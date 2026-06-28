@@ -256,6 +256,20 @@ components:
     rounded: "{rounded.pill}"
     padding: "4px 12px"
 
+  # ── Skill Card (Skill 管理页) ──
+  card-skill:
+    backgroundColor: "{colors.canvas}"
+    border: "1px solid {colors.hairline}"
+    rounded: "{rounded.md}"
+    padding: "{spacing.md}"
+    width: 280px
+
+  # ── Memory Item (记忆管理页) ──
+  card-memory:
+    backgroundColor: "{colors.canvas}"
+    borderBottom: "1px solid {colors.hairline-soft}"
+    padding: "{spacing.sm} {spacing.md}"
+
   # ── Message Cards ──
   card-tool-call:
     backgroundColor: "{colors.surface-default}"
