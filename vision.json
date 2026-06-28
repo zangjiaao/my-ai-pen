@@ -180,13 +180,13 @@
         "name": "代码审计 Agent",
         "slug": "code-audit-agent",
         "description": "对源代码进行静态分析发现漏洞，生成CodeFinding含文件位置、路由、数据流和修复建议。可与渗透测试Agent协同进行动态验证。",
-        "phase": "V3+"
+        "phase": "Post-MVP"
       },
       {
         "name": "应急响应 Agent",
         "slug": "ir-agent",
         "description": "分析异常事件、攻击路径和入侵指标(IOC)，生成Incident和Timeline。可与渗透测试Agent协同验证攻击路径。",
-        "phase": "V3+"
+        "phase": "Post-MVP"
       },
       {
         "name": "日志分析 Agent",
@@ -348,50 +348,28 @@
     "protocol": "WebSocket (实时双向) + REST (注册/查询/文件传输)"
   },
   "version_roadmap": {
-    "v1_mvp": {
-      "title": "MVP — 渗透测试闭环",
+    "mvp": {
+      "title": "MVP — 平台 + 渗透 Node 全能力 (= 原 V1+V2+V3 合并)",
       "deliverables": [
-        "渗透测试Node（信息收集→扫描→验证→报告）",
-        "平台Web对话页（Sidebar+对话区+右侧面板）",
-        "资产管理基础页",
-        "漏洞管理基础页",
-        "WebSocket实时通信",
-        "消息卡片体系（P0优先级）"
+        "渗透测试 Node 全能力（Agent Loop + 浏览器自动化 + 认证管理 + 流量分析 + WAF检测 + 覆盖率追踪）",
+        "平台 Web 对话页（Sidebar + 对话区 + 全量消息卡片 + 右侧信息面板全Tab）",
+        "资产管理 + 漏洞管理 + 节点管理完整页面",
+        "多节点注册与管理 + 健康检查 + 心跳监控",
+        "节点内子代理并行 + 会话 FIFO 队列",
+        "节点本地 Web 控制台 + 增强的 Agent 执行监控",
+        "认证 (JWT) + 审计日志 + 会话隔离",
+        "Docker 沙箱 + 独立模式 CLI + TUI + 离线导出同步"
       ]
     },
-    "v2": {
-      "title": "V2 — 信息面板+节点控制台",
+    "post_mvp": {
+      "title": "Post-MVP — 扩展节点 + 平台化",
       "deliverables": [
-        "全量信息卡片（资产卡片、摘要卡片、授权卡片）",
-        "节点本地Web控制台",
-        "增强的Agent执行监控"
-      ]
-    },
-    "v3": {
-      "title": "V3 — 多Agent协同",
-      "deliverables": [
-        "Agent编排引擎",
-        "代码审计Node",
-        "应急响应Node",
-        "跨节点协同机制"
-      ]
-    },
-    "v4": {
-      "title": "V4 — CTF+威胁情报+报告",
-      "deliverables": [
-        "CTF Node",
-        "事件管理页面",
+        "代码审计 Node + 应急响应 Node + CTF Node",
         "威胁情报集成（微步/VirusTotal/AlienVault OTX）",
-        "成果/报告中心（报告生成与归档）"
-      ]
-    },
-    "v5": {
-      "title": "V5 — 平台化",
-      "deliverables": [
-        "日志分析Node",
-        "告警研判Node",
-        "多租户与权限体系",
-        "组织架构管理"
+        "报告中心（报告生成/审核/归档）",
+        "多租户与 RBAC 权限体系",
+        "日志分析 Node + 告警研判 Node",
+        "跨会话智能学习"
       ]
     }
   },
