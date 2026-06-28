@@ -2,6 +2,8 @@ import { useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAuthStore } from "../stores/authStore";
 import { useConversationStore } from "../stores/conversationStore";
+import { authFetch } from "../lib/api";
+import { useConversationStore } from "../stores/conversationStore";
 
 interface Props {
   activeId: string | null;
@@ -39,13 +41,19 @@ export default function Sidebar({ activeId, onSelect }: Props) {
           <p className="px-3 py-4 text-center text-sm text-ink-muted">暂无会话</p>
         ) : (
           conversations.map((c) => (
-            <button key={c.id} onClick={() => { navigate("/"); onSelect(c.id); }}
-              className={`w-full rounded-md px-3 py-2.5 text-left text-sm transition-colors ${c.id === activeId ? "bg-accent-subtle font-medium text-ink" : "text-ink-secondary hover:bg-surface-default hover:text-ink"}`}>
-              <div className="flex items-center gap-2">
-                <span className={`inline-block h-2 w-2 rounded-full ${c.status === "running" ? "bg-status-running" : c.status === "completed" ? "bg-status-success" : "bg-ink-muted"}`} />
-                {c.title}
-              </div>
-            </button>
+            <div key={c.id} className="group flex items-center">
+              <button onClick={() => { navigate("/"); onSelect(c.id); }}
+                className={`flex-1 rounded-md px-3 py-2.5 text-left text-sm transition-colors ${c.id === activeId ? "bg-accent-subtle font-medium text-ink" : "text-ink-secondary hover:bg-surface-default hover:text-ink"}`}>
+                <div className="flex items-center gap-2">
+                  <span className={`inline-block h-2 w-2 rounded-full ${c.status === "running" ? "bg-status-running" : c.status === "completed" ? "bg-status-success" : "bg-ink-muted"}`} />
+                  <span className="truncate">{c.title}</span>
+                </div>
+              </button>
+              <button onClick={async (e) => { e.stopPropagation(); await authFetch(`/api/conversations/${c.id}`, { method: "DELETE" }); fetchAll(); }}
+                className="mr-1 rounded-full p-1 text-ink-muted opacity-0 transition-opacity hover:bg-surface-default hover:text-severity-critical group-hover:opacity-100">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
           ))
         )}
       </div>

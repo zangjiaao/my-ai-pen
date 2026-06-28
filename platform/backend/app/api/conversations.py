@@ -44,6 +44,13 @@ async def get_conversation(conv_id: str, current_user: dict = Depends(get_curren
     return _out(c)
 
 
+@router.delete("/{conv_id}")
+async def delete_conversation(conv_id: str, current_user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    c = await _get_conv(conv_id, current_user, db)
+    await db.delete(c); await db.commit()
+    return {"ok": True}
+
+
 @router.patch("/{conv_id}")
 async def update_conversation(conv_id: str, body: dict, current_user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     c = await _get_conv(conv_id, current_user, db)
