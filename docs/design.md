@@ -897,6 +897,45 @@ Sidebar 会话项同步显示待处理数量 badge（红色圆点 + 数字）。
 
 ---
 
+## Component Interfaces
+
+核心组件的 React props 定义：
+
+```tsx
+// ConversationPage 主页面
+<ConversationPage>
+  <Sidebar conversations:Conversation[], activeId:string, pendingCounts:{}, 
+           onCreateSession:()=>void, onSelect:(id)=>void />
+  <ConversationPanel conversationId:string, messages:Message[], 
+                     onSendSteer:(text)=>void>
+    <TemplateChips onSelect:(tpl)=>void />
+    <MessageRenderer message:Message />  {/* msg_type 分发到具体卡片 */}
+    <ChatInput onSend:(text)=>void />
+  </ConversationPanel>
+  <RightPanel conversationId:string, findings:Finding[], progress:ProgressInfo, 
+              pending:Approval[], files:FileInfo[],
+              onFileClick:(path)=>void />
+  <FileViewer open:bool, filePath:string, content:string, language:string, onClose:()=>void />
+  <VulnDetailDialog open:bool, finding:FindingDetail, onClose:()=>void />
+  <SonnerToast notifications:Notification[], onAction:(id)=>void />
+</ConversationPage>
+
+// 核心卡片 props
+<ToolCallCard toolName:string, command:string, status:'running'|'done'|'error', 
+              durationMs:number, stdout:string, stderr:string />
+<VulnCard severity:Severity, title:string, location:string, confidence:number, 
+         onDetail:()=>void, onRetest:()=>void, onReject:()=>void />
+<ConfirmCard riskLevel:string, question:string, proposedAction:string, 
+             expiresAt:string, onAuthorize:()=>void, onCancel:()=>void />
+<ThinkingCard reasoning:string, collapsed:bool, onToggle:()=>void />
+<AttackChainCard chainTitle:string, nodes:ChainNode[], edges:ChainEdge[] />
+<ScoreboardCard phase:string, evidence:number, reproducibility:number, coverage:number, overall:number />
+
+// Zustand stores
+interface MessageBuffer { buffers:Record<string,Message[]>; append, getMessages }
+interface ConversationStore { conversations:Conversation[]; activeId:string|null; pendingCounts:{}; setActive }
+```
+
 ## Iteration Guide
 
 1. 新增组件前先检查 `{colors}` 是否已有对应 token。

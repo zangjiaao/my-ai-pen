@@ -59,6 +59,17 @@
 | **对话原语** | 所有安全活动统一建模为 Conversation → Message，自然语言为第一交互原语 |
 | **数据可追溯** | 每个 Vulnerability 可追溯至原始 Conversation → Message → ToolRun → Evidence |
 
+### 1.3 项目结构
+
+```
+├── platform/backend/app/     # FastAPI — api/ ws/ models/ services/ middleware/ db/
+├── platform/frontend/src/    # React — pages/ components/cards/ stores/ hooks/ lib/
+├── node/pentest_node/        # Python — agent/ tools/ sandbox/ analysis/ evidence/ auth/ skills/ platform/ tui/
+├── node/skills/              # 10 个内置 Skill (.md)
+├── docs/                     # 设计文档
+└── vision.json
+```
+
 ---
 
 ## 2. 平台核心服务层设计
@@ -229,6 +240,70 @@
 4. 平台验证 Token → 注册节点 → node.registered 事件
 5. 节点定期发送 heartbeat → 平台更新 last_heartbeat
 ```
+
+### 2.6 数据库 DDL
+
+完整建表语句，平台 PostgreSQL：
+
+```sql
+-- 用户
+CREATE TABLE users (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), email TEXT UNIQUE NOT NULL, password_hash TEXT, oauth_provider TEXT, oauth_subject TEXT, display_name TEXT, org_id UUID, role TEXT DEFAULT 'member', created_at TIMESTAMPTZ DEFAULT NOW());
+-- 会话
+CREATE TABLE conversations (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), title TEXT DEFAULT '新会话', user_id UUID REFERENCES users(id), node_id UUID REFERENCES nodes(id), status TEXT DEFAULT 'created', context JSONB DEFAULT '{}', created_at TIMESTAMPTZ DEFAULT NOW(), last_active_at TIMESTAMPTZ DEFAULT NOW());
+CREATE INDEX idx_conv_user ON conversations(user_id, last_active_at DESC);
+-- 消息
+CREATE TABLE messages (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE, role TEXT NOT NULL, msg_type TEXT NOT NULL, content JSONB NOT NULL, parent_msg_id UUID, created_at TIMESTAMPTZ DEFAULT NOW());
+CREATE INDEX idx_msg_conv ON messages(conversation_id, created_at);
+-- 资产
+CREATE TABLE assets (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT NOT NULL, address TEXT NOT NULL, type TEXT NOT NULL, tags TEXT[] DEFAULT '{}', properties JSONB DEFAULT '{}', source TEXT DEFAULT 'manual', created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW());
+-- 漏洞
+CREATE TABLE vulnerabilities (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), title TEXT NOT NULL, severity TEXT NOT NULL, cvss REAL, cve_id TEXT, asset_id UUID REFERENCES assets(id), conversation_id UUID REFERENCES conversations(id), description TEXT, poc TEXT, remediation TEXT, confidence TEXT DEFAULT 'medium', status TEXT DEFAULT 'pending', evidence_ids TEXT[] DEFAULT '{}', discovered_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW());
+CREATE INDEX idx_vuln_sev ON vulnerabilities(severity, status);
+-- 节点
+CREATE TABLE nodes (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name TEXT UNIQUE NOT NULL, type TEXT DEFAULT 'pentest', status TEXT DEFAULT 'offline', token_hash TEXT, ip INET, cpu_usage REAL, memory_usage REAL, current_sessions INT DEFAULT 0, last_heartbeat TIMESTAMPTZ, config JSONB DEFAULT '{}', registered_at TIMESTAMPTZ DEFAULT NOW());
+-- 审计
+CREATE TABLE audit_log (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(), actor_type TEXT NOT NULL, actor_id UUID NOT NULL, actor_name TEXT, action TEXT NOT NULL, resource_type TEXT, resource_id UUID, detail JSONB, ip_address INET, conversation_id UUID, status TEXT NOT NULL);
+CREATE INDEX idx_audit_ts ON audit_log(timestamp DESC);
+```
+
+节点 SQLite：
+```sql
+CREATE TABLE node_tasks (id TEXT PRIMARY KEY, conversation_id TEXT, target JSON, scope JSON, policy JSON, status TEXT, created_at REAL);
+CREATE TABLE tool_runs (id TEXT PRIMARY KEY, task_id TEXT, tool_name TEXT, command TEXT, risk_level TEXT, exit_code INT, stdout_ref TEXT, stderr_ref TEXT, start_time REAL, end_time REAL);
+CREATE TABLE findings (id TEXT PRIMARY KEY, task_id TEXT, title TEXT, vuln_type TEXT, severity TEXT, affected_asset TEXT, location TEXT, confidence REAL, status TEXT, evidence_ids TEXT, created_at REAL);
+CREATE TABLE checkpoints (iteration INT PRIMARY KEY, phase TEXT, phase_iteration INT, timestamp REAL, snapshot JSON);
+CREATE TABLE coverage (endpoint_pattern TEXT, param_name TEXT, vuln_type TEXT, tested_at REAL, result TEXT, PRIMARY KEY(endpoint_pattern, param_name, vuln_type));
+```
+
+### 2.7 REST API 端点
+
+通用前缀: `/api`。认证: `Authorization: Bearer {jwt}`。错误格式: `{"error":{"code":"...","message":"..."}}`。
+
+| 组 | 方法 | 路径 | 说明 |
+|----|------|------|------|
+| 认证 | POST | `/auth/login` | `{email,password}` → `{access_token,refresh_token,user}` |
+| | POST | `/auth/refresh` | `{refresh_token}` → 新 token 对 |
+| | GET | `/auth/me` | 当前用户信息 |
+| 会话 | POST | `/conversations` | 创建会话 |
+| | GET | `/conversations` | 列表 `?status=active&limit=50` |
+| | GET | `/conversations/{id}` | 详情 |
+| | GET | `/conversations/{id}/messages` | 消息 `?after={msg_id}&limit=100` |
+| | PATCH | `/conversations/{id}` | 更新标题或状态 |
+| | POST | `/conversations/{id}/steer` | 发送纠偏消息到 Node |
+| 资产 | GET/POST | `/assets` | 列表/创建 |
+| | GET/PATCH/DELETE | `/assets/{id}` | 详情/更新/删除 |
+| 漏洞 | GET | `/vulnerabilities` | 列表 `?severity=&status=&limit=` |
+| | GET/PATCH | `/vulnerabilities/{id}` | 详情/状态变更 |
+| | POST | `/vulnerabilities/{id}/retest` | 创建复测会话 |
+| 节点 | GET/POST | `/nodes` | 列表/注册(返回 Token) |
+| | GET/PATCH/DELETE | `/nodes/{id}` | 详情/配置/删除 |
+| 同步 | POST | `/sync/import` | 上传 report.tar.gz |
+| Skill | GET | `/skills` | 列表 |
+| | POST | `/skills` | 上传自定义 Skill |
+| | GET/PATCH/DELETE | `/skills/{name}` | 详情/启用禁用/删除 |
+| 知识库 | GET | `/knowledge/search` | 搜索 `?q=&limit=5` |
+| 记忆 | GET/POST | `/memories` | 列表/添加 |
+| | PATCH/DELETE | `/memories/{id}` | 编辑/删除 |
 
 ---
 
@@ -567,6 +642,28 @@ if self.steering_queue:
 - **ACK 机制**：关键消息（task_assign、user_interrupt）需节点 ACK，超时重试
 - **优雅中断**：user_interrupt 消息通过高优先级通道发送，节点收到后立即暂停并在限定时间内响应
 - **Steer 消息不丢**：steer 消息与普通消息共用持久化通道，节点离线时暂存平台，重连后补传
+
+### 4.5 消息 JSON Schema
+
+平台→节点：
+```json
+{"type":"task_assign","conversation_id":"u","task_id":"u","target":{"type":"host|url","value":"..."},"scope":{"allow":[],"deny":[]},"policy":{"max_risk":"intrusive","approval_required":["destructive"]},"credentials":[{"username":"admin","password":"***","role":"high_privilege"}]}
+{"type":"user_steer","conversation_id":"u","text":"别扫22端口"}
+{"type":"user_interrupt","conversation_id":"u","action":"pause|resume|cancel"}
+{"type":"user_input","conversation_id":"u","request_id":"u","response":"authorize|cancel"}
+```
+
+节点→平台：
+```json
+{"type":"status_update","conversation_id":"u","task_id":"u","phase":"recon","iteration":12,"active_tool":"nmap"}
+{"type":"tool_output","conversation_id":"u","tool_run_id":"u","tool_name":"nmap","stream":"stdout","line":"80/tcp open http"}
+{"type":"vuln_found","conversation_id":"u","finding_id":"u","title":"SQL注入","severity":"high","confidence":"high","affected_asset":"10.0.1.1","location":"/api?id=","evidence_ids":["ev1","ev2"]}
+{"type":"asset_discovered","conversation_id":"u","address":"10.0.1.10","asset_type":"host","open_ports":[22,80],"services":[{"port":80,"name":"http","version":"nginx"}],"is_new":true}
+{"type":"request_decision","conversation_id":"u","request_id":"u","risk_level":"destructive","question":"允许sqlmap --dbs?","proposed_action":"sqlmap -u ...","target":"/api?id=1","expires_at":"iso8601"}
+{"type":"task_complete","conversation_id":"u","task_id":"u","status":"completed","summary":{"assets_found":6,"vulns_confirmed":3,"duration_seconds":2847}}
+{"type":"task_error","conversation_id":"u","task_id":"u","error_code":"TARGET_UNREACHABLE","message":"..."}
+{"type":"phase_changed","conversation_id":"u","task_id":"u","from":"recon","to":"scan","summary":"发现6个资产"}
+```
 
 ---
 
