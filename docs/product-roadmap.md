@@ -160,15 +160,15 @@
   - [ ] request_decision 消息
   - [ ] task_complete/task_error 消息
 
-- [ ] **Agent Runtime（PydanticAI）**
-  - [ ] PydanticAI 集成
-  - [ ] 工具 Schema 定义
+- [x] **Agent Runtime（PydanticAI/LiteLLM）**
+  - [x] LiteLLM 集成 (chat + stream)
+  - [x] 工具 Schema 定义
   - [ ] 结构化输出（TaskPlan, CandidateFinding, ConfirmedFinding）
-  - [ ] HITL 中断点
+  - [x] HITL 中断点 (steer/interrupt/confirm)
 
 - [ ] **Node Runtime Adapter**
-  - [ ] 平台协议适配层
-  - [ ] 统一事件接口
+  - [x] 平台协议适配层 (WS client)
+  - [x] 统一事件接口
   - [ ] 证据/Finding 接口抽象
 
 - [x] **沙箱执行**
