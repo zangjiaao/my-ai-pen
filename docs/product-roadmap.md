@@ -27,7 +27,7 @@
   - [x] 「创建会话」按钮（不弹窗，直接进入对话页；用户在输入框用自然语言描述测试意图）
   - [x] 会话列表（统一列表，按最后活跃时间倒序，不分組）
   - [x] 会话状态视觉标识（运行中/排队中/等待用户确认/失败/完成）
-  - [ ] 会话操作：重命名、归档、删除
+  - [x] 会话操作：重命名、归档、删除
   - [x] 次级导航入口：资产管理、漏洞管理、节点管理
 
 - [x] **对话页 — 对话区**
@@ -41,16 +41,16 @@
 
 - [x] **对话页 — 右侧信息面板**
   - [x] Tab 切换框架
-  - [ ] Agent 状态 Tab（当前阶段、当前工具、Agent 状态、工具调用历史）
+  - [x] Agent 状态 Tab（当前阶段、当前工具、Agent 状态、工具调用历史）
   - [x] 发现漏洞 Tab（漏洞列表、等级统计、查看详情入口）
-  - [ ] 目标资产 Tab（目标信息、开放端口/服务列表、一键纳入资产）
+  - [x] 目标资产 Tab（目标信息、开放端口/服务列表、一键纳入资产）
 
 - [x] **资产管理页**
   - [x] 资产列表（表格展示 + 分页）
   - [x] 资产筛选（按类型、标签、业务系统）
   - [x] 资产详情面板（基本信息、关联漏洞、历史会话、操作日志）
   - [x] 手动添加资产表单
-  - [ ] Agent 发现资产自动入库（标记来源）
+  - [x] Agent 发现资产自动入库（标记来源）
 
 - [x] **漏洞管理页**
   - [x] 漏洞列表（表格展示 + 分页 + 等级颜色标识）
@@ -62,7 +62,7 @@
 - [x] **节点管理页**
   - [x] 节点列表（名称、ID、类型、健康状态、IP、资源使用率、当前会话数）
   - [x] 节点注册（生成接入 Token + 部署指南）
-  - [ ] 节点详情（配置、版本、指标、历史会话）
+  - [x] 节点详情（配置、版本、指标、历史会话）
 
 ### 平台后端
 
@@ -132,14 +132,14 @@
   - [x] 命令构建 → 工具沙箱执行
 
 - [x] **Agent Orchestrator + Workflow Engine**
-  - [ ] precheck 阶段：目标格式/DNS/连通性校验
-  - [ ] plan 阶段：Playbook 选择 + TaskPlan 生成
-  - [ ] recon 阶段：nmap 端口扫描 + httpx 服务识别 + gobuster 目录枚举
-  - [ ] scan 阶段：nuclei 模板扫描 + sqlmap 注入检测 + 配置检查
-  - [ ] verify 阶段：候选 Finding 复现验证 + 交叉工具验证
-  - [ ] report 阶段：ConfirmedFinding 同步 + 阶段摘要生成
-  - [ ] checkpoint：每阶段持久化状态，支持中断恢复
-  - [ ] 状态机流转 + 阻塞条件处理
+  - [x] precheck 阶段：目标格式/DNS/连通性校验
+  - [x] plan 阶段：Playbook 选择 + TaskPlan 生成
+  - [x] recon 阶段：nmap 端口扫描 + httpx 服务识别 + gobuster 目录枚举
+  - [x] scan 阶段：nuclei 模板扫描 + sqlmap 注入检测 + 配置检查
+  - [x] verify 阶段：候选 Finding 复现验证 + 交叉工具验证
+  - [x] report 阶段：ConfirmedFinding 同步 + 阶段摘要生成
+  - [x] checkpoint：每阶段持久化状态，支持中断恢复
+  - [x] 状态机流转 + 阻塞条件处理
 
 - [x] **Evidence Store**
   - [x] 原始工具输出存储（stdout/stderr）
@@ -148,8 +148,8 @@
 
 - [x] **Finding Verifier**
   - [x] 候选 Finding 输出解析
-  - [ ] 漏洞复现验证
-  - [ ] 去误报逻辑
+  - [x] 漏洞复现验证
+  - [x] 去误报逻辑
   - [x] 防重复检测
 
 - [x] **Platform Sync**
@@ -187,12 +187,12 @@
   - [x] 基于 Textual (Python) 构建独立模式 TUI
   - [x] 面板：Agent对话区 / 发现列表(按等级) / 资产摘要 / 状态(阶段+进度+活跃工具)
   - [x] 快捷键：Approve(响应授权)、Stop(安全停止)、Detail(展开Finding)、Logs(原始日志)、Quit(不停止任务)
-  - [ ] `pentest-node attach` 重新连接到后台任务
-  - [ ] `pentest-node observe` 平台模式下只读观察
+  - [x] `pentest-node attach` 重新连接到后台任务
+  - [x] `pentest-node observe` 平台模式下只读观察
 
 - [x] **独立运行模式**
-  - [ ] `pentest-node standalone` CLI 子命令（脱离平台运行）
-  - [ ] 配置文件模式 (`--config engagement.yaml`)
+  - [x] `pentest-node standalone` CLI 子命令（脱离平台运行）
+  - [x] 配置文件模式 (`--config engagement.yaml`)
   - [x] 运行时观测：`pentest-node status`、`pentest-node logs --follow`
   - [x] 运行时调整：`pentest-node adjust`（修改 scope/凭据/策略）
   - [x] 运行时中止：`pentest-node stop`（安全停止在最近检查点）
@@ -227,14 +227,14 @@
   - [x] 质量记分牌 (scoreboard_card) — 每阶段三维自评（证据质量/可复现性/覆盖率）
 
 - [x] **Agent 智能增强**
-  - [ ] 质量记分牌：每阶段结束三维自评 → 低于 60 分自动补充测试
+  - [x] 质量记分牌：每阶段结束三维自评 → 低于 60 分自动补充测试
   - [x] 反事实挑战：≥3 个 Finding 时主动质疑假设 → 防止过早下结论
   - [x] 敏感信息遮蔽：工具输出/日志/报告/跨会话记忆中的凭据自动替换 ***REDACTED***
   - [x] 跨会话记忆：用户偏好/客户技术栈/特殊配置自动记忆 → 下次会话生效
 
 - [x] **知识库**
   - [x] 内置知识源：CVE/NVD + OWASP + PortSwigger Research + 工具手册
-  - [ ] `knowledge_search` 工具：向量 + BM25 混合检索
+  - [x] `knowledge_search` 工具：向量 + BM25 混合检索
   - [x] 知识库管理页：搜索/浏览/团队贡献条目
   - [x] 检索结果注入 Agent 上下文
 
@@ -247,7 +247,7 @@
   - [x] 记忆管理页：列表 + 搜索/筛选 + 编辑/删除
   - [x] 记忆作用域：个人 / 团队 / 全局
   - [x] Agent 自动学习 + 用户手动添加 + 从会话导入
-  - [ ] 右侧信息面板（操作中心）
+  - [x] 右侧信息面板（操作中心）
     - [x] Tab 1「发现」：漏洞列表（点击→详情 Dialog：详情/发现过程/证据/修复建议）
     - [x] Tab 2「进度」：阶段进度条 + Agent 自动 TODO 列表（已完成/进行中/待开始+统计数据）
     - [x] Tab 3「待处理」：等待授权的操作列表，点击跳转到对话区确认卡片
@@ -256,8 +256,8 @@
   - [x] 漏洞详情 Dialog (640px)：详情/发现过程/证据/修复建议 四个子 Tab
 
 - [x] **节点 Web 控制台**
-  - [ ] 节点本地 Web 控制台（性能指标、活跃任务、工具清单、日志查看）
-  - [ ] 安全意识：默认关闭、需授权开启、scope 校验 + 操作记录
+  - [x] 节点本地 Web 控制台（性能指标、活跃任务、工具清单、日志查看）
+  - [x] 安全意识：默认关闭、需授权开启、scope 校验 + 操作记录
 
 - [x] **增强的 Agent 执行监控**
   - [x] 实时 Agent 状态面板（阶段、进度、活跃工具、待确认事项）
@@ -272,12 +272,12 @@
 
 - [x] **节点内子代理 (Subagent)**
   - [x] 同一步内最多 4 个工具并行执行（已设计）
-  - [ ] 长时间扫描后台执行，不阻塞 Agent 主推理链路
-  - [ ] 子代理结果回传后 Agent 自动整合
+  - [x] 长时间扫描后台执行，不阻塞 Agent 主推理链路
+  - [x] 子代理结果回传后 Agent 自动整合
 
 - [x] **共享信息中心**
-  - [ ] 同一 Node 内多个 Session 共享资产库和漏洞库
-  - [ ] 不同 Node 通过平台数据库共享 Asset/Finding（V2 阶段只读，写操作需用户确认）
+  - [x] 同一 Node 内多个 Session 共享资产库和漏洞库
+  - [x] 不同 Node 通过平台数据库共享 Asset/Finding（V2 阶段只读，写操作需用户确认）
 
 ### 测试环境
 
@@ -307,10 +307,10 @@
 - [x] 关键页面线框图确认（对话页、资产页、漏洞页）
 - [x] 技术栈最终确认（React + shadcn/ui + FastAPI + PostgreSQL + RabbitMQ）
 - [x] 通信协议与消息 Schema 最终确认
-- [ ] Docker 漏洞靶场环境准备
-  - [ ] DVWA (`vulnerables/web-dvwa`) — 端口8080，覆盖 SQLi/XSS/CSRF/命令注入
-  - [ ] OWASP Juice Shop (`bkimminich/juice-shop`) — 端口3000，覆盖 SQLi/XSS/JWT/IDOR/SSRF
-  - [ ] docker-compose.yml 一键启动两个靶场 + 网络互通
+- [x] Docker 漏洞靶场环境准备
+  - [x] DVWA (`vulnerables/web-dvwa`) — 端口8080，覆盖 SQLi/XSS/CSRF/命令注入
+  - [x] OWASP Juice Shop (`bkimminich/juice-shop`) — 端口3000，覆盖 SQLi/XSS/JWT/IDOR/SSRF
+  - [x] docker-compose.yml 一键启动两个靶场 + 网络互通
 - [x] Docker 沙箱镜像构建
   - [x] 基于 `kalilinux/kali-rolling` 定制 `pentest-sandbox` 镜像
   - [x] 预装 CLI 工具：nmap, nuclei (+templates), sqlmap, gobuster, ffuf, httpx, curl, whatweb
@@ -321,52 +321,52 @@
   - [x] 资源限制：mem_limit=2g, cpu_quota=80000, cap_drop=ALL + cap_add=NET_RAW
 
 - [x] 浏览器自动化 (Playwright)
-  - [ ] browser 工具实现：navigate, login, click, type, screenshot, save_auth, load_auth, capture_requests
-  - [ ] 自动登录：识别登录表单→填写→提交→检测成功/失败
-  - [ ] 网络请求捕获：自动记录所有 XHR/fetch/document 请求
-  - [ ] 多账号认证状态管理 (AuthManager)：保存/加载/切换 auth_state
+  - [x] browser 工具实现：navigate, login, click, type, screenshot, save_auth, load_auth, capture_requests
+  - [x] 自动登录：识别登录表单→填写→提交→检测成功/失败
+  - [x] 网络请求捕获：自动记录所有 XHR/fetch/document 请求
+  - [x] 多账号认证状态管理 (AuthManager)：保存/加载/切换 auth_state
 
 - [x] 认证会话管理
-  - [ ] AuthManager：注册凭据→登录→保存 Cookie→自动注入后续请求
-  - [ ] http_request 自动携带认证 Cookie（auth_name 参数切换账号）
-  - [ ] 认证失效检测 (401/403) + 自动重登
-  - [ ] 凭据遮蔽：工具输出和报告中自动替换为 ***REDACTED***
+  - [x] AuthManager：注册凭据→登录→保存 Cookie→自动注入后续请求
+  - [x] http_request 自动携带认证 Cookie（auth_name 参数切换账号）
+  - [x] 认证失效检测 (401/403) + 自动重登
+  - [x] 凭据遮蔽：工具输出和报告中自动替换为 ***REDACTED***
 
 - [x] Web 应用测试工作流
-  - [ ] 浏览器登录+认证捕获 → 应用探索+请求收集 → 端点分析+注入点提取
-  - [ ] 参数测试：重放请求 → 替换参数为 payload → 对比响应
-  - [ ] 多账号越权测试：admin 浏览→viewer 浏览→对比可访问端点→尝试跨权限访问
-  - [ ] 带认证的自动化扫描：nuclei/sqlmap 使用已捕获的 Cookie
+  - [x] 浏览器登录+认证捕获 → 应用探索+请求收集 → 端点分析+注入点提取
+  - [x] 参数测试：重放请求 → 替换参数为 payload → 对比响应
+  - [x] 多账号越权测试：admin 浏览→viewer 浏览→对比可访问端点→尝试跨权限访问
+  - [x] 带认证的自动化扫描：nuclei/sqlmap 使用已捕获的 Cookie
 
 - [x] WAF 检测与绕过
-  - [ ] WAFDetector：HTTP 头指纹 + 响应行为 + 主动探测三级检测
-  - [ ] 已知 WAF 指纹库：Cloudflare, AWS WAF, ModSecurity, 阿里云, 长亭, 腾讯云
-  - [ ] 自动测试绕过手段 (大小写/编码/空字节/Content-Type切换)
-  - [ ] 检测结果注入 Agent 上下文 (WAF名称/置信度/可用绕过/影响)
+  - [x] WAFDetector：HTTP 头指纹 + 响应行为 + 主动探测三级检测
+  - [x] 已知 WAF 指纹库：Cloudflare, AWS WAF, ModSecurity, 阿里云, 长亭, 腾讯云
+  - [x] 自动测试绕过手段 (大小写/编码/空字节/Content-Type切换)
+  - [x] 检测结果注入 Agent 上下文 (WAF名称/置信度/可用绕过/影响)
 
 - [x] 速率限制感知
-  - [ ] http_request 内置限速检测：429/Retry-After/X-RateLimit-Remaining/503
-  - [ ] 每 host 独立限速状态 (RateLimit: min_interval, cooldown_until)
-  - [ ] 自动等待 + 上下文注入 ("目标有速率限制，最小间隔 X 秒")
+  - [x] http_request 内置限速检测：429/Retry-After/X-RateLimit-Remaining/503
+  - [x] 每 host 独立限速状态 (RateLimit: min_interval, cooldown_until)
+  - [x] 自动等待 + 上下文注入 ("目标有速率限制，最小间隔 X 秒")
 
 - [x] 覆盖率追踪
-  - [ ] CoverageStore: (endpoint_pattern, param_name, vuln_type) 三元组去重
-  - [ ] 工具执行前自动查表跳过已测组合
-  - [ ] 每轮上下文注入覆盖率摘要 (已测 X 组合, 待测: ...)
+  - [x] CoverageStore: (endpoint_pattern, param_name, vuln_type) 三元组去重
+  - [x] 工具执行前自动查表跳过已测组合
+  - [x] 每轮上下文注入覆盖率摘要 (已测 X 组合, 待测: ...)
 
 - [x] 应用模型
-  - [ ] ApplicationModel: 端点→认证角色→参数→WAF行为 实时图谱
-  - [ ] 每轮上下文注入结构化端点地图 (替代纯文本摘要)
-  - [ ] 为后续 V3 跨节点协同预留接口
+  - [x] ApplicationModel: 端点→认证角色→参数→WAF行为 实时图谱
+  - [x] 每轮上下文注入结构化端点地图 (替代纯文本摘要)
+  - [x] 为后续 V3 跨节点协同预留接口
 
 - [x] 验证码/MFA/蜜罐感知
-  - [ ] LoginChallengeDetector: 检测 CAPTCHA/reCAPTCHA/hCaptcha/Turnstile + MFA/TOTP
-  - [ ] 遇到挑战时生成 request_user_input 而非报 login failed
-  - [ ] HoneypotDetector: 负向测试时检测蜜罐字段+timing 异常
+  - [x] LoginChallengeDetector: 检测 CAPTCHA/reCAPTCHA/hCaptcha/Turnstile + MFA/TOTP
+  - [x] 遇到挑战时生成 request_user_input 而非报 login failed
+  - [x] HoneypotDetector: 负向测试时检测蜜罐字段+timing 异常
 
 - [x] MCP 工具扩展 (MVP 预留接口)
-  - [ ] MCPAdapter: 启动外部 MCP 服务器 → 发现工具 → 注册到 ToolRegistry
-  - [ ] MVP 不依赖外部 MCP，接口预留用于社区工具生态
+  - [x] MCPAdapter: 启动外部 MCP 服务器 → 发现工具 → 注册到 ToolRegistry
+  - [x] MVP 不依赖外部 MCP，接口预留用于社区工具生态
 
 - [x] Skill 库 (MVP 至少 10 个)
   - [x] `web_baseline` — Web 应用基线测试 (recon)
