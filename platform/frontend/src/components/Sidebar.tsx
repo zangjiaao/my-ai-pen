@@ -3,7 +3,6 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { useAuthStore } from "../stores/authStore";
 import { useConversationStore } from "../stores/conversationStore";
 import { authFetch } from "../lib/api";
-import { useConversationStore } from "../stores/conversationStore";
 
 interface Props {
   activeId: string | null;
