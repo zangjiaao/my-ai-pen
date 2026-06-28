@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 import RightPanel from "../components/RightPanel";
 import MessageRenderer from "../components/MessageRenderer";
 import { useConversations } from "../hooks/useApi";
 import { useWebSocket } from "../hooks/useWebSocket";
+import { authFetch } from "../lib/api";
 import type { Message } from "../lib/types";
 
 const TEMPLATES = [
@@ -15,13 +16,12 @@ const TEMPLATES = [
 ];
 
 export default function ConversationPage() {
-  const { data: conversations } = useConversations();
+  const { data: conversations, refetch } = useConversations();
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
 
   useWebSocket({
-    status_update: (msg) => console.log("[status]", msg),
     vuln_found: (msg) => setMessages((prev) => [...prev, { id: crypto.randomUUID(), conversation_id: activeId || "", role: "agent", msg_type: "vuln_card", content: msg as Record<string, unknown>, parent_msg_id: null, created_at: new Date().toISOString() }]),
     tool_output: (msg) => {
       const { tool_name, line } = msg as Record<string, string>;
@@ -35,20 +35,32 @@ export default function ConversationPage() {
     },
   });
 
-  const handleSend = () => {
+  const handleSend = useCallback(async () => {
     if (!input.trim()) return;
-    const msg: Message = { id: crypto.randomUUID(), conversation_id: activeId || "", role: "user", msg_type: "text", content: { text: input }, parent_msg_id: null, created_at: new Date().toISOString() };
-    setMessages((prev) => [...prev, msg]);
+    const text = input;
     setInput("");
-  };
+
+    // 第一条消息 → 创建会话
+    let convId = activeId;
+    if (!convId) {
+      try {
+        const data = await authFetch("/api/conversations", { method: "POST", headers: { "Content-Type": "application/json" } });
+        convId = data.id as string;
+        setActiveId(convId);
+        refetch();
+      } catch { return; }
+    }
+
+    const userMsg: Message = { id: crypto.randomUUID(), conversation_id: convId, role: "user", msg_type: "text", content: { text }, parent_msg_id: null, created_at: new Date().toISOString() };
+    setMessages((prev) => [...prev, userMsg]);
+  }, [input, activeId, refetch]);
 
   return (
     <div className="flex h-screen overflow-hidden bg-canvas">
-      <Sidebar conversations={conversations || []} activeId={activeId} onSelect={setActiveId} />
+      <Sidebar conversations={conversations || []} activeId={activeId} onSelect={(id) => { setActiveId(id); setMessages([]); }} />
       <div className="flex flex-1 flex-col">
         <TopBar title={activeId ? conversations?.find(c => c.id === activeId)?.title : undefined} />
         <div className="flex flex-1 overflow-hidden">
-          {/* 对话区 */}
           <main className="flex flex-1 flex-col border-r border-hairline-soft">
             <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
               {messages.length === 0 && (
@@ -61,18 +73,15 @@ export default function ConversationPage() {
               )}
               {messages.map((msg) => <MessageRenderer key={msg.id} message={msg} />)}
             </div>
-            {/* 输入区 */}
             <div className="border-t border-hairline-soft p-4">
-              <div className="flex gap-2 mb-3">
+              <div className="mb-3 flex gap-2">
                 {TEMPLATES.map((t) => (
-                  <button key={t.label} onClick={() => setInput(t.text)} className="rounded-pill border border-hairline px-3 py-1.5 text-xs text-ink-secondary transition-colors hover:bg-surface-default hover:text-ink">
-                    {t.label}
-                  </button>
+                  <button key={t.label} onClick={() => setInput(t.text)} className="rounded-pill border border-hairline px-3 py-1.5 text-xs text-ink-secondary transition-colors hover:bg-surface-default hover:text-ink">{t.label}</button>
                 ))}
               </div>
               <div className="flex gap-2">
                 <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSend()}
-                  placeholder="描述你的测试需求。例如：对 https://example.com 做渗透测试，测试账号 admin/admin123（高权限）和 viewer/viewer123（低权限），重点检查权限提升和 API 鉴权绕过。"
+                  placeholder="描述你的测试需求。例如：对 https://example.com 做渗透测试，测试账号 admin/admin123（高权限）和 viewer/viewer123（低权限）..."
                   className="flex-1 rounded-md border border-hairline bg-canvas px-3.5 py-2.5 text-sm placeholder:text-ink-muted focus:border-ink focus:outline-none" />
                 <button onClick={handleSend} className="rounded-pill bg-ink px-5 py-2.5 text-sm font-medium text-white">发送</button>
               </div>

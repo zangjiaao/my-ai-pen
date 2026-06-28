@@ -23,20 +23,16 @@ export default function Sidebar({ conversations, activeId, onSelect }: Props) {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const handleCreate = async () => {
-    try {
-      const res = await authFetch("/api/conversations", { method: "POST", headers: { "Content-Type": "application/json" } });
-      const data = res;
-      navigate("/");
-      onSelect(data.id);
-    } catch { /* ignore */ }
+  const handleCreate = () => {
+    // 只导航到首页，不创建会话。会话在用户发第一条消息时才创建。
+    navigate("/");
   };
 
   return (
     <aside className="flex w-[280px] flex-shrink-0 flex-col border-r border-hairline bg-surface-sidebar">
       <div className="p-3">
         <button onClick={handleCreate} className="w-full rounded-pill bg-ink px-4 py-2.5 text-sm font-medium text-white transition-opacity hover:opacity-90">
-          + 创建会话
+          + 新建会话
         </button>
       </div>
 
