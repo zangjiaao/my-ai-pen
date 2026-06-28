@@ -16,7 +16,7 @@ const TEMPLATES = [
 ];
 
 export default function ConversationPage() {
-  const { conversations, fetchAll } = useConversationStore();
+  const { fetchAll } = useConversationStore();
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -53,11 +53,11 @@ export default function ConversationPage() {
 
     const userMsg: Message = { id: crypto.randomUUID(), conversation_id: convId, role: "user", msg_type: "text", content: { text }, parent_msg_id: null, created_at: new Date().toISOString() };
     setMessages((prev) => [...prev, userMsg]);
-  }, [input, activeId, refetch]);
+  }, [input, activeId, fetchAll]);
 
   return (
     <div className="flex h-screen overflow-hidden bg-canvas">
-      <Sidebar conversations={conversations || []} activeId={activeId} onSelect={(id) => { setActiveId(id); setMessages([]); }} />
+      <Sidebar activeId={activeId} onSelect={(id) => { setActiveId(id); setMessages([]); }} />
       <div className="flex flex-1 flex-col">
         <TopBar title={activeId ? conversations?.find(c => c.id === activeId)?.title : undefined} />
         <div className="flex flex-1 overflow-hidden">
