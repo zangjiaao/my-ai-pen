@@ -141,16 +141,16 @@
   - [ ] checkpoint：每阶段持久化状态，支持中断恢复
   - [ ] 状态机流转 + 阻塞条件处理
 
-- [ ] **Evidence Store**
-  - [ ] 原始工具输出存储（stdout/stderr）
-  - [ ] 请求/响应对存储
-  - [ ] 证据哈希 + 摘要生成
+- [x] **Evidence Store**
+  - [x] 原始工具输出存储（stdout/stderr）
+  - [x] 请求/响应对存储
+  - [x] 证据哈希 + 摘要生成
 
 - [ ] **Finding Verifier**
-  - [ ] 候选 Finding 输出解析
+  - [x] 候选 Finding 输出解析
   - [ ] 漏洞复现验证
   - [ ] 去误报逻辑
-  - [ ] 防重复检测
+  - [x] 防重复检测
 
 - [ ] **Platform Sync**
   - [ ] status_update 消息发送
