@@ -526,13 +526,47 @@ scope 边界、WAF 情况、速率限制、已获取的认证状态。
 15. 节点 → 平台       task_complete (summary, report_artifacts)
 ```
 
-### 4.3 消息可靠性
+### 4.3 运行中交互：Steer 与 Interrupt
+
+Agent 执行期间，用户不是旁观者。三种交互模式覆盖不同场景：
+
+| 模式 | 触发 | 行为 | 例子 |
+|------|------|------|------|
+| **Steer（纠偏）** | 用户发送消息 | 注入为下轮 LLM 调用的 system 消息，**不中断当前工具执行** | "别扫 8080，那是 CDN" — Agent 下轮自动跳过 |
+| **Interrupt（中断）** | 用户点「停止」 | 立即中断当前操作，保存 Checkpoint | "停！你扫的是生产环境" — Agent 立刻停止 |
+| **Respond（响应）** | Agent 发确认卡片 | 用户点「授权/取消」— Agent 继续或调整 | sqlmap 执行确认 — 用户点授权 |
+
+```
+Agent 在执行 nmap (60s)...
+         │
+用户: "扫完别碰 22 端口，那是跳板机"
+         │
+         ▼ 不中断 nmap，消息排队
+nmap 完成 → 下轮 LLM 调用前注入 steering 消息
+         │
+Agent: "收到，跳过 22 端口。继续扫描其他端口..."  ← Agent 自动纠偏
+```
+
+**实现**：Node 维护一个 `steering_queue`。每轮 LLM 调用前，队列中的消息作为 system message 注入：
+```python
+# Agent Loop 每轮开始时
+if self.steering_queue:
+    for msg in self.steering_queue:
+        self.history.append({"role": "system",
+            "content": f"[用户纠偏] {msg.text}"})
+    self.steering_queue.clear()
+```
+
+**UX**：Agent 执行期间输入框保持可用。用户发送的消息自动标记为"纠偏"模式（非 Interrupt），对话区用左边框标识区别于常规消息。
+
+### 4.4 消息可靠性
 
 - **消息去重**：每个消息带唯一 msg_id，接收端去重
 - **有序投递**：基于 session_id 的消息队列保证同一会话消息有序
 - **离线缓存**：节点离线时平台缓存待发消息，重连后按序补传
 - **ACK 机制**：关键消息（task_assign、user_interrupt）需节点 ACK，超时重试
 - **优雅中断**：user_interrupt 消息通过高优先级通道发送，节点收到后立即暂停并在限定时间内响应
+- **Steer 消息不丢**：steer 消息与普通消息共用持久化通道，节点离线时暂存平台，重连后补传
 
 ---
 
