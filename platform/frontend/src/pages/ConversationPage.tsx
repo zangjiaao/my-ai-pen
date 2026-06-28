@@ -3,7 +3,7 @@ import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 import RightPanel from "../components/RightPanel";
 import MessageRenderer from "../components/MessageRenderer";
-import { useConversations } from "../hooks/useApi";
+import { useConversationStore } from "../stores/conversationStore";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { authFetch } from "../lib/api";
 import type { Message } from "../lib/types";
@@ -16,7 +16,7 @@ const TEMPLATES = [
 ];
 
 export default function ConversationPage() {
-  const { data: conversations, refetch } = useConversations();
+  const { conversations, fetchAll } = useConversationStore();
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -47,7 +47,7 @@ export default function ConversationPage() {
         const data = await authFetch("/api/conversations", { method: "POST", headers: { "Content-Type": "application/json" } });
         convId = data.id as string;
         setActiveId(convId);
-        refetch();
+        fetchAll();
       } catch { return; }
     }
 

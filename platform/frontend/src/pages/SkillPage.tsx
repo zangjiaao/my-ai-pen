@@ -22,7 +22,7 @@ export default function SkillPage() {
 
   return (
     <div className="flex h-screen bg-canvas">
-      <Sidebar conversations={[]} activeId={null} onSelect={() => {}} />
+      <Sidebar activeId={null} onSelect={() => {}} />
       <div className="flex-1 flex-col flex">
         <TopBar title="Skill 管理" />
         <div className="flex-1 overflow-y-auto p-6">

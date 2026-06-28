@@ -15,7 +15,7 @@ export default function KnowledgePage() {
 
   return (
     <div className="flex h-screen bg-canvas">
-      <Sidebar conversations={[]} activeId={null} onSelect={() => {}} />
+      <Sidebar activeId={null} onSelect={() => {}} />
       <div className="flex-1 flex-col flex">
         <TopBar title="知识库" />
         <div className="flex-1 overflow-y-auto p-6">

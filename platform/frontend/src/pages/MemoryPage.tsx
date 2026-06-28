@@ -7,7 +7,7 @@ export default function MemoryPage() {
 
   return (
     <div className="flex h-screen bg-canvas">
-      <Sidebar conversations={[]} activeId={null} onSelect={() => {}} />
+      <Sidebar activeId={null} onSelect={() => {}} />
       <div className="flex-1 flex-col flex">
         <TopBar title="记忆管理" />
         <div className="flex-1 overflow-y-auto p-6">
