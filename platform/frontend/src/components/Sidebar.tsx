@@ -1,8 +1,9 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAuthStore } from "../stores/authStore";
 import { useConversationStore } from "../stores/conversationStore";
 import { authFetch } from "../lib/api";
+import ConfirmDialog from "./ConfirmDialog";
 
 interface Props {
   activeId: string | null;
@@ -23,6 +24,7 @@ export default function Sidebar({ activeId, onSelect }: Props) {
   const { conversations, fetchAll } = useConversationStore();
   const navigate = useNavigate();
   const location = useLocation();
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
 
   useEffect(() => { fetchAll(); }, []);
 
@@ -48,7 +50,7 @@ export default function Sidebar({ activeId, onSelect }: Props) {
                   <span className="truncate">{c.title}</span>
                 </div>
               </button>
-              <button onClick={(e) => { e.stopPropagation(); if (window.confirm(`确定删除会话 "${c.title}"?`)) { authFetch(`/api/conversations/${c.id}`, { method: "DELETE" }).then(fetchAll); } }}
+              <button onClick={(e) => { e.stopPropagation(); setDeleteTarget({ id: c.id, title: c.title }); }}
                 className="mr-1 rounded-full p-1 text-ink-muted opacity-0 transition-opacity hover:bg-surface-default hover:text-severity-critical group-hover:opacity-100" title="删除会话">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
@@ -72,6 +74,13 @@ export default function Sidebar({ activeId, onSelect }: Props) {
         <p className="text-xs text-ink-muted">{user?.email}</p>
         <button onClick={logout} className="mt-1 text-xs text-ink-secondary hover:text-ink">退出</button>
       </div>
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title="删除会话"
+        description={`确定删除会话 "${deleteTarget?.title}"? 此操作不可撤销。`}
+        onConfirm={() => { authFetch(`/api/conversations/${deleteTarget!.id}`, { method: "DELETE" }).then(fetchAll); setDeleteTarget(null); }}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </aside>
   );
 }
