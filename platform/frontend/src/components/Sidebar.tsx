@@ -1,3 +1,4 @@
+import { authFetch } from "../../lib/api";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAuthStore } from "../stores/authStore";
 import type { Conversation } from "../lib/types";
@@ -24,8 +25,8 @@ export default function Sidebar({ conversations, activeId, onSelect }: Props) {
 
   const handleCreate = async () => {
     try {
-      const res = await fetch("/api/conversations", { method: "POST", headers: { "Content-Type": "application/json" } });
-      const data = await res.json();
+      const res = await authFetch("/api/conversations", { method: "POST", headers: { "Content-Type": "application/json" } });
+      const data = res;
       navigate("/");
       onSelect(data.id);
     } catch { /* ignore */ }

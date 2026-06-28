@@ -1,3 +1,4 @@
+import { authFetch } from "../lib/api";
 import { useState } from "react";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
@@ -8,8 +9,8 @@ export default function KnowledgePage() {
 
   const search = async () => {
     if (!query.trim()) return;
-    const res = await fetch(`/api/knowledge/search?q=${encodeURIComponent(query)}&limit=5`);
-    setResults(await res.json());
+    const res = await authFetch(`/api/knowledge/search?q=${encodeURIComponent(query)}&limit=5`);
+    setResults(res);
   };
 
   return (

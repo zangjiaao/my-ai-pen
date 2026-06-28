@@ -1,13 +1,11 @@
-import { TokenResponse, User, Conversation } from "./types";
+import type { TokenResponse, User, Conversation } from "./types";
 
 const BASE = "/api";
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = localStorage.getItem("access_token");
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...(options.headers as Record<string, string> || {}),
-  };
+  const headers: Record<string, string> = { ...(options.headers as Record<string, string> || {}) };
+  if (!(options.body instanceof FormData)) headers["Content-Type"] = "application/json";
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
   const res = await fetch(`${BASE}${path}`, { ...options, headers });
@@ -27,3 +25,8 @@ export const api = {
   me: () => request<User>("/auth/me"),
   getConversations: () => request<Conversation[]>("/conversations"),
 };
+
+// Helper for pages to use directly
+export function authFetch<T = any>(path: string, options: RequestInit = {}): Promise<T> {
+  return request<T>(path, options);
+}

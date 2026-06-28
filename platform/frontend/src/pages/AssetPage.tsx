@@ -1,3 +1,4 @@
+import { authFetch } from "../lib/api";
 import { useState, useEffect } from "react";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
@@ -16,13 +17,13 @@ export default function AssetPage() {
     const params = new URLSearchParams();
     if (search) params.set("search", search);
     if (typeFilter !== "全部") params.set("type", typeFilter);
-    const res = await fetch(`/api/assets?${params}`);
-    setAssets(await res.json());
+    const res = await authFetch(`/api/assets?${params}`);
+    setAssets(res);
   };
   useEffect(() => { load(); });
 
   const createAsset = async () => {
-    await fetch("/api/assets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...form, tags: form.tags.split(",").map(t => t.trim()).filter(Boolean) }) });
+    await authFetch("/api/assets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...form, tags: form.tags.split(",").map(t => t.trim()).filter(Boolean) }) });
     setShowForm(false); load();
   };
 

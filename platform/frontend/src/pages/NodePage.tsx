@@ -1,3 +1,4 @@
+import { authFetch } from "../lib/api";
 import { useState, useEffect } from "react";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
@@ -8,12 +9,12 @@ export default function NodePage() {
   const [regName, setRegName] = useState("");
   const [newToken, setNewToken] = useState("");
 
-  const load = () => { fetch("/api/nodes").then(r => r.json()).then(setNodes); };
+  const load = () => { authFetch("/api/nodes".then(setNodes); };
   useEffect(() => { load(); }, []);
 
   const register = async () => {
-    const res = await fetch("/api/nodes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: regName || undefined }) });
-    const data = await res.json();
+    const res = await authFetch("/api/nodes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: regName || undefined }) });
+    const data = res;
     setNewToken(data.token);
     setShowRegister(false);
     load();
