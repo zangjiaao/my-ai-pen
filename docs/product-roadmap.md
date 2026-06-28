@@ -87,16 +87,16 @@
   - [ ] 消息持久化（离线缓存+重连补传）
   - [x] 节点注册/认证
 
-- [ ] **平台 Agent**
-  - [ ] 自然语言意图识别 → 会话类型 + 节点路由
-  - [ ] 会话标题自动生成
-  - [ ] 阶段摘要生成
-  - [ ] 资产/漏洞数据查询能力（Function Call 方式，调用平台 REST API）
+- [x] **平台 Agent**
+  - [x] 自然语言意图识别 → 会话类型 + 节点路由
+  - [x] 会话标题自动生成
+  - [x] 阶段摘要生成
+  - [x] 资产/漏洞数据查询能力（Function Call 方式，调用平台 REST API）
 
 - [x] **节点调度**
   - [x] 节点注册/发现
-  - [ ] Task 分配（task_assign）
-  - [ ] 用户中断指令转发
+  - [x] Task 分配（task_assign）
+  - [x] 用户中断指令转发
 
 - [x] **数据库**
   - [x] PostgreSQL Schema 创建（Asset, Vulnerability, Conversation, Message, Node, Event, AuditLog）
@@ -198,15 +198,15 @@
   - [ ] 运行时中止：`pentest-node stop`（安全停止在最近检查点）
   - [ ] 运行时恢复：`pentest-node resume`
 
-- [ ] **离线结果导出与同步**
-  - [ ] `pentest-node export` 生成 report.tar.gz（含 summary+assets+vulns+evidence+audit）
-  - [ ] `pentest-node sync` 将离线结果同步到平台（REST API 导入）
-  - [ ] 平台导入端：接收 tar.gz → 创建会话 → 导入资产/漏洞/审计日志
+- [x] **离线结果导出与同步**
+  - [x] `pentest-node export` 生成 report.tar.gz（含 summary+assets+vulns+evidence+audit）
+  - [x] `pentest-node sync` 将离线结果同步到平台（REST API 导入）
+  - [x] 平台导入端：接收 tar.gz → 创建会话 → 导入资产/漏洞/审计日志
 
-- [ ] **凭据安全**
-  - [ ] 凭据仅存内存，不写磁盘
-  - [ ] 工具输出中凭据自动遮蔽（redact 模块）
-  - [ ] 导出报告中不包含明文凭据
+- [x] **凭据安全**
+  - [x] 凭据仅存内存，不写磁盘
+  - [x] 工具输出中凭据自动遮蔽（redact 模块）
+  - [x] 导出报告中不包含明文凭据
 
 - [ ] **JSONL 事件日志**
 
