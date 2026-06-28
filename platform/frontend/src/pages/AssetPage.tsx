@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 
@@ -19,7 +19,7 @@ export default function AssetPage() {
     const res = await fetch(`/api/assets?${params}`);
     setAssets(await res.json());
   };
-  useState(() => { load(); });
+  useEffect(() => { load(); });
 
   const createAsset = async () => {
     await fetch("/api/assets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...form, tags: form.tags.split(",").map(t => t.trim()).filter(Boolean) }) });

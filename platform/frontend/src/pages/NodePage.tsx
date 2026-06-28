@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 
 export default function NodePage() {
   const [nodes, setNodes] = useState<Array<Record<string, unknown>>>([]);
-  useState(() => { fetch("/api/nodes").then(r => r.json()).then(setNodes); });
+  useEffect(() => { fetch("/api/nodes").then(r => r.json()).then(setNodes); });
 
   return (
     <div className="flex h-screen bg-canvas">
