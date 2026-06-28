@@ -213,7 +213,7 @@ components:
     border: "1px solid {colors.hairline}"
     placeholderColor: "{colors.ink-muted}"
 
-  # ── Right Panel ──
+  # ── Right Panel (360px, 三个Tab) ──
   panel-right:
     backgroundColor: "{colors.canvas}"
     width: 360px
@@ -230,6 +230,31 @@ components:
     typography: "{typography.body-sm}"
     fontWeight: 500
     borderBottom: "2px solid {colors.ink}"
+
+  # ── Vuln Detail Dialog (漏洞详情弹窗) ──
+  dialog-vuln-detail:
+    backgroundColor: "{colors.canvas}"
+    border: "1px solid {colors.hairline-soft}"
+    rounded: "{rounded.xl}"
+    width: 640px
+    maxHeight: 80vh
+    padding: "{spacing.xl}"
+  dialog-vuln-tabs:
+    backgroundColor: transparent
+    typography: "{typography.body-sm}"
+
+  # ── Sonner Toast (全局提醒) ──
+  sonner-toast:
+    backgroundColor: "{colors.ink}"
+    textColor: "{colors.ink-inverse}"
+    typography: "{typography.body-sm}"
+    rounded: "{rounded.md}"
+    padding: "{spacing.sm} {spacing.md}"
+  sonner-toast-action:
+    backgroundColor: "{colors.accent-on}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.pill}"
+    padding: "4px 12px"
 
   # ── Message Cards ──
   card-tool-call:
@@ -650,7 +675,94 @@ Pill 形状，`{typography.eyebrow}`（JetBrains Mono 12px 520 uppercase + 0.54p
 
 ### Right Panel
 
-360px 宽，左侧 hairline 分隔。Tab 切换：默认 `{colors.ink-secondary}` weight 380，活跃 tab `{colors.ink}` weight 500 + 2px 黑色底部下划线。
+360px 宽，左侧 hairline 分隔。右侧面板是**操作中心**而非信息展示区——用户在这里审阅发现、跟踪进度、处理待办。
+
+**三个 Tab**：
+
+**Tab 1: 发现 (Discoveries)**
+```
+┌─ 发现 ──────────────────────────┐
+│ 🟠 HIGH  SQL 注入               │
+│ /api/users/123?include=         │
+│                                  │
+│ 🟠 HIGH  垂直越权                │
+│ /admin/users (viewer 可访问)     │
+│                                  │
+│ 🟡 MEDIUM API 过度暴露           │
+│ /api/users 返回 password_hash   │
+│                                  │
+│ [点击任意漏洞 → 弹出详情 Dialog]  │
+└──────────────────────────────────┘
+```
+
+点击漏洞 → `dialog-vuln-detail` 弹出（640px 宽，80vh 高），内含子 Tab：
+- **详情**：标题、等级 badge、位置、置信度、CVSS 评分
+- **发现过程**：Agent 的思路时间线——"手工探测 → 单引号报错 → sqlmap 确认 → 手工 UNION SELECT 验证"
+- **证据**：原始 HTTP 请求/响应对 + 工具输出截图 + 复现步骤
+- **修复建议**：具体代码级修复方案
+
+**Tab 2: 进度 (Progress)**
+```
+┌─ 进度 ──────────────────────────┐
+│ 📍 阶段: scan  32/80 次迭代      │
+│ ████████████░░░░░░ 40%           │
+│                                  │
+│ 活跃工具: nuclei (23s)            │
+│                                  │
+│ TODO:                            │
+│ ✅ 端口扫描 (6 资产)              │
+│ ✅ 服务识别                       │
+│ ✅ 目录枚举 (23 端点)             │
+│ 🔄 SQL 注入检测 (进行中)          │
+│ ⬜ XSS 检测                       │
+│ ⬜ 越权测试 (需 2 账号)           │
+│ ⬜ 文件上传测试                   │
+└──────────────────────────────────┘
+```
+
+- **进度条**：基于当前阶段迭代上限的百分比
+- **TODO 列表**：Agent 在 plan 阶段自动生成，执行中实时更新状态
+- 已完成项显示统计数据（如 "6 资产"），进行中项显示 spinner
+
+**Tab 3: 待处理 (Pending)**
+```
+┌─ 待处理 ────────────────────────┐
+│ ⏳ 等待授权 1 项                  │
+│                                  │
+│ sqlmap --dbs 执行确认            │
+│ 风险: DESTRUCTIVE                │
+│ 目标: /api/users/123             │
+│ [去处理 →]                       │
+│                                  │
+│ 超时: 3 分 42 秒后自动取消       │
+└──────────────────────────────────┘
+```
+
+点击"去处理"→ 滚动到对话区对应的确认卡片位置。
+
+### Sonner 通知
+
+当 Agent 需要用户决策时，全局弹出 Sonner toast——不打断操作，但足够醒目：
+
+```
+┌────────────────────────────────────────────────┐
+│                                                │
+│   ⏳ pentest-01 等待你的确认                    │
+│   sqlmap --dbs 执行授权  |  [去处理]            │
+│                                                │
+└────────────────────────────────────────────────┘
+
+  黑色底 + 白色字，圆角 8px，右上角弹出
+  点击"去处理"→ 自动切换到对应会话 + 滚动到确认卡片
+  3 秒后自动收起（不消失，保留在待处理 Tab）
+```
+
+触发时机：
+- Agent 发出 `request_decision` → Sonner 提醒
+- 确认卡片超时即将到期（剩余 1 分钟）→ 再次 Sonner 提醒
+- 多个会话同时等待 → 按紧急程度排序，每个 toast 独立显示
+
+Sidebar 会话项同步显示待处理数量 badge（红色圆点 + 数字）。
 
 ### Modal
 
