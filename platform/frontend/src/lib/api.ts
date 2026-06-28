@@ -8,7 +8,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (!(options.body instanceof FormData)) headers["Content-Type"] = "application/json";
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const res = await fetch(`${BASE}${path}`, { ...options, headers });
+  const fullPath = path.startsWith("/api/") ? path : `${BASE}${path}`;
+  const res = await fetch(fullPath, { ...options, headers });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ message: res.statusText }));
     throw new Error(err?.detail || err?.message || `HTTP ${res.status}`);
