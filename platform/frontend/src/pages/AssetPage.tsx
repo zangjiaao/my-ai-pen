@@ -20,7 +20,7 @@ export default function AssetPage() {
     const res = await authFetch(`/api/assets?${params}`);
     setAssets(res);
   };
-  useEffect(() => { load(); });
+  useEffect(() => { load(); }, []);
 
   const createAsset = async () => {
     await authFetch("/api/assets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...form, tags: form.tags.split(",").map(t => t.trim()).filter(Boolean) }) });
