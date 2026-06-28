@@ -21,7 +21,7 @@ export default function ConversationPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
 
-  useWebSocket({
+  const { send } = useWebSocket({
     vuln_found: (msg) => setMessages((prev) => [...prev, { id: crypto.randomUUID(), conversation_id: activeId || "", role: "agent", msg_type: "vuln_card", content: msg as Record<string, unknown>, parent_msg_id: null, created_at: new Date().toISOString() }]),
     tool_output: (msg) => {
       const { tool_name, line } = msg as Record<string, string>;
@@ -33,6 +33,10 @@ export default function ConversationPage() {
         return [...prev, { id: crypto.randomUUID(), conversation_id: activeId || "", role: "agent", msg_type: "tool_call", content: { tool_name, command: "", status: "running", stdout: line + "\n" }, parent_msg_id: null, created_at: new Date().toISOString() }];
       });
     },
+    asset_discovered: (msg) => setMessages((prev) => [...prev, { id: crypto.randomUUID(), conversation_id: activeId || "", role: "agent", msg_type: "asset_card", content: msg as Record<string, unknown>, parent_msg_id: null, created_at: new Date().toISOString() }]),
+    status_update: (msg) => { console.log("[status]", msg); },
+    task_complete: (msg) => { console.log("[complete]", msg); },
+    task_error: (msg) => { console.log("[error]", msg); },
   });
 
   const handleSend = useCallback(async () => {
@@ -53,7 +57,13 @@ export default function ConversationPage() {
 
     const userMsg: Message = { id: crypto.randomUUID(), conversation_id: convId, role: "user", msg_type: "text", content: { text }, parent_msg_id: null, created_at: new Date().toISOString() };
     setMessages((prev) => [...prev, userMsg]);
-  }, [input, activeId, fetchAll]);
+    // 通过 WebSocket 发送给平台，平台转发给 Node
+    send({ type: "user_message", conversation_id: convId, text, target: { type: "url", value: extractUrl(text) || "http://localhost:8080" } });
+  }, [input, activeId, fetchAll, send]);
+
+  function extractUrl(t: string): string | null {
+    const m = t.match(/https?:\/\/\S+/); return m ? m[0] : null;
+  }
 
   return (
     <div className="flex h-screen overflow-hidden bg-canvas">

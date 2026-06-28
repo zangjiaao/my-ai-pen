@@ -1,20 +1,50 @@
 import json
+import hashlib
+import uuid
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 
 router = APIRouter()
 
-# 已连接客户端: node_id → WebSocket (节点连接)
-# conversation_id → set[WebSocket] (浏览器订阅)
-node_connections: dict[str, WebSocket] = {}
-conversation_subscribers: dict[str, set[WebSocket]] = {}
+node_connections: dict[str, WebSocket] = {}  # node_id → ws
+conversation_subscribers: dict[str, set[WebSocket]] = {}  # conv_id → {browser_ws}
+
+
+async def _update_node_status(node_id: str, status: str):
+    """更新节点数据库状态"""
+    try:
+        from app.db.base import async_session
+        from app.models.node import Node
+        from sqlalchemy import select
+        async with async_session() as db:
+            result = await db.execute(select(Node).where(Node.id == uuid.UUID(node_id)))
+            node = result.scalar_one_or_none()
+            if node:
+                node.status = status
+                await db.commit()
+    except Exception:
+        pass
+
+
+async def _find_node_by_token(token: str) -> str | None:
+    """根据 token 找到节点 ID"""
+    try:
+        from app.db.base import async_session
+        from app.models.node import Node
+        from sqlalchemy import select
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        async with async_session() as db:
+            result = await db.execute(select(Node).where(Node.token_hash == token_hash))
+            node = result.scalar_one_or_none()
+            return str(node.id) if node else None
+    except Exception:
+        return None
 
 
 @router.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
-    """统一 WebSocket 端点。token 用于区分节点 vs 用户。
-    """
     await ws.accept()
 
+    # 识别客户端类型
     try:
         import jwt
         from app.config import settings
@@ -23,7 +53,12 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
         client_id = payload["sub"]
     except Exception:
         client_type = "node"
-        client_id = None
+        client_id = await _find_node_by_token(token)
+
+    # 节点上线
+    if client_type == "node" and client_id:
+        node_connections[client_id] = ws
+        await _update_node_status(client_id, "online")
 
     try:
         while True:
@@ -31,25 +66,37 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
             msg = json.loads(raw)
 
             if client_type == "node":
-                # 节点消息 → 广播给订阅该会话的浏览器
                 conv_id = msg.get("conversation_id")
                 if conv_id and conv_id in conversation_subscribers:
-                    for sub in conversation_subscribers[conv_id]:
+                    for sub in list(conversation_subscribers[conv_id]):
                         try:
                             await sub.send_text(raw)
                         except Exception:
-                            pass
+                            conversation_subscribers[conv_id].discard(sub)
 
             elif client_type == "user":
-                # 用户消息 → 转发给节点
                 conv_id = msg.get("conversation_id")
-                if conv_id and conv_id in conversation_subscribers:
-                    conversation_subscribers[conv_id].add(ws)
-                else:
-                    conversation_subscribers[conv_id] = {ws}
+                if conv_id:
+                    conversation_subscribers.setdefault(conv_id, set()).add(ws)
 
-                # 如果是 steer/interrupt → 转发给对应节点
-                if msg.get("type") in ("user_steer", "user_interrupt", "user_input"):
+                # 用户发消息 → 转发给所有在线节点作为 task_assign
+                if msg.get("type") == "user_message" and node_connections:
+                    task_msg = {
+                        "type": "task_assign",
+                        "conversation_id": conv_id,
+                        "task_id": str(uuid.uuid4()),
+                        "target": msg.get("target", {}),
+                        "initial_instruction": msg.get("text", ""),
+                    }
+                    for nid, node_ws in list(node_connections.items()):
+                        try:
+                            await node_ws.send_text(json.dumps(task_msg))
+                            break  # 只发给第一个可用节点
+                        except Exception:
+                            pass
+
+                # steer/interrupt 转发给节点
+                if msg.get("type") in ("user_steer", "user_interrupt"):
                     for node_ws in node_connections.values():
                         try:
                             await node_ws.send_text(raw)
@@ -59,7 +106,6 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
     except WebSocketDisconnect:
         pass
     finally:
-        # 清理
         for conv_id, subs in list(conversation_subscribers.items()):
             subs.discard(ws)
             if not subs:
@@ -67,3 +113,4 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
 
         if client_type == "node" and client_id:
             node_connections.pop(client_id, None)
+            await _update_node_status(client_id, "offline")
