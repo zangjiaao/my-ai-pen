@@ -1,0 +1,400 @@
+{
+  "$schema": "https://plaid.dev/schemas/vision-v2.json",
+  "version": "2.0",
+  "product": {
+    "name": "AI 安全运营平台",
+    "slug": "ai-sec-platform",
+    "tagline": "平台+节点架构 × 对话式交互 × Agent协同 × 数据沉淀",
+    "description": "一个以自然语言对话为核心交互模式的AI安全运营平台，通过平台Agent与节点Agent的协同，将渗透测试、代码审计、应急响应、日志分析等安全任务从专家驱动的离散操作转变为一站式、可观测、可干预、可追溯的智能安全闭环。",
+    "category": "安全运营 / AI Agent平台",
+    "status": "MVP设计阶段"
+  },
+  "problem": {
+    "statement": "当前安全运营面临五大核心痛点：安全工具分散，操作链路断裂；渗透测试等高级安全活动高度依赖专家经验，人才稀缺且成本高昂；安全分析过程缺乏可观测性和可追溯性；不同安全领域（渗透、代码审计、应急响应、日志分析）之间数据孤岛，无法有效协同；安全发现的证据和结论缺乏系统化管理，知识难以沉淀和复用。",
+    "who_has_it": [
+      "企业安全团队——需要高效完成渗透测试、漏洞管理、应急响应等安全运营工作",
+      "安全服务提供商——需要规模化交付标准化安全测试和评估服务",
+      "CTF 安全研究团队——需要协作式解题环境和知识管理",
+      "个人安全研究员——需要AI辅助的安全分析工具链"
+    ],
+    "current_alternatives": "当前安全工程师通过手动组合Kali Linux工具链（nmap、sqlmap、nuclei、Burp Suite等）执行安全测试，在多个终端和工具间切换，手动整理报告，缺乏统一的协作界面和知识管理。商业方案（如渗透测试平台、漏洞管理平台）各有侧重但缺乏AI原生的统一入口。",
+    "urgency": "high"
+  },
+  "solution": {
+    "core_premise": "构建统一的AI安全入口，以自然语言对话为交互核心。用户对平台Agent描述安全目标，平台Agent识别意图、管理会话、路由到对应安全节点Agent执行，实时展示过程并支持用户干预。所有发现自动沉淀为结构化的资产、漏洞、证据和知识库。",
+    "key_principles": [
+      "平台与节点解耦：节点独立运行，通过标准协议接入平台；平台持有通用对象，不感知节点内部实现细节",
+      "对话为中心：用户通过自然语言对话发起安全活动，平台Agent负责协同和任务路由",
+      "端到端可观测与可干预：工具执行流程透明展示，关键步骤支持用户确认/干预",
+      "数据自然沉淀：资产、漏洞、事件在Agent执行过程中自动入库并建立关联关系，降低人工维护成本",
+      "多Agent协同：节点内部Agent、技能和工具分层架构，基于共享信息中心跨节点协作"
+    ],
+    "differentiators": [
+      "平台+节点架构的Agent协同模式，区别于单一Agent产品",
+      "自然语言驱动的安全操作入口，降低高级安全技能的使用门槛",
+      "实时可观测+可干预的执行过程，兼具自动化和可控性",
+      "统一的资产/漏洞/证据数据模型，打通安全运营全链条"
+    ]
+  },
+  "target_users": {
+    "primary": {
+      "name": "安全工程师 / 渗透测试工程师",
+      "needs": "高效的漏洞发现、验证、报告闭环，减少重复性手工操作",
+      "pain": "工具链割裂，报告编写耗时，缺乏系统性证据管理"
+    },
+    "secondary": [
+      {
+        "name": "安全运营团队管理者",
+        "needs": "团队安全活动可视化管理、进度跟踪、质量评估"
+      },
+      {
+        "name": "代码审计工程师",
+        "needs": "结合静态分析结果进行动态验证，形成可信漏洞结论"
+      },
+      {
+        "name": "应急响应工程师",
+        "needs": "快速分析与溯源，关联威胁情报和资产信息"
+      }
+    ],
+    "tertiary": [
+      {
+        "name": "CTF 参赛者/团队",
+        "needs": "协作解题环境，解题过程记录与Writeup生成"
+      },
+      {
+        "name": "安全研究人员",
+        "needs": "AI辅助的安全分析，威胁情报查询与关联分析"
+      }
+    ]
+  },
+  "architecture": {
+    "layers": [
+      {
+        "name": "用户交互层",
+        "components": ["平台 Web 控制台", "节点 Web 控制台"],
+        "description": "统一的安全任务交互入口。对话页面、资产管理、漏洞管理、节点管理、实时状态展示。"
+      },
+      {
+        "name": "平台核心服务层",
+        "components": [
+          "会话引擎",
+          "资产引擎",
+          "漏洞引擎",
+          "事件总线",
+          "节点编排",
+          "平台 Agent"
+        ],
+        "description": "通用业务调度层。会话编排、资产/漏洞数据库、节点注册与发现、WebSocket广播、授权控制。"
+      },
+      {
+        "name": "节点层（可扩展）",
+        "components": [
+          "渗透测试 Node",
+          "代码审计 Node",
+          "应急响应 Node",
+          "日志分析 Node",
+          "CTF Node",
+          "威胁情报 Node"
+        ],
+        "description": "安全任务执行体。每个Node是一个独立的安全专业领域AI执行者，封装工具、技能和Agent执行环境。"
+      }
+    ],
+    "communication": "平台 ↔ 节点：WebSocket (实时双向) + REST API (注册/任务/查询)",
+    "core_closed_loop": "会话创建 → 意图识别/直连入口 → 节点调度(task_assign) → 资产探测/漏洞扫描/漏洞验证 → 实时状态回传 → 对话页展示过程 + 右侧栏同步发现 → Finding确认 → 证据/漏洞入库 → 阶段摘要 + 报告素材生成"
+  },
+  "mvp": {
+    "scope": "渗透测试Node + 对话页 + 资产管理基础 + 漏洞管理基础",
+    "target_users": "安全工程师在执行渗透测试时获得AI辅助，通过对话发起测试、实时观察过程、确认发现的漏洞",
+    "focus": "打通对话→Agent执行→实时展示→用户干预→漏洞确认入库的完整闭环",
+    "key_features": [
+      "平台Web对话页：Sidebar会话管理 + 中间对话区 + 右侧信息面板",
+      "渗透测试Node：信息收集 → 漏洞扫描 → 漏洞验证 → 报告同步的完整Agent流程",
+      "实时消息体系：工具调用卡片、漏洞发现卡片、确认卡片、状态指示器等",
+      "资产管理基础：扫描发现的端口和服务自动关联资产，支持手动添加和Agent自动发现",
+      "漏洞管理基础：Agent发现并确认的漏洞自动入库，支持状态管理、验证和复测",
+      "WebSocket实时通信：双向消息传递、状态同步、工具输出流式展示",
+      "用户干预机制：高风险操作的授权确认、漏洞发现的交互式确认"
+    ],
+    "out_of_scope": [
+      "CTF、应急响应、日志分析、威胁情报等节点类型",
+      "完整的信息面板Tab — Agent摘要卡片、资产卡片等增强消息（V2完善）；MVP仅提供Agent状态+漏洞+资产三个核心Tab",
+      "完整 RBAC 权限系统（角色/多租户/组织架构）— MVP 仅做 JWT 登录+会话级数据隔离；数据库预留 org_id/role 字段",
+      "复杂多Agent编排",
+      "节点Web控制台（MVP仅提供CLI）",
+      "威胁情报集成",
+      "代码审计节点的Agent验证逻辑"
+    ],
+    "success_criteria": [
+      "用户能在对话页创建渗透测试会话并输入目标",
+      "平台能创建会话并将任务下发至渗透测试Node",
+      "Node执行过程中实时推送工具调用卡片到对话页",
+      "用户能通过确认卡片交互式干预Agent执行",
+      "确认的漏洞自动写入漏洞管理页并关联来源会话",
+      "扫描发现的服务和端口支持一键纳入资产管理"
+    ]
+  },
+  "agents": {
+    "platform_agent": {
+      "name": "平台 Agent",
+      "role": "用户与安全平台之间的默认协同入口和任务路由器",
+      "capabilities": [
+        "自然语言意图识别与任务路由",
+        "平台数据操作（资产/漏洞的查询、创建、修改、删除）",
+        "会话协同（识别对话意图、补全信息、生成标题、产出摘要）",
+        "节点管理（查询状态、执行摘要、获取日志）",
+        "通用安全知识问答",
+        "威胁情报查询（IP/域名/Hash/URL）"
+      ],
+      "separation": "平台Agent不直接执行安全工具调用——这是节点Agent的职责。平台Agent处理通用安全知识和平台内数据操作。"
+    },
+    "node_agents": [
+      {
+        "name": "渗透测试 Agent",
+        "slug": "pentest-agent",
+        "description": "MVP核心节点。定位为一个由平台调度、具备完整安全边界、结构化决策、可追溯证据和漏洞评价能力的AI渗透测试工程师。",
+        "runtime": "Python + PydanticAI（MVP），通过Node Runtime Adapter解耦底层Runtime",
+        "modules": [
+          "Task Intake — 接收task_assign，构建NodeTask并校验参数和scope",
+          "Policy Engine — scope校验、工具风险等级判断、授权状态与审批请求",
+          "Runtime Adapter — 封装底层Runtime，向平台暴露统一事件/证据/Finding接口",
+          "Agent Orchestrator — 解析目标选Playbook、生成阶段计划、遵循执行原则",
+          "Workflow Engine — 维护 precheck→recon→scan→verify→report 阶段状态机",
+          "Skill/Playbook Engine — 将能力和流程封装为可版本化的技能和剧本",
+          "Tool Gateway — 统一工具注册、参数校验、风险分级、命令构建、输出解析",
+          "Sandbox Runner — 受控环境执行安全工具（Docker/Kali沙箱），资源限制+kill switch",
+          "Evidence Store — 原始工具输出+请求/响应+截图Hash+结构化证据摘要",
+          "Finding Verifier — 候选漏洞复现验证、交叉工具验证、去误报、防重复"
+        ],
+        "workflow_states": [
+          {"state": "precheck", "description": "目标格式校验、scope校验、DNS解析、网络连通性检查"},
+          {"state": "plan", "description": "选Playbook、生成TaskPlan、展示阶段计划"},
+          {"state": "recon", "description": "端口扫描、服务识别、指纹、目录枚举"},
+          {"state": "scan", "description": "漏洞扫描、POC验证、配置检查、API测试"},
+          {"state": "verify", "description": "候选Finding复现、交叉工具验证、高风险需授权"},
+          {"state": "report", "description": "确认Finding同步平台、生成阶段摘要和报告素材"},
+          {"state": "checkpoint", "description": "每阶段写入检查点，支持中断/异常后恢复"}
+        ],
+        "references": ["PentesterFlow (HITL confirm_finding, Skill/Playbook)", "AIRecon (阶段化pipeline)", "HexStrike fork (scope validator, blast radius, kill switch)"]
+      },
+      {
+        "name": "代码审计 Agent",
+        "slug": "code-audit-agent",
+        "description": "对源代码进行静态分析发现漏洞，生成CodeFinding含文件位置、路由、数据流和修复建议。可与渗透测试Agent协同进行动态验证。",
+        "phase": "V3+"
+      },
+      {
+        "name": "应急响应 Agent",
+        "slug": "ir-agent",
+        "description": "分析异常事件、攻击路径和入侵指标(IOC)，生成Incident和Timeline。可与渗透测试Agent协同验证攻击路径。",
+        "phase": "V3+"
+      },
+      {
+        "name": "日志分析 Agent",
+        "slug": "log-agent",
+        "description": "分析系统和应用日志，发现异常行为模式和潜在入侵痕迹，生成LogFinding关联资产和事件。",
+        "phase": "V5+"
+      },
+      {
+        "name": "CTF Agent",
+        "slug": "ctf-agent",
+        "description": "针对CTF题目进行自动化/半自动化解题，记录解题过程和关键Flag，生成Writeup。",
+        "phase": "V4+"
+      }
+    ],
+    "agent_collaboration_examples": [
+      {
+        "scenario": "漏洞复测协同",
+        "description": "用户在漏洞管理页针对某个漏洞发起复测，平台创建复测会话调用渗透Agent执行验证，生成RetestResult更新漏洞状态。"
+      },
+      {
+        "scenario": "代码审计→渗透验证",
+        "description": "代码审计Agent在源码中发现漏洞生成CodeFinding，渗透Agent提取路由和参数进行动态验证，验证成功升级为确认Vulnerability。"
+      },
+      {
+        "scenario": "应急响应→渗透溯源",
+        "description": "应急响应Agent发现异常IP和攻击路径后，将IOC传给渗透Agent进行漏洞扫描，确认攻击路径和修复优先级。"
+      }
+    ]
+  },
+  "pages": {
+    "sidebar": {
+      "description": "围绕'会话'而非功能模块组织导航。核心入口是'创建会话'按钮，会话列表按安全活动类型分组（渗透测试、CTF、应急响应等），每个会话显示Icon、标题、状态、摘要和活跃时间。下方是资产、漏洞、事件、节点、知识库和系统设置的次级入口。"
+    },
+    "conversation_page": {
+      "description": "平台默认主页和核心工作界面。左侧Sidebar选择/创建会话，中间展示当前会话的对话区和控制栏，右侧信息面板以Tab页展示当前会话的Agent状态、发现漏洞、目标资产和会话统计。",
+      "message_types": {
+        "P0_mvp": ["文本消息(text)", "系统通知", "工具调用卡片(tool_call)", "漏洞发现卡片(vuln_card)", "确认卡片(confirm_card)"],
+        "P1_next": ["Agent摘要(summary_card)", "阶段状态指示器(step_indicator)", "授权卡片(auth_card)"],
+        "P2_future": ["资产发现卡片(asset_card)", "扫描摘要卡片"]
+      }
+    },
+    "asset_page": {
+      "description": "安全资产的全量视图。资产类型包括IP/域名、Web应用、云服务、代码仓库、日志源、CTF环境等。支持按业务系统、标签筛选和检索。资产信息以详情面板展示，关联漏洞、事件、历史会话和操作日志。支持手动添加和Agent自动发现。"
+    },
+    "vulnerability_page": {
+      "description": "Agent发现并确认的漏洞全量管理。列表展示漏洞标题、严重等级、CVE编号、影响资产、发现时间、来源会话和当前状态。状态流转：待确认→已确认→已报告→已修复→接受风险。详情包含复现步骤、POC、影响URL/参数、修复建议和状态时间线。支持发起复测会话一键调用渗透Agent。"
+    },
+    "node_page": {
+      "description": "节点注册、监控和管理的技术管理页。节点列表展示名称、ID、类型、健康状态、IP、资源使用率、当前会话数。注册时生成接入Token供节点部署脚本使用。详情展示配置信息、版本、指标、当前/历史会话和日志。"
+    }
+  },
+  "data_models": {
+    "core_entities": [
+      {
+        "entity": "Asset",
+        "fields": "id, name, address, type, tags, group_id, properties(json), source, created_at, updated_at",
+        "description": "统一资产对象。properties字段支持异构资产的扩展属性存储。"
+      },
+      {
+        "entity": "Vulnerability",
+        "fields": "id, title, severity, cvss, cve_id, asset_id, conversation_id, description, poc, remediation, confidence, status, discovered_at, updated_at",
+        "description": "漏洞记录。追溯至原始会话和工具运行证据。"
+      },
+      {
+        "entity": "Conversation",
+        "fields": "id, title, node_id, node_type, platform_agent_id, status, context(json), created_at, last_active_at",
+        "description": "会话容器。context存储中间态：执行计划、已发现资产、漏洞列表、agent状态。"
+      },
+      {
+        "entity": "Message",
+        "fields": "id, conversation_id, role, msg_type, content(json), parent_msg_id, created_at",
+        "description": "统一消息结构。content JSON支持text/tool_call/vuln_card/asset_card/confirm_card等多种类型。"
+      },
+      {
+        "entity": "Node",
+        "fields": "id, name, type, status, ip, cpu_usage, memory_usage, current_sessions, last_heartbeat, config(json), registered_at",
+        "description": "节点注册信息和运行时状态。"
+      },
+      {
+        "entity": "Event",
+        "fields": "id, title, type, severity, asset_id, conversation_id, timeline(json), iocs(json), status, created_at",
+        "description": "安全事件记录（应急响应、日志分析等场景）。timeLine和IOC结构化存储。"
+      },
+      {
+        "entity": "AuditLog",
+        "fields": "id, timestamp, actor_type(user|agent|node|system), actor_id, actor_name, action, resource_type, resource_id, detail(jsonb), ip_address, user_agent, conversation_id, status(success|failure|denied)",
+        "description": "不可变审计日志。只追加不修改不删除，同时记录人的操作（登录/状态变更/授权）和Agent的操作（工具执行/Finding/资产发现）。"
+      }
+    ],
+    "node_internal": [
+      {
+        "entity": "ToolRun",
+        "fields": "tool_name, command, args, status, stdout_ref, stderr_ref, start_time, end_time",
+        "description": "记录单次工具的实际执行过程。"
+      },
+      {
+        "entity": "Evidence",
+        "fields": "type, source, raw_ref, summary, hash, related_tool_run_id",
+        "description": "结构化的证据项，含原始请求/响应、截图等。"
+      },
+      {
+        "entity": "CandidateFinding",
+        "fields": "title, affected_asset, location, confidence, evidence_ids",
+        "description": "候选漏洞，由工具输出解析产生，需验证确认。"
+      },
+      {
+        "entity": "ConfirmedFinding",
+        "fields": "severity, reproduction, impact, remediation, evidence_bundle",
+        "description": "验证确认后的漏洞，同步至平台Vulnerability表。"
+      },
+      {
+        "entity": "RetestResult",
+        "fields": "vulnerability_id, result, evidence_ids, agent_id, created_at",
+        "description": "复测结果，用于漏洞修复验证。"
+      }
+    ]
+  },
+  "protocols": {
+    "websocket_message_types": {
+      "platform_to_node": [
+        {"type": "task_assign", "description": "下发任务（目标、任务类型、会话ID）"},
+        {"type": "user_interrupt", "description": "用户中断指令（暂停/继续/取消/补充参数）"},
+        {"type": "user_input", "description": "用户对Agent询问或确认卡片的回复"},
+        {"type": "config_update", "description": "更新节点配置"}
+      ],
+      "node_to_platform": [
+        {"type": "status_update", "description": "Agent状态变化、阶段切换、工具开始/完成"},
+        {"type": "tool_output", "description": "工具实时输出流（stdout/stderr逐行推送）"},
+        {"type": "vuln_found", "description": "发现漏洞（含证据和置信度）"},
+        {"type": "asset_discovered", "description": "发现新资产或资产属性更新"},
+        {"type": "request_decision", "description": "向用户请求授权（生成确认卡片）"},
+        {"type": "task_complete", "description": "任务完成（含摘要和报告）"},
+        {"type": "task_error", "description": "异常终止"}
+      ]
+    },
+    "reliability": "WebSocket断线自动重连+心跳。消息队列离线缓存，重连后补传。任务指令和结果持久化再发送，避免数据丢失。用户中断通过专用消息通道，高优先级处理。"
+  },
+  "security_model": {
+    "principles": "渗透测试Node的任何外部工具调用，必须经过Scope校验、风险等级评估、速率限制和禁止清单过滤，防止AI越权执行或产生不可逆的破坏性后果。",
+    "controls": [
+      {"name": "Scope Gate", "description": "每个任务绑定明确的授权范围(scope)，工具参数中的target必须在scope内"},
+      {"name": "Risk Tier", "description": "工具和动作分为4级——observe(观察)、safe(安全)、intrusive(侵入)、destructive(破坏)——不同等级绑定不同控制策略"},
+      {"name": "Approval Gate", "description": "高风险动作(侵入/破坏级)必须生成ApprovalRequest，在平台对话页以确认/授权卡片形式等待用户授权"},
+      {"name": "Audit Trail", "description": "完整记录决策、会话、目标、工具、参数、结果和摘要的审计日志，证据库保存原始请求/响应"},
+      {"name": "Kill Switch", "description": "平台可对会话或单个ToolRun下发终止指令，节点必须在限定时间内响应并停止执行"},
+      {"name": "Evidence Gate", "description": "漏洞结论必须绑定工具证据、置信度、复现步骤和修复建议。无证据不得形成漏洞记录。"}
+    ]
+  },
+  "tech_stack": {
+    "platform_frontend": "React + shadcn/ui + Zustand + TanStack Query (React Query) + WebSocket 客户端 → 会话路由、消息渲染、右侧信息面板、资产/漏洞管理页面",
+    "platform_backend": "FastAPI (Python) → 会话管理、资产/漏洞CRUD、节点管理、授权控制、WebSocket广播、RabbitMQ消息队列",
+    "platform_database": "PostgreSQL → 资产、漏洞、会话、消息、节点、事件等核心数据",
+    "message_queue": "RabbitMQ → 节点离线消息缓存，重连后按序补传；平台多实例间WebSocket广播",
+    "node_runtime": "Python 3.11+ FastAPI / asyncio → 节点主体：平台连接、任务接收、事件回传、健康检查、CLI入口",
+    "agent_runtime": "PydanticAI (MVP) → 工具Schema定义、结构化输出、HITL。通过Node Runtime Adapter解耦底层Runtime",
+    "llm_adapter": "LiteLLM → 统一接入闭源和开源模型（OpenAI系列、Claude系列、Ollama、LM Studio、企业私有模型）",
+    "sandbox": "Docker / Kali Sandbox Runner → 安全工具隔离执行环境，资源限制、网络策略、工作目录隔离",
+    "node_storage": "SQLite + 文件目录 → NodeTask、ToolRun、Finding、Checkpoint记录；文件目录存储原始证据文件",
+    "protocol": "WebSocket (实时双向) + REST (注册/查询/文件传输)"
+  },
+  "version_roadmap": {
+    "v1_mvp": {
+      "title": "MVP — 渗透测试闭环",
+      "deliverables": [
+        "渗透测试Node（信息收集→扫描→验证→报告）",
+        "平台Web对话页（Sidebar+对话区+右侧面板）",
+        "资产管理基础页",
+        "漏洞管理基础页",
+        "WebSocket实时通信",
+        "消息卡片体系（P0优先级）"
+      ]
+    },
+    "v2": {
+      "title": "V2 — 信息面板+节点控制台",
+      "deliverables": [
+        "全量信息卡片（资产卡片、摘要卡片、授权卡片）",
+        "节点本地Web控制台",
+        "增强的Agent执行监控"
+      ]
+    },
+    "v3": {
+      "title": "V3 — 多Agent协同",
+      "deliverables": [
+        "Agent编排引擎",
+        "代码审计Node",
+        "应急响应Node",
+        "跨节点协同机制"
+      ]
+    },
+    "v4": {
+      "title": "V4 — CTF+威胁情报+报告",
+      "deliverables": [
+        "CTF Node",
+        "事件管理页面",
+        "威胁情报集成（微步/VirusTotal/AlienVault OTX）",
+        "成果/报告中心（报告生成与归档）"
+      ]
+    },
+    "v5": {
+      "title": "V5 — 平台化",
+      "deliverables": [
+        "日志分析Node",
+        "告警研判Node",
+        "多租户与权限体系",
+        "组织架构管理"
+      ]
+    }
+  },
+  "generated_from": "docs/plan.docx (V2.0, 2026-06-25)",
+  "generated_at": "2026-06-28"
+}

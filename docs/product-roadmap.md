@@ -1,0 +1,385 @@
+# 产品路线图 — AI 安全运营平台
+
+> 来源: `vision.json` V2.0 | 生成时间: 2026-06-28
+> 详细设计参考: `docs/pentest-node-spec.md` + `docs/architecture.md` §3
+
+---
+
+## 版本概览
+
+| 版本 | 主题 | 核心交付 |
+|------|------|---------|
+| **V1 MVP** | 渗透测试闭环 | 对话页 + 渗透 Node + 资产/漏洞管理基础 |
+| **V2** | 信息面板 + 节点控制台 | 全量消息卡片 + 节点本地 Web 控制台 |
+| **V3** | 多 Agent 协同 | 编排引擎 + 代码审计 Node + 应急响应 Node |
+| **V4** | CTF + 情报 + 报告 | CTF Node + 威胁情报 + 报告中心 |
+| **V5** | 平台化 | 日志分析 + 告警研判 + 多租户 + 权限体系 |
+
+---
+
+## V1 — MVP：渗透测试闭环 🔴 当前
+
+**目标**：打通"对话 → Agent 执行 → 实时展示 → 用户干预 → 漏洞确认入库"的完整闭环。
+
+### 平台前端
+
+- [ ] **对话页 — Sidebar**
+  - [ ] 全局布局：Sidebar + 对话区 + 右侧信息面板三栏结构
+  - [ ] 「创建会话」按钮与面板（选择会话类型/节点/目标/初始指令）
+  - [ ] 会话列表（按类型分组、Icon区分、标题/状态/摘要/活跃时间展示）
+  - [ ] 会话状态视觉标识（运行中/等待用户确认/失败/完成）
+  - [ ] 会话操作：重命名、归档、删除
+  - [ ] 次级导航入口：资产管理、漏洞管理、节点管理
+
+- [ ] **对话页 — 对话区**
+  - [ ] 文本消息渲染（Markdown 支持）
+  - [ ] 系统通知消息（节点上线/离线、任务开始/结束/异常）
+  - [ ] 工具调用卡片（工具名称、命令、实时流式输出、状态、耗时）
+  - [ ] 漏洞发现卡片（等级标签、标题、位置、置信度、查看详情按钮）
+  - [ ] 确认卡片（问题描述、选项按钮、超时倒计时）
+  - [ ] 对话区底部输入框 + 附件上传 + 快捷指令
+  - [ ] 会话切换时对话区内容刷新
+
+- [ ] **对话页 — 右侧信息面板**
+  - [ ] Tab 切换框架
+  - [ ] Agent 状态 Tab（当前阶段、当前工具、Agent 状态、工具调用历史）
+  - [ ] 发现漏洞 Tab（漏洞列表、等级统计、查看详情入口）
+  - [ ] 目标资产 Tab（目标信息、开放端口/服务列表、一键纳入资产）
+
+- [ ] **资产管理页**
+  - [ ] 资产列表（表格展示 + 分页）
+  - [ ] 资产筛选（按类型、标签、业务系统）
+  - [ ] 资产详情面板（基本信息、关联漏洞、历史会话、操作日志）
+  - [ ] 手动添加资产表单
+  - [ ] Agent 发现资产自动入库（标记来源）
+
+- [ ] **漏洞管理页**
+  - [ ] 漏洞列表（表格展示 + 分页 + 等级颜色标识）
+  - [ ] 漏洞筛选（按等级、状态、资产、时间范围）
+  - [ ] 漏洞详情面板（描述、复现步骤、POC、影响范围、修复建议、状态时间线）
+  - [ ] 漏洞状态流转（待确认→已确认→已报告→已修复→接受风险）
+  - [ ] 「发起复测」按钮（一键创建复测会话）
+
+- [ ] **节点管理页**
+  - [ ] 节点列表（名称、ID、类型、健康状态、IP、资源使用率、当前会话数）
+  - [ ] 节点注册（生成接入 Token + 部署指南）
+  - [ ] 节点详情（配置、版本、指标、历史会话）
+
+### 平台后端
+
+- [ ] **会话管理服务**
+  - [ ] 会话 CRUD API
+  - [ ] 会话状态机（created→running→paused→completed→failed）
+  - [ ] 会话上下文存储（execution_plan, discovered_assets, vulns_list, agent_state）
+
+- [ ] **资产引擎**
+  - [ ] 资产 CRUD API
+  - [ ] 资产属性 JSON Schema 校验
+  - [ ] 资产-Agent发现关联
+
+- [ ] **漏洞引擎**
+  - [ ] 漏洞 CRUD API
+  - [ ] 漏洞状态机 + 状态流转 API
+  - [ ] 漏洞-会话-证据关联
+
+- [ ] **WebSocket 服务**
+  - [ ] 双向消息通道（按会话 ID 路由）
+  - [ ] 心跳 + 断线重连
+  - [ ] 消息持久化（离线缓存+重连补传）
+  - [ ] 节点注册/认证
+
+- [ ] **平台 Agent**
+  - [ ] 自然语言意图识别 → 会话类型 + 节点路由
+  - [ ] 会话标题自动生成
+  - [ ] 阶段摘要生成
+  - [ ] 资产/漏洞数据查询能力（Function Call 方式，调用平台 REST API）
+
+- [ ] **节点调度**
+  - [ ] 节点注册/发现
+  - [ ] Task 分配（task_assign）
+  - [ ] 用户中断指令转发
+
+- [ ] **数据库**
+  - [ ] PostgreSQL Schema 创建（Asset, Vulnerability, Conversation, Message, Node, Event, AuditLog）
+  - [ ] 索引优化
+  - [ ] 迁移脚本
+
+- [ ] **认证与权限（MVP 最小壳）**
+  - [ ] JWT 登录（email+password 或 OAuth2 Google/GitHub）
+  - [ ] 前端登录页 + Token 刷新
+  - [ ] 会话级别访问隔离（用户只能看到自己的会话/资产/漏洞）
+  - [ ] 节点 WebSocket Token 认证（已在通信设计中，确认实现）
+  - [ ] 数据库预留 org_id / role 字段（V5 多租户用，MVP 不用）
+
+- [ ] **审计日志**
+  - [ ] `audit_log` 表创建 + append-only 权限（INSERT/SELECT 无 UPDATE/DELETE）
+  - [ ] 人的操作写入：login/logout/session.create/vuln.status_change/approval/asset.crud
+  - [ ] Agent 操作写入：task/tool.execute/finding.create+confirm+reject/asset.discover
+  - [ ] 系统事件写入：node.connect+disconnect/system.error
+  - [ ] 审计查询/浏览 UI 不纳入 MVP（V2 补充）
+
+### 渗透测试 Node
+
+- [ ] **Task Intake**
+  - [ ] 接收 task_assign 消息
+  - [ ] NodeTask 结构构建
+  - [ ] Scope 与参数校验
+
+- [ ] **Policy Engine + Tool Gateway**
+  - [ ] 工具注册（nmap, httpx, nuclei, sqlmap, gobuster, ffuf, curl）
+  - [ ] ToolSpec Schema 定义（参数、风险等级、超时、Parser）
+  - [ ] Scope 校验 → 非 scope 内目标拒绝
+  - [ ] 风险等级判断 → 高风险工具触发 ApprovalRequest
+  - [ ] 命令构建 → 工具沙箱执行
+
+- [ ] **Agent Orchestrator + Workflow Engine**
+  - [ ] precheck 阶段：目标格式/DNS/连通性校验
+  - [ ] plan 阶段：Playbook 选择 + TaskPlan 生成
+  - [ ] recon 阶段：nmap 端口扫描 + httpx 服务识别 + gobuster 目录枚举
+  - [ ] scan 阶段：nuclei 模板扫描 + sqlmap 注入检测 + 配置检查
+  - [ ] verify 阶段：候选 Finding 复现验证 + 交叉工具验证
+  - [ ] report 阶段：ConfirmedFinding 同步 + 阶段摘要生成
+  - [ ] checkpoint：每阶段持久化状态，支持中断恢复
+  - [ ] 状态机流转 + 阻塞条件处理
+
+- [ ] **Evidence Store**
+  - [ ] 原始工具输出存储（stdout/stderr）
+  - [ ] 请求/响应对存储
+  - [ ] 证据哈希 + 摘要生成
+
+- [ ] **Finding Verifier**
+  - [ ] 候选 Finding 输出解析
+  - [ ] 漏洞复现验证
+  - [ ] 去误报逻辑
+  - [ ] 防重复检测
+
+- [ ] **Platform Sync**
+  - [ ] status_update 消息发送
+  - [ ] tool_output 流式推送
+  - [ ] vuln_found 消息（含证据）
+  - [ ] asset_discovered 消息
+  - [ ] request_decision 消息
+  - [ ] task_complete/task_error 消息
+
+- [ ] **Agent Runtime（PydanticAI）**
+  - [ ] PydanticAI 集成
+  - [ ] 工具 Schema 定义
+  - [ ] 结构化输出（TaskPlan, CandidateFinding, ConfirmedFinding）
+  - [ ] HITL 中断点
+
+- [ ] **Node Runtime Adapter**
+  - [ ] 平台协议适配层
+  - [ ] 统一事件接口
+  - [ ] 证据/Finding 接口抽象
+
+- [ ] **沙箱执行**
+  - [ ] Docker 环境准备（Kali 工具镜像）
+  - [ ] 沙箱 Runner 实现（资源限制、超时、kill switch）
+  - [ ] 工作目录隔离
+
+- [ ] **节点配置与部署**
+  - [ ] Docker 镜像构建 + 发布到 GHCR
+  - [ ] docker-compose.yml 一键部署
+  - [ ] 配置文件（平台地址、Token、节点类型、工具路径、资源限制）
+  - [ ] CLI 入口 (`pentest-node` 命令)
+  - [ ] 健康检查接口
+
+- [ ] **本地 TUI 界面**
+  - [ ] 基于 Textual (Python) 构建独立模式 TUI
+  - [ ] 面板：Agent对话区 / 发现列表(按等级) / 资产摘要 / 状态(阶段+进度+活跃工具)
+  - [ ] 快捷键：Approve(响应授权)、Stop(安全停止)、Detail(展开Finding)、Logs(原始日志)、Quit(不停止任务)
+  - [ ] `pentest-node attach` 重新连接到后台任务
+  - [ ] `pentest-node observe` 平台模式下只读观察
+
+- [ ] **独立运行模式**
+  - [ ] `pentest-node standalone` CLI 子命令（脱离平台运行）
+  - [ ] 配置文件模式 (`--config engagement.yaml`)
+  - [ ] 运行时观测：`pentest-node status`、`pentest-node logs --follow`
+  - [ ] 运行时调整：`pentest-node adjust`（修改 scope/凭据/策略）
+  - [ ] 运行时中止：`pentest-node stop`（安全停止在最近检查点）
+  - [ ] 运行时恢复：`pentest-node resume`
+
+- [ ] **离线结果导出与同步**
+  - [ ] `pentest-node export` 生成 report.tar.gz（含 summary+assets+vulns+evidence+audit）
+  - [ ] `pentest-node sync` 将离线结果同步到平台（REST API 导入）
+  - [ ] 平台导入端：接收 tar.gz → 创建会话 → 导入资产/漏洞/审计日志
+
+- [ ] **凭据安全**
+  - [ ] 凭据仅存内存，不写磁盘
+  - [ ] 工具输出中凭据自动遮蔽（redact 模块）
+  - [ ] 导出报告中不包含明文凭据
+
+- [ ] **JSONL 事件日志**
+
+### 测试环境
+
+- [ ] Docker 漏洞靶场准备（DVWA, Metasploitable2 等）
+- [ ] MVP 验收标准冒烟测试清单
+
+---
+
+## V2 — 信息面板 + 节点控制台
+
+**目标**：补全消息卡片体系，上线节点本地 Web 控制台。
+
+- [ ] P1 消息卡片实现（Agent 摘要卡片、阶段指示器、授权卡片）
+- [ ] P2 消息卡片实现（资产发现卡片、扫描摘要卡片）
+- [ ] 节点本地 Web 控制台（性能指标、活跃任务、工具清单、日志查看）
+- [ ] 节点本地 Web 控制台安全意识（默认关闭、需授权开启、scope校验+操作记录）
+- [ ] 增强的 Agent 执行监控面板
+
+---
+
+## V3 — 多 Agent 协同
+
+**目标**：上线 Agent 编排引擎，新增代码审计和应急响应节点。
+
+- [ ] **Agent 编排引擎**
+  - [ ] 多 Agent 会话编排
+  - [ ] 跨节点 Findings 关联
+  - [ ] 共享信息中心（Asset/Finding/Evidence 跨节点可读）
+
+- [ ] **代码审计 Node**
+  - [ ] 源码静态分析能力
+  - [ ] CodeFinding 数据结构
+  - [ ] 与渗透 Node 协同（动态验证 CodeFinding）
+
+- [ ] **应急响应 Node**
+  - [ ] 事件分析能力
+  - [ ] Incident + Timeline 数据结构
+  - [ ] IOC 提取与管理
+  - [ ] 与渗透 Node 协同（攻击路径验证）
+
+---
+
+## V4 — CTF + 威胁情报 + 报告中心
+
+**目标**：扩展 CTF 场景、集成威胁情报、上线报告生成。
+
+- [ ] **CTF Node**
+  - [ ] CTF 题目资产类型
+  - [ ] 解题 Agent 能力
+  - [ ] Writeup 生成与归档
+
+- [ ] **威胁情报集成**
+  - [ ] 统一情报查询接口
+  - [ ] 微步在线 / VirusTotal / AlienVault OTX 接入
+  - [ ] 情报卡片式展示
+
+- [ ] **报告中心**
+  - [ ] 渗透测试报告生成（漏洞清单 + 证据 + 修复建议）
+  - [ ] 漏洞复测报告
+  - [ ] CTF Writeup 归档
+  - [ ] 代码审计报告
+  - [ ] 应急响应报告
+  - [ ] 报告状态管理（草稿 → 审核 → 已发布 → 已归档）
+
+---
+
+## V5 — 平台化
+
+**目标**：新增日志分析和告警研判节点，上线多租户与权限体系。
+
+- [ ] **日志分析 Node**
+  - [ ] 系统和应用日志分析
+  - [ ] 异常行为检测
+  - [ ] LogFinding 数据结构
+
+- [ ] **告警研判 Node**
+  - [ ] 安全告警分析
+  - [ ] 误报过滤
+  - [ ] 告警关联与优先级排序
+
+- [ ] **多租户与权限体系**
+  - [ ] 用户管理
+  - [ ] 角色与权限（RBAC）
+  - [ ] 组织架构
+  - [ ] 数据隔离
+
+- [ ] **成果/知识中心**
+  - [ ] 知识库管理
+  - [ ] Skill/Playbook 版本管理
+  - [ ] 可复用知识沉淀与共享
+
+---
+
+## MVP 启动前检查清单
+
+- [x] 产品方案文档完成 (plan.docx → vision.json + PRD)
+- [ ] 关键页面线框图确认（对话页、资产页、漏洞页）
+- [x] 技术栈最终确认（React + shadcn/ui + FastAPI + PostgreSQL + RabbitMQ）
+- [x] 通信协议与消息 Schema 最终确认
+- [ ] Docker 漏洞靶场环境准备
+  - [ ] DVWA (`vulnerables/web-dvwa`) — 端口8080，覆盖 SQLi/XSS/CSRF/命令注入
+  - [ ] OWASP Juice Shop (`bkimminich/juice-shop`) — 端口3000，覆盖 SQLi/XSS/JWT/IDOR/SSRF
+  - [ ] docker-compose.yml 一键启动两个靶场 + 网络互通
+- [ ] Docker 沙箱镜像构建
+  - [ ] 基于 `kalilinux/kali-rolling` 定制 `pentest-sandbox` 镜像
+  - [ ] 预装 CLI 工具：nmap, nuclei (+templates), sqlmap, gobuster, ffuf, httpx, curl, whatweb
+  - [ ] 预装浏览器：Playwright + headless Chromium (+ deps)
+  - [ ] 预装代理：mitmproxy（HTTP 拦截和请求捕获）
+  - [ ] 预置常用字典（/usr/share/wordlists/）
+  - [ ] 持久容器 + exec 模式（避免每次冷启动 3-5s）
+  - [ ] 资源限制：mem_limit=2g, cpu_quota=80000, cap_drop=ALL + cap_add=NET_RAW
+
+- [ ] 浏览器自动化 (Playwright)
+  - [ ] browser 工具实现：navigate, login, click, type, screenshot, save_auth, load_auth, capture_requests
+  - [ ] 自动登录：识别登录表单→填写→提交→检测成功/失败
+  - [ ] 网络请求捕获：自动记录所有 XHR/fetch/document 请求
+  - [ ] 多账号认证状态管理 (AuthManager)：保存/加载/切换 auth_state
+
+- [ ] 认证会话管理
+  - [ ] AuthManager：注册凭据→登录→保存 Cookie→自动注入后续请求
+  - [ ] http_request 自动携带认证 Cookie（auth_name 参数切换账号）
+  - [ ] 认证失效检测 (401/403) + 自动重登
+  - [ ] 凭据遮蔽：工具输出和报告中自动替换为 ***REDACTED***
+
+- [ ] Web 应用测试工作流
+  - [ ] 浏览器登录+认证捕获 → 应用探索+请求收集 → 端点分析+注入点提取
+  - [ ] 参数测试：重放请求 → 替换参数为 payload → 对比响应
+  - [ ] 多账号越权测试：admin 浏览→viewer 浏览→对比可访问端点→尝试跨权限访问
+  - [ ] 带认证的自动化扫描：nuclei/sqlmap 使用已捕获的 Cookie
+
+- [ ] WAF 检测与绕过
+  - [ ] WAFDetector：HTTP 头指纹 + 响应行为 + 主动探测三级检测
+  - [ ] 已知 WAF 指纹库：Cloudflare, AWS WAF, ModSecurity, 阿里云, 长亭, 腾讯云
+  - [ ] 自动测试绕过手段 (大小写/编码/空字节/Content-Type切换)
+  - [ ] 检测结果注入 Agent 上下文 (WAF名称/置信度/可用绕过/影响)
+
+- [ ] 速率限制感知
+  - [ ] http_request 内置限速检测：429/Retry-After/X-RateLimit-Remaining/503
+  - [ ] 每 host 独立限速状态 (RateLimit: min_interval, cooldown_until)
+  - [ ] 自动等待 + 上下文注入 ("目标有速率限制，最小间隔 X 秒")
+
+- [ ] 覆盖率追踪
+  - [ ] CoverageStore: (endpoint_pattern, param_name, vuln_type) 三元组去重
+  - [ ] 工具执行前自动查表跳过已测组合
+  - [ ] 每轮上下文注入覆盖率摘要 (已测 X 组合, 待测: ...)
+
+- [ ] 应用模型
+  - [ ] ApplicationModel: 端点→认证角色→参数→WAF行为 实时图谱
+  - [ ] 每轮上下文注入结构化端点地图 (替代纯文本摘要)
+  - [ ] 为后续 V3 跨节点协同预留接口
+
+- [ ] 验证码/MFA/蜜罐感知
+  - [ ] LoginChallengeDetector: 检测 CAPTCHA/reCAPTCHA/hCaptcha/Turnstile + MFA/TOTP
+  - [ ] 遇到挑战时生成 request_user_input 而非报 login failed
+  - [ ] HoneypotDetector: 负向测试时检测蜜罐字段+timing 异常
+
+- [ ] MCP 工具扩展 (MVP 预留接口)
+  - [ ] MCPAdapter: 启动外部 MCP 服务器 → 发现工具 → 注册到 ToolRegistry
+  - [ ] MVP 不依赖外部 MCP，接口预留用于社区工具生态
+
+- [ ] Skill 库 (MVP 至少 10 个)
+  - [x] `web_baseline` — Web 应用基线测试 (recon)
+  - [x] `network_baseline` — 主机/内网渗透基线 (recon)
+  - [x] `sql_injection` — SQL 注入检测与验证 (scan)
+  - [x] `xss` — 跨站脚本检测 (scan)
+  - [x] `auth_test` — 认证/会话/JWT/越权测试 (scan)
+  - [x] `ssrf` — 服务端请求伪造检测 (scan)
+  - [x] `idor` — 越权访问专项测试 (scan)
+  - [x] `file_upload` — 文件上传漏洞检测 (scan)
+  - [x] `api_test` — REST/GraphQL API 安全测试 (scan)
+  - [x] `ssti` — 服务端模板注入检测 (scan)
+- [ ] 渗透测试 Node CLI 原型验证
+- [ ] MVP 里程碑计划排期与人员分工

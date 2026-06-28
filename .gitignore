@@ -1,0 +1,39 @@
+# OS
+Thumbs.db
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+venv/
+
+# Node
+node_modules/
+
+# Environment
+.env
+.env.local
+
+# Build
+dist/
+build/
+
+# Research (external repos, not part of main project)
+research/
+
+# Temporary
+docs/plan_unpacked/
+*.tmp
+*.log
+
+# Claude Code
+.claude/plans/
+.claude/projects/
+memory/
+MEMORY.md
