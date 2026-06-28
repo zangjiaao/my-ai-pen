@@ -192,7 +192,7 @@
 - Agent 事件：task.started / task.phase_changed / task.completed
 - 安全事件：vuln.found / vuln.confirmed / vuln.retested
 
-### 2.4 多会话隔离与连续性
+### 2.5 多会话隔离与连续性
 
 **核心原则**：会话是独立的，切换只是 UI 视角移动，不影响底层执行。
 
