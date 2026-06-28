@@ -222,6 +222,8 @@
 - [ ] **全量消息卡片**
   - [ ] P1 消息卡片：Agent 摘要卡片 (summary_card)、阶段指示器 (step_indicator)、授权卡片 (auth_card)
   - [ ] P2 消息卡片：资产发现卡片 (asset_card)、扫描摘要卡片
+  - [ ] Agent 思考卡片 (thinking_card) — 可折叠，展示 Agent 决策推理过程
+  - [ ] 漏洞利用链卡片 (attack_chain_card) — 多漏洞串联攻击路径可视化
   - [ ] 右侧信息面板全 Tab（Agent 状态 / 漏洞 / 资产 / 统计）
 
 - [ ] **节点 Web 控制台**
