@@ -48,8 +48,8 @@ export default function Sidebar({ activeId, onSelect }: Props) {
                   <span className="truncate">{c.title}</span>
                 </div>
               </button>
-              <button onClick={async (e) => { e.stopPropagation(); await authFetch(`/api/conversations/${c.id}`, { method: "DELETE" }); fetchAll(); }}
-                className="mr-1 rounded-full p-1 text-ink-muted opacity-0 transition-opacity hover:bg-surface-default hover:text-severity-critical group-hover:opacity-100">
+              <button onClick={(e) => { e.stopPropagation(); if (window.confirm(`确定删除会话 "${c.title}"?`)) { authFetch(`/api/conversations/${c.id}`, { method: "DELETE" }).then(fetchAll); } }}
+                className="mr-1 rounded-full p-1 text-ink-muted opacity-0 transition-opacity hover:bg-surface-default hover:text-severity-critical group-hover:opacity-100" title="删除会话">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
             </div>
