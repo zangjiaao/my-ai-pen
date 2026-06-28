@@ -184,19 +184,19 @@
   - [x] 健康检查接口
 
 - [x] **本地 TUI 界面**
-  - [ ] 基于 Textual (Python) 构建独立模式 TUI
-  - [ ] 面板：Agent对话区 / 发现列表(按等级) / 资产摘要 / 状态(阶段+进度+活跃工具)
-  - [ ] 快捷键：Approve(响应授权)、Stop(安全停止)、Detail(展开Finding)、Logs(原始日志)、Quit(不停止任务)
+  - [x] 基于 Textual (Python) 构建独立模式 TUI
+  - [x] 面板：Agent对话区 / 发现列表(按等级) / 资产摘要 / 状态(阶段+进度+活跃工具)
+  - [x] 快捷键：Approve(响应授权)、Stop(安全停止)、Detail(展开Finding)、Logs(原始日志)、Quit(不停止任务)
   - [ ] `pentest-node attach` 重新连接到后台任务
   - [ ] `pentest-node observe` 平台模式下只读观察
 
 - [x] **独立运行模式**
   - [ ] `pentest-node standalone` CLI 子命令（脱离平台运行）
   - [ ] 配置文件模式 (`--config engagement.yaml`)
-  - [ ] 运行时观测：`pentest-node status`、`pentest-node logs --follow`
-  - [ ] 运行时调整：`pentest-node adjust`（修改 scope/凭据/策略）
-  - [ ] 运行时中止：`pentest-node stop`（安全停止在最近检查点）
-  - [ ] 运行时恢复：`pentest-node resume`
+  - [x] 运行时观测：`pentest-node status`、`pentest-node logs --follow`
+  - [x] 运行时调整：`pentest-node adjust`（修改 scope/凭据/策略）
+  - [x] 运行时中止：`pentest-node stop`（安全停止在最近检查点）
+  - [x] 运行时恢复：`pentest-node resume`
 
 - [x] **离线结果导出与同步**
   - [x] `pentest-node export` 生成 report.tar.gz（含 summary+assets+vulns+evidence+audit）
@@ -282,7 +282,7 @@
 ### 测试环境
 
 - [x] Docker 漏洞靶场准备（DVWA + Juice Shop，docker-compose 一键启动）
-- [ ] MVP 验收标准冒烟测试清单
+- [x] MVP 验收标准冒烟测试清单
 
 ---
 
@@ -316,7 +316,7 @@
   - [x] 预装 CLI 工具：nmap, nuclei (+templates), sqlmap, gobuster, ffuf, httpx, curl, whatweb
   - [x] 预装浏览器：Playwright + headless Chromium (+ deps)
   - [x] 预装代理：mitmproxy（HTTP 拦截和请求捕获）
-  - [ ] 预置常用字典（/usr/share/wordlists/）
+  - [x] 预置常用字典（/usr/share/wordlists/）
   - [x] 持久容器 + exec 模式（避免每次冷启动 3-5s）
   - [x] 资源限制：mem_limit=2g, cpu_quota=80000, cap_drop=ALL + cap_add=NET_RAW
 
@@ -379,5 +379,5 @@
   - [x] `file_upload` — 文件上传漏洞检测 (scan)
   - [x] `api_test` — REST/GraphQL API 安全测试 (scan)
   - [x] `ssti` — 服务端模板注入检测 (scan)
-- [ ] 渗透测试 Node CLI 原型验证
-- [ ] MVP 里程碑计划排期与人员分工
+- [x] 渗透测试 Node CLI 原型验证
+- [x] MVP 里程碑计划排期与人员分工
