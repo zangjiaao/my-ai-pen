@@ -9,7 +9,7 @@ export default function NodePage() {
   const [regName, setRegName] = useState("");
   const [newToken, setNewToken] = useState("");
 
-  const load = () => { authFetch("/api/nodes".then(setNodes); };
+  const load = async () => { const data = await authFetch("/api/nodes"); setNodes(data); };
   useEffect(() => { load(); }, []);
 
   const register = async () => {

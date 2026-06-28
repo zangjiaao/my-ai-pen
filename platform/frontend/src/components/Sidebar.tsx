@@ -1,4 +1,4 @@
-import { authFetch } from "../../lib/api";
+import { authFetch } from "../lib/api";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAuthStore } from "../stores/authStore";
 import type { Conversation } from "../lib/types";
