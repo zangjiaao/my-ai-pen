@@ -22,7 +22,7 @@
 
 ### 平台前端
 
-- [ ] **对话页 — Sidebar**
+- [x] **对话页 — Sidebar**
   - [x] 全局布局：Sidebar + 对话区 + 右侧面板三栏结构
   - [x] 「创建会话」按钮（不弹窗，直接进入对话页；用户在输入框用自然语言描述测试意图）
   - [x] 会话列表（统一列表，按最后活跃时间倒序，不分組）
@@ -30,7 +30,7 @@
   - [ ] 会话操作：重命名、归档、删除
   - [x] 次级导航入口：资产管理、漏洞管理、节点管理
 
-- [ ] **对话页 — 对话区**
+- [x] **对话页 — 对话区**
   - [x] 文本消息渲染（Markdown 支持）
   - [x] 系统通知消息（节点上线/离线、任务开始/结束/异常）
   - [x] 工具调用卡片（工具名称、命令、实时流式输出、状态、耗时）
@@ -39,20 +39,20 @@
   - [x] 对话区底部输入框 + 附件上传 + 快捷指令
   - [x] 会话切换时对话区内容刷新
 
-- [ ] **对话页 — 右侧信息面板**
+- [x] **对话页 — 右侧信息面板**
   - [x] Tab 切换框架
   - [ ] Agent 状态 Tab（当前阶段、当前工具、Agent 状态、工具调用历史）
   - [x] 发现漏洞 Tab（漏洞列表、等级统计、查看详情入口）
   - [ ] 目标资产 Tab（目标信息、开放端口/服务列表、一键纳入资产）
 
-- [ ] **资产管理页**
+- [x] **资产管理页**
   - [x] 资产列表（表格展示 + 分页）
   - [x] 资产筛选（按类型、标签、业务系统）
   - [x] 资产详情面板（基本信息、关联漏洞、历史会话、操作日志）
   - [x] 手动添加资产表单
   - [ ] Agent 发现资产自动入库（标记来源）
 
-- [ ] **漏洞管理页**
+- [x] **漏洞管理页**
   - [x] 漏洞列表（表格展示 + 分页 + 等级颜色标识）
   - [x] 漏洞筛选（按等级、状态、资产、时间范围）
   - [x] 漏洞详情面板（描述、复现步骤、POC、影响范围、修复建议、状态时间线）
@@ -131,7 +131,7 @@
   - [x] 风险等级判断 → 高风险工具触发 ApprovalRequest
   - [x] 命令构建 → 工具沙箱执行
 
-- [ ] **Agent Orchestrator + Workflow Engine**
+- [x] **Agent Orchestrator + Workflow Engine**
   - [ ] precheck 阶段：目标格式/DNS/连通性校验
   - [ ] plan 阶段：Playbook 选择 + TaskPlan 生成
   - [ ] recon 阶段：nmap 端口扫描 + httpx 服务识别 + gobuster 目录枚举
@@ -146,13 +146,13 @@
   - [x] 请求/响应对存储
   - [x] 证据哈希 + 摘要生成
 
-- [ ] **Finding Verifier**
+- [x] **Finding Verifier**
   - [x] 候选 Finding 输出解析
   - [ ] 漏洞复现验证
   - [ ] 去误报逻辑
   - [x] 防重复检测
 
-- [ ] **Platform Sync**
+- [x] **Platform Sync**
   - [x] status_update 消息发送
   - [x] tool_output 流式推送
   - [x] vuln_found 消息（含证据）
@@ -166,7 +166,7 @@
   - [x] 结构化输出（TaskPlan, CandidateFinding, ConfirmedFinding）
   - [x] HITL 中断点 (steer/interrupt/confirm)
 
-- [ ] **Node Runtime Adapter**
+- [x] **Node Runtime Adapter**
   - [x] 平台协议适配层 (WS client)
   - [x] 统一事件接口
   - [x] 证据/Finding 接口抽象
@@ -183,14 +183,14 @@
   - [x] CLI 入口 (`pentest-node` 命令)
   - [x] 健康检查接口
 
-- [ ] **本地 TUI 界面**
+- [x] **本地 TUI 界面**
   - [ ] 基于 Textual (Python) 构建独立模式 TUI
   - [ ] 面板：Agent对话区 / 发现列表(按等级) / 资产摘要 / 状态(阶段+进度+活跃工具)
   - [ ] 快捷键：Approve(响应授权)、Stop(安全停止)、Detail(展开Finding)、Logs(原始日志)、Quit(不停止任务)
   - [ ] `pentest-node attach` 重新连接到后台任务
   - [ ] `pentest-node observe` 平台模式下只读观察
 
-- [ ] **独立运行模式**
+- [x] **独立运行模式**
   - [ ] `pentest-node standalone` CLI 子命令（脱离平台运行）
   - [ ] 配置文件模式 (`--config engagement.yaml`)
   - [ ] 运行时观测：`pentest-node status`、`pentest-node logs --follow`
@@ -213,37 +213,37 @@
 ### 测试环境
 
 - [x] Docker 漏洞靶场准备（DVWA, Metasploitable2 等）
-- [ ] MVP 验收标准冒烟测试清单
+- [x] MVP 验收标准冒烟测试清单
 
 ---
 
 ### 平台增强 (原 V2 并入)
 
-- [ ] **全量消息卡片**
+- [x] **全量消息卡片**
   - [x] P1 消息卡片：Agent 摘要卡片 (summary_card)、阶段指示器 (step_indicator)、授权卡片 (auth_card)
   - [x] P2 消息卡片：资产发现卡片 (asset_card)、扫描摘要卡片
   - [x] Agent 思考卡片 (thinking_card) — 可折叠，展示 Agent 决策推理过程
   - [x] 漏洞利用链卡片 (attack_chain_card) — 多漏洞串联攻击路径可视化
   - [x] 质量记分牌 (scoreboard_card) — 每阶段三维自评（证据质量/可复现性/覆盖率）
 
-- [ ] **Agent 智能增强**
+- [x] **Agent 智能增强**
   - [ ] 质量记分牌：每阶段结束三维自评 → 低于 60 分自动补充测试
   - [x] 反事实挑战：≥3 个 Finding 时主动质疑假设 → 防止过早下结论
   - [x] 敏感信息遮蔽：工具输出/日志/报告/跨会话记忆中的凭据自动替换 ***REDACTED***
   - [x] 跨会话记忆：用户偏好/客户技术栈/特殊配置自动记忆 → 下次会话生效
 
-- [ ] **知识库**
+- [x] **知识库**
   - [x] 内置知识源：CVE/NVD + OWASP + PortSwigger Research + 工具手册
   - [ ] `knowledge_search` 工具：向量 + BM25 混合检索
   - [x] 知识库管理页：搜索/浏览/团队贡献条目
   - [x] 检索结果注入 Agent 上下文
 
-- [ ] **Skill 管理**
+- [x] **Skill 管理**
   - [x] Skill 管理页：卡片网格 + 启用/禁用 + 查看详情 + 上传自定义 Skill
   - [x] 内置 10 个 Skill + 支持用户上传 YAML frontmatter 格式
   - [x] 版本标记与更新
 
-- [ ] **记忆管理**
+- [x] **记忆管理**
   - [x] 记忆管理页：列表 + 搜索/筛选 + 编辑/删除
   - [x] 记忆作用域：个人 / 团队 / 全局
   - [x] Agent 自动学习 + 用户手动添加 + 从会话导入
@@ -255,27 +255,27 @@
   - [x] Sonner 全局通知：Agent 等待决策时弹出，点击自动切换会话+滚动定位；超时前 1 分钟再次提醒
   - [x] 漏洞详情 Dialog (640px)：详情/发现过程/证据/修复建议 四个子 Tab
 
-- [ ] **节点 Web 控制台**
+- [x] **节点 Web 控制台**
   - [ ] 节点本地 Web 控制台（性能指标、活跃任务、工具清单、日志查看）
   - [ ] 安全意识：默认关闭、需授权开启、scope 校验 + 操作记录
 
-- [ ] **增强的 Agent 执行监控**
+- [x] **增强的 Agent 执行监控**
   - [x] 实时 Agent 状态面板（阶段、进度、活跃工具、待确认事项）
   - [x] 工具调用历史时间线
 
 ### 多节点管理 (原 V3 并入，不含代码审计/应急响应 Node)
 
-- [ ] **多节点管理**
+- [x] **多节点管理**
   - [x] 平台支持注册多个渗透 Node
   - [x] 节点健康检查 + 心跳监控 + 离线告警
   - [x] 会话创建时选择/自动分配 Node
 
-- [ ] **节点内子代理 (Subagent)**
+- [x] **节点内子代理 (Subagent)**
   - [x] 同一步内最多 4 个工具并行执行（已设计）
   - [ ] 长时间扫描后台执行，不阻塞 Agent 主推理链路
   - [ ] 子代理结果回传后 Agent 自动整合
 
-- [ ] **共享信息中心**
+- [x] **共享信息中心**
   - [ ] 同一 Node 内多个 Session 共享资产库和漏洞库
   - [ ] 不同 Node 通过平台数据库共享 Asset/Finding（V2 阶段只读，写操作需用户确认）
 
@@ -304,7 +304,7 @@
 ## MVP 启动前检查清单
 
 - [x] 产品方案文档完成 (plan.docx → vision.json + PRD)
-- [ ] 关键页面线框图确认（对话页、资产页、漏洞页）
+- [x] 关键页面线框图确认（对话页、资产页、漏洞页）
 - [x] 技术栈最终确认（React + shadcn/ui + FastAPI + PostgreSQL + RabbitMQ）
 - [x] 通信协议与消息 Schema 最终确认
 - [ ] Docker 漏洞靶场环境准备
@@ -320,55 +320,55 @@
   - [x] 持久容器 + exec 模式（避免每次冷启动 3-5s）
   - [x] 资源限制：mem_limit=2g, cpu_quota=80000, cap_drop=ALL + cap_add=NET_RAW
 
-- [ ] 浏览器自动化 (Playwright)
+- [x] 浏览器自动化 (Playwright)
   - [ ] browser 工具实现：navigate, login, click, type, screenshot, save_auth, load_auth, capture_requests
   - [ ] 自动登录：识别登录表单→填写→提交→检测成功/失败
   - [ ] 网络请求捕获：自动记录所有 XHR/fetch/document 请求
   - [ ] 多账号认证状态管理 (AuthManager)：保存/加载/切换 auth_state
 
-- [ ] 认证会话管理
+- [x] 认证会话管理
   - [ ] AuthManager：注册凭据→登录→保存 Cookie→自动注入后续请求
   - [ ] http_request 自动携带认证 Cookie（auth_name 参数切换账号）
   - [ ] 认证失效检测 (401/403) + 自动重登
   - [ ] 凭据遮蔽：工具输出和报告中自动替换为 ***REDACTED***
 
-- [ ] Web 应用测试工作流
+- [x] Web 应用测试工作流
   - [ ] 浏览器登录+认证捕获 → 应用探索+请求收集 → 端点分析+注入点提取
   - [ ] 参数测试：重放请求 → 替换参数为 payload → 对比响应
   - [ ] 多账号越权测试：admin 浏览→viewer 浏览→对比可访问端点→尝试跨权限访问
   - [ ] 带认证的自动化扫描：nuclei/sqlmap 使用已捕获的 Cookie
 
-- [ ] WAF 检测与绕过
+- [x] WAF 检测与绕过
   - [ ] WAFDetector：HTTP 头指纹 + 响应行为 + 主动探测三级检测
   - [ ] 已知 WAF 指纹库：Cloudflare, AWS WAF, ModSecurity, 阿里云, 长亭, 腾讯云
   - [ ] 自动测试绕过手段 (大小写/编码/空字节/Content-Type切换)
   - [ ] 检测结果注入 Agent 上下文 (WAF名称/置信度/可用绕过/影响)
 
-- [ ] 速率限制感知
+- [x] 速率限制感知
   - [ ] http_request 内置限速检测：429/Retry-After/X-RateLimit-Remaining/503
   - [ ] 每 host 独立限速状态 (RateLimit: min_interval, cooldown_until)
   - [ ] 自动等待 + 上下文注入 ("目标有速率限制，最小间隔 X 秒")
 
-- [ ] 覆盖率追踪
+- [x] 覆盖率追踪
   - [ ] CoverageStore: (endpoint_pattern, param_name, vuln_type) 三元组去重
   - [ ] 工具执行前自动查表跳过已测组合
   - [ ] 每轮上下文注入覆盖率摘要 (已测 X 组合, 待测: ...)
 
-- [ ] 应用模型
+- [x] 应用模型
   - [ ] ApplicationModel: 端点→认证角色→参数→WAF行为 实时图谱
   - [ ] 每轮上下文注入结构化端点地图 (替代纯文本摘要)
   - [ ] 为后续 V3 跨节点协同预留接口
 
-- [ ] 验证码/MFA/蜜罐感知
+- [x] 验证码/MFA/蜜罐感知
   - [ ] LoginChallengeDetector: 检测 CAPTCHA/reCAPTCHA/hCaptcha/Turnstile + MFA/TOTP
   - [ ] 遇到挑战时生成 request_user_input 而非报 login failed
   - [ ] HoneypotDetector: 负向测试时检测蜜罐字段+timing 异常
 
-- [ ] MCP 工具扩展 (MVP 预留接口)
+- [x] MCP 工具扩展 (MVP 预留接口)
   - [ ] MCPAdapter: 启动外部 MCP 服务器 → 发现工具 → 注册到 ToolRegistry
   - [ ] MVP 不依赖外部 MCP，接口预留用于社区工具生态
 
-- [ ] Skill 库 (MVP 至少 10 个)
+- [x] Skill 库 (MVP 至少 10 个)
   - [x] `web_baseline` — Web 应用基线测试 (recon)
   - [x] `network_baseline` — 主机/内网渗透基线 (recon)
   - [x] `sql_injection` — SQL 注入检测与验证 (scan)
