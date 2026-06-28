@@ -37,7 +37,7 @@
   - [x] 漏洞发现卡片（等级标签、标题、位置、置信度、查看详情按钮）
   - [x] 确认卡片（问题描述、选项按钮、超时倒计时）
   - [x] 对话区底部输入框 + 附件上传 + 快捷指令
-  - [ ] 会话切换时对话区内容刷新
+  - [x] 会话切换时对话区内容刷新
 
 - [ ] **对话页 — 右侧信息面板**
   - [x] Tab 切换框架
@@ -73,13 +73,13 @@
 
 - [x] **资产引擎**
   - [x] 资产 CRUD API
-  - [ ] 资产属性 JSON Schema 校验
-  - [ ] 资产-Agent发现关联
+  - [x] 资产属性 JSON Schema 校验
+  - [x] 资产-Agent发现关联
 
 - [x] **漏洞引擎**
   - [x] 漏洞 CRUD API
   - [x] 漏洞状态机 + 状态流转 API
-  - [ ] 漏洞-会话-证据关联
+  - [x] 漏洞-会话-证据关联
 
 - [x] **WebSocket 服务**
   - [x] 双向消息通道（按会话 ID 路由）
@@ -100,7 +100,7 @@
 
 - [x] **数据库**
   - [x] PostgreSQL Schema 创建（Asset, Vulnerability, Conversation, Message, Node, Event, AuditLog）
-  - [ ] 索引优化
+  - [x] 索引优化
   - [x] 迁移脚本
 
 - [x] **认证与权限（MVP 最小壳）**
@@ -112,9 +112,9 @@
 
 - [x] **审计日志**
   - [x] `audit_log` 表创建 + append-only 权限（INSERT/SELECT 无 UPDATE/DELETE）
-  - [ ] 人的操作写入：login/logout/session.create/vuln.status_change/approval/asset.crud
-  - [ ] Agent 操作写入：task/tool.execute/finding.create+confirm+reject/asset.discover
-  - [ ] 系统事件写入：node.connect+disconnect/system.error
+  - [x] 人的操作写入：login/logout/session.create/vuln.status_change/approval/asset.crud
+  - [x] Agent 操作写入：task/tool.execute/finding.create+confirm+reject/asset.discover
+  - [x] 系统事件写入：node.connect+disconnect/system.error
   - [x] 审计查询/浏览 UI 不纳入 MVP（V2 补充）
 
 ### 渗透测试 Node
@@ -122,7 +122,7 @@
 - [x] **Task Intake**
   - [x] 接收 task_assign 消息
   - [x] NodeTask 结构构建
-  - [ ] Scope 与参数校验
+  - [x] Scope 与参数校验
 
 - [x] **Policy Engine + Tool Gateway**
   - [x] 工具注册（nmap, httpx, nuclei, sqlmap, gobuster, ffuf, curl）
@@ -153,23 +153,23 @@
   - [x] 防重复检测
 
 - [ ] **Platform Sync**
-  - [ ] status_update 消息发送
-  - [ ] tool_output 流式推送
-  - [ ] vuln_found 消息（含证据）
-  - [ ] asset_discovered 消息
-  - [ ] request_decision 消息
-  - [ ] task_complete/task_error 消息
+  - [x] status_update 消息发送
+  - [x] tool_output 流式推送
+  - [x] vuln_found 消息（含证据）
+  - [x] asset_discovered 消息
+  - [x] request_decision 消息
+  - [x] task_complete/task_error 消息
 
 - [x] **Agent Runtime（PydanticAI/LiteLLM）**
   - [x] LiteLLM 集成 (chat + stream)
   - [x] 工具 Schema 定义
-  - [ ] 结构化输出（TaskPlan, CandidateFinding, ConfirmedFinding）
+  - [x] 结构化输出（TaskPlan, CandidateFinding, ConfirmedFinding）
   - [x] HITL 中断点 (steer/interrupt/confirm)
 
 - [ ] **Node Runtime Adapter**
   - [x] 平台协议适配层 (WS client)
   - [x] 统一事件接口
-  - [ ] 证据/Finding 接口抽象
+  - [x] 证据/Finding 接口抽象
 
 - [x] **沙箱执行**
   - [x] Docker 环境准备（Kali 工具镜像）
@@ -212,7 +212,7 @@
 
 ### 测试环境
 
-- [ ] Docker 漏洞靶场准备（DVWA, Metasploitable2 等）
+- [x] Docker 漏洞靶场准备（DVWA, Metasploitable2 等）
 - [ ] MVP 验收标准冒烟测试清单
 
 ---
@@ -233,20 +233,20 @@
   - [x] 跨会话记忆：用户偏好/客户技术栈/特殊配置自动记忆 → 下次会话生效
 
 - [ ] **知识库**
-  - [ ] 内置知识源：CVE/NVD + OWASP + PortSwigger Research + 工具手册
+  - [x] 内置知识源：CVE/NVD + OWASP + PortSwigger Research + 工具手册
   - [ ] `knowledge_search` 工具：向量 + BM25 混合检索
   - [x] 知识库管理页：搜索/浏览/团队贡献条目
-  - [ ] 检索结果注入 Agent 上下文
+  - [x] 检索结果注入 Agent 上下文
 
 - [ ] **Skill 管理**
   - [x] Skill 管理页：卡片网格 + 启用/禁用 + 查看详情 + 上传自定义 Skill
   - [x] 内置 10 个 Skill + 支持用户上传 YAML frontmatter 格式
-  - [ ] 版本标记与更新
+  - [x] 版本标记与更新
 
 - [ ] **记忆管理**
   - [x] 记忆管理页：列表 + 搜索/筛选 + 编辑/删除
-  - [ ] 记忆作用域：个人 / 团队 / 全局
-  - [ ] Agent 自动学习 + 用户手动添加 + 从会话导入
+  - [x] 记忆作用域：个人 / 团队 / 全局
+  - [x] Agent 自动学习 + 用户手动添加 + 从会话导入
   - [ ] 右侧信息面板（操作中心）
     - [x] Tab 1「发现」：漏洞列表（点击→详情 Dialog：详情/发现过程/证据/修复建议）
     - [x] Tab 2「进度」：阶段进度条 + Agent 自动 TODO 列表（已完成/进行中/待开始+统计数据）
@@ -260,8 +260,8 @@
   - [ ] 安全意识：默认关闭、需授权开启、scope 校验 + 操作记录
 
 - [ ] **增强的 Agent 执行监控**
-  - [ ] 实时 Agent 状态面板（阶段、进度、活跃工具、待确认事项）
-  - [ ] 工具调用历史时间线
+  - [x] 实时 Agent 状态面板（阶段、进度、活跃工具、待确认事项）
+  - [x] 工具调用历史时间线
 
 ### 多节点管理 (原 V3 并入，不含代码审计/应急响应 Node)
 
