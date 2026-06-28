@@ -270,6 +270,19 @@ components:
     borderBottom: "1px solid {colors.hairline-soft}"
     padding: "{spacing.sm} {spacing.md}"
 
+  # ── File Viewer Tab (只读文件查看) ──
+  file-viewer:
+    backgroundColor: "{colors.canvas-inset}"
+    textColor: "{colors.ink}"
+    typography: "{typography.code}"
+    border: "1px solid {colors.hairline}"
+    rounded: "{rounded.md}"
+    padding: "{spacing.md}"
+  file-viewer-header:
+    backgroundColor: "{colors.surface-default}"
+    borderBottom: "1px solid {colors.hairline}"
+    typography: "{typography.body-sm}"
+
   # ── Message Cards ──
   card-tool-call:
     backgroundColor: "{colors.surface-default}"
@@ -753,6 +766,48 @@ Pill 形状，`{typography.eyebrow}`（JetBrains Mono 12px 520 uppercase + 0.54p
 ```
 
 点击"去处理"→ 滚动到对话区对应的确认卡片位置。
+
+**Tab 4: 文件 (Files)**
+
+```
+┌─ 文件 ──────────────────────────┐
+│ 📄 test_xss.sh        2.1 KB   │
+│ 📄 scan_loop.py       0.8 KB   │
+│ 📄 custom_bypass.txt  0.3 KB   │
+│ 📄 sqlmap-result.txt  12.4 KB  │
+│ 📄 poc_sqli.py        1.5 KB   │
+│ 📄 nmap-10.0.1.10.txt 45.2 KB  │
+└──────────────────────────────────┘
+```
+
+- 列出 Agent 在沙箱 workspace 中创建的所有文件
+- 按时间倒序排列，显示文件名和大小
+- 点击文件 → 在左侧主区域打开**只读文件查看 Tab**
+
+**文件查看 Tab**：点击文件后，在对话区旁边打开一个只读 Tab（类似 VS Code 的编辑 Tab）：
+
+```
+┌─ 对话区 ────────────┬── 文件: poc_sqli.py ──┬── 右侧面板 ──┐
+│                     │                        │              │
+│  Agent 执行中...     │ import requests        │  [发现]      │
+│                     │                        │  [进度]      │
+│                     │ target = "https://..."  │  [待处理]    │
+│                     │ payload = "' OR '1'='1" │  [文件]      │
+│                     │                        │              │
+│                     │ resp = requests.get(    │              │
+│                     │   target,              │              │
+│                     │   params={"id":payload})│              │
+│                     │                        │              │
+│                     │ print(resp.status_code) │              │
+│                     │                        │              │
+│                     │ [关闭]                  │              │
+└─────────────────────┴────────────────────────┴──────────────┘
+```
+
+- 只读模式（不可编辑——Agent 正在使用这些文件）
+- 代码高亮（根据文件扩展名自动检测语言）
+- 多个文件可以同时打开，Tab 式切换
+- 关闭 Tab 不会删除文件，只是收起视图
 
 ### Sonner 通知
 
