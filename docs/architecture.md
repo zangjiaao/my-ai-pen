@@ -192,6 +192,27 @@
 - Agent 事件：task.started / task.phase_changed / task.completed
 - 安全事件：vuln.found / vuln.confirmed / vuln.retested
 
+### 2.4 多会话隔离与连续性
+
+**核心原则**：会话是独立的，切换只是 UI 视角移动，不影响底层执行。
+
+```
+┌─ 浏览器 ──────────────────────────────────────────────────┐
+│  MessageBuffer { conversation_id → Message[] }            │
+│                                                           │
+│  切换到 session-2: 从本地 buffer 渲染 → API 补漏 → 显示    │
+│  切回 session-1: buffer 中已有切换期间到达的新消息          │
+│  不需要"从头开始"——消息一直在推送和缓冲                      │
+└──────────────────────────────────────────────────────────┘
+```
+
+**实现要点**：
+
+- **单一 WebSocket 连接**：浏览器只维持一条 WS 连接。所有会话的消息通过同一条连接推送，`conversation_id` 字段路由到对应的 buffer
+- **消息即时持久化**：每条消息到达平台后立即写 PostgreSQL。切换会话时前端调 `GET /api/conversations/:id/messages?after={last_seen_id}` 补全切换期间可能遗漏的消息
+- **Node 侧会话独立**：每个 Session 有独立的 `AgentState`（phase、iteration、history、findings）。Session 队列管理的是执行顺序——排队的 Session 状态保持不动，轮到执行时从 Checkpoint 恢复
+- **用户侧无感知**：你从 session-1 切到 session-2 再切回来，session-1 的消息流不间断——Agent 的输出持续追加到 buffer 和数据库，不管你当前在看哪个页面
+
 ### 2.5 节点编排
 
 **核心职责**：
