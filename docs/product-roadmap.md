@@ -23,26 +23,26 @@
 ### 平台前端
 
 - [ ] **对话页 — Sidebar**
-  - [ ] 全局布局：Sidebar + 对话区 + 右侧面板三栏结构
-  - [ ] 「创建会话」按钮（不弹窗，直接进入对话页；用户在输入框用自然语言描述测试意图）
-  - [ ] 会话列表（统一列表，按最后活跃时间倒序，不分組）
-  - [ ] 会话状态视觉标识（运行中/排队中/等待用户确认/失败/完成）
+  - [x] 全局布局：Sidebar + 对话区 + 右侧面板三栏结构
+  - [x] 「创建会话」按钮（不弹窗，直接进入对话页；用户在输入框用自然语言描述测试意图）
+  - [x] 会话列表（统一列表，按最后活跃时间倒序，不分組）
+  - [x] 会话状态视觉标识（运行中/排队中/等待用户确认/失败/完成）
   - [ ] 会话操作：重命名、归档、删除
-  - [ ] 次级导航入口：资产管理、漏洞管理、节点管理
+  - [x] 次级导航入口：资产管理、漏洞管理、节点管理
 
 - [ ] **对话页 — 对话区**
-  - [ ] 文本消息渲染（Markdown 支持）
+  - [x] 文本消息渲染（Markdown 支持）
   - [ ] 系统通知消息（节点上线/离线、任务开始/结束/异常）
-  - [ ] 工具调用卡片（工具名称、命令、实时流式输出、状态、耗时）
-  - [ ] 漏洞发现卡片（等级标签、标题、位置、置信度、查看详情按钮）
+  - [x] 工具调用卡片（工具名称、命令、实时流式输出、状态、耗时）
+  - [x] 漏洞发现卡片（等级标签、标题、位置、置信度、查看详情按钮）
   - [ ] 确认卡片（问题描述、选项按钮、超时倒计时）
-  - [ ] 对话区底部输入框 + 附件上传 + 快捷指令
+  - [x] 对话区底部输入框 + 附件上传 + 快捷指令
   - [ ] 会话切换时对话区内容刷新
 
 - [ ] **对话页 — 右侧信息面板**
-  - [ ] Tab 切换框架
+  - [x] Tab 切换框架
   - [ ] Agent 状态 Tab（当前阶段、当前工具、Agent 状态、工具调用历史）
-  - [ ] 发现漏洞 Tab（漏洞列表、等级统计、查看详情入口）
+  - [x] 发现漏洞 Tab（漏洞列表、等级统计、查看详情入口）
   - [ ] 目标资产 Tab（目标信息、开放端口/服务列表、一键纳入资产）
 
 - [ ] **资产管理页**
@@ -60,32 +60,32 @@
   - [ ] 「发起复测」按钮（一键创建复测会话）
 
 - [ ] **节点管理页**
-  - [ ] 节点列表（名称、ID、类型、健康状态、IP、资源使用率、当前会话数）
-  - [ ] 节点注册（生成接入 Token + 部署指南）
+  - [x] 节点列表（名称、ID、类型、健康状态、IP、资源使用率、当前会话数）
+  - [x] 节点注册（生成接入 Token + 部署指南）
   - [ ] 节点详情（配置、版本、指标、历史会话）
 
 ### 平台后端
 
-- [ ] **会话管理服务**
-  - [ ] 会话 CRUD API
-  - [ ] 会话状态机（created→running→paused→completed→failed）
+- [x] **会话管理服务**
+  - [x] 会话 CRUD API
+  - [x] 会话状态机（created→running→paused→completed→failed）
   - [ ] 会话上下文存储（execution_plan, discovered_assets, vulns_list, agent_state）
 
-- [ ] **资产引擎**
-  - [ ] 资产 CRUD API
+- [x] **资产引擎**
+  - [x] 资产 CRUD API
   - [ ] 资产属性 JSON Schema 校验
   - [ ] 资产-Agent发现关联
 
-- [ ] **漏洞引擎**
-  - [ ] 漏洞 CRUD API
-  - [ ] 漏洞状态机 + 状态流转 API
+- [x] **漏洞引擎**
+  - [x] 漏洞 CRUD API
+  - [x] 漏洞状态机 + 状态流转 API
   - [ ] 漏洞-会话-证据关联
 
-- [ ] **WebSocket 服务**
-  - [ ] 双向消息通道（按会话 ID 路由）
-  - [ ] 心跳 + 断线重连
+- [x] **WebSocket 服务**
+  - [x] 双向消息通道（按会话 ID 路由）
+  - [x] 心跳 + 断线重连
   - [ ] 消息持久化（离线缓存+重连补传）
-  - [ ] 节点注册/认证
+  - [x] 节点注册/认证
 
 - [ ] **平台 Agent**
   - [ ] 自然语言意图识别 → 会话类型 + 节点路由
@@ -93,43 +93,43 @@
   - [ ] 阶段摘要生成
   - [ ] 资产/漏洞数据查询能力（Function Call 方式，调用平台 REST API）
 
-- [ ] **节点调度**
-  - [ ] 节点注册/发现
+- [x] **节点调度**
+  - [x] 节点注册/发现
   - [ ] Task 分配（task_assign）
   - [ ] 用户中断指令转发
 
-- [ ] **数据库**
-  - [ ] PostgreSQL Schema 创建（Asset, Vulnerability, Conversation, Message, Node, Event, AuditLog）
+- [x] **数据库**
+  - [x] PostgreSQL Schema 创建（Asset, Vulnerability, Conversation, Message, Node, Event, AuditLog）
   - [ ] 索引优化
-  - [ ] 迁移脚本
+  - [x] 迁移脚本
 
-- [ ] **认证与权限（MVP 最小壳）**
-  - [ ] JWT 登录（email+password 或 OAuth2 Google/GitHub）
-  - [ ] 前端登录页 + Token 刷新
-  - [ ] 会话级别访问隔离（用户只能看到自己的会话/资产/漏洞）
-  - [ ] 节点 WebSocket Token 认证（已在通信设计中，确认实现）
-  - [ ] 数据库预留 org_id / role 字段（V5 多租户用，MVP 不用）
+- [x] **认证与权限（MVP 最小壳）**
+  - [x] JWT 登录（email+password 或 OAuth2 Google/GitHub）
+  - [x] 前端登录页 + Token 刷新
+  - [x] 会话级别访问隔离（用户只能看到自己的会话/资产/漏洞）
+  - [x] 节点 WebSocket Token 认证（已在通信设计中，确认实现）
+  - [x] 数据库预留 org_id / role 字段（V5 多租户用，MVP 不用）
 
-- [ ] **审计日志**
-  - [ ] `audit_log` 表创建 + append-only 权限（INSERT/SELECT 无 UPDATE/DELETE）
+- [x] **审计日志**
+  - [x] `audit_log` 表创建 + append-only 权限（INSERT/SELECT 无 UPDATE/DELETE）
   - [ ] 人的操作写入：login/logout/session.create/vuln.status_change/approval/asset.crud
   - [ ] Agent 操作写入：task/tool.execute/finding.create+confirm+reject/asset.discover
   - [ ] 系统事件写入：node.connect+disconnect/system.error
-  - [ ] 审计查询/浏览 UI 不纳入 MVP（V2 补充）
+  - [x] 审计查询/浏览 UI 不纳入 MVP（V2 补充）
 
 ### 渗透测试 Node
 
-- [ ] **Task Intake**
-  - [ ] 接收 task_assign 消息
-  - [ ] NodeTask 结构构建
+- [x] **Task Intake**
+  - [x] 接收 task_assign 消息
+  - [x] NodeTask 结构构建
   - [ ] Scope 与参数校验
 
-- [ ] **Policy Engine + Tool Gateway**
-  - [ ] 工具注册（nmap, httpx, nuclei, sqlmap, gobuster, ffuf, curl）
-  - [ ] ToolSpec Schema 定义（参数、风险等级、超时、Parser）
-  - [ ] Scope 校验 → 非 scope 内目标拒绝
-  - [ ] 风险等级判断 → 高风险工具触发 ApprovalRequest
-  - [ ] 命令构建 → 工具沙箱执行
+- [x] **Policy Engine + Tool Gateway**
+  - [x] 工具注册（nmap, httpx, nuclei, sqlmap, gobuster, ffuf, curl）
+  - [x] ToolSpec Schema 定义（参数、风险等级、超时、Parser）
+  - [x] Scope 校验 → 非 scope 内目标拒绝
+  - [x] 风险等级判断 → 高风险工具触发 ApprovalRequest
+  - [x] 命令构建 → 工具沙箱执行
 
 - [ ] **Agent Orchestrator + Workflow Engine**
   - [ ] precheck 阶段：目标格式/DNS/连通性校验
@@ -171,16 +171,16 @@
   - [ ] 统一事件接口
   - [ ] 证据/Finding 接口抽象
 
-- [ ] **沙箱执行**
-  - [ ] Docker 环境准备（Kali 工具镜像）
-  - [ ] 沙箱 Runner 实现（资源限制、超时、kill switch）
-  - [ ] 工作目录隔离
+- [x] **沙箱执行**
+  - [x] Docker 环境准备（Kali 工具镜像）
+  - [x] 沙箱 Runner 实现（资源限制、超时、kill switch）
+  - [x] 工作目录隔离
 
-- [ ] **节点配置与部署**
-  - [ ] Docker 镜像构建 + 发布到 GHCR
-  - [ ] docker-compose.yml 一键部署
-  - [ ] 配置文件（平台地址、Token、节点类型、工具路径、资源限制）
-  - [ ] CLI 入口 (`pentest-node` 命令)
+- [x] **节点配置与部署**
+  - [x] Docker 镜像构建 + 发布到 GHCR
+  - [x] docker-compose.yml 一键部署
+  - [x] 配置文件（平台地址、Token、节点类型、工具路径、资源限制）
+  - [x] CLI 入口 (`pentest-node` 命令)
   - [ ] 健康检查接口
 
 - [ ] **本地 TUI 界面**
@@ -281,7 +281,7 @@
 
 ### 测试环境
 
-- [ ] Docker 漏洞靶场准备（DVWA + Juice Shop，docker-compose 一键启动）
+- [x] Docker 漏洞靶场准备（DVWA + Juice Shop，docker-compose 一键启动）
 - [ ] MVP 验收标准冒烟测试清单
 
 ---
@@ -311,14 +311,14 @@
   - [ ] DVWA (`vulnerables/web-dvwa`) — 端口8080，覆盖 SQLi/XSS/CSRF/命令注入
   - [ ] OWASP Juice Shop (`bkimminich/juice-shop`) — 端口3000，覆盖 SQLi/XSS/JWT/IDOR/SSRF
   - [ ] docker-compose.yml 一键启动两个靶场 + 网络互通
-- [ ] Docker 沙箱镜像构建
-  - [ ] 基于 `kalilinux/kali-rolling` 定制 `pentest-sandbox` 镜像
-  - [ ] 预装 CLI 工具：nmap, nuclei (+templates), sqlmap, gobuster, ffuf, httpx, curl, whatweb
-  - [ ] 预装浏览器：Playwright + headless Chromium (+ deps)
-  - [ ] 预装代理：mitmproxy（HTTP 拦截和请求捕获）
+- [x] Docker 沙箱镜像构建
+  - [x] 基于 `kalilinux/kali-rolling` 定制 `pentest-sandbox` 镜像
+  - [x] 预装 CLI 工具：nmap, nuclei (+templates), sqlmap, gobuster, ffuf, httpx, curl, whatweb
+  - [x] 预装浏览器：Playwright + headless Chromium (+ deps)
+  - [x] 预装代理：mitmproxy（HTTP 拦截和请求捕获）
   - [ ] 预置常用字典（/usr/share/wordlists/）
-  - [ ] 持久容器 + exec 模式（避免每次冷启动 3-5s）
-  - [ ] 资源限制：mem_limit=2g, cpu_quota=80000, cap_drop=ALL + cap_add=NET_RAW
+  - [x] 持久容器 + exec 模式（避免每次冷启动 3-5s）
+  - [x] 资源限制：mem_limit=2g, cpu_quota=80000, cap_drop=ALL + cap_add=NET_RAW
 
 - [ ] 浏览器自动化 (Playwright)
   - [ ] browser 工具实现：navigate, login, click, type, screenshot, save_auth, load_auth, capture_requests
