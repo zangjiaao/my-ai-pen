@@ -30,6 +30,23 @@ async def _update_node_status(node_id: str, status: str, ip: str | None = None):
         print(f"[WS] _update_node_status error: {e}")
 
 
+async def _bind_conversation_to_node(conv_id: str, node_id: str):
+    """记录会话分配给了哪个节点"""
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+        from sqlalchemy import select
+        async with async_session() as db:
+            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id)))
+            c = r.scalar_one_or_none()
+            if c:
+                c.node_id = uuid.UUID(node_id)
+                c.status = "running"
+                await db.commit()
+    except Exception:
+        pass
+
+
 async def _incr_sessions(node_id: str, delta: int):
     """更新节点活跃会话数"""
     try:
@@ -53,14 +70,19 @@ async def _save_message(msg: dict, role: str):
         from app.models.message import Message
         conv_id = msg.get("conversation_id")
         if not conv_id: return
+        if role == "user":
+            content = {"text": msg.get("text", "")}
+        elif role == "agent":
+            content = msg  # 完整的 WS 消息，含 type/text/content 等
+        else:
+            content = msg
         m = Message(conversation_id=uuid.UUID(conv_id), role=role,
-                    msg_type=msg.get("type", "text"),
-                    content={"text": msg.get("text", "")} if role == "user" else msg)
+                    msg_type=msg.get("type", "text"), content=content)
         async with async_session() as db:
             db.add(m)
             await db.commit()
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[WS] _save_message error: {e}")
 
 
 async def _find_node_by_token(token: str) -> str | None:
@@ -145,6 +167,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         nid = node_ids[idx]
                         try:
                             await node_connections[nid].send_text(json.dumps(task_msg))
+                            await _bind_conversation_to_node(conv_id, nid)
                             await _incr_sessions(nid, 1)
                             print(f"[WS] task_assign SENT to node {nid[:8]} (round-robin {idx}/{len(node_ids)})")
                         except Exception as e:

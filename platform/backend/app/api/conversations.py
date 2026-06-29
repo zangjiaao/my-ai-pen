@@ -47,6 +47,12 @@ async def get_conversation(conv_id: str, current_user: dict = Depends(get_curren
 @router.delete("/{conv_id}")
 async def delete_conversation(conv_id: str, current_user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     c = await _get_conv(conv_id, current_user, db)
+    # 如果会话分配给了节点且仍在运行，递减节点活跃会话计数
+    if c.node_id and c.status == "running":
+        from app.models.node import Node
+        r = await db.execute(select(Node).where(Node.id == c.node_id))
+        n = r.scalar_one_or_none()
+        if n: n.current_sessions = max(0, (n.current_sessions or 0) - 1)
     await db.delete(c); await db.commit()
     return {"ok": True}
 
