@@ -59,6 +59,10 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
     if client_type == "node" and client_id:
         node_connections[client_id] = ws
         await _update_node_status(client_id, "online")
+        print(f"[WS] NODE ONLINE: {client_id[:8]} (total nodes: {len(node_connections)})")
+
+    if client_type == "user":
+        print(f"[WS] USER CONNECTED")
 
     try:
         while True:
@@ -80,20 +84,25 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     conversation_subscribers.setdefault(conv_id, set()).add(ws)
 
                 # 用户发消息 → 转发给所有在线节点作为 task_assign
-                if msg.get("type") == "user_message" and node_connections:
-                    task_msg = {
-                        "type": "task_assign",
-                        "conversation_id": conv_id,
-                        "task_id": str(uuid.uuid4()),
-                        "target": msg.get("target", {}),
-                        "initial_instruction": msg.get("text", ""),
-                    }
-                    for nid, node_ws in list(node_connections.items()):
-                        try:
-                            await node_ws.send_text(json.dumps(task_msg))
-                            break  # 只发给第一个可用节点
-                        except Exception:
-                            pass
+                if msg.get("type") == "user_message":
+                    print(f"[WS] USER_MSG received. node_connections={len(node_connections)} keys={list(node_connections.keys())}")
+                    if node_connections:
+                        task_msg = {
+                            "type": "task_assign",
+                            "conversation_id": conv_id,
+                            "task_id": str(uuid.uuid4()),
+                            "target": msg.get("target") or {},
+                            "initial_instruction": msg.get("text", ""),
+                        }
+                        for nid, node_ws in list(node_connections.items()):
+                            try:
+                                await node_ws.send_text(json.dumps(task_msg))
+                                print(f"[WS] task_assign SENT to node {nid[:8]}")
+                                break  # 只发给第一个可用节点
+                            except Exception as e:
+                                print(f"[WS] send to node failed: {e}")
+                    else:
+                        print(f"[WS] NO NODES CONNECTED - dropping message")
 
                 # steer/interrupt 转发给节点
                 if msg.get("type") in ("user_steer", "user_interrupt"):
