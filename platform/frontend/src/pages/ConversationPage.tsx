@@ -116,11 +116,11 @@ export default function ConversationPage() {
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
       const phase = typeof m.phase === "string" ? m.phase : undefined;
-      setAgentState({ phase, activeTool: m.active_tool });
+      setAgentState({ phase, activeTool: m.active_tool, intakeResult: m.intake_result, intakeStatus: m.status });
       setProgress(progressForPhase(phase, "running"));
       setTodos(todosForPhase(phase, "running"));
       setRunning(true);
-      setMessages(prev => [...prev, makeMessage(messageConversationId(msg, activeId), "system", "status", { text: `Phase: ${phase || ""}`, phase, iteration: m.iteration, active_tool: m.active_tool })]);
+      setMessages(prev => [...prev, makeMessage(messageConversationId(msg, activeId), "system", "status", { text: `Phase: ${phase || ""}`, phase, iteration: m.iteration, active_tool: m.active_tool, status: m.status, intake_result: m.intake_result })]);
     },
     task_complete: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
@@ -277,6 +277,8 @@ export default function ConversationPage() {
           <RightPanel
             phase={agentState.phase as string}
             activeTool={agentState.activeTool as string}
+            intakeResult={agentState.intakeResult as Record<string, unknown> | undefined}
+            intakeStatus={agentState.intakeStatus as string | undefined}
             progress={progress}
             todos={todos}
             findings={findings}

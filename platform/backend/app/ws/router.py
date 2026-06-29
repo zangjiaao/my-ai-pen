@@ -202,6 +202,8 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                 "phase": msg.get("phase"),
                 "iteration": msg.get("iteration"),
                 "active_tool": msg.get("active_tool"),
+                "status": msg.get("status"),
+                "intake_result": msg.get("intake_result"),
             }
         elif msg_type == "request_decision":
             msg_type = "confirm_card"

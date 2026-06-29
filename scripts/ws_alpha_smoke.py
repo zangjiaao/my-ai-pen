@@ -87,6 +87,8 @@ async def _assert_db_state(sessionmaker, user_id: uuid.UUID, node_id: uuid.UUID,
 
         messages = (await db.execute(select(Message).where(Message.conversation_id == conv_id))).scalars().all()
         assert {m.msg_type for m in messages} >= {"text", "tool_call", "confirm_card", "decision", "status"}
+        status_messages = [m for m in messages if m.msg_type == "status" and isinstance(m.content, dict)]
+        assert any((m.content.get("intake_result") or {}).get("target") == "https://example.com/" for m in status_messages)
 
         asset = (await db.execute(select(Asset).where(Asset.user_id == user_id))).scalar_one()
         assert asset.conversation_id == conv_id
@@ -179,9 +181,13 @@ def main() -> None:
                             "conversation_id": str(conv.id),
                             "phase": "recon",
                             "iteration": 1,
-                            "active_tool": "curl",
+                            "active_tool": "intake",
+                            "status": "done",
+                            "intake_result": {"ok": True, "target": "https://example.com/", "dns_addresses": ["93.184.216.34"], "connectivity": {"checked": True, "ok": True, "host": "example.com", "port": 443}},
                         }))
-                        assert _recv_until(user_ws, "status_update")["phase"] == "recon"
+                        status_update = _recv_until(user_ws, "status_update")
+                        assert status_update["phase"] == "recon"
+                        assert status_update["intake_result"]["connectivity"]["ok"] is True
 
                         node_ws.send_text(json.dumps({
                             "type": "tool_output",

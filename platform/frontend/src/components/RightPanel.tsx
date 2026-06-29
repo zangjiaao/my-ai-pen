@@ -6,6 +6,8 @@ type TodoStatus = "done" | "running" | "pending";
 interface Props {
   phase?: string;
   activeTool?: string;
+  intakeResult?: Record<string, unknown>;
+  intakeStatus?: string;
   progress?: { current: number; total: number; percent: number };
   todos?: Array<{ id: string; title: string; status: TodoStatus }>;
   findings?: Array<Record<string, unknown>>;
@@ -29,7 +31,7 @@ const PHASE_LABELS: Record<string, string> = {
   report: "同步结果与整理证据",
 };
 
-export default function RightPanel({ phase, activeTool, progress, todos = [], findings = [], pendingApprovals = [], evidence = [], onDecision }: Props) {
+export default function RightPanel({ phase, activeTool, intakeResult, intakeStatus, progress, todos = [], findings = [], pendingApprovals = [], evidence = [], onDecision }: Props) {
   const [tab, setTab] = useState<Tab>("progress");
 
   const tabs: { key: Tab; label: string }[] = [
@@ -41,6 +43,7 @@ export default function RightPanel({ phase, activeTool, progress, todos = [], fi
 
   const percent = Math.max(0, Math.min(100, Number(progress?.percent || 0)));
   const phaseText = phase ? (PHASE_LABELS[phase] || phase) : "等待开始";
+  const intake = normalizeIntake(intakeResult, intakeStatus);
 
   return (
     <aside className="w-[360px] flex-shrink-0 border-l border-hairline bg-canvas flex flex-col">
@@ -72,6 +75,20 @@ export default function RightPanel({ phase, activeTool, progress, todos = [], fi
               <div>
                 <p className="text-xs text-ink-muted mb-1">活跃工具</p>
                 <p className="text-sm font-mono">{activeTool}</p>
+              </div>
+            )}
+            {intake && (
+              <div data-testid="intake-result" className="rounded-md border border-hairline-soft p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="text-xs font-medium uppercase tracking-wide text-ink-muted">预检</p>
+                  <span className={`rounded-pill px-2 py-0.5 text-[11px] font-medium ${intake.ok ? "bg-status-success text-white" : "bg-severity-critical text-white"}`}>{intake.label}</span>
+                </div>
+                <div className="space-y-1 text-xs text-ink-secondary">
+                  {intake.target && <p className="break-all">目标: {intake.target}</p>}
+                  {intake.dns && <p className="break-all">DNS: {intake.dns}</p>}
+                  {intake.connectivity && <p className="break-all">连通性: {intake.connectivity}</p>}
+                  {intake.reason && <p className="break-all text-severity-critical">{intake.reason}</p>}
+                </div>
               </div>
             )}
             <div>
@@ -143,4 +160,21 @@ export default function RightPanel({ phase, activeTool, progress, todos = [], fi
       </div>
     </aside>
   );
+}
+function normalizeIntake(intakeResult?: Record<string, unknown>, intakeStatus?: string) {
+  if (!intakeResult) return null;
+  const ok = intakeResult.ok === true;
+  const connectivity = intakeResult.connectivity as Record<string, unknown> | undefined;
+  const dns = Array.isArray(intakeResult.dns_addresses) ? intakeResult.dns_addresses.join(", ") : "";
+  const connText = connectivity?.checked
+    ? `${connectivity.ok ? "可达" : "不可达"} ${connectivity.host || ""}${connectivity.port ? `:${connectivity.port}` : ""}`.trim()
+    : "未检查";
+  return {
+    ok,
+    label: ok ? "通过" : "失败",
+    target: String(intakeResult.target || ""),
+    dns,
+    connectivity: connText,
+    reason: String(intakeResult.reason || (intakeStatus === "failed" ? "预检失败" : "")),
+  };
 }

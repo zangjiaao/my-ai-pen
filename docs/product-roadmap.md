@@ -2,7 +2,7 @@
 
 > 来源: `vision.json` V2.0 / `docs/prd.md` / `docs/architecture.md` / `docs/pentest-node-spec.md`
 > 进度审计时间: 2026-06-29
-> 当前结论: **MVP Alpha 单节点闭环已通过平台、Node、真实 `/ws`、浏览器 UI、真实 DockerSandbox 自动化验收，并已提交 `3725e44 Implement MVP alpha platform loop`；MVP 全量仍有 P0/P1/P2 缺口。**
+> 当前结论: **MVP Alpha 单节点闭环已通过平台、Node、真实 `/ws`、浏览器 UI、真实 DockerSandbox 自动化验收，并已提交 `3725e44 Implement MVP alpha platform loop`；MVP 全量仍有 P1/P2 缺口。**
 
 ---
 
@@ -35,7 +35,7 @@
 | MVP | 部分完成 | 平台 Web 原型 + 后端 CRUD/API 骨架 + 节点 WebSocket 联调原型 + 渗透 Node LLM 工具调用原型 |
 | Post-MVP | 未开始 | 代码审计 Node、应急响应 Node、CTF Node、威胁情报、多租户、报告中心 |
 
-当前 MVP 不是“平台 + 渗透 Node 全能力”。更准确的说法是：**已有平台和 Node 的端到端 Alpha 闭环：可以注册节点、登录平台、创建会话、通过 WebSocket 下发任务，展示 Agent 输出，处理授权确认，并把资产、漏洞、证据和部分审计日志持久化；但确定性 Task Intake、完整证据链、ACK/心跳/离线补传、独立运行、报告同步、多节点策略等仍未完成。**
+当前 MVP 不是“平台 + 渗透 Node 全能力”。更准确的说法是：**已有平台和 Node 的端到端 Alpha 闭环：可以注册节点、登录平台、创建会话、通过 WebSocket 下发任务，展示 Agent 输出，处理授权确认，并把资产、漏洞、证据和部分审计日志持久化；但完整证据链、ACK/心跳/离线补传、独立运行、报告同步、多节点策略等仍未完成。**
 
 ---
 
@@ -139,7 +139,7 @@
 
 - [ ] **节点调度**
   - 部分完成：节点注册/发现、轮询选择在线节点、`task_assign` 下发、按会话绑定的 `user_steer` / `user_interrupt` 精确转发已实现。
-  - [ ] 节点能力发现、任务队列、多节点负载/健康策略未完整实现。
+  - [ ] 节点能力发现、任务队列未完整实现。
   - [ ] 多节点负载/健康策略未实现。
 
 - [ ] **数据库**
@@ -165,10 +165,10 @@
 
 ### 渗透测试 Node
 
-- [ ] **Task Intake**
-  - 部分完成：平台模式可以接收 `task_assign` 并构造 AgentLoop task dict。
-  - [ ] NodeTask 结构、scope 解析、参数校验未按规格实现。
-  - [ ] DNS/连通性校验依赖 LLM 提示执行 curl，不是确定性 intake 逻辑。
+- [x] **Task Intake**
+  - [x] 平台模式可以接收 `task_assign` 并构造规范化 NodeTask。
+  - [x] NodeTask 结构、target URL/host 解析、allow/deny scope 校验已由确定性 `TaskIntake` 实现。
+  - [x] DNS 和 TCP 连通性已在 LLM loop 前确定性校验；localhost/127.0.0.1 会提示使用 `host.docker.internal`。
 
 - [ ] **Policy Engine + Tool Gateway**
   - 部分完成：有 `ToolRegistry`、`execute`、`http_request`、workflow tools。
@@ -341,7 +341,7 @@
 - [x] 接通 `request_decision`：Node 请求授权 → 前端确认卡 → 用户选择 → 平台按会话路由回 Node → Node 继续/取消。
 - [x] 实时 `asset_discovered` / `vuln_found` / `tool_output` evidence 已入库并关联 user/conversation/node；漏洞 evidence_ids 可持久化，完整证据文件同步仍未实现。
 - [x] 将平台模式从 `LocalSandbox` 切到 `DockerSandbox`，修复 DockerSandbox 重复方法与输出解析。
-- [ ] 实现确定性 Task Intake：target 解析、scope 校验已完成；DNS/连通性检查仍由 precheck 工具阶段完成。
+- [x] 实现确定性 Task Intake：NodeTask 解析、allow/deny scope、DNS、TCP 连通性和 localhost 误用提示已在 LLM loop 前完成。
 - [x] 建立 Alembic 初始迁移脚本。
 - [x] 修复会话状态机与前端类型不一致问题。
 - [x] 完成资产/漏洞的用户隔离字段与查询过滤。
@@ -398,11 +398,11 @@
 - Node 使用 DockerSandbox 运行。
 - 用户创建会话并输入目标 URL。
 - 平台按会话绑定 Node，下发 task_assign。
-- Node 完成确定性 intake、scope 校验和至少一个 recon 工具调用。
+- Node 完成确定性 intake、scope 校验、DNS/TCP 连通性校验和至少一个 recon 工具调用。
 - 工具输出、资产、候选漏洞、证据写入平台数据库。
 - 高风险操作能触发确认卡，用户确认后 Node 才继续执行。
 - 会话结束后平台能看到消息、资产、漏洞、证据和审计日志。
 
-当前验收：以上 Alpha 闭环已由 `alpha_smoke.py`、`node_alpha_smoke.py`、`ws_alpha_smoke.py`、`docker_sandbox_smoke.py`、`docker_sandbox_real_smoke.py`、`alpha_browser_smoke.py` 覆盖并通过，提交为 `3725e44 Implement MVP alpha platform loop`；仍不代表 MVP 全量、生产 docker-compose、多节点、ACK/心跳/离线补传、完整证据文件同步或 kill switch 已完成。
+当前验收：以上 Alpha 闭环已由 `alpha_smoke.py`、`node_alpha_smoke.py`、`ws_alpha_smoke.py`、`docker_sandbox_smoke.py`、`docker_sandbox_real_smoke.py`、`alpha_browser_smoke.py` 覆盖并通过；本轮新增确定性 Task Intake 分支覆盖和 intake_result 刷新恢复。仍不代表 MVP 全量、生产 docker-compose、多节点、ACK/心跳/离线补传、完整证据文件同步或 kill switch 已完成。
 
 即便 Alpha 闭环已完成，也不应把“全量消息卡片、多节点、子代理、独立模式、报告同步、知识库/记忆智能增强”标为完成。

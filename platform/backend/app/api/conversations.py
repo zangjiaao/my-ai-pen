@@ -217,11 +217,15 @@ def _agent_state_from_messages(messages: list[Message], evidence: list[Evidence]
     phase = None
     iteration = None
     active_tool = None
+    intake_result = None
+    intake_status = None
     for m in reversed(messages):
         if m.msg_type == "status" and isinstance(m.content, dict):
             phase = m.content.get("phase") or _parse_phase(str(m.content.get("text", "")))
             iteration = m.content.get("iteration")
             active_tool = m.content.get("active_tool")
+            intake_result = m.content.get("intake_result")
+            intake_status = m.content.get("status")
             break
     if not active_tool:
         for m in reversed(messages):
@@ -232,7 +236,7 @@ def _agent_state_from_messages(messages: list[Message], evidence: list[Evidence]
         active_tool = evidence[0].source_tool or evidence[0].type
     if not phase:
         phase = "report" if status == "completed" else "precheck" if status == "running" else None
-    return {"phase": phase, "iteration": iteration, "activeTool": active_tool}
+    return {"phase": phase, "iteration": iteration, "activeTool": active_tool, "intakeResult": intake_result, "intakeStatus": intake_status}
 
 
 def _parse_phase(text: str) -> str | None:

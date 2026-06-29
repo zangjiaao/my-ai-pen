@@ -23,6 +23,7 @@ MVP 聚焦渗透测试 Node 与平台 Web 闭环：
 - 用户登录平台并创建会话。
 - 用户用自然语言输入目标和测试需求。
 - 平台按会话绑定在线渗透测试 Node 并下发任务。
+- Node 在进入 LLM loop 前执行确定性 target/scope/DNS/TCP intake，localhost 靶场误用会给出 `host.docker.internal` 提示。
 - Node 使用受控 DockerSandbox 执行工具。
 - 工具输出、资产、漏洞、证据实时回传并入库。
 - 高风险操作通过确认卡片等待用户授权。
@@ -34,7 +35,7 @@ CTF、应急响应、日志分析、威胁情报、完整多租户 RBAC、复杂
 
 ## 成功标准
 
-MVP Alpha 的成功标准是：单用户、单在线节点、单会话可以完成从任务创建到 Node 执行、授权确认、资产/漏洞/证据入库、前端刷新恢复的端到端闭环，并具备自动化 smoke 覆盖。当前该 Alpha 标准已通过 `alpha_smoke.py`、`node_alpha_smoke.py`、`ws_alpha_smoke.py`、`docker_sandbox_smoke.py`、`docker_sandbox_real_smoke.py` 和 `alpha_browser_smoke.py` 验收。
+MVP Alpha 的成功标准是：单用户、单在线节点、单会话可以完成从任务创建到 Node 执行、授权确认、资产/漏洞/证据入库、前端刷新恢复的端到端闭环，并具备自动化 smoke 覆盖。当前该 Alpha 标准已通过 `alpha_smoke.py`、`node_alpha_smoke.py`、`ws_alpha_smoke.py`、`docker_sandbox_smoke.py`、`docker_sandbox_real_smoke.py` 和 `alpha_browser_smoke.py` 验收；确定性 Task Intake 已纳入 `node_alpha_smoke.py` 和 `ws_alpha_smoke.py` 覆盖。
 
 ## 技术方向
 
