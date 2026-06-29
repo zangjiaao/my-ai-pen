@@ -60,6 +60,14 @@ async def update_conversation(conv_id: str, body: dict, current_user: dict = Dep
     return {"ok": True}
 
 
+@router.get("/{conv_id}/messages")
+async def get_messages(conv_id: str, current_user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    await _get_conv(conv_id, current_user, db)
+    result = await db.execute(
+        select(Message).where(Message.conversation_id == uuid.UUID(conv_id)).order_by(Message.created_at).limit(200))
+    return [{"id": str(m.id), "role": m.role, "msg_type": m.msg_type, "content": m.content, "created_at": m.created_at.isoformat() if m.created_at else None} for m in result.scalars().all()]
+
+
 @router.post("/{conv_id}/steer")
 async def steer_conversation(conv_id: str, body: dict, current_user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     await _get_conv(conv_id, current_user, db)

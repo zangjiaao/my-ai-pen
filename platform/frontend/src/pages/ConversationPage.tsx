@@ -69,7 +69,7 @@ export default function ConversationPage() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-canvas">
-      <Sidebar activeId={activeId} onSelect={(id) => { setActiveId(id); setMessages([]); }} />
+      <Sidebar activeId={activeId} onSelect={async (id) => { setActiveId(id); try { const data = await authFetch(`/api/conversations/${id}/messages`); setMessages(data.map((m: Record<string,unknown>) => ({ ...m, parent_msg_id: null }) as Message)); } catch { setMessages([]); } }} />
       <div className="flex flex-1 flex-col">
         <TopBar title={activeId ? conversations?.find(c => c.id === activeId)?.title : undefined} />
         <div className="flex flex-1 overflow-hidden">

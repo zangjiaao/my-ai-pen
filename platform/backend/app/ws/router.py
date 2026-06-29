@@ -25,6 +25,23 @@ async def _update_node_status(node_id: str, status: str):
         pass
 
 
+async def _save_message(msg: dict, role: str):
+    """持久化消息到数据库"""
+    try:
+        from app.db.base import async_session
+        from app.models.message import Message
+        conv_id = msg.get("conversation_id")
+        if not conv_id: return
+        m = Message(conversation_id=uuid.UUID(conv_id), role=role,
+                    msg_type=msg.get("type", "text"),
+                    content={"text": msg.get("text", "")} if role == "user" else msg)
+        async with async_session() as db:
+            db.add(m)
+            await db.commit()
+    except Exception:
+        pass
+
+
 async def _find_node_by_token(token: str) -> str | None:
     """根据 token 找到节点 ID"""
     try:
@@ -71,6 +88,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
 
             if client_type == "node":
                 print(f"[WS] NODE_MSG received: type={msg.get('type')} conv={str(msg.get('conversation_id',''))[:8]} subs={len(conversation_subscribers.get(msg.get('conversation_id',''), set()))}")
+                await _save_message(msg, "agent")
                 conv_id = msg.get("conversation_id")
                 if conv_id and conv_id in conversation_subscribers:
                     for sub in list(conversation_subscribers[conv_id]):
@@ -83,6 +101,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                 conv_id = msg.get("conversation_id")
                 if conv_id:
                     conversation_subscribers.setdefault(conv_id, set()).add(ws)
+                    await _save_message(msg, "user")
 
                 # 用户发消息 → 转发给所有在线节点作为 task_assign
                 if msg.get("type") == "user_message":
