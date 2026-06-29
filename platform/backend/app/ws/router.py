@@ -7,6 +7,7 @@ router = APIRouter()
 
 node_connections: dict[str, WebSocket] = {}  # node_id → ws
 conversation_subscribers: dict[str, set[WebSocket]] = {}  # conv_id → {browser_ws}
+_round_robin_counter: int = 0
 
 
 async def _update_node_status(node_id: str, status: str, ip: str | None = None):
@@ -118,13 +119,17 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             "target": msg.get("target") or {},
                             "initial_instruction": msg.get("text", ""),
                         }
-                        for nid, node_ws in list(node_connections.items()):
-                            try:
-                                await node_ws.send_text(json.dumps(task_msg))
-                                print(f"[WS] task_assign SENT to node {nid[:8]}")
-                                break  # 只发给第一个可用节点
-                            except Exception as e:
-                                print(f"[WS] send to node failed: {e}")
+                        # 轮询分配
+                        global _round_robin_counter
+                        node_ids = sorted(node_connections.keys())
+                        idx = _round_robin_counter % len(node_ids)
+                        _round_robin_counter += 1
+                        nid = node_ids[idx]
+                        try:
+                            await node_connections[nid].send_text(json.dumps(task_msg))
+                            print(f"[WS] task_assign SENT to node {nid[:8]} (round-robin {idx}/{len(node_ids)})")
+                        except Exception as e:
+                            print(f"[WS] send to node failed: {e}")
                     else:
                         print(f"[WS] NO NODES CONNECTED - dropping message")
 
