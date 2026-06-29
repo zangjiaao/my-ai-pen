@@ -74,11 +74,24 @@ async def _save_message(msg: dict, role: str):
         if role == "user":
             content = {"text": msg.get("text", "")}
         elif msg_type == "text":
-            # Agent text: 提取嵌套的 content.text
             inner = msg.get("content", {})
             content = {"text": inner.get("text", str(msg)) if isinstance(inner, dict) else str(inner)}
+        elif msg_type == "tool_output":
+            # 归入 tool_call 类型，与前端 ToolCallCard 对齐
+            msg_type = "tool_call"
+            content = {"tool_name": msg.get("tool_name",""), "command": "",
+                       "status": "running", "stdout": msg.get("line","")}
+        elif msg_type in ("status_update", "phase_changed"):
+            msg_type = "status"
+            content = {"text": f"Phase: {msg.get('phase','')} (iter {msg.get('iteration','')})"}
+        elif msg_type == "task_complete":
+            msg_type = "status"
+            content = {"text": "任务完成"}
+        elif msg_type == "task_error":
+            msg_type = "status"
+            content = {"text": f"任务失败: {msg.get('message','')}"}
         else:
-            content = msg  # tool_output, vuln_found 等保留原始结构
+            content = msg
         m = Message(conversation_id=uuid.UUID(conv_id), role=role,
                     msg_type=msg_type, content=content)
         async with async_session() as db:

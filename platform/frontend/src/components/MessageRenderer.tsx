@@ -52,6 +52,8 @@ export default function MessageRenderer({ message }: { message: Message }) {
   switch (msg_type) {
     case "tool_call": return <ToolCallCard content={content} />;
     case "vuln_card": return <VulnCard content={content} />;
+    case "asset_card": return <div className="my-2 rounded-md border border-hairline bg-canvas p-3 text-sm">🖥 {content.address as string} — 端口: {JSON.stringify(content.open_ports)}</div>;
+    case "status": return <div className="my-2 text-center text-xs text-ink-muted">{content.text as string}</div>;
     case "text":
     default:
       return <div className="my-2 text-sm leading-relaxed">{content.text as string}</div>;
