@@ -1,76 +1,145 @@
 import { useState } from "react";
 
-type Tab = "discoveries" | "progress" | "pending";
+type Tab = "discoveries" | "progress" | "pending" | "evidence";
+type TodoStatus = "done" | "running" | "pending";
 
 interface Props {
   phase?: string;
-  iteration?: number;
-  maxIteration?: number;
   activeTool?: string;
+  progress?: { current: number; total: number; percent: number };
+  todos?: Array<{ id: string; title: string; status: TodoStatus }>;
   findings?: Array<Record<string, unknown>>;
+  pendingApprovals?: Array<Record<string, unknown>>;
+  evidence?: Array<Record<string, unknown>>;
+  onDecision?: (requestId: string, decision: "authorize" | "cancel") => void;
 }
 
-export default function RightPanel({ phase, iteration, maxIteration, activeTool, findings = [] }: Props) {
-  const [tab, setTab] = useState<Tab>("discoveries");
+const TODO_MARK: Record<TodoStatus, string> = {
+  done: "✓",
+  running: "•",
+  pending: "",
+};
+
+const PHASE_LABELS: Record<string, string> = {
+  precheck: "目标与授权范围检查",
+  plan: "生成测试计划",
+  recon: "资产与服务探测",
+  scan: "漏洞扫描与候选发现",
+  verify: "复现验证与授权确认",
+  report: "同步结果与整理证据",
+};
+
+export default function RightPanel({ phase, activeTool, progress, todos = [], findings = [], pendingApprovals = [], evidence = [], onDecision }: Props) {
+  const [tab, setTab] = useState<Tab>("progress");
 
   const tabs: { key: Tab; label: string }[] = [
-    { key: "discoveries", label: "发现" },
     { key: "progress", label: "进度" },
-    { key: "pending", label: "待处理" },
+    { key: "discoveries", label: `发现${findings.length ? ` (${findings.length})` : ""}` },
+    { key: "pending", label: `待处理${pendingApprovals.length ? ` (${pendingApprovals.length})` : ""}` },
+    { key: "evidence", label: `证据${evidence.length ? ` (${evidence.length})` : ""}` },
   ];
+
+  const percent = Math.max(0, Math.min(100, Number(progress?.percent || 0)));
+  const phaseText = phase ? (PHASE_LABELS[phase] || phase) : "等待开始";
 
   return (
     <aside className="w-[360px] flex-shrink-0 border-l border-hairline bg-canvas flex flex-col">
-      <nav className="flex border-b border-hairline-soft">
+      <nav className="grid grid-cols-4 border-b border-hairline-soft">
         {tabs.map((t) => (
-          <button key={t.key} onClick={() => setTab(t.key)}
-            className={`flex-1 py-2.5 text-sm font-medium transition-colors ${tab === t.key ? "text-ink border-b-2 border-ink" : "text-ink-secondary border-b-2 border-transparent hover:text-ink"}`}>
+          <button key={t.key} data-testid={`right-tab-${t.key}`} onClick={() => setTab(t.key)}
+            className={`py-2.5 text-sm font-medium transition-colors ${tab === t.key ? "text-ink border-b-2 border-ink" : "text-ink-secondary border-b-2 border-transparent hover:text-ink"}`}>
             {t.label}
           </button>
         ))}
       </nav>
       <div className="flex-1 overflow-y-auto p-4">
-        {tab === "discoveries" && (
-          findings.length === 0 ? (
-            <p className="text-sm text-ink-muted">暂无发现</p>
-          ) : (
-            <div className="space-y-2">
-              {findings.map((f, i) => (
-                <div key={i} className="rounded-md border border-hairline-soft p-2">
-                  <div className="flex items-center gap-1 mb-1">
-                    <span className={`inline-block rounded-pill px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase tracking-wider bg-severity-${f.severity}-subtle text-severity-${f.severity}`}>{f.severity as string}</span>
-                    <span className="text-sm font-medium truncate">{f.title as string}</span>
-                  </div>
-                  <p className="text-xs text-ink-muted">{f.location as string}</p>
-                </div>
-              ))}
-            </div>
-          )
-        )}
         {tab === "progress" && (
-          <div className="space-y-3">
+          <div className="space-y-4">
             <div>
               <p className="text-xs text-ink-muted mb-1">当前阶段</p>
-              <p className="text-sm font-medium">{phase || "等待中..."}</p>
+              <p className="text-sm font-medium">{phaseText}</p>
             </div>
-            {iteration != null && maxIteration != null && (
-              <div>
-                <p className="text-xs text-ink-muted mb-1">迭代 {iteration}/{maxIteration}</p>
-                <div className="h-1.5 rounded-full bg-hairline">
-                  <div className="h-1.5 rounded-full bg-ink" style={{ width: `${Math.min(100, (iteration / maxIteration) * 100)}%` }} />
-                </div>
+            <div>
+              <div className="mb-1 flex items-center justify-between text-xs text-ink-muted">
+                <span>阶段进度</span>
+                <span data-testid="phase-progress">{progress ? `${progress.current}/${progress.total}` : "0/6"}</span>
               </div>
-            )}
+              <div className="h-1.5 rounded-full bg-hairline">
+                <div className="h-1.5 rounded-full bg-ink transition-all" style={{ width: `${percent}%` }} />
+              </div>
+            </div>
             {activeTool && (
               <div>
                 <p className="text-xs text-ink-muted mb-1">活跃工具</p>
                 <p className="text-sm font-mono">{activeTool}</p>
               </div>
             )}
-            {!phase && <p className="text-sm text-ink-muted">等待 Agent 开始...</p>}
+            <div>
+              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-ink-muted">TODO</p>
+              {todos.length === 0 ? (
+                <p className="text-sm text-ink-muted">等待 Agent 生成计划</p>
+              ) : (
+                <div className="space-y-2" data-testid="todo-list">
+                  {todos.map((item) => (
+                    <div key={item.id} className="flex items-center gap-2 rounded-md border border-hairline-soft px-2.5 py-2">
+                      <span className={`flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border text-xs ${item.status === "done" ? "border-status-success bg-status-success text-white" : item.status === "running" ? "border-status-running text-status-running" : "border-hairline text-transparent"}`}>{TODO_MARK[item.status]}</span>
+                      <span className={`min-w-0 text-sm ${item.status === "pending" ? "text-ink-muted" : "text-ink"}`}>{item.title}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
-        {tab === "pending" && <p className="text-sm text-ink-muted">无待处理项</p>}
+        {tab === "discoveries" && (
+          findings.length === 0 ? (
+            <p className="text-sm text-ink-muted">暂无发现</p>
+          ) : (
+            <div className="space-y-2">
+              {findings.map((f, i) => (
+                <div key={(f.id as string) || i} className="rounded-md border border-hairline-soft p-2">
+                  <div className="flex items-center gap-1 mb-1">
+                    <span className={`inline-block rounded-pill px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase tracking-wider bg-severity-${f.severity}-subtle text-severity-${f.severity}`}>{f.severity as string}</span>
+                    <span className="truncate text-sm font-medium">{f.title as string}</span>
+                  </div>
+                  <p className="text-xs text-ink-muted">{(f.location || f.status || "") as string}</p>
+                </div>
+              ))}
+            </div>
+          )
+        )}
+        {tab === "pending" && (
+          pendingApprovals.length === 0 ? <p className="text-sm text-ink-muted">无待处理项</p> : (
+            <div className="space-y-3" data-testid="pending-list">
+              {pendingApprovals.map((item) => (
+                <div key={item.request_id as string} className="rounded-md border border-hairline p-3">
+                  <div className="mb-1 text-xs text-ink-muted">{item.risk_level as string}</div>
+                  <div className="mb-2 text-sm font-medium">{item.question as string}</div>
+                  {Boolean(item.proposed_action) && <pre className="mb-2 max-h-24 overflow-auto rounded bg-canvas-inset p-2 text-xs">{String(item.proposed_action)}</pre>}
+                  <div className="flex gap-2">
+                    <button onClick={() => onDecision?.(item.request_id as string, "authorize")} className="rounded-pill bg-ink px-3 py-1.5 text-xs text-white">授权</button>
+                    <button onClick={() => onDecision?.(item.request_id as string, "cancel")} className="rounded-pill border px-3 py-1.5 text-xs">取消</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )
+        )}
+        {tab === "evidence" && (
+          evidence.length === 0 ? <p className="text-sm text-ink-muted">暂无证据</p> : (
+            <div className="space-y-2" data-testid="evidence-list">
+              {evidence.map((item) => (
+                <div key={(item.evidence_id || item.id) as string} data-testid="evidence-item" className="rounded-md border border-hairline-soft p-2">
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <span className="truncate text-sm font-medium">{(item.source_tool || item.type) as string}</span>
+                    <span className="font-mono text-[10px] text-ink-muted">{item.evidence_id as string}</span>
+                  </div>
+                  <p className="line-clamp-3 text-xs text-ink-muted">{String(item.summary || item.raw_ref || "")}</p>
+                </div>
+              ))}
+            </div>
+          )
+        )}
       </div>
     </aside>
   );

@@ -21,3 +21,6 @@ from app.api.memories import router as memories_router
 api_router.include_router(memories_router)
 from app.api.skills_api import router as skills_api_router
 api_router.include_router(skills_api_router)
+
+from app.api.evidence import router as evidence_router
+api_router.include_router(evidence_router)

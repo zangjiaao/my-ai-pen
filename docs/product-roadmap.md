@@ -2,7 +2,7 @@
 
 > 来源: `vision.json` V2.0 / `docs/prd.md` / `docs/architecture.md` / `docs/pentest-node-spec.md`
 > 进度审计时间: 2026-06-29
-> 当前结论: **MVP 处于可演示原型阶段，不是已完成状态。**
+> 当前结论: **MVP Alpha 单节点闭环已通过平台、Node、真实 `/ws`、浏览器 UI、真实 DockerSandbox 自动化验收；MVP 全量仍有 P1/P2 缺口。**
 
 ---
 
@@ -24,7 +24,7 @@
 - 部署与靶场：`platform/docker-compose*.yml`、`node/Dockerfile*`
 - 产品/架构文档：`docs/prd.md`、`docs/architecture.md`、`docs/pentest-node-spec.md`
 
-注意：PLAID Build 说明要求存在 `docs/product-vision.md`，但当前仓库没有该文件。
+注意：PLAID Build 说明要求存在 `docs/product-vision.md`，当前已按 `vision.json` / PRD 补齐；`scripts/validate-vision.js` 仍缺失，无法执行 PLAID 自动校验脚本。
 
 ---
 
@@ -51,7 +51,7 @@
   - [x] Sidebar + 对话区 + 右侧面板三栏结构已实现。
   - [x] 「新建会话」按钮进入空白对话页。
   - [x] 会话列表按后端返回展示，具备基础状态点。
-  - [ ] 会话重命名 UI 未实现；后端有更新 title 的 PATCH 能力。
+  - [x] 会话重命名 UI 已实现，后端 PATCH title 会更新并刷新会话列表。
   - [ ] 归档未实现；删除已实现。
   - [x] 次级导航入口已包含资产、漏洞、节点、Skill、知识库、记忆管理。
 
@@ -60,7 +60,7 @@
   - [ ] Markdown 渲染未实现，当前只是直接显示文本。
   - [x] 工具调用卡片有基础流式输出展示。
   - [x] 漏洞发现卡片有基础展示。
-  - [ ] 确认卡片、授权选项、超时倒计时未实现。
+  - [ ] 确认卡片和授权选项已接入；超时倒计时未实现。
   - [ ] 附件上传未实现。
   - [x] 快捷模板按钮已实现。
   - [x] 会话切换时会加载该会话消息。
@@ -69,25 +69,25 @@
 - [ ] **对话页 — 右侧信息面板完整能力**
   - 部分完成：已有「发现 / 进度 / 待处理」Tab。
   - [x] 发现列表基础展示已实现。
-  - [x] 进度面板可显示 phase、iteration、activeTool。
+  - [x] 进度面板可显示阶段进度、activeTool，并提供固定 TODO 列表。
   - [ ] 目标资产 Tab 未实现。
   - [ ] 统计、工具调用历史、漏洞详情入口未完整实现。
-  - [ ] 待处理授权列表未接真实 `request_decision` 数据。
+  - [x] 待处理授权列表已接入 `request_decision`，可授权或取消。
   - [ ] 文件 Tab、只读文件查看未实现。
 
 - [ ] **资产管理页**
   - 部分完成：列表、类型/搜索筛选、详情侧栏、手动添加已实现。
   - [ ] 分页 UI 未实现。
   - [ ] 资产详情中的关联漏洞、历史会话、操作日志未实现。
-  - [ ] Agent 实时发现资产自动入库未实现；当前 WebSocket 只展示消息，不写 Asset 表。
-  - [ ] 资产级用户隔离未实现，Asset 模型没有 `user_id` / `org_id`。
+  - [x] Agent 实时发现资产可通过 WebSocket 写入 Asset 表。
+  - [x] Asset 已补 `user_id` 并按当前用户过滤。
 
 - [ ] **漏洞管理页**
   - 部分完成：漏洞列表、等级/状态筛选、详情侧栏、状态 PATCH 已实现。
   - [ ] 分页 UI 未实现。
   - [ ] 详情中的复现步骤、影响范围、状态时间线未完整实现。
   - [ ] 「复测」按钮是空操作，后端没有 `/vulnerabilities/{id}/retest`。
-  - [ ] 漏洞级用户隔离未实现，Vulnerability 模型没有 `user_id` / `org_id`。
+  - [x] Vulnerability 已补 `user_id` 并按当前用户过滤。
 
 - [ ] **节点管理页**
   - 部分完成：节点列表、节点注册、token 生成、token 重置、删除已实现。
@@ -106,9 +106,9 @@
 
 - [ ] **会话管理服务**
   - 部分完成：会话创建、列表、详情、删除、消息列表已实现。
-  - [ ] 会话状态机不完整，PATCH 只允许 `paused` / `resumed`，且 `resumed` 不在前端类型定义状态中。
+  - [x] 会话状态机已统一为 `created/running/paused/completed/failed/canceled`，PATCH 会校验合法流转，`resumed` 兼容归一为 `running`。
   - [ ] `execution_plan`、`discovered_assets`、`vulns_list`、`agent_state` 没有系统性写入。
-  - [ ] `POST /conversations/{id}/steer` 只返回 queued，没有转发给 Node。
+  - [x] `POST /conversations/{id}/steer` 会按会话绑定节点转发 `user_steer` / `user_interrupt`，节点不在线时返回 409。
 
 - [ ] **资产引擎**
   - 部分完成：资产 CRUD API 已实现。
@@ -126,8 +126,8 @@
   - 部分完成：用户 JWT 连接、节点 token 连接、节点在线/离线、用户消息转 `task_assign`、节点消息转发给订阅会话、部分消息持久化已实现。
   - [x] 前端 WebSocket 有自动重连和发送队列。
   - [ ] 后端心跳、ACK、离线消息缓存、重连补传未实现。
-  - [ ] `request_decision` 没有前端处理闭环。
-  - [ ] `user_steer` / `user_interrupt` 是广播给所有在线节点，不是按会话绑定节点精确路由。
+  - [x] `request_decision` 已具备前端确认卡、待处理列表和 `user_decision` 回传闭环。
+  - [x] `user_steer` / `user_interrupt` 已按会话绑定节点精确路由；用户中断会同步更新会话状态。
   - [ ] RabbitMQ 未集成。
 
 - [ ] **平台 Agent**
@@ -143,7 +143,7 @@
 
 - [ ] **数据库**
   - 部分完成：SQLAlchemy models 覆盖 User、Conversation、Message、Asset、Vulnerability、Node、AuditLog 等。
-  - [ ] Alembic migration versions 目录为空，实际迁移脚本未创建。
+  - [x] 已创建 Alpha 初始 Alembic migration：`0001_alpha_schema.py`。
   - [ ] 索引优化未落地。
   - [ ] `Event` 模型未看到实现。
 
@@ -152,7 +152,7 @@
   - [ ] OAuth2 Google/GitHub 未实现。
   - [ ] Token refresh 前端自动刷新策略不完整。
   - [ ] 会话按 user_id 隔离已实现。
-  - [ ] 资产、漏洞、节点未按用户隔离。
+  - [ ] 节点仍未按用户隔离；资产、漏洞已按用户隔离。
   - [ ] 节点 WebSocket token 认证已实现。
   - [ ] org_id / role 仅 User 上有字段，资源模型未形成多租户隔离。
 
@@ -171,11 +171,11 @@
 
 - [ ] **Policy Engine + Tool Gateway**
   - 部分完成：有 `ToolRegistry`、`execute`、`http_request`、workflow tools。
-  - [ ] `browser` 工具存在但平台模式未注册。
+  - [x] `browser` 工具已在平台模式注册。
   - [ ] `nmap/httpx/nuclei/sqlmap/gobuster/ffuf/curl` 没有独立 ToolSpec，只是通过 shell `execute` 调用。
-  - [ ] Scope Gate 未实现。
-  - [ ] 风险等级只做命令 denylist/destructive 识别，没有阻断并等待授权。
-  - [ ] `request_approval` 只发送消息，不暂停等待用户决策。
+  - [x] Scope Gate 已在确定性 intake 和 execute 工具中实现最小校验。
+  - [x] destructive 风险命令会阻断并等待用户授权。
+  - [x] `request_approval` 会等待用户授权/取消结果。
 
 - [ ] **Agent Orchestrator + Workflow Engine**
   - 部分完成：有 precheck/plan/recon/scan/verify/report 阶段提示和 `phase_transition` 工具。
@@ -185,7 +185,7 @@
 
 - [ ] **Evidence Store**
   - 部分完成：存在 `node/pentest_node/evidence/store.py`。
-  - [ ] Agent Loop 未系统性把工具输出、HTTP 请求/响应、证据哈希写入证据库。
+  - [x] Agent Loop 已将工具输出写入本地 EvidenceStore，并通过 `evidence_created` 同步 evidence_id/raw_ref/summary/hash 到平台。HTTP 请求/响应专用采集仍需继续扩展。
   - [ ] 证据与 Finding / 平台漏洞记录的完整关联未实现。
 
 - [ ] **Finding Verifier**
@@ -195,7 +195,7 @@
 
 - [ ] **Platform Sync**
   - 部分完成：Node 可发送 `status_update`、`tool_output`、`vuln_found`、`asset_discovered`、`request_decision`、task 结束信息。
-  - [ ] 平台端没有把实时 asset/vuln/finding/evidence 同步入库。
+  - [x] 平台端已将实时 asset/vuln/evidence 入库；证据文件内容仍只保留 raw_ref/summary/hash，未实现二进制文件同步。
   - [ ] `task_complete` 是 Agent 工具触发本地 `_aborted`，外层发送完成摘要；可演示但不完整。
 
 - [x] **Agent Runtime**
@@ -211,9 +211,9 @@
 
 - [ ] **沙箱执行**
   - 部分完成：`DockerSandbox` 类和 `node/Dockerfile.sandbox` 存在。
-  - [ ] 平台模式当前使用 `LocalSandbox`，直接本地 `subprocess.run(shell=True)`，没有启用 DockerSandbox。
-  - [ ] DockerSandbox 文件内有重复 `execute`/`destroy` 方法定义，需要清理。
-  - [ ] kill switch、工作目录隔离、资源限制只有 DockerSandbox 原型，未接入运行路径。
+  - [x] 平台模式已切换为 `DockerSandbox`。
+  - [x] DockerSandbox 重复 `execute`/`destroy` 方法已清理。
+  - [x] DockerSandbox 已接入平台模式并具备工作目录隔离/资源限制，且 `scripts/docker_sandbox_real_smoke.py` 已验证真实容器启动/执行/清理；kill switch 仍未完整实现。
 
 - [ ] **节点配置与部署**
   - 部分完成：Node 有 pyproject、Dockerfile、Dockerfile.sandbox、配置类、平台模式 CLI。
@@ -254,8 +254,8 @@
 - [x] Docker 沙箱镜像文件：`node/Dockerfile.sandbox` 基于 Kali，安装 nmap、httpx-toolkit、gobuster、nuclei、sqlmap、curl、ffuf、whatweb 等。
 - [ ] Metasploitable2 未包含。
 - [ ] Playwright、mitmproxy 未安装在 `Dockerfile.sandbox` 中。
-- [ ] MVP 验收标准冒烟测试清单未看到独立文档或自动化脚本。
-- [ ] 平台 docker-compose 有基础服务编排，但未验证端到端生产部署能力。
+- [x] 已新增自动化冒烟脚本：`scripts/alpha_smoke.py` 覆盖平台侧绑定/入库/audit/evidence，`scripts/node_alpha_smoke.py` 覆盖节点侧 intake/scope/approval/evidence，`scripts/ws_alpha_smoke.py` 通过 `/api/nodes` 注册 Node 并用真实 `/ws` endpoint 覆盖 JWT 用户连接、node token 连接、task_assign、request_decision/user_decision 回传、task_complete 和 DB 持久化，`scripts/docker_sandbox_smoke.py` 覆盖 DockerSandbox 合约，`scripts/docker_sandbox_real_smoke.py` 覆盖真实容器执行，`scripts/alpha_browser_smoke.py` 覆盖真实前端登录、发起会话、确认卡授权和 Evidence 视图。
+- [ ] 平台 docker-compose 有基础服务编排，但未验证端到端生产部署能力；真实 DockerSandbox 已在本机 Docker Desktop `29.4.1` 上通过脚本化验收。
 
 ---
 
@@ -337,18 +337,18 @@
 
 ### P0：让 MVP 闭环真实可用
 
-- [ ] 接通 `request_decision`：Node 请求授权 → 前端确认卡 → 用户选择 → 平台按会话路由回 Node → Node 继续/取消。
-- [ ] 实时 `asset_discovered` / `vuln_found` 入库，并关联 conversation/node/evidence。
-- [ ] 将平台模式从 `LocalSandbox` 切到 `DockerSandbox`，修复 DockerSandbox 重复方法与输出解析。
-- [ ] 实现确定性 Task Intake：target 解析、scope 校验、DNS/连通性检查。
-- [ ] 建立 Alembic 初始迁移脚本。
-- [ ] 修复会话状态机与前端类型不一致问题。
-- [ ] 完成资产/漏洞的用户隔离字段与查询过滤。
+- [x] 接通 `request_decision`：Node 请求授权 → 前端确认卡 → 用户选择 → 平台按会话路由回 Node → Node 继续/取消。
+- [x] 实时 `asset_discovered` / `vuln_found` / `tool_output` evidence 已入库并关联 user/conversation/node；漏洞 evidence_ids 可持久化，完整证据文件同步仍未实现。
+- [x] 将平台模式从 `LocalSandbox` 切到 `DockerSandbox`，修复 DockerSandbox 重复方法与输出解析。
+- [ ] 实现确定性 Task Intake：target 解析、scope 校验已完成；DNS/连通性检查仍由 precheck 工具阶段完成。
+- [x] 建立 Alembic 初始迁移脚本。
+- [x] 修复会话状态机与前端类型不一致问题。
+- [x] 完成资产/漏洞的用户隔离字段与查询过滤。
 
 ### P1：补齐安全与可观测基础
 
 - [ ] 审计日志写入基础设施，并覆盖登录、会话、资产、漏洞、节点、Agent 操作。
-- [ ] 证据存储接入 Agent Loop：工具输出、HTTP 请求/响应、hash、summary、Finding 引用。
+- [ ] 证据存储接入 Agent Loop：工具输出、hash、summary 已接入并有 smoke 覆盖；HTTP 请求/响应与 Finding 引用强校验仍待补。
 - [ ] Scope Gate 和风险等级 Gate 接入 execute/http/browser/workflow。
 - [ ] 前端接入确认卡、待处理列表、Sonner 通知。
 - [ ] 对话消息支持 Markdown 渲染。
@@ -368,7 +368,7 @@
 ## MVP 启动前检查清单真实状态
 
 - [x] 产品方案文档完成：`vision.json`、`docs/prd.md`、`docs/architecture.md`、`docs/pentest-node-spec.md` 存在。
-- [ ] `docs/product-vision.md` 缺失。
+- [x] `docs/product-vision.md` 已补齐；`scripts/validate-vision.js` 仍缺失，未能运行 PLAID vision 校验。
 - [x] 关键页面原型已实现：对话页、资产页、漏洞页、节点页等。
 - [ ] 关键页面完整交互未完成：确认卡、附件、详情关联、复测、文件面板等。
 - [x] 技术栈基本落地：React + FastAPI + PostgreSQL 模型 + WebSocket + Python Node。
@@ -376,12 +376,12 @@
 - [ ] 通信协议只实现核心子集，ACK、心跳、离线缓存、按会话精确路由未完成。
 - [x] Docker 靶场文件包含 DVWA + Juice Shop。
 - [x] Kali 沙箱 Dockerfile 存在。
-- [ ] 沙箱镜像未接入平台模式运行路径。
-- [ ] 浏览器自动化工具存在但未注册到平台模式 Agent。
+- [x] 沙箱镜像已在平台模式代码路径接入，并通过真实 Docker daemon 完成实际容器运行验证。
+- [x] browser 工具已注册到平台模式 Agent；浏览器 UI Alpha smoke 已覆盖平台前端闭环。
 - [ ] WAF 检测、速率限制感知、覆盖率追踪、应用模型、验证码/MFA/蜜罐检测、MCP 扩展均未在代码中实现。
 - [x] 10 个 Skill markdown 文件存在。
 - [ ] Skill 未接入 Agent 执行。
-- [ ] MVP 冒烟测试清单/自动化验收未看到。
+- [x] MVP Alpha 冒烟测试清单和自动化验收脚本已建立。
 
 ---
 
@@ -402,4 +402,6 @@
 - 高风险操作能触发确认卡，用户确认后 Node 才继续执行。
 - 会话结束后平台能看到消息、资产、漏洞、证据和审计日志。
 
-在这个里程碑完成前，不应再把“全量消息卡片、多节点、子代理、独立模式、报告同步、知识库/记忆智能增强”标为完成。
+当前验收：以上 Alpha 闭环已由 `alpha_smoke.py`、`node_alpha_smoke.py`、`ws_alpha_smoke.py`、`docker_sandbox_smoke.py`、`docker_sandbox_real_smoke.py`、`alpha_browser_smoke.py` 覆盖并通过；仍不代表 MVP 全量、生产 docker-compose、多节点、ACK/心跳/离线补传、完整证据文件同步或 kill switch 已完成。
+
+即便 Alpha 闭环已完成，也不应把“全量消息卡片、多节点、子代理、独立模式、报告同步、知识库/记忆智能增强”标为完成。

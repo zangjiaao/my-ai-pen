@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Check, Pencil, Trash2, X } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAuthStore } from "../stores/authStore";
 import { useConversationStore } from "../stores/conversationStore";
@@ -25,8 +26,31 @@ export default function Sidebar({ activeId, onSelect }: Props) {
   const navigate = useNavigate();
   const location = useLocation();
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
+  const [renameTarget, setRenameTarget] = useState<{ id: string; title: string } | null>(null);
+  const [renameValue, setRenameValue] = useState("");
 
-  useEffect(() => { fetchAll(); }, []);
+  useEffect(() => { fetchAll(); }, [fetchAll]);
+
+  const startRename = (conversation: { id: string; title: string }) => {
+    setRenameTarget(conversation);
+    setRenameValue(conversation.title);
+  };
+
+  const submitRename = async () => {
+    if (!renameTarget) return;
+    const title = renameValue.trim();
+    if (!title || title === renameTarget.title) {
+      setRenameTarget(null);
+      return;
+    }
+    await authFetch(`/api/conversations/${renameTarget.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    });
+    setRenameTarget(null);
+    await fetchAll();
+  };
 
   return (
     <aside className="flex w-[280px] flex-shrink-0 flex-col border-r border-hairline bg-surface-sidebar">
@@ -42,18 +66,45 @@ export default function Sidebar({ activeId, onSelect }: Props) {
           <p className="px-3 py-4 text-center text-sm text-ink-muted">暂无会话</p>
         ) : (
           conversations.map((c) => (
-            <div key={c.id} className="group flex items-center">
-              <button onClick={() => { navigate("/"); onSelect(c.id); }}
-                className={`flex-1 rounded-md px-3 py-2.5 text-left text-sm transition-colors ${c.id === activeId ? "bg-accent-subtle font-medium text-ink" : "text-ink-secondary hover:bg-surface-default hover:text-ink"}`}>
-                <div className="flex items-center gap-2">
-                  <span className={`inline-block h-2 w-2 rounded-full ${c.status === "running" ? "bg-status-running" : c.status === "completed" ? "bg-status-success" : "bg-ink-muted"}`} />
-                  <span className="truncate">{c.title}</span>
+            <div key={c.id} className="group flex min-h-[40px] items-center gap-1 rounded-md">
+              {renameTarget?.id === c.id ? (
+                <div className="flex flex-1 items-center gap-1 px-1 py-1">
+                  <input
+                    autoFocus
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void submitRename();
+                      if (e.key === "Escape") setRenameTarget(null);
+                    }}
+                    className="min-w-0 flex-1 rounded-md border border-hairline bg-canvas px-2 py-1.5 text-sm text-ink focus:border-ink focus:outline-none"
+                  />
+                  <button onMouseDown={(e) => e.preventDefault()} onClick={() => { void submitRename(); }} className="rounded-md p-1.5 text-ink-secondary hover:bg-surface-default hover:text-ink" title="保存名称">
+                    <Check size={14} />
+                  </button>
+                  <button onMouseDown={(e) => e.preventDefault()} onClick={() => setRenameTarget(null)} className="rounded-md p-1.5 text-ink-secondary hover:bg-surface-default hover:text-ink" title="取消重命名">
+                    <X size={14} />
+                  </button>
                 </div>
-              </button>
-              <button onClick={(e) => { e.stopPropagation(); setDeleteTarget({ id: c.id, title: c.title }); }}
-                className="mr-1 rounded-full p-1 text-ink-muted opacity-0 transition-opacity hover:bg-surface-default hover:text-severity-critical group-hover:opacity-100" title="删除会话">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
+              ) : (
+                <>
+                  <button onClick={() => { navigate("/"); onSelect(c.id); }}
+                    className={`min-w-0 flex-1 rounded-md px-3 py-2.5 text-left text-sm transition-colors ${c.id === activeId ? "bg-accent-subtle font-medium text-ink" : "text-ink-secondary hover:bg-surface-default hover:text-ink"}`}>
+                    <div className="flex items-center gap-2">
+                      <span className={`inline-block h-2 w-2 flex-shrink-0 rounded-full ${statusDotClass(c.status)}`} />
+                      <span className="truncate">{c.title}</span>
+                    </div>
+                  </button>
+                  <button onClick={(e) => { e.stopPropagation(); startRename(c); }}
+                    className="rounded-md p-1.5 text-ink-muted opacity-0 transition-opacity hover:bg-surface-default hover:text-ink group-hover:opacity-100" title="重命名会话">
+                    <Pencil size={14} />
+                  </button>
+                  <button onClick={(e) => { e.stopPropagation(); setDeleteTarget({ id: c.id, title: c.title }); }}
+                    className="mr-1 rounded-md p-1.5 text-ink-muted opacity-0 transition-opacity hover:bg-surface-default hover:text-severity-critical group-hover:opacity-100" title="删除会话">
+                    <Trash2 size={14} />
+                  </button>
+                </>
+              )}
             </div>
           ))
         )}
@@ -83,4 +134,12 @@ export default function Sidebar({ activeId, onSelect }: Props) {
       />
     </aside>
   );
+}
+
+function statusDotClass(status: string) {
+  if (status === "running") return "bg-status-running";
+  if (status === "completed") return "bg-status-success";
+  if (status === "failed" || status === "canceled") return "bg-severity-critical";
+  if (status === "paused") return "bg-ink-secondary";
+  return "bg-ink-muted";
 }

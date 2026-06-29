@@ -41,3 +41,7 @@ MEMORY.md
 node/*.txt
 node/*.php
 node/*.html
+platform/frontend/tsconfig.tsbuildinfo
+.alpha/
+reverse/
+node/workspace/

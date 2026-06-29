@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 type MessageHandler = (msg: Record<string, unknown>) => void;
 
@@ -18,7 +18,10 @@ export function useWebSocket(handlers: Record<string, MessageHandler>) {
       return;
     }
 
-    const wsUrl = `ws://localhost:8000/ws?token=${token}`;
+    const explicitWsUrl = import.meta.env.VITE_WS_URL as string | undefined;
+    const backendUrl = (import.meta.env.VITE_BACKEND_URL as string | undefined) || "http://localhost:8000";
+    const wsBase = explicitWsUrl || backendUrl.replace(/^http/, "ws");
+    const wsUrl = `${wsBase.replace(/\/$/, "")}/ws?token=${token}`;
     console.log("[WS] Connecting", wsUrl);
 
     const ws = new WebSocket(wsUrl);
@@ -55,13 +58,13 @@ export function useWebSocket(handlers: Record<string, MessageHandler>) {
     };
   }, []);
 
-  return {
-    send: (msg: Record<string, unknown>) => {
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify(msg));
-      } else {
-        queueRef.current.push(msg);
-      }
-    },
-  };
+  const send = useCallback((msg: Record<string, unknown>) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify(msg));
+    } else {
+      queueRef.current.push(msg);
+    }
+  }, []);
+
+  return { send };
 }

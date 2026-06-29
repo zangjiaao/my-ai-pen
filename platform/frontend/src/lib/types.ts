@@ -16,7 +16,7 @@ export interface Conversation {
   id: string;
   title: string;
   node_id: string | null;
-  status: "created" | "running" | "paused" | "completed" | "failed";
+  status: "created" | "running" | "paused" | "completed" | "failed" | "canceled";
   created_at: string;
   last_active_at: string;
 }
