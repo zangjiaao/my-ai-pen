@@ -12,7 +12,9 @@ export function useWebSocket(handlers: Record<string, MessageHandler>) {
     if (!token) return;
 
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${protocol}//${location.host}/ws?token=${token}`);
+    // WebSocket 直连后端，不经过 Vite proxy
+    const backendHost = import.meta.env.DEV ? "localhost:8000" : location.host;
+    const ws = new WebSocket(`${protocol}//${backendHost}/ws?token=${token}`);
     wsRef.current = ws;
 
     ws.onopen = () => {
