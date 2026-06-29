@@ -58,8 +58,9 @@ export default function ConversationPage() {
 
     const userMsg: Message = { id: crypto.randomUUID(), conversation_id: convId, role: "user", msg_type: "text", content: { text }, parent_msg_id: null, created_at: new Date().toISOString() };
     setMessages((prev) => [...prev, userMsg]);
-    // 通过 WebSocket 发送给平台，平台转发给 Node
-    send({ type: "user_message", conversation_id: convId, text, target: { type: "url", value: extractUrl(text) || "http://localhost:8080" } });
+    const url = extractUrl(text);
+    const target = url ? { type: "url", value: url } : null;
+    send({ type: "user_message", conversation_id: convId, text, target });
   }, [input, activeId, fetchAll, send]);
 
   function extractUrl(t: string): string | null {

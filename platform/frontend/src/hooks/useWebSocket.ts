@@ -6,13 +6,13 @@ export function useWebSocket(handlers: Record<string, MessageHandler>) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>();
   const attemptRef = useRef(0);
+  const queueRef = useRef<Record<string, unknown>[]>([]);
 
   const connect = () => {
     const token = localStorage.getItem("access_token");
     if (!token) return;
 
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-    // WebSocket 直连后端，不经过 Vite proxy
     const backendHost = import.meta.env.DEV ? "localhost:8000" : location.host;
     const ws = new WebSocket(`${protocol}//${backendHost}/ws?token=${token}`);
     wsRef.current = ws;
@@ -20,6 +20,11 @@ export function useWebSocket(handlers: Record<string, MessageHandler>) {
     ws.onopen = () => {
       attemptRef.current = 0;
       console.log("[WS] connected");
+      // 发送排队中的消息
+      while (queueRef.current.length) {
+        const msg = queueRef.current.shift()!;
+        ws.send(JSON.stringify(msg));
+      }
     };
 
     ws.onmessage = (event) => {
@@ -49,6 +54,9 @@ export function useWebSocket(handlers: Record<string, MessageHandler>) {
     send: (msg: Record<string, unknown>) => {
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify(msg));
+      } else {
+        // 连接未就绪 → 排队
+        queueRef.current.push(msg);
       }
     },
   };
