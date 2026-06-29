@@ -70,14 +70,17 @@ async def _save_message(msg: dict, role: str):
         from app.models.message import Message
         conv_id = msg.get("conversation_id")
         if not conv_id: return
+        msg_type = msg.get("type", "text")
         if role == "user":
             content = {"text": msg.get("text", "")}
-        elif role == "agent":
-            content = msg  # 完整的 WS 消息，含 type/text/content 等
+        elif msg_type == "text":
+            # Agent text: 提取嵌套的 content.text
+            inner = msg.get("content", {})
+            content = {"text": inner.get("text", str(msg)) if isinstance(inner, dict) else str(inner)}
         else:
-            content = msg
+            content = msg  # tool_output, vuln_found 等保留原始结构
         m = Message(conversation_id=uuid.UUID(conv_id), role=role,
-                    msg_type=msg.get("type", "text"), content=content)
+                    msg_type=msg_type, content=content)
         async with async_session() as db:
             db.add(m)
             await db.commit()
