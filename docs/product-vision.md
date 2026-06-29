@@ -2,6 +2,7 @@
 
 > 来源：`vision.json` V2.0 与 `docs/prd.md`
 > 生成时间：2026-06-29
+> 当前同步：MVP Alpha 闭环已提交 `3725e44 Implement MVP alpha platform loop`；`scripts/validate-vision.js` 缺失，PLAID 自动校验未运行。
 
 ## 产品定位
 
@@ -33,7 +34,7 @@ CTF、应急响应、日志分析、威胁情报、完整多租户 RBAC、复杂
 
 ## 成功标准
 
-MVP Alpha 的成功标准是：单用户、单在线节点、单会话可以完成从任务创建到 Node 执行、授权确认、资产/漏洞/证据入库、前端刷新恢复的端到端闭环，并具备自动化 smoke 覆盖。
+MVP Alpha 的成功标准是：单用户、单在线节点、单会话可以完成从任务创建到 Node 执行、授权确认、资产/漏洞/证据入库、前端刷新恢复的端到端闭环，并具备自动化 smoke 覆盖。当前该 Alpha 标准已通过 `alpha_smoke.py`、`node_alpha_smoke.py`、`ws_alpha_smoke.py`、`docker_sandbox_smoke.py`、`docker_sandbox_real_smoke.py` 和 `alpha_browser_smoke.py` 验收。
 
 ## 技术方向
 

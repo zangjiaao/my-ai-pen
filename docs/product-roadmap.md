@@ -2,7 +2,7 @@
 
 > 来源: `vision.json` V2.0 / `docs/prd.md` / `docs/architecture.md` / `docs/pentest-node-spec.md`
 > 进度审计时间: 2026-06-29
-> 当前结论: **MVP Alpha 单节点闭环已通过平台、Node、真实 `/ws`、浏览器 UI、真实 DockerSandbox 自动化验收；MVP 全量仍有 P1/P2 缺口。**
+> 当前结论: **MVP Alpha 单节点闭环已通过平台、Node、真实 `/ws`、浏览器 UI、真实 DockerSandbox 自动化验收，并已提交 `3725e44 Implement MVP alpha platform loop`；MVP 全量仍有 P0/P1/P2 缺口。**
 
 ---
 
@@ -35,7 +35,7 @@
 | MVP | 部分完成 | 平台 Web 原型 + 后端 CRUD/API 骨架 + 节点 WebSocket 联调原型 + 渗透 Node LLM 工具调用原型 |
 | Post-MVP | 未开始 | 代码审计 Node、应急响应 Node、CTF Node、威胁情报、多租户、报告中心 |
 
-当前 MVP 不是“平台 + 渗透 Node 全能力”。更准确的说法是：**已有平台和 Node 的端到端雏形，可以注册节点、登录平台、创建会话、通过 WebSocket 下发任务并显示部分 Agent 输出，但完整安全控制、证据链、持久化、授权闭环、独立运行、报告同步等仍未完成。**
+当前 MVP 不是“平台 + 渗透 Node 全能力”。更准确的说法是：**已有平台和 Node 的端到端 Alpha 闭环：可以注册节点、登录平台、创建会话、通过 WebSocket 下发任务，展示 Agent 输出，处理授权确认，并把资产、漏洞、证据和部分审计日志持久化；但确定性 Task Intake、完整证据链、ACK/心跳/离线补传、独立运行、报告同步、多节点策略等仍未完成。**
 
 ---
 
@@ -60,7 +60,8 @@
   - [ ] Markdown 渲染未实现，当前只是直接显示文本。
   - [x] 工具调用卡片有基础流式输出展示。
   - [x] 漏洞发现卡片有基础展示。
-  - [ ] 确认卡片和授权选项已接入；超时倒计时未实现。
+  - [x] 确认卡片和授权选项已接入 `request_decision` / `user_decision` 闭环。
+  - [ ] 确认卡片超时倒计时未实现。
   - [ ] 附件上传未实现。
   - [x] 快捷模板按钮已实现。
   - [x] 会话切换时会加载该会话消息。
@@ -117,7 +118,7 @@
 
 - [ ] **漏洞引擎**
   - 部分完成：漏洞列表、详情、状态/字段 PATCH 已实现。
-  - [ ] 漏洞创建 API 未开放给前端/Node WebSocket；实时 `vuln_found` 未写入数据库。
+  - [x] 实时 `vuln_found` 已通过 WebSocket 写入数据库并关联 user/conversation/node；前端直接创建漏洞 API 仍未开放。
   - [ ] 状态机约束未实现，PATCH 可直接改状态。
   - [ ] 漏洞-会话-证据完整关联未实现。
   - [ ] 复测 API 未实现。
@@ -137,8 +138,8 @@
   - [ ] 资产/漏洞 Function Call 查询能力未实现。
 
 - [ ] **节点调度**
-  - 部分完成：节点注册/发现、轮询选择在线节点、`task_assign` 下发已实现。
-  - [ ] 节点能力发现、任务队列、按会话绑定的中断/纠偏转发未完整实现。
+  - 部分完成：节点注册/发现、轮询选择在线节点、`task_assign` 下发、按会话绑定的 `user_steer` / `user_interrupt` 精确转发已实现。
+  - [ ] 节点能力发现、任务队列、多节点负载/健康策略未完整实现。
   - [ ] 多节点负载/健康策略未实现。
 
 - [ ] **数据库**
@@ -157,8 +158,8 @@
   - [ ] org_id / role 仅 User 上有字段，资源模型未形成多租户隔离。
 
 - [ ] **审计日志**
-  - 部分完成：`AuditLog` 模型和查询 API 已实现。
-  - [ ] 没有看到登录、会话、资产、漏洞、节点、Agent 操作写入审计日志的调用。
+  - 部分完成：`AuditLog` 模型和查询 API 已实现；WebSocket 路径已写入 node.online、task.assign、asset.discover、finding.create、evidence.create、approval.* 等关键审计。
+  - [ ] 登录、会话 PATCH/删除、资产/漏洞 REST 操作等审计覆盖仍不完整。
   - [ ] append-only 数据库权限未实现。
   - [ ] 审计浏览 UI 原本不纳入 MVP，但当前 API 已存在；仍缺数据写入和权限策略。
 
@@ -207,7 +208,7 @@
 - [ ] **Node Runtime Adapter**
   - 部分完成：`PlatformWSClient` 和平台模式转发存在。
   - [ ] 统一事件接口、证据/Finding 抽象不完整。
-  - [ ] 纠偏队列存在于 AgentLoop，但平台 `steer` API 未接通；WebSocket 的 `user_steer` 也没有调用 current_loop.steer。
+  - [x] 平台 `steer` API 已按会话绑定节点转发，Node WebSocket 的 `user_steer` 会调用 `current_loop.steer`；`user_interrupt` 可触发 abort，但 pause/resume 语义仍不完整。
 
 - [ ] **沙箱执行**
   - 部分完成：`DockerSandbox` 类和 `node/Dockerfile.sandbox` 存在。
@@ -293,8 +294,8 @@
   - [ ] 未实现。
 
 - [ ] **增强的 Agent 执行监控**
-  - 部分完成：右侧进度面板显示阶段、迭代和活跃工具。
-  - [ ] 工具调用历史时间线、待确认事项、文件/证据视图未完整实现。
+  - 部分完成：右侧进度面板显示阶段进度、TODO、活跃工具、待确认事项和 Evidence 列表。
+  - [ ] 工具调用历史时间线、文件视图、漏洞详情联动仍未完整实现。
 
 ---
 
@@ -347,10 +348,10 @@
 
 ### P1：补齐安全与可观测基础
 
-- [ ] 审计日志写入基础设施，并覆盖登录、会话、资产、漏洞、节点、Agent 操作。
+- [ ] 扩展审计日志覆盖登录、会话 PATCH/删除、资产/漏洞 REST 操作，并补权限策略。
 - [ ] 证据存储接入 Agent Loop：工具输出、hash、summary 已接入并有 smoke 覆盖；HTTP 请求/响应与 Finding 引用强校验仍待补。
 - [ ] Scope Gate 和风险等级 Gate 接入 execute/http/browser/workflow。
-- [ ] 前端接入确认卡、待处理列表、Sonner 通知。
+- [ ] 前端确认卡和待处理列表已接入；Sonner 通知、倒计时和定位仍待补齐。
 - [ ] 对话消息支持 Markdown 渲染。
 - [ ] 漏洞复测 API 和前端按钮接通。
 
@@ -370,10 +371,10 @@
 - [x] 产品方案文档完成：`vision.json`、`docs/prd.md`、`docs/architecture.md`、`docs/pentest-node-spec.md` 存在。
 - [x] `docs/product-vision.md` 已补齐；`scripts/validate-vision.js` 仍缺失，未能运行 PLAID vision 校验。
 - [x] 关键页面原型已实现：对话页、资产页、漏洞页、节点页等。
-- [ ] 关键页面完整交互未完成：确认卡、附件、详情关联、复测、文件面板等。
+- [ ] 关键页面完整交互未完成：确认卡倒计时/定位、附件、详情关联、复测、文件面板等。
 - [x] 技术栈基本落地：React + FastAPI + PostgreSQL 模型 + WebSocket + Python Node。
 - [ ] RabbitMQ 未落地。
-- [ ] 通信协议只实现核心子集，ACK、心跳、离线缓存、按会话精确路由未完成。
+- [ ] 通信协议只实现核心子集；按会话精确路由已完成，ACK、心跳、离线缓存、重连补传仍未完成。
 - [x] Docker 靶场文件包含 DVWA + Juice Shop。
 - [x] Kali 沙箱 Dockerfile 存在。
 - [x] 沙箱镜像已在平台模式代码路径接入，并通过真实 Docker daemon 完成实际容器运行验证。
@@ -402,6 +403,6 @@
 - 高风险操作能触发确认卡，用户确认后 Node 才继续执行。
 - 会话结束后平台能看到消息、资产、漏洞、证据和审计日志。
 
-当前验收：以上 Alpha 闭环已由 `alpha_smoke.py`、`node_alpha_smoke.py`、`ws_alpha_smoke.py`、`docker_sandbox_smoke.py`、`docker_sandbox_real_smoke.py`、`alpha_browser_smoke.py` 覆盖并通过；仍不代表 MVP 全量、生产 docker-compose、多节点、ACK/心跳/离线补传、完整证据文件同步或 kill switch 已完成。
+当前验收：以上 Alpha 闭环已由 `alpha_smoke.py`、`node_alpha_smoke.py`、`ws_alpha_smoke.py`、`docker_sandbox_smoke.py`、`docker_sandbox_real_smoke.py`、`alpha_browser_smoke.py` 覆盖并通过，提交为 `3725e44 Implement MVP alpha platform loop`；仍不代表 MVP 全量、生产 docker-compose、多节点、ACK/心跳/离线补传、完整证据文件同步或 kill switch 已完成。
 
 即便 Alpha 闭环已完成，也不应把“全量消息卡片、多节点、子代理、独立模式、报告同步、知识库/记忆智能增强”标为完成。

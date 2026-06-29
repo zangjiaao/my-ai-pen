@@ -351,7 +351,7 @@ CREATE TABLE coverage (endpoint_pattern TEXT, param_name TEXT, vuln_type TEXT, t
 │  └────────────────────────────┼──────────────────────────┘  │
 │                               │                              │
 │  ┌────────────────────────────┼──────────────────────────┐  │
-│  │          Agent Runtime (PydanticAI MVP)               │  │
+│  │          Agent Runtime (OpenAI SDK-compatible MVP)     │  │
 │  │                                                        │  │
 │  │  ┌──────────────────┐   ┌─────────────────┐           │  │
 │  │  │Agent Orchestrator│←──│Workflow Engine  │           │  │
@@ -803,7 +803,7 @@ CREATE INDEX idx_audit_conversation ON audit_log (conversation_id);
 │ FastAPI (Python 3.11+)                                        │
 │ + WebSocket (FastAPI WebSocket)                               │
 │ + PostgreSQL (asyncpg / psycopg)                              │
-│ + RabbitMQ — 节点离线消息缓存 + 多实例WebSocket广播            │
+│ + RabbitMQ — 设计目标；当前代码尚未集成，WebSocket 为核心子集 │
 ├───────────────────────────────────────────────────────────────┤
 │ 节点运行时                                                     │
 │ Python 3.11+ + FastAPI + asyncio                              │
@@ -813,12 +813,12 @@ CREATE INDEX idx_audit_conversation ON audit_log (conversation_id);
 │ + 离线结果导出(tar.gz) + 平台同步(REST)                        │
 ├───────────────────────────────────────────────────────────────┤
 │ Agent Runtime                                                 │
-│ PydanticAI (MVP) → 工具Schema + 结构化输出 + HITL              │
+│ 当前实现：OpenAI SDK 兼容接口 + 工具注册 + workflow tools + HITL │
 │ 通过 Runtime Adapter 解耦 → 可替换 LangGraph / Pi / Hermes    │
 ├───────────────────────────────────────────────────────────────┤
 │ LLM 接入                                                       │
-│ LiteLLM                                                        │
-│ 支持: OpenAI系列, Claude系列, 本地Ollama, LM Studio, 企业模型  │
+│ OpenAI SDK 兼容接口                                            │
+│ 支持: OpenAI、DeepSeek、Ollama、LM Studio、企业兼容服务         │
 ├───────────────────────────────────────────────────────────────┤
 │ 沙箱环境                                                       │
 │ Docker (Kali Linux 镜像)                                      │
@@ -844,7 +844,7 @@ CREATE INDEX idx_audit_conversation ON audit_log (conversation_id);
     ↓
 节点 (Python + FastAPI)
     │
-    ├── Agent Runtime (PydanticAI)
+    ├── Agent Runtime (OpenAI SDK-compatible adapter; PydanticAI not used yet)
     │       │
     │       ├── Tool Gateway → Docker 沙箱 → 安全工具
     │       │
@@ -925,7 +925,7 @@ CREATE INDEX idx_audit_conversation ON audit_log (conversation_id);
 │  服务器 B (节点)                                      │
 │                                                     │
 │  ┌──────────────────────────────────────────────┐  │
-│  │ Python Node Runtime + PydanticAI Agent       │  │
+│  │ Python Node Runtime + OpenAI SDK-compatible Agent │  │
 │  │                                              │  │
 │  │  ┌──────────────────────────────────────┐   │  │
 │  │  │ Docker 沙箱 (Kali 工具镜像)            │   │  │
@@ -947,4 +947,4 @@ CREATE INDEX idx_audit_conversation ON audit_log (conversation_id);
 
 ---
 
-*文档状态：草稿 | 基于 plan.docx V2.0 提取*
+*文档状态：已按 2026-06-29 MVP Alpha 当前实现同步；部分章节仍保留目标架构说明。*
