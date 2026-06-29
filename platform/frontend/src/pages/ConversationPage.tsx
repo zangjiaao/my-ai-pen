@@ -6,6 +6,7 @@ import MessageRenderer from "../components/MessageRenderer";
 import { useConversationStore } from "../stores/conversationStore";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { authFetch } from "../lib/api";
+import { normalizeExecutionStatus } from "../lib/status";
 import type { Conversation, Message } from "../lib/types";
 
 const ACTIVE_CONVERSATION_KEY = "active_conversation_id";
@@ -54,25 +55,26 @@ export default function ConversationPage() {
   const [evidence, setEvidence] = useState<Array<Record<string, unknown>>>([]);
   const [running, setRunning] = useState(false);
 
-  const applyConversationState = useCallback((snapshot: ConversationSnapshot) => {
-    setAgentState(snapshot.agent_state || {});
-    setProgress(snapshot.progress);
-    setTodos(snapshot.todos || []);
-    setFindings(snapshot.findings || []);
-    setPendingApprovals(snapshot.pending_approvals || []);
-    setEvidence(snapshot.evidence || []);
-    setRunning(snapshot.conversation?.status === "running");
+  const applyConversationState = useCallback((snapshot: ConversationSnapshot, fallback?: ConversationSnapshot) => {
+    setAgentState(hasValues(snapshot.agent_state) ? snapshot.agent_state! : fallback?.agent_state || {});
+    setProgress(snapshot.progress || fallback?.progress);
+    setTodos(snapshot.todos?.length ? snapshot.todos : fallback?.todos || []);
+    setFindings(snapshot.findings?.length ? snapshot.findings : fallback?.findings || []);
+    setPendingApprovals(snapshot.pending_approvals?.length ? snapshot.pending_approvals : fallback?.pending_approvals || []);
+    setEvidence(snapshot.evidence?.length ? snapshot.evidence : fallback?.evidence || []);
+    setRunning((snapshot.conversation || fallback?.conversation)?.status === "running");
   }, []);
 
   const refreshConversationState = useCallback(async (id: string | null) => {
     if (!id) return;
     try {
       const state = await authFetch<ConversationSnapshot>(`/api/conversations/${id}/state`);
-      applyConversationState(state);
+      const status = state.conversation?.status || conversations.find(c => c.id === id)?.status || "created";
+      applyConversationState(state, snapshotFromMessages(messages, status));
     } catch {
       // The live stream remains usable even if a snapshot refresh races startup.
     }
-  }, [applyConversationState]);
+  }, [applyConversationState, conversations, messages]);
 
   const { send } = useWebSocket({
     vuln_found: (msg) => {
@@ -84,14 +86,15 @@ export default function ConversationPage() {
     },
     tool_output: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
-      const { tool_name, line, status } = msg as Record<string, string>;
-      setMessages((prev) => {
-        const last = prev[prev.length - 1];
-        if (last?.msg_type === "tool_call" && (last.content as Record<string, unknown>).tool_name === tool_name) {
-          return [...prev.slice(0, -1), { ...last, content: { ...last.content, status: status || "running", stdout: ((last.content as Record<string, string>).stdout || "") + line + "\n" } }];
-        }
-        return [...prev, makeMessage(messageConversationId(msg, activeId), "agent", "tool_call", { tool_name, command: "", status: status || "running", stdout: line + "\n" })];
+      const m = msg as Record<string, string>;
+      const incoming = makeMessage(messageConversationId(msg, activeId), "agent", "tool_call", {
+        tool_name: m.tool_name || "",
+        tool_run_id: m.tool_run_id,
+        command: m.command || "",
+        status: normalizeExecutionStatus(m.status),
+        stdout: m.line ? `${m.line}\n` : "",
       });
+      setMessages((prev) => mergeToolCallIntoMessages(prev, incoming));
       void refreshConversationState(messageConversationId(msg, activeId));
     },
     asset_discovered: (msg) => {
@@ -120,13 +123,13 @@ export default function ConversationPage() {
       setProgress(progressForPhase(phase, "running"));
       setTodos(todosForPhase(phase, "running"));
       setRunning(true);
-      setMessages(prev => [...prev, makeMessage(messageConversationId(msg, activeId), "system", "status", { text: `Phase: ${phase || ""}`, phase, iteration: m.iteration, active_tool: m.active_tool, status: m.status, intake_result: m.intake_result })]);
+      setMessages(prev => appendConversationMessage(prev, makeMessage(messageConversationId(msg, activeId), "system", "status", { text: `Phase: ${phase || ""}`, phase, iteration: m.iteration, active_tool: m.active_tool, status: m.status, intake_result: m.intake_result })));
     },
     task_complete: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const convId = messageConversationId(msg, activeId);
       setRunning(false);
-      setMessages(prev => [...prev, makeMessage(convId, "system", "status", { text: "任务完成 - " + JSON.stringify((msg as Record<string, unknown>).summary || {}), summary: (msg as Record<string, unknown>).summary || {} })]);
+      setMessages(prev => appendConversationMessage(prev, makeMessage(convId, "system", "status", { text: "任务完成 - " + JSON.stringify((msg as Record<string, unknown>).summary || {}), summary: (msg as Record<string, unknown>).summary || {} })));
       void fetchAll();
       void refreshConversationState(convId);
     },
@@ -134,7 +137,7 @@ export default function ConversationPage() {
       if (!isActiveMessage(msg, activeId)) return;
       const convId = messageConversationId(msg, activeId);
       setRunning(false);
-      setMessages(prev => [...prev, makeMessage(convId, "system", "status", { text: "任务失败: " + ((msg as Record<string, unknown>).message || "") })]);
+      setMessages(prev => appendConversationMessage(prev, makeMessage(convId, "system", "status", { text: "任务失败: " + ((msg as Record<string, unknown>).message || "") })));
       void fetchAll();
       void refreshConversationState(convId);
     },
@@ -168,17 +171,29 @@ export default function ConversationPage() {
     localStorage.setItem(ACTIVE_CONVERSATION_KEY, id);
     send({ type: "subscribe", conversation_id: id });
 
+    const conversationStatus = conversations.find(c => c.id === id)?.status || "created";
+    let restoredMessages: Message[] = [];
+    let fallbackState = snapshotFromMessages(restoredMessages, conversationStatus);
+
     try {
-      const [messageData, state] = await Promise.all([
-        authFetch<Array<Record<string, unknown>>>(`/api/conversations/${id}/messages`),
-        authFetch<ConversationSnapshot>(`/api/conversations/${id}/state`),
-      ]);
-      setMessages(messageData.map(normalizeMessage(id)));
-      applyConversationState(state);
+      const messageData = await authFetch<Array<Record<string, unknown>>>(`/api/conversations/${id}/messages`);
+      restoredMessages = coalesceConversationMessages(messageData.map(normalizeMessage(id)));
+      fallbackState = snapshotFromMessages(restoredMessages, conversationStatus);
+      setMessages(restoredMessages);
+      applyConversationState(fallbackState);
     } catch {
-      resetConversationState();
+      setMessages([]);
+      applyConversationState(fallbackState);
     }
-  }, [applyConversationState, resetConversationState, send]);
+
+    try {
+      const state = await authFetch<ConversationSnapshot>(`/api/conversations/${id}/state`);
+      const stateStatus = state.conversation?.status || conversationStatus;
+      applyConversationState(state, snapshotFromMessages(restoredMessages, stateStatus));
+    } catch {
+      applyConversationState(fallbackState);
+    }
+  }, [applyConversationState, conversations, resetConversationState, send]);
 
   useEffect(() => { void fetchAll(); }, [fetchAll]);
 
@@ -241,16 +256,24 @@ export default function ConversationPage() {
   return (
     <div className="flex h-screen overflow-hidden bg-canvas">
       <Sidebar activeId={activeId} onSelect={(id) => { void loadConversation(id || null); }} />
-      <div className="flex flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col">
         <TopBar title={activeId ? conversations?.find(c => c.id === activeId)?.title : undefined} />
-        <div className="flex flex-1 overflow-hidden">
-          <main className="flex flex-1 flex-col border-r border-hairline-soft">
-            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-              {messages.length === 0 && (
+        <div className="flex min-w-0 flex-1 overflow-hidden">
+          <main className="flex min-w-0 flex-1 flex-col border-r border-hairline-soft">
+            <div className="min-w-0 flex-1 overflow-y-auto px-6 py-4 space-y-4">
+              {messages.length === 0 && !activeId && (
                 <div className="flex h-full items-center justify-center">
                   <div className="text-center">
                     <h2 className="text-xl font-semibold">开始新的渗透测试</h2>
                     <p className="mt-2 text-sm text-ink-secondary">在下方输入测试目标，Agent 将自动开始工作</p>
+                  </div>
+                </div>
+              )}
+              {messages.length === 0 && activeId && (
+                <div className="flex h-full items-center justify-center">
+                  <div className="text-center">
+                    <h2 className="text-xl font-semibold">暂无对话记录</h2>
+                    <p className="mt-2 text-sm text-ink-secondary">该会话已选中，但历史消息为空或暂时无法加载。</p>
                   </div>
                 </div>
               )}
@@ -262,10 +285,10 @@ export default function ConversationPage() {
                   <button key={t.label} onClick={() => setInput(t.text)} className="rounded-pill border border-hairline px-3 py-1.5 text-xs text-ink-secondary transition-colors hover:bg-surface-default hover:text-ink">{t.label}</button>
                 ))}
               </div>
-              <div className="flex gap-2">
+              <div className="flex min-w-0 gap-2">
                 <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void handleSend(); }}
                   placeholder="描述你的测试需求。例如：对 http://host.docker.internal:8080/login.php 做低风险 recon"
-                  className="flex-1 rounded-md border border-hairline bg-canvas px-3.5 py-2.5 text-sm placeholder:text-ink-muted focus:border-ink focus:outline-none" />
+                  className="min-w-0 flex-1 rounded-md border border-hairline bg-canvas px-3.5 py-2.5 text-sm placeholder:text-ink-muted focus:border-ink focus:outline-none" />
                 {running ? (
                   <button onClick={() => { send({ type: "user_interrupt", conversation_id: activeId, action: "cancel" }); setRunning(false); }} className="rounded-pill bg-severity-critical px-5 py-2.5 text-sm font-medium text-white">中断</button>
                 ) : (
@@ -293,15 +316,191 @@ export default function ConversationPage() {
 }
 
 function normalizeMessage(conversationId: string) {
-  return (m: Record<string, unknown>): Message => ({
-    id: String(m.id || crypto.randomUUID()),
-    conversation_id: String(m.conversation_id || conversationId),
-    role: m.role as Message["role"],
-    msg_type: String(m.msg_type || "text"),
-    content: (m.content || {}) as Record<string, unknown>,
-    parent_msg_id: null,
-    created_at: String(m.created_at || new Date().toISOString()),
-  });
+  return (m: Record<string, unknown>): Message => {
+    const msgType = String(m.msg_type || "text");
+    const content = { ...((m.content || {}) as Record<string, unknown>) };
+    if (msgType === "tool_call") content.status = normalizeExecutionStatus(content.status);
+    return {
+      id: String(m.id || crypto.randomUUID()),
+      conversation_id: String(m.conversation_id || conversationId),
+      role: m.role as Message["role"],
+      msg_type: msgType,
+      content,
+      parent_msg_id: null,
+      created_at: String(m.created_at || new Date().toISOString()),
+    };
+  };
+}
+
+function coalesceConversationMessages(messages: Message[]): Message[] {
+  return messages.reduce<Message[]>((merged, message) => appendConversationMessage(merged, message), []);
+}
+
+function appendConversationMessage(messages: Message[], incoming: Message): Message[] {
+  if (incoming.msg_type === "tool_call") return mergeToolCallIntoMessages(messages, incoming);
+  if (isDuplicateStatusMessage(messages, incoming)) return messages;
+  return [...messages, incoming];
+}
+
+function isDuplicateStatusMessage(messages: Message[], incoming: Message): boolean {
+  if (incoming.msg_type !== "status") return false;
+  const incomingText = normalizeStatusText(readString(incoming.content.text));
+  if (!incomingText) return false;
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.msg_type !== "status") continue;
+    return normalizeStatusText(readString(message.content.text)) === incomingText;
+  }
+  return false;
+}
+
+function normalizeStatusText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function mergeToolCallIntoMessages(messages: Message[], incoming: Message): Message[] {
+  if (incoming.msg_type !== "tool_call") return [...messages, incoming];
+
+  const incomingKey = toolRunKey(incoming);
+  const incomingTool = readString(incoming.content.tool_name);
+  let existingIndex = -1;
+
+  if (incomingKey) {
+    existingIndex = findLastToolCallIndex(messages, incomingKey);
+  } else {
+    const lastIndex = messages.length - 1;
+    const lastMessage = messages[lastIndex];
+    if (lastMessage?.msg_type === "tool_call" && readString(lastMessage.content.tool_name) === incomingTool && !toolRunKey(lastMessage)) {
+      existingIndex = lastIndex;
+    }
+  }
+
+  if (existingIndex < 0) existingIndex = findDuplicateFailedToolCallIndex(messages, incoming);
+  if (existingIndex < 0) return [...messages, incoming];
+
+  const next = [...messages];
+  next[existingIndex] = mergeToolMessages(next[existingIndex], incoming);
+  return next;
+}
+
+function findDuplicateFailedToolCallIndex(messages: Message[], incoming: Message): number {
+  if (normalizeExecutionStatus(incoming.content.status) !== "fail") return -1;
+  const incomingTool = readString(incoming.content.tool_name);
+  const incomingOutput = normalizeToolOutput(readString(incoming.content.stdout));
+  if (!incomingTool || !incomingOutput) return -1;
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.msg_type !== "tool_call") continue;
+    if (readString(message.content.tool_name) !== incomingTool) continue;
+    if (normalizeExecutionStatus(message.content.status) !== "fail") continue;
+    if (normalizeToolOutput(readString(message.content.stdout)) === incomingOutput) return index;
+  }
+  return -1;
+}
+
+function normalizeToolOutput(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function findLastToolCallIndex(messages: Message[], toolRunKeyValue: string): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.msg_type === "tool_call" && toolRunKey(message) === toolRunKeyValue) return index;
+  }
+  return -1;
+}
+
+function mergeToolMessages(existing: Message, incoming: Message): Message {
+  const currentStdout = readString(existing.content.stdout);
+  const incomingStdout = readString(incoming.content.stdout);
+  return {
+    ...existing,
+    content: {
+      ...existing.content,
+      ...incoming.content,
+      command: incoming.content.command || existing.content.command || "",
+      stdout: appendStdout(currentStdout, incomingStdout),
+      status: normalizeExecutionStatus(incoming.content.status || existing.content.status),
+    },
+    created_at: incoming.created_at || existing.created_at,
+  };
+}
+
+function appendStdout(current: string, incoming: string): string {
+  if (!incoming) return current;
+  if (!current) return incoming;
+  if (current.endsWith(incoming)) return current;
+  return `${current}${current.endsWith("\n") ? "" : "\n"}${incoming}`;
+}
+
+function toolRunKey(message: Message): string {
+  return readString(message.content.tool_run_id);
+}
+
+function snapshotFromMessages(messages: Message[], status: Conversation["status"] | "running" | string): ConversationSnapshot {
+  const normalizedStatus = String(status || "created") as Conversation["status"];
+  const statusMessages = messages.filter(m => m.msg_type === "status" && typeof m.content === "object");
+  const lastStatus = last(statusMessages)?.content || {};
+  const phase = readString(lastStatus.phase) || parsePhase(readString(lastStatus.text)) || (normalizedStatus === "completed" ? "report" : normalizedStatus === "running" ? "precheck" : undefined);
+  const lastTool = last(messages.filter(m => m.msg_type === "tool_call" && readString(m.content.tool_name)));
+  const activeTool = readString(lastStatus.active_tool) || readString(lastTool?.content.tool_name);
+  const decisions = new Set(messages.filter(m => m.msg_type === "decision").map(m => readString(m.content.request_id)).filter(Boolean));
+  const pending = messages
+    .filter(m => m.msg_type === "confirm_card" && readString(m.content.request_id) && !decisions.has(readString(m.content.request_id)))
+    .map(m => ({ ...m.content, message_id: m.id }));
+  const findings = messages
+    .filter(m => m.msg_type === "vuln_card" || m.msg_type === "vuln_found")
+    .map(m => ({ ...m.content, id: readString(m.content.id) || readString(m.content.finding_id) || m.id, location: m.content.location || m.content.affected_asset || "" }));
+  const explicitEvidence = messages
+    .filter(m => m.msg_type === "evidence_created")
+    .map(m => ({ ...m.content, id: readString(m.content.id) || m.id }));
+  const toolEvidence = messages
+    .filter(m => m.msg_type === "tool_call" && readString(m.content.stdout))
+    .map(m => ({
+      id: m.id,
+      evidence_id: readString(m.content.tool_run_id) || m.id,
+      type: "tool_output",
+      source_tool: m.content.tool_name,
+      tool_run_id: m.content.tool_run_id,
+      summary: readString(m.content.stdout),
+      properties: { status: m.content.status },
+    }));
+  const evidence = explicitEvidence.length ? explicitEvidence : toolEvidence;
+
+  return {
+    conversation: { id: messages[0]?.conversation_id || "", title: "", node_id: null, status: normalizedStatus, created_at: "", last_active_at: "" },
+    agent_state: {
+      phase,
+      iteration: lastStatus.iteration,
+      activeTool,
+      intakeResult: lastStatus.intake_result,
+      intakeStatus: lastStatus.status,
+    },
+    progress: progressForPhase(phase, normalizedStatus),
+    todos: todosForPhase(phase, normalizedStatus),
+    findings,
+    pending_approvals: pending,
+    evidence,
+  };
+}
+
+function last<T>(items: T[]): T | undefined {
+  return items.length ? items[items.length - 1] : undefined;
+}
+
+function readString(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function hasValues(value: Record<string, unknown> | undefined): boolean {
+  return Boolean(value && Object.values(value).some(v => v !== undefined && v !== null && v !== ""));
+}
+
+function parsePhase(text: string): string | undefined {
+  const match = text.match(/Phase:\s*([^\s(]+)/);
+  return match?.[1];
 }
 
 function progressForPhase(phase: string | undefined, status: Conversation["status"] | "running"): Progress {

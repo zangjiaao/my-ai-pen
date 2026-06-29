@@ -11,6 +11,8 @@ interface Props {
   onSelect: (id: string) => void;
 }
 
+const ACTIVE_CONVERSATION_KEY = "active_conversation_id";
+
 const NAV_ITEMS = [
   { label: "资产管理", path: "/assets" },
   { label: "漏洞管理", path: "/vulnerabilities" },
@@ -55,7 +57,7 @@ export default function Sidebar({ activeId, onSelect }: Props) {
   return (
     <aside className="flex w-[280px] flex-shrink-0 flex-col border-r border-hairline bg-surface-sidebar">
       <div className="p-3">
-        <button onClick={() => { navigate("/"); onSelect(""); }} className="w-full rounded-pill bg-ink px-4 py-2.5 text-sm font-medium text-white transition-opacity hover:opacity-90">
+        <button onClick={() => { localStorage.removeItem(ACTIVE_CONVERSATION_KEY); navigate("/"); onSelect(""); }} className="w-full rounded-pill bg-ink px-4 py-2.5 text-sm font-medium text-white transition-opacity hover:opacity-90">
           + 新建会话
         </button>
       </div>
@@ -88,7 +90,7 @@ export default function Sidebar({ activeId, onSelect }: Props) {
                 </div>
               ) : (
                 <>
-                  <button onClick={() => { navigate("/"); onSelect(c.id); }}
+                  <button onClick={() => { localStorage.setItem(ACTIVE_CONVERSATION_KEY, c.id); navigate("/"); onSelect(c.id); }}
                     className={`min-w-0 flex-1 rounded-md px-3 py-2.5 text-left text-sm transition-colors ${c.id === activeId ? "bg-accent-subtle font-medium text-ink" : "text-ink-secondary hover:bg-surface-default hover:text-ink"}`}>
                     <div className="flex items-center gap-2">
                       <span className={`inline-block h-2 w-2 flex-shrink-0 rounded-full ${statusDotClass(c.status)}`} />
