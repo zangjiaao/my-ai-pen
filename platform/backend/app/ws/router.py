@@ -30,6 +30,22 @@ async def _update_node_status(node_id: str, status: str, ip: str | None = None):
         print(f"[WS] _update_node_status error: {e}")
 
 
+async def _incr_sessions(node_id: str, delta: int):
+    """更新节点活跃会话数"""
+    try:
+        from app.db.base import async_session
+        from app.models.node import Node
+        from sqlalchemy import select
+        async with async_session() as db:
+            r = await db.execute(select(Node).where(Node.id == uuid.UUID(node_id)))
+            n = r.scalar_one_or_none()
+            if n:
+                n.current_sessions = max(0, (n.current_sessions or 0) + delta)
+                await db.commit()
+    except Exception:
+        pass
+
+
 async def _save_message(msg: dict, role: str):
     """持久化消息到数据库"""
     try:
@@ -94,6 +110,8 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
             if client_type == "node":
                 print(f"[WS] NODE_MSG received: type={msg.get('type')} conv={str(msg.get('conversation_id',''))[:8]} subs={len(conversation_subscribers.get(msg.get('conversation_id',''), set()))}")
                 await _save_message(msg, "agent")
+                if msg.get("type") in ("task_complete", "task_error") and client_id:
+                    await _incr_sessions(client_id, -1)
                 conv_id = msg.get("conversation_id")
                 if conv_id and conv_id in conversation_subscribers:
                     for sub in list(conversation_subscribers[conv_id]):
@@ -127,6 +145,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         nid = node_ids[idx]
                         try:
                             await node_connections[nid].send_text(json.dumps(task_msg))
+                            await _incr_sessions(nid, 1)
                             print(f"[WS] task_assign SENT to node {nid[:8]} (round-robin {idx}/{len(node_ids)})")
                         except Exception as e:
                             print(f"[WS] send to node failed: {e}")
