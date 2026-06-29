@@ -38,3 +38,6 @@ docs/plan_unpacked/
 .claude/projects/
 memory/
 MEMORY.md
+node/*.txt
+node/*.php
+node/*.html
