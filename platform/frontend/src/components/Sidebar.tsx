@@ -31,7 +31,7 @@ export default function Sidebar({ activeId, onSelect }: Props) {
   return (
     <aside className="flex w-[280px] flex-shrink-0 flex-col border-r border-hairline bg-surface-sidebar">
       <div className="p-3">
-        <button onClick={() => navigate("/")} className="w-full rounded-pill bg-ink px-4 py-2.5 text-sm font-medium text-white transition-opacity hover:opacity-90">
+        <button onClick={() => { navigate("/"); onSelect(""); }} className="w-full rounded-pill bg-ink px-4 py-2.5 text-sm font-medium text-white transition-opacity hover:opacity-90">
           + 新建会话
         </button>
       </div>
