@@ -14,9 +14,15 @@ export default function NodePage() {
 
   const register = async () => {
     const res = await authFetch("/api/nodes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: regName || undefined }) });
-    const data = res;
-    setNewToken(data.token);
+    const data = res as Record<string,unknown>;
+    setNewToken(data.token as string);
     setShowRegister(false);
+    load();
+  };
+
+  const deleteNode = async (id: string, name: string) => {
+    if (!window.confirm(`确定删除节点 "${name}"？`)) return;
+    await authFetch(`/api/nodes/${id}`, { method: "DELETE" });
     load();
   };
 
@@ -56,7 +62,10 @@ export default function NodePage() {
                 <div key={n.id as string} className="rounded-md border border-hairline p-4">
                   <div className="mb-2 flex items-center justify-between">
                     <span className="font-medium">{n.name as string}</span>
-                    <span className={`inline-block h-2 w-2 rounded-full ${n.status === "online" ? "bg-status-success" : "bg-ink-muted"}`} />
+                    <div className="flex items-center gap-2">
+                      <span className={`inline-block h-2 w-2 rounded-full ${n.status === "online" ? "bg-status-success" : "bg-ink-muted"}`} />
+                      <button onClick={() => deleteNode(n.id as string, n.name as string)} className="text-xs text-ink-muted hover:text-severity-critical">删除</button>
+                    </div>
                   </div>
                   <div className="space-y-1 text-sm text-ink-secondary">
                     <p>类型: {n.type as string}</p>
