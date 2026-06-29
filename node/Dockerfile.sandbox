@@ -5,11 +5,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     httpx-toolkit gobuster \
     nuclei sqlmap \
     curl wget ffuf \
-    git python3 python3-pip jq \
-    mitmproxy \
+    git jq \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-RUN pip install playwright && playwright install --with-deps chromium && playwright install-deps chromium
 RUN nuclei -update-templates
 
 WORKDIR /workspace
