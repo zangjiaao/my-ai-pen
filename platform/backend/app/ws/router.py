@@ -9,7 +9,7 @@ node_connections: dict[str, WebSocket] = {}  # node_id → ws
 conversation_subscribers: dict[str, set[WebSocket]] = {}  # conv_id → {browser_ws}
 
 
-async def _update_node_status(node_id: str, status: str):
+async def _update_node_status(node_id: str, status: str, ip: str | None = None):
     """更新节点数据库状态"""
     try:
         from app.db.base import async_session
@@ -20,8 +20,9 @@ async def _update_node_status(node_id: str, status: str):
             node = result.scalar_one_or_none()
             if node:
                 node.status = status
+                if ip: node.ip = ip
                 await db.commit()
-                print(f"[WS] Node {node_id[:8]} status -> {status}")
+                print(f"[WS] Node {node_id[:8]} status -> {status} ip={ip}")
             else:
                 print(f"[WS] Node {node_id[:8]} not found in DB")
     except Exception as e:
@@ -78,8 +79,8 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
     # 节点上线
     if client_type == "node" and client_id:
         node_connections[client_id] = ws
-        await _update_node_status(client_id, "online")
-        print(f"[WS] NODE ONLINE: {client_id[:8]} (total nodes: {len(node_connections)})")
+        await _update_node_status(client_id, "online", ip=str(ws.client.host) if ws.client else None)
+        print(f"[WS] NODE ONLINE: {client_id[:8]} ip={ws.client.host} (total nodes: {len(node_connections)})")
 
     if client_type == "user":
         print(f"[WS] USER CONNECTED")
