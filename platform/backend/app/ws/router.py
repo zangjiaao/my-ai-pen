@@ -70,6 +70,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
             msg = json.loads(raw)
 
             if client_type == "node":
+                print(f"[WS] NODE_MSG received: type={msg.get('type')} conv={str(msg.get('conversation_id',''))[:8]} subs={len(conversation_subscribers.get(msg.get('conversation_id',''), set()))}")
                 conv_id = msg.get("conversation_id")
                 if conv_id and conv_id in conversation_subscribers:
                     for sub in list(conversation_subscribers[conv_id]):
