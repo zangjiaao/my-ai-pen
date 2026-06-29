@@ -21,8 +21,11 @@ async def _update_node_status(node_id: str, status: str):
             if node:
                 node.status = status
                 await db.commit()
-    except Exception:
-        pass
+                print(f"[WS] Node {node_id[:8]} status -> {status}")
+            else:
+                print(f"[WS] Node {node_id[:8]} not found in DB")
+    except Exception as e:
+        print(f"[WS] _update_node_status error: {e}")
 
 
 async def _save_message(msg: dict, role: str):
