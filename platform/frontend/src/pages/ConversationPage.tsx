@@ -34,8 +34,9 @@ export default function ConversationPage() {
       });
     },
     asset_discovered: (msg) => setMessages((prev) => [...prev, { id: crypto.randomUUID(), conversation_id: activeId || "", role: "agent", msg_type: "asset_card", content: msg as Record<string, unknown>, parent_msg_id: null, created_at: new Date().toISOString() }]),
-    status_update: (msg) => { console.log("[status]", msg); },
-    task_complete: (msg) => { console.log("[complete]", msg); },
+    status_update: (msg) => { setMessages((prev) => [...prev, { id: crypto.randomUUID(), conversation_id: activeId || "", role: "system", msg_type: "status", content: msg as Record<string, unknown>, parent_msg_id: null, created_at: new Date().toISOString() }]); },
+    task_complete: (msg) => { setMessages((prev) => [...prev, { id: crypto.randomUUID(), conversation_id: activeId || "", role: "system", msg_type: "status", content: { text: "任务完成 — " + JSON.stringify((msg as Record<string,unknown>).summary) }, parent_msg_id: null, created_at: new Date().toISOString() }]); },
+    text: (msg) => { setMessages((prev) => [...prev, { id: crypto.randomUUID(), conversation_id: activeId || "", role: "agent", msg_type: "text", content: msg as Record<string, unknown>, parent_msg_id: null, created_at: new Date().toISOString() }]); },
     task_error: (msg) => { console.log("[error]", msg); },
   });
 
