@@ -26,6 +26,11 @@ export default function NodePage() {
     load();
   };
 
+  const regenerateToken = async (id: string) => {
+    const data = await authFetch(`/api/nodes/${id}/regenerate-token`, { method: "POST" }) as Record<string,unknown>;
+    setNewToken(data.token as string);
+  };
+
   return (
     <div className="flex h-screen bg-canvas">
       <Sidebar activeId={null} onSelect={() => {}} />
@@ -64,6 +69,7 @@ export default function NodePage() {
                     <span className="font-medium">{n.name as string}</span>
                     <div className="flex items-center gap-2">
                       <span className={`inline-block h-2 w-2 rounded-full ${n.status === "online" ? "bg-status-success" : "bg-ink-muted"}`} />
+                      <button onClick={() => regenerateToken(n.id as string)} className="text-xs text-ink-muted hover:text-ink">Token</button>
                       <button onClick={() => deleteNode(n.id as string, n.name as string)} className="text-xs text-ink-muted hover:text-severity-critical">删除</button>
                     </div>
                   </div>

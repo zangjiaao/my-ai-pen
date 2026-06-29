@@ -49,6 +49,17 @@ async def get_node(node_id: str, current_user: dict = Depends(get_current_user),
     return _node_out(n)
 
 
+@router.post("/{node_id}/regenerate-token", response_model=dict)
+async def regenerate_token(node_id: str, current_user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Node).where(Node.id == uuid.UUID(node_id)))
+    n = result.scalar_one_or_none()
+    if not n: raise HTTPException(404, "Node not found")
+    new_token = secrets.token_hex(32)
+    n.token_hash = hashlib.sha256(new_token.encode()).hexdigest()
+    await db.commit()
+    return {"id": str(n.id), "name": n.name, "token": new_token}
+
+
 @router.delete("/{node_id}")
 async def delete_node(node_id: str, current_user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Node).where(Node.id == uuid.UUID(node_id)))
