@@ -20,9 +20,11 @@ export default function ConversationPage() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
+  const [agentState, setAgentState] = useState<Record<string, unknown>>({});
+  const [findings, setFindings] = useState<Array<Record<string, unknown>>>([]);
 
   const { send } = useWebSocket({
-    vuln_found: (msg) => setMessages((prev) => [...prev, { id: crypto.randomUUID(), conversation_id: activeId || "", role: "agent", msg_type: "vuln_card", content: msg as Record<string, unknown>, parent_msg_id: null, created_at: new Date().toISOString() }]),
+    vuln_found: (msg) => { const m = msg as Record<string,unknown>; setFindings(prev => [...prev.filter(f => f.title !== m.title), { title: m.title, severity: m.severity, location: m.location || '' }]); setMessages((prev) => [...prev, { id: crypto.randomUUID(), conversation_id: activeId || "", role: "agent", msg_type: "vuln_card", content: m, parent_msg_id: null, created_at: new Date().toISOString() }]); },
     tool_output: (msg) => {
       const { tool_name, line } = msg as Record<string, string>;
       setMessages((prev) => {
@@ -34,7 +36,7 @@ export default function ConversationPage() {
       });
     },
     asset_discovered: (msg) => setMessages((prev) => [...prev, { id: crypto.randomUUID(), conversation_id: activeId || "", role: "agent", msg_type: "asset_card", content: msg as Record<string, unknown>, parent_msg_id: null, created_at: new Date().toISOString() }]),
-    status_update: (msg) => { setMessages((prev) => [...prev, { id: crypto.randomUUID(), conversation_id: activeId || "", role: "system", msg_type: "status", content: { text: `Phase: ${(msg as Record<string,string>).phase}` }, parent_msg_id: null, created_at: new Date().toISOString() }]); },
+    status_update: (msg) => { const m = msg as Record<string,unknown>; setAgentState({ phase: m.phase, iteration: m.iteration, maxIteration: 50, activeTool: m.active_tool }); setMessages((prev) => [...prev, { id: crypto.randomUUID(), conversation_id: activeId || "", role: "system", msg_type: "status", content: { text: `Phase: ${m.phase}` }, parent_msg_id: null, created_at: new Date().toISOString() }]); },
     task_complete: (msg) => { setMessages((prev) => [...prev, { id: crypto.randomUUID(), conversation_id: activeId || "", role: "system", msg_type: "status", content: { text: "任务完成 — " + JSON.stringify((msg as Record<string,unknown>).summary) }, parent_msg_id: null, created_at: new Date().toISOString() }]); },
     text: (msg) => { const c = (msg as Record<string,unknown>).content || msg; setMessages((prev) => [...prev, { id: crypto.randomUUID(), conversation_id: activeId || "", role: "agent", msg_type: "text", content: c as Record<string, unknown>, parent_msg_id: null, created_at: new Date().toISOString() }]); },
     task_error: (msg) => { console.log("[error]", msg); },
@@ -99,7 +101,7 @@ export default function ConversationPage() {
               </div>
             </div>
           </main>
-          <RightPanel />
+          <RightPanel phase={agentState.phase as string} iteration={agentState.iteration as number} maxIteration={agentState.maxIteration as number} activeTool={agentState.activeTool as string} findings={findings} />
         </div>
       </div>
     </div>
