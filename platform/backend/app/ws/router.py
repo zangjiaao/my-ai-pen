@@ -193,7 +193,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
 
                 # steer/interrupt 转发给节点
                 if msg.get("type") in ("user_steer", "user_interrupt"):
-                    for node_ws in node_connections.values():
+                    for node_ws in list(node_connections.values()):
                         try:
                             await node_ws.send_text(raw)
                         except Exception:

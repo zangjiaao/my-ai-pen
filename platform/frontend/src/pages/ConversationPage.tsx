@@ -22,6 +22,7 @@ export default function ConversationPage() {
   const [input, setInput] = useState("");
   const [agentState, setAgentState] = useState<Record<string, unknown>>({});
   const [findings, setFindings] = useState<Array<Record<string, unknown>>>([]);
+  const [running, setRunning] = useState(false);
 
   const { send } = useWebSocket({
     vuln_found: (msg) => { const m = msg as Record<string,unknown>; setFindings(prev => [...prev.filter(f => f.title !== m.title), { title: m.title, severity: m.severity, location: m.location || '' }]); setMessages((prev) => [...prev, { id: crypto.randomUUID(), conversation_id: activeId || "", role: "agent", msg_type: "vuln_card", content: m, parent_msg_id: null, created_at: new Date().toISOString() }]); },
@@ -37,7 +38,8 @@ export default function ConversationPage() {
     },
     asset_discovered: (msg) => setMessages((prev) => [...prev, { id: crypto.randomUUID(), conversation_id: activeId || "", role: "agent", msg_type: "asset_card", content: msg as Record<string, unknown>, parent_msg_id: null, created_at: new Date().toISOString() }]),
     status_update: (msg) => { const m = msg as Record<string,unknown>; setAgentState({ phase: m.phase, iteration: m.iteration, maxIteration: 50, activeTool: m.active_tool }); setMessages((prev) => [...prev, { id: crypto.randomUUID(), conversation_id: activeId || "", role: "system", msg_type: "status", content: { text: `Phase: ${m.phase}` }, parent_msg_id: null, created_at: new Date().toISOString() }]); },
-    task_complete: (msg) => { setMessages((prev) => [...prev, { id: crypto.randomUUID(), conversation_id: activeId || "", role: "system", msg_type: "status", content: { text: "任务完成 — " + JSON.stringify((msg as Record<string,unknown>).summary) }, parent_msg_id: null, created_at: new Date().toISOString() }]); },
+    task_complete: (msg) => { setRunning(false); setMessages((prev) => [...prev, { id: crypto.randomUUID(), conversation_id: activeId || "", role: "system", msg_type: "status", content: { text: "任务完成 — " + JSON.stringify((msg as Record<string,unknown>).summary) }, parent_msg_id: null, created_at: new Date().toISOString() }]); },
+    task_error: (msg) => { setRunning(false); setMessages((prev) => [...prev, { id: crypto.randomUUID(), conversation_id: activeId || "", role: "system", msg_type: "status", content: { text: "任务失败: " + ((msg as Record<string,unknown>).message || '') }, parent_msg_id: null, created_at: new Date().toISOString() }]); },
     text: (msg) => { const c = (msg as Record<string,unknown>).content || msg; setMessages((prev) => [...prev, { id: crypto.randomUUID(), conversation_id: activeId || "", role: "agent", msg_type: "text", content: c as Record<string, unknown>, parent_msg_id: null, created_at: new Date().toISOString() }]); },
     task_error: (msg) => { console.log("[error]", msg); },
   });
@@ -58,6 +60,7 @@ export default function ConversationPage() {
       } catch { return; }
     }
 
+    setRunning(true);
     const userMsg: Message = { id: crypto.randomUUID(), conversation_id: convId, role: "user", msg_type: "text", content: { text }, parent_msg_id: null, created_at: new Date().toISOString() };
     setMessages((prev) => [...prev, userMsg]);
     const url = extractUrl(text);
@@ -97,7 +100,11 @@ export default function ConversationPage() {
                 <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSend()}
                   placeholder="描述你的测试需求。例如：对 https://example.com 做渗透测试，测试账号 admin/admin123（高权限）和 viewer/viewer123（低权限）..."
                   className="flex-1 rounded-md border border-hairline bg-canvas px-3.5 py-2.5 text-sm placeholder:text-ink-muted focus:border-ink focus:outline-none" />
-                <button onClick={handleSend} className="rounded-pill bg-ink px-5 py-2.5 text-sm font-medium text-white">发送</button>
+                {running ? (
+                  <button onClick={() => { send({ type: "user_interrupt", conversation_id: activeId, action: "cancel" }); setRunning(false); }} className="rounded-pill bg-severity-critical px-5 py-2.5 text-sm font-medium text-white">中止</button>
+                ) : (
+                  <button onClick={handleSend} className="rounded-pill bg-ink px-5 py-2.5 text-sm font-medium text-white">发送</button>
+                )}
               </div>
             </div>
           </main>
