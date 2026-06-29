@@ -16,7 +16,7 @@ const TEMPLATES = [
 ];
 
 export default function ConversationPage() {
-  const { fetchAll } = useConversationStore();
+  const { conversations, fetchAll } = useConversationStore();
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
