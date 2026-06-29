@@ -59,6 +59,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
     if client_type == "node" and client_id:
         node_connections[client_id] = ws
         await _update_node_status(client_id, "online")
+        print(f"[WS] Node {client_id[:8]} connected. node_connections={len(node_connections)}")
 
     try:
         while True:
@@ -80,6 +81,8 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     conversation_subscribers.setdefault(conv_id, set()).add(ws)
 
                 # 用户发消息 → 转发给所有在线节点作为 task_assign
+                if msg.get("type") == "user_message":
+                    print(f"[WS] user_message received. node_connections={len(node_connections)} nodes={list(node_connections.keys())}")
                 if msg.get("type") == "user_message" and node_connections:
                     task_msg = {
                         "type": "task_assign",
