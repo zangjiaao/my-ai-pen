@@ -176,6 +176,8 @@ async def _update_node_status(node_id: str, status: str, ip: str | None = None):
             node = result.scalar_one_or_none()
             if node:
                 node.status = status
+                if status == "offline":
+                    node.current_sessions = 0
                 node.last_heartbeat = datetime.now(timezone.utc)
                 if ip:
                     node.ip = ip
@@ -190,6 +192,18 @@ async def _update_node_status(node_id: str, status: str, ip: str | None = None):
     except Exception as e:
         print(f"[WS] _update_node_status error: {e}")
 
+
+async def revoke_node_connection(node_id: str, reason: str = "node revoked"):
+    ws = node_connections.pop(node_id, None)
+    for conv_id, bound_node_id in list(conversation_node.items()):
+        if bound_node_id == node_id:
+            del conversation_node[conv_id]
+    if ws:
+        try:
+            await ws.close(code=4001, reason=reason[:120])
+        except Exception:
+            pass
+    await _update_node_status(node_id, "offline")
 
 async def _bind_conversation_to_node(conv_id: str, node_id: str):
     try:

@@ -58,6 +58,8 @@ export default function ConversationPage() {
   const [liveMessages, setLiveMessages] = useState<Message[]>([]);
   const messageScrollerRef = useRef<HTMLDivElement | null>(null);
   const pendingScrollRestoreRef = useRef<{ top: number; height: number } | null>(null);
+  const pendingScrollToBottomRef = useRef(false);
+  const shouldStickToBottomRef = useRef(true);
   const [input, setInput] = useState("");
   const [selectedAgent, setSelectedAgent] = useState<AgentNode | null>(null);
   const [agentNodes, setAgentNodes] = useState<AgentNode[]>([]);
@@ -106,6 +108,24 @@ export default function ConversationPage() {
     setRunning((snapshot.conversation || fallback?.conversation)?.status === "running");
   }, []);
 
+  const isNearMessageBottom = useCallback(() => {
+    const el = messageScrollerRef.current;
+    if (!el) return true;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 160;
+  }, []);
+
+  const markMessageAutoScroll = useCallback(() => {
+    shouldStickToBottomRef.current = isNearMessageBottom();
+  }, [isNearMessageBottom]);
+
+  const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
+    window.requestAnimationFrame(() => {
+      const el = messageScrollerRef.current;
+      if (!el) return;
+      el.scrollTo({ top: el.scrollHeight, behavior });
+    });
+  }, []);
+
   const refreshConversationState = useCallback(async (id: string | null) => {
     if (!id) return;
     try {
@@ -121,6 +141,7 @@ export default function ConversationPage() {
     vuln_found: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
+      markMessageAutoScroll();
       setFindings(prev => upsertBy(prev, { ...m, id: m.id || m.vulnerability_id, location: m.location || m.affected_asset || "" }, "title"));
       setLiveMessages(prev => [...prev, makeMessage(messageConversationId(m, activeId), "agent", "vuln_card", m)]);
       void refreshConversationState(messageConversationId(m, activeId));
@@ -128,6 +149,7 @@ export default function ConversationPage() {
     tool_output: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, string>;
+      markMessageAutoScroll();
       const incoming = makeMessage(messageConversationId(msg, activeId), "agent", "tool_call", {
         tool_name: m.tool_name || "",
         tool_run_id: m.tool_run_id,
@@ -141,6 +163,7 @@ export default function ConversationPage() {
     asset_discovered: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
+      markMessageAutoScroll();
       setAssets(prev => upsertBy(prev, { ...m, id: m.id || m.asset_id }, "address"));
       setLiveMessages(prev => [...prev, makeMessage(messageConversationId(msg, activeId), "agent", "asset_card", m)]);
       void refreshConversationState(messageConversationId(msg, activeId));
@@ -154,6 +177,7 @@ export default function ConversationPage() {
     request_decision: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
+      markMessageAutoScroll();
       const convId = messageConversationId(msg, activeId);
       const requestId = String(m.request_id || "");
       setPendingApprovals(prev => upsertBy(prev, m, "request_id"));
@@ -168,6 +192,7 @@ export default function ConversationPage() {
     status_update: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
+      markMessageAutoScroll();
       const phase = typeof m.phase === "string" ? m.phase : undefined;
       setAgentState({ phase, activeTool: m.active_tool, intakeResult: m.intake_result, intakeStatus: m.status });
       setProgress(progressForPhase(phase, "running"));
@@ -178,6 +203,7 @@ export default function ConversationPage() {
     task_complete: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const convId = messageConversationId(msg, activeId);
+      markMessageAutoScroll();
       setRunning(false);
       setLiveMessages(prev => appendConversationMessage(prev, makeMessage(convId, "system", "status", { text: "任务完成 - " + JSON.stringify((msg as Record<string, unknown>).summary || {}), summary: (msg as Record<string, unknown>).summary || {} })));
       void fetchAll();
@@ -186,6 +212,7 @@ export default function ConversationPage() {
     task_error: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const convId = messageConversationId(msg, activeId);
+      markMessageAutoScroll();
       setRunning(false);
       setLiveMessages(prev => appendConversationMessage(prev, makeMessage(convId, "system", "status", { text: "任务失败: " + ((msg as Record<string, unknown>).message || "") })));
       void fetchAll();
@@ -194,6 +221,7 @@ export default function ConversationPage() {
     text: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const c = (msg as Record<string, unknown>).content || msg;
+      markMessageAutoScroll();
       setLiveMessages(prev => [...prev, makeMessage(messageConversationId(msg, activeId), "agent", "text", c as Record<string, unknown>)]);
     },
   });
@@ -240,6 +268,8 @@ export default function ConversationPage() {
     }
 
     setStateSnapshotLoaded(false);
+    pendingScrollToBottomRef.current = true;
+    shouldStickToBottomRef.current = true;
     void queryClient.removeQueries({ queryKey: ["conversation-messages"] });
     setActiveId(id);
     localStorage.setItem(ACTIVE_CONVERSATION_KEY, id);
@@ -358,6 +388,8 @@ export default function ConversationPage() {
       userContent.agent_target = selectedMentionAgent.type === "platform" ? "platform" : "pentest";
       userContent.agent_node_id = selectedMentionAgent.id;
     }
+    pendingScrollToBottomRef.current = true;
+    shouldStickToBottomRef.current = true;
     setLiveMessages(prev => [...prev, makeMessage(convId, "user", "text", userContent)]);
     const agentPayload = selectedMentionAgent ? { agent_target: selectedMentionAgent.type === "platform" ? "platform" : "pentest", agent_node_id: selectedMentionAgent.id } : {};
     const shouldContinueExisting = Boolean(!startFresh && activeId && !restartRequested && !completedConversation);
@@ -446,9 +478,11 @@ function isConversationComplete(activeId: string | null, conversations: Conversa
 
   const handleMessageScroll = useCallback(() => {
     const el = messageScrollerRef.current;
-    if (!el || el.scrollTop > 96) return;
+    if (!el) return;
+    shouldStickToBottomRef.current = isNearMessageBottom();
+    if (el.scrollTop > 96) return;
     fetchOlderMessages();
-  }, [fetchOlderMessages]);
+  }, [fetchOlderMessages, isNearMessageBottom]);
 
   useEffect(() => {
     const pending = pendingScrollRestoreRef.current;
@@ -457,6 +491,17 @@ function isConversationComplete(activeId: string | null, conversations: Conversa
     el.scrollTop = el.scrollHeight - pending.height + pending.top;
     pendingScrollRestoreRef.current = null;
   }, [messages.length, messageQuery.isFetchingNextPage]);
+
+  useEffect(() => {
+    if (!activeId || messageQuery.isFetchingNextPage || pendingScrollRestoreRef.current) return;
+    if (pendingScrollToBottomRef.current) {
+      pendingScrollToBottomRef.current = false;
+      shouldStickToBottomRef.current = true;
+      scrollMessagesToBottom("auto");
+      return;
+    }
+    if (shouldStickToBottomRef.current) scrollMessagesToBottom("auto");
+  }, [activeId, messages, messageQuery.isFetchingNextPage, scrollMessagesToBottom]);
 
   return (
     <div className="flex h-screen overflow-hidden bg-canvas">

@@ -18,6 +18,7 @@ class NodeOut(BaseModel):
     cpu_usage: float | None; memory_usage: float | None; current_sessions: int
     registered_at: str | None
     token_required: bool
+    token: str | None = None
     model_config = {"from_attributes": True}
 
 
@@ -47,7 +48,8 @@ async def register_node(body: dict, current_user: dict = Depends(get_current_use
 
     token = secrets.token_hex(32)
     node = Node(id=uuid.uuid4(), name=name, type=node_type,
-                token_hash=hashlib.sha256(token.encode()).hexdigest())
+                token_hash=hashlib.sha256(token.encode()).hexdigest(),
+                config={"token": token})
     db.add(node)
     await db.commit()
     return {"id": str(node.id), "name": node.name, "token": token}
@@ -84,7 +86,10 @@ async def regenerate_token(node_id: str, current_user: dict = Depends(get_curren
         raise HTTPException(400, "Platform node does not use a token")
     new_token = secrets.token_hex(32)
     n.token_hash = hashlib.sha256(new_token.encode()).hexdigest()
+    n.config = {**(n.config or {}), "token": new_token}
     await db.commit()
+    from app.ws import router as ws_router
+    await ws_router.revoke_node_connection(str(n.id), "token regenerated")
     return {"id": str(n.id), "name": n.name, "token": new_token}
 
 
@@ -135,9 +140,18 @@ async def _get_node(db: AsyncSession, node_id: str) -> Node:
     return n
 
 
+def _node_token(n: Node) -> str | None:
+    if n.type == "platform":
+        return None
+    config = n.config if isinstance(n.config, dict) else {}
+    token = config.get("token")
+    return token if isinstance(token, str) and token else None
+
+
 def _node_out(n: Node) -> NodeOut:
     return NodeOut(id=str(n.id), name=n.name, type=n.type, status=n.status,
                    ip=str(n.ip) if n.ip else None, cpu_usage=n.cpu_usage, memory_usage=n.memory_usage,
-                   current_sessions=n.current_sessions,
+                   current_sessions=n.current_sessions or 0,
                    registered_at=n.registered_at.isoformat() if n.registered_at else None,
-                   token_required=bool(n.token_hash))
+                   token_required=bool(n.token_hash),
+                   token=_node_token(n))
