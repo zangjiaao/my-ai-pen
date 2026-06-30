@@ -1,4 +1,4 @@
-﻿import { useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { Message } from "../lib/types";
 import type { SecurityAsset, SecurityVulnerability } from "../lib/securityTypes";
@@ -7,6 +7,10 @@ import ConfirmCard from "./cards/ConfirmCard";
 
 interface Props {
   message: Message;
+  agentNameById?: Record<string, string>;
+  previousMessage?: Message;
+  fallbackPentestNodeId?: string | null;
+  platformAgentNodeId?: string | null;
   onDecision?: (requestId: string, decision: "authorize" | "cancel") => void;
   onOpenVulnerability?: (finding: Partial<SecurityVulnerability>) => void;
   onOpenAsset?: (asset: Partial<SecurityAsset>) => void;
@@ -23,6 +27,14 @@ type MarkdownBlock =
   | { type: "quote"; text: string }
   | { type: "table"; headers: string[]; alignments: TableAlignment[]; rows: string[][] };
 
+function agentDisplayName(content: Record<string, unknown>, agentNameById: Record<string, string>, fallbackPentestNodeId?: string | null, platformAgentNodeId?: string | null): string {
+  const source = String(content.agent_source || "pentest");
+  const explicitNodeId = typeof content.agent_node_id === "string" ? content.agent_node_id : "";
+  const fallbackNodeId = source === "platform" ? platformAgentNodeId : fallbackPentestNodeId;
+  const nodeId = explicitNodeId || fallbackNodeId || "";
+  if (nodeId && agentNameById[nodeId]) return agentNameById[nodeId];
+  return source === "platform" ? "平台Agent" : "渗透Agent";
+}
 function ToolCallCard({ content }: { content: Record<string, unknown> }) {
   const [expanded, setExpanded] = useState(false);
   const toolName = content.tool_name as string || "";
@@ -362,7 +374,7 @@ function SystemNotice({ content }: { content: Record<string, unknown> }) {
   return <div className="my-2 text-center text-xs text-ink-muted">{content.text as string}</div>;
 }
 
-export default function MessageRenderer({ message, onDecision, onOpenVulnerability, onOpenAsset, highlightedApprovalId }: Props) {
+export default function MessageRenderer({ message, agentNameById = {}, previousMessage, fallbackPentestNodeId, platformAgentNodeId, onDecision, onOpenVulnerability, onOpenAsset, highlightedApprovalId }: Props) {
   const { role, msg_type, content } = message;
 
   if (role === "system") return <SystemNotice content={content} />;
@@ -375,21 +387,41 @@ export default function MessageRenderer({ message, onDecision, onOpenVulnerabili
     );
   }
 
+  const agentLabel = agentDisplayName(content, agentNameById, fallbackPentestNodeId, platformAgentNodeId);
+  const previousAgentLabel = previousMessage?.role === "agent" ? agentDisplayName(previousMessage.content, agentNameById, fallbackPentestNodeId, platformAgentNodeId) : "";
+  const showAgentLabel = previousAgentLabel !== agentLabel;
+  let body: ReactNode;
   switch (msg_type) {
     case "tool_call":
-      return <ToolCallCard content={content} />;
+      body = <ToolCallCard content={content} />;
+      break;
     case "vuln_card":
     case "vuln_found":
-      return <VulnCard content={content} onOpen={onOpenVulnerability} />;
+      body = <VulnCard content={content} onOpen={onOpenVulnerability} />;
+      break;
     case "asset_card":
     case "asset_discovered":
-      return <AssetCard content={content} onOpen={onOpenAsset} />;
+      body = <AssetCard content={content} onOpen={onOpenAsset} />;
+      break;
     case "confirm_card":
-      return <ConfirmCard content={content} highlighted={Boolean(content.request_id && content.request_id === highlightedApprovalId)} onAuthorize={() => onDecision?.(content.request_id as string, "authorize")} onCancel={() => onDecision?.(content.request_id as string, "cancel")} />;
+      body = <ConfirmCard content={content} highlighted={Boolean(content.request_id && content.request_id === highlightedApprovalId)} onAuthorize={() => onDecision?.(content.request_id as string, "authorize")} onCancel={() => onDecision?.(content.request_id as string, "cancel")} />;
+      break;
     case "status":
-      return <div className="my-2 text-center text-xs text-ink-muted">{content.text as string}</div>;
+      body = <div className="my-2 text-center text-xs text-ink-muted">{content.text as string}</div>;
+      break;
     case "text":
     default:
-      return <MarkdownText text={String(content.text || "")} />;
+      body = <MarkdownText text={String(content.text || "")} />;
   }
+
+  return (
+    <div className="my-2 min-w-0">
+      {showAgentLabel && (
+        <div className="mb-1 flex items-center gap-2 text-xs text-ink-muted">
+          <span className="font-medium text-ink-secondary">{agentLabel}</span>
+        </div>
+      )}
+      {body}
+    </div>
+  );
 }

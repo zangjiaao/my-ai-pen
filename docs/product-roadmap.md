@@ -1,418 +1,194 @@
 # 产品路线图 — AI 安全运营平台
 
-> 来源: `vision.json` V2.0 / `docs/prd.md` / `docs/architecture.md` / `docs/pentest-node-spec.md`
-> 进度审计时间: 2026-06-29
-> 当前结论: **MVP Alpha 单节点闭环已通过平台、Node、真实 `/ws`、浏览器 UI、真实 DockerSandbox 自动化验收，并已提交 `3725e44 Implement MVP alpha platform loop`；MVP 全量仍有 P1/P2 缺口。**
+- 来源：`vision.json`、`docs/prd.md`、`docs/architecture.md`、`docs/pentest-node-spec.md`、当前代码实现
+- 最近校准：2026-06-30
+- 当前结论：**MVP Alpha 单节点闭环已完成；完整可演示 MVP 仍未完成。** 当前应继续补齐“客户演示所需的结果可见性、报告输出、运行稳定性和部署说明”，暂不进入多节点、子代理、知识库/记忆增强等扩展方向。
 
 ---
 
-## 状态说明
+## 0. 本次清理结论
 
-本文件已按当前代码重新校准。此前 roadmap 将几乎所有任务都标为已完成，但代码中很多能力只是设计文档、静态页面、内存原型或未接通的接口。
+原 roadmap 的主要问题不是缺任务，而是状态源太多：前面的“大型能力清单”、后面的 P0/P1/P2、V2/V3 合并章节、启动前检查清单、下一阶段定义之间互相重复，而且有些状态已经和代码不一致。
 
-标记规则：
+本次清理后的规则：
 
-- `[x]` 已完成：当前代码中有可运行实现支撑。
-- `[ ]` 未完成：没有实现，或只有按钮/文档/占位。
-- `部分完成`：已有骨架或单向链路，但没有达到 roadmap 原描述。
+- `[x]`：当前代码有可运行实现，并已有脚本或页面路径能验证。
+- `[~]`：已有主链路，但仍缺关键体验、边界处理、数据完整性或生产化能力。
+- `[ ]`：未实现，或只是静态页面、内存原型、按钮占位、文档规划。
 
-本次审计主要检查了：
-
-- 平台前端：`platform/frontend/src`
-- 平台后端：`platform/backend/app`
-- 渗透 Node：`node/pentest_node`
-- 部署与靶场：`platform/docker-compose*.yml`、`node/Dockerfile*`
-- 产品/架构文档：`docs/prd.md`、`docs/architecture.md`、`docs/pentest-node-spec.md`
-
-注意：PLAID Build 说明要求存在 `docs/product-vision.md`，当前已按 `vision.json` / PRD 补齐；`scripts/validate-vision.js` 仍缺失，无法执行 PLAID 自动校验脚本。
+本文件只保留路线图和可执行差距，不再保留历史审计长文。
 
 ---
 
-## 版本概览
+## 1. 当前里程碑状态
 
-| 版本 | 当前状态 | 核心交付 |
-|------|----------|---------|
-| MVP | 部分完成 | 平台 Web 原型 + 后端 CRUD/API 骨架 + 节点 WebSocket 联调原型 + 渗透 Node LLM 工具调用原型 |
-| Post-MVP | 未开始 | 代码审计 Node、应急响应 Node、CTF Node、威胁情报、多租户、报告中心 |
-
-当前 MVP 不是“平台 + 渗透 Node 全能力”。更准确的说法是：**已有平台和 Node 的端到端 Alpha 闭环：可以注册节点、登录平台、创建会话、通过 WebSocket 下发任务，展示 Agent 输出，处理授权确认，并把资产、漏洞、证据和部分审计日志持久化；但完整证据链、ACK/心跳/离线补传、独立运行、报告同步、多节点策略等仍未完成。**
-
----
-
-## MVP 当前真实进度
-
-目标：一个安全团队用 Web 浏览器发起渗透测试、实时观看 Agent 执行过程、干预关键决策、查看结构化结果。
-
-当前状态：**部分达成。**
-
-### 平台前端
-
-- [x] **对话页 — 基础布局**
-  - [x] Sidebar + 对话区 + 右侧面板三栏结构已实现。
-  - [x] 「新建会话」按钮进入空白对话页。
-  - [x] 会话列表按后端返回展示，具备基础状态点。
-  - [x] 会话重命名 UI 已实现，后端 PATCH title 会更新并刷新会话列表。
-  - [ ] 归档未实现；删除已实现。
-  - [x] 次级导航入口已包含资产、漏洞、节点、Skill、知识库、记忆管理。
-
-- [ ] **对话页 — 对话区完整能力**
-  - 部分完成：普通文本消息、系统状态、工具输出卡片、漏洞卡片、资产卡片有基础渲染。
-  - [ ] Markdown 渲染未实现，当前只是直接显示文本。
-  - [x] 工具调用卡片有基础流式输出展示。
-  - [x] 漏洞发现卡片有基础展示。
-  - [x] 确认卡片和授权选项已接入 `request_decision` / `user_decision` 闭环。
-  - [x] 确认卡片超时倒计时已实现，并与待处理列表保持一致。
-  - [ ] 附件上传未实现。
-  - [x] 快捷模板按钮已实现。
-  - [x] 会话切换时会加载该会话消息。
-  - [ ] 多会话消息 buffer、补漏、滚动定位等完整体验未实现。
-
-- [ ] **对话页 — 右侧信息面板完整能力**
-  - 部分完成：已有「发现 / 进度 / 待处理」Tab。
-  - [x] 发现列表基础展示已实现。
-  - [x] 进度面板可显示阶段进度、activeTool，并提供固定 TODO 列表。
-  - [ ] 目标资产 Tab 未实现。
-  - [ ] 统计、工具调用历史、漏洞详情入口未完整实现。
-  - [x] 待处理授权列表已接入 `request_decision`，可授权或取消。
-  - [ ] 文件 Tab、只读文件查看未实现。
-
-- [ ] **Asset Management Page**
-  - Partially complete: list, type/search filters, detail sidebar, manual create are implemented.
-  - [x] Agent-discovered assets can be persisted through WebSocket and linked to user/conversation/node.
-  - [x] Agent-discovered ports and services are stored in Asset.properties and visible in asset details.
-  - [x] Asset has user isolation and current-user filtering.
-  - [x] Asset detail shows properties and related vulnerability summaries.
-  - [ ] Pagination UI is not implemented.
-  - [ ] Asset detail still needs session history and audit history.
-  - [x] Asset/port cards in conversation and right panel are wired to the shared asset detail dialog.
-
-- [ ] **Vulnerability Management Page**
-  - Partially complete: list, severity/status filters, detail sidebar, and status PATCH are implemented.
-  - [x] Vulnerability has user isolation and current-user filtering.
-  - [x] Vulnerability detail returns and displays linked asset, conversation/node, evidence_ids, and evidence summaries.
-  - [x] Vulnerability status PATCH has basic lifecycle transition validation.
-  - [ ] Pagination UI is not implemented.
-  - [ ] Detail still needs complete reproduction steps, impact scope, and status timeline.
-  - [x] Vulnerability cards in conversation and right panel are wired to the shared vulnerability detail dialog.
-  - [x] Retest button is wired to `/vulnerabilities/{id}/retest`; current implementation creates/starts a focused retest conversation, while a dedicated RetestResult model is still not implemented.
-
-- [ ] **节点管理页**
-  - 部分完成：节点列表、节点注册、token 生成、token 重置、删除已实现。
-  - [ ] 部署指南只有简单环境变量提示。
-  - [ ] 节点详情页、配置、版本、指标、历史会话未实现。
-  - [ ] 健康状态主要依赖 WebSocket 在线/离线更新，没有完整健康检查指标采集。
-
-- [ ] **Skill / 知识库 / 记忆管理页面**
-  - Skill 页面：静态本地数组展示，启用/禁用只改前端 state；没有接后端 Skill API。
-  - Skill 后端：有内置列表和自定义 Skill 内存上传接口，但未持久化、未解析文件上传、未接入 Agent 选择。
-  - 知识库页面：能调用 `/api/knowledge/search`；后端是固定列表 + substring 搜索。
-  - 记忆页面：未调用后端 API；后端记忆是内存列表。
-  - `knowledge_search` 工具、向量 + BM25 混合检索、Agent 上下文注入、自动学习都未完成。
-
-### 平台后端
-
-- [ ] **会话管理服务**
-  - 部分完成：会话创建、列表、详情、删除、消息列表已实现。
-  - [x] 会话状态机已统一为 `created/running/paused/completed/failed/canceled`，PATCH 会校验合法流转，`resumed` 兼容归一为 `running`。
-  - [ ] `execution_plan`、`discovered_assets`、`vulns_list`、`agent_state` 没有系统性写入。
-  - [x] `POST /conversations/{id}/steer` 会按会话绑定节点转发 `user_steer` / `user_interrupt`，节点不在线时返回 409。
-
-- [ ] **资产引擎**
-  - 部分完成：资产 CRUD API 已实现。
-  - [ ] JSON Schema 校验未实现。
-  - [ ] 资产与 Agent 发现、会话、漏洞的实时关联未实现。
-
-- [ ] **漏洞引擎**
-  - 部分完成：漏洞列表、详情、状态/字段 PATCH 已实现。
-  - [x] 实时 `vuln_found` 已通过 WebSocket 写入数据库并关联 user/conversation/node；前端直接创建漏洞 API 仍未开放。
-  - [ ] 状态机约束未实现，PATCH 可直接改状态。
-  - [ ] 漏洞-会话-证据完整关联未实现。
-  - [ ] 复测 API 未实现。
-
-- [ ] **WebSocket 服务**
-  - 部分完成：用户 JWT 连接、节点 token 连接、节点在线/离线、用户消息转 `task_assign`、节点消息转发给订阅会话、部分消息持久化已实现。
-  - [x] 前端 WebSocket 有自动重连和发送队列。
-  - [ ] 后端心跳、ACK、离线消息缓存、重连补传未实现。
-  - [x] `request_decision` 已具备前端确认卡、待处理列表和 `user_decision` 回传闭环。
-  - [x] `user_steer` / `user_interrupt` 已按会话绑定节点精确路由；用户中断会同步更新会话状态。
-  - [ ] RabbitMQ 未集成。
-
-- [ ] **平台 Agent**
-  - [ ] 自然语言意图识别未实现；前端只用正则提取 URL，后端直接下发任务。
-  - [ ] 会话标题自动生成未实现。
-  - [ ] 阶段摘要生成未实现。
-  - [ ] 资产/漏洞 Function Call 查询能力未实现。
-
-- [ ] **节点调度**
-  - 部分完成：节点注册/发现、轮询选择在线节点、`task_assign` 下发、按会话绑定的 `user_steer` / `user_interrupt` 精确转发已实现。
-  - [ ] 节点能力发现、任务队列未完整实现。
-  - [ ] 多节点负载/健康策略未实现。
-
-- [ ] **数据库**
-  - 部分完成：SQLAlchemy models 覆盖 User、Conversation、Message、Asset、Vulnerability、Node、AuditLog 等。
-  - [x] 已创建 Alpha 初始 Alembic migration：`0001_alpha_schema.py`。
-  - [ ] 索引优化未落地。
-  - [ ] `Event` 模型未看到实现。
-
-- [ ] **认证与权限**
-  - 部分完成：email + password JWT 登录、refresh、前端登录页已实现。
-  - [ ] OAuth2 Google/GitHub 未实现。
-  - [ ] Token refresh 前端自动刷新策略不完整。
-  - [ ] 会话按 user_id 隔离已实现。
-  - [ ] 节点仍未按用户隔离；资产、漏洞已按用户隔离。
-  - [ ] 节点 WebSocket token 认证已实现。
-  - [ ] org_id / role 仅 User 上有字段，资源模型未形成多租户隔离。
-
-- [ ] **审计日志**
-  - 部分完成：`AuditLog` 模型和查询 API 已实现；WebSocket 路径已写入 node.online、task.assign、asset.discover、finding.create、evidence.create、approval.* 等关键审计。
-  - [ ] 登录、会话 PATCH/删除、资产/漏洞 REST 操作等审计覆盖仍不完整。
-  - [ ] append-only 数据库权限未实现。
-  - [ ] 审计浏览 UI 原本不纳入 MVP，但当前 API 已存在；仍缺数据写入和权限策略。
-
-### 渗透测试 Node
-
-- [x] **Task Intake**
-  - [x] 平台模式可以接收 `task_assign` 并构造规范化 NodeTask。
-  - [x] NodeTask 结构、target URL/host 解析、allow/deny scope 校验已由确定性 `TaskIntake` 实现。
-  - [x] DNS 和 TCP 连通性已在 LLM loop 前确定性校验；localhost/127.0.0.1 会提示使用 `host.docker.internal`。
-
-- [ ] **Policy Engine + Tool Gateway**
-  - 部分完成：有 `ToolRegistry`、`execute`、`http_request`、workflow tools。
-  - [x] `browser` 工具已在平台模式注册。
-  - [ ] `nmap/httpx/nuclei/sqlmap/gobuster/ffuf/curl` 没有独立 ToolSpec，只是通过 shell `execute` 调用。
-  - [x] Scope Gate 已在确定性 intake 和 execute 工具中实现最小校验。
-  - [x] destructive 风险命令会阻断并等待用户授权。
-  - [x] `request_approval` 会等待用户授权/取消结果。
-
-- [ ] **Agent Orchestrator + Workflow Engine**
-  - 部分完成：有 precheck/plan/recon/scan/verify/report 阶段提示和 `phase_transition` 工具。
-  - [ ] 阶段转换主要依赖 LLM 调工具，不是规格书里的确定性状态机。
-  - [ ] checkpoint 持久化、中断恢复、阻塞条件处理未实现。
-  - [ ] 反循环、上下文压缩、质量评分、反事实挑战未实现。
-
-- [ ] **Evidence Store**
-  - 部分完成：存在 `node/pentest_node/evidence/store.py`。
-  - [x] Agent Loop 已将工具输出写入本地 EvidenceStore，并通过 `evidence_created` 同步 evidence_id/raw_ref/summary/hash 到平台。HTTP 请求/响应专用采集仍需继续扩展。
-  - [ ] 证据与 Finding / 平台漏洞记录的完整关联未实现。
-
-- [ ] **Finding Verifier**
-  - 部分完成：有 `create_candidate_finding`、`confirm_finding`、`reject_finding` workflow tools。
-  - [ ] 候选解析、复现验证、去误报、防重复主要依赖 LLM 自律，没有确定性实现。
-  - [ ] `confirm_finding` 要求 evidence_ids，但没有强校验证据存在或数量。
-
-- [ ] **Platform Sync**
-  - 部分完成：Node 可发送 `status_update`、`tool_output`、`vuln_found`、`asset_discovered`、`request_decision`、task 结束信息。
-  - [x] 平台端已将实时 asset/vuln/evidence 入库；证据文件内容仍只保留 raw_ref/summary/hash，未实现二进制文件同步。
-  - [ ] `task_complete` 是 Agent 工具触发本地 `_aborted`，外层发送完成摘要；可演示但不完整。
-
-- [x] **Agent Runtime**
-  - 已按当前代码实现为 **OpenAI SDK 兼容接口**，支持通过 `base_url` 接 DeepSeek/Ollama/LM Studio/企业兼容服务。
-  - [ ] PydanticAI 未使用。
-  - [ ] 结构化输出依赖 OpenAI tool calling + workflow tools，未使用 Pydantic 模型强校验。
-  - [ ] HITL 中断点未形成等待/恢复闭环。
-
-- [ ] **Node Runtime Adapter**
-  - 部分完成：`PlatformWSClient` 和平台模式转发存在。
-  - [ ] 统一事件接口、证据/Finding 抽象不完整。
-  - [x] 平台 `steer` API 已按会话绑定节点转发，Node WebSocket 的 `user_steer` 会调用 `current_loop.steer`；`user_interrupt` 可触发 abort，但 pause/resume 语义仍不完整。
-
-- [ ] **沙箱执行**
-  - 部分完成：`DockerSandbox` 类和 `node/Dockerfile.sandbox` 存在。
-  - [x] 平台模式已切换为 `DockerSandbox`。
-  - [x] DockerSandbox 重复 `execute`/`destroy` 方法已清理。
-  - [x] DockerSandbox 已接入平台模式并具备工作目录隔离/资源限制，且 `scripts/docker_sandbox_real_smoke.py` 已验证真实容器启动/执行/清理；kill switch 仍未完整实现。
-
-- [ ] **节点配置与部署**
-  - 部分完成：Node 有 pyproject、Dockerfile、Dockerfile.sandbox、配置类、平台模式 CLI。
-  - [ ] GHCR 发布未完成。
-  - [ ] Node docker-compose 一键部署未看到。
-  - [ ] `pentest-node` console script 未在 pyproject 中配置。
-  - [ ] 健康检查接口文件存在，但未看到服务入口接入。
-
-- [ ] **本地 TUI 界面**
-  - 部分完成：Textual TUI 骨架存在。
-  - [ ] 未接真实 Agent 运行状态、发现、资产、日志。
-  - [ ] Approve/Stop/Detail/Logs/Quit 快捷键未实现。
-  - [ ] `attach` / `observe` CLI 未实现。
-
-- [ ] **独立运行模式**
-  - [ ] `--standalone` 当前只打印 “not yet implemented”。
-  - [ ] `status` / `logs --follow` / `adjust` / `stop` / `resume` CLI 未实现。
-  - [ ] 配置文件模式未接入。
-
-- [ ] **离线结果导出与同步**
-  - 部分完成：`export_session()` 和 `sync_to_platform()` 函数存在，平台有 `/api/sync/import`。
-  - [ ] CLI 未暴露 `export` / `sync` 命令。
-  - [ ] 导出内容只有 session/evidence 目录和 summary，不保证包含 assets/vulns/audit 标准结构。
-  - [ ] 平台导入端解析逻辑与导出结构不匹配，且不导入 evidence/audit。
-
-- [ ] **凭据安全**
-  - 部分完成：`redact.py` 存在。
-  - [ ] 凭据仅内存存储、工具输出全链路遮蔽、导出报告遮蔽未系统性接入。
-  - [ ] browser 工具里 auth state 只存在函数闭包内存，且每次调用新建浏览器上下文，实际保存/加载能力有限。
-
-- [ ] **JSONL 事件日志**
-  - 部分完成：`jsonl_logger.py` 存在。
-  - [ ] 未看到 Agent Loop / CLI 运行路径系统性写 JSONL。
-
-### 测试环境与部署
-
-- [x] Docker 漏洞靶场准备：`platform/docker-compose.targets.yml` 包含 DVWA 和 Juice Shop。
-- [x] Docker 沙箱镜像文件：`node/Dockerfile.sandbox` 基于 Kali，安装 nmap、httpx-toolkit、gobuster、nuclei、sqlmap、curl、ffuf、whatweb 等。
-- [ ] Metasploitable2 未包含。
-- [ ] Playwright、mitmproxy 未安装在 `Dockerfile.sandbox` 中。
-- [x] 已新增自动化冒烟脚本：`scripts/alpha_smoke.py` 覆盖平台侧绑定/入库/audit/evidence，`scripts/node_alpha_smoke.py` 覆盖节点侧 intake/scope/approval/evidence，`scripts/ws_alpha_smoke.py` 通过 `/api/nodes` 注册 Node 并用真实 `/ws` endpoint 覆盖 JWT 用户连接、node token 连接、task_assign、request_decision/user_decision 回传、task_complete 和 DB 持久化，`scripts/docker_sandbox_smoke.py` 覆盖 DockerSandbox 合约，`scripts/docker_sandbox_real_smoke.py` 覆盖真实容器执行，`scripts/alpha_browser_smoke.py` 覆盖真实前端登录、发起会话、确认卡授权和 Evidence 视图。
-- [ ] 平台 docker-compose 有基础服务编排，但未验证端到端生产部署能力；真实 DockerSandbox 已在本机 Docker Desktop `29.4.1` 上通过脚本化验收。
+| 里程碑 | 状态 | 说明 |
+|---|---:|---|
+| MVP Alpha：单节点平台闭环 | [x] | 平台登录、节点注册、WebSocket 下发任务、Node 执行、授权确认、资产/漏洞/证据/消息入库、前端刷新恢复已具备。 |
+| MVP Demo：客户可演示版本 | [~] | 核心链路可跑，但还缺报告输出、演示脚本稳定性、证据文件可追溯、运行/部署说明和少量 UI 收尾。 |
+| MVP Production：早期试用版本 | [ ] | 缺 ACK/心跳/离线补传、生产部署、权限/组织边界、审计完整性、节点健康与失败恢复。 |
+| Post-MVP 扩展 | [ ] | 多节点策略、子代理、知识库/记忆增强、TUI/独立模式、Skill 深度接入、报告中心等。 |
 
 ---
 
-## 平台增强（原 V2 并入）当前状态
+## 2. 已实现但旧 roadmap 没有正确勾选的能力
 
-- [ ] **全量消息卡片**
-  - 部分完成：基础 tool/vuln/asset/status/text 卡片存在，部分增强卡片组件文件存在。
-  - [ ] `ThinkingCard`、`SummaryCard`、`ScoreboardCard`、`AttackChainCard` 等未接入 `MessageRenderer`。
-  - [ ] auth_card / confirm_card 等授权闭环未完成。
+这些能力在旧文档前半部分仍写成未完成或部分完成，但当前代码已经具备可运行实现：
 
-- [ ] **Agent 智能增强**
-  - [ ] 质量记分牌、低分补测、反事实挑战未实现。
-  - [ ] 跨会话记忆未接 Agent。
-  - [ ] 敏感信息遮蔽未系统性接入所有工具输出/日志/报告。
-
-- [ ] **知识库**
-  - 部分完成：知识库页面和简单搜索 API 存在。
-  - [ ] 向量 + BM25 混合检索未实现。
-  - [ ] `knowledge_search` 工具未实现。
-  - [ ] 检索结果未注入 Agent 上下文。
-
-- [ ] **Skill 管理**
-  - 部分完成：10 个 Skill markdown 文件存在，后端有静态 Skill 列表。
-  - [ ] 前端未接后端 Skill API。
-  - [ ] 自定义上传未持久化，未校验 YAML frontmatter 文件。
-  - [ ] Agent 未加载/选择 Skill 文件驱动执行。
-
-- [ ] **记忆管理**
-  - 部分完成：后端内存 API 存在。
-  - [ ] 前端未接后端 API。
-  - [ ] 编辑、筛选、从会话导入未实现。
-  - [ ] Agent 自动学习未实现。
-
-- [ ] **节点 Web 控制台**
-  - [ ] 未实现。
-
-- [ ] **增强的 Agent 执行监控**
-  - 部分完成：右侧进度面板显示阶段进度、TODO、活跃工具、待确认事项和 Evidence 列表。
-  - [ ] 工具调用历史时间线、文件视图、漏洞详情联动仍未完整实现。
+- [x] **Markdown 与表格渲染**：`MessageRenderer` 已支持标题、列表、代码块、引用、表格和基础 inline markdown。
+- [x] **工具卡片长输出体验**：工具卡片默认收起，可展开；长输出会换行并限制滚动区域，避免撑破右侧面板。
+- [x] **工具卡片去重/合并**：前端按 `tool_run_id` 合并 running/done/fail 更新，避免恢复会话时同一工具调用显示两张卡。
+- [x] **会话持久化恢复**：后端 `conversation_snapshot` 成为恢复视图的事实源；前端使用 TanStack infinite query 加载历史消息，刷新和切换页面后能恢复消息、资产、漏洞、证据、待处理和进度。
+- [x] **会话删除一致性**：删除会话会清理关联消息、资产、漏洞、证据；前端删除失败会展示错误，404 会清理本地 active 会话。
+- [x] **资产/端口入库与详情**：Agent 发现的资产、端口和服务会写入 `Asset.properties`，资产页、会话卡片、右侧面板共用资产详情弹窗。
+- [x] **漏洞入库与详情**：Agent 发现的漏洞会写入漏洞库，漏洞页、会话卡片、右侧面板共用漏洞详情弹窗，并展示资产、证据、会话和节点来源。
+- [x] **漏洞状态约束**：漏洞 PATCH 已有基础生命周期 transition validation，不再是任意状态直接覆盖。
+- [x] **漏洞复测入口**：`/api/vulnerabilities/{id}/retest` 已能创建聚焦复测会话并在有在线节点时启动。
+- [x] **Evidence Gate**：Node `confirm_finding` 要求 evidence_ids；平台对缺证据的 confirmed finding 会降级或补 placeholder，漏洞详情能展示证据摘要。
+- [x] **审计日志覆盖扩大**：已覆盖登录、会话创建/更新/删除/steer、资产 CRUD、漏洞状态、复测、finding confirm/reject、tool.execute 等关键路径。
+- [x] **数据库索引与 schema repair**：已有 `0002_session_persistence_repair.py`，补充 assets/vulnerabilities/evidence 相关字段和索引。
+- [x] **OpenAI SDK 兼容实现**：Node 运行时已从 LiteLLM 改为 OpenAI SDK 兼容接口，通过 `base_url` 支持 DeepSeek/Ollama/LM Studio/企业兼容服务。
 
 ---
 
-## 多节点管理（原 V3 并入）当前状态
+## 3. 旧 roadmap 中与当前实现冲突的描述
 
-- [ ] **多节点管理**
-  - 部分完成：平台可注册多个节点，WebSocket 在线节点采用轮询分配。
-  - [ ] 健康检查、心跳监控、离线告警未完整实现。
-  - [ ] 会话创建时手动选择 Node 未实现。
-  - [ ] 自动分配策略非常基础，不考虑能力/负载/健康。
+以下描述已不应继续保留为事实：
 
-- [ ] **节点内子代理**
-  - [ ] 未实现。
-  - [ ] 最多 4 个工具并行执行未实现。
-  - [ ] 长时间扫描后台执行、子代理结果整合未实现。
-
-- [ ] **共享信息中心**
-  - 部分完成：平台有 Asset/Vulnerability 表。
-  - [ ] 同一 Node 内多 Session 共享资产库/漏洞库未实现。
-  - [ ] 不同 Node 的 Asset/Finding 共享和用户确认写入策略未实现。
+- **“Markdown 渲染未实现”**：已实现，包含表格。
+- **“漏洞状态 PATCH 可直接改状态，状态机未实现”**：已实现基础 transition validation。
+- **“复测 API 未实现”**：已实现复测会话创建和在线节点派发；只是还没有独立 `RetestResult` 模型。
+- **“资产中的 Agent 发现、会话、漏洞实时关联未实现”**：主链路已实现，剩余是资产历史、审计历史和更完整的关系视图。
+- **“索引优化未落地”**：核心会话/资产/漏洞/证据索引已在 repair migration 中落地；仍可继续做生产级索引优化。
+- **“下一阶段定义为 MVP Alpha”**：Alpha 已完成，不应继续作为下一阶段。下一阶段应是 **MVP Demo**。
+- **“P1 全部完成意味着完整 MVP 完成”**：不成立。P1 主要补齐结果可见性、安全门禁和会话恢复；完整演示还需要报告、部署、稳定性和验收脚本。
+- **“平台增强/V2、多节点/V3 并入当前 MVP”**：容易误导。多节点策略、子代理、知识库/记忆增强、独立模式和 TUI 都应放到 MVP 之后。
 
 ---
 
-## Post-MVP
+## 4. 当前已完成能力基线
 
-以下能力仍保持 Post-MVP，当前未开始：
+### 4.1 平台前端
 
-- [ ] 代码审计 Node：源码静态分析 → CodeFinding → 渗透 Node 动态验证。
-- [ ] 应急响应 Node：事件分析 → Incident + Timeline + IOC 提取 → 渗透 Node 攻击路径验证。
-- [ ] CTF Node：CTF 题目资产类型 + 解题 Agent + Writeup 生成。
-- [ ] 威胁情报集成：微步在线 / VirusTotal / AlienVault OTX → 统一情报查询接口。
-- [ ] 报告中心：渗透测试报告 / 复测报告 / CTF Writeup / 代码审计报告。
-- [ ] 多租户与权限体系：RBAC + 组织架构 + 数据隔离。
-- [ ] 日志分析 Node + 告警研判 Node。
-- [ ] 跨会话智能学习：成功模式复用、自适应工具选择。
+- [x] 登录页、主布局、三栏对话页、会话列表、新建会话、重命名、删除。
+- [x] 会话 ID 展示/复制入口。
+- [x] 会话消息恢复、分页懒加载、刷新恢复、会话切换恢复。
+- [x] Markdown/table 渲染、状态消息、工具卡片、漏洞卡片、资产卡片、确认卡片。
+- [x] 右侧面板展示发现、进度、待处理、证据列表。
+- [x] 授权确认 UX：确认卡、待处理列表、通知、倒计时、定位。
+- [x] 资产管理页：列表、搜索/过滤、手工创建、详情弹窗、相关漏洞摘要。
+- [x] 漏洞管理页：列表、过滤、详情弹窗、状态变更、复测入口。
+- [x] 节点管理页：节点注册、token 生成/重置、删除、基础状态。
+- [~] Skill/知识库/记忆页面：有基础页面或简单 API，但不是完整产品能力。
 
----
+### 4.2 平台后端
 
-## 近期修正优先级
+- [x] JWT 登录、refresh、当前用户接口。
+- [x] Conversation CRUD、状态机、消息分页、会话快照、steer/interrupt 路由。
+- [x] WebSocket 用户连接、节点连接、任务下发、会话订阅、节点消息持久化。
+- [x] Asset/Vulnerability/Evidence/Audit 核心模型与 API。
+- [x] Agent 发现资产、漏洞、证据后的入库和 user/conversation/node 关联。
+- [x] 漏洞详情关联资产和证据；资产详情关联漏洞摘要。
+- [x] 审计 API 和基础权限过滤。
+- [~] Node 健康、ACK、心跳、离线补传、重连补偿仍未实现。
+- [~] 组织/RBAC/多租户字段存在部分基础，但资源模型还不是完整多租户隔离。
 
-### P0：让 MVP 闭环真实可用
+### 4.3 渗透 Node
 
-- [x] 接通 `request_decision`：Node 请求授权 → 前端确认卡 → 用户选择 → 平台按会话路由回 Node → Node 继续/取消。
-- [x] 实时 `asset_discovered` / `vuln_found` / `tool_output` evidence 已入库并关联 user/conversation/node；漏洞 evidence_ids 可持久化，完整证据文件同步仍未实现。
-- [x] 将平台模式从 `LocalSandbox` 切到 `DockerSandbox`，修复 DockerSandbox 重复方法与输出解析。
-- [x] 实现确定性 Task Intake：NodeTask 解析、allow/deny scope、DNS、TCP 连通性和 localhost 误用提示已在 LLM loop 前完成。
-- [x] 建立 Alembic 初始迁移脚本。
-- [x] 修复会话状态机与前端类型不一致问题。
-- [x] 完成资产/漏洞的用户隔离字段与查询过滤。
+- [x] 平台模式 WebSocket 客户端，接收 `task_assign` 并启动 Agent loop。
+- [x] Task Intake：target/scope/DNS/TCP 预检，`host.docker.internal` 提示。
+- [x] OpenAI SDK 兼容 LLM client。
+- [x] DockerSandbox 平台模式接入，真实 Docker smoke 已覆盖。
+- [x] execute/http/browser/workflow tools 基础接入。
+- [x] scope/risk gate：越权目标阻断，高风险操作走授权。
+- [x] evidence store、checkpoint_update、asset/vuln/evidence/status/task_complete 同步。
+- [~] 阶段推进仍主要依赖 LLM 调用 `phase_transition`，不是强确定性工作流。
+- [~] nmap/httpx/nuclei/sqlmap/gobuster/ffuf 等没有独立 ToolSpec，主要通过 `execute` 调用。
+- [~] pause/resume、失败恢复、长任务恢复、kill switch 仍不完整。
 
-### P1: security, evidence chain, and result visibility
+### 4.4 测试与验收脚本
 
-- [x] **Unified vulnerability detail entry**: vulnerability cards in conversation, vulnerability cards in the right panel, and rows in the vulnerability management page open the same detail dialog. The dialog shows title, severity, status, affected asset, location, reproduction/POC, impact, remediation, evidence, conversation, and node source.
-- [x] **Unified asset and port detail entry**: asset/port cards in conversation, asset/port discoveries in the right panel, and rows in the asset management page open the same asset detail dialog. The dialog shows address, type, open ports, services, source conversation, related vulnerabilities, and raw properties.
-- [x] **Asset and port persistence acceptance**: Agent-discovered assets, open ports, and service fingerprints must be stored in Asset or Asset.properties. After refresh or conversation switch, they remain visible from the asset management page and are not only kept in message/right-panel memory.
-- [x] **Vulnerability retest loop**: `/api/vulnerabilities/{id}/retest` creates a focused retest conversation with original asset/vulnerability context, starts it when an online node exists, and the shared vulnerability dialog is wired to trigger it. Dedicated RetestResult writeback is still deferred.
-- [x] **Evidence chain and Evidence Gate**: HTTP/browser request-response evidence is structured and persisted. Node-side `confirm_finding` requires known evidence_ids; platform-side confirmed `vuln_found` without evidence is downgraded to pending; referenced evidence can be created as a placeholder and later updated by `evidence_created`. Vulnerability details show evidence summary, tool source, hash, raw_ref, and structured properties.
-- [x] **Audit log coverage**: covers `auth.login`, conversation create/PATCH/delete/steer, asset CRUD, vulnerability status changes, retest trigger, finding.confirm/reject, and `tool.execute`; audit list now applies admin/all vs user-owned conversation permission filtering.
-- [x] **Scope/Risk Gate consistency**: execute/http/browser/workflow now enforce scope validation. execute/http destructive actions require `request_decision`; out-of-scope, denied, and failed tool results are emitted as conversation tool messages and audited through `tool.execute`.
-- [x] **Approval confirmation UX**: confirmation cards, pending list, Sonner notifications, countdown, and click-to-locate behavior are connected and covered by browser smoke.
-- [x] **Message rendering and long-output UX**: conversation messages support Markdown tables. Tool cards default collapsed, can expand, wrap/limit long output, and browser smoke verifies long output stays scroll-contained without horizontal page overflow after refresh.
-- [x] **Session persistence and recovery reliability**: repaired schema drift for assets/vulnerabilities/evidence, added paginated recent-first message recovery, TanStack Query infinite loading for conversation history, message-derived state fallback, integrity/repair tooling, and long-session recovery smoke coverage.
-
-### P2：恢复 roadmap 中被提前勾选的增强能力
-
-- [ ] Skill 前后端接通，支持上传、校验、持久化、启用/禁用，并让 Agent 读取 Skill。
-- [ ] 知识库改为持久化检索，并提供 `knowledge_search` 工具。
-- [ ] 记忆管理前端接 API，后端改为数据库存储。
-- [ ] 独立模式 CLI：`standalone` / `status` / `logs` / `adjust` / `stop` / `resume`。
-- [ ] 导出/同步 CLI，并统一导出包和平台导入格式。
-- [ ] TUI 接真实运行状态和快捷键操作。
-
----
-
-## MVP 启动前检查清单真实状态
-
-- [x] 产品方案文档完成：`vision.json`、`docs/prd.md`、`docs/architecture.md`、`docs/pentest-node-spec.md` 存在。
-- [x] `docs/product-vision.md` 已补齐；`scripts/validate-vision.js` 仍缺失，未能运行 PLAID vision 校验。
-- [x] 关键页面原型已实现：对话页、资产页、漏洞页、节点页等。
-- [ ] 关键页面完整交互未完成：附件、文件面板、多会话消息 buffer/补漏等。
-- [x] 技术栈基本落地：React + FastAPI + PostgreSQL 模型 + WebSocket + Python Node。
-- [ ] RabbitMQ 未落地。
-- [ ] 通信协议只实现核心子集；按会话精确路由已完成，ACK、心跳、离线缓存、重连补传仍未完成。
-- [x] Docker 靶场文件包含 DVWA + Juice Shop。
-- [x] Kali 沙箱 Dockerfile 存在。
-- [x] 沙箱镜像已在平台模式代码路径接入，并通过真实 Docker daemon 完成实际容器运行验证。
-- [x] browser 工具已注册到平台模式 Agent；浏览器 UI Alpha smoke 已覆盖平台前端闭环。
-- [ ] WAF 检测、速率限制感知、覆盖率追踪、应用模型、验证码/MFA/蜜罐检测、MCP 扩展均未在代码中实现。
-- [x] 10 个 Skill markdown 文件存在。
-- [ ] Skill 未接入 Agent 执行。
-- [x] MVP Alpha 冒烟测试清单和自动化验收脚本已建立。
+- [x] `scripts/alpha_smoke.py`：平台侧入库、审计、证据基础闭环。
+- [x] `scripts/node_alpha_smoke.py`：Node intake/scope/approval/evidence。
+- [x] `scripts/ws_alpha_smoke.py`：真实 `/ws` 用户/节点连接、任务、授权、完成和持久化。
+- [x] `scripts/docker_sandbox_smoke.py` / `scripts/docker_sandbox_real_smoke.py`：DockerSandbox 合约与真实容器。
+- [x] `scripts/alpha_browser_smoke.py`：真实前端闭环、刷新恢复、授权卡、Evidence 视图、长输出约束。
+- [x] `scripts/session_recovery_smoke.py`：长会话恢复、分页、删除回归。
+- [x] `scripts/session_integrity_check.py`：排查单会话消息/资产/漏洞/证据一致性。
+- [x] `scripts/audit_coverage_smoke.py`：审计覆盖回归。
 
 ---
 
-## 下一阶段定义
+## 5. MVP Demo 剩余范围
 
-下一个可验收里程碑建议定义为：
+这是下一阶段，不是 P2，也不是 Post-MVP。目标是让客户能看懂、能复现、能相信结果。
 
-**MVP Alpha：单节点端到端渗透任务闭环**
+### P0：演示闭环稳定化
 
-验收标准：
+- [ ] 固化一条 DVWA/Juice Shop 演示脚本：从节点启动、发起测试、授权确认、发现资产/漏洞、查看证据、生成总结。
+- [ ] 对真实 DVWA 跑一轮人工验收，记录 Agent 行为质量问题：重复输出、阶段误用、误报、漏报、错误工具选择。
+- [ ] 收敛 Agent 阶段控制：禁止在错误 phase 调用不允许工具时重复失败；失败要进入可恢复路径，而不是刷屏。
+- [ ] 明确“继续任务”和“重新开始”的协议：已有会话进度时默认 resume，只有用户明确重开才新建任务。
+- [ ] 客户演示启动文档：平台、Node、靶场、环境变量、常见 localhost/host.docker.internal 问题。
 
-- 用户登录平台，注册一个 Node。
-- Node 使用 DockerSandbox 运行。
-- 用户创建会话并输入目标 URL。
-- 平台按会话绑定 Node，下发 task_assign。
-- Node 完成确定性 intake、scope 校验、DNS/TCP 连通性校验和至少一个 recon 工具调用。
-- 工具输出、资产、候选漏洞、证据写入平台数据库。
-- 高风险操作能触发确认卡，用户确认后 Node 才继续执行。
-- 会话结束后平台能看到消息、资产、漏洞、证据和审计日志。
+### P1：结果可交付
 
-当前验收：以上 Alpha 闭环已由 `alpha_smoke.py`、`node_alpha_smoke.py`、`ws_alpha_smoke.py`、`docker_sandbox_smoke.py`、`docker_sandbox_real_smoke.py`、`alpha_browser_smoke.py` 覆盖并通过；本轮新增确定性 Task Intake 分支覆盖和 intake_result 刷新恢复。仍不代表 MVP 全量、生产 docker-compose、多节点、ACK/心跳/离线补传、完整证据文件同步或 kill switch 已完成。
+- [ ] MVP 报告导出：基于会话快照导出 Markdown/HTML，包含目标、范围、资产、漏洞、证据摘要、时间线和免责声明。
+- [ ] Evidence 详情页/弹窗：能从漏洞详情打开证据详情，展示 request/response、工具输出、hash、raw_ref 和来源工具。
+- [ ] 证据原始文件同步策略：至少明确 demo 版只展示摘要/引用，或实现可下载 raw evidence。
+- [ ] 漏洞详情补齐字段：复现步骤、影响、修复建议、证据列表、状态更新时间线。
+- [ ] 资产详情补齐字段：端口/服务历史、来源会话、相关漏洞、最近扫描时间。
 
-即便 Alpha 闭环已完成，也不应把“全量消息卡片、多节点、子代理、独立模式、报告同步、知识库/记忆智能增强”标为完成。
+### P2：运行可观测与可靠性
+
+- [ ] 审计日志 UI：至少能按会话查看关键事件，便于演示和问题排查。
+- [ ] 节点健康与任务状态：展示在线状态、当前任务、最近心跳、失败原因。
+- [ ] WebSocket ACK/心跳最小实现：避免 UI 误以为任务还在跑或节点仍在线。
+- [ ] 更完整的错误归档：task_error、tool fail、scope block、approval cancel 都应在会话恢复后可见且不重复。
+- [ ] 一键 smoke 验收脚本：聚合平台、Node、WS、浏览器、DockerSandbox 的主要测试，输出 demo readiness。
+
+---
+
+## 6. MVP 之后再做的能力
+
+这些能力有价值，但不应阻塞 MVP Demo。
+
+### Platform Post-MVP
+
+- [ ] 归档会话、会话标签、批量管理。
+- [ ] 附件上传和文件面板。
+- [ ] 资产/漏洞分页 UI、复杂筛选、批量操作。
+- [ ] 完整 RBAC、组织、多租户隔离。
+- [ ] 报告中心：渗透报告、复测报告、模板管理、审批流。
+- [ ] RabbitMQ 或任务队列化通信。
+
+### Agent/Node Post-MVP
+
+- [ ] 独立运行模式：`--standalone`、`status`、`logs --follow`、`adjust`、`stop`、`resume`。
+- [ ] TUI 接真实 Agent 状态和快捷键操作。
+- [ ] 离线导出/同步 CLI，并统一导出包与平台导入格式。
+- [ ] 独立 ToolSpec：nmap/httpx/nuclei/sqlmap/gobuster/ffuf 等。
+- [ ] 确定性 workflow engine、质量评分、反事实挑战、去重和误报控制。
+- [ ] 完整 kill switch、资源限额、长任务恢复。
+
+### Intelligence Post-MVP
+
+- [ ] Skill 前后端接通：上传、校验、持久化、启用/禁用，并让 Agent 读取。
+- [ ] 知识库持久化检索：向量 + BM25，提供 `knowledge_search` 工具。
+- [ ] 记忆管理接数据库，并支持从会话学习。
+- [ ] 多节点调度：能力发现、健康策略、负载策略、手动选择节点。
+- [ ] 节点内子代理和并行工具执行。
+
+---
+
+## 7. 当前推荐下一步
+
+下一步应继续做 **MVP Demo P0/P1**，不建议进入多节点、子代理、知识库/记忆增强。
+
+推荐顺序：
+
+1. 固化 DVWA/Juice Shop 演示脚本，并跑真实端到端验收。
+2. 补 MVP 报告导出，让 Agent 成果能交付给客户。
+3. 补 Evidence 详情入口和证据原文策略，保证漏洞不是只显示摘要。
+4. 收敛 Agent 阶段错误和重复失败输出，提高演示稳定性。
+5. 写一份启动/演示 runbook，降低现场演示风险。

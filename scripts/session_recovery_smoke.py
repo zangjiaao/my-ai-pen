@@ -31,6 +31,8 @@ from app.models.message import Message  # noqa: E402
 from app.models.user import User  # noqa: E402
 from app.models.vulnerability import Vulnerability  # noqa: E402
 from app.services.conversation_snapshot import build_conversation_snapshot  # noqa: E402
+from app.services.completed_conversation_agent import answer_completed_conversation, set_completed_conversation_chat_override  # noqa: E402
+from app.ws.router import _save_message  # noqa: E402
 
 
 @compiles(INET, "sqlite")
@@ -205,6 +207,28 @@ def main() -> None:
                 direct_state = client.portal.call(snapshot_direct)
                 assert direct_state["counts"] == state_data["counts"]
                 assert direct_state["findings"] == state_data["findings"]
+
+                async def ask_completed_conversation():
+                    async def fake_chat(messages):
+                        assert "Late recovered finding" in messages[1]["content"]
+                        return "Agent 认为 Late recovered finding 值得优先验证，因为它是 high 且有关联证据 ev-late。"
+
+                    set_completed_conversation_chat_override(fake_chat)
+                    try:
+                        answer = await answer_completed_conversation(str(conv.id), str(user.id), "你这次发现了哪些值得利用的漏洞？")
+                        await _save_message(answer, "agent")
+                        return answer
+                    finally:
+                        set_completed_conversation_chat_override(None)
+                answer = client.portal.call(ask_completed_conversation)
+                assert answer["type"] == "text", answer
+                assert "Late recovered finding" in answer["content"]["text"], answer
+                after_question = client.get(f"/api/conversations/{conv.id}/messages?limit=20&offset=0&order=desc", headers=headers)
+                assert after_question.status_code == 200, after_question.text
+                assert any(
+                    m["role"] == "agent" and m["msg_type"] == "text" and "Late recovered finding" in m["content"].get("text", "")
+                    for m in after_question.json()
+                ), after_question.json()
 
                 delete_response = client.delete(f"/api/conversations/{conv.id}", headers=headers)
                 assert delete_response.status_code == 200, delete_response.text

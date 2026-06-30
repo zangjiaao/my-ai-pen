@@ -21,6 +21,8 @@ export interface Conversation {
   last_active_at: string;
 }
 
+export type AgentIdentity = "platform" | "pentest";
+
 export interface Message {
   id: string;
   conversation_id: string;

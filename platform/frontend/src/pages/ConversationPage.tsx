@@ -10,7 +10,7 @@ import { useWebSocket } from "../hooks/useWebSocket";
 import { ApiError, authFetch } from "../lib/api";
 import { normalizeExecutionStatus } from "../lib/status";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
-import type { Conversation, Message } from "../lib/types";
+import type { AgentIdentity, Conversation, Message } from "../lib/types";
 import type { SecurityAsset, SecurityVulnerability } from "../lib/securityTypes";
 
 const ACTIVE_CONVERSATION_KEY = "active_conversation_id";
@@ -35,6 +35,8 @@ const TEMPLATES = [
 
 type Progress = { current: number; total: number; percent: number };
 type Todo = { id: string; title: string; status: "done" | "running" | "pending" };
+type AgentNode = { id: string; name: string; type: AgentIdentity | string; status: string; token_required?: boolean };
+type MentionState = { start: number; query: string } | null;
 
 type ConversationSnapshot = {
   conversation?: Conversation;
@@ -57,6 +59,8 @@ export default function ConversationPage() {
   const messageScrollerRef = useRef<HTMLDivElement | null>(null);
   const pendingScrollRestoreRef = useRef<{ top: number; height: number } | null>(null);
   const [input, setInput] = useState("");
+  const [selectedAgent, setSelectedAgent] = useState<AgentNode | null>(null);
+  const [agentNodes, setAgentNodes] = useState<AgentNode[]>([]);
   const [agentState, setAgentState] = useState<Record<string, unknown>>({});
   const [progress, setProgress] = useState<Progress | undefined>();
   const [todos, setTodos] = useState<Todo[]>([]);
@@ -85,6 +89,11 @@ export default function ConversationPage() {
   }, [activeId, messageQuery.data]);
 
   const messages = useMemo(() => coalesceConversationMessages([...persistedMessages, ...liveMessages]), [persistedMessages, liveMessages]);
+  const activeConversation = useMemo(() => conversations.find(c => c.id === activeId), [activeId, conversations]);
+  const platformAgentNodeId = useMemo(() => agentNodes.find(node => node.type === "platform")?.id || null, [agentNodes]);
+  const agentNameById = useMemo(() => Object.fromEntries(agentNodes.map(node => [node.id, node.name])), [agentNodes]);
+  const mentionState = useMemo(() => getMentionState(input), [input]);
+  const mentionOptions = useMemo(() => filterMentionOptions(agentNodes, mentionState?.query || ""), [agentNodes, mentionState]);
 
   const applyConversationState = useCallback((snapshot: ConversationSnapshot, fallback?: ConversationSnapshot) => {
     setAgentState(hasValues(snapshot.agent_state) ? snapshot.agent_state! : fallback?.agent_state || {});
@@ -266,6 +275,26 @@ export default function ConversationPage() {
 
   useEffect(() => { void fetchAll(); }, [fetchAll]);
 
+  const loadAgentNodes = useCallback(async () => {
+    try {
+      setAgentNodes(await authFetch<AgentNode[]>("/api/nodes"));
+    } catch {
+      setAgentNodes([]);
+    }
+  }, []);
+
+  useEffect(() => { void loadAgentNodes(); }, [loadAgentNodes]);
+
+  useEffect(() => {
+    const reload = () => { void loadAgentNodes(); };
+    window.addEventListener("focus", reload);
+    window.addEventListener("nodes:changed", reload);
+    return () => {
+      window.removeEventListener("focus", reload);
+      window.removeEventListener("nodes:changed", reload);
+    };
+  }, [loadAgentNodes]);
+
   useEffect(() => {
     if (restoreAttempted || conversations.length === 0) return;
     const storedId = localStorage.getItem(ACTIVE_CONVERSATION_KEY);
@@ -287,16 +316,29 @@ export default function ConversationPage() {
     send({ type: "user_decision", conversation_id: activeId, request_id: requestId, decision });
   }, [activeId, send]);
 
+  const chooseMention = useCallback((node: AgentNode) => {
+    const state = getMentionState(input);
+    const mention = `@${node.name} `;
+    if (!state) {
+      setInput(current => `${current}${current.endsWith(" ") || !current ? "" : " "}${mention}`);
+    } else {
+      setInput(current => `${current.slice(0, state.start)}${mention}${current.slice(state.start + state.query.length + 1)}`);
+    }
+    setSelectedAgent(node);
+  }, [input]);
+
   const handleSend = useCallback(async () => {
     if (!input.trim()) return;
-    const text = input;
+    const selectedMentionAgent = selectedAgent && input.includes(`@${selectedAgent.name}`) ? selectedAgent : resolveMentionedAgent(input, agentNodes);
+    const text = stripAgentMention(input, selectedMentionAgent);
     setInput("");
+    setSelectedAgent(null);
 
     const targetValue = extractTarget(text);
     const restartRequested = isRestartRequest(text);
-    const activeConversation = conversations.find(c => c.id === activeId);
     const completedConversation = isConversationComplete(activeId, conversations, todos);
-    const startFresh = Boolean(activeId && (restartRequested || (completedConversation && targetValue)));
+    const platformMention = selectedMentionAgent?.type === "platform";
+    const startFresh = Boolean(activeId && (restartRequested || (completedConversation && targetValue && !platformMention)));
 
     let convId = startFresh ? null : activeId;
     if (!convId) {
@@ -311,22 +353,28 @@ export default function ConversationPage() {
       } catch { return; }
     }
 
-    setLiveMessages(prev => [...prev, makeMessage(convId, "user", "text", { text })]);
+    const userContent: Record<string, unknown> = { text };
+    if (selectedMentionAgent) {
+      userContent.agent_target = selectedMentionAgent.type === "platform" ? "platform" : "pentest";
+      userContent.agent_node_id = selectedMentionAgent.id;
+    }
+    setLiveMessages(prev => [...prev, makeMessage(convId, "user", "text", userContent)]);
+    const agentPayload = selectedMentionAgent ? { agent_target: selectedMentionAgent.type === "platform" ? "platform" : "pentest", agent_node_id: selectedMentionAgent.id } : {};
     const shouldContinueExisting = Boolean(!startFresh && activeId && !restartRequested && !completedConversation);
 
-    if (shouldContinueExisting && activeConversation?.status === "running") {
-      send({ type: "user_steer", conversation_id: convId, text });
+    if (!platformMention && shouldContinueExisting && activeConversation?.status === "running") {
+      send({ type: "user_steer", conversation_id: convId, text, ...agentPayload });
       return;
     }
 
     if (shouldContinueExisting && !targetValue) {
       setRunning(true);
-      send({ type: "user_message", conversation_id: convId, text, resume: true });
+      send({ type: "user_message", conversation_id: convId, text, resume: true, ...agentPayload });
       return;
     }
 
     if (!targetValue) {
-      send({ type: "user_message", conversation_id: convId, text });
+      send({ type: "user_message", conversation_id: convId, text, ...agentPayload });
       return;
     }
 
@@ -336,10 +384,32 @@ export default function ConversationPage() {
     setTodos(todosForPhase("precheck", "running"));
     const target = { type: targetValue.startsWith("http") ? "url" : "host", value: targetValue };
     const scope = { allow: [target.value], deny: [] };
-    send({ type: "user_message", conversation_id: convId, text, target, scope });
-  }, [input, activeId, conversations, todos, resetConversationState, fetchAll, send]);
+    send({ type: "user_message", conversation_id: convId, text, target, scope, ...agentPayload });
+  }, [input, selectedAgent, agentNodes, activeId, activeConversation, conversations, todos, resetConversationState, fetchAll, send]);
 
 
+function getMentionState(value: string): MentionState {
+  const match = value.match(/(?:^|\s)@([^\s@]*)$/);
+  if (!match || match.index === undefined) return null;
+  const atOffset = value.slice(match.index).indexOf("@");
+  return { start: match.index + atOffset, query: match[1] || "" };
+}
+
+function filterMentionOptions(nodes: AgentNode[], query: string): AgentNode[] {
+  const normalized = query.trim().toLowerCase();
+  const ordered = [...nodes].sort((a, b) => (a.type === "platform" ? -1 : b.type === "platform" ? 1 : a.name.localeCompare(b.name)));
+  if (!normalized) return ordered.slice(0, 8);
+  return ordered.filter(node => node.name.toLowerCase().includes(normalized) || String(node.type).toLowerCase().includes(normalized)).slice(0, 8);
+}
+
+function resolveMentionedAgent(value: string, nodes: AgentNode[]): AgentNode | null {
+  return nodes.find(node => value.includes(`@${node.name}`)) || null;
+}
+
+function stripAgentMention(value: string, node: AgentNode | null): string {
+  if (!node) return value;
+  return value.replace(`@${node.name}`, "").replace(/\s+/g, " ").trim();
+}
 function isRestartRequest(text: string): boolean {
   const normalized = text.trim().toLowerCase();
   const englishRestart = /\b(restart|start over|rerun|new task)\b/i.test(normalized);
@@ -414,7 +484,7 @@ function isConversationComplete(activeId: string | null, conversations: Conversa
               )}
               {messageQuery.isFetchingNextPage && <div className="py-2 text-center text-xs text-ink-muted">Loading older messages...</div>}
               {messageQuery.hasNextPage && !messageQuery.isFetchingNextPage && <button type="button" onClick={fetchOlderMessages} className="mx-auto block rounded-pill border border-hairline px-3 py-1.5 text-xs text-ink-secondary">Load older messages</button>}
-              {messages.map((msg) => <MessageRenderer key={msg.id} message={msg} onDecision={handleDecision} onOpenVulnerability={setSelectedVulnerability} onOpenAsset={setSelectedAsset} highlightedApprovalId={highlightedApprovalId} />)}
+              {messages.map((msg, index) => <MessageRenderer key={msg.id} message={msg} previousMessage={messages[index - 1]} agentNameById={agentNameById} fallbackPentestNodeId={activeConversation?.node_id || null} platformAgentNodeId={platformAgentNodeId} onDecision={handleDecision} onOpenVulnerability={setSelectedVulnerability} onOpenAsset={setSelectedAsset} highlightedApprovalId={highlightedApprovalId} />)}
             </div>
             <div className="border-t border-hairline-soft p-4">
               <div className="mb-3 flex gap-2">
@@ -422,9 +492,19 @@ function isConversationComplete(activeId: string | null, conversations: Conversa
                   <button key={t.label} onClick={() => setInput(t.text)} className="rounded-pill border border-hairline px-3 py-1.5 text-xs text-ink-secondary transition-colors hover:bg-surface-default hover:text-ink">{t.label}</button>
                 ))}
               </div>
-              <div className="flex min-w-0 gap-2">
+              <div className="relative flex min-w-0 gap-2">
+                {mentionState && mentionOptions.length > 0 && (
+                  <div className="absolute bottom-full left-0 z-20 mb-2 w-72 overflow-hidden rounded-md border border-hairline bg-canvas shadow-lg">
+                    {mentionOptions.map((node) => (
+                      <button key={node.id} type="button" onMouseDown={(event) => { event.preventDefault(); chooseMention(node); }} className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-surface-default">
+                        <span className="min-w-0 truncate">{node.name}</span>
+                        <span className="ml-3 shrink-0 text-xs text-ink-muted">{node.type === "platform" ? "平台" : node.status === "online" ? "在线" : "离线"}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void handleSend(); }}
-                  placeholder="描述你的测试需求。例如：对 http://host.docker.internal:8080/login.php 做低风险 recon"
+                  placeholder="输入 @ 选择 Agent，或直接描述测试需求"
                   className="min-w-0 flex-1 rounded-md border border-hairline bg-canvas px-3.5 py-2.5 text-sm placeholder:text-ink-muted focus:border-ink focus:outline-none" />
                 {running ? (
                   <button onClick={() => { send({ type: "user_interrupt", conversation_id: activeId, action: "cancel" }); setRunning(false); }} className="rounded-pill bg-severity-critical px-5 py-2.5 text-sm font-medium text-white">中断</button>

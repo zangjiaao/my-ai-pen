@@ -8,6 +8,10 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
 
 
+PLATFORM_AGENT_NODE_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+PLATFORM_AGENT_NODE_NAME = "平台Agent"
+
+
 class Node(Base):
     __tablename__ = "nodes"
 

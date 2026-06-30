@@ -9,6 +9,8 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 
 from app.services.conversation_state import ConversationStatusError, transition_conversation
+from app.services.completed_conversation_agent import answer_completed_conversation
+from app.models.node import PLATFORM_AGENT_NODE_ID
 
 router = APIRouter()
 
@@ -252,6 +254,36 @@ async def _incr_sessions(node_id: str, delta: int):
         print(f"[WS] incr sessions error: {e}")
 
 
+def _normalize_agent_identity(value, default: str | None = None) -> str | None:
+    raw = str(value or "").strip().lower().replace("@", "")
+    if raw in {"platform", "platform_agent", "平台", "平台agent", "平台 agent"}:
+        return "platform"
+    if raw in {"pentest", "pentest_agent", "security", "security_agent", "渗透", "渗透agent", "渗透 agent"}:
+        return "pentest"
+    return default
+
+
+def _agent_source(msg: dict, default: str = "pentest") -> str:
+    content = msg.get("content") if isinstance(msg.get("content"), dict) else {}
+    return _normalize_agent_identity(msg.get("agent_source") or content.get("agent_source"), default) or default
+
+
+def _agent_target(msg: dict) -> str | None:
+    content = msg.get("content") if isinstance(msg.get("content"), dict) else {}
+    return _normalize_agent_identity(msg.get("agent_target") or content.get("agent_target"))
+
+
+def _agent_node_id(msg: dict) -> str | None:
+    content = msg.get("content") if isinstance(msg.get("content"), dict) else {}
+    value = msg.get("agent_node_id") or content.get("agent_node_id")
+    if not value:
+        return None
+    try:
+        return str(uuid.UUID(str(value)))
+    except ValueError:
+        return None
+
+
 async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
     try:
         from app.db.base import async_session
@@ -263,6 +295,8 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
 
         msg_type = msg.get("type", "text")
         if role == "user":
+            target_agent = _agent_target(msg)
+            target_node_id = _agent_node_id(msg)
             if msg_type == "user_decision":
                 content = {
                     "request_id": msg.get("request_id"),
@@ -273,6 +307,10 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
             else:
                 content = {"text": msg.get("text", "")}
                 msg_type = "text"
+            if target_agent:
+                content["agent_target"] = target_agent
+            if target_node_id:
+                content["agent_node_id"] = target_node_id
         elif msg_type == "text":
             inner = msg.get("content", {})
             content = {"text": inner.get("text", str(msg)) if isinstance(inner, dict) else str(inner)}
@@ -313,7 +351,13 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
             msg_type = "status"
             content = {"text": f"任务失败: {msg.get('message', msg.get('error', ''))}"}
         else:
-            content = msg
+            content = dict(msg)
+
+        if role == "agent":
+            content["agent_source"] = _agent_source(msg)
+            agent_node_id = _agent_node_id(msg)
+            if agent_node_id:
+                content["agent_node_id"] = agent_node_id
 
         message_id = uuid.uuid4()
         async with async_session() as db:
@@ -850,6 +894,11 @@ async def _send_to_bound_node(conv_id: str, raw: str) -> bool:
     return False
 
 
+async def _persist_and_broadcast(conv_id: str, msg: dict, role: str = "agent"):
+    await _save_message(msg, role)
+    await _broadcast_to_conversation(conv_id, json.dumps(msg, ensure_ascii=False))
+
+
 async def _broadcast_to_conversation(conv_id: str, raw: str):
     if conv_id in conversation_subscribers:
         for sub in list(conversation_subscribers[conv_id]):
@@ -886,6 +935,10 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
             conv_id = msg.get("conversation_id")
 
             if client_type == "node":
+                if conv_id:
+                    msg["agent_source"] = "pentest"
+                    msg["agent_node_id"] = client_id
+                    raw = json.dumps(msg, ensure_ascii=False)
                 if msg.get("type") == "request_decision" and not msg.get("request_id"):
                     msg["request_id"] = str(uuid.uuid4())
                     raw = json.dumps(msg)
@@ -935,6 +988,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             print(f"[WS] update conversation status error: {e}")
 
                 if conv_id:
+                    raw = json.dumps(msg, ensure_ascii=False)
                     await _broadcast_to_conversation(conv_id, raw)
 
             elif client_type == "user":
@@ -948,14 +1002,28 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
 
                 if msg.get("type") == "user_message" and conv_id:
                     conversation_status = await _conversation_status(conv_id)
+                    requested_agent = _agent_target(msg)
+                    if requested_agent == "platform":
+                        answer = await answer_completed_conversation(conv_id, client_id, msg.get("text", ""), "platform")
+                        answer["agent_node_id"] = str(PLATFORM_AGENT_NODE_ID)
+                        if isinstance(answer.get("content"), dict):
+                            answer["content"]["agent_node_id"] = str(PLATFORM_AGENT_NODE_ID)
+                        await _save_message(answer, "agent")
+                        raw_answer = json.dumps(answer, ensure_ascii=False)
+                        await _broadcast_to_conversation(conv_id, raw_answer)
+                        continue
                     route = _user_message_route(msg, conversation_status)
                     resumed_from_context = False
                     if route["action"] == "completed":
-                        await ws.send_text(json.dumps({
-                            "type": "task_error",
-                            "conversation_id": conv_id,
-                            "message": "当前会话已完成；如需继续测试，请创建新会话或明确重新开始。",
-                        }, ensure_ascii=False))
+                        requested_agent = _agent_target(msg) or "platform"
+                        answer = await answer_completed_conversation(conv_id, client_id, msg.get("text", ""), requested_agent)
+                        if requested_agent == "platform":
+                            answer["agent_node_id"] = str(PLATFORM_AGENT_NODE_ID)
+                            if isinstance(answer.get("content"), dict):
+                                answer["content"]["agent_node_id"] = str(PLATFORM_AGENT_NODE_ID)
+                        await _save_message(answer, "agent")
+                        raw_answer = json.dumps(answer, ensure_ascii=False)
+                        await _broadcast_to_conversation(conv_id, raw_answer)
                         continue
                     if route["action"] == "steer_or_resume":
                         steer_msg = {**msg, "type": "user_steer"}
@@ -977,11 +1045,13 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         if resumed_msg:
                             msg = resumed_msg
                         else:
-                            await ws.send_text(json.dumps({
+                            await _persist_and_broadcast(conv_id, {
                                 "type": "task_error",
                                 "conversation_id": conv_id,
                                 "message": "当前会话缺少可恢复的目标，请提供测试目标 URL 或 IP，或明确重新开始。",
-                            }, ensure_ascii=False))
+                                "agent_source": "platform",
+                                "agent_node_id": str(PLATFORM_AGENT_NODE_ID),
+                            }, "agent")
                             continue
                     if node_connections:
                         task_msg = _task_assign_from_user_message(conv_id, msg, str(uuid.uuid4()))
@@ -991,19 +1061,35 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         if not resumed_from_context:
                             await _remember_conversation_task(conv_id, target=task_target, scope=task_scope, instruction=task_instruction)
                         global _round_robin_counter
+                        preferred_node_id = _agent_node_id(msg)
+                        if preferred_node_id and preferred_node_id not in node_connections:
+                            await _persist_and_broadcast(conv_id, {
+                                "type": "task_error",
+                                "conversation_id": conv_id,
+                                "message": "指定的渗透节点不在线，任务无法下发。",
+                                "agent_source": "platform",
+                                "agent_node_id": str(PLATFORM_AGENT_NODE_ID),
+                            }, "agent")
+                            continue
                         node_ids = sorted(node_connections.keys())
-                        idx = _round_robin_counter % len(node_ids)
-                        _round_robin_counter += 1
-                        node_id = node_ids[idx]
+                        if preferred_node_id:
+                            node_id = preferred_node_id
+                        else:
+                            idx = _round_robin_counter % len(node_ids)
+                            _round_robin_counter += 1
+                            node_id = node_ids[idx]
                         await _bind_conversation_to_node(conv_id, node_id)
                         await _incr_sessions(node_id, 1)
+                        task_msg["agent_node_id"] = node_id
                         await node_connections[node_id].send_text(json.dumps(task_msg, ensure_ascii=False))
                     else:
-                        await ws.send_text(json.dumps({
+                        await _persist_and_broadcast(conv_id, {
                             "type": "task_error",
                             "conversation_id": conv_id,
                             "message": "没有在线节点，任务无法下发",
-                        }, ensure_ascii=False))
+                            "agent_source": "platform",
+                            "agent_node_id": str(PLATFORM_AGENT_NODE_ID),
+                        }, "agent")
 
                 elif msg.get("type") == "user_decision" and conv_id:
                     request_id = msg.get("request_id")
