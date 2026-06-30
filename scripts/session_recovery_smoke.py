@@ -8,6 +8,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -67,27 +68,41 @@ async def _setup_db(db_path: Path):
 
     user = User(id=uuid.uuid4(), email="session-recovery@example.local", role="admin")
     conv = Conversation(id=uuid.uuid4(), user_id=user.id, status="completed")
-    messages = [
-        Message(id=uuid.uuid4(), conversation_id=conv.id, role="user", msg_type="text", content={"text": "test https://example.com"}),
-        Message(id=uuid.uuid4(), conversation_id=conv.id, role="agent", msg_type="status", content={"text": "Phase: scan (iter 1)", "phase": "scan"}),
-    ]
-    for index in range(1200):
-        messages.append(Message(
+    base_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    order_index = 0
+
+    def msg(*, role: str, msg_type: str, content: dict) -> Message:
+        nonlocal order_index
+        item = Message(
             id=uuid.uuid4(),
             conversation_id=conv.id,
+            role=role,
+            msg_type=msg_type,
+            content=content,
+            created_at=base_time + timedelta(seconds=order_index),
+        )
+        order_index += 1
+        return item
+
+    messages = [
+        msg(role="user", msg_type="text", content={"text": "test https://example.com"}),
+        msg(role="agent", msg_type="status", content={"text": "Phase: scan (iter 1)", "phase": "scan"}),
+    ]
+    for index in range(1200):
+        messages.append(msg(
             role="agent",
             msg_type="tool_call",
             content={"tool_name": "curl", "tool_run_id": f"tool-{index}", "status": "done", "stdout": f"line {index}"},
         ))
     messages.extend([
-        Message(id=uuid.uuid4(), conversation_id=conv.id, role="agent", msg_type="asset_discovered", content={
+        msg(role="agent", msg_type="asset_discovered", content={
             "type": "asset_discovered",
             "conversation_id": str(conv.id),
             "address": "https://example.com",
             "asset_type": "web",
             "open_ports": [443],
         }),
-        Message(id=uuid.uuid4(), conversation_id=conv.id, role="agent", msg_type="vuln_found", content={
+        msg(role="agent", msg_type="vuln_found", content={
             "type": "vuln_found",
             "conversation_id": str(conv.id),
             "title": "Late recovered finding",
@@ -96,7 +111,7 @@ async def _setup_db(db_path: Path):
             "location": "/late",
             "evidence_ids": ["ev-late"],
         }),
-        Message(id=uuid.uuid4(), conversation_id=conv.id, role="agent", msg_type="evidence_created", content={
+        msg(role="agent", msg_type="evidence_created", content={
             "type": "evidence_created",
             "conversation_id": str(conv.id),
             "evidence_id": "ev-late",
@@ -190,6 +205,14 @@ def main() -> None:
                 direct_state = client.portal.call(snapshot_direct)
                 assert direct_state["counts"] == state_data["counts"]
                 assert direct_state["findings"] == state_data["findings"]
+
+                delete_response = client.delete(f"/api/conversations/{conv.id}", headers=headers)
+                assert delete_response.status_code == 200, delete_response.text
+                listed = client.get("/api/conversations", headers=headers)
+                assert listed.status_code == 200, listed.text
+                assert all(item["id"] != str(conv.id) for item in listed.json()), listed.json()
+                deleted_state = client.get(f"/api/conversations/{conv.id}/state", headers=headers)
+                assert deleted_state.status_code == 404, deleted_state.text
                 print("session recovery smoke ok")
             finally:
                 db_base.async_session = original_session

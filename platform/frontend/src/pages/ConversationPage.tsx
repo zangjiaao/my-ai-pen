@@ -7,7 +7,7 @@ import VulnDetailDialog from "../components/VulnDetailDialog";
 import AssetDetailDialog from "../components/AssetDetailDialog";
 import { useConversationStore } from "../stores/conversationStore";
 import { useWebSocket } from "../hooks/useWebSocket";
-import { authFetch } from "../lib/api";
+import { ApiError, authFetch } from "../lib/api";
 import { normalizeExecutionStatus } from "../lib/status";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import type { Conversation, Message } from "../lib/types";
@@ -244,11 +244,19 @@ export default function ConversationPage() {
       const state = await authFetch<ConversationSnapshot>(`/api/conversations/${id}/state`);
       applyConversationState(state);
       setStateSnapshotLoaded(true);
-    } catch {
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) {
+        localStorage.removeItem(ACTIVE_CONVERSATION_KEY);
+        void queryClient.removeQueries({ queryKey: ["conversation-messages", id] });
+        setActiveId(null);
+        resetConversationState();
+        void fetchAll();
+        return;
+      }
       applyConversationState(fallbackState);
       setStateSnapshotLoaded(false);
     }
-  }, [applyConversationState, conversations, queryClient, resetConversationState, send]);
+  }, [applyConversationState, conversations, fetchAll, queryClient, resetConversationState, send]);
 
   useEffect(() => {
     if (!activeId || stateSnapshotLoaded || messageQuery.isLoading || messages.length === 0) return;

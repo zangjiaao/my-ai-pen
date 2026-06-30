@@ -2,14 +2,18 @@
 import json
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 from app.db.base import get_db
 from app.middleware.auth import get_current_user
 from app.models.audit import AuditLog
+from app.models.asset import Asset
 from app.models.conversation import Conversation
+from app.models.evidence import Evidence
+from app.models.message import Message
 from app.models.node import Node
+from app.models.vulnerability import Vulnerability
 from app.services.conversation_state import ConversationStatusError, transition_conversation
 from app.services.conversation_snapshot import build_conversation_snapshot, conversation_summary, get_message_page
 
@@ -63,12 +67,24 @@ async def get_conversation_state(conv_id: str, current_user: dict = Depends(get_
 async def delete_conversation(conv_id: str, current_user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     c = await _get_conv(conv_id, current_user, db)
     user_id = uuid.UUID(current_user["user_id"])
-    if c.node_id and c.status == "running":
-        r = await db.execute(select(Node).where(Node.id == c.node_id))
+    conversation_id = c.id
+    node_id = c.node_id
+    status = c.status
+    title = c.title
+    if node_id and status == "running":
+        r = await db.execute(select(Node).where(Node.id == node_id))
         n = r.scalar_one_or_none()
         if n:
             n.current_sessions = max(0, (n.current_sessions or 0) - 1)
-    await _audit(db, user_id, "conversation.delete", "conversation", c.id, c.id, {"title": c.title, "status": c.status})
+    await db.execute(delete(Message).where(Message.conversation_id == conversation_id))
+    await db.execute(delete(Evidence).where(Evidence.conversation_id == conversation_id))
+    await db.execute(delete(Vulnerability).where(Vulnerability.conversation_id == conversation_id))
+    await db.execute(delete(Asset).where(Asset.conversation_id == conversation_id))
+    await _audit(db, user_id, "conversation.delete", "conversation", conversation_id, conversation_id, {
+        "title": title,
+        "status": status,
+        "node_id": str(node_id) if node_id else None,
+    })
     await db.delete(c)
     await db.commit()
     return {"ok": True}

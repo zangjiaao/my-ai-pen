@@ -24,12 +24,13 @@ const NAV_ITEMS = [
 
 export default function Sidebar({ activeId, onSelect }: Props) {
   const { user, logout } = useAuthStore();
-  const { conversations, fetchAll } = useConversationStore();
+  const { conversations, fetchAll, removeLocal } = useConversationStore();
   const navigate = useNavigate();
   const location = useLocation();
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
   const [renameTarget, setRenameTarget] = useState<{ id: string; title: string } | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
@@ -52,6 +53,25 @@ export default function Sidebar({ activeId, onSelect }: Props) {
     });
     setRenameTarget(null);
     await fetchAll();
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    const targetId = deleteTarget.id;
+    setDeleteError(null);
+    try {
+      await authFetch(`/api/conversations/${targetId}`, { method: "DELETE" });
+      removeLocal(targetId);
+      if (activeId === targetId) {
+        localStorage.removeItem(ACTIVE_CONVERSATION_KEY);
+        onSelect("");
+        navigate("/");
+      }
+      setDeleteTarget(null);
+      await fetchAll();
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : "??????");
+    }
   };
 
   return (
@@ -101,7 +121,7 @@ export default function Sidebar({ activeId, onSelect }: Props) {
                     className="rounded-md p-1.5 text-ink-muted opacity-0 transition-opacity hover:bg-surface-default hover:text-ink group-hover:opacity-100" title="重命名会话">
                     <Pencil size={14} />
                   </button>
-                  <button onClick={(e) => { e.stopPropagation(); setDeleteTarget({ id: c.id, title: c.title }); }}
+                  <button onClick={(e) => { e.stopPropagation(); setDeleteError(null); setDeleteTarget({ id: c.id, title: c.title }); }}
                     className="mr-1 rounded-md p-1.5 text-ink-muted opacity-0 transition-opacity hover:bg-surface-default hover:text-severity-critical group-hover:opacity-100" title="删除会话">
                     <Trash2 size={14} />
                   </button>
@@ -131,8 +151,9 @@ export default function Sidebar({ activeId, onSelect }: Props) {
         open={!!deleteTarget}
         title="删除会话"
         description={`确定删除会话 "${deleteTarget?.title}"? 此操作不可撤销。`}
-        onConfirm={() => { authFetch(`/api/conversations/${deleteTarget!.id}`, { method: "DELETE" }).then(fetchAll); setDeleteTarget(null); }}
-        onCancel={() => setDeleteTarget(null)}
+        onConfirm={() => { void confirmDelete(); }}
+        onCancel={() => { setDeleteTarget(null); setDeleteError(null); }}
+        error={deleteError}
       />
     </aside>
   );

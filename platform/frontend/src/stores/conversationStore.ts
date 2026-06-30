@@ -6,6 +6,7 @@ interface ConversationState {
   conversations: Conversation[];
   loading: boolean;
   fetchAll: () => Promise<void>;
+  removeLocal: (id: string) => void;
 }
 
 export const useConversationStore = create<ConversationState>((set) => ({
@@ -19,5 +20,8 @@ export const useConversationStore = create<ConversationState>((set) => ({
     } catch {
       set({ loading: false });
     }
+  },
+  removeLocal: (id: string) => {
+    set((state) => ({ conversations: state.conversations.filter((conversation) => conversation.id !== id) }));
   },
 }));
