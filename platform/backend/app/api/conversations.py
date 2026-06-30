@@ -99,22 +99,26 @@ async def get_conversation_state(conv_id: str, current_user: dict = Depends(get_
         seen_pending.add(str(request_id))
         pending.append({**m.content, "message_id": str(m.id)})
 
-    agent_state = _agent_state_from_messages(messages, evidence, c.status)
-    todos = _todos_for_phase(agent_state.get("phase"), c.status)
-    progress = _progress_for_phase(agent_state.get("phase"), c.status)
+    checkpoint = ((c.context or {}).get("checkpoint") if isinstance(c.context, dict) else {}) or {}
+    agent_state = _agent_state_from_checkpoint(checkpoint, c.status) if checkpoint else _agent_state_from_messages(messages, evidence, c.status)
+    todos = _todos_for_checkpoint(checkpoint, c.status) if checkpoint else _todos_for_phase(agent_state.get("phase"), c.status)
+    progress = _progress_for_checkpoint(checkpoint, c.status) if checkpoint else _progress_for_phase(agent_state.get("phase"), c.status)
+    findings = _merge_by_key([_vuln_summary(v) for v in vulns], _checkpoint_findings(checkpoint), "id")
+    asset_items = _merge_by_key([_asset_summary(a) for a in assets], _checkpoint_assets(checkpoint), "address")
 
     return {
         "conversation": _out(c).model_dump(),
         "agent_state": agent_state,
         "progress": progress,
         "todos": todos,
-        "findings": [_vuln_summary(v) for v in vulns],
-        "assets": [_asset_summary(a) for a in assets],
+        "findings": findings,
+        "assets": asset_items,
+        "checkpoint": checkpoint or {},
         "pending_approvals": pending,
         "evidence": [_evidence_summary(e) for e in evidence],
         "counts": {
-            "assets": len(assets),
-            "findings": len(vulns),
+            "assets": len(asset_items),
+            "findings": len(findings),
             "pending": len(pending),
             "evidence": len(evidence),
         },
@@ -213,6 +217,52 @@ def _out(c: Conversation) -> ConversationOut:
                            last_active_at=c.last_active_at.isoformat() if c.last_active_at else None)
 
 
+def _checkpoint_completed(checkpoint: dict) -> set[str]:
+    if not isinstance(checkpoint, dict):
+        return set()
+    state = checkpoint.get("state") if isinstance(checkpoint.get("state"), dict) else {}
+    completed = state.get("phases_completed") or checkpoint.get("phases_completed") or []
+    return {str(item) for item in completed if str(item) in PHASES}
+
+
+def _checkpoint_phase(checkpoint: dict, status: str) -> str | None:
+    if not isinstance(checkpoint, dict):
+        return "report" if status == "completed" else None
+    state = checkpoint.get("state") if isinstance(checkpoint.get("state"), dict) else {}
+    phase = state.get("phase") or checkpoint.get("phase")
+    completed = _checkpoint_completed(checkpoint)
+    if status == "completed":
+        return "report"
+    if phase in PHASES and phase in completed and status == "running":
+        next_index = PHASES.index(phase) + 1
+        while next_index < len(PHASES) and PHASES[next_index] in completed:
+            next_index += 1
+        return PHASES[next_index] if next_index < len(PHASES) else phase
+    return phase if phase in PHASES else None
+
+
+def _agent_state_from_checkpoint(checkpoint: dict, status: str = "running") -> dict:
+    if not isinstance(checkpoint, dict):
+        checkpoint = {}
+    state = checkpoint.get("state") if isinstance(checkpoint.get("state"), dict) else {}
+    phase = _checkpoint_phase(checkpoint, status)
+    recent_tools = state.get("recent_tool_runs") if isinstance(state.get("recent_tool_runs"), list) else []
+    active_tool = None
+    if recent_tools:
+        last_tool = recent_tools[-1]
+        if isinstance(last_tool, dict):
+            active_tool = last_tool.get("tool_name")
+    return {
+        "phase": phase,
+        "iteration": state.get("iteration", checkpoint.get("iteration")),
+        "phaseIteration": state.get("phase_iteration", checkpoint.get("phase_iteration")),
+        "activeTool": active_tool,
+        "intakeResult": checkpoint.get("intake_result"),
+        "intakeStatus": checkpoint.get("intake_status"),
+        "checkpointReason": checkpoint.get("reason"),
+    }
+
+
 def _agent_state_from_messages(messages: list[Message], evidence: list[Evidence], status: str) -> dict:
     phase = None
     iteration = None
@@ -269,6 +319,91 @@ def _todos_for_phase(phase: str | None, status: str) -> list[dict]:
             item_status = "pending"
         todos.append({"id": key, "title": PHASE_LABELS[key], "status": item_status})
     return todos
+
+
+def _progress_for_checkpoint(checkpoint: dict, status: str) -> dict:
+    total = len(PHASES)
+    phase = _checkpoint_phase(checkpoint, status)
+    completed = _checkpoint_completed(checkpoint)
+    if status == "completed":
+        current = total
+    elif completed:
+        current = min(total, max(PHASES.index(item) + 1 for item in completed))
+        if phase in PHASES and phase not in completed:
+            current = max(current, PHASES.index(phase) + 1)
+    elif phase in PHASES:
+        current = PHASES.index(phase) + 1
+    elif status == "running":
+        current = 1
+    else:
+        current = 0
+    current = max(0, min(total, current))
+    return {"current": current, "total": total, "percent": round((current / total) * 100) if total else 0}
+
+
+def _todos_for_checkpoint(checkpoint: dict, status: str) -> list[dict]:
+    phase = _checkpoint_phase(checkpoint, status)
+    completed = _checkpoint_completed(checkpoint)
+    current_index = PHASES.index(phase) if phase in PHASES else (-1 if status != "running" else 0)
+    todos = []
+    for index, key in enumerate(PHASES):
+        if status == "completed" or key in completed or index < current_index:
+            item_status = "done"
+        elif index == current_index:
+            item_status = "running"
+        else:
+            item_status = "pending"
+        todos.append({"id": key, "title": PHASE_LABELS[key], "status": item_status})
+    return todos
+
+
+def _checkpoint_findings(checkpoint: dict) -> list[dict]:
+    if not isinstance(checkpoint, dict):
+        return []
+    items = []
+    for source in ("candidate_findings", "confirmed_findings"):
+        for item in checkpoint.get(source) or []:
+            if not isinstance(item, dict):
+                continue
+            items.append({
+                "id": str(item.get("id") or item.get("finding_id") or item.get("title") or ""),
+                "title": item.get("title") or "Untitled finding",
+                "severity": item.get("severity") or "medium",
+                "location": item.get("location") or item.get("affected_asset") or "",
+                "confidence": item.get("confidence"),
+                "status": item.get("status") or ("confirmed" if source == "confirmed_findings" else "candidate"),
+                "evidence_ids": item.get("evidence_ids") or [],
+            })
+    return items
+
+
+def _checkpoint_assets(checkpoint: dict) -> list[dict]:
+    if not isinstance(checkpoint, dict):
+        return []
+    assets = []
+    for item in checkpoint.get("discovered_assets") or []:
+        if not isinstance(item, dict):
+            continue
+        address = item.get("address") or item.get("hostname") or "unknown"
+        assets.append({
+            "id": str(address),
+            "name": item.get("hostname") or address,
+            "address": address,
+            "type": item.get("asset_type") or "host",
+            "properties": {"open_ports": item.get("open_ports", []), "services": item.get("services", [])},
+        })
+    return assets
+
+
+def _merge_by_key(primary: list[dict], secondary: list[dict], key: str) -> list[dict]:
+    seen = {str(item.get(key) or item.get("id") or item.get("title")) for item in primary}
+    merged = list(primary)
+    for item in secondary:
+        marker = str(item.get(key) or item.get("id") or item.get("title"))
+        if marker and marker not in seen:
+            seen.add(marker)
+            merged.append(item)
+    return merged
 
 
 def _asset_summary(a: Asset) -> dict:

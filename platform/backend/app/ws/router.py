@@ -1,5 +1,6 @@
 import json
 import hashlib
+import re
 import uuid
 from datetime import datetime, timezone
 
@@ -274,8 +275,11 @@ async def _persist_asset(msg: dict, node_id: str | None):
                 )
                 db.add(asset)
             else:
-                asset.conversation_id = asset.conversation_id or uuid.UUID(conv_id)
-                asset.node_id = asset.node_id or node_uuid
+                asset.conversation_id = uuid.UUID(conv_id)
+                asset.node_id = node_uuid or asset.node_id
+                asset.name = msg.get("hostname") or asset.name
+                asset.type = msg.get("asset_type") or asset.type
+                asset.source = "agent_discovered"
                 asset.properties = {
                     **(asset.properties or {}),
                     "open_ports": msg.get("open_ports", (asset.properties or {}).get("open_ports", [])),
@@ -363,6 +367,22 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
         from app.models.vulnerability import Vulnerability
 
         affected_asset = msg.get("affected_asset") or msg.get("target") or "unknown"
+        status_map = {
+            "candidate": "pending",
+            "pending": "pending",
+            "confirmed": "confirmed",
+            "rejected": "false_positive",
+            "false_positive": "false_positive",
+            "reported": "reported",
+            "fixed": "fixed",
+            "accepted": "accepted",
+        }
+        incoming_status = status_map.get(str(msg.get("status") or "").lower(), "pending")
+        title = msg.get("title", "?????")
+        location = msg.get("location") or msg.get("poc") or ""
+        poc_value = msg.get("poc") or msg.get("location") or ""
+        evidence_ids = [str(x) for x in msg.get("evidence_ids", [])]
+
         async with async_session() as db:
             asset_id = None
             if affected_asset != "unknown":
@@ -383,31 +403,55 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                     await db.flush()
                 asset_id = asset.id
 
-            vuln = Vulnerability(
-                id=uuid.uuid4(),
-                user_id=user_id,
-                node_id=node_uuid,
-                title=msg.get("title", "未命名漏洞"),
-                severity=msg.get("severity", "medium"),
-                asset_id=asset_id,
-                conversation_id=uuid.UUID(conv_id),
-                description=msg.get("description") or msg.get("evidence_summary") or "",
-                poc=msg.get("poc") or msg.get("location") or "",
-                remediation=msg.get("remediation") or "",
-                confidence=str(msg.get("confidence", "medium")),
-                status="pending",
-                evidence_ids=[str(x) for x in msg.get("evidence_ids", [])],
+            query = select(Vulnerability).where(
+                Vulnerability.user_id == user_id,
+                Vulnerability.conversation_id == uuid.UUID(conv_id),
+                Vulnerability.title == title,
             )
-            db.add(vuln)
+            if asset_id:
+                query = query.where(Vulnerability.asset_id == asset_id)
+            else:
+                query = query.where(Vulnerability.asset_id.is_(None))
+            existing = await db.execute(query)
+            vuln = existing.scalar_one_or_none()
+            created = vuln is None
+
+            if not vuln:
+                vuln = Vulnerability(
+                    id=uuid.uuid4(),
+                    user_id=user_id,
+                    node_id=node_uuid,
+                    title=title,
+                    severity=msg.get("severity", "medium"),
+                    asset_id=asset_id,
+                    conversation_id=uuid.UUID(conv_id),
+                    description=msg.get("description") or msg.get("evidence_summary") or "",
+                    poc=poc_value,
+                    remediation=msg.get("remediation") or "",
+                    confidence=str(msg.get("confidence", "medium")),
+                    status=incoming_status,
+                    evidence_ids=evidence_ids,
+                )
+                db.add(vuln)
+            else:
+                vuln.node_id = vuln.node_id or node_uuid
+                vuln.severity = msg.get("severity") or vuln.severity
+                vuln.description = msg.get("description") or msg.get("evidence_summary") or vuln.description
+                vuln.poc = poc_value or vuln.poc
+                vuln.remediation = msg.get("remediation") or vuln.remediation
+                vuln.confidence = str(msg.get("confidence", vuln.confidence))
+                if incoming_status != "pending" or vuln.status == "pending":
+                    vuln.status = incoming_status
+                vuln.evidence_ids = sorted(set(vuln.evidence_ids or []) | set(evidence_ids))
             await db.commit()
             await _audit(
                 actor_type="agent",
                 actor_id=node_uuid or uuid.UUID(int=0),
-                action="finding.create",
+                action="finding.create" if created else "finding.update",
                 resource_type="vulnerability",
                 resource_id=vuln.id,
                 conversation_id=uuid.UUID(conv_id),
-                detail={"title": vuln.title, "severity": vuln.severity},
+                detail={"title": vuln.title, "severity": vuln.severity, "status": vuln.status},
             )
     except Exception as e:
         print(f"[WS] persist vuln error: {e}")
@@ -426,6 +470,132 @@ async def _find_node_by_token(token: str) -> str | None:
     except Exception:
         return None
 
+
+
+
+async def _conversation_status(conv_id: str) -> str | None:
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+
+        async with async_session() as db:
+            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id)))
+            c = r.scalar_one_or_none()
+            return c.status if c else None
+    except Exception:
+        return None
+
+
+async def _conversation_resume_context(conv_id: str) -> dict:
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+
+        async with async_session() as db:
+            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id)))
+            c = r.scalar_one_or_none()
+            if not c or not isinstance(c.context, dict):
+                return {}
+            context = c.context or {}
+            return {"task": context.get("task") or {}, "checkpoint": context.get("checkpoint") or {}}
+    except Exception:
+        return {}
+
+
+
+async def _remember_conversation_task(conv_id: str, *, target: dict, scope: dict, instruction: str):
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+
+        async with async_session() as db:
+            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id)))
+            c = r.scalar_one_or_none()
+            if not c:
+                return
+            context = dict(c.context or {})
+            context["task"] = {"target": target or {}, "scope": scope or {}, "instruction": instruction or ""}
+            c.context = context
+            await db.commit()
+    except Exception as e:
+        print(f"[WS] remember conversation task error: {e}")
+
+
+async def _remember_conversation_checkpoint(conv_id: str, checkpoint: dict):
+    if not conv_id or not isinstance(checkpoint, dict):
+        return
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+
+        async with async_session() as db:
+            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id)))
+            c = r.scalar_one_or_none()
+            if not c:
+                return
+            context = dict(c.context or {})
+            context["checkpoint"] = checkpoint
+            task = context.get("task") or {}
+            if checkpoint.get("target") and not task.get("target"):
+                task["target"] = checkpoint.get("target") or {}
+            if checkpoint.get("scope") and not task.get("scope"):
+                task["scope"] = checkpoint.get("scope") or {}
+            if task:
+                context["task"] = task
+            c.context = context
+            await db.commit()
+    except Exception as e:
+        print(f"[WS] remember conversation checkpoint error: {e}")
+
+def _message_target_value(msg: dict) -> str:
+    target = msg.get("target") or {}
+    if isinstance(target, dict) and target.get("value"):
+        return str(target.get("value") or "").strip()
+    text = str(msg.get("text") or msg.get("initial_instruction") or "")
+    match = re.search(r"https?://\S+|\b(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?\b", text)
+    return match.group(0) if match else ""
+
+
+def _user_message_route(msg: dict, conversation_status: str | None) -> dict:
+    target_value = _message_target_value(msg)
+    if conversation_status == "completed":
+        return {"action": "completed", "target_value": target_value}
+    if not target_value and conversation_status == "running":
+        return {"action": "steer_or_resume", "target_value": target_value}
+    if not target_value:
+        return {"action": "resume", "target_value": target_value}
+    return {"action": "assign", "target_value": target_value}
+
+
+def _resume_message_from_context(msg: dict, resume_context: dict) -> tuple[dict | None, bool]:
+    task_context = resume_context.get("task") or {}
+    if not task_context.get("target"):
+        return None, False
+
+    base_instruction = str(task_context.get("instruction") or "")
+    continue_instruction = str(msg.get("text") or "")
+    combined_instruction = f"{base_instruction}\n\n用户继续指令: {continue_instruction}".strip()
+    return {
+        **msg,
+        "target": task_context.get("target") or {},
+        "scope": task_context.get("scope") or {},
+        "checkpoint": resume_context.get("checkpoint") or {},
+        "text": combined_instruction,
+    }, True
+
+
+def _task_assign_from_user_message(conv_id: str, msg: dict, task_id: str) -> dict:
+    task_target = msg.get("target") or {}
+    task_scope = msg.get("scope") or {"allow": [task_target.get("value")] if task_target else []}
+    return {
+        "type": "task_assign",
+        "conversation_id": conv_id,
+        "task_id": task_id,
+        "target": task_target,
+        "scope": task_scope,
+        "initial_instruction": msg.get("text", ""),
+        "checkpoint": msg.get("checkpoint") or {},
+    }
 
 async def _send_to_bound_node(conv_id: str, raw: str) -> bool:
     node_id = conversation_node.get(conv_id)
@@ -477,7 +647,10 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                 if msg.get("type") == "request_decision" and not msg.get("request_id"):
                     msg["request_id"] = str(uuid.uuid4())
                     raw = json.dumps(msg)
-                await _save_message(msg, "agent")
+                if msg.get("type") == "checkpoint_update":
+                    await _remember_conversation_checkpoint(conv_id, msg.get("checkpoint") or {})
+                else:
+                    await _save_message(msg, "agent")
                 if msg.get("type") == "asset_discovered":
                     await _persist_asset(msg, client_id)
                 elif msg.get("type") == "vuln_found":
@@ -524,15 +697,49 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     await _save_message(msg, "user")
 
                 if msg.get("type") == "user_message" and conv_id:
-                    if node_connections:
-                        task_msg = {
-                            "type": "task_assign",
+                    conversation_status = await _conversation_status(conv_id)
+                    route = _user_message_route(msg, conversation_status)
+                    resumed_from_context = False
+                    if route["action"] == "completed":
+                        await ws.send_text(json.dumps({
+                            "type": "task_error",
                             "conversation_id": conv_id,
-                            "task_id": str(uuid.uuid4()),
-                            "target": msg.get("target") or {},
-                            "scope": msg.get("scope") or {"allow": [msg.get("target", {}).get("value")] if msg.get("target") else []},
-                            "initial_instruction": msg.get("text", ""),
-                        }
+                            "message": "当前会话已完成；如需继续测试，请创建新会话或明确重新开始。",
+                        }, ensure_ascii=False))
+                        continue
+                    if route["action"] == "steer_or_resume":
+                        steer_msg = {**msg, "type": "user_steer"}
+                        sent = await _send_to_bound_node(conv_id, json.dumps(steer_msg, ensure_ascii=False))
+                        if sent:
+                            await _audit(
+                                actor_type="user",
+                                actor_id=uuid.UUID(client_id),
+                                action="user_steer",
+                                resource_type="conversation",
+                                resource_id=uuid.UUID(conv_id),
+                                conversation_id=uuid.UUID(conv_id),
+                                detail={"sent": sent, "source": "targetless_user_message"},
+                            )
+                            continue
+                    if route["action"] in {"resume", "steer_or_resume"}:
+                        resume_context = await _conversation_resume_context(conv_id)
+                        resumed_msg, resumed_from_context = _resume_message_from_context(msg, resume_context)
+                        if resumed_msg:
+                            msg = resumed_msg
+                        else:
+                            await ws.send_text(json.dumps({
+                                "type": "task_error",
+                                "conversation_id": conv_id,
+                                "message": "当前会话缺少可恢复的目标，请提供测试目标 URL 或 IP，或明确重新开始。",
+                            }, ensure_ascii=False))
+                            continue
+                    if node_connections:
+                        task_msg = _task_assign_from_user_message(conv_id, msg, str(uuid.uuid4()))
+                        task_target = task_msg["target"]
+                        task_scope = task_msg["scope"]
+                        task_instruction = task_msg["initial_instruction"]
+                        if not resumed_from_context:
+                            await _remember_conversation_task(conv_id, target=task_target, scope=task_scope, instruction=task_instruction)
                         global _round_robin_counter
                         node_ids = sorted(node_connections.keys())
                         idx = _round_robin_counter % len(node_ids)
@@ -540,13 +747,13 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         node_id = node_ids[idx]
                         await _bind_conversation_to_node(conv_id, node_id)
                         await _incr_sessions(node_id, 1)
-                        await node_connections[node_id].send_text(json.dumps(task_msg))
+                        await node_connections[node_id].send_text(json.dumps(task_msg, ensure_ascii=False))
                     else:
                         await ws.send_text(json.dumps({
                             "type": "task_error",
                             "conversation_id": conv_id,
                             "message": "没有在线节点，任务无法下发",
-                        }))
+                        }, ensure_ascii=False))
 
                 elif msg.get("type") == "user_decision" and conv_id:
                     request_id = msg.get("request_id")

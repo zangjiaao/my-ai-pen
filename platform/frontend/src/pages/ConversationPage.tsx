@@ -115,6 +115,10 @@ export default function ConversationPage() {
       setMessages(prev => [...prev, makeMessage(messageConversationId(msg, activeId), "agent", "confirm_card", m)]);
       void refreshConversationState(messageConversationId(m, activeId));
     },
+    checkpoint_update: (msg) => {
+      if (!isActiveMessage(msg, activeId)) return;
+      void refreshConversationState(messageConversationId(msg, activeId));
+    },
     status_update: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
@@ -223,7 +227,13 @@ export default function ConversationPage() {
     const text = input;
     setInput("");
 
-    let convId = activeId;
+    const targetValue = extractTarget(text);
+    const restartRequested = isRestartRequest(text);
+    const activeConversation = conversations.find(c => c.id === activeId);
+    const completedConversation = isConversationComplete(activeId, conversations, todos);
+    const startFresh = Boolean(activeId && (restartRequested || (completedConversation && targetValue)));
+
+    let convId = startFresh ? null : activeId;
     if (!convId) {
       try {
         const data = await authFetch<Conversation>("/api/conversations", { method: "POST", headers: { "Content-Type": "application/json" } });
@@ -231,21 +241,60 @@ export default function ConversationPage() {
         setActiveId(convId);
         localStorage.setItem(ACTIVE_CONVERSATION_KEY, convId);
         send({ type: "subscribe", conversation_id: convId });
+        if (startFresh) resetConversationState();
         void fetchAll();
       } catch { return; }
+    }
+
+    setMessages(prev => [...prev, makeMessage(convId, "user", "text", { text })]);
+    const shouldContinueExisting = Boolean(!startFresh && activeId && !restartRequested && !completedConversation);
+
+    if (shouldContinueExisting && activeConversation?.status === "running") {
+      send({ type: "user_steer", conversation_id: convId, text });
+      return;
+    }
+
+    if (shouldContinueExisting && !targetValue) {
+      setRunning(true);
+      send({ type: "user_message", conversation_id: convId, text, resume: true });
+      return;
+    }
+
+    if (!targetValue) {
+      send({ type: "user_message", conversation_id: convId, text });
+      return;
     }
 
     setRunning(true);
     setAgentState({ phase: "precheck" });
     setProgress(progressForPhase("precheck", "running"));
     setTodos(todosForPhase("precheck", "running"));
-    setMessages(prev => [...prev, makeMessage(convId, "user", "text", { text })]);
-    const targetValue = extractTarget(text);
-    const target = targetValue ? { type: targetValue.startsWith("http") ? "url" : "host", value: targetValue } : null;
-    const scope = target ? { allow: [target.value], deny: [] } : { allow: [], deny: [] };
+    const target = { type: targetValue.startsWith("http") ? "url" : "host", value: targetValue };
+    const scope = { allow: [target.value], deny: [] };
     send({ type: "user_message", conversation_id: convId, text, target, scope });
-  }, [input, activeId, fetchAll, send]);
+  }, [input, activeId, conversations, todos, resetConversationState, fetchAll, send]);
 
+
+function isRestartRequest(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  const englishRestart = /\b(restart|start over|rerun|new task)\b/i.test(normalized);
+  const chineseRestartTerms = [
+    "\u91cd\u65b0\u5f00\u59cb",
+    "\u91cd\u5934\u5f00\u59cb",
+    "\u91cd\u65b0\u6d4b\u8bd5",
+    "\u91cd\u8dd1",
+    "\u65b0\u4efb\u52a1",
+    "\u6362\u76ee\u6807",
+  ];
+  return englishRestart || chineseRestartTerms.some(term => normalized.includes(term));
+}
+
+function isConversationComplete(activeId: string | null, conversations: Conversation[], todos: Todo[]): boolean {
+  const conversation = conversations.find(c => c.id === activeId);
+  if (conversation?.status === "completed") return true;
+  if (todos.length > 0 && todos.every(item => item.status === "done")) return true;
+  return false;
+}
   function extractTarget(t: string): string | null {
     const url = t.match(/https?:\/\/\S+/);
     if (url) return url[0];
