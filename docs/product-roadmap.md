@@ -61,7 +61,7 @@
   - [x] 工具调用卡片有基础流式输出展示。
   - [x] 漏洞发现卡片有基础展示。
   - [x] 确认卡片和授权选项已接入 `request_decision` / `user_decision` 闭环。
-  - [ ] 确认卡片超时倒计时未实现。
+  - [x] 确认卡片超时倒计时已实现，并与待处理列表保持一致。
   - [ ] 附件上传未实现。
   - [x] 快捷模板按钮已实现。
   - [x] 会话切换时会加载该会话消息。
@@ -76,19 +76,25 @@
   - [x] 待处理授权列表已接入 `request_decision`，可授权或取消。
   - [ ] 文件 Tab、只读文件查看未实现。
 
-- [ ] **资产管理页**
-  - 部分完成：列表、类型/搜索筛选、详情侧栏、手动添加已实现。
-  - [ ] 分页 UI 未实现。
-  - [ ] 资产详情中的关联漏洞、历史会话、操作日志未实现。
-  - [x] Agent 实时发现资产可通过 WebSocket 写入 Asset 表。
-  - [x] Asset 已补 `user_id` 并按当前用户过滤。
+- [ ] **Asset Management Page**
+  - Partially complete: list, type/search filters, detail sidebar, manual create are implemented.
+  - [x] Agent-discovered assets can be persisted through WebSocket and linked to user/conversation/node.
+  - [x] Agent-discovered ports and services are stored in Asset.properties and visible in asset details.
+  - [x] Asset has user isolation and current-user filtering.
+  - [x] Asset detail shows properties and related vulnerability summaries.
+  - [ ] Pagination UI is not implemented.
+  - [ ] Asset detail still needs session history and audit history.
+  - [x] Asset/port cards in conversation and right panel are wired to the shared asset detail dialog.
 
-- [ ] **漏洞管理页**
-  - 部分完成：漏洞列表、等级/状态筛选、详情侧栏、状态 PATCH 已实现。
-  - [ ] 分页 UI 未实现。
-  - [ ] 详情中的复现步骤、影响范围、状态时间线未完整实现。
-  - [ ] 「复测」按钮是空操作，后端没有 `/vulnerabilities/{id}/retest`。
-  - [x] Vulnerability 已补 `user_id` 并按当前用户过滤。
+- [ ] **Vulnerability Management Page**
+  - Partially complete: list, severity/status filters, detail sidebar, and status PATCH are implemented.
+  - [x] Vulnerability has user isolation and current-user filtering.
+  - [x] Vulnerability detail returns and displays linked asset, conversation/node, evidence_ids, and evidence summaries.
+  - [x] Vulnerability status PATCH has basic lifecycle transition validation.
+  - [ ] Pagination UI is not implemented.
+  - [ ] Detail still needs complete reproduction steps, impact scope, and status timeline.
+  - [x] Vulnerability cards in conversation and right panel are wired to the shared vulnerability detail dialog.
+  - [x] Retest button is wired to `/vulnerabilities/{id}/retest`; current implementation creates/starts a focused retest conversation, while a dedicated RetestResult model is still not implemented.
 
 - [ ] **节点管理页**
   - 部分完成：节点列表、节点注册、token 生成、token 重置、删除已实现。
@@ -346,14 +352,18 @@
 - [x] 修复会话状态机与前端类型不一致问题。
 - [x] 完成资产/漏洞的用户隔离字段与查询过滤。
 
-### P1：补齐安全与可观测基础
+### P1: security, evidence chain, and result visibility
 
-- [ ] 扩展审计日志覆盖登录、会话 PATCH/删除、资产/漏洞 REST 操作，并补权限策略。
-- [ ] 证据存储接入 Agent Loop：工具输出、hash、summary 已接入并有 smoke 覆盖；HTTP 请求/响应与 Finding 引用强校验仍待补。
-- [ ] Scope Gate 和风险等级 Gate 接入 execute/http/browser/workflow。
-- [ ] 前端确认卡和待处理列表已接入；Sonner 通知、倒计时和定位仍待补齐。
-- [ ] 对话消息支持 Markdown 渲染。
-- [ ] 漏洞复测 API 和前端按钮接通。
+- [x] **Unified vulnerability detail entry**: vulnerability cards in conversation, vulnerability cards in the right panel, and rows in the vulnerability management page open the same detail dialog. The dialog shows title, severity, status, affected asset, location, reproduction/POC, impact, remediation, evidence, conversation, and node source.
+- [x] **Unified asset and port detail entry**: asset/port cards in conversation, asset/port discoveries in the right panel, and rows in the asset management page open the same asset detail dialog. The dialog shows address, type, open ports, services, source conversation, related vulnerabilities, and raw properties.
+- [x] **Asset and port persistence acceptance**: Agent-discovered assets, open ports, and service fingerprints must be stored in Asset or Asset.properties. After refresh or conversation switch, they remain visible from the asset management page and are not only kept in message/right-panel memory.
+- [x] **Vulnerability retest loop**: `/api/vulnerabilities/{id}/retest` creates a focused retest conversation with original asset/vulnerability context, starts it when an online node exists, and the shared vulnerability dialog is wired to trigger it. Dedicated RetestResult writeback is still deferred.
+- [x] **Evidence chain and Evidence Gate**: HTTP/browser request-response evidence is structured and persisted. Node-side `confirm_finding` requires known evidence_ids; platform-side confirmed `vuln_found` without evidence is downgraded to pending; referenced evidence can be created as a placeholder and later updated by `evidence_created`. Vulnerability details show evidence summary, tool source, hash, raw_ref, and structured properties.
+- [x] **Audit log coverage**: covers `auth.login`, conversation create/PATCH/delete/steer, asset CRUD, vulnerability status changes, retest trigger, finding.confirm/reject, and `tool.execute`; audit list now applies admin/all vs user-owned conversation permission filtering.
+- [x] **Scope/Risk Gate consistency**: execute/http/browser/workflow now enforce scope validation. execute/http destructive actions require `request_decision`; out-of-scope, denied, and failed tool results are emitted as conversation tool messages and audited through `tool.execute`.
+- [x] **Approval confirmation UX**: confirmation cards, pending list, Sonner notifications, countdown, and click-to-locate behavior are connected and covered by browser smoke.
+- [x] **Message rendering and long-output UX**: conversation messages support Markdown tables. Tool cards default collapsed, can expand, wrap/limit long output, and browser smoke verifies long output stays scroll-contained without horizontal page overflow after refresh.
+- [x] **Session persistence and recovery reliability**: repaired schema drift for assets/vulnerabilities/evidence, added paginated recent-first message recovery, TanStack Query infinite loading for conversation history, message-derived state fallback, integrity/repair tooling, and long-session recovery smoke coverage.
 
 ### P2：恢复 roadmap 中被提前勾选的增强能力
 
@@ -371,7 +381,7 @@
 - [x] 产品方案文档完成：`vision.json`、`docs/prd.md`、`docs/architecture.md`、`docs/pentest-node-spec.md` 存在。
 - [x] `docs/product-vision.md` 已补齐；`scripts/validate-vision.js` 仍缺失，未能运行 PLAID vision 校验。
 - [x] 关键页面原型已实现：对话页、资产页、漏洞页、节点页等。
-- [ ] 关键页面完整交互未完成：确认卡倒计时/定位、附件、详情关联、复测、文件面板等。
+- [ ] 关键页面完整交互未完成：附件、文件面板、多会话消息 buffer/补漏等。
 - [x] 技术栈基本落地：React + FastAPI + PostgreSQL 模型 + WebSocket + Python Node。
 - [ ] RabbitMQ 未落地。
 - [ ] 通信协议只实现核心子集；按会话精确路由已完成，ACK、心跳、离线缓存、重连补传仍未完成。

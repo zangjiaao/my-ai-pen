@@ -99,10 +99,11 @@ async def _assert_db_state(sessionmaker, user_id: uuid.UUID, node_id: uuid.UUID,
         assert vuln.node_id == node_id
         assert vuln.asset_id == asset.id
 
-        evidence = (await db.execute(select(Evidence).where(Evidence.user_id == user_id))).scalar_one()
-        assert evidence.conversation_id == conv_id
-        assert evidence.node_id == node_id
-        assert evidence.source_tool == "curl"
+        evidence_rows = (await db.execute(select(Evidence).where(Evidence.user_id == user_id))).scalars().all()
+        assert any(e.conversation_id == conv_id and e.node_id == node_id and e.source_tool == "curl" for e in evidence_rows)
+        placeholder = next(e for e in evidence_rows if e.evidence_id == "ev-ws-alpha")
+        assert placeholder.source_tool == "finding_reference"
+        assert placeholder.properties.get("placeholder") is True
 
         audits = (await db.execute(select(AuditLog))).scalars().all()
         audit_actions = {a.action for a in audits}
@@ -112,9 +113,13 @@ async def _assert_db_state(sessionmaker, user_id: uuid.UUID, node_id: uuid.UUID,
             "asset.discover",
             "finding.create",
             "evidence.create",
+            "tool.execute",
             "approval.request",
             "approval.authorize",
         }, audit_actions
+        tool_audits = [a for a in audits if a.action == "tool.execute"]
+        assert any(a.status == "success" and a.detail["tool_name"] == "curl" for a in tool_audits)
+        assert any(a.status == "failed" and a.detail["tool_name"] == "curl" for a in tool_audits)
 
 
 def _recv_until(ws, expected_type: str, limit: int = 12) -> dict:
@@ -198,6 +203,16 @@ def main() -> None:
                             "status": "done",
                         }))
                         assert _recv_until(user_ws, "tool_output")["tool_name"] == "curl"
+
+                        node_ws.send_text(json.dumps({
+                            "type": "tool_output",
+                            "conversation_id": str(conv.id),
+                            "tool_name": "curl",
+                            "tool_run_id": "tool-ws-failed",
+                            "line": "curl: connection failed",
+                            "status": "failed",
+                        }))
+                        assert _recv_until(user_ws, "tool_output")["status"] == "failed"
 
                         node_ws.send_text(json.dumps({
                             "type": "asset_discovered",

@@ -1,12 +1,16 @@
-import { useState, type ReactNode } from "react";
+﻿import { useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { Message } from "../lib/types";
+import type { SecurityAsset, SecurityVulnerability } from "../lib/securityTypes";
 import { normalizeExecutionStatus } from "../lib/status";
 import ConfirmCard from "./cards/ConfirmCard";
 
 interface Props {
   message: Message;
   onDecision?: (requestId: string, decision: "authorize" | "cancel") => void;
+  onOpenVulnerability?: (finding: Partial<SecurityVulnerability>) => void;
+  onOpenAsset?: (asset: Partial<SecurityAsset>) => void;
+  highlightedApprovalId?: string | null;
 }
 
 type TableAlignment = "left" | "center" | "right";
@@ -28,8 +32,9 @@ function ToolCallCard({ content }: { content: Record<string, unknown> }) {
   const statusColor = status === "running" ? "bg-status-running" : status === "done" ? "bg-status-success" : "bg-status-error";
   const ToggleIcon = expanded ? ChevronDown : ChevronRight;
   return (
-    <div className="my-2 min-w-0 max-w-full rounded-md border border-hairline bg-surface-default">
+    <div data-testid="tool-card" className="my-2 min-w-0 max-w-full rounded-md border border-hairline bg-surface-default">
       <button
+        data-testid="tool-card-toggle"
         type="button"
         aria-expanded={expanded}
         onClick={() => setExpanded(value => !value)}
@@ -43,7 +48,7 @@ function ToolCallCard({ content }: { content: Record<string, unknown> }) {
       </button>
       {expanded && (
         <div className="px-4 pb-4">
-          <pre className="max-h-64 max-w-full overflow-y-auto overflow-x-hidden rounded-sm border border-hairline bg-canvas-inset p-3 font-mono text-[13px] leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{stdout || "等待输出..."}</pre>
+          <pre data-testid="tool-card-output" className="max-h-64 max-w-full overflow-y-auto overflow-x-hidden rounded-sm border border-hairline bg-canvas-inset p-3 font-mono text-[13px] leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{stdout || "Waiting for output..."}</pre>
         </div>
       )}
     </div>
@@ -52,7 +57,7 @@ function ToolCallCard({ content }: { content: Record<string, unknown> }) {
 
 function summarizeToolOutput(stdout: string): string {
   const lines = stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  return lines.length ? lines[lines.length - 1] : "等待输出...";
+  return lines.length ? lines[lines.length - 1] : "Waiting for output...";
 }
 
 function MarkdownText({ text }: { text: string }) {
@@ -322,17 +327,34 @@ function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode[] {
   return nodes;
 }
 
-function VulnCard({ content }: { content: Record<string, unknown> }) {
-  const severity = content.severity as string || "info";
+function VulnCard({ content, onOpen }: { content: Record<string, unknown>; onOpen?: (finding: Partial<SecurityVulnerability>) => void }) {
+  const severity = String(content.severity || "info");
   const borderColor: Record<string, string> = { critical: "border-l-severity-critical", high: "border-l-severity-high", medium: "border-l-severity-medium", low: "border-l-severity-low" };
+  const confidence = Number(content.confidence);
+  const confidenceText = Number.isFinite(confidence) && confidence <= 1 ? `${Math.round(confidence * 100)}%` : String(content.confidence || "-");
   return (
-    <div className={`my-2 min-w-0 rounded-md border border-hairline bg-canvas border-l-3 ${borderColor[severity] || "border-l-severity-info"} p-4`}>
+    <button type="button" onClick={() => onOpen?.(content as Partial<SecurityVulnerability>)} className={`my-2 block w-full min-w-0 rounded-md border border-hairline bg-canvas border-l-3 ${borderColor[severity] || "border-l-severity-info"} p-4 text-left transition-colors hover:bg-surface-default`}>
       <div className="mb-1 flex min-w-0 items-center gap-2">
-        <span className={`inline-block flex-shrink-0 rounded-pill px-2.5 py-0.5 font-mono text-[11px] font-medium uppercase tracking-wider bg-severity-${severity}-subtle text-severity-${severity}`}>{severity}</span>
-        <span className="min-w-0 truncate font-semibold">{content.title as string}</span>
+        <span className={`inline-block flex-shrink-0 rounded-md px-2.5 py-0.5 font-mono text-[11px] font-medium uppercase bg-severity-${severity}-subtle text-severity-${severity}`}>{severity}</span>
+        <span className="min-w-0 truncate font-semibold">{String(content.title || "Untitled vulnerability")}</span>
       </div>
-      <p className="break-words text-sm text-ink-secondary [overflow-wrap:anywhere]">{content.location as string} - 置信度 {String(Math.round((Number(content.confidence) || 0) * 100))}%</p>
-    </div>
+      <p className="break-words text-sm text-ink-secondary [overflow-wrap:anywhere]">{String(content.location || content.affected_asset || "-")} - confidence {confidenceText}</p>
+    </button>
+  );
+}
+
+function AssetCard({ content, onOpen }: { content: Record<string, unknown>; onOpen?: (asset: Partial<SecurityAsset>) => void }) {
+  const properties = content.properties as Record<string, unknown> | undefined;
+  const ports = Array.isArray(content.open_ports) ? content.open_ports : Array.isArray(properties?.open_ports) ? properties.open_ports as unknown[] : [];
+  const services = Array.isArray(content.services) ? content.services : Array.isArray(properties?.services) ? properties.services as unknown[] : [];
+  return (
+    <button type="button" onClick={() => onOpen?.(content as Partial<SecurityAsset>)} className="my-2 block w-full min-w-0 rounded-md border border-hairline bg-canvas p-4 text-left transition-colors hover:bg-surface-default">
+      <div className="mb-1 flex min-w-0 items-center gap-2">
+        <span className="rounded-md bg-canvas-inset px-2 py-0.5 text-xs text-ink-secondary">{String(content.asset_type || content.type || "asset")}</span>
+        <span className="min-w-0 truncate font-semibold">{String(content.address || content.name || "Unknown asset")}</span>
+      </div>
+      <p className="break-words text-sm text-ink-secondary [overflow-wrap:anywhere]">ports: {ports.length ? ports.join(", ") : "-"} ? services: {services.length}</p>
+    </button>
   );
 }
 
@@ -340,7 +362,7 @@ function SystemNotice({ content }: { content: Record<string, unknown> }) {
   return <div className="my-2 text-center text-xs text-ink-muted">{content.text as string}</div>;
 }
 
-export default function MessageRenderer({ message, onDecision }: Props) {
+export default function MessageRenderer({ message, onDecision, onOpenVulnerability, onOpenAsset, highlightedApprovalId }: Props) {
   const { role, msg_type, content } = message;
 
   if (role === "system") return <SystemNotice content={content} />;
@@ -358,12 +380,12 @@ export default function MessageRenderer({ message, onDecision }: Props) {
       return <ToolCallCard content={content} />;
     case "vuln_card":
     case "vuln_found":
-      return <VulnCard content={content} />;
+      return <VulnCard content={content} onOpen={onOpenVulnerability} />;
     case "asset_card":
     case "asset_discovered":
-      return <div className="my-2 min-w-0 break-words rounded-md border border-hairline bg-canvas p-3 text-sm [overflow-wrap:anywhere]">{content.address as string} - 端口: {JSON.stringify(content.open_ports)}</div>;
+      return <AssetCard content={content} onOpen={onOpenAsset} />;
     case "confirm_card":
-      return <ConfirmCard content={content} onAuthorize={() => onDecision?.(content.request_id as string, "authorize")} onCancel={() => onDecision?.(content.request_id as string, "cancel")} />;
+      return <ConfirmCard content={content} highlighted={Boolean(content.request_id && content.request_id === highlightedApprovalId)} onAuthorize={() => onDecision?.(content.request_id as string, "authorize")} onCancel={() => onDecision?.(content.request_id as string, "cancel")} />;
     case "status":
       return <div className="my-2 text-center text-xs text-ink-muted">{content.text as string}</div>;
     case "text":

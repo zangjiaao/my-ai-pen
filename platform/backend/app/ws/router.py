@@ -3,6 +3,7 @@ import hashlib
 import re
 import uuid
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
@@ -27,6 +28,79 @@ def _uuid(value: str | uuid.UUID | None) -> uuid.UUID | None:
         return uuid.UUID(str(value))
     except ValueError:
         return None
+
+
+def _clean_evidence_ids(value) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _asset_address(value: object) -> str:
+    raw = str(value or "").strip().strip("'\"")
+    if not raw:
+        return "unknown"
+
+    url_match = re.search(r"https?://[^\s,;)\]}>'\"]+", raw, flags=re.IGNORECASE)
+    if url_match:
+        raw = url_match.group(0).rstrip("/.")
+    else:
+        host_match = re.search(
+            r"(?:\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}|\blocalhost\b|\bhost\.docker\.internal\b|\b(?:\d{1,3}\.){3}\d{1,3}\b)(?::\d{1,5})?",
+            raw,
+            flags=re.IGNORECASE,
+        )
+        if host_match:
+            raw = host_match.group(0).rstrip("/.")
+
+    parsed = urlparse(raw if "://" in raw else f"//{raw}")
+    if parsed.hostname:
+        scheme = parsed.scheme if "://" in raw and parsed.scheme in {"http", "https"} else ""
+        host = parsed.hostname
+        try:
+            port_value = parsed.port
+        except ValueError:
+            port_value = None
+        port = f":{port_value}" if port_value else ""
+        return f"{scheme + '://' if scheme else ''}{host}{port}"
+    return raw.rstrip("/")
+
+
+def _finding_audit_action(*, created: bool, raw_status: str, stored_status: str) -> str:
+    raw = str(raw_status or "").lower()
+    if raw == "confirmed" or stored_status == "confirmed":
+        return "finding.confirm"
+    if raw in {"rejected", "false_positive"} or stored_status == "false_positive":
+        return "finding.reject"
+    return "finding.create" if created else "finding.update"
+
+
+def _target_address_from_context(context: object) -> str:
+    if not isinstance(context, dict):
+        return "unknown"
+    task = context.get("task") if isinstance(context.get("task"), dict) else {}
+    checkpoint = context.get("checkpoint") if isinstance(context.get("checkpoint"), dict) else {}
+    for source in (task, checkpoint):
+        target = source.get("target") if isinstance(source.get("target"), dict) else {}
+        value = target.get("value") or source.get("target_url") or source.get("target")
+        address = _asset_address(value)
+        if address != "unknown":
+            return address
+    return "unknown"
+
+
+def _merge_status(current: str | None, incoming: str | None) -> str:
+    rank = {
+        "false_positive": 0,
+        "pending": 1,
+        "accepted": 2,
+        "confirmed": 3,
+        "reported": 4,
+        "fixed": 5,
+    }
+    current_value = current or "pending"
+    incoming_value = incoming or "pending"
+    return incoming_value if rank.get(incoming_value, 1) >= rank.get(current_value, 1) else current_value
 
 
 async def _audit(
@@ -73,6 +147,21 @@ async def _conversation_owner(conv_id: str) -> tuple[uuid.UUID | None, uuid.UUID
             return c.user_id, c.node_id
     except Exception:
         return None, None
+
+
+async def _conversation_context(conv_id: str) -> dict:
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+
+        async with async_session() as db:
+            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id)))
+            c = r.scalar_one_or_none()
+            if not c or not isinstance(c.context, dict):
+                return {}
+            return dict(c.context or {})
+    except Exception:
+        return {}
 
 
 async def _update_node_status(node_id: str, status: str, ip: str | None = None):
@@ -245,18 +334,18 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
 async def _persist_asset(msg: dict, node_id: str | None):
     conv_id = msg.get("conversation_id")
     if not conv_id:
-        return
+        return None
     user_id, bound_node = await _conversation_owner(conv_id)
     if not user_id:
-        return
+        return None
     node_uuid = _uuid(node_id) or bound_node
     try:
         from app.db.base import async_session
         from app.models.asset import Asset
 
-        address = msg.get("address") or msg.get("affected_asset") or msg.get("target") or "unknown"
+        address = _asset_address(msg.get("address") or msg.get("affected_asset") or msg.get("target") or "unknown")
         async with async_session() as db:
-            existing = await db.execute(select(Asset).where(Asset.user_id == user_id, Asset.address == address))
+            existing = await db.execute(select(Asset).where(Asset.user_id == user_id, Asset.conversation_id == uuid.UUID(conv_id), Asset.address == address))
             asset = existing.scalar_one_or_none()
             if not asset:
                 asset = Asset(
@@ -276,6 +365,7 @@ async def _persist_asset(msg: dict, node_id: str | None):
                 db.add(asset)
             else:
                 asset.conversation_id = uuid.UUID(conv_id)
+                asset.user_id = asset.user_id or user_id
                 asset.node_id = node_uuid or asset.node_id
                 asset.name = msg.get("hostname") or asset.name
                 asset.type = msg.get("asset_type") or asset.type
@@ -295,8 +385,19 @@ async def _persist_asset(msg: dict, node_id: str | None):
                 conversation_id=uuid.UUID(conv_id),
                 detail={"address": address},
             )
+            return {
+                "id": str(asset.id),
+                "asset_id": str(asset.id),
+                "conversation_id": str(asset.conversation_id) if asset.conversation_id else conv_id,
+                "node_id": str(asset.node_id) if asset.node_id else None,
+                "name": asset.name,
+                "address": asset.address,
+                "asset_type": asset.type,
+                "properties": asset.properties or {},
+            }
     except Exception as e:
         print(f"[WS] persist asset error: {e}")
+        return None
 
 
 async def _persist_evidence(msg: dict, node_id: str | None):
@@ -315,6 +416,12 @@ async def _persist_evidence(msg: dict, node_id: str | None):
         summary = msg.get("summary") or msg.get("line") or msg.get("stdout") or ""
         raw_hash = msg.get("hash") or hashlib.sha256(str(summary).encode()).hexdigest()
         evidence_id = msg.get("evidence_id") or f"ev-{raw_hash[:12]}"
+        incoming_properties = msg.get("properties") if isinstance(msg.get("properties"), dict) else {}
+        properties = {
+            **incoming_properties,
+            "status": msg.get("status"),
+            "stderr": msg.get("stderr", ""),
+        }
 
         async with async_session() as db:
             existing = await db.execute(select(Evidence).where(Evidence.evidence_id == evidence_id))
@@ -332,12 +439,24 @@ async def _persist_evidence(msg: dict, node_id: str | None):
                     raw_ref=msg.get("raw_ref"),
                     summary=str(summary)[:2000],
                     hash=raw_hash,
-                    properties={
-                        "status": msg.get("status"),
-                        "stderr": msg.get("stderr", ""),
-                    },
+                    properties=properties,
                 )
                 db.add(evidence)
+            else:
+                evidence.user_id = evidence.user_id or user_id
+                evidence.conversation_id = evidence.conversation_id or uuid.UUID(conv_id)
+                evidence.node_id = evidence.node_id or node_uuid
+                evidence.type = msg.get("evidence_type") or evidence.type
+                evidence.source_tool = msg.get("source_tool") or msg.get("tool_name") or evidence.source_tool
+                evidence.tool_run_id = tool_run_id or evidence.tool_run_id
+                evidence.raw_ref = msg.get("raw_ref") or evidence.raw_ref
+                evidence.summary = str(summary)[:2000] or evidence.summary
+                evidence.hash = raw_hash or evidence.hash
+                evidence.properties = {
+                    **(evidence.properties or {}),
+                    **properties,
+                    "placeholder": False,
+                }
             await db.commit()
             await _audit(
                 actor_type="agent",
@@ -353,20 +472,58 @@ async def _persist_evidence(msg: dict, node_id: str | None):
         print(f"[WS] persist evidence error: {e}")
         return None
 
-async def _persist_vulnerability(msg: dict, node_id: str | None):
+async def _audit_tool_output(msg: dict, node_id: str | None):
     conv_id = msg.get("conversation_id")
     if not conv_id:
         return
+    node_uuid = _uuid(node_id)
+    if not node_uuid:
+        _, bound_node = await _conversation_owner(conv_id)
+        node_uuid = bound_node
+    status_value = str(msg.get("status") or "done").lower()
+    if status_value in {"blocked", "denied", "canceled", "cancelled"}:
+        audit_status = "blocked"
+    elif status_value in {"fail", "failed", "error"}:
+        audit_status = "failed"
+    else:
+        audit_status = "success"
+    await _audit(
+        actor_type="agent",
+        actor_id=node_uuid or uuid.UUID(int=0),
+        action="tool.execute",
+        status=audit_status,
+        resource_type="conversation",
+        resource_id=_uuid(conv_id),
+        conversation_id=_uuid(conv_id),
+        detail={
+            "tool_name": msg.get("tool_name"),
+            "tool_run_id": msg.get("tool_run_id"),
+            "command": msg.get("command"),
+            "line": str(msg.get("line") or "")[:500],
+            "risk_level": msg.get("risk_level"),
+            "raw_status": msg.get("status"),
+        },
+    )
+
+
+async def _persist_vulnerability(msg: dict, node_id: str | None):
+    conv_id = msg.get("conversation_id")
+    if not conv_id:
+        return None
     user_id, bound_node = await _conversation_owner(conv_id)
     if not user_id:
-        return
+        return None
     node_uuid = _uuid(node_id) or bound_node
     try:
         from app.db.base import async_session
         from app.models.asset import Asset
+        from app.models.evidence import Evidence
         from app.models.vulnerability import Vulnerability
 
-        affected_asset = msg.get("affected_asset") or msg.get("target") or "unknown"
+        context = await _conversation_context(conv_id)
+        affected_asset = _asset_address(msg.get("affected_asset") or msg.get("target"))
+        if affected_asset == "unknown":
+            affected_asset = _target_address_from_context(context)
         status_map = {
             "candidate": "pending",
             "pending": "pending",
@@ -378,15 +535,34 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
             "accepted": "accepted",
         }
         incoming_status = status_map.get(str(msg.get("status") or "").lower(), "pending")
-        title = msg.get("title", "?????")
+        title = str(msg.get("title") or "Untitled finding").strip() or "Untitled finding"
         location = msg.get("location") or msg.get("poc") or ""
         poc_value = msg.get("poc") or msg.get("location") or ""
-        evidence_ids = [str(x) for x in msg.get("evidence_ids", [])]
+        evidence_ids = _clean_evidence_ids(msg.get("evidence_ids", []))
+        evidence_gate = "not_required"
+        if incoming_status == "confirmed":
+            if evidence_ids:
+                evidence_gate = "passed"
+            else:
+                incoming_status = "pending"
+                evidence_gate = "missing_evidence"
 
         async with async_session() as db:
-            asset_id = None
+            existing_vulns = (await db.execute(
+                select(Vulnerability)
+                .where(
+                    Vulnerability.user_id == user_id,
+                    Vulnerability.conversation_id == uuid.UUID(conv_id),
+                    Vulnerability.title == title,
+                )
+                .order_by(Vulnerability.discovered_at, Vulnerability.id)
+            )).scalars().all()
+            vuln = existing_vulns[0] if existing_vulns else None
+            created = vuln is None
+
+            asset_id = vuln.asset_id if vuln else None
             if affected_asset != "unknown":
-                existing_asset = await db.execute(select(Asset).where(Asset.user_id == user_id, Asset.address == affected_asset))
+                existing_asset = await db.execute(select(Asset).where(Asset.user_id == user_id, Asset.conversation_id == uuid.UUID(conv_id), Asset.address == affected_asset))
                 asset = existing_asset.scalar_one_or_none()
                 if not asset:
                     asset = Asset(
@@ -401,20 +577,54 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                     )
                     db.add(asset)
                     await db.flush()
+                else:
+                    asset.user_id = asset.user_id or user_id
+                    asset.conversation_id = asset.conversation_id or uuid.UUID(conv_id)
+                    asset.node_id = asset.node_id or node_uuid
+                asset_id = asset_id or asset.id
+
+            if not asset_id:
+                fallback_address = _target_address_from_context(context)
+                if fallback_address == "unknown":
+                    fallback_address = f"unknown:{conv_id}"
+                existing_asset = await db.execute(select(Asset).where(Asset.user_id == user_id, Asset.conversation_id == uuid.UUID(conv_id), Asset.address == fallback_address))
+                asset = existing_asset.scalar_one_or_none()
+                if not asset:
+                    asset = Asset(
+                        id=uuid.uuid4(),
+                        user_id=user_id,
+                        conversation_id=uuid.UUID(conv_id),
+                        node_id=node_uuid,
+                        name=fallback_address,
+                        address=fallback_address,
+                        type="host",
+                        source="agent_discovered",
+                    )
+                    db.add(asset)
+                    await db.flush()
                 asset_id = asset.id
 
-            query = select(Vulnerability).where(
-                Vulnerability.user_id == user_id,
-                Vulnerability.conversation_id == uuid.UUID(conv_id),
-                Vulnerability.title == title,
-            )
-            if asset_id:
-                query = query.where(Vulnerability.asset_id == asset_id)
-            else:
-                query = query.where(Vulnerability.asset_id.is_(None))
-            existing = await db.execute(query)
-            vuln = existing.scalar_one_or_none()
-            created = vuln is None
+            if evidence_ids:
+                existing_evidence = await db.execute(select(Evidence).where(Evidence.evidence_id.in_(evidence_ids)))
+                known_evidence_ids = {item.evidence_id for item in existing_evidence.scalars().all()}
+                for evidence_id in evidence_ids:
+                    if evidence_id in known_evidence_ids:
+                        continue
+                    db.add(Evidence(
+                        id=uuid.uuid4(),
+                        evidence_id=evidence_id,
+                        user_id=user_id,
+                        conversation_id=uuid.UUID(conv_id),
+                        node_id=node_uuid,
+                        type="referenced",
+                        source_tool="finding_reference",
+                        tool_run_id=None,
+                        raw_ref=None,
+                        summary="Referenced by finding before detailed evidence was synced.",
+                        hash=None,
+                        properties={"placeholder": True},
+                    ))
+                await db.flush()
 
             if not vuln:
                 vuln = Vulnerability(
@@ -434,27 +644,59 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                 )
                 db.add(vuln)
             else:
+                vuln.user_id = vuln.user_id or user_id
                 vuln.node_id = vuln.node_id or node_uuid
+                vuln.asset_id = vuln.asset_id or asset_id
                 vuln.severity = msg.get("severity") or vuln.severity
                 vuln.description = msg.get("description") or msg.get("evidence_summary") or vuln.description
                 vuln.poc = poc_value or vuln.poc
                 vuln.remediation = msg.get("remediation") or vuln.remediation
                 vuln.confidence = str(msg.get("confidence", vuln.confidence))
-                if incoming_status != "pending" or vuln.status == "pending":
-                    vuln.status = incoming_status
+                vuln.status = _merge_status(vuln.status, incoming_status)
                 vuln.evidence_ids = sorted(set(vuln.evidence_ids or []) | set(evidence_ids))
+
+            for duplicate in existing_vulns[1:]:
+                vuln.evidence_ids = sorted(set(vuln.evidence_ids or []) | set(duplicate.evidence_ids or []))
+                vuln.description = vuln.description or duplicate.description
+                vuln.poc = vuln.poc or duplicate.poc
+                vuln.remediation = vuln.remediation or duplicate.remediation
+                vuln.asset_id = vuln.asset_id or duplicate.asset_id
+                vuln.status = _merge_status(vuln.status, duplicate.status)
+                await db.delete(duplicate)
+
             await db.commit()
             await _audit(
                 actor_type="agent",
                 actor_id=node_uuid or uuid.UUID(int=0),
-                action="finding.create" if created else "finding.update",
+                action=_finding_audit_action(created=created, raw_status=str(msg.get("status") or ""), stored_status=vuln.status),
                 resource_type="vulnerability",
                 resource_id=vuln.id,
                 conversation_id=uuid.UUID(conv_id),
-                detail={"title": vuln.title, "severity": vuln.severity, "status": vuln.status},
+                detail={
+                    "title": vuln.title,
+                    "severity": vuln.severity,
+                    "status": vuln.status,
+                    "evidence_gate": evidence_gate,
+                    "evidence_ids": vuln.evidence_ids or [],
+                    "deduped": max(0, len(existing_vulns) - 1),
+                },
             )
+            return {
+                "id": str(vuln.id),
+                "vulnerability_id": str(vuln.id),
+                "asset_id": str(vuln.asset_id) if vuln.asset_id else None,
+                "conversation_id": str(vuln.conversation_id),
+                "node_id": str(vuln.node_id) if vuln.node_id else None,
+                "title": vuln.title,
+                "severity": vuln.severity,
+                "location": vuln.poc or location,
+                "confidence": vuln.confidence,
+                "status": vuln.status,
+                "evidence_ids": vuln.evidence_ids or [],
+            }
     except Exception as e:
         print(f"[WS] persist vuln error: {e}")
+        return None
 
 
 async def _find_node_by_token(token: str) -> str | None:
@@ -647,17 +889,25 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                 if msg.get("type") == "request_decision" and not msg.get("request_id"):
                     msg["request_id"] = str(uuid.uuid4())
                     raw = json.dumps(msg)
+                if msg.get("type") == "asset_discovered":
+                    persisted = await _persist_asset(msg, client_id)
+                    if persisted:
+                        msg.update({k: v for k, v in persisted.items() if v is not None})
+                    raw = json.dumps(msg, ensure_ascii=False)
+                elif msg.get("type") == "vuln_found":
+                    persisted = await _persist_vulnerability(msg, client_id)
+                    if persisted:
+                        msg.update({k: v for k, v in persisted.items() if v is not None})
+                    raw = json.dumps(msg, ensure_ascii=False)
+                elif msg.get("type") in ("tool_output", "evidence_created"):
+                    await _persist_evidence(msg, client_id)
+                    if msg.get("type") == "tool_output":
+                        await _audit_tool_output(msg, client_id)
                 if msg.get("type") == "checkpoint_update":
                     await _remember_conversation_checkpoint(conv_id, msg.get("checkpoint") or {})
                 else:
                     await _save_message(msg, "agent")
-                if msg.get("type") == "asset_discovered":
-                    await _persist_asset(msg, client_id)
-                elif msg.get("type") == "vuln_found":
-                    await _persist_vulnerability(msg, client_id)
-                elif msg.get("type") in ("tool_output", "evidence_created"):
-                    await _persist_evidence(msg, client_id)
-                elif msg.get("type") == "request_decision":
+                if msg.get("type") == "request_decision":
                     request_id = msg.get("request_id") or str(uuid.uuid4())
                     msg["request_id"] = request_id
                     raw = json.dumps(msg)

@@ -17,7 +17,9 @@ from pentest_node.agent.intake import TaskIntake  # noqa: E402
 from pentest_node.agent.loop import PentestAgentLoop  # noqa: E402
 from pentest_node.agent.state import Phase  # noqa: E402
 from pentest_node.evidence.store import EvidenceStore  # noqa: E402
+from pentest_node.tools.browser import make_browser_tool  # noqa: E402
 from pentest_node.tools.execute import make_execute_tool  # noqa: E402
+from pentest_node.tools.http import make_http_tool  # noqa: E402
 from pentest_node.tools.registry import ToolRegistry  # noqa: E402
 from pentest_node.tools.workflow import make_workflow_tools  # noqa: E402
 
@@ -273,6 +275,42 @@ async def assert_host_port_scope() -> None:
     assert blocked["stderr"] == "scope denied"
 
 
+async def assert_network_tool_scope_and_risk_gates() -> None:
+    scope = {"allow": ["https://example.com"], "deny": ["https://blocked.example.com"]}
+    http_tool = make_http_tool(scope=scope, approval_callback=lambda **kwargs: asyncio.sleep(0, result="cancel"))
+    outside = await http_tool.handler(method="GET", url="https://evil.example/", reason="scope regression")
+    assert outside["status"] == "blocked"
+    assert outside["stderr"] == "scope denied"
+
+    denied = await http_tool.handler(method="GET", url="https://blocked.example.com/", reason="deny regression")
+    assert denied["status"] == "blocked"
+    assert denied["stderr"] == "scope denied"
+
+    destructive = await http_tool.handler(method="DELETE", url="https://example.com/item/1", reason="approval regression")
+    assert destructive["status"] == "blocked"
+    assert destructive["stderr"] == "not authorized"
+
+    browser_tool = make_browser_tool(scope=scope)
+    browser_outside = await browser_tool.handler(action="navigate", url="https://evil.example/")
+    assert browser_outside["status"] == "blocked"
+    assert browser_outside["stderr"] == "scope denied"
+
+    task = {
+        "instruction": "test https://example.com",
+        "target": {"value": "https://example.com"},
+        "scope": scope,
+    }
+    loop = make_loop(task)
+    workflow_tools = {tool.name: tool for tool in make_workflow_tools(loop)}
+    approval = await workflow_tools["request_approval"].handler(
+        risk_level="destructive",
+        question="outside?",
+        proposed_action="DELETE https://evil.example/item/1",
+        target="https://evil.example/item/1",
+    )
+    assert approval["status"] == "blocked"
+
+
 async def assert_workflow_events(loop: PentestAgentLoop) -> None:
     tools = {tool.name: tool for tool in make_workflow_tools(loop)}
     asset = await tools["report_asset"].handler(
@@ -394,6 +432,63 @@ async def assert_agent_records_evidence() -> None:
         assert any(e.get("type") == "evidence_created" for e in platform.events)
 
 
+async def assert_confirm_finding_requires_known_evidence() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        platform = FakePlatform()
+        task = {
+            "instruction": "test https://example.com",
+            "target": {"value": "https://example.com"},
+            "scope": {"allow": ["example.com"]},
+        }
+        loop = PentestAgentLoop(
+            task,
+            ToolRegistry(),
+            FakeSandbox(),
+            FakeLLM(),
+            platform,
+            evidence_store=EvidenceStore(Path(tmp)),
+            intake=FakeIntake(),
+        )
+        tools = {tool.name: tool for tool in make_workflow_tools(loop)}
+        finding = await tools["create_candidate_finding"].handler(
+            title="Evidence gated finding",
+            vuln_type="info_disclosure",
+            severity="low",
+            affected_asset="https://example.com",
+            location="/headers",
+            confidence=0.7,
+            evidence_summary="headers exposed",
+        )
+        missing = await tools["confirm_finding"].handler(
+            candidate_finding_id=finding["finding_id"],
+            reproduction_steps="curl https://example.com/headers",
+            impact="header exposure",
+            remediation="remove header",
+            evidence_ids=[],
+        )
+        assert missing["status"] == "error"
+        unknown = await tools["confirm_finding"].handler(
+            candidate_finding_id=finding["finding_id"],
+            reproduction_steps="curl https://example.com/headers",
+            impact="header exposure",
+            remediation="remove header",
+            evidence_ids=["ev-missing"],
+        )
+        assert unknown["status"] == "error"
+        evidence = await loop.evidence_store.collect_tool_output("tool-confirm", "curl", "HTTP/1.1 200 OK")
+        assert evidence is not None
+        confirmed = await tools["confirm_finding"].handler(
+            candidate_finding_id=finding["finding_id"],
+            reproduction_steps="curl https://example.com/headers",
+            impact="header exposure",
+            remediation="remove header",
+            evidence_ids=[evidence.evidence_id],
+        )
+        assert confirmed["status"] == "ok"
+        sent = [e for e in platform.events if e.get("type") == "vuln_found" and e.get("status") == "confirmed"]
+        assert sent and sent[-1]["evidence_ids"] == [evidence.evidence_id]
+
+
 async def main() -> None:
     platform = FakePlatform()
     sandbox = FakeSandbox()
@@ -409,12 +504,14 @@ async def main() -> None:
     await assert_scope_and_approval(loop, sandbox)
     await assert_host_port_intake()
     await assert_host_port_scope()
+    await assert_network_tool_scope_and_risk_gates()
     await assert_workflow_events(loop)
     await assert_phase_tool_guard()
     await assert_text_only_supervision()
     await assert_watchdog_command_safety()
     await assert_dvwa_reaches_recon()
     await assert_agent_records_evidence()
+    await assert_confirm_finding_requires_known_evidence()
     print("node alpha smoke ok")
 
 

@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 import urllib.request
 from pathlib import Path
 from urllib.request import urlopen
@@ -39,10 +40,14 @@ async def fake_node_flow() -> None:
             if msg.get("type") == "task_assign":
                 conv_id = msg["conversation_id"]
                 await ws.send(json.dumps({"type": "status_update", "conversation_id": conv_id, "phase": "recon", "iteration": 1, "active_tool": "curl"}))
-                await ws.send(json.dumps({"type": "tool_output", "conversation_id": conv_id, "tool_name": "curl", "tool_run_id": "tool-browser", "line": "HTTP/1.1 200 OK", "status": "done"}))
+                markdown_table = "## Browser smoke markdown\n\n| Endpoint | Status | Notes |\n|---|---:|---|\n| /headers | 200 | **ok** |\n| /admin | 403 | blocked |"
+                await ws.send(json.dumps({"type": "text", "conversation_id": conv_id, "content": {"text": markdown_table}}))
+                long_output = "HTTP/1.1 200 OK\n" + "\n".join([f"line-{i:03d} " + ("x" * 120) for i in range(80)])
+                await ws.send(json.dumps({"type": "tool_output", "conversation_id": conv_id, "tool_name": "curl", "tool_run_id": "tool-browser", "line": long_output, "status": "done"}))
                 await ws.send(json.dumps({"type": "asset_discovered", "conversation_id": conv_id, "address": "https://example.com", "asset_type": "web", "open_ports": [443], "services": [{"port": 443, "name": "https"}]}))
                 await ws.send(json.dumps({"type": "vuln_found", "conversation_id": conv_id, "title": "Browser Alpha finding", "severity": "low", "confidence": 0.7, "affected_asset": "https://example.com", "location": "/headers", "evidence_ids": ["ev-browser"]}))
-                await ws.send(json.dumps({"type": "request_decision", "conversation_id": conv_id, "request_id": "req-browser", "risk_level": "destructive", "question": "Allow browser smoke dump?", "proposed_action": "sqlmap --dump"}))
+                approval_expiry = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
+                await ws.send(json.dumps({"type": "request_decision", "conversation_id": conv_id, "request_id": "req-browser", "risk_level": "destructive", "question": "Allow browser smoke dump?", "proposed_action": "sqlmap --dump", "expires_at": approval_expiry}))
             elif msg.get("type") == "user_input" and msg.get("request_id") == "req-browser":
                 assert msg.get("response") == "authorize"
                 conv_id = msg["conversation_id"]
@@ -149,6 +154,53 @@ class CDPClient:
         raise TimeoutError(f"Timed out waiting for JS expression: {expression}; last={last!r}")
 
 
+async def assert_snapshot_matches_ui(cdp: CDPClient, *, expected_status: str | None = None) -> dict:
+    await cdp.eval("document.querySelector('[data-testid=right-tab-progress]')?.click(); true")
+    await cdp.wait_for("document.querySelector('[data-testid=phase-progress]') !== null")
+    result = await cdp.eval(r"""
+(async () => {
+  const main = document.querySelector('[data-testid=conversation-main]');
+  const conversationId = main?.getAttribute('data-active-conversation-id') || '';
+  if (!conversationId) return { ok: false, reason: 'missing conversation id' };
+  const token = localStorage.getItem('access_token');
+  const res = await fetch(`/api/conversations/${conversationId}/state`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) return { ok: false, reason: `state ${res.status}` };
+  const state = await res.json();
+  const tabText = (id) => document.querySelector(`[data-testid=${id}]`)?.innerText || '';
+  const countFromTab = (id) => {
+    const match = tabText(id).match(/\((\d+)\)/);
+    return match ? Number(match[1]) : 0;
+  };
+  const progressText = document.querySelector('[data-testid=phase-progress]')?.innerText || '';
+  const [current, total] = progressText.split('/').map((x) => Number(x));
+  const ui = {
+    discoveries: countFromTab('right-tab-discoveries'),
+    pending: countFromTab('right-tab-pending'),
+    evidence: countFromTab('right-tab-evidence'),
+    progressCurrent: current,
+    progressTotal: total,
+  };
+  const expected = {
+    discoveries: (state.counts.assets || 0) + (state.counts.findings || 0),
+    pending: state.counts.pending || 0,
+    evidence: state.counts.evidence || 0,
+    progressCurrent: state.progress?.current,
+    progressTotal: state.progress?.total,
+    status: state.conversation?.status,
+  };
+  return { ok: true, conversationId, ui, expected };
+})()
+""")
+    if not result.get("ok"):
+        raise AssertionError(result)
+    if expected_status and result["expected"].get("status") != expected_status:
+        raise AssertionError(result)
+    expected_ui = {key: result["expected"][key] for key in result["ui"]}
+    if result["ui"] != expected_ui:
+        raise AssertionError(result)
+    return result
+
+
 async def drive_ui(websocket_url: str, url: str) -> None:
     async with CDPClient(websocket_url) as cdp:
         await cdp.call("Page.navigate", {"url": url})
@@ -180,31 +232,88 @@ async def drive_ui(websocket_url: str, url: str) -> None:
 })()
 """)
         await cdp.wait_for("document.body.innerText.includes('Browser Alpha finding')")
+        await cdp.wait_for("document.querySelector('main table') !== null && document.querySelector('main table')?.innerText.includes('/headers')")
+        await cdp.wait_for("Array.from(document.querySelectorAll('[data-testid=tool-card-toggle]')).some(el => el.getAttribute('aria-expanded') === 'false' && el.innerText.includes('curl'))")
+        await cdp.wait_for("document.querySelector('[data-testid=tool-card-output]') === null")
+        duplicate_cards = await cdp.eval("({ tools: document.querySelectorAll('main [data-testid=tool-card]').length, approvals: document.querySelectorAll('main [data-testid=confirm-card]').length })")
+        if duplicate_cards["tools"] != 1 or duplicate_cards["approvals"] > 1:
+            raise AssertionError(duplicate_cards)
         await cdp.wait_for("document.querySelector('[data-testid=confirm-authorize]') !== null")
+        await cdp.wait_for("document.querySelector('[data-testid=sonner-toast]') !== null && document.querySelector('[data-testid=sonner-toast]')?.innerText.includes('Approval required')")
+        await cdp.wait_for("Array.from(document.querySelectorAll('[data-testid=approval-countdown]')).some(el => /\\d+s|\\d+m/.test(el.innerText))")
+        await cdp.eval("document.querySelector('[data-testid=sonner-locate]').click(); true")
+        await cdp.wait_for("document.querySelector('[data-testid=confirm-card]')?.className.includes('shadow-')")
+        await cdp.eval("document.querySelector('[data-testid=right-tab-progress]').click(); true")
+        await cdp.eval("document.querySelector('[data-testid=right-tab-pending]').click(); true")
+        await cdp.wait_for("document.querySelector('[data-testid=pending-item]') !== null")
+        await cdp.wait_for("document.querySelector('[data-testid=pending-locate]') !== null")
+        await cdp.eval("document.querySelector('[data-testid=pending-locate]').click(); true")
+        await cdp.wait_for("document.querySelector('[data-testid=confirm-card]')?.className.includes('shadow-')")
+        await cdp.eval("document.querySelector('[data-testid=right-tab-progress]').click(); true")
         await cdp.wait_for("document.querySelector('[data-testid=todo-list]') !== null")
         await cdp.wait_for("document.querySelector('[data-testid=phase-progress]')?.innerText === '3/6'")
-        await cdp.wait_for("document.querySelector('[data-testid=right-tab-discoveries]')?.innerText.includes('(1)')")
+        await cdp.wait_for("document.querySelector('[data-testid=right-tab-discoveries]')?.innerText.includes('(2)')")
         await cdp.wait_for("document.querySelector('[data-testid=right-tab-pending]')?.innerText.includes('(1)')")
-        await cdp.wait_for("document.querySelector('[data-testid=right-tab-evidence]')?.innerText.includes('(1)')")
+        await cdp.wait_for("/^Evidence(?: \([1-9][0-9]*\))?$/.test(document.querySelector('[data-testid=right-tab-evidence]')?.innerText || '')")
+        await assert_snapshot_matches_ui(cdp)
         await cdp.call("Page.reload", {"ignoreCache": True})
         await cdp.wait_for("document.body.innerText.includes('Browser Alpha finding')")
+        await cdp.wait_for("document.querySelector('main table') !== null && document.querySelector('main table')?.innerText.includes('/headers')")
+        await cdp.wait_for("Array.from(document.querySelectorAll('[data-testid=tool-card-toggle]')).some(el => el.getAttribute('aria-expanded') === 'false' && el.innerText.includes('curl'))")
         await cdp.wait_for("document.querySelector('[data-testid=confirm-authorize]') !== null")
+        await cdp.eval("document.querySelector('[data-testid=right-tab-pending]').click(); true")
+        await cdp.wait_for("document.querySelector('[data-testid=pending-item]') !== null")
+        await cdp.wait_for("Array.from(document.querySelectorAll('[data-testid=approval-countdown]')).some(el => /\\d+s|\\d+m/.test(el.innerText))")
+        await cdp.eval("document.querySelector('[data-testid=pending-locate]').click(); true")
+        await cdp.wait_for("document.querySelector('[data-testid=confirm-card]')?.className.includes('shadow-')")
+        await cdp.eval("document.querySelector('[data-testid=right-tab-progress]').click(); true")
         await cdp.wait_for("document.querySelector('[data-testid=todo-list]') !== null")
         await cdp.wait_for("document.querySelector('[data-testid=phase-progress]')?.innerText === '3/6'")
-        await cdp.wait_for("document.querySelector('[data-testid=right-tab-discoveries]')?.innerText.includes('(1)')")
+        await cdp.wait_for("document.querySelector('[data-testid=right-tab-discoveries]')?.innerText.includes('(2)')")
         await cdp.wait_for("document.querySelector('[data-testid=right-tab-pending]')?.innerText.includes('(1)')")
-        await cdp.wait_for("document.querySelector('[data-testid=right-tab-evidence]')?.innerText.includes('(1)')")
+        await cdp.wait_for("/^Evidence(?: \([1-9][0-9]*\))?$/.test(document.querySelector('[data-testid=right-tab-evidence]')?.innerText || '')")
+        await assert_snapshot_matches_ui(cdp)
         invalid_progress = await cdp.eval("/\\b\\d{2,}\\/50\\b/.test(document.body.innerText)")
         if invalid_progress:
             raise AssertionError(await cdp.eval("document.body.innerText"))
         await cdp.eval("document.querySelector('[data-testid=right-tab-evidence]').click(); true")
         await cdp.wait_for("document.querySelector('[data-testid=evidence-item]') !== null")
+        await cdp.eval("Array.from(document.querySelectorAll('[data-testid=tool-card-toggle]')).find(el => el.innerText.includes('curl')).click(); true")
+        await cdp.wait_for("document.querySelector('[data-testid=tool-card-output]') !== null")
+        output_metrics = await cdp.eval(r"""
+(() => {
+  const pre = document.querySelector('[data-testid=tool-card-output]');
+  const styles = getComputedStyle(pre);
+  return {
+    overflowY: styles.overflowY,
+    maxHeight: styles.maxHeight,
+    clientHeight: pre.clientHeight,
+    scrollHeight: pre.scrollHeight,
+    textLength: pre.innerText.length,
+    bodyOverflowX: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  };
+})()
+""")
+        if output_metrics["overflowY"] not in ("auto", "scroll") or output_metrics["clientHeight"] > 280 or output_metrics["scrollHeight"] <= output_metrics["clientHeight"] or output_metrics["textLength"] < 4000 or output_metrics["bodyOverflowX"]:
+            raise AssertionError(output_metrics)
         await cdp.eval("document.querySelector('[data-testid=confirm-authorize]').click(); true")
+        await cdp.wait_for(r"""
+(async () => {
+  const conversationId = document.querySelector('[data-testid=conversation-main]')?.getAttribute('data-active-conversation-id') || '';
+  const token = localStorage.getItem('access_token');
+  if (!conversationId || !token) return false;
+  const res = await fetch(`/api/conversations/${conversationId}/state`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) return false;
+  const state = await res.json();
+  return state.conversation?.status === 'completed' && state.progress?.current === state.progress?.total;
+})()
+""", timeout=30)
         await cdp.wait_for("document.querySelector('[data-testid=right-tab-evidence]') !== null")
         await cdp.wait_for("document.body.innerText.includes('curl') || document.body.innerText.includes('HTTP/1.1 200 OK')")
         text = await cdp.eval("document.body.innerText")
         if "Browser Alpha finding" not in text or "curl" not in text:
             raise AssertionError(text)
+        await assert_snapshot_matches_ui(cdp, expected_status="completed")
 
 
 def main() -> None:

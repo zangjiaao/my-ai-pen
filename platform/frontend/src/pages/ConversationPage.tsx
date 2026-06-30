@@ -1,15 +1,20 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 import RightPanel from "../components/RightPanel";
 import MessageRenderer from "../components/MessageRenderer";
+import VulnDetailDialog from "../components/VulnDetailDialog";
+import AssetDetailDialog from "../components/AssetDetailDialog";
 import { useConversationStore } from "../stores/conversationStore";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { authFetch } from "../lib/api";
 import { normalizeExecutionStatus } from "../lib/status";
+import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import type { Conversation, Message } from "../lib/types";
+import type { SecurityAsset, SecurityVulnerability } from "../lib/securityTypes";
 
 const ACTIVE_CONVERSATION_KEY = "active_conversation_id";
+const MESSAGE_PAGE_SIZE = 200;
 
 const PHASES = ["precheck", "plan", "recon", "scan", "verify", "report"] as const;
 const PHASE_LABELS: Record<string, string> = {
@@ -37,29 +42,56 @@ type ConversationSnapshot = {
   progress?: Progress;
   todos?: Todo[];
   findings?: Array<Record<string, unknown>>;
+  assets?: Array<Record<string, unknown>>;
   pending_approvals?: Array<Record<string, unknown>>;
   evidence?: Array<Record<string, unknown>>;
 };
 
 export default function ConversationPage() {
   const { conversations, fetchAll } = useConversationStore();
+  const queryClient = useQueryClient();
   const [activeId, setActiveId] = useState<string | null>(null);
   const [restoreAttempted, setRestoreAttempted] = useState(false);
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [stateSnapshotLoaded, setStateSnapshotLoaded] = useState(false);
+  const [liveMessages, setLiveMessages] = useState<Message[]>([]);
+  const messageScrollerRef = useRef<HTMLDivElement | null>(null);
+  const pendingScrollRestoreRef = useRef<{ top: number; height: number } | null>(null);
   const [input, setInput] = useState("");
   const [agentState, setAgentState] = useState<Record<string, unknown>>({});
   const [progress, setProgress] = useState<Progress | undefined>();
   const [todos, setTodos] = useState<Todo[]>([]);
   const [findings, setFindings] = useState<Array<Record<string, unknown>>>([]);
+  const [assets, setAssets] = useState<Array<Record<string, unknown>>>([]);
   const [pendingApprovals, setPendingApprovals] = useState<Array<Record<string, unknown>>>([]);
   const [evidence, setEvidence] = useState<Array<Record<string, unknown>>>([]);
   const [running, setRunning] = useState(false);
+  const [selectedVulnerability, setSelectedVulnerability] = useState<Partial<SecurityVulnerability> | null>(null);
+  const [selectedAsset, setSelectedAsset] = useState<Partial<SecurityAsset> | null>(null);
+  const [highlightedApprovalId, setHighlightedApprovalId] = useState<string | null>(null);
+
+  const messageQuery = useInfiniteQuery({
+    queryKey: ["conversation-messages", activeId],
+    queryFn: ({ pageParam }) => fetchConversationMessagesPage(activeId!, pageParam),
+    enabled: Boolean(activeId),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => lastPage.length === MESSAGE_PAGE_SIZE ? allPages.reduce((sum, page) => sum + page.length, 0) : undefined,
+    staleTime: 15_000,
+  });
+
+  const persistedMessages = useMemo(() => {
+    if (!activeId || !messageQuery.data?.pages) return [];
+    const orderedPages = [...messageQuery.data.pages].reverse();
+    return coalesceConversationMessages(orderedPages.flat().map(normalizeMessage(activeId)));
+  }, [activeId, messageQuery.data]);
+
+  const messages = useMemo(() => coalesceConversationMessages([...persistedMessages, ...liveMessages]), [persistedMessages, liveMessages]);
 
   const applyConversationState = useCallback((snapshot: ConversationSnapshot, fallback?: ConversationSnapshot) => {
     setAgentState(hasValues(snapshot.agent_state) ? snapshot.agent_state! : fallback?.agent_state || {});
     setProgress(snapshot.progress || fallback?.progress);
     setTodos(snapshot.todos?.length ? snapshot.todos : fallback?.todos || []);
     setFindings(snapshot.findings?.length ? snapshot.findings : fallback?.findings || []);
+    setAssets(snapshot.assets?.length ? snapshot.assets : fallback?.assets || []);
     setPendingApprovals(snapshot.pending_approvals?.length ? snapshot.pending_approvals : fallback?.pending_approvals || []);
     setEvidence(snapshot.evidence?.length ? snapshot.evidence : fallback?.evidence || []);
     setRunning((snapshot.conversation || fallback?.conversation)?.status === "running");
@@ -69,19 +101,19 @@ export default function ConversationPage() {
     if (!id) return;
     try {
       const state = await authFetch<ConversationSnapshot>(`/api/conversations/${id}/state`);
-      const status = state.conversation?.status || conversations.find(c => c.id === id)?.status || "created";
-      applyConversationState(state, snapshotFromMessages(messages, status));
+      applyConversationState(state);
+      setStateSnapshotLoaded(true);
     } catch {
       // The live stream remains usable even if a snapshot refresh races startup.
     }
-  }, [applyConversationState, conversations, messages]);
+  }, [applyConversationState]);
 
   const { send } = useWebSocket({
     vuln_found: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
-      setFindings(prev => upsertBy(prev, { title: m.title, severity: m.severity, location: m.location || m.affected_asset || "" }, "title"));
-      setMessages(prev => [...prev, makeMessage(messageConversationId(m, activeId), "agent", "vuln_card", m)]);
+      setFindings(prev => upsertBy(prev, { ...m, id: m.id || m.vulnerability_id, location: m.location || m.affected_asset || "" }, "title"));
+      setLiveMessages(prev => [...prev, makeMessage(messageConversationId(m, activeId), "agent", "vuln_card", m)]);
       void refreshConversationState(messageConversationId(m, activeId));
     },
     tool_output: (msg) => {
@@ -94,12 +126,14 @@ export default function ConversationPage() {
         status: normalizeExecutionStatus(m.status),
         stdout: m.line ? `${m.line}\n` : "",
       });
-      setMessages((prev) => mergeToolCallIntoMessages(prev, incoming));
+      setLiveMessages((prev) => mergeToolCallIntoMessages(prev, incoming));
       void refreshConversationState(messageConversationId(msg, activeId));
     },
     asset_discovered: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
-      setMessages(prev => [...prev, makeMessage(messageConversationId(msg, activeId), "agent", "asset_card", msg as Record<string, unknown>)]);
+      const m = msg as Record<string, unknown>;
+      setAssets(prev => upsertBy(prev, { ...m, id: m.id || m.asset_id }, "address"));
+      setLiveMessages(prev => [...prev, makeMessage(messageConversationId(msg, activeId), "agent", "asset_card", m)]);
       void refreshConversationState(messageConversationId(msg, activeId));
     },
     evidence_created: (msg) => {
@@ -111,8 +145,11 @@ export default function ConversationPage() {
     request_decision: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
+      const convId = messageConversationId(msg, activeId);
+      const requestId = String(m.request_id || "");
       setPendingApprovals(prev => upsertBy(prev, m, "request_id"));
-      setMessages(prev => [...prev, makeMessage(messageConversationId(msg, activeId), "agent", "confirm_card", m)]);
+      setLiveMessages(prev => [...prev, makeMessage(convId, "agent", "confirm_card", m)]);
+      window.dispatchEvent(new CustomEvent("sonner:notify", { detail: { id: `approval-${requestId || crypto.randomUUID()}`, requestId, conversationId: convId || "", message: "Approval required", description: String(m.question || m.proposed_action || "") } }));
       void refreshConversationState(messageConversationId(m, activeId));
     },
     checkpoint_update: (msg) => {
@@ -127,13 +164,13 @@ export default function ConversationPage() {
       setProgress(progressForPhase(phase, "running"));
       setTodos(todosForPhase(phase, "running"));
       setRunning(true);
-      setMessages(prev => appendConversationMessage(prev, makeMessage(messageConversationId(msg, activeId), "system", "status", { text: `Phase: ${phase || ""}`, phase, iteration: m.iteration, active_tool: m.active_tool, status: m.status, intake_result: m.intake_result })));
+      setLiveMessages(prev => appendConversationMessage(prev, makeMessage(messageConversationId(msg, activeId), "system", "status", { text: `Phase: ${phase || ""}`, phase, iteration: m.iteration, active_tool: m.active_tool, status: m.status, intake_result: m.intake_result })));
     },
     task_complete: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const convId = messageConversationId(msg, activeId);
       setRunning(false);
-      setMessages(prev => appendConversationMessage(prev, makeMessage(convId, "system", "status", { text: "任务完成 - " + JSON.stringify((msg as Record<string, unknown>).summary || {}), summary: (msg as Record<string, unknown>).summary || {} })));
+      setLiveMessages(prev => appendConversationMessage(prev, makeMessage(convId, "system", "status", { text: "任务完成 - " + JSON.stringify((msg as Record<string, unknown>).summary || {}), summary: (msg as Record<string, unknown>).summary || {} })));
       void fetchAll();
       void refreshConversationState(convId);
     },
@@ -141,23 +178,44 @@ export default function ConversationPage() {
       if (!isActiveMessage(msg, activeId)) return;
       const convId = messageConversationId(msg, activeId);
       setRunning(false);
-      setMessages(prev => appendConversationMessage(prev, makeMessage(convId, "system", "status", { text: "任务失败: " + ((msg as Record<string, unknown>).message || "") })));
+      setLiveMessages(prev => appendConversationMessage(prev, makeMessage(convId, "system", "status", { text: "任务失败: " + ((msg as Record<string, unknown>).message || "") })));
       void fetchAll();
       void refreshConversationState(convId);
     },
     text: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const c = (msg as Record<string, unknown>).content || msg;
-      setMessages(prev => [...prev, makeMessage(messageConversationId(msg, activeId), "agent", "text", c as Record<string, unknown>)]);
+      setLiveMessages(prev => [...prev, makeMessage(messageConversationId(msg, activeId), "agent", "text", c as Record<string, unknown>)]);
     },
   });
 
+  const locateApproval = useCallback((requestId: string) => {
+    if (!requestId) return;
+    setHighlightedApprovalId(requestId);
+    window.setTimeout(() => {
+      const target = Array.from(document.querySelectorAll<HTMLElement>("[data-approval-request-id]")).find((element) => element.dataset.approvalRequestId === requestId);
+      target?.scrollIntoView({ block: "center", behavior: "smooth" });
+    }, 0);
+    window.setTimeout(() => setHighlightedApprovalId(current => current === requestId ? null : current), 2400);
+  }, []);
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ requestId?: string; conversationId?: string }>).detail || {};
+      if (detail.conversationId && activeId && detail.conversationId !== activeId) return;
+      if (detail.requestId) locateApproval(detail.requestId);
+    };
+    window.addEventListener("approval:locate", handler as EventListener);
+    return () => window.removeEventListener("approval:locate", handler as EventListener);
+  }, [activeId, locateApproval]);
+
   const resetConversationState = useCallback(() => {
-    setMessages([]);
+    setLiveMessages([]);
     setAgentState({});
     setProgress(undefined);
     setTodos([]);
     setFindings([]);
+    setAssets([]);
     setPendingApprovals([]);
     setEvidence([]);
     setRunning(false);
@@ -166,38 +224,37 @@ export default function ConversationPage() {
   const loadConversation = useCallback(async (id: string | null) => {
     if (!id) {
       localStorage.removeItem(ACTIVE_CONVERSATION_KEY);
+      void queryClient.removeQueries({ queryKey: ["conversation-messages"] });
       setActiveId(null);
       resetConversationState();
       return;
     }
 
+    setStateSnapshotLoaded(false);
+    void queryClient.removeQueries({ queryKey: ["conversation-messages"] });
     setActiveId(id);
     localStorage.setItem(ACTIVE_CONVERSATION_KEY, id);
     send({ type: "subscribe", conversation_id: id });
 
+    setLiveMessages([]);
     const conversationStatus = conversations.find(c => c.id === id)?.status || "created";
-    let restoredMessages: Message[] = [];
-    let fallbackState = snapshotFromMessages(restoredMessages, conversationStatus);
-
-    try {
-      const messageData = await authFetch<Array<Record<string, unknown>>>(`/api/conversations/${id}/messages`);
-      restoredMessages = coalesceConversationMessages(messageData.map(normalizeMessage(id)));
-      fallbackState = snapshotFromMessages(restoredMessages, conversationStatus);
-      setMessages(restoredMessages);
-      applyConversationState(fallbackState);
-    } catch {
-      setMessages([]);
-      applyConversationState(fallbackState);
-    }
+    const fallbackState = snapshotFromMessages([], conversationStatus);
 
     try {
       const state = await authFetch<ConversationSnapshot>(`/api/conversations/${id}/state`);
-      const stateStatus = state.conversation?.status || conversationStatus;
-      applyConversationState(state, snapshotFromMessages(restoredMessages, stateStatus));
+      applyConversationState(state);
+      setStateSnapshotLoaded(true);
     } catch {
       applyConversationState(fallbackState);
+      setStateSnapshotLoaded(false);
     }
-  }, [applyConversationState, conversations, resetConversationState, send]);
+  }, [applyConversationState, conversations, queryClient, resetConversationState, send]);
+
+  useEffect(() => {
+    if (!activeId || stateSnapshotLoaded || messageQuery.isLoading || messages.length === 0) return;
+    const conversationStatus = conversations.find(c => c.id === activeId)?.status || "created";
+    applyConversationState(snapshotFromMessages(messages, conversationStatus));
+  }, [activeId, conversations, messages, messageQuery.isLoading, stateSnapshotLoaded, applyConversationState]);
 
   useEffect(() => { void fetchAll(); }, [fetchAll]);
 
@@ -218,7 +275,7 @@ export default function ConversationPage() {
   const handleDecision = useCallback((requestId: string, decision: "authorize" | "cancel") => {
     if (!activeId || !requestId) return;
     setPendingApprovals(prev => prev.filter(item => item.request_id !== requestId));
-    setMessages(prev => [...prev, makeMessage(activeId, "user", "text", { text: decision === "authorize" ? "已授权执行" : "已取消该操作" })]);
+    setLiveMessages(prev => [...prev, makeMessage(activeId, "user", "text", { text: decision === "authorize" ? "已授权执行" : "已取消该操作" })]);
     send({ type: "user_decision", conversation_id: activeId, request_id: requestId, decision });
   }, [activeId, send]);
 
@@ -246,7 +303,7 @@ export default function ConversationPage() {
       } catch { return; }
     }
 
-    setMessages(prev => [...prev, makeMessage(convId, "user", "text", { text })]);
+    setLiveMessages(prev => [...prev, makeMessage(convId, "user", "text", { text })]);
     const shouldContinueExisting = Boolean(!startFresh && activeId && !restartRequested && !completedConversation);
 
     if (shouldContinueExisting && activeConversation?.status === "running") {
@@ -302,14 +359,35 @@ function isConversationComplete(activeId: string | null, conversations: Conversa
     return ip ? ip[0] : null;
   }
 
+  const fetchOlderMessages = useCallback(() => {
+    const el = messageScrollerRef.current;
+    if (!el || !messageQuery.hasNextPage || messageQuery.isFetchingNextPage) return;
+    pendingScrollRestoreRef.current = { top: el.scrollTop, height: el.scrollHeight };
+    void messageQuery.fetchNextPage();
+  }, [messageQuery]);
+
+  const handleMessageScroll = useCallback(() => {
+    const el = messageScrollerRef.current;
+    if (!el || el.scrollTop > 96) return;
+    fetchOlderMessages();
+  }, [fetchOlderMessages]);
+
+  useEffect(() => {
+    const pending = pendingScrollRestoreRef.current;
+    const el = messageScrollerRef.current;
+    if (!pending || !el || messageQuery.isFetchingNextPage) return;
+    el.scrollTop = el.scrollHeight - pending.height + pending.top;
+    pendingScrollRestoreRef.current = null;
+  }, [messages.length, messageQuery.isFetchingNextPage]);
+
   return (
     <div className="flex h-screen overflow-hidden bg-canvas">
       <Sidebar activeId={activeId} onSelect={(id) => { void loadConversation(id || null); }} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar title={activeId ? conversations?.find(c => c.id === activeId)?.title : undefined} />
+        <TopBar title={activeId ? conversations?.find(c => c.id === activeId)?.title : undefined} conversationId={activeId} />
         <div className="flex min-w-0 flex-1 overflow-hidden">
-          <main className="flex min-w-0 flex-1 flex-col border-r border-hairline-soft">
-            <div className="min-w-0 flex-1 overflow-y-auto px-6 py-4 space-y-4">
+          <main data-testid="conversation-main" data-active-conversation-id={activeId || ""} className="flex min-w-0 flex-1 flex-col border-r border-hairline-soft">
+            <div ref={messageScrollerRef} onScroll={handleMessageScroll} className="min-w-0 flex-1 overflow-y-auto px-6 py-4 space-y-4">
               {messages.length === 0 && !activeId && (
                 <div className="flex h-full items-center justify-center">
                   <div className="text-center">
@@ -326,7 +404,9 @@ function isConversationComplete(activeId: string | null, conversations: Conversa
                   </div>
                 </div>
               )}
-              {messages.map((msg) => <MessageRenderer key={msg.id} message={msg} onDecision={handleDecision} />)}
+              {messageQuery.isFetchingNextPage && <div className="py-2 text-center text-xs text-ink-muted">Loading older messages...</div>}
+              {messageQuery.hasNextPage && !messageQuery.isFetchingNextPage && <button type="button" onClick={fetchOlderMessages} className="mx-auto block rounded-pill border border-hairline px-3 py-1.5 text-xs text-ink-secondary">Load older messages</button>}
+              {messages.map((msg) => <MessageRenderer key={msg.id} message={msg} onDecision={handleDecision} onOpenVulnerability={setSelectedVulnerability} onOpenAsset={setSelectedAsset} highlightedApprovalId={highlightedApprovalId} />)}
             </div>
             <div className="border-t border-hairline-soft p-4">
               <div className="mb-3 flex gap-2">
@@ -354,14 +434,36 @@ function isConversationComplete(activeId: string | null, conversations: Conversa
             progress={progress}
             todos={todos}
             findings={findings}
+            assets={assets}
             pendingApprovals={pendingApprovals}
             evidence={evidence}
             onDecision={handleDecision}
+            onOpenVulnerability={setSelectedVulnerability}
+            onOpenAsset={setSelectedAsset}
+            onLocateApproval={locateApproval}
           />
         </div>
       </div>
+      <VulnDetailDialog
+        open={Boolean(selectedVulnerability)}
+        vulnerabilityId={(selectedVulnerability?.id || selectedVulnerability?.vulnerability_id) as string | undefined}
+        initial={selectedVulnerability}
+        onClose={() => setSelectedVulnerability(null)}
+        onUpdated={(updated) => setFindings(prev => upsertBy(prev, updated as unknown as Record<string, unknown>, "id"))}
+        onRetestCreated={(conversationId) => { void fetchAll(); void loadConversation(conversationId); }}
+      />
+      <AssetDetailDialog
+        open={Boolean(selectedAsset)}
+        assetId={(selectedAsset?.id || selectedAsset?.asset_id) as string | undefined}
+        initial={selectedAsset}
+        onClose={() => setSelectedAsset(null)}
+      />
     </div>
   );
+}
+
+async function fetchConversationMessagesPage(conversationId: string, offset: number): Promise<Array<Record<string, unknown>>> {
+  return authFetch<Array<Record<string, unknown>>>(`/api/conversations/${conversationId}/messages?limit=${MESSAGE_PAGE_SIZE}&offset=${offset}&order=desc`);
 }
 
 function normalizeMessage(conversationId: string) {
@@ -502,6 +604,9 @@ function snapshotFromMessages(messages: Message[], status: Conversation["status"
   const findings = messages
     .filter(m => m.msg_type === "vuln_card" || m.msg_type === "vuln_found")
     .map(m => ({ ...m.content, id: readString(m.content.id) || readString(m.content.finding_id) || m.id, location: m.content.location || m.content.affected_asset || "" }));
+  const assets = messages
+    .filter(m => m.msg_type === "asset_card" || m.msg_type === "asset_discovered")
+    .map(m => ({ ...m.content, id: readString(m.content.id) || readString(m.content.asset_id) || m.id, address: m.content.address || m.content.name || "" }));
   const explicitEvidence = messages
     .filter(m => m.msg_type === "evidence_created")
     .map(m => ({ ...m.content, id: readString(m.content.id) || m.id }));
@@ -530,6 +635,7 @@ function snapshotFromMessages(messages: Message[], status: Conversation["status"
     progress: progressForPhase(phase, normalizedStatus),
     todos: todosForPhase(phase, normalizedStatus),
     findings,
+    assets,
     pending_approvals: pending,
     evidence,
   };

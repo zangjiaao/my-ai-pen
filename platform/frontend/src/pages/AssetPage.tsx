@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 import { authFetch } from "../lib/api";
+import AssetDetailDialog from "../components/AssetDetailDialog";
 
 type RelatedVuln = {
   id: string;
@@ -142,48 +143,12 @@ export default function AssetPage() {
             </div>
           </main>
 
-          {selected && (
-            <aside className="w-[420px] flex-shrink-0 overflow-y-auto border-l border-hairline bg-surface-raised p-4">
-              <div className="mb-4 flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <h2 className="truncate text-lg font-semibold">{selected.name}</h2>
-                  <p className="break-all font-mono text-xs text-ink-muted">{selected.address}</p>
-                </div>
-                <button onClick={() => setSelected(null)} className="rounded-md border border-hairline px-3 py-1 text-xs">Close</button>
-              </div>
-
-              <div className="space-y-3 text-sm">
-                <div className="grid grid-cols-2 gap-2">
-                  <Info label="Type" value={selected.type} />
-                  <Info label="Source" value={selected.source} />
-                  <Info label="Session" value={shortId(selected.conversation_id)} />
-                  <Info label="Node" value={shortId(selected.node_id)} />
-                </div>
-                <section>
-                  <h3 className="mb-1 text-xs font-semibold uppercase text-ink-secondary">Tags</h3>
-                  <p className="text-ink-secondary">{selected.tags?.join(", ") || "-"}</p>
-                </section>
-                <section>
-                  <h3 className="mb-1 text-xs font-semibold uppercase text-ink-secondary">Properties</h3>
-                  <pre className="max-h-44 overflow-auto whitespace-pre-wrap break-words rounded-md bg-canvas-inset p-3 font-mono text-xs">{JSON.stringify(selected.properties || {}, null, 2)}</pre>
-                </section>
-                <section>
-                  <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">Related Vulnerabilities</h3>
-                  <div className="space-y-2">
-                    {selected.related_vulnerabilities?.map((v) => (
-                      <div key={v.id} className="rounded-md border border-hairline-soft p-2">
-                        <div className="font-medium">{v.title}</div>
-                        <div className="mt-1 flex gap-2 text-xs text-ink-muted">
-                          <span>{v.severity}</span><span>{v.status}</span><span>{v.confidence}</span>
-                        </div>
-                      </div>
-                    ))}
-                    {!selected.related_vulnerabilities?.length && <p className="text-sm text-ink-muted">No related vulnerabilities</p>}
-                  </div>
-                </section>
-              </div>
-            </aside>
-          )}
+          <AssetDetailDialog
+            open={Boolean(selected)}
+            assetId={selected?.id}
+            initial={selected}
+            onClose={() => setSelected(null)}
+          />
         </div>
       </div>
     </div>

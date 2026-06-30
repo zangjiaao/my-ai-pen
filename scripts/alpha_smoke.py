@@ -107,6 +107,53 @@ async def main() -> None:
                 "location": "/alpha",
             }, str(node_id))
 
+            await ws_router._persist_vulnerability({
+                "type": "vuln_found",
+                "conversation_id": str(conv_id),
+                "title": "Alpha gated finding",
+                "severity": "high",
+                "confidence": 0.9,
+                "status": "confirmed",
+                "affected_asset": "127.0.0.1",
+                "location": "/missing-evidence",
+            }, str(node_id))
+
+            await ws_router._persist_vulnerability({
+                "type": "vuln_found",
+                "conversation_id": str(conv_id),
+                "title": "Alpha confirmed finding",
+                "severity": "high",
+                "confidence": 0.9,
+                "status": "confirmed",
+                "affected_asset": "127.0.0.1",
+                "location": "/confirmed",
+                "evidence_ids": ["ev-alpha-confirm"],
+            }, str(node_id))
+
+            await ws_router._persist_vulnerability({
+                "type": "vuln_found",
+                "conversation_id": str(conv_id),
+                "title": "Alpha rejected finding",
+                "severity": "low",
+                "confidence": 0.2,
+                "status": "rejected",
+                "affected_asset": "127.0.0.1",
+                "location": "/false-positive",
+            }, str(node_id))
+
+            await ws_router._persist_evidence({
+                "type": "evidence_created",
+                "conversation_id": str(conv_id),
+                "evidence_id": "ev-alpha-confirm",
+                "evidence_type": "http_trace",
+                "source_tool": "http_request",
+                "tool_run_id": "tool-alpha-confirm",
+                "summary": "HTTP 200 proof",
+                "raw_ref": "evidence/ev-alpha-confirm",
+                "hash": "hash-alpha-confirm",
+                "properties": {"method": "GET", "url": "http://127.0.0.1/confirmed", "status_code": 200},
+            }, str(node_id))
+
             await ws_router._persist_evidence({
                 "type": "tool_output",
                 "conversation_id": str(conv_id),
@@ -130,13 +177,26 @@ async def main() -> None:
                 assert conv.status == "running"
                 asset = (await db.execute(select(Asset).where(Asset.user_id == user_id))).scalar_one()
                 assert asset.address == "127.0.0.1"
-                vuln = (await db.execute(select(Vulnerability).where(Vulnerability.user_id == user_id))).scalar_one()
-                assert vuln.title == "Alpha test finding"
+                vulns = (await db.execute(select(Vulnerability).where(Vulnerability.user_id == user_id))).scalars().all()
+                by_title = {v.title: v for v in vulns}
+                vuln = by_title["Alpha test finding"]
                 assert vuln.asset_id == asset.id
-                evidence = (await db.execute(select(Evidence).where(Evidence.user_id == user_id))).scalar_one()
-                assert evidence.source_tool == "curl"
+                assert by_title["Alpha gated finding"].status == "pending"
+                assert by_title["Alpha rejected finding"].status == "false_positive"
+                confirmed = by_title["Alpha confirmed finding"]
+                assert confirmed.status == "confirmed"
+                assert confirmed.evidence_ids == ["ev-alpha-confirm"]
+                evidence_rows = (await db.execute(select(Evidence).where(Evidence.user_id == user_id))).scalars().all()
+                by_evidence_id = {e.evidence_id: e for e in evidence_rows}
+                assert any(e.source_tool == "curl" for e in evidence_rows)
+                confirmed_evidence = by_evidence_id["ev-alpha-confirm"]
+                assert confirmed_evidence.source_tool == "http_request"
+                assert confirmed_evidence.properties["placeholder"] is False
+                assert confirmed_evidence.properties["status_code"] == 200
                 audits = (await db.execute(select(AuditLog))).scalars().all()
                 assert {a.action for a in audits} >= {"task.assign", "asset.discover", "finding.create", "evidence.create"}
+                assert any((a.detail or {}).get("evidence_gate") == "missing_evidence" for a in audits)
+                assert {a.action for a in audits} >= {"finding.confirm", "finding.reject"}
 
             print("alpha smoke ok")
         finally:

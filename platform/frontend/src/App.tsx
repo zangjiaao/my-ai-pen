@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+﻿import { useEffect } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { useAuthStore } from "./stores/authStore";
 import LoginPage from "./pages/LoginPage";
@@ -9,6 +9,7 @@ import NodePage from "./pages/NodePage";
 import SkillPage from "./pages/SkillPage";
 import KnowledgePage from "./pages/KnowledgePage";
 import MemoryPage from "./pages/MemoryPage";
+import SonnerToast from "./components/SonnerToast";
 
 export default function App() {
   const { checkAuth, user, loading } = useAuthStore();
@@ -18,15 +19,18 @@ export default function App() {
   if (loading) return <div className="flex h-screen items-center justify-center text-ink-muted">Loading...</div>;
 
   return (
-    <Routes>
-      <Route path="/login" element={user ? <Navigate to="/" /> : <LoginPage />} />
-      <Route path="/" element={user ? <ConversationPage /> : <Navigate to="/login" />} />
-      <Route path="/assets" element={user ? <AssetPage /> : <Navigate to="/login" />} />
-      <Route path="/vulnerabilities" element={user ? <VulnerabilityPage /> : <Navigate to="/login" />} />
-      <Route path="/nodes" element={user ? <NodePage /> : <Navigate to="/login" />} />
-      <Route path="/skills" element={user ? <SkillPage /> : <Navigate to="/login" />} />
-      <Route path="/knowledge" element={user ? <KnowledgePage /> : <Navigate to="/login" />} />
-      <Route path="/memories" element={user ? <MemoryPage /> : <Navigate to="/login" />} />
-    </Routes>
+    <>
+      <Routes>
+        <Route path="/login" element={user ? <Navigate to="/" /> : <LoginPage />} />
+        <Route path="/" element={user ? <ConversationPage /> : <Navigate to="/login" />} />
+        <Route path="/assets" element={user ? <AssetPage /> : <Navigate to="/login" />} />
+        <Route path="/vulnerabilities" element={user ? <VulnerabilityPage /> : <Navigate to="/login" />} />
+        <Route path="/nodes" element={user ? <NodePage /> : <Navigate to="/login" />} />
+        <Route path="/skills" element={user ? <SkillPage /> : <Navigate to="/login" />} />
+        <Route path="/knowledge" element={user ? <KnowledgePage /> : <Navigate to="/login" />} />
+        <Route path="/memories" element={user ? <MemoryPage /> : <Navigate to="/login" />} />
+      </Routes>
+      {user && <SonnerToast />}
+    </>
   );
 }

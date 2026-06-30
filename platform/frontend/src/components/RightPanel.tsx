@@ -1,4 +1,6 @@
-import { useState } from "react";
+﻿import { useState } from "react";
+import type { SecurityAsset, SecurityVulnerability } from "../lib/securityTypes";
+import ApprovalCountdown from "./ApprovalCountdown";
 
 type Tab = "discoveries" | "progress" | "pending" | "evidence";
 type TodoStatus = "done" | "running" | "pending";
@@ -11,9 +13,13 @@ interface Props {
   progress?: { current: number; total: number; percent: number };
   todos?: Array<{ id: string; title: string; status: TodoStatus }>;
   findings?: Array<Record<string, unknown>>;
+  assets?: Array<Record<string, unknown>>;
   pendingApprovals?: Array<Record<string, unknown>>;
   evidence?: Array<Record<string, unknown>>;
   onDecision?: (requestId: string, decision: "authorize" | "cancel") => void;
+  onOpenVulnerability?: (finding: Partial<SecurityVulnerability>) => void;
+  onOpenAsset?: (asset: Partial<SecurityAsset>) => void;
+  onLocateApproval?: (requestId: string) => void;
 }
 
 const TODO_MARK: Record<TodoStatus, string> = {
@@ -31,14 +37,14 @@ const PHASE_LABELS: Record<string, string> = {
   report: "同步结果与整理证据",
 };
 
-export default function RightPanel({ phase, activeTool, intakeResult, intakeStatus, progress, todos = [], findings = [], pendingApprovals = [], evidence = [], onDecision }: Props) {
+export default function RightPanel({ phase, activeTool, intakeResult, intakeStatus, progress, todos = [], findings = [], assets = [], pendingApprovals = [], evidence = [], onDecision, onOpenVulnerability, onOpenAsset, onLocateApproval }: Props) {
   const [tab, setTab] = useState<Tab>("progress");
 
   const tabs: { key: Tab; label: string }[] = [
-    { key: "progress", label: "进度" },
-    { key: "discoveries", label: `发现${findings.length ? ` (${findings.length})` : ""}` },
-    { key: "pending", label: `待处理${pendingApprovals.length ? ` (${pendingApprovals.length})` : ""}` },
-    { key: "evidence", label: `证据${evidence.length ? ` (${evidence.length})` : ""}` },
+    { key: "progress", label: "Progress" },
+    { key: "discoveries", label: `Discoveries${findings.length + assets.length ? ` (${findings.length + assets.length})` : ""}` },
+    { key: "pending", label: `Pending${pendingApprovals.length ? ` (${pendingApprovals.length})` : ""}` },
+    { key: "evidence", label: `Evidence${evidence.length ? ` (${evidence.length})` : ""}` },
   ];
 
   const percent = Math.max(0, Math.min(100, Number(progress?.percent || 0)));
@@ -109,36 +115,58 @@ export default function RightPanel({ phase, activeTool, intakeResult, intakeStat
           </div>
         )}
         {tab === "discoveries" && (
-          findings.length === 0 ? (
-            <p className="text-sm text-ink-muted">暂无发现</p>
+          findings.length + assets.length === 0 ? (
+            <p className="text-sm text-ink-muted">No discoveries yet</p>
           ) : (
             <div className="space-y-2">
               {findings.map((f, i) => (
-                <div key={(f.id as string) || i} className="rounded-md border border-hairline-soft p-2">
-                  <div className="flex items-center gap-1 mb-1">
-                    <span className={`inline-block rounded-pill px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase tracking-wider bg-severity-${f.severity}-subtle text-severity-${f.severity}`}>{f.severity as string}</span>
-                    <span className="truncate text-sm font-medium">{f.title as string}</span>
+                <button key={(f.id as string) || (f.vulnerability_id as string) || i} type="button" onClick={() => onOpenVulnerability?.(f as Partial<SecurityVulnerability>)} className="block w-full rounded-md border border-hairline-soft p-2 text-left transition-colors hover:bg-surface-default">
+                  <div className="mb-1 flex items-center gap-1">
+                    <span className={`inline-block rounded-md px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase bg-severity-${f.severity || "info"}-subtle text-severity-${f.severity || "info"}`}>{String(f.severity || "info")}</span>
+                    <span className="truncate text-sm font-medium">{String(f.title || "Untitled vulnerability")}</span>
                   </div>
-                  <p className="text-xs text-ink-muted">{(f.location || f.status || "") as string}</p>
-                </div>
+                  <p className="break-words text-xs text-ink-muted">{String(f.location || f.affected_asset || f.status || "")}</p>
+                </button>
               ))}
+              {assets.map((asset, i) => {
+                const props = asset.properties as Record<string, unknown> | undefined;
+                const ports = Array.isArray(asset.open_ports) ? asset.open_ports : Array.isArray(props?.open_ports) ? props.open_ports as unknown[] : [];
+                return (
+                  <button key={(asset.id as string) || (asset.asset_id as string) || (asset.address as string) || i} type="button" onClick={() => onOpenAsset?.(asset as Partial<SecurityAsset>)} className="block w-full rounded-md border border-hairline-soft p-2 text-left transition-colors hover:bg-surface-default">
+                    <div className="mb-1 flex items-center gap-1">
+                      <span className="rounded-md bg-canvas-inset px-1.5 py-0.5 text-[10px] uppercase text-ink-secondary">{String(asset.asset_type || asset.type || "asset")}</span>
+                      <span className="truncate text-sm font-medium">{String(asset.address || asset.name || "Unknown asset")}</span>
+                    </div>
+                    <p className="break-words text-xs text-ink-muted">ports: {ports.length ? ports.join(", ") : "-"}</p>
+                  </button>
+                );
+              })}
             </div>
           )
         )}
         {tab === "pending" && (
-          pendingApprovals.length === 0 ? <p className="text-sm text-ink-muted">无待处理项</p> : (
+          pendingApprovals.length === 0 ? <p className="text-sm text-ink-muted">No pending approvals</p> : (
             <div className="space-y-3" data-testid="pending-list">
-              {pendingApprovals.map((item) => (
-                <div key={item.request_id as string} className="rounded-md border border-hairline p-3">
-                  <div className="mb-1 text-xs text-ink-muted">{item.risk_level as string}</div>
-                  <div className="mb-2 text-sm font-medium">{item.question as string}</div>
-                  {Boolean(item.proposed_action) && <pre className="mb-2 max-h-24 overflow-auto rounded bg-canvas-inset p-2 text-xs">{String(item.proposed_action)}</pre>}
-                  <div className="flex gap-2">
-                    <button onClick={() => onDecision?.(item.request_id as string, "authorize")} className="rounded-pill bg-ink px-3 py-1.5 text-xs text-white">授权</button>
-                    <button onClick={() => onDecision?.(item.request_id as string, "cancel")} className="rounded-pill border px-3 py-1.5 text-xs">取消</button>
+              {pendingApprovals.map((item) => {
+                const requestId = String(item.request_id || "");
+                return (
+                  <div key={requestId} data-testid="pending-item" data-approval-request-id={requestId} className="rounded-md border border-hairline p-3">
+                    <div className="mb-2 flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="text-xs uppercase text-ink-muted">{String(item.risk_level || "unknown")}</div>
+                        <div className="mt-1 break-words text-sm font-medium [overflow-wrap:anywhere]">{String(item.question || "")}</div>
+                      </div>
+                      <ApprovalCountdown expiresAt={item.expires_at} compact />
+                    </div>
+                    {Boolean(item.proposed_action) && <pre className="mb-2 max-h-24 overflow-auto rounded bg-canvas-inset p-2 font-mono text-xs whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{String(item.proposed_action)}</pre>}
+                    <div className="flex flex-wrap gap-2">
+                      <button data-testid="pending-locate" type="button" onClick={() => onLocateApproval?.(requestId)} className="rounded-pill border border-hairline px-3 py-1.5 text-xs">Locate</button>
+                      <button type="button" onClick={() => onDecision?.(requestId, "authorize")} className="rounded-pill bg-ink px-3 py-1.5 text-xs text-white">Authorize</button>
+                      <button type="button" onClick={() => onDecision?.(requestId, "cancel")} className="rounded-pill border px-3 py-1.5 text-xs">Cancel</button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )
         )}
