@@ -1,4 +1,4 @@
-﻿# 产品路线图 — AI 安全运营平台
+# 产品路线图 — AI 安全运营平台
 
 > 文档角色：PLAID 一等文档，唯一执行计划和 checkbox 来源。产品范围见 `docs/product-vision.md` 与 `docs/prd.md`，技术边界见 `docs/architecture.md`。
 > 最近校准：2026-07-01
@@ -49,7 +49,7 @@ MVP Alpha 单节点平台闭环已经完成；MVP Demo 尚未完成。
 
 ## 3. MVP Demo Phase 1：Agent 自治能力基线
 
-目标：参考 AIRecon 和 PentesterFlow 的成熟做法，先让渗透 Agent 具备最小自治测试能力，而不是只包装一个会跑脚本的 UI。
+目标：参考 AIRecon 和 PentesterFlow 的成熟做法，先让渗透 Agent 具备最小自治测试能力，而不是只包装一个会跑脚本的 UI。专项设计见 `docs/phase1-agent-autonomy-baseline.md`。
 
 - [ ] **TASK-008** — 建立 Attack Surface Inventory。
   Files: `node/pentest_node/agent/attack_surface.py`, `node/pentest_node/tools/http.py`, `node/pentest_node/tools/browser.py`, `tests/`
