@@ -11,7 +11,7 @@ CONVERSATION_TRANSITIONS: dict[str, set[str]] = {
     "created": {"running", "canceled"},
     "running": {"paused", "completed", "failed", "canceled"},
     "paused": {"running", "canceled"},
-    "completed": set(),
+    "completed": {"running"},
     "failed": {"running", "canceled"},
     "canceled": {"running"},
 }

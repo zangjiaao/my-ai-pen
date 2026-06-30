@@ -9,18 +9,18 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "node"))
 sys.path.insert(0, str(ROOT / "platform" / "backend"))
 
-from app.api.conversations import (  # noqa: E402
-    _agent_state_from_checkpoint,
-    _checkpoint_assets,
-    _checkpoint_findings,
-    _progress_for_checkpoint,
-    _todos_for_checkpoint,
+from app.services.conversation_snapshot import (  # noqa: E402
+    agent_state_from_checkpoint as _agent_state_from_checkpoint,
+    checkpoint_assets as _checkpoint_assets,
+    checkpoint_findings as _checkpoint_findings,
+    progress_for_checkpoint as _progress_for_checkpoint,
+    todos_for_checkpoint as _todos_for_checkpoint,
 )
 from app.models.conversation import Conversation  # noqa: E402
-from app.services.conversation_state import ConversationStatusError, transition_conversation  # noqa: E402
+from app.services.conversation_state import transition_conversation  # noqa: E402
 from app.ws.router import _resume_message_from_context, _task_assign_from_user_message, _user_message_route  # noqa: E402
 from pentest_node.agent.intake import TaskIntake  # noqa: E402
-from pentest_node.agent.loop import PentestAgentLoop  # noqa: E402
+from pentest_node.agent.loop import PHASE_TOOL_NAMES, PentestAgentLoop  # noqa: E402
 from pentest_node.agent.state import Phase  # noqa: E402
 
 
@@ -80,6 +80,11 @@ class CheckpointResumeTests(unittest.TestCase):
         self.assertEqual(snapshot["iteration"], 17)
         self.assertIn("recon", snapshot["phases_completed"])
 
+    def test_web_phases_allow_http_and_browser_tools(self):
+        for phase in ("recon", "scan", "verify"):
+            self.assertIn("http_request", PHASE_TOOL_NAMES[phase])
+            self.assertIn("browser", PHASE_TOOL_NAMES[phase])
+
     def test_conversation_state_uses_checkpoint_progress(self):
         checkpoint = {
             "reason": "tool_output",
@@ -133,6 +138,18 @@ class CheckpointResumeTests(unittest.TestCase):
 
     def test_user_message_route_separates_resume_from_new_assignment(self):
         self.assertEqual(_user_message_route({"text": "continue"}, "completed")["action"], "completed")
+        self.assertEqual(
+            _user_message_route({"text": "confirm current state", "agent_target": "pentest"}, "completed")["action"],
+            "completed_followup",
+        )
+        self.assertEqual(
+            _user_message_route({"text": "\u786e\u8ba4\u4e00\u4e0b DVWA \u5b89\u5168\u7ea7\u522b", "agent_target": "pentest"}, "completed")["action"],
+            "completed_followup",
+        )
+        self.assertEqual(
+            _user_message_route({"text": "test http://host.docker.internal:8080/login.php"}, "completed")["action"],
+            "completed_followup",
+        )
         self.assertEqual(_user_message_route({"text": "continue"}, "running")["action"], "steer_or_resume")
         self.assertEqual(_user_message_route({"text": "continue"}, "failed")["action"], "resume")
         self.assertEqual(
@@ -159,6 +176,25 @@ class CheckpointResumeTests(unittest.TestCase):
         self.assertEqual(resumed["checkpoint"], resume_context["checkpoint"])
         self.assertIn("Run a DVWA web application pentest", resumed["text"])
         self.assertIn("continue", resumed["text"])
+
+    def test_completed_followup_resume_can_reset_checkpoint(self):
+        msg = {"type": "user_message", "conversation_id": "conv-1", "text": "confirm current state"}
+        resume_context = {
+            "task": {
+                "target": {"type": "url", "value": "http://host.docker.internal:8080/login.php"},
+                "scope": {"allow": ["http://host.docker.internal:8080/login.php"], "deny": []},
+                "instruction": "Run a DVWA web application pentest",
+            },
+            "checkpoint": {"phase": "report", "phases_completed": ["precheck", "plan", "recon", "scan", "verify", "report"]},
+        }
+
+        resumed, is_resume = _resume_message_from_context(msg, resume_context, include_checkpoint=False)
+
+        self.assertTrue(is_resume)
+        self.assertEqual(resumed["target"], resume_context["task"]["target"])
+        self.assertEqual(resumed["scope"], resume_context["task"]["scope"])
+        self.assertEqual(resumed["checkpoint"], {})
+        self.assertIn("confirm current state", resumed["text"])
 
     def test_resume_message_requires_durable_target(self):
         resumed, is_resume = _resume_message_from_context({"text": "continue"}, {"task": {}, "checkpoint": {"phase": "scan"}})
@@ -192,8 +228,8 @@ class CheckpointResumeTests(unittest.TestCase):
         self.assertEqual(canceled.status, "running")
 
         completed = Conversation(status="completed")
-        with self.assertRaises(ConversationStatusError):
-            transition_conversation(completed, "running")
+        transition_conversation(completed, "running")
+        self.assertEqual(completed.status, "running")
 
 
 if __name__ == "__main__":

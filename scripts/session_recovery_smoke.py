@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "platform" / "backend"))
 
 from fastapi.testclient import TestClient  # noqa: E402
-from sqlalchemy import JSON, String  # noqa: E402
+from sqlalchemy import JSON, String, select  # noqa: E402
 from sqlalchemy.dialects.postgresql import ARRAY, INET, JSONB, UUID  # noqa: E402
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
 from sqlalchemy.ext.compiler import compiles  # noqa: E402
@@ -70,6 +70,7 @@ async def _setup_db(db_path: Path):
 
     user = User(id=uuid.uuid4(), email="session-recovery@example.local", role="admin")
     conv = Conversation(id=uuid.uuid4(), user_id=user.id, status="completed")
+    empty_conv = Conversation(id=uuid.uuid4(), user_id=user.id, status="created")
     base_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
     order_index = 0
 
@@ -127,6 +128,7 @@ async def _setup_db(db_path: Path):
     async with sessionmaker() as db:
         db.add(user)
         db.add(conv)
+        db.add(empty_conv)
         db.add_all(messages)
         db.add(Asset(
             id=uuid.uuid4(),
@@ -162,7 +164,7 @@ async def _setup_db(db_path: Path):
             properties={},
         ))
         await db.commit()
-    return engine, sessionmaker, user, conv
+    return engine, sessionmaker, user, conv, empty_conv
 
 
 def main() -> None:
@@ -171,7 +173,7 @@ def main() -> None:
     original_session = db_base.async_session
     with tempfile.TemporaryDirectory() as tmp:
         with TestClient(app) as client:
-            engine, sessionmaker, user, conv = client.portal.call(_setup_db, Path(tmp) / "session-recovery.db")
+            engine, sessionmaker, user, conv, empty_conv = client.portal.call(_setup_db, Path(tmp) / "session-recovery.db")
             db_base.async_session = sessionmaker
             try:
                 token = _create_token(user, 3600)
@@ -229,6 +231,59 @@ def main() -> None:
                     m["role"] == "agent" and m["msg_type"] == "text" and "Late recovered finding" in m["content"].get("text", "")
                     for m in after_question.json()
                 ), after_question.json()
+
+                async def save_user_message_with_client_id():
+                    client_message_id = "client-smoke-message-1"
+                    await _save_message({
+                        "type": "user_message",
+                        "conversation_id": str(conv.id),
+                        "text": "hello with client id",
+                        "client_message_id": client_message_id,
+                    }, "user")
+                    async with sessionmaker() as db:
+                        result = await db.execute(
+                            select(Message)
+                            .where(Message.conversation_id == conv.id, Message.role == "user")
+                            .order_by(Message.created_at.desc(), Message.id.desc())
+                            .limit(1)
+                        )
+                        saved = result.scalar_one()
+                        return saved.content
+
+                saved_user_content = client.portal.call(save_user_message_with_client_id)
+                assert saved_user_content["client_message_id"] == "client-smoke-message-1", saved_user_content
+
+                async def fake_platform_chat(messages):
+                    assert messages[-1]["content"] == "hello"
+                    return "platform chat ok"
+
+                set_completed_conversation_chat_override(fake_platform_chat)
+                try:
+                    with client.websocket_connect(f"/ws?token={token}") as websocket:
+                        websocket.send_json({
+                            "type": "user_message",
+                            "conversation_id": str(empty_conv.id),
+                            "text": "hello",
+                            "client_message_id": "client-smoke-chat-1",
+                        })
+                        answer = websocket.receive_json()
+                        assert answer["type"] == "text", answer
+                        assert answer["content"]["text"] == "platform chat ok", answer
+                finally:
+                    set_completed_conversation_chat_override(None)
+
+                empty_messages = client.get(f"/api/conversations/{empty_conv.id}/messages?limit=20&offset=0&order=desc", headers=headers)
+                assert empty_messages.status_code == 200, empty_messages.text
+                empty_payload = empty_messages.json()
+                assert any(
+                    m["role"] == "user" and m["content"].get("client_message_id") == "client-smoke-chat-1"
+                    for m in empty_payload
+                ), empty_payload
+                assert any(
+                    m["role"] == "agent" and m["msg_type"] == "text" and m["content"].get("text") == "platform chat ok"
+                    for m in empty_payload
+                ), empty_payload
+                assert not any(m["msg_type"] == "status" and "task_error" in str(m["content"]) for m in empty_payload), empty_payload
 
                 delete_response = client.delete(f"/api/conversations/{conv.id}", headers=headers)
                 assert delete_response.status_code == 200, delete_response.text

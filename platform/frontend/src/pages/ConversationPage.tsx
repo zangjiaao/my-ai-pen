@@ -9,7 +9,7 @@ import { useConversationStore } from "../stores/conversationStore";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { ApiError, authFetch } from "../lib/api";
 import { normalizeExecutionStatus } from "../lib/status";
-import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import type { AgentIdentity, Conversation, Message } from "../lib/types";
 import type { SecurityAsset, SecurityVulnerability } from "../lib/securityTypes";
 
@@ -38,6 +38,9 @@ type Todo = { id: string; title: string; status: "done" | "running" | "pending" 
 type AgentNode = { id: string; name: string; type: AgentIdentity | string; status: string; token_required?: boolean };
 type MentionState = { start: number; query: string } | null;
 
+type MessageRecord = Record<string, unknown>;
+type MessagesInfiniteData = InfiniteData<MessageRecord[], unknown>;
+
 type ConversationSnapshot = {
   conversation?: Conversation;
   agent_state?: Record<string, unknown>;
@@ -55,7 +58,6 @@ export default function ConversationPage() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [restoreAttempted, setRestoreAttempted] = useState(false);
   const [stateSnapshotLoaded, setStateSnapshotLoaded] = useState(false);
-  const [liveMessages, setLiveMessages] = useState<Message[]>([]);
   const messageScrollerRef = useRef<HTMLDivElement | null>(null);
   const pendingScrollRestoreRef = useRef<{ top: number; height: number } | null>(null);
   const pendingScrollToBottomRef = useRef(false);
@@ -82,15 +84,10 @@ export default function ConversationPage() {
     initialPageParam: 0,
     getNextPageParam: (lastPage, allPages) => lastPage.length === MESSAGE_PAGE_SIZE ? allPages.reduce((sum, page) => sum + page.length, 0) : undefined,
     staleTime: 15_000,
+    refetchOnWindowFocus: false,
   });
 
-  const persistedMessages = useMemo(() => {
-    if (!activeId || !messageQuery.data?.pages) return [];
-    const orderedPages = [...messageQuery.data.pages].reverse();
-    return coalesceConversationMessages(orderedPages.flat().map(normalizeMessage(activeId)));
-  }, [activeId, messageQuery.data]);
-
-  const messages = useMemo(() => coalesceConversationMessages([...persistedMessages, ...liveMessages]), [persistedMessages, liveMessages]);
+  const messages = useMemo(() => messagesFromQueryData(activeId, messageQuery.data as MessagesInfiniteData | undefined), [activeId, messageQuery.data]);
   const activeConversation = useMemo(() => conversations.find(c => c.id === activeId), [activeId, conversations]);
   const platformAgentNodeId = useMemo(() => agentNodes.find(node => node.type === "platform")?.id || null, [agentNodes]);
   const agentNameById = useMemo(() => Object.fromEntries(agentNodes.map(node => [node.id, node.name])), [agentNodes]);
@@ -137,95 +134,156 @@ export default function ConversationPage() {
     }
   }, [applyConversationState]);
 
+  const setConversationMessageData = useCallback((conversationId: string | null, updater: (data: MessagesInfiniteData) => MessagesInfiniteData) => {
+    if (!conversationId) return;
+    queryClient.setQueryData<MessagesInfiniteData>(["conversation-messages", conversationId], current => updater(current || emptyMessagesData()));
+  }, [queryClient]);
+
+  const addMessageToConversation = useCallback((conversationId: string | null, message: Message) => {
+    setConversationMessageData(conversationId, data => appendMessageRecord(data, messageRecordFromMessage(message)));
+  }, [setConversationMessageData]);
+
+  const clearPendingAgentMessage = useCallback((conversationId: string | null) => {
+    setConversationMessageData(conversationId, data => removeMessageRecords(data, record => recordMessageType(record) === "agent_pending"));
+  }, [setConversationMessageData]);
+
   const { send } = useWebSocket({
     vuln_found: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
+      const convId = messageConversationId(m, activeId);
+      clearPendingAgentMessage(convId);
       markMessageAutoScroll();
       setFindings(prev => upsertBy(prev, { ...m, id: m.id || m.vulnerability_id, location: m.location || m.affected_asset || "" }, "title"));
-      setLiveMessages(prev => [...prev, makeMessage(messageConversationId(m, activeId), "agent", "vuln_card", m)]);
-      void refreshConversationState(messageConversationId(m, activeId));
+      addMessageToConversation(convId, makeMessage(convId, "agent", "vuln_card", m));
+      void refreshConversationState(convId);
     },
     tool_output: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, string>;
+      const convId = messageConversationId(msg, activeId);
+      clearPendingAgentMessage(convId);
       markMessageAutoScroll();
-      const incoming = makeMessage(messageConversationId(msg, activeId), "agent", "tool_call", {
+      const incoming = makeMessage(convId, "agent", "tool_call", {
         tool_name: m.tool_name || "",
         tool_run_id: m.tool_run_id,
         command: m.command || "",
         status: normalizeExecutionStatus(m.status),
         stdout: m.line ? `${m.line}\n` : "",
+        message_id: m.message_id,
       });
-      setLiveMessages((prev) => mergeToolCallIntoMessages(prev, incoming));
-      void refreshConversationState(messageConversationId(msg, activeId));
+      addMessageToConversation(convId, incoming);
+      void refreshConversationState(convId);
     },
     asset_discovered: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
+      const convId = messageConversationId(msg, activeId);
+      clearPendingAgentMessage(convId);
       markMessageAutoScroll();
       setAssets(prev => upsertBy(prev, { ...m, id: m.id || m.asset_id }, "address"));
-      setLiveMessages(prev => [...prev, makeMessage(messageConversationId(msg, activeId), "agent", "asset_card", m)]);
-      void refreshConversationState(messageConversationId(msg, activeId));
+      addMessageToConversation(convId, makeMessage(convId, "agent", "asset_card", m));
+      void refreshConversationState(convId);
     },
     evidence_created: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
+      const convId = messageConversationId(m, activeId);
+      clearPendingAgentMessage(convId);
       setEvidence(prev => upsertBy(prev, m, "evidence_id"));
-      void refreshConversationState(messageConversationId(m, activeId));
+      void refreshConversationState(convId);
     },
     request_decision: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
-      markMessageAutoScroll();
       const convId = messageConversationId(msg, activeId);
+      clearPendingAgentMessage(convId);
+      markMessageAutoScroll();
       const requestId = String(m.request_id || "");
       setPendingApprovals(prev => upsertBy(prev, m, "request_id"));
-      setLiveMessages(prev => [...prev, makeMessage(convId, "agent", "confirm_card", m)]);
+      addMessageToConversation(convId, makeMessage(convId, "agent", "confirm_card", m));
       window.dispatchEvent(new CustomEvent("sonner:notify", { detail: { id: `approval-${requestId || crypto.randomUUID()}`, requestId, conversationId: convId || "", message: "Approval required", description: String(m.question || m.proposed_action || "") } }));
-      void refreshConversationState(messageConversationId(m, activeId));
+      void refreshConversationState(convId);
     },
     checkpoint_update: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
-      void refreshConversationState(messageConversationId(msg, activeId));
+      const convId = messageConversationId(msg, activeId);
+      clearPendingAgentMessage(convId);
+      void refreshConversationState(convId);
+    },
+    intake_update: (msg) => {
+      if (!isActiveMessage(msg, activeId)) return;
+      const m = msg as Record<string, unknown>;
+      const phase = typeof m.phase === "string" ? m.phase : "precheck";
+      clearPendingAgentMessage(messageConversationId(msg, activeId));
+      setAgentState({ phase, activeTool: m.active_tool, intakeResult: m.intake_result, intakeStatus: m.status });
+      setProgress(progressForPhase(phase, "running"));
+      setTodos(todosForPhase(phase, "running"));
+      setRunning(true);
+    },
+    thinking: (msg) => {
+      if (!isActiveMessage(msg, activeId)) return;
+      const convId = messageConversationId(msg, activeId);
+      clearPendingAgentMessage(convId);
+      markMessageAutoScroll();
+      addMessageToConversation(convId, makeMessage(convId, "agent", "thinking", msg as Record<string, unknown>));
+    },
+    reasoning: (msg) => {
+      if (!isActiveMessage(msg, activeId)) return;
+      const convId = messageConversationId(msg, activeId);
+      clearPendingAgentMessage(convId);
+      markMessageAutoScroll();
+      addMessageToConversation(convId, makeMessage(convId, "agent", "reasoning", msg as Record<string, unknown>));
+    },
+    agent_thinking: (msg) => {
+      if (!isActiveMessage(msg, activeId)) return;
+      const convId = messageConversationId(msg, activeId);
+      clearPendingAgentMessage(convId);
+      markMessageAutoScroll();
+      addMessageToConversation(convId, makeMessage(convId, "agent", "agent_thinking", msg as Record<string, unknown>));
     },
     status_update: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
+      const convId = messageConversationId(msg, activeId);
+      clearPendingAgentMessage(convId);
       markMessageAutoScroll();
       const phase = typeof m.phase === "string" ? m.phase : undefined;
       setAgentState({ phase, activeTool: m.active_tool, intakeResult: m.intake_result, intakeStatus: m.status });
       setProgress(progressForPhase(phase, "running"));
       setTodos(todosForPhase(phase, "running"));
       setRunning(true);
-      setLiveMessages(prev => appendConversationMessage(prev, makeMessage(messageConversationId(msg, activeId), "system", "status", { text: `Phase: ${phase || ""}`, phase, iteration: m.iteration, active_tool: m.active_tool, status: m.status, intake_result: m.intake_result })));
+      addMessageToConversation(convId, makeMessage(convId, "system", "status", { text: `Phase: ${phase || ""}`, phase, iteration: m.iteration, active_tool: m.active_tool, status: m.status, intake_result: m.intake_result, message_id: m.message_id }));
     },
     task_complete: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const convId = messageConversationId(msg, activeId);
+      clearPendingAgentMessage(convId);
       markMessageAutoScroll();
       setRunning(false);
-      setLiveMessages(prev => appendConversationMessage(prev, makeMessage(convId, "system", "status", { text: "任务完成 - " + JSON.stringify((msg as Record<string, unknown>).summary || {}), summary: (msg as Record<string, unknown>).summary || {} })));
+      addMessageToConversation(convId, makeMessage(convId, "system", "status", { text: "任务完成 - " + JSON.stringify((msg as Record<string, unknown>).summary || {}), summary: (msg as Record<string, unknown>).summary || {}, message_id: (msg as Record<string, unknown>).message_id }));
       void fetchAll();
       void refreshConversationState(convId);
     },
     task_error: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const convId = messageConversationId(msg, activeId);
+      clearPendingAgentMessage(convId);
       markMessageAutoScroll();
       setRunning(false);
-      setLiveMessages(prev => appendConversationMessage(prev, makeMessage(convId, "system", "status", { text: "任务失败: " + ((msg as Record<string, unknown>).message || "") })));
+      addMessageToConversation(convId, makeMessage(convId, "system", "status", { text: "任务失败: " + ((msg as Record<string, unknown>).message || ""), message_id: (msg as Record<string, unknown>).message_id }));
       void fetchAll();
       void refreshConversationState(convId);
     },
     text: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const c = (msg as Record<string, unknown>).content || msg;
+      const convId = messageConversationId(msg, activeId);
+      clearPendingAgentMessage(convId);
       markMessageAutoScroll();
-      setLiveMessages(prev => [...prev, makeMessage(messageConversationId(msg, activeId), "agent", "text", c as Record<string, unknown>)]);
+      addMessageToConversation(convId, makeMessage(convId, "agent", "text", c as Record<string, unknown>));
     },
   });
-
   const locateApproval = useCallback((requestId: string) => {
     if (!requestId) return;
     setHighlightedApprovalId(requestId);
@@ -247,7 +305,6 @@ export default function ConversationPage() {
   }, [activeId, locateApproval]);
 
   const resetConversationState = useCallback(() => {
-    setLiveMessages([]);
     setAgentState({});
     setProgress(undefined);
     setTodos([]);
@@ -275,7 +332,6 @@ export default function ConversationPage() {
     localStorage.setItem(ACTIVE_CONVERSATION_KEY, id);
     send({ type: "subscribe", conversation_id: id });
 
-    setLiveMessages([]);
     const conversationStatus = conversations.find(c => c.id === id)?.status || "created";
     const fallbackState = snapshotFromMessages([], conversationStatus);
 
@@ -342,9 +398,9 @@ export default function ConversationPage() {
   const handleDecision = useCallback((requestId: string, decision: "authorize" | "cancel") => {
     if (!activeId || !requestId) return;
     setPendingApprovals(prev => prev.filter(item => item.request_id !== requestId));
-    setLiveMessages(prev => [...prev, makeMessage(activeId, "user", "text", { text: decision === "authorize" ? "已授权执行" : "已取消该操作" })]);
+    addMessageToConversation(activeId, makeMessage(activeId, "user", "text", { text: decision === "authorize" ? "已授权执行" : "已取消该操作" }));
     send({ type: "user_decision", conversation_id: activeId, request_id: requestId, decision });
-  }, [activeId, send]);
+  }, [activeId, addMessageToConversation, send]);
 
   const chooseMention = useCallback((node: AgentNode) => {
     const state = getMentionState(input);
@@ -368,7 +424,7 @@ export default function ConversationPage() {
     const restartRequested = isRestartRequest(text);
     const completedConversation = isConversationComplete(activeId, conversations, todos);
     const platformMention = selectedMentionAgent?.type === "platform";
-    const startFresh = Boolean(activeId && (restartRequested || (completedConversation && targetValue && !platformMention)));
+    const startFresh = Boolean(activeId && restartRequested);
 
     let convId = startFresh ? null : activeId;
     if (!convId) {
@@ -383,30 +439,42 @@ export default function ConversationPage() {
       } catch { return; }
     }
 
-    const userContent: Record<string, unknown> = { text };
+    const clientMessageId = crypto.randomUUID();
+    const userContent: Record<string, unknown> = { text, client_message_id: clientMessageId };
     if (selectedMentionAgent) {
       userContent.agent_target = selectedMentionAgent.type === "platform" ? "platform" : "pentest";
       userContent.agent_node_id = selectedMentionAgent.id;
     }
     pendingScrollToBottomRef.current = true;
     shouldStickToBottomRef.current = true;
-    setLiveMessages(prev => [...prev, makeMessage(convId, "user", "text", userContent)]);
     const agentPayload = selectedMentionAgent ? { agent_target: selectedMentionAgent.type === "platform" ? "platform" : "pentest", agent_node_id: selectedMentionAgent.id } : {};
     const shouldContinueExisting = Boolean(!startFresh && activeId && !restartRequested && !completedConversation);
+    const pendingAgentSource = pendingAgentSourceForMessage(selectedMentionAgent, targetValue, activeConversation?.status, todos);
+    const pendingAgentNodeId = selectedMentionAgent?.id || (pendingAgentSource === "pentest" ? activeConversation?.node_id || undefined : undefined);
+    const pendingContent: Record<string, unknown> = {
+      text: "Working...",
+      agent_source: pendingAgentSource,
+    };
+    if (pendingAgentNodeId) pendingContent.agent_node_id = pendingAgentNodeId;
+    setConversationMessageData(convId, data => {
+      const withoutPending = removeMessageRecords(data, record => recordMessageType(record) === "agent_pending");
+      const withUser = appendMessageRecord(withoutPending, messageRecordFromMessage(makeMessage(convId, "user", "text", userContent)));
+      return appendMessageRecord(withUser, messageRecordFromMessage(makeMessage(convId, "agent", "agent_pending", pendingContent)));
+    });
 
     if (!platformMention && shouldContinueExisting && activeConversation?.status === "running") {
-      send({ type: "user_steer", conversation_id: convId, text, ...agentPayload });
+      send({ type: "user_steer", conversation_id: convId, text, client_message_id: clientMessageId, ...agentPayload });
       return;
     }
 
     if (shouldContinueExisting && !targetValue) {
       setRunning(true);
-      send({ type: "user_message", conversation_id: convId, text, resume: true, ...agentPayload });
+      send({ type: "user_message", conversation_id: convId, text, resume: true, client_message_id: clientMessageId, ...agentPayload });
       return;
     }
 
     if (!targetValue) {
-      send({ type: "user_message", conversation_id: convId, text, ...agentPayload });
+      send({ type: "user_message", conversation_id: convId, text, client_message_id: clientMessageId, ...agentPayload });
       return;
     }
 
@@ -416,8 +484,8 @@ export default function ConversationPage() {
     setTodos(todosForPhase("precheck", "running"));
     const target = { type: targetValue.startsWith("http") ? "url" : "host", value: targetValue };
     const scope = { allow: [target.value], deny: [] };
-    send({ type: "user_message", conversation_id: convId, text, target, scope, ...agentPayload });
-  }, [input, selectedAgent, agentNodes, activeId, activeConversation, conversations, todos, resetConversationState, fetchAll, send]);
+    send({ type: "user_message", conversation_id: convId, text, target, scope, client_message_id: clientMessageId, ...agentPayload });
+  }, [input, selectedAgent, agentNodes, activeId, activeConversation, conversations, todos, resetConversationState, fetchAll, send, setConversationMessageData]);
 
 
 function getMentionState(value: string): MentionState {
@@ -461,6 +529,18 @@ function isConversationComplete(activeId: string | null, conversations: Conversa
   if (conversation?.status === "completed") return true;
   if (todos.length > 0 && todos.every(item => item.status === "done")) return true;
   return false;
+}
+
+function pendingAgentSourceForMessage(
+  selectedAgent: AgentNode | null,
+  targetValue: string | null,
+  conversationStatus: Conversation["status"] | undefined,
+  todos: Todo[],
+): AgentIdentity {
+  if (selectedAgent?.type === "platform") return "platform";
+  if (selectedAgent?.type === "pentest") return "pentest";
+  if (targetValue || conversationStatus === "running" || todos.some(item => item.status === "running" || item.status === "pending")) return "pentest";
+  return "platform";
 }
   function extractTarget(t: string): string | null {
     const url = t.match(/https?:\/\/\S+/);
@@ -599,13 +679,19 @@ async function fetchConversationMessagesPage(conversationId: string, offset: num
   return authFetch<Array<Record<string, unknown>>>(`/api/conversations/${conversationId}/messages?limit=${MESSAGE_PAGE_SIZE}&offset=${offset}&order=desc`);
 }
 
+function messagesFromQueryData(conversationId: string | null, data: MessagesInfiniteData | undefined): Message[] {
+  if (!conversationId || !data?.pages) return [];
+  return [...data.pages].reverse().flat().map(normalizeMessage(conversationId));
+}
+
 function normalizeMessage(conversationId: string) {
-  return (m: Record<string, unknown>): Message => {
+  return (m: MessageRecord): Message => {
     const msgType = String(m.msg_type || "text");
     const content = { ...((m.content || {}) as Record<string, unknown>) };
+    content.message_id = String(m.id || content.message_id || "");
     if (msgType === "tool_call") content.status = normalizeExecutionStatus(content.status);
     return {
-      id: String(m.id || crypto.randomUUID()),
+      id: String(m.id || content.message_id || crypto.randomUUID()),
       conversation_id: String(m.conversation_id || conversationId),
       role: m.role as Message["role"],
       msg_type: msgType,
@@ -616,100 +702,80 @@ function normalizeMessage(conversationId: string) {
   };
 }
 
-function coalesceConversationMessages(messages: Message[]): Message[] {
-  return messages.reduce<Message[]>((merged, message) => appendConversationMessage(merged, message), []);
+function emptyMessagesData(): MessagesInfiniteData {
+  return { pages: [[]], pageParams: [0] };
 }
 
-function appendConversationMessage(messages: Message[], incoming: Message): Message[] {
-  if (incoming.msg_type === "tool_call") return mergeToolCallIntoMessages(messages, incoming);
-  if (isDuplicateStatusMessage(messages, incoming)) return messages;
-  return [...messages, incoming];
+function appendMessageRecord(data: MessagesInfiniteData, record: MessageRecord): MessagesInfiniteData {
+  const current = data.pages.length ? data : emptyMessagesData();
+  let updatedExisting = false;
+  const pages = current.pages.map(page => page.map(existing => {
+    if (!shouldUpdateMessageRecord(existing, record)) return existing;
+    updatedExisting = true;
+    return mergeMessageRecords(existing, record);
+  }));
+
+  if (updatedExisting) return { ...current, pages };
+  const [firstPage = [], ...restPages] = pages;
+  return { ...current, pages: [[...firstPage, record], ...restPages] };
 }
 
-function isDuplicateStatusMessage(messages: Message[], incoming: Message): boolean {
-  if (incoming.msg_type !== "status") return false;
-  const incomingText = normalizeStatusText(readString(incoming.content.text));
-  if (!incomingText) return false;
-
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message.msg_type !== "status") continue;
-    return normalizeStatusText(readString(message.content.text)) === incomingText;
-  }
-  return false;
+function removeMessageRecords(data: MessagesInfiniteData, predicate: (record: MessageRecord) => boolean): MessagesInfiniteData {
+  return { ...data, pages: data.pages.map(page => page.filter(record => !predicate(record))) };
 }
 
-function normalizeStatusText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
+function shouldUpdateMessageRecord(existing: MessageRecord, incoming: MessageRecord): boolean {
+  const existingId = recordMessageId(existing);
+  const incomingId = recordMessageId(incoming);
+  if (existingId && incomingId && existingId === incomingId) return true;
+  return recordMessageType(existing) === "tool_call" && recordMessageType(incoming) === "tool_call" && Boolean(recordToolRunKey(existing)) && recordToolRunKey(existing) === recordToolRunKey(incoming);
 }
 
-function mergeToolCallIntoMessages(messages: Message[], incoming: Message): Message[] {
-  if (incoming.msg_type !== "tool_call") return [...messages, incoming];
-
-  const incomingKey = toolRunKey(incoming);
-  const incomingTool = readString(incoming.content.tool_name);
-  let existingIndex = -1;
-
-  if (incomingKey) {
-    existingIndex = findLastToolCallIndex(messages, incomingKey);
-  } else {
-    const lastIndex = messages.length - 1;
-    const lastMessage = messages[lastIndex];
-    if (lastMessage?.msg_type === "tool_call" && readString(lastMessage.content.tool_name) === incomingTool && !toolRunKey(lastMessage)) {
-      existingIndex = lastIndex;
-    }
-  }
-
-  if (existingIndex < 0) existingIndex = findDuplicateFailedToolCallIndex(messages, incoming);
-  if (existingIndex < 0) return [...messages, incoming];
-
-  const next = [...messages];
-  next[existingIndex] = mergeToolMessages(next[existingIndex], incoming);
-  return next;
-}
-
-function findDuplicateFailedToolCallIndex(messages: Message[], incoming: Message): number {
-  if (normalizeExecutionStatus(incoming.content.status) !== "fail") return -1;
-  const incomingTool = readString(incoming.content.tool_name);
-  const incomingOutput = normalizeToolOutput(readString(incoming.content.stdout));
-  if (!incomingTool || !incomingOutput) return -1;
-
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message.msg_type !== "tool_call") continue;
-    if (readString(message.content.tool_name) !== incomingTool) continue;
-    if (normalizeExecutionStatus(message.content.status) !== "fail") continue;
-    if (normalizeToolOutput(readString(message.content.stdout)) === incomingOutput) return index;
-  }
-  return -1;
-}
-
-function normalizeToolOutput(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
-}
-
-function findLastToolCallIndex(messages: Message[], toolRunKeyValue: string): number {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message.msg_type === "tool_call" && toolRunKey(message) === toolRunKeyValue) return index;
-  }
-  return -1;
-}
-
-function mergeToolMessages(existing: Message, incoming: Message): Message {
-  const currentStdout = readString(existing.content.stdout);
-  const incomingStdout = readString(incoming.content.stdout);
+function mergeMessageRecords(existing: MessageRecord, incoming: MessageRecord): MessageRecord {
+  if (recordMessageType(existing) !== "tool_call" || recordMessageType(incoming) !== "tool_call") return incoming;
+  const existingContent = recordContent(existing);
+  const incomingContent = recordContent(incoming);
   return {
     ...existing,
+    ...incoming,
     content: {
-      ...existing.content,
-      ...incoming.content,
-      command: incoming.content.command || existing.content.command || "",
-      stdout: appendStdout(currentStdout, incomingStdout),
-      status: normalizeExecutionStatus(incoming.content.status || existing.content.status),
+      ...existingContent,
+      ...incomingContent,
+      command: incomingContent.command || existingContent.command || "",
+      stdout: appendStdout(readString(existingContent.stdout), readString(incomingContent.stdout)),
+      status: normalizeExecutionStatus(incomingContent.status || existingContent.status),
     },
     created_at: incoming.created_at || existing.created_at,
   };
+}
+
+function messageRecordFromMessage(message: Message): MessageRecord {
+  const content = { ...message.content };
+  if (!content.message_id) content.message_id = message.id;
+  return {
+    id: message.id,
+    conversation_id: message.conversation_id,
+    role: message.role,
+    msg_type: message.msg_type,
+    content,
+    created_at: message.created_at,
+  };
+}
+
+function recordContent(record: MessageRecord): Record<string, unknown> {
+  return ((record.content || {}) as Record<string, unknown>);
+}
+
+function recordMessageType(record: MessageRecord): string {
+  return String(record.msg_type || "text");
+}
+
+function recordMessageId(record: MessageRecord): string {
+  return readString(record.id) || readString(recordContent(record).message_id);
+}
+
+function recordToolRunKey(record: MessageRecord): string {
+  return readString(recordContent(record).tool_run_id);
 }
 
 function appendStdout(current: string, incoming: string): string {
@@ -717,10 +783,6 @@ function appendStdout(current: string, incoming: string): string {
   if (!current) return incoming;
   if (current.endsWith(incoming)) return current;
   return `${current}${current.endsWith("\n") ? "" : "\n"}${incoming}`;
-}
-
-function toolRunKey(message: Message): string {
-  return readString(message.content.tool_run_id);
 }
 
 function snapshotFromMessages(messages: Message[], status: Conversation["status"] | "running" | string): ConversationSnapshot {
@@ -825,5 +887,6 @@ function upsertBy(items: Array<Record<string, unknown>>, item: Record<string, un
 }
 
 function makeMessage(conversationId: string | null, role: Message["role"], msg_type: string, content: Record<string, unknown>): Message {
-  return { id: crypto.randomUUID(), conversation_id: conversationId || "", role, msg_type, content, parent_msg_id: null, created_at: new Date().toISOString() };
+  const messageId = readString(content.message_id);
+  return { id: messageId || crypto.randomUUID(), conversation_id: conversationId || "", role, msg_type, content, parent_msg_id: null, created_at: new Date().toISOString() };
 }

@@ -4,6 +4,7 @@ import type { Message } from "../lib/types";
 import type { SecurityAsset, SecurityVulnerability } from "../lib/securityTypes";
 import { normalizeExecutionStatus } from "../lib/status";
 import ConfirmCard from "./cards/ConfirmCard";
+import ThinkingCard from "./cards/ThinkingCard";
 
 interface Props {
   message: Message;
@@ -29,11 +30,12 @@ type MarkdownBlock =
 
 function agentDisplayName(content: Record<string, unknown>, agentNameById: Record<string, string>, fallbackPentestNodeId?: string | null, platformAgentNodeId?: string | null): string {
   const source = String(content.agent_source || "pentest");
+  const mode = String(content.agent_mode || "");
   const explicitNodeId = typeof content.agent_node_id === "string" ? content.agent_node_id : "";
   const fallbackNodeId = source === "platform" ? platformAgentNodeId : fallbackPentestNodeId;
   const nodeId = explicitNodeId || fallbackNodeId || "";
-  if (nodeId && agentNameById[nodeId]) return agentNameById[nodeId];
-  return source === "platform" ? "平台Agent" : "渗透Agent";
+  const baseName = nodeId && agentNameById[nodeId] ? agentNameById[nodeId] : source === "platform" ? "\u5e73\u53f0Agent" : "\u6e17\u900fAgent";
+  return mode === "snapshot_qa" ? `${baseName} (\u5386\u53f2\u95ee\u7b54)` : baseName;
 }
 function ToolCallCard({ content }: { content: Record<string, unknown> }) {
   const [expanded, setExpanded] = useState(false);
@@ -370,6 +372,13 @@ function AssetCard({ content, onOpen }: { content: Record<string, unknown>; onOp
   );
 }
 
+function AgentPendingCard({ content }: { content: Record<string, unknown> }) {
+  return (
+    <div className="my-2 min-w-0 max-w-full text-sm leading-relaxed text-ink-secondary">
+      {String(content.text || "Working...")}
+    </div>
+  );
+}
 function SystemNotice({ content }: { content: Record<string, unknown> }) {
   return <div className="my-2 text-center text-xs text-ink-muted">{content.text as string}</div>;
 }
@@ -405,6 +414,14 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
       break;
     case "confirm_card":
       body = <ConfirmCard content={content} highlighted={Boolean(content.request_id && content.request_id === highlightedApprovalId)} onAuthorize={() => onDecision?.(content.request_id as string, "authorize")} onCancel={() => onDecision?.(content.request_id as string, "cancel")} />;
+      break;
+    case "agent_pending":
+      body = <AgentPendingCard content={content} />;
+      break;
+    case "thinking":
+    case "reasoning":
+    case "agent_thinking":
+      body = <ThinkingCard content={content} />;
       break;
     case "status":
       body = <div className="my-2 text-center text-xs text-ink-muted">{content.text as string}</div>;

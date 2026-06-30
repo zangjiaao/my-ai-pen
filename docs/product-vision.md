@@ -1,42 +1,82 @@
 # Product Vision — AI 安全运营平台
 
-> 来源：`vision.json` V2.0 与 `docs/prd.md`
-> 生成时间：2026-06-29
-> 当前同步：MVP Alpha 闭环已提交 `3725e44 Implement MVP alpha platform loop`；`scripts/validate-vision.js` 缺失，PLAID 自动校验未运行。
+> 文档角色：PLAID 一等文档，描述产品方向、MVP 边界和成功标准。技术细节见 `docs/prd.md` 与 `docs/architecture.md`，执行计划见 `docs/product-roadmap.md`。
+> 最近校准：2026-07-01
 
 ## 产品定位
 
-AI 安全运营平台是一个以自然语言对话为核心入口的安全运营系统。它采用平台 + 节点架构，由平台负责会话、资产、漏洞、证据、节点调度和用户交互，由安全节点负责具体工具执行与专业 Agent 流程。
+AI 安全运营平台是一个以自然语言对话为核心入口的安全运营系统。平台负责会话、资产、漏洞、证据、节点调度和用户交互；渗透测试 Node 负责具体工具执行、Agent 决策、安全边界和证据采集。
+
+产品的长期方向是让安全团队把渗透测试、漏洞验证、复测、报告沉淀和知识复用都放进一个可观测、可干预、可追溯的工作台。当前阶段必须先把渗透测试单节点闭环做成可演示、可复现、可信任的 MVP。
 
 ## 核心问题
 
-安全团队在渗透测试、漏洞验证和报告沉淀中经常面对工具链分散、专家经验依赖强、过程不可观测、证据管理割裂和知识难复用的问题。当前 MVP 聚焦先把单节点渗透测试闭环做实，让用户能从 Web 对话页发起任务、观察执行、干预授权，并看到结构化结果沉淀。
+安全团队在渗透测试和漏洞验证中经常遇到：
+
+- 工具链分散，执行过程难以复盘。
+- 专家经验强依赖，低价值重复操作多。
+- 漏洞结论与证据文件割裂，报告整理成本高。
+- Agent 行为不可观测，用户难以判断它是否真的执行了验证。
+- 离线或客户内网场景无法完全依赖平台在线调度。
 
 ## 目标用户
 
-主要用户是安全工程师和渗透测试工程师，他们需要减少重复操作、降低报告整理成本，并让漏洞结论有证据链支撑。次要用户包括安全运营团队管理者、代码审计工程师和应急响应工程师。
+主要用户是安全工程师和渗透测试工程师。他们需要用自然语言发起测试，观察 Agent 执行过程，在高风险动作前授权，并获得可管理、可复测、可导出的漏洞结果。
 
-## MVP 范围
+次要用户包括安全运营团队管理者、代码审计工程师和应急响应工程师。当前 MVP 不覆盖这些场景的专业 Node，但数据模型和平台信息中心要为后续扩展预留空间。
 
-MVP 聚焦渗透测试 Node 与平台 Web 闭环：
+## MVP 分层
+
+### MVP Alpha：已完成
+
+Alpha 目标是验证平台模式单节点闭环：
 
 - 用户登录平台并创建会话。
-- 用户用自然语言输入目标和测试需求。
 - 平台按会话绑定在线渗透测试 Node 并下发任务。
-- Node 在进入 LLM loop 前执行确定性 target/scope/DNS/TCP intake，localhost 靶场误用会给出 `host.docker.internal` 提示。
-- Node 使用受控 DockerSandbox 执行工具。
-- 工具输出、资产、漏洞、证据实时回传并入库。
-- 高风险操作通过确认卡片等待用户授权。
-- 刷新页面后，会话消息、进度、TODO、待处理授权、发现和证据可从后端快照恢复。
+- Node 执行 target/scope/DNS/TCP intake。
+- Node 使用 DockerSandbox 执行工具。
+- 工具输出、资产、漏洞、证据、状态消息实时回传并入库。
+- 高风险操作通过平台确认卡片授权。
+- 刷新页面或切换会话后，消息、进度、TODO、待处理、资产、漏洞和证据可从后端快照恢复。
+
+### MVP Demo：当前目标
+
+Demo 目标是客户可演示版本，必须同时覆盖在线平台模式和离线独立模式：
+
+- 平台模式可以完成 DVWA/Juice Shop 的端到端演示。
+- 漏洞、资产、证据可在会话、右侧面板、资产管理页和漏洞管理页查看详情。
+- 可基于会话快照导出 Markdown/HTML 报告。
+- 证据详情能展示工具输出、HTTP 请求/响应摘要、hash、raw_ref 和来源工具。
+- Node 可脱离平台独立完成渗透测试任务。
+- Standalone 使用 SQLite 作为本地事实源，证据文件保存在 session workspace。
+- Standalone 支持 CLI 创建任务、`--resume <session_id>` 恢复未完成任务。
+- Standalone TUI 提供最小观察界面和授权确认，行为与平台确认卡一致。
+- 完成后可导出 `report.tar.gz`，平台可导入并恢复会话、消息、资产、漏洞和证据。
 
 ## 非 MVP 范围
 
-CTF、应急响应、日志分析、威胁情报、完整多租户 RBAC、复杂多 Agent 编排、完整报告中心、生产级离线消息补传和完整证据文件同步不纳入当前平台前后端 MVP 闭环。
+当前 Demo 不承诺：
+
+- 多节点调度策略、负载均衡、节点队列化。
+- 节点后台 daemon、多客户端 attach、并发 session 队列。
+- 完整 RBAC、组织、多租户隔离。
+- 完整报告中心、模板审批流和长期报告归档。
+- 代码审计、应急响应、日志分析、CTF 等其他专业 Node。
+- 知识库/记忆增强、子代理、并行工具执行。
+- RabbitMQ、生产级 ACK、离线消息补传和多实例 WebSocket 广播。
 
 ## 成功标准
 
-MVP Alpha 的成功标准是：单用户、单在线节点、单会话可以完成从任务创建到 Node 执行、授权确认、资产/漏洞/证据入库、前端刷新恢复的端到端闭环，并具备自动化 smoke 覆盖。当前该 Alpha 标准已通过 `alpha_smoke.py`、`node_alpha_smoke.py`、`ws_alpha_smoke.py`、`docker_sandbox_smoke.py`、`docker_sandbox_real_smoke.py` 和 `alpha_browser_smoke.py` 验收；确定性 Task Intake 已纳入 `node_alpha_smoke.py` 和 `ws_alpha_smoke.py` 覆盖。
+MVP Demo 达标必须满足：
+
+- 平台模式：用户可以从 Web 会话发起 DVWA/Juice Shop 测试，看到 Agent 执行过程、授权请求、资产、漏洞、证据和总结，并在刷新后状态不丢失。
+- 独立模式：用户不启动平台，也能用 CLI + TUI 完成一次授权范围内的渗透测试，结果进入 SQLite 和证据目录。
+- 同步闭环：Standalone 结果可导出为 `report.tar.gz`，平台导入后能在会话、资产管理、漏洞管理和证据详情中查看。
+- 可交付：用户能导出一份包含范围、资产、漏洞、证据摘要、时间线和免责声明的 MVP 报告。
+- 可排查：会话 ID、任务状态、关键错误、工具失败和授权记录可追溯。
 
 ## 技术方向
 
-平台前端使用 React + Zustand + WebSocket；平台后端使用 FastAPI + SQLAlchemy + PostgreSQL 模型 + WebSocket；Node 使用 Python Agent Runtime、OpenAI SDK 兼容接口和 Docker/Kali 沙箱。RabbitMQ、ACK、心跳补传和生产级多节点调度保留为后续增强。
+平台前端使用 React、Tailwind、Zustand、TanStack Query 和 WebSocket。平台后端使用 FastAPI、SQLAlchemy、PostgreSQL 和 WebSocket。Node 使用 Python、OpenAI SDK 兼容接口、DockerSandbox、SQLite、Textual/Rich TUI 和本地证据文件目录。
+
+RabbitMQ、多节点、知识库/记忆、完整 Skill runtime、生产级审计与离线补传保留为 MVP 之后的增强。

@@ -69,7 +69,8 @@ async def answer_completed_conversation(conv_id: str, user_id: str, question: st
         "type": "text",
         "conversation_id": conv_id,
         "agent_source": normalized_agent,
-        "content": {"text": content.strip() or "我没有生成有效回答。", "agent_source": normalized_agent},
+        "agent_mode": "snapshot_qa",
+        "content": {"text": content.strip() or "我没有生成有效回答。", "agent_source": normalized_agent, "agent_mode": "snapshot_qa"},
     }
 
 

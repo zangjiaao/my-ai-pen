@@ -20,6 +20,12 @@ conversation_node: dict[str, str] = {}
 pending_approvals: dict[str, dict] = {}
 _round_robin_counter: int = 0
 
+FOLLOW_UP_ACTION_RE = re.compile(
+    "\u786e\u8ba4|\u68c0\u67e5|\u67e5\u770b|\u8bbf\u95ee|\u6253\u5f00|\u590d\u6d4b|\u91cd\u6d4b|\u91cd\u65b0\u6d4b|\u7ee7\u7eed\u6d4b|\u9a8c\u8bc1|\u8bf7\u6c42|\u6293\u53d6|\u767b\u5f55|\u770b\u4e00\u4e0b|"
+    r"\b(check|confirm|verify|retest|rerun|visit|open|fetch|request|scan|test|login)\b",
+    re.IGNORECASE,
+)
+
 
 def _uuid(value: str | uuid.UUID | None) -> uuid.UUID | None:
     if not value:
@@ -320,6 +326,8 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                 msg_type = "decision"
             else:
                 content = {"text": msg.get("text", "")}
+                if msg.get("client_message_id"):
+                    content["client_message_id"] = msg.get("client_message_id")
                 msg_type = "text"
             if target_agent:
                 content["agent_target"] = target_agent
@@ -374,6 +382,9 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                 content["agent_node_id"] = agent_node_id
 
         message_id = uuid.uuid4()
+        msg["message_id"] = str(message_id)
+        if isinstance(msg.get("content"), dict):
+            msg["content"]["message_id"] = str(message_id)
         async with async_session() as db:
             db.add(Message(
                 id=message_id,
@@ -856,10 +867,23 @@ def _message_target_value(msg: dict) -> str:
     return match.group(0) if match else ""
 
 
+def _completed_pentest_followup_requested(msg: dict, target_value: str) -> bool:
+    requested_agent = _agent_target(msg)
+    if requested_agent == "platform":
+        return False
+    if target_value:
+        return True
+    if requested_agent != "pentest":
+        return False
+    text = str(msg.get("text") or msg.get("initial_instruction") or "")
+    return bool(FOLLOW_UP_ACTION_RE.search(text))
+
+
 def _user_message_route(msg: dict, conversation_status: str | None) -> dict:
     target_value = _message_target_value(msg)
     if conversation_status == "completed":
-        return {"action": "completed", "target_value": target_value}
+        action = "completed_followup" if _completed_pentest_followup_requested(msg, target_value) else "completed"
+        return {"action": action, "target_value": target_value}
     if not target_value and conversation_status == "running":
         return {"action": "steer_or_resume", "target_value": target_value}
     if not target_value:
@@ -867,7 +891,7 @@ def _user_message_route(msg: dict, conversation_status: str | None) -> dict:
     return {"action": "assign", "target_value": target_value}
 
 
-def _resume_message_from_context(msg: dict, resume_context: dict) -> tuple[dict | None, bool]:
+def _resume_message_from_context(msg: dict, resume_context: dict, *, include_checkpoint: bool = True) -> tuple[dict | None, bool]:
     task_context = resume_context.get("task") or {}
     if not task_context.get("target"):
         return None, False
@@ -879,7 +903,7 @@ def _resume_message_from_context(msg: dict, resume_context: dict) -> tuple[dict 
         **msg,
         "target": task_context.get("target") or {},
         "scope": task_context.get("scope") or {},
-        "checkpoint": resume_context.get("checkpoint") or {},
+        "checkpoint": (resume_context.get("checkpoint") or {}) if include_checkpoint else {},
         "text": combined_instruction,
     }, True
 
@@ -911,6 +935,17 @@ async def _send_to_bound_node(conv_id: str, raw: str) -> bool:
 async def _persist_and_broadcast(conv_id: str, msg: dict, role: str = "agent"):
     await _save_message(msg, role)
     await _broadcast_to_conversation(conv_id, json.dumps(msg, ensure_ascii=False))
+
+
+
+async def _answer_with_platform_agent(conv_id: str, user_id: str, text: str, agent_source: str = "platform"):
+    answer = await answer_completed_conversation(conv_id, user_id, text, agent_source)
+    if agent_source == "platform":
+        answer["agent_node_id"] = str(PLATFORM_AGENT_NODE_ID)
+        if isinstance(answer.get("content"), dict):
+            answer["content"]["agent_node_id"] = str(PLATFORM_AGENT_NODE_ID)
+    await _save_message(answer, "agent")
+    await _broadcast_to_conversation(conv_id, json.dumps(answer, ensure_ascii=False))
 
 
 async def _broadcast_to_conversation(conv_id: str, raw: str):
@@ -972,7 +1007,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         await _audit_tool_output(msg, client_id)
                 if msg.get("type") == "checkpoint_update":
                     await _remember_conversation_checkpoint(conv_id, msg.get("checkpoint") or {})
-                else:
+                elif msg.get("type") != "intake_update":
                     await _save_message(msg, "agent")
                 if msg.get("type") == "request_decision":
                     request_id = msg.get("request_id") or str(uuid.uuid4())
@@ -1018,26 +1053,13 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     conversation_status = await _conversation_status(conv_id)
                     requested_agent = _agent_target(msg)
                     if requested_agent == "platform":
-                        answer = await answer_completed_conversation(conv_id, client_id, msg.get("text", ""), "platform")
-                        answer["agent_node_id"] = str(PLATFORM_AGENT_NODE_ID)
-                        if isinstance(answer.get("content"), dict):
-                            answer["content"]["agent_node_id"] = str(PLATFORM_AGENT_NODE_ID)
-                        await _save_message(answer, "agent")
-                        raw_answer = json.dumps(answer, ensure_ascii=False)
-                        await _broadcast_to_conversation(conv_id, raw_answer)
+                        await _answer_with_platform_agent(conv_id, client_id, msg.get("text", ""), "platform")
                         continue
                     route = _user_message_route(msg, conversation_status)
                     resumed_from_context = False
                     if route["action"] == "completed":
                         requested_agent = _agent_target(msg) or "platform"
-                        answer = await answer_completed_conversation(conv_id, client_id, msg.get("text", ""), requested_agent)
-                        if requested_agent == "platform":
-                            answer["agent_node_id"] = str(PLATFORM_AGENT_NODE_ID)
-                            if isinstance(answer.get("content"), dict):
-                                answer["content"]["agent_node_id"] = str(PLATFORM_AGENT_NODE_ID)
-                        await _save_message(answer, "agent")
-                        raw_answer = json.dumps(answer, ensure_ascii=False)
-                        await _broadcast_to_conversation(conv_id, raw_answer)
+                        await _answer_with_platform_agent(conv_id, client_id, msg.get("text", ""), requested_agent)
                         continue
                     if route["action"] == "steer_or_resume":
                         steer_msg = {**msg, "type": "user_steer"}
@@ -1053,19 +1075,13 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                                 detail={"sent": sent, "source": "targetless_user_message"},
                             )
                             continue
-                    if route["action"] in {"resume", "steer_or_resume"}:
+                    if route["action"] in {"resume", "steer_or_resume", "completed_followup"}:
                         resume_context = await _conversation_resume_context(conv_id)
-                        resumed_msg, resumed_from_context = _resume_message_from_context(msg, resume_context)
+                        resumed_msg, resumed_from_context = _resume_message_from_context(msg, resume_context, include_checkpoint=route["action"] != "completed_followup")
                         if resumed_msg:
                             msg = resumed_msg
                         else:
-                            await _persist_and_broadcast(conv_id, {
-                                "type": "task_error",
-                                "conversation_id": conv_id,
-                                "message": "当前会话缺少可恢复的目标，请提供测试目标 URL 或 IP，或明确重新开始。",
-                                "agent_source": "platform",
-                                "agent_node_id": str(PLATFORM_AGENT_NODE_ID),
-                            }, "agent")
+                            await _answer_with_platform_agent(conv_id, client_id, msg.get("text", ""), "platform")
                             continue
                     if node_connections:
                         task_msg = _task_assign_from_user_message(conv_id, msg, str(uuid.uuid4()))
