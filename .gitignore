@@ -45,3 +45,4 @@ platform/frontend/tsconfig.tsbuildinfo
 .alpha/
 reverse/
 node/workspace/
+node/node/

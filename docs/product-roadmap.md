@@ -18,7 +18,7 @@ MVP Alpha 单节点平台闭环已经完成；MVP Demo 尚未完成。
 | MVP Alpha：平台模式单节点闭环 | [x] | 已能从平台发起任务、Node 执行、结果入库、刷新恢复。 |
 | MVP Demo Phase 1：Agent 自治能力基线 | [x] | Agent 能先看目标、建立攻击面、按覆盖矩阵推进测试，并只确认有证据的漏洞。 |
 | MVP Demo Phase 2：平台结果可交付 | [x] | 平台模式可稳定演示，漏洞/资产/证据/报告可查看、可导出、可排查。 |
-| MVP Demo Phase 3：Node Standalone 闭环 | [ ] | 无平台环境也能独立测试，SQLite 持久化，CLI/TUI 观察和授权。 |
+| MVP Demo Phase 3：Node Standalone 闭环 | [x] | 无平台环境也能独立测试，SQLite 持久化，CLI/TUI 观察和授权。 |
 | MVP Demo Phase 4：Export / Import 闭环 | [ ] | Standalone 结果导入平台，进入统一会话、资产、漏洞、证据管理。 |
 | MVP Demo Phase 5：演示稳定性与观测 | [ ] | Demo 前可自动检查环境、节点、靶场和关键链路，问题可追踪。 |
 | MVP Production | [ ] | 生产部署、ACK/心跳、权限隔离、多节点可靠性。 |
@@ -91,30 +91,30 @@ MVP Alpha 单节点平台闭环已经完成；MVP Demo 尚未完成。
 
 目标：不启动平台也能完成授权范围内的渗透测试任务，并通过 CLI/TUI 观察和授权。
 
-- [ ] **TASK-018** — 设计并实现 Node SQLite 本地事实源。
+- [x] **TASK-018** — 设计并实现 Node SQLite 本地事实源。
   Files: `node/pentest_node/db.py`, `node/pentest_node/models.py`
-  Notes: 表包含 sessions、messages、tool_runs、assets、findings、evidence、approvals、checkpoints、attack_surface、coverage。
-- [ ] **TASK-019** — 抽象统一 Agent event sink。
+  Notes: 表包含 sessions、messages、tool_runs、assets、findings、evidence、approvals、checkpoints、attack_surface、coverage；standalone 事件投影已覆盖消息、工具、资产、漏洞、证据、授权、checkpoint、attack surface、coverage。
+- [x] **TASK-019** — 抽象统一 Agent event sink。
   Files: `node/pentest_node/agent/loop.py`, `node/pentest_node/platform/`, `node/pentest_node/standalone/`
-  Notes: Agent 事件先写本地事实源，再分发到平台 WebSocket、TUI 或 export；避免平台模式和 standalone 双实现。
-- [ ] **TASK-020** — 实现 standalone CLI 创建任务。
+  Notes: `LocalFirstEventSink` 是 shared Agent event sink contract；standalone 和平台模式均先写 Node SQLite 本地事实源，再分发到 TUI callback、approval handler 或平台 WebSocket。
+- [x] **TASK-020** — 实现 standalone CLI 创建任务。
   Files: `node/pentest_node/main.py`
   Notes: 支持 `pentest-node standalone --target <target> --scope <allow> --output <dir>`，不依赖平台 WebSocket。
-- [ ] **TASK-021** — Standalone 复用平台模式安全门禁。
+- [x] **TASK-021** — Standalone 复用平台模式安全门禁。
   Files: `node/pentest_node/agent/intake.py`, `node/pentest_node/tools/execute.py`, `node/pentest_node/tools/http.py`, `node/pentest_node/tools/browser.py`, `node/pentest_node/tools/workflow.py`
   Notes: intake、scope gate、risk gate、Evidence Gate 行为必须和平台模式一致。
-- [ ] **TASK-022** — 实现 CLI 授权 prompt。
+- [x] **TASK-022** — 实现 CLI 授权 prompt。
   Files: `node/pentest_node/agent/loop.py`, `node/pentest_node/standalone/`
   Notes: 无 TUI 时，高风险操作在终端显示 proposed_action、risk_level、target，并等待 authorize/cancel。
-- [ ] **TASK-023** — 实现 `--resume <session_id>`。
+- [x] **TASK-023** — 实现 `--resume <session_id>`。
   Files: `node/pentest_node/main.py`, `node/pentest_node/db.py`, `node/pentest_node/agent/loop.py`
   Notes: 从 SQLite 最近 checkpoint 恢复未完成任务；不承诺 daemon、attach 或并发队列。
-- [ ] **TASK-024** — 实现最小 Textual/Rich TUI。
+- [x] **TASK-024** — 实现最小 Textual/Rich TUI。
   Files: `node/pentest_node/tui/app.py`, `node/pentest_node/tui/`
-  Notes: 参考 `research/AIRecon` 的 Textual 形态，显示 phase、iteration、active tool、Agent 输出、工具调用、Findings、Assets、Evidence、Coverage。
-- [ ] **TASK-025** — TUI 授权确认。
+  Notes: 参考 `research/AIRecon` 的 Textual 工作台形态：左侧 session/status/tools，中间 transcript 和输入框，右侧 Findings/Assets/Evidence 同屏结果面板；支持空 TUI 启动后输入自然语言任务创建 standalone session，并支持 `/resume <session_id>`。
+- [x] **TASK-025** — TUI 授权确认。
   Files: `node/pentest_node/tui/app.py`, `node/pentest_node/agent/loop.py`
-  Notes: TUI modal 行为与平台确认卡一致，返回 authorize/cancel。
+  Notes: TUI modal 行为与平台确认卡一致，返回 authorize/cancel；任务运行中输入会作为 steering 注入当前 Agent loop。Verification 2026-07-01: `python -m unittest tests.test_standalone_phase3`, `python -m unittest discover -s tests`, `python -m pentest_node.main standalone --help`, `python -m pentest_node.main --help`, and `python -c "from pentest_node.tui.app import PentestTUI"` passed。
 
 ## 6. MVP Demo Phase 4：Export / Import 闭环
 
@@ -165,4 +165,4 @@ MVP Alpha 单节点平台闭环已经完成；MVP Demo 尚未完成。
 
 ## 9. 下一步
 
-下一步进入 **MVP Demo Phase 3：Node Standalone 闭环**，从 **TASK-018 到 TASK-025** 开始。Phase 2 已完成平台结果可交付：错误去重和持久化、Evidence 详情、报告导出、资产/漏洞 Demo 字段均已补齐。
+下一步进入 **MVP Demo Phase 4：Export / Import 闭环**，从 **TASK-026 到 TASK-030** 开始。Phase 3 已完成 Node SQLite 本地事实源、shared Agent event sink、standalone CLI、resume、CLI/TUI 授权和最小 Textual TUI。
