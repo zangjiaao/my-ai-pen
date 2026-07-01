@@ -1,4 +1,4 @@
-﻿import { useState } from "react";
+import { useState } from "react";
 import type { SecurityAsset, SecurityVulnerability } from "../lib/securityTypes";
 import ApprovalCountdown from "./ApprovalCountdown";
 
@@ -23,20 +23,19 @@ interface Props {
 }
 
 const TODO_MARK: Record<TodoStatus, string> = {
-  done: "✓",
-  running: "•",
+  done: "\u2713",
+  running: "\u2022",
   pending: "",
 };
 
 const PHASE_LABELS: Record<string, string> = {
-  precheck: "目标与授权范围检查",
-  plan: "生成测试计划",
-  recon: "资产与服务探测",
-  scan: "漏洞扫描与候选发现",
-  verify: "复现验证与授权确认",
-  report: "同步结果与整理证据",
+  intake: "\u76ee\u6807\u4e0e\u6388\u6743\u8303\u56f4\u68c0\u67e5",
+  recon: "\u653b\u51fb\u9762\u53d1\u73b0",
+  analysis: "\u8986\u76d6\u5206\u6790\u4e0e\u6d4b\u8bd5\u8ba1\u5212",
+  verify: "\u9a8c\u8bc1\u4e0e\u8bc1\u636e\u786e\u8ba4",
+  report: "\u62a5\u544a\u6574\u7406",
+  complete: "\u4efb\u52a1\u5b8c\u6210",
 };
-
 export default function RightPanel({ phase, activeTool, intakeResult, intakeStatus, progress, todos = [], findings = [], assets = [], pendingApprovals = [], evidence = [], onDecision, onOpenVulnerability, onOpenAsset, onLocateApproval }: Props) {
   const [tab, setTab] = useState<Tab>("progress");
 
@@ -48,7 +47,7 @@ export default function RightPanel({ phase, activeTool, intakeResult, intakeStat
   ];
 
   const percent = Math.max(0, Math.min(100, Number(progress?.percent || 0)));
-  const phaseText = phase ? (PHASE_LABELS[phase] || phase) : "等待开始";
+  const phaseText = phase ? (PHASE_LABELS[phase] || phase) : "\u7b49\u5f85\u5f00\u59cb";
   const intake = normalizeIntake(intakeResult, intakeStatus);
 
   return (

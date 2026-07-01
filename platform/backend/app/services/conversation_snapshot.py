@@ -21,16 +21,15 @@ from app.models.message import Message
 from app.models.vulnerability import Vulnerability
 
 
-PHASES = ["precheck", "plan", "recon", "scan", "verify", "report"]
+PHASES = ["intake", "recon", "analysis", "verify", "report", "complete"]
 PHASE_LABELS = {
-    "precheck": "目标与授权范围检查",
-    "plan": "生成测试计划",
-    "recon": "资产与服务探测",
-    "scan": "漏洞扫描与候选发现",
-    "verify": "复现验证与授权确认",
-    "report": "同步结果与整理证据",
+    "intake": "\u76ee\u6807\u4e0e\u6388\u6743\u8303\u56f4\u68c0\u67e5",
+    "recon": "\u653b\u51fb\u9762\u53d1\u73b0",
+    "analysis": "\u8986\u76d6\u5206\u6790\u4e0e\u6d4b\u8bd5\u8ba1\u5212",
+    "verify": "\u9a8c\u8bc1\u4e0e\u8bc1\u636e\u786e\u8ba4",
+    "report": "\u62a5\u544a\u6574\u7406",
+    "complete": "\u4efb\u52a1\u5b8c\u6210",
 }
-
 
 def conversation_summary(c: Conversation) -> dict:
     return {
@@ -238,7 +237,7 @@ def agent_state_from_messages(messages: list[Message], evidence: list[Evidence],
     if not active_tool and evidence:
         active_tool = evidence[0].source_tool or evidence[0].type
     if not phase:
-        phase = "report" if status == "completed" else "precheck" if status == "running" else None
+        phase = "complete" if status == "completed" else "intake" if status == "running" else None
     return {"phase": phase, "iteration": iteration, "activeTool": active_tool, "intakeResult": intake_result, "intakeStatus": intake_status}
 
 

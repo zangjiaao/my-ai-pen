@@ -16,7 +16,7 @@ MVP Alpha 单节点平台闭环已经完成；MVP Demo 尚未完成。
 | 里程碑 | 状态 | Demo 价值 |
 |---|---:|---|
 | MVP Alpha：平台模式单节点闭环 | [x] | 已能从平台发起任务、Node 执行、结果入库、刷新恢复。 |
-| MVP Demo Phase 1：Agent 自治能力基线 | [ ] | Agent 能先看目标、建立攻击面、按覆盖矩阵推进测试，并只确认有证据的漏洞。 |
+| MVP Demo Phase 1：Agent 自治能力基线 | [x] | Agent 能先看目标、建立攻击面、按覆盖矩阵推进测试，并只确认有证据的漏洞。 |
 | MVP Demo Phase 2：平台结果可交付 | [ ] | 平台模式可稳定演示，漏洞/资产/证据/报告可查看、可导出、可排查。 |
 | MVP Demo Phase 3：Node Standalone 闭环 | [ ] | 无平台环境也能独立测试，SQLite 持久化，CLI/TUI 观察和授权。 |
 | MVP Demo Phase 4：Export / Import 闭环 | [ ] | Standalone 结果导入平台，进入统一会话、资产、漏洞、证据管理。 |
@@ -51,24 +51,24 @@ MVP Alpha 单节点平台闭环已经完成；MVP Demo 尚未完成。
 
 目标：参考 AIRecon 和 PentesterFlow 的成熟做法，先让渗透 Agent 具备最小自治测试能力，而不是只包装一个会跑脚本的 UI。专项设计见 `docs/phase1-agent-autonomy-baseline.md`。
 
-- [ ] **TASK-008** — 建立 Attack Surface Inventory。
+- [x] **TASK-008** — 建立 Attack Surface Inventory。
   Files: `node/pentest_node/agent/attack_surface.py`, `node/pentest_node/tools/http.py`, `node/pentest_node/tools/browser.py`, `tests/`
   Notes: 抽取 host、URL、method、form、参数、链接、登录状态线索、技术栈和端口服务；每条记录带来源 evidence/tool_run_id。
-- [ ] **TASK-009** — 建立 Coverage Store。
+- [x] **TASK-009** — 建立 Coverage Store。
   Files: `node/pentest_node/agent/coverage.py`, `node/pentest_node/agent/loop.py`, `tests/`
   Notes: 参考 PentesterFlow，记录 `(endpoint, parameter, vuln_type)` 的 tried/passed/failed/skipped 状态，驱动 Agent 选择未覆盖项，避免反复测试同一目标。
-- [ ] **TASK-010** — 重排 Agent phase 和阶段退出条件。
+- [x] **TASK-010** — 重排 Agent phase 和阶段退出条件。
   Files: `node/pentest_node/agent/loop.py`, `node/pentest_node/tools/workflow.py`, `tests/`
   Notes: 阶段改为 intake -> recon -> analysis -> verify -> report -> complete；phase 不是硬编码拒绝一切，而是目标、推荐工具、退出条件和质量门禁。
-- [ ] **TASK-011** — 实现 Finding Quality Gate。
+- [x] **TASK-011** — 实现 Finding Quality Gate。
   Files: `node/pentest_node/tools/workflow.py`, `node/pentest_node/agent/loop.py`, `tests/`
   Notes: 参考 AIRecon validators 和 PentesterFlow confirm_finding；漏洞确认必须绑定 evidence_ids、真实目标 URL、复现请求、响应证据、影响说明和修复建议。禁止把“疑似/可能/需要进一步确认”直接变成 confirmed finding。
-- [ ] **TASK-012** — 补最小 Web 漏洞 verifier。
+- [x] **TASK-012** — 补最小 Web 漏洞 verifier。
   Files: `node/pentest_node/agent/verifiers/`, `node/pentest_node/tools/http.py`, `tests/`
   Notes: MVP 先覆盖 DVWA/Juice Shop 可演示的 SQLi、XSS、认证/会话、IDOR/访问控制、敏感信息泄露；verifier 产出结构化 evidence。
-- [ ] **TASK-013** — 跑 DVWA/Juice Shop 自治验收并记录覆盖率。
+- [x] **TASK-013** — 跑 DVWA/Juice Shop 自治验收并记录覆盖率。
   Files: `scripts/agent_autonomy_smoke.py`, `docs/product-roadmap.md`
-  Notes: runbook 是 benchmark harness：记录攻击面数量、coverage 数量、confirmed finding 数量、false positive、重复动作和人工干预次数。
+  Notes: runbook 是 benchmark harness：记录攻击面数量、coverage 数量、confirmed finding 数量、false positive、重复动作和人工干预次数。Verification 2026-07-01: DVWA live-web smoke passed for http://host.docker.internal:8080/login.php; attack_surface=4, coverage=1 passed, evidence=1, duplicate_actions=0, checkpoint=node/workspace/phase1-dvwa-autonomy-checkpoint.json. Juice Shop live-web smoke passed for http://host.docker.internal:3000; attack_surface=3, coverage=1 passed, evidence=1, duplicate_actions=0, checkpoint=node/workspace/phase1-juice-shop-autonomy-checkpoint.json.
 
 ## 4. MVP Demo Phase 2：平台结果可交付
 
@@ -165,4 +165,4 @@ MVP Alpha 单节点平台闭环已经完成；MVP Demo 尚未完成。
 
 ## 9. 下一步
 
-下一步从 **TASK-008 到 TASK-013** 做 Agent 自治能力基线。理由是：如果 Agent 不能建立攻击面、按覆盖矩阵推进、用证据门禁确认漏洞，那么后续 Standalone、TUI、export/import 只是在包装一个不稳定的测试循环，无法支撑客户 Demo。
+下一步进入 **MVP Demo Phase 2：平台结果可交付**，从 **TASK-014 到 TASK-017** 开始。Phase 1 已完成 Agent 自治能力基线：攻击面、coverage、phase controller、Finding Quality Gate、最小 verifier，以及 DVWA/Juice Shop live-web autonomy smoke 均已有验证证据。

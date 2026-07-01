@@ -22,7 +22,15 @@ from app.ws.router import _resume_message_from_context, _task_assign_from_user_m
 from pentest_node.agent.intake import TaskIntake  # noqa: E402
 from pentest_node.agent.loop import PHASE_TOOL_NAMES, PentestAgentLoop  # noqa: E402
 from pentest_node.agent.state import Phase  # noqa: E402
+from pentest_node.tools.workflow import make_workflow_tools  # noqa: E402
 
+
+class DummyPlatform:
+    def __init__(self):
+        self.events = []
+
+    async def send(self, event):
+        self.events.append(event)
 
 class CheckpointResumeTests(unittest.TestCase):
     def test_resume_intake_can_skip_connectivity_but_keeps_scope(self):
@@ -43,11 +51,11 @@ class CheckpointResumeTests(unittest.TestCase):
 
     def test_node_restores_checkpoint_state(self):
         checkpoint = {
-            "phase": "scan",
+            "phase": "analysis",
             "resolved_target": "http://host.docker.internal:8080/login.php",
             "state": {
-                "phase": "scan",
-                "phases_completed": ["precheck", "plan", "recon"],
+                "phase": "analysis",
+                "phases_completed": ["intake", "recon"],
                 "iteration": 17,
                 "phase_iteration": 4,
                 "recent_tool_runs": [{"tool_name": "execute", "status": "done"}],
@@ -67,21 +75,196 @@ class CheckpointResumeTests(unittest.TestCase):
         )
 
         self.assertTrue(loop._resuming)
-        self.assertEqual(loop.state.phase, Phase.SCAN)
+        self.assertEqual(loop.state.phase, Phase.ANALYSIS)
         self.assertEqual(loop.state.iteration, 17)
         self.assertEqual(loop.state.phase_iteration, 4)
-        self.assertEqual({p.value for p in loop.state.phases_completed}, {"precheck", "plan", "recon"})
+        self.assertEqual({p.value for p in loop.state.phases_completed}, {"intake", "recon"})
         self.assertEqual(loop.task["resolved_target"], checkpoint["resolved_target"])
         self.assertEqual(loop.candidate_findings[0]["id"], "f1")
         self.assertEqual(loop.discovered_assets[0]["address"], "host.docker.internal")
 
         snapshot = loop.checkpoint_snapshot("test")
-        self.assertEqual(snapshot["phase"], "scan")
+        self.assertEqual(snapshot["phase"], "analysis")
         self.assertEqual(snapshot["iteration"], 17)
         self.assertIn("recon", snapshot["phases_completed"])
 
+    def test_node_restores_attack_surface_and_coverage(self):
+        checkpoint = {
+            "phase": "analysis",
+            "attack_surface": [
+                {
+                    "surface_id": "as-1",
+                    "conversation_id": "conv-1",
+                    "kind": "form",
+                    "url": "http://target.local/login",
+                    "method": "POST",
+                    "parameters": ["username", "password"],
+                    "evidence_ids": ["ev-1"],
+                }
+            ],
+            "coverage": [
+                {
+                    "coverage_id": "cov-1",
+                    "conversation_id": "conv-1",
+                    "endpoint": "POST http://target.local/login",
+                    "parameter": "username",
+                    "vuln_type": "sqli",
+                    "status": "tried",
+                    "count": 1,
+                }
+            ],
+        }
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-1", "checkpoint": checkpoint},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=DummyPlatform(),
+        )
+
+        snapshot = loop.checkpoint_snapshot("test")
+
+        self.assertEqual(snapshot["attack_surface_summary"]["total"], 1)
+        self.assertEqual(snapshot["coverage_summary"]["total"], 1)
+        self.assertEqual(snapshot["attack_surface"][0]["parameters"], ["username", "password"])
+        self.assertEqual(snapshot["coverage"][0]["vuln_type"], "sqli")
+
+    def test_http_result_populates_attack_surface(self):
+        platform = DummyPlatform()
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-1"},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=platform,
+        )
+        result = {
+            "status": "done",
+            "method": "GET",
+            "url": "http://target.local/login.php?debug=1",
+            "status_code": 200,
+            "headers": {"content-type": "text/html"},
+            "body": """
+                <html><a href='/setup.php'>setup</a>
+                <form action='/login.php' method='post'>
+                  <input name='username'><input name='password' type='password'>
+                </form></html>
+            """,
+        }
+
+        asyncio.run(loop._record_autonomy_from_tool("tool-1", "http_request", result, "ev-1"))
+        snapshot = loop.checkpoint_snapshot("test")
+
+        kinds = {item["kind"] for item in snapshot["attack_surface"]}
+        self.assertIn("url", kinds)
+        self.assertIn("form", kinds)
+        self.assertTrue(any(item["method"] == "POST" and "username" in item["parameters"] for item in snapshot["attack_surface"]))
+        self.assertTrue(any(event["type"] == "attack_surface_discovered" for event in platform.events))
+
+    def test_mark_coverage_tool_updates_checkpoint(self):
+        platform = DummyPlatform()
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-1"},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=platform,
+        )
+        tool = next(t for t in make_workflow_tools(loop) if t.name == "mark_coverage")
+
+        result = asyncio.run(tool.handler(
+            endpoint="POST http://target.local/login.php?debug=1",
+            parameter="username",
+            vuln_type="sqli",
+            status="passed",
+            notes="No SQL error or timing difference observed",
+            evidence_ids=["ev-1"],
+        ))
+        snapshot = loop.checkpoint_snapshot("test")
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(snapshot["coverage_summary"]["by_status"]["passed"], 1)
+        self.assertEqual(snapshot["coverage"][0]["parameter"], "username")
+        self.assertTrue(any(event["type"] == "coverage_marked" for event in platform.events))
+
+    def test_confirm_finding_requires_quality_gate_fields(self):
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-1", "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=DummyPlatform(),
+        )
+        loop.candidate_findings.append({"id": "cand-1", "title": "SQLi", "severity": "high", "status": "candidate"})
+        tool = next(t for t in make_workflow_tools(loop) if t.name == "confirm_finding")
+
+        result = asyncio.run(tool.handler(candidate_finding_id="cand-1", evidence_ids=["ev-1"]))
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("Finding quality gate failed", result["message"])
+        self.assertEqual(loop.confirmed_findings, [])
+
+    def test_confirm_finding_passes_quality_gate(self):
+        platform = DummyPlatform()
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-1", "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=platform,
+        )
+        loop.candidate_findings.append({"id": "cand-1", "title": "SQLi", "severity": "high", "status": "candidate"})
+        tool = next(t for t in make_workflow_tools(loop) if t.name == "confirm_finding")
+
+        result = asyncio.run(tool.handler(
+            candidate_finding_id="cand-1",
+            target_url="http://target.local/login.php",
+            method="POST",
+            parameter="username",
+            payload="' OR '1'='1",
+            reproduction_steps="Submit the payload in the username field.",
+            reproduction_request="curl -i -X POST http://target.local/login.php -d username=...",
+            response_proof="The response contains a SQL error marker.",
+            impact="An attacker can bypass authentication.",
+            remediation="Use parameterized queries and server-side validation.",
+            evidence_ids=["ev-1"],
+        ))
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(loop.confirmed_findings[0]["target_url"], "http://target.local/login.php")
+        self.assertTrue(any(event["type"] == "vuln_found" and event["status"] == "confirmed" for event in platform.events))
+    def test_autonomy_prompt_includes_next_untested_candidates(self):
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-1"},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=DummyPlatform(),
+        )
+        loop.attack_surface.add_item(
+            kind="form",
+            url="http://target.local/login.php",
+            method="POST",
+            parameters=["username", "password"],
+            source_tool_run_id="tool-1",
+            evidence_id="ev-1",
+        )
+        loop.coverage.mark(
+            endpoint="POST http://target.local/login.php",
+            parameter="username",
+            vuln_type="sqli",
+            status="passed",
+            evidence_ids=["ev-1"],
+        )
+
+        prompt = loop._autonomy_context_prompt()
+
+        self.assertIn("Next untested candidates:", prompt)
+        self.assertIn("param=password vuln=sqli", prompt)
+        self.assertNotIn("- POST http://target.local/login.php param=username vuln=sqli", prompt)
+
     def test_web_phases_allow_http_and_browser_tools(self):
-        for phase in ("recon", "scan", "verify"):
+        for phase in ("recon", "verify"):
             self.assertIn("http_request", PHASE_TOOL_NAMES[phase])
             self.assertIn("browser", PHASE_TOOL_NAMES[phase])
 
@@ -89,8 +272,8 @@ class CheckpointResumeTests(unittest.TestCase):
         checkpoint = {
             "reason": "tool_output",
             "state": {
-                "phase": "scan",
-                "phases_completed": ["precheck", "plan", "recon"],
+                "phase": "analysis",
+                "phases_completed": ["intake", "recon"],
                 "iteration": 12,
                 "phase_iteration": 3,
                 "recent_tool_runs": [{"tool_name": "execute", "status": "done"}],
@@ -103,10 +286,10 @@ class CheckpointResumeTests(unittest.TestCase):
         progress = _progress_for_checkpoint(checkpoint, "running")
         todos = _todos_for_checkpoint(checkpoint, "running")
 
-        self.assertEqual(agent_state["phase"], "scan")
+        self.assertEqual(agent_state["phase"], "analysis")
         self.assertEqual(agent_state["activeTool"], "execute")
-        self.assertEqual(progress, {"current": 4, "total": 6, "percent": 67})
-        self.assertEqual([item["status"] for item in todos], ["done", "done", "done", "running", "pending", "pending"])
+        self.assertEqual(progress, {"current": 3, "total": 6, "percent": 50})
+        self.assertEqual([item["status"] for item in todos], ["done", "done", "running", "pending", "pending", "pending"])
         self.assertEqual(_checkpoint_findings(checkpoint)[0]["id"], "cand-1")
         self.assertEqual(_checkpoint_assets(checkpoint)[0]["address"], "http://target.local")
 
@@ -121,8 +304,8 @@ class CheckpointResumeTests(unittest.TestCase):
         checkpoint = {
             "reason": "phase_transition",
             "state": {
-                "phase": "scan",
-                "phases_completed": ["precheck", "plan", "recon", "scan"],
+                "phase": "analysis",
+                "phases_completed": ["intake", "recon", "analysis"],
                 "iteration": 20,
                 "phase_iteration": 999,
             },
@@ -133,8 +316,8 @@ class CheckpointResumeTests(unittest.TestCase):
         todos = _todos_for_checkpoint(checkpoint, "running")
 
         self.assertEqual(agent_state["phase"], "verify")
-        self.assertEqual(progress, {"current": 5, "total": 6, "percent": 83})
-        self.assertEqual([item["status"] for item in todos], ["done", "done", "done", "done", "running", "pending"])
+        self.assertEqual(progress, {"current": 4, "total": 6, "percent": 67})
+        self.assertEqual([item["status"] for item in todos], ["done", "done", "done", "running", "pending", "pending"])
 
     def test_user_message_route_separates_resume_from_new_assignment(self):
         self.assertEqual(_user_message_route({"text": "continue"}, "completed")["action"], "completed")
@@ -165,7 +348,7 @@ class CheckpointResumeTests(unittest.TestCase):
                 "scope": {"allow": ["http://host.docker.internal:8080/login.php"], "deny": []},
                 "instruction": "Run a DVWA web application pentest",
             },
-            "checkpoint": {"phase": "scan", "state": {"phase": "scan"}},
+            "checkpoint": {"phase": "analysis", "state": {"phase": "analysis"}},
         }
 
         resumed, is_resume = _resume_message_from_context(msg, resume_context)
@@ -185,7 +368,7 @@ class CheckpointResumeTests(unittest.TestCase):
                 "scope": {"allow": ["http://host.docker.internal:8080/login.php"], "deny": []},
                 "instruction": "Run a DVWA web application pentest",
             },
-            "checkpoint": {"phase": "report", "phases_completed": ["precheck", "plan", "recon", "scan", "verify", "report"]},
+            "checkpoint": {"phase": "complete", "phases_completed": ["intake", "recon", "analysis", "verify", "report", "complete"]},
         }
 
         resumed, is_resume = _resume_message_from_context(msg, resume_context, include_checkpoint=False)
@@ -197,7 +380,7 @@ class CheckpointResumeTests(unittest.TestCase):
         self.assertIn("confirm current state", resumed["text"])
 
     def test_resume_message_requires_durable_target(self):
-        resumed, is_resume = _resume_message_from_context({"text": "continue"}, {"task": {}, "checkpoint": {"phase": "scan"}})
+        resumed, is_resume = _resume_message_from_context({"text": "continue"}, {"task": {}, "checkpoint": {"phase": "analysis"}})
         self.assertIsNone(resumed)
         self.assertFalse(is_resume)
 

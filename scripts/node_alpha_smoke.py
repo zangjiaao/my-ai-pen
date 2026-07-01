@@ -110,13 +110,13 @@ class DvwaReconLLM:
     async def chat(self, messages, tools=None):
         phase = "unknown"
         content = "\n".join(str(m.get("content", "")) for m in messages)
-        for candidate in ("precheck", "plan", "recon", "scan", "verify", "report"):
-            if f"当前：{_phase_label(candidate)}" in content or f"阶段是 {candidate}" in content:
+        for candidate in ("intake", "recon", "analysis", "verify", "report", "complete"):
+            if f"Current phase: {candidate}" in content:
                 phase = candidate
                 break
         self.phase_calls[phase] = self.phase_calls.get(phase, 0) + 1
         tool_id = f"{phase}-{self.phase_calls[phase]}"
-        if phase in {"precheck", "plan", "scan", "verify"}:
+        if phase in {"intake", "analysis", "verify", "report"}:
             name = "phase_transition"
             args = '{"phase_summary":"ok"}'
         elif phase == "recon":
@@ -158,7 +158,7 @@ async def assert_intake(loop: PentestAgentLoop) -> None:
     intake = await loop._intake()
     assert intake.ok, intake.reason
     assert intake.target == "https://example.com/"
-    event = [e for e in loop.platform.events if e.get("type") == "status_update" and e.get("active_tool") == "intake"][-1]
+    event = [e for e in loop.platform.events if e.get("type") == "intake_update" and e.get("active_tool") == "intake"][-1]
     assert event["status"] == "done"
     assert event["intake_result"]["dns_addresses"] == ["93.184.216.34"]
     assert event["intake_result"]["connectivity"]["ok"] is True
@@ -345,14 +345,14 @@ async def assert_phase_tool_guard() -> None:
     for tool in make_workflow_tools(loop):
         loop.tools.register(tool)
 
-    await loop._run_phase(Phase.PRECHECK)
+    await loop._run_phase(Phase.INTAKE)
     assert llm.seen_tools, "LLM was not called"
     assert "task_complete" not in llm.seen_tools[0]
     assert not loop._aborted
     assert any(
         e.get("type") == "tool_output"
         and e.get("status") == "blocked"
-        and "not allowed in precheck" in e.get("line", "")
+        and "not allowed in intake" in e.get("line", "")
         for e in platform.events
     )
 
@@ -404,8 +404,8 @@ async def assert_dvwa_reaches_recon() -> None:
     result = await loop.run()
     assert result.status == "completed"
     assert "curl -sI http://host.docker.internal:8080/login.php" in sandbox.commands
-    phases = {event.get("phase") for event in platform.events if event.get("type") == "status_update"}
-    assert {"precheck", "plan", "recon"} <= phases
+    phases = {event.get("phase") for event in platform.events if event.get("type") in {"intake_update", "status_update"}}
+    assert {"intake", "recon", "analysis"} <= phases
 
 async def assert_agent_records_evidence() -> None:
     with tempfile.TemporaryDirectory() as tmp:
@@ -475,11 +475,14 @@ async def assert_confirm_finding_requires_known_evidence() -> None:
             evidence_ids=["ev-missing"],
         )
         assert unknown["status"] == "error"
-        evidence = await loop.evidence_store.collect_tool_output("tool-confirm", "curl", "HTTP/1.1 200 OK")
+        evidence = await loop.evidence_store.collect_http_trace("tool-confirm", "GET https://example.com/headers HTTP/1.1", "HTTP/1.1 200 OK")
         assert evidence is not None
         confirmed = await tools["confirm_finding"].handler(
             candidate_finding_id=finding["finding_id"],
+            target_url="https://example.com/headers",
             reproduction_steps="curl https://example.com/headers",
+            reproduction_request="GET https://example.com/headers HTTP/1.1",
+            response_proof="HTTP/1.1 200 OK",
             impact="header exposure",
             remediation="remove header",
             evidence_ids=[evidence.evidence_id],

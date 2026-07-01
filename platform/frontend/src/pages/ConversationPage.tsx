@@ -16,16 +16,15 @@ import type { SecurityAsset, SecurityVulnerability } from "../lib/securityTypes"
 const ACTIVE_CONVERSATION_KEY = "active_conversation_id";
 const MESSAGE_PAGE_SIZE = 200;
 
-const PHASES = ["precheck", "plan", "recon", "scan", "verify", "report"] as const;
+const PHASES = ["intake", "recon", "analysis", "verify", "report", "complete"] as const;
 const PHASE_LABELS: Record<string, string> = {
-  precheck: "目标与授权范围检查",
-  plan: "生成测试计划",
-  recon: "资产与服务探测",
-  scan: "漏洞扫描与候选发现",
-  verify: "复现验证与授权确认",
-  report: "同步结果与整理证据",
+  intake: "\u76ee\u6807\u4e0e\u6388\u6743\u8303\u56f4\u68c0\u67e5",
+  recon: "\u653b\u51fb\u9762\u53d1\u73b0",
+  analysis: "\u8986\u76d6\u5206\u6790\u4e0e\u6d4b\u8bd5\u8ba1\u5212",
+  verify: "\u9a8c\u8bc1\u4e0e\u8bc1\u636e\u786e\u8ba4",
+  report: "\u62a5\u544a\u6574\u7406",
+  complete: "\u4efb\u52a1\u5b8c\u6210",
 };
-
 const TEMPLATES = [
   { label: "Web 渗透", text: "对 {URL} 进行 Web 应用渗透测试" },
   { label: "主机扫描", text: "对 {IP 段} 进行全面主机安全扫描" },
@@ -214,7 +213,7 @@ export default function ConversationPage() {
     intake_update: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
-      const phase = typeof m.phase === "string" ? m.phase : "precheck";
+      const phase = typeof m.phase === "string" ? m.phase : "intake";
       clearPendingAgentMessage(messageConversationId(msg, activeId));
       setAgentState({ phase, activeTool: m.active_tool, intakeResult: m.intake_result, intakeStatus: m.status });
       setProgress(progressForPhase(phase, "running"));
@@ -479,9 +478,9 @@ export default function ConversationPage() {
     }
 
     setRunning(true);
-    setAgentState({ phase: "precheck" });
-    setProgress(progressForPhase("precheck", "running"));
-    setTodos(todosForPhase("precheck", "running"));
+    setAgentState({ phase: "intake" });
+    setProgress(progressForPhase("intake", "running"));
+    setTodos(todosForPhase("intake", "running"));
     const target = { type: targetValue.startsWith("http") ? "url" : "host", value: targetValue };
     const scope = { allow: [target.value], deny: [] };
     send({ type: "user_message", conversation_id: convId, text, target, scope, client_message_id: clientMessageId, ...agentPayload });
@@ -789,7 +788,7 @@ function snapshotFromMessages(messages: Message[], status: Conversation["status"
   const normalizedStatus = String(status || "created") as Conversation["status"];
   const statusMessages = messages.filter(m => m.msg_type === "status" && typeof m.content === "object");
   const lastStatus = last(statusMessages)?.content || {};
-  const phase = readString(lastStatus.phase) || parsePhase(readString(lastStatus.text)) || (normalizedStatus === "completed" ? "report" : normalizedStatus === "running" ? "precheck" : undefined);
+  const phase = readString(lastStatus.phase) || parsePhase(readString(lastStatus.text)) || (normalizedStatus === "completed" ? "complete" : normalizedStatus === "running" ? "intake" : undefined);
   const lastTool = last(messages.filter(m => m.msg_type === "tool_call" && readString(m.content.tool_name)));
   const activeTool = readString(lastStatus.active_tool) || readString(lastTool?.content.tool_name);
   const decisions = new Set(messages.filter(m => m.msg_type === "decision").map(m => readString(m.content.request_id)).filter(Boolean));
