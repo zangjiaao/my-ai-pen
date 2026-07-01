@@ -21,6 +21,18 @@ class DummyPlatform:
         self.events.append(event)
 
 
+
+
+class FakeEvidenceStore:
+    workspace = ROOT
+
+    def __init__(self, ids=("ev-222222222222",)):
+        self.records = [SimpleNamespace(evidence_id=eid) for eid in ids]
+
+    def get_by_ids(self, ids):
+        wanted = set(ids)
+        return [record for record in self.records if record.evidence_id in wanted]
+
 class WebVerifierTests(unittest.TestCase):
     def test_sqli_basic_fails_on_sql_error_pattern(self):
         result = evaluate_web_probe(
@@ -38,6 +50,23 @@ class WebVerifierTests(unittest.TestCase):
         self.assertEqual(result.candidate["vuln_type"], "sql_injection")
         self.assertEqual(result.evidence_ids, ["ev-1"])
 
+    def test_sqli_union_credential_dump_is_failed_finding(self):
+        result = evaluate_web_probe(
+            vuln_type="sqli",
+            target_url="http://target.local/rest/products/search",
+            method="GET",
+            parameter="q",
+            payload="nonexistent')) UNION ALL SELECT id,email,password,4,5,6,7,8,9 FROM Users--",
+            baseline_body='{"status":"success","data":[{"name":"Apple Juice"}]}',
+            probe_body='{"status":"success","data":[{"name":"admin@juice-sh.op","description":"0192023a7bbd73250516f069df18b500"}]}',
+            evidence_ids=["ev-222222222222"],
+        )
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(result.candidate["vuln_type"], "sql_injection")
+        self.assertEqual(result.candidate["severity"], "critical")
+        self.assertIn("credential", result.coverage_notes.lower())
+        self.assertEqual(result.evidence_ids, ["ev-222222222222"])
     def test_auth_session_flags_weak_cookie(self):
         result = evaluate_web_probe(
             vuln_type="auth_session",
@@ -84,11 +113,12 @@ class WebVerifierTests(unittest.TestCase):
     def test_workflow_web_verifier_marks_coverage_and_candidate(self):
         platform = DummyPlatform()
         loop = PentestAgentLoop(
-            task={"conversation_id": "conv-1"},
+            task={"conversation_id": "conv-1", "scope": {"allow": ["http://target.local"], "deny": []}},
             tools=SimpleNamespace(),
             sandbox=None,
             llm=None,
             platform_sync=platform,
+            evidence_store=FakeEvidenceStore(),
         )
         tool = next(t for t in make_workflow_tools(loop) if t.name == "evaluate_web_verifier")
 
@@ -99,7 +129,7 @@ class WebVerifierTests(unittest.TestCase):
             parameter="q",
             payload="<script>alert(1)</script>",
             probe_body="<html><script>alert(1)</script></html>",
-            evidence_ids=["ev-2"],
+            evidence_ids=["ev-222222222222"],
         ))
 
         self.assertEqual(result["status"], "ok")

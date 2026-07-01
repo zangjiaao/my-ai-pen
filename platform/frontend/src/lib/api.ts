@@ -42,3 +42,18 @@ export const api = {
 export function authFetch<T = any>(path: string, options: RequestInit = {}): Promise<T> {
   return request<T>(path, options);
 }
+
+export async function authDownload(path: string, options: RequestInit = {}): Promise<{ blob: Blob; filename: string }> {
+  const token = localStorage.getItem("access_token");
+  const headers: Record<string, string> = { ...(options.headers as Record<string, string> || {}) };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const fullPath = path.startsWith("/api/") ? path : `${BASE}${path}`;
+  const res = await fetch(fullPath, { ...options, headers });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: res.statusText }));
+    throw new ApiError(res.status, err?.detail || err?.message || `HTTP ${res.status}`, err);
+  }
+  const disposition = res.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename="?([^";]+)"?/i);
+  return { blob: await res.blob(), filename: match?.[1] || "report" };
+}

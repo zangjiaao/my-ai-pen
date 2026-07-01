@@ -67,6 +67,7 @@ class VulnOut(BaseModel):
     remediation: str | None
     evidence_ids: list[str] = Field(default_factory=list)
     evidence: list[EvidenceOut] = Field(default_factory=list)
+    status_timeline: list[dict] = Field(default_factory=list)
     discovered_at: str | None
     updated_at: str | None
     model_config = {"from_attributes": True}
@@ -339,6 +340,15 @@ def _evidence_out(e: Evidence) -> EvidenceOut:
     )
 
 
+
+def _status_timeline(v: Vulnerability) -> list[dict]:
+    events = []
+    if v.discovered_at:
+        events.append({"status": "discovered", "at": v.discovered_at.isoformat(), "label": "Finding discovered"})
+    if v.status:
+        events.append({"status": v.status, "at": v.updated_at.isoformat() if v.updated_at else None, "label": f"Current status: {v.status}"})
+    return events
+
 def _out(v: Vulnerability, *, asset: Asset | None = None, evidence: list[Evidence] | None = None) -> VulnOut:
     return VulnOut(
         id=str(v.id),
@@ -358,6 +368,7 @@ def _out(v: Vulnerability, *, asset: Asset | None = None, evidence: list[Evidenc
         remediation=v.remediation,
         evidence_ids=v.evidence_ids or [],
         evidence=[_evidence_out(e) for e in (evidence or [])],
+        status_timeline=_status_timeline(v),
         discovered_at=v.discovered_at.isoformat() if v.discovered_at else None,
         updated_at=v.updated_at.isoformat() if v.updated_at else None,
     )

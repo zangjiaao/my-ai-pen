@@ -16,6 +16,7 @@ interface Props {
   onOpenVulnerability?: (finding: Partial<SecurityVulnerability>) => void;
   onOpenAsset?: (asset: Partial<SecurityAsset>) => void;
   highlightedApprovalId?: string | null;
+  approvalDecisionByRequestId?: Record<string, "authorize" | "cancel">;
 }
 
 type TableAlignment = "left" | "center" | "right";
@@ -35,7 +36,7 @@ function agentDisplayName(content: Record<string, unknown>, agentNameById: Recor
   const fallbackNodeId = source === "platform" ? platformAgentNodeId : fallbackPentestNodeId;
   const nodeId = explicitNodeId || fallbackNodeId || "";
   const baseName = nodeId && agentNameById[nodeId] ? agentNameById[nodeId] : source === "platform" ? "\u5e73\u53f0Agent" : "\u6e17\u900fAgent";
-  return mode === "snapshot_qa" ? `${baseName} (\u5386\u53f2\u95ee\u7b54)` : baseName;
+  return baseName;
 }
 function ToolCallCard({ content }: { content: Record<string, unknown> }) {
   const [expanded, setExpanded] = useState(false);
@@ -383,10 +384,12 @@ function SystemNotice({ content }: { content: Record<string, unknown> }) {
   return <div className="my-2 text-center text-xs text-ink-muted">{content.text as string}</div>;
 }
 
-export default function MessageRenderer({ message, agentNameById = {}, previousMessage, fallbackPentestNodeId, platformAgentNodeId, onDecision, onOpenVulnerability, onOpenAsset, highlightedApprovalId }: Props) {
+export default function MessageRenderer({ message, agentNameById = {}, previousMessage, fallbackPentestNodeId, platformAgentNodeId, onDecision, onOpenVulnerability, onOpenAsset, highlightedApprovalId, approvalDecisionByRequestId = {} }: Props) {
   const { role, msg_type, content } = message;
 
   if (role === "system") return <SystemNotice content={content} />;
+
+  if (role === "user" && msg_type === "decision") return null;
 
   if (role === "user") {
     return (
@@ -413,7 +416,7 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
       body = <AssetCard content={content} onOpen={onOpenAsset} />;
       break;
     case "confirm_card":
-      body = <ConfirmCard content={content} highlighted={Boolean(content.request_id && content.request_id === highlightedApprovalId)} onAuthorize={() => onDecision?.(content.request_id as string, "authorize")} onCancel={() => onDecision?.(content.request_id as string, "cancel")} />;
+      body = <ConfirmCard content={content} decision={approvalDecisionByRequestId[String(content.request_id || "")]} highlighted={Boolean(content.request_id && content.request_id === highlightedApprovalId)} onAuthorize={() => onDecision?.(content.request_id as string, "authorize")} onCancel={() => onDecision?.(content.request_id as string, "cancel")} />;
       break;
     case "agent_pending":
       body = <AgentPendingCard content={content} />;

@@ -53,6 +53,8 @@ export default function AssetDetailDialog({ open, assetId, initial, onClose }: P
           <Info label="Source" value={asString(asset?.source)} />
           <Info label="Session" value={shortId(asset?.conversation_id)} />
           <Info label="Node" value={shortId(asset?.node_id)} />
+          <Info label="Last Scan" value={asset?.updated_at?.slice(0, 19) || "-"} />
+          <Info label="Created" value={asset?.created_at?.slice(0, 19) || "-"} />
         </div>
 
         <section className="mt-5">
@@ -86,6 +88,11 @@ export default function AssetDetailDialog({ open, assetId, initial, onClose }: P
           ) : <p className="text-sm text-ink-muted">No service fingerprints recorded</p>}
         </section>
 
+
+        <section className="mt-5">
+          <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">Scan History</h3>
+          <HistoryList value={properties.scan_history || properties.service_history || properties.port_history} fallback={asset?.updated_at ? [`${asset.updated_at}: ${asset.source || "agent"}`] : []} />
+        </section>
         <section className="mt-5">
           <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">Related Vulnerabilities</h3>
           <div className="space-y-2">
@@ -145,6 +152,20 @@ function Info({ label, value }: { label: string; value: string }) {
     <div className="rounded-md bg-canvas-inset p-2">
       <div className="text-xs text-ink-muted">{label}</div>
       <div className="mt-1 truncate font-mono text-xs">{value || "-"}</div>
+    </div>
+  );
+}
+
+function HistoryList({ value, fallback }: { value: unknown; fallback: string[] }) {
+  const items = Array.isArray(value) ? value : fallback;
+  if (!items.length) return <p className="text-sm text-ink-muted">No scan history recorded</p>;
+  return (
+    <div className="space-y-2">
+      {items.slice(0, 10).map((item, index) => (
+        <div key={index} className="rounded-md border border-hairline-soft p-2 text-xs text-ink-secondary">
+          <pre className="whitespace-pre-wrap break-words font-mono [overflow-wrap:anywhere]">{typeof item === "string" ? item : JSON.stringify(item, null, 2)}</pre>
+        </div>
+      ))}
     </div>
   );
 }

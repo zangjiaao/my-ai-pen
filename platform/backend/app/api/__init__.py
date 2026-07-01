@@ -24,3 +24,6 @@ api_router.include_router(skills_api_router)
 
 from app.api.evidence import router as evidence_router
 api_router.include_router(evidence_router)
+
+from app.api.reports import router as reports_router
+api_router.include_router(reports_router)

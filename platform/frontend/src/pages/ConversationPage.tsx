@@ -5,13 +5,14 @@ import RightPanel from "../components/RightPanel";
 import MessageRenderer from "../components/MessageRenderer";
 import VulnDetailDialog from "../components/VulnDetailDialog";
 import AssetDetailDialog from "../components/AssetDetailDialog";
+import EvidenceDetailDialog from "../components/EvidenceDetailDialog";
 import { useConversationStore } from "../stores/conversationStore";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { ApiError, authFetch } from "../lib/api";
 import { normalizeExecutionStatus } from "../lib/status";
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import type { AgentIdentity, Conversation, Message } from "../lib/types";
-import type { SecurityAsset, SecurityVulnerability } from "../lib/securityTypes";
+import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../lib/securityTypes";
 
 const ACTIVE_CONVERSATION_KEY = "active_conversation_id";
 const MESSAGE_PAGE_SIZE = 200;
@@ -74,6 +75,7 @@ export default function ConversationPage() {
   const [running, setRunning] = useState(false);
   const [selectedVulnerability, setSelectedVulnerability] = useState<Partial<SecurityVulnerability> | null>(null);
   const [selectedAsset, setSelectedAsset] = useState<Partial<SecurityAsset> | null>(null);
+  const [selectedEvidence, setSelectedEvidence] = useState<Partial<SecurityEvidence> | null>(null);
   const [highlightedApprovalId, setHighlightedApprovalId] = useState<string | null>(null);
 
   const messageQuery = useInfiniteQuery({
@@ -92,6 +94,16 @@ export default function ConversationPage() {
   const agentNameById = useMemo(() => Object.fromEntries(agentNodes.map(node => [node.id, node.name])), [agentNodes]);
   const mentionState = useMemo(() => getMentionState(input), [input]);
   const mentionOptions = useMemo(() => filterMentionOptions(agentNodes, mentionState?.query || ""), [agentNodes, mentionState]);
+  const approvalDecisionByRequestId = useMemo(() => {
+    const decisions: Record<string, "authorize" | "cancel"> = {};
+    for (const message of messages) {
+      if (message.msg_type !== "decision") continue;
+      const requestId = readString(message.content.request_id);
+      const decision = readString(message.content.decision);
+      if (requestId && (decision === "authorize" || decision === "cancel")) decisions[requestId] = decision;
+    }
+    return decisions;
+  }, [messages]);
 
   const applyConversationState = useCallback((snapshot: ConversationSnapshot, fallback?: ConversationSnapshot) => {
     setAgentState(hasValues(snapshot.agent_state) ? snapshot.agent_state! : fallback?.agent_state || {});
@@ -397,7 +409,7 @@ export default function ConversationPage() {
   const handleDecision = useCallback((requestId: string, decision: "authorize" | "cancel") => {
     if (!activeId || !requestId) return;
     setPendingApprovals(prev => prev.filter(item => item.request_id !== requestId));
-    addMessageToConversation(activeId, makeMessage(activeId, "user", "text", { text: decision === "authorize" ? "已授权执行" : "已取消该操作" }));
+    addMessageToConversation(activeId, makeMessage(activeId, "user", "decision", { request_id: requestId, decision }));
     send({ type: "user_decision", conversation_id: activeId, request_id: requestId, decision });
   }, [activeId, addMessageToConversation, send]);
 
@@ -608,7 +620,7 @@ function pendingAgentSourceForMessage(
               )}
               {messageQuery.isFetchingNextPage && <div className="py-2 text-center text-xs text-ink-muted">Loading older messages...</div>}
               {messageQuery.hasNextPage && !messageQuery.isFetchingNextPage && <button type="button" onClick={fetchOlderMessages} className="mx-auto block rounded-pill border border-hairline px-3 py-1.5 text-xs text-ink-secondary">Load older messages</button>}
-              {messages.map((msg, index) => <MessageRenderer key={msg.id} message={msg} previousMessage={messages[index - 1]} agentNameById={agentNameById} fallbackPentestNodeId={activeConversation?.node_id || null} platformAgentNodeId={platformAgentNodeId} onDecision={handleDecision} onOpenVulnerability={setSelectedVulnerability} onOpenAsset={setSelectedAsset} highlightedApprovalId={highlightedApprovalId} />)}
+              {messages.map((msg, index) => <MessageRenderer key={msg.id} message={msg} previousMessage={messages[index - 1]} agentNameById={agentNameById} fallbackPentestNodeId={activeConversation?.node_id || null} platformAgentNodeId={platformAgentNodeId} onDecision={handleDecision} onOpenVulnerability={setSelectedVulnerability} onOpenAsset={setSelectedAsset} highlightedApprovalId={highlightedApprovalId} approvalDecisionByRequestId={approvalDecisionByRequestId} />)}
             </div>
             <div className="border-t border-hairline-soft p-4">
               <div className="mb-3 flex gap-2">
@@ -652,6 +664,7 @@ function pendingAgentSourceForMessage(
             onDecision={handleDecision}
             onOpenVulnerability={setSelectedVulnerability}
             onOpenAsset={setSelectedAsset}
+            onOpenEvidence={setSelectedEvidence}
             onLocateApproval={locateApproval}
           />
         </div>
@@ -663,6 +676,13 @@ function pendingAgentSourceForMessage(
         onClose={() => setSelectedVulnerability(null)}
         onUpdated={(updated) => setFindings(prev => upsertBy(prev, updated as unknown as Record<string, unknown>, "id"))}
         onRetestCreated={(conversationId) => { void fetchAll(); void loadConversation(conversationId); }}
+        onOpenEvidence={setSelectedEvidence}
+      />
+      <EvidenceDetailDialog
+        open={Boolean(selectedEvidence)}
+        evidenceId={(selectedEvidence?.evidence_id || selectedEvidence?.id) as string | undefined}
+        initial={selectedEvidence}
+        onClose={() => setSelectedEvidence(null)}
       />
       <AssetDetailDialog
         open={Boolean(selectedAsset)}

@@ -17,7 +17,7 @@ MVP Alpha 单节点平台闭环已经完成；MVP Demo 尚未完成。
 |---|---:|---|
 | MVP Alpha：平台模式单节点闭环 | [x] | 已能从平台发起任务、Node 执行、结果入库、刷新恢复。 |
 | MVP Demo Phase 1：Agent 自治能力基线 | [x] | Agent 能先看目标、建立攻击面、按覆盖矩阵推进测试，并只确认有证据的漏洞。 |
-| MVP Demo Phase 2：平台结果可交付 | [ ] | 平台模式可稳定演示，漏洞/资产/证据/报告可查看、可导出、可排查。 |
+| MVP Demo Phase 2：平台结果可交付 | [x] | 平台模式可稳定演示，漏洞/资产/证据/报告可查看、可导出、可排查。 |
 | MVP Demo Phase 3：Node Standalone 闭环 | [ ] | 无平台环境也能独立测试，SQLite 持久化，CLI/TUI 观察和授权。 |
 | MVP Demo Phase 4：Export / Import 闭环 | [ ] | Standalone 结果导入平台，进入统一会话、资产、漏洞、证据管理。 |
 | MVP Demo Phase 5：演示稳定性与观测 | [ ] | Demo 前可自动检查环境、节点、靶场和关键链路，问题可追踪。 |
@@ -74,18 +74,18 @@ MVP Alpha 单节点平台闭环已经完成；MVP Demo 尚未完成。
 
 目标：平台模式可稳定展示 Agent 的真实工作成果，并交付可查看、可排查、可导出的结果。
 
-- [ ] **TASK-014** — 收敛失败去重和错误持久化。
+- [x] **TASK-014** — 收敛失败去重和错误持久化。
   Files: `node/pentest_node/agent/loop.py`, `platform/backend/app/ws/router.py`, `tests/`
   Notes: phase/tool 错误不能刷屏；失败事件要入库，切换会话后仍可见且不重复。
-- [ ] **TASK-015** — 补 Evidence 详情弹窗。
+- [x] **TASK-015** — 补 Evidence 详情弹窗。
   Files: `platform/frontend/src/components/`, `platform/backend/app/api/evidence.py`
   Notes: 从漏洞详情和右侧 Evidence 列表打开，展示 source_tool、tool_run_id、summary、hash、raw_ref、metadata。
-- [ ] **TASK-016** — 补平台 MVP 报告导出。
+- [x] **TASK-016** — 补平台 MVP 报告导出。
   Files: `platform/backend/app/api/`, `platform/frontend/src/pages/`
   Notes: 基于 conversation snapshot 导出 Markdown/HTML，包含目标、scope、资产、漏洞、证据摘要、时间线和免责声明。
-- [ ] **TASK-017** — 补资产/漏洞详情的 Demo 必需字段。
+- [x] **TASK-017** — 补资产/漏洞详情的 Demo 必需字段。
   Files: `platform/frontend/src/components/VulnDetailDialog.tsx`, `platform/frontend/src/components/AssetDetailDialog.tsx`, `platform/backend/app/api/assets.py`, `platform/backend/app/api/vulnerabilities.py`
-  Notes: 漏洞补复现步骤、影响、修复建议、状态时间线；资产补来源会话、最近扫描时间、端口/服务历史。
+  Notes: 漏洞补复现步骤、影响、修复建议、状态时间线；资产补来源会话、最近扫描时间、端口/服务历史。 Verification 2026-07-01: Phase 2 platform deliverables passed `python -m compileall platform\backend\app`, `npm run build`, `python -m unittest tests.test_platform_phase2 tests.test_checkpoint_resume tests.test_web_verifiers tests.test_agent_autonomy_smoke`, and `python scripts\node_alpha_smoke.py`.
 
 ## 5. MVP Demo Phase 3：Node Standalone 闭环
 
@@ -165,4 +165,4 @@ MVP Alpha 单节点平台闭环已经完成；MVP Demo 尚未完成。
 
 ## 9. 下一步
 
-下一步进入 **MVP Demo Phase 2：平台结果可交付**，从 **TASK-014 到 TASK-017** 开始。Phase 1 已完成 Agent 自治能力基线：攻击面、coverage、phase controller、Finding Quality Gate、最小 verifier，以及 DVWA/Juice Shop live-web autonomy smoke 均已有验证证据。
+下一步进入 **MVP Demo Phase 3：Node Standalone 闭环**，从 **TASK-018 到 TASK-025** 开始。Phase 2 已完成平台结果可交付：错误去重和持久化、Evidence 详情、报告导出、资产/漏洞 Demo 字段均已补齐。

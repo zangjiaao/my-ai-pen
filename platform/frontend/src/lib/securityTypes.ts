@@ -37,6 +37,8 @@ export type SecurityEvidence = {
   id: string;
   evidence_id: string;
   type: string;
+  conversation_id?: string | null;
+  node_id?: string | null;
   source_tool?: string | null;
   tool_run_id?: string | null;
   raw_ref?: string | null;
@@ -67,6 +69,7 @@ export type SecurityVulnerability = {
   remediation?: string | null;
   evidence_ids?: string[];
   evidence?: SecurityEvidence[];
+  status_timeline?: Array<Record<string, unknown>>;
   discovered_at?: string | null;
   updated_at?: string | null;
 };

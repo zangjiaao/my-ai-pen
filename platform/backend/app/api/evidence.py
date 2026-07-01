@@ -1,7 +1,7 @@
 """Evidence API."""
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 
@@ -50,9 +50,15 @@ async def list_evidence(
 
 @router.get("/{evidence_id}", response_model=EvidenceOut)
 async def get_evidence(evidence_id: str, current_user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    user_id = uuid.UUID(current_user["user_id"])
+    filters = [Evidence.evidence_id == evidence_id]
+    try:
+        filters.append(Evidence.id == uuid.UUID(evidence_id))
+    except ValueError:
+        pass
     result = await db.execute(select(Evidence).where(
-        Evidence.evidence_id == evidence_id,
-        Evidence.user_id == uuid.UUID(current_user["user_id"]),
+        Evidence.user_id == user_id,
+        *filters,
     ))
     evidence = result.scalar_one_or_none()
     if not evidence:

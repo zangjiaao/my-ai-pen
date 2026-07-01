@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { SecurityAsset, SecurityVulnerability } from "../lib/securityTypes";
+import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../lib/securityTypes";
 import ApprovalCountdown from "./ApprovalCountdown";
 
 type Tab = "discoveries" | "progress" | "pending" | "evidence";
@@ -19,6 +19,7 @@ interface Props {
   onDecision?: (requestId: string, decision: "authorize" | "cancel") => void;
   onOpenVulnerability?: (finding: Partial<SecurityVulnerability>) => void;
   onOpenAsset?: (asset: Partial<SecurityAsset>) => void;
+  onOpenEvidence?: (evidence: Partial<SecurityEvidence>) => void;
   onLocateApproval?: (requestId: string) => void;
 }
 
@@ -36,7 +37,7 @@ const PHASE_LABELS: Record<string, string> = {
   report: "\u62a5\u544a\u6574\u7406",
   complete: "\u4efb\u52a1\u5b8c\u6210",
 };
-export default function RightPanel({ phase, activeTool, intakeResult, intakeStatus, progress, todos = [], findings = [], assets = [], pendingApprovals = [], evidence = [], onDecision, onOpenVulnerability, onOpenAsset, onLocateApproval }: Props) {
+export default function RightPanel({ phase, activeTool, intakeResult, intakeStatus, progress, todos = [], findings = [], assets = [], pendingApprovals = [], evidence = [], onDecision, onOpenVulnerability, onOpenAsset, onOpenEvidence, onLocateApproval }: Props) {
   const [tab, setTab] = useState<Tab>("progress");
 
   const tabs: { key: Tab; label: string }[] = [
@@ -173,13 +174,13 @@ export default function RightPanel({ phase, activeTool, intakeResult, intakeStat
           evidence.length === 0 ? <p className="text-sm text-ink-muted">暂无证据</p> : (
             <div className="space-y-2" data-testid="evidence-list">
               {evidence.map((item) => (
-                <div key={(item.evidence_id || item.id) as string} data-testid="evidence-item" className="rounded-md border border-hairline-soft p-2">
+                <button key={(item.evidence_id || item.id) as string} type="button" onClick={() => onOpenEvidence?.(item as Partial<SecurityEvidence>)} data-testid="evidence-item" className="block w-full rounded-md border border-hairline-soft p-2 text-left transition-colors hover:bg-surface-default">
                   <div className="mb-1 flex items-center justify-between gap-2">
                     <span className="truncate text-sm font-medium">{(item.source_tool || item.type) as string}</span>
                     <span className="font-mono text-[10px] text-ink-muted">{item.evidence_id as string}</span>
                   </div>
-                  <p className="line-clamp-3 text-xs text-ink-muted">{String(item.summary || item.raw_ref || "")}</p>
-                </div>
+                  <p className="line-clamp-3 break-words text-xs text-ink-muted [overflow-wrap:anywhere]">{String(item.summary || item.raw_ref || "")}</p>
+                </button>
               ))}
             </div>
           )

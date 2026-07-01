@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { authFetch } from "../lib/api";
-import { asString, shortId, type SecurityVulnerability } from "../lib/securityTypes";
+import { asString, shortId, type SecurityEvidence, type SecurityVulnerability } from "../lib/securityTypes";
 
 interface Props {
   open: boolean;
@@ -10,6 +10,7 @@ interface Props {
   onClose: () => void;
   onUpdated?: (vulnerability: SecurityVulnerability) => void;
   onRetestCreated?: (conversationId: string) => void;
+  onOpenEvidence?: (evidence: Partial<SecurityEvidence>) => void;
 }
 
 type RetestResponse = {
@@ -40,7 +41,7 @@ const NEXT_STATUS: Record<string, string[]> = {
   false_positive: ["pending", "confirmed"],
 };
 
-export default function VulnDetailDialog({ open, vulnerabilityId, initial, onClose, onUpdated, onRetestCreated }: Props) {
+export default function VulnDetailDialog({ open, vulnerabilityId, initial, onClose, onUpdated, onRetestCreated, onOpenEvidence }: Props) {
   const navigate = useNavigate();
   const [detail, setDetail] = useState<SecurityVulnerability | null>(null);
   const [loading, setLoading] = useState(false);
@@ -123,6 +124,8 @@ export default function VulnDetailDialog({ open, vulnerabilityId, initial, onClo
           <Info label="Node" value={shortId(vulnerability?.node_id)} />
           <Info label="Confidence" value={asString(vulnerability?.confidence)} />
           <Info label="CVSS" value={vulnerability?.cvss == null ? "-" : String(vulnerability.cvss)} />
+          <Info label="Discovered" value={vulnerability?.discovered_at?.slice(0, 19) || "-"} />
+          <Info label="Updated" value={vulnerability?.updated_at?.slice(0, 19) || "-"} />
         </div>
 
         <section className="mt-5">
@@ -149,14 +152,14 @@ export default function VulnDetailDialog({ open, vulnerabilityId, initial, onClo
           <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">Evidence</h3>
           <div className="space-y-2">
             {vulnerability?.evidence?.map((item) => (
-              <div key={item.id || item.evidence_id} className="rounded-md border border-hairline-soft p-2">
+              <button key={item.id || item.evidence_id} type="button" onClick={() => onOpenEvidence?.(item)} className="block w-full rounded-md border border-hairline-soft p-2 text-left transition-colors hover:bg-surface-default">
                 <div className="flex items-center justify-between gap-2 text-xs">
                   <span className="font-mono text-ink-secondary">{item.evidence_id}</span>
                   <span className="text-ink-muted">{item.source_tool || item.type}</span>
                 </div>
                 <p className="mt-1 max-h-28 overflow-auto whitespace-pre-wrap break-words text-xs text-ink-secondary">{item.summary || item.raw_ref || item.hash || "-"}</p>
                 <EvidenceMetadata item={item} />
-              </div>
+              </button>
             ))}
             {!vulnerability?.evidence?.length && (
               <div className="rounded-md bg-canvas-inset p-3 text-xs text-ink-muted">
@@ -166,6 +169,19 @@ export default function VulnDetailDialog({ open, vulnerabilityId, initial, onClo
           </div>
         </section>
 
+
+        <section className="mt-5">
+          <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">Status Timeline</h3>
+          <div className="space-y-2">
+            {(vulnerability?.status_timeline || []).map((event, index) => (
+              <div key={index} className="rounded-md border border-hairline-soft p-2 text-xs">
+                <div className="font-medium">{asString(event.label || event.status)}</div>
+                <div className="mt-1 font-mono text-ink-muted">{asString(event.at)}</div>
+              </div>
+            ))}
+            {!vulnerability?.status_timeline?.length && <p className="text-sm text-ink-muted">No status events recorded</p>}
+          </div>
+        </section>
         <section className="mt-5">
           <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">Lifecycle</h3>
           <div className="flex flex-wrap gap-2">
@@ -200,6 +216,7 @@ function normalizeInitial(initial?: Partial<SecurityVulnerability> | null): Secu
     remediation: initial.remediation,
     evidence_ids: initial.evidence_ids || [],
     evidence: initial.evidence || [],
+    status_timeline: initial.status_timeline || [],
     discovered_at: initial.discovered_at,
     updated_at: initial.updated_at,
   };
