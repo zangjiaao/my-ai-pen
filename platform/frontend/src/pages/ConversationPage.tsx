@@ -11,6 +11,7 @@ import { useWebSocket } from "../hooks/useWebSocket";
 import { ApiError, authFetch } from "../lib/api";
 import { normalizeExecutionStatus } from "../lib/status";
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
+import { Upload } from "lucide-react";
 import type { AgentIdentity, Conversation, Message } from "../lib/types";
 import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../lib/securityTypes";
 
@@ -40,6 +41,14 @@ type MentionState = { start: number; query: string } | null;
 
 type MessageRecord = Record<string, unknown>;
 type MessagesInfiniteData = InfiniteData<MessageRecord[], unknown>;
+type ImportStatus = { level: "success" | "error" | "info"; text: string } | null;
+type ImportReportResult = {
+  conversation_id: string;
+  messages_imported?: number;
+  assets_imported?: number;
+  vulns_imported?: number;
+  evidence_imported?: number;
+};
 
 type ConversationSnapshot = {
   conversation?: Conversation;
@@ -59,10 +68,13 @@ export default function ConversationPage() {
   const [restoreAttempted, setRestoreAttempted] = useState(false);
   const [stateSnapshotLoaded, setStateSnapshotLoaded] = useState(false);
   const messageScrollerRef = useRef<HTMLDivElement | null>(null);
+  const importFileInputRef = useRef<HTMLInputElement | null>(null);
   const pendingScrollRestoreRef = useRef<{ top: number; height: number } | null>(null);
   const pendingScrollToBottomRef = useRef(false);
   const shouldStickToBottomRef = useRef(true);
   const [input, setInput] = useState("");
+  const [importingReport, setImportingReport] = useState(false);
+  const [importStatus, setImportStatus] = useState<ImportStatus>(null);
   const [selectedAgent, setSelectedAgent] = useState<AgentNode | null>(null);
   const [agentNodes, setAgentNodes] = useState<AgentNode[]>([]);
   const [agentState, setAgentState] = useState<Record<string, unknown>>({});
@@ -424,6 +436,27 @@ export default function ConversationPage() {
     setSelectedAgent(node);
   }, [input]);
 
+  const handleImportReport = useCallback(async (file: File | null) => {
+    if (!file) return;
+    setImportingReport(true);
+    setImportStatus({ level: "info", text: "正在导入会话..." });
+    const form = new FormData();
+    form.append("file", file);
+    try {
+      const result = await authFetch<ImportReportResult>("/api/sync/import", { method: "POST", body: form });
+      const summary = `导入完成：消息 ${result.messages_imported || 0}，资产 ${result.assets_imported || 0}，漏洞 ${result.vulns_imported || 0}，证据 ${result.evidence_imported || 0}`;
+      setImportStatus({ level: "success", text: summary });
+      await fetchAll();
+      await loadConversation(result.conversation_id);
+    } catch (error) {
+      const message = error instanceof ApiError ? String(error.message) : "导入失败，请确认文件是 pentest-node 导出的 report.tar.gz。";
+      setImportStatus({ level: "error", text: message });
+    } finally {
+      setImportingReport(false);
+      if (importFileInputRef.current) importFileInputRef.current.value = "";
+    }
+  }, [fetchAll, loadConversation]);
+
   const handleSend = useCallback(async () => {
     if (!input.trim()) return;
     const selectedMentionAgent = selectedAgent && input.includes(`@${selectedAgent.name}`) ? selectedAgent : resolveMentionedAgent(input, agentNodes);
@@ -604,9 +637,32 @@ function pendingAgentSourceForMessage(
             <div ref={messageScrollerRef} onScroll={handleMessageScroll} className="min-w-0 flex-1 overflow-y-auto px-6 py-4 space-y-4">
               {messages.length === 0 && !activeId && (
                 <div className="flex h-full items-center justify-center">
-                  <div className="text-center">
+                  <div className="max-w-md text-center">
                     <h2 className="text-xl font-semibold">开始新的渗透测试</h2>
                     <p className="mt-2 text-sm text-ink-secondary">在下方输入测试目标，Agent 将自动开始工作</p>
+                    <div className="mt-5 flex items-center justify-center gap-3">
+                      <input
+                        ref={importFileInputRef}
+                        type="file"
+                        accept=".tar.gz,.tgz,application/gzip,application/x-gzip"
+                        className="hidden"
+                        onChange={(event) => { void handleImportReport(event.target.files?.[0] || null); }}
+                      />
+                      <button
+                        type="button"
+                        disabled={importingReport}
+                        onClick={() => importFileInputRef.current?.click()}
+                        className="inline-flex items-center gap-2 rounded-pill border border-hairline px-4 py-2 text-sm font-medium text-ink-secondary transition-colors hover:bg-surface-default hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <Upload className="h-4 w-4" />
+                        {importingReport ? "导入中..." : "导入会话"}
+                      </button>
+                    </div>
+                    {importStatus && (
+                      <p className={`mt-3 text-xs ${importStatus.level === "error" ? "text-severity-critical" : importStatus.level === "success" ? "text-severity-low" : "text-ink-muted"}`}>
+                        {importStatus.text}
+                      </p>
+                    )}
                   </div>
                 </div>
               )}
