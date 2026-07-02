@@ -19,7 +19,7 @@ MVP Alpha 单节点平台闭环已经完成；MVP Demo 尚未完成。
 | MVP Demo Phase 1：Agent 自治能力基线 | [x] | Agent 能先看目标、建立攻击面、按覆盖矩阵推进测试，并只确认有证据的漏洞。 |
 | MVP Demo Phase 2：平台结果可交付 | [x] | 平台模式可稳定演示，漏洞/资产/证据/报告可查看、可导出、可排查。 |
 | MVP Demo Phase 3：Node Standalone 闭环 | [x] | 无平台环境也能独立测试，SQLite 持久化，CLI/TUI 观察和授权。 |
-| MVP Demo Phase 4：Export / Import 闭环 | [ ] | Standalone 结果导入平台，进入统一会话、资产、漏洞、证据管理。 |
+| MVP Demo Phase 4：Export / Import 闭环 | [x] | Standalone 结果导入平台，进入统一会话、资产、漏洞、证据管理。 |
 | MVP Demo Phase 5：演示稳定性与观测 | [ ] | Demo 前可自动检查环境、节点、靶场和关键链路，问题可追踪。 |
 | MVP Production | [ ] | 生产部署、ACK/心跳、权限隔离、多节点可靠性。 |
 
@@ -120,21 +120,21 @@ MVP Alpha 单节点平台闭环已经完成；MVP Demo 尚未完成。
 
 目标：Standalone 结果可以导出并导入平台，形成统一资产、漏洞、证据管理。
 
-- [ ] **TASK-026** — 定义并实现 `report.tar.gz` 包格式。
+- [x] **TASK-026** — 定义并实现 `report.tar.gz` 包格式。
   Files: `node/pentest_node/export.py`
   Notes: 包含 manifest.json、conversation.jsonl、assets.json、vulnerabilities.json、evidence.json、attack_surface.json、coverage.json、checkpoints/、evidence/。
-- [ ] **TASK-027** — 实现 `pentest-node export` CLI。
+- [x] **TASK-027** — 实现 `pentest-node export` CLI。
   Files: `node/pentest_node/main.py`, `node/pentest_node/export.py`
-  Notes: 从 SQLite + evidence 文件目录生成自包含导出包。
-- [ ] **TASK-028** — 重做平台 `/api/sync/import`。
+  Notes: 从 SQLite + evidence 文件目录生成自包含导出包；TUI 支持 `/export [path]` 直接导出当前 session。
+- [x] **TASK-028** — 重做平台 `/api/sync/import`。
   Files: `platform/backend/app/api/sync.py`, `platform/backend/app/models/`
   Notes: 解析统一包格式，创建 Conversation，导入 Message、Asset、Vulnerability、Evidence、attack surface 和 coverage 摘要。
-- [ ] **TASK-029** — 导入后前端可查看完整结果。
+- [x] **TASK-029** — 导入后前端可查看完整结果。
   Files: `platform/frontend/src/pages/ConversationPage.tsx`, `platform/frontend/src/pages/AssetPage.tsx`, `platform/frontend/src/pages/VulnerabilityPage.tsx`
   Notes: 导入会话可打开，右侧面板、资产页、漏洞页和证据详情可用。
-- [ ] **TASK-030** — Standalone 到平台导入 smoke。
+- [x] **TASK-030** — Standalone 到平台导入 smoke。
   Files: `scripts/standalone_import_smoke.py`, `tests/`
-  Notes: 自动验证 standalone SQLite 数据、导出包、平台导入、资产/漏洞/证据/coverage 数量一致。
+  Notes: 自动验证 standalone SQLite 数据、导出包、平台导入、资产/漏洞/证据/coverage 数量一致。 Verification 2026-07-02: Phase 4 export/import passed `python -m unittest tests.test_standalone_phase4 tests.test_standalone_phase3 tests.test_platform_phase2`, `python scripts\standalone_import_smoke.py`, `python -m pentest_node.main export --help`, and `python -m compileall platform\backend\app node\pentest_node`.
 
 ## 7. MVP Demo Phase 5：演示稳定性与观测
 
@@ -165,4 +165,4 @@ MVP Alpha 单节点平台闭环已经完成；MVP Demo 尚未完成。
 
 ## 9. 下一步
 
-下一步进入 **MVP Demo Phase 4：Export / Import 闭环**，从 **TASK-026 到 TASK-030** 开始。Phase 3 已完成 Node SQLite 本地事实源、shared Agent event sink、standalone CLI、resume、CLI/TUI 授权和最小 Textual TUI。
+下一步进入 **MVP Demo Phase 5：演示稳定性与观测**，从 **TASK-031 到 TASK-034** 开始。Phase 4 已完成 standalone report.tar.gz 导出、`pentest-node export` CLI、平台 `/api/sync/import`、导入后会话/资产/漏洞/证据读模型恢复，以及 standalone import smoke。

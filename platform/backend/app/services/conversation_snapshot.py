@@ -97,7 +97,8 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
         await db.rollback()
 
     pending = pending_approvals_from_messages(messages)
-    checkpoint = ((conversation.context or {}).get("checkpoint") if isinstance(conversation.context, dict) else {}) or {}
+    context = conversation.context if isinstance(conversation.context, dict) else {}
+    checkpoint = (context.get("checkpoint") if isinstance(context, dict) else {}) or {}
     agent_state = agent_state_from_checkpoint(checkpoint, conversation.status) if checkpoint else agent_state_from_messages(messages, evidence, conversation.status)
     todos = todos_for_checkpoint(checkpoint, conversation.status) if checkpoint else todos_for_phase(agent_state.get("phase"), conversation.status)
     progress = progress_for_checkpoint(checkpoint, conversation.status) if checkpoint else progress_for_phase(agent_state.get("phase"), conversation.status)
@@ -127,6 +128,8 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
         "findings": findings,
         "assets": asset_items,
         "checkpoint": checkpoint or {},
+        "attack_surface": context.get("attack_surface") or [],
+        "coverage": context.get("coverage") or [],
         "pending_approvals": pending,
         "evidence": evidence_items,
         "read_model_errors": read_model_errors,
@@ -135,6 +138,8 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
             "findings": len(findings),
             "pending": len(pending),
             "evidence": len(evidence_items),
+            "attack_surface": len(context.get("attack_surface") or []),
+            "coverage": len(context.get("coverage") or []),
         },
     }
 
