@@ -217,6 +217,7 @@ async def _bind_conversation_to_node(conv_id: str, node_id: str):
     try:
         from app.db.base import async_session
         from app.models.conversation import Conversation
+        from app.models.node import Node
 
         async with async_session() as db:
             r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id)))
@@ -224,6 +225,10 @@ async def _bind_conversation_to_node(conv_id: str, node_id: str):
             if c:
                 c.node_id = uuid.UUID(node_id)
                 transition_conversation(c, "running")
+                node_result = await db.execute(select(Node).where(Node.id == uuid.UUID(node_id)))
+                node = node_result.scalar_one_or_none()
+                if node:
+                    node.config = {**(node.config or {}), "last_failure_reason": None}
                 await db.commit()
                 conversation_node[conv_id] = node_id
                 await _audit(
@@ -275,6 +280,24 @@ async def _incr_sessions(node_id: str, delta: int):
     except Exception as e:
         print(f"[WS] incr sessions error: {e}")
 
+
+async def _record_node_failure(node_id: str | None, reason: object) -> None:
+    if not node_id:
+        return
+    try:
+        from app.db.base import async_session
+        from app.models.node import Node
+
+        message = str(reason or "Task failed").strip()[:500]
+        async with async_session() as db:
+            result = await db.execute(select(Node).where(Node.id == uuid.UUID(node_id)))
+            node = result.scalar_one_or_none()
+            if node:
+                node.config = {**(node.config or {}), "last_failure_reason": message}
+                node.last_heartbeat = datetime.now(timezone.utc)
+                await db.commit()
+    except Exception as e:
+        print(f"[WS] record node failure error: {e}")
 
 async def _available_agent_capabilities() -> list[AgentCapability]:
     capabilities = [
@@ -1157,6 +1180,8 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         detail={"request_id": request_id, "risk_level": msg.get("risk_level")},
                     )
                 elif msg.get("type") in ("task_complete", "task_error"):
+                    if msg.get("type") == "task_error":
+                        await _record_node_failure(client_id, msg.get("message") or msg.get("error"))
                     if client_id:
                         await _incr_sessions(client_id, -1)
                     if conv_id:

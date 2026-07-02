@@ -14,6 +14,15 @@ type NodeRecord = {
   memory_usage?: number | null;
   current_sessions?: number;
   registered_at?: string | null;
+  last_heartbeat?: string | null;
+  current_task?: {
+    conversation_id: string;
+    title?: string | null;
+    status?: string | null;
+    target?: string | null;
+    updated_at?: string | null;
+  } | null;
+  last_failure_reason?: string | null;
   token_required?: boolean;
   token?: string | null;
 };
@@ -141,6 +150,9 @@ export default function NodePage() {
                       <p>类型: {isPlatform ? "平台 Agent" : n.type}</p>
                       <p>IP: {n.ip || "—"}</p>
                       <p>活跃会话: {n.current_sessions || 0}</p>
+                      <p>最近心跳: {formatDate(n.last_heartbeat)}</p>
+                      <p className="truncate">当前任务: {taskSummary(n.current_task)}</p>
+                      {n.last_failure_reason && <p className="truncate text-severity-critical">最近失败: {n.last_failure_reason}</p>}
                       {isPlatform && <p>Token: 内置节点，无需配置</p>}
                       {n.cpu_usage != null && <p>CPU: {n.cpu_usage}%</p>}
                     </div>
@@ -190,6 +202,10 @@ function NodeDetailDialog({ node, token, tokenVisible, onToggleToken, onClose, o
           <Info label="状态" value={node.status === "online" ? "在线" : "离线"} />
           <Info label="IP" value={node.ip || "—"} />
           <Info label="活跃会话" value={String(node.current_sessions || 0)} />
+          <Info label="当前任务" value={taskSummary(node.current_task)} />
+          {node.current_task?.conversation_id && <Info label="任务会话" value={node.current_task.conversation_id} />}
+          <Info label="最近心跳" value={formatDate(node.last_heartbeat)} />
+          <Info label="最近失败" value={node.last_failure_reason || "—"} />
           <Info label="注册时间" value={formatDate(node.registered_at)} />
           <div>
             <div className="mb-1 text-xs font-medium uppercase text-ink-muted">Token</div>
@@ -222,6 +238,12 @@ function NodeDetailDialog({ node, token, tokenVisible, onToggleToken, onClose, o
       </div>
     </div>
   );
+}
+
+function taskSummary(task?: NodeRecord["current_task"]): string {
+  if (!task) return "—";
+  const target = task.target ? ` · ${task.target}` : "";
+  return `${task.title || task.conversation_id}${target}`;
 }
 
 function maskTokenPlaceholder(): string {

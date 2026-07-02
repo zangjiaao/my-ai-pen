@@ -141,15 +141,17 @@ MVP Alpha 单节点平台闭环已经完成；MVP Demo 尚未完成。
 - [ ] **TASK-031** — 一键 Demo readiness 检查。
   Files: `scripts/demo_readiness.py`
   Notes: 聚合平台 API、WebSocket、Node、DockerSandbox、DVWA/Juice Shop、standalone export/import。
-- [ ] **TASK-032** — 审计日志 UI 最小版。
-  Files: `platform/frontend/src/pages/`, `platform/backend/app/api/audit.py`
-  Notes: 至少能按会话查看关键事件，便于演示和排查。
-- [ ] **TASK-033** — 节点健康和当前任务展示。
+- [x] **TASK-032** — 审计日志 UI 最小版。
+  Files: `platform/frontend/src/pages/AuditPage.tsx`, `platform/frontend/src/App.tsx`, `platform/frontend/src/components/Sidebar.tsx`, `platform/backend/app/api/audit.py`
+  Notes: 新增审计日志页面，支持按会话和 action 过滤关键事件，展示 actor、status、conversation 和 detail，便于演示和排查。
+- [x] **TASK-033** — 节点健康和当前任务展示。
   Files: `platform/frontend/src/pages/NodePage.tsx`, `platform/backend/app/api/nodes.py`, `platform/backend/app/ws/router.py`
-  Notes: 展示在线状态、当前任务、最近心跳、最近失败原因。
+  Notes: 节点 API 返回 last_heartbeat、current_task、last_failure_reason；节点页卡片和详情弹窗展示在线状态、当前任务、最近心跳、最近失败原因。
 - [ ] **TASK-034** — Demo 观测报告。
   Files: `scripts/agent_autonomy_smoke.py`, `scripts/demo_readiness.py`
   Notes: 输出攻击面覆盖、测试覆盖、确认漏洞、失败工具、重复动作、人工授权次数，避免用固定脚本冒充自治能力。
+
+  Verification 2026-07-02: `python -m py_compile platform\backend\app\api\nodes.py platform\backend\app\ws\router.py platform\backend\app\api\audit.py` and `npm run build` in `platform/frontend` passed.
 
 ## 8. Post-MVP
 

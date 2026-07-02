@@ -17,6 +17,7 @@ const NAV_ITEMS = [
   { label: "资产管理", path: "/assets" },
   { label: "漏洞管理", path: "/vulnerabilities" },
   { label: "节点管理", path: "/nodes" },
+  { label: "审计日志", path: "/audit" },
   { label: "Skill 管理", path: "/skills" },
   { label: "知识库", path: "/knowledge" },
   { label: "记忆管理", path: "/memories" },

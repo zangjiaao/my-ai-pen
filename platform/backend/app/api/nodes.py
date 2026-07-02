@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 from app.db.base import get_db
 from app.middleware.auth import get_current_user
+from app.models.conversation import Conversation
 from app.models.node import Node, PLATFORM_AGENT_NODE_ID, PLATFORM_AGENT_NODE_NAME
 
 router = APIRouter(prefix="/api/nodes", tags=["nodes"])
@@ -17,6 +18,9 @@ class NodeOut(BaseModel):
     id: str; name: str; type: str; status: str; ip: str | None
     cpu_usage: float | None; memory_usage: float | None; current_sessions: int
     registered_at: str | None
+    last_heartbeat: str | None = None
+    current_task: dict | None = None
+    last_failure_reason: str | None = None
     token_required: bool
     token: str | None = None
     model_config = {"from_attributes": True}
@@ -30,7 +34,9 @@ class NodeUpdate(BaseModel):
 async def list_nodes(current_user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     await _ensure_platform_node(db)
     result = await db.execute(select(Node).order_by(Node.type.asc(), Node.registered_at.desc()))
-    return [_node_out(n) for n in result.scalars().all()]
+    nodes = result.scalars().all()
+    tasks = await _current_tasks_by_node(db, nodes)
+    return [_node_out(n, tasks.get(n.id)) for n in nodes]
 
 
 @router.post("", response_model=dict)
@@ -59,7 +65,8 @@ async def register_node(body: dict, current_user: dict = Depends(get_current_use
 async def get_node(node_id: str, current_user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     await _ensure_platform_node(db)
     n = await _get_node(db, node_id)
-    return _node_out(n)
+    tasks = await _current_tasks_by_node(db, [n])
+    return _node_out(n, tasks.get(n.id))
 
 
 @router.patch("/{node_id}", response_model=NodeOut)
@@ -148,10 +155,45 @@ def _node_token(n: Node) -> str | None:
     return token if isinstance(token, str) and token else None
 
 
-def _node_out(n: Node) -> NodeOut:
+async def _current_tasks_by_node(db: AsyncSession, nodes: list[Node]) -> dict[uuid.UUID, dict]:
+    node_ids = [node.id for node in nodes]
+    if not node_ids:
+        return {}
+    result = await db.execute(
+        select(Conversation)
+        .where(Conversation.node_id.in_(node_ids), Conversation.status == "running")
+        .order_by(Conversation.last_active_at.desc())
+    )
+    tasks: dict[uuid.UUID, dict] = {}
+    for conv in result.scalars().all():
+        if not conv.node_id or conv.node_id in tasks:
+            continue
+        context = conv.context if isinstance(conv.context, dict) else {}
+        task = context.get("task") if isinstance(context.get("task"), dict) else {}
+        target = task.get("target") if isinstance(task.get("target"), dict) else {}
+        tasks[conv.node_id] = {
+            "conversation_id": str(conv.id),
+            "title": conv.title,
+            "status": conv.status,
+            "target": target.get("value") or "",
+            "updated_at": conv.last_active_at.isoformat() if conv.last_active_at else None,
+        }
+    return tasks
+
+
+def _last_failure_reason(n: Node) -> str | None:
+    config = n.config if isinstance(n.config, dict) else {}
+    value = config.get("last_failure_reason")
+    return value if isinstance(value, str) and value else None
+
+
+def _node_out(n: Node, current_task: dict | None = None) -> NodeOut:
     return NodeOut(id=str(n.id), name=n.name, type=n.type, status=n.status,
                    ip=str(n.ip) if n.ip else None, cpu_usage=n.cpu_usage, memory_usage=n.memory_usage,
                    current_sessions=n.current_sessions or 0,
                    registered_at=n.registered_at.isoformat() if n.registered_at else None,
+                   last_heartbeat=n.last_heartbeat.isoformat() if n.last_heartbeat else None,
+                   current_task=current_task,
+                   last_failure_reason=_last_failure_reason(n),
                    token_required=bool(n.token_hash),
                    token=_node_token(n))
