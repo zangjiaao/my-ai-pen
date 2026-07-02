@@ -1,7 +1,7 @@
 # 产品路线图 — AI 安全运营平台
 
 > 文档角色：PLAID 一等文档，唯一执行计划和 checkbox 来源。产品范围见 `docs/product-vision.md` 与 `docs/prd.md`，技术边界见 `docs/architecture.md`。
-> 最近校准：2026-07-01
+> 最近校准：2026-07-02
 
 ## 0. 当前结论
 
@@ -21,6 +21,7 @@ MVP Alpha 单节点平台闭环已经完成；MVP Demo 尚未完成。
 | MVP Demo Phase 3：Node Standalone 闭环 | [x] | 无平台环境也能独立测试，SQLite 持久化，CLI/TUI 观察和授权。 |
 | MVP Demo Phase 4：Export / Import 闭环 | [x] | Standalone 结果导入平台，进入统一会话、资产、漏洞、证据管理。 |
 | MVP Demo Phase 5：演示稳定性与观测 | [ ] | Demo 前可自动检查环境、节点、靶场和关键链路，问题可追踪。 |
+| MVP Demo Phase 6：Agent 自主渗透能力增强 | [ ] | 通过 Plan Tree、HTTP 捕获/重放/改包和 Benchmark 提升漏洞覆盖率与可靠性。 |
 | MVP Production | [ ] | 生产部署、ACK/心跳、权限隔离、多节点可靠性。 |
 
 ## 2. 已完成基线
@@ -153,7 +154,39 @@ MVP Alpha 单节点平台闭环已经完成；MVP Demo 尚未完成。
 
   Verification 2026-07-02: `python -m py_compile platform\backend\app\api\nodes.py platform\backend\app\ws\router.py platform\backend\app\api\audit.py` and `npm run build` in `platform/frontend` passed.
 
-## 8. Post-MVP
+## 8. MVP Demo Phase 6：Agent 自主渗透能力增强
+
+目标：平台和 TUI 只作为不同 UI/transport，Agent runtime 使用同一套自主测试方式。以少而精工具、强编排、强上下文和可恢复 Plan Tree 提升 DVWA/Juice Shop benchmark 覆盖率。评分细则见 `docs/agent-autonomy-benchmark.md`。
+
+参考来源：`research/anything-analyzer` 的抓包会话和请求详情、`research/AIRecon` 的 proxy history/replay/fuzz marker/coverage、`research/PentesterFlow-agent` 的 webvuln skill、`research/pentestagent` 的 playbook/crew runtime。
+
+- [x] **TASK-035** — 定义 Agent Autonomy Benchmark 和离线评分器。
+  Files: `docs/agent-autonomy-benchmark.md`, `scripts/agent_benchmark.py`, `tests/`
+  Notes: Benchmark 是开发侧考官，不进入产品 UI，不向 Agent 注入答案；Markdown 是第一版答案，离线脚本只抽取 session 事实材料，输出 `benchmark-report.json` / `benchmark-report.md`。
+  Verification 2026-07-02: `python -m unittest tests.test_agent_benchmark` and `python -m py_compile scripts\agent_benchmark.py tests\test_agent_benchmark.py` passed.
+- [ ] **TASK-036** — 实现 Exploration Plan Tree。
+  Files: `node/pentest_node/agent/plan_tree.py`, `node/pentest_node/tools/workflow.py`, `platform/backend/app/services/conversation_snapshot.py`, `tests/`
+  Notes: Plan Tree 是 Agent 的工作笔记本；运行时从 attack surface/traffic 自动生成基础节点，Agent 通过 `plan_add_node`、`plan_update_node`、`plan_next`、`plan_prune_or_complete` 维护计划。
+- [ ] **TASK-037** — 实现 mitmproxy Traffic Capture sidecar。
+  Files: `node/pentest_node/traffic/`, `node/pentest_node/tools/`, `node/pentest_node/agent/loop.py`, `tests/`
+  Notes: 平台模式和 standalone/TUI 共用同一 Agent runtime；第一版工具为 `capture_start`、`capture_list_requests`、`capture_get_request`、`capture_replay_request`、`capture_mutate_request`。
+- [ ] **TASK-038** — 将捕获流量转为 attack surface、Plan Tree 和 coverage gaps。
+  Files: `node/pentest_node/agent/attack_surface.py`, `node/pentest_node/agent/coverage.py`, `node/pentest_node/agent/plan_tree.py`, `tests/`
+  Notes: 捕获到的真实请求生成 endpoint/form/parameter 节点，驱动 Agent 从真实请求重放和改包，避免凭空猜 URL。
+- [ ] **TASK-039** — 接入少而精的 Web Skill Playbooks。
+  Files: `node/pentest_node/skills/`, `node/pentest_node/agent/loop.py`, `tests/`
+  Notes: 先覆盖 SQLi、XSS、Auth/Session、IDOR/Access Control、Info Disclosure；参考 PentesterFlow，强调 real PoC、http/curl 优先、非必要不默认堆扫描器。
+- [ ] **TASK-040** — Context Pack 管理。
+  Files: `node/pentest_node/agent/context_pack.py`, `node/pentest_node/agent/loop.py`, `tests/`
+  Notes: 每轮只注入当前路径、top pending/blocked plan nodes、coverage gaps、最近证据和关键请求，降低上下文噪声。
+- [ ] **TASK-041** — Plan Tree 在平台和 TUI 可视化。
+  Files: `platform/frontend/src/components/RightPanel.tsx`, `node/pentest_node/tui/app.py`, `platform/backend/app/services/conversation_snapshot.py`, `tests/`
+  Notes: 平台展示可展开树形 TODO；TUI 展示压缩版当前路径和 top pending/blocked；两者都读取 checkpoint/event 数据。
+- [ ] **TASK-042** — DVWA/Juice Shop benchmark smoke 达到 80%。
+  Files: `scripts/agent_benchmark.py`, `scripts/agent_autonomy_smoke.py`, `tests/`
+  Notes: 按 `docs/agent-autonomy-benchmark.md` 的 P0+P1 case list 评分；Benchmark 只做事后判定，不提示 Agent。
+
+## 9. Post-MVP
 
 这些能力有价值，但不阻塞当前 Demo：
 
@@ -165,6 +198,6 @@ MVP Alpha 单节点平台闭环已经完成；MVP Demo 尚未完成。
 - 完整 Skill runtime、知识库/记忆注入、子代理、并行工具执行。
 - 代码审计、应急响应、日志分析、CTF Node。
 
-## 9. 下一步
+## 10. 下一步
 
-下一步进入 **MVP Demo Phase 5：演示稳定性与观测**，从 **TASK-031 到 TASK-034** 开始。Phase 4 已完成 standalone report.tar.gz 导出、`pentest-node export` CLI、平台 `/api/sync/import`、导入后会话/资产/漏洞/证据读模型恢复，以及 standalone import smoke。
+下一步保持 Phase 5 的 TASK-031/TASK-034 未完成项可并行推进；Agent 能力主线进入 **MVP Demo Phase 6：Agent 自主渗透能力增强**，从 **TASK-035 到 TASK-042** 开始。Phase 6 的核心是 Benchmark 先行、Exploration Plan Tree、mitmproxy Traffic Capture / Replay / Mutate、Skill Playbooks、Context Pack，以及 DVWA/Juice Shop 80% benchmark smoke。
