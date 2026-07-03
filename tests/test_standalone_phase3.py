@@ -13,7 +13,7 @@ from pentest_node.config import NodeConfig  # noqa: E402
 from pentest_node.db import NodeDB  # noqa: E402
 from pentest_node.events.sink import LocalFirstEventSink  # noqa: E402
 from pentest_node.tui.logging_config import configure_tui_logging  # noqa: E402
-from pentest_node.standalone.runner import StandaloneOptions, run_standalone  # noqa: E402
+from pentest_node.standalone.runner import StandaloneOptions, run_standalone, _resolve_session  # noqa: E402
 from pentest_node.tools.registry import ToolSpec  # noqa: E402
 from pentest_node.tui.commands import options_from_command  # noqa: E402
 
@@ -205,6 +205,39 @@ class StandalonePhase3Tests(unittest.TestCase):
         self.assertIn("web vulnerabilities", options.instruction)
         self.assertFalse(options.check_connectivity)
 
+    def test_tui_command_uses_default_target_for_followup_instruction(self):
+        base = StandaloneOptions(output=Path("node/workspace/standalone"), check_connectivity=False)
+
+        options, error = options_from_command(
+            base,
+            "follow up on DVWA low medium high levels",
+            default_target="http://host.docker.internal:8080/",
+            default_scope=["http://host.docker.internal:8080"],
+        )
+
+        self.assertIsNone(error)
+        self.assertEqual(options.target, "http://host.docker.internal:8080/")
+        self.assertEqual(options.scope, ["http://host.docker.internal:8080"])
+        self.assertIn("low", options.instruction)
+        self.assertFalse(options.check_connectivity)
+
+    def test_tui_command_prefers_current_session_for_followup_instruction(self):
+        base = StandaloneOptions(output=Path("node/workspace/standalone"), check_connectivity=False)
+
+        options, error = options_from_command(
+            base,
+            "follow up on DVWA low medium high levels",
+            default_target="http://host.docker.internal:8080/",
+            default_scope=["http://host.docker.internal:8080"],
+            default_resume_session_id="session-current",
+        )
+
+        self.assertIsNone(error)
+        self.assertEqual(options.resume, "session-current")
+        self.assertEqual(options.target, "")
+        self.assertIsNone(options.scope)
+        self.assertIn("low", options.instruction)
+
     def test_tui_command_supports_resume(self):
         base = StandaloneOptions(output=Path("node/workspace/standalone"))
 
@@ -213,6 +246,46 @@ class StandalonePhase3Tests(unittest.TestCase):
         self.assertIsNone(error)
         self.assertEqual(options.resume, "session-123")
         self.assertEqual(options.target, "")
+
+    def test_standalone_resume_followup_reopens_completed_checkpoint(self):
+        async def scenario():
+            with tempfile.TemporaryDirectory() as tmp:
+                output = Path(tmp)
+                db = NodeDB(output / "pentest-node.sqlite3")
+                await db.init()
+                await db.create_session(
+                    session_id="s-complete",
+                    task_id="t-complete",
+                    target={"type": "url", "value": "http://192.0.2.1/"},
+                    scope={"allow": ["http://192.0.2.1/"], "deny": []},
+                    instruction="original instruction",
+                    output_dir=str(output),
+                    status="completed",
+                )
+                checkpoint = {
+                    "phase": "complete",
+                    "phases_completed": ["intake", "recon", "analysis", "verify", "report", "complete"],
+                    "state": {"phase": "complete", "phases_completed": ["intake", "recon", "analysis", "verify", "report", "complete"], "phase_iteration": 4},
+                    "attack_surface": [{"surface_id": "surface-1", "url": "http://192.0.2.1/"}],
+                }
+                await db.save_event("s-complete", {"type": "checkpoint_update", "checkpoint": checkpoint})
+                resolved = await _resolve_session(db, StandaloneOptions(output=output, resume="s-complete", instruction="follow up on DVWA low medium high levels"))
+                await db.close()
+                return resolved
+
+        session_id, task_id, target, scope, instruction, checkpoint = asyncio.run(scenario())
+
+        self.assertEqual(session_id, "s-complete")
+        self.assertEqual(task_id, "t-complete")
+        self.assertEqual(target["value"], "http://192.0.2.1/")
+        self.assertEqual(scope["allow"], ["http://192.0.2.1/"])
+        self.assertIn("original instruction", instruction)
+        self.assertIn("User continuation: follow up on DVWA low medium high levels", instruction)
+        self.assertEqual(checkpoint["phase"], "verify")
+        self.assertEqual(checkpoint["state"]["phase"], "verify")
+        self.assertEqual(checkpoint["phases_completed"], ["intake", "recon", "analysis"])
+        self.assertEqual(checkpoint["attack_surface"][0]["surface_id"], "surface-1")
+        self.assertEqual(checkpoint["steering_queue"][-1]["text"], "follow up on DVWA low medium high levels")
 
     def test_local_first_sink_persists_before_forwarding(self):
         async def scenario():

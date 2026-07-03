@@ -327,6 +327,63 @@ class StandalonePhase4Tests(unittest.TestCase):
         self.assertFalse(visible)
         self.assertEqual(started, [])
 
+    def test_tui_followup_without_url_uses_current_target_context(self):
+        app = PentestTUI(StandaloneOptions(output=Path("."), target="http://target.local/login.php", scope=["http://target.local"], check_connectivity=False))
+        app.session_id = "session-current"
+
+        options, error = app._options_from_command("continue testing low medium high levels")
+
+        self.assertIsNone(error)
+        self.assertEqual(options.resume, "session-current")
+        self.assertEqual(options.target, "")
+        self.assertIsNone(options.scope)
+        self.assertIn("low medium high", options.instruction)
+
+    def test_tui_remembers_target_context_from_resume_checkpoint(self):
+        app = PentestTUI(StandaloneOptions(output=Path("."), check_connectivity=False))
+        app.session_id = "session-1"
+        app.target = "resume:session-1"
+        app._remember_target_context({"checkpoint": {"resolved_target": "http://target.local/", "scope": {"allow": ["http://target.local"], "deny": []}}})
+
+        options, error = app._options_from_command("continue testing medium level")
+
+        self.assertIsNone(error)
+        self.assertEqual(options.resume, "session-1")
+        self.assertEqual(options.target, "")
+        self.assertIsNone(options.scope)
+
+    def test_tui_current_session_followup_preserves_findings_panel(self):
+        async def scenario():
+            app = PentestTUI(StandaloneOptions(output=Path("."), check_connectivity=False))
+            started = []
+
+            def fake_start(options, *, preserve_context=False):
+                started.append((options, preserve_context))
+
+            async with app.run_test(size=(120, 30)) as pilot:
+                await pilot.pause(0.1)
+                app.session_id = "session-current"
+                app.target = "http://target.local/login.php"
+                app.scope = ["http://target.local"]
+                app.findings = 1
+                app.assets = 2
+                app.evidence = 3
+                app.finding_lines = ["medium | Reflected XSS | GET /vulnerabilities/xss_r/"]
+                app.plan_tree = [{"node_id": "plan-1", "title": "Existing test", "status": "done"}]
+                app._start_run = fake_start  # type: ignore[method-assign]
+                await app._submit_command_text("continue testing low medium high levels")
+                return app.findings, app.assets, app.evidence, list(app.finding_lines), list(app.plan_tree), started
+
+        findings, assets, evidence, finding_lines, plan_tree, started = asyncio.run(scenario())
+
+        self.assertEqual(findings, 1)
+        self.assertEqual(assets, 2)
+        self.assertEqual(evidence, 3)
+        self.assertEqual(finding_lines, ["medium | Reflected XSS | GET /vulnerabilities/xss_r/"])
+        self.assertEqual(plan_tree[0]["node_id"], "plan-1")
+        self.assertEqual(started[0][0].resume, "session-current")
+        self.assertTrue(started[0][1])
+
     def test_tui_agent_log_allows_mouse_text_selection(self):
         async def scenario():
             app = PentestTUI(StandaloneOptions(output=Path("."), check_connectivity=False))
