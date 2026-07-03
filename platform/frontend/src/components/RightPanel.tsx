@@ -79,7 +79,7 @@ export default function RightPanel({ phase, activeTool, intakeResult, intakeStat
             {activeTool && (
               <div>
                 <p className="text-xs text-ink-muted mb-1">活跃工具</p>
-                <p className="text-sm font-mono">{activeTool}</p>
+                <p className="font-sans text-sm">{activeTool}</p>
               </div>
             )}
             {intake && (

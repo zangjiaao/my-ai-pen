@@ -77,6 +77,7 @@ export default function ConversationPage() {
   const [importStatus, setImportStatus] = useState<ImportStatus>(null);
   const [selectedAgent, setSelectedAgent] = useState<AgentNode | null>(null);
   const [agentNodes, setAgentNodes] = useState<AgentNode[]>([]);
+  const [activeConversationNodeId, setActiveConversationNodeId] = useState<string | null>(null);
   const [agentState, setAgentState] = useState<Record<string, unknown>>({});
   const [progress, setProgress] = useState<Progress | undefined>();
   const [planTree, setPlanTree] = useState<PlanNode[]>([]);
@@ -104,6 +105,10 @@ export default function ConversationPage() {
   const displayMessages = useMemo(() => groupConsecutiveToolMessages(messages), [messages]);
   const activeConversation = useMemo(() => conversations.find(c => c.id === activeId), [activeId, conversations]);
   const platformAgentNodeId = useMemo(() => agentNodes.find(node => node.type === "platform")?.id || null, [agentNodes]);
+  const fallbackPentestNodeId = useMemo(() => {
+    const pentestNodeIds = agentNodes.filter(node => node.type === "pentest").map(node => node.id);
+    return activeConversation?.node_id || activeConversationNodeId || (pentestNodeIds.length === 1 ? pentestNodeIds[0] : null);
+  }, [activeConversation?.node_id, activeConversationNodeId, agentNodes]);
   const agentNameById = useMemo(() => Object.fromEntries(agentNodes.map(node => [node.id, node.name])), [agentNodes]);
   const mentionState = useMemo(() => getMentionState(input), [input]);
   const mentionOptions = useMemo(() => filterMentionOptions(agentNodes, mentionState?.query || ""), [agentNodes, mentionState]);
@@ -126,7 +131,9 @@ export default function ConversationPage() {
     setAssets(snapshot.assets?.length ? snapshot.assets : fallback?.assets || []);
     setPendingApprovals(snapshot.pending_approvals?.length ? snapshot.pending_approvals : fallback?.pending_approvals || []);
     setEvidence(snapshot.evidence?.length ? snapshot.evidence : fallback?.evidence || []);
-    setRunning((snapshot.conversation || fallback?.conversation)?.status === "running");
+    const snapshotConversation = snapshot.conversation || fallback?.conversation;
+    if (snapshotConversation) setActiveConversationNodeId(snapshotConversation.node_id || null);
+    setRunning(snapshotConversation?.status === "running");
   }, []);
 
   const isNearMessageBottom = useCallback(() => {
@@ -189,6 +196,7 @@ export default function ConversationPage() {
       clearPendingAgentMessage(convId);
       markMessageAutoScroll();
       const incoming = makeMessage(convId, "agent", "tool_call", {
+        ...agentAttribution(m),
         tool_name: m.tool_name || "",
         tool_run_id: m.tool_run_id,
         command: m.command || "",
@@ -285,7 +293,7 @@ export default function ConversationPage() {
       setRunning(true);
       const statusMessage = readString(m.message);
       if (statusMessage) {
-        addMessageToConversation(convId, makeMessage(convId, "agent", "text", { text: statusMessage, message_id: m.message_id }));
+        addMessageToConversation(convId, makeMessage(convId, "agent", "text", { ...agentAttribution(m), text: statusMessage, message_id: m.message_id }));
       } else {
         addMessageToConversation(convId, makeMessage(convId, "system", "status", { text: `Phase: ${phase || ""}`, phase, iteration: m.iteration, active_tool: m.active_tool, status: m.status, intake_result: m.intake_result, message_id: m.message_id }));
       }
@@ -316,7 +324,7 @@ export default function ConversationPage() {
       const convId = messageConversationId(msg, activeId);
       clearPendingAgentMessage(convId);
       markMessageAutoScroll();
-      addMessageToConversation(convId, makeMessage(convId, "agent", "text", c as Record<string, unknown>));
+      addMessageToConversation(convId, makeMessage(convId, "agent", "text", { ...agentAttribution(msg as Record<string, unknown>), ...(c as Record<string, unknown>) }));
     },
   });
   const locateApproval = useCallback((requestId: string) => {
@@ -341,6 +349,7 @@ export default function ConversationPage() {
 
   const resetConversationState = useCallback(() => {
     setAgentState({});
+    setActiveConversationNodeId(null);
     setProgress(undefined);
     setPlanTree([]);
     setFindings([]);
@@ -364,6 +373,7 @@ export default function ConversationPage() {
     shouldStickToBottomRef.current = true;
     void queryClient.removeQueries({ queryKey: ["conversation-messages"] });
     setActiveId(id);
+    setActiveConversationNodeId(conversations.find(c => c.id === id)?.node_id || null);
     localStorage.setItem(ACTIVE_CONVERSATION_KEY, id);
     send({ type: "subscribe", conversation_id: id });
 
@@ -688,7 +698,7 @@ function pendingAgentSourceForMessage(
               )}
               {messageQuery.isFetchingNextPage && <div className="py-2 text-center text-xs text-ink-muted">Loading older messages...</div>}
               {messageQuery.hasNextPage && !messageQuery.isFetchingNextPage && <button type="button" onClick={fetchOlderMessages} className="mx-auto block rounded-pill border border-hairline px-3 py-1.5 text-xs text-ink-secondary">Load older messages</button>}
-              {displayMessages.map((msg, index) => <MessageRenderer key={msg.id} message={msg} previousMessage={displayMessages[index - 1]} agentNameById={agentNameById} fallbackPentestNodeId={activeConversation?.node_id || null} platformAgentNodeId={platformAgentNodeId} onDecision={handleDecision} onOpenVulnerability={setSelectedVulnerability} onOpenAsset={setSelectedAsset} onOpenEvidence={setSelectedEvidence} highlightedApprovalId={highlightedApprovalId} approvalDecisionByRequestId={approvalDecisionByRequestId} />)}
+              {displayMessages.map((msg, index) => <MessageRenderer key={msg.id} message={msg} previousMessage={displayMessages[index - 1]} agentNameById={agentNameById} fallbackPentestNodeId={fallbackPentestNodeId} platformAgentNodeId={platformAgentNodeId} onDecision={handleDecision} onOpenVulnerability={setSelectedVulnerability} onOpenAsset={setSelectedAsset} onOpenEvidence={setSelectedEvidence} highlightedApprovalId={highlightedApprovalId} approvalDecisionByRequestId={approvalDecisionByRequestId} />)}
             </div>
             <div className="border-t border-hairline-soft p-4">
               <div className="mb-3 flex gap-2">
@@ -1065,6 +1075,12 @@ function isActiveMessage(msg: Record<string, unknown>, activeId: string | null):
   return !activeId || !convId || String(convId) === activeId;
 }
 
+function agentAttribution(msg: Record<string, unknown>, fallbackSource: AgentIdentity = "pentest"): Record<string, unknown> {
+  const content = msg.content && typeof msg.content === "object" && !Array.isArray(msg.content) ? msg.content as Record<string, unknown> : {};
+  const source = readString(msg.agent_source) || readString(content.agent_source) || fallbackSource;
+  const nodeId = readString(msg.agent_node_id) || readString(content.agent_node_id);
+  return nodeId ? { agent_source: source, agent_node_id: nodeId } : { agent_source: source };
+}
 function messageConversationId(msg: Record<string, unknown>, fallback: string | null): string | null {
   return msg.conversation_id ? String(msg.conversation_id) : fallback;
 }

@@ -57,21 +57,21 @@ function ToolCallCard({ content, onOpenEvidence }: { content: Record<string, unk
         type="button"
         aria-expanded={expanded}
         onClick={() => setExpanded(value => !value)}
-        className="flex w-full min-w-0 items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-canvas-inset"
+        className="flex w-full min-w-0 items-center gap-1.5 py-1.5 text-left transition-colors hover:bg-canvas-inset"
       >
-        <div className="flex flex-shrink-0 items-center gap-1.5">
+        <div className="flex flex-shrink-0 items-center gap-1">
           {categories.map(category => <ToolCategoryIcon key={category.key} category={category} />)}
         </div>
-        <span className="min-w-0 max-w-[34%] flex-shrink truncate text-sm font-medium text-ink">{toolTitle(toolNames)}</span>
+        <span className="min-w-0 max-w-[34%] flex-shrink truncate font-sans text-sm text-ink-secondary">{toolTitle(toolNames)}</span>
         <span className="min-w-0 truncate text-xs text-ink-secondary">{resultSummary}</span>
         <span className="min-w-6 flex-1" aria-hidden="true" />
       </button>
       {expanded && (
-        <div className="ml-10 space-y-1 px-1 pb-2">
+        <div className="ml-7 space-y-0.5 pb-1">
           {items.length ? items.map((item, index) => (
             <ToolItemRow key={`${item.runId || item.evidenceId || index}-${index}`} item={item} onOpenEvidence={onOpenEvidence} />
           )) : (
-            <div className="rounded-sm bg-canvas-inset px-3 py-2 text-xs text-ink-secondary">{fallbackSummary}</div>
+            <div className="rounded-sm bg-canvas-inset px-3 py-1.5 text-xs text-ink-secondary">{fallbackSummary}</div>
           )}
         </div>
       )}
@@ -105,7 +105,7 @@ function ToolItemRow({ item, onOpenEvidence }: { item: ToolItem; onOpenEvidence?
     </button>
   ) : null;
   return (
-    <div className="flex min-w-0 items-start gap-2 px-1 py-1.5 text-xs">
+    <div className="flex min-w-0 items-start gap-2 py-1 text-xs">
       <span className={`mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full ${statusColor}`} />
       <div className="min-w-0 flex-1 overflow-hidden">
         <div className="flex min-w-0 items-center gap-2">
@@ -348,7 +348,7 @@ function uniqueStrings(values: string[]): string[] {
 function MarkdownText({ text }: { text: string }) {
   const blocks = parseMarkdown(text);
   return (
-    <div className="my-2 min-w-0 max-w-full space-y-2 text-sm leading-relaxed text-ink [overflow-wrap:anywhere]">
+    <div className="my-2 min-w-0 max-w-full space-y-2 font-mono text-sm leading-relaxed text-ink [overflow-wrap:anywhere]">
       {blocks.map((block, index) => renderMarkdownBlock(block, index))}
     </div>
   );
@@ -645,7 +645,7 @@ function AssetCard({ content, onOpen }: { content: Record<string, unknown>; onOp
 
 function AgentPendingCard({ content }: { content: Record<string, unknown> }) {
   return (
-    <div className="my-2 min-w-0 max-w-full text-sm leading-relaxed text-ink-secondary">
+    <div className="my-2 min-w-0 max-w-full font-mono text-sm leading-relaxed text-ink-secondary">
       {String(content.text || "Working...")}
     </div>
   );
@@ -664,7 +664,7 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
   if (role === "user") {
     return (
       <div className="my-2 flex min-w-0 justify-end">
-        <div className="max-w-[70%] break-words rounded-2xl bg-surface-default px-4 py-2.5 text-sm [overflow-wrap:anywhere]">{content.text as string}</div>
+        <div className="max-w-[70%] break-words rounded-2xl bg-surface-default px-4 py-2.5 font-mono text-sm [overflow-wrap:anywhere]">{content.text as string}</div>
       </div>
     );
   }
