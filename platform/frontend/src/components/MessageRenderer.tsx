@@ -348,7 +348,7 @@ function uniqueStrings(values: string[]): string[] {
 function MarkdownText({ text }: { text: string }) {
   const blocks = parseMarkdown(text);
   return (
-    <div className="my-2 min-w-0 max-w-full space-y-2 font-mono text-sm leading-relaxed text-ink [overflow-wrap:anywhere]">
+    <div className="my-2 min-w-0 max-w-full space-y-2 text-sm leading-relaxed text-ink [overflow-wrap:anywhere]">
       {blocks.map((block, index) => renderMarkdownBlock(block, index))}
     </div>
   );
@@ -645,7 +645,7 @@ function AssetCard({ content, onOpen }: { content: Record<string, unknown>; onOp
 
 function AgentPendingCard({ content }: { content: Record<string, unknown> }) {
   return (
-    <div className="my-2 min-w-0 max-w-full font-mono text-sm leading-relaxed text-ink-secondary">
+    <div className="my-2 min-w-0 max-w-full text-sm leading-relaxed text-ink-secondary">
       {String(content.text || "Working...")}
     </div>
   );
@@ -664,7 +664,7 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
   if (role === "user") {
     return (
       <div className="my-2 flex min-w-0 justify-end">
-        <div className="max-w-[70%] break-words rounded-2xl bg-surface-default px-4 py-2.5 font-mono text-sm [overflow-wrap:anywhere]">{content.text as string}</div>
+        <div className="max-w-[70%] break-words rounded-2xl bg-surface-default px-4 py-2.5 text-sm [overflow-wrap:anywhere]">{content.text as string}</div>
       </div>
     );
   }
