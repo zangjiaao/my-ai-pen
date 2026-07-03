@@ -85,6 +85,7 @@ type ToolItem = {
   summary: string;
   evidenceId?: string;
   runId?: string;
+  command?: string;
   result?: Record<string, unknown>;
 };
 
@@ -168,12 +169,14 @@ function toolItemsFromContent(content: Record<string, unknown>): ToolItem[] {
       const status = readContentString(item.status) || readContentString(content.status) || "done";
       const stdout = readContentString(item.stdout);
       const parsed = parseLooseObject(stdout);
+      const command = readContentString(item.command) || readContentString(parsed?.command);
       return {
         toolName,
         status,
-        summary: parsed ? summarizeToolObject(parsed, toolName) || stripJsonNoise(stdout) : summarizeToolLine(stdout, toolName),
+        summary: summarizeToolItem(toolName, status, parsed, stdout, command),
         evidenceId: readContentString(item.evidence_id),
         runId: readContentString(item.tool_run_id),
+        command,
         result: parsed || undefined,
       };
     });
@@ -183,6 +186,7 @@ function toolItemsFromContent(content: Record<string, unknown>): ToolItem[] {
   const lines = stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
   const toolNames = toolNamesFromContent(content);
   const runIds = Array.isArray(content.tool_run_ids) ? content.tool_run_ids.map(item => String(item || "")) : [String(content.tool_run_id || "")];
+  const commands = readContentString(content.command).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
   const fallbackTool = String(content.latest_tool_name || content.tool_name || toolNames[0] || "tool");
   const fallbackStatus = String(content.status || "done");
   const items = lines
@@ -190,41 +194,72 @@ function toolItemsFromContent(content: Record<string, unknown>): ToolItem[] {
     .map((line, index) => toolItemFromLine(line, {
       fallbackTool: toolNames[index] || fallbackTool,
       fallbackStatus,
+      fallbackCommand: commands[index] || commands[commands.length - 1] || "",
       runId: runIds[index] || runIds[runIds.length - 1] || "",
     }))
     .filter((item): item is ToolItem => Boolean(item));
   if (items.length) return items;
-  return [{ toolName: fallbackTool, status: fallbackStatus, summary: summarizeToolOutput(stdout, fallbackTool), evidenceId: readContentString(content.evidence_id), runId: readContentString(content.tool_run_id) }];
+  return [{ toolName: fallbackTool, status: fallbackStatus, summary: summarizeToolItem(fallbackTool, fallbackStatus, null, stdout, commands[0] || ""), evidenceId: readContentString(content.evidence_id), runId: readContentString(content.tool_run_id), command: commands[0] || "" }];
 }
 
 function summarizeToolLine(line: string, latestTool: string): string {
   if (!line) return "Started tool call";
   const parsed = parseLooseObject(line);
-  if (parsed) return summarizeToolObject(parsed, latestTool) || stripJsonNoise(line);
+  if (parsed) return summarizeToolItem(latestTool, readContentString(parsed.status) || readContentString(parsed.status_code), parsed, line, readContentString(parsed.command));
   return stripJsonNoise(line);
 }
-function toolItemFromLine(line: string, fallback: { fallbackTool: string; fallbackStatus: string; runId: string }): ToolItem | null {
+function toolItemFromLine(line: string, fallback: { fallbackTool: string; fallbackStatus: string; fallbackCommand: string; runId: string }): ToolItem | null {
   const parsed = parseLooseObject(line);
   if (parsed) {
     const toolName = readContentString(parsed.tool_name) || readContentString(parsed.source_tool) || fallback.fallbackTool;
     const status = readContentString(parsed.status) || readContentString(parsed.status_code) || fallback.fallbackStatus;
+    const command = readContentString(parsed.command) || fallback.fallbackCommand;
     return {
       toolName,
       status,
-      summary: summarizeToolObject(parsed, toolName) || stripJsonNoise(line),
+      summary: summarizeToolItem(toolName, status, parsed, line, command),
       evidenceId: readContentString(parsed.evidence_id) || readContentString(parsed.EVIDENCE_ID),
       runId: readContentString(parsed.tool_run_id) || fallback.runId,
+      command,
       result: parsed,
     };
   }
   return {
     toolName: fallback.fallbackTool,
     status: fallback.fallbackStatus,
-    summary: stripJsonNoise(line),
+    summary: fallback.fallbackCommand || stripJsonNoise(line),
+    command: fallback.fallbackCommand,
     runId: fallback.runId,
   };
 }
 
+function summarizeToolItem(toolName: string, status: string, result: Record<string, unknown> | null, rawText: string, command = ""): string {
+  const lower = toolName.toLowerCase();
+  const value = result || {};
+  const displayStatus = compactStatus(status || readContentString(value.status) || readContentString(value.status_code));
+  const method = readContentString(value.method).toUpperCase();
+  const url = readContentString(value.url) || readContentString(value.target) || readContentString(value.location);
+  const commandText = command || readContentString(value.command);
+
+  if (/browser|explore|crawl/.test(lower)) return joinSummaryParts([url || readContentString(value.action) || toolName, displayStatus]);
+  if (/http|request|replay|fetch|curl/.test(lower)) return joinSummaryParts([method || "HTTP", url, compactStatus(value.status_code || status)]);
+  if (/execute|command|shell|docker|process/.test(lower)) return joinSummaryParts([commandText || stripJsonNoise(rawText)]);
+
+  const title = readContentString(value.title) || readContentString(value.summary) || readContentString(value.message) || readContentString(value.error);
+  const evidence = readContentString(value.evidence_id) || readContentString(value.EVIDENCE_ID);
+  return joinSummaryParts([title || readContentString(value.action) || toolName, url || evidence, displayStatus]);
+}
+
+function compactStatus(value: unknown): string {
+  const status = String(value || "").trim();
+  if (!status) return "";
+  if (/^status\s+/i.test(status)) return status.replace(/^status\s+/i, "");
+  return status;
+}
+
+function joinSummaryParts(parts: Array<string | undefined>): string {
+  return parts.map(part => String(part || "").trim()).filter(Boolean).slice(0, 3).join(" - ");
+}
 function readContentString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
@@ -280,19 +315,7 @@ function summarizeToolOutput(stdout: string, latestTool = "tool"): string {
 }
 
 function summarizeToolObject(value: Record<string, unknown>, latestTool: string): string {
-  const status = String(value.status || value.status_code || "").trim();
-  const action = String(value.action || value.command || value.method || "").trim();
-  const title = String(value.title || value.summary || value.message || value.error || "").trim();
-  const url = String(value.url || value.target || value.location || "").trim();
-  const evidence = String(value.evidence_id || value.EVIDENCE_ID || "").trim();
-  const pieces: string[] = [];
-  if (action) pieces.push(action);
-  else pieces.push(latestTool);
-  if (url) pieces.push(url);
-  if (status) pieces.push(`status ${status}`);
-  if (title && !pieces.includes(title)) pieces.push(title);
-  if (evidence) pieces.push(`evidence ${evidence}`);
-  return pieces.join(" · ");
+  return summarizeToolItem(latestTool, readContentString(value.status) || readContentString(value.status_code), value, "", readContentString(value.command));
 }
 
 function parseLooseObject(text: string): Record<string, unknown> | null {
@@ -304,7 +327,11 @@ function parseLooseObject(text: string): Record<string, unknown> | null {
   }
   const pairs = [...text.matchAll(/["']?([A-Za-z_][\w-]*)["']?\s*:\s*["']([^"']{1,240})["']/g)];
   if (!pairs.length) return null;
-  return Object.fromEntries(pairs.map(match => [match[1], match[2]]));
+  const result: Record<string, unknown> = {};
+  for (const match of pairs) {
+    if (result[match[1]] === undefined) result[match[1]] = match[2];
+  }
+  return result;
 }
 
 function stripJsonNoise(text: string): string {
@@ -688,5 +715,7 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
     </div>
   );
 }
+
+
 
 
