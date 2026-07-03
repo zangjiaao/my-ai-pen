@@ -19,7 +19,7 @@ const ACTIVE_CONVERSATION_KEY = "active_conversation_id";
 const MESSAGE_PAGE_SIZE = 200;
 
 const PHASES = ["intake", "recon", "analysis", "verify", "report", "complete"] as const;
-const PHASE_LABELS: Record<string, string> = {
+const PLAN_PHASE_TITLES: Record<string, string> = {
   intake: "\u76ee\u6807\u4e0e\u6388\u6743\u8303\u56f4\u68c0\u67e5",
   recon: "\u653b\u51fb\u9762\u53d1\u73b0",
   analysis: "\u8986\u76d6\u5206\u6790\u4e0e\u6d4b\u8bd5\u8ba1\u5212",
@@ -28,15 +28,14 @@ const PHASE_LABELS: Record<string, string> = {
   complete: "\u4efb\u52a1\u5b8c\u6210",
 };
 const TEMPLATES = [
-  { label: "Web 渗透", text: "对 {URL} 进行 Web 应用渗透测试" },
-  { label: "主机扫描", text: "对 {IP 段} 进行全面主机安全扫描" },
-  { label: "权限测试", text: "测试以下账号的权限控制和越权漏洞" },
-  { label: "复测", text: "针对漏洞进行复测验证" },
+  { label: "Web pentest", text: "Test {URL} for web application vulnerabilities" },
+  { label: "Host scan", text: "Scan {IP range} for exposed services and security issues" },
+  { label: "Access control", text: "Test the following accounts for access-control issues" },
+  { label: "Retest", text: "Retest the vulnerability and verify the fix" },
 ];
 
 type Progress = { current: number; total: number; percent: number };
-type Todo = { id: string; title: string; status: "done" | "running" | "pending" };
-type PlanNode = { node_id?: string; id?: string; title?: string; status?: string; parent_id?: string | null; kind?: string; endpoint?: string | null; parameter?: string | null; vuln_type?: string | null; notes?: string | null; evidence_ids?: string[]; priority?: number; };
+type PlanNode = { node_id?: string; id?: string; title?: string; status?: string; parent_id?: string | null; kind?: string; level?: string; endpoint?: string | null; parameter?: string | null; vuln_type?: string | null; notes?: string | null; evidence_ids?: string[]; priority?: number; };
 type AgentNode = { id: string; name: string; type: AgentIdentity | string; status: string; token_required?: boolean };
 type MentionState = { start: number; query: string } | null;
 
@@ -55,7 +54,6 @@ type ConversationSnapshot = {
   conversation?: Conversation;
   agent_state?: Record<string, unknown>;
   progress?: Progress;
-  todos?: Todo[];
   plan_tree?: PlanNode[];
   findings?: Array<Record<string, unknown>>;
   assets?: Array<Record<string, unknown>>;
@@ -81,7 +79,6 @@ export default function ConversationPage() {
   const [agentNodes, setAgentNodes] = useState<AgentNode[]>([]);
   const [agentState, setAgentState] = useState<Record<string, unknown>>({});
   const [progress, setProgress] = useState<Progress | undefined>();
-  const [todos, setTodos] = useState<Todo[]>([]);
   const [planTree, setPlanTree] = useState<PlanNode[]>([]);
   const [findings, setFindings] = useState<Array<Record<string, unknown>>>([]);
   const [assets, setAssets] = useState<Array<Record<string, unknown>>>([]);
@@ -104,6 +101,7 @@ export default function ConversationPage() {
   });
 
   const messages = useMemo(() => messagesFromQueryData(activeId, messageQuery.data as MessagesInfiniteData | undefined), [activeId, messageQuery.data]);
+  const displayMessages = useMemo(() => groupConsecutiveToolMessages(messages), [messages]);
   const activeConversation = useMemo(() => conversations.find(c => c.id === activeId), [activeId, conversations]);
   const platformAgentNodeId = useMemo(() => agentNodes.find(node => node.type === "platform")?.id || null, [agentNodes]);
   const agentNameById = useMemo(() => Object.fromEntries(agentNodes.map(node => [node.id, node.name])), [agentNodes]);
@@ -123,7 +121,6 @@ export default function ConversationPage() {
   const applyConversationState = useCallback((snapshot: ConversationSnapshot, fallback?: ConversationSnapshot) => {
     setAgentState(hasValues(snapshot.agent_state) ? snapshot.agent_state! : fallback?.agent_state || {});
     setProgress(snapshot.progress || fallback?.progress);
-    setTodos(snapshot.todos?.length ? snapshot.todos : fallback?.todos || []);
     setPlanTree(snapshot.plan_tree?.length ? snapshot.plan_tree : fallback?.plan_tree || []);
     setFindings(snapshot.findings?.length ? snapshot.findings : fallback?.findings || []);
     setAssets(snapshot.assets?.length ? snapshot.assets : fallback?.assets || []);
@@ -197,6 +194,8 @@ export default function ConversationPage() {
         command: m.command || "",
         status: normalizeExecutionStatus(m.status),
         stdout: m.line ? `${m.line}\n` : "",
+        evidence_id: m.evidence_id,
+        tool_items: [{ tool_name: m.tool_name || "", tool_run_id: m.tool_run_id, status: normalizeExecutionStatus(m.status), stdout: m.line || "", command: m.command || "", evidence_id: m.evidence_id }],
         message_id: m.message_id,
       });
       addMessageToConversation(convId, incoming);
@@ -251,7 +250,6 @@ export default function ConversationPage() {
       clearPendingAgentMessage(messageConversationId(msg, activeId));
       setAgentState({ phase, activeTool: m.active_tool, intakeResult: m.intake_result, intakeStatus: m.status });
       setProgress(progressForPhase(phase, "running"));
-      setTodos(todosForPhase(phase, "running"));
       setRunning(true);
     },
     thinking: (msg) => {
@@ -284,9 +282,13 @@ export default function ConversationPage() {
       const phase = typeof m.phase === "string" ? m.phase : undefined;
       setAgentState({ phase, activeTool: m.active_tool, intakeResult: m.intake_result, intakeStatus: m.status });
       setProgress(progressForPhase(phase, "running"));
-      setTodos(todosForPhase(phase, "running"));
       setRunning(true);
-      addMessageToConversation(convId, makeMessage(convId, "system", "status", { text: `Phase: ${phase || ""}`, phase, iteration: m.iteration, active_tool: m.active_tool, status: m.status, intake_result: m.intake_result, message_id: m.message_id }));
+      const statusMessage = readString(m.message);
+      if (statusMessage) {
+        addMessageToConversation(convId, makeMessage(convId, "agent", "text", { text: statusMessage, message_id: m.message_id }));
+      } else {
+        addMessageToConversation(convId, makeMessage(convId, "system", "status", { text: `Phase: ${phase || ""}`, phase, iteration: m.iteration, active_tool: m.active_tool, status: m.status, intake_result: m.intake_result, message_id: m.message_id }));
+      }
     },
     task_complete: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
@@ -294,7 +296,7 @@ export default function ConversationPage() {
       clearPendingAgentMessage(convId);
       markMessageAutoScroll();
       setRunning(false);
-      addMessageToConversation(convId, makeMessage(convId, "system", "status", { text: "任务完成 - " + JSON.stringify((msg as Record<string, unknown>).summary || {}), summary: (msg as Record<string, unknown>).summary || {}, message_id: (msg as Record<string, unknown>).message_id }));
+      addMessageToConversation(convId, makeMessage(convId, "system", "status", { text: "Task complete - " + JSON.stringify((msg as Record<string, unknown>).summary || {}), summary: (msg as Record<string, unknown>).summary || {}, message_id: (msg as Record<string, unknown>).message_id }));
       void fetchAll();
       void refreshConversationState(convId);
     },
@@ -304,7 +306,7 @@ export default function ConversationPage() {
       clearPendingAgentMessage(convId);
       markMessageAutoScroll();
       setRunning(false);
-      addMessageToConversation(convId, makeMessage(convId, "system", "status", { text: "任务失败: " + ((msg as Record<string, unknown>).message || ""), message_id: (msg as Record<string, unknown>).message_id }));
+      addMessageToConversation(convId, makeMessage(convId, "system", "status", { text: "Task failed: " + ((msg as Record<string, unknown>).message || ""), message_id: (msg as Record<string, unknown>).message_id }));
       void fetchAll();
       void refreshConversationState(convId);
     },
@@ -340,7 +342,6 @@ export default function ConversationPage() {
   const resetConversationState = useCallback(() => {
     setAgentState({});
     setProgress(undefined);
-    setTodos([]);
     setPlanTree([]);
     setFindings([]);
     setAssets([]);
@@ -450,17 +451,17 @@ export default function ConversationPage() {
   const handleImportReport = useCallback(async (file: File | null) => {
     if (!file) return;
     setImportingReport(true);
-    setImportStatus({ level: "info", text: "正在导入会话..." });
+    setImportStatus({ level: "info", text: "Importing conversation..." });
     const form = new FormData();
     form.append("file", file);
     try {
       const result = await authFetch<ImportReportResult>("/api/sync/import", { method: "POST", body: form });
-      const summary = `导入完成：消息 ${result.messages_imported || 0}，资产 ${result.assets_imported || 0}，漏洞 ${result.vulns_imported || 0}，证据 ${result.evidence_imported || 0}`;
+      const summary = `Import complete: messages ${result.messages_imported || 0}, assets ${result.assets_imported || 0}, vulnerabilities ${result.vulns_imported || 0}, evidence ${result.evidence_imported || 0}`;
       setImportStatus({ level: "success", text: summary });
       await fetchAll();
       await loadConversation(result.conversation_id);
     } catch (error) {
-      const message = error instanceof ApiError ? String(error.message) : "导入失败，请确认文件是 pentest-node 导出的 report.tar.gz。";
+      const message = error instanceof ApiError ? String(error.message) : "Import failed. Please confirm this is a pentest-node report.tar.gz export.";
       setImportStatus({ level: "error", text: message });
     } finally {
       setImportingReport(false);
@@ -477,7 +478,7 @@ export default function ConversationPage() {
 
     const targetValue = extractTarget(text);
     const restartRequested = isRestartRequest(text);
-    const completedConversation = isConversationComplete(activeId, conversations, todos);
+    const completedConversation = isConversationComplete(activeId, conversations, planTree);
     const platformMention = selectedMentionAgent?.type === "platform";
     const startFresh = Boolean(activeId && restartRequested);
 
@@ -504,7 +505,7 @@ export default function ConversationPage() {
     shouldStickToBottomRef.current = true;
     const agentPayload = selectedMentionAgent ? { agent_target: selectedMentionAgent.type === "platform" ? "platform" : "pentest", agent_node_id: selectedMentionAgent.id } : {};
     const shouldContinueExisting = Boolean(!startFresh && activeId && !restartRequested && !completedConversation);
-    const pendingAgentSource = pendingAgentSourceForMessage(selectedMentionAgent, targetValue, activeConversation?.status, todos);
+    const pendingAgentSource = pendingAgentSourceForMessage(selectedMentionAgent, targetValue, activeConversation?.status, planTree);
     const pendingAgentNodeId = selectedMentionAgent?.id || (pendingAgentSource === "pentest" ? activeConversation?.node_id || undefined : undefined);
     const pendingContent: Record<string, unknown> = {
       text: "Working...",
@@ -536,11 +537,10 @@ export default function ConversationPage() {
     setRunning(true);
     setAgentState({ phase: "intake" });
     setProgress(progressForPhase("intake", "running"));
-    setTodos(todosForPhase("intake", "running"));
     const target = { type: targetValue.startsWith("http") ? "url" : "host", value: targetValue };
     const scope = { allow: [target.value], deny: [] };
     send({ type: "user_message", conversation_id: convId, text, target, scope, client_message_id: clientMessageId, ...agentPayload });
-  }, [input, selectedAgent, agentNodes, activeId, activeConversation, conversations, todos, resetConversationState, fetchAll, send, setConversationMessageData]);
+  }, [input, selectedAgent, agentNodes, activeId, activeConversation, conversations, planTree, resetConversationState, fetchAll, send, setConversationMessageData]);
 
 
 function getMentionState(value: string): MentionState {
@@ -579,22 +579,23 @@ function isRestartRequest(text: string): boolean {
   return englishRestart || chineseRestartTerms.some(term => normalized.includes(term));
 }
 
-function isConversationComplete(activeId: string | null, conversations: Conversation[], todos: Todo[]): boolean {
+function isConversationComplete(activeId: string | null, conversations: Conversation[], planTree: PlanNode[]): boolean {
   const conversation = conversations.find(c => c.id === activeId);
   if (conversation?.status === "completed") return true;
-  if (todos.length > 0 && todos.every(item => item.status === "done")) return true;
-  return false;
+  const phaseNodes = planTree.filter(node => node.level === "phase" || node.kind === "phase");
+  return phaseNodes.length > 0 && phaseNodes.every(node => node.status === "done");
 }
 
 function pendingAgentSourceForMessage(
   selectedAgent: AgentNode | null,
   targetValue: string | null,
   conversationStatus: Conversation["status"] | undefined,
-  todos: Todo[],
+  planTree: PlanNode[],
 ): AgentIdentity {
   if (selectedAgent?.type === "platform") return "platform";
   if (selectedAgent?.type === "pentest") return "pentest";
-  if (targetValue || conversationStatus === "running" || todos.some(item => item.status === "running" || item.status === "pending")) return "pentest";
+  const activePlan = planTree.some(node => node.status === "running" || node.status === "pending");
+  if (targetValue || conversationStatus === "running" || activePlan) return "pentest";
   return "platform";
 }
   function extractTarget(t: string): string | null {
@@ -649,8 +650,8 @@ function pendingAgentSourceForMessage(
               {messages.length === 0 && !activeId && (
                 <div className="flex h-full items-center justify-center">
                   <div className="max-w-md text-center">
-                    <h2 className="text-xl font-semibold">开始新的渗透测试</h2>
-                    <p className="mt-2 text-sm text-ink-secondary">在下方输入测试目标，Agent 将自动开始工作</p>
+                    <h2 className="text-xl font-semibold">Start a new pentest</h2>
+                    <p className="mt-2 text-sm text-ink-secondary">Enter a target below and the Agent will start working.</p>
                     <div className="mt-5 flex items-center justify-center gap-3">
                       <input
                         ref={importFileInputRef}
@@ -666,7 +667,7 @@ function pendingAgentSourceForMessage(
                         className="inline-flex items-center gap-2 rounded-pill border border-hairline px-4 py-2 text-sm font-medium text-ink-secondary transition-colors hover:bg-surface-default hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         <Upload className="h-4 w-4" />
-                        {importingReport ? "导入中..." : "导入会话"}
+                        {importingReport ? "Importing..." : "Import conversation"}
                       </button>
                     </div>
                     {importStatus && (
@@ -680,14 +681,14 @@ function pendingAgentSourceForMessage(
               {messages.length === 0 && activeId && (
                 <div className="flex h-full items-center justify-center">
                   <div className="text-center">
-                    <h2 className="text-xl font-semibold">暂无对话记录</h2>
-                    <p className="mt-2 text-sm text-ink-secondary">该会话已选中，但历史消息为空或暂时无法加载。</p>
+                    <h2 className="text-xl font-semibold">No messages yet</h2>
+                    <p className="mt-2 text-sm text-ink-secondary">This conversation is selected, but no history is available yet.</p>
                   </div>
                 </div>
               )}
               {messageQuery.isFetchingNextPage && <div className="py-2 text-center text-xs text-ink-muted">Loading older messages...</div>}
               {messageQuery.hasNextPage && !messageQuery.isFetchingNextPage && <button type="button" onClick={fetchOlderMessages} className="mx-auto block rounded-pill border border-hairline px-3 py-1.5 text-xs text-ink-secondary">Load older messages</button>}
-              {messages.map((msg, index) => <MessageRenderer key={msg.id} message={msg} previousMessage={messages[index - 1]} agentNameById={agentNameById} fallbackPentestNodeId={activeConversation?.node_id || null} platformAgentNodeId={platformAgentNodeId} onDecision={handleDecision} onOpenVulnerability={setSelectedVulnerability} onOpenAsset={setSelectedAsset} highlightedApprovalId={highlightedApprovalId} approvalDecisionByRequestId={approvalDecisionByRequestId} />)}
+              {displayMessages.map((msg, index) => <MessageRenderer key={msg.id} message={msg} previousMessage={displayMessages[index - 1]} agentNameById={agentNameById} fallbackPentestNodeId={activeConversation?.node_id || null} platformAgentNodeId={platformAgentNodeId} onDecision={handleDecision} onOpenVulnerability={setSelectedVulnerability} onOpenAsset={setSelectedAsset} onOpenEvidence={setSelectedEvidence} highlightedApprovalId={highlightedApprovalId} approvalDecisionByRequestId={approvalDecisionByRequestId} />)}
             </div>
             <div className="border-t border-hairline-soft p-4">
               <div className="mb-3 flex gap-2">
@@ -701,18 +702,18 @@ function pendingAgentSourceForMessage(
                     {mentionOptions.map((node) => (
                       <button key={node.id} type="button" onMouseDown={(event) => { event.preventDefault(); chooseMention(node); }} className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-surface-default">
                         <span className="min-w-0 truncate">{node.name}</span>
-                        <span className="ml-3 shrink-0 text-xs text-ink-muted">{node.type === "platform" ? "平台" : node.status === "online" ? "在线" : "离线"}</span>
+                        <span className="ml-3 shrink-0 text-xs text-ink-muted">{node.type === "platform" ? "Platform" : node.status === "online" ? "Online" : "Offline"}</span>
                       </button>
                     ))}
                   </div>
                 )}
                 <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void handleSend(); }}
-                  placeholder="输入 @ 选择 Agent，或直接描述测试需求"
+                  placeholder="Type @ to choose an Agent, or describe the test request"
                   className="min-w-0 flex-1 rounded-md border border-hairline bg-canvas px-3.5 py-2.5 text-sm placeholder:text-ink-muted focus:border-ink focus:outline-none" />
                 {running ? (
-                  <button onClick={() => { send({ type: "user_interrupt", conversation_id: activeId, action: "cancel" }); setRunning(false); }} className="rounded-pill bg-severity-critical px-5 py-2.5 text-sm font-medium text-white">中断</button>
+                  <button onClick={() => { send({ type: "user_interrupt", conversation_id: activeId, action: "cancel" }); setRunning(false); }} className="rounded-pill bg-severity-critical px-5 py-2.5 text-sm font-medium text-white">Interrupt</button>
                 ) : (
-                  <button onClick={() => { void handleSend(); }} className="rounded-pill bg-ink px-5 py-2.5 text-sm font-medium text-white">发送</button>
+                  <button onClick={() => { void handleSend(); }} className="rounded-pill bg-ink px-5 py-2.5 text-sm font-medium text-white">Send</button>
                 )}
               </div>
             </div>
@@ -723,7 +724,6 @@ function pendingAgentSourceForMessage(
             intakeResult={agentState.intakeResult as Record<string, unknown> | undefined}
             intakeStatus={agentState.intakeStatus as string | undefined}
             progress={progress}
-            todos={todos}
             planTree={planTree}
             findings={findings}
             assets={assets}
@@ -872,6 +872,105 @@ function appendStdout(current: string, incoming: string): string {
   return `${current}${current.endsWith("\n") ? "" : "\n"}${incoming}`;
 }
 
+function groupConsecutiveToolMessages(messages: Message[]): Message[] {
+  const grouped: Message[] = [];
+  for (const message of messages) {
+    const previous = last(grouped);
+    if (!previous || !canGroupToolMessages(previous, message)) {
+      grouped.push(message);
+      continue;
+    }
+    grouped[grouped.length - 1] = mergeConsecutiveToolMessage(previous, message);
+  }
+  return grouped;
+}
+
+function canGroupToolMessages(previous: Message, incoming: Message): boolean {
+  if (previous.role !== "agent" || incoming.role !== "agent") return false;
+  if (previous.msg_type !== "tool_call" || incoming.msg_type !== "tool_call") return false;
+  const previousTool = readString(previous.content.latest_tool_name) || readString(previous.content.tool_name);
+  const incomingTool = readString(incoming.content.tool_name);
+  if (!previousTool || previousTool !== incomingTool) return false;
+  return readString(previous.content.agent_source) === readString(incoming.content.agent_source)
+    && readString(previous.content.agent_node_id) === readString(incoming.content.agent_node_id);
+}
+
+function mergeConsecutiveToolMessage(previous: Message, incoming: Message): Message {
+  const previousRunIds = toolRunIds(previous);
+  const incomingRunId = readString(incoming.content.tool_run_id) || incoming.id;
+  const tool_run_ids = previousRunIds.includes(incomingRunId) ? previousRunIds : [...previousRunIds, incomingRunId];
+  const tool_names = uniqueMessageStrings([...toolNames(previous), readString(incoming.content.tool_name)]);
+  const tool_items = [...toolItems(previous), toolItemForMessage(incoming)];
+  return {
+    ...previous,
+    content: {
+      ...previous.content,
+      ...incoming.content,
+      tool_name: tool_names[0] || previous.content.tool_name || incoming.content.tool_name,
+      latest_tool_name: incoming.content.tool_name || previous.content.latest_tool_name || previous.content.tool_name,
+      tool_names,
+      tool_items,
+      tool_run_id: previous.content.tool_run_id || incoming.content.tool_run_id,
+      tool_run_ids,
+      run_count: tool_run_ids.length,
+      command: mergeGroupedCommands(readString(previous.content.command), readString(incoming.content.command)),
+      stdout: appendGroupedStdout(readString(previous.content.stdout), readString(incoming.content.stdout)),
+      status: mergeGroupedToolStatus(readString(previous.content.status), readString(incoming.content.status)),
+    },
+    created_at: incoming.created_at || previous.created_at,
+  };
+}
+
+function toolItems(message: Message): Array<Record<string, unknown>> {
+  const existing = message.content.tool_items;
+  if (Array.isArray(existing)) return existing.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)));
+  return [toolItemForMessage(message)];
+}
+
+function toolItemForMessage(message: Message): Record<string, unknown> {
+  return {
+    tool_name: message.content.tool_name,
+    tool_run_id: message.content.tool_run_id,
+    status: message.content.status,
+    stdout: message.content.stdout,
+    command: message.content.command,
+    evidence_id: message.content.evidence_id,
+  };
+}
+function toolNames(message: Message): string[] {
+  const existing = message.content.tool_names;
+  if (Array.isArray(existing)) return existing.map(item => String(item)).filter(Boolean);
+  return [readString(message.content.tool_name)].filter(Boolean);
+}
+
+function uniqueMessageStrings(values: string[]): string[] {
+  return Array.from(new Set(values.map(value => String(value || "").trim()).filter(Boolean)));
+}
+function toolRunIds(message: Message): string[] {
+  const existing = message.content.tool_run_ids;
+  if (Array.isArray(existing)) return existing.map(item => String(item)).filter(Boolean);
+  return [readString(message.content.tool_run_id) || message.id].filter(Boolean);
+}
+
+function mergeGroupedCommands(previous: string, incoming: string): string {
+  if (!incoming || previous === incoming) return previous;
+  if (!previous) return incoming;
+  return `${previous}\n${incoming}`;
+}
+
+function appendGroupedStdout(current: string, incoming: string): string {
+  if (!incoming) return current;
+  if (!current) return incoming;
+  if (current.includes(incoming)) return current;
+  return `${current}${current.endsWith("\n") ? "\n" : "\n\n"}${incoming}`;
+}
+
+function mergeGroupedToolStatus(previous: string, incoming: string): string {
+  const values = [previous, incoming].map(value => normalizeExecutionStatus(value));
+  if (values.includes("fail")) return "fail";
+  if (values.includes("running")) return "running";
+  return incoming || previous || "done";
+}
 function snapshotFromMessages(messages: Message[], status: Conversation["status"] | "running" | string): ConversationSnapshot {
   const normalizedStatus = String(status || "created") as Conversation["status"];
   const statusMessages = messages.filter(m => m.msg_type === "status" && typeof m.content === "object");
@@ -915,7 +1014,7 @@ function snapshotFromMessages(messages: Message[], status: Conversation["status"
       intakeStatus: lastStatus.status,
     },
     progress: progressForPhase(phase, normalizedStatus),
-    todos: todosForPhase(phase, normalizedStatus),
+    plan_tree: planTreeForPhase(phase, normalizedStatus),
     findings,
     assets,
     pending_approvals: pending,
@@ -949,12 +1048,15 @@ function progressForPhase(phase: string | undefined, status: Conversation["statu
   return { current, total, percent: total ? Math.round((current / total) * 100) : 0 };
 }
 
-function todosForPhase(phase: string | undefined, status: Conversation["status"] | "running"): Todo[] {
+function planTreeForPhase(phase: string | undefined, status: Conversation["status"] | "running"): PlanNode[] {
   const currentIndex = phase && PHASES.includes(phase as typeof PHASES[number]) ? PHASES.indexOf(phase as typeof PHASES[number]) : status === "running" ? 0 : -1;
   return PHASES.map((key, index) => ({
-    id: key,
-    title: PHASE_LABELS[key],
+    node_id: `plan-phase-${key}`,
+    title: PLAN_PHASE_TITLES[key],
+    kind: "phase",
+    level: "phase",
     status: status === "completed" || index < currentIndex ? "done" : index === currentIndex ? "running" : "pending",
+    priority: index * 100,
   }));
 }
 

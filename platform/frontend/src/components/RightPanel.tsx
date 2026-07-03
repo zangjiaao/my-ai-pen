@@ -1,11 +1,13 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../lib/securityTypes";
 import ApprovalCountdown from "./ApprovalCountdown";
 
 type Tab = "discoveries" | "progress" | "pending" | "evidence";
-type TodoStatus = "done" | "running" | "pending";
 type PlanStatus = "pending" | "running" | "done" | "skipped" | "blocked" | "failed" | string;
-type PlanNode = { node_id?: string; id?: string; title?: string; status?: PlanStatus; kind?: string; endpoint?: string | null; parameter?: string | null; vuln_type?: string | null; parent_id?: string | null; notes?: string | null; priority?: number; };
+type PlanNode = { node_id?: string; id?: string; title?: string; status?: PlanStatus; kind?: string; level?: string; endpoint?: string | null; parameter?: string | null; vuln_type?: string | null; parent_id?: string | null; notes?: string | null; priority?: number; };
+type PlanTreeItem = { key: string; node: PlanNode; children: PlanTreeItem[]; index: number };
+type VisiblePlanTreeItem = { item: PlanTreeItem; depth: number };
 
 interface Props {
   phase?: string;
@@ -13,7 +15,6 @@ interface Props {
   intakeResult?: Record<string, unknown>;
   intakeStatus?: string;
   progress?: { current: number; total: number; percent: number };
-  todos?: Array<{ id: string; title: string; status: TodoStatus }>;
   planTree?: PlanNode[];
   findings?: Array<Record<string, unknown>>;
   assets?: Array<Record<string, unknown>>;
@@ -26,12 +27,6 @@ interface Props {
   onLocateApproval?: (requestId: string) => void;
 }
 
-const TODO_MARK: Record<TodoStatus, string> = {
-  done: "\u2713",
-  running: "\u2022",
-  pending: "",
-};
-
 const PHASE_LABELS: Record<string, string> = {
   intake: "\u76ee\u6807\u4e0e\u6388\u6743\u8303\u56f4\u68c0\u67e5",
   recon: "\u653b\u51fb\u9762\u53d1\u73b0",
@@ -40,7 +35,8 @@ const PHASE_LABELS: Record<string, string> = {
   report: "\u62a5\u544a\u6574\u7406",
   complete: "\u4efb\u52a1\u5b8c\u6210",
 };
-export default function RightPanel({ phase, activeTool, intakeResult, intakeStatus, progress, todos = [], planTree = [], findings = [], assets = [], pendingApprovals = [], evidence = [], onDecision, onOpenVulnerability, onOpenAsset, onOpenEvidence, onLocateApproval }: Props) {
+
+export default function RightPanel({ phase, activeTool, intakeResult, intakeStatus, progress, planTree = [], findings = [], assets = [], pendingApprovals = [], evidence = [], onDecision, onOpenVulnerability, onOpenAsset, onOpenEvidence, onLocateApproval }: Props) {
   const [tab, setTab] = useState<Tab>("progress");
 
   const tabs: { key: Tab; label: string }[] = [
@@ -95,46 +91,17 @@ export default function RightPanel({ phase, activeTool, intakeResult, intakeStat
                 <div className="space-y-1 text-xs text-ink-secondary">
                   {intake.target && <p className="break-all">目标: {intake.target}</p>}
                   {intake.dns && <p className="break-all">DNS: {intake.dns}</p>}
-                  {intake.connectivity && <p className="break-all">连通性: {intake.connectivity}</p>}
+                  {intake.connectivity && <p className="break-all">连通�? {intake.connectivity}</p>}
                   {intake.reason && <p className="break-all text-severity-critical">{intake.reason}</p>}
                 </div>
               </div>
             )}
             <div>
               <p className="mb-2 text-xs font-medium uppercase tracking-wide text-ink-muted">PLAN TREE</p>
-              {planTree.length === 0 ? (
-                <p className="text-sm text-ink-muted">等待 Agent 生成探索计划</p>
+              {planTree.length > 0 ? (
+                <PlanTreeView nodes={planTree} />
               ) : (
-                <div className="space-y-2" data-testid="plan-tree-list">
-                  {planTree.slice(0, 10).map((node, index) => {
-                    const status = String(node.status || "pending");
-                    const color = status === "done" ? "text-status-success" : status === "running" ? "text-status-running" : status === "failed" || status === "blocked" ? "text-severity-critical" : "text-ink-muted";
-                    return (
-                      <div key={String(node.node_id || node.id || index)} className="rounded-md border border-hairline-soft px-2.5 py-2">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="min-w-0 truncate text-sm font-medium">{String(node.title || "Untitled plan node")}</span>
-                          <span className={`flex-shrink-0 text-[10px] uppercase ${color}`}>{status}</span>
-                        </div>
-                        <p className="mt-1 break-words font-mono text-[11px] text-ink-muted [overflow-wrap:anywhere]">{String(node.endpoint || node.kind || "")}</p>
-                        {(node.parameter || node.vuln_type) && <p className="mt-1 text-[11px] text-ink-secondary">{String(node.vuln_type || "test")} / {String(node.parameter || "-")}</p>}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>            <div>
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-ink-muted">TODO</p>
-              {todos.length === 0 ? (
-                <p className="text-sm text-ink-muted">等待 Agent 生成计划</p>
-              ) : (
-                <div className="space-y-2" data-testid="todo-list">
-                  {todos.map((item) => (
-                    <div key={item.id} className="flex items-center gap-2 rounded-md border border-hairline-soft px-2.5 py-2">
-                      <span className={`flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border text-xs ${item.status === "done" ? "border-status-success bg-status-success text-white" : item.status === "running" ? "border-status-running text-status-running" : "border-hairline text-transparent"}`}>{TODO_MARK[item.status]}</span>
-                      <span className={`min-w-0 text-sm ${item.status === "pending" ? "text-ink-muted" : "text-ink"}`}>{item.title}</span>
-                    </div>
-                  ))}
-                </div>
+                <p className="text-sm text-ink-muted">No plan nodes yet</p>
               )}
             </div>
           </div>
@@ -214,20 +181,143 @@ export default function RightPanel({ phase, activeTool, intakeResult, intakeStat
     </aside>
   );
 }
+
+function PlanTreeView({ nodes }: { nodes: PlanNode[] }) {
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => defaultCollapsedKeys(nodes));
+  const [userTouchedCollapse, setUserTouchedCollapse] = useState(false);
+  const roots = buildPlanTree(nodes);
+  const rows = flattenVisiblePlanTree(roots, collapsed);
+
+  useEffect(() => {
+    if (!userTouchedCollapse) setCollapsed(defaultCollapsedKeys(nodes));
+  }, [nodes, userTouchedCollapse]);
+
+  const toggle = (key: string) => {
+    setUserTouchedCollapse(true);
+    setCollapsed((value) => {
+      const next = new Set(value);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  return (
+    <div className="space-y-1.5" data-testid="plan-tree-list">
+      {rows.map(({ item, depth }) => {
+        const node = item.node;
+        const status = String(node.status || "pending");
+        const hasChildren = item.children.length > 0;
+        const ToggleIcon = collapsed.has(item.key) ? ChevronRight : ChevronDown;
+        return (
+          <div
+            key={item.key}
+            data-plan-node-id={item.key}
+            className="rounded-md px-2.5 py-2 transition-colors hover:bg-canvas-inset"
+            style={{ marginLeft: depth ? `${Math.min(depth, 6) * 14}px` : undefined }}
+          >
+            <div className="flex min-w-0 items-start gap-2">
+              <button
+                type="button"
+                aria-label={hasChildren ? `${collapsed.has(item.key) ? "Expand" : "Collapse"} plan node` : "Plan leaf node"}
+                aria-expanded={hasChildren ? !collapsed.has(item.key) : undefined}
+                disabled={!hasChildren}
+                onClick={() => toggle(item.key)}
+                className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-sm ${hasChildren ? "text-ink-muted hover:bg-canvas-inset hover:text-ink" : "cursor-default text-transparent"}`}
+              >
+                {hasChildren ? <ToggleIcon size={14} /> : <span className="h-1.5 w-1.5 rounded-full bg-hairline" />}
+              </button>
+              <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 items-start justify-between gap-2">
+                  <span className="min-w-0 break-words text-sm font-medium [overflow-wrap:anywhere]">{String(node.title || "Untitled plan node")}</span>
+                  <span className={`shrink-0 text-[10px] uppercase ${planStatusColor(status)}`}>{status}</span>
+                </div>
+                <PlanNodeMeta node={node} />
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function PlanNodeMeta({ node }: { node: PlanNode }) {
+  if (node.level && node.level !== "work_item") return null;
+  const location = String(node.endpoint || (node.kind && node.kind !== "phase" && node.kind !== "objective" ? node.kind : ""));
+  const testDetail = node.parameter || node.vuln_type ? `${String(node.vuln_type || "test")} / ${String(node.parameter || "-")}` : "";
+  if (!location && !testDetail) return null;
+  return (
+    <div className="mt-1 space-y-0.5">
+      {location && <p className="break-words font-mono text-[11px] text-ink-muted [overflow-wrap:anywhere]">{location}</p>}
+      {testDetail && <p className="break-words text-[11px] text-ink-secondary [overflow-wrap:anywhere]">{testDetail}</p>}
+    </div>
+  );
+}
+
+function defaultCollapsedKeys(nodes: PlanNode[]): Set<string> {
+  const keys = new Set<string>();
+  nodes.forEach((node, index) => {
+    if (node.level === "objective") keys.add(planNodeKey(node, index));
+  });
+  return keys;
+}
+
+function buildPlanTree(nodes: PlanNode[]): PlanTreeItem[] {
+  const items: PlanTreeItem[] = nodes.map((node, index) => ({ key: planNodeKey(node, index), node, children: [], index }));
+  const byKey = new Map(items.map((item) => [item.key, item]));
+  const roots: PlanTreeItem[] = [];
+
+  for (const item of items) {
+    const parentId = String(item.node.parent_id || "").trim();
+    const parent = parentId ? byKey.get(parentId) : undefined;
+    if (parent && parent !== item) parent.children.push(item);
+    else roots.push(item);
+  }
+
+  return roots.sort(byInputOrder);
+}
+
+function flattenVisiblePlanTree(nodes: PlanTreeItem[], collapsed: Set<string>, depth = 0): VisiblePlanTreeItem[] {
+  const rows: VisiblePlanTreeItem[] = [];
+  for (const item of [...nodes].sort(byInputOrder)) {
+    rows.push({ item, depth });
+    if (!collapsed.has(item.key) && item.children.length > 0) {
+      rows.push(...flattenVisiblePlanTree(item.children, collapsed, depth + 1));
+    }
+  }
+  return rows;
+}
+
+function byInputOrder(left: PlanTreeItem, right: PlanTreeItem) {
+  return left.index - right.index;
+}
+
+function planNodeKey(node: PlanNode, index: number) {
+  return String(node.node_id || node.id || `plan-node-${index}`);
+}
+
+function planStatusColor(status: string) {
+  if (status === "done") return "text-status-success";
+  if (status === "running") return "text-status-running";
+  if (status === "failed" || status === "blocked") return "text-severity-critical";
+  return "text-ink-muted";
+}
+
 function normalizeIntake(intakeResult?: Record<string, unknown>, intakeStatus?: string) {
   if (!intakeResult) return null;
   const ok = intakeResult.ok === true;
   const connectivity = intakeResult.connectivity as Record<string, unknown> | undefined;
   const dns = Array.isArray(intakeResult.dns_addresses) ? intakeResult.dns_addresses.join(", ") : "";
   const connText = connectivity?.checked
-    ? `${connectivity.ok ? "可达" : "不可达"} ${connectivity.host || ""}${connectivity.port ? `:${connectivity.port}` : ""}`.trim()
-    : "未检查";
+    ? `${connectivity.ok ? "\u53ef\u8fbe" : "\u4e0d\u53ef\u8fbe"} ${connectivity.host || ""}${connectivity.port ? `:${connectivity.port}` : ""}`.trim()
+    : "\u672a\u68c0\u67e5";
   return {
     ok,
-    label: ok ? "通过" : "失败",
+    label: ok ? "\u901a\u8fc7" : "\u5931\u8d25",
     target: String(intakeResult.target || ""),
     dns,
     connectivity: connText,
-    reason: String(intakeResult.reason || (intakeStatus === "failed" ? "预检失败" : "")),
+    reason: String(intakeResult.reason || (intakeStatus === "failed" ? "\u9884\u68c0\u5931\u8d25" : "")),
   };
 }

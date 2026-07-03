@@ -154,8 +154,61 @@ class CheckpointResumeTests(unittest.TestCase):
         self.assertEqual(result["reasoning_content"], "hidden reasoning")
         self.assertEqual(result["content"], "answer")
 
-    def test_complete_phase_only_allows_task_complete(self):
+    def test_complete_phase_recommends_task_complete(self):
         self.assertEqual(PHASE_TOOL_NAMES["complete"], {"task_complete"})
+
+    def test_phase_tool_allowlist_blocks_disallowed_tool_execution(self):
+        target = "http://target.local/login.php"
+        platform = DummyPlatform()
+        calls = []
+
+        class FakeLLM:
+            def __init__(self):
+                self.calls = 0
+
+            async def chat(self, messages, tools=None):
+                self.calls += 1
+                if self.calls == 1:
+                    return {
+                        "content": "",
+                        "finish_reason": "tool_calls",
+                        "tool_calls": [{"id": "call-run-skill", "type": "function", "function": {"name": "run_web_skill", "arguments": "{}"}}],
+                    }
+                return {
+                    "content": "",
+                    "finish_reason": "tool_calls",
+                    "tool_calls": [{"id": "call-complete", "type": "function", "function": {"name": "task_complete", "arguments": "{}"}}],
+                }
+
+        async def run_web_skill_handler(**kwargs):
+            calls.append("run_web_skill")
+            return {"status": "done", "stdout": "skill executed"}
+
+        async def task_complete_handler(**kwargs):
+            loop.abort()
+            return {"status": "ok"}
+
+        tool_by_name = {
+            "run_web_skill": SimpleNamespace(name="run_web_skill", description="fake skill", parameters={"type": "object", "properties": {}}, handler=run_web_skill_handler),
+            "task_complete": SimpleNamespace(name="task_complete", description="complete", parameters={"type": "object", "properties": {}}, handler=task_complete_handler),
+        }
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-1", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(list_tools=lambda: list(tool_by_name.values()), get=lambda name: tool_by_name.get(name)),
+            sandbox=None,
+            llm=FakeLLM(),
+            platform_sync=platform,
+        )
+        loop.attack_surface.record_http_result("tool-1", {"status": "done", "method": "GET", "url": target, "status_code": 200}, "ev-111111111111")
+        loop.coverage.mark(endpoint=f"GET {target}", parameter="<none>", vuln_type="web_baseline", status="tried", evidence_ids=["ev-111111111111"])
+
+        asyncio.run(loop._run_phase(Phase.COMPLETE))
+
+        self.assertEqual(calls, [])
+        self.assertTrue(any(event.get("tool_name") == "run_web_skill" and event.get("status") == "blocked" for event in platform.events))
+        self.assertTrue(any("not available during complete" in str(event.get("line") or "") for event in platform.events))
+        self.assertFalse(any(item.get("content", "").startswith("Phase guidance:") for item in loop.history if item.get("role") == "system"))
+
     def test_repeated_llm_errors_fail_phase_instead_of_spamming(self):
         platform = DummyPlatform()
         loop = PentestAgentLoop(
@@ -1191,8 +1244,11 @@ class CheckpointResumeTests(unittest.TestCase):
 
         snapshot = loop.checkpoint_snapshot("test")
 
-        self.assertEqual(snapshot["plan_tree_summary"]["total"], 1)
-        self.assertEqual(snapshot["exploration_plan_tree"][0]["node_id"], "plan-1")
+        self.assertEqual(snapshot["plan_tree_summary"]["by_level"]["phase"], 6)
+        self.assertEqual(snapshot["plan_tree_summary"]["by_level"]["work_item"], 1)
+        by_id = {node["node_id"]: node for node in snapshot["exploration_plan_tree"]}
+        self.assertEqual(by_id["plan-1"]["node_id"], "plan-1")
+        self.assertEqual(by_id["plan-1"]["level"], "work_item")
         prompt = loop._autonomy_context_prompt()
         self.assertIn("Test login form SQLi", prompt)
         self.assertIn("sql_injection", prompt)
@@ -1356,8 +1412,9 @@ class CheckpointResumeTests(unittest.TestCase):
         asyncio.run(loop._record_autonomy_from_tool("tool-1", "http_request", result, "ev-111111111111"))
         snapshot = loop.checkpoint_snapshot("test")
 
-        self.assertEqual(snapshot["plan_tree_summary"]["total"], 0)
-        self.assertFalse(snapshot["exploration_plan_tree"])
+        self.assertEqual(snapshot["plan_tree_summary"]["by_level"].get("phase"), 6)
+        self.assertEqual(snapshot["plan_tree_summary"]["by_level"].get("work_item", 0), 0)
+        self.assertFalse(any(node.get("level") == "work_item" for node in snapshot["exploration_plan_tree"]))
     def test_http_result_marks_matching_plan_node_running(self):
         platform = DummyPlatform()
         target = "http://target.local/vulnerabilities/sqli/?id=1&Submit=Submit"
@@ -1501,7 +1558,7 @@ class CheckpointResumeTests(unittest.TestCase):
         snapshot = loop.checkpoint_snapshot("test")
 
         self.assertEqual(snapshot["traffic_capture_summary"]["total"], 1)
-        self.assertEqual(snapshot["plan_tree_summary"]["total"], 1)
+        self.assertEqual(snapshot["plan_tree_summary"]["by_level"].get("work_item"), 1)
         self.assertFalse(any(event.get("type") == "attack_surface_discovered" for event in platform.events))
     def test_http_result_populates_captured_traffic(self):
         platform = DummyPlatform()
@@ -1551,8 +1608,8 @@ class CheckpointResumeTests(unittest.TestCase):
             vuln_type="sqli",
         ))
         node_id = added["node"]["node_id"]
-        updated = asyncio.run(tools["plan_update_node"].handler(node_id=node_id, status="running", notes="Starting test"))
-        completed = asyncio.run(tools["plan_prune_or_complete"].handler(node_ids=[node_id], status="done", evidence_ids=["ev-111111111111"]))
+        updated = asyncio.run(tools["plan_update"].handler(node_id=node_id, status="running", notes="Starting test"))
+        completed = asyncio.run(tools["plan_update"].handler(node_ids=[node_id], status="done", evidence_ids=["ev-111111111111"]))
         next_nodes = asyncio.run(tools["plan_next"].handler(limit=5))
         snapshot = loop.checkpoint_snapshot("test")
 
@@ -1560,7 +1617,9 @@ class CheckpointResumeTests(unittest.TestCase):
         self.assertEqual(updated["node"]["status"], "running")
         self.assertEqual(completed["updated"][0]["status"], "done")
         self.assertEqual(next_nodes["status"], "ok")
-        self.assertEqual(snapshot["exploration_plan_tree"][0]["status"], "done")
+        self.assertFalse(any(node.get("level") != "work_item" for node in next_nodes["nodes"]))
+        by_id = {node["node_id"]: node for node in snapshot["exploration_plan_tree"]}
+        self.assertEqual(by_id[node_id]["status"], "done")
         self.assertTrue(any(event["type"] == "plan_tree_updated" for event in platform.events))
     def test_run_web_skill_executes_plan_node_and_creates_candidate(self):
         class Handler(BaseHTTPRequestHandler):
@@ -1940,7 +1999,7 @@ class CheckpointResumeTests(unittest.TestCase):
         tools = {tool.name: tool for tool in make_workflow_tools(loop)}
 
         listed = asyncio.run(tools["traffic_list"].handler(limit=5))
-        detail = asyncio.run(tools["traffic_detail"].handler(request_id=row["request_id"]))
+        detail = asyncio.run(tools["traffic_get"].handler(request_id=row["request_id"]))
 
         self.assertEqual(listed["status"], "ok")
         self.assertNotIn("response_body", listed["requests"][0])
@@ -2157,7 +2216,7 @@ class CheckpointResumeTests(unittest.TestCase):
         self.assertEqual(result["status"], "done")
         self.assertEqual(result["source_request_id"], row["request_id"])
         self.assertIn("<script>alert(1337)</script>", result["body"])
-    def test_capture_replay_and_mutate_send_real_http_requests(self):
+    def test_traffic_send_replay_and_mutate_send_real_http_requests(self):
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
                 body = f"GET {self.path}".encode()
@@ -2196,8 +2255,8 @@ class CheckpointResumeTests(unittest.TestCase):
             request_id = loop.traffic_capture.to_list()[0]["request_id"]
             tools = {tool.name: tool for tool in make_workflow_tools(loop)}
 
-            replay = asyncio.run(tools["capture_replay_request"].handler(request_id=request_id))
-            mutated = asyncio.run(tools["capture_mutate_request"].handler(request_id=request_id, method="POST", body="username=admin"))
+            replay = asyncio.run(tools["traffic_send"].handler(request_id=request_id, action="replay"))
+            mutated = asyncio.run(tools["traffic_send"].handler(request_id=request_id, action="mutate", method="POST", body="username=admin"))
         finally:
             server.shutdown()
             server.server_close()
@@ -2211,6 +2270,23 @@ class CheckpointResumeTests(unittest.TestCase):
         for phase in ("recon", "verify"):
             self.assertIn("http_request", PHASE_TOOL_NAMES[phase])
             self.assertIn("browser", PHASE_TOOL_NAMES[phase])
+
+    def test_phase_tool_lists_expose_consolidated_workflow_tools(self):
+        legacy_names = {
+            "capture_list_requests",
+            "capture_get_request",
+            "traffic_detail",
+            "capture_replay_request",
+            "capture_mutate_request",
+            "plan_update_node",
+            "plan_prune_or_complete",
+        }
+        for phase in ("recon", "analysis", "verify"):
+            self.assertIn("traffic_list", PHASE_TOOL_NAMES[phase])
+            self.assertIn("traffic_get", PHASE_TOOL_NAMES[phase])
+            self.assertIn("traffic_send", PHASE_TOOL_NAMES[phase])
+            self.assertIn("plan_update", PHASE_TOOL_NAMES[phase])
+            self.assertFalse(PHASE_TOOL_NAMES[phase] & legacy_names)
 
     def test_conversation_state_uses_checkpoint_progress(self):
         checkpoint = {

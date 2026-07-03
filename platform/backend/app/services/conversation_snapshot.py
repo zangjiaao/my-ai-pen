@@ -31,6 +31,98 @@ PHASE_LABELS = {
     "complete": "\u4efb\u52a1\u5b8c\u6210",
 }
 
+
+
+def plan_node_level(kind: str) -> str:
+    if kind == "phase":
+        return "phase"
+    if kind == "objective":
+        return "objective"
+    return "work_item"
+
+
+def phase_node_id(phase: str) -> str:
+    return f"plan-phase-{phase}"
+
+
+def objective_node_id(phase: str, key: str) -> str:
+    return f"plan-objective-{phase}-{key}"
+
+
+def objective_title(phase: str, key: str) -> str:
+    titles = {
+        ("recon", "attack_surface"): "\u53d1\u73b0\u53ef\u6d4b\u8bd5\u653b\u51fb\u9762",
+        ("recon", "traffic"): "\u6574\u7406\u9ad8\u4ef7\u503c\u8bf7\u6c42",
+        ("analysis", "test_plan"): "\u5206\u6790\u653b\u51fb\u9762\u98ce\u9669",
+    }
+    return titles.get((phase, key), key.replace("_", " ").title())
+
+
+def ensure_plan_tree_shape(items: list[dict], phase: str | None, completed: set[str], status: str) -> list[dict]:
+    nodes = [dict(item) for item in items if isinstance(item, dict)]
+    by_id = {str(item.get("node_id") or item.get("id") or ""): item for item in nodes if item.get("node_id") or item.get("id")}
+    current_index = PHASES.index(phase) if phase in PHASES else (-1 if status != "running" else 0)
+
+    for index, key in enumerate(PHASES):
+        node_id = phase_node_id(key)
+        if node_id not in by_id:
+            node = {
+                "node_id": node_id,
+                "title": PHASE_LABELS[key],
+                "kind": "phase",
+                "level": "phase",
+                "parent_id": None,
+                "status": "pending",
+                "priority": index * 100,
+                "source": "runtime",
+            }
+            nodes.append(node)
+            by_id[node_id] = node
+        phase_status = "pending"
+        if status == "completed" or key in completed or index < current_index:
+            phase_status = "done"
+        elif index == current_index:
+            phase_status = "running"
+        by_id[node_id]["status"] = phase_status
+        by_id[node_id]["level"] = "phase"
+        by_id[node_id]["kind"] = "phase"
+        by_id[node_id]["priority"] = by_id[node_id].get("priority", index * 100)
+
+    def ensure_objective(phase_key: str, objective_key: str, priority: int) -> str:
+        node_id = objective_node_id(phase_key, objective_key)
+        if node_id not in by_id:
+            node = {
+                "node_id": node_id,
+                "title": objective_title(phase_key, objective_key),
+                "kind": "objective",
+                "level": "objective",
+                "parent_id": phase_node_id(phase_key),
+                "status": "pending",
+                "priority": PHASES.index(phase_key) * 100 + priority,
+                "source": "runtime",
+            }
+            nodes.append(node)
+            by_id[node_id] = node
+        return node_id
+
+    for node in nodes:
+        kind = str(node.get("kind") or "task")
+        node["level"] = str(node.get("level") or plan_node_level(kind))
+        if node["level"] != "work_item":
+            continue
+        parent_id = str(node.get("parent_id") or "")
+        if parent_id and parent_id in by_id:
+            continue
+        if kind in {"surface", "request"}:
+            node["parent_id"] = ensure_objective("recon", "attack_surface", 10)
+        elif kind == "test":
+            node["parent_id"] = ensure_objective("analysis", "test_plan", 10)
+        else:
+            node["parent_id"] = ensure_objective("analysis", "test_plan", 10)
+
+    return sorted(nodes, key=lambda item: (int(item.get("priority") or 50), str(item.get("created_at") or ""), str(item.get("node_id") or "")))
+
+
 def conversation_summary(c: Conversation) -> dict:
     return {
         "id": str(c.id),
@@ -100,7 +192,6 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     context = conversation.context if isinstance(conversation.context, dict) else {}
     checkpoint = (context.get("checkpoint") if isinstance(context, dict) else {}) or {}
     agent_state = agent_state_from_checkpoint(checkpoint, conversation.status) if checkpoint else agent_state_from_messages(messages, evidence, conversation.status)
-    todos = todos_for_checkpoint(checkpoint, conversation.status) if checkpoint else todos_for_phase(agent_state.get("phase"), conversation.status)
     progress = progress_for_checkpoint(checkpoint, conversation.status) if checkpoint else progress_for_phase(agent_state.get("phase"), conversation.status)
     findings = merge_many_by_key([
         [vuln_summary(v) for v in vulns],
@@ -114,7 +205,9 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     ], "address")
     explicit_evidence = message_evidence(messages, include_tool_calls=False)
     fallback_tool_evidence = [] if evidence or explicit_evidence else message_evidence(messages, include_tool_calls=True)
-    plan_tree = checkpoint_plan_tree(checkpoint) or context.get("exploration_plan_tree") or context.get("plan_tree") or []
+    raw_plan_tree = checkpoint_plan_tree(checkpoint) or context.get("exploration_plan_tree") or context.get("plan_tree") or []
+    plan_tree = ensure_plan_tree_shape(raw_plan_tree, agent_state.get("phase"), checkpoint_completed(checkpoint), conversation.status)
+    todos = todos_for_plan_tree(plan_tree) or (todos_for_checkpoint(checkpoint, conversation.status) if checkpoint else todos_for_phase(agent_state.get("phase"), conversation.status))
     evidence_items = merge_many_by_key([
         [evidence_summary(e) for e in evidence],
         explicit_evidence,
@@ -267,6 +360,31 @@ def progress_for_phase(phase: str | None, status: str) -> dict:
     return {"current": current, "total": total, "percent": round((current / total) * 100) if total else 0}
 
 
+
+
+def todos_for_plan_tree(plan_tree: list[dict]) -> list[dict]:
+    by_phase: dict[str, dict] = {}
+    for node in plan_tree or []:
+        if not isinstance(node, dict):
+            continue
+        if node.get("level") != "phase" and node.get("kind") != "phase":
+            continue
+        node_id = str(node.get("node_id") or "")
+        phase = node_id.removeprefix("plan-phase-") if node_id.startswith("plan-phase-") else str(node.get("phase") or "")
+        if phase in PHASES:
+            by_phase[phase] = node
+    if not by_phase:
+        return []
+    return [
+        {
+            "id": phase,
+            "title": str(by_phase.get(phase, {}).get("title") or PHASE_LABELS[phase]),
+            "status": str(by_phase.get(phase, {}).get("status") or "pending"),
+        }
+        for phase in PHASES
+    ]
+
+
 def todos_for_phase(phase: str | None, status: str) -> list[dict]:
     current_index = PHASES.index(phase) if phase in PHASES else (-1 if status != "running" else 0)
     return [
@@ -332,6 +450,7 @@ def checkpoint_plan_tree(checkpoint: dict) -> list[dict]:
             "status": item.get("status") or "pending",
             "parent_id": item.get("parent_id"),
             "kind": item.get("kind") or "task",
+            "level": item.get("level") or plan_node_level(str(item.get("kind") or "task")),
             "target": item.get("target"),
             "endpoint": item.get("endpoint"),
             "parameter": item.get("parameter"),

@@ -384,39 +384,85 @@ class StandalonePhase4Tests(unittest.TestCase):
         self.assertEqual(started[0][0].resume, "session-current")
         self.assertTrue(started[0][1])
 
+    def test_tui_groups_consecutive_same_tool_cards(self):
+        async def scenario():
+            app = PentestTUI(StandaloneOptions(output=Path("."), check_connectivity=False))
+            async with app.run_test(size=(120, 30)) as pilot:
+                await pilot.pause(0.1)
+                app.transcript = []
+                app.tool_entries.clear()
+                app._write_tool_card("http_request", "done", "GET /login 200", "run-1")
+                app._write_tool_card("http_request", "done", "GET /admin 404", "run-2")
+                app._write_tool_card("browser", "done", "opened /login", "run-3")
+                app._write_tool_card("http_request", "done", "GET /setup 200", "run-4")
+                await pilot.pause(0.1)
+                return app.transcript, app.tool_entries
+
+        transcript, tool_entries = asyncio.run(scenario())
+
+        self.assertEqual([entry["name"] for entry in transcript if entry.get("type") == "tool"], ["http_request", "browser", "http_request"])
+        first_http = transcript[0]
+        self.assertEqual(first_http["run_count"], 2)
+        self.assertIn("GET /login 200", first_http["line"])
+        self.assertIn("GET /admin 404", first_http["line"])
+        self.assertIs(tool_entries["run-1"], first_http)
+        self.assertIs(tool_entries["run-2"], first_http)
+        self.assertIsNot(tool_entries["run-4"], first_http)
     def test_tui_agent_log_allows_mouse_text_selection(self):
         async def scenario():
             app = PentestTUI(StandaloneOptions(output=Path("."), check_connectivity=False))
             async with app.run_test(size=(120, 30)) as pilot:
                 await pilot.pause(0.1)
                 agent_log = app.query_one("#agent-log")
-                results_log = app.query_one("#results-log")
-                return agent_log.allow_select, agent_log.can_focus, results_log.allow_select, results_log.can_focus
+                plan_tree_log = app.query_one("#plan-tree-log")
+                findings_log = app.query_one("#findings-log")
+                return (
+                    agent_log.allow_select,
+                    agent_log.can_focus,
+                    plan_tree_log.allow_select,
+                    plan_tree_log.can_focus,
+                    findings_log.allow_select,
+                    findings_log.can_focus,
+                )
 
-        agent_select, agent_focus, results_select, results_focus = asyncio.run(scenario())
+        agent_select, agent_focus, plan_select, plan_focus, findings_select, findings_focus = asyncio.run(scenario())
 
         self.assertTrue(agent_select)
         self.assertFalse(agent_focus)
-        self.assertTrue(results_select)
-        self.assertFalse(results_focus)
+        self.assertTrue(plan_select)
+        self.assertFalse(plan_focus)
+        self.assertTrue(findings_select)
+        self.assertFalse(findings_focus)
 
 
-    def test_tui_results_panel_prefers_plan_tree_todos(self):
+    def test_tui_results_panel_splits_plan_tree_and_findings(self):
         async def scenario():
             app = PentestTUI(StandaloneOptions(output=Path("."), check_connectivity=False))
             async with app.run_test(size=(120, 30)) as pilot:
                 await pilot.pause(0.1)
-                app.plan_tree = [{"node_id": "plan-1", "title": "Test login SQLi", "status": "running", "endpoint": "POST http://target.local/login", "parameter": "username", "vuln_type": "sqli"}]
+                app.plan_tree = [
+                    {"node_id": "plan-phase-recon", "title": "Recon phase", "status": "done", "kind": "phase", "level": "phase", "priority": 100},
+                    {"node_id": "plan-objective-recon-login", "title": "Hidden objective", "status": "running", "kind": "objective", "level": "objective", "parent_id": "plan-phase-recon"},
+                    {"node_id": "plan-1", "title": "Test login SQLi", "status": "running", "endpoint": "POST http://target.local/login", "parameter": "username", "vuln_type": "sqli", "parent_id": "plan-objective-recon-login"},
+                    {"node_id": "plan-phase-verify", "title": "Verify phase", "status": "running", "kind": "phase", "level": "phase", "priority": 300},
+                ]
+                app.finding_lines = ["medium | Reflected XSS | GET /vulnerabilities/xss_r/"]
                 app._refresh_results_panel()
-                results_log = app.query_one("#results-log")
-                text = "\n".join(strip.text for strip in results_log.lines)
-                return text
+                plan_tree_log = app.query_one("#plan-tree-log")
+                findings_log = app.query_one("#findings-log")
+                plan_text = "\n".join(strip.text for strip in plan_tree_log.lines)
+                findings_text = "\n".join(strip.text for strip in findings_log.lines)
+                return plan_text, findings_text
 
-        text = asyncio.run(scenario())
+        plan_text, findings_text = asyncio.run(scenario())
 
-        self.assertIn("Test login SQLi", text)
-        self.assertIn("POST http://target.local/login", text)
-        self.assertNotIn("[~] intake", text)
+        self.assertIn("Recon phase", plan_text)
+        self.assertIn("Verify phase", plan_text)
+        self.assertNotIn("Hidden objective", plan_text)
+        self.assertNotIn("Test login SQLi", plan_text)
+        self.assertNotIn("POST http://target.local/login", plan_text)
+        self.assertNotIn("Reflected XSS", plan_text)
+        self.assertIn("Reflected XSS", findings_text)
 
     def test_tui_ctrl_c_is_not_intercepted_by_app(self):
         async def scenario():
@@ -581,4 +627,3 @@ def _make_report_package_bytes(assets: list[dict] | None = None, vulnerabilities
 
 if __name__ == "__main__":
     unittest.main()
-

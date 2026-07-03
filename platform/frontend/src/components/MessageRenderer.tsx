@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { Compass, Globe2, Search, ShieldAlert, Terminal, Wrench, type LucideIcon } from "lucide-react";
 import type { Message } from "../lib/types";
-import type { SecurityAsset, SecurityVulnerability } from "../lib/securityTypes";
+import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../lib/securityTypes";
 import { normalizeExecutionStatus } from "../lib/status";
 import ConfirmCard from "./cards/ConfirmCard";
 import ThinkingCard from "./cards/ThinkingCard";
@@ -15,6 +15,7 @@ interface Props {
   onDecision?: (requestId: string, decision: "authorize" | "cancel") => void;
   onOpenVulnerability?: (finding: Partial<SecurityVulnerability>) => void;
   onOpenAsset?: (asset: Partial<SecurityAsset>) => void;
+  onOpenEvidence?: (evidence: Partial<SecurityEvidence>) => void;
   highlightedApprovalId?: string | null;
   approvalDecisionByRequestId?: Record<string, "authorize" | "cancel">;
 }
@@ -38,43 +39,248 @@ function agentDisplayName(content: Record<string, unknown>, agentNameById: Recor
   const baseName = nodeId && agentNameById[nodeId] ? agentNameById[nodeId] : source === "platform" ? "\u5e73\u53f0Agent" : "\u6e17\u900fAgent";
   return baseName;
 }
-function ToolCallCard({ content }: { content: Record<string, unknown> }) {
+function ToolCallCard({ content, onOpenEvidence }: { content: Record<string, unknown>; onOpenEvidence?: (evidence: Partial<SecurityEvidence>) => void }) {
   const [expanded, setExpanded] = useState(false);
-  const toolName = content.tool_name as string || "";
+  const toolNames = toolNamesFromContent(content);
+  const primaryTool = toolNames[0] || "tool";
+  const latestTool = String(content.latest_tool_name || content.tool_name || primaryTool);
   const status = normalizeExecutionStatus(content.status);
   const stdout = content.stdout as string || "";
-  const summary = summarizeToolOutput(stdout);
-  const statusColor = status === "running" ? "bg-status-running" : status === "done" ? "bg-status-success" : "bg-status-error";
-  const ToggleIcon = expanded ? ChevronDown : ChevronRight;
+  const runCount = Number(content.run_count || (Array.isArray(content.tool_run_ids) ? content.tool_run_ids.length : toolNames.length || 1));
+  const categories = toolCategories(toolNames);
+  const items = toolItemsFromContent(content);
+  const summary = summarizeToolOutput(stdout, latestTool);
   return (
-    <div data-testid="tool-card" className="my-2 min-w-0 max-w-full rounded-md border border-hairline bg-surface-default">
+    <div data-testid="tool-card" className="my-2 min-w-0 max-w-full rounded-md bg-surface-default/70">
       <button
         data-testid="tool-card-toggle"
         type="button"
         aria-expanded={expanded}
         onClick={() => setExpanded(value => !value)}
-        className="flex w-full min-w-0 items-center gap-2 px-4 py-3 text-left transition-colors hover:bg-canvas-inset"
+        className="flex w-full min-w-0 items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-canvas-inset"
       >
-        <ToggleIcon size={16} className="flex-shrink-0 text-ink-muted" />
-        <span className={`inline-block h-2 w-2 flex-shrink-0 rounded-full ${statusColor}`} />
-        <span className="min-w-0 truncate text-sm font-medium">{toolName}</span>
-        <span className="flex-shrink-0 text-xs text-ink-muted">{status}</span>
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-ink-muted">{summary}</span>
+        <div className="flex flex-shrink-0 items-center gap-1.5">
+          {categories.map(category => <ToolCategoryIcon key={category.key} category={category} />)}
+        </div>
+        <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">{toolTitle(toolNames)}</span>
+        <span className="ml-auto flex-shrink-0 text-xs text-ink-muted">{runCount} {runCount === 1 ? "call" : "calls"}</span>
       </button>
       {expanded && (
-        <div className="px-4 pb-4">
-          <pre data-testid="tool-card-output" className="max-h-64 max-w-full overflow-y-auto overflow-x-hidden rounded-sm border border-hairline bg-canvas-inset p-3 font-mono text-[13px] leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{stdout || "Waiting for output..."}</pre>
+        <div className="ml-10 space-y-1 px-1 pb-2">
+          {items.length ? items.map((item, index) => (
+            <ToolItemRow key={`${item.runId || item.evidenceId || index}-${index}`} item={item} onOpenEvidence={onOpenEvidence} />
+          )) : (
+            <div className="rounded-sm bg-canvas-inset px-3 py-2 text-xs text-ink-secondary">{summary}</div>
+          )}
         </div>
       )}
     </div>
   );
 }
 
-function summarizeToolOutput(stdout: string): string {
-  const lines = stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  return lines.length ? lines[lines.length - 1] : "Waiting for output...";
+type ToolItem = {
+  toolName: string;
+  status: string;
+  summary: string;
+  evidenceId?: string;
+  runId?: string;
+};
+
+function ToolItemRow({ item, onOpenEvidence }: { item: ToolItem; onOpenEvidence?: (evidence: Partial<SecurityEvidence>) => void }) {
+  const status = normalizeExecutionStatus(item.status);
+  const statusColor = status === "running" ? "bg-status-running" : status === "done" ? "bg-status-success" : "bg-status-error";
+  const evidenceButton = item.evidenceId ? (
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        onOpenEvidence?.({ evidence_id: item.evidenceId, id: item.evidenceId, source_tool: item.toolName, tool_run_id: item.runId, summary: item.summary, type: "tool_output" });
+      }}
+      className="ml-2 shrink-0 whitespace-nowrap text-xs text-ink-muted underline underline-offset-2 hover:text-ink"
+    >
+      Evidence
+    </button>
+  ) : null;
+  return (
+    <div className="flex min-w-0 items-start gap-2 px-1 py-1.5 text-xs">
+      <span className={`mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full ${statusColor}`} />
+      <div className="min-w-0 flex-1 overflow-hidden">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="block min-w-0 max-w-full truncate text-ink-muted">{item.summary}</span>
+        </div>
+      </div>
+      {evidenceButton}
+    </div>
+  );
+}
+type ToolCategory = { key: string; label: string; Icon: LucideIcon };
+
+function ToolCategoryIcon({ category }: { category: ToolCategory }) {
+  const Icon = category.Icon;
+  return (
+    <span title={category.label} className="inline-flex h-5 w-5 items-center justify-center text-ink-muted">
+      <Icon size={15} />
+    </span>
+  );
 }
 
+function toolItemsFromContent(content: Record<string, unknown>): ToolItem[] {
+  const structured = Array.isArray(content.tool_items)
+    ? content.tool_items.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)))
+    : [];
+  if (structured.length) {
+    return structured.map(item => {
+      const toolName = readContentString(item.tool_name) || readContentString(content.tool_name) || "tool";
+      const status = readContentString(item.status) || readContentString(content.status) || "done";
+      const stdout = readContentString(item.stdout);
+      return {
+        toolName,
+        status,
+        summary: summarizeToolLine(stdout, toolName),
+        evidenceId: readContentString(item.evidence_id),
+        runId: readContentString(item.tool_run_id),
+      };
+    });
+  }
+
+  const stdout = String(content.stdout || "");
+  const lines = stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const toolNames = toolNamesFromContent(content);
+  const runIds = Array.isArray(content.tool_run_ids) ? content.tool_run_ids.map(item => String(item || "")) : [String(content.tool_run_id || "")];
+  const fallbackTool = String(content.latest_tool_name || content.tool_name || toolNames[0] || "tool");
+  const fallbackStatus = String(content.status || "done");
+  const items = lines
+    .filter(line => !line.endsWith("..."))
+    .map((line, index) => toolItemFromLine(line, {
+      fallbackTool: toolNames[index] || fallbackTool,
+      fallbackStatus,
+      runId: runIds[index] || runIds[runIds.length - 1] || "",
+    }))
+    .filter((item): item is ToolItem => Boolean(item));
+  if (items.length) return items;
+  return [{ toolName: fallbackTool, status: fallbackStatus, summary: summarizeToolOutput(stdout, fallbackTool), evidenceId: readContentString(content.evidence_id), runId: readContentString(content.tool_run_id) }];
+}
+
+function summarizeToolLine(line: string, latestTool: string): string {
+  if (!line) return "Started tool call";
+  const parsed = parseLooseObject(line);
+  if (parsed) return summarizeToolObject(parsed, latestTool) || stripJsonNoise(line);
+  return stripJsonNoise(line);
+}
+function toolItemFromLine(line: string, fallback: { fallbackTool: string; fallbackStatus: string; runId: string }): ToolItem | null {
+  const parsed = parseLooseObject(line);
+  if (parsed) {
+    const toolName = readContentString(parsed.tool_name) || readContentString(parsed.source_tool) || fallback.fallbackTool;
+    const status = readContentString(parsed.status) || readContentString(parsed.status_code) || fallback.fallbackStatus;
+    return {
+      toolName,
+      status,
+      summary: summarizeToolObject(parsed, toolName) || stripJsonNoise(line),
+      evidenceId: readContentString(parsed.evidence_id) || readContentString(parsed.EVIDENCE_ID),
+      runId: readContentString(parsed.tool_run_id) || fallback.runId,
+    };
+  }
+  return {
+    toolName: fallback.fallbackTool,
+    status: fallback.fallbackStatus,
+    summary: stripJsonNoise(line),
+    runId: fallback.runId,
+  };
+}
+
+function readContentString(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+function toolNamesFromContent(content: Record<string, unknown>): string[] {
+  const names = Array.isArray(content.tool_names) ? content.tool_names : [content.tool_name];
+  return names.map(item => String(item || "").trim()).filter(Boolean);
+}
+
+function toolTitle(toolNames: string[]): string {
+  const unique = uniqueStrings(toolNames);
+  if (!unique.length) return "Tool activity";
+  if (unique.length === 1) return unique[0];
+  return `${unique.slice(0, 2).join(" + ")}${unique.length > 2 ? ` +${unique.length - 2}` : ""}`;
+}
+
+function toolCategories(toolNames: string[]): ToolCategory[] {
+  const categories = uniqueStrings(toolNames.map(toolCategoryKey)).map(categoryForKey);
+  return categories.length ? categories : [categoryForKey("tool")];
+}
+
+function toolCategoryKey(toolName: string): string {
+  const name = toolName.toLowerCase();
+  if (/browser|explore|crawl|capture|traffic|discover|asset|surface/.test(name)) return "discovery";
+  if (/http|request|replay|mutate|fetch|curl/.test(name)) return "request";
+  if (/execute|command|shell|docker|process/.test(name)) return "command";
+  if (/finding|vuln|verify|evidence|confirm/.test(name)) return "finding";
+  if (/search|scan|dir|wordlist|enumerate/.test(name)) return "search";
+  return "tool";
+}
+
+function categoryForKey(key: string): ToolCategory {
+  const categories: Record<string, ToolCategory> = {
+    discovery: { key: "discovery", label: "发现", Icon: Compass },
+    request: { key: "request", label: "请求", Icon: Globe2 },
+    command: { key: "command", label: "命令执行", Icon: Terminal },
+    finding: { key: "finding", label: "发现验证", Icon: ShieldAlert },
+    search: { key: "search", label: "搜索枚举", Icon: Search },
+    tool: { key: "tool", label: "工具", Icon: Wrench },
+  };
+  return categories[key] || categories.tool;
+}
+
+function summarizeToolOutput(stdout: string, latestTool = "tool"): string {
+  const lines = stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  if (!lines.length) return "Waiting for tool output";
+  const last = lines[lines.length - 1];
+  const parsed = parseLooseObject(last);
+  if (parsed) {
+    const action = summarizeToolObject(parsed, latestTool);
+    if (action) return action;
+  }
+  return stripJsonNoise(last);
+}
+
+function summarizeToolObject(value: Record<string, unknown>, latestTool: string): string {
+  const status = String(value.status || value.status_code || "").trim();
+  const action = String(value.action || value.command || value.method || "").trim();
+  const title = String(value.title || value.summary || value.message || value.error || "").trim();
+  const url = String(value.url || value.target || value.location || "").trim();
+  const evidence = String(value.evidence_id || value.EVIDENCE_ID || "").trim();
+  const pieces: string[] = [];
+  if (action) pieces.push(action);
+  else pieces.push(latestTool);
+  if (url) pieces.push(url);
+  if (status) pieces.push(`status ${status}`);
+  if (title && !pieces.includes(title)) pieces.push(title);
+  if (evidence) pieces.push(`evidence ${evidence}`);
+  return pieces.join(" · ");
+}
+
+function parseLooseObject(text: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+  } catch {
+    // Tool output may be Python dict-like; fall through to a conservative extractor.
+  }
+  const pairs = [...text.matchAll(/["']?([A-Za-z_][\w-]*)["']?\s*:\s*["']([^"']{1,240})["']/g)];
+  if (!pairs.length) return null;
+  return Object.fromEntries(pairs.map(match => [match[1], match[2]]));
+}
+
+function stripJsonNoise(text: string): string {
+  return text
+    .replace(/^[-`\s]+/, "")
+    .replace(/[{}[\]"]/g, "")
+    .replace(/\s+/g, " ")
+    .slice(0, 220);
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)));
+}
 function MarkdownText({ text }: { text: string }) {
   const blocks = parseMarkdown(text);
   return (
@@ -384,7 +590,7 @@ function SystemNotice({ content }: { content: Record<string, unknown> }) {
   return <div className="my-2 text-center text-xs text-ink-muted">{content.text as string}</div>;
 }
 
-export default function MessageRenderer({ message, agentNameById = {}, previousMessage, fallbackPentestNodeId, platformAgentNodeId, onDecision, onOpenVulnerability, onOpenAsset, highlightedApprovalId, approvalDecisionByRequestId = {} }: Props) {
+export default function MessageRenderer({ message, agentNameById = {}, previousMessage, fallbackPentestNodeId, platformAgentNodeId, onDecision, onOpenVulnerability, onOpenAsset, onOpenEvidence, highlightedApprovalId, approvalDecisionByRequestId = {} }: Props) {
   const { role, msg_type, content } = message;
 
   if (role === "system") return <SystemNotice content={content} />;
@@ -405,7 +611,7 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
   let body: ReactNode;
   switch (msg_type) {
     case "tool_call":
-      body = <ToolCallCard content={content} />;
+      body = <ToolCallCard content={content} onOpenEvidence={onOpenEvidence} />;
       break;
     case "vuln_card":
     case "vuln_found":
