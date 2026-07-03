@@ -699,6 +699,19 @@ function AssetCard({ content, onOpen }: { content: Record<string, unknown>; onOp
   );
 }
 
+function renderMentionText(text: string): ReactNode[] {
+  const parts: ReactNode[] = [];
+  const pattern = /(@[^\s@]+)/g;
+  let lastIndex = 0;
+  for (const match of text.matchAll(pattern)) {
+    const index = match.index ?? 0;
+    if (index > lastIndex) parts.push(text.slice(lastIndex, index));
+    parts.push(<span key={`${index}-${match[0]}`} className="font-semibold text-status-running">{match[0]}</span>);
+    lastIndex = index + match[0].length;
+  }
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+  return parts.length ? parts : [text];
+}
 function AgentPendingCard({ content }: { content: Record<string, unknown> }) {
   return (
     <div className="my-2 min-w-0 max-w-full text-sm leading-relaxed text-ink-secondary">
@@ -733,7 +746,7 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
   if (role === "user") {
     return (
       <div className="my-2 flex min-w-0 justify-end">
-        <div className="max-w-[70%] break-words rounded-2xl bg-surface-default px-4 py-2.5 text-sm [overflow-wrap:anywhere]">{content.text as string}</div>
+        <div className="max-w-[70%] break-words rounded-2xl bg-surface-default px-4 py-2.5 text-sm [overflow-wrap:anywhere]">{renderMentionText(String(content.text || ""))}</div>
       </div>
     );
   }

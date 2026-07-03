@@ -225,6 +225,58 @@ class PlatformPhase2Tests(unittest.TestCase):
         self.assertEqual(decision.action, "platform_reply")
         self.assertEqual(decision.capability, "platform.chat")
 
+    def test_requested_pentest_answer_uses_pentest_snapshot_context(self):
+        async def fake_chat(messages):
+            return '{"action":"answer_user","capability":"platform.chat","agent":"platform","targets":[],"reason":"greeting"}'
+
+        async def run():
+            set_orchestrator_chat_override(fake_chat)
+            try:
+                return await route_with_platform_agent(
+                    text="hello",
+                    context=OrchestrationContext(
+                        conversation_status="completed",
+                        requested_agent="pentest",
+                        requested_node_id="node-1",
+                        has_resume_task=True,
+                        bound_node_id="node-1",
+                    ),
+                )
+            finally:
+                set_orchestrator_chat_override(None)
+
+        decision = asyncio.run(run())
+        self.assertEqual(decision.action, "platform_reply")
+        self.assertEqual(decision.capability, "snapshot.qa")
+        self.assertEqual(decision.mode, "snapshot_qa")
+        self.assertEqual(decision.agent, "pentest")
+        self.assertEqual(decision.agent_node_id, "node-1")
+
+    def test_requested_pentest_clarification_uses_pentest_snapshot_when_session_exists(self):
+        async def fake_chat(messages):
+            return '{"action":"ask_clarification","capability":"platform.chat","agent":"platform","targets":[],"reason":"missing target"}'
+
+        async def run():
+            set_orchestrator_chat_override(fake_chat)
+            try:
+                return await route_with_platform_agent(
+                    text="self evaluate the last test",
+                    context=OrchestrationContext(
+                        conversation_status="completed",
+                        requested_agent="pentest",
+                        requested_node_id="node-1",
+                        has_resume_task=True,
+                        bound_node_id="node-1",
+                    ),
+                )
+            finally:
+                set_orchestrator_chat_override(None)
+
+        decision = asyncio.run(run())
+        self.assertEqual(decision.action, "platform_reply")
+        self.assertEqual(decision.capability, "snapshot.qa")
+        self.assertEqual(decision.agent, "pentest")
+
     def test_platform_agent_invalid_plan_is_not_routed_by_fallback(self):
         async def fake_chat(messages):
             return 'not json'

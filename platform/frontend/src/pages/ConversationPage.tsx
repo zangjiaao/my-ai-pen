@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 import RightPanel from "../components/RightPanel";
@@ -476,8 +476,9 @@ export default function ConversationPage() {
 
   const handleSend = useCallback(async () => {
     if (!input.trim()) return;
-    const selectedMentionAgent = selectedAgent && input.includes(`@${selectedAgent.name}`) ? selectedAgent : resolveMentionedAgent(input, agentNodes);
-    const text = stripAgentMention(input, selectedMentionAgent);
+    const displayText = input.trim();
+    const selectedMentionAgent = selectedAgent && displayText.includes(`@${selectedAgent.name}`) ? selectedAgent : resolveMentionedAgent(displayText, agentNodes);
+    const text = stripAgentMention(displayText, selectedMentionAgent);
     setInput("");
     setSelectedAgent(null);
 
@@ -501,7 +502,7 @@ export default function ConversationPage() {
     }
 
     const clientMessageId = crypto.randomUUID();
-    const userContent: Record<string, unknown> = { text, client_message_id: clientMessageId };
+    const userContent: Record<string, unknown> = { text: displayText, client_message_id: clientMessageId };
     if (selectedMentionAgent) {
       userContent.agent_target = selectedMentionAgent.type === "platform" ? "platform" : "pentest";
       userContent.agent_node_id = selectedMentionAgent.id;
@@ -525,18 +526,18 @@ export default function ConversationPage() {
     });
 
     if (!platformMention && shouldContinueExisting && activeConversation?.status === "running") {
-      send({ type: "user_steer", conversation_id: convId, text, client_message_id: clientMessageId, ...agentPayload });
+      send({ type: "user_steer", conversation_id: convId, text, display_text: displayText, client_message_id: clientMessageId, ...agentPayload });
       return;
     }
 
     if (shouldContinueExisting && !targetValue) {
       setRunning(true);
-      send({ type: "user_message", conversation_id: convId, text, resume: true, client_message_id: clientMessageId, ...agentPayload });
+      send({ type: "user_message", conversation_id: convId, text, display_text: displayText, resume: true, client_message_id: clientMessageId, ...agentPayload });
       return;
     }
 
     if (!targetValue) {
-      send({ type: "user_message", conversation_id: convId, text, client_message_id: clientMessageId, ...agentPayload });
+      send({ type: "user_message", conversation_id: convId, text, display_text: displayText, client_message_id: clientMessageId, ...agentPayload });
       return;
     }
 
@@ -545,10 +546,23 @@ export default function ConversationPage() {
     setProgress(progressForPhase("intake", "running"));
     const target = { type: targetValue.startsWith("http") ? "url" : "host", value: targetValue };
     const scope = { allow: [target.value], deny: [] };
-    send({ type: "user_message", conversation_id: convId, text, target, scope, client_message_id: clientMessageId, ...agentPayload });
+    send({ type: "user_message", conversation_id: convId, text, target, scope, display_text: displayText, client_message_id: clientMessageId, ...agentPayload });
   }, [input, selectedAgent, agentNodes, activeId, activeConversation, conversations, planTree, resetConversationState, fetchAll, send, setConversationMessageData]);
 
 
+function renderMentionText(text: string): ReactNode[] {
+  const parts: ReactNode[] = [];
+  const pattern = /(@[^\s@]+)/g;
+  let lastIndex = 0;
+  for (const match of text.matchAll(pattern)) {
+    const index = match.index ?? 0;
+    if (index > lastIndex) parts.push(text.slice(lastIndex, index));
+    parts.push(<span key={`${index}-${match[0]}`} className="font-semibold text-status-running">{match[0]}</span>);
+    lastIndex = index + match[0].length;
+  }
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+  return parts.length ? parts : [text];
+}
 function getMentionState(value: string): MentionState {
   const match = value.match(/(?:^|\s)@([^\s@]*)$/);
   if (!match || match.index === undefined) return null;
@@ -710,9 +724,16 @@ function pendingAgentSourceForMessage(
                     ))}
                   </div>
                 )}
-                <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void handleSend(); }}
-                  placeholder="Type @ to choose an Agent, or describe the test request"
-                  className="min-w-0 flex-1 rounded-md border border-hairline bg-canvas px-3.5 py-2.5 text-sm placeholder:text-ink-muted focus:border-ink focus:outline-none" />
+                <div className="relative min-w-0 flex-1 rounded-md border border-hairline bg-canvas focus-within:border-ink">
+                  {input && (
+                    <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre px-3.5 py-2.5 text-sm text-ink">
+                      {renderMentionText(input)}
+                    </div>
+                  )}
+                  <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void handleSend(); }}
+                    placeholder="Type @ to choose an Agent, or describe the test request"
+                    className="relative z-10 w-full bg-transparent px-3.5 py-2.5 text-sm text-transparent caret-ink placeholder:text-ink-muted focus:outline-none" />
+                </div>
                 {running ? (
                   <button onClick={() => { send({ type: "user_interrupt", conversation_id: activeId, action: "cancel" }); setRunning(false); }} className="rounded-pill bg-severity-critical px-5 py-2.5 text-sm font-medium text-white">Interrupt</button>
                 ) : (

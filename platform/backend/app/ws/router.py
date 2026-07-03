@@ -510,7 +510,7 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                 }
                 msg_type = "decision"
             else:
-                content = {"text": msg.get("text", "")}
+                content = {"text": msg.get("display_text") or msg.get("text", "")}
                 if msg.get("client_message_id"):
                     content["client_message_id"] = msg.get("client_message_id")
                 msg_type = "text"
@@ -1195,15 +1195,16 @@ async def _persist_and_broadcast(conv_id: str, msg: dict, role: str = "agent"):
 
 
 
-async def _answer_with_platform_agent(conv_id: str, user_id: str, text: str, agent_source: str = "platform", mode: str = "platform_chat"):
+async def _answer_with_platform_agent(conv_id: str, user_id: str, text: str, agent_source: str = "platform", mode: str = "platform_chat", agent_node_id: str | None = None):
     if mode == "snapshot_qa":
         answer = await answer_snapshot_qa(conv_id, user_id, text, agent_source)
     else:
         answer = await answer_platform_chat(conv_id, user_id, text)
-    if agent_source == "platform":
-        answer["agent_node_id"] = str(PLATFORM_AGENT_NODE_ID)
+    display_node_id = str(PLATFORM_AGENT_NODE_ID) if agent_source == "platform" else agent_node_id
+    if display_node_id:
+        answer["agent_node_id"] = str(display_node_id)
         if isinstance(answer.get("content"), dict):
-            answer["content"]["agent_node_id"] = str(PLATFORM_AGENT_NODE_ID)
+            answer["content"]["agent_node_id"] = str(display_node_id)
     await _save_message(answer, "agent")
     await _broadcast_to_conversation(conv_id, json.dumps(answer, ensure_ascii=False))
 
@@ -1340,7 +1341,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         continue
 
                     if decision.action == "platform_reply":
-                        await _answer_with_platform_agent(conv_id, client_id, msg.get("text", ""), decision.agent or "platform", decision.mode or "platform_chat")
+                        await _answer_with_platform_agent(conv_id, client_id, msg.get("text", ""), decision.agent or "platform", decision.mode or "platform_chat", decision.agent_node_id)
                         continue
 
                     if decision.action == "ask_clarification":

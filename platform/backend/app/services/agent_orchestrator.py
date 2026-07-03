@@ -95,6 +95,15 @@ def _policy_guard(plan: AgentPlan, *, text: str, context: OrchestrationContext) 
     requested_agent = _normalize_agent(context.requested_agent)
     agent = _normalize_agent(plan.agent) or _agent_for_capability(plan.capability) or requested_agent or "platform"
 
+    if requested_agent == "pentest" and not targets and context.has_resume_task and plan.action in {"answer_user", "summarize_results", "ask_clarification"}:
+        return RoutingDecision(
+            action="platform_reply",
+            capability="snapshot.qa",
+            mode="snapshot_qa",
+            agent="pentest",
+            agent_node_id=plan.agent_node_id or context.requested_node_id or context.bound_node_id,
+            reason=plan.reason or "user explicitly addressed the pentest agent for session context",
+        )
 
     if plan.action == "ask_clarification":
         return RoutingDecision(
