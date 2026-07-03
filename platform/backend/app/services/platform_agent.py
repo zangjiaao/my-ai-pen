@@ -10,34 +10,33 @@ from sqlalchemy import select
 from app.config import settings
 import app.db.base as db_base
 from app.models.conversation import Conversation
-from app.models.message import Message
 from app.services.conversation_snapshot import build_conversation_snapshot
 
 ChatFn = Callable[[list[dict]], Awaitable[str]]
 _chat_override: ChatFn | None = None
 
 
-PLATFORM_CHAT_PROMPT = """你是安全测试平台的小助理，负责理解用户意图、编排任务、解释平台状态并把工作分配给合适的节点。
-规则：
-- 如果用户只是打招呼或询问平台能力，直接简洁回答。
-- 如果用户想发起测试但缺少目标，提示用户提供 URL/IP 和授权范围。
-- 不要声称已经执行了测试；真实测试由具体节点完成。
-- 用中文回答，语气专业、直接。"""
+PLATFORM_CHAT_PROMPT = """\u4f60\u662f\u5b89\u5168\u6d4b\u8bd5\u5e73\u53f0\u7684\u5c0f\u52a9\u7406\uff0c\u8d1f\u8d23\u7406\u89e3\u7528\u6237\u610f\u56fe\u3001\u7f16\u6392\u4efb\u52a1\u3001\u89e3\u91ca\u5e73\u53f0\u72b6\u6001\u5e76\u628a\u5de5\u4f5c\u5206\u914d\u7ed9\u5408\u9002\u7684\u8282\u70b9\u3002
+\u89c4\u5219\uff1a
+- \u5982\u679c\u7528\u6237\u53ea\u662f\u6253\u62db\u547c\u6216\u8be2\u95ee\u5e73\u53f0\u80fd\u529b\uff0c\u76f4\u63a5\u7b80\u6d01\u56de\u7b54\u3002
+- \u5982\u679c\u7528\u6237\u60f3\u53d1\u8d77\u6d4b\u8bd5\u4f46\u7f3a\u5c11\u76ee\u6807\uff0c\u63d0\u793a\u7528\u6237\u63d0\u4f9b URL/IP \u548c\u6388\u6743\u8303\u56f4\u3002
+- \u4e0d\u8981\u58f0\u79f0\u5df2\u7ecf\u6267\u884c\u4e86\u6d4b\u8bd5\uff1b\u771f\u5b9e\u6d4b\u8bd5\u7531\u5177\u4f53\u8282\u70b9\u5b8c\u6210\u3002
+- \u7528\u4e2d\u6587\u56de\u7b54\uff0c\u8bed\u6c14\u4e13\u4e1a\u3001\u76f4\u63a5\u3002"""
 
-SNAPSHOT_QA_PROMPT = """你是安全测试平台的小助理，正在基于当前会话已保存的消息、资产、漏洞、证据和 checkpoint 回答用户问题。
-规则：
-- 只基于提供的会话上下文回答。
-- 不要声称重新测试了目标。
-- 如果证据不足，直接说明缺少哪些证据。
-- 可以总结风险、解释判断依据、给出整改建议或下一步验证建议。
-- 用中文回答，保持简洁但足够可执行。"""
+SNAPSHOT_QA_PROMPT = """\u4f60\u662f\u5b89\u5168\u6d4b\u8bd5\u5e73\u53f0\u7684\u5c0f\u52a9\u7406\uff0c\u6b63\u5728\u57fa\u4e8e\u5f53\u524d\u4f1a\u8bdd Session Snapshot \u56de\u7b54\u7528\u6237\u95ee\u9898\u3002
+\u89c4\u5219\uff1a
+- \u53ea\u57fa\u4e8e\u63d0\u4f9b\u7684 Session Snapshot \u56de\u7b54\u3002
+- \u4e0d\u8981\u58f0\u79f0\u91cd\u65b0\u6d4b\u8bd5\u4e86\u76ee\u6807\u3002
+- \u5982\u679c\u8bc1\u636e\u4e0d\u8db3\uff0c\u76f4\u63a5\u8bf4\u660e\u7f3a\u5c11\u54ea\u4e9b\u8bc1\u636e\u3002
+- \u53ef\u4ee5\u603b\u7ed3\u98ce\u9669\u3001\u89e3\u91ca\u5224\u65ad\u4f9d\u636e\u3001\u7ed9\u51fa\u6574\u6539\u5efa\u8bae\u6216\u4e0b\u4e00\u6b65\u9a8c\u8bc1\u5efa\u8bae\u3002
+- \u7528\u4e2d\u6587\u56de\u7b54\uff0c\u4fdd\u6301\u7b80\u6d01\u4f46\u8db3\u591f\u53ef\u6267\u884c\u3002"""
 
-PENTEST_SNAPSHOT_PROMPT = """你是本次会话里的渗透 Agent。用户正在询问你已经执行过的测试过程、发现、证据或下一步建议。
-规则：
-- 只基于提供的会话上下文回答。
-- 当前回复不能调用工具；不要声称重新测试了目标。
-- 可以用第一人称解释此前判断依据、利用价值、风险排序和建议。
-- 用中文回答。"""
+PENTEST_SNAPSHOT_PROMPT = """\u4f60\u662f\u672c\u6b21\u4f1a\u8bdd\u91cc\u7684\u6e17\u900f Agent\u3002\u7528\u6237\u6b63\u5728\u8be2\u95ee\u4f60\u5df2\u7ecf\u6267\u884c\u8fc7\u7684\u6d4b\u8bd5\u8fc7\u7a0b\u3001\u53d1\u73b0\u3001\u8bc1\u636e\u6216\u4e0b\u4e00\u6b65\u5efa\u8bae\u3002
+\u89c4\u5219\uff1a
+- \u53ea\u57fa\u4e8e\u63d0\u4f9b\u7684 Session Snapshot \u56de\u7b54\u3002
+- \u5f53\u524d\u56de\u590d\u4e0d\u80fd\u8c03\u7528\u5de5\u5177\uff1b\u4e0d\u8981\u58f0\u79f0\u91cd\u65b0\u6d4b\u8bd5\u4e86\u76ee\u6807\u3002
+- \u53ef\u4ee5\u7528\u7b2c\u4e00\u4eba\u79f0\u89e3\u91ca\u6b64\u524d\u5224\u65ad\u4f9d\u636e\u3001\u5229\u7528\u4ef7\u503c\u3001\u98ce\u9669\u6392\u5e8f\u548c\u5efa\u8bae\u3002
+- \u7528\u4e2d\u6587\u56de\u7b54\u3002"""
 
 
 def set_platform_agent_chat_override(chat: ChatFn | None) -> None:
@@ -48,13 +47,13 @@ def set_platform_agent_chat_override(chat: ChatFn | None) -> None:
 async def answer_platform_chat(conv_id: str, user_id: str, question: str) -> dict:
     content = await _chat([
         {"role": "system", "content": PLATFORM_CHAT_PROMPT},
-        {"role": "user", "content": str(question or "你好")},
+        {"role": "user", "content": str(question or "\u4f60\u597d")},
     ])
-    return _agent_text(conv_id, "platform", "platform_chat", content or "你好，我可以帮你分配测试任务、解释结果或整理整改建议。")
+    return _agent_text(conv_id, "platform", "platform_chat", content or "\u4f60\u597d\uff0c\u6211\u53ef\u4ee5\u5e2e\u4f60\u5206\u914d\u6d4b\u8bd5\u4efb\u52a1\u3001\u89e3\u91ca\u7ed3\u679c\u6216\u6574\u7406\u6574\u6539\u5efa\u8bae\u3002")
 
 
 async def answer_snapshot_qa(conv_id: str, user_id: str, question: str, agent_source: str = "platform") -> dict:
-    snapshot, recent_messages, missing = await _load_snapshot(conv_id, user_id)
+    snapshot, missing = await _load_snapshot(conv_id, user_id)
     if missing:
         return {"type": "task_error", "conversation_id": conv_id, "message": "Conversation not found or access denied."}
 
@@ -66,54 +65,55 @@ async def answer_snapshot_qa(conv_id: str, user_id: str, question: str, agent_so
         "agent_state": snapshot.get("agent_state"),
         "progress": snapshot.get("progress"),
         "todos": snapshot.get("todos"),
+        "task_context": snapshot.get("task_context"),
+        "plan_tree": snapshot.get("plan_tree"),
+        "attack_surface": snapshot.get("attack_surface"),
+        "coverage": snapshot.get("coverage"),
+        "captured_traffic": snapshot.get("captured_traffic"),
         "findings": snapshot.get("findings"),
         "assets": snapshot.get("assets"),
         "evidence": snapshot.get("evidence"),
         "checkpoint": _compact_checkpoint(snapshot.get("checkpoint") or {}),
-        "recent_messages": [_message_context(item) for item in recent_messages[-40:]],
+        "messages": (snapshot.get("messages") or [])[-40:],
+        "agents": snapshot.get("agents"),
+        "omitted": snapshot.get("omitted"),
     }
     content = await _chat([
         {"role": "system", "content": prompt},
-        {"role": "user", "content": "当前会话持久化上下文：\n" + json.dumps(context, ensure_ascii=False, default=str)[:24000]},
-        {"role": "user", "content": str(question or "请总结本次会话结果。")},
+        {"role": "user", "content": "\u5f53\u524d\u4f1a\u8bdd Session Snapshot:\n" + json.dumps(context, ensure_ascii=False, default=str)[:24000]},
+        {"role": "user", "content": str(question or "\u8bf7\u603b\u7ed3\u672c\u6b21\u4f1a\u8bdd\u7ed3\u679c\u3002")},
     ])
-    return _agent_text(conv_id, normalized_agent, "snapshot_qa", content or "当前会话没有足够信息生成回答。")
+    return _agent_text(conv_id, normalized_agent, "snapshot_qa", content or "\u5f53\u524d\u4f1a\u8bdd\u6ca1\u6709\u8db3\u591f\u4fe1\u606f\u751f\u6210\u56de\u7b54\u3002")
 
 
 async def answer_clarification(conv_id: str, message: str, *, mode: str = "clarification") -> dict:
     return _agent_text(conv_id, "platform", mode, message)
 
 
-async def _load_snapshot(conv_id: str, user_id: str) -> tuple[dict, list[Message], bool]:
+async def _load_snapshot(conv_id: str, user_id: str) -> tuple[dict, bool]:
     async with db_base.async_session() as db:
         result = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id), Conversation.user_id == uuid.UUID(user_id)))
         conversation = result.scalar_one_or_none()
         if not conversation:
-            return {}, [], True
+            return {}, True
         snapshot = await build_conversation_snapshot(db, conversation, uuid.UUID(user_id))
-        recent_messages = (await db.execute(
-            select(Message)
-            .where(Message.conversation_id == conversation.id)
-            .order_by(Message.created_at.desc(), Message.id.desc())
-            .limit(80)
-        )).scalars().all()
-    return snapshot, list(reversed(recent_messages)), False
+    return snapshot, False
 
 
 async def _chat(messages: list[dict]) -> str:
     try:
         return await (_chat_override(messages) if _chat_override else _chat_with_openai(messages))
     except Exception as exc:
-        return f"LLM 调用失败，无法继续对话：{str(exc)[:300]}"
+        return f"LLM call failed, unable to continue conversation: {str(exc)[:300]}"
 
 
 async def _chat_with_openai(messages: list[dict]) -> str:
     if not settings.LLM_API_KEY:
-        raise RuntimeError("平台后端未配置 LLM_API_KEY。")
+        raise RuntimeError("Platform backend is missing LLM_API_KEY.")
     try:
         from openai import AsyncOpenAI
     except ImportError as exc:
-        raise RuntimeError("平台后端缺少 openai 依赖，请安装 backend requirements。") from exc
+        raise RuntimeError("Platform backend is missing openai dependency. Install backend requirements.") from exc
 
     client = AsyncOpenAI(api_key=settings.LLM_API_KEY, base_url=settings.LLM_BASE_URL or None)
     response = await client.chat.completions.create(
@@ -132,22 +132,6 @@ def _agent_text(conv_id: str, agent_source: str, agent_mode: str, content: str) 
         "agent_source": agent_source,
         "agent_mode": agent_mode,
         "content": {"text": text, "agent_source": agent_source, "agent_mode": agent_mode},
-    }
-
-
-def _message_context(message: Message) -> dict:
-    content = message.content or {}
-    compact_content = content
-    if isinstance(content, dict):
-        compact_content = dict(content)
-        stdout = compact_content.get("stdout")
-        if isinstance(stdout, str) and len(stdout) > 1200:
-            compact_content["stdout"] = stdout[:1200] + "...<truncated>"
-    return {
-        "role": message.role,
-        "type": message.msg_type,
-        "content": compact_content,
-        "created_at": message.created_at.isoformat() if message.created_at else None,
     }
 
 

@@ -12,6 +12,7 @@ from app.services.conversation_state import ConversationStatusError, transition_
 from app.services.agent_router import extract_target
 from app.services.agent_orchestrator import AgentCapability, OrchestrationContext, OrchestrationError, route_with_platform_agent
 from app.services.platform_agent import answer_clarification, answer_platform_chat, answer_snapshot_qa
+from app.services.conversation_snapshot import build_conversation_snapshot
 from app.models.node import PLATFORM_AGENT_NODE_ID
 
 router = APIRouter()
@@ -984,7 +985,7 @@ async def _conversation_status(conv_id: str) -> str | None:
         return None
 
 
-async def _conversation_resume_context(conv_id: str) -> dict:
+async def _conversation_snapshot(conv_id: str, user_id: str) -> dict:
     try:
         from app.db.base import async_session
         from app.models.conversation import Conversation
@@ -992,11 +993,11 @@ async def _conversation_resume_context(conv_id: str) -> dict:
         async with async_session() as db:
             r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id)))
             c = r.scalar_one_or_none()
-            if not c or not isinstance(c.context, dict):
+            if not c:
                 return {}
-            context = c.context or {}
-            return {"task": context.get("task") or {}, "checkpoint": context.get("checkpoint") or {}}
-    except Exception:
+            return await build_conversation_snapshot(db, c, uuid.UUID(user_id))
+    except Exception as e:
+        print(f"[WS] conversation snapshot error: {e}")
         return {}
 
 
@@ -1078,7 +1079,7 @@ def _user_message_route(msg: dict, conversation_status: str | None) -> dict:
 
 
 def _resume_message_from_context(msg: dict, resume_context: dict, *, include_checkpoint: bool = True) -> tuple[dict | None, bool]:
-    task_context = resume_context.get("task") or {}
+    task_context = resume_context.get("task_context") or resume_context.get("task") or {}
     if not task_context.get("target"):
         return None, False
 
@@ -1117,7 +1118,7 @@ def _task_assign_from_user_message(conv_id: str, msg: dict, task_id: str) -> dic
         "target": task_target,
         "scope": task_scope,
         "initial_instruction": msg.get("text", ""),
-        "checkpoint": msg.get("checkpoint") or {},
+        "snapshot": msg.get("snapshot") or {},
     }
 
 def _agent_assignment_notice(decision, node_id: str, node_name: str | None = None) -> str:
@@ -1314,7 +1315,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
 
                 if msg.get("type") == "user_message" and conv_id:
                     conversation_status = await _conversation_status(conv_id)
-                    resume_context = await _conversation_resume_context(conv_id)
+                    resume_context = await _conversation_snapshot(conv_id, client_id)
                     _, bound_node = await _conversation_owner(conv_id)
                     bound_node_id = str(bound_node) if bound_node else conversation_node.get(conv_id)
                     try:
@@ -1437,6 +1438,12 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             await _incr_sessions(node_id, 1)
                             task_msg["agent_node_id"] = node_id
                             task_msg["agent_capability"] = decision.capability
+                            snapshot = await _conversation_snapshot(conv_id, client_id)
+                            if "checkpoint" in msg:
+                                snapshot["checkpoint"] = msg.get("checkpoint") or {}
+                            elif not resumed_from_context:
+                                snapshot["checkpoint"] = {}
+                            task_msg["snapshot"] = snapshot
                             await _announce_agent_assignment(conv_id, decision, node_id)
                             await node_connections[node_id].send_text(json.dumps(task_msg, ensure_ascii=False))
                             continue

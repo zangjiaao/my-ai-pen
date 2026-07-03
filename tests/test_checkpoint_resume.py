@@ -1,4 +1,5 @@
 import sys
+import uuid
 import asyncio
 import json
 import unittest
@@ -13,14 +14,17 @@ sys.path.insert(0, str(ROOT / "node"))
 sys.path.insert(0, str(ROOT / "platform" / "backend"))
 
 from app.services.conversation_snapshot import (  # noqa: E402
+    build_conversation_snapshot as _build_conversation_snapshot,
     agent_state_from_checkpoint as _agent_state_from_checkpoint,
     checkpoint_assets as _checkpoint_assets,
     checkpoint_findings as _checkpoint_findings,
     checkpoint_plan_tree as _checkpoint_plan_tree,
     progress_for_checkpoint as _progress_for_checkpoint,
+    snapshot_messages as _snapshot_messages,
     todos_for_checkpoint as _todos_for_checkpoint,
 )
 from app.models.conversation import Conversation  # noqa: E402
+from app.models.message import Message  # noqa: E402
 from app.services.conversation_state import transition_conversation  # noqa: E402
 from app.ws.router import _resume_message_from_context, _task_assign_from_user_message, _user_message_route  # noqa: E402
 from pentest_node.agent.intake import TaskIntake  # noqa: E402
@@ -882,6 +886,10 @@ class CheckpointResumeTests(unittest.TestCase):
 
         node_id = loop.plan_tree.to_list()[0]["node_id"]
         loop.plan_tree.update_node(node_id, status="done", evidence_ids=["ev-111111111111"])
+        self.assertIn("unfinished Plan Tree work items", loop._phase_gate_error(Phase.REPORT))
+        for node in loop.plan_tree.to_list():
+            if node["status"] == "pending":
+                loop.plan_tree.update_node(node["node_id"], status="skipped", notes="duplicate endpoint/parameter/type already covered")
         self.assertIsNone(loop._phase_gate_error(Phase.REPORT))
 
         loop.plan_tree.add_node(title="Test login XSS", kind="test", endpoint=f"GET {target}", parameter="q", vuln_type="xss")
@@ -891,6 +899,41 @@ class CheckpointResumeTests(unittest.TestCase):
                 loop.plan_tree.update_node(node["node_id"], status="skipped", notes="not selected in focused test")
 
         self.assertIsNone(loop._phase_gate_error(Phase.REPORT))
+    def test_phase_gate_does_not_count_running_nodes_as_executed(self):
+        target = "http://target.local/login.php"
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-running", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=DummyPlatform(),
+            evidence_store=FakeEvidenceStore(),
+        )
+        loop.attack_surface.record_http_result("tool-1", {"status": "done", "method": "GET", "url": target, "status_code": 200}, "ev-111111111111")
+        for idx in range(20):
+            node = loop.plan_tree.add_node(title=f"Running login check {idx}", kind="test", endpoint=f"GET {target}", parameter="q", vuln_type="sqli")
+            loop.plan_tree.update_node(node.node_id, status="running")
+        loop.coverage.mark(endpoint=f"GET {target}", parameter="q", vuln_type="sqli", status="tried", evidence_ids=["ev-111111111111"])
+
+        self.assertIn("Plan Tree has no executed nodes", loop._phase_gate_error(Phase.REPORT))
+
+    def test_verify_runtime_does_not_advance_with_unfinished_low_priority_work(self):
+        target = "http://target.local/login.php"
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-unfinished-low", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=DummyPlatform(),
+            evidence_store=FakeEvidenceStore(),
+        )
+        loop.attack_surface.record_http_result("tool-1", {"status": "done", "method": "GET", "url": target, "status_code": 200}, "ev-111111111111")
+        loop.coverage.mark(endpoint=f"GET {target}", parameter="<none>", vuln_type="web_baseline", status="tried", evidence_ids=["ev-111111111111"])
+        loop.plan_tree.add_node(title="Cookie flags", kind="test", endpoint=f"GET {target}", parameter="<none>", vuln_type="auth_session")
+
+        self.assertEqual(loop._runtime_phase_advance_reason(Phase.VERIFY), "")
+        self.assertIn("unfinished Plan Tree work items", loop._phase_gate_error(Phase.REPORT))
+
     def test_phase_gate_counts_pending_tests_by_endpoint_parameter_and_type(self):
         target = "http://target.local/search?q=base"
         other = "http://target.local/profile?name=base"
@@ -935,6 +978,9 @@ class CheckpointResumeTests(unittest.TestCase):
         loop.plan_tree.update_node(info_node.node_id, status="skipped", notes="not sensitive", evidence_ids=["ev-111111111111"])
         loop.plan_tree.update_node(idor_node.node_id, status="skipped", notes="no object identifier", evidence_ids=["ev-111111111111"])
         self.assertEqual(loop._pending_high_value_test_count(), 0)
+        self.assertIn("unfinished Plan Tree work items", loop._phase_gate_error(Phase.REPORT))
+
+        loop.plan_tree.update_node(auth_node.node_id, status="skipped", notes="cookie flags not in scope", evidence_ids=["ev-111111111111"])
         self.assertIsNone(loop._phase_gate_error(Phase.REPORT))
         self.assertEqual(auth_node.vuln_type, "auth_session")
 
@@ -2413,12 +2459,12 @@ class CheckpointResumeTests(unittest.TestCase):
         self.assertIsNone(resumed)
         self.assertFalse(is_resume)
 
-    def test_task_assign_from_user_message_carries_checkpoint(self):
+    def test_task_assign_from_user_message_carries_snapshot_only(self):
         msg = {
             "text": "continue",
             "target": {"type": "url", "value": "http://target.local"},
             "scope": {"allow": ["http://target.local"], "deny": []},
-            "checkpoint": {"phase": "verify"},
+            "snapshot": {"counts": {"findings": 1}, "findings": [{"title": "SQLi"}]},
         }
 
         task_msg = _task_assign_from_user_message("conv-1", msg, "task-1")
@@ -2428,7 +2474,100 @@ class CheckpointResumeTests(unittest.TestCase):
         self.assertEqual(task_msg["task_id"], "task-1")
         self.assertEqual(task_msg["target"], msg["target"])
         self.assertEqual(task_msg["scope"], msg["scope"])
-        self.assertEqual(task_msg["checkpoint"], msg["checkpoint"])
+        self.assertNotIn("checkpoint", task_msg)
+        self.assertEqual(task_msg["snapshot"], msg["snapshot"])
+
+    def test_build_conversation_snapshot_restores_checkpoint_runtime_structures(self):
+        conv_id = uuid.uuid4()
+        user_id = uuid.uuid4()
+        checkpoint = {
+            "phase": "verify",
+            "state": {"phase": "verify", "phases_completed": ["intake", "recon", "analysis"]},
+            "attack_surface": [{"kind": "form", "url": "http://target.local/login", "method": "POST"}],
+            "coverage": [{"endpoint": "POST http://target.local/login", "parameter": "username", "vuln_type": "sqli", "status": "tried"}],
+            "captured_traffic": [{"request_id": "req-1", "method": "POST", "url": "http://target.local/login"}],
+            "exploration_plan_tree": [{"node_id": "plan-1", "title": "Verify login SQLi", "kind": "test", "status": "pending"}],
+            "candidate_findings": [{"id": "finding-1", "title": "SQL injection", "severity": "high"}],
+            "discovered_assets": [{"address": "http://target.local", "asset_type": "web"}],
+        }
+        task_context = {"target": {"type": "url", "value": "http://target.local"}, "scope": {"allow": ["http://target.local"]}}
+        conversation = Conversation(id=conv_id, user_id=user_id, status="running", context={"checkpoint": checkpoint, "task": task_context})
+        messages = [Message(id=uuid.uuid4(), conversation_id=conv_id, role="user", msg_type="text", content={"text": "@pentest continue"})]
+
+        class Result:
+            def __init__(self, rows):
+                self.rows = rows
+
+            def scalars(self):
+                return self
+
+            def all(self):
+                return self.rows
+
+        class FakeDB:
+            def __init__(self):
+                self.results = [messages, [], [], []]
+
+            async def execute(self, _query):
+                return Result(self.results.pop(0))
+
+            async def rollback(self):
+                pass
+
+        snapshot = asyncio.run(_build_conversation_snapshot(FakeDB(), conversation, user_id))
+
+        self.assertEqual(snapshot["checkpoint"], checkpoint)
+        self.assertEqual(snapshot["attack_surface"], checkpoint["attack_surface"])
+        self.assertEqual(snapshot["coverage"], checkpoint["coverage"])
+        self.assertEqual(snapshot["captured_traffic"], checkpoint["captured_traffic"])
+        self.assertEqual(snapshot["counts"]["attack_surface"], 1)
+        self.assertEqual(snapshot["counts"]["coverage"], 1)
+        self.assertEqual(snapshot["counts"]["captured_traffic"], 1)
+        self.assertTrue(any(item["content"].get("text") == "@pentest continue" for item in snapshot["messages"]))
+        self.assertTrue(any(item.get("title") == "SQL injection" for item in snapshot["findings"]))
+        self.assertTrue(any(item.get("address") == "http://target.local" for item in snapshot["assets"]))
+    def test_snapshot_messages_keep_main_content_and_omit_tool_detail(self):
+        conv_id = uuid.uuid4()
+        messages = [
+            Message(id=uuid.uuid4(), conversation_id=conv_id, role="user", msg_type="text", content={"text": "@pentest summarize"}),
+            Message(id=uuid.uuid4(), conversation_id=conv_id, role="agent", msg_type="tool_call", content={"tool_name": "http_request", "tool_run_id": "run-1", "stdout": "x" * 2000, "evidence_id": "ev-1"}),
+        ]
+
+        compacted, omitted = _snapshot_messages(messages, limit=10)
+
+        self.assertEqual(compacted[0]["content"]["text"], "@pentest summarize")
+        self.assertEqual(compacted[1]["content"]["tool_name"], "http_request")
+        self.assertEqual(compacted[1]["content"]["evidence_id"], "ev-1")
+        self.assertLess(len(compacted[1]["content"]["stdout"]), 1000)
+        self.assertGreater(omitted["tool_stdout_chars"], 0)
+
+    def test_task_context_prompt_includes_shared_session_snapshot(self):
+        loop = PentestAgentLoop(
+            task={
+                "instruction": "continue",
+                "target": {"type": "url", "value": "http://target.local"},
+                "scope": {"allow": ["http://target.local"], "deny": []},
+                "snapshot": {
+                    "conversation": {"status": "completed"},
+                    "counts": {"findings": 1, "plan_tree": 1},
+                    "findings": [{"title": "SQL injection", "severity": "critical", "status": "confirmed"}],
+                    "plan_tree": [{"title": "Verify login", "status": "pending", "endpoint": "POST http://target.local/login"}],
+                    "messages": [{"role": "user", "content": {"text": "@pentest evaluate"}}],
+                },
+            },
+            tools=SimpleNamespace(),
+            sandbox=SimpleNamespace(),
+            llm=SimpleNamespace(),
+            platform_sync=DummyPlatform(),
+            evidence_store=SimpleNamespace(),
+        )
+
+        prompt = loop._task_context_prompt(Phase.VERIFY)
+
+        self.assertIn("[Session Snapshot - shared platform context]", prompt)
+        self.assertIn("SQL injection", prompt)
+        self.assertIn("Verify login", prompt)
+        self.assertIn("@pentest evaluate", prompt)
 
     def test_status_machine_allows_unfinished_resume_but_not_completed(self):
         failed = Conversation(status="failed")

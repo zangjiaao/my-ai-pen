@@ -175,7 +175,7 @@ async def retest_vuln(
     await db.commit()
     await db.refresh(conv)
 
-    started = await _dispatch_retest_if_possible(str(conv.id), target, scope, instruction)
+    started = await _dispatch_retest_if_possible(str(conv.id), str(user_id), target, scope, instruction)
     return RetestOut(
         conversation_id=str(conv.id),
         started=started,
@@ -248,7 +248,7 @@ def _retest_instruction(v: Vulnerability, asset: Asset | None, target_value: str
     )
 
 
-async def _dispatch_retest_if_possible(conv_id: str, target: dict, scope: dict, instruction: str) -> bool:
+async def _dispatch_retest_if_possible(conv_id: str, user_id: str, target: dict, scope: dict, instruction: str) -> bool:
     try:
         from app.ws import router as ws_router
 
@@ -256,6 +256,8 @@ async def _dispatch_retest_if_possible(conv_id: str, target: dict, scope: dict, 
         if not node_ids:
             return False
         node_id = node_ids[0]
+        snapshot = await ws_router._conversation_snapshot(conv_id, user_id)
+        snapshot["checkpoint"] = {}
         task_msg = {
             "type": "task_assign",
             "conversation_id": conv_id,
@@ -263,7 +265,7 @@ async def _dispatch_retest_if_possible(conv_id: str, target: dict, scope: dict, 
             "target": target,
             "scope": scope,
             "initial_instruction": instruction,
-            "checkpoint": {},
+            "snapshot": snapshot,
         }
         await ws_router._bind_conversation_to_node(conv_id, node_id)
         await ws_router._incr_sessions(node_id, 1)

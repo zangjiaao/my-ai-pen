@@ -22,6 +22,9 @@ from app.models.vulnerability import Vulnerability
 
 
 PHASES = ["intake", "recon", "analysis", "verify", "report", "complete"]
+SNAPSHOT_MESSAGE_LIMIT = 120
+SNAPSHOT_TEXT_LIMIT = 2000
+SNAPSHOT_TOOL_STDOUT_LIMIT = 800
 PHASE_LABELS = {
     "intake": "\u76ee\u6807\u4e0e\u6388\u6743\u8303\u56f4\u68c0\u67e5",
     "recon": "\u653b\u51fb\u9762\u53d1\u73b0",
@@ -191,6 +194,7 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     pending = pending_approvals_from_messages(messages)
     context = conversation.context if isinstance(conversation.context, dict) else {}
     checkpoint = (context.get("checkpoint") if isinstance(context, dict) else {}) or {}
+    task_context = context.get("task") if isinstance(context.get("task"), dict) else {}
     agent_state = agent_state_from_checkpoint(checkpoint, conversation.status) if checkpoint else agent_state_from_messages(messages, evidence, conversation.status)
     progress = progress_for_checkpoint(checkpoint, conversation.status) if checkpoint else progress_for_phase(agent_state.get("phase"), conversation.status)
     findings = merge_many_by_key([
@@ -205,6 +209,9 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     ], "address")
     explicit_evidence = message_evidence(messages, include_tool_calls=False)
     fallback_tool_evidence = [] if evidence or explicit_evidence else message_evidence(messages, include_tool_calls=True)
+    attack_surface_items = snapshot_list(checkpoint.get("attack_surface")) or snapshot_list(context.get("attack_surface"))
+    coverage_items = snapshot_list(checkpoint.get("coverage")) or snapshot_list(context.get("coverage"))
+    captured_traffic_items = snapshot_list(checkpoint.get("captured_traffic")) or snapshot_list(context.get("captured_traffic"))
     raw_plan_tree = checkpoint_plan_tree(checkpoint) or context.get("exploration_plan_tree") or context.get("plan_tree") or []
     plan_tree = ensure_plan_tree_shape(raw_plan_tree, agent_state.get("phase"), checkpoint_completed(checkpoint), conversation.status)
     todos = todos_for_plan_tree(plan_tree) or (todos_for_checkpoint(checkpoint, conversation.status) if checkpoint else todos_for_phase(agent_state.get("phase"), conversation.status))
@@ -213,32 +220,47 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
         explicit_evidence,
         fallback_tool_evidence,
     ], "evidence_id")
+    snapshot_message_items, omitted = snapshot_messages(messages)
+    agent_items = agents_from_messages(messages)
 
     return {
         "conversation": conversation_summary(conversation),
+        "messages": snapshot_message_items,
+        "agents": agent_items,
         "agent_state": agent_state,
         "progress": progress,
         "todos": todos,
         "findings": findings,
         "assets": asset_items,
         "checkpoint": checkpoint or {},
-        "attack_surface": context.get("attack_surface") or [],
-        "coverage": context.get("coverage") or [],
+        "task_context": task_context,
+        "attack_surface": attack_surface_items,
+        "coverage": coverage_items,
         "plan_tree": plan_tree,
+        "captured_traffic": captured_traffic_items,
         "pending_approvals": pending,
         "evidence": evidence_items,
         "read_model_errors": read_model_errors,
+        "omitted": omitted,
         "counts": {
             "assets": len(asset_items),
             "findings": len(findings),
             "pending": len(pending),
             "evidence": len(evidence_items),
-            "attack_surface": len(context.get("attack_surface") or []),
-            "coverage": len(context.get("coverage") or []),
+            "attack_surface": len(attack_surface_items),
+            "coverage": len(coverage_items),
+            "captured_traffic": len(captured_traffic_items),
             "plan_tree": len(plan_tree),
+            "messages": len(snapshot_message_items),
+            "agents": len(agent_items),
+            "has_task_context": bool(task_context),
         },
     }
 
+
+
+def snapshot_list(value) -> list:
+    return list(value) if isinstance(value, list) else []
 
 def message_summary(m: Message) -> dict:
     return {
@@ -250,6 +272,110 @@ def message_summary(m: Message) -> dict:
         "created_at": m.created_at.isoformat() if m.created_at else None,
     }
 
+
+def snapshot_messages(messages: list[Message], limit: int = SNAPSHOT_MESSAGE_LIMIT) -> tuple[list[dict], dict]:
+    total = len(messages)
+    selected = messages[-limit:] if limit > 0 and total > limit else list(messages)
+    omitted = {
+        "messages": max(0, total - len(selected)),
+        "tool_stdout_chars": 0,
+        "large_text_chars": 0,
+    }
+    compacted = []
+    for message in selected:
+        item, stats = compact_message_summary(message)
+        omitted["tool_stdout_chars"] += stats.get("tool_stdout_chars", 0)
+        omitted["large_text_chars"] += stats.get("large_text_chars", 0)
+        compacted.append(item)
+    return compacted, {key: value for key, value in omitted.items() if value}
+
+
+def compact_message_summary(message: Message) -> tuple[dict, dict]:
+    content = message.content if isinstance(message.content, dict) else {}
+    stats = {"tool_stdout_chars": 0, "large_text_chars": 0}
+    compact_content = compact_message_content(message.msg_type, content, stats)
+    return {
+        "id": str(message.id),
+        "conversation_id": str(message.conversation_id),
+        "role": message.role,
+        "msg_type": message.msg_type,
+        "content": compact_content,
+        "created_at": message.created_at.isoformat() if message.created_at else None,
+    }, stats
+
+
+def compact_message_content(msg_type: str, content: dict, stats: dict) -> dict:
+    if msg_type == "tool_call":
+        result = {
+            "tool_name": content.get("tool_name"),
+            "tool_run_id": content.get("tool_run_id"),
+            "status": content.get("status"),
+            "command": truncate_text(content.get("command"), SNAPSHOT_TEXT_LIMIT, stats, "large_text_chars"),
+            "evidence_id": content.get("evidence_id"),
+        }
+        stdout = str(content.get("stdout") or "")
+        if stdout:
+            result["stdout"] = truncate_text(stdout, SNAPSHOT_TOOL_STDOUT_LIMIT, stats, "tool_stdout_chars")
+        if isinstance(content.get("tool_items"), list):
+            result["tool_items"] = [compact_tool_item(item, stats) for item in content.get("tool_items")[:20] if isinstance(item, dict)]
+            omitted_items = max(0, len(content.get("tool_items") or []) - len(result["tool_items"]))
+            if omitted_items:
+                result["omitted_tool_items"] = omitted_items
+        return {key: value for key, value in result.items() if value not in (None, "", [])}
+    if msg_type == "status":
+        keys = ("text", "phase", "iteration", "active_tool", "status", "summary", "agent_source", "agent_node_id")
+        return {key: compact_value(content.get(key), stats) for key in keys if key in content and content.get(key) is not None}
+    if msg_type in {"text", "thinking", "reasoning", "agent_thinking"}:
+        keys = ("text", "agent_source", "agent_node_id", "agent_mode", "agent_target", "client_message_id")
+        return {key: compact_value(content.get(key), stats) for key in keys if key in content and content.get(key) is not None}
+    return {key: compact_value(value, stats) for key, value in content.items() if key != "stdout"}
+
+
+def compact_tool_item(item: dict, stats: dict) -> dict:
+    keys = ("tool_name", "tool_run_id", "status", "command", "evidence_id", "summary")
+    result = {key: compact_value(item.get(key), stats) for key in keys if key in item and item.get(key) is not None}
+    stdout = str(item.get("stdout") or "")
+    if stdout:
+        result["stdout"] = truncate_text(stdout, SNAPSHOT_TOOL_STDOUT_LIMIT, stats, "tool_stdout_chars")
+    return result
+
+
+def compact_value(value, stats: dict):
+    if isinstance(value, str):
+        return truncate_text(value, SNAPSHOT_TEXT_LIMIT, stats, "large_text_chars")
+    if isinstance(value, list):
+        return [compact_value(item, stats) for item in value[:50]]
+    if isinstance(value, dict):
+        return {str(key): compact_value(val, stats) for key, val in list(value.items())[:80]}
+    return value
+
+
+def truncate_text(value, limit: int, stats: dict, stat_key: str) -> str:
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    omitted = len(text) - limit
+    stats[stat_key] = stats.get(stat_key, 0) + omitted
+    return f"{text[:limit]}...<truncated {omitted} chars>"
+
+
+def agents_from_messages(messages: list[Message]) -> list[dict]:
+    agents: dict[tuple[str, str], dict] = {}
+    for message in messages:
+        content = message.content if isinstance(message.content, dict) else {}
+        source = str(content.get("agent_source") or content.get("agent_target") or ("user" if message.role == "user" else "agent"))
+        node_id = str(content.get("agent_node_id") or "")
+        key = (source, node_id)
+        item = agents.setdefault(key, {
+            "agent_source": source,
+            "agent_node_id": node_id or None,
+            "messages": 0,
+            "first_seen_at": message.created_at.isoformat() if message.created_at else None,
+            "last_seen_at": None,
+        })
+        item["messages"] += 1
+        item["last_seen_at"] = message.created_at.isoformat() if message.created_at else item.get("last_seen_at")
+    return list(agents.values())
 
 def pending_approvals_from_messages(messages: list[Message]) -> list[dict]:
     decisions = {

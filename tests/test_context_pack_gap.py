@@ -1,4 +1,4 @@
-"""Context Pack breadth-gap tests.
+"""Playbook hint breadth-gap tests.
 
 Guards that discovered-but-untested attack surface is surfaced back to the model
 so it is nudged to widen coverage instead of only replaying captured traffic.
@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "node"))
 
 from pentest_node.agent.attack_surface import AttackSurfaceInventory  # noqa: E402
-from pentest_node.agent.context_pack import build_context_pack  # noqa: E402
+from pentest_node.agent.playbook_hints import build_playbook_hints  # noqa: E402
 from pentest_node.agent.coverage import CoverageStore  # noqa: E402
 from pentest_node.agent.plan_tree import ExplorationPlanTree  # noqa: E402
 
@@ -34,7 +34,7 @@ def _agent_loop():
     )
 
 
-class ContextPackGapTest(unittest.TestCase):
+class PlaybookHintsGapTest(unittest.TestCase):
     def test_untested_surface_listed_and_covered_hidden(self):
         loop = _agent_loop()
         loop.attack_surface.add_item(kind="url", url="http://t/vulnerabilities/csrf/", method="GET")
@@ -42,7 +42,7 @@ class ContextPackGapTest(unittest.TestCase):
         # sqli endpoint has been probed; csrf has not.
         loop.coverage.mark(endpoint="GET http://t/vulnerabilities/sqli/", parameter="id", vuln_type="sqli", status="tried")
 
-        pack = build_context_pack(loop, skills_dir=Path("/nonexistent"))
+        pack = build_playbook_hints(loop, skills_dir=Path("/nonexistent"))
 
         self.assertIn("Untested attack surface", pack)
         self.assertIn("/vulnerabilities/csrf", pack)
@@ -51,7 +51,7 @@ class ContextPackGapTest(unittest.TestCase):
 
     def test_guidance_encourages_visiting_unvisited_endpoints(self):
         loop = _agent_loop()
-        pack = build_context_pack(loop, skills_dir=Path("/nonexistent"))
+        pack = build_playbook_hints(loop, skills_dir=Path("/nonexistent"))
         self.assertIn("visit any discovered-but-unvisited endpoints", pack)
 
 
