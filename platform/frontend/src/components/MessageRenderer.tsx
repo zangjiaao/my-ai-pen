@@ -159,27 +159,71 @@ function isSuccessfulStatus(value: unknown): boolean {
   return normalizeExecutionStatus(status) === "done";
 }
 
+function toolItemFromStructuredRecord(item: Record<string, unknown>, content: Record<string, unknown>): ToolItem {
+  const toolName = readContentString(item.tool_name) || readContentString(content.tool_name) || "tool";
+  const stdout = readContentString(item.stdout);
+  const output = parseToolOutput(stdout);
+  const parsed = output.result;
+  const status = readContentString(item.status) || readContentString(parsed?.status) || readContentString(content.status) || "done";
+  const command = readContentString(item.command) || readContentString(parsed?.command);
+  const evidenceId = readContentString(item.evidence_id) || output.evidenceId || readContentString(parsed?.evidence_id) || readContentString(content.evidence_id);
+  return {
+    toolName,
+    status,
+    summary: summarizeToolItem(toolName, status, parsed, stdout, command),
+    evidenceId,
+    runId: readContentString(item.tool_run_id) || readContentString(content.tool_run_id),
+    command,
+    result: parsed || undefined,
+  };
+}
+
+function mergeToolItems(items: ToolItem[]): ToolItem[] {
+  const merged: ToolItem[] = [];
+  const byRunId = new Map<string, number>();
+  for (const item of items) {
+    const key = item.runId || "";
+    if (!key || !byRunId.has(key)) {
+      if (key) byRunId.set(key, merged.length);
+      merged.push(item);
+      continue;
+    }
+    const index = byRunId.get(key)!;
+    const previous = merged[index];
+    merged[index] = {
+      ...previous,
+      ...item,
+      evidenceId: item.evidenceId || previous.evidenceId,
+      command: item.command || previous.command,
+      result: item.result || previous.result,
+      summary: item.summary || previous.summary,
+      status: item.status || previous.status,
+    };
+  }
+  return merged;
+}
+
+function parseToolOutput(stdout: string): { result: Record<string, unknown> | null; evidenceId: string } {
+  const evidenceId = stdout.match(/(?:^|\n)\s*EVIDENCE_ID:\s*([^\s]+)/i)?.[1] || "";
+  const lines = stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (/^EVIDENCE_ID:/i.test(line) || line.endsWith("...")) continue;
+    const parsed = parseLooseObject(line);
+    if (parsed) return { result: parsed, evidenceId };
+  }
+  return { result: parseLooseObject(stdout), evidenceId };
+}
 function toolItemsFromContent(content: Record<string, unknown>): ToolItem[] {
   const structured = Array.isArray(content.tool_items)
     ? content.tool_items.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)))
     : [];
   if (structured.length) {
-    return structured.map(item => {
-      const toolName = readContentString(item.tool_name) || readContentString(content.tool_name) || "tool";
-      const status = readContentString(item.status) || readContentString(content.status) || "done";
-      const stdout = readContentString(item.stdout);
-      const parsed = parseLooseObject(stdout);
-      const command = readContentString(item.command) || readContentString(parsed?.command);
-      return {
-        toolName,
-        status,
-        summary: summarizeToolItem(toolName, status, parsed, stdout, command),
-        evidenceId: readContentString(item.evidence_id),
-        runId: readContentString(item.tool_run_id),
-        command,
-        result: parsed || undefined,
-      };
-    });
+    return mergeToolItems(structured.map(item => toolItemFromStructuredRecord(item, content)));
+  }
+
+  if (readContentString(content.tool_run_id) || readContentString(content.tool_name)) {
+    return [toolItemFromStructuredRecord(content, content)];
   }
 
   const stdout = String(content.stdout || "");
@@ -237,9 +281,10 @@ function summarizeToolItem(toolName: string, status: string, result: Record<stri
   const lower = toolName.toLowerCase();
   const value = result || {};
   const displayStatus = compactStatus(status || readContentString(value.status) || readContentString(value.status_code));
-  const method = readContentString(value.method).toUpperCase();
-  const url = readContentString(value.url) || readContentString(value.target) || readContentString(value.location);
-  const commandText = command || readContentString(value.command);
+  const inferred = inferToolText(rawText);
+  const method = readContentString(value.method).toUpperCase() || inferred.method;
+  const url = readContentString(value.url) || readContentString(value.target) || readContentString(value.location) || inferred.url;
+  const commandText = command || readContentString(value.command) || inferred.command;
 
   if (/browser|explore|crawl/.test(lower)) return joinSummaryParts([url || readContentString(value.action) || toolName, displayStatus]);
   if (/http|request|replay|fetch|curl/.test(lower)) return joinSummaryParts([method || "HTTP", url, compactStatus(value.status_code || status)]);
@@ -250,6 +295,16 @@ function summarizeToolItem(toolName: string, status: string, result: Record<stri
   return joinSummaryParts([title || readContentString(value.action) || toolName, url || evidence, displayStatus]);
 }
 
+function inferToolText(text: string): { method: string; url: string; command: string } {
+  const firstLine = text.split(/\r?\n/).map(line => line.trim()).find(line => line && !/^EVIDENCE_ID:/i.test(line) && !line.startsWith("{")) || "";
+  const request = firstLine.match(/\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(https?:\/\/[^\s'"\])}]+)/i);
+  const browser = firstLine.match(/\bbrowser\s+\w+\s+(https?:\/\/[^\s'"\])}]+)/i);
+  return {
+    method: request?.[1]?.toUpperCase() || "",
+    url: (request?.[2] || browser?.[1] || "").replace(/\.\.\.$/, ""),
+    command: firstLine,
+  };
+}
 function compactStatus(value: unknown): string {
   const status = String(value || "").trim();
   if (!status) return "";

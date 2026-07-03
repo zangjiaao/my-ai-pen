@@ -425,24 +425,68 @@ def _message_dedupe_key(*, role: str, original_type: str, stored_type: str, cont
     return None
 
 
+def _append_tool_stdout(current: object, incoming: object) -> str:
+    current_stdout = str(current or "")
+    incoming_stdout = str(incoming or "")
+    if incoming_stdout and incoming_stdout not in current_stdout:
+        separator = "" if current_stdout.endswith("\n") or not current_stdout else "\n"
+        return f"{current_stdout}{separator}{incoming_stdout}"
+    return current_stdout or incoming_stdout
+
+
+def _tool_item_from_content(content: dict) -> dict:
+    return {
+        "tool_name": content.get("tool_name", ""),
+        "tool_run_id": content.get("tool_run_id"),
+        "command": content.get("command", ""),
+        "status": content.get("status", "running"),
+        "stdout": content.get("stdout", ""),
+        "evidence_id": content.get("evidence_id"),
+    }
+
+
+def _merge_tool_items(existing: dict, incoming: dict) -> list[dict]:
+    current = existing.get("tool_items") if isinstance(existing.get("tool_items"), list) else [_tool_item_from_content(existing)]
+    incoming_item = _tool_item_from_content(incoming)
+    incoming_run_id = str(incoming_item.get("tool_run_id") or "")
+    merged: list[dict] = []
+    updated = False
+
+    for item in current:
+        if not isinstance(item, dict):
+            continue
+        item_run_id = str(item.get("tool_run_id") or "")
+        if incoming_run_id and item_run_id == incoming_run_id:
+            merged.append({
+                **item,
+                **incoming_item,
+                "command": incoming_item.get("command") or item.get("command") or "",
+                "stdout": _append_tool_stdout(item.get("stdout"), incoming_item.get("stdout")),
+                "status": incoming_item.get("status") or item.get("status") or "running",
+                "evidence_id": incoming_item.get("evidence_id") or item.get("evidence_id"),
+            })
+            updated = True
+        else:
+            merged.append(item)
+
+    if not updated:
+        merged.append(incoming_item)
+    return merged
+
+
 def _merge_saved_message_content(existing: dict, incoming: dict, msg_type: str) -> dict:
     if msg_type != "tool_call":
         return {**existing, **incoming}
-    current_stdout = str(existing.get("stdout") or "")
-    incoming_stdout = str(incoming.get("stdout") or "")
-    if incoming_stdout and incoming_stdout not in current_stdout:
-        separator = "" if current_stdout.endswith("\n") or not current_stdout else "\n"
-        stdout = f"{current_stdout}{separator}{incoming_stdout}"
-    else:
-        stdout = current_stdout or incoming_stdout
+    stdout = _append_tool_stdout(existing.get("stdout"), incoming.get("stdout"))
     return {
         **existing,
         **incoming,
         "command": incoming.get("command") or existing.get("command") or "",
+        "evidence_id": incoming.get("evidence_id") or existing.get("evidence_id"),
         "stdout": stdout,
         "status": incoming.get("status") or existing.get("status") or "running",
+        "tool_items": _merge_tool_items(existing, incoming),
     }
-
 
 async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
     try:
@@ -485,7 +529,9 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                 "command": msg.get("command", ""),
                 "status": msg.get("status", "running"),
                 "stdout": msg.get("line", ""),
+                "evidence_id": msg.get("evidence_id"),
             }
+            content["tool_items"] = [_tool_item_from_content(content)]
         elif msg_type in ("status_update", "phase_changed"):
             msg_type = "status"
             content = {

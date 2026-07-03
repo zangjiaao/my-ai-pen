@@ -45,6 +45,33 @@ class PlatformPhase2Tests(unittest.TestCase):
         merged_again = _merge_saved_message_content(merged, incoming, "tool_call")
         self.assertEqual(merged_again["stdout"], "line one\nline two")
 
+    def test_tool_output_merge_keeps_one_structured_item_per_run(self):
+        existing = {
+            "tool_name": "http_request",
+            "tool_run_id": "run-1",
+            "stdout": "http_request GET http://target.local/robots.txt...",
+            "status": "running",
+            "tool_items": [{
+                "tool_name": "http_request",
+                "tool_run_id": "run-1",
+                "stdout": "http_request GET http://target.local/robots.txt...",
+                "status": "running",
+            }],
+        }
+        incoming = {
+            "tool_name": "http_request",
+            "tool_run_id": "run-1",
+            "stdout": "EVIDENCE_ID: ev-1\n{'status': 'done', 'url': 'http://target.local/robots.txt', 'method': 'GET'}",
+            "status": "done",
+            "evidence_id": "ev-1",
+        }
+        merged = _merge_saved_message_content(existing, incoming, "tool_call")
+
+        self.assertEqual(merged["evidence_id"], "ev-1")
+        self.assertEqual(len(merged["tool_items"]), 1)
+        self.assertEqual(merged["tool_items"][0]["evidence_id"], "ev-1")
+        self.assertIn("http_request GET", merged["tool_items"][0]["stdout"])
+        self.assertIn("EVIDENCE_ID: ev-1", merged["tool_items"][0]["stdout"])
 
     def test_candidate_vuln_messages_are_not_persisted_as_vulnerabilities(self):
         result = asyncio.run(_persist_vulnerability({

@@ -102,7 +102,7 @@ export default function ConversationPage() {
   });
 
   const messages = useMemo(() => messagesFromQueryData(activeId, messageQuery.data as MessagesInfiniteData | undefined), [activeId, messageQuery.data]);
-  const displayMessages = useMemo(() => groupConsecutiveToolMessages(messages), [messages]);
+  const displayMessages = useMemo(() => groupConsecutiveToolMessages(messages.filter(isRenderableMessage)), [messages]);
   const activeConversation = useMemo(() => conversations.find(c => c.id === activeId), [activeId, conversations]);
   const platformAgentNodeId = useMemo(() => agentNodes.find(node => node.type === "platform")?.id || null, [agentNodes]);
   const fallbackPentestNodeId = useMemo(() => {
@@ -882,6 +882,12 @@ function appendStdout(current: string, incoming: string): string {
   return `${current}${current.endsWith("\n") ? "" : "\n"}${incoming}`;
 }
 
+function isRenderableMessage(message: Message): boolean {
+  if (message.role === "user" && message.msg_type === "decision") return false;
+  if (message.msg_type === "tool_call") return true;
+  if (["text", "status", "confirm_card", "vuln_card", "vuln_found", "asset_card", "asset_discovered", "agent_pending", "thinking", "reasoning", "agent_thinking"].includes(message.msg_type)) return true;
+  return false;
+}
 function groupConsecutiveToolMessages(messages: Message[]): Message[] {
   const grouped: Message[] = [];
   for (const message of messages) {
