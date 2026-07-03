@@ -3,6 +3,7 @@ import { Compass, Globe2, Search, ShieldAlert, Terminal, Wrench, type LucideIcon
 import type { Message } from "../lib/types";
 import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../lib/securityTypes";
 import { normalizeExecutionStatus } from "../lib/status";
+import { phaseLabel } from "../lib/phase";
 import ConfirmCard from "./cards/ConfirmCard";
 import ThinkingCard from "./cards/ThinkingCard";
 
@@ -705,14 +706,27 @@ function AgentPendingCard({ content }: { content: Record<string, unknown> }) {
     </div>
   );
 }
+function statusNoticeText(content: Record<string, unknown>): string {
+  const phase = typeof content.phase === "string" ? content.phase : parsePhaseFromText(String(content.text || ""));
+  return phase ? phaseLabel(phase) : String(content.text || "");
+}
+
+function parsePhaseFromText(text: string): string {
+  return text.match(/Phase:\s*([^\s(]+)/)?.[1] || "";
+}
+
+function StatusNotice({ content }: { content: Record<string, unknown> }) {
+  return <div className="my-2 text-center text-xs text-ink-muted">{statusNoticeText(content)}</div>;
+}
+
 function SystemNotice({ content }: { content: Record<string, unknown> }) {
-  return <div className="my-2 text-center text-xs text-ink-muted">{content.text as string}</div>;
+  return <StatusNotice content={content} />;
 }
 
 export default function MessageRenderer({ message, agentNameById = {}, previousMessage, fallbackPentestNodeId, platformAgentNodeId, onDecision, onOpenVulnerability, onOpenAsset, onOpenEvidence, highlightedApprovalId, approvalDecisionByRequestId = {} }: Props) {
   const { role, msg_type, content } = message;
 
-  if (role === "system") return <SystemNotice content={content} />;
+  if (role === "system" || msg_type === "status") return <SystemNotice content={content} />;
 
   if (role === "user" && msg_type === "decision") return null;
 
@@ -752,7 +766,7 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
       body = <ThinkingCard content={content} />;
       break;
     case "status":
-      body = <div className="my-2 text-center text-xs text-ink-muted">{content.text as string}</div>;
+      body = <StatusNotice content={content} />;
       break;
     case "text":
     default:

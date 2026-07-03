@@ -1120,6 +1120,64 @@ def _task_assign_from_user_message(conv_id: str, msg: dict, task_id: str) -> dic
         "checkpoint": msg.get("checkpoint") or {},
     }
 
+def _agent_assignment_notice(decision, node_id: str, node_name: str | None = None) -> str:
+    agent_label = _agent_label_for_notice(getattr(decision, "agent", "") or _capability_for_notice(getattr(decision, "capability", "")))
+    node_label = str(node_name or "").strip() or (node_id[:8] if node_id else "")
+    node_part = f"\uff08{node_label}\uff09" if node_label else ""
+    capability = str(getattr(decision, "capability", "") or "").strip()
+    capability_part = f"\uff0c\u80fd\u529b: {capability}" if capability else ""
+    return f"\u5e73\u53f0 Agent \u5df2\u5c06\u4efb\u52a1\u4ea4\u7ed9 {agent_label}{node_part} \u5904\u7406{capability_part}\u3002"
+
+
+def _capability_for_notice(capability: str) -> str:
+    value = str(capability or "").lower()
+    if value.startswith("pentest"):
+        return "pentest"
+    if value.startswith("report"):
+        return "report"
+    if value.startswith("remediation"):
+        return "remediation"
+    if value.startswith("baseline"):
+        return "baseline"
+    return "agent"
+
+
+def _agent_label_for_notice(agent: str) -> str:
+    labels = {
+        "platform": "\u5e73\u53f0 Agent",
+        "pentest": "\u6e17\u900f Agent",
+        "baseline": "\u57fa\u7ebf Agent",
+        "remediation": "\u6574\u6539 Agent",
+        "report": "\u62a5\u544a Agent",
+    }
+    key = str(agent or "").strip().lower()
+    return labels.get(key, f"{key or 'Agent'} Agent")
+
+
+async def _node_name(node_id: str | None) -> str:
+    if not node_id:
+        return ""
+    try:
+        from app.db.base import async_session
+        from app.models.node import Node
+
+        async with async_session() as db:
+            result = await db.execute(select(Node).where(Node.id == uuid.UUID(node_id)))
+            node = result.scalar_one_or_none()
+            return str(getattr(node, "name", "") or "") if node else ""
+    except Exception:
+        return ""
+
+
+async def _announce_agent_assignment(conv_id: str, decision, node_id: str) -> None:
+    await _persist_and_broadcast(conv_id, {
+        "type": "text",
+        "conversation_id": conv_id,
+        "content": {"text": _agent_assignment_notice(decision, node_id, await _node_name(node_id))},
+        "agent_source": "platform",
+        "agent_node_id": str(PLATFORM_AGENT_NODE_ID),
+    }, "agent")
+
 async def _send_to_bound_node(conv_id: str, raw: str) -> bool:
     node_id = conversation_node.get(conv_id)
     if not node_id:
@@ -1378,6 +1436,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             await _incr_sessions(node_id, 1)
                             task_msg["agent_node_id"] = node_id
                             task_msg["agent_capability"] = decision.capability
+                            await _announce_agent_assignment(conv_id, decision, node_id)
                             await node_connections[node_id].send_text(json.dumps(task_msg, ensure_ascii=False))
                             continue
 

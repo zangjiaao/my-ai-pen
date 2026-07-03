@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../lib/securityTypes";
 import ApprovalCountdown from "./ApprovalCountdown";
+import { phaseLabel } from "../lib/phase";
 
 type Tab = "discoveries" | "progress" | "pending" | "evidence";
 type PlanStatus = "pending" | "running" | "done" | "skipped" | "blocked" | "failed" | string;
@@ -27,14 +28,6 @@ interface Props {
   onLocateApproval?: (requestId: string) => void;
 }
 
-const PHASE_LABELS: Record<string, string> = {
-  intake: "\u76ee\u6807\u4e0e\u6388\u6743\u8303\u56f4\u68c0\u67e5",
-  recon: "\u653b\u51fb\u9762\u53d1\u73b0",
-  analysis: "\u8986\u76d6\u5206\u6790\u4e0e\u6d4b\u8bd5\u8ba1\u5212",
-  verify: "\u9a8c\u8bc1\u4e0e\u8bc1\u636e\u786e\u8ba4",
-  report: "\u62a5\u544a\u6574\u7406",
-  complete: "\u4efb\u52a1\u5b8c\u6210",
-};
 
 export default function RightPanel({ phase, activeTool, intakeResult, intakeStatus, progress, planTree = [], findings = [], assets = [], pendingApprovals = [], evidence = [], onDecision, onOpenVulnerability, onOpenAsset, onOpenEvidence, onLocateApproval }: Props) {
   const [tab, setTab] = useState<Tab>("progress");
@@ -47,7 +40,7 @@ export default function RightPanel({ phase, activeTool, intakeResult, intakeStat
   ];
 
   const percent = Math.max(0, Math.min(100, Number(progress?.percent || 0)));
-  const phaseText = phase ? (PHASE_LABELS[phase] || phase) : "\u7b49\u5f85\u5f00\u59cb";
+  const phaseText = phaseLabel(phase);
   const intake = normalizeIntake(intakeResult, intakeStatus);
 
   return (

@@ -10,6 +10,7 @@ import { useConversationStore } from "../stores/conversationStore";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { ApiError, authFetch } from "../lib/api";
 import { normalizeExecutionStatus } from "../lib/status";
+import { PHASES, PHASE_LABELS, phaseLabel } from "../lib/phase";
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { Upload } from "lucide-react";
 import type { AgentIdentity, Conversation, Message } from "../lib/types";
@@ -18,15 +19,6 @@ import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../
 const ACTIVE_CONVERSATION_KEY = "active_conversation_id";
 const MESSAGE_PAGE_SIZE = 200;
 
-const PHASES = ["intake", "recon", "analysis", "verify", "report", "complete"] as const;
-const PLAN_PHASE_TITLES: Record<string, string> = {
-  intake: "\u76ee\u6807\u4e0e\u6388\u6743\u8303\u56f4\u68c0\u67e5",
-  recon: "\u653b\u51fb\u9762\u53d1\u73b0",
-  analysis: "\u8986\u76d6\u5206\u6790\u4e0e\u6d4b\u8bd5\u8ba1\u5212",
-  verify: "\u9a8c\u8bc1\u4e0e\u8bc1\u636e\u786e\u8ba4",
-  report: "\u62a5\u544a\u6574\u7406",
-  complete: "\u4efb\u52a1\u5b8c\u6210",
-};
 const TEMPLATES = [
   { label: "Web pentest", text: "Test {URL} for web application vulnerabilities" },
   { label: "Host scan", text: "Scan {IP range} for exposed services and security issues" },
@@ -102,7 +94,7 @@ export default function ConversationPage() {
   });
 
   const messages = useMemo(() => messagesFromQueryData(activeId, messageQuery.data as MessagesInfiniteData | undefined), [activeId, messageQuery.data]);
-  const displayMessages = useMemo(() => groupConsecutiveToolMessages(messages.filter(isRenderableMessage)), [messages]);
+  const displayMessages = useMemo(() => groupConsecutiveToolMessages(phaseEntryMessages(messages.filter(isRenderableMessage))), [messages]);
   const activeConversation = useMemo(() => conversations.find(c => c.id === activeId), [activeId, conversations]);
   const platformAgentNodeId = useMemo(() => agentNodes.find(node => node.type === "platform")?.id || null, [agentNodes]);
   const fallbackPentestNodeId = useMemo(() => {
@@ -255,10 +247,13 @@ export default function ConversationPage() {
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
       const phase = typeof m.phase === "string" ? m.phase : "intake";
-      clearPendingAgentMessage(messageConversationId(msg, activeId));
+      const convId = messageConversationId(msg, activeId);
+      clearPendingAgentMessage(convId);
+      markMessageAutoScroll();
       setAgentState({ phase, activeTool: m.active_tool, intakeResult: m.intake_result, intakeStatus: m.status });
       setProgress(progressForPhase(phase, "running"));
       setRunning(true);
+      addMessageToConversation(convId, makeMessage(convId, "system", "status", { text: phaseLabel(phase), phase, active_tool: m.active_tool, status: m.status, intake_result: m.intake_result, message_id: m.message_id }));
     },
     thinking: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
@@ -295,7 +290,7 @@ export default function ConversationPage() {
       if (statusMessage) {
         addMessageToConversation(convId, makeMessage(convId, "agent", "text", { ...agentAttribution(m), text: statusMessage, message_id: m.message_id }));
       } else {
-        addMessageToConversation(convId, makeMessage(convId, "system", "status", { text: `Phase: ${phase || ""}`, phase, iteration: m.iteration, active_tool: m.active_tool, status: m.status, intake_result: m.intake_result, message_id: m.message_id }));
+        addMessageToConversation(convId, makeMessage(convId, "system", "status", { text: phaseLabel(phase), phase, iteration: m.iteration, active_tool: m.active_tool, status: m.status, intake_result: m.intake_result, message_id: m.message_id }));
       }
     },
     task_complete: (msg) => {
@@ -515,7 +510,8 @@ export default function ConversationPage() {
     shouldStickToBottomRef.current = true;
     const agentPayload = selectedMentionAgent ? { agent_target: selectedMentionAgent.type === "platform" ? "platform" : "pentest", agent_node_id: selectedMentionAgent.id } : {};
     const shouldContinueExisting = Boolean(!startFresh && activeId && !restartRequested && !completedConversation);
-    const pendingAgentSource = pendingAgentSourceForMessage(selectedMentionAgent, targetValue, activeConversation?.status, planTree);
+    const willSteerDirectly = Boolean(!platformMention && shouldContinueExisting && activeConversation?.status === "running");
+    const pendingAgentSource = pendingAgentSourceForMessage(selectedMentionAgent, willSteerDirectly);
     const pendingAgentNodeId = selectedMentionAgent?.id || (pendingAgentSource === "pentest" ? activeConversation?.node_id || undefined : undefined);
     const pendingContent: Record<string, unknown> = {
       text: "Working...",
@@ -598,14 +594,11 @@ function isConversationComplete(activeId: string | null, conversations: Conversa
 
 function pendingAgentSourceForMessage(
   selectedAgent: AgentNode | null,
-  targetValue: string | null,
-  conversationStatus: Conversation["status"] | undefined,
-  planTree: PlanNode[],
+  willSteerDirectly: boolean,
 ): AgentIdentity {
   if (selectedAgent?.type === "platform") return "platform";
   if (selectedAgent?.type === "pentest") return "pentest";
-  const activePlan = planTree.some(node => node.status === "running" || node.status === "pending");
-  if (targetValue || conversationStatus === "running" || activePlan) return "pentest";
+  if (willSteerDirectly) return "pentest";
   return "platform";
 }
   function extractTarget(t: string): string | null {
@@ -882,6 +875,51 @@ function appendStdout(current: string, incoming: string): string {
   return `${current}${current.endsWith("\n") ? "" : "\n"}${incoming}`;
 }
 
+function phaseEntryMessages(messages: Message[]): Message[] {
+  const result: Message[] = [];
+  let currentPhase = "";
+  for (const message of messages) {
+    const phase = phaseForStatusMessage(message);
+    if (!phase) {
+      result.push(message);
+      continue;
+    }
+
+    if (!currentPhase) {
+      for (const missingPhase of phasesBefore(phase)) {
+        result.push(makeSyntheticPhaseMessage(message, missingPhase));
+      }
+      currentPhase = result.length && phaseForStatusMessage(result[result.length - 1]) ? phaseForStatusMessage(result[result.length - 1]) : "";
+    }
+
+    if (phase === currentPhase) continue;
+    currentPhase = phase;
+    result.push(message);
+  }
+  return result;
+}
+
+function phasesBefore(phase: string): string[] {
+  const index = PHASES.indexOf(phase as typeof PHASES[number]);
+  return index > 0 ? PHASES.slice(0, index) : [];
+}
+
+function makeSyntheticPhaseMessage(anchor: Message, phase: string): Message {
+  return {
+    id: `${anchor.id}-phase-${phase}`,
+    conversation_id: anchor.conversation_id,
+    role: "system",
+    msg_type: "status",
+    content: { phase, text: phaseLabel(phase), synthetic: true },
+    parent_msg_id: null,
+    created_at: anchor.created_at,
+  };
+}
+
+function phaseForStatusMessage(message: Message): string {
+  if (message.msg_type !== "status") return "";
+  return readString(message.content.phase) || parsePhase(readString(message.content.text)) || "";
+}
 function isRenderableMessage(message: Message): boolean {
   if (message.role === "user" && message.msg_type === "decision") return false;
   if (message.msg_type === "tool_call") return true;
@@ -1068,7 +1106,7 @@ function planTreeForPhase(phase: string | undefined, status: Conversation["statu
   const currentIndex = phase && PHASES.includes(phase as typeof PHASES[number]) ? PHASES.indexOf(phase as typeof PHASES[number]) : status === "running" ? 0 : -1;
   return PHASES.map((key, index) => ({
     node_id: `plan-phase-${key}`,
-    title: PLAN_PHASE_TITLES[key],
+    title: PHASE_LABELS[key],
     kind: "phase",
     level: "phase",
     status: status === "completed" || index < currentIndex ? "done" : index === currentIndex ? "running" : "pending",

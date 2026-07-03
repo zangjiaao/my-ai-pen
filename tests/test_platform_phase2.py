@@ -16,7 +16,7 @@ from app.services.agent_orchestrator import (
     route_with_platform_agent,
     set_orchestrator_chat_override,
 )
-from app.ws.router import _message_with_decision_target, _merge_saved_message_content, _message_dedupe_key, _persist_vulnerability
+from app.ws.router import _agent_assignment_notice, _message_with_decision_target, _merge_saved_message_content, _message_dedupe_key, _persist_vulnerability
 
 
 class PlatformPhase2Tests(unittest.TestCase):
@@ -73,6 +73,14 @@ class PlatformPhase2Tests(unittest.TestCase):
         self.assertIn("http_request GET", merged["tool_items"][0]["stdout"])
         self.assertIn("EVIDENCE_ID: ev-1", merged["tool_items"][0]["stdout"])
 
+    def test_agent_assignment_notice_names_selected_agent(self):
+        decision = type("Decision", (), {"agent": "pentest", "capability": "pentest.web"})()
+
+        notice = _agent_assignment_notice(decision, "12345678-1234-1234-1234-123456789abc", "web-node-1")
+
+        self.assertIn("\u6e17\u900f Agent", notice)
+        self.assertIn("web-node-1", notice)
+        self.assertIn("pentest.web", notice)
     def test_candidate_vuln_messages_are_not_persisted_as_vulnerabilities(self):
         result = asyncio.run(_persist_vulnerability({
             "conversation_id": "00000000-0000-0000-0000-000000000001",
