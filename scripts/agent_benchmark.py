@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 import re
+import sys
 import tarfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -41,7 +42,7 @@ class SessionFacts:
 
 
 def load_answers(path: Path) -> dict[str, Any]:
-    text = path.read_text(encoding="utf-8")
+    text = path.read_text(encoding="utf-8-sig")
     return {
         "path": str(path),
         "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
@@ -76,7 +77,7 @@ def parse_markdown_cases(text: str) -> list[dict[str, str]]:
 
 
 def load_checkpoint_file(path: Path) -> SessionFacts:
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
     checkpoint = data.get("checkpoint") if isinstance(data.get("checkpoint"), dict) else data
     if not isinstance(checkpoint, dict):
         raise ValueError("checkpoint must be a JSON object")
@@ -106,7 +107,7 @@ def load_report_file(path: Path) -> SessionFacts:
         candidate_findings=[item for item in checkpoint.get("candidate_findings") or [] if isinstance(item, dict)],
         evidence=[item for item in evidence if isinstance(item, dict)],
         attack_surface=[item for item in attack_surface if isinstance(item, dict)],
-        coverage=[item for item in coverage if isinstance(item, dict)],
+        coverage=[item for item in (coverage or checkpoint.get("coverage") or []) if isinstance(item, dict)],
         history=messages,
         checkpoint=checkpoint,
     )
@@ -131,16 +132,18 @@ def facts_from_checkpoint(checkpoint: dict[str, Any], *, source_type: str, sourc
     )
 
 
-def build_report(facts: SessionFacts, answers: dict[str, Any]) -> dict[str, Any]:
+def build_report(facts: SessionFacts, answers: dict[str, Any], review: dict[str, Any] | None = None) -> dict[str, Any]:
     confirmed = [_finding_summary(item) for item in facts.confirmed_findings]
     candidates = [_finding_summary(item) for item in facts.candidate_findings]
     coverage = [_coverage_summary(item) for item in facts.coverage]
     attack_surface = [_surface_summary(item) for item in facts.attack_surface]
     evidence = [_evidence_summary(item) for item in facts.evidence]
+    review_map = _review_map(review)
     expected_cases = [
         {
             **case,
-            "review_status": "manual_review",
+            "review_status": review_map.get(case["id"], {}).get("status", "manual_review"),
+            "review_notes": review_map.get(case["id"], {}).get("notes", ""),
             "related_findings": _related_indexes(case, confirmed + candidates),
             "related_coverage": _related_indexes(case, coverage),
             "related_attack_surface": _related_indexes(case, attack_surface),
@@ -149,6 +152,7 @@ def build_report(facts: SessionFacts, answers: dict[str, Any]) -> dict[str, Any]
         for case in answers["cases"]
     ]
     denominator = [case for case in expected_cases if "P0" in case["section"] or "P1" in case["section"]]
+    score = _score_review(expected_cases, denominator) if review_map else None
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -175,6 +179,7 @@ def build_report(facts: SessionFacts, answers: dict[str, Any]) -> dict[str, Any]
             "coverage": len(coverage),
             "history": len(facts.history),
         },
+        "score": score,
         "expected_cases": expected_cases,
         "confirmed_findings": confirmed,
         "candidate_findings": candidates,
@@ -189,13 +194,93 @@ def build_report(facts: SessionFacts, answers: dict[str, Any]) -> dict[str, Any]
     }
 
 
-def write_reports(report: dict[str, Any], output_dir: Path) -> tuple[Path, Path]:
+
+def load_review(path: Path | None) -> dict[str, Any] | None:
+    if not path:
+        return None
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
+    if not isinstance(data, dict):
+        raise ValueError("review file must be a JSON object")
+    return data
+
+
+def _review_map(review: dict[str, Any] | None) -> dict[str, dict[str, str]]:
+    if not review:
+        return {}
+    out: dict[str, dict[str, str]] = {}
+    for case_id in review.get("hits") or []:
+        out[str(case_id)] = {"status": "hit", "notes": ""}
+    for item in review.get("cases") or []:
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        status = str(item.get("status") or "manual_review").lower()
+        if status not in {"hit", "miss", "partial", "false_positive", "manual_review"}:
+            status = "manual_review"
+        out[str(item["id"])] = {"status": status, "notes": str(item.get("notes") or "")}
+    return out
+
+
+def _score_review(expected_cases: list[dict[str, Any]], denominator: list[dict[str, Any]]) -> dict[str, Any]:
+    denominator_ids = {case["id"] for case in denominator}
+    hit_ids = {case["id"] for case in expected_cases if case["id"] in denominator_ids and case.get("review_status") == "hit"}
+    partial_ids = {case["id"] for case in expected_cases if case["id"] in denominator_ids and case.get("review_status") == "partial"}
+    miss_ids = {case["id"] for case in expected_cases if case["id"] in denominator_ids and case.get("review_status") == "miss"}
+    reviewed_ids = hit_ids | partial_ids | miss_ids | {case["id"] for case in expected_cases if case["id"] in denominator_ids and case.get("review_status") == "false_positive"}
+    score = len(hit_ids) + len(partial_ids) * 0.5
+    total = len(denominator_ids)
+    percent = round((score / total) * 100, 2) if total else 0.0
+    return {
+        "mode": "manual_review",
+        "target_percent": 80.0,
+        "passed": percent >= 80.0,
+        "percent": percent,
+        "score": score,
+        "denominator": total,
+        "hit": len(hit_ids),
+        "partial": len(partial_ids),
+        "miss": len(miss_ids),
+        "reviewed": len(reviewed_ids),
+        "unreviewed": max(0, total - len(reviewed_ids)),
+    }
+def write_reports(report: dict[str, Any], output_dir: Path, *, write_review_template: bool = False) -> tuple[Path, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / "benchmark-report.json"
     md_path = output_dir / "benchmark-report.md"
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     md_path.write_text(render_markdown(report), encoding="utf-8")
+    if write_review_template:
+        review_path = output_dir / "benchmark-review-template.json"
+        review_path.write_text(json.dumps(build_review_template(report), ensure_ascii=False, indent=2), encoding="utf-8")
     return json_path, md_path
+
+
+def build_review_template(report: dict[str, Any]) -> dict[str, Any]:
+    denominator_sections = ("P0", "P1")
+    cases = []
+    for case in report.get("expected_cases") or []:
+        section = str(case.get("section") or "")
+        if not any(marker in section for marker in denominator_sections):
+            continue
+        cases.append({
+            "id": case.get("id"),
+            "status": "manual_review",
+            "notes": "",
+            "section": section,
+            "type": case.get("type"),
+            "target_ability": case.get("target_ability"),
+            "hit_standard": case.get("hit_standard"),
+            "related_findings": case.get("related_findings") or [],
+            "related_coverage": case.get("related_coverage") or [],
+            "related_evidence": case.get("related_evidence") or [],
+        })
+    return {
+        "review_schema": "agent-benchmark-manual-review-v1",
+        "instructions": "Set each case status to hit, miss, partial, false_positive, or manual_review. Only P0/P1 cases are scored for TASK-042.",
+        "session_id": report.get("session", {}).get("session_id", ""),
+        "target": report.get("session", {}).get("target", ""),
+        "answer_key_sha256": report.get("answer_key", {}).get("sha256", ""),
+        "cases": cases,
+    }
 
 
 def render_markdown(report: dict[str, Any]) -> str:
@@ -226,15 +311,16 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         "Use this table against `docs/agent-autonomy-benchmark.md`. Related indexes are hints only, not automatic pass/fail.",
         "",
-        "| Case | Section | Type | Related findings | Related coverage | Related evidence |",
-        "|---|---|---|---|---|---|",
+        "| Case | Section | Type | Review | Related findings | Related coverage | Related evidence |",
+        "|---|---|---|---|---|---|---|",
     ])
     for case in report["expected_cases"]:
         lines.append(
-            "| {id} | {section} | {type} | {findings} | {coverage} | {evidence} |".format(
+            "| {id} | {section} | {type} | {review} | {findings} | {coverage} | {evidence} |".format(
                 id=case["id"],
                 section=case["section"],
                 type=case["type"],
+                review=case.get("review_status", "manual_review"),
                 findings=_join_indexes(case["related_findings"]),
                 coverage=_join_indexes(case["related_coverage"]),
                 evidence=_join_indexes(case["related_evidence"]),
@@ -430,24 +516,37 @@ def _join_indexes(values: list[int]) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="Build offline Agent benchmark reports for manual review")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--checkpoint", help="Path to checkpoint JSON or platform snapshot JSON")
     source.add_argument("--report", help="Path to standalone report.tar.gz")
     parser.add_argument("--answers", default=str(DEFAULT_ANSWERS), help="Markdown answer key. Defaults to docs/agent-autonomy-benchmark.md")
     parser.add_argument("--output-dir", default=".", help="Directory for benchmark-report.json and benchmark-report.md")
+    parser.add_argument("--review", help="Optional manual review JSON with hits/cases statuses to compute the 80% score")
+    parser.add_argument("--require-passing-score", action="store_true", help="Exit non-zero unless --review yields a passing score")
+    parser.add_argument("--write-review-template", action="store_true", help="Write benchmark-review-template.json for manual P0/P1 scoring")
     parser.add_argument("--print-json", action="store_true", help="Print report JSON to stdout")
     args = parser.parse_args(argv)
 
     answers = load_answers(Path(args.answers))
     facts = load_report_file(Path(args.report)) if args.report else load_checkpoint_file(Path(args.checkpoint))
-    report = build_report(facts, answers)
-    json_path, md_path = write_reports(report, Path(args.output_dir))
+    report = build_report(facts, answers, load_review(Path(args.review)) if args.review else None)
+    json_path, md_path = write_reports(report, Path(args.output_dir), write_review_template=args.write_review_template)
     if args.print_json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:
         print(f"Wrote {json_path}")
         print(f"Wrote {md_path}")
+    if args.require_passing_score:
+        score = report.get("score")
+        if not score:
+            print("TASK-042 score gate failed: --review is required", file=sys.stderr)
+            return 2
+        if not score.get("passed"):
+            print(f"TASK-042 score gate failed: {score.get('percent')}% < {score.get('target_percent')}%", file=sys.stderr)
+            return 2
     return 0
 
 

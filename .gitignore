@@ -30,6 +30,7 @@ research/
 
 # Temporary
 docs/plan_unpacked/
+.analysis/
 *.tmp
 *.log
 
@@ -46,3 +47,6 @@ platform/frontend/tsconfig.tsbuildinfo
 reverse/
 node/workspace/
 node/node/
+
+tmp/
+node/tmp/

@@ -146,6 +146,35 @@ class StandalonePhase3Tests(unittest.TestCase):
         self.assertEqual(snap["approvals"][0]["decision"], "authorize")
         self.assertEqual(snap["checkpoint"]["phase"], "verify")
 
+    def test_checkpoint_reconciles_coverage_without_coverage_marked_event(self):
+        # Auto-marked coverage never emits coverage_marked; the checkpoint snapshot
+        # is the source of truth and must reconcile the coverage table.
+        async def scenario():
+            with tempfile.TemporaryDirectory() as tmp:
+                db = NodeDB(Path(tmp) / "node.sqlite3")
+                await db.init()
+                await db.create_session(
+                    session_id="s1", task_id="t1",
+                    target={"type": "url", "value": "http://192.0.2.1/"},
+                    scope={"allow": ["http://192.0.2.1/"], "deny": []},
+                    instruction="test", output_dir=tmp, status="running",
+                )
+                await db.save_event("s1", {"type": "checkpoint_update", "checkpoint": {
+                    "phase": "verify", "iteration": 5,
+                    "state": {"phase": "verify", "iteration": 5},
+                    "coverage": [
+                        {"coverage_id": "cov-a", "endpoint": "GET http://192.0.2.1/", "parameter": "id", "vuln_type": "sqli", "status": "failed", "evidence_ids": ["ev-1"]},
+                        {"coverage_id": "cov-b", "endpoint": "GET http://192.0.2.1/x", "parameter": "q", "vuln_type": "xss", "status": "passed", "evidence_ids": []},
+                    ],
+                }})
+                snap = await db.snapshot("s1")
+                await db.close()
+                return snap
+
+        snap = asyncio.run(scenario())
+        self.assertEqual(len(snap["coverage"]), 2)
+        self.assertEqual({c["vuln_type"] for c in snap["coverage"]}, {"sqli", "xss"})
+
     def test_tui_logging_routes_to_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             root_logger = logging.getLogger()
@@ -221,6 +250,35 @@ class StandalonePhase3Tests(unittest.TestCase):
         self.assertGreaterEqual(forwarded[0]["message_count_at_forward"], 1)
         self.assertEqual(snap["approvals"][0]["decision"], "authorize")
 
+
+    def test_standalone_runner_can_disable_docker_sandbox(self):
+        async def scenario():
+            with tempfile.TemporaryDirectory() as tmp:
+                target = "http://192.0.2.1/"
+                options = StandaloneOptions(
+                    target=target,
+                    output=Path(tmp),
+                    session_id="standalone-no-sandbox",
+                    check_connectivity=False,
+                    no_sandbox=True,
+                )
+                loops = []
+                result = await run_standalone(
+                    options,
+                    config=NodeConfig(llm_api_key="test-key"),
+                    approval_handler=lambda event: "authorize",
+                    llm=FakeLLM(target),
+                    tool_overrides={"http_request": make_fake_http_tool(target)},
+                    agent_loop_callback=lambda loop: loops.append(loop),
+                )
+                return result, loops[0].sandbox
+
+        result, sandbox = asyncio.run(scenario())
+
+        self.assertEqual(result.status, "completed")
+        disabled = asyncio.run(sandbox.execute("id"))
+        self.assertEqual(disabled["exit_code"], 126)
+        self.assertIn("disabled", disabled["stderr"])
     def test_standalone_runner_completes_without_platform(self):
         async def scenario():
             with tempfile.TemporaryDirectory() as tmp:

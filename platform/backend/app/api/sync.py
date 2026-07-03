@@ -37,6 +37,7 @@ class ReportPackage:
     evidence: list[dict[str, Any]]
     attack_surface: list[dict[str, Any]]
     coverage: list[dict[str, Any]]
+    traffic: list[dict[str, Any]]
     checkpoint: dict[str, Any]
     evidence_files: list[str]
 
@@ -61,6 +62,7 @@ async def import_report(
             "checkpoint": package.checkpoint,
             "attack_surface": package.attack_surface,
             "coverage": package.coverage,
+            "traffic": package.traffic,
             "evidence_files": package.evidence_files,
         },
     )
@@ -68,7 +70,13 @@ async def import_report(
     await db.flush()
 
     messages_imported = _add_messages(db, conv.id, package.messages)
-    asset_map, assets_imported = await _add_assets(db, user_id, conv.id, package.assets)
+    asset_map, assets_imported = await _add_assets(
+        db,
+        user_id,
+        conv.id,
+        package.assets,
+        _asset_hints_from_vulnerabilities(package.vulnerabilities),
+    )
     evidence_imported = await _add_evidence(db, user_id, conv.id, package.evidence, package.evidence_files)
     vulns_imported = await _add_vulnerabilities(db, user_id, conv.id, package.vulnerabilities, asset_map)
 
@@ -79,6 +87,7 @@ async def import_report(
         "evidence_imported": evidence_imported,
         "attack_surface_imported": len(package.attack_surface),
         "coverage_imported": len(package.coverage),
+        "traffic_imported": len(package.traffic),
         "warnings": [],
     }
     conv.context = {**(conv.context or {}), "import_stats": stats}
@@ -113,6 +122,7 @@ def load_report_package(raw: bytes) -> ReportPackage:
                 evidence=_read_json(tar, members, "evidence.json"),
                 attack_surface=_read_json(tar, members, "attack_surface.json"),
                 coverage=_read_json(tar, members, "coverage.json"),
+                traffic=_read_json(tar, members, "traffic.json", default=[]),
                 checkpoint=_read_json(tar, members, "checkpoints/latest.json"),
                 evidence_files=sorted(name for name in members if name.startswith("evidence/")),
             )
@@ -173,13 +183,19 @@ def _add_messages(db: AsyncSession, conversation_id: uuid.UUID, messages: list[d
     return len(messages)
 
 
-async def _add_assets(db: AsyncSession, user_id: uuid.UUID, conversation_id: uuid.UUID, assets: list[dict[str, Any]]) -> tuple[dict[str, uuid.UUID], int]:
+async def _add_assets(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    conversation_id: uuid.UUID,
+    assets: list[dict[str, Any]],
+    inferred_addresses: list[str] | None = None,
+) -> tuple[dict[str, uuid.UUID], int]:
     asset_map: dict[str, uuid.UUID] = {}
     imported = 0
     for item in assets:
         address = str(item.get("address") or item.get("affected_asset") or item.get("target") or "unknown")
         asset_id = uuid.uuid4()
-        asset_map[address] = asset_id
+        _map_asset_aliases(asset_map, address, asset_id)
         if item.get("id"):
             asset_map[str(item.get("id"))] = asset_id
         db.add(Asset(
@@ -191,6 +207,22 @@ async def _add_assets(db: AsyncSession, user_id: uuid.UUID, conversation_id: uui
             type=str(item.get("asset_type") or item.get("type") or "host"),
             source="standalone_import",
             properties={**item, "source": "standalone_import"},
+        ))
+        imported += 1
+    for address in inferred_addresses or []:
+        if _find_asset_id(asset_map, address):
+            continue
+        asset_id = uuid.uuid4()
+        _map_asset_aliases(asset_map, address, asset_id)
+        db.add(Asset(
+            id=asset_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            name=address,
+            address=address,
+            type="web",
+            source="standalone_import",
+            properties={"address": address, "source": "standalone_import", "inferred_from": "vulnerability"},
         ))
         imported += 1
     return asset_map, imported
@@ -227,10 +259,10 @@ async def _add_evidence(db: AsyncSession, user_id: uuid.UUID, conversation_id: u
 async def _add_vulnerabilities(db: AsyncSession, user_id: uuid.UUID, conversation_id: uuid.UUID, vulnerabilities: list[dict[str, Any]], asset_map: dict[str, uuid.UUID]) -> int:
     imported = 0
     for item in vulnerabilities:
-        if str(item.get("status") or "confirmed") not in {"confirmed", "done", "verified"}:
+        if not _is_importable_vulnerability(item):
             continue
-        affected = str(item.get("affected_asset") or item.get("asset") or item.get("target") or "")
-        asset_id = asset_map.get(str(item.get("asset_id") or "")) or asset_map.get(affected)
+        affected = _vulnerability_asset_address(item)
+        asset_id = asset_map.get(str(item.get("asset_id") or "")) or _find_asset_id(asset_map, affected)
         evidence_ids = item.get("evidence_ids") if isinstance(item.get("evidence_ids"), list) else []
         db.add(Vulnerability(
             id=uuid.uuid4(),
@@ -250,6 +282,52 @@ async def _add_vulnerabilities(db: AsyncSession, user_id: uuid.UUID, conversatio
         ))
         imported += 1
     return imported
+
+
+def _asset_hints_from_vulnerabilities(vulnerabilities: list[dict[str, Any]]) -> list[str]:
+    addresses = []
+    seen = set()
+    for item in vulnerabilities:
+        if not _is_importable_vulnerability(item):
+            continue
+        address = _vulnerability_asset_address(item)
+        if not address or address in seen:
+            continue
+        seen.add(address)
+        addresses.append(address)
+    return addresses
+
+
+def _is_importable_vulnerability(item: dict[str, Any]) -> bool:
+    return str(item.get("status") or "confirmed") in {"confirmed", "done", "verified"}
+
+
+def _vulnerability_asset_address(item: dict[str, Any]) -> str:
+    return str(item.get("affected_asset") or item.get("asset") or item.get("target") or "").strip()
+
+
+def _map_asset_aliases(asset_map: dict[str, uuid.UUID], address: str, asset_id: uuid.UUID) -> None:
+    for alias in _asset_aliases(address):
+        asset_map[alias] = asset_id
+
+
+def _find_asset_id(asset_map: dict[str, uuid.UUID], address: str) -> uuid.UUID | None:
+    for alias in _asset_aliases(address):
+        asset_id = asset_map.get(alias)
+        if asset_id:
+            return asset_id
+    return None
+
+
+def _asset_aliases(address: str) -> list[str]:
+    cleaned = str(address or "").strip()
+    if not cleaned:
+        return []
+    aliases = [cleaned]
+    without_trailing_slash = cleaned.rstrip("/")
+    if without_trailing_slash and without_trailing_slash != cleaned:
+        aliases.append(without_trailing_slash)
+    return aliases
 
 
 def _conversation_title(manifest: dict[str, Any]) -> str:

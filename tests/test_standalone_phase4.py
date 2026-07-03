@@ -24,6 +24,32 @@ from pentest_node.tui.app import PentestTUI  # noqa: E402
 
 
 class StandalonePhase4Tests(unittest.TestCase):
+    def test_finding_upsert_preserves_new_vulnerability_metadata(self):
+        async def scenario():
+            with tempfile.TemporaryDirectory() as tmp:
+                output = Path(tmp)
+                db = NodeDB(output / "pentest-node.sqlite3")
+                await db.init()
+                await db.create_session(
+                    session_id="s-meta",
+                    task_id="t-meta",
+                    target={"type": "url", "value": "http://192.0.2.1/"},
+                    scope={"allow": ["http://192.0.2.1/"], "deny": []},
+                    instruction="test target",
+                    output_dir=str(output),
+                    status="running",
+                )
+                await db.save_event("s-meta", {"type": "vuln_found", "finding_id": "finding-1", "title": "Possible SQL injection", "severity": "high", "status": "candidate", "evidence_ids": ["ev-1"]})
+                await db.save_event("s-meta", {"type": "vuln_found", "finding_id": "finding-1", "title": "Possible SQL injection", "vuln_type": "sql_injection", "severity": "high", "status": "confirmed", "affected_asset": "http://192.0.2.1", "location": "GET http://192.0.2.1/search parameter=q", "evidence_ids": ["ev-1"]})
+                snapshot = await db.snapshot("s-meta")
+                await db.close()
+                return snapshot["findings"][0]
+
+        finding = asyncio.run(scenario())
+
+        self.assertEqual(finding["status"], "confirmed")
+        self.assertEqual(finding["vuln_type"], "sql_injection")
+        self.assertEqual(finding["location"], "GET http://192.0.2.1/search parameter=q")
     def test_export_session_writes_unified_report_package(self):
         async def scenario():
             with tempfile.TemporaryDirectory() as tmp:
@@ -45,7 +71,7 @@ class StandalonePhase4Tests(unittest.TestCase):
                 await db.save_event("s1", {"type": "evidence_created", "evidence_id": "ev-111111111111", "evidence_type": "http_trace", "source_tool": "http_request", "tool_run_id": "tool-1", "raw_ref": "evidence/ev-111111111111", "summary": "HTTP trace"})
                 await db.save_event("s1", {"type": "attack_surface_discovered", "surface": {"surface_id": "surface-1", "kind": "url", "url": "http://192.0.2.1/"}})
                 await db.save_event("s1", {"type": "coverage_marked", "coverage": {"coverage_id": "cov-1", "endpoint": "GET http://192.0.2.1/", "vuln_type": "xss", "status": "passed", "evidence_ids": ["ev-111111111111"]}})
-                await db.save_event("s1", {"type": "checkpoint_update", "checkpoint": {"phase": "complete", "iteration": 2, "state": {"phase": "complete", "iteration": 2}}})
+                await db.save_event("s1", {"type": "checkpoint_update", "checkpoint": {"phase": "complete", "iteration": 2, "state": {"phase": "complete", "iteration": 2}, "captured_traffic": [{"request_id": "req-1", "method": "POST", "url": "http://192.0.2.1/login", "status_code": 200, "rank_score": 82, "source": "browser", "source_tool": "browser", "parameter_names": ["username"], "is_static": False}]}})
                 evidence_file = output / "session-s1" / "evidence" / "ev-111111111111" / "response.txt"
                 evidence_file.parent.mkdir(parents=True)
                 evidence_file.write_text("HTTP/1.1 200 OK", encoding="utf-8")
@@ -62,6 +88,7 @@ class StandalonePhase4Tests(unittest.TestCase):
                         "evidence.json",
                         "attack_surface.json",
                         "coverage.json",
+                        "traffic.json",
                         "checkpoints/latest.json",
                         "evidence/ev-111111111111/response.txt",
                     }:
@@ -71,10 +98,11 @@ class StandalonePhase4Tests(unittest.TestCase):
                     assets = json.load(tar.extractfile("assets.json"))
                     vulnerabilities = json.load(tar.extractfile("vulnerabilities.json"))
                     evidence = json.load(tar.extractfile("evidence.json"))
+                    traffic = json.load(tar.extractfile("traffic.json"))
                 package = load_report_package(tar_path.read_bytes())
-                return manifest, conversation, assets, vulnerabilities, evidence, package
+                return manifest, conversation, assets, vulnerabilities, evidence, traffic, package
 
-        manifest, conversation, assets, vulnerabilities, evidence, package = asyncio.run(scenario())
+        manifest, conversation, assets, vulnerabilities, evidence, traffic, package = asyncio.run(scenario())
 
         self.assertEqual(manifest["format_version"], "mvp-demo-v1")
         self.assertEqual(manifest["session_id"], "s1")
@@ -87,6 +115,9 @@ class StandalonePhase4Tests(unittest.TestCase):
         self.assertEqual(package.manifest["session_id"], "s1")
         self.assertEqual(len(package.attack_surface), 1)
         self.assertEqual(len(package.coverage), 1)
+        self.assertEqual(traffic[0]["request_id"], "req-1")
+        self.assertEqual(package.manifest["counts"]["traffic"], 1)
+        self.assertEqual(package.traffic[0]["request_id"], "req-1")
         self.assertIn("evidence/ev-111111111111/response.txt", package.evidence_files)
 
 
@@ -111,6 +142,28 @@ class StandalonePhase4Tests(unittest.TestCase):
         self.assertIn("Vulnerability", type_names)
         self.assertIn("Evidence", type_names)
         self.assertIn("AuditLog", type_names)
+
+    def test_platform_import_infers_assets_from_vulnerabilities_when_assets_are_empty(self):
+        async def scenario():
+            raw = _make_report_package_bytes(
+                assets=[],
+                vulnerabilities=[
+                    {"title": "Reflected XSS", "severity": "medium", "status": "confirmed", "affected_asset": "http://192.0.2.1/login", "evidence_ids": ["ev-1"]},
+                    {"title": "Candidate XSS", "severity": "medium", "status": "candidate", "affected_asset": "http://192.0.2.1/candidate", "evidence_ids": ["ev-1"]},
+                ],
+            )
+            fake_db = FakeDB()
+            result = await import_report(FakeUpload(raw), {"user_id": "11111111-1111-1111-1111-111111111111"}, fake_db)
+            return result, fake_db.objects
+
+        result, objects = asyncio.run(scenario())
+
+        assets = [obj for obj in objects if type(obj).__name__ == "Asset"]
+        vulns = [obj for obj in objects if type(obj).__name__ == "Vulnerability"]
+        self.assertEqual(result["assets_imported"], 1)
+        self.assertEqual(result["vulns_imported"], 1)
+        self.assertEqual(assets[0].address, "http://192.0.2.1/login")
+        self.assertEqual(vulns[0].asset_id, assets[0].id)
 
     def test_tui_export_command_writes_report_package(self):
         async def scenario():
@@ -291,6 +344,23 @@ class StandalonePhase4Tests(unittest.TestCase):
         self.assertFalse(results_focus)
 
 
+    def test_tui_results_panel_prefers_plan_tree_todos(self):
+        async def scenario():
+            app = PentestTUI(StandaloneOptions(output=Path("."), check_connectivity=False))
+            async with app.run_test(size=(120, 30)) as pilot:
+                await pilot.pause(0.1)
+                app.plan_tree = [{"node_id": "plan-1", "title": "Test login SQLi", "status": "running", "endpoint": "POST http://target.local/login", "parameter": "username", "vuln_type": "sqli"}]
+                app._refresh_results_panel()
+                results_log = app.query_one("#results-log")
+                text = "\n".join(strip.text for strip in results_log.lines)
+                return text
+
+        text = asyncio.run(scenario())
+
+        self.assertIn("Test login SQLi", text)
+        self.assertIn("POST http://target.local/login", text)
+        self.assertNotIn("[~] intake", text)
+
     def test_tui_ctrl_c_is_not_intercepted_by_app(self):
         async def scenario():
             app = PentestTUI(StandaloneOptions(output=Path("."), check_connectivity=False))
@@ -423,11 +493,15 @@ class FakeDB:
         self.committed = True
 
 
-def _make_report_package_bytes() -> bytes:
+def _make_report_package_bytes(assets: list[dict] | None = None, vulnerabilities: list[dict] | None = None) -> bytes:
+    if assets is None:
+        assets = [{"id": "asset-1", "address": "http://192.0.2.1/", "asset_type": "web"}]
+    if vulnerabilities is None:
+        vulnerabilities = [{"title": "Reflected XSS", "severity": "medium", "status": "confirmed", "affected_asset": "http://192.0.2.1/", "evidence_ids": ["ev-1"]}]
     payloads = {
         "manifest.json": {"format_version": "mvp-demo-v1", "session_id": "s1", "target": {"value": "http://192.0.2.1/"}, "scope": {"allow": ["http://192.0.2.1/"]}, "status": "completed"},
-        "assets.json": [{"id": "asset-1", "address": "http://192.0.2.1/", "asset_type": "web"}],
-        "vulnerabilities.json": [{"title": "Reflected XSS", "severity": "medium", "status": "confirmed", "affected_asset": "http://192.0.2.1/", "evidence_ids": ["ev-1"]}],
+        "assets.json": assets,
+        "vulnerabilities.json": vulnerabilities,
         "evidence.json": [{"evidence_id": "ev-1", "evidence_type": "http_trace", "source_tool": "http_request", "summary": "HTTP trace"}],
         "attack_surface.json": [{"surface_id": "surface-1"}],
         "coverage.json": [{"coverage_id": "cov-1"}],
@@ -450,3 +524,4 @@ def _make_report_package_bytes() -> bytes:
 
 if __name__ == "__main__":
     unittest.main()
+

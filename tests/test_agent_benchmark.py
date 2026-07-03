@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "agent_benchmark.py"
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from agent_benchmark import build_report, load_answers, load_checkpoint_file, load_report_file, parse_markdown_cases  # noqa: E402
+from agent_benchmark import build_report, build_review_template, load_answers, load_checkpoint_file, load_report_file, parse_markdown_cases  # noqa: E402
 
 
 class AgentBenchmarkTests(unittest.TestCase):
@@ -83,6 +83,103 @@ class AgentBenchmarkTests(unittest.TestCase):
         self.assertEqual(len(facts.confirmed_findings), 1)
         self.assertEqual(len(facts.evidence), 1)
 
+
+    def test_report_loader_falls_back_to_checkpoint_coverage(self):
+        raw = _make_report_package_bytes(coverage_rows=[], checkpoint={"phase": "complete", "coverage": [{"coverage_id": "cov-cp", "endpoint": "GET http://192.0.2.1/", "vuln_type": "web_baseline", "status": "tried"}]})
+        with tempfile.TemporaryDirectory() as tmp:
+            report_path = Path(tmp) / "report.tar.gz"
+            report_path.write_bytes(raw)
+            facts = load_report_file(report_path)
+
+        self.assertEqual(len(facts.coverage), 1)
+        self.assertEqual(facts.coverage[0]["coverage_id"], "cov-cp")
+    def test_review_file_computes_manual_score_without_auto_judgment(self):
+        checkpoint = {"conversation_id": "conv-score", "resolved_target": "http://target.local/"}
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint_path = Path(tmp) / "checkpoint.json"
+            checkpoint_path.write_text(json.dumps(checkpoint), encoding="utf-8")
+            review_path = Path(tmp) / "review.json"
+            review_path.write_text(json.dumps({"hits": ["DVWA-LOW-BRUTE-FORCE", "DVWA-LOW-COMMAND-INJECTION"]}), encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), "--checkpoint", str(checkpoint_path), "--review", str(review_path), "--output-dir", tmp, "--print-json"],
+                cwd=ROOT,
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=False,
+            )
+            report = json.loads(result.stdout)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(report["score"]["mode"], "manual_review")
+        self.assertEqual(report["score"]["hit"], 2)
+        self.assertFalse(report["score"]["passed"])
+        self.assertGreater(report["score"]["denominator"], 2)
+
+
+    def test_require_passing_score_fails_when_review_is_below_target(self):
+        checkpoint = {"conversation_id": "conv-low-score", "resolved_target": "http://target.local/"}
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint_path = Path(tmp) / "checkpoint.json"
+            checkpoint_path.write_text(json.dumps(checkpoint), encoding="utf-8")
+            review_path = Path(tmp) / "review.json"
+            review_path.write_text(json.dumps({"hits": ["DVWA-LOW-BRUTE-FORCE"]}), encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), "--checkpoint", str(checkpoint_path), "--review", str(review_path), "--require-passing-score", "--output-dir", tmp],
+                cwd=ROOT,
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("TASK-042 score gate failed", result.stderr)
+
+    def test_require_passing_score_passes_at_target(self):
+        checkpoint = {"conversation_id": "conv-pass-score", "resolved_target": "http://target.local/"}
+        answers = load_answers(ROOT / "docs" / "agent-autonomy-benchmark.md")
+        denominator_hits = [case["id"] for case in answers["cases"] if "P0" in case["section"] or "P1" in case["section"]]
+        required_hits = denominator_hits[:108]
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint_path = Path(tmp) / "checkpoint.json"
+            checkpoint_path.write_text(json.dumps(checkpoint), encoding="utf-8")
+            review_path = Path(tmp) / "review.json"
+            review_path.write_text(json.dumps({"hits": required_hits}), encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), "--checkpoint", str(checkpoint_path), "--review", str(review_path), "--require-passing-score", "--output-dir", tmp, "--print-json"],
+                cwd=ROOT,
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=False,
+            )
+            report = json.loads(result.stdout)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(report["score"]["passed"])
+        self.assertGreaterEqual(report["score"]["percent"], 80.0)
+    def test_review_template_contains_only_scored_cases(self):
+        checkpoint = {"conversation_id": "conv-template", "resolved_target": "http://target.local/"}
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint_path = Path(tmp) / "checkpoint.json"
+            checkpoint_path.write_text(json.dumps(checkpoint), encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), "--checkpoint", str(checkpoint_path), "--output-dir", tmp, "--write-review-template"],
+                cwd=ROOT,
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=False,
+            )
+            template = json.loads((Path(tmp) / "benchmark-review-template.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(template["review_schema"], "agent-benchmark-manual-review-v1")
+        self.assertEqual(len(template["cases"]), 135)
+        self.assertTrue(all(case["status"] == "manual_review" for case in template["cases"]))
+        self.assertFalse(any("P2" in case["section"] for case in template["cases"]))
+
     def test_cli_writes_json_and_markdown_reports(self):
         checkpoint = {
             "conversation_id": "conv-cli",
@@ -96,6 +193,7 @@ class AgentBenchmarkTests(unittest.TestCase):
                 [sys.executable, str(SCRIPT), "--checkpoint", str(checkpoint_path), "--output-dir", tmp],
                 cwd=ROOT,
                 text=True,
+                encoding="utf-8",
                 capture_output=True,
                 check=False,
             )
@@ -109,7 +207,7 @@ class AgentBenchmarkTests(unittest.TestCase):
         self.assertTrue(md_exists)
 
 
-def _make_report_package_bytes() -> bytes:
+def _make_report_package_bytes(coverage_rows: list[dict] | None = None, checkpoint: dict | None = None) -> bytes:
     payloads = {
         "manifest.json": {
             "format_version": "mvp-demo-v1",
@@ -123,8 +221,8 @@ def _make_report_package_bytes() -> bytes:
         ],
         "evidence.json": [{"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "payload reflected"}],
         "attack_surface.json": [{"surface_id": "as-1", "kind": "url", "url": "http://192.0.2.1/"}],
-        "coverage.json": [{"coverage_id": "cov-1", "endpoint": "GET http://192.0.2.1/", "vuln_type": "xss"}],
-        "checkpoints/latest.json": {"phase": "complete"},
+        "coverage.json": [{"coverage_id": "cov-1", "endpoint": "GET http://192.0.2.1/", "vuln_type": "xss"}] if coverage_rows is None else coverage_rows,
+        "checkpoints/latest.json": checkpoint or {"phase": "complete"},
     }
     out = io.BytesIO()
     with tarfile.open(fileobj=out, mode="w:gz") as tar:

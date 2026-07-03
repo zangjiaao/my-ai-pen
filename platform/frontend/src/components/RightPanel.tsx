@@ -4,6 +4,8 @@ import ApprovalCountdown from "./ApprovalCountdown";
 
 type Tab = "discoveries" | "progress" | "pending" | "evidence";
 type TodoStatus = "done" | "running" | "pending";
+type PlanStatus = "pending" | "running" | "done" | "skipped" | "blocked" | "failed" | string;
+type PlanNode = { node_id?: string; id?: string; title?: string; status?: PlanStatus; kind?: string; endpoint?: string | null; parameter?: string | null; vuln_type?: string | null; parent_id?: string | null; notes?: string | null; priority?: number; };
 
 interface Props {
   phase?: string;
@@ -12,6 +14,7 @@ interface Props {
   intakeStatus?: string;
   progress?: { current: number; total: number; percent: number };
   todos?: Array<{ id: string; title: string; status: TodoStatus }>;
+  planTree?: PlanNode[];
   findings?: Array<Record<string, unknown>>;
   assets?: Array<Record<string, unknown>>;
   pendingApprovals?: Array<Record<string, unknown>>;
@@ -37,7 +40,7 @@ const PHASE_LABELS: Record<string, string> = {
   report: "\u62a5\u544a\u6574\u7406",
   complete: "\u4efb\u52a1\u5b8c\u6210",
 };
-export default function RightPanel({ phase, activeTool, intakeResult, intakeStatus, progress, todos = [], findings = [], assets = [], pendingApprovals = [], evidence = [], onDecision, onOpenVulnerability, onOpenAsset, onOpenEvidence, onLocateApproval }: Props) {
+export default function RightPanel({ phase, activeTool, intakeResult, intakeStatus, progress, todos = [], planTree = [], findings = [], assets = [], pendingApprovals = [], evidence = [], onDecision, onOpenVulnerability, onOpenAsset, onOpenEvidence, onLocateApproval }: Props) {
   const [tab, setTab] = useState<Tab>("progress");
 
   const tabs: { key: Tab; label: string }[] = [
@@ -98,6 +101,28 @@ export default function RightPanel({ phase, activeTool, intakeResult, intakeStat
               </div>
             )}
             <div>
+              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-ink-muted">PLAN TREE</p>
+              {planTree.length === 0 ? (
+                <p className="text-sm text-ink-muted">等待 Agent 生成探索计划</p>
+              ) : (
+                <div className="space-y-2" data-testid="plan-tree-list">
+                  {planTree.slice(0, 10).map((node, index) => {
+                    const status = String(node.status || "pending");
+                    const color = status === "done" ? "text-status-success" : status === "running" ? "text-status-running" : status === "failed" || status === "blocked" ? "text-severity-critical" : "text-ink-muted";
+                    return (
+                      <div key={String(node.node_id || node.id || index)} className="rounded-md border border-hairline-soft px-2.5 py-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="min-w-0 truncate text-sm font-medium">{String(node.title || "Untitled plan node")}</span>
+                          <span className={`flex-shrink-0 text-[10px] uppercase ${color}`}>{status}</span>
+                        </div>
+                        <p className="mt-1 break-words font-mono text-[11px] text-ink-muted [overflow-wrap:anywhere]">{String(node.endpoint || node.kind || "")}</p>
+                        {(node.parameter || node.vuln_type) && <p className="mt-1 text-[11px] text-ink-secondary">{String(node.vuln_type || "test")} / {String(node.parameter || "-")}</p>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>            <div>
               <p className="mb-2 text-xs font-medium uppercase tracking-wide text-ink-muted">TODO</p>
               {todos.length === 0 ? (
                 <p className="text-sm text-ink-muted">等待 Agent 生成计划</p>

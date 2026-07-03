@@ -114,6 +114,7 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     ], "address")
     explicit_evidence = message_evidence(messages, include_tool_calls=False)
     fallback_tool_evidence = [] if evidence or explicit_evidence else message_evidence(messages, include_tool_calls=True)
+    plan_tree = checkpoint_plan_tree(checkpoint) or context.get("exploration_plan_tree") or context.get("plan_tree") or []
     evidence_items = merge_many_by_key([
         [evidence_summary(e) for e in evidence],
         explicit_evidence,
@@ -130,6 +131,7 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
         "checkpoint": checkpoint or {},
         "attack_surface": context.get("attack_surface") or [],
         "coverage": context.get("coverage") or [],
+        "plan_tree": plan_tree,
         "pending_approvals": pending,
         "evidence": evidence_items,
         "read_model_errors": read_model_errors,
@@ -140,6 +142,7 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
             "evidence": len(evidence_items),
             "attack_surface": len(context.get("attack_surface") or []),
             "coverage": len(context.get("coverage") or []),
+            "plan_tree": len(plan_tree),
         },
     }
 
@@ -312,6 +315,33 @@ def todos_for_checkpoint(checkpoint: dict, status: str) -> list[dict]:
     return todos
 
 
+
+def checkpoint_plan_tree(checkpoint: dict) -> list[dict]:
+    if not isinstance(checkpoint, dict):
+        return []
+    items = checkpoint.get("exploration_plan_tree") or checkpoint.get("plan_tree") or []
+    if not isinstance(items, list):
+        return []
+    out = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        out.append({
+            "node_id": str(item.get("node_id") or item.get("id") or ""),
+            "title": item.get("title") or "Untitled plan node",
+            "status": item.get("status") or "pending",
+            "parent_id": item.get("parent_id"),
+            "kind": item.get("kind") or "task",
+            "target": item.get("target"),
+            "endpoint": item.get("endpoint"),
+            "parameter": item.get("parameter"),
+            "vuln_type": item.get("vuln_type"),
+            "notes": item.get("notes"),
+            "evidence_ids": item.get("evidence_ids") or [],
+            "source": item.get("source") or "agent",
+            "priority": item.get("priority", 50),
+        })
+    return out
 def checkpoint_findings(checkpoint: dict) -> list[dict]:
     if not isinstance(checkpoint, dict):
         return []

@@ -1,6 +1,9 @@
 import sys
 import asyncio
+import json
 import unittest
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,6 +16,7 @@ from app.services.conversation_snapshot import (  # noqa: E402
     agent_state_from_checkpoint as _agent_state_from_checkpoint,
     checkpoint_assets as _checkpoint_assets,
     checkpoint_findings as _checkpoint_findings,
+    checkpoint_plan_tree as _checkpoint_plan_tree,
     progress_for_checkpoint as _progress_for_checkpoint,
     todos_for_checkpoint as _todos_for_checkpoint,
 )
@@ -23,7 +27,7 @@ from pentest_node.agent.intake import TaskIntake  # noqa: E402
 from pentest_node.agent.loop import PHASE_TOOL_NAMES, PhaseGateError, PentestAgentLoop  # noqa: E402
 from pentest_node.agent.state import Phase  # noqa: E402
 from pentest_node.agent.llm import LLMClient  # noqa: E402
-from pentest_node.tools.browser import _playwright_install_error  # noqa: E402
+from pentest_node.tools.browser import _browser_result, _playwright_install_error, _safe_click_candidate  # noqa: E402
 from pentest_node.tools.execute import make_execute_tool  # noqa: E402
 from pentest_node.tools.workflow import make_workflow_tools  # noqa: E402
 
@@ -55,7 +59,34 @@ class FakeEvidenceStore:
     workspace = ROOT
 
     def __init__(self, ids=("ev-111111111111",)):
-        self.records = [SimpleNamespace(evidence_id=eid, summary="HTTP POST http://target.local/login.php returned SQL error", raw_ref="") for eid in ids]
+        self.records = [self._record(eid, "HTTP POST http://target.local/login.php returned SQL error") for eid in ids]
+
+    def _record(self, evidence_id, summary):
+        return SimpleNamespace(
+            evidence_id=evidence_id,
+            type="http_trace",
+            source_tool="run_web_skill",
+            related_tool_run_id="tool-1",
+            raw_ref="",
+            summary=summary,
+            hash="sha256:test",
+        )
+
+    async def collect_http_trace(self, tool_run_id, request, response):
+        evidence_id = f"ev-{len(self.records) + 1:012x}"
+        record = self._record(evidence_id, f"HTTP {request[:200]}")
+        record.related_tool_run_id = tool_run_id
+        self.records.append(record)
+        return record
+
+    async def collect_tool_output(self, tool_run_id, tool_name, stdout, stderr):
+        evidence_id = f"ev-{len(self.records) + 1:012x}"
+        record = self._record(evidence_id, f"Tool output from {tool_name}")
+        record.type = "tool_output"
+        record.source_tool = tool_name
+        record.related_tool_run_id = tool_run_id
+        self.records.append(record)
+        return record
 
     def get_by_ids(self, ids):
         wanted = set(ids)
@@ -123,6 +154,8 @@ class CheckpointResumeTests(unittest.TestCase):
         self.assertEqual(result["reasoning_content"], "hidden reasoning")
         self.assertEqual(result["content"], "answer")
 
+    def test_complete_phase_only_allows_task_complete(self):
+        self.assertEqual(PHASE_TOOL_NAMES["complete"], {"task_complete"})
     def test_repeated_llm_errors_fail_phase_instead_of_spamming(self):
         platform = DummyPlatform()
         loop = PentestAgentLoop(
@@ -375,8 +408,51 @@ class CheckpointResumeTests(unittest.TestCase):
         self.assertIn("unresolved vulnerability", loop._phase_gate_error(Phase.COMPLETE))
 
         loop.candidate_findings.append({"id": "cand-1", "title": "SQLi", "status": "candidate", "evidence_ids": ["ev-111111111111"]})
+        for node in loop.plan_tree.to_list():
+            if node.get("status") == "pending":
+                loop.plan_tree.update_node(node["node_id"], status="skipped", notes="not relevant to unresolved-signal gate test")
         self.assertIsNone(loop._phase_gate_error(Phase.COMPLETE))
 
+    def test_failed_info_disclosure_coverage_auto_creates_confirmed_finding(self):
+        target = "http://target.local/login.php"
+        platform = DummyPlatform()
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-info-disclosure", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=platform,
+            evidence_store=FakeEvidenceStore(),
+        )
+        loop.attack_surface.record_http_result("tool-1", {"status": "done", "method": "GET", "url": target, "status_code": 200}, "ev-111111111111")
+        loop.coverage.mark(
+            endpoint=f"GET {target}",
+            parameter="<none>",
+            vuln_type="info_disclosure",
+            status="failed",
+            notes="Directory listing enabled and sensitive backup file exposed.",
+            evidence_ids=["ev-111111111111"],
+        )
+
+        created = asyncio.run(loop._auto_create_findings_from_failed_coverage())
+
+        self.assertEqual(len(created), 1)
+        self.assertEqual(loop.candidate_findings[0]["status"], "confirmed")
+        self.assertEqual(loop.confirmed_findings[0]["vuln_type"], "info_disclosure")
+        self.assertIsNone(loop._phase_gate_error(Phase.COMPLETE))
+        self.assertTrue(any(event.get("type") == "vuln_found" and event.get("status") == "confirmed" for event in platform.events))
+    def test_info_disclosure_finding_key_dedupes_different_titles_same_location(self):
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-dedupe", "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=DummyPlatform(),
+        )
+        first = {"title": "Possible sensitive information disclosure", "vuln_type": "info_disclosure", "affected_asset": "http://target.local/ftp", "location": "GET http://target.local/ftp"}
+        second = {"title": "Sensitive information disclosure", "vuln_type": "info_disclosure", "affected_asset": "http://target.local/ftp", "location": "GET http://target.local/ftp"}
+
+        self.assertEqual(loop._finding_key(first), loop._finding_key(second))
     def test_tool_history_content_exposes_evidence_id(self):
         loop = PentestAgentLoop(
             task={},
@@ -390,6 +466,325 @@ class CheckpointResumeTests(unittest.TestCase):
 
         self.assertIn("EVIDENCE_ID: ev-111111111111", content)
         self.assertIn("proof body", content)
+    def test_recon_runtime_advances_when_executable_plan_nodes_exist(self):
+        class ExplodingLLM:
+            async def chat(self, messages, tools=None):
+                raise AssertionError("recon runtime should advance before calling LLM")
+
+        target = "http://target.local/login.php"
+        platform = DummyPlatform()
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-1", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(list_tools=lambda: [], get=lambda name: None),
+            sandbox=None,
+            llm=ExplodingLLM(),
+            platform_sync=platform,
+            evidence_store=FakeEvidenceStore(),
+        )
+        loop.attack_surface.record_http_result("tool-1", {"status": "done", "method": "GET", "url": target, "status_code": 200, "body": "<form><input name=q></form>"}, "ev-111111111111")
+        for idx in range(3):
+            loop.plan_tree.add_node(title=f"Recon runtime test {idx}", kind="test", endpoint=f"GET {target}", parameter="q", vuln_type="sqli")
+
+        asyncio.run(loop._run_phase(Phase.RECON))
+
+        self.assertIn(Phase.RECON, loop.state.phases_completed)
+        self.assertTrue(any("advancing to analysis" in item.get("content", "") for item in loop.history))
+        self.assertTrue(any(event.get("active_tool") == "workflow_runtime" for event in platform.events))
+
+    def test_login_surface_auth_pivot_expands_attack_surface(self):
+        calls = []
+
+        async def browser_handler(**kwargs):
+            calls.append(kwargs)
+            return {
+                "status": "ok",
+                "action": "login",
+                "url": "http://target.local/index.php",
+                "title": "Home",
+                "body": "<html><a href='/vulnerabilities/exec/'>Command Injection</a><form action='/vulnerabilities/exec/' method='post'><input name='ip'></form></html>",
+            }
+
+        target = "http://target.local/login.php"
+        platform = DummyPlatform()
+        browser_tool = SimpleNamespace(handler=browser_handler)
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-auth", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(list_tools=lambda: [], get=lambda name: browser_tool if name == "browser" else None),
+            sandbox=None,
+            llm=None,
+            platform_sync=platform,
+            evidence_store=FakeEvidenceStore(),
+        )
+        loop.attack_surface.record_http_result(
+            "tool-login",
+            {"status": "done", "method": "GET", "url": target, "status_code": 200, "body": "<form action='/login.php' method='post'><input name='username'><input name='password'></form>"},
+            "ev-111111111111",
+        )
+
+        self.assertTrue(loop._auth_pivot_available())
+        executed = asyncio.run(loop._autorun_auth_pivot())
+        snapshot = loop.checkpoint_snapshot("test")
+        urls = {item["url"] for item in snapshot["attack_surface"] if item.get("url")}
+        tests = {(node["target"], node["parameter"], node["vuln_type"]) for node in snapshot["exploration_plan_tree"] if node["kind"] == "test"}
+
+        self.assertEqual(executed, 1)
+        self.assertEqual(calls[0]["action"], "login")
+        self.assertIn("http://target.local/vulnerabilities/exec", urls)
+        self.assertTrue(any(target_url.rstrip("/") == "http://target.local/vulnerabilities/exec" and param == "ip" and vuln == "command_injection" for target_url, param, vuln in tests))
+        self.assertFalse(loop._auth_pivot_available())
+    def test_browser_explore_click_filter_skips_unsafe_controls(self):
+        base = "http://target.local/"
+        self.assertTrue(_safe_click_candidate({"tag": "a", "href": "/login", "text": "Login", "visible": True}, base))
+        self.assertTrue(_safe_click_candidate({"tag": "button", "text": "Menu", "visible": True}, base))
+        self.assertFalse(_safe_click_candidate({"tag": "button", "text": "Delete account", "visible": True}, base))
+        self.assertFalse(_safe_click_candidate({"tag": "button", "type": "submit", "text": "Login", "in_form": True, "visible": True}, base))
+        self.assertFalse(_safe_click_candidate({"tag": "a", "href": "https://evil.example/", "text": "external", "visible": True}, base))
+
+    def test_browser_entrypoint_captures_spa_api_traffic(self):
+        calls = []
+
+        async def browser_handler(**kwargs):
+            calls.append(kwargs)
+            return _browser_result(
+                status="ok",
+                action="navigate",
+                url="http://target.local/",
+                title="SPA",
+                body="<html><script src='main.js'></script></html>",
+                captured_requests=[
+                    {
+                        "method": "GET",
+                        "url": "http://target.local/rest/products/search?q=apple",
+                        "status_code": 200,
+                        "response_headers": {"content-type": "application/json"},
+                        "response_body": "[{\"id\":1,\"name\":\"Apple Juice\"}]",
+                    },
+                    {
+                        "method": "GET",
+                        "url": "http://target.local/socket.io/?EIO=4",
+                        "status_code": 200,
+                        "response_headers": {"content-type": "text/plain"},
+                        "is_websocket": True,
+                    },
+                ],
+            )
+
+        browser_tool = SimpleNamespace(handler=browser_handler)
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-entrypoint", "target": {"type": "url", "value": "http://target.local/"}, "resolved_target": "http://target.local/", "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(list_tools=lambda: [], get=lambda name: browser_tool if name == "browser" else None),
+            sandbox=None,
+            llm=None,
+            platform_sync=DummyPlatform(),
+            evidence_store=FakeEvidenceStore(),
+        )
+
+        executed = asyncio.run(loop._autorun_browser_entrypoint())
+        snapshot = loop.checkpoint_snapshot("test")
+        ranked = loop.traffic_capture.rank_candidates(limit=5)
+
+        self.assertEqual(executed, 1)
+        self.assertEqual(calls[0]["action"], "explore")
+        self.assertEqual(calls[0]["wait_ms"], 1000)
+        self.assertEqual(calls[0]["max_actions"], 8)
+        self.assertTrue(any(row["url"] == "http://target.local/rest/products/search?q=apple" for row in ranked))
+        self.assertFalse(any("socket.io" in row["url"] for row in ranked))
+        self.assertTrue(any(item["kind"] == "api_endpoint" and item["url"] == "http://target.local/rest/products/search?q=apple" for item in snapshot["attack_surface"]))
+        self.assertTrue(any(node["kind"] == "test" and node["request_id"] for node in snapshot["exploration_plan_tree"]))
+    def test_surface_expansion_visits_pending_surface_and_discovers_forms(self):
+        async def browser_handler(**kwargs):
+            return {
+                "status": "ok",
+                "action": "navigate",
+                "url": kwargs["url"],
+                "title": "Command Injection",
+                "body": "<form action='/vulnerabilities/exec/' method='post'><input name='ip'></form>",
+            }
+
+        target = "http://target.local/vulnerabilities/exec"
+        platform = DummyPlatform()
+        browser_tool = SimpleNamespace(handler=browser_handler)
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-surface", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(list_tools=lambda: [], get=lambda name: browser_tool if name == "browser" else None),
+            sandbox=None,
+            llm=None,
+            platform_sync=platform,
+            evidence_store=FakeEvidenceStore(),
+        )
+        surface = loop.plan_tree.add_node(title="Explore exec", kind="surface", target=target, endpoint=f"GET {target}", source="runtime")
+
+        executed = asyncio.run(loop._autorun_surface_expansion(limit=1))
+        snapshot = loop.checkpoint_snapshot("test")
+        by_id = {node["node_id"]: node for node in snapshot["exploration_plan_tree"]}
+        tests = {(node["target"], node["parameter"], node["vuln_type"]) for node in snapshot["exploration_plan_tree"] if node["kind"] == "test"}
+
+        self.assertEqual(executed, 1)
+        self.assertEqual(by_id[surface.node_id]["status"], "done")
+        self.assertTrue(any(target_url.rstrip("/") == target.rstrip("/") and param == "ip" and vuln == "command_injection" for target_url, param, vuln in tests))
+
+    def test_workflow_runtime_prioritizes_high_value_tests_over_cookie_checks(self):
+        target = "http://target.local/vulnerabilities/exec?ip=127.0.0.1"
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-priority", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=DummyPlatform(),
+        )
+        loop.plan_tree.add_node(title="Cookie flags", kind="test", endpoint=f"GET {target}", parameter="<none>", vuln_type="auth_session")
+        high = loop.plan_tree.add_node(title="Command injection", kind="test", endpoint=f"GET {target}", parameter="ip", vuln_type="command_injection")
+
+        nodes = loop._workflow_runtime_candidate_nodes(limit=10)
+
+        self.assertEqual([node["node_id"] for node in nodes], [high.node_id])
+    def test_workflow_runtime_balances_vulnerability_types_and_paths(self):
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-balanced", "target": {"type": "url", "value": "http://target.local"}, "resolved_target": "http://target.local", "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=DummyPlatform(),
+        )
+        cmdi = loop.plan_tree.add_node(title="Exec command injection", kind="test", endpoint="POST http://target.local/vulnerabilities/exec/", parameter="ip", vuln_type="command_injection", priority=22)
+        exec_sqli = loop.plan_tree.add_node(title="Exec SQLi", kind="test", endpoint="POST http://target.local/vulnerabilities/exec/", parameter="ip", vuln_type="sqli", priority=22)
+        sqli = loop.plan_tree.add_node(title="SQLi", kind="test", endpoint="GET http://target.local/vulnerabilities/sqli/", parameter="id", vuln_type="sqli", priority=22)
+        xss = loop.plan_tree.add_node(title="XSS", kind="test", endpoint="GET http://target.local/vulnerabilities/xss_r/", parameter="name", vuln_type="xss", priority=22)
+
+        nodes = loop._workflow_runtime_candidate_nodes(limit=3)
+
+        self.assertEqual(nodes[0]["node_id"], cmdi.node_id)
+        self.assertIn(sqli.node_id, [node["node_id"] for node in nodes])
+        self.assertIn(xss.node_id, [node["node_id"] for node in nodes])
+        self.assertNotIn(exec_sqli.node_id, [node["node_id"] for node in nodes])
+    def test_workflow_runtime_prioritizes_endpoint_vulnerability_affinity(self):
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-affinity", "target": {"type": "url", "value": "http://target.local"}, "resolved_target": "http://target.local", "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=DummyPlatform(),
+        )
+        csrf_sqli = loop.plan_tree.add_node(title="CSRF SQLi", kind="test", endpoint="GET http://target.local/vulnerabilities/csrf/", parameter="password_new", vuln_type="sqli", priority=22)
+        sqli = loop.plan_tree.add_node(title="SQLi", kind="test", endpoint="GET http://target.local/vulnerabilities/sqli/", parameter="id", vuln_type="sqli", priority=22)
+        cmdi = loop.plan_tree.add_node(title="Exec command injection", kind="test", endpoint="POST http://target.local/vulnerabilities/exec/", parameter="ip", vuln_type="command_injection", priority=22)
+
+        nodes = loop._workflow_runtime_candidate_nodes(limit=3)
+
+        self.assertEqual(nodes[0]["node_id"], cmdi.node_id)
+        self.assertEqual(nodes[1]["node_id"], sqli.node_id)
+        self.assertEqual(nodes[2]["node_id"], csrf_sqli.node_id)
+    def test_surface_expansion_prioritizes_high_signal_attack_surfaces(self):
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-surface-priority", "target": {"type": "url", "value": "http://target.local"}, "resolved_target": "http://target.local", "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=DummyPlatform(),
+        )
+        about = loop.plan_tree.add_node(title="About", kind="surface", target="http://target.local/about.php", endpoint="GET http://target.local/about.php", source="runtime")
+        xss = loop.plan_tree.add_node(title="XSS", kind="surface", target="http://target.local/vulnerabilities/xss_r/", endpoint="GET http://target.local/vulnerabilities/xss_r/", source="runtime")
+        sqli = loop.plan_tree.add_node(title="SQLi", kind="surface", target="http://target.local/vulnerabilities/sqli/", endpoint="GET http://target.local/vulnerabilities/sqli/", source="runtime")
+        exec_node = loop.plan_tree.add_node(title="Exec", kind="surface", target="http://target.local/vulnerabilities/exec/", endpoint="GET http://target.local/vulnerabilities/exec/", source="runtime")
+
+        nodes = loop._surface_expansion_candidate_nodes(limit=4)
+
+        self.assertEqual([node["node_id"] for node in nodes], [exec_node.node_id, sqli.node_id, xss.node_id, about.node_id])
+    def test_goal_keeper_keeps_vulnerability_discovery_as_primary_objective(self):
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-1"},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=DummyPlatform(),
+        )
+
+        prompt = loop._goal_keeper_prompt(Phase.VERIFY)
+
+        self.assertIn("discover, verify, and report real exploitable vulnerabilities", prompt)
+        self.assertIn("supporting means, not success criteria", prompt)
+    def test_analysis_drains_with_reflection_turns_then_advances(self):
+        # When the auto-seeded plan is drained, the runtime must give the model
+        # reflection turns (ReAct) instead of hard-advancing. It advances only
+        # after DRAIN_MAX_IDLE_ROUNDS turns produce no new plan nodes/coverage.
+        class IdleLLM:
+            def __init__(self):
+                self.calls = 0
+
+            async def chat(self, messages, tools=None):
+                self.calls += 1
+                return {"finish_reason": "stop", "tool_calls": [], "content": "No further coverage gaps."}
+
+        target = "http://target.local/login.php"
+        platform = DummyPlatform()
+        llm = IdleLLM()
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-1", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(list_tools=lambda: [], get=lambda name: None),
+            sandbox=None,
+            llm=llm,
+            platform_sync=platform,
+            evidence_store=FakeEvidenceStore(),
+        )
+        loop.attack_surface.record_http_result("tool-1", {"status": "done", "method": "GET", "url": target, "status_code": 200, "body": "<form><input name=q></form>"}, "ev-111111111111")
+        for idx in range(3):
+            loop.plan_tree.add_node(title=f"Runtime test {idx}", kind="test", endpoint=f"GET {target}", parameter="q", vuln_type="sqli")
+
+        asyncio.run(loop._run_phase(Phase.ANALYSIS))
+
+        self.assertIn(Phase.ANALYSIS, loop.state.phases_completed)
+        # The ReAct loop was given at least one reflection turn before advancing.
+        self.assertGreaterEqual(llm.calls, 1)
+        self.assertTrue(any("Plan Tree test nodes are drained" in item.get("content", "") for item in loop.history))
+        self.assertTrue(any("advancing to verify workflow" in item.get("content", "") for item in loop.history))
+        self.assertTrue(any(event.get("active_tool") == "workflow_runtime" for event in platform.events))
+
+    def test_verify_drains_with_reflection_turns_then_advances(self):
+        class IdleLLM:
+            def __init__(self):
+                self.calls = 0
+
+            async def chat(self, messages, tools=None):
+                self.calls += 1
+                return {"finish_reason": "stop", "tool_calls": [], "content": "No further tests remain."}
+
+        target = "http://target.local/login.php"
+        platform = DummyPlatform()
+        llm = IdleLLM()
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-1", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(list_tools=lambda: [], get=lambda name: None),
+            sandbox=None,
+            llm=llm,
+            platform_sync=platform,
+            evidence_store=FakeEvidenceStore(),
+        )
+        loop.attack_surface.record_http_result("tool-1", {"status": "done", "method": "GET", "url": target, "status_code": 200, "body": "<form><input name=q></form>"}, "ev-111111111111")
+        node = loop.plan_tree.add_node(title="Runtime test", kind="test", endpoint=f"GET {target}", parameter="q", vuln_type="sqli")
+        loop.plan_tree.update_node(node.node_id, status="done", evidence_ids=["ev-111111111111"])
+        loop.coverage.mark(endpoint=f"GET {target}", parameter="q", vuln_type="sqli", status="tried", evidence_ids=["ev-111111111111"])
+
+        asyncio.run(loop._run_phase(Phase.VERIFY))
+
+        self.assertIn(Phase.VERIFY, loop.state.phases_completed)
+        self.assertGreaterEqual(llm.calls, 1)
+        self.assertTrue(any("High-value Plan Tree test nodes are executed" in item.get("content", "") for item in loop.history))
+        self.assertTrue(any("advancing to report" in item.get("content", "") for item in loop.history))
+        self.assertTrue(any(event.get("active_tool") == "workflow_runtime" for event in platform.events))
+    def test_analysis_runtime_waits_for_plan_or_iteration_threshold(self):
+        target = "http://target.local/login.php"
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-1", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=DummyPlatform(),
+        )
+        loop.plan_tree.add_node(title="Runtime test", kind="test", endpoint=f"GET {target}", parameter="q", vuln_type="sqli")
+
+        self.assertEqual(loop._runtime_phase_advance_reason(Phase.ANALYSIS), "")
+        loop.state.phase_iteration = 6
+        self.assertIn("advancing to verify workflow", loop._runtime_phase_advance_reason(Phase.ANALYSIS))
     def test_phase_gates_reject_false_completion_without_valid_testing(self):
         target = "http://target.local/login.php"
         loop = PentestAgentLoop(
@@ -406,12 +801,119 @@ class CheckpointResumeTests(unittest.TestCase):
         asyncio.run(loop._record_autonomy_from_tool("tool-1", "http_request", {"status": "done", "url": target, "method": "GET", "status_code": 200}, "ev-111111111111"))
         self.assertIsNone(loop._phase_gate_error(Phase.RECON))
 
+        loop.coverage.restore([])
         loop.coverage.mark(endpoint=f"GET {target}", parameter="<none>", vuln_type="xss", status="skipped", notes="not applicable")
         self.assertIn("all coverage records are skipped", loop._phase_gate_error(Phase.COMPLETE))
 
         loop.coverage.mark(endpoint=f"GET {target}", parameter="q", vuln_type="xss", status="tried", evidence_ids=["ev-111111111111"])
         self.assertIsNone(loop._phase_gate_error(Phase.COMPLETE))
 
+
+    def test_phase_gates_reject_report_when_plan_tree_was_not_executed(self):
+        target = "http://target.local/login.php"
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-1", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=DummyPlatform(),
+            evidence_store=FakeEvidenceStore(),
+        )
+        loop.attack_surface.record_http_result("tool-1", {"status": "done", "method": "GET", "url": target, "status_code": 200, "body": "<form><input name=q></form>"}, "ev-111111111111")
+        for idx in range(20):
+            loop.plan_tree.add_node(title=f"Test login SQLi {idx}", kind="test", endpoint=f"GET {target}", parameter="q", vuln_type="sqli")
+        loop.coverage.mark(endpoint=f"GET {target}", parameter="q", vuln_type="sqli", status="tried", evidence_ids=["ev-111111111111"])
+
+        self.assertIn("Plan Tree has no executed nodes", loop._phase_gate_error(Phase.VERIFY))
+        self.assertIn("Plan Tree has no executed nodes", loop._phase_gate_error(Phase.REPORT))
+
+        node_id = loop.plan_tree.to_list()[0]["node_id"]
+        loop.plan_tree.update_node(node_id, status="done", evidence_ids=["ev-111111111111"])
+        self.assertIsNone(loop._phase_gate_error(Phase.REPORT))
+
+        loop.plan_tree.add_node(title="Test login XSS", kind="test", endpoint=f"GET {target}", parameter="q", vuln_type="xss")
+        self.assertIn("unexamined high-value Plan Tree test nodes", loop._phase_gate_error(Phase.REPORT))
+        for node in loop.plan_tree.to_list():
+            if node["status"] == "pending":
+                loop.plan_tree.update_node(node["node_id"], status="skipped", notes="not selected in focused test")
+
+        self.assertIsNone(loop._phase_gate_error(Phase.REPORT))
+    def test_phase_gate_counts_pending_tests_by_endpoint_parameter_and_type(self):
+        target = "http://target.local/search?q=base"
+        other = "http://target.local/profile?name=base"
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-1", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=DummyPlatform(),
+            evidence_store=FakeEvidenceStore(),
+        )
+        loop.attack_surface.record_http_result("tool-1", {"status": "done", "method": "GET", "url": target, "status_code": 200}, "ev-111111111111")
+        done_node = loop.plan_tree.add_node(title="Search SQLi", kind="test", endpoint=f"GET {target}", parameter="q", vuln_type="sqli")
+        loop.plan_tree.update_node(done_node.node_id, status="done", evidence_ids=["ev-111111111111"])
+        loop.coverage.mark(endpoint=f"GET {target}", parameter="q", vuln_type="sqli", status="tried", evidence_ids=["ev-111111111111"])
+        loop.plan_tree.add_node(title="Profile SQLi", kind="test", endpoint=f"GET {other}", parameter="name", vuln_type="sqli")
+
+        self.assertEqual(loop._pending_high_value_test_count(), 1)
+        self.assertIn("unexamined high-value Plan Tree test nodes", loop._phase_gate_error(Phase.REPORT))
+
+    def test_phase_gate_counts_pending_no_param_info_and_idor_tests(self):
+        target = "http://target.local/api/users"
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-1", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=DummyPlatform(),
+            evidence_store=FakeEvidenceStore(),
+        )
+        loop.attack_surface.record_http_result("tool-1", {"status": "done", "method": "GET", "url": target, "status_code": 200, "body": "[]"}, "ev-111111111111")
+        done_node = loop.plan_tree.add_node(title="Executed baseline", kind="test", endpoint=f"GET {target}", parameter="<none>", vuln_type="web_baseline")
+        loop.plan_tree.update_node(done_node.node_id, status="done", evidence_ids=["ev-111111111111"])
+        loop.coverage.mark(endpoint=f"GET {target}", parameter="<none>", vuln_type="web_baseline", status="tried", evidence_ids=["ev-111111111111"])
+        info_node = loop.plan_tree.add_node(title="API info disclosure", kind="test", endpoint=f"GET {target}", parameter="<none>", vuln_type="info_disclosure")
+        idor_node = loop.plan_tree.add_node(title="API IDOR", kind="test", endpoint=f"GET {target}", parameter="<none>", vuln_type="idor")
+        auth_node = loop.plan_tree.add_node(title="Cookie flags", kind="test", endpoint=f"GET {target}", parameter="<none>", vuln_type="auth_session")
+
+        self.assertEqual(loop._pending_high_value_test_count(), 2)
+        self.assertIn("unexamined high-value Plan Tree test nodes", loop._phase_gate_error(Phase.REPORT))
+
+        loop.plan_tree.update_node(info_node.node_id, status="skipped", notes="not sensitive", evidence_ids=["ev-111111111111"])
+        loop.plan_tree.update_node(idor_node.node_id, status="skipped", notes="no object identifier", evidence_ids=["ev-111111111111"])
+        self.assertEqual(loop._pending_high_value_test_count(), 0)
+        self.assertIsNone(loop._phase_gate_error(Phase.REPORT))
+        self.assertEqual(auth_node.vuln_type, "auth_session")
+
+    def test_report_phase_uses_runtime_facts_not_llm_summary(self):
+        class ExplodingLLM:
+            async def chat(self, messages, tools=None):
+                raise AssertionError("report phase should not call LLM")
+
+        platform = DummyPlatform()
+        target = "http://target.local/search.php?q=x"
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-report", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=ExplodingLLM(),
+            platform_sync=platform,
+            evidence_store=FakeEvidenceStore(),
+        )
+        loop.attack_surface.record_http_result("tool-1", {"status": "done", "method": "GET", "url": target, "status_code": 200, "body": "<script>alert(1)</script>"}, "ev-111111111111")
+        loop.coverage.mark(endpoint=f"GET {target}", parameter="q", vuln_type="xss", status="failed", notes="Executable XSS payload reflected", evidence_ids=["ev-111111111111"])
+        loop.candidate_findings.append({"id": "finding-xss", "title": "Executable cross-site scripting", "vuln_type": "xss", "severity": "high", "status": "confirmed", "location": f"GET {target} parameter=q", "evidence_ids": ["ev-111111111111"], "impact": "JavaScript execution", "remediation": "Encode output"})
+        loop.confirmed_findings.append(loop.candidate_findings[0])
+
+        asyncio.run(loop._run_phase(Phase.REPORT))
+
+        text_events = [event for event in platform.events if event.get("type") == "text"]
+        self.assertTrue(text_events)
+        report_text = text_events[-1]["content"]["text"]
+        self.assertIn("Executable cross-site scripting", report_text)
+        self.assertIn("coverage status `failed` means", report_text)
+        self.assertNotIn("No confirmed findings", report_text)
+        self.assertIn(Phase.REPORT, loop.state.phases_completed)
     def test_workflow_tools_cannot_bypass_phase_gates(self):
         target = "http://target.local/login.php"
         loop = PentestAgentLoop(
@@ -664,6 +1166,1047 @@ class CheckpointResumeTests(unittest.TestCase):
         self.assertIn("param=password vuln=sqli", prompt)
         self.assertNotIn("- POST http://target.local/login.php param=username vuln=sqli", prompt)
 
+    def test_node_restores_plan_tree(self):
+        checkpoint = {
+            "phase": "analysis",
+            "exploration_plan_tree": [
+                {
+                    "node_id": "plan-1",
+                    "title": "Test login form SQLi",
+                    "status": "running",
+                    "kind": "test",
+                    "endpoint": "POST http://target.local/login.php",
+                    "parameter": "username",
+                    "vuln_type": "sqli",
+                }
+            ],
+        }
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-1", "checkpoint": checkpoint},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=DummyPlatform(),
+        )
+
+        snapshot = loop.checkpoint_snapshot("test")
+
+        self.assertEqual(snapshot["plan_tree_summary"]["total"], 1)
+        self.assertEqual(snapshot["exploration_plan_tree"][0]["node_id"], "plan-1")
+        prompt = loop._autonomy_context_prompt()
+        self.assertIn("Test login form SQLi", prompt)
+        self.assertIn("sql_injection", prompt)
+
+    def test_browser_html_populates_attack_surface_and_plan_tree(self):
+        platform = DummyPlatform()
+        target = "http://target.local/index.php"
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-1", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=platform,
+        )
+        result = {
+            "status": "ok",
+            "action": "login",
+            "url": target,
+            "title": "Welcome",
+            "body": "<html><a href='/vulnerabilities/exec/'>Command Injection</a><a href='/vulnerabilities/fi/?page=include.php'>File Inclusion</a><form action='/vulnerabilities/exec/' method='post'><input name='ip'></form></html>",
+        }
+
+        asyncio.run(loop._record_autonomy_from_tool("browser-1", "browser", result, "ev-111111111111"))
+        snapshot = loop.checkpoint_snapshot("test")
+        urls = {item["url"] for item in snapshot["attack_surface"] if item.get("url")}
+        tests = {(node["endpoint"], node["parameter"], node["vuln_type"]) for node in snapshot["exploration_plan_tree"] if node["kind"] == "test"}
+
+        self.assertIn("http://target.local/vulnerabilities/exec", urls)
+        self.assertIn("http://target.local/vulnerabilities/fi?page=include.php", urls)
+        self.assertTrue(any(param == "ip" and vuln == "command_injection" for _endpoint, param, vuln in tests))
+        self.assertTrue(any(param == "page" and vuln == "lfi" for _endpoint, param, vuln in tests))
+    def test_http_result_populates_plan_tree_from_attack_surface(self):
+        platform = DummyPlatform()
+        target = "http://target.local/login.php"
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-1", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=platform,
+        )
+        result = {
+            "status": "done",
+            "method": "GET",
+            "url": target,
+            "status_code": 200,
+            "headers": {"content-type": "text/html"},
+            "body": "<form action='/login.php' method='post'><input name='username'><input name='password'></form>",
+        }
+
+        asyncio.run(loop._record_autonomy_from_tool("tool-1", "http_request", result, "ev-111111111111"))
+        snapshot = loop.checkpoint_snapshot("test")
+
+        self.assertGreater(snapshot["plan_tree_summary"]["total"], 0)
+        self.assertTrue(any(node["kind"] == "test" and node["parameter"] == "username" for node in snapshot["exploration_plan_tree"]))
+        self.assertTrue(any(event["type"] == "plan_tree_updated" for event in platform.events))
+
+
+    def test_http_result_auto_marks_coverage_from_real_traffic(self):
+        platform = DummyPlatform()
+        target = "http://target.local/vulnerabilities/sqli/?id=1&Submit=Submit"
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-1", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=platform,
+        )
+        result = {
+            "status": "done",
+            "method": "GET",
+            "url": target,
+            "status_code": 200,
+            "headers": {"content-type": "text/html"},
+            "body": "You have an error in your SQL syntax",
+            "request": f"GET {target} HTTP/1.1\nHost: target.local",
+            "response": "HTTP 200\n\nSQL syntax",
+        }
+
+        asyncio.run(loop._record_autonomy_from_tool("tool-1", "http_request", result, "ev-111111111111"))
+        snapshot = loop.checkpoint_snapshot("test")
+
+        self.assertTrue(any(row["parameter"] == "id" and row["vuln_type"] == "sqli" and row["status"] == "failed" for row in snapshot["coverage"]))
+        self.assertTrue(any("ev-111111111111" in row["evidence_ids"] for row in snapshot["coverage"]))
+        self.assertEqual(len(snapshot["confirmed_findings"]), 1)
+        self.assertEqual(snapshot["confirmed_findings"][0]["vuln_type"], "sql_injection")
+    def test_plan_tree_seeds_high_value_web_vulnerability_hypotheses(self):
+        platform = DummyPlatform()
+        target = "http://target.local/exec.php"
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-1", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=platform,
+        )
+        result = {
+            "status": "done",
+            "method": "GET",
+            "url": target,
+            "status_code": 200,
+            "headers": {"content-type": "text/html"},
+            "body": "<form action='/exec.php' method='post'><input name='ip'></form><a href='/file.php?page=include.php'>file</a><a href='/redirect.php?url=/'>redirect</a>",
+        }
+
+        asyncio.run(loop._record_autonomy_from_tool("tool-1", "http_request", result, "ev-111111111111"))
+        snapshot = loop.checkpoint_snapshot("test")
+        tests = {(node["parameter"], node["vuln_type"]) for node in snapshot["exploration_plan_tree"] if node["kind"] == "test"}
+
+        self.assertIn(("ip", "command_injection"), tests)
+        self.assertIn(("page", "lfi"), tests)
+        self.assertIn(("url", "open_redirect"), tests)
+    def test_plan_tree_filters_low_value_form_parameters(self):
+        platform = DummyPlatform()
+        target = "http://target.local/login.php"
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-1", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=platform,
+        )
+        result = {
+            "status": "done",
+            "method": "GET",
+            "url": target,
+            "status_code": 200,
+            "headers": {"content-type": "text/html"},
+            "body": "<form action='/login.php' method='post'><input name='username'><input name='password'><input name='user_token'><input name='Login'></form>",
+        }
+
+        asyncio.run(loop._record_autonomy_from_tool("tool-1", "http_request", result, "ev-111111111111"))
+        snapshot = loop.checkpoint_snapshot("test")
+        tests = [node for node in snapshot["exploration_plan_tree"] if node["kind"] == "test"]
+
+        self.assertFalse(any(node["parameter"] == "username" and node["vuln_type"] == "sqli" for node in tests))
+        self.assertFalse(any(node["parameter"] == "username" and node["vuln_type"] == "auth_session" for node in tests))
+        self.assertTrue(any(node["parameter"] == "username" and node["vuln_type"] == "weak_credentials" for node in tests))
+        self.assertTrue(any(node["parameter"] == "password" and node["vuln_type"] == "weak_credentials" for node in tests))
+        self.assertFalse(any(node["parameter"] == "Login" for node in tests))
+        self.assertFalse(any(node["parameter"] == "user_token" for node in tests))
+    def test_static_asset_surface_does_not_seed_vulnerability_tests(self):
+        platform = DummyPlatform()
+        target = "http://target.local/static/app.css"
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-1", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=platform,
+        )
+        result = {
+            "status": "done",
+            "method": "GET",
+            "url": target,
+            "status_code": 200,
+            "headers": {"content-type": "text/css"},
+            "body": "body { color: black; }",
+        }
+
+        asyncio.run(loop._record_autonomy_from_tool("tool-1", "http_request", result, "ev-111111111111"))
+        snapshot = loop.checkpoint_snapshot("test")
+
+        self.assertEqual(snapshot["plan_tree_summary"]["total"], 0)
+        self.assertFalse(snapshot["exploration_plan_tree"])
+    def test_http_result_marks_matching_plan_node_running(self):
+        platform = DummyPlatform()
+        target = "http://target.local/vulnerabilities/sqli/?id=1&Submit=Submit"
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-1", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=platform,
+        )
+        loop.plan_tree.add_node(
+            title="Test SQLi on id",
+            kind="test",
+            endpoint=f"GET {target}",
+            parameter="id",
+            vuln_type="sqli",
+        )
+        result = {
+            "status": "done",
+            "method": "GET",
+            "url": target,
+            "status_code": 200,
+            "headers": {"content-type": "text/html"},
+            "body": "You have an error in your SQL syntax",
+            "request": f"GET {target} HTTP/1.1\nHost: target.local",
+            "response": "HTTP 200\n\nSQL syntax",
+        }
+
+        asyncio.run(loop._record_autonomy_from_tool("tool-1", "http_request", result, "ev-111111111111"))
+        snapshot = loop.checkpoint_snapshot("test")
+
+        matching = [node for node in snapshot["exploration_plan_tree"] if node["vuln_type"] == "sqli"]
+        self.assertEqual(matching[0]["status"], "failed")
+        self.assertIn("ev-111111111111", matching[0]["evidence_ids"])
+        self.assertTrue(any(event["type"] == "plan_tree_updated" for event in platform.events))
+    def test_failed_coverage_does_not_fail_unrelated_plan_nodes(self):
+        platform = DummyPlatform()
+        target = "http://target.local/login.php"
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-1", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=platform,
+        )
+        auth = loop.plan_tree.add_node(title="Test auth session", kind="test", endpoint=f"POST {target}", parameter="username", vuln_type="auth_session")
+        xss = loop.plan_tree.add_node(title="Test XSS", kind="test", endpoint=f"POST {target}", parameter="username", vuln_type="xss")
+        weak = loop.plan_tree.add_node(title="Test weak credentials", kind="test", endpoint=f"POST {target}", parameter="username", vuln_type="weak_credentials")
+        result = {
+            "status": "done",
+            "method": "POST",
+            "url": target,
+            "status_code": 200,
+            "headers": {"set-cookie": "PHPSESSID=abc; Path=/"},
+            "body": "login page",
+            "parameter": "username",
+            "vuln_type": "auth_session",
+            "request": f"POST {target} HTTP/1.1\nHost: target.local\n\nusername=admin",
+            "response": "HTTP 200\nset-cookie: PHPSESSID=abc; Path=/\n\nlogin page",
+        }
+
+        asyncio.run(loop._record_autonomy_from_tool("tool-1", "run_web_skill", result, "ev-111111111111"))
+        snapshot = loop.checkpoint_snapshot("test")
+        by_id = {node["node_id"]: node for node in snapshot["exploration_plan_tree"]}
+
+        self.assertEqual(by_id[auth.node_id]["status"], "failed")
+        self.assertEqual(by_id[xss.node_id]["status"], "pending")
+        self.assertEqual(by_id[weak.node_id]["status"], "pending")
+    def test_common_web_discovery_detects_directory_listing_info_disclosure(self):
+        async def handler(**kwargs):
+            url = kwargs["url"]
+            if url.endswith("/ftp/"):
+                body = "<html><head><title>listing directory /ftp/</title></head><body><a href='legal.md'>legal.md</a></body></html>"
+                return {
+                    "status": "done",
+                    "method": "GET",
+                    "url": url,
+                    "status_code": 200,
+                    "headers": {"content-type": "text/html"},
+                    "body": body,
+                    "request": f"GET {url} HTTP/1.1\nHost: target.local\n\n",
+                    "response": "HTTP 200\ncontent-type: text/html\n\n" + body,
+                }
+            return {
+                "status": "done",
+                "method": "GET",
+                "url": url,
+                "status_code": 404,
+                "headers": {"content-type": "text/plain"},
+                "body": "not found",
+                "request": f"GET {url} HTTP/1.1\nHost: target.local\n\n",
+                "response": "HTTP 404\ncontent-type: text/plain\n\nnot found",
+            }
+
+        target = "http://target.local/"
+        platform = DummyPlatform()
+        tool = SimpleNamespace(handler=handler)
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-common-discovery", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(get=lambda name: tool if name == "http_request" else None),
+            sandbox=None,
+            llm=None,
+            platform_sync=platform,
+            evidence_store=FakeEvidenceStore(ids=()),
+        )
+
+        executed = asyncio.run(loop._autorun_common_web_discovery(limit=20))
+        asyncio.run(loop._auto_create_findings_from_failed_coverage())
+        snapshot = loop.checkpoint_snapshot("test")
+
+        self.assertGreaterEqual(executed, 1)
+        self.assertTrue(any(item.get("url", "").endswith("/ftp") or item.get("url", "").endswith("/ftp/") for item in snapshot["attack_surface"]))
+        self.assertTrue(any(entry["vuln_type"] == "info_disclosure" and entry["status"] == "failed" for entry in snapshot["coverage"]))
+        self.assertTrue(any(finding.get("status") == "confirmed" and finding.get("vuln_type") == "info_disclosure" for finding in snapshot["candidate_findings"]))
+    def test_run_web_skill_result_does_not_seed_new_plan_nodes_from_probe_url(self):
+        platform = DummyPlatform()
+        target = "http://target.local/search?q=base"
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-run-skill-no-seed", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=platform,
+        )
+        node = loop.plan_tree.add_node(title="Search XSS", kind="test", endpoint=f"GET {target}", parameter="q", vuln_type="xss")
+        result = {
+            "status": "done",
+            "method": "GET",
+            "url": "http://target.local/search?q=%27%3E%3Csvg%2Fonload%3Dalert%281337%29%3E&Submit=Submit",
+            "status_code": 200,
+            "headers": {"content-type": "text/html"},
+            "body": "no reflection",
+            "parameter": "q",
+            "vuln_type": "xss",
+            "plan_node_id": node.node_id,
+            "request": "GET /search?q=payload HTTP/1.1\nHost: target.local\n\n",
+            "response": "HTTP 200\ncontent-type: text/html\n\nno reflection",
+        }
+
+        asyncio.run(loop._record_autonomy_from_tool("tool-run-skill", "run_web_skill", result, "ev-111111111111"))
+        snapshot = loop.checkpoint_snapshot("test")
+
+        self.assertEqual(snapshot["traffic_capture_summary"]["total"], 1)
+        self.assertEqual(snapshot["plan_tree_summary"]["total"], 1)
+        self.assertFalse(any(event.get("type") == "attack_surface_discovered" for event in platform.events))
+    def test_http_result_populates_captured_traffic(self):
+        platform = DummyPlatform()
+        target = "http://target.local/login.php"
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-1", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=platform,
+        )
+        result = {
+            "status": "done",
+            "method": "GET",
+            "url": target,
+            "status_code": 200,
+            "headers": {"content-type": "text/html"},
+            "body": "<html>ok</html>",
+            "request": f"GET {target} HTTP/1.1\nHost: target.local",
+            "response": "HTTP 200\ncontent-type: text/html\n\n<html>ok</html>",
+        }
+
+        asyncio.run(loop._record_autonomy_from_tool("tool-1", "http_request", result, "ev-111111111111"))
+        snapshot = loop.checkpoint_snapshot("test")
+
+        self.assertEqual(snapshot["traffic_capture_summary"]["total"], 1)
+        self.assertEqual(snapshot["captured_traffic"][0]["method"], "GET")
+        self.assertEqual(snapshot["captured_traffic"][0]["evidence_id"], "ev-111111111111")
+
+    def test_plan_workflow_tools_update_checkpoint(self):
+        platform = DummyPlatform()
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-1", "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=platform,
+            evidence_store=FakeEvidenceStore(),
+        )
+        tools = {tool.name: tool for tool in make_workflow_tools(loop)}
+
+        added = asyncio.run(tools["plan_add_node"].handler(
+            title="Test SQLi on login",
+            kind="test",
+            endpoint="POST http://target.local/login.php",
+            parameter="username",
+            vuln_type="sqli",
+        ))
+        node_id = added["node"]["node_id"]
+        updated = asyncio.run(tools["plan_update_node"].handler(node_id=node_id, status="running", notes="Starting test"))
+        completed = asyncio.run(tools["plan_prune_or_complete"].handler(node_ids=[node_id], status="done", evidence_ids=["ev-111111111111"]))
+        next_nodes = asyncio.run(tools["plan_next"].handler(limit=5))
+        snapshot = loop.checkpoint_snapshot("test")
+
+        self.assertEqual(added["status"], "ok")
+        self.assertEqual(updated["node"]["status"], "running")
+        self.assertEqual(completed["updated"][0]["status"], "done")
+        self.assertEqual(next_nodes["status"], "ok")
+        self.assertEqual(snapshot["exploration_plan_tree"][0]["status"], "done")
+        self.assertTrue(any(event["type"] == "plan_tree_updated" for event in platform.events))
+    def test_run_web_skill_executes_plan_node_and_creates_candidate(self):
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                from urllib.parse import parse_qs, urlparse
+                query = parse_qs(urlparse(self.path).query)
+                body = (query.get("q") or [""])[0].encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            platform = DummyPlatform()
+            target = f"http://127.0.0.1:{server.server_port}/search?q=base"
+            loop = PentestAgentLoop(
+                task={"conversation_id": "conv-1", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": [f"http://127.0.0.1:{server.server_port}"], "deny": []}},
+                tools=SimpleNamespace(),
+                sandbox=None,
+                llm=None,
+                platform_sync=platform,
+            )
+            node = loop.plan_tree.add_node(title="Test reflected XSS", kind="test", endpoint=f"GET {target}", parameter="q", vuln_type="xss")
+            tool = next(t for t in make_workflow_tools(loop) if t.name == "run_web_skill")
+
+            result = asyncio.run(tool.handler(node_id=node.node_id))
+            asyncio.run(loop._record_autonomy_from_tool("tool-1", "run_web_skill", result, "ev-111111111111"))
+            snapshot = loop.checkpoint_snapshot("test")
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        self.assertEqual(result["status"], "done")
+        self.assertIn("<script>alert(1337)</script>", result["body"])
+        self.assertTrue(any(row["vuln_type"] == "xss" and row["status"] == "failed" for row in snapshot["coverage"]))
+        self.assertEqual(len(snapshot["candidate_findings"]), 1)
+        self.assertTrue(any(node["title"] == "Test reflected XSS" and node["status"] == "failed" for node in snapshot["exploration_plan_tree"]))
+        self.assertTrue(any(event["type"] == "vuln_found" for event in platform.events))
+
+    def test_run_web_skill_skips_no_param_idor_node(self):
+        target = "http://target.local/api/users"
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-idor-skip", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=DummyPlatform(),
+        )
+        node = loop.plan_tree.add_node(title="API IDOR", kind="test", endpoint=f"GET {target}", parameter="<none>", vuln_type="idor")
+        tool = next(t for t in make_workflow_tools(loop) if t.name == "run_web_skill")
+
+        result = asyncio.run(tool.handler(node_id=node.node_id))
+        asyncio.run(loop._record_autonomy_from_tool("tool-idor", "run_web_skill", result, "ev-111111111111"))
+        snapshot = loop.checkpoint_snapshot("test")
+
+        self.assertEqual(result["status"], "done")
+        self.assertEqual(result["verifier"]["status"], "skipped")
+        self.assertTrue(any(row["vuln_type"] == "idor" and row["status"] == "skipped" for row in snapshot["coverage"]))
+        self.assertTrue(any(row["node_id"] == node.node_id and row["status"] == "skipped" for row in snapshot["exploration_plan_tree"]))
+
+    def test_run_web_skill_no_param_info_disclosure_uses_verifier(self):
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = b'{"users":[{"email":"admin@example.com","passwordHash":"0123456789abcdef0123456789abcdef"}]}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            platform = DummyPlatform()
+            target = f"http://127.0.0.1:{server.server_port}/api/users"
+            loop = PentestAgentLoop(
+                task={"conversation_id": "conv-info", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": [f"http://127.0.0.1:{server.server_port}"], "deny": []}},
+                tools=SimpleNamespace(),
+                sandbox=None,
+                llm=None,
+                platform_sync=platform,
+            )
+            node = loop.plan_tree.add_node(title="API info disclosure", kind="test", endpoint=f"GET {target}", parameter="<none>", vuln_type="info_disclosure")
+            tool = next(t for t in make_workflow_tools(loop) if t.name == "run_web_skill")
+
+            result = asyncio.run(tool.handler(node_id=node.node_id))
+            asyncio.run(loop._record_autonomy_from_tool("tool-info", "run_web_skill", result, "ev-111111111111"))
+            snapshot = loop.checkpoint_snapshot("test")
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        self.assertEqual(result["status"], "done")
+        self.assertEqual(result["verifier"]["status"], "failed")
+        self.assertTrue(any(row["vuln_type"] == "info_disclosure" and row["status"] == "failed" for row in snapshot["coverage"]))
+        self.assertEqual(snapshot["candidate_findings"][0]["vuln_type"], "info_disclosure")
+        self.assertTrue(any(row["node_id"] == node.node_id and row["status"] == "failed" for row in snapshot["exploration_plan_tree"]))
+
+    def test_run_web_skill_posts_form_node_and_creates_command_injection_candidate(self):
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                posted = self.rfile.read(length).decode()
+                if self.path == "/vulnerabilities/exec/" and "ip=127.0.0.1" in posted and "%26%26+id" in posted and "Submit=Submit" in posted:
+                    body = b"PING ok\nuid=33(www-data) gid=33(www-data) groups=33(www-data)"
+                else:
+                    body = f"unexpected {self.path} {posted}".encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            platform = DummyPlatform()
+            target = f"http://127.0.0.1:{server.server_port}/vulnerabilities/exec/"
+            loop = PentestAgentLoop(
+                task={"conversation_id": "conv-cmdi", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": [f"http://127.0.0.1:{server.server_port}"], "deny": []}},
+                tools=SimpleNamespace(),
+                sandbox=None,
+                llm=None,
+                platform_sync=platform,
+            )
+            node = loop.plan_tree.add_node(title="Command injection form", kind="test", endpoint=f"POST {target}", parameter="ip", vuln_type="command_injection")
+            tool = next(t for t in make_workflow_tools(loop) if t.name == "run_web_skill")
+
+            result = asyncio.run(tool.handler(node_id=node.node_id))
+            asyncio.run(loop._record_autonomy_from_tool("tool-cmdi", "run_web_skill", result, "ev-111111111111"))
+            snapshot = loop.checkpoint_snapshot("test")
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        self.assertEqual(result["status"], "done")
+        self.assertIn("Content-Type: application/x-www-form-urlencoded", result["request"])
+        self.assertIn("Submit=Submit", result["request"])
+        self.assertIn("%26%26+id", result["request"])
+        self.assertIn("uid=33", result["body"])
+        self.assertTrue(any(row["vuln_type"] == "command_injection" and row["status"] == "failed" for row in snapshot["coverage"]))
+        self.assertEqual(len(snapshot["candidate_findings"]), 1)
+        self.assertEqual(snapshot["candidate_findings"][0]["vuln_type"], "command_injection")
+        self.assertTrue(any(row["node_id"] == node.node_id and row["status"] == "failed" for row in snapshot["exploration_plan_tree"]))
+    def test_verify_workflow_runtime_executes_pending_skill_node(self):
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                from urllib.parse import parse_qs, urlparse
+                query = parse_qs(urlparse(self.path).query)
+                body = (query.get("q") or [""])[0].encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            platform = DummyPlatform()
+            target = f"http://127.0.0.1:{server.server_port}/search?q=base"
+            loop = PentestAgentLoop(
+                task={"conversation_id": "conv-1", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": [f"http://127.0.0.1:{server.server_port}"], "deny": []}},
+                tools=SimpleNamespace(),
+                sandbox=None,
+                llm=None,
+                platform_sync=platform,
+                evidence_store=FakeEvidenceStore(ids=()),
+            )
+            workflow_tool = next(t for t in make_workflow_tools(loop) if t.name == "run_web_skill")
+            loop.tools = SimpleNamespace(get=lambda name: workflow_tool if name == "run_web_skill" else None)
+            loop.plan_tree.add_node(title="Test reflected XSS", kind="test", endpoint=f"GET {target}", parameter="q", vuln_type="xss")
+
+            executed = asyncio.run(loop._autorun_verify_workflow_nodes(limit=1))
+            snapshot = loop.checkpoint_snapshot("test")
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        self.assertEqual(executed, 1)
+        self.assertTrue(any(row["vuln_type"] == "xss" and row["status"] == "failed" for row in snapshot["coverage"]))
+        self.assertEqual(len(snapshot["candidate_findings"]), 1)
+        self.assertEqual(snapshot["candidate_findings"][0]["status"], "confirmed")
+        self.assertEqual(len(snapshot["confirmed_findings"]), 1)
+        self.assertTrue(any(node["status"] == "failed" for node in snapshot["exploration_plan_tree"]))
+        self.assertTrue(any(event["type"] == "evidence_created" for event in platform.events))
+        self.assertTrue(any(event.get("type") == "vuln_found" and event.get("status") == "confirmed" and event.get("vuln_type") == "xss" for event in platform.events))
+        self.assertTrue(any("[Workflow Runtime]" in item.get("content", "") for item in loop.history))
+    def test_verify_workflow_runtime_auto_confirms_high_confidence_verifier(self):
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                from urllib.parse import parse_qs, urlparse
+                query = parse_qs(urlparse(self.path).query)
+                ip_value = (query.get("ip") or [""])[0]
+                body = b"uid=33(www-data) gid=33(www-data)" if "id" in ip_value else b"PING ok"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            platform = DummyPlatform()
+            target = f"http://127.0.0.1:{server.server_port}/vulnerabilities/exec?ip=127.0.0.1"
+            loop = PentestAgentLoop(
+                task={"conversation_id": "conv-autoconfirm", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": [f"http://127.0.0.1:{server.server_port}"], "deny": []}},
+                tools=SimpleNamespace(),
+                sandbox=None,
+                llm=None,
+                platform_sync=platform,
+                evidence_store=FakeEvidenceStore(ids=()),
+            )
+            workflow_tool = next(t for t in make_workflow_tools(loop) if t.name == "run_web_skill")
+            loop.tools = SimpleNamespace(get=lambda name: workflow_tool if name == "run_web_skill" else None)
+            loop.plan_tree.add_node(title="Test command injection", kind="test", endpoint=f"GET {target}", parameter="ip", vuln_type="command_injection")
+
+            executed = asyncio.run(loop._autorun_verify_workflow_nodes(limit=1))
+            snapshot = loop.checkpoint_snapshot("test")
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        self.assertEqual(executed, 1)
+        self.assertEqual(len(snapshot["candidate_findings"]), 1)
+        self.assertEqual(snapshot["candidate_findings"][0]["status"], "confirmed")
+        self.assertEqual(len(snapshot["confirmed_findings"]), 1)
+        self.assertTrue(snapshot["confirmed_findings"][0]["reproduction_request"].startswith("GET "))
+        self.assertTrue(any(event.get("type") == "vuln_found" and event.get("status") == "confirmed" for event in platform.events))
+    def test_verify_workflow_runtime_auto_confirms_sql_error_injection(self):
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                from urllib.parse import parse_qs, urlparse
+                query = parse_qs(urlparse(self.path).query)
+                id_value = (query.get("id") or [""])[0]
+                if "'" in id_value:
+                    body = b"You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near ''' at line 1"
+                else:
+                    body = b"ID: 1 First name: admin"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            platform = DummyPlatform()
+            target = f"http://127.0.0.1:{server.server_port}/vulnerabilities/sqli?id=1"
+            loop = PentestAgentLoop(
+                task={"conversation_id": "conv-sqli-autoconfirm", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": [f"http://127.0.0.1:{server.server_port}"], "deny": []}},
+                tools=SimpleNamespace(),
+                sandbox=None,
+                llm=None,
+                platform_sync=platform,
+                evidence_store=FakeEvidenceStore(ids=()),
+            )
+            workflow_tool = next(t for t in make_workflow_tools(loop) if t.name == "run_web_skill")
+            loop.tools = SimpleNamespace(get=lambda name: workflow_tool if name == "run_web_skill" else None)
+            loop.plan_tree.add_node(title="Test SQL injection", kind="test", endpoint=f"GET {target}", parameter="id", vuln_type="sqli")
+
+            executed = asyncio.run(loop._autorun_verify_workflow_nodes(limit=1))
+            snapshot = loop.checkpoint_snapshot("test")
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        self.assertEqual(executed, 1)
+        self.assertEqual(len(snapshot["candidate_findings"]), 1)
+        self.assertEqual(snapshot["candidate_findings"][0]["status"], "confirmed")
+        self.assertEqual(snapshot["candidate_findings"][0]["vuln_type"], "sql_injection")
+        self.assertEqual(len(snapshot["confirmed_findings"]), 1)
+        self.assertTrue(any(event.get("type") == "vuln_found" and event.get("status") == "confirmed" and event.get("vuln_type") == "sql_injection" for event in platform.events))
+    def test_traffic_rank_candidates_prioritizes_parameterized_requests(self):
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-traffic", "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=DummyPlatform(),
+        )
+        loop.traffic_capture.record_browser_requests([
+            {"method": "GET", "url": "http://target.local/static/app.css", "status_code": 200, "response_headers": {"content-type": "text/css"}, "is_static": True},
+            {"method": "POST", "url": "http://target.local/login.php", "body": "username=admin&password=password", "headers": {"content-type": "application/x-www-form-urlencoded"}, "status_code": 200, "response_headers": {"content-type": "text/html", "set-cookie": "PHPSESSID=abc"}, "response_body": "<form></form>"},
+            {"method": "GET", "url": "http://target.local/item.php?id=1", "status_code": 200, "response_headers": {"content-type": "text/html"}},
+        ], evidence_id="ev-111111111111")
+        tools = {tool.name: tool for tool in make_workflow_tools(loop)}
+
+        ranked = asyncio.run(tools["traffic_rank_candidates"].handler(limit=5))
+
+        self.assertEqual(ranked["status"], "ok")
+        self.assertEqual(ranked["requests"][0]["method"], "POST")
+        self.assertIn("username", ranked["requests"][0]["parameter_names"])
+        self.assertFalse(any(row["url"].endswith("app.css") for row in ranked["requests"]))
+
+    def test_attack_surface_extracts_openapi_paths_and_script_routes(self):
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-api-doc", "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=DummyPlatform(),
+        )
+        openapi = {
+            "openapi": "3.0.0",
+            "paths": {
+                "/api/users/{id}": {"get": {"parameters": [{"name": "id", "in": "path"}]}},
+                "/api/login": {"post": {"requestBody": {"content": {"application/json": {"schema": {"properties": {"email": {}, "password": {}}}}}}}},
+            },
+        }
+        created = loop.attack_surface.record_http_result(
+            "tool-openapi",
+            {"status": "done", "method": "GET", "url": "http://target.local/api-docs/swagger.json", "status_code": 200, "headers": {"content-type": "application/json"}, "body": json.dumps(openapi)},
+            "ev-111111111111",
+        )
+        created.extend(loop.attack_surface.record_http_result(
+            "tool-js",
+            {"status": "done", "method": "GET", "url": "http://target.local/app.js", "status_code": 200, "headers": {"content-type": "application/javascript"}, "body": "fetch('/rest/products/search?q=apple')"},
+            "ev-111111111111",
+        ))
+
+        endpoints = {(item.method, item.url, tuple(item.parameters)) for item in created if item.kind == "api_endpoint"}
+
+        self.assertIn(("GET", "http://target.local/api/users/{id}", ("id",)), endpoints)
+        self.assertIn(("POST", "http://target.local/api/login", ("email", "password")), endpoints)
+        self.assertTrue(any(url == "http://target.local/rest/products/search?q=apple" for _, url, _ in endpoints))
+    def test_traffic_context_list_returns_summaries_and_detail_returns_body(self):
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-traffic-detail", "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=DummyPlatform(),
+        )
+        row = loop.traffic_capture.record_http_result(
+            tool_name="http_request",
+            result={
+                "method": "POST",
+                "url": "http://target.local/api/search",
+                "request_body": "q=admin",
+                "request_headers": {"content-type": "application/x-www-form-urlencoded"},
+                "status_code": 200,
+                "headers": {"content-type": "application/json"},
+                "body": "{\"users\":[{\"email\":\"admin@example.test\",\"passwordHash\":\"abc\"}]}",
+            },
+            evidence_id="ev-111111111111",
+        )
+        tools = {tool.name: tool for tool in make_workflow_tools(loop)}
+
+        listed = asyncio.run(tools["traffic_list"].handler(limit=5))
+        detail = asyncio.run(tools["traffic_detail"].handler(request_id=row["request_id"]))
+
+        self.assertEqual(listed["status"], "ok")
+        self.assertNotIn("response_body", listed["requests"][0])
+        self.assertIn("api", listed["requests"][0]["traffic_tags"])
+        self.assertIn("sensitive_shape", listed["requests"][0]["traffic_tags"])
+        self.assertTrue(detail["request"]["response_body"].startswith("{\"users\""))
+
+    def test_browser_history_uses_request_summaries_not_full_captured_requests(self):
+        loop = PentestAgentLoop(
+            task={},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=DummyPlatform(),
+        )
+        result = _browser_result(
+            status="ok",
+            action="navigate",
+            url="http://target.local",
+            title="Home",
+            captured_requests=[{
+                "method": "GET",
+                "url": "http://target.local/api/users",
+                "status_code": 200,
+                "response_headers": {"content-type": "application/json"},
+                "response_body": "X" * 5000,
+            }],
+        )
+
+        content = loop._tool_history_content(result)
+
+        self.assertIn("api/users", content)
+        self.assertIn("count", content)
+        self.assertNotIn("captured_requests", content)
+        self.assertNotIn("XXX", content)
+
+    def test_low_value_and_probe_traffic_do_not_seed_plan_nodes(self):
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-traffic-noise", "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=DummyPlatform(),
+        )
+        rows = loop.traffic_capture.record_browser_requests([
+            {"method": "GET", "url": "http://target.local/socket.io/?EIO=4", "status_code": 200, "response_headers": {"content-type": "text/plain"}},
+            {"method": "GET", "url": "http://target.local/i18n/en.json", "status_code": 200, "response_headers": {"content-type": "application/json"}, "response_body": "{}"},
+            {"method": "GET", "url": "http://target.local/search?q=%3Cscript%3Ealert(1)%3C/script%3E", "status_code": 200, "response_headers": {"content-type": "text/html"}, "response_body": "probe"},
+        ], evidence_id="ev-111111111111")
+
+        created = []
+        for row in rows:
+            created.extend(loop.plan_tree.seed_from_traffic_request(row, vuln_types=["xss", "sqli"]))
+
+        self.assertEqual(created, [])
+    def test_traffic_rank_candidates_excludes_embedded_external_url_paths(self):
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-traffic-malformed", "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=DummyPlatform(),
+        )
+        malformed = 'http://target.local/rest/products//%22https:/steamcommunity.com/sharedfiles/filedetails?id=1969196030\\%22'
+        valid = "http://target.local/rest/products/search?q=apple"
+        loop.traffic_capture.record_browser_requests([
+            {"method": "GET", "url": malformed, "status_code": 500, "response_headers": {"content-type": "text/html"}, "response_body": "Unexpected path"},
+            {"method": "GET", "url": valid, "status_code": 200, "response_headers": {"content-type": "application/json"}, "response_body": "[]"},
+        ], evidence_id="ev-111111111111")
+        tools = {tool.name: tool for tool in make_workflow_tools(loop)}
+
+        ranked = asyncio.run(tools["traffic_rank_candidates"].handler(limit=10))
+
+        urls = [row["url"] for row in ranked["requests"]]
+        self.assertIn(valid, urls)
+        self.assertNotIn(malformed, urls)
+
+    def test_browser_autonomy_ignores_embedded_external_url_paths(self):
+        platform = DummyPlatform()
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-surface-malformed", "target": {"type": "url", "value": "http://target.local"}, "resolved_target": "http://target.local", "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=platform,
+        )
+        malformed = 'http://target.local/rest/admin/\\"https:/steamcommunity.com/sharedfiles/filedetails?id=1970691216\\"'
+        result = {
+            "status": "ok",
+            "action": "navigate",
+            "url": malformed,
+            "title": "Error: Unexpected path",
+            "body": '<a href="/rest/admin/\\"https:/steamcommunity.com/sharedfiles/filedetails?id=1970691216\\"">bad</a>',
+            "requests": [{"method": "GET", "url": malformed, "status_code": 500, "response_headers": {"content-type": "text/html"}, "response_body": "Unexpected path"}],
+        }
+
+        asyncio.run(loop._record_autonomy_from_tool("browser-malformed", "browser", result, "ev-111111111111"))
+        snapshot = loop.checkpoint_snapshot("test")
+
+        self.assertFalse(any("steamcommunity" in str(item.get("url") or "") for item in snapshot["attack_surface"]))
+        self.assertFalse(any("steamcommunity" in str(node.get("target") or "") for node in snapshot["exploration_plan_tree"]))
+    def test_attack_surface_seed_prioritizes_high_signal_links_before_truncation(self):
+        platform = DummyPlatform()
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-seed-priority", "target": {"type": "url", "value": "http://target.local"}, "resolved_target": "http://target.local", "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=platform,
+        )
+        low_signal_links = "".join(f"<a href='/docs/page-{idx}'>doc</a>" for idx in range(40))
+        result = {
+            "status": "ok",
+            "action": "navigate",
+            "url": "http://target.local/index.php",
+            "body": low_signal_links + "<a href='/vulnerabilities/exec/'>exec</a>",
+        }
+
+        asyncio.run(loop._record_autonomy_from_tool("browser-seed", "browser", result, "ev-111111111111"))
+        snapshot = loop.checkpoint_snapshot("test")
+        surface_targets = [node["target"] for node in snapshot["exploration_plan_tree"] if node["kind"] == "surface"]
+
+        self.assertTrue(any(str(target).rstrip("/") == "http://target.local/vulnerabilities/exec" for target in surface_targets))
+    def test_browser_captured_html_responses_seed_plan_nodes(self):
+        platform = DummyPlatform()
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-browser-traffic", "target": {"type": "url", "value": "http://target.local"}, "resolved_target": "http://target.local", "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=platform,
+        )
+        result = {
+            "status": "ok",
+            "action": "navigate",
+            "url": "http://target.local/index.php",
+            "body": "<a href='/vulnerabilities/exec'>exec</a>",
+            "requests": [
+                {
+                    "method": "GET",
+                    "url": "http://target.local/vulnerabilities/exec",
+                    "status_code": 200,
+                    "response_headers": {"content-type": "text/html"},
+                    "response_body": "".join(f"<a href='/menu-{idx}'>m</a>" for idx in range(30)) + "<form action='/vulnerabilities/exec' method='get'><input name='ip'></form>",
+                }
+            ],
+        }
+
+        asyncio.run(loop._record_autonomy_from_tool("tool-browser", "browser", result, "ev-111111111111"))
+        snapshot = loop.checkpoint_snapshot("test")
+        test_nodes = [node for node in snapshot["exploration_plan_tree"] if node["kind"] == "test"]
+        tests = {(node["parameter"], node["vuln_type"], node["endpoint"]) for node in test_nodes}
+
+        self.assertTrue(any(param == "ip" and vuln == "command_injection" and "vulnerabilities/exec" in endpoint for param, vuln, endpoint in tests))
+        self.assertFalse(any(node["parameter"] == "ip" and node["vuln_type"] in {"weak_credentials", "auth_session"} for node in test_nodes))
+        self.assertTrue(any(node["parameter"] == "ip" and node["priority"] == 22 for node in test_nodes))
+    def test_traffic_request_seeds_request_bound_plan_nodes(self):
+        loop = PentestAgentLoop(
+            task={"conversation_id": "conv-traffic-plan", "scope": {"allow": ["http://target.local"], "deny": []}},
+            tools=SimpleNamespace(),
+            sandbox=None,
+            llm=None,
+            platform_sync=DummyPlatform(),
+        )
+        rows = loop.traffic_capture.record_browser_requests([
+            {"method": "POST", "url": "http://target.local/search", "body": "q=base", "headers": {"content-type": "application/x-www-form-urlencoded"}, "status_code": 200, "response_headers": {"content-type": "text/html"}, "response_body": "base"},
+        ], evidence_id="ev-111111111111")
+
+        created = loop.plan_tree.seed_from_traffic_request(rows[0], vuln_types=["xss", "sqli"])
+        tests = [node.to_dict() for node in created if node.kind == "test"]
+
+        self.assertTrue(tests)
+        self.assertTrue(all(node["request_id"] == rows[0]["request_id"] for node in tests))
+        self.assertTrue(any(node["parameter"] == "q" and node["vuln_type"] == "xss" for node in tests))
+
+    def test_run_web_skill_uses_plan_node_request_id(self):
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                from urllib.parse import parse_qs
+                posted = self.rfile.read(length).decode()
+                body = (parse_qs(posted).get("q") or [posted])[0].encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            platform = DummyPlatform()
+            target = f"http://127.0.0.1:{server.server_port}/search"
+            loop = PentestAgentLoop(
+                task={"conversation_id": "conv-request-skill", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": [f"http://127.0.0.1:{server.server_port}"], "deny": []}},
+                tools=SimpleNamespace(),
+                sandbox=None,
+                llm=None,
+                platform_sync=platform,
+            )
+            row = loop.traffic_capture.record_http_result(tool_name="browser", result={"method": "POST", "url": target, "request_body": "q=base", "request_headers": {"content-type": "application/x-www-form-urlencoded"}, "status_code": 200, "headers": {"content-type": "text/html"}, "body": "base"})
+            node = loop.plan_tree.add_node(title="Request-bound XSS", kind="test", endpoint=f"POST {target}", parameter="q", vuln_type="xss", request_id=row["request_id"])
+            tool = next(t for t in make_workflow_tools(loop) if t.name == "run_web_skill")
+
+            result = asyncio.run(tool.handler(node_id=node.node_id))
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        self.assertEqual(result["status"], "done")
+        self.assertEqual(result["source_request_id"], row["request_id"])
+        self.assertIn("<script>alert(1337)</script>", result["body"])
+    def test_capture_replay_and_mutate_send_real_http_requests(self):
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = f"GET {self.path}".encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                posted = self.rfile.read(length).decode()
+                body = f"POST {self.path} {posted}".encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            target = f"http://127.0.0.1:{server.server_port}/login"
+            loop = PentestAgentLoop(
+                task={"conversation_id": "conv-1", "target": {"type": "url", "value": target}, "resolved_target": target, "scope": {"allow": [f"http://127.0.0.1:{server.server_port}"], "deny": []}},
+                tools=SimpleNamespace(),
+                sandbox=None,
+                llm=None,
+                platform_sync=DummyPlatform(),
+            )
+            loop.traffic_capture.record_http_result(tool_name="http_request", result={"status": "done", "method": "GET", "url": target, "status_code": 200, "headers": {}, "body": "baseline"})
+            request_id = loop.traffic_capture.to_list()[0]["request_id"]
+            tools = {tool.name: tool for tool in make_workflow_tools(loop)}
+
+            replay = asyncio.run(tools["capture_replay_request"].handler(request_id=request_id))
+            mutated = asyncio.run(tools["capture_mutate_request"].handler(request_id=request_id, method="POST", body="username=admin"))
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        self.assertEqual(replay["status"], "done")
+        self.assertIn("GET /login", replay["body"])
+        self.assertEqual(mutated["status"], "done")
+        self.assertIn("username=admin", mutated["body"])
+
     def test_web_phases_allow_http_and_browser_tools(self):
         for phase in ("recon", "verify"):
             self.assertIn("http_request", PHASE_TOOL_NAMES[phase])
@@ -700,7 +2243,16 @@ class CheckpointResumeTests(unittest.TestCase):
         self.assertEqual([item["status"] for item in _todos_for_checkpoint(None, "running")], ["running", "pending", "pending", "pending", "pending", "pending"])
         self.assertEqual(_checkpoint_findings(None), [])
         self.assertEqual(_checkpoint_assets(None), [])
+        self.assertEqual(_checkpoint_plan_tree(None), [])
 
+    def test_checkpoint_plan_tree_helper_normalizes_nodes(self):
+        checkpoint = {"exploration_plan_tree": [{"node_id": "plan-1", "title": "Check login", "status": "running", "endpoint": "GET http://target.local"}]}
+
+        nodes = _checkpoint_plan_tree(checkpoint)
+
+        self.assertEqual(nodes[0]["node_id"], "plan-1")
+        self.assertEqual(nodes[0]["status"], "running")
+        self.assertEqual(nodes[0]["endpoint"], "GET http://target.local")
     def test_checkpoint_completed_current_phase_advances_display_phase(self):
         checkpoint = {
             "reason": "phase_transition",
@@ -818,5 +2370,13 @@ class CheckpointResumeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+
+
+
+
+
 
 

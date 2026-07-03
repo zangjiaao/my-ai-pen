@@ -36,6 +36,7 @@ const TEMPLATES = [
 
 type Progress = { current: number; total: number; percent: number };
 type Todo = { id: string; title: string; status: "done" | "running" | "pending" };
+type PlanNode = { node_id?: string; id?: string; title?: string; status?: string; parent_id?: string | null; kind?: string; endpoint?: string | null; parameter?: string | null; vuln_type?: string | null; notes?: string | null; evidence_ids?: string[]; priority?: number; };
 type AgentNode = { id: string; name: string; type: AgentIdentity | string; status: string; token_required?: boolean };
 type MentionState = { start: number; query: string } | null;
 
@@ -55,6 +56,7 @@ type ConversationSnapshot = {
   agent_state?: Record<string, unknown>;
   progress?: Progress;
   todos?: Todo[];
+  plan_tree?: PlanNode[];
   findings?: Array<Record<string, unknown>>;
   assets?: Array<Record<string, unknown>>;
   pending_approvals?: Array<Record<string, unknown>>;
@@ -80,6 +82,7 @@ export default function ConversationPage() {
   const [agentState, setAgentState] = useState<Record<string, unknown>>({});
   const [progress, setProgress] = useState<Progress | undefined>();
   const [todos, setTodos] = useState<Todo[]>([]);
+  const [planTree, setPlanTree] = useState<PlanNode[]>([]);
   const [findings, setFindings] = useState<Array<Record<string, unknown>>>([]);
   const [assets, setAssets] = useState<Array<Record<string, unknown>>>([]);
   const [pendingApprovals, setPendingApprovals] = useState<Array<Record<string, unknown>>>([]);
@@ -121,6 +124,7 @@ export default function ConversationPage() {
     setAgentState(hasValues(snapshot.agent_state) ? snapshot.agent_state! : fallback?.agent_state || {});
     setProgress(snapshot.progress || fallback?.progress);
     setTodos(snapshot.todos?.length ? snapshot.todos : fallback?.todos || []);
+    setPlanTree(snapshot.plan_tree?.length ? snapshot.plan_tree : fallback?.plan_tree || []);
     setFindings(snapshot.findings?.length ? snapshot.findings : fallback?.findings || []);
     setAssets(snapshot.assets?.length ? snapshot.assets : fallback?.assets || []);
     setPendingApprovals(snapshot.pending_approvals?.length ? snapshot.pending_approvals : fallback?.pending_approvals || []);
@@ -216,7 +220,13 @@ export default function ConversationPage() {
       setEvidence(prev => upsertBy(prev, m, "evidence_id"));
       void refreshConversationState(convId);
     },
-    request_decision: (msg) => {
+    plan_tree_updated: (msg) => {
+      if (!isActiveMessage(msg, activeId)) return;
+      const m = msg as Record<string, unknown>;
+      const tree = Array.isArray(m.plan_tree) ? m.plan_tree as PlanNode[] : m.plan_node ? [m.plan_node as PlanNode] : [];
+      if (tree.length) setPlanTree(tree);
+      void refreshConversationState(messageConversationId(msg, activeId));
+    },    request_decision: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
       const convId = messageConversationId(msg, activeId);
@@ -331,6 +341,7 @@ export default function ConversationPage() {
     setAgentState({});
     setProgress(undefined);
     setTodos([]);
+    setPlanTree([]);
     setFindings([]);
     setAssets([]);
     setPendingApprovals([]);
@@ -713,6 +724,7 @@ function pendingAgentSourceForMessage(
             intakeStatus={agentState.intakeStatus as string | undefined}
             progress={progress}
             todos={todos}
+            planTree={planTree}
             findings={findings}
             assets={assets}
             pendingApprovals={pendingApprovals}
