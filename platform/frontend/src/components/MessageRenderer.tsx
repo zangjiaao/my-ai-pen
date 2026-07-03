@@ -46,10 +46,10 @@ function ToolCallCard({ content, onOpenEvidence }: { content: Record<string, unk
   const latestTool = String(content.latest_tool_name || content.tool_name || primaryTool);
   const status = normalizeExecutionStatus(content.status);
   const stdout = content.stdout as string || "";
-  const runCount = Number(content.run_count || (Array.isArray(content.tool_run_ids) ? content.tool_run_ids.length : toolNames.length || 1));
   const categories = toolCategories(toolNames);
   const items = toolItemsFromContent(content);
-  const summary = summarizeToolOutput(stdout, latestTool);
+  const fallbackSummary = summarizeToolOutput(stdout, latestTool);
+  const resultSummary = summarizeToolActivity(items, latestTool, status);
   return (
     <div data-testid="tool-card" className="my-2 min-w-0 max-w-full rounded-md bg-surface-default/70">
       <button
@@ -62,15 +62,16 @@ function ToolCallCard({ content, onOpenEvidence }: { content: Record<string, unk
         <div className="flex flex-shrink-0 items-center gap-1.5">
           {categories.map(category => <ToolCategoryIcon key={category.key} category={category} />)}
         </div>
-        <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">{toolTitle(toolNames)}</span>
-        <span className="ml-auto flex-shrink-0 text-xs text-ink-muted">{runCount} {runCount === 1 ? "call" : "calls"}</span>
+        <span className="min-w-0 max-w-[34%] flex-shrink truncate text-sm font-medium text-ink">{toolTitle(toolNames)}</span>
+        <span className="min-w-0 truncate text-xs text-ink-secondary">{resultSummary}</span>
+        <span className="min-w-6 flex-1" aria-hidden="true" />
       </button>
       {expanded && (
         <div className="ml-10 space-y-1 px-1 pb-2">
           {items.length ? items.map((item, index) => (
             <ToolItemRow key={`${item.runId || item.evidenceId || index}-${index}`} item={item} onOpenEvidence={onOpenEvidence} />
           )) : (
-            <div className="rounded-sm bg-canvas-inset px-3 py-2 text-xs text-ink-secondary">{summary}</div>
+            <div className="rounded-sm bg-canvas-inset px-3 py-2 text-xs text-ink-secondary">{fallbackSummary}</div>
           )}
         </div>
       )}
@@ -84,6 +85,7 @@ type ToolItem = {
   summary: string;
   evidenceId?: string;
   runId?: string;
+  result?: Record<string, unknown>;
 };
 
 function ToolItemRow({ item, onOpenEvidence }: { item: ToolItem; onOpenEvidence?: (evidence: Partial<SecurityEvidence>) => void }) {
@@ -124,6 +126,38 @@ function ToolCategoryIcon({ category }: { category: ToolCategory }) {
   );
 }
 
+function summarizeToolActivity(items: ToolItem[], fallbackTool: string, aggregateStatus: string): string {
+  const candidates: ToolItem[] = items.length ? items : [{ toolName: fallbackTool, status: aggregateStatus, summary: "" }];
+  const successful = candidates.filter(isSuccessfulToolItem);
+  if (!successful.length) {
+    if (candidates.some(item => normalizeExecutionStatus(item.status) === "running")) return "\u6267\u884c\u4e2d";
+    return "\u5931\u8d25";
+  }
+
+  const toolName = successful[successful.length - 1]?.toolName || fallbackTool;
+  const lower = toolName.toLowerCase();
+  const count = successful.length;
+  if (/browser|explore|crawl/.test(lower)) return `\u5df2\u6d4f\u89c8${count}\u4e2a\u7f51\u9875`;
+  if (/http|request|replay|fetch|curl/.test(lower)) return `\u5df2\u8bf7\u6c42${count}\u6b21`;
+  if (/execute|command|shell|docker|process/.test(lower)) return `\u5df2\u6267\u884c${count}\u6761\u547d\u4ee4`;
+  if (/finding|vuln|verify|evidence|confirm/.test(lower)) return `\u5df2\u5904\u7406${count}\u6761\u7ed3\u679c`;
+  if (/search|scan|dir|wordlist|enumerate/.test(lower)) return `\u5df2\u679a\u4e3e${count}\u6b21`;
+  return `\u5df2\u5b8c\u6210${count}\u6b21`;
+}
+
+function isSuccessfulToolItem(item: ToolItem): boolean {
+  const primaryStatus = String(item.status || "").trim().toLowerCase();
+  if (primaryStatus && normalizeExecutionStatus(primaryStatus) !== "running") return isSuccessfulStatus(primaryStatus);
+  return [item.result?.status, item.result?.status_code].some(isSuccessfulStatus);
+}
+
+function isSuccessfulStatus(value: unknown): boolean {
+  const status = String(value || "").trim().toLowerCase();
+  if (["done", "ok", "success", "completed", "complete", "saved", "loaded"].includes(status)) return true;
+  if (/^\d{3}$/.test(status)) return Number(status) < 400;
+  return normalizeExecutionStatus(status) === "done";
+}
+
 function toolItemsFromContent(content: Record<string, unknown>): ToolItem[] {
   const structured = Array.isArray(content.tool_items)
     ? content.tool_items.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)))
@@ -133,12 +167,14 @@ function toolItemsFromContent(content: Record<string, unknown>): ToolItem[] {
       const toolName = readContentString(item.tool_name) || readContentString(content.tool_name) || "tool";
       const status = readContentString(item.status) || readContentString(content.status) || "done";
       const stdout = readContentString(item.stdout);
+      const parsed = parseLooseObject(stdout);
       return {
         toolName,
         status,
-        summary: summarizeToolLine(stdout, toolName),
+        summary: parsed ? summarizeToolObject(parsed, toolName) || stripJsonNoise(stdout) : summarizeToolLine(stdout, toolName),
         evidenceId: readContentString(item.evidence_id),
         runId: readContentString(item.tool_run_id),
+        result: parsed || undefined,
       };
     });
   }
@@ -178,6 +214,7 @@ function toolItemFromLine(line: string, fallback: { fallbackTool: string; fallba
       summary: summarizeToolObject(parsed, toolName) || stripJsonNoise(line),
       evidenceId: readContentString(parsed.evidence_id) || readContentString(parsed.EVIDENCE_ID),
       runId: readContentString(parsed.tool_run_id) || fallback.runId,
+      result: parsed,
     };
   }
   return {
@@ -651,3 +688,5 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
     </div>
   );
 }
+
+
