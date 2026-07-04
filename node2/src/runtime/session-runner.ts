@@ -19,6 +19,7 @@ import { createPentestExtension } from "./pentest-extension.js";
 import { buildSystemPrompt } from "./prompt.js";
 
 const TEXT_STREAM_FLUSH_MS = 250;
+const DEFAULT_COMPLETION_GATE_ROUNDS = 3;
 
 export async function runPentestTask(
   config: Node2Config,
@@ -114,6 +115,53 @@ export async function runPentestTask(
     await session.prompt(task.instruction, { source: "interactive" });
     await textStream.flush();
     if (signal?.aborted) throw new Error("Task interrupted by user.");
+    const gateRounds = completionGateRounds();
+    let gatePassed = runtime.plan.audit().canComplete;
+    for (let round = 0; !gatePassed && round < gateRounds; round += 1) {
+      const gapPrompt = runtime.plan.gapPrompt();
+      await platform.send({
+        type: "completion_blocked",
+        conversation_id: task.conversationId,
+        task_id: task.taskId,
+        round: round + 1,
+        audit: runtime.plan.audit(),
+        message: "Runtime completion gate found unresolved Plan Tree work items.",
+      });
+      await session.prompt(gapPrompt, { source: "interactive" });
+      await textStream.flush();
+      if (signal?.aborted) throw new Error("Task interrupted by user.");
+      gatePassed = runtime.plan.audit().canComplete;
+    }
+    if (!gatePassed) {
+      await platform.send({
+        type: "checkpoint_update",
+        conversation_id: task.conversationId,
+        task_id: task.taskId,
+        checkpoint: {
+          ...runtime.plan.checkpoint(),
+          runtime: "node2-pi",
+          tool_names: PENTEST_TOOL_NAMES,
+          coverage: await runtime.coverage.summary(),
+          evidence: await runtime.evidence.list(),
+        },
+      });
+      await platform.send({
+        type: "task_incomplete",
+        conversation_id: task.conversationId,
+        task_id: task.taskId,
+        status: "incomplete",
+        audit: runtime.plan.audit(),
+        summary: extractLastAssistantText(session.messages).slice(0, 4000) || runtime.plan.audit().summary,
+      });
+      await platform.send({
+        type: "task_complete",
+        conversation_id: task.conversationId,
+        task_id: task.taskId,
+        status: "incomplete",
+        summary: runtime.plan.audit().summary,
+      });
+      return;
+    }
     runtime.plan.complete();
     await platform.send({
       type: "checkpoint_update",
@@ -147,6 +195,12 @@ export async function runPentestTask(
     await textStream.dispose();
     session.dispose();
   }
+}
+
+function completionGateRounds(): number {
+  const raw = Number(process.env.NODE2_COMPLETION_GATE_ROUNDS || DEFAULT_COMPLETION_GATE_ROUNDS);
+  if (!Number.isFinite(raw)) return DEFAULT_COMPLETION_GATE_ROUNDS;
+  return Math.max(0, Math.min(Math.floor(raw), 8));
 }
 
 async function handleSessionEvent(platform: PlatformSink, runtime: ToolRuntime, event: any): Promise<void> {

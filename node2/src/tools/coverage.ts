@@ -3,7 +3,7 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { CoverageStatus, ToolRuntime } from "../types.js";
 import { emitPlanUpdate, jsonResult, textResult } from "./common.js";
 
-const statuses = ["tried", "passed", "failed", "blocked", "skipped"] as const;
+const statuses = ["observed", "tried", "passed", "failed", "blocked", "skipped"] as const;
 
 export function createCoverageTool(runtime: ToolRuntime): ToolDefinition<any> {
   return {
@@ -27,6 +27,8 @@ export function createCoverageTool(runtime: ToolRuntime): ToolDefinition<any> {
       title: Type.Optional(Type.String()),
       parent_id: Type.Optional(Type.String()),
       kind: Type.Optional(Type.String()),
+      method: Type.Optional(Type.String()),
+      result: Type.Optional(Type.String()),
       priority: Type.Optional(Type.Number()),
       candidates: Type.Optional(Type.Array(Type.Object({ endpoint: Type.String(), param: Type.String() }))),
       vuln_classes: Type.Optional(Type.Array(Type.String())),
@@ -76,9 +78,11 @@ export function createCoverageTool(runtime: ToolRuntime): ToolDefinition<any> {
           kind: params.kind || "task",
           level: "work_item",
           parent_id: params.parent_id,
+          method: params.method,
           endpoint: params.endpoint,
           parameter: params.param,
           vuln_type: params.vuln_class,
+          result: params.result,
           notes: params.notes,
           priority: params.priority,
           source: "agent",

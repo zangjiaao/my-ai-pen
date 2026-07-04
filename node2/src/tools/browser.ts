@@ -1,6 +1,7 @@
 import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ToolRuntime } from "../types.js";
+import { observeAttackSurface } from "../runtime/coverage-auditor.js";
 import { emitToolEvidence, jsonResult, textResult } from "./common.js";
 
 type BrowserState = {
@@ -38,25 +39,30 @@ export function createBrowserTool(runtime: ToolRuntime): ToolDefinition<any> {
       if (params.action === "goto") {
         if (!params.url) return textResult("error: url is required");
         await page.goto(params.url, { waitUntil: "domcontentloaded" });
+        await observePage(runtime, page, "browser");
         return jsonResult(await pageSummary(page));
       }
       if (params.action === "click") {
         if (!params.selector) return textResult("error: selector is required");
         await page.click(params.selector);
+        await observePage(runtime, page, "browser");
         return jsonResult(await pageSummary(page));
       }
       if (params.action === "fill") {
         if (!params.selector) return textResult("error: selector is required");
         await page.fill(params.selector, params.text || "");
+        await observePage(runtime, page, "browser");
         return jsonResult(await pageSummary(page));
       }
       if (params.action === "press") {
         await page.keyboard.press(params.key || "Enter");
+        await observePage(runtime, page, "browser");
         return jsonResult(await pageSummary(page));
       }
       if (params.action === "content") {
         const html = String(await page.content()).slice(0, 128 * 1024);
         const evidenceId = await emitToolEvidence(runtime, "browser", `browser content ${page.url()}`, { url: page.url(), html });
+        await observeAttackSurface(runtime, { method: "GET", url: page.url(), responseBody: html, evidenceIds: [evidenceId], source: "browser" });
         return jsonResult({ evidence_id: evidenceId, url: page.url(), html }, { evidenceId });
       }
       if (params.action === "snapshot") {
@@ -91,4 +97,13 @@ async function loadPlaywright(): Promise<any | undefined> {
 
 async function pageSummary(page: any): Promise<Record<string, unknown>> {
   return { url: page.url(), title: await page.title() };
+}
+
+async function observePage(runtime: ToolRuntime, page: any, source: string): Promise<void> {
+  try {
+    const html = String(await page.content()).slice(0, 128 * 1024);
+    await observeAttackSurface(runtime, { method: "GET", url: page.url(), responseBody: html, source });
+  } catch {
+    // Observation should never break the browser action itself.
+  }
 }

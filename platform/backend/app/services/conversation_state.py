@@ -5,13 +5,14 @@ from datetime import datetime, timezone
 
 from app.models.conversation import Conversation
 
-CONVERSATION_STATUSES = {"created", "running", "paused", "completed", "failed", "canceled"}
+CONVERSATION_STATUSES = {"created", "running", "paused", "completed", "incomplete", "failed", "canceled"}
 
 CONVERSATION_TRANSITIONS: dict[str, set[str]] = {
     "created": {"running", "canceled"},
-    "running": {"paused", "completed", "failed", "canceled"},
+    "running": {"paused", "completed", "incomplete", "failed", "canceled"},
     "paused": {"running", "canceled"},
     "completed": {"running"},
+    "incomplete": {"running", "canceled"},
     "failed": {"running", "canceled"},
     "canceled": {"running"},
 }

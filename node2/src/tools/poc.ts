@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ToolRuntime } from "../types.js";
+import { observeAttackSurface } from "../runtime/coverage-auditor.js";
 import { emitToolEvidence, jsonResult, textResult } from "./common.js";
 
 export function createPocTool(runtime: ToolRuntime): ToolDefinition<any> {
@@ -40,6 +41,7 @@ export function createPocTool(runtime: ToolRuntime): ToolDefinition<any> {
         if (!ext) throw new Error("only .py, .js, and .mjs PoC files can run");
         const result = await runProcess(ext, [file, ...(params.args || [])], Math.min((params.timeout_seconds || 60) * 1000, 180_000));
         const evidenceId = await emitToolEvidence(runtime, "poc", `PoC ${params.filename}`, { file, ...result });
+        await observeAttackSurface(runtime, { responseBody: `${result.stdout}\n${result.stderr}`, evidenceIds: [evidenceId], source: "poc" });
         return jsonResult({ evidence_id: evidenceId, ...result }, { evidenceId });
       }
       return textResult("error: action must be write, read, or run");

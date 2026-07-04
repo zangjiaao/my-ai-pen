@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ToolRuntime } from "../types.js";
+import { observeAttackSurface } from "../runtime/coverage-auditor.js";
 import { emitToolEvidence, isInScope, jsonResult } from "./common.js";
 
 const SCANNERS: Record<string, { command: string; build: (p: Record<string, unknown>) => string[]; timeoutMs: number }> = {
@@ -44,6 +45,7 @@ export function createScanTool(runtime: ToolRuntime): ToolDefinition<any> {
       const argv = spec.build(params);
       const result = await runProcess(spec.command, argv, Math.min((params.timeout_seconds || spec.timeoutMs / 1000) * 1000, spec.timeoutMs));
       const evidenceId = await emitToolEvidence(runtime, "scan", `${params.scanner} ${target}`, { scanner: params.scanner, argv, ...result });
+      await observeAttackSurface(runtime, { method: "GET", url: target, responseBody: `${result.stdout}\n${result.stderr}`, evidenceIds: [evidenceId], source: "scan" });
       return jsonResult({ evidence_id: evidenceId, scanner: params.scanner, argv, ...result }, { evidenceId });
     },
   };

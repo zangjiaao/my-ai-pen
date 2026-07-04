@@ -23,7 +23,9 @@ export type ToolRuntime = {
   traffic: TrafficStoreLike;
 };
 
-export type PlanStatus = "pending" | "running" | "done" | "blocked" | "failed" | "skipped";
+export type PlanStatus = "todo" | "pending" | "running" | "done" | "blocked" | "failed" | "skipped";
+
+export type WorkResult = "confirmed" | "negative" | "inconclusive" | "blocked";
 
 export type PlanNode = {
   node_id: string;
@@ -32,13 +34,26 @@ export type PlanNode = {
   kind: string;
   level: "phase" | "objective" | "work_item";
   parent_id?: string | null;
+  method?: string | null;
   endpoint?: string | null;
   parameter?: string | null;
+  parameters?: string[];
   vuln_type?: string | null;
+  result?: WorkResult | null;
   notes?: string | null;
   evidence_ids?: string[];
   priority?: number;
   source?: string;
+};
+
+export type PlanAudit = {
+  canComplete: boolean;
+  openWorkItems: PlanNode[];
+  inconclusiveWorkItems: PlanNode[];
+  blockedWorkItems: PlanNode[];
+  findingsWithoutEvidence: PlanNode[];
+  missingBacklog: boolean;
+  summary: string;
 };
 
 export type PlanStoreLike = {
@@ -51,13 +66,15 @@ export type PlanStoreLike = {
   coverageMark(input: { endpoint: string; param: string; vulnClass: string; status: CoverageStatus; notes?: string }): void;
   upsert(input: Partial<PlanNode> & { node_id?: string; id?: string; title: string }): PlanNode;
   findingConfirmed(input: { title: string; severity?: string; location?: string; evidenceIds?: string[] }): void;
+  audit(): PlanAudit;
+  gapPrompt(): string;
   snapshot(): PlanNode[];
   checkpoint(extra?: Record<string, unknown>): Record<string, unknown>;
   progress(): { current: number; total: number; percent: number };
   currentPhase(): string;
 };
 
-export type CoverageStatus = "tried" | "passed" | "failed" | "blocked" | "skipped";
+export type CoverageStatus = "observed" | "tried" | "passed" | "failed" | "blocked" | "skipped";
 
 export type CoverageStoreLike = {
   mark(input: {

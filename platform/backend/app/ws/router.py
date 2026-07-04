@@ -431,8 +431,8 @@ def _message_dedupe_key(*, role: str, original_type: str, stored_type: str, cont
         return f"approval:{request_id}" if request_id else None
     if original_type == "task_error":
         return f"task_error:{hashlib.sha256(str(content.get('text') or '').encode()).hexdigest()[:16]}"
-    if original_type == "task_complete":
-        return "task_complete"
+    if original_type in {"task_complete", "task_incomplete"}:
+        return "task_complete" if original_type == "task_complete" else "task_incomplete"
     if original_type in {"evidence_created", "vuln_found", "asset_discovered"}:
         stable_id = content.get("evidence_id") or content.get("id") or content.get("vulnerability_id") or content.get("asset_id")
         return f"{original_type}:{stable_id}" if stable_id else None
@@ -598,9 +598,23 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                 "expires_at": msg.get("expires_at", ""),
                 "options": ["authorize", "cancel"],
             }
+        elif msg_type == "completion_blocked":
+            msg_type = "status"
+            content = {
+                "text": msg.get("message") or "Runtime completion gate found unresolved Plan Tree work items.",
+                "status": "blocked",
+                "audit": msg.get("audit"),
+                "round": msg.get("round"),
+            }
+        elif msg_type == "task_incomplete":
+            msg_type = "status"
+            content = {"text": "Task incomplete", "status": "incomplete", "summary": msg.get("summary", {}), "audit": msg.get("audit")}
         elif msg_type == "task_complete":
             msg_type = "status"
-            content = {"text": "Task complete", "summary": msg.get("summary", {})}
+            if msg.get("status") == "incomplete":
+                content = {"text": "Task incomplete", "status": "incomplete", "summary": msg.get("summary", {}), "audit": msg.get("audit")}
+            else:
+                content = {"text": "Task complete", "status": "completed", "summary": msg.get("summary", {})}
         elif msg_type == "task_error":
             msg_type = "status"
             content = {"text": f"Task failed: {msg.get('message', msg.get('error', ''))}"}
@@ -1342,7 +1356,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             from app.db.base import async_session
                             from app.models.conversation import Conversation
 
-                            next_status = "completed" if msg.get("type") == "task_complete" else "failed"
+                            next_status = "incomplete" if msg.get("type") == "task_complete" and msg.get("status") == "incomplete" else "completed" if msg.get("type") == "task_complete" else "failed"
                             await _set_conversation_status(conv_id, next_status)
                         except Exception as e:
                             print(f"[WS] update conversation status error: {e}")

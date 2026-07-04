@@ -5,8 +5,8 @@ import ApprovalCountdown from "./ApprovalCountdown";
 import { phaseLabel } from "../lib/phase";
 
 type Tab = "discoveries" | "progress" | "pending" | "evidence";
-type PlanStatus = "pending" | "running" | "done" | "skipped" | "blocked" | "failed" | string;
-type PlanNode = { node_id?: string; id?: string; title?: string; status?: PlanStatus; kind?: string; level?: string; endpoint?: string | null; parameter?: string | null; vuln_type?: string | null; parent_id?: string | null; notes?: string | null; priority?: number; };
+type PlanStatus = "todo" | "pending" | "running" | "done" | "skipped" | "blocked" | "failed" | string;
+type PlanNode = { node_id?: string; id?: string; title?: string; status?: PlanStatus; kind?: string; level?: string; method?: string | null; endpoint?: string | null; parameter?: string | null; parameters?: string[]; vuln_type?: string | null; result?: string | null; parent_id?: string | null; notes?: string | null; evidence_ids?: string[]; priority?: number; };
 type PlanTreeItem = { key: string; node: PlanNode; children: PlanTreeItem[]; index: number };
 type VisiblePlanTreeItem = { item: PlanTreeItem; depth: number };
 
@@ -239,11 +239,15 @@ function PlanNodeMeta({ node }: { node: PlanNode }) {
   if (node.level && node.level !== "work_item") return null;
   const location = String(node.endpoint || (node.kind && node.kind !== "phase" && node.kind !== "objective" ? node.kind : ""));
   const testDetail = node.parameter || node.vuln_type ? `${String(node.vuln_type || "test")} / ${String(node.parameter || "-")}` : "";
-  if (!location && !testDetail) return null;
+  const evidenceCount = Array.isArray(node.evidence_ids) ? node.evidence_ids.length : 0;
+  const result = node.result ? String(node.result) : "";
+  const method = node.method ? String(node.method) : "";
+  if (!location && !testDetail && !result && !method && evidenceCount === 0) return null;
   return (
     <div className="mt-1 space-y-0.5">
-      {location && <p className="break-words font-mono text-[11px] text-ink-muted [overflow-wrap:anywhere]">{location}</p>}
+      {location && <p className="break-words font-mono text-[11px] text-ink-muted [overflow-wrap:anywhere]">{method ? `${method} ` : ""}{location}</p>}
       {testDetail && <p className="break-words text-[11px] text-ink-secondary [overflow-wrap:anywhere]">{testDetail}</p>}
+      {(result || evidenceCount > 0) && <p className="break-words text-[11px] text-ink-secondary [overflow-wrap:anywhere]">{[result && `result: ${result}`, evidenceCount > 0 && `evidence: ${evidenceCount}`].filter(Boolean).join(" | ")}</p>}
     </div>
   );
 }
@@ -293,7 +297,9 @@ function planNodeKey(node: PlanNode, index: number) {
 function planStatusColor(status: string) {
   if (status === "done") return "text-status-success";
   if (status === "running") return "text-status-running";
+  if (status === "todo") return "text-ink-secondary";
   if (status === "failed" || status === "blocked") return "text-severity-critical";
+  if (status === "skipped") return "text-severity-medium";
   return "text-ink-muted";
 }
 

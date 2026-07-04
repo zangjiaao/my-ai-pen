@@ -24,13 +24,14 @@ export class CoverageStore implements CoverageStoreLike {
     const key = this.key(input.endpoint, input.param, input.vulnClass);
     const now = new Date().toISOString();
     const existing = this.rows.get(key);
+    const status = mergeStatus(existing?.status, input.status);
     const row: CoverageRow = existing
-      ? { ...existing, status: input.status, notes: input.notes, count: existing.count + 1, lastSeen: now }
+      ? { ...existing, status, notes: input.notes || existing.notes, count: existing.count + 1, lastSeen: now }
       : {
           endpoint: input.endpoint,
           param: input.param,
           vulnClass: input.vulnClass,
-          status: input.status,
+          status,
           notes: input.notes,
           count: 1,
           firstSeen: now,
@@ -74,4 +75,17 @@ export class CoverageStore implements CoverageStoreLike {
   private key(endpoint: string, param: string, vulnClass: string): string {
     return `${endpoint}\u0000${param}\u0000${vulnClass}`.toLowerCase();
   }
+}
+
+function mergeStatus(existing: CoverageStatus | undefined, next: CoverageStatus): CoverageStatus {
+  if (!existing) return next;
+  const rank: Record<CoverageStatus, number> = {
+    observed: 0,
+    tried: 1,
+    skipped: 2,
+    blocked: 3,
+    failed: 4,
+    passed: 4,
+  };
+  return rank[next] >= rank[existing] ? next : existing;
 }

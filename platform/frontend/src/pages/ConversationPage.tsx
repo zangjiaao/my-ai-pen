@@ -27,7 +27,7 @@ const TEMPLATES = [
 ];
 
 type Progress = { current: number; total: number; percent: number };
-type PlanNode = { node_id?: string; id?: string; title?: string; status?: string; parent_id?: string | null; kind?: string; level?: string; endpoint?: string | null; parameter?: string | null; vuln_type?: string | null; notes?: string | null; evidence_ids?: string[]; priority?: number; };
+type PlanNode = { node_id?: string; id?: string; title?: string; status?: string; parent_id?: string | null; kind?: string; level?: string; method?: string | null; endpoint?: string | null; parameter?: string | null; parameters?: string[]; vuln_type?: string | null; result?: string | null; notes?: string | null; evidence_ids?: string[]; priority?: number; };
 type AgentNode = { id: string; name: string; type: AgentIdentity | string; status: string; token_required?: boolean };
 type MentionState = { start: number; query: string } | null;
 
@@ -233,7 +233,40 @@ export default function ConversationPage() {
       if (tree.length) setPlanTree(tree);
       if (isProgress(m.progress)) setProgress(m.progress);
       void refreshConversationState(messageConversationId(msg, activeId));
-    },    request_decision: (msg) => {
+    },
+    completion_blocked: (msg) => {
+      if (!isActiveMessage(msg, activeId)) return;
+      const m = msg as Record<string, unknown>;
+      const convId = messageConversationId(msg, activeId);
+      clearPendingAgentMessage(convId);
+      markMessageAutoScroll();
+      addMessageToConversation(convId, makeMessage(convId, "system", "status", {
+        text: String(m.message || "Runtime completion gate found unresolved Plan Tree work items."),
+        status: "blocked",
+        audit: m.audit,
+        round: m.round,
+        message_id: m.message_id,
+      }));
+      void refreshConversationState(convId);
+    },
+    task_incomplete: (msg) => {
+      if (!isActiveMessage(msg, activeId)) return;
+      const m = msg as Record<string, unknown>;
+      const convId = messageConversationId(msg, activeId);
+      clearPendingAgentMessage(convId);
+      markMessageAutoScroll();
+      setRunning(false);
+      addMessageToConversation(convId, makeMessage(convId, "system", "status", {
+        text: "Task incomplete - " + String(m.summary || ""),
+        status: "incomplete",
+        audit: m.audit,
+        summary: m.summary,
+        message_id: m.message_id,
+      }));
+      void fetchAll();
+      void refreshConversationState(convId);
+    },
+    request_decision: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
       const convId = messageConversationId(msg, activeId);
@@ -303,11 +336,19 @@ export default function ConversationPage() {
     },
     task_complete: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
+      const m = msg as Record<string, unknown>;
       const convId = messageConversationId(msg, activeId);
       clearPendingAgentMessage(convId);
       markMessageAutoScroll();
       setRunning(false);
-      addMessageToConversation(convId, makeMessage(convId, "system", "status", { text: "Task complete - " + JSON.stringify((msg as Record<string, unknown>).summary || {}), summary: (msg as Record<string, unknown>).summary || {}, message_id: (msg as Record<string, unknown>).message_id }));
+      const incomplete = m.status === "incomplete";
+      addMessageToConversation(convId, makeMessage(convId, "system", "status", {
+        text: incomplete ? "Task incomplete - " + String(m.summary || "") : "Task complete - " + JSON.stringify(m.summary || {}),
+        status: incomplete ? "incomplete" : "completed",
+        summary: m.summary || {},
+        audit: m.audit,
+        message_id: m.message_id,
+      }));
       void fetchAll();
       void refreshConversationState(convId);
     },

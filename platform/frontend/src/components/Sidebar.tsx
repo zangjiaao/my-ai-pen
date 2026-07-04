@@ -163,6 +163,7 @@ export default function Sidebar({ activeId, onSelect }: Props) {
 function statusDotClass(status: string) {
   if (status === "running") return "bg-status-running";
   if (status === "completed") return "bg-status-success";
+  if (status === "incomplete") return "bg-severity-medium";
   if (status === "failed" || status === "canceled") return "bg-severity-critical";
   if (status === "paused") return "bg-ink-secondary";
   return "bg-ink-muted";

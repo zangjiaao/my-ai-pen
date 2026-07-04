@@ -8,6 +8,7 @@ import { createPocTool } from "./poc.js";
 import { createScanTool } from "./scan.js";
 import { createSkillTool } from "./skill.js";
 import { createTrafficTool } from "./traffic.js";
+import { createVerifierTool } from "./verifier.js";
 
 export const PENTEST_TOOL_NAMES = [
   "http",
@@ -17,6 +18,7 @@ export const PENTEST_TOOL_NAMES = [
   "coverage",
   "skill",
   "poc",
+  "verifier",
   "finding",
 ] as const;
 
@@ -29,6 +31,7 @@ export function createPentestTools(runtime: ToolRuntime): ToolDefinition<any>[] 
     createCoverageTool(runtime),
     createSkillTool(runtime),
     createPocTool(runtime),
+    createVerifierTool(runtime),
     createFindingTool(runtime),
   ];
 }

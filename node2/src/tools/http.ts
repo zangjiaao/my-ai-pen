@@ -3,6 +3,7 @@ import { request as httpsRequest } from "node:https";
 import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ToolRuntime } from "../types.js";
+import { observeAttackSurface } from "../runtime/coverage-auditor.js";
 import { emitToolEvidence, isInScope, jsonResult, resolveTargetUrl } from "./common.js";
 
 const MAX_BODY_CHARS = 256 * 1024;
@@ -38,12 +39,20 @@ export function createHttpTool(runtime: ToolRuntime): ToolDefinition<any> {
         responseBody: result.body,
       });
       const evidenceId = await emitToolEvidence(runtime, "http", `${method} ${url} -> ${result.status}`, { trafficId, ...result });
+      await observeAttackSurface(runtime, {
+        method,
+        url,
+        requestBody: params.body,
+        responseBody: result.body,
+        evidenceIds: [evidenceId],
+        source: "http",
+      });
       return jsonResult({ traffic_id: trafficId, evidence_id: evidenceId, ...result }, { evidenceId, trafficId });
     },
   };
 }
 
-function sendHttp(input: {
+export function sendHttp(input: {
   method: string;
   url: string;
   headers: Record<string, string>;
