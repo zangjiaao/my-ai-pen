@@ -54,6 +54,22 @@ class PlaybookHintsGapTest(unittest.TestCase):
         pack = build_playbook_hints(loop, skills_dir=Path("/nonexistent"))
         self.assertIn("visit any discovered-but-unvisited endpoints", pack)
 
+    def test_playbook_hints_prefer_package_skill_doc(self):
+        loop = _agent_loop()
+        loop.plan_tree.add_node(
+            title="Test reflected XSS",
+            kind="test",
+            endpoint="GET http://t/search?q=base",
+            parameter="q",
+            vuln_type="xss",
+        )
+
+        pack = build_playbook_hints(loop, skills_dir=ROOT / "node" / "pentest_node" / "skills")
+
+        self.assertIn("Relevant playbook hints", pack)
+        self.assertIn("- xss:", pack)
+        self.assertIn("Classify context", pack)
+        self.assertNotIn("Track every reflection point", pack)
 
 if __name__ == "__main__":
     unittest.main()
