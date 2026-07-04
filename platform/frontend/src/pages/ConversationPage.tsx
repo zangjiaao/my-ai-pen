@@ -177,7 +177,14 @@ export default function ConversationPage() {
       const convId = messageConversationId(m, activeId);
       clearPendingAgentMessage(convId);
       markMessageAutoScroll();
-      setFindings(prev => upsertBy(prev, { ...m, id: m.id || m.vulnerability_id, location: m.location || m.affected_asset || "" }, "title"));
+      setFindings(prev => upsertBy(prev, {
+        ...m,
+        id: m.vulnerability_id || m.id,
+        location: m.location || m.url || m.affected_asset || "",
+        description: m.description || m.impact,
+        poc: m.poc || m.reproduction,
+        affected_asset: m.affected_asset || m.url,
+      }, "title"));
       addMessageToConversation(convId, makeMessage(convId, "agent", "vuln_card", m));
       void refreshConversationState(convId);
     },
@@ -224,6 +231,7 @@ export default function ConversationPage() {
       const m = msg as Record<string, unknown>;
       const tree = Array.isArray(m.plan_tree) ? m.plan_tree as PlanNode[] : m.plan_node ? [m.plan_node as PlanNode] : [];
       if (tree.length) setPlanTree(tree);
+      if (isProgress(m.progress)) setProgress(m.progress);
       void refreshConversationState(messageConversationId(msg, activeId));
     },    request_decision: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
@@ -284,7 +292,7 @@ export default function ConversationPage() {
       markMessageAutoScroll();
       const phase = typeof m.phase === "string" ? m.phase : undefined;
       setAgentState({ phase, activeTool: m.active_tool, intakeResult: m.intake_result, intakeStatus: m.status });
-      setProgress(progressForPhase(phase, "running"));
+      setProgress(isProgress(m.progress) ? m.progress : progressForPhase(phase, "running"));
       setRunning(true);
       const statusMessage = readString(m.message);
       if (statusMessage) {
@@ -763,7 +771,7 @@ function pendingAgentSourceForMessage(
       </div>
       <VulnDetailDialog
         open={Boolean(selectedVulnerability)}
-        vulnerabilityId={(selectedVulnerability?.id || selectedVulnerability?.vulnerability_id) as string | undefined}
+        vulnerabilityId={selectedVulnerability?.vulnerability_id as string | undefined}
         initial={selectedVulnerability}
         onClose={() => setSelectedVulnerability(null)}
         onUpdated={(updated) => setFindings(prev => upsertBy(prev, updated as unknown as Record<string, unknown>, "id"))}
@@ -1059,7 +1067,14 @@ function snapshotFromMessages(messages: Message[], status: Conversation["status"
     .map(m => ({ ...m.content, message_id: m.id }));
   const findings = messages
     .filter(m => m.msg_type === "vuln_card" || m.msg_type === "vuln_found")
-    .map(m => ({ ...m.content, id: readString(m.content.id) || readString(m.content.finding_id) || m.id, location: m.content.location || m.content.affected_asset || "" }));
+    .map(m => ({
+      ...m.content,
+      id: readString(m.content.id) || readString(m.content.vulnerability_id) || readString(m.content.finding_id) || m.id,
+      location: m.content.location || m.content.url || m.content.affected_asset || "",
+      description: m.content.description || m.content.impact,
+      poc: m.content.poc || m.content.reproduction,
+      affected_asset: m.content.affected_asset || m.content.url,
+    }));
   const assets = messages
     .filter(m => m.msg_type === "asset_card" || m.msg_type === "asset_discovered")
     .map(m => ({ ...m.content, id: readString(m.content.id) || readString(m.content.asset_id) || m.id, address: m.content.address || m.content.name || "" }));
@@ -1103,6 +1118,12 @@ function last<T>(items: T[]): T | undefined {
 
 function readString(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+function isProgress(value: unknown): value is Progress {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const item = value as Record<string, unknown>;
+  return typeof item.current === "number" && typeof item.total === "number" && typeof item.percent === "number";
 }
 
 function hasValues(value: Record<string, unknown> | undefined): boolean {

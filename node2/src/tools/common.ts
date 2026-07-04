@@ -31,6 +31,18 @@ export async function emitToolEvidence(
   return evidence.id;
 }
 
+export async function emitPlanUpdate(runtime: ToolRuntime, reason: string): Promise<void> {
+  await runtime.platform.send({
+    type: "plan_tree_updated",
+    conversation_id: runtime.task.conversationId,
+    task_id: runtime.task.taskId,
+    reason,
+    phase: runtime.plan.currentPhase(),
+    progress: runtime.plan.progress(),
+    plan_tree: runtime.plan.snapshot(),
+  } as PlatformMessage);
+}
+
 export function targetBase(runtime: ToolRuntime): string | undefined {
   const value = runtime.task.target?.value;
   return typeof value === "string" && value ? value : undefined;
@@ -47,10 +59,29 @@ export function resolveTargetUrl(runtime: ToolRuntime, raw: string): string {
 export function isInScope(runtime: ToolRuntime, rawUrlOrHost: string): boolean {
   const allow = Array.isArray(runtime.task.scope?.allow) ? runtime.task.scope.allow : [];
   if (allow.length === 0) return true;
+  const target = parseScopeValue(rawUrlOrHost);
   const value = rawUrlOrHost.toLowerCase();
   return allow.some((entry) => {
     if (typeof entry !== "string" || !entry) return false;
-    const normalized = entry.toLowerCase().replace(/^https?:\/\//, "");
-    return value.includes(normalized);
+    const allowed = parseScopeValue(entry);
+    if (target && allowed) {
+      if (target.hostname === allowed.hostname) {
+        if (!target.port || !allowed.port || target.port === allowed.port) return true;
+      }
+      if (target.origin === allowed.origin && target.pathname.startsWith(allowed.pathname)) return true;
+    }
+    const normalized = entry.toLowerCase().replace(/^https?:\/\//, "").replace(/\/$/, "");
+    const comparableValue = value.replace(/^https?:\/\//, "").replace(/\/$/, "");
+    return comparableValue.includes(normalized) || normalized.includes(comparableValue);
   });
+}
+
+function parseScopeValue(value: string): URL | undefined {
+  const raw = value.trim();
+  if (!raw) return undefined;
+  try {
+    return new URL(/^https?:\/\//i.test(raw) ? raw : `http://${raw}`);
+  } catch {
+    return undefined;
+  }
 }

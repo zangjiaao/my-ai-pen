@@ -47,6 +47,8 @@ platform/frontend/tsconfig.tsbuildinfo
 reverse/
 node/workspace/
 node/node/
+node2/workspace/
+node2/.pi-agent/
 
 tmp/
 node/tmp/

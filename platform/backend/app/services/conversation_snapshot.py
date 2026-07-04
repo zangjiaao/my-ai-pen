@@ -212,7 +212,7 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     attack_surface_items = snapshot_list(checkpoint.get("attack_surface")) or snapshot_list(context.get("attack_surface"))
     coverage_items = snapshot_list(checkpoint.get("coverage")) or snapshot_list(context.get("coverage"))
     captured_traffic_items = snapshot_list(checkpoint.get("captured_traffic")) or snapshot_list(context.get("captured_traffic"))
-    raw_plan_tree = checkpoint_plan_tree(checkpoint) or context.get("exploration_plan_tree") or context.get("plan_tree") or []
+    raw_plan_tree = checkpoint_plan_tree(checkpoint) or message_plan_tree(messages) or context.get("exploration_plan_tree") or context.get("plan_tree") or []
     plan_tree = ensure_plan_tree_shape(raw_plan_tree, agent_state.get("phase"), checkpoint_completed(checkpoint), conversation.status)
     todos = todos_for_plan_tree(plan_tree) or (todos_for_checkpoint(checkpoint, conversation.status) if checkpoint else todos_for_phase(agent_state.get("phase"), conversation.status))
     evidence_items = merge_many_by_key([
@@ -587,6 +587,18 @@ def checkpoint_plan_tree(checkpoint: dict) -> list[dict]:
             "priority": item.get("priority", 50),
         })
     return out
+
+
+def message_plan_tree(messages: list[Message]) -> list[dict]:
+    for message in reversed(messages):
+        if message.msg_type != "plan_tree_updated" or not isinstance(message.content, dict):
+            continue
+        items = message.content.get("plan_tree")
+        if isinstance(items, list):
+            return [item for item in items if isinstance(item, dict)]
+    return []
+
+
 def checkpoint_findings(checkpoint: dict) -> list[dict]:
     if not isinstance(checkpoint, dict):
         return []
@@ -651,10 +663,14 @@ def message_findings(messages: list[Message]) -> list[dict]:
             "vulnerability_id": str(content.get("vulnerability_id") or content.get("id") or ""),
             "title": content.get("title") or "Untitled finding",
             "severity": content.get("severity") or "medium",
-            "location": content.get("location") or content.get("affected_asset") or content.get("poc") or "",
+            "location": content.get("location") or content.get("url") or content.get("affected_asset") or content.get("poc") or "",
             "confidence": content.get("confidence"),
             "status": content.get("status") or "pending",
             "asset_id": str(content.get("asset_id")) if content.get("asset_id") else None,
+            "affected_asset": content.get("affected_asset") or content.get("url") or "",
+            "description": content.get("description") or content.get("impact") or "",
+            "poc": content.get("poc") or content.get("reproduction") or "",
+            "remediation": content.get("remediation") or "",
             "evidence_ids": content.get("evidence_ids") or [],
         })
     return findings
@@ -729,6 +745,7 @@ def asset_summary(a: Asset) -> dict:
 def vuln_summary(v: Vulnerability) -> dict:
     return {
         "id": str(v.id),
+        "vulnerability_id": str(v.id),
         "title": v.title,
         "severity": v.severity,
         "location": v.poc or "",

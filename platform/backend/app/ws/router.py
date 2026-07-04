@@ -114,6 +114,11 @@ def _merge_status(current: str | None, incoming: str | None) -> str:
     return incoming_value if rank.get(incoming_value, 1) >= rank.get(current_value, 1) else current_value
 
 
+def _normalize_severity(value: object) -> str:
+    severity = str(value or "medium").strip().lower()
+    return severity if severity in {"critical", "high", "medium", "low", "info"} else "medium"
+
+
 async def _audit(
     *,
     actor_type: str,
@@ -406,6 +411,14 @@ def _message_dedupe_key(*, role: str, original_type: str, stored_type: str, cont
     if original_type == "tool_output":
         tool_run_id = content.get("tool_run_id")
         return f"tool:{tool_run_id}" if tool_run_id else None
+    if role == "agent" and original_type == "text":
+        stream_id = content.get("stream_id")
+        return f"text:{stream_id}" if stream_id else None
+    if original_type == "plan_tree_updated":
+        return "plan_tree:{task_id}:{phase}".format(
+            task_id=content.get("task_id") or "",
+            phase=content.get("phase") or "",
+        )
     if original_type in {"status_update", "phase_changed"}:
         return "status:{phase}:{iteration}:{active_tool}:{status}".format(
             phase=content.get("phase") or "",
@@ -433,6 +446,31 @@ def _append_tool_stdout(current: object, incoming: object) -> str:
         separator = "" if current_stdout.endswith("\n") or not current_stdout else "\n"
         return f"{current_stdout}{separator}{incoming_stdout}"
     return current_stdout or incoming_stdout
+
+
+def _proof_properties_from_summary(summary: object) -> dict:
+    if not isinstance(summary, str) or not summary.strip().startswith(("{", "[")):
+        return {}
+    try:
+        parsed = json.loads(summary)
+    except Exception:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    proof = {}
+    for key in ("url", "status", "statusText", "scanner", "exitCode", "traffic_id", "trafficId"):
+        if parsed.get(key) is not None:
+            proof[key] = parsed.get(key)
+    body = parsed.get("body") or parsed.get("responseBody")
+    if isinstance(body, str) and body:
+        proof["body_excerpt"] = body[:6000]
+    stdout = parsed.get("stdout")
+    if isinstance(stdout, str) and stdout:
+        proof["stdout_excerpt"] = stdout[:6000]
+    stderr = parsed.get("stderr")
+    if isinstance(stderr, str) and stderr:
+        proof["stderr_excerpt"] = stderr[:2000]
+    return {"proof": proof} if proof else {}
 
 
 def _tool_item_from_content(content: dict) -> dict:
@@ -521,7 +559,13 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                 content["agent_node_id"] = target_node_id
         elif msg_type == "text":
             inner = msg.get("content", {})
-            content = {"text": inner.get("text", str(msg)) if isinstance(inner, dict) else str(inner)}
+            if isinstance(inner, dict):
+                content = dict(inner)
+                content["text"] = inner.get("text", str(msg))
+            else:
+                content = {"text": str(inner)}
+            if msg.get("stream_id") and not content.get("stream_id"):
+                content["stream_id"] = msg.get("stream_id")
         elif msg_type == "tool_output":
             msg_type = "tool_call"
             content = {
@@ -701,6 +745,7 @@ async def _persist_evidence(msg: dict, node_id: str | None):
         incoming_properties = msg.get("properties") if isinstance(msg.get("properties"), dict) else {}
         properties = {
             **incoming_properties,
+            **_proof_properties_from_summary(summary),
             "status": msg.get("status"),
             "stderr": msg.get("stderr", ""),
         }
@@ -816,6 +861,8 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
         title = str(msg.get("title") or "Untitled finding").strip() or "Untitled finding"
         location = msg.get("location") or msg.get("poc") or ""
         poc_value = msg.get("poc") or msg.get("location") or ""
+        severity = _normalize_severity(msg.get("severity"))
+        description = msg.get("description") or msg.get("impact") or msg.get("evidence_summary") or ""
 
         async with async_session() as db:
             existing_evidence = await db.execute(
@@ -890,10 +937,10 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                     user_id=user_id,
                     node_id=node_uuid,
                     title=title,
-                    severity=msg.get("severity", "medium"),
+                    severity=severity,
                     asset_id=asset_id,
                     conversation_id=uuid.UUID(conv_id),
-                    description=msg.get("description") or msg.get("evidence_summary") or "",
+                    description=description,
                     poc=poc_value,
                     remediation=msg.get("remediation") or "",
                     confidence=str(msg.get("confidence", "high")),
@@ -905,8 +952,8 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                 vuln.user_id = vuln.user_id or user_id
                 vuln.node_id = vuln.node_id or node_uuid
                 vuln.asset_id = vuln.asset_id or asset_id
-                vuln.severity = msg.get("severity") or vuln.severity
-                vuln.description = msg.get("description") or msg.get("evidence_summary") or vuln.description
+                vuln.severity = severity or vuln.severity
+                vuln.description = description or vuln.description
                 vuln.poc = poc_value or vuln.poc
                 vuln.remediation = msg.get("remediation") or vuln.remediation
                 vuln.confidence = str(msg.get("confidence", vuln.confidence or "high"))

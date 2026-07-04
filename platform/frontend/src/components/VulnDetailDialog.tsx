@@ -162,9 +162,22 @@ export default function VulnDetailDialog({ open, vulnerabilityId, initial, onClo
               </button>
             ))}
             {!vulnerability?.evidence?.length && (
-              <div className="rounded-md bg-canvas-inset p-3 text-xs text-ink-muted">
-                {vulnerability?.evidence_ids?.length ? `Referenced evidence: ${vulnerability.evidence_ids.join(", ")}` : "No evidence references"}
-              </div>
+              vulnerability?.evidence_ids?.length ? (
+                <div className="space-y-2">
+                  {vulnerability.evidence_ids.map((evidenceId) => (
+                    <button
+                      key={evidenceId}
+                      type="button"
+                      onClick={() => onOpenEvidence?.({ evidence_id: evidenceId, id: evidenceId, type: "evidence" })}
+                      className="block w-full rounded-md border border-hairline-soft p-2 text-left font-mono text-xs text-ink-secondary transition-colors hover:bg-surface-default"
+                    >
+                      {evidenceId}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-md bg-canvas-inset p-3 text-xs text-ink-muted">No evidence references</div>
+              )
             )}
           </div>
         </section>
@@ -198,23 +211,38 @@ export default function VulnDetailDialog({ open, vulnerabilityId, initial, onClo
 
 function normalizeInitial(initial?: Partial<SecurityVulnerability> | null): SecurityVulnerability | null {
   if (!initial) return null;
+  const raw = initial as Partial<SecurityVulnerability> & {
+    url?: string | null;
+    target?: string | null;
+    impact?: string | null;
+    reproduction?: string | null;
+    evidence_id?: string | null;
+  };
+  const location = initial.location || raw.url || raw.target || initial.affected_asset || initial.poc;
+  const description = initial.description || raw.impact;
+  const poc = initial.poc || raw.reproduction || location;
+  const evidenceIds = initial.evidence_ids?.length
+    ? initial.evidence_ids
+    : raw.evidence_id
+      ? [raw.evidence_id]
+      : [];
   return {
     id: String(initial.id || initial.vulnerability_id || ""),
     vulnerability_id: initial.vulnerability_id,
     conversation_id: initial.conversation_id,
     node_id: initial.node_id,
     title: asString(initial.title, "Untitled vulnerability"),
-    severity: asString(initial.severity, "info"),
+    severity: normalizeSeverity(initial.severity),
     asset_id: initial.asset_id,
     asset: initial.asset,
-    affected_asset: initial.affected_asset,
-    location: initial.location,
+    affected_asset: initial.affected_asset || raw.url || raw.target || undefined,
+    location: location || undefined,
     confidence: asString(initial.confidence, "medium"),
     status: asString(initial.status, "pending"),
-    description: initial.description,
-    poc: initial.poc,
+    description,
+    poc,
     remediation: initial.remediation,
-    evidence_ids: initial.evidence_ids || [],
+    evidence_ids: evidenceIds,
     evidence: initial.evidence || [],
     status_timeline: initial.status_timeline || [],
     discovered_at: initial.discovered_at,
@@ -246,7 +274,13 @@ function EvidenceMetadata({ item }: { item: NonNullable<SecurityVulnerability["e
 }
 
 function SeverityBadge({ severity }: { severity: string }) {
-  return <span className={`rounded-md px-2.5 py-0.5 font-mono text-[11px] font-medium uppercase ${SEVERITY_CLASSES[severity] || SEVERITY_CLASSES.info}`}>{severity}</span>;
+  const normalized = normalizeSeverity(severity);
+  return <span className={`rounded-md px-2.5 py-0.5 font-mono text-[11px] font-medium uppercase ${SEVERITY_CLASSES[normalized] || SEVERITY_CLASSES.info}`}>{normalized}</span>;
+}
+
+function normalizeSeverity(value: unknown): string {
+  const severity = String(value || "info").toLowerCase();
+  return ["critical", "high", "medium", "low", "info"].includes(severity) ? severity : "info";
 }
 
 function Info({ label, value }: { label: string; value: string }) {

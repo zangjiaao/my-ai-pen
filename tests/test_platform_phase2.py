@@ -36,6 +36,23 @@ class PlatformPhase2Tests(unittest.TestCase):
         )
         self.assertEqual(key, "tool:run-1")
 
+    def test_streaming_text_dedupe_key_uses_stream_id(self):
+        key = _message_dedupe_key(
+            role="agent",
+            original_type="text",
+            stored_type="text",
+            content={"stream_id": "task-1:assistant:1", "text": "partial"},
+        )
+        self.assertEqual(key, "text:task-1:assistant:1")
+
+    def test_streaming_text_merge_replaces_with_latest_accumulated_text(self):
+        existing = {"stream_id": "s1", "text": "hello", "agent_source": "pentest"}
+        incoming = {"stream_id": "s1", "text": "hello world", "agent_source": "pentest"}
+        merged = _merge_saved_message_content(existing, incoming, "text")
+
+        self.assertEqual(merged["text"], "hello world")
+        self.assertEqual(merged["stream_id"], "s1")
+
     def test_tool_output_merge_appends_new_lines_without_duplicate_tail(self):
         existing = {"tool_run_id": "run-1", "stdout": "line one", "status": "running"}
         incoming = {"tool_run_id": "run-1", "stdout": "line two", "status": "done"}

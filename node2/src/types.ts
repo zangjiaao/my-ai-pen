@@ -17,9 +17,44 @@ export type ToolRuntime = {
   task: TaskEnvelope;
   workspaceDir: string;
   platform: PlatformSink;
+  plan: PlanStoreLike;
   coverage: CoverageStoreLike;
   evidence: EvidenceStoreLike;
   traffic: TrafficStoreLike;
+};
+
+export type PlanStatus = "pending" | "running" | "done" | "blocked" | "failed" | "skipped";
+
+export type PlanNode = {
+  node_id: string;
+  title: string;
+  status: PlanStatus;
+  kind: string;
+  level: "phase" | "objective" | "work_item";
+  parent_id?: string | null;
+  endpoint?: string | null;
+  parameter?: string | null;
+  vuln_type?: string | null;
+  notes?: string | null;
+  evidence_ids?: string[];
+  priority?: number;
+  source?: string;
+};
+
+export type PlanStoreLike = {
+  start(): void;
+  complete(): void;
+  fail(message?: string): void;
+  setPhase(phase: string): void;
+  toolStart(toolCallId: string, toolName: string, args?: Record<string, unknown>): void;
+  toolEnd(toolCallId: string, toolName: string, isError: boolean, notes?: string): void;
+  coverageMark(input: { endpoint: string; param: string; vulnClass: string; status: CoverageStatus; notes?: string }): void;
+  upsert(input: Partial<PlanNode> & { node_id?: string; id?: string; title: string }): PlanNode;
+  findingConfirmed(input: { title: string; severity?: string; location?: string; evidenceIds?: string[] }): void;
+  snapshot(): PlanNode[];
+  checkpoint(extra?: Record<string, unknown>): Record<string, unknown>;
+  progress(): { current: number; total: number; percent: number };
+  currentPhase(): string;
 };
 
 export type CoverageStatus = "tried" | "passed" | "failed" | "blocked" | "skipped";

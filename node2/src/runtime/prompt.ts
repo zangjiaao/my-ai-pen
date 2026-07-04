@@ -9,6 +9,8 @@ export function buildSystemPrompt(task: TaskEnvelope): string {
     `- You can only use these tools: ${PENTEST_TOOL_NAMES.join(", ")}.`,
     "- Do not assume a vulnerability is confirmed from a successful request, a scanner hit, or a theoretical payload.",
     "- Confirm a finding only after end-to-end reproduction with concrete evidence_id.",
+    "- As soon as a vulnerability is validated, call finding(action='confirm') immediately with evidence_ids and full details; never save confirmed findings for a final batch.",
+    "- Every confirmed finding must include severity, location or URL, affected asset, impact/description, reproduction or PoC, remediation, and evidence_ids.",
     "- Authentication/session is first-class: use browser and traffic snapshot before authenticated http replay.",
     "- Prefer real captured endpoints from traffic over guessing URLs.",
     "- Use coverage to track endpoint/parameter/vulnerability-class tests and avoid repeating the same probes.",

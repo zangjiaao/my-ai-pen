@@ -669,14 +669,21 @@ function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode[] {
 }
 
 function VulnCard({ content, onOpen }: { content: Record<string, unknown>; onOpen?: (finding: Partial<SecurityVulnerability>) => void }) {
-  const severity = String(content.severity || "info");
+  const severity = normalizeSeverity(content.severity);
   const borderColor: Record<string, string> = { critical: "border-l-severity-critical", high: "border-l-severity-high", medium: "border-l-severity-medium", low: "border-l-severity-low" };
+  const severityClass: Record<string, string> = {
+    critical: "bg-severity-critical-subtle text-severity-critical",
+    high: "bg-severity-high-subtle text-severity-high",
+    medium: "bg-severity-medium-subtle text-severity-medium",
+    low: "bg-severity-low-subtle text-severity-low",
+    info: "bg-canvas-inset text-ink-secondary",
+  };
   const confidence = Number(content.confidence);
   const confidenceText = Number.isFinite(confidence) && confidence <= 1 ? `${Math.round(confidence * 100)}%` : String(content.confidence || "-");
   return (
     <button type="button" onClick={() => onOpen?.(content as Partial<SecurityVulnerability>)} className={`my-2 block w-full min-w-0 rounded-md border border-hairline bg-canvas border-l-3 ${borderColor[severity] || "border-l-severity-info"} p-4 text-left transition-colors hover:bg-surface-default`}>
       <div className="mb-1 flex min-w-0 items-center gap-2">
-        <span className={`inline-block flex-shrink-0 rounded-md px-2.5 py-0.5 font-mono text-[11px] font-medium uppercase bg-severity-${severity}-subtle text-severity-${severity}`}>{severity}</span>
+        <span className={`inline-block flex-shrink-0 rounded-md px-2.5 py-0.5 font-mono text-[11px] font-medium uppercase ${severityClass[severity]}`}>{severity}</span>
         <span className="min-w-0 truncate font-semibold">{String(content.title || "Untitled vulnerability")}</span>
       </div>
       <p className="break-words text-sm text-ink-secondary [overflow-wrap:anywhere]">{String(content.location || content.affected_asset || "-")} - confidence {confidenceText}</p>
@@ -711,6 +718,11 @@ function renderMentionText(text: string): ReactNode[] {
   }
   if (lastIndex < text.length) parts.push(text.slice(lastIndex));
   return parts.length ? parts : [text];
+}
+
+function normalizeSeverity(value: unknown): string {
+  const severity = String(value || "info").toLowerCase();
+  return ["critical", "high", "medium", "low", "info"].includes(severity) ? severity : "info";
 }
 function AgentPendingCard({ content }: { content: Record<string, unknown> }) {
   return (
