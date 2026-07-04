@@ -1,0 +1,27 @@
+{
+  "name": "my-ai-pen-node2",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/main.ts",
+    "start": "node dist/main.js",
+    "check": "tsc --noEmit",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "file:../research/pi/packages/agent",
+    "@earendil-works/pi-ai": "file:../research/pi/packages/ai",
+    "@earendil-works/pi-coding-agent": "file:../research/pi/packages/coding-agent",
+    "typebox": "1.1.38",
+    "yaml": "2.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.12.4",
+    "tsx": "4.22.1",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}
