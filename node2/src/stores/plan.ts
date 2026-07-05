@@ -403,7 +403,7 @@ function parentForTool(toolName: string): string {
 
 function priorityForTool(toolName: string): number {
   if (toolName === "browser" || toolName === "traffic" || toolName === "scan") return 150;
-  if (toolName === "coverage" || toolName === "skill") return 240;
+  if (toolName === "coverage" || toolName.startsWith("workflow_")) return 240;
   if (toolName === "http" || toolName === "poc" || toolName === "finding") return 340;
   return 250;
 }

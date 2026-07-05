@@ -3,7 +3,7 @@ import { loadConfig } from "./config.js";
 import { loadDotEnv } from "./env.js";
 import { PlatformWSClient } from "./platform/ws-client.js";
 import { runPentestTask } from "./runtime/session-runner.js";
-import type { PlatformMessage, TaskEnvelope } from "./types.js";
+import type { PlatformMessage, ScanMode, TaskEnvelope } from "./types.js";
 
 loadDotEnv();
 loadDotEnv("node2/.env");
@@ -69,10 +69,17 @@ function normalizeTask(message: PlatformMessage): TaskEnvelope {
     taskId,
     conversationId,
     instruction: String(message.initial_instruction || message.text || ""),
+    scanMode: normalizeScanMode(message.scan_mode || message.scanMode),
     target: isRecord(message.target) ? message.target : {},
     scope: isRecord(message.scope) ? message.scope : {},
     snapshot: isRecord(message.snapshot) ? message.snapshot : {},
   };
+}
+
+function normalizeScanMode(value: unknown): ScanMode {
+  const normalized = String(value || "standard").trim().toLowerCase();
+  if (normalized === "quick" || normalized === "standard" || normalized === "deep") return normalized;
+  return "standard";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

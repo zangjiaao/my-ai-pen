@@ -1,4 +1,7 @@
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const NODE2_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 export type Node2Config = {
   nodeName: string;
@@ -6,6 +9,10 @@ export type Node2Config = {
   platformWsUrl: string;
   workspaceDir: string;
   piAgentDir: string;
+  pentestSkillsDir: string;
+  pentestWorkflowsDir: string;
+  pocCatalogPath: string;
+  piWorkflowPackageDir: string;
   modelProvider: string;
   modelId: string;
   llmBaseUrl?: string;
@@ -27,6 +34,12 @@ export function loadConfig(): Node2Config {
     platformWsUrl: process.env.PLATFORM_WS_URL || "ws://localhost:8000/ws",
     workspaceDir: resolve(process.env.NODE2_WORKSPACE || "./workspace"),
     piAgentDir: resolve(process.env.PI_AGENT_DIR || "./.pi-agent"),
+    pentestSkillsDir: resolve(process.env.NODE2_SKILLS_DIR || resolve(NODE2_ROOT, "skills")),
+    pentestWorkflowsDir: resolve(process.env.NODE2_WORKFLOWS_DIR || resolve(NODE2_ROOT, "workflows")),
+    pocCatalogPath: resolve(process.env.NODE2_POC_CATALOG || resolve(NODE2_ROOT, "poc-catalog", "web-vulns.json")),
+    piWorkflowPackageDir: resolve(
+      process.env.PI_WORKFLOW_PACKAGE_DIR || resolve(NODE2_ROOT, "node_modules", "@agwab", "pi-workflow"),
+    ),
     modelProvider,
     modelId: process.env.PI_MODEL || "gpt-5",
     llmBaseUrl: baseUrlForProvider(modelProvider),

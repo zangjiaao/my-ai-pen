@@ -9,7 +9,7 @@ export function createFindingTool(runtime: ToolRuntime): ToolDefinition<any> {
   return {
     name: "finding",
     label: "Finding",
-    description: "Record candidate, confirmed, or rejected findings. Confirmed findings require at least one evidence_id from http, scan, browser, or poc output.",
+    description: "Record candidate, confirmed, or rejected findings. Confirmed findings require at least one evidence_id from http, scan, browser, verifier, or poc output.",
     promptSnippet: "Record candidate/confirmed/rejected findings",
     promptGuidelines: [
       "Use finding(action='candidate') for plausible issues; use finding(action='confirm') only with evidence_id proving end-to-end reproduction.",
@@ -37,6 +37,15 @@ export function createFindingTool(runtime: ToolRuntime): ToolDefinition<any> {
       const evidenceIds = params.evidence_ids || [];
       if (action === "confirm" && evidenceIds.length === 0) {
         return textResult("error: confirmed finding requires evidence_ids");
+      }
+      if (action === "confirm") {
+        const missingEvidenceIds = [];
+        for (const id of evidenceIds) {
+          if (!(await runtime.evidence.read(id))) missingEvidenceIds.push(id);
+        }
+        if (missingEvidenceIds.length > 0) {
+          return textResult(`error: evidence_ids not found: ${missingEvidenceIds.join(", ")}`);
+        }
       }
       const severity = normalizeSeverity(params.severity);
       const location = stringValue(params.location || params.url || params.affected_asset);

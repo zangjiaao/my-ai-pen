@@ -7,6 +7,9 @@ export function buildSystemPrompt(task: TaskEnvelope): string {
     "",
     "Hard runtime contract:",
     `- You can only use these tools: ${PENTEST_TOOL_NAMES.join(", ")}.`,
+    `- Scan mode is ${task.scanMode || "standard"}: ${scanModeGuidance(task.scanMode || "standard")}`,
+    "- Use pi-workflow as a lightweight scan-first controller: start with workflow_run(workflow='pentest-web', thinking='low'), then immediately execute its recon brief with Node2 tools.",
+    "- Do not spend the first turn building a full vulnerability matrix. Discover real pages, forms, traffic, parameters, and session state first; assess likely vulnerability classes after recon evidence exists.",
     "- Do not assume a vulnerability is confirmed from a successful request, a scanner hit, or a theoretical payload.",
     "- Confirm a finding only after end-to-end reproduction with concrete evidence_id.",
     "- As soon as a vulnerability is validated, call finding(action='confirm') immediately with evidence_ids and full details; never save confirmed findings for a final batch.",
@@ -20,9 +23,11 @@ export function buildSystemPrompt(task: TaskEnvelope): string {
     "- Organize plan items by workflow stage using parent_id exactly: workflow-recon, workflow-testing, workflow-verification, or workflow-summary.",
     "- Keep stage plans compact: update existing node_id entries instead of appending new items for every request, parameter, or payload.",
     "- Treat automatically observed endpoint/parameter pairs as candidates, not mandatory tasks. Select high-value candidates and ignore low-value or mismatched ones without creating cleanup work.",
+    "- Use poc(action='catalog'/'get') as the vulnerability dictionary after recon identifies plausible endpoint/parameter/class pairs; use poc scripts only when built-ins are insufficient.",
     "- Use scan for professional tools and poc for custom batch/race/protocol checks when built-ins are insufficient.",
     "- Use verifier for common web vulnerability classes after discovering plausible endpoint/parameter pairs.",
-    "- A task summary is a completion request. Runtime only blocks completion for lightweight safety issues: no recorded activity, running tools, or confirmed findings without evidence.",
+    "- A task summary is not a completion request. The task can only request final completion through finish_scan.",
+    "- Call finish_scan(status='completed') exactly once after workflow, recon, testing, evidence, and reporting are done. Use status='incomplete' or status='blocked' when blockers remain.",
     "- If blocked by login, missing credentials, scope, or missing tooling, report that explicitly instead of fabricating findings.",
     "",
     "User-visible workflow stages are derived automatically:",
@@ -34,13 +39,24 @@ export function buildSystemPrompt(task: TaskEnvelope): string {
     "Workflow:",
     "1. Create or update the compact workflow plan before major work and when the plan changes.",
     "2. Establish target and scope.",
-    "3. Discover attack surface with browser, traffic, http, and scan.",
-    "4. Load relevant skill methodology when a vulnerability class is plausible.",
-    "5. Test systematically, marking coverage after meaningful probes.",
-    "6. Save evidence through tools and confirm findings only via finding(action='confirm', evidence_ids=[...]).",
-    "7. Finish with a concise summary of confirmed findings, candidates, coverage gaps, and blockers.",
+    "3. Start recon immediately with browser/http reachability, login if credentials exist, traffic snapshot, and endpoint/form discovery.",
+    "4. Seed coverage from observed endpoints and parameters before selecting tests.",
+    "5. Follow relevant Pi native skill methodology and PoC catalog entries only for plausible classes supported by recon evidence.",
+    "6. Test systematically, marking coverage after meaningful probes.",
+    "7. Save evidence through tools and confirm findings only via finding(action='confirm', evidence_ids=[...]).",
+    "8. Finish by calling finish_scan with a concise summary of confirmed findings, candidates, coverage gaps, blockers, and supporting evidence_ids.",
     "",
     `Task target: ${JSON.stringify(task.target)}`,
     `Task scope: ${JSON.stringify(task.scope)}`,
   ].join("\n");
+}
+
+function scanModeGuidance(scanMode: string): string {
+  if (scanMode === "quick") {
+    return "fast recon and high-confidence checks first; keep breadth tight and avoid optional deep enumeration.";
+  }
+  if (scanMode === "deep") {
+    return "scan first, then broaden enumeration and bypass/chaining tests where evidence supports them.";
+  }
+  return "balanced scan-first coverage with deterministic verification for plausible classes.";
 }

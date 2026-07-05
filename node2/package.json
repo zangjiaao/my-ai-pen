@@ -5,14 +5,22 @@
   "type": "module",
   "scripts": {
     "dev": "tsx src/main.ts",
+    "standalone": "tsx src/standalone.ts",
+    "dvwa:agent-benchmark": "tsx src/dvwa-agent-benchmark.ts",
+    "dvwa:score": "tsx src/dvwa-benchmark-score.ts",
+    "dvwa:tool-smoke": "tsx src/dvwa-tool-smoke.ts",
     "start": "node dist/main.js",
+    "start:standalone": "node dist/standalone.js",
     "check": "tsc --noEmit",
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@agwab/pi-subagent": "^0.3.6",
+    "@agwab/pi-workflow": "file:../research/pi-workflow",
     "@earendil-works/pi-agent-core": "file:../research/pi/packages/agent",
     "@earendil-works/pi-ai": "file:../research/pi/packages/ai",
     "@earendil-works/pi-coding-agent": "file:../research/pi/packages/coding-agent",
+    "pi-web-access": "^0.10.7",
     "playwright": "^1.61.1",
     "typebox": "1.1.38",
     "yaml": "2.9.0"

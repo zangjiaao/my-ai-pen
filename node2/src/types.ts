@@ -4,10 +4,13 @@ export type TaskEnvelope = {
   taskId: string;
   conversationId: string;
   instruction: string;
+  scanMode?: ScanMode;
   target: Record<string, unknown>;
   scope: Record<string, unknown>;
   snapshot: Record<string, unknown>;
 };
+
+export type ScanMode = "quick" | "standard" | "deep";
 
 export type PlatformSink = {
   send(message: PlatformMessage): Promise<void>;
@@ -21,6 +24,33 @@ export type ToolRuntime = {
   coverage: CoverageStoreLike;
   evidence: EvidenceStoreLike;
   traffic: TrafficStoreLike;
+  pocCatalogPath: string;
+  workflowRuns: WorkflowRunSummary[];
+  lifecycle: RuntimeLifecycle;
+};
+
+export type RuntimeLifecycle = {
+  finishScan?: FinishScanState;
+};
+
+export type FinishScanState = {
+  status: "completed" | "incomplete" | "blocked";
+  summary: string;
+  confirmedFindings?: string[];
+  coverageGaps?: string[];
+  blockers?: string[];
+  evidenceIds?: string[];
+  calledAt: string;
+  toolCallId: string;
+};
+
+export type WorkflowRunSummary = {
+  runId: string;
+  status?: string;
+  specPath?: string;
+  taskSummary?: string;
+  openCommand?: string;
+  toolCallId?: string;
 };
 
 export type PlanStatus = "todo" | "pending" | "running" | "done" | "blocked" | "failed" | "skipped";
