@@ -9,12 +9,13 @@ export function createCoverageTool(runtime: ToolRuntime): ToolDefinition<any> {
   return {
     name: "coverage",
     label: "Coverage",
-    description: "Track tested endpoint/parameter/vulnerability-class tuples and maintain the Plan Tree/TODO notebook. Use it to avoid repeating probes and to remember attack surface, planned tests, blockers, and reporting work.",
-    promptSnippet: "Track endpoint/parameter coverage and maintain Plan Tree TODOs",
+    description: "Track tested endpoint/parameter/vulnerability-class tuples and maintain the compact user-facing workflow plan. Use it to avoid repeating probes and to remember attack surface, planned tests, blockers, and summary work.",
+    promptSnippet: "Track endpoint/parameter coverage and maintain the workflow plan",
     promptGuidelines: [
       "Use coverage(action='untested') before broad probing and coverage(action='mark') after each meaningful test.",
-      "Use coverage(action='plan') to add or update Plan Tree TODOs for discovered attack surface, planned vulnerability tests, blockers, and report tasks.",
-      "Keep plan nodes current: pending for queued work, running for active work, done for completed tests, blocked for missing access/tooling.",
+      "Use coverage(action='plan') to add or update user-facing workflow plan items. Use stable node_id values.",
+      "Use parent_id exactly to group plan items: workflow-recon, workflow-testing, workflow-verification, or workflow-summary.",
+      "Keep plan nodes current: pending for queued work, running for active work, done for completed work, blocked for missing access/tooling, skipped for deliberately ignored low-value work.",
     ],
     parameters: Type.Object({
       action: Type.String(),

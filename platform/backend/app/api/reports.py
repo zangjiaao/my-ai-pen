@@ -61,6 +61,10 @@ def _render_markdown(snapshot: dict) -> str:
     agent_state = snapshot.get("agent_state") or {}
     progress = snapshot.get("progress") or {}
     checkpoint = snapshot.get("checkpoint") or {}
+    kanban = snapshot.get("kanban") if isinstance(snapshot.get("kanban"), dict) else {}
+    checkpoint_kanban = checkpoint.get("kanban") if isinstance(checkpoint.get("kanban"), dict) else {}
+    workflow_kind = kanban.get("workflow_kind") or checkpoint.get("workflow_kind") or checkpoint_kanban.get("workflow_kind") or "-"
+    workflow_stage = kanban.get("current_stage") or checkpoint.get("workflow_stage") or checkpoint_kanban.get("current_stage") or "-"
     target = _target_from_snapshot(snapshot)
     scope = _scope_from_snapshot(snapshot)
     generated_at = datetime.now(timezone.utc).isoformat()
@@ -74,7 +78,8 @@ def _render_markdown(snapshot: dict) -> str:
         f"- Generated At: `{generated_at}`",
         f"- Target: `{target or '-'}`",
         f"- Scope: `{scope or '-'}`",
-        f"- Phase: `{agent_state.get('phase') or '-'}`",
+        f"- Workflow: `{workflow_kind}`",
+        f"- Workflow Stage: `{workflow_stage}`",
         f"- Progress: `{progress.get('current', 0)}/{progress.get('total', 0)}`",
         f"- Assets: `{counts.get('assets', 0)}`",
         f"- Vulnerabilities: `{counts.get('findings', 0)}`",
@@ -162,8 +167,8 @@ def _render_markdown(snapshot: dict) -> str:
         "This MVP report is generated from platform-stored conversation, asset, vulnerability, evidence, and checkpoint data. Findings should be reviewed before customer delivery.",
         "",
         "## Checkpoint Summary",
-        f"- Checkpoint Phase: `{checkpoint.get('phase') or '-'}`",
-        f"- Completed Phases: `{', '.join(map(str, checkpoint.get('phases_completed') or [])) or '-'}`",
+        f"- Workflow Kind: `{workflow_kind}`",
+        f"- Workflow Stage: `{workflow_stage}`",
     ])
     return "\n".join(lines).strip() + "\n"
 

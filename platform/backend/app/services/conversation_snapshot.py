@@ -7,6 +7,7 @@ the frontend has loaded.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import re
 import uuid
 
@@ -33,6 +34,14 @@ PHASE_LABELS = {
     "report": "\u62a5\u544a\u6574\u7406",
     "complete": "\u4efb\u52a1\u5b8c\u6210",
 }
+KANBAN_BUCKET_TITLES = {
+    "task-confirmation": "\u4efb\u52a1\u786e\u8ba4",
+    "attack-surface": "\u653b\u51fb\u9762\u8bc6\u522b",
+    "vulnerability-discovery": "\u6f0f\u6d1e\u53d1\u73b0",
+    "vulnerability-verification": "\u6f0f\u6d1e\u9a8c\u8bc1",
+    "task-summary": "\u4efb\u52a1\u603b\u7ed3",
+}
+TERMINAL_PLAN_STATUSES = {"done", "blocked", "failed", "skipped"}
 
 
 
@@ -61,8 +70,11 @@ def objective_title(phase: str, key: str) -> str:
     return titles.get((phase, key), key.replace("_", " ").title())
 
 
-def ensure_plan_tree_shape(items: list[dict], phase: str | None, completed: set[str], status: str) -> list[dict]:
+def ensure_plan_tree_shape(items: list[dict], phase: str | None, completed: set[str], status: str, workflow_kind: str | None = None) -> list[dict]:
     nodes = [dict(item) for item in items if isinstance(item, dict)]
+    if workflow_kind == "pentest":
+        return normalize_pentest_plan_tree(nodes)
+
     by_id = {str(item.get("node_id") or item.get("id") or ""): item for item in nodes if item.get("node_id") or item.get("id")}
     current_index = PHASES.index(phase) if phase in PHASES else (-1 if status != "running" else 0)
 
@@ -124,6 +136,33 @@ def ensure_plan_tree_shape(items: list[dict], phase: str | None, completed: set[
             node["parent_id"] = ensure_objective("analysis", "test_plan", 10)
 
     return sorted(nodes, key=lambda item: (int(item.get("priority") or 50), str(item.get("created_at") or ""), str(item.get("node_id") or "")))
+
+
+def normalize_pentest_plan_tree(nodes: list[dict]) -> list[dict]:
+    normalized: list[dict] = []
+    for node in nodes:
+        if is_legacy_runtime_phase_node(node):
+            continue
+        item = dict(node)
+        kind = str(item.get("kind") or "task")
+        item["level"] = str(item.get("level") or plan_node_level(kind))
+        parent_id = str(item.get("parent_id") or "")
+        if parent_id.startswith("plan-phase-") or parent_id.startswith("plan-objective-"):
+            item["parent_id"] = None
+        normalized.append(item)
+    return sorted(normalized, key=lambda item: (int(item.get("priority") or 50), str(item.get("created_at") or ""), str(item.get("node_id") or "")))
+
+
+def is_legacy_runtime_phase_node(node: dict) -> bool:
+    node_id = str(node.get("node_id") or node.get("id") or "")
+    level = str(node.get("level") or "")
+    kind = str(node.get("kind") or "")
+    parent_id = str(node.get("parent_id") or "")
+    if level == "phase" or kind == "phase" or node_id.startswith("plan-phase-"):
+        return True
+    if level == "objective" or kind == "objective":
+        return node_id.startswith("plan-objective-") or parent_id.startswith("plan-phase-") or str(node.get("source") or "") == "runtime"
+    return False
 
 
 def conversation_summary(c: Conversation) -> dict:
@@ -196,7 +235,6 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     checkpoint = (context.get("checkpoint") if isinstance(context, dict) else {}) or {}
     task_context = context.get("task") if isinstance(context.get("task"), dict) else {}
     agent_state = agent_state_from_checkpoint(checkpoint, conversation.status) if checkpoint else agent_state_from_messages(messages, evidence, conversation.status)
-    progress = progress_for_checkpoint(checkpoint, conversation.status) if checkpoint else progress_for_phase(agent_state.get("phase"), conversation.status)
     findings = merge_many_by_key([
         [vuln_summary(v) for v in vulns],
         message_findings(messages),
@@ -213,8 +251,13 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     coverage_items = snapshot_list(checkpoint.get("coverage")) or snapshot_list(context.get("coverage"))
     captured_traffic_items = snapshot_list(checkpoint.get("captured_traffic")) or snapshot_list(context.get("captured_traffic"))
     raw_plan_tree = checkpoint_plan_tree(checkpoint) or message_plan_tree(messages) or context.get("exploration_plan_tree") or context.get("plan_tree") or []
-    plan_tree = ensure_plan_tree_shape(raw_plan_tree, agent_state.get("phase"), checkpoint_completed(checkpoint), conversation.status)
-    todos = todos_for_plan_tree(plan_tree) or (todos_for_checkpoint(checkpoint, conversation.status) if checkpoint else todos_for_phase(agent_state.get("phase"), conversation.status))
+    workflow_kind = workflow_kind_for_checkpoint(checkpoint)
+    plan_tree = ensure_plan_tree_shape(raw_plan_tree, agent_state.get("phase"), checkpoint_completed(checkpoint), conversation.status, workflow_kind)
+    if conversation.status in {"completed", "incomplete"} and workflow_kind == "pentest":
+        plan_tree = normalize_terminal_pentest_plan_tree(plan_tree)
+    kanban = kanban_for_snapshot(checkpoint, plan_tree, agent_state.get("phase"), conversation.status, elapsed_seconds_for_conversation(conversation))
+    progress = progress_for_kanban(kanban) or (progress_for_checkpoint(checkpoint, conversation.status) if checkpoint else progress_for_phase(agent_state.get("phase"), conversation.status))
+    todos = todos_for_kanban(kanban) or todos_for_plan_tree(plan_tree) or (todos_for_checkpoint(checkpoint, conversation.status) if checkpoint else todos_for_phase(agent_state.get("phase"), conversation.status))
     evidence_items = merge_many_by_key([
         [evidence_summary(e) for e in evidence],
         explicit_evidence,
@@ -229,6 +272,7 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
         "agents": agent_items,
         "agent_state": agent_state,
         "progress": progress,
+        "kanban": kanban,
         "todos": todos,
         "findings": findings,
         "assets": asset_items,
@@ -288,6 +332,18 @@ def snapshot_messages(messages: list[Message], limit: int = SNAPSHOT_MESSAGE_LIM
         omitted["large_text_chars"] += stats.get("large_text_chars", 0)
         compacted.append(item)
     return compacted, {key: value for key, value in omitted.items() if value}
+
+
+def elapsed_seconds_for_conversation(c: Conversation) -> int:
+    if not c.created_at:
+        return 0
+    end = datetime.now(timezone.utc) if c.status == "running" else (c.last_active_at or datetime.now(timezone.utc))
+    start = c.created_at
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    return max(0, int((end - start).total_seconds()))
 
 
 def compact_message_summary(message: Message) -> tuple[dict, dict]:
@@ -473,6 +529,252 @@ def parse_phase(text: str) -> str | None:
     return match.group(1) if match else None
 
 
+def kanban_for_snapshot(checkpoint: dict, plan_tree: list[dict], phase: str | None, status: str, elapsed_seconds: int) -> dict:
+    checkpoint_kanban = checkpoint.get("kanban") if isinstance(checkpoint, dict) and isinstance(checkpoint.get("kanban"), dict) else None
+    checkpoint_kind = workflow_kind_for_checkpoint(checkpoint)
+    if status in {"completed", "incomplete"} and checkpoint_kind == "pentest":
+        plan_tree = normalize_terminal_pentest_plan_tree(plan_tree)
+    if checkpoint_kanban and not should_recompute_terminal_kanban(checkpoint_kanban, checkpoint_kind, status):
+        kanban = dict(checkpoint_kanban)
+        kanban["workflow_kind"] = str(kanban.get("workflow_kind") or checkpoint_kind or "")
+        totals = dict(kanban.get("totals") or {})
+        totals["percent"] = int(totals.get("percent") or safe_percent(totals.get("processed"), totals.get("discovered")))
+        kanban["totals"] = totals
+        kanban["buckets"] = normalize_kanban_buckets(kanban.get("buckets") or [], kanban.get("workflow_kind"))
+        kanban["elapsed_seconds"] = elapsed_seconds
+        kanban["current_stage"] = current_kanban_stage(phase, status, checkpoint, kanban.get("current_stage"))
+        return kanban
+
+    work = [node for node in plan_tree or [] if isinstance(node, dict) and str(node.get("level") or "work_item") == "work_item"]
+    surfaces = [node for node in work if str(node.get("kind") or "") in {"surface", "request"}]
+    tests = [node for node in work if is_concrete_test_node(node)]
+    verification = [node for node in work if str(node.get("kind") or "") == "finding" or (str(node.get("kind") or "") == "test" and is_terminal_plan_node(node))]
+    if not checkpoint_kind == "pentest" and not surfaces and not tests and not verification:
+        return {
+            "elapsed_seconds": elapsed_seconds,
+            "current_stage": current_kanban_stage(phase, status, checkpoint, None),
+            "totals": {"discovered": 0, "processed": 0, "pending": 0, "running": 0, "confirmed": 0, "negative": 0, "blocked": 0, "inconclusive": 0, "percent": 0},
+            "buckets": [],
+        }
+    processed = sum(1 for node in tests if is_terminal_plan_node(node))
+    discovered = len(tests) or len(surfaces)
+    phase_index = PHASES.index(phase) if phase in PHASES else -1
+    task_confirmed = status in {"completed", "incomplete"} or phase_index > 0
+    summary_total = 1 if tests or verification else 0
+    summary_done = status in {"completed", "incomplete"}
+    totals = {
+        "discovered": discovered,
+        "processed": processed,
+        "pending": sum(1 for node in tests if str(node.get("status") or "pending") in {"todo", "pending"}),
+        "running": sum(1 for node in tests if str(node.get("status") or "") == "running"),
+        "confirmed": result_count(tests, "confirmed"),
+        "negative": result_count(tests, "negative"),
+        "blocked": result_count(tests, "blocked"),
+        "inconclusive": result_count(tests, "inconclusive"),
+        "percent": safe_percent(processed, discovered),
+    }
+    return {
+        "workflow_kind": "pentest",
+        "elapsed_seconds": elapsed_seconds,
+        "current_stage": current_kanban_stage(phase, status, checkpoint, None),
+        "totals": totals,
+        "buckets": [
+            {"id": "task-confirmation", "title": KANBAN_BUCKET_TITLES["task-confirmation"], "done": 1 if task_confirmed else 0, "total": 1, "status": "done" if task_confirmed else "running" if phase == "intake" else "pending"},
+            {"id": "attack-surface", "title": KANBAN_BUCKET_TITLES["attack-surface"], "done": sum(1 for node in surfaces if is_terminal_plan_node(node)), "total": len(surfaces), "status": bucket_status(surfaces, phase == "recon")},
+            {"id": "vulnerability-discovery", "title": KANBAN_BUCKET_TITLES["vulnerability-discovery"], "done": processed, "total": len(tests), "status": bucket_status(tests, phase in {"analysis", "verify"})},
+            {"id": "vulnerability-verification", "title": KANBAN_BUCKET_TITLES["vulnerability-verification"], "done": sum(1 for node in verification if is_terminal_plan_node(node)), "total": len(verification), "status": bucket_status(verification, phase == "verify")},
+            {"id": "task-summary", "title": KANBAN_BUCKET_TITLES["task-summary"], "done": summary_total if summary_done else 0, "total": summary_total, "status": "done" if summary_done else "running" if phase == "report" else "pending"},
+        ],
+    }
+
+
+def should_recompute_terminal_kanban(kanban: dict, workflow_kind: str, status: str) -> bool:
+    if status not in {"completed", "incomplete"} or workflow_kind != "pentest":
+        return False
+    current_stage = str(kanban.get("current_stage") or "")
+    buckets = kanban.get("buckets") if isinstance(kanban.get("buckets"), list) else []
+    summary_bucket = next((item for item in buckets if isinstance(item, dict) and item.get("id") == "task-summary"), {})
+    totals = kanban.get("totals") if isinstance(kanban.get("totals"), dict) else {}
+    has_open_totals = int(totals.get("pending") or 0) > 0 or int(totals.get("running") or 0) > 0
+    summary_pending = str(summary_bucket.get("status") or "pending") == "pending"
+    return current_stage == "executing" or summary_pending or has_open_totals
+
+
+def normalize_terminal_pentest_plan_tree(plan_tree: list[dict]) -> list[dict]:
+    normalized = []
+    for node in plan_tree or []:
+        if not isinstance(node, dict):
+            continue
+        item = dict(node)
+        if is_legacy_resolved_test_node(item):
+            if notes_imply_not_applicable(item):
+                item["status"] = "skipped"
+                item["result"] = "negative"
+            else:
+                item["status"] = "done"
+                item["result"] = item.get("result") or "inconclusive"
+        normalized.append(item)
+    return normalized
+
+
+def is_legacy_resolved_test_node(node: dict) -> bool:
+    if str(node.get("kind") or "") != "test":
+        return False
+    if str(node.get("status") or "") not in {"todo", "pending", "running"}:
+        return False
+    source = str(node.get("source") or "")
+    notes = str(node.get("notes") or "").strip()
+    if source == "coverage" and notes:
+        return True
+    if source == "auditor" and notes.startswith("Inferred from observed request/form parameter."):
+        return True
+    return notes_imply_not_applicable(node)
+
+
+def notes_imply_not_applicable(node: dict) -> bool:
+    notes = str(node.get("notes") or "").lower()
+    return "not applicable" in notes or notes.startswith("no ")
+
+
+def normalize_kanban_buckets(items, workflow_kind: str | None = None) -> list[dict]:
+    if workflow_kind != "pentest":
+        return [
+            {
+                "id": str(item.get("id") or item.get("title") or index),
+                "title": str(item.get("title") or item.get("id") or "Task"),
+                "done": int(item.get("done") or 0),
+                "total": int(item.get("total") or 0),
+                "status": str(item.get("status") or "pending"),
+            }
+            for index, item in enumerate(items if isinstance(items, list) else [])
+            if isinstance(item, dict)
+        ]
+    buckets = []
+    seen = set()
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        bucket_id = str(item.get("id") or "")
+        if bucket_id not in KANBAN_BUCKET_TITLES:
+            continue
+        seen.add(bucket_id)
+        buckets.append({
+            "id": bucket_id,
+            "title": KANBAN_BUCKET_TITLES[bucket_id],
+            "done": int(item.get("done") or 0),
+            "total": int(item.get("total") or 0),
+            "status": str(item.get("status") or "pending"),
+        })
+    for bucket_id, title in KANBAN_BUCKET_TITLES.items():
+        if bucket_id not in seen:
+            buckets.append({"id": bucket_id, "title": title, "done": 0, "total": 0, "status": "pending"})
+    return buckets
+
+
+def workflow_kind_for_checkpoint(checkpoint: dict) -> str:
+    direct_kind = str(checkpoint.get("workflow_kind") or "") if isinstance(checkpoint, dict) else ""
+    if direct_kind:
+        return direct_kind
+    kanban = checkpoint.get("kanban") if isinstance(checkpoint, dict) and isinstance(checkpoint.get("kanban"), dict) else {}
+    kanban_kind = str(kanban.get("workflow_kind") or "")
+    if kanban_kind:
+        return kanban_kind
+    runtime = str(checkpoint.get("runtime") or "") if isinstance(checkpoint, dict) else ""
+    if runtime.startswith("node2"):
+        return "pentest"
+    return ""
+
+
+def current_kanban_stage(phase: str | None, status: str, checkpoint: dict, fallback) -> str:
+    if status == "completed":
+        return "completed"
+    if status == "incomplete":
+        return "incomplete"
+    if phase == "intake":
+        return "confirming"
+    if phase == "report":
+        return "summarizing"
+    if fallback in {"confirming", "executing", "summarizing", "completed", "incomplete"}:
+        return str(fallback)
+    return "executing"
+
+
+def progress_for_kanban(kanban: dict) -> dict:
+    totals = kanban.get("totals") if isinstance(kanban, dict) else {}
+    if not isinstance(totals, dict):
+        return {}
+    current = int(totals.get("processed") or 0)
+    total = int(totals.get("discovered") or 0)
+    return {"current": current, "total": total, "percent": safe_percent(current, total)}
+
+
+def todos_for_kanban(kanban: dict) -> list[dict]:
+    buckets = kanban.get("buckets") if isinstance(kanban, dict) else []
+    if not isinstance(buckets, list):
+        return []
+    return [
+        {"id": str(item.get("id") or ""), "title": str(item.get("title") or ""), "status": str(item.get("status") or "pending")}
+        for item in buckets
+        if isinstance(item, dict)
+    ]
+
+
+def is_terminal_plan_node(node: dict) -> bool:
+    return str(node.get("status") or "") in TERMINAL_PLAN_STATUSES
+
+
+def is_gateable_plan_node(node: dict) -> bool:
+    if str(node.get("source") or "") == "pi_tool":
+        return False
+    if str(node.get("kind") or "") in {"surface", "finding"}:
+        return False
+    return str(node.get("level") or "work_item") == "work_item"
+
+
+def is_concrete_test_node(node: dict) -> bool:
+    if not is_gateable_plan_node(node):
+        return False
+    if str(node.get("kind") or "") == "test":
+        return True
+    if node.get("vuln_type"):
+        return True
+    return bool(node.get("endpoint") and node.get("parameter"))
+
+
+def bucket_status(nodes: list[dict], running: bool) -> str:
+    if not nodes:
+        return "running" if running else "pending"
+    if any(str(node.get("status") or "") == "running" for node in nodes):
+        return "running"
+    if all(is_terminal_plan_node(node) for node in nodes):
+        return "done"
+    return "running" if running else "pending"
+
+
+def result_count(nodes: list[dict], result: str) -> int:
+    count = 0
+    for node in nodes:
+        node_result = str(node.get("result") or "")
+        if node_result == result:
+            count += 1
+        elif result == "blocked" and str(node.get("status") or "") == "blocked":
+            count += 1
+        elif result == "negative" and str(node.get("status") or "") == "skipped":
+            count += 1
+        elif result == "inconclusive" and not node_result and not is_terminal_plan_node(node):
+            count += 1
+    return count
+
+
+def safe_percent(current, total) -> int:
+    try:
+        current_value = int(current or 0)
+        total_value = int(total or 0)
+    except (TypeError, ValueError):
+        return 0
+    return round((current_value / total_value) * 100) if total_value else 0
+
+
 def progress_for_phase(phase: str | None, status: str) -> dict:
     total = len(PHASES)
     if status == "completed":
@@ -578,9 +880,12 @@ def checkpoint_plan_tree(checkpoint: dict) -> list[dict]:
             "kind": item.get("kind") or "task",
             "level": item.get("level") or plan_node_level(str(item.get("kind") or "task")),
             "target": item.get("target"),
+            "method": item.get("method"),
             "endpoint": item.get("endpoint"),
             "parameter": item.get("parameter"),
+            "parameters": item.get("parameters") or [],
             "vuln_type": item.get("vuln_type"),
+            "result": item.get("result"),
             "notes": item.get("notes"),
             "evidence_ids": item.get("evidence_ids") or [],
             "source": item.get("source") or "agent",

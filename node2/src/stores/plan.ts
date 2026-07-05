@@ -1,4 +1,4 @@
-import type { CoverageStatus, PlanAudit, PlanNode, PlanStatus, PlanStoreLike, WorkResult } from "../types.js";
+import type { CoverageStatus, KanbanBucket, KanbanStage, KanbanSummary, PlanAudit, PlanNode, PlanStatus, PlanStoreLike, WorkResult } from "../types.js";
 
 const PHASES = ["intake", "recon", "analysis", "verify", "report", "complete"] as const;
 
@@ -64,8 +64,6 @@ export class PlanStore implements PlanStoreLike {
   }
 
   toolStart(toolCallId: string, toolName: string, args: Record<string, unknown> = {}): void {
-    const phase = phaseForTool(toolName, args);
-    this.setPhase(phase);
     this.upsert({
       node_id: `plan-tool-${slug(toolCallId)}`,
       title: toolTitle(toolName, args),
@@ -87,11 +85,9 @@ export class PlanStore implements PlanStoreLike {
     if (!node) return;
     node.status = isError ? "failed" : "done";
     if (notes) node.notes = notes.slice(0, 500);
-    if (toolName === "finding" && !isError) this.setPhase("report");
   }
 
   coverageMark(input: { endpoint: string; param: string; vulnClass: string; status: CoverageStatus; notes?: string }): void {
-    this.setPhase(input.status === "passed" || input.status === "failed" ? "verify" : "analysis");
     const result = coverageToResult(input.status);
     const node = this.upsert({
       node_id: `plan-test-${slug(`${input.endpoint}-${input.param}-${input.vulnClass}`)}`,
@@ -109,6 +105,7 @@ export class PlanStore implements PlanStoreLike {
       source: "coverage",
     });
     this.closeRelatedCoverage(input, node.status, result);
+    this.advanceWorkflow();
   }
 
   upsert(input: Partial<PlanNode> & { node_id?: string; id?: string; title: string }): PlanNode {
@@ -135,11 +132,11 @@ export class PlanStore implements PlanStoreLike {
       source: input.source || existing?.source || "agent",
     };
     this.nodes.set(nodeId, next);
+    if (next.source !== "pi_tool") this.advanceWorkflow();
     return next;
   }
 
   findingConfirmed(input: { title: string; severity?: string; location?: string; evidenceIds?: string[] }): void {
-    this.setPhase("verify");
     this.upsert({
       node_id: `plan-finding-${slug(input.title)}`,
       title: `Confirmed: ${input.title}`,
@@ -155,24 +152,24 @@ export class PlanStore implements PlanStoreLike {
       source: "finding",
     });
     this.closeRelatedTests(input.title, input.location || "", input.evidenceIds || []);
-    this.setPhase("report");
+    this.advanceWorkflow();
   }
 
   audit(): PlanAudit {
     const work = this.snapshot().filter((node) => node.level === "work_item");
-    const evidenceBackedFindings = work.filter((node) => node.kind === "finding" && node.status === "done" && (node.evidence_ids || []).length);
-    const openWorkItems = work.filter((node) => isOpenStatus(node.status) && isGateable(node));
-    const inconclusiveWorkItems = work.filter((node) => node.result === "inconclusive" && !isTerminalException(node.status) && isGateable(node));
+    const completedActivity = work.filter((node) => node.status === "done" && (node.source === "pi_tool" || node.kind === "surface" || node.kind === "finding" || node.kind === "test"));
+    const runningTools = work.filter((node) => node.source === "pi_tool" && node.status === "running");
+    const openWorkItems = runningTools;
+    const inconclusiveWorkItems: PlanNode[] = [];
     const blockedWorkItems = work.filter((node) => node.status === "blocked");
-    const findingsWithoutEvidence = work.filter((node) => node.kind === "finding" && node.status === "done" && !(node.evidence_ids || []).length);
-    const missingBacklog = work.filter(isGateable).length === 0 && evidenceBackedFindings.length === 0;
+    const findingsWithoutEvidence = work.filter((node) => node.kind === "finding" && node.source !== "pi_tool" && node.status === "done" && !(node.evidence_ids || []).length);
+    const missingBacklog = completedActivity.length === 0;
     const canComplete = !missingBacklog && openWorkItems.length === 0 && inconclusiveWorkItems.length === 0 && findingsWithoutEvidence.length === 0;
     const summaryParts = [
-      `${openWorkItems.length} open work item(s)`,
-      `${inconclusiveWorkItems.length} inconclusive item(s)`,
+      `${runningTools.length} running tool(s)`,
       `${blockedWorkItems.length} blocked item(s)`,
       `${findingsWithoutEvidence.length} confirmed finding(s) without evidence`,
-      missingBacklog ? "missing vulnerability test backlog" : "test backlog present",
+      missingBacklog ? "no recorded activity yet" : "activity recorded",
     ];
     return {
       canComplete,
@@ -187,16 +184,16 @@ export class PlanStore implements PlanStoreLike {
 
   gapPrompt(): string {
     const audit = this.audit();
-    const open = [...audit.openWorkItems, ...audit.inconclusiveWorkItems].slice(0, 20);
+    const open = audit.openWorkItems.slice(0, 10);
     const lines = [
-      "Runtime completion gate blocked task completion.",
+      "Runtime completion gate blocked task completion on lightweight safety checks.",
       audit.summary,
       "",
-      "Before writing a final report, update the Plan Tree and resolve these work items:",
+      "Resolve only these runtime blockers before requesting task summary:",
     ];
     for (const item of open) {
       lines.push(
-        `- ${item.node_id}: ${item.title}; status=${item.status}; endpoint=${item.endpoint || "-"}; param=${item.parameter || "-"}; vuln=${item.vuln_type || "-"}; notes=${clip(item.notes || "", 260)}`,
+        `- ${item.node_id}: ${item.title}; status=${item.status}; notes=${clip(item.notes || "", 260)}`,
       );
     }
     if (audit.findingsWithoutEvidence.length) {
@@ -204,39 +201,135 @@ export class PlanStore implements PlanStoreLike {
       for (const item of audit.findingsWithoutEvidence.slice(0, 10)) lines.push(`- ${item.title}`);
     }
     if (audit.missingBacklog) {
-      lines.push("", "No vulnerability test backlog exists yet. First discover or enumerate target attack surface, then add concrete Plan Tree test items for plausible endpoint/parameter/vulnerability-class combinations.");
+      lines.push("", "No runtime activity has been recorded yet. Run at least one appropriate recon, request, verification, or finding step before summarizing.");
     }
     lines.push(
       "",
-      "For each item, either perform concrete verification and call finding(action='confirm') with evidence_ids, mark coverage/test as negative or done with evidence-backed notes, or mark it blocked with a specific reason. Do not produce a final report until this gate is clear.",
+      "Do not create or clear broad checklist debt for completion. Summarize once tools are idle and confirmed findings have evidence.",
     );
     return lines.join("\n");
   }
 
   snapshot(): PlanNode[] {
-    return [...this.nodes.values()].sort((left, right) => (left.priority || 0) - (right.priority || 0) || left.node_id.localeCompare(right.node_id));
+    return [...this.nodes.values()]
+      .filter((node) => node.level === "work_item")
+      .map((node) => ({
+        ...node,
+        parent_id: node.parent_id && (node.parent_id.startsWith("plan-phase-") || node.parent_id.startsWith("plan-objective-")) ? null : node.parent_id,
+      }))
+      .sort((left, right) => (left.priority || 0) - (right.priority || 0) || left.node_id.localeCompare(right.node_id));
   }
 
   checkpoint(extra: Record<string, unknown> = {}): Record<string, unknown> {
+    const kanban = this.kanban();
     return {
       ...extra,
-      phase: this.phase,
-      completed_phases: this.snapshot().filter((node) => node.level === "phase" && node.status === "done").map((node) => node.node_id.replace("plan-phase-", "")),
+      workflow_kind: "pentest",
+      workflow_stage: kanban.current_stage,
+      progress: this.progress(),
+      kanban,
       plan_tree: this.snapshot(),
       audit: this.audit(),
     };
   }
 
   progress(): { current: number; total: number; percent: number } {
-    const total = PHASES.length;
-    const done = this.snapshot().filter((node) => node.level === "phase" && node.status === "done").length;
-    const running = this.snapshot().some((node) => node.level === "phase" && node.status === "running") ? 1 : 0;
-    const current = Math.min(total, done + running);
-    return { current, total, percent: Math.round((current / total) * 100) };
+    const totals = this.kanban().totals;
+    return { current: totals.processed, total: totals.discovered, percent: totals.percent };
+  }
+
+  kanban(): KanbanSummary {
+    const snapshot = this.snapshot();
+    const work = snapshot.filter((node) => node.level === "work_item");
+    const surfaces = work.filter((node) => node.kind === "surface" || node.kind === "request");
+    const tests = work.filter(isConcreteTestNode);
+    const verification = work.filter((node) => node.kind === "finding" || (node.kind === "test" && isTerminalStatus(node.status)));
+    const taskConfirmed = this.phase !== "intake" || this.phaseNode("intake").status === "done";
+    const summaryDone = this.phase === "complete";
+    const summaryTotal = 1;
+    const processed = tests.filter((node) => isTerminalStatus(node.status)).length;
+    const discovered = tests.length || surfaces.length;
+    const buckets: KanbanBucket[] = [
+      {
+        id: "task-confirmation",
+        title: "Task confirmation",
+        done: taskConfirmed ? 1 : 0,
+        total: 1,
+        status: taskConfirmed ? "done" : this.phase === "intake" ? "running" : "pending",
+      },
+      {
+        id: "attack-surface",
+        title: "Attack surface identification",
+        done: surfaces.filter((node) => isTerminalStatus(node.status)).length,
+        total: surfaces.length,
+        status: bucketStatus(surfaces, this.phase === "recon"),
+      },
+      {
+        id: "vulnerability-discovery",
+        title: "Vulnerability discovery",
+        done: processed,
+        total: tests.length,
+        status: bucketStatus(tests, this.phase === "analysis" || this.phase === "verify"),
+      },
+      {
+        id: "vulnerability-verification",
+        title: "Vulnerability verification",
+        done: verification.filter((node) => isTerminalStatus(node.status)).length,
+        total: verification.length,
+        status: bucketStatus(verification, this.phase === "verify"),
+      },
+      {
+        id: "task-summary",
+        title: "Task summary",
+        done: summaryDone ? summaryTotal : 0,
+        total: summaryTotal,
+        status: summaryDone ? "done" : this.phase === "report" ? "running" : "pending",
+      },
+    ];
+    const counts = resultCounts(tests);
+    return {
+      workflow_kind: "pentest",
+      current_stage: currentKanbanStage(this.phase, this.audit().canComplete),
+      totals: {
+        discovered,
+        processed,
+        pending: tests.filter((node) => node.status === "todo" || node.status === "pending").length,
+        running: tests.filter((node) => node.status === "running").length,
+        confirmed: counts.confirmed,
+        negative: counts.negative,
+        blocked: counts.blocked,
+        inconclusive: counts.inconclusive,
+        percent: discovered ? Math.round((processed / discovered) * 100) : 0,
+      },
+      buckets,
+    };
   }
 
   currentPhase(): string {
     return this.phase;
+  }
+
+  private advanceWorkflow(): void {
+    if (this.phase === "complete") return;
+    const work = this.snapshot().filter((node) => node.level === "work_item");
+    const surfaces = work.filter((node) => node.kind === "surface" || node.kind === "request");
+    const tests = work.filter(isConcreteTestNode);
+    const evidenceBackedFindings = work.filter((node) => node.kind === "finding" && node.status === "done" && (node.evidence_ids || []).length);
+    const hasAttackSurface = surfaces.length > 0 || tests.length > 0;
+    const hasVerifiedWork = tests.length > 0 || evidenceBackedFindings.length > 0;
+    const verifiedWorkResolved = tests.length > 0 ? tests.every((node) => isTerminalStatus(node.status)) : evidenceBackedFindings.length > 0;
+    const canSummarize = verifiedWorkResolved && this.audit().canComplete;
+    const currentIndex = PHASES.indexOf(this.phase as any);
+
+    if (currentIndex < PHASES.indexOf("analysis") && hasAttackSurface) {
+      this.setPhase("analysis");
+    }
+    if (PHASES.indexOf(this.phase as any) < PHASES.indexOf("verify") && hasVerifiedWork) {
+      this.setPhase("verify");
+    }
+    if (PHASES.indexOf(this.phase as any) < PHASES.indexOf("report") && canSummarize) {
+      this.setPhase("report");
+    }
   }
 
   private seed(): void {
@@ -301,14 +394,6 @@ export class PlanStore implements PlanStoreLike {
   }
 }
 
-function phaseForTool(toolName: string, args: Record<string, unknown>): string {
-  if (toolName === "browser" || toolName === "traffic" || toolName === "scan") return "recon";
-  if (toolName === "coverage" || toolName === "skill") return "analysis";
-  if (toolName === "http" || toolName === "poc" || toolName === "finding") return "verify";
-  if (String(args.action || "") === "confirm") return "verify";
-  return "analysis";
-}
-
 function parentForTool(toolName: string): string {
   if (toolName === "browser" || toolName === "traffic" || toolName === "scan") return "plan-objective-recon-attack-surface";
   if (toolName === "finding") return "plan-objective-verify-evidence";
@@ -352,7 +437,7 @@ function vulnClassForArgs(args: Record<string, unknown>): string | null {
 
 function coverageToPlanStatus(status: CoverageStatus): PlanStatus {
   if (status === "observed") return "pending";
-  if (status === "passed" || status === "failed") return "done";
+  if (status === "tried" || status === "passed" || status === "failed") return "done";
   if (status === "blocked") return "blocked";
   if (status === "skipped") return "skipped";
   return "running";
@@ -384,6 +469,31 @@ function isTerminalStatus(status: PlanStatus): boolean {
   return status === "done" || status === "blocked" || status === "failed" || status === "skipped";
 }
 
+function bucketStatus(nodes: PlanNode[], running: boolean): PlanStatus {
+  if (!nodes.length) return running ? "running" : "pending";
+  if (nodes.some((node) => node.status === "running")) return "running";
+  if (nodes.every((node) => isTerminalStatus(node.status))) return "done";
+  if (running) return "running";
+  return "pending";
+}
+
+function currentKanbanStage(phase: string, canComplete: boolean): KanbanStage {
+  if (phase === "complete") return "completed";
+  if (phase === "intake") return "confirming";
+  if (phase === "report") return "summarizing";
+  return "executing";
+}
+
+function resultCounts(nodes: PlanNode[]): Record<WorkResult, number> {
+  const counts: Record<WorkResult, number> = { confirmed: 0, negative: 0, inconclusive: 0, blocked: 0 };
+  for (const node of nodes) {
+    const result = normalizeResult(node.result) || resultForStatus(node.status);
+    if (result) counts[result] += 1;
+    else if (!isTerminalStatus(node.status)) counts.inconclusive += 1;
+  }
+  return counts;
+}
+
 function normalizeResult(value: unknown): WorkResult | null {
   if (["confirmed", "negative", "inconclusive", "blocked"].includes(String(value))) return value as WorkResult;
   return null;
@@ -408,6 +518,13 @@ function isGateable(node: PlanNode): boolean {
   if (node.kind === "surface") return false;
   if (node.kind === "finding") return false;
   return node.level === "work_item";
+}
+
+function isConcreteTestNode(node: PlanNode): boolean {
+  if (!isGateable(node)) return false;
+  if (node.kind === "test") return true;
+  if (node.vuln_type) return true;
+  return Boolean(node.endpoint && node.parameter);
 }
 
 function clip(value: string, limit: number): string {

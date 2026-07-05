@@ -27,7 +27,23 @@ const TEMPLATES = [
 ];
 
 type Progress = { current: number; total: number; percent: number };
-type PlanNode = { node_id?: string; id?: string; title?: string; status?: string; parent_id?: string | null; kind?: string; level?: string; method?: string | null; endpoint?: string | null; parameter?: string | null; parameters?: string[]; vuln_type?: string | null; result?: string | null; notes?: string | null; evidence_ids?: string[]; priority?: number; };
+type PlanNode = { node_id?: string; id?: string; title?: string; status?: string; parent_id?: string | null; kind?: string; level?: string; method?: string | null; endpoint?: string | null; parameter?: string | null; parameters?: string[]; vuln_type?: string | null; result?: string | null; notes?: string | null; evidence_ids?: string[]; priority?: number; source?: string; };
+type KanbanBucket = { id: string; title: string; done: number; total: number; status: string };
+type KanbanSummary = {
+  workflow_kind?: string;
+  elapsed_seconds?: number;
+  current_stage?: string;
+  totals?: Record<string, number>;
+  buckets?: KanbanBucket[];
+};
+type TimelineEvent = {
+  id: string;
+  at?: string;
+  category: string;
+  title: string;
+  detail?: string;
+  status?: string;
+};
 type AgentNode = { id: string; name: string; type: AgentIdentity | string; status: string; token_required?: boolean };
 type MentionState = { start: number; query: string } | null;
 
@@ -46,6 +62,7 @@ type ConversationSnapshot = {
   conversation?: Conversation;
   agent_state?: Record<string, unknown>;
   progress?: Progress;
+  kanban?: KanbanSummary;
   plan_tree?: PlanNode[];
   findings?: Array<Record<string, unknown>>;
   assets?: Array<Record<string, unknown>>;
@@ -61,6 +78,7 @@ export default function ConversationPage() {
   const [stateSnapshotLoaded, setStateSnapshotLoaded] = useState(false);
   const messageScrollerRef = useRef<HTMLDivElement | null>(null);
   const importFileInputRef = useRef<HTMLInputElement | null>(null);
+  const stateRefreshSeqRef = useRef(0);
   const pendingScrollRestoreRef = useRef<{ top: number; height: number } | null>(null);
   const pendingScrollToBottomRef = useRef(false);
   const shouldStickToBottomRef = useRef(true);
@@ -72,12 +90,14 @@ export default function ConversationPage() {
   const [activeConversationNodeId, setActiveConversationNodeId] = useState<string | null>(null);
   const [agentState, setAgentState] = useState<Record<string, unknown>>({});
   const [progress, setProgress] = useState<Progress | undefined>();
+  const [kanban, setKanban] = useState<KanbanSummary | undefined>();
   const [planTree, setPlanTree] = useState<PlanNode[]>([]);
   const [findings, setFindings] = useState<Array<Record<string, unknown>>>([]);
   const [assets, setAssets] = useState<Array<Record<string, unknown>>>([]);
   const [pendingApprovals, setPendingApprovals] = useState<Array<Record<string, unknown>>>([]);
   const [evidence, setEvidence] = useState<Array<Record<string, unknown>>>([]);
   const [running, setRunning] = useState(false);
+  const [timelineCursorAt, setTimelineCursorAt] = useState<string | undefined>();
   const [selectedVulnerability, setSelectedVulnerability] = useState<Partial<SecurityVulnerability> | null>(null);
   const [selectedAsset, setSelectedAsset] = useState<Partial<SecurityAsset> | null>(null);
   const [selectedEvidence, setSelectedEvidence] = useState<Partial<SecurityEvidence> | null>(null);
@@ -94,8 +114,15 @@ export default function ConversationPage() {
   });
 
   const messages = useMemo(() => messagesFromQueryData(activeId, messageQuery.data as MessagesInfiniteData | undefined), [activeId, messageQuery.data]);
-  const displayMessages = useMemo(() => groupConsecutiveToolMessages(phaseEntryMessages(messages.filter(isRenderableMessage))), [messages]);
+  const displayMessages = useMemo(() => groupConsecutiveToolMessages(messages.filter(isRenderableMessage)), [messages]);
+  const timelineEvents = useMemo(() => timelineFromMessages(messages), [messages]);
   const activeConversation = useMemo(() => conversations.find(c => c.id === activeId), [activeId, conversations]);
+  const isActiveConversationRunning = running || activeConversation?.status === "running";
+  const activeWorkflowKind = useMemo(() => {
+    if (kanban?.workflow_kind) return kanban.workflow_kind;
+    const nodeId = activeConversation?.node_id || activeConversationNodeId || "";
+    return String(agentNodes.find(node => node.id === nodeId)?.type || "");
+  }, [activeConversation?.node_id, activeConversationNodeId, agentNodes, kanban?.workflow_kind]);
   const platformAgentNodeId = useMemo(() => agentNodes.find(node => node.type === "platform")?.id || null, [agentNodes]);
   const fallbackPentestNodeId = useMemo(() => {
     const pentestNodeIds = agentNodes.filter(node => node.type === "pentest").map(node => node.id);
@@ -118,6 +145,7 @@ export default function ConversationPage() {
   const applyConversationState = useCallback((snapshot: ConversationSnapshot, fallback?: ConversationSnapshot) => {
     setAgentState(hasValues(snapshot.agent_state) ? snapshot.agent_state! : fallback?.agent_state || {});
     setProgress(snapshot.progress || fallback?.progress);
+    setKanban(snapshot.kanban || fallback?.kanban);
     setPlanTree(snapshot.plan_tree?.length ? snapshot.plan_tree : fallback?.plan_tree || []);
     setFindings(snapshot.findings?.length ? snapshot.findings : fallback?.findings || []);
     setAssets(snapshot.assets?.length ? snapshot.assets : fallback?.assets || []);
@@ -146,13 +174,35 @@ export default function ConversationPage() {
     });
   }, []);
 
+  const updateTimelineCursorFromScroll = useCallback(() => {
+    const el = messageScrollerRef.current;
+    if (!el) return;
+    const rows = Array.from(el.querySelectorAll<HTMLElement>("[data-message-created-at]"));
+    if (!rows.length) {
+      setTimelineCursorAt(undefined);
+      return;
+    }
+    const containerRect = el.getBoundingClientRect();
+    const markerY = containerRect.top + el.clientHeight * 0.72;
+    let current = rows[0].dataset.messageCreatedAt || undefined;
+    for (const row of rows) {
+      const rowTop = row.getBoundingClientRect().top;
+      if (rowTop <= markerY) current = row.dataset.messageCreatedAt || current;
+      else break;
+    }
+    setTimelineCursorAt((previous) => previous === current ? previous : current);
+  }, []);
+
   const refreshConversationState = useCallback(async (id: string | null) => {
     if (!id) return;
+    const requestSeq = ++stateRefreshSeqRef.current;
     try {
       const state = await authFetch<ConversationSnapshot>(`/api/conversations/${id}/state`);
+      if (requestSeq !== stateRefreshSeqRef.current) return;
       applyConversationState(state);
       setStateSnapshotLoaded(true);
     } catch {
+      if (requestSeq !== stateRefreshSeqRef.current) return;
       // The live stream remains usable even if a snapshot refresh races startup.
     }
   }, [applyConversationState]);
@@ -229,10 +279,13 @@ export default function ConversationPage() {
     plan_tree_updated: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
+      const convId = messageConversationId(msg, activeId);
       const tree = Array.isArray(m.plan_tree) ? m.plan_tree as PlanNode[] : m.plan_node ? [m.plan_node as PlanNode] : [];
       if (tree.length) setPlanTree(tree);
       if (isProgress(m.progress)) setProgress(m.progress);
-      void refreshConversationState(messageConversationId(msg, activeId));
+      if (isKanbanSummary(m.kanban)) setKanban(m.kanban);
+      addMessageToConversation(convId, makeMessage(convId, "system", "plan_tree_updated", { ...m, message_id: readString(m.message_id) || crypto.randomUUID() }));
+      void refreshConversationState(convId);
     },
     completion_blocked: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
@@ -241,7 +294,7 @@ export default function ConversationPage() {
       clearPendingAgentMessage(convId);
       markMessageAutoScroll();
       addMessageToConversation(convId, makeMessage(convId, "system", "status", {
-        text: String(m.message || "Runtime completion gate found unresolved Plan Tree work items."),
+        text: String(m.message || "Runtime completion gate found unresolved runtime safety checks."),
         status: "blocked",
         audit: m.audit,
         round: m.round,
@@ -293,8 +346,11 @@ export default function ConversationPage() {
       markMessageAutoScroll();
       setAgentState({ phase, activeTool: m.active_tool, intakeResult: m.intake_result, intakeStatus: m.status });
       setProgress(progressForPhase(phase, "running"));
+      if (isKanbanSummary(m.kanban)) setKanban(m.kanban);
       setRunning(true);
-      addMessageToConversation(convId, makeMessage(convId, "system", "status", { text: phaseLabel(phase), phase, active_tool: m.active_tool, status: m.status, intake_result: m.intake_result, message_id: m.message_id }));
+      if (shouldRenderPhaseStatus(m, activeWorkflowKind)) {
+        addMessageToConversation(convId, makeMessage(convId, "system", "status", { text: phaseLabel(phase), phase, active_tool: m.active_tool, status: m.status, intake_result: m.intake_result, message_id: m.message_id }));
+      }
     },
     thinking: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
@@ -326,11 +382,12 @@ export default function ConversationPage() {
       const phase = typeof m.phase === "string" ? m.phase : undefined;
       setAgentState({ phase, activeTool: m.active_tool, intakeResult: m.intake_result, intakeStatus: m.status });
       setProgress(isProgress(m.progress) ? m.progress : progressForPhase(phase, "running"));
+      if (isKanbanSummary(m.kanban)) setKanban(m.kanban);
       setRunning(true);
       const statusMessage = readString(m.message);
       if (statusMessage) {
         addMessageToConversation(convId, makeMessage(convId, "agent", "text", { ...agentAttribution(m), text: statusMessage, message_id: m.message_id }));
-      } else {
+      } else if (shouldRenderPhaseStatus(m, activeWorkflowKind)) {
         addMessageToConversation(convId, makeMessage(convId, "system", "status", { text: phaseLabel(phase), phase, iteration: m.iteration, active_tool: m.active_tool, status: m.status, intake_result: m.intake_result, message_id: m.message_id }));
       }
     },
@@ -395,6 +452,7 @@ export default function ConversationPage() {
     setAgentState({});
     setActiveConversationNodeId(null);
     setProgress(undefined);
+    setKanban(undefined);
     setPlanTree([]);
     setFindings([]);
     setAssets([]);
@@ -404,6 +462,7 @@ export default function ConversationPage() {
   }, []);
 
   const loadConversation = useCallback(async (id: string | null) => {
+    stateRefreshSeqRef.current += 1;
     if (!id) {
       localStorage.removeItem(ACTIVE_CONVERSATION_KEY);
       void queryClient.removeQueries({ queryKey: ["conversation-messages"] });
@@ -483,6 +542,22 @@ export default function ConversationPage() {
   useEffect(() => {
     if (activeId) send({ type: "subscribe", conversation_id: activeId });
   }, [activeId, send]);
+
+  useEffect(() => {
+    if (!activeId || !isActiveConversationRunning) return;
+    let inFlight = false;
+    const refresh = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        await refreshConversationState(activeId);
+      } finally {
+        inFlight = false;
+      }
+    };
+    const timer = window.setInterval(() => { void refresh(); }, 2000);
+    return () => window.clearInterval(timer);
+  }, [activeId, isActiveConversationRunning, refreshConversationState]);
 
   const handleDecision = useCallback((requestId: string, decision: "authorize" | "cancel") => {
     if (!activeId || !requestId) return;
@@ -593,6 +668,7 @@ export default function ConversationPage() {
     setRunning(true);
     setAgentState({ phase: "intake" });
     setProgress(progressForPhase("intake", "running"));
+    setKanban(undefined);
     const target = { type: targetValue.startsWith("http") ? "url" : "host", value: targetValue };
     const scope = { allow: [target.value], deny: [] };
     send({ type: "user_message", conversation_id: convId, text, target, scope, display_text: displayText, client_message_id: clientMessageId, ...agentPayload });
@@ -682,9 +758,10 @@ function pendingAgentSourceForMessage(
     const el = messageScrollerRef.current;
     if (!el) return;
     shouldStickToBottomRef.current = isNearMessageBottom();
+    updateTimelineCursorFromScroll();
     if (el.scrollTop > 96) return;
     fetchOlderMessages();
-  }, [fetchOlderMessages, isNearMessageBottom]);
+  }, [fetchOlderMessages, isNearMessageBottom, updateTimelineCursorFromScroll]);
 
   useEffect(() => {
     const pending = pendingScrollRestoreRef.current;
@@ -700,10 +777,16 @@ function pendingAgentSourceForMessage(
       pendingScrollToBottomRef.current = false;
       shouldStickToBottomRef.current = true;
       scrollMessagesToBottom("auto");
+      window.requestAnimationFrame(() => window.requestAnimationFrame(updateTimelineCursorFromScroll));
       return;
     }
     if (shouldStickToBottomRef.current) scrollMessagesToBottom("auto");
-  }, [activeId, messages, messageQuery.isFetchingNextPage, scrollMessagesToBottom]);
+    window.requestAnimationFrame(updateTimelineCursorFromScroll);
+  }, [activeId, messages, messageQuery.isFetchingNextPage, scrollMessagesToBottom, updateTimelineCursorFromScroll]);
+
+  useEffect(() => {
+    window.requestAnimationFrame(updateTimelineCursorFromScroll);
+  }, [displayMessages.length, updateTimelineCursorFromScroll]);
 
   return (
     <div className="flex h-screen overflow-hidden bg-canvas">
@@ -754,7 +837,11 @@ function pendingAgentSourceForMessage(
               )}
               {messageQuery.isFetchingNextPage && <div className="py-2 text-center text-xs text-ink-muted">Loading older messages...</div>}
               {messageQuery.hasNextPage && !messageQuery.isFetchingNextPage && <button type="button" onClick={fetchOlderMessages} className="mx-auto block rounded-pill border border-hairline px-3 py-1.5 text-xs text-ink-secondary">Load older messages</button>}
-              {displayMessages.map((msg, index) => <MessageRenderer key={msg.id} message={msg} previousMessage={displayMessages[index - 1]} agentNameById={agentNameById} fallbackPentestNodeId={fallbackPentestNodeId} platformAgentNodeId={platformAgentNodeId} onDecision={handleDecision} onOpenVulnerability={setSelectedVulnerability} onOpenAsset={setSelectedAsset} onOpenEvidence={setSelectedEvidence} highlightedApprovalId={highlightedApprovalId} approvalDecisionByRequestId={approvalDecisionByRequestId} />)}
+              {displayMessages.map((msg, index) => (
+                <div key={msg.id} data-message-created-at={msg.created_at}>
+                  <MessageRenderer message={msg} previousMessage={displayMessages[index - 1]} agentNameById={agentNameById} fallbackPentestNodeId={fallbackPentestNodeId} platformAgentNodeId={platformAgentNodeId} onDecision={handleDecision} onOpenVulnerability={setSelectedVulnerability} onOpenAsset={setSelectedAsset} onOpenEvidence={setSelectedEvidence} highlightedApprovalId={highlightedApprovalId} approvalDecisionByRequestId={approvalDecisionByRequestId} />
+                </div>
+              ))}
             </div>
             <div className="border-t border-hairline-soft p-4">
               <div className="mb-3 flex gap-2">
@@ -797,16 +884,16 @@ function pendingAgentSourceForMessage(
             intakeResult={agentState.intakeResult as Record<string, unknown> | undefined}
             intakeStatus={agentState.intakeStatus as string | undefined}
             progress={progress}
+            kanban={kanban}
+            workflowKind={activeWorkflowKind}
+            running={isActiveConversationRunning}
             planTree={planTree}
+            timeline={timelineEvents}
+            timelineCursorAt={timelineCursorAt}
             findings={findings}
             assets={assets}
-            pendingApprovals={pendingApprovals}
-            evidence={evidence}
-            onDecision={handleDecision}
             onOpenVulnerability={setSelectedVulnerability}
             onOpenAsset={setSelectedAsset}
-            onOpenEvidence={setSelectedEvidence}
-            onLocateApproval={locateApproval}
           />
         </div>
       </div>
@@ -943,6 +1030,210 @@ function appendStdout(current: string, incoming: string): string {
   if (!current) return incoming;
   if (current.endsWith(incoming)) return current;
   return `${current}${current.endsWith("\n") ? "" : "\n"}${incoming}`;
+}
+
+function timelineFromMessages(messages: Message[]): TimelineEvent[] {
+  const events: TimelineEvent[] = [];
+  const seen = new Set<string>();
+  const taskStatus = new Map<string, string>();
+  const workflowStatus = new Map<string, string>();
+  for (const message of messages) {
+    if (message.msg_type === "plan_tree_updated") {
+      const content = message.content || {};
+      for (const event of workflowEventsForMessage(message, workflowStatus)) {
+        addTimelineEvent(events, seen, event);
+      }
+      const tree = Array.isArray(content.plan_tree) ? content.plan_tree : [];
+      for (const item of tree) {
+        if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+        const node = item as PlanNode;
+        if (!isTimelineTaskNode(node)) continue;
+        const nodeId = String(node.node_id || node.id || node.title || "");
+        if (!nodeId) continue;
+        const status = String(node.status || "pending");
+        const previous = taskStatus.get(nodeId);
+        if (previous === status) continue;
+        taskStatus.set(nodeId, status);
+        addTimelineEvent(events, seen, {
+          id: `${message.id}:${nodeId}:${status}`,
+          at: message.created_at,
+          category: "Task",
+          title: `${taskStatusVerb(status)}：${String(node.title || "未命名任务")}`,
+          detail: taskDetail(node),
+          status,
+        });
+      }
+      continue;
+    }
+
+    const event = resultTimelineEventForMessage(message);
+    if (event) addTimelineEvent(events, seen, event);
+  }
+  return events.slice(-120);
+}
+
+function addTimelineEvent(events: TimelineEvent[], seen: Set<string>, event: TimelineEvent): void {
+  const key = `${event.category}:${event.title}:${event.detail || ""}:${event.status || ""}`;
+  if (seen.has(key)) return;
+  seen.add(key);
+  events.push(event);
+}
+
+function workflowEventsForMessage(message: Message, workflowStatus: Map<string, string>): TimelineEvent[] {
+  const content = message.content || {};
+  const kanban = content.kanban as Record<string, unknown> | undefined;
+  const buckets = kanban?.buckets;
+  if (!Array.isArray(buckets)) return [];
+  const events: TimelineEvent[] = [];
+  for (const bucket of buckets) {
+    if (!bucket || typeof bucket !== "object" || Array.isArray(bucket)) continue;
+    const item = bucket as Record<string, unknown>;
+    const id = readString(item.id) || readString(item.title);
+    if (!id) continue;
+    const status = readString(item.status) || "pending";
+    const previous = workflowStatus.get(id);
+    if (previous === status) continue;
+    workflowStatus.set(id, status);
+    if (status === "pending" && previous) continue;
+    events.push({
+      id: `${message.id}:workflow:${id}:${status}`,
+      at: message.created_at,
+      category: "Workflow",
+      title: `${readString(item.title) || id}：${statusText(status)}`,
+      detail: bucketProgress(item),
+      status,
+    });
+  }
+  return events;
+}
+
+function resultTimelineEventForMessage(message: Message): TimelineEvent | null {
+  const content = message.content || {};
+  const at = message.created_at;
+  const id = message.id;
+  switch (message.msg_type) {
+    case "status": {
+      const text = readString(content.text);
+      const status = readString(content.status);
+      if (!text && !status) return null;
+      if (!["blocked", "incomplete", "failed"].includes(status)) return null;
+      return {
+        id,
+        at,
+        category: status === "blocked" || status === "incomplete" ? "Gate" : "Status",
+        title: text || status,
+        detail: status && text !== status ? status : undefined,
+        status,
+      };
+    }
+    case "vuln_card":
+    case "vuln_found": {
+      const title = readString(content.title) || "Untitled vulnerability";
+      const severity = readString(content.severity);
+      const location = readString(content.location) || readString(content.url) || readString(content.affected_asset);
+      return {
+        id,
+        at,
+        category: "Finding",
+        title: `漏洞：${title}`,
+        detail: [severity, location].filter(Boolean).join(" · "),
+        status: readString(content.status) || severity,
+      };
+    }
+    case "asset_card":
+    case "asset_discovered": {
+      const address = readString(content.address) || readString(content.name) || "Unknown asset";
+      return {
+        id,
+        at,
+        category: "Asset",
+        title: `资产：${address}`,
+        detail: readString(content.asset_type) || readString(content.type),
+      };
+    }
+    case "confirm_card": {
+      return {
+        id,
+        at,
+        category: "Approval",
+        title: "请求用户确认",
+        detail: clipTimeline(readString(content.question) || readString(content.proposed_action), 180),
+        status: readString(content.risk_level),
+      };
+    }
+    case "decision": {
+      return {
+        id,
+        at,
+        category: "Approval",
+        title: `用户确认：${readString(content.decision) || "decision"}`,
+        detail: readString(content.request_id),
+        status: readString(content.decision),
+      };
+    }
+    case "task_complete": {
+      const status = readString(content.status);
+      return {
+        id,
+        at,
+        category: "Task",
+        title: status === "incomplete" ? "任务未完成" : "任务完成",
+        detail: clipTimeline(readString(content.summary), 180),
+        status: status || "completed",
+      };
+    }
+    case "task_incomplete":
+      return {
+        id,
+        at,
+        category: "Gate",
+        title: "任务未完成",
+        detail: clipTimeline(readString(content.summary), 180),
+        status: "incomplete",
+      };
+    default:
+      return null;
+  }
+}
+
+function isTimelineTaskNode(node: PlanNode): boolean {
+  if ((node.level || "work_item") !== "work_item") return false;
+  if (String(node.source || "") !== "agent") return false;
+  const kind = String(node.kind || "task");
+  return !["tool", "browser", "http", "poc", "scan", "traffic", "finding"].includes(kind);
+}
+
+function taskStatusVerb(status: string): string {
+  if (status === "running") return "开始";
+  if (status === "done") return "完成";
+  if (status === "blocked") return "阻塞";
+  if (status === "failed") return "失败";
+  if (status === "skipped") return "跳过";
+  return "计划";
+}
+
+function statusText(status: string): string {
+  if (status === "running") return "进行中";
+  if (status === "done") return "完成";
+  if (status === "blocked") return "阻塞";
+  if (status === "failed") return "失败";
+  if (status === "skipped") return "跳过";
+  return "待处理";
+}
+
+function taskDetail(node: PlanNode): string {
+  return [node.endpoint, node.parameter, node.vuln_type, node.notes].map((item) => String(item || "").trim()).filter(Boolean).join(" · ");
+}
+
+function bucketProgress(bucket: Record<string, unknown>): string {
+  const done = Number(bucket.done || 0);
+  const total = Number(bucket.total || 0);
+  return total > 0 ? `${done}/${total}` : "";
+}
+
+function clipTimeline(value: string, limit: number): string {
+  const normalized = String(value || "").replace(/\s+/g, " ").trim();
+  return normalized.length > limit ? `${normalized.slice(0, limit - 1)}…` : normalized;
 }
 
 function phaseEntryMessages(messages: Message[]): Message[] {
@@ -1165,6 +1456,19 @@ function isProgress(value: unknown): value is Progress {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const item = value as Record<string, unknown>;
   return typeof item.current === "number" && typeof item.total === "number" && typeof item.percent === "number";
+}
+
+function isKanbanSummary(value: unknown): value is KanbanSummary {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const item = value as Record<string, unknown>;
+  return typeof item.totals === "object" || Array.isArray(item.buckets);
+}
+
+function shouldRenderPhaseStatus(message: Record<string, unknown>, workflowKind: string): boolean {
+  if (workflowKind === "pentest") return false;
+  const kanban = message.kanban;
+  if (isKanbanSummary(kanban) && kanban.workflow_kind === "pentest") return false;
+  return true;
 }
 
 function hasValues(value: Record<string, unknown> | undefined): boolean {

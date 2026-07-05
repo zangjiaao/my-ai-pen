@@ -19,7 +19,7 @@ import { createPentestExtension } from "./pentest-extension.js";
 import { buildSystemPrompt } from "./prompt.js";
 
 const TEXT_STREAM_FLUSH_MS = 250;
-const DEFAULT_COMPLETION_GATE_ROUNDS = 3;
+const DEFAULT_COMPLETION_GATE_ROUNDS = 1;
 
 export async function runPentestTask(
   config: Node2Config,
@@ -96,19 +96,21 @@ export async function runPentestTask(
       type: "status_update",
       conversation_id: task.conversationId,
       task_id: task.taskId,
-      phase: runtime.plan.currentPhase(),
+      workflow_stage: runtime.plan.kanban().current_stage,
       active_tool: "pi",
       status: "running",
       message: "Pi pentest runtime started",
       progress: runtime.plan.progress(),
+      kanban: runtime.plan.kanban(),
     });
     await platform.send({
       type: "plan_tree_updated",
       conversation_id: task.conversationId,
       task_id: task.taskId,
       reason: "runtime.start",
-      phase: runtime.plan.currentPhase(),
+      workflow_stage: runtime.plan.kanban().current_stage,
       progress: runtime.plan.progress(),
+      kanban: runtime.plan.kanban(),
       plan_tree: runtime.plan.snapshot(),
     });
     if (signal?.aborted) throw new Error("Task interrupted by user.");
@@ -125,7 +127,7 @@ export async function runPentestTask(
         task_id: task.taskId,
         round: round + 1,
         audit: runtime.plan.audit(),
-        message: "Runtime completion gate found unresolved Plan Tree work items.",
+        message: "Runtime completion gate found unresolved runtime safety checks.",
       });
       await session.prompt(gapPrompt, { source: "interactive" });
       await textStream.flush();
@@ -133,6 +135,17 @@ export async function runPentestTask(
       gatePassed = runtime.plan.audit().canComplete;
     }
     if (!gatePassed) {
+      runtime.plan.setPhase("report");
+      await platform.send({
+        type: "plan_tree_updated",
+        conversation_id: task.conversationId,
+        task_id: task.taskId,
+        reason: "runtime.incomplete_summary",
+        workflow_stage: runtime.plan.kanban().current_stage,
+        progress: runtime.plan.progress(),
+        kanban: runtime.plan.kanban(),
+        plan_tree: runtime.plan.snapshot(),
+      });
       await platform.send({
         type: "checkpoint_update",
         conversation_id: task.conversationId,
@@ -180,8 +193,9 @@ export async function runPentestTask(
       conversation_id: task.conversationId,
       task_id: task.taskId,
       reason: "runtime.complete",
-      phase: runtime.plan.currentPhase(),
+      workflow_stage: runtime.plan.kanban().current_stage,
       progress: runtime.plan.progress(),
+      kanban: runtime.plan.kanban(),
       plan_tree: runtime.plan.snapshot(),
     });
     await platform.send({
@@ -209,21 +223,22 @@ async function handleSessionEvent(platform: PlatformSink, runtime: ToolRuntime, 
       type: "status_update",
       conversation_id: runtime.task.conversationId,
       task_id: runtime.task.taskId,
-      phase: runtime.plan.currentPhase(),
+      workflow_stage: runtime.plan.kanban().current_stage,
       active_tool: "pi",
       status: "running",
       progress: runtime.plan.progress(),
+      kanban: runtime.plan.kanban(),
     } as PlatformMessage);
   }
   if (event.type === "agent_end") {
-    runtime.plan.setPhase("report");
     await platform.send({
       type: "plan_tree_updated",
       conversation_id: runtime.task.conversationId,
       task_id: runtime.task.taskId,
       reason: "agent.end",
-      phase: runtime.plan.currentPhase(),
+      workflow_stage: runtime.plan.kanban().current_stage,
       progress: runtime.plan.progress(),
+      kanban: runtime.plan.kanban(),
       plan_tree: runtime.plan.snapshot(),
     } as PlatformMessage);
   }

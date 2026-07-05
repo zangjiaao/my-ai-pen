@@ -56,6 +56,33 @@ export type PlanAudit = {
   summary: string;
 };
 
+export type KanbanStage = "confirming" | "executing" | "summarizing" | "completed" | "incomplete";
+
+export type KanbanBucket = {
+  id: "task-confirmation" | "attack-surface" | "vulnerability-discovery" | "vulnerability-verification" | "task-summary";
+  title: string;
+  done: number;
+  total: number;
+  status: PlanStatus;
+};
+
+export type KanbanSummary = {
+  workflow_kind?: string;
+  current_stage: KanbanStage;
+  totals: {
+    discovered: number;
+    processed: number;
+    pending: number;
+    running: number;
+    confirmed: number;
+    negative: number;
+    blocked: number;
+    inconclusive: number;
+    percent: number;
+  };
+  buckets: KanbanBucket[];
+};
+
 export type PlanStoreLike = {
   start(): void;
   complete(): void;
@@ -71,6 +98,7 @@ export type PlanStoreLike = {
   snapshot(): PlanNode[];
   checkpoint(extra?: Record<string, unknown>): Record<string, unknown>;
   progress(): { current: number; total: number; percent: number };
+  kanban(): KanbanSummary;
   currentPhase(): string;
 };
 

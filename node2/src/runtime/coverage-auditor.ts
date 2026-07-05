@@ -1,4 +1,5 @@
 import type { ToolRuntime } from "../types.js";
+import { targetBase } from "../tools/common.js";
 
 type ObservedRequest = {
   method?: string;
@@ -7,6 +8,12 @@ type ObservedRequest = {
   responseBody?: string;
   evidenceIds?: string[];
   source?: string;
+};
+
+type ObservedUrl = {
+  method: string;
+  url: string;
+  primary: boolean;
 };
 
 type TestCandidate = {
@@ -20,29 +27,16 @@ type TestCandidate = {
 };
 
 export async function observeAttackSurface(runtime: ToolRuntime, input: ObservedRequest): Promise<void> {
-  const observations = observedUrls(input);
+  const observations = observedUrls(input).filter((observed) => observedInScope(runtime, observed.url, input.url));
   for (const observed of observations) {
     upsertSurface(runtime, observed.method, observed.url, input.evidenceIds || [], input.source);
-    const candidates = inferCandidates(observed.method, observed.url, input.requestBody || "", input.responseBody || "");
+    const candidates = inferCandidates(
+      observed.method,
+      observed.url,
+      observed.primary ? input.requestBody || "" : "",
+      observed.primary ? input.responseBody || "" : "",
+    );
     for (const candidate of candidates) {
-      runtime.plan.upsert({
-        node_id: testNodeId(candidate.endpoint, candidate.param, candidate.vulnClass),
-        title: candidate.title,
-        status: "pending",
-        kind: "test",
-        level: "work_item",
-        parent_id: "plan-objective-analysis-test-plan",
-        method: candidate.method,
-        endpoint: candidate.endpoint,
-        parameter: candidate.param,
-        parameters: splitParams(candidate.param),
-        vuln_type: candidate.vulnClass,
-        result: "inconclusive",
-        notes: candidate.notes,
-        evidence_ids: input.evidenceIds || [],
-        priority: candidate.priority,
-        source: "auditor",
-      });
       await runtime.coverage.mark({
         endpoint: candidate.endpoint,
         param: candidate.param,
@@ -54,15 +48,16 @@ export async function observeAttackSurface(runtime: ToolRuntime, input: Observed
   }
 }
 
-function observedUrls(input: ObservedRequest): Array<{ method: string; url: string }> {
-  const out: Array<{ method: string; url: string }> = [];
-  if (input.url && validUrl(input.url)) out.push({ method: (input.method || "GET").toUpperCase(), url: input.url });
+function observedUrls(input: ObservedRequest): ObservedUrl[] {
+  const out: ObservedUrl[] = [];
+  if (input.url && validUrl(input.url)) out.push({ method: (input.method || "GET").toUpperCase(), url: input.url, primary: true });
   const text = `${input.responseBody || ""}\n${input.requestBody || ""}`;
   const base = input.url ? baseUrl(input.url) : "";
   for (const match of text.matchAll(/(?:https?:\/\/[^\s"'<>]+|vulnerabilities\/[a-z0-9_/-]+\/?(?:\?[^\s"'<>]*)?)/gi)) {
     const raw = match[0].replace(/&amp;/g, "&");
     try {
-      out.push({ method: "GET", url: raw.startsWith("http") ? raw : new URL(raw, base || "http://localhost/").toString() });
+      const url = raw.startsWith("http") ? raw : new URL(raw, base || "http://localhost/").toString();
+      out.push({ method: "GET", url, primary: sameUrl(url, input.url || "") });
     } catch {
       // Ignore malformed snippets from HTML or scanner text.
     }
@@ -74,6 +69,28 @@ function validUrl(value: string): boolean {
   try {
     new URL(value);
     return true;
+  } catch {
+    return false;
+  }
+}
+
+function observedInScope(runtime: ToolRuntime, rawUrl: string, observedFrom?: string): boolean {
+  if (!validUrl(rawUrl)) return false;
+  const allow = Array.isArray(runtime.task.scope?.allow) ? runtime.task.scope.allow : [];
+  if (allow.length > 0) return allow.some((entry) => typeof entry === "string" && strictScopeMatch(rawUrl, entry));
+  const base = targetBase(runtime) || observedFrom;
+  if (!base) return true;
+  return strictScopeMatch(rawUrl, base);
+}
+
+function strictScopeMatch(rawUrl: string, rawScope: string): boolean {
+  try {
+    const target = new URL(rawUrl);
+    const scoped = new URL(/^https?:\/\//i.test(rawScope) ? rawScope : `http://${rawScope}`);
+    if (target.hostname !== scoped.hostname) return false;
+    if (target.port && scoped.port && target.port !== scoped.port) return false;
+    const scopedPath = scoped.pathname.replace(/\/+$/, "");
+    return !scopedPath || scopedPath === "/" || target.pathname === scopedPath || target.pathname.startsWith(`${scopedPath}/`);
   } catch {
     return false;
   }
@@ -170,9 +187,29 @@ function upsertSurface(runtime: ToolRuntime, method: string, rawUrl: string, evi
 function requestParams(url: URL, body: string, html: string): string[] {
   const params = new Set<string>();
   for (const key of url.searchParams.keys()) params.add(key);
-  for (const key of new URLSearchParams(body).keys()) params.add(key);
+  for (const key of requestBodyParams(body)) params.add(key);
   for (const match of html.matchAll(/\bname=["']?([a-zA-Z0-9_-]+)["']?/g)) params.add(match[1]);
   return [...params].filter((param) => !["Submit", "Login", "btnSign", "btnClear", "user_token"].includes(param));
+}
+
+function requestBodyParams(body: string): string[] {
+  const params = new Set<string>();
+  if (!body) return [];
+  if (/Content-Disposition:\s*form-data/i.test(body)) {
+    for (const match of body.matchAll(/Content-Disposition:\s*form-data;[^\n\r]*\bname=["']([^"'\r\n]+)["']/gi)) {
+      params.add(match[1]);
+    }
+    return [...params];
+  }
+  if (!body.includes("=") || /WebKitFormBoundary|Content-Disposition/i.test(body)) return [];
+  try {
+    for (const key of new URLSearchParams(body).keys()) {
+      if (key && /^[a-zA-Z0-9_-]+$/.test(key)) params.add(key);
+    }
+  } catch {
+    return [];
+  }
+  return [...params];
 }
 
 function genericVulnClass(param: string, endpoint: string, html: string): string | undefined {
@@ -197,9 +234,9 @@ function dedupeCandidates(candidates: TestCandidate[]): TestCandidate[] {
   return out;
 }
 
-function unique(values: Array<{ method: string; url: string }>): Array<{ method: string; url: string }> {
+function unique(values: ObservedUrl[]): ObservedUrl[] {
   const seen = new Set<string>();
-  const out: Array<{ method: string; url: string }> = [];
+  const out: ObservedUrl[] = [];
   for (const value of values) {
     const key = `${value.method} ${value.url}`;
     if (seen.has(key)) continue;
@@ -207,14 +244,6 @@ function unique(values: Array<{ method: string; url: string }>): Array<{ method:
     out.push(value);
   }
   return out;
-}
-
-function testNodeId(endpoint: string, param: string, vulnClass: string): string {
-  return `plan-test-${slug(`${endpoint}-${param}-${vulnClass}`)}`;
-}
-
-function splitParams(value: string): string[] {
-  return value.split(",").map((item) => item.trim()).filter(Boolean);
 }
 
 function hasAny(value: string, needles: string[]): boolean {
@@ -229,6 +258,19 @@ function hasAllText(value: string, needles: string[]): boolean {
 function baseUrl(rawUrl: string): string {
   const url = new URL(rawUrl);
   return `${url.protocol}//${url.host}/`;
+}
+
+function sameUrl(left: string, right: string): boolean {
+  if (!left || !right) return false;
+  try {
+    const leftUrl = new URL(left);
+    const rightUrl = new URL(right);
+    leftUrl.hash = "";
+    rightUrl.hash = "";
+    return leftUrl.toString() === rightUrl.toString();
+  } catch {
+    return false;
+  }
 }
 
 function slug(value: string): string {

@@ -138,9 +138,11 @@ def _agent_text(conv_id: str, agent_source: str, agent_mode: str, content: str) 
 def _compact_checkpoint(checkpoint: dict) -> dict:
     if not isinstance(checkpoint, dict):
         return {}
+    kanban = checkpoint.get("kanban") if isinstance(checkpoint.get("kanban"), dict) else {}
     return {
-        "phase": checkpoint.get("phase"),
-        "phases_completed": checkpoint.get("phases_completed"),
+        "workflow_kind": checkpoint.get("workflow_kind") or kanban.get("workflow_kind"),
+        "workflow_stage": checkpoint.get("workflow_stage") or kanban.get("current_stage"),
+        "kanban": kanban,
         "candidate_findings": checkpoint.get("candidate_findings"),
         "confirmed_findings": checkpoint.get("confirmed_findings"),
         "discovered_assets": checkpoint.get("discovered_assets"),

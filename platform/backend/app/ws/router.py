@@ -415,13 +415,10 @@ def _message_dedupe_key(*, role: str, original_type: str, stored_type: str, cont
         stream_id = content.get("stream_id")
         return f"text:{stream_id}" if stream_id else None
     if original_type == "plan_tree_updated":
-        return "plan_tree:{task_id}:{phase}".format(
-            task_id=content.get("task_id") or "",
-            phase=content.get("phase") or "",
-        )
+        return _plan_tree_dedupe_key(content)
     if original_type in {"status_update", "phase_changed"}:
-        return "status:{phase}:{iteration}:{active_tool}:{status}".format(
-            phase=content.get("phase") or "",
+        return "status:{stage}:{iteration}:{active_tool}:{status}".format(
+            stage=content.get("workflow_stage") or content.get("phase") or "",
             iteration=content.get("iteration") or "",
             active_tool=content.get("active_tool") or "",
             status=content.get("status") or "",
@@ -437,6 +434,47 @@ def _message_dedupe_key(*, role: str, original_type: str, stored_type: str, cont
         stable_id = content.get("evidence_id") or content.get("id") or content.get("vulnerability_id") or content.get("asset_id")
         return f"{original_type}:{stable_id}" if stable_id else None
     return None
+
+
+def _plan_tree_dedupe_key(content: dict) -> str:
+    plan_items = content.get("plan_tree") if isinstance(content.get("plan_tree"), list) else []
+    kanban = content.get("kanban") if isinstance(content.get("kanban"), dict) else {}
+    payload = {
+        "task_id": content.get("task_id") or "",
+        "workflow_stage": content.get("workflow_stage") or content.get("phase") or "",
+        "kanban": {
+            "workflow_kind": kanban.get("workflow_kind"),
+            "current_stage": kanban.get("current_stage"),
+            "totals": kanban.get("totals"),
+            "buckets": kanban.get("buckets"),
+        },
+        "plan_tree": [
+            {
+                "id": item.get("node_id") or item.get("id") or item.get("title"),
+                "title": item.get("title"),
+                "kind": item.get("kind"),
+                "level": item.get("level"),
+                "status": item.get("status"),
+                "result": item.get("result"),
+                "source": item.get("source"),
+                "parent_id": item.get("parent_id"),
+                "endpoint": item.get("endpoint"),
+                "parameter": item.get("parameter"),
+                "vuln_type": item.get("vuln_type"),
+            }
+            for item in plan_items
+            if isinstance(item, dict)
+        ],
+    }
+    digest = hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
+    return f"plan_tree:{digest}"
+
+
+def _is_pentest_runtime_status(msg: dict) -> bool:
+    if msg.get("type") not in {"status_update", "phase_changed"}:
+        return False
+    kanban = msg.get("kanban") if isinstance(msg.get("kanban"), dict) else {}
+    return msg.get("workflow_kind") == "pentest" or kanban.get("workflow_kind") == "pentest"
 
 
 def _append_tool_stdout(current: object, incoming: object) -> str:
@@ -601,7 +639,7 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
         elif msg_type == "completion_blocked":
             msg_type = "status"
             content = {
-                "text": msg.get("message") or "Runtime completion gate found unresolved Plan Tree work items.",
+                "text": msg.get("message") or "Runtime completion gate found unresolved runtime safety checks.",
                 "status": "blocked",
                 "audit": msg.get("audit"),
                 "round": msg.get("round"),
@@ -1330,7 +1368,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         await _audit_tool_output(msg, client_id)
                 if msg.get("type") == "checkpoint_update":
                     await _remember_conversation_checkpoint(conv_id, msg.get("checkpoint") or {})
-                elif msg.get("type") != "intake_update":
+                elif msg.get("type") != "intake_update" and not _is_pentest_runtime_status(msg):
                     await _save_message(msg, "agent")
                 if msg.get("type") == "request_decision":
                     request_id = msg.get("request_id") or str(uuid.uuid4())

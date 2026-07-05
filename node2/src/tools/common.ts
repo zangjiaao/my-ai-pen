@@ -37,8 +37,9 @@ export async function emitPlanUpdate(runtime: ToolRuntime, reason: string): Prom
     conversation_id: runtime.task.conversationId,
     task_id: runtime.task.taskId,
     reason,
-    phase: runtime.plan.currentPhase(),
+    workflow_stage: runtime.plan.kanban().current_stage,
     progress: runtime.plan.progress(),
+    kanban: runtime.plan.kanban(),
     plan_tree: runtime.plan.snapshot(),
   } as PlatformMessage);
 }

@@ -736,11 +736,19 @@ function statusNoticeText(content: Record<string, unknown>): string {
   return phase ? phaseLabel(phase) : String(content.text || "");
 }
 
+function isLegacyPhaseOnlyStatus(content: Record<string, unknown>): boolean {
+  const phase = typeof content.phase === "string" ? content.phase : parsePhaseFromText(String(content.text || ""));
+  if (!["intake", "recon", "analysis", "verify", "report", "complete"].includes(phase)) return false;
+  const text = String(content.text || "").trim();
+  return Boolean(content.synthetic) || !text || text === phaseLabel(phase) || text.startsWith(`Phase: ${phase}`);
+}
+
 function parsePhaseFromText(text: string): string {
   return text.match(/Phase:\s*([^\s(]+)/)?.[1] || "";
 }
 
 function StatusNotice({ content }: { content: Record<string, unknown> }) {
+  if (isLegacyPhaseOnlyStatus(content)) return null;
   return <div className="my-2 text-center text-xs text-ink-muted">{statusNoticeText(content)}</div>;
 }
 
