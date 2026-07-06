@@ -44,6 +44,27 @@ type TimelineEvent = {
   detail?: string;
   status?: string;
 };
+type StrixAgentStatus = {
+  id: string;
+  name: string;
+  status: string;
+  parent_id?: string | null;
+  task?: string;
+  skills?: string[];
+  pending_count?: number;
+  role?: string;
+  current_tool?: string;
+  current_action?: string;
+};
+type StrixNote = {
+  id: string;
+  title: string;
+  content?: string;
+  category?: string;
+  tags?: string[];
+  created_at?: string;
+  updated_at?: string;
+};
 type AgentNode = { id: string; name: string; type: AgentIdentity | string; status: string; token_required?: boolean };
 type MentionState = { start: number; query: string } | null;
 
@@ -64,6 +85,8 @@ type ConversationSnapshot = {
   progress?: Progress;
   kanban?: KanbanSummary;
   plan_tree?: PlanNode[];
+  strix_agents?: StrixAgentStatus[];
+  strix_notes?: StrixNote[];
   findings?: Array<Record<string, unknown>>;
   assets?: Array<Record<string, unknown>>;
   pending_approvals?: Array<Record<string, unknown>>;
@@ -92,7 +115,10 @@ export default function ConversationPage() {
   const [agentState, setAgentState] = useState<Record<string, unknown>>({});
   const [progress, setProgress] = useState<Progress | undefined>();
   const [kanban, setKanban] = useState<KanbanSummary | undefined>();
+  const [pendingWorkflowKind, setPendingWorkflowKind] = useState<string>("");
   const [planTree, setPlanTree] = useState<PlanNode[]>([]);
+  const [strixAgents, setStrixAgents] = useState<StrixAgentStatus[]>([]);
+  const [strixNotes, setStrixNotes] = useState<StrixNote[]>([]);
   const [findings, setFindings] = useState<Array<Record<string, unknown>>>([]);
   const [assets, setAssets] = useState<Array<Record<string, unknown>>>([]);
   const [pendingApprovals, setPendingApprovals] = useState<Array<Record<string, unknown>>>([]);
@@ -122,8 +148,15 @@ export default function ConversationPage() {
   const activeWorkflowKind = useMemo(() => {
     if (kanban?.workflow_kind) return kanban.workflow_kind;
     const nodeId = activeConversation?.node_id || activeConversationNodeId || "";
-    return String(agentNodes.find(node => node.id === nodeId)?.type || "");
-  }, [activeConversation?.node_id, activeConversationNodeId, agentNodes, kanban?.workflow_kind]);
+    return String(agentNodes.find(node => node.id === nodeId)?.type || pendingWorkflowKind || "");
+  }, [activeConversation?.node_id, activeConversationNodeId, agentNodes, kanban?.workflow_kind, pendingWorkflowKind]);
+  const shouldShowRightPanel = useMemo(() => {
+    if (!activeId) return false;
+    if (["pentest", "strix"].includes(activeWorkflowKind)) return true;
+    if (["pentest", "strix"].includes(String(kanban?.workflow_kind || ""))) return true;
+    if (strixAgents.length || strixNotes.length || findings.length || assets.length) return true;
+    return planTree.some((node) => ["strix_todo", "agent", "coverage", "auditor"].includes(String(node.source || "")));
+  }, [activeId, activeWorkflowKind, assets.length, findings.length, kanban?.workflow_kind, planTree, strixAgents.length, strixNotes.length]);
   const platformAgentNodeId = useMemo(() => agentNodes.find(node => node.type === "platform")?.id || null, [agentNodes]);
   const fallbackPentestNodeId = useMemo(() => {
     const pentestNodeIds = agentNodes.filter(node => node.type === "pentest").map(node => node.id);
@@ -148,6 +181,8 @@ export default function ConversationPage() {
     setProgress(snapshot.progress || fallback?.progress);
     setKanban(snapshot.kanban || fallback?.kanban);
     setPlanTree(snapshot.plan_tree?.length ? snapshot.plan_tree : fallback?.plan_tree || []);
+    setStrixAgents(snapshot.strix_agents?.length ? snapshot.strix_agents : fallback?.strix_agents || []);
+    setStrixNotes(snapshot.strix_notes?.length ? snapshot.strix_notes : fallback?.strix_notes || []);
     setFindings(snapshot.findings?.length ? snapshot.findings : fallback?.findings || []);
     setAssets(snapshot.assets?.length ? snapshot.assets : fallback?.assets || []);
     setPendingApprovals(snapshot.pending_approvals?.length ? snapshot.pending_approvals : fallback?.pending_approvals || []);
@@ -251,9 +286,30 @@ export default function ConversationPage() {
         tool_run_id: m.tool_run_id,
         command: m.command || "",
         status: normalizeExecutionStatus(m.status),
-        stdout: m.line ? `${m.line}\n` : "",
+        stdout: m.stdout || (m.line ? `${m.line}\n` : ""),
         evidence_id: m.evidence_id,
-        tool_items: [{ tool_name: m.tool_name || "", tool_run_id: m.tool_run_id, status: normalizeExecutionStatus(m.status), stdout: m.line || "", command: m.command || "", evidence_id: m.evidence_id }],
+        summary: m.summary || m.line || "",
+        display_title: m.display_title || "",
+        category: m.category || "",
+        target: m.target || "",
+        args: m.args,
+        result: m.result,
+        result_text: m.result_text,
+        tool_items: [{
+          tool_name: m.tool_name || "",
+          tool_run_id: m.tool_run_id,
+          status: normalizeExecutionStatus(m.status),
+          stdout: m.stdout || m.line || "",
+          command: m.command || "",
+          evidence_id: m.evidence_id,
+          summary: m.summary || m.line || "",
+          display_title: m.display_title || "",
+          category: m.category || "",
+          target: m.target || "",
+          args: m.args,
+          result: m.result,
+          result_text: m.result_text,
+        }],
         message_id: m.message_id,
       });
       addMessageToConversation(convId, incoming);
@@ -334,7 +390,24 @@ export default function ConversationPage() {
     },
     checkpoint_update: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
+      const m = msg as Record<string, unknown>;
       const convId = messageConversationId(msg, activeId);
+      const checkpoint = m.checkpoint && typeof m.checkpoint === "object" && !Array.isArray(m.checkpoint) ? m.checkpoint as Record<string, unknown> : {};
+      const node3Strix = checkpoint.node3_strix && typeof checkpoint.node3_strix === "object" && !Array.isArray(checkpoint.node3_strix) ? checkpoint.node3_strix as Record<string, unknown> : {};
+      if (Array.isArray(node3Strix.agents)) {
+        setStrixAgents(node3Strix.agents.filter(isStrixAgentStatus));
+      }
+      if (Array.isArray(node3Strix.todos)) {
+        const todoPlan = strixTodosToPlanTree(node3Strix.todos);
+        if (todoPlan.length) setPlanTree(todoPlan);
+      }
+      if (Array.isArray(node3Strix.notes)) {
+        setStrixNotes(node3Strix.notes.filter(isStrixNote));
+      }
+      if (Array.isArray(node3Strix.vulnerabilities)) {
+        const vulnerabilities = node3Strix.vulnerabilities;
+        setFindings(prev => mergeByTitle(prev, vulnerabilities.filter(isRecord).map(strixVulnerabilityToFinding)));
+      }
       clearPendingAgentMessage(convId);
       void refreshConversationState(convId);
     },
@@ -454,7 +527,10 @@ export default function ConversationPage() {
     setActiveConversationNodeId(null);
     setProgress(undefined);
     setKanban(undefined);
+    setPendingWorkflowKind("");
     setPlanTree([]);
+    setStrixAgents([]);
+    setStrixNotes([]);
     setFindings([]);
     setAssets([]);
     setPendingApprovals([]);
@@ -672,8 +748,9 @@ export default function ConversationPage() {
     }
 
     setRunning(true);
-    setAgentState({ phase: "intake" });
-    setProgress(progressForPhase("intake", "running"));
+    setPendingWorkflowKind("pentest");
+    setAgentState({});
+    setProgress(undefined);
     setKanban(undefined);
     const target = { type: targetValue.startsWith("http") ? "url" : "host", value: targetValue };
     const scope = { allow: [target.value], deny: [] };
@@ -811,7 +888,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar title={activeId ? conversations?.find(c => c.id === activeId)?.title : undefined} conversationId={activeId} />
         <div className="flex min-w-0 flex-1 overflow-hidden">
-          <main data-testid="conversation-main" data-active-conversation-id={activeId || ""} className="flex min-w-0 flex-1 flex-col border-r border-hairline-soft">
+          <main data-testid="conversation-main" data-active-conversation-id={activeId || ""} className={`flex min-w-0 flex-1 flex-col ${shouldShowRightPanel ? "border-r border-hairline-soft" : ""}`}>
             <div ref={messageScrollerRef} onScroll={handleMessageScroll} className="min-w-0 flex-1 overflow-y-auto px-6 py-4 space-y-4">
               {messages.length === 0 && !activeId && (
                 <div className="flex h-full items-center justify-center">
@@ -895,23 +972,27 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               </div>
             </div>
           </main>
-          <RightPanel
-            phase={agentState.phase as string}
-            activeTool={agentState.activeTool as string}
-            intakeResult={agentState.intakeResult as Record<string, unknown> | undefined}
-            intakeStatus={agentState.intakeStatus as string | undefined}
-            progress={progress}
-            kanban={kanban}
-            workflowKind={activeWorkflowKind}
-            running={isActiveConversationRunning}
-            planTree={planTree}
-            timeline={timelineEvents}
-            timelineCursorAt={timelineCursorAt}
-            findings={findings}
-            assets={assets}
-            onOpenVulnerability={setSelectedVulnerability}
-            onOpenAsset={setSelectedAsset}
-          />
+          {shouldShowRightPanel && (
+            <RightPanel
+              phase={agentState.phase as string}
+              activeTool={agentState.activeTool as string}
+              intakeResult={agentState.intakeResult as Record<string, unknown> | undefined}
+              intakeStatus={agentState.intakeStatus as string | undefined}
+              progress={progress}
+              kanban={kanban}
+              workflowKind={activeWorkflowKind}
+              running={isActiveConversationRunning}
+              planTree={planTree}
+              strixAgents={strixAgents}
+              strixNotes={strixNotes}
+              timeline={timelineEvents}
+              timelineCursorAt={timelineCursorAt}
+              findings={findings}
+              assets={assets}
+              onOpenVulnerability={setSelectedVulnerability}
+              onOpenAsset={setSelectedAsset}
+            />
+          )}
         </div>
       </div>
       <VulnDetailDialog
@@ -1367,6 +1448,13 @@ function toolItemForMessage(message: Message): Record<string, unknown> {
     stdout: message.content.stdout,
     command: message.content.command,
     evidence_id: message.content.evidence_id,
+    summary: message.content.summary,
+    display_title: message.content.display_title,
+    category: message.content.category,
+    target: message.content.target,
+    args: message.content.args,
+    result: message.content.result,
+    result_text: message.content.result_text,
   };
 }
 function toolNames(message: Message): string[] {
@@ -1479,6 +1567,65 @@ function isKanbanSummary(value: unknown): value is KanbanSummary {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const item = value as Record<string, unknown>;
   return typeof item.totals === "object" || Array.isArray(item.buckets);
+}
+
+function isStrixAgentStatus(value: unknown): value is StrixAgentStatus {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value) && readString((value as Record<string, unknown>).id));
+}
+
+function isStrixNote(value: unknown): value is StrixNote {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value) && readString((value as Record<string, unknown>).id));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function strixTodosToPlanTree(items: unknown[]): PlanNode[] {
+  return items.filter(isRecord).map((item, index) => ({
+    node_id: `strix-todo-${readString(item.id) || index}`,
+    id: readString(item.id) || `todo-${index}`,
+    title: readString(item.title) || "Untitled task",
+    status: readString(item.status) || "pending",
+    kind: "task",
+    level: "work_item",
+    notes: readString(item.description),
+    priority: strixTodoPriority(item.priority, index),
+    source: "strix_todo",
+  }));
+}
+
+function strixTodoPriority(value: unknown, index: number): number {
+  const base: Record<string, number> = { critical: 0, high: 10, medium: 20, normal: 30, low: 40 };
+  return (base[String(value || "").toLowerCase()] ?? 30) + index;
+}
+
+function strixVulnerabilityToFinding(item: Record<string, unknown>): Record<string, unknown> {
+  const target = item.target || item.affected_asset || "";
+  return {
+    ...item,
+    id: item.id || item.vulnerability_id || item.title,
+    vulnerability_id: item.vulnerability_id || item.id,
+    strix_vulnerability_id: item.strix_vulnerability_id || item.id,
+    location: item.endpoint || item.location || target,
+    affected_asset: target,
+    status: item.status || "confirmed",
+    confidence: item.confidence || "high",
+    poc: item.poc || item.poc_description || item.poc_script_code,
+    remediation: item.remediation || item.remediation_steps,
+    source: "strix",
+  };
+}
+
+function mergeByTitle(current: Array<Record<string, unknown>>, incoming: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const merged = [...current];
+  for (const item of incoming) {
+    const title = String(item.title || "");
+    const index = merged.findIndex(existing => title && String(existing.title || "") === title);
+    if (index >= 0) merged[index] = { ...merged[index], ...item };
+    else merged.push(item);
+  }
+  return merged;
 }
 
 function shouldRenderPhaseStatus(message: Record<string, unknown>, workflowKind: string): boolean {

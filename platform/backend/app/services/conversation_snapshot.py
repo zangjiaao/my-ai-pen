@@ -72,6 +72,8 @@ def objective_title(phase: str, key: str) -> str:
 
 def ensure_plan_tree_shape(items: list[dict], phase: str | None, completed: set[str], status: str, workflow_kind: str | None = None) -> list[dict]:
     nodes = [dict(item) for item in items if isinstance(item, dict)]
+    if workflow_kind == "strix":
+        return sorted(nodes, key=lambda item: (int(item.get("priority") or 50), str(item.get("created_at") or ""), str(item.get("node_id") or "")))
     if workflow_kind == "pentest":
         return normalize_pentest_plan_tree(nodes)
 
@@ -236,9 +238,9 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     task_context = context.get("task") if isinstance(context.get("task"), dict) else {}
     agent_state = agent_state_from_checkpoint(checkpoint, conversation.status) if checkpoint else agent_state_from_messages(messages, evidence, conversation.status)
     findings = merge_many_by_key([
-        [vuln_summary(v) for v in vulns],
         message_findings(messages),
         checkpoint_findings(checkpoint),
+        [vuln_summary(v) for v in vulns],
     ], "title")
     asset_items = merge_many_by_key([
         [asset_summary(a) for a in assets],
@@ -250,7 +252,11 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     attack_surface_items = snapshot_list(checkpoint.get("attack_surface")) or snapshot_list(context.get("attack_surface"))
     coverage_items = snapshot_list(checkpoint.get("coverage")) or snapshot_list(context.get("coverage"))
     captured_traffic_items = snapshot_list(checkpoint.get("captured_traffic")) or snapshot_list(context.get("captured_traffic"))
-    raw_plan_tree = checkpoint_plan_tree(checkpoint) or message_plan_tree(messages) or context.get("exploration_plan_tree") or context.get("plan_tree") or []
+    checkpoint_tree = checkpoint_plan_tree(checkpoint)
+    strix_todo_tree = strix_todos_plan_tree(checkpoint)
+    raw_plan_tree = checkpoint_tree + [item for item in strix_todo_tree if item.get("node_id") not in {node.get("node_id") for node in checkpoint_tree}]
+    if not raw_plan_tree:
+        raw_plan_tree = message_plan_tree(messages) or context.get("exploration_plan_tree") or context.get("plan_tree") or []
     workflow_kind = workflow_kind_for_checkpoint(checkpoint)
     plan_tree = ensure_plan_tree_shape(raw_plan_tree, agent_state.get("phase"), checkpoint_completed(checkpoint), conversation.status, workflow_kind)
     if conversation.status in {"completed", "incomplete"} and workflow_kind == "pentest":
@@ -265,11 +271,15 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     ], "evidence_id")
     snapshot_message_items, omitted = snapshot_messages(messages)
     agent_items = agents_from_messages(messages)
+    strix_agent_items = strix_agents_from_checkpoint(checkpoint)
+    strix_note_items = strix_notes_from_checkpoint(checkpoint)
 
     return {
         "conversation": conversation_summary(conversation),
         "messages": snapshot_message_items,
         "agents": agent_items,
+        "strix_agents": strix_agent_items,
+        "strix_notes": strix_note_items,
         "agent_state": agent_state,
         "progress": progress,
         "kanban": kanban,
@@ -297,6 +307,8 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
             "plan_tree": len(plan_tree),
             "messages": len(snapshot_message_items),
             "agents": len(agent_items),
+            "strix_agents": len(strix_agent_items),
+            "strix_notes": len(strix_note_items),
             "has_task_context": bool(task_context),
         },
     }
@@ -305,6 +317,138 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
 
 def snapshot_list(value) -> list:
     return list(value) if isinstance(value, list) else []
+
+
+def strix_agents_from_checkpoint(checkpoint: dict) -> list[dict]:
+    if not isinstance(checkpoint, dict):
+        return []
+    node3 = checkpoint.get("node3_strix") if isinstance(checkpoint.get("node3_strix"), dict) else {}
+    agents = node3.get("agents") if isinstance(node3.get("agents"), list) else []
+    normalized = []
+    for item in agents:
+        if not isinstance(item, dict):
+            continue
+        agent_id = str(item.get("id") or item.get("agent_id") or "").strip()
+        if not agent_id:
+            continue
+        skills = item.get("skills") if isinstance(item.get("skills"), list) else []
+        parent_id = str(item.get("parent_id") or "").strip()
+        normalized.append({
+            "id": agent_id,
+            "name": str(item.get("name") or agent_id),
+            "status": str(item.get("status") or "running"),
+            "parent_id": parent_id or None,
+            "task": str(item.get("task") or ""),
+            "skills": [str(skill) for skill in skills if str(skill).strip()][:12],
+            "pending_count": int(item.get("pending_count") or 0),
+            "role": str(item.get("role") or ("child" if parent_id else "main")),
+            "current_tool": str(item.get("current_tool") or ""),
+            "current_action": str(item.get("current_action") or ""),
+        })
+    return normalized
+
+
+def strix_todos_from_checkpoint(checkpoint: dict) -> list[dict]:
+    if not isinstance(checkpoint, dict):
+        return []
+    node3 = checkpoint.get("node3_strix") if isinstance(checkpoint.get("node3_strix"), dict) else {}
+    todos = node3.get("todos") if isinstance(node3.get("todos"), list) else []
+    normalized = []
+    for item in todos:
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("id") or item.get("title") or "").strip()
+        if not item_id:
+            continue
+        normalized.append({
+            "id": item_id,
+            "agent_id": str(item.get("agent_id") or ""),
+            "title": str(item.get("title") or "Untitled task"),
+            "description": str(item.get("description") or ""),
+            "priority": str(item.get("priority") or "normal"),
+            "status": normalize_plan_status(item.get("status")),
+            "created_at": str(item.get("created_at") or ""),
+            "updated_at": str(item.get("updated_at") or ""),
+            "completed_at": str(item.get("completed_at") or ""),
+        })
+    return normalized
+
+
+def strix_todos_plan_tree(checkpoint: dict) -> list[dict]:
+    nodes = []
+    for index, item in enumerate(strix_todos_from_checkpoint(checkpoint)):
+        todo_id = item.get("id") or f"todo-{index}"
+        nodes.append({
+            "node_id": f"strix-todo-{todo_id}",
+            "id": str(todo_id),
+            "title": item.get("title") or "Untitled task",
+            "status": item.get("status") or "pending",
+            "parent_id": None,
+            "kind": "task",
+            "level": "work_item",
+            "target": None,
+            "method": None,
+            "endpoint": None,
+            "parameter": None,
+            "parameters": [],
+            "vuln_type": None,
+            "result": None,
+            "notes": item.get("description") or "",
+            "evidence_ids": [],
+            "source": "strix_todo",
+            "priority": strix_priority(item.get("priority"), index),
+            "agent_id": item.get("agent_id") or "",
+            "created_at": item.get("created_at") or "",
+            "updated_at": item.get("updated_at") or "",
+        })
+    return nodes
+
+
+def strix_notes_from_checkpoint(checkpoint: dict) -> list[dict]:
+    if not isinstance(checkpoint, dict):
+        return []
+    node3 = checkpoint.get("node3_strix") if isinstance(checkpoint.get("node3_strix"), dict) else {}
+    notes = node3.get("notes") if isinstance(node3.get("notes"), list) else []
+    normalized = []
+    for item in notes:
+        if not isinstance(item, dict):
+            continue
+        note_id = str(item.get("id") or item.get("title") or "").strip()
+        if not note_id:
+            continue
+        tags = item.get("tags") if isinstance(item.get("tags"), list) else []
+        normalized.append({
+            "id": note_id,
+            "title": str(item.get("title") or "Untitled note"),
+            "content": str(item.get("content") or ""),
+            "category": str(item.get("category") or ""),
+            "tags": [str(tag) for tag in tags if str(tag).strip()][:12],
+            "created_at": str(item.get("created_at") or ""),
+            "updated_at": str(item.get("updated_at") or ""),
+        })
+    return normalized
+
+
+def normalize_plan_status(value) -> str:
+    status = str(value or "pending").strip().lower()
+    if status in {"complete", "completed"}:
+        return "done"
+    if status in {"in_progress", "working"}:
+        return "running"
+    if status in {"todo", "pending", "running", "done", "blocked", "failed", "skipped"}:
+        return status
+    return "pending"
+
+
+def strix_priority(value, index: int) -> int:
+    base = {
+        "critical": 0,
+        "high": 10,
+        "medium": 20,
+        "normal": 30,
+        "low": 40,
+    }.get(str(value or "").lower(), 30)
+    return base + index
 
 def message_summary(m: Message) -> dict:
     return {
@@ -546,6 +690,28 @@ def kanban_for_snapshot(checkpoint: dict, plan_tree: list[dict], phase: str | No
         return kanban
 
     work = [node for node in plan_tree or [] if isinstance(node, dict) and str(node.get("level") or "work_item") == "work_item"]
+    if checkpoint_kind == "strix":
+        done = sum(1 for node in work if is_terminal_plan_node(node))
+        running = sum(1 for node in work if str(node.get("status") or "") == "running")
+        pending = sum(1 for node in work if str(node.get("status") or "pending") in {"todo", "pending"})
+        total = len(work)
+        return {
+            "workflow_kind": "strix",
+            "elapsed_seconds": elapsed_seconds,
+            "current_stage": "completed" if status == "completed" else "executing" if status == "running" else "idle",
+            "totals": {
+                "discovered": total,
+                "processed": done,
+                "pending": pending,
+                "running": running,
+                "confirmed": 0,
+                "negative": 0,
+                "blocked": sum(1 for node in work if str(node.get("status") or "") == "blocked"),
+                "inconclusive": 0,
+                "percent": safe_percent(done, total),
+            },
+            "buckets": [],
+        }
     surfaces = [node for node in work if str(node.get("kind") or "") in {"surface", "request"}]
     tests = [node for node in work if is_concrete_test_node(node)]
     verification = [node for node in work if str(node.get("kind") or "") == "finding" or (str(node.get("kind") or "") == "test" and is_terminal_plan_node(node))]
@@ -675,6 +841,8 @@ def workflow_kind_for_checkpoint(checkpoint: dict) -> str:
     direct_kind = str(checkpoint.get("workflow_kind") or "") if isinstance(checkpoint, dict) else ""
     if direct_kind:
         return direct_kind
+    if isinstance(checkpoint, dict) and isinstance(checkpoint.get("node3_strix"), dict):
+        return "strix"
     kanban = checkpoint.get("kanban") if isinstance(checkpoint, dict) and isinstance(checkpoint.get("kanban"), dict) else {}
     kanban_kind = str(kanban.get("workflow_kind") or "")
     if kanban_kind:
@@ -908,6 +1076,11 @@ def checkpoint_findings(checkpoint: dict) -> list[dict]:
     if not isinstance(checkpoint, dict):
         return []
     items = []
+    node3 = checkpoint.get("node3_strix") if isinstance(checkpoint.get("node3_strix"), dict) else {}
+    for item in node3.get("vulnerabilities") or []:
+        if not isinstance(item, dict):
+            continue
+        items.append(strix_vulnerability_finding(item))
     for source in ("candidate_findings", "confirmed_findings"):
         for item in checkpoint.get(source) or []:
             if not isinstance(item, dict):
@@ -922,6 +1095,44 @@ def checkpoint_findings(checkpoint: dict) -> list[dict]:
                 "evidence_ids": item.get("evidence_ids") or [],
             })
     return items
+
+
+def strix_vulnerability_finding(item: dict) -> dict:
+    target = item.get("target") or item.get("affected_asset") or ""
+    endpoint = item.get("endpoint") or ""
+    poc = item.get("poc") or item.get("poc_description") or item.get("poc_script_code") or ""
+    return {
+        "id": str(item.get("id") or item.get("vulnerability_id") or item.get("title") or ""),
+        "vulnerability_id": str(item.get("vulnerability_id") or item.get("id") or ""),
+        "strix_vulnerability_id": str(item.get("strix_vulnerability_id") or item.get("id") or ""),
+        "title": item.get("title") or "Untitled finding",
+        "severity": item.get("severity") or "medium",
+        "location": endpoint or item.get("location") or target,
+        "confidence": item.get("confidence") or "high",
+        "status": item.get("status") or "confirmed",
+        "affected_asset": target,
+        "target": target,
+        "url": target,
+        "description": item.get("description") or "",
+        "impact": item.get("impact") or "",
+        "technical_analysis": item.get("technical_analysis") or "",
+        "poc": poc,
+        "poc_description": item.get("poc_description") or "",
+        "poc_script_code": item.get("poc_script_code") or "",
+        "remediation": item.get("remediation") or item.get("remediation_steps") or "",
+        "remediation_steps": item.get("remediation_steps") or "",
+        "evidence_ids": item.get("evidence_ids") or [],
+        "cvss": item.get("cvss"),
+        "cvss_breakdown": item.get("cvss_breakdown") if isinstance(item.get("cvss_breakdown"), dict) else {},
+        "cve_id": item.get("cve_id") or item.get("cve"),
+        "cwe": item.get("cwe"),
+        "endpoint": endpoint,
+        "method": item.get("method"),
+        "agent_id": item.get("agent_id"),
+        "agent_name": item.get("agent_name"),
+        "timestamp": item.get("timestamp"),
+        "source": "strix",
+    }
 
 
 def checkpoint_assets(checkpoint: dict) -> list[dict]:
@@ -966,16 +1177,31 @@ def message_findings(messages: list[Message]) -> list[dict]:
         findings.append({
             "id": str(finding_id),
             "vulnerability_id": str(content.get("vulnerability_id") or content.get("id") or ""),
+            "strix_vulnerability_id": content.get("strix_vulnerability_id"),
             "title": content.get("title") or "Untitled finding",
             "severity": content.get("severity") or "medium",
             "location": content.get("location") or content.get("url") or content.get("affected_asset") or content.get("poc") or "",
             "confidence": content.get("confidence"),
             "status": content.get("status") or "pending",
             "asset_id": str(content.get("asset_id")) if content.get("asset_id") else None,
-            "affected_asset": content.get("affected_asset") or content.get("url") or "",
+            "affected_asset": content.get("affected_asset") or content.get("url") or content.get("target") or "",
             "description": content.get("description") or content.get("impact") or "",
+            "impact": content.get("impact") or "",
+            "technical_analysis": content.get("technical_analysis") or "",
             "poc": content.get("poc") or content.get("reproduction") or "",
+            "poc_description": content.get("poc_description") or "",
+            "poc_script_code": content.get("poc_script_code") or "",
             "remediation": content.get("remediation") or "",
+            "remediation_steps": content.get("remediation_steps") or "",
+            "cvss": content.get("cvss"),
+            "cvss_breakdown": content.get("cvss_breakdown") if isinstance(content.get("cvss_breakdown"), dict) else {},
+            "cve_id": content.get("cve_id") or content.get("cve"),
+            "cwe": content.get("cwe"),
+            "endpoint": content.get("endpoint"),
+            "method": content.get("method"),
+            "agent_id": content.get("agent_id"),
+            "agent_name": content.get("agent_name"),
+            "timestamp": content.get("timestamp"),
             "evidence_ids": content.get("evidence_ids") or [],
         })
     return findings
@@ -1057,6 +1283,9 @@ def vuln_summary(v: Vulnerability) -> dict:
         "confidence": v.confidence,
         "status": v.status,
         "asset_id": str(v.asset_id) if v.asset_id else None,
+        "description": v.description,
+        "poc": v.poc,
+        "remediation": v.remediation,
         "evidence_ids": v.evidence_ids or [],
     }
 

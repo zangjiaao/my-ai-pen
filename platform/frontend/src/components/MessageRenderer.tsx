@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { Compass, Globe2, Search, ShieldAlert, Terminal, Wrench, type LucideIcon } from "lucide-react";
+import { Brain, Compass, Globe2, Search, ShieldAlert, Terminal, Users, Wrench, type LucideIcon } from "lucide-react";
 import type { Message } from "../lib/types";
 import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../lib/securityTypes";
 import { normalizeExecutionStatus } from "../lib/status";
@@ -47,8 +47,8 @@ function ToolCallCard({ content, onOpenEvidence }: { content: Record<string, unk
   const latestTool = String(content.latest_tool_name || content.tool_name || primaryTool);
   const status = normalizeExecutionStatus(content.status);
   const stdout = content.stdout as string || "";
-  const categories = toolCategories(toolNames);
   const items = toolItemsFromContent(content);
+  const categories = toolCategories(toolNames, items.map(item => item.category || ""));
   const fallbackSummary = summarizeToolOutput(stdout, latestTool);
   const resultSummary = summarizeToolActivity(items, latestTool, status);
   return (
@@ -84,6 +84,8 @@ type ToolItem = {
   toolName: string;
   status: string;
   summary: string;
+  category?: string;
+  target?: string;
   evidenceId?: string;
   runId?: string;
   command?: string;
@@ -111,6 +113,7 @@ function ToolItemRow({ item, onOpenEvidence }: { item: ToolItem; onOpenEvidence?
       <div className="min-w-0 flex-1 overflow-hidden">
         <div className="flex min-w-0 items-center gap-2">
           <span className="block min-w-0 max-w-full truncate text-ink-muted">{item.summary}</span>
+          {item.target && <span className="hidden shrink truncate font-mono text-[11px] text-ink-muted md:block">{item.target}</span>}
         </div>
       </div>
       {evidenceButton}
@@ -164,14 +167,18 @@ function toolItemFromStructuredRecord(item: Record<string, unknown>, content: Re
   const toolName = readContentString(item.tool_name) || readContentString(content.tool_name) || "tool";
   const stdout = readContentString(item.stdout);
   const output = parseToolOutput(stdout);
-  const parsed = output.result;
+  const explicitResult = item.result && typeof item.result === "object" && !Array.isArray(item.result) ? item.result as Record<string, unknown> : null;
+  const parsed = explicitResult || output.result;
   const status = readContentString(item.status) || readContentString(parsed?.status) || readContentString(content.status) || "done";
   const command = readContentString(item.command) || readContentString(parsed?.command);
   const evidenceId = readContentString(item.evidence_id) || output.evidenceId || readContentString(parsed?.evidence_id) || readContentString(content.evidence_id);
+  const summary = readContentString(item.summary) || readContentString(content.summary);
   return {
     toolName,
     status,
-    summary: summarizeToolItem(toolName, status, parsed, stdout, command),
+    summary: summary || summarizeToolItem(toolName, status, parsed, stdout, command),
+    category: readContentString(item.category) || readContentString(content.category),
+    target: readContentString(item.target) || readContentString(parsed?.target) || readContentString(parsed?.url) || readContentString(parsed?.title),
     evidenceId,
     runId: readContentString(item.tool_run_id) || readContentString(content.tool_run_id),
     command,
@@ -267,6 +274,7 @@ function toolItemFromLine(line: string, fallback: { fallbackTool: string; fallba
       runId: readContentString(parsed.tool_run_id) || fallback.runId,
       command,
       result: parsed,
+      target: readContentString(parsed.target) || readContentString(parsed.url) || readContentString(parsed.title),
     };
   }
   return {
@@ -320,7 +328,7 @@ function readContentString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 function toolNamesFromContent(content: Record<string, unknown>): string[] {
-  const names = Array.isArray(content.tool_names) ? content.tool_names : [content.tool_name];
+  const names = Array.isArray(content.tool_names) ? content.tool_names : [content.display_title || content.tool_name];
   return names.map(item => String(item || "").trim()).filter(Boolean);
 }
 
@@ -331,8 +339,8 @@ function toolTitle(toolNames: string[]): string {
   return `${unique.slice(0, 2).join(" + ")}${unique.length > 2 ? ` +${unique.length - 2}` : ""}`;
 }
 
-function toolCategories(toolNames: string[]): ToolCategory[] {
-  const categories = uniqueStrings(toolNames.map(toolCategoryKey)).map(categoryForKey);
+function toolCategories(toolNames: string[], explicitCategories: string[] = []): ToolCategory[] {
+  const categories = uniqueStrings([...explicitCategories, ...toolNames.map(toolCategoryKey)]).map(categoryForKey);
   return categories.length ? categories : [categoryForKey("tool")];
 }
 
@@ -343,6 +351,8 @@ function toolCategoryKey(toolName: string): string {
   if (/execute|command|shell|docker|process/.test(name)) return "command";
   if (/finding|vuln|verify|evidence|confirm/.test(name)) return "finding";
   if (/search|scan|dir|wordlist|enumerate/.test(name)) return "search";
+  if (/agent|message|graph/.test(name)) return "agent";
+  if (/todo|note|think|skill/.test(name)) return "planning";
   return "tool";
 }
 
@@ -353,6 +363,8 @@ function categoryForKey(key: string): ToolCategory {
     command: { key: "command", label: "命令执行", Icon: Terminal },
     finding: { key: "finding", label: "发现验证", Icon: ShieldAlert },
     search: { key: "search", label: "搜索枚举", Icon: Search },
+    agent: { key: "agent", label: "Agent", Icon: Users },
+    planning: { key: "planning", label: "规划", Icon: Brain },
     tool: { key: "tool", label: "工具", Icon: Wrench },
   };
   return categories[key] || categories.tool;

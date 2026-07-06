@@ -13,7 +13,7 @@ dependencies = [
   "requests>=2.32.0",
   "cvss>=3.2",
   "caido-sdk-client>=0.2.0",
-  "websockets>=16.0",
+  "websockets>=14.2,<16",
 ]
 
 [dependency-groups]

@@ -1,4 +1,5 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { ChevronRight } from "lucide-react";
 import type { SecurityAsset, SecurityVulnerability } from "../lib/securityTypes";
 
 type Tab = "status" | "discoveries" | "activity";
@@ -53,6 +54,29 @@ type TimelineEvent = {
   status?: string;
 };
 
+type StrixAgentStatus = {
+  id: string;
+  name: string;
+  status: string;
+  parent_id?: string | null;
+  task?: string;
+  skills?: string[];
+  pending_count?: number;
+  role?: string;
+  current_tool?: string;
+  current_action?: string;
+};
+
+type StrixNote = {
+  id: string;
+  title: string;
+  content?: string;
+  category?: string;
+  tags?: string[];
+  created_at?: string;
+  updated_at?: string;
+};
+
 type PhasePlan = {
   id: WorkflowPhaseId;
   label: string;
@@ -70,12 +94,36 @@ interface Props {
   workflowKind?: string;
   running?: boolean;
   planTree?: PlanNode[];
+  strixAgents?: StrixAgentStatus[];
+  strixNotes?: StrixNote[];
   timeline?: TimelineEvent[];
   timelineCursorAt?: string;
   findings?: Array<Record<string, unknown>>;
   assets?: Array<Record<string, unknown>>;
   onOpenVulnerability?: (finding: Partial<SecurityVulnerability>) => void;
   onOpenAsset?: (asset: Partial<SecurityAsset>) => void;
+}
+
+const RIGHT_PANEL_WIDTH_KEY = "my_ai_pen_right_panel_width";
+const MIN_RIGHT_PANEL_WIDTH = 380;
+const DEFAULT_RIGHT_PANEL_WIDTH = 480;
+const MAX_RIGHT_PANEL_WIDTH = 760;
+const MIN_MAIN_CONTENT_WIDTH = 520;
+
+function loadRightPanelWidth(): number {
+  try {
+    const saved = Number(window.localStorage.getItem(RIGHT_PANEL_WIDTH_KEY));
+    return clampRightPanelWidth(Number.isFinite(saved) && saved > 0 ? saved : DEFAULT_RIGHT_PANEL_WIDTH);
+  } catch {
+    return clampRightPanelWidth(DEFAULT_RIGHT_PANEL_WIDTH);
+  }
+}
+
+function clampRightPanelWidth(width: number): number {
+  const viewportWidth = typeof window === "undefined" ? 1440 : window.innerWidth;
+  const availableWidth = Math.max(MIN_RIGHT_PANEL_WIDTH, viewportWidth - MIN_MAIN_CONTENT_WIDTH);
+  const maxWidth = Math.min(MAX_RIGHT_PANEL_WIDTH, availableWidth);
+  return Math.max(MIN_RIGHT_PANEL_WIDTH, Math.min(maxWidth, Math.round(width)));
 }
 
 export default function RightPanel({
@@ -87,6 +135,8 @@ export default function RightPanel({
   workflowKind,
   running = false,
   planTree = [],
+  strixAgents = [],
+  strixNotes = [],
   timeline = [],
   timelineCursorAt,
   findings = [],
@@ -96,39 +146,107 @@ export default function RightPanel({
 }: Props) {
   const [tab, setTab] = useState<Tab>("status");
   const surfaceItems = attackSurfaceItems(planTree);
+  const orderedStrixAgents = orderStrixAgents(strixAgents);
+  const hasStatusData = running || Boolean(activeTool) || planTree.length > 0 || orderedStrixAgents.length > 0 || findings.length > 0 || assets.length > 0 || timeline.length > 0;
   const kanbanSummary = normalizeKanban(kanban, planTree, progress, workflowKind);
-  const phasePlan = buildPhasePlan(planTree, kanbanSummary.current_stage, activeTool, running, findings.length);
-  const currentAction = currentActionText({ activeTool, running, currentStage: kanbanSummary.current_stage, timeline, phasePlan });
+  const isStrixWorkflow = workflowKind === "strix" || kanbanSummary.workflow_kind === "strix" || planTree.some((node) => String(node.source || "") === "strix_todo");
+  const phasePlan = hasStatusData ? buildPhasePlan(planTree, kanbanSummary.current_stage, activeTool, running, findings.length, isStrixWorkflow) : [];
+  const currentAction = currentActionText({ activeTool, running, currentStage: kanbanSummary.current_stage, timeline, phasePlan, strixAgents: orderedStrixAgents, findingsCount: findings.length, planCount: planTree.length });
   const overallProgress = overallPlanProgress(phasePlan, kanbanSummary, progress);
   const elapsedBaseSeconds = normalizeSeconds(kanbanSummary.elapsed_seconds);
   const intake = normalizeIntake(intakeResult, intakeStatus);
-  const [elapsedClock, setElapsedClock] = useState(() => ({
-    baseSeconds: elapsedBaseSeconds,
-    anchorMs: Date.now(),
-    nowMs: Date.now(),
-  }));
+  const [elapsedClock, setElapsedClock] = useState(() => ({ seconds: elapsedBaseSeconds, anchorSeconds: elapsedBaseSeconds, anchorMs: Date.now() }));
+  const [panelWidth, setPanelWidth] = useState(loadRightPanelWidth);
+  const [resizing, setResizing] = useState(false);
 
   useEffect(() => {
-    setElapsedClock({ baseSeconds: elapsedBaseSeconds, anchorMs: Date.now(), nowMs: Date.now() });
+    setElapsedClock((current) => {
+      if (running && elapsedBaseSeconds <= current.seconds) return current;
+      return { seconds: elapsedBaseSeconds, anchorSeconds: elapsedBaseSeconds, anchorMs: Date.now() };
+    });
   }, [elapsedBaseSeconds]);
 
   useEffect(() => {
-    if (!running) return;
-    const update = () => setElapsedClock((current) => ({ ...current, nowMs: Date.now() }));
+    if (!running) {
+      setElapsedClock((current) => ({ seconds: elapsedBaseSeconds, anchorSeconds: elapsedBaseSeconds, anchorMs: Date.now() }));
+      return;
+    }
+    const update = () => {
+      const nowMs = Date.now();
+      setElapsedClock((current) => {
+        const seconds = current.anchorSeconds + Math.floor((nowMs - current.anchorMs) / 1000);
+        return seconds === current.seconds ? current : { ...current, seconds };
+      });
+    };
     update();
-    const timer = window.setInterval(update, 1000);
+    const timer = window.setInterval(update, 250);
     return () => window.clearInterval(timer);
-  }, [running]);
+  }, [elapsedBaseSeconds, running]);
 
-  const elapsedText = formatDuration(elapsedClock.baseSeconds + (running ? Math.max(0, Math.floor((elapsedClock.nowMs - elapsedClock.anchorMs) / 1000)) : 0));
+  useEffect(() => {
+    const handleResize = () => setPanelWidth((current) => clampRightPanelWidth(current));
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(RIGHT_PANEL_WIDTH_KEY, String(panelWidth));
+    } catch {
+      // Ignore storage failures; resizing should still work for the current page.
+    }
+  }, [panelWidth]);
+
+  const handlePanelResizeStart = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = panelWidth;
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    setResizing(true);
+
+    const handleMove = (moveEvent: PointerEvent) => {
+      const nextWidth = startWidth - (moveEvent.clientX - startX);
+      setPanelWidth(clampRightPanelWidth(nextWidth));
+    };
+
+    const handleEnd = () => {
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      setResizing(false);
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleEnd);
+      window.removeEventListener("pointercancel", handleEnd);
+    };
+
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleEnd);
+    window.addEventListener("pointercancel", handleEnd);
+  };
+
+  const elapsedText = formatDuration(elapsedClock.seconds);
   const tabs: { key: Tab; label: string }[] = [
     { key: "status", label: "Status" },
-    { key: "discoveries", label: `Discoveries${findings.length + assets.length + surfaceItems.length ? ` (${findings.length + assets.length + surfaceItems.length})` : ""}` },
+    { key: "discoveries", label: `Discoveries${findings.length + assets.length + surfaceItems.length + strixNotes.length ? ` (${findings.length + assets.length + surfaceItems.length + strixNotes.length})` : ""}` },
     { key: "activity", label: `Activity${timeline.length ? ` (${timeline.length})` : ""}` },
   ];
 
   return (
-    <aside className="flex w-[360px] flex-shrink-0 flex-col border-l border-hairline bg-canvas">
+    <aside
+      className={`relative flex flex-shrink-0 flex-col border-l border-hairline bg-canvas ${resizing ? "select-none" : ""}`}
+      style={{ width: panelWidth, minWidth: MIN_RIGHT_PANEL_WIDTH }}
+    >
+      <button
+        type="button"
+        aria-label="Resize status panel"
+        title="Resize status panel"
+        onPointerDown={handlePanelResizeStart}
+        className={`group absolute -left-1 top-0 z-10 h-full w-2 cursor-col-resize touch-none bg-transparent outline-none transition-colors hover:bg-status-running/10 focus-visible:bg-status-running/10 ${resizing ? "bg-status-running/10" : ""}`}
+      >
+        <span aria-hidden="true" className={`absolute left-1/2 top-1/2 h-12 w-px -translate-x-1/2 -translate-y-1/2 rounded-pill transition-colors ${resizing ? "bg-status-running" : "bg-transparent group-hover:bg-status-running/60 group-focus-visible:bg-status-running/60"}`} />
+      </button>
       <nav className="grid grid-cols-3 border-b border-hairline-soft">
         {tabs.map((item) => (
           <button
@@ -148,20 +266,29 @@ export default function RightPanel({
               <p className="mb-1 text-xs text-ink-muted">Elapsed</p>
               <p className="font-mono text-xl font-semibold leading-none tracking-normal">{elapsedText}</p>
             </section>
-            <OverallProgress progress={overallProgress} />
+            {!isStrixWorkflow && hasStatusData && overallProgress.label !== "waiting" && <OverallProgress progress={overallProgress} />}
             <section>
               <p className="mb-1 text-xs text-ink-muted">Current action</p>
               <p className="break-words text-sm font-medium [overflow-wrap:anywhere]">{currentAction}</p>
             </section>
+            {orderedStrixAgents.length > 0 && (
+              <section>
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="text-xs text-ink-muted">Agent collaboration</p>
+                  <p className="font-mono text-[11px] text-ink-muted">{agentStatusCount(orderedStrixAgents)}</p>
+                </div>
+                <StrixAgentList agents={orderedStrixAgents} />
+              </section>
+            )}
             <section>
-              <p className="mb-2 text-xs text-ink-muted">Workflow plan</p>
-              <WorkflowPlan phases={phasePlan} />
+              <p className="mb-2 text-xs text-ink-muted">{isStrixWorkflow ? "Strix tasks" : "Workflow plan"}</p>
+              <WorkflowPlan phases={phasePlan} strixWorkflow={isStrixWorkflow} running={running} />
             </section>
             {intake && <IntakeSummary intake={intake} />}
           </div>
         )}
         {tab === "discoveries" && (
-          findings.length + assets.length + surfaceItems.length === 0 ? (
+          findings.length + assets.length + surfaceItems.length + strixNotes.length === 0 ? (
             <p className="text-sm text-ink-muted">No discoveries yet</p>
           ) : (
             <div className="space-y-4">
@@ -180,8 +307,28 @@ export default function RightPanel({
                         </span>
                         <span className="truncate text-sm font-medium">{String(finding.title || "Untitled vulnerability")}</span>
                       </div>
-                      <p className="break-words text-xs text-ink-muted">{String(finding.location || finding.affected_asset || finding.status || "")}</p>
+                      <p className="break-words text-xs text-ink-muted">{findingMetaLine(finding)}</p>
                     </button>
+                  ))}
+                </DiscoverySection>
+              )}
+              {strixNotes.length > 0 && (
+                <DiscoverySection title="Notes">
+                  {strixNotes.map((note, index) => (
+                    <div key={note.id || index} className="rounded-md border border-hairline-soft p-2">
+                      <div className="mb-1 flex min-w-0 items-center gap-1">
+                        {note.category && <span className="rounded-md bg-canvas-inset px-1.5 py-0.5 text-[10px] uppercase text-ink-secondary">{note.category}</span>}
+                        <span className="truncate text-sm font-medium">{note.title || "Untitled note"}</span>
+                      </div>
+                      {note.content && <p className="break-words text-xs text-ink-muted [overflow-wrap:anywhere]">{clip(markdownPreview(note.content), 220)}</p>}
+                      {note.tags?.length ? (
+                        <div className="mt-1.5 flex flex-wrap gap-1">
+                          {note.tags.slice(0, 4).map((tag) => (
+                            <span key={tag} className="rounded-sm bg-canvas-inset px-1.5 py-0.5 text-[10px] text-ink-secondary">{tag}</span>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
                   ))}
                 </DiscoverySection>
               )}
@@ -243,7 +390,10 @@ function OverallProgress({ progress }: { progress: { percent: number; label: str
   );
 }
 
-function WorkflowPlan({ phases }: { phases: PhasePlan[] }) {
+function WorkflowPlan({ phases, strixWorkflow = false, running = false }: { phases: PhasePlan[]; strixWorkflow?: boolean; running?: boolean }) {
+  if (!phases.length) {
+    return <p className="text-sm text-ink-muted">{strixWorkflow && running ? "Waiting for Strix to publish tasks" : "No active task plan yet"}</p>;
+  }
   return (
     <div className="space-y-3" data-testid="workflow-plan">
       {phases.map((phase, index) => {
@@ -260,7 +410,7 @@ function WorkflowPlan({ phases }: { phases: PhasePlan[] }) {
               {phase.items.length ? (
                 phase.items.map((item, itemIndex) => <PlanItem key={planNodeKey(item, itemIndex)} item={item} />)
               ) : (
-                <p className="text-xs text-ink-muted">Waiting for agent plan</p>
+                <p className="text-xs text-ink-muted">No tasks in this stage</p>
               )}
             </div>
           </section>
@@ -279,6 +429,109 @@ function PlanItem({ item }: { item: PlanNode }) {
         <p className={`break-words text-xs [overflow-wrap:anywhere] ${isTerminalPlanStatus(status) ? "text-ink-muted" : "text-ink-secondary"}`}>{String(item.title || "Untitled plan item")}</p>
         {item.notes && <p className="mt-0.5 break-words text-[11px] text-ink-muted [overflow-wrap:anywhere]">{clip(item.notes, 140)}</p>}
       </div>
+    </div>
+  );
+}
+
+function StrixAgentList({ agents }: { agents: StrixAgentStatus[] }) {
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const roots = agents.filter((agent) => !agent.parent_id);
+  const rootAgents = roots.length ? roots : agents.slice(0, 1);
+  const childrenByParent = new Map<string, StrixAgentStatus[]>();
+  const rootIds = new Set(rootAgents.map((agent) => agent.id));
+  for (const agent of agents) {
+    if (rootIds.has(agent.id)) continue;
+    const parentId = agent.parent_id && agents.some((candidate) => candidate.id === agent.parent_id) ? agent.parent_id : rootAgents[0]?.id || "";
+    if (!parentId) continue;
+    childrenByParent.set(parentId, [...(childrenByParent.get(parentId) || []), agent]);
+  }
+  return (
+    <div className="space-y-1" data-testid="strix-agent-status">
+      {rootAgents.map((agent) => {
+        const children = childrenByParent.get(agent.id) || [];
+        const open = expanded[agent.id] ?? true;
+        return (
+          <div key={agent.id} className="min-w-0">
+            <AgentRow
+              agent={agent}
+              primary
+              childCount={children.length}
+              expanded={open}
+              onToggle={children.length ? () => setExpanded((current) => ({ ...current, [agent.id]: !open })) : undefined}
+            />
+            {children.length > 0 && (
+              <div className={`${open ? "block" : "hidden"} mt-1 space-y-1`}>
+                {children.map((child) => (
+                  <AgentRow key={child.id} agent={child} />
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function AgentRow({
+  agent,
+  primary = false,
+  childCount = 0,
+  expanded = false,
+  onToggle,
+}: {
+  agent: StrixAgentStatus;
+  primary?: boolean;
+  childCount?: number;
+  expanded?: boolean;
+  onToggle?: () => void;
+}) {
+  const summary = summarizeAgentAction(agent);
+  const status = agentStatusLabel(agent.status);
+  return (
+    <div className={`min-w-0 rounded-md px-2 py-2 ${primary ? "bg-canvas-inset" : "bg-transparent hover:bg-canvas-inset"}`}>
+      <div className="flex min-w-0 items-start gap-2">
+        <button
+          type="button"
+          onClick={onToggle}
+          disabled={!onToggle}
+          className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-ink-muted ${onToggle ? "hover:bg-surface-elevated hover:text-ink" : "cursor-default opacity-0"}`}
+          aria-label={expanded ? "Collapse sub-agents" : "Expand sub-agents"}
+        >
+          <ChevronRight className={`h-3.5 w-3.5 transition-transform ${expanded ? "rotate-90" : ""}`} />
+        </button>
+        <span aria-hidden="true" className={`mt-2 h-2 w-2 shrink-0 rounded-full ${agentStatusDotClass(agent.status)}`} />
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-start justify-between gap-2">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium">{agent.name || agent.id}</p>
+              <p className="mt-0.5 text-xs text-ink-secondary">{summary}</p>
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              {childCount > 0 && <span className="font-mono text-[10px] text-ink-muted">{childCount}</span>}
+              <span className={`rounded-sm px-1.5 py-0.5 text-[10px] font-medium uppercase ${agentStatusBadgeClass(agent.status)}`}>{status}</span>
+            </div>
+          </div>
+          <AgentMeta agent={agent} primary={primary} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AgentMeta({ agent, primary }: { agent: StrixAgentStatus; primary: boolean }) {
+  const skills = Array.isArray(agent.skills) ? agent.skills.slice(0, primary ? 4 : 3) : [];
+  const meta = [
+    primary ? "main agent" : "sub-agent",
+    Number(agent.pending_count || 0) > 0 ? `${agent.pending_count} queued` : "",
+    ...skills,
+  ].filter(Boolean);
+  if (!meta.length) return null;
+  return (
+    <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+      {meta.map((item) => (
+        <span key={item} className="text-[10px] text-ink-muted">{item}</span>
+      ))}
     </div>
   );
 }
@@ -370,7 +623,23 @@ function normalizeKanban(input: KanbanSummary | undefined, nodes: PlanNode[], pr
   };
 }
 
-function buildPhasePlan(nodes: PlanNode[], currentStage: string | undefined, activeTool: string | undefined, running: boolean, findingsCount: number): PhasePlan[] {
+function buildPhasePlan(nodes: PlanNode[], currentStage: string | undefined, activeTool: string | undefined, running: boolean, findingsCount: number, strixWorkflow = false): PhasePlan[] {
+  const items = agentPlanItems(nodes);
+  if (!activeTool && findingsCount === 0 && items.length === 0) {
+    return [];
+  }
+  if (strixWorkflow) {
+    const strixItems = items.sort((left, right) => Number(left.priority || 999) - Number(right.priority || 999) || String(left.title || "").localeCompare(String(right.title || ""))).slice(0, 12);
+    if (!strixItems.length) return [];
+    const status: PhasePlan["status"] = strixItems.some((item) => item.status === "running")
+      ? "running"
+      : strixItems.every((item) => isTerminalPlanStatus(item.status))
+        ? "done"
+        : running
+          ? "running"
+          : "pending";
+    return [{ id: "testing", label: "Strix", status, items: strixItems }];
+  }
   const activeId = lightweightStageId(currentStage, activeTool, running, findingsCount);
   const phases: PhasePlan[] = [
     { id: "recon", label: "Recon", status: "pending", items: [] },
@@ -383,7 +652,7 @@ function buildPhasePlan(nodes: PlanNode[], currentStage: string | undefined, act
   phases.forEach((phase, index) => {
     phase.status = activeId === "completed" || index < activeIndex ? "done" : index === activeIndex ? "running" : "pending";
   });
-  for (const item of agentPlanItems(nodes)) {
+  for (const item of items) {
     byId.get(workflowPhaseForPlanItem(item))?.items.push(item);
   }
   for (const phase of phases) {
@@ -395,7 +664,7 @@ function buildPhasePlan(nodes: PlanNode[], currentStage: string | undefined, act
 function agentPlanItems(nodes: PlanNode[]): PlanNode[] {
   return nodes.filter((node) => {
     if ((node.level || "work_item") !== "work_item") return false;
-    if (String(node.source || "") !== "agent") return false;
+    if (!["agent", "strix_todo"].includes(String(node.source || ""))) return false;
     const kind = String(node.kind || "task");
     return !["tool", "browser", "http", "poc", "scan", "traffic", "finding"].includes(kind);
   });
@@ -438,7 +707,9 @@ function stageProgressPercent(phases: PhasePlan[]): number {
   return Math.round(((done + running) / phases.length) * 100);
 }
 
-function currentActionText({ activeTool, running, currentStage, timeline, phasePlan }: { activeTool?: string; running?: boolean; currentStage?: string; timeline: TimelineEvent[]; phasePlan: PhasePlan[] }): string {
+function currentActionText({ activeTool, running, currentStage, timeline, phasePlan, strixAgents, findingsCount = 0, planCount = 0 }: { activeTool?: string; running?: boolean; currentStage?: string; timeline: TimelineEvent[]; phasePlan: PhasePlan[]; strixAgents?: StrixAgentStatus[]; findingsCount?: number; planCount?: number }): string {
+  const activeStrixAgent = strixAgents?.find((agent) => agent.role === "main" && isActiveAgentStatus(agent.status)) || strixAgents?.find((agent) => isActiveAgentStatus(agent.status));
+  if (running && activeStrixAgent?.current_action) return activeStrixAgent.current_action;
   const tool = String(activeTool || "").trim();
   if (running && tool && tool !== "pi") return actionForTool(tool);
   const activePlanItem = phasePlan.flatMap((phase) => phase.items).find((item) => item.status === "running");
@@ -449,7 +720,8 @@ function currentActionText({ activeTool, running, currentStage, timeline, phaseP
   if (currentStage === "incomplete") return "Task stopped before completion";
   if (currentStage === "summarizing") return "Preparing summary";
   if (running) return "Agent is working";
-  return "Idle";
+  if (findingsCount > 0 || planCount > 0) return "Scan results ready";
+  return "Waiting for task";
 }
 
 function actionForTool(tool: string): string {
@@ -486,6 +758,25 @@ function attackSurfaceItems(nodes: PlanNode[]): PlanNode[] {
   return surfaces;
 }
 
+function findingMetaLine(finding: Record<string, unknown>): string {
+  const pieces = [
+    [finding.method, finding.endpoint || finding.location].filter(Boolean).join(" "),
+    finding.cwe,
+    finding.agent_name ? `agent: ${finding.agent_name}` : "",
+    finding.affected_asset,
+    finding.status,
+  ].map((item) => String(item || "").trim()).filter(Boolean);
+  return pieces[0] || "";
+}
+
+function markdownPreview(value: string): string {
+  return String(value || "")
+    .replace(/```[\s\S]*?```/g, " code block ")
+    .replace(/[#*_`>\-[\]]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function timelineCategoryLabel(category: string): string {
   const normalized = category.toLowerCase();
   if (normalized === "workflow") return "Workflow";
@@ -505,6 +796,91 @@ function timelineDotClass(category: string, status?: string): string {
   if (normalized.includes("evidence")) return "border-status-success bg-status-success";
   if (normalized.includes("workflow")) return "border-ink bg-ink";
   return "border-hairline bg-canvas";
+}
+
+function orderStrixAgents(agents: StrixAgentStatus[]): StrixAgentStatus[] {
+  const byId = new Map(agents.map((agent) => [agent.id, agent]));
+  const depth = (agent: StrixAgentStatus): number => {
+    let count = 0;
+    let parentId = agent.parent_id || "";
+    const seen = new Set<string>();
+    while (parentId && byId.has(parentId) && !seen.has(parentId)) {
+      seen.add(parentId);
+      count += 1;
+      parentId = byId.get(parentId)?.parent_id || "";
+    }
+    return count;
+  };
+  return [...agents].sort((left, right) => depth(left) - depth(right) || String(left.parent_id || "").localeCompare(String(right.parent_id || "")) || left.name.localeCompare(right.name));
+}
+
+function agentStatusCount(agents: StrixAgentStatus[]): string {
+  const active = agents.filter((agent) => isActiveAgentStatus(agent.status)).length;
+  return `${active}/${agents.length} active`;
+}
+
+function isActiveAgentStatus(status: string | undefined): boolean {
+  return ["running", "waiting", "pending"].includes(String(status || "").toLowerCase());
+}
+
+function agentStatusLabel(status: string | undefined): string {
+  const normalized = String(status || "running").toLowerCase();
+  if (normalized === "completed") return "done";
+  if (normalized === "crashed") return "failed";
+  if (normalized === "waiting") return "pending";
+  return normalized;
+}
+
+function agentStatusDotClass(status: string | undefined): string {
+  const normalized = agentStatusLabel(status);
+  if (normalized === "running") return "bg-status-running";
+  if (normalized === "pending") return "bg-[#d97706]";
+  if (["failed", "crashed"].includes(normalized)) return "bg-severity-critical";
+  if (["done", "stopped"].includes(normalized)) return "bg-status-success";
+  return "bg-canvas-inset";
+}
+
+function agentStatusBadgeClass(status: string | undefined): string {
+  const normalized = agentStatusLabel(status);
+  if (normalized === "running") return "bg-status-running/10 text-status-running";
+  if (normalized === "done") return "bg-status-success/10 text-status-success";
+  if (normalized === "failed") return "bg-severity-critical-subtle text-severity-critical";
+  if (normalized === "pending") return "bg-[#fff7ed] text-[#d97706]";
+  return "bg-canvas-inset text-ink-secondary";
+}
+
+function summarizeAgentAction(agent: StrixAgentStatus): string {
+  const tool = String(agent.current_tool || "").trim();
+  const action = String(agent.current_action || "").trim();
+  if (tool) {
+    if (tool === "exec_command" || action.toLowerCase().startsWith("running command")) return "Running a command";
+    if (tool === "write_stdin") return "Reading command output";
+    if (tool === "create_agent") return "Delegating to a sub-agent";
+    if (tool === "create_vulnerability_report") return "Recording a vulnerability";
+    if (tool === "finish_scan") return "Preparing the final report";
+    if (tool === "agent_finish") return "Returning sub-agent results";
+    if (tool === "send_message_to_agent") return "Coordinating with a sub-agent";
+    if (tool === "wait_for_message") return "Waiting for a sub-agent";
+    if (tool.includes("todo")) return "Updating task plan";
+    if (tool.includes("note")) return "Writing notes";
+    if (tool.includes("request") || tool.includes("sitemap") || tool.includes("scope")) return "Reviewing target surface";
+    return friendlyActionName(tool);
+  }
+  if (action) return compactAgentAction(action);
+  if (agent.task) return clip(agent.task, 90);
+  return agentStatusLabel(agent.status) === "done" ? "Finished assigned work" : "Waiting for work";
+}
+
+function compactAgentAction(value: string): string {
+  const text = value.replace(/\s+/g, " ").trim();
+  if (/^running command:/i.test(text)) return "Running a command";
+  if (/^creating sub-agent:/i.test(text)) return text.replace(/^creating sub-agent:/i, "Delegating to").trim();
+  if (/^reporting finding:/i.test(text)) return text.replace(/^reporting finding:/i, "Recording").trim();
+  return clip(text, 90);
+}
+
+function friendlyActionName(tool: string): string {
+  return tool.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function formatTimelineTime(value: string): string {

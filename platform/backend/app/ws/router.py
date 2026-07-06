@@ -583,7 +583,7 @@ def _proof_properties_from_summary(summary: object) -> dict:
 
 
 def _tool_item_from_content(content: dict) -> dict:
-    return {
+    item = {
         "tool_name": content.get("tool_name", ""),
         "tool_run_id": content.get("tool_run_id"),
         "command": content.get("command", ""),
@@ -591,6 +591,10 @@ def _tool_item_from_content(content: dict) -> dict:
         "stdout": content.get("stdout", ""),
         "evidence_id": content.get("evidence_id"),
     }
+    for key in ("summary", "display_title", "category", "target", "args", "result", "result_text"):
+        if content.get(key) is not None:
+            item[key] = content.get(key)
+    return item
 
 
 def _merge_tool_items(existing: dict, incoming: dict) -> list[dict]:
@@ -605,14 +609,17 @@ def _merge_tool_items(existing: dict, incoming: dict) -> list[dict]:
             continue
         item_run_id = str(item.get("tool_run_id") or "")
         if incoming_run_id and item_run_id == incoming_run_id:
-            merged.append({
+            merged_item = {
                 **item,
                 **incoming_item,
                 "command": incoming_item.get("command") or item.get("command") or "",
                 "stdout": _append_tool_stdout(item.get("stdout"), incoming_item.get("stdout")),
                 "status": incoming_item.get("status") or item.get("status") or "running",
                 "evidence_id": incoming_item.get("evidence_id") or item.get("evidence_id"),
-            })
+            }
+            for key in ("summary", "display_title", "category", "target", "args", "result", "result_text"):
+                merged_item[key] = incoming_item.get(key) if incoming_item.get(key) is not None else item.get(key)
+            merged.append(merged_item)
             updated = True
         else:
             merged.append(item)
@@ -682,8 +689,15 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                 "tool_run_id": msg.get("tool_run_id"),
                 "command": msg.get("command", ""),
                 "status": msg.get("status", "running"),
-                "stdout": msg.get("line", ""),
+                "stdout": msg.get("stdout") or msg.get("line", ""),
                 "evidence_id": msg.get("evidence_id"),
+                "summary": msg.get("summary") or msg.get("line", ""),
+                "display_title": msg.get("display_title"),
+                "category": msg.get("category"),
+                "target": msg.get("target"),
+                "args": msg.get("args"),
+                "result": msg.get("result"),
+                "result_text": msg.get("result_text"),
             }
             content["tool_items"] = [_tool_item_from_content(content)]
         elif msg_type in ("status_update", "phase_changed"):
@@ -1112,6 +1126,7 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
             return {
                 "id": str(vuln.id),
                 "vulnerability_id": str(vuln.id),
+                "strix_vulnerability_id": msg.get("strix_vulnerability_id") or msg.get("id"),
                 "asset_id": str(vuln.asset_id) if vuln.asset_id else None,
                 "conversation_id": str(vuln.conversation_id),
                 "node_id": str(vuln.node_id) if vuln.node_id else None,
@@ -1120,6 +1135,24 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                 "location": vuln.poc or location,
                 "confidence": vuln.confidence,
                 "status": vuln.status,
+                "affected_asset": affected_asset if affected_asset != "unknown" else msg.get("affected_asset"),
+                "description": msg.get("description") or vuln.description,
+                "impact": msg.get("impact"),
+                "technical_analysis": msg.get("technical_analysis"),
+                "poc": msg.get("poc") or vuln.poc,
+                "poc_description": msg.get("poc_description"),
+                "poc_script_code": msg.get("poc_script_code"),
+                "remediation": msg.get("remediation") or vuln.remediation,
+                "remediation_steps": msg.get("remediation_steps"),
+                "cvss": msg.get("cvss"),
+                "cvss_breakdown": msg.get("cvss_breakdown"),
+                "cve_id": msg.get("cve_id") or msg.get("cve"),
+                "cwe": msg.get("cwe"),
+                "endpoint": msg.get("endpoint"),
+                "method": msg.get("method"),
+                "agent_id": msg.get("agent_id"),
+                "agent_name": msg.get("agent_name"),
+                "timestamp": msg.get("timestamp"),
                 "evidence_ids": vuln.evidence_ids or [],
             }
     except Exception as e:

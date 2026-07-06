@@ -25,7 +25,7 @@ from openai.types.responses import ResponseOutputMessage
 
 from strix.config import load_settings
 from strix.config.models import DEFAULT_MODEL_RETRY, StrixProvider, configure_sdk_model_defaults
-from strix_node import run_embedded_scan
+from strix.platform.node_runner import run_platform_scan
 
 
 DEFAULT_STRIX_PROJECT = (ROOT / "workspace" / "strix_runtime").resolve()
@@ -113,7 +113,7 @@ class Node3Runtime:
 
     async def run_scan(self, ws: Any, task: dict[str, Any]) -> None:
         try:
-            await run_embedded_scan(ws, task, self.config)
+            await run_platform_scan(ws, task, self.config)
         except asyncio.CancelledError:
             raise
         finally:
@@ -251,18 +251,6 @@ async def send(ws: Any, message: dict[str, Any]) -> None:
     await ws.send(json.dumps(message, ensure_ascii=False))
 
 
-def status(task: dict[str, Any], state: str, stage: str, summary: str) -> dict[str, Any]:
-    return {
-        "type": "status_update",
-        "conversation_id": task["conversation_id"],
-        "task_id": task["task_id"],
-        "status": state,
-        "workflow_stage": stage,
-        "active_tool": "strix",
-        "summary": summary,
-    }
-
-
 def text(task: dict[str, Any], value: str) -> dict[str, Any]:
     return {
         "type": "text",
@@ -324,15 +312,18 @@ def main() -> None:
     standalone.add_argument("--instruction", default="", help="Optional task instruction.")
     standalone.add_argument("--resume", default=None, help="Resume a Strix run name from the output directory.")
     standalone.add_argument("--scan-mode", default=None, choices=["quick", "standard", "deep"], help="Strix scan mode.")
-    standalone.add_argument("--tui", action="store_true", help="Open the Strix Textual TUI.")
+    standalone.add_argument("--tui", action="store_true", help="Open the Strix Textual TUI. This is the default.")
     standalone.add_argument("--no-tui", action="store_true", help="Run non-interactively and print Strix CLI output.")
 
     parser.add_argument("--standalone", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--target", default="", help=argparse.SUPPRESS)
     parser.add_argument("--scope", action="append", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--output", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--instruction", default="", help=argparse.SUPPRESS)
     parser.add_argument("--resume", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--scan-mode", default=None, choices=["quick", "standard", "deep"], help=argparse.SUPPRESS)
     parser.add_argument("--tui", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--no-tui", action="store_true", help=argparse.SUPPRESS)
 
     args = parser.parse_args()
     if args.command == "standalone" or args.standalone:
@@ -346,6 +337,10 @@ def run_standalone_strix(args: argparse.Namespace, parser: argparse.ArgumentPars
     resume = str(args.resume or "").strip()
     if not target and not resume:
         parser.error("standalone requires --target or --resume")
+    if args.tui and args.no_tui:
+        parser.error("standalone cannot combine --tui and --no-tui")
+    if "--tui" in target or "--no-tui" in target:
+        parser.error("standalone target contains a TUI flag; add a space before --tui/--no-tui")
 
     config = Node3Config()
     output_dir = resolve_config_path(args.output, DEFAULT_STANDALONE_OUTPUT)
@@ -361,12 +356,16 @@ def run_standalone_strix(args: argparse.Namespace, parser: argparse.ArgumentPars
     instruction = standalone_instruction(str(args.instruction or "").strip(), args.scope)
     if instruction:
         cli_args.extend(["--instruction", instruction])
-    if args.no_tui:
+    tui_enabled = not args.no_tui
+    if tui_enabled:
+        cli_args.append("--tui")
+    else:
         cli_args.append("-n")
     cli_args.extend(config.extra_args)
 
     print(f"[node3] standalone Strix source: {ROOT / 'strix'}", flush=True)
     print(f"[node3] standalone workspace: {output_dir}", flush=True)
+    print(f"[node3] standalone mode: {'tui' if tui_enabled else 'headless'}", flush=True)
     print(f"[node3] strix {' '.join(cli_args)}", flush=True)
 
     previous_argv = sys.argv[:]

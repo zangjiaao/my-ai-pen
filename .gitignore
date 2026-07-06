@@ -49,6 +49,7 @@ node/workspace/
 node/node/
 node2/workspace/
 node2/.pi-agent/
+node3/workspace/
 
 tmp/
 node/tmp/

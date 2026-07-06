@@ -6,9 +6,24 @@ It is intended for benchmark comparison against Node2, not as a replacement for 
 
 ## Run
 
-Use the Docker adapter as the default path on Windows. This keeps the Node3/Strix process in a Linux filesystem and avoids antivirus deleting Python source files from `research/strix`.
+Use the local Python entrypoint as the default path. Node3 now vendors the Strix source under `node3/strix`, so the platform node process does not need to run inside Docker just to execute Strix.
 
 Configure `node3/.env`, then start Node3:
+
+```powershell
+uv sync --project node3
+.\node3\run-python.ps1
+```
+
+Node-directed chat messages without a target use the same Strix LLM configuration as scans.
+
+Strix model/provider variables are read directly by Strix, for example `STRIX_LLM` and `LLM_API_KEY`.
+
+Docker may still need to be running for Strix-managed sandbox/Caido sidecars, depending on the tools used by a scan. That is different from running the Node3 process itself in Docker.
+
+## Docker Fallback
+
+The Docker runner is still available as a fallback when the local Python environment is unsuitable:
 
 ```powershell
 .\node3\run-docker.ps1
@@ -22,27 +37,6 @@ The container mounts:
 The Node3 source tree includes the Strix runtime. Rebuild after changing `node3/`.
 
 `PLATFORM_WS_URL` should usually be `ws://host.docker.internal:8000/ws` when Node3 runs in Docker and the platform backend runs on the host.
-
-## Local Python Fallback
-
-Use this only when the local checkout is not being modified by antivirus.
-
-Prepare Node3 once:
-
-```powershell
-uv sync --project node3
-```
-
-Start Node3 in platform mode:
-
-```powershell
-.\node3\run-python.ps1
-```
-
-Node-directed chat messages without a target use the same Strix LLM configuration as scans.
-
-Strix model/provider variables are read directly by Strix, for example `STRIX_LLM` and `LLM_API_KEY`.
-Docker must also be running because Strix starts its sandbox/Caido sidecar from Docker.
 
 ## Standalone Mode
 

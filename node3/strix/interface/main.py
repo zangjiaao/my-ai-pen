@@ -398,6 +398,12 @@ Examples:
     )
 
     parser.add_argument(
+        "--tui",
+        action="store_true",
+        help="Run in interactive mode with the Textual TUI. This is the default.",
+    )
+
+    parser.add_argument(
         "-n",
         "--non-interactive",
         action="store_true",
@@ -474,6 +480,9 @@ Examples:
         parser.error(
             "Cannot specify both --instruction and --instruction-file. Use one or the other."
         )
+
+    if args.tui and args.non_interactive:
+        parser.error("Cannot specify both --tui and --non-interactive/-n")
 
     if args.instruction_file:
         instruction_path = Path(args.instruction_file)

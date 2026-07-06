@@ -124,6 +124,10 @@ export default function VulnDetailDialog({ open, vulnerabilityId, initial, onClo
           <Info label="Node" value={shortId(vulnerability?.node_id)} />
           <Info label="Confidence" value={asString(vulnerability?.confidence)} />
           <Info label="CVSS" value={vulnerability?.cvss == null ? "-" : String(vulnerability.cvss)} />
+          <Info label="CWE" value={asString(vulnerability?.cwe)} />
+          <Info label="Method" value={asString(vulnerability?.method)} />
+          <Info label="Endpoint" value={asString(vulnerability?.endpoint || vulnerability?.location)} />
+          <Info label="Agent" value={asString(vulnerability?.agent_name || vulnerability?.agent_id)} />
           <Info label="Discovered" value={vulnerability?.discovered_at?.slice(0, 19) || "-"} />
           <Info label="Updated" value={vulnerability?.updated_at?.slice(0, 19) || "-"} />
         </div>
@@ -143,9 +147,13 @@ export default function VulnDetailDialog({ open, vulnerabilityId, initial, onClo
 
         <div className="mt-5 space-y-4 text-sm">
           <TextBlock title="Location" value={vulnerability?.location || vulnerability?.poc} />
-          <TextBlock title="Description / Impact" value={vulnerability?.description} />
-          <TextBlock title="Reproduction / POC" value={vulnerability?.poc || vulnerability?.location} code />
-          <TextBlock title="Remediation" value={vulnerability?.remediation} />
+          <TextBlock title="Description" value={vulnerability?.description} />
+          <TextBlock title="Impact" value={vulnerability?.impact} />
+          <TextBlock title="Technical Analysis" value={vulnerability?.technical_analysis} />
+          <TextBlock title="POC Description" value={vulnerability?.poc_description || vulnerability?.poc || vulnerability?.location} />
+          <TextBlock title="POC Script" value={vulnerability?.poc_script_code} code />
+          <TextBlock title="Remediation" value={vulnerability?.remediation_steps || vulnerability?.remediation} />
+          <CvssBreakdown value={vulnerability?.cvss_breakdown} />
         </div>
 
         <section className="mt-5">
@@ -229,19 +237,35 @@ function normalizeInitial(initial?: Partial<SecurityVulnerability> | null): Secu
   return {
     id: String(initial.id || initial.vulnerability_id || ""),
     vulnerability_id: initial.vulnerability_id,
+    strix_vulnerability_id: initial.strix_vulnerability_id,
     conversation_id: initial.conversation_id,
     node_id: initial.node_id,
     title: asString(initial.title, "Untitled vulnerability"),
     severity: normalizeSeverity(initial.severity),
+    cvss: initial.cvss,
+    cvss_breakdown: initial.cvss_breakdown,
+    cve_id: initial.cve_id,
+    cwe: initial.cwe,
     asset_id: initial.asset_id,
     asset: initial.asset,
     affected_asset: initial.affected_asset || raw.url || raw.target || undefined,
+    target: initial.target || raw.target || raw.url || undefined,
     location: location || undefined,
+    endpoint: initial.endpoint,
+    method: initial.method,
     confidence: asString(initial.confidence, "medium"),
     status: asString(initial.status, "pending"),
     description,
+    impact: initial.impact || raw.impact,
+    technical_analysis: initial.technical_analysis,
     poc,
+    poc_description: initial.poc_description,
+    poc_script_code: initial.poc_script_code,
     remediation: initial.remediation,
+    remediation_steps: initial.remediation_steps,
+    agent_id: initial.agent_id,
+    agent_name: initial.agent_name,
+    timestamp: initial.timestamp,
     evidence_ids: evidenceIds,
     evidence: initial.evidence || [],
     status_timeline: initial.status_timeline || [],
@@ -301,6 +325,23 @@ function TextBlock({ title, value, code = false }: { title: string; value?: stri
       ) : (
         <p className="whitespace-pre-wrap break-words text-ink-secondary">{value || "-"}</p>
       )}
+    </section>
+  );
+}
+
+function CvssBreakdown({ value }: { value?: Record<string, unknown> }) {
+  if (!value || !Object.keys(value).length) return null;
+  return (
+    <section>
+      <h3 className="mb-1 text-xs font-semibold uppercase text-ink-secondary">CVSS Breakdown</h3>
+      <div className="grid gap-1 rounded-md bg-canvas-inset p-3 font-mono text-xs md:grid-cols-2">
+        {Object.entries(value).map(([key, val]) => (
+          <div key={key} className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+            <span className="truncate text-ink-muted">{key}</span>
+            <span className="text-ink-secondary">{asString(val)}</span>
+          </div>
+        ))}
+      </div>
     </section>
   );
 }
