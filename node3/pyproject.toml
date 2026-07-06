@@ -1,0 +1,30 @@
+[project]
+name = "node3-strix-node"
+version = "0.1.0"
+description = "Platform and standalone Strix-based penetration node"
+requires-python = ">=3.12"
+dependencies = [
+  "openai-agents[litellm]==0.14.6",
+  "pydantic>=2.11.3",
+  "pydantic-settings>=2.13.0",
+  "rich",
+  "docker>=7.1.0",
+  "textual>=6.0.0",
+  "requests>=2.32.0",
+  "cvss>=3.2",
+  "caido-sdk-client>=0.2.0",
+  "websockets>=16.0",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["strix"]

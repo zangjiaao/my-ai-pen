@@ -1,20 +1,22 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
+import contextlib
 import json
 import os
-import queue
 import re
 import shlex
 import signal
-import subprocess
 import sys
-import threading
-import time
 import uuid
 from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any
+
+ROOT = Path(__file__).resolve().parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 import websockets
 from agents.model_settings import ModelSettings
@@ -23,13 +25,14 @@ from openai.types.responses import ResponseOutputMessage
 
 from strix.config import load_settings
 from strix.config.models import DEFAULT_MODEL_RETRY, StrixProvider, configure_sdk_model_defaults
+from strix_node import run_embedded_scan
 
 
-ROOT = Path(__file__).resolve().parent
-DEFAULT_STRIX_PROJECT = (ROOT.parent / "research" / "strix").resolve()
+DEFAULT_STRIX_PROJECT = (ROOT / "workspace" / "strix_runtime").resolve()
 
 TARGET_RE = re.compile(r"https?://[^\s,;)\]}>'\"]+", re.IGNORECASE)
 MAX_CHAT_TURNS = 12
+DEFAULT_STANDALONE_OUTPUT = ROOT / "workspace" / "standalone"
 
 
 class Node3Config:
@@ -49,7 +52,6 @@ class Node3Config:
 class Node3Runtime:
     def __init__(self, config: Node3Config) -> None:
         self.config = config
-        self.current_process: subprocess.Popen[str] | None = None
         self.current_task: asyncio.Task[None] | None = None
         self.chat_history: dict[str, deque[tuple[str, str]]] = defaultdict(lambda: deque(maxlen=MAX_CHAT_TURNS))
         self.stop_event = asyncio.Event()
@@ -84,12 +86,12 @@ class Node3Runtime:
             else:
                 await self.answer_chat(ws, task)
         elif msg_type == "user_interrupt":
-            if self.current_process and self.current_process.poll() is None:
-                self.current_process.terminate()
+            if self.current_task and not self.current_task.done():
+                self.current_task.cancel()
             await send(ws, {
                 "type": "text",
                 "conversation_id": str(message.get("conversation_id") or ""),
-                "content": {"text": "Node3 received interrupt; stopping current scan."},
+                "content": {"text": "Node3 received interrupt; stopping embedded Strix scan."},
             })
         elif msg_type == "user_input":
             await send(ws, {
@@ -110,105 +112,11 @@ class Node3Runtime:
         self.current_task = asyncio.create_task(self.run_scan(ws, task))
 
     async def run_scan(self, ws: Any, task: dict[str, Any]) -> None:
-        target = extract_target(task)
-        if not target:
-            await send(ws, {
-                "type": "task_error",
-                "conversation_id": task["conversation_id"],
-                "task_id": task["task_id"],
-                "message": "Node3 requires a target URL, host, repository, or local path.",
-            })
-            return
-
-        before_runs = snapshot_run_dirs(self.config.strix_project_dir)
-        started_at = time.monotonic()
-        command = [
-            sys.executable,
-            "-m",
-            "strix.interface.main",
-            "-n",
-            "--target",
-            target,
-            "--scan-mode",
-            task["scan_mode"],
-            "--instruction",
-            build_instruction(task),
-            *self.config.extra_args,
-        ]
-        await send(ws, status(task, "running", "strix_scan", f"Starting Strix {task['scan_mode']} scan against {target}"))
-        await send(ws, text(task, f"Node3 Python Strix adapter starting: {redact_command(command)}"))
-
-        output = ""
         try:
-            await ensure_sandbox_image(ws, task, self.config.heartbeat_seconds)
-            self.current_process = subprocess.Popen(
-                command,
-                cwd=str(self.config.strix_project_dir),
-                env=os.environ.copy(),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-            )
-            assert self.current_process.stdout is not None
-            output_queue: queue.Queue[Any] = queue.Queue()
-            reader_done = object()
-            threading.Thread(
-                target=read_process_output,
-                args=(self.current_process.stdout, output_queue, reader_done),
-                daemon=True,
-            ).start()
-            last_output_at = time.monotonic()
-            next_heartbeat_at = last_output_at + self.config.heartbeat_seconds
-            while True:
-                item = await asyncio.to_thread(queue_get, output_queue, 2.0)
-                if item is reader_done:
-                    if self.current_process.poll() is not None:
-                        break
-                    continue
-                if isinstance(item, Exception):
-                    raise item
-                if isinstance(item, str) and item:
-                    last_output_at = time.monotonic()
-                    output = append_output(output, item, self.config.max_output_chars)
-                    await send(ws, text(task, item.rstrip()))
-                    continue
-                now = time.monotonic()
-                if self.current_process.poll() is not None:
-                    break
-                if now >= next_heartbeat_at:
-                    await send(ws, status(
-                        task,
-                        "running",
-                        "strix_scan",
-                        f"Strix is still running. Elapsed: {format_duration(now - started_at)}. Last output: {format_duration(now - last_output_at)} ago.",
-                    ))
-                    next_heartbeat_at = now + self.config.heartbeat_seconds
-            exit_code = self.current_process.wait()
-            artifacts = load_latest_artifacts(self.config.strix_project_dir, before_runs)
-            await import_artifacts(ws, task, artifacts, output)
-            if exit_code not in (0, 2):
-                raise RuntimeError(f"Strix exited with code {exit_code}.")
-            finding_count = len(artifacts.get("vulnerabilities") or []) if artifacts else 0
-            run_name = artifacts.get("run_name") if artifacts else "unknown"
-            await send(ws, status(task, "completed", "artifact_import", f"Imported {finding_count} Strix finding(s)."))
-            await send(ws, {
-                "type": "task_complete",
-                "conversation_id": task["conversation_id"],
-                "task_id": task["task_id"],
-                "status": "completed",
-                "summary": f"Node3 Strix scan completed in {format_duration(time.monotonic() - started_at)}. Run: {run_name}. Findings: {finding_count}.",
-            })
-        except Exception as exc:
-            await send(ws, {
-                "type": "task_error",
-                "conversation_id": task["conversation_id"],
-                "task_id": task["task_id"],
-                "message": str(exc),
-            })
+            await run_embedded_scan(ws, task, self.config)
+        except asyncio.CancelledError:
+            raise
         finally:
-            self.current_process = None
             self.current_task = None
 
     async def answer_chat(self, ws: Any, task: dict[str, Any]) -> None:
@@ -327,213 +235,6 @@ def build_instruction(task: dict[str, Any]) -> str:
     return "\n\n".join(piece for piece in pieces if piece)
 
 
-async def import_artifacts(ws: Any, task: dict[str, Any], artifacts: dict[str, Any] | None, output: str) -> None:
-    if not artifacts:
-        await send(ws, {
-            "type": "tool_output",
-            "conversation_id": task["conversation_id"],
-            "task_id": task["task_id"],
-            "tool_name": "strix",
-            "status": "done",
-            "stdout": output,
-        })
-        return
-    run_name = str(artifacts.get("run_name") or "unknown")
-    run_dir = str(artifacts.get("run_dir") or "")
-    report = artifacts.get("report_markdown")
-    if report:
-        evidence_id = f"strix-{safe_id(run_name)}-report"
-        await send(ws, {
-            "type": "evidence_created",
-            "conversation_id": task["conversation_id"],
-            "task_id": task["task_id"],
-            "evidence_id": evidence_id,
-            "evidence_type": "strix_report",
-            "source_tool": "strix",
-            "content": report,
-            "metadata": {"run_name": run_name, "run_dir": run_dir},
-        })
-    for index, vuln in enumerate(artifacts.get("vulnerabilities") or []):
-        if not isinstance(vuln, dict):
-            continue
-        vuln_id = str(vuln.get("id") or f"vuln-{index + 1}")
-        evidence_id = f"strix-{safe_id(run_name)}-{safe_id(vuln_id)}"
-        title = str(vuln.get("title") or vuln.get("name") or "Strix vulnerability")
-        severity = normalize_severity(vuln.get("severity"))
-        target = str(vuln.get("target") or extract_target(task) or "unknown")
-        description = first_text(vuln, "description", "technical_analysis", "impact", "poc_description")
-        await send(ws, {
-            "type": "evidence_created",
-            "conversation_id": task["conversation_id"],
-            "task_id": task["task_id"],
-            "evidence_id": evidence_id,
-            "evidence_type": "strix_vulnerability_report",
-            "source_tool": "strix",
-            "content": json.dumps(vuln, ensure_ascii=False, indent=2),
-            "metadata": {"run_name": run_name, "run_dir": run_dir, "strix_vulnerability": vuln},
-        })
-        await send(ws, {
-            "type": "vuln_found",
-            "conversation_id": task["conversation_id"],
-            "task_id": task["task_id"],
-            "vulnerability_id": evidence_id,
-            "title": title,
-            "severity": severity,
-            "status": "confirmed",
-            "target": target,
-            "url": target,
-            "location": str(vuln.get("endpoint") or target),
-            "affected_asset": target,
-            "description": description,
-            "impact": str(vuln.get("impact") or ""),
-            "remediation": first_text(vuln, "remediation", "remediation_steps"),
-            "evidence_ids": [evidence_id],
-        })
-    await send(ws, {
-        "type": "checkpoint_update",
-        "conversation_id": task["conversation_id"],
-        "task_id": task["task_id"],
-        "checkpoint": {"node3_strix": {"run_name": run_name, "run_dir": run_dir}},
-    })
-
-
-async def ensure_sandbox_image(ws: Any, task: dict[str, Any], heartbeat_seconds: int) -> None:
-    image = load_settings().runtime.image
-    if not image:
-        raise RuntimeError("STRIX_IMAGE is not configured")
-    if await docker_image_exists(image):
-        await send(ws, status(task, "running", "sandbox_image", f"Strix sandbox image is ready: {image}"))
-        return
-    await send(ws, status(task, "running", "sandbox_image", f"Pulling Strix sandbox image: {image}"))
-    command = ["docker", "pull", image]
-    process = subprocess.Popen(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
-    assert process.stdout is not None
-    output_queue: queue.Queue[Any] = queue.Queue()
-    reader_done = object()
-    threading.Thread(
-        target=read_process_output,
-        args=(process.stdout, output_queue, reader_done),
-        daemon=True,
-    ).start()
-    started_at = time.monotonic()
-    next_heartbeat_at = started_at + heartbeat_seconds
-    last_progress = ""
-    while True:
-        item = await asyncio.to_thread(queue_get, output_queue, 2.0)
-        if item is reader_done:
-            if process.poll() is not None:
-                break
-            continue
-        if isinstance(item, Exception):
-            raise item
-        if isinstance(item, str) and item:
-            last_progress = item.strip()
-            if should_forward_docker_pull_line(last_progress):
-                await send(ws, text(task, f"[sandbox image] {last_progress}"))
-            continue
-        now = time.monotonic()
-        if process.poll() is not None:
-            break
-        if now >= next_heartbeat_at:
-            summary = f"Still pulling Strix sandbox image after {format_duration(now - started_at)}"
-            if last_progress:
-                summary += f". Last progress: {last_progress}"
-            await send(ws, status(task, "running", "sandbox_image", summary))
-            next_heartbeat_at = now + heartbeat_seconds
-    exit_code = process.wait()
-    if exit_code != 0:
-        raise RuntimeError(f"docker pull {image} failed with code {exit_code}. Last output: {last_progress}")
-    await send(ws, status(task, "running", "sandbox_image", f"Strix sandbox image pulled: {image}"))
-
-
-async def docker_image_exists(image: str) -> bool:
-    process = await asyncio.create_subprocess_exec(
-        "docker",
-        "image",
-        "inspect",
-        image,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
-    return await process.wait() == 0
-
-
-def read_process_output(stream: Any, output_queue: queue.Queue[Any], done_marker: object) -> None:
-    try:
-        for line in stream:
-            output_queue.put(line)
-    except Exception as exc:
-        output_queue.put(exc)
-    finally:
-        output_queue.put(done_marker)
-
-
-def queue_get(output_queue: queue.Queue[Any], timeout: float) -> Any:
-    try:
-        return output_queue.get(timeout=timeout)
-    except queue.Empty:
-        return None
-
-
-def should_forward_docker_pull_line(line: str) -> bool:
-    if not line:
-        return False
-    lowered = line.lower()
-    return any(
-        marker in lowered
-        for marker in (
-            "pulling from",
-            "pulling fs layer",
-            "waiting",
-            "downloading",
-            "verifying checksum",
-            "extracting",
-            "pull complete",
-            "download complete",
-            "downloaded newer image",
-            "image is up to date",
-            "digest:",
-            "status:",
-        )
-    )
-
-
-def load_latest_artifacts(project_dir: Path, before_runs: set[str]) -> dict[str, Any] | None:
-    runs_dir = project_dir / "strix_runs"
-    if not runs_dir.exists():
-        return None
-    candidates = [item for item in runs_dir.iterdir() if item.is_dir() and item.name not in before_runs]
-    if not candidates:
-        candidates = [item for item in runs_dir.iterdir() if item.is_dir()]
-    if not candidates:
-        return None
-    run_dir = max(candidates, key=lambda item: item.stat().st_mtime)
-    vulnerabilities = read_json(run_dir / "vulnerabilities.json")
-    if not isinstance(vulnerabilities, list):
-        vulnerabilities = []
-    report_path = run_dir / "penetration_test_report.md"
-    return {
-        "run_name": run_dir.name,
-        "run_dir": str(run_dir),
-        "vulnerabilities": vulnerabilities,
-        "report_markdown": report_path.read_text(encoding="utf-8", errors="replace") if report_path.exists() else "",
-    }
-
-
-def snapshot_run_dirs(project_dir: Path) -> set[str]:
-    runs_dir = project_dir / "strix_runs"
-    if not runs_dir.exists():
-        return set()
-    return {item.name for item in runs_dir.iterdir() if item.is_dir()}
-
-
 def extract_response_text(response: Any) -> str:
     parts: list[str] = []
     for item in response.output:
@@ -571,23 +272,9 @@ def text(task: dict[str, Any], value: str) -> dict[str, Any]:
     }
 
 
-def read_json(path: Path) -> Any:
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8", errors="replace"))
-    except Exception:
-        return None
-
-
 def normalize_scan_mode(value: Any) -> str:
     normalized = str(value or "quick").strip().lower()
     return normalized if normalized in {"quick", "standard", "deep"} else "quick"
-
-
-def normalize_severity(value: Any) -> str:
-    normalized = str(value or "medium").strip().lower()
-    return normalized if normalized in {"critical", "high", "medium", "low", "info"} else "medium"
 
 
 def positive_int(value: str | None, fallback: int) -> int:
@@ -615,38 +302,7 @@ def string_value(value: Any) -> str:
     return value.strip() if isinstance(value, str) and value.strip() else ""
 
 
-def first_text(mapping: dict[str, Any], *keys: str) -> str:
-    for key in keys:
-        value = mapping.get(key)
-        if isinstance(value, list):
-            value = "\n".join(str(item) for item in value)
-        if value:
-            return str(value)
-    return ""
-
-
-def append_output(current: str, chunk: str, limit: int) -> str:
-    merged = current + chunk
-    return merged[-limit:] if len(merged) > limit else merged
-
-
-def safe_id(value: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9_.-]+", "-", value).strip("-")[:80] or "item"
-
-
-def redact_command(command: list[str]) -> str:
-    return " ".join(command)
-
-
-def format_duration(seconds: float) -> str:
-    if seconds < 60:
-        return f"{seconds:.1f}s"
-    minutes = int(seconds // 60)
-    rest = int(seconds % 60)
-    return f"{minutes}m {rest}s"
-
-
-async def main() -> None:
+async def run_platform_main() -> None:
     runtime = Node3Runtime(Node3Config())
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -657,5 +313,83 @@ async def main() -> None:
     await runtime.run()
 
 
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Node3 Strix penetration node")
+    subparsers = parser.add_subparsers(dest="command")
+
+    standalone = subparsers.add_parser("standalone", help="Run a standalone Strix session")
+    standalone.add_argument("--target", default="", help="Target URL/IP/repository/local path. Required unless --resume is used.")
+    standalone.add_argument("--scope", action="append", default=None, help="Authorized scope allow entry. Can be repeated.")
+    standalone.add_argument("--output", default=None, help="Standalone output directory. Defaults to node3/workspace/standalone.")
+    standalone.add_argument("--instruction", default="", help="Optional task instruction.")
+    standalone.add_argument("--resume", default=None, help="Resume a Strix run name from the output directory.")
+    standalone.add_argument("--scan-mode", default=None, choices=["quick", "standard", "deep"], help="Strix scan mode.")
+    standalone.add_argument("--tui", action="store_true", help="Open the Strix Textual TUI.")
+    standalone.add_argument("--no-tui", action="store_true", help="Run non-interactively and print Strix CLI output.")
+
+    parser.add_argument("--standalone", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--target", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--scope", action="append", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--output", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--resume", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--tui", action="store_true", help=argparse.SUPPRESS)
+
+    args = parser.parse_args()
+    if args.command == "standalone" or args.standalone:
+        run_standalone_strix(args, parser)
+        return
+    asyncio.run(run_platform_main())
+
+
+def run_standalone_strix(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    target = str(args.target or "").strip()
+    resume = str(args.resume or "").strip()
+    if not target and not resume:
+        parser.error("standalone requires --target or --resume")
+
+    config = Node3Config()
+    output_dir = resolve_config_path(args.output, DEFAULT_STANDALONE_OUTPUT)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    scan_mode = normalize_scan_mode(args.scan_mode or config.scan_mode)
+    cli_args: list[str] = []
+    if resume:
+        cli_args.extend(["--resume", resume])
+    if target:
+        cli_args.extend(["--target", target])
+    if scan_mode:
+        cli_args.extend(["--scan-mode", scan_mode])
+    instruction = standalone_instruction(str(args.instruction or "").strip(), args.scope)
+    if instruction:
+        cli_args.extend(["--instruction", instruction])
+    if args.no_tui:
+        cli_args.append("-n")
+    cli_args.extend(config.extra_args)
+
+    print(f"[node3] standalone Strix source: {ROOT / 'strix'}", flush=True)
+    print(f"[node3] standalone workspace: {output_dir}", flush=True)
+    print(f"[node3] strix {' '.join(cli_args)}", flush=True)
+
+    previous_argv = sys.argv[:]
+    previous_cwd = Path.cwd()
+    sys.argv = ["strix", *cli_args]
+    os.chdir(output_dir)
+    try:
+        from strix.interface.main import main as strix_main
+
+        strix_main()
+    finally:
+        sys.argv = previous_argv
+        with contextlib.suppress(Exception):
+            os.chdir(previous_cwd)
+
+
+def standalone_instruction(instruction: str, scope: list[str] | None) -> str:
+    entries = [str(item).strip() for item in scope or [] if str(item).strip()]
+    if not entries:
+        return instruction
+    scope_text = "Authorized scope allow-list:\n" + "\n".join(f"- {item}" for item in entries)
+    return "\n\n".join(part for part in (instruction, scope_text) if part)
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

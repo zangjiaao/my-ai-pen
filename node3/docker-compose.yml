@@ -7,10 +7,10 @@ services:
       - .env
     environment:
       PLATFORM_WS_URL: ${PLATFORM_WS_URL:-ws://host.docker.internal:8000/ws}
-      STRIX_PROJECT_DIR: /workspace/research/strix
-      PYTHONPATH: /workspace/research/strix
+      STRIX_PROJECT_DIR: /workspace/node3/workspace/strix_runtime
+      PYTHONPATH: /workspace/node3
     volumes:
-      - ../research/strix/strix_runs:/workspace/research/strix/strix_runs
+      - ./workspace:/workspace/node3/workspace
       - /var/run/docker.sock:/var/run/docker.sock
       - strix-uv-cache:/root/.cache/uv
     extra_hosts:

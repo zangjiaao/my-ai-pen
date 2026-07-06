@@ -11,13 +11,11 @@ RUN apt-get update && \
 
 WORKDIR /workspace
 
-COPY research/strix /workspace/research/strix
-RUN test -f /workspace/research/strix/README.md && \
-    test -f /workspace/research/strix/strix/tools/reporting/tool.py && \
-    uv sync --project /workspace/research/strix --no-dev
-
-ENV PATH="/workspace/research/strix/.venv/bin:$PATH"
-
 COPY node3 /workspace/node3
+RUN test -f /workspace/node3/pyproject.toml && \
+    uv sync --project /workspace/node3 --no-dev
+
+ENV PATH="/workspace/node3/.venv/bin:$PATH" \
+    PYTHONPATH="/workspace/node3"
 
 CMD ["python", "/workspace/node3/main.py"]
