@@ -57,6 +57,7 @@ const runtime: ToolRuntime = {
   pocCatalogPath: config.pocCatalogPath,
   workflowRuns: [],
   lifecycle: {},
+  trafficProxyUrl: config.trafficProxyUrl,
 };
 
 runtime.plan.start();

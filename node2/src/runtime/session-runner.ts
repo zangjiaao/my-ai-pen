@@ -13,8 +13,10 @@ import { CoverageStore } from "../stores/coverage.js";
 import { EvidenceStore } from "../stores/evidence.js";
 import { PlanStore } from "../stores/plan.js";
 import { TrafficStore } from "../stores/traffic.js";
+import { createExternalTrafficSource } from "../traffic/external-source.js";
 import type { PlatformMessage, PlatformSink, TaskEnvelope, ToolRuntime } from "../types.js";
 import { PENTEST_TOOL_NAMES } from "../tools/index.js";
+import { startCaidoBridge } from "./caido-bridge.js";
 import { createPentestExtension } from "./pentest-extension.js";
 import { buildSystemPrompt } from "./prompt.js";
 
@@ -27,8 +29,10 @@ export async function runPentestTask(
   task: TaskEnvelope,
   signal?: AbortSignal,
 ): Promise<void> {
+  task = normalizeSidecarTaskTarget(config, task);
   const taskDir = join(config.workspaceDir, task.taskId);
   await mkdir(taskDir, { recursive: true });
+  const caidoBridge = await startCaidoBridge(config, platform, task);
 
   const runtime: ToolRuntime = {
     task,
@@ -41,6 +45,15 @@ export async function runPentestTask(
     pocCatalogPath: config.pocCatalogPath,
     workflowRuns: [],
     lifecycle: {},
+    trafficProxyUrl: caidoBridge?.caidoUrl || config.trafficProxyUrl,
+    externalTrafficSource: caidoBridge?.source || createExternalTrafficSource({
+      url: config.externalTrafficSourceUrl,
+      token: config.externalTrafficSourceToken,
+    }),
+    scannerSandbox: {
+      enabled: config.scannerSandboxAutoStart,
+      image: config.scannerSandboxImage,
+    },
   };
   await syncWorkflowBundles(config, taskDir);
 
@@ -222,6 +235,46 @@ export async function runPentestTask(
   } finally {
     await textStream.dispose();
     session.dispose();
+    await caidoBridge?.stop();
+  }
+}
+
+function normalizeSidecarTaskTarget(config: Node2Config, task: TaskEnvelope): TaskEnvelope {
+  if (!config.caidoSidecarAutoStart) return task;
+  const targetValue = typeof task.target?.value === "string" ? task.target.value : "";
+  const normalizedTarget = dockerHostTarget(targetValue);
+  if (!normalizedTarget || normalizedTarget === targetValue) return task;
+  const scopeAllow = Array.isArray(task.scope?.allow) ? task.scope.allow : [];
+  return {
+    ...task,
+    instruction: [
+      task.instruction,
+      "",
+      `Runtime note: Caido sidecar mode remapped local target ${targetValue} to ${normalizedTarget} so Docker-based proxy tooling can reach the host service. Use the remapped URL for browser/http/traffic/verifier requests.`,
+    ].join("\n"),
+    target: { ...task.target, value: normalizedTarget, requested_value: targetValue },
+    scope: {
+      ...task.scope,
+      allow: scopeAllow.map((item) => typeof item === "string" && item === targetValue ? normalizedTarget : item),
+      requested_allow: scopeAllow,
+    },
+    snapshot: {
+      ...task.snapshot,
+      requested_target: targetValue,
+      sidecar_target: normalizedTarget,
+    },
+  };
+}
+
+function dockerHostTarget(value: string): string | undefined {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    if (!["localhost", "127.0.0.1", "::1"].includes(url.hostname)) return value;
+    url.hostname = "host.docker.internal";
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return undefined;
   }
 }
 
@@ -251,7 +304,12 @@ function buildWorkflowFirstInstruction(task: TaskEnvelope): string {
     `Scan mode: ${scanMode}. ${scanModeGuidance(scanMode)}`,
     "Call workflow_run with workflow=\"pentest-web\", thinking=\"low\", and a concrete task preserving the target, scope, and user instruction below.",
     "After the workflow returns, do not expand a full vulnerability matrix up front. Read the brief if needed, then immediately perform browser/http reachability, login/session capture, traffic discovery, and coverage seeding with Node2 tools.",
-    "Choose vulnerability classes only after recon evidence exists, then use Pi native skills, the PoC catalog, verifier, evidence, coverage, and finding tools.",
+    "Use browser/http/scan output to populate the unified traffic store. If an external traffic source is configured, call traffic(action='source_status') and traffic(action='sync') after browsing/scanning.",
+    "Prefer scan for established tools such as httpx, katana, nuclei, nmap, ffuf, sqlmap, dalfox, arjun, wafw00f, and nikto; Node2 runs scanners only through the configured Strix-style scanner sandbox and reports the runner used.",
+    "Treat scanner-created pending tests as prioritized leads: verify them with baseline/attack traffic and deterministic verifier/http evidence before finding(confirm).",
+    "Use verifier for supported classes when possible: upload confirmations require a retrievable marker, CSRF requires before/action/after state evidence, brute-force requires invalid/valid credential differential, and JavaScript-logic requires invalid/accepted server-side differential.",
+    "Then call traffic(action='analyze') or traffic(action='candidates') and establish baselines with traffic(action='repeat') before mutating requests with traffic(action='mutate').",
+    "Choose vulnerability classes only after recon evidence or replayable traffic exists, then use Pi native skills, the PoC catalog, verifier, evidence, coverage, and finding tools.",
     "When reporting is ready, call finish_scan(status='completed', ...) as the final lifecycle action. Use status='incomplete' or status='blocked' if runtime blockers remain.",
     "",
     "Original user instruction:",
@@ -279,17 +337,40 @@ function completionGate(runtime: ToolRuntime): { canComplete: boolean; audit: Re
   const planAudit = runtime.plan.audit();
   const workflowAudit = workflowCompletionAudit(runtime);
   const finishAudit = finishScanAudit(runtime);
-  const summary = [planAudit.summary, workflowAudit.summary, finishAudit.summary].filter(Boolean).join("; ");
+  const coverageAudit = coverageCompletionAudit(runtime);
+  const summary = [planAudit.summary, workflowAudit.summary, finishAudit.summary, coverageAudit.summary].filter(Boolean).join("; ");
   return {
-    canComplete: planAudit.canComplete && workflowAudit.canComplete && finishAudit.canComplete,
+    canComplete: planAudit.canComplete && workflowAudit.canComplete && finishAudit.canComplete && coverageAudit.canComplete,
     audit: {
       ...planAudit,
       workflow: workflowAudit,
       finish_scan: finishAudit,
+      coverage: coverageAudit,
       summary,
     },
     summary,
   };
+}
+
+function coverageCompletionAudit(runtime: ToolRuntime): { canComplete: boolean; summary: string; unresolved: unknown[] } {
+  const rows = runtime.coverage.listSync?.() || [];
+  const unresolved = rows.filter(isUnresolvedCoverageRow).slice(0, 20);
+  if (!unresolved.length) return { canComplete: true, summary: "coverage resolved", unresolved };
+  return {
+    canComplete: false,
+    summary: `${unresolved.length} observed/tried coverage item(s) still need confirmed, negative, blocked, or skipped resolution`,
+    unresolved,
+  };
+}
+
+function isUnresolvedCoverageRow(row: any): boolean {
+  const status = String(row?.status || "");
+  if (status !== "observed" && status !== "tried") return false;
+  const endpoint = String(row?.endpoint || "");
+  const vulnClass = String(row?.vulnClass || "");
+  if (!endpoint || !vulnClass) return false;
+  if (/\.(?:css|js|png|jpe?g|gif|ico|svg|woff2?)$/i.test(endpoint)) return false;
+  return !["unknown", "info", "technology"].includes(vulnClass);
 }
 
 function finishScanAudit(runtime: ToolRuntime): { canComplete: boolean; summary: string; finishScan?: unknown } {
@@ -324,6 +405,7 @@ function workflowCompletionAudit(runtime: ToolRuntime): { canComplete: boolean; 
 function completionGapPrompt(runtime: ToolRuntime, gate: { audit: Record<string, unknown>; summary: string }): string {
   const workflow = gate.audit.workflow as { canComplete?: boolean; summary?: string } | undefined;
   const finishScan = gate.audit.finish_scan as { canComplete?: boolean; summary?: string } | undefined;
+  const coverage = gate.audit.coverage as { canComplete?: boolean; summary?: string; unresolved?: any[] } | undefined;
   const parts = [runtime.plan.gapPrompt()];
   if (workflow && !workflow.canComplete) {
     parts.push(
@@ -342,6 +424,20 @@ function completionGapPrompt(runtime: ToolRuntime, gate: { audit: Record<string,
         "The mandatory finish_scan lifecycle gate is still unresolved.",
         finishScan.summary || "finish_scan has not been called.",
         "After resolving any remaining runtime blockers, call finish_scan with status='completed' and include summary, confirmed_findings, coverage_gaps, blockers, and evidence_ids. If blockers remain, call finish_scan with status='incomplete' or status='blocked'.",
+      ].join("\n"),
+    );
+  }
+  if (coverage && !coverage.canComplete) {
+    const unresolved = Array.isArray(coverage.unresolved) ? coverage.unresolved.slice(0, 12) : [];
+    parts.push(
+      [
+        "",
+        "Coverage gate still has observed or tried attack-surface items without resolution.",
+        coverage.summary || "Unresolved coverage remains.",
+        "For each high-value item, either verify and confirm a finding with evidence, or mark coverage as passed/blocked/skipped with a concrete reason. Do not call finish_scan(status='completed') while these remain.",
+        ...unresolved.map((row) =>
+          `- ${String(row.endpoint || "")} param=${String(row.param || "-")} class=${String(row.vulnClass || "")} status=${String(row.status || "")} notes=${String(row.notes || "").slice(0, 180)}`,
+        ),
       ].join("\n"),
     );
   }

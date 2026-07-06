@@ -1,5 +1,6 @@
 import sys
 import asyncio
+import json
 import unittest
 from pathlib import Path
 
@@ -16,7 +17,7 @@ from app.services.agent_orchestrator import (
     route_with_platform_agent,
     set_orchestrator_chat_override,
 )
-from app.ws.router import _agent_assignment_notice, _message_with_decision_target, _merge_saved_message_content, _message_dedupe_key, _persist_vulnerability
+from app.ws.router import _agent_assignment_notice, _apply_agent_attribution, _agent_target_for_request, _decision_agent_attribution, _mentioned_node_id, _message_with_decision_target, _merge_saved_message_content, _message_dedupe_key, _persist_vulnerability, _send_direct_node_message, conversation_node, node_connections
 
 
 class PlatformPhase2Tests(unittest.TestCase):
@@ -98,6 +99,89 @@ class PlatformPhase2Tests(unittest.TestCase):
         self.assertIn("\u6e17\u900f Agent", notice)
         self.assertIn("web-node-1", notice)
         self.assertIn("pentest.web", notice)
+
+    def test_node_name_mention_resolves_requested_node(self):
+        capabilities = [
+            AgentCapability(agent_type="platform", capability="platform.chat", node_id="00000000-0000-0000-0000-000000000001", name="Platform Agent", online=True),
+            AgentCapability(agent_type="pentest", capability="pentest.web", node_id="11111111-1111-1111-1111-111111111111", name="node3", online=True),
+        ]
+        msg = {"type": "user_message", "text": "@node3 test http://target.local"}
+
+        node_id = _mentioned_node_id(msg, capabilities)
+
+        self.assertEqual(node_id, "11111111-1111-1111-1111-111111111111")
+        self.assertEqual(_agent_target_for_request(msg, node_id, capabilities), "pentest")
+
+    def test_requested_pentest_node_without_target_asks_for_target(self):
+        async def fake_chat(messages):
+            return '{"action":"answer_user","capability":"platform.chat","agent":"platform","targets":[],"reason":"greeting"}'
+
+        async def run():
+            set_orchestrator_chat_override(fake_chat)
+            try:
+                return await route_with_platform_agent(
+                    text="@node3 hello",
+                    context=OrchestrationContext(
+                        conversation_status="created",
+                        requested_agent="pentest",
+                        requested_node_id="11111111-1111-1111-1111-111111111111",
+                        has_resume_task=False,
+                        capabilities=[AgentCapability(agent_type="pentest", capability="pentest.web", node_id="11111111-1111-1111-1111-111111111111", name="node3", online=True)],
+                    ),
+                )
+            finally:
+                set_orchestrator_chat_override(None)
+
+        decision = asyncio.run(run())
+        self.assertEqual(decision.action, "ask_clarification")
+        self.assertEqual(decision.capability, "pentest.web")
+        self.assertEqual(decision.mode, "missing_target")
+        self.assertEqual(decision.agent_node_id, "11111111-1111-1111-1111-111111111111")
+
+    def test_pentest_clarification_keeps_requested_node_attribution(self):
+        decision = type("Decision", (), {"agent": "pentest", "agent_node_id": "11111111-1111-1111-1111-111111111111"})()
+
+        source, node_id = _decision_agent_attribution(decision)
+        answer = _apply_agent_attribution(
+            {"type": "text", "content": {"text": "missing target"}},
+            agent_source=source,
+            agent_node_id=node_id,
+        )
+
+        self.assertEqual(answer["agent_source"], "pentest")
+        self.assertEqual(answer["agent_node_id"], "11111111-1111-1111-1111-111111111111")
+        self.assertEqual(answer["content"]["agent_source"], "pentest")
+        self.assertEqual(answer["content"]["agent_node_id"], "11111111-1111-1111-1111-111111111111")
+
+    def test_direct_node_message_sends_user_steer_to_requested_node(self):
+        class FakeWebSocket:
+            def __init__(self):
+                self.sent = []
+
+            async def send_text(self, raw):
+                self.sent.append(json.loads(raw))
+
+        node_id = "11111111-1111-1111-1111-111111111111"
+        conv_id = "22222222-2222-2222-2222-222222222222"
+        fake_ws = FakeWebSocket()
+        node_connections[node_id] = fake_ws
+        try:
+            sent = asyncio.run(_send_direct_node_message(
+                conv_id,
+                node_id,
+                {"type": "user_message", "conversation_id": conv_id, "text": "@node3 hello"},
+                "pentest.web",
+            ))
+        finally:
+            node_connections.pop(node_id, None)
+            conversation_node.pop(conv_id, None)
+
+        self.assertTrue(sent)
+        self.assertEqual(fake_ws.sent[0]["type"], "user_steer")
+        self.assertEqual(fake_ws.sent[0]["agent_node_id"], node_id)
+        self.assertEqual(fake_ws.sent[0]["agent_capability"], "pentest.web")
+        self.assertEqual(fake_ws.sent[0]["text"], "@node3 hello")
+
     def test_candidate_vuln_messages_are_not_persisted_as_vulnerabilities(self):
         result = asyncio.run(_persist_vulnerability({
             "conversation_id": "00000000-0000-0000-0000-000000000001",

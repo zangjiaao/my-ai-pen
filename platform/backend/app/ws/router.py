@@ -28,6 +28,7 @@ FOLLOW_UP_ACTION_RE = re.compile(
     r"\b(check|confirm|verify|retest|rerun|visit|open|fetch|request|scan|test|login)\b",
     re.IGNORECASE,
 )
+NODE_MENTION_RE = re.compile(r"@([A-Za-z0-9_.:-]{1,128})")
 
 
 def _uuid(value: str | uuid.UUID | None) -> uuid.UUID | None:
@@ -403,6 +404,76 @@ def _agent_node_id(msg: dict) -> str | None:
         return str(uuid.UUID(str(value)))
     except ValueError:
         return None
+
+def _node_mention_key(value: object) -> str:
+    return str(value or "").strip().lower().lstrip("@")
+
+def _node_mention_tokens(msg: dict) -> list[str]:
+    content = msg.get("content") if isinstance(msg.get("content"), dict) else {}
+    texts = [
+        msg.get("text"),
+        msg.get("display_text"),
+        msg.get("initial_instruction"),
+        content.get("text"),
+    ]
+    tokens: list[str] = []
+    for text in texts:
+        for match in NODE_MENTION_RE.findall(str(text or "")):
+            token = _node_mention_key(match)
+            if token and token not in tokens:
+                tokens.append(token)
+    return tokens
+
+def _mentioned_node_id(msg: dict, capabilities: list[AgentCapability]) -> str | None:
+    explicit_node_id = _agent_node_id(msg)
+    if explicit_node_id:
+        return explicit_node_id
+
+    tokens = _node_mention_tokens(msg)
+    if not tokens:
+        return None
+
+    node_caps = [item for item in capabilities if item.node_id and item.agent_type != "platform"]
+    for token in tokens:
+        matches = [
+            str(item.node_id)
+            for item in node_caps
+            if token == _node_mention_key(item.name) or str(item.node_id).lower().startswith(token)
+        ]
+        if len(matches) == 1:
+            return matches[0]
+    return None
+
+def _agent_target_for_request(
+    msg: dict,
+    requested_node_id: str | None,
+    capabilities: list[AgentCapability],
+) -> str | None:
+    target = _agent_target(msg)
+    if target:
+        return target
+    if not requested_node_id:
+        return None
+    for item in capabilities:
+        if item.node_id == requested_node_id:
+            return _normalize_agent_identity(item.agent_type, str(item.agent_type or "").strip().lower())
+    return None
+
+def _decision_agent_attribution(decision) -> tuple[str, str]:
+    source = _normalize_agent_identity(getattr(decision, "agent", None), "platform") or "platform"
+    node_id = str(getattr(decision, "agent_node_id", "") or "")
+    if source != "platform" and node_id:
+        return source, node_id
+    return "platform", str(PLATFORM_AGENT_NODE_ID)
+
+def _apply_agent_attribution(answer: dict, *, agent_source: str, agent_node_id: str) -> dict:
+    answer["agent_source"] = agent_source
+    answer["agent_node_id"] = agent_node_id
+    content = answer.get("content")
+    if isinstance(content, dict):
+        content["agent_source"] = agent_source
+        content["agent_node_id"] = agent_node_id
+    return answer
 
 def _message_dedupe_key(*, role: str, original_type: str, stored_type: str, content: dict) -> str | None:
     if role == "user":
@@ -1289,6 +1360,22 @@ async def _send_to_bound_node(conv_id: str, raw: str) -> bool:
     return False
 
 
+async def _send_direct_node_message(conv_id: str, node_id: str | None, msg: dict, capability: str | None = None) -> bool:
+    if not node_id or node_id not in node_connections:
+        return False
+    node_msg = {
+        **msg,
+        "type": "user_steer",
+        "conversation_id": conv_id,
+        "agent_node_id": node_id,
+    }
+    if capability:
+        node_msg["agent_capability"] = capability
+    conversation_node[conv_id] = node_id
+    await node_connections[node_id].send_text(json.dumps(node_msg, ensure_ascii=False))
+    return True
+
+
 async def _persist_and_broadcast(conv_id: str, msg: dict, role: str = "agent"):
     await _save_message(msg, role)
     await _broadcast_to_conversation(conv_id, json.dumps(msg, ensure_ascii=False))
@@ -1416,18 +1503,48 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     conversation_status = await _conversation_status(conv_id)
                     resume_context = await _conversation_snapshot(conv_id, client_id)
                     _, bound_node = await _conversation_owner(conv_id)
-                    bound_node_id = str(bound_node) if bound_node else conversation_node.get(conv_id)
+                    bound_node_id = conversation_node.get(conv_id) or (str(bound_node) if bound_node else None)
+                    capabilities = await _available_agent_capabilities()
+                    requested_node_id = _mentioned_node_id(msg, capabilities)
+                    requested_agent = _agent_target_for_request(msg, requested_node_id, capabilities)
+                    if not requested_node_id and bound_node_id:
+                        bound_capability = next((item.capability for item in capabilities if item.node_id == bound_node_id), None)
+                        sent = await _send_direct_node_message(conv_id, bound_node_id, msg, bound_capability)
+                        await _audit(
+                            actor_type="user",
+                            actor_id=uuid.UUID(client_id),
+                            action="user_steer",
+                            resource_type="conversation",
+                            resource_id=uuid.UUID(conv_id),
+                            conversation_id=uuid.UUID(conv_id),
+                            detail={
+                                "sent": sent,
+                                "source": "sticky_node_binding",
+                                "node_id": bound_node_id,
+                                "capability": bound_capability,
+                            },
+                        )
+                        if sent:
+                            continue
+                        await _persist_and_broadcast(conv_id, {
+                            "type": "task_error",
+                            "conversation_id": conv_id,
+                            "message": "Bound node is unavailable. Mention another online node to switch this conversation.",
+                            "agent_source": "platform",
+                            "agent_node_id": str(PLATFORM_AGENT_NODE_ID),
+                        }, "agent")
+                        continue
                     try:
                         decision = await route_with_platform_agent(
                             text=str(msg.get("text") or ""),
                             context=OrchestrationContext(
                                 conversation_status=conversation_status,
-                                requested_agent=_agent_target(msg),
-                                requested_node_id=_agent_node_id(msg),
+                                requested_agent=requested_agent,
+                                requested_node_id=requested_node_id,
                                 has_resume_task=bool((resume_context.get("task") or {}).get("target")),
                                 has_bound_node=bool(bound_node_id),
                                 bound_node_id=bound_node_id,
-                                capabilities=await _available_agent_capabilities(),
+                                capabilities=capabilities,
                             ),
                         )
                     except OrchestrationError as e:
@@ -1445,15 +1562,41 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         continue
 
                     if decision.action == "ask_clarification":
+                        if requested_node_id and requested_agent and requested_agent != "platform":
+                            sent = await _send_direct_node_message(conv_id, requested_node_id, msg, decision.capability or "pentest.web")
+                            await _audit(
+                                actor_type="user",
+                                actor_id=uuid.UUID(client_id),
+                                action="user_steer",
+                                resource_type="conversation",
+                                resource_id=uuid.UUID(conv_id),
+                                conversation_id=uuid.UUID(conv_id),
+                                detail={
+                                    "sent": sent,
+                                    "source": "explicit_node_mention",
+                                    "node_id": requested_node_id,
+                                    "capability": decision.capability,
+                                },
+                            )
+                            if sent:
+                                continue
+                            await _persist_and_broadcast(conv_id, {
+                                "type": "task_error",
+                                "conversation_id": conv_id,
+                                "message": "Requested node is unavailable.",
+                                "agent_source": "platform",
+                                "agent_node_id": str(PLATFORM_AGENT_NODE_ID),
+                            }, "agent")
+                            continue
                         prompt = decision.message or "Please provide the target URL or IP and confirm it is in authorized scope."
+                        answer_agent_source, answer_agent_node_id = _decision_agent_attribution(decision)
                         answer = await answer_clarification(
                             conv_id,
                             prompt,
                             mode=decision.mode or "clarification",
+                            agent_source=answer_agent_source,
                         )
-                        answer["agent_node_id"] = str(PLATFORM_AGENT_NODE_ID)
-                        if isinstance(answer.get("content"), dict):
-                            answer["content"]["agent_node_id"] = str(PLATFORM_AGENT_NODE_ID)
+                        _apply_agent_attribution(answer, agent_source=answer_agent_source, agent_node_id=answer_agent_node_id)
                         await _persist_and_broadcast(conv_id, answer, "agent")
                         continue
 
@@ -1485,14 +1628,14 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             if resumed_msg:
                                 msg = resumed_msg
                             elif decision.requires_target:
+                                answer_agent_source, answer_agent_node_id = _decision_agent_attribution(decision)
                                 answer = await answer_clarification(
                                     conv_id,
                                     "Please provide the target URL/IP to continue or retest.",
                                     mode="clarification",
+                                    agent_source=answer_agent_source,
                                 )
-                                answer["agent_node_id"] = str(PLATFORM_AGENT_NODE_ID)
-                                if isinstance(answer.get("content"), dict):
-                                    answer["content"]["agent_node_id"] = str(PLATFORM_AGENT_NODE_ID)
+                                _apply_agent_attribution(answer, agent_source=answer_agent_source, agent_node_id=answer_agent_node_id)
                                 await _persist_and_broadcast(conv_id, answer, "agent")
                                 continue
 

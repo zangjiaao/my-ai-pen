@@ -52,12 +52,25 @@ const args = parseArgs(process.argv.slice(2));
 const config = loadConfig();
 
 async function main(): Promise<void> {
-  const target = args.target || "http://localhost:8080";
   const outputDir = resolve(args.output || config.workspaceDir);
   const scanMode = normalizeScanMode(args["scan-mode"]);
   const levels = parseLevels(args.levels || "low,medium,high");
   const runId = args["run-id"] || `dvwa-agent-benchmark-${Date.now()}`;
   const resetDb = args["reset-db"] !== "false";
+  const caidoSidecarAutoStart = boolArg("caido-sidecar", config.caidoSidecarAutoStart);
+  const caidoBridgeAutoStart = boolArg("caido-bridge", config.caidoBridgeAutoStart || caidoSidecarAutoStart);
+  const scannerSandboxAutoStart = boolArg("scanner-sandbox", config.scannerSandboxAutoStart);
+  if (caidoSidecarAutoStart && !caidoBridgeAutoStart) {
+    throw new Error("--caido-sidecar requires --caido-bridge because the sidecar is managed by the Caido bridge lifecycle.");
+  }
+  const runConfig = {
+    ...config,
+    caidoBridgeAutoStart,
+    caidoSidecarAutoStart,
+    scannerSandboxAutoStart,
+  };
+  const requestedTarget = args.target || "http://localhost:8080";
+  const target = caidoSidecarAutoStart ? sidecarReachableTarget(requestedTarget) : requestedTarget;
   const summaryPath = resolve(outputDir, `${runId}-summary.json`);
   const results: DvwaBenchmarkResult[] = [];
 
@@ -97,7 +110,7 @@ async function main(): Promise<void> {
     const startedAt = new Date();
     let runError = "";
     try {
-      await runPentestTask(config, sink, task);
+      await runPentestTask(runConfig, sink, task);
       await sink.writeSummary("completed");
     } catch (error) {
       runError = error instanceof Error ? error.message : String(error);
@@ -111,7 +124,7 @@ async function main(): Promise<void> {
     }
     const endedAt = new Date();
     results.push(await summarizeRun(taskDir, taskId, level, scanMode, startedAt, endedAt, preflight, runError));
-    await writeFile(summaryPath, JSON.stringify({ runId, target, scanMode, results }, null, 2), "utf8");
+    await writeFile(summaryPath, JSON.stringify({ runId, target, requestedTarget, scanMode, runtime: runtimeSummary(runConfig), results }, null, 2), "utf8");
   }
 
   console.log(`[node2-dvwa-agent-benchmark] ${summaryPath}`);
@@ -120,6 +133,16 @@ async function main(): Promise<void> {
       `${result.level}: status=${result.terminalStatus} finish=${result.finishStatus || "none"} seconds=${result.seconds} findings=${result.findings.length}`,
     );
   }
+}
+
+function sidecarReachableTarget(target: string): string {
+  if (args["sidecar-target"]) return args["sidecar-target"];
+  const url = new URL(target);
+  if (["localhost", "127.0.0.1", "::1"].includes(url.hostname)) {
+    url.hostname = "host.docker.internal";
+    return url.toString().replace(/\/$/, "");
+  }
+  return target;
 }
 
 type DvwaBenchmarkResult = {
@@ -133,6 +156,8 @@ type DvwaBenchmarkResult = {
   findings: Array<{ title: string; severity?: string; location?: string }>;
   workflows: unknown[];
   coverage?: unknown;
+  traffic?: unknown;
+  sidecar?: unknown;
   preflight: unknown;
   error?: string;
 };
@@ -172,8 +197,49 @@ async function summarizeRun(
     findings,
     workflows: Array.isArray(checkpoint?.workflows) ? checkpoint.workflows : [],
     coverage: checkpoint?.coverage,
+    traffic: trafficSummary(events, checkpoint),
+    sidecar: sidecarSummary(events),
     preflight,
     error: error || undefined,
+  };
+}
+
+function runtimeSummary(runConfig: typeof config): Record<string, unknown> {
+  return {
+    node: "node2-pi",
+    caidoBridgeAutoStart: runConfig.caidoBridgeAutoStart,
+    caidoSidecarAutoStart: runConfig.caidoSidecarAutoStart,
+    caidoSidecarImage: runConfig.caidoSidecarAutoStart ? runConfig.caidoSidecarImage : undefined,
+    scannerSandboxAutoStart: runConfig.scannerSandboxAutoStart,
+    scannerSandboxImage: runConfig.scannerSandboxAutoStart ? runConfig.scannerSandboxImage : undefined,
+    externalTrafficSourceConfigured: Boolean(runConfig.externalTrafficSourceUrl),
+    trafficProxyConfigured: Boolean(runConfig.trafficProxyUrl),
+  };
+}
+
+function trafficSummary(events: any[], checkpoint: any): Record<string, unknown> {
+  const trafficToolEvents = events.filter((event) => event.tool_name === "traffic");
+  const syncOutputs = trafficToolEvents.filter((event) => /synced_count|traffic_sync/.test(JSON.stringify(event)));
+  const checkpointEvidence = Array.isArray(checkpoint?.evidence) ? checkpoint.evidence : [];
+  const trafficEvidence = checkpointEvidence.filter((item: any) => /traffic|http|browser|verifier/i.test(String(item?.sourceTool || item?.type || "")));
+  return {
+    trafficToolEvents: trafficToolEvents.length,
+    syncEvents: syncOutputs.length,
+    trafficEvidence: trafficEvidence.length,
+    sourceStatusCalled: trafficToolEvents.some((event) => /source_status/.test(JSON.stringify(event))),
+    syncCalled: trafficToolEvents.some((event) => /"action"\s*:\s*"sync"|synced_count/.test(JSON.stringify(event))),
+  };
+}
+
+function sidecarSummary(events: any[]): Record<string, unknown> {
+  const bridgeStarted = events.find((event) => event.type === "traffic_bridge_started");
+  const sidecarStarted = events.find((event) => event.type === "traffic_sidecar_started");
+  return {
+    bridgeStarted: Boolean(bridgeStarted),
+    bridgeUrl: typeof bridgeStarted?.url === "string" ? bridgeStarted.url : undefined,
+    sidecarStarted: Boolean(sidecarStarted),
+    sidecarUrl: typeof sidecarStarted?.url === "string" ? sidecarStarted.url : undefined,
+    sidecarImage: typeof sidecarStarted?.image === "string" ? sidecarStarted.image : undefined,
   };
 }
 
@@ -351,6 +417,12 @@ function parseArgs(argv: string[]): Record<string, string> {
     }
   }
   return out;
+}
+
+function boolArg(name: string, fallback: boolean): boolean {
+  if (!(name in args)) return fallback;
+  const value = String(args[name] || "true").trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

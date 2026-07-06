@@ -7,6 +7,7 @@ import { emitToolEvidence, jsonResult, textResult } from "./common.js";
 type BrowserState = {
   page?: any;
   browser?: any;
+  wired?: boolean;
 };
 
 const state: BrowserState = {};
@@ -32,8 +33,12 @@ export function createBrowserTool(runtime: ToolRuntime): ToolDefinition<any> {
       const pw = await loadPlaywright();
       if (!pw) return textResult("error: Playwright is not installed. Run `npm install` in node2 and `npx playwright install chromium`.");
       if (!state.browser) {
-        state.browser = await pw.chromium.launch({ headless: true });
+        state.browser = await pw.chromium.launch({
+          headless: true,
+          proxy: runtime.trafficProxyUrl ? { server: runtime.trafficProxyUrl } : undefined,
+        });
         state.page = await state.browser.newPage();
+        wireTrafficCapture(runtime, state.page);
       }
       const page = state.page;
       if (params.action === "goto") {
@@ -106,4 +111,80 @@ async function observePage(runtime: ToolRuntime, page: any, source: string): Pro
   } catch {
     // Observation should never break the browser action itself.
   }
+}
+
+function wireTrafficCapture(runtime: ToolRuntime, page: any): void {
+  if (state.wired) return;
+  state.wired = true;
+  const pending = new Map<any, { method: string; url: string; requestHeaders: Record<string, string>; requestBody?: string; startedAt: string }>();
+  page.on("request", async (request: any) => {
+    try {
+      pending.set(request, {
+        method: String(request.method() || "GET").toUpperCase(),
+        url: String(request.url()),
+        requestHeaders: lowerHeaders(await request.allHeaders().catch(() => request.headers())),
+        requestBody: request.postData() || undefined,
+        startedAt: new Date().toISOString(),
+      });
+    } catch {
+      // Browser capture is best-effort and should not break user actions.
+    }
+  });
+  page.on("response", async (response: any) => {
+    try {
+      const request = response.request();
+      const started = pending.get(request) || {
+        method: String(request.method() || "GET").toUpperCase(),
+        url: String(response.url()),
+        requestHeaders: lowerHeaders(request.headers()),
+        requestBody: request.postData() || undefined,
+        startedAt: new Date().toISOString(),
+      };
+      pending.delete(request);
+      if (!/^https?:\/\//i.test(started.url)) return;
+      const responseHeaders = lowerHeaders(await response.allHeaders().catch(() => response.headers()));
+      const contentType = responseHeaders["content-type"] || "";
+      const responseBody = shouldCaptureBody(contentType) ? String(await response.text().catch(() => "")).slice(0, 128 * 1024) : undefined;
+      const trafficId = runtime.traffic.add({
+        source: "browser",
+        method: started.method,
+        url: started.url,
+        status: response.status(),
+        requestHeaders: started.requestHeaders,
+        requestBody: started.requestBody,
+        responseHeaders,
+        responseBody,
+        receivedAt: started.startedAt,
+      });
+      await observeAttackSurface(runtime, {
+        method: started.method,
+        url: started.url,
+        requestBody: started.requestBody,
+        responseBody,
+        source: "browser.traffic",
+      });
+      await runtime.platform.send({
+        type: "traffic_captured",
+        conversation_id: runtime.task.conversationId,
+        task_id: runtime.task.taskId,
+        traffic_id: trafficId,
+        method: started.method,
+        url: started.url,
+        status: response.status(),
+        source: "browser",
+      });
+    } catch {
+      // Browser capture is best-effort and should not break user actions.
+    }
+  });
+}
+
+function lowerHeaders(headers: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers || {})) out[key.toLowerCase()] = String(value);
+  return out;
+}
+
+function shouldCaptureBody(contentType: string): boolean {
+  return !contentType || /text\/|json|xml|javascript|html|form/i.test(contentType);
 }

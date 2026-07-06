@@ -86,8 +86,15 @@ async def answer_snapshot_qa(conv_id: str, user_id: str, question: str, agent_so
     return _agent_text(conv_id, normalized_agent, "snapshot_qa", content or "\u5f53\u524d\u4f1a\u8bdd\u6ca1\u6709\u8db3\u591f\u4fe1\u606f\u751f\u6210\u56de\u7b54\u3002")
 
 
-async def answer_clarification(conv_id: str, message: str, *, mode: str = "clarification") -> dict:
-    return _agent_text(conv_id, "platform", mode, message)
+async def answer_clarification(
+    conv_id: str,
+    message: str,
+    *,
+    mode: str = "clarification",
+    agent_source: str = "platform",
+) -> dict:
+    normalized_agent = "pentest" if agent_source == "pentest" else "platform"
+    return _agent_text(conv_id, normalized_agent, mode, message)
 
 
 async def _load_snapshot(conv_id: str, user_id: str) -> tuple[dict, bool]:

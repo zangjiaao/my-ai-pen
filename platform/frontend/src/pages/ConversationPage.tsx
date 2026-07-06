@@ -86,6 +86,7 @@ export default function ConversationPage() {
   const [importingReport, setImportingReport] = useState(false);
   const [importStatus, setImportStatus] = useState<ImportStatus>(null);
   const [selectedAgent, setSelectedAgent] = useState<AgentNode | null>(null);
+  const selectedAgentRef = useRef<AgentNode | null>(null);
   const [agentNodes, setAgentNodes] = useState<AgentNode[]>([]);
   const [activeConversationNodeId, setActiveConversationNodeId] = useState<string | null>(null);
   const [agentState, setAgentState] = useState<Record<string, unknown>>({});
@@ -574,6 +575,7 @@ export default function ConversationPage() {
     } else {
       setInput(current => `${current.slice(0, state.start)}${mention}${current.slice(state.start + state.query.length + 1)}`);
     }
+    selectedAgentRef.current = node;
     setSelectedAgent(node);
   }, [input]);
 
@@ -601,9 +603,11 @@ export default function ConversationPage() {
   const handleSend = useCallback(async () => {
     if (!input.trim()) return;
     const displayText = input.trim();
-    const selectedMentionAgent = selectedAgent && displayText.includes(`@${selectedAgent.name}`) ? selectedAgent : resolveMentionedAgent(displayText, agentNodes);
+    const selectedAgentCandidate = selectedAgentRef.current || selectedAgent;
+    const selectedMentionAgent = selectedAgentCandidate && displayText.includes(`@${selectedAgentCandidate.name}`) ? selectedAgentCandidate : resolveMentionedAgent(displayText, agentNodes);
     const text = stripAgentMention(displayText, selectedMentionAgent);
     setInput("");
+    selectedAgentRef.current = null;
     setSelectedAgent(null);
 
     const targetValue = extractTarget(text);
@@ -627,17 +631,19 @@ export default function ConversationPage() {
 
     const clientMessageId = crypto.randomUUID();
     const userContent: Record<string, unknown> = { text: displayText, client_message_id: clientMessageId };
-    if (selectedMentionAgent) {
-      userContent.agent_target = selectedMentionAgent.type === "platform" ? "platform" : "pentest";
-      userContent.agent_node_id = selectedMentionAgent.id;
+    const stickyAgentNode = selectedMentionAgent || agentNodeById(agentNodes, activeConversationNodeId || activeConversation?.node_id || null);
+    const stickyAgentTarget = stickyAgentNode ? agentTargetForNode(stickyAgentNode) : undefined;
+    if (stickyAgentNode && stickyAgentTarget) {
+      userContent.agent_target = stickyAgentTarget;
+      userContent.agent_node_id = stickyAgentNode.id;
     }
     pendingScrollToBottomRef.current = true;
     shouldStickToBottomRef.current = true;
-    const agentPayload = selectedMentionAgent ? { agent_target: selectedMentionAgent.type === "platform" ? "platform" : "pentest", agent_node_id: selectedMentionAgent.id } : {};
+    const agentPayload = stickyAgentNode && stickyAgentTarget ? { agent_target: stickyAgentTarget, agent_node_id: stickyAgentNode.id } : {};
     const shouldContinueExisting = Boolean(!startFresh && activeId && !restartRequested && !completedConversation);
     const willSteerDirectly = Boolean(!platformMention && shouldContinueExisting && activeConversation?.status === "running");
-    const pendingAgentSource = pendingAgentSourceForMessage(selectedMentionAgent, willSteerDirectly);
-    const pendingAgentNodeId = selectedMentionAgent?.id || (pendingAgentSource === "pentest" ? activeConversation?.node_id || undefined : undefined);
+    const pendingAgentSource = pendingAgentSourceForMessage(stickyAgentNode, willSteerDirectly);
+    const pendingAgentNodeId = stickyAgentNode?.id || (pendingAgentSource === "pentest" ? activeConversationNodeId || activeConversation?.node_id || undefined : undefined);
     const pendingContent: Record<string, unknown> = {
       text: "Working...",
       agent_source: pendingAgentSource,
@@ -739,6 +745,17 @@ function pendingAgentSourceForMessage(
   if (selectedAgent?.type === "pentest") return "pentest";
   if (willSteerDirectly) return "pentest";
   return "platform";
+}
+
+function agentNodeById(nodes: AgentNode[], nodeId: string | null): AgentNode | null {
+  if (!nodeId) return null;
+  return nodes.find(node => node.id === nodeId) || null;
+}
+
+function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
+  if (node.type === "platform") return "platform";
+  if (node.type === "pentest") return "pentest";
+  return undefined;
 }
   function extractTarget(t: string): string | null {
     const url = t.match(/https?:\/\/\S+/);

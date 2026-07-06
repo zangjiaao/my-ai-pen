@@ -27,6 +27,14 @@ export type ToolRuntime = {
   pocCatalogPath: string;
   workflowRuns: WorkflowRunSummary[];
   lifecycle: RuntimeLifecycle;
+  trafficProxyUrl?: string;
+  externalTrafficSource?: ExternalTrafficSourceLike;
+  scannerSandbox?: ScannerSandboxConfig;
+};
+
+export type ScannerSandboxConfig = {
+  enabled: boolean;
+  image: string;
 };
 
 export type RuntimeLifecycle = {
@@ -143,6 +151,7 @@ export type CoverageStoreLike = {
     notes?: string;
   }): Promise<Record<string, unknown>>;
   list(filter?: { endpoint?: string; param?: string; vulnClass?: string }): Promise<Record<string, unknown>[]>;
+  listSync?(filter?: { endpoint?: string; param?: string; vulnClass?: string }): Record<string, unknown>[];
   untested(candidates: Array<{ endpoint: string; param: string }>, vulnClasses: string[]): Promise<Record<string, unknown>[]>;
   summary(): Promise<Record<string, unknown>>;
 };
@@ -160,15 +169,24 @@ export type EvidenceStoreLike = {
 
 export type TrafficStoreLike = {
   add(input: CapturedTraffic): string;
-  list(filter?: { urlContains?: string; method?: string; limit?: number }): CapturedTraffic[];
+  list(filter?: { urlContains?: string; method?: string; limit?: number; replayableOnly?: boolean }): CapturedTraffic[];
   get(id: string): CapturedTraffic | undefined;
-  endpoints(): Array<{ endpoint: string; method: string; params: string[]; count: number }>;
+  endpoints(): Array<{ endpoint: string; method: string; params: string[]; count: number; trafficIds: string[] }>;
+  candidates(limit?: number): CapturedTraffic[];
   snapshot(): Record<string, unknown> | undefined;
   setSnapshot(snapshot: Record<string, unknown>): void;
 };
 
+export type ExternalTrafficSourceLike = {
+  kind: string;
+  status(): Promise<Record<string, unknown>>;
+  list(filter?: { urlContains?: string; method?: string; limit?: number }): Promise<CapturedTraffic[]>;
+  get(id: string): Promise<CapturedTraffic | undefined>;
+};
+
 export type CapturedTraffic = {
   id?: string;
+  source?: string;
   method: string;
   url: string;
   status?: number;
@@ -176,5 +194,8 @@ export type CapturedTraffic = {
   requestBody?: string;
   responseHeaders?: Record<string, string>;
   responseBody?: string;
+  tags?: string[];
+  evidenceId?: string;
+  parentTrafficId?: string;
   receivedAt?: string;
 };

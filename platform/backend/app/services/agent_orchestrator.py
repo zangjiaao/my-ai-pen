@@ -105,6 +105,18 @@ def _policy_guard(plan: AgentPlan, *, text: str, context: OrchestrationContext) 
             reason=plan.reason or "user explicitly addressed the pentest agent for session context",
         )
 
+    if requested_agent == "pentest" and context.requested_node_id and not targets and not context.has_resume_task and plan.action in {"answer_user", "summarize_results"}:
+        return RoutingDecision(
+            action="ask_clarification",
+            capability="pentest.web",
+            mode="missing_target",
+            agent="pentest",
+            agent_node_id=plan.agent_node_id or context.requested_node_id,
+            requires_target=True,
+            reason=plan.reason or "user explicitly addressed a pentest node without an execution target",
+            message="Please provide the target URL/IP and confirm it is in authorized scope.",
+        )
+
     if plan.action == "ask_clarification":
         return RoutingDecision(
             action="ask_clarification",

@@ -42,6 +42,10 @@ export class CoverageStore implements CoverageStoreLike {
   }
 
   async list(filter: { endpoint?: string; param?: string; vulnClass?: string } = {}): Promise<Record<string, unknown>[]> {
+    return this.listSync(filter);
+  }
+
+  listSync(filter: { endpoint?: string; param?: string; vulnClass?: string } = {}): Record<string, unknown>[] {
     return [...this.rows.values()].filter((row) => {
       if (filter.endpoint && !row.endpoint.includes(filter.endpoint)) return false;
       if (filter.param && row.param !== filter.param) return false;
