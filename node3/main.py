@@ -10,7 +10,6 @@ import shlex
 import signal
 import sys
 import uuid
-from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any
 
@@ -19,19 +18,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import websockets
-from agents.model_settings import ModelSettings
-from agents.models.interface import ModelTracing
-from openai.types.responses import ResponseOutputMessage
 
-from strix.config import load_settings
-from strix.config.models import DEFAULT_MODEL_RETRY, StrixProvider, configure_sdk_model_defaults
-from strix.platform.node_runner import run_platform_scan
+from strix.platform.node_runner import StrixPlatformConversationSession, stable_platform_run_name
 
 
 DEFAULT_STRIX_PROJECT = (ROOT / "workspace" / "strix_runtime").resolve()
 
 TARGET_RE = re.compile(r"https?://[^\s,;)\]}>'\"]+", re.IGNORECASE)
-MAX_CHAT_TURNS = 12
 DEFAULT_STANDALONE_OUTPUT = ROOT / "workspace" / "standalone"
 
 
@@ -53,8 +46,7 @@ class Node3Runtime:
     def __init__(self, config: Node3Config) -> None:
         self.config = config
         self.ws: Any | None = None
-        self.current_task: asyncio.Task[None] | None = None
-        self.chat_history: dict[str, deque[tuple[str, str]]] = defaultdict(lambda: deque(maxlen=MAX_CHAT_TURNS))
+        self.sessions: dict[str, StrixPlatformConversationSession] = {}
         self.stop_event = asyncio.Event()
 
     async def run(self) -> None:
@@ -62,87 +54,94 @@ class Node3Runtime:
             print("[node3] NODE_TOKEN is empty; platform websocket authentication will fail.", flush=True)
         print(f"[node3] {self.config.node_name} starting. Platform: {self.config.platform_ws_url}", flush=True)
         print(f"[node3] Strix project: {self.config.strix_project_dir}", flush=True)
-        while not self.stop_event.is_set():
-            try:
-                ws_url = f"{self.config.platform_ws_url}?token={self.config.node_token}"
-                async with websockets.connect(ws_url) as ws:
-                    self.ws = ws
-                    print(f"[node3] websocket connected: {self.config.platform_ws_url}", flush=True)
-                    async for raw in ws:
-                        await self.handle_message(json.loads(raw))
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                print(f"[node3] websocket error: {exc}", flush=True)
-                await asyncio.sleep(3)
-            finally:
-                self.ws = None
+        try:
+            while not self.stop_event.is_set():
+                try:
+                    ws_url = f"{self.config.platform_ws_url}?token={self.config.node_token}"
+                    async with websockets.connect(ws_url) as ws:
+                        self.ws = ws
+                        print(f"[node3] websocket connected: {self.config.platform_ws_url}", flush=True)
+                        async for raw in ws:
+                            await self.handle_message(json.loads(raw))
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    print(f"[node3] websocket error: {exc}", flush=True)
+                    await asyncio.sleep(3)
+                finally:
+                    self.ws = None
+        finally:
+            await self.close_sessions()
 
     async def handle_message(self, message: dict[str, Any]) -> None:
         msg_type = str(message.get("type") or "")
         if msg_type == "task_assign":
             task = normalize_task(message, self.config)
-            await self.start_scan(task)
+            await self.start_or_update_session(task)
         elif msg_type == "user_steer":
             task = normalize_task(message, self.config)
-            if extract_target(task):
-                await self.start_scan(task)
-            else:
-                await self.answer_chat(task)
+            session = await self.start_or_update_session(task, allow_saved_session=True)
+            if session is not None:
+                delivered = await session.send_user_message(task)
+                if not delivered:
+                    await self.send({
+                        "type": "task_error",
+                        "conversation_id": task["conversation_id"],
+                        "task_id": task["task_id"],
+                        "message": "Node3 could not deliver the message to the Strix conversation.",
+                    })
         elif msg_type == "user_interrupt":
-            if self.current_task and not self.current_task.done():
-                self.current_task.cancel()
-            await self.send({
-                "type": "text",
-                "conversation_id": str(message.get("conversation_id") or ""),
-                "content": {"text": "Node3 received interrupt; stopping embedded Strix scan."},
-            })
+            conv_id = str(message.get("conversation_id") or "")
+            session = self.sessions.get(conv_id)
+            if session is not None:
+                await session.interrupt(str(message.get("action") or "interrupt"))
+            else:
+                await self.send({
+                    "type": "text",
+                    "conversation_id": conv_id,
+                    "content": {"text": "Node3 has no active Strix session to interrupt for this conversation."},
+                })
         elif msg_type == "user_input":
             await self.send({
                 "type": "text",
                 "conversation_id": str(message.get("conversation_id") or ""),
-                "content": {"text": "Node3 runs Strix in non-interactive mode and does not handle approval prompts yet."},
+                "content": {"text": "Node3 has not enabled Strix approval prompt handling yet."},
             })
 
-    async def start_scan(self, task: dict[str, Any]) -> None:
-        if self.current_task and not self.current_task.done():
-            await self.send({
-                "type": "task_error",
-                "conversation_id": task["conversation_id"],
-                "task_id": task["task_id"],
-                "message": "Node3 Strix adapter is busy",
-            })
-            return
-        self.current_task = asyncio.create_task(self.run_scan(task))
-
-    async def run_scan(self, task: dict[str, Any]) -> None:
-        try:
-            await run_platform_scan(self, task, self.config)
-        except asyncio.CancelledError:
-            raise
-        finally:
-            self.current_task = None
-
-    async def answer_chat(self, task: dict[str, Any]) -> None:
+    async def start_or_update_session(
+        self,
+        task: dict[str, Any],
+        *,
+        allow_saved_session: bool = False,
+    ) -> StrixPlatformConversationSession | None:
         conv_id = task["conversation_id"]
-        user_text = str(task.get("instruction") or "").strip()
-        self.chat_history[conv_id].append(("user", user_text))
-        try:
-            answer = await asyncio.wait_for(self.call_strix_model(conv_id), timeout=self.config.chat_timeout)
-            self.chat_history[conv_id].append(("assistant", answer))
-            await self.send({
-                "type": "text",
-                "conversation_id": conv_id,
-                "task_id": task["task_id"],
-                "content": {"text": answer or "Node3 model returned an empty response."},
-            })
-        except Exception as exc:
+        session = self.sessions.get(conv_id)
+        if session is not None:
+            session.update_task_context(task)
+            return session
+        if not extract_target(task) and not (allow_saved_session and self.saved_session_exists(conv_id)):
             await self.send({
                 "type": "task_error",
                 "conversation_id": conv_id,
                 "task_id": task["task_id"],
-                "message": f"Node3 model chat failed: {exc}",
+                "message": "Node3 requires a target URL/IP for a new Strix conversation, or an existing saved Strix session.",
             })
+            return None
+        session = StrixPlatformConversationSession(self, task, self.config)
+        self.sessions[conv_id] = session
+        await session.start()
+        return session
+
+    def saved_session_exists(self, conversation_id: str) -> bool:
+        run_name = stable_platform_run_name(conversation_id)
+        state_dir = self.config.strix_project_dir / "strix_runs" / run_name / ".state"
+        return (state_dir / "agents.db").exists() and (state_dir / "agents.json").exists()
+
+    async def close_sessions(self) -> None:
+        sessions = list(self.sessions.values())
+        self.sessions.clear()
+        if sessions:
+            await asyncio.gather(*(session.close() for session in sessions), return_exceptions=True)
 
     async def send(self, message: dict[str, Any] | str) -> None:
         payload = message if isinstance(message, str) else json.dumps(message, ensure_ascii=False)
@@ -156,35 +155,6 @@ class Node3Runtime:
                     print(f"[node3] websocket send failed; waiting for reconnect: {exc}", flush=True)
                     self.ws = None
             await asyncio.sleep(1)
-
-    async def call_strix_model(self, conv_id: str) -> str:
-        settings = load_settings()
-        model_name = (settings.llm.model or "").strip()
-        if not model_name:
-            raise RuntimeError("STRIX_LLM is not configured")
-        configure_sdk_model_defaults(settings)
-        model = StrixProvider().get_model(model_name)
-        transcript = "\n".join(f"{role}: {content}" for role, content in self.chat_history[conv_id])
-        system = (
-            "You are Node3, a Strix-based penetration testing agent connected to a security testing platform. "
-            "Answer normal conversation directly and concisely. "
-            "For security testing requests, ask for an authorized target URL/IP and scope if missing. "
-            "Do not claim that a scan has started unless a target was provided."
-        )
-        response = await model.get_response(
-            system_instructions=system,
-            input=transcript,
-            model_settings=ModelSettings(retry=DEFAULT_MODEL_RETRY, include_usage=True),
-            tools=[],
-            output_schema=None,
-            handoffs=[],
-            tracing=ModelTracing.DISABLED,
-            previous_response_id=None,
-            conversation_id=conv_id,
-            prompt=None,
-        )
-        return extract_response_text(response)
-
 
 def load_dotenv(path: Path) -> None:
     if not path.exists():
@@ -210,6 +180,7 @@ def normalize_task(message: dict[str, Any], config: Node3Config) -> dict[str, An
         "target": message.get("target") if isinstance(message.get("target"), dict) else {},
         "scope": message.get("scope") if isinstance(message.get("scope"), dict) else {},
         "snapshot": message.get("snapshot") if isinstance(message.get("snapshot"), dict) else {},
+        "target_profile": str(message.get("target_profile") or message.get("profile") or "").strip(),
     }
 
 
@@ -250,18 +221,6 @@ def build_instruction(task: dict[str, Any]) -> str:
         "Avoid reporting negative or speculative findings as vulnerabilities.",
     ]
     return "\n\n".join(piece for piece in pieces if piece)
-
-
-def extract_response_text(response: Any) -> str:
-    parts: list[str] = []
-    for item in response.output:
-        if not isinstance(item, ResponseOutputMessage):
-            continue
-        for chunk in item.content:
-            text_value = getattr(chunk, "text", None)
-            if text_value:
-                parts.append(str(text_value))
-    return "".join(parts).strip()
 
 
 async def send(ws: Any, message: dict[str, Any]) -> None:

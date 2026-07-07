@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 Status = Literal["running", "waiting", "completed", "stopped", "crashed", "failed"]
+TERMINAL_STATUSES: set[Status] = {"completed", "stopped", "crashed", "failed"}
 
 
 @dataclass(slots=True)
@@ -115,6 +116,8 @@ class AgentCoordinator:
             if agent_id not in self.statuses:
                 return
             self.statuses[agent_id] = status  # type: ignore[assignment]
+            if status in TERMINAL_STATUSES:
+                self.pending_counts[agent_id] = 0
             runtime = self.runtimes.setdefault(agent_id, AgentRuntime())
             runtime.wake.set()
         logger.info("agent.status %s=%s", agent_id, status)
@@ -125,6 +128,14 @@ class AgentCoordinator:
         async with self._lock:
             if target_agent_id not in self.statuses:
                 logger.debug("agent.send dropped unknown target=%s", target_agent_id)
+                return False
+            status = self.statuses[target_agent_id]
+            if status in TERMINAL_STATUSES:
+                logger.warning(
+                    "agent.send dropped target=%s because status is terminal (%s)",
+                    target_agent_id,
+                    status,
+                )
                 return False
             runtime = self.runtimes.setdefault(target_agent_id, AgentRuntime())
             session = runtime.session
@@ -184,6 +195,7 @@ class AgentCoordinator:
             if agent_id not in self.statuses:
                 return
             self.statuses[agent_id] = "stopped"
+            self.pending_counts[agent_id] = 0
             runtime = self.runtimes.setdefault(agent_id, AgentRuntime())
             runtime.wake.set()
             stream = runtime.stream
@@ -248,7 +260,7 @@ class AgentCoordinator:
                 if aid == agent_id:
                     continue
                 pending_count = self.pending_counts.get(aid, 0)
-                if status in {"running", "waiting"} or pending_count > 0:
+                if status in {"running", "waiting"}:
                     unresolved.append(
                         {
                             "agent_id": aid,

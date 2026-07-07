@@ -53,6 +53,7 @@ from strix.tools.todo.tools import (
     update_todo,
 )
 from strix.tools.web_search.tool import web_search
+from strix.config import load_settings
 
 
 if TYPE_CHECKING:
@@ -498,6 +499,19 @@ _BASE_TOOLS: tuple[Tool, ...] = (
 )
 
 
+def _available_base_tools() -> list[Tool]:
+    tools = list(_BASE_TOOLS)
+    if not load_settings().integrations.perplexity_api_key:
+        tools = [tool for tool in tools if getattr(tool, "name", "") != "web_search"]
+    return tools
+
+
+def _system_prompt_context_with_tool_flags(context: dict[str, Any] | None, *, web_search_available: bool) -> dict[str, Any]:
+    prompt_context = dict(context or {})
+    prompt_context["web_search_available"] = web_search_available
+    return prompt_context
+
+
 def build_strix_agent(
     *,
     name: str = "strix",
@@ -515,19 +529,24 @@ def build_strix_agent(
         chat_completions_tools: Wrap SDK custom tools as function tools
             when the selected backend cannot accept Responses custom tools.
     """
+    base_tools = _available_base_tools()
+    web_search_available = any(getattr(tool, "name", "") == "web_search" for tool in base_tools)
     instructions = render_system_prompt(
         skills=skills,
         scan_mode=scan_mode,
         is_whitebox=is_whitebox,
         is_root=is_root,
         interactive=interactive,
-        system_prompt_context=system_prompt_context,
+        system_prompt_context=_system_prompt_context_with_tool_flags(
+            system_prompt_context,
+            web_search_available=web_search_available,
+        ),
     )
 
     if is_root:
-        tools: list[Tool] = [*_BASE_TOOLS, finish_scan]
+        tools: list[Tool] = [*base_tools, finish_scan]
     else:
-        tools = [*_BASE_TOOLS, agent_finish]
+        tools = [*base_tools, agent_finish]
     if chat_completions_tools:
         tools = [_tool_with_chat_completions_schema(tool) for tool in tools]
 

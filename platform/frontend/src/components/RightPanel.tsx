@@ -1002,12 +1002,16 @@ function agentStatusLabel(status: string | undefined): string {
   return normalized;
 }
 
+function isInterruptedAgentStatus(status: string): boolean {
+  return ["failed", "stopped", "interrupted", "canceled", "cancelled"].includes(status);
+}
+
 function agentStatusDotClass(status: string | undefined): string {
   const normalized = agentStatusLabel(status);
   if (normalized === "running") return "bg-status-running";
   if (normalized === "pending") return "bg-[#d97706]";
-  if (["failed", "crashed"].includes(normalized)) return "bg-severity-critical";
-  if (["done", "stopped"].includes(normalized)) return "bg-status-success";
+  if (isInterruptedAgentStatus(normalized)) return "bg-severity-critical";
+  if (normalized === "done") return "bg-status-success";
   return "bg-canvas-inset";
 }
 
@@ -1015,7 +1019,7 @@ function agentStatusBadgeClass(status: string | undefined): string {
   const normalized = agentStatusLabel(status);
   if (normalized === "running") return "bg-status-running/10 text-status-running";
   if (normalized === "done") return "bg-status-success/10 text-status-success";
-  if (normalized === "failed") return "bg-severity-critical-subtle text-severity-critical";
+  if (isInterruptedAgentStatus(normalized)) return "bg-severity-critical-subtle text-severity-critical";
   if (normalized === "pending") return "bg-[#fff7ed] text-[#d97706]";
   return "bg-canvas-inset text-ink-secondary";
 }

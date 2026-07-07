@@ -17,7 +17,7 @@ from app.services.agent_orchestrator import (
     route_with_platform_agent,
     set_orchestrator_chat_override,
 )
-from app.ws.router import _agent_assignment_notice, _apply_agent_attribution, _agent_target_for_request, _decision_agent_attribution, _mentioned_node_id, _message_with_decision_target, _merge_saved_message_content, _message_dedupe_key, _persist_vulnerability, _send_direct_node_message, _should_announce_agent_assignment, conversation_node, node_connections
+from app.ws.router import _agent_assignment_notice, _apply_agent_attribution, _agent_target_for_request, _apply_vulnerability_cvss, _decision_agent_attribution, _mentioned_node_id, _message_with_decision_target, _merge_saved_message_content, _message_dedupe_key, _persist_vulnerability, _send_direct_node_message, _should_announce_agent_assignment, conversation_node, node_connections
 
 
 class PlatformPhase2Tests(unittest.TestCase):
@@ -203,6 +203,15 @@ class PlatformPhase2Tests(unittest.TestCase):
             "evidence_ids": [],
         }, None))
         self.assertIsNone(result)
+
+    def test_vulnerability_cvss_updates_only_when_present(self):
+        vuln = type("Vuln", (), {"cvss": 7.5})()
+
+        _apply_vulnerability_cvss(vuln, None)
+        self.assertEqual(vuln.cvss, 7.5)
+
+        _apply_vulnerability_cvss(vuln, 9.8)
+        self.assertEqual(vuln.cvss, 9.8)
 
 
 

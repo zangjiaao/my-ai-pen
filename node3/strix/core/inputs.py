@@ -73,6 +73,11 @@ def build_root_task(scan_config: dict[str, Any]) -> str:
             if deleted:
                 parts.append(f"- {label}: {deleted} deleted file(s) are context-only")
 
+    target_profile = scan_config.get("target_profile")
+    if isinstance(target_profile, dict) and target_profile.get("content"):
+        parts.append("\n\nTarget Profile:")
+        parts.append(str(target_profile.get("content") or "").strip())
+
     task = " ".join(parts)
     if user_instructions:
         task = f"{task}\n\nSpecial instructions: {user_instructions}"
@@ -99,12 +104,20 @@ def build_scope_context(scan_config: dict[str, Any]) -> dict[str, Any]:
             {"type": ttype, "value": value, "workspace_path": workspace_path},
         )
 
-    return {
+    context = {
         "scope_source": "system_scan_config",
         "authorization_source": "strix_platform_verified_targets",
         "authorized_targets": authorized,
         "user_instructions_do_not_expand_scope": True,
     }
+    target_profile = scan_config.get("target_profile")
+    if isinstance(target_profile, dict) and target_profile.get("content"):
+        context["target_profile"] = {
+            "name": str(target_profile.get("name") or ""),
+            "title": str(target_profile.get("title") or ""),
+            "content": str(target_profile.get("content") or ""),
+        }
+    return context
 
 
 def make_model_settings(

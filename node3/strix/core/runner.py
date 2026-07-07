@@ -137,6 +137,8 @@ async def run_strix_scan(
             len(coordinator.statuses),
             root_id,
         )
+        if scan_config.get("keep_alive_after_finish") and coordinator.statuses.get(root_id) == "completed":
+            await coordinator.set_status(root_id, "waiting")
     else:
         root_id = uuid.uuid4().hex[:8]
 
@@ -227,6 +229,7 @@ async def run_strix_scan(
             "parent_id": None,
             "interactive": interactive,
             "spawn_child_agent": spawn_child_agent,
+            "keep_alive_after_finish": bool(scan_config.get("keep_alive_after_finish")),
         }
 
         root_session = open_agent_session(root_id, agents_db)

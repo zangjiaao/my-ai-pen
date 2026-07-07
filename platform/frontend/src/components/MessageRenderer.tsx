@@ -95,6 +95,9 @@ type ToolItem = {
 function ToolItemRow({ item, onOpenEvidence }: { item: ToolItem; onOpenEvidence?: (evidence: Partial<SecurityEvidence>) => void }) {
   const status = normalizeExecutionStatus(item.status);
   const statusColor = status === "running" ? "bg-status-running" : status === "done" ? "bg-status-success" : "bg-status-error";
+  const showCommand = isCommandToolName(item.toolName) && Boolean(item.command);
+  const primaryText = showCommand ? item.command || item.summary : item.summary;
+  const secondaryText = showCommand && item.summary && item.summary !== item.command ? item.summary : "";
   const evidenceButton = item.evidenceId ? (
     <button
       type="button"
@@ -112,9 +115,10 @@ function ToolItemRow({ item, onOpenEvidence }: { item: ToolItem; onOpenEvidence?
       <span className={`mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full ${statusColor}`} />
       <div className="min-w-0 flex-1 overflow-hidden">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="block min-w-0 max-w-full truncate text-ink-muted">{item.summary}</span>
+          <span className={`block min-w-0 max-w-full truncate ${showCommand ? "font-mono text-[11px] text-ink-secondary" : "text-ink-muted"}`}>{primaryText}</span>
           {item.target && <span className="hidden shrink truncate font-mono text-[11px] text-ink-muted md:block">{item.target}</span>}
         </div>
+        {secondaryText && <div className="mt-0.5 truncate text-[11px] text-ink-muted">{secondaryText}</div>}
       </div>
       {evidenceButton}
     </div>
@@ -144,6 +148,7 @@ function summarizeToolActivity(items: ToolItem[], fallbackTool: string, aggregat
   const count = successful.length;
   if (/browser|explore|crawl/.test(lower)) return `\u5df2\u6d4f\u89c8${count}\u4e2a\u7f51\u9875`;
   if (/http|request|replay|fetch|curl/.test(lower)) return `\u5df2\u8bf7\u6c42${count}\u6b21`;
+  if (/stdin|command input|\binput\b/.test(lower)) return `\u5df2\u53d1\u9001${count}\u6b21\u8f93\u5165`;
   if (/execute|command|shell|docker|process/.test(lower)) return `\u5df2\u6267\u884c${count}\u6761\u547d\u4ee4`;
   if (/finding|vuln|verify|evidence|confirm/.test(lower)) return `\u5df2\u5904\u7406${count}\u6761\u7ed3\u679c`;
   if (/search|scan|dir|wordlist|enumerate/.test(lower)) return `\u5df2\u679a\u4e3e${count}\u6b21`;
@@ -164,7 +169,8 @@ function isSuccessfulStatus(value: unknown): boolean {
 }
 
 function toolItemFromStructuredRecord(item: Record<string, unknown>, content: Record<string, unknown>): ToolItem {
-  const toolName = readContentString(item.tool_name) || readContentString(content.tool_name) || "tool";
+  const rawToolName = readContentString(item.tool_name) || readContentString(content.tool_name) || "tool";
+  const toolName = displayToolName(rawToolName, readContentString(item.display_title) || readContentString(content.display_title));
   const stdout = readContentString(item.stdout);
   const output = parseToolOutput(stdout);
   const explicitResult = item.result && typeof item.result === "object" && !Array.isArray(item.result) ? item.result as Record<string, unknown> : null;
@@ -251,7 +257,7 @@ function toolItemsFromContent(content: Record<string, unknown>): ToolItem[] {
     }))
     .filter((item): item is ToolItem => Boolean(item));
   if (items.length) return items;
-  return [{ toolName: fallbackTool, status: fallbackStatus, summary: summarizeToolItem(fallbackTool, fallbackStatus, null, stdout, commands[0] || ""), evidenceId: readContentString(content.evidence_id), runId: readContentString(content.tool_run_id), command: commands[0] || "" }];
+  return [{ toolName: displayToolName(fallbackTool), status: fallbackStatus, summary: summarizeToolItem(fallbackTool, fallbackStatus, null, stdout, commands[0] || ""), evidenceId: readContentString(content.evidence_id), runId: readContentString(content.tool_run_id), command: commands[0] || "" }];
 }
 
 function summarizeToolLine(line: string, latestTool: string): string {
@@ -263,7 +269,7 @@ function summarizeToolLine(line: string, latestTool: string): string {
 function toolItemFromLine(line: string, fallback: { fallbackTool: string; fallbackStatus: string; fallbackCommand: string; runId: string }): ToolItem | null {
   const parsed = parseLooseObject(line);
   if (parsed) {
-    const toolName = readContentString(parsed.tool_name) || readContentString(parsed.source_tool) || fallback.fallbackTool;
+    const toolName = displayToolName(readContentString(parsed.tool_name) || readContentString(parsed.source_tool) || fallback.fallbackTool);
     const status = readContentString(parsed.status) || readContentString(parsed.status_code) || fallback.fallbackStatus;
     const command = readContentString(parsed.command) || fallback.fallbackCommand;
     return {
@@ -278,7 +284,7 @@ function toolItemFromLine(line: string, fallback: { fallbackTool: string; fallba
     };
   }
   return {
-    toolName: fallback.fallbackTool,
+    toolName: displayToolName(fallback.fallbackTool),
     status: fallback.fallbackStatus,
     summary: fallback.fallbackCommand || stripJsonNoise(line),
     command: fallback.fallbackCommand,
@@ -329,7 +335,27 @@ function readContentString(value: unknown): string {
 }
 function toolNamesFromContent(content: Record<string, unknown>): string[] {
   const names = Array.isArray(content.tool_names) ? content.tool_names : [content.display_title || content.tool_name];
-  return names.map(item => String(item || "").trim()).filter(Boolean);
+  return names.map(item => displayToolName(String(item || "").trim())).filter(Boolean);
+}
+
+function displayToolName(toolName: string, explicitTitle = ""): string {
+  const title = explicitTitle.trim();
+  if (title) return title;
+  const normalized = toolName.trim();
+  const lower = normalized.toLowerCase();
+  const known: Record<string, string> = {
+    exec_command: "Exec Command",
+    write_stdin: "Command Input",
+  };
+  if (known[lower]) return known[lower];
+  if (!normalized) return "";
+  return normalized.includes("_")
+    ? normalized.split("_").filter(Boolean).map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(" ")
+    : normalized;
+}
+
+function isCommandToolName(toolName: string): boolean {
+  return /exec command|command input|execute|command|shell|docker|process|stdin/i.test(toolName);
 }
 
 function toolTitle(toolNames: string[]): string {

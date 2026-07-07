@@ -23,6 +23,17 @@ _CVSS_VALID = {
     "integrity": ["N", "L", "H"],
     "availability": ["N", "L", "H"],
 }
+_CVSS_SHORT_TO_LONG = {
+    "AV": "attack_vector",
+    "AC": "attack_complexity",
+    "PR": "privileges_required",
+    "UI": "user_interaction",
+    "S": "scope",
+    "C": "confidentiality",
+    "I": "integrity",
+    "A": "availability",
+}
+_CVSS_IGNORED_KEYS = {"score", "severity", "E", "RL", "RC", "CR", "IR", "AR", "MAV", "MAC", "MPR", "MUI", "MS", "MC", "MI", "MA"}
 
 _CODE_LOCATION_FIELDS = (
     "file",
@@ -126,6 +137,76 @@ def _validate_cwe(cwe: str) -> str | None:
     return None
 
 
+def _json_object(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+def _cvss_vector_to_dict(value: str) -> dict[str, str] | None:
+    text = value.strip()
+    if not text.upper().startswith("CVSS:"):
+        return None
+    parts = text.split("/")
+    parsed: dict[str, str] = {}
+    for part in parts[1:]:
+        if ":" not in part:
+            continue
+        key, raw_value = part.split(":", 1)
+        long_key = _CVSS_SHORT_TO_LONG.get(key.upper())
+        if long_key:
+            parsed[long_key] = raw_value.upper()
+    return parsed or None
+
+
+def _normalize_cvss_breakdown(raw: Any) -> tuple[dict[str, str], list[str]]:
+    errors: list[str] = []
+    if isinstance(raw, str):
+        vector = _cvss_vector_to_dict(raw)
+        if vector is not None:
+            return vector, []
+        parsed = _json_object(raw)
+        if parsed is not None:
+            raw = parsed
+
+    if not isinstance(raw, dict) or not raw:
+        return {}, ["cvss_breakdown: must be an object with the 8 CVSS metrics"]
+
+    if set(raw.keys()) == {"_json"}:
+        wrapped = raw.get("_json")
+        if isinstance(wrapped, str):
+            vector = _cvss_vector_to_dict(wrapped)
+            if vector is not None:
+                return vector, []
+        parsed = _json_object(wrapped)
+        if parsed is None:
+            return {}, ["cvss_breakdown._json: must contain a JSON object or CVSS vector"]
+        raw = parsed
+
+    normalized: dict[str, str] = {}
+    for key, value in raw.items():
+        if value is None:
+            continue
+        key_text = str(key)
+        long_key = _CVSS_SHORT_TO_LONG.get(key_text.upper()) or key_text
+        if long_key in _CVSS_VALID:
+            normalized[long_key] = str(value).strip().upper()
+        elif key_text not in _CVSS_IGNORED_KEYS and key_text.upper() not in _CVSS_IGNORED_KEYS:
+            errors.append(f"Unknown cvss_breakdown metric: {key_text}")
+
+    for name, valid in _CVSS_VALID.items():
+        value = normalized.get(name)
+        if value not in valid:
+            errors.append(f"Invalid {name}: {value}. Must be one of: {valid}")
+    return normalized, errors
+
+
 def _calculate_cvss(breakdown: dict[str, str]) -> tuple[float, str, str]:
     try:
         from cvss import CVSS3
@@ -155,7 +236,7 @@ async def _do_create(
     poc_description: str,
     poc_script_code: str,
     remediation_steps: str,
-    cvss_breakdown: dict[str, str],
+    cvss_breakdown: dict[str, Any] | str,
     endpoint: str | None,
     method: str | None,
     cve: str | None,
@@ -179,14 +260,8 @@ async def _do_create(
         if not str(fields.get(name) or "").strip():
             errors.append(msg)
 
-    if not isinstance(cvss_breakdown, dict) or not cvss_breakdown:
-        errors.append("cvss_breakdown: must be an object with the 8 CVSS metrics")
-        cvss_breakdown = {}
-    else:
-        for name, valid in _CVSS_VALID.items():
-            value = cvss_breakdown.get(name)
-            if value not in valid:
-                errors.append(f"Invalid {name}: {value}. Must be one of: {valid}")
+    cvss_breakdown, cvss_errors = _normalize_cvss_breakdown(cvss_breakdown)
+    errors.extend(cvss_errors)
 
     parsed_locations = _normalize_code_locations(code_locations)
     if parsed_locations:
@@ -241,8 +316,9 @@ async def _do_create(
                 "",
             )
             return {
-                "success": False,
-                "error": (
+                "success": True,
+                "status": "skipped_duplicate",
+                "message": (
                     f"Potential duplicate of '{duplicate_title}' "
                     f"(id={duplicate_id[:8]}...) - do not re-report the same vulnerability"
                 ),
@@ -303,7 +379,7 @@ async def create_vulnerability_report(
     poc_description: str,
     poc_script_code: str,
     remediation_steps: str,
-    cvss_breakdown: dict[str, str],
+    cvss_breakdown: dict[str, Any] | str,
     endpoint: str | None = None,
     method: str | None = None,
     cve: str | None = None,

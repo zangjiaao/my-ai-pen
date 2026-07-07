@@ -999,6 +999,7 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
         location = msg.get("location") or msg.get("poc") or ""
         poc_value = msg.get("poc") or msg.get("location") or ""
         severity = _normalize_severity(msg.get("severity"))
+        cvss_value = msg.get("cvss")
         description = msg.get("description") or msg.get("impact") or msg.get("evidence_summary") or ""
 
         async with async_session() as db:
@@ -1075,6 +1076,7 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                     node_id=node_uuid,
                     title=title,
                     severity=severity,
+                    cvss=cvss_value,
                     asset_id=asset_id,
                     conversation_id=uuid.UUID(conv_id),
                     description=description,
@@ -1090,6 +1092,7 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                 vuln.node_id = vuln.node_id or node_uuid
                 vuln.asset_id = vuln.asset_id or asset_id
                 vuln.severity = severity or vuln.severity
+                _apply_vulnerability_cvss(vuln, cvss_value)
                 vuln.description = description or vuln.description
                 vuln.poc = poc_value or vuln.poc
                 vuln.remediation = msg.get("remediation") or vuln.remediation
@@ -1171,6 +1174,11 @@ async def _find_node_by_token(token: str) -> str | None:
             return str(node.id) if node else None
     except Exception:
         return None
+
+
+def _apply_vulnerability_cvss(vuln, cvss_value):
+    if cvss_value is not None:
+        vuln.cvss = cvss_value
 
 
 

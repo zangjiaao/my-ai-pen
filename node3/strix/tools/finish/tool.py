@@ -95,7 +95,9 @@ async def finish_scan(
 
     1. Verifies you are the root agent.
     2. Writes the four narrative sections to the scan record.
-    3. Marks the scan completed and stops execution.
+    3. Marks the report completed. In one-shot runs this stops execution;
+       in platform conversation mode the root agent stays waiting for
+       follow-up instructions.
 
     **Pre-flight checklist (mandatory — do not skip):**
 
@@ -210,5 +212,6 @@ async def finish_scan(
         and coordinator is not None
         and isinstance(me, str)
     ):
-        await coordinator.set_status(me, "completed")
+        next_status = "waiting" if inner.get("keep_alive_after_finish") else "completed"
+        await coordinator.set_status(me, next_status)
     return json.dumps(result, ensure_ascii=False, default=str)

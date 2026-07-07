@@ -141,8 +141,9 @@ async def send_message_to_agent(
     **Don't** use for routine "hello/status" pings, for context the
     target already has (children inherit parent history), or when
     parent/child completion via ``agent_finish`` already covers the
-    flow. Messages to any registered agent wake it, regardless of
-    status, so a follow-up can restart a completed/stopped/failed agent.
+    flow. Messages can only be delivered to active agents. If an agent
+    is completed, stopped, crashed, or failed, create a new child agent
+    for follow-up work instead of messaging the terminal one.
 
     Args:
         target_agent_id: Recipient's 8-char id.
@@ -613,9 +614,9 @@ async def stop_agent(
 
     Uses the SDK's ``RunResultStreaming.cancel(mode="after_turn")`` so the
     target's current turn finishes — including saving items to its
-    session — before the run loop honors the cancel. The agent's
-    interactive outer loop parks as ``stopped``; later user/peer
-    messages can wake it again.
+    session — before the run loop honors the cancel. The target agent
+    becomes terminal as ``stopped`` and will not accept later
+    user/peer messages.
 
     Use sparingly. This is a forced cancellation tool, not a normal
     completion path. For ordinary wrap-up, use ``send_message_to_agent``

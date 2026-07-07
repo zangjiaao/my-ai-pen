@@ -5,7 +5,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from strix.report.state import ReportState
 
@@ -25,6 +25,7 @@ class PlatformEventSink:
         self.agents_by_id: dict[str, dict[str, Any]] = {}
         self.run_name = ""
         self.run_dir = ""
+        self.scan_completed_callback: Callable[[], None] | None = None
         self.forward_raw_messages = truthy(os.getenv("NODE3_FORWARD_STRIX_MESSAGES"))
         self._closed = False
 
@@ -85,14 +86,15 @@ class PlatformEventSink:
             progress = important_tool_progress(call["tool_name"], call["args"])
             if progress:
                 self.emit(text(self.task, progress, metadata={"agent_id": agent_id, "tool_name": call["tool_name"]}))
-            self.emit(tool_output(
-                self.task,
-                tool_name=call["tool_name"],
-                tool_run_id=call_id,
-                status_value="running",
-                line=tool_call_summary(call["tool_name"], call["args"]),
-                metadata={"agent_id": agent_id, "args": call["args"]},
-            ))
+            if should_emit_tool_output(call["tool_name"], "running"):
+                self.emit(tool_output(
+                    self.task,
+                    tool_name=call["tool_name"],
+                    tool_run_id=call_id,
+                    status_value="running",
+                    line=tool_call_summary(call["tool_name"], call["args"]),
+                    metadata={"agent_id": agent_id, "args": call["args"]},
+                ))
             self.emit_agent_checkpoint()
             return
         if item_type == "tool_call_output_item":
@@ -102,16 +104,25 @@ class PlatformEventSink:
             args = self.tool_args_by_call_id.get(call_id, {})
             event_agent_id = self.tool_agent_by_call_id.get(call_id, agent_id)
             parsed_output = parse_json_value(output["output"])
-            status_value = "failed" if isinstance(parsed_output, dict) and parsed_output.get("success") is False else "done"
+            status_value = tool_status_value(parsed_output)
             self.update_agent_activity(event_agent_id, tool_name, args, status_value, parsed_output)
-            self.emit(tool_output(
-                self.task,
-                tool_name=tool_name,
-                tool_run_id=call_id,
-                status_value=status_value,
-                line=tool_result_summary(tool_name, parsed_output),
-                metadata={"agent_id": event_agent_id, "args": args, "result": parsed_output},
-            ))
+            if (
+                tool_name == "finish_scan"
+                and status_value == "done"
+                and isinstance(parsed_output, dict)
+                and parsed_output.get("scan_completed")
+                and self.scan_completed_callback is not None
+            ):
+                self.scan_completed_callback()
+            if should_emit_tool_output(tool_name, status_value):
+                self.emit(tool_output(
+                    self.task,
+                    tool_name=tool_name,
+                    tool_run_id=call_id,
+                    status_value=status_value,
+                    line=tool_result_summary(tool_name, parsed_output),
+                    metadata={"agent_id": event_agent_id, "args": args, "result": parsed_output},
+                ))
             self.emit_agent_checkpoint()
 
     def ensure_agent(self, agent_id: str, *, parent_id: str | None = None, name: str | None = None, task: str = "", skills: list[str] | None = None) -> dict[str, Any]:
@@ -148,6 +159,8 @@ class PlatformEventSink:
         agent["current_action"] = tool_call_summary(tool_name, args) if status_value == "running" else tool_result_summary(tool_name, result)
         if status_value == "failed":
             agent["status"] = "failed"
+        elif status_value == "skipped" and agent.get("status") not in {"completed", "failed", "stopped", "crashed"}:
+            agent["status"] = "running"
         elif tool_name == "agent_finish" and status_value == "done":
             agent["status"] = "completed"
         elif tool_name == "finish_scan" and status_value == "done":
@@ -725,6 +738,21 @@ def parse_json_value(value: Any) -> Any:
         return value
 
 
+def tool_status_value(result: Any) -> str:
+    if isinstance(result, dict) and result.get("success") is False:
+        return "failed"
+    status = str(result.get("status") or "").strip().lower() if isinstance(result, dict) else ""
+    if status in {"skipped_duplicate", "skipped", "duplicate"}:
+        return "skipped"
+    return "done"
+
+
+def should_emit_tool_output(tool_name: str, status_value: str) -> bool:
+    if tool_name == "write_stdin" and status_value != "failed":
+        return False
+    return True
+
+
 def short_value(value: Any) -> str:
     if isinstance(value, str):
         text_value = value
@@ -738,7 +766,7 @@ def tool_call_summary(tool_name: str, args: dict[str, Any]) -> str:
     if tool_name == "exec_command":
         return f"Running command: {first_present(args, 'cmd', 'command') or 'shell command'}"
     if tool_name == "write_stdin":
-        return f"Reading command session {first_present(args, 'session_id') or ''}".strip()
+        return f"Sending input to command session {first_present(args, 'session_id') or ''}".strip()
     if tool_name == "create_agent":
         return f"Creating sub-agent: {first_present(args, 'name') or 'agent'}"
     if tool_name == "load_skill":
@@ -772,8 +800,14 @@ def important_tool_progress(tool_name: str, args: dict[str, Any]) -> str:
 def tool_result_summary(tool_name: str, result: Any) -> str:
     name = friendly_tool_name(tool_name)
     if isinstance(result, dict):
+        if result.get("status") in {"skipped_duplicate", "skipped", "duplicate"}:
+            return f"{name} skipped: {first_present(result, 'message', 'reason', 'error') or 'duplicate'}"
         if result.get("success") is False:
-            return f"{name} failed: {first_present(result, 'error', 'message', 'reason') or 'see details'}"
+            detail = first_present(result, "error", "message", "reason") or "see details"
+            errors = result.get("errors")
+            if isinstance(errors, list) and errors:
+                detail = f"{detail}: {'; '.join(str(item) for item in errors[:3])}"
+            return f"{name} failed: {detail}"
         if tool_name == "create_vulnerability_report":
             title = first_present(result, "message", "report_id")
             return f"Finding reported: {title}" if title else "Finding reported"
@@ -804,6 +838,8 @@ def tool_result_summary(tool_name: str, result: Any) -> str:
 
 def friendly_tool_name(tool_name: str) -> str:
     return {
+        "exec_command": "Exec Command",
+        "write_stdin": "Command Input",
         "think": "Planning",
         "load_skill": "Loading skill",
         "web_search": "Web search",
@@ -864,7 +900,11 @@ def tool_command(tool_name: str, args: dict[str, Any], result: Any) -> str:
     if tool_name == "exec_command":
         return first_present(args, "cmd", "command")
     if tool_name == "write_stdin":
-        return first_present(args, "chars", "input") or f"session {first_present(args, 'session_id')}"
+        session_id = first_present(args, "session_id")
+        chars = first_present(args, "chars", "input")
+        if session_id and chars:
+            return f"stdin -> session {session_id}: {chars}"
+        return chars or (f"stdin -> session {session_id}" if session_id else "")
     if isinstance(result, dict):
         return first_present(result, "command", "cmd")
     return ""
