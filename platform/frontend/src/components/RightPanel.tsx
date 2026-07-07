@@ -1,5 +1,5 @@
 import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { Bot, CheckCircle2, ChevronRight, Circle, CircleDashed, GitBranch, Tag, XCircle } from "lucide-react";
+import { Bot, CheckCircle2, Circle, CircleDashed, GitBranch, Tag, XCircle } from "lucide-react";
 import type { SecurityAsset, SecurityVulnerability } from "../lib/securityTypes";
 
 type Tab = "status" | "discoveries" | "activity";
@@ -588,34 +588,41 @@ function StrixAgentList({ agents }: { agents: StrixAgentStatus[] }) {
     const open = expanded[agent.id] ?? true;
     const canToggle = children.length > 0;
     const nextTrail = [...trail, agent.id];
+    const hasVisibleChildren = children.length > 0 && open;
     if (trail.includes(agent.id)) return null;
     return (
-      <div key={agent.id} className={`min-w-0 ${primary ? "" : "relative pl-5"}`}>
+      <div key={agent.id} className="relative min-w-0">
         {!primary && (
           <>
             <svg
               aria-hidden="true"
-              viewBox="0 0 20 28"
-              className="pointer-events-none absolute left-0 top-0 h-7 w-5 text-hairline"
+              viewBox="0 0 26 28"
+              className="pointer-events-none absolute -left-1.5 top-0 h-7 w-[26px] text-hairline"
               fill="none"
             >
-              <path d="M2 0 V12 Q2 18 8 18 H18" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              <path d="M0 0 V14 Q0 20 6 20 H16" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
             </svg>
-            {!lastSibling && <span aria-hidden="true" className="pointer-events-none absolute bottom-0 left-[2px] top-[18px] w-px bg-hairline" />}
+            {!lastSibling && <span aria-hidden="true" className="pointer-events-none absolute bottom-0 -left-1.5 top-[21px] w-px bg-hairline" />}
           </>
         )}
-        <AgentRow
-          agent={agent}
-          primary={primary}
-          secondary={!primary}
-          childCount={children.length}
-          expanded={open}
-          onToggle={canToggle ? () => setExpanded((current) => ({ ...current, [agent.id]: !open })) : undefined}
-        />
+        <div className="relative">
+          {hasVisibleChildren && <span aria-hidden="true" className="pointer-events-none absolute bottom-0 left-[18px] top-[26px] w-px bg-hairline" />}
+          <AgentRow
+            agent={agent}
+            primary={primary}
+            secondary={!primary}
+            childCount={children.length}
+            expanded={open}
+            onToggle={canToggle ? () => setExpanded((current) => ({ ...current, [agent.id]: !open })) : undefined}
+          />
+        </div>
         {children.length > 0 && (
-          <div className={`${open ? "block" : "hidden"} mt-1 space-y-1 pl-4`}>
-            {children.map((child, index) => renderAgentNode(child, false, nextTrail, index === children.length - 1))}
-          </div>
+          <>
+            {open && <span aria-hidden="true" className="pointer-events-none block h-1 w-px bg-hairline ml-[18px]" />}
+            <div className={`${open ? "block" : "hidden"} space-y-1 pl-6`}>
+              {children.map((child, index) => renderAgentNode(child, false, nextTrail, index === children.length - 1))}
+            </div>
+          </>
         )}
       </div>
     );
@@ -644,8 +651,7 @@ function AgentRow({
 }) {
   const summary = summarizeAgentAction(agent);
   const status = agentStatusLabel(agent.status);
-  const showToggle = !primary && Boolean(onToggle);
-  const rowInteractive = primary && Boolean(onToggle);
+  const rowInteractive = Boolean(onToggle);
   const handleRowKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (!rowInteractive) return;
     if (event.key !== "Enter" && event.key !== " ") return;
@@ -654,7 +660,7 @@ function AgentRow({
   };
   return (
     <div
-      className={`min-w-0 rounded-md py-2 pr-2 ${primary ? `pl-3.5 bg-canvas-inset ${rowInteractive ? "cursor-pointer hover:bg-surface-default focus-visible:outline focus-visible:outline-2 focus-visible:outline-status-running/40" : ""}` : "pl-2 bg-transparent hover:bg-canvas-inset"}`}
+      className={`min-w-0 rounded-md py-2 pr-2 pl-3.5 bg-transparent ${rowInteractive ? "cursor-pointer hover:bg-canvas-inset focus-visible:outline focus-visible:outline-2 focus-visible:outline-status-running/40" : "hover:bg-canvas-inset"}`}
       onClick={rowInteractive ? onToggle : undefined}
       onKeyDown={handleRowKeyDown}
       role={rowInteractive ? "button" : undefined}
@@ -662,16 +668,6 @@ function AgentRow({
       aria-expanded={rowInteractive ? expanded : undefined}
     >
       <div className="flex min-w-0 items-start gap-2">
-        {showToggle && (
-          <button
-            type="button"
-            onClick={onToggle}
-            className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-ink-muted hover:bg-surface-elevated hover:text-ink"
-            aria-label={expanded ? "Collapse sub-agents" : "Expand sub-agents"}
-          >
-            <ChevronRight className={`h-3.5 w-3.5 transition-transform ${expanded ? "rotate-90" : ""}`} />
-          </button>
-        )}
         <span aria-hidden="true" className={`mt-2 h-2 w-2 shrink-0 rounded-full ${agentStatusDotClass(agent.status)}`} />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-start justify-between gap-2">
@@ -683,7 +679,7 @@ function AgentRow({
               <p className="mt-0.5 text-xs text-ink-secondary">{summary}</p>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
-              {primary && childCount > 0 && <span className="font-mono text-[10px] text-ink-muted" title={`${childCount} sub-agents`}>{childCount}</span>}
+              {childCount > 0 && <span className="font-mono text-[10px] text-ink-muted" title={`${childCount} sub-agents`}>{childCount}</span>}
               <span className={`rounded-sm px-1.5 py-0.5 text-[10px] font-medium uppercase ${agentStatusBadgeClass(agent.status)}`}>{status}</span>
             </div>
           </div>

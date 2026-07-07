@@ -126,6 +126,88 @@ def _sorted_todos(agent_id: str) -> list[dict[str, Any]]:
     return todos_list
 
 
+def validate_todo_exists(*, owner_agent_id: str, todo_id: str) -> str:
+    """Return a normalized todo ID if it exists for the owner."""
+    clean_id = str(todo_id or "").strip()
+    if not clean_id:
+        raise ValueError("todo_id cannot be empty")
+    if clean_id not in _get_agent_todos(owner_agent_id):
+        raise ValueError(f"Todo with ID '{clean_id}' not found")
+    return clean_id
+
+
+def create_bound_todo(
+    *,
+    owner_agent_id: str,
+    title: str,
+    description: str | None = None,
+    priority: str | None = None,
+    linked_agent_id: str,
+) -> dict[str, Any]:
+    """Create an in-progress parent todo assigned to a child agent."""
+    clean_title = str(title or "").strip()
+    if not clean_title:
+        raise ValueError("Todo title cannot be empty")
+    normalized_priority = _normalize_priority(priority)
+    timestamp = datetime.now(UTC).isoformat()
+    todo_id = str(uuid.uuid4())[:6]
+    todo = {
+        "title": clean_title,
+        "description": str(description or "").strip() or None,
+        "priority": normalized_priority,
+        "status": "in_progress",
+        "created_at": timestamp,
+        "updated_at": timestamp,
+        "started_at": timestamp,
+        "completed_at": None,
+        "linked_agent_id": str(linked_agent_id),
+    }
+    _get_agent_todos(owner_agent_id)[todo_id] = todo
+    _persist()
+    return {**todo, "todo_id": todo_id}
+
+
+def bind_todo_to_agent(
+    *,
+    owner_agent_id: str,
+    todo_id: str,
+    linked_agent_id: str,
+) -> dict[str, Any]:
+    """Assign an existing parent todo to a child agent and mark it active."""
+    clean_id = validate_todo_exists(owner_agent_id=owner_agent_id, todo_id=todo_id)
+    agent_todos = _get_agent_todos(owner_agent_id)
+    timestamp = datetime.now(UTC).isoformat()
+    todo = agent_todos[clean_id]
+    todo["linked_agent_id"] = str(linked_agent_id)
+    todo["status"] = "in_progress"
+    todo["started_at"] = todo.get("started_at") or timestamp
+    todo["completed_at"] = None
+    todo["updated_at"] = timestamp
+    _persist()
+    return {**todo, "todo_id": clean_id}
+
+
+def complete_bound_todos(*, linked_agent_id: str, success: bool = True) -> list[dict[str, Any]]:
+    """Complete todos assigned to a child agent after successful agent_finish."""
+    if not success:
+        return []
+    timestamp = datetime.now(UTC).isoformat()
+    completed: list[dict[str, Any]] = []
+    for owner_agent_id, agent_todos in _todos_storage.items():
+        for todo_id, todo in agent_todos.items():
+            if str(todo.get("linked_agent_id") or "") != str(linked_agent_id):
+                continue
+            if todo.get("status") == "done":
+                continue
+            todo["status"] = "done"
+            todo["completed_at"] = timestamp
+            todo["updated_at"] = timestamp
+            completed.append({**todo, "todo_id": todo_id, "owner_agent_id": owner_agent_id})
+    if completed:
+        _persist()
+    return completed
+
+
 def _normalize_todo_ids(raw_ids: Any) -> list[str]:
     if raw_ids is None:
         return []

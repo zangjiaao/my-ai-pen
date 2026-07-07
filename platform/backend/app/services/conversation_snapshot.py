@@ -375,6 +375,8 @@ def strix_todos_from_checkpoint(checkpoint: dict) -> list[dict]:
             "created_at": str(item.get("created_at") or ""),
             "updated_at": str(item.get("updated_at") or ""),
             "completed_at": str(item.get("completed_at") or ""),
+            "started_at": str(item.get("started_at") or ""),
+            "linked_agent_id": str(item.get("linked_agent_id") or ""),
         })
     return normalized
 
@@ -403,6 +405,7 @@ def strix_todos_plan_tree(checkpoint: dict) -> list[dict]:
             "source": "strix_todo",
             "priority": strix_priority(item.get("priority"), index),
             "agent_id": item.get("agent_id") or "",
+            "linked_agent_id": item.get("linked_agent_id") or "",
             "created_at": item.get("created_at") or "",
             "updated_at": item.get("updated_at") or "",
         })

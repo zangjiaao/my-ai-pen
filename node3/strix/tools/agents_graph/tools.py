@@ -14,7 +14,13 @@ from agents import RunContextWrapper, function_tool
 
 from strix.core.agents import Status, coordinator_from_context
 from strix.skills import validate_requested_skills
-from strix.tools.todo.tools import unfinished_todos_for_agent
+from strix.tools.todo.tools import (
+    bind_todo_to_agent,
+    complete_bound_todos,
+    create_bound_todo,
+    unfinished_todos_for_agent,
+    validate_todo_exists,
+)
 
 
 _ACTIVE_STATUSES: frozenset[str] = frozenset({"running", "waiting"})
@@ -359,6 +365,8 @@ async def create_agent(
     task: str,
     inherit_context: bool = True,
     skills: list[str] | None = None,
+    todo_id: str | None = None,
+    task_priority: Literal["low", "normal", "high", "critical"] = "normal",
 ) -> str:
     """Spawn a specialist child agent to run in parallel.
 
@@ -399,6 +407,10 @@ async def create_agent(
             when starting a clean-slate task.
         skills: List of skill names (e.g. ``["xss", "sql_injection"]``).
             Max 5; prefer 1-3.
+        todo_id: Optional parent todo to bind to this child. If omitted,
+            a new in-progress todo is created automatically and is marked
+            done when the child calls ``agent_finish(success=true)``.
+        task_priority: Priority for the automatically created todo.
     """
     inner = _ctx(ctx)
     coordinator = coordinator_from_context(inner)
@@ -429,6 +441,15 @@ async def create_agent(
             ensure_ascii=False,
             default=str,
         )
+    if todo_id:
+        try:
+            todo_id = validate_todo_exists(owner_agent_id=str(parent_id), todo_id=todo_id)
+        except ValueError as e:
+            return json.dumps(
+                {"success": False, "error": f"Failed to bind todo: {e!s}", "agent_id": None},
+                ensure_ascii=False,
+                default=str,
+            )
 
     parent_history = list(ctx.turn_input) if inherit_context and ctx.turn_input else []
     try:
@@ -447,13 +468,56 @@ async def create_agent(
             default=str,
         )
 
+    child_id = str(result.get("agent_id") or "").strip()
+    tracking = "none"
+    assigned_todo_id = ""
+    if child_id and result.get("success") is not False:
+        try:
+            if todo_id:
+                bound = bind_todo_to_agent(
+                    owner_agent_id=str(parent_id),
+                    todo_id=todo_id,
+                    linked_agent_id=child_id,
+                )
+                tracking = "bound"
+            else:
+                bound = create_bound_todo(
+                    owner_agent_id=str(parent_id),
+                    title=name,
+                    description=task,
+                    priority=task_priority,
+                    linked_agent_id=child_id,
+                )
+                tracking = "created"
+            assigned_todo_id = str(bound.get("todo_id") or "")
+            await coordinator.update_metadata(
+                child_id,
+                assigned_todo_id=assigned_todo_id,
+                assigned_todo_owner_id=str(parent_id),
+            )
+        except Exception as e:
+            logger.exception("create_agent: failed to bind todo for child '%s'", name)
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": f"child spawned but task tracking failed: {e!s}",
+                    "agent_id": child_id,
+                },
+                ensure_ascii=False,
+                default=str,
+            )
+    result["todo_id"] = assigned_todo_id or None
+    result["task_tracking"] = tracking
+
     logger.info(
-        "create_agent: spawned %s (%s) parent=%s skills=%d task_len=%d",
-        result.get("agent_id"),
+        "create_agent: spawned %s (%s) parent=%s skills=%d task_len=%d todo=%s tracking=%s",
+        child_id or result.get("agent_id"),
         name,
         parent_id or "-",
         len(skill_list),
         len(task or ""),
+        assigned_todo_id or "-",
+        tracking,
     )
 
     return json.dumps(
@@ -554,6 +618,7 @@ async def agent_finish(
         )
 
     parent_notified = False
+    completed_todos: list[dict[str, Any]] = []
     if report_to_parent:
         async with coordinator._lock:
             agent_name = coordinator.names.get(me, me)
@@ -578,12 +643,15 @@ async def agent_finish(
         )
         parent_notified = True
 
+    completed_todos = complete_bound_todos(linked_agent_id=str(me), success=success)
+
     logger.info(
-        "agent_finish: %s success=%s findings=%d parent_notified=%s",
+        "agent_finish: %s success=%s findings=%d parent_notified=%s completed_todos=%d",
         me,
         success,
         len(findings or []),
         parent_notified,
+        len(completed_todos),
     )
     await coordinator.set_status(me, "completed")
 
@@ -596,6 +664,7 @@ async def agent_finish(
             "summary": result_summary,
             "findings_count": len(findings or []),
             "has_recommendations": bool(final_recommendations),
+            "completed_todo_ids": [todo.get("todo_id") for todo in completed_todos],
         },
         ensure_ascii=False,
         default=str,

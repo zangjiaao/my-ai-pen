@@ -71,7 +71,9 @@ class AgentCoordinator:
         *,
         task: str | None = None,
         skills: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
+        extra_metadata = dict(metadata or {})
         async with self._lock:
             self.statuses[agent_id] = "running"
             self.parent_of[agent_id] = parent_id
@@ -80,10 +82,23 @@ class AgentCoordinator:
             self.metadata[agent_id] = {
                 "task": task or "",
                 "skills": list(skills or []),
+                **extra_metadata,
             }
             self.runtimes.setdefault(agent_id, AgentRuntime())
         logger.info("agent.register %s (%s) parent=%s", agent_id, name, parent_id or "-")
         await self._maybe_snapshot()
+
+    async def update_metadata(self, agent_id: str, **metadata: Any) -> None:
+        async with self._lock:
+            if agent_id not in self.statuses:
+                return
+            current = self.metadata.setdefault(agent_id, {})
+            current.update({key: value for key, value in metadata.items() if value is not None})
+        await self._maybe_snapshot()
+
+    async def agent_metadata(self, agent_id: str) -> dict[str, Any]:
+        async with self._lock:
+            return dict(self.metadata.get(agent_id, {}))
 
     async def attach_runtime(
         self,

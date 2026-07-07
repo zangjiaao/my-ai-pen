@@ -545,6 +545,8 @@ def normalize_todos(raw: Any) -> list[dict[str, Any]]:
             "created_at": string_value(item.get("created_at")),
             "updated_at": string_value(item.get("updated_at")),
             "completed_at": string_value(item.get("completed_at")),
+            "started_at": string_value(item.get("started_at")),
+            "linked_agent_id": string_value(item.get("linked_agent_id")),
         }
         items.append(normalized)
     return sorted(items, key=lambda item: (priority_rank(item.get("priority")), str(item.get("created_at") or ""), str(item.get("title") or "")))
@@ -820,7 +822,7 @@ def tool_result_summary(tool_name: str, result: Any) -> str:
         if tool_name == "wait_for_message":
             return first_present(result, "message", "wait_outcome") or "Sub-agent response received"
         if tool_name == "agent_finish":
-            return f"Sub-agent finished: {first_present(result, 'result_summary', 'message') or 'results returned'}"
+            return f"Sub-agent finished: {first_present(result, 'summary', 'result_summary', 'message') or 'results returned'}"
         summary = first_present(result, "message", "summary", "status", "title")
         if summary:
             return f"{name}: {summary}"
@@ -922,6 +924,9 @@ def summarize_result_payload(result: dict[str, Any]) -> dict[str, Any]:
         "report_id",
         "agent_id",
         "name",
+        "todo_id",
+        "task_tracking",
+        "completed_todo_ids",
         "wait_outcome",
         "result_summary",
         "findings",

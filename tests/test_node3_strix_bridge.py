@@ -17,6 +17,7 @@ from strix.platform.node_protocol import (  # noqa: E402
     agent_graph_from_file,
     checkpoint,
     notes_from_file,
+    runtime_checkpoint,
     tool_status_value,
     tool_result_summary,
     todos_from_file,
@@ -269,6 +270,8 @@ def test_bridge_checkpoint_includes_strix_state_artifacts(tmp_path):
                 "status": "pending",
                 "created_at": "2026-07-06T10:00:00Z",
                 "updated_at": "2026-07-06T10:00:00Z",
+                "started_at": "2026-07-06T10:01:00Z",
+                "linked_agent_id": "child",
             },
         },
     }), encoding="utf-8")
@@ -313,9 +316,37 @@ def test_bridge_checkpoint_includes_strix_state_artifacts(tmp_path):
     node3 = payload["checkpoint"]["node3_strix"]
     assert node3["todos"][0]["agent_id"] == "root"
     assert node3["todos"][0]["priority"] == "high"
+    assert node3["todos"][0]["started_at"] == "2026-07-06T10:01:00Z"
+    assert node3["todos"][0]["linked_agent_id"] == "child"
     assert node3["notes"][0]["category"] == "findings"
     assert node3["vulnerabilities"][0]["endpoint"] == "/login.php"
     assert node3["vulnerabilities"][0]["technical_analysis"] == "Input is concatenated into SQL."
+
+
+def test_runtime_checkpoint_includes_bound_todo_metadata(tmp_path):
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    (state_dir / "todos.json").write_text(json.dumps({
+        "root": {
+            "todo-1": {
+                "title": "Validate child task",
+                "priority": "normal",
+                "status": "in_progress",
+                "created_at": "2026-07-06T10:00:00Z",
+                "updated_at": "2026-07-06T10:01:00Z",
+                "started_at": "2026-07-06T10:01:00Z",
+                "linked_agent_id": "child",
+            },
+        },
+    }), encoding="utf-8")
+    task = {"task_id": "task-1", "conversation_id": "conv-1"}
+
+    payload = runtime_checkpoint(task, "run-1", str(tmp_path))
+
+    todos = payload["checkpoint"]["node3_strix"]["todos"]
+    assert todos[0]["status"] == "running"
+    assert todos[0]["started_at"] == "2026-07-06T10:01:00Z"
+    assert todos[0]["linked_agent_id"] == "child"
 
 
 def test_runtime_checkpoint_sends_interrupted_run_status(tmp_path):
@@ -747,6 +778,155 @@ def test_create_todo_is_atomic_and_accepts_medium_priority(tmp_path):
     assert next(iter(persisted["root"].values()))["priority"] == "normal"
 
 
+def test_bound_todo_helpers_complete_successful_child_task(tmp_path):
+    todo_tools.hydrate_todos_from_disk(tmp_path)
+
+    created = todo_tools.create_bound_todo(
+        owner_agent_id="root",
+        title="Validate endpoint",
+        description="Run focused checks",
+        priority="high",
+        linked_agent_id="child",
+    )
+    assert created["status"] == "in_progress"
+    assert created["linked_agent_id"] == "child"
+
+    skipped = todo_tools.complete_bound_todos(linked_agent_id="child", success=False)
+    assert skipped == []
+    pending = json.loads((tmp_path / "todos.json").read_text(encoding="utf-8"))
+    assert pending["root"][created["todo_id"]]["status"] == "in_progress"
+
+    completed = todo_tools.complete_bound_todos(linked_agent_id="child", success=True)
+    assert completed[0]["todo_id"] == created["todo_id"]
+    persisted = json.loads((tmp_path / "todos.json").read_text(encoding="utf-8"))
+    assert persisted["root"][created["todo_id"]]["status"] == "done"
+    assert persisted["root"][created["todo_id"]]["completed_at"]
+
+
+def test_create_agent_creates_bound_parent_todo(tmp_path):
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        todo_tools.hydrate_todos_from_disk(tmp_path)
+
+        async def spawner(**kwargs):
+            await coordinator.register(
+                "child",
+                kwargs["name"],
+                kwargs["parent_ctx"]["agent_id"],
+                task=kwargs["task"],
+                skills=kwargs["skills"],
+            )
+            return {"success": True, "agent_id": "child", "name": kwargs["name"]}
+
+        ctx = ToolContext(
+            context={"agent_id": "root", "coordinator": coordinator, "spawn_child_agent": spawner},
+            tool_name="create_agent",
+            tool_call_id="call-agent",
+            tool_arguments="{}",
+        )
+        result = await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({
+                "name": "XSS Agent",
+                "task": "Validate XSS on /search",
+                "skills": ["xss"],
+                "task_priority": "high",
+            }),
+        )
+        metadata = await coordinator.agent_metadata("child")
+        return json.loads(result), metadata
+
+    result, metadata = asyncio.run(run())
+
+    assert result["success"] is True
+    assert result["task_tracking"] == "created"
+    assert result["todo_id"]
+    assert metadata["assigned_todo_id"] == result["todo_id"]
+    persisted = json.loads((tmp_path / "todos.json").read_text(encoding="utf-8"))
+    todo = persisted["root"][result["todo_id"]]
+    assert todo["title"] == "XSS Agent"
+    assert todo["status"] == "in_progress"
+    assert todo["linked_agent_id"] == "child"
+
+
+def test_create_agent_binds_existing_parent_todo(tmp_path):
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        todo_tools.hydrate_todos_from_disk(tmp_path)
+        todo_ctx = ToolContext(
+            context={"agent_id": "root"},
+            tool_name="create_todo",
+            tool_call_id="call-todo",
+            tool_arguments="{}",
+        )
+        created = await todo_tools.create_todo.on_invoke_tool(
+            todo_ctx,
+            json.dumps({"todos": [{"title": "Existing task", "priority": "normal"}]}),
+        )
+        todo_id = json.loads(created)["created"][0]["todo_id"]
+
+        async def spawner(**kwargs):
+            await coordinator.register("child", kwargs["name"], "root")
+            return {"success": True, "agent_id": "child", "name": kwargs["name"]}
+
+        ctx = ToolContext(
+            context={"agent_id": "root", "coordinator": coordinator, "spawn_child_agent": spawner},
+            tool_name="create_agent",
+            tool_call_id="call-agent",
+            tool_arguments="{}",
+        )
+        result = await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({"name": "Existing Agent", "task": "Do existing work", "todo_id": todo_id}),
+        )
+        return json.loads(result), todo_id
+
+    result, todo_id = asyncio.run(run())
+
+    assert result["task_tracking"] == "bound"
+    assert result["todo_id"] == todo_id
+    persisted = json.loads((tmp_path / "todos.json").read_text(encoding="utf-8"))
+    assert len(persisted["root"]) == 1
+    assert persisted["root"][todo_id]["status"] == "in_progress"
+    assert persisted["root"][todo_id]["linked_agent_id"] == "child"
+
+
+def test_create_agent_rejects_unknown_todo_before_spawning(tmp_path):
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        todo_tools.hydrate_todos_from_disk(tmp_path)
+        spawned = False
+
+        async def spawner(**kwargs):
+            nonlocal spawned
+            spawned = True
+            return {"success": True, "agent_id": "child", "name": kwargs["name"]}
+
+        ctx = ToolContext(
+            context={"agent_id": "root", "coordinator": coordinator, "spawn_child_agent": spawner},
+            tool_name="create_agent",
+            tool_call_id="call-agent",
+            tool_arguments="{}",
+        )
+        result = await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({"name": "Unknown Todo Agent", "task": "Do work", "todo_id": "missing"}),
+        )
+        _, statuses, _ = await coordinator.graph_snapshot()
+        return json.loads(result), spawned, statuses
+
+    result, spawned, statuses = asyncio.run(run())
+
+    assert result["success"] is False
+    assert result["agent_id"] is None
+    assert "Todo with ID 'missing' not found" in result["error"]
+    assert spawned is False
+    assert statuses == {"root": "running"}
+
+
 def test_stop_agent_requires_force_for_active_child():
     async def run():
         coordinator = AgentCoordinator()
@@ -879,6 +1059,73 @@ def test_agent_finish_blocks_unresolved_todos(tmp_path):
     assert result["agent_completed"] is False
     assert result["unfinished_todos"][0]["title"] == "Validate endpoint"
     assert statuses["child"] == "running"
+
+
+def test_agent_finish_completes_bound_parent_todo(tmp_path):
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        await coordinator.register("child", "child", "root")
+        todo_tools.hydrate_todos_from_disk(tmp_path)
+        created = todo_tools.create_bound_todo(
+            owner_agent_id="root",
+            title="Child assignment",
+            description="Assigned work",
+            linked_agent_id="child",
+        )
+
+        finish_ctx = ToolContext(
+            context={"agent_id": "child", "parent_id": "root", "coordinator": coordinator},
+            tool_name="agent_finish",
+            tool_call_id="call-finish",
+            tool_arguments="{}",
+        )
+        result = await agent_tools.agent_finish.on_invoke_tool(
+            finish_ctx,
+            json.dumps({"result_summary": "done", "success": True}),
+        )
+        _, statuses, _ = await coordinator.graph_snapshot()
+        return json.loads(result), statuses, created["todo_id"]
+
+    result, statuses, todo_id = asyncio.run(run())
+
+    assert result["success"] is True
+    assert result["completed_todo_ids"] == [todo_id]
+    assert statuses["child"] == "completed"
+    persisted = json.loads((tmp_path / "todos.json").read_text(encoding="utf-8"))
+    assert persisted["root"][todo_id]["status"] == "done"
+
+
+def test_agent_finish_failure_does_not_complete_bound_parent_todo(tmp_path):
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        await coordinator.register("child", "child", "root")
+        todo_tools.hydrate_todos_from_disk(tmp_path)
+        created = todo_tools.create_bound_todo(
+            owner_agent_id="root",
+            title="Child assignment",
+            linked_agent_id="child",
+        )
+
+        finish_ctx = ToolContext(
+            context={"agent_id": "child", "parent_id": "root", "coordinator": coordinator},
+            tool_name="agent_finish",
+            tool_call_id="call-finish",
+            tool_arguments="{}",
+        )
+        result = await agent_tools.agent_finish.on_invoke_tool(
+            finish_ctx,
+            json.dumps({"result_summary": "blocked", "success": False}),
+        )
+        return json.loads(result), created["todo_id"]
+
+    result, todo_id = asyncio.run(run())
+
+    assert result["success"] is True
+    assert result["completed_todo_ids"] == []
+    persisted = json.loads((tmp_path / "todos.json").read_text(encoding="utf-8"))
+    assert persisted["root"][todo_id]["status"] == "in_progress"
 
 
 def test_reporting_shim_calculates_cvss_and_persists(monkeypatch):
@@ -1078,6 +1325,15 @@ def test_tool_result_summary_includes_validation_errors():
 
     assert "Validation failed" in summary
     assert "Invalid attack_vector" in summary
+
+
+def test_agent_finish_tool_result_summary_uses_summary_field():
+    summary = tool_result_summary("agent_finish", {
+        "success": True,
+        "summary": "validated login endpoint",
+    })
+
+    assert summary == "Sub-agent finished: validated login endpoint"
 
 
 def test_tool_status_value_treats_duplicate_as_skipped():
