@@ -16,6 +16,24 @@ from strix.tools.todo.tools import unfinished_todos_for_agent
 logger = logging.getLogger(__name__)
 
 
+def _finish_quality_gate() -> dict[str, Any] | None:
+    try:
+        from strix.platform.node_runner import completion_gate_for_run
+        from strix.report.state import get_global_report_state
+    except ImportError:
+        return None
+
+    report_state = get_global_report_state()
+    if report_state is None or not hasattr(report_state, "get_run_dir"):
+        return None
+    try:
+        run_dir = report_state.get_run_dir()
+    except Exception:
+        logger.exception("finish_scan quality gate could not resolve run_dir")
+        return None
+    return completion_gate_for_run(run_dir)
+
+
 def _do_finish(
     *,
     parent_id: str | None,
@@ -113,7 +131,14 @@ async def finish_scan(
     2. All vulnerabilities you found are filed via
        ``create_vulnerability_report`` (un-reported findings are not
        tracked and not credited).
-    3. Don't double-report — one report per distinct vulnerability.
+    3. Call ``list_memory(kind="summary")`` and make sure the run has
+       attack-surface and coverage ledger entries. If a discovered endpoint,
+       form, auth route, admin route, upload point, API route, or service is
+       missing from memory, record it before finishing.
+    4. Each meaningful positive or negative test has a ``record_coverage``
+       entry. Confirmed vulnerability reports must cite real ``evidence_ids``
+       returned by ``record_evidence``; do not invent evidence IDs.
+    5. Don't double-report - one report per distinct vulnerability.
 
     **Calling this multiple times overwrites the previous report.**
     Make the single call comprehensive.
@@ -197,6 +222,22 @@ async def finish_scan(
                 ensure_ascii=False,
                 default=str,
             )
+
+    quality_gate = await asyncio.to_thread(_finish_quality_gate)
+    if quality_gate is not None and not quality_gate.get("ok"):
+        return json.dumps(
+            {
+                "success": False,
+                "scan_completed": False,
+                "error": (
+                    "Cannot finish scan because evidence and memory quality gates did not pass. "
+                    "Record attack surface, coverage, evidence, and cite real evidence_ids before finishing"
+                ),
+                "completion_gate": quality_gate,
+            },
+            ensure_ascii=False,
+            default=str,
+        )
 
     result = await asyncio.to_thread(
         _do_finish,

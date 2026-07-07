@@ -148,11 +148,12 @@ COMBINED MODE (code + deployed target present):
 ASSESSMENT METHODOLOGY:
 1. Scope definition - Clearly establish boundaries first
 2. Reconnaissance and mapping first - In normal testing, perform strong reconnaissance and attack-surface mapping before active vulnerability discovery or deep validation
-3. Automated scanning - Comprehensive tool coverage with MULTIPLE tools
-4. Targeted validation - Focus on high-impact vulnerabilities
-5. Continuous iteration - Loop back with new insights
-6. Impact documentation - Assess business context
-7. EXHAUSTIVE TESTING - Try every possible combination and approach
+3. Memory ledger - Record discovered endpoints/forms/services with `record_attack_surface`, proof artifacts with `record_evidence`, and tested endpoint/parameter/vulnerability combinations with `record_coverage`
+4. Automated scanning - Comprehensive tool coverage with MULTIPLE tools
+5. Targeted validation - Focus on high-impact vulnerabilities
+6. Continuous iteration - Loop back with new insights
+7. Impact documentation - Assess business context
+8. EXHAUSTIVE TESTING - Try every possible combination and approach
 
 OPERATIONAL PRINCIPLES:
 - Choose appropriate tools for each context
@@ -168,6 +169,7 @@ OPERATIONAL PRINCIPLES:
 - WORK METHODICALLY - Don't stop at shallow checks when deeper in-scope validation is warranted
 - Continue iterating until the most promising in-scope vectors have been properly assessed
 - Try multiple approaches simultaneously - don't wait for one to fail
+- Maintain structured memory as you work: use `list_memory` before planning a new phase, record each meaningful attack surface, and update coverage for both positive and validated negative tests
 {% if system_prompt_context.web_search_available %}
 - Continuously research payloads, bypasses, and validation techniques with the web_search tool; integrate findings into automated testing and confirmation
 {% else %}
@@ -185,6 +187,8 @@ EFFICIENCY TACTICS:
 - Use `exec_command` for Python code: write reusable scripts under
   `/workspace/scratch/` and run them with `python3`. For one-off snippets,
   `python3 -c` or a here-document is acceptable.
+- The shell execution tool is named `exec_command`. There is no
+  `execute_command` tool. Never call `execute_command`.
 - For Caido proxy automation inside Python, explicitly import from
   `caido_api`:
   `from caido_api import list_requests, view_request, repeat_request, list_sitemap, view_sitemap_entry, scope_rules`
@@ -204,6 +208,9 @@ EFFICIENCY TACTICS:
 VALIDATION REQUIREMENTS:
 - Full validation required - no assumptions
 - Demonstrate concrete impact with evidence
+- Before `create_vulnerability_report`, call `record_evidence` for the decisive proof and pass the returned `evidence_ids` into the report
+- For each tested endpoint/parameter/vulnerability class, call `record_coverage` with status `passed`, `failed`, `blocked`, or `skipped`; do not rely on free-form notes as the only memory
+- For every discovered endpoint, form, auth route, admin route, upload point, API route, or service, call `record_attack_surface` with method, parameters, auth_state, and evidence_ids when known
 - Consider business context for severity assessment
 - Independent verification through subagent
 - Document complete attack chain

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import os
 import time
 from collections.abc import AsyncIterator
@@ -27,13 +28,19 @@ from strix.platform.node_protocol import (
     runtime_checkpoint,
     send,
     text,
+    todos_from_file,
 )
 from strix.profiles import infer_target_profile, load_target_profile
 from strix.report.state import ReportState, set_global_report_state
 from strix.runtime import session_manager
+from strix.tools.run_memory.tools import attack_surface_from_file, coverage_from_file, evidence_from_file
 
 
 HOST_GATEWAY_HOSTNAME = "host.docker.internal"
+COMPLETION_WATCH_INTERVAL_SECONDS = 2.0
+COMPLETION_FLUSH_TIMEOUT_SECONDS = 10.0
+TERMINAL_TODO_STATUSES = {"done", "blocked", "failed", "skipped"}
+MEANINGFUL_COVERAGE_STATUSES = {"tried", "passed", "failed"}
 
 
 def stable_platform_run_name(conversation_id: str) -> str:
@@ -70,6 +77,7 @@ class StrixPlatformConversationSession:
         self.run_dir = ""
         self.run_task: asyncio.Task[None] | None = None
         self.pump_task: asyncio.Task[None] | None = None
+        self.completion_watch_task: asyncio.Task[None] | None = None
         self.started_at = time.monotonic()
         self._completion_sent = False
         self._closed = False
@@ -86,6 +94,8 @@ class StrixPlatformConversationSession:
             return
         if self.pump_task is None or self.pump_task.done():
             self.pump_task = asyncio.create_task(self.sink.pump())
+        if self.completion_watch_task is None or self.completion_watch_task.done():
+            self.completion_watch_task = asyncio.create_task(self._watch_scan_completion())
         self.run_task = asyncio.create_task(self._run())
 
     async def send_user_message(self, task: dict[str, Any]) -> bool:
@@ -144,6 +154,10 @@ class StrixPlatformConversationSession:
             with contextlib.suppress(Exception):
                 await session_manager.cleanup(self.run_name)
         await self.sink.close()
+        if self.completion_watch_task is not None and not self.completion_watch_task.done():
+            self.completion_watch_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.completion_watch_task
         if self.pump_task is not None:
             await self.pump_task
 
@@ -275,25 +289,80 @@ class StrixPlatformConversationSession:
             self._completion_sent = True
             asyncio.create_task(self._on_scan_completed())
 
+    async def _watch_scan_completion(self) -> None:
+        while not self._closed and not self._completion_sent:
+            await asyncio.sleep(COMPLETION_WATCH_INTERVAL_SECONDS)
+            if self._report_state_scan_completed():
+                self._schedule_scan_completed()
+                return
+
+    def _report_state_scan_completed(self) -> bool:
+        if self.report_state is None:
+            return False
+
+        record = dict(self.report_state.run_record or {})
+        if not self._record_is_scan_completed(record):
+            run_dir = Path(self.run_dir) if self.run_dir else self.report_state.get_run_dir()
+            run_json = run_dir / "run.json"
+            if run_json.exists():
+                try:
+                    loaded = json.loads(run_json.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    loaded = {}
+                if isinstance(loaded, dict):
+                    record = loaded
+
+        if not self._record_is_scan_completed(record):
+            return False
+
+        self.report_state.run_record.update(record)
+        scan_results = record.get("scan_results")
+        if isinstance(scan_results, dict):
+            self.report_state.scan_results = scan_results
+            self.report_state.final_scan_result = self.report_state._format_final_scan_result(scan_results)
+        if isinstance(record.get("end_time"), str):
+            self.report_state.end_time = record["end_time"]
+        return True
+
+    @staticmethod
+    def _record_is_scan_completed(record: dict[str, Any]) -> bool:
+        scan_results = record.get("scan_results")
+        return (
+            record.get("status") == "completed"
+            and isinstance(scan_results, dict)
+            and scan_results.get("scan_completed") is True
+        )
+
+    async def _flush_sink(self) -> None:
+        try:
+            await asyncio.wait_for(self.sink.flush(), timeout=COMPLETION_FLUSH_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            pass
+
     async def _on_scan_completed(self) -> None:
         if self.report_state is None:
             return
-        await self.sink.flush()
+        await self._flush_sink()
         await emit_final_artifacts(self.ws, self.task, self.run_name, self.report_state)
         finding_count = len(self.report_state.vulnerability_reports)
-        await self._send_checkpoint("scan_completed")
+        completion_gate = self._completion_gate()
+        task_status = "completed" if completion_gate["ok"] else "incomplete"
+        await self._send_checkpoint("scan_completed" if completion_gate["ok"] else "scan_incomplete")
         await send(self.ws, text(
             self.task,
-            f"Strix scan report completed with {finding_count} vulnerabilities. The conversation remains attached for follow-up.",
+            completion_text(finding_count, completion_gate),
         ))
         await send(self.ws, {
             "type": "task_complete",
             "conversation_id": self.conversation_id,
             "task_id": self.task["task_id"],
-            "status": "completed",
-            "summary": (
-                f"Node3 Strix scan completed in {format_duration(time.monotonic() - self.started_at)}. "
-                f"Run: {self.run_name}. Findings: {finding_count}. Session remains available for follow-up."
+            "status": task_status,
+            "summary": completion_summary(
+                task_status,
+                self.run_name,
+                finding_count,
+                time.monotonic() - self.started_at,
+                completion_gate,
             ),
         })
 
@@ -313,6 +382,12 @@ class StrixPlatformConversationSession:
                 "status": status,
             },
         )
+
+    def _completion_gate(self) -> dict[str, Any]:
+        if self.report_state is None:
+            return {"ok": True, "unfinished_todos": [], "unfinished_count": 0}
+        run_dir = Path(self.run_dir) if self.run_dir else self.report_state.get_run_dir()
+        return completion_gate_for_run(run_dir)
 
 
 async def run_platform_scan(ws: Any, task: dict[str, Any], config: Any) -> None:
@@ -395,14 +470,29 @@ async def run_platform_scan(ws: Any, task: dict[str, Any], config: Any) -> None:
             await sink.flush()
             await emit_final_artifacts(ws, task, run_name, report_state)
             finding_count = len(report_state.vulnerability_reports)
-            await send_runtime_checkpoint(ws, task, sink, report_state, run_name)
-            await send(ws, text(task, f"Strix 扫描完成，已记录 {finding_count} 个漏洞。报告、证据和运行状态已同步到平台。"))
+            completion_gate = completion_gate_for_run(Path(run_dir))
+            task_status = "completed" if completion_gate["ok"] else "incomplete"
+            await send_runtime_checkpoint(
+                ws,
+                task,
+                sink,
+                report_state,
+                run_name,
+                session_metadata={"status": "scan_completed" if completion_gate["ok"] else "scan_incomplete"},
+            )
+            await send(ws, text(task, completion_text(finding_count, completion_gate)))
             await send(ws, {
                 "type": "task_complete",
                 "conversation_id": task["conversation_id"],
                 "task_id": task["task_id"],
-                "status": "completed",
-                "summary": f"Node3 Strix scan completed in {format_duration(time.monotonic() - started_at)}. Run: {run_name}. Findings: {finding_count}.",
+                "status": task_status,
+                "summary": completion_summary(
+                    task_status,
+                    run_name,
+                    finding_count,
+                    time.monotonic() - started_at,
+                    completion_gate,
+                ),
             })
     except asyncio.CancelledError:
         coordinator.mark_shutting_down()
@@ -559,3 +649,119 @@ def format_duration(seconds: float) -> str:
     minutes = int(seconds // 60)
     rest = int(seconds % 60)
     return f"{minutes}m {rest}s"
+
+
+def unfinished_todos_for_run(run_dir: Path) -> list[dict[str, Any]]:
+    todos = todos_from_file(run_dir / ".state" / "todos.json")
+    return [
+        todo
+        for todo in todos
+        if str(todo.get("status") or "pending").lower() not in TERMINAL_TODO_STATUSES
+    ]
+
+
+def completion_gate_for_run(run_dir: Path) -> dict[str, Any]:
+    unfinished = unfinished_todos_for_run(run_dir)
+    state_dir = run_dir / ".state"
+    attack_surface = attack_surface_from_file(state_dir / "attack_surface.json")
+    coverage = coverage_from_file(state_dir / "coverage.json")
+    evidence = evidence_from_file(state_dir / "evidence.json")
+    vulnerabilities = normalize_vulnerabilities_from_run(run_dir)
+    evidence_ids = {
+        str(item.get("evidence_id"))
+        for item in evidence
+        if str(item.get("evidence_id") or "").strip()
+    }
+    meaningful_coverage = [
+        item
+        for item in coverage
+        if str(item.get("status") or "").lower() in MEANINGFUL_COVERAGE_STATUSES
+    ]
+    unevidenced_findings = [
+        item
+        for item in vulnerabilities
+        if not _clean_evidence_ids(item.get("evidence_ids"))
+    ]
+    missing_evidence_refs = sorted({
+        evidence_id
+        for item in vulnerabilities + coverage + attack_surface
+        for evidence_id in _clean_evidence_ids(item.get("evidence_ids"))
+        if evidence_id not in evidence_ids
+    })
+    reasons: list[str] = []
+    if unfinished:
+        reasons.append(f"{len(unfinished)} unresolved task(s)")
+    if not attack_surface:
+        reasons.append("no attack surface records")
+    if not meaningful_coverage:
+        reasons.append("no meaningful coverage records")
+    if unevidenced_findings:
+        reasons.append(f"{len(unevidenced_findings)} finding(s) without evidence_ids")
+    if missing_evidence_refs:
+        reasons.append(f"{len(missing_evidence_refs)} missing evidence reference(s)")
+    return {
+        "ok": not reasons,
+        "unfinished_todos": unfinished[:20],
+        "unfinished_count": len(unfinished),
+        "attack_surface_count": len(attack_surface),
+        "coverage_count": len(coverage),
+        "meaningful_coverage_count": len(meaningful_coverage),
+        "evidence_count": len(evidence),
+        "unevidenced_findings": unevidenced_findings[:20],
+        "unevidenced_finding_count": len(unevidenced_findings),
+        "missing_evidence_refs": missing_evidence_refs[:20],
+        "missing_evidence_ref_count": len(missing_evidence_refs),
+        "incomplete_reasons": reasons,
+    }
+
+
+def normalize_vulnerabilities_from_run(run_dir: Path) -> list[dict[str, Any]]:
+    path = run_dir / "vulnerabilities.json"
+    if not path.exists():
+        return []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    return normalize_vulnerabilities(raw)
+
+
+def _clean_evidence_ids(raw: Any) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    return [str(item).strip() for item in raw if str(item).strip()]
+
+
+def completion_text(finding_count: int, completion_gate: dict[str, Any]) -> str:
+    if completion_gate.get("ok"):
+        return f"Strix scan report completed with {finding_count} vulnerabilities. The conversation remains attached for follow-up."
+    reasons = completion_gate.get("incomplete_reasons")
+    reason_text = "; ".join(str(reason) for reason in reasons[:5]) if isinstance(reasons, list) else "quality gates did not pass"
+    return (
+        f"Strix generated a report with {finding_count} vulnerabilities, but completion gates did not pass "
+        f"({reason_text}). The conversation is marked incomplete for follow-up."
+    )
+
+
+def completion_summary(
+    status: str,
+    run_name: str,
+    finding_count: int,
+    elapsed_seconds: float,
+    completion_gate: dict[str, Any],
+) -> str:
+    base = (
+        f"Node3 Strix scan {'completed' if status == 'completed' else 'incomplete'} "
+        f"in {format_duration(elapsed_seconds)}. Run: {run_name}. Findings: {finding_count}."
+    )
+    if status == "completed":
+        return f"{base} Session remains available for follow-up."
+    unfinished_count = int(completion_gate.get("unfinished_count") or 0)
+    unfinished = completion_gate.get("unfinished_todos") if isinstance(completion_gate.get("unfinished_todos"), list) else []
+    titles = [str(todo.get("title") or "Untitled task") for todo in unfinished[:5] if isinstance(todo, dict)]
+    reasons = completion_gate.get("incomplete_reasons")
+    reason_text = "; ".join(str(reason) for reason in reasons[:5]) if isinstance(reasons, list) else "quality gates did not pass"
+    suffix = f" Completion gates: {reason_text}. Unresolved tasks: {unfinished_count}."
+    if titles:
+        suffix += " Examples: " + "; ".join(titles) + "."
+    return base + suffix

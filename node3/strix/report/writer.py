@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from strix.core.paths import run_record_path
+from strix.tools.run_memory.tools import evidence_from_file
 
 
 logger = logging.getLogger(__name__)
@@ -57,11 +58,12 @@ def write_vulnerabilities(
     vuln_dir.mkdir(exist_ok=True)
 
     new_reports = [r for r in vulnerability_reports if r["id"] not in saved_vuln_ids]
+    evidence_by_id = _evidence_by_id(run_dir)
 
     for report in new_reports:
         _atomic_write_text(
             vuln_dir / f"{report['id']}.md",
-            render_vulnerability_md(report),
+            render_vulnerability_md(report, evidence_by_id),
         )
         saved_vuln_ids.add(report["id"])
 
@@ -116,7 +118,46 @@ def _atomic_write_text(path: Path, payload: str) -> None:
     tmp_path.replace(path)
 
 
-def render_vulnerability_md(report: dict[str, Any]) -> str:  # noqa: PLR0912, PLR0915
+def _evidence_by_id(run_dir: Path) -> dict[str, dict[str, Any]]:
+    return {
+        str(item.get("evidence_id")): item
+        for item in evidence_from_file(run_dir / ".state" / "evidence.json")
+        if str(item.get("evidence_id") or "").strip()
+    }
+
+
+def _one_line(value: Any, *, limit: int = 240) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+
+def _render_evidence_line(evidence_id: str, evidence_by_id: dict[str, dict[str, Any]] | None) -> str:
+    evidence = (evidence_by_id or {}).get(evidence_id)
+    if not evidence:
+        return f"- `{evidence_id}` (not found in evidence ledger)"
+
+    details = [
+        _one_line(evidence.get("evidence_type"), limit=80),
+        _one_line(evidence.get("source_tool"), limit=80),
+        _one_line(evidence.get("target"), limit=120),
+    ]
+    details_text = ", ".join(detail for detail in details if detail)
+    summary = _one_line(evidence.get("summary"), limit=240)
+    if details_text and summary:
+        return f"- `{evidence_id}` ({details_text}) - {summary}"
+    if summary:
+        return f"- `{evidence_id}` - {summary}"
+    if details_text:
+        return f"- `{evidence_id}` ({details_text})"
+    return f"- `{evidence_id}`"
+
+
+def render_vulnerability_md(
+    report: dict[str, Any],
+    evidence_by_id: dict[str, dict[str, Any]] | None = None,
+) -> str:  # noqa: PLR0912, PLR0915
     lines: list[str] = [
         f"# {report.get('title', 'Untitled Vulnerability')}\n",
         f"**ID:** {report.get('id', 'unknown')}",
@@ -188,6 +229,12 @@ def render_vulnerability_md(report: dict[str, Any]) -> str:  # noqa: PLR0912, PL
                     lines.extend(f"+ {ln}" for ln in str(loc["fix_after"]).splitlines())
                 lines.append("```")
             lines.append("")
+
+    if report.get("evidence_ids"):
+        lines.append("## Evidence\n")
+        for evidence_id in report["evidence_ids"]:
+            lines.append(_render_evidence_line(str(evidence_id), evidence_by_id))
+        lines.append("")
 
     if report.get("remediation_steps"):
         lines.append("## Remediation\n")

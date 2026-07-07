@@ -219,6 +219,7 @@ class ReportState:
         cve: str | None = None,
         cwe: str | None = None,
         code_locations: list[dict[str, Any]] | None = None,
+        evidence_ids: list[str] | None = None,
         agent_id: str | None = None,
         agent_name: str | None = None,
     ) -> str:
@@ -259,6 +260,8 @@ class ReportState:
             report["cwe"] = cwe.strip()
         if code_locations:
             report["code_locations"] = code_locations
+        if evidence_ids:
+            report["evidence_ids"] = [str(eid).strip() for eid in evidence_ids if str(eid).strip()]
         if agent_id:
             report["agent_id"] = agent_id
         if agent_name:

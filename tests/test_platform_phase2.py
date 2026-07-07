@@ -17,7 +17,7 @@ from app.services.agent_orchestrator import (
     route_with_platform_agent,
     set_orchestrator_chat_override,
 )
-from app.ws.router import _agent_assignment_notice, _apply_agent_attribution, _agent_target_for_request, _apply_vulnerability_cvss, _decision_agent_attribution, _mentioned_node_id, _message_with_decision_target, _merge_saved_message_content, _message_dedupe_key, _persist_vulnerability, _send_direct_node_message, _should_announce_agent_assignment, conversation_node, node_connections
+from app.ws.router import _agent_assignment_notice, _apply_agent_attribution, _agent_target_for_request, _apply_vulnerability_cvss, _decision_agent_attribution, _mentioned_node_id, _message_with_decision_target, _merge_saved_message_content, _message_dedupe_key, _persist_vulnerability, _send_direct_node_message, _should_announce_agent_assignment, _should_use_sticky_node_binding, conversation_node, node_connections
 
 
 class PlatformPhase2Tests(unittest.TestCase):
@@ -186,6 +186,26 @@ class PlatformPhase2Tests(unittest.TestCase):
         self.assertEqual(fake_ws.sent[0]["agent_node_id"], node_id)
         self.assertEqual(fake_ws.sent[0]["agent_capability"], "pentest.web")
         self.assertEqual(fake_ws.sent[0]["text"], "@node3 hello")
+
+    def test_sticky_node_binding_only_applies_to_running_conversation(self):
+        node_id = "11111111-1111-1111-1111-111111111111"
+
+        self.assertTrue(_should_use_sticky_node_binding(
+            conversation_status="running",
+            requested_node_id=None,
+            bound_node_id=node_id,
+        ))
+        for status in ("created", "completed", "incomplete", "failed", "canceled", "paused"):
+            self.assertFalse(_should_use_sticky_node_binding(
+                conversation_status=status,
+                requested_node_id=None,
+                bound_node_id=node_id,
+            ))
+        self.assertFalse(_should_use_sticky_node_binding(
+            conversation_status="running",
+            requested_node_id=node_id,
+            bound_node_id=node_id,
+        ))
 
     def test_candidate_vuln_messages_are_not_persisted_as_vulnerabilities(self):
         result = asyncio.run(_persist_vulnerability({

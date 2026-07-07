@@ -508,6 +508,20 @@ query GetSitemapEntry($id: ID!) {
 """
 
 
+def _normalize_sitemap_scope_id(scope_id: str | None) -> tuple[str | None, str | None]:
+    if scope_id is None:
+        return None, None
+    cleaned = str(scope_id).strip()
+    if not cleaned:
+        return None, None
+    if cleaned.isdigit():
+        return cleaned, None
+    return None, (
+        "Ignored scope_id because Caido sitemapRootEntries expects a numeric scope ID. "
+        f"Received {cleaned!r}; returning unscoped sitemap roots."
+    )
+
+
 def _clean_sitemap_metadata(node: dict[str, Any]) -> dict[str, Any]:
     cleaned: dict[str, Any] = {
         "id": node["id"],
@@ -574,10 +588,12 @@ async def list_sitemap_with_client(
             variables={"parentId": parent_id, "depth": depth},
         )
         data = raw.get("sitemapDescendantEntries") or {}
+        warning = None
     else:
+        normalized_scope_id, warning = _normalize_sitemap_scope_id(scope_id)
         raw = await client.graphql.query(
             _SITEMAP_ROOTS_QUERY,
-            variables={"scopeId": scope_id},
+            variables={"scopeId": normalized_scope_id},
         )
         data = raw.get("sitemapRootEntries") or {}
 
@@ -595,7 +611,7 @@ async def list_sitemap_with_client(
         cleaned.append(entry)
 
     total_pages = (total + page_size - 1) // page_size if total else 0
-    return {
+    result = {
         "success": True,
         "entries": cleaned,
         "page": page,
@@ -604,6 +620,9 @@ async def list_sitemap_with_client(
         "total_count": total,
         "has_more": page < total_pages,
     }
+    if warning:
+        result["warning"] = warning
+    return result
 
 
 async def view_sitemap_entry_with_client(

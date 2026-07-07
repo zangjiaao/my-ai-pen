@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -149,6 +150,36 @@ def _json_object(value: Any) -> dict[str, Any] | None:
     return None
 
 
+def _normalize_evidence_ids(raw: list[str] | str | None) -> list[str]:
+    if raw is None:
+        return []
+    value: Any = raw
+    if isinstance(raw, str):
+        stripped = raw.strip()
+        if not stripped:
+            return []
+        try:
+            value = json.loads(stripped)
+        except json.JSONDecodeError:
+            value = stripped.split(",")
+    if not isinstance(value, list):
+        value = [value]
+    evidence_ids: list[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if text and text not in evidence_ids:
+            evidence_ids.append(text)
+    return evidence_ids
+
+
+def _state_dir_path(raw: Any) -> Path | None:
+    if isinstance(raw, Path):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        return Path(raw)
+    return None
+
+
 def _cvss_vector_to_dict(value: str) -> dict[str, str] | None:
     text = value.strip()
     if not text.upper().startswith("CVSS:"):
@@ -163,6 +194,16 @@ def _cvss_vector_to_dict(value: str) -> dict[str, str] | None:
         if long_key:
             parsed[long_key] = raw_value.upper()
     return parsed or None
+
+
+def _normalize_cvss_metric_value(value: Any, valid: list[str]) -> str:
+    text = str(value).strip().upper()
+    if text in valid:
+        return text
+    match = re.match(r"^([A-Z])(?:\b|[\s(:/-])", text)
+    if match and match.group(1) in valid:
+        return match.group(1)
+    return text
 
 
 def _normalize_cvss_breakdown(raw: Any) -> tuple[dict[str, str], list[str]]:
@@ -196,7 +237,7 @@ def _normalize_cvss_breakdown(raw: Any) -> tuple[dict[str, str], list[str]]:
         key_text = str(key)
         long_key = _CVSS_SHORT_TO_LONG.get(key_text.upper()) or key_text
         if long_key in _CVSS_VALID:
-            normalized[long_key] = str(value).strip().upper()
+            normalized[long_key] = _normalize_cvss_metric_value(value, _CVSS_VALID[long_key])
         elif key_text not in _CVSS_IGNORED_KEYS and key_text.upper() not in _CVSS_IGNORED_KEYS:
             errors.append(f"Unknown cvss_breakdown metric: {key_text}")
 
@@ -242,8 +283,10 @@ async def _do_create(
     cve: str | None,
     cwe: str | None,
     code_locations: list[dict[str, Any]] | None,
+    evidence_ids: list[str] | str | None,
     agent_id: str | None = None,
     agent_name: str | None = None,
+    state_dir: Any = None,
 ) -> dict[str, Any]:
     errors: list[str] = []
     fields = {
@@ -266,6 +309,20 @@ async def _do_create(
     parsed_locations = _normalize_code_locations(code_locations)
     if parsed_locations:
         errors.extend(_validate_code_locations(parsed_locations))
+    parsed_evidence_ids = _normalize_evidence_ids(evidence_ids)
+    if parsed_evidence_ids:
+        try:
+            from strix.tools.run_memory.tools import missing_evidence_ids_in_state
+        except ImportError:
+            missing_ids = []
+        else:
+            missing_ids = missing_evidence_ids_in_state(_state_dir_path(state_dir), parsed_evidence_ids)
+        if missing_ids:
+            errors.append(
+                "Unknown evidence_ids: "
+                + ", ".join(missing_ids)
+                + ". Call record_evidence first and cite the returned IDs."
+            )
     if cve:
         cve = _extract_cve(cve)
         cve_err = _validate_cve(cve)
@@ -345,6 +402,7 @@ async def _do_create(
             cve=cve,
             cwe=cwe,
             code_locations=parsed_locations,
+            evidence_ids=parsed_evidence_ids,
             agent_id=agent_id if isinstance(agent_id, str) else None,
             agent_name=agent_name if isinstance(agent_name, str) else None,
         )
@@ -359,13 +417,16 @@ async def _do_create(
         cvss_score,
         title,
     )
-    return {
+    result = {
         "success": True,
         "message": f"Vulnerability report '{title}' created successfully",
         "report_id": report_id,
         "severity": severity,
         "cvss_score": cvss_score,
     }
+    if not parsed_evidence_ids:
+        result["warning"] = "No evidence_ids were provided; record evidence and cite it for stronger confirmed findings."
+    return result
 
 
 @function_tool(timeout=180, strict_mode=False)
@@ -385,6 +446,7 @@ async def create_vulnerability_report(
     cve: str | None = None,
     cwe: str | None = None,
     code_locations: list[dict[str, Any]] | None = None,
+    evidence_ids: list[str] | str | None = None,
 ) -> str:
     inner = ctx.context if isinstance(ctx.context, dict) else {}
     raw_agent_id = inner.get("agent_id")
@@ -412,6 +474,8 @@ async def create_vulnerability_report(
         cve=cve,
         cwe=cwe,
         code_locations=code_locations,
+        evidence_ids=evidence_ids,
+        state_dir=inner.get("state_dir"),
         agent_id=agent_id,
         agent_name=agent_name,
     )

@@ -27,6 +27,12 @@ from strix.tools.agents_graph.tools import (
 )
 from strix.tools.finish.tool import finish_scan
 from strix.tools.load_skill.tool import load_skill
+from strix.tools.run_memory.tools import (
+    list_memory,
+    record_attack_surface,
+    record_coverage,
+    record_evidence,
+)
 from strix.tools.notes.tools import (
     create_note,
     delete_note,
@@ -483,6 +489,10 @@ _BASE_TOOLS: tuple[Tool, ...] = (
     get_note,
     update_note,
     delete_note,
+    record_evidence,
+    record_attack_surface,
+    record_coverage,
+    list_memory,
     web_search,
     create_vulnerability_report,
     list_requests,

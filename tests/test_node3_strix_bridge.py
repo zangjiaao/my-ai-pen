@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import json
+import sqlite3
 import sys
 from types import SimpleNamespace
 from pathlib import Path
@@ -23,7 +24,7 @@ from strix.platform.node_protocol import (  # noqa: E402
     todos_from_file,
     vulnerabilities_from_file,
 )
-from strix.platform.node_runner import merge_task_context, send_runtime_checkpoint, stable_platform_run_name  # noqa: E402
+from strix.platform.node_runner import StrixPlatformConversationSession, completion_gate_for_run, merge_task_context, send_runtime_checkpoint, stable_platform_run_name  # noqa: E402
 from strix.core.inputs import build_root_task, build_scope_context  # noqa: E402
 from strix.profiles import infer_target_profile, load_target_profile  # noqa: E402
 from agents.tool_context import ToolContext  # noqa: E402
@@ -32,6 +33,7 @@ from strix.tools.agents_graph import tools as agent_tools  # noqa: E402
 from strix.tools.finish.tool import finish_scan  # noqa: E402
 from strix.tools.todo import tools as todo_tools  # noqa: E402
 from strix.tools.reporting import node3_tool  # noqa: E402
+from strix.report.writer import write_vulnerabilities  # noqa: E402
 import main as node3_main  # noqa: E402
 
 
@@ -428,6 +430,202 @@ def test_runtime_checkpoint_includes_session_metadata(tmp_path):
     }
 
 
+def test_platform_session_detects_completed_run_record(tmp_path):
+    run_record = {
+        "run_id": "conversation-conv-1",
+        "run_name": "conversation-conv-1",
+        "status": "completed",
+        "end_time": "2026-07-07T09:32:49Z",
+        "scan_results": {
+            "scan_completed": True,
+            "executive_summary": "Summary",
+            "methodology": "Methodology",
+            "technical_analysis": "Technical analysis",
+            "recommendations": "Recommendations",
+        },
+    }
+    (tmp_path / "run.json").write_text(json.dumps(run_record), encoding="utf-8")
+
+    class FakeConfig:
+        pass
+
+    class FakeReportState:
+        vulnerability_reports = []
+        run_record = {"status": "running"}
+        scan_results = None
+        final_scan_result = None
+        end_time = None
+
+        def get_run_dir(self):
+            return tmp_path
+
+        def _format_final_scan_result(self, scan_results):
+            return scan_results["executive_summary"]
+
+    session = StrixPlatformConversationSession(
+        FakeWebSocket(),
+        {"task_id": "task-1", "conversation_id": "conv-1", "scan_mode": "quick"},
+        FakeConfig(),
+    )
+    session.run_dir = str(tmp_path)
+    session.report_state = FakeReportState()
+
+    assert session._report_state_scan_completed() is True
+    assert session.report_state.run_record["status"] == "completed"
+    assert session.report_state.scan_results["scan_completed"] is True
+    assert session.report_state.final_scan_result == "Summary"
+
+
+def test_platform_session_marks_completion_incomplete_when_todos_unresolved(tmp_path):
+    run_record = {
+        "run_id": "conversation-conv-1",
+        "run_name": "conversation-conv-1",
+        "status": "completed",
+        "end_time": "2026-07-07T09:32:49Z",
+        "scan_results": {"scan_completed": True},
+    }
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    (tmp_path / "run.json").write_text(json.dumps(run_record), encoding="utf-8")
+    (tmp_path / "penetration_test_report.md").write_text("Report", encoding="utf-8")
+    (state_dir / "todos.json").write_text(json.dumps({
+        "root": {
+            "todo-1": {"title": "Done task", "status": "done", "priority": "normal"},
+            "todo-2": {"title": "Pending auth checks", "status": "pending", "priority": "high"},
+        },
+    }), encoding="utf-8")
+
+    class FakeConfig:
+        pass
+
+    class FakeReportState:
+        vulnerability_reports = [{"title": "Finding"}]
+        final_scan_result = "Report"
+
+        def __init__(self):
+            self.run_record = dict(run_record)
+
+        def get_run_dir(self):
+            return tmp_path
+
+    async def run():
+        ws = FakeWebSocket()
+        session = StrixPlatformConversationSession(
+            ws,
+            {"task_id": "task-1", "conversation_id": "conv-1", "scan_mode": "quick"},
+            FakeConfig(),
+        )
+        session.run_name = "conversation-conv-1"
+        session.run_dir = str(tmp_path)
+        session.report_state = FakeReportState()
+        await session._on_scan_completed()
+        return ws.sent
+
+    sent = asyncio.run(run())
+    completion = next(message for message in sent if message["type"] == "task_complete")
+    checkpoint_message = next(message for message in sent if message["type"] == "checkpoint_update")
+
+    assert completion["status"] == "incomplete"
+    assert "Unresolved tasks: 1" in completion["summary"]
+    assert "Pending auth checks" in completion["summary"]
+    assert checkpoint_message["checkpoint"]["node3_strix"]["session"]["status"] == "scan_incomplete"
+
+
+def test_completion_gate_requires_memory_ledgers(tmp_path):
+    (tmp_path / "run.json").write_text(json.dumps({"status": "completed"}), encoding="utf-8")
+
+    gate = completion_gate_for_run(tmp_path)
+
+    assert gate["ok"] is False
+    assert "no attack surface records" in gate["incomplete_reasons"]
+    assert "no meaningful coverage records" in gate["incomplete_reasons"]
+
+
+def test_completion_gate_passes_with_surface_coverage_and_evidence(tmp_path):
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    (state_dir / "attack_surface.json").write_text(json.dumps([
+        {"surface_id": "as-1", "kind": "auth_endpoint", "url": "http://target.local/login", "method": "POST", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "coverage.json").write_text(json.dumps([
+        {"coverage_id": "cov-1", "endpoint": "POST http://target.local/login", "parameter": "username", "vuln_type": "sql_injection", "status": "passed", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "evidence.json").write_text(json.dumps([
+        {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "SQL error observed"},
+    ]), encoding="utf-8")
+    (tmp_path / "vulnerabilities.json").write_text(json.dumps([
+        {"id": "vuln-1", "title": "SQLi", "severity": "high", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+
+    gate = completion_gate_for_run(tmp_path)
+
+    assert gate["ok"] is True
+    assert gate["attack_surface_count"] == 1
+    assert gate["meaningful_coverage_count"] == 1
+    assert gate["evidence_count"] == 1
+
+
+def test_completion_gate_reads_memory_from_sqlite_without_json_snapshots(tmp_path):
+    from strix.tools.run_memory import tools as memory_tools
+
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    memory_tools.hydrate_memory_from_disk(state_dir)
+    ctx = ToolContext(
+        context={"agent_id": "root"},
+        tool_name="record_evidence",
+        tool_call_id="call-1",
+        tool_arguments="{}",
+    )
+    evidence = json.loads(asyncio.run(memory_tools.record_evidence.on_invoke_tool(
+        ctx,
+        json.dumps({"evidence_type": "http_trace", "summary": "Baseline response"}),
+    )))
+    evidence_id = evidence["evidence_id"]
+    json.loads(asyncio.run(memory_tools.record_attack_surface.on_invoke_tool(
+        ctx,
+        json.dumps({"kind": "url", "url": "http://target.local/", "evidence_ids": [evidence_id]}),
+    )))
+    json.loads(asyncio.run(memory_tools.record_coverage.on_invoke_tool(
+        ctx,
+        json.dumps({"endpoint": "GET http://target.local/", "vuln_type": "baseline", "status": "tried", "evidence_ids": [evidence_id]}),
+    )))
+    for filename in ("attack_surface.json", "coverage.json", "evidence.json"):
+        (state_dir / filename).unlink()
+
+    gate = completion_gate_for_run(tmp_path)
+
+    assert gate["ok"] is True
+    assert gate["attack_surface_count"] == 1
+    assert gate["meaningful_coverage_count"] == 1
+    assert gate["evidence_count"] == 1
+
+
+def test_completion_gate_rejects_missing_finding_evidence(tmp_path):
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    (state_dir / "attack_surface.json").write_text(json.dumps([
+        {"surface_id": "as-1", "kind": "url", "url": "http://target.local/", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "coverage.json").write_text(json.dumps([
+        {"coverage_id": "cov-1", "endpoint": "GET http://target.local/", "parameter": "<none>", "vuln_type": "baseline", "status": "tried", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "evidence.json").write_text(json.dumps([
+        {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "Baseline response"},
+    ]), encoding="utf-8")
+    (tmp_path / "vulnerabilities.json").write_text(json.dumps([
+        {"id": "vuln-1", "title": "Speculative SQLi", "severity": "high"},
+        {"id": "vuln-2", "title": "Stored XSS", "severity": "high", "evidence_ids": ["ev-missing"]},
+    ]), encoding="utf-8")
+
+    gate = completion_gate_for_run(tmp_path)
+
+    assert gate["ok"] is False
+    assert "1 finding(s) without evidence_ids" in gate["incomplete_reasons"]
+    assert "1 missing evidence reference(s)" in gate["incomplete_reasons"]
+    assert gate["missing_evidence_refs"] == ["ev-missing"]
+
+
 def test_finish_scan_keeps_root_waiting_in_platform_conversation(monkeypatch, tmp_path):
     class FakeReportState:
         vulnerability_reports = []
@@ -505,6 +703,115 @@ def test_finish_scan_completes_root_without_keep_alive(monkeypatch, tmp_path):
     result, statuses = asyncio.run(run())
 
     assert result["success"] is True
+    assert statuses["root"] == "completed"
+
+
+def test_finish_scan_rejects_missing_memory_ledgers(monkeypatch, tmp_path):
+    class FakeReportState:
+        vulnerability_reports = []
+
+        def get_run_dir(self):
+            return tmp_path
+
+        def update_scan_final_fields(self, **kwargs):
+            self.final_fields = kwargs
+
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        todo_tools.hydrate_todos_from_disk(tmp_path)
+        monkeypatch.setattr("strix.report.state.get_global_report_state", lambda: FakeReportState())
+        ctx = ToolContext(
+            context={"agent_id": "root", "parent_id": None, "coordinator": coordinator},
+            tool_name="finish_scan",
+            tool_call_id="call-finish",
+            tool_arguments="{}",
+        )
+
+        result = await finish_scan.on_invoke_tool(
+            ctx,
+            json.dumps({
+                "executive_summary": "Summary",
+                "methodology": "Methodology",
+                "technical_analysis": "Technical analysis",
+                "recommendations": "Recommendations",
+            }),
+        )
+        _, statuses, _ = await coordinator.graph_snapshot()
+        return json.loads(result), statuses
+
+    result, statuses = asyncio.run(run())
+
+    assert result["success"] is False
+    assert result["scan_completed"] is False
+    assert result["completion_gate"]["ok"] is False
+    assert "no attack surface records" in result["completion_gate"]["incomplete_reasons"]
+    assert statuses["root"] == "running"
+
+
+def test_finish_scan_allows_completed_memory_ledgers(monkeypatch, tmp_path):
+    from strix.tools.run_memory import tools as memory_tools
+
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    memory_tools.hydrate_memory_from_disk(state_dir)
+    ctx_memory = ToolContext(
+        context={"agent_id": "root"},
+        tool_name="record_evidence",
+        tool_call_id="call-memory",
+        tool_arguments="{}",
+    )
+    evidence = json.loads(asyncio.run(memory_tools.record_evidence.on_invoke_tool(
+        ctx_memory,
+        json.dumps({"evidence_type": "http_trace", "summary": "Baseline response"}),
+    )))
+    evidence_id = evidence["evidence_id"]
+    json.loads(asyncio.run(memory_tools.record_attack_surface.on_invoke_tool(
+        ctx_memory,
+        json.dumps({"kind": "url", "url": "http://target.local/", "evidence_ids": [evidence_id]}),
+    )))
+    json.loads(asyncio.run(memory_tools.record_coverage.on_invoke_tool(
+        ctx_memory,
+        json.dumps({"endpoint": "GET http://target.local/", "vuln_type": "baseline", "status": "tried", "evidence_ids": [evidence_id]}),
+    )))
+
+    class FakeReportState:
+        vulnerability_reports = []
+
+        def get_run_dir(self):
+            return tmp_path
+
+        def update_scan_final_fields(self, **kwargs):
+            self.final_fields = kwargs
+
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        todo_tools.hydrate_todos_from_disk(state_dir)
+        monkeypatch.setattr("strix.report.state.get_global_report_state", lambda: FakeReportState())
+        ctx = ToolContext(
+            context={"agent_id": "root", "parent_id": None, "coordinator": coordinator},
+            tool_name="finish_scan",
+            tool_call_id="call-finish",
+            tool_arguments="{}",
+        )
+
+        result = await finish_scan.on_invoke_tool(
+            ctx,
+            json.dumps({
+                "executive_summary": "Summary",
+                "methodology": "Methodology",
+                "technical_analysis": "Technical analysis",
+                "recommendations": "Recommendations",
+            }),
+        )
+        _, statuses, _ = await coordinator.graph_snapshot()
+        return json.loads(result), statuses
+
+    result, statuses = asyncio.run(run())
+
+    assert result["success"] is True
+    assert result["scan_completed"] is True
     assert statuses["root"] == "completed"
 
 
@@ -742,6 +1049,431 @@ def test_agent_includes_web_search_with_perplexity_key(monkeypatch):
 
     assert "web_search" in tool_names
     assert "with the web_search tool" in agent.instructions
+
+
+def test_agent_prompt_names_exec_command_not_execute_command(monkeypatch):
+    from strix.agents import factory
+
+    monkeypatch.setattr(
+        factory,
+        "load_settings",
+        lambda: SimpleNamespace(integrations=SimpleNamespace(perplexity_api_key="")),
+    )
+
+    agent = factory.build_strix_agent(is_root=False, chat_completions_tools=True)
+
+    assert "The shell execution tool is named `exec_command`" in agent.instructions
+    assert "`execute_command` tool. Never call `execute_command`." in agent.instructions
+    assert "record_attack_surface" in agent.instructions
+    assert "record_evidence" in agent.instructions
+    assert "record_coverage" in agent.instructions
+
+
+def test_agent_shell_capability_exposes_only_exec_command(monkeypatch):
+    from strix.agents import factory
+
+    monkeypatch.setattr(
+        factory,
+        "load_settings",
+        lambda: SimpleNamespace(integrations=SimpleNamespace(perplexity_api_key="")),
+    )
+
+    class FakeSandboxSession:
+        def supports_pty(self):
+            return False
+
+    agent = factory.build_strix_agent(is_root=False, chat_completions_tools=True)
+    shell_capability = next(
+        capability for capability in agent.capabilities if capability.type == "shell"
+    )
+    shell_capability.bind(FakeSandboxSession())
+
+    tool_names = {tool.name for tool in shell_capability.tools()}
+
+    assert "exec_command" in tool_names
+    assert "execute_command" not in tool_names
+
+
+def test_agent_exposes_memory_ledger_tools(monkeypatch):
+    from strix.agents import factory
+
+    monkeypatch.setattr(
+        factory,
+        "load_settings",
+        lambda: SimpleNamespace(integrations=SimpleNamespace(perplexity_api_key="")),
+    )
+
+    agent = factory.build_strix_agent(is_root=False, chat_completions_tools=True)
+    tool_names = {tool.name for tool in agent.tools}
+
+    assert {"record_evidence", "record_attack_surface", "record_coverage", "list_memory"} <= tool_names
+
+
+def test_list_sitemap_ignores_non_numeric_scope_id():
+    from strix.tools.proxy import caido_api
+
+    class FakeGraphQL:
+        def __init__(self):
+            self.variables = None
+
+        async def query(self, _query, *, variables):
+            self.variables = variables
+            return {
+                "sitemapRootEntries": {
+                    "edges": [],
+                    "count": {"value": 0},
+                },
+            }
+
+    class FakeClient:
+        def __init__(self):
+            self.graphql = FakeGraphQL()
+
+    client = FakeClient()
+
+    result = asyncio.run(
+        caido_api.list_sitemap_with_client(
+            client,
+            scope_id="http://host.docker.internal:3000",
+        )
+    )
+
+    assert client.graphql.variables == {"scopeId": None}
+    assert result["success"] is True
+    assert "warning" in result
+
+
+def test_memory_tools_persist_attack_surface_coverage_and_evidence(tmp_path):
+    from strix.tools.run_memory import tools as memory_tools
+
+    memory_tools.hydrate_memory_from_disk(tmp_path)
+    ctx = ToolContext(
+        context={"agent_id": "root"},
+        tool_name="record_evidence",
+        tool_call_id="call-1",
+        tool_arguments="{}",
+    )
+
+    evidence = json.loads(asyncio.run(memory_tools.record_evidence.on_invoke_tool(
+        ctx,
+        json.dumps({
+            "evidence_type": "http_trace",
+            "summary": "POST /login returned SQL error for quote payload",
+            "content": "request/response",
+            "source_tool": "exec_command",
+            "target": "http://target.local/login",
+        }),
+    )))
+    evidence_id = evidence["evidence_id"]
+    surface = json.loads(asyncio.run(memory_tools.record_attack_surface.on_invoke_tool(
+        ctx,
+        json.dumps({
+            "kind": "auth_endpoint",
+            "url": "http://target.local/login",
+            "method": "POST",
+            "parameters": ["username", "password"],
+            "auth_state": "anonymous",
+            "evidence_ids": [evidence_id],
+        }),
+    )))
+    coverage = json.loads(asyncio.run(memory_tools.record_coverage.on_invoke_tool(
+        ctx,
+        json.dumps({
+            "endpoint": "POST http://target.local/login",
+            "parameter": "username",
+            "vuln_type": "sql_injection",
+            "status": "passed",
+            "evidence_ids": [evidence_id],
+            "result": "SQL injection confirmed",
+        }),
+    )))
+
+    assert surface["success"] is True
+    assert coverage["success"] is True
+    assert (tmp_path / "run_memory.db").exists()
+    assert json.loads((tmp_path / "evidence.json").read_text(encoding="utf-8"))[0]["evidence_id"] == evidence_id
+    assert json.loads((tmp_path / "attack_surface.json").read_text(encoding="utf-8"))[0]["parameters"] == ["username", "password"]
+    assert json.loads((tmp_path / "coverage.json").read_text(encoding="utf-8"))[0]["evidence_ids"] == [evidence_id]
+    with sqlite3.connect(tmp_path / "run_memory.db") as conn:
+        assert conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM attack_surface").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM coverage").fetchone()[0] == 1
+
+
+def test_memory_tools_deduplicate_attack_surface_in_sqlite_and_json(tmp_path):
+    from strix.tools.run_memory import tools as memory_tools
+
+    memory_tools.hydrate_memory_from_disk(tmp_path)
+    ctx = ToolContext(
+        context={"agent_id": "root"},
+        tool_name="record_attack_surface",
+        tool_call_id="call-1",
+        tool_arguments="{}",
+    )
+
+    first = json.loads(asyncio.run(memory_tools.record_attack_surface.on_invoke_tool(
+        ctx,
+        json.dumps({
+            "kind": "api_endpoint",
+            "url": "http://target.local/rest/user/whoami",
+            "method": "GET",
+            "parameters": ["token"],
+        }),
+    )))
+    second = json.loads(asyncio.run(memory_tools.record_attack_surface.on_invoke_tool(
+        ctx,
+        json.dumps({
+            "kind": "api_endpoint",
+            "url": "http://target.local/rest/user/whoami",
+            "method": "GET",
+            "parameters": ["Authorization"],
+        }),
+    )))
+
+    rows = json.loads((tmp_path / "attack_surface.json").read_text(encoding="utf-8"))
+    with sqlite3.connect(tmp_path / "run_memory.db") as conn:
+        sqlite_count = conn.execute("SELECT COUNT(*) FROM attack_surface").fetchone()[0]
+
+    assert first["status"] == "created"
+    assert second["status"] == "updated"
+    assert len(rows) == 1
+    assert rows[0]["parameters"] == ["Authorization", "token"]
+    assert sqlite_count == 1
+
+
+def test_memory_tools_reject_unknown_evidence_ids(tmp_path):
+    from strix.tools.run_memory import tools as memory_tools
+
+    memory_tools.hydrate_memory_from_disk(tmp_path)
+    ctx = ToolContext(
+        context={"agent_id": "root"},
+        tool_name="record_attack_surface",
+        tool_call_id="call-1",
+        tool_arguments="{}",
+    )
+
+    surface = json.loads(asyncio.run(memory_tools.record_attack_surface.on_invoke_tool(
+        ctx,
+        json.dumps({
+            "kind": "url",
+            "url": "http://target.local/",
+            "evidence_ids": ["ev-missing"],
+        }),
+    )))
+    coverage = json.loads(asyncio.run(memory_tools.record_coverage.on_invoke_tool(
+        ctx,
+        json.dumps({
+            "endpoint": "GET http://target.local/",
+            "vuln_type": "baseline",
+            "status": "tried",
+            "evidence_ids": ["ev-missing"],
+        }),
+    )))
+
+    assert surface["success"] is False
+    assert coverage["success"] is False
+    assert surface["missing_evidence_ids"] == ["ev-missing"]
+    assert coverage["missing_evidence_ids"] == ["ev-missing"]
+
+
+def test_memory_tools_use_context_state_dir_to_avoid_cross_run_leakage(tmp_path):
+    from strix.tools.run_memory import tools as memory_tools
+
+    state_a = tmp_path / "run-a" / ".state"
+    state_b = tmp_path / "run-b" / ".state"
+    state_a.mkdir(parents=True)
+    state_b.mkdir(parents=True)
+    memory_tools.hydrate_memory_from_disk(state_a)
+    memory_tools.hydrate_memory_from_disk(state_b)
+
+    ctx_a = ToolContext(
+        context={"agent_id": "root-a", "state_dir": str(state_a)},
+        tool_name="record_evidence",
+        tool_call_id="call-a",
+        tool_arguments="{}",
+    )
+    ctx_b = ToolContext(
+        context={"agent_id": "root-b", "state_dir": str(state_b)},
+        tool_name="record_evidence",
+        tool_call_id="call-b",
+        tool_arguments="{}",
+    )
+
+    evidence_a = json.loads(asyncio.run(memory_tools.record_evidence.on_invoke_tool(
+        ctx_a,
+        json.dumps({"evidence_type": "http_trace", "summary": "Run A proof"}),
+    )))["evidence_id"]
+    evidence_b = json.loads(asyncio.run(memory_tools.record_evidence.on_invoke_tool(
+        ctx_b,
+        json.dumps({"evidence_type": "http_trace", "summary": "Run B proof"}),
+    )))["evidence_id"]
+    surface_a = json.loads(asyncio.run(memory_tools.record_attack_surface.on_invoke_tool(
+        ctx_a,
+        json.dumps({"kind": "url", "url": "http://run-a.local/", "evidence_ids": [evidence_a]}),
+    )))
+    coverage_b = json.loads(asyncio.run(memory_tools.record_coverage.on_invoke_tool(
+        ctx_b,
+        json.dumps({"endpoint": "GET http://run-b.local/", "vuln_type": "baseline", "status": "tried", "evidence_ids": [evidence_b]}),
+    )))
+    summary_a = json.loads(asyncio.run(memory_tools.list_memory.on_invoke_tool(
+        ctx_a,
+        json.dumps({"kind": "summary"}),
+    )))
+    summary_b = json.loads(asyncio.run(memory_tools.list_memory.on_invoke_tool(
+        ctx_b,
+        json.dumps({"kind": "summary"}),
+    )))
+
+    assert surface_a["success"] is True
+    assert coverage_b["success"] is True
+    assert summary_a["evidence_count"] == 1
+    assert summary_a["attack_surface_count"] == 1
+    assert summary_a["coverage_count"] == 0
+    assert summary_b["evidence_count"] == 1
+    assert summary_b["attack_surface_count"] == 0
+    assert summary_b["coverage_count"] == 1
+    assert json.loads((state_a / "evidence.json").read_text(encoding="utf-8"))[0]["evidence_id"] == evidence_a
+    assert json.loads((state_b / "evidence.json").read_text(encoding="utf-8"))[0]["evidence_id"] == evidence_b
+
+
+def test_runtime_checkpoint_includes_memory_ledgers(tmp_path):
+    run_dir = tmp_path
+    state_dir = run_dir / ".state"
+    state_dir.mkdir()
+    (state_dir / "attack_surface.json").write_text(json.dumps([
+        {"surface_id": "as-1", "kind": "form", "url": "http://target.local/login", "method": "POST", "parameters": ["username"]},
+    ]), encoding="utf-8")
+    (state_dir / "coverage.json").write_text(json.dumps([
+        {"coverage_id": "cov-1", "endpoint": "POST http://target.local/login", "parameter": "username", "vuln_type": "sql_injection", "status": "passed", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "evidence.json").write_text(json.dumps([
+        {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "SQL error observed"},
+    ]), encoding="utf-8")
+
+    event = runtime_checkpoint(
+        {"conversation_id": "conv-1", "task_id": "task-1"},
+        "run-1",
+        str(run_dir),
+    )
+    node3_strix = event["checkpoint"]["node3_strix"]
+
+    assert node3_strix["attack_surface"][0]["surface_id"] == "as-1"
+    assert node3_strix["coverage"][0]["coverage_id"] == "cov-1"
+    assert node3_strix["evidence"][0]["evidence_id"] == "ev-1"
+
+
+def test_runtime_checkpoint_reads_memory_from_sqlite_without_json_snapshots(tmp_path):
+    from strix.tools.run_memory import tools as memory_tools
+
+    run_dir = tmp_path
+    state_dir = run_dir / ".state"
+    state_dir.mkdir()
+    memory_tools.hydrate_memory_from_disk(state_dir)
+    ctx = ToolContext(
+        context={"agent_id": "root"},
+        tool_name="record_evidence",
+        tool_call_id="call-1",
+        tool_arguments="{}",
+    )
+    evidence = json.loads(asyncio.run(memory_tools.record_evidence.on_invoke_tool(
+        ctx,
+        json.dumps({"evidence_type": "http_trace", "summary": "Baseline response"}),
+    )))
+    evidence_id = evidence["evidence_id"]
+    json.loads(asyncio.run(memory_tools.record_attack_surface.on_invoke_tool(
+        ctx,
+        json.dumps({"kind": "url", "url": "http://target.local/", "evidence_ids": [evidence_id]}),
+    )))
+    json.loads(asyncio.run(memory_tools.record_coverage.on_invoke_tool(
+        ctx,
+        json.dumps({"endpoint": "GET http://target.local/", "vuln_type": "baseline", "status": "tried", "evidence_ids": [evidence_id]}),
+    )))
+    for filename in ("attack_surface.json", "coverage.json", "evidence.json"):
+        (state_dir / filename).unlink()
+
+    event = runtime_checkpoint(
+        {"conversation_id": "conv-1", "task_id": "task-1"},
+        "run-1",
+        str(run_dir),
+    )
+    node3_strix = event["checkpoint"]["node3_strix"]
+
+    assert node3_strix["attack_surface"][0]["url"] == "http://target.local/"
+    assert node3_strix["coverage"][0]["evidence_ids"] == [evidence_id]
+    assert node3_strix["evidence"][0]["evidence_id"] == evidence_id
+
+
+def test_vulnerability_markdown_renders_evidence_summary_from_sqlite(tmp_path):
+    from strix.tools.run_memory import tools as memory_tools
+
+    run_dir = tmp_path
+    state_dir = run_dir / ".state"
+    state_dir.mkdir()
+    memory_tools.hydrate_memory_from_disk(state_dir)
+    ctx = ToolContext(
+        context={"agent_id": "root", "state_dir": str(state_dir)},
+        tool_name="record_evidence",
+        tool_call_id="call-1",
+        tool_arguments="{}",
+    )
+    evidence = json.loads(asyncio.run(memory_tools.record_evidence.on_invoke_tool(
+        ctx,
+        json.dumps({
+            "evidence_type": "http_trace",
+            "summary": "POST /login returned a database syntax error for a quote payload.",
+            "content": "RAW_HTTP_TRACE_SHOULD_NOT_BE_RENDERED" * 20,
+            "source_tool": "http_client",
+            "target": "POST http://target.local/login",
+        }),
+    )))
+    evidence_id = evidence["evidence_id"]
+    for filename in ("attack_surface.json", "coverage.json", "evidence.json"):
+        path = state_dir / filename
+        if path.exists():
+            path.unlink()
+
+    write_vulnerabilities(
+        run_dir,
+        [
+            {
+                "id": "vuln-1",
+                "title": "SQL Injection",
+                "severity": "high",
+                "timestamp": "2026-07-08T00:00:00Z",
+                "description": "SQL injection is confirmed.",
+                "evidence_ids": [evidence_id],
+            },
+        ],
+        set(),
+    )
+
+    markdown = (run_dir / "vulnerabilities" / "vuln-1.md").read_text(encoding="utf-8")
+    assert f"`{evidence_id}`" in markdown
+    assert "http_trace" in markdown
+    assert "http_client" in markdown
+    assert "POST http://target.local/login" in markdown
+    assert "POST /login returned a database syntax error" in markdown
+    assert "RAW_HTTP_TRACE_SHOULD_NOT_BE_RENDERED" not in markdown
+
+
+def test_vulnerability_markdown_marks_missing_evidence_reference(tmp_path):
+    write_vulnerabilities(
+        tmp_path,
+        [
+            {
+                "id": "vuln-missing",
+                "title": "Stored XSS",
+                "severity": "medium",
+                "timestamp": "2026-07-08T00:00:00Z",
+                "description": "Stored XSS is suspected.",
+                "evidence_ids": ["ev-missing"],
+            },
+        ],
+        set(),
+    )
+
+    markdown = (tmp_path / "vulnerabilities" / "vuln-missing.md").read_text(encoding="utf-8")
+    assert "`ev-missing` (not found in evidence ledger)" in markdown
 
 
 def test_create_todo_is_atomic_and_accepts_medium_priority(tmp_path):
@@ -1176,6 +1908,7 @@ def test_reporting_shim_calculates_cvss_and_persists(monkeypatch):
         cve=None,
         cwe="CWE-78",
         code_locations=None,
+        evidence_ids=None,
     ))
 
     assert result["success"] is True
@@ -1183,6 +1916,167 @@ def test_reporting_shim_calculates_cvss_and_persists(monkeypatch):
     assert result["cvss_score"] == 9.8
     assert state.reports[0]["severity"] == "critical"
     assert state.reports[0]["cvss"] == 9.8
+
+
+def test_reporting_shim_persists_evidence_ids(monkeypatch, tmp_path):
+    from strix.tools.run_memory import tools as memory_tools
+
+    memory_tools.hydrate_memory_from_disk(tmp_path)
+
+    class FakeReportState:
+        def __init__(self) -> None:
+            self.reports: list[dict] = []
+
+        def get_existing_vulnerabilities(self) -> list[dict]:
+            return []
+
+        def add_vulnerability_report(self, **kwargs):
+            self.reports.append(kwargs)
+            return "vuln-0001"
+
+    state = FakeReportState()
+
+    async def fake_check_duplicate(candidate, existing):
+        return {"is_duplicate": False}
+
+    monkeypatch.setattr("strix.report.dedupe.check_duplicate", fake_check_duplicate)
+    monkeypatch.setattr("strix.report.state.get_global_report_state", lambda: state)
+    ctx = ToolContext(
+        context={"agent_id": "root"},
+        tool_name="record_evidence",
+        tool_call_id="call-1",
+        tool_arguments="{}",
+    )
+    first_evidence = json.loads(asyncio.run(memory_tools.record_evidence.on_invoke_tool(
+        ctx,
+        json.dumps({"evidence_type": "http_trace", "summary": "SQL injection proof"}),
+    )))["evidence_id"]
+    second_evidence = json.loads(asyncio.run(memory_tools.record_evidence.on_invoke_tool(
+        ctx,
+        json.dumps({"evidence_type": "tool_output", "summary": "SQL injection exploit output"}),
+    )))["evidence_id"]
+
+    result = asyncio.run(node3_tool._do_create(
+        title="SQL Injection",
+        description="SQL injection is confirmed.",
+        impact="An attacker can read database contents.",
+        target="http://target.local",
+        technical_analysis="The endpoint concatenates SQL.",
+        poc_description="Send a UNION payload.",
+        poc_script_code="print('poc')",
+        remediation_steps="Use prepared statements.",
+        cvss_breakdown={"AV": "N", "AC": "L", "PR": "N", "UI": "N", "S": "U", "C": "H", "I": "H", "A": "H"},
+        endpoint="/sqli",
+        method="GET",
+        cve=None,
+        cwe="CWE-89",
+        code_locations=None,
+        evidence_ids=[first_evidence, first_evidence, second_evidence],
+    ))
+
+    assert result["success"] is True
+    assert "warning" not in result
+    assert state.reports[0]["evidence_ids"] == [first_evidence, second_evidence]
+
+
+def test_reporting_shim_rejects_unknown_evidence_ids(monkeypatch, tmp_path):
+    from strix.tools.run_memory import tools as memory_tools
+
+    memory_tools.hydrate_memory_from_disk(tmp_path)
+
+    class FakeReportState:
+        def __init__(self) -> None:
+            self.reports: list[dict] = []
+
+        def get_existing_vulnerabilities(self) -> list[dict]:
+            return []
+
+        def add_vulnerability_report(self, **kwargs):
+            self.reports.append(kwargs)
+            return "vuln-0001"
+
+    state = FakeReportState()
+    monkeypatch.setattr("strix.report.state.get_global_report_state", lambda: state)
+
+    result = asyncio.run(node3_tool._do_create(
+        title="SQL Injection",
+        description="SQL injection is confirmed.",
+        impact="An attacker can read database contents.",
+        target="http://target.local",
+        technical_analysis="The endpoint concatenates SQL.",
+        poc_description="Send a UNION payload.",
+        poc_script_code="print('poc')",
+        remediation_steps="Use prepared statements.",
+        cvss_breakdown={"AV": "N", "AC": "L", "PR": "N", "UI": "N", "S": "U", "C": "H", "I": "H", "A": "H"},
+        endpoint="/sqli",
+        method="GET",
+        cve=None,
+        cwe="CWE-89",
+        code_locations=None,
+        evidence_ids=["ev-missing"],
+    ))
+
+    assert result["success"] is False
+    assert any("Unknown evidence_ids: ev-missing" in error for error in result["errors"])
+    assert state.reports == []
+
+
+def test_reporting_shim_validates_evidence_ids_against_context_state_dir(monkeypatch, tmp_path):
+    from strix.tools.run_memory import tools as memory_tools
+
+    state_a = tmp_path / "run-a" / ".state"
+    state_b = tmp_path / "run-b" / ".state"
+    state_a.mkdir(parents=True)
+    state_b.mkdir(parents=True)
+    memory_tools.hydrate_memory_from_disk(state_a)
+    ctx_a = ToolContext(
+        context={"agent_id": "root-a", "state_dir": str(state_a)},
+        tool_name="record_evidence",
+        tool_call_id="call-a",
+        tool_arguments="{}",
+    )
+    evidence_a = json.loads(asyncio.run(memory_tools.record_evidence.on_invoke_tool(
+        ctx_a,
+        json.dumps({"evidence_type": "http_trace", "summary": "Run A proof"}),
+    )))["evidence_id"]
+    memory_tools.hydrate_memory_from_disk(state_b)
+
+    class FakeReportState:
+        def __init__(self) -> None:
+            self.reports: list[dict] = []
+
+        def get_existing_vulnerabilities(self) -> list[dict]:
+            return []
+
+        def add_vulnerability_report(self, **kwargs):
+            self.reports.append(kwargs)
+            return "vuln-0001"
+
+    state = FakeReportState()
+    monkeypatch.setattr("strix.report.state.get_global_report_state", lambda: state)
+
+    result = asyncio.run(node3_tool._do_create(
+        title="SQL Injection",
+        description="SQL injection is confirmed.",
+        impact="An attacker can read database contents.",
+        target="http://target.local",
+        technical_analysis="The endpoint concatenates SQL.",
+        poc_description="Send a UNION payload.",
+        poc_script_code="print('poc')",
+        remediation_steps="Use prepared statements.",
+        cvss_breakdown={"AV": "N", "AC": "L", "PR": "N", "UI": "N", "S": "U", "C": "H", "I": "H", "A": "H"},
+        endpoint="/sqli",
+        method="GET",
+        cve=None,
+        cwe="CWE-89",
+        code_locations=None,
+        evidence_ids=[evidence_a],
+        state_dir=str(state_b),
+    ))
+
+    assert result["success"] is False
+    assert any(f"Unknown evidence_ids: {evidence_a}" in error for error in result["errors"])
+    assert state.reports == []
 
 
 def test_reporting_shim_accepts_cvss_short_keys(monkeypatch):
@@ -1220,11 +2114,118 @@ def test_reporting_shim_accepts_cvss_short_keys(monkeypatch):
         cve=None,
         cwe="CWE-78",
         code_locations=None,
+        evidence_ids=None,
     ))
 
     assert result["success"] is True
     assert result["cvss_score"] == 9.8
     assert state.reports[0]["cvss_breakdown"]["attack_vector"] == "N"
+
+
+def test_reporting_shim_tolerates_cvss_metric_values_with_scores(monkeypatch):
+    class FakeReportState:
+        def __init__(self) -> None:
+            self.reports: list[dict] = []
+
+        def get_existing_vulnerabilities(self) -> list[dict]:
+            return []
+
+        def add_vulnerability_report(self, **kwargs):
+            self.reports.append(kwargs)
+            return "vuln-0001"
+
+    state = FakeReportState()
+
+    async def fake_check_duplicate(candidate, existing):
+        return {"is_duplicate": False}
+
+    monkeypatch.setattr("strix.report.dedupe.check_duplicate", fake_check_duplicate)
+    monkeypatch.setattr("strix.report.state.get_global_report_state", lambda: state)
+
+    result = asyncio.run(node3_tool._do_create(
+        title="Command Injection",
+        description="Remote command execution is confirmed.",
+        impact="An attacker can execute arbitrary commands.",
+        target="http://target.local",
+        technical_analysis="The endpoint passes user input to a shell.",
+        poc_description="Send the payload and observe command output.",
+        poc_script_code="print('poc')",
+        remediation_steps="Avoid shell invocation and validate input.",
+        cvss_breakdown={
+            "AV": "N - SCORE: 9.8 CRITICAL",
+            "AC": "L",
+            "PR": "N",
+            "UI": "N",
+            "S": "U",
+            "C": "H",
+            "I": "H",
+            "A": "H - SCORE: 9.8 CRITICAL",
+        },
+        endpoint="/run",
+        method="POST",
+        cve=None,
+        cwe="CWE-78",
+        code_locations=None,
+        evidence_ids=None,
+    ))
+
+    assert result["success"] is True
+    assert result["cvss_score"] == 9.8
+    assert state.reports[0]["cvss_breakdown"]["attack_vector"] == "N"
+    assert state.reports[0]["cvss_breakdown"]["availability"] == "H"
+
+
+def test_reporting_shim_tolerates_cvss_metric_values_with_explanations(monkeypatch):
+    class FakeReportState:
+        def __init__(self) -> None:
+            self.reports: list[dict] = []
+
+        def get_existing_vulnerabilities(self) -> list[dict]:
+            return []
+
+        def add_vulnerability_report(self, **kwargs):
+            self.reports.append(kwargs)
+            return "vuln-0001"
+
+    state = FakeReportState()
+
+    async def fake_check_duplicate(candidate, existing):
+        return {"is_duplicate": False}
+
+    monkeypatch.setattr("strix.report.dedupe.check_duplicate", fake_check_duplicate)
+    monkeypatch.setattr("strix.report.state.get_global_report_state", lambda: state)
+
+    result = asyncio.run(node3_tool._do_create(
+        title="Sensitive Data Exposure",
+        description="Sensitive data exposure is confirmed.",
+        impact="An attacker can read user data.",
+        target="http://target.local",
+        technical_analysis="The endpoint exposes private user records.",
+        poc_description="Send the request and observe leaked data.",
+        poc_script_code="print('poc')",
+        remediation_steps="Enforce authorization checks.",
+        cvss_breakdown={
+            "AV": "N (6.5 MEDIUM) - LOW PRIVILEGE REQUIRED, HIGH CONFIDENTIALITY IMPACT",
+            "AC": "L",
+            "PR": "L",
+            "UI": "N",
+            "S": "U",
+            "C": "H",
+            "I": "N",
+            "A": "N (6.5 MEDIUM) - LOW PRIVILEGE REQUIRED",
+        },
+        endpoint="/users",
+        method="GET",
+        cve=None,
+        cwe="CWE-200",
+        code_locations=None,
+        evidence_ids=None,
+    ))
+
+    assert result["success"] is True
+    assert result["cvss_score"] == 6.5
+    assert state.reports[0]["cvss_breakdown"]["attack_vector"] == "N"
+    assert state.reports[0]["cvss_breakdown"]["availability"] == "N"
 
 
 def test_reporting_shim_accepts_cvss_vector_and_json_wrapper(monkeypatch):
@@ -1261,6 +2262,7 @@ def test_reporting_shim_accepts_cvss_vector_and_json_wrapper(monkeypatch):
         "cve": None,
         "cwe": "CWE-89",
         "code_locations": None,
+        "evidence_ids": None,
     }
     vector_result = asyncio.run(node3_tool._do_create(
         **base,
@@ -1309,6 +2311,7 @@ def test_reporting_shim_duplicate_is_skipped_not_failed(monkeypatch):
         cve=None,
         cwe="CWE-89",
         code_locations=None,
+        evidence_ids=None,
     ))
 
     assert result["success"] is True

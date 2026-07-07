@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from strix.report.state import ReportState
+from strix.tools.run_memory.tools import attack_surface_from_file, coverage_from_file, evidence_from_file
 
 
 MAX_TOOL_OUTPUT_CHARS = 4000
@@ -202,6 +203,12 @@ class PlatformEventSink:
             f"发现并记录漏洞：{str(report.get('title') or 'Strix vulnerability')}（{normalize_severity(report.get('severity'))}）",
             metadata={"vulnerability_id": vuln_id},
         ))
+        report_evidence_ids = [
+            str(eid)
+            for eid in (report.get("evidence_ids") if isinstance(report.get("evidence_ids"), list) else [])
+            if str(eid).strip()
+        ]
+        event_evidence_ids = report_evidence_ids or [evidence_id]
         self.emit({
             "type": "vuln_found",
             "conversation_id": self.task["conversation_id"],
@@ -223,7 +230,7 @@ class PlatformEventSink:
             "poc_script_code": str(report.get("poc_script_code") or ""),
             "remediation": first_text(report, "remediation", "remediation_steps"),
             "remediation_steps": str(report.get("remediation_steps") or ""),
-            "evidence_ids": [evidence_id],
+            "evidence_ids": event_evidence_ids,
             "cvss": report.get("cvss"),
             "cvss_breakdown": report.get("cvss_breakdown"),
             "cve_id": report.get("cve"),
@@ -319,6 +326,9 @@ def checkpoint(
     agents: list[dict[str, Any]] | None = None,
     todos: list[dict[str, Any]] | None = None,
     notes: list[dict[str, Any]] | None = None,
+    attack_surface: list[dict[str, Any]] | None = None,
+    coverage: list[dict[str, Any]] | None = None,
+    evidence: list[dict[str, Any]] | None = None,
     vulnerabilities: list[dict[str, Any]] | None = None,
     run: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -331,6 +341,12 @@ def checkpoint(
         node3_strix["todos"] = normalize_todos(todos)
     if notes:
         node3_strix["notes"] = normalize_notes(notes)
+    if attack_surface:
+        node3_strix["attack_surface"] = normalize_attack_surface(attack_surface)
+    if coverage:
+        node3_strix["coverage"] = normalize_coverage(coverage)
+    if evidence:
+        node3_strix["evidence"] = normalize_evidence(evidence)
     if vulnerabilities:
         node3_strix["vulnerabilities"] = normalize_vulnerabilities(vulnerabilities)
     return {
@@ -364,6 +380,9 @@ def runtime_checkpoint(
         agents=agents,
         todos=todos_from_file(state_dir / "todos.json"),
         notes=notes_from_file(state_dir / "notes.json"),
+        attack_surface=attack_surface_from_file(state_dir / "attack_surface.json"),
+        coverage=coverage_from_file(state_dir / "coverage.json"),
+        evidence=evidence_from_file(state_dir / "evidence.json"),
         vulnerabilities=vulnerabilities,
     )
 
@@ -574,6 +593,93 @@ def normalize_notes(raw: Any) -> list[dict[str, Any]]:
     return sorted(items, key=lambda item: str(item.get("created_at") or ""))
 
 
+def normalize_attack_surface(raw: Any) -> list[dict[str, Any]]:
+    if isinstance(raw, dict):
+        raw_items = raw.get("attack_surface") or raw.get("items") or list(raw.values())
+    else:
+        raw_items = raw
+    if not isinstance(raw_items, list):
+        return []
+    items = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        params = item.get("parameters") if isinstance(item.get("parameters"), list) else []
+        evidence_ids = item.get("evidence_ids") if isinstance(item.get("evidence_ids"), list) else []
+        items.append({
+            "surface_id": string_value(item.get("surface_id") or item.get("id")) or safe_id(item.get("url") or item.get("address") or "surface"),
+            "kind": string_value(item.get("kind")) or "other",
+            "method": string_value(item.get("method")),
+            "url": string_value(item.get("url")),
+            "address": string_value(item.get("address")),
+            "parameters": [str(param) for param in params[:30] if str(param).strip()],
+            "auth_state": string_value(item.get("auth_state")),
+            "role": string_value(item.get("role")),
+            "source": string_value(item.get("source")),
+            "evidence_ids": [str(eid) for eid in evidence_ids[:20] if str(eid).strip()],
+            "notes": string_value(item.get("notes")),
+            "agent_id": string_value(item.get("agent_id")),
+            "created_at": string_value(item.get("created_at")),
+            "updated_at": string_value(item.get("updated_at")),
+        })
+    return sorted(items, key=lambda item: str(item.get("created_at") or ""))
+
+
+def normalize_coverage(raw: Any) -> list[dict[str, Any]]:
+    if isinstance(raw, dict):
+        raw_items = raw.get("coverage") or raw.get("items") or list(raw.values())
+    else:
+        raw_items = raw
+    if not isinstance(raw_items, list):
+        return []
+    items = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        evidence_ids = item.get("evidence_ids") if isinstance(item.get("evidence_ids"), list) else []
+        items.append({
+            "coverage_id": string_value(item.get("coverage_id") or item.get("id")) or safe_id(item.get("endpoint") or "coverage"),
+            "endpoint": string_value(item.get("endpoint")),
+            "parameter": string_value(item.get("parameter")) or "<none>",
+            "vuln_type": string_value(item.get("vuln_type")),
+            "status": string_value(item.get("status")) or "planned",
+            "auth_state": string_value(item.get("auth_state")),
+            "evidence_ids": [str(eid) for eid in evidence_ids[:20] if str(eid).strip()],
+            "result": string_value(item.get("result")),
+            "notes": string_value(item.get("notes")),
+            "agent_id": string_value(item.get("agent_id")),
+            "created_at": string_value(item.get("created_at")),
+            "updated_at": string_value(item.get("updated_at")),
+        })
+    return sorted(items, key=lambda item: str(item.get("created_at") or ""))
+
+
+def normalize_evidence(raw: Any) -> list[dict[str, Any]]:
+    if isinstance(raw, dict):
+        raw_items = raw.get("evidence") or raw.get("items") or list(raw.values())
+    else:
+        raw_items = raw
+    if not isinstance(raw_items, list):
+        return []
+    items = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        items.append({
+            "evidence_id": string_value(item.get("evidence_id") or item.get("id")) or safe_id(item.get("summary") or "evidence"),
+            "evidence_type": string_value(item.get("evidence_type")) or "other",
+            "summary": string_value(item.get("summary")),
+            "content": string_value(item.get("content"))[:MAX_TOOL_OUTPUT_CHARS],
+            "source_tool": string_value(item.get("source_tool")),
+            "target": string_value(item.get("target")),
+            "metadata": item.get("metadata") if isinstance(item.get("metadata"), dict) else {},
+            "agent_id": string_value(item.get("agent_id")),
+            "created_at": string_value(item.get("created_at")),
+            "updated_at": string_value(item.get("updated_at")),
+        })
+    return sorted(items, key=lambda item: str(item.get("created_at") or ""))
+
+
 def normalize_vulnerabilities(raw: Any) -> list[dict[str, Any]]:
     if isinstance(raw, dict):
         raw_items = raw.get("vulnerabilities") or raw.get("reports") or raw.get("items") or []
@@ -585,6 +691,7 @@ def normalize_vulnerabilities(raw: Any) -> list[dict[str, Any]]:
 
 
 def normalize_vulnerability(item: dict[str, Any]) -> dict[str, Any]:
+    evidence_ids = item.get("evidence_ids") if isinstance(item.get("evidence_ids"), list) else []
     return {
         "id": string_value(item.get("id")) or safe_id(item.get("title") or "finding"),
         "title": string_value(item.get("title")) or "Untitled vulnerability",
@@ -603,6 +710,7 @@ def normalize_vulnerability(item: dict[str, Any]) -> dict[str, Any]:
         "method": string_value(item.get("method")),
         "cve_id": string_value(item.get("cve") or item.get("cve_id")),
         "cwe": string_value(item.get("cwe")),
+        "evidence_ids": [str(eid) for eid in evidence_ids[:20] if str(eid).strip()],
         "agent_id": string_value(item.get("agent_id")),
         "agent_name": string_value(item.get("agent_name")),
     }

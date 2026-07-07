@@ -459,6 +459,17 @@ def _agent_target_for_request(
             return _normalize_agent_identity(item.agent_type, str(item.agent_type or "").strip().lower())
     return None
 
+def _is_active_runtime_status(conversation_status: str | None) -> bool:
+    return str(conversation_status or "").strip().lower() == "running"
+
+def _should_use_sticky_node_binding(
+    *,
+    conversation_status: str | None,
+    requested_node_id: str | None,
+    bound_node_id: str | None,
+) -> bool:
+    return bool(_is_active_runtime_status(conversation_status) and not requested_node_id and bound_node_id)
+
 def _decision_agent_attribution(decision) -> tuple[str, str]:
     source = _normalize_agent_identity(getattr(decision, "agent", None), "platform") or "platform"
     node_id = str(getattr(decision, "agent_node_id", "") or "")
@@ -1553,7 +1564,11 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     capabilities = await _available_agent_capabilities()
                     requested_node_id = _mentioned_node_id(msg, capabilities)
                     requested_agent = _agent_target_for_request(msg, requested_node_id, capabilities)
-                    if not requested_node_id and bound_node_id:
+                    if _should_use_sticky_node_binding(
+                        conversation_status=conversation_status,
+                        requested_node_id=requested_node_id,
+                        bound_node_id=bound_node_id,
+                    ):
                         bound_capability = next((item.capability for item in capabilities if item.node_id == bound_node_id), None)
                         sent = await _send_direct_node_message(conv_id, bound_node_id, msg, bound_capability)
                         await _audit(
@@ -1647,28 +1662,31 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         continue
 
                     resumed_from_context = False
+                    force_dispatch_resumed_task = False
                     if decision.action == "continue_task":
-                        steer_msg = {**msg, "type": "user_steer"}
-                        sent = await _send_to_bound_node(conv_id, json.dumps(steer_msg, ensure_ascii=False))
-                        if sent:
-                            await _audit(
-                                actor_type="user",
-                                actor_id=uuid.UUID(client_id),
-                                action="user_steer",
-                                resource_type="conversation",
-                                resource_id=uuid.UUID(conv_id),
-                                conversation_id=uuid.UUID(conv_id),
-                                detail={"sent": sent, "source": "agent_router"},
-                            )
-                            continue
+                        if _is_active_runtime_status(conversation_status):
+                            steer_msg = {**msg, "type": "user_steer"}
+                            sent = await _send_to_bound_node(conv_id, json.dumps(steer_msg, ensure_ascii=False))
+                            if sent:
+                                await _audit(
+                                    actor_type="user",
+                                    actor_id=uuid.UUID(client_id),
+                                    action="user_steer",
+                                    resource_type="conversation",
+                                    resource_id=uuid.UUID(conv_id),
+                                    conversation_id=uuid.UUID(conv_id),
+                                    detail={"sent": sent, "source": "agent_router"},
+                                )
+                                continue
                         resumed_msg, resumed_from_context = _resume_message_from_context(msg, resume_context)
                         if resumed_msg:
                             msg = resumed_msg
+                            force_dispatch_resumed_task = True
                         else:
                             await _answer_with_platform_agent(conv_id, client_id, msg.get("text", ""), "platform", "platform_chat")
                             continue
 
-                    if decision.action == "dispatch_node":
+                    if decision.action == "dispatch_node" or force_dispatch_resumed_task:
                         if decision.mode == "completed_followup" and not decision.targets:
                             resumed_msg, resumed_from_context = _resume_message_from_context(msg, resume_context, include_checkpoint=False)
                             if resumed_msg:
