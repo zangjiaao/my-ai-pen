@@ -8,6 +8,8 @@ the frontend has loaded.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
+from pathlib import Path
 import re
 import uuid
 
@@ -273,6 +275,7 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     agent_items = agents_from_messages(messages)
     strix_agent_items = strix_agents_from_checkpoint(checkpoint)
     strix_note_items = strix_notes_from_checkpoint(checkpoint)
+    strix_run = strix_run_from_checkpoint(checkpoint)
 
     return {
         "conversation": conversation_summary(conversation),
@@ -280,6 +283,7 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
         "agents": agent_items,
         "strix_agents": strix_agent_items,
         "strix_notes": strix_note_items,
+        "strix_run": strix_run,
         "agent_state": agent_state,
         "progress": progress,
         "kanban": kanban,
@@ -309,6 +313,7 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
             "agents": len(agent_items),
             "strix_agents": len(strix_agent_items),
             "strix_notes": len(strix_note_items),
+            "has_strix_run": bool(strix_run),
             "has_task_context": bool(task_context),
         },
     }
@@ -427,6 +432,112 @@ def strix_notes_from_checkpoint(checkpoint: dict) -> list[dict]:
             "updated_at": str(item.get("updated_at") or ""),
         })
     return normalized
+
+
+def strix_run_from_checkpoint(checkpoint: dict) -> dict:
+    if not isinstance(checkpoint, dict):
+        return {}
+    node3 = checkpoint.get("node3_strix") if isinstance(checkpoint.get("node3_strix"), dict) else {}
+    run = node3.get("run") if isinstance(node3.get("run"), dict) else {}
+    if not run:
+        run = strix_run_from_run_dir(str(node3.get("run_dir") or ""))
+    if not run:
+        return {}
+    targets = run.get("targets_info") if isinstance(run.get("targets_info"), list) else []
+    usage = run.get("llm_usage") if isinstance(run.get("llm_usage"), dict) else {}
+    return {
+        "run_id": str(run.get("run_id") or ""),
+        "run_name": str(run.get("run_name") or node3.get("run_name") or ""),
+        "status": str(run.get("status") or ""),
+        "start_time": str(run.get("start_time") or ""),
+        "end_time": str(run.get("end_time") or ""),
+        "scan_mode": str(run.get("scan_mode") or ""),
+        "targets_info": [strix_target_summary(item) for item in targets if isinstance(item, dict)][:12],
+        "llm_usage": {
+            "requests": safe_int(usage.get("requests")),
+            "input_tokens": safe_int(usage.get("input_tokens")),
+            "cached_tokens": safe_int(usage.get("cached_tokens")),
+            "output_tokens": safe_int(usage.get("output_tokens")),
+            "reasoning_tokens": safe_int(usage.get("reasoning_tokens")),
+            "total_tokens": safe_int(usage.get("total_tokens")),
+            "cost": safe_float(usage.get("cost")),
+            "agent_count": safe_int(usage.get("agent_count")),
+        },
+    }
+
+
+def strix_run_from_run_dir(run_dir: str) -> dict:
+    if not run_dir:
+        return {}
+    try:
+        path = Path(run_dir) / "run.json"
+        if not path.exists():
+            return {}
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    usage = raw.get("llm_usage") if isinstance(raw.get("llm_usage"), dict) else {}
+    return {
+        "run_id": str(raw.get("run_id") or ""),
+        "run_name": str(raw.get("run_name") or ""),
+        "status": str(raw.get("status") or ""),
+        "start_time": str(raw.get("start_time") or ""),
+        "end_time": str(raw.get("end_time") or ""),
+        "scan_mode": str(raw.get("scan_mode") or ""),
+        "targets_info": [strix_target_from_raw(item) for item in raw.get("targets_info", []) if isinstance(item, dict)][:12],
+        "llm_usage": {
+            "requests": safe_int(usage.get("requests")),
+            "input_tokens": safe_int(usage.get("input_tokens")),
+            "cached_tokens": usage_detail_total(usage.get("input_tokens_details"), "cached_tokens"),
+            "output_tokens": safe_int(usage.get("output_tokens")),
+            "reasoning_tokens": usage_detail_total(usage.get("output_tokens_details"), "reasoning_tokens"),
+            "total_tokens": safe_int(usage.get("total_tokens")),
+            "cost": safe_float(usage.get("cost")),
+            "agent_count": len([item for item in usage.get("agent_usages", []) if isinstance(item, dict)]) if isinstance(usage.get("agent_usages"), list) else 0,
+        },
+    }
+
+
+def strix_target_summary(item: dict) -> dict:
+    return {
+        "type": str(item.get("type") or "target"),
+        "target": str(item.get("target") or item.get("original") or ""),
+        "original": str(item.get("original") or item.get("target") or ""),
+    }
+
+
+def strix_target_from_raw(item: dict) -> dict:
+    details = item.get("details") if isinstance(item.get("details"), dict) else {}
+    target = details.get("target_url") or details.get("target_repo") or details.get("target_path") or details.get("target_host") or item.get("original") or ""
+    return {
+        "type": str(item.get("type") or "target"),
+        "target": str(target),
+        "original": str(item.get("original") or target),
+    }
+
+
+def usage_detail_total(raw, key: str) -> int:
+    if isinstance(raw, dict):
+        return safe_int(raw.get(key))
+    if isinstance(raw, list):
+        return sum(safe_int(item.get(key)) for item in raw if isinstance(item, dict))
+    return 0
+
+
+def safe_int(value) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def safe_float(value) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def normalize_plan_status(value) -> str:

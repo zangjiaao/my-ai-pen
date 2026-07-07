@@ -1,5 +1,5 @@
 import { useEffect, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { ChevronRight } from "lucide-react";
+import { Bot, CheckCircle2, ChevronRight, Circle, CircleDashed, GitBranch, Tag, XCircle } from "lucide-react";
 import type { SecurityAsset, SecurityVulnerability } from "../lib/securityTypes";
 
 type Tab = "status" | "discoveries" | "activity";
@@ -77,6 +77,26 @@ type StrixNote = {
   updated_at?: string;
 };
 
+type StrixRun = {
+  run_id?: string;
+  run_name?: string;
+  status?: string;
+  start_time?: string;
+  end_time?: string;
+  scan_mode?: string;
+  targets_info?: Array<{ type?: string; target?: string; original?: string }>;
+  llm_usage?: {
+    requests?: number;
+    input_tokens?: number;
+    cached_tokens?: number;
+    output_tokens?: number;
+    reasoning_tokens?: number;
+    total_tokens?: number;
+    cost?: number;
+    agent_count?: number;
+  };
+};
+
 type PhasePlan = {
   id: WorkflowPhaseId;
   label: string;
@@ -96,6 +116,7 @@ interface Props {
   planTree?: PlanNode[];
   strixAgents?: StrixAgentStatus[];
   strixNotes?: StrixNote[];
+  strixRun?: StrixRun;
   timeline?: TimelineEvent[];
   timelineCursorAt?: string;
   findings?: Array<Record<string, unknown>>;
@@ -137,6 +158,7 @@ export default function RightPanel({
   planTree = [],
   strixAgents = [],
   strixNotes = [],
+  strixRun,
   timeline = [],
   timelineCursorAt,
   findings = [],
@@ -151,7 +173,6 @@ export default function RightPanel({
   const kanbanSummary = normalizeKanban(kanban, planTree, progress, workflowKind);
   const isStrixWorkflow = workflowKind === "strix" || kanbanSummary.workflow_kind === "strix" || planTree.some((node) => String(node.source || "") === "strix_todo");
   const phasePlan = hasStatusData ? buildPhasePlan(planTree, kanbanSummary.current_stage, activeTool, running, findings.length, isStrixWorkflow) : [];
-  const currentAction = currentActionText({ activeTool, running, currentStage: kanbanSummary.current_stage, timeline, phasePlan, strixAgents: orderedStrixAgents, findingsCount: findings.length, planCount: planTree.length });
   const overallProgress = overallPlanProgress(phasePlan, kanbanSummary, progress);
   const elapsedBaseSeconds = normalizeSeconds(kanbanSummary.elapsed_seconds);
   const intake = normalizeIntake(intakeResult, intakeStatus);
@@ -262,15 +283,15 @@ export default function RightPanel({
       <div className="flex-1 overflow-y-auto p-4">
         {tab === "status" && (
           <div className="space-y-4">
-            <section>
-              <p className="mb-1 text-xs text-ink-muted">Elapsed</p>
-              <p className="font-mono text-xl font-semibold leading-none tracking-normal">{elapsedText}</p>
-            </section>
+            {isStrixWorkflow && strixRun ? (
+              <StrixRunSummary run={strixRun} elapsedText={elapsedText} />
+            ) : (
+              <section>
+                <p className="mb-1 text-xs text-ink-muted">Elapsed</p>
+                <p className="font-mono text-xl font-semibold leading-none tracking-normal">{elapsedText}</p>
+              </section>
+            )}
             {!isStrixWorkflow && hasStatusData && overallProgress.label !== "waiting" && <OverallProgress progress={overallProgress} />}
-            <section>
-              <p className="mb-1 text-xs text-ink-muted">Current action</p>
-              <p className="break-words text-sm font-medium [overflow-wrap:anywhere]">{currentAction}</p>
-            </section>
             {orderedStrixAgents.length > 0 && (
               <section>
                 <div className="mb-2 flex items-center justify-between gap-2">
@@ -282,7 +303,11 @@ export default function RightPanel({
             )}
             <section>
               <p className="mb-2 text-xs text-ink-muted">{isStrixWorkflow ? "Strix tasks" : "Workflow plan"}</p>
-              <WorkflowPlan phases={phasePlan} strixWorkflow={isStrixWorkflow} running={running} />
+              {isStrixWorkflow ? (
+                <StrixTodoList items={phasePlan.flatMap((phase) => phase.items)} running={running} />
+              ) : (
+                <WorkflowPlan phases={phasePlan} running={running} />
+              )}
             </section>
             {intake && <IntakeSummary intake={intake} />}
           </div>
@@ -390,9 +415,122 @@ function OverallProgress({ progress }: { progress: { percent: number; label: str
   );
 }
 
-function WorkflowPlan({ phases, strixWorkflow = false, running = false }: { phases: PhasePlan[]; strixWorkflow?: boolean; running?: boolean }) {
+function StrixRunSummary({ run, elapsedText }: { run: StrixRun; elapsedText: string }) {
+  const usage = run.llm_usage || {};
+  const targets = Array.isArray(run.targets_info) ? run.targets_info : [];
+  const hasUsage = Number(usage.total_tokens || usage.requests || 0) > 0;
+  const hasTargets = targets.some((target) => target.target || target.original);
+  if (!run.start_time && !run.end_time && !hasTargets && !hasUsage) return null;
+  return (
+    <section className="space-y-3 text-xs">
+      <TimeSummary elapsedText={elapsedText} startTime={run.start_time} endTime={run.end_time} />
+      {hasUsage && <LlmUsageSummary usage={usage} />}
+      {hasTargets && <TargetSummary targets={targets} />}
+    </section>
+  );
+}
+
+function TimeSummary({ elapsedText, startTime, endTime }: { elapsedText: string; startTime?: string; endTime?: string }) {
+  return (
+    <div className="grid grid-cols-3 gap-2">
+      <div className="min-w-0 px-2 py-1">
+        <SummarySubLabel>Elapsed</SummarySubLabel>
+        <p className="mt-0.5 font-mono text-xl font-semibold leading-none text-ink">{elapsedText}</p>
+      </div>
+      <div className="min-w-0 px-2 py-1">
+        <SummarySubLabel>Started</SummarySubLabel>
+        <SummaryValue>{startTime ? formatDateTime(startTime) : "-"}</SummaryValue>
+      </div>
+      <div className="min-w-0 px-2 py-1">
+        <SummarySubLabel>Ended</SummarySubLabel>
+        <SummaryValue>{endTime ? formatDateTime(endTime) : "-"}</SummaryValue>
+      </div>
+    </div>
+  );
+}
+
+function LlmUsageSummary({ usage }: { usage: NonNullable<StrixRun["llm_usage"]> }) {
+  const tokenDetail = `Input: ${formatNumber(usage.input_tokens)}\nOutput: ${formatNumber(usage.output_tokens)}\nCached: ${formatNumber(usage.cached_tokens)}\nReasoning: ${formatNumber(usage.reasoning_tokens)}`;
+  return (
+    <div className="grid grid-cols-3 gap-2">
+      <div className="min-w-0 px-2 py-1">
+        <SummarySubLabel>Requests</SummarySubLabel>
+        <SummaryValue>{formatNumber(usage.requests)}</SummaryValue>
+      </div>
+      <div className="min-w-0 px-2 py-1" title={tokenDetail}>
+        <SummarySubLabel>Tokens</SummarySubLabel>
+        <SummaryValue>{formatCompactNumber(usage.total_tokens)}</SummaryValue>
+      </div>
+      <div className="min-w-0 px-2 py-1">
+        <SummarySubLabel>Cost</SummarySubLabel>
+        <SummaryValue>{Number(usage.cost || 0) > 0 ? `$${formatCost(usage.cost)}` : "-"}</SummaryValue>
+      </div>
+    </div>
+  );
+}
+
+function TargetSummary({ targets }: { targets: NonNullable<StrixRun["targets_info"]> }) {
+  const items = targets.map((target) => ({
+    type: target.type || "target",
+    value: target.target || target.original || "",
+  })).filter((target) => target.value);
+  if (!items.length) return null;
+  return (
+    <div className="min-w-0">
+      <SummaryLabel>Target</SummaryLabel>
+      <div className="space-y-1">
+        {items.map((target, index) => (
+          <div key={`${target.value}-${index}`} className="flex min-w-0 items-start gap-2">
+            <span className="shrink-0 rounded-sm bg-canvas-inset px-1.5 py-0.5 text-[10px] uppercase text-ink-secondary">{target.type}</span>
+            <span className="min-w-0 break-words font-mono text-xs font-medium text-ink [overflow-wrap:anywhere]">{target.value}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SummaryLabel({ children }: { children: ReactNode }) {
+  return <p className="mb-1 text-xs text-ink-muted">{children}</p>;
+}
+
+function SummarySubLabel({ children }: { children: ReactNode }) {
+  return <p className="text-[10px] text-ink-muted">{children}</p>;
+}
+
+function SummaryValue({ children }: { children: ReactNode }) {
+  return <p className="mt-0.5 min-w-0 break-words font-mono text-sm font-medium text-ink [overflow-wrap:anywhere]">{children}</p>;
+}
+
+function StrixTodoList({ items, running = false }: { items: PlanNode[]; running?: boolean }) {
+  if (!items.length) {
+    return <p className="text-sm text-ink-muted">{running ? "Waiting for Strix to publish tasks" : "No active task plan yet"}</p>;
+  }
+  const orderedItems = [...items].sort((left, right) => strixTaskStatusWeight(left.status) - strixTaskStatusWeight(right.status) || Number(left.priority || 999) - Number(right.priority || 999) || String(left.title || "").localeCompare(String(right.title || "")));
+  return (
+    <div className="space-y-1" data-testid="strix-todo-list">
+      {orderedItems.map((item, index) => <StrixTodoItem key={planNodeKey(item, index)} item={item} />)}
+    </div>
+  );
+}
+
+function StrixTodoItem({ item }: { item: PlanNode }) {
+  const status = normalizeTodoStatus(item.status);
+  const Icon = todoStatusIcon(status);
+  return (
+    <div className="flex min-w-0 items-start gap-2 rounded-md px-2 py-2 hover:bg-canvas-inset">
+      <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${todoStatusIconClass(status)}`} />
+      <div className="min-w-0 flex-1">
+        <p className={`break-words text-sm font-medium [overflow-wrap:anywhere] ${todoTitleClass(status)}`}>{String(item.title || "Untitled task")}</p>
+        {item.notes && <p className="mt-0.5 break-words text-xs text-ink-muted [overflow-wrap:anywhere]">{clip(item.notes, 150)}</p>}
+      </div>
+    </div>
+  );
+}
+
+function WorkflowPlan({ phases }: { phases: PhasePlan[]; running?: boolean }) {
   if (!phases.length) {
-    return <p className="text-sm text-ink-muted">{strixWorkflow && running ? "Waiting for Strix to publish tasks" : "No active task plan yet"}</p>;
+    return <p className="text-sm text-ink-muted">No active task plan yet</p>;
   }
   return (
     <div className="space-y-3" data-testid="workflow-plan">
@@ -504,11 +642,14 @@ function AgentRow({
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-start justify-between gap-2">
             <div className="min-w-0">
-              <p className="truncate text-sm font-medium">{agent.name || agent.id}</p>
+              <div className="flex min-w-0 items-center gap-1.5">
+                <AgentRoleBadge primary={primary} />
+                <p className="min-w-0 flex-1 truncate text-sm font-medium">{agent.name || agent.id}</p>
+              </div>
               <p className="mt-0.5 text-xs text-ink-secondary">{summary}</p>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
-              {childCount > 0 && <span className="font-mono text-[10px] text-ink-muted">{childCount}</span>}
+              {childCount > 0 && <span className="font-mono text-[10px] text-ink-muted" title={`${childCount} sub-agents`}>{childCount}</span>}
               <span className={`rounded-sm px-1.5 py-0.5 text-[10px] font-medium uppercase ${agentStatusBadgeClass(agent.status)}`}>{status}</span>
             </div>
           </div>
@@ -519,20 +660,41 @@ function AgentRow({
   );
 }
 
+function AgentRoleBadge({ primary }: { primary: boolean }) {
+  const Icon = primary ? Bot : GitBranch;
+  const label = primary ? "Main Agent" : "Sub Agent";
+  return (
+    <span
+      title={label}
+      aria-label={label}
+      className={`inline-flex h-5 w-5 shrink-0 items-center justify-center ${primary ? "text-ink" : "text-ink-muted"}`}
+    >
+      <Icon className="h-3 w-3" />
+    </span>
+  );
+}
+
 function AgentMeta({ agent, primary }: { agent: StrixAgentStatus; primary: boolean }) {
-  const skills = Array.isArray(agent.skills) ? agent.skills.slice(0, primary ? 4 : 3) : [];
-  const meta = [
-    primary ? "main agent" : "sub-agent",
-    Number(agent.pending_count || 0) > 0 ? `${agent.pending_count} queued` : "",
-    ...skills,
-  ].filter(Boolean);
-  if (!meta.length) return null;
+  const skills = Array.isArray(agent.skills) ? agent.skills.slice(0, primary ? 4 : 5) : [];
+  const pendingCount = Number(agent.pending_count || 0);
+  if (!skills.length && pendingCount <= 0) return null;
   return (
     <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-      {meta.map((item) => (
-        <span key={item} className="text-[10px] text-ink-muted">{item}</span>
-      ))}
+      {pendingCount > 0 && <span className="rounded-sm bg-canvas-inset px-1.5 py-0.5 text-[10px] text-ink-muted" title="Queued messages or actions waiting for this agent">{pendingCount} queued</span>}
+      {skills.map((skill) => <AgentSkillBadge key={skill} skill={skill} />)}
     </div>
+  );
+}
+
+function AgentSkillBadge({ skill }: { skill: string }) {
+  return (
+    <span
+      title={`Strix skill: ${skill}`}
+      className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-sm bg-canvas-inset px-1.5 py-0.5 text-[10px] text-ink-muted"
+    >
+      <Tag className="h-3 w-3 shrink-0" />
+      <span className="truncate">{friendlySkillName(skill)}</span>
+    </span>
   );
 }
 
@@ -707,31 +869,6 @@ function stageProgressPercent(phases: PhasePlan[]): number {
   return Math.round(((done + running) / phases.length) * 100);
 }
 
-function currentActionText({ activeTool, running, currentStage, timeline, phasePlan, strixAgents, findingsCount = 0, planCount = 0 }: { activeTool?: string; running?: boolean; currentStage?: string; timeline: TimelineEvent[]; phasePlan: PhasePlan[]; strixAgents?: StrixAgentStatus[]; findingsCount?: number; planCount?: number }): string {
-  const activeStrixAgent = strixAgents?.find((agent) => agent.role === "main" && isActiveAgentStatus(agent.status)) || strixAgents?.find((agent) => isActiveAgentStatus(agent.status));
-  if (running && activeStrixAgent?.current_action) return activeStrixAgent.current_action;
-  const tool = String(activeTool || "").trim();
-  if (running && tool && tool !== "pi") return actionForTool(tool);
-  const activePlanItem = phasePlan.flatMap((phase) => phase.items).find((item) => item.status === "running");
-  if (running && activePlanItem?.title) return String(activePlanItem.title);
-  const recent = [...timeline].reverse().find((event) => event.title && !["status", "workflow"].includes(event.category.toLowerCase()));
-  if (running && recent) return recent.title;
-  if (currentStage === "completed") return "Task complete";
-  if (currentStage === "incomplete") return "Task stopped before completion";
-  if (currentStage === "summarizing") return "Preparing summary";
-  if (running) return "Agent is working";
-  if (findingsCount > 0 || planCount > 0) return "Scan results ready";
-  return "Waiting for task";
-}
-
-function actionForTool(tool: string): string {
-  const normalized = tool.toLowerCase();
-  if (["browser", "scan", "traffic"].includes(normalized)) return "Discovering target surface";
-  if (["http", "poc", "coverage", "skill"].includes(normalized)) return "Testing selected behavior";
-  if (["verifier", "finding"].includes(normalized)) return "Verifying and recording findings";
-  return `${tool} running`;
-}
-
 function lightweightStageId(currentStage: string | undefined, activeTool: string | undefined, running: boolean | undefined, findingsCount: number): WorkflowPhaseId | "completed" {
   if (currentStage === "completed") return "completed";
   if (currentStage === "summarizing" || currentStage === "incomplete") return "summary";
@@ -883,6 +1020,21 @@ function friendlyActionName(tool: string): string {
   return tool.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function friendlySkillName(skill: string): string {
+  const explicit: Record<string, string> = {
+    authentication_jwt: "Auth / JWT",
+    business_logic: "Business logic",
+    sql_injection: "SQL injection",
+    ssrf: "SSRF",
+    ssti: "SSTI",
+    csrf: "CSRF",
+    rce: "RCE",
+    xss: "XSS",
+  };
+  const normalized = String(skill || "").trim();
+  return explicit[normalized.toLowerCase()] || friendlyActionName(normalized);
+}
+
 function formatTimelineTime(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
@@ -899,6 +1051,46 @@ function planItemDotClass(status: string): string {
   return "bg-canvas-inset";
 }
 
+function normalizeTodoStatus(status: PlanStatus | undefined): "running" | "done" | "failed" | "blocked" | "skipped" | "pending" {
+  const normalized = String(status || "pending").toLowerCase();
+  if (["completed", "complete", "done"].includes(normalized)) return "done";
+  if (["running", "in_progress", "active"].includes(normalized)) return "running";
+  if (["failed", "error", "crashed"].includes(normalized)) return "failed";
+  if (normalized === "blocked") return "blocked";
+  if (normalized === "skipped") return "skipped";
+  return "pending";
+}
+
+function strixTaskStatusWeight(status: PlanStatus | undefined): number {
+  const normalized = normalizeTodoStatus(status);
+  if (normalized === "running") return 0;
+  if (normalized === "pending") return 1;
+  if (normalized === "blocked") return 2;
+  if (normalized === "failed") return 3;
+  if (normalized === "done") return 4;
+  return 5;
+}
+
+function todoStatusIcon(status: ReturnType<typeof normalizeTodoStatus>) {
+  if (status === "done") return CheckCircle2;
+  if (status === "running") return CircleDashed;
+  if (status === "failed" || status === "blocked") return XCircle;
+  return Circle;
+}
+
+function todoStatusIconClass(status: ReturnType<typeof normalizeTodoStatus>): string {
+  if (status === "running") return "text-status-running";
+  if (status === "done") return "text-status-success";
+  if (status === "failed" || status === "blocked") return "text-severity-critical";
+  if (status === "skipped") return "text-ink-muted";
+  return "text-[#d97706]";
+}
+
+function todoTitleClass(status: ReturnType<typeof normalizeTodoStatus>): string {
+  if (status === "done" || status === "skipped") return "text-ink-muted";
+  return "text-ink";
+}
+
 function normalizeSeconds(seconds: unknown): number {
   const value = Number(seconds || 0);
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
@@ -912,6 +1104,30 @@ function formatDuration(seconds: unknown): string {
   const secs = total % 60;
   const pad = (item: number) => String(item).padStart(2, "0");
   return hours > 0 ? `${hours}:${pad(minutes)}:${pad(secs)}` : `${pad(minutes)}:${pad(secs)}`;
+}
+
+function formatDateTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString([], { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function formatNumber(value: unknown): string {
+  const numberValue = Number(value || 0);
+  if (!Number.isFinite(numberValue) || numberValue <= 0) return "0";
+  return new Intl.NumberFormat().format(numberValue);
+}
+
+function formatCompactNumber(value: unknown): string {
+  const numberValue = Number(value || 0);
+  if (!Number.isFinite(numberValue) || numberValue <= 0) return "0";
+  return new Intl.NumberFormat([], { notation: "compact", maximumFractionDigits: 1 }).format(numberValue);
+}
+
+function formatCost(value: unknown): string {
+  const numberValue = Number(value || 0);
+  if (!Number.isFinite(numberValue) || numberValue <= 0) return "0";
+  return numberValue < 0.01 ? numberValue.toFixed(4) : numberValue.toFixed(2);
 }
 
 function planNodeKey(node: PlanNode, index: number) {

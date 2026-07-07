@@ -307,8 +307,11 @@ def checkpoint(
     todos: list[dict[str, Any]] | None = None,
     notes: list[dict[str, Any]] | None = None,
     vulnerabilities: list[dict[str, Any]] | None = None,
+    run: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     node3_strix: dict[str, Any] = {"run_name": run_name, "run_dir": run_dir}
+    if run:
+        node3_strix["run"] = run
     if agents:
         node3_strix["agents"] = normalize_agent_graph(agents)
     if todos:
@@ -336,10 +339,12 @@ def runtime_checkpoint(
     state_dir = run_path / ".state"
     agents = agent_graph_from_file(state_dir / "agents.json") or list(fallback_agents or [])
     vulnerabilities = vulnerabilities_from_file(run_path / "vulnerabilities.json")
+    run_summary = run_summary_from_file(run_path / "run.json")
     return checkpoint(
         task,
         run_name,
         run_dir,
+        run=run_summary,
         agents=agents,
         todos=todos_from_file(state_dir / "todos.json"),
         notes=notes_from_file(state_dir / "notes.json"),
@@ -372,6 +377,13 @@ def notes_from_file(path: Path) -> list[dict[str, Any]]:
 def vulnerabilities_from_file(path: Path) -> list[dict[str, Any]]:
     raw = json_from_file(path)
     return normalize_vulnerabilities(raw)
+
+
+def run_summary_from_file(path: Path) -> dict[str, Any]:
+    raw = json_from_file(path)
+    if not isinstance(raw, dict):
+        return {}
+    return normalize_run_summary(raw)
 
 
 def json_from_file(path: Path) -> Any:
@@ -533,6 +545,64 @@ def normalize_vulnerability(item: dict[str, Any]) -> dict[str, Any]:
         "agent_id": string_value(item.get("agent_id")),
         "agent_name": string_value(item.get("agent_name")),
     }
+
+
+def normalize_run_summary(raw: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "run_id": string_value(raw.get("run_id")),
+        "run_name": string_value(raw.get("run_name")),
+        "status": string_value(raw.get("status")),
+        "start_time": string_value(raw.get("start_time")),
+        "end_time": string_value(raw.get("end_time")),
+        "scan_mode": string_value(raw.get("scan_mode")),
+        "targets_info": normalize_targets_info(raw.get("targets_info")),
+        "llm_usage": normalize_llm_usage(raw.get("llm_usage")),
+    }
+
+
+def normalize_targets_info(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    targets = []
+    for item in raw[:12]:
+        if not isinstance(item, dict):
+            continue
+        details = item.get("details") if isinstance(item.get("details"), dict) else {}
+        target_value = first_present(details, "target_url", "target_repo", "target_path", "target_host") or string_value(item.get("original"))
+        targets.append({
+            "type": string_value(item.get("type")) or "target",
+            "target": target_value,
+            "original": string_value(item.get("original")) or target_value,
+        })
+    return targets
+
+
+def normalize_llm_usage(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    agent_usages = raw.get("agent_usages") if isinstance(raw.get("agent_usages"), list) else []
+    return {
+        "requests": int(raw.get("requests") or 0),
+        "input_tokens": int(raw.get("input_tokens") or 0),
+        "cached_tokens": usage_detail_total(raw.get("input_tokens_details"), "cached_tokens"),
+        "output_tokens": int(raw.get("output_tokens") or 0),
+        "reasoning_tokens": usage_detail_total(raw.get("output_tokens_details"), "reasoning_tokens"),
+        "total_tokens": int(raw.get("total_tokens") or 0),
+        "cost": float(raw.get("cost") or 0),
+        "agent_count": len([item for item in agent_usages if isinstance(item, dict)]),
+    }
+
+
+def usage_detail_total(raw: Any, key: str) -> int:
+    if isinstance(raw, dict):
+        return int(raw.get(key) or 0)
+    if isinstance(raw, list):
+        total = 0
+        for item in raw:
+            if isinstance(item, dict):
+                total += int(item.get(key) or 0)
+        return total
+    return 0
 
 
 def normalize_todo_status(value: Any) -> str:

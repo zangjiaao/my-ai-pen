@@ -65,6 +65,25 @@ type StrixNote = {
   created_at?: string;
   updated_at?: string;
 };
+type StrixRun = {
+  run_id?: string;
+  run_name?: string;
+  status?: string;
+  start_time?: string;
+  end_time?: string;
+  scan_mode?: string;
+  targets_info?: Array<{ type?: string; target?: string; original?: string }>;
+  llm_usage?: {
+    requests?: number;
+    input_tokens?: number;
+    cached_tokens?: number;
+    output_tokens?: number;
+    reasoning_tokens?: number;
+    total_tokens?: number;
+    cost?: number;
+    agent_count?: number;
+  };
+};
 type AgentNode = { id: string; name: string; type: AgentIdentity | string; status: string; token_required?: boolean };
 type MentionState = { start: number; query: string } | null;
 
@@ -87,6 +106,7 @@ type ConversationSnapshot = {
   plan_tree?: PlanNode[];
   strix_agents?: StrixAgentStatus[];
   strix_notes?: StrixNote[];
+  strix_run?: StrixRun;
   findings?: Array<Record<string, unknown>>;
   assets?: Array<Record<string, unknown>>;
   pending_approvals?: Array<Record<string, unknown>>;
@@ -119,6 +139,7 @@ export default function ConversationPage() {
   const [planTree, setPlanTree] = useState<PlanNode[]>([]);
   const [strixAgents, setStrixAgents] = useState<StrixAgentStatus[]>([]);
   const [strixNotes, setStrixNotes] = useState<StrixNote[]>([]);
+  const [strixRun, setStrixRun] = useState<StrixRun | undefined>();
   const [findings, setFindings] = useState<Array<Record<string, unknown>>>([]);
   const [assets, setAssets] = useState<Array<Record<string, unknown>>>([]);
   const [pendingApprovals, setPendingApprovals] = useState<Array<Record<string, unknown>>>([]);
@@ -183,6 +204,7 @@ export default function ConversationPage() {
     setPlanTree(snapshot.plan_tree?.length ? snapshot.plan_tree : fallback?.plan_tree || []);
     setStrixAgents(snapshot.strix_agents?.length ? snapshot.strix_agents : fallback?.strix_agents || []);
     setStrixNotes(snapshot.strix_notes?.length ? snapshot.strix_notes : fallback?.strix_notes || []);
+    setStrixRun(snapshot.strix_run || fallback?.strix_run);
     setFindings(snapshot.findings?.length ? snapshot.findings : fallback?.findings || []);
     setAssets(snapshot.assets?.length ? snapshot.assets : fallback?.assets || []);
     setPendingApprovals(snapshot.pending_approvals?.length ? snapshot.pending_approvals : fallback?.pending_approvals || []);
@@ -404,6 +426,9 @@ export default function ConversationPage() {
       if (Array.isArray(node3Strix.notes)) {
         setStrixNotes(node3Strix.notes.filter(isStrixNote));
       }
+      if (isStrixRun(node3Strix.run)) {
+        setStrixRun(node3Strix.run);
+      }
       if (Array.isArray(node3Strix.vulnerabilities)) {
         const vulnerabilities = node3Strix.vulnerabilities;
         setFindings(prev => mergeByTitle(prev, vulnerabilities.filter(isRecord).map(strixVulnerabilityToFinding)));
@@ -531,6 +556,7 @@ export default function ConversationPage() {
     setPlanTree([]);
     setStrixAgents([]);
     setStrixNotes([]);
+    setStrixRun(undefined);
     setFindings([]);
     setAssets([]);
     setPendingApprovals([]);
@@ -985,6 +1011,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               planTree={planTree}
               strixAgents={strixAgents}
               strixNotes={strixNotes}
+              strixRun={strixRun}
               timeline={timelineEvents}
               timelineCursorAt={timelineCursorAt}
               findings={findings}
@@ -1575,6 +1602,10 @@ function isStrixAgentStatus(value: unknown): value is StrixAgentStatus {
 
 function isStrixNote(value: unknown): value is StrixNote {
   return Boolean(value && typeof value === "object" && !Array.isArray(value) && readString((value as Record<string, unknown>).id));
+}
+
+function isStrixRun(value: unknown): value is StrixRun {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
