@@ -14,6 +14,7 @@ from agents.sandbox import SandboxRunConfig
 from openai import RateLimitError
 
 from strix.agents.factory import build_strix_agent, make_child_factory
+from strix.agents.prompt import resolve_prompt_skills
 from strix.config import load_settings
 from strix.config.models import (
     StrixProvider,
@@ -154,6 +155,12 @@ async def run_strix_scan(
         scan_mode = str(scan_config.get("scan_mode") or "deep")
         is_whitebox = any(t.get("type") == "local_code" for t in targets)
         skills = list(scan_config.get("skills") or [])
+        root_skills = resolve_prompt_skills(
+            requested=skills,
+            scan_mode=scan_mode,
+            is_whitebox=is_whitebox,
+            is_root=True,
+        )
         root_task = build_root_task(scan_config)
         model_settings = make_model_settings(
             settings.llm.reasoning_effort,
@@ -187,7 +194,7 @@ async def run_strix_scan(
                 "strix",
                 parent_id=None,
                 task=root_task,
-                skills=skills,
+                skills=root_skills,
             )
 
         child_agent_builder = make_child_factory(

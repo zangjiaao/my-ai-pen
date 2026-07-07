@@ -10,6 +10,7 @@ from typing import Any
 from agents import RunContextWrapper, function_tool
 
 from strix.core.agents import coordinator_from_context
+from strix.tools.todo.tools import unfinished_todos_for_agent
 
 
 logger = logging.getLogger(__name__)
@@ -151,24 +152,49 @@ async def finish_scan(
     me = inner.get("agent_id")
     parent_id = inner.get("parent_id")
     if coordinator is not None and parent_id is None and me is not None:
-        active_agents = await coordinator.active_agents_except(me)
+        unresolved_agents = await coordinator.unresolved_agents_except(me)
     else:
-        active_agents = []
+        unresolved_agents = []
 
-    if active_agents:
+    if unresolved_agents:
         return json.dumps(
             {
                 "success": False,
                 "scan_completed": False,
                 "error": (
-                    "Cannot finish scan while child agents are still active. "
-                    "Wait for completion, send them finish instructions, or stop them first"
+                    "Cannot finish scan while child agents are still active or have unread messages. "
+                    "Wait for agent_finish reports, consume pending messages, or explicitly resolve them first"
                 ),
-                "active_agents": active_agents,
+                "unresolved_agents": unresolved_agents,
             },
             ensure_ascii=False,
             default=str,
         )
+
+    if parent_id is None and isinstance(me, str):
+        unfinished_todos = unfinished_todos_for_agent(me)
+        if unfinished_todos:
+            return json.dumps(
+                {
+                    "success": False,
+                    "scan_completed": False,
+                    "error": (
+                        "Cannot finish scan while root todos are still unresolved. "
+                        "Complete the work, or mark tested-but-not-vulnerable items as done before finishing"
+                    ),
+                    "unfinished_todos": [
+                        {
+                            "todo_id": todo.get("todo_id"),
+                            "title": todo.get("title"),
+                            "status": todo.get("status"),
+                            "priority": todo.get("priority"),
+                        }
+                        for todo in unfinished_todos
+                    ],
+                },
+                ensure_ascii=False,
+                default=str,
+            )
 
     result = await asyncio.to_thread(
         _do_finish,

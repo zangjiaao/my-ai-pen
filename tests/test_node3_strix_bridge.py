@@ -19,6 +19,10 @@ from strix.platform.node_protocol import (  # noqa: E402
     todos_from_file,
     vulnerabilities_from_file,
 )
+from agents.tool_context import ToolContext  # noqa: E402
+from strix.core.agents import AgentCoordinator  # noqa: E402
+from strix.tools.agents_graph import tools as agent_tools  # noqa: E402
+from strix.tools.todo import tools as todo_tools  # noqa: E402
 from strix.tools.reporting import node3_tool  # noqa: E402
 import main as node3_main  # noqa: E402
 
@@ -211,6 +215,163 @@ def test_bridge_checkpoint_includes_strix_state_artifacts(tmp_path):
     assert node3["notes"][0]["category"] == "findings"
     assert node3["vulnerabilities"][0]["endpoint"] == "/login.php"
     assert node3["vulnerabilities"][0]["technical_analysis"] == "Input is concatenated into SQL."
+
+
+def test_todo_tool_schema_accepts_array_inputs():
+    import strix.agents.factory as factory
+
+    schema = factory._normalize_chat_completions_schema(todo_tools.create_todo.params_json_schema)
+    todos_schema = schema["properties"]["todos"]
+    todo_ids_schema = factory._normalize_chat_completions_schema(
+        todo_tools.mark_todo_done.params_json_schema,
+    )["properties"]["todo_ids"]
+
+    assert "anyOf" in todos_schema
+    assert any(option.get("type") == "array" for option in todos_schema["anyOf"])
+    assert "anyOf" in todo_ids_schema
+    assert any(option.get("type") == "array" for option in todo_ids_schema["anyOf"])
+
+
+def test_chat_completions_tool_schemas_have_typed_properties():
+    from agents.tool import FunctionTool
+    from strix.agents.factory import build_strix_agent
+
+    agent = build_strix_agent(is_root=True, chat_completions_tools=True)
+
+    for tool in agent.tools:
+        if not isinstance(tool, FunctionTool):
+            continue
+        schema = tool.params_json_schema
+        assert any(key in schema for key in ("type", "anyOf", "$ref")), tool.name
+        for prop_name, prop_schema in schema.get("properties", {}).items():
+            assert any(
+                key in prop_schema for key in ("type", "anyOf", "$ref", "oneOf", "allOf", "enum", "const")
+            ), f"{tool.name}.{prop_name}"
+        if schema.get("type") == "object":
+            assert schema.get("properties"), tool.name
+
+
+def test_empty_argument_tools_get_deepseek_placeholder():
+    from agents.tool import FunctionTool
+    from strix.agents.factory import build_strix_agent
+
+    agent = build_strix_agent(is_root=True, chat_completions_tools=True)
+    graph_tool = next(tool for tool in agent.tools if isinstance(tool, FunctionTool) and tool.name == "view_agent_graph")
+
+    assert graph_tool.params_json_schema["properties"] == {
+        "_noop": {
+            "type": "string",
+            "description": "Optional ignored placeholder for providers that reject empty parameter objects.",
+        },
+    }
+    assert graph_tool.params_json_schema["required"] == ["_noop"]
+
+
+def test_create_todo_is_atomic_and_accepts_medium_priority(tmp_path):
+    todo_tools.hydrate_todos_from_disk(tmp_path)
+    ctx = ToolContext(
+        context={"agent_id": "root"},
+        tool_name="create_todo",
+        tool_call_id="call-1",
+        tool_arguments="{}",
+    )
+
+    bad = asyncio.run(todo_tools.create_todo.on_invoke_tool(
+        ctx,
+        json.dumps({"todos": [
+            {"title": "First task", "priority": "critical"},
+            {"title": "Bad task", "priority": "urgent"},
+        ]}),
+    ))
+    assert json.loads(bad)["success"] is False
+    assert not (tmp_path / "todos.json").exists()
+
+    good = asyncio.run(todo_tools.create_todo.on_invoke_tool(
+        ctx,
+        json.dumps({"todos": [
+            {"title": "Medium task", "priority": "medium"},
+        ]}),
+    ))
+    payload = json.loads(good)
+
+    assert payload["success"] is True
+    assert payload["created"][0]["priority"] == "normal"
+    persisted = json.loads((tmp_path / "todos.json").read_text(encoding="utf-8"))
+    assert len(persisted["root"]) == 1
+    assert next(iter(persisted["root"].values()))["priority"] == "normal"
+
+
+def test_stop_agent_requires_force_for_active_child():
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        await coordinator.register("child", "child", "root")
+        ctx = ToolContext(
+            context={"agent_id": "root", "coordinator": coordinator},
+            tool_name="stop_agent",
+            tool_call_id="call-1",
+            tool_arguments="{}",
+        )
+
+        denied = await agent_tools.stop_agent.on_invoke_tool(
+            ctx,
+            json.dumps({"target_agent_id": "child", "reason": "wrap up"}),
+        )
+        _, statuses, _ = await coordinator.graph_snapshot()
+
+        forced = await agent_tools.stop_agent.on_invoke_tool(
+            ctx,
+            json.dumps({"target_agent_id": "child", "reason": "duplicate work", "force": True}),
+        )
+        _, forced_statuses, _ = await coordinator.graph_snapshot()
+
+        return json.loads(denied), statuses, json.loads(forced), forced_statuses
+
+    denied, statuses, forced, forced_statuses = asyncio.run(run())
+
+    assert denied["success"] is False
+    assert "force=true" in denied["error"]
+    assert statuses["child"] == "running"
+    assert forced["success"] is True
+    assert forced_statuses["child"] == "stopped"
+
+
+def test_agent_finish_blocks_unresolved_todos(tmp_path):
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        await coordinator.register("child", "child", "root")
+        todo_tools.hydrate_todos_from_disk(tmp_path)
+        todo_ctx = ToolContext(
+            context={"agent_id": "child"},
+            tool_name="create_todo",
+            tool_call_id="call-todo",
+            tool_arguments="{}",
+        )
+        await todo_tools.create_todo.on_invoke_tool(
+            todo_ctx,
+            json.dumps({"todos": [{"title": "Validate endpoint", "priority": "high"}]}),
+        )
+
+        finish_ctx = ToolContext(
+            context={"agent_id": "child", "parent_id": "root", "coordinator": coordinator},
+            tool_name="agent_finish",
+            tool_call_id="call-finish",
+            tool_arguments="{}",
+        )
+        result = await agent_tools.agent_finish.on_invoke_tool(
+            finish_ctx,
+            json.dumps({"result_summary": "done"}),
+        )
+        _, statuses, _ = await coordinator.graph_snapshot()
+        return json.loads(result), statuses
+
+    result, statuses = asyncio.run(run())
+
+    assert result["success"] is False
+    assert result["agent_completed"] is False
+    assert result["unfinished_todos"][0]["title"] == "Validate endpoint"
+    assert statuses["child"] == "running"
 
 
 def test_reporting_shim_calculates_cvss_and_persists(monkeypatch):

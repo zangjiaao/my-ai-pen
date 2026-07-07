@@ -6,6 +6,7 @@ import inspect
 import json
 import logging
 import re
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
 from agents.agent import ToolsToFinalOutputResult
@@ -68,6 +69,53 @@ _CUSTOM_TOOL_INPUT_FIELD_BY_NAME = {
     "apply_patch": "patch",
 }
 _DEFAULT_CUSTOM_TOOL_INPUT_FIELD = "input"
+_JSON_SCHEMA_TYPE_MARKERS = {"type", "anyOf", "$ref", "oneOf", "allOf", "enum", "const"}
+_ANY_JSON_SCHEMA: dict[str, Any] = {
+    "anyOf": [
+        {"type": "string"},
+        {"type": "number"},
+        {"type": "integer"},
+        {"type": "boolean"},
+        {
+            "type": "object",
+            "properties": {
+                "_json": {
+                    "type": "string",
+                    "description": "Optional JSON object payload for providers that reject free-form objects.",
+                },
+            },
+            "additionalProperties": False,
+        },
+        {
+            "type": "array",
+            "items": {
+                "anyOf": [
+                    {"type": "string"},
+                    {"type": "number"},
+                    {"type": "integer"},
+                    {"type": "boolean"},
+                    {
+                        "type": "object",
+                        "properties": {
+                            "_json": {
+                                "type": "string",
+                                "description": "Optional JSON object payload for providers that reject free-form objects.",
+                            },
+                        },
+                        "additionalProperties": False,
+                    },
+                    {"type": "null"},
+                ],
+            },
+        },
+        {"type": "null"},
+    ],
+}
+_NOOP_SCHEMA_PROPERTY: dict[str, Any] = {
+    "type": "string",
+    "description": "Optional ignored placeholder for providers that reject empty parameter objects.",
+}
+_NOOP_ARGUMENT_KEYS = {"_noop"}
 
 
 def _custom_tool_input_field(tool: CustomTool) -> str:
@@ -107,7 +155,102 @@ def _format_tool_error(exc: Exception) -> str:
     return str(exc) or exc.__class__.__name__
 
 
+def _normalize_chat_completions_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Ensure permissive SDK schemas are valid for strict Chat Completions APIs.
+
+    Pydantic emits fields typed as ``Any`` as ``{"title": ...}``. OpenAI accepts
+    that, but providers such as Deepseek reject every schema node without a
+    ``type`` / ``anyOf`` / ``$ref`` marker. Keep runtime behavior permissive by
+    turning those untyped leaves into a broad JSON value union.
+    """
+    normalized = deepcopy(schema)
+    if not any(marker in normalized for marker in _JSON_SCHEMA_TYPE_MARKERS):
+        normalized["type"] = "object"
+    _normalize_schema_node(normalized)
+    return normalized
+
+
+def _normalize_schema_node(node: dict[str, Any]) -> None:
+    for key, value in list(node.items()):
+        if key == "properties" and isinstance(value, dict):
+            for child in value.values():
+                if isinstance(child, dict):
+                    _normalize_schema_node(child)
+            continue
+        if key in {"$defs", "definitions"} and isinstance(value, dict):
+            for child in value.values():
+                if isinstance(child, dict):
+                    _normalize_schema_node(child)
+            continue
+        if key in {"items", "additionalProperties", "contains", "propertyNames", "not"}:
+            if isinstance(value, dict):
+                _normalize_schema_node(value)
+            continue
+        if key in {"anyOf", "oneOf", "allOf"} and isinstance(value, list):
+            for child in value:
+                if isinstance(child, dict):
+                    _normalize_schema_node(child)
+
+    if "properties" in node:
+        node["type"] = "object"
+        if isinstance(node["properties"], dict) and not node["properties"]:
+            node["properties"] = {"_noop": deepcopy(_NOOP_SCHEMA_PROPERTY)}
+        if isinstance(node["properties"], dict):
+            node["required"] = list(node["properties"].keys())
+        node["additionalProperties"] = False
+        return
+    if node.get("type") == "object":
+        node["properties"] = {"_json": deepcopy(_NOOP_SCHEMA_PROPERTY)}
+        node["required"] = ["_json"]
+        node["additionalProperties"] = False
+        return
+    if any(marker in node for marker in _JSON_SCHEMA_TYPE_MARKERS):
+        return
+    if "items" in node:
+        node["type"] = "array"
+        return
+    if any(key in node for key in {"title", "description", "default", "examples"}):
+        node.update(deepcopy(_ANY_JSON_SCHEMA))
+        return
+
+
+def _ensure_chat_completions_tool_schema(tool: FunctionTool) -> FunctionTool:
+    schema = tool.params_json_schema
+    if isinstance(schema, dict):
+        normalized = _normalize_chat_completions_schema(schema)
+        if _is_empty_object_schema(normalized):
+            normalized["properties"] = {"_noop": deepcopy(_NOOP_SCHEMA_PROPERTY)}
+            normalized["required"] = ["_noop"]
+            normalized["additionalProperties"] = False
+            _wrap_noop_arguments(tool)
+        tool.params_json_schema = normalized
+    return tool
+
+
+def _is_empty_object_schema(schema: dict[str, Any]) -> bool:
+    return schema.get("type") == "object" and isinstance(schema.get("properties"), dict) and not schema["properties"]
+
+
+def _wrap_noop_arguments(tool: FunctionTool) -> None:
+    if getattr(tool, "_strix_noop_argument_wrapper", False):
+        return
+    invoke_tool = tool.on_invoke_tool
+
+    async def invoke(ctx: Any, raw_input: str) -> Any:
+        try:
+            parsed = json.loads(raw_input) if isinstance(raw_input, str) else raw_input
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict) and set(parsed).issubset(_NOOP_ARGUMENT_KEYS):
+            return await invoke_tool(ctx, "{}")
+        return await invoke_tool(ctx, raw_input)
+
+    tool.on_invoke_tool = invoke
+    setattr(tool, "_strix_noop_argument_wrapper", True)
+
+
 def _function_tool_with_error_result(tool: FunctionTool) -> FunctionTool:
+    _ensure_chat_completions_tool_schema(tool)
     invoke_tool = tool.on_invoke_tool
 
     async def invoke(ctx: Any, raw_input: str) -> Any:
@@ -165,6 +308,12 @@ def _configure_chat_completions_filesystem_tools(toolset: Any) -> None:
             setattr(toolset, name, _custom_tool_as_function_tool(tool))
         elif isinstance(tool, FunctionTool):
             setattr(toolset, name, _function_tool_with_error_result(tool))
+
+
+def _tool_with_chat_completions_schema(tool: Tool) -> Tool:
+    if isinstance(tool, FunctionTool):
+        return _ensure_chat_completions_tool_schema(tool)
+    return tool
 
 
 _CHARS_ESCAPE_RE = re.compile(r"\\(?:u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[0abtnvfr\\])")
@@ -379,6 +528,8 @@ def build_strix_agent(
         tools: list[Tool] = [*_BASE_TOOLS, finish_scan]
     else:
         tools = [*_BASE_TOOLS, agent_finish]
+    if chat_completions_tools:
+        tools = [_tool_with_chat_completions_schema(tool) for tool in tools]
 
     logger.info(
         "Built %s agent '%s' (skills=%d, tools=%d, scan_mode=%s, whitebox=%s)",

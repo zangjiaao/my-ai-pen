@@ -190,7 +190,10 @@ VALIDATION REQUIREMENTS:
 - Independent verification through subagent
 - Document complete attack chain
 - Keep going until you find something that matters
+- Before finishing, review your todos. Mark every completed test as done, including tests that produced a validated negative result (not vulnerable / mitigated). Do not leave a todo pending merely because no vulnerability was found.
 - A vulnerability is ONLY considered reported when a reporting agent uses create_vulnerability_report with full details. Mentions in agent_finish, finish_scan, or generic messages are NOT sufficient
+- Normal subagent wrap-up is: send_message_to_agent with a clear wrap-up instruction, then wait_for_message for the child's agent_finish report. Do not use stop_agent as a shortcut to move to reporting.
+- stop_agent is only for intentional cancellation of duplicate, off-track, out-of-scope, blocked, budget-stopped, or user-cancelled work. If you use it on an active agent, you must set force=true and explain why incomplete work is being discarded.
 - Do NOT patch/fix before reporting: first create the vulnerability report via create_vulnerability_report (by the reporting agent). Only after reporting is completed should fixing/patching proceed
 - DEDUPLICATION: The create_vulnerability_report tool uses LLM-based deduplication. If it rejects your report as a duplicate, DO NOT attempt to re-submit the same vulnerability. Accept the rejection and move on to testing other areas. The vulnerability has already been reported by another agent
 </execution_guidelines>

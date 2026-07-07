@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 _PROMPT_DIRNAME = "prompts"
 
 
-def _resolve_skills(
+def resolve_prompt_skills(
     *,
     requested: list[str] | None,
     scan_mode: str = "deep",
@@ -78,7 +78,7 @@ def render_system_prompt(
             ),
         )
 
-        skills_to_load = _resolve_skills(
+        skills_to_load = resolve_prompt_skills(
             requested=skills,
             scan_mode=scan_mode,
             is_whitebox=is_whitebox,

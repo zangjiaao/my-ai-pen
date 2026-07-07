@@ -241,6 +241,25 @@ class AgentCoordinator:
                 if aid != agent_id and status in {"running", "waiting"}
             ]
 
+    async def unresolved_agents_except(self, agent_id: str) -> list[dict[str, Any]]:
+        async with self._lock:
+            unresolved: list[dict[str, Any]] = []
+            for aid, status in self.statuses.items():
+                if aid == agent_id:
+                    continue
+                pending_count = self.pending_counts.get(aid, 0)
+                if status in {"running", "waiting"} or pending_count > 0:
+                    unresolved.append(
+                        {
+                            "agent_id": aid,
+                            "name": self.names.get(aid, aid),
+                            "status": status,
+                            "parent_id": self.parent_of.get(aid),
+                            "pending_count": pending_count,
+                        },
+                    )
+            return unresolved
+
     async def graph_snapshot(
         self,
     ) -> tuple[dict[str, str | None], dict[str, Status], dict[str, str]]:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from copy import deepcopy
 from typing import TYPE_CHECKING
 
 from agents import set_default_openai_api, set_default_openai_key, set_tracing_disabled
@@ -108,7 +109,65 @@ def _configure_litellm_compatibility() -> None:
     litellm.disable_streaming_logging = False
     litellm.suppress_debug_info = True
 
+    _patch_litellm_tool_schemas()
     _register_litellm_cost_callback()
+
+
+def _patch_litellm_tool_schemas() -> None:
+    """Normalize outgoing tool schemas for strict OpenAI-compatible providers."""
+    import litellm
+
+    if getattr(litellm, "_strix_tool_schema_patch", False):
+        return
+
+    original = litellm.acompletion
+
+    async def patched_acompletion(*args, **kwargs):
+        tools = kwargs.get("tools")
+        if isinstance(tools, list):
+            kwargs["tools"] = _normalize_outgoing_tools(tools)
+        return await original(*args, **kwargs)
+
+    litellm.acompletion = patched_acompletion
+    litellm._strix_tool_schema_patch = True
+
+
+def _normalize_outgoing_tools(tools: list[object]) -> list[object]:
+    normalized = deepcopy(tools)
+    for tool in normalized:
+        if not isinstance(tool, dict):
+            continue
+        function = tool.get("function")
+        if not isinstance(function, dict):
+            continue
+        parameters = function.get("parameters")
+        if isinstance(parameters, dict):
+            _normalize_outgoing_schema_node(parameters)
+    return normalized
+
+
+def _normalize_outgoing_schema_node(node: dict[str, object]) -> None:
+    for key, value in list(node.items()):
+        if isinstance(value, dict):
+            _normalize_outgoing_schema_node(value)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    _normalize_outgoing_schema_node(item)
+
+    if node.get("type") == "object":
+        properties = node.get("properties")
+        if not isinstance(properties, dict) or not properties:
+            node["properties"] = {
+                "_json": {
+                    "type": "string",
+                    "description": "Optional JSON object payload placeholder.",
+                },
+            }
+            properties = node["properties"]
+        if isinstance(properties, dict):
+            node["required"] = list(properties.keys())
+        node["additionalProperties"] = False
 
 
 def _register_litellm_cost_callback() -> None:

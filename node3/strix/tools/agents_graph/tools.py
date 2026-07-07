@@ -14,6 +14,7 @@ from agents import RunContextWrapper, function_tool
 
 from strix.core.agents import Status, coordinator_from_context
 from strix.skills import validate_requested_skills
+from strix.tools.todo.tools import unfinished_todos_for_agent
 
 
 _ACTIVE_STATUSES: frozenset[str] = frozenset({"running", "waiting"})
@@ -527,6 +528,30 @@ async def agent_finish(
             default=str,
         )
 
+    unfinished_todos = unfinished_todos_for_agent(me)
+    if unfinished_todos:
+        return json.dumps(
+            {
+                "success": False,
+                "agent_completed": False,
+                "error": (
+                    "Cannot finish while your todos are still unresolved. "
+                    "Mark completed or tested-negative work as done before calling agent_finish"
+                ),
+                "unfinished_todos": [
+                    {
+                        "todo_id": todo.get("todo_id"),
+                        "title": todo.get("title"),
+                        "status": todo.get("status"),
+                        "priority": todo.get("priority"),
+                    }
+                    for todo in unfinished_todos
+                ],
+            },
+            ensure_ascii=False,
+            default=str,
+        )
+
     parent_notified = False
     if report_to_parent:
         async with coordinator._lock:
@@ -582,6 +607,7 @@ async def stop_agent(
     target_agent_id: str,
     cascade: bool = True,
     reason: str = "",
+    force: bool = False,
 ) -> str:
     """Gracefully stop a running agent (and optionally its descendants).
 
@@ -591,9 +617,16 @@ async def stop_agent(
     interactive outer loop parks as ``stopped``; later user/peer
     messages can wake it again.
 
-    Use sparingly. Prefer ``send_message_to_agent`` (asking the agent
-    to wrap up) for soft-stop scenarios. Reach for ``stop_agent`` when
-    a child has gone off-track and won't self-correct.
+    Use sparingly. This is a forced cancellation tool, not a normal
+    completion path. For ordinary wrap-up, use ``send_message_to_agent``
+    to ask the child to call ``agent_finish``, then ``wait_for_message``
+    for its completion report.
+
+    By default, active agents are protected from accidental cancellation.
+    Set ``force=true`` only after you have a concrete reason to discard
+    incomplete work, such as a duplicated task, out-of-scope work,
+    repeated failure to follow instructions, or an explicit user/budget
+    stop.
 
     Args:
         target_agent_id: The 8-char id from ``view_agent_graph`` /
@@ -603,6 +636,8 @@ async def stop_agent(
             target.
         reason: Optional human-readable reason for the stop, surfaced
             in logs and telemetry.
+        force: Must be ``true`` to cancel an active agent. Keep the
+            default ``false`` for normal workflow coordination.
     """
     inner = _ctx(ctx)
     coordinator = coordinator_from_context(inner)
@@ -644,6 +679,28 @@ async def stop_agent(
                 ),
                 "target_agent_id": target_agent_id,
                 "current_status": current_status,
+            },
+            ensure_ascii=False,
+            default=str,
+        )
+
+    if not force:
+        return json.dumps(
+            {
+                "success": False,
+                "error": (
+                    "Refusing to stop an active agent without force=true. "
+                    "Normal completion must use send_message_to_agent to ask the child to wrap up, "
+                    "then wait_for_message for its agent_finish report. Use force=true only when "
+                    "you intentionally want to discard incomplete child work"
+                ),
+                "target_agent_id": target_agent_id,
+                "current_status": current_status,
+                "recommended_next_steps": [
+                    "send_message_to_agent with a clear wrap-up instruction",
+                    "wait_for_message until the completion report arrives",
+                    "call stop_agent again with force=true only for duplicated, off-track, out-of-scope, blocked, budget-stopped, or user-cancelled work",
+                ],
             },
             ensure_ascii=False,
             default=str,

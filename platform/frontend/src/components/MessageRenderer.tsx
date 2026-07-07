@@ -48,7 +48,7 @@ function ToolCallCard({ content, onOpenEvidence }: { content: Record<string, unk
   const status = normalizeExecutionStatus(content.status);
   const stdout = content.stdout as string || "";
   const items = toolItemsFromContent(content);
-  const categories = toolCategories(toolNames, items.map(item => item.category || ""));
+  const category = toolPrimaryCategory(toolNames, items.map(item => item.category || ""));
   const fallbackSummary = summarizeToolOutput(stdout, latestTool);
   const resultSummary = summarizeToolActivity(items, latestTool, status);
   return (
@@ -61,7 +61,7 @@ function ToolCallCard({ content, onOpenEvidence }: { content: Record<string, unk
         className="flex w-full min-w-0 items-center gap-1.5 py-1.5 text-left transition-colors hover:bg-canvas-inset"
       >
         <div className="flex flex-shrink-0 items-center gap-1">
-          {categories.map(category => <ToolCategoryIcon key={category.key} category={category} />)}
+          <ToolCategoryIcon category={category} />
         </div>
         <span className="min-w-0 max-w-[34%] flex-shrink truncate font-sans text-sm text-ink-secondary">{toolTitle(toolNames)}</span>
         <span className="min-w-0 truncate text-xs text-ink-secondary">{resultSummary}</span>
@@ -339,9 +339,11 @@ function toolTitle(toolNames: string[]): string {
   return `${unique.slice(0, 2).join(" + ")}${unique.length > 2 ? ` +${unique.length - 2}` : ""}`;
 }
 
-function toolCategories(toolNames: string[], explicitCategories: string[] = []): ToolCategory[] {
-  const categories = uniqueStrings([...explicitCategories, ...toolNames.map(toolCategoryKey)]).map(categoryForKey);
-  return categories.length ? categories : [categoryForKey("tool")];
+function toolPrimaryCategory(toolNames: string[], explicitCategories: string[] = []): ToolCategory {
+  const explicit = uniqueStrings(explicitCategories.map(normalizeToolCategoryKey));
+  const inferred = toolNames.map(toolCategoryKey);
+  const key = explicit.find(category => category !== "tool") || explicit[0] || inferred.find(category => category !== "tool") || inferred[0] || "tool";
+  return categoryForKey(key);
 }
 
 function toolCategoryKey(toolName: string): string {
@@ -357,6 +359,7 @@ function toolCategoryKey(toolName: string): string {
 }
 
 function categoryForKey(key: string): ToolCategory {
+  const normalizedKey = normalizeToolCategoryKey(key);
   const categories: Record<string, ToolCategory> = {
     discovery: { key: "discovery", label: "发现", Icon: Compass },
     request: { key: "request", label: "请求", Icon: Globe2 },
@@ -367,7 +370,21 @@ function categoryForKey(key: string): ToolCategory {
     planning: { key: "planning", label: "规划", Icon: Brain },
     tool: { key: "tool", label: "工具", Icon: Wrench },
   };
-  return categories[key] || categories.tool;
+  return categories[normalizedKey] || categories.tool;
+}
+
+function normalizeToolCategoryKey(value: string): string {
+  const key = String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (!key) return "";
+  if (["discovery", "discover", "asset", "assets", "recon"].includes(key)) return "discovery";
+  if (["request", "requests", "http", "http_request", "traffic", "sitemap", "scope"].includes(key)) return "request";
+  if (["command", "commands", "exec", "execution", "shell", "process"].includes(key)) return "command";
+  if (["finding", "findings", "vuln", "vulns", "vulnerability", "vulnerabilities", "evidence", "report"].includes(key)) return "finding";
+  if (["search", "scan", "scanner", "enumeration", "enumerate", "skill", "skills"].includes(key)) return "search";
+  if (["agent", "agents", "subagent", "sub_agent"].includes(key)) return "agent";
+  if (["planning", "plan", "todo", "todos", "note", "notes", "think", "thinking"].includes(key)) return "planning";
+  if (key === "tool" || key === "tools") return "tool";
+  return key;
 }
 
 function summarizeToolOutput(stdout: string, latestTool = "tool"): string {

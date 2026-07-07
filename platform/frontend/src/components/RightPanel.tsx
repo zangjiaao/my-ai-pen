@@ -1,4 +1,4 @@
-import { useEffect, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { Bot, CheckCircle2, ChevronRight, Circle, CircleDashed, GitBranch, Tag, XCircle } from "lucide-react";
 import type { SecurityAsset, SecurityVulnerability } from "../lib/securityTypes";
 
@@ -583,30 +583,46 @@ function StrixAgentList({ agents }: { agents: StrixAgentStatus[] }) {
     if (!parentId) continue;
     childrenByParent.set(parentId, [...(childrenByParent.get(parentId) || []), agent]);
   }
+  const renderAgentNode = (agent: StrixAgentStatus, primary = false, trail: string[] = [], lastSibling = true): ReactNode => {
+    const children = childrenByParent.get(agent.id) || [];
+    const open = expanded[agent.id] ?? true;
+    const canToggle = children.length > 0;
+    const nextTrail = [...trail, agent.id];
+    if (trail.includes(agent.id)) return null;
+    return (
+      <div key={agent.id} className={`min-w-0 ${primary ? "" : "relative pl-5"}`}>
+        {!primary && (
+          <>
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 20 28"
+              className="pointer-events-none absolute left-0 top-0 h-7 w-5 text-hairline"
+              fill="none"
+            >
+              <path d="M2 0 V12 Q2 18 8 18 H18" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+            {!lastSibling && <span aria-hidden="true" className="pointer-events-none absolute bottom-0 left-[2px] top-[18px] w-px bg-hairline" />}
+          </>
+        )}
+        <AgentRow
+          agent={agent}
+          primary={primary}
+          secondary={!primary}
+          childCount={children.length}
+          expanded={open}
+          onToggle={canToggle ? () => setExpanded((current) => ({ ...current, [agent.id]: !open })) : undefined}
+        />
+        {children.length > 0 && (
+          <div className={`${open ? "block" : "hidden"} mt-1 space-y-1 pl-4`}>
+            {children.map((child, index) => renderAgentNode(child, false, nextTrail, index === children.length - 1))}
+          </div>
+        )}
+      </div>
+    );
+  };
   return (
     <div className="space-y-1" data-testid="strix-agent-status">
-      {rootAgents.map((agent) => {
-        const children = childrenByParent.get(agent.id) || [];
-        const open = expanded[agent.id] ?? true;
-        return (
-          <div key={agent.id} className="min-w-0">
-            <AgentRow
-              agent={agent}
-              primary
-              childCount={children.length}
-              expanded={open}
-              onToggle={children.length ? () => setExpanded((current) => ({ ...current, [agent.id]: !open })) : undefined}
-            />
-            {children.length > 0 && (
-              <div className={`${open ? "block" : "hidden"} mt-1 space-y-1`}>
-                {children.map((child) => (
-                  <AgentRow key={child.id} agent={child} />
-                ))}
-              </div>
-            )}
-          </div>
-        );
-      })}
+      {rootAgents.map((agent) => renderAgentNode(agent, true))}
     </div>
   );
 }
@@ -614,30 +630,48 @@ function StrixAgentList({ agents }: { agents: StrixAgentStatus[] }) {
 function AgentRow({
   agent,
   primary = false,
+  secondary = false,
   childCount = 0,
   expanded = false,
   onToggle,
 }: {
   agent: StrixAgentStatus;
   primary?: boolean;
+  secondary?: boolean;
   childCount?: number;
   expanded?: boolean;
   onToggle?: () => void;
 }) {
   const summary = summarizeAgentAction(agent);
   const status = agentStatusLabel(agent.status);
+  const showToggle = !primary && Boolean(onToggle);
+  const rowInteractive = primary && Boolean(onToggle);
+  const handleRowKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (!rowInteractive) return;
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    onToggle?.();
+  };
   return (
-    <div className={`min-w-0 rounded-md px-2 py-2 ${primary ? "bg-canvas-inset" : "bg-transparent hover:bg-canvas-inset"}`}>
+    <div
+      className={`min-w-0 rounded-md py-2 pr-2 ${primary ? `pl-3.5 bg-canvas-inset ${rowInteractive ? "cursor-pointer hover:bg-surface-default focus-visible:outline focus-visible:outline-2 focus-visible:outline-status-running/40" : ""}` : "pl-2 bg-transparent hover:bg-canvas-inset"}`}
+      onClick={rowInteractive ? onToggle : undefined}
+      onKeyDown={handleRowKeyDown}
+      role={rowInteractive ? "button" : undefined}
+      tabIndex={rowInteractive ? 0 : undefined}
+      aria-expanded={rowInteractive ? expanded : undefined}
+    >
       <div className="flex min-w-0 items-start gap-2">
-        <button
-          type="button"
-          onClick={onToggle}
-          disabled={!onToggle}
-          className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-ink-muted ${onToggle ? "hover:bg-surface-elevated hover:text-ink" : "cursor-default opacity-0"}`}
-          aria-label={expanded ? "Collapse sub-agents" : "Expand sub-agents"}
-        >
-          <ChevronRight className={`h-3.5 w-3.5 transition-transform ${expanded ? "rotate-90" : ""}`} />
-        </button>
+        {showToggle && (
+          <button
+            type="button"
+            onClick={onToggle}
+            className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-ink-muted hover:bg-surface-elevated hover:text-ink"
+            aria-label={expanded ? "Collapse sub-agents" : "Expand sub-agents"}
+          >
+            <ChevronRight className={`h-3.5 w-3.5 transition-transform ${expanded ? "rotate-90" : ""}`} />
+          </button>
+        )}
         <span aria-hidden="true" className={`mt-2 h-2 w-2 shrink-0 rounded-full ${agentStatusDotClass(agent.status)}`} />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-start justify-between gap-2">
@@ -649,11 +683,11 @@ function AgentRow({
               <p className="mt-0.5 text-xs text-ink-secondary">{summary}</p>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
-              {childCount > 0 && <span className="font-mono text-[10px] text-ink-muted" title={`${childCount} sub-agents`}>{childCount}</span>}
+              {primary && childCount > 0 && <span className="font-mono text-[10px] text-ink-muted" title={`${childCount} sub-agents`}>{childCount}</span>}
               <span className={`rounded-sm px-1.5 py-0.5 text-[10px] font-medium uppercase ${agentStatusBadgeClass(agent.status)}`}>{status}</span>
             </div>
           </div>
-          <AgentMeta agent={agent} primary={primary} />
+          <AgentMeta agent={agent} primary={primary && !secondary} />
         </div>
       </div>
     </div>
@@ -990,18 +1024,9 @@ function summarizeAgentAction(agent: StrixAgentStatus): string {
   const tool = String(agent.current_tool || "").trim();
   const action = String(agent.current_action || "").trim();
   if (tool) {
-    if (tool === "exec_command" || action.toLowerCase().startsWith("running command")) return "Running a command";
-    if (tool === "write_stdin") return "Reading command output";
-    if (tool === "create_agent") return "Delegating to a sub-agent";
-    if (tool === "create_vulnerability_report") return "Recording a vulnerability";
-    if (tool === "finish_scan") return "Preparing the final report";
-    if (tool === "agent_finish") return "Returning sub-agent results";
-    if (tool === "send_message_to_agent") return "Coordinating with a sub-agent";
-    if (tool === "wait_for_message") return "Waiting for a sub-agent";
-    if (tool.includes("todo")) return "Updating task plan";
-    if (tool.includes("note")) return "Writing notes";
-    if (tool.includes("request") || tool.includes("sitemap") || tool.includes("scope")) return "Reviewing target surface";
-    return friendlyActionName(tool);
+    const toolLabel = friendlyActionName(tool);
+    if (action) return clip(`${toolLabel}: ${compactAgentAction(action)}`, 110);
+    return `${toolLabel} running`;
   }
   if (action) return compactAgentAction(action);
   if (agent.task) return clip(agent.task, 90);

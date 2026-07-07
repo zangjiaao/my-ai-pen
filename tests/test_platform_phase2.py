@@ -17,7 +17,7 @@ from app.services.agent_orchestrator import (
     route_with_platform_agent,
     set_orchestrator_chat_override,
 )
-from app.ws.router import _agent_assignment_notice, _apply_agent_attribution, _agent_target_for_request, _decision_agent_attribution, _mentioned_node_id, _message_with_decision_target, _merge_saved_message_content, _message_dedupe_key, _persist_vulnerability, _send_direct_node_message, conversation_node, node_connections
+from app.ws.router import _agent_assignment_notice, _apply_agent_attribution, _agent_target_for_request, _decision_agent_attribution, _mentioned_node_id, _message_with_decision_target, _merge_saved_message_content, _message_dedupe_key, _persist_vulnerability, _send_direct_node_message, _should_announce_agent_assignment, conversation_node, node_connections
 
 
 class PlatformPhase2Tests(unittest.TestCase):
@@ -99,6 +99,11 @@ class PlatformPhase2Tests(unittest.TestCase):
         self.assertIn("\u6e17\u900f Agent", notice)
         self.assertIn("web-node-1", notice)
         self.assertIn("pentest.web", notice)
+
+    def test_agent_assignment_notice_is_suppressed_for_explicit_node_request(self):
+        self.assertFalse(_should_announce_agent_assignment("11111111-1111-1111-1111-111111111111", {"text": "@node3 test http://target.local"}))
+        self.assertFalse(_should_announce_agent_assignment(None, {"agent_node_id": "11111111-1111-1111-1111-111111111111", "text": "test http://target.local"}))
+        self.assertTrue(_should_announce_agent_assignment(None, {"text": "test http://target.local"}))
 
     def test_node_name_mention_resolves_requested_node(self):
         capabilities = [

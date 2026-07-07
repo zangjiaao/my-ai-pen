@@ -337,7 +337,10 @@ def runtime_checkpoint(
 ) -> dict[str, Any]:
     run_path = Path(run_dir)
     state_dir = run_path / ".state"
-    agents = agent_graph_from_file(state_dir / "agents.json") or list(fallback_agents or [])
+    agents = merge_agent_activity(
+        agent_graph_from_file(state_dir / "agents.json"),
+        list(fallback_agents or []),
+    )
     vulnerabilities = vulnerabilities_from_file(run_path / "vulnerabilities.json")
     run_summary = run_summary_from_file(run_path / "run.json")
     return checkpoint(
@@ -362,6 +365,49 @@ def agent_graph_from_file(path: Path) -> list[dict[str, Any]]:
     if not isinstance(raw, dict):
         return []
     return normalize_agent_graph(raw)
+
+
+def merge_agent_activity(
+    snapshot_agents: list[dict[str, Any]],
+    runtime_agents: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not snapshot_agents:
+        return runtime_agents
+    if not runtime_agents:
+        return snapshot_agents
+    runtime_by_id = {
+        string_value(agent.get("id") or agent.get("agent_id")): agent
+        for agent in runtime_agents
+        if string_value(agent.get("id") or agent.get("agent_id"))
+    }
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for agent in snapshot_agents:
+        agent_id = string_value(agent.get("id") or agent.get("agent_id"))
+        runtime = runtime_by_id.get(agent_id)
+        if not runtime:
+            merged.append(agent)
+            if agent_id:
+                seen.add(agent_id)
+            continue
+        item = dict(agent)
+        for key in ("current_tool", "current_action", "pending_count"):
+            value = runtime.get(key)
+            if value not in (None, ""):
+                item[key] = value
+        runtime_status = string_value(runtime.get("status"))
+        snapshot_status = string_value(item.get("status"))
+        if runtime_status in {"failed", "crashed", "stopped"} or snapshot_status not in {"completed", "failed", "crashed", "stopped"}:
+            if runtime_status:
+                item["status"] = runtime_status
+        for key in ("name", "task", "skills", "parent_id", "role"):
+            if not item.get(key) and runtime.get(key) not in (None, ""):
+                item[key] = runtime.get(key)
+        merged.append(item)
+        if agent_id:
+            seen.add(agent_id)
+    merged.extend(agent for agent_id, agent in runtime_by_id.items() if agent_id not in seen)
+    return sort_agent_items([normalize_agent_item(agent) for agent in merged if isinstance(agent, dict)])
 
 
 def todos_from_file(path: Path) -> list[dict[str, Any]]:

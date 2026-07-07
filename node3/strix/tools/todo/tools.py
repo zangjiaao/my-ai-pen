@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 VALID_PRIORITIES = ["low", "normal", "high", "critical"]
+PRIORITY_ALIASES = {"medium": "normal", "med": "normal"}
 VALID_STATUSES = ["pending", "in_progress", "done"]
 
 _PRIORITY_RANK = {"critical": 0, "high": 1, "normal": 2, "low": 3}
@@ -111,6 +112,7 @@ def _get_agent_todos(agent_id: str) -> dict[str, dict[str, Any]]:
 
 def _normalize_priority(priority: str | None, default: str = "normal") -> str:
     candidate = (priority or default or "normal").lower()
+    candidate = PRIORITY_ALIASES.get(candidate, candidate)
     if candidate not in VALID_PRIORITIES:
         raise ValueError(f"Invalid priority. Must be one of: {', '.join(VALID_PRIORITIES)}")
     return candidate
@@ -141,6 +143,17 @@ def _normalize_todo_ids(raw_ids: Any) -> list[str]:
     if isinstance(raw_ids, list):
         return [str(item).strip() for item in raw_ids if str(item).strip()]
     return [str(raw_ids).strip()]
+
+
+def unfinished_todos_for_agent(agent_id: str) -> list[dict[str, Any]]:
+    """Return unresolved todos for an agent."""
+    unresolved = [
+        {**todo, "todo_id": todo_id}
+        for todo_id, todo in _get_agent_todos(agent_id).items()
+        if todo.get("status") != "done"
+    ]
+    unresolved.sort(key=_todo_sort_key)
+    return unresolved
 
 
 def _normalize_bulk_updates(raw_updates: Any) -> list[dict[str, Any]]:
@@ -257,7 +270,7 @@ def _apply_single_update(
 
 
 @function_tool(timeout=30)
-async def create_todo(ctx: RunContextWrapper, todos: str) -> str:
+async def create_todo(ctx: RunContextWrapper, todos: Any) -> str:
     """Create one or many todos for the current agent.
 
     Always pass a list, even for a single todo (wrap it in a one-item array).
@@ -277,8 +290,8 @@ async def create_todo(ctx: RunContextWrapper, todos: str) -> str:
     - Single quick task — just do it.
 
     Args:
-        todos: JSON array of todo objects. For one todo, pass a one-item
-            list. Each object's fields:
+        todos: array of todo objects, a single todo object, or a JSON string.
+            For one todo, prefer a one-item list. Each object's fields:
 
             - ``title`` (str, **required**): short actionable title,
               e.g. ``"Test /api/admin for IDOR"``.
@@ -301,10 +314,14 @@ async def create_todo(ctx: RunContextWrapper, todos: str) -> str:
                 default=str,
             )
 
+        normalized_tasks = [
+            {**task, "priority": _normalize_priority(task.get("priority"))}
+            for task in tasks
+        ]
         agent_todos = _get_agent_todos(agent_id)
         created: list[dict[str, Any]] = []
-        for task in tasks:
-            task_priority = _normalize_priority(task.get("priority"))
+        for task in normalized_tasks:
+            task_priority = task["priority"]
             todo_id = str(uuid.uuid4())[:6]
             timestamp = datetime.now(UTC).isoformat()
             agent_todos[todo_id] = {
@@ -404,7 +421,7 @@ async def list_todos(
 
 
 @function_tool(timeout=30)
-async def update_todo(ctx: RunContextWrapper, updates: str) -> str:
+async def update_todo(ctx: RunContextWrapper, updates: Any) -> str:
     """Update one or many todos.
 
     Always pass a list, even for a single update (wrap it in a one-item
@@ -475,7 +492,7 @@ async def update_todo(ctx: RunContextWrapper, updates: str) -> str:
     return json.dumps(response, ensure_ascii=False, default=str)
 
 
-def _mark(*, agent_id: str, todo_ids: str, new_status: str) -> str:
+def _mark(*, agent_id: str, todo_ids: Any, new_status: str) -> str:
     try:
         agent_todos = _get_agent_todos(agent_id)
         ids = _normalize_todo_ids(todo_ids)
@@ -514,40 +531,37 @@ def _mark(*, agent_id: str, todo_ids: str, new_status: str) -> str:
 
 
 @function_tool(timeout=30)
-async def mark_todo_done(ctx: RunContextWrapper, todo_ids: str) -> str:
+async def mark_todo_done(ctx: RunContextWrapper, todo_ids: Any) -> str:
     """Mark one or many todos as done.
 
     Always pass a list, even for a single ID (wrap it in a one-item array).
 
     Args:
-        todo_ids: JSON array of todo IDs to mark done. For one todo,
-            pass a one-item list.
+        todo_ids: array of todo IDs, a single todo ID, or a JSON string.
     """
     return _mark(agent_id=_agent_id_from(ctx), todo_ids=todo_ids, new_status="done")
 
 
 @function_tool(timeout=30)
-async def mark_todo_pending(ctx: RunContextWrapper, todo_ids: str) -> str:
+async def mark_todo_pending(ctx: RunContextWrapper, todo_ids: Any) -> str:
     """Reset one or many todos to pending (e.g., to retry a failed task).
 
     Always pass a list, even for a single ID (wrap it in a one-item array).
 
     Args:
-        todo_ids: JSON array of todo IDs to reset to pending. For one
-            todo, pass a one-item list.
+        todo_ids: array of todo IDs, a single todo ID, or a JSON string.
     """
     return _mark(agent_id=_agent_id_from(ctx), todo_ids=todo_ids, new_status="pending")
 
 
 @function_tool(timeout=30)
-async def delete_todo(ctx: RunContextWrapper, todo_ids: str) -> str:
+async def delete_todo(ctx: RunContextWrapper, todo_ids: Any) -> str:
     """Delete one or many todos. Removes them entirely (no soft-delete).
 
     Always pass a list, even for a single ID (wrap it in a one-item array).
 
     Args:
-        todo_ids: JSON array of todo IDs to delete. For one todo, pass
-            a one-item list.
+        todo_ids: array of todo IDs, a single todo ID, or a JSON string.
     """
     agent_id = _agent_id_from(ctx)
     try:

@@ -52,6 +52,7 @@ class Node3Config:
 class Node3Runtime:
     def __init__(self, config: Node3Config) -> None:
         self.config = config
+        self.ws: Any | None = None
         self.current_task: asyncio.Task[None] | None = None
         self.chat_history: dict[str, deque[tuple[str, str]]] = defaultdict(lambda: deque(maxlen=MAX_CHAT_TURNS))
         self.stop_event = asyncio.Event()
@@ -65,80 +66,96 @@ class Node3Runtime:
             try:
                 ws_url = f"{self.config.platform_ws_url}?token={self.config.node_token}"
                 async with websockets.connect(ws_url) as ws:
+                    self.ws = ws
                     print(f"[node3] websocket connected: {self.config.platform_ws_url}", flush=True)
                     async for raw in ws:
-                        await self.handle_message(ws, json.loads(raw))
+                        await self.handle_message(json.loads(raw))
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 print(f"[node3] websocket error: {exc}", flush=True)
                 await asyncio.sleep(3)
+            finally:
+                self.ws = None
 
-    async def handle_message(self, ws: Any, message: dict[str, Any]) -> None:
+    async def handle_message(self, message: dict[str, Any]) -> None:
         msg_type = str(message.get("type") or "")
         if msg_type == "task_assign":
             task = normalize_task(message, self.config)
-            await self.start_scan(ws, task)
+            await self.start_scan(task)
         elif msg_type == "user_steer":
             task = normalize_task(message, self.config)
             if extract_target(task):
-                await self.start_scan(ws, task)
+                await self.start_scan(task)
             else:
-                await self.answer_chat(ws, task)
+                await self.answer_chat(task)
         elif msg_type == "user_interrupt":
             if self.current_task and not self.current_task.done():
                 self.current_task.cancel()
-            await send(ws, {
+            await self.send({
                 "type": "text",
                 "conversation_id": str(message.get("conversation_id") or ""),
                 "content": {"text": "Node3 received interrupt; stopping embedded Strix scan."},
             })
         elif msg_type == "user_input":
-            await send(ws, {
+            await self.send({
                 "type": "text",
                 "conversation_id": str(message.get("conversation_id") or ""),
                 "content": {"text": "Node3 runs Strix in non-interactive mode and does not handle approval prompts yet."},
             })
 
-    async def start_scan(self, ws: Any, task: dict[str, Any]) -> None:
+    async def start_scan(self, task: dict[str, Any]) -> None:
         if self.current_task and not self.current_task.done():
-            await send(ws, {
+            await self.send({
                 "type": "task_error",
                 "conversation_id": task["conversation_id"],
                 "task_id": task["task_id"],
                 "message": "Node3 Strix adapter is busy",
             })
             return
-        self.current_task = asyncio.create_task(self.run_scan(ws, task))
+        self.current_task = asyncio.create_task(self.run_scan(task))
 
-    async def run_scan(self, ws: Any, task: dict[str, Any]) -> None:
+    async def run_scan(self, task: dict[str, Any]) -> None:
         try:
-            await run_platform_scan(ws, task, self.config)
+            await run_platform_scan(self, task, self.config)
         except asyncio.CancelledError:
             raise
         finally:
             self.current_task = None
 
-    async def answer_chat(self, ws: Any, task: dict[str, Any]) -> None:
+    async def answer_chat(self, task: dict[str, Any]) -> None:
         conv_id = task["conversation_id"]
         user_text = str(task.get("instruction") or "").strip()
         self.chat_history[conv_id].append(("user", user_text))
         try:
             answer = await asyncio.wait_for(self.call_strix_model(conv_id), timeout=self.config.chat_timeout)
             self.chat_history[conv_id].append(("assistant", answer))
-            await send(ws, {
+            await self.send({
                 "type": "text",
                 "conversation_id": conv_id,
                 "task_id": task["task_id"],
                 "content": {"text": answer or "Node3 model returned an empty response."},
             })
         except Exception as exc:
-            await send(ws, {
+            await self.send({
                 "type": "task_error",
                 "conversation_id": conv_id,
                 "task_id": task["task_id"],
                 "message": f"Node3 model chat failed: {exc}",
             })
+
+    async def send(self, message: dict[str, Any] | str) -> None:
+        payload = message if isinstance(message, str) else json.dumps(message, ensure_ascii=False)
+        while not self.stop_event.is_set():
+            ws = self.ws
+            if ws is not None:
+                try:
+                    await ws.send(payload)
+                    return
+                except Exception as exc:
+                    print(f"[node3] websocket send failed; waiting for reconnect: {exc}", flush=True)
+                    self.ws = None
+            await asyncio.sleep(1)
 
     async def call_strix_model(self, conv_id: str) -> str:
         settings = load_settings()
@@ -279,6 +296,8 @@ def split_args(value: str) -> list[str]:
 
 def resolve_config_path(value: str | None, fallback: Path) -> Path:
     if not value:
+        return fallback.resolve()
+    if os.name == "nt" and value.replace("\\", "/").startswith("/workspace/"):
         return fallback.resolve()
     path = Path(value)
     if path.is_absolute():

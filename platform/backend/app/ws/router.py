@@ -1382,6 +1382,11 @@ async def _announce_agent_assignment(conv_id: str, decision, node_id: str) -> No
         "agent_node_id": str(PLATFORM_AGENT_NODE_ID),
     }, "agent")
 
+
+def _should_announce_agent_assignment(requested_node_id: str | None, msg: dict) -> bool:
+    return not (requested_node_id or _agent_node_id(msg))
+
+
 async def _send_to_bound_node(conv_id: str, raw: str) -> bool:
     node_id = conversation_node.get(conv_id)
     if not node_id:
@@ -1719,7 +1724,8 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             elif not resumed_from_context:
                                 snapshot["checkpoint"] = {}
                             task_msg["snapshot"] = snapshot
-                            await _announce_agent_assignment(conv_id, decision, node_id)
+                            if _should_announce_agent_assignment(requested_node_id, msg):
+                                await _announce_agent_assignment(conv_id, decision, node_id)
                             await node_connections[node_id].send_text(json.dumps(task_msg, ensure_ascii=False))
                             continue
 
