@@ -27,7 +27,7 @@ const TEMPLATES = [
 ];
 
 type Progress = { current: number; total: number; percent: number };
-type PlanNode = { node_id?: string; id?: string; title?: string; status?: string; parent_id?: string | null; kind?: string; level?: string; method?: string | null; endpoint?: string | null; parameter?: string | null; parameters?: string[]; vuln_type?: string | null; result?: string | null; notes?: string | null; evidence_ids?: string[]; priority?: number; source?: string; };
+type PlanNode = { node_id?: string; id?: string; title?: string; status?: string; parent_id?: string | null; kind?: string; level?: string; method?: string | null; endpoint?: string | null; parameter?: string | null; parameters?: string[]; vuln_type?: string | null; result?: string | null; notes?: string | null; evidence_ids?: string[]; priority?: number; source?: string; agent_id?: string; linked_agent_id?: string; };
 type KanbanBucket = { id: string; title: string; done: number; total: number; status: string };
 type KanbanSummary = {
   workflow_kind?: string;
@@ -1623,6 +1623,8 @@ function strixTodosToPlanTree(items: unknown[]): PlanNode[] {
     notes: readString(item.description),
     priority: strixTodoPriority(item.priority, index),
     source: "strix_todo",
+    agent_id: readString(item.agent_id),
+    linked_agent_id: readString(item.linked_agent_id),
   }));
 }
 

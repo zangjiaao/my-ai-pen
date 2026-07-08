@@ -172,6 +172,94 @@ def _normalize_evidence_ids(raw: list[str] | str | None) -> list[str]:
     return evidence_ids
 
 
+def _agent_graph_from_context(
+    *,
+    coordinator: Any = None,
+    state_dir: Any = None,
+) -> list[dict[str, Any]]:
+    if coordinator is not None:
+        statuses = getattr(coordinator, "statuses", {})
+        parent_of = getattr(coordinator, "parent_of", {})
+        names = getattr(coordinator, "names", {})
+        metadata = getattr(coordinator, "metadata", {})
+        if isinstance(statuses, dict) and isinstance(parent_of, dict):
+            ids = set(statuses) | set(parent_of)
+            if isinstance(names, dict):
+                ids |= set(names)
+            if isinstance(metadata, dict):
+                ids |= set(metadata)
+            agents: list[dict[str, Any]] = []
+            for agent_id in ids:
+                md = metadata.get(agent_id) if isinstance(metadata, dict) and isinstance(metadata.get(agent_id), dict) else {}
+                agents.append({
+                    "id": str(agent_id),
+                    "parent_id": parent_of.get(agent_id),
+                    "name": names.get(agent_id) if isinstance(names, dict) else str(agent_id),
+                    "skills": md.get("skills") if isinstance(md.get("skills"), list) else [],
+                    "status": statuses.get(agent_id) or "running",
+                })
+            return agents
+
+    state_path = _state_dir_path(state_dir)
+    if state_path is not None:
+        try:
+            from strix.platform.node_protocol import agent_graph_from_file
+        except ImportError:
+            return []
+        return agent_graph_from_file(state_path / "agents.json")
+    return []
+
+
+def _validate_independent_validation(
+    *,
+    validation_agent_id: str | None,
+    validation_evidence_ids: list[str],
+    reporting_agent_id: str | None,
+    coordinator: Any = None,
+    state_dir: Any = None,
+) -> list[str]:
+    errors: list[str] = []
+    clean_validation_agent_id = str(validation_agent_id or "").strip()
+    if not clean_validation_agent_id:
+        errors.append("validation_agent_id is required and must reference an independent subagent")
+    if not validation_evidence_ids:
+        errors.append("validation_evidence_ids is required and must cite evidence recorded by the validation subagent")
+
+    graph = _agent_graph_from_context(coordinator=coordinator, state_dir=state_dir)
+    by_id = {str(agent.get("id") or ""): agent for agent in graph if str(agent.get("id") or "").strip()}
+    if clean_validation_agent_id:
+        agent = by_id.get(clean_validation_agent_id)
+        if not agent:
+            errors.append(f"validation_agent_id '{clean_validation_agent_id}' was not found in the agent graph")
+        elif not str(agent.get("parent_id") or "").strip():
+            errors.append("validation_agent_id must reference a subagent, not the root agent")
+        if reporting_agent_id and clean_validation_agent_id == reporting_agent_id:
+            errors.append("validation_agent_id must be different from the reporting agent")
+        state_path = _state_dir_path(state_dir)
+        if state_path is not None and validation_evidence_ids:
+            try:
+                from strix.tools.run_memory.tools import evidence_from_file
+            except ImportError:
+                evidence_by_id = {}
+            else:
+                evidence_by_id = {
+                    str(item.get("evidence_id") or ""): item
+                    for item in evidence_from_file(state_path / "evidence.json")
+                }
+            wrong_owner = [
+                evidence_id
+                for evidence_id in validation_evidence_ids
+                if str(evidence_by_id.get(evidence_id, {}).get("agent_id") or "").strip() != clean_validation_agent_id
+            ]
+            if wrong_owner:
+                errors.append(
+                    "validation_evidence_ids must be recorded by validation_agent_id: "
+                    + ", ".join(wrong_owner)
+                )
+
+    return errors
+
+
 def _state_dir_path(raw: Any) -> Path | None:
     if isinstance(raw, Path):
         return raw
@@ -284,9 +372,13 @@ async def _do_create(
     cwe: str | None,
     code_locations: list[dict[str, Any]] | None,
     evidence_ids: list[str] | str | None,
+    validation_agent_id: str | None = None,
+    validation_evidence_ids: list[str] | str | None = None,
     agent_id: str | None = None,
     agent_name: str | None = None,
     state_dir: Any = None,
+    coordinator: Any = None,
+    enforce_independent_validation: bool = False,
 ) -> dict[str, Any]:
     errors: list[str] = []
     fields = {
@@ -310,6 +402,7 @@ async def _do_create(
     if parsed_locations:
         errors.extend(_validate_code_locations(parsed_locations))
     parsed_evidence_ids = _normalize_evidence_ids(evidence_ids)
+    parsed_validation_evidence_ids = _normalize_evidence_ids(validation_evidence_ids)
     if parsed_evidence_ids:
         try:
             from strix.tools.run_memory.tools import missing_evidence_ids_in_state
@@ -323,6 +416,27 @@ async def _do_create(
                 + ", ".join(missing_ids)
                 + ". Call record_evidence first and cite the returned IDs."
             )
+    if parsed_validation_evidence_ids:
+        try:
+            from strix.tools.run_memory.tools import missing_evidence_ids_in_state
+        except ImportError:
+            missing_validation_ids = []
+        else:
+            missing_validation_ids = missing_evidence_ids_in_state(_state_dir_path(state_dir), parsed_validation_evidence_ids)
+        if missing_validation_ids:
+            errors.append(
+                "Unknown validation_evidence_ids: "
+                + ", ".join(missing_validation_ids)
+                + ". The validation subagent must record evidence first and cite the returned IDs."
+            )
+    if enforce_independent_validation:
+        errors.extend(_validate_independent_validation(
+            validation_agent_id=validation_agent_id,
+            validation_evidence_ids=parsed_validation_evidence_ids,
+            reporting_agent_id=agent_id,
+            coordinator=coordinator,
+            state_dir=state_dir,
+        ))
     if cve:
         cve = _extract_cve(cve)
         cve_err = _validate_cve(cve)
@@ -403,6 +517,8 @@ async def _do_create(
             cwe=cwe,
             code_locations=parsed_locations,
             evidence_ids=parsed_evidence_ids,
+            validation_agent_id=str(validation_agent_id or "").strip() or None,
+            validation_evidence_ids=parsed_validation_evidence_ids,
             agent_id=agent_id if isinstance(agent_id, str) else None,
             agent_name=agent_name if isinstance(agent_name, str) else None,
         )
@@ -426,6 +542,8 @@ async def _do_create(
     }
     if not parsed_evidence_ids:
         result["warning"] = "No evidence_ids were provided; record evidence and cite it for stronger confirmed findings."
+    result["validation_agent_id"] = str(validation_agent_id or "").strip() or None
+    result["validation_evidence_ids"] = parsed_validation_evidence_ids
     return result
 
 
@@ -447,7 +565,16 @@ async def create_vulnerability_report(
     cwe: str | None = None,
     code_locations: list[dict[str, Any]] | None = None,
     evidence_ids: list[str] | str | None = None,
+    validation_agent_id: str | None = None,
+    validation_evidence_ids: list[str] | str | None = None,
 ) -> str:
+    """File a confirmed vulnerability report.
+
+    Every confirmed finding must cite direct proof evidence_ids and an
+    independent validation subagent. Pass validation_agent_id for the subagent
+    that verified the issue, and validation_evidence_ids for evidence recorded
+    by that subagent.
+    """
     inner = ctx.context if isinstance(ctx.context, dict) else {}
     raw_agent_id = inner.get("agent_id")
     agent_id = raw_agent_id if isinstance(raw_agent_id, str) else None
@@ -475,7 +602,11 @@ async def create_vulnerability_report(
         cwe=cwe,
         code_locations=code_locations,
         evidence_ids=evidence_ids,
+        validation_agent_id=validation_agent_id,
+        validation_evidence_ids=validation_evidence_ids,
         state_dir=inner.get("state_dir"),
+        coordinator=coordinator,
+        enforce_independent_validation=True,
         agent_id=agent_id,
         agent_name=agent_name,
     )

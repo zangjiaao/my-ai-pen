@@ -17,6 +17,7 @@ from strix.platform.node_protocol import (  # noqa: E402
     PlatformEventSink,
     agent_graph_from_file,
     checkpoint,
+    merge_agent_activity,
     notes_from_file,
     runtime_checkpoint,
     tool_status_value,
@@ -87,6 +88,68 @@ def test_bridge_vulnerability_callback_emits_platform_evidence_and_finding():
     assert sent[2]["title"] == "Reflected XSS"
     assert sent[2]["severity"] == "high"
     assert sent[2]["evidence_ids"] == [sent[0]["evidence_id"]]
+
+
+def test_bridge_emits_referenced_memory_evidence_before_finding(tmp_path):
+    from strix.tools.run_memory import tools as memory_tools
+
+    async def run_bridge():
+        state_dir = tmp_path / ".state"
+        state_dir.mkdir()
+        memory_tools.hydrate_memory_from_disk(state_dir)
+        evidence_ctx = ToolContext(
+            context={"agent_id": "validator", "state_dir": str(state_dir)},
+            tool_name="record_evidence",
+            tool_call_id="call-1",
+            tool_arguments="{}",
+        )
+        evidence_id = json.loads(await memory_tools.record_evidence.on_invoke_tool(
+            evidence_ctx,
+            json.dumps({
+                "evidence_type": "http_trace",
+                "summary": "Validator reproduced SQL injection",
+                "target": "http://target.local/search",
+            }),
+        ))["evidence_id"]
+
+        ws = FakeWebSocket()
+        task = {
+            "task_id": "task-1",
+            "conversation_id": "conv-1",
+            "target": {"value": "http://target.local"},
+            "scope": {},
+            "snapshot": {},
+        }
+        bridge = PlatformEventSink(ws, task)
+        bridge.set_run_context("run-1", str(tmp_path))
+        pump = asyncio.create_task(bridge.pump())
+        bridge.vulnerability_found({
+            "id": "vuln-0001",
+            "title": "SQL Injection",
+            "severity": "high",
+            "target": "http://target.local",
+            "endpoint": "/search",
+            "description": "Confirmed SQL injection.",
+            "impact": "Data exposure.",
+            "remediation_steps": "Use prepared statements.",
+            "evidence_ids": [evidence_id],
+            "validation_agent_id": "validator",
+            "validation_evidence_ids": [evidence_id],
+            "agent_id": "root",
+        })
+        await bridge.close()
+        await pump
+        return ws.sent, evidence_id
+
+    sent, evidence_id = asyncio.run(run_bridge())
+    evidence_messages = [message for message in sent if message["type"] == "evidence_created"]
+    assert evidence_messages[0]["evidence_id"].startswith("strix-task-1-vuln-0001")
+    assert evidence_messages[1]["evidence_id"] == evidence_id
+    assert evidence_messages[1]["summary"] == "Validator reproduced SQL injection"
+    assert sent[-1]["type"] == "vuln_found"
+    assert sent[-1]["evidence_ids"] == [evidence_id]
+    assert sent[-1]["validation_agent_id"] == "validator"
+    assert sent[-1]["validation_evidence_ids"] == [evidence_id]
 
 
 def test_bridge_tool_output_includes_platform_card_fields():
@@ -233,6 +296,62 @@ def test_bridge_keeps_failed_write_stdin_tool_output():
     assert sent[0]["display_title"] == "Command Input"
     assert sent[0]["status"] == "failed"
     assert "session not found" in sent[0]["line"]
+
+
+def test_tool_failure_does_not_mark_agent_failed():
+    task = {
+        "task_id": "task-1",
+        "conversation_id": "conv-1",
+        "target": {"value": "http://target.local"},
+        "scope": {},
+        "snapshot": {},
+    }
+    bridge = PlatformEventSink(FakeWebSocket(), task)
+
+    bridge.update_agent_activity(
+        "agent-1",
+        "create_vulnerability_report",
+        {"title": "SQL Injection"},
+        "failed",
+        {"success": False, "error": "Validation failed"},
+    )
+
+    agent = bridge.agents_by_id["agent-1"]
+    assert agent["status"] == "running"
+    assert agent["current_tool"] == "create_vulnerability_report"
+    assert "Validation failed" in agent["current_action"]
+
+    bridge.update_agent_activity(
+        "agent-1",
+        "agent_finish",
+        {},
+        "done",
+        {"success": True, "summary": "validated login endpoint"},
+    )
+
+    assert bridge.agents_by_id["agent-1"]["status"] == "completed"
+
+
+def test_merge_agent_activity_ignores_fallback_failed_status_for_running_snapshot():
+    merged = merge_agent_activity(
+        [{
+            "id": "agent-1",
+            "name": "SQL Agent",
+            "status": "running",
+            "current_tool": "",
+            "current_action": "Starting task",
+        }],
+        [{
+            "id": "agent-1",
+            "status": "failed",
+            "current_tool": "create_vulnerability_report",
+            "current_action": "Reporting finding failed: Validation failed",
+        }],
+    )
+
+    assert merged[0]["status"] == "running"
+    assert merged[0]["current_tool"] == "create_vulnerability_report"
+    assert "Validation failed" in merged[0]["current_action"]
 
 
 def test_bridge_checkpoint_includes_normalized_strix_agent_graph(tmp_path):
@@ -548,13 +667,26 @@ def test_completion_gate_passes_with_surface_coverage_and_evidence(tmp_path):
         {"surface_id": "as-1", "kind": "auth_endpoint", "url": "http://target.local/login", "method": "POST", "evidence_ids": ["ev-1"]},
     ]), encoding="utf-8")
     (state_dir / "coverage.json").write_text(json.dumps([
-        {"coverage_id": "cov-1", "endpoint": "POST http://target.local/login", "parameter": "username", "vuln_type": "sql_injection", "status": "passed", "evidence_ids": ["ev-1"]},
+        {"coverage_id": "cov-1", "endpoint": "POST /login", "parameter": "username", "vuln_type": "sql_injection", "status": "passed", "evidence_ids": ["ev-1"]},
     ]), encoding="utf-8")
     (state_dir / "evidence.json").write_text(json.dumps([
-        {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "SQL error observed"},
+        {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "SQL error observed", "agent_id": "validator"},
     ]), encoding="utf-8")
+    (state_dir / "agents.json").write_text(json.dumps({
+        "statuses": {"root": "running", "validator": "completed"},
+        "parent_of": {"root": None, "validator": "root"},
+        "names": {"root": "strix", "validator": "SQL Validator"},
+    }), encoding="utf-8")
     (tmp_path / "vulnerabilities.json").write_text(json.dumps([
-        {"id": "vuln-1", "title": "SQLi", "severity": "high", "evidence_ids": ["ev-1"]},
+        {
+            "id": "vuln-1",
+            "title": "SQLi",
+            "severity": "high",
+            "evidence_ids": ["ev-1"],
+            "validation_agent_id": "validator",
+            "validation_evidence_ids": ["ev-1"],
+            "agent_id": "root",
+        },
     ]), encoding="utf-8")
 
     gate = completion_gate_for_run(tmp_path)
@@ -563,6 +695,117 @@ def test_completion_gate_passes_with_surface_coverage_and_evidence(tmp_path):
     assert gate["attack_surface_count"] == 1
     assert gate["meaningful_coverage_count"] == 1
     assert gate["evidence_count"] == 1
+    assert gate["uncovered_attack_surface_count"] == 0
+
+
+def test_completion_gate_rejects_uncovered_attack_surface(tmp_path):
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    (state_dir / "attack_surface.json").write_text(json.dumps([
+        {"surface_id": "as-1", "kind": "url", "url": "http://target.local/", "method": "GET", "evidence_ids": ["ev-1"]},
+        {"surface_id": "as-2", "kind": "auth_endpoint", "url": "http://target.local/login", "method": "POST", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "coverage.json").write_text(json.dumps([
+        {"coverage_id": "cov-1", "endpoint": "GET http://target.local/", "vuln_type": "baseline", "status": "tried", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "evidence.json").write_text(json.dumps([
+        {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "Baseline response", "agent_id": "root"},
+    ]), encoding="utf-8")
+
+    gate = completion_gate_for_run(tmp_path)
+
+    assert gate["ok"] is False
+    assert "1 attack surface record(s) without coverage" in gate["incomplete_reasons"]
+    assert gate["uncovered_attack_surface_count"] == 1
+    assert gate["uncovered_attack_surfaces"][0]["surface_id"] == "as-2"
+
+
+def test_completion_gate_accepts_skipped_surface_with_reason(tmp_path):
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    (state_dir / "attack_surface.json").write_text(json.dumps([
+        {"surface_id": "as-1", "kind": "url", "url": "http://target.local/", "method": "GET", "evidence_ids": ["ev-1"]},
+        {"surface_id": "as-2", "kind": "admin_endpoint", "url": "http://target.local/admin", "method": "GET", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "coverage.json").write_text(json.dumps([
+        {"coverage_id": "cov-1", "endpoint": "GET http://target.local/", "vuln_type": "baseline", "status": "tried", "evidence_ids": ["ev-1"]},
+        {"coverage_id": "cov-2", "endpoint": "GET http://target.local/admin", "vuln_type": "access_control", "status": "skipped", "notes": "Out of scope for current role; admin credentials unavailable", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "evidence.json").write_text(json.dumps([
+        {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "Baseline response"},
+    ]), encoding="utf-8")
+
+    gate = completion_gate_for_run(tmp_path)
+
+    assert gate["ok"] is True
+    assert gate["uncovered_attack_surface_count"] == 0
+    assert gate["meaningful_coverage_count"] == 1
+
+
+def test_completion_gate_ignores_terminal_agent_orphan_todos(tmp_path):
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    (state_dir / "agents.json").write_text(json.dumps({
+        "statuses": {"root": "waiting", "failed-child": "failed"},
+        "parent_of": {"root": None, "failed-child": "root"},
+        "names": {"root": "strix", "failed-child": "XSS Testing Agent"},
+    }), encoding="utf-8")
+    (state_dir / "todos.json").write_text(json.dumps({
+        "failed-child": {
+            "todo-1": {"title": "Legacy XSS task", "status": "pending", "priority": "high"},
+        },
+    }), encoding="utf-8")
+    (state_dir / "attack_surface.json").write_text(json.dumps([
+        {"surface_id": "as-1", "kind": "url", "url": "http://target.local/", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "coverage.json").write_text(json.dumps([
+        {"coverage_id": "cov-1", "endpoint": "GET http://target.local/", "vuln_type": "baseline", "status": "tried", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "evidence.json").write_text(json.dumps([
+        {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "Baseline response"},
+    ]), encoding="utf-8")
+
+    gate = completion_gate_for_run(tmp_path)
+
+    assert gate["ok"] is True
+    assert gate["unfinished_count"] == 0
+    assert gate["ignored_unfinished_count"] == 1
+    assert gate["ignored_unfinished_todos"][0]["agent_id"] == "failed-child"
+    assert "owner agent is failed" in gate["ignored_unfinished_todos"][0]["ignore_reason"]
+    assert gate["completion_warnings"] == [
+        "1 unresolved task(s) ignored because their owner agent is terminal"
+    ]
+
+
+def test_completion_gate_keeps_running_agent_todos_actionable(tmp_path):
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    (state_dir / "agents.json").write_text(json.dumps({
+        "statuses": {"root": "waiting", "child": "running"},
+        "parent_of": {"root": None, "child": "root"},
+        "names": {"root": "strix", "child": "Auth Agent"},
+    }), encoding="utf-8")
+    (state_dir / "todos.json").write_text(json.dumps({
+        "child": {
+            "todo-1": {"title": "Validate endpoint", "status": "pending", "priority": "high"},
+        },
+    }), encoding="utf-8")
+    (state_dir / "attack_surface.json").write_text(json.dumps([
+        {"surface_id": "as-1", "kind": "url", "url": "http://target.local/", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "coverage.json").write_text(json.dumps([
+        {"coverage_id": "cov-1", "endpoint": "GET http://target.local/", "vuln_type": "baseline", "status": "tried", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "evidence.json").write_text(json.dumps([
+        {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "Baseline response"},
+    ]), encoding="utf-8")
+
+    gate = completion_gate_for_run(tmp_path)
+
+    assert gate["ok"] is False
+    assert gate["unfinished_count"] == 1
+    assert gate["ignored_unfinished_count"] == 0
+    assert gate["unfinished_todos"][0]["title"] == "Validate endpoint"
 
 
 def test_completion_gate_reads_memory_from_sqlite_without_json_snapshots(tmp_path):
@@ -624,6 +867,36 @@ def test_completion_gate_rejects_missing_finding_evidence(tmp_path):
     assert "1 finding(s) without evidence_ids" in gate["incomplete_reasons"]
     assert "1 missing evidence reference(s)" in gate["incomplete_reasons"]
     assert gate["missing_evidence_refs"] == ["ev-missing"]
+
+
+def test_completion_gate_rejects_finding_without_independent_validation(tmp_path):
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    (state_dir / "agents.json").write_text(json.dumps({
+        "statuses": {"root": "running", "child": "completed"},
+        "parent_of": {"root": None, "child": "root"},
+        "names": {"root": "strix", "child": "SQL Validator"},
+    }), encoding="utf-8")
+    (state_dir / "attack_surface.json").write_text(json.dumps([
+        {"surface_id": "as-1", "kind": "url", "url": "http://target.local/", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "coverage.json").write_text(json.dumps([
+        {"coverage_id": "cov-1", "endpoint": "GET http://target.local/", "parameter": "<none>", "vuln_type": "baseline", "status": "tried", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "evidence.json").write_text(json.dumps([
+        {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "Baseline response"},
+    ]), encoding="utf-8")
+    (tmp_path / "vulnerabilities.json").write_text(json.dumps([
+        {"id": "vuln-1", "title": "Root self-validated SQLi", "severity": "high", "evidence_ids": ["ev-1"], "validation_agent_id": "root", "validation_evidence_ids": ["ev-1"], "agent_id": "root"},
+        {"id": "vuln-2", "title": "Missing validation", "severity": "high", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+
+    gate = completion_gate_for_run(tmp_path)
+
+    assert gate["ok"] is False
+    assert "2 finding(s) without independent subagent validation" in gate["incomplete_reasons"]
+    assert gate["invalid_vulnerability_validation_count"] == 2
+    assert "validation_agent_id references root agent" in gate["invalid_vulnerability_validations"][0]["problems"]
 
 
 def test_finish_scan_keeps_root_waiting_in_platform_conversation(monkeypatch, tmp_path):
@@ -1064,6 +1337,7 @@ def test_agent_prompt_names_exec_command_not_execute_command(monkeypatch):
 
     assert "The shell execution tool is named `exec_command`" in agent.instructions
     assert "`execute_command` tool. Never call `execute_command`." in agent.instructions
+    assert "Do not call a tool named `agent_browser`" in agent.instructions
     assert "record_attack_surface" in agent.instructions
     assert "record_evidence" in agent.instructions
     assert "record_coverage" in agent.instructions
@@ -1107,6 +1381,7 @@ def test_agent_exposes_memory_ledger_tools(monkeypatch):
     tool_names = {tool.name for tool in agent.tools}
 
     assert {"record_evidence", "record_attack_surface", "record_coverage", "list_memory"} <= tool_names
+    assert "agent_browser" in tool_names
 
 
 def test_list_sitemap_ignores_non_numeric_scope_id():
@@ -1141,6 +1416,48 @@ def test_list_sitemap_ignores_non_numeric_scope_id():
     assert client.graphql.variables == {"scopeId": None}
     assert result["success"] is True
     assert "warning" in result
+
+
+def test_list_sitemap_serializes_shared_graphql_client():
+    from strix.tools.proxy import caido_api
+
+    class FakeGraphQL:
+        def __init__(self):
+            self.active = 0
+            self.max_active = 0
+
+        async def query(self, _query, *, variables):
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            try:
+                if self.active > 1:
+                    raise AssertionError("concurrent GraphQL query on shared client")
+                await asyncio.sleep(0.01)
+                return {
+                    "sitemapRootEntries": {
+                        "edges": [],
+                        "count": {"value": 0},
+                    },
+                }
+            finally:
+                self.active -= 1
+
+    class FakeClient:
+        def __init__(self):
+            self.graphql = FakeGraphQL()
+
+    async def run():
+        client = FakeClient()
+        results = await asyncio.gather(
+            caido_api.list_sitemap_with_client(client),
+            caido_api.list_sitemap_with_client(client),
+        )
+        return client.graphql.max_active, results
+
+    max_active, results = asyncio.run(run())
+
+    assert max_active == 1
+    assert all(result["success"] is True for result in results)
 
 
 def test_memory_tools_persist_attack_surface_coverage_and_evidence(tmp_path):
@@ -1198,6 +1515,42 @@ def test_memory_tools_persist_attack_surface_coverage_and_evidence(tmp_path):
         assert conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM attack_surface").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM coverage").fetchone()[0] == 1
+
+
+def test_record_evidence_normalizes_alias_and_unknown_type(tmp_path):
+    from strix.tools.run_memory import tools as memory_tools
+
+    memory_tools.hydrate_memory_from_disk(tmp_path)
+    ctx = ToolContext(
+        context={"agent_id": "root"},
+        tool_name="record_evidence",
+        tool_call_id="call-1",
+        tool_arguments="{}",
+    )
+
+    alias_result = json.loads(asyncio.run(memory_tools.record_evidence.on_invoke_tool(
+        ctx,
+        json.dumps({
+            "evidence_type": "request_response",
+            "summary": "Login request and response captured",
+            "target": "http://target.local/login",
+        }),
+    )))
+    url_type_result = json.loads(asyncio.run(memory_tools.record_evidence.on_invoke_tool(
+        ctx,
+        json.dumps({
+            "evidence_type": "http://host.docker.internal:3000/rest/user/login",
+            "summary": "Login endpoint observed",
+        }),
+    )))
+
+    assert alias_result["success"] is True
+    assert alias_result["evidence"]["evidence_type"] == "http_trace"
+    assert alias_result["evidence"]["metadata"]["original_evidence_type"] == "request_response"
+    assert url_type_result["success"] is True
+    assert url_type_result["evidence"]["evidence_type"] == "other"
+    assert url_type_result["evidence"]["target"] == "http://host.docker.internal:3000/rest/user/login"
+    assert url_type_result["evidence"]["metadata"]["original_evidence_type"] == "http://host.docker.internal:3000/rest/user/login"
 
 
 def test_memory_tools_deduplicate_attack_surface_in_sqlite_and_json(tmp_path):
@@ -1508,6 +1861,56 @@ def test_create_todo_is_atomic_and_accepts_medium_priority(tmp_path):
     persisted = json.loads((tmp_path / "todos.json").read_text(encoding="utf-8"))
     assert len(persisted["root"]) == 1
     assert next(iter(persisted["root"].values()))["priority"] == "normal"
+
+
+def test_todo_must_be_in_progress_before_done(tmp_path):
+    todo_tools.hydrate_todos_from_disk(tmp_path)
+    ctx = ToolContext(
+        context={"agent_id": "root"},
+        tool_name="create_todo",
+        tool_call_id="call-1",
+        tool_arguments="{}",
+    )
+    created_payload = json.loads(asyncio.run(todo_tools.create_todo.on_invoke_tool(
+        ctx,
+        json.dumps({"todos": [{"title": "Probe /login"}, {"title": "Probe /admin"}]}),
+    )))
+    first_id = created_payload["created"][0]["todo_id"]
+    second_id = created_payload["created"][1]["todo_id"]
+
+    direct_done = json.loads(asyncio.run(todo_tools.mark_todo_done.on_invoke_tool(
+        ctx,
+        json.dumps({"todo_ids": [first_id]}),
+    )))
+    assert direct_done["success"] is False
+    assert "in_progress before it can be marked done" in direct_done["errors"][0]["error"]
+
+    update_done = json.loads(asyncio.run(todo_tools.update_todo.on_invoke_tool(
+        ctx,
+        json.dumps({"updates": [{"todo_id": first_id, "status": "done"}]}),
+    )))
+    assert update_done["success"] is False
+    assert "in_progress before it can be marked done" in update_done["errors"][0]["error"]
+
+    started = json.loads(asyncio.run(todo_tools.update_todo.on_invoke_tool(
+        ctx,
+        json.dumps({"updates": [{"todo_id": first_id, "status": "in_progress"}]}),
+    )))
+    assert started["success"] is True
+
+    mixed_done = json.loads(asyncio.run(todo_tools.mark_todo_done.on_invoke_tool(
+        ctx,
+        json.dumps({"todo_ids": [first_id, second_id]}),
+    )))
+    assert mixed_done["success"] is False
+    assert mixed_done["marked"] == [first_id]
+    assert mixed_done["errors"][0]["todo_id"] == second_id
+
+    persisted = json.loads((tmp_path / "todos.json").read_text(encoding="utf-8"))
+    assert persisted["root"][first_id]["status"] == "done"
+    assert persisted["root"][first_id]["started_at"]
+    assert persisted["root"][first_id]["completed_at"]
+    assert persisted["root"][second_id]["status"] == "pending"
 
 
 def test_bound_todo_helpers_complete_successful_child_task(tmp_path):
@@ -1977,6 +2380,121 @@ def test_reporting_shim_persists_evidence_ids(monkeypatch, tmp_path):
     assert result["success"] is True
     assert "warning" not in result
     assert state.reports[0]["evidence_ids"] == [first_evidence, second_evidence]
+
+
+def test_create_vulnerability_report_requires_independent_validation(monkeypatch, tmp_path):
+    from strix.tools.run_memory import tools as memory_tools
+
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    memory_tools.hydrate_memory_from_disk(state_dir)
+
+    class FakeReportState:
+        def __init__(self) -> None:
+            self.reports: list[dict] = []
+
+        def get_existing_vulnerabilities(self) -> list[dict]:
+            return []
+
+        def add_vulnerability_report(self, **kwargs):
+            self.reports.append(kwargs)
+            return "vuln-0001"
+
+    state = FakeReportState()
+
+    async def fake_check_duplicate(candidate, existing):
+        return {"is_duplicate": False}
+
+    async def run_case():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "strix", None)
+        await coordinator.register("validator", "SQL Validator", "root")
+        root_ctx = ToolContext(
+            context={"agent_id": "root", "state_dir": str(state_dir), "coordinator": coordinator},
+            tool_name="record_evidence",
+            tool_call_id="call-root-evidence",
+            tool_arguments="{}",
+        )
+        validator_ctx = ToolContext(
+            context={"agent_id": "validator", "state_dir": str(state_dir), "coordinator": coordinator},
+            tool_name="record_evidence",
+            tool_call_id="call-validator-evidence",
+            tool_arguments="{}",
+        )
+        root_evidence_id = json.loads(await memory_tools.record_evidence.on_invoke_tool(
+            root_ctx,
+            json.dumps({"evidence_type": "http_trace", "summary": "Root SQL injection proof"}),
+        ))["evidence_id"]
+        validator_evidence_id = json.loads(await memory_tools.record_evidence.on_invoke_tool(
+            validator_ctx,
+            json.dumps({"evidence_type": "http_trace", "summary": "Validator reproduced SQL injection"}),
+        ))["evidence_id"]
+        report_ctx = ToolContext(
+            context={"agent_id": "root", "state_dir": str(state_dir), "coordinator": coordinator},
+            tool_name="create_vulnerability_report",
+            tool_call_id="call-report",
+            tool_arguments="{}",
+        )
+        base = {
+            "title": "SQL Injection",
+            "description": "SQL injection is confirmed.",
+            "impact": "An attacker can read database contents.",
+            "target": "http://target.local",
+            "technical_analysis": "The endpoint concatenates SQL.",
+            "poc_description": "Send a UNION payload.",
+            "poc_script_code": "print('poc')",
+            "remediation_steps": "Use prepared statements.",
+            "cvss_breakdown": {"AV": "N", "AC": "L", "PR": "N", "UI": "N", "S": "U", "C": "H", "I": "H", "A": "H"},
+            "endpoint": "/sqli",
+            "method": "GET",
+            "cwe": "CWE-89",
+            "evidence_ids": [root_evidence_id],
+        }
+        missing_validation = json.loads(await node3_tool.create_vulnerability_report.on_invoke_tool(
+            report_ctx,
+            json.dumps(base),
+        ))
+        root_self_validation = json.loads(await node3_tool.create_vulnerability_report.on_invoke_tool(
+            report_ctx,
+            json.dumps({
+                **base,
+                "validation_agent_id": "root",
+                "validation_evidence_ids": [root_evidence_id],
+            }),
+        ))
+        wrong_owner_validation = json.loads(await node3_tool.create_vulnerability_report.on_invoke_tool(
+            report_ctx,
+            json.dumps({
+                **base,
+                "validation_agent_id": "validator",
+                "validation_evidence_ids": [root_evidence_id],
+            }),
+        ))
+        valid = json.loads(await node3_tool.create_vulnerability_report.on_invoke_tool(
+            report_ctx,
+            json.dumps({
+                **base,
+                "validation_agent_id": "validator",
+                "validation_evidence_ids": [validator_evidence_id],
+            }),
+        ))
+        return missing_validation, root_self_validation, wrong_owner_validation, valid, validator_evidence_id
+
+    monkeypatch.setattr("strix.report.dedupe.check_duplicate", fake_check_duplicate)
+    monkeypatch.setattr("strix.report.state.get_global_report_state", lambda: state)
+
+    missing_validation, root_self_validation, wrong_owner_validation, valid, validator_evidence_id = asyncio.run(run_case())
+
+    assert missing_validation["success"] is False
+    assert any("validation_agent_id is required" in error for error in missing_validation["errors"])
+    assert any("validation_evidence_ids is required" in error for error in missing_validation["errors"])
+    assert root_self_validation["success"] is False
+    assert any("subagent, not the root agent" in error for error in root_self_validation["errors"])
+    assert wrong_owner_validation["success"] is False
+    assert any("recorded by validation_agent_id" in error for error in wrong_owner_validation["errors"])
+    assert valid["success"] is True
+    assert state.reports[0]["validation_agent_id"] == "validator"
+    assert state.reports[0]["validation_evidence_ids"] == [validator_evidence_id]
 
 
 def test_reporting_shim_rejects_unknown_evidence_ids(monkeypatch, tmp_path):

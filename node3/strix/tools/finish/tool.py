@@ -135,10 +135,15 @@ async def finish_scan(
        attack-surface and coverage ledger entries. If a discovered endpoint,
        form, auth route, admin route, upload point, API route, or service is
        missing from memory, record it before finishing.
-    4. Each meaningful positive or negative test has a ``record_coverage``
+    4. Compare ``list_memory(kind="attack_surface")`` with
+       ``list_memory(kind="coverage")``. Every discovered HTTP/API/form/auth/
+       upload/service surface must have coverage, or an explicit
+       ``blocked``/``skipped`` coverage entry with notes explaining why it
+       could not be tested.
+    5. Each meaningful positive or negative test has a ``record_coverage``
        entry. Confirmed vulnerability reports must cite real ``evidence_ids``
        returned by ``record_evidence``; do not invent evidence IDs.
-    5. Don't double-report - one report per distinct vulnerability.
+    6. Don't double-report - one report per distinct vulnerability.
 
     **Calling this multiple times overwrites the previous report.**
     Make the single call comprehensive.

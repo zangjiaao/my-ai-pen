@@ -62,6 +62,32 @@ _VALID_EVIDENCE_TYPES = {
     "manual_observation",
     "other",
 }
+_EVIDENCE_TYPE_ALIASES = {
+    "browser": "manual_observation",
+    "browser_observation": "manual_observation",
+    "browser_trace": "manual_observation",
+    "command": "tool_output",
+    "command_output": "tool_output",
+    "exec_command": "tool_output",
+    "http": "http_trace",
+    "http_request": "http_trace",
+    "http_response": "http_trace",
+    "network": "http_trace",
+    "network_trace": "http_trace",
+    "observation": "manual_observation",
+    "request": "http_trace",
+    "request_response": "http_trace",
+    "response": "http_trace",
+    "scan_result": "tool_output",
+    "scanner_output": "tool_output",
+    "shell": "tool_output",
+    "shell_output": "tool_output",
+    "terminal": "tool_output",
+    "terminal_output": "tool_output",
+    "text": "note",
+    "tool": "tool_output",
+    "vulnerability_report": "artifact",
+}
 
 
 def hydrate_memory_from_disk(state_dir: Path) -> None:
@@ -358,6 +384,21 @@ def _clean_text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _looks_like_url(value: str) -> bool:
+    lowered = value.lower()
+    return lowered.startswith(("http://", "https://", "ws://", "wss://"))
+
+
+def _normalize_evidence_type(value: Any) -> tuple[str, str | None]:
+    raw = _clean_text(value)
+    normalized = raw.lower().replace("-", "_").replace(" ", "_")
+    if normalized in _VALID_EVIDENCE_TYPES:
+        return normalized, None
+    if normalized in _EVIDENCE_TYPE_ALIASES:
+        return _EVIDENCE_TYPE_ALIASES[normalized], raw or None
+    return "other", raw or None
+
+
 def _clean_list(value: Any) -> list[str]:
     if value is None:
         return []
@@ -627,15 +668,13 @@ def _record_evidence_impl(
     agent_id: str | None,
 ) -> dict[str, Any]:
     with _memory_lock:
-        clean_type = _clean_text(evidence_type).lower()
-        if clean_type not in _VALID_EVIDENCE_TYPES:
-            return {"success": False, "error": f"evidence_type must be one of: {', '.join(sorted(_VALID_EVIDENCE_TYPES))}"}
+        clean_type, original_type = _normalize_evidence_type(evidence_type)
         clean_summary = _clean_text(summary)
         if not clean_summary:
             return {"success": False, "error": "summary cannot be empty"}
         clean_metadata: dict[str, Any] = {}
         if isinstance(metadata, dict):
-            clean_metadata = metadata
+            clean_metadata = dict(metadata)
         elif isinstance(metadata, str) and metadata.strip():
             try:
                 parsed = json.loads(metadata)
@@ -643,6 +682,11 @@ def _record_evidence_impl(
                 clean_metadata = {"text": metadata.strip()}
             else:
                 clean_metadata = parsed if isinstance(parsed, dict) else {"value": parsed}
+        if original_type:
+            clean_metadata.setdefault("original_evidence_type", original_type)
+        clean_target = _clean_text(target)
+        if not clean_target and original_type and _looks_like_url(original_type):
+            clean_target = original_type
         evidence_id = _new_id("ev", _evidence)
         timestamp = _now()
         item = {
@@ -651,7 +695,7 @@ def _record_evidence_impl(
             "summary": clean_summary,
             "content": _clean_text(content) or None,
             "source_tool": _clean_text(source_tool) or None,
-            "target": _clean_text(target) or None,
+            "target": clean_target or None,
             "metadata": clean_metadata or None,
             "agent_id": agent_id,
             "created_at": timestamp,
@@ -707,6 +751,16 @@ async def record_evidence(
 
     Use this before filing a vulnerability or marking coverage as tested.
     Keep summaries concise but include enough detail to identify the proof.
+
+    Args:
+        evidence_type: Prefer one of ``http_trace``, ``tool_output``,
+            ``screenshot``, ``artifact``, ``note``, ``manual_observation``,
+            or ``other``. Common aliases are normalized automatically.
+        summary: Short description of what this evidence proves.
+        content: Optional bounded raw proof text.
+        source_tool: Tool or command that produced the evidence.
+        target: URL, endpoint, host, file, or asset the evidence belongs to.
+        metadata: Optional structured details.
     """
     state_dir = state_dir_from_context(ctx)
     agent_id = _agent_id_from(ctx)

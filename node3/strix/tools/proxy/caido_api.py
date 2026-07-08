@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import threading
 import time
 import urllib.request
 from typing import TYPE_CHECKING, Any, Literal
@@ -42,6 +43,9 @@ _SITEMAP_PAGE_SIZE = 30
 
 _DEFAULT_CAIDO_URL = "http://127.0.0.1:48080"
 _CLIENT_CACHE: dict[str, Client] = {}
+_CLIENT_LOCKS: dict[tuple[int, int], asyncio.Lock] = {}
+_CLIENT_INIT_LOCKS: dict[int, asyncio.Lock] = {}
+_CLIENT_LOCKS_GUARD = threading.Lock()
 _REQ_FIELD_MAP: dict[SortBy, tuple[str, str]] = {
     "timestamp": ("req", "created_at"),
     "host": ("req", "host"),
@@ -81,22 +85,63 @@ def _login_as_guest() -> str:
     return str(payload["data"]["loginAsGuest"]["token"]["accessToken"])
 
 
+def _loop_id() -> int:
+    return id(asyncio.get_running_loop())
+
+
+def _default_client_init_lock() -> asyncio.Lock:
+    loop_key = _loop_id()
+    with _CLIENT_LOCKS_GUARD:
+        lock = _CLIENT_INIT_LOCKS.get(loop_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _CLIENT_INIT_LOCKS[loop_key] = lock
+        return lock
+
+
+def _client_lock(client: CaidoClient) -> asyncio.Lock:
+    key = (id(client), _loop_id())
+    with _CLIENT_LOCKS_GUARD:
+        lock = _CLIENT_LOCKS.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _CLIENT_LOCKS[key] = lock
+        return lock
+
+
+async def _with_client_lock(client: CaidoClient, operation: Any) -> Any:
+    # caido-sdk-client's gql transport is stateful and cannot safely run
+    # concurrent execute_async calls on one shared Client instance.
+    async with _client_lock(client):
+        return await operation()
+
+
 async def get_client() -> Client:
     if client := _CLIENT_CACHE.get("default"):
         return client
 
-    token = await asyncio.to_thread(_login_as_guest)
-    client = Client(caido_url(), auth=TokenAuthOptions(token=token))
-    await client.connect()
-    _CLIENT_CACHE["default"] = client
-    return client
+    async with _default_client_init_lock():
+        if client := _CLIENT_CACHE.get("default"):
+            return client
+
+        token = await asyncio.to_thread(_login_as_guest)
+        client = Client(caido_url(), auth=TokenAuthOptions(token=token))
+        await client.connect()
+        _CLIENT_CACHE["default"] = client
+        return client
 
 
 async def close_client() -> None:
     client = _CLIENT_CACHE.pop("default", None)
     if client is None:
         return
-    await client.aclose()
+    try:
+        await _with_client_lock(client, client.aclose)
+    finally:
+        client_id = id(client)
+        with _CLIENT_LOCKS_GUARD:
+            for key in [key for key in _CLIENT_LOCKS if key[0] == client_id]:
+                _CLIENT_LOCKS.pop(key, None)
 
 
 async def list_requests_with_client(
@@ -109,16 +154,19 @@ async def list_requests_with_client(
     sort_order: SortOrder = "desc",
     scope_id: str | None = None,
 ) -> Any:
-    builder = client.request.list().first(first)
-    if httpql_filter:
-        builder = builder.filter(httpql_filter)
-    if after:
-        builder = builder.after(after)
-    if scope_id:
-        builder = builder.scope(scope_id)
-    target, field = _REQ_FIELD_MAP[sort_by]
-    builder = (builder.descending if sort_order == "desc" else builder.ascending)(target, field)
-    return await builder.execute()
+    async def _operation() -> Any:
+        builder = client.request.list().first(first)
+        if httpql_filter:
+            builder = builder.filter(httpql_filter)
+        if after:
+            builder = builder.after(after)
+        if scope_id:
+            builder = builder.scope(scope_id)
+        target, field = _REQ_FIELD_MAP[sort_by]
+        builder = (builder.descending if sort_order == "desc" else builder.ascending)(target, field)
+        return await builder.execute()
+
+    return await _with_client_lock(client, _operation)
 
 
 async def get_request_with_client(
@@ -134,7 +182,7 @@ async def get_request_with_client(
     # "Field required" on the missing raw field. Always request both —
     # the caller picks which one to surface via ``part``.
     opts = RequestGetOptions(request_raw=True, response_raw=True)
-    return await client.request.get(request_id, opts)
+    return await _with_client_lock(client, lambda: client.request.get(request_id, opts))
 
 
 def build_raw_request(
@@ -331,11 +379,11 @@ async def replay_send_raw(
 
 
 async def scope_list(client: CaidoClient) -> Any:
-    return await client.scope.list()
+    return await _with_client_lock(client, client.scope.list)
 
 
 async def scope_get(client: CaidoClient, scope_id: str) -> Any:
-    return await client.scope.get(scope_id)
+    return await _with_client_lock(client, lambda: client.scope.get(scope_id))
 
 
 async def scope_create(
@@ -345,11 +393,14 @@ async def scope_create(
     allowlist: list[str] | None = None,
     denylist: list[str] | None = None,
 ) -> Any:
-    return await client.scope.create(
-        CreateScopeOptions(
-            name=name,
-            allowlist=list(allowlist or []),
-            denylist=list(denylist or []),
+    return await _with_client_lock(
+        client,
+        lambda: client.scope.create(
+            CreateScopeOptions(
+                name=name,
+                allowlist=list(allowlist or []),
+                denylist=list(denylist or []),
+            ),
         ),
     )
 
@@ -362,18 +413,21 @@ async def scope_update(
     allowlist: list[str] | None = None,
     denylist: list[str] | None = None,
 ) -> Any:
-    return await client.scope.update(
-        scope_id,
-        UpdateScopeOptions(
-            name=name,
-            allowlist=list(allowlist or []),
-            denylist=list(denylist or []),
+    return await _with_client_lock(
+        client,
+        lambda: client.scope.update(
+            scope_id,
+            UpdateScopeOptions(
+                name=name,
+                allowlist=list(allowlist or []),
+                denylist=list(denylist or []),
+            ),
         ),
     )
 
 
 async def scope_delete(client: CaidoClient, scope_id: str) -> None:
-    await client.scope.delete(scope_id)
+    await _with_client_lock(client, lambda: client.scope.delete(scope_id))
 
 
 async def list_requests(
@@ -583,17 +637,23 @@ async def list_sitemap_with_client(
     client-side.
     """
     if parent_id:
-        raw = await client.graphql.query(
-            _SITEMAP_DESCENDANTS_QUERY,
-            variables={"parentId": parent_id, "depth": depth},
+        raw = await _with_client_lock(
+            client,
+            lambda: client.graphql.query(
+                _SITEMAP_DESCENDANTS_QUERY,
+                variables={"parentId": parent_id, "depth": depth},
+            ),
         )
         data = raw.get("sitemapDescendantEntries") or {}
         warning = None
     else:
         normalized_scope_id, warning = _normalize_sitemap_scope_id(scope_id)
-        raw = await client.graphql.query(
-            _SITEMAP_ROOTS_QUERY,
-            variables={"scopeId": normalized_scope_id},
+        raw = await _with_client_lock(
+            client,
+            lambda: client.graphql.query(
+                _SITEMAP_ROOTS_QUERY,
+                variables={"scopeId": normalized_scope_id},
+            ),
         )
         data = raw.get("sitemapRootEntries") or {}
 
@@ -629,7 +689,10 @@ async def view_sitemap_entry_with_client(
     client: CaidoClient,
     entry_id: str,
 ) -> dict[str, Any]:
-    raw = await client.graphql.query(_SITEMAP_ENTRY_QUERY, variables={"id": entry_id})
+    raw = await _with_client_lock(
+        client,
+        lambda: client.graphql.query(_SITEMAP_ENTRY_QUERY, variables={"id": entry_id}),
+    )
     entry = raw.get("sitemapEntry")
     if not entry:
         return {"success": False, "error": f"Sitemap entry {entry_id} not found"}

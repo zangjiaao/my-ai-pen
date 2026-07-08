@@ -220,6 +220,8 @@ class ReportState:
         cwe: str | None = None,
         code_locations: list[dict[str, Any]] | None = None,
         evidence_ids: list[str] | None = None,
+        validation_agent_id: str | None = None,
+        validation_evidence_ids: list[str] | None = None,
         agent_id: str | None = None,
         agent_name: str | None = None,
     ) -> str:
@@ -262,6 +264,14 @@ class ReportState:
             report["code_locations"] = code_locations
         if evidence_ids:
             report["evidence_ids"] = [str(eid).strip() for eid in evidence_ids if str(eid).strip()]
+        if validation_agent_id:
+            report["validation_agent_id"] = validation_agent_id.strip()
+        if validation_evidence_ids:
+            report["validation_evidence_ids"] = [
+                str(eid).strip()
+                for eid in validation_evidence_ids
+                if str(eid).strip()
+            ]
         if agent_id:
             report["agent_id"] = agent_id
         if agent_name:

@@ -158,6 +158,8 @@ ASSESSMENT METHODOLOGY:
 OPERATIONAL PRINCIPLES:
 - Choose appropriate tools for each context
 - Default to recon first. Unless the next step is obvious from context or the user/system gives specific prioritization instructions, begin by mapping the target well before diving into narrow validation or targeted testing
+- Root agents must run a discovery phase before creating vulnerability-specialist agents or broad vulnerability-category todos. Build an attack-surface inventory first from Caido sitemap/listed requests, browser crawl, forms, robots/sitemap files, known route manifests, crawlers such as katana/gospider, and relevant source-code routing clues. Then plan vulnerability testing from that inventory.
+- Do not treat generic vulnerability categories as coverage. A task like "SQL Injection Testing" is only complete after each relevant discovered endpoint/parameter has a `record_coverage` entry, or an explicit `skipped`/`blocked` entry with a concrete reason.
 - Prefer established industry-standard tools already available in the sandbox before writing custom scripts
 - Do NOT reinvent the wheel with ad hoc Python or shell code when a suitable existing tool can do the job reliably
 - Skills relevant to your task are preloaded into this prompt at scan start; refer back to them when you need vulnerability-, protocol-, or tool-specific guidance
@@ -189,6 +191,10 @@ EFFICIENCY TACTICS:
   `python3 -c` or a here-document is acceptable.
 - The shell execution tool is named `exec_command`. There is no
   `execute_command` tool. Never call `execute_command`.
+- Browser automation is the sandbox CLI command `agent-browser`; run it
+  only through `exec_command`, for example `agent-browser open <url>`.
+  Do not call a tool named `agent_browser`; that name is only a recovery
+  guard if you make a mistaken tool call.
 - For Caido proxy automation inside Python, explicitly import from
   `caido_api`:
   `from caido_api import list_requests, view_request, repeat_request, list_sitemap, view_sitemap_entry, scope_rules`
@@ -209,8 +215,10 @@ VALIDATION REQUIREMENTS:
 - Full validation required - no assumptions
 - Demonstrate concrete impact with evidence
 - Before `create_vulnerability_report`, call `record_evidence` for the decisive proof and pass the returned `evidence_ids` into the report
+- Every confirmed vulnerability report must cite an independent validation subagent: spawn a non-root validation agent, have it record validation evidence, then pass `validation_agent_id` and `validation_evidence_ids` to `create_vulnerability_report`
 - For each tested endpoint/parameter/vulnerability class, call `record_coverage` with status `passed`, `failed`, `blocked`, or `skipped`; do not rely on free-form notes as the only memory
 - For every discovered endpoint, form, auth route, admin route, upload point, API route, or service, call `record_attack_surface` with method, parameters, auth_state, and evidence_ids when known
+- Before finishing, compare `list_memory(kind="attack_surface")` with `list_memory(kind="coverage")`. Every discovered HTTP/API/form/auth/upload/service surface must have at least one meaningful coverage record, or a `blocked`/`skipped` coverage record whose notes explain why testing was not possible.
 - Consider business context for severity assessment
 - Independent verification through subagent
 - Document complete attack chain

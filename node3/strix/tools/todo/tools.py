@@ -345,8 +345,23 @@ def _apply_single_update(
                 "todo_id": todo_id,
                 "error": f"Invalid status. Must be one of: {', '.join(VALID_STATUSES)}",
             }
+        current_status = str(todo.get("status") or "pending").lower()
+        if status_candidate == "done" and current_status != "in_progress":
+            return {
+                "todo_id": todo_id,
+                "error": "Todo must be in_progress before it can be marked done",
+            }
+        timestamp = datetime.now(UTC).isoformat()
         todo["status"] = status_candidate
-        todo["completed_at"] = datetime.now(UTC).isoformat() if status_candidate == "done" else None
+        if status_candidate == "in_progress":
+            todo["started_at"] = todo.get("started_at") or timestamp
+            todo["completed_at"] = None
+        elif status_candidate == "done":
+            todo["completed_at"] = timestamp
+        else:
+            todo["completed_at"] = None
+        todo["updated_at"] = timestamp
+        return None
     todo["updated_at"] = datetime.now(UTC).isoformat()
     return None
 
@@ -590,8 +605,19 @@ def _mark(*, agent_id: str, todo_ids: Any, new_status: str) -> str:
                 errors.append({"todo_id": tid, "error": f"Todo with ID '{tid}' not found"})
                 continue
             todo = agent_todos[tid]
+            current_status = str(todo.get("status") or "pending").lower()
+            if new_status == "done" and current_status != "in_progress":
+                errors.append({
+                    "todo_id": tid,
+                    "error": "Todo must be in_progress before it can be marked done",
+                })
+                continue
             todo["status"] = new_status
             todo["completed_at"] = timestamp if new_status == "done" else None
+            if new_status == "pending":
+                todo["started_at"] = None
+            elif new_status == "done":
+                todo["started_at"] = todo.get("started_at") or timestamp
             todo["updated_at"] = timestamp
             marked.append(tid)
     except (ValueError, TypeError) as e:

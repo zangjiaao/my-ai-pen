@@ -24,6 +24,8 @@ type PlanNode = {
   evidence_ids?: string[];
   priority?: number;
   source?: string;
+  agent_id?: string;
+  linked_agent_id?: string;
 };
 
 type KanbanBucket = { id: string; title: string; done: number; total: number; status: PlanStatus };
@@ -172,7 +174,8 @@ export default function RightPanel({
   const hasStatusData = running || Boolean(activeTool) || planTree.length > 0 || orderedStrixAgents.length > 0 || findings.length > 0 || assets.length > 0 || timeline.length > 0;
   const kanbanSummary = normalizeKanban(kanban, planTree, progress, workflowKind);
   const isStrixWorkflow = workflowKind === "strix" || kanbanSummary.workflow_kind === "strix" || planTree.some((node) => String(node.source || "") === "strix_todo");
-  const phasePlan = hasStatusData ? buildPhasePlan(planTree, kanbanSummary.current_stage, activeTool, running, findings.length, isStrixWorkflow) : [];
+  const visiblePlanTree = isStrixWorkflow ? mainAgentPlanTree(planTree, orderedStrixAgents) : planTree;
+  const phasePlan = hasStatusData ? buildPhasePlan(visiblePlanTree, kanbanSummary.current_stage, activeTool, running, findings.length, isStrixWorkflow) : [];
   const overallProgress = overallPlanProgress(phasePlan, kanbanSummary, progress);
   const elapsedBaseSeconds = normalizeSeconds(kanbanSummary.elapsed_seconds);
   const intake = normalizeIntake(intakeResult, intakeStatus);
@@ -851,6 +854,21 @@ function buildPhasePlan(nodes: PlanNode[], currentStage: string | undefined, act
     phase.items = phase.items.sort((left, right) => Number(left.priority || 999) - Number(right.priority || 999) || String(left.title || "").localeCompare(String(right.title || ""))).slice(0, 7);
   }
   return phases;
+}
+
+function mainAgentPlanTree(nodes: PlanNode[], agents: StrixAgentStatus[]): PlanNode[] {
+  const mainAgentId = mainStrixAgentId(agents);
+  if (!mainAgentId) return nodes;
+  return nodes.filter((node) => {
+    if (String(node.source || "") !== "strix_todo") return true;
+    const ownerAgentId = String(node.agent_id || "").trim();
+    return !ownerAgentId || ownerAgentId === mainAgentId;
+  });
+}
+
+function mainStrixAgentId(agents: StrixAgentStatus[]): string {
+  const main = agents.find((agent) => String(agent.role || "").toLowerCase() === "main") || agents.find((agent) => !agent.parent_id);
+  return String(main?.id || "").trim();
 }
 
 function agentPlanItems(nodes: PlanNode[]): PlanNode[] {

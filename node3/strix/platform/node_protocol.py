@@ -12,6 +12,7 @@ from strix.tools.run_memory.tools import attack_surface_from_file, coverage_from
 
 
 MAX_TOOL_OUTPUT_CHARS = 4000
+TERMINAL_AGENT_ACTIVITY_STATUSES = {"completed", "failed", "stopped", "crashed"}
 
 
 class PlatformEventSink:
@@ -158,15 +159,13 @@ class PlatformEventSink:
         agent = self.ensure_agent(agent_id)
         agent["current_tool"] = tool_name
         agent["current_action"] = tool_call_summary(tool_name, args) if status_value == "running" else tool_result_summary(tool_name, result)
-        if status_value == "failed":
-            agent["status"] = "failed"
-        elif status_value == "skipped" and agent.get("status") not in {"completed", "failed", "stopped", "crashed"}:
+        if status_value == "skipped" and agent.get("status") not in TERMINAL_AGENT_ACTIVITY_STATUSES:
             agent["status"] = "running"
         elif tool_name == "agent_finish" and status_value == "done":
             agent["status"] = "completed"
         elif tool_name == "finish_scan" and status_value == "done":
             agent["status"] = "completed"
-        elif agent.get("status") not in {"completed", "failed", "stopped", "crashed"}:
+        elif agent.get("status") not in TERMINAL_AGENT_ACTIVITY_STATUSES:
             agent["status"] = "running"
 
         if tool_name == "create_agent" and status_value == "done" and isinstance(result, dict) and result.get("success") is not False:
@@ -188,6 +187,16 @@ class PlatformEventSink:
             self.sent_vulnerability_ids.add(vuln_id)
         evidence_id = f"strix-{safe_id(self.task.get('task_id', 'task'))}-{safe_id(vuln_id or report.get('title') or 'finding')}"
         target = str(report.get("target") or extract_target(self.task) or "unknown")
+        report_evidence_ids = [
+            str(eid)
+            for eid in (report.get("evidence_ids") if isinstance(report.get("evidence_ids"), list) else [])
+            if str(eid).strip()
+        ]
+        validation_evidence_ids = [
+            str(eid)
+            for eid in (report.get("validation_evidence_ids") if isinstance(report.get("validation_evidence_ids"), list) else [])
+            if str(eid).strip()
+        ]
         self.emit({
             "type": "evidence_created",
             "conversation_id": self.task["conversation_id"],
@@ -198,16 +207,12 @@ class PlatformEventSink:
             "content": json.dumps(report, ensure_ascii=False, indent=2),
             "metadata": {"strix_vulnerability": report},
         })
+        self._emit_memory_evidence(report_evidence_ids + validation_evidence_ids)
         self.emit(text(
             self.task,
             f"发现并记录漏洞：{str(report.get('title') or 'Strix vulnerability')}（{normalize_severity(report.get('severity'))}）",
             metadata={"vulnerability_id": vuln_id},
         ))
-        report_evidence_ids = [
-            str(eid)
-            for eid in (report.get("evidence_ids") if isinstance(report.get("evidence_ids"), list) else [])
-            if str(eid).strip()
-        ]
         event_evidence_ids = report_evidence_ids or [evidence_id]
         self.emit({
             "type": "vuln_found",
@@ -231,6 +236,8 @@ class PlatformEventSink:
             "remediation": first_text(report, "remediation", "remediation_steps"),
             "remediation_steps": str(report.get("remediation_steps") or ""),
             "evidence_ids": event_evidence_ids,
+            "validation_agent_id": report.get("validation_agent_id"),
+            "validation_evidence_ids": validation_evidence_ids,
             "cvss": report.get("cvss"),
             "cvss_breakdown": report.get("cvss_breakdown"),
             "cve_id": report.get("cve"),
@@ -241,6 +248,35 @@ class PlatformEventSink:
             "agent_name": report.get("agent_name"),
             "timestamp": report.get("timestamp"),
         })
+
+    def _emit_memory_evidence(self, evidence_ids: list[str]) -> None:
+        if not self.run_dir:
+            return
+        wanted = {str(eid).strip() for eid in evidence_ids if str(eid).strip()}
+        if not wanted:
+            return
+        records = {
+            str(item.get("evidence_id") or ""): item
+            for item in evidence_from_file(Path(self.run_dir) / ".state" / "evidence.json")
+            if str(item.get("evidence_id") or "") in wanted
+        }
+        for evidence_id in sorted(wanted):
+            item = records.get(evidence_id)
+            if not item:
+                continue
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            self.emit({
+                "type": "evidence_created",
+                "conversation_id": self.task["conversation_id"],
+                "task_id": self.task["task_id"],
+                "evidence_id": evidence_id,
+                "evidence_type": str(item.get("evidence_type") or "other"),
+                "source_tool": item.get("source_tool") or "strix_memory",
+                "target": item.get("target"),
+                "summary": str(item.get("summary") or ""),
+                "content": str(item.get("content") or ""),
+                "metadata": {**metadata, "strix_memory_evidence": item},
+            })
 
 
 async def emit_final_artifacts(ws: Any, task: dict[str, Any], run_name: str, report_state: ReportState) -> None:
@@ -429,7 +465,11 @@ def merge_agent_activity(
                 item[key] = value
         runtime_status = string_value(runtime.get("status"))
         snapshot_status = string_value(item.get("status"))
-        if runtime_status in {"failed", "crashed", "stopped"} or snapshot_status not in {"completed", "failed", "crashed", "stopped"}:
+        if runtime_status in {"crashed", "stopped"} or (
+            snapshot_status not in TERMINAL_AGENT_ACTIVITY_STATUSES
+            and runtime_status
+            and runtime_status != "failed"
+        ):
             if runtime_status:
                 item["status"] = runtime_status
         for key in ("name", "task", "skills", "parent_id", "role"):
@@ -692,6 +732,7 @@ def normalize_vulnerabilities(raw: Any) -> list[dict[str, Any]]:
 
 def normalize_vulnerability(item: dict[str, Any]) -> dict[str, Any]:
     evidence_ids = item.get("evidence_ids") if isinstance(item.get("evidence_ids"), list) else []
+    validation_evidence_ids = item.get("validation_evidence_ids") if isinstance(item.get("validation_evidence_ids"), list) else []
     return {
         "id": string_value(item.get("id")) or safe_id(item.get("title") or "finding"),
         "title": string_value(item.get("title")) or "Untitled vulnerability",
@@ -711,6 +752,8 @@ def normalize_vulnerability(item: dict[str, Any]) -> dict[str, Any]:
         "cve_id": string_value(item.get("cve") or item.get("cve_id")),
         "cwe": string_value(item.get("cwe")),
         "evidence_ids": [str(eid) for eid in evidence_ids[:20] if str(eid).strip()],
+        "validation_agent_id": string_value(item.get("validation_agent_id")),
+        "validation_evidence_ids": [str(eid) for eid in validation_evidence_ids[:20] if str(eid).strip()],
         "agent_id": string_value(item.get("agent_id")),
         "agent_name": string_value(item.get("agent_name")),
     }

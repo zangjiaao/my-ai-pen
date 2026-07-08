@@ -4,10 +4,12 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from strix.config import load_settings
 from strix.core.agents import AgentCoordinator
@@ -22,6 +24,7 @@ from strix.interface.utils import (
 )
 from strix.platform.node_protocol import (
     PlatformEventSink,
+    agent_graph_from_file,
     emit_final_artifacts,
     extract_target,
     normalize_vulnerabilities,
@@ -40,7 +43,19 @@ HOST_GATEWAY_HOSTNAME = "host.docker.internal"
 COMPLETION_WATCH_INTERVAL_SECONDS = 2.0
 COMPLETION_FLUSH_TIMEOUT_SECONDS = 10.0
 TERMINAL_TODO_STATUSES = {"done", "blocked", "failed", "skipped"}
+TERMINAL_AGENT_STATUSES = {"failed", "crashed", "stopped"}
 MEANINGFUL_COVERAGE_STATUSES = {"tried", "passed", "failed"}
+SURFACE_KINDS_REQUIRING_COVERAGE = {
+    "url",
+    "api_endpoint",
+    "form",
+    "auth_endpoint",
+    "admin_endpoint",
+    "file_upload",
+    "websocket",
+    "service",
+}
+HTTP_METHOD_RE = re.compile(r"^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|TRACE)\s+(.+)$", re.IGNORECASE)
 
 
 def stable_platform_run_name(conversation_id: str) -> str:
@@ -660,18 +675,209 @@ def unfinished_todos_for_run(run_dir: Path) -> list[dict[str, Any]]:
     ]
 
 
-def completion_gate_for_run(run_dir: Path) -> dict[str, Any]:
+def split_actionable_unfinished_todos(run_dir: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     unfinished = unfinished_todos_for_run(run_dir)
+    if not unfinished:
+        return [], []
+
+    agent_statuses = {
+        str(agent.get("id") or ""): str(agent.get("status") or "").lower()
+        for agent in agent_graph_from_file(run_dir / ".state" / "agents.json")
+        if str(agent.get("id") or "")
+    }
+    actionable = []
+    ignored = []
+    for todo in unfinished:
+        agent_id = str(todo.get("agent_id") or "")
+        if agent_id and agent_statuses.get(agent_id) in TERMINAL_AGENT_STATUSES:
+            ignored.append({
+                **todo,
+                "ignore_reason": f"owner agent is {agent_statuses[agent_id]}",
+            })
+        else:
+            actionable.append(todo)
+    return actionable, ignored
+
+
+def _normalize_endpoint_target(raw: Any) -> str:
+    value = str(raw or "").strip()
+    if not value:
+        return ""
+    parsed = urlsplit(value)
+    if parsed.scheme and parsed.netloc:
+        path = parsed.path or "/"
+        if path != "/":
+            path = path.rstrip("/")
+        return urlunsplit((
+            parsed.scheme.lower(),
+            parsed.netloc.lower(),
+            path,
+            parsed.query,
+            "",
+        ))
+    return value.rstrip("/").lower()
+
+
+def _endpoint_target_variants(raw: Any) -> set[str]:
+    value = str(raw or "").strip()
+    if not value:
+        return set()
+    normalized = _normalize_endpoint_target(value)
+    variants = {normalized} if normalized else set()
+    parsed = urlsplit(value)
+    if parsed.scheme and parsed.netloc:
+        path = parsed.path or "/"
+        if path != "/":
+            path = path.rstrip("/")
+        path_key = urlunsplit(("", "", path, parsed.query, "")).lower()
+        if path_key:
+            variants.add(path_key)
+    return variants
+
+
+def _coverage_endpoint_key(item: dict[str, Any]) -> tuple[str | None, set[str]]:
+    endpoint = str(item.get("endpoint") or "").strip()
+    match = HTTP_METHOD_RE.match(endpoint)
+    method = match.group(1).upper() if match else None
+    target = match.group(2) if match else endpoint
+    return method, _endpoint_target_variants(target)
+
+
+def _surface_endpoint_key(item: dict[str, Any]) -> tuple[str | None, set[str]]:
+    method = str(item.get("method") or "").strip().upper() or None
+    target = item.get("url") or item.get("address")
+    return method, _endpoint_target_variants(target)
+
+
+def _coverage_resolves_surface(item: dict[str, Any]) -> bool:
+    status = str(item.get("status") or "").lower()
+    if status in MEANINGFUL_COVERAGE_STATUSES:
+        return True
+    if status in {"blocked", "skipped"}:
+        return bool(str(item.get("result") or item.get("notes") or "").strip())
+    return False
+
+
+def uncovered_attack_surfaces(attack_surface: list[dict[str, Any]], coverage: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    resolved_coverage = [
+        item
+        for item in coverage
+        if _coverage_resolves_surface(item)
+    ]
+    covered_exact: set[tuple[str | None, str]] = set()
+    for item in resolved_coverage:
+        method, targets = _coverage_endpoint_key(item)
+        for target in targets:
+            covered_exact.add((method, target))
+    covered_by_target: dict[str, set[str | None]] = {}
+    for method, target in covered_exact:
+        if target:
+            covered_by_target.setdefault(target, set()).add(method)
+
+    uncovered: list[dict[str, Any]] = []
+    for item in attack_surface:
+        kind = str(item.get("kind") or "").lower()
+        if kind and kind not in SURFACE_KINDS_REQUIRING_COVERAGE:
+            continue
+        method, targets = _surface_endpoint_key(item)
+        if not targets:
+            continue
+        if method:
+            covered = any((method, target) in covered_exact or (None, target) in covered_exact for target in targets)
+        else:
+            covered = any(target in covered_by_target for target in targets)
+        if not covered:
+            uncovered.append({
+                "surface_id": item.get("surface_id"),
+                "kind": item.get("kind"),
+                "method": item.get("method"),
+                "url": item.get("url"),
+                "address": item.get("address"),
+                "source": item.get("source"),
+            })
+    return uncovered
+
+
+def invalid_vulnerability_validations(
+    vulnerabilities: list[dict[str, Any]],
+    agents: list[dict[str, Any]],
+    evidence_records: dict[str, dict[str, Any]] | set[str],
+) -> list[dict[str, Any]]:
+    enforce_evidence_owner = isinstance(evidence_records, dict)
+    evidence_by_id = (
+        evidence_records
+        if enforce_evidence_owner
+        else {evidence_id: {"evidence_id": evidence_id} for evidence_id in evidence_records}
+    )
+    agents_by_id = {
+        str(agent.get("id") or ""): agent
+        for agent in agents
+        if str(agent.get("id") or "").strip()
+    }
+    invalid: list[dict[str, Any]] = []
+    for item in vulnerabilities:
+        problems: list[str] = []
+        validation_agent_id = str(item.get("validation_agent_id") or "").strip()
+        validation_evidence_ids = _clean_evidence_ids(item.get("validation_evidence_ids"))
+        reporting_agent_id = str(item.get("agent_id") or "").strip()
+        if not validation_agent_id:
+            problems.append("missing validation_agent_id")
+        else:
+            validation_agent = agents_by_id.get(validation_agent_id)
+            if validation_agent is None:
+                problems.append("validation_agent_id not found in agent graph")
+            elif not str(validation_agent.get("parent_id") or "").strip():
+                problems.append("validation_agent_id references root agent")
+            if reporting_agent_id and validation_agent_id == reporting_agent_id:
+                problems.append("validation_agent_id matches reporting agent")
+        if not validation_evidence_ids:
+            problems.append("missing validation_evidence_ids")
+        else:
+            missing_validation_evidence = [
+                evidence_id
+                for evidence_id in validation_evidence_ids
+                if evidence_id not in evidence_by_id
+            ]
+            if missing_validation_evidence:
+                problems.append("validation evidence missing: " + ", ".join(missing_validation_evidence))
+            if enforce_evidence_owner and validation_agent_id:
+                wrong_owner = [
+                    evidence_id
+                    for evidence_id in validation_evidence_ids
+                    if evidence_id in evidence_by_id
+                    and str(evidence_by_id[evidence_id].get("agent_id") or "").strip() != validation_agent_id
+                ]
+                if wrong_owner:
+                    problems.append(
+                        "validation evidence not recorded by validation_agent_id: "
+                        + ", ".join(wrong_owner)
+                    )
+        if problems:
+            invalid.append({
+                "id": item.get("id"),
+                "title": item.get("title"),
+                "agent_id": item.get("agent_id"),
+                "validation_agent_id": item.get("validation_agent_id"),
+                "validation_evidence_ids": validation_evidence_ids,
+                "problems": problems,
+            })
+    return invalid
+
+
+def completion_gate_for_run(run_dir: Path) -> dict[str, Any]:
+    unfinished, ignored_unfinished = split_actionable_unfinished_todos(run_dir)
     state_dir = run_dir / ".state"
+    agents = agent_graph_from_file(state_dir / "agents.json")
     attack_surface = attack_surface_from_file(state_dir / "attack_surface.json")
     coverage = coverage_from_file(state_dir / "coverage.json")
     evidence = evidence_from_file(state_dir / "evidence.json")
     vulnerabilities = normalize_vulnerabilities_from_run(run_dir)
-    evidence_ids = {
-        str(item.get("evidence_id"))
+    evidence_by_id = {
+        str(item.get("evidence_id")): item
         for item in evidence
         if str(item.get("evidence_id") or "").strip()
     }
+    evidence_ids = set(evidence_by_id)
     meaningful_coverage = [
         item
         for item in coverage
@@ -685,9 +891,14 @@ def completion_gate_for_run(run_dir: Path) -> dict[str, Any]:
     missing_evidence_refs = sorted({
         evidence_id
         for item in vulnerabilities + coverage + attack_surface
-        for evidence_id in _clean_evidence_ids(item.get("evidence_ids"))
+        for evidence_id in (
+            _clean_evidence_ids(item.get("evidence_ids"))
+            + _clean_evidence_ids(item.get("validation_evidence_ids"))
+        )
         if evidence_id not in evidence_ids
     })
+    uncovered_surfaces = uncovered_attack_surfaces(attack_surface, coverage)
+    invalid_validations = invalid_vulnerability_validations(vulnerabilities, agents, evidence_by_id)
     reasons: list[str] = []
     if unfinished:
         reasons.append(f"{len(unfinished)} unresolved task(s)")
@@ -695,23 +906,39 @@ def completion_gate_for_run(run_dir: Path) -> dict[str, Any]:
         reasons.append("no attack surface records")
     if not meaningful_coverage:
         reasons.append("no meaningful coverage records")
+    if uncovered_surfaces:
+        reasons.append(f"{len(uncovered_surfaces)} attack surface record(s) without coverage")
     if unevidenced_findings:
         reasons.append(f"{len(unevidenced_findings)} finding(s) without evidence_ids")
     if missing_evidence_refs:
         reasons.append(f"{len(missing_evidence_refs)} missing evidence reference(s)")
+    if invalid_validations:
+        reasons.append(f"{len(invalid_validations)} finding(s) without independent subagent validation")
+    warnings: list[str] = []
+    if ignored_unfinished:
+        warnings.append(
+            f"{len(ignored_unfinished)} unresolved task(s) ignored because their owner agent is terminal"
+        )
     return {
         "ok": not reasons,
         "unfinished_todos": unfinished[:20],
         "unfinished_count": len(unfinished),
+        "ignored_unfinished_todos": ignored_unfinished[:20],
+        "ignored_unfinished_count": len(ignored_unfinished),
         "attack_surface_count": len(attack_surface),
         "coverage_count": len(coverage),
         "meaningful_coverage_count": len(meaningful_coverage),
+        "uncovered_attack_surfaces": uncovered_surfaces[:20],
+        "uncovered_attack_surface_count": len(uncovered_surfaces),
         "evidence_count": len(evidence),
         "unevidenced_findings": unevidenced_findings[:20],
         "unevidenced_finding_count": len(unevidenced_findings),
         "missing_evidence_refs": missing_evidence_refs[:20],
         "missing_evidence_ref_count": len(missing_evidence_refs),
+        "invalid_vulnerability_validations": invalid_validations[:20],
+        "invalid_vulnerability_validation_count": len(invalid_validations),
         "incomplete_reasons": reasons,
+        "completion_warnings": warnings,
     }
 
 
