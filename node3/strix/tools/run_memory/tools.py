@@ -44,6 +44,24 @@ _VALID_SURFACE_KINDS = {
     "repository",
     "other",
 }
+_SURFACE_KIND_ALIASES = {
+    "admin": "admin_endpoint",
+    "admin_api": "admin_endpoint",
+    "admin_route": "admin_endpoint",
+    "api": "api_endpoint",
+    "api_route": "api_endpoint",
+    "endpoint": "api_endpoint",
+    "rest_api": "api_endpoint",
+    "rest_api_endpoint": "api_endpoint",
+    "route": "api_endpoint",
+    "file": "static_asset",
+    "file_upload_endpoint": "file_upload",
+    "static": "static_asset",
+    "upload": "file_upload",
+    "upload_endpoint": "file_upload",
+    "web_socket": "websocket",
+    "ws": "websocket",
+}
 _VALID_COVERAGE_STATUSES = {
     "planned",
     "in_progress",
@@ -399,6 +417,16 @@ def _normalize_evidence_type(value: Any) -> tuple[str, str | None]:
     return "other", raw or None
 
 
+def _normalize_surface_kind(value: Any) -> tuple[str, str | None]:
+    raw = _clean_text(value)
+    normalized = raw.lower().replace("-", "_").replace(" ", "_")
+    if normalized in _VALID_SURFACE_KINDS:
+        return normalized, None
+    if normalized in _SURFACE_KIND_ALIASES:
+        return _SURFACE_KIND_ALIASES[normalized], raw or None
+    return normalized, None
+
+
 def _clean_list(value: Any) -> list[str]:
     if value is None:
         return []
@@ -526,7 +554,7 @@ def _record_attack_surface_impl(
     agent_id: str | None,
 ) -> dict[str, Any]:
     with _memory_lock:
-        clean_kind = _clean_text(kind).lower()
+        clean_kind, original_kind = _normalize_surface_kind(kind)
         if clean_kind not in _VALID_SURFACE_KINDS:
             return {"success": False, "error": f"kind must be one of: {', '.join(sorted(_VALID_SURFACE_KINDS))}"}
         clean_url = _clean_text(url) or None
@@ -578,6 +606,7 @@ def _record_attack_surface_impl(
             "notes": _clean_text(notes) or None,
             "agent_id": agent_id,
             "dedupe_key": key,
+            "original_kind": original_kind,
             "created_at": timestamp,
             "updated_at": timestamp,
         }
@@ -710,10 +739,40 @@ def _list_memory_impl(kind: str, limit: int = 50) -> dict[str, Any]:
     with _memory_lock:
         clean_kind = _clean_text(kind).lower() or "summary"
         bounded = max(1, min(int(limit or 50), 200))
+        coverage_gaps: list[dict[str, Any]] = []
+        external_discovery_gaps: list[dict[str, Any]] = []
+        if clean_kind in {"summary", "coverage_gaps"}:
+            try:
+                from strix.tools.workflow import coverage_gaps_for_state
+            except ImportError:
+                coverage_gaps = []
+            else:
+                coverage_gaps = coverage_gaps_for_state(_state_dir)
+        if clean_kind in {"summary", "external_discovery_gaps"}:
+            try:
+                from strix.tools.workflow import discovered_inventory_gaps_for_state
+            except ImportError:
+                external_discovery_gaps = []
+            else:
+                external_discovery_gaps = discovered_inventory_gaps_for_state(_state_dir)
         if clean_kind == "attack_surface":
             return {"success": True, "kind": clean_kind, "items": _sorted_values(_attack_surface)[-bounded:], "total_count": len(_attack_surface)}
         if clean_kind == "coverage":
             return {"success": True, "kind": clean_kind, "items": _sorted_values(_coverage)[-bounded:], "total_count": len(_coverage)}
+        if clean_kind == "coverage_gaps":
+            return {
+                "success": True,
+                "kind": clean_kind,
+                "items": coverage_gaps[:bounded],
+                "total_count": len(coverage_gaps),
+            }
+        if clean_kind == "external_discovery_gaps":
+            return {
+                "success": True,
+                "kind": clean_kind,
+                "items": external_discovery_gaps[:bounded],
+                "total_count": len(external_discovery_gaps),
+            }
         if clean_kind == "evidence":
             return {"success": True, "kind": clean_kind, "items": _sorted_values(_evidence)[-bounded:], "total_count": len(_evidence)}
         if clean_kind == "summary":
@@ -722,11 +781,15 @@ def _list_memory_impl(kind: str, limit: int = 50) -> dict[str, Any]:
                 "kind": "summary",
                 "attack_surface_count": len(_attack_surface),
                 "coverage_count": len(_coverage),
+                "uncovered_attack_surface_count": len(coverage_gaps),
+                "coverage_gap_examples": coverage_gaps[: min(5, bounded)],
+                "external_discovery_gap_count": len(external_discovery_gaps),
+                "external_discovery_gap_examples": external_discovery_gaps[: min(5, bounded)],
                 "evidence_count": len(_evidence),
                 "coverage_by_status": _count_by(_coverage.values(), "status"),
                 "coverage_by_vuln_type": _count_by(_coverage.values(), "vuln_type"),
             }
-        return {"success": False, "error": "kind must be one of: summary, attack_surface, coverage, evidence"}
+        return {"success": False, "error": "kind must be one of: summary, attack_surface, coverage, coverage_gaps, external_discovery_gaps, evidence"}
 
 
 def _count_by(items: Any, field: str) -> dict[str, int]:
@@ -797,8 +860,9 @@ async def record_attack_surface(
 ) -> str:
     """Record a discovered endpoint, form, service, or other attack surface.
 
-    Include method, parameters, auth_state, and evidence_ids when known. The
-    ledger is deduplicated by kind/method/url/address.
+    Include method, parameters, auth_state, and evidence_ids when known. Common
+    kind aliases such as ``api``, ``endpoint``, and ``REST API endpoint`` are
+    normalized automatically. The ledger is deduplicated by kind/method/url/address.
     """
     state_dir = state_dir_from_context(ctx)
     agent_id = _agent_id_from(ctx)
@@ -865,7 +929,8 @@ async def record_coverage(
 async def list_memory(ctx: RunContextWrapper, kind: str = "summary", limit: int = 50) -> str:
     """List persistent run memory.
 
-    kind may be ``summary``, ``attack_surface``, ``coverage``, or ``evidence``.
+    kind may be ``summary``, ``attack_surface``, ``coverage``,
+    ``coverage_gaps``, ``external_discovery_gaps``, or ``evidence``.
     """
     state_dir = state_dir_from_context(ctx)
 

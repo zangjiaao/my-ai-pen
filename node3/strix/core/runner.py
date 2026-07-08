@@ -108,6 +108,7 @@ async def run_strix_scan(
     from strix.tools.run_memory.tools import hydrate_memory_from_disk
     from strix.tools.notes.tools import hydrate_notes_from_disk
     from strix.tools.todo.tools import hydrate_todos_from_disk
+    from strix.tools.workflow import initialize_workflow_state
 
     hydrate_todos_from_disk(state_dir)
     hydrate_notes_from_disk(state_dir)
@@ -150,6 +151,7 @@ async def run_strix_scan(
         image=image,
         local_sources=local_sources or [],
     )
+    initialize_workflow_state(state_dir, caido_available=bundle.get("caido_client") is not None)
     logger.info("Sandbox ready for scan %s", scan_id)
 
     sessions_to_close: list[SQLiteSession] = []

@@ -37,6 +37,13 @@ from strix.profiles import infer_target_profile, load_target_profile
 from strix.report.state import ReportState, set_global_report_state
 from strix.runtime import session_manager
 from strix.tools.run_memory.tools import attack_surface_from_file, coverage_from_file, evidence_from_file
+from strix.tools.workflow import (
+    discovered_inventory_gaps,
+    load_workflow_state,
+    sitemap_expansion_gaps_from_state,
+    sitemap_gate,
+    sitemap_pagination_gaps_from_state,
+)
 
 
 HOST_GATEWAY_HOSTNAME = "host.docker.internal"
@@ -56,6 +63,71 @@ SURFACE_KINDS_REQUIRING_COVERAGE = {
     "service",
 }
 HTTP_METHOD_RE = re.compile(r"^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|TRACE)\s+(.+)$", re.IGNORECASE)
+JUICE_SHOP_PROFILE_NAMES = {"juice_shop", "owasp_juice_shop"}
+JUICE_SHOP_REQUIRED_COVERAGE = {
+    "auth_session": (
+        "auth",
+        "jwt",
+        "login",
+        "session",
+        "/rest/user/login",
+        "/rest/user/whoami",
+    ),
+    "access_control": (
+        "access control",
+        "authorization",
+        "idor",
+        "bola",
+        "basketitems",
+        "/api/users",
+        "/api/cards",
+        "/api/address",
+    ),
+    "injection_or_xss": (
+        "sql",
+        "xss",
+        "injection",
+        "/rest/products/search",
+        "/api/feedback",
+        "feedback",
+    ),
+    "order_payment_business_flow": (
+        "order",
+        "checkout",
+        "payment",
+        "coupon",
+        "wallet",
+        "deluxe",
+    ),
+    "password_reset_security_question": (
+        "password reset",
+        "forgot",
+        "security question",
+        "reset password",
+        "answer",
+    ),
+    "captcha_feedback": (
+        "captcha",
+        "anti-automation",
+        "anti automation",
+        "feedback",
+    ),
+    "profile_upload": (
+        "profile",
+        "upload",
+        "file upload",
+        "profile image",
+        "avatar",
+    ),
+    "admin_hidden_observability": (
+        "admin",
+        "configuration",
+        "scoreboard",
+        "metrics",
+        "logs",
+        "backup",
+    ),
+}
 
 
 def stable_platform_run_name(conversation_id: str) -> str:
@@ -867,6 +939,8 @@ def invalid_vulnerability_validations(
 def completion_gate_for_run(run_dir: Path) -> dict[str, Any]:
     unfinished, ignored_unfinished = split_actionable_unfinished_todos(run_dir)
     state_dir = run_dir / ".state"
+    workflow_state = load_workflow_state(state_dir)
+    workflow_sitemap_gate = sitemap_gate(state_dir)
     agents = agent_graph_from_file(state_dir / "agents.json")
     attack_surface = attack_surface_from_file(state_dir / "attack_surface.json")
     coverage = coverage_from_file(state_dir / "coverage.json")
@@ -898,8 +972,26 @@ def completion_gate_for_run(run_dir: Path) -> dict[str, Any]:
         if evidence_id not in evidence_ids
     })
     uncovered_surfaces = uncovered_attack_surfaces(attack_surface, coverage)
+    discovered_surface_gaps = discovered_inventory_gaps(workflow_state, attack_surface)
+    sitemap_pagination_gaps = sitemap_pagination_gaps_from_state(workflow_state)
+    sitemap_expansion_gaps = sitemap_expansion_gaps_from_state(workflow_state)
     invalid_validations = invalid_vulnerability_validations(vulnerabilities, agents, evidence_by_id)
+    target_profile_name = target_profile_name_for_run(
+        run_dir,
+        attack_surface=attack_surface,
+        coverage=coverage,
+        evidence=evidence,
+        vulnerabilities=vulnerabilities,
+    )
+    profile_coverage_gaps = profile_coverage_gaps_for_run(
+        target_profile_name,
+        coverage=coverage,
+        attack_surface=attack_surface,
+        evidence=evidence,
+    )
     reasons: list[str] = []
+    if not workflow_sitemap_gate.get("ok"):
+        reasons.append(str(workflow_sitemap_gate.get("reason") or "sitemap workflow gate failed"))
     if unfinished:
         reasons.append(f"{len(unfinished)} unresolved task(s)")
     if not attack_surface:
@@ -908,6 +1000,17 @@ def completion_gate_for_run(run_dir: Path) -> dict[str, Any]:
         reasons.append("no meaningful coverage records")
     if uncovered_surfaces:
         reasons.append(f"{len(uncovered_surfaces)} attack surface record(s) without coverage")
+    if discovered_surface_gaps:
+        reasons.append(f"{len(discovered_surface_gaps)} externally discovered endpoint(s) missing from attack surface")
+    if sitemap_pagination_gaps:
+        reasons.append(f"{len(sitemap_pagination_gaps)} sitemap branch(es) with unenumerated pages")
+    if sitemap_expansion_gaps:
+        reasons.append(f"{len(sitemap_expansion_gaps)} sitemap branch(es) with descendants not expanded")
+    if profile_coverage_gaps:
+        reasons.append(
+            f"{target_profile_name} profile coverage missing: "
+            + ", ".join(gap["category"] for gap in profile_coverage_gaps[:5])
+        )
     if unevidenced_findings:
         reasons.append(f"{len(unevidenced_findings)} finding(s) without evidence_ids")
     if missing_evidence_refs:
@@ -930,6 +1033,16 @@ def completion_gate_for_run(run_dir: Path) -> dict[str, Any]:
         "meaningful_coverage_count": len(meaningful_coverage),
         "uncovered_attack_surfaces": uncovered_surfaces[:20],
         "uncovered_attack_surface_count": len(uncovered_surfaces),
+        "external_discovery_count": int(workflow_state.get("external_discovery_count") or 0),
+        "external_discovery_gaps": discovered_surface_gaps[:20],
+        "external_discovery_gap_count": len(discovered_surface_gaps),
+        "sitemap_pagination_gaps": sitemap_pagination_gaps[:20],
+        "sitemap_pagination_gap_count": len(sitemap_pagination_gaps),
+        "sitemap_expansion_gaps": sitemap_expansion_gaps[:20],
+        "sitemap_expansion_gap_count": len(sitemap_expansion_gaps),
+        "target_profile_name": target_profile_name,
+        "profile_coverage_gaps": profile_coverage_gaps[:20],
+        "profile_coverage_gap_count": len(profile_coverage_gaps),
         "evidence_count": len(evidence),
         "unevidenced_findings": unevidenced_findings[:20],
         "unevidenced_finding_count": len(unevidenced_findings),
@@ -937,9 +1050,72 @@ def completion_gate_for_run(run_dir: Path) -> dict[str, Any]:
         "missing_evidence_ref_count": len(missing_evidence_refs),
         "invalid_vulnerability_validations": invalid_validations[:20],
         "invalid_vulnerability_validation_count": len(invalid_validations),
+        "workflow_state": workflow_state,
+        "workflow_gate": workflow_sitemap_gate,
         "incomplete_reasons": reasons,
         "completion_warnings": warnings,
     }
+
+
+def target_profile_name_for_run(
+    run_dir: Path,
+    *,
+    attack_surface: list[dict[str, Any]],
+    coverage: list[dict[str, Any]],
+    evidence: list[dict[str, Any]],
+    vulnerabilities: list[dict[str, Any]],
+) -> str | None:
+    run_json = run_dir / "run.json"
+    if run_json.exists():
+        try:
+            raw = json.loads(run_json.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            raw = {}
+        if isinstance(raw, dict):
+            scan_config = raw.get("scan_config")
+            if isinstance(scan_config, dict):
+                profile = scan_config.get("target_profile")
+                if isinstance(profile, dict):
+                    name = str(profile.get("name") or "").strip().lower()
+                    if name:
+                        return name
+                elif isinstance(profile, str) and profile.strip():
+                    return profile.strip().lower()
+
+    sample = " ".join(
+        json.dumps(item, ensure_ascii=False, default=str).lower()
+        for item in [*attack_surface, *coverage, *evidence, *vulnerabilities]
+    )
+    if "juice shop" in sample or "juice-shop" in sample or "juice-sh.op" in sample:
+        return "juice_shop"
+    return None
+
+
+def profile_coverage_gaps_for_run(
+    profile_name: str | None,
+    *,
+    coverage: list[dict[str, Any]],
+    attack_surface: list[dict[str, Any]],
+    evidence: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if str(profile_name or "").lower() not in JUICE_SHOP_PROFILE_NAMES:
+        return []
+    coverage_texts = [
+        json.dumps(item, ensure_ascii=False, default=str).lower()
+        for item in coverage
+        if _coverage_resolves_surface(item)
+    ]
+    # Evidence and surface context can prove that the target is Juice Shop, but
+    # only coverage rows prove that the agent actually tested a category.
+    _ = attack_surface, evidence
+    gaps: list[dict[str, Any]] = []
+    for category, terms in JUICE_SHOP_REQUIRED_COVERAGE.items():
+        if not any(any(term in text for term in terms) for text in coverage_texts):
+            gaps.append({
+                "category": category,
+                "expected_terms": list(terms),
+            })
+    return gaps
 
 
 def normalize_vulnerabilities_from_run(run_dir: Path) -> list[dict[str, Any]]:

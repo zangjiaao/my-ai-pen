@@ -21,6 +21,7 @@ from strix.tools.todo.tools import (
     unfinished_todos_for_agent,
     validate_todo_exists,
 )
+from strix.tools.workflow import is_recon_task, state_dir_from_raw, testing_preflight
 
 
 _ACTIVE_STATUSES: frozenset[str] = frozenset({"running", "waiting"})
@@ -447,6 +448,27 @@ async def create_agent(
         except ValueError as e:
             return json.dumps(
                 {"success": False, "error": f"Failed to bind todo: {e!s}", "agent_id": None},
+                ensure_ascii=False,
+                default=str,
+            )
+
+    if inner.get("parent_id") is None and not is_recon_task(
+        name=name,
+        task=task,
+        skills=skill_list,
+    ):
+        gate = testing_preflight(
+            state_dir_from_raw(inner.get("state_dir")),
+            require_attack_surface=True,
+        )
+        if not gate.get("ok"):
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": "Workflow gate blocked create_agent until reconnaissance and attack-surface mapping are complete",
+                    "workflow_gate": gate,
+                    "agent_id": None,
+                },
                 ensure_ascii=False,
                 default=str,
             )

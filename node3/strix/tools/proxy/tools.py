@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, Any, Literal
 from agents import RunContextWrapper, function_tool
 
 from strix.tools.proxy import caido_api
+from strix.tools.run_memory.tools import state_dir_from_context
+from strix.tools.workflow import discoveries_from_request_entries, mark_sitemap_attempt, record_external_discoveries
 
 
 logger = logging.getLogger(__name__)
@@ -192,6 +194,12 @@ async def list_requests(
                 },
             )
 
+        state_dir = state_dir_from_context(ctx)
+        record_external_discoveries(
+            state_dir,
+            source="caido_requests",
+            discoveries=discoveries_from_request_entries(entries),
+        )
         return json.dumps(
             {
                 "success": True,
@@ -437,8 +445,14 @@ async def list_sitemap(
             (recursive subtree). Only meaningful with ``parent_id``.
         page: 1-indexed page (30 entries per page).
     """
+    state_dir = state_dir_from_context(ctx)
     client = _ctx_client(ctx)
     if client is None:
+        mark_sitemap_attempt(
+            state_dir,
+            success=False,
+            error="Caido client not available in run context",
+        )
         return _no_client()
     try:
         payload = await caido_api.list_sitemap_with_client(
@@ -448,8 +462,23 @@ async def list_sitemap(
             depth=depth,
             page=page,
         )
+        entries = payload.get("entries") if isinstance(payload, dict) else None
+        mark_sitemap_attempt(
+            state_dir,
+            success=bool(isinstance(payload, dict) and payload.get("success") is not False),
+            entry_count=len(entries) if isinstance(entries, list) else 0,
+            error=str(payload.get("error") or "") if isinstance(payload, dict) else "",
+            entries=entries if isinstance(entries, list) else [],
+            parent_id=parent_id,
+            depth=depth,
+            page=page,
+            total_pages=int(payload.get("total_pages") or 0) if isinstance(payload, dict) else 0,
+            total_count=int(payload.get("total_count") or 0) if isinstance(payload, dict) else 0,
+            has_more=bool(payload.get("has_more")) if isinstance(payload, dict) else False,
+        )
         return json.dumps(payload, ensure_ascii=False, default=str)
     except Exception as exc:  # noqa: BLE001
+        mark_sitemap_attempt(state_dir, success=False, error=str(exc))
         return _err("list_sitemap", exc)
 
 

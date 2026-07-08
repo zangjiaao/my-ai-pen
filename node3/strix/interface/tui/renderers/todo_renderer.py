@@ -205,7 +205,7 @@ class DeleteTodoRenderer(BaseToolRenderer):
 
         text = Text()
         text.append("📋 ")
-        text.append("Todo Removed", style="bold #94a3b8")
+        text.append("Todo Archived", style="bold #94a3b8")
 
         if isinstance(result, str) and result.strip():
             text.append("\n  ")
@@ -214,12 +214,12 @@ class DeleteTodoRenderer(BaseToolRenderer):
             if result.get("success"):
                 _format_todo_lines(text, result)
             else:
-                error = result.get("error", "Failed to remove todo")
+                error = result.get("error", "Failed to archive todo")
                 text.append("\n  ")
                 text.append(error, style="#ef4444")
         else:
             text.append("\n  ")
-            text.append("Removing...", style="dim")
+            text.append("Archiving...", style="dim")
 
         css_classes = cls.get_css_classes("completed")
         return Static(text, classes=css_classes)

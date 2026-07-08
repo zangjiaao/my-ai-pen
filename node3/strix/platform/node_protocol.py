@@ -85,7 +85,7 @@ class PlatformEventSink:
             self.tool_args_by_call_id[call_id] = call["args"]
             self.tool_agent_by_call_id[call_id] = agent_id
             self.update_agent_activity(agent_id, call["tool_name"], call["args"], "running")
-            progress = important_tool_progress(call["tool_name"], call["args"])
+            progress = tool_start_progress(call["tool_name"], call["args"])
             if progress:
                 self.emit(text(self.task, progress, metadata={"agent_id": agent_id, "tool_name": call["tool_name"]}))
             if should_emit_tool_output(call["tool_name"], "running"):
@@ -606,6 +606,13 @@ def normalize_todos(raw: Any) -> list[dict[str, Any]]:
             "completed_at": string_value(item.get("completed_at")),
             "started_at": string_value(item.get("started_at")),
             "linked_agent_id": string_value(item.get("linked_agent_id")),
+            "surface_id": string_value(item.get("surface_id")),
+            "endpoint": string_value(item.get("endpoint")),
+            "method": string_value(item.get("method")),
+            "parameter": string_value(item.get("parameter")),
+            "vuln_type": string_value(item.get("vuln_type")),
+            "auth_state": string_value(item.get("auth_state")),
+            "archived_at": string_value(item.get("archived_at")),
         }
         items.append(normalized)
     return sorted(items, key=lambda item: (priority_rank(item.get("priority")), str(item.get("created_at") or ""), str(item.get("title") or "")))
@@ -938,6 +945,15 @@ def tool_call_summary(tool_name: str, args: dict[str, Any]) -> str:
     return f"{name} started"
 
 
+def tool_start_progress(tool_name: str, args: dict[str, Any]) -> str:
+    if tool_name == "write_stdin":
+        return ""
+    summary = tool_call_summary(tool_name, args).rstrip(".")
+    if not summary:
+        return ""
+    return f"Next: {summary}."
+
+
 def important_tool_progress(tool_name: str, args: dict[str, Any]) -> str:
     if tool_name == "create_agent":
         name = first_present(args, "name") or "子 Agent"
@@ -1016,6 +1032,11 @@ def friendly_tool_name(tool_name: str) -> str:
         "create_note": "Writing note",
         "update_note": "Updating note",
         "list_notes": "Reviewing notes",
+        "record_evidence": "Recording evidence",
+        "record_attack_surface": "Recording attack surface",
+        "record_coverage": "Recording coverage",
+        "list_memory": "Reviewing memory",
+        "delete_todo": "Archiving todo",
     }.get(tool_name, tool_name.replace("_", " ").strip().title() or "Tool")
 
 

@@ -195,13 +195,15 @@ def test_bridge_tool_output_includes_platform_card_fields():
 
     sent = asyncio.run(run_bridge())
 
-    assert [message["type"] for message in sent] == ["tool_output", "tool_output"]
-    assert sent[0]["display_title"] == "Exec Command"
-    assert sent[0]["category"] == "command"
-    assert sent[0]["command"] == "id"
-    assert sent[0]["args"] == {"cmd": "id"}
-    assert sent[1]["status"] == "done"
-    assert "uid=1000" in sent[1]["line"]
+    assert [message["type"] for message in sent] == ["text", "tool_output", "tool_output"]
+    assert sent[0]["content"]["text"] == "Next: Running command: id."
+    assert sent[0]["content"]["metadata"]["tool_name"] == "exec_command"
+    assert sent[1]["display_title"] == "Exec Command"
+    assert sent[1]["category"] == "command"
+    assert sent[1]["command"] == "id"
+    assert sent[1]["args"] == {"cmd": "id"}
+    assert sent[2]["status"] == "done"
+    assert "uid=1000" in sent[2]["line"]
 
 
 def test_bridge_hides_successful_write_stdin_tool_output():
@@ -660,6 +662,32 @@ def test_completion_gate_requires_memory_ledgers(tmp_path):
     assert "no meaningful coverage records" in gate["incomplete_reasons"]
 
 
+def test_completion_gate_blocks_caido_runs_until_sitemap_attempted(tmp_path):
+    from strix.tools.workflow import initialize_workflow_state, mark_sitemap_attempt
+
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    initialize_workflow_state(state_dir, caido_available=True)
+    (state_dir / "attack_surface.json").write_text(json.dumps([
+        {"surface_id": "as-1", "kind": "url", "url": "http://target.local/", "method": "GET", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "coverage.json").write_text(json.dumps([
+        {"coverage_id": "cov-1", "endpoint": "GET http://target.local/", "vuln_type": "baseline", "status": "tried", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "evidence.json").write_text(json.dumps([
+        {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "Baseline response"},
+    ]), encoding="utf-8")
+
+    blocked = completion_gate_for_run(tmp_path)
+    mark_sitemap_attempt(state_dir, success=False, error="empty sitemap")
+    allowed = completion_gate_for_run(tmp_path)
+
+    assert blocked["ok"] is False
+    assert "Caido is available but list_sitemap has not been attempted" in blocked["incomplete_reasons"]
+    assert allowed["ok"] is True
+    assert allowed["workflow_state"]["sitemap_attempted"] is True
+
+
 def test_completion_gate_passes_with_surface_coverage_and_evidence(tmp_path):
     state_dir = tmp_path / ".state"
     state_dir.mkdir()
@@ -720,6 +748,87 @@ def test_completion_gate_rejects_uncovered_attack_surface(tmp_path):
     assert gate["uncovered_attack_surfaces"][0]["surface_id"] == "as-2"
 
 
+def test_completion_gate_rejects_external_discovered_endpoint_missing_from_attack_surface(tmp_path):
+    from strix.tools.workflow import record_external_discoveries
+
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    record_external_discoveries(
+        state_dir,
+        source="caido_requests",
+        discoveries=[
+            {"method": "GET", "url": "http://target.local/api/Users", "path": "/api/Users"},
+            {"method": "GET", "url": "http://target.local/api/Products", "path": "/api/Products"},
+        ],
+    )
+    (state_dir / "attack_surface.json").write_text(json.dumps([
+        {"surface_id": "as-1", "kind": "api_endpoint", "url": "http://target.local/api/Users", "method": "GET", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "coverage.json").write_text(json.dumps([
+        {"coverage_id": "cov-1", "endpoint": "GET http://target.local/api/Users", "vuln_type": "authorization", "status": "tried", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "evidence.json").write_text(json.dumps([
+        {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "Baseline response"},
+    ]), encoding="utf-8")
+
+    gate = completion_gate_for_run(tmp_path)
+
+    assert gate["ok"] is False
+    assert "1 externally discovered endpoint(s) missing from attack surface" in gate["incomplete_reasons"]
+    assert gate["external_discovery_gap_count"] == 1
+    assert gate["external_discovery_gaps"][0]["url"] == "http://target.local/api/Products"
+
+
+def test_create_agent_blocks_vulnerability_agent_until_external_inventory_is_recorded(tmp_path):
+    from strix.tools.workflow import record_external_discoveries
+
+    async def run():
+        state_dir = tmp_path / ".state"
+        state_dir.mkdir()
+        record_external_discoveries(
+            state_dir,
+            source="caido_sitemap",
+            discoveries=[
+                {"method": "GET", "url": "http://target.local/api/Users", "path": "/api/Users"},
+                {"method": "GET", "url": "http://target.local/api/Products", "path": "/api/Products"},
+            ],
+        )
+        (state_dir / "attack_surface.json").write_text(json.dumps([
+            {"surface_id": "as-1", "kind": "api_endpoint", "url": "http://target.local/api/Users", "method": "GET"},
+        ]), encoding="utf-8")
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        todo_tools.hydrate_todos_from_disk(state_dir)
+
+        async def spawner(**kwargs):
+            await coordinator.register("child", kwargs["name"], kwargs["parent_ctx"]["agent_id"])
+            return {"success": True, "agent_id": "child", "name": kwargs["name"]}
+
+        ctx = ToolContext(
+            context={
+                "agent_id": "root",
+                "parent_id": None,
+                "state_dir": str(state_dir),
+                "coordinator": coordinator,
+                "spawn_child_agent": spawner,
+            },
+            tool_name="create_agent",
+            tool_call_id="call-agent",
+            tool_arguments="{}",
+        )
+        return json.loads(await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({"name": "SQLi Validator", "task": "Validate SQLi on /api/Users"}),
+        ))
+
+    blocked = asyncio.run(run())
+
+    assert blocked["success"] is False
+    assert "Workflow gate blocked create_agent" in blocked["error"]
+    assert blocked["workflow_gate"]["reason"] == "Externally discovered endpoints have not been recorded in attack surface memory"
+    assert blocked["workflow_gate"]["external_discovery_gaps"][0]["url"] == "http://target.local/api/Products"
+
+
 def test_completion_gate_accepts_skipped_surface_with_reason(tmp_path):
     state_dir = tmp_path / ".state"
     state_dir.mkdir()
@@ -740,6 +849,36 @@ def test_completion_gate_accepts_skipped_surface_with_reason(tmp_path):
     assert gate["ok"] is True
     assert gate["uncovered_attack_surface_count"] == 0
     assert gate["meaningful_coverage_count"] == 1
+
+
+def test_completion_gate_rejects_juice_shop_profile_missing_business_coverage(tmp_path):
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    (tmp_path / "run.json").write_text(json.dumps({
+        "scan_config": {"target_profile": {"name": "juice_shop"}},
+    }), encoding="utf-8")
+    (state_dir / "attack_surface.json").write_text(json.dumps([
+        {"surface_id": "as-1", "kind": "auth_endpoint", "url": "http://target.local/rest/user/login", "method": "POST", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "coverage.json").write_text(json.dumps([
+        {"coverage_id": "cov-1", "endpoint": "POST /rest/user/login", "vuln_type": "jwt_authentication", "status": "tried", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "evidence.json").write_text(json.dumps([
+        {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "Login baseline"},
+    ]), encoding="utf-8")
+
+    gate = completion_gate_for_run(tmp_path)
+
+    assert gate["ok"] is False
+    assert gate["target_profile_name"] == "juice_shop"
+    assert gate["profile_coverage_gap_count"] >= 1
+    assert any("juice_shop profile coverage missing" in reason for reason in gate["incomplete_reasons"])
+    assert {gap["category"] for gap in gate["profile_coverage_gaps"]} >= {
+        "order_payment_business_flow",
+        "password_reset_security_question",
+        "captcha_feedback",
+        "profile_upload",
+    }
 
 
 def test_completion_gate_ignores_terminal_agent_orphan_todos(tmp_path):
@@ -1460,6 +1599,65 @@ def test_list_sitemap_serializes_shared_graphql_client():
     assert all(result["success"] is True for result in results)
 
 
+def test_list_sitemap_records_workflow_attempt(monkeypatch, tmp_path):
+    from strix.tools.proxy import tools as proxy_tools
+    from strix.tools.workflow import initialize_workflow_state, load_workflow_state
+
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    initialize_workflow_state(state_dir, caido_available=True)
+
+    async def fake_list_sitemap_with_client(*_args, **_kwargs):
+        return {
+            "success": True,
+            "entries": [
+                {"id": "entry-1", "request": {"method": "GET", "path": "/api/Users", "status_code": 200}},
+                {"id": "entry-2"},
+            ],
+        }
+
+    monkeypatch.setattr(proxy_tools.caido_api, "list_sitemap_with_client", fake_list_sitemap_with_client)
+    ctx = ToolContext(
+        context={"agent_id": "root", "state_dir": str(state_dir), "caido_client": object()},
+        tool_name="list_sitemap",
+        tool_call_id="call-sitemap",
+        tool_arguments="{}",
+    )
+
+    result = json.loads(asyncio.run(proxy_tools.list_sitemap.on_invoke_tool(ctx, json.dumps({}))))
+    state = load_workflow_state(state_dir)
+
+    assert result["success"] is True
+    assert state["sitemap_attempted"] is True
+    assert state["sitemap_success"] is True
+    assert state["sitemap_entry_count"] == 2
+    assert state["external_discovery_count"] == 1
+    assert state["external_discoveries"][0]["path"] == "/api/Users"
+
+
+def test_list_sitemap_records_attempt_when_client_missing(tmp_path):
+    from strix.tools.proxy import tools as proxy_tools
+    from strix.tools.workflow import initialize_workflow_state, load_workflow_state
+
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    initialize_workflow_state(state_dir, caido_available=True)
+    ctx = ToolContext(
+        context={"agent_id": "root", "state_dir": str(state_dir)},
+        tool_name="list_sitemap",
+        tool_call_id="call-sitemap",
+        tool_arguments="{}",
+    )
+
+    result = json.loads(asyncio.run(proxy_tools.list_sitemap.on_invoke_tool(ctx, json.dumps({}))))
+    state = load_workflow_state(state_dir)
+
+    assert result["success"] is False
+    assert state["sitemap_attempted"] is True
+    assert state["sitemap_success"] is False
+    assert "Caido client not available" in state["sitemap_error"]
+
+
 def test_memory_tools_persist_attack_surface_coverage_and_evidence(tmp_path):
     from strix.tools.run_memory import tools as memory_tools
 
@@ -1517,6 +1715,42 @@ def test_memory_tools_persist_attack_surface_coverage_and_evidence(tmp_path):
         assert conn.execute("SELECT COUNT(*) FROM coverage").fetchone()[0] == 1
 
 
+def test_memory_tools_list_coverage_gaps(tmp_path):
+    from strix.tools.run_memory import tools as memory_tools
+
+    memory_tools.hydrate_memory_from_disk(tmp_path)
+    ctx = ToolContext(
+        context={"agent_id": "root", "state_dir": str(tmp_path)},
+        tool_name="record_attack_surface",
+        tool_call_id="call-1",
+        tool_arguments="{}",
+    )
+    surface = json.loads(asyncio.run(memory_tools.record_attack_surface.on_invoke_tool(
+        ctx,
+        json.dumps({
+            "kind": "api_endpoint",
+            "url": "http://target.local/api/users",
+            "method": "GET",
+        }),
+    )))
+
+    gaps = json.loads(asyncio.run(memory_tools.list_memory.on_invoke_tool(
+        ctx,
+        json.dumps({"kind": "coverage_gaps"}),
+    )))
+    summary = json.loads(asyncio.run(memory_tools.list_memory.on_invoke_tool(
+        ctx,
+        json.dumps({"kind": "summary"}),
+    )))
+
+    assert surface["success"] is True
+    assert gaps["success"] is True
+    assert gaps["total_count"] == 1
+    assert gaps["items"][0]["surface_id"] == surface["surface"]["surface_id"]
+    assert summary["uncovered_attack_surface_count"] == 1
+    assert summary["coverage_gap_examples"][0]["url"] == "http://target.local/api/users"
+
+
 def test_record_evidence_normalizes_alias_and_unknown_type(tmp_path):
     from strix.tools.run_memory import tools as memory_tools
 
@@ -1551,6 +1785,42 @@ def test_record_evidence_normalizes_alias_and_unknown_type(tmp_path):
     assert url_type_result["evidence"]["evidence_type"] == "other"
     assert url_type_result["evidence"]["target"] == "http://host.docker.internal:3000/rest/user/login"
     assert url_type_result["evidence"]["metadata"]["original_evidence_type"] == "http://host.docker.internal:3000/rest/user/login"
+
+
+def test_memory_tools_normalize_attack_surface_kind_aliases(tmp_path):
+    from strix.tools.run_memory import tools as memory_tools
+
+    memory_tools.hydrate_memory_from_disk(tmp_path)
+    ctx = ToolContext(
+        context={"agent_id": "root"},
+        tool_name="record_attack_surface",
+        tool_call_id="call-1",
+        tool_arguments="{}",
+    )
+
+    api_surface = json.loads(asyncio.run(memory_tools.record_attack_surface.on_invoke_tool(
+        ctx,
+        json.dumps({
+            "kind": "api",
+            "url": "http://target.local/rest/products/search?q=",
+            "method": "GET",
+        }),
+    )))
+    rest_surface = json.loads(asyncio.run(memory_tools.record_attack_surface.on_invoke_tool(
+        ctx,
+        json.dumps({
+            "kind": "REST API endpoint",
+            "url": "http://target.local/rest/user/login",
+            "method": "POST",
+        }),
+    )))
+
+    assert api_surface["success"] is True
+    assert api_surface["surface"]["kind"] == "api_endpoint"
+    assert api_surface["surface"]["original_kind"] == "api"
+    assert rest_surface["success"] is True
+    assert rest_surface["surface"]["kind"] == "api_endpoint"
+    assert rest_surface["surface"]["original_kind"] == "REST API endpoint"
 
 
 def test_memory_tools_deduplicate_attack_surface_in_sqlite_and_json(tmp_path):
@@ -1863,6 +2133,50 @@ def test_create_todo_is_atomic_and_accepts_medium_priority(tmp_path):
     assert next(iter(persisted["root"].values()))["priority"] == "normal"
 
 
+def test_root_todo_rejects_generic_vuln_testing_and_preserves_details(tmp_path):
+    todo_tools.hydrate_todos_from_disk(tmp_path)
+    ctx = ToolContext(
+        context={"agent_id": "root"},
+        tool_name="create_todo",
+        tool_call_id="call-1",
+        tool_arguments="{}",
+    )
+
+    generic = json.loads(asyncio.run(todo_tools.create_todo.on_invoke_tool(
+        ctx,
+        json.dumps({"todos": [{"title": "Test SQL Injection", "priority": "high"}]}),
+    )))
+    detailed = json.loads(asyncio.run(todo_tools.create_todo.on_invoke_tool(
+        ctx,
+        json.dumps({"todos": [{
+            "title": "Test SQL Injection on POST /login username",
+            "priority": "high",
+            "endpoint": "/login",
+            "method": "POST",
+            "parameter": "username",
+            "vuln_type": "sql_injection",
+            "auth_state": "anonymous",
+        }]}),
+    )))
+    todo_id = detailed["created"][0]["todo_id"]
+    update = json.loads(asyncio.run(todo_tools.update_todo.on_invoke_tool(
+        ctx,
+        json.dumps({"updates": [{"todo_id": todo_id, "surface_id": "as-1"}]}),
+    )))
+    projected = todos_from_file(tmp_path / "todos.json")
+
+    assert generic["success"] is False
+    assert "Root vulnerability-testing todos must include endpoint/detail fields" in generic["error"]
+    assert detailed["success"] is True
+    assert update["success"] is True
+    assert projected[0]["surface_id"] == "as-1"
+    assert projected[0]["endpoint"] == "/login"
+    assert projected[0]["method"] == "POST"
+    assert projected[0]["parameter"] == "username"
+    assert projected[0]["vuln_type"] == "sql_injection"
+    assert projected[0]["auth_state"] == "anonymous"
+
+
 def test_todo_must_be_in_progress_before_done(tmp_path):
     todo_tools.hydrate_todos_from_disk(tmp_path)
     ctx = ToolContext(
@@ -1913,6 +2227,54 @@ def test_todo_must_be_in_progress_before_done(tmp_path):
     assert persisted["root"][second_id]["status"] == "pending"
 
 
+def test_delete_todo_cannot_remove_unfinished_or_erase_history(tmp_path):
+    todo_tools.hydrate_todos_from_disk(tmp_path)
+    ctx = ToolContext(
+        context={"agent_id": "root"},
+        tool_name="create_todo",
+        tool_call_id="call-1",
+        tool_arguments="{}",
+    )
+    created_payload = json.loads(asyncio.run(todo_tools.create_todo.on_invoke_tool(
+        ctx,
+        json.dumps({"todos": [{"title": "Probe /login"}, {"title": "Probe /admin"}]}),
+    )))
+    first_id = created_payload["created"][0]["todo_id"]
+    second_id = created_payload["created"][1]["todo_id"]
+
+    blocked_delete = json.loads(asyncio.run(todo_tools.delete_todo.on_invoke_tool(
+        ctx,
+        json.dumps({"todo_ids": [first_id, second_id]}),
+    )))
+    assert blocked_delete["success"] is False
+    assert blocked_delete["deleted"] == []
+    assert blocked_delete["deleted_count"] == 0
+    assert {error["todo_id"] for error in blocked_delete["errors"]} == {first_id, second_id}
+
+    asyncio.run(todo_tools.update_todo.on_invoke_tool(
+        ctx,
+        json.dumps({"updates": [{"todo_id": first_id, "status": "in_progress"}]}),
+    ))
+    asyncio.run(todo_tools.mark_todo_done.on_invoke_tool(
+        ctx,
+        json.dumps({"todo_ids": [first_id]}),
+    ))
+    archived_delete = json.loads(asyncio.run(todo_tools.delete_todo.on_invoke_tool(
+        ctx,
+        json.dumps({"todo_ids": [first_id]}),
+    )))
+    assert archived_delete["success"] is True
+    assert archived_delete["deleted"] == [first_id]
+    assert archived_delete["archived"] == [first_id]
+
+    persisted = json.loads((tmp_path / "todos.json").read_text(encoding="utf-8"))
+    assert first_id in persisted["root"]
+    assert persisted["root"][first_id]["status"] == "done"
+    assert persisted["root"][first_id]["archived_at"]
+    assert second_id in persisted["root"]
+    assert persisted["root"][second_id]["status"] == "pending"
+
+
 def test_bound_todo_helpers_complete_successful_child_task(tmp_path):
     todo_tools.hydrate_todos_from_disk(tmp_path)
 
@@ -1936,6 +2298,64 @@ def test_bound_todo_helpers_complete_successful_child_task(tmp_path):
     persisted = json.loads((tmp_path / "todos.json").read_text(encoding="utf-8"))
     assert persisted["root"][created["todo_id"]]["status"] == "done"
     assert persisted["root"][created["todo_id"]]["completed_at"]
+
+
+def test_create_agent_enforces_recon_workflow_gate_for_root(tmp_path):
+    from strix.tools.workflow import initialize_workflow_state, mark_sitemap_attempt
+
+    async def run():
+        state_dir = tmp_path / ".state"
+        state_dir.mkdir()
+        initialize_workflow_state(state_dir, caido_available=True)
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        todo_tools.hydrate_todos_from_disk(state_dir)
+        spawned: list[str] = []
+
+        async def spawner(**kwargs):
+            child_id = f"child-{len(spawned) + 1}"
+            spawned.append(kwargs["name"])
+            await coordinator.register(child_id, kwargs["name"], kwargs["parent_ctx"]["agent_id"])
+            return {"success": True, "agent_id": child_id, "name": kwargs["name"]}
+
+        ctx = ToolContext(
+            context={
+                "agent_id": "root",
+                "parent_id": None,
+                "state_dir": str(state_dir),
+                "coordinator": coordinator,
+                "spawn_child_agent": spawner,
+            },
+            tool_name="create_agent",
+            tool_call_id="call-agent",
+            tool_arguments="{}",
+        )
+        blocked = json.loads(await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({"name": "XSS Agent", "task": "Validate XSS on /search"}),
+        ))
+        recon = json.loads(await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({"name": "Sitemap Mapper", "task": "Map sitemap and attack surface"}),
+        ))
+        mark_sitemap_attempt(state_dir, success=True, entry_count=1)
+        (state_dir / "attack_surface.json").write_text(json.dumps([
+            {"surface_id": "as-1", "kind": "url", "url": "http://target.local/search", "method": "GET"},
+        ]), encoding="utf-8")
+        allowed = json.loads(await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({"name": "XSS Agent", "task": "Validate XSS on /search"}),
+        ))
+        return blocked, recon, allowed, spawned
+
+    blocked, recon, allowed, spawned = asyncio.run(run())
+
+    assert blocked["success"] is False
+    assert "Workflow gate blocked create_agent" in blocked["error"]
+    assert blocked["workflow_gate"]["reason"] == "Caido is available but list_sitemap has not been attempted"
+    assert recon["success"] is True
+    assert allowed["success"] is True
+    assert spawned == ["Sitemap Mapper", "XSS Agent"]
 
 
 def test_create_agent_creates_bound_parent_todo(tmp_path):
@@ -2382,6 +2802,122 @@ def test_reporting_shim_persists_evidence_ids(monkeypatch, tmp_path):
     assert state.reports[0]["evidence_ids"] == [first_evidence, second_evidence]
 
 
+def test_create_vulnerability_report_requires_attack_surface_and_coverage(monkeypatch, tmp_path):
+    from strix.tools.run_memory import tools as memory_tools
+
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    memory_tools.hydrate_memory_from_disk(state_dir)
+
+    class FakeReportState:
+        def __init__(self) -> None:
+            self.reports: list[dict] = []
+
+        def get_existing_vulnerabilities(self) -> list[dict]:
+            return []
+
+        def add_vulnerability_report(self, **kwargs):
+            self.reports.append(kwargs)
+            return "vuln-0001"
+
+    state = FakeReportState()
+
+    async def fake_check_duplicate(candidate, existing):
+        return {"is_duplicate": False}
+
+    async def run_case():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "strix", None)
+        await coordinator.register("validator", "SQL Validator", "root")
+        root_ctx = ToolContext(
+            context={"agent_id": "root", "state_dir": str(state_dir), "coordinator": coordinator},
+            tool_name="record_evidence",
+            tool_call_id="call-root-evidence",
+            tool_arguments="{}",
+        )
+        validator_ctx = ToolContext(
+            context={"agent_id": "validator", "state_dir": str(state_dir), "coordinator": coordinator},
+            tool_name="record_evidence",
+            tool_call_id="call-validator-evidence",
+            tool_arguments="{}",
+        )
+        root_evidence_id = json.loads(await memory_tools.record_evidence.on_invoke_tool(
+            root_ctx,
+            json.dumps({"evidence_type": "http_trace", "summary": "Root SQL injection proof"}),
+        ))["evidence_id"]
+        validator_evidence_id = json.loads(await memory_tools.record_evidence.on_invoke_tool(
+            validator_ctx,
+            json.dumps({"evidence_type": "http_trace", "summary": "Validator reproduced SQL injection"}),
+        ))["evidence_id"]
+        report_ctx = ToolContext(
+            context={"agent_id": "root", "state_dir": str(state_dir), "coordinator": coordinator},
+            tool_name="create_vulnerability_report",
+            tool_call_id="call-report",
+            tool_arguments="{}",
+        )
+        base = {
+            "title": "SQL Injection",
+            "description": "SQL injection is confirmed.",
+            "impact": "An attacker can read database contents.",
+            "target": "http://target.local",
+            "technical_analysis": "The endpoint concatenates SQL.",
+            "poc_description": "Send a UNION payload.",
+            "poc_script_code": "print('poc')",
+            "remediation_steps": "Use prepared statements.",
+            "cvss_breakdown": {"AV": "N", "AC": "L", "PR": "N", "UI": "N", "S": "U", "C": "H", "I": "H", "A": "H"},
+            "endpoint": "/sqli",
+            "method": "GET",
+            "cwe": "CWE-89",
+            "evidence_ids": [root_evidence_id],
+            "validation_agent_id": "validator",
+            "validation_evidence_ids": [validator_evidence_id],
+        }
+        no_surface = json.loads(await node3_tool.create_vulnerability_report.on_invoke_tool(
+            report_ctx,
+            json.dumps(base),
+        ))
+        await memory_tools.record_attack_surface.on_invoke_tool(
+            root_ctx,
+            json.dumps({
+                "kind": "api_endpoint",
+                "url": "/sqli",
+                "method": "GET",
+                "evidence_ids": [root_evidence_id],
+            }),
+        )
+        no_coverage = json.loads(await node3_tool.create_vulnerability_report.on_invoke_tool(
+            report_ctx,
+            json.dumps(base),
+        ))
+        await memory_tools.record_coverage.on_invoke_tool(
+            root_ctx,
+            json.dumps({
+                "endpoint": "GET /sqli",
+                "vuln_type": "sql_injection",
+                "status": "failed",
+                "evidence_ids": [root_evidence_id],
+                "result": "SQL injection confirmed",
+            }),
+        )
+        valid = json.loads(await node3_tool.create_vulnerability_report.on_invoke_tool(
+            report_ctx,
+            json.dumps(base),
+        ))
+        return no_surface, no_coverage, valid
+
+    monkeypatch.setattr("strix.report.dedupe.check_duplicate", fake_check_duplicate)
+    monkeypatch.setattr("strix.report.state.get_global_report_state", lambda: state)
+
+    no_surface, no_coverage, valid = asyncio.run(run_case())
+
+    assert no_surface["success"] is False
+    assert no_surface["workflow_gate"]["reason"] == "No attack surface records exist yet"
+    assert no_coverage["success"] is False
+    assert no_coverage["workflow_gate"]["reason"] == "The reported endpoint does not have a meaningful coverage record"
+    assert valid["success"] is True
+    assert state.reports[0]["endpoint"] == "/sqli"
+
+
 def test_create_vulnerability_report_requires_independent_validation(monkeypatch, tmp_path):
     from strix.tools.run_memory import tools as memory_tools
 
@@ -2429,6 +2965,27 @@ def test_create_vulnerability_report_requires_independent_validation(monkeypatch
             validator_ctx,
             json.dumps({"evidence_type": "http_trace", "summary": "Validator reproduced SQL injection"}),
         ))["evidence_id"]
+        surface = json.loads(await memory_tools.record_attack_surface.on_invoke_tool(
+            root_ctx,
+            json.dumps({
+                "kind": "api_endpoint",
+                "url": "/sqli",
+                "method": "GET",
+                "evidence_ids": [root_evidence_id],
+            }),
+        ))
+        coverage = json.loads(await memory_tools.record_coverage.on_invoke_tool(
+            root_ctx,
+            json.dumps({
+                "endpoint": "GET /sqli",
+                "vuln_type": "sql_injection",
+                "status": "failed",
+                "evidence_ids": [root_evidence_id],
+                "result": "SQL injection confirmed",
+            }),
+        ))
+        assert surface["success"] is True
+        assert coverage["success"] is True
         report_ctx = ToolContext(
             context={"agent_id": "root", "state_dir": str(state_dir), "coordinator": coordinator},
             tool_name="create_vulnerability_report",

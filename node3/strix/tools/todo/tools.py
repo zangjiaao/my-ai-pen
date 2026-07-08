@@ -13,6 +13,8 @@ from typing import Any
 
 from agents import RunContextWrapper, function_tool
 
+from strix.tools.workflow import is_recon_task
+
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +22,22 @@ logger = logging.getLogger(__name__)
 VALID_PRIORITIES = ["low", "normal", "high", "critical"]
 PRIORITY_ALIASES = {"medium": "normal", "med": "normal"}
 VALID_STATUSES = ["pending", "in_progress", "done"]
+TODO_DETAIL_FIELDS = ("surface_id", "endpoint", "method", "parameter", "vuln_type", "auth_state")
+_GENERIC_TEST_MARKERS = (
+    "sql injection",
+    "sqli",
+    "xss",
+    "idor",
+    "broken access",
+    "ssrf",
+    "csrf",
+    "path traversal",
+    "lfi",
+    "rfi",
+    "authentication",
+    "session",
+    "authorization",
+)
 
 _PRIORITY_RANK = {"critical": 0, "high": 1, "normal": 2, "low": 3}
 _STATUS_RANK = {"done": 0, "in_progress": 1, "pending": 2}
@@ -104,6 +122,11 @@ def _persist() -> None:
 def _agent_id_from(ctx: RunContextWrapper) -> str:
     inner = ctx.context if isinstance(ctx.context, dict) else {}
     return str(inner.get("agent_id") or "default")
+
+
+def _is_root_agent(ctx: RunContextWrapper) -> bool:
+    inner = ctx.context if isinstance(ctx.context, dict) else {}
+    return inner.get("parent_id") is None
 
 
 def _get_agent_todos(agent_id: str) -> dict[str, dict[str, Any]]:
@@ -270,6 +293,7 @@ def _normalize_bulk_updates(raw_updates: Any) -> list[dict[str, Any]]:
                 "description": item.get("description"),
                 "priority": item.get("priority"),
                 "status": item.get("status"),
+                **{field: item.get(field) for field in TODO_DETAIL_FIELDS if field in item},
             },
         )
     return normalized
@@ -311,9 +335,24 @@ def _normalize_bulk_todos(raw_todos: Any) -> list[dict[str, Any]]:
                 "title": title.strip(),
                 "description": (item.get("description") or "").strip() or None,
                 "priority": item.get("priority"),
+                **{field: item.get(field) for field in TODO_DETAIL_FIELDS if field in item},
             },
         )
     return normalized
+
+
+def _has_todo_detail(task: dict[str, Any]) -> bool:
+    if str(task.get("description") or "").strip():
+        return True
+    return any(str(task.get(field) or "").strip() for field in TODO_DETAIL_FIELDS)
+
+
+def _is_generic_testing_todo(task: dict[str, Any]) -> bool:
+    title = str(task.get("title") or "")
+    if is_recon_task(name=title, task=str(task.get("description") or "")):
+        return False
+    lowered = title.lower()
+    return any(marker in lowered for marker in _GENERIC_TEST_MARKERS)
 
 
 def _apply_single_update(
@@ -323,6 +362,7 @@ def _apply_single_update(
     description: str | None = None,
     priority: str | None = None,
     status: str | None = None,
+    details: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if todo_id not in agent_todos:
         return {"todo_id": todo_id, "error": f"Todo with ID '{todo_id}' not found"}
@@ -338,6 +378,15 @@ def _apply_single_update(
             todo["priority"] = _normalize_priority(priority, str(todo.get("priority", "normal")))
         except ValueError as exc:
             return {"todo_id": todo_id, "error": str(exc)}
+    if details:
+        for field, value in details.items():
+            if field not in TODO_DETAIL_FIELDS:
+                continue
+            text = str(value or "").strip()
+            if text:
+                todo[field] = text
+            elif field in todo:
+                todo.pop(field, None)
     if status is not None:
         status_candidate = status.lower()
         if status_candidate not in VALID_STATUSES:
@@ -410,6 +459,26 @@ async def create_todo(ctx: RunContextWrapper, todos: Any) -> str:
                 ensure_ascii=False,
                 default=str,
             )
+        if _is_root_agent(ctx):
+            generic_without_detail = [
+                task.get("title")
+                for task in tasks
+                if _is_generic_testing_todo(task) and not _has_todo_detail(task)
+            ]
+            if generic_without_detail:
+                return json.dumps(
+                    {
+                        "success": False,
+                        "error": (
+                            "Root vulnerability-testing todos must include endpoint/detail fields "
+                            "or a concrete description. Create recon/mapping todos first, then "
+                            "endpoint-level test todos from recorded attack surface."
+                        ),
+                        "generic_todos": generic_without_detail,
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                )
 
         normalized_tasks = [
             {**task, "priority": _normalize_priority(task.get("priority"))}
@@ -429,6 +498,11 @@ async def create_todo(ctx: RunContextWrapper, todos: Any) -> str:
                 "created_at": timestamp,
                 "updated_at": timestamp,
                 "completed_at": None,
+                **{
+                    field: str(task.get(field)).strip()
+                    for field in TODO_DETAIL_FIELDS
+                    if str(task.get(field) or "").strip()
+                },
             }
             created.append({"todo_id": todo_id, "title": task["title"], "priority": task_priority})
     except (ValueError, TypeError) as e:
@@ -567,6 +641,7 @@ async def update_todo(ctx: RunContextWrapper, updates: Any) -> str:
                 upd.get("description"),
                 upd.get("priority"),
                 upd.get("status"),
+                {field: upd.get(field) for field in TODO_DETAIL_FIELDS if field in upd},
             )
             if err:
                 errors.append(err)
@@ -664,7 +739,10 @@ async def mark_todo_pending(ctx: RunContextWrapper, todo_ids: Any) -> str:
 
 @function_tool(timeout=30)
 async def delete_todo(ctx: RunContextWrapper, todo_ids: Any) -> str:
-    """Delete one or many todos. Removes them entirely (no soft-delete).
+    """Archive one or many completed todos without removing plan history.
+
+    Unfinished todos cannot be deleted. This prevents bypassing lifecycle
+    checks by removing pending work before ``finish_scan``.
 
     Always pass a list, even for a single ID (wrap it in a one-item array).
 
@@ -682,23 +760,38 @@ async def delete_todo(ctx: RunContextWrapper, todo_ids: Any) -> str:
                 default=str,
             )
 
-        deleted: list[str] = []
+        archived: list[str] = []
         errors: list[dict[str, Any]] = []
+        timestamp = datetime.now(UTC).isoformat()
         for tid in ids:
             if tid not in agent_todos:
                 errors.append({"todo_id": tid, "error": f"Todo with ID '{tid}' not found"})
                 continue
-            del agent_todos[tid]
-            deleted.append(tid)
+            todo = agent_todos[tid]
+            status = str(todo.get("status") or "pending").lower()
+            if status != "done":
+                errors.append({
+                    "todo_id": tid,
+                    "error": (
+                        "Cannot delete unfinished todo; mark it in_progress and then done "
+                        "after completing the work"
+                    ),
+                })
+                continue
+            todo["archived_at"] = todo.get("archived_at") or timestamp
+            todo["updated_at"] = timestamp
+            archived.append(tid)
     except (ValueError, TypeError) as e:
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False, default=str)
 
-    if deleted:
+    if archived:
         _persist()
     response: dict[str, Any] = {
         "success": len(errors) == 0,
-        "deleted": deleted,
-        "deleted_count": len(deleted),
+        "deleted": archived,
+        "deleted_count": len(archived),
+        "archived": archived,
+        "archived_count": len(archived),
         "todos": _sorted_todos(agent_id),
         "total_count": len(agent_todos),
     }

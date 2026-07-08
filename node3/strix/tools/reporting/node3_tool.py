@@ -11,6 +11,8 @@ from typing import Any
 
 from agents import RunContextWrapper, function_tool
 
+from strix.tools.workflow import reporting_preflight, state_dir_from_raw
+
 
 logger = logging.getLogger(__name__)
 
@@ -437,6 +439,13 @@ async def _do_create(
             coordinator=coordinator,
             state_dir=state_dir,
         ))
+    workflow_gate = reporting_preflight(
+        state_dir_from_raw(state_dir),
+        endpoint=endpoint,
+        method=method,
+    )
+    if not workflow_gate.get("ok"):
+        errors.append(f"workflow gate: {workflow_gate.get('reason')}")
     if cve:
         cve = _extract_cve(cve)
         cve_err = _validate_cve(cve)
@@ -449,7 +458,10 @@ async def _do_create(
             errors.append(cwe_err)
 
     if errors:
-        return {"success": False, "error": "Validation failed", "errors": errors}
+        result: dict[str, Any] = {"success": False, "error": "Validation failed", "errors": errors}
+        if not workflow_gate.get("ok"):
+            result["workflow_gate"] = workflow_gate
+        return result
 
     cvss_score, severity, _vector = _calculate_cvss(cvss_breakdown)
 

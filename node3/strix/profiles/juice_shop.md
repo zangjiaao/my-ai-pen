@@ -5,6 +5,15 @@ Use this profile only for authorized OWASP Juice Shop benchmark runs.
 - Treat Juice Shop as a modern single-page application with browser workflows and JSON APIs. Map both UI routes and API endpoints before deep testing.
 - Establish whether the run should be unauthenticated, authenticated as a normal user, or authenticated as an admin-like account. Keep those identities separate.
 - Capture baseline traffic through Caido for registration/login, basket, product search, checkout, complaint/upload, profile, and admin-related workflows when available.
+- Maintain a Juice Shop coverage matrix, not just a vulnerability list. At minimum cover these categories with `record_coverage` rows, including negative/skipped/blocked rows with reasons when no exploit is confirmed:
+  - auth/session/JWT/login/whoami
+  - broken access control and object authorization across users, baskets, cards, addresses, orders, and admin routes
+  - injection and executable XSS surfaces including search, feedback, reviews, and profile fields
+  - basket/order/checkout/payment/coupon/wallet/deluxe business logic
+  - forgot-password/security-question/geostalking style reset flows
+  - captcha/feedback/anti-automation behavior
+  - profile image, file upload, document/static file, deprecated/B2B interfaces
+  - admin/configuration/scoreboard/metrics/logs/backups and hidden routes
 - For direct scripts and command-line tools, reuse the relevant authorization headers, cookies, and JSON content types from verified baseline requests.
 - Prioritize confirmed business-impact findings: broken access control, IDOR, authentication/session issues, injection, XSS with executable proof, file upload abuse, sensitive data exposure, and API authorization flaws.
 - Do not report challenge hints, scoreboard metadata, or intentionally exposed training text as vulnerabilities unless they demonstrate a concrete exploit path.
