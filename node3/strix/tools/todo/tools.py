@@ -13,6 +13,7 @@ from typing import Any
 
 from agents import RunContextWrapper, function_tool
 
+from strix.tools.run_memory.tools import attack_surface_from_file, coverage_from_file, evidence_from_file, hypotheses_from_file
 from strix.tools.workflow import is_recon_task
 
 
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 VALID_PRIORITIES = ["low", "normal", "high", "critical"]
 PRIORITY_ALIASES = {"medium": "normal", "med": "normal"}
 VALID_STATUSES = ["pending", "in_progress", "done"]
+TERMINAL_INTERNAL_STATUSES = {"done", "failed", "blocked", "skipped"}
 TODO_DETAIL_FIELDS = ("surface_id", "endpoint", "method", "parameter", "vuln_type", "auth_state")
 _GENERIC_TEST_MARKERS = (
     "sql injection",
@@ -40,14 +42,18 @@ _GENERIC_TEST_MARKERS = (
 )
 
 _PRIORITY_RANK = {"critical": 0, "high": 1, "normal": 2, "low": 3}
-_STATUS_RANK = {"done": 0, "in_progress": 1, "pending": 2}
 
 
-def _todo_sort_key(todo: dict[str, Any]) -> tuple[int, int, str]:
+def _todo_sort_key(todo: dict[str, Any]) -> tuple[int, str, str]:
+    raw_order = todo.get("order_index")
+    try:
+        order_index = int(raw_order)
+    except (TypeError, ValueError):
+        order_index = 1_000_000
     return (
-        _STATUS_RANK.get(todo.get("status", "pending"), 99),
-        _PRIORITY_RANK.get(todo.get("priority", "normal"), 99),
+        order_index,
         todo.get("created_at", ""),
+        todo.get("todo_id", ""),
     )
 
 
@@ -124,6 +130,16 @@ def _agent_id_from(ctx: RunContextWrapper) -> str:
     return str(inner.get("agent_id") or "default")
 
 
+def _state_dir_from(ctx: RunContextWrapper) -> Path | None:
+    inner = ctx.context if isinstance(ctx.context, dict) else {}
+    raw = inner.get("state_dir")
+    if isinstance(raw, Path):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        return Path(raw)
+    return None
+
+
 def _is_root_agent(ctx: RunContextWrapper) -> bool:
     inner = ctx.context if isinstance(ctx.context, dict) else {}
     return inner.get("parent_id") is None
@@ -149,6 +165,169 @@ def _sorted_todos(agent_id: str) -> list[dict[str, Any]]:
     return todos_list
 
 
+def _next_order_index(agent_todos: dict[str, dict[str, Any]]) -> int:
+    highest = -1
+    for fallback_index, todo in enumerate(agent_todos.values()):
+        try:
+            current = int(todo.get("order_index"))
+        except (TypeError, ValueError):
+            current = fallback_index
+            todo["order_index"] = current
+        highest = max(highest, current)
+    return highest + 1
+
+
+def _is_internal_child_tracking_todo(todo: dict[str, Any]) -> bool:
+    return bool(todo.get("internal_tracking")) or (
+        bool(str(todo.get("linked_agent_id") or "").strip())
+        and bool(str(todo.get("parent_todo_id") or "").strip())
+    )
+
+
+def _is_top_level_root_todo(todo: dict[str, Any]) -> bool:
+    return not str(todo.get("linked_agent_id") or "").strip() and not str(todo.get("parent_todo_id") or "").strip()
+
+
+def _single_root_phase_transition_errors(
+    agent_todos: dict[str, dict[str, Any]],
+    updates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    status_updates = [
+        upd
+        for upd in updates
+        if str(upd.get("status") or "").strip().lower() in {"in_progress", "done"}
+    ]
+    top_level_updates = [
+        upd
+        for upd in status_updates
+        if upd.get("todo_id") in agent_todos and _is_top_level_root_todo(agent_todos[upd["todo_id"]])
+    ]
+    if len(top_level_updates) <= 1:
+        return []
+    return [
+        {
+            "todo_id": str(upd.get("todo_id") or ""),
+            "error": (
+                "Root top-level todos represent scan phases and must be advanced one at a time. "
+                "Update the current phase, complete its work and memory records, then advance the next phase."
+            ),
+        }
+        for upd in top_level_updates
+    ]
+
+
+def _parse_time(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _artifact_time(item: dict[str, Any]) -> datetime | None:
+    candidates = [
+        _parse_time(item.get(field))
+        for field in ("updated_at", "created_at", "timestamp", "completed_at")
+    ]
+    valid = [candidate for candidate in candidates if candidate is not None]
+    return max(valid) if valid else None
+
+
+def _load_json_artifacts(path: Path, id_field: str | None = None) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if isinstance(raw, list):
+        return [item for item in raw if isinstance(item, dict)]
+    if isinstance(raw, dict):
+        if id_field and isinstance(raw.get(id_field), str):
+            return [raw]
+        return [item for item in raw.values() if isinstance(item, dict)]
+    return []
+
+
+def _phase_keys(todo_id: str, todo: dict[str, Any]) -> set[str]:
+    return {
+        str(value or "").strip().lower()
+        for value in (todo_id, todo.get("title"))
+        if str(value or "").strip()
+    }
+
+
+def _artifact_matches_phase(item: dict[str, Any], phase_keys: set[str]) -> bool:
+    phase = str(item.get("phase") or "").strip().lower()
+    return bool(phase and phase in phase_keys)
+
+
+def _phase_work_artifacts_since(
+    state_dir: Path,
+    started_at: datetime,
+    *,
+    phase_keys: set[str],
+) -> list[dict[str, Any]]:
+    run_dir = state_dir.parent
+    artifact_sets = [
+        ("attack_surface", attack_surface_from_file(state_dir / "attack_surface.json")),
+        ("hypothesis", hypotheses_from_file(state_dir / "hypotheses.json")),
+        ("coverage", coverage_from_file(state_dir / "coverage.json")),
+        ("evidence", evidence_from_file(state_dir / "evidence.json")),
+        ("note", _load_json_artifacts(state_dir / "notes.json")),
+        ("vulnerability", _load_json_artifacts(run_dir / "vulnerabilities.json", "id")),
+    ]
+    recent: list[dict[str, Any]] = []
+    for kind, artifacts in artifact_sets:
+        for item in artifacts:
+            artifact_at = _artifact_time(item)
+            if artifact_at is not None and artifact_at >= started_at and _artifact_matches_phase(item, phase_keys):
+                recent.append(
+                    {
+                        "kind": kind,
+                        "id": (
+                            item.get("coverage_id")
+                            or item.get("surface_id")
+                            or item.get("hypothesis_id")
+                            or item.get("evidence_id")
+                            or item.get("id")
+                        ),
+                        "phase": item.get("phase"),
+                    },
+                )
+    return recent
+
+
+def _root_phase_completion_error(
+    todo_id: str,
+    todo: dict[str, Any],
+    state_dir: Path | None,
+) -> dict[str, Any] | None:
+    if state_dir is None or not _is_top_level_root_todo(todo):
+        return None
+    started_at = _parse_time(todo.get("started_at"))
+    if started_at is None:
+        return None
+    if _phase_work_artifacts_since(state_dir, started_at, phase_keys=_phase_keys(todo_id, todo)):
+        return None
+    return {
+        "todo_id": todo_id,
+        "error": (
+            "Root top-level scan phases cannot be marked done without phase-linked work artifacts "
+            "recorded after the phase started. Set the artifact phase to the current phase title "
+            "or todo_id when recording attack surface, hypotheses, coverage, evidence, notes, "
+            "or vulnerability reports from the phase work."
+        ),
+    }
+
+
 def validate_todo_exists(*, owner_agent_id: str, todo_id: str) -> str:
     """Return a normalized todo ID if it exists for the owner."""
     clean_id = str(todo_id or "").strip()
@@ -166,6 +345,7 @@ def create_bound_todo(
     description: str | None = None,
     priority: str | None = None,
     linked_agent_id: str,
+    parent_todo_id: str | None = None,
 ) -> dict[str, Any]:
     """Create an in-progress parent todo assigned to a child agent."""
     clean_title = str(title or "").strip()
@@ -174,18 +354,26 @@ def create_bound_todo(
     normalized_priority = _normalize_priority(priority)
     timestamp = datetime.now(UTC).isoformat()
     todo_id = str(uuid.uuid4())[:6]
+    agent_todos = _get_agent_todos(owner_agent_id)
     todo = {
         "title": clean_title,
         "description": str(description or "").strip() or None,
         "priority": normalized_priority,
         "status": "in_progress",
+        "order_index": _next_order_index(agent_todos),
         "created_at": timestamp,
         "updated_at": timestamp,
         "started_at": timestamp,
         "completed_at": None,
         "linked_agent_id": str(linked_agent_id),
+        "internal_tracking": True,
     }
-    _get_agent_todos(owner_agent_id)[todo_id] = todo
+    if parent_todo_id:
+        todo["parent_todo_id"] = validate_todo_exists(
+            owner_agent_id=owner_agent_id,
+            todo_id=parent_todo_id,
+        )
+    agent_todos[todo_id] = todo
     _persist()
     return {**todo, "todo_id": todo_id}
 
@@ -211,24 +399,73 @@ def bind_todo_to_agent(
 
 
 def complete_bound_todos(*, linked_agent_id: str, success: bool = True) -> list[dict[str, Any]]:
-    """Complete todos assigned to a child agent after successful agent_finish."""
+    """Resolve todos assigned to a child agent after agent_finish."""
     if not success:
-        return []
+        return resolve_bound_todos(linked_agent_id=linked_agent_id, status="failed")
+    return resolve_bound_todos(linked_agent_id=linked_agent_id, status="done")
+
+
+def resolve_bound_todos(
+    *,
+    linked_agent_id: str,
+    status: str,
+    reason: str | None = None,
+) -> list[dict[str, Any]]:
+    """Mark parent todos assigned to a child as terminal."""
+    normalized_status = str(status or "").strip().lower()
+    if normalized_status not in TERMINAL_INTERNAL_STATUSES:
+        raise ValueError(
+            "Invalid terminal todo status. Must be one of: "
+            + ", ".join(sorted(TERMINAL_INTERNAL_STATUSES)),
+        )
     timestamp = datetime.now(UTC).isoformat()
-    completed: list[dict[str, Any]] = []
+    resolved: list[dict[str, Any]] = []
     for owner_agent_id, agent_todos in _todos_storage.items():
         for todo_id, todo in agent_todos.items():
             if str(todo.get("linked_agent_id") or "") != str(linked_agent_id):
                 continue
-            if todo.get("status") == "done":
+            if str(todo.get("status") or "").lower() in TERMINAL_INTERNAL_STATUSES:
                 continue
-            todo["status"] = "done"
+            todo["status"] = normalized_status
             todo["completed_at"] = timestamp
             todo["updated_at"] = timestamp
-            completed.append({**todo, "todo_id": todo_id, "owner_agent_id": owner_agent_id})
-    if completed:
+            if reason:
+                todo["resolution_reason"] = str(reason).strip()
+            resolved.append({**todo, "todo_id": todo_id, "owner_agent_id": owner_agent_id})
+    if resolved:
         _persist()
-    return completed
+    return resolved
+
+
+def active_parent_todo_id(owner_agent_id: str) -> str | None:
+    """Return a single active unbound parent todo, if one is unambiguous."""
+    active = [
+        todo_id
+        for todo_id, todo in _get_agent_todos(owner_agent_id).items()
+        if str(todo.get("status") or "").lower() == "in_progress"
+        and not str(todo.get("linked_agent_id") or "").strip()
+    ]
+    return active[0] if len(active) == 1 else None
+
+
+def reconcile_bound_todos_with_agent_statuses(agent_statuses: dict[str, str]) -> list[dict[str, Any]]:
+    """Resolve bound todos whose linked agent is already terminal."""
+    resolved: list[dict[str, Any]] = []
+    for agent_id, status in agent_statuses.items():
+        normalized_status = str(status or "").strip().lower()
+        if normalized_status in {"failed", "crashed"}:
+            resolved.extend(resolve_bound_todos(
+                linked_agent_id=agent_id,
+                status="failed",
+                reason=f"Agent ended with status {normalized_status}",
+            ))
+        elif normalized_status == "stopped":
+            resolved.extend(resolve_bound_todos(
+                linked_agent_id=agent_id,
+                status="skipped",
+                reason=f"Agent ended with status {normalized_status}",
+            ))
+    return resolved
 
 
 def _normalize_todo_ids(raw_ids: Any) -> list[str]:
@@ -255,7 +492,7 @@ def unfinished_todos_for_agent(agent_id: str) -> list[dict[str, Any]]:
     unresolved = [
         {**todo, "todo_id": todo_id}
         for todo_id, todo in _get_agent_todos(agent_id).items()
-        if todo.get("status") != "done"
+        if str(todo.get("status") or "").lower() not in TERMINAL_INTERNAL_STATUSES
     ]
     unresolved.sort(key=_todo_sort_key)
     return unresolved
@@ -495,6 +732,7 @@ async def create_todo(ctx: RunContextWrapper, todos: Any) -> str:
                 "description": task.get("description"),
                 "priority": task_priority,
                 "status": "pending",
+                "order_index": _next_order_index(agent_todos),
                 "created_at": timestamp,
                 "updated_at": timestamp,
                 "completed_at": None,
@@ -631,9 +869,44 @@ async def update_todo(ctx: RunContextWrapper, updates: Any) -> str:
                 default=str,
             )
 
+        state_dir = _state_dir_from(ctx)
+        root_agent = _is_root_agent(ctx)
+        root_phase_errors = (
+            _single_root_phase_transition_errors(agent_todos, updates_to_apply)
+            if root_agent
+            else []
+        )
+        if root_phase_errors:
+            return json.dumps(
+                {
+                    "success": False,
+                    "updated": [],
+                    "updated_count": 0,
+                    "todos": _sorted_todos(agent_id),
+                    "total_count": len(agent_todos),
+                    "errors": root_phase_errors,
+                },
+                ensure_ascii=False,
+                default=str,
+            )
+
         updated: list[str] = []
         errors: list[dict[str, Any]] = []
         for upd in updates_to_apply:
+            existing = agent_todos.get(upd["todo_id"])
+            if (
+                root_agent
+                and existing is not None
+                and str(upd.get("status") or "").strip().lower() == "done"
+            ):
+                completion_error = _root_phase_completion_error(
+                    upd["todo_id"],
+                    existing,
+                    state_dir,
+                )
+                if completion_error:
+                    errors.append(completion_error)
+                    continue
             err = _apply_single_update(
                 agent_todos,
                 upd["todo_id"],
@@ -664,13 +937,43 @@ async def update_todo(ctx: RunContextWrapper, updates: Any) -> str:
     return json.dumps(response, ensure_ascii=False, default=str)
 
 
-def _mark(*, agent_id: str, todo_ids: Any, new_status: str) -> str:
+def _mark(
+    *,
+    agent_id: str,
+    todo_ids: Any,
+    new_status: str,
+    root_agent: bool = False,
+    state_dir: Path | None = None,
+) -> str:
     try:
         agent_todos = _get_agent_todos(agent_id)
         ids = _normalize_todo_ids(todo_ids)
         if not ids:
             msg = f"Provide a non-empty 'todo_ids' list to mark as {new_status}"
             return json.dumps({"success": False, "error": msg}, ensure_ascii=False, default=str)
+
+        root_phase_errors = (
+            _single_root_phase_transition_errors(
+                agent_todos,
+                [{"todo_id": tid, "status": new_status} for tid in ids],
+            )
+            if root_agent and new_status in {"in_progress", "done"}
+            else []
+        )
+        if root_phase_errors:
+            return json.dumps(
+                {
+                    "success": False,
+                    "marked": [],
+                    "marked_count": 0,
+                    "new_status": new_status,
+                    "todos": _sorted_todos(agent_id),
+                    "total_count": len(agent_todos),
+                    "errors": root_phase_errors,
+                },
+                ensure_ascii=False,
+                default=str,
+            )
 
         marked: list[str] = []
         errors: list[dict[str, Any]] = []
@@ -687,6 +990,11 @@ def _mark(*, agent_id: str, todo_ids: Any, new_status: str) -> str:
                     "error": "Todo must be in_progress before it can be marked done",
                 })
                 continue
+            if root_agent and new_status == "done":
+                completion_error = _root_phase_completion_error(tid, todo, state_dir)
+                if completion_error:
+                    errors.append(completion_error)
+                    continue
             todo["status"] = new_status
             todo["completed_at"] = timestamp if new_status == "done" else None
             if new_status == "pending":
@@ -722,7 +1030,13 @@ async def mark_todo_done(ctx: RunContextWrapper, todo_ids: Any) -> str:
     Args:
         todo_ids: array of todo IDs, a single todo ID, or a JSON string.
     """
-    return _mark(agent_id=_agent_id_from(ctx), todo_ids=todo_ids, new_status="done")
+    return _mark(
+        agent_id=_agent_id_from(ctx),
+        todo_ids=todo_ids,
+        new_status="done",
+        root_agent=_is_root_agent(ctx),
+        state_dir=_state_dir_from(ctx),
+    )
 
 
 @function_tool(timeout=30)
@@ -734,7 +1048,13 @@ async def mark_todo_pending(ctx: RunContextWrapper, todo_ids: Any) -> str:
     Args:
         todo_ids: array of todo IDs, a single todo ID, or a JSON string.
     """
-    return _mark(agent_id=_agent_id_from(ctx), todo_ids=todo_ids, new_status="pending")
+    return _mark(
+        agent_id=_agent_id_from(ctx),
+        todo_ids=todo_ids,
+        new_status="pending",
+        root_agent=_is_root_agent(ctx),
+        state_dir=_state_dir_from(ctx),
+    )
 
 
 @function_tool(timeout=30)

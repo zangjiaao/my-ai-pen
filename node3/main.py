@@ -180,7 +180,6 @@ def normalize_task(message: dict[str, Any], config: Node3Config) -> dict[str, An
         "target": message.get("target") if isinstance(message.get("target"), dict) else {},
         "scope": message.get("scope") if isinstance(message.get("scope"), dict) else {},
         "snapshot": message.get("snapshot") if isinstance(message.get("snapshot"), dict) else {},
-        "target_profile": str(message.get("target_profile") or message.get("profile") or "").strip(),
     }
 
 
@@ -217,7 +216,7 @@ def extract_target(task: dict[str, Any]) -> str | None:
 def build_instruction(task: dict[str, Any]) -> str:
     pieces = [
         str(task.get("instruction") or "").strip(),
-        "Run in benchmark-friendly mode: prioritize confirmed, reproducible web vulnerabilities; include endpoint, method, parameter, proof of concept, impact, and remediation for each finding.",
+        "Run in coverage-first mode: map the authorized attack surface and plan endpoint/business-flow coverage before deep vulnerability validation.",
         "Avoid reporting negative or speculative findings as vulnerabilities.",
     ]
     return "\n\n".join(piece for piece in pieces if piece)

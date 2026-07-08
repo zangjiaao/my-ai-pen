@@ -33,16 +33,22 @@ from strix.platform.node_protocol import (
     text,
     todos_from_file,
 )
-from strix.profiles import infer_target_profile, load_target_profile
 from strix.report.state import ReportState, set_global_report_state
 from strix.runtime import session_manager
-from strix.tools.run_memory.tools import attack_surface_from_file, coverage_from_file, evidence_from_file
+from strix.tools.run_memory.tools import (
+    attack_surface_from_file,
+    coverage_from_file,
+    evidence_from_file,
+    hypothesis_gaps,
+    hypotheses_from_file,
+)
 from strix.tools.workflow import (
     discovered_inventory_gaps,
     load_workflow_state,
     sitemap_expansion_gaps_from_state,
     sitemap_gate,
     sitemap_pagination_gaps_from_state,
+    target_in_authorized_scope,
 )
 
 
@@ -63,73 +69,6 @@ SURFACE_KINDS_REQUIRING_COVERAGE = {
     "service",
 }
 HTTP_METHOD_RE = re.compile(r"^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|TRACE)\s+(.+)$", re.IGNORECASE)
-JUICE_SHOP_PROFILE_NAMES = {"juice_shop", "owasp_juice_shop"}
-JUICE_SHOP_REQUIRED_COVERAGE = {
-    "auth_session": (
-        "auth",
-        "jwt",
-        "login",
-        "session",
-        "/rest/user/login",
-        "/rest/user/whoami",
-    ),
-    "access_control": (
-        "access control",
-        "authorization",
-        "idor",
-        "bola",
-        "basketitems",
-        "/api/users",
-        "/api/cards",
-        "/api/address",
-    ),
-    "injection_or_xss": (
-        "sql",
-        "xss",
-        "injection",
-        "/rest/products/search",
-        "/api/feedback",
-        "feedback",
-    ),
-    "order_payment_business_flow": (
-        "order",
-        "checkout",
-        "payment",
-        "coupon",
-        "wallet",
-        "deluxe",
-    ),
-    "password_reset_security_question": (
-        "password reset",
-        "forgot",
-        "security question",
-        "reset password",
-        "answer",
-    ),
-    "captcha_feedback": (
-        "captcha",
-        "anti-automation",
-        "anti automation",
-        "feedback",
-    ),
-    "profile_upload": (
-        "profile",
-        "upload",
-        "file upload",
-        "profile image",
-        "avatar",
-    ),
-    "admin_hidden_observability": (
-        "admin",
-        "configuration",
-        "scoreboard",
-        "metrics",
-        "logs",
-        "backup",
-    ),
-}
-
-
 def stable_platform_run_name(conversation_id: str) -> str:
     safe = "".join(ch if ch.isalnum() else "-" for ch in str(conversation_id).strip().lower())
     safe = "-".join(part for part in safe.split("-") if part)
@@ -138,7 +77,7 @@ def stable_platform_run_name(conversation_id: str) -> str:
 
 def merge_task_context(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
     merged = dict(existing)
-    for key in ("instruction", "scan_mode", "target_profile"):
+    for key in ("instruction", "scan_mode"):
         if incoming.get(key):
             merged[key] = incoming[key]
     for key in ("target", "scope", "snapshot"):
@@ -208,7 +147,7 @@ class StrixPlatformConversationSession:
     async def interrupt(self, reason: str = "") -> None:
         root_id = await self._wait_for_root_agent(timeout=2.0)
         if root_id is not None:
-            delivered = await self.coordinator.send(
+            await self.coordinator.send(
                 root_id,
                 {
                     "from": "user",
@@ -221,12 +160,25 @@ class StrixPlatformConversationSession:
                     ),
                 },
             )
-            if delivered:
-                await send(self.ws, text(self.task, "Node3 paused the current Strix action; session state is preserved."))
-                return
+            with contextlib.suppress(Exception):
+                await self.coordinator.cancel_descendants_graceful(root_id)
+                await self.coordinator.set_status(root_id, "stopped")
         if self.run_task and not self.run_task.done():
             self.run_task.cancel()
-        await send(self.ws, text(self.task, "Node3 interrupted Strix before the root session was ready."))
+            with contextlib.suppress(asyncio.CancelledError, TimeoutError, Exception):
+                await asyncio.wait_for(self.run_task, timeout=10.0)
+        if self.report_state is not None:
+            with contextlib.suppress(Exception):
+                self.report_state.cleanup(status="interrupted")
+                await self._send_checkpoint("interrupted")
+        await send(self.ws, text(self.task, "Node3 interrupted the current Strix run; session state is preserved."))
+        await send(self.ws, {
+            "type": "task_complete",
+            "conversation_id": self.conversation_id,
+            "task_id": self.task["task_id"],
+            "status": "interrupted",
+            "summary": f"Node3 Strix run interrupted. Run: {self.run_name}. Session can be continued from saved state.",
+        })
 
     async def close(self) -> None:
         self._closed = True
@@ -338,7 +290,6 @@ class StrixPlatformConversationSession:
         local_sources: list[dict[str, Any]],
         target: str | None,
     ) -> dict[str, Any]:
-        target_profile = load_target_profile(infer_target_profile(self.task, target or ""))
         scan_config: dict[str, Any] = {
             "scan_id": self.run_name,
             "targets": targets_info,
@@ -353,12 +304,6 @@ class StrixPlatformConversationSession:
             "diff_base": None,
             "resume_instruction": str(self.task.get("instruction") or "").strip(),
         }
-        if target_profile is not None:
-            scan_config["target_profile"] = {
-                "name": target_profile.name,
-                "title": target_profile.title,
-                "content": target_profile.content,
-            }
         return scan_config
 
     async def _wait_for_root_agent(self, timeout: float = 30.0) -> str | None:
@@ -499,7 +444,6 @@ async def run_platform_scan(ws: Any, task: dict[str, Any], config: Any) -> None:
         async with working_directory(config.strix_project_dir):
             targets_info = build_targets_info(target)
             run_name = generate_run_name(targets_info)
-            target_profile = load_target_profile(infer_target_profile(task, target))
             for target_info in targets_info:
                 if target_info["type"] == "repository":
                     repo_url = target_info["details"]["target_repo"]
@@ -521,13 +465,6 @@ async def run_platform_scan(ws: Any, task: dict[str, Any], config: Any) -> None:
                 "diff_base": None,
                 "resume_instruction": "",
             }
-            if target_profile is not None:
-                scan_config["target_profile"] = {
-                    "name": target_profile.name,
-                    "title": target_profile.title,
-                    "content": target_profile.content,
-                }
-
             report_state = ReportState(run_name)
             report_state.hydrate_from_run_dir()
             run_dir = str(report_state.get_run_dir())
@@ -701,7 +638,7 @@ async def working_directory(path: Path) -> AsyncIterator[None]:
 def build_instruction(task: dict[str, Any]) -> str:
     pieces = [
         str(task.get("instruction") or "").strip(),
-        "Run in benchmark-friendly mode: prioritize confirmed, reproducible web vulnerabilities; include endpoint, method, parameter, proof of concept, impact, and remediation for each finding.",
+        "Run in coverage-first mode: map the authorized attack surface and plan endpoint/business-flow coverage before deep vulnerability validation.",
         "Avoid reporting negative or speculative findings as vulnerabilities.",
     ]
     return "\n\n".join(piece for piece in pieces if piece)
@@ -766,6 +703,13 @@ def split_actionable_unfinished_todos(run_dir: Path) -> tuple[list[dict[str, Any
                 **todo,
                 "ignore_reason": f"owner agent is {agent_statuses[agent_id]}",
             })
+            continue
+        linked_agent_id = str(todo.get("linked_agent_id") or "")
+        if linked_agent_id and agent_statuses.get(linked_agent_id) in TERMINAL_AGENT_STATUSES:
+            ignored.append({
+                **todo,
+                "ignore_reason": f"linked agent is {agent_statuses[linked_agent_id]}",
+            })
         else:
             actionable.append(todo)
     return actionable, ignored
@@ -804,11 +748,20 @@ def _endpoint_target_variants(raw: Any) -> set[str]:
         path_key = urlunsplit(("", "", path, parsed.query, "")).lower()
         if path_key:
             variants.add(path_key)
+        variants.add(urlunsplit(("", "", path, "", "")).lower())
     return variants
 
 
 def _coverage_endpoint_key(item: dict[str, Any]) -> tuple[str | None, set[str]]:
     endpoint = str(item.get("endpoint") or "").strip()
+    parts = [part.strip() for part in endpoint.split(",") if part.strip()]
+    if len(parts) > 1 and any(HTTP_METHOD_RE.match(part) for part in parts):
+        targets: set[str] = set()
+        for part in parts:
+            match = HTTP_METHOD_RE.match(part)
+            target = match.group(2) if match else part
+            targets.update(_endpoint_target_variants(target))
+        return None, targets
     match = HTTP_METHOD_RE.match(endpoint)
     method = match.group(1).upper() if match else None
     target = match.group(2) if match else endpoint
@@ -830,7 +783,141 @@ def _coverage_resolves_surface(item: dict[str, Any]) -> bool:
     return False
 
 
-def uncovered_attack_surfaces(attack_surface: list[dict[str, Any]], coverage: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _method_tokens(value: Any) -> set[str]:
+    text = str(value or "").strip().upper()
+    if not text or text in {"-", "ANY", "ALL", "*"}:
+        return set()
+    return {
+        part
+        for part in re.split(r"[^A-Z]+", text)
+        if part in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE"}
+    }
+
+
+def _methods_compatible(left: Any, right: Any) -> bool:
+    left_tokens = _method_tokens(left)
+    right_tokens = _method_tokens(right)
+    return not left_tokens or not right_tokens or bool(left_tokens.intersection(right_tokens))
+
+
+def _hypothesis_endpoint_keys(item: dict[str, Any]) -> list[tuple[str | None, set[str]]]:
+    explicit_method = str(item.get("method") or "").strip().upper() or None
+    endpoint = str(item.get("endpoint") or "").strip()
+    parts = [part.strip() for part in endpoint.split(",") if part.strip()]
+    if len(parts) > 1 and any(HTTP_METHOD_RE.match(part) for part in parts):
+        keys: list[tuple[str | None, set[str]]] = []
+        for part in parts:
+            match = HTTP_METHOD_RE.match(part)
+            method = explicit_method or (match.group(1).upper() if match else None)
+            target = match.group(2) if match else part
+            targets = _endpoint_target_variants(target)
+            if targets:
+                keys.append((method, targets))
+        return keys
+    match = HTTP_METHOD_RE.match(endpoint)
+    method = explicit_method or (match.group(1).upper() if match else None)
+    target = match.group(2) if match else endpoint
+    targets = _endpoint_target_variants(target)
+    return [(method, targets)] if targets else []
+
+
+def surface_hypothesis_gaps(
+    attack_surface: list[dict[str, Any]],
+    hypotheses: list[dict[str, Any]],
+    workflow_state: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Return testable attack surfaces that have no linked hypothesis."""
+    hypotheses_by_surface = {
+        str(item.get("surface_id") or "").strip()
+        for item in hypotheses
+        if str(item.get("surface_id") or "").strip()
+    }
+    hypothesis_endpoints = [
+        (item, hypothesis_method, hypothesis_targets)
+        for item in hypotheses
+        for hypothesis_method, hypothesis_targets in _hypothesis_endpoint_keys(item)
+    ]
+    gaps: list[dict[str, Any]] = []
+    for item in attack_surface:
+        kind = str(item.get("kind") or "").lower()
+        if kind and kind not in SURFACE_KINDS_REQUIRING_COVERAGE:
+            continue
+        if workflow_state is not None and not target_in_authorized_scope(
+            workflow_state,
+            item.get("url") or item.get("address"),
+        ):
+            continue
+        surface_id = str(item.get("surface_id") or "").strip()
+        if surface_id and surface_id in hypotheses_by_surface:
+            continue
+        surface_method, surface_targets = _surface_endpoint_key(item)
+        if not surface_targets:
+            continue
+        matched = False
+        for _, hypothesis_method, hypothesis_targets in hypothesis_endpoints:
+            if not surface_targets.intersection(hypothesis_targets):
+                continue
+            if _methods_compatible(surface_method, hypothesis_method):
+                matched = True
+                break
+        if not matched:
+            gaps.append({
+                "surface_id": item.get("surface_id"),
+                "kind": item.get("kind"),
+                "method": item.get("method"),
+                "url": item.get("url"),
+                "address": item.get("address"),
+                "parameters": item.get("parameters"),
+                "auth_state": item.get("auth_state"),
+                "source": item.get("source"),
+            })
+    return gaps
+
+
+def coverage_without_hypothesis_links(
+    coverage: list[dict[str, Any]],
+    hypotheses: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return meaningful coverage records that are not tied to a hypothesis."""
+    linked_coverage_ids = {
+        str(coverage_id).strip()
+        for hypothesis in hypotheses
+        for coverage_id in (hypothesis.get("coverage_ids") if isinstance(hypothesis.get("coverage_ids"), list) else [])
+        if str(coverage_id).strip()
+    }
+    known_hypothesis_ids = {
+        str(hypothesis.get("hypothesis_id") or "").strip()
+        for hypothesis in hypotheses
+        if str(hypothesis.get("hypothesis_id") or "").strip()
+    }
+    gaps: list[dict[str, Any]] = []
+    for item in coverage:
+        if not _coverage_resolves_surface(item):
+            continue
+        coverage_id = str(item.get("coverage_id") or "").strip()
+        hypothesis_id = str(item.get("hypothesis_id") or "").strip()
+        if hypothesis_id and hypothesis_id in known_hypothesis_ids:
+            continue
+        if coverage_id and coverage_id in linked_coverage_ids:
+            continue
+        gaps.append({
+            "coverage_id": item.get("coverage_id"),
+            "endpoint": item.get("endpoint"),
+            "parameter": item.get("parameter"),
+            "vuln_type": item.get("vuln_type"),
+            "status": item.get("status"),
+            "auth_state": item.get("auth_state"),
+            "evidence_ids": _clean_evidence_ids(item.get("evidence_ids")),
+            "result": item.get("result"),
+        })
+    return gaps
+
+
+def uncovered_attack_surfaces(
+    attack_surface: list[dict[str, Any]],
+    coverage: list[dict[str, Any]],
+    workflow_state: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     resolved_coverage = [
         item
         for item in coverage
@@ -850,6 +937,11 @@ def uncovered_attack_surfaces(attack_surface: list[dict[str, Any]], coverage: li
     for item in attack_surface:
         kind = str(item.get("kind") or "").lower()
         if kind and kind not in SURFACE_KINDS_REQUIRING_COVERAGE:
+            continue
+        if workflow_state is not None and not target_in_authorized_scope(
+            workflow_state,
+            item.get("url") or item.get("address"),
+        ):
             continue
         method, targets = _surface_endpoint_key(item)
         if not targets:
@@ -936,6 +1028,67 @@ def invalid_vulnerability_validations(
     return invalid
 
 
+def confirmed_coverage_without_reports(
+    coverage: list[dict[str, Any]],
+    vulnerabilities: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return positive coverage records that have no matching formal report."""
+    confirmed = [
+        item
+        for item in coverage
+        if str(item.get("status") or "").strip().lower() == "passed"
+    ]
+    gaps: list[dict[str, Any]] = []
+    for item in confirmed:
+        if any(_coverage_matches_vulnerability(item, vuln) for vuln in vulnerabilities):
+            continue
+        gaps.append({
+            "coverage_id": item.get("coverage_id"),
+            "endpoint": item.get("endpoint"),
+            "parameter": item.get("parameter"),
+            "vuln_type": item.get("vuln_type"),
+            "auth_state": item.get("auth_state"),
+            "evidence_ids": _clean_evidence_ids(item.get("evidence_ids")),
+            "result": item.get("result"),
+        })
+    return gaps
+
+
+def _coverage_matches_vulnerability(coverage_item: dict[str, Any], vulnerability: dict[str, Any]) -> bool:
+    coverage_evidence = set(_clean_evidence_ids(coverage_item.get("evidence_ids")))
+    vulnerability_evidence = set(
+        _clean_evidence_ids(vulnerability.get("evidence_ids"))
+        + _clean_evidence_ids(vulnerability.get("validation_evidence_ids")),
+    )
+    if coverage_evidence and coverage_evidence.intersection(vulnerability_evidence):
+        return True
+
+    coverage_method, coverage_targets = _coverage_endpoint_key(coverage_item)
+    for vuln_method, vuln_targets in _vulnerability_endpoint_keys(vulnerability):
+        if not coverage_targets.intersection(vuln_targets):
+            continue
+        if coverage_method and vuln_method and coverage_method != vuln_method:
+            continue
+        return True
+    return False
+
+
+def _vulnerability_endpoint_keys(item: dict[str, Any]) -> list[tuple[str | None, set[str]]]:
+    keys: list[tuple[str | None, set[str]]] = []
+    explicit_method = str(item.get("method") or "").strip().upper() or None
+    for raw in (item.get("endpoint"), item.get("target")):
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        match = HTTP_METHOD_RE.match(text)
+        method = explicit_method or (match.group(1).upper() if match else None)
+        target = match.group(2) if match else text
+        targets = _endpoint_target_variants(target)
+        if targets:
+            keys.append((method, targets))
+    return keys
+
+
 def completion_gate_for_run(run_dir: Path) -> dict[str, Any]:
     unfinished, ignored_unfinished = split_actionable_unfinished_todos(run_dir)
     state_dir = run_dir / ".state"
@@ -943,6 +1096,7 @@ def completion_gate_for_run(run_dir: Path) -> dict[str, Any]:
     workflow_sitemap_gate = sitemap_gate(state_dir)
     agents = agent_graph_from_file(state_dir / "agents.json")
     attack_surface = attack_surface_from_file(state_dir / "attack_surface.json")
+    hypotheses = hypotheses_from_file(state_dir / "hypotheses.json")
     coverage = coverage_from_file(state_dir / "coverage.json")
     evidence = evidence_from_file(state_dir / "evidence.json")
     vulnerabilities = normalize_vulnerabilities_from_run(run_dir)
@@ -971,24 +1125,19 @@ def completion_gate_for_run(run_dir: Path) -> dict[str, Any]:
         )
         if evidence_id not in evidence_ids
     })
-    uncovered_surfaces = uncovered_attack_surfaces(attack_surface, coverage)
+    uncovered_surfaces = uncovered_attack_surfaces(attack_surface, coverage, workflow_state)
+    surface_hypothesis_gap_list = surface_hypothesis_gaps(attack_surface, hypotheses, workflow_state)
+    unlinked_coverage = coverage_without_hypothesis_links(coverage, hypotheses)
+    hypothesis_gap_list = hypothesis_gaps(hypotheses, {
+        str(item.get("coverage_id")): item
+        for item in coverage
+        if str(item.get("coverage_id") or "").strip()
+    }, evidence_by_id)
     discovered_surface_gaps = discovered_inventory_gaps(workflow_state, attack_surface)
     sitemap_pagination_gaps = sitemap_pagination_gaps_from_state(workflow_state)
     sitemap_expansion_gaps = sitemap_expansion_gaps_from_state(workflow_state)
     invalid_validations = invalid_vulnerability_validations(vulnerabilities, agents, evidence_by_id)
-    target_profile_name = target_profile_name_for_run(
-        run_dir,
-        attack_surface=attack_surface,
-        coverage=coverage,
-        evidence=evidence,
-        vulnerabilities=vulnerabilities,
-    )
-    profile_coverage_gaps = profile_coverage_gaps_for_run(
-        target_profile_name,
-        coverage=coverage,
-        attack_surface=attack_surface,
-        evidence=evidence,
-    )
+    unreported_confirmed = confirmed_coverage_without_reports(coverage, vulnerabilities)
     reasons: list[str] = []
     if not workflow_sitemap_gate.get("ok"):
         reasons.append(str(workflow_sitemap_gate.get("reason") or "sitemap workflow gate failed"))
@@ -996,6 +1145,14 @@ def completion_gate_for_run(run_dir: Path) -> dict[str, Any]:
         reasons.append(f"{len(unfinished)} unresolved task(s)")
     if not attack_surface:
         reasons.append("no attack surface records")
+    if attack_surface and not hypotheses:
+        reasons.append("no hypothesis/test-matrix records")
+    if surface_hypothesis_gap_list:
+        reasons.append(f"{len(surface_hypothesis_gap_list)} attack surface record(s) without hypothesis/test-matrix coverage")
+    if hypothesis_gap_list:
+        reasons.append(f"{len(hypothesis_gap_list)} unresolved hypothesis/test-matrix item(s)")
+    if unlinked_coverage:
+        reasons.append(f"{len(unlinked_coverage)} coverage record(s) not linked to a hypothesis/test-matrix item")
     if not meaningful_coverage:
         reasons.append("no meaningful coverage records")
     if uncovered_surfaces:
@@ -1006,17 +1163,14 @@ def completion_gate_for_run(run_dir: Path) -> dict[str, Any]:
         reasons.append(f"{len(sitemap_pagination_gaps)} sitemap branch(es) with unenumerated pages")
     if sitemap_expansion_gaps:
         reasons.append(f"{len(sitemap_expansion_gaps)} sitemap branch(es) with descendants not expanded")
-    if profile_coverage_gaps:
-        reasons.append(
-            f"{target_profile_name} profile coverage missing: "
-            + ", ".join(gap["category"] for gap in profile_coverage_gaps[:5])
-        )
     if unevidenced_findings:
         reasons.append(f"{len(unevidenced_findings)} finding(s) without evidence_ids")
     if missing_evidence_refs:
         reasons.append(f"{len(missing_evidence_refs)} missing evidence reference(s)")
     if invalid_validations:
         reasons.append(f"{len(invalid_validations)} finding(s) without independent subagent validation")
+    if unreported_confirmed:
+        reasons.append(f"{len(unreported_confirmed)} confirmed coverage record(s) without vulnerability report")
     warnings: list[str] = []
     if ignored_unfinished:
         warnings.append(
@@ -1029,8 +1183,15 @@ def completion_gate_for_run(run_dir: Path) -> dict[str, Any]:
         "ignored_unfinished_todos": ignored_unfinished[:20],
         "ignored_unfinished_count": len(ignored_unfinished),
         "attack_surface_count": len(attack_surface),
+        "hypothesis_count": len(hypotheses),
+        "surface_hypothesis_gaps": surface_hypothesis_gap_list[:20],
+        "surface_hypothesis_gap_count": len(surface_hypothesis_gap_list),
+        "hypothesis_gaps": hypothesis_gap_list[:20],
+        "hypothesis_gap_count": len(hypothesis_gap_list),
         "coverage_count": len(coverage),
         "meaningful_coverage_count": len(meaningful_coverage),
+        "coverage_without_hypothesis": unlinked_coverage[:20],
+        "coverage_without_hypothesis_count": len(unlinked_coverage),
         "uncovered_attack_surfaces": uncovered_surfaces[:20],
         "uncovered_attack_surface_count": len(uncovered_surfaces),
         "external_discovery_count": int(workflow_state.get("external_discovery_count") or 0),
@@ -1040,9 +1201,6 @@ def completion_gate_for_run(run_dir: Path) -> dict[str, Any]:
         "sitemap_pagination_gap_count": len(sitemap_pagination_gaps),
         "sitemap_expansion_gaps": sitemap_expansion_gaps[:20],
         "sitemap_expansion_gap_count": len(sitemap_expansion_gaps),
-        "target_profile_name": target_profile_name,
-        "profile_coverage_gaps": profile_coverage_gaps[:20],
-        "profile_coverage_gap_count": len(profile_coverage_gaps),
         "evidence_count": len(evidence),
         "unevidenced_findings": unevidenced_findings[:20],
         "unevidenced_finding_count": len(unevidenced_findings),
@@ -1050,72 +1208,13 @@ def completion_gate_for_run(run_dir: Path) -> dict[str, Any]:
         "missing_evidence_ref_count": len(missing_evidence_refs),
         "invalid_vulnerability_validations": invalid_validations[:20],
         "invalid_vulnerability_validation_count": len(invalid_validations),
+        "unreported_confirmed_coverage": unreported_confirmed[:20],
+        "unreported_confirmed_coverage_count": len(unreported_confirmed),
         "workflow_state": workflow_state,
         "workflow_gate": workflow_sitemap_gate,
         "incomplete_reasons": reasons,
         "completion_warnings": warnings,
     }
-
-
-def target_profile_name_for_run(
-    run_dir: Path,
-    *,
-    attack_surface: list[dict[str, Any]],
-    coverage: list[dict[str, Any]],
-    evidence: list[dict[str, Any]],
-    vulnerabilities: list[dict[str, Any]],
-) -> str | None:
-    run_json = run_dir / "run.json"
-    if run_json.exists():
-        try:
-            raw = json.loads(run_json.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            raw = {}
-        if isinstance(raw, dict):
-            scan_config = raw.get("scan_config")
-            if isinstance(scan_config, dict):
-                profile = scan_config.get("target_profile")
-                if isinstance(profile, dict):
-                    name = str(profile.get("name") or "").strip().lower()
-                    if name:
-                        return name
-                elif isinstance(profile, str) and profile.strip():
-                    return profile.strip().lower()
-
-    sample = " ".join(
-        json.dumps(item, ensure_ascii=False, default=str).lower()
-        for item in [*attack_surface, *coverage, *evidence, *vulnerabilities]
-    )
-    if "juice shop" in sample or "juice-shop" in sample or "juice-sh.op" in sample:
-        return "juice_shop"
-    return None
-
-
-def profile_coverage_gaps_for_run(
-    profile_name: str | None,
-    *,
-    coverage: list[dict[str, Any]],
-    attack_surface: list[dict[str, Any]],
-    evidence: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    if str(profile_name or "").lower() not in JUICE_SHOP_PROFILE_NAMES:
-        return []
-    coverage_texts = [
-        json.dumps(item, ensure_ascii=False, default=str).lower()
-        for item in coverage
-        if _coverage_resolves_surface(item)
-    ]
-    # Evidence and surface context can prove that the target is Juice Shop, but
-    # only coverage rows prove that the agent actually tested a category.
-    _ = attack_surface, evidence
-    gaps: list[dict[str, Any]] = []
-    for category, terms in JUICE_SHOP_REQUIRED_COVERAGE.items():
-        if not any(any(term in text for term in terms) for text in coverage_texts):
-            gaps.append({
-                "category": category,
-                "expected_terms": list(terms),
-            })
-    return gaps
 
 
 def normalize_vulnerabilities_from_run(run_dir: Path) -> list[dict[str, Any]]:

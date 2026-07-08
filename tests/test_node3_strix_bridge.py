@@ -3,6 +3,7 @@ import importlib
 import json
 import sqlite3
 import sys
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
@@ -25,9 +26,8 @@ from strix.platform.node_protocol import (  # noqa: E402
     todos_from_file,
     vulnerabilities_from_file,
 )
-from strix.platform.node_runner import StrixPlatformConversationSession, completion_gate_for_run, merge_task_context, send_runtime_checkpoint, stable_platform_run_name  # noqa: E402
+from strix.platform.node_runner import StrixPlatformConversationSession, build_instruction, completion_gate_for_run, merge_task_context, send_runtime_checkpoint, stable_platform_run_name  # noqa: E402
 from strix.core.inputs import build_root_task, build_scope_context  # noqa: E402
-from strix.profiles import infer_target_profile, load_target_profile  # noqa: E402
 from agents.tool_context import ToolContext  # noqa: E402
 from strix.core.agents import AgentCoordinator  # noqa: E402
 from strix.tools.agents_graph import tools as agent_tools  # noqa: E402
@@ -44,6 +44,34 @@ class FakeWebSocket:
 
     async def send(self, payload: str) -> None:
         self.sent.append(json.loads(payload))
+
+
+def write_closed_hypothesis(
+    state_dir: Path,
+    *,
+    hypothesis_id: str = "hyp-1",
+    coverage_id: str = "cov-1",
+    evidence_id: str = "ev-1",
+    endpoint: str = "GET http://target.local/",
+    vuln_type: str = "baseline",
+    phase: str | None = None,
+) -> None:
+    item = {
+        "hypothesis_id": hypothesis_id,
+        "endpoint": endpoint,
+        "parameter": "<none>",
+        "vuln_type": vuln_type,
+        "status": "tested",
+        "hypothesis": f"{endpoint} should be checked for {vuln_type}",
+        "test_strategy": "Execute the relevant test and compare evidence-backed behavior.",
+        "evidence_ids": [evidence_id],
+        "coverage_ids": [coverage_id],
+        "created_at": "2026-07-08T00:00:00+00:00",
+        "updated_at": "2026-07-08T00:00:01+00:00",
+    }
+    if phase:
+        item["phase"] = phase
+    (state_dir / "hypotheses.json").write_text(json.dumps([item]), encoding="utf-8")
 
 
 def test_node3_reporting_tool_is_used_by_vendored_strix():
@@ -195,15 +223,49 @@ def test_bridge_tool_output_includes_platform_card_fields():
 
     sent = asyncio.run(run_bridge())
 
-    assert [message["type"] for message in sent] == ["text", "tool_output", "tool_output"]
-    assert sent[0]["content"]["text"] == "Next: Running command: id."
-    assert sent[0]["content"]["metadata"]["tool_name"] == "exec_command"
-    assert sent[1]["display_title"] == "Exec Command"
-    assert sent[1]["category"] == "command"
-    assert sent[1]["command"] == "id"
-    assert sent[1]["args"] == {"cmd": "id"}
-    assert sent[2]["status"] == "done"
-    assert "uid=1000" in sent[2]["line"]
+    assert [message["type"] for message in sent] == ["tool_output", "tool_output"]
+    assert sent[0]["display_title"] == "Exec Command"
+    assert sent[0]["category"] == "command"
+    assert sent[0]["command"] == "id"
+    assert sent[0]["args"] == {"cmd": "id"}
+    assert sent[1]["status"] == "done"
+    assert "uid=1000" in sent[1]["line"]
+
+
+def test_bridge_forwards_agent_progress_text_by_default(monkeypatch):
+    monkeypatch.delenv("NODE3_FORWARD_STRIX_MESSAGES", raising=False)
+
+    class MessageItem:
+        type = "message_output_item"
+        raw_item = SimpleNamespace(content=[SimpleNamespace(text="I am mapping the application before testing endpoints.")])
+
+    class Event:
+        type = "run_item_stream_event"
+
+        def __init__(self, item):
+            self.item = item
+
+    async def run_bridge():
+        ws = FakeWebSocket()
+        task = {
+            "task_id": "task-1",
+            "conversation_id": "conv-1",
+            "target": {"value": "http://target.local"},
+            "scope": {},
+            "snapshot": {},
+        }
+        bridge = PlatformEventSink(ws, task)
+        pump = asyncio.create_task(bridge.pump())
+        bridge.sdk_event("agent-1", Event(MessageItem()))
+        await bridge.close()
+        await pump
+        return ws.sent
+
+    sent = asyncio.run(run_bridge())
+
+    assert [message["type"] for message in sent] == ["text"]
+    assert sent[0]["content"]["text"] == "I am mapping the application before testing endpoints."
+    assert sent[0]["content"]["metadata"] == {"agent_id": "agent-1"}
 
 
 def test_bridge_hides_successful_write_stdin_tool_output():
@@ -449,6 +511,57 @@ def test_bridge_checkpoint_includes_strix_state_artifacts(tmp_path):
 def test_runtime_checkpoint_includes_bound_todo_metadata(tmp_path):
     state_dir = tmp_path / ".state"
     state_dir.mkdir()
+    (state_dir / "agents.json").write_text(json.dumps({
+        "statuses": {"root": "running", "child": "running"},
+        "parent_of": {"root": None, "child": "root"},
+        "names": {"root": "strix", "child": "SQL Injection Specialist"},
+    }), encoding="utf-8")
+    (state_dir / "todos.json").write_text(json.dumps({
+        "root": {
+            "phase-1": {
+                "title": "Phase 1: Validation",
+                "priority": "high",
+                "status": "in_progress",
+                "created_at": "2026-07-06T09:59:00Z",
+                "updated_at": "2026-07-06T10:01:00Z",
+                "started_at": "2026-07-06T10:01:00Z",
+            },
+            "todo-1": {
+                "title": "Validate child task",
+                "priority": "normal",
+                "status": "in_progress",
+                "created_at": "2026-07-06T10:00:00Z",
+                "updated_at": "2026-07-06T10:01:00Z",
+                "started_at": "2026-07-06T10:01:00Z",
+                "linked_agent_id": "child",
+                "parent_todo_id": "phase-1",
+                "resolution_reason": "Agent ended with status stopped",
+            },
+        },
+        "child": {
+            "todo-2": {
+                "title": "Test POST /login for SQLi",
+                "priority": "high",
+                "status": "in_progress",
+                "created_at": "2026-07-06T10:00:30Z",
+                "updated_at": "2026-07-06T10:01:30Z",
+                "started_at": "2026-07-06T10:01:30Z",
+            },
+        },
+    }), encoding="utf-8")
+    task = {"task_id": "task-1", "conversation_id": "conv-1"}
+
+    payload = runtime_checkpoint(task, "run-1", str(tmp_path))
+
+    todos = payload["checkpoint"]["node3_strix"]["todos"]
+    assert [todo["id"] for todo in todos] == ["phase-1"]
+    assert todos[0]["status"] == "running"
+    assert todos[0]["started_at"] == "2026-07-06T10:01:00Z"
+
+
+def test_checkpoint_keeps_explicit_agent_bound_top_level_todo(tmp_path):
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
     (state_dir / "todos.json").write_text(json.dumps({
         "root": {
             "todo-1": {
@@ -462,14 +575,40 @@ def test_runtime_checkpoint_includes_bound_todo_metadata(tmp_path):
             },
         },
     }), encoding="utf-8")
+
+    todos = todos_from_file(state_dir / "todos.json")
+
+    assert len(todos) == 1
+    assert todos[0]["id"] == "todo-1"
+    assert todos[0]["linked_agent_id"] == "child"
+
+
+def test_runtime_checkpoint_reconciles_stale_bound_todo_status(tmp_path):
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    (state_dir / "agents.json").write_text(json.dumps({
+        "statuses": {"root": "waiting", "child": "stopped"},
+        "parent_of": {"root": None, "child": "root"},
+        "names": {"root": "strix", "child": "Validation Agent"},
+    }), encoding="utf-8")
+    (state_dir / "todos.json").write_text(json.dumps({
+        "root": {
+            "todo-1": {
+                "title": "Validate child task",
+                "priority": "normal",
+                "status": "in_progress",
+                "linked_agent_id": "child",
+            },
+        },
+    }), encoding="utf-8")
     task = {"task_id": "task-1", "conversation_id": "conv-1"}
 
     payload = runtime_checkpoint(task, "run-1", str(tmp_path))
 
-    todos = payload["checkpoint"]["node3_strix"]["todos"]
-    assert todos[0]["status"] == "running"
-    assert todos[0]["started_at"] == "2026-07-06T10:01:00Z"
-    assert todos[0]["linked_agent_id"] == "child"
+    assert payload["checkpoint"]["node3_strix"].get("todos", []) == []
+    persisted = json.loads((state_dir / "todos.json").read_text(encoding="utf-8"))
+    assert persisted["root"]["todo-1"]["status"] == "skipped"
+    assert persisted["root"]["todo-1"]["resolution_reason"] == "Agent ended with status stopped"
 
 
 def test_runtime_checkpoint_sends_interrupted_run_status(tmp_path):
@@ -503,12 +642,77 @@ def test_runtime_checkpoint_sends_interrupted_run_status(tmp_path):
     assert sent[0]["checkpoint"]["node3_strix"]["run"]["status"] == "interrupted"
 
 
+def test_platform_session_interrupt_cancels_run_and_marks_interrupted(tmp_path):
+    class FakeConfig:
+        pass
+
+    class FakeReportState:
+        vulnerability_reports = []
+
+        def __init__(self):
+            self.cleaned_status = None
+
+        def get_run_dir(self):
+            return tmp_path
+
+        def cleanup(self, status="stopped"):
+            self.cleaned_status = status
+            (tmp_path / "run.json").write_text(json.dumps({
+                "run_id": "run-1",
+                "run_name": "run-1",
+                "status": status,
+                "start_time": "2026-07-07T07:39:05Z",
+                "end_time": "2026-07-07T08:15:20Z",
+                "scan_mode": "quick",
+                "targets_info": [],
+                "llm_usage": {},
+            }), encoding="utf-8")
+
+    async def run():
+        ws = FakeWebSocket()
+        session = StrixPlatformConversationSession(
+            ws,
+            {"task_id": "task-1", "conversation_id": "conv-1", "scan_mode": "quick"},
+            FakeConfig(),
+        )
+        report_state = FakeReportState()
+        session.report_state = report_state
+        session.run_name = "run-1"
+        session.run_dir = str(tmp_path)
+        session.sink.set_run_context("run-1", str(tmp_path))
+        await session.coordinator.register("root", "root", None)
+        session.run_task = asyncio.create_task(asyncio.sleep(60))
+        await session.interrupt("user clicked stop")
+        return ws.sent, report_state.cleaned_status, session.run_task.done()
+
+    sent, cleaned_status, task_done = asyncio.run(run())
+
+    assert cleaned_status == "interrupted"
+    assert task_done is True
+    assert any(message["type"] == "checkpoint_update" for message in sent)
+    completion = next(message for message in sent if message["type"] == "task_complete")
+    assert completion["status"] == "interrupted"
+    assert json.loads((tmp_path / "run.json").read_text(encoding="utf-8"))["status"] == "interrupted"
+
+
 def test_stable_platform_run_name_is_deterministic():
     conversation_id = "8e4c637b-8431-48c8-b021-a9ece4c58c4d"
 
     assert stable_platform_run_name(conversation_id) == "conversation-8e4c637b-8431-48c8-b021-a9ece4c58c4d"
     assert stable_platform_run_name(conversation_id) == stable_platform_run_name(conversation_id.upper())
     assert stable_platform_run_name("") == "conversation-session"
+
+
+def test_build_instruction_uses_coverage_first_default():
+    instruction = build_instruction({"instruction": "Test http://target.local/"})
+    legacy_instruction = node3_main.build_instruction({"instruction": "Test http://target.local/"})
+
+    assert "coverage-first mode" in instruction
+    assert "coverage-first mode" in legacy_instruction
+    assert "benchmark-friendly" not in instruction
+    assert "benchmark-friendly" not in legacy_instruction
+    assert "prioritize confirmed" not in instruction
+    assert "prioritize confirmed" not in legacy_instruction
 
 
 def test_runtime_checkpoint_includes_session_metadata(tmp_path):
@@ -674,6 +878,7 @@ def test_completion_gate_blocks_caido_runs_until_sitemap_attempted(tmp_path):
     (state_dir / "coverage.json").write_text(json.dumps([
         {"coverage_id": "cov-1", "endpoint": "GET http://target.local/", "vuln_type": "baseline", "status": "tried", "evidence_ids": ["ev-1"]},
     ]), encoding="utf-8")
+    write_closed_hypothesis(state_dir, endpoint="GET http://target.local/", vuln_type="baseline")
     (state_dir / "evidence.json").write_text(json.dumps([
         {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "Baseline response"},
     ]), encoding="utf-8")
@@ -697,6 +902,11 @@ def test_completion_gate_passes_with_surface_coverage_and_evidence(tmp_path):
     (state_dir / "coverage.json").write_text(json.dumps([
         {"coverage_id": "cov-1", "endpoint": "POST /login", "parameter": "username", "vuln_type": "sql_injection", "status": "passed", "evidence_ids": ["ev-1"]},
     ]), encoding="utf-8")
+    write_closed_hypothesis(
+        state_dir,
+        endpoint="POST /login",
+        vuln_type="sql_injection",
+    )
     (state_dir / "evidence.json").write_text(json.dumps([
         {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "SQL error observed", "agent_id": "validator"},
     ]), encoding="utf-8")
@@ -748,6 +958,157 @@ def test_completion_gate_rejects_uncovered_attack_surface(tmp_path):
     assert gate["uncovered_attack_surfaces"][0]["surface_id"] == "as-2"
 
 
+def test_completion_gate_rejects_surface_without_hypothesis_matrix(tmp_path):
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    (state_dir / "attack_surface.json").write_text(json.dumps([
+        {"surface_id": "as-1", "kind": "url", "url": "http://target.local/", "method": "GET", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "coverage.json").write_text(json.dumps([
+        {"coverage_id": "cov-1", "endpoint": "GET http://target.local/", "vuln_type": "baseline", "status": "tried", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "evidence.json").write_text(json.dumps([
+        {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "Baseline response", "agent_id": "root"},
+    ]), encoding="utf-8")
+
+    gate = completion_gate_for_run(tmp_path)
+
+    assert gate["ok"] is False
+    assert "no hypothesis/test-matrix records" in gate["incomplete_reasons"]
+    assert gate["hypothesis_count"] == 0
+
+
+def test_completion_gate_rejects_surface_without_linked_hypothesis(tmp_path):
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    (state_dir / "attack_surface.json").write_text(json.dumps([
+        {"surface_id": "as-1", "kind": "api_endpoint", "url": "http://target.local/api/users", "method": "GET", "evidence_ids": ["ev-1"]},
+        {"surface_id": "as-2", "kind": "api_endpoint", "url": "http://target.local/api/orders", "method": "GET", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "coverage.json").write_text(json.dumps([
+        {"coverage_id": "cov-1", "endpoint": "GET /api/users", "vuln_type": "authorization", "status": "tried", "evidence_ids": ["ev-1"]},
+        {"coverage_id": "cov-2", "endpoint": "GET /api/orders", "vuln_type": "authorization", "status": "tried", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "hypotheses.json").write_text(json.dumps([
+        {
+            "hypothesis_id": "hyp-1",
+            "surface_id": "as-1",
+            "endpoint": "GET /api/users",
+            "parameter": "<none>",
+            "vuln_type": "authorization",
+            "status": "tested",
+            "hypothesis": "Users API should enforce authorization.",
+            "test_strategy": "Request with a low-privilege token.",
+            "evidence_ids": ["ev-1"],
+            "coverage_ids": ["cov-1"],
+        },
+    ]), encoding="utf-8")
+    (state_dir / "evidence.json").write_text(json.dumps([
+        {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "API responses"},
+    ]), encoding="utf-8")
+
+    gate = completion_gate_for_run(tmp_path)
+
+    assert gate["ok"] is False
+    assert "1 attack surface record(s) without hypothesis/test-matrix coverage" in gate["incomplete_reasons"]
+    assert gate["surface_hypothesis_gap_count"] == 1
+    assert gate["surface_hypothesis_gaps"][0]["surface_id"] == "as-2"
+
+
+def test_completion_gate_rejects_coverage_without_hypothesis_link(tmp_path):
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    (state_dir / "attack_surface.json").write_text(json.dumps([
+        {"surface_id": "as-1", "kind": "api_endpoint", "url": "http://target.local/api/users", "method": "GET", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "coverage.json").write_text(json.dumps([
+        {"coverage_id": "cov-1", "endpoint": "GET /api/users", "vuln_type": "authorization", "status": "tried", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "hypotheses.json").write_text(json.dumps([
+        {
+            "hypothesis_id": "hyp-1",
+            "surface_id": "as-1",
+            "endpoint": "GET /api/users",
+            "parameter": "<none>",
+            "vuln_type": "authorization",
+            "status": "skipped",
+            "hypothesis": "Users API should enforce authorization.",
+            "test_strategy": "Request with a low-privilege token.",
+            "notes": "Deferred to later batch.",
+        },
+    ]), encoding="utf-8")
+    (state_dir / "evidence.json").write_text(json.dumps([
+        {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "API response"},
+    ]), encoding="utf-8")
+
+    gate = completion_gate_for_run(tmp_path)
+
+    assert gate["ok"] is False
+    assert "1 coverage record(s) not linked to a hypothesis/test-matrix item" in gate["incomplete_reasons"]
+    assert gate["coverage_without_hypothesis_count"] == 1
+    assert gate["coverage_without_hypothesis"][0]["coverage_id"] == "cov-1"
+
+
+def test_completion_gate_rejects_unresolved_hypothesis_matrix_item(tmp_path):
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    (state_dir / "attack_surface.json").write_text(json.dumps([
+        {"surface_id": "as-1", "kind": "url", "url": "http://target.local/", "method": "GET", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "hypotheses.json").write_text(json.dumps([
+        {
+            "hypothesis_id": "hyp-1",
+            "endpoint": "GET http://target.local/",
+            "parameter": "<none>",
+            "vuln_type": "baseline",
+            "status": "planned",
+            "hypothesis": "Root route should be tested.",
+            "test_strategy": "Request root route and compare response.",
+        },
+    ]), encoding="utf-8")
+    (state_dir / "coverage.json").write_text(json.dumps([
+        {"coverage_id": "cov-1", "endpoint": "GET http://target.local/", "vuln_type": "baseline", "status": "tried", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "evidence.json").write_text(json.dumps([
+        {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "Baseline response", "agent_id": "root"},
+    ]), encoding="utf-8")
+
+    gate = completion_gate_for_run(tmp_path)
+
+    assert gate["ok"] is False
+    assert "1 unresolved hypothesis/test-matrix item(s)" in gate["incomplete_reasons"]
+    assert gate["hypothesis_gap_count"] == 1
+    assert "hypothesis is still planned" in gate["hypothesis_gaps"][0]["problems"]
+
+
+def test_completion_gate_ignores_out_of_scope_attack_surface_when_scope_known(tmp_path):
+    from strix.tools.workflow import initialize_workflow_state
+
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    initialize_workflow_state(
+        state_dir,
+        caido_available=False,
+        authorized_targets=[{"type": "web_application", "value": "http://target.local"}],
+    )
+    (state_dir / "attack_surface.json").write_text(json.dumps([
+        {"surface_id": "as-1", "kind": "url", "url": "http://target.local/", "method": "GET", "evidence_ids": ["ev-1"]},
+        {"surface_id": "as-2", "kind": "url", "url": "https://telemetry.example/status", "method": "GET", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "coverage.json").write_text(json.dumps([
+        {"coverage_id": "cov-1", "endpoint": "GET http://target.local/", "vuln_type": "baseline", "status": "tried", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    write_closed_hypothesis(state_dir, endpoint="GET http://target.local/", vuln_type="baseline")
+    (state_dir / "evidence.json").write_text(json.dumps([
+        {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "Baseline response", "agent_id": "root"},
+    ]), encoding="utf-8")
+
+    gate = completion_gate_for_run(tmp_path)
+
+    assert gate["ok"] is True
+    assert gate["uncovered_attack_surface_count"] == 0
+
+
 def test_completion_gate_rejects_external_discovered_endpoint_missing_from_attack_surface(tmp_path):
     from strix.tools.workflow import record_external_discoveries
 
@@ -777,6 +1138,33 @@ def test_completion_gate_rejects_external_discovered_endpoint_missing_from_attac
     assert "1 externally discovered endpoint(s) missing from attack surface" in gate["incomplete_reasons"]
     assert gate["external_discovery_gap_count"] == 1
     assert gate["external_discovery_gaps"][0]["url"] == "http://target.local/api/Products"
+
+
+def test_external_discovery_filters_out_of_scope_hosts(tmp_path):
+    from strix.tools.workflow import initialize_workflow_state, load_workflow_state, record_external_discoveries
+
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    initialize_workflow_state(
+        state_dir,
+        caido_available=True,
+        authorized_targets=[{"type": "web_application", "value": "http://target.local"}],
+    )
+    record_external_discoveries(
+        state_dir,
+        source="caido_sitemap",
+        discoveries=[
+            {"method": "GET", "url": "http://target.local/api/Users", "path": "/api/Users"},
+            {"method": "GET", "url": "https://telemetry.example/log", "path": "/log"},
+        ],
+    )
+
+    state = load_workflow_state(state_dir)
+
+    assert state["external_discovery_count"] == 1
+    assert state["external_discoveries"][0]["url"] == "http://target.local/api/Users"
+    assert state["out_of_scope_external_discovery_count"] == 1
+    assert state["out_of_scope_external_discoveries"] == {"telemetry.example": 1}
 
 
 def test_create_agent_blocks_vulnerability_agent_until_external_inventory_is_recorded(tmp_path):
@@ -829,6 +1217,67 @@ def test_create_agent_blocks_vulnerability_agent_until_external_inventory_is_rec
     assert blocked["workflow_gate"]["external_discovery_gaps"][0]["url"] == "http://target.local/api/Products"
 
 
+def test_create_agent_allows_confirmed_coverage_followup_despite_external_inventory_gap(tmp_path):
+    from strix.tools.workflow import record_external_discoveries
+
+    async def run():
+        state_dir = tmp_path / ".state"
+        state_dir.mkdir()
+        record_external_discoveries(
+            state_dir,
+            source="caido_sitemap",
+            discoveries=[
+                {"method": "GET", "url": "http://target.local/api/Users", "path": "/api/Users"},
+                {"method": "GET", "url": "http://target.local/api/Products", "path": "/api/Products"},
+            ],
+        )
+        (state_dir / "attack_surface.json").write_text(json.dumps([
+            {"surface_id": "as-1", "kind": "api_endpoint", "url": "http://target.local/api/Users", "method": "GET"},
+        ]), encoding="utf-8")
+        (state_dir / "coverage.json").write_text(json.dumps([
+            {
+                "coverage_id": "cov-1",
+                "endpoint": "GET http://target.local/api/Users",
+                "parameter": "role",
+                "vuln_type": "mass_assignment",
+                "status": "passed",
+                "result": "Mass assignment confirmed on role",
+            },
+        ]), encoding="utf-8")
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        todo_tools.hydrate_todos_from_disk(state_dir)
+
+        async def spawner(**kwargs):
+            await coordinator.register("child", kwargs["name"], kwargs["parent_ctx"]["agent_id"])
+            return {"success": True, "agent_id": "child", "name": kwargs["name"]}
+
+        ctx = ToolContext(
+            context={
+                "agent_id": "root",
+                "parent_id": None,
+                "state_dir": str(state_dir),
+                "coordinator": coordinator,
+                "spawn_child_agent": spawner,
+            },
+            tool_name="create_agent",
+            tool_call_id="call-agent",
+            tool_arguments="{}",
+        )
+        return json.loads(await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({
+                "name": "Mass Assignment Validation Agent",
+                "task": "Validate confirmed mass_assignment on GET /api/Users parameter role and record evidence",
+            }),
+        ))
+
+    allowed = asyncio.run(run())
+
+    assert allowed["success"] is True
+    assert allowed["agent_id"] == "child"
+
+
 def test_completion_gate_accepts_skipped_surface_with_reason(tmp_path):
     state_dir = tmp_path / ".state"
     state_dir.mkdir()
@@ -839,6 +1288,31 @@ def test_completion_gate_accepts_skipped_surface_with_reason(tmp_path):
     (state_dir / "coverage.json").write_text(json.dumps([
         {"coverage_id": "cov-1", "endpoint": "GET http://target.local/", "vuln_type": "baseline", "status": "tried", "evidence_ids": ["ev-1"]},
         {"coverage_id": "cov-2", "endpoint": "GET http://target.local/admin", "vuln_type": "access_control", "status": "skipped", "notes": "Out of scope for current role; admin credentials unavailable", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "hypotheses.json").write_text(json.dumps([
+        {
+            "hypothesis_id": "hyp-1",
+            "endpoint": "GET http://target.local/",
+            "parameter": "<none>",
+            "vuln_type": "baseline",
+            "status": "tested",
+            "hypothesis": "Homepage baseline behavior should be checked.",
+            "test_strategy": "Request homepage and compare response.",
+            "evidence_ids": ["ev-1"],
+            "coverage_ids": ["cov-1"],
+        },
+        {
+            "hypothesis_id": "hyp-2",
+            "endpoint": "GET http://target.local/admin",
+            "parameter": "<none>",
+            "vuln_type": "access_control",
+            "status": "skipped",
+            "hypothesis": "Admin endpoint may expose access-control issues.",
+            "test_strategy": "Attempt role-based access checks when credentials are available.",
+            "notes": "Out of scope for current role; admin credentials unavailable",
+            "evidence_ids": ["ev-1"],
+            "coverage_ids": ["cov-2"],
+        },
     ]), encoding="utf-8")
     (state_dir / "evidence.json").write_text(json.dumps([
         {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "Baseline response"},
@@ -851,34 +1325,104 @@ def test_completion_gate_accepts_skipped_surface_with_reason(tmp_path):
     assert gate["meaningful_coverage_count"] == 1
 
 
-def test_completion_gate_rejects_juice_shop_profile_missing_business_coverage(tmp_path):
+def test_completion_gate_matches_query_surface_to_path_coverage(tmp_path):
     state_dir = tmp_path / ".state"
     state_dir.mkdir()
-    (tmp_path / "run.json").write_text(json.dumps({
-        "scan_config": {"target_profile": {"name": "juice_shop"}},
-    }), encoding="utf-8")
     (state_dir / "attack_surface.json").write_text(json.dumps([
-        {"surface_id": "as-1", "kind": "auth_endpoint", "url": "http://target.local/rest/user/login", "method": "POST", "evidence_ids": ["ev-1"]},
+        {"surface_id": "as-1", "kind": "api_endpoint", "url": "http://target.local/rest/products/search?q={keyword}", "method": "GET", "evidence_ids": ["ev-1"]},
     ]), encoding="utf-8")
     (state_dir / "coverage.json").write_text(json.dumps([
-        {"coverage_id": "cov-1", "endpoint": "POST /rest/user/login", "vuln_type": "jwt_authentication", "status": "tried", "evidence_ids": ["ev-1"]},
+        {"coverage_id": "cov-1", "endpoint": "GET /rest/products/search", "parameter": "q", "vuln_type": "sql_injection", "status": "tried", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    write_closed_hypothesis(
+        state_dir,
+        endpoint="GET /rest/products/search",
+        vuln_type="sql_injection",
+    )
+    (state_dir / "evidence.json").write_text(json.dumps([
+        {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "Search SQLi proof"},
+    ]), encoding="utf-8")
+
+    gate = completion_gate_for_run(tmp_path)
+
+    assert gate["ok"] is True
+    assert gate["uncovered_attack_surface_count"] == 0
+
+
+def test_completion_gate_rejects_confirmed_coverage_without_vulnerability_report(tmp_path):
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    (state_dir / "attack_surface.json").write_text(json.dumps([
+        {"surface_id": "as-1", "kind": "api_endpoint", "url": "http://target.local/rest/products/search", "method": "GET", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "coverage.json").write_text(json.dumps([
+        {
+            "coverage_id": "cov-1",
+            "endpoint": "GET /rest/products/search",
+            "parameter": "q",
+            "vuln_type": "sql_injection",
+            "status": "passed",
+            "evidence_ids": ["ev-1"],
+            "result": "SQL injection confirmed",
+        },
     ]), encoding="utf-8")
     (state_dir / "evidence.json").write_text(json.dumps([
-        {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "Login baseline"},
+        {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "Search SQLi proof"},
     ]), encoding="utf-8")
 
     gate = completion_gate_for_run(tmp_path)
 
     assert gate["ok"] is False
-    assert gate["target_profile_name"] == "juice_shop"
-    assert gate["profile_coverage_gap_count"] >= 1
-    assert any("juice_shop profile coverage missing" in reason for reason in gate["incomplete_reasons"])
-    assert {gap["category"] for gap in gate["profile_coverage_gaps"]} >= {
-        "order_payment_business_flow",
-        "password_reset_security_question",
-        "captcha_feedback",
-        "profile_upload",
-    }
+    assert "1 confirmed coverage record(s) without vulnerability report" in gate["incomplete_reasons"]
+    assert gate["unreported_confirmed_coverage_count"] == 1
+    assert gate["unreported_confirmed_coverage"][0]["coverage_id"] == "cov-1"
+
+
+def test_completion_gate_matches_multi_method_coverage(tmp_path):
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    (state_dir / "attack_surface.json").write_text(json.dumps([
+        {"surface_id": "as-0", "kind": "url", "url": "http://target.local/", "method": "GET", "evidence_ids": ["ev-1"]},
+        {"surface_id": "as-1", "kind": "api_endpoint", "url": "http://target.local/socket.io/", "method": "GET", "evidence_ids": ["ev-1"]},
+        {"surface_id": "as-2", "kind": "api_endpoint", "url": "http://target.local/socket.io/", "method": "POST", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "coverage.json").write_text(json.dumps([
+        {"coverage_id": "cov-0", "endpoint": "GET http://target.local/", "parameter": "<none>", "vuln_type": "baseline", "status": "tried", "evidence_ids": ["ev-1"]},
+        {"coverage_id": "cov-1", "endpoint": "GET /socket.io/, POST /socket.io/", "parameter": "<none>", "vuln_type": "websocket", "status": "skipped", "notes": "Socket.IO was identified but not tested in this run", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "hypotheses.json").write_text(json.dumps([
+        {
+            "hypothesis_id": "hyp-0",
+            "endpoint": "GET http://target.local/",
+            "parameter": "<none>",
+            "vuln_type": "baseline",
+            "status": "tested",
+            "hypothesis": "Root route should be checked for baseline reachability.",
+            "test_strategy": "Request root route and record response evidence.",
+            "evidence_ids": ["ev-1"],
+            "coverage_ids": ["cov-0"],
+        },
+        {
+            "hypothesis_id": "hyp-1",
+            "endpoint": "GET /socket.io/, POST /socket.io/",
+            "parameter": "<none>",
+            "vuln_type": "websocket",
+            "status": "skipped",
+            "hypothesis": "Socket.IO routes may expose websocket risks.",
+            "test_strategy": "Inspect websocket handshake and authorization behavior.",
+            "notes": "Socket.IO was identified but not tested in this run",
+            "evidence_ids": ["ev-1"],
+            "coverage_ids": ["cov-1"],
+        },
+    ]), encoding="utf-8")
+    (state_dir / "evidence.json").write_text(json.dumps([
+        {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "Socket.IO observed"},
+    ]), encoding="utf-8")
+
+    gate = completion_gate_for_run(tmp_path)
+
+    assert gate["ok"] is True
+    assert gate["uncovered_attack_surface_count"] == 0
 
 
 def test_completion_gate_ignores_terminal_agent_orphan_todos(tmp_path):
@@ -900,6 +1444,7 @@ def test_completion_gate_ignores_terminal_agent_orphan_todos(tmp_path):
     (state_dir / "coverage.json").write_text(json.dumps([
         {"coverage_id": "cov-1", "endpoint": "GET http://target.local/", "vuln_type": "baseline", "status": "tried", "evidence_ids": ["ev-1"]},
     ]), encoding="utf-8")
+    write_closed_hypothesis(state_dir, endpoint="GET http://target.local/", vuln_type="baseline")
     (state_dir / "evidence.json").write_text(json.dumps([
         {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "Baseline response"},
     ]), encoding="utf-8")
@@ -914,6 +1459,43 @@ def test_completion_gate_ignores_terminal_agent_orphan_todos(tmp_path):
     assert gate["completion_warnings"] == [
         "1 unresolved task(s) ignored because their owner agent is terminal"
     ]
+
+
+def test_completion_gate_ignores_todos_bound_to_terminal_linked_agent(tmp_path):
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    (state_dir / "agents.json").write_text(json.dumps({
+        "statuses": {"root": "waiting", "child": "stopped"},
+        "parent_of": {"root": None, "child": "root"},
+        "names": {"root": "strix", "child": "Validation Agent"},
+    }), encoding="utf-8")
+    (state_dir / "todos.json").write_text(json.dumps({
+        "root": {
+            "todo-1": {
+                "title": "Validate endpoint",
+                "status": "in_progress",
+                "priority": "high",
+                "linked_agent_id": "child",
+            },
+        },
+    }), encoding="utf-8")
+    (state_dir / "attack_surface.json").write_text(json.dumps([
+        {"surface_id": "as-1", "kind": "url", "url": "http://target.local/", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    (state_dir / "coverage.json").write_text(json.dumps([
+        {"coverage_id": "cov-1", "endpoint": "GET http://target.local/", "vuln_type": "baseline", "status": "tried", "evidence_ids": ["ev-1"]},
+    ]), encoding="utf-8")
+    write_closed_hypothesis(state_dir, endpoint="GET http://target.local/", vuln_type="baseline")
+    (state_dir / "evidence.json").write_text(json.dumps([
+        {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "Baseline response"},
+    ]), encoding="utf-8")
+
+    gate = completion_gate_for_run(tmp_path)
+
+    assert gate["ok"] is True
+    assert gate["unfinished_count"] == 0
+    assert gate["ignored_unfinished_count"] == 1
+    assert "linked agent is stopped" in gate["ignored_unfinished_todos"][0]["ignore_reason"]
 
 
 def test_completion_gate_keeps_running_agent_todos_actionable(tmp_path):
@@ -968,17 +1550,33 @@ def test_completion_gate_reads_memory_from_sqlite_without_json_snapshots(tmp_pat
         ctx,
         json.dumps({"kind": "url", "url": "http://target.local/", "evidence_ids": [evidence_id]}),
     )))
+    hypothesis = json.loads(asyncio.run(memory_tools.record_hypothesis.on_invoke_tool(
+        ctx,
+        json.dumps({
+            "endpoint": "GET http://target.local/",
+            "vuln_type": "baseline",
+            "hypothesis": "Root route should be checked for baseline behavior.",
+            "test_strategy": "Request root route and record response evidence.",
+        }),
+    )))
     json.loads(asyncio.run(memory_tools.record_coverage.on_invoke_tool(
         ctx,
-        json.dumps({"endpoint": "GET http://target.local/", "vuln_type": "baseline", "status": "tried", "evidence_ids": [evidence_id]}),
+        json.dumps({
+            "endpoint": "GET http://target.local/",
+            "vuln_type": "baseline",
+            "status": "tried",
+            "evidence_ids": [evidence_id],
+            "hypothesis_id": hypothesis["hypothesis_id"],
+        }),
     )))
-    for filename in ("attack_surface.json", "coverage.json", "evidence.json"):
+    for filename in ("attack_surface.json", "hypotheses.json", "coverage.json", "evidence.json"):
         (state_dir / filename).unlink()
 
     gate = completion_gate_for_run(tmp_path)
 
     assert gate["ok"] is True
     assert gate["attack_surface_count"] == 1
+    assert gate["hypothesis_count"] == 1
     assert gate["meaningful_coverage_count"] == 1
     assert gate["evidence_count"] == 1
 
@@ -1182,9 +1780,24 @@ def test_finish_scan_allows_completed_memory_ledgers(monkeypatch, tmp_path):
         ctx_memory,
         json.dumps({"kind": "url", "url": "http://target.local/", "evidence_ids": [evidence_id]}),
     )))
+    hypothesis = json.loads(asyncio.run(memory_tools.record_hypothesis.on_invoke_tool(
+        ctx_memory,
+        json.dumps({
+            "endpoint": "GET http://target.local/",
+            "vuln_type": "baseline",
+            "hypothesis": "Root route should be checked for baseline behavior.",
+            "test_strategy": "Request root route and record response evidence.",
+        }),
+    )))
     json.loads(asyncio.run(memory_tools.record_coverage.on_invoke_tool(
         ctx_memory,
-        json.dumps({"endpoint": "GET http://target.local/", "vuln_type": "baseline", "status": "tried", "evidence_ids": [evidence_id]}),
+        json.dumps({
+            "endpoint": "GET http://target.local/",
+            "vuln_type": "baseline",
+            "status": "tried",
+            "evidence_ids": [evidence_id],
+            "hypothesis_id": hypothesis["hypothesis_id"],
+        }),
     )))
 
     class FakeReportState:
@@ -1286,59 +1899,30 @@ def test_merge_task_context_keeps_original_task_id():
     assert merged["scope"] == {"allow": ["http://target.local"]}
 
 
-def test_target_profile_loader_infers_dvwa_high():
-    profile_name = infer_target_profile(
-        {"instruction": "Run DVWA Docker in High security level"},
-        "http://host.docker.internal:8080",
-    )
-    profile = load_target_profile(profile_name)
-
-    assert profile_name == "dvwa_high"
-    assert profile is not None
-    assert "security=high" in profile.content
-
-
-def test_target_profile_loader_infers_juice_shop():
-    profile_name = infer_target_profile(
-        {"instruction": "Assess OWASP Juice Shop"},
-        "http://host.docker.internal:3000",
-    )
-    profile = load_target_profile(profile_name)
-
-    assert profile_name == "juice_shop"
-    assert profile is not None
-    assert "single-page application" in profile.content
-
-
-def test_target_profile_is_injected_into_root_task_and_scope_context():
-    profile = load_target_profile("dvwa_high")
-    assert profile is not None
+def test_target_profile_is_not_injected_into_root_task_or_scope_context():
     scan_config = {
         "targets": [{
             "type": "web_application",
             "details": {"target_url": "http://host.docker.internal:8080"},
         }],
         "target_profile": {
-            "name": profile.name,
-            "title": profile.title,
-            "content": profile.content,
+            "name": "dvwa_high",
+            "title": "DVWA High Profile",
+            "content": "This stale profile content must not reach the agent.",
         },
     }
 
     root_task = build_root_task(scan_config)
     scope_context = build_scope_context(scan_config)
 
-    assert "Target Profile:" in root_task
-    assert "DVWA High Profile" in root_task
-    assert scope_context["target_profile"]["name"] == "dvwa_high"
-    assert "security=high" in scope_context["target_profile"]["content"]
+    assert "Target Profile:" not in root_task
+    assert "DVWA High Profile" not in root_task
+    assert "target_profile" not in scope_context
 
 
-def test_agent_prompt_includes_target_profile(monkeypatch):
+def test_agent_prompt_excludes_target_profile(monkeypatch):
     from strix.agents import factory
 
-    profile = load_target_profile("dvwa_high")
-    assert profile is not None
     monkeypatch.setattr(
         factory,
         "load_settings",
@@ -1353,19 +1937,19 @@ def test_agent_prompt_includes_target_profile(monkeypatch):
             "authorization_source": "test",
             "authorized_targets": [{"type": "web_application", "value": "http://target.local"}],
             "target_profile": {
-                "name": profile.name,
-                "title": profile.title,
-                "content": profile.content,
+                "name": "dvwa_high",
+                "title": "DVWA High Profile",
+                "content": "This stale profile content must not reach the agent.",
             },
         },
     )
 
-    assert "TARGET PROFILE:" in agent.instructions
-    assert "DVWA High Profile" in agent.instructions
-    assert "security=high" in agent.instructions
+    assert "TARGET PROFILE:" not in agent.instructions
+    assert "DVWA High Profile" not in agent.instructions
+    assert "stale profile content" not in agent.instructions
 
 
-def test_node3_normalize_task_preserves_explicit_profile():
+def test_node3_normalize_task_drops_explicit_profile():
     class FakeConfig:
         scan_mode = "quick"
 
@@ -1378,7 +1962,7 @@ def test_node3_normalize_task_preserves_explicit_profile():
         FakeConfig(),
     )
 
-    assert task["target_profile"] == "juice_shop"
+    assert "target_profile" not in task
 
 
 def test_todo_tool_schema_accepts_array_inputs():
@@ -1476,10 +2060,28 @@ def test_agent_prompt_names_exec_command_not_execute_command(monkeypatch):
 
     assert "The shell execution tool is named `exec_command`" in agent.instructions
     assert "`execute_command` tool. Never call `execute_command`." in agent.instructions
-    assert "Do not call a tool named `agent_browser`" in agent.instructions
+    assert "Do not call tools named `agent_browser` or `agent-browser`" in agent.instructions
     assert "record_attack_surface" in agent.instructions
     assert "record_evidence" in agent.instructions
+    assert "record_hypothesis" in agent.instructions
     assert "record_coverage" in agent.instructions
+
+
+def test_agent_prompt_requires_real_progress_text_with_tool_calls(monkeypatch):
+    from strix.agents import factory
+
+    monkeypatch.setattr(
+        factory,
+        "load_settings",
+        lambda: SimpleNamespace(integrations=SimpleNamespace(perplexity_api_key="")),
+    )
+
+    agent = factory.build_strix_agent(is_root=True, chat_completions_tools=True)
+
+    assert "meaningful phase starts" in agent.instructions
+    assert "same assistant message" in agent.instructions
+    assert "actual plan and current workflow state" in agent.instructions
+    assert "not from the name or arguments of the tool" in agent.instructions
 
 
 def test_agent_shell_capability_exposes_only_exec_command(monkeypatch):
@@ -1519,8 +2121,63 @@ def test_agent_exposes_memory_ledger_tools(monkeypatch):
     agent = factory.build_strix_agent(is_root=False, chat_completions_tools=True)
     tool_names = {tool.name for tool in agent.tools}
 
-    assert {"record_evidence", "record_attack_surface", "record_coverage", "list_memory"} <= tool_names
+    assert {"record_evidence", "record_attack_surface", "record_hypothesis", "record_coverage", "list_memory"} <= tool_names
     assert "agent_browser" in tool_names
+    assert "agent-browser" in tool_names
+
+
+def test_agent_browser_direct_tool_call_returns_recovery_instruction():
+    from strix.tools.agent_browser.tool import agent_browser_cli
+
+    result = json.loads(asyncio.run(agent_browser_cli.on_invoke_tool(
+        ToolContext(
+            context={},
+            tool_name="agent-browser",
+            tool_call_id="call-browser",
+            tool_arguments="{}",
+        ),
+        json.dumps({"command": "open", "args": ["http://target.local"]}),
+    )))
+
+    assert result["success"] is False
+    assert "not an SDK function tool" in result["error"]
+    assert "exec_command" in result["next_step"]
+    assert "agent-browser" in result["next_step"]
+
+
+def test_failed_child_notifies_parent_to_stop_waiting():
+    from strix.core.execution import _notify_parent_on_failure
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.items: list[dict] = []
+
+        async def add_items(self, items):
+            self.items.extend(items)
+
+        async def get_items(self):
+            return list(self.items)
+
+    async def run_case():
+        coordinator = AgentCoordinator()
+        parent_session = FakeSession()
+        await coordinator.register("parent", "Parent Agent", None)
+        await coordinator.register("child", "XSS Validation Agent", "parent")
+        await coordinator.attach_runtime("parent", session=parent_session)
+
+        await _notify_parent_on_failure(coordinator, "child", "failed")
+
+        return coordinator, parent_session
+
+    coordinator, parent_session = asyncio.run(run_case())
+
+    assert coordinator.pending_counts["parent"] == 1
+    assert len(parent_session.items) == 1
+    content = parent_session.items[0]["content"]
+    assert "type=failure" in content
+    assert "[Agent failed]" in content
+    assert "XSS Validation Agent" in content
+    assert "retry the task with a new agent" in content
 
 
 def test_list_sitemap_ignores_non_numeric_scope_id():
@@ -1635,6 +2292,61 @@ def test_list_sitemap_records_workflow_attempt(monkeypatch, tmp_path):
     assert state["external_discoveries"][0]["path"] == "/api/Users"
 
 
+def test_list_sitemap_records_discovery_with_parent_origin(monkeypatch, tmp_path):
+    from strix.tools.proxy import tools as proxy_tools
+    from strix.tools.workflow import initialize_workflow_state, load_workflow_state, sitemap_expansion_gaps_from_state
+
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    initialize_workflow_state(
+        state_dir,
+        caido_available=True,
+        authorized_targets=[{"type": "web_application", "value": "http://target.local:3000"}],
+    )
+
+    async def fake_list_sitemap_with_client(*_args, **kwargs):
+        if kwargs.get("parent_id") == "domain-1":
+            return {
+                "success": True,
+                "entries": [
+                    {"id": "request-1", "kind": "REQUEST", "label": "Users", "has_descendants": False, "request": {"method": "GET", "path": "/api/Users", "status_code": 200}},
+                    {"id": "request-2", "kind": "REQUEST", "label": "Telemetry", "has_descendants": False, "request": {"method": "GET", "path": "/log", "status_code": 200}},
+                ],
+            }
+        return {
+            "success": True,
+            "entries": [
+                {"id": "domain-1", "kind": "DOMAIN", "label": "target.local", "has_descendants": True, "metadata": {"port": 3000}},
+                {"id": "domain-2", "kind": "DOMAIN", "label": "telemetry.example", "has_descendants": True},
+            ],
+        }
+
+    monkeypatch.setattr(proxy_tools.caido_api, "list_sitemap_with_client", fake_list_sitemap_with_client)
+    ctx = ToolContext(
+        context={"agent_id": "root", "state_dir": str(state_dir), "caido_client": object()},
+        tool_name="list_sitemap",
+        tool_call_id="call-sitemap",
+        tool_arguments="{}",
+    )
+
+    json.loads(asyncio.run(proxy_tools.list_sitemap.on_invoke_tool(ctx, json.dumps({}))))
+    root_state = load_workflow_state(state_dir)
+    assert [gap["id"] for gap in sitemap_expansion_gaps_from_state(root_state)] == ["domain-1"]
+
+    json.loads(asyncio.run(proxy_tools.list_sitemap.on_invoke_tool(
+        ctx,
+        json.dumps({"parent_id": "domain-1", "depth": "ALL"}),
+    )))
+    state = load_workflow_state(state_dir)
+
+    assert sitemap_expansion_gaps_from_state(state) == []
+    assert state["external_discovery_count"] == 2
+    assert {item["url"] for item in state["external_discoveries"]} == {
+        "http://target.local:3000/api/Users",
+        "http://target.local:3000/log",
+    }
+
+
 def test_list_sitemap_records_attempt_when_client_missing(tmp_path):
     from strix.tools.proxy import tools as proxy_tools
     from strix.tools.workflow import initialize_workflow_state, load_workflow_state
@@ -1713,6 +2425,126 @@ def test_memory_tools_persist_attack_surface_coverage_and_evidence(tmp_path):
         assert conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM attack_surface").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM coverage").fetchone()[0] == 1
+
+
+def test_memory_tools_persist_hypothesis_and_close_with_coverage(tmp_path):
+    from strix.tools.run_memory import tools as memory_tools
+
+    memory_tools.hydrate_memory_from_disk(tmp_path)
+    ctx = ToolContext(
+        context={"agent_id": "root", "state_dir": str(tmp_path)},
+        tool_name="record_hypothesis",
+        tool_call_id="call-hyp",
+        tool_arguments="{}",
+    )
+    evidence = json.loads(asyncio.run(memory_tools.record_evidence.on_invoke_tool(
+        ctx,
+        json.dumps({
+            "evidence_type": "http_trace",
+            "summary": "Search request returned normal response for SQLi probe",
+            "target": "GET http://target.local/rest/products/search?q=test",
+            "phase": "Phase 3: Injection Testing",
+        }),
+    )))
+    evidence_id = evidence["evidence_id"]
+    hypothesis = json.loads(asyncio.run(memory_tools.record_hypothesis.on_invoke_tool(
+        ctx,
+        json.dumps({
+            "endpoint": "GET http://target.local/rest/products/search",
+            "method": "GET",
+            "parameter": "q",
+            "vuln_type": "sql_injection",
+            "phase": "Phase 3: Injection Testing",
+            "hypothesis": "Search query may be injectable because q is reflected into product search behavior.",
+            "test_strategy": "Send error-based and boolean-differential probes and compare response bodies.",
+            "risk_reason": "Successful injection could expose product or user data.",
+        }),
+    )))
+    hypothesis_id = hypothesis["hypothesis_id"]
+    coverage = json.loads(asyncio.run(memory_tools.record_coverage.on_invoke_tool(
+        ctx,
+        json.dumps({
+            "endpoint": "GET http://target.local/rest/products/search",
+            "parameter": "q",
+            "vuln_type": "sql_injection",
+            "status": "failed",
+            "phase": "Phase 3: Injection Testing",
+            "hypothesis_id": hypothesis_id,
+            "evidence_ids": [evidence_id],
+            "result": "SQLi probes did not alter query semantics.",
+        }),
+    )))
+    gaps = json.loads(asyncio.run(memory_tools.list_memory.on_invoke_tool(
+        ctx,
+        json.dumps({"kind": "hypothesis_gaps"}),
+    )))
+    hypotheses = json.loads((tmp_path / "hypotheses.json").read_text(encoding="utf-8"))
+
+    assert hypothesis["success"] is True
+    assert coverage["success"] is True
+    assert hypotheses[0]["status"] == "tested"
+    assert hypotheses[0]["coverage_ids"] == [coverage["coverage"]["coverage_id"]]
+    assert hypotheses[0]["evidence_ids"] == [evidence_id]
+    assert gaps["total_count"] == 0
+    with sqlite3.connect(tmp_path / "run_memory.db") as conn:
+        assert conn.execute("SELECT COUNT(*) FROM hypotheses").fetchone()[0] == 1
+
+
+def test_record_coverage_requires_evidence_for_meaningful_result(tmp_path):
+    from strix.tools.run_memory import tools as memory_tools
+
+    memory_tools.hydrate_memory_from_disk(tmp_path)
+    ctx = ToolContext(
+        context={"agent_id": "root", "state_dir": str(tmp_path)},
+        tool_name="record_coverage",
+        tool_call_id="call-cov",
+        tool_arguments="{}",
+    )
+
+    result = json.loads(asyncio.run(memory_tools.record_coverage.on_invoke_tool(
+        ctx,
+        json.dumps({
+            "endpoint": "GET http://target.local/",
+            "vuln_type": "baseline",
+            "status": "failed",
+            "result": "No issue observed",
+        }),
+    )))
+
+    assert result["success"] is False
+    assert "requires evidence_ids" in result["error"]
+
+
+def test_record_attack_surface_skips_out_of_scope_targets(tmp_path):
+    from strix.tools.run_memory import tools as memory_tools
+    from strix.tools.workflow import initialize_workflow_state
+
+    initialize_workflow_state(
+        tmp_path,
+        caido_available=False,
+        authorized_targets=[{"type": "web_application", "value": "http://target.local"}],
+    )
+    memory_tools.hydrate_memory_from_disk(tmp_path)
+    ctx = ToolContext(
+        context={"agent_id": "root", "state_dir": str(tmp_path)},
+        tool_name="record_attack_surface",
+        tool_call_id="call-1",
+        tool_arguments="{}",
+    )
+
+    result = json.loads(asyncio.run(memory_tools.record_attack_surface.on_invoke_tool(
+        ctx,
+        json.dumps({
+            "kind": "external_domain",
+            "url": "https://telemetry.example/log",
+            "method": "GET",
+            "notes": "Observed in proxy traffic",
+        }),
+    )))
+
+    assert result["success"] is True
+    assert result["status"] == "skipped_out_of_scope"
+    assert json.loads((tmp_path / "attack_surface.json").read_text(encoding="utf-8")) == []
 
 
 def test_memory_tools_list_coverage_gaps(tmp_path):
@@ -1969,6 +2801,19 @@ def test_runtime_checkpoint_includes_memory_ledgers(tmp_path):
     (state_dir / "coverage.json").write_text(json.dumps([
         {"coverage_id": "cov-1", "endpoint": "POST http://target.local/login", "parameter": "username", "vuln_type": "sql_injection", "status": "passed", "evidence_ids": ["ev-1"]},
     ]), encoding="utf-8")
+    (state_dir / "hypotheses.json").write_text(json.dumps([
+        {
+            "hypothesis_id": "hyp-1",
+            "endpoint": "POST http://target.local/login",
+            "parameter": "username",
+            "vuln_type": "sql_injection",
+            "status": "tested",
+            "hypothesis": "Login username may be injectable.",
+            "test_strategy": "Send quote payload and inspect SQL error behavior.",
+            "evidence_ids": ["ev-1"],
+            "coverage_ids": ["cov-1"],
+        },
+    ]), encoding="utf-8")
     (state_dir / "evidence.json").write_text(json.dumps([
         {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "SQL error observed"},
     ]), encoding="utf-8")
@@ -1981,6 +2826,7 @@ def test_runtime_checkpoint_includes_memory_ledgers(tmp_path):
     node3_strix = event["checkpoint"]["node3_strix"]
 
     assert node3_strix["attack_surface"][0]["surface_id"] == "as-1"
+    assert node3_strix["hypotheses"][0]["hypothesis_id"] == "hyp-1"
     assert node3_strix["coverage"][0]["coverage_id"] == "cov-1"
     assert node3_strix["evidence"][0]["evidence_id"] == "ev-1"
 
@@ -2217,14 +3063,51 @@ def test_todo_must_be_in_progress_before_done(tmp_path):
         json.dumps({"todo_ids": [first_id, second_id]}),
     )))
     assert mixed_done["success"] is False
-    assert mixed_done["marked"] == [first_id]
-    assert mixed_done["errors"][0]["todo_id"] == second_id
+    assert mixed_done["marked"] == []
+    assert "advanced one at a time" in mixed_done["errors"][0]["error"]
 
     persisted = json.loads((tmp_path / "todos.json").read_text(encoding="utf-8"))
-    assert persisted["root"][first_id]["status"] == "done"
+    assert persisted["root"][first_id]["status"] == "in_progress"
     assert persisted["root"][first_id]["started_at"]
-    assert persisted["root"][first_id]["completed_at"]
+    assert not persisted["root"][first_id].get("completed_at")
     assert persisted["root"][second_id]["status"] == "pending"
+
+
+def test_todo_order_stays_stable_when_status_changes(tmp_path):
+    todo_tools.hydrate_todos_from_disk(tmp_path)
+    ctx = ToolContext(
+        context={"agent_id": "root"},
+        tool_name="create_todo",
+        tool_call_id="call-1",
+        tool_arguments="{}",
+    )
+    created_payload = json.loads(asyncio.run(todo_tools.create_todo.on_invoke_tool(
+        ctx,
+        json.dumps({"todos": [
+            {"title": "Phase 1: Recon", "priority": "normal"},
+            {"title": "Phase 2: Testing", "priority": "critical"},
+            {"title": "Phase 3: Reporting", "priority": "low"},
+        ]}),
+    )))
+    ordered_ids = [item["todo_id"] for item in created_payload["created"]]
+
+    asyncio.run(todo_tools.update_todo.on_invoke_tool(
+        ctx,
+        json.dumps({"updates": [{"todo_id": ordered_ids[1], "status": "in_progress"}]}),
+    ))
+    asyncio.run(todo_tools.mark_todo_done.on_invoke_tool(
+        ctx,
+        json.dumps({"todo_ids": [ordered_ids[1]]}),
+    ))
+    listed = json.loads(asyncio.run(todo_tools.list_todos.on_invoke_tool(
+        ctx,
+        json.dumps({}),
+    )))
+    projected = todos_from_file(tmp_path / "todos.json")
+
+    assert [item["todo_id"] for item in listed["todos"]] == ordered_ids
+    assert [item["id"] for item in projected] == ordered_ids
+    assert listed["todos"][1]["status"] == "done"
 
 
 def test_delete_todo_cannot_remove_unfinished_or_erase_history(tmp_path):
@@ -2289,15 +3172,23 @@ def test_bound_todo_helpers_complete_successful_child_task(tmp_path):
     assert created["linked_agent_id"] == "child"
 
     skipped = todo_tools.complete_bound_todos(linked_agent_id="child", success=False)
-    assert skipped == []
+    assert skipped[0]["status"] == "failed"
     pending = json.loads((tmp_path / "todos.json").read_text(encoding="utf-8"))
-    assert pending["root"][created["todo_id"]]["status"] == "in_progress"
+    assert pending["root"][created["todo_id"]]["status"] == "failed"
 
-    completed = todo_tools.complete_bound_todos(linked_agent_id="child", success=True)
-    assert completed[0]["todo_id"] == created["todo_id"]
+    created_success = todo_tools.create_bound_todo(
+        owner_agent_id="root",
+        title="Validate second endpoint",
+        description="Run focused checks",
+        priority="high",
+        linked_agent_id="child-success",
+    )
+    completed = todo_tools.complete_bound_todos(linked_agent_id="child-success", success=True)
+    assert completed[0]["todo_id"] == created_success["todo_id"]
     persisted = json.loads((tmp_path / "todos.json").read_text(encoding="utf-8"))
-    assert persisted["root"][created["todo_id"]]["status"] == "done"
-    assert persisted["root"][created["todo_id"]]["completed_at"]
+    assert persisted["root"][created["todo_id"]]["status"] == "failed"
+    assert persisted["root"][created_success["todo_id"]]["status"] == "done"
+    assert persisted["root"][created_success["todo_id"]]["completed_at"]
 
 
 def test_create_agent_enforces_recon_workflow_gate_for_root(tmp_path):
@@ -2358,6 +3249,57 @@ def test_create_agent_enforces_recon_workflow_gate_for_root(tmp_path):
     assert spawned == ["Sitemap Mapper", "XSS Agent"]
 
 
+def test_create_agent_rejects_unbounded_vulnerability_task(tmp_path):
+    async def run():
+        state_dir = tmp_path / ".state"
+        state_dir.mkdir()
+        (state_dir / "attack_surface.json").write_text(json.dumps([
+            {"surface_id": "as-1", "kind": "url", "url": "http://target.local/search", "method": "GET"},
+        ]), encoding="utf-8")
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        todo_tools.hydrate_todos_from_disk(state_dir)
+        spawned: list[str] = []
+
+        async def spawner(**kwargs):
+            child_id = f"child-{len(spawned) + 1}"
+            spawned.append(kwargs["name"])
+            await coordinator.register(child_id, kwargs["name"], kwargs["parent_ctx"]["agent_id"])
+            return {"success": True, "agent_id": child_id, "name": kwargs["name"]}
+
+        ctx = ToolContext(
+            context={
+                "agent_id": "root",
+                "parent_id": None,
+                "state_dir": str(state_dir),
+                "coordinator": coordinator,
+                "spawn_child_agent": spawner,
+            },
+            tool_name="create_agent",
+            tool_call_id="call-agent",
+            tool_arguments="{}",
+        )
+        blocked = json.loads(await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({
+                "name": "XSS Agent",
+                "task": "Validate XSS on /search and any other user input reflection points",
+            }),
+        ))
+        allowed = json.loads(await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({"name": "XSS Agent", "task": "Validate XSS on /search"}),
+        ))
+        return blocked, allowed, spawned
+
+    blocked, allowed, spawned = asyncio.run(run())
+
+    assert blocked["success"] is False
+    assert blocked["workflow_gate"]["reason"] == "Child testing task is too broad and can drift away from recorded attack surface"
+    assert allowed["success"] is True
+    assert spawned == ["XSS Agent"]
+
+
 def test_create_agent_creates_bound_parent_todo(tmp_path):
     async def run():
         coordinator = AgentCoordinator()
@@ -2405,6 +3347,150 @@ def test_create_agent_creates_bound_parent_todo(tmp_path):
     assert todo["linked_agent_id"] == "child"
 
 
+def test_create_agent_links_auto_todo_to_single_active_phase(tmp_path):
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        todo_tools.hydrate_todos_from_disk(tmp_path)
+        todo_ctx = ToolContext(
+            context={"agent_id": "root"},
+            tool_name="create_todo",
+            tool_call_id="call-todo",
+            tool_arguments="{}",
+        )
+        created = await todo_tools.create_todo.on_invoke_tool(
+            todo_ctx,
+            json.dumps({"todos": [{"title": "Validation phase", "priority": "high"}]}),
+        )
+        phase_id = json.loads(created)["created"][0]["todo_id"]
+        await todo_tools.update_todo.on_invoke_tool(
+            todo_ctx,
+            json.dumps({"updates": [{"todo_id": phase_id, "status": "in_progress"}]}),
+        )
+
+        async def spawner(**kwargs):
+            await coordinator.register("child", kwargs["name"], "root")
+            return {"success": True, "agent_id": "child", "name": kwargs["name"]}
+
+        ctx = ToolContext(
+            context={"agent_id": "root", "coordinator": coordinator, "spawn_child_agent": spawner},
+            tool_name="create_agent",
+            tool_call_id="call-agent",
+            tool_arguments="{}",
+        )
+        result = await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({"name": "XSS Agent", "task": "Validate XSS on /search"}),
+        )
+        return json.loads(result), phase_id
+
+    result, phase_id = asyncio.run(run())
+
+    assert result["success"] is True
+    child_todo_id = result["todo_id"]
+    persisted = json.loads((tmp_path / "todos.json").read_text(encoding="utf-8"))
+    assert persisted["root"][child_todo_id]["parent_todo_id"] == phase_id
+    assert persisted["root"][phase_id]["status"] == "in_progress"
+
+
+def test_root_top_level_todos_must_advance_one_phase_at_a_time(tmp_path):
+    async def run():
+        todo_tools.hydrate_todos_from_disk(tmp_path)
+        ctx = ToolContext(
+            context={"agent_id": "root", "parent_id": None},
+            tool_name="create_todo",
+            tool_call_id="call-todo",
+            tool_arguments="{}",
+        )
+        created = json.loads(await todo_tools.create_todo.on_invoke_tool(
+            ctx,
+            json.dumps({"todos": [
+                {"title": "Phase 1: Recon", "priority": "high"},
+                {"title": "Phase 2: Injection", "priority": "high"},
+                {"title": "Phase 3: Access Control", "priority": "high"},
+            ]}),
+        ))
+        ids = [item["todo_id"] for item in created["created"]]
+        bulk_start = json.loads(await todo_tools.update_todo.on_invoke_tool(
+            ctx,
+            json.dumps({"updates": [
+                {"todo_id": ids[0], "status": "in_progress"},
+                {"todo_id": ids[1], "status": "in_progress"},
+            ]}),
+        ))
+        single_start = json.loads(await todo_tools.update_todo.on_invoke_tool(
+            ctx,
+            json.dumps({"updates": [{"todo_id": ids[0], "status": "in_progress"}]}),
+        ))
+        bulk_done = json.loads(await todo_tools.mark_todo_done.on_invoke_tool(
+            ctx,
+            json.dumps({"todo_ids": ids[:2]}),
+        ))
+        return bulk_start, single_start, bulk_done
+
+    bulk_start, single_start, bulk_done = asyncio.run(run())
+
+    assert bulk_start["success"] is False
+    assert "advanced one at a time" in bulk_start["errors"][0]["error"]
+    assert single_start["success"] is True
+    assert bulk_done["success"] is False
+    assert "advanced one at a time" in bulk_done["errors"][0]["error"]
+
+
+def test_root_phase_done_requires_work_artifact_since_phase_start(tmp_path):
+    async def run():
+        state_dir = tmp_path / ".state"
+        state_dir.mkdir()
+        todo_tools.hydrate_todos_from_disk(state_dir)
+        ctx = ToolContext(
+            context={"agent_id": "root", "parent_id": None, "state_dir": str(state_dir)},
+            tool_name="create_todo",
+            tool_call_id="call-todo",
+            tool_arguments="{}",
+        )
+        created = json.loads(await todo_tools.create_todo.on_invoke_tool(
+            ctx,
+            json.dumps({"todos": [{"title": "Phase 4: Access Control Testing", "priority": "high"}]}),
+        ))
+        todo_id = created["created"][0]["todo_id"]
+        started = json.loads(await todo_tools.update_todo.on_invoke_tool(
+            ctx,
+            json.dumps({"updates": [{"todo_id": todo_id, "status": "in_progress"}]}),
+        ))
+        blocked = json.loads(await todo_tools.mark_todo_done.on_invoke_tool(
+            ctx,
+            json.dumps({"todo_ids": [todo_id]}),
+        ))
+
+        persisted = json.loads((state_dir / "todos.json").read_text(encoding="utf-8"))
+        started_at = datetime.fromisoformat(
+            persisted["root"][todo_id]["started_at"].replace("Z", "+00:00"),
+        )
+        artifact_at = (started_at + timedelta(seconds=1)).isoformat()
+        (state_dir / "coverage.json").write_text(json.dumps([{
+            "coverage_id": "cov-1",
+            "endpoint": "GET /api/BasketItems",
+            "vuln_type": "idor",
+            "status": "passed",
+            "result": "Authorization check tested with another account.",
+            "phase": "Phase 4: Access Control Testing",
+            "created_at": artifact_at,
+            "updated_at": artifact_at,
+        }]), encoding="utf-8")
+        completed = json.loads(await todo_tools.mark_todo_done.on_invoke_tool(
+            ctx,
+            json.dumps({"todo_ids": [todo_id]}),
+        ))
+        return started, blocked, completed
+
+    started, blocked, completed = asyncio.run(run())
+
+    assert started["success"] is True
+    assert blocked["success"] is False
+    assert "without phase-linked work artifacts" in blocked["errors"][0]["error"]
+    assert completed["success"] is True
+
+
 def test_create_agent_binds_existing_parent_todo(tmp_path):
     async def run():
         coordinator = AgentCoordinator()
@@ -2446,6 +3532,27 @@ def test_create_agent_binds_existing_parent_todo(tmp_path):
     assert len(persisted["root"]) == 1
     assert persisted["root"][todo_id]["status"] == "in_progress"
     assert persisted["root"][todo_id]["linked_agent_id"] == "child"
+
+
+def test_terminal_agent_status_resolves_bound_parent_todo(tmp_path):
+    async def run():
+        todo_tools.hydrate_todos_from_disk(tmp_path)
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        await coordinator.register("child", "child", "root")
+        created = todo_tools.create_bound_todo(
+            owner_agent_id="root",
+            title="Child assignment",
+            linked_agent_id="child",
+        )
+        await coordinator.set_status("child", "crashed")
+        return created["todo_id"]
+
+    todo_id = asyncio.run(run())
+
+    persisted = json.loads((tmp_path / "todos.json").read_text(encoding="utf-8"))
+    assert persisted["root"][todo_id]["status"] == "failed"
+    assert persisted["root"][todo_id]["resolution_reason"] == "Agent ended with status crashed"
 
 
 def test_create_agent_rejects_unknown_todo_before_spawning(tmp_path):
@@ -2679,8 +3786,9 @@ def test_agent_finish_failure_does_not_complete_bound_parent_todo(tmp_path):
 
     assert result["success"] is True
     assert result["completed_todo_ids"] == []
+    assert result["resolved_todo_ids"] == [todo_id]
     persisted = json.loads((tmp_path / "todos.json").read_text(encoding="utf-8"))
-    assert persisted["root"][todo_id]["status"] == "in_progress"
+    assert persisted["root"][todo_id]["status"] == "failed"
 
 
 def test_reporting_shim_calculates_cvss_and_persists(monkeypatch):
@@ -2915,6 +4023,117 @@ def test_create_vulnerability_report_requires_attack_surface_and_coverage(monkey
     assert no_coverage["success"] is False
     assert no_coverage["workflow_gate"]["reason"] == "The reported endpoint does not have a meaningful coverage record"
     assert valid["success"] is True
+    assert state.reports[0]["endpoint"] == "/sqli"
+
+
+def test_create_vulnerability_report_allows_specific_endpoint_when_unrelated_external_gap_exists(monkeypatch, tmp_path):
+    from strix.tools.run_memory import tools as memory_tools
+    from strix.tools.workflow import record_external_discoveries
+
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    memory_tools.hydrate_memory_from_disk(state_dir)
+    record_external_discoveries(
+        state_dir,
+        source="caido_sitemap",
+        discoveries=[
+            {"method": "GET", "url": "http://target.local/sqli", "path": "/sqli"},
+            {"method": "GET", "url": "http://target.local/unrecorded", "path": "/unrecorded"},
+        ],
+    )
+
+    class FakeReportState:
+        def __init__(self) -> None:
+            self.reports: list[dict] = []
+
+        def get_existing_vulnerabilities(self) -> list[dict]:
+            return []
+
+        def add_vulnerability_report(self, **kwargs):
+            self.reports.append(kwargs)
+            return "vuln-0001"
+
+    state = FakeReportState()
+
+    async def fake_check_duplicate(candidate, existing):
+        return {"is_duplicate": False}
+
+    async def run_case():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "strix", None)
+        await coordinator.register("validator", "SQL Validator", "root")
+        root_ctx = ToolContext(
+            context={"agent_id": "root", "state_dir": str(state_dir), "coordinator": coordinator},
+            tool_name="record_evidence",
+            tool_call_id="call-root-evidence",
+            tool_arguments="{}",
+        )
+        validator_ctx = ToolContext(
+            context={"agent_id": "validator", "state_dir": str(state_dir), "coordinator": coordinator},
+            tool_name="record_evidence",
+            tool_call_id="call-validator-evidence",
+            tool_arguments="{}",
+        )
+        root_evidence_id = json.loads(await memory_tools.record_evidence.on_invoke_tool(
+            root_ctx,
+            json.dumps({"evidence_type": "http_trace", "summary": "Root SQL injection proof"}),
+        ))["evidence_id"]
+        validator_evidence_id = json.loads(await memory_tools.record_evidence.on_invoke_tool(
+            validator_ctx,
+            json.dumps({"evidence_type": "http_trace", "summary": "Validator reproduced SQL injection"}),
+        ))["evidence_id"]
+        await memory_tools.record_attack_surface.on_invoke_tool(
+            root_ctx,
+            json.dumps({
+                "kind": "api_endpoint",
+                "url": "http://target.local/sqli",
+                "method": "GET",
+                "evidence_ids": [root_evidence_id],
+            }),
+        )
+        await memory_tools.record_coverage.on_invoke_tool(
+            root_ctx,
+            json.dumps({
+                "endpoint": "GET http://target.local/sqli",
+                "vuln_type": "sql_injection",
+                "status": "passed",
+                "evidence_ids": [root_evidence_id],
+                "result": "SQL injection confirmed",
+            }),
+        )
+        report_ctx = ToolContext(
+            context={"agent_id": "root", "state_dir": str(state_dir), "coordinator": coordinator},
+            tool_name="create_vulnerability_report",
+            tool_call_id="call-report",
+            tool_arguments="{}",
+        )
+        return json.loads(await node3_tool.create_vulnerability_report.on_invoke_tool(
+            report_ctx,
+            json.dumps({
+                "title": "SQL Injection",
+                "description": "SQL injection is confirmed.",
+                "impact": "An attacker can read database contents.",
+                "target": "http://target.local",
+                "technical_analysis": "The endpoint concatenates SQL.",
+                "poc_description": "Send a UNION payload.",
+                "poc_script_code": "print('poc')",
+                "remediation_steps": "Use prepared statements.",
+                "cvss_breakdown": {"AV": "N", "AC": "L", "PR": "N", "UI": "N", "S": "U", "C": "H", "I": "H", "A": "H"},
+                "endpoint": "/sqli",
+                "method": "GET",
+                "cwe": "CWE-89",
+                "evidence_ids": [root_evidence_id],
+                "validation_agent_id": "validator",
+                "validation_evidence_ids": [validator_evidence_id],
+            }),
+        ))
+
+    monkeypatch.setattr("strix.report.dedupe.check_duplicate", fake_check_duplicate)
+    monkeypatch.setattr("strix.report.state.get_global_report_state", lambda: state)
+
+    result = asyncio.run(run_case())
+
+    assert result["success"] is True
     assert state.reports[0]["endpoint"] == "/sqli"
 
 
@@ -3480,3 +4699,33 @@ def test_standalone_rejects_tui_flag_glued_to_target(monkeypatch, tmp_path):
             pass
         else:
             raise AssertionError("expected parser.error to exit")
+
+
+def test_agent_engineering_rules_prioritize_harness_over_restriction():
+    rules = (ROOT / "AGENTS.MD").read_text(encoding="utf-8")
+
+    assert "Harness Over Restriction" in rules
+    assert "Do not use target-specific profiles" in rules
+    assert "Do not make new gates, restrictions, tools, or validators the default answer" in rules
+    assert "Validator and reporting agents should follow candidate evidence" in rules
+
+
+def test_system_prompt_uses_discovery_first_multi_agent_workflow():
+    prompt = (NODE3 / "strix" / "agents" / "prompts" / "system_prompt.jinja").read_text(encoding="utf-8")
+
+    assert "PHASE 2 - HYPOTHESIS-DRIVEN DISCOVERY & TESTING" in prompt
+    assert "Discovery/testing workstreams -> Candidate validation -> Reporting" in prompt
+    assert "CREATE AGENTS FROM THE TEST MATRIX" in prompt
+    assert "Create new agents from recorded attack surfaces, planned hypotheses, candidate evidence" in prompt
+    assert "CREATE SPECIALIZED SUBAGENT for EACH vulnerability type" not in prompt
+    assert "Found SQL injection hint?" not in prompt
+    assert "SQL injection agent finds potential vulnerability in login form" not in prompt
+
+
+def test_create_agent_guidance_shapes_discovery_before_validation():
+    source = (NODE3 / "strix" / "tools" / "agents_graph" / "tools.py").read_text(encoding="utf-8")
+
+    assert "Good discovery/testing tasks cite recorded endpoints" in source
+    assert "Good validator tasks cite the candidate evidence" in source
+    assert "prefer discovery/testing children built" in source
+    assert "do not use validators as the first" in source

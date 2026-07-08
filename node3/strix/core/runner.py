@@ -107,7 +107,7 @@ async def run_strix_scan(
 
     from strix.tools.run_memory.tools import hydrate_memory_from_disk
     from strix.tools.notes.tools import hydrate_notes_from_disk
-    from strix.tools.todo.tools import hydrate_todos_from_disk
+    from strix.tools.todo.tools import hydrate_todos_from_disk, reconcile_bound_todos_with_agent_statuses
     from strix.tools.workflow import initialize_workflow_state
 
     hydrate_todos_from_disk(state_dir)
@@ -127,6 +127,13 @@ async def run_strix_scan(
                 f"Cannot resume scan {scan_id}: missing SDK session database at {agents_db}",
             )
         await coordinator.restore(snap)
+        raw_statuses = snap.get("statuses")
+        if isinstance(raw_statuses, dict):
+            agent_statuses = {
+                str(agent_id): str(status)
+                for agent_id, status in raw_statuses.items()
+            }
+            reconcile_bound_todos_with_agent_statuses(agent_statuses)
         for aid, parent in coordinator.parent_of.items():
             if parent is None:
                 root_id = aid
@@ -151,7 +158,12 @@ async def run_strix_scan(
         image=image,
         local_sources=local_sources or [],
     )
-    initialize_workflow_state(state_dir, caido_available=bundle.get("caido_client") is not None)
+    scope_context = build_scope_context(scan_config)
+    initialize_workflow_state(
+        state_dir,
+        caido_available=bundle.get("caido_client") is not None,
+        authorized_targets=scope_context.get("authorized_targets"),
+    )
     logger.info("Sandbox ready for scan %s", scan_id)
 
     sessions_to_close: list[SQLiteSession] = []
@@ -180,8 +192,6 @@ async def run_strix_scan(
             trace_include_sensitive_data=False,
         )
         hooks = ReportUsageHooks(model=resolved_model, max_budget_usd=max_budget_usd)
-
-        scope_context = build_scope_context(scan_config)
 
         root_agent = build_strix_agent(
             name="strix",
@@ -337,6 +347,13 @@ async def run_strix_scan(
             with contextlib.suppress(Exception):
                 await coordinator.set_status(root_id, "stopped")
         return None
+    except asyncio.CancelledError:
+        logger.info("Scan %s interrupted", scan_id)
+        if root_id is not None:
+            await coordinator.cancel_descendants(root_id)
+            with contextlib.suppress(Exception):
+                await coordinator.set_status(root_id, "stopped")
+        raise
     except BaseException:
         logger.exception("Strix scan %s failed", scan_id)
         if root_id is not None:

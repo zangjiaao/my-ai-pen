@@ -136,6 +136,7 @@ class AgentCoordinator:
             runtime = self.runtimes.setdefault(agent_id, AgentRuntime())
             runtime.wake.set()
         logger.info("agent.status %s=%s", agent_id, status)
+        self._resolve_terminal_bound_todos(agent_id, str(status))
         await self._maybe_snapshot()
 
     async def send(self, target_agent_id: str, message: dict[str, Any]) -> bool:
@@ -216,19 +217,57 @@ class AgentCoordinator:
             stream = runtime.stream
         if stream is not None:
             stream.cancel(mode="after_turn")
+        self._resolve_terminal_bound_todos(agent_id, "stopped")
         await self._maybe_snapshot()
+
+    def _resolve_terminal_bound_todos(self, agent_id: str, status: str) -> None:
+        todo_status = {
+            "failed": "failed",
+            "crashed": "failed",
+            "stopped": "skipped",
+        }.get(status)
+        if not todo_status:
+            return
+        try:
+            from strix.tools.todo.tools import resolve_bound_todos
+
+            resolved = resolve_bound_todos(
+                linked_agent_id=agent_id,
+                status=todo_status,
+                reason=f"Agent ended with status {status}",
+            )
+        except Exception:
+            logger.exception("failed to resolve bound todos for agent %s", agent_id)
+            return
+        if resolved:
+            logger.info(
+                "agent.status %s=%s resolved_bound_todos=%d",
+                agent_id,
+                status,
+                len(resolved),
+            )
 
     async def cancel_descendants(self, agent_id: str) -> None:
         tasks = []
+        stopped_agents: list[str] = []
         async with self._lock:
             for aid in reversed(self._subtree_order_locked(agent_id)):
                 task = self.runtimes.get(aid, AgentRuntime()).task
                 if task is not None and not task.done():
                     tasks.append(task)
+                if self.statuses.get(aid) not in TERMINAL_STATUSES:
+                    self.statuses[aid] = "stopped"
+                    self.pending_counts[aid] = 0
+                    self.runtimes.setdefault(aid, AgentRuntime()).wake.set()
+                    stopped_agents.append(aid)
         for task in tasks:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        for aid in stopped_agents:
+            self._resolve_terminal_bound_todos(aid, "stopped")
+        if stopped_agents:
+            await self._maybe_snapshot()
 
     async def cancel_descendants_graceful(self, agent_id: str) -> None:
         async with self._lock:

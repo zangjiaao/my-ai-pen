@@ -135,15 +135,21 @@ async def finish_scan(
        attack-surface and coverage ledger entries. If a discovered endpoint,
        form, auth route, admin route, upload point, API route, or service is
        missing from memory, record it before finishing.
-    4. Compare ``list_memory(kind="attack_surface")`` with
+    4. Call ``list_memory(kind="hypotheses")`` and
+       ``list_memory(kind="hypothesis_gaps")``. Every high-value attack
+       surface should have concrete hypotheses, and every hypothesis must be
+       tested, blocked, or skipped with linked coverage/evidence or concrete
+       notes.
+    5. Compare ``list_memory(kind="attack_surface")`` with
        ``list_memory(kind="coverage")``. Every discovered HTTP/API/form/auth/
        upload/service surface must have coverage, or an explicit
        ``blocked``/``skipped`` coverage entry with notes explaining why it
        could not be tested.
-    5. Each meaningful positive or negative test has a ``record_coverage``
-       entry. Confirmed vulnerability reports must cite real ``evidence_ids``
+    6. Each meaningful positive or negative test has a ``record_coverage``
+       entry. Prefer passing ``hypothesis_id`` so the test matrix closes.
+       Confirmed vulnerability reports must cite real ``evidence_ids``
        returned by ``record_evidence``; do not invent evidence IDs.
-    6. Don't double-report - one report per distinct vulnerability.
+    7. Don't double-report - one report per distinct vulnerability.
 
     **Calling this multiple times overwrites the previous report.**
     Make the single call comprehensive.
@@ -230,15 +236,61 @@ async def finish_scan(
 
     quality_gate = await asyncio.to_thread(_finish_quality_gate)
     if quality_gate is not None and not quality_gate.get("ok"):
+        confirmed_gap_count = int(quality_gate.get("unreported_confirmed_coverage_count") or 0)
+        uncovered_count = int(quality_gate.get("uncovered_attack_surface_count") or 0)
+        external_gap_count = int(quality_gate.get("external_discovery_gap_count") or 0)
+        hypothesis_gap_count = int(quality_gate.get("hypothesis_gap_count") or 0)
+        surface_hypothesis_gap_count = int(quality_gate.get("surface_hypothesis_gap_count") or 0)
+        unlinked_coverage_count = int(quality_gate.get("coverage_without_hypothesis_count") or 0)
+        hypothesis_count = int(quality_gate.get("hypothesis_count") or 0)
+        attack_surface_count = int(quality_gate.get("attack_surface_count") or 0)
+        if attack_surface_count and not hypothesis_count:
+            next_action = (
+                "Convert recorded attack surface into record_hypothesis test-matrix entries, then execute "
+                "the planned tests and close them with evidence-backed record_coverage"
+            )
+        elif surface_hypothesis_gap_count:
+            next_action = (
+                "Create concrete record_hypothesis test-matrix entries for every surface_hypothesis_gaps "
+                "entry before validating or reporting more findings"
+            )
+        elif hypothesis_gap_count:
+            next_action = (
+                "Resolve every hypothesis_gaps entry before trying finish_scan again; each hypothesis must be "
+                "tested, blocked, or skipped with linked coverage/evidence or concrete notes"
+            )
+        elif unlinked_coverage_count:
+            next_action = (
+                "Link every coverage_without_hypothesis entry to a planned hypothesis by passing "
+                "hypothesis_id to record_coverage or updating the hypothesis coverage_ids"
+            )
+        elif confirmed_gap_count:
+            next_action = (
+                "Create vulnerability reports for every unreported_confirmed_coverage entry before trying "
+                "finish_scan again; each report needs independent validation evidence"
+            )
+        elif uncovered_count:
+            next_action = (
+                "Continue endpoint-level testing for the uncovered_attack_surfaces entries before trying "
+                "finish_scan again; record coverage as passed, failed, tried, blocked, or skipped with evidence"
+            )
+        elif external_gap_count:
+            next_action = (
+                "Convert every external_discovery_gaps entry into record_attack_surface memory or mark it "
+                "out of scope before testing or finishing"
+            )
+        else:
+            next_action = "Record attack surface, coverage, evidence, and cite real evidence_ids before finishing"
         return json.dumps(
             {
                 "success": False,
                 "scan_completed": False,
                 "error": (
                     "Cannot finish scan because evidence and memory quality gates did not pass. "
-                    "Record attack surface, coverage, evidence, and cite real evidence_ids before finishing"
+                    + next_action
                 ),
                 "completion_gate": quality_gate,
+                "recommended_next_action": next_action,
             },
             ensure_ascii=False,
             default=str,

@@ -77,6 +77,28 @@ _DYNAMIC_PATH_HINTS = (
     "/security",
     "/review",
 )
+_UNBOUNDED_TASK_PHRASES = (
+    "any other",
+    "all endpoint",
+    "all api",
+    "all route",
+    "entire app",
+    "entire application",
+    "whole app",
+    "whole application",
+    "other user input",
+    "other input",
+)
+_RECORDED_WORK_FOLLOWUP_KEYWORDS = (
+    "confirm",
+    "confirmed",
+    "evidence",
+    "report",
+    "reproduce",
+    "validate",
+    "validation",
+    "verify",
+)
 
 
 def state_dir_from_raw(raw: Any) -> Path | None:
@@ -98,16 +120,21 @@ def _now() -> str:
 def _default_state(*, caido_available: bool = False) -> dict[str, Any]:
     return {
         "caido_available": bool(caido_available),
+        "authorized_targets": [],
+        "authorized_hosts": [],
         "sitemap_attempted": False,
         "sitemap_success": False,
         "sitemap_entry_count": 0,
         "sitemap_error": "",
         "sitemap_call_count": 0,
         "sitemap_branches": {},
+        "sitemap_entry_index": {},
         "sitemap_expandable_entries": [],
         "sitemap_expanded_parent_ids": [],
         "external_discoveries": [],
         "external_discovery_count": 0,
+        "out_of_scope_external_discoveries": {},
+        "out_of_scope_external_discovery_count": 0,
         "created_at": _now(),
         "updated_at": _now(),
     }
@@ -148,9 +175,21 @@ def save_workflow_state(state_dir: Path, state: dict[str, Any]) -> None:
     tmp_path.replace(path)
 
 
-def initialize_workflow_state(state_dir: Path, *, caido_available: bool) -> dict[str, Any]:
+def initialize_workflow_state(
+    state_dir: Path,
+    *,
+    caido_available: bool,
+    authorized_targets: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     state = load_workflow_state(state_dir)
     state["caido_available"] = bool(caido_available)
+    if authorized_targets is not None:
+        state["authorized_targets"] = [
+            dict(item)
+            for item in authorized_targets
+            if isinstance(item, dict)
+        ]
+        state["authorized_hosts"] = authorized_hosts_from_targets(authorized_targets)
     state.setdefault("created_at", _now())
     save_workflow_state(state_dir, state)
     return state
@@ -192,11 +231,16 @@ def mark_sitemap_attempt(
             total_count=total_count,
             has_more=has_more,
         )
-        _record_sitemap_expansion_state(state, entries or [], parent_id=parent_id, depth=depth)
+        parent_origin = _record_sitemap_expansion_state(
+            state,
+            entries or [],
+            parent_id=parent_id,
+            depth=depth,
+        )
         _record_external_discoveries_in_state(
             state,
             source="caido_sitemap",
-            discoveries=_discoveries_from_sitemap_entries(entries or []),
+            discoveries=_discoveries_from_sitemap_entries(entries or [], origin=parent_origin),
         )
     save_workflow_state(state_dir, state)
     return state
@@ -306,7 +350,9 @@ def discovered_inventory_gaps(
     discoveries = [
         item
         for item in workflow_state.get("external_discoveries") or []
-        if isinstance(item, dict) and _discovery_requires_surface(item)
+        if isinstance(item, dict)
+        and target_in_authorized_scope(workflow_state, item.get("url") or item.get("host") or item.get("path"))
+        and _discovery_requires_surface(item)
     ]
     if not discoveries:
         return []
@@ -359,6 +405,9 @@ def sitemap_pagination_gaps_from_state(state: dict[str, Any]) -> list[dict[str, 
     for branch_key, branch in branches.items():
         if not isinstance(branch, dict):
             continue
+        parent_id = branch.get("parent_id")
+        if parent_id and not target_in_authorized_scope(state, _sitemap_entry_origin(state, str(parent_id))):
+            continue
         total_pages = int(branch.get("total_pages") or 0)
         if total_pages <= 1:
             continue
@@ -371,7 +420,7 @@ def sitemap_pagination_gaps_from_state(state: dict[str, Any]) -> list[dict[str, 
         if missing:
             gaps.append({
                 "branch": branch_key,
-                "parent_id": branch.get("parent_id"),
+                "parent_id": parent_id,
                 "depth": branch.get("depth"),
                 "missing_pages": missing,
                 "total_pages": total_pages,
@@ -397,6 +446,8 @@ def sitemap_expansion_gaps_from_state(state: dict[str, Any]) -> list[dict[str, A
     for item in expandable:
         if not isinstance(item, dict):
             continue
+        if not target_in_authorized_scope(state, item.get("origin") or item.get("label")):
+            continue
         entry_id = str(item.get("id") or "").strip()
         if entry_id and entry_id not in expanded:
             gaps.append(item)
@@ -421,6 +472,51 @@ def _clean_url_target(value: Any) -> str:
     if text.startswith("/"):
         return text.rstrip("/").lower() or "/"
     return text.rstrip("/").lower()
+
+
+def authorized_hosts_from_targets(targets: list[dict[str, Any]] | None) -> list[str]:
+    hosts: set[str] = set()
+    for target in targets or []:
+        if not isinstance(target, dict):
+            continue
+        value = str(target.get("value") or target.get("target_url") or target.get("target_ip") or "").strip()
+        if not value:
+            continue
+        host = _host_from_target(value)
+        if host:
+            hosts.add(host)
+    return sorted(hosts)
+
+
+def target_in_authorized_scope(state: dict[str, Any] | None, value: Any) -> bool:
+    hosts = {
+        str(host).strip().lower()
+        for host in (state or {}).get("authorized_hosts") or []
+        if str(host).strip()
+    }
+    if not hosts:
+        return True
+    host = _host_from_target(value)
+    if not host:
+        return True
+    return host in hosts
+
+
+def _host_from_target(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    parsed = urlsplit(text)
+    netloc = parsed.netloc
+    if not netloc and "://" not in text and "/" not in text:
+        netloc = text
+    if not netloc:
+        return ""
+    return netloc.split("@", 1)[-1].lower()
+
+
+def _target_host(value: Any) -> str:
+    return _host_from_target(value)
 
 
 def _record_sitemap_page(
@@ -468,7 +564,8 @@ def _record_sitemap_expansion_state(
     *,
     parent_id: str | None,
     depth: str | None,
-) -> None:
+) -> str | None:
+    parent_origin = _sitemap_entry_origin(state, parent_id)
     if parent_id:
         expanded = {
             str(item)
@@ -478,8 +575,28 @@ def _record_sitemap_expansion_state(
         expanded.add(str(parent_id))
         state["sitemap_expanded_parent_ids"] = sorted(expanded)
 
+    index = state.setdefault("sitemap_entry_index", {})
+    if not isinstance(index, dict):
+        index = {}
+        state["sitemap_entry_index"] = index
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        entry_id = str(entry.get("id") or "").strip()
+        if not entry_id:
+            continue
+        origin = _origin_from_sitemap_entry(entry) or parent_origin
+        index[entry_id] = {
+            "id": entry_id,
+            "kind": entry.get("kind"),
+            "label": entry.get("label"),
+            "parent_id": parent_id,
+            "origin": origin,
+        }
+    state["sitemap_entry_index"] = index
+
     if str(depth or "DIRECT").upper() != "DIRECT":
-        return
+        return parent_origin
     existing = {
         str(item.get("id") or ""): item
         for item in state.get("sitemap_expandable_entries") or []
@@ -491,17 +608,26 @@ def _record_sitemap_expansion_state(
         entry_id = str(entry.get("id") or "").strip()
         if not entry_id:
             continue
+        origin = _origin_from_sitemap_entry(entry) or parent_origin
+        if not target_in_authorized_scope(state, origin or entry.get("label")):
+            continue
         existing[entry_id] = {
             "id": entry_id,
             "kind": entry.get("kind"),
             "label": entry.get("label"),
             "parent_id": parent_id,
             "source": "caido_sitemap",
+            "origin": origin,
         }
     state["sitemap_expandable_entries"] = list(existing.values())
+    return parent_origin
 
 
-def _discoveries_from_sitemap_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _discoveries_from_sitemap_entries(
+    entries: list[dict[str, Any]],
+    *,
+    origin: str | None = None,
+) -> list[dict[str, Any]]:
     discoveries: list[dict[str, Any]] = []
     for entry in entries:
         if not isinstance(entry, dict):
@@ -513,10 +639,13 @@ def _discoveries_from_sitemap_entries(entries: list[dict[str, Any]]) -> list[dic
         path = str(request.get("path") or "").strip()
         if not path:
             continue
+        entry_origin = _origin_from_sitemap_entry(entry) or origin
+        url = _url_from_origin_and_path(entry_origin, path)
         discoveries.append({
             "method": method or None,
             "path": path,
-            "url": None,
+            "url": url,
+            "host": _target_host(url or entry_origin),
             "sitemap_entry_id": entry.get("id"),
             "sitemap_kind": entry.get("kind"),
             "status_code": request.get("status_code"),
@@ -544,6 +673,7 @@ def _record_external_discoveries_in_state(
             "method": str(raw.get("method") or "").strip().upper() or None,
             "url": str(raw.get("url") or "").strip() or None,
             "path": str(raw.get("path") or "").strip() or None,
+            "host": str(raw.get("host") or "").strip().lower() or _target_host(raw.get("url")),
             "status_code": raw.get("status_code"),
             "source_request_id": raw.get("source_request_id"),
             "sitemap_entry_id": raw.get("sitemap_entry_id"),
@@ -552,6 +682,10 @@ def _record_external_discoveries_in_state(
             "updated_at": timestamp,
         }
         if not item["url"] and not item["path"]:
+            continue
+        scope_value = item["url"] or item["host"] or item["path"]
+        if not target_in_authorized_scope(state, scope_value):
+            _record_out_of_scope_external_discovery(state, item)
             continue
         key = _discovery_key(item)
         if not key:
@@ -576,6 +710,8 @@ def _discovery_key(item: dict[str, Any]) -> str:
 
 
 def _discovery_requires_surface(item: dict[str, Any]) -> bool:
+    if item.get("in_scope") is False:
+        return False
     target = str(item.get("url") or item.get("path") or "").strip()
     if not target:
         return False
@@ -589,6 +725,71 @@ def _discovery_requires_surface(item: dict[str, Any]) -> bool:
     if suffix in _STATIC_EXTENSIONS:
         return False
     return True
+
+
+def _record_out_of_scope_external_discovery(state: dict[str, Any], item: dict[str, Any]) -> None:
+    host = str(item.get("host") or _target_host(item.get("url")) or "<unknown>").strip().lower()
+    if not host:
+        host = "<unknown>"
+    summary = state.setdefault("out_of_scope_external_discoveries", {})
+    if not isinstance(summary, dict):
+        summary = {}
+        state["out_of_scope_external_discoveries"] = summary
+    summary[host] = int(summary.get(host) or 0) + 1
+    state["out_of_scope_external_discovery_count"] = sum(
+        int(count or 0)
+        for count in summary.values()
+    )
+
+
+def _sitemap_entry_origin(state: dict[str, Any], entry_id: str | None) -> str | None:
+    if not entry_id:
+        return None
+    index = state.get("sitemap_entry_index")
+    if not isinstance(index, dict):
+        return None
+    seen: set[str] = set()
+    current = str(entry_id)
+    while current and current not in seen:
+        seen.add(current)
+        item = index.get(current)
+        if not isinstance(item, dict):
+            return None
+        origin = str(item.get("origin") or "").strip()
+        if origin:
+            return origin
+        current = str(item.get("parent_id") or "").strip()
+    return None
+
+
+def _origin_from_sitemap_entry(entry: dict[str, Any]) -> str | None:
+    if str(entry.get("kind") or "").upper() != "DOMAIN":
+        return None
+    label = str(entry.get("label") or "").strip()
+    if not label:
+        return None
+    metadata = entry.get("metadata")
+    is_tls = isinstance(metadata, dict) and metadata.get("is_tls") is True
+    port = str(metadata.get("port") or "").strip() if isinstance(metadata, dict) else ""
+    scheme = "https" if is_tls else "http"
+    netloc = label
+    if port and ":" not in netloc and port not in {"80", "443"}:
+        netloc = f"{netloc}:{port}"
+    return f"{scheme}://{netloc}"
+
+
+def _url_from_origin_and_path(origin: str | None, path: str) -> str | None:
+    clean_path = str(path or "").strip()
+    if not origin or not clean_path:
+        return None
+    if _host_from_target(clean_path):
+        return clean_path
+    if not clean_path.startswith("/"):
+        clean_path = "/" + clean_path
+    parsed = urlsplit(origin)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    return urlunsplit((parsed.scheme, parsed.netloc, clean_path, "", ""))
 
 
 def _endpoint_variants(value: Any) -> set[str]:
@@ -605,6 +806,7 @@ def _endpoint_variants(value: Any) -> set[str]:
         if path != "/":
             path = path.rstrip("/")
         variants.add(urlunsplit(("", "", path, parsed.query, "")).lower())
+        variants.add(urlunsplit(("", "", path, "", "")).lower())
     return {variant for variant in variants if variant}
 
 
@@ -626,7 +828,7 @@ def coverage_gaps_for_state(state_dir: Path | None) -> list[dict[str, Any]]:
         from strix.platform.node_runner import uncovered_attack_surfaces
     except ImportError:
         return []
-    return uncovered_attack_surfaces(attack_surface, coverage)
+    return uncovered_attack_surfaces(attack_surface, coverage, load_workflow_state(state_dir))
 
 
 def _has_attack_surface_for_endpoint(state_dir: Path | None, endpoint: str | None, method: str | None) -> bool:
@@ -635,7 +837,9 @@ def _has_attack_surface_for_endpoint(state_dir: Path | None, endpoint: str | Non
     wanted_targets = _endpoint_variants(endpoint)
     wanted_method = str(method or "").strip().upper()
     for item in attack_surface_from_file(state_dir / "attack_surface.json"):
-        item_targets = _endpoint_variants(item.get("url") or item.get("address"))
+        item_targets: set[str] = set()
+        for candidate in (item.get("url"), item.get("address"), item.get("path"), item.get("endpoint")):
+            item_targets.update(_endpoint_variants(candidate))
         if not wanted_targets.intersection(item_targets):
             continue
         item_method = str(item.get("method") or "").strip().upper()
@@ -665,7 +869,77 @@ def _has_coverage_for_endpoint(state_dir: Path | None, endpoint: str | None, met
     return False
 
 
-def testing_preflight(state_dir: Path | None, *, require_attack_surface: bool = True) -> dict[str, Any]:
+def _task_mentions_recorded_surface(state_dir: Path | None, task: str | None) -> bool:
+    if state_dir is None or not task:
+        return False
+    text = str(task or "").lower()
+    for item in attack_surface_from_file(state_dir / "attack_surface.json"):
+        raw_candidates = [
+            item.get("url"),
+            item.get("address"),
+            item.get("path"),
+            item.get("endpoint"),
+        ]
+        variants: set[str] = set()
+        for candidate in raw_candidates:
+            variants.update(_endpoint_variants(candidate))
+        for variant in variants:
+            if variant and variant in text:
+                return True
+            parsed = urlsplit(variant)
+            if parsed.path and parsed.path != "/" and parsed.path.lower() in text:
+                return True
+    return False
+
+
+def _task_mentions_confirmed_coverage(state_dir: Path | None, task: str | None) -> bool:
+    if state_dir is None or not task:
+        return False
+    text = str(task or "").lower()
+    for item in coverage_from_file(state_dir / "coverage.json"):
+        if str(item.get("status") or "").strip().lower() != "passed":
+            continue
+        raw_candidates = [
+            item.get("endpoint"),
+            item.get("parameter"),
+            item.get("vuln_type"),
+            item.get("result"),
+        ]
+        for candidate in raw_candidates:
+            candidate_text = str(candidate or "").strip().lower()
+            if candidate_text and candidate_text in text:
+                return True
+        for variant in _endpoint_variants(item.get("endpoint")):
+            if variant and variant in text:
+                return True
+            parsed = urlsplit(variant)
+            if parsed.path and parsed.path != "/" and parsed.path.lower() in text:
+                return True
+    return False
+
+
+def _task_has_unbounded_scope(task: str | None) -> bool:
+    text = str(task or "").lower()
+    return any(phrase in text for phrase in _UNBOUNDED_TASK_PHRASES)
+
+
+def task_can_follow_recorded_work(state_dir: Path | None, task: str | None) -> bool:
+    if state_dir is None or not task:
+        return False
+    text = str(task or "").lower()
+    if _task_has_unbounded_scope(task):
+        return False
+    if not any(keyword in text for keyword in _RECORDED_WORK_FOLLOWUP_KEYWORDS):
+        return False
+    return _task_mentions_confirmed_coverage(state_dir, task)
+
+
+def testing_preflight(
+    state_dir: Path | None,
+    *,
+    require_attack_surface: bool = True,
+    planned_task: str | None = None,
+) -> dict[str, Any]:
     if state_dir is None:
         return {"ok": True, "workflow_state": load_workflow_state(None)}
     gate = sitemap_gate(state_dir)
@@ -697,16 +971,49 @@ def testing_preflight(state_dir: Path | None, *, require_attack_surface: bool = 
                     "Create or update endpoint-level todos from the completed attack-surface inventory",
                 ],
             }
+        if planned_task and _task_has_unbounded_scope(planned_task):
+            return {
+                "ok": False,
+                "reason": "Child testing task is too broad and can drift away from recorded attack surface",
+                "workflow_state": gate.get("workflow_state"),
+                "recommended_next_steps": [
+                    "Split the child task into specific endpoint or business-flow tasks",
+                    "Remove open-ended scope such as 'any other endpoint' or 'all inputs'",
+                    "Bind each child task to recorded attack surface entries",
+                ],
+            }
+        if planned_task and not _task_mentions_recorded_surface(state_dir, planned_task):
+            return {
+                "ok": False,
+                "reason": "Child testing task is not bound to a recorded attack surface",
+                "workflow_state": gate.get("workflow_state"),
+                "recommended_next_steps": [
+                    "Reference the specific endpoint, method, parameter, form, service, or business flow in the child task",
+                    "Create or update attack-surface records before delegating testing",
+                    "Avoid vulnerability-category-only tasks such as generic SQLi or XSS testing",
+                ],
+            }
     return {"ok": True, "workflow_state": gate.get("workflow_state")}
 
 
 def reporting_preflight(state_dir: Path | None, *, endpoint: str | None, method: str | None) -> dict[str, Any]:
     if state_dir is None:
         return {"ok": True}
-    gate = testing_preflight(state_dir, require_attack_surface=True)
-    if not gate.get("ok"):
-        return gate
-    if endpoint and not _has_attack_surface_for_endpoint(state_dir, endpoint, method):
+    if not endpoint:
+        return testing_preflight(state_dir, require_attack_surface=True)
+    attack_surface_count = len(attack_surface_from_file(state_dir / "attack_surface.json"))
+    if attack_surface_count <= 0:
+        return {
+            "ok": False,
+            "reason": "No attack surface records exist yet",
+            "endpoint": endpoint,
+            "method": method,
+            "recommended_next_steps": [
+                "Call record_attack_surface for this endpoint before reporting",
+                "Then record endpoint coverage with record_coverage",
+            ],
+        }
+    if not _has_attack_surface_for_endpoint(state_dir, endpoint, method):
         return {
             "ok": False,
             "reason": "The reported endpoint is not present in attack surface memory",
@@ -717,7 +1024,7 @@ def reporting_preflight(state_dir: Path | None, *, endpoint: str | None, method:
                 "Then record endpoint coverage with record_coverage",
             ],
         }
-    if endpoint and not _has_coverage_for_endpoint(state_dir, endpoint, method):
+    if not _has_coverage_for_endpoint(state_dir, endpoint, method):
         return {
             "ok": False,
             "reason": "The reported endpoint does not have a meaningful coverage record",

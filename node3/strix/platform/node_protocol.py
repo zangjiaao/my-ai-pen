@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from strix.report.state import ReportState
-from strix.tools.run_memory.tools import attack_surface_from_file, coverage_from_file, evidence_from_file
+from strix.tools.run_memory.tools import attack_surface_from_file, coverage_from_file, evidence_from_file, hypotheses_from_file
 
 
 MAX_TOOL_OUTPUT_CHARS = 4000
@@ -28,7 +28,7 @@ class PlatformEventSink:
         self.run_name = ""
         self.run_dir = ""
         self.scan_completed_callback: Callable[[], None] | None = None
-        self.forward_raw_messages = truthy(os.getenv("NODE3_FORWARD_STRIX_MESSAGES"))
+        self.forward_raw_messages = not falsey(os.getenv("NODE3_FORWARD_STRIX_MESSAGES", "1"))
         self._closed = False
 
     def set_run_context(self, run_name: str, run_dir: str) -> None:
@@ -363,6 +363,7 @@ def checkpoint(
     todos: list[dict[str, Any]] | None = None,
     notes: list[dict[str, Any]] | None = None,
     attack_surface: list[dict[str, Any]] | None = None,
+    hypotheses: list[dict[str, Any]] | None = None,
     coverage: list[dict[str, Any]] | None = None,
     evidence: list[dict[str, Any]] | None = None,
     vulnerabilities: list[dict[str, Any]] | None = None,
@@ -379,6 +380,8 @@ def checkpoint(
         node3_strix["notes"] = normalize_notes(notes)
     if attack_surface:
         node3_strix["attack_surface"] = normalize_attack_surface(attack_surface)
+    if hypotheses:
+        node3_strix["hypotheses"] = normalize_hypotheses(hypotheses)
     if coverage:
         node3_strix["coverage"] = normalize_coverage(coverage)
     if evidence:
@@ -402,8 +405,10 @@ def runtime_checkpoint(
 ) -> dict[str, Any]:
     run_path = Path(run_dir)
     state_dir = run_path / ".state"
+    snapshot_agents = agent_graph_from_file(state_dir / "agents.json")
+    reconcile_terminal_bound_todos(state_dir, snapshot_agents)
     agents = merge_agent_activity(
-        agent_graph_from_file(state_dir / "agents.json"),
+        snapshot_agents,
         list(fallback_agents or []),
     )
     vulnerabilities = vulnerabilities_from_file(run_path / "vulnerabilities.json")
@@ -414,13 +419,38 @@ def runtime_checkpoint(
         run_dir,
         run=run_summary,
         agents=agents,
-        todos=todos_from_file(state_dir / "todos.json"),
+        todos=todos_from_file(
+            state_dir / "todos.json",
+            platform_visible=True,
+            agents=agents,
+        ),
         notes=notes_from_file(state_dir / "notes.json"),
         attack_surface=attack_surface_from_file(state_dir / "attack_surface.json"),
+        hypotheses=hypotheses_from_file(state_dir / "hypotheses.json"),
         coverage=coverage_from_file(state_dir / "coverage.json"),
         evidence=evidence_from_file(state_dir / "evidence.json"),
         vulnerabilities=vulnerabilities,
     )
+
+
+def reconcile_terminal_bound_todos(state_dir: Path, agents: list[dict[str, Any]]) -> None:
+    agent_statuses = {
+        string_value(agent.get("id") or agent.get("agent_id")): string_value(agent.get("status"))
+        for agent in agents
+        if string_value(agent.get("id") or agent.get("agent_id"))
+    }
+    if not agent_statuses:
+        return
+    try:
+        from strix.tools.todo.tools import (
+            hydrate_todos_from_disk,
+            reconcile_bound_todos_with_agent_statuses,
+        )
+
+        hydrate_todos_from_disk(state_dir)
+        reconcile_bound_todos_with_agent_statuses(agent_statuses)
+    except Exception:
+        return
 
 
 def agent_graph_from_file(path: Path) -> list[dict[str, Any]]:
@@ -482,9 +512,23 @@ def merge_agent_activity(
     return sort_agent_items([normalize_agent_item(agent) for agent in merged if isinstance(agent, dict)])
 
 
-def todos_from_file(path: Path) -> list[dict[str, Any]]:
+def todos_from_file(
+    path: Path,
+    *,
+    platform_visible: bool = False,
+    agents: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     raw = json_from_file(path)
-    return normalize_todos(raw)
+    root_agent_ids: set[str] | None = None
+    if platform_visible:
+        graph = agents if agents is not None else agent_graph_from_file(path.with_name("agents.json"))
+        root_agent_ids = {
+            str(agent.get("id") or agent.get("agent_id") or "")
+            for agent in graph
+            if str(agent.get("id") or agent.get("agent_id") or "").strip()
+            and not str(agent.get("parent_id") or "").strip()
+        }
+    return normalize_todos(raw, root_agent_ids=root_agent_ids, platform_visible=platform_visible)
 
 
 def notes_from_file(path: Path) -> list[dict[str, Any]]:
@@ -579,33 +623,62 @@ def sort_agent_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(items, key=lambda item: (depth(item), str(item.get("parent_id") or ""), str(item.get("name") or ""), str(item.get("id") or "")))
 
 
-def normalize_todos(raw: Any) -> list[dict[str, Any]]:
+def normalize_todos(
+    raw: Any,
+    *,
+    root_agent_ids: set[str] | None = None,
+    platform_visible: bool = False,
+) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     if isinstance(raw, list):
-        candidates = [(None, item.get("id"), item) for item in raw if isinstance(item, dict)]
+        candidates = [
+            (index, None, item.get("id"), item)
+            for index, item in enumerate(raw)
+            if isinstance(item, dict)
+        ]
     elif isinstance(raw, dict):
         candidates = []
+        index = 0
         for agent_id, agent_todos in raw.items():
             if isinstance(agent_todos, dict):
-                candidates.extend((str(agent_id), todo_id, item) for todo_id, item in agent_todos.items() if isinstance(item, dict))
+                for todo_id, item in agent_todos.items():
+                    if isinstance(item, dict):
+                        candidates.append((index, str(agent_id), todo_id, item))
+                        index += 1
             elif isinstance(agent_todos, list):
-                candidates.extend((str(agent_id), item.get("id"), item) for item in agent_todos if isinstance(item, dict))
+                for item in agent_todos:
+                    if isinstance(item, dict):
+                        candidates.append((index, str(agent_id), item.get("id"), item))
+                        index += 1
     else:
         candidates = []
 
-    for agent_id, todo_id, item in candidates:
+    for source_index, agent_id, todo_id, item in candidates:
+        normalized_agent_id = string_value(item.get("agent_id") or agent_id)
+        if platform_visible and root_agent_ids and normalized_agent_id not in root_agent_ids:
+            continue
+        if _is_internal_tracking_todo(item, platform_visible=platform_visible):
+            continue
+        raw_order = item.get("order_index")
+        try:
+            order_index = int(raw_order)
+        except (TypeError, ValueError):
+            order_index = source_index
         normalized = {
             "id": string_value(item.get("id") or todo_id) or safe_id(item.get("title") or "todo"),
-            "agent_id": string_value(item.get("agent_id") or agent_id),
+            "agent_id": normalized_agent_id,
             "title": string_value(item.get("title")) or "Untitled task",
             "description": string_value(item.get("description")),
             "priority": string_value(item.get("priority")) or "normal",
             "status": normalize_todo_status(item.get("status")),
+            "order_index": order_index,
             "created_at": string_value(item.get("created_at")),
             "updated_at": string_value(item.get("updated_at")),
             "completed_at": string_value(item.get("completed_at")),
             "started_at": string_value(item.get("started_at")),
             "linked_agent_id": string_value(item.get("linked_agent_id")),
+            "parent_todo_id": string_value(item.get("parent_todo_id")),
+            "resolution_reason": string_value(item.get("resolution_reason")),
             "surface_id": string_value(item.get("surface_id")),
             "endpoint": string_value(item.get("endpoint")),
             "method": string_value(item.get("method")),
@@ -615,7 +688,15 @@ def normalize_todos(raw: Any) -> list[dict[str, Any]]:
             "archived_at": string_value(item.get("archived_at")),
         }
         items.append(normalized)
-    return sorted(items, key=lambda item: (priority_rank(item.get("priority")), str(item.get("created_at") or ""), str(item.get("title") or "")))
+    return sorted(items, key=lambda item: (int(item.get("order_index") or 0), str(item.get("created_at") or ""), str(item.get("id") or "")))
+
+
+def _is_internal_tracking_todo(item: dict[str, Any], *, platform_visible: bool = False) -> bool:
+    if item.get("internal_tracking"):
+        return True
+    if platform_visible and string_value(item.get("linked_agent_id")):
+        return True
+    return bool(string_value(item.get("linked_agent_id"))) and bool(string_value(item.get("parent_todo_id")))
 
 
 def normalize_notes(raw: Any) -> list[dict[str, Any]]:
@@ -664,6 +745,43 @@ def normalize_attack_surface(raw: Any) -> list[dict[str, Any]]:
             "role": string_value(item.get("role")),
             "source": string_value(item.get("source")),
             "evidence_ids": [str(eid) for eid in evidence_ids[:20] if str(eid).strip()],
+            "phase": string_value(item.get("phase")),
+            "notes": string_value(item.get("notes")),
+            "agent_id": string_value(item.get("agent_id")),
+            "created_at": string_value(item.get("created_at")),
+            "updated_at": string_value(item.get("updated_at")),
+        })
+    return sorted(items, key=lambda item: str(item.get("created_at") or ""))
+
+
+def normalize_hypotheses(raw: Any) -> list[dict[str, Any]]:
+    if isinstance(raw, dict):
+        raw_items = raw.get("hypotheses") or raw.get("items") or list(raw.values())
+    else:
+        raw_items = raw
+    if not isinstance(raw_items, list):
+        return []
+    items = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        evidence_ids = item.get("evidence_ids") if isinstance(item.get("evidence_ids"), list) else []
+        coverage_ids = item.get("coverage_ids") if isinstance(item.get("coverage_ids"), list) else []
+        items.append({
+            "hypothesis_id": string_value(item.get("hypothesis_id") or item.get("id")) or safe_id(item.get("hypothesis") or "hypothesis"),
+            "surface_id": string_value(item.get("surface_id")),
+            "endpoint": string_value(item.get("endpoint")),
+            "method": string_value(item.get("method")),
+            "parameter": string_value(item.get("parameter")) or "<none>",
+            "vuln_type": string_value(item.get("vuln_type")),
+            "auth_state": string_value(item.get("auth_state")),
+            "phase": string_value(item.get("phase")),
+            "hypothesis": string_value(item.get("hypothesis")),
+            "test_strategy": string_value(item.get("test_strategy")),
+            "risk_reason": string_value(item.get("risk_reason")),
+            "status": string_value(item.get("status")) or "planned",
+            "evidence_ids": [str(eid) for eid in evidence_ids[:20] if str(eid).strip()],
+            "coverage_ids": [str(cid) for cid in coverage_ids[:20] if str(cid).strip()],
             "notes": string_value(item.get("notes")),
             "agent_id": string_value(item.get("agent_id")),
             "created_at": string_value(item.get("created_at")),
@@ -691,6 +809,8 @@ def normalize_coverage(raw: Any) -> list[dict[str, Any]]:
             "vuln_type": string_value(item.get("vuln_type")),
             "status": string_value(item.get("status")) or "planned",
             "auth_state": string_value(item.get("auth_state")),
+            "hypothesis_id": string_value(item.get("hypothesis_id")),
+            "phase": string_value(item.get("phase")),
             "evidence_ids": [str(eid) for eid in evidence_ids[:20] if str(eid).strip()],
             "result": string_value(item.get("result")),
             "notes": string_value(item.get("notes")),
@@ -719,6 +839,7 @@ def normalize_evidence(raw: Any) -> list[dict[str, Any]]:
             "content": string_value(item.get("content"))[:MAX_TOOL_OUTPUT_CHARS],
             "source_tool": string_value(item.get("source_tool")),
             "target": string_value(item.get("target")),
+            "phase": string_value(item.get("phase")),
             "metadata": item.get("metadata") if isinstance(item.get("metadata"), dict) else {},
             "agent_id": string_value(item.get("agent_id")),
             "created_at": string_value(item.get("created_at")),
@@ -946,12 +1067,7 @@ def tool_call_summary(tool_name: str, args: dict[str, Any]) -> str:
 
 
 def tool_start_progress(tool_name: str, args: dict[str, Any]) -> str:
-    if tool_name == "write_stdin":
-        return ""
-    summary = tool_call_summary(tool_name, args).rstrip(".")
-    if not summary:
-        return ""
-    return f"Next: {summary}."
+    return ""
 
 
 def important_tool_progress(tool_name: str, args: dict[str, Any]) -> str:
@@ -1034,6 +1150,7 @@ def friendly_tool_name(tool_name: str) -> str:
         "list_notes": "Reviewing notes",
         "record_evidence": "Recording evidence",
         "record_attack_surface": "Recording attack surface",
+        "record_hypothesis": "Recording test hypothesis",
         "record_coverage": "Recording coverage",
         "list_memory": "Reviewing memory",
         "delete_todo": "Archiving todo",
@@ -1202,5 +1319,5 @@ def safe_id(value: Any) -> str:
     return re.sub(r"[^a-zA-Z0-9_.-]+", "-", str(value)).strip("-")[:80] or "item"
 
 
-def truthy(value: Any) -> bool:
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+def falsey(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"0", "false", "no", "off"}

@@ -15,13 +15,20 @@ from agents import RunContextWrapper, function_tool
 from strix.core.agents import Status, coordinator_from_context
 from strix.skills import validate_requested_skills
 from strix.tools.todo.tools import (
+    active_parent_todo_id,
     bind_todo_to_agent,
     complete_bound_todos,
     create_bound_todo,
+    resolve_bound_todos,
     unfinished_todos_for_agent,
     validate_todo_exists,
 )
-from strix.tools.workflow import is_recon_task, state_dir_from_raw, testing_preflight
+from strix.tools.workflow import (
+    is_recon_task,
+    state_dir_from_raw,
+    task_can_follow_recorded_work,
+    testing_preflight,
+)
 
 
 _ACTIVE_STATUSES: frozenset[str] = frozenset({"running", "waiting"})
@@ -386,15 +393,27 @@ async def create_agent(
     - Most agents need at least one ``skill`` to be useful.
     - Aim for **1-3 related skills** per agent. Up to 5 only when the
       task genuinely spans them.
-    - One skill = most focused (e.g., XSS-only). Five skills = upper
-      bound.
-    - Match the ``name`` to the focus (``XSS Specialist``,
-      ``SQLi Validator``, ``Auth Specialist``).
+    - Match the ``name`` to the current role: discovery/testing agents
+      explore recorded surfaces or planned hypotheses; validator agents
+      reproduce candidate vulnerabilities that already have evidence;
+      reporting agents document independently validated findings.
+    - Good discovery/testing tasks cite recorded endpoints, methods,
+      parameters, auth states, business flows, or hypothesis IDs, then
+      ask the child to record hypotheses/coverage/evidence as it works.
+    - Good validator tasks cite the candidate evidence, affected
+      surface, expected impact, and what proof would confirm or reject
+      exploitability.
 
     **When to spawn vs do it yourself:**
 
     - Spawn when the subtask is large, parallelizable, or needs
       different specialization than what you're already doing.
+    - After reconnaissance, prefer discovery/testing children built
+      from the attack-surface inventory and hypothesis matrix before
+      creating validator or reporting chains.
+    - Create validator children only after discovery/testing work has
+      produced candidate evidence; do not use validators as the first
+      post-recon workstream.
     - Don't spawn for trivial one-shot probes — just run the tool
       yourself.
 
@@ -410,7 +429,9 @@ async def create_agent(
             Max 5; prefer 1-3.
         todo_id: Optional parent todo to bind to this child. If omitted,
             a new in-progress todo is created automatically and is marked
-            done when the child calls ``agent_finish(success=true)``.
+            done when the child calls ``agent_finish(success=true)``. If the
+            parent has exactly one active unassigned phase todo, the new
+            child-tracking todo is linked to it with ``parent_todo_id``.
         task_priority: Priority for the automatically created todo.
     """
     inner = _ctx(ctx)
@@ -452,16 +473,18 @@ async def create_agent(
                 default=str,
             )
 
+    state_dir = state_dir_from_raw(inner.get("state_dir"))
     if inner.get("parent_id") is None and not is_recon_task(
         name=name,
         task=task,
         skills=skill_list,
     ):
         gate = testing_preflight(
-            state_dir_from_raw(inner.get("state_dir")),
+            state_dir,
             require_attack_surface=True,
+            planned_task=task,
         )
-        if not gate.get("ok"):
+        if not gate.get("ok") and not task_can_follow_recorded_work(state_dir, task):
             return json.dumps(
                 {
                     "success": False,
@@ -503,12 +526,14 @@ async def create_agent(
                 )
                 tracking = "bound"
             else:
+                parent_todo_id = active_parent_todo_id(str(parent_id))
                 bound = create_bound_todo(
                     owner_agent_id=str(parent_id),
                     title=name,
                     description=task,
                     priority=task_priority,
                     linked_agent_id=child_id,
+                    parent_todo_id=parent_todo_id,
                 )
                 tracking = "created"
             assigned_todo_id = str(bound.get("todo_id") or "")
@@ -686,7 +711,12 @@ async def agent_finish(
             "summary": result_summary,
             "findings_count": len(findings or []),
             "has_recommendations": bool(final_recommendations),
-            "completed_todo_ids": [todo.get("todo_id") for todo in completed_todos],
+            "completed_todo_ids": [
+                todo.get("todo_id")
+                for todo in completed_todos
+                if todo.get("status") == "done"
+            ],
+            "resolved_todo_ids": [todo.get("todo_id") for todo in completed_todos],
         },
         ensure_ascii=False,
         default=str,
@@ -802,12 +832,18 @@ async def stop_agent(
         await coordinator.cancel_descendants_graceful(target_agent_id)
     else:
         await coordinator.request_stop(target_agent_id)
+    resolved_todos = resolve_bound_todos(
+        linked_agent_id=target_agent_id,
+        status="skipped",
+        reason=reason or "Agent stopped before normal completion",
+    )
 
     logger.info(
-        "stop_agent: target=%s cascade=%s reason=%r",
+        "stop_agent: target=%s cascade=%s reason=%r resolved_todos=%d",
         target_agent_id,
         cascade,
         reason,
+        len(resolved_todos),
     )
     return json.dumps(
         {
@@ -815,6 +851,7 @@ async def stop_agent(
             "target_agent_id": target_agent_id,
             "cascade": cascade,
             "reason": reason,
+            "resolved_todo_ids": [todo.get("todo_id") for todo in resolved_todos],
             "note": "Cancellation is graceful — current turn completes first.",
         },
         ensure_ascii=False,

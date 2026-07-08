@@ -7,6 +7,7 @@ import contextlib
 import logging
 import uuid
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from agents import RunConfig, Runner
@@ -317,7 +318,7 @@ async def _run_noninteractive_until_lifecycle(
 
         if invalid_final_outputs >= invalid_final_output_limit:
             await coordinator.set_status(agent_id, "crashed")
-            await _notify_parent_on_crash(coordinator, agent_id, "crashed")
+            await _notify_parent_on_failure(coordinator, agent_id, "crashed")
             raise MaxTurnsExceeded(
                 "Agent exhausted non-interactive recovery attempts without calling "
                 "finish_scan or agent_finish."
@@ -427,12 +428,18 @@ async def _run_cycle(  # noqa: PLR0912, PLR0915
                 status = "crashed"
             logger.exception("agent run failed for %s; parking as %s", agent_id, status)
             await coordinator.set_status(agent_id, status)
-            await _notify_parent_on_crash(coordinator, agent_id, status)
+            await _notify_parent_on_failure(coordinator, agent_id, status)
             if context.get("parent_id") is None and status in {"failed", "crashed"}:
                 raise
             return None
         else:
-            await _settle_run_result(coordinator, agent_id, interactive)
+            await _settle_run_result(
+                coordinator,
+                agent_id,
+                interactive,
+                result=stream,
+                context=context,
+            )
             return stream
 
 
@@ -440,6 +447,9 @@ async def _settle_run_result(
     coordinator: AgentCoordinator,
     agent_id: str,
     interactive: bool,
+    *,
+    result: RunResultBase | None = None,
+    context: dict[str, Any] | None = None,
 ) -> None:
     async with coordinator._lock:
         current_status = coordinator.statuses.get(agent_id)
@@ -450,7 +460,78 @@ async def _settle_run_result(
     if not interactive:
         return
 
+    if await _recover_interactive_text_final_if_scan_incomplete(
+        coordinator,
+        agent_id,
+        result=result,
+        context=context or {},
+    ):
+        return
+
     await coordinator.set_status(agent_id, "waiting")
+
+
+async def _recover_interactive_text_final_if_scan_incomplete(
+    coordinator: AgentCoordinator,
+    agent_id: str,
+    *,
+    result: RunResultBase | None,
+    context: dict[str, Any],
+) -> bool:
+    if context.get("parent_id") is not None:
+        return False
+    if not context.get("keep_alive_after_finish"):
+        return False
+    final_output = getattr(result, "final_output", None)
+    if not isinstance(final_output, str) or not final_output.strip():
+        return False
+    if _completion_gate_allows_text_final(context.get("run_dir")):
+        return False
+
+    attempts = int(context.get("_interactive_lifecycle_recovery_count") or 0) + 1
+    context["_interactive_lifecycle_recovery_count"] = attempts
+    if attempts > 3:
+        logger.error(
+            "root agent %s repeatedly produced text-only final output before completion gates passed",
+            agent_id,
+        )
+        await coordinator.set_status(agent_id, "failed")
+        return True
+
+    sent = await coordinator.send(
+        agent_id,
+        {
+            "from": "system",
+            "type": "instruction",
+            "priority": "high",
+            "content": (
+                "Your previous response ended the scan with plain text while completion gates are still failing. "
+                "Continue with exactly one tool call. Review the completion gate state, resolve missing reports, "
+                "coverage gaps, sitemap pagination, or external discovery gaps, and call finish_scan only after "
+                "the gates pass."
+            ),
+        },
+    )
+    if sent:
+        logger.warning(
+            "root agent %s produced text-only output before completion gates passed; injected recovery instruction",
+            agent_id,
+        )
+        return True
+    return False
+
+
+def _completion_gate_allows_text_final(raw_run_dir: Any) -> bool:
+    if not raw_run_dir:
+        return True
+    try:
+        from strix.platform.node_runner import completion_gate_for_run
+
+        gate = completion_gate_for_run(Path(str(raw_run_dir)))
+    except Exception:
+        logger.exception("completion gate check failed while evaluating text-only final output")
+        return False
+    return bool(gate.get("ok"))
 
 
 async def _agent_status(coordinator: AgentCoordinator, agent_id: str) -> Status | None:
@@ -493,12 +574,12 @@ async def _append_noninteractive_tool_required_message(
     return []
 
 
-async def _notify_parent_on_crash(
+async def _notify_parent_on_failure(
     coordinator: AgentCoordinator,
     agent_id: str,
     status: str,
 ) -> None:
-    if status != "crashed":
+    if status not in {"failed", "crashed", "stopped"}:
         return
     async with coordinator._lock:
         parent = coordinator.parent_of.get(agent_id)
@@ -509,11 +590,12 @@ async def _notify_parent_on_crash(
         parent,
         {
             "from": agent_id,
-            "type": "crash",
+            "type": "crash" if status == "crashed" else ("failure" if status == "failed" else "stop"),
             "priority": "high",
             "content": (
-                f"[Agent crash] {name} ({agent_id}) terminated unexpectedly. "
-                "Stop waiting on this child unless you want to message it again."
+                f"[Agent {status}] {name} ({agent_id}) cannot continue. "
+                "Stop waiting on this child; retry the task with a new agent, "
+                "mark the assigned work blocked/skipped with a reason, or continue with another plan."
             ),
         },
     )

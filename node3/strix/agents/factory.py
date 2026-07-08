@@ -17,7 +17,7 @@ from agents.tool import CustomTool, FunctionTool, Tool
 from pydantic import ValidationError
 
 from strix.agents.prompt import render_system_prompt
-from strix.tools.agent_browser.tool import agent_browser
+from strix.tools.agent_browser.tool import agent_browser, agent_browser_cli
 from strix.tools.agents_graph.tools import (
     agent_finish,
     create_agent,
@@ -33,6 +33,7 @@ from strix.tools.run_memory.tools import (
     record_attack_surface,
     record_coverage,
     record_evidence,
+    record_hypothesis,
 )
 from strix.tools.notes.tools import (
     create_note,
@@ -492,10 +493,12 @@ _BASE_TOOLS: tuple[Tool, ...] = (
     delete_note,
     record_evidence,
     record_attack_surface,
+    record_hypothesis,
     record_coverage,
     list_memory,
     web_search,
     agent_browser,
+    agent_browser_cli,
     create_vulnerability_report,
     list_requests,
     view_request,
