@@ -33,6 +33,7 @@ export const HIGH_PRIORITY_VULN_CLASSES = new Set([
   "xss-dom",
   "file-inclusion",
   "file-upload",
+  "path-traversal",
   "csrf",
   "brute-force",
   "weak-session-id",
@@ -42,7 +43,64 @@ export const HIGH_PRIORITY_VULN_CLASSES = new Set([
   "ssrf",
   "idor",
   "auth-bypass",
+  "jwt-alg-none",
+  "open-redirect",
+  "mass-assignment",
 ]);
+
+/**
+ * Generic risk families used for breadth gates. Derived from observed surface shape,
+ * never from target product names or benchmark case IDs.
+ */
+export const RISK_FAMILIES: Array<{
+  id: string;
+  label: string;
+  classes: string[];
+  surfaceHints: RegExp;
+}> = [
+  {
+    id: "injection",
+    label: "Input injection",
+    classes: ["sql-injection", "blind-sql-injection", "command-injection"],
+    surfaceHints: /search|query|q=|filter|sort|email|login|id=|user|product|comment/i,
+  },
+  {
+    id: "access_control",
+    label: "Access control / object isolation",
+    classes: ["idor", "auth-bypass", "mass-assignment"],
+    surfaceHints: /\/api\/|\/rest\/|users?|basket|order|account|profile|admin|role|feedback|complaint/i,
+  },
+  {
+    id: "auth_session",
+    label: "Authentication / session / token",
+    classes: ["jwt-alg-none", "weak-session-id", "brute-force", "auth-bypass"],
+    surfaceHints: /login|auth|token|session|jwt|whoami|register|password|oauth/i,
+  },
+  {
+    id: "xss",
+    label: "Client-side script sinks",
+    classes: ["xss-reflected", "xss-stored", "xss-dom"],
+    surfaceHints: /search|q=|name|message|comment|feedback|track|redirect/i,
+  },
+  {
+    id: "file_path",
+    label: "File / path handling",
+    classes: ["file-inclusion", "file-upload", "path-traversal"],
+    surfaceHints: /file|upload|download|ftp|static|image|path|page|include|document/i,
+  },
+  {
+    id: "redirect",
+    label: "Open redirect / URL fetch",
+    classes: ["open-redirect", "ssrf"],
+    surfaceHints: /redirect|returnurl|next=|url=|link=|imageurl|to=/i,
+  },
+  {
+    id: "csrf",
+    label: "CSRF / state-changing forms",
+    classes: ["csrf"],
+    surfaceHints: /password|profile|change|update|delete|post/i,
+  },
+];
 
 const RESOLVED_STATUSES = new Set(["passed", "failed", "blocked", "skipped"]);
 const ATTEMPTED_STATUSES = new Set(["tried", "passed", "failed", "blocked", "skipped"]);
@@ -52,13 +110,16 @@ export function candidatePriority(vulnClass: string, endpoint = ""): number {
   const path = String(endpoint || "").toLowerCase();
   let score = 100;
   if (HIGH_PRIORITY_VULN_CLASSES.has(klass)) score += 100;
-  if (["command-injection", "sql-injection", "blind-sql-injection", "file-upload", "file-inclusion"].includes(klass)) {
+  if (["command-injection", "sql-injection", "blind-sql-injection", "file-upload", "file-inclusion", "path-traversal"].includes(klass)) {
     score += 40;
   }
-  if (["xss-reflected", "xss-stored", "xss-dom", "csrf", "brute-force"].includes(klass)) score += 25;
-  if (path.includes("/admin") || path.includes("login") || path.includes("upload")) score += 15;
+  if (["idor", "jwt-alg-none", "mass-assignment", "auth-bypass"].includes(klass)) score += 35;
+  if (["xss-reflected", "xss-stored", "xss-dom", "csrf", "brute-force", "open-redirect"].includes(klass)) score += 25;
+  if (path.includes("/admin") || path.includes("login") || path.includes("upload") || path.includes("/api/") || path.includes("/rest/")) {
+    score += 15;
+  }
   if (/\.(?:css|js|png|jpe?g|gif|ico|svg|woff2?)$/i.test(path)) score -= 200;
-  if (["unknown", "info", "technology"].includes(klass)) score -= 150;
+  if (["unknown", "info", "technology", "injection", "xss"].includes(klass)) score -= 150;
   return score;
 }
 
@@ -109,16 +170,27 @@ export function materialUntestedHighPriority(rows: CoverageLikeRow[]): Conversio
   return untestedHighPriorityCandidates(rows);
 }
 
+export type RiskFamilyGap = {
+  family: string;
+  label: string;
+  suggestedClasses: string[];
+  exampleSurfaces: string[];
+  reason: string;
+};
+
 export type FinishEligibility = {
   allowed: boolean;
   reason: string;
   untestedHighPriority: ConversionCandidate[];
   verifiedAwaitingConfirm: ConversionCandidate[];
+  missingRiskFamilies: RiskFamilyGap[];
 };
 
 /**
- * finish_scan(status='completed') is allowed only when no material high-priority
- * observed candidates remain without a tried/resolved/blocked/skipped outcome.
+ * finish_scan(status='completed') is allowed only when:
+ * 1) no material high-priority observed candidates remain untested, and
+ * 2) risk families suggested by observed surface shape each have at least one attempted/resolved coverage row
+ *    (or an explicit blocked/skipped family row).
  */
 export function finishCompletedEligibility(
   coverageRows: CoverageLikeRow[],
@@ -126,6 +198,7 @@ export function finishCompletedEligibility(
 ): FinishEligibility {
   const status = String(options.status || "completed").toLowerCase();
   const untested = materialUntestedHighPriority(coverageRows);
+  const missingRiskFamilies = missingRiskFamiliesFromCoverage(coverageRows);
   const verifiedAwaitingConfirm = coverageRows
     .map(normalizeCoverageRow)
     .filter((row): row is ConversionCandidate => Boolean(row))
@@ -137,6 +210,7 @@ export function finishCompletedEligibility(
       reason: `finish status ${status} does not require full high-priority conversion`,
       untestedHighPriority: untested,
       verifiedAwaitingConfirm,
+      missingRiskFamilies,
     };
   }
 
@@ -149,15 +223,76 @@ export function finishCompletedEligibility(
         `Examples: ${untested.slice(0, 5).map(formatCandidate).join("; ")}`,
       untestedHighPriority: untested,
       verifiedAwaitingConfirm,
+      missingRiskFamilies,
+    };
+  }
+
+  if (missingRiskFamilies.length > 0) {
+    return {
+      allowed: false,
+      reason:
+        `${missingRiskFamilies.length} risk family gap(s) remain for observed attack surface. ` +
+        `Test or explicitly skip: ${missingRiskFamilies.map((item) => item.family).join(", ")}. ` +
+        `Use verifier for suggested classes or coverage(mark status=blocked/skipped) with notes.`,
+      untestedHighPriority: untested,
+      verifiedAwaitingConfirm,
+      missingRiskFamilies,
     };
   }
 
   return {
     allowed: true,
-    reason: "no material high-priority observed candidates remain untested",
+    reason: "no material high-priority observed candidates or risk-family gaps remain",
     untestedHighPriority: untested,
     verifiedAwaitingConfirm,
+    missingRiskFamilies,
   };
+}
+
+/** Infer which risk families the observed endpoints/params suggest, then find unattempted ones. */
+export function missingRiskFamiliesFromCoverage(coverageRows: CoverageLikeRow[]): RiskFamilyGap[] {
+  const normalized = coverageRows
+    .map(normalizeCoverageRow)
+    .filter((row): row is ConversionCandidate => Boolean(row));
+  if (!normalized.length) return [];
+
+  const surfaceText = normalized
+    .map((row) => `${row.endpoint} ${row.param} ${row.vulnClass} ${row.notes || ""}`)
+    .join("\n");
+  const suggested = RISK_FAMILIES.filter((family) => family.surfaceHints.test(surfaceText));
+  if (!suggested.length) return [];
+
+  const attemptedClasses = new Set(
+    normalized
+      .filter((row) => ATTEMPTED_STATUSES.has(row.status))
+      .map((row) => row.vulnClass.toLowerCase()),
+  );
+  // Explicit family-level skip: coverage row with param="family" or notes containing family id.
+  const familyResolved = new Set(
+    normalized
+      .filter((row) => RESOLVED_STATUSES.has(row.status))
+      .filter((row) => row.param === "family" || /risk.?family|family-skip/i.test(row.notes || ""))
+      .map((row) => row.vulnClass.toLowerCase()),
+  );
+
+  const gaps: RiskFamilyGap[] = [];
+  for (const family of suggested) {
+    const hit = family.classes.some((klass) => attemptedClasses.has(klass) || familyResolved.has(klass) || familyResolved.has(family.id));
+    if (hit) continue;
+    const examples = normalized
+      .filter((row) => family.surfaceHints.test(`${row.endpoint} ${row.param}`))
+      .map((row) => `${row.endpoint}`)
+      .filter((value, index, arr) => arr.indexOf(value) === index)
+      .slice(0, 5);
+    gaps.push({
+      family: family.id,
+      label: family.label,
+      suggestedClasses: family.classes,
+      exampleSurfaces: examples,
+      reason: `Observed surface suggests ${family.label}, but no coverage attempt was recorded for ${family.classes.join("/")}`,
+    });
+  }
+  return gaps;
 }
 
 export type ConversionMetrics = {
@@ -177,6 +312,7 @@ export type ConversionMetrics = {
   observedToConfirmedRate: number;
   missList: ConversionCandidate[];
   confirmedList: ConversionCandidate[];
+  missingRiskFamilies: RiskFamilyGap[];
 };
 
 /**
@@ -211,6 +347,7 @@ export function conversionMetrics(coverageRows: CoverageLikeRow[]): ConversionMe
     observedToConfirmedRate: percent(confirmed.length, high.length),
     missList: highUntested.sort((a, b) => b.priority - a.priority),
     confirmedList: confirmed,
+    missingRiskFamilies: missingRiskFamiliesFromCoverage(coverageRows),
   };
 }
 
@@ -218,7 +355,11 @@ export function formatCandidate(row: ConversionCandidate): string {
   return `${row.vulnClass} @ ${row.endpoint} (${row.param}) p=${row.priority}`;
 }
 
-export function nextVerifyGuidance(candidates: ConversionCandidate[], confirmedEvidenceIds: string[] = []): string {
+export function nextVerifyGuidance(
+  candidates: ConversionCandidate[],
+  confirmedEvidenceIds: string[] = [],
+  familyGaps: RiskFamilyGap[] = [],
+): string {
   const lines: string[] = [];
   if (candidates.length) {
     lines.push(
@@ -228,11 +369,22 @@ export function nextVerifyGuidance(candidates: ConversionCandidate[], confirmedE
       lines.push(`- ${formatCandidate(row)}`);
     }
   }
+  if (familyGaps.length) {
+    lines.push(`Close risk-family gaps before finish_scan(completed):`);
+    for (const gap of familyGaps.slice(0, 8)) {
+      lines.push(
+        `- ${gap.family} (${gap.label}): try verifier vuln_class in [${gap.suggestedClasses.join(", ")}] on surfaces like ${gap.exampleSurfaces.join(", ") || "observed APIs"}`,
+      );
+    }
+  }
   if (confirmedEvidenceIds.length) {
     lines.push(
       `After verifier confirmed=true, call finding(action='confirm') immediately with evidence_ids=[${confirmedEvidenceIds.join(", ")}] and full reproduction details. Do not batch confirmations for the end.`,
     );
   }
+  lines.push(
+    "After authentication succeeds, re-inventory authenticated APIs/resources and seed coverage before stopping. Prefer batching verifier calls across priority_candidates rather than stopping after the first confirmed finding.",
+  );
   return lines.join("\n");
 }
 

@@ -10,6 +10,7 @@ import {
   conversionMetrics,
   finishCompletedEligibility,
   materialUntestedHighPriority,
+  missingRiskFamiliesFromCoverage,
 } from "./runtime/detection-conversion.js";
 import { CoverageStore } from "./stores/coverage.js";
 import { EvidenceStore } from "./stores/evidence.js";
@@ -116,6 +117,23 @@ async function main(): Promise<void> {
   assert(Array.isArray(blocked.untested_high_priority) && blocked.untested_high_priority.length >= 2, "blocked payload missing untested list");
   assert(!runtime.lifecycle.finishScan, "lifecycle finishScan must not be set when completed is rejected");
 
+  // API-shaped surface should produce risk-family gaps until access-control/auth families are attempted.
+  await execJson(coverage, "mark-api", {
+    action: "mark",
+    endpoint: "/api/Users/1",
+    param: "id",
+    vuln_class: "idor",
+    status: "observed",
+  });
+  const familyGaps = missingRiskFamiliesFromCoverage(await runtime.coverage.list());
+  assert(familyGaps.some((gap) => gap.family === "access_control"), `expected access_control family gap: ${JSON.stringify(familyGaps)}`);
+  const familyBlocked = await execJson(finish, "finish-family-blocked", {
+    status: "completed",
+    summary: "attempt complete while family gaps remain",
+  });
+  // Still blocked either by untested observed idor or family gaps.
+  assert(familyBlocked.blocked === true || familyBlocked.ok === false, `finish should stay blocked with family gaps: ${JSON.stringify(familyBlocked)}`);
+
   // incomplete is always allowed.
   const incomplete = await execJson(finish, "finish-incomplete", {
     status: "incomplete",
@@ -125,7 +143,7 @@ async function main(): Promise<void> {
   assert(incomplete.ok === true, `incomplete should succeed: ${JSON.stringify(incomplete)}`);
   runtime.lifecycle.finishScan = undefined;
 
-  // Resolve high-priority candidates.
+  // Resolve high-priority candidates and family-driving rows.
   await execJson(coverage, "try-1", {
     action: "mark",
     endpoint: "/vulnerabilities/sqli/",
@@ -142,11 +160,31 @@ async function main(): Promise<void> {
     status: "blocked",
     notes: "login required; cannot probe without credentials",
   });
+  await execJson(coverage, "try-api", {
+    action: "mark",
+    endpoint: "/api/Users/1",
+    param: "id",
+    vuln_class: "idor",
+    status: "failed",
+    notes: "cross-object access confirmed",
+  });
+  // Close remaining suggested families with explicit skips where no surface remains actionable.
+  for (const family of missingRiskFamiliesFromCoverage(await runtime.coverage.list())) {
+    await execJson(coverage, `skip-${family.family}`, {
+      action: "mark",
+      endpoint: `/family/${family.family}`,
+      param: "family",
+      vuln_class: family.family,
+      status: "skipped",
+      notes: `risk-family skip: ${family.reason}`,
+    });
+  }
 
   const rowsB = await runtime.coverage.list();
   const pureB = finishCompletedEligibility(rowsB, { status: "completed" });
   assert(pureB.allowed, `pure helper should allow completed after resolution: ${pureB.reason}`);
   assert(materialUntestedHighPriority(rowsB).length === 0, "no high-priority observed should remain");
+  assert(missingRiskFamiliesFromCoverage(rowsB).length === 0, "no risk-family gaps should remain");
 
   const metrics = conversionMetrics(rowsB);
   assert(metrics.highPriorityUntested === 0, `expected 0 untested, got ${metrics.highPriorityUntested}`);

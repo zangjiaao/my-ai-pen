@@ -3,6 +3,7 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
   conversionMetrics,
   materialUntestedHighPriority,
+  missingRiskFamiliesFromCoverage,
   nextVerifyGuidance,
 } from "../runtime/detection-conversion.js";
 import type { CoverageStatus, ToolRuntime } from "../types.js";
@@ -14,10 +15,10 @@ export function createCoverageTool(runtime: ToolRuntime): ToolDefinition<any> {
   return {
     name: "coverage",
     label: "Coverage",
-    description: "Track tested endpoint/parameter/vulnerability-class tuples and maintain the compact user-facing workflow plan. Use it to avoid repeating probes and to remember attack surface, planned tests, blockers, and summary work. Actions: mark, list, untested, priority_candidates, conversion, summary, plan, plan_list.",
+    description: "Track tested endpoint/parameter/vulnerability-class tuples and maintain the compact user-facing workflow plan. Use it to avoid repeating probes and to remember attack surface, planned tests, blockers, and summary work. Actions: mark, list, untested, priority_candidates, family_gaps, conversion, summary, plan, plan_list.",
     promptSnippet: "Track endpoint/parameter coverage and maintain the workflow plan",
     promptGuidelines: [
-      "Use coverage(action='priority_candidates') or conversion after recon to pick the next high-priority observed tests.",
+      "Use coverage(action='priority_candidates') or family_gaps/conversion after recon to pick the next high-priority observed tests and missing risk families.",
       "Use coverage(action='untested') before broad probing and coverage(action='mark') after each meaningful test.",
       "Use coverage(action='plan') to add or update user-facing workflow plan items. Use stable node_id values.",
       "Use parent_id exactly to group plan items: workflow-recon, workflow-testing, workflow-verification, or workflow-summary.",
@@ -76,10 +77,21 @@ export function createCoverageTool(runtime: ToolRuntime): ToolDefinition<any> {
       if (params.action === "priority_candidates") {
         const rows = await runtime.coverage.list();
         const untested = materialUntestedHighPriority(rows);
+        const familyGaps = missingRiskFamiliesFromCoverage(rows);
         return jsonResult({
           count: untested.length,
           candidates: untested,
-          guidance: nextVerifyGuidance(untested),
+          missing_risk_families: familyGaps,
+          guidance: nextVerifyGuidance(untested, [], familyGaps),
+        });
+      }
+      if (params.action === "family_gaps") {
+        const rows = await runtime.coverage.list();
+        const familyGaps = missingRiskFamiliesFromCoverage(rows);
+        return jsonResult({
+          count: familyGaps.length,
+          missing_risk_families: familyGaps,
+          guidance: nextVerifyGuidance([], [], familyGaps),
         });
       }
       if (params.action === "conversion") {
@@ -93,6 +105,7 @@ export function createCoverageTool(runtime: ToolRuntime): ToolDefinition<any> {
           ...summary,
           conversion: conversionMetrics(rows),
           priority_untested: materialUntestedHighPriority(rows).slice(0, 20),
+          missing_risk_families: missingRiskFamiliesFromCoverage(rows),
         });
       }
       if (params.action === "plan") {
@@ -119,7 +132,7 @@ export function createCoverageTool(runtime: ToolRuntime): ToolDefinition<any> {
       if (params.action === "plan_list") {
         return jsonResult(runtime.plan.snapshot());
       }
-      return textResult("error: action must be mark, list, untested, priority_candidates, conversion, summary, plan, or plan_list");
+      return textResult("error: action must be mark, list, untested, priority_candidates, family_gaps, conversion, summary, plan, or plan_list");
     },
   };
 }

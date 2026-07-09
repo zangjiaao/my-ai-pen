@@ -59,11 +59,16 @@ export function createFinishScanTool(runtime: ToolRuntime): ToolDefinition<any> 
         return jsonResult({
           ok: false,
           blocked: true,
-          error: "finish_scan(completed) rejected: high-priority observed candidates remain untested",
+          error: "finish_scan(completed) rejected: coverage conversion or risk-family gaps remain",
           reason: eligibility.reason,
           untested_high_priority: eligibility.untestedHighPriority.map(formatCandidate),
+          missing_risk_families: eligibility.missingRiskFamilies,
           conversion: metrics,
-          guidance: nextVerifyGuidance(eligibility.untestedHighPriority, evidenceIds),
+          guidance: nextVerifyGuidance(
+            eligibility.untestedHighPriority,
+            evidenceIds,
+            eligibility.missingRiskFamilies,
+          ),
         });
       }
 

@@ -126,13 +126,18 @@ function routeHintTests(endpoint: string, html: string): Omit<TestCandidate, "en
   if (hasAny(route, ["brute", "login"]) && hasAllText(html, ["username", "password"])) {
     add("username,password", "brute-force", "Verify brute-force/default credential behavior", "Try controlled valid/invalid credential pairs and record success/failure response differences.", 222);
   }
+  if (hasAny(route, ["login", "auth", "whoami", "token", "session", "jwt"])) {
+    add("authorization", "jwt-alg-none", "Verify JWT/session algorithm or unsigned token handling", "If a bearer/JWT is observed, probe unsigned or alg-none style token acceptance against a protected endpoint.", 250);
+    add("session", "weak-session-id", "Verify weak session/token predictability", "Generate multiple IDs or tokens, store samples, and analyze sequence or entropy.", 226);
+  }
   if (hasAny(route, ["exec", "command", "ping"]) || /\bname=["']ip["']/i.test(html)) {
     add("ip", "command-injection", "Verify command injection in command-like parameter", "Submit a harmless command separator payload and prove command output or side-channel behavior.", 220);
   }
   if (route.includes("csrf") || (hasAny(route, ["password", "account"]) && hasAllText(html, ["password", "confirm"]))) {
     add("password_new,password_conf", "csrf", "Verify CSRF on state-changing form", "Perform a state-changing request without a CSRF token and verify the state changed, then restore state.", 224);
   }
-  if (hasAny(route, ["include", "file", "path", "page"]) && !/type=["']file["']/i.test(html)) {
+  if (hasAny(route, ["include", "file", "path", "page", "ftp", "download", "document"]) && !/type=["']file["']/i.test(html)) {
+    add("page", "path-traversal", "Verify path traversal / arbitrary file read", "Compare baseline path with traversal payloads and look for file content markers.", 245);
     add("page", "file-inclusion", "Verify file inclusion/path traversal", "Compare baseline include page with a controlled local file read.", 221);
   }
   if (route.includes("upload") || /type=["']file["']/i.test(html)) {
@@ -141,21 +146,27 @@ function routeHintTests(endpoint: string, html: string): Omit<TestCandidate, "en
   if (route.includes("captcha") || html.toLowerCase().includes("captcha")) {
     add("captcha,step", "insecure-captcha", "Verify CAPTCHA server-side workflow enforcement", "Replay or mutate CAPTCHA workflow parameters and prove whether server-side validation can be bypassed.", 229);
   }
-  if (hasAny(route, ["sqli", "sql", "query"]) && route.includes("blind")) {
+  if (hasAny(route, ["sqli", "sql", "query", "search"]) && route.includes("blind")) {
     add("id", "blind-sql-injection", "Verify blind SQL injection with controlled boolean pair", "Use true/false predicates such as AND 1=1 and AND 1=2, not only malformed input.", 225);
-  } else if (hasAny(route, ["sqli", "sql", "query"])) {
-    add("id", "sql-injection", "Verify SQL injection in data lookup parameter", "Use error, boolean, or UNION evidence and record request/response differences.", 220);
+  } else if (hasAny(route, ["sqli", "sql", "query", "search", "filter", "login"])) {
+    add("q", "sql-injection", "Verify SQL injection in lookup/search parameter", "Use error, boolean, or UNION evidence and record request/response differences.", 240);
   }
-  if (hasAny(route, ["weak", "session", "token"])) {
-    add("session", "weak-session-id", "Verify weak session/token predictability", "Generate multiple IDs or tokens, store samples, and analyze sequence or entropy.", 226);
+  if (hasAny(route, ["users", "user", "basket", "order", "profile", "account", "feedback", "complaint", "/api/", "/rest/"])) {
+    add("id", "idor", "Verify direct object reference / authorization isolation", "Replay object identifiers across auth states or adjacent IDs and prove unauthorized data access.", 255);
   }
-  if (hasAny(route, ["xss", "dom"])) {
+  if (hasAny(route, ["register", "signup", "users"]) && (methodLooksWritable(html) || route.includes("api"))) {
+    add("role", "mass-assignment", "Verify mass assignment / privileged field injection", "Submit extra privileged fields (role/admin/isAdmin) during create/update and prove privilege change.", 252);
+  }
+  if (hasAny(route, ["redirect", "return", "next", "url", "link", "to"])) {
+    add("url", "open-redirect", "Verify open redirect allowlist bypass", "Inject an external absolute URL into redirect parameters and prove off-site Location/navigation.", 248);
+  }
+  if (hasAny(route, ["xss", "dom", "search", "track"])) {
     const stored = hasAny(route, ["stored", "guest", "_s", "-s"]) || hasAny(html.toLowerCase(), ["guestbook", "textarea"]);
     const dom = hasAny(route, ["dom", "_d", "-d"]);
-    const reflected = hasAny(route, ["reflected", "_r", "-r"]) || !stored;
+    const reflected = hasAny(route, ["reflected", "_r", "-r", "search", "q"]) || !stored;
     if (stored) add("txtName,mtxMessage", "xss-stored", "Verify stored XSS with second retrieval", "Submit a short payload that fits field limits, retrieve the page again, and prove persistence/execution.", 225);
     if (dom) add("default", "xss-dom", "Verify DOM XSS execution", "Use browser navigation with query/hash payload and capture a DOM/dialog effect.", 227);
-    if (reflected) add("name", "xss-reflected", "Verify reflected XSS execution context", "Prove executable JavaScript context, preferably with browser-observed dialog or DOM marker.", 224);
+    if (reflected) add("q", "xss-reflected", "Verify reflected XSS execution context", "Prove executable JavaScript context, preferably with browser-observed dialog or DOM marker.", 244);
   }
   if (route.includes("csp") || html.toLowerCase().includes("content-security-policy")) {
     add("policy,payload", "csp-bypass", "Verify CSP bypass", "Record CSP policy, identify allowed sources, and prove a bypass payload executes.", 228);
@@ -164,6 +175,10 @@ function routeHintTests(endpoint: string, html: string): Omit<TestCandidate, "en
     add("token,phrase", "javascript-logic", "Verify client-side JavaScript logic bypass", "Analyze client-side validation logic and prove server accepts the derived or bypassed value.", 228);
   }
   return tests;
+}
+
+function methodLooksWritable(html: string): boolean {
+  return /method=["']post["']|application\/json|"role"|password/i.test(html);
 }
 
 function upsertSurface(runtime: ToolRuntime, method: string, rawUrl: string, evidenceIds: string[], source?: string): void {
@@ -213,12 +228,17 @@ function requestBodyParams(body: string): string[] {
 }
 
 function genericVulnClass(param: string, endpoint: string, html: string): string | undefined {
+  const name = param.toLowerCase();
   const lowered = `${param} ${endpoint}`.toLowerCase();
-  if (lowered.includes("file") || param === "uploaded" || /type=["']file["']/i.test(html)) return "file-upload";
-  if (["id", "user", "uid"].includes(param.toLowerCase())) return "injection";
-  if (["name", "message", "txtname", "mtxmessage"].includes(param.toLowerCase())) return "xss";
-  if (lowered.includes("url") || lowered.includes("redirect")) return "open-redirect";
-  if (lowered.includes("password")) return "csrf";
+  if (lowered.includes("file") || name === "uploaded" || /type=["']file["']/i.test(html)) return "file-upload";
+  if (["page", "path", "file", "doc", "document"].includes(name) || /ftp|download|static/.test(lowered)) return "path-traversal";
+  if (["q", "query", "search", "filter", "email", "id"].includes(name) || /search|login|query/.test(lowered)) return "sql-injection";
+  if (["userid", "user_id", "orderid", "order_id", "basketid", "basket_id"].includes(name) || /\/\d+(\/|$)/.test(endpoint)) return "idor";
+  if (["role", "isadmin", "admin", "privilege", "type"].includes(name) || /register|signup|users/.test(lowered)) return "mass-assignment";
+  if (["name", "message", "txtname", "mtxmessage", "comment"].includes(name)) return "xss-reflected";
+  if (name.includes("url") || name.includes("redirect") || name.includes("next") || name.includes("return")) return "open-redirect";
+  if (name.includes("token") || name.includes("jwt") || name.includes("authorization")) return "jwt-alg-none";
+  if (lowered.includes("password") && !/login/.test(lowered)) return "csrf";
   return undefined;
 }
 

