@@ -53,4 +53,4 @@ Inside a scan, the Agent should call:
 4. `traffic(action="analyze")` or `traffic(action="candidates")`
 5. `traffic(action="repeat")` and `traffic(action="mutate")` before verifier/finding.
 
-Current limitation: Node2 starts the Caido sidecar and bridge, but it does not yet run general shell/browser tooling inside the sandbox container. Browser/http/verifier traffic is proxied into Caido from the Node2 host process.
+Browser automation runs inside the same `strix-sandbox` image via a long-lived container and `agent-browser` (Node3-aligned). Host Playwright is not required for the `browser` tool. When Caido sidecar auto mode is enabled, browser sandbox processes inherit proxy env so traffic can land in Caido; `http`/`verifier` still run from the Node2 host process (or scan sandbox) and merge cookies from `browser(action='snapshot')`.

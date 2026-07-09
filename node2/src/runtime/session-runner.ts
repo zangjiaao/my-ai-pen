@@ -1,4 +1,4 @@
-import { cp, mkdir, stat } from "node:fs/promises";
+import { cp, mkdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   AuthStorage,
@@ -16,14 +16,17 @@ import { TrafficStore } from "../stores/traffic.js";
 import { createExternalTrafficSource } from "../traffic/external-source.js";
 import type { PlatformMessage, PlatformSink, TaskEnvelope, ToolRuntime } from "../types.js";
 import { PENTEST_TOOL_NAMES } from "../tools/index.js";
+import { TaskDiagnostics } from "./agent-observability.js";
 import { startCaidoBridge } from "./caido-bridge.js";
 import {
   conversionMetrics,
   finishCompletedEligibility,
   formatCandidate,
   materialUntestedHighPriority,
+  missingRiskFamiliesFromCoverage,
   nextVerifyGuidance,
 } from "./detection-conversion.js";
+import { stopBrowserSandbox } from "./browser-sandbox.js";
 import { createPentestExtension } from "./pentest-extension.js";
 import { buildSystemPrompt } from "./prompt.js";
 
@@ -39,12 +42,14 @@ export async function runPentestTask(
   task = normalizeSidecarTaskTarget(config, task);
   const taskDir = join(config.workspaceDir, task.taskId);
   await mkdir(taskDir, { recursive: true });
-  const caidoBridge = await startCaidoBridge(config, platform, task);
+  const diagnostics = await TaskDiagnostics.create(taskDir, task);
+  const platformOut = diagnostics.wrapPlatform(platform);
+  const caidoBridge = await startCaidoBridge(config, platformOut, task);
 
   const runtime: ToolRuntime = {
     task,
     workspaceDir: config.workspaceDir,
-    platform,
+    platform: platformOut,
     plan: new PlanStore(),
     coverage: new CoverageStore(),
     evidence: new EvidenceStore(join(taskDir, "evidence")),
@@ -96,6 +101,9 @@ export async function runPentestTask(
   });
   await resourceLoader.reload();
 
+  // Persist Pi session entries under the task dir so stalled runs remain inspectable.
+  const piSessionDir = join(taskDir, "pi-sessions");
+  await mkdir(piSessionDir, { recursive: true });
   const { session } = await createAgentSession({
     cwd: taskDir,
     agentDir: config.piAgentDir,
@@ -105,33 +113,38 @@ export async function runPentestTask(
     modelRegistry,
     resourceLoader,
     tools: [...PENTEST_TOOL_NAMES],
-    sessionManager: SessionManager.inMemory(taskDir),
+    sessionManager: SessionManager.create(taskDir, piSessionDir),
     settingsManager,
   });
 
-  const textStream = new PlatformTextStream(platform, task);
+  const textStream = new PlatformTextStream(platformOut, task);
   try {
     const abortHandler = () => {
+      void diagnostics.noteRuntime("signal_abort", { reason: "user_interrupt_or_abort" });
+      void diagnostics.setPhase("aborted", { reason: "abort_signal" });
       void session.abort();
     };
     signal?.addEventListener("abort", abortHandler, { once: true });
     session.subscribe(async (event) => {
+      await diagnostics.handleAgentEvent(event);
       await textStream.handle(event);
-      await handleSessionEvent(platform, runtime, event);
+      await handleSessionEvent(platformOut, runtime, diagnostics, event);
     });
     runtime.plan.start();
-    await platform.send({
+    await platformOut.send({
       type: "status_update",
       conversation_id: task.conversationId,
       task_id: task.taskId,
       workflow_stage: runtime.plan.kanban().current_stage,
       active_tool: "pi",
+      agent_phase: "starting",
       status: "running",
       message: "Pi pentest runtime started",
       progress: runtime.plan.progress(),
       kanban: runtime.plan.kanban(),
+      diagnostics: diagnostics.paths,
     });
-    await platform.send({
+    await platformOut.send({
       type: "plan_tree_updated",
       conversation_id: task.conversationId,
       task_id: task.taskId,
@@ -142,31 +155,45 @@ export async function runPentestTask(
       plan_tree: runtime.plan.snapshot(),
     });
     if (signal?.aborted) throw new Error("Task interrupted by user.");
+    await diagnostics.noteRuntime("prompt_start", { stage: "main" });
     await session.prompt(buildWorkflowFirstInstruction(task), { source: "interactive" });
     await textStream.flush();
+    await diagnostics.noteRuntime("prompt_end", { stage: "main" });
     throwIfLastAssistantError(session.messages);
     if (signal?.aborted) throw new Error("Task interrupted by user.");
     const gateRounds = completionGateRounds();
     let gate = completionGate(runtime);
+    await diagnostics.noteRuntime("completion_gate_eval", {
+      ok: gate.canComplete,
+      summary: gate.summary,
+      rounds_allowed: gateRounds,
+    });
     for (let round = 0; !gate.canComplete && round < gateRounds; round += 1) {
       const gapPrompt = completionGapPrompt(runtime, gate);
-      await platform.send({
+      await platformOut.send({
         type: "completion_blocked",
         conversation_id: task.conversationId,
         task_id: task.taskId,
         round: round + 1,
         audit: gate.audit,
         message: "Runtime completion gate found unresolved runtime safety checks.",
+        agent_phase: "completion_gate",
       });
+      await diagnostics.noteRuntime("completion_gate_reprompt", { round: round + 1, summary: gate.summary });
       await session.prompt(gapPrompt, { source: "interactive" });
       await textStream.flush();
       throwIfLastAssistantError(session.messages);
       if (signal?.aborted) throw new Error("Task interrupted by user.");
       gate = completionGate(runtime);
+      await diagnostics.noteRuntime("completion_gate_eval", {
+        ok: gate.canComplete,
+        summary: gate.summary,
+        round: round + 1,
+      });
     }
     if (!gate.canComplete) {
       runtime.plan.setPhase("report");
-      await platform.send({
+      await platformOut.send({
         type: "plan_tree_updated",
         conversation_id: task.conversationId,
         task_id: task.taskId,
@@ -176,7 +203,7 @@ export async function runPentestTask(
         kanban: runtime.plan.kanban(),
         plan_tree: runtime.plan.snapshot(),
       });
-      await platform.send({
+      await platformOut.send({
         type: "checkpoint_update",
         conversation_id: task.conversationId,
         task_id: task.taskId,
@@ -188,9 +215,10 @@ export async function runPentestTask(
           lifecycle: runtime.lifecycle,
           coverage: await runtime.coverage.summary(),
           evidence: await runtime.evidence.list(),
+          diagnostics: diagnostics.snapshot(),
         },
       });
-      await platform.send({
+      await platformOut.send({
         type: "task_incomplete",
         conversation_id: task.conversationId,
         task_id: task.taskId,
@@ -198,7 +226,7 @@ export async function runPentestTask(
         audit: gate.audit,
         summary: runtime.lifecycle.finishScan?.summary || extractLastAssistantText(session.messages).slice(0, 4000) || gate.summary,
       });
-      await platform.send({
+      await platformOut.send({
         type: "task_complete",
         conversation_id: task.conversationId,
         task_id: task.taskId,
@@ -208,7 +236,7 @@ export async function runPentestTask(
       return;
     }
     runtime.plan.complete();
-    await platform.send({
+    await platformOut.send({
       type: "checkpoint_update",
       conversation_id: task.conversationId,
       task_id: task.taskId,
@@ -220,9 +248,10 @@ export async function runPentestTask(
         lifecycle: runtime.lifecycle,
         coverage: await runtime.coverage.summary(),
         evidence: await runtime.evidence.list(),
+        diagnostics: diagnostics.snapshot(),
       },
     });
-    await platform.send({
+    await platformOut.send({
       type: "plan_tree_updated",
       conversation_id: task.conversationId,
       task_id: task.taskId,
@@ -232,16 +261,32 @@ export async function runPentestTask(
       kanban: runtime.plan.kanban(),
       plan_tree: runtime.plan.snapshot(),
     });
-    await platform.send({
+    await platformOut.send({
       type: "task_complete",
       conversation_id: task.conversationId,
       task_id: task.taskId,
       status: "completed",
       summary: runtime.lifecycle.finishScan?.summary || extractLastAssistantText(session.messages).slice(0, 4000) || "Task completed.",
     });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await diagnostics.noteRuntime("task_error", { message });
+    await diagnostics.setPhase("error", { error: message });
+    await writeFile(
+      join(taskDir, "last-error.json"),
+      JSON.stringify({ ts: new Date().toISOString(), message, stack: error instanceof Error ? error.stack : undefined }, null, 2),
+      "utf8",
+    );
+    throw error;
   } finally {
     await textStream.dispose();
-    session.dispose();
+    try {
+      session.dispose();
+    } catch {
+      // Session may already be disposed after abort.
+    }
+    await stopBrowserSandbox(task.taskId).catch(() => undefined);
+    await diagnostics.noteRuntime("task_finally", { phase: diagnostics.snapshot().phase });
     await caidoBridge?.stop();
   }
 }
@@ -314,12 +359,13 @@ function buildWorkflowFirstInstruction(task: TaskEnvelope): string {
     "Use browser/http/scan output to populate the unified traffic store. If an external traffic source is configured, call traffic(action='source_status') and traffic(action='sync') after browsing/scanning.",
     "Prefer scan for established tools such as httpx, katana, nuclei, nmap, ffuf, sqlmap, dalfox, arjun, wafw00f, and nikto; Node2 runs scanners only through the configured Strix-style scanner sandbox and reports the runner used.",
     "Treat scanner-created pending tests as prioritized leads: verify them with baseline/attack traffic and deterministic verifier/http evidence before finding(confirm).",
-    "After recon, call coverage(action='priority_candidates') or coverage(action='conversion') and convert high-priority observed candidates with verifier/scan/poc/traffic(mutate). Do not leave material high-priority rows as observed-only.",
-    "Use verifier for supported classes when possible: upload confirmations require a retrievable marker, CSRF requires before/action/after state evidence, brute-force requires invalid/valid credential differential, and JavaScript-logic requires invalid/accepted server-side differential.",
-    "As soon as verifier returns confirmed=true with evidence_id, call finding(action='confirm') immediately with that evidence_id and full reproduction details.",
+    "After recon, call coverage(action='priority_candidates') and coverage(action='family_gaps'). Batch verifier/scan/poc/traffic(mutate) across the queue for injection, access-control/IDOR, auth/session/JWT, XSS, file/path, and redirect families. Do not stop after the first confirmed finding.",
+    "Use verifier for supported classes when possible, including idor, jwt-alg-none, open-redirect, path-traversal, mass-assignment, upload, CSRF, brute-force, and JavaScript-logic.",
+    "As soon as verifier returns confirmed=true with evidence_id, call finding(action='confirm') immediately with that evidence_id and full reproduction details, then continue the remaining candidate queue.",
+    "After any successful login/registration, re-inventory authenticated APIs/resources and seed new coverage before finishing.",
     "Then call traffic(action='analyze') or traffic(action='candidates') and establish baselines with traffic(action='repeat') before mutating requests with traffic(action='mutate').",
     "Choose vulnerability classes only after recon evidence or replayable traffic exists, then use Pi native skills, the PoC catalog, verifier, evidence, coverage, and finding tools.",
-    "When reporting is ready, call finish_scan(status='completed', ...) as the final lifecycle action. finish_scan(completed) is rejected while high-priority observed candidates remain untested; use incomplete/blocked if blockers remain.",
+    "When reporting is ready, call finish_scan(status='completed', ...) as the final lifecycle action. finish_scan(completed) is rejected while high-priority observed candidates or suggested risk-family gaps remain; use incomplete/blocked if blockers remain.",
     "",
     "Original user instruction:",
     task.instruction || "Run an authorized web penetration test against the target and report confirmed findings, evidence, coverage gaps, and blockers.",
@@ -366,23 +412,30 @@ function coverageCompletionAudit(runtime: ToolRuntime): {
   summary: string;
   unresolved: unknown[];
   conversion?: unknown;
+  missingRiskFamilies?: unknown[];
 } {
   const rows = runtime.coverage.listSync?.() || [];
   const untested = materialUntestedHighPriority(rows);
+  const familyGaps = missingRiskFamiliesFromCoverage(rows);
   const metrics = conversionMetrics(rows);
-  if (!untested.length) {
+  if (!untested.length && !familyGaps.length) {
     return {
       canComplete: true,
-      summary: "high-priority coverage candidates resolved or absent",
+      summary: "high-priority coverage candidates and risk families resolved or absent",
       unresolved: [],
       conversion: metrics,
+      missingRiskFamilies: [],
     };
   }
   return {
     canComplete: false,
-    summary: `${untested.length} high-priority observed candidate(s) still need verifier/scan/poc or blocked/skipped notes`,
+    summary: [
+      untested.length ? `${untested.length} high-priority observed candidate(s) still need testing` : "",
+      familyGaps.length ? `${familyGaps.length} risk-family gap(s) still need testing` : "",
+    ].filter(Boolean).join("; "),
     unresolved: untested.slice(0, 20).map(formatCandidate),
     conversion: metrics,
+    missingRiskFamilies: familyGaps,
   };
 }
 
@@ -453,13 +506,14 @@ function completionGapPrompt(runtime: ToolRuntime, gate: { audit: Record<string,
     const unresolved = Array.isArray(coverage.unresolved) ? coverage.unresolved.slice(0, 12) : [];
     const rows = runtime.coverage.listSync?.() || [];
     const untested = materialUntestedHighPriority(rows);
+    const familyGaps = missingRiskFamiliesFromCoverage(rows);
     parts.push(
       [
         "",
-        "Coverage conversion gate still has high-priority observed candidates without verification.",
+        "Coverage conversion gate still has high-priority observed candidates or risk-family gaps.",
         coverage.summary || "Unresolved high-priority coverage remains.",
-        nextVerifyGuidance(untested),
-        "For each high-value item, run verifier/scan/poc/traffic(mutate) and either finding(confirm) with evidence, or mark coverage as tried/passed/failed/blocked/skipped with a concrete reason. finish_scan(status='completed') is rejected while these remain observed-only.",
+        nextVerifyGuidance(untested, [], familyGaps),
+        "Batch verifier/http/traffic(mutate) across the remaining candidates. After auth success, re-inventory authenticated APIs. finish_scan(status='completed') is rejected while observed-only high-priority rows or family gaps remain.",
         ...unresolved.map((row) => `- ${typeof row === "string" ? row : formatCandidate(row as any)}`),
       ].join("\n"),
     );
@@ -467,7 +521,13 @@ function completionGapPrompt(runtime: ToolRuntime, gate: { audit: Record<string,
   return parts.join("\n");
 }
 
-async function handleSessionEvent(platform: PlatformSink, runtime: ToolRuntime, event: any): Promise<void> {
+async function handleSessionEvent(
+  platform: PlatformSink,
+  runtime: ToolRuntime,
+  diagnostics: TaskDiagnostics,
+  event: any,
+): Promise<void> {
+  const state = diagnostics.snapshot();
   if (event.type === "turn_start") {
     await platform.send({
       type: "status_update",
@@ -475,12 +535,56 @@ async function handleSessionEvent(platform: PlatformSink, runtime: ToolRuntime, 
       task_id: runtime.task.taskId,
       workflow_stage: runtime.plan.kanban().current_stage,
       active_tool: "pi",
+      agent_phase: "llm_waiting",
       status: "running",
+      turn: state.turn,
+      progress: runtime.plan.progress(),
+      kanban: runtime.plan.kanban(),
+    } as PlatformMessage);
+  }
+  if (event.type === "tool_execution_start") {
+    await platform.send({
+      type: "status_update",
+      conversation_id: runtime.task.conversationId,
+      task_id: runtime.task.taskId,
+      workflow_stage: runtime.plan.kanban().current_stage,
+      active_tool: String(event.toolName || "tool"),
+      agent_phase: "tool_running",
+      status: "running",
+      tool_run_id: event.toolCallId,
+      turn: state.turn,
+      progress: runtime.plan.progress(),
+      kanban: runtime.plan.kanban(),
+    } as PlatformMessage);
+  }
+  if (event.type === "tool_execution_end") {
+    await platform.send({
+      type: "status_update",
+      conversation_id: runtime.task.conversationId,
+      task_id: runtime.task.taskId,
+      workflow_stage: runtime.plan.kanban().current_stage,
+      active_tool: String(event.toolName || "tool"),
+      agent_phase: "llm_waiting",
+      status: event.isError ? "tool_error" : "running",
+      tool_run_id: event.toolCallId,
+      turn: state.turn,
       progress: runtime.plan.progress(),
       kanban: runtime.plan.kanban(),
     } as PlatformMessage);
   }
   if (event.type === "agent_end") {
+    await platform.send({
+      type: "status_update",
+      conversation_id: runtime.task.conversationId,
+      task_id: runtime.task.taskId,
+      workflow_stage: runtime.plan.kanban().current_stage,
+      active_tool: "pi",
+      agent_phase: "agent_end",
+      status: "running",
+      turn: state.turn,
+      progress: runtime.plan.progress(),
+      kanban: runtime.plan.kanban(),
+    } as PlatformMessage);
     await platform.send({
       type: "plan_tree_updated",
       conversation_id: runtime.task.conversationId,
@@ -498,6 +602,7 @@ async function handleSessionEvent(platform: PlatformSink, runtime: ToolRuntime, 
       conversation_id: runtime.task.conversationId,
       task_id: runtime.task.taskId,
       message: event.message.errorMessage || "Assistant model returned an error.",
+      agent_phase: "error",
       workflow_stage: runtime.plan.kanban().current_stage,
       progress: runtime.plan.progress(),
       kanban: runtime.plan.kanban(),
