@@ -509,7 +509,7 @@ function StrixTodoList({ items, running = false }: { items: PlanNode[]; running?
   if (!items.length) {
     return <p className="text-sm text-ink-muted">{running ? "Waiting for Strix to publish tasks" : "No active task plan yet"}</p>;
   }
-  const orderedItems = [...items].sort((left, right) => strixTaskStatusWeight(left.status) - strixTaskStatusWeight(right.status) || Number(left.priority || 999) - Number(right.priority || 999) || String(left.title || "").localeCompare(String(right.title || "")));
+  const orderedItems = [...items].sort((left, right) => Number(left.priority || 999) - Number(right.priority || 999) || String(left.title || "").localeCompare(String(right.title || "")));
   return (
     <div className="space-y-1" data-testid="strix-todo-list">
       {orderedItems.map((item, index) => <StrixTodoItem key={planNodeKey(item, index)} item={item} />)}
@@ -1102,16 +1102,6 @@ function normalizeTodoStatus(status: PlanStatus | undefined): "running" | "done"
   if (normalized === "blocked") return "blocked";
   if (normalized === "skipped") return "skipped";
   return "pending";
-}
-
-function strixTaskStatusWeight(status: PlanStatus | undefined): number {
-  const normalized = normalizeTodoStatus(status);
-  if (normalized === "running") return 0;
-  if (normalized === "pending") return 1;
-  if (normalized === "blocked") return 2;
-  if (normalized === "failed") return 3;
-  if (normalized === "done") return 4;
-  return 5;
 }
 
 function todoStatusIcon(status: ReturnType<typeof normalizeTodoStatus>) {
