@@ -329,6 +329,11 @@ def strix_agents_from_checkpoint(checkpoint: dict) -> list[dict]:
         return []
     node3 = checkpoint.get("node3_strix") if isinstance(checkpoint.get("node3_strix"), dict) else {}
     agents = node3.get("agents") if isinstance(node3.get("agents"), list) else []
+    if not agents:
+        # Node2 panel parity: checkpoint.panel_agents synthesized by the runtime.
+        agents = checkpoint.get("panel_agents") if isinstance(checkpoint.get("panel_agents"), list) else []
+    if not agents:
+        agents = agents_from_pentest_diagnostics(checkpoint)
     normalized = []
     for item in agents:
         if not isinstance(item, dict):
@@ -351,6 +356,27 @@ def strix_agents_from_checkpoint(checkpoint: dict) -> list[dict]:
             "current_action": str(item.get("current_action") or ""),
         })
     return normalized
+
+
+def agents_from_pentest_diagnostics(checkpoint: dict) -> list[dict]:
+    """Build a Node3-shaped main agent row from Node2 diagnostics when multi-agent data is absent."""
+    if str(checkpoint.get("runtime") or "") not in {"node2-pi", "node2"} and workflow_kind_for_checkpoint(checkpoint) != "pentest":
+        return []
+    diag = checkpoint.get("diagnostics") if isinstance(checkpoint.get("diagnostics"), dict) else {}
+    phase = str(diag.get("phase") or "")
+    status = "completed" if phase in {"finished", "agent_end"} else "failed" if phase in {"error", "aborted"} else "running"
+    return [{
+        "id": "node2-main",
+        "name": "Main Agent",
+        "status": status,
+        "parent_id": None,
+        "task": "",
+        "skills": [],
+        "pending_count": 0,
+        "role": "main",
+        "current_tool": str(diag.get("activeTool") or diag.get("lastTool") or ""),
+        "current_action": phase,
+    }]
 
 
 def strix_todos_from_checkpoint(checkpoint: dict) -> list[dict]:
@@ -445,6 +471,8 @@ def strix_run_from_checkpoint(checkpoint: dict) -> dict:
     if not run:
         run = strix_run_from_run_dir(str(node3.get("run_dir") or ""))
     if not run:
+        run = pentest_run_from_checkpoint(checkpoint)
+    if not run:
         return {}
     targets = run.get("targets_info") if isinstance(run.get("targets_info"), list) else []
     usage = run.get("llm_usage") if isinstance(run.get("llm_usage"), dict) else {}
@@ -465,6 +493,51 @@ def strix_run_from_checkpoint(checkpoint: dict) -> dict:
             "total_tokens": safe_int(usage.get("total_tokens")),
             "cost": safe_float(usage.get("cost")),
             "agent_count": safe_int(usage.get("agent_count")),
+        },
+    }
+
+
+def pentest_run_from_checkpoint(checkpoint: dict) -> dict:
+    """Synthesize Node3-shaped run summary from Node2/pi checkpoints for right-panel parity."""
+    if not isinstance(checkpoint, dict):
+        return {}
+    if str(checkpoint.get("runtime") or "") not in {"node2-pi", "node2"} and workflow_kind_for_checkpoint(checkpoint) != "pentest":
+        return {}
+    diag = checkpoint.get("diagnostics") if isinstance(checkpoint.get("diagnostics"), dict) else {}
+    lifecycle = checkpoint.get("lifecycle") if isinstance(checkpoint.get("lifecycle"), dict) else {}
+    finish = lifecycle.get("finishScan") if isinstance(lifecycle.get("finishScan"), dict) else {}
+    usage = checkpoint.get("llm_usage") if isinstance(checkpoint.get("llm_usage"), dict) else {}
+    targets = checkpoint.get("targets_info") if isinstance(checkpoint.get("targets_info"), list) else []
+    if not targets:
+        task_target = checkpoint.get("task_target") if isinstance(checkpoint.get("task_target"), dict) else {}
+        value = task_target.get("value") or task_target.get("url") or ""
+        if value:
+            targets = [{"type": "url", "target": value, "original": value}]
+    start_time = str(checkpoint.get("started_at") or diag.get("startedAt") or "")
+    end_time = str(finish.get("calledAt") or "")
+    if not end_time and str(diag.get("phase") or "") in {"finished", "error", "aborted"}:
+        end_time = str(diag.get("updatedAt") or "")
+    phase = str(diag.get("phase") or "")
+    status = str(finish.get("status") or "")
+    if not status:
+        status = "completed" if phase in {"finished", "agent_end"} else "failed" if phase in {"error", "aborted"} else "running"
+    return {
+        "run_id": str(diag.get("taskId") or checkpoint.get("task_id") or ""),
+        "run_name": "node2",
+        "status": status,
+        "start_time": start_time,
+        "end_time": end_time,
+        "scan_mode": str(checkpoint.get("scan_mode") or ""),
+        "targets_info": targets,
+        "llm_usage": {
+            "requests": safe_int(usage.get("requests") or diag.get("llmTurnCount")),
+            "input_tokens": safe_int(usage.get("input_tokens")),
+            "cached_tokens": safe_int(usage.get("cached_tokens")),
+            "output_tokens": safe_int(usage.get("output_tokens")),
+            "reasoning_tokens": safe_int(usage.get("reasoning_tokens")),
+            "total_tokens": safe_int(usage.get("total_tokens")),
+            "cost": safe_float(usage.get("cost")),
+            "agent_count": safe_int(usage.get("agent_count") or 1),
         },
     }
 

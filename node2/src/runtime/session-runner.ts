@@ -216,16 +216,7 @@ export async function runPentestTask(
         type: "checkpoint_update",
         conversation_id: task.conversationId,
         task_id: task.taskId,
-        checkpoint: {
-          ...runtime.plan.checkpoint(),
-          runtime: "node2-pi",
-          tool_names: PENTEST_TOOL_NAMES,
-          workflows: runtime.workflowRuns,
-          lifecycle: runtime.lifecycle,
-          coverage: await runtime.coverage.summary(),
-          evidence: await runtime.evidence.list(),
-          diagnostics: diagnostics.snapshot(),
-        },
+        checkpoint: await buildNode2Checkpoint(runtime, task, diagnostics),
       });
       await platformOut.send({
         type: "task_incomplete",
@@ -249,16 +240,7 @@ export async function runPentestTask(
       type: "checkpoint_update",
       conversation_id: task.conversationId,
       task_id: task.taskId,
-      checkpoint: {
-        ...runtime.plan.checkpoint(),
-        runtime: "node2-pi",
-        tool_names: PENTEST_TOOL_NAMES,
-        workflows: runtime.workflowRuns,
-        lifecycle: runtime.lifecycle,
-        coverage: await runtime.coverage.summary(),
-        evidence: await runtime.evidence.list(),
-        diagnostics: diagnostics.snapshot(),
-      },
+      checkpoint: await buildNode2Checkpoint(runtime, task, diagnostics),
     });
     await platformOut.send({
       type: "plan_tree_updated",
@@ -356,6 +338,64 @@ async function exists(path: string): Promise<boolean> {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
   }
+}
+
+async function buildNode2Checkpoint(
+  runtime: ToolRuntime,
+  task: TaskEnvelope,
+  diagnostics: TaskDiagnostics,
+): Promise<Record<string, unknown>> {
+  const diag = diagnostics.snapshot();
+  const engagementInfo = resolveEffectiveEngagement(task, runtime.workflowRuns);
+  const targetValue =
+    typeof task.target?.value === "string"
+      ? task.target.value
+      : typeof task.target?.url === "string"
+        ? String(task.target.url)
+        : "";
+  return {
+    ...runtime.plan.checkpoint(),
+    runtime: "node2-pi",
+    tool_names: PENTEST_TOOL_NAMES,
+    workflows: runtime.workflowRuns,
+    lifecycle: runtime.lifecycle,
+    coverage: await runtime.coverage.summary(),
+    evidence: await runtime.evidence.list(),
+    diagnostics: diag,
+    // Panel parity fields (Node3-shaped run/agent synthesis on the platform).
+    scan_mode: task.scanMode,
+    engagement: engagementInfo.engagement,
+    started_at: diag.startedAt,
+    task_target: task.target,
+    targets_info: targetValue
+      ? [{ type: "url", target: targetValue, original: targetValue }]
+      : [],
+    panel_agents: [
+      {
+        id: "node2-main",
+        name: "Main Agent",
+        status: diag.phase === "finished" || diag.phase === "error" || diag.phase === "aborted" ? "completed" : "running",
+        parent_id: null,
+        task: task.instruction?.slice(0, 240) || "Authorized security task",
+        skills: [],
+        pending_count: 0,
+        role: "main",
+        current_tool: diag.activeTool || "",
+        current_action: diag.phase || "",
+      },
+    ],
+    llm_usage: {
+      requests: diag.llmTurnCount,
+      total_tokens: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      cached_tokens: 0,
+      reasoning_tokens: 0,
+      cost: 0,
+      agent_count: 1,
+      tool_calls: diag.toolCallCount,
+    },
+  };
 }
 
 function buildWorkflowFirstInstruction(task: TaskEnvelope): string {

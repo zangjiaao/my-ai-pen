@@ -40,6 +40,7 @@ export type AgentStateSnapshot = {
   toolCallCount: number;
   llmTurnCount: number;
   errorCount: number;
+  startedAt?: string;
   updatedAt: string;
 };
 
@@ -63,6 +64,7 @@ export class TaskDiagnostics {
   private assistantStopReason?: string;
   private errorMessage?: string;
   private openTools = new Map<string, { toolName: string; startedAt: string }>();
+  private readonly startedAt: string = new Date().toISOString();
 
   private constructor(
     private readonly taskDir: string,
@@ -328,6 +330,7 @@ export class TaskDiagnostics {
       toolCallCount: this.toolCallCount,
       llmTurnCount: this.llmTurnCount,
       errorCount: this.errorCount,
+      startedAt: this.startedAt,
       updatedAt,
     };
   }

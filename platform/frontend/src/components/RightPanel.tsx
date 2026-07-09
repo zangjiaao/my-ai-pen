@@ -171,12 +171,20 @@ export default function RightPanel({
   const [tab, setTab] = useState<Tab>("status");
   const surfaceItems = attackSurfaceItems(planTree);
   const orderedStrixAgents = orderStrixAgents(strixAgents);
-  const hasStatusData = running || Boolean(activeTool) || planTree.length > 0 || orderedStrixAgents.length > 0 || findings.length > 0 || assets.length > 0 || timeline.length > 0;
   const kanbanSummary = normalizeKanban(kanban, planTree, progress, workflowKind);
   const isStrixWorkflow = workflowKind === "strix" || kanbanSummary.workflow_kind === "strix" || planTree.some((node) => String(node.source || "") === "strix_todo");
-  const visiblePlanTree = isStrixWorkflow ? mainAgentPlanTree(planTree, orderedStrixAgents) : planTree;
+  // Unified right-panel layout (Node3 baseline) for both Strix and Node2/pentest.
+  const displayAgents = orderedStrixAgents.length > 0
+    ? orderedStrixAgents
+    : synthesizeMainAgent(activeTool, running, workflowKind);
+  const hasStatusData = running || Boolean(activeTool) || planTree.length > 0 || displayAgents.length > 0 || findings.length > 0 || assets.length > 0 || timeline.length > 0 || Boolean(strixRun);
+  const visiblePlanTree = isStrixWorkflow ? mainAgentPlanTree(planTree, displayAgents) : planTree;
   const phasePlan = hasStatusData ? buildPhasePlan(visiblePlanTree, kanbanSummary.current_stage, activeTool, running, findings.length, isStrixWorkflow) : [];
-  const overallProgress = overallPlanProgress(phasePlan, kanbanSummary, progress);
+  // Node3-style flat task list for all workflows (phase tree remains available via plan data).
+  const taskItems = isStrixWorkflow
+    ? phasePlan.flatMap((phase) => phase.items)
+    : unifiedTodoItems(visiblePlanTree);
+  const displayRun = strixRun && hasRunSummaryData(strixRun) ? strixRun : undefined;
   const elapsedBaseSeconds = normalizeSeconds(kanbanSummary.elapsed_seconds);
   const intake = normalizeIntake(intakeResult, intakeStatus);
   const [elapsedClock, setElapsedClock] = useState(() => ({ seconds: elapsedBaseSeconds, anchorSeconds: elapsedBaseSeconds, anchorMs: Date.now() }));
@@ -286,31 +294,29 @@ export default function RightPanel({
       <div className="flex-1 overflow-y-auto p-4">
         {tab === "status" && (
           <div className="space-y-4">
-            {isStrixWorkflow && strixRun ? (
-              <StrixRunSummary run={strixRun} elapsedText={elapsedText} />
+            {/* Card 1: Run summary — Node3 layout for all engines */}
+            {displayRun ? (
+              <StrixRunSummary run={displayRun} elapsedText={elapsedText} />
             ) : (
               <section>
                 <p className="mb-1 text-xs text-ink-muted">Elapsed</p>
                 <p className="font-mono text-xl font-semibold leading-none tracking-normal">{elapsedText}</p>
               </section>
             )}
-            {!isStrixWorkflow && hasStatusData && overallProgress.label !== "waiting" && <OverallProgress progress={overallProgress} />}
-            {orderedStrixAgents.length > 0 && (
+            {/* Card 2: Agent collaboration — multi-agent (Node3) or synthesized main agent (Node2) */}
+            {displayAgents.length > 0 && (
               <section>
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <p className="text-xs text-ink-muted">Agent collaboration</p>
-                  <p className="font-mono text-[11px] text-ink-muted">{agentStatusCount(orderedStrixAgents)}</p>
+                  <p className="font-mono text-[11px] text-ink-muted">{agentStatusCount(displayAgents)}</p>
                 </div>
-                <StrixAgentList agents={orderedStrixAgents} />
+                <StrixAgentList agents={displayAgents} />
               </section>
             )}
+            {/* Card 3: Task plan — Node3 todo list style for all engines */}
             <section>
-              <p className="mb-2 text-xs text-ink-muted">{isStrixWorkflow ? "Strix tasks" : "Workflow plan"}</p>
-              {isStrixWorkflow ? (
-                <StrixTodoList items={phasePlan.flatMap((phase) => phase.items)} running={running} />
-              ) : (
-                <WorkflowPlan phases={phasePlan} running={running} />
-              )}
+              <p className="mb-2 text-xs text-ink-muted">Tasks</p>
+              <StrixTodoList items={taskItems} running={running} />
             </section>
             {intake && <IntakeSummary intake={intake} />}
           </div>
@@ -507,7 +513,7 @@ function SummaryValue({ children }: { children: ReactNode }) {
 
 function StrixTodoList({ items, running = false }: { items: PlanNode[]; running?: boolean }) {
   if (!items.length) {
-    return <p className="text-sm text-ink-muted">{running ? "Waiting for Strix to publish tasks" : "No active task plan yet"}</p>;
+    return <p className="text-sm text-ink-muted">{running ? "Waiting for tasks" : "No active task plan yet"}</p>;
   }
   const orderedItems = [...items].sort((left, right) => Number(left.priority || 999) - Number(right.priority || 999) || String(left.title || "").localeCompare(String(right.title || "")));
   return (
@@ -878,6 +884,58 @@ function agentPlanItems(nodes: PlanNode[]): PlanNode[] {
     const kind = String(node.kind || "task");
     return !["tool", "browser", "http", "poc", "scan", "traffic", "finding"].includes(kind);
   });
+}
+
+/** Unified task list for Node2/pentest: agent-authored plan items, not raw tool telemetry. */
+function unifiedTodoItems(nodes: PlanNode[]): PlanNode[] {
+  const noiseKinds = new Set([
+    "tool", "browser", "http", "poc", "scan", "traffic", "finding", "coverage", "verifier",
+    "finish_scan", "workflow", "workflow_run", "workflow_list", "workflow_dynamic", "read", "actor",
+  ]);
+  return nodes
+    .filter((node) => {
+      if ((node.level || "work_item") !== "work_item") return false;
+      const source = String(node.source || "");
+      const kind = String(node.kind || "task");
+      const parent = String(node.parent_id || "");
+      if (source === "strix_todo" || source === "agent") return !noiseKinds.has(kind);
+      if (parent.startsWith("workflow-") || parent.startsWith("plan-objective")) return !noiseKinds.has(kind);
+      if (kind === "task" || kind === "work" || kind === "work_item") return true;
+      return false;
+    })
+    .sort((left, right) => Number(left.priority || 999) - Number(right.priority || 999) || String(left.title || "").localeCompare(String(right.title || "")))
+    .slice(0, 24);
+}
+
+function synthesizeMainAgent(activeTool: string | undefined, running: boolean, workflowKind?: string): StrixAgentStatus[] {
+  // Only synthesize for pentest/Node2 when the platform did not send multi-agent rows.
+  if (workflowKind === "strix") return [];
+  if (!running && !activeTool) return [];
+  return [{
+    id: "node2-main",
+    name: "Main Agent",
+    status: running ? "running" : "completed",
+    parent_id: null,
+    task: "",
+    skills: [],
+    pending_count: 0,
+    role: "main",
+    current_tool: activeTool || "",
+    current_action: running ? "working" : "done",
+  }];
+}
+
+function hasRunSummaryData(run: StrixRun | undefined): boolean {
+  if (!run) return false;
+  const usage = run.llm_usage || {};
+  const targets = Array.isArray(run.targets_info) ? run.targets_info : [];
+  return Boolean(
+    run.start_time ||
+    run.end_time ||
+    run.scan_mode ||
+    Number(usage.total_tokens || usage.requests || 0) > 0 ||
+    targets.some((target) => target.target || target.original),
+  );
 }
 
 function workflowPhaseForPlanItem(item: PlanNode): WorkflowPhaseId {

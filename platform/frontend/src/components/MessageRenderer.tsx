@@ -295,17 +295,47 @@ function toolItemFromLine(line: string, fallback: { fallbackTool: string; fallba
 function summarizeToolItem(toolName: string, status: string, result: Record<string, unknown> | null, rawText: string, command = ""): string {
   const lower = toolName.toLowerCase();
   const value = result || {};
-  const displayStatus = compactStatus(status || readContentString(value.status) || readContentString(value.status_code));
+  const displayStatus = compactStatus(status || readContentString(value.status) || readContentString(value.status_code) || readContentString(value.statusCode));
   const inferred = inferToolText(rawText);
+  // Prefer structured result; Node2 often puts human summary in content.summary already.
   const method = readContentString(value.method).toUpperCase() || inferred.method;
-  const url = readContentString(value.url) || readContentString(value.target) || readContentString(value.location) || inferred.url;
+  const url =
+    readContentString(value.url) ||
+    readContentString(value.requested_url) ||
+    readContentString(value.target) ||
+    readContentString(value.location) ||
+    inferred.url;
   const commandText = command || readContentString(value.command) || inferred.command;
 
-  if (/browser|explore|crawl/.test(lower)) return joinSummaryParts([url || readContentString(value.action) || toolName, displayStatus]);
-  if (/http|request|replay|fetch|curl/.test(lower)) return joinSummaryParts([method || "HTTP", url, compactStatus(value.status_code || status)]);
-  if (/execute|command|shell|docker|process/.test(lower)) return joinSummaryParts([commandText || stripJsonNoise(rawText)]);
+  // If upstream already sent a clean non-JSON summary line, keep it.
+  const cleanRaw = String(rawText || "").trim();
+  if (cleanRaw && !cleanRaw.startsWith("{") && !cleanRaw.startsWith("[") && cleanRaw.length < 280 && !/^EVIDENCE_ID:/i.test(cleanRaw)) {
+    // Prefer structured HTTP/browser formatting when fields exist.
+    if (!((/http|request/.test(lower) || /browser/.test(lower)) && (method || url))) {
+      return stripJsonNoise(cleanRaw);
+    }
+  }
 
-  const title = readContentString(value.title) || readContentString(value.summary) || readContentString(value.message) || readContentString(value.error);
+  if (/browser|explore|crawl/.test(lower)) {
+    if (url) return joinSummaryParts([method || "GET", url, displayStatus || "done"]);
+    return joinSummaryParts([readContentString(value.action) || toolName, displayStatus]);
+  }
+  if (/http|request|replay|fetch|curl/.test(lower)) {
+    return joinSummaryParts([method || "HTTP", url, compactStatus(value.status_code || value.status || status)]);
+  }
+  if (/execute|command|shell|docker|process|scan/.test(lower)) {
+    return joinSummaryParts([commandText || stripJsonNoise(rawText), displayStatus]);
+  }
+  if (/verifier/.test(lower)) {
+    const klass = readContentString(value.vuln_class) || toolName;
+    const outcome = value.confirmed === true ? "confirmed" : value.confirmed === false ? "not confirmed" : displayStatus;
+    return joinSummaryParts([klass, url, outcome]);
+  }
+  if (/actor/.test(lower)) {
+    return joinSummaryParts([readContentString(value.action) || "actor", readContentString(value.id) || readContentString(value.active), displayStatus]);
+  }
+
+  const title = readContentString(value.title) || readContentString(value.summary) || readContentString(value.message) || readContentString(value.error) || readContentString(value.reason);
   const evidence = readContentString(value.evidence_id) || readContentString(value.EVIDENCE_ID);
   return joinSummaryParts([title || readContentString(value.action) || toolName, url || evidence, displayStatus]);
 }
@@ -355,7 +385,7 @@ function displayToolName(toolName: string, explicitTitle = ""): string {
 }
 
 function isCommandToolName(toolName: string): boolean {
-  return /exec command|command input|execute|command|shell|docker|process|stdin/i.test(toolName);
+  return /exec command|command input|execute|command|shell|docker|process|stdin|\bscan\b/i.test(toolName);
 }
 
 function toolTitle(toolNames: string[]): string {
