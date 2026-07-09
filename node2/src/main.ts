@@ -65,11 +65,18 @@ await client.connect();
 function normalizeTask(message: PlatformMessage): TaskEnvelope {
   const taskId = String(message.task_id || randomUUID());
   const conversationId = String(message.conversation_id || taskId);
+  // Only structured engagement from the platform — do not keyword-parse free text.
+  const engagementRaw = message.engagement ?? message.task_engagement ?? message.intent;
+  const engagement =
+    typeof engagementRaw === "string" && ["assess", "verify", "retest", "consult"].includes(engagementRaw.trim().toLowerCase())
+      ? (engagementRaw.trim().toLowerCase() as TaskEnvelope["engagement"])
+      : undefined;
   return {
     taskId,
     conversationId,
     instruction: String(message.initial_instruction || message.text || ""),
     scanMode: normalizeScanMode(message.scan_mode || message.scanMode),
+    engagement,
     target: isRecord(message.target) ? message.target : {},
     scope: isRecord(message.scope) ? message.scope : {},
     snapshot: isRecord(message.snapshot) ? message.snapshot : {},

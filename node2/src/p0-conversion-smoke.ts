@@ -12,6 +12,7 @@ import {
   materialUntestedHighPriority,
   missingRiskFamiliesFromCoverage,
 } from "./runtime/detection-conversion.js";
+import { ActorStore } from "./stores/actors.js";
 import { CoverageStore } from "./stores/coverage.js";
 import { EvidenceStore } from "./stores/evidence.js";
 import { PlanStore } from "./stores/plan.js";
@@ -65,11 +66,14 @@ async function main(): Promise<void> {
     coverage: new CoverageStore(),
     evidence: new EvidenceStore(resolve(taskDir, "evidence")),
     traffic: new TrafficStore(),
+    actors: new ActorStore(),
     pocCatalogPath: "",
     workflowRuns: [{ runId: "wf-1", status: "completed", specPath: "workflows/pentest-web/spec.json" }],
     lifecycle: {},
   };
   runtime.plan.start();
+  runtime.actors!.upsert({ id: "user_a", label: "A", authorization: "Bearer a" });
+  runtime.actors!.upsert({ id: "user_b", label: "B", authorization: "Bearer b" });
   const coverage = createCoverageTool(runtime);
   const finish = createFinishScanTool(runtime);
 
@@ -166,7 +170,7 @@ async function main(): Promise<void> {
     param: "id",
     vuln_class: "idor",
     status: "failed",
-    notes: "cross-object access confirmed",
+    notes: "dual-actor | actor=user_a | alt_actor=user_b | cross-object access confirmed",
   });
   // Close remaining suggested families with explicit skips where no surface remains actionable.
   for (const family of missingRiskFamiliesFromCoverage(await runtime.coverage.list())) {
@@ -181,7 +185,7 @@ async function main(): Promise<void> {
   }
 
   const rowsB = await runtime.coverage.list();
-  const pureB = finishCompletedEligibility(rowsB, { status: "completed" });
+  const pureB = finishCompletedEligibility(rowsB, { status: "completed", actorCount: runtime.actors!.count() });
   assert(pureB.allowed, `pure helper should allow completed after resolution: ${pureB.reason}`);
   assert(materialUntestedHighPriority(rowsB).length === 0, "no high-priority observed should remain");
   assert(missingRiskFamiliesFromCoverage(rowsB).length === 0, "no risk-family gaps should remain");

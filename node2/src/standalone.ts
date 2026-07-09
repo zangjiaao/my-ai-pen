@@ -75,6 +75,7 @@ async function main(): Promise<void> {
   const taskId = args["task-id"] || `node2-standalone-${Date.now()}`;
   const target = args.target || "http://localhost:8080";
   const scanMode = normalizeScanMode(args["scan-mode"]);
+  const engagement = normalizeEngagementArg(args.engagement);
   const dvwaSecurity = args["dvwa-security"];
   const outputDir = resolve(args.output || config.workspaceDir);
   const instruction = args.instruction || buildStandaloneInstruction({
@@ -88,6 +89,7 @@ async function main(): Promise<void> {
     conversationId: args["conversation-id"] || taskId,
     instruction,
     scanMode,
+    engagement,
     target: { type: "url", value: target },
     scope: { allow: parseList(args.scope || target) },
     snapshot: {},
@@ -115,6 +117,16 @@ function normalizeScanMode(value: string | undefined): ScanMode {
   const normalized = String(value || "standard").trim().toLowerCase();
   if (normalized === "quick" || normalized === "standard" || normalized === "deep") return normalized;
   throw new Error(`Unsupported --scan-mode "${value}". Use quick, standard, or deep.`);
+}
+
+/** Explicit CLI engagement only — never inferred from --instruction free text. */
+function normalizeEngagementArg(value: string | undefined): TaskEnvelope["engagement"] | undefined {
+  if (!value) return undefined;
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === "assess" || normalized === "verify" || normalized === "retest" || normalized === "consult") {
+    return normalized;
+  }
+  throw new Error(`Unsupported --engagement "${value}". Use assess, verify, retest, or consult.`);
 }
 
 function buildStandaloneInstruction(input: {

@@ -8,6 +8,7 @@ import {
   formatCandidate,
   nextVerifyGuidance,
 } from "../runtime/detection-conversion.js";
+import { resolveEffectiveEngagement } from "../runtime/engagement.js";
 import type { FinishScanState, PlatformMessage, ToolRuntime } from "../types.js";
 import { emitPlanUpdate, jsonResult, textResult } from "./common.js";
 
@@ -18,12 +19,13 @@ export function createFinishScanTool(runtime: ToolRuntime): ToolDefinition<any> 
     name: "finish_scan",
     label: "Finish Scan",
     description:
-      "Finish the authorized scan lifecycle. This is the only valid way to request final task completion after workflow, recon, testing, evidence, and reporting are done.",
-    promptSnippet: "Finish the scan lifecycle with a final status and concise report",
+      "Finish the authorized task lifecycle. Completion gates depend on engagement (assess vs verify/retest/consult) derived from the workflow you ran or an explicit task.engagement field.",
+    promptSnippet: "Finish the task lifecycle with a final status and concise report",
     promptGuidelines: [
-      "Call finish_scan exactly once when the scan is ready to end.",
-      "Use status='completed' only after high-priority observed coverage candidates were verified or explicitly blocked/skipped, tools are idle, and confirmed findings have valid evidence_ids.",
-      "Use status='incomplete' or status='blocked' when login, scope, tooling, time, or remaining untested high-priority candidates prevent completion.",
+      "Call finish_scan exactly once when the task is ready to end.",
+      "For assess (pentest-web): status='completed' only after high-priority observed candidates, risk families, and multi-actor probes (when required) are resolved.",
+      "For verify/retest/consult: status='completed' when the hypothesis/retest outcome or consultation answer is done — full-site conversion gates do not apply.",
+      "Use status='incomplete' or status='blocked' when blockers prevent finishing the chosen engagement.",
       "Include a concise summary, confirmed finding titles, coverage gaps, blockers, and evidence_ids that support the final report.",
     ],
     parameters: Type.Object({
@@ -50,9 +52,13 @@ export function createFinishScanTool(runtime: ToolRuntime): ToolDefinition<any> 
       }
 
       const coverageRows = await runtime.coverage.list();
+      const actorCount = runtime.actors?.count() ?? 0;
+      const engagementInfo = resolveEffectiveEngagement(runtime.task, runtime.workflowRuns);
       const eligibility = finishCompletedEligibility(coverageRows, {
         status,
         confirmedFindings: stringArray(params.confirmed_findings),
+        actorCount,
+        engagement: engagementInfo.engagement,
       });
       if (status === "completed" && !eligibility.allowed) {
         const metrics = conversionMetrics(coverageRows);
@@ -61,8 +67,10 @@ export function createFinishScanTool(runtime: ToolRuntime): ToolDefinition<any> 
           blocked: true,
           error: "finish_scan(completed) rejected: coverage conversion or risk-family gaps remain",
           reason: eligibility.reason,
+          engagement: engagementInfo,
           untested_high_priority: eligibility.untestedHighPriority.map(formatCandidate),
           missing_risk_families: eligibility.missingRiskFamilies,
+          actors: runtime.actors?.summary?.() ?? { count: actorCount },
           conversion: metrics,
           guidance: nextVerifyGuidance(
             eligibility.untestedHighPriority,

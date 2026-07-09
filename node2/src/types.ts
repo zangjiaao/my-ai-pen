@@ -5,12 +5,21 @@ export type TaskEnvelope = {
   conversationId: string;
   instruction: string;
   scanMode?: ScanMode;
+  /**
+   * Optional structured engagement from the product UI/API.
+   * Free-text intent must NOT be keyword-parsed into this field by platform code;
+   * when absent, the agent selects the pi-workflow via LLM judgment.
+   */
+  engagement?: Engagement;
   target: Record<string, unknown>;
   scope: Record<string, unknown>;
   snapshot: Record<string, unknown>;
 };
 
 export type ScanMode = "quick" | "standard" | "deep";
+
+/** Structured task intent; maps to a pi-workflow and completion gates. */
+export type Engagement = "assess" | "verify" | "retest" | "consult";
 
 export type PlatformSink = {
   send(message: PlatformMessage): Promise<void>;
@@ -24,12 +33,32 @@ export type ToolRuntime = {
   coverage: CoverageStoreLike;
   evidence: EvidenceStoreLike;
   traffic: TrafficStoreLike;
+  /** Multi-identity sessions for horizontal/vertical privilege testing. */
+  actors?: ActorStoreLike;
   pocCatalogPath: string;
   workflowRuns: WorkflowRunSummary[];
   lifecycle: RuntimeLifecycle;
   trafficProxyUrl?: string;
   externalTrafficSource?: ExternalTrafficSourceLike;
   scannerSandbox?: ScannerSandboxConfig;
+};
+
+export type ActorStoreLike = {
+  list(): Array<{ id: string; label: string; roleHint?: string; headers: Record<string, string>; meta: Record<string, unknown>; updatedAt: string }>;
+  count(): number;
+  get(id: string): { id: string; label: string; roleHint?: string; headers: Record<string, string>; meta: Record<string, unknown>; updatedAt: string } | undefined;
+  active(): { id: string; label: string; roleHint?: string; headers: Record<string, string>; meta: Record<string, unknown>; updatedAt: string } | undefined;
+  activeIdValue(): string | undefined;
+  upsert(input: Record<string, unknown>): { id: string; label: string; roleHint?: string; headers: Record<string, string>; meta: Record<string, unknown>; updatedAt: string };
+  activate(id: string): { id: string; label: string; roleHint?: string; headers: Record<string, string>; meta: Record<string, unknown>; updatedAt: string };
+  clearActive(): void;
+  headersFor(id?: string | null): Record<string, string>;
+  capture(
+    id: string,
+    material: { headers?: Record<string, string>; authorization?: string; cookie?: string; meta?: Record<string, unknown>; label?: string; roleHint?: string },
+    options?: { replaceHeaders?: boolean; activate?: boolean },
+  ): { id: string; label: string; roleHint?: string; headers: Record<string, string>; meta: Record<string, unknown>; updatedAt: string };
+  summary(): { active?: string; count: number; actors: Array<{ id: string; label: string; roleHint?: string; hasAuth: boolean; meta: Record<string, unknown> }> };
 };
 
 export type ScannerSandboxConfig = {

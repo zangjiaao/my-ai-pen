@@ -27,3 +27,11 @@
 - Do not hardcode current-task workflows, vulnerability categories, payloads, reports, or coverage conclusions unless the user explicitly approves that tradeoff.
 - Prefer harness steering over late failure handling: guide agents toward attack-surface discovery, hypothesis-driven testing, candidate validation, and reporting in that order.
 - Validator and reporting agents should follow candidate evidence from discovery/testing work. They must not replace discovery-oriented testing or become the first post-recon workstream.
+
+## Intent And Workflow Selection
+
+- Do not route user tasks, choose pi-workflows, or set engagement modes by keyword/regex matching on the user's natural-language prompt (including bilingual synonym lists that try to "guess" intent).
+- Prefer the LLM (or an explicit structured field from the product UI / task envelope such as `engagement`) to understand the user's intent and select the matching workflow.
+- Platform code may map an **explicit** structured engagement value to a workflow name and completion gates. It must not invent that engagement by scanning free-text instructions for words like "verify", "retest", or "explain".
+- After the agent runs a workflow, gates and reports should follow the **actually selected workflow / persisted engagement**, not a second keyword pass over the original prompt.
+- When intent is ambiguous and no structured engagement is provided, the agent should decide among published workflows using judgment; defaults in code (if any) must be conservative and disclosed, not disguised NLP.

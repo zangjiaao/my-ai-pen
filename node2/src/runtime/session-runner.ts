@@ -9,6 +9,7 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type { Node2Config } from "../config.js";
+import { ActorStore } from "../stores/actors.js";
 import { CoverageStore } from "../stores/coverage.js";
 import { EvidenceStore } from "../stores/evidence.js";
 import { PlanStore } from "../stores/plan.js";
@@ -27,6 +28,13 @@ import {
   nextVerifyGuidance,
 } from "./detection-conversion.js";
 import { stopBrowserSandbox } from "./browser-sandbox.js";
+import {
+  engagementRequiresFullCoverageGate,
+  isKnownPentestWorkflow,
+  resolveEffectiveEngagement,
+  resolveExplicitEngagement,
+  workflowCatalogForPrompt,
+} from "./engagement.js";
 import { createPentestExtension } from "./pentest-extension.js";
 import { buildSystemPrompt } from "./prompt.js";
 
@@ -54,6 +62,7 @@ export async function runPentestTask(
     coverage: new CoverageStore(),
     evidence: new EvidenceStore(join(taskDir, "evidence")),
     traffic: new TrafficStore(),
+    actors: new ActorStore(),
     pocCatalogPath: config.pocCatalogPath,
     workflowRuns: [],
     lifecycle: {},
@@ -351,25 +360,40 @@ async function exists(path: string): Promise<boolean> {
 
 function buildWorkflowFirstInstruction(task: TaskEnvelope): string {
   const scanMode = task.scanMode || "standard";
-  return [
-    "Use the pi-workflow named \"pentest-web\" as the lightweight scan-first controller for this authorized test.",
-    `Scan mode: ${scanMode}. ${scanModeGuidance(scanMode)}`,
-    "Call workflow_run with workflow=\"pentest-web\", thinking=\"low\", and a concrete task preserving the target, scope, and user instruction below.",
-    "After the workflow returns, do not expand a full vulnerability matrix up front. Read the brief if needed, then immediately perform browser/http reachability, login/session capture, traffic discovery, and coverage seeding with Node2 tools.",
-    "Use browser/http/scan output to populate the unified traffic store. If an external traffic source is configured, call traffic(action='source_status') and traffic(action='sync') after browsing/scanning.",
-    "Prefer scan for established tools such as httpx, katana, nuclei, nmap, ffuf, sqlmap, dalfox, arjun, wafw00f, and nikto; Node2 runs scanners only through the configured Strix-style scanner sandbox and reports the runner used.",
-    "Treat scanner-created pending tests as prioritized leads: verify them with baseline/attack traffic and deterministic verifier/http evidence before finding(confirm).",
-    "After recon, call coverage(action='priority_candidates') and coverage(action='family_gaps'). Batch verifier/scan/poc/traffic(mutate) across the queue for injection, access-control/IDOR, auth/session/JWT, XSS, file/path, and redirect families. Do not stop after the first confirmed finding.",
-    "Use verifier for supported classes when possible, including idor, jwt-alg-none, open-redirect, path-traversal, mass-assignment, upload, CSRF, brute-force, and JavaScript-logic.",
-    "As soon as verifier returns confirmed=true with evidence_id, call finding(action='confirm') immediately with that evidence_id and full reproduction details, then continue the remaining candidate queue.",
-    "After any successful login/registration, re-inventory authenticated APIs/resources and seed new coverage before finishing.",
-    "Then call traffic(action='analyze') or traffic(action='candidates') and establish baselines with traffic(action='repeat') before mutating requests with traffic(action='mutate').",
-    "Choose vulnerability classes only after recon evidence or replayable traffic exists, then use Pi native skills, the PoC catalog, verifier, evidence, coverage, and finding tools.",
-    "When reporting is ready, call finish_scan(status='completed', ...) as the final lifecycle action. finish_scan(completed) is rejected while high-priority observed candidates or suggested risk-family gaps remain; use incomplete/blocked if blockers remain.",
+  const explicit = resolveExplicitEngagement(task);
+  const lines: string[] = [
+    "Start by selecting the correct pi-workflow for this task, then execute its brief with Node2 tools.",
+    `Scan intensity: ${scanMode}. ${scanModeGuidance(scanMode)} (intensity is independent of engagement/workflow choice).`,
+  ];
+
+  if (explicit) {
+    lines.push(
+      `Structured engagement="${explicit.engagement}" → use workflow_run with workflow="${explicit.workflow}", thinking="low".`,
+      "Preserve target, scope, and the user instruction in the workflow task payload.",
+    );
+  } else {
+    lines.push(
+      "No structured engagement field was provided. Understand the user's instruction and choose the matching workflow yourself (LLM judgment — do not apply a rigid keyword table).",
+      workflowCatalogForPrompt(),
+      'Call workflow_run with workflow="<chosen>", thinking="low", and a concrete task preserving the user instruction.',
+    );
+  }
+
+  lines.push(
+    "After the workflow returns, follow that engagement only:",
+    "- pentest-web (assess): recon, multi-actor when needed, traffic/coverage, dual-actor and business-logic probes, then finish_scan with full-assessment gates.",
+    "- pentest-verify: minimal path to validate the stated hypothesis; finish when confirmed, disproven, or blocked — do not full-site sweep.",
+    "- pentest-retest: replay the prior finding path and report still-vulnerable vs fixed.",
+    "- pentest-consult: answer the question; live tools only if authorized and necessary.",
+    "Use browser/http/scan/actor/traffic/verifier/finding as appropriate to the chosen engagement.",
+    "Prefer scan for established tools (httpx, katana, nuclei, nmap, ffuf, sqlmap, …) via the scanner sandbox when discovery is in scope.",
+    "When verifier returns confirmed=true with evidence_id, call finding(action='confirm') immediately with that evidence_id.",
+    "Call finish_scan as the final lifecycle action. Completion gates follow the engagement of the workflow you ran (or explicit task.engagement).",
     "",
     "Original user instruction:",
-    task.instruction || "Run an authorized web penetration test against the target and report confirmed findings, evidence, coverage gaps, and blockers.",
-  ].join("\n");
+    task.instruction || "Run an authorized web security task against the target and report outcomes with evidence.",
+  );
+  return lines.join("\n");
 }
 
 function scanModeGuidance(scanMode: string): string {
@@ -389,15 +413,17 @@ function completionGateRounds(): number {
 }
 
 function completionGate(runtime: ToolRuntime): { canComplete: boolean; audit: Record<string, unknown>; summary: string } {
+  const engagementInfo = resolveEffectiveEngagement(runtime.task, runtime.workflowRuns);
   const planAudit = runtime.plan.audit();
   const workflowAudit = workflowCompletionAudit(runtime);
   const finishAudit = finishScanAudit(runtime);
-  const coverageAudit = coverageCompletionAudit(runtime);
+  const coverageAudit = coverageCompletionAudit(runtime, engagementInfo.engagement);
   const summary = [planAudit.summary, workflowAudit.summary, finishAudit.summary, coverageAudit.summary].filter(Boolean).join("; ");
   return {
     canComplete: planAudit.canComplete && workflowAudit.canComplete && finishAudit.canComplete && coverageAudit.canComplete,
     audit: {
       ...planAudit,
+      engagement: engagementInfo,
       workflow: workflowAudit,
       finish_scan: finishAudit,
       coverage: coverageAudit,
@@ -407,13 +433,23 @@ function completionGate(runtime: ToolRuntime): { canComplete: boolean; audit: Re
   };
 }
 
-function coverageCompletionAudit(runtime: ToolRuntime): {
+function coverageCompletionAudit(
+  runtime: ToolRuntime,
+  engagement: string,
+): {
   canComplete: boolean;
   summary: string;
   unresolved: unknown[];
   conversion?: unknown;
   missingRiskFamilies?: unknown[];
 } {
+  if (!engagementRequiresFullCoverageGate(engagement as import("./engagement.js").Engagement)) {
+    return {
+      canComplete: true,
+      summary: `${engagement} engagement: full-site coverage conversion gate not required`,
+      unresolved: [],
+    };
+  }
   const rows = runtime.coverage.listSync?.() || [];
   const untested = materialUntestedHighPriority(rows);
   const familyGaps = missingRiskFamiliesFromCoverage(rows);
@@ -450,7 +486,12 @@ function finishScanAudit(runtime: ToolRuntime): { canComplete: boolean; summary:
     };
   }
   const rows = runtime.coverage.listSync?.() || [];
-  const eligibility = finishCompletedEligibility(rows, { status: "completed" });
+  const engagementInfo = resolveEffectiveEngagement(runtime.task, runtime.workflowRuns);
+  const eligibility = finishCompletedEligibility(rows, {
+    status: "completed",
+    actorCount: runtime.actors?.count() ?? 0,
+    engagement: engagementInfo.engagement,
+  });
   if (!eligibility.allowed) {
     return {
       canComplete: false,
@@ -460,19 +501,44 @@ function finishScanAudit(runtime: ToolRuntime): { canComplete: boolean; summary:
   }
   return {
     canComplete: true,
-    summary: "finish_scan completed",
+    summary: `finish_scan completed (engagement=${engagementInfo.engagement})`,
     finishScan,
   };
 }
 
 function workflowCompletionAudit(runtime: ToolRuntime): { canComplete: boolean; summary: string; runs: unknown[] } {
-  const runs = runtime.workflowRuns.filter((run) => run.specPath?.includes("pentest-web") || !run.specPath);
-  const completed = runs.some((run) => run.status === "completed");
-  if (completed) return { canComplete: true, summary: "pentest-web workflow completed", runs };
-  if (runs.length === 0) return { canComplete: false, summary: "pentest-web workflow has not run", runs };
+  const explicit = resolveExplicitEngagement(runtime.task);
+  const runs = runtime.workflowRuns.filter(
+    (run) => isKnownPentestWorkflow(run.specPath) || isKnownPentestWorkflow(run.openCommand) || !run.specPath,
+  );
+  const completedKnown = runs.filter((run) => run.status === "completed" && (isKnownPentestWorkflow(run.specPath) || isKnownPentestWorkflow(run.openCommand)));
+  if (explicit) {
+    const expected = explicit.workflow;
+    const match = completedKnown.some(
+      (run) =>
+        (run.specPath && run.specPath.includes(expected)) ||
+        (run.openCommand && run.openCommand.includes(expected)),
+    );
+    // Also accept completed run with empty specPath if only one workflow completed and name unknown — prefer strict match.
+    if (match) return { canComplete: true, summary: `${expected} workflow completed`, runs };
+    if (runs.length === 0) return { canComplete: false, summary: `${expected} workflow has not run`, runs };
+    return {
+      canComplete: false,
+      summary: `${expected} workflow did not complete; latest status=${runs[runs.length - 1]?.status || "unknown"}`,
+      runs,
+    };
+  }
+  if (completedKnown.length > 0) {
+    return {
+      canComplete: true,
+      summary: `engagement workflow completed (${completedKnown[completedKnown.length - 1]?.specPath || "known"})`,
+      runs,
+    };
+  }
+  if (runs.length === 0) return { canComplete: false, summary: "no engagement pi-workflow has run yet", runs };
   return {
     canComplete: false,
-    summary: `pentest-web workflow did not complete; latest status=${runs[runs.length - 1]?.status || "unknown"}`,
+    summary: `engagement workflow did not complete; latest status=${runs[runs.length - 1]?.status || "unknown"}`,
     runs,
   };
 }
@@ -483,12 +549,15 @@ function completionGapPrompt(runtime: ToolRuntime, gate: { audit: Record<string,
   const coverage = gate.audit.coverage as { canComplete?: boolean; summary?: string; unresolved?: any[] } | undefined;
   const parts = [runtime.plan.gapPrompt()];
   if (workflow && !workflow.canComplete) {
+    const engagementInfo = resolveEffectiveEngagement(runtime.task, runtime.workflowRuns);
+    const expected = resolveExplicitEngagement(runtime.task)?.workflow || engagementInfo.workflow;
     parts.push(
       [
         "",
-        "The mandatory pentest-web pi-workflow completion gate is still unresolved.",
-        workflow.summary || "pentest-web workflow has not completed.",
-        "Run workflow_run with workflow=\"pentest-web\", thinking=\"low\", and a concrete scoped task, wait for it to complete, then execute its brief with Node2 tools before summarizing.",
+        "The mandatory engagement pi-workflow completion gate is still unresolved.",
+        workflow.summary || "engagement workflow has not completed.",
+        `Run workflow_run with the workflow that matches the user's intent (expected or preferred: "${expected}"), thinking="low", wait for it to complete, then execute its brief with Node2 tools before summarizing.`,
+        workflowCatalogForPrompt(),
       ].join("\n"),
     );
   }

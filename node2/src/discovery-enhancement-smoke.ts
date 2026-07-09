@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { finishCompletedEligibility, missingRiskFamiliesFromCoverage } from "./runtime/detection-conversion.js";
+import { ActorStore } from "./stores/actors.js";
 import { CoverageStore } from "./stores/coverage.js";
 import { EvidenceStore } from "./stores/evidence.js";
 import { PlanStore } from "./stores/plan.js";
@@ -117,11 +118,14 @@ try {
     coverage: new CoverageStore(),
     evidence: new EvidenceStore(resolve(taskDir, "evidence")),
     traffic: new TrafficStore(),
+    actors: new ActorStore(),
     pocCatalogPath: "",
     workflowRuns: [],
     lifecycle: {},
   };
   runtime.plan.start();
+  runtime.actors!.upsert({ id: "user_a", label: "A", authorization: "Bearer real-token" });
+  runtime.actors!.upsert({ id: "user_b", label: "B", authorization: "Bearer other-token" });
   const verifier = createVerifierTool(runtime);
 
   // Seed coverage shapes that imply multiple families.
@@ -139,7 +143,8 @@ try {
     vuln_class: "idor",
     url: `${target}/api/Users/1`,
     object_id: "1",
-    alt_object_id: "2",
+    actor: "user_a",
+    alt_actor: "user_b",
   });
   assert(idor.confirmed === true, `idor should confirm: ${JSON.stringify(idor)}`);
 
@@ -200,7 +205,10 @@ try {
       notes: `risk-family skip ${family.reason}`,
     });
   }
-  const allowed = finishCompletedEligibility(await runtime.coverage.list(), { status: "completed" });
+  const allowed = finishCompletedEligibility(await runtime.coverage.list(), {
+    status: "completed",
+    actorCount: runtime.actors!.count(),
+  });
   assert(allowed.allowed, `finish should be allowed after family closure: ${allowed.reason}`);
 
   console.log(JSON.stringify({

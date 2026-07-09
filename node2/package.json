@@ -24,6 +24,8 @@
     "scan-output:smoke": "tsx src/scan-output-ingest-smoke.ts",
     "scan-real-sandbox:smoke": "tsx src/scan-real-sandbox-smoke.ts",
     "browser-sandbox:smoke": "tsx src/browser-sandbox-smoke.ts",
+    "multi-actor:smoke": "tsx src/multi-actor-smoke.ts",
+    "engagement:smoke": "tsx src/engagement-smoke.ts",
     "caido-bridge:smoke": "tsx src/caido-bridge-status-smoke.ts",
     "caido-sidecar:smoke": "tsx src/caido-bridge-status-smoke.ts --sidecar",
     "caido-sidecar-traffic:smoke": "tsx src/caido-sidecar-traffic-smoke.ts",

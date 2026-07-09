@@ -46,6 +46,11 @@ export const HIGH_PRIORITY_VULN_CLASSES = new Set([
   "jwt-alg-none",
   "open-redirect",
   "mass-assignment",
+  "business-logic",
+  "workflow-bypass",
+  "access-control",
+  "horizontal-access",
+  "vertical-access",
 ]);
 
 /**
@@ -99,6 +104,12 @@ export const RISK_FAMILIES: Array<{
     label: "CSRF / state-changing forms",
     classes: ["csrf"],
     surfaceHints: /password|profile|change|update|delete|post/i,
+  },
+  {
+    id: "business_logic",
+    label: "Business logic / workflow abuse",
+    classes: ["business-logic", "workflow-bypass", "price-tampering", "javascript-logic"],
+    surfaceHints: /order|cart|basket|checkout|payment|coupon|discount|feedback|captcha|quantity|price|rating|review|wallet|transfer|step|quantity/i,
   },
 ];
 
@@ -187,18 +198,26 @@ export type FinishEligibility = {
 };
 
 /**
- * finish_scan(status='completed') is allowed only when:
- * 1) no material high-priority observed candidates remain untested, and
- * 2) risk families suggested by observed surface shape each have at least one attempted/resolved coverage row
- *    (or an explicit blocked/skipped family row).
+ * finish_scan(status='completed') eligibility depends on engagement:
+ * - assess (default): high-priority observed cleared, risk families attempted, multi-actor when surface needs it
+ * - verify / retest / consult: do not require full-site conversion; hypothesis-scoped completion is allowed
  */
 export function finishCompletedEligibility(
   coverageRows: CoverageLikeRow[],
-  options: { status?: string; confirmedFindings?: string[] } = {},
+  options: {
+    status?: string;
+    confirmedFindings?: string[];
+    actorCount?: number;
+    /** assess | verify | retest | consult — from explicit task field or workflow actually run */
+    engagement?: string;
+  } = {},
 ): FinishEligibility {
   const status = String(options.status || "completed").toLowerCase();
+  const engagement = String(options.engagement || "assess").toLowerCase();
   const untested = materialUntestedHighPriority(coverageRows);
   const missingRiskFamilies = missingRiskFamiliesFromCoverage(coverageRows);
+  const applyMultiActor = engagement === "assess";
+  const multiActorGaps = applyMultiActor ? multiActorTestingGaps(coverageRows, options.actorCount ?? 0) : [];
   const verifiedAwaitingConfirm = coverageRows
     .map(normalizeCoverageRow)
     .filter((row): row is ConversionCandidate => Boolean(row))
@@ -210,7 +229,21 @@ export function finishCompletedEligibility(
       reason: `finish status ${status} does not require full high-priority conversion`,
       untestedHighPriority: untested,
       verifiedAwaitingConfirm,
-      missingRiskFamilies,
+      missingRiskFamilies: [...missingRiskFamilies, ...multiActorGaps],
+    };
+  }
+
+  // Narrow engagements: full-site coverage/family/multi-actor gates do not apply.
+  if (engagement === "verify" || engagement === "retest" || engagement === "consult") {
+    return {
+      allowed: true,
+      reason:
+        engagement === "consult"
+          ? "consult engagement: completed allowed after the question is answered (no full-assessment conversion gates)"
+          : `${engagement} engagement: completed allowed when the stated hypothesis/retest outcome is resolved with evidence (no full-site conversion gates)`,
+      untestedHighPriority: untested,
+      verifiedAwaitingConfirm,
+      missingRiskFamilies: [],
     };
   }
 
@@ -223,7 +256,7 @@ export function finishCompletedEligibility(
         `Examples: ${untested.slice(0, 5).map(formatCandidate).join("; ")}`,
       untestedHighPriority: untested,
       verifiedAwaitingConfirm,
-      missingRiskFamilies,
+      missingRiskFamilies: [...missingRiskFamilies, ...multiActorGaps],
     };
   }
 
@@ -236,17 +269,85 @@ export function finishCompletedEligibility(
         `Use verifier for suggested classes or coverage(mark status=blocked/skipped) with notes.`,
       untestedHighPriority: untested,
       verifiedAwaitingConfirm,
-      missingRiskFamilies,
+      missingRiskFamilies: [...missingRiskFamilies, ...multiActorGaps],
+    };
+  }
+
+  if (multiActorGaps.length > 0) {
+    return {
+      allowed: false,
+      reason:
+        `${multiActorGaps.length} multi-actor / privilege-testing gap(s) remain. ` +
+        multiActorGaps.map((item) => item.reason).join(" "),
+      untestedHighPriority: untested,
+      verifiedAwaitingConfirm,
+      missingRiskFamilies: multiActorGaps,
     };
   }
 
   return {
     allowed: true,
-    reason: "no material high-priority observed candidates or risk-family gaps remain",
+    reason: "no material high-priority observed candidates, risk-family, or multi-actor gaps remain",
     untestedHighPriority: untested,
     verifiedAwaitingConfirm,
     missingRiskFamilies,
   };
+}
+
+/**
+ * When observed surface looks multi-user/API, require real dual-actor access-control probes.
+ * Skipped-only IDOR rows do not satisfy this gate.
+ */
+export function multiActorTestingGaps(coverageRows: CoverageLikeRow[], actorCount: number): RiskFamilyGap[] {
+  const normalized = coverageRows
+    .map(normalizeCoverageRow)
+    .filter((row): row is ConversionCandidate => Boolean(row));
+  if (!normalized.length) return [];
+
+  const surfaceText = normalized.map((row) => `${row.endpoint} ${row.param} ${row.vulnClass}`).join("\n");
+  const needsMultiUser = /\/api\/|\/rest\/|users?|basket|order|account|profile|admin|role|feedback|complaint|cart/i.test(surfaceText);
+  if (!needsMultiUser) return [];
+
+  const gaps: RiskFamilyGap[] = [];
+  if (actorCount < 2) {
+    gaps.push({
+      family: "multi_actor",
+      label: "Multi-identity privilege contexts",
+      suggestedClasses: ["idor", "access-control", "business-logic"],
+      exampleSurfaces: normalized
+        .filter((row) => /\/api\/|\/rest\/|basket|order|users?/i.test(row.endpoint))
+        .map((row) => row.endpoint)
+        .filter((value, index, arr) => arr.indexOf(value) === index)
+        .slice(0, 5),
+      reason:
+        "Observed multi-user/API surface but fewer than two actors were registered. " +
+        "Create two identities with actor(upsert/capture) then retest access-control.",
+    });
+    return gaps;
+  }
+
+  const dualActorProbe = normalized.some(
+    (row) =>
+      ["idor", "access-control", "horizontal-access", "vertical-access", "business-logic", "auth-bypass"].includes(row.vulnClass.toLowerCase()) &&
+      (row.status === "passed" || row.status === "failed") &&
+      /dual.?actor|alt_actor|cross.?actor|horizontal|vertical|owner-actor|alt-actor/i.test(row.notes || ""),
+  );
+  if (!dualActorProbe) {
+    gaps.push({
+      family: "multi_actor_probe",
+      label: "Dual-actor access-control proof",
+      suggestedClasses: ["idor", "access-control", "business-logic"],
+      exampleSurfaces: normalized
+        .filter((row) => /basket|order|users?|account|profile|feedback/i.test(row.endpoint))
+        .map((row) => row.endpoint)
+        .filter((value, index, arr) => arr.indexOf(value) === index)
+        .slice(0, 5),
+      reason:
+        "Two or more actors exist, but no dual-actor access-control/business-logic verifier result was recorded. " +
+        "Run verifier(vuln_class='idor', actor=A, alt_actor=B, object_id=...) or a business-logic probe with two identities.",
+    });
+  }
+  return gaps;
 }
 
 /** Infer which risk families the observed endpoints/params suggest, then find unattempted ones. */
