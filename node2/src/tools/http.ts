@@ -16,10 +16,13 @@ export function createHttpTool(runtime: ToolRuntime): ToolDefinition<any> {
   return {
     name: "http",
     label: "HTTP",
-    description: "Send one scoped HTTP/HTTPS request without following redirects. Use for authenticated replay, injection checks, IDOR checks, and precise vulnerability verification.",
-    promptSnippet: "Send one scoped HTTP/HTTPS request",
+    description:
+      "Send one scoped HTTP/HTTPS request without following redirects. Use for authenticated replay, injection checks, IDOR checks, and precise vulnerability verification. Optional actor= pins multi-identity session headers from the actor store.",
+    promptSnippet: "Send one scoped HTTP/HTTPS request (optional actor identity)",
     promptGuidelines: [
       "Use http for exact request/response verification after collecting real endpoints from traffic.",
+      "Pass actor=<id> to replay as a stored identity; omit to use the active actor / snapshot session.",
+      "Compare the same endpoint as two actors before concluding access control is correct.",
       "Do not treat an HTTP 200 or scanner success as a vulnerability; verify the response body proves the issue.",
     ],
     parameters: Type.Object({
@@ -27,14 +30,16 @@ export function createHttpTool(runtime: ToolRuntime): ToolDefinition<any> {
       url: Type.String(),
       headers: Type.Optional(Type.Record(Type.String(), Type.String())),
       body: Type.Optional(Type.String()),
+      actor: Type.Optional(Type.String()),
     }),
     async execute(_toolCallId: string, params: any) {
       const method = (params.method || "GET").toUpperCase();
       const url = resolveTargetUrl(runtime, params.url);
       if (!isInScope(runtime, url)) throw new Error(`out of scope: ${url}`);
-      const headers = mergeSessionHeaders(runtime, params.headers || {});
+      const actorId = params.actor !== undefined ? String(params.actor) : undefined;
+      const headers = mergeSessionHeaders(runtime, params.headers || {}, actorId);
       const result = await sendHttp({ method, url, headers, body: params.body, proxyUrl: runtime.trafficProxyUrl });
-      rememberResponseCookies(runtime, result.headers);
+      rememberResponseCookies(runtime, result.headers, actorId);
       const trafficId = runtime.traffic.add({
         method,
         url,
@@ -43,8 +48,13 @@ export function createHttpTool(runtime: ToolRuntime): ToolDefinition<any> {
         requestBody: params.body,
         responseHeaders: result.headers,
         responseBody: result.body,
+        source: actorId ? `http.actor.${actorId}` : "http",
       });
-      const evidenceId = await emitToolEvidence(runtime, "http", `${method} ${url} -> ${result.status}`, { trafficId, ...result });
+      const evidenceId = await emitToolEvidence(runtime, "http", `${method} ${url} -> ${result.status}${actorId ? ` actor=${actorId}` : ""}`, {
+        trafficId,
+        actor: actorId,
+        ...result,
+      });
       await observeAttackSurface(runtime, {
         method,
         url,
@@ -53,7 +63,7 @@ export function createHttpTool(runtime: ToolRuntime): ToolDefinition<any> {
         evidenceIds: [evidenceId],
         source: "http",
       });
-      return jsonResult({ traffic_id: trafficId, evidence_id: evidenceId, ...result }, { evidenceId, trafficId });
+      return jsonResult({ traffic_id: trafficId, evidence_id: evidenceId, actor: actorId, ...result }, { evidenceId, trafficId });
     },
   };
 }

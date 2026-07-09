@@ -39,13 +39,15 @@ export function createVerifierTool(runtime: ToolRuntime): ToolDefinition<any> {
   return {
     name: "verifier",
     label: "Verifier",
-    description: "Run deterministic verification helpers for common web vulnerability classes. Supported classes: command-injection, file-inclusion, path-traversal, sql-injection, xss-reflected, xss-stored, blind-sql-injection, weak-session-id, file-upload, csrf, brute-force, javascript-logic, idor, jwt-alg-none, open-redirect, mass-assignment.",
-    promptSnippet: "Run a deterministic vulnerability verifier",
+    description:
+      "Run deterministic verification helpers for common web vulnerability classes. Supported classes: command-injection, file-inclusion, path-traversal, sql-injection, xss-reflected, xss-stored, blind-sql-injection, weak-session-id, file-upload, csrf, brute-force, javascript-logic, idor, jwt-alg-none, open-redirect, mass-assignment, business-logic. For access control prefer actor + alt_actor dual-identity IDOR probes.",
+    promptSnippet: "Run a deterministic vulnerability verifier (supports dual-actor)",
     promptGuidelines: [
       "Use verifier after discovering a plausible endpoint/parameter to avoid ad hoc incomplete checks.",
+      "For IDOR/access-control: register two actors, then verifier(vuln_class='idor', actor=owner, alt_actor=attacker, object_id=ownerObject).",
+      "For business-logic: supply fields baseline and privileged_fields or tampered fields to prove server accepts illegal state transitions.",
       "Treat verifier confirmed=true as evidence for finding(confirm); treat confirmed=false as a negative or inconclusive coverage result with notes.",
-      "For state-changing verifiers, use harmless payloads and restore state when needed.",
-      "After recon, batch verifier across coverage(priority_candidates) including idor/jwt-alg-none/open-redirect/path-traversal/mass-assignment when surface shape suggests them.",
+      "After recon, batch verifier across coverage(priority_candidates) including dual-actor idor and business-logic when surface shape suggests them.",
     ],
     parameters: Type.Object({
       vuln_class: Type.String(),
@@ -84,12 +86,17 @@ export function createVerifierTool(runtime: ToolRuntime): ToolDefinition<any> {
       alt_object_id: Type.Optional(Type.String()),
       jwt: Type.Optional(Type.String()),
       privileged_fields: Type.Optional(Type.Record(Type.String(), Type.String())),
+      actor: Type.Optional(Type.String()),
+      alt_actor: Type.Optional(Type.String()),
+      keep_auth: Type.Optional(Type.Boolean()),
+      drop_auth: Type.Optional(Type.Boolean()),
     }),
     async execute(_toolCallId: string, params: any) {
       const url = resolveTargetUrl(runtime, params.url);
       if (!isInScope(runtime, url)) throw new Error(`out of scope: ${url}`);
       const vulnClass = String(params.vuln_class || "").toLowerCase();
-      const headers = mergeSessionHeaders(runtime, params.headers || {});
+      const actorId = params.actor !== undefined ? String(params.actor) : undefined;
+      const headers = mergeSessionHeaders(runtime, params.headers || {}, actorId);
       activeVerifierRuntime = runtime;
       try {
         const result = await runVerifier(vulnClass, url, params, headers, runtime.trafficProxyUrl);
@@ -97,7 +104,13 @@ export function createVerifierTool(runtime: ToolRuntime): ToolDefinition<any> {
         result.traffic_ids = trafficIds;
         result.baseline_traffic_id = trafficIds[0];
         result.attack_traffic_id = trafficIds[1] || trafficIds[0];
-        const evidenceId = await emitToolEvidence(runtime, "verifier", `${vulnClass} ${url} -> ${result.confirmed ? "confirmed" : "not confirmed"}`, result);
+        const dual = Boolean(params.alt_actor || params.actor);
+        const evidenceId = await emitToolEvidence(
+          runtime,
+          "verifier",
+          `${vulnClass} ${url} -> ${result.confirmed ? "confirmed" : "not confirmed"}${params.alt_actor ? " dual-actor" : ""}`,
+          result,
+        );
         result.evidence_id = evidenceId;
         await observeAttackSurface(runtime, {
           method: params.method || "GET",
@@ -106,8 +119,12 @@ export function createVerifierTool(runtime: ToolRuntime): ToolDefinition<any> {
           evidenceIds: [evidenceId],
           source: "verifier",
         });
-        await markVerified(runtime, url, params.param || defaultParam(vulnClass), vulnClass, result, evidenceId);
-        const payload: Record<string, unknown> = { ...result };
+        await markVerified(runtime, url, params.param || defaultParam(vulnClass), vulnClass, result, evidenceId, {
+          dualActor: Boolean(params.alt_actor),
+          actor: params.actor,
+          altActor: params.alt_actor,
+        });
+        const payload: Record<string, unknown> = { ...result, dual_actor: dual };
         if (result.confirmed) {
           payload.next_step =
             `Call finding(action='confirm') immediately with evidence_ids=['${evidenceId}'] and full severity/location/impact/poc/remediation. Do not defer confirmation.`;
@@ -138,10 +155,15 @@ async function runVerifier(
   if (vulnClass === "csrf") return verifyCsrf(url, params, headers, proxyUrl);
   if (vulnClass === "brute-force") return verifyBruteForce(url, params, headers, proxyUrl);
   if (vulnClass === "javascript-logic") return verifyJavascriptLogic(url, params, headers, proxyUrl);
-  if (vulnClass === "idor") return verifyIdor(url, params, headers, proxyUrl);
+  if (vulnClass === "idor" || vulnClass === "access-control" || vulnClass === "horizontal-access" || vulnClass === "vertical-access") {
+    return verifyIdor(url, params, headers, proxyUrl);
+  }
   if (vulnClass === "jwt-alg-none") return verifyJwtAlgNone(url, params, headers, proxyUrl);
   if (vulnClass === "open-redirect") return verifyOpenRedirect(url, params, headers, proxyUrl);
   if (vulnClass === "mass-assignment") return verifyMassAssignment(url, params, headers, proxyUrl);
+  if (vulnClass === "business-logic" || vulnClass === "workflow-bypass" || vulnClass === "price-tampering") {
+    return verifyBusinessLogic(url, params, headers, proxyUrl);
+  }
   return {
     confirmed: false,
     reason: `unsupported verifier class: ${vulnClass}`,
@@ -151,21 +173,59 @@ async function runVerifier(
 
 async function verifyIdor(url: string, params: any, headers: Record<string, string>, proxyUrl?: string): Promise<VerifyResult> {
   const method = (params.method || "GET").toUpperCase();
-  const baselineId = String(params.object_id || params.baseline_payload || extractObjectId(url) || "1");
-  const altId = String(params.alt_object_id || params.payload || neighborId(baselineId));
-  const baselineUrl = replaceObjectId(url, baselineId);
+  const objectId = String(params.object_id || params.baseline_payload || extractObjectId(url) || "1");
+  const runtime = activeVerifierRuntime;
+
+  // Preferred path: dual-actor horizontal/vertical — same object_id, different identities.
+  if (params.alt_actor && runtime?.actors) {
+    const ownerHeaders = mergeSessionHeaders(runtime, params.headers || {}, params.actor ? String(params.actor) : undefined);
+    const attackerHeaders = mergeSessionHeaders(runtime, {}, String(params.alt_actor));
+    const targetUrl = replaceObjectId(url, objectId);
+    const baseline = await sendProbe(method, targetUrl, ownerHeaders, params.body, proxyUrl);
+    const attack = await sendProbe(method, targetUrl, attackerHeaders, params.body, proxyUrl);
+    const ownerOk = baseline.status > 0 && baseline.status < 400;
+    const attackerOk = attack.status > 0 && attack.status < 400;
+    const sensitive = /email|password|token|admin|role|address|card|phone|hash|basket|order|payment/i.test(attack.body);
+    const dataLeak = attackerOk && (sensitive || attack.body.length > 40);
+    // Confirm when non-owner receives successful access to owner's object (and body is not an empty denial shell).
+    const confirmed = ownerOk && dataLeak && !/unauthorized|forbidden|access denied|not allowed/i.test(attack.body.slice(0, 400));
+    return {
+      confirmed,
+      reason: confirmed
+        ? "dual-actor access: secondary identity retrieved another identity's object without authorization"
+        : "dual-actor access: secondary identity did not prove unauthorized access to the target object",
+      requests: [
+        { method: baseline.method, url: baseline.url, status: baseline.status, marker: "owner-actor" },
+        { method: attack.method, url: attack.url, status: attack.status, marker: confirmed ? "alt-actor-unauthorized-access" : "alt-actor-denied-or-empty" },
+      ],
+      details: {
+        mode: "dual-actor",
+        object_id: objectId,
+        actor: params.actor || runtime.actors.activeIdValue(),
+        alt_actor: params.alt_actor,
+        sensitive_fields_hint: sensitive,
+        baseline_length: baseline.body.length,
+        attack_length: attack.body.length,
+        attack_excerpt: attack.body.slice(0, 500),
+        probes: [probeDetails(baseline, "owner"), probeDetails(attack, "attacker")],
+      },
+    };
+  }
+
+  // Fallback: same session, alternate object id (and optional unauth drop).
+  const altId = String(params.alt_object_id || params.payload || neighborId(objectId));
+  const baselineUrl = replaceObjectId(url, objectId);
   const attackUrl = replaceObjectId(url, altId);
   const baseline = await sendProbe(method, baselineUrl, headers, params.body, proxyUrl);
-  // Unauthenticated or cross-object probe: drop auth if requested, else same headers with alt id.
   const unauthHeaders = { ...headers };
-  if (params.drop_auth !== false) {
+  if (params.drop_auth !== false && !params.keep_auth) {
     delete unauthHeaders.authorization;
     delete unauthHeaders.Authorization;
     delete unauthHeaders.cookie;
     delete unauthHeaders.Cookie;
   }
   const attack = await sendProbe(method, attackUrl, params.keep_auth ? headers : unauthHeaders, params.body, proxyUrl);
-  const sensitive = /email|password|token|admin|role|address|card|phone|hash/i.test(attack.body);
+  const sensitive = /email|password|token|admin|role|address|card|phone|hash|basket|order/i.test(attack.body);
   const authorizedShape = baseline.status < 400 && attack.status < 400;
   const differentObject = meaningfulDifference(baseline.body, attack.body) || baselineUrl !== attackUrl;
   const confirmed = authorizedShape && differentObject && (sensitive || attack.body.length > 20);
@@ -179,11 +239,75 @@ async function verifyIdor(url: string, params: any, headers: Record<string, stri
       { method: attack.method, url: attack.url, status: attack.status, marker: confirmed ? "cross-object-access" : undefined },
     ],
     details: {
-      baseline_id: baselineId,
+      mode: params.keep_auth ? "same-session-cross-object" : "cross-object-or-unauth",
+      baseline_id: objectId,
       alt_id: altId,
       sensitive_fields_hint: sensitive,
       baseline_length: baseline.body.length,
       attack_length: attack.body.length,
+      attack_excerpt: attack.body.slice(0, 500),
+      probes: [probeDetails(baseline, "baseline"), probeDetails(attack, "attack")],
+    },
+  };
+}
+
+/**
+ * Business-logic / workflow abuse: server accepts a tampered field that changes
+ * privilege, price, quantity, step, or ownership compared to a clean baseline.
+ */
+async function verifyBusinessLogic(url: string, params: any, headers: Record<string, string>, proxyUrl?: string): Promise<VerifyResult> {
+  const method = (params.method || "POST").toUpperCase();
+  const baseFields = { ...(params.fields || {}) };
+  const tampered = {
+    ...baseFields,
+    ...(params.privileged_fields || params.tampered_fields || {}),
+  };
+  if (!Object.keys(baseFields).length && !Object.keys(tampered).length) {
+    return {
+      confirmed: false,
+      reason: "business-logic verifier requires fields and privileged_fields/tampered_fields",
+      requests: [],
+    };
+  }
+  // Unique markers so repeated creates do not collide.
+  const stamp = `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  if (baseFields.email) baseFields.email = `logic_base_${stamp}@example.com`;
+  if (tampered.email) tampered.email = `logic_atk_${stamp}@example.com`;
+
+  const useJson = /\/api\/|\/rest\/|application\/json/i.test(`${url} ${headers["content-type"] || headers["Content-Type"] || ""}`);
+  const baseline = useJson
+    ? await sendJson(url, method, baseFields, headers, proxyUrl)
+    : await requestWithFields(url, method, baseFields, headers, proxyUrl);
+  const attack = useJson
+    ? await sendJson(url, method, tampered, headers, proxyUrl)
+    : await requestWithFields(url, method, tampered, headers, proxyUrl);
+
+  const attackAccepted = attack.status > 0 && attack.status < 400;
+  const privilegeHint = /"role"\s*:\s*"admin"|"isAdmin"\s*:\s*true|"price"\s*:\s*0|"quantity"\s*:\s*-|"discount"\s*:\s*100|"rating"\s*:\s*0/i.test(
+    attack.body,
+  );
+  const tamperKeys = Object.keys(params.privileged_fields || params.tampered_fields || {});
+  const tamperReflected = tamperKeys.some((key) => {
+    const value = String((params.privileged_fields || params.tampered_fields || {})[key] ?? "");
+    return value && attack.body.includes(value);
+  });
+  const outcomeChanged = meaningfulDifference(baseline.body, attack.body) || privilegeHint || tamperReflected;
+  const confirmed = attackAccepted && outcomeChanged && (privilegeHint || tamperReflected || attack.status !== baseline.status);
+
+  return {
+    confirmed,
+    reason: confirmed
+      ? "server accepted tampered business fields and returned a privileged/illegal outcome"
+      : "tampered business fields did not prove a logic bypass",
+    requests: [
+      { method: baseline.method, url: baseline.url, status: baseline.status, marker: "baseline-fields" },
+      { method: attack.method, url: attack.url, status: attack.status, marker: confirmed ? "tampered-fields-accepted" : undefined },
+    ],
+    details: {
+      mode: "business-logic",
+      tampered_keys: tamperKeys,
+      privilege_hint: privilegeHint,
+      tamper_reflected: tamperReflected,
       attack_excerpt: attack.body.slice(0, 500),
       probes: [probeDetails(baseline, "baseline"), probeDetails(attack, "attack")],
     },
@@ -208,7 +332,10 @@ async function verifyJwtAlgNone(url: string, params: any, headers: Record<string
   const baselineDenied = baseline.status === 401 || baseline.status === 403 || /unauthorized|unauthenticated|invalid token|jwt/i.test(baseline.body);
   const attackAccepted = attack.status > 0 && attack.status < 400 && !/invalid token|jwt malformed|unauthorized/i.test(attack.body);
   // Also compare privileged marker presence when baseline was unauthenticated.
-  const confirmed = attackAccepted && (baselineDenied || meaningfulDifference(baseline.body, attack.body));
+  // Accept when forged token works and identity/content differs from baseline (or baseline was denied).
+  const confirmed =
+    attackAccepted &&
+    (baselineDenied || baseline.body !== attack.body || meaningfulDifference(baseline.body, attack.body));
   return {
     confirmed,
     reason: confirmed
@@ -925,18 +1052,34 @@ async function requestLoginAttempt(
   return requestWithFields(url, method, attemptFields, headers, proxyUrl);
 }
 
-async function markVerified(runtime: ToolRuntime, rawUrl: string, param: string, vulnClass: string, result: VerifyResult, evidenceId: string): Promise<void> {
+async function markVerified(
+  runtime: ToolRuntime,
+  rawUrl: string,
+  param: string,
+  vulnClass: string,
+  result: VerifyResult,
+  evidenceId: string,
+  meta: { dualActor?: boolean; actor?: string; altActor?: string } = {},
+): Promise<void> {
   const endpoint = new URL(rawUrl).pathname;
+  const notes = [
+    result.reason,
+    meta.dualActor ? "dual-actor" : "",
+    meta.actor ? `actor=${meta.actor}` : "",
+    meta.altActor ? `alt_actor=${meta.altActor}` : "",
+  ]
+    .filter(Boolean)
+    .join(" | ");
   await runtime.coverage.mark({
     endpoint,
     param,
     vulnClass,
     status: result.confirmed ? "failed" : "passed",
-    notes: result.reason,
+    notes,
   });
   runtime.plan.upsert({
-    node_id: `plan-test-${slug(`${endpoint}-${param}-${vulnClass}`)}`,
-    title: `Verify ${vulnClass} on ${param}`,
+    node_id: `plan-test-${slug(`${endpoint}-${param}-${vulnClass}${meta.altActor || ""}`)}`,
+    title: meta.dualActor ? `Dual-actor ${vulnClass} on ${param}` : `Verify ${vulnClass} on ${param}`,
     status: "done",
     kind: "test",
     level: "work_item",
@@ -946,7 +1089,7 @@ async function markVerified(runtime: ToolRuntime, rawUrl: string, param: string,
     parameter: param,
     vuln_type: vulnClass,
     result: result.confirmed ? "confirmed" : "negative",
-    notes: result.reason,
+    notes,
     evidence_ids: [evidenceId],
     priority: 230,
     source: "verifier",
@@ -965,10 +1108,11 @@ function defaultParam(vulnClass: string): string {
   if (vulnClass === "csrf") return "csrf_token";
   if (vulnClass === "brute-force") return "username,password";
   if (vulnClass === "javascript-logic") return "token";
-  if (vulnClass === "idor") return "id";
+  if (vulnClass === "idor" || vulnClass === "access-control" || vulnClass === "horizontal-access" || vulnClass === "vertical-access") return "id";
   if (vulnClass === "jwt-alg-none") return "authorization";
   if (vulnClass === "open-redirect") return "to";
   if (vulnClass === "mass-assignment") return "role";
+  if (vulnClass === "business-logic" || vulnClass === "workflow-bypass" || vulnClass === "price-tampering") return "fields";
   return "-";
 }
 

@@ -6,27 +6,72 @@
 
 import type { CapturedTraffic, ToolRuntime } from "../types.js";
 
+/**
+ * Merge auth material for the next request.
+ * - actorId string: pin that actor only (no cross-actor snapshot pollution)
+ * - actorId undefined: active actor + global snapshot/traffic (legacy single-session flow)
+ * - actorId null: force unauthenticated
+ * Explicit request headers always win over stored material.
+ */
 export function mergeSessionHeaders(
   runtime: ToolRuntime,
   headers: Record<string, string> = {},
+  actorId?: string | null,
 ): Record<string, string> {
   const out = lowerKeyCopy(headers);
-  const snapshotCookie = cookieFromSnapshot(runtime.traffic.snapshot());
-  const trafficCookie = cookieFromTraffic(runtime.traffic.list({ limit: 100 }));
-  const mergedCookie = mergeCookieHeader(snapshotCookie, trafficCookie, out.cookie || out.Cookie);
-  if (mergedCookie) {
-    out.cookie = mergedCookie;
-    delete out.Cookie;
+  const unauthenticated = actorId === null;
+  const pinnedActor = typeof actorId === "string" && actorId.length > 0;
+
+  if (!unauthenticated) {
+    const actorHeaders = runtime.actors?.headersFor(pinnedActor ? actorId : undefined) || {};
+    if (!out.cookie && !out.Cookie && actorHeaders.cookie) out.cookie = actorHeaders.cookie;
+    if (!out.authorization && !out.Authorization && actorHeaders.authorization) out.authorization = actorHeaders.authorization;
+    for (const [key, value] of Object.entries(actorHeaders)) {
+      const lower = key.toLowerCase();
+      if (lower === "cookie" || lower === "authorization") continue;
+      if (out[key] === undefined && out[lower] === undefined) out[key] = value;
+    }
   }
-  const auth = authorizationFromSnapshot(runtime.traffic.snapshot()) || authorizationFromTraffic(runtime.traffic.list({ limit: 50 }));
-  if (auth && !out.authorization && !out.Authorization) {
-    out.authorization = auth;
+
+  // Only blend global snapshot/traffic when not pinning a named actor (avoids A/B cookie bleed).
+  if (!unauthenticated && !pinnedActor) {
+    const snapshotCookie = cookieFromSnapshot(runtime.traffic.snapshot());
+    const trafficCookie = cookieFromTraffic(runtime.traffic.list({ limit: 100 }));
+    const mergedCookie = mergeCookieHeader(snapshotCookie, trafficCookie, out.cookie || out.Cookie);
+    if (mergedCookie) {
+      out.cookie = mergedCookie;
+      delete out.Cookie;
+    }
+    const auth =
+      out.authorization ||
+      out.Authorization ||
+      authorizationFromSnapshot(runtime.traffic.snapshot()) ||
+      authorizationFromTraffic(runtime.traffic.list({ limit: 50 }));
+    if (auth && !out.authorization && !out.Authorization) {
+      out.authorization = auth;
+    }
   }
+
+  if (unauthenticated) {
+    if (!headers.authorization && !headers.Authorization) {
+      delete out.authorization;
+      delete out.Authorization;
+    }
+    if (!headers.cookie && !headers.Cookie) {
+      delete out.cookie;
+      delete out.Cookie;
+    }
+  }
+
   return out;
 }
 
-/** After a response, fold Set-Cookie values into the traffic snapshot cookie jar. */
-export function rememberResponseCookies(runtime: ToolRuntime, responseHeaders: Record<string, string> | undefined): void {
+/** After a response, fold Set-Cookie values into the traffic snapshot cookie jar and active actor. */
+export function rememberResponseCookies(
+  runtime: ToolRuntime,
+  responseHeaders: Record<string, string> | undefined,
+  actorId?: string | null,
+): void {
   if (!responseHeaders) return;
   const setCookie = responseHeaders["set-cookie"] || responseHeaders["Set-Cookie"];
   if (!setCookie) return;
@@ -38,6 +83,20 @@ export function rememberResponseCookies(runtime: ToolRuntime, responseHeaders: R
   snapshot.cookie = serializeCookieMap(next);
   snapshot.cookies = snapshot.cookie;
   runtime.traffic.setSnapshot(snapshot);
+
+  // Keep the active/named actor cookie jar in sync so multi-actor state survives.
+  const targetActorId = actorId === undefined ? runtime.actors?.activeIdValue() : actorId || undefined;
+  if (targetActorId && runtime.actors) {
+    const actor = runtime.actors.get(targetActorId);
+    if (actor) {
+      const actorCookies = cookieMapFromHeader(String(actor.headers.cookie || ""));
+      const merged = { ...actorCookies, ...incoming };
+      runtime.actors.upsert({
+        id: targetActorId,
+        headers: { ...actor.headers, cookie: serializeCookieMap(merged) },
+      });
+    }
+  }
 }
 
 export function extractHtmlToken(html: string, names: string[] = ["user_token", "csrf", "csrf_token", "token", "nonce"]): Record<string, string> {
