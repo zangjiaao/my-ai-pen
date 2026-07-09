@@ -1,5 +1,6 @@
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadLlmCostRatesFromEnv, type LlmCostRates } from "./runtime/llm-usage.js";
 
 const NODE2_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -17,6 +18,8 @@ export type Node2Config = {
   modelId: string;
   llmBaseUrl?: string;
   llmApi?: LlmApi;
+  /** USD per 1M tokens for custom/unknown models (Pi built-ins already have rates). */
+  llmCost: LlmCostRates;
   trafficProxyUrl?: string;
   externalTrafficSourceUrl?: string;
   externalTrafficSourceToken?: string;
@@ -59,6 +62,7 @@ export function loadConfig(): Node2Config {
     modelId: process.env.PI_MODEL || "gpt-5",
     llmBaseUrl: baseUrlForProvider(modelProvider),
     llmApi: llmApiForProvider(modelProvider),
+    llmCost: loadLlmCostRatesFromEnv(),
     trafficProxyUrl: optionalEnv("NODE2_TRAFFIC_PROXY_URL") || optionalEnv("HTTP_PROXY") || optionalEnv("http_proxy"),
     externalTrafficSourceUrl: optionalEnv("NODE2_EXTERNAL_TRAFFIC_SOURCE_URL"),
     externalTrafficSourceToken: optionalEnv("NODE2_EXTERNAL_TRAFFIC_SOURCE_TOKEN"),

@@ -95,6 +95,7 @@ function smokeConfig(port: number, python: string, sidecar: boolean): Node2Confi
     caidoSidecarHost: "127.0.0.1",
     caidoSidecarPort: undefined,
     caidoUrl: process.env.STRIX_CAIDO_URL,
+    llmCost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     scannerSandboxAutoStart: false,
     scannerSandboxImage: "ghcr.io/usestrix/strix-sandbox:1.0.0",
   };

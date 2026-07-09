@@ -173,7 +173,8 @@ function toolResultLine(
 
   if (name === "actor") {
     const action = String(args.action || parsed?.action || "actor");
-    const id = String(args.id || parsed?.actor?.id || parsed?.active || "");
+    const actor = isRecord(parsed?.actor) ? parsed!.actor : null;
+    const id = String(args.id || actor?.id || parsed?.active || "");
     return joinParts([action, id, status || "done"]);
   }
 
@@ -194,7 +195,8 @@ function toolResultLine(
   }
 
   if (name === "finish_scan") {
-    return joinParts(["finish_scan", String(args.status || parsed?.status || parsed?.finish_scan?.status || ""), status || "done"]);
+    const finish = isRecord(parsed?.finish_scan) ? parsed!.finish_scan : null;
+    return joinParts(["finish_scan", String(args.status || parsed?.status || finish?.status || ""), status || "done"]);
   }
 
   if (name === "workflow_run" || name === "workflow_list" || name === "workflow_dynamic") {

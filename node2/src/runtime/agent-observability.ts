@@ -10,6 +10,12 @@
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { PlatformMessage, PlatformSink, TaskEnvelope } from "../types.js";
+import {
+  LlmUsageLedger,
+  loadLlmCostRatesFromEnv,
+  type LlmCostRates,
+  type LlmUsageSnapshot,
+} from "./llm-usage.js";
 
 export type AgentPhase =
   | "starting"
@@ -65,19 +71,23 @@ export class TaskDiagnostics {
   private errorMessage?: string;
   private openTools = new Map<string, { toolName: string; startedAt: string }>();
   private readonly startedAt: string = new Date().toISOString();
+  private readonly usageLedger: LlmUsageLedger;
+  private lastUsageCheckpointAt = 0;
 
   private constructor(
     private readonly taskDir: string,
     private readonly task: TaskEnvelope,
+    costRates?: LlmCostRates,
   ) {
     this.eventsPath = join(taskDir, "events.jsonl");
     this.statePath = join(taskDir, "agent-state.json");
     this.summaryPath = join(taskDir, "agent-summary.json");
+    this.usageLedger = new LlmUsageLedger(costRates || loadLlmCostRatesFromEnv());
   }
 
-  static async create(taskDir: string, task: TaskEnvelope): Promise<TaskDiagnostics> {
+  static async create(taskDir: string, task: TaskEnvelope, costRates?: LlmCostRates): Promise<TaskDiagnostics> {
     await mkdir(taskDir, { recursive: true });
-    const diagnostics = new TaskDiagnostics(taskDir, task);
+    const diagnostics = new TaskDiagnostics(taskDir, task, costRates);
     await writeFile(diagnostics.eventsPath, "", "utf8");
     await diagnostics.setPhase("starting", { reason: "task_start" });
     await diagnostics.append({
@@ -166,13 +176,16 @@ export class TaskDiagnostics {
         const role = event.message?.role;
         const stopReason = event.message?.stopReason;
         const toolNames = toolNamesFromMessage(event.message);
+        let usageRecorded = false;
         if (role === "assistant") {
           this.assistantStopReason = stopReason ? String(stopReason) : undefined;
           if (stopReason === "error") {
             this.errorCount += 1;
             this.errorMessage = String(event.message?.errorMessage || "assistant error");
           }
+          usageRecorded = this.usageLedger.recordAssistantMessage(event.message);
         }
+        const usage = this.llmUsage();
         await this.append({
           kind: "agent",
           type,
@@ -182,10 +195,24 @@ export class TaskDiagnostics {
           tool_names: toolNames,
           text_preview: textPreview(event.message),
           error_message: event.message?.errorMessage,
+          usage_recorded: usageRecorded || undefined,
+          usage: usageRecorded
+            ? {
+                input: event.message?.usage?.input,
+                output: event.message?.usage?.output,
+                cacheRead: event.message?.usage?.cacheRead,
+                totalTokens: event.message?.usage?.totalTokens,
+                cost: event.message?.usage?.cost?.total,
+              }
+            : undefined,
+          llm_usage: usage.requests > 0 ? usage : undefined,
           at: now,
         });
         if (role === "assistant" && stopReason === "error") {
           await this.setPhase("error", { reason: "assistant_error", error: this.errorMessage });
+        } else if (usageRecorded) {
+          // Keep agent-summary.json current so operators can tail usage mid-run.
+          await this.persistState({ reason: "llm_usage", usage });
         }
         break;
       }
@@ -309,6 +336,29 @@ export class TaskDiagnostics {
     });
   }
 
+  /** Node3-shaped llm_usage for checkpoints / right panel. */
+  llmUsage(): LlmUsageSnapshot {
+    const usage = this.usageLedger.snapshot({ agent_count: 1, tool_calls: this.toolCallCount });
+    // Fall back to turn count when the provider did not report token usage.
+    if (usage.requests <= 0 && this.llmTurnCount > 0) {
+      return { ...usage, requests: this.llmTurnCount };
+    }
+    return usage;
+  }
+
+  /**
+   * Whether a live checkpoint_update is due (throttled) so the platform panel
+   * can refresh tokens/cost without waiting for task end.
+   */
+  shouldEmitUsageCheckpoint(minIntervalMs = 10_000): boolean {
+    const usage = this.llmUsage();
+    if (usage.requests <= 0 && usage.total_tokens <= 0) return false;
+    const now = Date.now();
+    if (now - this.lastUsageCheckpointAt < minIntervalMs) return false;
+    this.lastUsageCheckpointAt = now;
+    return true;
+  }
+
   snapshot(): AgentStateSnapshot {
     const updatedAt = new Date().toISOString();
     const lastAt = this.lastEventAt ? Date.parse(this.lastEventAt) : undefined;
@@ -354,6 +404,7 @@ export class TaskDiagnostics {
     const state = this.snapshot();
     const summary = {
       ...state,
+      llm_usage: this.llmUsage(),
       openToolCallIds: [...this.openTools.keys()],
       details,
       paths: {

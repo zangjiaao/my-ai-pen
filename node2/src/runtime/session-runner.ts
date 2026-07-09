@@ -50,7 +50,7 @@ export async function runPentestTask(
   task = normalizeSidecarTaskTarget(config, task);
   const taskDir = join(config.workspaceDir, task.taskId);
   await mkdir(taskDir, { recursive: true });
-  const diagnostics = await TaskDiagnostics.create(taskDir, task);
+  const diagnostics = await TaskDiagnostics.create(taskDir, task, config.llmCost);
   const platformOut = diagnostics.wrapPlatform(platform);
   const caidoBridge = await startCaidoBridge(config, platformOut, task);
 
@@ -384,17 +384,7 @@ async function buildNode2Checkpoint(
         current_action: diag.phase || "",
       },
     ],
-    llm_usage: {
-      requests: diag.llmTurnCount,
-      total_tokens: 0,
-      input_tokens: 0,
-      output_tokens: 0,
-      cached_tokens: 0,
-      reasoning_tokens: 0,
-      cost: 0,
-      agent_count: 1,
-      tool_calls: diag.toolCallCount,
-    },
+    llm_usage: diagnostics.llmUsage(),
   };
 }
 
@@ -649,6 +639,19 @@ async function handleSessionEvent(
       turn: state.turn,
       progress: runtime.plan.progress(),
       kanban: runtime.plan.kanban(),
+      llm_usage: diagnostics.llmUsage(),
+    } as PlatformMessage);
+  }
+  // Throttled mid-run checkpoint so the right panel can refresh tokens/cost live.
+  if (
+    (event.type === "turn_end" || (event.type === "message_end" && event.message?.role === "assistant")) &&
+    diagnostics.shouldEmitUsageCheckpoint()
+  ) {
+    await platform.send({
+      type: "checkpoint_update",
+      conversation_id: runtime.task.conversationId,
+      task_id: runtime.task.taskId,
+      checkpoint: await buildNode2Checkpoint(runtime, runtime.task, diagnostics),
     } as PlatformMessage);
   }
   if (event.type === "tool_execution_start") {
@@ -824,6 +827,7 @@ function registerCustomModel(modelRegistry: ModelRegistry, config: Node2Config):
     throw new Error("LLM_BASE_URL is required when PI_MODEL_PROVIDER=custom");
   }
 
+  const rates = config.llmCost;
   modelRegistry.registerProvider("custom", {
     name: "Custom LLM",
     baseUrl: config.llmBaseUrl,
@@ -835,7 +839,13 @@ function registerCustomModel(modelRegistry: ModelRegistry, config: Node2Config):
         name: config.modelId,
         reasoning: false,
         input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        // Pi calculateCost uses these USD-per-1M rates on each assistant usage block.
+        cost: {
+          input: rates.input,
+          output: rates.output,
+          cacheRead: rates.cacheRead,
+          cacheWrite: rates.cacheWrite,
+        },
         contextWindow: Number(process.env.LLM_CONTEXT_WINDOW || 128000),
         maxTokens: Number(process.env.LLM_MAX_TOKENS || 8192),
       },

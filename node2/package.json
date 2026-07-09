@@ -27,6 +27,7 @@
     "multi-actor:smoke": "tsx src/multi-actor-smoke.ts",
     "engagement:smoke": "tsx src/engagement-smoke.ts",
     "tool-presentation:smoke": "tsx src/tool-presentation-smoke.ts",
+    "llm-usage:smoke": "tsx src/llm-usage-smoke.ts",
     "caido-bridge:smoke": "tsx src/caido-bridge-status-smoke.ts",
     "caido-sidecar:smoke": "tsx src/caido-bridge-status-smoke.ts --sidecar",
     "caido-sidecar-traffic:smoke": "tsx src/caido-sidecar-traffic-smoke.ts",
