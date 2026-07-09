@@ -31,6 +31,10 @@ _hypotheses: dict[str, dict[str, Any]] = {}
 _coverage: dict[str, dict[str, Any]] = {}
 _evidence: dict[str, dict[str, Any]] = {}
 _DB_FILENAME = "run_memory.db"
+_COMPACTED_MEMORY_TEXT_PREFIX = "[compacted by Strix memory]"
+_MAX_MEMORY_TEXT_CHARS = 4_000
+_MAX_EVIDENCE_CONTENT_CHARS = 12_000
+_MAX_MEMORY_METADATA_TEXT_CHARS = 2_000
 
 _VALID_SURFACE_KINDS = {
     "url",
@@ -51,6 +55,11 @@ _SURFACE_KIND_ALIASES = {
     "admin_route": "admin_endpoint",
     "api": "api_endpoint",
     "api_route": "api_endpoint",
+    "dir": "url",
+    "dir_listing": "url",
+    "directory": "url",
+    "directory_index": "url",
+    "directory_listing": "url",
     "endpoint": "api_endpoint",
     "external_domain": "other",
     "external_host": "other",
@@ -58,8 +67,14 @@ _SURFACE_KIND_ALIASES = {
     "rest_api_endpoint": "api_endpoint",
     "route": "api_endpoint",
     "file": "static_asset",
+    "file_directory": "url",
+    "file_listing": "url",
     "file_upload_endpoint": "file_upload",
+    "listing": "url",
+    "page": "url",
+    "public_directory": "url",
     "static": "static_asset",
+    "web_page": "url",
     "upload": "file_upload",
     "upload_endpoint": "file_upload",
     "web_socket": "websocket",
@@ -443,6 +458,37 @@ def _clean_text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _clean_bounded_text(value: Any, *, limit: int = _MAX_MEMORY_TEXT_CHARS) -> str:
+    text = _clean_text(value)
+    if not text or limit <= 0 or len(text) <= limit:
+        return text
+    if text.startswith(_COMPACTED_MEMORY_TEXT_PREFIX):
+        return text
+    preview_budget = max(200, limit - 220)
+    head = max(100, preview_budget // 2)
+    tail = max(100, preview_budget - head)
+    return (
+        f"{_COMPACTED_MEMORY_TEXT_PREFIX}\n"
+        f"Original length: {len(text)} characters. "
+        "Persist exact raw proof as an artifact and keep structured memory concise.\n"
+        f"--- head ---\n{text[:head]}\n"
+        f"--- tail ---\n{text[-tail:]}"
+    )
+
+
+def _bound_memory_value(value: Any, *, text_limit: int = _MAX_MEMORY_METADATA_TEXT_CHARS) -> Any:
+    if isinstance(value, str):
+        return _clean_bounded_text(value, limit=text_limit)
+    if isinstance(value, list):
+        return [_bound_memory_value(item, text_limit=text_limit) for item in value[:40]]
+    if isinstance(value, dict):
+        return {
+            str(key): _bound_memory_value(item, text_limit=text_limit)
+            for key, item in list(value.items())[:40]
+        }
+    return value
+
+
 def _looks_like_url(value: str) -> bool:
     lowered = value.lower()
     return lowered.startswith(("http://", "https://", "ws://", "wss://"))
@@ -466,6 +512,23 @@ def _normalize_surface_kind(value: Any) -> tuple[str, str | None]:
     if normalized in _SURFACE_KIND_ALIASES:
         return _SURFACE_KIND_ALIASES[normalized], raw or None
     return normalized, None
+
+
+def _surface_kind_error(received_kind: Any, normalized_kind: str) -> dict[str, Any]:
+    allowed = sorted(_VALID_SURFACE_KINDS)
+    hint = (
+        "Use kind='url' for browsable pages, routes, and directory listings; "
+        "kind='api_endpoint' for HTTP APIs; kind='static_asset' for individual files."
+    )
+    return {
+        "success": False,
+        "error": f"kind must be one of: {', '.join(allowed)}",
+        "received_kind": _clean_text(received_kind) or None,
+        "normalized_kind": normalized_kind or None,
+        "allowed_kinds": allowed,
+        "known_aliases": dict(sorted(_SURFACE_KIND_ALIASES.items())),
+        "retry_hint": hint,
+    }
 
 
 def _clean_list(value: Any) -> list[str]:
@@ -641,7 +704,7 @@ def _record_attack_surface_impl(
     with _memory_lock:
         clean_kind, original_kind = _normalize_surface_kind(kind)
         if clean_kind not in _VALID_SURFACE_KINDS:
-            return {"success": False, "error": f"kind must be one of: {', '.join(sorted(_VALID_SURFACE_KINDS))}"}
+            return _surface_kind_error(kind, clean_kind)
         clean_url = _clean_text(url) or None
         clean_address = _clean_text(address) or None
         if not clean_url and not clean_address:
@@ -683,7 +746,7 @@ def _record_attack_surface_impl(
                 "auth_state": _clean_text(auth_state) or None,
                 "role": _clean_text(role) or None,
                 "source": _clean_text(source) or None,
-                "notes": _clean_text(notes) or None,
+                "notes": _clean_bounded_text(notes) or None,
                 "phase": _clean_text(phase) or None,
                 "agent_id": agent_id,
             }.items():
@@ -705,7 +768,7 @@ def _record_attack_surface_impl(
             "role": _clean_text(role) or None,
             "source": _clean_text(source) or None,
             "evidence_ids": clean_evidence_ids,
-            "notes": _clean_text(notes) or None,
+            "notes": _clean_bounded_text(notes) or None,
             "agent_id": agent_id,
             "phase": _clean_text(phase) or None,
             "dedupe_key": key,
@@ -738,8 +801,8 @@ def _record_hypothesis_impl(
 ) -> dict[str, Any]:
     with _memory_lock:
         clean_vuln_type = _clean_text(vuln_type).lower()
-        clean_hypothesis = _clean_text(hypothesis)
-        clean_strategy = _clean_text(test_strategy)
+        clean_hypothesis = _clean_bounded_text(hypothesis)
+        clean_strategy = _clean_bounded_text(test_strategy)
         clean_endpoint = _clean_text(endpoint)
         clean_method = _clean_text(method).upper() or None
         clean_parameter = _clean_text(parameter) or "<none>"
@@ -813,8 +876,8 @@ def _record_hypothesis_impl(
                     "hypothesis": clean_hypothesis,
                     "test_strategy": clean_strategy,
                     "status": clean_status,
-                    "risk_reason": _clean_text(risk_reason) or existing.get("risk_reason"),
-                    "notes": _clean_text(notes) or existing.get("notes"),
+                    "risk_reason": _clean_bounded_text(risk_reason) or existing.get("risk_reason"),
+                    "notes": _clean_bounded_text(notes) or existing.get("notes"),
                     "updated_at": timestamp,
                     "agent_id": agent_id or existing.get("agent_id"),
                 },
@@ -847,11 +910,11 @@ def _record_hypothesis_impl(
             "phase": clean_phase,
             "hypothesis": clean_hypothesis,
             "test_strategy": clean_strategy,
-            "risk_reason": _clean_text(risk_reason) or None,
+            "risk_reason": _clean_bounded_text(risk_reason) or None,
             "status": clean_status,
             "evidence_ids": clean_evidence_ids,
             "coverage_ids": clean_coverage_ids,
-            "notes": _clean_text(notes) or None,
+            "notes": _clean_bounded_text(notes) or None,
             "agent_id": agent_id,
             "dedupe_key": key,
             "created_at": timestamp,
@@ -939,11 +1002,23 @@ def _record_coverage_impl(
         timestamp = _now()
         existing = _find_by_key(_coverage, "dedupe_key", key)
         if existing:
+            existing_status = _clean_text(existing.get("status")).lower()
+            if existing_status == "passed" and clean_status != "passed":
+                return {
+                    "success": False,
+                    "error": (
+                        "Existing coverage is already passed/confirmed and cannot be downgraded. "
+                        "Record additional validation evidence, create the vulnerability report, "
+                        "or use a distinct coverage key for a different parameter/auth state."
+                    ),
+                    "coverage": dict(existing),
+                    "requested_status": clean_status,
+                }
             existing.update(
                 {
                     "status": clean_status,
-                    "result": _clean_text(result) or existing.get("result"),
-                    "notes": _clean_text(notes) or existing.get("notes"),
+                    "result": _clean_bounded_text(result) or existing.get("result"),
+                    "notes": _clean_bounded_text(notes) or existing.get("notes"),
                     "updated_at": timestamp,
                     "agent_id": agent_id or existing.get("agent_id"),
                     "hypothesis_id": clean_hypothesis_id or existing.get("hypothesis_id"),
@@ -967,8 +1042,8 @@ def _record_coverage_impl(
             "evidence_ids": clean_evidence_ids,
             "hypothesis_id": clean_hypothesis_id,
             "phase": clean_phase,
-            "result": _clean_text(result) or None,
-            "notes": _clean_text(notes) or None,
+            "result": _clean_bounded_text(result) or None,
+            "notes": _clean_bounded_text(notes) or None,
             "agent_id": agent_id,
             "dedupe_key": key,
             "created_at": timestamp,
@@ -999,14 +1074,18 @@ def _record_evidence_impl(
             return {"success": False, "error": "summary cannot be empty"}
         clean_metadata: dict[str, Any] = {}
         if isinstance(metadata, dict):
-            clean_metadata = dict(metadata)
+            clean_metadata = _bound_memory_value(dict(metadata))
         elif isinstance(metadata, str) and metadata.strip():
             try:
                 parsed = json.loads(metadata)
             except json.JSONDecodeError:
-                clean_metadata = {"text": metadata.strip()}
+                clean_metadata = {"text": _clean_bounded_text(metadata, limit=_MAX_MEMORY_METADATA_TEXT_CHARS)}
             else:
-                clean_metadata = parsed if isinstance(parsed, dict) else {"value": parsed}
+                clean_metadata = (
+                    _bound_memory_value(parsed)
+                    if isinstance(parsed, dict)
+                    else {"value": _bound_memory_value(parsed)}
+                )
         if original_type:
             clean_metadata.setdefault("original_evidence_type", original_type)
         clean_target = _clean_text(target)
@@ -1017,8 +1096,8 @@ def _record_evidence_impl(
         item = {
             "evidence_id": evidence_id,
             "evidence_type": clean_type,
-            "summary": clean_summary,
-            "content": _clean_text(content) or None,
+            "summary": _clean_bounded_text(clean_summary),
+            "content": _clean_bounded_text(content, limit=_MAX_EVIDENCE_CONTENT_CHARS) or None,
             "source_tool": _clean_text(source_tool) or None,
             "target": clean_target or None,
             "phase": _clean_text(phase) or None,
@@ -1104,6 +1183,22 @@ def _list_memory_impl(kind: str, limit: int = 50) -> dict[str, Any]:
         hypothesis_gaps_list: list[dict[str, Any]] = []
         surface_hypothesis_gaps_list: list[dict[str, Any]] = []
         coverage_without_hypothesis_list: list[dict[str, Any]] = []
+        workflow_clusters: dict[str, Any] = {
+            "cluster_count": 0,
+            "clusters": [],
+            "clusters_without_hypotheses": [],
+            "clusters_without_coverage": [],
+            "external_clusters_without_inventory": [],
+            "clusters_with_narrow_testing": [],
+            "suggested_next_testing_families": [],
+            "dominant_clusters": [],
+        }
+        inventory_readiness: dict[str, Any] = {
+            "ok": True,
+            "ready_for_testing": True,
+            "gaps": [],
+            "matrix_warnings": [],
+        }
         if clean_kind in {"summary", "coverage_gaps"}:
             try:
                 from strix.tools.workflow import coverage_gaps_for_state
@@ -1134,6 +1229,41 @@ def _list_memory_impl(kind: str, limit: int = 50) -> dict[str, Any]:
                 external_discovery_gaps = []
             else:
                 external_discovery_gaps = discovered_inventory_gaps_for_state(_state_dir)
+        if clean_kind in {"summary", "workflow_clusters"}:
+            try:
+                from strix.tools.workflow import workflow_cluster_summary, workflow_cluster_summary_for_state
+            except ImportError:
+                workflow_clusters = {
+                    "cluster_count": 0,
+                    "clusters": [],
+                    "clusters_without_hypotheses": [],
+                    "clusters_without_coverage": [],
+                    "external_clusters_without_inventory": [],
+                    "clusters_with_narrow_testing": [],
+                    "suggested_next_testing_families": [],
+                    "dominant_clusters": [],
+                }
+            else:
+                if _state_dir is not None:
+                    workflow_clusters = workflow_cluster_summary_for_state(_state_dir)
+                else:
+                    workflow_clusters = workflow_cluster_summary(
+                        _sorted_values(_attack_surface),
+                        _sorted_values(_hypotheses),
+                        _sorted_values(_coverage),
+                    )
+        if clean_kind in {"summary", "inventory_readiness"}:
+            try:
+                from strix.tools.workflow import inventory_readiness_for_state
+            except ImportError:
+                inventory_readiness = {
+                    "ok": True,
+                    "ready_for_testing": True,
+                    "gaps": [],
+                    "matrix_warnings": [],
+                }
+            else:
+                inventory_readiness = inventory_readiness_for_state(_state_dir)
         if clean_kind == "attack_surface":
             return {"success": True, "kind": clean_kind, "items": _sorted_values(_attack_surface)[-bounded:], "total_count": len(_attack_surface)}
         if clean_kind == "hypotheses":
@@ -1175,6 +1305,29 @@ def _list_memory_impl(kind: str, limit: int = 50) -> dict[str, Any]:
                 "items": external_discovery_gaps[:bounded],
                 "total_count": len(external_discovery_gaps),
             }
+        if clean_kind == "workflow_clusters":
+            clusters = workflow_clusters.get("clusters", []) if isinstance(workflow_clusters, dict) else []
+            if not isinstance(clusters, list):
+                clusters = []
+            result = {
+                "success": True,
+                "kind": clean_kind,
+                "cluster_count": workflow_clusters.get("cluster_count", len(clusters)),
+                "clusters": clusters[:bounded],
+                "clusters_without_hypotheses": workflow_clusters.get("clusters_without_hypotheses", []),
+                "clusters_without_coverage": workflow_clusters.get("clusters_without_coverage", []),
+                "external_clusters_without_inventory": workflow_clusters.get("external_clusters_without_inventory", []),
+                "clusters_with_narrow_testing": workflow_clusters.get("clusters_with_narrow_testing", []),
+                "suggested_next_testing_families": workflow_clusters.get("suggested_next_testing_families", []),
+                "dominant_clusters": workflow_clusters.get("dominant_clusters", []),
+            }
+            return result
+        if clean_kind == "inventory_readiness":
+            return {
+                "success": True,
+                "kind": clean_kind,
+                **inventory_readiness,
+            }
         if clean_kind == "evidence":
             return {"success": True, "kind": clean_kind, "items": _sorted_values(_evidence)[-bounded:], "total_count": len(_evidence)}
         if clean_kind == "summary":
@@ -1199,8 +1352,10 @@ def _list_memory_impl(kind: str, limit: int = 50) -> dict[str, Any]:
                 "coverage_by_vuln_type": _count_by(_coverage.values(), "vuln_type"),
                 "hypotheses_by_status": _count_by(_hypotheses.values(), "status"),
                 "hypotheses_by_vuln_type": _count_by(_hypotheses.values(), "vuln_type"),
+                "workflow_clusters": workflow_clusters,
+                "inventory_readiness": inventory_readiness,
             }
-        return {"success": False, "error": "kind must be one of: summary, attack_surface, hypotheses, hypothesis_gaps, surface_hypothesis_gaps, coverage, coverage_without_hypothesis, coverage_gaps, external_discovery_gaps, evidence"}
+        return {"success": False, "error": "kind must be one of: summary, inventory_readiness, workflow_clusters, attack_surface, hypotheses, hypothesis_gaps, surface_hypothesis_gaps, coverage, coverage_without_hypothesis, coverage_gaps, external_discovery_gaps, evidence"}
 
 
 def _count_by(items: Any, field: str) -> dict[str, int]:
@@ -1418,9 +1573,9 @@ async def record_coverage(
 async def list_memory(ctx: RunContextWrapper, kind: str = "summary", limit: int = 50) -> str:
     """List persistent run memory.
 
-    kind may be ``summary``, ``attack_surface``, ``hypotheses``,
-    ``hypothesis_gaps``, ``surface_hypothesis_gaps``, ``coverage``,
-    ``coverage_without_hypothesis``, ``coverage_gaps``,
+    kind may be ``summary``, ``inventory_readiness``, ``attack_surface``,
+    ``hypotheses``, ``hypothesis_gaps``, ``surface_hypothesis_gaps``,
+    ``coverage``, ``coverage_without_hypothesis``, ``coverage_gaps``,
     ``external_discovery_gaps``, or ``evidence``.
     """
     state_dir = state_dir_from_context(ctx)

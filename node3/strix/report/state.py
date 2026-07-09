@@ -318,6 +318,10 @@ class ReportState:
         """Live accumulated LLM cost, independent of the persisted run-record snapshot."""
         return self._llm_usage.total_cost
 
+    def get_agent_llm_tokens(self, agent_id: str) -> int:
+        """Live accumulated token count for a single agent."""
+        return self._llm_usage.agent_total_tokens(agent_id)
+
     def update_scan_final_fields(
         self,
         executive_summary: str,

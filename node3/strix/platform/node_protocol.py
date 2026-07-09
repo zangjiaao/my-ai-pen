@@ -1045,24 +1045,21 @@ def short_value(value: Any) -> str:
 def tool_call_summary(tool_name: str, args: dict[str, Any]) -> str:
     name = friendly_tool_name(tool_name)
     if tool_name == "exec_command":
-        return f"Running command: {first_present(args, 'cmd', 'command') or 'shell command'}"
+        return "Running shell command"
     if tool_name == "write_stdin":
-        return f"Sending input to command session {first_present(args, 'session_id') or ''}".strip()
+        return "Sending command input"
     if tool_name == "create_agent":
-        return f"Creating sub-agent: {first_present(args, 'name') or 'agent'}"
+        return "Creating sub-agent"
     if tool_name == "load_skill":
-        return f"Loading skills: {first_present(args, 'skills') or 'selected skills'}"
+        return "Loading selected skills"
     if tool_name == "create_vulnerability_report":
-        return f"Reporting finding: {first_present(args, 'title') or 'vulnerability'}"
+        return "Reporting finding"
     if tool_name == "agent_finish":
         return "Sub-agent finishing with results"
     if tool_name == "finish_scan":
         return "Preparing final Strix report"
     if tool_name in {"list_requests", "list_sitemap", "scope_rules", "view_agent_graph", "list_todos", "list_notes"}:
         return f"{name} started"
-    target = first_present(args, "url", "target", "endpoint", "path", "query", "command", "task", "message")
-    if target:
-        return f"{name}: {target}"
     return f"{name} started"
 
 
@@ -1071,14 +1068,6 @@ def tool_start_progress(tool_name: str, args: dict[str, Any]) -> str:
 
 
 def important_tool_progress(tool_name: str, args: dict[str, Any]) -> str:
-    if tool_name == "create_agent":
-        name = first_present(args, "name") or "子 Agent"
-        task = first_present(args, "task")
-        return f"已分派 {name}" + (f"：{task}" if task else "")
-    if tool_name == "create_vulnerability_report":
-        return f"正在整理漏洞报告：{first_present(args, 'title') or '已确认漏洞'}"
-    if tool_name == "finish_scan":
-        return "正在汇总 Strix 扫描结果。"
     return ""
 
 

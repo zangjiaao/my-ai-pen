@@ -21,6 +21,14 @@ Strix model/provider variables are read directly by Strix, for example `STRIX_LL
 
 Docker may still need to be running for Strix-managed sandbox/Caido sidecars, depending on the tools used by a scan. That is different from running the Node3 process itself in Docker.
 
+### Scan Modes
+
+Node3 supports Strix `quick`, `standard`, and `deep` scan modes. The local default is `standard`.
+
+- `quick`: time-boxed high-impact checks; useful for fast signal, not full coverage.
+- `standard`: balanced coverage-first assessment; best default for normal web-app testing and benchmark comparison.
+- `deep`: exhaustive coverage and chaining; highest cost.
+
 ## Docker Fallback
 
 The Docker runner is still available as a fallback when the local Python environment is unsuitable:
@@ -49,7 +57,7 @@ node3\.venv\Scripts\python.exe node3\main.py standalone --target http://host.doc
 For headless standalone runs:
 
 ```powershell
-node3\.venv\Scripts\python.exe node3\main.py standalone --target http://host.docker.internal:8080 --no-tui --scan-mode quick
+node3\.venv\Scripts\python.exe node3\main.py standalone --target http://host.docker.internal:8080 --no-tui --scan-mode standard
 ```
 
 Resume a prior run by Strix run name:

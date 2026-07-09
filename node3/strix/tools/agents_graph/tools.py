@@ -5,20 +5,26 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import uuid
 from collections import Counter
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Literal, get_args
+from urllib.parse import urlsplit, urlunsplit
 
 from agents import RunContextWrapper, function_tool
 
 from strix.core.agents import Status, coordinator_from_context
+from strix.core.inputs import build_child_context_pack
+from strix.core.task_shape import classify_child_task_shape, task_purpose_for_shape
 from strix.skills import validate_requested_skills
 from strix.tools.todo.tools import (
     active_parent_todo_id,
     bind_todo_to_agent,
     complete_bound_todos,
     create_bound_todo,
+    get_todo,
     resolve_bound_todos,
     unfinished_todos_for_agent,
     validate_todo_exists,
@@ -26,12 +32,25 @@ from strix.tools.todo.tools import (
 from strix.tools.workflow import (
     is_recon_task,
     state_dir_from_raw,
-    task_can_follow_recorded_work,
     testing_preflight,
 )
 
 
 _ACTIVE_STATUSES: frozenset[str] = frozenset({"running", "waiting"})
+_DUPLICATE_RELEVANT_STATUSES: frozenset[str] = frozenset({"running", "waiting", "completed", "failed", "crashed"})
+_FAILED_RETRY_TERMS: tuple[str, ...] = (
+    "after failure",
+    "budget",
+    "crashed",
+    "failed",
+    "follow-up",
+    "narrower",
+    "retry",
+    "scoped",
+    "smaller",
+    "timeout",
+    "token",
+)
 
 
 logger = logging.getLogger(__name__)
@@ -39,6 +58,279 @@ logger = logging.getLogger(__name__)
 
 def _ctx(ctx: RunContextWrapper) -> dict[str, Any]:
     return ctx.context if isinstance(ctx.context, dict) else {}
+
+
+def _normalize_task_signature(name: str, task: str) -> str:
+    normalized = " ".join(f"{name} {task}".lower().split())
+    return normalized[:4000]
+
+
+_TASK_TARGET_RE = re.compile(
+    r"(?:https?://[^\s,;)'\"`]+|/(?:[A-Za-z0-9_.~{}:-]+/?)+(?:\?[^\s,;)'\"`]+)?)",
+)
+_TASK_STOPWORDS = {
+    "agent",
+    "and",
+    "any",
+    "as",
+    "at",
+    "call",
+    "candidate",
+    "confirmed",
+    "create",
+    "evidence",
+    "final",
+    "finding",
+    "findings",
+    "for",
+    "from",
+    "get",
+    "http",
+    "https",
+    "independently",
+    "issue",
+    "method",
+    "new",
+    "of",
+    "on",
+    "or",
+    "post",
+    "record",
+    "report",
+    "reporter",
+    "reporting",
+    "reproduce",
+    "request",
+    "response",
+    "result",
+    "same",
+    "show",
+    "status",
+    "task",
+    "test",
+    "testing",
+    "the",
+    "this",
+    "to",
+    "tool",
+    "url",
+    "use",
+    "validate",
+    "validation",
+    "validator",
+    "verify",
+    "with",
+}
+_VULN_TOPIC_ALIASES = {
+    "sqli": {"sql", "injection"},
+    "sql": {"sqli", "injection"},
+    "xss": {"client", "script"},
+    "idor": {"authorization", "access", "object"},
+    "bfla": {"authorization", "access", "function"},
+    "jwt": {"token", "session"},
+    "xxe": {"xml", "parser", "file"},
+    "ssrf": {"url", "server", "request"},
+    "csrf": {"request", "forgery"},
+}
+_GENERIC_TOPIC_OVERLAP_TERMS = {
+    "access",
+    "authorization",
+    "client",
+    "evidence",
+    "file",
+    "function",
+    "injection",
+    "object",
+    "parameter",
+    "request",
+    "response",
+    "server",
+    "validation",
+    "vulnerability",
+}
+
+
+def _task_scope_signature(name: str, task: str) -> dict[str, Any]:
+    text = " ".join([str(name or ""), str(task or "")]).lower()
+    targets = _task_targets(text)
+    target_terms = set()
+    for target in targets:
+        parsed = urlsplit(target if "://" in target else f"http://placeholder{target}")
+        target_terms.update(
+            token
+            for token in re.split(r"[^a-z0-9]+", parsed.path.lower())
+            if token
+        )
+    topic_terms = {
+        token
+        for token in re.split(r"[^a-z0-9]+", text)
+        if len(token) >= 3
+        and token not in _TASK_STOPWORDS
+        and token not in target_terms
+        and not token.isdigit()
+    }
+    topic_terms.update(_topic_alias_terms(topic_terms))
+    return {
+        "purpose": _task_purpose(text),
+        "targets": targets,
+        "topic_terms": topic_terms,
+    }
+
+
+def _task_targets(text: str) -> set[str]:
+    targets: set[str] = set()
+    for match in _TASK_TARGET_RE.finditer(text):
+        raw = match.group(0).strip().rstrip(".,")
+        target = _canonical_task_target(raw)
+        if target:
+            targets.add(target)
+            targets.update(_target_variants(target))
+    return targets
+
+
+def _canonical_task_target(raw: str) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    parsed = urlsplit(text)
+    if parsed.scheme and parsed.netloc:
+        path = parsed.path or "/"
+        if path != "/":
+            path = path.rstrip("/")
+        return urlunsplit(("", "", path, "", "")).lower()
+    parsed = urlsplit(text if text.startswith("/") else f"/{text}")
+    path = parsed.path or "/"
+    if path != "/":
+        path = path.rstrip("/")
+    return path.lower()
+
+
+def _target_variants(target: str) -> set[str]:
+    parsed = urlsplit(target if target.startswith("/") else f"/{target}")
+    segments = [segment for segment in parsed.path.split("/") if segment]
+    if not segments:
+        return set()
+    generalized = [
+        "{}"
+        if segment.isdigit() or (segment.startswith("{") and segment.endswith("}"))
+        else segment.lower()
+        for segment in segments
+    ]
+    if generalized == [segment.lower() for segment in segments]:
+        return set()
+    return {"/" + "/".join(generalized)}
+
+
+def _topic_alias_terms(topic_terms: set[str]) -> set[str]:
+    aliases: set[str] = set()
+    for term in topic_terms:
+        aliases.update(_VULN_TOPIC_ALIASES.get(term, set()))
+    return aliases
+
+
+def _task_purpose(text: str) -> str:
+    return task_purpose_for_shape(classify_child_task_shape(name="", task=text))
+
+
+def _intentional_failed_retry(*, agent_id: str, requested_text: str) -> bool:
+    text = requested_text.lower()
+    return agent_id.lower() in text or any(term in text for term in _FAILED_RETRY_TERMS)
+
+
+def _near_duplicate_task(
+    requested: dict[str, Any],
+    existing: dict[str, Any],
+) -> bool:
+    if not requested["targets"] or not existing["targets"]:
+        return False
+    if requested["purpose"] != existing["purpose"]:
+        return False
+    if not _target_overlap(requested["targets"], existing["targets"]):
+        return False
+    requested_terms = set(requested["topic_terms"])
+    existing_terms = set(existing["topic_terms"])
+    if requested_terms and existing_terms and not _specific_topic_overlap(requested_terms, existing_terms):
+        return False
+    return True
+
+
+def _specific_targets(targets: set[str]) -> set[str]:
+    return {target for target in targets if target != "/"}
+
+
+def _target_overlap(requested_targets: set[str], existing_targets: set[str]) -> set[str]:
+    requested_specific = _specific_targets(requested_targets)
+    existing_specific = _specific_targets(existing_targets)
+    specific_overlap = requested_specific.intersection(existing_specific)
+    if specific_overlap:
+        return specific_overlap
+    if requested_specific or existing_specific:
+        return set()
+    return requested_targets.intersection(existing_targets)
+
+
+def _specific_topic_overlap(requested_terms: set[str], existing_terms: set[str]) -> set[str]:
+    overlap = requested_terms.intersection(existing_terms)
+    specific = {term for term in overlap if term not in _GENERIC_TOPIC_OVERLAP_TERMS}
+    return specific or (overlap if not requested_terms or not existing_terms else set())
+
+
+def _reported_finding_overlap(
+    *,
+    state_dir: Path | None,
+    requested_scope: dict[str, Any],
+) -> dict[str, Any] | None:
+    if state_dir is None or requested_scope["purpose"] not in {"validate", "report"}:
+        return None
+    if not requested_scope["targets"]:
+        return None
+    reports = _vulnerability_reports_for_state(state_dir)
+    requested_terms = set(requested_scope["topic_terms"])
+    for report in reports:
+        existing_scope = _task_scope_signature(
+            str(report.get("title") or ""),
+            " ".join(
+                str(report.get(key) or "")
+                for key in (
+                    "endpoint",
+                    "method",
+                    "description",
+                    "technical_analysis",
+                    "cwe",
+                    "category",
+                    "vulnerability_type",
+                )
+            ),
+        )
+        matched_targets = _target_overlap(requested_scope["targets"], existing_scope["targets"])
+        if not matched_targets:
+            continue
+        existing_terms = set(existing_scope["topic_terms"])
+        if requested_terms and existing_terms and not _specific_topic_overlap(requested_terms, existing_terms):
+            continue
+        return {
+            "id": report.get("id"),
+            "title": report.get("title"),
+            "endpoint": report.get("endpoint"),
+            "method": report.get("method"),
+            "matched_targets": sorted(matched_targets),
+        }
+    return None
+
+
+def _vulnerability_reports_for_state(state_dir: Path) -> list[dict[str, Any]]:
+    candidates = []
+    if state_dir.name == ".state":
+        candidates.append(state_dir.parent / "vulnerabilities.json")
+    candidates.append(state_dir / "vulnerabilities.json")
+    for path in candidates:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+    return []
 
 
 def _render_completion_report(
@@ -374,6 +666,7 @@ async def create_agent(
     inherit_context: bool = True,
     skills: list[str] | None = None,
     todo_id: str | None = None,
+    parent_todo_id: str | None = None,
     task_priority: Literal["low", "normal", "high", "critical"] = "normal",
 ) -> str:
     """Spawn a specialist child agent to run in parallel.
@@ -395,11 +688,18 @@ async def create_agent(
       task genuinely spans them.
     - Match the ``name`` to the current role: discovery/testing agents
       explore recorded surfaces or planned hypotheses; validator agents
-      reproduce candidate vulnerabilities that already have evidence;
-      reporting agents document independently validated findings.
+      reproduce candidate vulnerabilities that already have evidence.
+      After validation, the coordinating parent should usually call
+      ``create_vulnerability_report`` directly with the validator's
+      evidence; do not spawn a child just to file the report.
     - Good discovery/testing tasks cite recorded endpoints, methods,
       parameters, auth states, business flows, or hypothesis IDs, then
       ask the child to record hypotheses/coverage/evidence as it works.
+    - Good discovery/testing tasks ask for a bounded batch script or
+      established scanner pass with a compact result table, then
+      evidence/coverage/reporting for confirmed issues. Avoid tasks
+      that require one model turn per payload or vague category-only
+      testing.
     - Good validator tasks cite the candidate evidence, affected
       surface, expected impact, and what proof would confirm or reject
       exploitability.
@@ -408,12 +708,18 @@ async def create_agent(
 
     - Spawn when the subtask is large, parallelizable, or needs
       different specialization than what you're already doing.
-    - After reconnaissance, prefer discovery/testing children built
-      from the attack-surface inventory and hypothesis matrix before
-      creating validator or reporting chains.
+    - Advance the root phase plan before delegation: finish the
+      hypothesis/test-matrix phase before spawning discovery/testing
+      children, and start validation/reporting before spawning validator
+      or reporting children.
+    - After reconnaissance, prefer discovery/testing children built from
+      the attack-surface inventory and hypothesis matrix before creating
+      validator work.
     - Create validator children only after discovery/testing work has
       produced candidate evidence; do not use validators as the first
       post-recon workstream.
+    - Reporting-shaped agents should not spawn children. If validation
+      evidence is missing, return that gap to the parent coordinator.
     - Don't spawn for trivial one-shot probes — just run the tool
       yourself.
 
@@ -427,11 +733,15 @@ async def create_agent(
             when starting a clean-slate task.
         skills: List of skill names (e.g. ``["xss", "sql_injection"]``).
             Max 5; prefer 1-3.
-        todo_id: Optional parent todo to bind to this child. If omitted,
-            a new in-progress todo is created automatically and is marked
-            done when the child calls ``agent_finish(success=true)``. If the
-            parent has exactly one active unassigned phase todo, the new
-            child-tracking todo is linked to it with ``parent_todo_id``.
+        todo_id: Optional existing todo to bind to this child. Use only
+            when the child owns that exact todo; it will be marked done
+            when the child calls ``agent_finish(success=true)``.
+        parent_todo_id: Optional existing parent/phase todo under which
+            the platform should create a new child-tracking todo. Use this
+            when delegating work that belongs to a specific phase. If
+            omitted, and the parent has exactly one active unassigned
+            phase todo, the new child-tracking todo is linked to that
+            active phase.
         task_priority: Priority for the automatically created todo.
     """
     inner = _ctx(ctx)
@@ -463,6 +773,16 @@ async def create_agent(
             ensure_ascii=False,
             default=str,
         )
+    if todo_id and parent_todo_id:
+        return json.dumps(
+            {
+                "success": False,
+                "error": "Use either todo_id or parent_todo_id, not both",
+                "agent_id": None,
+            },
+            ensure_ascii=False,
+            default=str,
+        )
     if todo_id:
         try:
             todo_id = validate_todo_exists(owner_agent_id=str(parent_id), todo_id=todo_id)
@@ -472,8 +792,137 @@ async def create_agent(
                 ensure_ascii=False,
                 default=str,
             )
+    if parent_todo_id:
+        try:
+            parent_todo_id = validate_todo_exists(
+                owner_agent_id=str(parent_id),
+                todo_id=parent_todo_id,
+            )
+        except ValueError as e:
+            return json.dumps(
+                {"success": False, "error": f"Failed to bind parent todo: {e!s}", "agent_id": None},
+                ensure_ascii=False,
+                default=str,
+            )
+        parent_todo = get_todo(owner_agent_id=str(parent_id), todo_id=parent_todo_id)
+        parent_status = str((parent_todo or {}).get("status") or "").strip().lower()
+        if parent_status != "in_progress":
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": (
+                        "Cannot create a child agent under a parent todo that is not in_progress. "
+                        "Start the current phase or bind the child to an active todo before delegating."
+                    ),
+                    "agent_id": None,
+                    "parent_todo_id": parent_todo_id,
+                    "parent_todo_status": parent_status or None,
+                },
+                ensure_ascii=False,
+                default=str,
+            )
 
     state_dir = state_dir_from_raw(inner.get("state_dir"))
+    parent_of, statuses, names = await coordinator.graph_snapshot()
+    requested_signature = _normalize_task_signature(name, task)
+    requested_scope = _task_scope_signature(name, task)
+    requested_shape = classify_child_task_shape(name=name, task=task)
+    parent_metadata = await coordinator.agent_metadata(str(parent_id))
+    parent_shape = classify_child_task_shape(
+        name=names.get(str(parent_id), str(parent_id)),
+        task=str(parent_metadata.get("task") or ""),
+    )
+    if parent_shape == "reporting":
+        return json.dumps(
+            {
+                "success": False,
+                "error": (
+                    "Reporting agents should not spawn child agents. Use existing independent "
+                    "validation evidence to call create_vulnerability_report, or return the "
+                    "missing validation/evidence gap to the parent coordinator."
+                ),
+                "agent_id": None,
+                "requested_child_shape": requested_shape,
+            },
+            ensure_ascii=False,
+            default=str,
+        )
+    reported_overlap = _reported_finding_overlap(
+        state_dir=state_dir,
+        requested_scope=requested_scope,
+    )
+    if reported_overlap is not None:
+        return json.dumps(
+            {
+                "success": False,
+                "error": (
+                    "A vulnerability report already covers this target and risk area; "
+                    "use the existing report instead of spawning another validator or reporter"
+                ),
+                "agent_id": None,
+                "existing_vulnerability": reported_overlap,
+            },
+            ensure_ascii=False,
+            default=str,
+        )
+    for agent_id, status in statuses.items():
+        if agent_id == parent_id:
+            continue
+        if status not in _DUPLICATE_RELEVANT_STATUSES:
+            continue
+        metadata = await coordinator.agent_metadata(agent_id)
+        existing_signature = _normalize_task_signature(
+            names.get(agent_id, agent_id),
+            str(metadata.get("task") or ""),
+        )
+        if existing_signature == requested_signature:
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": (
+                        "An agent already has the same name and task; reuse its result "
+                        "or coordinate with it instead of spawning a duplicate"
+                    ),
+                    "agent_id": None,
+                    "duplicate_agent_id": agent_id,
+                    "duplicate_status": status,
+                    "duplicate_parent_id": parent_of.get(agent_id),
+                },
+                ensure_ascii=False,
+                default=str,
+            )
+        existing_scope = _task_scope_signature(
+            names.get(agent_id, agent_id),
+            str(metadata.get("task") or ""),
+        )
+        if _near_duplicate_task(requested_scope, existing_scope):
+            if status in {"failed", "crashed"} and _intentional_failed_retry(
+                agent_id=agent_id,
+                requested_text=requested_signature,
+            ):
+                continue
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": (
+                        "An agent already covers the same target and task purpose; "
+                        "reuse its result, message it if it is active, or create a "
+                        "smaller failure-aware follow-up instead of spawning a near-duplicate"
+                    ),
+                    "agent_id": None,
+                    "duplicate_agent_id": agent_id,
+                    "duplicate_status": status,
+                    "duplicate_parent_id": parent_of.get(agent_id),
+                    "duplicate_scope": {
+                        "purpose": existing_scope["purpose"],
+                        "targets": sorted(existing_scope["targets"]),
+                    },
+                },
+                ensure_ascii=False,
+                default=str,
+            )
+
+    workflow_warnings: list[dict[str, Any]] = []
     if inner.get("parent_id") is None and not is_recon_task(
         name=name,
         task=task,
@@ -484,19 +933,22 @@ async def create_agent(
             require_attack_surface=True,
             planned_task=task,
         )
-        if not gate.get("ok") and not task_can_follow_recorded_work(state_dir, task):
-            return json.dumps(
-                {
-                    "success": False,
-                    "error": "Workflow gate blocked create_agent until reconnaissance and attack-surface mapping are complete",
-                    "workflow_gate": gate,
-                    "agent_id": None,
-                },
-                ensure_ascii=False,
-                default=str,
-            )
+        if not gate.get("ok"):
+            workflow_warnings.append(gate)
 
-    parent_history = list(ctx.turn_input) if inherit_context and ctx.turn_input else []
+    raw_parent_history = list(ctx.turn_input) if inherit_context and ctx.turn_input else []
+    parent_history = (
+        build_child_context_pack(
+            name=name,
+            task=task,
+            skills=skill_list,
+            parent_id=str(parent_id),
+            state_dir=state_dir,
+            parent_history=raw_parent_history,
+        )
+        if inherit_context
+        else []
+    )
     try:
         result = await spawner(
             parent_ctx=inner,
@@ -526,14 +978,14 @@ async def create_agent(
                 )
                 tracking = "bound"
             else:
-                parent_todo_id = active_parent_todo_id(str(parent_id))
+                selected_parent_todo_id = parent_todo_id or active_parent_todo_id(str(parent_id))
                 bound = create_bound_todo(
                     owner_agent_id=str(parent_id),
                     title=name,
                     description=task,
                     priority=task_priority,
                     linked_agent_id=child_id,
-                    parent_todo_id=parent_todo_id,
+                    parent_todo_id=selected_parent_todo_id,
                 )
                 tracking = "created"
             assigned_todo_id = str(bound.get("todo_id") or "")
@@ -555,6 +1007,8 @@ async def create_agent(
             )
     result["todo_id"] = assigned_todo_id or None
     result["task_tracking"] = tracking
+    if workflow_warnings:
+        result["workflow_warnings"] = workflow_warnings
 
     logger.info(
         "create_agent: spawned %s (%s) parent=%s skills=%d task_len=%d todo=%s tracking=%s",

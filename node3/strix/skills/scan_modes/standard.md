@@ -11,6 +11,14 @@ Balanced security assessment with structured methodology. Thorough coverage with
 
 Systematic testing across the full attack surface. Understand the application before exploiting it.
 
+## Coordination Model
+
+- Root owns orientation, attack-surface inventory, workflow clustering, and the hypothesis/test matrix before broad delegation.
+- Do not turn the first interesting endpoint into the whole assessment. Early positive signals should be recorded, then used to improve the matrix.
+- Delegate after the inventory is coherent enough to create concrete, non-overlapping assignments by workflow, role boundary, endpoint group, or risk family.
+- Subagents own testing, evidence, coverage, and confirmed vulnerability reporting for their assigned scope. A confirmed report does not end the root's remaining coordination work.
+- Prefer a few well-scoped testing batches over many narrow validator/reporting agents. Use subagents to add parallel coverage, not ceremony.
+
 ## Phase 1: Reconnaissance
 
 **Whitebox (source available)**
@@ -45,6 +53,14 @@ Before testing for vulnerabilities, understand the application:
 ## Phase 3: Systematic Testing
 
 Test each attack surface methodically. Spawn focused subagents for different areas.
+
+Before testing, turn the discovered surface into a practical matrix:
+
+- workflows and roles observed
+- endpoints, methods, parameters, and state-changing actions
+- expected trust boundaries and data ownership rules
+- applicable risk families per workflow, including business logic and access control, not only injection and XSS
+- assigned owner for each testing batch and the evidence/coverage expected from that batch
 
 **Input Validation**
 - Injection testing on all input fields (SQL, XSS, command, template)

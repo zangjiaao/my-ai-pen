@@ -16,9 +16,11 @@ from agents.sandbox.errors import ExecTransportError
 from docker import errors as docker_errors  # type: ignore[import-untyped, unused-ignore]
 from openai import APIError
 
-from strix.core.hooks import BudgetExceededError
+from strix.core.hooks import AgentTokenBudgetExceeded, BudgetExceededError
 from strix.core.inputs import child_initial_input
-from strix.core.sessions import open_agent_session, strip_all_images_from_session
+from strix.core.sessions import compact_session_items, open_agent_session, strip_all_images_from_session
+from strix.core.agents import TERMINAL_STATUSES
+from strix.core.task_shape import classify_child_task_shape
 
 
 if TYPE_CHECKING:
@@ -37,6 +39,11 @@ logger = logging.getLogger(__name__)
 StreamEventSink = Callable[[str, Any], None]
 
 _INPUT_REJECTION_CODES = frozenset({400, 404, 422})
+_CHILD_REPORT_MAX_TURNS = 12
+_CHILD_VALIDATE_MAX_TURNS = 24
+_CHILD_DISCOVERY_MAX_TURNS = 48
+_CHILD_DEFAULT_MAX_TURNS = 60
+_NONINTERACTIVE_LIFECYCLE_RECOVERY_LIMIT = 3
 
 
 async def run_agent_loop(
@@ -150,13 +157,14 @@ async def spawn_child_agent(
         skills=skills,
     )
 
+    child_max_turns = _child_max_turns(name=name, task=task, parent_max_turns=max_turns)
     await _start_child_runner(
         parent_ctx=parent_ctx,
         coordinator=coordinator,
         agents_db_path=agents_db_path,
         sessions_to_close=sessions_to_close,
         run_config=run_config,
-        max_turns=max_turns,
+        max_turns=child_max_turns,
         interactive=interactive,
         child_agent=child_agent,
         child_id=child_id,
@@ -179,6 +187,7 @@ async def spawn_child_agent(
         "agent_id": child_id,
         "name": name,
         "parent_id": parent_id,
+        "max_turns": child_max_turns,
         "message": f"Spawned '{name}' ({child_id}) running in parallel.",
     }
 
@@ -204,7 +213,7 @@ async def respawn_subagents(
         ]
         candidates: list[tuple[str, str, str | None, dict[str, Any]]] = []
         for aid, status, md in agents_snapshot:
-            if not interactive and status not in {"running", "waiting"}:
+            if status in TERMINAL_STATUSES or status not in {"running", "waiting"}:
                 continue
             if coordinator.parent_of.get(aid) is None or aid == root_id:
                 continue
@@ -233,19 +242,20 @@ async def respawn_subagents(
 
             child_skills = list(md.get("skills") or [])
             child_agent = factory(name=name, skills=child_skills)
+            task = str(md.get("task", ""))
             await _start_child_runner(
                 parent_ctx=parent_ctx,
                 coordinator=coordinator,
                 agents_db_path=agents_db_path,
                 sessions_to_close=sessions_to_close,
                 run_config=run_config,
-                max_turns=max_turns,
+                max_turns=_child_max_turns(name=name, task=task, parent_max_turns=max_turns),
                 interactive=interactive,
                 child_agent=child_agent,
                 child_id=child_id,
                 name=name,
                 parent_id=parent_id,
-                task=str(md.get("task", "")),
+                task=task,
                 initial_input=[],
                 start_parked=start_parked,
                 event_sink=event_sink,
@@ -281,7 +291,10 @@ async def _run_noninteractive_until_lifecycle(
     result: RunResultBase | None = None
     input_data: Any = initial_input
     invalid_final_outputs = 0
-    invalid_final_output_limit = max(1, max_turns)
+    invalid_final_output_limit = max(
+        1,
+        min(int(max_turns), _NONINTERACTIVE_LIFECYCLE_RECOVERY_LIMIT),
+    )
 
     while True:
         if coordinator.budget_stopped:
@@ -318,7 +331,15 @@ async def _run_noninteractive_until_lifecycle(
 
         if invalid_final_outputs >= invalid_final_output_limit:
             await coordinator.set_status(agent_id, "crashed")
-            await _notify_parent_on_failure(coordinator, agent_id, "crashed")
+            await _notify_parent_on_failure(
+                coordinator,
+                agent_id,
+                "crashed",
+                reason=(
+                    "Agent exhausted non-interactive recovery attempts without calling "
+                    "finish_scan or agent_finish."
+                ),
+            )
             raise MaxTurnsExceeded(
                 "Agent exhausted non-interactive recovery attempts without calling "
                 "finish_scan or agent_finish."
@@ -350,6 +371,11 @@ async def _run_cycle(  # noqa: PLR0912, PLR0915
     while True:
         try:
             await coordinator.mark_running(agent_id)
+            if session is not None:
+                try:
+                    await compact_session_items(session)
+                except Exception:
+                    logger.exception("pre-run session compaction failed for %s", agent_id)
             stream = Runner.run_streamed(
                 agent,
                 input=input_data,
@@ -398,6 +424,14 @@ async def _run_cycle(  # noqa: PLR0912, PLR0915
             await coordinator.set_status(agent_id, "stopped")
             await coordinator.trigger_budget_stop()
             raise
+        except AgentTokenBudgetExceeded as exc:
+            status: Status = "failed"
+            logger.warning("agent %s exceeded its narrow task token budget: %s", agent_id, exc)
+            await coordinator.set_status(agent_id, status)
+            await _notify_parent_on_failure(coordinator, agent_id, status, reason=str(exc))
+            if context.get("parent_id") is None:
+                raise
+            return None
         except Exception as exc:
             if (
                 image_strips < 3
@@ -428,7 +462,7 @@ async def _run_cycle(  # noqa: PLR0912, PLR0915
                 status = "crashed"
             logger.exception("agent run failed for %s; parking as %s", agent_id, status)
             await coordinator.set_status(agent_id, status)
-            await _notify_parent_on_failure(coordinator, agent_id, status)
+            await _notify_parent_on_failure(coordinator, agent_id, status, reason=str(exc))
             if context.get("parent_id") is None and status in {"failed", "crashed"}:
                 raise
             return None
@@ -440,6 +474,11 @@ async def _run_cycle(  # noqa: PLR0912, PLR0915
                 result=stream,
                 context=context,
             )
+            if session is not None:
+                try:
+                    await compact_session_items(session)
+                except Exception:
+                    logger.exception("session compaction failed for %s", agent_id)
             return stream
 
 
@@ -549,6 +588,20 @@ def _final_output_preview(result: RunResultBase | None) -> str:
     return text[:300]
 
 
+def _child_max_turns(*, name: str, task: str, parent_max_turns: int) -> int:
+    """Bound child work by task shape so narrow subtasks cannot consume root-scale turns."""
+    shape = classify_child_task_shape(name=name, task=task)
+    if shape == "reporting":
+        limit = _CHILD_REPORT_MAX_TURNS
+    elif shape == "validation":
+        limit = _CHILD_VALIDATE_MAX_TURNS
+    elif shape == "discovery":
+        limit = _CHILD_DISCOVERY_MAX_TURNS
+    else:
+        limit = _CHILD_DEFAULT_MAX_TURNS
+    return max(1, min(int(parent_max_turns), limit))
+
+
 async def _append_noninteractive_tool_required_message(
     *,
     session: Session | None,
@@ -578,6 +631,8 @@ async def _notify_parent_on_failure(
     coordinator: AgentCoordinator,
     agent_id: str,
     status: str,
+    *,
+    reason: str | None = None,
 ) -> None:
     if status not in {"failed", "crashed", "stopped"}:
         return
@@ -586,6 +641,7 @@ async def _notify_parent_on_failure(
         name = coordinator.names.get(agent_id, agent_id)
     if parent is None:
         return
+    reason_text = f" Reason: {reason}" if reason else ""
     await coordinator.send(
         parent,
         {
@@ -594,8 +650,11 @@ async def _notify_parent_on_failure(
             "priority": "high",
             "content": (
                 f"[Agent {status}] {name} ({agent_id}) cannot continue. "
-                "Stop waiting on this child; retry the task with a new agent, "
-                "mark the assigned work blocked/skipped with a reason, or continue with another plan."
+                f"{reason_text} "
+                "This does not close coverage for the assigned surfaces or hypotheses. "
+                "Stop waiting on this child; inspect memory and retry the unfinished work "
+                "as a smaller failure-aware batch, or record blocked/skipped coverage only "
+                "when concrete evidence shows the surface is unreachable, out of scope, or not applicable."
             ),
         },
     )
@@ -652,6 +711,8 @@ async def _start_child_runner(
             )
         except BudgetExceededError:
             logger.info("child %s stopped after reaching the scan budget limit", child_id)
+        except AgentTokenBudgetExceeded:
+            logger.warning("child %s stopped after exceeding its narrow task token budget", child_id)
 
     task_handle = asyncio.create_task(_child_loop(), name=f"agent-{name}-{child_id}")
     await coordinator.attach_runtime(child_id, task=task_handle)

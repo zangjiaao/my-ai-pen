@@ -35,7 +35,7 @@ class Node3Config:
         self.node_token = os.getenv("NODE_TOKEN", "")
         self.platform_ws_url = os.getenv("PLATFORM_WS_URL", "ws://localhost:8000/ws")
         self.strix_project_dir = resolve_config_path(os.getenv("STRIX_PROJECT_DIR"), DEFAULT_STRIX_PROJECT)
-        self.scan_mode = normalize_scan_mode(os.getenv("STRIX_SCAN_MODE", "quick"))
+        self.scan_mode = normalize_scan_mode(os.getenv("STRIX_SCAN_MODE", "standard"))
         self.extra_args = split_args(os.getenv("STRIX_EXTRA_ARGS", ""))
         self.max_output_chars = positive_int(os.getenv("NODE3_MAX_OUTPUT_CHARS"), 120_000)
         self.chat_timeout = positive_int(os.getenv("NODE3_CHAT_TIMEOUT_SECONDS"), 60)
@@ -172,11 +172,14 @@ def load_dotenv(path: Path) -> None:
 def normalize_task(message: dict[str, Any], config: Node3Config) -> dict[str, Any]:
     task_id = str(message.get("task_id") or uuid.uuid4())
     conversation_id = str(message.get("conversation_id") or task_id)
+    explicit_scan_mode = message.get("scan_mode") or message.get("scanMode")
+    scan_mode = normalize_scan_mode(explicit_scan_mode or config.scan_mode)
     return {
         "task_id": task_id,
         "conversation_id": conversation_id,
         "instruction": str(message.get("initial_instruction") or message.get("text") or ""),
-        "scan_mode": normalize_scan_mode(message.get("scan_mode") or message.get("scanMode") or config.scan_mode),
+        "scan_mode": scan_mode,
+        "scan_mode_source": "message" if explicit_scan_mode else "config",
         "target": message.get("target") if isinstance(message.get("target"), dict) else {},
         "scope": message.get("scope") if isinstance(message.get("scope"), dict) else {},
         "snapshot": message.get("snapshot") if isinstance(message.get("snapshot"), dict) else {},
@@ -216,7 +219,7 @@ def extract_target(task: dict[str, Any]) -> str | None:
 def build_instruction(task: dict[str, Any]) -> str:
     pieces = [
         str(task.get("instruction") or "").strip(),
-        "Run in coverage-first mode: map the authorized attack surface and plan endpoint/business-flow coverage before deep vulnerability validation.",
+        scan_mode_guidance(task.get("scan_mode")),
         "Avoid reporting negative or speculative findings as vulnerabilities.",
     ]
     return "\n\n".join(piece for piece in pieces if piece)
@@ -236,8 +239,26 @@ def text(task: dict[str, Any], value: str) -> dict[str, Any]:
 
 
 def normalize_scan_mode(value: Any) -> str:
-    normalized = str(value or "quick").strip().lower()
-    return normalized if normalized in {"quick", "standard", "deep"} else "quick"
+    normalized = str(value or "standard").strip().lower()
+    return normalized if normalized in {"quick", "standard", "deep"} else "standard"
+
+
+def scan_mode_guidance(value: Any) -> str:
+    mode = normalize_scan_mode(value)
+    if mode == "quick":
+        return (
+            "Run in quick mode: prioritize fast orientation and high-impact findings on the most obvious "
+            "authorized attack surfaces. Do not pretend quick mode provides full attack-surface coverage."
+        )
+    if mode == "deep":
+        return (
+            "Run in deep coverage-first mode: thoroughly map the authorized attack surface, build a "
+            "workflow and hypothesis/test matrix, and pursue broad plus deep validation before finalization."
+        )
+    return (
+        "Run in standard coverage-first mode: map the authorized attack surface and plan "
+        "endpoint/business-flow coverage before deep vulnerability validation."
+    )
 
 
 def positive_int(value: str | None, fallback: int) -> int:

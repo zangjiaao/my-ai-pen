@@ -10,10 +10,10 @@ from typing import Any
 from agents import RunContextWrapper, function_tool
 
 from strix.core.agents import coordinator_from_context
-from strix.tools.todo.tools import unfinished_todos_for_agent
 
 
 logger = logging.getLogger(__name__)
+_GATE_SAMPLE_LIMIT = 5
 
 
 def _finish_quality_gate() -> dict[str, Any] | None:
@@ -96,6 +96,94 @@ def _do_finish(
             "message": "Scan completed successfully",
             "vulnerabilities_found": vuln_count,
         }
+
+
+def _summarize_completion_gate(gate: dict[str, Any]) -> dict[str, Any]:
+    count_keys = [
+        "unreported_confirmed_coverage_count",
+        "uncovered_attack_surface_count",
+        "external_discovery_gap_count",
+        "hypothesis_gap_count",
+        "surface_hypothesis_gap_count",
+        "coverage_without_hypothesis_count",
+        "narrow_workflow_cluster_count",
+        "completion_warning_count",
+        "hypothesis_count",
+        "attack_surface_count",
+        "unfinished_count",
+    ]
+    list_keys = [
+        "incomplete_reasons",
+        "unreported_confirmed_coverage",
+        "uncovered_attack_surfaces",
+        "external_discovery_gaps",
+        "hypothesis_gaps",
+        "surface_hypothesis_gaps",
+        "coverage_without_hypothesis",
+        "narrow_workflow_clusters",
+        "unfinished_todos",
+        "completion_warnings",
+    ]
+    summary: dict[str, Any] = {
+        "ok": bool(gate.get("ok")),
+        "counts": {key: gate.get(key) for key in count_keys if key in gate},
+        "samples": {},
+        "omitted_full_details": True,
+    }
+    warnings = gate.get("completion_warnings")
+    if isinstance(warnings, list):
+        summary["counts"]["completion_warning_count"] = len(warnings)
+    workflow_clusters = gate.get("workflow_clusters")
+    if isinstance(workflow_clusters, dict):
+        clusters = workflow_clusters.get("clusters")
+        summary["workflow_clusters"] = {
+            "cluster_count": workflow_clusters.get("cluster_count"),
+            "dominant_clusters": workflow_clusters.get("dominant_clusters"),
+            "clusters_without_hypotheses": workflow_clusters.get("clusters_without_hypotheses"),
+            "clusters_without_coverage": workflow_clusters.get("clusters_without_coverage"),
+            "external_clusters_without_inventory": workflow_clusters.get("external_clusters_without_inventory"),
+            "clusters_with_narrow_testing": (
+                workflow_clusters.get("clusters_with_narrow_testing") or []
+            )[:_GATE_SAMPLE_LIMIT],
+            "suggested_next_testing_families": (
+                workflow_clusters.get("suggested_next_testing_families") or []
+            )[:_GATE_SAMPLE_LIMIT],
+            "sample_clusters": clusters[:_GATE_SAMPLE_LIMIT] if isinstance(clusters, list) else [],
+        }
+    for key in list_keys:
+        value = gate.get(key)
+        if isinstance(value, list) and value:
+            summary["samples"][key] = [_compact_gate_item(item) for item in value[:_GATE_SAMPLE_LIMIT]]
+            if len(value) > _GATE_SAMPLE_LIMIT:
+                summary["samples"][f"{key}_omitted_count"] = len(value) - _GATE_SAMPLE_LIMIT
+        elif value:
+            summary["samples"][key] = value
+    return summary
+
+
+def _compact_gate_item(item: Any) -> Any:
+    if not isinstance(item, dict):
+        return item
+    wanted = [
+        "todo_id",
+        "title",
+        "status",
+        "priority",
+        "surface_id",
+        "hypothesis_id",
+        "coverage_id",
+        "evidence_id",
+        "endpoint",
+        "url",
+        "method",
+        "parameter",
+        "vuln_type",
+        "auth_state",
+        "reason",
+        "notes",
+    ]
+    compacted = {key: item.get(key) for key in wanted if item.get(key) not in (None, "", [])}
+    return compacted or {key: item.get(key) for key in list(item)[:5]}
 
 
 @function_tool(timeout=60)
@@ -209,42 +297,21 @@ async def finish_scan(
             default=str,
         )
 
-    if parent_id is None and isinstance(me, str):
-        unfinished_todos = unfinished_todos_for_agent(me)
-        if unfinished_todos:
-            return json.dumps(
-                {
-                    "success": False,
-                    "scan_completed": False,
-                    "error": (
-                        "Cannot finish scan while root todos are still unresolved. "
-                        "Complete the work, or mark tested-but-not-vulnerable items as done before finishing"
-                    ),
-                    "unfinished_todos": [
-                        {
-                            "todo_id": todo.get("todo_id"),
-                            "title": todo.get("title"),
-                            "status": todo.get("status"),
-                            "priority": todo.get("priority"),
-                        }
-                        for todo in unfinished_todos
-                    ],
-                },
-                ensure_ascii=False,
-                default=str,
-            )
-
     quality_gate = await asyncio.to_thread(_finish_quality_gate)
     if quality_gate is not None and not quality_gate.get("ok"):
         confirmed_gap_count = int(quality_gate.get("unreported_confirmed_coverage_count") or 0)
-        uncovered_count = int(quality_gate.get("uncovered_attack_surface_count") or 0)
-        external_gap_count = int(quality_gate.get("external_discovery_gap_count") or 0)
         hypothesis_gap_count = int(quality_gate.get("hypothesis_gap_count") or 0)
         surface_hypothesis_gap_count = int(quality_gate.get("surface_hypothesis_gap_count") or 0)
         unlinked_coverage_count = int(quality_gate.get("coverage_without_hypothesis_count") or 0)
         hypothesis_count = int(quality_gate.get("hypothesis_count") or 0)
         attack_surface_count = int(quality_gate.get("attack_surface_count") or 0)
-        if attack_surface_count and not hypothesis_count:
+        unfinished_count = int(quality_gate.get("unfinished_count") or 0)
+        if unfinished_count:
+            next_action = (
+                "Resolve the unfinished root todo(s) by doing the remaining work or recording a concrete "
+                "blocked/skipped outcome, then finish once the hard evidence checks pass"
+            )
+        elif attack_surface_count and not hypothesis_count:
             next_action = (
                 "Convert recorded attack surface into record_hypothesis test-matrix entries, then execute "
                 "the planned tests and close them with evidence-backed record_coverage"
@@ -269,16 +336,6 @@ async def finish_scan(
                 "Create vulnerability reports for every unreported_confirmed_coverage entry before trying "
                 "finish_scan again; each report needs independent validation evidence"
             )
-        elif uncovered_count:
-            next_action = (
-                "Continue endpoint-level testing for the uncovered_attack_surfaces entries before trying "
-                "finish_scan again; record coverage as passed, failed, tried, blocked, or skipped with evidence"
-            )
-        elif external_gap_count:
-            next_action = (
-                "Convert every external_discovery_gaps entry into record_attack_surface memory or mark it "
-                "out of scope before testing or finishing"
-            )
         else:
             next_action = "Record attack surface, coverage, evidence, and cite real evidence_ids before finishing"
         return json.dumps(
@@ -289,7 +346,7 @@ async def finish_scan(
                     "Cannot finish scan because evidence and memory quality gates did not pass. "
                     + next_action
                 ),
-                "completion_gate": quality_gate,
+                "completion_gate_summary": _summarize_completion_gate(quality_gate),
                 "recommended_next_action": next_action,
             },
             ensure_ascii=False,
@@ -312,4 +369,10 @@ async def finish_scan(
     ):
         next_status = "waiting" if inner.get("keep_alive_after_finish") else "completed"
         await coordinator.set_status(me, next_status)
+    if quality_gate is not None and result.get("success"):
+        warnings = quality_gate.get("completion_warnings")
+        if isinstance(warnings, list) and warnings:
+            result["completion_warnings"] = warnings[:10]
+            if len(warnings) > 10:
+                result["completion_warnings_omitted_count"] = len(warnings) - 10
     return json.dumps(result, ensure_ascii=False, default=str)

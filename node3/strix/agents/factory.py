@@ -125,6 +125,10 @@ _NOOP_SCHEMA_PROPERTY: dict[str, Any] = {
     "description": "Optional ignored placeholder for providers that reject empty parameter objects.",
 }
 _NOOP_ARGUMENT_KEYS = {"_noop"}
+_MAX_TOOL_OUTPUT_CHARS = 20_000
+_MAX_TOOL_OUTPUT_FIELD_CHARS = 4_000
+_MAX_TOOL_OUTPUT_COLLECTION_ITEMS = 40
+_BOUNDED_OUTPUT_PREFIX = "[tool output compacted by Strix]"
 
 
 def _custom_tool_input_field(tool: CustomTool) -> str:
@@ -264,7 +268,7 @@ def _function_tool_with_error_result(tool: FunctionTool) -> FunctionTool:
 
     async def invoke(ctx: Any, raw_input: str) -> Any:
         try:
-            return await invoke_tool(ctx, raw_input)
+            return _bound_tool_output(tool.name, await invoke_tool(ctx, raw_input))
         except Exception as exc:  # noqa: BLE001 - tool errors should be model-visible results.
             logger.debug("Tool %s failed; returning error as result", tool.name, exc_info=True)
             return _format_tool_error(exc)
@@ -279,7 +283,7 @@ def _custom_tool_as_function_tool(tool: CustomTool) -> FunctionTool:
         if not custom_input:
             return f"`{_custom_tool_input_field(tool)}` must be a non-empty string."
         try:
-            return await tool.on_invoke_tool(ctx, custom_input)
+            return _bound_tool_output(tool.name, await tool.on_invoke_tool(ctx, custom_input))
         except Exception as exc:  # noqa: BLE001 - matches SDK CustomTool error-as-result behavior.
             logger.debug("Tool %s failed; returning error as result", tool.name, exc_info=True)
             return _format_tool_error(exc)
@@ -363,12 +367,103 @@ def _format_validation_error(tool_name: str, exc: ValidationError) -> str:
     return f"{tool_name}: invalid arguments — " + "; ".join(parts)
 
 
+def _bound_tool_output(tool_name: str, output: Any) -> Any:
+    """Keep oversized tool results from dominating later model context."""
+    if not isinstance(output, str):
+        return output
+    if len(output) <= _MAX_TOOL_OUTPUT_CHARS or output.startswith(_BOUNDED_OUTPUT_PREFIX):
+        return output
+    try:
+        parsed = json.loads(output)
+    except (TypeError, ValueError):
+        return _compact_text_output(output, tool_name=tool_name)
+
+    compacted = _compact_output_value(parsed)
+    if isinstance(compacted, dict):
+        compacted.setdefault("_strix_truncated_output", True)
+        compacted.setdefault("_original_output_chars", len(output))
+        compacted.setdefault(
+            "_note",
+            "Oversized tool output was compacted. Persist exact proof with record_evidence or an artifact when needed.",
+        )
+    rendered = json.dumps(compacted, ensure_ascii=False, default=str)
+    if len(rendered) <= _MAX_TOOL_OUTPUT_CHARS:
+        return rendered
+    return _compact_text_output(rendered, original_length=len(output), tool_name=tool_name)
+
+
+def _compact_output_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return _clip_tool_field(value)
+    if isinstance(value, list):
+        compacted = [_compact_output_value(item) for item in value[:_MAX_TOOL_OUTPUT_COLLECTION_ITEMS]]
+        if len(value) > _MAX_TOOL_OUTPUT_COLLECTION_ITEMS:
+            compacted.append({"_strix_omitted_items": len(value) - _MAX_TOOL_OUTPUT_COLLECTION_ITEMS})
+        return compacted
+    if isinstance(value, dict):
+        compacted: dict[str, Any] = {}
+        items = list(value.items())
+        for key, item in items[:_MAX_TOOL_OUTPUT_COLLECTION_ITEMS]:
+            compacted[str(key)] = _compact_output_value(item)
+        if len(items) > _MAX_TOOL_OUTPUT_COLLECTION_ITEMS:
+            compacted["_strix_omitted_keys"] = len(items) - _MAX_TOOL_OUTPUT_COLLECTION_ITEMS
+        return compacted
+    return value
+
+
+def _clip_tool_field(text: str) -> str:
+    if len(text) <= _MAX_TOOL_OUTPUT_FIELD_CHARS:
+        return text
+    head = _MAX_TOOL_OUTPUT_FIELD_CHARS // 2
+    tail = _MAX_TOOL_OUTPUT_FIELD_CHARS - head
+    return (
+        f"{_BOUNDED_OUTPUT_PREFIX}\n"
+        f"Original field length: {len(text)} characters.\n"
+        f"--- head ---\n{text[:head]}\n"
+        f"--- tail ---\n{text[-tail:]}"
+    )
+
+
+def _compact_text_output(
+    text: str,
+    *,
+    original_length: int | None = None,
+    tool_name: str | None = None,
+) -> str:
+    original = original_length if original_length is not None else len(text)
+    budget = max(1_000, _MAX_TOOL_OUTPUT_CHARS - 700)
+    head = budget // 2
+    tail = budget - head
+    label = f" from {tool_name}" if tool_name else ""
+    return (
+        f"{_BOUNDED_OUTPUT_PREFIX}\n"
+        f"Original output{label}: {original} characters. "
+        "Only a head/tail preview is returned to keep model context bounded. "
+        "Rerun with narrower output, redirect full output to an artifact, or record decisive proof with record_evidence if exact data is needed.\n"
+        f"--- head ---\n{text[:head]}\n"
+        f"--- tail ---\n{text[-tail:]}"
+    )
+
+
+def _wrap_bounded_tool_output(tool: FunctionTool) -> FunctionTool:
+    if getattr(tool, "_strix_bounded_output_wrapper", False):
+        return tool
+    invoke_tool = tool.on_invoke_tool
+
+    async def invoke(ctx: Any, raw_input: str) -> Any:
+        return _bound_tool_output(tool.name, await invoke_tool(ctx, raw_input))
+
+    tool.on_invoke_tool = invoke
+    setattr(tool, "_strix_bounded_output_wrapper", True)
+    return tool
+
+
 def _wrap_exec_command(tool: FunctionTool) -> FunctionTool:
     invoke_tool = tool.on_invoke_tool
 
     async def invoke(ctx: Any, raw_input: str) -> Any:
         try:
-            return await invoke_tool(ctx, raw_input)
+            return _bound_tool_output(tool.name, await invoke_tool(ctx, raw_input))
         except ValidationError as exc:
             return _format_validation_error(tool.name, exc)
         except InvalidManifestPathError as exc:
@@ -395,7 +490,7 @@ def _wrap_write_stdin(tool: FunctionTool) -> FunctionTool:
             parsed["chars"] = _decode_chars_escape(parsed["chars"])
             raw_input = json.dumps(parsed)
         try:
-            return await invoke_tool(ctx, raw_input)
+            return _bound_tool_output(tool.name, await invoke_tool(ctx, raw_input))
         except ValidationError as exc:
             return _format_validation_error(tool.name, exc)
 
@@ -564,6 +659,10 @@ def build_strix_agent(
         tools = [*base_tools, agent_finish]
     if chat_completions_tools:
         tools = [_tool_with_chat_completions_schema(tool) for tool in tools]
+    tools = [
+        _wrap_bounded_tool_output(tool) if isinstance(tool, FunctionTool) else tool
+        for tool in tools
+    ]
 
     logger.info(
         "Built %s agent '%s' (skills=%d, tools=%d, scan_mode=%s, whitebox=%s)",

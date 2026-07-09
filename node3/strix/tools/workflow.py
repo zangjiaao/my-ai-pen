@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from strix.tools.run_memory.tools import attack_surface_from_file, coverage_from_file
+from strix.tools.run_memory.tools import attack_surface_from_file, coverage_from_file, evidence_from_file, hypotheses_from_file
 
 
 WORKFLOW_STATE_FILENAME = "workflow_state.json"
@@ -89,15 +89,65 @@ _UNBOUNDED_TASK_PHRASES = (
     "other user input",
     "other input",
 )
-_RECORDED_WORK_FOLLOWUP_KEYWORDS = (
-    "confirm",
-    "confirmed",
-    "evidence",
-    "report",
-    "reproduce",
-    "validate",
+_GENERIC_CLUSTER_SEGMENTS = {
+    "api",
+    "app",
+    "graphql",
+    "rest",
+    "route",
+    "routes",
+    "v1",
+    "v2",
+    "v3",
+}
+_REPORTING_PHASE_TERMS = (
     "validation",
-    "verify",
+    "validate",
+    "report",
+    "reporting",
+    "final",
+)
+_RISK_FAMILY_HINTS = (
+    {
+        "family": "authentication_and_session",
+        "surface_terms": ("auth", "login", "logout", "password", "reset", "forgot", "session", "token", "jwt", "security-question", "mfa", "totp"),
+        "vuln_terms": ("auth", "authentication", "session", "jwt", "token", "password", "credential", "account"),
+    },
+    {
+        "family": "authorization_and_object_isolation",
+        "surface_terms": ("admin", "user", "users", "profile", "account", "basket", "cart", "order", "wallet", "card", "complaint", "review", "address"),
+        "vuln_terms": ("authorization", "access", "idor", "bfla", "privilege", "ownership", "isolation"),
+    },
+    {
+        "family": "input_injection",
+        "surface_terms": ("search", "query", "filter", "sort", "where", "id", "email", "name", "message", "comment", "review", "feedback", "prompt", "chat", "xml", "template"),
+        "vuln_terms": ("injection", "sqli", "sql", "nosql", "command", "xxe", "ssti", "template", "prompt"),
+    },
+    {
+        "family": "client_side_input_output",
+        "surface_terms": ("search", "q", "query", "redirect", "return", "callback", "message", "comment", "review", "feedback", "description", "content", "html", "script"),
+        "vuln_terms": ("xss", "dom", "client", "csp", "reflection", "stored", "header"),
+    },
+    {
+        "family": "business_logic_and_state_changes",
+        "surface_terms": ("basket", "cart", "checkout", "order", "payment", "coupon", "discount", "wallet", "card", "membership", "feedback", "captcha", "review", "delete", "update", "create"),
+        "vuln_terms": ("business", "logic", "validation", "input", "coupon", "payment", "captcha", "rate", "automation", "mass", "assignment"),
+    },
+    {
+        "family": "file_and_parser_handling",
+        "surface_terms": ("upload", "file", "files", "ftp", "download", "import", "export", "pdf", "xml", "zip", "backup", "path", "filename"),
+        "vuln_terms": ("upload", "file", "path", "traversal", "lfi", "rfi", "xxe", "parser", "deserialization"),
+    },
+    {
+        "family": "redirect_and_external_url",
+        "surface_terms": ("redirect", "return", "next", "url", "uri", "callback", "continue", "proxy", "external", "image", "avatar"),
+        "vuln_terms": ("redirect", "ssrf", "url", "callback", "external", "open"),
+    },
+    {
+        "family": "configuration_observability_and_components",
+        "surface_terms": ("config", "configuration", "swagger", "openapi", "metrics", "health", "debug", "log", "package", "lock", "map", "js", "well-known", "robots"),
+        "vuln_terms": ("configuration", "disclosure", "component", "dependency", "observability", "debug", "metrics", "version"),
+    },
 )
 
 
@@ -343,6 +393,352 @@ def discovered_inventory_gaps_for_state(state_dir: Path | None) -> list[dict[str
     return discovered_inventory_gaps(state, attack_surface)
 
 
+def workflow_cluster_summary(
+    attack_surface: list[dict[str, Any]],
+    hypotheses: list[dict[str, Any]],
+    coverage: list[dict[str, Any]],
+    external_discoveries: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Summarize observed workflow coverage from recorded paths.
+
+    The clusters are derived from actual URL/path segments rather than target
+    profiles or benchmark expectations. This makes coverage skew visible to the
+    agent without telling it which application-specific findings should exist.
+    """
+    clusters: dict[str, dict[str, Any]] = {}
+
+    def ensure(cluster: str) -> dict[str, Any]:
+        return clusters.setdefault(
+            cluster,
+            {
+                "cluster": cluster,
+                "attack_surface_count": 0,
+                "hypothesis_count": 0,
+                "coverage_count": 0,
+                "external_discovery_count": 0,
+                "coverage_statuses": {},
+                "vuln_types": {},
+                "example_targets": [],
+                "surface_hints": [],
+            },
+        )
+
+    for item in external_discoveries or []:
+        cluster = _workflow_cluster_for_item(item)
+        entry = ensure(cluster)
+        entry["external_discovery_count"] += 1
+        _append_example_target(entry, item.get("url") or item.get("path"))
+        for family in _risk_families_for_surface(item):
+            _append_unique(entry["surface_hints"], family, limit=8)
+
+    for item in attack_surface:
+        cluster = _workflow_cluster_for_item(item)
+        entry = ensure(cluster)
+        entry["attack_surface_count"] += 1
+        _append_example_target(entry, item.get("url") or item.get("address") or item.get("endpoint"))
+        for family in _risk_families_for_surface(item):
+            _append_unique(entry["surface_hints"], family, limit=8)
+
+    for item in hypotheses:
+        cluster = _workflow_cluster_for_item(item)
+        entry = ensure(cluster)
+        entry["hypothesis_count"] += 1
+        vuln_type = str(item.get("vuln_type") or "unknown")
+        entry["vuln_types"][vuln_type] = int(entry["vuln_types"].get(vuln_type, 0)) + 1
+        _append_example_target(entry, item.get("endpoint") or item.get("url"))
+
+    for item in coverage:
+        cluster = _workflow_cluster_for_item(item)
+        entry = ensure(cluster)
+        entry["coverage_count"] += 1
+        status = str(item.get("status") or "unknown")
+        entry["coverage_statuses"][status] = int(entry["coverage_statuses"].get(status, 0)) + 1
+        vuln_type = str(item.get("vuln_type") or "unknown")
+        entry["vuln_types"][vuln_type] = int(entry["vuln_types"].get(vuln_type, 0)) + 1
+        _append_example_target(entry, item.get("endpoint") or item.get("url"))
+
+    ordered = sorted(
+        clusters.values(),
+        key=lambda item: (
+            -int(item["attack_surface_count"]),
+            -int(item["external_discovery_count"]),
+            -int(item["hypothesis_count"]),
+            str(item["cluster"]),
+        ),
+    )
+    clusters_without_hypotheses = [
+        item["cluster"]
+        for item in ordered
+        if int(item["attack_surface_count"]) > 0 and int(item["hypothesis_count"]) == 0
+    ]
+    clusters_without_coverage = [
+        item["cluster"]
+        for item in ordered
+        if int(item["attack_surface_count"]) > 0 and int(item["coverage_count"]) == 0
+    ]
+    external_clusters_without_inventory = [
+        item["cluster"]
+        for item in ordered
+        if int(item["external_discovery_count"]) > 0 and int(item["attack_surface_count"]) == 0
+    ]
+    clusters_with_narrow_testing: list[dict[str, Any]] = []
+    suggested_next_testing_families: list[dict[str, Any]] = []
+    family_counts: dict[str, int] = {}
+    for item in ordered:
+        observed_families = _risk_families_from_vuln_types(item.get("vuln_types", {}))
+        suggested = [
+            family
+            for family in item.get("surface_hints", [])
+            if family not in observed_families
+        ]
+        if int(item["attack_surface_count"]) > 0 and suggested:
+            clusters_with_narrow_testing.append({
+                "cluster": item["cluster"],
+                "tested_families": sorted(observed_families),
+                "suggested_untested_families": suggested[:5],
+                "example_targets": item.get("example_targets", [])[:3],
+            })
+            for family in suggested:
+                family_counts[family] = family_counts.get(family, 0) + 1
+    for family, count in sorted(family_counts.items(), key=lambda pair: (-pair[1], pair[0])):
+        suggested_next_testing_families.append({"family": family, "cluster_count": count})
+    return {
+        "cluster_count": len(ordered),
+        "clusters": ordered,
+        "clusters_without_hypotheses": clusters_without_hypotheses,
+        "clusters_without_coverage": clusters_without_coverage,
+        "external_clusters_without_inventory": external_clusters_without_inventory,
+        "clusters_with_narrow_testing": clusters_with_narrow_testing[:10],
+        "suggested_next_testing_families": suggested_next_testing_families[:10],
+        "dominant_clusters": [
+            item["cluster"]
+            for item in ordered[:3]
+            if (
+                int(item["external_discovery_count"])
+                or int(item["attack_surface_count"])
+                or int(item["hypothesis_count"])
+                or int(item["coverage_count"])
+            )
+        ],
+    }
+
+
+def workflow_cluster_summary_for_state(state_dir: Path | None) -> dict[str, Any]:
+    if state_dir is None:
+        return workflow_cluster_summary([], [], [])
+    try:
+        from strix.tools.run_memory.tools import hypotheses_from_file
+    except ImportError:
+        hypotheses = []
+    else:
+        hypotheses = hypotheses_from_file(state_dir / "hypotheses.json")
+    return workflow_cluster_summary(
+        attack_surface_from_file(state_dir / "attack_surface.json"),
+        hypotheses,
+        coverage_from_file(state_dir / "coverage.json"),
+        discovered_inventory_gaps_for_state(state_dir),
+    )
+
+
+def inventory_readiness_for_state(state_dir: Path | None) -> dict[str, Any]:
+    """Return whether observed attack surface is ready to become test work.
+
+    This is intentionally derived from observed ledgers and external discovery
+    state, not from target profiles or benchmark expectations. The goal is to
+    make the root agent compile the inventory and hypothesis matrix before it
+    starts distributing vulnerability-testing work.
+    """
+    if state_dir is None:
+        return {
+            "ok": True,
+            "ready_for_testing": True,
+            "reason": "",
+            "gaps": [],
+            "recommended_next_steps": [],
+        }
+
+    gate = sitemap_gate(state_dir)
+    attack_surface = attack_surface_from_file(state_dir / "attack_surface.json")
+    hypotheses = hypotheses_from_file(state_dir / "hypotheses.json")
+    coverage = coverage_from_file(state_dir / "coverage.json")
+    external_gaps = discovered_inventory_gaps_for_state(state_dir)
+    workflow_clusters = workflow_cluster_summary(
+        attack_surface,
+        hypotheses,
+        coverage,
+        external_gaps,
+    )
+    try:
+        from strix.platform.node_runner import surface_hypothesis_gaps
+    except ImportError:
+        surface_gaps: list[dict[str, Any]] = []
+    else:
+        surface_gaps = surface_hypothesis_gaps(
+            attack_surface,
+            hypotheses,
+            load_workflow_state(state_dir),
+        )
+
+    gaps: list[dict[str, Any]] = []
+    if not gate.get("ok"):
+        gaps.append({
+            "kind": "discovery_source_not_processed",
+            "reason": gate.get("reason") or "Discovery source state is incomplete",
+            "details": {
+                key: gate.get(key)
+                for key in (
+                    "sitemap_pagination_gaps",
+                    "sitemap_expansion_gaps",
+                    "recommended_next_steps",
+                )
+                if gate.get(key)
+            },
+        })
+    if not attack_surface:
+        gaps.append({
+            "kind": "no_attack_surface_inventory",
+            "reason": "No attack surface records exist yet",
+        })
+    if external_gaps:
+        gaps.append({
+            "kind": "external_discovery_not_imported",
+            "reason": "Externally discovered endpoints have not been recorded in attack surface memory",
+            "items": external_gaps[:20],
+            "total_count": len(external_gaps),
+        })
+    clusters_without_hypotheses = workflow_clusters.get("clusters_without_hypotheses") or []
+    if clusters_without_hypotheses:
+        gaps.append({
+            "kind": "clusters_without_hypotheses",
+            "reason": "Observed workflow clusters have no hypothesis/test matrix entries",
+            "clusters": clusters_without_hypotheses[:20],
+            "total_count": len(clusters_without_hypotheses),
+        })
+    if surface_gaps:
+        gaps.append({
+            "kind": "surfaces_without_hypotheses",
+            "reason": "Recorded testable attack surfaces are not represented in the hypothesis matrix",
+            "items": surface_gaps[:20],
+            "total_count": len(surface_gaps),
+        })
+
+    narrow_testing = workflow_clusters.get("clusters_with_narrow_testing") or []
+    ready = not gaps
+    return {
+        "ok": ready,
+        "ready_for_testing": ready,
+        "reason": "" if ready else "Attack-surface inventory and hypothesis matrix are not ready for vulnerability testing",
+        "attack_surface_count": len(attack_surface),
+        "hypothesis_count": len(hypotheses),
+        "coverage_count": len(coverage),
+        "workflow_clusters": workflow_clusters,
+        "gaps": gaps,
+        "matrix_warnings": [
+            {
+                "kind": "narrow_cluster_testing",
+                "reason": "Some observed clusters have suggested risk families that are not represented in the matrix",
+                "items": narrow_testing[:20],
+                "total_count": len(narrow_testing),
+            },
+        ] if narrow_testing else [],
+        "recommended_next_steps": [
+            "Continue root-led discovery until external sitemap/request-history gaps are imported or deliberately excluded",
+            "Group recorded surfaces into workflow clusters with list_memory(kind=\"workflow_clusters\")",
+            "Create record_hypothesis entries for each testable surface and applicable risk family before spawning testing agents",
+            "Delegate subagents from concrete hypothesis/surface groups after inventory_readiness is ok",
+        ] if not ready else [
+            "Create surface- or hypothesis-bound testing subagents from the compiled matrix",
+            "Track coverage with record_coverage(hypothesis_id=...) as each test is executed",
+        ],
+    }
+
+
+def _workflow_cluster_for_item(item: dict[str, Any]) -> str:
+    target = str(
+        item.get("url")
+        or item.get("endpoint")
+        or item.get("address")
+        or item.get("path")
+        or "",
+    ).strip()
+    match = _HTTP_METHOD_RE.match(target)
+    if match:
+        target = match.group(2)
+    parsed = urlsplit(target if "://" in target else f"http://placeholder{target}")
+    segments = [
+        segment.lower()
+        for segment in parsed.path.split("/")
+        if segment and not segment.startswith("{") and not segment.startswith(":")
+    ]
+    meaningful = [
+        segment
+        for segment in segments
+        if segment not in _GENERIC_CLUSTER_SEGMENTS and not segment.isdigit()
+    ]
+    if meaningful:
+        return meaningful[0]
+    kind = str(item.get("kind") or "").strip().lower()
+    if kind:
+        return kind
+    return "root"
+
+
+def _append_example_target(entry: dict[str, Any], target: Any) -> None:
+    text = str(target or "").strip()
+    if not text:
+        return
+    examples = entry.setdefault("example_targets", [])
+    _append_unique(examples, text, limit=5)
+
+
+def _append_unique(items: list[Any], value: Any, *, limit: int) -> None:
+    if value not in items and len(items) < limit:
+        items.append(value)
+
+
+def _risk_families_for_surface(item: dict[str, Any]) -> list[str]:
+    haystack = _surface_hint_text(item)
+    if not haystack:
+        return []
+    families: list[str] = []
+    for hint in _RISK_FAMILY_HINTS:
+        if any(term in haystack for term in hint["surface_terms"]):
+            families.append(str(hint["family"]))
+    method = str(item.get("method") or "").strip().upper()
+    if method in {"POST", "PUT", "PATCH", "DELETE"}:
+        _append_unique(families, "business_logic_and_state_changes", limit=10)
+        _append_unique(families, "authorization_and_object_isolation", limit=10)
+    kind = str(item.get("kind") or item.get("original_kind") or "").strip().lower()
+    if kind == "file_upload":
+        _append_unique(families, "file_and_parser_handling", limit=10)
+    return families[:8]
+
+
+def _surface_hint_text(item: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for field in ("kind", "original_kind", "url", "endpoint", "address", "path", "method", "auth_state", "role", "notes", "source"):
+        value = item.get(field)
+        if value:
+            parts.append(str(value))
+    parameters = item.get("parameters")
+    if isinstance(parameters, list):
+        parts.extend(str(value) for value in parameters)
+    elif parameters:
+        parts.append(str(parameters))
+    return " ".join(parts).lower()
+
+
+def _risk_families_from_vuln_types(vuln_types: Any) -> set[str]:
+    if not isinstance(vuln_types, dict):
+        return set()
+    text = " ".join(str(vuln_type).lower() for vuln_type in vuln_types)
+    families: set[str] = set()
+    for hint in _RISK_FAMILY_HINTS:
+        if any(term in text for term in hint["vuln_terms"]):
+            families.add(str(hint["family"]))
+    return families
+
+
 def discovered_inventory_gaps(
     workflow_state: dict[str, Any],
     attack_surface: list[dict[str, Any]],
@@ -359,12 +755,15 @@ def discovered_inventory_gaps(
 
     surface_keys: set[tuple[str | None, str]] = set()
     surface_by_target: dict[str, set[str | None]] = {}
+    directory_surfaces: list[tuple[str | None, str]] = []
     for item in attack_surface:
         method = str(item.get("method") or "").strip().upper() or None
         targets = _endpoint_variants(item.get("url") or item.get("address"))
         for target in targets:
             surface_keys.add((method, target))
             surface_by_target.setdefault(target, set()).add(method)
+            if _is_directory_surface(item, target):
+                directory_surfaces.append((method, target))
 
     gaps: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -377,6 +776,8 @@ def discovered_inventory_gaps(
             matched = any((method, target) in surface_keys or (None, target) in surface_keys for target in targets)
         else:
             matched = any(target in surface_by_target for target in targets)
+        if not matched:
+            matched = _covered_by_directory_surface(method, targets, directory_surfaces)
         if matched:
             continue
         key = "|".join([method or "", sorted(targets)[0]])
@@ -391,6 +792,47 @@ def discovered_inventory_gaps(
             "status_code": item.get("status_code"),
         })
     return gaps
+
+
+def _is_directory_surface(item: dict[str, Any], target: str) -> bool:
+    kind = str(item.get("kind") or item.get("original_kind") or "").strip().lower()
+    if kind not in {"static_asset", "static_directory", "directory", "url"}:
+        return False
+    for raw in (item.get("url"), item.get("address"), item.get("path"), item.get("endpoint")):
+        raw_text = str(raw or "").strip()
+        if not raw_text:
+            continue
+        parsed_raw = urlsplit(raw_text if "://" in raw_text else f"http://placeholder{raw_text}")
+        raw_path = parsed_raw.path or raw_text
+        if raw_path not in {"", "/"} and raw_path.endswith("/"):
+            return True
+    parsed = urlsplit(target)
+    path = parsed.path or target
+    return path not in {"", "/"} and path.endswith("/")
+
+
+def _covered_by_directory_surface(
+    method: str | None,
+    targets: set[str],
+    directory_surfaces: list[tuple[str | None, str]],
+) -> bool:
+    for surface_method, surface_target in directory_surfaces:
+        if method and surface_method and method != surface_method:
+            continue
+        for target in targets:
+            if _target_is_below_directory(target, surface_target):
+                return True
+    return False
+
+
+def _target_is_below_directory(target: str, directory_target: str) -> bool:
+    target_text = str(target or "").strip().lower()
+    directory_text = str(directory_target or "").strip().lower()
+    if not target_text or not directory_text:
+        return False
+    if not directory_text.endswith("/"):
+        directory_text += "/"
+    return target_text != directory_text.rstrip("/") and target_text.startswith(directory_text)
 
 
 def sitemap_pagination_gaps_for_state(state_dir: Path | None) -> list[dict[str, Any]]:
@@ -801,8 +1243,14 @@ def _endpoint_variants(value: Any) -> set[str]:
         text = match.group(2).strip()
     variants = {_clean_url_target(text)}
     parsed = urlsplit(text)
+    path = parsed.path or ""
     if parsed.scheme and parsed.netloc:
-        path = parsed.path or "/"
+        path = path or "/"
+        if path != "/":
+            path = path.rstrip("/")
+        variants.add(urlunsplit(("", "", path, parsed.query, "")).lower())
+        variants.add(urlunsplit(("", "", path, "", "")).lower())
+    elif path:
         if path != "/":
             path = path.rstrip("/")
         variants.add(urlunsplit(("", "", path, parsed.query, "")).lower())
@@ -829,6 +1277,170 @@ def coverage_gaps_for_state(state_dir: Path | None) -> list[dict[str, Any]]:
     except ImportError:
         return []
     return uncovered_attack_surfaces(attack_surface, coverage, load_workflow_state(state_dir))
+
+
+def _root_top_level_todos_from_state(state_dir: Path | None) -> list[dict[str, Any]]:
+    if state_dir is None:
+        return []
+    path = state_dir / "todos.json"
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(raw, dict):
+        return []
+    todos: list[dict[str, Any]] = []
+    for owner_id, by_id in raw.items():
+        if not isinstance(by_id, dict):
+            continue
+        for todo_id, item in by_id.items():
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("linked_agent_id") or "").strip():
+                continue
+            if str(item.get("parent_todo_id") or "").strip():
+                continue
+            todos.append({
+                **item,
+                "todo_id": str(todo_id),
+                "owner_agent_id": str(owner_id),
+            })
+    def sort_key(item: dict[str, Any]) -> tuple[int, str, str]:
+        try:
+            order_index = int(item.get("order_index") or 1_000_000)
+        except (TypeError, ValueError):
+            order_index = 1_000_000
+        return (
+            order_index,
+            str(item.get("created_at") or ""),
+            str(item.get("todo_id") or ""),
+        )
+
+    todos.sort(key=sort_key)
+    return todos
+
+
+def _phase_title_allows_reporting(title: Any) -> bool:
+    text = str(title or "").strip().lower()
+    return bool(text and any(term in text for term in _REPORTING_PHASE_TERMS))
+
+
+def reporting_phase_preflight(state_dir: Path | None) -> dict[str, Any]:
+    """Return whether the root phase plan is currently in reporting mode.
+
+    If a run has no root phase plan yet, keep this permissive so tests and
+    legacy one-shot usage still rely on the memory gates. When a phase plan
+    exists, formal vulnerability reports should happen only while the active
+    top-level phase is explicitly validation/reporting/finalization shaped.
+    """
+    root_todos = _root_top_level_todos_from_state(state_dir)
+    if not root_todos:
+        return {"ok": True, "phase_plan_present": False}
+    active = [
+        item
+        for item in root_todos
+        if str(item.get("status") or "").strip().lower() == "in_progress"
+    ]
+    reporting_active = [
+        item
+        for item in active
+        if _phase_title_allows_reporting(item.get("title"))
+    ]
+    if reporting_active:
+        return {
+            "ok": True,
+            "phase_plan_present": True,
+            "active_phase": {
+                "todo_id": reporting_active[0].get("todo_id"),
+                "title": reporting_active[0].get("title"),
+                "status": reporting_active[0].get("status"),
+            },
+        }
+    if active:
+        return {
+            "ok": False,
+            "reason": "Root is not in the validation/reporting phase",
+            "phase_plan_present": True,
+            "active_phase": {
+                "todo_id": active[0].get("todo_id"),
+                "title": active[0].get("title"),
+                "status": active[0].get("status"),
+            },
+            "recommended_next_steps": [
+                "Record candidate evidence and coverage, then continue the current discovery/testing phase",
+                "Use list_memory(kind=\"coverage_gaps\"), list_memory(kind=\"hypothesis_gaps\"), and list_memory(kind=\"surface_hypothesis_gaps\") before switching phases",
+                "Start the validation/reporting phase only after the testing matrix is closed or explicitly blocked/skipped with concrete notes",
+            ],
+        }
+    return {
+        "ok": False,
+        "reason": "Root has a phase plan but no active validation/reporting phase",
+        "phase_plan_present": True,
+        "recommended_next_steps": [
+            "Start the validation/reporting phase before filing formal vulnerability reports",
+            "If discovery/testing is not complete, resume that phase and close remaining coverage or hypothesis gaps first",
+        ],
+    }
+
+
+def reporting_matrix_preflight(state_dir: Path | None) -> dict[str, Any]:
+    if state_dir is None:
+        return {"ok": True}
+    attack_surface = attack_surface_from_file(state_dir / "attack_surface.json")
+    hypotheses = hypotheses_from_file(state_dir / "hypotheses.json")
+    coverage = coverage_from_file(state_dir / "coverage.json")
+    evidence = evidence_from_file(state_dir / "evidence.json")
+    workflow_state = load_workflow_state(state_dir)
+    try:
+        from strix.platform.node_runner import coverage_without_hypothesis_links, surface_hypothesis_gaps
+        from strix.tools.run_memory.tools import hypothesis_gaps
+    except ImportError:
+        surface_gaps: list[dict[str, Any]] = []
+        unlinked_coverage: list[dict[str, Any]] = []
+        hypothesis_gap_list: list[dict[str, Any]] = []
+    else:
+        surface_gaps = surface_hypothesis_gaps(attack_surface, hypotheses, workflow_state)
+        unlinked_coverage = coverage_without_hypothesis_links(coverage, hypotheses)
+        coverage_by_id = {
+            str(item.get("coverage_id")): item
+            for item in coverage
+            if str(item.get("coverage_id") or "").strip()
+        }
+        evidence_by_id = {
+            str(item.get("evidence_id")): item
+            for item in evidence
+            if str(item.get("evidence_id") or "").strip()
+        }
+        hypothesis_gap_list = hypothesis_gaps(hypotheses, coverage_by_id, evidence_by_id)
+    coverage_gaps = coverage_gaps_for_state(state_dir)
+    gaps = {
+        "surface_hypothesis_gap_count": len(surface_gaps),
+        "hypothesis_gap_count": len(hypothesis_gap_list),
+        "coverage_without_hypothesis_count": len(unlinked_coverage),
+        "uncovered_attack_surface_count": len(coverage_gaps),
+        "surface_hypothesis_gaps": surface_gaps[:20],
+        "hypothesis_gaps": hypothesis_gap_list[:20],
+        "coverage_without_hypothesis": unlinked_coverage[:20],
+        "uncovered_attack_surfaces": coverage_gaps[:20],
+    }
+    if any(gaps[key] for key in (
+        "surface_hypothesis_gap_count",
+        "hypothesis_gap_count",
+        "coverage_without_hypothesis_count",
+        "uncovered_attack_surface_count",
+    )):
+        return {
+            "ok": False,
+            "reason": "Discovery/testing matrix is still open; reporting now would collapse coverage around early findings",
+            **gaps,
+            "recommended_next_steps": [
+                "Continue discovery/testing for uncovered attack surfaces",
+                "Create or link missing hypotheses for recorded surfaces and coverage",
+                "Close planned hypotheses with evidence-backed coverage, or explicit blocked/skipped notes",
+                "Keep confirmed candidates in evidence/coverage memory until validation/reporting phase",
+            ],
+        }
+    return {"ok": True, **gaps}
 
 
 def _has_attack_surface_for_endpoint(state_dir: Path | None, endpoint: str | None, method: str | None) -> bool:
@@ -892,46 +1504,9 @@ def _task_mentions_recorded_surface(state_dir: Path | None, task: str | None) ->
     return False
 
 
-def _task_mentions_confirmed_coverage(state_dir: Path | None, task: str | None) -> bool:
-    if state_dir is None or not task:
-        return False
-    text = str(task or "").lower()
-    for item in coverage_from_file(state_dir / "coverage.json"):
-        if str(item.get("status") or "").strip().lower() != "passed":
-            continue
-        raw_candidates = [
-            item.get("endpoint"),
-            item.get("parameter"),
-            item.get("vuln_type"),
-            item.get("result"),
-        ]
-        for candidate in raw_candidates:
-            candidate_text = str(candidate or "").strip().lower()
-            if candidate_text and candidate_text in text:
-                return True
-        for variant in _endpoint_variants(item.get("endpoint")):
-            if variant and variant in text:
-                return True
-            parsed = urlsplit(variant)
-            if parsed.path and parsed.path != "/" and parsed.path.lower() in text:
-                return True
-    return False
-
-
 def _task_has_unbounded_scope(task: str | None) -> bool:
     text = str(task or "").lower()
     return any(phrase in text for phrase in _UNBOUNDED_TASK_PHRASES)
-
-
-def task_can_follow_recorded_work(state_dir: Path | None, task: str | None) -> bool:
-    if state_dir is None or not task:
-        return False
-    text = str(task or "").lower()
-    if _task_has_unbounded_scope(task):
-        return False
-    if not any(keyword in text for keyword in _RECORDED_WORK_FOLLOWUP_KEYWORDS):
-        return False
-    return _task_mentions_confirmed_coverage(state_dir, task)
 
 
 def testing_preflight(
@@ -982,6 +1557,18 @@ def testing_preflight(
                     "Bind each child task to recorded attack surface entries",
                 ],
             }
+        readiness = inventory_readiness_for_state(state_dir)
+        if not readiness.get("ok"):
+            return {
+                "ok": False,
+                "reason": readiness.get("reason") or "Attack-surface inventory is not ready for vulnerability testing",
+                "workflow_state": gate.get("workflow_state"),
+                "inventory_readiness": readiness,
+                "blocks_testing_until_inventory_ready": True,
+                "recommended_next_steps": readiness.get("recommended_next_steps") or [
+                    "Finish attack-surface inventory and hypothesis/test matrix before spawning testing agents",
+                ],
+            }
         if planned_task and not _task_mentions_recorded_surface(state_dir, planned_task):
             return {
                 "ok": False,
@@ -1000,7 +1587,10 @@ def reporting_preflight(state_dir: Path | None, *, endpoint: str | None, method:
     if state_dir is None:
         return {"ok": True}
     if not endpoint:
-        return testing_preflight(state_dir, require_attack_surface=True)
+        gate = testing_preflight(state_dir, require_attack_surface=True)
+        if not gate.get("ok"):
+            return gate
+        return {"ok": True}
     attack_surface_count = len(attack_surface_from_file(state_dir / "attack_surface.json"))
     if attack_surface_count <= 0:
         return {

@@ -3,7 +3,7 @@ import importlib
 import json
 import sqlite3
 import sys
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
@@ -18,23 +18,36 @@ from strix.platform.node_protocol import (  # noqa: E402
     PlatformEventSink,
     agent_graph_from_file,
     checkpoint,
+    important_tool_progress,
     merge_agent_activity,
     notes_from_file,
     runtime_checkpoint,
     tool_status_value,
+    tool_call_summary,
     tool_result_summary,
     todos_from_file,
     vulnerabilities_from_file,
 )
-from strix.platform.node_runner import StrixPlatformConversationSession, build_instruction, completion_gate_for_run, merge_task_context, send_runtime_checkpoint, stable_platform_run_name  # noqa: E402
-from strix.core.inputs import build_root_task, build_scope_context  # noqa: E402
+from strix.platform.node_runner import StrixPlatformConversationSession, build_instruction, completion_gate_for_run, confirmed_coverage_without_reports, merge_task_context, send_runtime_checkpoint, stable_platform_run_name  # noqa: E402
+from strix.core import execution as execution_core  # noqa: E402
+from strix.core.hooks import AgentTokenBudgetExceeded, ReportUsageHooks  # noqa: E402
+from strix.core.inputs import (  # noqa: E402
+    build_child_context_pack,
+    build_root_task,
+    build_scope_context,
+    child_initial_input,
+)
+from strix.core.sessions import compact_session_items  # noqa: E402
+from strix.core.task_shape import classify_child_task_shape  # noqa: E402
 from agents.tool_context import ToolContext  # noqa: E402
+from agents.usage import Usage  # noqa: E402
 from strix.core.agents import AgentCoordinator  # noqa: E402
 from strix.tools.agents_graph import tools as agent_tools  # noqa: E402
 from strix.tools.finish.tool import finish_scan  # noqa: E402
 from strix.tools.todo import tools as todo_tools  # noqa: E402
 from strix.tools.reporting import node3_tool  # noqa: E402
 from strix.report.writer import write_vulnerabilities  # noqa: E402
+from strix.tools.workflow import discovered_inventory_gaps, inventory_readiness_for_state, workflow_cluster_summary, workflow_cluster_summary_for_state  # noqa: E402
 import main as node3_main  # noqa: E402
 
 
@@ -715,6 +728,23 @@ def test_build_instruction_uses_coverage_first_default():
     assert "prioritize confirmed" not in legacy_instruction
 
 
+def test_build_instruction_respects_quick_mode():
+    instruction = build_instruction({"instruction": "Test http://target.local/", "scan_mode": "quick"})
+    legacy_instruction = node3_main.build_instruction({"instruction": "Test http://target.local/", "scan_mode": "quick"})
+
+    assert "quick mode" in instruction
+    assert "quick mode" in legacy_instruction
+    assert "coverage-first mode" not in instruction
+    assert "coverage-first mode" not in legacy_instruction
+
+
+def test_node3_env_example_defaults_to_standard_scan_mode():
+    env_example = (NODE3 / ".env.example").read_text(encoding="utf-8")
+
+    assert "STRIX_SCAN_MODE=standard" in env_example
+    assert "STRIX_SCAN_MODE=quick" not in env_example
+
+
 def test_runtime_checkpoint_includes_session_metadata(tmp_path):
     (tmp_path / "run.json").write_text(json.dumps({
         "run_id": "run-1",
@@ -866,7 +896,7 @@ def test_completion_gate_requires_memory_ledgers(tmp_path):
     assert "no meaningful coverage records" in gate["incomplete_reasons"]
 
 
-def test_completion_gate_blocks_caido_runs_until_sitemap_attempted(tmp_path):
+def test_completion_gate_warns_caido_runs_until_sitemap_attempted(tmp_path):
     from strix.tools.workflow import initialize_workflow_state, mark_sitemap_attempt
 
     state_dir = tmp_path / ".state"
@@ -883,12 +913,12 @@ def test_completion_gate_blocks_caido_runs_until_sitemap_attempted(tmp_path):
         {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "Baseline response"},
     ]), encoding="utf-8")
 
-    blocked = completion_gate_for_run(tmp_path)
+    warned = completion_gate_for_run(tmp_path)
     mark_sitemap_attempt(state_dir, success=False, error="empty sitemap")
     allowed = completion_gate_for_run(tmp_path)
 
-    assert blocked["ok"] is False
-    assert "Caido is available but list_sitemap has not been attempted" in blocked["incomplete_reasons"]
+    assert warned["ok"] is True
+    assert "Caido is available but list_sitemap has not been attempted" in warned["completion_warnings"]
     assert allowed["ok"] is True
     assert allowed["workflow_state"]["sitemap_attempted"] is True
 
@@ -936,7 +966,7 @@ def test_completion_gate_passes_with_surface_coverage_and_evidence(tmp_path):
     assert gate["uncovered_attack_surface_count"] == 0
 
 
-def test_completion_gate_rejects_uncovered_attack_surface(tmp_path):
+def test_completion_gate_warns_uncovered_attack_surface(tmp_path):
     state_dir = tmp_path / ".state"
     state_dir.mkdir()
     (state_dir / "attack_surface.json").write_text(json.dumps([
@@ -946,14 +976,15 @@ def test_completion_gate_rejects_uncovered_attack_surface(tmp_path):
     (state_dir / "coverage.json").write_text(json.dumps([
         {"coverage_id": "cov-1", "endpoint": "GET http://target.local/", "vuln_type": "baseline", "status": "tried", "evidence_ids": ["ev-1"]},
     ]), encoding="utf-8")
+    write_closed_hypothesis(state_dir, endpoint="GET http://target.local/", vuln_type="baseline")
     (state_dir / "evidence.json").write_text(json.dumps([
         {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "Baseline response", "agent_id": "root"},
     ]), encoding="utf-8")
 
     gate = completion_gate_for_run(tmp_path)
 
-    assert gate["ok"] is False
-    assert "1 attack surface record(s) without coverage" in gate["incomplete_reasons"]
+    assert gate["ok"] is True
+    assert "1 attack surface record(s) without coverage" in gate["completion_warnings"]
     assert gate["uncovered_attack_surface_count"] == 1
     assert gate["uncovered_attack_surfaces"][0]["surface_id"] == "as-2"
 
@@ -978,7 +1009,7 @@ def test_completion_gate_rejects_surface_without_hypothesis_matrix(tmp_path):
     assert gate["hypothesis_count"] == 0
 
 
-def test_completion_gate_rejects_surface_without_linked_hypothesis(tmp_path):
+def test_completion_gate_warns_surface_without_linked_hypothesis(tmp_path):
     state_dir = tmp_path / ".state"
     state_dir.mkdir()
     (state_dir / "attack_surface.json").write_text(json.dumps([
@@ -987,7 +1018,6 @@ def test_completion_gate_rejects_surface_without_linked_hypothesis(tmp_path):
     ]), encoding="utf-8")
     (state_dir / "coverage.json").write_text(json.dumps([
         {"coverage_id": "cov-1", "endpoint": "GET /api/users", "vuln_type": "authorization", "status": "tried", "evidence_ids": ["ev-1"]},
-        {"coverage_id": "cov-2", "endpoint": "GET /api/orders", "vuln_type": "authorization", "status": "tried", "evidence_ids": ["ev-1"]},
     ]), encoding="utf-8")
     (state_dir / "hypotheses.json").write_text(json.dumps([
         {
@@ -1009,8 +1039,8 @@ def test_completion_gate_rejects_surface_without_linked_hypothesis(tmp_path):
 
     gate = completion_gate_for_run(tmp_path)
 
-    assert gate["ok"] is False
-    assert "1 attack surface record(s) without hypothesis/test-matrix coverage" in gate["incomplete_reasons"]
+    assert gate["ok"] is True
+    assert "1 attack surface record(s) without hypothesis/test-matrix coverage" in gate["completion_warnings"]
     assert gate["surface_hypothesis_gap_count"] == 1
     assert gate["surface_hypothesis_gaps"][0]["surface_id"] == "as-2"
 
@@ -1109,7 +1139,7 @@ def test_completion_gate_ignores_out_of_scope_attack_surface_when_scope_known(tm
     assert gate["uncovered_attack_surface_count"] == 0
 
 
-def test_completion_gate_rejects_external_discovered_endpoint_missing_from_attack_surface(tmp_path):
+def test_completion_gate_warns_external_discovered_endpoint_missing_from_attack_surface(tmp_path):
     from strix.tools.workflow import record_external_discoveries
 
     state_dir = tmp_path / ".state"
@@ -1128,14 +1158,19 @@ def test_completion_gate_rejects_external_discovered_endpoint_missing_from_attac
     (state_dir / "coverage.json").write_text(json.dumps([
         {"coverage_id": "cov-1", "endpoint": "GET http://target.local/api/Users", "vuln_type": "authorization", "status": "tried", "evidence_ids": ["ev-1"]},
     ]), encoding="utf-8")
+    write_closed_hypothesis(
+        state_dir,
+        endpoint="GET http://target.local/api/Users",
+        vuln_type="authorization",
+    )
     (state_dir / "evidence.json").write_text(json.dumps([
         {"evidence_id": "ev-1", "evidence_type": "http_trace", "summary": "Baseline response"},
     ]), encoding="utf-8")
 
     gate = completion_gate_for_run(tmp_path)
 
-    assert gate["ok"] is False
-    assert "1 externally discovered endpoint(s) missing from attack surface" in gate["incomplete_reasons"]
+    assert gate["ok"] is True
+    assert "1 externally discovered endpoint(s) missing from attack surface" in gate["completion_warnings"]
     assert gate["external_discovery_gap_count"] == 1
     assert gate["external_discovery_gaps"][0]["url"] == "http://target.local/api/Products"
 
@@ -1167,7 +1202,7 @@ def test_external_discovery_filters_out_of_scope_hosts(tmp_path):
     assert state["out_of_scope_external_discoveries"] == {"telemetry.example": 1}
 
 
-def test_create_agent_blocks_vulnerability_agent_until_external_inventory_is_recorded(tmp_path):
+def test_create_agent_allows_anchored_vulnerability_agent_with_external_inventory_warning(tmp_path):
     from strix.tools.workflow import record_external_discoveries
 
     async def run():
@@ -1187,10 +1222,13 @@ def test_create_agent_blocks_vulnerability_agent_until_external_inventory_is_rec
         coordinator = AgentCoordinator()
         await coordinator.register("root", "root", None)
         todo_tools.hydrate_todos_from_disk(state_dir)
+        spawned: list[str] = []
 
         async def spawner(**kwargs):
-            await coordinator.register("child", kwargs["name"], kwargs["parent_ctx"]["agent_id"])
-            return {"success": True, "agent_id": "child", "name": kwargs["name"]}
+            child_id = f"child-{len(spawned) + 1}"
+            spawned.append(child_id)
+            await coordinator.register(child_id, kwargs["name"], kwargs["parent_ctx"]["agent_id"])
+            return {"success": True, "agent_id": child_id, "name": kwargs["name"]}
 
         ctx = ToolContext(
             context={
@@ -1204,17 +1242,25 @@ def test_create_agent_blocks_vulnerability_agent_until_external_inventory_is_rec
             tool_call_id="call-agent",
             tool_arguments="{}",
         )
-        return json.loads(await agent_tools.create_agent.on_invoke_tool(
+        anchored = json.loads(await agent_tools.create_agent.on_invoke_tool(
             ctx,
             json.dumps({"name": "SQLi Validator", "task": "Validate SQLi on /api/Users"}),
         ))
+        unanchored = json.loads(await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({"name": "SQLi Validator", "task": "Validate SQLi on /api/Orders"}),
+        ))
+        return anchored, unanchored
 
-    blocked = asyncio.run(run())
+    anchored, unanchored = asyncio.run(run())
 
-    assert blocked["success"] is False
-    assert "Workflow gate blocked create_agent" in blocked["error"]
-    assert blocked["workflow_gate"]["reason"] == "Externally discovered endpoints have not been recorded in attack surface memory"
-    assert blocked["workflow_gate"]["external_discovery_gaps"][0]["url"] == "http://target.local/api/Products"
+    assert anchored["success"] is True
+    assert anchored["agent_id"] == "child-1"
+    assert anchored["workflow_warnings"][0]["reason"] == "Externally discovered endpoints have not been recorded in attack surface memory"
+    assert anchored["workflow_warnings"][0]["external_discovery_gaps"][0]["url"] == "http://target.local/api/Products"
+    assert unanchored["success"] is True
+    assert unanchored["agent_id"] == "child-2"
+    assert unanchored["workflow_warnings"][0]["reason"] == "Externally discovered endpoints have not been recorded in attack surface memory"
 
 
 def test_create_agent_allows_confirmed_coverage_followup_despite_external_inventory_gap(tmp_path):
@@ -1247,10 +1293,13 @@ def test_create_agent_allows_confirmed_coverage_followup_despite_external_invent
         coordinator = AgentCoordinator()
         await coordinator.register("root", "root", None)
         todo_tools.hydrate_todos_from_disk(state_dir)
+        spawned: list[str] = []
 
         async def spawner(**kwargs):
-            await coordinator.register("child", kwargs["name"], kwargs["parent_ctx"]["agent_id"])
-            return {"success": True, "agent_id": "child", "name": kwargs["name"]}
+            child_id = f"child-{len(spawned) + 1}"
+            spawned.append(child_id)
+            await coordinator.register(child_id, kwargs["name"], kwargs["parent_ctx"]["agent_id"])
+            return {"success": True, "agent_id": child_id, "name": kwargs["name"]}
 
         ctx = ToolContext(
             context={
@@ -1275,7 +1324,7 @@ def test_create_agent_allows_confirmed_coverage_followup_despite_external_invent
     allowed = asyncio.run(run())
 
     assert allowed["success"] is True
-    assert allowed["agent_id"] == "child"
+    assert allowed["agent_id"] == "child-1"
 
 
 def test_completion_gate_accepts_skipped_surface_with_reason(tmp_path):
@@ -1606,7 +1655,7 @@ def test_completion_gate_rejects_missing_finding_evidence(tmp_path):
     assert gate["missing_evidence_refs"] == ["ev-missing"]
 
 
-def test_completion_gate_rejects_finding_without_independent_validation(tmp_path):
+def test_completion_gate_allows_direct_reporting_but_rejects_invalid_validation_refs(tmp_path):
     state_dir = tmp_path / ".state"
     state_dir.mkdir()
     (state_dir / "agents.json").write_text(json.dumps({
@@ -1625,14 +1674,14 @@ def test_completion_gate_rejects_finding_without_independent_validation(tmp_path
     ]), encoding="utf-8")
     (tmp_path / "vulnerabilities.json").write_text(json.dumps([
         {"id": "vuln-1", "title": "Root self-validated SQLi", "severity": "high", "evidence_ids": ["ev-1"], "validation_agent_id": "root", "validation_evidence_ids": ["ev-1"], "agent_id": "root"},
-        {"id": "vuln-2", "title": "Missing validation", "severity": "high", "evidence_ids": ["ev-1"]},
+        {"id": "vuln-2", "title": "Direct report", "severity": "high", "evidence_ids": ["ev-1"]},
     ]), encoding="utf-8")
 
     gate = completion_gate_for_run(tmp_path)
 
     assert gate["ok"] is False
-    assert "2 finding(s) without independent subagent validation" in gate["incomplete_reasons"]
-    assert gate["invalid_vulnerability_validation_count"] == 2
+    assert "1 finding(s) with invalid validation references" in gate["incomplete_reasons"]
+    assert gate["invalid_vulnerability_validation_count"] == 1
     assert "validation_agent_id references root agent" in gate["invalid_vulnerability_validations"][0]["problems"]
 
 
@@ -1754,9 +1803,68 @@ def test_finish_scan_rejects_missing_memory_ledgers(monkeypatch, tmp_path):
 
     assert result["success"] is False
     assert result["scan_completed"] is False
-    assert result["completion_gate"]["ok"] is False
-    assert "no attack surface records" in result["completion_gate"]["incomplete_reasons"]
+    assert result["completion_gate_summary"]["ok"] is False
+    assert "no attack surface records" in result["completion_gate_summary"]["samples"]["incomplete_reasons"]
     assert statuses["root"] == "running"
+
+
+def test_finish_scan_failed_gate_output_is_bounded(monkeypatch, tmp_path):
+    class FakeReportState:
+        vulnerability_reports = []
+
+        def get_run_dir(self):
+            return tmp_path
+
+    (tmp_path / ".state").mkdir()
+    (tmp_path / ".state" / "attack_surface.json").write_text(
+        json.dumps([
+            {
+                "surface_id": f"as-{i}",
+                "url": f"http://target.local/item/{i}",
+                "method": "GET",
+                "kind": "api_endpoint",
+                "notes": "x" * 500,
+            }
+            for i in range(40)
+        ]),
+        encoding="utf-8",
+    )
+    (tmp_path / ".state" / "evidence.json").write_text(
+        json.dumps([{"evidence_id": "ev-1", "summary": "baseline"}]),
+        encoding="utf-8",
+    )
+
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        todo_tools.hydrate_todos_from_disk(tmp_path)
+        monkeypatch.setattr("strix.report.state.get_global_report_state", lambda: FakeReportState())
+        ctx = ToolContext(
+            context={"agent_id": "root", "parent_id": None, "coordinator": coordinator},
+            tool_name="finish_scan",
+            tool_call_id="call-finish",
+            tool_arguments="{}",
+        )
+        return await finish_scan.on_invoke_tool(
+            ctx,
+            json.dumps({
+                "executive_summary": "Summary",
+                "methodology": "Methodology",
+                "technical_analysis": "Technical analysis",
+                "recommendations": "Recommendations",
+            }),
+        )
+
+    raw = asyncio.run(run())
+    result = json.loads(raw)
+
+    assert len(raw) < 8000
+    assert "completion_gate" not in result
+    assert result["completion_gate_summary"]["omitted_full_details"] is True
+    assert result["completion_gate_summary"]["samples"]["uncovered_attack_surfaces_omitted_count"] > 0
+    workflow_summary = result["completion_gate_summary"]["workflow_clusters"]
+    assert "clusters_with_narrow_testing" in workflow_summary
+    assert "suggested_next_testing_families" in workflow_summary
 
 
 def test_finish_scan_allows_completed_memory_ledgers(monkeypatch, tmp_path):
@@ -1840,6 +1948,405 @@ def test_finish_scan_allows_completed_memory_ledgers(monkeypatch, tmp_path):
     assert statuses["root"] == "completed"
 
 
+def test_compact_session_items_bounds_old_oversized_content():
+    class FakeSession:
+        def __init__(self):
+            self.items = [
+                {"role": "user", "content": "A" * 2000},
+                {"type": "function_call_output", "call_id": "old-call", "output": "B" * 2000},
+                {"type": "function_call_output", "call_id": "recent-call", "output": "C" * 2000},
+            ]
+
+        async def get_items(self):
+            return self.items
+
+        async def clear_session(self):
+            self.items = []
+
+        async def add_items(self, items):
+            self.items.extend(items)
+
+    session = FakeSession()
+
+    changed = asyncio.run(compact_session_items(
+        session,
+        max_text_chars=500,
+        recent_items_to_keep=1,
+    ))
+
+    assert changed is True
+    assert "Original length: 2000 characters" in session.items[0]["content"]
+    assert "Original length: 2000 characters" in session.items[1]["output"]
+    assert session.items[2]["output"] == "C" * 2000
+
+
+def test_compact_session_items_preserves_recent_only_content():
+    class FakeSession:
+        def __init__(self):
+            self.items = [{"type": "function_call_output", "call_id": "recent-call", "output": "A" * 2000}]
+
+        async def get_items(self):
+            return self.items
+
+        async def clear_session(self):
+            self.items = []
+
+        async def add_items(self, items):
+            self.items.extend(items)
+
+    session = FakeSession()
+
+    changed = asyncio.run(compact_session_items(
+        session,
+        max_text_chars=500,
+        recent_items_to_keep=1,
+    ))
+
+    assert changed is False
+    assert session.items[0]["output"] == "A" * 2000
+
+
+def test_compact_session_items_bounds_recent_window_by_text_budget():
+    class FakeSession:
+        def __init__(self):
+            self.items = [
+                {"type": "function_call_output", "call_id": f"call-{idx}", "output": str(idx) + ("A" * 1999)}
+                for idx in range(8)
+            ]
+
+        async def get_items(self):
+            return self.items
+
+        async def clear_session(self):
+            self.items = []
+
+        async def add_items(self, items):
+            self.items.extend(items)
+
+    session = FakeSession()
+
+    changed = asyncio.run(compact_session_items(
+        session,
+        max_text_chars=500,
+        recent_items_to_keep=8,
+        recent_text_budget=4_500,
+        exact_recent_items=2,
+    ))
+
+    assert changed is True
+    assert session.items[-1]["output"] == "7" + ("A" * 1999)
+    assert session.items[-2]["output"] == "6" + ("A" * 1999)
+    assert any(
+        str(item["output"]).startswith("[compacted by Strix session history]")
+        for item in session.items[:-2]
+    )
+
+
+def test_compact_session_items_compacts_recent_items_below_default_item_limit_when_window_exceeds_budget():
+    class FakeSession:
+        def __init__(self):
+            self.items = [
+                {"type": "function_call_output", "call_id": f"call-{idx}", "output": str(idx) + ("B" * 6999)}
+                for idx in range(6)
+            ]
+
+        async def get_items(self):
+            return self.items
+
+        async def clear_session(self):
+            self.items = []
+
+        async def add_items(self, items):
+            self.items.extend(items)
+
+    session = FakeSession()
+
+    changed = asyncio.run(compact_session_items(
+        session,
+        max_text_chars=8_000,
+        recent_items_to_keep=6,
+        recent_text_budget=15_000,
+        exact_recent_items=2,
+        over_budget_recent_text_chars=1_500,
+    ))
+
+    assert changed is True
+    assert session.items[-1]["output"] == "5" + ("B" * 6999)
+    assert session.items[-2]["output"] == "4" + ("B" * 6999)
+    assert any(
+        str(item["output"]).startswith("[compacted by Strix session history]")
+        for item in session.items[:-2]
+    )
+
+
+def test_run_cycle_compacts_session_before_model_call(monkeypatch):
+    class FakeSession:
+        def __init__(self):
+            self.items = [
+                {"role": "user", "content": f"old-{idx}-" + ("A" * 10_000)}
+                for idx in range(13)
+            ]
+
+        async def get_items(self):
+            return self.items
+
+        async def clear_session(self):
+            self.items = []
+
+        async def add_items(self, items):
+            self.items.extend(items)
+
+    class FakeStream:
+        run_loop_exception = None
+
+        async def stream_events(self):
+            if False:
+                yield None
+
+    session = FakeSession()
+
+    def fake_run_streamed(*args, **kwargs):
+        assert session.items[0]["content"].startswith("[compacted by Strix session history]")
+        return FakeStream()
+
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        monkeypatch.setattr(execution_core.Runner, "run_streamed", fake_run_streamed)
+        stream = await execution_core._run_cycle(
+            SimpleNamespace(),
+            coordinator,
+            "root",
+            input_data=[],
+            run_config=SimpleNamespace(),
+            context={"agent_id": "root"},
+            max_turns=1,
+            session=session,
+            interactive=True,
+            event_sink=None,
+            hooks=None,
+        )
+        return stream, coordinator.statuses["root"]
+
+    stream, status = asyncio.run(run())
+
+    assert isinstance(stream, FakeStream)
+    assert status == "waiting"
+
+
+def test_noninteractive_lifecycle_recovery_is_capped(monkeypatch):
+    calls = 0
+
+    async def fake_run_cycle(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return SimpleNamespace(final_output="I am done but did not call a lifecycle tool.")
+
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        monkeypatch.setattr(execution_core, "_run_cycle", fake_run_cycle)
+        try:
+            await execution_core._run_noninteractive_until_lifecycle(
+                SimpleNamespace(),
+                coordinator,
+                "root",
+                initial_input=[],
+                run_config=SimpleNamespace(),
+                context={"agent_id": "root"},
+                max_turns=500,
+                session=None,
+                event_sink=None,
+                hooks=None,
+            )
+        except execution_core.MaxTurnsExceeded as exc:
+            return str(exc), coordinator.statuses["root"]
+        raise AssertionError("expected MaxTurnsExceeded")
+
+    message, status = asyncio.run(run())
+
+    assert calls == 3
+    assert status == "crashed"
+    assert "without calling finish_scan or agent_finish" in message
+
+
+def test_report_usage_hooks_stop_runaway_reporter_child(monkeypatch):
+    class FakeReportState:
+        def __init__(self) -> None:
+            self.tokens = 0
+
+        def record_sdk_usage(self, **kwargs):
+            usage = kwargs["usage"]
+            self.tokens += int(usage.total_tokens or 0)
+
+        def get_agent_llm_tokens(self, agent_id):
+            assert agent_id == "child"
+            return self.tokens
+
+        def get_total_llm_cost(self):
+            return 0.0
+
+    state = FakeReportState()
+    monkeypatch.setattr("strix.core.hooks.get_global_report_state", lambda: state)
+    hooks = ReportUsageHooks(model="test-model")
+    usage = Usage(requests=1, input_tokens=300_001, output_tokens=1, total_tokens=300_002)
+
+    async def run():
+        await hooks.on_llm_end(
+            SimpleNamespace(context={
+                "agent_id": "child",
+                "parent_id": "root",
+                "task": "Create a vulnerability report for the confirmed issue",
+            }),
+            SimpleNamespace(name="Search SQLi Reporter"),
+            SimpleNamespace(usage=usage),
+        )
+
+    try:
+        asyncio.run(run())
+    except AgentTokenBudgetExceeded as exc:
+        assert "reporting child agent" in str(exc)
+    else:
+        raise AssertionError("runaway reporter should be stopped")
+
+
+def test_report_usage_hooks_do_not_treat_report_back_as_reporter(monkeypatch):
+    class FakeReportState:
+        def record_sdk_usage(self, **kwargs):
+            pass
+
+        def get_agent_llm_tokens(self, agent_id):
+            return 300_001
+
+        def get_total_llm_cost(self):
+            return 0.0
+
+    monkeypatch.setattr("strix.core.hooks.get_global_report_state", lambda: FakeReportState())
+    hooks = ReportUsageHooks(model="test-model")
+    usage = Usage(requests=1, input_tokens=1, output_tokens=1, total_tokens=2)
+
+    async def run():
+        await hooks.on_llm_end(
+            SimpleNamespace(context={
+                "agent_id": "child",
+                "parent_id": "root",
+                "task": "Test GET /rest/products/search and report back what you found.",
+            }),
+            SimpleNamespace(name="SQLi Discovery Agent"),
+            SimpleNamespace(usage=usage),
+        )
+
+    asyncio.run(run())
+
+
+def test_report_usage_hooks_stop_runaway_validator_child(monkeypatch):
+    class FakeReportState:
+        def record_sdk_usage(self, **kwargs):
+            pass
+
+        def get_agent_llm_tokens(self, agent_id):
+            return 750_001
+
+        def get_total_llm_cost(self):
+            return 0.0
+
+    monkeypatch.setattr("strix.core.hooks.get_global_report_state", lambda: FakeReportState())
+    hooks = ReportUsageHooks(model="test-model")
+    usage = Usage(requests=1, input_tokens=1, output_tokens=1, total_tokens=2)
+
+    async def run():
+        await hooks.on_llm_end(
+            SimpleNamespace(context={
+                "agent_id": "child",
+                "parent_id": "root",
+                "task": "Independently validate and reproduce the candidate finding",
+            }),
+            SimpleNamespace(name="Candidate Validator"),
+            SimpleNamespace(usage=usage),
+        )
+
+    try:
+        asyncio.run(run())
+    except AgentTokenBudgetExceeded as exc:
+        assert "validation child agent" in str(exc)
+    else:
+        raise AssertionError("runaway validator should be stopped")
+
+
+def test_report_usage_hooks_stop_runaway_focused_child(monkeypatch):
+    class FakeReportState:
+        def record_sdk_usage(self, **kwargs):
+            pass
+
+        def get_agent_llm_tokens(self, agent_id):
+            return 1_500_001
+
+        def get_total_llm_cost(self):
+            return 0.0
+
+    monkeypatch.setattr("strix.core.hooks.get_global_report_state", lambda: FakeReportState())
+    hooks = ReportUsageHooks(model="test-model")
+    usage = Usage(requests=1, input_tokens=1, output_tokens=1, total_tokens=2)
+
+    async def run():
+        await hooks.on_llm_end(
+            SimpleNamespace(context={
+                "agent_id": "child",
+                "parent_id": "root",
+                "task": "Explore the checkout workflow and close planned hypotheses",
+            }),
+            SimpleNamespace(name="Checkout Discovery Agent"),
+            SimpleNamespace(usage=usage),
+        )
+
+    try:
+        asyncio.run(run())
+    except AgentTokenBudgetExceeded as exc:
+        assert "focused child agent" in str(exc)
+    else:
+        raise AssertionError("runaway focused child should be stopped")
+
+
+def test_report_usage_hooks_do_not_cap_broad_recon_or_root(monkeypatch):
+    class FakeReportState:
+        def record_sdk_usage(self, **kwargs):
+            pass
+
+        def get_agent_llm_tokens(self, agent_id):
+            return 5_000_000
+
+        def get_total_llm_cost(self):
+            return 0.0
+
+    monkeypatch.setattr("strix.core.hooks.get_global_report_state", lambda: FakeReportState())
+    hooks = ReportUsageHooks(model="test-model")
+    usage = Usage(requests=1, input_tokens=1, output_tokens=1, total_tokens=2)
+
+    async def run_case(context, name):
+        await hooks.on_llm_end(
+            SimpleNamespace(context=context),
+            SimpleNamespace(name=name),
+            SimpleNamespace(usage=usage),
+        )
+
+    asyncio.run(run_case(
+        {
+            "agent_id": "child",
+            "parent_id": "root",
+            "task": "Map the entire in-scope attack surface from sitemap, crawl, and route inventory",
+        },
+        "Application-Wide Recon Agent",
+    ))
+    asyncio.run(run_case(
+        {
+            "agent_id": "root",
+            "parent_id": None,
+            "task": "Coordinate the assessment",
+        },
+        "strix",
+    ))
+
+
 def test_node3_user_steer_delivers_to_existing_strix_session():
     class FakeConfig:
         scan_mode = "quick"
@@ -1897,6 +2404,32 @@ def test_merge_task_context_keeps_original_task_id():
     assert merged["instruction"] == "continue"
     assert merged["scan_mode"] == "standard"
     assert merged["scope"] == {"allow": ["http://target.local"]}
+
+
+def test_node3_normalize_scan_mode_defaults_to_standard():
+    assert node3_main.normalize_scan_mode(None) == "standard"
+    assert node3_main.normalize_scan_mode("") == "standard"
+    assert node3_main.normalize_scan_mode("unknown") == "standard"
+    assert node3_main.normalize_scan_mode("quick") == "quick"
+
+
+def test_node3_normalize_task_records_scan_mode_source():
+    class FakeConfig:
+        scan_mode = "standard"
+
+    configured = node3_main.normalize_task(
+        {"conversation_id": "conv-1", "target": {"value": "http://target.local"}},
+        FakeConfig(),
+    )
+    explicit = node3_main.normalize_task(
+        {"conversation_id": "conv-2", "target": {"value": "http://target.local"}, "scanMode": "deep"},
+        FakeConfig(),
+    )
+
+    assert configured["scan_mode"] == "standard"
+    assert configured["scan_mode_source"] == "config"
+    assert explicit["scan_mode"] == "deep"
+    assert explicit["scan_mode_source"] == "message"
 
 
 def test_target_profile_is_not_injected_into_root_task_or_scope_context():
@@ -2067,6 +2600,517 @@ def test_agent_prompt_names_exec_command_not_execute_command(monkeypatch):
     assert "record_coverage" in agent.instructions
 
 
+def test_tool_output_bounding_compacts_large_text():
+    from strix.agents import factory
+
+    output = factory._bound_tool_output("exec_command", "A" * 50_000)
+
+    assert len(output) < 22_000
+    assert "[tool output compacted by Strix]" in output
+    assert "Original output from exec_command: 50000 characters" in output
+
+
+def test_tool_output_bounding_preserves_json_success_fields():
+    from strix.agents import factory
+
+    raw = json.dumps({
+        "success": True,
+        "scan_completed": True,
+        "content": "A" * 50_000,
+    })
+
+    output = factory._bound_tool_output("finish_scan", raw)
+    parsed = json.loads(output)
+
+    assert parsed["success"] is True
+    assert parsed["scan_completed"] is True
+    assert parsed["_strix_truncated_output"] is True
+    assert "[tool output compacted by Strix]" in parsed["content"]
+
+
+def test_root_exec_command_allows_inventory_probe_before_readiness(tmp_path):
+    from strix.agents import factory
+
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    invoked = {"value": False}
+
+    async def invoke_tool(ctx, raw_input):
+        invoked["value"] = True
+        return "baseline response"
+
+    tool = SimpleNamespace(name="exec_command", on_invoke_tool=invoke_tool)
+    factory._wrap_exec_command(tool)
+    ctx = ToolContext(
+        context={"agent_id": "root", "parent_id": None, "state_dir": str(state_dir)},
+        tool_name="exec_command",
+        tool_call_id="call-shell",
+        tool_arguments="{}",
+    )
+
+    result = asyncio.run(tool.on_invoke_tool(
+        ctx,
+        json.dumps({"cmd": "curl -i http://target.local/search?q=shoes"}),
+    ))
+
+    assert invoked["value"] is True
+    assert result == "baseline response"
+
+
+def test_root_exec_command_does_not_gate_payload_commands_before_readiness(tmp_path):
+    from strix.agents import factory
+
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    (state_dir / "attack_surface.json").write_text(
+        json.dumps([
+            {
+                "surface_id": "as-search",
+                "kind": "api_endpoint",
+                "method": "GET",
+                "url": "http://target.local/search",
+                "parameters": ["q"],
+            }
+        ]),
+        encoding="utf-8",
+    )
+    invoked = {"value": False}
+
+    async def invoke_tool(ctx, raw_input):
+        invoked["value"] = True
+        return "test response"
+
+    tool = SimpleNamespace(name="exec_command", on_invoke_tool=invoke_tool)
+    factory._wrap_exec_command(tool)
+    ctx = ToolContext(
+        context={"agent_id": "root", "parent_id": None, "state_dir": str(state_dir)},
+        tool_name="exec_command",
+        tool_call_id="call-shell",
+        tool_arguments="{}",
+    )
+
+    result = asyncio.run(tool.on_invoke_tool(
+        ctx,
+        json.dumps({"cmd": "curl 'http://target.local/search?q=%27%20OR%201%3D1--'"}),
+    ))
+
+    assert invoked["value"] is True
+    assert result == "test response"
+
+
+def test_root_exec_command_allows_browser_recon_before_readiness(tmp_path):
+    from strix.agents import factory
+
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    invoked = {"value": False}
+
+    async def invoke_tool(ctx, raw_input):
+        invoked["value"] = True
+        return "browser snapshot"
+
+    tool = SimpleNamespace(name="exec_command", on_invoke_tool=invoke_tool)
+    factory._wrap_exec_command(tool)
+    ctx = ToolContext(
+        context={"agent_id": "root", "parent_id": None, "state_dir": str(state_dir)},
+        tool_name="exec_command",
+        tool_call_id="call-shell",
+        tool_arguments="{}",
+    )
+
+    result = asyncio.run(tool.on_invoke_tool(
+        ctx,
+        json.dumps({
+            "cmd": (
+                "agent-browser open http://host.docker.internal:3000/ "
+                "2>/tmp/browser_err.log; echo \"EXIT:$?\"; sleep 5; "
+                "agent-browser snapshot -i -c -u 2>&1 | tee /tmp/snapshot.txt; "
+                "echo \"---SNAPSHOT_DONE---\""
+            )
+        }),
+    ))
+
+    assert invoked["value"] is True
+    assert result == "browser snapshot"
+
+
+def test_workflow_cluster_summary_exposes_untested_clusters():
+    summary = workflow_cluster_summary(
+        [
+            {"url": "http://target.local/rest/basket/1", "method": "GET"},
+            {"url": "http://target.local/api/users", "method": "GET"},
+            {"url": "http://target.local/ftp/", "method": "GET"},
+        ],
+        [
+            {
+                "endpoint": "http://target.local/rest/basket/{id}",
+                "method": "GET",
+                "vuln_type": "idor",
+            }
+        ],
+        [
+            {
+                "endpoint": "http://target.local/rest/basket/{id}",
+                "method": "GET",
+                "vuln_type": "idor",
+                "status": "passed",
+            }
+        ],
+    )
+
+    by_cluster = {item["cluster"]: item for item in summary["clusters"]}
+
+    assert by_cluster["basket"]["hypothesis_count"] == 1
+    assert by_cluster["basket"]["coverage_count"] == 1
+    assert "users" in summary["clusters_without_hypotheses"]
+    assert "ftp" in summary["clusters_without_coverage"]
+
+
+def test_workflow_cluster_summary_suggests_uncovered_risk_families_from_surfaces():
+    summary = workflow_cluster_summary(
+        [
+            {
+                "url": "http://target.local/rest/user/login",
+                "method": "POST",
+                "parameters": ["email", "password"],
+            },
+            {
+                "url": "http://target.local/rest/products/search",
+                "method": "GET",
+                "parameters": ["q"],
+            },
+            {
+                "url": "http://target.local/api/orders",
+                "method": "POST",
+                "parameters": ["coupon", "paymentId"],
+            },
+        ],
+        [
+            {
+                "endpoint": "http://target.local/rest/products/search",
+                "method": "GET",
+                "vuln_type": "sql_injection",
+            }
+        ],
+        [
+            {
+                "endpoint": "http://target.local/rest/products/search",
+                "method": "GET",
+                "vuln_type": "sql_injection",
+                "status": "passed",
+            }
+        ],
+    )
+
+    by_cluster = {item["cluster"]: item for item in summary["clusters"]}
+    narrow = {item["cluster"]: item for item in summary["clusters_with_narrow_testing"]}
+    suggested_families = {
+        item["family"]
+        for item in summary["suggested_next_testing_families"]
+    }
+
+    assert "authentication_and_session" in by_cluster["user"]["surface_hints"]
+    assert "business_logic_and_state_changes" in by_cluster["orders"]["surface_hints"]
+    assert "client_side_input_output" in narrow["products"]["suggested_untested_families"]
+    assert "business_logic_and_state_changes" in suggested_families
+
+
+def test_directory_attack_surface_covers_external_child_file_discoveries():
+    workflow_state = {
+        "authorized_hosts": ["target.local"],
+        "external_discoveries": [
+            {
+                "method": "GET",
+                "url": "http://target.local/files/report.pdf",
+                "path": "/files/report.pdf",
+                "source": "caido_sitemap",
+                "status_code": 200,
+            },
+            {
+                "method": "GET",
+                "url": "http://target.local/files/archive.zip",
+                "path": "/files/archive.zip",
+                "source": "caido_sitemap",
+                "status_code": 200,
+            },
+            {
+                "method": "GET",
+                "url": "http://target.local/api/users",
+                "path": "/api/users",
+                "source": "caido_sitemap",
+                "status_code": 401,
+            },
+        ],
+    }
+    attack_surface = [
+        {
+            "kind": "static_asset",
+            "url": "http://target.local/files/",
+            "method": "GET",
+        }
+    ]
+
+    gaps = discovered_inventory_gaps(workflow_state, attack_surface)
+
+    assert [item["path"] for item in gaps] == ["/api/users"]
+
+
+def test_workflow_cluster_summary_includes_external_inventory_gaps(tmp_path):
+    state = tmp_path / ".state"
+    state.mkdir()
+    (state / "workflow_state.json").write_text(json.dumps({
+        "authorized_hosts": ["target.local"],
+        "external_discoveries": [
+            {
+                "method": "POST",
+                "url": "http://target.local/api/feedback",
+                "path": "/api/feedback",
+                "source": "caido_sitemap",
+                "status_code": 200,
+            },
+            {
+                "method": "POST",
+                "url": "http://target.local/rest/cart/coupon",
+                "path": "/rest/cart/coupon",
+                "source": "caido_sitemap",
+                "status_code": 200,
+            },
+        ],
+    }), encoding="utf-8")
+    (state / "attack_surface.json").write_text(json.dumps([
+        {"surface_id": "as-login", "url": "http://target.local/rest/user/login", "method": "POST"},
+    ]), encoding="utf-8")
+    (state / "hypotheses.json").write_text(json.dumps([]), encoding="utf-8")
+    (state / "coverage.json").write_text(json.dumps([]), encoding="utf-8")
+
+    summary = workflow_cluster_summary_for_state(state)
+    by_cluster = {item["cluster"]: item for item in summary["clusters"]}
+
+    assert by_cluster["feedback"]["external_discovery_count"] == 1
+    assert by_cluster["cart"]["external_discovery_count"] == 1
+    assert "feedback" in summary["external_clusters_without_inventory"]
+    assert "cart" in summary["external_clusters_without_inventory"]
+    assert "business_logic_and_state_changes" in by_cluster["cart"]["surface_hints"]
+
+
+def test_completion_gate_includes_workflow_clusters(tmp_path):
+    state = tmp_path / ".state"
+    state.mkdir()
+    (state / "attack_surface.json").write_text(json.dumps([
+        {"surface_id": "as-basket", "url": "http://target.local/rest/basket/1", "method": "GET"},
+        {"surface_id": "as-users", "url": "http://target.local/api/users", "method": "GET"},
+    ]), encoding="utf-8")
+    (state / "hypotheses.json").write_text(json.dumps([
+        {
+            "hypothesis_id": "hyp-basket",
+            "surface_id": "as-basket",
+            "endpoint": "http://target.local/rest/basket/{id}",
+            "method": "GET",
+            "vuln_type": "idor",
+            "status": "planned",
+        }
+    ]), encoding="utf-8")
+    (state / "coverage.json").write_text(json.dumps([]), encoding="utf-8")
+    (state / "evidence.json").write_text(json.dumps([{"evidence_id": "ev-1"}]), encoding="utf-8")
+
+    gate = completion_gate_for_run(tmp_path)
+
+    assert "workflow_clusters" in gate
+    assert gate["workflow_clusters"]["cluster_count"] == 2
+    assert "users" in gate["workflow_clusters"]["clusters_without_hypotheses"]
+
+
+def test_inventory_readiness_requires_hypothesis_matrix(tmp_path):
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    (state_dir / "attack_surface.json").write_text(
+        json.dumps([
+            {
+                "surface_id": "as-search",
+                "kind": "api_endpoint",
+                "method": "GET",
+                "url": "http://target.local/search",
+                "parameters": ["q"],
+            }
+        ]),
+        encoding="utf-8",
+    )
+    not_ready = inventory_readiness_for_state(state_dir)
+
+    (state_dir / "hypotheses.json").write_text(
+        json.dumps([
+            {
+                "hypothesis_id": "hyp-search-sqli",
+                "surface_id": "as-search",
+                "endpoint": "GET http://target.local/search",
+                "method": "GET",
+                "parameter": "q",
+                "vuln_type": "sql_injection",
+                "hypothesis": "Search query may be interpreted as SQL.",
+                "test_strategy": "Send differential SQL syntax probes and compare response behavior.",
+                "status": "planned",
+            }
+        ]),
+        encoding="utf-8",
+    )
+    ready = inventory_readiness_for_state(state_dir)
+
+    assert not_ready["ok"] is False
+    assert "surfaces_without_hypotheses" in {gap["kind"] for gap in not_ready["gaps"]}
+    assert ready["ok"] is True
+    assert ready["ready_for_testing"] is True
+    assert ready["attack_surface_count"] == 1
+    assert ready["hypothesis_count"] == 1
+
+
+def test_list_memory_exposes_inventory_readiness(tmp_path):
+    from strix.tools.run_memory import tools as memory_tools
+
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    memory_tools.hydrate_memory_from_disk(state_dir)
+    ctx = ToolContext(
+        context={"agent_id": "root", "state_dir": str(state_dir)},
+        tool_name="list_memory",
+        tool_call_id="call-memory",
+        tool_arguments="{}",
+    )
+
+    result = json.loads(asyncio.run(memory_tools.list_memory.on_invoke_tool(
+        ctx,
+        json.dumps({"kind": "inventory_readiness"}),
+    )))
+
+    assert result["success"] is True
+    assert result["kind"] == "inventory_readiness"
+    assert result["ready_for_testing"] is False
+    assert "no_attack_surface_inventory" in {gap["kind"] for gap in result["gaps"]}
+
+
+def test_completion_gate_warns_narrow_workflow_risk_family_coverage(tmp_path):
+    state = tmp_path / ".state"
+    state.mkdir()
+    (state / "attack_surface.json").write_text(json.dumps([
+        {
+            "surface_id": "as-search",
+            "url": "http://target.local/rest/products/search",
+            "method": "GET",
+            "parameters": ["q"],
+        },
+        {
+            "surface_id": "as-orders",
+            "url": "http://target.local/api/orders",
+            "method": "POST",
+            "parameters": ["coupon", "paymentId"],
+        },
+        {
+            "surface_id": "as-login",
+            "url": "http://target.local/rest/user/login",
+            "method": "POST",
+            "parameters": ["email", "password"],
+        },
+    ]), encoding="utf-8")
+    (state / "hypotheses.json").write_text(json.dumps([
+        {
+            "hypothesis_id": "hyp-search-sqli",
+            "surface_id": "as-search",
+            "endpoint": "http://target.local/rest/products/search",
+            "method": "GET",
+            "vuln_type": "sql_injection",
+            "status": "tested",
+            "coverage_ids": ["cov-search"],
+            "evidence_ids": ["ev-search"],
+        },
+        {
+            "hypothesis_id": "hyp-orders-idor",
+            "surface_id": "as-orders",
+            "endpoint": "http://target.local/api/orders",
+            "method": "POST",
+            "vuln_type": "idor",
+            "status": "tested",
+            "coverage_ids": ["cov-orders"],
+            "evidence_ids": ["ev-orders"],
+        },
+    ]), encoding="utf-8")
+    (state / "coverage.json").write_text(json.dumps([
+        {
+            "coverage_id": "cov-search",
+            "endpoint": "http://target.local/rest/products/search",
+            "method": "GET",
+            "vuln_type": "sql_injection",
+            "status": "failed",
+            "evidence_ids": ["ev-search"],
+        },
+        {
+            "coverage_id": "cov-orders",
+            "endpoint": "http://target.local/api/orders",
+            "method": "POST",
+            "vuln_type": "idor",
+            "status": "failed",
+            "evidence_ids": ["ev-orders"],
+        },
+    ]), encoding="utf-8")
+    (state / "evidence.json").write_text(json.dumps([
+        {"evidence_id": "ev-search", "summary": "Search test evidence."},
+        {"evidence_id": "ev-orders", "summary": "Order test evidence."},
+    ]), encoding="utf-8")
+
+    gate = completion_gate_for_run(tmp_path)
+
+    assert gate["ok"] is True
+    assert gate["narrow_workflow_cluster_count"] == 2
+    assert any("untested suggested risk families" in warning for warning in gate["completion_warnings"])
+
+
+def test_confirmed_coverage_matches_report_when_only_query_differs():
+    coverage = [
+        {
+            "coverage_id": "cov-search",
+            "endpoint": "/rest/products/search?q=",
+            "parameter": "q",
+            "vuln_type": "sql_injection",
+            "status": "passed",
+            "evidence_ids": ["ev-discovery"],
+        }
+    ]
+    vulnerabilities = [
+        {
+            "id": "vuln-search",
+            "endpoint": "http://target.local/rest/products/search",
+            "method": "GET",
+            "evidence_ids": ["ev-validation"],
+            "validation_evidence_ids": ["ev-validation"],
+        }
+    ]
+
+    assert confirmed_coverage_without_reports(coverage, vulnerabilities) == []
+
+
+def test_tool_progress_does_not_expose_raw_tool_arguments():
+    summary = tool_call_summary("exec_command", {"cmd": "echo super-secret"})
+
+    assert summary == "Running shell command"
+    assert "super-secret" not in summary
+    assert important_tool_progress("create_agent", {"name": "X", "task": "hardcoded task"}) == ""
+
+
+def test_child_agent_prompt_is_scoped_and_bounded(monkeypatch):
+    from strix.agents import factory
+
+    monkeypatch.setattr(
+        factory,
+        "load_settings",
+        lambda: SimpleNamespace(integrations=SimpleNamespace(perplexity_api_key="")),
+    )
+
+    agent = factory.build_strix_agent(is_root=False, chat_completions_tools=True)
+
+    assert len(agent.instructions) < 12000
+    assert "SUBAGENT ROLE:" in agent.instructions
+    assert "Do not call `finish_scan`" in agent.instructions
+    assert "Root Agent Coordination" not in agent.instructions
+
+
 def test_agent_prompt_requires_real_progress_text_with_tool_calls(monkeypatch):
     from strix.agents import factory
 
@@ -2165,7 +3209,12 @@ def test_failed_child_notifies_parent_to_stop_waiting():
         await coordinator.register("child", "XSS Validation Agent", "parent")
         await coordinator.attach_runtime("parent", session=parent_session)
 
-        await _notify_parent_on_failure(coordinator, "child", "failed")
+        await _notify_parent_on_failure(
+            coordinator,
+            "child",
+            "failed",
+            reason="focused child agent exceeded its token budget",
+        )
 
         return coordinator, parent_session
 
@@ -2176,8 +3225,12 @@ def test_failed_child_notifies_parent_to_stop_waiting():
     content = parent_session.items[0]["content"]
     assert "type=failure" in content
     assert "[Agent failed]" in content
+    assert "exceeded its token budget" in content
+    assert "does not close coverage" in content
+    assert "smaller failure-aware batch" in content
+    assert "blocked/skipped coverage only when concrete evidence" in content
     assert "XSS Validation Agent" in content
-    assert "retry the task with a new agent" in content
+    assert "assigned surfaces or hypotheses" in content
 
 
 def test_list_sitemap_ignores_non_numeric_scope_id():
@@ -2515,6 +3568,53 @@ def test_record_coverage_requires_evidence_for_meaningful_result(tmp_path):
     assert "requires evidence_ids" in result["error"]
 
 
+def test_record_coverage_does_not_downgrade_confirmed_result(tmp_path):
+    from strix.tools.run_memory import tools as memory_tools
+
+    memory_tools.hydrate_memory_from_disk(tmp_path)
+    ctx = ToolContext(
+        context={"agent_id": "root", "state_dir": str(tmp_path)},
+        tool_name="record_coverage",
+        tool_call_id="call-cov",
+        tool_arguments="{}",
+    )
+    evidence = json.loads(asyncio.run(memory_tools.record_evidence.on_invoke_tool(
+        ctx,
+        json.dumps({
+            "evidence_type": "http_trace",
+            "summary": "Search endpoint returned SQL error for quote payload",
+            "target": "GET http://target.local/rest/products/search?q='",
+        }),
+    )))
+    created = json.loads(asyncio.run(memory_tools.record_coverage.on_invoke_tool(
+        ctx,
+        json.dumps({
+            "endpoint": "GET http://target.local/rest/products/search",
+            "parameter": "q",
+            "vuln_type": "sql_injection",
+            "status": "passed",
+            "evidence_ids": [evidence["evidence_id"]],
+            "result": "SQL injection confirmed",
+        }),
+    )))
+    downgraded = json.loads(asyncio.run(memory_tools.record_coverage.on_invoke_tool(
+        ctx,
+        json.dumps({
+            "endpoint": "GET http://target.local/rest/products/search",
+            "parameter": "q",
+            "vuln_type": "sql_injection",
+            "status": "blocked",
+            "notes": "Child agent failed before report writing.",
+        }),
+    )))
+
+    assert created["success"] is True
+    assert downgraded["success"] is False
+    assert "cannot be downgraded" in downgraded["error"]
+    persisted = json.loads((tmp_path / "coverage.json").read_text(encoding="utf-8"))
+    assert persisted[0]["status"] == "passed"
+
+
 def test_record_attack_surface_skips_out_of_scope_targets(tmp_path):
     from strix.tools.run_memory import tools as memory_tools
     from strix.tools.workflow import initialize_workflow_state
@@ -2583,6 +3683,63 @@ def test_memory_tools_list_coverage_gaps(tmp_path):
     assert summary["coverage_gap_examples"][0]["url"] == "http://target.local/api/users"
 
 
+def test_memory_tools_list_workflow_clusters_kind(tmp_path):
+    from strix.tools.run_memory import tools as memory_tools
+
+    memory_tools.hydrate_memory_from_disk(tmp_path)
+    ctx = ToolContext(
+        context={"agent_id": "root", "state_dir": str(tmp_path)},
+        tool_name="record_attack_surface",
+        tool_call_id="call-1",
+        tool_arguments="{}",
+    )
+    (tmp_path / "workflow_state.json").write_text(json.dumps({
+        "authorized_hosts": ["target.local"],
+        "external_discoveries": [
+            {
+                "method": "POST",
+                "url": "http://target.local/api/feedback",
+                "path": "/api/feedback",
+                "source": "caido_sitemap",
+                "status_code": 200,
+            },
+        ],
+    }), encoding="utf-8")
+    json.loads(asyncio.run(memory_tools.record_attack_surface.on_invoke_tool(
+        ctx,
+        json.dumps({
+            "kind": "api_endpoint",
+            "url": "http://target.local/rest/cart/coupon",
+            "method": "POST",
+        }),
+    )))
+    json.loads(asyncio.run(memory_tools.record_hypothesis.on_invoke_tool(
+        ctx,
+        json.dumps({
+            "endpoint": "http://target.local/rest/cart/coupon",
+            "method": "POST",
+            "parameter": "coupon",
+            "vuln_type": "business_logic",
+            "hypothesis": "Coupon state transition may allow invalid discounts",
+            "test_strategy": "Exercise coupon application boundaries",
+        }),
+    )))
+
+    result = json.loads(asyncio.run(memory_tools.list_memory.on_invoke_tool(
+        ctx,
+        json.dumps({"kind": "workflow_clusters", "limit": 10}),
+    )))
+    by_cluster = {item["cluster"]: item for item in result["clusters"]}
+
+    assert result["success"] is True
+    assert result["kind"] == "workflow_clusters"
+    assert result["cluster_count"] == 2
+    assert by_cluster["cart"]["attack_surface_count"] == 1
+    assert by_cluster["feedback"]["external_discovery_count"] == 1
+    assert "feedback" in result["external_clusters_without_inventory"]
+    assert result["suggested_next_testing_families"]
+
+
 def test_record_evidence_normalizes_alias_and_unknown_type(tmp_path):
     from strix.tools.run_memory import tools as memory_tools
 
@@ -2619,6 +3776,59 @@ def test_record_evidence_normalizes_alias_and_unknown_type(tmp_path):
     assert url_type_result["evidence"]["metadata"]["original_evidence_type"] == "http://host.docker.internal:3000/rest/user/login"
 
 
+def test_memory_tools_bound_large_proof_text_before_persisting(tmp_path):
+    from strix.tools.run_memory import tools as memory_tools
+
+    memory_tools.hydrate_memory_from_disk(tmp_path)
+    ctx = ToolContext(
+        context={"agent_id": "root", "state_dir": str(tmp_path)},
+        tool_name="record_evidence",
+        tool_call_id="call-1",
+        tool_arguments="{}",
+    )
+    large_content = "A" * 50_000
+    large_metadata = {"scanner_output": "B" * 20_000}
+
+    evidence = json.loads(asyncio.run(memory_tools.record_evidence.on_invoke_tool(
+        ctx,
+        json.dumps({
+            "evidence_type": "tool_output",
+            "summary": "Scanner output captured",
+            "content": large_content,
+            "metadata": large_metadata,
+            "target": "http://target.local/search",
+        }),
+    )))
+    evidence_id = evidence["evidence_id"]
+    coverage = json.loads(asyncio.run(memory_tools.record_coverage.on_invoke_tool(
+        ctx,
+        json.dumps({
+            "endpoint": "GET http://target.local/search",
+            "parameter": "q",
+            "vuln_type": "xss",
+            "status": "failed",
+            "evidence_ids": [evidence_id],
+            "result": "C" * 20_000,
+        }),
+    )))
+    listed = json.loads(asyncio.run(memory_tools.list_memory.on_invoke_tool(
+        ctx,
+        json.dumps({"kind": "evidence", "limit": 10}),
+    )))
+    persisted_evidence = json.loads((tmp_path / "evidence.json").read_text(encoding="utf-8"))[0]
+    persisted_coverage = json.loads((tmp_path / "coverage.json").read_text(encoding="utf-8"))[0]
+
+    assert evidence["success"] is True
+    assert evidence["evidence"]["content"].startswith("[compacted by Strix memory]")
+    assert len(evidence["evidence"]["content"]) < 13_000
+    assert evidence["evidence"]["metadata"]["scanner_output"].startswith("[compacted by Strix memory]")
+    assert coverage["success"] is True
+    assert coverage["coverage"]["result"].startswith("[compacted by Strix memory]")
+    assert persisted_evidence["content"] == evidence["evidence"]["content"]
+    assert persisted_coverage["result"] == coverage["coverage"]["result"]
+    assert listed["items"][0]["content"] == evidence["evidence"]["content"]
+
+
 def test_memory_tools_normalize_attack_surface_kind_aliases(tmp_path):
     from strix.tools.run_memory import tools as memory_tools
 
@@ -2646,6 +3856,14 @@ def test_memory_tools_normalize_attack_surface_kind_aliases(tmp_path):
             "method": "POST",
         }),
     )))
+    directory_surface = json.loads(asyncio.run(memory_tools.record_attack_surface.on_invoke_tool(
+        ctx,
+        json.dumps({
+            "kind": "directory listing",
+            "url": "http://target.local/ftp/",
+            "method": "GET",
+        }),
+    )))
 
     assert api_surface["success"] is True
     assert api_surface["surface"]["kind"] == "api_endpoint"
@@ -2653,6 +3871,37 @@ def test_memory_tools_normalize_attack_surface_kind_aliases(tmp_path):
     assert rest_surface["success"] is True
     assert rest_surface["surface"]["kind"] == "api_endpoint"
     assert rest_surface["surface"]["original_kind"] == "REST API endpoint"
+    assert directory_surface["success"] is True
+    assert directory_surface["surface"]["kind"] == "url"
+    assert directory_surface["surface"]["original_kind"] == "directory listing"
+
+
+def test_record_attack_surface_unknown_kind_error_is_actionable(tmp_path):
+    from strix.tools.run_memory import tools as memory_tools
+
+    memory_tools.hydrate_memory_from_disk(tmp_path)
+    ctx = ToolContext(
+        context={"agent_id": "root"},
+        tool_name="record_attack_surface",
+        tool_call_id="call-1",
+        tool_arguments="{}",
+    )
+
+    result = json.loads(asyncio.run(memory_tools.record_attack_surface.on_invoke_tool(
+        ctx,
+        json.dumps({
+            "kind": "custom surface bucket",
+            "url": "http://target.local/custom",
+            "method": "GET",
+        }),
+    )))
+
+    assert result["success"] is False
+    assert result["received_kind"] == "custom surface bucket"
+    assert result["normalized_kind"] == "custom_surface_bucket"
+    assert "url" in result["allowed_kinds"]
+    assert result["known_aliases"]["directory_listing"] == "url"
+    assert "Use kind='url'" in result["retry_hint"]
 
 
 def test_memory_tools_deduplicate_attack_surface_in_sqlite_and_json(tmp_path):
@@ -3191,8 +4440,8 @@ def test_bound_todo_helpers_complete_successful_child_task(tmp_path):
     assert persisted["root"][created_success["todo_id"]]["completed_at"]
 
 
-def test_create_agent_enforces_recon_workflow_gate_for_root(tmp_path):
-    from strix.tools.workflow import initialize_workflow_state, mark_sitemap_attempt
+def test_create_agent_warns_on_recon_workflow_gap_for_root(tmp_path):
+    from strix.tools.workflow import initialize_workflow_state
 
     async def run():
         state_dir = tmp_path / ".state"
@@ -3229,32 +4478,93 @@ def test_create_agent_enforces_recon_workflow_gate_for_root(tmp_path):
             ctx,
             json.dumps({"name": "Sitemap Mapper", "task": "Map sitemap and attack surface"}),
         ))
-        mark_sitemap_attempt(state_dir, success=True, entry_count=1)
-        (state_dir / "attack_surface.json").write_text(json.dumps([
-            {"surface_id": "as-1", "kind": "url", "url": "http://target.local/search", "method": "GET"},
-        ]), encoding="utf-8")
-        allowed = json.loads(await agent_tools.create_agent.on_invoke_tool(
-            ctx,
-            json.dumps({"name": "XSS Agent", "task": "Validate XSS on /search"}),
-        ))
-        return blocked, recon, allowed, spawned
+        return blocked, recon, spawned
 
-    blocked, recon, allowed, spawned = asyncio.run(run())
+    blocked, recon, spawned = asyncio.run(run())
 
-    assert blocked["success"] is False
-    assert "Workflow gate blocked create_agent" in blocked["error"]
-    assert blocked["workflow_gate"]["reason"] == "Caido is available but list_sitemap has not been attempted"
+    assert blocked["success"] is True
+    assert blocked["workflow_warnings"][0]["reason"] == "Caido is available but list_sitemap has not been attempted"
     assert recon["success"] is True
-    assert allowed["success"] is True
-    assert spawned == ["Sitemap Mapper", "XSS Agent"]
+    assert spawned == ["XSS Agent", "Sitemap Mapper"]
 
 
-def test_create_agent_rejects_unbounded_vulnerability_task(tmp_path):
+def test_create_agent_allows_anchored_task_despite_sitemap_pagination_gap(tmp_path):
+    from strix.tools.workflow import initialize_workflow_state, mark_sitemap_attempt
+
+    async def run():
+        state_dir = tmp_path / ".state"
+        state_dir.mkdir()
+        initialize_workflow_state(state_dir, caido_available=True)
+        mark_sitemap_attempt(
+            state_dir,
+            success=True,
+            entry_count=20,
+            page=1,
+            total_pages=2,
+            total_count=40,
+        )
+        (state_dir / "attack_surface.json").write_text(json.dumps([{
+            "surface_id": "as-1",
+            "kind": "url",
+            "url": "http://target.local/search",
+            "method": "GET",
+            "parameters": ["q"],
+        }]), encoding="utf-8")
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        todo_tools.hydrate_todos_from_disk(state_dir)
+
+        async def spawner(**kwargs):
+            await coordinator.register("child", kwargs["name"], kwargs["parent_ctx"]["agent_id"])
+            return {"success": True, "agent_id": "child", "name": kwargs["name"]}
+
+        ctx = ToolContext(
+            context={
+                "agent_id": "root",
+                "parent_id": None,
+                "state_dir": str(state_dir),
+                "coordinator": coordinator,
+                "spawn_child_agent": spawner,
+            },
+            tool_name="create_agent",
+            tool_call_id="call-agent",
+            tool_arguments="{}",
+        )
+        anchored = json.loads(await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({"name": "XSS Agent", "task": "Validate XSS on /search parameter q"}),
+        ))
+        unanchored = json.loads(await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({"name": "Admin Agent", "task": "Validate access control on /admin"}),
+        ))
+        return anchored, unanchored
+
+    anchored, unanchored = asyncio.run(run())
+
+    assert anchored["success"] is True
+    assert anchored["workflow_warnings"][0]["reason"] == "Caido sitemap has additional pages that have not been enumerated"
+    assert anchored["workflow_warnings"][0]["sitemap_pagination_gaps"][0]["missing_pages"] == [2]
+    assert unanchored["success"] is True
+    assert unanchored["workflow_warnings"][0]["reason"] == "Caido sitemap has additional pages that have not been enumerated"
+
+
+def test_create_agent_warns_on_unbounded_vulnerability_task(tmp_path):
     async def run():
         state_dir = tmp_path / ".state"
         state_dir.mkdir()
         (state_dir / "attack_surface.json").write_text(json.dumps([
             {"surface_id": "as-1", "kind": "url", "url": "http://target.local/search", "method": "GET"},
+        ]), encoding="utf-8")
+        (state_dir / "hypotheses.json").write_text(json.dumps([
+            {
+                "hypothesis_id": "hyp-search-xss",
+                "surface_id": "as-1",
+                "endpoint": "GET http://target.local/search",
+                "method": "GET",
+                "vuln_type": "xss",
+                "status": "planned",
+            }
         ]), encoding="utf-8")
         coordinator = AgentCoordinator()
         await coordinator.register("root", "root", None)
@@ -3279,24 +4589,19 @@ def test_create_agent_rejects_unbounded_vulnerability_task(tmp_path):
             tool_call_id="call-agent",
             tool_arguments="{}",
         )
-        blocked = json.loads(await agent_tools.create_agent.on_invoke_tool(
+        broad = json.loads(await agent_tools.create_agent.on_invoke_tool(
             ctx,
             json.dumps({
                 "name": "XSS Agent",
                 "task": "Validate XSS on /search and any other user input reflection points",
             }),
         ))
-        allowed = json.loads(await agent_tools.create_agent.on_invoke_tool(
-            ctx,
-            json.dumps({"name": "XSS Agent", "task": "Validate XSS on /search"}),
-        ))
-        return blocked, allowed, spawned
+        return broad, spawned
 
-    blocked, allowed, spawned = asyncio.run(run())
+    broad, spawned = asyncio.run(run())
 
-    assert blocked["success"] is False
-    assert blocked["workflow_gate"]["reason"] == "Child testing task is too broad and can drift away from recorded attack surface"
-    assert allowed["success"] is True
+    assert broad["success"] is True
+    assert broad["workflow_warnings"][0]["reason"] == "Child testing task is too broad and can drift away from recorded attack surface"
     assert spawned == ["XSS Agent"]
 
 
@@ -3391,6 +4696,1206 @@ def test_create_agent_links_auto_todo_to_single_active_phase(tmp_path):
     persisted = json.loads((tmp_path / "todos.json").read_text(encoding="utf-8"))
     assert persisted["root"][child_todo_id]["parent_todo_id"] == phase_id
     assert persisted["root"][phase_id]["status"] == "in_progress"
+
+
+def test_create_agent_links_auto_todo_to_explicit_parent_phase(tmp_path):
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        todo_tools.hydrate_todos_from_disk(tmp_path)
+        todo_ctx = ToolContext(
+            context={"agent_id": "root"},
+            tool_name="create_todo",
+            tool_call_id="call-todo",
+            tool_arguments="{}",
+        )
+        created = await todo_tools.create_todo.on_invoke_tool(
+            todo_ctx,
+            json.dumps({"todos": [
+                {"title": "Phase 2: Hypothesis & Test Matrix", "priority": "high"},
+                {"title": "Phase 3: Vulnerability Discovery & Testing", "priority": "high"},
+            ]}),
+        )
+        phase_ids = [item["todo_id"] for item in json.loads(created)["created"]]
+        await todo_tools.update_todo.on_invoke_tool(
+            todo_ctx,
+            json.dumps({"updates": [{"todo_id": phase_ids[1], "status": "in_progress"}]}),
+        )
+
+        async def spawner(**kwargs):
+            await coordinator.register("child", kwargs["name"], "root")
+            return {"success": True, "agent_id": "child", "name": kwargs["name"]}
+
+        ctx = ToolContext(
+            context={"agent_id": "root", "coordinator": coordinator, "spawn_child_agent": spawner},
+            tool_name="create_agent",
+            tool_call_id="call-agent",
+            tool_arguments="{}",
+        )
+        result = await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({
+                "name": "Account Flow Testing Agent",
+                "task": "Test recorded account-flow hypotheses and record coverage.",
+                "parent_todo_id": phase_ids[1],
+            }),
+        )
+        return json.loads(result), phase_ids
+
+    result, phase_ids = asyncio.run(run())
+
+    assert result["success"] is True
+    persisted = json.loads((tmp_path / "todos.json").read_text(encoding="utf-8"))
+    assert persisted["root"][result["todo_id"]]["parent_todo_id"] == phase_ids[1]
+    assert persisted["root"][result["todo_id"]]["title"] == "Account Flow Testing Agent"
+
+
+def test_create_agent_rejects_explicit_parent_phase_that_is_not_active(tmp_path):
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        todo_tools.hydrate_todos_from_disk(tmp_path)
+        todo_ctx = ToolContext(
+            context={"agent_id": "root"},
+            tool_name="create_todo",
+            tool_call_id="call-todo",
+            tool_arguments="{}",
+        )
+        created = await todo_tools.create_todo.on_invoke_tool(
+            todo_ctx,
+            json.dumps({"todos": [
+                {"title": "Phase 3: Vulnerability Discovery & Testing", "priority": "high"},
+            ]}),
+        )
+        phase_id = json.loads(created)["created"][0]["todo_id"]
+
+        async def spawner(**kwargs):
+            raise AssertionError("spawner should not be called for inactive parent phase")
+
+        ctx = ToolContext(
+            context={"agent_id": "root", "coordinator": coordinator, "spawn_child_agent": spawner},
+            tool_name="create_agent",
+            tool_call_id="call-agent",
+            tool_arguments="{}",
+        )
+        return json.loads(await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({
+                "name": "Inactive Phase Child",
+                "task": "This should not start until the parent phase is active.",
+                "parent_todo_id": phase_id,
+            }),
+        ))
+
+    result = asyncio.run(run())
+
+    assert result["success"] is False
+    assert result["parent_todo_status"] == "pending"
+    assert "not in_progress" in result["error"]
+
+
+def test_create_agent_rejects_conflicting_todo_bindings(tmp_path):
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        todo_tools.hydrate_todos_from_disk(tmp_path)
+        todo_ctx = ToolContext(
+            context={"agent_id": "root"},
+            tool_name="create_todo",
+            tool_call_id="call-todo",
+            tool_arguments="{}",
+        )
+        created = await todo_tools.create_todo.on_invoke_tool(
+            todo_ctx,
+            json.dumps({"todos": [
+                {"title": "Existing child task", "priority": "high"},
+                {"title": "Phase 3: Discovery", "priority": "high"},
+            ]}),
+        )
+        ids = [item["todo_id"] for item in json.loads(created)["created"]]
+
+        async def spawner(**kwargs):
+            raise AssertionError("spawner should not be called")
+
+        ctx = ToolContext(
+            context={"agent_id": "root", "coordinator": coordinator, "spawn_child_agent": spawner},
+            tool_name="create_agent",
+            tool_call_id="call-agent",
+            tool_arguments="{}",
+        )
+        return json.loads(await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({
+                "name": "Conflicting Agent",
+                "task": "Should fail before spawning",
+                "todo_id": ids[0],
+                "parent_todo_id": ids[1],
+            }),
+        ))
+
+    result = asyncio.run(run())
+
+    assert result["success"] is False
+    assert "Use either todo_id or parent_todo_id" in result["error"]
+
+
+def test_child_initial_input_does_not_dump_full_parent_history():
+    sentinel = "FULL_PARENT_HISTORY_SHOULD_NOT_BE_INHERITED"
+    parent_history = [
+        {
+            "role": "assistant",
+            "content": f"{sentinel}-{index}-" + ("x" * 5_000),
+        }
+        for index in range(20)
+    ]
+
+    payload = child_initial_input(
+        name="Focused Child",
+        child_id="child-1",
+        parent_id="root",
+        task="Test POST /api/users authorization hypotheses.",
+        parent_history=parent_history,
+    )
+    rendered = json.dumps(payload, ensure_ascii=False)
+
+    assert len(rendered) < 20_000
+    assert "Scoped context from parent" in rendered
+    assert "FULL_PARENT_HISTORY_SHOULD_NOT_BE_INHERITED-0" not in rendered
+    assert "FULL_PARENT_HISTORY_SHOULD_NOT_BE_INHERITED-19" in rendered
+
+
+def test_child_context_pack_includes_relevant_memory(tmp_path):
+    (tmp_path / "attack_surface.json").write_text(json.dumps([
+        {
+            "surface_id": "as-users",
+            "kind": "api_endpoint",
+            "endpoint": "GET /api/users",
+            "method": "GET",
+            "notes": "User listing endpoint.",
+        },
+        {
+            "surface_id": "as-products",
+            "kind": "api_endpoint",
+            "endpoint": "GET /api/products",
+            "method": "GET",
+            "notes": "Product listing endpoint.",
+        },
+    ]), encoding="utf-8")
+    (tmp_path / "hypotheses.json").write_text(json.dumps([
+        {
+            "hypothesis_id": "hyp-users",
+            "endpoint": "GET /api/users",
+            "vuln_type": "access_control",
+            "status": "planned",
+            "test_strategy": "Compare user listing with low-privilege and admin sessions.",
+        },
+        {
+            "hypothesis_id": "hyp-products",
+            "endpoint": "GET /api/products",
+            "vuln_type": "cache",
+            "status": "planned",
+            "test_strategy": "Check product cache headers.",
+        },
+    ]), encoding="utf-8")
+    (tmp_path / "coverage.json").write_text(json.dumps([]), encoding="utf-8")
+    (tmp_path / "evidence.json").write_text(json.dumps([]), encoding="utf-8")
+
+    pack = build_child_context_pack(
+        name="Users API Access Control Agent",
+        task="Test GET /api/users access-control hypotheses and record coverage.",
+        skills=["authorization"],
+        parent_id="root",
+        state_dir=tmp_path,
+        parent_history=[{"role": "assistant", "content": "Recent plan mentions /api/users."}],
+    )[0]
+    rendered = json.dumps(pack, ensure_ascii=False)
+
+    assert pack["context_type"] == "scoped_child_context_v1"
+    assert pack["execution_contract"]["execution_mode"] == "batch_first_detection"
+    assert "surface_or_hypothesis_id" in pack["execution_contract"]["result_table_fields"]
+    assert "A failed command" in pack["execution_contract"]["failure_rule"]
+    assert pack["memory_summary"]["attack_surface_count"] == 2
+    assert "as-users" in rendered
+    assert "hyp-users" in rendered
+    assert "as-products" not in rendered
+    assert "hyp-products" not in rendered
+    assert len(rendered) <= 12_000
+
+
+def test_child_context_pack_includes_workflow_gaps_and_bounds_unrelated_fallback(tmp_path):
+    state = tmp_path
+    (state / "workflow_state.json").write_text(json.dumps({
+        "authorized_hosts": ["target.local"],
+        "external_discoveries": [
+            {
+                "method": "POST",
+                "url": "http://target.local/api/feedback",
+                "path": "/api/feedback",
+                "source": "caido_sitemap",
+                "status_code": 200,
+            }
+        ],
+    }), encoding="utf-8")
+    (state / "attack_surface.json").write_text(json.dumps([
+        {
+            "surface_id": f"as-{index}",
+            "kind": "api_endpoint",
+            "url": f"http://target.local/api/unrelated-{index}",
+            "method": "GET",
+            "notes": "Unrelated endpoint.",
+        }
+        for index in range(6)
+    ]), encoding="utf-8")
+    (state / "hypotheses.json").write_text(json.dumps([]), encoding="utf-8")
+    (state / "coverage.json").write_text(json.dumps([]), encoding="utf-8")
+    (state / "evidence.json").write_text(json.dumps([]), encoding="utf-8")
+
+    pack = build_child_context_pack(
+        name="Feedback Workflow Agent",
+        task="Plan tests for the observed feedback workflow.",
+        parent_id="root",
+        state_dir=state,
+        parent_history=[],
+    )[0]
+
+    workflow = pack["memory_summary"]["workflow_clusters"]
+    rendered = json.dumps(pack, ensure_ascii=False)
+
+    assert "feedback" in workflow["external_clusters_without_inventory"]
+    assert len(pack["relevant_attack_surface"]) == 2
+    assert "as-0" not in rendered
+    assert "as-4" in rendered
+    assert "as-5" in rendered
+
+
+def test_create_agent_passes_compact_context_to_spawner(tmp_path):
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        captured: dict[str, object] = {}
+
+        async def spawner(**kwargs):
+            captured["parent_history"] = kwargs["parent_history"]
+            await coordinator.register("child", kwargs["name"], "root", task=kwargs["task"])
+            return {"success": True, "agent_id": "child", "name": kwargs["name"]}
+
+        ctx = ToolContext(
+            context={
+                "agent_id": "root",
+                "parent_id": "parent",
+                "coordinator": coordinator,
+                "spawn_child_agent": spawner,
+                "state_dir": str(tmp_path),
+            },
+            tool_name="create_agent",
+            tool_call_id="call-agent",
+            tool_arguments="{}",
+            turn_input=[
+                {"role": "assistant", "content": "old context " + ("x" * 10_000)}
+                for _ in range(10)
+            ],
+        )
+        result = await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({
+                "name": "Users API Access Control Agent",
+                "task": "Test GET /api/users access-control hypotheses.",
+            }),
+        )
+        return json.loads(result), captured["parent_history"]
+
+    result, parent_history = asyncio.run(run())
+    rendered = json.dumps(parent_history, ensure_ascii=False)
+
+    assert result["success"] is True
+    assert parent_history[0]["context_type"] == "scoped_child_context_v1"
+    assert len(rendered) <= 12_000
+    assert "old context " in rendered
+    assert "x" * 5_000 not in rendered
+
+
+def test_create_agent_rejects_active_exact_duplicate_task(tmp_path):
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        await coordinator.register(
+            "child-existing",
+            "Users API Access Control Agent",
+            "root",
+            task="Test GET /api/users access-control hypotheses.",
+        )
+
+        async def spawner(**kwargs):
+            raise AssertionError("duplicate should be rejected before spawning")
+
+        ctx = ToolContext(
+            context={
+                "agent_id": "root",
+                "parent_id": "parent",
+                "coordinator": coordinator,
+                "spawn_child_agent": spawner,
+                "state_dir": str(tmp_path),
+            },
+            tool_name="create_agent",
+            tool_call_id="call-agent",
+            tool_arguments="{}",
+        )
+        result = await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({
+                "name": "Users API Access Control Agent",
+                "task": "Test GET /api/users access-control hypotheses.",
+            }),
+        )
+        return json.loads(result)
+
+    result = asyncio.run(run())
+
+    assert result["success"] is False
+    assert result["duplicate_agent_id"] == "child-existing"
+    assert "same name and task" in result["error"]
+
+
+def test_create_agent_rejects_completed_exact_duplicate_task(tmp_path):
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        await coordinator.register(
+            "child-existing",
+            "Search SQLi Validator",
+            "root",
+            task="Validate GET /rest/products/search SQL injection and record evidence.",
+        )
+        await coordinator.set_status("child-existing", "completed")
+
+        async def spawner(**kwargs):
+            raise AssertionError("completed duplicate should be rejected before spawning")
+
+        ctx = ToolContext(
+            context={
+                "agent_id": "root",
+                "coordinator": coordinator,
+                "spawn_child_agent": spawner,
+                "state_dir": str(tmp_path),
+            },
+            tool_name="create_agent",
+            tool_call_id="call-agent",
+            tool_arguments="{}",
+        )
+        result = await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({
+                "name": "Search SQLi Validator",
+                "task": "Validate GET /rest/products/search SQL injection and record evidence.",
+            }),
+        )
+        return json.loads(result)
+
+    result = asyncio.run(run())
+
+    assert result["success"] is False
+    assert result["duplicate_agent_id"] == "child-existing"
+    assert result["duplicate_status"] == "completed"
+    assert "same name and task" in result["error"]
+
+
+def test_create_agent_rejects_completed_near_duplicate_validator_task(tmp_path):
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        await coordinator.register(
+            "child-existing",
+            "Search SQLi Validator",
+            "root",
+            task="Validate GET /rest/products/search SQL injection and record evidence.",
+        )
+        await coordinator.set_status("child-existing", "completed")
+
+        async def spawner(**kwargs):
+            raise AssertionError("near-duplicate should be rejected before spawning")
+
+        ctx = ToolContext(
+            context={
+                "agent_id": "root",
+                "coordinator": coordinator,
+                "spawn_child_agent": spawner,
+                "state_dir": str(tmp_path),
+            },
+            tool_name="create_agent",
+            tool_call_id="call-agent",
+            tool_arguments="{}",
+        )
+        blocked = await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({
+                "name": "Search SQLi Final Validator",
+                "task": "Final confirmation for /rest/products/search SQL injection evidence.",
+            }),
+        )
+        return json.loads(blocked)
+
+    result = asyncio.run(run())
+
+    assert result["success"] is False
+    assert result["duplicate_agent_id"] == "child-existing"
+    assert result["duplicate_scope"]["purpose"] == "validate"
+    assert result["duplicate_scope"]["targets"] == ["/rest/products/search"]
+    assert "same target and task purpose" in result["error"]
+
+
+def test_task_shape_does_not_treat_report_back_or_negated_report_as_reporting():
+    assert classify_child_task_shape(
+        name="SQLi Discovery Agent",
+        task="Test GET /rest/products/search and report back what you found.",
+    ) == "discovery"
+    assert classify_child_task_shape(
+        name="SQLi Validation Agent",
+        task="Validate the candidate on /rest/products/search. DO NOT create a vulnerability report.",
+    ) == "validation"
+    assert classify_child_task_shape(
+        name="SQL Injection Reporter",
+        task="Create vulnerability report for confirmed SQLi on /rest/products/search.",
+    ) == "reporting"
+
+
+def test_create_agent_rejects_reporting_parent_spawning_child(tmp_path):
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        await coordinator.register(
+            "reporter",
+            "SQL Injection Reporter",
+            "root",
+            task="Create vulnerability report for confirmed SQLi on /rest/products/search.",
+        )
+
+        async def spawner(**kwargs):
+            raise AssertionError("reporting parent should be rejected before spawning")
+
+        ctx = ToolContext(
+            context={
+                "agent_id": "reporter",
+                "coordinator": coordinator,
+                "spawn_child_agent": spawner,
+                "state_dir": str(tmp_path),
+            },
+            tool_name="create_agent",
+            tool_call_id="call-agent",
+            tool_arguments="{}",
+        )
+        result = await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({
+                "name": "SQLi Validation Agent",
+                "task": "Validate GET /rest/products/search SQL injection and record evidence.",
+            }),
+        )
+        return json.loads(result)
+
+    result = asyncio.run(run())
+
+    assert result["success"] is False
+    assert result["requested_child_shape"] == "validation"
+    assert "Reporting agents should not spawn child agents" in result["error"]
+
+
+def test_create_agent_warns_on_testing_before_inventory_readiness(tmp_path):
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    (state_dir / "attack_surface.json").write_text(
+        json.dumps([
+            {
+                "surface_id": "as-search",
+                "kind": "api_endpoint",
+                "method": "GET",
+                "url": "http://target.local/search",
+                "parameters": ["q"],
+            }
+        ]),
+        encoding="utf-8",
+    )
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+
+        async def spawner(**kwargs):
+            await coordinator.register("child-sqli", kwargs["name"], "root")
+            return {"success": True, "agent_id": "child-sqli", "name": kwargs["name"]}
+
+        ctx = ToolContext(
+            context={
+                "agent_id": "root",
+                "coordinator": coordinator,
+                "spawn_child_agent": spawner,
+                "state_dir": str(state_dir),
+            },
+            tool_name="create_agent",
+            tool_call_id="call-agent",
+            tool_arguments="{}",
+        )
+        result = await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({
+                "name": "Search SQLi Testing Agent",
+                "task": "Test GET /search q parameter for SQL injection.",
+            }),
+        )
+        return json.loads(result)
+
+    result = asyncio.run(run())
+
+    assert result["success"] is True
+    assert result["workflow_warnings"][0]["blocks_testing_until_inventory_ready"] is True
+    assert "surfaces_without_hypotheses" in {
+        gap["kind"]
+        for gap in result["workflow_warnings"][0]["inventory_readiness"]["gaps"]
+    }
+
+
+def test_create_agent_allows_testing_after_inventory_readiness(tmp_path):
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    (state_dir / "attack_surface.json").write_text(
+        json.dumps([
+            {
+                "surface_id": "as-search",
+                "kind": "api_endpoint",
+                "method": "GET",
+                "url": "http://target.local/search",
+                "parameters": ["q"],
+            }
+        ]),
+        encoding="utf-8",
+    )
+    (state_dir / "hypotheses.json").write_text(
+        json.dumps([
+            {
+                "hypothesis_id": "hyp-search-sqli",
+                "surface_id": "as-search",
+                "endpoint": "GET http://target.local/rest/products/search",
+                "method": "GET",
+                "parameter": "q",
+                "vuln_type": "sql_injection",
+                "status": "planned",
+            }
+        ]),
+        encoding="utf-8",
+    )
+    (state_dir / "hypotheses.json").write_text(
+        json.dumps([
+            {
+                "hypothesis_id": "hyp-search-sqli",
+                "surface_id": "as-search",
+                "endpoint": "GET http://target.local/search",
+                "method": "GET",
+                "parameter": "q",
+                "vuln_type": "sql_injection",
+                "hypothesis": "Search query may be interpreted as SQL.",
+                "test_strategy": "Send differential SQL syntax probes and compare response behavior.",
+                "status": "planned",
+            }
+        ]),
+        encoding="utf-8",
+    )
+
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        spawned: list[str] = []
+
+        async def spawner(**kwargs):
+            spawned.append(kwargs["name"])
+            await coordinator.register("child-sqli", kwargs["name"], "root")
+            return {"success": True, "agent_id": "child-sqli", "name": kwargs["name"]}
+
+        ctx = ToolContext(
+            context={
+                "agent_id": "root",
+                "coordinator": coordinator,
+                "spawn_child_agent": spawner,
+                "state_dir": str(state_dir),
+            },
+            tool_name="create_agent",
+            tool_call_id="call-agent",
+            tool_arguments="{}",
+        )
+        result = await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({
+                "name": "Search SQLi Testing Agent",
+                "task": "Execute hypothesis hyp-search-sqli for GET /search q SQL injection testing.",
+            }),
+        )
+        return json.loads(result), spawned
+
+    result, spawned = asyncio.run(run())
+
+    assert result["success"] is True
+    assert spawned == ["Search SQLi Testing Agent"]
+
+
+def test_create_agent_rejects_failed_near_duplicate_without_failure_aware_scope(tmp_path):
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        await coordinator.register(
+            "child-failed",
+            "Search SQLi Validation Agent",
+            "root",
+            task="Validate GET /rest/products/search SQL injection and record evidence.",
+        )
+        await coordinator.set_status("child-failed", "failed")
+
+        async def spawner(**kwargs):
+            raise AssertionError("failed near-duplicate should be rejected before spawning")
+
+        ctx = ToolContext(
+            context={
+                "agent_id": "root",
+                "coordinator": coordinator,
+                "spawn_child_agent": spawner,
+                "state_dir": str(tmp_path),
+            },
+            tool_name="create_agent",
+            tool_call_id="call-agent",
+            tool_arguments="{}",
+        )
+        result = await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({
+                "name": "Search SQLi Final Validator",
+                "task": "Final confirmation for /rest/products/search SQL injection evidence.",
+            }),
+        )
+        return json.loads(result)
+
+    result = asyncio.run(run())
+
+    assert result["success"] is False
+    assert result["duplicate_agent_id"] == "child-failed"
+    assert result["duplicate_status"] == "failed"
+    assert "failure-aware follow-up" in result["error"]
+
+
+def test_create_agent_allows_failure_aware_retry_for_failed_near_duplicate(tmp_path):
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    (state_dir / "attack_surface.json").write_text(
+        json.dumps([
+            {
+                "surface_id": "as-search",
+                "kind": "api_endpoint",
+                "method": "GET",
+                "url": "http://target.local/rest/products/search",
+                "parameters": ["q"],
+            }
+        ]),
+        encoding="utf-8",
+    )
+    (state_dir / "hypotheses.json").write_text(
+        json.dumps([
+            {
+                "hypothesis_id": "hyp-search-sqli",
+                "surface_id": "as-search",
+                "endpoint": "GET http://target.local/rest/products/search",
+                "method": "GET",
+                "parameter": "q",
+                "vuln_type": "sql_injection",
+                "status": "planned",
+            }
+        ]),
+        encoding="utf-8",
+    )
+
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        await coordinator.register(
+            "child-failed",
+            "Search SQLi Validation Agent",
+            "root",
+            task="Validate GET /rest/products/search SQL injection and record evidence.",
+        )
+        await coordinator.set_status("child-failed", "failed")
+        spawned: list[str] = []
+
+        async def spawner(**kwargs):
+            spawned.append(kwargs["name"])
+            await coordinator.register("child-new", kwargs["name"], "root")
+            return {"success": True, "agent_id": "child-new", "name": kwargs["name"]}
+
+        ctx = ToolContext(
+            context={
+                "agent_id": "root",
+                "coordinator": coordinator,
+                "spawn_child_agent": spawner,
+                "state_dir": str(state_dir),
+            },
+            tool_name="create_agent",
+            tool_call_id="call-agent",
+            tool_arguments="{}",
+        )
+        result = await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({
+                "name": "Search SQLi Narrow Retry Validator",
+                "task": (
+                    "Retry after failure child-failed with a smaller scoped validation for "
+                    "GET /rest/products/search SQL injection timing evidence only."
+                ),
+            }),
+        )
+        return json.loads(result), spawned
+
+    result, spawned = asyncio.run(run())
+
+    assert result["success"] is True
+    assert spawned == ["Search SQLi Narrow Retry Validator"]
+
+
+def test_create_agent_allows_same_endpoint_different_risk_topic(tmp_path):
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    (state_dir / "attack_surface.json").write_text(
+        json.dumps([
+            {
+                "surface_id": "as-search",
+                "kind": "api_endpoint",
+                "method": "GET",
+                "url": "http://target.local/search",
+                "parameters": ["q"],
+            }
+        ]),
+        encoding="utf-8",
+    )
+    (state_dir / "hypotheses.json").write_text(
+        json.dumps([
+            {
+                "hypothesis_id": "hyp-search-sqli",
+                "surface_id": "as-search",
+                "endpoint": "GET http://target.local/search",
+                "method": "GET",
+                "parameter": "q",
+                "vuln_type": "sql_injection",
+                "status": "planned",
+            }
+        ]),
+        encoding="utf-8",
+    )
+
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        await coordinator.register(
+            "child-existing",
+            "Search SQLi Validator",
+            "root",
+            task="Validate GET /search SQL injection and record evidence.",
+        )
+        await coordinator.set_status("child-existing", "completed")
+        spawned: list[str] = []
+
+        async def spawner(**kwargs):
+            spawned.append(kwargs["name"])
+            await coordinator.register("child-new", kwargs["name"], "root")
+            return {"success": True, "agent_id": "child-new", "name": kwargs["name"]}
+
+        ctx = ToolContext(
+            context={
+                "agent_id": "root",
+                "coordinator": coordinator,
+                "spawn_child_agent": spawner,
+                "state_dir": str(state_dir),
+            },
+            tool_name="create_agent",
+            tool_call_id="call-agent",
+            tool_arguments="{}",
+        )
+        allowed = await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({
+                "name": "Search XSS Validator",
+                "task": "Validate GET /search reflected XSS and record evidence.",
+            }),
+        )
+        return json.loads(allowed), spawned
+
+    result, spawned = asyncio.run(run())
+
+    assert result["success"] is True
+    assert spawned == ["Search XSS Validator"]
+
+
+def test_create_agent_does_not_treat_shared_base_url_as_same_target(tmp_path):
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        await coordinator.register(
+            "child-existing",
+            "Users Access Control Validator",
+            "root",
+            task=(
+                "Validate access control for http://host.docker.internal:3000/ "
+                "and GET /api/users."
+            ),
+        )
+        await coordinator.set_status("child-existing", "completed")
+        spawned: list[str] = []
+
+        async def spawner(**kwargs):
+            spawned.append(kwargs["name"])
+            await coordinator.register("child-new", kwargs["name"], "root")
+            return {"success": True, "agent_id": "child-new", "name": kwargs["name"]}
+
+        ctx = ToolContext(
+            context={
+                "agent_id": "root",
+                "parent_id": "parent",
+                "coordinator": coordinator,
+                "spawn_child_agent": spawner,
+                "state_dir": str(tmp_path),
+            },
+            tool_name="create_agent",
+            tool_call_id="call-agent",
+            tool_arguments="{}",
+        )
+        allowed = await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({
+                "name": "Orders Access Control Validator",
+                "task": (
+                    "Validate access control for http://host.docker.internal:3000/ "
+                    "and GET /api/orders."
+                ),
+            }),
+        )
+        return json.loads(allowed), spawned
+
+    result, spawned = asyncio.run(run())
+
+    assert result["success"] is True
+    assert spawned == ["Orders Access Control Validator"]
+
+
+def test_create_agent_rejects_reporter_when_vulnerability_already_reported(tmp_path):
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    (tmp_path / "vulnerabilities.json").write_text(
+        json.dumps([
+            {
+                "id": "vuln-1",
+                "title": "SQL Injection in Product Search",
+                "endpoint": "http://target.local/rest/products/search",
+                "method": "GET",
+                "description": "The q parameter is vulnerable to SQL injection.",
+            }
+        ]),
+        encoding="utf-8",
+    )
+
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+
+        async def spawner(**kwargs):
+            raise AssertionError("reported duplicate should be rejected before spawning")
+
+        ctx = ToolContext(
+            context={
+                "agent_id": "root",
+                "coordinator": coordinator,
+                "spawn_child_agent": spawner,
+                "state_dir": str(state_dir),
+            },
+            tool_name="create_agent",
+            tool_call_id="call-agent",
+            tool_arguments="{}",
+        )
+        blocked = await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({
+                "name": "Search SQLi Reporter",
+                "task": "Create a report for GET /rest/products/search SQLi evidence.",
+            }),
+        )
+        return json.loads(blocked)
+
+    result = asyncio.run(run())
+
+    assert result["success"] is False
+    assert result["existing_vulnerability"]["id"] == "vuln-1"
+    assert result["existing_vulnerability"]["matched_targets"] == ["/rest/products/search"]
+    assert "already covers this target and risk area" in result["error"]
+
+
+def test_create_agent_allows_reported_endpoint_different_risk_topic(tmp_path):
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    (state_dir / "attack_surface.json").write_text(
+        json.dumps([
+            {
+                "surface_id": "as-search",
+                "kind": "api_endpoint",
+                "method": "GET",
+                "url": "http://target.local/rest/products/search",
+                "parameters": ["q"],
+            }
+        ]),
+        encoding="utf-8",
+    )
+    (state_dir / "hypotheses.json").write_text(
+        json.dumps([
+            {
+                "hypothesis_id": "hyp-search-sqli",
+                "surface_id": "as-search",
+                "endpoint": "GET http://target.local/rest/products/search",
+                "method": "GET",
+                "parameter": "q",
+                "vuln_type": "sql_injection",
+                "status": "planned",
+            }
+        ]),
+        encoding="utf-8",
+    )
+    (tmp_path / "vulnerabilities.json").write_text(
+        json.dumps([
+            {
+                "id": "vuln-1",
+                "title": "SQL Injection in Product Search",
+                "endpoint": "http://target.local/rest/products/search",
+                "method": "GET",
+                "description": "The q parameter is vulnerable to SQL injection.",
+            }
+        ]),
+        encoding="utf-8",
+    )
+
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        spawned: list[str] = []
+
+        async def spawner(**kwargs):
+            spawned.append(kwargs["name"])
+            await coordinator.register("child-xss", kwargs["name"], "root")
+            return {"success": True, "agent_id": "child-xss", "name": kwargs["name"]}
+
+        ctx = ToolContext(
+            context={
+                "agent_id": "root",
+                "coordinator": coordinator,
+                "spawn_child_agent": spawner,
+                "state_dir": str(state_dir),
+            },
+            tool_name="create_agent",
+            tool_call_id="call-agent",
+            tool_arguments="{}",
+        )
+        allowed = await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({
+                "name": "Search XSS Validator",
+                "task": "Validate reflected XSS behavior on GET /rest/products/search.",
+            }),
+        )
+        return json.loads(allowed), spawned
+
+    result, spawned = asyncio.run(run())
+
+    assert result["success"] is True
+    assert spawned == ["Search XSS Validator"]
+
+
+def test_create_agent_does_not_block_different_injection_family_on_generic_term(tmp_path):
+    state_dir = tmp_path / ".state"
+    state_dir.mkdir()
+    (state_dir / "attack_surface.json").write_text(
+        json.dumps([
+            {
+                "surface_id": "as-tool",
+                "kind": "api_endpoint",
+                "method": "POST",
+                "url": "http://target.local/api/tool/run",
+                "parameters": ["command"],
+            }
+        ]),
+        encoding="utf-8",
+    )
+    (state_dir / "hypotheses.json").write_text(
+        json.dumps([
+            {
+                "hypothesis_id": "hyp-tool-sqli",
+                "surface_id": "as-tool",
+                "endpoint": "POST http://target.local/api/tool/run",
+                "method": "POST",
+                "parameter": "filter",
+                "vuln_type": "sql_injection",
+                "status": "planned",
+            }
+        ]),
+        encoding="utf-8",
+    )
+    (tmp_path / "vulnerabilities.json").write_text(
+        json.dumps([
+            {
+                "id": "vuln-1",
+                "title": "SQL Injection in Tool Runner",
+                "endpoint": "http://target.local/api/tool/run",
+                "method": "POST",
+                "description": "The filter parameter is vulnerable to SQL injection.",
+            }
+        ]),
+        encoding="utf-8",
+    )
+
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        spawned: list[str] = []
+
+        async def spawner(**kwargs):
+            spawned.append(kwargs["name"])
+            await coordinator.register("child-cmdi", kwargs["name"], "root")
+            return {"success": True, "agent_id": "child-cmdi", "name": kwargs["name"]}
+
+        ctx = ToolContext(
+            context={
+                "agent_id": "root",
+                "coordinator": coordinator,
+                "spawn_child_agent": spawner,
+                "state_dir": str(state_dir),
+            },
+            tool_name="create_agent",
+            tool_call_id="call-agent",
+            tool_arguments="{}",
+        )
+        allowed = await agent_tools.create_agent.on_invoke_tool(
+            ctx,
+            json.dumps({
+                "name": "Tool Command Injection Validator",
+                "task": "Validate command injection on POST /api/tool/run command parameter.",
+            }),
+        )
+        return json.loads(allowed), spawned
+
+    result, spawned = asyncio.run(run())
+
+    assert result["success"] is True
+    assert spawned == ["Tool Command Injection Validator"]
+
+
+def test_respawn_subagents_skips_terminal_children_on_interactive_resume(monkeypatch, tmp_path):
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        await coordinator.register("running-child", "Running Child", "root", task="Continue testing")
+        await coordinator.register("waiting-child", "Waiting Child", "root", task="Wait for message")
+        await coordinator.register("done-child", "Done Child", "root", task="Already done")
+        await coordinator.register("stopped-child", "Stopped Child", "root", task="Already stopped")
+        await coordinator.set_status("waiting-child", "waiting")
+        await coordinator.set_status("done-child", "completed")
+        await coordinator.set_status("stopped-child", "stopped")
+
+        started: list[tuple[str, bool]] = []
+
+        async def fake_start_child_runner(**kwargs):
+            started.append((kwargs["child_id"], kwargs["start_parked"]))
+
+        monkeypatch.setattr(execution_core, "_start_child_runner", fake_start_child_runner)
+        await execution_core.respawn_subagents(
+            coordinator=coordinator,
+            factory=lambda **kwargs: SimpleNamespace(**kwargs),
+            agents_db_path=tmp_path / "agents.db",
+            sessions_to_close=[],
+            run_config=SimpleNamespace(),
+            max_turns=10,
+            interactive=True,
+            parent_ctx={"agent_id": "root"},
+            root_id="root",
+        )
+        return started
+
+    started = asyncio.run(run())
+
+    assert started == [("running-child", False), ("waiting-child", True)]
+
+
+def test_spawn_child_agent_caps_narrow_task_turns(monkeypatch, tmp_path):
+    async def run(name: str, task: str, parent_max_turns: int = 200):
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+
+        started: list[int] = []
+
+        async def fake_start_child_runner(**kwargs):
+            started.append(kwargs["max_turns"])
+
+        monkeypatch.setattr(execution_core, "_start_child_runner", fake_start_child_runner)
+        result = await execution_core.spawn_child_agent(
+            coordinator=coordinator,
+            factory=lambda **kwargs: SimpleNamespace(**kwargs),
+            agents_db_path=tmp_path / "agents.db",
+            sessions_to_close=[],
+            run_config=SimpleNamespace(),
+            max_turns=parent_max_turns,
+            interactive=True,
+            parent_ctx={"agent_id": "root"},
+            name=name,
+            task=task,
+            skills=[],
+            parent_history=[],
+        )
+        return result, started
+
+    reporter, reporter_started = asyncio.run(run("Search SQLi Reporter", "Report the confirmed finding."))
+    validator, validator_started = asyncio.run(run("Search SQLi Validator", "Validate and reproduce the candidate."))
+    discovery, discovery_started = asyncio.run(run("Surface Discovery Agent", "Discover and test product flows."))
+    capped_by_parent, capped_started = asyncio.run(run("Search SQLi Validator", "Validate SQLi.", parent_max_turns=7))
+
+    assert reporter["max_turns"] == 12
+    assert reporter_started == [12]
+    assert validator["max_turns"] == 24
+    assert validator_started == [24]
+    assert discovery["max_turns"] == 48
+    assert discovery_started == [48]
+    assert capped_by_parent["max_turns"] == 7
+    assert capped_started == [7]
+
+
+def test_respawn_subagents_reapplies_task_shape_turn_caps(monkeypatch, tmp_path):
+    async def run():
+        coordinator = AgentCoordinator()
+        await coordinator.register("root", "root", None)
+        await coordinator.register("reporter", "Basket IDOR Reporter", "root", task="Report the confirmed IDOR finding.")
+        await coordinator.register("validator", "Basket IDOR Validator", "root", task="Validate and reproduce the IDOR candidate.")
+        await coordinator.register("discovery", "Workflow Discovery Agent", "root", task="Discover and test checkout flows.")
+
+        started: dict[str, int] = {}
+
+        async def fake_start_child_runner(**kwargs):
+            started[kwargs["child_id"]] = kwargs["max_turns"]
+
+        monkeypatch.setattr(execution_core, "_start_child_runner", fake_start_child_runner)
+        await execution_core.respawn_subagents(
+            coordinator=coordinator,
+            factory=lambda **kwargs: SimpleNamespace(**kwargs),
+            agents_db_path=tmp_path / "agents.db",
+            sessions_to_close=[],
+            run_config=SimpleNamespace(),
+            max_turns=200,
+            interactive=True,
+            parent_ctx={"agent_id": "root"},
+            root_id="root",
+        )
+        return started
+
+    started = asyncio.run(run())
+
+    assert started == {
+        "reporter": 12,
+        "validator": 24,
+        "discovery": 48,
+    }
 
 
 def test_root_top_level_todos_must_advance_one_phase_at_a_time(tmp_path):
@@ -3489,6 +5994,250 @@ def test_root_phase_done_requires_work_artifact_since_phase_start(tmp_path):
     assert blocked["success"] is False
     assert "without phase-linked work artifacts" in blocked["errors"][0]["error"]
     assert completed["success"] is True
+
+
+def test_root_matrix_phase_done_returns_inventory_readiness_warning(tmp_path):
+    async def run():
+        state_dir = tmp_path / ".state"
+        state_dir.mkdir()
+        todo_tools.hydrate_todos_from_disk(state_dir)
+        ctx = ToolContext(
+            context={"agent_id": "root", "parent_id": None, "state_dir": str(state_dir)},
+            tool_name="create_todo",
+            tool_call_id="call-todo",
+            tool_arguments="{}",
+        )
+        phase_title = "Phase 2: Hypothesis/Test Matrix"
+        created = json.loads(await todo_tools.create_todo.on_invoke_tool(
+            ctx,
+            json.dumps({"todos": [{"title": phase_title, "priority": "high"}]}),
+        ))
+        phase_id = created["created"][0]["todo_id"]
+        await todo_tools.update_todo.on_invoke_tool(
+            ctx,
+            json.dumps({"updates": [{"todo_id": phase_id, "status": "in_progress"}]}),
+        )
+        artifact_at = datetime.now(UTC).isoformat()
+        (state_dir / "attack_surface.json").write_text(json.dumps([{
+            "surface_id": "as-search",
+            "kind": "api_endpoint",
+            "url": "/search",
+            "method": "GET",
+            "phase": phase_title,
+            "created_at": artifact_at,
+            "updated_at": artifact_at,
+        }]), encoding="utf-8")
+        completed = json.loads(await todo_tools.mark_todo_done.on_invoke_tool(
+            ctx,
+            json.dumps({"todo_ids": [phase_id]}),
+        ))
+        return completed
+
+    completed = asyncio.run(run())
+
+    assert completed["success"] is True
+    assert completed["workflow_warnings"][0]["kind"] == "inventory_readiness"
+    assert completed["workflow_warnings"][0]["inventory_readiness"]["ready_for_testing"] is False
+
+
+def test_root_broad_testing_phase_done_returns_closed_matrix_warning(tmp_path):
+    async def run():
+        state_dir = tmp_path / ".state"
+        state_dir.mkdir()
+        (state_dir / "attack_surface.json").write_text(json.dumps([
+            {
+                "surface_id": "as-search",
+                "kind": "api_endpoint",
+                "url": "/search",
+                "method": "GET",
+            },
+            {
+                "surface_id": "as-account",
+                "kind": "api_endpoint",
+                "url": "/account",
+                "method": "GET",
+            },
+        ]), encoding="utf-8")
+        (state_dir / "coverage.json").write_text(json.dumps([{
+            "coverage_id": "cov-search",
+            "endpoint": "GET /search",
+            "vuln_type": "input_validation",
+            "status": "failed",
+            "evidence_ids": ["ev-search"],
+        }]), encoding="utf-8")
+        (state_dir / "evidence.json").write_text(json.dumps([{
+            "evidence_id": "ev-search",
+            "evidence_type": "http_trace",
+            "summary": "Search endpoint tested.",
+        }]), encoding="utf-8")
+        (state_dir / "hypotheses.json").write_text(json.dumps([{
+            "hypothesis_id": "hyp-search",
+            "surface_id": "as-search",
+            "endpoint": "GET /search",
+            "method": "GET",
+            "parameter": "q",
+            "vuln_type": "input_validation",
+            "status": "tested",
+            "coverage_ids": ["cov-search"],
+            "evidence_ids": ["ev-search"],
+        }]), encoding="utf-8")
+        todo_tools.hydrate_todos_from_disk(state_dir)
+        ctx = ToolContext(
+            context={"agent_id": "root", "parent_id": None, "state_dir": str(state_dir)},
+            tool_name="create_todo",
+            tool_call_id="call-todo",
+            tool_arguments="{}",
+        )
+        phase_title = "Phase 3: Discovery/Testing"
+        created = json.loads(await todo_tools.create_todo.on_invoke_tool(
+            ctx,
+            json.dumps({"todos": [{"title": phase_title, "priority": "high"}]}),
+        ))
+        phase_id = created["created"][0]["todo_id"]
+        await todo_tools.update_todo.on_invoke_tool(
+            ctx,
+            json.dumps({"updates": [{"todo_id": phase_id, "status": "in_progress"}]}),
+        )
+        artifact_at = datetime.now(UTC).isoformat()
+        coverage = json.loads((state_dir / "coverage.json").read_text(encoding="utf-8"))
+        coverage[0]["phase"] = phase_title
+        coverage[0]["created_at"] = artifact_at
+        coverage[0]["updated_at"] = artifact_at
+        (state_dir / "coverage.json").write_text(json.dumps(coverage), encoding="utf-8")
+        completed = json.loads(await todo_tools.mark_todo_done.on_invoke_tool(
+            ctx,
+            json.dumps({"todo_ids": [phase_id]}),
+        ))
+        return completed
+
+    completed = asyncio.run(run())
+
+    assert completed["success"] is True
+    assert completed["workflow_warnings"][0]["kind"] == "reporting_matrix_preflight"
+    assert completed["workflow_warnings"][0]["reporting_matrix_gate"]["surface_hypothesis_gap_count"] == 1
+
+
+def test_root_phase_done_ignores_terminal_child_assignments(tmp_path):
+    async def run():
+        state_dir = tmp_path / ".state"
+        state_dir.mkdir()
+        todo_tools.hydrate_todos_from_disk(state_dir)
+        ctx = ToolContext(
+            context={"agent_id": "root", "parent_id": None, "state_dir": str(state_dir)},
+            tool_name="create_todo",
+            tool_call_id="call-todo",
+            tool_arguments="{}",
+        )
+        created = json.loads(await todo_tools.create_todo.on_invoke_tool(
+            ctx,
+            json.dumps({"todos": [{"title": "Phase 3: Injection Testing", "priority": "high"}]}),
+        ))
+        phase_id = created["created"][0]["todo_id"]
+        started = json.loads(await todo_tools.update_todo.on_invoke_tool(
+            ctx,
+            json.dumps({"updates": [{"todo_id": phase_id, "status": "in_progress"}]}),
+        ))
+        todo_tools.create_bound_todo(
+            owner_agent_id="root",
+            title="SQLi Discovery Agent",
+            description="Test recorded search endpoint.",
+            priority="high",
+            linked_agent_id="child-sqli",
+            parent_todo_id=phase_id,
+        )
+        todo_tools.resolve_bound_todos(
+            linked_agent_id="child-sqli",
+            status="failed",
+            reason="Agent token budget exceeded",
+        )
+
+        persisted = json.loads((state_dir / "todos.json").read_text(encoding="utf-8"))
+        started_at = datetime.fromisoformat(
+            persisted["root"][phase_id]["started_at"].replace("Z", "+00:00"),
+        )
+        artifact_at = (started_at + timedelta(seconds=1)).isoformat()
+        (state_dir / "coverage.json").write_text(json.dumps([{
+            "coverage_id": "cov-1",
+            "endpoint": "GET /rest/products/search",
+            "parameter": "q",
+            "vuln_type": "sql_injection",
+            "status": "tried",
+            "result": "SQLi testing started.",
+            "phase": "Phase 3: Injection Testing",
+            "created_at": artifact_at,
+            "updated_at": artifact_at,
+        }]), encoding="utf-8")
+        completed = json.loads(await todo_tools.mark_todo_done.on_invoke_tool(
+            ctx,
+            json.dumps({"todo_ids": [phase_id]}),
+        ))
+        return started, completed
+
+    started, completed = asyncio.run(run())
+
+    assert started["success"] is True
+    assert completed["success"] is True
+
+
+def test_root_phase_done_requires_active_child_assignments_resolved(tmp_path):
+    async def run():
+        state_dir = tmp_path / ".state"
+        state_dir.mkdir()
+        todo_tools.hydrate_todos_from_disk(state_dir)
+        ctx = ToolContext(
+            context={"agent_id": "root", "parent_id": None, "state_dir": str(state_dir)},
+            tool_name="create_todo",
+            tool_call_id="call-todo",
+            tool_arguments="{}",
+        )
+        created = json.loads(await todo_tools.create_todo.on_invoke_tool(
+            ctx,
+            json.dumps({"todos": [{"title": "Phase 3: Injection Testing", "priority": "high"}]}),
+        ))
+        phase_id = created["created"][0]["todo_id"]
+        started = json.loads(await todo_tools.update_todo.on_invoke_tool(
+            ctx,
+            json.dumps({"updates": [{"todo_id": phase_id, "status": "in_progress"}]}),
+        ))
+        child_todo = todo_tools.create_bound_todo(
+            owner_agent_id="root",
+            title="SQLi Discovery Agent",
+            description="Test recorded search endpoint.",
+            priority="high",
+            linked_agent_id="child-sqli",
+            parent_todo_id=phase_id,
+        )
+        child_id = child_todo["todo_id"]
+
+        persisted = json.loads((state_dir / "todos.json").read_text(encoding="utf-8"))
+        started_at = datetime.fromisoformat(
+            persisted["root"][phase_id]["started_at"].replace("Z", "+00:00"),
+        )
+        artifact_at = (started_at + timedelta(seconds=1)).isoformat()
+        (state_dir / "coverage.json").write_text(json.dumps([{
+            "coverage_id": "cov-1",
+            "endpoint": "GET /rest/products/search",
+            "parameter": "q",
+            "vuln_type": "sql_injection",
+            "status": "tried",
+            "result": "SQLi testing started.",
+            "phase": "Phase 3: Injection Testing",
+            "created_at": artifact_at,
+            "updated_at": artifact_at,
+        }]), encoding="utf-8")
+        completed = json.loads(await todo_tools.mark_todo_done.on_invoke_tool(
+            ctx,
+            json.dumps({"todo_ids": [phase_id]}),
+        ))
+        return started, completed, child_id
+
+    started, completed, child_id = asyncio.run(run())
+
+    assert started["success"] is True
+    assert completed["success"] is False
+    assert "child-agent assignments" in completed["errors"][0]["error"]
+    assert completed["errors"][0]["child_assignments"][0]["todo_id"] == child_id
+    assert completed["errors"][0]["child_assignments"][0]["status"] == "in_progress"
 
 
 def test_create_agent_binds_existing_parent_todo(tmp_path):
@@ -3984,7 +6733,7 @@ def test_create_vulnerability_report_requires_attack_surface_and_coverage(monkey
             report_ctx,
             json.dumps(base),
         ))
-        await memory_tools.record_attack_surface.on_invoke_tool(
+        surface = json.loads(await memory_tools.record_attack_surface.on_invoke_tool(
             root_ctx,
             json.dumps({
                 "kind": "api_endpoint",
@@ -3992,12 +6741,12 @@ def test_create_vulnerability_report_requires_attack_surface_and_coverage(monkey
                 "method": "GET",
                 "evidence_ids": [root_evidence_id],
             }),
-        )
+        ))
         no_coverage = json.loads(await node3_tool.create_vulnerability_report.on_invoke_tool(
             report_ctx,
             json.dumps(base),
         ))
-        await memory_tools.record_coverage.on_invoke_tool(
+        coverage = json.loads(await memory_tools.record_coverage.on_invoke_tool(
             root_ctx,
             json.dumps({
                 "endpoint": "GET /sqli",
@@ -4005,6 +6754,21 @@ def test_create_vulnerability_report_requires_attack_surface_and_coverage(monkey
                 "status": "failed",
                 "evidence_ids": [root_evidence_id],
                 "result": "SQL injection confirmed",
+            }),
+        ))
+        await memory_tools.record_hypothesis.on_invoke_tool(
+            root_ctx,
+            json.dumps({
+                "surface_id": surface["surface"]["surface_id"],
+                "endpoint": "GET /sqli",
+                "method": "GET",
+                "parameter": "<none>",
+                "vuln_type": "sql_injection",
+                "hypothesis": "The SQL endpoint should be tested for injection.",
+                "test_strategy": "Send injection payloads and compare response behavior.",
+                "status": "tested",
+                "coverage_ids": [coverage["coverage"]["coverage_id"]],
+                "evidence_ids": [root_evidence_id],
             }),
         )
         valid = json.loads(await node3_tool.create_vulnerability_report.on_invoke_tool(
@@ -4024,6 +6788,133 @@ def test_create_vulnerability_report_requires_attack_surface_and_coverage(monkey
     assert no_coverage["workflow_gate"]["reason"] == "The reported endpoint does not have a meaningful coverage record"
     assert valid["success"] is True
     assert state.reports[0]["endpoint"] == "/sqli"
+
+
+def test_reporting_preflight_allows_specific_endpoint_during_testing_phase(tmp_path):
+    from strix.tools.workflow import reporting_preflight
+
+    async def run():
+        state_dir = tmp_path / ".state"
+        state_dir.mkdir()
+        (state_dir / "attack_surface.json").write_text(json.dumps([{
+            "surface_id": "as-sqli",
+            "kind": "api_endpoint",
+            "url": "/sqli",
+            "method": "GET",
+        }]), encoding="utf-8")
+        (state_dir / "coverage.json").write_text(json.dumps([{
+            "coverage_id": "cov-sqli",
+            "endpoint": "GET /sqli",
+            "vuln_type": "sql_injection",
+            "status": "passed",
+            "evidence_ids": ["ev-sqli"],
+        }]), encoding="utf-8")
+        (state_dir / "evidence.json").write_text(json.dumps([{
+            "evidence_id": "ev-sqli",
+            "evidence_type": "http_trace",
+            "summary": "SQL injection proof",
+        }]), encoding="utf-8")
+        (state_dir / "hypotheses.json").write_text(json.dumps([{
+            "hypothesis_id": "hyp-sqli",
+            "surface_id": "as-sqli",
+            "endpoint": "GET /sqli",
+            "method": "GET",
+            "parameter": "<none>",
+            "vuln_type": "sql_injection",
+            "status": "tested",
+            "coverage_ids": ["cov-sqli"],
+            "evidence_ids": ["ev-sqli"],
+        }]), encoding="utf-8")
+        todo_tools.hydrate_todos_from_disk(state_dir)
+        ctx = ToolContext(
+            context={"agent_id": "root", "parent_id": None, "state_dir": str(state_dir)},
+            tool_name="create_todo",
+            tool_call_id="call-todo",
+            tool_arguments="{}",
+        )
+        created = json.loads(await todo_tools.create_todo.on_invoke_tool(
+            ctx,
+            json.dumps({"todos": [
+                {"title": "Phase 3: Discovery/Testing", "priority": "high"},
+                {"title": "Phase 4: Validation/Reporting", "priority": "high"},
+            ]}),
+        ))
+        discovery_id = created["created"][0]["todo_id"]
+        await todo_tools.update_todo.on_invoke_tool(
+            ctx,
+            json.dumps({"updates": [{"todo_id": discovery_id, "status": "in_progress"}]}),
+        )
+        return reporting_preflight(state_dir, endpoint="/sqli", method="GET")
+
+    result = asyncio.run(run())
+
+    assert result["ok"] is True
+
+
+def test_reporting_preflight_allows_specific_endpoint_when_global_matrix_has_open_gaps(tmp_path):
+    from strix.tools.workflow import reporting_preflight
+
+    async def run():
+        state_dir = tmp_path / ".state"
+        state_dir.mkdir()
+        (state_dir / "attack_surface.json").write_text(json.dumps([
+            {
+                "surface_id": "as-sqli",
+                "kind": "api_endpoint",
+                "url": "/sqli",
+                "method": "GET",
+            },
+            {
+                "surface_id": "as-admin",
+                "kind": "api_endpoint",
+                "url": "/admin",
+                "method": "GET",
+            },
+        ]), encoding="utf-8")
+        (state_dir / "coverage.json").write_text(json.dumps([{
+            "coverage_id": "cov-sqli",
+            "endpoint": "GET /sqli",
+            "vuln_type": "sql_injection",
+            "status": "passed",
+            "evidence_ids": ["ev-sqli"],
+        }]), encoding="utf-8")
+        (state_dir / "evidence.json").write_text(json.dumps([{
+            "evidence_id": "ev-sqli",
+            "evidence_type": "http_trace",
+            "summary": "SQL injection proof",
+        }]), encoding="utf-8")
+        (state_dir / "hypotheses.json").write_text(json.dumps([{
+            "hypothesis_id": "hyp-sqli",
+            "surface_id": "as-sqli",
+            "endpoint": "GET /sqli",
+            "method": "GET",
+            "parameter": "<none>",
+            "vuln_type": "sql_injection",
+            "status": "tested",
+            "coverage_ids": ["cov-sqli"],
+            "evidence_ids": ["ev-sqli"],
+        }]), encoding="utf-8")
+        todo_tools.hydrate_todos_from_disk(state_dir)
+        ctx = ToolContext(
+            context={"agent_id": "root", "parent_id": None, "state_dir": str(state_dir)},
+            tool_name="create_todo",
+            tool_call_id="call-todo",
+            tool_arguments="{}",
+        )
+        created = json.loads(await todo_tools.create_todo.on_invoke_tool(
+            ctx,
+            json.dumps({"todos": [{"title": "Phase 4: Validation/Reporting", "priority": "high"}]}),
+        ))
+        validation_id = created["created"][0]["todo_id"]
+        await todo_tools.update_todo.on_invoke_tool(
+            ctx,
+            json.dumps({"updates": [{"todo_id": validation_id, "status": "in_progress"}]}),
+        )
+        return reporting_preflight(state_dir, endpoint="/sqli", method="GET")
+
+    result = asyncio.run(run())
+
+    assert result["ok"] is True
 
 
 def test_create_vulnerability_report_allows_specific_endpoint_when_unrelated_external_gap_exists(monkeypatch, tmp_path):
@@ -4082,7 +6973,7 @@ def test_create_vulnerability_report_allows_specific_endpoint_when_unrelated_ext
             validator_ctx,
             json.dumps({"evidence_type": "http_trace", "summary": "Validator reproduced SQL injection"}),
         ))["evidence_id"]
-        await memory_tools.record_attack_surface.on_invoke_tool(
+        surface = json.loads(await memory_tools.record_attack_surface.on_invoke_tool(
             root_ctx,
             json.dumps({
                 "kind": "api_endpoint",
@@ -4090,8 +6981,8 @@ def test_create_vulnerability_report_allows_specific_endpoint_when_unrelated_ext
                 "method": "GET",
                 "evidence_ids": [root_evidence_id],
             }),
-        )
-        await memory_tools.record_coverage.on_invoke_tool(
+        ))
+        coverage = json.loads(await memory_tools.record_coverage.on_invoke_tool(
             root_ctx,
             json.dumps({
                 "endpoint": "GET http://target.local/sqli",
@@ -4099,6 +6990,21 @@ def test_create_vulnerability_report_allows_specific_endpoint_when_unrelated_ext
                 "status": "passed",
                 "evidence_ids": [root_evidence_id],
                 "result": "SQL injection confirmed",
+            }),
+        ))
+        await memory_tools.record_hypothesis.on_invoke_tool(
+            root_ctx,
+            json.dumps({
+                "surface_id": surface["surface"]["surface_id"],
+                "endpoint": "GET http://target.local/sqli",
+                "method": "GET",
+                "parameter": "<none>",
+                "vuln_type": "sql_injection",
+                "hypothesis": "The SQL endpoint should be tested for injection.",
+                "test_strategy": "Send injection payloads and compare response behavior.",
+                "status": "tested",
+                "coverage_ids": [coverage["coverage"]["coverage_id"]],
+                "evidence_ids": [root_evidence_id],
             }),
         )
         report_ctx = ToolContext(
@@ -4137,7 +7043,7 @@ def test_create_vulnerability_report_allows_specific_endpoint_when_unrelated_ext
     assert state.reports[0]["endpoint"] == "/sqli"
 
 
-def test_create_vulnerability_report_requires_independent_validation(monkeypatch, tmp_path):
+def test_create_vulnerability_report_allows_direct_reporting_and_validates_optional_validation_refs(monkeypatch, tmp_path):
     from strix.tools.run_memory import tools as memory_tools
 
     state_dir = tmp_path / ".state"
@@ -4205,6 +7111,22 @@ def test_create_vulnerability_report_requires_independent_validation(monkeypatch
         ))
         assert surface["success"] is True
         assert coverage["success"] is True
+        hypothesis = json.loads(await memory_tools.record_hypothesis.on_invoke_tool(
+            root_ctx,
+            json.dumps({
+                "surface_id": surface["surface"]["surface_id"],
+                "endpoint": "GET /sqli",
+                "method": "GET",
+                "parameter": "<none>",
+                "vuln_type": "sql_injection",
+                "hypothesis": "The SQL endpoint should be tested for injection.",
+                "test_strategy": "Send injection payloads and compare response behavior.",
+                "status": "tested",
+                "coverage_ids": [coverage["coverage"]["coverage_id"]],
+                "evidence_ids": [root_evidence_id],
+            }),
+        ))
+        assert hypothesis["success"] is True
         report_ctx = ToolContext(
             context={"agent_id": "root", "state_dir": str(state_dir), "coordinator": coordinator},
             tool_name="create_vulnerability_report",
@@ -4226,7 +7148,7 @@ def test_create_vulnerability_report_requires_independent_validation(monkeypatch
             "cwe": "CWE-89",
             "evidence_ids": [root_evidence_id],
         }
-        missing_validation = json.loads(await node3_tool.create_vulnerability_report.on_invoke_tool(
+        direct_report = json.loads(await node3_tool.create_vulnerability_report.on_invoke_tool(
             report_ctx,
             json.dumps(base),
         ))
@@ -4254,23 +7176,22 @@ def test_create_vulnerability_report_requires_independent_validation(monkeypatch
                 "validation_evidence_ids": [validator_evidence_id],
             }),
         ))
-        return missing_validation, root_self_validation, wrong_owner_validation, valid, validator_evidence_id
+        return direct_report, root_self_validation, wrong_owner_validation, valid, validator_evidence_id
 
     monkeypatch.setattr("strix.report.dedupe.check_duplicate", fake_check_duplicate)
     monkeypatch.setattr("strix.report.state.get_global_report_state", lambda: state)
 
-    missing_validation, root_self_validation, wrong_owner_validation, valid, validator_evidence_id = asyncio.run(run_case())
+    direct_report, root_self_validation, wrong_owner_validation, valid, validator_evidence_id = asyncio.run(run_case())
 
-    assert missing_validation["success"] is False
-    assert any("validation_agent_id is required" in error for error in missing_validation["errors"])
-    assert any("validation_evidence_ids is required" in error for error in missing_validation["errors"])
+    assert direct_report["success"] is True
     assert root_self_validation["success"] is False
     assert any("subagent, not the root agent" in error for error in root_self_validation["errors"])
     assert wrong_owner_validation["success"] is False
     assert any("recorded by validation_agent_id" in error for error in wrong_owner_validation["errors"])
     assert valid["success"] is True
-    assert state.reports[0]["validation_agent_id"] == "validator"
-    assert state.reports[0]["validation_evidence_ids"] == [validator_evidence_id]
+    assert state.reports[0]["validation_agent_id"] is None
+    assert state.reports[1]["validation_agent_id"] == "validator"
+    assert state.reports[1]["validation_evidence_ids"] == [validator_evidence_id]
 
 
 def test_reporting_shim_rejects_unknown_evidence_ids(monkeypatch, tmp_path):
@@ -4714,10 +7635,46 @@ def test_system_prompt_uses_discovery_first_multi_agent_workflow():
     prompt = (NODE3 / "strix" / "agents" / "prompts" / "system_prompt.jinja").read_text(encoding="utf-8")
 
     assert "PHASE 2 - HYPOTHESIS-DRIVEN DISCOVERY & TESTING" in prompt
-    assert "Discovery/testing workstreams -> Candidate validation -> Reporting" in prompt
+    assert "Root mapping -> surface-bound discovery/testing subagents -> direct reporting for confirmed findings" in prompt
     assert "CREATE AGENTS FROM THE TEST MATRIX" in prompt
-    assert "Create new agents from recorded attack surfaces, planned hypotheses, candidate evidence" in prompt
+    assert "Create new agents from recorded attack surfaces, planned hypotheses, concrete candidate evidence" in prompt
+    assert "Once a specialist subagent has a scoped assignment, it owns testing, evidence collection, coverage, and reporting" in prompt
+    assert "create_agent(parent_todo_id=<current phase todo_id>)" in prompt
+    assert "workflow clusters" in prompt
+    assert "Do not let early findings collapse coverage" in prompt
+    assert "reported by the responsible specialist" in prompt
+    assert "Creating a vulnerability report does not complete the scan or the assigned testing work" in prompt
+    assert "Treat model context and token budget as assessment resources" in prompt
+    assert "DETECTION EXECUTION CONTRACT" in prompt
+    assert "use batch-first detection" in prompt
+    assert "compact result table" in prompt
+    assert "If `exec_command` returns process-running or empty output twice" in prompt
+    assert "Child failure is not test coverage" in prompt
+    assert "smaller failure-aware follow-up task" in prompt
+    assert "Failed memory/reporting tool calls are unresolved work" in prompt
+    assert "repair the arguments and retry immediately" in prompt
+    assert "Failed memory/reporting tool calls are unresolved assigned work" in prompt
+    assert "Prefer `list_memory(kind=\"summary\")` and the focused workflow/gap views" in prompt
+    assert "`inventory_readiness`" in prompt
+    assert "Use `list_memory(kind=\"inventory_readiness\")` as a planning check" in prompt
+    assert "simple response sampling as reconnaissance" in prompt
+    assert "Do not create subagents from the first interesting endpoint or early positive signal" in prompt
+    assert "Do not recognize a product, training app, framework, or endpoint" in prompt
+    assert "`list_memory(kind=\"workflow_clusters\")`" in prompt
+    assert "extra reporting subagents" in prompt
+    assert "REPORTING IS PART OF CONFIRMED WORK" in prompt
+    assert "The specialist that confirms a vulnerability should report it directly" in prompt
+    assert "DIRECT REPORTING AFTER VALIDATION" not in prompt
+    assert "Create a reporting agent" not in prompt
+    assert "ONLY REPORTING AGENTS" not in prompt
     assert "CREATE SPECIALIZED SUBAGENT for EACH vulnerability type" not in prompt
+    assert "Use EVERY available tool" not in prompt
+    assert "tried everything" not in prompt
+    assert "Try every possible combination" not in prompt
+    assert "PRIMARY TARGETS (Test ALL of these)" not in prompt
+    assert "PRIMARY RISK FAMILIES" in prompt
+    assert "Juice Shop" not in prompt
+    assert "benchmark" not in prompt.lower()
     assert "Found SQL injection hint?" not in prompt
     assert "SQL injection agent finds potential vulnerability in login form" not in prompt
 
@@ -4727,5 +7684,8 @@ def test_create_agent_guidance_shapes_discovery_before_validation():
 
     assert "Good discovery/testing tasks cite recorded endpoints" in source
     assert "Good validator tasks cite the candidate evidence" in source
+    assert "do not spawn a child just to file the report" in source
+    assert "Reporting-shaped agents should not spawn children" in source
+    assert "parent_todo_id" in source
     assert "prefer discovery/testing children built" in source
     assert "do not use validators as the first" in source

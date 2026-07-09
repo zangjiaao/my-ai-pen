@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from agents.lifecycle import RunHooks
 
+from strix.core.task_shape import classify_child_task_shape
 from strix.report.state import get_global_report_state
 
 
@@ -21,6 +22,15 @@ logger = logging.getLogger(__name__)
 
 class BudgetExceededError(RuntimeError):
     """Raised when the accumulated LLM cost reaches the configured budget."""
+
+
+class AgentTokenBudgetExceeded(RuntimeError):
+    """Raised when a narrow child task consumes far more tokens than its scope warrants."""
+
+
+_REPORTER_TOKEN_LIMIT = 300_000
+_VALIDATOR_TOKEN_LIMIT = 750_000
+_FOCUSED_CHILD_TOKEN_LIMIT = 1_500_000
 
 
 class ReportUsageHooks(RunHooks[dict[str, Any]]):
@@ -61,9 +71,68 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         except Exception:
             logger.exception("failed to record SDK usage for agent %s", agent_id)
 
+        _enforce_narrow_child_token_budget(
+            report_state=report_state,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            task=ctx.get("task"),
+            parent_id=ctx.get("parent_id"),
+        )
+
         if self._max_budget_usd is not None:
             cost = report_state.get_total_llm_cost()
             if cost >= self._max_budget_usd:
                 raise BudgetExceededError(
                     f"Token budget of ${self._max_budget_usd:.2f} exceeded (spent ${cost:.4f})"
                 )
+
+
+def _enforce_narrow_child_token_budget(
+    *,
+    report_state: Any,
+    agent_id: str,
+    agent_name: str | None,
+    task: Any,
+    parent_id: Any,
+) -> None:
+    """Stop runaway validation/reporting chains without constraining discovery work."""
+    if not isinstance(parent_id, str) or not parent_id:
+        return
+
+    text = f"{agent_name or ''} {task or ''}".lower()
+    shape = classify_child_task_shape(name=agent_name, task=task)
+    if shape == "reporting":
+        limit = _REPORTER_TOKEN_LIMIT
+    elif shape == "validation":
+        limit = _VALIDATOR_TOKEN_LIMIT
+    elif _is_broad_recon_or_orchestration_task(text):
+        return
+    else:
+        limit = _FOCUSED_CHILD_TOKEN_LIMIT
+        shape = "focused"
+
+    getter = getattr(report_state, "get_agent_llm_tokens", None)
+    if not callable(getter):
+        return
+    try:
+        total_tokens = int(getter(agent_id) or 0)
+    except Exception:
+        logger.exception("failed to read token total for agent %s", agent_id)
+        return
+    if total_tokens <= limit:
+        return
+
+    raise AgentTokenBudgetExceeded(
+        f"{shape} child agent {agent_name or agent_id} exceeded its token budget "
+        f"({total_tokens:,} > {limit:,}). Stop this narrow task and continue with "
+        "coverage-oriented work or a smaller follow-up task."
+    )
+
+
+def _is_broad_recon_or_orchestration_task(text: str) -> bool:
+    """Leave genuinely broad mapping/orchestration work to turn limits."""
+    if "root" in text or "orchestrat" in text or "coordinat" in text:
+        return True
+    recon_terms = ("recon", "reconnaissance", "crawl", "map", "mapping", "inventory", "sitemap")
+    broad_terms = ("entire", "whole", "all in-scope", "attack surface", "site-wide", "application-wide")
+    return any(term in text for term in recon_terms) and any(term in text for term in broad_terms)

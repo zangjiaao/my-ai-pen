@@ -49,6 +49,7 @@ from strix.tools.workflow import (
     sitemap_gate,
     sitemap_pagination_gaps_from_state,
     target_in_authorized_scope,
+    workflow_cluster_summary_for_state,
 )
 
 
@@ -638,10 +639,30 @@ async def working_directory(path: Path) -> AsyncIterator[None]:
 def build_instruction(task: dict[str, Any]) -> str:
     pieces = [
         str(task.get("instruction") or "").strip(),
-        "Run in coverage-first mode: map the authorized attack surface and plan endpoint/business-flow coverage before deep vulnerability validation.",
+        scan_mode_guidance(task.get("scan_mode")),
         "Avoid reporting negative or speculative findings as vulnerabilities.",
     ]
     return "\n\n".join(piece for piece in pieces if piece)
+
+
+def scan_mode_guidance(value: Any) -> str:
+    mode = str(value or "standard").strip().lower()
+    if mode not in {"quick", "standard", "deep"}:
+        mode = "standard"
+    if mode == "quick":
+        return (
+            "Run in quick mode: prioritize fast orientation and high-impact findings on the most obvious "
+            "authorized attack surfaces. Do not pretend quick mode provides full attack-surface coverage."
+        )
+    if mode == "deep":
+        return (
+            "Run in deep coverage-first mode: thoroughly map the authorized attack surface, build a "
+            "workflow and hypothesis/test matrix, and pursue broad plus deep validation before finalization."
+        )
+    return (
+        "Run in standard coverage-first mode: map the authorized attack surface and plan "
+        "endpoint/business-flow coverage before deep vulnerability validation."
+    )
 
 
 def should_forward_docker_pull_line(line: str) -> bool:
@@ -741,13 +762,19 @@ def _endpoint_target_variants(raw: Any) -> set[str]:
     normalized = _normalize_endpoint_target(value)
     variants = {normalized} if normalized else set()
     parsed = urlsplit(value)
+    path = parsed.path or ""
     if parsed.scheme and parsed.netloc:
-        path = parsed.path or "/"
+        path = path or "/"
         if path != "/":
             path = path.rstrip("/")
         path_key = urlunsplit(("", "", path, parsed.query, "")).lower()
         if path_key:
             variants.add(path_key)
+        variants.add(urlunsplit(("", "", path, "", "")).lower())
+    elif path:
+        if path != "/":
+            path = path.rstrip("/")
+        variants.add(urlunsplit(("", "", path, parsed.query, "")).lower())
         variants.add(urlunsplit(("", "", path, "", "")).lower())
     return variants
 
@@ -984,9 +1011,9 @@ def invalid_vulnerability_validations(
         validation_agent_id = str(item.get("validation_agent_id") or "").strip()
         validation_evidence_ids = _clean_evidence_ids(item.get("validation_evidence_ids"))
         reporting_agent_id = str(item.get("agent_id") or "").strip()
-        if not validation_agent_id:
-            problems.append("missing validation_agent_id")
-        else:
+        if not validation_agent_id and not validation_evidence_ids:
+            continue
+        if validation_agent_id:
             validation_agent = agents_by_id.get(validation_agent_id)
             if validation_agent is None:
                 problems.append("validation_agent_id not found in agent graph")
@@ -994,6 +1021,8 @@ def invalid_vulnerability_validations(
                 problems.append("validation_agent_id references root agent")
             if reporting_agent_id and validation_agent_id == reporting_agent_id:
                 problems.append("validation_agent_id matches reporting agent")
+        else:
+            problems.append("missing validation_agent_id")
         if not validation_evidence_ids:
             problems.append("missing validation_evidence_ids")
         else:
@@ -1134,13 +1163,16 @@ def completion_gate_for_run(run_dir: Path) -> dict[str, Any]:
         if str(item.get("coverage_id") or "").strip()
     }, evidence_by_id)
     discovered_surface_gaps = discovered_inventory_gaps(workflow_state, attack_surface)
+    workflow_clusters = workflow_cluster_summary_for_state(state_dir)
+    narrow_workflow_clusters = _completion_narrow_workflow_clusters(workflow_clusters)
     sitemap_pagination_gaps = sitemap_pagination_gaps_from_state(workflow_state)
     sitemap_expansion_gaps = sitemap_expansion_gaps_from_state(workflow_state)
     invalid_validations = invalid_vulnerability_validations(vulnerabilities, agents, evidence_by_id)
     unreported_confirmed = confirmed_coverage_without_reports(coverage, vulnerabilities)
     reasons: list[str] = []
+    warnings: list[str] = []
     if not workflow_sitemap_gate.get("ok"):
-        reasons.append(str(workflow_sitemap_gate.get("reason") or "sitemap workflow gate failed"))
+        warnings.append(str(workflow_sitemap_gate.get("reason") or "sitemap workflow gate failed"))
     if unfinished:
         reasons.append(f"{len(unfinished)} unresolved task(s)")
     if not attack_surface:
@@ -1148,7 +1180,9 @@ def completion_gate_for_run(run_dir: Path) -> dict[str, Any]:
     if attack_surface and not hypotheses:
         reasons.append("no hypothesis/test-matrix records")
     if surface_hypothesis_gap_list:
-        reasons.append(f"{len(surface_hypothesis_gap_list)} attack surface record(s) without hypothesis/test-matrix coverage")
+        warnings.append(
+            f"{len(surface_hypothesis_gap_list)} attack surface record(s) without hypothesis/test-matrix coverage"
+        )
     if hypothesis_gap_list:
         reasons.append(f"{len(hypothesis_gap_list)} unresolved hypothesis/test-matrix item(s)")
     if unlinked_coverage:
@@ -1156,22 +1190,25 @@ def completion_gate_for_run(run_dir: Path) -> dict[str, Any]:
     if not meaningful_coverage:
         reasons.append("no meaningful coverage records")
     if uncovered_surfaces:
-        reasons.append(f"{len(uncovered_surfaces)} attack surface record(s) without coverage")
+        warnings.append(f"{len(uncovered_surfaces)} attack surface record(s) without coverage")
     if discovered_surface_gaps:
-        reasons.append(f"{len(discovered_surface_gaps)} externally discovered endpoint(s) missing from attack surface")
+        warnings.append(f"{len(discovered_surface_gaps)} externally discovered endpoint(s) missing from attack surface")
+    if narrow_workflow_clusters:
+        warnings.append(
+            f"{len(narrow_workflow_clusters)} workflow cluster(s) still have untested suggested risk families"
+        )
     if sitemap_pagination_gaps:
-        reasons.append(f"{len(sitemap_pagination_gaps)} sitemap branch(es) with unenumerated pages")
+        warnings.append(f"{len(sitemap_pagination_gaps)} sitemap branch(es) with unenumerated pages")
     if sitemap_expansion_gaps:
-        reasons.append(f"{len(sitemap_expansion_gaps)} sitemap branch(es) with descendants not expanded")
+        warnings.append(f"{len(sitemap_expansion_gaps)} sitemap branch(es) with descendants not expanded")
     if unevidenced_findings:
         reasons.append(f"{len(unevidenced_findings)} finding(s) without evidence_ids")
     if missing_evidence_refs:
         reasons.append(f"{len(missing_evidence_refs)} missing evidence reference(s)")
     if invalid_validations:
-        reasons.append(f"{len(invalid_validations)} finding(s) without independent subagent validation")
+        reasons.append(f"{len(invalid_validations)} finding(s) with invalid validation references")
     if unreported_confirmed:
         reasons.append(f"{len(unreported_confirmed)} confirmed coverage record(s) without vulnerability report")
-    warnings: list[str] = []
     if ignored_unfinished:
         warnings.append(
             f"{len(ignored_unfinished)} unresolved task(s) ignored because their owner agent is terminal"
@@ -1211,10 +1248,52 @@ def completion_gate_for_run(run_dir: Path) -> dict[str, Any]:
         "unreported_confirmed_coverage": unreported_confirmed[:20],
         "unreported_confirmed_coverage_count": len(unreported_confirmed),
         "workflow_state": workflow_state,
+        "workflow_clusters": workflow_clusters,
+        "narrow_workflow_clusters": narrow_workflow_clusters[:20],
+        "narrow_workflow_cluster_count": len(narrow_workflow_clusters),
         "workflow_gate": workflow_sitemap_gate,
         "incomplete_reasons": reasons,
         "completion_warnings": warnings,
     }
+
+
+def _completion_narrow_workflow_clusters(workflow_clusters: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return workflow clusters whose recorded tests are too narrow to finish.
+
+    This is intentionally generic: it only uses observed attack surface,
+    recorded vuln families, and risk-family hints derived from surface shape.
+    It avoids target profiles, benchmark expectations, and fixed vuln counts.
+    """
+    clusters = workflow_clusters.get("clusters")
+    narrow = workflow_clusters.get("clusters_with_narrow_testing")
+    if not isinstance(clusters, list) or not isinstance(narrow, list):
+        return []
+    surface_clusters = [
+        item
+        for item in clusters
+        if isinstance(item, dict) and int(item.get("attack_surface_count") or 0) > 0
+    ]
+    # Avoid blocking tiny apps or scans that have not yet reached meaningful
+    # coverage; other completion gates handle those earlier lifecycle gaps.
+    if len(surface_clusters) < 3:
+        return []
+    covered_clusters = [
+        item
+        for item in surface_clusters
+        if int(item.get("coverage_count") or 0) > 0
+    ]
+    if len(covered_clusters) < 2:
+        return []
+    actionable = [
+        item
+        for item in narrow
+        if isinstance(item, dict)
+        and item.get("suggested_untested_families")
+        and item.get("tested_families")
+    ]
+    if len(actionable) < 2:
+        return []
+    return actionable
 
 
 def normalize_vulnerabilities_from_run(run_dir: Path) -> list[dict[str, Any]]:

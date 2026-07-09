@@ -223,9 +223,9 @@ def _validate_independent_validation(
     errors: list[str] = []
     clean_validation_agent_id = str(validation_agent_id or "").strip()
     if not clean_validation_agent_id:
-        errors.append("validation_agent_id is required and must reference an independent subagent")
+        errors.append("validation_agent_id is required when validation_evidence_ids are provided")
     if not validation_evidence_ids:
-        errors.append("validation_evidence_ids is required and must cite evidence recorded by the validation subagent")
+        errors.append("validation_evidence_ids is required when validation_agent_id is provided")
 
     graph = _agent_graph_from_context(coordinator=coordinator, state_dir=state_dir)
     by_id = {str(agent.get("id") or ""): agent for agent in graph if str(agent.get("id") or "").strip()}
@@ -431,7 +431,7 @@ async def _do_create(
                 + ", ".join(missing_validation_ids)
                 + ". The validation subagent must record evidence first and cite the returned IDs."
             )
-    if enforce_independent_validation:
+    if enforce_independent_validation or validation_agent_id or parsed_validation_evidence_ids:
         errors.extend(_validate_independent_validation(
             validation_agent_id=validation_agent_id,
             validation_evidence_ids=parsed_validation_evidence_ids,
@@ -459,6 +459,12 @@ async def _do_create(
 
     if errors:
         result: dict[str, Any] = {"success": False, "error": "Validation failed", "errors": errors}
+        if enforce_independent_validation:
+            result["guidance"] = (
+                "Independent validation is optional unless this tool was invoked in a mode that "
+                "explicitly requires it. Otherwise, cite direct evidence_ids from the agent that "
+                "confirmed the finding."
+            )
         if not workflow_gate.get("ok"):
             result["workflow_gate"] = workflow_gate
         return result
@@ -582,10 +588,10 @@ async def create_vulnerability_report(
 ) -> str:
     """File a confirmed vulnerability report.
 
-    Every confirmed finding must cite direct proof evidence_ids and an
-    independent validation subagent. Pass validation_agent_id for the subagent
-    that verified the issue, and validation_evidence_ids for evidence recorded
-    by that subagent.
+    Every confirmed finding should cite direct proof evidence_ids. The agent
+    that confirmed the issue can report it directly; a separate validation or
+    reporting subagent is optional and should be used only when it materially
+    improves confidence.
     """
     inner = ctx.context if isinstance(ctx.context, dict) else {}
     raw_agent_id = inner.get("agent_id")
@@ -618,7 +624,7 @@ async def create_vulnerability_report(
         validation_evidence_ids=validation_evidence_ids,
         state_dir=inner.get("state_dir"),
         coordinator=coordinator,
-        enforce_independent_validation=True,
+        enforce_independent_validation=False,
         agent_id=agent_id,
         agent_name=agent_name,
     )

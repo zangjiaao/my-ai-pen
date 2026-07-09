@@ -39,10 +39,10 @@ def resolve_prompt_skills(
     6. Whitebox-specific skills if applicable.
     """
     ordered: list[str] = list(requested or [])
-    ordered.append(f"scan_modes/{scan_mode}")
-    ordered.append("tooling/agent_browser")
-    ordered.append("tooling/python")
     if is_root:
+        ordered.append(f"scan_modes/{scan_mode}")
+        ordered.append("tooling/agent_browser")
+        ordered.append("tooling/python")
         ordered.append("coordination/root_agent")
     if is_whitebox:
         ordered.append("coordination/source_aware_whitebox")
@@ -91,6 +91,8 @@ def render_system_prompt(
             loaded_skill_names=list(skill_content.keys()),
             available_skills=get_available_skills(),
             interactive=interactive,
+            is_root=is_root,
+            scan_mode=scan_mode,
             system_prompt_context=system_prompt_context or {},
             **skill_content,
         )

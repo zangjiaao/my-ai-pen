@@ -14,7 +14,7 @@ from typing import Any
 from agents import RunContextWrapper, function_tool
 
 from strix.tools.run_memory.tools import attack_surface_from_file, coverage_from_file, evidence_from_file, hypotheses_from_file
-from strix.tools.workflow import is_recon_task
+from strix.tools.workflow import inventory_readiness_for_state, is_recon_task, reporting_matrix_preflight
 
 
 logger = logging.getLogger(__name__)
@@ -40,6 +40,8 @@ _GENERIC_TEST_MARKERS = (
     "session",
     "authorization",
 )
+_MATRIX_PHASE_TERMS = ("hypothesis", "matrix", "test planning", "planning")
+_BROAD_TESTING_PHASE_TERMS = ("discovery/testing", "discovery & testing", "testing batches")
 
 _PRIORITY_RANK = {"critical": 0, "high": 1, "normal": 2, "low": 3}
 
@@ -188,6 +190,16 @@ def _is_top_level_root_todo(todo: dict[str, Any]) -> bool:
     return not str(todo.get("linked_agent_id") or "").strip() and not str(todo.get("parent_todo_id") or "").strip()
 
 
+def _is_matrix_phase(todo: dict[str, Any]) -> bool:
+    title = str(todo.get("title") or "").strip().lower()
+    return bool(title and any(term in title for term in _MATRIX_PHASE_TERMS))
+
+
+def _is_broad_testing_phase(todo: dict[str, Any]) -> bool:
+    title = str(todo.get("title") or "").strip().lower()
+    return bool(title and any(term in title for term in _BROAD_TESTING_PHASE_TERMS))
+
+
 def _single_root_phase_transition_errors(
     agent_todos: dict[str, dict[str, Any]],
     updates: list[dict[str, Any]],
@@ -305,13 +317,50 @@ def _phase_work_artifacts_since(
     return recent
 
 
+def _unfinished_child_assignments_for_phase(
+    agent_todos: dict[str, dict[str, Any]],
+    parent_todo_id: str,
+) -> list[dict[str, Any]]:
+    unfinished: list[dict[str, Any]] = []
+    for todo_id, item in agent_todos.items():
+        if str(item.get("parent_todo_id") or "").strip() != str(parent_todo_id):
+            continue
+        if not _is_internal_child_tracking_todo(item):
+            continue
+        if str(item.get("status") or "").strip().lower() in TERMINAL_INTERNAL_STATUSES:
+            continue
+        unfinished.append({
+            "todo_id": todo_id,
+            "title": item.get("title"),
+            "status": item.get("status") or "pending",
+            "linked_agent_id": item.get("linked_agent_id"),
+        })
+    unfinished.sort(key=lambda item: _todo_sort_key({
+        **agent_todos.get(str(item.get("todo_id") or ""), {}),
+        "todo_id": str(item.get("todo_id") or ""),
+    }))
+    return unfinished
+
+
 def _root_phase_completion_error(
     todo_id: str,
     todo: dict[str, Any],
     state_dir: Path | None,
+    agent_todos: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     if state_dir is None or not _is_top_level_root_todo(todo):
         return None
+    child_assignments = _unfinished_child_assignments_for_phase(agent_todos or {}, todo_id)
+    if child_assignments:
+        return {
+            "todo_id": todo_id,
+            "error": (
+                "Root top-level scan phases cannot be marked done while child-agent "
+                "assignments under the phase are still active. Wait for those assignments "
+                "to finish, or stop/retry them before completing the phase."
+            ),
+            "child_assignments": child_assignments,
+        }
     started_at = _parse_time(todo.get("started_at"))
     if started_at is None:
         return None
@@ -328,6 +377,82 @@ def _root_phase_completion_error(
     }
 
 
+def _compact_root_phase_gate(value: dict[str, Any]) -> dict[str, Any]:
+    compact: dict[str, Any] = {}
+    count_keys = [
+        "ready_for_testing",
+        "ok",
+        "attack_surface_count",
+        "testable_surface_count",
+        "hypothesis_count",
+        "coverage_count",
+        "meaningful_coverage_count",
+        "uncovered_attack_surface_count",
+        "surface_hypothesis_gap_count",
+        "hypothesis_gap_count",
+        "coverage_without_hypothesis_count",
+        "external_discovery_gap_count",
+    ]
+    list_keys = [
+        "gaps",
+        "uncovered_attack_surfaces",
+        "surface_hypothesis_gaps",
+        "hypothesis_gaps",
+        "coverage_without_hypothesis",
+        "external_discovery_gaps",
+        "recommended_next_steps",
+    ]
+    for key in count_keys:
+        if key in value:
+            compact[key] = value.get(key)
+    for key in list_keys:
+        item = value.get(key)
+        if isinstance(item, list) and item:
+            compact[key] = item[:5]
+            if len(item) > 5:
+                compact[f"{key}_omitted_count"] = len(item) - 5
+        elif item:
+            compact[key] = item
+    return compact or value
+
+
+def _root_phase_completion_warnings(
+    todo_id: str,
+    todo: dict[str, Any],
+    state_dir: Path | None,
+) -> list[dict[str, Any]]:
+    if state_dir is None or not _is_top_level_root_todo(todo):
+        return []
+    warnings: list[dict[str, Any]] = []
+    if _is_matrix_phase(todo):
+        readiness = inventory_readiness_for_state(state_dir)
+        if not readiness.get("ready_for_testing"):
+            warnings.append({
+                "todo_id": todo_id,
+                "kind": "inventory_readiness",
+                "message": (
+                    "Inventory and hypothesis/test-matrix readiness still has gaps. "
+                    "Use this as planning input for the next testing batch; do not "
+                    "repeat mark_todo_done solely to clear this warning."
+                ),
+                "inventory_readiness": _compact_root_phase_gate(readiness),
+            })
+    if _is_broad_testing_phase(todo):
+        matrix_gate = reporting_matrix_preflight(state_dir)
+        if not matrix_gate.get("ok"):
+            warnings.append({
+                "todo_id": todo_id,
+                "kind": "reporting_matrix_preflight",
+                "message": (
+                    "The attack-surface/hypothesis/coverage matrix still has gaps. "
+                    "Use this as directional input for follow-up testing; do not "
+                    "loop on phase completion."
+                ),
+                "reporting_matrix_gate": _compact_root_phase_gate(matrix_gate),
+            })
+    return warnings
+
+
 def validate_todo_exists(*, owner_agent_id: str, todo_id: str) -> str:
     """Return a normalized todo ID if it exists for the owner."""
     clean_id = str(todo_id or "").strip()
@@ -336,6 +461,25 @@ def validate_todo_exists(*, owner_agent_id: str, todo_id: str) -> str:
     if clean_id not in _get_agent_todos(owner_agent_id):
         raise ValueError(f"Todo with ID '{clean_id}' not found")
     return clean_id
+
+
+def get_todo(*, owner_agent_id: str, todo_id: str) -> dict[str, Any] | None:
+    """Return a todo snapshot for an owner without mutating todo state."""
+    clean_id = str(todo_id or "").strip()
+    if not clean_id:
+        return None
+    todo = _get_agent_todos(owner_agent_id).get(clean_id)
+    if not isinstance(todo, dict):
+        return None
+    return {**todo, "todo_id": clean_id}
+
+
+def _todo_status_summary(agent_todos: dict[str, dict[str, Any]]) -> dict[str, int]:
+    summary: dict[str, int] = {"pending": 0, "in_progress": 0, "done": 0}
+    for todo in agent_todos.values():
+        status = str(todo.get("status") or "pending").strip().lower()
+        summary[status] = summary.get(status, 0) + 1
+    return summary
 
 
 def create_bound_todo(
@@ -756,8 +900,8 @@ async def create_todo(ctx: RunContextWrapper, todos: Any) -> str:
             "success": True,
             "created": created,
             "created_count": len(created),
-            "todos": _sorted_todos(agent_id),
             "total_count": len(_get_agent_todos(agent_id)),
+            "summary": _todo_status_summary(_get_agent_todos(agent_id)),
         },
         ensure_ascii=False,
         default=str,
@@ -770,10 +914,11 @@ async def list_todos(
     status: str | None = None,
     priority: str | None = None,
 ) -> str:
-    """List the current agent's todos, sorted by status then priority.
+    """List the current agent's todos in stable plan order.
 
-    Sort order: status (done → in_progress → pending), then priority
-    within each status (critical → high → normal → low).
+    Sort order follows the todo ``order_index`` assigned at creation, then
+    creation time and todo id. Status changes do not move completed items to
+    the bottom.
 
     Args:
         status: Filter — ``"pending"`` / ``"in_progress"`` / ``"done"``.
@@ -882,8 +1027,8 @@ async def update_todo(ctx: RunContextWrapper, updates: Any) -> str:
                     "success": False,
                     "updated": [],
                     "updated_count": 0,
-                    "todos": _sorted_todos(agent_id),
                     "total_count": len(agent_todos),
+                    "summary": _todo_status_summary(agent_todos),
                     "errors": root_phase_errors,
                 },
                 ensure_ascii=False,
@@ -903,6 +1048,7 @@ async def update_todo(ctx: RunContextWrapper, updates: Any) -> str:
                     upd["todo_id"],
                     existing,
                     state_dir,
+                    agent_todos,
                 )
                 if completion_error:
                     errors.append(completion_error)
@@ -929,8 +1075,8 @@ async def update_todo(ctx: RunContextWrapper, updates: Any) -> str:
         "success": len(errors) == 0,
         "updated": updated,
         "updated_count": len(updated),
-        "todos": _sorted_todos(agent_id),
         "total_count": len(agent_todos),
+        "summary": _todo_status_summary(agent_todos),
     }
     if errors:
         response["errors"] = errors
@@ -967,8 +1113,8 @@ def _mark(
                     "marked": [],
                     "marked_count": 0,
                     "new_status": new_status,
-                    "todos": _sorted_todos(agent_id),
                     "total_count": len(agent_todos),
+                    "summary": _todo_status_summary(agent_todos),
                     "errors": root_phase_errors,
                 },
                 ensure_ascii=False,
@@ -977,6 +1123,7 @@ def _mark(
 
         marked: list[str] = []
         errors: list[dict[str, Any]] = []
+        workflow_warnings: list[dict[str, Any]] = []
         timestamp = datetime.now(UTC).isoformat()
         for tid in ids:
             if tid not in agent_todos:
@@ -991,10 +1138,11 @@ def _mark(
                 })
                 continue
             if root_agent and new_status == "done":
-                completion_error = _root_phase_completion_error(tid, todo, state_dir)
+                completion_error = _root_phase_completion_error(tid, todo, state_dir, agent_todos)
                 if completion_error:
                     errors.append(completion_error)
                     continue
+                workflow_warnings.extend(_root_phase_completion_warnings(tid, todo, state_dir))
             todo["status"] = new_status
             todo["completed_at"] = timestamp if new_status == "done" else None
             if new_status == "pending":
@@ -1013,11 +1161,13 @@ def _mark(
         "marked": marked,
         "marked_count": len(marked),
         "new_status": new_status,
-        "todos": _sorted_todos(agent_id),
         "total_count": len(agent_todos),
+        "summary": _todo_status_summary(agent_todos),
     }
     if errors:
         response["errors"] = errors
+    if workflow_warnings:
+        response["workflow_warnings"] = workflow_warnings
     return json.dumps(response, ensure_ascii=False, default=str)
 
 
@@ -1112,8 +1262,8 @@ async def delete_todo(ctx: RunContextWrapper, todo_ids: Any) -> str:
         "deleted_count": len(archived),
         "archived": archived,
         "archived_count": len(archived),
-        "todos": _sorted_todos(agent_id),
         "total_count": len(agent_todos),
+        "summary": _todo_status_summary(agent_todos),
     }
     if errors:
         response["errors"] = errors

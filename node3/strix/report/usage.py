@@ -56,6 +56,12 @@ class LLMUsageLedger:
     def total_cost(self) -> float:
         return _round_cost(self._total_cost)
 
+    def agent_total_tokens(self, agent_id: str) -> int:
+        usage = self._agent_usage.get(str(agent_id or ""))
+        if usage is None:
+            return 0
+        return _resolve_total_tokens(usage)
+
     def to_record(self) -> dict[str, Any]:
         record = serialize_usage(self._total_usage)
         record["cost"] = _round_cost(self._total_cost)
