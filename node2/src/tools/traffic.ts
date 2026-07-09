@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ToolRuntime } from "../types.js";
 import { observeAttackSurface } from "../runtime/coverage-auditor.js";
+import { mergeSessionHeaders, rememberResponseCookies } from "../runtime/session-headers.js";
 import { emitToolEvidence, isInScope, jsonResult, resolveTargetUrl, textResult } from "./common.js";
 import { sendHttp } from "./http.js";
 
@@ -168,9 +169,10 @@ async function repeatTraffic(runtime: ToolRuntime, params: any) {
   const base = runtime.traffic.get(params.id);
   if (!base) return textResult(`error: traffic id not found: ${params.id}`);
   if (!isInScope(runtime, base.url)) throw new Error(`out of scope: ${base.url}`);
-  const headers = { ...(base.requestHeaders || {}), ...(params.headers || {}) };
+  const headers = mergeSessionHeaders(runtime, { ...(base.requestHeaders || {}), ...(params.headers || {}) });
   const body = params.body !== undefined ? params.body : base.requestBody;
   const result = await sendHttp({ method: base.method, url: base.url, headers, body, proxyUrl: runtime.trafficProxyUrl });
+  rememberResponseCookies(runtime, result.headers);
   const trafficId = runtime.traffic.add({
     source: "traffic.repeat",
     parentTrafficId: params.id,
@@ -194,9 +196,11 @@ async function mutateTraffic(runtime: ToolRuntime, params: any) {
   const mutations = { ...(params.mutations || {}) };
   if (params.param && params.value !== undefined) mutations[params.param] = String(params.value);
   if (!Object.keys(mutations).length) return textResult("error: mutate requires param/value or mutations");
-  const mutated = mutateRequest(base.url, base.requestBody, base.requestHeaders || {}, mutations);
+  const baseHeaders = mergeSessionHeaders(runtime, base.requestHeaders || {});
+  const mutated = mutateRequest(base.url, base.requestBody, baseHeaders, mutations);
   if (!isInScope(runtime, mutated.url)) throw new Error(`out of scope: ${mutated.url}`);
   const result = await sendHttp({ method: base.method, url: mutated.url, headers: mutated.headers, body: mutated.body, proxyUrl: runtime.trafficProxyUrl });
+  rememberResponseCookies(runtime, result.headers);
   const trafficId = runtime.traffic.add({
     source: "traffic.mutate",
     parentTrafficId: params.id,

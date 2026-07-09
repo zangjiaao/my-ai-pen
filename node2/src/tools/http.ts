@@ -7,6 +7,7 @@ import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ToolRuntime } from "../types.js";
 import { observeAttackSurface } from "../runtime/coverage-auditor.js";
+import { mergeSessionHeaders, rememberResponseCookies } from "../runtime/session-headers.js";
 import { emitToolEvidence, isInScope, jsonResult, resolveTargetUrl } from "./common.js";
 
 const MAX_BODY_CHARS = 256 * 1024;
@@ -31,12 +32,14 @@ export function createHttpTool(runtime: ToolRuntime): ToolDefinition<any> {
       const method = (params.method || "GET").toUpperCase();
       const url = resolveTargetUrl(runtime, params.url);
       if (!isInScope(runtime, url)) throw new Error(`out of scope: ${url}`);
-      const result = await sendHttp({ method, url, headers: params.headers || {}, body: params.body, proxyUrl: runtime.trafficProxyUrl });
+      const headers = mergeSessionHeaders(runtime, params.headers || {});
+      const result = await sendHttp({ method, url, headers, body: params.body, proxyUrl: runtime.trafficProxyUrl });
+      rememberResponseCookies(runtime, result.headers);
       const trafficId = runtime.traffic.add({
         method,
         url,
         status: result.status,
-        requestHeaders: params.headers || {},
+        requestHeaders: headers,
         requestBody: params.body,
         responseHeaders: result.headers,
         responseBody: result.body,

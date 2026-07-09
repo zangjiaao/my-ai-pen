@@ -147,13 +147,22 @@ type ScoredResult = {
   confirmedVulnRate: number;
   reportedRate: number;
   observedRate: number;
+  /** observed modules that became confirmed / observed modules */
+  observedToConfirmedRate: number;
   confirmedVulnModules: string[];
   reportedModules: string[];
   observedModules: string[];
   missingConfirmedVulns: string[];
   missingReported: string[];
   observedButUnconfirmed: string[];
+  missList: string[];
   findings: Array<{ title: string; severity?: string; location?: string; modules: string[]; confirmedVulnerability: boolean }>;
+  conversion?: {
+    observedCount: number;
+    confirmedCount: number;
+    observedToConfirmedRate: number;
+    missList: string[];
+  };
 };
 
 function scoreSummary(summary: any, source: string): ScoredSummary {
@@ -186,6 +195,8 @@ function scoreResult(result: any): ScoredResult {
   const missingConfirmedVulns = expectedIds.filter((id) => !confirmedVulnModules.includes(id));
   const missingReported = expectedIds.filter((id) => !reportedModules.includes(id));
   const observedButUnconfirmed = observedModules.filter((id) => !confirmedVulnModules.includes(id));
+  const observedToConfirmedRate = percent(confirmedVulnModules.length, observedModules.length);
+  const missList = observedButUnconfirmed.length ? observedButUnconfirmed : missingConfirmedVulns;
 
   return {
     level: String(result?.level || ""),
@@ -200,13 +211,21 @@ function scoreResult(result: any): ScoredResult {
     confirmedVulnRate: percent(confirmedVulnModules.length, expectedIds.length),
     reportedRate: percent(reportedModules.length, expectedIds.length),
     observedRate: percent(observedModules.length, expectedIds.length),
+    observedToConfirmedRate,
     confirmedVulnModules,
     reportedModules,
     observedModules,
     missingConfirmedVulns,
     missingReported,
     observedButUnconfirmed,
+    missList,
     findings: scoredFindings,
+    conversion: {
+      observedCount: observedModules.length,
+      confirmedCount: confirmedVulnModules.length,
+      observedToConfirmedRate,
+      missList,
+    },
   };
 }
 
@@ -244,6 +263,7 @@ function aggregateReports(reports: ScoredSummary[]): Record<string, unknown> {
     averageConfirmedVulnRate: average(results.map((result) => result.confirmedVulnRate)),
     averageReportedRate: average(results.map((result) => result.reportedRate)),
     averageObservedRate: average(results.map((result) => result.observedRate)),
+    averageObservedToConfirmedRate: average(results.map((result) => result.observedToConfirmedRate)),
     byLevel: Object.fromEntries(
       ["low", "medium", "high"].map((level) => {
         const rows = results.filter((result) => result.level === level);
@@ -254,9 +274,12 @@ function aggregateReports(reports: ScoredSummary[]): Record<string, unknown> {
             bestConfirmedVulnRate: rows.length ? Math.max(...rows.map((row) => row.confirmedVulnRate)) : 0,
             bestReportedRate: rows.length ? Math.max(...rows.map((row) => row.reportedRate)) : 0,
             bestObservedRate: rows.length ? Math.max(...rows.map((row) => row.observedRate)) : 0,
+            bestObservedToConfirmedRate: rows.length ? Math.max(...rows.map((row) => row.observedToConfirmedRate)) : 0,
             latestConfirmedVulnRate: rows.at(-1)?.confirmedVulnRate || 0,
             latestReportedRate: rows.at(-1)?.reportedRate || 0,
             latestObservedRate: rows.at(-1)?.observedRate || 0,
+            latestObservedToConfirmedRate: rows.at(-1)?.observedToConfirmedRate || 0,
+            latestMissList: rows.at(-1)?.missList || [],
           },
         ];
       }),
@@ -269,7 +292,7 @@ function printConsole(report: any, output: string): void {
   for (const summary of report.summaries as ScoredSummary[]) {
     for (const result of summary.results) {
       console.log(
-        `${result.level}: confirmedVulns=${result.confirmedVulnerabilities}/${result.expected} (${result.confirmedVulnRate}%) reported=${result.reported}/${result.expected} (${result.reportedRate}%) observed=${result.observed}/${result.expected} (${result.observedRate}%) missingVulns=${result.missingConfirmedVulns.join(", ") || "none"}`,
+        `${result.level}: confirmedVulns=${result.confirmedVulnerabilities}/${result.expected} (${result.confirmedVulnRate}%) reported=${result.reported}/${result.expected} (${result.reportedRate}%) observed=${result.observed}/${result.expected} (${result.observedRate}%) observed→confirmed=${result.observedToConfirmedRate}% missingVulns=${result.missingConfirmedVulns.join(", ") || "none"} missList=${result.missList.join(", ") || "none"}`,
       );
     }
   }

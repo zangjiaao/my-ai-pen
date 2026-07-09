@@ -2,6 +2,12 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import {
+  conversionMetrics,
+  finishCompletedEligibility,
+  formatCandidate,
+  nextVerifyGuidance,
+} from "../runtime/detection-conversion.js";
 import type { FinishScanState, PlatformMessage, ToolRuntime } from "../types.js";
 import { emitPlanUpdate, jsonResult, textResult } from "./common.js";
 
@@ -16,8 +22,8 @@ export function createFinishScanTool(runtime: ToolRuntime): ToolDefinition<any> 
     promptSnippet: "Finish the scan lifecycle with a final status and concise report",
     promptGuidelines: [
       "Call finish_scan exactly once when the scan is ready to end.",
-      "Use status='completed' only after pentest-web completed, tools are idle, and all confirmed findings have valid evidence_ids.",
-      "Use status='incomplete' or status='blocked' when login, scope, tooling, time, or runtime gates prevent completion.",
+      "Use status='completed' only after high-priority observed coverage candidates were verified or explicitly blocked/skipped, tools are idle, and confirmed findings have valid evidence_ids.",
+      "Use status='incomplete' or status='blocked' when login, scope, tooling, time, or remaining untested high-priority candidates prevent completion.",
       "Include a concise summary, confirmed finding titles, coverage gaps, blockers, and evidence_ids that support the final report.",
     ],
     parameters: Type.Object({
@@ -41,6 +47,24 @@ export function createFinishScanTool(runtime: ToolRuntime): ToolDefinition<any> 
       }
       if (missingEvidenceIds.length > 0) {
         return textResult(`error: evidence_ids not found: ${missingEvidenceIds.join(", ")}`);
+      }
+
+      const coverageRows = await runtime.coverage.list();
+      const eligibility = finishCompletedEligibility(coverageRows, {
+        status,
+        confirmedFindings: stringArray(params.confirmed_findings),
+      });
+      if (status === "completed" && !eligibility.allowed) {
+        const metrics = conversionMetrics(coverageRows);
+        return jsonResult({
+          ok: false,
+          blocked: true,
+          error: "finish_scan(completed) rejected: high-priority observed candidates remain untested",
+          reason: eligibility.reason,
+          untested_high_priority: eligibility.untestedHighPriority.map(formatCandidate),
+          conversion: metrics,
+          guidance: nextVerifyGuidance(eligibility.untestedHighPriority, evidenceIds),
+        });
       }
 
       const state: FinishScanState = {
@@ -73,7 +97,17 @@ export function createFinishScanTool(runtime: ToolRuntime): ToolDefinition<any> 
       } as PlatformMessage);
       await emitPlanUpdate(runtime, "finish_scan");
 
-      return jsonResult({ ok: true, path, finish_scan: state }, { finishScanStatus: status });
+      const metrics = conversionMetrics(coverageRows);
+      return jsonResult(
+        {
+          ok: true,
+          path,
+          finish_scan: state,
+          conversion: metrics,
+          untested_high_priority: eligibility.untestedHighPriority.map(formatCandidate),
+        },
+        { finishScanStatus: status },
+      );
     },
   };
 }

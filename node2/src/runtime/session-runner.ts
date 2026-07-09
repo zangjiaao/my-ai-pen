@@ -17,6 +17,13 @@ import { createExternalTrafficSource } from "../traffic/external-source.js";
 import type { PlatformMessage, PlatformSink, TaskEnvelope, ToolRuntime } from "../types.js";
 import { PENTEST_TOOL_NAMES } from "../tools/index.js";
 import { startCaidoBridge } from "./caido-bridge.js";
+import {
+  conversionMetrics,
+  finishCompletedEligibility,
+  formatCandidate,
+  materialUntestedHighPriority,
+  nextVerifyGuidance,
+} from "./detection-conversion.js";
 import { createPentestExtension } from "./pentest-extension.js";
 import { buildSystemPrompt } from "./prompt.js";
 
@@ -307,10 +314,12 @@ function buildWorkflowFirstInstruction(task: TaskEnvelope): string {
     "Use browser/http/scan output to populate the unified traffic store. If an external traffic source is configured, call traffic(action='source_status') and traffic(action='sync') after browsing/scanning.",
     "Prefer scan for established tools such as httpx, katana, nuclei, nmap, ffuf, sqlmap, dalfox, arjun, wafw00f, and nikto; Node2 runs scanners only through the configured Strix-style scanner sandbox and reports the runner used.",
     "Treat scanner-created pending tests as prioritized leads: verify them with baseline/attack traffic and deterministic verifier/http evidence before finding(confirm).",
+    "After recon, call coverage(action='priority_candidates') or coverage(action='conversion') and convert high-priority observed candidates with verifier/scan/poc/traffic(mutate). Do not leave material high-priority rows as observed-only.",
     "Use verifier for supported classes when possible: upload confirmations require a retrievable marker, CSRF requires before/action/after state evidence, brute-force requires invalid/valid credential differential, and JavaScript-logic requires invalid/accepted server-side differential.",
+    "As soon as verifier returns confirmed=true with evidence_id, call finding(action='confirm') immediately with that evidence_id and full reproduction details.",
     "Then call traffic(action='analyze') or traffic(action='candidates') and establish baselines with traffic(action='repeat') before mutating requests with traffic(action='mutate').",
     "Choose vulnerability classes only after recon evidence or replayable traffic exists, then use Pi native skills, the PoC catalog, verifier, evidence, coverage, and finding tools.",
-    "When reporting is ready, call finish_scan(status='completed', ...) as the final lifecycle action. Use status='incomplete' or status='blocked' if runtime blockers remain.",
+    "When reporting is ready, call finish_scan(status='completed', ...) as the final lifecycle action. finish_scan(completed) is rejected while high-priority observed candidates remain untested; use incomplete/blocked if blockers remain.",
     "",
     "Original user instruction:",
     task.instruction || "Run an authorized web penetration test against the target and report confirmed findings, evidence, coverage gaps, and blockers.",
@@ -352,25 +361,29 @@ function completionGate(runtime: ToolRuntime): { canComplete: boolean; audit: Re
   };
 }
 
-function coverageCompletionAudit(runtime: ToolRuntime): { canComplete: boolean; summary: string; unresolved: unknown[] } {
+function coverageCompletionAudit(runtime: ToolRuntime): {
+  canComplete: boolean;
+  summary: string;
+  unresolved: unknown[];
+  conversion?: unknown;
+} {
   const rows = runtime.coverage.listSync?.() || [];
-  const unresolved = rows.filter(isUnresolvedCoverageRow).slice(0, 20);
-  if (!unresolved.length) return { canComplete: true, summary: "coverage resolved", unresolved };
+  const untested = materialUntestedHighPriority(rows);
+  const metrics = conversionMetrics(rows);
+  if (!untested.length) {
+    return {
+      canComplete: true,
+      summary: "high-priority coverage candidates resolved or absent",
+      unresolved: [],
+      conversion: metrics,
+    };
+  }
   return {
     canComplete: false,
-    summary: `${unresolved.length} observed/tried coverage item(s) still need confirmed, negative, blocked, or skipped resolution`,
-    unresolved,
+    summary: `${untested.length} high-priority observed candidate(s) still need verifier/scan/poc or blocked/skipped notes`,
+    unresolved: untested.slice(0, 20).map(formatCandidate),
+    conversion: metrics,
   };
-}
-
-function isUnresolvedCoverageRow(row: any): boolean {
-  const status = String(row?.status || "");
-  if (status !== "observed" && status !== "tried") return false;
-  const endpoint = String(row?.endpoint || "");
-  const vulnClass = String(row?.vulnClass || "");
-  if (!endpoint || !vulnClass) return false;
-  if (/\.(?:css|js|png|jpe?g|gif|ico|svg|woff2?)$/i.test(endpoint)) return false;
-  return !["unknown", "info", "technology"].includes(vulnClass);
 }
 
 function finishScanAudit(runtime: ToolRuntime): { canComplete: boolean; summary: string; finishScan?: unknown } {
@@ -380,6 +393,15 @@ function finishScanAudit(runtime: ToolRuntime): { canComplete: boolean; summary:
     return {
       canComplete: false,
       summary: `finish_scan requested ${finishScan.status}`,
+      finishScan,
+    };
+  }
+  const rows = runtime.coverage.listSync?.() || [];
+  const eligibility = finishCompletedEligibility(rows, { status: "completed" });
+  if (!eligibility.allowed) {
+    return {
+      canComplete: false,
+      summary: eligibility.reason,
       finishScan,
     };
   }
@@ -429,15 +451,16 @@ function completionGapPrompt(runtime: ToolRuntime, gate: { audit: Record<string,
   }
   if (coverage && !coverage.canComplete) {
     const unresolved = Array.isArray(coverage.unresolved) ? coverage.unresolved.slice(0, 12) : [];
+    const rows = runtime.coverage.listSync?.() || [];
+    const untested = materialUntestedHighPriority(rows);
     parts.push(
       [
         "",
-        "Coverage gate still has observed or tried attack-surface items without resolution.",
-        coverage.summary || "Unresolved coverage remains.",
-        "For each high-value item, either verify and confirm a finding with evidence, or mark coverage as passed/blocked/skipped with a concrete reason. Do not call finish_scan(status='completed') while these remain.",
-        ...unresolved.map((row) =>
-          `- ${String(row.endpoint || "")} param=${String(row.param || "-")} class=${String(row.vulnClass || "")} status=${String(row.status || "")} notes=${String(row.notes || "").slice(0, 180)}`,
-        ),
+        "Coverage conversion gate still has high-priority observed candidates without verification.",
+        coverage.summary || "Unresolved high-priority coverage remains.",
+        nextVerifyGuidance(untested),
+        "For each high-value item, run verifier/scan/poc/traffic(mutate) and either finding(confirm) with evidence, or mark coverage as tried/passed/failed/blocked/skipped with a concrete reason. finish_scan(status='completed') is rejected while these remain observed-only.",
+        ...unresolved.map((row) => `- ${typeof row === "string" ? row : formatCandidate(row as any)}`),
       ].join("\n"),
     );
   }
