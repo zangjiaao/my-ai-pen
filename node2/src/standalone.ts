@@ -75,13 +75,13 @@ async function main(): Promise<void> {
   const taskId = args["task-id"] || `node2-standalone-${Date.now()}`;
   const target = args.target || "http://localhost:8080";
   const scanMode = normalizeScanMode(args["scan-mode"]);
-  const dvwaSecurity = args["dvwa-security"] || "low";
+  const dvwaSecurity = args["dvwa-security"];
   const outputDir = resolve(args.output || config.workspaceDir);
-  const instruction = args.instruction || [
-    "Run an authorized web penetration test against the target.",
-    "Use the available workflow, Pi native skills, PoC catalog, and Node2 tools.",
-    `For DVWA, use credentials admin/password when login is required, set security level to ${dvwaSecurity} if the application exposes that option, and report confirmed findings, meaningful negatives, coverage gaps, and blockers.`,
-  ].join(" ");
+  const instruction = args.instruction || buildStandaloneInstruction({
+    scanMode,
+    target,
+    dvwaSecurity,
+  });
 
   const task: TaskEnvelope = {
     taskId,
@@ -115,6 +115,28 @@ function normalizeScanMode(value: string | undefined): ScanMode {
   const normalized = String(value || "standard").trim().toLowerCase();
   if (normalized === "quick" || normalized === "standard" || normalized === "deep") return normalized;
   throw new Error(`Unsupported --scan-mode "${value}". Use quick, standard, or deep.`);
+}
+
+function buildStandaloneInstruction(input: {
+  scanMode: ScanMode;
+  target: string;
+  dvwaSecurity?: string;
+}): string {
+  const parts = [
+    `Run an authorized web penetration test against ${input.target}.`,
+    "Use the available workflow, Pi native skills, PoC catalog, and Node2 tools.",
+    `Scan mode: ${input.scanMode}.`,
+    "Identify the application from observed responses; do not assume DVWA, Juice Shop, or any other lab app unless the target actually presents as one.",
+    "Use credentials only when the task provides them or when the application itself documents demo credentials.",
+    "Report confirmed findings with evidence, meaningful negatives, coverage gaps, and blockers.",
+  ];
+  // Optional DVWA-only hint — only when the operator explicitly sets --dvwa-security.
+  if (input.dvwaSecurity) {
+    parts.push(
+      `If and only if the target is DVWA, use credentials admin/password when login is required and set security level to ${input.dvwaSecurity} when that option is exposed.`,
+    );
+  }
+  return parts.join(" ");
 }
 
 try {

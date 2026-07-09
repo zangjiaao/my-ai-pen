@@ -6,16 +6,17 @@ import { observeAttackSurface } from "../runtime/coverage-auditor.js";
 import { emitToolEvidence, isInScope, jsonResult } from "./common.js";
 
 const SCANNERS: Record<string, { command: string; build: (p: Record<string, unknown>) => string[]; timeoutMs: number }> = {
-  nmap: { command: "nmap", timeoutMs: 10 * 60_000, build: (p) => compact(["-sV", String(p.target || ""), ...(asArray(p.args))]) },
-  httpx: { command: "httpx", timeoutMs: 5 * 60_000, build: (p) => compact(["-silent", "-json", "-u", String(p.target || ""), ...(asArray(p.args))]) },
-  katana: { command: "katana", timeoutMs: 8 * 60_000, build: (p) => compact(["-silent", "-jsonl", "-u", String(p.target || ""), ...(asArray(p.args))]) },
-  ffuf: { command: "ffuf", timeoutMs: 10 * 60_000, build: (p) => compact(["-u", String(p.url || p.target || ""), "-w", String(p.wordlist || ""), "-json", ...(asArray(p.args))]) },
-  nuclei: { command: "nuclei", timeoutMs: 12 * 60_000, build: (p) => compact(["-jsonl", "-u", String(p.target || ""), ...(asArray(p.args))]) },
-  sqlmap: { command: "sqlmap", timeoutMs: 15 * 60_000, build: (p) => compact(["-u", String(p.url || p.target || ""), "--batch", ...(asArray(p.args))]) },
-  dalfox: { command: "dalfox", timeoutMs: 10 * 60_000, build: (p) => compact(["url", String(p.url || p.target || ""), "--output", "stdout", ...(asArray(p.args))]) },
-  arjun: { command: "arjun", timeoutMs: 8 * 60_000, build: (p) => compact(["-u", String(p.url || p.target || ""), "-oJ", "-", ...(asArray(p.args))]) },
-  wafw00f: { command: "wafw00f", timeoutMs: 3 * 60_000, build: (p) => compact([String(p.target || ""), ...(asArray(p.args))]) },
-  nikto: { command: "nikto", timeoutMs: 12 * 60_000, build: (p) => compact(["-h", String(p.target || ""), ...(asArray(p.args))]) },
+  // Prefer normalized `target` (execute sets both url+target). Fall back to either field so agents can pass either name.
+  nmap: { command: "nmap", timeoutMs: 10 * 60_000, build: (p) => compact(["-sV", scannerTarget(p), ...(asArray(p.args))]) },
+  httpx: { command: "httpx", timeoutMs: 5 * 60_000, build: (p) => compact(["-silent", "-json", "-u", scannerTarget(p), ...(asArray(p.args))]) },
+  katana: { command: "katana", timeoutMs: 8 * 60_000, build: (p) => compact(["-silent", "-jsonl", "-u", scannerTarget(p), ...(asArray(p.args))]) },
+  ffuf: { command: "ffuf", timeoutMs: 10 * 60_000, build: (p) => compact(["-u", scannerTarget(p), "-w", String(p.wordlist || ""), "-json", ...(asArray(p.args))]) },
+  nuclei: { command: "nuclei", timeoutMs: 12 * 60_000, build: (p) => compact(["-jsonl", "-u", scannerTarget(p), ...(asArray(p.args))]) },
+  sqlmap: { command: "sqlmap", timeoutMs: 15 * 60_000, build: (p) => compact(["-u", scannerTarget(p), "--batch", ...(asArray(p.args))]) },
+  dalfox: { command: "dalfox", timeoutMs: 10 * 60_000, build: (p) => compact(["url", scannerTarget(p), "--output", "stdout", ...(asArray(p.args))]) },
+  arjun: { command: "arjun", timeoutMs: 8 * 60_000, build: (p) => compact(["-u", scannerTarget(p), "-oJ", "-", ...(asArray(p.args))]) },
+  wafw00f: { command: "wafw00f", timeoutMs: 3 * 60_000, build: (p) => compact([scannerTarget(p), ...(asArray(p.args))]) },
+  nikto: { command: "nikto", timeoutMs: 12 * 60_000, build: (p) => compact(["-h", scannerTarget(p), ...(asArray(p.args))]) },
 };
 
 export function createScanTool(runtime: ToolRuntime): ToolDefinition<any> {
@@ -43,7 +44,8 @@ export function createScanTool(runtime: ToolRuntime): ToolDefinition<any> {
       const target = String(params.url || params.target || "");
       if (!target) throw new Error("target or url is required");
       if (!isInScope(runtime, target)) throw new Error(`out of scope: ${target}`);
-      const argv = spec.build(params);
+      // Normalize so scanners that historically read only `target` still work when the agent passes `url`.
+      const argv = spec.build({ ...params, target, url: target });
       const timeoutMs = Math.min((params.timeout_seconds || spec.timeoutMs / 1000) * 1000, spec.timeoutMs);
       const execution = await runScanner(runtime, spec.command, argv, timeoutMs);
       const result = execution.result;
@@ -560,6 +562,10 @@ function stripFragment(url: string): string {
 
 function asArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function scannerTarget(params: Record<string, unknown>): string {
+  return String(params.target || params.url || "");
 }
 
 function compact(values: string[]): string[] {

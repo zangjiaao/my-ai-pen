@@ -77,6 +77,18 @@ export function sendHttp(input: {
     if (proxy) {
       headers.host = url.host;
     }
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(hardTimer);
+      fn();
+    };
+    // Hard deadline covers hung sockets and slow/never-ending bodies (socket inactivity alone is not enough).
+    const hardTimer = setTimeout(() => {
+      req.destroy(new Error("request timed out"));
+      finish(() => reject(new Error("request timed out")));
+    }, 60_000);
     const req = transport(
       requestUrl,
       {
@@ -89,28 +101,38 @@ export function sendHttp(input: {
       (res) => {
         const chunks: Buffer[] = [];
         let total = 0;
+        const complete = () => {
+          const responseHeaders: Record<string, string> = {};
+          for (const [key, value] of Object.entries(res.headers)) {
+            responseHeaders[key] = Array.isArray(value) ? value.join(", ") : String(value || "");
+          }
+          finish(() =>
+            resolve({
+              status: res.statusCode || 0,
+              statusText: res.statusMessage || "",
+              headers: responseHeaders,
+              body: Buffer.concat(chunks).toString("utf8"),
+            }),
+          );
+        };
         res.on("data", (chunk: Buffer) => {
           if (total >= MAX_BODY_CHARS) return;
           const remaining = MAX_BODY_CHARS - total;
           chunks.push(chunk.subarray(0, remaining));
           total += Math.min(chunk.length, remaining);
-        });
-        res.on("end", () => {
-          const headers: Record<string, string> = {};
-          for (const [key, value] of Object.entries(res.headers)) {
-            headers[key] = Array.isArray(value) ? value.join(", ") : String(value || "");
+          // Cap body and finish early so large/streaming responses cannot stall the agent.
+          if (total >= MAX_BODY_CHARS) {
+            res.removeAllListeners("data");
+            res.destroy();
+            complete();
           }
-          resolve({
-            status: res.statusCode || 0,
-            statusText: res.statusMessage || "",
-            headers,
-            body: Buffer.concat(chunks).toString("utf8"),
-          });
         });
+        res.on("end", complete);
+        res.on("error", (error: Error) => finish(() => reject(error)));
       },
     );
     req.on("timeout", () => req.destroy(new Error("request timed out")));
-    req.on("error", reject);
+    req.on("error", (error: Error) => finish(() => reject(error)));
     if (input.body) req.write(input.body);
     req.end();
   });
