@@ -5,7 +5,13 @@
 import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { PlatformMessage, ToolRuntime, WorkerRunRecord } from "../types.js";
-import { runWorkerSession, type WorkerLaunchContext } from "../runtime/worker-runner.js";
+import {
+  classifyWorkerOutcome,
+  planStatusForWorkerOutcome,
+  runWorkerSession,
+  type WorkerLaunchContext,
+  type WorkerOutcome,
+} from "../runtime/worker-runner.js";
 import { listWorkerRoles, resolveWorkerRole } from "../runtime/worker-roles.js";
 import { emitPlanUpdate, jsonResult, textResult } from "./common.js";
 
@@ -88,6 +94,7 @@ export function createWorkerTool(runtime: ToolRuntime): ToolDefinition<any> {
         const message = error instanceof Error ? error.message : String(error);
         result = {
           ok: false,
+          outcome: classifyWorkerOutcome(false, message),
           workerId,
           role: role.id,
           summary: "",
@@ -97,18 +104,23 @@ export function createWorkerTool(runtime: ToolRuntime): ToolDefinition<any> {
         };
       }
 
+      const outcome: WorkerOutcome = result.outcome || classifyWorkerOutcome(result.ok, result.error);
+      const planStatus = planStatusForWorkerOutcome(outcome);
       const endedAt = new Date().toISOString();
+      const outcomeLabel =
+        outcome === "completed" ? "done" : outcome === "timeout" ? "timeout" : outcome === "aborted" ? "aborted" : "failed";
+      const notesBody = (result.error || result.summary || "").slice(0, 420);
       runtime.plan.upsert({
         node_id: planNodeId,
-        title: `Worker ${role.id}: ${task.slice(0, 60)}`,
-        status: result.ok ? "done" : "failed",
+        title: `Worker ${role.id} [${outcomeLabel}]: ${task.slice(0, 50)}`,
+        status: planStatus,
         kind: "worker",
         level: "work_item",
         parent_id: "plan-objective-analysis-test-plan",
-        notes: (result.summary || result.error || "").slice(0, 500),
+        notes: `[${outcomeLabel}] ${notesBody}`.slice(0, 500),
         priority: 220,
         source: "worker",
-        result: result.ok ? "confirmed" : "inconclusive",
+        result: outcome === "completed" ? "confirmed" : outcome === "timeout" ? "blocked" : "inconclusive",
       });
 
       const runRecord: WorkerRunRecord = {
@@ -116,6 +128,7 @@ export function createWorkerTool(runtime: ToolRuntime): ToolDefinition<any> {
         role: result.role,
         task: task.slice(0, 400),
         ok: result.ok,
+        outcome,
         at: endedAt,
         durationMs: result.durationMs,
         toolCallCount: result.toolCallCount,
@@ -151,6 +164,8 @@ export function createWorkerTool(runtime: ToolRuntime): ToolDefinition<any> {
         role: result.role,
         role_label: role.label,
         ok: result.ok,
+        outcome,
+        status: planStatus,
         task: task.slice(0, 500),
         plan_node_id: planNodeId,
         tool_call_count: result.toolCallCount,
@@ -165,6 +180,7 @@ export function createWorkerTool(runtime: ToolRuntime): ToolDefinition<any> {
         worker_id: workerId,
         role: result.role,
         ok: result.ok,
+        outcome,
         tool_call_count: result.toolCallCount,
         duration_ms: result.durationMs,
       });
@@ -172,6 +188,8 @@ export function createWorkerTool(runtime: ToolRuntime): ToolDefinition<any> {
 
       return jsonResult({
         ok: result.ok,
+        outcome,
+        status: planStatus,
         worker_id: workerId,
         role: result.role,
         role_label: role.label,
@@ -183,7 +201,11 @@ export function createWorkerTool(runtime: ToolRuntime): ToolDefinition<any> {
         worker_runs: runtime.lifecycle.workerRuns?.length ?? 0,
         available_roles: roles.map((item) => ({ id: item.id, label: item.label, description: item.description })),
         next:
-          "Integrate worker findings into coverage/next_work; dispatch more packages or call finish_scan from the main agent when assess gates are satisfied.",
+          outcome === "timeout"
+            ? "Worker timed out. Re-dispatch a narrower package or finish remaining probes in the main session before finish_scan."
+            : outcome === "failed"
+              ? "Worker failed. Inspect error, re-dispatch or continue with http/verifier, then update coverage."
+              : "Integrate worker findings into coverage/next_work; dispatch more packages or call finish_scan only when assess gates are satisfied (use incomplete if work remains).",
       });
     },
   };

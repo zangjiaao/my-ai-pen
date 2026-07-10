@@ -441,19 +441,24 @@ export function buildPanelAgents(
     },
   ];
   for (const run of runtime.lifecycle.workerRuns || []) {
+    const outcome = run.outcome || (run.ok ? "completed" : /timed out|timeout/i.test(String(run.error || "")) ? "timeout" : "failed");
+    const panelStatus =
+      outcome === "completed" ? "completed" : outcome === "timeout" ? "timed_out" : outcome === "aborted" ? "stopped" : "failed";
     agents.push({
       id: run.workerId,
       name: `Worker ${run.role}`,
-      status: run.ok ? "completed" : "failed",
+      status: panelStatus,
       parent_id: "node2-main",
       task: run.task?.slice(0, 240) || "",
       skills: [],
       pending_count: 0,
       role: run.role,
       current_tool: "",
-      current_action: run.ok ? "done" : "failed",
+      current_action: outcome,
+      outcome,
       duration_ms: run.durationMs,
       tool_call_count: run.toolCallCount,
+      error: run.error,
     });
   }
   return agents;
@@ -489,7 +494,11 @@ function buildWorkflowFirstInstruction(task: TaskEnvelope): string {
     "Use browser/http/scan/actor/traffic/verifier/finding as appropriate to the chosen engagement.",
     "Prefer scan for established tools (httpx, katana, nuclei, nmap, ffuf, sqlmap, …) via the scanner sandbox when discovery is in scope.",
     "When verifier returns confirmed=true with evidence_id, call finding(action='confirm') immediately with that evidence_id.",
-    "Call finish_scan as the final lifecycle action. Completion gates follow the engagement of the workflow you ran (or explicit task.engagement).",
+    "Call finish_scan only when ready to end the lifecycle:",
+    "- status=completed only if high-priority coverage is resolved (tried/failed/passed or substantive skip/block notes) and assess multi-actor/surface gates are met.",
+    "- If material work remains, call finish_scan(status='incomplete') ONCE — do not spam finish_scan(completed) or bulk-skip to force completed.",
+    "- After a worker timeout/failed outcome, re-dispatch or continue live probes for that package before finishing.",
+    "Completion gates follow the engagement of the workflow you ran (or explicit task.engagement).",
     "",
     "Original user instruction:",
     task.instruction || "Run an authorized web security task against the target and report outcomes with evidence.",

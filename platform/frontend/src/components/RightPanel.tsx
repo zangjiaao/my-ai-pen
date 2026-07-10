@@ -508,15 +508,39 @@ function StrixTodoList({ items, running = false }: { items: PlanNode[]; running?
 function StrixTodoItem({ item }: { item: PlanNode }) {
   const status = normalizeTodoStatus(item.status);
   const Icon = todoStatusIcon(status);
+  const isWorker = String(item.kind || "") === "worker" || String(item.source || "") === "worker";
+  const workerBadge = isWorker ? workerOutcomeBadge(item) : null;
   return (
     <div className="flex min-w-0 items-start gap-2 rounded-md px-2 py-2 hover:bg-canvas-inset">
       <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${todoStatusIconClass(status)}`} />
       <div className="min-w-0 flex-1">
-        <p className={`break-words text-sm font-medium [overflow-wrap:anywhere] ${todoTitleClass(status)}`}>{String(item.title || "Untitled task")}</p>
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          <p className={`min-w-0 break-words text-sm font-medium [overflow-wrap:anywhere] ${todoTitleClass(status)}`}>{String(item.title || "Untitled task")}</p>
+          {workerBadge && (
+            <span className={`shrink-0 rounded-sm px-1.5 py-0.5 text-[10px] font-medium uppercase ${workerBadge.className}`}>{workerBadge.label}</span>
+          )}
+        </div>
         {item.notes && <p className="mt-0.5 break-words text-xs text-ink-muted [overflow-wrap:anywhere]">{clip(item.notes, 150)}</p>}
       </div>
     </div>
   );
+}
+
+function workerOutcomeBadge(item: PlanNode): { label: string; className: string } | null {
+  const notes = String(item.notes || "").toLowerCase();
+  const title = String(item.title || "").toLowerCase();
+  const status = String(item.status || "").toLowerCase();
+  if (status === "running") return { label: "running", className: "bg-status-running/15 text-status-running" };
+  if (/\[timeout\]|timed out|timeout/.test(notes) || /\[timeout\]/.test(title) || status === "blocked") {
+    return { label: "timeout", className: "bg-severity-high-subtle text-severity-high" };
+  }
+  if (status === "failed" || /\[failed\]|\[aborted\]/.test(notes)) {
+    return { label: status === "failed" && /abort/.test(notes) ? "aborted" : "failed", className: "bg-severity-critical-subtle text-severity-critical" };
+  }
+  if (status === "done" || status === "completed") {
+    return { label: "done", className: "bg-status-success/15 text-status-success" };
+  }
+  return { label: status || "pending", className: "bg-canvas-inset text-ink-secondary" };
 }
 
 function WorkflowPlan({ phases }: { phases: PhasePlan[]; running?: boolean }) {
@@ -1123,17 +1147,19 @@ function agentStatusLabel(status: string | undefined): string {
   if (normalized === "completed") return "done";
   if (normalized === "crashed") return "failed";
   if (normalized === "waiting") return "pending";
+  if (normalized === "timed_out" || normalized === "timeout") return "timeout";
   return normalized;
 }
 
 function isInterruptedAgentStatus(status: string): boolean {
-  return ["failed", "stopped", "interrupted", "canceled", "cancelled"].includes(status);
+  return ["failed", "stopped", "interrupted", "canceled", "cancelled", "timeout", "aborted"].includes(status);
 }
 
 function agentStatusDotClass(status: string | undefined): string {
   const normalized = agentStatusLabel(status);
   if (normalized === "running") return "bg-status-running";
   if (normalized === "pending") return "bg-[#d97706]";
+  if (normalized === "timeout") return "bg-severity-high";
   if (isInterruptedAgentStatus(normalized)) return "bg-severity-critical";
   if (normalized === "done") return "bg-status-success";
   return "bg-canvas-inset";
@@ -1143,6 +1169,7 @@ function agentStatusBadgeClass(status: string | undefined): string {
   const normalized = agentStatusLabel(status);
   if (normalized === "running") return "bg-status-running/10 text-status-running";
   if (normalized === "done") return "bg-status-success/10 text-status-success";
+  if (normalized === "timeout") return "bg-severity-high-subtle text-severity-high";
   if (isInterruptedAgentStatus(normalized)) return "bg-severity-critical-subtle text-severity-critical";
   if (normalized === "pending") return "bg-[#fff7ed] text-[#d97706]";
   return "bg-canvas-inset text-ink-secondary";
@@ -1151,14 +1178,18 @@ function agentStatusBadgeClass(status: string | undefined): string {
 function summarizeAgentAction(agent: StrixAgentStatus): string {
   const tool = String(agent.current_tool || "").trim();
   const action = String(agent.current_action || "").trim();
+  const status = agentStatusLabel(agent.status);
+  if (status === "timeout") return "Timed out before package finished";
+  if (status === "failed") return "Worker failed — re-dispatch or continue probes";
+  if (status === "aborted" || status === "stopped") return "Worker stopped early";
   if (tool) {
     const toolLabel = friendlyActionName(tool);
     if (action) return clip(`${toolLabel}: ${compactAgentAction(action)}`, 110);
     return `${toolLabel} running`;
   }
-  if (action) return compactAgentAction(action);
+  if (action && !["done", "completed", "timeout", "failed"].includes(action)) return compactAgentAction(action);
   if (agent.task) return clip(agent.task, 90);
-  return agentStatusLabel(agent.status) === "done" ? "Finished assigned work" : "Waiting for work";
+  return status === "done" ? "Finished assigned work" : "Waiting for work";
 }
 
 function compactAgentAction(value: string): string {

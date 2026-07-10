@@ -511,6 +511,8 @@ const workerResult = parseJsonResult(
 );
 assert(workerResult.ok === false, "stub launch must fail the session without LLM");
 assert(/invalid worker launch context/i.test(String(workerResult.error || "")), `error=${workerResult.error}`);
+assert(String(workerResult.outcome || "") === "failed", `outcome=${workerResult.outcome}`);
+assert(String(workerResult.status || "") === "failed", `plan status=${workerResult.status}`);
 assert(String(workerResult.role) === "injection", `role=${workerResult.role}`);
 assert(String(workerResult.worker_id || "").startsWith("worker-injection-"), `worker_id=${workerResult.worker_id}`);
 

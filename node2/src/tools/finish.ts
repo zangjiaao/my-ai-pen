@@ -171,6 +171,10 @@ export function createFinishScanTool(runtime: ToolRuntime): ToolDefinition<any> 
         toolCallId,
       };
       runtime.lifecycle.finishScan = state;
+      // Successful incomplete/blocked/completed settles thrash counter.
+      if (status === "incomplete" || status === "blocked" || status === "completed") {
+        runtime.lifecycle.finishCompletedRejects = 0;
+      }
 
       await mkdir(taskDir, { recursive: true });
       const path = join(taskDir, "finish-scan.json");

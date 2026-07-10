@@ -94,11 +94,16 @@ export type ScannerSandboxConfig = {
   image: string;
 };
 
+/** Normalized worker terminal outcome for plan/panel display. */
+export type WorkerOutcome = "completed" | "timeout" | "failed" | "aborted";
+
 export type WorkerRunRecord = {
   workerId: string;
   role: string;
   task: string;
   ok: boolean;
+  /** completed | timeout | failed | aborted — preferred over ok alone for UI. */
+  outcome?: WorkerOutcome;
   at: string;
   durationMs?: number;
   toolCallCount?: number;

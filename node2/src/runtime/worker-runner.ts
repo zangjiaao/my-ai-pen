@@ -29,8 +29,12 @@ export type WorkerLaunchContext = {
   noteWorker?: (type: string, details: Record<string, unknown>) => void | Promise<void>;
 };
 
+export type WorkerOutcome = "completed" | "timeout" | "failed" | "aborted";
+
 export type WorkerRunResult = {
   ok: boolean;
+  /** Stable terminal classification for plan/panel (not just ok boolean). */
+  outcome: WorkerOutcome;
   workerId: string;
   role: WorkerRoleId;
   summary: string;
@@ -39,6 +43,23 @@ export type WorkerRunResult = {
   durationMs: number;
   usage?: LlmUsageSnapshot;
 };
+
+/** Map error text to a display outcome. */
+export function classifyWorkerOutcome(ok: boolean, error?: string): WorkerOutcome {
+  if (ok) return "completed";
+  const msg = String(error || "").toLowerCase();
+  if (/timed out|timeout/.test(msg)) return "timeout";
+  if (/abort/.test(msg)) return "aborted";
+  return "failed";
+}
+
+/** Plan-node status for a worker outcome. */
+export function planStatusForWorkerOutcome(outcome: WorkerOutcome): "done" | "blocked" | "failed" {
+  if (outcome === "completed") return "done";
+  // Timeout is incomplete work, not a hard crash — surface as blocked for TODO clarity.
+  if (outcome === "timeout") return "blocked";
+  return "failed";
+}
 
 export async function runWorkerSession(input: {
   runtime: ToolRuntime;
@@ -59,6 +80,7 @@ export async function runWorkerSession(input: {
   if (!taskText) {
     return {
       ok: false,
+      outcome: "failed",
       workerId,
       role: role.id,
       summary: "",
@@ -78,13 +100,15 @@ export async function runWorkerSession(input: {
     !input.launch.settingsManager ||
     !input.launch.taskDir
   ) {
+    const error = "invalid worker launch context: missing model, config, or taskDir";
     return {
       ok: false,
+      outcome: "failed",
       workerId,
       role: role.id,
       summary: "",
       toolCallCount: 0,
-      error: "invalid worker launch context: missing model, config, or taskDir",
+      error,
       durationMs: Date.now() - started,
       usage: {
         requests: 0,
@@ -188,6 +212,7 @@ export async function runWorkerSession(input: {
     const usage = usageLedger.snapshot({ agent_count: 1, tool_calls: toolCallCount });
     return {
       ok: true,
+      outcome: "completed",
       workerId,
       role: role.id,
       summary: lastAssistant || `Worker ${role.id} completed with ${toolCallCount} tool call(s).`,
@@ -198,11 +223,13 @@ export async function runWorkerSession(input: {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const usage = usageLedger.snapshot({ agent_count: 1, tool_calls: toolCallCount });
+    const outcome = classifyWorkerOutcome(false, message);
     return {
       ok: false,
+      outcome,
       workerId,
       role: role.id,
-      summary: lastAssistant,
+      summary: lastAssistant || (outcome === "timeout" ? `Worker ${role.id} timed out after wall-clock budget.` : ""),
       toolCallCount,
       error: message,
       durationMs: Date.now() - started,
