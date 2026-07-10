@@ -103,6 +103,24 @@ export async function runPentestTask(
     modelRegistry,
     settingsManager,
     taskDir,
+    mergeWorkerUsage: async (usage) => {
+      await diagnostics.mergeWorkerUsage({
+        requests: Number(usage.requests) || 0,
+        input_tokens: Number(usage.input_tokens) || 0,
+        output_tokens: Number(usage.output_tokens) || 0,
+        cached_tokens: Number(usage.cached_tokens) || 0,
+        cache_write_tokens: Number(usage.cache_write_tokens) || 0,
+        reasoning_tokens: Number(usage.reasoning_tokens) || 0,
+        total_tokens: Number(usage.total_tokens) || 0,
+        cost: Number(usage.cost) || 0,
+        agent_count: Number(usage.agent_count) || 1,
+        model: usage.model,
+        tool_calls: usage.tool_calls,
+      });
+    },
+    noteWorker: async (type, details) => {
+      await diagnostics.noteRuntime(type, details);
+    },
   };
 
   const resourceLoader = new DefaultResourceLoader({
@@ -380,22 +398,49 @@ async function buildNode2Checkpoint(
     targets_info: targetValue
       ? [{ type: "url", target: targetValue, original: targetValue }]
       : [],
-    panel_agents: [
-      {
-        id: "node2-main",
-        name: "Main Agent",
-        status: diag.phase === "finished" || diag.phase === "error" || diag.phase === "aborted" ? "completed" : "running",
-        parent_id: null,
-        task: task.instruction?.slice(0, 240) || "Authorized security task",
-        skills: [],
-        pending_count: 0,
-        role: "main",
-        current_tool: diag.activeTool || "",
-        current_action: diag.phase || "",
-      },
-    ],
+    panel_agents: buildPanelAgents(runtime, diag),
+    worker_runs: runtime.lifecycle.workerRuns || [],
     llm_usage: diagnostics.llmUsage(),
   };
+}
+
+/** Build Node3-shaped panel_agents (main + worker runs) for checkpoint/right panel. */
+export function buildPanelAgents(
+  runtime: ToolRuntime,
+  diag: { phase: string; activeTool?: string },
+): Array<Record<string, unknown>> {
+  const terminal = diag.phase === "finished" || diag.phase === "error" || diag.phase === "aborted";
+  const agents: Array<Record<string, unknown>> = [
+    {
+      id: "node2-main",
+      name: "Main Agent",
+      status: terminal ? "completed" : "running",
+      parent_id: null,
+      task: runtime.task.instruction?.slice(0, 240) || "Authorized security task",
+      skills: [],
+      pending_count: 0,
+      role: "main",
+      current_tool: diag.activeTool || "",
+      current_action: diag.phase || "",
+    },
+  ];
+  for (const run of runtime.lifecycle.workerRuns || []) {
+    agents.push({
+      id: run.workerId,
+      name: `Worker ${run.role}`,
+      status: run.ok ? "completed" : "failed",
+      parent_id: "node2-main",
+      task: run.task?.slice(0, 240) || "",
+      skills: [],
+      pending_count: 0,
+      role: run.role,
+      current_tool: "",
+      current_action: run.ok ? "done" : "failed",
+      duration_ms: run.durationMs,
+      tool_call_count: run.toolCallCount,
+    });
+  }
+  return agents;
 }
 
 function buildWorkflowFirstInstruction(task: TaskEnvelope): string {

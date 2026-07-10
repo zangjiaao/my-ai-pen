@@ -73,6 +73,9 @@ export class TaskDiagnostics {
   private readonly startedAt: string = new Date().toISOString();
   private readonly usageLedger: LlmUsageLedger;
   private lastUsageCheckpointAt = 0;
+  /** Main agent counts as 1; each completed worker launch increments this. */
+  private workerAgentCount = 0;
+  private workerToolCalls = 0;
 
   private constructor(
     private readonly taskDir: string,
@@ -336,14 +339,41 @@ export class TaskDiagnostics {
     });
   }
 
-  /** Node3-shaped llm_usage for checkpoints / right panel. */
+  /** Node3-shaped llm_usage for checkpoints / right panel (main + workers). */
   llmUsage(): LlmUsageSnapshot {
-    const usage = this.usageLedger.snapshot({ agent_count: 1, tool_calls: this.toolCallCount });
+    const agentCount = 1 + this.workerAgentCount;
+    const toolCalls = this.toolCallCount + this.workerToolCalls;
+    const usage = this.usageLedger.snapshot({ agent_count: agentCount, tool_calls: toolCalls });
     // Fall back to turn count when the provider did not report token usage.
     if (usage.requests <= 0 && this.llmTurnCount > 0) {
       return { ...usage, requests: this.llmTurnCount };
     }
     return usage;
+  }
+
+  /**
+   * Merge a worker session's usage into the task ledger and bump agent_count.
+   * Call once per worker run (even if tokens are zero) so panel agent_count reflects workers.
+   */
+  async mergeWorkerUsage(
+    usage: LlmUsageSnapshot | undefined | null,
+    details: Record<string, unknown> = {},
+  ): Promise<void> {
+    this.workerAgentCount += 1;
+    if (usage) {
+      this.usageLedger.mergeSnapshot(usage);
+      this.workerToolCalls += Math.max(0, Number(usage.tool_calls) || 0);
+    }
+    await this.append({
+      kind: "runtime",
+      type: "worker_usage_merged",
+      conversation_id: this.task.conversationId,
+      task_id: this.task.taskId,
+      worker_agent_count: this.workerAgentCount,
+      usage: usage || undefined,
+      ...details,
+    });
+    await this.persistState({ reason: "worker_usage_merged", ...details });
   }
 
   /**

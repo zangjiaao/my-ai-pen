@@ -4,7 +4,7 @@
  */
 import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { ToolRuntime } from "../types.js";
+import type { PlatformMessage, ToolRuntime, WorkerRunRecord } from "../types.js";
 import { runWorkerSession, type WorkerLaunchContext } from "../runtime/worker-runner.js";
 import { listWorkerRoles, resolveWorkerRole } from "../runtime/worker-roles.js";
 import { emitPlanUpdate, jsonResult, textResult } from "./common.js";
@@ -40,8 +40,12 @@ export function createWorkerTool(runtime: ToolRuntime): ToolDefinition<any> {
         );
       }
 
+      const workerId = `worker-${role.id}-${Date.now().toString(36)}`;
+      const planNodeId = `plan-${workerId}`;
+      const startedAt = new Date().toISOString();
+
       runtime.plan.upsert({
-        node_id: `plan-worker-${role.id}-${Date.now().toString(36)}`,
+        node_id: planNodeId,
         title: `Worker ${role.id}: ${task.slice(0, 80)}`,
         status: "running",
         kind: "worker",
@@ -51,19 +55,52 @@ export function createWorkerTool(runtime: ToolRuntime): ToolDefinition<any> {
         priority: 220,
         source: "worker",
       });
+
+      await runtime.platform.send({
+        type: "worker_started",
+        conversation_id: runtime.task.conversationId,
+        task_id: runtime.task.taskId,
+        worker_id: workerId,
+        role: role.id,
+        role_label: role.label,
+        task: task.slice(0, 500),
+        plan_node_id: planNodeId,
+        started_at: startedAt,
+      } as PlatformMessage);
+      await launch.noteWorker?.("worker_started", {
+        worker_id: workerId,
+        role: role.id,
+        task: task.slice(0, 300),
+      });
       await emitPlanUpdate(runtime, "worker.start");
 
-      const result = await runWorkerSession({
-        runtime,
-        launch,
-        role: role.id,
-        task,
-        maxTurns: params.max_turns !== undefined ? Number(params.max_turns) : undefined,
-      });
+      let result;
+      try {
+        result = await runWorkerSession({
+          runtime,
+          launch,
+          role: role.id,
+          task,
+          workerId,
+          maxTurns: params.max_turns !== undefined ? Number(params.max_turns) : undefined,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        result = {
+          ok: false,
+          workerId,
+          role: role.id,
+          summary: "",
+          toolCallCount: 0,
+          error: message,
+          durationMs: Date.now() - Date.parse(startedAt) || 0,
+        };
+      }
 
+      const endedAt = new Date().toISOString();
       runtime.plan.upsert({
-        node_id: `plan-worker-${role.id}-done-${Date.now().toString(36)}`,
-        title: `Worker ${role.id} ${result.ok ? "done" : "failed"}`,
+        node_id: planNodeId,
+        title: `Worker ${role.id}: ${task.slice(0, 60)}`,
         status: result.ok ? "done" : "failed",
         kind: "worker",
         level: "work_item",
@@ -71,17 +108,79 @@ export function createWorkerTool(runtime: ToolRuntime): ToolDefinition<any> {
         notes: (result.summary || result.error || "").slice(0, 500),
         priority: 220,
         source: "worker",
+        result: result.ok ? "confirmed" : "inconclusive",
+      });
+
+      const runRecord: WorkerRunRecord = {
+        workerId,
+        role: result.role,
+        task: task.slice(0, 400),
+        ok: result.ok,
+        at: endedAt,
+        durationMs: result.durationMs,
+        toolCallCount: result.toolCallCount,
+        summary: (result.summary || "").slice(0, 500),
+        error: result.error,
+      };
+      if (!runtime.lifecycle.workerRuns) runtime.lifecycle.workerRuns = [];
+      runtime.lifecycle.workerRuns.push(runRecord);
+
+      if (result.usage) {
+        await launch.mergeWorkerUsage?.(result.usage);
+      } else {
+        // Still count the worker agent even when the provider reported no tokens.
+        await launch.mergeWorkerUsage?.({
+          requests: 0,
+          input_tokens: 0,
+          output_tokens: 0,
+          cached_tokens: 0,
+          cache_write_tokens: 0,
+          reasoning_tokens: 0,
+          total_tokens: 0,
+          cost: 0,
+          agent_count: 1,
+          tool_calls: result.toolCallCount,
+        });
+      }
+
+      await runtime.platform.send({
+        type: "worker_finished",
+        conversation_id: runtime.task.conversationId,
+        task_id: runtime.task.taskId,
+        worker_id: workerId,
+        role: result.role,
+        role_label: role.label,
+        ok: result.ok,
+        task: task.slice(0, 500),
+        plan_node_id: planNodeId,
+        tool_call_count: result.toolCallCount,
+        duration_ms: result.durationMs,
+        summary: (result.summary || "").slice(0, 800),
+        error: result.error,
+        usage: result.usage,
+        started_at: startedAt,
+        ended_at: endedAt,
+      } as PlatformMessage);
+      await launch.noteWorker?.("worker_finished", {
+        worker_id: workerId,
+        role: result.role,
+        ok: result.ok,
+        tool_call_count: result.toolCallCount,
+        duration_ms: result.durationMs,
       });
       await emitPlanUpdate(runtime, "worker.end");
 
       return jsonResult({
         ok: result.ok,
+        worker_id: workerId,
         role: result.role,
         role_label: role.label,
         tool_call_count: result.toolCallCount,
         duration_ms: result.durationMs,
         summary: result.summary,
         error: result.error,
+        usage: result.usage,
+        worker_runs: runtime.lifecycle.workerRuns?.length ?? 0,
         available_roles: roles.map((item) => ({ id: item.id, label: item.label, description: item.description })),
         next:
           "Integrate worker findings into coverage/next_work; dispatch more packages or call finish_scan from the main agent when assess gates are satisfied.",

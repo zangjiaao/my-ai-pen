@@ -52,6 +52,22 @@ export type ToolRuntime = {
     modelRegistry: unknown;
     settingsManager: unknown;
     taskDir: string;
+    /** Merge worker session token usage into parent task llm_usage. */
+    mergeWorkerUsage?: (usage: {
+      requests: number;
+      input_tokens: number;
+      output_tokens: number;
+      cached_tokens: number;
+      cache_write_tokens: number;
+      reasoning_tokens: number;
+      total_tokens: number;
+      cost: number;
+      agent_count?: number;
+      model?: string;
+      tool_calls?: number;
+    }) => void | Promise<void>;
+    /** Append a diagnostics/runtime event for worker lifecycle. */
+    noteWorker?: (type: string, details: Record<string, unknown>) => void | Promise<void>;
   };
 };
 
@@ -78,14 +94,32 @@ export type ScannerSandboxConfig = {
   image: string;
 };
 
+export type WorkerRunRecord = {
+  workerId: string;
+  role: string;
+  task: string;
+  ok: boolean;
+  at: string;
+  durationMs?: number;
+  toolCallCount?: number;
+  summary?: string;
+  error?: string;
+};
+
 export type RuntimeLifecycle = {
   finishScan?: FinishScanState;
+  /** Recorded in-process worker runs for finish gates and panel rollup. */
+  workerRuns?: WorkerRunRecord[];
 };
 
 export type FinishScanState = {
   status: "completed" | "incomplete" | "blocked";
   summary: string;
   confirmedFindings?: string[];
+  /** Optional LLM-supplied titles kept for forensics; disk findings are authoritative. */
+  llmConfirmedFindings?: string[];
+  findingsRawCount?: number;
+  findingsDedupedCount?: number;
   coverageGaps?: string[];
   blockers?: string[];
   evidenceIds?: string[];

@@ -129,6 +129,24 @@ assert(Number(summary.llm_usage?.cost) > 0, "summary llm_usage.cost");
 const fromEnv = loadLlmCostRatesFromEnv({});
 assert(fromEnv.input === 0 && fromEnv.output === 0, "default rates are zero");
 
+// Worker usage rollup into parent diagnostics (P1).
+await diagnostics.mergeWorkerUsage({
+  requests: 1,
+  input_tokens: 100,
+  output_tokens: 50,
+  cached_tokens: 0,
+  cache_write_tokens: 0,
+  reasoning_tokens: 0,
+  total_tokens: 150,
+  cost: 0.001,
+  agent_count: 1,
+  tool_calls: 2,
+});
+const withWorker = diagnostics.llmUsage();
+assert(withWorker.agent_count === 2, `agent_count with worker=${withWorker.agent_count}`);
+assert(withWorker.total_tokens === 1750, `total with worker=${withWorker.total_tokens}`);
+assert(withWorker.requests === 2, `requests with worker=${withWorker.requests}`);
+
 console.log(
   JSON.stringify(
     {

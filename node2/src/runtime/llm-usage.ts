@@ -137,6 +137,20 @@ export class LlmUsageLedger {
     };
   }
 
+  /** Merge another snapshot into this ledger (e.g. worker session usage). */
+  mergeSnapshot(snapshot: LlmUsageSnapshot | undefined | null): void {
+    if (!snapshot) return;
+    this.requests += nonNeg(snapshot.requests);
+    this.inputTokens += nonNeg(snapshot.input_tokens);
+    this.outputTokens += nonNeg(snapshot.output_tokens);
+    this.cachedTokens += nonNeg(snapshot.cached_tokens);
+    this.cacheWriteTokens += nonNeg(snapshot.cache_write_tokens);
+    this.reasoningTokens += nonNeg(snapshot.reasoning_tokens);
+    this.totalTokens += nonNeg(snapshot.total_tokens);
+    this.cost += typeof snapshot.cost === "number" && Number.isFinite(snapshot.cost) ? snapshot.cost : 0;
+    if (snapshot.model && !this.model) this.model = snapshot.model;
+  }
+
   private messageCost(usage: AssistantUsageLike): number {
     const reported = usage.cost?.total;
     if (typeof reported === "number" && Number.isFinite(reported) && reported > 0) {
@@ -147,6 +161,51 @@ export class LlmUsageLedger {
     }
     return 0;
   }
+}
+
+/** Pure merge of Node3-shaped usage snapshots (main + workers). */
+export function mergeLlmUsageSnapshots(
+  parts: Array<LlmUsageSnapshot | undefined | null>,
+  extra: { agent_count?: number; tool_calls?: number; model?: string } = {},
+): LlmUsageSnapshot {
+  let requests = 0;
+  let input = 0;
+  let output = 0;
+  let cached = 0;
+  let cacheWrite = 0;
+  let reasoning = 0;
+  let total = 0;
+  let cost = 0;
+  let toolCalls = 0;
+  let model = extra.model || "";
+  let agentCount = 0;
+  for (const part of parts) {
+    if (!part) continue;
+    requests += nonNeg(part.requests);
+    input += nonNeg(part.input_tokens);
+    output += nonNeg(part.output_tokens);
+    cached += nonNeg(part.cached_tokens);
+    cacheWrite += nonNeg(part.cache_write_tokens);
+    reasoning += nonNeg(part.reasoning_tokens);
+    total += nonNeg(part.total_tokens);
+    cost += typeof part.cost === "number" && Number.isFinite(part.cost) ? part.cost : 0;
+    toolCalls += nonNeg(part.tool_calls);
+    agentCount += nonNeg(part.agent_count) || 0;
+    if (!model && part.model) model = part.model;
+  }
+  return {
+    requests,
+    input_tokens: input,
+    output_tokens: output,
+    cached_tokens: cached,
+    cache_write_tokens: cacheWrite,
+    reasoning_tokens: reasoning,
+    total_tokens: total,
+    cost: roundCost(cost),
+    agent_count: extra.agent_count ?? Math.max(1, agentCount || 1),
+    model: model || undefined,
+    tool_calls: extra.tool_calls ?? (toolCalls > 0 ? toolCalls : undefined),
+  };
 }
 
 function asUsage(value: unknown): AssistantUsageLike | null {

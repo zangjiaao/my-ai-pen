@@ -16,6 +16,7 @@
     "discovery:smoke": "tsx src/discovery-enhancement-smoke.ts",
     "surface-finish:smoke": "tsx src/surface-finish-smoke.ts",
     "worker:smoke": "tsx src/worker-smoke.ts",
+    "p0-p2:smoke": "tsx src/p0-p2-worker-finish-smoke.ts",
     "traffic:smoke": "tsx src/traffic-replay-smoke.ts",
     "proxy:smoke": "tsx src/proxy-routing-smoke.ts",
     "https-proxy:smoke": "tsx src/https-proxy-routing-smoke.ts",

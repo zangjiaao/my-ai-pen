@@ -10,6 +10,11 @@ import {
   surfaceInventoryFromTraffic,
 } from "../runtime/detection-conversion.js";
 import { resolveEffectiveEngagement } from "../runtime/engagement.js";
+import { loadAggregatedConfirmedFindings } from "../runtime/findings-aggregate.js";
+import {
+  assessWorkerDispatchGate,
+  loadWorkPackagesFromTaskDir,
+} from "../runtime/work-packages.js";
 import type { FinishScanState, PlatformMessage, ToolRuntime } from "../types.js";
 import { emitPlanUpdate, jsonResult, textResult } from "./common.js";
 
@@ -28,7 +33,8 @@ export function createFinishScanTool(runtime: ToolRuntime): ToolDefinition<any> 
       "Do not bulk-skip high-priority coverage to force completed; use status='incomplete' when work remains.",
       "For verify/retest/consult: status='completed' when the hypothesis/retest outcome or consultation answer is done — full-site conversion gates do not apply.",
       "Use status='incomplete' or status='blocked' when blockers prevent finishing the chosen engagement.",
-      "Include a concise summary, confirmed finding titles, coverage gaps, blockers, and evidence_ids that support the final report.",
+      "confirmed_findings is optional narrative; finish_scan loads and dedupes confirmed findings from the findings/ directory as the authoritative list.",
+      "Include a concise summary, coverage gaps, blockers, and evidence_ids that support the final report.",
     ],
     parameters: Type.Object({
       status: Type.String(),
@@ -44,7 +50,14 @@ export function createFinishScanTool(runtime: ToolRuntime): ToolDefinition<any> 
       const summary = String(params.summary || "").trim();
       if (!summary) return textResult("error: summary is required");
 
-      const evidenceIds = stringArray(params.evidence_ids);
+      const taskDir = join(runtime.workspaceDir, runtime.task.taskId);
+      const findingsDir = join(taskDir, "findings");
+      const aggregated = await loadAggregatedConfirmedFindings(findingsDir);
+      const llmTitles = stringArray(params.confirmed_findings);
+      // Disk-confirmed findings are authoritative; LLM titles are optional hints only.
+      const confirmedFindings = aggregated.titles.length > 0 ? aggregated.titles : [];
+
+      const evidenceIds = uniqueStrings([...stringArray(params.evidence_ids), ...aggregated.evidenceIds]);
       const missingEvidenceIds = [];
       for (const id of evidenceIds) {
         if (!(await runtime.evidence.read(id))) missingEvidenceIds.push(id);
@@ -63,7 +76,7 @@ export function createFinishScanTool(runtime: ToolRuntime): ToolDefinition<any> 
       const engagementInfo = resolveEffectiveEngagement(runtime.task, runtime.workflowRuns);
       const eligibility = finishCompletedEligibility(coverageRows, {
         status,
-        confirmedFindings: stringArray(params.confirmed_findings),
+        confirmedFindings,
         actorCount,
         actorAuthCount,
         engagement: engagementInfo.engagement,
@@ -97,13 +110,45 @@ export function createFinishScanTool(runtime: ToolRuntime): ToolDefinition<any> 
           surface_inventory: surfaceInventory,
           actors: actorSummary,
           conversion: metrics,
+          findings_aggregate: {
+            raw_count: aggregated.rawCount,
+            deduped_count: aggregated.dedupedCount,
+            titles: confirmedFindings,
+            llm_titles: llmTitles,
+          },
+        });
+      }
+
+      // P2: structured workPackages from the brief must not be ignored (zero workers).
+      const packages = await loadWorkPackagesFromTaskDir(taskDir);
+      const workerRunCount = runtime.lifecycle.workerRuns?.length ?? 0;
+      const workerGate = assessWorkerDispatchGate({
+        engagement: engagementInfo.engagement,
+        packages,
+        workerRunCount,
+        status,
+      });
+      if (!workerGate.allowed) {
+        return jsonResult({
+          ok: false,
+          blocked: true,
+          error: "finish_scan(completed) rejected: workPackages were not dispatched to workers",
+          reason: workerGate.reason,
+          engagement: engagementInfo,
+          work_packages: packages.map((pkg) => ({ id: pkg.id, role: pkg.role, task: pkg.task.slice(0, 200) })),
+          worker_run_count: workerRunCount,
+          instruction:
+            "Dispatch worker(role, task) for each structured workPackage from the workflow brief (or status=incomplete if packages cannot be run).",
         });
       }
 
       const state: FinishScanState = {
         status,
         summary,
-        confirmedFindings: stringArray(params.confirmed_findings),
+        confirmedFindings,
+        llmConfirmedFindings: llmTitles.length > 0 ? llmTitles : undefined,
+        findingsRawCount: aggregated.rawCount,
+        findingsDedupedCount: aggregated.dedupedCount,
         coverageGaps: stringArray(params.coverage_gaps),
         blockers: stringArray(params.blockers),
         evidenceIds,
@@ -112,9 +157,8 @@ export function createFinishScanTool(runtime: ToolRuntime): ToolDefinition<any> 
       };
       runtime.lifecycle.finishScan = state;
 
-      const dir = join(runtime.workspaceDir, runtime.task.taskId);
-      await mkdir(dir, { recursive: true });
-      const path = join(dir, "finish-scan.json");
+      await mkdir(taskDir, { recursive: true });
+      const path = join(taskDir, "finish-scan.json");
       await writeFile(path, JSON.stringify(state, null, 2), "utf8");
 
       await runtime.platform.send({
@@ -124,9 +168,13 @@ export function createFinishScanTool(runtime: ToolRuntime): ToolDefinition<any> 
         status,
         summary,
         confirmed_findings: state.confirmedFindings,
+        findings_raw_count: aggregated.rawCount,
+        findings_deduped_count: aggregated.dedupedCount,
+        llm_confirmed_findings: llmTitles,
         coverage_gaps: state.coverageGaps,
         blockers: state.blockers,
         evidence_ids: evidenceIds,
+        worker_run_count: workerRunCount,
       } as PlatformMessage);
       await emitPlanUpdate(runtime, "finish_scan");
 
@@ -138,6 +186,17 @@ export function createFinishScanTool(runtime: ToolRuntime): ToolDefinition<any> 
           finish_scan: state,
           conversion: metrics,
           untested_high_priority: eligibility.untestedHighPriority.map(formatCandidate),
+          findings_aggregate: {
+            raw_count: aggregated.rawCount,
+            deduped_count: aggregated.dedupedCount,
+            titles: confirmedFindings,
+            llm_titles: llmTitles,
+          },
+          worker_dispatch: {
+            packages: packages.length,
+            worker_runs: workerRunCount,
+            gate: workerGate.reason,
+          },
         },
         { finishScanStatus: status },
       );
@@ -154,4 +213,8 @@ function normalizeStatus(value: unknown): FinishScanState["status"] | undefined 
 function stringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.map((item) => String(item || "").trim()).filter(Boolean);
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map((v) => v.trim()).filter(Boolean))];
 }

@@ -14,6 +14,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { Node2Config } from "../config.js";
 import type { ToolRuntime } from "../types.js";
+import { LlmUsageLedger, type LlmUsageSnapshot } from "./llm-usage.js";
 import { createPentestExtension } from "./pentest-extension.js";
 import { resolveWorkerRole, workerToolAllowlist, type WorkerRoleId } from "./worker-roles.js";
 
@@ -24,15 +25,19 @@ export type WorkerLaunchContext = {
   modelRegistry: ModelRegistry;
   settingsManager: SettingsManager;
   taskDir: string;
+  mergeWorkerUsage?: (usage: LlmUsageSnapshot) => void | Promise<void>;
+  noteWorker?: (type: string, details: Record<string, unknown>) => void | Promise<void>;
 };
 
 export type WorkerRunResult = {
   ok: boolean;
+  workerId: string;
   role: WorkerRoleId;
   summary: string;
   toolCallCount: number;
   error?: string;
   durationMs: number;
+  usage?: LlmUsageSnapshot;
 };
 
 export async function runWorkerSession(input: {
@@ -40,16 +45,21 @@ export async function runWorkerSession(input: {
   launch: WorkerLaunchContext;
   role: string;
   task: string;
+  workerId?: string;
   maxTurns?: number;
   signal?: AbortSignal;
 }): Promise<WorkerRunResult> {
   const started = Date.now();
   const role = resolveWorkerRole(input.role);
   const tools = workerToolAllowlist(role);
+  const workerId =
+    String(input.workerId || "").trim() ||
+    `worker-${role.id}-${Date.now().toString(36)}`;
   const taskText = String(input.task || "").trim();
   if (!taskText) {
     return {
       ok: false,
+      workerId,
       role: role.id,
       summary: "",
       toolCallCount: 0,
@@ -58,8 +68,41 @@ export async function runWorkerSession(input: {
     };
   }
 
+  // Fail fast when launch context is incomplete (smokes / misconfigured runtimes).
+  // Start/end platform events are still emitted by the worker tool around this call.
+  if (
+    !input.launch?.config ||
+    input.launch.model == null ||
+    !input.launch.authStorage ||
+    !input.launch.modelRegistry ||
+    !input.launch.settingsManager ||
+    !input.launch.taskDir
+  ) {
+    return {
+      ok: false,
+      workerId,
+      role: role.id,
+      summary: "",
+      toolCallCount: 0,
+      error: "invalid worker launch context: missing model, config, or taskDir",
+      durationMs: Date.now() - started,
+      usage: {
+        requests: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        cached_tokens: 0,
+        cache_write_tokens: 0,
+        reasoning_tokens: 0,
+        total_tokens: 0,
+        cost: 0,
+        agent_count: 1,
+        tool_calls: 0,
+      },
+    };
+  }
+
   const maxTurns = clampInt(input.maxTurns ?? Number(process.env.NODE2_WORKER_MAX_TURNS || 12), 1, 40);
-  const workerDir = join(input.launch.taskDir, "workers", `${role.id}-${Date.now().toString(36)}`);
+  const workerDir = join(input.launch.taskDir, "workers", workerId);
   await mkdir(workerDir, { recursive: true });
   const piSessionDir = join(workerDir, "pi-sessions");
   await mkdir(piSessionDir, { recursive: true });
@@ -87,6 +130,7 @@ export async function runWorkerSession(input: {
 
   let toolCallCount = 0;
   let lastAssistant = "";
+  const usageLedger = new LlmUsageLedger();
   const { session } = await createAgentSession({
     cwd: input.launch.taskDir,
     agentDir: input.launch.config.piAgentDir,
@@ -103,6 +147,7 @@ export async function runWorkerSession(input: {
   const unsubscribe = session.subscribe((event: any) => {
     if (event?.type === "tool_execution_start") toolCallCount += 1;
     if (event?.type === "message_end" && event?.message?.role === "assistant") {
+      usageLedger.recordAssistantMessage(event.message);
       const content = event.message.content;
       if (Array.isArray(content)) {
         lastAssistant = content
@@ -130,6 +175,7 @@ export async function runWorkerSession(input: {
       session.prompt(
         [
           `Worker role: ${role.id} (${role.label})`,
+          `Worker id: ${workerId}`,
           `Max effort: about ${maxTurns} tool-using turns; then stop with a summary.`,
           "Assigned package:",
           taskText,
@@ -139,22 +185,28 @@ export async function runWorkerSession(input: {
       sleepReject(timeoutMs, `worker timed out after ${timeoutMs}ms`),
     ]);
 
+    const usage = usageLedger.snapshot({ agent_count: 1, tool_calls: toolCallCount });
     return {
       ok: true,
+      workerId,
       role: role.id,
       summary: lastAssistant || `Worker ${role.id} completed with ${toolCallCount} tool call(s).`,
       toolCallCount,
       durationMs: Date.now() - started,
+      usage,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const usage = usageLedger.snapshot({ agent_count: 1, tool_calls: toolCallCount });
     return {
       ok: false,
+      workerId,
       role: role.id,
       summary: lastAssistant,
       toolCallCount,
       error: message,
       durationMs: Date.now() - started,
+      usage,
     };
   } finally {
     unsubscribe?.();
