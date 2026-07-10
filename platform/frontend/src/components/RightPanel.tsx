@@ -2,7 +2,7 @@ import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type Poi
 import { Bot, CheckCircle2, Circle, CircleDashed, GitBranch, Tag, XCircle } from "lucide-react";
 import type { SecurityAsset, SecurityVulnerability } from "../lib/securityTypes";
 
-type Tab = "status" | "discoveries" | "activity";
+type Tab = "status" | "assets" | "findings" | "activity";
 type PlanStatus = "todo" | "pending" | "running" | "done" | "skipped" | "blocked" | "failed" | string;
 type WorkflowPhaseId = "recon" | "testing" | "verification" | "summary";
 
@@ -259,10 +259,12 @@ export default function RightPanel({
   };
 
   const elapsedText = formatDuration(elapsedClock.seconds);
+  const assetTabCount = assets.length + surfaceItems.length;
   const tabs: { key: Tab; label: string }[] = [
     { key: "status", label: "Status" },
-    { key: "discoveries", label: discoveriesTabLabel(findings.length, assets.length, surfaceItems.length, strixNotes.length) },
-    { key: "activity", label: `Activity${timeline.length ? ` (${timeline.length})` : ""}` },
+    { key: "assets", label: countLabel("Assets", assetTabCount) },
+    { key: "findings", label: countLabel("Findings", findings.length) },
+    { key: "activity", label: countLabel("Activity", timeline.length) },
   ];
 
   return (
@@ -279,13 +281,13 @@ export default function RightPanel({
       >
         <span aria-hidden="true" className={`absolute left-1/2 top-1/2 h-12 w-px -translate-x-1/2 -translate-y-1/2 rounded-pill transition-colors ${resizing ? "bg-status-running" : "bg-transparent group-hover:bg-status-running/60 group-focus-visible:bg-status-running/60"}`} />
       </button>
-      <nav className="grid grid-cols-3 border-b border-hairline-soft">
+      <nav className="grid grid-cols-4 border-b border-hairline-soft">
         {tabs.map((item) => (
           <button
             key={item.key}
             data-testid={`right-tab-${item.key}`}
             onClick={() => setTab(item.key)}
-            className={`py-2.5 text-sm font-medium transition-colors ${tab === item.key ? "border-b-2 border-ink text-ink" : "border-b-2 border-transparent text-ink-secondary hover:text-ink"}`}
+            className={`px-0.5 py-2.5 text-[13px] font-medium transition-colors ${tab === item.key ? "border-b-2 border-ink text-ink" : "border-b-2 border-transparent text-ink-secondary hover:text-ink"}`}
           >
             {item.label}
           </button>
@@ -294,7 +296,7 @@ export default function RightPanel({
       <div className="flex-1 overflow-y-auto p-4">
         {tab === "status" && (
           <div className="space-y-4">
-            {/* Card 1: Run summary — Node3 layout for all engines */}
+            {/* Run summary: elapsed / budget (tokens·cost) / targets */}
             {displayRun ? (
               <StrixRunSummary run={displayRun} elapsedText={elapsedText} />
             ) : (
@@ -303,7 +305,7 @@ export default function RightPanel({
                 <p className="font-mono text-xl font-semibold leading-none tracking-normal">{elapsedText}</p>
               </section>
             )}
-            {/* Card 2: Agent collaboration — multi-agent (Node3) or synthesized main agent (Node2) */}
+            {/* Agent collaboration tree */}
             {displayAgents.length > 0 && (
               <section>
                 <div className="mb-2 flex items-center justify-between gap-2">
@@ -313,61 +315,42 @@ export default function RightPanel({
                 <StrixAgentList agents={displayAgents} />
               </section>
             )}
-            {/* Card 3: Task plan — Node3 todo list style for all engines */}
+            {/* Task / TODO plan */}
             <section>
               <p className="mb-2 text-xs text-ink-muted">Tasks</p>
               <StrixTodoList items={taskItems} running={running} />
             </section>
+            {/* Agent notes sit with operational status, not with findings */}
+            {strixNotes.length > 0 && (
+              <PanelSection title="Notes">
+                {strixNotes.map((note, index) => (
+                  <div key={note.id || index} className="rounded-md border border-hairline-soft p-2">
+                    <div className="mb-1 flex min-w-0 items-center gap-1">
+                      {note.category && <span className="rounded-md bg-canvas-inset px-1.5 py-0.5 text-[10px] uppercase text-ink-secondary">{note.category}</span>}
+                      <span className="truncate text-sm font-medium">{note.title || "Untitled note"}</span>
+                    </div>
+                    {note.content && <p className="break-words text-xs text-ink-muted [overflow-wrap:anywhere]">{clip(markdownPreview(note.content), 220)}</p>}
+                    {note.tags?.length ? (
+                      <div className="mt-1.5 flex flex-wrap gap-1">
+                        {note.tags.slice(0, 4).map((tag) => (
+                          <span key={tag} className="rounded-sm bg-canvas-inset px-1.5 py-0.5 text-[10px] text-ink-secondary">{tag}</span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+              </PanelSection>
+            )}
             {intake && <IntakeSummary intake={intake} />}
           </div>
         )}
-        {tab === "discoveries" && (
-          findings.length + assets.length + surfaceItems.length + strixNotes.length === 0 ? (
-            <p className="text-sm text-ink-muted">No discoveries yet</p>
+        {tab === "assets" && (
+          assets.length + surfaceItems.length === 0 ? (
+            <p className="text-sm text-ink-muted">No assets yet</p>
           ) : (
             <div className="space-y-4">
-              {findings.length > 0 && (
-                <DiscoverySection title="Findings">
-                  {findings.map((finding, index) => (
-                    <button
-                      key={(finding.id as string) || (finding.vulnerability_id as string) || index}
-                      type="button"
-                      onClick={() => onOpenVulnerability?.(finding as Partial<SecurityVulnerability>)}
-                      className="block w-full rounded-md border border-hairline-soft p-2 text-left transition-colors hover:bg-surface-default"
-                    >
-                      <div className="mb-1 flex min-w-0 items-center gap-1">
-                        <span className={`inline-block rounded-md px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase bg-severity-${finding.severity || "info"}-subtle text-severity-${finding.severity || "info"}`}>
-                          {String(finding.severity || "info")}
-                        </span>
-                        <span className="truncate text-sm font-medium">{String(finding.title || "Untitled vulnerability")}</span>
-                      </div>
-                      <p className="break-words text-xs text-ink-muted">{findingMetaLine(finding)}</p>
-                    </button>
-                  ))}
-                </DiscoverySection>
-              )}
-              {strixNotes.length > 0 && (
-                <DiscoverySection title="Notes">
-                  {strixNotes.map((note, index) => (
-                    <div key={note.id || index} className="rounded-md border border-hairline-soft p-2">
-                      <div className="mb-1 flex min-w-0 items-center gap-1">
-                        {note.category && <span className="rounded-md bg-canvas-inset px-1.5 py-0.5 text-[10px] uppercase text-ink-secondary">{note.category}</span>}
-                        <span className="truncate text-sm font-medium">{note.title || "Untitled note"}</span>
-                      </div>
-                      {note.content && <p className="break-words text-xs text-ink-muted [overflow-wrap:anywhere]">{clip(markdownPreview(note.content), 220)}</p>}
-                      {note.tags?.length ? (
-                        <div className="mt-1.5 flex flex-wrap gap-1">
-                          {note.tags.slice(0, 4).map((tag) => (
-                            <span key={tag} className="rounded-sm bg-canvas-inset px-1.5 py-0.5 text-[10px] text-ink-secondary">{tag}</span>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
-                  ))}
-                </DiscoverySection>
-              )}
               {assets.length > 0 && (
-                <DiscoverySection title="Assets">
+                <PanelSection title="Hosts / Assets">
                   {assets.map((asset, index) => {
                     const props = asset.properties as Record<string, unknown> | undefined;
                     const ports = Array.isArray(asset.open_ports) ? asset.open_ports : Array.isArray(props?.open_ports) ? props.open_ports as unknown[] : [];
@@ -386,10 +369,10 @@ export default function RightPanel({
                       </button>
                     );
                   })}
-                </DiscoverySection>
+                </PanelSection>
               )}
               {surfaceItems.length > 0 && (
-                <DiscoverySection title="Attack Surface">
+                <PanelSection title="Attack Surface">
                   {surfaceItems.map((node, index) => (
                     <div key={planNodeKey(node, index)} className="rounded-md border border-hairline-soft p-2">
                       <div className="mb-1 flex min-w-0 items-center gap-1">
@@ -399,8 +382,32 @@ export default function RightPanel({
                       {(node.parameters?.length || node.notes) && <p className="break-words text-xs text-ink-muted">{node.parameters?.length ? `params: ${node.parameters.join(", ")}` : node.notes}</p>}
                     </div>
                   ))}
-                </DiscoverySection>
+                </PanelSection>
               )}
+            </div>
+          )
+        )}
+        {tab === "findings" && (
+          findings.length === 0 ? (
+            <p className="text-sm text-ink-muted">No findings yet</p>
+          ) : (
+            <div className="space-y-2">
+              {findings.map((finding, index) => (
+                <button
+                  key={(finding.id as string) || (finding.vulnerability_id as string) || index}
+                  type="button"
+                  onClick={() => onOpenVulnerability?.(finding as Partial<SecurityVulnerability>)}
+                  className="block w-full rounded-md border border-hairline-soft p-2 text-left transition-colors hover:bg-surface-default"
+                >
+                  <div className="mb-1 flex min-w-0 items-center gap-1">
+                    <span className={`inline-block rounded-md px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase bg-severity-${finding.severity || "info"}-subtle text-severity-${finding.severity || "info"}`}>
+                      {String(finding.severity || "info")}
+                    </span>
+                    <span className="truncate text-sm font-medium">{String(finding.title || "Untitled vulnerability")}</span>
+                  </div>
+                  <p className="break-words text-xs text-ink-muted">{findingMetaLine(finding)}</p>
+                </button>
+              ))}
             </div>
           )
         )}
@@ -737,7 +744,7 @@ function AgentSkillBadge({ skill }: { skill: string }) {
   );
 }
 
-function DiscoverySection({ title, children }: { title: string; children: ReactNode }) {
+function PanelSection({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="space-y-2">
       <p className="text-xs text-ink-muted">{title}</p>
@@ -938,13 +945,8 @@ function hasRunSummaryData(run: StrixRun | undefined): boolean {
   );
 }
 
-/** Tab label that does not conflate findings with assets/surface/notes. */
-function discoveriesTabLabel(findings: number, assets: number, surface: number, notes: number): string {
-  const other = assets + surface + notes;
-  if (findings <= 0 && other <= 0) return "Discoveries";
-  if (findings > 0 && other <= 0) return `Discoveries (Findings ${findings})`;
-  if (findings <= 0) return `Discoveries (${other})`;
-  return `Discoveries (Findings ${findings} · +${other})`;
+function countLabel(base: string, count: number): string {
+  return count > 0 ? `${base} (${count})` : base;
 }
 
 function workflowPhaseForPlanItem(item: PlanNode): WorkflowPhaseId {

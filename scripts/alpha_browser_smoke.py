@@ -174,7 +174,8 @@ async def assert_snapshot_matches_ui(cdp: CDPClient, *, expected_status: str | N
   const progressText = document.querySelector('[data-testid=phase-progress]')?.innerText || '';
   const [current, total] = progressText.split('/').map((x) => Number(x));
   const ui = {
-    discoveries: countFromTab('right-tab-discoveries'),
+    findings: countFromTab('right-tab-findings'),
+    assets: countFromTab('right-tab-assets'),
     pending: countFromTab('right-tab-pending'),
     evidence: countFromTab('right-tab-evidence'),
     progressCurrent: current,
@@ -252,7 +253,7 @@ async def drive_ui(websocket_url: str, url: str) -> None:
         await cdp.eval("document.querySelector('[data-testid=right-tab-progress]').click(); true")
         await cdp.wait_for("document.querySelector('[data-testid=todo-list]') !== null")
         await cdp.wait_for("document.querySelector('[data-testid=phase-progress]')?.innerText === '3/6'")
-        await cdp.wait_for("document.querySelector('[data-testid=right-tab-discoveries]')?.innerText.includes('(2)')")
+        await cdp.wait_for("document.querySelector('[data-testid=right-tab-findings]')?.innerText.includes('(2)')")
         await cdp.wait_for("document.querySelector('[data-testid=right-tab-pending]')?.innerText.includes('(1)')")
         await cdp.wait_for("/^Evidence(?: \([1-9][0-9]*\))?$/.test(document.querySelector('[data-testid=right-tab-evidence]')?.innerText || '')")
         await assert_snapshot_matches_ui(cdp)
@@ -269,7 +270,7 @@ async def drive_ui(websocket_url: str, url: str) -> None:
         await cdp.eval("document.querySelector('[data-testid=right-tab-progress]').click(); true")
         await cdp.wait_for("document.querySelector('[data-testid=todo-list]') !== null")
         await cdp.wait_for("document.querySelector('[data-testid=phase-progress]')?.innerText === '3/6'")
-        await cdp.wait_for("document.querySelector('[data-testid=right-tab-discoveries]')?.innerText.includes('(2)')")
+        await cdp.wait_for("document.querySelector('[data-testid=right-tab-findings]')?.innerText.includes('(2)')")
         await cdp.wait_for("document.querySelector('[data-testid=right-tab-pending]')?.innerText.includes('(1)')")
         await cdp.wait_for("/^Evidence(?: \([1-9][0-9]*\))?$/.test(document.querySelector('[data-testid=right-tab-evidence]')?.innerText || '')")
         await assert_snapshot_matches_ui(cdp)
