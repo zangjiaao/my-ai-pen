@@ -2,7 +2,7 @@ import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type Poi
 import { Bot, CheckCircle2, Circle, CircleDashed, GitBranch, Tag, XCircle } from "lucide-react";
 import type { SecurityAsset, SecurityVulnerability } from "../lib/securityTypes";
 
-type Tab = "status" | "assets" | "findings" | "activity";
+type Tab = "status" | "surface" | "findings" | "activity";
 type PlanStatus = "todo" | "pending" | "running" | "done" | "skipped" | "blocked" | "failed" | string;
 type WorkflowPhaseId = "recon" | "testing" | "verification" | "summary";
 
@@ -259,10 +259,9 @@ export default function RightPanel({
   };
 
   const elapsedText = formatDuration(elapsedClock.seconds);
-  const assetTabCount = assets.length + surfaceItems.length;
   const tabs: { key: Tab; label: string }[] = [
     { key: "status", label: "Status" },
-    { key: "assets", label: countLabel("Assets", assetTabCount) },
+    { key: "surface", label: countLabel("Surface", surfaceItems.length) },
     { key: "findings", label: countLabel("Findings", findings.length) },
     { key: "activity", label: countLabel("Activity", timeline.length) },
   ];
@@ -296,7 +295,7 @@ export default function RightPanel({
       <div className="flex-1 overflow-y-auto p-4">
         {tab === "status" && (
           <div className="space-y-4">
-            {/* Run summary: elapsed / budget (tokens·cost) / targets */}
+            {/* Run summary: elapsed / budget (tokens·cost) / targets (asset context) */}
             {displayRun ? (
               <StrixRunSummary run={displayRun} elapsedText={elapsedText} />
             ) : (
@@ -315,75 +314,45 @@ export default function RightPanel({
                 <StrixAgentList agents={displayAgents} />
               </section>
             )}
-            {/* Task / TODO plan */}
+            {/* Intentional TODO / work packages — not coverage mark noise */}
             <section>
-              <p className="mb-2 text-xs text-ink-muted">Tasks</p>
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <p className="text-xs text-ink-muted">Tasks</p>
+                {taskItems.length > 0 && (
+                  <p className="font-mono text-[11px] text-ink-muted">
+                    {taskItems.filter((item) => isTerminalPlanStatus(item.status)).length}/{taskItems.length}
+                  </p>
+                )}
+              </div>
               <StrixTodoList items={taskItems} running={running} />
             </section>
-            {/* Agent notes sit with operational status, not with findings */}
-            {strixNotes.length > 0 && (
-              <PanelSection title="Notes">
-                {strixNotes.map((note, index) => (
-                  <div key={note.id || index} className="rounded-md border border-hairline-soft p-2">
-                    <div className="mb-1 flex min-w-0 items-center gap-1">
-                      {note.category && <span className="rounded-md bg-canvas-inset px-1.5 py-0.5 text-[10px] uppercase text-ink-secondary">{note.category}</span>}
-                      <span className="truncate text-sm font-medium">{note.title || "Untitled note"}</span>
-                    </div>
-                    {note.content && <p className="break-words text-xs text-ink-muted [overflow-wrap:anywhere]">{clip(markdownPreview(note.content), 220)}</p>}
-                    {note.tags?.length ? (
-                      <div className="mt-1.5 flex flex-wrap gap-1">
-                        {note.tags.slice(0, 4).map((tag) => (
-                          <span key={tag} className="rounded-sm bg-canvas-inset px-1.5 py-0.5 text-[10px] text-ink-secondary">{tag}</span>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                ))}
-              </PanelSection>
-            )}
             {intake && <IntakeSummary intake={intake} />}
           </div>
         )}
-        {tab === "assets" && (
-          assets.length + surfaceItems.length === 0 ? (
-            <p className="text-sm text-ink-muted">No assets yet</p>
+        {tab === "surface" && (
+          surfaceItems.length === 0 ? (
+            <p className="text-sm text-ink-muted">No attack surface recorded yet</p>
           ) : (
-            <div className="space-y-4">
-              {assets.length > 0 && (
-                <PanelSection title="Hosts / Assets">
-                  {assets.map((asset, index) => {
-                    const props = asset.properties as Record<string, unknown> | undefined;
-                    const ports = Array.isArray(asset.open_ports) ? asset.open_ports : Array.isArray(props?.open_ports) ? props.open_ports as unknown[] : [];
-                    return (
-                      <button
-                        key={(asset.id as string) || (asset.asset_id as string) || (asset.address as string) || index}
-                        type="button"
-                        onClick={() => onOpenAsset?.(asset as Partial<SecurityAsset>)}
-                        className="block w-full rounded-md border border-hairline-soft p-2 text-left transition-colors hover:bg-surface-default"
-                      >
-                        <div className="mb-1 flex min-w-0 items-center gap-1">
-                          <span className="rounded-md bg-canvas-inset px-1.5 py-0.5 text-[10px] uppercase text-ink-secondary">{String(asset.asset_type || asset.type || "asset")}</span>
-                          <span className="truncate text-sm font-medium">{String(asset.address || asset.name || "Unknown asset")}</span>
-                        </div>
-                        <p className="break-words text-xs text-ink-muted">ports: {ports.length ? ports.join(", ") : "-"}</p>
-                      </button>
-                    );
-                  })}
-                </PanelSection>
-              )}
-              {surfaceItems.length > 0 && (
-                <PanelSection title="Attack Surface">
-                  {surfaceItems.map((node, index) => (
-                    <div key={planNodeKey(node, index)} className="rounded-md border border-hairline-soft p-2">
-                      <div className="mb-1 flex min-w-0 items-center gap-1">
-                        <span className="rounded-md bg-canvas-inset px-1.5 py-0.5 text-[10px] uppercase text-ink-secondary">{String(node.method || node.kind || "surface")}</span>
-                        <span className="truncate text-sm font-medium">{String(node.endpoint || node.title || "Untitled surface")}</span>
-                      </div>
-                      {(node.parameters?.length || node.notes) && <p className="break-words text-xs text-ink-muted">{node.parameters?.length ? `params: ${node.parameters.join(", ")}` : node.notes}</p>}
-                    </div>
-                  ))}
-                </PanelSection>
-              )}
+            <div className="space-y-2">
+              {surfaceItems.map((node, index) => (
+                <div key={planNodeKey(node, index)} className="rounded-md border border-hairline-soft p-2">
+                  <div className="mb-1 flex min-w-0 items-center gap-1">
+                    <span className="rounded-md bg-canvas-inset px-1.5 py-0.5 text-[10px] uppercase text-ink-secondary">{String(node.method || node.kind || "endpoint")}</span>
+                    <span className="truncate text-sm font-medium">{String(node.endpoint || node.title || "Untitled surface")}</span>
+                  </div>
+                  {(node.parameters?.length || node.vuln_type || node.notes) && (
+                    <p className="break-words text-xs text-ink-muted">
+                      {[
+                        node.parameters?.length ? `params: ${node.parameters.join(", ")}` : "",
+                        node.vuln_type ? `class: ${node.vuln_type}` : "",
+                        node.notes || "",
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </p>
+                  )}
+                </div>
+              ))}
             </div>
           )
         )}
@@ -520,12 +489,18 @@ function SummaryValue({ children }: { children: ReactNode }) {
 
 function StrixTodoList({ items, running = false }: { items: PlanNode[]; running?: boolean }) {
   if (!items.length) {
-    return <p className="text-sm text-ink-muted">{running ? "Waiting for tasks" : "No active task plan yet"}</p>;
+    return (
+      <p className="text-sm text-ink-muted">
+        {running
+          ? "Waiting for structured tasks (workers / coverage plan)"
+          : "No structured task plan — worker packages and coverage(plan) items show here"}
+      </p>
+    );
   }
-  const orderedItems = [...items].sort((left, right) => Number(left.priority || 999) - Number(right.priority || 999) || String(left.title || "").localeCompare(String(right.title || "")));
+  // Keep caller sort (active-first for Node2); do not re-sort by priority alone.
   return (
     <div className="space-y-1" data-testid="strix-todo-list">
-      {orderedItems.map((item, index) => <StrixTodoItem key={planNodeKey(item, index)} item={item} />)}
+      {items.map((item, index) => <StrixTodoItem key={planNodeKey(item, index)} item={item} />)}
     </div>
   );
 }
@@ -893,25 +868,56 @@ function agentPlanItems(nodes: PlanNode[]): PlanNode[] {
   });
 }
 
-/** Unified task list for Node2/pentest: agent-authored plan items, not raw tool telemetry. */
+/**
+ * Intentional TODO / work-package list for Status.
+ * Excludes coverage(mark) test flood, tool telemetry, and findings cards —
+ * those belong in Surface / Findings / Activity instead.
+ */
 function unifiedTodoItems(nodes: PlanNode[]): PlanNode[] {
   const noiseKinds = new Set([
     "tool", "browser", "http", "poc", "scan", "traffic", "finding", "coverage", "verifier",
     "finish_scan", "workflow", "workflow_run", "workflow_list", "workflow_dynamic", "read", "actor",
+    "surface", "request", "test",
   ]);
+  const intentionalSources = new Set([
+    "agent", "strix_todo", "worker", "pi_workflow", "plan", "coverage.plan", "runtime",
+  ]);
+  const intentionalKinds = new Set([
+    "task", "work", "work_item", "worker", "workflow", "objective", "package",
+  ]);
+
   return nodes
     .filter((node) => {
       if ((node.level || "work_item") !== "work_item") return false;
       const source = String(node.source || "");
       const kind = String(node.kind || "task");
       const parent = String(node.parent_id || "");
-      if (source === "strix_todo" || source === "agent") return !noiseKinds.has(kind);
-      if (parent.startsWith("workflow-") || parent.startsWith("plan-objective")) return !noiseKinds.has(kind);
-      if (kind === "task" || kind === "work" || kind === "work_item") return true;
+      // Never show coverage matrix rows as user-facing TODO.
+      if (source === "coverage" || kind === "test") return false;
+      if (noiseKinds.has(kind) && kind !== "worker" && kind !== "workflow") return false;
+      if (intentionalSources.has(source)) return true;
+      if (intentionalKinds.has(kind)) return true;
+      // Explicit workflow-phase plan items from coverage(action='plan').
+      if (parent.startsWith("workflow-") && !noiseKinds.has(kind)) return true;
       return false;
     })
-    .sort((left, right) => Number(left.priority || 999) - Number(right.priority || 999) || String(left.title || "").localeCompare(String(right.title || "")))
-    .slice(0, 24);
+    .sort((left, right) => {
+      // Active work first, then incomplete, then finished.
+      const rank = (status: string | undefined) => {
+        const s = String(status || "pending");
+        if (s === "running") return 0;
+        if (s === "todo" || s === "pending") return 1;
+        if (s === "blocked") return 2;
+        if (s === "failed") return 3;
+        if (s === "skipped") return 4;
+        return 5; // done
+      };
+      const byStatus = rank(left.status) - rank(right.status);
+      if (byStatus !== 0) return byStatus;
+      return Number(left.priority || 999) - Number(right.priority || 999)
+        || String(left.title || "").localeCompare(String(right.title || ""));
+    })
+    .slice(0, 32);
 }
 
 function synthesizeMainAgent(activeTool: string | undefined, running: boolean, workflowKind?: string): StrixAgentStatus[] {
@@ -997,19 +1003,54 @@ function lightweightStageId(currentStage: string | undefined, activeTool: string
   return currentStage === "confirming" ? "recon" : "testing";
 }
 
+/**
+ * Attack-surface inventory for the Surface tab.
+ * Prefer explicit surface/request nodes; also fold unique endpoints observed
+ * via coverage/http work so the tab is not empty when only mark/test ran.
+ */
 function attackSurfaceItems(nodes: PlanNode[]): PlanNode[] {
   const seen = new Set<string>();
   const surfaces: PlanNode[] = [];
+
+  const push = (node: PlanNode, endpoint: string, method?: string | null) => {
+    const path = String(endpoint || "").trim();
+    if (!path || path === "-" || path.startsWith("http") && !path.includes("/")) return;
+    // Normalize full URLs to pathname when possible.
+    let display = path;
+    try {
+      if (/^https?:\/\//i.test(path)) display = new URL(path).pathname || path;
+    } catch {
+      // keep raw
+    }
+    const key = `${String(method || node.method || "").toUpperCase()} ${display}`.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    surfaces.push({
+      ...node,
+      endpoint: display,
+      method: method || node.method || null,
+      title: node.title || `${String(method || node.method || "ENDPOINT").toUpperCase()} ${display}`,
+      kind: node.kind === "surface" || node.kind === "request" ? node.kind : "surface",
+    });
+  };
+
   for (const node of nodes) {
     if ((node.level || "work_item") !== "work_item") continue;
     const kind = String(node.kind || "");
-    if (kind !== "surface" && kind !== "request") continue;
-    const key = `${node.method || ""} ${node.endpoint || node.title || ""}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    surfaces.push(node);
+    if (kind === "surface" || kind === "request") {
+      push(node, String(node.endpoint || node.title || ""), node.method);
+      continue;
+    }
+    // Coverage/http/worker probes that recorded an endpoint.
+    if (node.endpoint && ["test", "http", "browser", "scan", "traffic", "worker"].includes(kind)) {
+      push(node, String(node.endpoint), node.method);
+    }
   }
-  return surfaces;
+
+  return surfaces.sort((a, b) =>
+    String(a.endpoint || "").localeCompare(String(b.endpoint || ""))
+    || String(a.method || "").localeCompare(String(b.method || "")),
+  );
 }
 
 function findingMetaLine(finding: Record<string, unknown>): string {

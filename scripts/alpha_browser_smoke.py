@@ -175,7 +175,7 @@ async def assert_snapshot_matches_ui(cdp: CDPClient, *, expected_status: str | N
   const [current, total] = progressText.split('/').map((x) => Number(x));
   const ui = {
     findings: countFromTab('right-tab-findings'),
-    assets: countFromTab('right-tab-assets'),
+    surface: countFromTab('right-tab-surface'),
     pending: countFromTab('right-tab-pending'),
     evidence: countFromTab('right-tab-evidence'),
     progressCurrent: current,
