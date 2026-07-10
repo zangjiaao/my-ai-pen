@@ -1355,6 +1355,26 @@ def _task_assign_from_user_message(conv_id: str, msg: dict, task_id: str) -> dic
         "snapshot": msg.get("snapshot") or {},
     }
 
+
+async def _worker_limits_for_node(node_id: str | None) -> dict:
+    """Attach node-configured worker wall-clock / turn budgets to task_assign."""
+    if not node_id:
+        return {}
+    try:
+        from app.db.base import async_session
+        from app.models.node import Node
+        from app.api.nodes import worker_limits_from_config
+
+        async with async_session() as db:
+            result = await db.execute(select(Node).where(Node.id == uuid.UUID(str(node_id))))
+            node = result.scalar_one_or_none()
+            if not node or str(node.type or "") == "platform":
+                return {}
+            return worker_limits_from_config(node.config)
+    except Exception as e:
+        print(f"[WS] _worker_limits_for_node error: {e}")
+        return {}
+
 def _agent_assignment_notice(decision, node_id: str, node_name: str | None = None) -> str:
     agent_label = _agent_label_for_notice(getattr(decision, "agent", "") or _capability_for_notice(getattr(decision, "capability", "")))
     node_label = str(node_name or "").strip() or (node_id[:8] if node_id else "")
@@ -1762,6 +1782,9 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             elif not resumed_from_context:
                                 snapshot["checkpoint"] = {}
                             task_msg["snapshot"] = snapshot
+                            worker_limits = await _worker_limits_for_node(node_id)
+                            if worker_limits:
+                                task_msg["worker_limits"] = worker_limits
                             if _should_announce_agent_assignment(requested_node_id, msg):
                                 await _announce_agent_assignment(conv_id, decision, node_id)
                             await node_connections[node_id].send_text(json.dumps(task_msg, ensure_ascii=False))
