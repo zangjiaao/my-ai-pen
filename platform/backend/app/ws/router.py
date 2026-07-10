@@ -857,11 +857,15 @@ async def _persist_asset(msg: dict, node_id: str | None):
     try:
         from app.db.base import async_session
         from app.api.assets import upsert_discovered_asset
-        from app.services.asset_ledger import normalize_address
+        from app.services.asset_ledger import is_valid_ledger_address, normalize_address
 
-        address = normalize_address(
-            msg.get("address") or msg.get("affected_asset") or msg.get("target") or "unknown"
-        )
+        raw_address = msg.get("address") or msg.get("affected_asset") or msg.get("target") or ""
+        # Drop path/file noise (e.g. reflected.php) — not enterprise ledger hosts.
+        if not is_valid_ledger_address(raw_address):
+            return None
+        address = normalize_address(raw_address)
+        if not address:
+            return None
         # Pass None when agent omits identity fields so merge keeps ledger name/type.
         hostname = msg.get("hostname")
         name = str(hostname).strip() if hostname is not None and str(hostname).strip() else None

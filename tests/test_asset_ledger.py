@@ -15,6 +15,7 @@ from app.services.asset_ledger import (  # noqa: E402
     apply_discover_to_asset_fields,
     compute_security_changes,
     extract_ports,
+    is_valid_ledger_address,
     normalize_address,
     ports_summary,
     render_remediation_markdown,
@@ -30,6 +31,20 @@ class AssetLedgerNormalizeTests(unittest.TestCase):
         self.assertEqual(normalize_address("10.0.0.5:8080"), "10.0.0.5:8080")
         # Manual bare host and agent URL share one merge key.
         self.assertEqual(normalize_address("pay.corp.local"), normalize_address("https://pay.corp.local/app"))
+        # Path/file fragments are not ledger keys.
+        self.assertEqual(normalize_address("reflected.php"), "")
+        self.assertEqual(normalize_address("/vulnerabilities/fi/?page=include.php"), "")
+
+    def test_rejects_dirty_agent_path_assets(self):
+        self.assertFalse(is_valid_ledger_address("reflected.php"))
+        self.assertFalse(is_valid_ledger_address("include.php"))
+        self.assertFalse(is_valid_ledger_address("/admin/login.php"))
+        self.assertFalse(is_valid_ledger_address("unknown"))
+        self.assertFalse(is_valid_ledger_address(""))
+        self.assertTrue(is_valid_ledger_address("pay.example.com"))
+        self.assertTrue(is_valid_ledger_address("https://pay.example.com/app/login.php"))
+        self.assertTrue(is_valid_ledger_address("10.0.0.8"))
+        self.assertTrue(is_valid_ledger_address("localhost:3000"))
 
 
 class AssetLedgerMergeTests(unittest.TestCase):

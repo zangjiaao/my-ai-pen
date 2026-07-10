@@ -79,7 +79,13 @@ async def delete_conversation(conv_id: str, current_user: dict = Depends(get_cur
     await db.execute(delete(Message).where(Message.conversation_id == conversation_id))
     await db.execute(delete(Evidence).where(Evidence.conversation_id == conversation_id))
     await db.execute(delete(Vulnerability).where(Vulnerability.conversation_id == conversation_id))
-    await db.execute(delete(Asset).where(Asset.conversation_id == conversation_id))
+    # Asset ledger is user-owned and long-lived: do not cascade-delete on session delete.
+    # Unbind so history remains; users delete assets manually from 资产管理.
+    await db.execute(
+        Asset.__table__.update()
+        .where(Asset.conversation_id == conversation_id)
+        .values(conversation_id=None)
+    )
     await _audit(db, user_id, "conversation.delete", "conversation", conversation_id, conversation_id, {
         "title": title,
         "status": status,

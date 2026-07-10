@@ -20,6 +20,7 @@ from app.services.asset_ledger import (
     compute_security_changes,
     extract_ports,
     extract_services,
+    is_valid_ledger_address,
     normalize_address,
     ports_summary,
     render_changes_markdown,
@@ -166,7 +167,11 @@ async def create_asset(
     db: AsyncSession = Depends(get_db),
 ):
     user_id = uuid.UUID(current_user["user_id"])
+    if not is_valid_ledger_address(body.address):
+        raise HTTPException(400, "地址无效：请填写主机 IP、域名或 URL（不要用脚本路径/文件名）")
     address = normalize_address(body.address)
+    if not address:
+        raise HTTPException(400, "地址无效：无法解析为可台账的主机")
     # Merge into existing ledger row for same normalized address.
     existing = await db.execute(
         select(Asset).where(Asset.user_id == user_id, Asset.address == address)
@@ -277,7 +282,11 @@ async def update_asset(
         if k in body:
             setattr(a, k, body[k])
     if "address" in body:
+        if not is_valid_ledger_address(body["address"]):
+            raise HTTPException(400, "地址无效：请填写主机 IP、域名或 URL（不要用脚本路径/文件名）")
         a.address = normalize_address(body["address"])
+        if not a.address:
+            raise HTTPException(400, "地址无效：无法解析为可台账的主机")
     await _audit(db, user_id, "asset.update", "asset", a.id, {"fields": sorted(body.keys())})
     await db.commit()
     await db.refresh(a)

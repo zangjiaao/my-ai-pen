@@ -40,11 +40,28 @@ OPEN_VULN_STATUSES = frozenset({
 })
 
 
+# Bare path/file segments agents often mis-report as "assets" (not hosts).
+_REJECT_ADDRESS_TOKENS = frozenset({
+    "unknown", "n/a", "na", "none", "null", "-", "undefined", "localhost.localdomain",
+})
+_FILE_LIKE_EXT = re.compile(
+    r"\.(?:php|phtml|asp|aspx|jsp|jspx|cgi|pl|py|rb|js|mjs|ts|css|html?|htm|shtml|"
+    r"json|xml|txt|map|woff2?|ttf|eot|svg|png|jpe?g|gif|ico|pdf|zip|tar|gz|rar|"
+    r"sql|bak|old|swf|do|action)(?:\?.*)?$",
+    re.IGNORECASE,
+)
+_IPV4 = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
+_HOSTISH = re.compile(
+    r"^(?:localhost|host\.docker\.internal|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,})$",
+    re.IGNORECASE,
+)
+
+
 def normalize_address(value: object) -> str:
-    """Normalize host/URL/IP to a stable merge key (lowercase, strip path noise)."""
+    """Normalize host/URL/IP to a stable merge key (lowercase host[:port], no path)."""
     raw = str(value or "").strip().strip("'\"")
     if not raw:
-        return "unknown"
+        return ""
 
     url_match = re.search(r"https?://[^\s,;)\]}>'\"]+", raw, flags=re.IGNORECASE)
     if url_match:
@@ -62,6 +79,9 @@ def normalize_address(value: object) -> str:
     if parsed.hostname:
         # Host+port only (no scheme/path) so manual and agent forms merge.
         host = parsed.hostname.lower()
+        # Agents sometimes emit "reflected.php" which regex mistreats as host.tld.
+        if _FILE_LIKE_EXT.search(host) or host in _REJECT_ADDRESS_TOKENS:
+            return ""
         try:
             port_value = parsed.port
         except ValueError:
@@ -69,7 +89,51 @@ def normalize_address(value: object) -> str:
         port = f":{port_value}" if port_value else ""
         return f"{host}{port}"
 
-    return raw.lower().rstrip("/")
+    # Do not fall back to raw path/filename — empty signals "not a ledger asset".
+    return ""
+
+
+def is_valid_ledger_address(value: object) -> bool:
+    """
+    True only for host/IP(/URL) suitable for the enterprise asset ledger.
+
+    Rejects path-only pages (e.g. reflected.php, /admin/login) that agents
+    sometimes emit as "assets".
+    """
+    raw = str(value or "").strip().strip("'\"")
+    if not raw:
+        return False
+    if raw.lower() in _REJECT_ADDRESS_TOKENS:
+        return False
+
+    # Pure path or bare file name without host context.
+    if raw.startswith("/") or raw.startswith("./") or raw.startswith("../"):
+        return False
+    bare = raw.split("?", 1)[0].rstrip("/")
+    if "/" not in bare and "\\" not in bare and _FILE_LIKE_EXT.search(bare):
+        return False
+    # "dir/file.php" without scheme/host
+    if "://" not in raw and not re.match(r"^(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?$", raw):
+        if "/" in bare and _FILE_LIKE_EXT.search(bare.rsplit("/", 1)[-1]):
+            # Allow only if a real host was extractable via normalize.
+            pass
+
+    norm = normalize_address(raw)
+    if not norm or norm.lower() in _REJECT_ADDRESS_TOKENS:
+        return False
+
+    host = norm.split(":", 1)[0]
+    if host in _REJECT_ADDRESS_TOKENS:
+        return False
+    if _FILE_LIKE_EXT.search(host):
+        return False
+    if _IPV4.match(host):
+        return all(0 <= int(p) <= 255 for p in host.split("."))
+    if host in {"localhost", "host.docker.internal"}:
+        return True
+    if _HOSTISH.match(host):
+        return True
+    return False
 
 
 def type_label(asset_type: str | None) -> str:
