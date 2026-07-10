@@ -111,6 +111,8 @@ type ConversationSnapshot = {
   assets?: Array<Record<string, unknown>>;
   pending_approvals?: Array<Record<string, unknown>>;
   evidence?: Array<Record<string, unknown>>;
+  /** Authorized task target / scope from conversation.context.task */
+  task_context?: Record<string, unknown>;
 };
 
 export default function ConversationPage() {
@@ -144,6 +146,7 @@ export default function ConversationPage() {
   const [assets, setAssets] = useState<Array<Record<string, unknown>>>([]);
   const [pendingApprovals, setPendingApprovals] = useState<Array<Record<string, unknown>>>([]);
   const [evidence, setEvidence] = useState<Array<Record<string, unknown>>>([]);
+  const [taskContext, setTaskContext] = useState<Record<string, unknown> | undefined>();
   const [running, setRunning] = useState(false);
   const [timelineCursorAt, setTimelineCursorAt] = useState<string | undefined>();
   const [selectedVulnerability, setSelectedVulnerability] = useState<Partial<SecurityVulnerability> | null>(null);
@@ -212,6 +215,11 @@ export default function ConversationPage() {
     setAssets(snapshot.assets?.length ? snapshot.assets : fallback?.assets || []);
     setPendingApprovals(snapshot.pending_approvals?.length ? snapshot.pending_approvals : fallback?.pending_approvals || []);
     setEvidence(snapshot.evidence?.length ? snapshot.evidence : fallback?.evidence || []);
+    setTaskContext(
+      snapshot.task_context && Object.keys(snapshot.task_context).length
+        ? snapshot.task_context
+        : fallback?.task_context,
+    );
     const snapshotConversation = snapshot.conversation || fallback?.conversation;
     if (snapshotConversation) setActiveConversationNodeId(snapshotConversation.node_id || null);
     setRunning(snapshotConversation?.status === "running");
@@ -642,6 +650,7 @@ export default function ConversationPage() {
     setAssets([]);
     setPendingApprovals([]);
     setEvidence([]);
+    setTaskContext(undefined);
     setRunning(false);
   }, []);
 
@@ -1097,6 +1106,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               timelineCursorAt={timelineCursorAt}
               findings={findings}
               assets={assets}
+              taskContext={taskContext}
               onOpenVulnerability={setSelectedVulnerability}
               onOpenAsset={setSelectedAsset}
             />
@@ -1107,6 +1117,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
         open={Boolean(selectedVulnerability)}
         vulnerabilityId={selectedVulnerability?.vulnerability_id as string | undefined}
         initial={selectedVulnerability}
+        sessionName={activeId ? conversations?.find((c) => c.id === activeId)?.title : undefined}
         onClose={() => setSelectedVulnerability(null)}
         onUpdated={(updated) => setFindings(prev => upsertBy(prev, updated as unknown as Record<string, unknown>, "id"))}
         onRetestCreated={(conversationId) => { void fetchAll(); void loadConversation(conversationId); }}
