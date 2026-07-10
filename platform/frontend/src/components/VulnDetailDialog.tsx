@@ -1,12 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { authFetch } from "../lib/api";
-import { asString, shortId, type SecurityEvidence, type SecurityVulnerability } from "../lib/securityTypes";
+import { evidenceCardPreview, type EvidenceLike } from "../lib/evidenceDisplay";
+import { asString, type SecurityEvidence, type SecurityVulnerability } from "../lib/securityTypes";
 
 interface Props {
   open: boolean;
   vulnerabilityId?: string | null;
   initial?: Partial<SecurityVulnerability> | null;
+  /** Current conversation / session display name when available. */
+  sessionName?: string | null;
   onClose: () => void;
   onUpdated?: (vulnerability: SecurityVulnerability) => void;
   onRetestCreated?: (conversationId: string) => void;
@@ -32,16 +35,15 @@ const SEVERITY_CLASSES: Record<string, string> = {
   info: "bg-canvas-inset text-ink-secondary",
 };
 
-const NEXT_STATUS: Record<string, string[]> = {
-  pending: ["confirmed", "accepted", "false_positive"],
-  confirmed: ["reported", "fixed", "accepted", "false_positive", "pending"],
-  reported: ["fixed", "accepted", "confirmed"],
-  fixed: ["confirmed", "reported"],
-  accepted: ["confirmed", "fixed"],
-  false_positive: ["pending", "confirmed"],
-};
-
-export default function VulnDetailDialog({ open, vulnerabilityId, initial, onClose, onUpdated, onRetestCreated, onOpenEvidence }: Props) {
+export default function VulnDetailDialog({
+  open,
+  vulnerabilityId,
+  initial,
+  sessionName,
+  onClose,
+  onRetestCreated,
+  onOpenEvidence,
+}: Props) {
   const navigate = useNavigate();
   const [detail, setDetail] = useState<SecurityVulnerability | null>(null);
   const [loading, setLoading] = useState(false);
@@ -54,7 +56,8 @@ export default function VulnDetailDialog({ open, vulnerabilityId, initial, onClo
     if (!open) return;
     setError("");
     setDetail(normalizeInitial(initial));
-    if (!id) return;
+    // Session findings use synthetic ids (finding:...) — no platform vuln record to fetch.
+    if (!id || String(id).startsWith("finding:")) return;
     setLoading(true);
     authFetch<SecurityVulnerability>(`/api/vulnerabilities/${id}`)
       .then(setDetail)
@@ -63,24 +66,8 @@ export default function VulnDetailDialog({ open, vulnerabilityId, initial, onClo
   }, [open, id, initial]);
 
   const vulnerability = detail || normalizeInitial(initial);
-  const statusOptions = useMemo(() => NEXT_STATUS[vulnerability?.status || ""] || [], [vulnerability?.status]);
 
   if (!open) return null;
-
-  const updateStatus = async (nextStatus: string) => {
-    if (!id) return;
-    try {
-      setError("");
-      const updated = await authFetch<SecurityVulnerability>(`/api/vulnerabilities/${id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ status: nextStatus }),
-      });
-      setDetail(updated);
-      onUpdated?.(updated);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Status update failed");
-    }
-  };
 
   const startRetest = async () => {
     if (!id) return;
@@ -99,133 +86,405 @@ export default function VulnDetailDialog({ open, vulnerabilityId, initial, onClo
     }
   };
 
+  const findingKind = resolveDetailKind(vulnerability, initial);
+  const flagToken = extractDetailFlagToken(vulnerability, initial);
+  const keySub = detailAuthSubtype(vulnerability, initial);
+  const headline =
+    findingKind === "flag"
+      ? flagToken || asString(vulnerability?.title, "Captured flag")
+      : asString(vulnerability?.title, findingKind === "key" ? "Credential" : "Untitled vulnerability");
+  const badgeLabel =
+    findingKind === "vuln"
+      ? normalizeSeverity(vulnerability?.severity)
+      : findingKind === "flag"
+        ? "Flag"
+        : keySub.label;
+  const badgeClass =
+    findingKind === "vuln"
+      ? SEVERITY_CLASSES[normalizeSeverity(vulnerability?.severity)] || SEVERITY_CLASSES.info
+      : findingKind === "flag"
+        ? "bg-status-success/15 text-status-success"
+        : keySub.badgeClass;
+
+  const sessionLabel = asString(
+    sessionName
+      || (initial as { conversation_title?: string } | null)?.conversation_title
+      || (vulnerability as { conversation_title?: string } | null)?.conversation_title
+      || (vulnerability?.conversation_id ? shortSessionId(vulnerability.conversation_id) : ""),
+    "—",
+  );
+  const agentName = asString(vulnerability?.agent_name || vulnerability?.agent_id, "—");
+  const discoveredAt = formatDetailTime(vulnerability?.discovered_at || vulnerability?.timestamp);
+
+  const method = vulnerability?.method ? String(vulnerability.method).toUpperCase() : "";
+  // Prefer Surface-tree aligned path (set when finding is hung on the panel).
+  const surfaceFromPanel = String(
+    (vulnerability as { __surface_display?: string } | null)?.__surface_display
+      || (initial as { __surface_display?: string } | null)?.__surface_display
+      || "",
+  ).trim();
+  const surfaceFromUrl = (() => {
+    const raw = String(vulnerability?.endpoint || vulnerability?.location || vulnerability?.url || "").trim();
+    if (!raw) return "";
+    try {
+      if (/^https?:\/\//i.test(raw)) {
+        const token = raw.match(/^https?:\/\/\S+/i)?.[0] || raw;
+        const u = new URL(token);
+        const origin = `${u.hostname}${u.port ? `:${u.port}` : ""}`;
+        let path = u.pathname || "/";
+        if (path.length > 1) path = path.replace(/\/+$/, "");
+        return path === "/" ? origin : `${origin}${path}`;
+      }
+    } catch {
+      /* ignore */
+    }
+    if (raw.startsWith("/")) return raw.split(/[?#]/)[0] || raw;
+    return raw;
+  })();
+  const surfaceLine = surfaceFromPanel || [method, surfaceFromUrl].filter(Boolean).join(" ") || "—";
+
+  const description = String(
+    vulnerability?.description || vulnerability?.impact || vulnerability?.poc || "",
+  ).trim();
+  const highlightTokens = collectHighlightTokens(findingKind, flagToken, description, vulnerability);
+
+  const timelineEvents = buildDetailTimeline(vulnerability);
+  const evidenceItems = vulnerability?.evidence?.length
+    ? vulnerability.evidence
+    : (vulnerability?.evidence_ids || []).map((evidenceId) => ({
+        id: evidenceId,
+        evidence_id: evidenceId,
+        type: "evidence",
+        summary: evidenceId,
+      }));
+  const canMutate = Boolean(id && !String(id).startsWith("finding:"));
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={onClose}>
-      <div className="max-h-[88vh] w-full max-w-3xl overflow-y-auto rounded-lg border border-hairline-soft bg-canvas p-6 shadow-xl" onClick={(event) => event.stopPropagation()}>
+      <div
+        className="max-h-[88vh] w-full max-w-3xl overflow-y-auto rounded-lg border border-hairline-soft bg-canvas p-6 shadow-xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        {/* 1. Name + badge */}
         <div className="mb-4 flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <h2 className="break-words text-xl font-semibold">{asString(vulnerability?.title, "Vulnerability detail")}</h2>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <SeverityBadge severity={asString(vulnerability?.severity, "info")} />
-              <span className="rounded-md bg-canvas-inset px-2 py-0.5 text-xs text-ink-secondary">{asString(vulnerability?.status, "pending")}</span>
-              {loading && <span className="text-xs text-ink-muted">Loading...</span>}
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <span className={`inline-block shrink-0 rounded-md px-2.5 py-0.5 font-mono text-[11px] font-medium uppercase ${badgeClass}`}>
+                {badgeLabel}
+              </span>
+              <h2 className={`min-w-0 break-words text-xl font-semibold ${findingKind === "flag" ? "font-mono" : ""}`}>
+                {headline}
+              </h2>
             </div>
+            {loading && <p className="mt-1 text-xs text-ink-muted">Loading...</p>}
           </div>
           <div className="flex flex-shrink-0 gap-2">
-            {id && <button onClick={() => void startRetest()} disabled={retesting} className="rounded-md bg-ink px-3 py-1.5 text-xs text-white disabled:opacity-60">{retesting ? "Starting..." : "Retest"}</button>}
-            <button onClick={onClose} className="rounded-md border border-hairline px-3 py-1.5 text-xs hover:bg-surface-default">Close</button>
+            {canMutate && findingKind === "vuln" && (
+              <button
+                onClick={() => void startRetest()}
+                disabled={retesting}
+                className="rounded-md bg-ink px-3 py-1.5 text-xs text-white disabled:opacity-60"
+              >
+                {retesting ? "Starting..." : "Retest"}
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="rounded-md border border-hairline px-3 py-1.5 text-xs hover:bg-surface-default"
+            >
+              Close
+            </button>
           </div>
         </div>
 
-        {error && <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
+        {error && !String(error).toLowerCase().includes("not found") && (
+          <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
+        )}
 
-        <div className="grid gap-3 md:grid-cols-4">
-          <Info label="Session" value={shortId(vulnerability?.conversation_id)} />
-          <Info label="Node" value={shortId(vulnerability?.node_id)} />
-          <Info label="Confidence" value={asString(vulnerability?.confidence)} />
-          <Info label="CVSS" value={vulnerability?.cvss == null ? "-" : String(vulnerability.cvss)} />
-          <Info label="CWE" value={asString(vulnerability?.cwe)} />
-          <Info label="Method" value={asString(vulnerability?.method)} />
-          <Info label="Endpoint" value={asString(vulnerability?.endpoint || vulnerability?.location)} />
-          <Info label="Agent" value={asString(vulnerability?.agent_name || vulnerability?.agent_id)} />
-          <Info label="Discovered" value={vulnerability?.discovered_at?.slice(0, 19) || "-"} />
-          <Info label="Updated" value={vulnerability?.updated_at?.slice(0, 19) || "-"} />
-        </div>
-
-        <section className="mt-5">
-          <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">Affected Asset</h3>
-          {vulnerability?.asset ? (
-            <div className="rounded-md bg-canvas-inset p-3 text-sm">
-              <div className="font-medium">{vulnerability.asset.name}</div>
-              <div className="break-all font-mono text-xs text-ink-muted">{vulnerability.asset.address}</div>
-              <div className="mt-1 text-xs text-ink-muted">{vulnerability.asset.type}</div>
-            </div>
-          ) : (
-            <p className="break-all text-sm text-ink-secondary">{asString(vulnerability?.affected_asset || vulnerability?.asset_id)}</p>
-          )}
+        {/* 2. Session · Agent · Discovered */}
+        <section className="grid gap-3 sm:grid-cols-3">
+          <Info label="Session" value={sessionLabel} />
+          <Info label="Agent" value={agentName} />
+          <Info label="Discovered" value={discoveredAt} />
         </section>
 
-        <div className="mt-5 space-y-4 text-sm">
-          <TextBlock title="Location" value={vulnerability?.location || vulnerability?.poc} />
-          <TextBlock title="Description" value={vulnerability?.description} />
-          <TextBlock title="Impact" value={vulnerability?.impact} />
-          <TextBlock title="Technical Analysis" value={vulnerability?.technical_analysis} />
-          <TextBlock title="POC Description" value={vulnerability?.poc_description || vulnerability?.poc || vulnerability?.location} />
-          <TextBlock title="POC Script" value={vulnerability?.poc_script_code} code />
-          <TextBlock title="Remediation" value={vulnerability?.remediation_steps || vulnerability?.remediation} />
-          <CvssBreakdown value={vulnerability?.cvss_breakdown} />
-        </div>
+        {/* 3. Description — highlight FLAG / KEY material */}
+        <section className="mt-5">
+          <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">Description</h3>
+          {findingKind === "flag" && flagToken && (
+            <div className="mb-3 rounded-md border border-status-success/30 bg-status-success/10 px-3 py-2.5">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-status-success">Flag</p>
+              <p className="mt-1 break-all font-mono text-sm font-semibold text-ink">{flagToken}</p>
+            </div>
+          )}
+          {findingKind === "key" && highlightTokens.keySnippet && (
+            <div className="mb-3 rounded-md border border-status-running/25 bg-status-running/10 px-3 py-2.5">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-status-running">{keySub.label}</p>
+              <p className="mt-1 break-all font-mono text-sm font-medium text-ink">{highlightTokens.keySnippet}</p>
+            </div>
+          )}
+          <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-ink-secondary">
+            {description
+              ? renderHighlightedDescription(description, findingKind, flagToken)
+              : "—"}
+          </p>
+        </section>
 
+        {/* 4. Attack surface — same identity as right-panel Surface tree node */}
+        <section className="mt-5">
+          <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">Attack surface</h3>
+          <p className="break-all font-mono text-sm leading-relaxed text-ink-secondary">{surfaceLine}</p>
+        </section>
+
+        {/* 5. Evidence */}
         <section className="mt-5">
           <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">Evidence</h3>
           <div className="space-y-2">
-            {vulnerability?.evidence?.map((item) => (
-              <button key={item.id || item.evidence_id} type="button" onClick={() => onOpenEvidence?.(item)} className="block w-full rounded-md border border-hairline-soft p-2 text-left transition-colors hover:bg-surface-default">
-                <div className="flex items-center justify-between gap-2 text-xs">
-                  <span className="font-mono text-ink-secondary">{item.evidence_id}</span>
-                  <span className="text-ink-muted">{item.source_tool || item.type}</span>
-                </div>
-                <p className="mt-1 max-h-28 overflow-auto whitespace-pre-wrap break-words text-xs text-ink-secondary">{item.summary || item.raw_ref || item.hash || "-"}</p>
-                <EvidenceMetadata item={item} />
-              </button>
-            ))}
-            {!vulnerability?.evidence?.length && (
-              vulnerability?.evidence_ids?.length ? (
-                <div className="space-y-2">
-                  {vulnerability.evidence_ids.map((evidenceId) => (
-                    <button
-                      key={evidenceId}
-                      type="button"
-                      onClick={() => onOpenEvidence?.({ evidence_id: evidenceId, id: evidenceId, type: "evidence" })}
-                      className="block w-full rounded-md border border-hairline-soft p-2 text-left font-mono text-xs text-ink-secondary transition-colors hover:bg-surface-default"
-                    >
-                      {evidenceId}
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <div className="rounded-md bg-canvas-inset p-3 text-xs text-ink-muted">No evidence references</div>
-              )
+            {evidenceItems.map((item, index) => {
+              const preview = evidenceCardPreview(item as EvidenceLike);
+              const thin = !item.summary || preview.detail === "Evidence" || preview.title === item.evidence_id;
+              return (
+                <button
+                  key={item.id || item.evidence_id || index}
+                  type="button"
+                  onClick={() => onOpenEvidence?.(item)}
+                  className="block w-full rounded-md border border-hairline-soft p-3 text-left transition-colors hover:bg-surface-default"
+                >
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="shrink-0 rounded-md bg-canvas-inset px-2 py-0.5 font-mono text-[10px] font-medium uppercase text-ink-secondary">
+                      {preview.badge}
+                    </span>
+                    <span className="min-w-0 truncate text-sm font-medium text-ink">{preview.title}</span>
+                  </div>
+                  <p className="mt-1.5 line-clamp-2 break-words text-xs text-ink-muted">
+                    {thin
+                      ? "Reference recorded (raw request not captured yet)"
+                      : preview.detail}
+                  </p>
+                </button>
+              );
+            })}
+            {!evidenceItems.length && (
+              <div className="rounded-md bg-canvas-inset p-3 text-xs text-ink-muted">
+                No evidence linked. Agents should attach HTTP/tool evidence when confirming findings.
+              </div>
             )}
           </div>
         </section>
 
-
+        {/* 6. Timeline axis — dots and rail centered in a fixed column */}
         <section className="mt-5">
-          <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">Status Timeline</h3>
-          <div className="space-y-2">
-            {(vulnerability?.status_timeline || []).map((event, index) => (
-              <div key={index} className="rounded-md border border-hairline-soft p-2 text-xs">
-                <div className="font-medium">{asString(event.label || event.status)}</div>
-                <div className="mt-1 font-mono text-ink-muted">{asString(event.at)}</div>
-              </div>
-            ))}
-            {!vulnerability?.status_timeline?.length && <p className="text-sm text-ink-muted">No status events recorded</p>}
-          </div>
-        </section>
-        <section className="mt-5">
-          <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">Lifecycle</h3>
-          <div className="flex flex-wrap gap-2">
-            {id && statusOptions.map((status) => (
-              <button key={status} onClick={() => void updateStatus(status)} className="rounded-md border border-hairline px-3 py-1.5 text-xs hover:bg-surface-default">{status}</button>
-            ))}
-            {!id && <span className="text-xs text-ink-muted">Persisted vulnerability id is not available for status changes.</span>}
-          </div>
+          <h3 className="mb-3 text-xs font-semibold uppercase text-ink-secondary">Timeline</h3>
+          {timelineEvents.length ? (
+            <div>
+              {timelineEvents.map((event, index) => {
+                const isLast = index === timelineEvents.length - 1;
+                return (
+                  <div key={index} className="flex gap-3">
+                    <div className="flex w-3 shrink-0 flex-col items-center">
+                      <span
+                        aria-hidden
+                        className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full bg-ink-muted"
+                      />
+                      {!isLast && (
+                        <span aria-hidden className="mt-1 w-px flex-1 min-h-[1.25rem] bg-hairline" />
+                      )}
+                    </div>
+                    <div className={`min-w-0 ${isLast ? "pb-0" : "pb-4"}`}>
+                      <p className="text-sm font-medium leading-snug text-ink">{event.label}</p>
+                      <p className="mt-0.5 font-mono text-[11px] text-ink-muted">{event.at}</p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-sm text-ink-muted">No timeline events</p>
+          )}
         </section>
       </div>
     </div>
   );
 }
 
+function Info({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md bg-canvas-inset p-2.5">
+      <div className="text-xs text-ink-muted">{label}</div>
+      <div className="mt-1 break-all font-mono text-xs text-ink">{value || "—"}</div>
+    </div>
+  );
+}
+
+function formatDetailTime(value: unknown): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "—";
+  return raw.slice(0, 19).replace("T", " ");
+}
+
+function shortSessionId(id: string): string {
+  return id.length > 12 ? `${id.slice(0, 8)}…` : id;
+}
+
+function collectHighlightTokens(
+  kind: DetailKind,
+  flagToken: string,
+  description: string,
+  vulnerability: SecurityVulnerability | null,
+): { keySnippet?: string } {
+  if (kind !== "key") return {};
+  const blob = [description, vulnerability?.poc, vulnerability?.title].map((v) => String(v || "")).join("\n");
+  // JWT
+  const jwt = blob.match(/eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+/);
+  if (jwt) return { keySnippet: jwt[0].length > 96 ? `${jwt[0].slice(0, 93)}…` : jwt[0] };
+  // key=value or password-like short secrets
+  const kv = blob.match(
+    /\b(?:password|passwd|pwd|api[_-]?key|secret|token|bearer)\s*[:=]\s*([^\s,;"']{4,120})/i,
+  );
+  if (kv) return { keySnippet: `${kv[0].slice(0, 120)}` };
+  // quoted secret
+  const quoted = blob.match(/["']([A-Za-z0-9_\-./+=]{12,80})["']/);
+  if (quoted) return { keySnippet: quoted[1] };
+  if (description.length > 0 && description.length <= 160) return { keySnippet: description };
+  return {};
+}
+
+function renderHighlightedDescription(
+  text: string,
+  kind: DetailKind,
+  flagToken: string,
+): ReactNode {
+  if (kind === "flag" && flagToken) {
+    const parts = text.split(flagToken);
+    if (parts.length === 1) return text;
+    return parts.flatMap((part, i) =>
+      i === 0
+        ? [part]
+        : [
+            <mark key={`f-${i}`} className="rounded bg-status-success/20 px-1 font-mono font-semibold text-ink">
+              {flagToken}
+            </mark>,
+            part,
+          ],
+    );
+  }
+  // Highlight flag{...} anywhere
+  const nodes: ReactNode[] = [];
+  const re = /flag\{[^{}\n]{2,120}\}/gi;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  let i = 0;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) nodes.push(text.slice(last, m.index));
+    nodes.push(
+      <mark key={`fl-${i++}`} className="rounded bg-status-success/20 px-1 font-mono font-semibold text-ink">
+        {m[0]}
+      </mark>,
+    );
+    last = m.index + m[0].length;
+  }
+  if (last === 0) return text;
+  if (last < text.length) nodes.push(text.slice(last));
+  return nodes;
+}
+
+type DetailKind = "vuln" | "flag" | "key";
+
+type FindingExtras = {
+  finding_kind?: string | null;
+  kind?: string | null;
+  category?: string | null;
+  flag_value?: string | null;
+  url?: string | null;
+  target?: string | null;
+  impact?: string | null;
+  reproduction?: string | null;
+  evidence_id?: string | null;
+  __surface_kind?: string | null;
+};
+
+function resolveDetailKind(
+  vulnerability: SecurityVulnerability | null,
+  initial?: Partial<SecurityVulnerability> | null,
+): DetailKind {
+  const raw = { ...(initial || {}), ...(vulnerability || {}) } as FindingExtras & Partial<SecurityVulnerability>;
+  // Prefer explicit surface-click kind so FLAG chip opens Flag detail even if record primary kind is vuln.
+  const explicit = String(raw.__surface_kind || raw.finding_kind || raw.kind || raw.category || "")
+    .trim()
+    .toLowerCase();
+  if (["flag", "flags", "ctf"].includes(explicit)) return "flag";
+  if (["auth", "key", "credential", "credentials", "secret", "secrets", "password", "apikey", "api_key", "aksk"].includes(explicit)) {
+    return "key";
+  }
+  if (["vuln", "vulnerability", "vulns"].includes(explicit)) return "vuln";
+  if (extractDetailFlagToken(vulnerability, initial)) return "flag";
+  return "vuln";
+}
+
+function extractDetailFlagToken(
+  vulnerability: SecurityVulnerability | null,
+  initial?: Partial<SecurityVulnerability> | null,
+): string {
+  const raw = { ...(initial || {}), ...(vulnerability || {}) } as FindingExtras & Partial<SecurityVulnerability>;
+  const direct = String(raw.flag_value || "").trim();
+  if (direct) return direct;
+  const blob = [raw.title, raw.description, raw.poc, raw.poc_description, raw.impact, raw.reproduction, raw.location]
+    .map((v) => String(v || ""))
+    .join("\n");
+  const m = blob.match(/flag\{[^{}\n]{2,120}\}/i) || blob.match(/FLAG\{[^{}\n]{2,120}\}/);
+  return m ? m[0] : "";
+}
+
+function detailAuthSubtype(
+  vulnerability: SecurityVulnerability | null,
+  initial?: Partial<SecurityVulnerability> | null,
+): { label: string; badgeClass: string } {
+  const raw = { ...(initial || {}), ...(vulnerability || {}) } as FindingExtras & Partial<SecurityVulnerability>;
+  const blob = [raw.title, raw.description, raw.poc, raw.impact, raw.location, raw.flag_value]
+    .map((v) => String(v || ""))
+    .join("\n")
+    .toLowerCase();
+  if (/\bjwt\b|\beyj[a-z0-9_-]+\./i.test(blob)) return { label: "JWT", badgeClass: "bg-status-running/12 text-status-running" };
+  if (/\b(api[_-]?key|access[_-]?key|akia[0-9a-z]{12,}|ak\/sk)\b/i.test(blob)) return { label: "APIKEY", badgeClass: "bg-[#ecfeff] text-[#0e7490]" };
+  if (/\b(password|passwd|pwd|密码)\b/i.test(blob)) return { label: "PASSWORD", badgeClass: "bg-[#f5f3ff] text-[#6d28d9]" };
+  if (/\b(session[_-]?id|phpsessid|jsessionid)\b/i.test(blob)) return { label: "SESSION", badgeClass: "bg-[#f0fdfa] text-[#0f766e]" };
+  if (/\b(bearer\s+|oauth|refresh[_-]?token|access[_-]?token)\b/i.test(blob)) return { label: "TOKEN", badgeClass: "bg-[#eef2ff] text-[#4338ca]" };
+  if (/\b(private[_-]?key|secret|credential)\b/i.test(blob)) return { label: "SECRET", badgeClass: "bg-[#f8fafc] text-[#475569]" };
+  return { label: "KEY", badgeClass: "bg-status-running/10 text-status-running" };
+}
+
+function buildDetailTimeline(
+  vulnerability: SecurityVulnerability | null,
+): Array<{ at: string; label: string }> {
+  if (!vulnerability) return [];
+  const events: Array<{ at: string; label: string }> = [];
+  const discovered = vulnerability.discovered_at || vulnerability.timestamp;
+  if (discovered) {
+    events.push({ at: String(discovered).slice(0, 19).replace("T", " "), label: "Discovered" });
+  }
+  for (const event of vulnerability.status_timeline || []) {
+    events.push({
+      at: asString(event.at).slice(0, 19).replace("T", " ") || "—",
+      label: asString(event.label || event.status, "Status update"),
+    });
+  }
+  const updated = vulnerability.updated_at;
+  if (updated && String(updated) !== String(discovered)) {
+    events.push({ at: String(updated).slice(0, 19).replace("T", " "), label: "Updated" });
+  }
+  // Dedupe identical at+label
+  const seen = new Set<string>();
+  return events.filter((e) => {
+    const k = `${e.at}|${e.label}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
 function normalizeInitial(initial?: Partial<SecurityVulnerability> | null): SecurityVulnerability | null {
   if (!initial) return null;
-  const raw = initial as Partial<SecurityVulnerability> & {
-    url?: string | null;
-    target?: string | null;
-    impact?: string | null;
-    reproduction?: string | null;
-    evidence_id?: string | null;
-  };
+  const raw = initial as Partial<SecurityVulnerability> & FindingExtras;
   const location = initial.location || raw.url || raw.target || initial.affected_asset || initial.poc;
   const description = initial.description || raw.impact;
   const poc = initial.poc || raw.reproduction || location;
@@ -234,13 +493,14 @@ function normalizeInitial(initial?: Partial<SecurityVulnerability> | null): Secu
     : raw.evidence_id
       ? [raw.evidence_id]
       : [];
+  const kind = resolveDetailKind(null, initial);
   return {
     id: String(initial.id || initial.vulnerability_id || ""),
     vulnerability_id: initial.vulnerability_id,
     strix_vulnerability_id: initial.strix_vulnerability_id,
     conversation_id: initial.conversation_id,
     node_id: initial.node_id,
-    title: asString(initial.title, "Untitled vulnerability"),
+    title: asString(initial.title, kind === "flag" ? "Captured flag" : kind === "key" ? "Credential / key" : "Untitled vulnerability"),
     severity: normalizeSeverity(initial.severity),
     cvss: initial.cvss,
     cvss_breakdown: initial.cvss_breakdown,
@@ -254,7 +514,7 @@ function normalizeInitial(initial?: Partial<SecurityVulnerability> | null): Secu
     endpoint: initial.endpoint,
     method: initial.method,
     confidence: asString(initial.confidence, "medium"),
-    status: asString(initial.status, "pending"),
+    status: asString(initial.status, "confirmed"),
     description,
     impact: initial.impact || raw.impact,
     technical_analysis: initial.technical_analysis,
@@ -271,77 +531,17 @@ function normalizeInitial(initial?: Partial<SecurityVulnerability> | null): Secu
     status_timeline: initial.status_timeline || [],
     discovered_at: initial.discovered_at,
     updated_at: initial.updated_at,
-  };
-}
-
-function EvidenceMetadata({ item }: { item: NonNullable<SecurityVulnerability["evidence"]>[number] }) {
-  const props = item.properties || {};
-  const entries = [
-    ["raw", item.raw_ref],
-    ["hash", item.hash],
-    ["method", props.method],
-    ["url", props.url],
-    ["status", props.status_code || props.status],
-    ["placeholder", props.placeholder === true ? "yes" : ""],
-  ].filter(([, value]) => value !== undefined && value !== null && value !== "");
-  if (!entries.length) return null;
-  return (
-    <div className="mt-2 grid gap-1 rounded-md bg-canvas-inset p-2 font-mono text-[11px] text-ink-muted">
-      {entries.map(([key, value]) => (
-        <div key={String(key)} className="grid grid-cols-[72px_minmax(0,1fr)] gap-2">
-          <span className="uppercase text-ink-muted">{String(key)}</span>
-          <span className="break-all text-ink-secondary">{asString(value)}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function SeverityBadge({ severity }: { severity: string }) {
-  const normalized = normalizeSeverity(severity);
-  return <span className={`rounded-md px-2.5 py-0.5 font-mono text-[11px] font-medium uppercase ${SEVERITY_CLASSES[normalized] || SEVERITY_CLASSES.info}`}>{normalized}</span>;
+    // Preserve kind metadata for dialog mode (not on base type; cast via spread consumers).
+    ...( {
+      finding_kind: raw.__surface_kind || raw.finding_kind || raw.kind || raw.category,
+      flag_value: raw.flag_value || extractDetailFlagToken(null, initial) || undefined,
+      reproduction: raw.reproduction,
+      __surface_kind: raw.__surface_kind,
+    } as object),
+  } as SecurityVulnerability;
 }
 
 function normalizeSeverity(value: unknown): string {
   const severity = String(value || "info").toLowerCase();
   return ["critical", "high", "medium", "low", "info"].includes(severity) ? severity : "info";
-}
-
-function Info({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-md bg-canvas-inset p-2">
-      <div className="text-xs text-ink-muted">{label}</div>
-      <div className="mt-1 truncate font-mono text-xs">{value || "-"}</div>
-    </div>
-  );
-}
-
-function TextBlock({ title, value, code = false }: { title: string; value?: string | null; code?: boolean }) {
-  return (
-    <section>
-      <h3 className="mb-1 text-xs font-semibold uppercase text-ink-secondary">{title}</h3>
-      {code ? (
-        <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-words rounded-md bg-canvas-inset p-3 font-mono text-xs">{value || "-"}</pre>
-      ) : (
-        <p className="whitespace-pre-wrap break-words text-ink-secondary">{value || "-"}</p>
-      )}
-    </section>
-  );
-}
-
-function CvssBreakdown({ value }: { value?: Record<string, unknown> }) {
-  if (!value || !Object.keys(value).length) return null;
-  return (
-    <section>
-      <h3 className="mb-1 text-xs font-semibold uppercase text-ink-secondary">CVSS Breakdown</h3>
-      <div className="grid gap-1 rounded-md bg-canvas-inset p-3 font-mono text-xs md:grid-cols-2">
-        {Object.entries(value).map(([key, val]) => (
-          <div key={key} className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
-            <span className="truncate text-ink-muted">{key}</span>
-            <span className="text-ink-secondary">{asString(val)}</span>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
 }

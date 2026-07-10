@@ -753,25 +753,129 @@ function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode[] {
   return nodes;
 }
 
+/** Chat card category: reuse vuln card UI; badge shows Vuln / Flag / Key. */
+type FindingCardCategory = "vuln" | "flag" | "key";
+
+function resolveFindingCardCategory(content: Record<string, unknown>): FindingCardCategory {
+  const explicit = String(content.finding_kind || content.kind || content.category || "")
+    .trim()
+    .toLowerCase();
+  if (["flag", "flags", "ctf"].includes(explicit)) return "flag";
+  if (
+    ["auth", "credential", "credentials", "secret", "secrets", "password", "apikey", "api_key", "aksk", "key"].includes(
+      explicit,
+    )
+  ) {
+    return "key";
+  }
+  if (["vuln", "vulnerability", "vulns"].includes(explicit)) return "vuln";
+
+  const blob = [content.title, content.description, content.impact, content.poc, content.reproduction, content.flag_value]
+    .map((v) => String(v || ""))
+    .join("\n");
+  if (/flag\{[^{}\n]{2,120}\}/i.test(blob) || /FLAG\{[^{}\n]{2,120}\}/.test(blob)) {
+    // Prefer Flag badge when the artifact is mainly the token; keep Vuln if title is a vuln class.
+    if (
+      !/\b(sql\s*injection|sqli|xss|rce|ssrf|lfi|xxe|ssti|idor|漏洞|注入)\b/i.test(String(content.title || ""))
+    ) {
+      return "flag";
+    }
+  }
+  if (
+    /\b(api[_-]?key|access[_-]?key|secret[_-]?key|password|credential|credentials|ak\/sk)\b/i.test(blob) &&
+    !/\b(sql\s*injection|sqli|xss|rce|漏洞)\b/i.test(String(content.title || ""))
+  ) {
+    return "key";
+  }
+  return "vuln";
+}
+
+function findingCardTitle(content: Record<string, unknown>, category: FindingCardCategory): string {
+  if (category === "flag") {
+    const direct = String(content.flag_value || "").trim();
+    if (direct) return direct;
+    const blob = [content.title, content.description, content.poc].map((v) => String(v || "")).join("\n");
+    const m = blob.match(/flag\{[^{}\n]{2,120}\}/i) || blob.match(/FLAG\{[^{}\n]{2,120}\}/);
+    if (m) return m[0];
+  }
+  return String(content.title || "Untitled finding");
+}
+
+function chatAuthSubtype(content: Record<string, unknown>): { label: string; badgeClass: string } {
+  const blob = [content.title, content.description, content.poc, content.impact, content.location]
+    .map((v) => String(v || ""))
+    .join("\n")
+    .toLowerCase();
+  if (/\bjwt\b|\beyj[a-z0-9_-]+\./i.test(blob)) return { label: "JWT", badgeClass: "bg-status-running/12 text-status-running" };
+  if (/\b(api[_-]?key|access[_-]?key|akia[0-9a-z]{12,}|ak\/sk)\b/i.test(blob)) return { label: "APIKEY", badgeClass: "bg-[#ecfeff] text-[#0e7490]" };
+  if (/\b(password|passwd|pwd|密码)\b/i.test(blob)) return { label: "PASSWORD", badgeClass: "bg-[#f5f3ff] text-[#6d28d9]" };
+  if (/\b(session[_-]?id|phpsessid|jsessionid)\b/i.test(blob)) return { label: "SESSION", badgeClass: "bg-[#f0fdfa] text-[#0f766e]" };
+  if (/\b(bearer\s+|oauth|refresh[_-]?token|access[_-]?token)\b/i.test(blob)) return { label: "TOKEN", badgeClass: "bg-[#eef2ff] text-[#4338ca]" };
+  if (/\b(private[_-]?key|secret|credential)\b/i.test(blob)) return { label: "SECRET", badgeClass: "bg-[#f8fafc] text-[#475569]" };
+  return { label: "KEY", badgeClass: "bg-status-running/10 text-status-running" };
+}
+
 function VulnCard({ content, onOpen }: { content: Record<string, unknown>; onOpen?: (finding: Partial<SecurityVulnerability>) => void }) {
+  const category = resolveFindingCardCategory(content);
   const severity = normalizeSeverity(content.severity);
-  const borderColor: Record<string, string> = { critical: "border-l-severity-critical", high: "border-l-severity-high", medium: "border-l-severity-medium", low: "border-l-severity-low" };
-  const severityClass: Record<string, string> = {
-    critical: "bg-severity-critical-subtle text-severity-critical",
-    high: "bg-severity-high-subtle text-severity-high",
-    medium: "bg-severity-medium-subtle text-severity-medium",
-    low: "bg-severity-low-subtle text-severity-low",
-    info: "bg-canvas-inset text-ink-secondary",
-  };
-  const confidence = Number(content.confidence);
-  const confidenceText = Number.isFinite(confidence) && confidence <= 1 ? `${Math.round(confidence * 100)}%` : String(content.confidence || "-");
+  const keySub = category === "key" ? chatAuthSubtype(content) : null;
+  const label =
+    category === "vuln" ? severity : category === "flag" ? "Flag" : keySub!.label;
+  const badgeClass =
+    category === "vuln"
+      ? severity === "critical"
+        ? "bg-severity-critical-subtle text-severity-critical"
+        : severity === "high"
+          ? "bg-severity-high-subtle text-severity-high"
+          : severity === "medium"
+            ? "bg-severity-medium-subtle text-severity-medium"
+            : severity === "low"
+              ? "bg-severity-low-subtle text-severity-low"
+              : "bg-canvas-inset text-ink-secondary"
+      : category === "flag"
+        ? "bg-status-success/15 text-status-success"
+        : keySub!.badgeClass;
+  const borderClass =
+    category === "vuln"
+      ? severity === "critical"
+        ? "border-l-severity-critical"
+        : severity === "high"
+          ? "border-l-severity-high"
+          : severity === "medium"
+            ? "border-l-severity-medium"
+            : severity === "low"
+              ? "border-l-severity-low"
+              : "border-l-severity-info"
+      : category === "flag"
+        ? "border-l-status-success"
+        : "border-l-status-running";
+  const description = String(content.description || content.impact || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const subtitle = description
+    ? description.length > 180
+      ? `${description.slice(0, 177)}…`
+      : description
+    : String(content.location || content.endpoint || content.affected_asset || "").trim() || "-";
+
   return (
-    <button type="button" onClick={() => onOpen?.(content as Partial<SecurityVulnerability>)} className={`my-2 block w-full min-w-0 rounded-md border border-hairline bg-canvas border-l-3 ${borderColor[severity] || "border-l-severity-info"} p-4 text-left transition-colors hover:bg-surface-default`}>
+    <button
+      type="button"
+      onClick={() =>
+        onOpen?.({
+          ...content,
+          finding_kind: category === "key" ? "auth" : category,
+          kind: category === "key" ? "auth" : category,
+          __surface_kind: category,
+        } as Partial<SecurityVulnerability>)
+      }
+      className={`my-2 block w-full min-w-0 rounded-md border border-hairline bg-canvas border-l-3 ${borderClass} p-4 text-left transition-colors hover:bg-surface-default`}
+    >
       <div className="mb-1 flex min-w-0 items-center gap-2">
-        <span className={`inline-block flex-shrink-0 rounded-md px-2.5 py-0.5 font-mono text-[11px] font-medium uppercase ${severityClass[severity]}`}>{severity}</span>
-        <span className="min-w-0 truncate font-semibold">{String(content.title || "Untitled vulnerability")}</span>
+        <span className={`inline-block flex-shrink-0 rounded-md px-2.5 py-0.5 font-mono text-[11px] font-medium uppercase ${badgeClass}`}>{label}</span>
+        <span className="min-w-0 truncate font-semibold">{findingCardTitle(content, category)}</span>
       </div>
-      <p className="break-words text-sm text-ink-secondary [overflow-wrap:anywhere]">{String(content.location || content.affected_asset || "-")} - confidence {confidenceText}</p>
+      <p className="line-clamp-2 break-words text-sm text-ink-secondary [overflow-wrap:anywhere]">{subtitle}</p>
     </button>
   );
 }
