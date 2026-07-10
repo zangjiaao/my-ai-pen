@@ -893,21 +893,15 @@ function agentPlanItems(nodes: PlanNode[]): PlanNode[] {
 }
 
 /**
- * Intentional TODO / work-package list for Status.
- * Excludes coverage(mark) test flood, tool telemetry, and findings cards —
- * those belong in Surface / Findings / Activity instead.
+ * Intentional TODO list for Status — CTF/checklist plan items only.
+ * Workers live under Agent collaboration (not duplicated here).
+ * Tool telemetry / coverage(mark) / findings stay out of Tasks.
  */
 function unifiedTodoItems(nodes: PlanNode[]): PlanNode[] {
   const noiseKinds = new Set([
     "tool", "browser", "http", "poc", "scan", "traffic", "finding", "coverage", "verifier",
     "finish_scan", "workflow", "workflow_run", "workflow_list", "workflow_dynamic", "read", "actor",
-    "surface", "request", "test",
-  ]);
-  const intentionalSources = new Set([
-    "agent", "strix_todo", "worker", "pi_workflow", "plan", "coverage.plan", "runtime",
-  ]);
-  const intentionalKinds = new Set([
-    "task", "work", "work_item", "worker", "workflow", "objective", "package",
+    "surface", "request", "test", "worker", "stage",
   ]);
 
   return nodes
@@ -916,17 +910,24 @@ function unifiedTodoItems(nodes: PlanNode[]): PlanNode[] {
       const source = String(node.source || "");
       const kind = String(node.kind || "task");
       const parent = String(node.parent_id || "");
-      // Never show coverage matrix rows as user-facing TODO.
-      if (source === "coverage" || kind === "test") return false;
-      if (noiseKinds.has(kind) && kind !== "worker" && kind !== "workflow") return false;
-      if (intentionalSources.has(source)) return true;
-      if (intentionalKinds.has(kind)) return true;
-      // Explicit workflow-phase plan items from coverage(action='plan').
-      if (parent.startsWith("workflow-") && !noiseKinds.has(kind)) return true;
+      const id = String(node.node_id || node.id || "");
+      // Workers are shown in Agent collaboration, not Tasks.
+      if (kind === "worker" || (source === "worker" && !id.startsWith("plan-followup-") && !/^Follow-up /i.test(String(node.title || "")))) {
+        return false;
+      }
+      // Never show coverage matrix or tool telemetry.
+      if (source === "coverage" || source === "pi_tool" || kind === "test") return false;
+      if (noiseKinds.has(kind)) return false;
+      // Explicit agent/plan checklist items (coverage plan, CTF rows, follow-ups).
+      if (source === "agent" || source === "strix_todo" || source === "plan") return true;
+      if (source === "worker" && (id.startsWith("plan-followup-") || /^Follow-up /i.test(String(node.title || "")))) return true;
+      if (["task", "work", "work_item", "package", "objective"].includes(kind)) return true;
+      if (parent.startsWith("workflow-") || id.startsWith("ctf-") || id.startsWith("workflow-")) return true;
       return false;
     })
     .sort((left, right) => {
-      // Active work first, then incomplete, then finished.
+      // Stable primary sort by priority/id so lists do not thrash order on every status tick.
+      // Secondary: active work slightly preferred when priorities tie.
       const rank = (status: string | undefined) => {
         const s = String(status || "pending");
         if (s === "running") return 0;
@@ -934,14 +935,15 @@ function unifiedTodoItems(nodes: PlanNode[]): PlanNode[] {
         if (s === "blocked") return 2;
         if (s === "failed") return 3;
         if (s === "skipped") return 4;
-        return 5; // done
+        return 5;
       };
+      const byPri = Number(left.priority || 500) - Number(right.priority || 500);
+      if (byPri !== 0) return byPri;
       const byStatus = rank(left.status) - rank(right.status);
       if (byStatus !== 0) return byStatus;
-      return Number(left.priority || 999) - Number(right.priority || 999)
-        || String(left.title || "").localeCompare(String(right.title || ""));
+      return String(left.node_id || left.id || left.title || "").localeCompare(String(right.node_id || right.id || right.title || ""));
     })
-    .slice(0, 32);
+    .slice(0, 40);
 }
 
 function synthesizeMainAgent(activeTool: string | undefined, running: boolean, workflowKind?: string): StrixAgentStatus[] {

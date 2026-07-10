@@ -84,6 +84,45 @@ export function createWorkerTool(runtime: ToolRuntime): ToolDefinition<any> {
         task: task.slice(0, 300),
       });
       await emitPlanUpdate(runtime, "worker.start");
+      // Immediate panel_agents so Agent collaboration does not wait for a throttled checkpoint.
+      await runtime.platform.send({
+        type: "checkpoint_update",
+        conversation_id: runtime.task.conversationId,
+        task_id: runtime.task.taskId,
+        checkpoint: {
+          runtime: "node2-pi",
+          panel_agents: [
+            {
+              id: "node2-main",
+              name: "Main Agent",
+              status: "running",
+              parent_id: null,
+              role: "main",
+              task: runtime.task.instruction?.slice(0, 240) || "",
+              current_tool: "worker",
+              current_action: "dispatch",
+            },
+            ...(runtime.lifecycle.workerRuns || []).map((run) => ({
+              id: run.workerId,
+              name: `Worker ${run.role}`,
+              status: run.ok ? "completed" : run.outcome === "timeout" ? "timed_out" : "failed",
+              parent_id: "node2-main",
+              role: run.role,
+              task: run.task?.slice(0, 240) || "",
+              current_action: run.outcome || (run.ok ? "done" : "failed"),
+            })),
+            {
+              id: workerId,
+              name: `Worker ${role.id}`,
+              status: "running",
+              parent_id: "node2-main",
+              role: role.id,
+              task: task.slice(0, 240),
+              current_action: "running",
+            },
+          ],
+        },
+      } as PlatformMessage);
 
       let result;
       try {
@@ -237,6 +276,44 @@ export function createWorkerTool(runtime: ToolRuntime): ToolDefinition<any> {
         duration_ms: result.durationMs,
       });
       await emitPlanUpdate(runtime, "worker.end");
+      await runtime.platform.send({
+        type: "checkpoint_update",
+        conversation_id: runtime.task.conversationId,
+        task_id: runtime.task.taskId,
+        checkpoint: {
+          runtime: "node2-pi",
+          panel_agents: [
+            {
+              id: "node2-main",
+              name: "Main Agent",
+              status: "running",
+              parent_id: null,
+              role: "main",
+              task: runtime.task.instruction?.slice(0, 240) || "",
+              current_tool: "",
+              current_action: "coordinating",
+            },
+            ...(runtime.lifecycle.workerRuns || []).map((run) => ({
+              id: run.workerId,
+              name: `Worker ${run.role}`,
+              status:
+                run.outcome === "completed" || run.ok
+                  ? "completed"
+                  : run.outcome === "timeout"
+                    ? "timed_out"
+                    : run.outcome === "aborted"
+                      ? "stopped"
+                      : "failed",
+              parent_id: "node2-main",
+              role: run.role,
+              task: run.task?.slice(0, 240) || "",
+              current_action: run.outcome || (run.ok ? "done" : "failed"),
+              duration_ms: run.durationMs,
+              tool_call_count: run.toolCallCount,
+            })),
+          ],
+        },
+      } as PlatformMessage);
 
       const openLeft = unresolvedWorkerPackages(runtime.lifecycle);
       return jsonResult({

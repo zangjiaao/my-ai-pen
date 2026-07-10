@@ -150,6 +150,9 @@ export default function ConversationPage() {
   const [selectedAsset, setSelectedAsset] = useState<Partial<SecurityAsset> | null>(null);
   const [selectedEvidence, setSelectedEvidence] = useState<Partial<SecurityEvidence> | null>(null);
   const [highlightedApprovalId, setHighlightedApprovalId] = useState<string | null>(null);
+  /** Debounce high-frequency plan_tree_updated so Status/Tasks does not flicker. */
+  const planTreeDebounceRef = useRef<number | null>(null);
+  const planTreeRefreshThrottleRef = useRef<number>(0);
 
   const messageQuery = useInfiniteQuery({
     queryKey: ["conversation-messages", activeId],
@@ -360,11 +363,23 @@ export default function ConversationPage() {
       const m = msg as Record<string, unknown>;
       const convId = messageConversationId(msg, activeId);
       const tree = Array.isArray(m.plan_tree) ? m.plan_tree as PlanNode[] : m.plan_node ? [m.plan_node as PlanNode] : [];
-      if (tree.length) setPlanTree(tree);
+      if (tree.length) {
+        // Coalesce rapid plan broadcasts (tool start/end) into one UI update.
+        if (planTreeDebounceRef.current) window.clearTimeout(planTreeDebounceRef.current);
+        planTreeDebounceRef.current = window.setTimeout(() => {
+          setPlanTree(tree);
+          planTreeDebounceRef.current = null;
+        }, 250);
+      }
       if (isProgress(m.progress)) setProgress(m.progress);
       if (isKanbanSummary(m.kanban)) setKanban(m.kanban);
-      addMessageToConversation(convId, makeMessage(convId, "system", "plan_tree_updated", { ...m, message_id: readString(m.message_id) || crypto.randomUUID() }));
-      void refreshConversationState(convId);
+      // Do not append every plan tick to the chat stream — it floods and triggers re-renders.
+      // Snapshot refresh is throttled; live tree comes from debounced setPlanTree above.
+      const now = Date.now();
+      if (now - planTreeRefreshThrottleRef.current > 4000) {
+        planTreeRefreshThrottleRef.current = now;
+        void refreshConversationState(convId);
+      }
     },
     completion_blocked: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
@@ -416,8 +431,11 @@ export default function ConversationPage() {
       const convId = messageConversationId(msg, activeId);
       const checkpoint = m.checkpoint && typeof m.checkpoint === "object" && !Array.isArray(m.checkpoint) ? m.checkpoint as Record<string, unknown> : {};
       const node3Strix = checkpoint.node3_strix && typeof checkpoint.node3_strix === "object" && !Array.isArray(checkpoint.node3_strix) ? checkpoint.node3_strix as Record<string, unknown> : {};
-      if (Array.isArray(node3Strix.agents)) {
+      // Node3 agents, or Node2 panel_agents (worker tree), or diagnostics fallback from snapshot path.
+      if (Array.isArray(node3Strix.agents) && node3Strix.agents.length) {
         setStrixAgents(node3Strix.agents.filter(isStrixAgentStatus));
+      } else if (Array.isArray(checkpoint.panel_agents) && checkpoint.panel_agents.length) {
+        setStrixAgents(checkpoint.panel_agents.filter(isStrixAgentStatus));
       }
       if (Array.isArray(node3Strix.todos)) {
         const todoPlan = strixTodosToPlanTree(node3Strix.todos);
@@ -428,6 +446,20 @@ export default function ConversationPage() {
       }
       if (isStrixRun(node3Strix.run)) {
         setStrixRun(node3Strix.run);
+      } else if (checkpoint.llm_usage || checkpoint.started_at || checkpoint.scan_mode || checkpoint.targets_info) {
+        // Node2 synthesizes run-like fields on the checkpoint root (not only under node3_strix).
+        const runLike: StrixRun = {
+          run_id: readString(checkpoint.run_id) || readString(checkpoint.task_id),
+          status: readString(checkpoint.status),
+          start_time: readString(checkpoint.started_at) || readString(checkpoint.start_time),
+          end_time: readString(checkpoint.end_time),
+          scan_mode: readString(checkpoint.scan_mode),
+          targets_info: Array.isArray(checkpoint.targets_info)
+            ? (checkpoint.targets_info as StrixRun["targets_info"])
+            : undefined,
+          llm_usage: isRecord(checkpoint.llm_usage) ? (checkpoint.llm_usage as StrixRun["llm_usage"]) : undefined,
+        };
+        if (runLike.llm_usage || runLike.start_time || runLike.targets_info) setStrixRun(runLike);
       }
       if (Array.isArray(node3Strix.vulnerabilities)) {
         const vulnerabilities = node3Strix.vulnerabilities;
@@ -435,6 +467,55 @@ export default function ConversationPage() {
       }
       clearPendingAgentMessage(convId);
       void refreshConversationState(convId);
+    },
+    // Live Node2 worker lifecycle — do not wait for the next throttled checkpoint.
+    worker_started: (msg) => {
+      if (!isActiveMessage(msg, activeId)) return;
+      const m = msg as Record<string, unknown>;
+      const workerId = readString(m.worker_id) || readString(m.id);
+      if (!workerId) return;
+      const role = readString(m.role) || "worker";
+      setRunning(true);
+      setStrixAgents((prev) => upsertWorkerAgent(prev, {
+        id: workerId,
+        name: `Worker ${role}`,
+        status: "running",
+        parent_id: "node2-main",
+        task: readString(m.task) || "",
+        skills: [],
+        pending_count: 0,
+        role,
+        current_tool: "",
+        current_action: "running",
+      }));
+    },
+    worker_finished: (msg) => {
+      if (!isActiveMessage(msg, activeId)) return;
+      const m = msg as Record<string, unknown>;
+      const workerId = readString(m.worker_id) || readString(m.id);
+      if (!workerId) return;
+      const role = readString(m.role) || "worker";
+      const outcome = readString(m.outcome) || (m.ok === false ? "failed" : "completed");
+      const status =
+        outcome === "timeout" || outcome === "timed_out"
+          ? "timed_out"
+          : outcome === "completed" || m.ok === true
+            ? "completed"
+            : outcome === "aborted"
+              ? "stopped"
+              : "failed";
+      setStrixAgents((prev) => upsertWorkerAgent(prev, {
+        id: workerId,
+        name: `Worker ${role}`,
+        status,
+        parent_id: "node2-main",
+        task: readString(m.task) || "",
+        skills: [],
+        pending_count: 0,
+        role,
+        current_tool: "",
+        current_action: outcome,
+      }));
     },
     intake_update: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
@@ -1598,6 +1679,28 @@ function isKanbanSummary(value: unknown): value is KanbanSummary {
 
 function isStrixAgentStatus(value: unknown): value is StrixAgentStatus {
   return Boolean(value && typeof value === "object" && !Array.isArray(value) && readString((value as Record<string, unknown>).id));
+}
+
+/** Ensure main agent row exists, then upsert a worker child for live collaboration tree. */
+function upsertWorkerAgent(prev: StrixAgentStatus[], worker: StrixAgentStatus): StrixAgentStatus[] {
+  const main: StrixAgentStatus = prev.find((a) => a.id === "node2-main" || a.role === "main") || {
+    id: "node2-main",
+    name: "Main Agent",
+    status: "running",
+    parent_id: null,
+    task: "",
+    skills: [],
+    pending_count: 0,
+    role: "main",
+    current_tool: "",
+    current_action: "running",
+  };
+  const others = prev.filter((a) => a.id !== main.id && a.id !== worker.id);
+  return [
+    { ...main, status: main.status === "completed" ? "running" : main.status || "running", parent_id: null },
+    ...others,
+    { ...worker, parent_id: "node2-main" },
+  ];
 }
 
 function isStrixNote(value: unknown): value is StrixNote {
