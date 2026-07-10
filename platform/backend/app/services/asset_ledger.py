@@ -230,31 +230,41 @@ def apply_discover_to_asset_fields(
     Returns full field dict ready for ORM apply or assert in tests.
     """
     norm = normalize_address(address)
+    name_in = _nonempty_str(name)
+    type_in = _nonempty_str(asset_type)
     if existing:
         props = merge_discover_properties(
             existing.get("properties"),
             open_ports=open_ports,
             services=services,
         )
+        # Preserve ledger identity when discover payload omits name/type.
         out = {
             "address": normalize_address(existing.get("address") or norm),
-            "name": (name or existing.get("name") or norm),
-            "type": asset_type or existing.get("type") or "host",
-            "source": source or existing.get("source") or "agent_discovered",
+            "name": name_in or _nonempty_str(existing.get("name")) or norm,
+            "type": type_in or _nonempty_str(existing.get("type")) or "host",
+            "source": _nonempty_str(source) or _nonempty_str(existing.get("source")) or "agent_discovered",
             "properties": props,
         }
         return out
     return {
         "address": norm,
-        "name": name or norm,
-        "type": asset_type or "host",
-        "source": source,
+        "name": name_in or norm,
+        "type": type_in or "host",
+        "source": _nonempty_str(source) or "agent_discovered",
         "properties": merge_discover_properties(
             {},
             open_ports=open_ports or [],
             services=services or [],
         ),
     }
+
+
+def _nonempty_str(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def render_remediation_markdown(

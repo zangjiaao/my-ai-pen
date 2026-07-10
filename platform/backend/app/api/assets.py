@@ -305,7 +305,7 @@ async def upsert_discovered_asset(
     user_id: uuid.UUID,
     address: str,
     name: str | None = None,
-    asset_type: str = "host",
+    asset_type: str | None = None,
     open_ports: object = None,
     services: object = None,
     conversation_id: uuid.UUID | None = None,

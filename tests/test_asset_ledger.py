@@ -74,6 +74,39 @@ class AssetLedgerMergeTests(unittest.TestCase):
         )
         self.assertEqual(extract_ports(again["properties"]), ["80"])
 
+    def test_rediscover_without_name_type_preserves_ledger_identity(self):
+        """Agent re-discover omitting hostname/type must not clobber manual identity."""
+        existing = apply_discover_to_asset_fields(
+            existing=None,
+            address="pay.example.com",
+            name="支付网关",
+            asset_type="web_app",
+            open_ports=[443],
+            services=[{"port": 443, "name": "https"}],
+        )
+        # Simulate WS path that used to pass name=address and type=host defaults.
+        rediscover = apply_discover_to_asset_fields(
+            existing=existing,
+            address="https://pay.example.com/login",
+            name=None,
+            asset_type=None,
+            open_ports=[22],
+            services=[{"port": 22, "name": "ssh"}],
+        )
+        self.assertEqual(rediscover["name"], "支付网关")
+        self.assertEqual(rediscover["type"], "web_app")
+        self.assertEqual(extract_ports(rediscover["properties"]), ["22", "443"])
+        # Explicit non-empty override still wins.
+        renamed = apply_discover_to_asset_fields(
+            existing=rediscover,
+            address="pay.example.com",
+            name="支付网关-v2",
+            asset_type="web",
+            open_ports=None,
+        )
+        self.assertEqual(renamed["name"], "支付网关-v2")
+        self.assertEqual(renamed["type"], "web")
+
 
 class AssetLedgerRiskAndExportTests(unittest.TestCase):
     def test_risk_summary_counts_open_by_severity(self):

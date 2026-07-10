@@ -862,13 +862,18 @@ async def _persist_asset(msg: dict, node_id: str | None):
         address = normalize_address(
             msg.get("address") or msg.get("affected_asset") or msg.get("target") or "unknown"
         )
+        # Pass None when agent omits identity fields so merge keeps ledger name/type.
+        hostname = msg.get("hostname")
+        name = str(hostname).strip() if hostname is not None and str(hostname).strip() else None
+        raw_type = msg.get("asset_type")
+        asset_type = str(raw_type).strip() if raw_type is not None and str(raw_type).strip() else None
         async with async_session() as db:
             asset = await upsert_discovered_asset(
                 db,
                 user_id=user_id,
                 address=address,
-                name=msg.get("hostname") or address,
-                asset_type=str(msg.get("asset_type") or "host"),
+                name=name,
+                asset_type=asset_type,
                 open_ports=msg.get("open_ports"),
                 services=msg.get("services"),
                 conversation_id=uuid.UUID(conv_id),
