@@ -7,6 +7,7 @@ import { resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   aggregateConfirmedFindings,
+  alignSummaryFindingCount,
   findingDedupeKey,
   loadAggregatedConfirmedFindings,
 } from "./runtime/findings-aggregate.js";
@@ -44,13 +45,13 @@ function parseJsonResult(result: any): any {
   }
 }
 
-// --- P0: pure aggregate + dedupe ---
+// --- P0: pure aggregate + strong class/endpoint dedupe ---
 const raw = aggregateConfirmedFindings([
   {
     action: "confirm",
     title: "SQL Injection in /rest/products/search",
     severity: "high",
-    location: "/rest/products/search?q=",
+    location: "http://host.docker.internal:3000/rest/products/search?q=",
     evidence_ids: ["ev-1"],
   },
   {
@@ -59,6 +60,27 @@ const raw = aggregateConfirmedFindings([
     severity: "medium",
     location: "/rest/products/search?q=",
     evidence_ids: ["ev-1", "ev-2"],
+  },
+  {
+    action: "confirm",
+    title: "SQL Injection - Full Users Table Extraction via UNION SELECT",
+    severity: "critical",
+    location: "GET /rest/products/search, parameter q",
+    evidence_ids: ["ev-9"],
+  },
+  {
+    action: "confirm",
+    title: "SQL Injection in POST /rest/user/login email parameter",
+    severity: "critical",
+    location: "POST /rest/user/login",
+    evidence_ids: ["ev-login-1"],
+  },
+  {
+    action: "confirm",
+    title: "SQL Injection in POST /rest/user/login (email parameter) - Authentication Bypass",
+    severity: "critical",
+    location: "http://host.docker.internal:3000/rest/user/login",
+    evidence_ids: ["ev-login-2"],
   },
   {
     action: "candidate",
@@ -74,19 +96,45 @@ const raw = aggregateConfirmedFindings([
     evidence_ids: ["ev-3"],
   },
 ]);
-assert(raw.rawCount === 3, `rawCount=${raw.rawCount}`);
-assert(raw.dedupedCount === 2, `dedupedCount=${raw.dedupedCount} titles=${raw.titles.join("|")}`);
-assert(raw.titles.some((t) => /sql|sqli/i.test(t)), "sqli kept");
-assert(raw.titles.some((t) => /idor/i.test(t)), "idor kept");
-assert(raw.evidenceIds.includes("ev-1") || raw.evidenceIds.includes("ev-2"), "evidence merged");
+assert(raw.rawCount === 6, `rawCount=${raw.rawCount}`);
+// search SQLi x3 + login SQLi x2 + idor x1 → 3 independent
+assert(raw.dedupedCount === 3, `dedupedCount=${raw.dedupedCount} titles=${raw.titles.join("|")}`);
+const keys = new Set(
+  [
+    findingDedupeKey({
+      action: "confirm",
+      title: "SQL Injection in /rest/products/search",
+      location: "http://host.docker.internal:3000/rest/products/search?q=",
+    }),
+    findingDedupeKey({
+      action: "confirm",
+      title: "SQL Injection in POST /rest/user/login email parameter",
+      location: "POST /rest/user/login",
+    }),
+    findingDedupeKey({
+      action: "confirm",
+      title: "IDOR on basket",
+      location: "/api/BasketItems/1",
+    }),
+  ],
+);
+assert(keys.size === 3, `expected 3 families, got ${[...keys].join(" | ")}`);
+assert([...keys].some((k) => k === "sqli|search"), `search key missing: ${[...keys]}`);
+assert([...keys].some((k) => k === "sqli|login"), `login key missing: ${[...keys]}`);
+assert([...keys].some((k) => k.startsWith("idor|")), `idor key missing: ${[...keys]}`);
+assert(raw.evidenceIds.includes("ev-9") || raw.evidenceIds.includes("ev-2"), "evidence merged for search");
 assert(
   findingDedupeKey({
     title: "SQL Injection",
     location: "/rest/products/search",
     severity: "high",
-  }).includes("sqli"),
+  }).startsWith("sqli|"),
   "dedupe class hint",
 );
+
+const aligned = alignSummaryFindingCount("**12 confirmed vulnerabilities** across the app. 12 findings confirmed.", 3);
+assert(/\*\*3 confirmed vulnerabilities\*\*/.test(aligned), `aligned summary: ${aligned}`);
+assert(/3 findings confirmed/.test(aligned), `aligned findings confirmed: ${aligned}`);
 
 // --- P1: usage merge pure ---
 const merged = mergeLlmUsageSnapshots(

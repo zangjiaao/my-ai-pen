@@ -2,6 +2,11 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import {
+  findExistingConfirmedByKey,
+  preferFindingRecord,
+  type PersistedFindingRecord,
+} from "../runtime/findings-aggregate.js";
 import type { PlatformMessage, ToolRuntime } from "../types.js";
 import { emitPlanUpdate, jsonResult, targetBase, textResult } from "./common.js";
 
@@ -9,12 +14,14 @@ export function createFindingTool(runtime: ToolRuntime): ToolDefinition<any> {
   return {
     name: "finding",
     label: "Finding",
-    description: "Record candidate, confirmed, or rejected findings. Confirmed findings require at least one evidence_id from http, scan, browser, verifier, or poc output.",
+    description:
+      "Record candidate, confirmed, or rejected findings. Confirmed findings require at least one evidence_id from http, scan, browser, verifier, or poc output. Re-confirming the same class+endpoint is a no-op update (no duplicate card).",
     promptSnippet: "Record candidate/confirmed/rejected findings",
     promptGuidelines: [
       "Use finding(action='candidate') for plausible issues; use finding(action='confirm') only with evidence_id proving end-to-end reproduction.",
       "Immediately confirm each validated issue as soon as evidence exists; do not batch confirmed findings at the end.",
       "A confirmed finding must include location/url, impact or description, reproduction steps or PoC, remediation, severity, and evidence_ids.",
+      "Do not re-confirm the same vulnerability class on the same endpoint with a reworded title — the tool merges duplicates.",
     ],
     parameters: Type.Object({
       action: Type.String(),
@@ -52,9 +59,37 @@ export function createFindingTool(runtime: ToolRuntime): ToolDefinition<any> {
       const affectedAsset = stringValue(params.affected_asset || params.url || targetBase(runtime));
       const description = stringValue(params.description || params.impact);
       const poc = stringValue(params.poc || params.reproduction || params.location || params.url);
-      const record = { ...params, evidence_ids: evidenceIds, created_at: new Date().toISOString() };
+      const record: PersistedFindingRecord = {
+        ...params,
+        action,
+        title: params.title,
+        severity,
+        location,
+        affected_asset: affectedAsset,
+        evidence_ids: evidenceIds,
+        created_at: new Date().toISOString(),
+      };
       const dir = join(runtime.workspaceDir, runtime.task.taskId, "findings");
       await mkdir(dir, { recursive: true });
+
+      // Suppress double-confirm (main + worker) of the same class+endpoint.
+      if (action === "confirm") {
+        const existing = await findExistingConfirmedByKey(dir, record);
+        if (existing) {
+          const merged = preferFindingRecord(existing.record, record);
+          const path = join(dir, existing.fileName);
+          await writeFile(path, JSON.stringify({ ...merged, updated_at: new Date().toISOString() }, null, 2), "utf8");
+          return jsonResult({
+            ok: true,
+            deduped: true,
+            path,
+            record: merged,
+            message:
+              "Merged into existing confirmed finding for the same vulnerability class and endpoint family; no additional vuln card emitted.",
+          });
+        }
+      }
+
       const path = join(dir, `${slug(params.title)}-${Date.now()}.json`);
       await writeFile(path, JSON.stringify(record, null, 2), "utf8");
       if (action === "confirm") {
@@ -74,6 +109,9 @@ export function createFindingTool(runtime: ToolRuntime): ToolDefinition<any> {
           url: params.url,
           location,
           affected_asset: affectedAsset,
+          // Prefer a stable finding key so platform message dedupe does not collapse
+          // unrelated findings that happen to share an evidence id.
+          id: `finding:${slug(params.title)}:${slug(location || String(params.url || "unknown"))}`,
           evidence_id: evidenceIds[0],
           evidence_ids: evidenceIds,
           confidence: params.confidence || "high",
@@ -85,7 +123,7 @@ export function createFindingTool(runtime: ToolRuntime): ToolDefinition<any> {
         } as PlatformMessage);
         await emitPlanUpdate(runtime, "finding.confirm");
       }
-      return jsonResult({ ok: true, path, record });
+      return jsonResult({ ok: true, path, record, deduped: false });
     },
   };
 }

@@ -46,6 +46,40 @@ class PlatformPhase2Tests(unittest.TestCase):
         )
         self.assertEqual(key, "text:task-1:assistant:1")
 
+    def test_vuln_found_dedupe_key_uses_title_not_shared_evidence_id(self):
+        """Distinct findings that share one evidence_id must not collapse in Discoveries."""
+        shared_ev = "ev_shared_001"
+        first = _message_dedupe_key(
+            role="agent",
+            original_type="vuln_found",
+            stored_type="vuln_card",
+            content={
+                "title": "SQL Injection in product search",
+                "evidence_id": shared_ev,
+                "status": "confirmed",
+            },
+        )
+        second = _message_dedupe_key(
+            role="agent",
+            original_type="vuln_found",
+            stored_type="vuln_card",
+            content={
+                "title": "Path Traversal via Null Byte Bypass on /ftp",
+                "evidence_id": shared_ev,
+                "status": "confirmed",
+            },
+        )
+        self.assertNotEqual(first, second)
+        self.assertTrue(first.startswith("vuln_found:"))
+        self.assertTrue(second.startswith("vuln_found:"))
+        same_title = _message_dedupe_key(
+            role="agent",
+            original_type="vuln_found",
+            stored_type="vuln_card",
+            content={"title": "SQL Injection in product search", "evidence_id": "ev_other"},
+        )
+        self.assertEqual(first, same_title)
+
     def test_streaming_text_merge_replaces_with_latest_accumulated_text(self):
         existing = {"stream_id": "s1", "text": "hello", "agent_source": "pentest"}
         incoming = {"stream_id": "s1", "text": "hello world", "agent_source": "pentest"}

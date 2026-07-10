@@ -512,7 +512,19 @@ def _message_dedupe_key(*, role: str, original_type: str, stored_type: str, cont
         return f"task_error:{hashlib.sha256(str(content.get('text') or '').encode()).hexdigest()[:16]}"
     if original_type in {"task_complete", "task_incomplete"}:
         return "task_complete" if original_type == "task_complete" else "task_incomplete"
-    if original_type in {"evidence_created", "vuln_found", "asset_discovered"}:
+    if original_type == "vuln_found":
+        # Dedupe by finding identity (title / vulnerability id), NOT evidence_id.
+        # Multiple distinct findings often share one evidence artifact; using
+        # evidence_id as the key silently dropped later cards from Discoveries.
+        title = str(content.get("title") or "").strip().lower()
+        stable_id = (
+            content.get("id")
+            or content.get("vulnerability_id")
+            or content.get("finding_id")
+            or (f"title:{title}" if title else None)
+        )
+        return f"vuln_found:{stable_id}" if stable_id else None
+    if original_type in {"evidence_created", "asset_discovered"}:
         stable_id = content.get("evidence_id") or content.get("id") or content.get("vulnerability_id") or content.get("asset_id")
         return f"{original_type}:{stable_id}" if stable_id else None
     return None

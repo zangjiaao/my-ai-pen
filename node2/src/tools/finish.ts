@@ -10,7 +10,10 @@ import {
   surfaceInventoryFromTraffic,
 } from "../runtime/detection-conversion.js";
 import { resolveEffectiveEngagement } from "../runtime/engagement.js";
-import { loadAggregatedConfirmedFindings } from "../runtime/findings-aggregate.js";
+import {
+  alignSummaryFindingCount,
+  loadAggregatedConfirmedFindings,
+} from "../runtime/findings-aggregate.js";
 import {
   assessWorkerDispatchGate,
   loadWorkPackagesFromTaskDir,
@@ -142,9 +145,12 @@ export function createFinishScanTool(runtime: ToolRuntime): ToolDefinition<any> 
         });
       }
 
+      // Rewrite free-text claim counts so the report matches the authoritative list.
+      const alignedSummary = alignSummaryFindingCount(summary, aggregated.dedupedCount);
+
       const state: FinishScanState = {
         status,
-        summary,
+        summary: alignedSummary,
         confirmedFindings,
         llmConfirmedFindings: llmTitles.length > 0 ? llmTitles : undefined,
         findingsRawCount: aggregated.rawCount,
@@ -166,7 +172,7 @@ export function createFinishScanTool(runtime: ToolRuntime): ToolDefinition<any> 
         conversation_id: runtime.task.conversationId,
         task_id: runtime.task.taskId,
         status,
-        summary,
+        summary: alignedSummary,
         confirmed_findings: state.confirmedFindings,
         findings_raw_count: aggregated.rawCount,
         findings_deduped_count: aggregated.dedupedCount,

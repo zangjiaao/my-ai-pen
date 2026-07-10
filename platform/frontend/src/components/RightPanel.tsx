@@ -261,7 +261,7 @@ export default function RightPanel({
   const elapsedText = formatDuration(elapsedClock.seconds);
   const tabs: { key: Tab; label: string }[] = [
     { key: "status", label: "Status" },
-    { key: "discoveries", label: `Discoveries${findings.length + assets.length + surfaceItems.length + strixNotes.length ? ` (${findings.length + assets.length + surfaceItems.length + strixNotes.length})` : ""}` },
+    { key: "discoveries", label: discoveriesTabLabel(findings.length, assets.length, surfaceItems.length, strixNotes.length) },
     { key: "activity", label: `Activity${timeline.length ? ` (${timeline.length})` : ""}` },
   ];
 
@@ -936,6 +936,15 @@ function hasRunSummaryData(run: StrixRun | undefined): boolean {
     Number(usage.total_tokens || usage.requests || 0) > 0 ||
     targets.some((target) => target.target || target.original),
   );
+}
+
+/** Tab label that does not conflate findings with assets/surface/notes. */
+function discoveriesTabLabel(findings: number, assets: number, surface: number, notes: number): string {
+  const other = assets + surface + notes;
+  if (findings <= 0 && other <= 0) return "Discoveries";
+  if (findings > 0 && other <= 0) return `Discoveries (Findings ${findings})`;
+  if (findings <= 0) return `Discoveries (${other})`;
+  return `Discoveries (Findings ${findings} · +${other})`;
 }
 
 function workflowPhaseForPlanItem(item: PlanNode): WorkflowPhaseId {
