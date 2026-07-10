@@ -16,16 +16,27 @@ from app.models.node import Node, PLATFORM_AGENT_NODE_ID, PLATFORM_AGENT_NODE_NA
 router = APIRouter(prefix="/api/nodes", tags=["nodes"])
 
 
-# Defaults for pentest worker wall-clock / turn budgets (node2 workers).
+# Defaults for pentest runtime budgets (node2 main agent + workers).
 DEFAULT_WORKER_MAX_MS = 300_000
 DEFAULT_WORKER_MAX_TURNS = 12
 DEFAULT_WORKER_MAX_TIMEOUT_RETRIES = 2
+DEFAULT_MAIN_MAX_MS = 1_800_000  # 30 min whole-task wall clock
+DEFAULT_MAIN_MAX_TURNS = 80
+DEFAULT_MAX_CONCURRENT_WORKERS = 1
+DEFAULT_SCAN_MODE = "standard"
 MIN_WORKER_MAX_MS = 10_000
 MAX_WORKER_MAX_MS = 900_000
 MIN_WORKER_MAX_TURNS = 1
 MAX_WORKER_MAX_TURNS = 40
 MIN_WORKER_MAX_TIMEOUT_RETRIES = 0
 MAX_WORKER_MAX_TIMEOUT_RETRIES = 5
+MIN_MAIN_MAX_MS = 60_000
+MAX_MAIN_MAX_MS = 7_200_000  # 2 h
+MIN_MAIN_MAX_TURNS = 5
+MAX_MAIN_MAX_TURNS = 200
+MIN_MAX_CONCURRENT_WORKERS = 1
+MAX_MAX_CONCURRENT_WORKERS = 4
+ALLOWED_SCAN_MODES = frozenset({"quick", "standard", "deep"})
 
 # Connectivity sparkline: last 24h in 30 buckets (~48 min each).
 CONNECTIVITY_WINDOW_HOURS = 24
@@ -48,13 +59,19 @@ class NodeOut(BaseModel):
     last_failure_reason: str | None = None
     token_required: bool
     token: str | None = None
-    # Worker runtime limits (pentest nodes). Stored in node.config.
+    # Runtime limits (pentest nodes). Stored in node.config; sent on task_assign.
     worker_max_ms: int | None = None
     worker_max_turns: int | None = None
     worker_max_timeout_retries: int | None = None
+    main_max_ms: int | None = None
+    main_max_turns: int | None = None
+    max_concurrent_workers: int | None = None
+    default_scan_mode: str | None = None
     # Uptime-style bars for the last 24h (card sparkline).
     connectivity: list[ConnectivityBar] = Field(default_factory=list)
     connectivity_uptime_pct: float | None = None
+    # Optional capability manifest from node.config.capabilities (node-reported).
+    capabilities: dict | None = None
     model_config = {"from_attributes": True}
 
 
@@ -63,6 +80,10 @@ class NodeUpdate(BaseModel):
     worker_max_ms: int | None = None
     worker_max_turns: int | None = None
     worker_max_timeout_retries: int | None = None
+    main_max_ms: int | None = None
+    main_max_turns: int | None = None
+    max_concurrent_workers: int | None = None
+    default_scan_mode: str | None = None
 
 
 @router.get("", response_model=list[NodeOut])
@@ -121,12 +142,18 @@ async def update_node(node_id: str, body: NodeUpdate, current_user: dict = Depen
         if existing.scalar_one_or_none():
             raise HTTPException(400, "Node name already exists")
         n.name = name
-    if any(
-        value is not None
-        for value in (body.worker_max_ms, body.worker_max_turns, body.worker_max_timeout_retries)
-    ):
-        if n.type == "platform":
-            raise HTTPException(400, "Platform node does not run worker packages")
+    runtime_fields = (
+        body.worker_max_ms,
+        body.worker_max_turns,
+        body.worker_max_timeout_retries,
+        body.main_max_ms,
+        body.main_max_turns,
+        body.max_concurrent_workers,
+        body.default_scan_mode,
+    )
+    if any(value is not None for value in runtime_fields):
+        if n.type != "pentest":
+            raise HTTPException(400, "Runtime budgets apply only to pentest nodes")
         cfg = dict(n.config or {})
         if body.worker_max_ms is not None:
             cfg["worker_max_ms"] = _clamp_int(
@@ -143,6 +170,26 @@ async def update_node(node_id: str, body: NodeUpdate, current_user: dict = Depen
                 MAX_WORKER_MAX_TIMEOUT_RETRIES,
                 DEFAULT_WORKER_MAX_TIMEOUT_RETRIES,
             )
+        if body.main_max_ms is not None:
+            cfg["main_max_ms"] = _clamp_int(
+                body.main_max_ms, MIN_MAIN_MAX_MS, MAX_MAIN_MAX_MS, DEFAULT_MAIN_MAX_MS
+            )
+        if body.main_max_turns is not None:
+            cfg["main_max_turns"] = _clamp_int(
+                body.main_max_turns, MIN_MAIN_MAX_TURNS, MAX_MAIN_MAX_TURNS, DEFAULT_MAIN_MAX_TURNS
+            )
+        if body.max_concurrent_workers is not None:
+            cfg["max_concurrent_workers"] = _clamp_int(
+                body.max_concurrent_workers,
+                MIN_MAX_CONCURRENT_WORKERS,
+                MAX_MAX_CONCURRENT_WORKERS,
+                DEFAULT_MAX_CONCURRENT_WORKERS,
+            )
+        if body.default_scan_mode is not None:
+            mode = str(body.default_scan_mode).strip().lower()
+            if mode not in ALLOWED_SCAN_MODES:
+                raise HTTPException(400, "default_scan_mode must be quick, standard, or deep")
+            cfg["default_scan_mode"] = mode
         n.config = cfg
     await db.commit()
     await db.refresh(n)
@@ -260,9 +307,12 @@ def _clamp_int(value: object, lo: int, hi: int, default: int) -> int:
     return max(lo, min(hi, n))
 
 
-def worker_limits_from_config(config: object) -> dict[str, int]:
-    """Normalize worker runtime limits from node.config (with defaults)."""
+def worker_limits_from_config(config: object) -> dict:
+    """Normalize runtime limits from node.config (worker + main + schedule) with defaults."""
     cfg = config if isinstance(config, dict) else {}
+    mode = str(cfg.get("default_scan_mode") or DEFAULT_SCAN_MODE).strip().lower()
+    if mode not in ALLOWED_SCAN_MODES:
+        mode = DEFAULT_SCAN_MODE
     return {
         "worker_max_ms": _clamp_int(
             cfg.get("worker_max_ms"), MIN_WORKER_MAX_MS, MAX_WORKER_MAX_MS, DEFAULT_WORKER_MAX_MS
@@ -276,6 +326,19 @@ def worker_limits_from_config(config: object) -> dict[str, int]:
             MAX_WORKER_MAX_TIMEOUT_RETRIES,
             DEFAULT_WORKER_MAX_TIMEOUT_RETRIES,
         ),
+        "main_max_ms": _clamp_int(
+            cfg.get("main_max_ms"), MIN_MAIN_MAX_MS, MAX_MAIN_MAX_MS, DEFAULT_MAIN_MAX_MS
+        ),
+        "main_max_turns": _clamp_int(
+            cfg.get("main_max_turns"), MIN_MAIN_MAX_TURNS, MAX_MAIN_MAX_TURNS, DEFAULT_MAIN_MAX_TURNS
+        ),
+        "max_concurrent_workers": _clamp_int(
+            cfg.get("max_concurrent_workers"),
+            MIN_MAX_CONCURRENT_WORKERS,
+            MAX_MAX_CONCURRENT_WORKERS,
+            DEFAULT_MAX_CONCURRENT_WORKERS,
+        ),
+        "default_scan_mode": mode,
     }
 
 
@@ -454,12 +517,32 @@ def _uptime_pct(bars: list[ConnectivityBar]) -> float | None:
     return round(100.0 * up / len(known), 1)
 
 
+def _capabilities_from_config(config: object) -> dict | None:
+    """Return node-reported capability manifest if present and non-empty."""
+    cfg = config if isinstance(config, dict) else {}
+    raw = cfg.get("capabilities")
+    if not isinstance(raw, dict):
+        return None
+    out: dict = {}
+    for key in ("runtime", "version"):
+        val = raw.get(key)
+        if isinstance(val, str) and val.strip():
+            out[key] = val.strip()
+    for key in ("skills", "workflows", "tools"):
+        val = raw.get(key)
+        if isinstance(val, list):
+            items = [str(x).strip() for x in val if str(x).strip()]
+            if items:
+                out[key] = items
+    return out or None
+
+
 def _node_out(
     n: Node,
     current_task: dict | None = None,
     connectivity: list[ConnectivityBar] | None = None,
 ) -> NodeOut:
-    limits = worker_limits_from_config(n.config) if n.type != "platform" else {}
+    limits = worker_limits_from_config(n.config) if n.type == "pentest" else {}
     bars = connectivity or []
     return NodeOut(
         id=str(n.id),
@@ -479,6 +562,11 @@ def _node_out(
         worker_max_ms=limits.get("worker_max_ms"),
         worker_max_turns=limits.get("worker_max_turns"),
         worker_max_timeout_retries=limits.get("worker_max_timeout_retries"),
+        main_max_ms=limits.get("main_max_ms"),
+        main_max_turns=limits.get("main_max_turns"),
+        max_concurrent_workers=limits.get("max_concurrent_workers"),
+        default_scan_mode=limits.get("default_scan_mode"),
         connectivity=bars,
         connectivity_uptime_pct=_uptime_pct(bars),
+        capabilities=_capabilities_from_config(n.config),
     )

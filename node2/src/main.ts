@@ -71,16 +71,22 @@ function normalizeTask(message: PlatformMessage): TaskEnvelope {
     typeof engagementRaw === "string" && ["assess", "verify", "retest", "consult"].includes(engagementRaw.trim().toLowerCase())
       ? (engagementRaw.trim().toLowerCase() as TaskEnvelope["engagement"])
       : undefined;
+  const workerLimits = normalizeWorkerLimits(message.worker_limits || message.workerLimits);
+  const hasExplicitScan =
+    (message.scan_mode != null && String(message.scan_mode).trim() !== "") ||
+    (message.scanMode != null && String(message.scanMode).trim() !== "");
   return {
     taskId,
     conversationId,
     instruction: String(message.initial_instruction || message.text || ""),
-    scanMode: normalizeScanMode(message.scan_mode || message.scanMode),
+    scanMode: normalizeScanMode(
+      hasExplicitScan ? message.scan_mode || message.scanMode : workerLimits?.defaultScanMode,
+    ),
     engagement,
     target: isRecord(message.target) ? message.target : {},
     scope: isRecord(message.scope) ? message.scope : {},
     snapshot: isRecord(message.snapshot) ? message.snapshot : {},
-    workerLimits: normalizeWorkerLimits(message.worker_limits || message.workerLimits),
+    workerLimits,
   };
 }
 
@@ -91,11 +97,26 @@ function normalizeWorkerLimits(raw: unknown): TaskEnvelope["workerLimits"] | und
   const maxTimeoutRetries = Number(
     raw.worker_max_timeout_retries ?? raw.maxTimeoutRetries ?? raw.max_timeout_retries,
   );
+  const mainMaxMs = Number(raw.main_max_ms ?? raw.mainMaxMs ?? raw.main_ms);
+  const mainMaxTurns = Number(raw.main_max_turns ?? raw.mainMaxTurns);
+  const maxConcurrentWorkers = Number(
+    raw.max_concurrent_workers ?? raw.maxConcurrentWorkers ?? raw.concurrent_workers,
+  );
+  const scanRaw = raw.default_scan_mode ?? raw.defaultScanMode ?? raw.scan_mode;
   const out: NonNullable<TaskEnvelope["workerLimits"]> = {};
   if (Number.isFinite(maxMs) && maxMs > 0) out.maxMs = Math.floor(maxMs);
   if (Number.isFinite(maxTurns) && maxTurns > 0) out.maxTurns = Math.floor(maxTurns);
   if (Number.isFinite(maxTimeoutRetries) && maxTimeoutRetries >= 0) {
     out.maxTimeoutRetries = Math.floor(maxTimeoutRetries);
+  }
+  if (Number.isFinite(mainMaxMs) && mainMaxMs > 0) out.mainMaxMs = Math.floor(mainMaxMs);
+  if (Number.isFinite(mainMaxTurns) && mainMaxTurns > 0) out.mainMaxTurns = Math.floor(mainMaxTurns);
+  if (Number.isFinite(maxConcurrentWorkers) && maxConcurrentWorkers > 0) {
+    out.maxConcurrentWorkers = Math.floor(maxConcurrentWorkers);
+  }
+  if (typeof scanRaw === "string" && scanRaw.trim()) {
+    const mode = scanRaw.trim().toLowerCase();
+    if (mode === "quick" || mode === "standard" || mode === "deep") out.defaultScanMode = mode;
   }
   return Object.keys(out).length ? out : undefined;
 }

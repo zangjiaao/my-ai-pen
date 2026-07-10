@@ -1,13 +1,15 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Check, Copy, Download } from "lucide-react";
 import { authDownload } from "../lib/api";
 
 interface Props {
   title?: string;
   conversationId?: string | null;
+  /** Extra controls on the right, before version (e.g. 注册节点). */
+  actions?: ReactNode;
 }
 
-export default function TopBar({ title, conversationId }: Props) {
+export default function TopBar({ title, conversationId, actions }: Props) {
   const [copied, setCopied] = useState(false);
   const [exporting, setExporting] = useState<string | null>(null);
   const shortId = conversationId ? conversationId.slice(0, 8) : "";
@@ -59,12 +61,23 @@ export default function TopBar({ title, conversationId }: Props) {
         )}
       </div>
       <div className="flex items-center gap-2">
+        {actions}
         {conversationId && (
           <>
-            <button type="button" onClick={() => void exportReport("markdown")} disabled={Boolean(exporting)} className="inline-flex items-center gap-1.5 rounded-md border border-hairline px-2.5 py-1.5 text-xs text-ink-secondary transition-colors hover:bg-surface-default hover:text-ink disabled:opacity-60">
+            <button
+              type="button"
+              onClick={() => void exportReport("markdown")}
+              disabled={Boolean(exporting)}
+              className="inline-flex items-center gap-1.5 rounded-md border border-hairline px-2.5 py-1.5 text-xs text-ink-secondary transition-colors hover:bg-surface-default hover:text-ink disabled:opacity-60"
+            >
               <Download size={13} /> MD
             </button>
-            <button type="button" onClick={() => void exportReport("html")} disabled={Boolean(exporting)} className="inline-flex items-center gap-1.5 rounded-md border border-hairline px-2.5 py-1.5 text-xs text-ink-secondary transition-colors hover:bg-surface-default hover:text-ink disabled:opacity-60">
+            <button
+              type="button"
+              onClick={() => void exportReport("html")}
+              disabled={Boolean(exporting)}
+              className="inline-flex items-center gap-1.5 rounded-md border border-hairline px-2.5 py-1.5 text-xs text-ink-secondary transition-colors hover:bg-surface-default hover:text-ink disabled:opacity-60"
+            >
               <Download size={13} /> HTML
             </button>
           </>

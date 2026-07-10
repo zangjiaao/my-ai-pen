@@ -155,6 +155,21 @@ export async function runPentestTask(
   });
 
   const textStream = new PlatformTextStream(platformOut, task);
+  const mainMaxMs = clampInt(
+    Number(task.workerLimits?.mainMaxMs ?? process.env.NODE2_MAIN_MAX_MS ?? 1_800_000),
+    60_000,
+    7_200_000,
+  );
+  const mainMaxTurns = clampInt(
+    Number(task.workerLimits?.mainMaxTurns ?? process.env.NODE2_MAIN_MAX_TURNS ?? 80),
+    5,
+    200,
+  );
+  let mainToolTurns = 0;
+  let mainMaxTurnsReached = false;
+  let mainTimedOut = false;
+  let mainBudgetTimer: ReturnType<typeof setTimeout> | undefined;
+
   try {
     const abortHandler = () => {
       void diagnostics.noteRuntime("signal_abort", { reason: "user_interrupt_or_abort" });
@@ -163,10 +178,23 @@ export async function runPentestTask(
     };
     signal?.addEventListener("abort", abortHandler, { once: true });
     session.subscribe(async (event) => {
+      if (event?.type === "tool_execution_start") {
+        mainToolTurns += 1;
+        if (mainToolTurns >= mainMaxTurns && !mainMaxTurnsReached) {
+          mainMaxTurnsReached = true;
+          void diagnostics.noteRuntime("main_max_turns", { turns: mainToolTurns, max: mainMaxTurns });
+          void session.abort?.();
+        }
+      }
       await diagnostics.handleAgentEvent(event);
       await textStream.handle(event);
       await handleSessionEvent(platformOut, runtime, diagnostics, event);
     });
+    mainBudgetTimer = setTimeout(() => {
+      mainTimedOut = true;
+      void diagnostics.noteRuntime("main_max_ms", { max_ms: mainMaxMs });
+      void session.abort?.();
+    }, mainMaxMs);
     runtime.plan.start();
     await platformOut.send({
       type: "status_update",
@@ -192,10 +220,28 @@ export async function runPentestTask(
       plan_tree: runtime.plan.snapshot(),
     });
     if (signal?.aborted) throw new Error("Task interrupted by user.");
-    await diagnostics.noteRuntime("prompt_start", { stage: "main" });
-    await session.prompt(buildWorkflowFirstInstruction(task), { source: "interactive" });
+    await diagnostics.noteRuntime("prompt_start", {
+      stage: "main",
+      main_max_ms: mainMaxMs,
+      main_max_turns: mainMaxTurns,
+    });
+    try {
+      await session.prompt(buildWorkflowFirstInstruction(task), { source: "interactive" });
+    } catch (error) {
+      if (!mainTimedOut && !mainMaxTurnsReached) throw error;
+    }
     await textStream.flush();
     await diagnostics.noteRuntime("prompt_end", { stage: "main" });
+    if (mainTimedOut) {
+      throw new Error(
+        `Main agent timed out after ${Math.round(mainMaxMs / 1000)}s (node 运行参数 · 主 Agent 超时).`,
+      );
+    }
+    if (mainMaxTurnsReached) {
+      throw new Error(
+        `Main agent stopped after max ${mainMaxTurns} tool turns (node 运行参数 · 主 Agent 轮次).`,
+      );
+    }
     throwIfLastAssistantError(session.messages);
     if (signal?.aborted) throw new Error("Task interrupted by user.");
     const gateRounds = completionGateRounds();
@@ -214,6 +260,7 @@ export async function runPentestTask(
       !gate.canComplete && !isTerminalFinishStatus(runtime.lifecycle.finishScan?.status) && round < gateRounds;
       round += 1
     ) {
+      if (mainTimedOut || mainMaxTurnsReached || signal?.aborted) break;
       const gapPrompt = completionGapPrompt(runtime, gate);
       await platformOut.send({
         type: "completion_blocked",
@@ -225,8 +272,14 @@ export async function runPentestTask(
         agent_phase: "completion_gate",
       });
       await diagnostics.noteRuntime("completion_gate_reprompt", { round: round + 1, summary: gate.summary });
-      await session.prompt(gapPrompt, { source: "interactive" });
+      try {
+        await session.prompt(gapPrompt, { source: "interactive" });
+      } catch (error) {
+        if (!mainTimedOut && !mainMaxTurnsReached) throw error;
+        break;
+      }
       await textStream.flush();
+      if (mainTimedOut || mainMaxTurnsReached) break;
       throwIfLastAssistantError(session.messages);
       if (signal?.aborted) throw new Error("Task interrupted by user.");
       gate = completionGate(runtime);
@@ -236,6 +289,16 @@ export async function runPentestTask(
         round: round + 1,
         finish_status: runtime.lifecycle.finishScan?.status,
       });
+    }
+    if (mainTimedOut) {
+      throw new Error(
+        `Main agent timed out after ${Math.round(mainMaxMs / 1000)}s (node 运行参数 · 主 Agent 超时).`,
+      );
+    }
+    if (mainMaxTurnsReached) {
+      throw new Error(
+        `Main agent stopped after max ${mainMaxTurns} tool turns (node 运行参数 · 主 Agent 轮次).`,
+      );
     }
 
     const finishStatus = runtime.lifecycle.finishScan?.status;
@@ -314,6 +377,7 @@ export async function runPentestTask(
     );
     throw error;
   } finally {
+    if (mainBudgetTimer) clearTimeout(mainBudgetTimer);
     await textStream.dispose();
     try {
       session.dispose();
@@ -324,6 +388,11 @@ export async function runPentestTask(
     await diagnostics.noteRuntime("task_finally", { phase: diagnostics.snapshot().phase });
     await caidoBridge?.stop();
   }
+}
+
+function clampInt(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.max(min, Math.min(max, Math.floor(value)));
 }
 
 function normalizeSidecarTaskTarget(config: Node2Config, task: TaskEnvelope): TaskEnvelope {

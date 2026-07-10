@@ -85,11 +85,10 @@ export default function AssetPage() {
     <div className="flex h-screen bg-canvas">
       <Sidebar activeId={null} onSelect={() => {}} />
       <div className="flex flex-1 flex-col overflow-hidden">
-        <TopBar title="Asset Management" />
+        <TopBar title="资产管理" />
         <div className="flex flex-1 overflow-hidden">
           <main className="flex-1 overflow-y-auto p-6">
             <div className="mb-4 flex flex-wrap items-center gap-3">
-              <h1 className="text-2xl font-semibold">Asset Management</h1>
               <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name or address" className="rounded-md border border-hairline px-3 py-2 text-sm focus:border-ink focus:outline-none" />
               <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="rounded-md border border-hairline px-3 py-2 text-sm">
                 {TYPES.map((t) => <option key={t}>{t}</option>)}

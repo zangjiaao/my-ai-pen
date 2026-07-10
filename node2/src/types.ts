@@ -15,13 +15,13 @@ export type TaskEnvelope = {
   scope: Record<string, unknown>;
   snapshot: Record<string, unknown>;
   /**
-   * Per-node worker budgets from 节点管理 (task_assign.worker_limits).
+   * Per-node runtime budgets from 节点管理 (task_assign.worker_limits).
    * Falls back to env defaults when absent.
    */
   workerLimits?: WorkerLimits;
 };
 
-/** Wall-clock / turn / timeout-retry budgets for in-process workers. */
+/** Wall-clock / turn / concurrency budgets for main agent + in-process workers. */
 export type WorkerLimits = {
   /** Hard wall-clock ms per worker package (default 300_000). */
   maxMs?: number;
@@ -29,6 +29,14 @@ export type WorkerLimits = {
   maxTurns?: number;
   /** Timeouts allowed before package is marked failed (default 2). */
   maxTimeoutRetries?: number;
+  /** Whole-task main-agent wall-clock ms (default 1_800_000). */
+  mainMaxMs?: number;
+  /** Main-agent max tool-using turns before graceful stop (default 80). */
+  mainMaxTurns?: number;
+  /** Max simultaneous in-process workers (default 1). */
+  maxConcurrentWorkers?: number;
+  /** Node default scan intensity when task does not set scan_mode. */
+  defaultScanMode?: ScanMode;
 };
 
 export type ScanMode = "quick" | "standard" | "deep";

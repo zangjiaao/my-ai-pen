@@ -7,9 +7,6 @@ import AssetPage from "./pages/AssetPage";
 import VulnerabilityPage from "./pages/VulnerabilityPage";
 import NodePage from "./pages/NodePage";
 import AuditPage from "./pages/AuditPage";
-import SkillPage from "./pages/SkillPage";
-import KnowledgePage from "./pages/KnowledgePage";
-import MemoryPage from "./pages/MemoryPage";
 import SonnerToast from "./components/SonnerToast";
 
 export default function App() {
@@ -28,9 +25,9 @@ export default function App() {
         <Route path="/vulnerabilities" element={user ? <VulnerabilityPage /> : <Navigate to="/login" />} />
         <Route path="/nodes" element={user ? <NodePage /> : <Navigate to="/login" />} />
         <Route path="/audit" element={user ? <AuditPage /> : <Navigate to="/login" />} />
-        <Route path="/skills" element={user ? <SkillPage /> : <Navigate to="/login" />} />
-        <Route path="/knowledge" element={user ? <KnowledgePage /> : <Navigate to="/login" />} />
-        <Route path="/memories" element={user ? <MemoryPage /> : <Navigate to="/login" />} />
+        <Route path="/skills" element={<Navigate to="/nodes" replace />} />
+        <Route path="/knowledge" element={<Navigate to="/nodes" replace />} />
+        <Route path="/memories" element={<Navigate to="/nodes" replace />} />
       </Routes>
       {user && <SonnerToast />}
     </>

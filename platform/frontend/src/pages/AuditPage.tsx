@@ -66,15 +66,29 @@ export default function AuditPage() {
         <TopBar title="审计日志" />
         <main className="flex-1 overflow-y-auto p-6">
           <div className="mb-4 flex flex-wrap items-center gap-3">
-            <h1 className="text-2xl font-semibold">审计日志</h1>
-            <select value={conversationId} onChange={(event) => setConversationId(event.target.value)} className="max-w-sm rounded-md border border-hairline bg-canvas px-3 py-2 text-sm">
+            <select
+              value={conversationId}
+              onChange={(event) => setConversationId(event.target.value)}
+              className="max-w-sm rounded-md border border-hairline px-3 py-2 text-sm"
+            >
               <option value={ALL}>全部会话</option>
               {conversations.map((conversation) => (
                 <option key={conversation.id} value={conversation.id}>{conversation.title}</option>
               ))}
             </select>
-            <input value={action} onChange={(event) => setAction(event.target.value)} placeholder="按 action 过滤" className="rounded-md border border-hairline bg-canvas px-3 py-2 text-sm focus:border-ink focus:outline-none" />
-            <button type="button" onClick={() => { void load(); }} className="rounded-md border border-hairline px-3 py-2 text-sm text-ink-secondary hover:bg-surface-default hover:text-ink">刷新</button>
+            <input
+              value={action}
+              onChange={(event) => setAction(event.target.value)}
+              placeholder="按 action 过滤"
+              className="rounded-md border border-hairline px-3 py-2 text-sm focus:border-ink focus:outline-none"
+            />
+            <button
+              type="button"
+              onClick={() => { void load(); }}
+              className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-white"
+            >
+              刷新
+            </button>
           </div>
 
           {error && <div className="mb-4 rounded-md border border-severity-critical/30 bg-severity-critical-subtle px-4 py-3 text-sm text-severity-critical">{error}</div>}

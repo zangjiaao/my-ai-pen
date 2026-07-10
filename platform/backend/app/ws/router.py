@@ -1357,7 +1357,7 @@ def _task_assign_from_user_message(conv_id: str, msg: dict, task_id: str) -> dic
 
 
 async def _worker_limits_for_node(node_id: str | None) -> dict:
-    """Attach node-configured worker wall-clock / turn budgets to task_assign."""
+    """Attach node-configured runtime budgets (worker + main + schedule) to task_assign."""
     if not node_id:
         return {}
     try:

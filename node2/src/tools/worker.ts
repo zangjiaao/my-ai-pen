@@ -20,6 +20,46 @@ import {
 import { listWorkerRoles, resolveWorkerRole } from "../runtime/worker-roles.js";
 import { emitPlanUpdate, jsonResult, textResult } from "./common.js";
 
+type WorkerSlotGate = {
+  active: number;
+  waiters: Array<() => void>;
+};
+
+function workerSlotGate(runtime: ToolRuntime): WorkerSlotGate {
+  const host = runtime as ToolRuntime & { __workerSlotGate?: WorkerSlotGate };
+  if (!host.__workerSlotGate) {
+    host.__workerSlotGate = { active: 0, waiters: [] };
+  }
+  return host.__workerSlotGate;
+}
+
+function maxConcurrentWorkers(runtime: ToolRuntime): number {
+  const n = Number(
+    runtime.task.workerLimits?.maxConcurrentWorkers ?? process.env.NODE2_MAX_CONCURRENT_WORKERS ?? 1,
+  );
+  if (!Number.isFinite(n)) return 1;
+  return Math.max(1, Math.min(4, Math.floor(n)));
+}
+
+async function acquireWorkerSlot(runtime: ToolRuntime): Promise<() => void> {
+  const gate = workerSlotGate(runtime);
+  const max = maxConcurrentWorkers(runtime);
+  if (gate.active >= max) {
+    await new Promise<void>((resolve) => {
+      gate.waiters.push(resolve);
+    });
+  }
+  gate.active += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    gate.active = Math.max(0, gate.active - 1);
+    const next = gate.waiters.shift();
+    if (next) next();
+  };
+}
+
 export function createWorkerTool(runtime: ToolRuntime): ToolDefinition<any> {
   const roles = listWorkerRoles();
   return {
@@ -53,10 +93,12 @@ export function createWorkerTool(runtime: ToolRuntime): ToolDefinition<any> {
         );
       }
 
+      const releaseSlot = await acquireWorkerSlot(runtime);
       const workerId = `worker-${role.id}-${Date.now().toString(36)}`;
       const planNodeId = `plan-${workerId}`;
       const startedAt = new Date().toISOString();
 
+      try {
       runtime.plan.upsert({
         node_id: planNodeId,
         title: `Worker ${role.id}: ${task.slice(0, 80)}`,
@@ -383,6 +425,9 @@ export function createWorkerTool(runtime: ToolRuntime): ToolDefinition<any> {
                   ? `Worker completed, but ${openLeft.length} other timeout/failed package(s) remain open. Clear them before finish_scan(completed).`
                   : "Integrate worker findings into coverage/next_work; dispatch more packages or call finish_scan only when assess gates are satisfied (use incomplete if work remains).",
       });
+      } finally {
+        releaseSlot();
+      }
     },
   };
 }
