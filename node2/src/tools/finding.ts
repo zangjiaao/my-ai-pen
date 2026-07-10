@@ -7,7 +7,11 @@ import {
   preferFindingRecord,
   type PersistedFindingRecord,
 } from "../runtime/findings-aggregate.js";
-import { extractFlagToken, inferFindingKind } from "../runtime/finding-kind.js";
+import {
+  extractFlagToken,
+  inferFindingKind,
+  looksLikeMixedVulnAndFlag,
+} from "../runtime/finding-kind.js";
 import type { PlatformMessage, ToolRuntime } from "../types.js";
 import { emitPlanUpdate, jsonResult, targetBase, textResult } from "./common.js";
 
@@ -16,14 +20,22 @@ export function createFindingTool(runtime: ToolRuntime): ToolDefinition<any> {
     name: "finding",
     label: "Finding",
     description:
-      "Record candidate, confirmed, or rejected high-value results: vulns, auth/credentials/secrets, or CTF flags. Confirmed findings require at least one evidence_id. Set finding_kind when clear (vuln|auth|flag).",
-    promptSnippet: "Record confirmed vulns, credentials, or flags with evidence",
+      "Record one independent high-value result per call: a vuln, an auth/key secret, or a CTF flag. Vuln/Key/Flag are separate objects — never combine them in one confirm. Confirmed findings require at least one evidence_id. Always set finding_kind (vuln|auth|flag).",
+    promptSnippet: "Confirm one vuln OR one flag OR one key per finding call (separate objects)",
     promptGuidelines: [
       "Use finding(action='candidate') for plausible issues; use finding(action='confirm') only with evidence_id proving end-to-end reproduction.",
       "Immediately confirm each validated issue as soon as evidence exists; do not batch confirmed findings at the end.",
-      "A confirmed finding must include location/url, impact or description, reproduction steps or PoC, remediation, severity, and evidence_ids.",
-      "Set finding_kind='flag' when the primary artifact is a CTF flag{...}; finding_kind='auth' for passwords/API keys/AKSK; finding_kind='vuln' for security vulnerabilities.",
-      "For flags, put the exact flag{...} token in description or poc so the panel can display it under Flags.",
+      "A confirmed finding must include location/url, a short description of the issue, reproduction or PoC, severity, and evidence_ids.",
+      "finding_kind is required intent: 'vuln' | 'auth' | 'flag'. Each confirm is exactly one object type.",
+      "REQUIRED when both apply: emit TWO confirms — (1) finding_kind='vuln' for the vulnerability, (2) finding_kind='flag' or 'auth' for the captured token/secret. Do not mix flag{...} into a vuln title as the only flag report.",
+      "TITLE naming (strict, user-facing cards use this): short, structured, no full sentences or essays. Max ~80 characters.",
+      "  vuln title: '<Class> · <METHOD path>' e.g. 'SQL Injection · POST /level9/login', 'IDOR · GET /api/Users/1', 'XSS · /search'. Class first; path second; optional param as 'param=id'.",
+      "  flag title: 'Flag · <path>' e.g. 'Flag · /level9/login' (put exact flag{...} in description/poc, not as a prose title).",
+      "  auth/key title: '<Subtype> · <path>' e.g. 'JWT · /api/whoami', 'Password · /login', 'API Key · /config'. Subtype in {Password, JWT, API Key, Token, Session, Secret}.",
+      "Do NOT use titles like long English paragraphs, .htaccess essays, or 'Found interesting thing while testing…'. Put narrative in description.",
+      "description: 1–3 sentences on what the issue is / why it matters (shown under the card). Put reproduction detail in reproduction/poc.",
+      "For flags: finding_kind='flag', exact flag{...} in description or poc, location = route obtained.",
+      "For keys: finding_kind='auth', secret material in description/poc with location.",
       "Do not re-confirm the same vulnerability class on the same endpoint with a reworded title — the tool merges duplicates.",
     ],
     parameters: Type.Object({
@@ -146,7 +158,19 @@ export function createFindingTool(runtime: ToolRuntime): ToolDefinition<any> {
         } as PlatformMessage);
         await emitPlanUpdate(runtime, "finding.confirm");
       }
-      return jsonResult({ ok: true, path, record, finding_kind: findingKind, flag_value: flagToken, deduped: false });
+      const mixedHint =
+        action === "confirm" && looksLikeMixedVulnAndFlag(record)
+          ? "This record looks like a mixed vuln+flag body. Emit a second finding(action='confirm', finding_kind='flag') with the exact flag{...} so Flag is a separate object."
+          : undefined;
+      return jsonResult({
+        ok: true,
+        path,
+        record,
+        finding_kind: findingKind,
+        flag_value: flagToken,
+        deduped: false,
+        ...(mixedHint ? { hint: mixedHint } : {}),
+      });
     },
   };
 }

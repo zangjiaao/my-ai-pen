@@ -125,17 +125,27 @@ const keys = new Set(
   ],
 );
 assert(keys.size === 3, `expected 3 families, got ${[...keys].join(" | ")}`);
-assert([...keys].some((k) => k === "sqli|search"), `search key missing: ${[...keys]}`);
-assert([...keys].some((k) => k === "sqli|login"), `login key missing: ${[...keys]}`);
-assert([...keys].some((k) => k.startsWith("idor|")), `idor key missing: ${[...keys]}`);
+// Keys are kind|class|family (vuln/flag/auth are independent objects).
+assert([...keys].some((k) => k === "vuln|sqli|search"), `search key missing: ${[...keys]}`);
+assert([...keys].some((k) => k === "vuln|sqli|login"), `login key missing: ${[...keys]}`);
+assert([...keys].some((k) => k.startsWith("vuln|idor|")), `idor key missing: ${[...keys]}`);
 assert(raw.evidenceIds.includes("ev-9") || raw.evidenceIds.includes("ev-2"), "evidence merged for search");
 assert(
   findingDedupeKey({
     title: "SQL Injection",
     location: "/rest/products/search",
     severity: "high",
-  }).startsWith("sqli|"),
+  }).startsWith("vuln|sqli|"),
   "dedupe class hint",
+);
+assert(
+  findingDedupeKey({
+    title: "Captured flag",
+    finding_kind: "flag",
+    location: "/rest/products/search",
+    description: "flag{example}",
+  }).startsWith("flag|"),
+  "flag object must not share vuln dedupe key",
 );
 
 const aligned = alignSummaryFindingCount("**12 confirmed vulnerabilities** across the app. 12 findings confirmed.", 3);

@@ -55,17 +55,33 @@ export function normalizeLocationFingerprint(value: unknown): string {
 }
 
 /**
- * Deterministic dedupe key: vulnerability class + endpoint family.
- * Near-duplicate titles on the same logical surface collapse regardless of host/wording.
+ * Deterministic dedupe key: object kind + vulnerability class + endpoint family.
+ * Vuln / flag / auth are independent objects — same route may hold one of each
+ * without collapsing. Near-duplicate vuln titles on the same surface still merge.
  */
 export function findingDedupeKey(record: PersistedFindingRecord): string {
+  const kind = normalizeFindingKindForDedupe(record.finding_kind || record.kind || record.category);
   const title = normalizeFindingText(record.title || "");
   const classHint = extractClassHint(title);
   const location = normalizeLocationFingerprint(record.location || record.url || record.affected_asset || "");
   const family = endpointFamily(location, title, classHint);
-  if (classHint) return `${classHint}|${family}`;
-  if (location) return `loc|${location}|${title.slice(0, 60)}`;
-  return title || "finding";
+  const body = classHint
+    ? `${classHint}|${family}`
+    : location
+      ? `loc|${location}|${title.slice(0, 60)}`
+      : title || "finding";
+  return `${kind}|${body}`;
+}
+
+function normalizeFindingKindForDedupe(value: unknown): string {
+  const raw = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (["flag", "flags", "ctf"].includes(raw)) return "flag";
+  if (["auth", "credential", "credentials", "secret", "secrets", "password", "apikey", "api_key", "aksk", "key"].includes(raw)) {
+    return "auth";
+  }
+  return "vuln";
 }
 
 /** Map free-form location/title into a coarse endpoint family for dedupe. */
