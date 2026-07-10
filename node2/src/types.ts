@@ -14,6 +14,21 @@ export type TaskEnvelope = {
   target: Record<string, unknown>;
   scope: Record<string, unknown>;
   snapshot: Record<string, unknown>;
+  /**
+   * Per-node worker budgets from 节点管理 (task_assign.worker_limits).
+   * Falls back to env defaults when absent.
+   */
+  workerLimits?: WorkerLimits;
+};
+
+/** Wall-clock / turn / timeout-retry budgets for in-process workers. */
+export type WorkerLimits = {
+  /** Hard wall-clock ms per worker package (default 300_000). */
+  maxMs?: number;
+  /** Max tool-using turns before graceful stop (default 12). */
+  maxTurns?: number;
+  /** Timeouts allowed before package is marked failed (default 2). */
+  maxTimeoutRetries?: number;
 };
 
 export type ScanMode = "quick" | "standard" | "deep";
@@ -122,6 +137,14 @@ export type OpenWorkerPackage = {
   resolved?: boolean;
   resolvedAt?: string;
   resolveNote?: string;
+  /** How many times this package lineage has timed out (including first). */
+  timeoutAttempts?: number;
+  /** True when retries are exhausted and package is terminal failed. */
+  retriesExhausted?: boolean;
+  /** Operator-facing adjustment advice when retries are exhausted. */
+  advice?: string;
+  /** Stable lineage key so retries resolve the same open row. */
+  lineageKey?: string;
 };
 
 export type RuntimeLifecycle = {

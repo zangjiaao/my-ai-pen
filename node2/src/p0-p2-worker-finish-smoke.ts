@@ -244,10 +244,12 @@ const life: { openWorkerPackages?: any[] } = {};
 recordOpenWorkerPackage(life as any, {
   workerId: "worker-general-1",
   role: "general",
-  task: "Test remaining levels L3-L9",
+  task: "Test remaining levels L3-L9 /level8/login.php",
   outcome: "timeout",
+  maxTimeoutRetries: 2,
 });
 assert(unresolvedWorkerPackages(life as any).length === 1, "one open package");
+assert(unresolvedWorkerPackages(life as any)[0]?.outcome === "timeout", "first timeout stays timeout");
 assert(
   !assessOpenWorkerPackageGate({
     engagement: "assess",
@@ -264,6 +266,44 @@ assert(
   }).allowed,
   "incomplete allows open packages",
 );
+// Cross-role path overlap resolve (general re-dispatch clears access debt).
+const life2: { openWorkerPackages?: any[] } = {};
+recordOpenWorkerPackage(life2 as any, {
+  workerId: "worker-access-1",
+  role: "access-control",
+  task: "L8 /level8/admin_delete.php vertical priv",
+  outcome: "timeout",
+  maxTimeoutRetries: 2,
+});
+const cross = resolveOpenWorkerPackagesForSuccess(life2 as any, {
+  role: "general",
+  task: "retry /level8/admin_delete.php only",
+  note: "cross-role ok",
+});
+assert(cross.count === 1, "path-overlap resolves across roles");
+assert(unresolvedWorkerPackages(life2 as any).length === 0, "resolved after cross-role success");
+
+// Timeout retry exhaustion → failed + advice
+const life3: { openWorkerPackages?: any[] } = {};
+let last = recordOpenWorkerPackage(life3 as any, {
+  workerId: "w1",
+  role: "xss",
+  task: "/level5/stored.php stored xss",
+  outcome: "timeout",
+  maxTimeoutRetries: 1,
+});
+assert(last.pkg.outcome === "timeout" && !last.escalatedToFailed, "1st timeout not exhausted");
+last = recordOpenWorkerPackage(life3 as any, {
+  workerId: "w2",
+  role: "xss",
+  task: "/level5/stored.php stored xss narrower",
+  outcome: "timeout",
+  maxTimeoutRetries: 1,
+});
+// attempts 2, limit = 1+1 = 2 → escalate
+assert(last.escalatedToFailed || last.pkg.outcome === "failed", "2nd timeout with maxRetries=1 escalates");
+assert(String(last.pkg.advice || last.advice || "").includes("Adjustment"), "advice present");
+
 resolveOpenWorkerPackagesForSuccess(life as any, { role: "general", note: "re-dispatched ok" });
 assert(unresolvedWorkerPackages(life as any).length === 0, "resolved after success");
 assert(

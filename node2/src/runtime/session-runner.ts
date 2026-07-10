@@ -487,7 +487,7 @@ function buildWorkflowFirstInstruction(task: TaskEnvelope): string {
 
   lines.push(
     "After the workflow returns, follow that engagement only:",
-    "- pentest-web (assess): workflow_run brief → dispatch worker packages (prefer narrow packages: one role / few endpoints) → on worker timeout/failed, re-dispatch narrower work or continue live probes → coverage(next_work) to fill family gaps → main agent finish_scan. Never bulk-skip only to force completed. Do not finish_scan(completed) while timeout/failed worker packages remain open.",
+    "- pentest-web (assess): workflow_run brief → dispatch worker packages (STRICT: one role + 1–2 endpoints each) → on worker timeout, re-dispatch a narrower package or main-session probes (do not resend the same wide package) → after repeated timeouts the package fails with adjustment advice → coverage(next_work) to fill family gaps → main agent finish_scan. Never bulk-skip only to force completed. Do not finish_scan(completed) while timeout/failed worker packages remain open.",
     "- pentest-verify: minimal path to validate the stated hypothesis; finish when confirmed, disproven, or blocked — do not full-site sweep.",
     "- pentest-retest: replay the prior finding path and report still-vulnerable vs fixed.",
     "- pentest-consult: answer the question; live tools only if authorized and necessary.",
@@ -498,7 +498,7 @@ function buildWorkflowFirstInstruction(task: TaskEnvelope): string {
     "Call finish_scan only when ready to end the lifecycle:",
     "- status=completed only if high-priority coverage is resolved (tried/failed/passed or substantive skip/block notes) and assess multi-actor/surface gates are met.",
     "- If material work remains, call finish_scan(status='incomplete') ONCE — do not spam finish_scan(completed) or bulk-skip to force completed.",
-    "- After a worker timeout/failed outcome, re-dispatch or continue live probes for that package before finishing.",
+    "- After a worker timeout: prefer one narrower re-dispatch; if retries are exhausted the package is failed — apply the advice in plan notes (split endpoints, raise node worker timeout in 节点管理, or mark incomplete with blockers).",
     "Completion gates follow the engagement of the workflow you ran (or explicit task.engagement).",
     "",
     "Original user instruction:",

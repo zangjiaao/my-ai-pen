@@ -584,6 +584,11 @@ function StrixTodoItem({ item }: { item: PlanNode }) {
   const Icon = todoStatusIcon(status);
   const isWorker = String(item.kind || "") === "worker" || String(item.source || "") === "worker";
   const workerBadge = isWorker ? workerOutcomeBadge(item) : null;
+  const isFollowUp =
+    String(item.source || "") === "worker" &&
+    (/^follow-up\b/i.test(String(item.title || "")) || String(item.node_id || item.id || "").startsWith("plan-followup-"));
+  // Show more of adjustment advice on failed follow-ups.
+  const noteLimit = isFollowUp && (status === "failed" || workerBadge?.label === "failed") ? 320 : 150;
   return (
     <div className="flex min-w-0 items-start gap-2 rounded-md px-2 py-2 hover:bg-canvas-inset">
       <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${todoStatusIconClass(status)}`} />
@@ -594,7 +599,14 @@ function StrixTodoItem({ item }: { item: PlanNode }) {
             <span className={`shrink-0 rounded-sm px-1.5 py-0.5 text-[10px] font-medium uppercase ${workerBadge.className}`}>{workerBadge.label}</span>
           )}
         </div>
-        {item.notes && <p className="mt-0.5 break-words text-xs text-ink-muted [overflow-wrap:anywhere]">{clip(item.notes, 150)}</p>}
+        {item.notes && (
+          <p
+            className="mt-0.5 break-words text-xs text-ink-muted [overflow-wrap:anywhere] whitespace-pre-wrap"
+            title={String(item.notes)}
+          >
+            {clip(item.notes, noteLimit)}
+          </p>
+        )}
       </div>
     </div>
   );
@@ -604,7 +616,28 @@ function workerOutcomeBadge(item: PlanNode): { label: string; className: string 
   const notes = String(item.notes || "").toLowerCase();
   const title = String(item.title || "").toLowerCase();
   const status = String(item.status || "").toLowerCase();
+  const isFollowUp =
+    String(item.source || "") === "worker" &&
+    (/^follow-up\b/i.test(String(item.title || "")) || String(item.node_id || item.id || "").startsWith("plan-followup-"));
+
   if (status === "running") return { label: "running", className: "bg-status-running/15 text-status-running" };
+
+  // Follow-up rows: explicit retry / failed / resolved (not the same as worker timeout chip).
+  if (isFollowUp) {
+    if (status === "done" || status === "completed" || /\[resolved\]/.test(title)) {
+      return { label: "resolved", className: "bg-status-success/15 text-status-success" };
+    }
+    if (status === "failed" || /\[failed\]/.test(title) || /retries exhausted|adjustment suggestions/.test(notes)) {
+      return { label: "failed", className: "bg-severity-critical-subtle text-severity-critical" };
+    }
+    if (status === "pending" || /\[retry\]/.test(title) || /retry budget/.test(notes)) {
+      return { label: "retry", className: "bg-status-running/12 text-status-running" };
+    }
+    if (/\[timeout\]/.test(title) || status === "blocked") {
+      return { label: "follow-up", className: "bg-severity-high-subtle text-severity-high" };
+    }
+  }
+
   if (/\[timeout\]|timed out|timeout/.test(notes) || /\[timeout\]/.test(title) || status === "blocked") {
     return { label: "timeout", className: "bg-severity-high-subtle text-severity-high" };
   }

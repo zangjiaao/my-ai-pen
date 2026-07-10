@@ -125,7 +125,12 @@ export async function runWorkerSession(input: {
     };
   }
 
-  const maxTurns = clampInt(input.maxTurns ?? Number(process.env.NODE2_WORKER_MAX_TURNS || 12), 1, 40);
+  const limitsFromTask = input.runtime?.task?.workerLimits;
+  const maxTurns = clampInt(
+    input.maxTurns ?? limitsFromTask?.maxTurns ?? Number(process.env.NODE2_WORKER_MAX_TURNS || 12),
+    1,
+    40,
+  );
   const workerDir = join(input.launch.taskDir, "workers", workerId);
   await mkdir(workerDir, { recursive: true });
   const piSessionDir = join(workerDir, "pi-sessions");
@@ -154,6 +159,7 @@ export async function runWorkerSession(input: {
 
   let toolCallCount = 0;
   let lastAssistant = "";
+  let maxTurnsReached = false;
   const usageLedger = new LlmUsageLedger();
   const { session } = await createAgentSession({
     cwd: input.launch.taskDir,
@@ -169,7 +175,14 @@ export async function runWorkerSession(input: {
   });
 
   const unsubscribe = session.subscribe((event: any) => {
-    if (event?.type === "tool_execution_start") toolCallCount += 1;
+    if (event?.type === "tool_execution_start") {
+      toolCallCount += 1;
+      // Hard turn budget: stop gracefully after max tool starts (forces summary path).
+      if (toolCallCount >= maxTurns && !maxTurnsReached) {
+        maxTurnsReached = true;
+        void session.abort?.();
+      }
+    }
     if (event?.type === "message_end" && event?.message?.role === "assistant") {
       usageLedger.recordAssistantMessage(event.message);
       const content = event.message.content;
@@ -192,16 +205,20 @@ export async function runWorkerSession(input: {
     };
     input.signal?.addEventListener("abort", abortHandler, { once: true });
 
-    // Soft turn budget: prompt once; session stop is controlled by max agent turns via env if supported.
-    // Also hard-timeout the whole worker.
-    // Default 5 minutes — multi-endpoint packages often need more than 3 minutes.
-    const timeoutMs = clampInt(Number(process.env.NODE2_WORKER_MAX_MS || 300_000), 10_000, 900_000);
+    // Wall-clock budget: task_assign worker_limits (节点管理) > env > default 5 min.
+    const limits = input.runtime?.task?.workerLimits;
+    const timeoutMs = clampInt(
+      Number(limits?.maxMs ?? process.env.NODE2_WORKER_MAX_MS ?? 300_000),
+      10_000,
+      900_000,
+    );
     await Promise.race([
       session.prompt(
         [
           `Worker role: ${role.id} (${role.label})`,
           `Worker id: ${workerId}`,
-          `Max effort: about ${maxTurns} tool-using turns; then stop with a summary.`,
+          `Max effort: at most ${maxTurns} tool-using turns (hard stop), then write a concise summary of what was confirmed vs still open.`,
+          "Keep the package narrow: prefer 1–2 endpoints; do not expand into unrelated levels.",
           "Assigned package:",
           taskText,
         ].join("\n\n"),
@@ -211,12 +228,17 @@ export async function runWorkerSession(input: {
     ]);
 
     const usage = usageLedger.snapshot({ agent_count: 1, tool_calls: toolCallCount });
+    const summary =
+      lastAssistant ||
+      (maxTurnsReached
+        ? `Worker ${role.id} stopped after max ${maxTurns} tool turns (${toolCallCount} tool call(s)).`
+        : `Worker ${role.id} completed with ${toolCallCount} tool call(s).`);
     return {
       ok: true,
       outcome: "completed",
       workerId,
       role: role.id,
-      summary: lastAssistant || `Worker ${role.id} completed with ${toolCallCount} tool call(s).`,
+      summary,
       toolCallCount,
       durationMs: Date.now() - started,
       usage,
@@ -224,6 +246,21 @@ export async function runWorkerSession(input: {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const usage = usageLedger.snapshot({ agent_count: 1, tool_calls: toolCallCount });
+    // Graceful max-turns stop is not a failure/timeout.
+    if (maxTurnsReached && !/timed out|timeout/i.test(message)) {
+      return {
+        ok: true,
+        outcome: "completed",
+        workerId,
+        role: role.id,
+        summary:
+          lastAssistant ||
+          `Worker ${role.id} stopped after max ${maxTurns} tool turns (${toolCallCount} tool call(s)).`,
+        toolCallCount,
+        durationMs: Date.now() - started,
+        usage,
+      };
+    }
     const outcome = classifyWorkerOutcome(false, message);
     return {
       ok: false,

@@ -80,7 +80,24 @@ function normalizeTask(message: PlatformMessage): TaskEnvelope {
     target: isRecord(message.target) ? message.target : {},
     scope: isRecord(message.scope) ? message.scope : {},
     snapshot: isRecord(message.snapshot) ? message.snapshot : {},
+    workerLimits: normalizeWorkerLimits(message.worker_limits || message.workerLimits),
   };
+}
+
+function normalizeWorkerLimits(raw: unknown): TaskEnvelope["workerLimits"] | undefined {
+  if (!isRecord(raw)) return undefined;
+  const maxMs = Number(raw.worker_max_ms ?? raw.maxMs ?? raw.max_ms);
+  const maxTurns = Number(raw.worker_max_turns ?? raw.maxTurns ?? raw.max_turns);
+  const maxTimeoutRetries = Number(
+    raw.worker_max_timeout_retries ?? raw.maxTimeoutRetries ?? raw.max_timeout_retries,
+  );
+  const out: NonNullable<TaskEnvelope["workerLimits"]> = {};
+  if (Number.isFinite(maxMs) && maxMs > 0) out.maxMs = Math.floor(maxMs);
+  if (Number.isFinite(maxTurns) && maxTurns > 0) out.maxTurns = Math.floor(maxTurns);
+  if (Number.isFinite(maxTimeoutRetries) && maxTimeoutRetries >= 0) {
+    out.maxTimeoutRetries = Math.floor(maxTimeoutRetries);
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 function normalizeScanMode(value: unknown): ScanMode {
