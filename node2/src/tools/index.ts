@@ -10,6 +10,7 @@ import { createPocTool } from "./poc.js";
 import { createScanTool } from "./scan.js";
 import { createTrafficTool } from "./traffic.js";
 import { createVerifierTool } from "./verifier.js";
+import { createWorkerTool } from "./worker.js";
 
 export const PENTEST_TOOL_NAMES = [
   "read",
@@ -22,6 +23,7 @@ export const PENTEST_TOOL_NAMES = [
   "poc",
   "verifier",
   "finding",
+  "worker",
   "finish_scan",
   "workflow_list",
   "workflow_run",
@@ -39,6 +41,7 @@ export function createPentestTools(runtime: ToolRuntime): ToolDefinition<any>[] 
     createPocTool(runtime),
     createVerifierTool(runtime),
     createFindingTool(runtime),
+    createWorkerTool(runtime),
     createFinishScanTool(runtime),
   ];
 }

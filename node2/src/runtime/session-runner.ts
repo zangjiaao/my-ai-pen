@@ -95,6 +95,16 @@ export async function runPentestTask(
   });
   process.env.PI_WORKFLOW_SUBAGENT_BACKEND ??= "inline";
 
+  // Enable in-process worker subagents that share this runtime's stores/tools.
+  runtime.workerLaunch = {
+    config,
+    model,
+    authStorage,
+    modelRegistry,
+    settingsManager,
+    taskDir,
+  };
+
   const resourceLoader = new DefaultResourceLoader({
     cwd: taskDir,
     agentDir: config.piAgentDir,
@@ -411,7 +421,7 @@ function buildWorkflowFirstInstruction(task: TaskEnvelope): string {
 
   lines.push(
     "After the workflow returns, follow that engagement only:",
-    "- pentest-web (assess): browser/http reachability → actor capture (≥2 when accounts exist) → traffic(analyze/candidates) → seed coverage → coverage(next_work) loop for untested families and traffic candidates → dual-actor on ≥2 object resources → more live probes after first findings (XSS/business-logic/injection variants) → finish_scan. Never bulk-skip only to force completed.",
+    "- pentest-web (assess): workflow_run brief → dispatch worker packages (recon / access-control / injection / xss / general) sharing runtime state → coverage(next_work) to fill family gaps → main agent finish_scan. Never bulk-skip only to force completed.",
     "- pentest-verify: minimal path to validate the stated hypothesis; finish when confirmed, disproven, or blocked — do not full-site sweep.",
     "- pentest-retest: replay the prior finding path and report still-vulnerable vs fixed.",
     "- pentest-consult: answer the question; live tools only if authorized and necessary.",

@@ -14,6 +14,7 @@ Start from real application behavior, not guessed URLs.
 5. Use `scan(scanner="httpx")`, `scan(scanner="katana")`, `scan(scanner="ffuf")`, or `scan(scanner="arjun")` when broader discovery is needed (OpenAPI/swagger, common API prefixes, SPA routes).
 6. Normalize candidates as `(METHOD path, parameter)` tuples, seed `coverage`, then call `coverage(action="surface_quality")`, `coverage(action="next_work")`, and `coverage(action="untested")`.
 7. Mid-run loop: after early findings, re-call `coverage(action="next_work")` and execute the top live probes (untested risk families + traffic candidates) before more skip/block marks.
+8. Prefer `worker(role="recon"|…, task=…)` for separable packages from the workflow brief; workers share traffic/coverage/actors/evidence. Main agent keeps `finish_scan`.
 
 Do not move to confirmation until a specific endpoint, parameter, and expected security property are defined.
 Do not bulk-skip high-priority coverage to force `finish_scan(completed)`; use incomplete when inventory or probes remain thin.

@@ -41,6 +41,18 @@ export type ToolRuntime = {
   trafficProxyUrl?: string;
   externalTrafficSource?: ExternalTrafficSourceLike;
   scannerSandbox?: ScannerSandboxConfig;
+  /**
+   * Optional context to launch in-process worker subagents that share this runtime.
+   * Populated by session-runner for full task runs; smokes may omit it.
+   */
+  workerLaunch?: {
+    config: unknown;
+    model: unknown;
+    authStorage: unknown;
+    modelRegistry: unknown;
+    settingsManager: unknown;
+    taskDir: string;
+  };
 };
 
 export type ActorStoreLike = {

@@ -30,6 +30,7 @@ export function friendlyToolName(toolName: string): string {
     finding: "Finding",
     finish_scan: "Finish Scan",
     poc: "PoC",
+    worker: "Worker",
     workflow_run: "Workflow",
     workflow_list: "Workflow",
     workflow_dynamic: "Workflow",
@@ -51,7 +52,7 @@ export function toolCategory(toolName: string): string {
   if (["http"].includes(name)) return "request";
   if (["scan", "poc"].includes(name) && name === "scan") return "search";
   if (["verifier", "finding", "finish_scan"].includes(name)) return "finding";
-  if (["coverage", "actor", "workflow_run", "workflow_list", "workflow_dynamic", "read"].includes(name)) return "planning";
+  if (["coverage", "actor", "worker", "workflow_run", "workflow_list", "workflow_dynamic", "read"].includes(name)) return "planning";
   if (/exec|shell|command|docker/.test(name)) return "command";
   return "tool";
 }
