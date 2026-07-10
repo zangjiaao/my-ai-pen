@@ -259,10 +259,12 @@ export default function RightPanel({
   };
 
   const elapsedText = formatDuration(elapsedClock.seconds);
-  const tabs: { key: Tab; label: string }[] = [
+  const findingGroups = groupFindingsByKind(findings);
+  const findingsTabTitle = findingsTabHoverTitle(findingGroups);
+  const tabs: { key: Tab; label: string; title?: string }[] = [
     { key: "status", label: "Status" },
     { key: "surface", label: countLabel("Surface", surfaceItems.length) },
-    { key: "findings", label: countLabel("Findings", findings.length) },
+    { key: "findings", label: countLabel("Findings", findings.length), title: findingsTabTitle },
     { key: "activity", label: countLabel("Activity", timeline.length) },
   ];
 
@@ -285,6 +287,7 @@ export default function RightPanel({
           <button
             key={item.key}
             data-testid={`right-tab-${item.key}`}
+            title={item.title || item.label}
             onClick={() => setTab(item.key)}
             className={`px-0.5 py-2.5 text-[13px] font-medium transition-colors ${tab === item.key ? "border-b-2 border-ink text-ink" : "border-b-2 border-transparent text-ink-secondary hover:text-ink"}`}
           >
@@ -360,23 +363,40 @@ export default function RightPanel({
           findings.length === 0 ? (
             <p className="text-sm text-ink-muted">No findings yet</p>
           ) : (
-            <div className="space-y-2">
-              {findings.map((finding, index) => (
-                <button
-                  key={(finding.id as string) || (finding.vulnerability_id as string) || index}
-                  type="button"
-                  onClick={() => onOpenVulnerability?.(finding as Partial<SecurityVulnerability>)}
-                  className="block w-full rounded-md border border-hairline-soft p-2 text-left transition-colors hover:bg-surface-default"
-                >
-                  <div className="mb-1 flex min-w-0 items-center gap-1">
-                    <span className={`inline-block rounded-md px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase bg-severity-${finding.severity || "info"}-subtle text-severity-${finding.severity || "info"}`}>
-                      {String(finding.severity || "info")}
-                    </span>
-                    <span className="truncate text-sm font-medium">{String(finding.title || "Untitled vulnerability")}</span>
-                  </div>
-                  <p className="break-words text-xs text-ink-muted">{findingMetaLine(finding)}</p>
-                </button>
-              ))}
+            <div className="space-y-4" title={findingsTabTitle}>
+              {findingGroups.map((group) =>
+                group.items.length === 0 ? null : (
+                  <section key={group.id} className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-medium text-ink-muted">
+                        {group.label} ({group.items.length})
+                      </p>
+                      <span className="font-mono text-[10px] text-ink-muted">{group.hint}</span>
+                    </div>
+                    {group.items.map((finding, index) => (
+                      <button
+                        key={(finding.id as string) || (finding.vulnerability_id as string) || `${group.id}-${index}`}
+                        type="button"
+                        onClick={() => onOpenVulnerability?.(finding as Partial<SecurityVulnerability>)}
+                        className="block w-full rounded-md border border-hairline-soft p-2 text-left transition-colors hover:bg-surface-default"
+                      >
+                        <div className="mb-1 flex min-w-0 items-center gap-1">
+                          <span className={`inline-block shrink-0 rounded-md px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase ${group.badgeClass}`}>
+                            {group.shortLabel}
+                          </span>
+                          {group.id === "vuln" && (
+                            <span className={`inline-block shrink-0 rounded-md px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase bg-severity-${finding.severity || "info"}-subtle text-severity-${finding.severity || "info"}`}>
+                              {String(finding.severity || "info")}
+                            </span>
+                          )}
+                          <span className="truncate text-sm font-medium">{findingDisplayTitle(finding, group.id)}</span>
+                        </div>
+                        <p className="break-words text-xs text-ink-muted">{findingMetaLine(finding, group.id)}</p>
+                      </button>
+                    ))}
+                  </section>
+                ),
+              )}
             </div>
           )
         )}
@@ -1079,7 +1099,121 @@ function attackSurfaceItems(nodes: PlanNode[]): PlanNode[] {
   );
 }
 
-function findingMetaLine(finding: Record<string, unknown>): string {
+type FindingKindId = "vuln" | "auth" | "flag";
+
+type FindingKindGroup = {
+  id: FindingKindId;
+  label: string;
+  shortLabel: string;
+  hint: string;
+  badgeClass: string;
+  items: Array<Record<string, unknown>>;
+};
+
+function groupFindingsByKind(findings: Array<Record<string, unknown>>): FindingKindGroup[] {
+  const buckets: Record<FindingKindId, Array<Record<string, unknown>>> = { vuln: [], auth: [], flag: [] };
+  for (const finding of findings) {
+    buckets[classifyFindingKind(finding)].push(finding);
+  }
+  return [
+    {
+      id: "vuln",
+      label: "Vuln",
+      shortLabel: "Vuln",
+      hint: "vulnerabilities",
+      badgeClass: "bg-severity-high-subtle text-severity-high",
+      items: buckets.vuln,
+    },
+    {
+      id: "auth",
+      label: "Auth",
+      shortLabel: "Auth",
+      hint: "credentials / secrets",
+      badgeClass: "bg-severity-critical-subtle text-severity-critical",
+      items: buckets.auth,
+    },
+    {
+      id: "flag",
+      label: "Flags",
+      shortLabel: "Flag",
+      hint: "CTF / challenge tokens",
+      badgeClass: "bg-status-success/15 text-status-success",
+      items: buckets.flag,
+    },
+  ];
+}
+
+function findingsTabHoverTitle(groups: FindingKindGroup[]): string {
+  const parts = groups.filter((g) => g.items.length > 0).map((g) => `${g.label} ${g.items.length}`);
+  return parts.length ? parts.join(" · ") : "Findings";
+}
+
+function classifyFindingKind(finding: Record<string, unknown>): FindingKindId {
+  const explicit = String(finding.finding_kind || finding.kind || finding.category || "")
+    .trim()
+    .toLowerCase();
+  if (["vuln", "vulnerability", "vulns"].includes(explicit)) return "vuln";
+  if (["auth", "credential", "credentials", "secret", "secrets", "password", "apikey", "api_key", "aksk"].includes(explicit)) {
+    return "auth";
+  }
+  if (["flag", "flags", "ctf"].includes(explicit)) return "flag";
+
+  const blob = [
+    finding.title,
+    finding.description,
+    finding.impact,
+    finding.poc,
+    finding.reproduction,
+    finding.location,
+    finding.flag_value,
+  ]
+    .map((v) => String(v || ""))
+    .join("\n");
+
+  if (/flag\s*\{[^{}\n]{2,120}\}/i.test(blob) || /\bFLAG\s*\{[^{}\n]{2,120}\}/.test(blob)) return "flag";
+  if (
+    /\b(api[_-]?key|access[_-]?key|secret[_-]?key|aws[_-]?secret|private[_-]?key|akia[0-9a-z]{12,})\b/i.test(blob) ||
+    /\b(password|passwd|pwd|credential|credentials)\b/i.test(blob) ||
+    /\b(ak\/sk|accesskeyid|secretaccesskey)\b/i.test(blob)
+  ) {
+    return "auth";
+  }
+  return "vuln";
+}
+
+function extractFlagFromFinding(finding: Record<string, unknown>): string | undefined {
+  const direct = String(finding.flag_value || "").trim();
+  if (direct) return direct;
+  const blob = [finding.title, finding.description, finding.poc, finding.reproduction, finding.impact]
+    .map((v) => String(v || ""))
+    .join("\n");
+  const m = blob.match(/flag\{[^{}\n]{2,120}\}/i) || blob.match(/FLAG\{[^{}\n]{2,120}\}/);
+  return m ? m[0] : undefined;
+}
+
+function findingDisplayTitle(finding: Record<string, unknown>, kind: FindingKindId): string {
+  if (kind === "flag") {
+    const flag = extractFlagFromFinding(finding);
+    if (flag) return flag;
+  }
+  return String(finding.title || "Untitled finding");
+}
+
+function findingMetaLine(finding: Record<string, unknown>, kind?: FindingKindId): string {
+  if (kind === "flag") {
+    const loc = String(finding.location || finding.url || finding.endpoint || "").trim();
+    const title = String(finding.title || "").replace(/flag\{[^{}\n]+\}/gi, "").replace(/\s+/g, " ").trim();
+    return [loc, title && title !== extractFlagFromFinding(finding) ? title : ""].filter(Boolean).join(" · ") || "CTF flag";
+  }
+  if (kind === "auth") {
+    return (
+      [finding.location || finding.url, finding.description || finding.impact]
+        .map((item) => String(item || "").trim())
+        .filter(Boolean)
+        .join(" · ")
+        .slice(0, 160) || "credential"
+    );
+  }
   const pieces = [
     [finding.method, finding.endpoint || finding.location].filter(Boolean).join(" "),
     finding.cwe,

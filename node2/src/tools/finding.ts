@@ -7,6 +7,7 @@ import {
   preferFindingRecord,
   type PersistedFindingRecord,
 } from "../runtime/findings-aggregate.js";
+import { extractFlagToken, inferFindingKind } from "../runtime/finding-kind.js";
 import type { PlatformMessage, ToolRuntime } from "../types.js";
 import { emitPlanUpdate, jsonResult, targetBase, textResult } from "./common.js";
 
@@ -15,17 +16,23 @@ export function createFindingTool(runtime: ToolRuntime): ToolDefinition<any> {
     name: "finding",
     label: "Finding",
     description:
-      "Record candidate, confirmed, or rejected findings. Confirmed findings require at least one evidence_id from http, scan, browser, verifier, or poc output. Re-confirming the same class+endpoint is a no-op update (no duplicate card).",
-    promptSnippet: "Record candidate/confirmed/rejected findings",
+      "Record candidate, confirmed, or rejected high-value results: vulns, auth/credentials/secrets, or CTF flags. Confirmed findings require at least one evidence_id. Set finding_kind when clear (vuln|auth|flag).",
+    promptSnippet: "Record confirmed vulns, credentials, or flags with evidence",
     promptGuidelines: [
       "Use finding(action='candidate') for plausible issues; use finding(action='confirm') only with evidence_id proving end-to-end reproduction.",
       "Immediately confirm each validated issue as soon as evidence exists; do not batch confirmed findings at the end.",
       "A confirmed finding must include location/url, impact or description, reproduction steps or PoC, remediation, severity, and evidence_ids.",
+      "Set finding_kind='flag' when the primary artifact is a CTF flag{...}; finding_kind='auth' for passwords/API keys/AKSK; finding_kind='vuln' for security vulnerabilities.",
+      "For flags, put the exact flag{...} token in description or poc so the panel can display it under Flags.",
       "Do not re-confirm the same vulnerability class on the same endpoint with a reworded title — the tool merges duplicates.",
     ],
     parameters: Type.Object({
       action: Type.String(),
       title: Type.String(),
+      /** vuln | auth | flag — high-value result category for the right panel. */
+      finding_kind: Type.Optional(Type.String()),
+      kind: Type.Optional(Type.String()),
+      category: Type.Optional(Type.String()),
       severity: Type.Optional(Type.String()),
       url: Type.Optional(Type.String()),
       location: Type.Optional(Type.String()),
@@ -59,10 +66,22 @@ export function createFindingTool(runtime: ToolRuntime): ToolDefinition<any> {
       const affectedAsset = stringValue(params.affected_asset || params.url || targetBase(runtime));
       const description = stringValue(params.description || params.impact);
       const poc = stringValue(params.poc || params.reproduction || params.location || params.url);
+      const findingKind = inferFindingKind({
+        title: params.title,
+        description,
+        impact: params.impact,
+        poc,
+        reproduction: params.reproduction,
+        location,
+        finding_kind: params.finding_kind || params.kind || params.category,
+      });
+      const flagToken = extractFlagToken(`${params.title}\n${description}\n${poc}\n${params.reproduction || ""}`);
       const record: PersistedFindingRecord = {
         ...params,
         action,
         title: params.title,
+        finding_kind: findingKind,
+        flag_value: flagToken,
         severity,
         location,
         affected_asset: affectedAsset,
@@ -106,12 +125,16 @@ export function createFindingTool(runtime: ToolRuntime): ToolDefinition<any> {
           title: params.title,
           severity,
           status: "confirmed",
+          finding_kind: findingKind,
+          kind: findingKind,
+          category: findingKind,
+          flag_value: flagToken,
           url: params.url,
           location,
           affected_asset: affectedAsset,
           // Prefer a stable finding key so platform message dedupe does not collapse
           // unrelated findings that happen to share an evidence id.
-          id: `finding:${slug(params.title)}:${slug(location || String(params.url || "unknown"))}`,
+          id: `finding:${findingKind}:${slug(params.title)}:${slug(location || String(params.url || "unknown"))}`,
           evidence_id: evidenceIds[0],
           evidence_ids: evidenceIds,
           confidence: params.confidence || "high",
@@ -123,7 +146,7 @@ export function createFindingTool(runtime: ToolRuntime): ToolDefinition<any> {
         } as PlatformMessage);
         await emitPlanUpdate(runtime, "finding.confirm");
       }
-      return jsonResult({ ok: true, path, record, deduped: false });
+      return jsonResult({ ok: true, path, record, finding_kind: findingKind, flag_value: flagToken, deduped: false });
     },
   };
 }
