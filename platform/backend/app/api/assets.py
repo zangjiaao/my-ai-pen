@@ -40,6 +40,8 @@ class AssetCreate(BaseModel):
     address: str
     type: str
     tags: list[str] = Field(default_factory=list)
+    # Business system / application grouping (stored in properties.system).
+    system: str | None = None
     properties: dict = Field(default_factory=dict)
 
 
@@ -71,6 +73,7 @@ class AssetOut(BaseModel):
     address: str
     type: str
     type_label: str = ""
+    system: str | None = None
     tags: list = Field(default_factory=list)
     properties: dict = Field(default_factory=dict)
     source: str
@@ -89,6 +92,7 @@ class AssetOut(BaseModel):
 @router.get("", response_model=list[AssetOut])
 async def list_assets(
     type: str | None = Query(None),
+    system: str | None = Query(None, description="Filter by business system name"),
     search: str | None = Query(None),
     limit: int = 100,
     offset: int = 0,
@@ -104,8 +108,30 @@ async def list_assets(
     q = q.order_by(Asset.updated_at.desc()).offset(offset).limit(limit)
     result = await db.execute(q)
     assets = result.scalars().all()
+    if system is not None:
+        want = system.strip()
+        if want == "" or want.lower() in {"__none__", "未分配"}:
+            assets = [a for a in assets if not _system_of(a)]
+        else:
+            assets = [a for a in assets if _system_of(a) == want]
     related = await _related_vulns(db, user_id, [a.id for a in assets])
     return [_out(a, related.get(a.id, [])) for a in assets]
+
+
+@router.get("/systems", response_model=list[str])
+async def list_asset_systems(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Distinct business system names used on this user's assets."""
+    user_id = uuid.UUID(current_user["user_id"])
+    result = await db.execute(select(Asset).where(Asset.user_id == user_id))
+    names: set[str] = set()
+    for a in result.scalars().all():
+        s = _system_of(a)
+        if s:
+            names.add(s)
+    return sorted(names, key=lambda x: x.lower())
 
 
 @router.get("/changes")
@@ -177,19 +203,25 @@ async def create_asset(
         select(Asset).where(Asset.user_id == user_id, Asset.address == address)
     )
     a = existing.scalar_one_or_none()
+    props = dict(body.properties or {})
+    if body.system is not None:
+        props = _with_system(props, body.system)
     if a:
         a.name = body.name or a.name
         a.type = body.type or a.type
         a.tags = body.tags or a.tags
-        if body.properties:
+        if body.properties or body.system is not None:
             from app.services.asset_ledger import merge_discover_properties
 
-            a.properties = merge_discover_properties(
+            merged = merge_discover_properties(
                 a.properties,
-                open_ports=body.properties.get("open_ports"),
-                services=body.properties.get("services"),
-                extra={k: v for k, v in body.properties.items() if k not in {"open_ports", "services"}},
+                open_ports=props.get("open_ports"),
+                services=props.get("services"),
+                extra={k: v for k, v in props.items() if k not in {"open_ports", "services"}},
             )
+            if body.system is not None:
+                merged = _with_system(merged, body.system)
+            a.properties = merged
         await _audit(db, user_id, "asset.update", "asset", a.id, {"address": a.address, "merged": True})
     else:
         a = Asset(
@@ -199,7 +231,7 @@ async def create_asset(
             address=address,
             type=body.type,
             tags=body.tags,
-            properties=body.properties or {},
+            properties=props,
             source="manual",
         )
         db.add(a)
@@ -278,9 +310,13 @@ async def update_asset(
 ):
     user_id = uuid.UUID(current_user["user_id"])
     a = await _get(asset_id, current_user, db)
-    for k in ("name", "type", "tags", "properties"):
+    for k in ("name", "type", "tags"):
         if k in body:
             setattr(a, k, body[k])
+    if "properties" in body and isinstance(body["properties"], dict):
+        a.properties = body["properties"]
+    if "system" in body:
+        a.properties = _with_system(a.properties or {}, body.get("system"))
     if "address" in body:
         if not is_valid_ledger_address(body["address"]):
             raise HTTPException(400, "地址无效：请填写主机 IP、域名或 URL（不要用脚本路径/文件名）")
@@ -442,6 +478,26 @@ async def _audit(
     )
 
 
+def _system_of(a: Asset) -> str | None:
+    props = a.properties if isinstance(a.properties, dict) else {}
+    for key in ("system", "business_system", "app_system", "信息系统"):
+        val = props.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return None
+
+
+def _with_system(properties: dict | None, system: object) -> dict:
+    props = dict(properties or {})
+    text = str(system or "").strip()
+    if text:
+        props["system"] = text
+    else:
+        props.pop("system", None)
+        props.pop("business_system", None)
+    return props
+
+
 def _out(a: Asset, related: list[RelatedVulnOut] | None = None) -> AssetOut:
     related = related or []
     props = a.properties or {}
@@ -467,6 +523,7 @@ def _out(a: Asset, related: list[RelatedVulnOut] | None = None) -> AssetOut:
         address=a.address,
         type=a.type,
         type_label=type_label(a.type),
+        system=_system_of(a),
         tags=a.tags or [],
         properties=props,
         source=a.source,

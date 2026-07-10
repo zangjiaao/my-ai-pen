@@ -27,6 +27,7 @@ type Asset = {
   address: string;
   type: string;
   type_label?: string;
+  system?: string | null;
   tags: string[];
   properties: Record<string, unknown>;
   source: string;
@@ -70,28 +71,37 @@ const TYPES = [
 export default function AssetPage() {
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState(ALL);
+  const [systemFilter, setSystemFilter] = useState(ALL);
   const [selected, setSelected] = useState<Asset | null>(null);
   const [assets, setAssets] = useState<Asset[]>([]);
+  const [systems, setSystems] = useState<string[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [showChanges, setShowChanges] = useState(false);
   const [changes, setChanges] = useState<ChangesSummary | null>(null);
   const [changesLoading, setChangesLoading] = useState(false);
-  const [form, setForm] = useState({ name: "", address: "", type: "host", tags: "" });
+  const [form, setForm] = useState({ name: "", address: "", type: "host", system: "", tags: "" });
   const [error, setError] = useState("");
 
   const params = useMemo(() => {
     const p = new URLSearchParams();
     if (search.trim()) p.set("search", search.trim());
     if (typeFilter !== ALL) p.set("type", typeFilter);
+    if (systemFilter !== ALL) {
+      p.set("system", systemFilter === "未分配" ? "__none__" : systemFilter);
+    }
     p.set("limit", "100");
     return p;
-  }, [search, typeFilter]);
+  }, [search, typeFilter, systemFilter]);
 
   const load = async () => {
     setError("");
     try {
-      const res = await authFetch<Asset[]>(`/api/assets?${params}`);
+      const [res, sys] = await Promise.all([
+        authFetch<Asset[]>(`/api/assets?${params}`),
+        authFetch<string[]>("/api/assets/systems").catch(() => [] as string[]),
+      ]);
       setAssets(res);
+      setSystems(sys);
       if (selected) {
         const fresh = res.find((item) => item.id === selected.id);
         if (fresh) setSelected(fresh);
@@ -122,11 +132,12 @@ export default function AssetPage() {
         name: form.name.trim() || form.address.trim(),
         address: form.address.trim(),
         type: form.type,
+        system: form.system.trim() || null,
         tags: form.tags.split(",").map((t) => t.trim()).filter(Boolean),
       }),
     });
     setShowForm(false);
-    setForm({ name: "", address: "", type: "host", tags: "" });
+    setForm({ name: "", address: "", type: "host", system: "", tags: "" });
     await load();
   };
 
@@ -178,6 +189,19 @@ export default function AssetPage() {
                 {TYPES.map((t) => (
                   <option key={t.value} value={t.value}>
                     {t.label}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={systemFilter}
+                onChange={(e) => setSystemFilter(e.target.value)}
+                className="rounded-md border border-hairline px-3 py-2 text-sm"
+              >
+                <option value={ALL}>全部系统</option>
+                <option value="未分配">未分配</option>
+                {systems.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
                   </option>
                 ))}
               </select>
@@ -250,7 +274,7 @@ export default function AssetPage() {
 
             {showForm && (
               <div className="mb-4 rounded-md border border-hairline bg-surface-default p-4">
-                <div className="grid gap-3 md:grid-cols-4">
+                <div className="grid gap-3 md:grid-cols-3 lg:grid-cols-5">
                   <input
                     placeholder="名称"
                     value={form.name}
@@ -275,12 +299,27 @@ export default function AssetPage() {
                     ))}
                   </select>
                   <input
+                    list="create-system-options"
+                    placeholder="所属系统（可选）"
+                    value={form.system}
+                    onChange={(e) => setForm({ ...form, system: e.target.value })}
+                    className="rounded border border-hairline px-3 py-2 text-sm"
+                  />
+                  <datalist id="create-system-options">
+                    {systems.map((s) => (
+                      <option key={s} value={s} />
+                    ))}
+                  </datalist>
+                  <input
                     placeholder="标签，逗号分隔"
                     value={form.tags}
                     onChange={(e) => setForm({ ...form, tags: e.target.value })}
                     className="rounded border border-hairline px-3 py-2 text-sm"
                   />
                 </div>
+                <p className="mt-2 text-[11px] text-ink-muted">
+                  所属系统用于按业务归类（如支付系统、门户官网）；可稍后在详情里编辑或改绑。
+                </p>
                 <div className="mt-3 flex gap-2">
                   <button type="button" onClick={() => void createAsset()} className="rounded-md bg-ink px-4 py-2 text-sm text-white">
                     保存
@@ -297,12 +336,13 @@ export default function AssetPage() {
                 <thead>
                   <tr className="border-b border-hairline bg-surface-default text-left text-xs font-medium text-ink-secondary">
                     <th className="px-4 py-2.5">名称 / 地址</th>
+                    <th className="w-28 px-4 py-2.5">所属系统</th>
                     <th className="w-24 px-4 py-2.5">类型</th>
                     <th className="w-40 px-4 py-2.5">风险</th>
-                    <th className="w-36 px-4 py-2.5">开放端口</th>
-                    <th className="w-36 px-4 py-2.5">指纹 / 技术</th>
+                    <th className="w-32 px-4 py-2.5">开放端口</th>
+                    <th className="w-32 px-4 py-2.5">指纹 / 技术</th>
                     <th className="w-24 px-4 py-2.5">来源</th>
-                    <th className="w-28 px-4 py-2.5">更新</th>
+                    <th className="w-24 px-4 py-2.5">更新</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -315,6 +355,9 @@ export default function AssetPage() {
                       <td className="min-w-0 px-4 py-2.5">
                         <div className="truncate font-medium text-ink">{a.name}</div>
                         <div className="mt-0.5 truncate font-mono text-[11px] text-ink-muted">{a.address}</div>
+                      </td>
+                      <td className="truncate px-4 py-2.5 text-xs text-ink-secondary" title={a.system || ""}>
+                        {a.system || <span className="text-ink-muted">未分配</span>}
                       </td>
                       <td className="px-4 py-2.5">
                         <span className="rounded-md bg-canvas-inset px-2 py-0.5 text-xs">{a.type_label || a.type}</span>
@@ -334,7 +377,7 @@ export default function AssetPage() {
                   ))}
                   {!assets.length && (
                     <tr>
-                      <td colSpan={7} className="px-4 py-10 text-center text-sm text-ink-muted">
+                      <td colSpan={8} className="px-4 py-10 text-center text-sm text-ink-muted">
                         暂无资产，点击「录入资产」开始建账
                       </td>
                     </tr>
@@ -348,7 +391,13 @@ export default function AssetPage() {
             open={Boolean(selected)}
             assetId={selected?.id}
             initial={selected}
+            systems={systems}
             onClose={() => setSelected(null)}
+            onSaved={() => void load()}
+            onDeleted={() => {
+              setSelected(null);
+              void load();
+            }}
             onExported={() => void load()}
           />
         </div>
