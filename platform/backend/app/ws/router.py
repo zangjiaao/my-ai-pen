@@ -846,6 +846,7 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
 
 
 async def _persist_asset(msg: dict, node_id: str | None):
+    """Upsert asset into the user ledger by normalized address (merge ports/services)."""
     conv_id = msg.get("conversation_id")
     if not conv_id:
         return None
@@ -855,50 +856,26 @@ async def _persist_asset(msg: dict, node_id: str | None):
     node_uuid = _uuid(node_id) or bound_node
     try:
         from app.db.base import async_session
-        from app.models.asset import Asset
+        from app.api.assets import upsert_discovered_asset
+        from app.services.asset_ledger import normalize_address
 
-        address = _asset_address(msg.get("address") or msg.get("affected_asset") or msg.get("target") or "unknown")
+        address = normalize_address(
+            msg.get("address") or msg.get("affected_asset") or msg.get("target") or "unknown"
+        )
         async with async_session() as db:
-            existing = await db.execute(select(Asset).where(Asset.user_id == user_id, Asset.conversation_id == uuid.UUID(conv_id), Asset.address == address))
-            asset = existing.scalar_one_or_none()
-            if not asset:
-                asset = Asset(
-                    id=uuid.uuid4(),
-                    user_id=user_id,
-                    conversation_id=uuid.UUID(conv_id),
-                    node_id=node_uuid,
-                    name=msg.get("hostname") or address,
-                    address=address,
-                    type=msg.get("asset_type", "host"),
-                    source="agent_discovered",
-                    properties={
-                        "open_ports": msg.get("open_ports", []),
-                        "services": msg.get("services", []),
-                    },
-                )
-                db.add(asset)
-            else:
-                asset.conversation_id = uuid.UUID(conv_id)
-                asset.user_id = asset.user_id or user_id
-                asset.node_id = node_uuid or asset.node_id
-                asset.name = msg.get("hostname") or asset.name
-                asset.type = msg.get("asset_type") or asset.type
-                asset.source = "agent_discovered"
-                asset.properties = {
-                    **(asset.properties or {}),
-                    "open_ports": msg.get("open_ports", (asset.properties or {}).get("open_ports", [])),
-                    "services": msg.get("services", (asset.properties or {}).get("services", [])),
-                }
-            await db.commit()
-            await _audit(
-                actor_type="agent",
-                actor_id=node_uuid or uuid.UUID(int=0),
-                action="asset.discover",
-                resource_type="asset",
-                resource_id=asset.id,
+            asset = await upsert_discovered_asset(
+                db,
+                user_id=user_id,
+                address=address,
+                name=msg.get("hostname") or address,
+                asset_type=str(msg.get("asset_type") or "host"),
+                open_ports=msg.get("open_ports"),
+                services=msg.get("services"),
                 conversation_id=uuid.UUID(conv_id),
-                detail={"address": address},
+                node_id=node_uuid,
+                source="agent_discovered",
             )
+            await db.commit()
             return {
                 "id": str(asset.id),
                 "asset_id": str(asset.id),
@@ -907,7 +884,10 @@ async def _persist_asset(msg: dict, node_id: str | None):
                 "name": asset.name,
                 "address": asset.address,
                 "asset_type": asset.type,
+                "type": asset.type,
                 "properties": asset.properties or {},
+                "open_ports": (asset.properties or {}).get("open_ports") or [],
+                "services": (asset.properties or {}).get("services") or [],
             }
     except Exception as e:
         print(f"[WS] persist asset error: {e}")
