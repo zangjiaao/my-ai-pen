@@ -111,10 +111,25 @@ export type WorkerRunRecord = {
   error?: string;
 };
 
+/** Open packages that timed out/failed and still need main-session or re-dispatch work. */
+export type OpenWorkerPackage = {
+  packageId: string;
+  workerId: string;
+  role: string;
+  task: string;
+  outcome: WorkerOutcome;
+  at: string;
+  resolved?: boolean;
+  resolvedAt?: string;
+  resolveNote?: string;
+};
+
 export type RuntimeLifecycle = {
   finishScan?: FinishScanState;
   /** Recorded in-process worker runs for finish gates and panel rollup. */
   workerRuns?: WorkerRunRecord[];
+  /** Timeout/failed packages not yet re-dispatched or completed in main session. */
+  openWorkerPackages?: OpenWorkerPackage[];
   /** How many times finish_scan(completed) was rejected this run (anti-thrash). */
   finishCompletedRejects?: number;
 };

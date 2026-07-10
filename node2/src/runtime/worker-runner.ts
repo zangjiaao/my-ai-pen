@@ -194,7 +194,8 @@ export async function runWorkerSession(input: {
 
     // Soft turn budget: prompt once; session stop is controlled by max agent turns via env if supported.
     // Also hard-timeout the whole worker.
-    const timeoutMs = clampInt(Number(process.env.NODE2_WORKER_MAX_MS || 180_000), 10_000, 900_000);
+    // Default 5 minutes — multi-endpoint packages often need more than 3 minutes.
+    const timeoutMs = clampInt(Number(process.env.NODE2_WORKER_MAX_MS || 300_000), 10_000, 900_000);
     await Promise.race([
       session.prompt(
         [

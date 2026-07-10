@@ -487,7 +487,7 @@ function buildWorkflowFirstInstruction(task: TaskEnvelope): string {
 
   lines.push(
     "After the workflow returns, follow that engagement only:",
-    "- pentest-web (assess): workflow_run brief → dispatch worker packages (recon / access-control / injection / xss / general) sharing runtime state → coverage(next_work) to fill family gaps → main agent finish_scan. Never bulk-skip only to force completed.",
+    "- pentest-web (assess): workflow_run brief → dispatch worker packages (prefer narrow packages: one role / few endpoints) → on worker timeout/failed, re-dispatch narrower work or continue live probes → coverage(next_work) to fill family gaps → main agent finish_scan. Never bulk-skip only to force completed. Do not finish_scan(completed) while timeout/failed worker packages remain open.",
     "- pentest-verify: minimal path to validate the stated hypothesis; finish when confirmed, disproven, or blocked — do not full-site sweep.",
     "- pentest-retest: replay the prior finding path and report still-vulnerable vs fixed.",
     "- pentest-consult: answer the question; live tools only if authorized and necessary.",

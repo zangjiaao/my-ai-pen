@@ -12,6 +12,11 @@ import {
   type WorkerLaunchContext,
   type WorkerOutcome,
 } from "../runtime/worker-runner.js";
+import {
+  recordOpenWorkerPackage,
+  resolveOpenWorkerPackagesForSuccess,
+  unresolvedWorkerPackages,
+} from "../runtime/worker-packages.js";
 import { listWorkerRoles, resolveWorkerRole } from "../runtime/worker-roles.js";
 import { emitPlanUpdate, jsonResult, textResult } from "./common.js";
 
@@ -138,6 +143,53 @@ export function createWorkerTool(runtime: ToolRuntime): ToolDefinition<any> {
       if (!runtime.lifecycle.workerRuns) runtime.lifecycle.workerRuns = [];
       runtime.lifecycle.workerRuns.push(runRecord);
 
+      // Discovery backlog: timeout/failed packages stay open until re-dispatch succeeds.
+      let followUpPlanId: string | undefined;
+      if (outcome === "timeout" || outcome === "failed" || outcome === "aborted") {
+        const open = recordOpenWorkerPackage(runtime.lifecycle, {
+          workerId,
+          role: result.role,
+          task: task.slice(0, 400),
+          outcome,
+        });
+        followUpPlanId = `plan-followup-${open.packageId}`;
+        runtime.plan.upsert({
+          node_id: followUpPlanId,
+          title: `Follow-up ${role.id} package [${outcomeLabel}]`,
+          status: "pending",
+          kind: "task",
+          level: "work_item",
+          parent_id: "plan-objective-analysis-test-plan",
+          notes: `Re-dispatch narrower worker(role=${role.id}) or main-session probes for: ${task.slice(0, 280)}`,
+          priority: 210,
+          source: "worker",
+          result: "blocked",
+        });
+      } else if (outcome === "completed") {
+        const resolved = resolveOpenWorkerPackagesForSuccess(runtime.lifecycle, {
+          role: result.role,
+          task,
+          note: `resolved by successful worker ${workerId}`,
+        });
+        if (resolved > 0) {
+          for (const pkg of runtime.lifecycle.openWorkerPackages || []) {
+            if (!pkg.resolved || pkg.role !== result.role) continue;
+            runtime.plan.upsert({
+              node_id: `plan-followup-${pkg.packageId}`,
+              title: `Follow-up ${pkg.role} package [resolved]`,
+              status: "done",
+              kind: "task",
+              level: "work_item",
+              parent_id: "plan-objective-analysis-test-plan",
+              notes: pkg.resolveNote || "resolved by successful re-dispatch",
+              priority: 210,
+              source: "worker",
+              result: "confirmed",
+            });
+          }
+        }
+      }
+
       if (result.usage) {
         await launch.mergeWorkerUsage?.(result.usage);
       } else {
@@ -186,6 +238,7 @@ export function createWorkerTool(runtime: ToolRuntime): ToolDefinition<any> {
       });
       await emitPlanUpdate(runtime, "worker.end");
 
+      const openLeft = unresolvedWorkerPackages(runtime.lifecycle);
       return jsonResult({
         ok: result.ok,
         outcome,
@@ -199,13 +252,17 @@ export function createWorkerTool(runtime: ToolRuntime): ToolDefinition<any> {
         error: result.error,
         usage: result.usage,
         worker_runs: runtime.lifecycle.workerRuns?.length ?? 0,
+        open_worker_packages: openLeft.length,
+        follow_up_plan_id: followUpPlanId,
         available_roles: roles.map((item) => ({ id: item.id, label: item.label, description: item.description })),
         next:
           outcome === "timeout"
-            ? "Worker timed out. Re-dispatch a narrower package or finish remaining probes in the main session before finish_scan."
-            : outcome === "failed"
-              ? "Worker failed. Inspect error, re-dispatch or continue with http/verifier, then update coverage."
-              : "Integrate worker findings into coverage/next_work; dispatch more packages or call finish_scan only when assess gates are satisfied (use incomplete if work remains).",
+            ? "Worker timed out — package is OPEN on the backlog. Re-dispatch a narrower worker(role, task) or run remaining probes in the main session before finish_scan(completed)."
+            : outcome === "failed" || outcome === "aborted"
+              ? "Worker failed — package is OPEN on the backlog. Inspect error, re-dispatch or continue with http/verifier, then update coverage."
+              : openLeft.length
+                ? `Worker completed, but ${openLeft.length} other timeout/failed package(s) remain open. Clear them before finish_scan(completed).`
+                : "Integrate worker findings into coverage/next_work; dispatch more packages or call finish_scan only when assess gates are satisfied (use incomplete if work remains).",
       });
     },
   };

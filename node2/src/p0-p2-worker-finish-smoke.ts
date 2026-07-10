@@ -22,6 +22,12 @@ import {
   planWorkerAutoDispatch,
   loadWorkPackagesFromTaskDir,
 } from "./runtime/work-packages.js";
+import {
+  assessOpenWorkerPackageGate,
+  recordOpenWorkerPackage,
+  resolveOpenWorkerPackagesForSuccess,
+  unresolvedWorkerPackages,
+} from "./runtime/worker-packages.js";
 import { createFinishScanTool } from "./tools/finish.js";
 import { createWorkerTool } from "./tools/worker.js";
 import { ActorStore } from "./stores/actors.js";
@@ -221,6 +227,42 @@ assert(
 assert(
   assessWorkerDispatchGate({ packages: [], workerRunCount: 0, status: "completed", engagement: "assess" }).allowed,
   "no packages means no gate",
+);
+
+// Open worker package gate (timeout backlog)
+const life: { openWorkerPackages?: any[] } = {};
+recordOpenWorkerPackage(life as any, {
+  workerId: "worker-general-1",
+  role: "general",
+  task: "Test remaining levels L3-L9",
+  outcome: "timeout",
+});
+assert(unresolvedWorkerPackages(life as any).length === 1, "one open package");
+assert(
+  !assessOpenWorkerPackageGate({
+    engagement: "assess",
+    status: "completed",
+    openPackages: unresolvedWorkerPackages(life as any),
+  }).allowed,
+  "open timeout package must block completed",
+);
+assert(
+  assessOpenWorkerPackageGate({
+    engagement: "assess",
+    status: "incomplete",
+    openPackages: unresolvedWorkerPackages(life as any),
+  }).allowed,
+  "incomplete allows open packages",
+);
+resolveOpenWorkerPackagesForSuccess(life as any, { role: "general", note: "re-dispatched ok" });
+assert(unresolvedWorkerPackages(life as any).length === 0, "resolved after success");
+assert(
+  assessOpenWorkerPackageGate({
+    engagement: "assess",
+    status: "completed",
+    openPackages: unresolvedWorkerPackages(life as any),
+  }).allowed,
+  "cleared packages allow completed",
 );
 
 // --- Integration: finish loads disk findings; package gate ---

@@ -18,6 +18,10 @@ import {
   assessWorkerDispatchGate,
   loadWorkPackagesFromTaskDir,
 } from "../runtime/work-packages.js";
+import {
+  assessOpenWorkerPackageGate,
+  unresolvedWorkerPackages,
+} from "../runtime/worker-packages.js";
 import type { FinishScanState, PlatformMessage, ToolRuntime } from "../types.js";
 import { emitPlanUpdate, jsonResult, textResult } from "./common.js";
 
@@ -151,6 +155,33 @@ export function createFinishScanTool(runtime: ToolRuntime): ToolDefinition<any> 
           worker_run_count: workerRunCount,
           instruction:
             "Dispatch worker(role, task) for each structured workPackage from the workflow brief (or status=incomplete if packages cannot be run).",
+        });
+      }
+
+      // Discovery: timeout/failed worker packages must be re-dispatched or finished in main session.
+      const openPackages = unresolvedWorkerPackages(runtime.lifecycle);
+      const openGate = assessOpenWorkerPackageGate({
+        engagement: engagementInfo.engagement,
+        status,
+        openPackages,
+      });
+      if (!openGate.allowed) {
+        return jsonResult({
+          ok: false,
+          blocked: true,
+          error: "finish_scan(completed) rejected: timeout/failed worker packages still open",
+          reason: openGate.reason,
+          engagement: engagementInfo,
+          open_worker_packages: openPackages.map((pkg) => ({
+            package_id: pkg.packageId,
+            role: pkg.role,
+            outcome: pkg.outcome,
+            task: pkg.task.slice(0, 200),
+            at: pkg.at,
+          })),
+          instruction:
+            "Re-dispatch narrower worker packages for open timeout/failed roles, or complete those probes in the main session with http/verifier/finding. " +
+            "If they cannot be finished, call finish_scan(status='incomplete') once — do not spam completed.",
         });
       }
 
