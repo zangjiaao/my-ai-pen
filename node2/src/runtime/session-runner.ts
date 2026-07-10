@@ -204,8 +204,16 @@ export async function runPentestTask(
       ok: gate.canComplete,
       summary: gate.summary,
       rounds_allowed: gateRounds,
+      finish_status: runtime.lifecycle.finishScan?.status,
     });
-    for (let round = 0; !gate.canComplete && round < gateRounds; round += 1) {
+    // Only reprompt when the agent has not yet settled the lifecycle (no finish_scan,
+    // or completed was never accepted). Explicit incomplete/blocked must not thrash
+    // the model back into finish_scan(completed) loops.
+    for (
+      let round = 0;
+      !gate.canComplete && !isTerminalFinishStatus(runtime.lifecycle.finishScan?.status) && round < gateRounds;
+      round += 1
+    ) {
       const gapPrompt = completionGapPrompt(runtime, gate);
       await platformOut.send({
         type: "completion_blocked",
@@ -226,15 +234,19 @@ export async function runPentestTask(
         ok: gate.canComplete,
         summary: gate.summary,
         round: round + 1,
+        finish_status: runtime.lifecycle.finishScan?.status,
       });
     }
-    if (!gate.canComplete) {
+
+    const finishStatus = runtime.lifecycle.finishScan?.status;
+    const settledIncomplete = isTerminalFinishStatus(finishStatus) && finishStatus !== "completed";
+    if (!gate.canComplete || settledIncomplete) {
       runtime.plan.setPhase("report");
       await platformOut.send({
         type: "plan_tree_updated",
         conversation_id: task.conversationId,
         task_id: task.taskId,
-        reason: "runtime.incomplete_summary",
+        reason: settledIncomplete ? "runtime.finish_incomplete" : "runtime.incomplete_summary",
         workflow_stage: runtime.plan.kanban().current_stage,
         progress: runtime.plan.progress(),
         kanban: runtime.plan.kanban(),
@@ -246,20 +258,24 @@ export async function runPentestTask(
         task_id: task.taskId,
         checkpoint: await buildNode2Checkpoint(runtime, task, diagnostics),
       });
+      const incompleteSummary =
+        runtime.lifecycle.finishScan?.summary ||
+        extractLastAssistantText(session.messages).slice(0, 4000) ||
+        gate.summary;
       await platformOut.send({
         type: "task_incomplete",
         conversation_id: task.conversationId,
         task_id: task.taskId,
-        status: "incomplete",
+        status: finishStatus === "blocked" ? "blocked" : "incomplete",
         audit: gate.audit,
-        summary: runtime.lifecycle.finishScan?.summary || extractLastAssistantText(session.messages).slice(0, 4000) || gate.summary,
+        summary: incompleteSummary,
       });
       await platformOut.send({
         type: "task_complete",
         conversation_id: task.conversationId,
         task_id: task.taskId,
-        status: "incomplete",
-        summary: runtime.lifecycle.finishScan?.summary || gate.summary,
+        status: finishStatus === "blocked" ? "blocked" : "incomplete",
+        summary: incompleteSummary,
       });
       return;
     }
@@ -535,6 +551,15 @@ function coverageCompletionAudit(
       unresolved: [],
     };
   }
+  // Explicit incomplete/blocked finish already waived full-site conversion for task end.
+  const finishStatus = runtime.lifecycle.finishScan?.status;
+  if (finishStatus === "incomplete" || finishStatus === "blocked") {
+    return {
+      canComplete: true,
+      summary: `coverage conversion not required after finish_scan(${finishStatus})`,
+      unresolved: [],
+    };
+  }
   const rows = runtime.coverage.listSync?.() || [];
   const actorSummary = runtime.actors?.summary?.() ?? { count: runtime.actors?.count() ?? 0, actors: [] as Array<{ hasAuth?: boolean }> };
   const actorAuthCount = Array.isArray(actorSummary.actors)
@@ -566,9 +591,22 @@ function coverageCompletionAudit(
   };
 }
 
+function isTerminalFinishStatus(status: string | undefined): boolean {
+  return status === "completed" || status === "incomplete" || status === "blocked";
+}
+
 function finishScanAudit(runtime: ToolRuntime): { canComplete: boolean; summary: string; finishScan?: unknown } {
   const finishScan = runtime.lifecycle.finishScan;
   if (!finishScan) return { canComplete: false, summary: "finish_scan has not been called" };
+  // incomplete/blocked are valid terminal lifecycle outcomes — do not force the agent
+  // to keep retrying finish_scan(completed) against conversion gates.
+  if (finishScan.status === "incomplete" || finishScan.status === "blocked") {
+    return {
+      canComplete: true,
+      summary: `finish_scan settled as ${finishScan.status} (terminal incomplete lifecycle)`,
+      finishScan,
+    };
+  }
   if (finishScan.status !== "completed") {
     return {
       canComplete: false,
@@ -664,12 +702,16 @@ function completionGapPrompt(runtime: ToolRuntime, gate: { audit: Record<string,
     );
   }
   if (finishScan && !finishScan.canComplete) {
+    const alreadyIncomplete = /finish_scan requested (incomplete|blocked)/i.test(String(finishScan.summary || ""));
     parts.push(
       [
         "",
         "The mandatory finish_scan lifecycle gate is still unresolved.",
         finishScan.summary || "finish_scan has not been called.",
-        "After resolving any remaining runtime blockers, call finish_scan with status='completed' and include summary, confirmed_findings, coverage_gaps, blockers, and evidence_ids. If blockers remain, call finish_scan with status='incomplete' or status='blocked'. Prefer live proofs over bulk coverage skips when status would be completed.",
+        alreadyIncomplete
+          ? "Lifecycle is already incomplete/blocked — do not retry finish_scan(completed). Stop tool loops; the runtime will settle the task."
+          : "If high-priority conversion gaps remain and cannot be cleared with live probes, call finish_scan(status='incomplete') ONCE with a concise summary of what was done and what remains. " +
+            "Only use status='completed' when conversion/multi-actor/surface gates are actually satisfied. Do not spam finish_scan.",
       ].join("\n"),
     );
   }

@@ -95,16 +95,25 @@ export function createFinishScanTool(runtime: ToolRuntime): ToolDefinition<any> 
           confirmedEvidenceIds: evidenceIds,
           limit: 8,
         });
+        const rejectCount = Number(runtime.lifecycle.finishCompletedRejects || 0) + 1;
+        runtime.lifecycle.finishCompletedRejects = rejectCount;
         // Front-load discovery queue so truncated tool previews still show next live work.
+        // After repeated completed-rejections, push a hard incomplete exit instead of mark spam.
+        const thrash = rejectCount >= 2;
         return jsonResult({
           ok: false,
           blocked: true,
-          guidance: queue.guidance,
-          next_work: queue.next_work,
-          instruction:
-            "Execute next_work live probes (verifier/http/browser/traffic) before more coverage skip/block marks. Do not bulk-skip to force completed.",
+          guidance: thrash
+            ? "finish_scan(completed) rejected repeatedly. Call finish_scan(status='incomplete') once with a short summary of remaining gaps — do not mark/skip bulk coverage just to force completed, and do not call completed again."
+            : queue.guidance,
+          next_work: thrash ? [] : queue.next_work,
+          instruction: thrash
+            ? "STOP retrying completed. Use status='incomplete' (or keep testing live probes from next_work if you still have budget). Bulk skip/block to force completed is not allowed."
+            : "Execute next_work live probes (verifier/http/browser/traffic) before more coverage skip/block marks. Do not bulk-skip to force completed. If work remains after one more probe cycle, finish_scan(status='incomplete').",
           error: "finish_scan(completed) rejected: coverage conversion, multi-actor, surface, or skip-discipline gaps remain",
           reason: eligibility.reason,
+          completed_reject_count: rejectCount,
+          prefer_incomplete: thrash,
           engagement: engagementInfo,
           untested_high_priority: eligibility.untestedHighPriority.map(formatCandidate),
           weak_skips: (eligibility.weakSkips || []).map(formatCandidate),

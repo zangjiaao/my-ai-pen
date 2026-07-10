@@ -110,6 +110,8 @@ export type RuntimeLifecycle = {
   finishScan?: FinishScanState;
   /** Recorded in-process worker runs for finish gates and panel rollup. */
   workerRuns?: WorkerRunRecord[];
+  /** How many times finish_scan(completed) was rejected this run (anti-thrash). */
+  finishCompletedRejects?: number;
 };
 
 export type FinishScanState = {
