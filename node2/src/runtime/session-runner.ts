@@ -23,9 +23,9 @@ import {
   conversionMetrics,
   finishCompletedEligibility,
   formatCandidate,
-  materialUntestedHighPriority,
+  formatDiscoveryQueuePayload,
   missingRiskFamiliesFromCoverage,
-  nextVerifyGuidance,
+  surfaceInventoryFromTraffic,
 } from "./detection-conversion.js";
 import { stopBrowserSandbox } from "./browser-sandbox.js";
 import {
@@ -411,7 +411,7 @@ function buildWorkflowFirstInstruction(task: TaskEnvelope): string {
 
   lines.push(
     "After the workflow returns, follow that engagement only:",
-    "- pentest-web (assess): recon, multi-actor when needed, traffic/coverage, dual-actor and business-logic probes, then finish_scan with full-assessment gates.",
+    "- pentest-web (assess): browser/http reachability → actor capture (≥2 when accounts exist) → traffic(analyze/candidates) → seed coverage → coverage(next_work) loop for untested families and traffic candidates → dual-actor on ≥2 object resources → more live probes after first findings (XSS/business-logic/injection variants) → finish_scan. Never bulk-skip only to force completed.",
     "- pentest-verify: minimal path to validate the stated hypothesis; finish when confirmed, disproven, or blocked — do not full-site sweep.",
     "- pentest-retest: replay the prior finding path and report still-vulnerable vs fixed.",
     "- pentest-consult: answer the question; live tools only if authorized and necessary.",
@@ -481,13 +481,22 @@ function coverageCompletionAudit(
     };
   }
   const rows = runtime.coverage.listSync?.() || [];
-  const untested = materialUntestedHighPriority(rows);
-  const familyGaps = missingRiskFamiliesFromCoverage(rows);
+  const actorSummary = runtime.actors?.summary?.() ?? { count: runtime.actors?.count() ?? 0, actors: [] as Array<{ hasAuth?: boolean }> };
+  const actorAuthCount = Array.isArray(actorSummary.actors)
+    ? actorSummary.actors.filter((actor) => Boolean(actor?.hasAuth)).length
+    : Number(actorSummary.count || 0);
+  const eligibility = finishCompletedEligibility(rows, {
+    status: "completed",
+    actorCount: Number(actorSummary.count || 0),
+    actorAuthCount,
+    engagement,
+    surfaceInventory: surfaceInventoryFromTraffic(runtime.traffic),
+  });
   const metrics = conversionMetrics(rows);
-  if (!untested.length && !familyGaps.length) {
+  if (eligibility.allowed) {
     return {
       canComplete: true,
-      summary: "high-priority coverage candidates and risk families resolved or absent",
+      summary: "high-priority coverage, risk families, multi-actor, and surface quality resolved or absent",
       unresolved: [],
       conversion: metrics,
       missingRiskFamilies: [],
@@ -495,13 +504,10 @@ function coverageCompletionAudit(
   }
   return {
     canComplete: false,
-    summary: [
-      untested.length ? `${untested.length} high-priority observed candidate(s) still need testing` : "",
-      familyGaps.length ? `${familyGaps.length} risk-family gap(s) still need testing` : "",
-    ].filter(Boolean).join("; "),
-    unresolved: untested.slice(0, 20).map(formatCandidate),
+    summary: eligibility.reason,
+    unresolved: eligibility.untestedHighPriority.slice(0, 20).map(formatCandidate),
     conversion: metrics,
-    missingRiskFamilies: familyGaps,
+    missingRiskFamilies: eligibility.missingRiskFamilies,
   };
 }
 
@@ -517,10 +523,16 @@ function finishScanAudit(runtime: ToolRuntime): { canComplete: boolean; summary:
   }
   const rows = runtime.coverage.listSync?.() || [];
   const engagementInfo = resolveEffectiveEngagement(runtime.task, runtime.workflowRuns);
+  const actorSummary = runtime.actors?.summary?.() ?? { count: runtime.actors?.count() ?? 0, actors: [] as Array<{ hasAuth?: boolean }> };
+  const actorAuthCount = Array.isArray(actorSummary.actors)
+    ? actorSummary.actors.filter((actor) => Boolean(actor?.hasAuth)).length
+    : Number(actorSummary.count || 0);
   const eligibility = finishCompletedEligibility(rows, {
     status: "completed",
-    actorCount: runtime.actors?.count() ?? 0,
+    actorCount: Number(actorSummary.count || 0),
+    actorAuthCount,
     engagement: engagementInfo.engagement,
+    surfaceInventory: surfaceInventoryFromTraffic(runtime.traffic),
   });
   if (!eligibility.allowed) {
     return {
@@ -576,7 +588,12 @@ function workflowCompletionAudit(runtime: ToolRuntime): { canComplete: boolean; 
 function completionGapPrompt(runtime: ToolRuntime, gate: { audit: Record<string, unknown>; summary: string }): string {
   const workflow = gate.audit.workflow as { canComplete?: boolean; summary?: string } | undefined;
   const finishScan = gate.audit.finish_scan as { canComplete?: boolean; summary?: string } | undefined;
-  const coverage = gate.audit.coverage as { canComplete?: boolean; summary?: string; unresolved?: any[] } | undefined;
+  const coverage = gate.audit.coverage as {
+    canComplete?: boolean;
+    summary?: string;
+    unresolved?: any[];
+    missingRiskFamilies?: import("./detection-conversion.js").RiskFamilyGap[];
+  } | undefined;
   const parts = [runtime.plan.gapPrompt()];
   if (workflow && !workflow.canComplete) {
     const engagementInfo = resolveEffectiveEngagement(runtime.task, runtime.workflowRuns);
@@ -597,23 +614,36 @@ function completionGapPrompt(runtime: ToolRuntime, gate: { audit: Record<string,
         "",
         "The mandatory finish_scan lifecycle gate is still unresolved.",
         finishScan.summary || "finish_scan has not been called.",
-        "After resolving any remaining runtime blockers, call finish_scan with status='completed' and include summary, confirmed_findings, coverage_gaps, blockers, and evidence_ids. If blockers remain, call finish_scan with status='incomplete' or status='blocked'.",
+        "After resolving any remaining runtime blockers, call finish_scan with status='completed' and include summary, confirmed_findings, coverage_gaps, blockers, and evidence_ids. If blockers remain, call finish_scan with status='incomplete' or status='blocked'. Prefer live proofs over bulk coverage skips when status would be completed.",
       ].join("\n"),
     );
   }
   if (coverage && !coverage.canComplete) {
     const unresolved = Array.isArray(coverage.unresolved) ? coverage.unresolved.slice(0, 12) : [];
     const rows = runtime.coverage.listSync?.() || [];
-    const untested = materialUntestedHighPriority(rows);
-    const familyGaps = missingRiskFamiliesFromCoverage(rows);
+    const familyGaps =
+      Array.isArray(coverage.missingRiskFamilies) && coverage.missingRiskFamilies.length > 0
+        ? coverage.missingRiskFamilies
+        : missingRiskFamiliesFromCoverage(rows);
+    const inventory = surfaceInventoryFromTraffic(runtime.traffic);
+    const actorSummary = runtime.actors?.summary?.() ?? { count: runtime.actors?.count() ?? 0, actors: [] as Array<{ hasAuth?: boolean }> };
+    const actorAuthCount = Array.isArray(actorSummary.actors)
+      ? actorSummary.actors.filter((actor) => Boolean(actor?.hasAuth)).length
+      : Number(actorSummary.count || 0);
+    const queue = formatDiscoveryQueuePayload(rows, {
+      familyGaps,
+      surfaceInventory: inventory,
+      actorCount: Number(actorSummary.count || 0),
+      actorAuthCount,
+      limit: 8,
+    });
     parts.push(
       [
         "",
-        "Coverage conversion gate still has high-priority observed candidates or risk-family gaps.",
-        coverage.summary || "Unresolved high-priority coverage remains.",
-        nextVerifyGuidance(untested, [], familyGaps),
-        "Batch verifier/http/traffic(mutate) across the remaining candidates. After auth success, re-inventory authenticated APIs. finish_scan(status='completed') is rejected while observed-only high-priority rows or family gaps remain.",
-        ...unresolved.map((row) => `- ${typeof row === "string" ? row : formatCandidate(row as any)}`),
+        "Coverage / assess-quality gate still open — run coverage(action='next_work') and execute live probes.",
+        coverage.summary || "Unresolved high-priority coverage or multi-actor/surface gaps remain.",
+        queue.guidance,
+        ...unresolved.slice(0, 6).map((row) => `- ${typeof row === "string" ? row : formatCandidate(row as any)}`),
       ].join("\n"),
     );
   }

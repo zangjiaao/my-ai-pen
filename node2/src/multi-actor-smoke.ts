@@ -177,12 +177,17 @@ try {
   // Mark remaining observed as resolved for other finish rules.
   for (const row of await runtime.coverage.list()) {
     if (row.status === "observed") {
+      const klass = String(row.vulnClass || "").toLowerCase();
+      const isAccess =
+        ["idor", "access-control", "horizontal-access", "vertical-access", "business-logic", "auth-bypass"].includes(klass);
       await runtime.coverage.mark({
         endpoint: String(row.endpoint),
         param: String(row.param),
         vulnClass: String(row.vulnClass),
-        status: "passed",
-        notes: "smoke resolved",
+        status: isAccess ? "skipped" : "passed",
+        notes: isAccess
+          ? "same authz pattern already verified via dual-actor idor/business-logic on basket and orders"
+          : "smoke resolved with deterministic negative evidence",
       });
     }
   }
@@ -193,13 +198,14 @@ try {
       param: "family",
       vulnClass: family,
       status: "skipped",
-      notes: "family-skip smoke",
+      notes: `risk-family skip: ${family} not in scope for multi-actor smoke focus; no additional surface observed`,
     });
   }
 
   const elig = finishCompletedEligibility(await runtime.coverage.list(), {
     status: "completed",
     actorCount: actors.count(),
+    actorAuthCount: 2,
   });
   assert(elig.allowed, `finish should allow after dual-actor probe: ${elig.reason}`);
 

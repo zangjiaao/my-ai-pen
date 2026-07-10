@@ -147,6 +147,15 @@ try {
     alt_actor: "user_b",
   });
   assert(idor.confirmed === true, `idor should confirm: ${JSON.stringify(idor)}`);
+  // Second dual-actor resource so multi_actor_breadth is satisfied when auditor seeds multiple object paths.
+  const idor2 = await execJson(verifier, "idor-2", {
+    vuln_class: "idor",
+    url: `${target}/api/Users/2`,
+    object_id: "2",
+    actor: "user_a",
+    alt_actor: "user_b",
+  });
+  assert(idor2.confirmed === true, `idor#2 should confirm: ${JSON.stringify(idor2)}`);
 
   // Valid-looking JWT payload; verifier forges alg=none.
   const payload = Buffer.from(JSON.stringify({ sub: "u1", email: "real@example.com" }), "utf8").toString("base64url");
@@ -185,14 +194,21 @@ try {
   assert(mass.confirmed === true, `mass-assignment should confirm: ${JSON.stringify(mass)}`);
 
   // Mark families attempted/resolved enough for finish eligibility helper.
+  // Access-control candidates beyond the dual-actor probe must be skipped with pattern notes
+  // (or dual-probed) so multi_actor_breadth does not block completed.
   for (const row of await runtime.coverage.list()) {
     if (String(row.status) === "observed") {
+      const klass = String(row.vulnClass || "").toLowerCase();
+      const isAccess =
+        ["idor", "access-control", "horizontal-access", "vertical-access", "business-logic", "auth-bypass"].includes(klass);
       await runtime.coverage.mark({
         endpoint: String(row.endpoint),
         param: String(row.param),
         vulnClass: String(row.vulnClass),
-        status: "failed",
-        notes: "smoke verified",
+        status: isAccess ? "skipped" : "failed",
+        notes: isAccess
+          ? "same authz pattern already verified via dual-actor idor on /api/Users/1; remaining object paths are pattern-covered"
+          : "smoke verified with deterministic verifier evidence",
       });
     }
   }
@@ -202,12 +218,13 @@ try {
       param: "family",
       vulnClass: family.family,
       status: "skipped",
-      notes: `risk-family skip ${family.reason}`,
+      notes: `risk-family skip: ${family.reason}`,
     });
   }
   const allowed = finishCompletedEligibility(await runtime.coverage.list(), {
     status: "completed",
     actorCount: runtime.actors!.count(),
+    actorAuthCount: 2,
   });
   assert(allowed.allowed, `finish should be allowed after family closure: ${allowed.reason}`);
 

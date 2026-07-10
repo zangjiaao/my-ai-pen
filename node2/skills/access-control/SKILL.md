@@ -39,6 +39,11 @@ Also replay sensitive endpoints with no actor / stripped auth as a third context
 - Record which actor performed each request.
 - Confirm only with request/response differentials tied to identity.
 - One basket IDOR does **not** exhaust access-control — retest other object classes (orders, feedback, profiles, files) with dual actors.
+- When three or more object-like resources appear, finish gates require either:
+  1. dual-actor probes on **at least two distinct endpoints**, or
+  2. dual-actor on **one** resource **plus** substantive skip/block notes on remaining object resources that the **same authz pattern was already proven** (e.g. `same authz pattern already verified via dual-actor`).
+- Weak skips without that pattern language do **not** clear the multi-actor breadth gate.
 - Use test accounts only; avoid third-party personal data.
+- Assess finish gates require ≥2 actors with real Authorization/Cookie material plus dual-actor evidence notes on coverage.
 
 Look up `poc(action='get', vuln_class='access-control')` for additional methodology after identities exist.

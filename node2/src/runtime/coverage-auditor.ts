@@ -1,5 +1,6 @@
 import type { ToolRuntime } from "../types.js";
 import { targetBase } from "../tools/common.js";
+import { isNoiseEndpoint, isObjectLikeResourcePath } from "./detection-conversion.js";
 
 type ObservedRequest = {
   method?: string;
@@ -27,7 +28,15 @@ type TestCandidate = {
 };
 
 export async function observeAttackSurface(runtime: ToolRuntime, input: ObservedRequest): Promise<void> {
-  const observations = observedUrls(input).filter((observed) => observedInScope(runtime, observed.url, input.url));
+  const observations = observedUrls(input)
+    .filter((observed) => observedInScope(runtime, observed.url, input.url))
+    .filter((observed) => {
+      try {
+        return !isNoiseEndpoint(new URL(observed.url).pathname);
+      } catch {
+        return false;
+      }
+    });
   for (const observed of observations) {
     upsertSurface(runtime, observed.method, observed.url, input.evidenceIds || [], input.source);
     const candidates = inferCandidates(
@@ -37,6 +46,7 @@ export async function observeAttackSurface(runtime: ToolRuntime, input: Observed
       observed.primary ? input.responseBody || "" : "",
     );
     for (const candidate of candidates) {
+      if (isNoiseEndpoint(candidate.endpoint)) continue;
       await runtime.coverage.mark({
         endpoint: candidate.endpoint,
         param: candidate.param,
@@ -99,9 +109,13 @@ function strictScopeMatch(rawUrl: string, rawScope: string): boolean {
 function inferCandidates(method: string, rawUrl: string, requestBody: string, responseBody: string): TestCandidate[] {
   const url = new URL(rawUrl);
   const endpoint = url.pathname;
+  if (isNoiseEndpoint(endpoint)) return [];
+  const observedParams = requestParams(url, requestBody, responseBody);
   const candidates: TestCandidate[] = [];
-  for (const test of routeHintTests(endpoint, responseBody)) candidates.push({ ...test, endpoint, method });
-  for (const param of requestParams(url, requestBody, responseBody)) {
+  for (const test of routeHintTests(endpoint, responseBody, observedParams, method)) {
+    candidates.push({ ...test, endpoint, method });
+  }
+  for (const param of observedParams) {
     const vulnClass = genericVulnClass(param, endpoint, responseBody);
     if (!vulnClass) continue;
     candidates.push({
@@ -117,9 +131,15 @@ function inferCandidates(method: string, rawUrl: string, requestBody: string, re
   return dedupeCandidates(candidates);
 }
 
-function routeHintTests(endpoint: string, html: string): Omit<TestCandidate, "endpoint" | "method">[] {
+function routeHintTests(
+  endpoint: string,
+  html: string,
+  observedParams: string[],
+  method: string,
+): Omit<TestCandidate, "endpoint" | "method">[] {
   const route = endpoint.toLowerCase();
   const tests: Omit<TestCandidate, "endpoint" | "method">[] = [];
+  const paramSet = new Set(observedParams.map((p) => p.toLowerCase()));
   const add = (param: string, vulnClass: string, title: string, notes: string, priority = 240) => {
     tests.push({ param, vulnClass, title, notes, priority });
   };
@@ -146,27 +166,35 @@ function routeHintTests(endpoint: string, html: string): Omit<TestCandidate, "en
   if (route.includes("captcha") || html.toLowerCase().includes("captcha")) {
     add("captcha,step", "insecure-captcha", "Verify CAPTCHA server-side workflow enforcement", "Replay or mutate CAPTCHA workflow parameters and prove whether server-side validation can be bypassed.", 229);
   }
+  // Injection: only invent params that match the surface (do not put q= on login).
   if (hasAny(route, ["sqli", "sql", "query", "search"]) && route.includes("blind")) {
-    add("id", "blind-sql-injection", "Verify blind SQL injection with controlled boolean pair", "Use true/false predicates such as AND 1=1 and AND 1=2, not only malformed input.", 225);
-  } else if (hasAny(route, ["sqli", "sql", "query", "search", "filter", "login"])) {
-    add("q", "sql-injection", "Verify SQL injection in lookup/search parameter", "Use error, boolean, or UNION evidence and record request/response differences.", 240);
+    add(pickParam(paramSet, ["id", "q", "query"], "id"), "blind-sql-injection", "Verify blind SQL injection with controlled boolean pair", "Use true/false predicates such as AND 1=1 and AND 1=2, not only malformed input.", 225);
+  } else if (hasAny(route, ["sqli", "sql", "query", "search", "filter"])) {
+    add(pickParam(paramSet, ["q", "query", "search", "filter", "id"], "q"), "sql-injection", "Verify SQL injection in lookup/search parameter", "Use error, boolean, or UNION evidence and record request/response differences.", 240);
+  } else if (hasAny(route, ["login", "signin", "authenticate"])) {
+    add(pickParam(paramSet, ["email", "username", "user", "login", "password"], "email,password"), "sql-injection", "Verify SQL injection in authentication fields", "Probe email/username/password with controlled boolean or error-based payloads; compare to valid/invalid baselines.", 245);
   }
-  if (hasAny(route, ["users", "user", "basket", "order", "profile", "account", "feedback", "complaint", "/api/", "/rest/"])) {
-    add("id", "idor", "Verify direct object reference / authorization isolation", "Replay object identifiers across auth states or adjacent IDs and prove unauthorized data access.", 255);
+  // IDOR: real object collections only — never bare /api or /rest roots (filtered as noise).
+  if (isObjectLikeResourcePath(endpoint) && !hasAny(route, ["search", "login", "register", "signup", "whoami"])) {
+    const idParam = pickParam(paramSet, ["id", "user_id", "userid", "order_id", "basket_id", "item_id"], "id");
+    add(idParam, "idor", "Verify direct object reference / authorization isolation", "Replay object identifiers across auth states or adjacent IDs and prove unauthorized data access.", 255);
   }
-  if (hasAny(route, ["register", "signup", "users"]) && (methodLooksWritable(html) || route.includes("api"))) {
-    add("role", "mass-assignment", "Verify mass assignment / privileged field injection", "Submit extra privileged fields (role/admin/isAdmin) during create/update and prove privilege change.", 252);
+  if (hasAny(route, ["register", "signup", "users"]) && (methodLooksWritable(html) || methodLooksWritableMethod(method) || route.includes("api"))) {
+    add(pickParam(paramSet, ["role", "isadmin", "admin", "privilege"], "role"), "mass-assignment", "Verify mass assignment / privileged field injection", "Submit extra privileged fields (role/admin/isAdmin) during create/update and prove privilege change.", 252);
   }
-  if (hasAny(route, ["redirect", "return", "next", "url", "link", "to"])) {
-    add("url", "open-redirect", "Verify open redirect allowlist bypass", "Inject an external absolute URL into redirect parameters and prove off-site Location/navigation.", 248);
+  if (hasAny(route, ["redirect", "return", "next", "url", "link", "to"]) && !hasAny(route, ["login"])) {
+    // Only when route itself suggests redirect, or observed redirect-ish params.
+    if (hasAny(route, ["redirect", "return", "next"]) || [...paramSet].some((p) => /url|redirect|next|return|to/.test(p))) {
+      add(pickParam(paramSet, ["url", "redirect", "next", "return", "to", "link"], "url"), "open-redirect", "Verify open redirect allowlist bypass", "Inject an external absolute URL into redirect parameters and prove off-site Location/navigation.", 248);
+    }
   }
-  if (hasAny(route, ["xss", "dom", "search", "track"])) {
+  if (hasAny(route, ["xss", "dom", "search", "track"]) || [...paramSet].some((p) => ["q", "query", "search", "name", "message", "comment"].includes(p))) {
     const stored = hasAny(route, ["stored", "guest", "_s", "-s"]) || hasAny(html.toLowerCase(), ["guestbook", "textarea"]);
     const dom = hasAny(route, ["dom", "_d", "-d"]);
     const reflected = hasAny(route, ["reflected", "_r", "-r", "search", "q"]) || !stored;
     if (stored) add("txtName,mtxMessage", "xss-stored", "Verify stored XSS with second retrieval", "Submit a short payload that fits field limits, retrieve the page again, and prove persistence/execution.", 225);
     if (dom) add("default", "xss-dom", "Verify DOM XSS execution", "Use browser navigation with query/hash payload and capture a DOM/dialog effect.", 227);
-    if (reflected) add("q", "xss-reflected", "Verify reflected XSS execution context", "Prove executable JavaScript context, preferably with browser-observed dialog or DOM marker.", 244);
+    if (reflected) add(pickParam(paramSet, ["q", "query", "search", "name", "message", "comment"], "q"), "xss-reflected", "Verify reflected XSS execution context", "Prove executable JavaScript context, preferably with browser-observed dialog or DOM marker.", 244);
   }
   if (route.includes("csp") || html.toLowerCase().includes("content-security-policy")) {
     add("policy,payload", "csp-bypass", "Verify CSP bypass", "Record CSP policy, identify allowed sources, and prove a bypass payload executes.", 228);
@@ -175,6 +203,17 @@ function routeHintTests(endpoint: string, html: string): Omit<TestCandidate, "en
     add("token,phrase", "javascript-logic", "Verify client-side JavaScript logic bypass", "Analyze client-side validation logic and prove server accepts the derived or bypassed value.", 228);
   }
   return tests;
+}
+
+function pickParam(paramSet: Set<string>, preferred: string[], fallback: string): string {
+  for (const name of preferred) {
+    if (paramSet.has(name.toLowerCase())) return name;
+  }
+  return fallback;
+}
+
+function methodLooksWritableMethod(method: string): boolean {
+  return ["POST", "PUT", "PATCH", "DELETE"].includes(String(method || "").toUpperCase());
 }
 
 function methodLooksWritable(html: string): boolean {
