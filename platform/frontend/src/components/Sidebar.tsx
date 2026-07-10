@@ -17,7 +17,7 @@ const NAV_ITEMS = [
   { label: "资产管理", path: "/assets" },
   { label: "漏洞管理", path: "/vulnerabilities" },
   { label: "节点管理", path: "/nodes" },
-  { label: "审计日志", path: "/audit" },
+  { label: "操作审计", path: "/audit" },
 ];
 
 export default function Sidebar({ activeId, onSelect }: Props) {

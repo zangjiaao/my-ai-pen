@@ -117,6 +117,14 @@ async def register_node(body: dict, current_user: dict = Depends(get_current_use
                 token_hash=hashlib.sha256(token.encode()).hexdigest(),
                 config={"token": token})
     db.add(node)
+    await db.flush()
+    await _audit_user(
+        db,
+        uuid.UUID(current_user["user_id"]),
+        "node.register",
+        node.id,
+        {"name": node.name, "type": node.type},
+    )
     await db.commit()
     return {"id": str(node.id), "name": node.name, "token": token}
 
@@ -151,6 +159,9 @@ async def update_node(node_id: str, body: NodeUpdate, current_user: dict = Depen
         body.max_concurrent_workers,
         body.default_scan_mode,
     )
+    changed_fields: list[str] = []
+    if body.name is not None:
+        changed_fields.append("name")
     if any(value is not None for value in runtime_fields):
         if n.type != "pentest":
             raise HTTPException(400, "Runtime budgets apply only to pentest nodes")
@@ -159,10 +170,12 @@ async def update_node(node_id: str, body: NodeUpdate, current_user: dict = Depen
             cfg["worker_max_ms"] = _clamp_int(
                 body.worker_max_ms, MIN_WORKER_MAX_MS, MAX_WORKER_MAX_MS, DEFAULT_WORKER_MAX_MS
             )
+            changed_fields.append("worker_max_ms")
         if body.worker_max_turns is not None:
             cfg["worker_max_turns"] = _clamp_int(
                 body.worker_max_turns, MIN_WORKER_MAX_TURNS, MAX_WORKER_MAX_TURNS, DEFAULT_WORKER_MAX_TURNS
             )
+            changed_fields.append("worker_max_turns")
         if body.worker_max_timeout_retries is not None:
             cfg["worker_max_timeout_retries"] = _clamp_int(
                 body.worker_max_timeout_retries,
@@ -170,14 +183,17 @@ async def update_node(node_id: str, body: NodeUpdate, current_user: dict = Depen
                 MAX_WORKER_MAX_TIMEOUT_RETRIES,
                 DEFAULT_WORKER_MAX_TIMEOUT_RETRIES,
             )
+            changed_fields.append("worker_max_timeout_retries")
         if body.main_max_ms is not None:
             cfg["main_max_ms"] = _clamp_int(
                 body.main_max_ms, MIN_MAIN_MAX_MS, MAX_MAIN_MAX_MS, DEFAULT_MAIN_MAX_MS
             )
+            changed_fields.append("main_max_ms")
         if body.main_max_turns is not None:
             cfg["main_max_turns"] = _clamp_int(
                 body.main_max_turns, MIN_MAIN_MAX_TURNS, MAX_MAIN_MAX_TURNS, DEFAULT_MAIN_MAX_TURNS
             )
+            changed_fields.append("main_max_turns")
         if body.max_concurrent_workers is not None:
             cfg["max_concurrent_workers"] = _clamp_int(
                 body.max_concurrent_workers,
@@ -185,12 +201,22 @@ async def update_node(node_id: str, body: NodeUpdate, current_user: dict = Depen
                 MAX_MAX_CONCURRENT_WORKERS,
                 DEFAULT_MAX_CONCURRENT_WORKERS,
             )
+            changed_fields.append("max_concurrent_workers")
         if body.default_scan_mode is not None:
             mode = str(body.default_scan_mode).strip().lower()
             if mode not in ALLOWED_SCAN_MODES:
                 raise HTTPException(400, "default_scan_mode must be quick, standard, or deep")
             cfg["default_scan_mode"] = mode
+            changed_fields.append("default_scan_mode")
         n.config = cfg
+    if changed_fields:
+        await _audit_user(
+            db,
+            uuid.UUID(current_user["user_id"]),
+            "node.update",
+            n.id,
+            {"name": n.name, "fields": changed_fields},
+        )
     await db.commit()
     await db.refresh(n)
     tasks = await _current_tasks_by_node(db, [n])
@@ -206,6 +232,13 @@ async def regenerate_token(node_id: str, current_user: dict = Depends(get_curren
     new_token = secrets.token_hex(32)
     n.token_hash = hashlib.sha256(new_token.encode()).hexdigest()
     n.config = {**(n.config or {}), "token": new_token}
+    await _audit_user(
+        db,
+        uuid.UUID(current_user["user_id"]),
+        "node.regenerate_token",
+        n.id,
+        {"name": n.name},
+    )
     await db.commit()
     from app.ws import router as ws_router
     await ws_router.revoke_node_connection(str(n.id), "token regenerated")
@@ -217,9 +250,36 @@ async def delete_node(node_id: str, current_user: dict = Depends(get_current_use
     n = await _get_node(db, node_id)
     if n.id == PLATFORM_AGENT_NODE_ID or n.type == "platform":
         raise HTTPException(400, "Platform node cannot be deleted")
+    await _audit_user(
+        db,
+        uuid.UUID(current_user["user_id"]),
+        "node.delete",
+        n.id,
+        {"name": n.name, "type": n.type},
+    )
     await db.delete(n)
     await db.commit()
     return {"ok": True}
+
+
+async def _audit_user(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    action: str,
+    resource_id: uuid.UUID,
+    detail: dict,
+) -> None:
+    db.add(
+        AuditLog(
+            actor_type="user",
+            actor_id=user_id,
+            action=action,
+            resource_type="node",
+            resource_id=resource_id,
+            detail=detail,
+            status="success",
+        )
+    )
 
 
 async def _ensure_platform_node(db: AsyncSession) -> Node:

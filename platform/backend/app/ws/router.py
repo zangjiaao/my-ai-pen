@@ -120,6 +120,32 @@ def _normalize_severity(value: object) -> str:
     return severity if severity in {"critical", "high", "medium", "low", "info"} else "medium"
 
 
+# Agent/runtime events belong in the conversation timeline, not the platform audit ledger.
+# Keep node.online / node.offline for connectivity sparklines.
+_AUDIT_SKIP_ACTIONS = frozenset({
+    "tool.execute",
+    "evidence.create",
+    "asset.discover",
+    "task.assign",
+    "user_steer",
+    "approval.request",
+})
+
+
+def _should_skip_runtime_audit(action: str) -> bool:
+    a = str(action or "")
+    if a in _AUDIT_SKIP_ACTIONS:
+        return True
+    if a.startswith("finding."):
+        return True
+    if a.startswith("approval."):
+        return True
+    # Unknown free-form message types from the WS path (not platform CRUD).
+    if a in {"user_interrupt", "user_input"}:
+        return True
+    return False
+
+
 async def _audit(
     *,
     actor_type: str,
@@ -131,6 +157,8 @@ async def _audit(
     conversation_id: uuid.UUID | None = None,
     detail: dict | None = None,
 ):
+    if _should_skip_runtime_audit(action):
+        return
     try:
         from app.db.base import async_session
         from app.models.audit import AuditLog
