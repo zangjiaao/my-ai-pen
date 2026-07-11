@@ -12,7 +12,8 @@
 - `architecture.md`：技术架构、数据流、协议和模块边界。
 - `product-roadmap.md`：唯一执行计划。
 - `design.md`：视觉和交互设计系统。
-- `harness-v2.md`：**Node2 Agent Runtime 改造北星**（OMP 对齐的攻击闭环：todo 地图、script 优先、finish 减负）。实现 Node 运行时行为时以该文档为准，避免回退到门禁驱动扫描状态机。
+- `harness-v2.md`：Node2 减负经验（过渡）。
+- `node4-harness.md`：**Node4 商业执行核北星**（clean-room OMP 哲学：极简 tool 面、todo 地图、script/http 优先、证据入账、单次 finish；**不**依赖 oh-my-pi 源码；TUI 延后）。新 Agent 能力以 Node4 为准，Node2 并行兼容。
 
 Node Skill 内容属于运行时资料，保留在 `node/skills/` 与 `node2/skills/`。历史超前规格不再作为实现依据。
 

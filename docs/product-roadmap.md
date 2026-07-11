@@ -2,28 +2,26 @@
 
 > 文档角色：产品和工程路线图的唯一执行入口。  
 > 当前校准日期：2026-07-11  
-> 当前主线：Node2 **Harness v2**（见 `docs/harness-v2.md`）— 对齐 OMP「简即是强」：单主 Agent 攻击闭环、独立 todo 进度、script/poc 一等、finish 证据导向；Pi Runtime + Skills/PoC/Tools 仍是底座。
+> 当前主线：**Node4** clean-room 简 harness（见 `docs/node4-harness.md`）— 商用自研、不依赖 OMP 源码；平台对接与 Node2 同通道；能力对照 OMP 基线；**TUI 延后**。
 
 ## 0. 当前结论
 
-Node2 的目标不是为 DVWA 写死 payload，也不是只做一个能跑 demo 的扫描器。目标是构建一个面向真实系统的渗透测试 Agent Runtime：
+目标是构建面向真实系统的渗透测试 Agent Runtime（商业产品，执行核自研）：
 
-- **Harness v2 北星**：`docs/harness-v2.md` — Understand → Map(todo) → Act → Book(finding) → Close(finish)；todo 不挡完成；worker/coverage-plan 退居可选。
-- Pi 负责上下文管理、提示词管理、会话管理、Hook 管理和原生 Skills 加载。
-- `pi-workflow` 负责轻量 brief（范围/建议 phase），不驱动半场状态机。
-- Skills 只做方法论和测试说明书，不保存执行状态。
-- PoC Catalog 作为漏洞字典；`poc` write/run 是多步利用的一等路径。
-- Tools 以 http / browser / poc / traffic / actor / finding / todo / finish 为主路径。
-- Traffic / Evidence / Finding 是事实来源；Coverage 作导航，不作用户 Tasks 真源。
-- Benchmark / OMP 对照衡量能力迁移，不以硬编码答案冒充自治。
+- **Node4 北星**：`docs/node4-harness.md` — Understand → Map(todo) → Act(http/script) → Book(finding) → Close(finish)；无默认 worker/coverage 门禁。
+- **Node2**：并行兼容节点；Harness v2 经验见 `docs/harness-v2.md`，不再作为主能力路径堆叠。
+- Pi 兼容栈负责 session/tools；**不** vendoring oh-my-pi。
+- 平台：会话 / 资产 / 漏洞 / 证据 / 计时；Node 只做执行与事件回写。
+- Benchmark / OMP 行为对照衡量能力，不以硬编码答案冒充自治。
+- Interactive TUI：预留，本阶段不交付。
 
 下一步优先级：
 
-1. **落地 Harness v2**（todo、prompt、finish 减负、script-first、对照 CTF/DVWA/Juice）。
-2. Caido 统一流量真相源（旁路增强，不堵主循环）。
-3. 基于真实请求的流量分析与通用 verifier。
-4. 多身份、多资源、多步骤状态化攻击（在 script 循环之上）。
-5. 多 benchmark 驱动能力硬化。
+1. **Node4 standalone runtime + smokes + 三靶场对照**。
+2. **Node4 平台 WS 对接**（task_assign → events → task_complete）。
+3. 能力硬化（script/sandbox、对照闭环）。
+4. TUI（后续）：sticky todo + transcript，与 Web 同语义。
+5. Caido / 多身份等旁路增强（不挡主循环）。
 
 ## 1. 总体阶段
 
