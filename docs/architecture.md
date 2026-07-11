@@ -5,15 +5,16 @@
 
 ## 1. 文档边界
 
-`docs/` 只保留五个一等文档：
+`docs/` 一等文档：
 
 - `product-vision.md`：产品方向和 MVP 边界。
 - `prd.md`：功能需求和验收标准。
 - `architecture.md`：技术架构、数据流、协议和模块边界。
 - `product-roadmap.md`：唯一执行计划。
 - `design.md`：视觉和交互设计系统。
+- `harness-v2.md`：**Node2 Agent Runtime 改造北星**（OMP 对齐的攻击闭环：todo 地图、script 优先、finish 减负）。实现 Node 运行时行为时以该文档为准，避免回退到门禁驱动扫描状态机。
 
-Node Skill 内容属于运行时资料，保留在 `node/skills/`。历史超前规格不再作为实现依据。
+Node Skill 内容属于运行时资料，保留在 `node/skills/` 与 `node2/skills/`。历史超前规格不再作为实现依据。
 
 ## 2. 架构总览
 

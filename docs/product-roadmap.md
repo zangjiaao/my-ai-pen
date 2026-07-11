@@ -1,27 +1,29 @@
 # 产品路线图：AI 渗透测试 Agent Runtime
 
 > 文档角色：产品和工程路线图的唯一执行入口。  
-> 当前校准日期：2026-07-06  
-> 当前主线：Node2 以 Pi Agent Runtime 为核心，参考 `research/pi-workflow` 管理工作流，以 Skills、PoC Catalog、Tools 和 Benchmark 共同提升真实系统渗透测试能力。
+> 当前校准日期：2026-07-11  
+> 当前主线：Node2 **Harness v2**（见 `docs/harness-v2.md`）— 对齐 OMP「简即是强」：单主 Agent 攻击闭环、独立 todo 进度、script/poc 一等、finish 证据导向；Pi Runtime + Skills/PoC/Tools 仍是底座。
 
 ## 0. 当前结论
 
 Node2 的目标不是为 DVWA 写死 payload，也不是只做一个能跑 demo 的扫描器。目标是构建一个面向真实系统的渗透测试 Agent Runtime：
 
+- **Harness v2 北星**：`docs/harness-v2.md` — Understand → Map(todo) → Act → Book(finding) → Close(finish)；todo 不挡完成；worker/coverage-plan 退居可选。
 - Pi 负责上下文管理、提示词管理、会话管理、Hook 管理和原生 Skills 加载。
-- `pi-workflow` 负责 Agent 工作流编排。
+- `pi-workflow` 负责轻量 brief（范围/建议 phase），不驱动半场状态机。
 - Skills 只做方法论和测试说明书，不保存执行状态。
-- PoC Catalog 作为漏洞字典，描述漏洞族、payload、mutation、oracle 和证据要求。
-- Tools 负责真实测试动作，包括 browser、http、traffic、verifier、scanner、artifact 等。
-- Traffic / Evidence / Coverage / Finding 是运行状态和事实来源。
-- Benchmark 用于衡量能力迁移，不以 DVWA high 得分作为唯一目标。
+- PoC Catalog 作为漏洞字典；`poc` write/run 是多步利用的一等路径。
+- Tools 以 http / browser / poc / traffic / actor / finding / todo / finish 为主路径。
+- Traffic / Evidence / Finding 是事实来源；Coverage 作导航，不作用户 Tasks 真源。
+- Benchmark / OMP 对照衡量能力迁移，不以硬编码答案冒充自治。
 
-下一步优先级已经确定：
+下一步优先级：
 
-1. 先做 Caido 统一流量真相源。
-2. 再做基于真实请求的流量分析和通用 verifier。
-3. 再做多身份、多资源、多步骤的状态化攻击编排。
-4. 最后用多 benchmark 驱动能力硬化。
+1. **落地 Harness v2**（todo、prompt、finish 减负、script-first、对照 CTF/DVWA/Juice）。
+2. Caido 统一流量真相源（旁路增强，不堵主循环）。
+3. 基于真实请求的流量分析与通用 verifier。
+4. 多身份、多资源、多步骤状态化攻击（在 script 循环之上）。
+5. 多 benchmark 驱动能力硬化。
 
 ## 1. 总体阶段
 
