@@ -37,6 +37,11 @@ import {
   workflowCatalogForPrompt,
 } from "./engagement.js";
 import { createPentestExtension } from "./pentest-extension.js";
+import {
+  finishScanSettlesTask,
+  isTerminalFinishSettlement,
+  resolveTerminalTaskStatus,
+} from "./finish-settlement.js";
 import { buildSystemPrompt } from "./prompt.js";
 
 const TEXT_STREAM_FLUSH_MS = 250;
@@ -335,14 +340,17 @@ export async function createLivingPentestSession(
     }
 
     const finishStatus = runtime.lifecycle.finishScan?.status;
-    const settledIncomplete = isTerminalFinishStatus(finishStatus) && finishStatus !== "completed";
-    if (!gate.canComplete || settledIncomplete) {
+    const terminalStatus = resolveTerminalTaskStatus({
+      gateCanComplete: gate.canComplete,
+      finishStatus,
+    });
+    // Harness v2: never demote finish_scan(completed) to incomplete.
+    if (terminalStatus !== "completed") {
       runtime.plan.setPhase("report");
       const incompleteSummary =
         runtime.lifecycle.finishScan?.summary ||
         extractLastAssistantText(session.messages).slice(0, 4000) ||
         gate.summary;
-      const terminalStatus = finishStatus === "blocked" ? "blocked" : "incomplete";
       // Unified terminal channel with completed path: only task_complete (status=incomplete|blocked).
       // Do not also send task_incomplete — that produced duplicate "Task incomplete" UI rows.
       await platformOut.send({
@@ -357,7 +365,7 @@ export async function createLivingPentestSession(
         type: "plan_tree_updated",
         conversation_id: task.conversationId,
         task_id: task.taskId,
-        reason: settledIncomplete ? "runtime.finish_incomplete" : "runtime.incomplete_summary",
+        reason: finishStatus === "incomplete" || finishStatus === "blocked" ? "runtime.finish_incomplete" : "runtime.incomplete_summary",
         workflow_stage: runtime.plan.kanban().current_stage,
         progress: runtime.plan.progress(),
         kanban: runtime.plan.kanban(),
@@ -840,23 +848,21 @@ function buildWorkflowFirstInstruction(task: TaskEnvelope): string {
   }
 
   lines.push(
-    "After the workflow returns, follow that engagement only:",
-    "- pentest-web (assess): workflow_run brief → seed intentional Tasks with coverage(plan) from workPackages/steps → dispatch worker packages (STRICT: one role + 1–2 endpoints each; multi-surface mega-packages are rejected) → update plan status running→done per package → on worker timeout, re-dispatch a narrower package or main-session probes → coverage(next_work) to fill family gaps → main agent finish_scan. Never bulk-skip only to force completed. Do not finish_scan(completed) while timeout/failed worker packages or open checklist items remain.",
-    "- Auth walls: before blocking captcha/admin/IDOR paths for 'no credentials', attempt an explicit credential path (register, known demo accounts from the app, session from traffic, authorized secret recovery). Put credential work in its own step/package.",
-    "- Stored XSS / OOB: without a callback URL or admin-bot environment, document the environment gap (blocked/incomplete) instead of claiming full impact proof.",
-    "- pentest-verify: seed plan steps from verificationSteps; mark each running/done as you probe; finish when confirmed, disproven, or blocked — do not full-site sweep.",
-    "- pentest-retest: seed plan steps from retestSteps; mark each running/done while replaying the prior path; report still-vulnerable vs fixed.",
-    "- pentest-consult: seed a short answer plan (outline → draft sections → final summary); mark steps done as the answer is produced; live tools only if authorized and necessary.",
-    "Plan ownership: YOU maintain the user-facing Tasks checklist with coverage(plan) during execution. Do not invent work only at the end or leave every item pending until finish_scan.",
-    "Use browser/http/scan/actor/traffic/verifier/finding as appropriate to the chosen engagement.",
-    "Prefer scan for established tools (httpx, katana, nuclei, nmap, ffuf, sqlmap, …) via the scanner sandbox when discovery is in scope.",
-    "When verifier returns confirmed=true with evidence_id, call finding(action='confirm') immediately with that evidence_id and finding_kind='vuln' (or flag/auth if the artifact is a token/secret).",
-    "Vuln, Flag, and Key are independent finding objects — never combine a vulnerability write-up and a captured flag/secret into one confirm; use separate finding(confirm) calls.",
-    "Call finish_scan only when ready to end the lifecycle:",
-    "- status=completed only if high-priority coverage is resolved (tried/failed/passed or substantive skip/block notes), assess multi-actor/surface gates are met when applicable, and every intentional checklist item is done/blocked/skipped.",
-    "- If material work remains, call finish_scan(status='incomplete') ONCE — do not spam finish_scan(completed) or bulk-skip to force completed.",
-    "- After a worker timeout: prefer one narrower re-dispatch; if retries are exhausted the package is failed — apply the advice in plan notes (split endpoints, raise node worker timeout in 节点管理, or mark incomplete with blockers).",
-    "Completion gates follow the engagement of the workflow you ran (or explicit task.engagement).",
+    "After the workflow returns, follow Harness v2 (simple attack loop):",
+    "1) todo(op='init') phases for the whole request (content strings as IDs; not task-1).",
+    "2) Act with http/browser/poc scripts (prefer multi-step poc write/run over many one-off calls).",
+    "3) Book: finding(confirm) immediately with evidence_ids; vuln|flag|auth are separate confirms.",
+    "4) Advance: todo(op='done') same turn; next pending auto-starts.",
+    "5) finish_scan once when ready.",
+    "- workers are optional for narrow parallel packages only — never required for finish_scan(completed).",
+    "- Open todo/checklist items do NOT block finish_scan(completed).",
+    "- assess: completed when evidence-backed findings exist (or clear no-finding after real attempts); otherwise incomplete.",
+    "- verify/retest/consult: complete when that engagement goal is done — no full-site conversion requirement.",
+    "- Auth walls: attempt credential paths before marking blocked; OOB/stored-XSS without bot env → document environment gap.",
+    "Use browser/http/scan/actor/traffic/verifier/finding/poc as appropriate.",
+    "Prefer scan for established tools (httpx, katana, nuclei, nmap, ffuf, sqlmap, …) when discovery is in scope.",
+    "If material work remains, finish_scan(status='incomplete') once — do not spam completed or bulk-skip.",
+    "Completion follows the engagement of the workflow you ran (or explicit task.engagement).",
     "",
     "Original user instruction:",
     task.instruction || "Run an authorized web security task against the target and report outcomes with evidence.",
@@ -882,9 +888,23 @@ function completionGateRounds(): number {
 
 function completionGate(runtime: ToolRuntime): { canComplete: boolean; audit: Record<string, unknown>; summary: string } {
   const engagementInfo = resolveEffectiveEngagement(runtime.task, runtime.workflowRuns);
+  const finishAudit = finishScanAudit(runtime);
+  // Harness v2: finish_scan terminal settlement is authoritative — do not re-litigate
+  // coverage/plan gates into incomplete after the tool accepted completed/incomplete/blocked.
+  if (finishAudit.canComplete && isTerminalFinishSettlement(runtime.lifecycle.finishScan?.status)) {
+    return {
+      canComplete: true,
+      audit: {
+        engagement: engagementInfo,
+        finish_scan: finishAudit,
+        summary: finishAudit.summary,
+        harness_v2: "finish_scan_settlement",
+      },
+      summary: finishAudit.summary,
+    };
+  }
   const planAudit = runtime.plan.audit();
   const workflowAudit = workflowCompletionAudit(runtime);
-  const finishAudit = finishScanAudit(runtime);
   const coverageAudit = coverageCompletionAudit(runtime, engagementInfo.engagement);
   const summary = [planAudit.summary, workflowAudit.summary, finishAudit.summary, coverageAudit.summary].filter(Boolean).join("; ");
   return {
@@ -918,9 +938,9 @@ function coverageCompletionAudit(
       unresolved: [],
     };
   }
-  // Explicit incomplete/blocked finish already waived full-site conversion for task end.
+  // Explicit terminal finish already waived full-site conversion for task end (incl. completed).
   const finishStatus = runtime.lifecycle.finishScan?.status;
-  if (finishStatus === "incomplete" || finishStatus === "blocked") {
+  if (finishStatus === "incomplete" || finishStatus === "blocked" || finishStatus === "completed") {
     return {
       canComplete: true,
       summary: `coverage conversion not required after finish_scan(${finishStatus})`,
@@ -959,51 +979,15 @@ function coverageCompletionAudit(
 }
 
 function isTerminalFinishStatus(status: string | undefined): boolean {
-  return status === "completed" || status === "incomplete" || status === "blocked";
+  return isTerminalFinishSettlement(status);
 }
 
 function finishScanAudit(runtime: ToolRuntime): { canComplete: boolean; summary: string; finishScan?: unknown } {
   const finishScan = runtime.lifecycle.finishScan;
-  if (!finishScan) return { canComplete: false, summary: "finish_scan has not been called" };
-  // incomplete/blocked are valid terminal lifecycle outcomes — do not force the agent
-  // to keep retrying finish_scan(completed) against conversion gates.
-  if (finishScan.status === "incomplete" || finishScan.status === "blocked") {
-    return {
-      canComplete: true,
-      summary: `finish_scan settled as ${finishScan.status} (terminal incomplete lifecycle)`,
-      finishScan,
-    };
-  }
-  if (finishScan.status !== "completed") {
-    return {
-      canComplete: false,
-      summary: `finish_scan requested ${finishScan.status}`,
-      finishScan,
-    };
-  }
-  const rows = runtime.coverage.listSync?.() || [];
-  const engagementInfo = resolveEffectiveEngagement(runtime.task, runtime.workflowRuns);
-  const actorSummary = runtime.actors?.summary?.() ?? { count: runtime.actors?.count() ?? 0, actors: [] as Array<{ hasAuth?: boolean }> };
-  const actorAuthCount = Array.isArray(actorSummary.actors)
-    ? actorSummary.actors.filter((actor) => Boolean(actor?.hasAuth)).length
-    : Number(actorSummary.count || 0);
-  const eligibility = finishCompletedEligibility(rows, {
-    status: "completed",
-    actorCount: Number(actorSummary.count || 0),
-    actorAuthCount,
-    engagement: engagementInfo.engagement,
-    surfaceInventory: surfaceInventoryFromTraffic(runtime.traffic),
-  });
-  if (!eligibility.allowed) {
-    return {
-      canComplete: false,
-      summary: eligibility.reason,
-      finishScan,
-    };
-  }
+  const settlement = finishScanSettlesTask(finishScan);
   return {
-    canComplete: true,
-    summary: `finish_scan completed (engagement=${engagementInfo.engagement})`,
+    canComplete: settlement.canComplete,
+    summary: settlement.summary,
     finishScan,
   };
 }

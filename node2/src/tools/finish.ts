@@ -10,6 +10,7 @@ import {
   surfaceInventoryFromTraffic,
 } from "../runtime/detection-conversion.js";
 import { resolveEffectiveEngagement } from "../runtime/engagement.js";
+import { allowCompletedDespiteCoverageGaps } from "../runtime/finish-settlement.js";
 import {
   alignSummaryFindingCount,
   loadAggregatedConfirmedFindings,
@@ -96,7 +97,13 @@ export function createFinishScanTool(runtime: ToolRuntime): ToolDefinition<any> 
       // Evidence-oriented: disk-confirmed findings allow completed despite soft coverage gaps.
       // Without findings, keep assess conversion gates so completed is not empty-booked.
       const hasEvidenceFindings = confirmedFindings.length > 0;
-      if (status === "completed" && !eligibility.allowed && !hasEvidenceFindings) {
+      if (
+        status === "completed" &&
+        !allowCompletedDespiteCoverageGaps({
+          eligibilityAllowed: eligibility.allowed,
+          confirmedFindingCount: confirmedFindings.length,
+        })
+      ) {
         const metrics = conversionMetrics(coverageRows);
         const queue = formatDiscoveryQueuePayload(coverageRows, {
           familyGaps: eligibility.missingRiskFamilies,

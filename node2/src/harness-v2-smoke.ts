@@ -1,6 +1,7 @@
 /**
  * Harness v2 smoke: pure todo ops, finish without checklist hard-reject,
- * evidence-oriented completed with findings, poc write path presence.
+ * evidence-oriented completed with findings, session terminal status,
+ * poc write path presence.
  */
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -12,6 +13,11 @@ import { TrafficStore } from "./stores/traffic.js";
 import { createTodoTool, projectTodoIntoPlan } from "./tools/todo.js";
 import { createFinishScanTool } from "./tools/finish.js";
 import { createPocTool } from "./tools/poc.js";
+import {
+  allowCompletedDespiteCoverageGaps,
+  finishScanSettlesTask,
+  resolveTerminalTaskStatus,
+} from "./runtime/finish-settlement.js";
 import { buildSystemPrompt } from "./runtime/prompt.js";
 import type { PlatformMessage, PlatformSink, ToolRuntime, TaskEnvelope } from "./types.js";
 
@@ -194,6 +200,51 @@ async function main() {
   assert(!prompt.includes("finish_scan(completed) is rejected while intentional"), "prompt does not mandate checklist gate");
   assert(prompt.toLowerCase().includes("poc"), "prompt mentions poc");
 
+  // Session settlement: finish_scan(completed) + findings must not demote to incomplete
+  // even when assess conversion eligibility would fail (mirrors session-runner path).
+  assert(
+    allowCompletedDespiteCoverageGaps({ eligibilityAllowed: false, confirmedFindingCount: 2 }) === true,
+    "findings waive conversion gaps",
+  );
+  assert(
+    allowCompletedDespiteCoverageGaps({ eligibilityAllowed: false, confirmedFindingCount: 0 }) === false,
+    "no findings keep conversion hard gate",
+  );
+  const settlement = finishScanSettlesTask({
+    status: "completed",
+    confirmedFindings: ["SQL Injection · GET /x"],
+    findingsDedupedCount: 1,
+  });
+  assert(settlement.canComplete === true && settlement.settled === true, "finishScanSettlesTask completed");
+  const demoted = resolveTerminalTaskStatus({
+    gateCanComplete: false,
+    finishStatus: "completed",
+  });
+  assert(demoted === "completed", `must not demote completed→incomplete, got ${demoted}`);
+
+  // End-to-end finish tool → lifecycle record → terminal status (session-runner contract)
+  assert(runtime.lifecycle.finishScan?.status === "completed", "lifecycle finish stored completed");
+  const endToEndTerminal = resolveTerminalTaskStatus({
+    // Simulate old buggy gate that re-checked conversion without findings bypass
+    gateCanComplete: false,
+    finishStatus: runtime.lifecycle.finishScan?.status,
+  });
+  assert(endToEndTerminal === "completed", "session terminal must be completed after accepted finish");
+
+  // Emit the same task_complete shape session-runner uses for completed settlement
+  await platform.send({
+    type: "task_complete",
+    conversation_id: task.conversationId,
+    task_id: task.taskId,
+    status: endToEndTerminal,
+    summary: runtime.lifecycle.finishScan?.summary || "done",
+  });
+  const terminalMsgs = messages.filter((m) => m.type === "task_complete");
+  assert(
+    terminalMsgs.some((m) => m.status === "completed"),
+    `task_complete status=completed required, got ${JSON.stringify(terminalMsgs.map((m) => m.status))}`,
+  );
+
   console.log(
     JSON.stringify(
       {
@@ -201,6 +252,8 @@ async function main() {
         pure_todo: true,
         finish_with_open_checklist: true,
         finish_without_findings_blocked: true,
+        session_terminal_completed: true,
+        no_demote_completed: true,
         poc_write: true,
         prompt_v2: true,
         taskDir,
