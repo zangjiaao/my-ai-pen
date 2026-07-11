@@ -41,6 +41,22 @@ export async function emitPlanUpdate(runtime: ToolRuntime, reason: string): Prom
     progress: runtime.plan.progress(),
     kanban: runtime.plan.kanban(),
     plan_tree: runtime.plan.snapshot(),
+    // Harness v2: todo is the user-facing task map when present.
+    todo_phases: runtime.todo?.snapshot?.() ?? [],
+    todo_open_count: runtime.todo?.openCount?.() ?? 0,
+  } as PlatformMessage);
+}
+
+/** Dedicated todo panel event (platform may ignore until UI binds it). */
+export async function emitTodoUpdate(runtime: ToolRuntime, op: string): Promise<void> {
+  if (!runtime.todo) return;
+  await runtime.platform.send({
+    type: "todo_updated",
+    conversation_id: runtime.task.conversationId,
+    task_id: runtime.task.taskId,
+    op,
+    phases: runtime.todo.snapshot(),
+    open_count: runtime.todo.openCount(),
   } as PlatformMessage);
 }
 

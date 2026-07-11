@@ -8,12 +8,14 @@ import { createFindingTool } from "./finding.js";
 import { createHttpTool } from "./http.js";
 import { createPocTool } from "./poc.js";
 import { createScanTool } from "./scan.js";
+import { createTodoTool } from "./todo.js";
 import { createTrafficTool } from "./traffic.js";
 import { createVerifierTool } from "./verifier.js";
 import { createWorkerTool } from "./worker.js";
 
 export const PENTEST_TOOL_NAMES = [
   "read",
+  "todo",
   "http",
   "browser",
   "actor",
@@ -32,6 +34,7 @@ export const PENTEST_TOOL_NAMES = [
 
 export function createPentestTools(runtime: ToolRuntime): ToolDefinition<any>[] {
   return [
+    createTodoTool(runtime),
     createHttpTool(runtime),
     createBrowserTool(runtime),
     createActorTool(runtime),

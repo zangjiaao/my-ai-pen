@@ -32,14 +32,14 @@ export function createFinishScanTool(runtime: ToolRuntime): ToolDefinition<any> 
     name: "finish_scan",
     label: "Finish Scan",
     description:
-      "Finish the authorized task lifecycle. Completion gates depend on engagement (assess vs verify/retest/consult) derived from the workflow you ran or an explicit task.engagement field.",
+      "Finish the authorized task lifecycle (Harness v2). Evidence-oriented: open todo/checklist never blocks completed. Assess with disk-confirmed findings may complete even if coverage navigation still has soft gaps.",
     promptSnippet: "Finish the task lifecycle with a final status and concise report",
     promptGuidelines: [
       "Call finish_scan exactly once when the task is ready to end.",
-      "For assess (pentest-web): status='completed' only after high-priority candidates are verified (not weak-skipped), risk families are attempted, traffic inventory is used, and multi-actor probes run when the surface is multi-user.",
-      "Do not bulk-skip high-priority coverage to force completed; use status='incomplete' when work remains.",
-      "For verify/retest/consult: status='completed' when the hypothesis/retest outcome or consultation answer is done — full-site conversion gates do not apply.",
-      "Use status='incomplete' or status='blocked' when blockers prevent finishing the chosen engagement.",
+      "Open todo items and coverage(plan) checklist do NOT block finish_scan(completed).",
+      "For assess: prefer status='completed' when you have evidence-backed findings (or a clear no-finding after real attempts). Use incomplete when work remains without evidence outcomes.",
+      "For verify/retest/consult: status='completed' when the engagement goal is done — full-site conversion gates do not apply.",
+      "Workers are optional; zero workers does not block completed.",
       "confirmed_findings is optional narrative; finish_scan loads and dedupes confirmed findings from the findings/ directory as the authoritative list.",
       "Include a concise summary, coverage gaps, blockers, and evidence_ids that support the final report.",
     ],
@@ -73,6 +73,10 @@ export function createFinishScanTool(runtime: ToolRuntime): ToolDefinition<any> 
         return textResult(`error: evidence_ids not found: ${missingEvidenceIds.join(", ")}`);
       }
 
+      // Harness v2: open intentional checklist / todo never hard-blocks completed.
+      const openChecklist = runtime.plan.openIntentionalChecklist?.() || [];
+      const todoOpen = runtime.todo?.openCount?.() ?? 0;
+
       const coverageRows = await runtime.coverage.list();
       const actorSummary = runtime.actors?.summary?.() ?? { count: runtime.actors?.count() ?? 0, actors: [] as Array<{ hasAuth?: boolean }> };
       const actorCount = Number(actorSummary.count ?? runtime.actors?.count() ?? 0);
@@ -89,7 +93,10 @@ export function createFinishScanTool(runtime: ToolRuntime): ToolDefinition<any> 
         engagement: engagementInfo.engagement,
         surfaceInventory,
       });
-      if (status === "completed" && !eligibility.allowed) {
+      // Evidence-oriented: disk-confirmed findings allow completed despite soft coverage gaps.
+      // Without findings, keep assess conversion gates so completed is not empty-booked.
+      const hasEvidenceFindings = confirmedFindings.length > 0;
+      if (status === "completed" && !eligibility.allowed && !hasEvidenceFindings) {
         const metrics = conversionMetrics(coverageRows);
         const queue = formatDiscoveryQueuePayload(coverageRows, {
           familyGaps: eligibility.missingRiskFamilies,
@@ -101,20 +108,18 @@ export function createFinishScanTool(runtime: ToolRuntime): ToolDefinition<any> 
         });
         const rejectCount = Number(runtime.lifecycle.finishCompletedRejects || 0) + 1;
         runtime.lifecycle.finishCompletedRejects = rejectCount;
-        // Front-load discovery queue so truncated tool previews still show next live work.
-        // After repeated completed-rejections, push a hard incomplete exit instead of mark spam.
         const thrash = rejectCount >= 2;
         return jsonResult({
           ok: false,
           blocked: true,
           guidance: thrash
-            ? "finish_scan(completed) rejected repeatedly. Call finish_scan(status='incomplete') once with a short summary of remaining gaps — do not mark/skip bulk coverage just to force completed, and do not call completed again."
+            ? "finish_scan(completed) rejected repeatedly with no confirmed findings. Call finish_scan(status='incomplete') once, or keep probing next_work."
             : queue.guidance,
           next_work: thrash ? [] : queue.next_work,
           instruction: thrash
-            ? "STOP retrying completed. Use status='incomplete' (or keep testing live probes from next_work if you still have budget). Bulk skip/block to force completed is not allowed."
-            : "Execute next_work live probes (verifier/http/browser/traffic) before more coverage skip/block marks. Do not bulk-skip to force completed. If work remains after one more probe cycle, finish_scan(status='incomplete').",
-          error: "finish_scan(completed) rejected: coverage conversion, multi-actor, surface, or skip-discipline gaps remain",
+            ? "STOP retrying completed without evidence. Use status='incomplete' or confirm findings with evidence_ids first."
+            : "Execute live probes (http/browser/poc/verifier) and finding(confirm) with evidence, or finish_scan(status='incomplete'). Open todo does not need to be empty.",
+          error: "finish_scan(completed) rejected: no evidence-backed findings and coverage/assess gaps remain",
           reason: eligibility.reason,
           completed_reject_count: rejectCount,
           prefer_incomplete: thrash,
@@ -126,6 +131,8 @@ export function createFinishScanTool(runtime: ToolRuntime): ToolDefinition<any> 
           surface_inventory: surfaceInventory,
           actors: actorSummary,
           conversion: metrics,
+          soft_open_todo: todoOpen,
+          soft_open_checklist: openChecklist.length,
           findings_aggregate: {
             raw_count: aggregated.rawCount,
             deduped_count: aggregated.dedupedCount,
@@ -135,7 +142,7 @@ export function createFinishScanTool(runtime: ToolRuntime): ToolDefinition<any> 
         });
       }
 
-      // P2: structured workPackages from the brief must not be ignored (zero workers).
+      // Workers optional (Harness v2): never hard-block completed on dispatch/open packages.
       const packages = await loadWorkPackagesFromTaskDir(taskDir);
       const workerRunCount = runtime.lifecycle.workerRuns?.length ?? 0;
       const workerGate = assessWorkerDispatchGate({
@@ -144,49 +151,26 @@ export function createFinishScanTool(runtime: ToolRuntime): ToolDefinition<any> 
         workerRunCount,
         status,
       });
-      if (!workerGate.allowed) {
-        return jsonResult({
-          ok: false,
-          blocked: true,
-          error: "finish_scan(completed) rejected: workPackages were not dispatched to workers",
-          reason: workerGate.reason,
-          engagement: engagementInfo,
-          work_packages: packages.map((pkg) => ({ id: pkg.id, role: pkg.role, task: pkg.task.slice(0, 200) })),
-          worker_run_count: workerRunCount,
-          instruction:
-            "Dispatch worker(role, task) for each structured workPackage from the workflow brief (or status=incomplete if packages cannot be run).",
-        });
-      }
-
-      // Discovery: timeout/failed worker packages must be re-dispatched or finished in main session.
       const openPackages = unresolvedWorkerPackages(runtime.lifecycle);
       const openGate = assessOpenWorkerPackageGate({
         engagement: engagementInfo.engagement,
         status,
         openPackages,
       });
-      if (!openGate.allowed) {
-        return jsonResult({
-          ok: false,
-          blocked: true,
-          error: "finish_scan(completed) rejected: timeout/failed worker packages still open",
-          reason: openGate.reason,
-          engagement: engagementInfo,
-          open_worker_packages: openPackages.map((pkg) => ({
-            package_id: pkg.packageId,
-            role: pkg.role,
-            outcome: pkg.outcome,
-            task: pkg.task.slice(0, 200),
-            at: pkg.at,
-          })),
-          instruction:
-            "Re-dispatch narrower worker packages for open timeout/failed roles, or complete those probes in the main session with http/verifier/finding. " +
-            "If they cannot be finished, call finish_scan(status='incomplete') once — do not spam completed.",
-        });
-      }
+      void workerGate;
+      void openGate;
 
       // Rewrite free-text claim counts so the report matches the authoritative list.
       const alignedSummary = alignSummaryFindingCount(summary, aggregated.dedupedCount);
+
+      const softGaps: string[] = [];
+      if (hasEvidenceFindings && !eligibility.allowed) {
+        softGaps.push(`soft_coverage_gap: ${eligibility.reason}`);
+      }
+      if (todoOpen > 0) softGaps.push(`soft_open_todo: ${todoOpen}`);
+      if (openChecklist.length > 0) softGaps.push(`soft_open_checklist: ${openChecklist.length}`);
+      if (!workerGate.allowed) softGaps.push(`soft_worker_dispatch: ${workerGate.reason}`);
+      if (!openGate.allowed) softGaps.push(`soft_open_workers: ${openGate.reason}`);
 
       const state: FinishScanState = {
         status,
@@ -195,7 +179,7 @@ export function createFinishScanTool(runtime: ToolRuntime): ToolDefinition<any> 
         llmConfirmedFindings: llmTitles.length > 0 ? llmTitles : undefined,
         findingsRawCount: aggregated.rawCount,
         findingsDedupedCount: aggregated.dedupedCount,
-        coverageGaps: stringArray(params.coverage_gaps),
+        coverageGaps: uniqueStrings([...stringArray(params.coverage_gaps), ...softGaps]),
         blockers: stringArray(params.blockers),
         evidenceIds,
         calledAt: new Date().toISOString(),

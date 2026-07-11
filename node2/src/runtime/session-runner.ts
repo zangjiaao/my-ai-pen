@@ -13,6 +13,7 @@ import { ActorStore } from "../stores/actors.js";
 import { CoverageStore } from "../stores/coverage.js";
 import { EvidenceStore } from "../stores/evidence.js";
 import { PlanStore } from "../stores/plan.js";
+import { TodoStore } from "../stores/todo.js";
 import { TrafficStore } from "../stores/traffic.js";
 import { createExternalTrafficSource } from "../traffic/external-source.js";
 import type { PlatformMessage, PlatformSink, TaskEnvelope, ToolRuntime } from "../types.js";
@@ -41,12 +42,38 @@ import { buildSystemPrompt } from "./prompt.js";
 const TEXT_STREAM_FLUSH_MS = 250;
 const DEFAULT_COMPLETION_GATE_ROUNDS = 1;
 
+/** Long-lived Pi session bound to one platform conversation. */
+export type LivingPentestSession = {
+  conversationId: string;
+  taskId: string;
+  followUp(userText: string, signal?: AbortSignal): Promise<void>;
+  dispose(): Promise<void>;
+};
+
+/**
+ * Standalone / one-shot entry: run work then dispose the Pi session.
+ * Prefer createLivingPentestSession for conversation-scoped multi-turn chat.
+ */
 export async function runPentestTask(
   config: Node2Config,
   platform: PlatformSink,
   task: TaskEnvelope,
   signal?: AbortSignal,
 ): Promise<void> {
+  const living = await createLivingPentestSession(config, platform, task, signal);
+  await living.dispose();
+}
+
+/**
+ * Create a living conversation participant: runs the initial instruction, then
+ * keeps the Pi session + stores so the user can keep talking (继续 / steers).
+ */
+export async function createLivingPentestSession(
+  config: Node2Config,
+  platform: PlatformSink,
+  task: TaskEnvelope,
+  signal?: AbortSignal,
+): Promise<LivingPentestSession> {
   task = normalizeSidecarTaskTarget(config, task);
   const taskDir = join(config.workspaceDir, task.taskId);
   await mkdir(taskDir, { recursive: true });
@@ -59,6 +86,7 @@ export async function runPentestTask(
     workspaceDir: config.workspaceDir,
     platform: platformOut,
     plan: new PlanStore(),
+    todo: new TodoStore(),
     coverage: new CoverageStore(),
     evidence: new EvidenceStore(join(taskDir, "evidence")),
     traffic: new TrafficStore(),
@@ -169,6 +197,24 @@ export async function runPentestTask(
   let mainMaxTurnsReached = false;
   let mainTimedOut = false;
   let mainBudgetTimer: ReturnType<typeof setTimeout> | undefined;
+  // One subscription for the whole living session; burst handlers swap in/out.
+  let activeTextStream: PlatformTextStream | undefined = textStream;
+  let burstOnToolStart: (() => void) | undefined = () => {
+    mainToolTurns += 1;
+    if (mainToolTurns >= mainMaxTurns && !mainMaxTurnsReached) {
+      mainMaxTurnsReached = true;
+      void diagnostics.noteRuntime("main_max_turns", { turns: mainToolTurns, max: mainMaxTurns });
+      void session.abort?.();
+    }
+  };
+  session.subscribe(async (event) => {
+    if (event?.type === "tool_execution_start") {
+      burstOnToolStart?.();
+    }
+    await diagnostics.handleAgentEvent(event);
+    if (activeTextStream) await activeTextStream.handle(event);
+    await handleSessionEvent(platformOut, runtime, diagnostics, event);
+  });
 
   try {
     const abortHandler = () => {
@@ -177,19 +223,6 @@ export async function runPentestTask(
       void session.abort();
     };
     signal?.addEventListener("abort", abortHandler, { once: true });
-    session.subscribe(async (event) => {
-      if (event?.type === "tool_execution_start") {
-        mainToolTurns += 1;
-        if (mainToolTurns >= mainMaxTurns && !mainMaxTurnsReached) {
-          mainMaxTurnsReached = true;
-          void diagnostics.noteRuntime("main_max_turns", { turns: mainToolTurns, max: mainMaxTurns });
-          void session.abort?.();
-        }
-      }
-      await diagnostics.handleAgentEvent(event);
-      await textStream.handle(event);
-      await handleSessionEvent(platformOut, runtime, diagnostics, event);
-    });
     mainBudgetTimer = setTimeout(() => {
       mainTimedOut = true;
       void diagnostics.noteRuntime("main_max_ms", { max_ms: mainMaxMs });
@@ -305,6 +338,21 @@ export async function runPentestTask(
     const settledIncomplete = isTerminalFinishStatus(finishStatus) && finishStatus !== "completed";
     if (!gate.canComplete || settledIncomplete) {
       runtime.plan.setPhase("report");
+      const incompleteSummary =
+        runtime.lifecycle.finishScan?.summary ||
+        extractLastAssistantText(session.messages).slice(0, 4000) ||
+        gate.summary;
+      const terminalStatus = finishStatus === "blocked" ? "blocked" : "incomplete";
+      // Unified terminal channel with completed path: only task_complete (status=incomplete|blocked).
+      // Do not also send task_incomplete — that produced duplicate "Task incomplete" UI rows.
+      await platformOut.send({
+        type: "task_complete",
+        conversation_id: task.conversationId,
+        task_id: task.taskId,
+        status: terminalStatus,
+        summary: incompleteSummary,
+        audit: gate.audit,
+      });
       await platformOut.send({
         type: "plan_tree_updated",
         conversation_id: task.conversationId,
@@ -321,51 +369,39 @@ export async function runPentestTask(
         task_id: task.taskId,
         checkpoint: await buildNode2Checkpoint(runtime, task, diagnostics),
       });
-      const incompleteSummary =
+      // Fall through — keep Pi session alive for follow-up chat (do not return).
+    } else {
+      runtime.plan.complete();
+      const completedSummary =
         runtime.lifecycle.finishScan?.summary ||
         extractLastAssistantText(session.messages).slice(0, 4000) ||
-        gate.summary;
-      await platformOut.send({
-        type: "task_incomplete",
-        conversation_id: task.conversationId,
-        task_id: task.taskId,
-        status: finishStatus === "blocked" ? "blocked" : "incomplete",
-        audit: gate.audit,
-        summary: incompleteSummary,
-      });
+        "Task completed.";
+      // task_complete must be first: platform stops billing/timer on this message.
+      // Heavy checkpoint/plan_tree payloads are best-effort after status is settled.
       await platformOut.send({
         type: "task_complete",
         conversation_id: task.conversationId,
         task_id: task.taskId,
-        status: finishStatus === "blocked" ? "blocked" : "incomplete",
-        summary: incompleteSummary,
+        status: "completed",
+        summary: completedSummary,
       });
-      return;
+      await platformOut.send({
+        type: "checkpoint_update",
+        conversation_id: task.conversationId,
+        task_id: task.taskId,
+        checkpoint: await buildNode2Checkpoint(runtime, task, diagnostics),
+      });
+      await platformOut.send({
+        type: "plan_tree_updated",
+        conversation_id: task.conversationId,
+        task_id: task.taskId,
+        reason: "runtime.complete",
+        workflow_stage: runtime.plan.kanban().current_stage,
+        progress: runtime.plan.progress(),
+        kanban: runtime.plan.kanban(),
+        plan_tree: runtime.plan.snapshot(),
+      });
     }
-    runtime.plan.complete();
-    await platformOut.send({
-      type: "checkpoint_update",
-      conversation_id: task.conversationId,
-      task_id: task.taskId,
-      checkpoint: await buildNode2Checkpoint(runtime, task, diagnostics),
-    });
-    await platformOut.send({
-      type: "plan_tree_updated",
-      conversation_id: task.conversationId,
-      task_id: task.taskId,
-      reason: "runtime.complete",
-      workflow_stage: runtime.plan.kanban().current_stage,
-      progress: runtime.plan.progress(),
-      kanban: runtime.plan.kanban(),
-      plan_tree: runtime.plan.snapshot(),
-    });
-    await platformOut.send({
-      type: "task_complete",
-      conversation_id: task.conversationId,
-      task_id: task.taskId,
-      status: "completed",
-      summary: runtime.lifecycle.finishScan?.summary || extractLastAssistantText(session.messages).slice(0, 4000) || "Task completed.",
-    });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await diagnostics.noteRuntime("task_error", { message });
@@ -375,18 +411,267 @@ export async function runPentestTask(
       JSON.stringify({ ts: new Date().toISOString(), message, stack: error instanceof Error ? error.stack : undefined }, null, 2),
       "utf8",
     );
-    throw error;
+    // Notify platform but keep the Pi session alive for multi-turn follow-up.
+    await platformOut.send({
+      type: "task_error",
+      conversation_id: task.conversationId,
+      task_id: task.taskId,
+      message,
+    } as PlatformMessage);
+    await diagnostics.noteRuntime("task_error_kept_alive", { message });
   } finally {
     if (mainBudgetTimer) clearTimeout(mainBudgetTimer);
     await textStream.dispose();
-    try {
-      session.dispose();
-    } catch {
-      // Session may already be disposed after abort.
+    activeTextStream = undefined;
+    burstOnToolStart = undefined;
+    // Do NOT dispose session / caido / stores — living participant stays in the group chat.
+    await diagnostics.noteRuntime("task_burst_end", { phase: diagnostics.snapshot().phase, keep_alive: true });
+  }
+
+  let disposed = false;
+  /** Last settled terminal status for this living mind (for pure-Q&A follow-ups). */
+  let lastSettledStatus: "completed" | "incomplete" | "blocked" | "failed" | undefined =
+    runtime.lifecycle.finishScan?.status === "completed"
+      ? "completed"
+      : runtime.lifecycle.finishScan?.status === "blocked"
+        ? "blocked"
+        : runtime.lifecycle.finishScan?.status === "incomplete"
+          ? "incomplete"
+          : diagnostics.snapshot().phase === "error"
+            ? "failed"
+            : undefined;
+  if (!lastSettledStatus && runtime.lifecycle.finishScan) {
+    lastSettledStatus = "incomplete";
+  }
+  const living: LivingPentestSession = {
+    conversationId: task.conversationId,
+    taskId: task.taskId,
+    async followUp(userText: string, followSignal?: AbortSignal): Promise<void> {
+      if (disposed) throw new Error("Living session is disposed");
+      const text = String(userText || "").trim();
+      if (!text) return;
+      const result = await runFollowUpBurst({
+        config,
+        platform,
+        platformOut,
+        task,
+        taskDir,
+        runtime,
+        session,
+        diagnostics,
+        signal: followSignal,
+        userText: text,
+        priorSettledStatus: lastSettledStatus,
+        attachBurst: (stream, onToolStart) => {
+          activeTextStream = stream;
+          burstOnToolStart = onToolStart;
+        },
+        detachBurst: () => {
+          activeTextStream = undefined;
+          burstOnToolStart = undefined;
+        },
+      });
+      if (result.settledStatus) lastSettledStatus = result.settledStatus;
+    },
+    async dispose(): Promise<void> {
+      if (disposed) return;
+      disposed = true;
+      activeTextStream = undefined;
+      burstOnToolStart = undefined;
+      try {
+        session.dispose();
+      } catch {
+        // already disposed
+      }
+      await stopBrowserSandbox(task.taskId).catch(() => undefined);
+      await caidoBridge?.stop();
+      await diagnostics.noteRuntime("living_session_disposed", {});
+    },
+  };
+  return living;
+}
+
+/** Re-export name used by conversation-host for clarity. */
+export const continueLivingPentestSession = async (
+  living: LivingPentestSession,
+  userText: string,
+  signal?: AbortSignal,
+): Promise<void> => living.followUp(userText, signal);
+
+async function runFollowUpBurst(input: {
+  config: Node2Config;
+  platform: PlatformSink;
+  platformOut: PlatformSink;
+  task: TaskEnvelope;
+  taskDir: string;
+  runtime: ToolRuntime;
+  session: { prompt: (text: string, opts?: { source?: string }) => Promise<void>; abort?: () => void; messages: any[] };
+  diagnostics: TaskDiagnostics;
+  signal?: AbortSignal;
+  userText: string;
+  priorSettledStatus?: "completed" | "incomplete" | "blocked" | "failed";
+  attachBurst: (stream: PlatformTextStream, onToolStart: () => void) => void;
+  detachBurst: () => void;
+}): Promise<{ settledStatus?: "completed" | "incomplete" | "blocked" | "failed" }> {
+  const { platformOut, task, runtime, session, diagnostics, signal, userText, priorSettledStatus, attachBurst, detachBurst } = input;
+  // Fresh budget window for each user turn after idle — does not wipe memory.
+  const mainMaxMs = clampInt(
+    Number(task.workerLimits?.mainMaxMs ?? process.env.NODE2_MAIN_MAX_MS ?? 1_800_000),
+    60_000,
+    7_200_000,
+  );
+  const mainMaxTurns = clampInt(
+    Number(task.workerLimits?.mainMaxTurns ?? process.env.NODE2_MAIN_MAX_TURNS ?? 80),
+    5,
+    200,
+  );
+  let mainToolTurns = 0;
+  let mainMaxTurnsReached = false;
+  let mainTimedOut = false;
+  let mainBudgetTimer: ReturnType<typeof setTimeout> | undefined;
+  const textStream = new PlatformTextStream(platformOut, task);
+  // Clear previous finish so a new finish_scan can settle this burst.
+  runtime.lifecycle.finishScan = undefined;
+  runtime.lifecycle.finishCompletedRejects = 0;
+
+  const abortHandler = () => {
+    void diagnostics.noteRuntime("signal_abort", { reason: "user_interrupt_or_abort_follow_up" });
+    void session.abort?.();
+  };
+  signal?.addEventListener("abort", abortHandler, { once: true });
+
+  attachBurst(textStream, () => {
+    mainToolTurns += 1;
+    if (mainToolTurns >= mainMaxTurns && !mainMaxTurnsReached) {
+      mainMaxTurnsReached = true;
+      void diagnostics.noteRuntime("main_max_turns", { turns: mainToolTurns, max: mainMaxTurns, mode: "follow_up" });
+      void session.abort?.();
     }
-    await stopBrowserSandbox(task.taskId).catch(() => undefined);
-    await diagnostics.noteRuntime("task_finally", { phase: diagnostics.snapshot().phase });
-    await caidoBridge?.stop();
+  });
+
+  mainBudgetTimer = setTimeout(() => {
+    mainTimedOut = true;
+    void diagnostics.noteRuntime("main_max_ms", { max_ms: mainMaxMs, mode: "follow_up" });
+    void session.abort?.();
+  }, mainMaxMs);
+
+  try {
+    await platformOut.send({
+      type: "status_update",
+      conversation_id: task.conversationId,
+      task_id: task.taskId,
+      workflow_stage: runtime.plan.kanban().current_stage,
+      active_tool: "pi",
+      agent_phase: "follow_up",
+      status: "running",
+      message: "Continuing in the same agent session",
+      progress: runtime.plan.progress(),
+      kanban: runtime.plan.kanban(),
+    });
+    await diagnostics.noteRuntime("prompt_start", {
+      stage: "follow_up",
+      main_max_ms: mainMaxMs,
+      main_max_turns: mainMaxTurns,
+    });
+    const prompt = [
+      "You are continuing the same authorized engagement in an existing multi-turn session.",
+      "Your prior tool results, findings, plan, and conversation memory are still available — do not pretend this is a fresh agent.",
+      "If the user asks to continue unfinished work, resume from remaining gaps and call finish_scan when the engagement outcome is settled.",
+      "If the user is only asking a question, answer with tools only when needed; you may finish without finish_scan for pure Q&A.",
+      "",
+      "User message:",
+      userText,
+    ].join("\n");
+    try {
+      await session.prompt(prompt, { source: "interactive" });
+    } catch (error) {
+      if (!mainTimedOut && !mainMaxTurnsReached) throw error;
+    }
+    await textStream.flush();
+    await diagnostics.noteRuntime("prompt_end", { stage: "follow_up" });
+
+    if (mainTimedOut) {
+      await platformOut.send({
+        type: "task_error",
+        conversation_id: task.conversationId,
+        task_id: task.taskId,
+        message: `Main agent timed out after ${Math.round(mainMaxMs / 1000)}s on follow-up (node 运行参数 · 主 Agent 超时). Session kept alive — you can send another message.`,
+      } as PlatformMessage);
+      return { settledStatus: "failed" };
+    }
+    if (mainMaxTurnsReached) {
+      await platformOut.send({
+        type: "task_error",
+        conversation_id: task.conversationId,
+        task_id: task.taskId,
+        message: `Main agent stopped after max ${mainMaxTurns} tool turns on follow-up (node 运行参数 · 主 Agent 轮次). Session kept alive — send 继续 or a narrower instruction.`,
+      } as PlatformMessage);
+      return { settledStatus: "failed" };
+    }
+
+    const finishStatus = runtime.lifecycle.finishScan?.status;
+    if (finishStatus === "completed" || finishStatus === "incomplete" || finishStatus === "blocked") {
+      const summary =
+        runtime.lifecycle.finishScan?.summary ||
+        extractLastAssistantText(session.messages).slice(0, 4000) ||
+        "Follow-up finished.";
+      const settled =
+        finishStatus === "completed" ? "completed" : finishStatus === "blocked" ? "blocked" : "incomplete";
+      await platformOut.send({
+        type: "task_complete",
+        conversation_id: task.conversationId,
+        task_id: task.taskId,
+        status: settled,
+        summary,
+      } as PlatformMessage);
+      await platformOut.send({
+        type: "checkpoint_update",
+        conversation_id: task.conversationId,
+        task_id: task.taskId,
+        checkpoint: await buildNode2Checkpoint(runtime, task, diagnostics),
+      } as PlatformMessage);
+      return { settledStatus: settled };
+    }
+
+    // Pure chat / Q&A turn: settle so billing/timer stops, keep Pi memory.
+    // Map prior "failed" → incomplete on settle so a normal answer does not re-flash task_error UI.
+    const restore: "completed" | "incomplete" | "blocked" =
+      priorSettledStatus === "blocked"
+        ? "blocked"
+        : priorSettledStatus === "incomplete" || priorSettledStatus === "failed"
+          ? "incomplete"
+          : "completed";
+    const qaSummary =
+      extractLastAssistantText(session.messages).slice(0, 4000) ||
+      "Answered follow-up in the same agent session.";
+    await platformOut.send({
+      type: "task_complete",
+      conversation_id: task.conversationId,
+      task_id: task.taskId,
+      status: restore,
+      summary: qaSummary,
+    } as PlatformMessage);
+    await platformOut.send({
+      type: "checkpoint_update",
+      conversation_id: task.conversationId,
+      task_id: task.taskId,
+      checkpoint: await buildNode2Checkpoint(runtime, task, diagnostics),
+    } as PlatformMessage);
+    return { settledStatus: restore };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await platformOut.send({
+      type: "task_error",
+      conversation_id: task.conversationId,
+      task_id: task.taskId,
+      message: `${message} (session kept alive)`,
+    } as PlatformMessage);
+    return { settledStatus: "failed" };
+  } finally {
+    if (mainBudgetTimer) clearTimeout(mainBudgetTimer);
+    signal?.removeEventListener("abort", abortHandler);
+    await textStream.dispose();
+    detachBurst();
   }
 }
 
@@ -556,16 +841,19 @@ function buildWorkflowFirstInstruction(task: TaskEnvelope): string {
 
   lines.push(
     "After the workflow returns, follow that engagement only:",
-    "- pentest-web (assess): workflow_run brief → dispatch worker packages (STRICT: one role + 1–2 endpoints each) → on worker timeout, re-dispatch a narrower package or main-session probes (do not resend the same wide package) → after repeated timeouts the package fails with adjustment advice → coverage(next_work) to fill family gaps → main agent finish_scan. Never bulk-skip only to force completed. Do not finish_scan(completed) while timeout/failed worker packages remain open.",
-    "- pentest-verify: minimal path to validate the stated hypothesis; finish when confirmed, disproven, or blocked — do not full-site sweep.",
-    "- pentest-retest: replay the prior finding path and report still-vulnerable vs fixed.",
-    "- pentest-consult: answer the question; live tools only if authorized and necessary.",
+    "- pentest-web (assess): workflow_run brief → seed intentional Tasks with coverage(plan) from workPackages/steps → dispatch worker packages (STRICT: one role + 1–2 endpoints each; multi-surface mega-packages are rejected) → update plan status running→done per package → on worker timeout, re-dispatch a narrower package or main-session probes → coverage(next_work) to fill family gaps → main agent finish_scan. Never bulk-skip only to force completed. Do not finish_scan(completed) while timeout/failed worker packages or open checklist items remain.",
+    "- Auth walls: before blocking captcha/admin/IDOR paths for 'no credentials', attempt an explicit credential path (register, known demo accounts from the app, session from traffic, authorized secret recovery). Put credential work in its own step/package.",
+    "- Stored XSS / OOB: without a callback URL or admin-bot environment, document the environment gap (blocked/incomplete) instead of claiming full impact proof.",
+    "- pentest-verify: seed plan steps from verificationSteps; mark each running/done as you probe; finish when confirmed, disproven, or blocked — do not full-site sweep.",
+    "- pentest-retest: seed plan steps from retestSteps; mark each running/done while replaying the prior path; report still-vulnerable vs fixed.",
+    "- pentest-consult: seed a short answer plan (outline → draft sections → final summary); mark steps done as the answer is produced; live tools only if authorized and necessary.",
+    "Plan ownership: YOU maintain the user-facing Tasks checklist with coverage(plan) during execution. Do not invent work only at the end or leave every item pending until finish_scan.",
     "Use browser/http/scan/actor/traffic/verifier/finding as appropriate to the chosen engagement.",
     "Prefer scan for established tools (httpx, katana, nuclei, nmap, ffuf, sqlmap, …) via the scanner sandbox when discovery is in scope.",
     "When verifier returns confirmed=true with evidence_id, call finding(action='confirm') immediately with that evidence_id and finding_kind='vuln' (or flag/auth if the artifact is a token/secret).",
     "Vuln, Flag, and Key are independent finding objects — never combine a vulnerability write-up and a captured flag/secret into one confirm; use separate finding(confirm) calls.",
     "Call finish_scan only when ready to end the lifecycle:",
-    "- status=completed only if high-priority coverage is resolved (tried/failed/passed or substantive skip/block notes) and assess multi-actor/surface gates are met.",
+    "- status=completed only if high-priority coverage is resolved (tried/failed/passed or substantive skip/block notes), assess multi-actor/surface gates are met when applicable, and every intentional checklist item is done/blocked/skipped.",
     "- If material work remains, call finish_scan(status='incomplete') ONCE — do not spam finish_scan(completed) or bulk-skip to force completed.",
     "- After a worker timeout: prefer one narrower re-dispatch; if retries are exhausted the package is failed — apply the advice in plan notes (split endpoints, raise node worker timeout in 节点管理, or mark incomplete with blockers).",
     "Completion gates follow the engagement of the workflow you ran (or explicit task.engagement).",

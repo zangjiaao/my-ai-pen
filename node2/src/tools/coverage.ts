@@ -22,16 +22,13 @@ export function createCoverageTool(runtime: ToolRuntime): ToolDefinition<any> {
     name: "coverage",
     label: "Coverage",
     description:
-      "Track tested endpoint/parameter/vulnerability-class tuples and maintain the compact user-facing workflow plan. Actions: mark, list, untested, priority_candidates, next_work, family_gaps, surface_quality, conversion, summary, plan, plan_list. Prefer next_work mid-assessment to choose live probes (not skip bookkeeping).",
-    promptSnippet: "Track coverage and fetch the mid-run discovery next_work queue",
+      "Track tested endpoint/parameter/vuln-class tuples (navigation/memory). Prefer the todo tool for user-facing Tasks. Actions: mark, list, untested, priority_candidates, next_work, family_gaps, surface_quality, conversion, summary, plan, plan_list.",
+    promptSnippet: "Track coverage and fetch mid-run next_work (todo owns Tasks UI)",
     promptGuidelines: [
-      "After recon and after each batch of findings, call coverage(action='next_work') and execute the top live probes (verifier/http/browser/traffic) before more skip/block marks.",
-      "Use coverage(action='priority_candidates') or family_gaps/surface_quality/conversion for detailed gaps.",
-      "Use coverage(action='untested') before broad probing and coverage(action='mark') after each meaningful test.",
-      "When skipping, always include substantive notes (why untestable). Weak skips do not satisfy finish_scan(completed).",
-      "Use coverage(action='plan') to add or update user-facing workflow plan items. Use stable node_id values.",
-      "Use parent_id exactly to group plan items: workflow-recon, workflow-testing, workflow-verification, or workflow-summary.",
-      "Keep plan nodes current: pending for queued work, running for active work, done for completed work, blocked for missing access/tooling, skipped for deliberately ignored low-value work with notes.",
+      "Prefer todo for user-facing progress (Harness v2). coverage is navigation/memory, not a finish gate ceremony.",
+      "After recon and early findings, coverage(action='next_work') can suggest live probes — then act with http/browser/poc.",
+      "Use coverage(action='mark') after meaningful tests. Skips need substantive notes.",
+      "coverage(plan) is legacy; open plan items do NOT block finish_scan(completed).",
     ],
     parameters: Type.Object({
       action: Type.String(),
@@ -246,10 +243,36 @@ export function createCoverageTool(runtime: ToolRuntime): ToolDefinition<any> {
           source: "agent",
         });
         await emitPlanUpdate(runtime, "coverage.plan");
-        return jsonResult(node);
+        const openChecklist = runtime.plan.openIntentionalChecklist?.() || [];
+        return jsonResult({
+          ok: true,
+          node,
+          open_checklist: openChecklist.map((item) => ({
+            node_id: item.node_id,
+            title: item.title,
+            status: item.status,
+            kind: item.kind,
+          })),
+          open_count: openChecklist.length,
+          guidance:
+            openChecklist.length > 0
+              ? "Legacy plan rows still open — prefer the todo tool for Tasks. Open plan items do not block finish_scan(completed)."
+              : "No open legacy plan rows. Prefer todo for progress; finish when evidence and engagement allow.",
+        });
       }
       if (params.action === "plan_list") {
-        return jsonResult(runtime.plan.snapshot());
+        const rows = runtime.plan.snapshot();
+        const openChecklist = runtime.plan.openIntentionalChecklist?.() || [];
+        return jsonResult({
+          plan: rows,
+          open_checklist: openChecklist.map((item) => ({
+            node_id: item.node_id,
+            title: item.title,
+            status: item.status,
+            kind: item.kind,
+          })),
+          open_count: openChecklist.length,
+        });
       }
       return textResult(
         "error: action must be mark, list, untested, priority_candidates, next_work, family_gaps, surface_quality, conversion, summary, plan, or plan_list",

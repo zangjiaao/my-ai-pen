@@ -18,6 +18,7 @@ import {
 import { TaskDiagnostics } from "./runtime/agent-observability.js";
 import {
   assessWorkerDispatchGate,
+  assessWorkerTaskNarrowness,
   parseWorkPackagesFromControl,
   planWorkerAutoDispatch,
   loadWorkPackagesFromTaskDir,
@@ -239,6 +240,22 @@ assert(
   "no packages means no gate",
 );
 
+// Narrow package heuristic (no target-specific lists)
+assert(
+  assessWorkerTaskNarrowness("Dual-actor IDOR on /api/BasketItems only").ok,
+  "single-endpoint package should pass",
+);
+assert(
+  assessWorkerTaskNarrowness(
+    "【L8 越权 · 4个挑战 + L5-2 存储型XSS】/level8/login.php /level8/profile.php /level8/admin_delete.php /level5/stored.php",
+  ).ok === false,
+  "multi-surface mega-package should be rejected",
+);
+assert(
+  assessWorkerTaskNarrowness("Verify captcha on /login_captcha.php and /captcha_response.php only").ok,
+  "two endpoints should still pass",
+);
+
 // Open worker package gate (timeout backlog)
 const life: { openWorkerPackages?: any[] } = {};
 recordOpenWorkerPackage(life as any, {
@@ -423,18 +440,24 @@ const runtime: ToolRuntime = {
 const finish = createFinishScanTool(runtime);
 const execFinish = (id: string, params: any) => finish.execute(id, params, undefined, undefined, {} as any);
 
-// Zero workers + packages → blocked
-const blocked = parseJsonResult(
+// Harness v2: zero workers + packages + disk findings → completed (workers optional).
+// Soft note may mention worker dispatch; must not hard-block.
+const softWorkers = parseJsonResult(
   await execFinish("f1", {
     status: "completed",
     summary: "done with findings",
     confirmed_findings: ["Only LLM title that should not win"],
+    evidence_ids: [ev1.id, ev2.id],
   }),
 );
-assert(blocked.ok === false && blocked.blocked === true, `expected package gate block: ${JSON.stringify(blocked).slice(0, 400)}`);
-assert(/workPackage|worker/i.test(String(blocked.reason || blocked.error || "")), `gate reason: ${blocked.reason}`);
+assert(softWorkers.ok === true, `workers optional: expected completed: ${JSON.stringify(softWorkers).slice(0, 400)}`);
+assert(
+  Array.isArray(softWorkers.finish_scan?.coverageGaps) &&
+    softWorkers.finish_scan.coverageGaps.some((g: string) => /soft_worker/i.test(String(g))),
+  `expected soft_worker gap note: ${JSON.stringify(softWorkers.finish_scan?.coverageGaps)}`,
+);
 
-// Record a synthetic worker run then finish
+// Second finish after recording a worker run still succeeds (idempotent path for panel fields).
 runtime.lifecycle.workerRuns = [
   {
     workerId: "worker-injection-test",
@@ -446,6 +469,7 @@ runtime.lifecycle.workerRuns = [
     toolCallCount: 2,
   },
 ];
+runtime.lifecycle.finishScan = undefined;
 
 const done = parseJsonResult(
   await execFinish("f2", {

@@ -53,6 +53,8 @@ export type ToolRuntime = {
   workspaceDir: string;
   platform: PlatformSink;
   plan: PlanStoreLike;
+  /** OMP-style session todo (user Tasks map). Optional for legacy smokes. */
+  todo?: TodoStoreLike;
   coverage: CoverageStoreLike;
   evidence: EvidenceStoreLike;
   traffic: TrafficStoreLike;
@@ -260,12 +262,42 @@ export type PlanStoreLike = {
   upsert(input: Partial<PlanNode> & { node_id?: string; id?: string; title: string }): PlanNode;
   findingConfirmed(input: { title: string; severity?: string; location?: string; evidenceIds?: string[] }): void;
   audit(): PlanAudit;
+  /** User-facing intentional TODOs still open (agent/plan checklist), not tool telemetry. */
+  openIntentionalChecklist(): PlanNode[];
   gapPrompt(): string;
   snapshot(): PlanNode[];
   checkpoint(extra?: Record<string, unknown>): Record<string, unknown>;
   progress(): { current: number; total: number; percent: number };
   kanban(): KanbanSummary;
   currentPhase(): string;
+};
+
+/** Session todo map (Harness v2 / OMP-aligned). */
+export type TodoStoreLike = {
+  snapshot(): Array<{ name: string; tasks: Array<{ content: string; status: string }> }>;
+  openCount(): number;
+  apply(params: {
+    op: string;
+    list?: Array<{ phase: string; items: string[] }>;
+    task?: string;
+    phase?: string;
+    items?: string[];
+  }): {
+    phases: Array<{ name: string; tasks: Array<{ content: string; status: string }> }>;
+    errors: string[];
+    readOnly: boolean;
+    completedTasks: Array<{ phase: string; content: string }>;
+  };
+  toPlanNodes(): Array<{
+    node_id: string;
+    title: string;
+    status: "pending" | "running" | "done" | "skipped";
+    kind: string;
+    level: "phase" | "work_item";
+    parent_id?: string | null;
+    source: string;
+    priority: number;
+  }>;
 };
 
 export type CoverageStatus = "observed" | "tried" | "passed" | "failed" | "blocked" | "skipped";
