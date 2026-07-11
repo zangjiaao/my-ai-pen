@@ -13,9 +13,17 @@ import { EvidenceStore } from "../stores/evidence.js";
 import { TodoStore } from "../stores/todo.js";
 import type { PlatformSink, TaskEnvelope, ToolRuntime } from "../types.js";
 import { NODE4_TOOL_NAMES } from "../tools/index.js";
+import { loadConfirmedFindings } from "../tools/finding.js";
 import { createNode4Extension } from "./extension.js";
-import { finishScanSettlesTask, resolveTerminalTaskStatus } from "./finish-settlement.js";
+import { resolveTerminalTaskStatus } from "./finish-settlement.js";
+import {
+  emptyStopContinuePrompt,
+  nextEmptyStopStreak,
+  resolveHarnessTerminalStatus,
+  shouldContinueAfterNaturalStop,
+} from "./loop-policy.js";
 import { buildSystemPrompt } from "./prompt.js";
+import { writePostRunInspectArtifacts } from "./session-inspect.js";
 
 export async function runNode4Task(
   config: Node4Config,
@@ -46,7 +54,7 @@ export async function runNode4Task(
     todo: new TodoStore(),
     evidence: new EvidenceStore(join(taskDir, "evidence")),
     findingsDir: join(taskDir, "findings"),
-    lifecycle: {},
+    lifecycle: { toolsInLastSegment: 0 },
   };
 
   await loggingPlatform.send({
@@ -70,11 +78,12 @@ export async function runNode4Task(
     retry: { enabled: true, maxRetries: 2 },
   });
 
+  const segmentCounter = { tools: 0 };
   const resourceLoader = new DefaultResourceLoader({
     cwd: taskDir,
     agentDir: config.piAgentDir,
     settingsManager,
-    extensionFactories: [createNode4Extension(runtime)],
+    extensionFactories: [createNode4Extension(runtime, segmentCounter)],
     noExtensions: true,
     noSkills: true,
     noPromptTemplates: true,
@@ -98,15 +107,11 @@ export async function runNode4Task(
     settingsManager,
   });
 
-  let toolTurns = 0;
-  let maxTurnsReached = false;
-  const onTool = () => {
-    toolTurns += 1;
-    if (toolTurns >= config.mainMaxTurns) maxTurnsReached = true;
-  };
-  // Count via event file growth is awkward; wrap platform already logs tools.
-  // Use session subscribe if available — fall back to turn limit via wall clock.
-  const started = Date.now();
+  const maxContinues = Math.max(1, Number(process.env.NODE4_MAX_CONTINUES || 8));
+  const maxEmptyStopStreak = Math.max(1, Number(process.env.NODE4_MAX_EMPTY_STOPS || 3));
+  let continueCount = 0;
+  let emptyStopStreak = 0;
+  let stopReason = "natural";
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
@@ -117,66 +122,83 @@ export async function runNode4Task(
       type: "status_update",
       conversation_id: task.conversationId,
       task_id: task.taskId,
-      message: "Node4 agent starting",
+      message: "Node4 agent starting (OMP-class continue loop)",
     });
 
     const userPrompt = [
-      "Run the authorized security task using the Node4 simple loop (todo → http/script → finding → finish_scan).",
+      "Run the authorized penetration test with high tool density (shell/write/edit/http).",
+      "Book proven issues only via finding+evidence_ids. status/finish_scan does not end the task.",
       `Target: ${JSON.stringify(task.target)}`,
       `Scope: ${JSON.stringify(task.scope)}`,
       task.instruction,
     ].join("\n");
 
-    // Soft turn budget: prompt once; agent stops via finish or max wall clock.
+    // First segment
+    segmentCounter.tools = 0;
+    runtime.lifecycle.toolsInLastSegment = 0;
     if (!signal?.aborted && !timedOut) {
       await session.prompt(userPrompt, { source: "interactive" });
     }
 
-    // If agent never finished but we still have time and no finish, one nudge.
-    if (!runtime.lifecycle.finishScan && !timedOut && !signal?.aborted) {
-      await session.prompt(
-        "If the engagement outcome is settled, call finish_scan now (completed with findings or incomplete with gaps). Open todo does not block completed.",
-        { source: "interactive" },
-      );
+    // Continue after natural stops (empty or premature) until caps/budget.
+    while (!signal?.aborted && !timedOut) {
+      const toolsInLast = segmentCounter.tools;
+      emptyStopStreak = nextEmptyStopStreak(toolsInLast, emptyStopStreak);
+      const decision = shouldContinueAfterNaturalStop({
+        timedOut,
+        aborted: Boolean(signal?.aborted),
+        toolsInLastSegment: toolsInLast,
+        emptyStopStreak,
+        continueCount,
+        maxContinues,
+        maxEmptyStopStreak,
+        agentBlocked: Boolean(runtime.lifecycle.agentBlocked),
+      });
+      stopReason = decision.reason;
+      if (!decision.continue) break;
+
+      continueCount = decision.nextContinueCount;
+      segmentCounter.tools = 0;
+      runtime.lifecycle.toolsInLastSegment = 0;
+      await loggingPlatform.send({
+        type: "status_update",
+        conversation_id: task.conversationId,
+        task_id: task.taskId,
+        message: `continue ${continueCount}/${maxContinues} (${decision.reason})`,
+      });
+      await session.prompt(emptyStopContinuePrompt(continueCount, maxContinues), { source: "interactive" });
     }
+    if (timedOut) stopReason = "wall_budget";
+    if (signal?.aborted) stopReason = "aborted";
   } finally {
     clearTimeout(timer);
-    try {
-      session.dispose?.();
-    } catch {
-      // ignore
-    }
   }
 
-  void onTool;
-  void started;
-  void maxTurnsReached;
+  // Snapshot messages before dispose for inspectability.
+  const messages = Array.isArray((session as any).messages) ? [...(session as any).messages] : [];
+  try {
+    session.dispose?.();
+  } catch {
+    // ignore
+  }
 
-  const finish = runtime.lifecycle.finishScan;
-  const settlement = finishScanSettlesTask(finish);
-  const terminalStatus = resolveTerminalTaskStatus({
-    gateCanComplete: settlement.canComplete,
-    finishStatus: finish?.status,
+  const booked = await loadConfirmedFindings(runtime.findingsDir);
+  const harnessStatus = resolveHarnessTerminalStatus({
+    agentBlocked: Boolean(runtime.lifecycle.agentBlocked),
+    bookedFindingCount: booked.count,
+    timedOut,
+    aborted: Boolean(signal?.aborted),
+    stopReason,
   });
-
-  // If no finish_scan, settle incomplete (not demote completed — there is none).
-  const finalStatus =
-    finish?.status === "completed"
-      ? "completed"
-      : finish?.status === "blocked"
-        ? "blocked"
-        : finish?.status === "incomplete"
-          ? "incomplete"
-          : timedOut || signal?.aborted
-            ? "incomplete"
-            : terminalStatus;
+  // Never honor agent finish as completed driver.
+  const emitStatus = resolveTerminalTaskStatus({ harnessStatus });
 
   const summary =
-    finish?.summary ||
-    (timedOut ? "Stopped on wall-clock budget without finish_scan." : "Task ended without finish_scan.");
-
-  // Authoritative: never demote accepted completed.
-  const emitStatus = finish?.status === "completed" ? "completed" : finalStatus;
+    runtime.lifecycle.lastStatusNote?.summary ||
+    runtime.lifecycle.finishScan?.summary ||
+    (booked.count > 0
+      ? `Harness settled ${emitStatus} with ${booked.count} booked finding(s). stop=${stopReason}`
+      : `Harness settled ${emitStatus}. stop=${stopReason}`);
 
   await loggingPlatform.send({
     type: "task_complete",
@@ -184,6 +206,9 @@ export async function runNode4Task(
     task_id: task.taskId,
     status: emitStatus,
     summary,
+    stop_reason: stopReason,
+    continue_count: continueCount,
+    booked_findings: booked.count,
   });
 
   await writeFile(
@@ -193,16 +218,30 @@ export async function runNode4Task(
         taskId: task.taskId,
         phase: "finished",
         terminalStatus: emitStatus,
-        finishScan: finish || null,
-        toolTurns,
+        stopReason,
+        continueCount,
+        bookedFindings: booked.count,
+        lastStatusNote: runtime.lifecycle.lastStatusNote || null,
+        // Explicit: agent finish does not settle
+        agentFinishNonTerminal: true,
         timedOut,
-        settlement,
       },
       null,
       2,
     ),
     "utf8",
   );
+
+  await writePostRunInspectArtifacts({
+    taskDir,
+    taskId: task.taskId,
+    terminalStatus: emitStatus,
+    summary,
+    messages,
+    continueCount,
+    stopReason,
+    bookedFindingCount: booked.count,
+  });
 
   return { terminalStatus: emitStatus, taskDir };
 }

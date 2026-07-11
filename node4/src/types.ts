@@ -15,14 +15,17 @@ export type PlatformSink = {
   send(message: PlatformMessage): Promise<void>;
 };
 
+/** @deprecated Non-terminal agent notes only — does not settle the run. */
 export type FinishScanState = {
-  status: "completed" | "incomplete" | "blocked";
+  status?: string;
+  kind?: string;
   summary: string;
   confirmedFindings?: string[];
   findingsDedupedCount?: number;
   evidenceIds?: string[];
   calledAt: string;
-  toolCallId: string;
+  toolCallId?: string;
+  non_terminal?: boolean;
 };
 
 export type ToolRuntime = {
@@ -33,7 +36,14 @@ export type ToolRuntime = {
   todo: import("./stores/todo.js").TodoStore;
   evidence: EvidenceStoreLike;
   findingsDir: string;
-  lifecycle: { finishScan?: FinishScanState };
+  lifecycle: {
+    /** Non-terminal agent status note. */
+    lastStatusNote?: FinishScanState & { kind?: string; non_terminal?: boolean };
+    /** Legacy alias for lastStatusNote. */
+    finishScan?: FinishScanState;
+    agentBlocked?: boolean;
+    toolsInLastSegment?: number;
+  };
 };
 
 export type EvidenceStoreLike = {

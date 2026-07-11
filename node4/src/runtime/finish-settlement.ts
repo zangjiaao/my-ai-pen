@@ -1,84 +1,70 @@
 /**
- * Harness v2: once finish_scan accepts a terminal status, session completion
- * must not re-litigate conversion gates and force incomplete.
- * Pure helpers for finish tool + session-runner (smokes drive these).
+ * Terminal settlement helpers. Agent status/finish tools are non-terminal.
+ * Only the harness runner emits task_complete after loop exit.
  */
 
-export type FinishSettlementStatus = "completed" | "incomplete" | "blocked";
-
-export type FinishSettlementRecord = {
-  status: FinishSettlementStatus | string;
+export type AgentStatusNote = {
+  /** Non-terminal progress label from agent. */
+  kind: "progress" | "blocked" | "summary";
+  summary: string;
+  calledAt: string;
+  toolCallId?: string;
   confirmedFindings?: string[];
   findingsDedupedCount?: number;
-  summary?: string;
+  evidenceIds?: string[];
 };
 
-/** Terminal finish_scan outcomes that settle the task lifecycle. */
-export function isTerminalFinishSettlement(status: string | undefined): boolean {
-  return status === "completed" || status === "incomplete" || status === "blocked";
-}
+/** @deprecated Use AgentStatusNote — kept for older call sites. */
+export type FinishSettlementRecord = {
+  status?: string;
+  summary?: string;
+  confirmedFindings?: string[];
+  findingsDedupedCount?: number;
+};
 
 /**
- * Whether session-runner may treat the task as settled after finish_scan.
- * completed/incomplete/blocked from the tool are final — do not re-apply
- * coverage conversion gates that the tool already handled (or waived with findings).
+ * Agent "finish_scan" / status must NOT settle the task loop.
+ * Always non-terminal from the agent tool's perspective.
  */
-export function finishScanSettlesTask(finishScan: FinishSettlementRecord | undefined | null): {
-  settled: boolean;
-  canComplete: boolean;
-  summary: string;
-} {
-  if (!finishScan) {
-    return { settled: false, canComplete: false, summary: "finish_scan has not been called" };
-  }
-  const status = String(finishScan.status || "").toLowerCase();
-  if (status === "incomplete" || status === "blocked") {
-    return {
-      settled: true,
-      canComplete: true,
-      summary: `finish_scan settled as ${status} (terminal incomplete lifecycle)`,
-    };
-  }
-  if (status === "completed") {
-    const findings =
-      Number(finishScan.findingsDedupedCount || 0) ||
-      (Array.isArray(finishScan.confirmedFindings) ? finishScan.confirmedFindings.length : 0);
-    return {
-      settled: true,
-      canComplete: true,
-      summary:
-        findings > 0
-          ? `finish_scan completed with ${findings} authoritative finding(s)`
-          : "finish_scan completed (accepted by tool; evidence-oriented)",
-    };
-  }
+export function agentStatusIsTerminal(_note: AgentStatusNote | FinishSettlementRecord | null | undefined): boolean {
+  return false;
+}
+
+export function finishScanSettlesTask(
+  _finishScan: FinishSettlementRecord | null | undefined,
+): { settled: boolean; canComplete: boolean; summary: string } {
+  // Agent finish no longer settles the run.
   return {
     settled: false,
     canComplete: false,
-    summary: `finish_scan requested ${finishScan.status}`,
+    summary: "agent status/finish is non-terminal; harness settles after loop exit",
   };
 }
 
 /**
- * Platform task_complete status from gate + finish_scan.
- * Never demote an accepted finish_scan(completed) to incomplete.
+ * Whether agent can force task_complete=completed by calling finish with findings.
+ * Always false under booking-without-finish-stop policy.
  */
+export function agentCanForceCompletedViaFinish(): boolean {
+  return false;
+}
+
 export function resolveTerminalTaskStatus(options: {
-  gateCanComplete: boolean;
+  gateCanComplete?: boolean;
   finishStatus?: string;
+  /** Preferred: harness-computed status after loop. */
+  harnessStatus?: "completed" | "incomplete" | "blocked";
 }): "completed" | "incomplete" | "blocked" {
+  if (options.harnessStatus) return options.harnessStatus;
+  // Ignore agent finishStatus for completed — never honor agent-driven complete.
   const finish = String(options.finishStatus || "").toLowerCase();
   if (finish === "blocked") return "blocked";
-  if (finish === "completed") return "completed";
+  // Map legacy agent "completed" to incomplete unless harness says otherwise — harness should set harnessStatus.
   if (finish === "incomplete") return "incomplete";
   if (options.gateCanComplete) return "completed";
   return "incomplete";
 }
 
-/**
- * Evidence-oriented completed allowance shared with finish tool semantics:
- * disk-confirmed findings waive remaining assess conversion gaps.
- */
 export function allowCompletedDespiteCoverageGaps(options: {
   eligibilityAllowed: boolean;
   confirmedFindingCount: number;

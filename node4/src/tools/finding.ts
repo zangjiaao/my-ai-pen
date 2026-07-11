@@ -10,7 +10,8 @@ export function createFindingTool(runtime: ToolRuntime): ToolDefinition<any> {
   return {
     name: "finding",
     label: "Finding",
-    description: "Confirm a vulnerability, flag, or credential with evidence_ids. Book after real proof only.",
+    description:
+      "ONLY product conclusion path for vuln/flag/auth. Requires evidence_ids from real tool output. Chat prose is not a product finding. Booking does NOT end the engagement — keep testing.",
     parameters: Type.Object({
       action: Type.String(),
       title: Type.Optional(Type.String()),

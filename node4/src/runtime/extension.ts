@@ -2,13 +2,17 @@ import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-a
 import type { ToolRuntime } from "../types.js";
 import { createNode4Tools } from "../tools/index.js";
 
-export function createNode4Extension(runtime: ToolRuntime): ExtensionFactory {
+export type SegmentCounter = { tools: number };
+
+export function createNode4Extension(runtime: ToolRuntime, segmentCounter?: SegmentCounter): ExtensionFactory {
   return (pi: ExtensionAPI) => {
     for (const tool of createNode4Tools(runtime)) {
       pi.registerTool(tool);
     }
 
     pi.on("tool_call", async (event) => {
+      if (segmentCounter) segmentCounter.tools += 1;
+      runtime.lifecycle.toolsInLastSegment = (runtime.lifecycle.toolsInLastSegment || 0) + 1;
       await runtime.platform.send({
         type: "tool_output",
         conversation_id: runtime.task.conversationId,
