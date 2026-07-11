@@ -11,13 +11,15 @@ export function createPocTool(runtime: ToolRuntime): ToolDefinition<any> {
   return {
     name: "poc",
     label: "PoC",
-    description: "Use the Node2 vulnerability PoC catalog, or create/read/run a bounded PoC script under the task workspace. Run is sandbox-only and supports JavaScript and Python scripts.",
-    promptSnippet: "Look up PoC catalog entries or run bounded PoC scripts",
+    description:
+      "First-class multi-step exploit path (Harness v2): catalog lookup, or write/read/run sandbox PoC scripts (Python/JS). Prefer scripts for batch SQLi, JWT, challenge chains, FTP enum — not twenty one-off http calls.",
+    promptSnippet: "Catalog payloads or write/run multi-step PoC scripts in sandbox",
     promptGuidelines: [
-      "Use poc(action='catalog') or poc(action='get') before custom verification when you need payload families, evidence gates, or reproduction guidance for a vulnerability class.",
-      "Use poc when existing tools cannot express the test, especially for batch replay, race checks, or custom protocol validation.",
+      "For multi-step exploits, prefer poc(action='write') then poc(action='run'); iterate by rewrite+run.",
+      "Use poc(action='catalog') or get for payload families / evidence gates when useful.",
       "PoC scripts run only inside the configured Strix-style sandbox; host Python/Node binaries are not used.",
-      "Keep PoC scripts deterministic and scoped; report evidence_id from poc run before confirming findings.",
+      "Keep scripts deterministic and scoped; use returned evidence_id in finding(confirm).",
+      "Do not hardcode target-specific challenge answers or fixed flag lists.",
     ],
     parameters: Type.Object({
       action: Type.String(),

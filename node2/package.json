@@ -29,6 +29,7 @@
     "browser-sandbox:smoke": "tsx src/browser-sandbox-smoke.ts",
     "multi-actor:smoke": "tsx src/multi-actor-smoke.ts",
     "engagement:smoke": "tsx src/engagement-smoke.ts",
+    "harness-v2:smoke": "tsx src/harness-v2-smoke.ts",
     "tool-presentation:smoke": "tsx src/tool-presentation-smoke.ts",
     "llm-usage:smoke": "tsx src/llm-usage-smoke.ts",
     "caido-bridge:smoke": "tsx src/caido-bridge-status-smoke.ts",
