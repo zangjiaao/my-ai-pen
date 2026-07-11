@@ -1,126 +1,130 @@
-# Node4 Agent Runtime — clean-room OMP-inspired harness
+# Node4 Agent Runtime — OMP-class harness, pentest role
 
-> **Commercial execution north star** for a new pentest node.  
-> Calibrated: 2026-07-11  
-> **Not** a dependency on oh-my-pi / OMP source. Learn structure; implement in-house.
+> **Commercial clean-room design** (no oh-my-pi / OMP source dependency).  
+> Calibrated: 2026-07-12  
+> Role: **penetration testing agent**, not a coding agent.  
+> Runtime: **OMP-class** (shell/write/edit/todo/continue/long session).  
 
-Related: `harness-v2.md` (Node2 simplification lessons), `product-roadmap.md`, `architecture.md`.
+Related: `product-roadmap.md`, `architecture.md`, `harness-v2.md` (Node2 lessons).
 
 ---
 
 ## 1. North star
 
-Node4 is a **simple authorized attack harness** that maximizes agent skill:
-
 ```text
-Understand → Map (todo) → Act (http / script) → Book (finding + evidence) → Close (finish once)
+OMP-class loop:  Map(todo) → Act(shell/write/edit/http) → Book(finding+evidence)* → continue…
+Product booking: structured tools only (never chat-only conclusions)
+Task end:        platform / user / wall-budget / empty-stop cap — NOT agent finish_scan(completed)
+Inspectability:  post-run task dir remains fully queryable (like OMP session files)
 ```
 
-Same product platform as Node2; **different default loop** — no conversion matrix, no mandatory workers, no checklist finish prison.
+Node4 is **not** a coding agent. System prompt is **pentest** (scope, exploit, evidence).  
+Harness mechanics follow OMP: high-density act tools, empty/premature-stop continue, durable sessions.
 
-Interactive **TUI is deferred** (reserved for a later goal). This release: headless/standalone + platform WS.
+Interactive **TUI remains deferred**.
 
 ---
 
-## 2. Clean-room principles
+## 2. Principles
 
-1. **Simple is strong** — default tools: `todo`, `http`, `script`, `finding`, `finish_scan` (+ optional `read` from Pi).
-2. **Script/shell-first for multi-step** — write → run → iterate under workspace/sandbox constraints.
-3. **Todo is a map** — content-string IDs, single `in_progress`, auto-promote; **never blocks** completed alone.
-4. **Book after proof** — `finding` with `evidence_ids` only.
-5. **One finish settlement** — tool accept is authoritative; session must not demote `completed` → `incomplete` via second conversion gate.
-6. **No OMP/oh-my-pi in the product tree** — no vendor, no fork-as-dependency, no pasted upstream sources.
-7. **No target answer keys** — no DVWA/Juice/CTF hardcoded flags.
-8. **Node2 coexistence** — Node2 remains available; Node4 is the capability path forward.
+1. **Pentest role, OMP harness** — replace coding system prompt; keep bash/write/edit/todo/continue semantics.
+2. **Booking ≠ finish** — `finding`/`evidence` may fire many times mid-run and **never** ends the loop.
+3. **Chat is not product truth** — vuln/flag/auth only via `finding` + `evidence_ids`.
+4. **No agent-driven early complete** — agent `status` is a non-terminal progress note; `task_complete` is harness/platform settlement after budgets or idle-stop cap.
+5. **Findings alone ≠ job done** — having N findings does not stop attacking or force completed mid-loop.
+6. **Post-run inspectability** — after dispose, operators can read task workspace artifacts without a live process.
+7. **No OMP source** — clean-room only.
+8. **No target answer keys**.
 
 ---
 
 ## 3. Main loop
 
-| Step | Action | Tool |
-|------|--------|------|
-| 1 | Scope + target | task envelope |
-| 2 | Phase map | `todo` init |
-| 3 | Probe / exploit | `http`, `script` |
-| 4 | Confirm | `finding` + evidence |
-| 5 | Advance | `todo` done |
-| 6 | End | `finish_scan` once |
-
-Workers, coverage matrices, multi-workflow DAGs are **non-default** (not shipped as ceremony).
+| Step | Behavior |
+|------|----------|
+| Start | Task envelope → durable task dir |
+| Map | `todo` phases |
+| Act | `shell`, `write`, `edit`, `read`, `http`, `script` under task cwd |
+| Book | `finding` + auto/manual evidence (repeatable) |
+| Continue | On natural stop: empty/premature-stop continue up to cap; wall budget hard stop |
+| Settle | Runner emits `task_complete` from harness policy (not agent finish) |
 
 ---
 
-## 4. Default tools (intent)
+## 4. Tools
 
 | Tool | Role |
 |------|------|
 | `todo` | Progress map |
-| `http` | Single HTTP request in scope |
-| `script` | Write/read/run `.py`/`.js` under task workspace (timeout-bounded) |
-| `finding` | Confirm vuln/flag/auth with evidence |
-| `finish_scan` | Terminal completed/incomplete/blocked |
+| `shell` | Task-scoped command execution (OMP-like bash density) |
+| `write` / `edit` / `read` | File iteration under task dir |
+| `http` | Single HTTP probe |
+| `script` | Optional multi-file run helper |
+| `finding` | **Only** product conclusion path |
+| `status` | Non-terminal engagement note (optional); does **not** end loop |
 
-Sandbox: scripts run with process timeout and task cwd isolation; production should keep Docker isolation aligned with Node2 when available.
-
----
-
-## 5. Platform event mapping
-
-Inbound (same as Node2):
-
-- `task_assign` → start run
-- `user_steer` / interrupt (minimal: abort current burst)
-
-Outbound:
-
-| Event | When |
-|-------|------|
-| `status_update` / `text` | Progress narration |
-| `tool_output` | Tool start/end |
-| `evidence_created` | Evidence written |
-| `vuln_found` | Finding confirmed |
-| `todo_updated` / `plan_tree_updated` | Todo projection |
-| `finish_scan_requested` | Finish tool accepted |
-| `task_complete` | Terminal; status matches finish settlement |
-| `task_error` | Hard failure |
-
-**Rule:** If `finish_scan` accepted `completed`, `task_complete.status` is `completed` (no demotion).
+Legacy name `finish_scan` may alias `status` for protocol compatibility but **must not** terminate the agent loop or alone force `task_complete=completed`.
 
 ---
 
-## 6. Node2 coexistence
+## 5. Booking vs lifecycle
 
-| | Node2 | Node4 |
-|--|-------|-------|
-| Role | Legacy full harness | Simple capability runtime |
-| Default loop | Heavy / hybrid v2 | OMP-philosophy clean-room |
-| Platform | Existing | Same channel, own `NODE_TOKEN` / name |
-| Transition | Keep for compat | Promote when labs match product bar |
+| Concern | Mechanism |
+|---------|-----------|
+| Evidence | Tool outputs may create evidence records |
+| Confirmed vuln/flag/auth | `finding` only |
+| Mid-run report text | `status` optional |
+| End of billing/session | Harness: wall budget, continue cap, abort → `task_complete` |
+
+Terminal status policy (harness):
+
+- `blocked` if agent booked a blocked status note with reason  
+- else `completed` if ≥1 evidence-backed finding **and** loop ended by budget/continue-cap (work happened)  
+- else `incomplete`  
+
+Agent cannot emit terminal complete merely by calling finish with findings mid-flight.
 
 ---
 
-## 7. TUI
+## 6. Post-run inspectability (OMP-like)
 
-**Deferred.** No OMP-like interactive TUI in this goal.  
-Reserved later: sticky todo + transcript sharing the same todo/finding events.  
-MVP may log to stdout only.
+Each task directory retains at least:
+
+| Path | Content |
+|------|---------|
+| `events.jsonl` | Platform/tool events |
+| `transcript.jsonl` | Serialized agent messages after run |
+| `session-manifest.json` | Index of artifact paths + terminal status |
+| `pi-sessions/` | Pi session manager files |
+| `findings/`, `evidence/`, `scripts/` | Product + act artifacts |
+| `status.json` | Last non-terminal status note if any |
+
+Operators reconstruct the run offline by reading this directory.
 
 ---
 
-## 8. Delivery phases
+## 7. Platform events
 
-1. Docs (this page)  
-2. Standalone runtime + unit smokes  
-3. Lab capability comparison vs OMP baselines (standalone first)  
-4. Platform WS bridge + smoke  
-5. Final comparison note + TUI remains deferred  
+| Event | Meaning |
+|-------|---------|
+| `tool_output` | Act/tool progress |
+| `evidence_created` / `vuln_found` | Booking |
+| `todo_updated` | Progress map |
+| `status_update` / non-terminal status | Notes |
+| `task_complete` | **Harness** terminal settlement only |
+
+---
+
+## 8. Node2 coexistence
+
+Node2: legacy. Node4: capability path. Same platform channel, different loop.
 
 ---
 
 ## 9. Non-goals
 
-- Shipping oh-my-pi as dependency  
-- Full TUI clone  
-- Coverage conversion gates as default finish path  
-- Multi-specialist nodes  
+- oh-my-pi dependency  
+- Full TUI  
+- Coverage/worker ceremony  
 - Hardcoded lab answers  
+- Exact OMP score parity  

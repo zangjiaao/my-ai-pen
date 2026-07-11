@@ -8,7 +8,7 @@
 
 目标是构建面向真实系统的渗透测试 Agent Runtime（商业产品，执行核自研）：
 
-- **Node4 北星**：`docs/node4-harness.md` — Understand → Map(todo) → Act(http/script) → Book(finding) → Close(finish)；无默认 worker/coverage 门禁。
+- **Node4 北星**：`docs/node4-harness.md` — OMP 级 harness（shell/write/edit/todo/continue）+ **渗透** system prompt；**入账** finding/evidence（非聊天）；**结束**由 harness/平台结算，agent finish 非终态；session 落盘可排查。
 - **Node2**：并行兼容节点；Harness v2 经验见 `docs/harness-v2.md`，不再作为主能力路径堆叠。
 - Pi 兼容栈负责 session/tools；**不** vendoring oh-my-pi。
 - 平台：会话 / 资产 / 漏洞 / 证据 / 计时；Node 只做执行与事件回写。
