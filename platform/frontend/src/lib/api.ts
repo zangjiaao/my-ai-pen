@@ -13,6 +13,16 @@ export class ApiError extends Error {
     this.detail = detail;
   }
 }
+function errorMessageFromBody(err: any, fallback: string): string {
+  const detail = err?.detail;
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    return detail.map((d: { msg?: string }) => d?.msg || JSON.stringify(d)).join("; ");
+  }
+  if (typeof err?.message === "string" && err.message.trim()) return err.message;
+  return fallback;
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = localStorage.getItem("access_token");
   const headers: Record<string, string> = { ...(options.headers as Record<string, string> || {}) };
@@ -23,7 +33,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(fullPath, { ...options, headers });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ message: res.statusText }));
-    throw new ApiError(res.status, err?.detail || err?.message || `HTTP ${res.status}`, err);
+    throw new ApiError(res.status, errorMessageFromBody(err, res.statusText || `HTTP ${res.status}`), err);
   }
   if (res.status === 204) return undefined as T;
   return res.json();
@@ -51,7 +61,7 @@ export async function authDownload(path: string, options: RequestInit = {}): Pro
   const res = await fetch(fullPath, { ...options, headers });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ message: res.statusText }));
-    throw new ApiError(res.status, err?.detail || err?.message || `HTTP ${res.status}`, err);
+    throw new ApiError(res.status, errorMessageFromBody(err, res.statusText || `HTTP ${res.status}`), err);
   }
   const disposition = res.headers.get("Content-Disposition") || "";
   const match = disposition.match(/filename="?([^";]+)"?/i);

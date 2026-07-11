@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { Bot, CheckCircle2, ChevronDown, ChevronRight, Circle, CircleDashed, GitBranch, Search, Tag, XCircle } from "lucide-react";
 import type { SecurityAsset, SecurityVulnerability } from "../lib/securityTypes";
+import FindingCard from "./cards/FindingCard";
 
 type Tab = "status" | "surface" | "findings" | "activity";
 type PlanStatus = "todo" | "pending" | "running" | "done" | "skipped" | "blocked" | "failed" | string;
@@ -397,10 +398,16 @@ export default function RightPanel({
                       <span className="font-mono text-[10px] text-ink-muted">{group.hint}</span>
                     </div>
                     {group.items.map((finding, index) => (
-                      <button
+                      <FindingCard
                         key={(finding.id as string) || (finding.vulnerability_id as string) || `${group.id}-${index}`}
-                        type="button"
-                        onClick={() => {
+                        finding={{
+                          ...finding,
+                          // Keep group assignment exclusive (Vuln / Key / Flag).
+                          finding_kind: group.id === "auth" ? "auth" : group.id,
+                          kind: group.id === "auth" ? "auth" : group.id,
+                          category: group.id === "auth" ? "auth" : group.id,
+                        }}
+                        onOpen={(opened) => {
                           const resolved =
                             resolveFindingSurfaceKey(
                               finding,
@@ -409,11 +416,7 @@ export default function RightPanel({
                               surfaceEntries,
                             ) || String((finding as { __surface_path?: string }).__surface_path || "");
                           onOpenVulnerability?.({
-                            ...(finding as Partial<SecurityVulnerability>),
-                            finding_kind: group.id === "auth" ? "auth" : group.id,
-                            kind: group.id === "auth" ? "auth" : group.id,
-                            category: group.id === "auth" ? "auth" : group.id,
-                            __surface_kind: group.id === "auth" ? "key" : group.id,
+                            ...opened,
                             ...(resolved
                               ? {
                                   __surface_path: resolved,
@@ -422,31 +425,7 @@ export default function RightPanel({
                               : {}),
                           } as Partial<SecurityVulnerability>);
                         }}
-                        className="block w-full rounded-md border border-hairline-soft p-2 text-left transition-colors hover:bg-surface-default"
-                      >
-                        <div className="mb-1 flex min-w-0 items-center gap-1">
-                          {group.id === "vuln" ? (
-                            <span className={`inline-block shrink-0 rounded-md px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase ${severityBadgeClass(finding.severity)}`}>
-                              {normalizeFindingSeverity(finding.severity)}
-                            </span>
-                          ) : group.id === "auth" ? (
-                            (() => {
-                              const sub = classifyAuthSubtype(finding);
-                              return (
-                                <span className={`inline-block shrink-0 rounded-md px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase ${sub.badgeClass}`}>
-                                  {sub.label}
-                                </span>
-                              );
-                            })()
-                          ) : (
-                            <span className={`inline-block shrink-0 rounded-md px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase ${group.badgeClass}`}>
-                              {group.shortLabel}
-                            </span>
-                          )}
-                          <span className="truncate text-sm font-medium">{findingDisplayTitle(finding, group.id)}</span>
-                        </div>
-                        <p className="break-words text-xs text-ink-muted">{findingMetaLine(finding, group.id)}</p>
-                      </button>
+                      />
                     ))}
                   </section>
                 ),
@@ -3378,26 +3357,6 @@ function extractFlagFromFinding(finding: Record<string, unknown>): string | unde
     .join("\n");
   const m = blob.match(/flag\{[^{}\n]{2,120}\}/i) || blob.match(/FLAG\{[^{}\n]{2,120}\}/);
   return m ? m[0] : undefined;
-}
-
-function findingDisplayTitle(finding: Record<string, unknown>, kind: FindingKindId): string {
-  if (kind === "flag") {
-    const flag = extractFlagFromFinding(finding);
-    if (flag) return flag;
-  }
-  return String(finding.title || "Untitled finding");
-}
-
-/** Card subtitle: short issue description (not path soup / agent noise). */
-function findingMetaLine(finding: Record<string, unknown>, _kind?: FindingKindId): string {
-  const desc = String(finding.description || finding.impact || "").replace(/\s+/g, " ").trim();
-  if (desc) return desc.length > 160 ? `${desc.slice(0, 157)}…` : desc;
-  if (_kind === "flag") {
-    const flag = extractFlagFromFinding(finding);
-    if (flag) return flag;
-  }
-  const loc = String(finding.location || finding.endpoint || finding.url || "").trim();
-  return loc || "";
 }
 
 function markdownPreview(value: string): string {

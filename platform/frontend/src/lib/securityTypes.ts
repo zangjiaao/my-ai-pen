@@ -4,6 +4,7 @@ export type RelatedVulnerability = {
   severity: string;
   status: string;
   confidence: string;
+  port?: string | null;
 };
 
 export type SecurityAsset = {
@@ -62,6 +63,7 @@ export type SecurityVulnerability = {
   cve_id?: string | null;
   cwe?: string | null;
   asset_id?: string | null;
+  port?: string | null;
   asset?: AssetSummary | null;
   affected_asset?: string;
   location?: string;
@@ -70,6 +72,10 @@ export type SecurityVulnerability = {
   method?: string | null;
   confidence: string;
   status: string;
+  status_label?: string;
+  kind?: string;
+  allowed_next_statuses?: string[];
+  port?: string | null;
   description?: string | null;
   impact?: string | null;
   technical_analysis?: string | null;

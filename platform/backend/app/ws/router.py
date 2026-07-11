@@ -78,11 +78,19 @@ def _asset_address(value: object) -> str:
     return raw.rstrip("/")
 
 
-def _finding_audit_action(*, created: bool, raw_status: str, stored_status: str) -> str:
+def _finding_audit_action(
+    *,
+    created: bool,
+    rediscovered: bool = False,
+    raw_status: str,
+    stored_status: str,
+) -> str:
     raw = str(raw_status or "").lower()
-    if raw == "confirmed" or stored_status == "confirmed":
-        return "finding.confirm"
-    if raw in {"rejected", "false_positive"} or stored_status == "false_positive":
+    if rediscovered:
+        return "finding.rediscover"
+    if raw == "confirmed" or stored_status in {"confirmed", "to_fix"}:
+        return "finding.confirm" if created else "finding.update"
+    if raw in {"rejected", "false_positive"}:
         return "finding.reject"
     return "finding.create" if created else "finding.update"
 
@@ -846,7 +854,7 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
 
 
 async def _persist_asset(msg: dict, node_id: str | None):
-    """Upsert asset into the user ledger by normalized address (merge ports/services)."""
+    """Upsert one host asset (IP/domain); merge ports/services under that host."""
     conv_id = msg.get("conversation_id")
     if not conv_id:
         return None
@@ -857,34 +865,37 @@ async def _persist_asset(msg: dict, node_id: str | None):
     try:
         from app.db.base import async_session
         from app.api.assets import upsert_discovered_asset
-        from app.services.asset_ledger import is_valid_ledger_address, normalize_address
+        from app.services.asset_ledger import is_valid_ledger_address, split_host_port
 
         raw_address = msg.get("address") or msg.get("affected_asset") or msg.get("target") or ""
         # Drop path/file noise (e.g. reflected.php) — not enterprise ledger hosts.
         if not is_valid_ledger_address(raw_address):
             return None
-        address = normalize_address(raw_address)
-        if not address:
+        host, addr_port = split_host_port(raw_address)
+        if not host:
             return None
         # Pass None when agent omits identity fields so merge keeps ledger name/type.
         hostname = msg.get("hostname")
         name = str(hostname).strip() if hostname is not None and str(hostname).strip() else None
         raw_type = msg.get("asset_type")
         asset_type = str(raw_type).strip() if raw_type is not None and str(raw_type).strip() else None
+        port = msg.get("port") or addr_port
         async with async_session() as db:
             asset = await upsert_discovered_asset(
                 db,
                 user_id=user_id,
-                address=address,
+                address=host,
                 name=name,
                 asset_type=asset_type,
                 open_ports=msg.get("open_ports"),
                 services=msg.get("services"),
+                port=port,
                 conversation_id=uuid.UUID(conv_id),
                 node_id=node_uuid,
                 source="agent_discovered",
             )
             await db.commit()
+            props = asset.properties or {}
             return {
                 "id": str(asset.id),
                 "asset_id": str(asset.id),
@@ -894,9 +905,10 @@ async def _persist_asset(msg: dict, node_id: str | None):
                 "address": asset.address,
                 "asset_type": asset.type,
                 "type": asset.type,
-                "properties": asset.properties or {},
-                "open_ports": (asset.properties or {}).get("open_ports") or [],
-                "services": (asset.properties or {}).get("services") or [],
+                "tags": asset.tags or [],
+                "properties": props,
+                "open_ports": props.get("open_ports") or [],
+                "services": props.get("services") or [],
             }
     except Exception as e:
         print(f"[WS] persist asset error: {e}")
@@ -1031,16 +1043,45 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
         from app.models.evidence import Evidence
         from app.models.vulnerability import Vulnerability
 
+        from app.api.assets import upsert_discovered_asset
+        from app.services.asset_ledger import is_valid_ledger_address, normalize_port, split_host_port
+
         context = await _conversation_context(conv_id)
-        affected_asset = _asset_address(msg.get("affected_asset") or msg.get("target"))
-        if affected_asset == "unknown":
-            affected_asset = _target_address_from_context(context)
+        raw_target = msg.get("affected_asset") or msg.get("target") or ""
+        host, port_from_target = split_host_port(raw_target)
+        if not host or not is_valid_ledger_address(host):
+            fallback = _target_address_from_context(context)
+            host, port_from_fallback = split_host_port(fallback)
+            if not port_from_target:
+                port_from_target = port_from_fallback
+        port = normalize_port(msg.get("port")) or port_from_target
+        # Also try location/URL for port when agent put full URL in location.
+        if not port:
+            _, port_from_loc = split_host_port(msg.get("location") or msg.get("poc") or "")
+            port = port_from_loc
+
+        from datetime import datetime, timezone
+
+        from app.services.finding_dedupe import (
+            append_discovery_event,
+            is_same_finding,
+            normalize_finding_title,
+            pick_canonical_vuln,
+            ports_equal,
+        )
+        from sqlalchemy import func
+
         title = str(msg.get("title") or "Untitled finding").strip() or "Untitled finding"
         location = msg.get("location") or msg.get("poc") or ""
         poc_value = msg.get("poc") or msg.get("location") or ""
         severity = _normalize_severity(msg.get("severity"))
         cvss_value = msg.get("cvss")
         description = msg.get("description") or msg.get("impact") or msg.get("evidence_summary") or ""
+        service_name = msg.get("service") or msg.get("service_name") or ""
+        cve_id = msg.get("cve_id") or msg.get("cve") or None
+        if cve_id is not None:
+            cve_id = str(cve_id).strip() or None
+        now = datetime.now(timezone.utc)
 
         async with async_session() as db:
             existing_evidence = await db.execute(
@@ -1053,46 +1094,33 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
             if set(evidence_ids) - known_evidence_ids:
                 return None
 
-            existing_vulns = (await db.execute(
-                select(Vulnerability)
-                .where(
-                    Vulnerability.user_id == user_id,
-                    Vulnerability.conversation_id == uuid.UUID(conv_id),
-                    Vulnerability.title == title,
+            # Resolve asset first so cross-session dedupe can key on host+port+title.
+            asset_id = None
+            if host and is_valid_ledger_address(host):
+                services = None
+                if port:
+                    services = [{"port": port, "name": str(service_name).strip() if service_name else ""}]
+                asset = await upsert_discovered_asset(
+                    db,
+                    user_id=user_id,
+                    address=host,
+                    open_ports=[port] if port else None,
+                    services=services,
+                    port=port,
+                    conversation_id=uuid.UUID(conv_id),
+                    node_id=node_uuid,
+                    source="agent_discovered",
                 )
-                .order_by(Vulnerability.discovered_at, Vulnerability.id)
-            )).scalars().all()
-            vuln = existing_vulns[0] if existing_vulns else None
-            created = vuln is None
-
-            asset_id = vuln.asset_id if vuln else None
-            if affected_asset != "unknown":
-                existing_asset = await db.execute(select(Asset).where(Asset.user_id == user_id, Asset.conversation_id == uuid.UUID(conv_id), Asset.address == affected_asset))
-                asset = existing_asset.scalar_one_or_none()
-                if not asset:
-                    asset = Asset(
-                        id=uuid.uuid4(),
-                        user_id=user_id,
-                        conversation_id=uuid.UUID(conv_id),
-                        node_id=node_uuid,
-                        name=affected_asset,
-                        address=affected_asset,
-                        type="host",
-                        source="agent_discovered",
+                asset_id = asset.id
+            else:
+                fallback_address = f"unknown:{conv_id}"
+                existing_asset = await db.execute(
+                    select(Asset).where(
+                        Asset.user_id == user_id,
+                        Asset.conversation_id == uuid.UUID(conv_id),
+                        Asset.address == fallback_address,
                     )
-                    db.add(asset)
-                    await db.flush()
-                else:
-                    asset.user_id = asset.user_id or user_id
-                    asset.conversation_id = asset.conversation_id or uuid.UUID(conv_id)
-                    asset.node_id = asset.node_id or node_uuid
-                asset_id = asset_id or asset.id
-
-            if not asset_id:
-                fallback_address = _target_address_from_context(context)
-                if fallback_address == "unknown":
-                    fallback_address = f"unknown:{conv_id}"
-                existing_asset = await db.execute(select(Asset).where(Asset.user_id == user_id, Asset.conversation_id == uuid.UUID(conv_id), Asset.address == fallback_address))
+                )
                 asset = existing_asset.scalar_one_or_none()
                 if not asset:
                     asset = Asset(
@@ -1109,6 +1137,52 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                     await db.flush()
                 asset_id = asset.id
 
+            # Cross-session dedupe: same user + asset + title (+ port) → one ledger row.
+            title_key = normalize_finding_title(title)
+            candidates: list = []
+            if asset_id and title_key:
+                result = await db.execute(
+                    select(Vulnerability).where(
+                        Vulnerability.user_id == user_id,
+                        Vulnerability.asset_id == asset_id,
+                        func.lower(func.trim(Vulnerability.title)) == title_key,
+                    )
+                )
+                for row in result.scalars().all():
+                    if is_same_finding(
+                        {
+                            "title": row.title,
+                            "asset_id": row.asset_id,
+                            "port": row.port,
+                            "cve_id": row.cve_id,
+                        },
+                        title=title,
+                        asset_id=asset_id,
+                        port=port,
+                        cve_id=cve_id,
+                    ) and ports_equal(row.port, port):
+                        candidates.append(row)
+            # Also catch same-conversation exact title rows (legacy duplicates).
+            conv_rows = (
+                await db.execute(
+                    select(Vulnerability).where(
+                        Vulnerability.user_id == user_id,
+                        Vulnerability.conversation_id == uuid.UUID(conv_id),
+                        func.lower(func.trim(Vulnerability.title)) == title_key,
+                    )
+                )
+            ).scalars().all()
+            seen_ids = {getattr(c, "id", None) for c in candidates}
+            for row in conv_rows:
+                if row.id not in seen_ids:
+                    candidates.append(row)
+                    seen_ids.add(row.id)
+
+            vuln = pick_canonical_vuln(candidates)
+            created = vuln is None
+            rediscovered = False
+            lifecycle_status = "to_fix"
+
             if not vuln:
                 vuln = Vulnerability(
                     id=uuid.uuid4(),
@@ -1117,43 +1191,113 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                     title=title,
                     severity=severity,
                     cvss=cvss_value,
+                    cve_id=cve_id,
                     asset_id=asset_id,
+                    port=port,
                     conversation_id=uuid.UUID(conv_id),
                     description=description,
                     poc=poc_value,
                     remediation=msg.get("remediation") or "",
                     confidence=str(msg.get("confidence", "high")),
-                    status="confirmed",
+                    status=lifecycle_status,
                     evidence_ids=evidence_ids,
+                    first_seen_at=now,
+                    discovered_at=now,
+                    history=append_discovery_event(
+                        [],
+                        event="discovered",
+                        conversation_id=conv_id,
+                        evidence_ids=evidence_ids,
+                        at=now,
+                    ),
                 )
                 db.add(vuln)
             else:
+                rediscovered = True
+                # Preserve first_seen; refresh last-seen discovered_at for list sorting / UI.
+                if not getattr(vuln, "first_seen_at", None):
+                    vuln.first_seen_at = vuln.discovered_at or now
+                vuln.discovered_at = now
                 vuln.user_id = vuln.user_id or user_id
                 vuln.node_id = vuln.node_id or node_uuid
                 vuln.asset_id = vuln.asset_id or asset_id
+                if port:
+                    vuln.port = port
+                if cve_id and not vuln.cve_id:
+                    vuln.cve_id = cve_id
                 vuln.severity = severity or vuln.severity
                 _apply_vulnerability_cvss(vuln, cvss_value)
-                vuln.description = description or vuln.description
-                vuln.poc = poc_value or vuln.poc
-                vuln.remediation = msg.get("remediation") or vuln.remediation
+                # Prefer fresher non-empty agent narrative on rediscover.
+                if description:
+                    vuln.description = description
+                if poc_value:
+                    vuln.poc = poc_value
+                if msg.get("remediation"):
+                    vuln.remediation = msg.get("remediation")
                 vuln.confidence = str(msg.get("confidence", vuln.confidence or "high"))
-                vuln.status = _merge_status(vuln.status, "confirmed")
                 vuln.evidence_ids = sorted(set(vuln.evidence_ids or []) | set(evidence_ids))
+                # Timeline: record rediscovery event.
+                try:
+                    prev_history = list(vuln.history or [])
+                except Exception:
+                    prev_history = []
+                vuln.history = append_discovery_event(
+                    prev_history,
+                    event="rediscovered",
+                    conversation_id=conv_id,
+                    evidence_ids=evidence_ids,
+                    at=now,
+                )
+                # Status: reopen fixed findings (regression); keep fixing in progress;
+                # otherwise ensure open as to_fix.
+                cur = str(vuln.status or "").strip().lower()
+                if cur in {"fixed", "closed"}:
+                    vuln.status = "to_fix"  # regression: still reproducible
+                elif cur in {"fixing", "reported", "in_progress"}:
+                    pass
+                else:
+                    vuln.status = lifecycle_status
+                # Keep original conversation_id (first session); latest is in history.
 
-            for duplicate in existing_vulns[1:]:
-                vuln.evidence_ids = sorted(set(vuln.evidence_ids or []) | set(duplicate.evidence_ids or []))
+            # Merge any extra duplicate rows into the canonical one, then delete them.
+            extras = [r for r in candidates if r is not None and r.id != vuln.id]
+            for duplicate in extras:
+                vuln.evidence_ids = sorted(
+                    set(vuln.evidence_ids or []) | set(duplicate.evidence_ids or [])
+                )
                 vuln.description = vuln.description or duplicate.description
                 vuln.poc = vuln.poc or duplicate.poc
                 vuln.remediation = vuln.remediation or duplicate.remediation
                 vuln.asset_id = vuln.asset_id or duplicate.asset_id
-                vuln.status = _merge_status(vuln.status, duplicate.status)
+                if not vuln.port and getattr(duplicate, "port", None):
+                    vuln.port = duplicate.port
+                # Prefer earliest first_seen
+                dup_first = getattr(duplicate, "first_seen_at", None) or duplicate.discovered_at
+                if dup_first and (
+                    not getattr(vuln, "first_seen_at", None) or dup_first < vuln.first_seen_at
+                ):
+                    vuln.first_seen_at = dup_first
+                try:
+                    dup_hist = list(duplicate.history or [])
+                except Exception:
+                    dup_hist = []
+                merged_hist = list(getattr(vuln, "history", None) or [])
+                for item in dup_hist:
+                    if item not in merged_hist:
+                        merged_hist.append(item)
+                vuln.history = merged_hist[-50:]
                 await db.delete(duplicate)
 
             await db.commit()
             await _audit(
                 actor_type="agent",
                 actor_id=node_uuid or uuid.UUID(int=0),
-                action=_finding_audit_action(created=created, raw_status=raw_status, stored_status=vuln.status),
+                action=_finding_audit_action(
+                    created=created,
+                    rediscovered=rediscovered and not created,
+                    raw_status=raw_status,
+                    stored_status=vuln.status,
+                ),
                 resource_type="vulnerability",
                 resource_id=vuln.id,
                 conversation_id=uuid.UUID(conv_id),
@@ -1161,9 +1305,14 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                     "title": vuln.title,
                     "severity": vuln.severity,
                     "status": vuln.status,
+                    "host": host or None,
+                    "port": vuln.port,
                     "evidence_gate": "passed",
                     "evidence_ids": vuln.evidence_ids or [],
-                    "deduped": max(0, len(existing_vulns) - 1),
+                    "created": created,
+                    "rediscovered": rediscovered and not created,
+                    "merged_duplicates": len(extras),
+                    "fingerprint_title": title_key,
                 },
             )
             return {
@@ -1171,6 +1320,7 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                 "vulnerability_id": str(vuln.id),
                 "strix_vulnerability_id": msg.get("strix_vulnerability_id") or msg.get("id"),
                 "asset_id": str(vuln.asset_id) if vuln.asset_id else None,
+                "port": vuln.port,
                 "conversation_id": str(vuln.conversation_id),
                 "node_id": str(vuln.node_id) if vuln.node_id else None,
                 "title": vuln.title,
@@ -1178,7 +1328,7 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                 "location": vuln.poc or location,
                 "confidence": vuln.confidence,
                 "status": vuln.status,
-                "affected_asset": affected_asset if affected_asset != "unknown" else msg.get("affected_asset"),
+                "affected_asset": host or msg.get("affected_asset"),
                 "description": msg.get("description") or vuln.description,
                 "impact": msg.get("impact"),
                 "technical_analysis": msg.get("technical_analysis"),

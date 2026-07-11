@@ -1457,7 +1457,28 @@ def message_evidence(messages: list[Message], *, include_tool_calls: bool = True
 
 
 def asset_summary(a: Asset) -> dict:
-    return {"id": str(a.id), "name": a.name, "address": a.address, "type": a.type, "properties": a.properties or {}}
+    """Asset card for agent/session snapshot; include port notes for service context."""
+    props = a.properties if isinstance(a.properties, dict) else {}
+    services = props.get("services") if isinstance(props.get("services"), list) else []
+    port_notes = {}
+    for svc in services:
+        if not isinstance(svc, dict):
+            continue
+        port = str(svc.get("port") or "").strip()
+        note = str(svc.get("note") or svc.get("remark") or "").strip()
+        if port and note:
+            port_notes[port] = note
+    return {
+        "id": str(a.id),
+        "name": a.name,
+        "address": a.address,
+        "type": a.type,
+        "tags": list(a.tags or []),
+        "properties": props,
+        # Flattened for agents: "52799": "CTF web, 9 levels · flag-based"
+        "port_notes": port_notes,
+        "services": services,
+    }
 
 
 def vuln_summary(v: Vulnerability) -> dict:

@@ -1,7 +1,9 @@
 [project]
 name = "pentest-platform-backend"
 version = "0.1.0"
-requires-python = ">=3.11"
+# Pin below 3.14: asyncpg wheels on Windows + uv-managed 3.14 have been incomplete
+# (missing asyncpg.connection). Prefer 3.12 LTS via .python-version.
+requires-python = ">=3.11,<3.14"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",

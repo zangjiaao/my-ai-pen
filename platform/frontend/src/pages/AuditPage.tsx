@@ -86,10 +86,6 @@ export default function AuditPage() {
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <TopBar title="操作审计" />
         <main className="flex-1 overflow-y-auto p-6">
-          <p className="mb-4 text-xs text-ink-muted">
-            记录平台上的人工与系统变更（登录、会话/节点/资产等）。任务过程与 Agent 操作见对应会话详情。
-          </p>
-
           <div className="mb-4 flex flex-wrap items-center gap-3">
             <select
               value={category}

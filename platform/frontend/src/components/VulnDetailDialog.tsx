@@ -48,9 +48,30 @@ export default function VulnDetailDialog({
   const [detail, setDetail] = useState<SecurityVulnerability | null>(null);
   const [loading, setLoading] = useState(false);
   const [retesting, setRetesting] = useState(false);
+  const [savingStatus, setSavingStatus] = useState(false);
   const [error, setError] = useState("");
 
   const id = vulnerabilityId || initial?.id || initial?.vulnerability_id || null;
+
+  const LIFECYCLE_LABELS: Record<string, string> = {
+    to_fix: "待修复",
+    fixing: "修复中",
+    fixed: "已修复",
+  };
+
+  const normalizeLifecycle = (status?: string | null): string => {
+    const s = String(status || "").toLowerCase();
+    if (
+      ["to_fix", "pending", "confirmed", "open", "candidate", "ignored", "accepted", "false_positive", "risk_accepted"].includes(
+        s,
+      )
+    ) {
+      return "to_fix";
+    }
+    if (["fixing", "reported", "in_progress", "retest"].includes(s)) return "fixing";
+    if (["fixed", "closed"].includes(s)) return "fixed";
+    return s || "to_fix";
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -80,9 +101,28 @@ export default function VulnDetailDialog({
       onClose();
       navigate("/");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Retest failed");
+      setError(err instanceof Error ? err.message : "复测启动失败");
     } finally {
       setRetesting(false);
+    }
+  };
+
+  const updateStatus = async (next: string) => {
+    if (!id) return;
+    setSavingStatus(true);
+    setError("");
+    try {
+      const updated = await authFetch<SecurityVulnerability>(`/api/vulnerabilities/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: next }),
+      });
+      setDetail(updated);
+      onUpdated?.(updated);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "状态更新失败");
+    } finally {
+      setSavingStatus(false);
     }
   };
 
@@ -185,17 +225,48 @@ export default function VulnDetailDialog({
                 disabled={retesting}
                 className="rounded-md bg-ink px-3 py-1.5 text-xs text-white disabled:opacity-60"
               >
-                {retesting ? "Starting..." : "Retest"}
+                {retesting ? "启动中…" : "复测"}
               </button>
             )}
             <button
               onClick={onClose}
               className="rounded-md border border-hairline px-3 py-1.5 text-xs hover:bg-surface-default"
             >
-              Close
+              关闭
             </button>
           </div>
         </div>
+
+        {/* Lifecycle status */}
+        {canMutate && (
+          <div className="mb-4 flex flex-wrap items-center gap-2">
+            <span className="text-xs text-ink-muted">处理状态</span>
+            {(["to_fix", "fixing", "fixed"] as const).map((st) => {
+              const current = normalizeLifecycle(vulnerability?.status);
+              const allowed =
+                (vulnerability as { allowed_next_statuses?: string[] } | null)?.allowed_next_statuses ||
+                [];
+              const canSelect = st === current || allowed.includes(st) || allowed.length === 0;
+              return (
+                <button
+                  key={st}
+                  type="button"
+                  disabled={savingStatus || !canSelect}
+                  onClick={() => {
+                    if (st !== current) void updateStatus(st);
+                  }}
+                  className={`rounded-md border px-2.5 py-1 text-[11px] font-medium disabled:opacity-40 ${
+                    st === current
+                      ? "border-ink bg-ink text-white"
+                      : "border-hairline text-ink-secondary hover:bg-surface-default"
+                  }`}
+                >
+                  {LIFECYCLE_LABELS[st]}
+                </button>
+              );
+            })}
+          </div>
+        )}
 
         {error && !String(error).toLowerCase().includes("not found") && (
           <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>

@@ -17,6 +17,8 @@ import type { AgentIdentity, Conversation, Message } from "../lib/types";
 import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../lib/securityTypes";
 
 const ACTIVE_CONVERSATION_KEY = "active_conversation_id";
+/** Set by AssetPage when launching a task from selected hosts/ports. */
+const PENDING_ASSET_TASK_KEY = "pending_asset_task";
 const MESSAGE_PAGE_SIZE = 200;
 
 const TEMPLATES = [
@@ -792,38 +794,60 @@ export default function ConversationPage() {
     }
   }, [fetchAll, loadConversation]);
 
-  const handleSend = useCallback(async () => {
-    if (!input.trim()) return;
-    const displayText = input.trim();
-    const selectedAgentCandidate = selectedAgentRef.current || selectedAgent;
-    const selectedMentionAgent = selectedAgentCandidate && displayText.includes(`@${selectedAgentCandidate.name}`) ? selectedAgentCandidate : resolveMentionedAgent(displayText, agentNodes);
-    const text = stripAgentMention(displayText, selectedMentionAgent);
-    setInput("");
-    selectedAgentRef.current = null;
-    setSelectedAgent(null);
+  const launchTaskMessage = useCallback(async (opts: {
+    displayText: string;
+    text: string;
+    target?: { type: string; value: string } | null;
+    scope?: { allow: string[]; deny: string[] } | null;
+    forceNewConversation?: boolean;
+    conversationId?: string | null;
+  }) => {
+    const displayText = opts.displayText.trim();
+    const text = opts.text.trim() || displayText;
+    if (!displayText) return;
 
-    const targetValue = extractTarget(text);
+    const selectedAgentCandidate = selectedAgentRef.current || selectedAgent;
+    const selectedMentionAgent =
+      selectedAgentCandidate && displayText.includes(`@${selectedAgentCandidate.name}`)
+        ? selectedAgentCandidate
+        : resolveMentionedAgent(displayText, agentNodes);
+    const platformMention = selectedMentionAgent?.type === "platform";
+    const targetValue = opts.target?.value || extractTarget(text);
     const restartRequested = isRestartRequest(text);
     const completedConversation = isConversationComplete(activeId, conversations, planTree);
-    const platformMention = selectedMentionAgent?.type === "platform";
-    const startFresh = Boolean(activeId && restartRequested);
+    const explicitConv = Boolean(opts.conversationId);
+    const startFresh = Boolean(
+      opts.forceNewConversation || (!explicitConv && activeId && restartRequested),
+    );
 
-    let convId = startFresh ? null : activeId;
+    let convId = opts.conversationId || (startFresh ? null : activeId);
     if (!convId) {
       try {
-        const data = await authFetch<Conversation>("/api/conversations", { method: "POST", headers: { "Content-Type": "application/json" } });
+        const data = await authFetch<Conversation>("/api/conversations", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        });
         convId = data.id;
         setActiveId(convId);
         localStorage.setItem(ACTIVE_CONVERSATION_KEY, convId);
         send({ type: "subscribe", conversation_id: convId });
         if (startFresh) resetConversationState();
         void fetchAll();
-      } catch { return; }
+      } catch {
+        return;
+      }
+    } else if (explicitConv) {
+      setActiveId(convId);
+      localStorage.setItem(ACTIVE_CONVERSATION_KEY, convId);
+      send({ type: "subscribe", conversation_id: convId });
+      void fetchAll();
     }
 
     const clientMessageId = crypto.randomUUID();
     const userContent: Record<string, unknown> = { text: displayText, client_message_id: clientMessageId };
-    const stickyAgentNode = selectedMentionAgent || agentNodeById(agentNodes, activeConversationNodeId || activeConversation?.node_id || null);
+    const stickyAgentNode =
+      selectedMentionAgent ||
+      agentNodeById(agentNodes, activeConversationNodeId || activeConversation?.node_id || null);
     const stickyAgentTarget = stickyAgentNode ? agentTargetForNode(stickyAgentNode) : undefined;
     if (stickyAgentNode && stickyAgentTarget) {
       userContent.agent_target = stickyAgentTarget;
@@ -831,35 +855,83 @@ export default function ConversationPage() {
     }
     pendingScrollToBottomRef.current = true;
     shouldStickToBottomRef.current = true;
-    const agentPayload = stickyAgentNode && stickyAgentTarget ? { agent_target: stickyAgentTarget, agent_node_id: stickyAgentNode.id } : {};
-    const shouldContinueExisting = Boolean(!startFresh && activeId && !restartRequested && !completedConversation);
-    const willSteerDirectly = Boolean(!platformMention && shouldContinueExisting && activeConversation?.status === "running");
+    const agentPayload =
+      stickyAgentNode && stickyAgentTarget
+        ? { agent_target: stickyAgentTarget, agent_node_id: stickyAgentNode.id }
+        : {};
+    // Asset-launched tasks always start a fresh assign on the given conversation.
+    const shouldContinueExisting = Boolean(
+      !explicitConv &&
+        !startFresh &&
+        activeId &&
+        !restartRequested &&
+        !completedConversation &&
+        !opts.forceNewConversation,
+    );
+    const willSteerDirectly = Boolean(
+      !platformMention && shouldContinueExisting && activeConversation?.status === "running",
+    );
     const pendingAgentSource = pendingAgentSourceForMessage(stickyAgentNode, willSteerDirectly);
-    const pendingAgentNodeId = stickyAgentNode?.id || (pendingAgentSource === "pentest" ? activeConversationNodeId || activeConversation?.node_id || undefined : undefined);
+    const pendingAgentNodeId =
+      stickyAgentNode?.id ||
+      (pendingAgentSource === "pentest"
+        ? activeConversationNodeId || activeConversation?.node_id || undefined
+        : undefined);
     const pendingContent: Record<string, unknown> = {
       text: "Working...",
       agent_source: pendingAgentSource,
     };
     if (pendingAgentNodeId) pendingContent.agent_node_id = pendingAgentNodeId;
-    setConversationMessageData(convId, data => {
-      const withoutPending = removeMessageRecords(data, record => recordMessageType(record) === "agent_pending");
-      const withUser = appendMessageRecord(withoutPending, messageRecordFromMessage(makeMessage(convId, "user", "text", userContent)));
-      return appendMessageRecord(withUser, messageRecordFromMessage(makeMessage(convId, "agent", "agent_pending", pendingContent)));
+    setConversationMessageData(convId, (data) => {
+      const withoutPending = removeMessageRecords(
+        data,
+        (record) => recordMessageType(record) === "agent_pending",
+      );
+      const withUser = appendMessageRecord(
+        withoutPending,
+        messageRecordFromMessage(makeMessage(convId!, "user", "text", userContent)),
+      );
+      return appendMessageRecord(
+        withUser,
+        messageRecordFromMessage(makeMessage(convId!, "agent", "agent_pending", pendingContent)),
+      );
     });
 
     if (!platformMention && shouldContinueExisting && activeConversation?.status === "running") {
-      send({ type: "user_steer", conversation_id: convId, text, display_text: displayText, client_message_id: clientMessageId, ...agentPayload });
+      send({
+        type: "user_steer",
+        conversation_id: convId,
+        text,
+        display_text: displayText,
+        client_message_id: clientMessageId,
+        ...agentPayload,
+      });
       return;
     }
 
     if (shouldContinueExisting && !targetValue) {
       setRunning(true);
-      send({ type: "user_message", conversation_id: convId, text, display_text: displayText, resume: true, client_message_id: clientMessageId, ...agentPayload });
+      send({
+        type: "user_message",
+        conversation_id: convId,
+        text,
+        display_text: displayText,
+        resume: true,
+        client_message_id: clientMessageId,
+        ...agentPayload,
+      });
       return;
     }
 
     if (!targetValue) {
-      send({ type: "user_message", conversation_id: convId, text, display_text: displayText, client_message_id: clientMessageId, ...agentPayload });
+      send({
+        type: "user_message",
+        conversation_id: convId,
+        text,
+        display_text: displayText,
+        client_message_id: clientMessageId,
+        ...agentPayload,
+      });
       return;
     }
 
@@ -868,10 +940,77 @@ export default function ConversationPage() {
     setAgentState({});
     setProgress(undefined);
     setKanban(undefined);
-    const target = { type: targetValue.startsWith("http") ? "url" : "host", value: targetValue };
-    const scope = { allow: [target.value], deny: [] };
-    send({ type: "user_message", conversation_id: convId, text, target, scope, display_text: displayText, client_message_id: clientMessageId, ...agentPayload });
-  }, [input, selectedAgent, agentNodes, activeId, activeConversation, conversations, planTree, resetConversationState, fetchAll, send, setConversationMessageData]);
+    const target =
+      opts.target ||
+      ({ type: targetValue.startsWith("http") ? "url" : "host", value: targetValue } as const);
+    const scope = opts.scope || { allow: [target.value], deny: [] };
+    send({
+      type: "user_message",
+      conversation_id: convId,
+      text,
+      target,
+      scope,
+      display_text: displayText,
+      client_message_id: clientMessageId,
+      ...agentPayload,
+    });
+  }, [
+    selectedAgent,
+    agentNodes,
+    activeId,
+    activeConversation,
+    conversations,
+    planTree,
+    resetConversationState,
+    send,
+    setConversationMessageData,
+    activeConversationNodeId,
+    fetchAll,
+  ]);
+
+  // Auto-start task launched from Asset management (host/port multi-select).
+  useEffect(() => {
+    const raw = sessionStorage.getItem(PENDING_ASSET_TASK_KEY);
+    if (!raw) return;
+    let draft: {
+      text?: string;
+      target?: { type: string; value: string };
+      scope?: { allow: string[]; deny: string[] };
+    };
+    try {
+      draft = JSON.parse(raw);
+    } catch {
+      sessionStorage.removeItem(PENDING_ASSET_TASK_KEY);
+      return;
+    }
+    sessionStorage.removeItem(PENDING_ASSET_TASK_KEY);
+    const text = String(draft.text || "").trim();
+    if (!text) return;
+    const convId = localStorage.getItem(ACTIVE_CONVERSATION_KEY);
+    void launchTaskMessage({
+      displayText: text,
+      text,
+      target: draft.target || null,
+      scope: draft.scope || null,
+      forceNewConversation: false,
+      conversationId: convId,
+    });
+  }, [launchTaskMessage]);
+
+  const handleSend = useCallback(async () => {
+    if (!input.trim()) return;
+    const displayText = input.trim();
+    const selectedAgentCandidate = selectedAgentRef.current || selectedAgent;
+    const selectedMentionAgent =
+      selectedAgentCandidate && displayText.includes(`@${selectedAgentCandidate.name}`)
+        ? selectedAgentCandidate
+        : resolveMentionedAgent(displayText, agentNodes);
+    const text = stripAgentMention(displayText, selectedMentionAgent);
+    setInput("");
+    selectedAgentRef.current = null;
+    setSelectedAgent(null);
+    await launchTaskMessage({ displayText, text });
+  }, [input, selectedAgent, agentNodes, launchTaskMessage]);
 
 
 function renderMentionText(text: string): ReactNode[] {
