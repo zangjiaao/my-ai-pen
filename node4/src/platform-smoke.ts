@@ -1,6 +1,10 @@
 /**
- * Platform bridge smoke: drive the same normalize + event path without a live server.
- * Simulates task_assign → tool events → finish → task_complete consistent settlement.
+ * Platform bridge smoke: drive the same normalize + event path as main.ts handlers.
+ *
+ * LIMITATION (verification plan step 3 fallback): does NOT open a live WebSocket to
+ * PLATFORM_WS_URL. Exercises shipped normalizeTaskAssign + tools + finish settlement
+ * + task_complete emission on the real tool path. Live platform WS requires NODE_TOKEN
+ * and a running backend; when unavailable this structural/unit path is used.
  */
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -41,6 +45,14 @@ export function normalizeTaskAssign(message: Record<string, unknown>): TaskEnvel
 }
 
 async function main() {
+  console.log(
+    JSON.stringify({
+      mode: "structural_fallback_no_live_ws",
+      limitation:
+        "No live PLATFORM_WS_URL connection in this smoke. Drives shipped task_assign normalize + tool/finish/task_complete handlers only. Live WS requires NODE_TOKEN + running platform backend.",
+      live_ws: false,
+    }),
+  );
   const events: PlatformMessage[] = [];
   const platform: PlatformSink = {
     async send(m) {
@@ -116,6 +128,8 @@ async function main() {
     JSON.stringify(
       {
         ok: true,
+        live_ws: false,
+        limitation: "structural fallback — no live platform WebSocket",
         path: "task_assign_normalize → tools → finish → task_complete",
         events: types,
         terminal: complete?.status,
