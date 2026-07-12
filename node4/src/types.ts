@@ -36,6 +36,10 @@ export type ToolRuntime = {
   goals: import("./stores/goal.js").GoalStore;
   subagents?: import("./runtime/subagent.js").SubagentHost;
   rolePackId?: string;
+  /** Optional skill store (CTF/pentest methodology). */
+  skills?: import("./stores/skill.js").SkillStore;
+  /** Pack-scoped skill ids for skill(list) filter. */
+  skillIds?: readonly string[];
   lifecycle: {
     toolsInLastSegment?: number;
     /** Set on failed todo apply; consumed by next harness continue injection. */

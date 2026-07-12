@@ -18,6 +18,15 @@ export type RolePack = {
   bookingMode: BookingMode;
   /** Settlement still harness-owned; pack only documents posture. */
   settlementNote: string;
+  /**
+   * Optional default long-task objective when goal mode is on but the task
+   * envelope did not supply goalObjective (structured field only — not NLP).
+   */
+  defaultGoalObjective?: string;
+  /** Skill ids surfaced by skill(list) for this pack (load on demand). */
+  skillIds?: readonly string[];
+  /** Relative recipe dir under node4 root (e.g. recipes/ctf). */
+  recipeDir?: string;
 };
 
 export type RoleResolveInput = {

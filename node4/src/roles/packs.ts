@@ -1,6 +1,6 @@
 import type { RolePack } from "./types.js";
 
-/** Default commercial pack: authorized pentest / CTF-style assessment. */
+/** Default commercial pack: authorized pentest assessment. */
 export const PENTEST_ROLE_PACK: RolePack = {
   id: "pentest",
   label: "Penetration testing",
@@ -32,6 +32,54 @@ export const PENTEST_ROLE_PACK: RolePack = {
 };
 
 /**
+ * CTF role pack: maximize verified flags with session HTTP + loadable skills.
+ * Distinct from pentest — selected only via explicit engagement/role=ctf.
+ */
+export const CTF_ROLE_PACK: RolePack = {
+  id: "ctf",
+  label: "CTF web player",
+  missionLines: [
+    "You are Node4 in the **ctf** role pack: an authorized CTF web challenge player.",
+    "Objective: enumerate challenges yourself and maximize unique verified flag{...} (or equivalent unlocks) with evidence-backed booking.",
+    "You are NOT a general coding agent. Do NOT invent answer keys, fixed flag lists, or site-specific spoilers.",
+    "Partial clearance is not done — keep working remaining items from YOUR recon until solved or proven blocked.",
+  ],
+  workLines: [
+    "How to work (CTF player — OMP density + professional session tools):",
+    "- Start with skill(list) then skill(load) for ctf-web-recon when surface is unclear; use ctf-flag-verify before goal complete; use ctf-stuck-rotation when stalled.",
+    "- Prefer session(op=request|chain) for cookie-jar multi-step HTTP instead of hand-rolled curl -b/-c loops. session(op=history) to review recent probes.",
+    "- shell remains high-density for scanners, gopher/SSRF pipelines, and custom scripts. See recipes/ctf for non-answer templates (copy into task scripts/ as needed).",
+    "- http is single-probe only; prefer session for stateful CTF flows.",
+    "- Enumerate levels/routes from the target first; maintain a coarse todo of categories (injection, XSS, SSRF, …) — not one todo per flag.",
+    "- Every real flag: finding(confirm)+evidence_ids immediately (batch after a session/shell burst is fine).",
+    "- Goal mode: seed or create maximize-flags objective early; do not complete while remaining_unsolved>0 from your recon. Harness rejects early complete.",
+    "- When stuck: rotate encodings/params/auth/source recon (skill ctf-stuck-rotation) — do not spam the same probe.",
+    "- No finish tool; no session wall. Chat is not product truth.",
+  ],
+  toolNames: [
+    "todo",
+    "shell",
+    "write",
+    "edit",
+    "read",
+    "http",
+    "session",
+    "script",
+    "finding",
+    "subagent",
+    "goal",
+    "skill",
+  ],
+  bookingMode: "finding",
+  settlementNote:
+    "Maximize verified flags with evidence. Goal complete only after full recon audit (remaining_unsolved=0 + harness gates). No finish tool.",
+  defaultGoalObjective:
+    "Within authorized scope, maximize verified unique flag{...} (or challenge unlocks) for all reachable challenges. Enumerate levels yourself; never invent answer keys. Partial clearance is not done. Complete only with audit_notes, remaining_unsolved=0, and harness gates.",
+  skillIds: ["ctf-web-recon", "ctf-flag-verify", "ctf-stuck-rotation"],
+  recipeDir: "recipes/ctf",
+};
+
+/**
  * Stub second pack: proves extension path without forking the runner.
  * Consult-style — explain/analyze with tools, no product finding booking.
  */
@@ -57,10 +105,12 @@ export const CONSULT_STUB_ROLE_PACK: RolePack = {
 
 const BUILTIN: Record<string, RolePack> = {
   pentest: PENTEST_ROLE_PACK,
+  ctf: CTF_ROLE_PACK,
   consult: CONSULT_STUB_ROLE_PACK,
-  // Aliases
+  // Aliases → distinct packs where meaningful
   assess: PENTEST_ROLE_PACK,
-  ctf: PENTEST_ROLE_PACK,
+  "ctf-web": CTF_ROLE_PACK,
+  challenge: CTF_ROLE_PACK,
 };
 
 /** Extra packs registered at runtime (tests / future product packs). */

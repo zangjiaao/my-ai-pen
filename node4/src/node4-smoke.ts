@@ -25,6 +25,7 @@ import {
 } from "./runtime/todo-harness.js";
 import {
   CONSULT_STUB_ROLE_PACK,
+  CTF_ROLE_PACK,
   PENTEST_ROLE_PACK,
   clearExtraRolePacks,
   listRolePackIds,
@@ -37,8 +38,13 @@ import { createWriteTool, createEditTool, createReadTool } from "./tools/fs-tool
 import { createFindingTool } from "./tools/finding.js";
 import { createSubagentTool } from "./tools/subagent.js";
 import { createGoalTool } from "./tools/goal.js";
+import { createSessionTool } from "./tools/session.js";
+import { createSkillTool } from "./tools/skill.js";
 import { createNode4Tools, NODE4_TOOL_NAMES, toolNamesForPack } from "./tools/index.js";
 import { buildSystemPrompt } from "./runtime/prompt.js";
+import { auditCtfEventsJsonl } from "./runtime/ctf-audit.js";
+import { SkillStore, skillContainsAnswerKey } from "./stores/skill.js";
+import { node4Root } from "./config.js";
 import {
   bookingBacklog,
   eagerBookingInjection,
@@ -107,6 +113,21 @@ async function main() {
   assert(toolNamesForPack(PENTEST_ROLE_PACK).includes("finding"), "pentest has finding");
   assert(!toolNamesForPack(CONSULT_STUB_ROLE_PACK).includes("finding"), "consult stub has no finding");
   assert(toolNamesForPack(PENTEST_ROLE_PACK).includes("subagent"), "pentest has subagent");
+  // CTF pack: distinct from pentest, structured engagement only
+  const ctfRes = resolveRolePack({ engagement: "ctf" });
+  assert(ctfRes.pack.id === "ctf" && ctfRes.source === "engagement", "ctf via engagement");
+  assert(ctfRes.pack.id !== PENTEST_ROLE_PACK.id, "ctf pack distinct from pentest");
+  assert(toolNamesForPack(CTF_ROLE_PACK).includes("session"), "ctf has session tool");
+  assert(toolNamesForPack(CTF_ROLE_PACK).includes("skill"), "ctf has skill tool");
+  assert(CTF_ROLE_PACK.skillIds && CTF_ROLE_PACK.skillIds.length >= 2, "ctf skill index ≥2");
+  assert(Boolean(CTF_ROLE_PACK.defaultGoalObjective?.includes("flag")), "ctf default goal maximize flags");
+  assert(!toolNamesForPack(PENTEST_ROLE_PACK).includes("session"), "pentest pack does not force session");
+  const ctfPrompt = buildSystemPrompt(
+    { taskId: "t", conversationId: "c", instruction: "play", target: {}, scope: {} },
+    CTF_ROLE_PACK,
+  );
+  assert(ctfPrompt.includes("ctf") && ctfPrompt.includes("session"), "ctf prompt mentions pack/session");
+  assert(ctfPrompt.includes("skill"), "ctf prompt mentions skills");
   clearExtraRolePacks();
   registerRolePack({
     id: "custom_test",
@@ -591,6 +612,74 @@ async function main() {
     "goals in continue",
   );
 
+  // --- CTF audit pure parser (fixture events) ---
+  const fixtureEvents = [
+    JSON.stringify({
+      type: "tool_output",
+      tool_name: "shell",
+      status: "running",
+      args: { command: "curl -c jar -b jar -s URL/login -d a=1" },
+    }),
+    JSON.stringify({
+      type: "tool_output",
+      tool_name: "shell",
+      status: "running",
+      args: { command: "python3 -c 'print(1)'" },
+    }),
+    JSON.stringify({ type: "tool_output", tool_name: "finding", status: "done", summary: "booked" }),
+    JSON.stringify({ type: "goal_updated", op: "complete_rejected" }),
+    JSON.stringify({
+      type: "status_update",
+      message: "continue 1/16 (goal_continuation) goal=1/16",
+    }),
+    JSON.stringify({ type: "tool_output", tool_name: "shell", status: "done", result_text: "flag{demo_fixture_abcd}" }),
+  ].join("\n");
+  const audit = auditCtfEventsJsonl(fixtureEvents, { sourceLabel: "fixture" });
+  assert(audit.tool_counts.shell >= 2, "audit counts shell");
+  assert(audit.shell_shapes.curl >= 1 && audit.shell_shapes.cookie_jar >= 1, "audit curl/cookie shapes");
+  assert(audit.gap_candidates.length >= 1, "audit gap candidates");
+  assert(audit.leverage_recommendations.some((r) => /session/i.test(r)), "audit recommends session");
+  assert(audit.flag_count >= 1, "audit extracts flags from evidence text");
+  assert(audit.goal_ops.includes("complete_rejected"), "audit goal ops");
+
+  // --- Skills list/load (real skill files on disk) ---
+  const skillStore = new SkillStore(join(node4Root(), "skills"));
+  runtime.skills = skillStore;
+  runtime.skillIds = CTF_ROLE_PACK.skillIds;
+  const skillTool = createSkillTool(runtime);
+  const skillList = JSON.parse(textOf(await exec(skillTool, "sk1", { op: "list" })));
+  assert(skillList.ok && skillList.count >= 2, `skill list count=${skillList.count}`);
+  assert(
+    (skillList.skills as Array<{ id: string }>).every((s) => String(s.id).startsWith("ctf-")),
+    "list filtered to ctf skills",
+  );
+  const loaded = JSON.parse(
+    textOf(await exec(skillTool, "sk2", { op: "load", id: "ctf-web-recon" })),
+  );
+  assert(loaded.ok && String(loaded.body).includes("Enumerate"), "load skill body");
+  assert(!skillContainsAnswerKey(String(loaded.body)), "skill body has no fixed flag keys");
+  for (const id of CTF_ROLE_PACK.skillIds || []) {
+    const body = await skillStore.load(id);
+    assert(!("error" in body), `skill ${id} loads`);
+    assert(!skillContainsAnswerKey((body as { body: string }).body), `no answer key in ${id}`);
+  }
+
+  // --- Session tool (local http server optional: use mock via undici? skip network if fails) ---
+  // Structural: factory present on ctf tools
+  const ctfTools = createNode4Tools(runtime, CTF_ROLE_PACK);
+  assert(ctfTools.some((t) => t.name === "session"), "ctf tools include session");
+  assert(ctfTools.some((t) => t.name === "skill"), "ctf tools include skill");
+  // Session jar_get works offline
+  const sessionTool = createSessionTool(runtime);
+  const jarGet = JSON.parse(textOf(await exec(sessionTool, "sess1", { op: "jar_get" })));
+  assert(jarGet.ok && jarGet.cookies && typeof jarGet.cookies === "object", "session jar_get");
+  const jarSet = JSON.parse(
+    textOf(await exec(sessionTool, "sess2", { op: "jar_set", cookies: { sid: "abc" } })),
+  );
+  assert(jarSet.ok && jarSet.cookies.sid === "abc", "session jar_set");
+  const jarGet2 = JSON.parse(textOf(await exec(sessionTool, "sess3", { op: "jar_get" })));
+  assert(jarGet2.cookies.sid === "abc", "session jar durable on disk");
+
   await exec(createTodoTool(runtime), "t", { op: "init", items: ["a", "b"] });
   // Todo mutations must project plan_tree for platform Tasks panel.
   const planMsgs = messages.filter((m) => m.type === "plan_tree_updated");
@@ -825,6 +914,10 @@ async function main() {
         platform_text: true,
         panel_agents: true,
         goal_tokensUsed: true,
+        ctf_pack: true,
+        ctf_audit: true,
+        ctf_skills: true,
+        session_tool: true,
         taskDir,
       },
       null,

@@ -9,9 +9,11 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type { Node4Config } from "../config.js";
+import { node4Root } from "../config.js";
 import { resolveRolePack } from "../roles/index.js";
 import { EvidenceStore } from "../stores/evidence.js";
 import { GoalStore } from "../stores/goal.js";
+import { SkillStore } from "../stores/skill.js";
 import { TodoStore } from "../stores/todo.js";
 import type { PlatformSink, TaskEnvelope, ToolRuntime } from "../types.js";
 import { toolNamesForPack } from "../tools/index.js";
@@ -70,6 +72,7 @@ export async function runNode4Task(
   const usage = createUsageLedgerFromEnv();
   const textStream = new PlatformTextStream(loggingPlatform, task);
   const checkpointThrottle = new CheckpointThrottle();
+  const skills = new SkillStore(join(node4Root(), "skills"));
 
   const runtime: ToolRuntime = {
     task,
@@ -81,6 +84,8 @@ export async function runNode4Task(
     findingsDir: join(taskDir, "findings"),
     goals,
     rolePackId: pack.id,
+    skills,
+    skillIds: pack.skillIds,
     lifecycle: { toolsInLastSegment: 0, panelAgents: panel },
   };
   runtime.subagents = new SubagentHost({
@@ -209,11 +214,12 @@ export async function runNode4Task(
   let stopReason = "natural";
   const cancelled = () => Boolean(signal?.aborted);
 
-  // Optional seed goal mode from structured task field (not free-text NLP).
+  // Optional seed goal mode from structured task field (not free-text NLP),
+  // else pack defaultGoalObjective when present (e.g. CTF maximize flags).
   const seedObjective =
     typeof (task as { goalObjective?: string }).goalObjective === "string"
       ? String((task as { goalObjective?: string }).goalObjective).trim()
-      : "";
+      : pack.defaultGoalObjective?.trim() || "";
   if (seedObjective) {
     try {
       goals.create({ objective: seedObjective });

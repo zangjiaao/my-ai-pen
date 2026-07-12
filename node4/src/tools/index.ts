@@ -6,7 +6,9 @@ import { createEditTool, createReadTool, createWriteTool } from "./fs-tools.js";
 import { createGoalTool } from "./goal.js";
 import { createHttpTool } from "./http.js";
 import { createScriptTool } from "./script.js";
+import { createSessionTool } from "./session.js";
 import { createShellTool } from "./shell.js";
+import { createSkillTool } from "./skill.js";
 import { createSubagentTool } from "./subagent.js";
 import { createTodoTool } from "./todo.js";
 
@@ -18,10 +20,12 @@ export const ALL_NODE4_TOOL_FACTORIES: Record<string, (runtime: ToolRuntime) => 
   edit: createEditTool,
   read: createReadTool,
   http: createHttpTool,
+  session: createSessionTool,
   script: createScriptTool,
   finding: createFindingTool,
   subagent: createSubagentTool,
   goal: createGoalTool,
+  skill: createSkillTool,
 };
 
 /** Default / pentest pack tool order. */
