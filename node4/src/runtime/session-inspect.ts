@@ -30,8 +30,6 @@ export async function writePostRunInspectArtifacts(options: {
     "evidence",
     "scripts",
     "pi-sessions",
-    "status.json",
-    "finish-scan.json",
     "agent-summary.json",
   ]) {
     try {

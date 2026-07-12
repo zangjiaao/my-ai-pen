@@ -1,7 +1,7 @@
 # 产品路线图：AI 渗透测试 Agent Runtime
 
 > 文档角色：产品和工程路线图的唯一执行入口。  
-> 当前校准日期：2026-07-11  
+> 当前校准日期：2026-07-12  
 > 当前主线：**Node4** clean-room 简 harness（见 `docs/node4-harness.md`）— 商用自研、不依赖 OMP 源码；平台对接与 Node2 同通道；能力对照 OMP 基线；**TUI 延后**。
 
 ## 0. 当前结论
@@ -9,19 +9,22 @@
 目标是构建面向真实系统的渗透测试 Agent Runtime（商业产品，执行核自研）：
 
 - **Node4 北星**：`docs/node4-harness.md` — OMP 级 harness（shell/write/edit/todo/continue）+ **渗透** system prompt；**入账** finding/evidence（非聊天）；**结束**由 harness/平台结算，agent finish 非终态；session 落盘可排查。
+- **设计备忘**：`docs/node4-roadmap-memo.md` — 角色化（CTF/整改/应急）、多环境多 Node、多 Agent **经平台协作**；**当前不为协作大改 Node4**。
 - **Node2**：并行兼容节点；Harness v2 经验见 `docs/harness-v2.md`，不再作为主能力路径堆叠。
 - Pi 兼容栈负责 session/tools；**不** vendoring oh-my-pi。
 - 平台：会话 / 资产 / 漏洞 / 证据 / 计时；Node 只做执行与事件回写。
 - Benchmark / OMP 行为对照衡量能力，不以硬编码答案冒充自治。
 - Interactive TUI：预留，本阶段不交付。
+- 多角色 / 多 Agent 流水线：**契约预留、实现排后**，不挡 OMP 对齐主线。
 
 下一步优先级：
 
-1. **Node4 standalone runtime + smokes + 三靶场对照**。
-2. **Node4 平台 WS 对接**（task_assign → events → task_complete）。
-3. 能力硬化（script/sandbox、对照闭环）。
-4. TUI（后续）：sticky todo + transcript，与 Web 同语义。
-5. Caido / 多身份等旁路增强（不挡主循环）。
+1. **继续 Node4 ↔ OMP 过程对齐**（shell 密度、continue、booking、API error 与 empty-stop 分离等）。
+2. **booking / 三靶对照复验**（有模型额度时干净 Juice 等）。
+3. **Node4 平台 WS 对接硬化**（task_assign → events → task_complete）。
+4. 能力硬化（script/sandbox、对照闭环）。
+5. TUI（后续）：sticky todo + transcript，与 Web 同语义。
+6. 角色包 / 平台多 Node 调度（更后）；Caido / 多身份等旁路增强。
 
 ## 1. 总体阶段
 

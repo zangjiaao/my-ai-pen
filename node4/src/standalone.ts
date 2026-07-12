@@ -14,7 +14,7 @@ const config = loadConfig();
 
 class LogSink implements PlatformSink {
   async send(message: PlatformMessage): Promise<void> {
-    if (["task_complete", "task_error", "finish_scan_requested", "vuln_found"].includes(message.type)) {
+    if (["task_complete", "task_error", "vuln_found", "todo_updated"].includes(message.type)) {
       console.log(`[node4] ${message.type}`, JSON.stringify(message).slice(0, 400));
     }
   }
@@ -28,9 +28,11 @@ async function main(): Promise<void> {
     conversationId: args["conversation-id"] || taskId,
     instruction:
       args.instruction ||
-      `Authorized security test of ${target}. Use todo → http/script → finding → finish_scan. Confirm with evidence.`,
+      `Authorized security test of ${target}. Use todo → shell/http/script → finding(confirm)+evidence. Use subagent for separable packages. No finish tool; harness ends the session.`,
     target: { type: "url", value: target },
     scope: { allow: (args.scope || target).split(",").map((s) => s.trim()).filter(Boolean) },
+    engagement: args.engagement || args.role || "pentest",
+    role: args.role,
   };
   if (args.output) config.workspaceDir = resolve(args.output);
 

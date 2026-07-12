@@ -55,3 +55,11 @@ node3/workspace/
 
 tmp/
 node/tmp/
+
+# Node4 local runtime / benches
+node4/workspace/
+node4/tmp/
+node4/.pi-agent/
+
+# Claude local
+.claude/settings.local.json

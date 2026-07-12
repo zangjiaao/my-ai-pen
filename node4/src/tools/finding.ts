@@ -4,14 +4,14 @@ import { randomBytes } from "node:crypto";
 import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ToolRuntime } from "../types.js";
+import { FINDING_TOOL_DESCRIPTION } from "../runtime/booking-harness.js";
 import { jsonResult, textResult } from "./common.js";
 
 export function createFindingTool(runtime: ToolRuntime): ToolDefinition<any> {
   return {
     name: "finding",
     label: "Finding",
-    description:
-      "ONLY product conclusion path for vuln/flag/auth. Requires evidence_ids from real tool output. Chat prose is not a product finding. Booking does NOT end the engagement — keep testing.",
+    description: FINDING_TOOL_DESCRIPTION,
     parameters: Type.Object({
       action: Type.String(),
       title: Type.Optional(Type.String()),

@@ -53,31 +53,61 @@ export function nextActionableTask(phases: readonly TodoPhase[]): TodoItem | und
 }
 
 export function formatTodoSummary(phases: TodoPhase[], errors: string[] = [], readOnly = false): string {
-  if (errors.length > 0) {
-    return `Errors: ${errors.join("; ")}`;
-  }
-  const total = phases.reduce((n, p) => n + p.tasks.length, 0);
-  if (total === 0) {
+  const tasks = phases.flatMap((phase) => phase.tasks);
+  if (tasks.length === 0) {
+    if (errors.length > 0) return `Errors: ${errors.join("; ")}`;
     return readOnly ? "Todo list is empty." : "Todo list cleared.";
   }
-  const open = phases.flatMap((p) => p.tasks).filter((t) => t.status === "pending" || t.status === "in_progress");
-  const active = nextActionableTask(phases);
-  const lines: string[] = [
-    `Open: ${open.length}/${total}` + (active ? ` · active: ${active.content}` : ""),
-  ];
+
+  const remainingByPhase = phases
+    .map((phase) => ({
+      name: phase.name,
+      tasks: phase.tasks.filter((task) => task.status === "pending" || task.status === "in_progress"),
+    }))
+    .filter((phase) => phase.tasks.length > 0);
+  const remainingTasks = remainingByPhase.flatMap((phase) =>
+    phase.tasks.map((task) => ({ ...task, phase: phase.name })),
+  );
+
+  let currentIdx = phases.findIndex((phase) =>
+    phase.tasks.some((task) => task.status === "pending" || task.status === "in_progress"),
+  );
+  if (currentIdx === -1) currentIdx = phases.length - 1;
+  const current = phases[currentIdx]!;
+  const closedInActive = current.tasks.filter(
+    (task) => task.status === "completed" || task.status === "abandoned",
+  ).length;
+  const closedAll = tasks.filter((task) => task.status === "completed" || task.status === "abandoned").length;
+  const workedAhead = phases.some(
+    (phase, idx) =>
+      idx > currentIdx && phase.tasks.some((task) => task.status === "completed" || task.status === "abandoned"),
+  );
+
+  const lines: string[] = [];
+  if (errors.length > 0) lines.push(`Errors: ${errors.join("; ")}`);
+  if (remainingTasks.length === 0) {
+    lines.push("Remaining items: none.");
+  } else {
+    lines.push(`Remaining items (${remainingTasks.length}):`);
+    for (const task of remainingTasks) {
+      lines.push(`  - ${task.content} [${task.status}] (${task.phase})`);
+    }
+  }
+  lines.push(`Overall: ${closedAll}/${tasks.length} done, ${remainingTasks.length} open.`);
+  lines.push(
+    `Active phase ${currentIdx + 1}/${phases.length} "${current.name}" (${closedInActive}/${current.tasks.length})${
+      workedAhead
+        ? " — earliest phase with open tasks; in_progress auto-advances to earliest open task (completed items are not reverted)."
+        : "."
+    }`,
+  );
   for (const phase of phases) {
-    const done = phase.tasks.filter((t) => t.status === "completed").length;
-    lines.push(`${phase.name} (${done}/${phase.tasks.length})`);
+    lines.push(`  ${phase.name}:`);
     for (const task of phase.tasks) {
-      const mark =
-        task.status === "completed"
-          ? "[x]"
-          : task.status === "in_progress"
-            ? "[/]"
-            : task.status === "abandoned"
-              ? "[-]"
-              : "[ ]";
-      lines.push(`  ${mark} ${task.content}`);
+      const checkbox = task.status === "completed" ? "[X]" : "[ ]";
+      const tag =
+        task.status === "in_progress" ? " (in progress)" : task.status === "abandoned" ? " (dropped)" : "";
+      lines.push(`    - ${checkbox} ${task.content}${tag}`);
     }
   }
   return lines.join("\n");

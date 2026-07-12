@@ -1,6 +1,7 @@
 import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { formatTodoSummary, type TodoOpName, type TodoParams } from "../stores/todo.js";
+import { TODO_TOOL_DESCRIPTION } from "../runtime/todo-harness.js";
 import type { ToolRuntime } from "../types.js";
 import { jsonResult, textResult } from "./common.js";
 
@@ -10,8 +11,7 @@ export function createTodoTool(runtime: ToolRuntime): ToolDefinition<any> {
   return {
     name: "todo",
     label: "Todo",
-    description:
-      "Session task map. Single op per call: init/start/done/drop/rm/append/view. Tasks identified by verbatim content (not task-1). One in_progress; done auto-promotes next. Does not block finish_scan.",
+    description: TODO_TOOL_DESCRIPTION,
     parameters: Type.Object({
       op: Type.String(),
       list: Type.Optional(Type.Array(Type.Object({ phase: Type.String(), items: Type.Array(Type.String()) }))),
@@ -38,9 +38,20 @@ export function createTodoTool(runtime: ToolRuntime): ToolDefinition<any> {
       };
       const result = runtime.todo.apply(input);
       if (result.errors.length) {
-        return jsonResult({ ok: false, errors: result.errors, summary: formatTodoSummary(result.phases, result.errors, true), phases: result.phases }, { isError: true });
+        runtime.lifecycle.pendingTodoErrorReminder = result.errors.slice();
+        return jsonResult(
+          {
+            ok: false,
+            errors: result.errors,
+            summary: formatTodoSummary(result.phases, result.errors, true),
+            phases: result.phases,
+          },
+          { isError: true },
+        );
       }
+      // Successful mutation clears a pending error reminder.
       if (!result.readOnly) {
+        runtime.lifecycle.pendingTodoErrorReminder = undefined;
         await runtime.platform.send({
           type: "todo_updated",
           conversation_id: runtime.task.conversationId,
@@ -56,7 +67,7 @@ export function createTodoTool(runtime: ToolRuntime): ToolDefinition<any> {
         summary: formatTodoSummary(result.phases, [], result.readOnly),
         phases: result.phases,
         open_count: runtime.todo.openCount(),
-        guidance: "Open todo items do not block finish_scan(completed).",
+        completed_tasks: result.completedTasks,
       });
     },
   };

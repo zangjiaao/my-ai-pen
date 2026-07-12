@@ -62,6 +62,13 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
     target,
     scope,
     engagement: typeof message.engagement === "string" ? message.engagement : undefined,
+    role: typeof message.role === "string" ? message.role : undefined,
+    parentTaskId:
+      typeof message.parent_task_id === "string"
+        ? message.parent_task_id
+        : typeof message.parentTaskId === "string"
+          ? message.parentTaskId
+          : undefined,
   };
 }
 

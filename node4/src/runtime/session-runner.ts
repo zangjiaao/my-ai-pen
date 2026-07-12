@@ -9,21 +9,26 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type { Node4Config } from "../config.js";
+import { resolveRolePack } from "../roles/index.js";
 import { EvidenceStore } from "../stores/evidence.js";
+import { GoalStore } from "../stores/goal.js";
 import { TodoStore } from "../stores/todo.js";
 import type { PlatformSink, TaskEnvelope, ToolRuntime } from "../types.js";
-import { NODE4_TOOL_NAMES } from "../tools/index.js";
+import { toolNamesForPack } from "../tools/index.js";
 import { loadConfirmedFindings } from "../tools/finding.js";
 import { createNode4Extension } from "./extension.js";
-import { resolveTerminalTaskStatus } from "./finish-settlement.js";
+import { resolveTerminalTaskStatus } from "./harness-settlement.js";
 import {
-  emptyStopContinuePrompt,
+  composeContinuePrompt,
   nextEmptyStopStreak,
   resolveHarnessTerminalStatus,
-  shouldContinueAfterNaturalStop,
+  evaluateContinueAfterSegment,
 } from "./loop-policy.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { writePostRunInspectArtifacts } from "./session-inspect.js";
+import { eagerBookingInjection } from "./booking-harness.js";
+import { SubagentHost } from "./subagent.js";
+import { eagerTodoInjection } from "./todo-harness.js";
 
 export async function runNode4Task(
   config: Node4Config,
@@ -36,6 +41,10 @@ export async function runNode4Task(
   await mkdir(join(taskDir, "evidence"), { recursive: true });
   await mkdir(join(taskDir, "findings"), { recursive: true });
   await mkdir(join(taskDir, "scripts"), { recursive: true });
+  await mkdir(join(taskDir, "subagents"), { recursive: true });
+
+  const roleResolved = resolveRolePack({ engagement: task.engagement, role: task.role });
+  const pack = roleResolved.pack;
 
   const eventsPath = join(taskDir, "events.jsonl");
   await writeFile(eventsPath, "", "utf8");
@@ -46,6 +55,7 @@ export async function runNode4Task(
     },
   };
 
+  const goals = new GoalStore();
   const runtime: ToolRuntime = {
     task,
     workspaceDir: config.workspaceDir,
@@ -54,14 +64,44 @@ export async function runNode4Task(
     todo: new TodoStore(),
     evidence: new EvidenceStore(join(taskDir, "evidence")),
     findingsDir: join(taskDir, "findings"),
+    goals,
+    rolePackId: pack.id,
     lifecycle: { toolsInLastSegment: 0 },
   };
+  runtime.subagents = new SubagentHost({
+    task,
+    taskDir,
+    evidence: runtime.evidence,
+    platform: loggingPlatform,
+    goals,
+  });
+
+  let sessionRef: { abort?: () => Promise<void> } = {};
+  // No session wall/max-time (OMP-default style). Only platform/user cancel aborts.
+  runtime.lifecycle.abortSignal = signal;
+  if (signal) {
+    const onCancel = () => {
+      void loggingPlatform
+        .send({
+          type: "status_update",
+          conversation_id: task.conversationId,
+          task_id: task.taskId,
+          message: "harness abort: cancelled",
+        })
+        .catch(() => {});
+      void Promise.resolve(sessionRef.abort?.()).catch(() => {});
+    };
+    if (signal.aborted) onCancel();
+    else signal.addEventListener("abort", onCancel, { once: true });
+  }
 
   await loggingPlatform.send({
     type: "task_start",
     conversation_id: task.conversationId,
     task_id: task.taskId,
     target: task.target,
+    role_pack: pack.id,
+    role_source: roleResolved.source,
   });
 
   const authStorage = AuthStorage.create(join(config.piAgentDir, "auth.json"));
@@ -79,21 +119,23 @@ export async function runNode4Task(
   });
 
   const segmentCounter = { tools: 0 };
+  const systemPrompt = buildSystemPrompt(task, pack, { goals });
   const resourceLoader = new DefaultResourceLoader({
     cwd: taskDir,
     agentDir: config.piAgentDir,
     settingsManager,
-    extensionFactories: [createNode4Extension(runtime, segmentCounter)],
+    extensionFactories: [createNode4Extension(runtime, segmentCounter, pack)],
     noExtensions: true,
     noSkills: true,
     noPromptTemplates: true,
     noContextFiles: true,
-    systemPrompt: buildSystemPrompt(task),
+    systemPrompt,
   });
   await resourceLoader.reload();
 
   const piSessionDir = join(taskDir, "pi-sessions");
   await mkdir(piSessionDir, { recursive: true });
+  const toolNames = toolNamesForPack(pack);
   const { session } = await createAgentSession({
     cwd: taskDir,
     agentDir: config.piAgentDir,
@@ -102,79 +144,140 @@ export async function runNode4Task(
     authStorage,
     modelRegistry,
     resourceLoader,
-    tools: [...NODE4_TOOL_NAMES],
+    tools: [...toolNames],
     sessionManager: SessionManager.create(taskDir, piSessionDir),
     settingsManager,
   });
+  sessionRef = session as any;
 
-  const maxContinues = Math.max(1, Number(process.env.NODE4_MAX_CONTINUES || 8));
-  const maxEmptyStopStreak = Math.max(1, Number(process.env.NODE4_MAX_EMPTY_STOPS || 3));
+  // Continues: limited empty + one booking-gap + small premature-stop budget.
+  // No session wall/max-time — run until natural stop / continue caps / cancel.
+  const maxContinues = Math.max(0, Number(process.env.NODE4_MAX_CONTINUES ?? 6));
+  const maxEmptyStopStreak = Math.max(0, Number(process.env.NODE4_MAX_EMPTY_STOPS ?? 1));
+  const maxPrematureStops = Math.max(0, Number(process.env.NODE4_MAX_PREMATURE_STOPS ?? 2));
   let continueCount = 0;
   let emptyStopStreak = 0;
+  let bookingContinueUsed = false;
+  let prematureStopCount = 0;
   let stopReason = "natural";
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-  }, config.mainMaxMs);
+  const cancelled = () => Boolean(signal?.aborted);
 
-  try {
+  await loggingPlatform.send({
+    type: "status_update",
+    conversation_id: task.conversationId,
+    task_id: task.taskId,
+    message: `Node4 starting role_pack=${pack.id} tools=${toolNames.join(",")} (no session wall)`,
+  });
+
+  const userPrompt = [
+    eagerTodoInjection({ forced: true }),
+    "",
+    pack.bookingMode === "finding" ? eagerBookingInjection() : "",
+    "",
+    goals.formatForPrompt(),
+    "",
+    `Role pack: ${pack.id}. High tool density: multiple shell/tool calls in the same turn when independent; multi-step pipelines in one shell.`,
+    pack.bookingMode === "finding"
+      ? "Book via finding(confirm)+evidence_ids (batch after a productive shell burst is fine). When finished working, simply stop — there is no finish tool; harness settles."
+      : "This pack does not book findings. When finished, simply stop — harness settles.",
+    `Target: ${JSON.stringify(task.target)}`,
+    `Scope: ${JSON.stringify(task.scope)}`,
+    task.instruction,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  segmentCounter.tools = 0;
+  runtime.lifecycle.toolsInLastSegment = 0;
+
+  if (!cancelled()) {
+    try {
+      await session.prompt(userPrompt, { source: "interactive" });
+    } catch (err) {
+      if (!cancelled()) throw err;
+    }
+  }
+
+  while (!cancelled()) {
+    const toolsInLast = segmentCounter.tools;
+
+    const evidenceList = await runtime.evidence.list().catch(() => []);
+    const bookedSoFar = await loadConfirmedFindings(runtime.findingsDir).catch(() => ({ count: 0 }));
+    const bookingSnap =
+      pack.bookingMode === "finding"
+        ? {
+            evidenceCount: evidenceList.length,
+            bookedFindingCount: bookedSoFar.count,
+            toolsInLastSegment: toolsInLast,
+          }
+        : undefined;
+    // bookingGap: has evidence but zero findings (strong signal to allow one continue)
+    const bookingGap =
+      pack.bookingMode === "finding" && evidenceList.length >= 2 && bookedSoFar.count === 0;
+
+    // Pass previous emptyStopStreak only — evaluateContinueAfterSegment increments once.
+    const decision = evaluateContinueAfterSegment({
+      aborted: cancelled(),
+      toolsInLastSegment: toolsInLast,
+      previousEmptyStopStreak: emptyStopStreak,
+      continueCount,
+      maxContinues,
+      maxEmptyStopStreak,
+      bookingGap,
+      bookingContinueUsed,
+      prematureStopCount,
+      maxPrematureStops,
+    });
+    emptyStopStreak = decision.nextEmptyStopStreak;
+    stopReason = decision.reason;
+    if (!decision.continue) break;
+
+    if (decision.kind === "booking_gap") bookingContinueUsed = true;
+    if (decision.kind === "premature") prematureStopCount += 1;
+    continueCount = decision.nextContinueCount;
+    segmentCounter.tools = 0;
+    runtime.lifecycle.toolsInLastSegment = 0;
+
+    const todoErrors = runtime.lifecycle.pendingTodoErrorReminder?.slice();
+    runtime.lifecycle.pendingTodoErrorReminder = undefined;
+    const goalSnap = goals.formatForPrompt();
+
     await loggingPlatform.send({
       type: "status_update",
       conversation_id: task.conversationId,
       task_id: task.taskId,
-      message: "Node4 agent starting (OMP-class continue loop)",
+      message: `continue ${continueCount}/${maxContinues} (${decision.reason}) premature=${prematureStopCount}/${maxPrematureStops} evidence=${evidenceList.length} findings=${bookedSoFar.count}`,
     });
-
-    const userPrompt = [
-      "Run the authorized penetration test with high tool density (shell/write/edit/http).",
-      "Book proven issues only via finding+evidence_ids. status/finish_scan does not end the task.",
-      `Target: ${JSON.stringify(task.target)}`,
-      `Scope: ${JSON.stringify(task.scope)}`,
-      task.instruction,
-    ].join("\n");
-
-    // First segment
-    segmentCounter.tools = 0;
-    runtime.lifecycle.toolsInLastSegment = 0;
-    if (!signal?.aborted && !timedOut) {
-      await session.prompt(userPrompt, { source: "interactive" });
+    try {
+      const continueKind =
+        decision.kind === "booking_gap"
+          ? "booking_gap"
+          : decision.kind === "premature"
+            ? "premature"
+            : "empty";
+      await session.prompt(
+        composeContinuePrompt({
+          attempt: continueCount,
+          max: maxContinues,
+          openTodoCount: runtime.todo.openCount(),
+          todoErrors,
+          booking: bookingSnap,
+          goalSummary: goalSnap,
+          kind: continueKind,
+          prematureAttempt: prematureStopCount,
+          prematureMax: maxPrematureStops,
+        }),
+        { source: "interactive" },
+      );
+    } catch (err) {
+      if (cancelled()) break;
+      throw err;
     }
-
-    // Continue after natural stops (empty or premature) until caps/budget.
-    while (!signal?.aborted && !timedOut) {
-      const toolsInLast = segmentCounter.tools;
-      emptyStopStreak = nextEmptyStopStreak(toolsInLast, emptyStopStreak);
-      const decision = shouldContinueAfterNaturalStop({
-        timedOut,
-        aborted: Boolean(signal?.aborted),
-        toolsInLastSegment: toolsInLast,
-        emptyStopStreak,
-        continueCount,
-        maxContinues,
-        maxEmptyStopStreak,
-        agentBlocked: Boolean(runtime.lifecycle.agentBlocked),
-      });
-      stopReason = decision.reason;
-      if (!decision.continue) break;
-
-      continueCount = decision.nextContinueCount;
-      segmentCounter.tools = 0;
-      runtime.lifecycle.toolsInLastSegment = 0;
-      await loggingPlatform.send({
-        type: "status_update",
-        conversation_id: task.conversationId,
-        task_id: task.taskId,
-        message: `continue ${continueCount}/${maxContinues} (${decision.reason})`,
-      });
-      await session.prompt(emptyStopContinuePrompt(continueCount, maxContinues), { source: "interactive" });
-    }
-    if (timedOut) stopReason = "wall_budget";
-    if (signal?.aborted) stopReason = "aborted";
-  } finally {
-    clearTimeout(timer);
   }
 
-  // Snapshot messages before dispose for inspectability.
+  if (cancelled()) stopReason = "aborted";
+  // else keep stopReason from last decision (e.g. natural_stop_after_tools)
+
   const messages = Array.isArray((session as any).messages) ? [...(session as any).messages] : [];
   try {
     session.dispose?.();
@@ -184,21 +287,16 @@ export async function runNode4Task(
 
   const booked = await loadConfirmedFindings(runtime.findingsDir);
   const harnessStatus = resolveHarnessTerminalStatus({
-    agentBlocked: Boolean(runtime.lifecycle.agentBlocked),
     bookedFindingCount: booked.count,
-    timedOut,
-    aborted: Boolean(signal?.aborted),
+    aborted: cancelled(),
     stopReason,
   });
-  // Never honor agent finish as completed driver.
   const emitStatus = resolveTerminalTaskStatus({ harnessStatus });
 
   const summary =
-    runtime.lifecycle.lastStatusNote?.summary ||
-    runtime.lifecycle.finishScan?.summary ||
-    (booked.count > 0
-      ? `Harness settled ${emitStatus} with ${booked.count} booked finding(s). stop=${stopReason}`
-      : `Harness settled ${emitStatus}. stop=${stopReason}`);
+    booked.count > 0
+      ? `Harness settled ${emitStatus} with ${booked.count} booked finding(s). stop=${stopReason} role=${pack.id}`
+      : `Harness settled ${emitStatus}. stop=${stopReason} role=${pack.id}`;
 
   await loggingPlatform.send({
     type: "task_complete",
@@ -209,6 +307,8 @@ export async function runNode4Task(
     stop_reason: stopReason,
     continue_count: continueCount,
     booked_findings: booked.count,
+    role_pack: pack.id,
+    open_goals: goals.snapshot().openCount,
   });
 
   await writeFile(
@@ -221,16 +321,18 @@ export async function runNode4Task(
         stopReason,
         continueCount,
         bookedFindings: booked.count,
-        lastStatusNote: runtime.lifecycle.lastStatusNote || null,
-        // Explicit: agent finish does not settle
-        agentFinishNonTerminal: true,
-        timedOut,
+        rolePack: pack.id,
+        roleSource: roleResolved.source,
+        openGoals: goals.snapshot().openCount,
+        goals: goals.snapshot().goals,
       },
       null,
       2,
     ),
     "utf8",
   );
+
+  await writeFile(join(taskDir, "goals-snapshot.json"), JSON.stringify(goals.snapshot(), null, 2), "utf8");
 
   await writePostRunInspectArtifacts({
     taskDir,

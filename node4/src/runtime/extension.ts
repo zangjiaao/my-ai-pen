@@ -1,12 +1,17 @@
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import type { RolePack } from "../roles/index.js";
 import type { ToolRuntime } from "../types.js";
 import { createNode4Tools } from "../tools/index.js";
 
 export type SegmentCounter = { tools: number };
 
-export function createNode4Extension(runtime: ToolRuntime, segmentCounter?: SegmentCounter): ExtensionFactory {
+export function createNode4Extension(
+  runtime: ToolRuntime,
+  segmentCounter?: SegmentCounter,
+  pack?: RolePack,
+): ExtensionFactory {
   return (pi: ExtensionAPI) => {
-    for (const tool of createNode4Tools(runtime)) {
+    for (const tool of createNode4Tools(runtime, pack)) {
       pi.registerTool(tool);
     }
 
@@ -29,7 +34,7 @@ export function createNode4Extension(runtime: ToolRuntime, segmentCounter?: Segm
     pi.on("tool_result", async (event) => {
       const text = event.content
         .filter((item: { type: string; text?: string }) => item.type === "text")
-        .map((item: { text?: string }) => item.text || "")
+        .map((item: { type: string; text?: string }) => ("text" in item ? item.text || "" : ""))
         .join("\n")
         .slice(0, 4000);
       await runtime.platform.send({

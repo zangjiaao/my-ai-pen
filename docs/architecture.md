@@ -13,7 +13,8 @@
 - `product-roadmap.md`：唯一执行计划。
 - `design.md`：视觉和交互设计系统。
 - `harness-v2.md`：Node2 减负经验（过渡）。
-- `node4-harness.md`：**Node4 商业执行核北星**（clean-room OMP 哲学：极简 tool 面、todo 地图、script/http 优先、证据入账、单次 finish；**不**依赖 oh-my-pi 源码；TUI 延后）。新 Agent 能力以 Node4 为准，Node2 并行兼容。
+- `node4-harness.md`：**Node4 商业执行核北星**（clean-room OMP 哲学：极简 tool 面、todo 地图、script/http 优先、证据入账、**无 agent finish**——harness 结算；**不**依赖 oh-my-pi 源码；TUI 延后）。新 Agent 能力以 Node4 为准，Node2 并行兼容。
+- `node4-roadmap-memo.md`：**Node4 设计备忘**（角色化 Role Pack、多环境多 Node、多 Agent **经平台协作**预留；明确当前不必为大协作大改 Node4）。
 
 Node Skill 内容属于运行时资料，保留在 `node/skills/` 与 `node2/skills/`。历史超前规格不再作为实现依据。
 

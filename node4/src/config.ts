@@ -13,7 +13,6 @@ export type Node4Config = {
   modelId: string;
   llmBaseUrl?: string;
   mainMaxTurns: number;
-  mainMaxMs: number;
 };
 
 export function loadConfig(): Node4Config {
@@ -28,7 +27,6 @@ export function loadConfig(): Node4Config {
     modelId: process.env.PI_MODEL || "gpt-5",
     llmBaseUrl: process.env.LLM_BASE_URL || process.env.OPENAI_BASE_URL || undefined,
     mainMaxTurns: Math.max(5, Math.min(Number(process.env.NODE4_MAIN_MAX_TURNS || 200) || 200, 500)),
-    mainMaxMs: Math.max(60_000, Math.min(Number(process.env.NODE4_MAIN_MAX_MS || 1_800_000) || 1_800_000, 7_200_000)),
   };
 }
 
