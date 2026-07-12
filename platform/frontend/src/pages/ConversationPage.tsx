@@ -130,6 +130,9 @@ export default function ConversationPage() {
   const pendingScrollToBottomRef = useRef(false);
   const shouldStickToBottomRef = useRef(true);
   const [input, setInput] = useState("");
+  /** Explicit long-task Goal mode (structured field → Node4 goalObjective; not NLP). */
+  const [goalModeEnabled, setGoalModeEnabled] = useState(false);
+  const [goalObjective, setGoalObjective] = useState("");
   const [importingReport, setImportingReport] = useState(false);
   const [importStatus, setImportStatus] = useState<ImportStatus>(null);
   const [selectedAgent, setSelectedAgent] = useState<AgentNode | null>(null);
@@ -843,10 +846,21 @@ export default function ConversationPage() {
     scope?: { allow: string[]; deny: string[] } | null;
     forceNewConversation?: boolean;
     conversationId?: string | null;
+    /** Explicit Goal mode for this assign (UI switch). */
+    goalMode?: boolean;
+    goalObjective?: string;
   }) => {
     const displayText = opts.displayText.trim();
     const text = opts.text.trim() || displayText;
     if (!displayText) return;
+    const enableGoal = Boolean(opts.goalMode);
+    const goalObjectiveText = String(opts.goalObjective || "").trim();
+    const goalPayload: Record<string, unknown> = enableGoal
+      ? {
+          goal_mode: true,
+          ...(goalObjectiveText ? { goal_objective: goalObjectiveText } : {}),
+        }
+      : {};
 
     const selectedAgentCandidate = selectedAgentRef.current || selectedAgent;
     const selectedMentionAgent =
@@ -947,6 +961,7 @@ export default function ConversationPage() {
         display_text: displayText,
         client_message_id: clientMessageId,
         ...agentPayload,
+        ...goalPayload,
       });
       return;
     }
@@ -961,6 +976,7 @@ export default function ConversationPage() {
         resume: true,
         client_message_id: clientMessageId,
         ...agentPayload,
+        ...goalPayload,
       });
       return;
     }
@@ -973,6 +989,7 @@ export default function ConversationPage() {
         display_text: displayText,
         client_message_id: clientMessageId,
         ...agentPayload,
+        ...goalPayload,
       });
       return;
     }
@@ -995,6 +1012,7 @@ export default function ConversationPage() {
       display_text: displayText,
       client_message_id: clientMessageId,
       ...agentPayload,
+      ...goalPayload,
     });
   }, [
     selectedAgent,
@@ -1051,8 +1069,13 @@ export default function ConversationPage() {
     setInput("");
     selectedAgentRef.current = null;
     setSelectedAgent(null);
-    await launchTaskMessage({ displayText, text });
-  }, [input, selectedAgent, agentNodes, launchTaskMessage]);
+    await launchTaskMessage({
+      displayText,
+      text,
+      goalMode: goalModeEnabled,
+      goalObjective: goalObjective.trim() || undefined,
+    });
+  }, [input, selectedAgent, agentNodes, launchTaskMessage, goalModeEnabled, goalObjective]);
 
 
 function renderMentionText(text: string): ReactNode[] {
@@ -1239,6 +1262,26 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                 {TEMPLATES.map((t) => (
                   <button key={t.label} onClick={() => setInput(t.text)} className="rounded-pill border border-hairline px-3 py-1.5 text-xs text-ink-secondary transition-colors hover:bg-surface-default hover:text-ink">{t.label}</button>
                 ))}
+              </div>
+              <div className="mb-3 flex flex-col gap-2 rounded-md border border-hairline-soft bg-surface-default/40 px-3 py-2">
+                <label className="flex cursor-pointer items-center gap-2 text-xs text-ink-secondary">
+                  <input
+                    type="checkbox"
+                    checked={goalModeEnabled}
+                    onChange={(e) => setGoalModeEnabled(e.target.checked)}
+                    className="rounded border-hairline"
+                  />
+                  <span className="font-medium text-ink">Goal mode (long task)</span>
+                  <span className="text-ink-muted">— Node keeps working toward an objective until complete</span>
+                </label>
+                {goalModeEnabled && (
+                  <input
+                    value={goalObjective}
+                    onChange={(e) => setGoalObjective(e.target.value)}
+                    placeholder="Optional objective (default: maximize verified findings/flags in scope)"
+                    className="w-full rounded-md border border-hairline bg-canvas px-3 py-1.5 text-xs text-ink placeholder:text-ink-muted focus:outline-none focus:border-ink"
+                  />
+                )}
               </div>
               <div className="relative flex min-w-0 gap-2">
                 {mentionState && mentionOptions.length > 0 && (

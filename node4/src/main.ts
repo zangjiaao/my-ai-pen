@@ -55,6 +55,23 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
   const instruction = String(
     message.initial_instruction || message.instruction || message.text || "Authorized security assessment.",
   );
+  const goalObjectiveRaw =
+    typeof message.goal_objective === "string"
+      ? message.goal_objective
+      : typeof message.goalObjective === "string"
+        ? message.goalObjective
+        : "";
+  const goalModeOn =
+    message.goal_mode === true ||
+    message.goal_mode === "true" ||
+    message.goalMode === true ||
+    Boolean(goalObjectiveRaw.trim());
+  const goalObjective = goalObjectiveRaw.trim()
+    ? goalObjectiveRaw.trim()
+    : goalModeOn
+      ? "Within authorized scope, maximize verified findings, flags, and challenge unlocks with evidence-backed booking. Complete only after auditing that remaining surface cannot be productively advanced."
+      : undefined;
+
   return {
     taskId,
     conversationId,
@@ -63,6 +80,7 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
     scope,
     engagement: typeof message.engagement === "string" ? message.engagement : undefined,
     role: typeof message.role === "string" ? message.role : undefined,
+    goalObjective,
     parentTaskId:
       typeof message.parent_task_id === "string"
         ? message.parent_task_id

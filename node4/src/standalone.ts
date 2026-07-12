@@ -23,6 +23,13 @@ class LogSink implements PlatformSink {
 async function main(): Promise<void> {
   const taskId = args["task-id"] || `node4-${randomUUID().slice(0, 8)}`;
   const target = args.target || "http://127.0.0.1:8080";
+  const goalMode =
+    args["goal-mode"] === "true" || args["goal-mode"] === "1" || Boolean(args["goal-objective"]?.trim());
+  const goalObjective = args["goal-objective"]?.trim()
+    ? args["goal-objective"].trim()
+    : goalMode
+      ? "Within authorized scope, maximize verified findings, flags, and challenge unlocks with evidence-backed booking. Complete only after auditing that remaining surface cannot be productively advanced."
+      : undefined;
   const task: TaskEnvelope = {
     taskId,
     conversationId: args["conversation-id"] || taskId,
@@ -33,6 +40,7 @@ async function main(): Promise<void> {
     scope: { allow: (args.scope || target).split(",").map((s) => s.trim()).filter(Boolean) },
     engagement: args.engagement || args.role || "pentest",
     role: args.role,
+    goalObjective,
   };
   if (args.output) config.workspaceDir = resolve(args.output);
 

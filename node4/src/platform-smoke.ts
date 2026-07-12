@@ -45,6 +45,22 @@ export function normalizeTaskAssign(message: Record<string, unknown>): TaskEnvel
     scopeRaw && typeof scopeRaw === "object" && !Array.isArray(scopeRaw)
       ? (scopeRaw as Record<string, unknown>)
       : { allow: [] };
+  const goalObjectiveRaw =
+    typeof message.goal_objective === "string"
+      ? message.goal_objective
+      : typeof message.goalObjective === "string"
+        ? message.goalObjective
+        : "";
+  const goalModeOn =
+    message.goal_mode === true ||
+    message.goal_mode === "true" ||
+    message.goalMode === true ||
+    Boolean(goalObjectiveRaw.trim());
+  const goalObjective = goalObjectiveRaw.trim()
+    ? goalObjectiveRaw.trim()
+    : goalModeOn
+      ? "Within authorized scope, maximize verified findings, flags, and challenge unlocks with evidence-backed booking."
+      : undefined;
   return {
     taskId,
     conversationId,
@@ -53,6 +69,7 @@ export function normalizeTaskAssign(message: Record<string, unknown>): TaskEnvel
     scope,
     engagement: typeof message.engagement === "string" ? message.engagement : undefined,
     role: typeof message.role === "string" ? message.role : undefined,
+    goalObjective,
   };
 }
 
@@ -85,8 +102,11 @@ async function main() {
     engagement: "pentest",
     target: { type: "url", value: "http://127.0.0.1:1" },
     scope: { allow: ["127.0.0.1:1"] },
+    goal_mode: true,
+    goal_objective: "Maximize verified findings in scope",
   });
   assert(task.engagement === "pentest", "normalize keeps engagement");
+  assert(task.goalObjective === "Maximize verified findings in scope", "normalize maps goal_objective");
 
   const root = join(process.cwd(), "tmp", "node4-platform-align");
   const taskDir = join(root, task.taskId);

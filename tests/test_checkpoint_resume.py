@@ -26,7 +26,13 @@ from app.services.conversation_snapshot import (  # noqa: E402
 from app.models.conversation import Conversation  # noqa: E402
 from app.models.message import Message  # noqa: E402
 from app.services.conversation_state import transition_conversation  # noqa: E402
-from app.ws.router import _resume_message_from_context, _task_assign_from_user_message, _user_message_route  # noqa: E402
+from app.ws.router import (  # noqa: E402
+    DEFAULT_GOAL_OBJECTIVE,
+    _goal_objective_from_message,
+    _resume_message_from_context,
+    _task_assign_from_user_message,
+    _user_message_route,
+)
 from pentest_node.agent.intake import TaskIntake  # noqa: E402
 from pentest_node.agent.loop import PHASE_TOOL_NAMES, PhaseGateError, PentestAgentLoop  # noqa: E402
 from pentest_node.agent.state import Phase  # noqa: E402
@@ -2476,6 +2482,51 @@ class CheckpointResumeTests(unittest.TestCase):
         self.assertEqual(task_msg["scope"], msg["scope"])
         self.assertNotIn("checkpoint", task_msg)
         self.assertEqual(task_msg["snapshot"], msg["snapshot"])
+        self.assertNotIn("goal_objective", task_msg)
+
+    def test_goal_objective_from_message_structured_only(self):
+        self.assertEqual(_goal_objective_from_message({}), "")
+        # Free-text instruction alone must not invent a goal (no NLP).
+        self.assertEqual(
+            _goal_objective_from_message({"text": "请尽量多拿 flag 和目标"}),
+            "",
+        )
+        self.assertEqual(
+            _goal_objective_from_message({"goal_mode": True}),
+            DEFAULT_GOAL_OBJECTIVE,
+        )
+        self.assertEqual(
+            _goal_objective_from_message(
+                {"goal_mode": True, "goal_objective": "  Enumerate and book SQLi only  "}
+            ),
+            "Enumerate and book SQLi only",
+        )
+
+    def test_task_assign_carries_goal_objective_when_goal_mode_on(self):
+        msg = {
+            "text": "Test http://target.local",
+            "target": {"type": "url", "value": "http://target.local"},
+            "scope": {"allow": ["http://target.local"], "deny": []},
+            "goal_mode": True,
+            "goal_objective": "Maximize verified flags in scope",
+        }
+        task_msg = _task_assign_from_user_message("conv-goal", msg, "task-goal")
+        self.assertTrue(task_msg.get("goal_mode"))
+        self.assertEqual(task_msg.get("goal_objective"), "Maximize verified flags in scope")
+
+    def test_resume_preserves_prior_goal_objective(self):
+        resume_context = {
+            "task": {
+                "target": {"type": "url", "value": "http://target.local"},
+                "scope": {"allow": ["http://target.local"]},
+                "instruction": "prior instruction",
+                "goal_objective": "Maximize verified flags in scope",
+            }
+        }
+        resumed, is_resume = _resume_message_from_context({"text": "继续"}, resume_context)
+        self.assertTrue(is_resume)
+        self.assertEqual(resumed.get("goal_objective"), "Maximize verified flags in scope")
+        self.assertTrue(resumed.get("goal_mode"))
 
     def test_build_conversation_snapshot_restores_checkpoint_runtime_structures(self):
         conv_id = uuid.uuid4()

@@ -1589,7 +1589,14 @@ async def _conversation_snapshot(conv_id: str, user_id: str) -> dict:
 
 
 
-async def _remember_conversation_task(conv_id: str, *, target: dict, scope: dict, instruction: str):
+async def _remember_conversation_task(
+    conv_id: str,
+    *,
+    target: dict,
+    scope: dict,
+    instruction: str,
+    goal_objective: str | None = None,
+):
     try:
         from app.db.base import async_session
         from app.models.conversation import Conversation
@@ -1600,7 +1607,15 @@ async def _remember_conversation_task(conv_id: str, *, target: dict, scope: dict
             if not c:
                 return
             context = dict(c.context or {})
-            context["task"] = {"target": target or {}, "scope": scope or {}, "instruction": instruction or ""}
+            task_blob: dict = {
+                "target": target or {},
+                "scope": scope or {},
+                "instruction": instruction or "",
+            }
+            go = str(goal_objective or "").strip()
+            if go:
+                task_blob["goal_objective"] = go
+            context["task"] = task_blob
             c.context = context
             await db.commit()
     except Exception as e:
@@ -1698,6 +1713,28 @@ def _looks_like_continue_request(text: str) -> bool:
     return False
 
 
+# Default objective when UI enables goal mode without custom text (not NLP on free text).
+DEFAULT_GOAL_OBJECTIVE = (
+    "Within authorized scope, maximize verified findings, flags, and challenge unlocks "
+    "with evidence-backed booking. Call goal complete only after auditing that remaining "
+    "surface cannot be productively advanced."
+)
+
+
+def _goal_objective_from_message(msg: dict, *, fallback: str | None = None) -> str:
+    """Structured goal_objective only — never invent from free-text instruction NLP."""
+    if msg.get("goal_mode") in (True, "true", "1", 1, "yes"):
+        custom = str(msg.get("goal_objective") or msg.get("goalObjective") or "").strip()
+        if custom:
+            return custom
+        fb = str(fallback or "").strip()
+        return fb or DEFAULT_GOAL_OBJECTIVE
+    custom = str(msg.get("goal_objective") or msg.get("goalObjective") or "").strip()
+    if custom:
+        return custom
+    return str(fallback or "").strip()
+
+
 def _resume_message_from_context(msg: dict, resume_context: dict, *, include_checkpoint: bool = True) -> tuple[dict | None, bool]:
     task_context = _task_context_from_snapshot(resume_context)
     if not task_context.get("target"):
@@ -1713,6 +1750,12 @@ def _resume_message_from_context(msg: dict, resume_context: dict, *, include_che
         "text": combined_instruction,
         "initial_instruction": combined_instruction,
     }
+    # Preserve prior structured goal seed on resume unless the new message overrides.
+    prior_goal = str(task_context.get("goal_objective") or "").strip()
+    resolved_goal = _goal_objective_from_message(msg, fallback=prior_goal)
+    if resolved_goal:
+        out["goal_objective"] = resolved_goal
+        out["goal_mode"] = True
     if include_checkpoint:
         checkpoint = resume_context.get("checkpoint") if isinstance(resume_context.get("checkpoint"), dict) else {}
         if not checkpoint and isinstance(task_context.get("checkpoint"), dict):
@@ -1737,7 +1780,7 @@ def _message_with_decision_target(msg: dict, decision) -> dict:
 def _task_assign_from_user_message(conv_id: str, msg: dict, task_id: str) -> dict:
     task_target = msg.get("target") or {}
     task_scope = msg.get("scope") or {"allow": [task_target.get("value")] if task_target else []}
-    return {
+    out = {
         "type": "task_assign",
         "conversation_id": conv_id,
         "task_id": task_id,
@@ -1746,6 +1789,11 @@ def _task_assign_from_user_message(conv_id: str, msg: dict, task_id: str) -> dic
         "initial_instruction": msg.get("text", ""),
         "snapshot": msg.get("snapshot") or {},
     }
+    goal_objective = _goal_objective_from_message(msg)
+    if goal_objective:
+        out["goal_objective"] = goal_objective
+        out["goal_mode"] = True
+    return out
 
 
 async def _worker_limits_for_node(node_id: str | None) -> dict:
@@ -2176,8 +2224,24 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             task_target = task_msg["target"]
                             task_scope = task_msg["scope"]
                             task_instruction = task_msg["initial_instruction"]
+                            task_goal = str(task_msg.get("goal_objective") or "").strip() or None
                             if not resumed_from_context:
-                                await _remember_conversation_task(conv_id, target=task_target, scope=task_scope, instruction=task_instruction)
+                                await _remember_conversation_task(
+                                    conv_id,
+                                    target=task_target,
+                                    scope=task_scope,
+                                    instruction=task_instruction,
+                                    goal_objective=task_goal,
+                                )
+                            elif task_goal:
+                                # Resume may re-seed goal mode; keep context in sync.
+                                await _remember_conversation_task(
+                                    conv_id,
+                                    target=task_target,
+                                    scope=task_scope,
+                                    instruction=task_instruction,
+                                    goal_objective=task_goal,
+                                )
                             global _round_robin_counter
                             preferred_node_id = decision.agent_node_id or _agent_node_id(msg)
                             if preferred_node_id and preferred_node_id not in eligible_node_ids:
