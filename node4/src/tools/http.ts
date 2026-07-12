@@ -7,7 +7,8 @@ export function createHttpTool(runtime: ToolRuntime): ToolDefinition<any> {
   return {
     name: "http",
     label: "HTTP",
-    description: "Send an in-scope HTTP request. Prefer script tool for multi-step exploit chains.",
+    description:
+      "Single in-scope HTTP request only. For multi-step recon/exploit (cookies, chains, parse, loops), use shell instead — do not issue many http calls for a chain.",
     parameters: Type.Object({
       method: Type.Optional(Type.String()),
       url: Type.String(),

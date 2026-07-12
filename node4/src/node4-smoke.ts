@@ -113,7 +113,7 @@ async function main() {
   });
   assert(natural.continue === false && natural.reason === "natural_stop_after_tools", `natural stop: ${JSON.stringify(natural)}`);
 
-  // Limited premature-stop continues after tools (discovery push), then natural end
+  // First tools-then-stop: one free recovery premature even without open work
   const premature1 = shouldContinueAfterNaturalStop({
     aborted: false,
     toolsInLastSegment: 4,
@@ -123,10 +123,27 @@ async function main() {
     maxEmptyStopStreak: 1,
     prematureStopCount: 0,
     maxPrematureStops: 2,
+    openWorkRemaining: false,
   });
   assert(
     premature1.continue === true && premature1.reason === "premature_stop_continue" && premature1.kind === "premature",
     `premature once: ${JSON.stringify(premature1)}`,
+  );
+  // Second premature requires open work (not blind score pad)
+  const prematureNoOpen = shouldContinueAfterNaturalStop({
+    aborted: false,
+    toolsInLastSegment: 2,
+    emptyStopStreak: 0,
+    continueCount: 1,
+    maxContinues: 6,
+    maxEmptyStopStreak: 1,
+    prematureStopCount: 1,
+    maxPrematureStops: 2,
+    openWorkRemaining: false,
+  });
+  assert(
+    prematureNoOpen.continue === false && prematureNoOpen.reason === "natural_stop_after_tools",
+    `no open work → natural after first premature: ${JSON.stringify(prematureNoOpen)}`,
   );
   const premature2 = shouldContinueAfterNaturalStop({
     aborted: false,
@@ -137,8 +154,9 @@ async function main() {
     maxEmptyStopStreak: 1,
     prematureStopCount: 1,
     maxPrematureStops: 2,
+    openWorkRemaining: true,
   });
-  assert(premature2.continue === true && premature2.reason === "premature_stop_continue", "premature twice");
+  assert(premature2.continue === true && premature2.reason === "premature_stop_continue", "premature twice with open work");
   const prematureCap = shouldContinueAfterNaturalStop({
     aborted: false,
     toolsInLastSegment: 2,
@@ -148,6 +166,7 @@ async function main() {
     maxEmptyStopStreak: 1,
     prematureStopCount: 2,
     maxPrematureStops: 2,
+    openWorkRemaining: true,
   });
   assert(
     prematureCap.continue === false && prematureCap.reason === "natural_stop_after_tools",
@@ -235,7 +254,7 @@ async function main() {
   });
   assert(afterTools.continue === false && afterTools.nextEmptyStopStreak === 0, "runner: tools reset empty streak");
 
-  // Runner-level: maxPrematureStops=2 allows two tools-then-stop continues then natural
+  // Runner-level: first premature free; second needs openWorkRemaining; then natural
   let prematureUsed = 0;
   const p1 = evaluateContinueAfterSegment({
     aborted: false,
@@ -246,6 +265,7 @@ async function main() {
     maxEmptyStopStreak: 1,
     prematureStopCount: prematureUsed,
     maxPrematureStops: 2,
+    openWorkRemaining: false,
   });
   assert(p1.continue && p1.reason === "premature_stop_continue", "runner: first premature");
   prematureUsed += 1;
@@ -258,8 +278,9 @@ async function main() {
     maxEmptyStopStreak: 1,
     prematureStopCount: prematureUsed,
     maxPrematureStops: 2,
+    openWorkRemaining: true,
   });
-  assert(p2.continue && p2.reason === "premature_stop_continue", "runner: second premature");
+  assert(p2.continue && p2.reason === "premature_stop_continue", "runner: second premature with open work");
   prematureUsed += 1;
   const p3 = evaluateContinueAfterSegment({
     aborted: false,
@@ -270,6 +291,7 @@ async function main() {
     maxEmptyStopStreak: 1,
     prematureStopCount: prematureUsed,
     maxPrematureStops: 2,
+    openWorkRemaining: true,
   });
   assert(!p3.continue && p3.reason === "natural_stop_after_tools", "runner: premature budget exhausted");
 
@@ -287,10 +309,13 @@ async function main() {
     "continue mentions no finish / natural stop",
   );
   assert(
-    prematureStopContinuePrompt(1, 2).includes("exploration push") && prematureStopContinuePrompt(1, 2).includes("no finish"),
-    "premature continue prompt is exploration push",
+    (prematureStopContinuePrompt(1, 2).includes("Recovery push") ||
+      prematureStopContinuePrompt(1, 2).includes("SHELL")) &&
+      prematureStopContinuePrompt(1, 2).toLowerCase().includes("finish"),
+    "premature continue prompt is shell-first recovery",
   );
-  assert(clampTimeoutSec(999) === 300, "shell timeout clamp max");
+  assert(clampTimeoutSec(999) === 600, "shell timeout clamp max");
+  assert(PENTEST_ROLE_PACK.workLines.some((l) => /shell-first|in-loop/i.test(l)), "pack encodes in-loop shell-first");
 
   // Goals
   const goals = new GoalStore();
@@ -338,7 +363,8 @@ async function main() {
   // Light-touch todo policy (OMP Juice-style)
   assert(eagerTodoInjection({ forced: true }).includes("coarse"), "eager todo coarse map");
   assert(eagerTodoInjection({ forced: true }).includes("NOT") || eagerTodoInjection({ forced: true }).includes("not a micro"), "eager discourages micro checklist");
-  assert(midRunTodoNudge(2) === "", "no mid-run todo nag for small open lists");
+  assert(midRunTodoNudge(0) === "", "no mid-run todo when none open");
+  assert(midRunTodoNudge(2).includes("open") || midRunTodoNudge(2).includes("shell"), "mid-run nudge when open work remains");
   assert(midRunTodoNudge(4).includes("category") || midRunTodoNudge(4).includes("coarse"), "mid-run soft when many open");
   assert(TODO_TOOL_DESCRIPTION.includes("sparingly") || TODO_TOOL_DESCRIPTION.includes("Light"), "tool desc light-touch");
 

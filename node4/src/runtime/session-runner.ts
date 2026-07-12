@@ -150,11 +150,11 @@ export async function runNode4Task(
   });
   sessionRef = session as any;
 
-  // Continues: limited empty + one booking-gap + small premature-stop budget.
-  // No session wall/max-time — run until natural stop / continue caps / cancel.
-  const maxContinues = Math.max(0, Number(process.env.NODE4_MAX_CONTINUES ?? 6));
+  // Continues: rare recovery (empty + one booking-gap + open-work premature).
+  // Discovery is in-loop (pi agent-loop). No session wall.
+  const maxContinues = Math.max(0, Number(process.env.NODE4_MAX_CONTINUES ?? 8));
   const maxEmptyStopStreak = Math.max(0, Number(process.env.NODE4_MAX_EMPTY_STOPS ?? 1));
-  const maxPrematureStops = Math.max(0, Number(process.env.NODE4_MAX_PREMATURE_STOPS ?? 2));
+  const maxPrematureStops = Math.max(0, Number(process.env.NODE4_MAX_PREMATURE_STOPS ?? 3));
   let continueCount = 0;
   let emptyStopStreak = 0;
   let bookingContinueUsed = false;
@@ -166,7 +166,7 @@ export async function runNode4Task(
     type: "status_update",
     conversation_id: task.conversationId,
     task_id: task.taskId,
-    message: `Node4 starting role_pack=${pack.id} tools=${toolNames.join(",")} (no session wall)`,
+    message: `Node4 starting role_pack=${pack.id} tools=${toolNames.join(",")} (in-loop density; no session wall)`,
   });
 
   const userPrompt = [
@@ -176,9 +176,9 @@ export async function runNode4Task(
     "",
     goals.formatForPrompt(),
     "",
-    `Role pack: ${pack.id}. High tool density: multiple shell/tool calls in the same turn when independent; multi-step pipelines in one shell.`,
+    `Role pack: ${pack.id}. OMP essence: keep tool-calling in-loop; shell-first multi-step + multi-call same turn; http is single-probe only.`,
     pack.bookingMode === "finding"
-      ? "Book via finding(confirm)+evidence_ids (batch after a productive shell burst is fine). When finished working, simply stop — there is no finish tool; harness settles."
+      ? "Book via finding(confirm)+evidence_ids (batch after a shell burst). When truly stuck after dense shell work, stop with no tools — no finish tool; harness settles."
       : "This pack does not book findings. When finished, simply stop — harness settles.",
     `Target: ${JSON.stringify(task.target)}`,
     `Scope: ${JSON.stringify(task.scope)}`,
@@ -214,6 +214,8 @@ export async function runNode4Task(
     // bookingGap: has evidence but zero findings (strong signal to allow one continue)
     const bookingGap =
       pack.bookingMode === "finding" && evidenceList.length >= 2 && bookedSoFar.count === 0;
+    // Open work: further premature pushes after first recovery (generic, not lab-specific).
+    const openWorkRemaining = runtime.todo.openCount() > 0 || goals.snapshot().openCount > 0;
 
     // Pass previous emptyStopStreak only — evaluateContinueAfterSegment increments once.
     const decision = evaluateContinueAfterSegment({
@@ -227,6 +229,7 @@ export async function runNode4Task(
       bookingContinueUsed,
       prematureStopCount,
       maxPrematureStops,
+      openWorkRemaining,
     });
     emptyStopStreak = decision.nextEmptyStopStreak;
     stopReason = decision.reason;

@@ -4,15 +4,15 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ToolRuntime } from "../types.js";
 import { emitEvidence, jsonResult, textResult } from "./common.js";
 
-const DEFAULT_TIMEOUT_SEC = 180;
-const MAX_TIMEOUT_SEC = 300;
+const DEFAULT_TIMEOUT_SEC = 240;
+const MAX_TIMEOUT_SEC = 600;
 const MIN_TIMEOUT_SEC = 1;
 const STDOUT_CAP = 250_000;
 const STDERR_CAP = 100_000;
 
 /**
- * OMP-class shell density: one call should pack multi-step probes
- * (cookie jar → curl chain → python parse). Cwd is always the task workspace.
+ * OMP-class shell density: primary act surface.
+ * Multi-step probes in one call; independent probes as parallel tool calls same turn.
  * Timeout kills the whole process group so hung children cannot outlive the tool.
  */
 export function createShellTool(runtime: ToolRuntime): ToolDefinition<any> {
@@ -20,10 +20,12 @@ export function createShellTool(runtime: ToolRuntime): ToolDefinition<any> {
     name: "shell",
     label: "Shell",
     description: [
-      "Run bash in the task workspace. Prefer HIGH DENSITY: one command packing cookie jars, curl pipelines, python one-liners, and parsing — not one curl per call.",
-      "Use scripts/ under the task dir for multi-step exploits; write then shell python scripts/x.py.",
-      "Avoid endless single-request loops and unbounded brute force without a tight bound; prefer scripted targeted probes.",
-      `timeout_seconds optional (default ${DEFAULT_TIMEOUT_SEC}, max ${MAX_TIMEOUT_SEC}); hung process groups are killed on tool timeout or session cancel.`,
+      "PRIMARY act tool. Run bash in the task workspace.",
+      "HIGH DENSITY: pack cookie jars, curl pipelines, python one-liners, and parsing in ONE command (chain with && when order matters).",
+      "Independent probes: issue multiple shell tool calls in the SAME turn (they can run in parallel).",
+      "Prefer shell over http for multi-step recon/exploit. Use scripts/ for longer exploits (write then shell python scripts/x.py).",
+      "Avoid one-request-per-call thrash and unbounded brute force; use bounded scripted probes.",
+      `timeout_seconds optional (default ${DEFAULT_TIMEOUT_SEC}, max ${MAX_TIMEOUT_SEC}); process group killed on timeout or session cancel.`,
     ].join(" "),
     parameters: Type.Object({
       command: Type.String(),

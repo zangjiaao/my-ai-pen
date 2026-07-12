@@ -27,13 +27,14 @@ export function eagerTodoInjection(options?: { forced?: boolean }): string {
  * Threshold matches "light maintenance": do not push micro done/start thrash.
  */
 export function midRunTodoNudge(openCount: number): string {
-  // Ignore small open lists; OMP-style maps stay open while work continues.
-  if (openCount < 3) return "";
+  // OMP mid-run nudge: any open items remind; keep working in-loop.
+  if (openCount < 1) return "";
   const plural = openCount === 1 ? "is" : "are";
   return [
     "<system-reminder>",
     `Todo note: ${openCount} coarse item${openCount === 1 ? "" : "s"} ${plural} still open.`,
-    "Only mark done when a whole category/phase is largely finished — do not bookkeep per finding or per shell call. Prefer more shell density over todo updates.",
+    "Only mark a category done when approaches in that category are exhausted — not after the first easy win.",
+    "Prefer more high-density shell (multi-step / multi-call same turn) over todo bookkeeping.",
     "</system-reminder>",
   ].join("\n");
 }

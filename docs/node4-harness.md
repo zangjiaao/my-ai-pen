@@ -47,7 +47,7 @@ Interactive **TUI remains deferred**.
 | Map | `todo` phases (content-keyed; single in_progress; auto-promote) |
 | Act | `shell`, `write`, `edit`, `read`, `http`, `script` under task cwd |
 | Book | `finding` + auto/manual evidence (repeatable) |
-| Continue | **OMP-like, rare**: empty-stop retries (default 1) or **one** booking-gap continue if evidence exists but 0 findings. **Not** “pad until wall”. After tools then stop → **natural end** |
+| Continue | **Rare recovery only** (OMP essence): empty-stop retries (default 1), **one** booking-gap if evidence without findings, and a **small open-work premature budget** (first tools-then-stop recovery always once; further premature only while open todos/goals remain). **Not** empty thrash or score padding. Discovery stays **in-loop**. |
 | Session wall / max-time | **None** by design (OMP default style). Only platform/user cancel aborts the session. Per-tool shell timeouts remain. |
 | Settle | Runner emits `task_complete` when agent naturally stops / empty-stop cap / wall / abort |
 

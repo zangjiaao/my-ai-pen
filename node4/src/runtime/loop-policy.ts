@@ -1,9 +1,10 @@
 /**
- * Continue / settlement policy — OMP-aligned.
+ * Continue / settlement policy — OMP essence (clean-room).
  *
- * No session wall/max-time. End via natural stop, limited continues, or cancel.
- * After tools then stop: small premature-stop budget, then natural end.
- * Empty-stop glitches and one booking-gap continue remain limited.
+ * Discovery belongs **in-loop** (pi agent-loop keeps tool-calling until the
+ * model emits no tools). Outer continues are **rare recovery** only:
+ * empty-stop glitches, one booking gap, and a small open-work premature
+ * budget. No session wall. No empty thrash as a score engine.
  */
 
 import { midRunBookingNudge, type BookingSnapshot } from "./booking-harness.js";
@@ -22,14 +23,15 @@ export type ContinueDecision = {
  * inject another user message.
  *
  * `emptyStopStreak` is the streak **before** this segment (do not pre-increment).
- * This function applies +1 for the current empty segment once.
  *
  * Policy:
- * - platform/user abort always ends
- * - evidence without findings → at most **one** booking_gap continue
- * - tools == 0 → limited empty-stop retries
- * - tools > 0 then stop → up to maxPrematureStops exploration pushes, then
- *   natural_stop_after_tools
+ * - abort → end
+ * - bookingGap once → booking_gap_continue
+ * - tools==0 → limited empty-stop retries
+ * - tools>0 then stop → premature only while budget remains AND open work
+ *   remains (open todos/goals), except one free recovery push (prematureUsed===0)
+ *   so a single early “I am done” after tools is not fatal
+ * - else natural_stop_after_tools
  */
 export function shouldContinueAfterNaturalStop(options: {
   aborted: boolean;
@@ -39,20 +41,16 @@ export function shouldContinueAfterNaturalStop(options: {
   continueCount: number;
   maxContinues: number;
   maxEmptyStopStreak: number;
-  /** True when pack books findings and evidence exists but bookedFindingCount===0 (or strong lag). */
   bookingGap?: boolean;
-  /** Already used the single booking-gap continue this run. */
   bookingContinueUsed?: boolean;
-  /**
-   * How many premature-stop continues already used this run.
-   * Pure default 0; runner supplies live count.
-   */
   prematureStopCount?: number;
-  /**
-   * Max tools-then-stop exploration continues before natural end.
-   * Default **0** (pure natural stop) so unit tests stay strict; runner sets >0.
-   */
+  /** Max premature continues; default 0 in pure unit tests. */
   maxPrematureStops?: number;
+  /**
+   * Generic open work (open todos or open goals). Further premature pushes after
+   * the first recovery require this so continue is not a blind score padder.
+   */
+  openWorkRemaining?: boolean;
 }): ContinueDecision {
   if (options.aborted) {
     return { continue: false, reason: "aborted", nextContinueCount: options.continueCount };
@@ -62,10 +60,8 @@ export function shouldContinueAfterNaturalStop(options: {
   }
 
   const empty = options.toolsInLastSegment === 0;
-  // Count this empty segment once (runner must pass previous streak only).
   const emptyStreak = empty ? options.emptyStopStreak + 1 : 0;
 
-  // One-shot: evidence without product booking (not a wall-padding loop).
   if (options.bookingGap && !options.bookingContinueUsed) {
     return {
       continue: true,
@@ -91,10 +87,14 @@ export function shouldContinueAfterNaturalStop(options: {
     };
   }
 
-  // Tools ran then stop: limited premature pushes before natural end.
+  // Tools ran then stop: rare premature recovery, not empty thrash.
   const prematureUsed = Math.max(0, options.prematureStopCount ?? 0);
   const maxPremature = Math.max(0, options.maxPrematureStops ?? 0);
-  if (prematureUsed < maxPremature) {
+  const openWork = Boolean(options.openWorkRemaining);
+  // First tools-then-stop always eligible once (recovery). Later pushes need open work.
+  const allowPremature =
+    prematureUsed < maxPremature && (prematureUsed === 0 || openWork);
+  if (allowPremature) {
     return {
       continue: true,
       reason: "premature_stop_continue",
@@ -130,6 +130,7 @@ export function evaluateContinueAfterSegment(options: {
   bookingContinueUsed?: boolean;
   prematureStopCount?: number;
   maxPrematureStops?: number;
+  openWorkRemaining?: boolean;
 }): ContinueDecision & { nextEmptyStopStreak: number } {
   const decision = shouldContinueAfterNaturalStop({
     aborted: options.aborted,
@@ -142,6 +143,7 @@ export function evaluateContinueAfterSegment(options: {
     bookingContinueUsed: options.bookingContinueUsed,
     prematureStopCount: options.prematureStopCount,
     maxPrematureStops: options.maxPrematureStops,
+    openWorkRemaining: options.openWorkRemaining,
   });
   return {
     ...decision,
@@ -151,7 +153,6 @@ export function evaluateContinueAfterSegment(options: {
 
 /**
  * Harness-owned terminal status after the loop ends.
- * natural_stop_after_tools with findings → completed (work happened, agent chose to stop).
  */
 export function resolveHarnessTerminalStatus(options: {
   bookedFindingCount: number;
@@ -166,9 +167,10 @@ export function resolveHarnessTerminalStatus(options: {
 export function emptyStopContinuePrompt(attempt: number, max: number): string {
   return [
     `<system-injection>`,
-    `You stopped without tool calls. If the engagement is still open, continue with high-density shell (multi-step curl|python in one call; multiple tool calls in the same turn when independent).`,
-    `If you already proved issues, book them with finding(confirm)+evidence_ids (batch ok after a shell burst).`,
-    `There is no finish tool. When you are done working, simply stop with no more tools — the harness will settle.`,
+    `You stopped without tool calls. Resume with high-density shell (multi-step curl|python in ONE call; multiple independent shell calls in the same turn).`,
+    `Do NOT spam single-request http for multi-step chains — use shell.`,
+    `If you already proved issues, book them with finding(confirm)+evidence_ids (batch ok).`,
+    `There is no finish tool. When truly stuck after dense shell work, stop with no tools.`,
     `Empty-stop retry ${attempt}/${max}.`,
     `</system-injection>`,
   ].join("\n");
@@ -179,24 +181,23 @@ export function bookingGapContinuePrompt(): string {
     `<system-injection>`,
     `You produced tool evidence but have not booked product findings yet.`,
     `Call finding(action=confirm) with evidence_ids for each proven flag / challenge unlock / vuln now (batch multiple confirms ok).`,
-    `Then stop if the engagement work is complete — do not pad time. There is no finish tool.`,
+    `Then continue dense shell if open work remains, or stop if stuck — do not pad idle time. No finish tool.`,
     `</system-injection>`,
   ].join("\n");
 }
 
 /**
- * Limited exploration push after tools-then-stop.
- * Generic (no target answer keys): another dense shell/API burst on unexplored classes.
+ * Limited recovery push — shell-first, in-loop density, no answer keys.
  */
 export function prematureStopContinuePrompt(attempt: number, max: number): string {
   return [
     `<system-injection>`,
-    `You stopped after tool work, but the harness is giving a limited exploration push (${attempt}/${max}).`,
-    `Do another high-density shell/API burst on categories not yet proven or only weakly tested.`,
-    `Prefer: auth/session/JWT, injection, IDOR/access control, file/path, XSS/HTML sinks, misconfig/exposed endpoints, business-logic edge cases.`,
-    `Do not treat "might need SPA/browser" as terminal without trying: JS/static asset recon, API-only paths, cookie/session chaining, and headless browser via shell if available in the environment.`,
-    `Book newly proven issues with finding(confirm)+evidence_ids (batch ok). If truly stuck after this push, stop with no tools — do not pad idle time.`,
-    `There is no finish tool.`,
+    `Recovery push ${attempt}/${max} (OMP-style rare continue — discovery should mostly stay in-loop).`,
+    `Do another high-density SHELL burst (not a stream of single http calls): multi-step pipelines, cookie jars, python parse, parallel independent shell calls in the same turn.`,
+    `Rotate unexplored categories from YOUR own recon (auth, injection, access control, files, XSS, misconfig, business logic). Do not invent target answer keys.`,
+    `Do not stop solely because remaining work "might need SPA" — try API/static JS first; drive headless browser via shell only if available.`,
+    `Keep coarse todo categories open until approaches in that category are exhausted. Book proven issues with finding(confirm)+evidence_ids.`,
+    `If truly stuck after this shell push, stop with no tools. There is no finish tool.`,
     `</system-injection>`,
   ].join("\n");
 }
@@ -210,7 +211,6 @@ export function composeContinuePrompt(options: {
   booking?: BookingSnapshot;
   goalSummary?: string;
   kind?: "empty" | "booking_gap" | "premature";
-  /** For premature prompt attempt/max (defaults to attempt/max). */
   prematureAttempt?: number;
   prematureMax?: number;
 }): string {
