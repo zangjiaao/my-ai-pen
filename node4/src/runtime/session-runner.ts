@@ -29,6 +29,7 @@ import { writePostRunInspectArtifacts } from "./session-inspect.js";
 import { eagerBookingInjection } from "./booking-harness.js";
 import { SubagentHost } from "./subagent.js";
 import { eagerTodoInjection } from "./todo-harness.js";
+import { buildGoalContinuationPrompt } from "../stores/goal.js";
 
 export async function runNode4Task(
   config: Node4Config,
@@ -150,23 +151,38 @@ export async function runNode4Task(
   });
   sessionRef = session as any;
 
-  // Continues: rare recovery (empty + one booking-gap + open-work premature).
+  // Continues: empty + booking-gap + OMP goal-continuation + rare premature.
   // Discovery is in-loop (pi agent-loop). No session wall.
-  const maxContinues = Math.max(0, Number(process.env.NODE4_MAX_CONTINUES ?? 8));
+  const maxContinues = Math.max(0, Number(process.env.NODE4_MAX_CONTINUES ?? 16));
   const maxEmptyStopStreak = Math.max(0, Number(process.env.NODE4_MAX_EMPTY_STOPS ?? 1));
   const maxPrematureStops = Math.max(0, Number(process.env.NODE4_MAX_PREMATURE_STOPS ?? 3));
+  const maxGoalContinues = Math.max(0, Number(process.env.NODE4_MAX_GOAL_CONTINUES ?? 12));
   let continueCount = 0;
   let emptyStopStreak = 0;
   let bookingContinueUsed = false;
   let prematureStopCount = 0;
+  let goalContinueCount = 0;
   let stopReason = "natural";
   const cancelled = () => Boolean(signal?.aborted);
+
+  // Optional seed goal mode from structured task field (not free-text NLP).
+  const seedObjective =
+    typeof (task as { goalObjective?: string }).goalObjective === "string"
+      ? String((task as { goalObjective?: string }).goalObjective).trim()
+      : "";
+  if (seedObjective) {
+    try {
+      goals.create({ objective: seedObjective });
+    } catch {
+      // already has a goal
+    }
+  }
 
   await loggingPlatform.send({
     type: "status_update",
     conversation_id: task.conversationId,
     task_id: task.taskId,
-    message: `Node4 starting role_pack=${pack.id} tools=${toolNames.join(",")} (in-loop density; no session wall)`,
+    message: `Node4 starting role_pack=${pack.id} tools=${toolNames.join(",")} goal_active=${goals.isActive()} (in-loop density; no session wall)`,
   });
 
   const userPrompt = [
@@ -177,6 +193,7 @@ export async function runNode4Task(
     goals.formatForPrompt(),
     "",
     `Role pack: ${pack.id}. OMP essence: keep tool-calling in-loop; shell-first multi-step + multi-call same turn; http is single-probe only.`,
+    "Long multi-challenge work: call goal(op=create, objective=...) early so the harness can auto-continue (OMP goal mode) until you complete/drop after a real audit.",
     pack.bookingMode === "finding"
       ? "Book via finding(confirm)+evidence_ids (batch after a shell burst). When truly stuck after dense shell work, stop with no tools — no finish tool; harness settles."
       : "This pack does not book findings. When finished, simply stop — harness settles.",
@@ -214,8 +231,8 @@ export async function runNode4Task(
     // bookingGap: has evidence but zero findings (strong signal to allow one continue)
     const bookingGap =
       pack.bookingMode === "finding" && evidenceList.length >= 2 && bookedSoFar.count === 0;
-    // Open work: further premature pushes after first recovery (generic, not lab-specific).
-    const openWorkRemaining = runtime.todo.openCount() > 0 || goals.snapshot().openCount > 0;
+    // Soft open work (todos only) for premature; goal mode is separate OMP path.
+    const openWorkRemaining = runtime.todo.openCount() > 0;
 
     // Pass previous emptyStopStreak only — evaluateContinueAfterSegment increments once.
     const decision = evaluateContinueAfterSegment({
@@ -230,6 +247,9 @@ export async function runNode4Task(
       prematureStopCount,
       maxPrematureStops,
       openWorkRemaining,
+      goalModeActive: goals.isActive(),
+      goalContinueCount,
+      maxGoalContinues,
     });
     emptyStopStreak = decision.nextEmptyStopStreak;
     stopReason = decision.reason;
@@ -237,6 +257,7 @@ export async function runNode4Task(
 
     if (decision.kind === "booking_gap") bookingContinueUsed = true;
     if (decision.kind === "premature") prematureStopCount += 1;
+    if (decision.kind === "goal") goalContinueCount += 1;
     continueCount = decision.nextContinueCount;
     segmentCounter.tools = 0;
     runtime.lifecycle.toolsInLastSegment = 0;
@@ -244,20 +265,25 @@ export async function runNode4Task(
     const todoErrors = runtime.lifecycle.pendingTodoErrorReminder?.slice();
     runtime.lifecycle.pendingTodoErrorReminder = undefined;
     const goalSnap = goals.formatForPrompt();
+    const modeGoal = goals.getMode();
+    const goalContinuationBody =
+      decision.kind === "goal" && modeGoal ? buildGoalContinuationPrompt(modeGoal) : undefined;
 
     await loggingPlatform.send({
       type: "status_update",
       conversation_id: task.conversationId,
       task_id: task.taskId,
-      message: `continue ${continueCount}/${maxContinues} (${decision.reason}) premature=${prematureStopCount}/${maxPrematureStops} evidence=${evidenceList.length} findings=${bookedSoFar.count}`,
+      message: `continue ${continueCount}/${maxContinues} (${decision.reason}) goal=${goalContinueCount}/${maxGoalContinues} premature=${prematureStopCount}/${maxPrematureStops} evidence=${evidenceList.length} findings=${bookedSoFar.count}`,
     });
     try {
       const continueKind =
         decision.kind === "booking_gap"
           ? "booking_gap"
-          : decision.kind === "premature"
-            ? "premature"
-            : "empty";
+          : decision.kind === "goal"
+            ? "goal"
+            : decision.kind === "premature"
+              ? "premature"
+              : "empty";
       await session.prompt(
         composeContinuePrompt({
           attempt: continueCount,
@@ -269,6 +295,7 @@ export async function runNode4Task(
           kind: continueKind,
           prematureAttempt: prematureStopCount,
           prematureMax: maxPrematureStops,
+          goalContinuationBody,
         }),
         { source: "interactive" },
       );

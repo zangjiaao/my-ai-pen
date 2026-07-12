@@ -317,18 +317,46 @@ async function main() {
   assert(clampTimeoutSec(999) === 600, "shell timeout clamp max");
   assert(PENTEST_ROLE_PACK.workLines.some((l) => /shell-first|in-loop/i.test(l)), "pack encodes in-loop shell-first");
 
-  // Goals
+  // OMP-style goal mode
   const goals = new GoalStore();
-  const g1 = goals.create({ title: "Map attack surface", detail: "enum APIs" });
-  assert(g1.status === "open", "goal open");
+  const g1 = goals.create({ objective: "Map attack surface and book proven issues" });
+  assert(g1.status === "active" && goals.isActive(), "goal active");
   goals.attachSubagent(g1.id, "sub_test");
   assert(goals.get(g1.id)!.subagentIds.includes("sub_test"), "goal attach subagent");
-  goals.update(g1.id, { status: "done" });
-  assert(goals.snapshot().openCount === 0, "open count after done");
-  // Settlement does not require empty goals — open goals still OK for harness.
-  goals.create({ title: "Still open later" });
-  assert(goals.snapshot().openCount === 1, "open goals allowed at settle time");
-  assert(goals.formatForPrompt().includes("Still open"), "goal prompt format");
+  goals.complete(g1.id);
+  assert(!goals.isActive() && goals.snapshot().openCount === 0, "complete clears active");
+  // New goal after complete
+  goals.create({ objective: "Still open later long-task" });
+  assert(goals.isActive() && goals.snapshot().openCount === 1, "goal active again");
+  assert(goals.formatForPrompt().includes("Still open") || goals.formatForPrompt().includes("objective"), "goal prompt format");
+  // Goal continuation policy: active goal → continue after tools
+  const goalCont = shouldContinueAfterNaturalStop({
+    aborted: false,
+    toolsInLastSegment: 3,
+    emptyStopStreak: 0,
+    continueCount: 0,
+    maxContinues: 16,
+    maxEmptyStopStreak: 1,
+    maxPrematureStops: 0,
+    goalModeActive: true,
+    goalContinueCount: 0,
+    maxGoalContinues: 12,
+  });
+  assert(goalCont.continue && goalCont.reason === "goal_continuation" && goalCont.kind === "goal", "goal mode continues after tools");
+  const goalCap = shouldContinueAfterNaturalStop({
+    aborted: false,
+    toolsInLastSegment: 2,
+    emptyStopStreak: 0,
+    continueCount: 12,
+    maxContinues: 16,
+    maxEmptyStopStreak: 1,
+    maxPrematureStops: 0,
+    goalModeActive: true,
+    goalContinueCount: 12,
+    maxGoalContinues: 12,
+  });
+  assert(!goalCap.continue || goalCap.reason === "natural_stop_after_tools" || goalCap.reason === "max_continues" || !goalCap.continue, "goal continue capped");
+  assert(!goalCap.continue, `goal continue exhausted: ${JSON.stringify(goalCap)}`);
 
   // Shell process group (per-tool timeout only — no session wall)
   const hung = await runShell("sleep 30", process.cwd(), 400);
@@ -404,7 +432,7 @@ async function main() {
   });
 
   // Deterministic subagent (no LLM)
-  const goal = goalStore.create({ title: "Probe target" });
+  const goal = goalStore.create({ objective: "Probe target with child package" });
   const sub = await runtime.subagents.spawn({
     assignment: "echo hello from child",
     goalId: goal.id,
@@ -425,17 +453,20 @@ async function main() {
   await access(sub.artifactPath!);
   assert(goalStore.get(goal.id)!.subagentIds.includes(sub.subagentId), "goal linked to subagent");
 
-  // Goal tool
-  await exec(createGoalTool(runtime), "g1", { op: "create", title: "Book findings" });
+  // Goal tool (already created above — list/get)
   const glist = JSON.parse(textOf(await exec(createGoalTool(runtime), "g2", { op: "list" })));
-  assert((glist.openCount ?? glist.open_count) >= 1, "goal list open");
+  assert((glist.openCount ?? glist.open_count) >= 1 && glist.active === true, "goal list active");
+  await exec(createGoalTool(runtime), "g3", { op: "complete" });
+  assert(!goalStore.isActive(), "goal tool complete deactivates");
+  // recreate for settle-with-open-goal assertion later
+  const gOpen = goalStore.create({ objective: "May remain open at settle" });
 
-  // Subagent tool with command
+  // Subagent tool with command (attach to current open goal)
   const subTool = JSON.parse(
     textOf(
       await exec(createSubagentTool(runtime), "s1", {
         assignment: "run proof command",
-        goal_id: goal.id,
+        goal_id: gOpen.id,
         command: "echo via-tool",
         timeout_seconds: 30,
       }),
@@ -452,7 +483,13 @@ async function main() {
     goalSummary: goalStore.formatForPrompt(),
   });
   assert(composed.includes("Booking gap") || composed.includes("0 findings"), "booking in continue");
-  assert(composed.includes("goal") || composed.includes("Goals") || composed.includes("Active goals"), "goals in continue");
+  assert(
+    composed.includes("goal") ||
+      composed.includes("Goals") ||
+      composed.includes("objective") ||
+      composed.includes("Goal mode"),
+    "goals in continue",
+  );
 
   await exec(createTodoTool(runtime), "t", { op: "init", items: ["a", "b"] });
 

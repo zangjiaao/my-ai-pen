@@ -86,6 +86,10 @@ See `src/roles/` and `docs/node4-roadmap-memo.md`.
 
 ## 6. Subagent + goals
 
+| `goal` mode (OMP-style) | Single active `objective`; while `status=active`, harness injects **goal_continuation** after natural stops (cap `NODE4_MAX_GOAL_CONTINUES`, default 12). `complete` only after evidence audit; not a settlement hard gate if never used. Seed via tool or structured `TaskEnvelope.goalObjective`. |
+
+
+
 | Mechanism | Behavior |
 |-----------|----------|
 | `subagent` tool / `SubagentHost` | Spawn child under `taskDir/subagents/<id>`; worker returns structured data; **evidence** always written |

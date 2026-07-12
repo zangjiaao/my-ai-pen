@@ -14,6 +14,11 @@ export type TaskEnvelope = {
   scanMode?: string;
   /** Optional parent task for future multi-agent platform orchestration (pass-through). */
   parentTaskId?: string;
+  /**
+   * Explicit structured long-task objective to seed OMP-style goal mode
+   * (not free-text NLP on instruction). When set, session starts with goal active.
+   */
+  goalObjective?: string;
 };
 
 export type PlatformSink = {

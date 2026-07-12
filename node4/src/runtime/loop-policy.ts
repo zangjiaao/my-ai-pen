@@ -15,7 +15,7 @@ export type ContinueDecision = {
   reason: string;
   nextContinueCount: number;
   /** Hint for prompt composition */
-  kind?: "empty" | "booking_gap" | "premature";
+  kind?: "empty" | "booking_gap" | "premature" | "goal";
 };
 
 /**
@@ -28,9 +28,8 @@ export type ContinueDecision = {
  * - abort → end
  * - bookingGap once → booking_gap_continue
  * - tools==0 → limited empty-stop retries
- * - tools>0 then stop → premature only while budget remains AND open work
- *   remains (open todos/goals), except one free recovery push (prematureUsed===0)
- *   so a single early “I am done” after tools is not fatal
+ * - tools>0 then stop → if OMP goal mode active → goal_continuation (until complete/cap)
+ * - else premature only while budget remains AND open work (todos), with one free recovery
  * - else natural_stop_after_tools
  */
 export function shouldContinueAfterNaturalStop(options: {
@@ -47,10 +46,18 @@ export function shouldContinueAfterNaturalStop(options: {
   /** Max premature continues; default 0 in pure unit tests. */
   maxPrematureStops?: number;
   /**
-   * Generic open work (open todos or open goals). Further premature pushes after
-   * the first recovery require this so continue is not a blind score padder.
+   * Soft open work (open todos). Used for premature (not goal mode).
    */
   openWorkRemaining?: boolean;
+  /**
+   * OMP-style goal mode still active (status=active). Takes priority over premature
+   * for long-task continuation after tools (and after empty once recovered).
+   */
+  goalModeActive?: boolean;
+  /** How many goal-continuation injects already used this run. */
+  goalContinueCount?: number;
+  /** Cap goal continuations (prevents infinite open-ended goals). Default 0 = off in pure tests. */
+  maxGoalContinues?: number;
 }): ContinueDecision {
   if (options.aborted) {
     return { continue: false, reason: "aborted", nextContinueCount: options.continueCount };
@@ -73,6 +80,17 @@ export function shouldContinueAfterNaturalStop(options: {
 
   if (empty) {
     if (emptyStreak > options.maxEmptyStopStreak) {
+      // Empty streak exhausted: if goal still active, one more path via goal continue.
+      const goalUsed = Math.max(0, options.goalContinueCount ?? 0);
+      const maxGoal = Math.max(0, options.maxGoalContinues ?? 0);
+      if (options.goalModeActive && goalUsed < maxGoal) {
+        return {
+          continue: true,
+          reason: "goal_continuation",
+          nextContinueCount: options.continueCount + 1,
+          kind: "goal",
+        };
+      }
       return {
         continue: false,
         reason: "max_empty_stops",
@@ -87,11 +105,22 @@ export function shouldContinueAfterNaturalStop(options: {
     };
   }
 
-  // Tools ran then stop: rare premature recovery, not empty thrash.
+  // Tools ran then stop: OMP goal mode continues while active (long-task).
+  const goalUsed = Math.max(0, options.goalContinueCount ?? 0);
+  const maxGoal = Math.max(0, options.maxGoalContinues ?? 0);
+  if (options.goalModeActive && goalUsed < maxGoal) {
+    return {
+      continue: true,
+      reason: "goal_continuation",
+      nextContinueCount: options.continueCount + 1,
+      kind: "goal",
+    };
+  }
+
+  // Rare premature recovery when not in goal mode (or goal exhausted).
   const prematureUsed = Math.max(0, options.prematureStopCount ?? 0);
   const maxPremature = Math.max(0, options.maxPrematureStops ?? 0);
   const openWork = Boolean(options.openWorkRemaining);
-  // First tools-then-stop always eligible once (recovery). Later pushes need open work.
   const allowPremature =
     prematureUsed < maxPremature && (prematureUsed === 0 || openWork);
   if (allowPremature) {
@@ -131,6 +160,9 @@ export function evaluateContinueAfterSegment(options: {
   prematureStopCount?: number;
   maxPrematureStops?: number;
   openWorkRemaining?: boolean;
+  goalModeActive?: boolean;
+  goalContinueCount?: number;
+  maxGoalContinues?: number;
 }): ContinueDecision & { nextEmptyStopStreak: number } {
   const decision = shouldContinueAfterNaturalStop({
     aborted: options.aborted,
@@ -144,6 +176,9 @@ export function evaluateContinueAfterSegment(options: {
     prematureStopCount: options.prematureStopCount,
     maxPrematureStops: options.maxPrematureStops,
     openWorkRemaining: options.openWorkRemaining,
+    goalModeActive: options.goalModeActive,
+    goalContinueCount: options.goalContinueCount,
+    maxGoalContinues: options.maxGoalContinues,
   });
   return {
     ...decision,
@@ -202,7 +237,7 @@ export function prematureStopContinuePrompt(attempt: number, max: number): strin
   ].join("\n");
 }
 
-/** Compose continue text — kind selects empty / booking-gap / premature body. */
+/** Compose continue text — kind selects empty / booking-gap / premature / goal body. */
 export function composeContinuePrompt(options: {
   attempt: number;
   max: number;
@@ -210,16 +245,21 @@ export function composeContinuePrompt(options: {
   todoErrors?: string[];
   booking?: BookingSnapshot;
   goalSummary?: string;
-  kind?: "empty" | "booking_gap" | "premature";
+  kind?: "empty" | "booking_gap" | "premature" | "goal";
   prematureAttempt?: number;
   prematureMax?: number;
+  /** When kind=goal, full goal continuation body (from GoalStore). */
+  goalContinuationBody?: string;
 }): string {
   const body =
     options.kind === "booking_gap"
       ? bookingGapContinuePrompt()
-      : options.kind === "premature"
-        ? prematureStopContinuePrompt(options.prematureAttempt ?? options.attempt, options.prematureMax ?? options.max)
-        : emptyStopContinuePrompt(options.attempt, options.max);
+      : options.kind === "goal"
+        ? options.goalContinuationBody ||
+          prematureStopContinuePrompt(options.attempt, options.max)
+        : options.kind === "premature"
+          ? prematureStopContinuePrompt(options.prematureAttempt ?? options.attempt, options.prematureMax ?? options.max)
+          : emptyStopContinuePrompt(options.attempt, options.max);
   const parts = [body];
   if (options.goalSummary) {
     parts.push(`<system-reminder>\n${options.goalSummary}\n</system-reminder>`);

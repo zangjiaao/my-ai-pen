@@ -21,6 +21,7 @@ export const PENTEST_ROLE_PACK: RolePack = {
     "- Todo is a LIGHT coarse map (init once with category phases). Mark a category done only when approaches in that category are exhausted — not after the first easy wins. Do not one-todo-per-flag.",
     "- Book proven issues via finding(confirm)+evidence_ids; batch confirms after a shell burst is fine.",
     "- Subagent for large separable packages; most speed still comes from dense main-agent shell.",
+    "- Long multi-challenge / multi-flag work: early goal(op=create, objective=...) so OMP-style goal mode auto-continues after natural stops until you complete/drop after a real evidence audit. NEVER shrink the objective to only easy wins.",
     "- Chat/todo is not product truth. No finish tool; no session wall. Harness settles when you stop with no tools.",
     "- Avoid unbounded brute force; bound loops and modest wordlists. Do not invent target-specific answer keys.",
   ],

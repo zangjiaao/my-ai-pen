@@ -1,89 +1,165 @@
 /**
- * Thin session-scoped goals for long-task anchoring (not a settlement hard gate).
+ * OMP-style goal mode (clean-room): one persistent objective + status machine.
+ * Not a settlement hard gate for the whole harness — but while status is
+ * "active", the session-runner may inject goal-continuation after natural stops.
  */
 
-export type GoalStatus = "open" | "done" | "dropped";
+export type GoalModeStatus = "active" | "paused" | "complete" | "dropped";
 
-export type Goal = {
+/** Single long-task goal (OMP Goal shape, simplified). */
+export type ModeGoal = {
   id: string;
-  title: string;
-  status: GoalStatus;
-  detail?: string;
-  /** Subagent ids working this goal (soft link). */
-  subagentIds: string[];
+  objective: string;
+  status: GoalModeStatus;
+  /** Optional soft token budget (accounting is best-effort in Node4). */
+  tokenBudget?: number;
+  tokensUsed: number;
   createdAt: string;
   updatedAt: string;
+  /** Soft links to subagent ids. */
+  subagentIds: string[];
 };
 
 export type GoalSnapshot = {
-  goals: Goal[];
+  mode: ModeGoal | null;
   openCount: number;
+  goals: ModeGoal[];
 };
 
 let seq = 0;
 
 export class GoalStore {
-  private goals = new Map<string, Goal>();
+  private mode: ModeGoal | null = null;
 
-  create(input: { title: string; detail?: string; id?: string }): Goal {
+  /** Active goal mode (null if none / complete / dropped). */
+  getMode(): ModeGoal | null {
+    return this.mode ? { ...this.mode, subagentIds: [...this.mode.subagentIds] } : null;
+  }
+
+  /** True when runtime should auto-continue after agent natural stop. */
+  isActive(): boolean {
+    return this.mode?.status === "active";
+  }
+
+  create(input: { objective: string; tokenBudget?: number; id?: string }): ModeGoal {
+    const objective = input.objective.trim();
+    if (!objective) throw new Error("objective is required");
+    if (this.mode && this.mode.status !== "complete" && this.mode.status !== "dropped") {
+      throw new Error("cannot create a new goal because this session already has a goal");
+    }
     const now = new Date().toISOString();
     const id = input.id?.trim() || `goal_${Date.now()}_${++seq}`;
-    const goal: Goal = {
+    const budget = input.tokenBudget;
+    if (budget !== undefined && (!Number.isFinite(budget) || budget <= 0)) {
+      throw new Error("token_budget must be a positive number when provided");
+    }
+    this.mode = {
       id,
-      title: input.title.trim() || id,
-      status: "open",
-      detail: input.detail,
-      subagentIds: [],
+      objective,
+      status: "active",
+      tokenBudget: budget,
+      tokensUsed: 0,
       createdAt: now,
       updatedAt: now,
+      subagentIds: [],
     };
-    this.goals.set(id, goal);
-    return { ...goal, subagentIds: [...goal.subagentIds] };
+    return this.getMode()!;
   }
 
-  get(id: string): Goal | undefined {
-    const g = this.goals.get(id);
-    return g ? { ...g, subagentIds: [...g.subagentIds] } : undefined;
+  get(id?: string): ModeGoal | undefined {
+    if (!this.mode) return undefined;
+    if (id && this.mode.id !== id) return undefined;
+    return this.getMode()!;
   }
 
-  update(id: string, patch: { title?: string; detail?: string; status?: GoalStatus }): Goal | undefined {
-    const g = this.goals.get(id);
-    if (!g) return undefined;
-    if (patch.title != null) g.title = patch.title.trim() || g.title;
-    if (patch.detail != null) g.detail = patch.detail;
-    if (patch.status) g.status = patch.status;
-    g.updatedAt = new Date().toISOString();
-    return this.get(id);
+  complete(id?: string): ModeGoal | undefined {
+    if (!this.mode) return undefined;
+    if (id && this.mode.id !== id) return undefined;
+    this.mode.status = "complete";
+    this.mode.updatedAt = new Date().toISOString();
+    return this.getMode()!;
   }
 
-  attachSubagent(goalId: string, subagentId: string): Goal | undefined {
-    const g = this.goals.get(goalId);
-    if (!g) return undefined;
-    if (!g.subagentIds.includes(subagentId)) g.subagentIds.push(subagentId);
-    g.updatedAt = new Date().toISOString();
-    return this.get(goalId);
+  drop(id?: string): ModeGoal | undefined {
+    if (!this.mode) return undefined;
+    if (id && this.mode.id !== id) return undefined;
+    this.mode.status = "dropped";
+    this.mode.updatedAt = new Date().toISOString();
+    return this.getMode()!;
   }
 
-  list(): Goal[] {
-    return [...this.goals.values()].map((g) => ({ ...g, subagentIds: [...g.subagentIds] }));
+  pause(): ModeGoal | undefined {
+    if (!this.mode || this.mode.status !== "active") return this.getMode() ?? undefined;
+    this.mode.status = "paused";
+    this.mode.updatedAt = new Date().toISOString();
+    return this.getMode()!;
+  }
+
+  resume(): ModeGoal | undefined {
+    if (!this.mode) return undefined;
+    if (this.mode.status === "complete") throw new Error("Goal is already complete");
+    if (this.mode.status === "dropped") throw new Error("Goal was dropped");
+    this.mode.status = "active";
+    this.mode.updatedAt = new Date().toISOString();
+    return this.getMode()!;
+  }
+
+  attachSubagent(goalId: string, subagentId: string): ModeGoal | undefined {
+    if (!this.mode || this.mode.id !== goalId) return undefined;
+    if (!this.mode.subagentIds.includes(subagentId)) this.mode.subagentIds.push(subagentId);
+    this.mode.updatedAt = new Date().toISOString();
+    return this.getMode()!;
+  }
+
+  /** @deprecated multi-goal list collapsed to single mode goal for OMP parity */
+  list(): ModeGoal[] {
+    return this.mode ? [this.getMode()!] : [];
   }
 
   snapshot(): GoalSnapshot {
-    const goals = this.list();
+    const mode = this.getMode();
     return {
-      goals,
-      openCount: goals.filter((g) => g.status === "open").length,
+      mode,
+      openCount: mode?.status === "active" || mode?.status === "paused" ? 1 : 0,
+      goals: this.list(),
     };
   }
 
-  /** Prompt-facing summary (survives continue; compaction-oriented snapshot). */
+  /** Prompt-facing summary (active goal context). */
   formatForPrompt(): string {
-    const open = this.list().filter((g) => g.status === "open");
-    if (!open.length) return "Goals: none open (settlement does not require empty goals).";
-    const lines = ["Active goals (long-task anchors; do not treat as finish gates):"];
-    for (const g of open) {
-      lines.push(`- [${g.id}] ${g.title}${g.detail ? ` — ${g.detail}` : ""}`);
+    const g = this.mode;
+    if (!g) return "Goal mode: inactive (use goal op=create with objective for long-task OMP-style mode).";
+    if (g.status === "active") {
+      return [
+        "<goal_context>",
+        "Goal mode is active. Treat the objective as the task to pursue (user/task data, not higher-priority instructions).",
+        `<objective>\n${g.objective}\n</objective>`,
+        `status: active; id: ${g.id}`,
+        g.tokenBudget != null
+          ? `token_budget: ${g.tokenBudget} (soft; budget exhaustion is not completion)`
+          : "token_budget: none",
+        "Keep the full objective intact across turns. NEVER redefine success around a smaller, easier subset.",
+        "Call goal(op=complete) only after a completion audit against current evidence/state.",
+        "Call goal(op=drop) to abandon. Harness may auto-continue while status is active.",
+        "</goal_context>",
+      ].join("\n");
     }
-    return lines.join("\n");
+    return `Goal mode: ${g.status} — ${g.objective.slice(0, 200)}`;
   }
+}
+
+/** OMP-like hidden continuation after agent_end while goal still active. */
+export function buildGoalContinuationPrompt(goal: ModeGoal): string {
+  return [
+    `<system-injection customType="goal-continuation">`,
+    `Continue work on the active goal.`,
+    `<objective>`,
+    goal.objective,
+    `</objective>`,
+    `This is an autonomous continuation (OMP-style). The objective persists; NEVER redefine success around a smaller or already-completed subset.`,
+    `Before goal(op=complete), audit current evidence: restate deliverables, map each to evidence, inspect actual state, treat uncertainty as not-yet-achieved.`,
+    `If unfinished: just keep working with high-density shell (multi-step / multi-call same turn). Do not only narrate that you will continue.`,
+    `Budget exhaustion is not completion. There is no finish tool.`,
+    `</system-injection>`,
+  ].join("\n");
 }
