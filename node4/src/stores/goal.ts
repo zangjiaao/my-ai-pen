@@ -152,6 +152,15 @@ export class GoalStore {
     this.mode.updatedAt = new Date().toISOString();
   }
 
+  /** OMP-style: accumulate tokens from assistant turns while goal is active. */
+  addTokensUsed(delta: number): void {
+    if (!this.mode || this.mode.status !== "active") return;
+    const n = Math.max(0, Math.floor(Number(delta) || 0));
+    if (n <= 0) return;
+    this.mode.tokensUsed += n;
+    this.mode.updatedAt = new Date().toISOString();
+  }
+
   /** Compute whether complete is allowed (pure helper for smokes). */
   completeBlockers(opts?: CompleteAttempt): string[] {
     const gates = goalCompleteGatesFromEnv();

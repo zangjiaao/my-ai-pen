@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { formatTodoSummary, type TodoOpName, type TodoParams } from "../stores/todo.js";
 import { TODO_TOOL_DESCRIPTION } from "../runtime/todo-harness.js";
+import { emitTodoPlanTreeUpdate } from "../runtime/plan-projection.js";
 import type { ToolRuntime } from "../types.js";
 import { jsonResult, textResult } from "./common.js";
 
@@ -49,7 +50,7 @@ export function createTodoTool(runtime: ToolRuntime): ToolDefinition<any> {
           { isError: true },
         );
       }
-      // Successful mutation clears a pending error reminder.
+      // Successful mutation: clear error reminder, emit todo + plan_tree for platform Tasks.
       if (!result.readOnly) {
         runtime.lifecycle.pendingTodoErrorReminder = undefined;
         await runtime.platform.send({
@@ -60,6 +61,8 @@ export function createTodoTool(runtime: ToolRuntime): ToolDefinition<any> {
           phases: runtime.todo.snapshot(),
           open_count: runtime.todo.openCount(),
         });
+        // Node2/OMP-style: project into plan_tree_updated so right-panel Tasks updates live.
+        await emitTodoPlanTreeUpdate(runtime.platform, runtime.task, runtime.todo, `todo.${op}`);
       }
       return jsonResult({
         ok: true,
@@ -68,6 +71,7 @@ export function createTodoTool(runtime: ToolRuntime): ToolDefinition<any> {
         phases: result.phases,
         open_count: runtime.todo.openCount(),
         completed_tasks: result.completedTasks,
+        plan_nodes: runtime.todo.toPlanNodes(),
       });
     },
   };

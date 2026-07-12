@@ -42,6 +42,8 @@ export type ToolRuntime = {
     pendingTodoErrorReminder?: string[];
     /** Platform/user cancel only — no session wall/max-time. Tools kill process groups when this fires. */
     abortSignal?: AbortSignal;
+    /** Optional collaboration tree tracker for checkpoint.panel_agents. */
+    panelAgents?: import("./runtime/panel-agents.js").PanelAgentTracker;
   };
 };
 

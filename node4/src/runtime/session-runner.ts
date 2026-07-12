@@ -20,7 +20,6 @@ import { createNode4Extension } from "./extension.js";
 import { resolveTerminalTaskStatus } from "./harness-settlement.js";
 import {
   composeContinuePrompt,
-  nextEmptyStopStreak,
   resolveHarnessTerminalStatus,
   evaluateContinueAfterSegment,
 } from "./loop-policy.js";
@@ -30,6 +29,15 @@ import { eagerBookingInjection } from "./booking-harness.js";
 import { SubagentHost } from "./subagent.js";
 import { eagerTodoInjection } from "./todo-harness.js";
 import { buildGoalContinuationPrompt } from "../stores/goal.js";
+import { PanelAgentTracker } from "./panel-agents.js";
+import {
+  CheckpointThrottle,
+  createUsageLedgerFromEnv,
+  emitCheckpointUpdate,
+  handleNode4SessionEvent,
+  PlatformTextStream,
+  type ObservabilityContext,
+} from "./platform-observability.js";
 
 export async function runNode4Task(
   config: Node4Config,
@@ -46,6 +54,7 @@ export async function runNode4Task(
 
   const roleResolved = resolveRolePack({ engagement: task.engagement, role: task.role });
   const pack = roleResolved.pack;
+  const startedAt = new Date().toISOString();
 
   const eventsPath = join(taskDir, "events.jsonl");
   await writeFile(eventsPath, "", "utf8");
@@ -57,6 +66,11 @@ export async function runNode4Task(
   };
 
   const goals = new GoalStore();
+  const panel = new PanelAgentTracker(task.instruction || "Authorized security task");
+  const usage = createUsageLedgerFromEnv();
+  const textStream = new PlatformTextStream(loggingPlatform, task);
+  const checkpointThrottle = new CheckpointThrottle();
+
   const runtime: ToolRuntime = {
     task,
     workspaceDir: config.workspaceDir,
@@ -67,7 +81,7 @@ export async function runNode4Task(
     findingsDir: join(taskDir, "findings"),
     goals,
     rolePackId: pack.id,
-    lifecycle: { toolsInLastSegment: 0 },
+    lifecycle: { toolsInLastSegment: 0, panelAgents: panel },
   };
   runtime.subagents = new SubagentHost({
     task,
@@ -75,9 +89,27 @@ export async function runNode4Task(
     evidence: runtime.evidence,
     platform: loggingPlatform,
     goals,
+    panelAgents: panel,
   });
 
-  let sessionRef: { abort?: () => Promise<void> } = {};
+  const obsCounters = {
+    toolCallCount: 0,
+    activeTool: undefined as string | undefined,
+    phase: "starting",
+  };
+  const obsCtx: ObservabilityContext = {
+    platform: loggingPlatform,
+    task,
+    runtime,
+    goals,
+    usage,
+    panel,
+    startedAt,
+    rolePackId: pack.id,
+    counters: obsCounters,
+  };
+
+  let sessionRef: { abort?: () => Promise<void>; subscribe?: (fn: (e: any) => void) => void } = {};
   // No session wall/max-time (OMP-default style). Only platform/user cancel aborts.
   runtime.lifecycle.abortSignal = signal;
   if (signal) {
@@ -151,6 +183,17 @@ export async function runNode4Task(
   });
   sessionRef = session as any;
 
+  // Platform observability: text stream, llm_usage, throttled checkpoints.
+  if (typeof (session as any).subscribe === "function") {
+    (session as any).subscribe(async (event: any) => {
+      try {
+        await handleNode4SessionEvent(obsCtx, textStream, checkpointThrottle, event);
+      } catch {
+        // Never let observability break the agent loop.
+      }
+    });
+  }
+
   // Continues: empty + booking-gap + OMP goal-continuation + rare premature.
   // Discovery is in-loop (pi agent-loop). No session wall.
   const maxContinues = Math.max(0, Number(process.env.NODE4_MAX_CONTINUES ?? 16));
@@ -184,7 +227,14 @@ export async function runNode4Task(
     conversation_id: task.conversationId,
     task_id: task.taskId,
     message: `Node4 starting role_pack=${pack.id} tools=${toolNames.join(",")} goal_active=${goals.isActive()} (in-loop density; no session wall)`,
+    agent_phase: "starting",
+    status: "running",
+    llm_usage: usage.snapshot(),
   });
+
+  // Initial checkpoint so right panel has structure even before first model turn.
+  await emitCheckpointUpdate(obsCtx);
+  checkpointThrottle.markEmitted();
 
   const userPrompt = [
     eagerTodoInjection({ forced: true }),
@@ -287,7 +337,14 @@ export async function runNode4Task(
       conversation_id: task.conversationId,
       task_id: task.taskId,
       message: `continue ${continueCount}/${maxContinues} (${decision.reason}) goal=${goalContinueCount}/${maxGoalContinues} premature=${prematureStopCount}/${maxPrematureStops} evidence=${evidenceList.length} findings=${bookedSoFar.count}`,
+      agent_phase: "continue",
+      status: "running",
+      llm_usage: usage.snapshot({ tool_calls: obsCounters.toolCallCount }),
     });
+    // Mid-run checkpoint on outer continues so tokens/tasks refresh even if throttle was idle.
+    await emitCheckpointUpdate(obsCtx);
+    checkpointThrottle.markEmitted();
+
     try {
       const continueKind =
         decision.kind === "booking_gap"
@@ -321,7 +378,23 @@ export async function runNode4Task(
   if (cancelled()) stopReason = "aborted";
   // else keep stopReason from last decision (e.g. natural_stop_after_tools)
 
+  await textStream.dispose().catch(() => {});
+
   const messages = Array.isArray((session as any).messages) ? [...(session as any).messages] : [];
+  // Fallback: if subscribe never recorded usage (older pi / missed events), scan once.
+  if (usage.snapshot().requests === 0) {
+    for (const msg of messages) {
+      if (msg && (msg as any).role === "assistant") {
+        const before = usage.snapshot().total_tokens;
+        if (usage.recordAssistantMessage(msg)) {
+          const after = usage.snapshot().total_tokens;
+          const delta = after - before;
+          if (delta > 0 && goals.isActive()) goals.addTokensUsed(delta);
+        }
+      }
+    }
+  }
+
   try {
     session.dispose?.();
   } catch {
@@ -335,11 +408,27 @@ export async function runNode4Task(
     stopReason,
   });
   const emitStatus = resolveTerminalTaskStatus({ harnessStatus });
+  const endTime = new Date().toISOString();
+
+  panel.setMainTerminal(cancelled() ? "aborted" : emitStatus === "completed" ? "completed" : "failed");
+  obsCounters.phase = "finished";
+
+  const llmUsage = usage.snapshot({
+    agent_count: panel.list().length,
+    tool_calls: obsCounters.toolCallCount,
+  });
 
   const summary =
     booked.count > 0
       ? `Harness settled ${emitStatus} with ${booked.count} booked finding(s). stop=${stopReason} role=${pack.id}`
       : `Harness settled ${emitStatus}. stop=${stopReason} role=${pack.id}`;
+
+  // Terminal checkpoint before task_complete so UI has final tokens + plan.
+  await emitCheckpointUpdate(obsCtx, {
+    terminal: true,
+    status: emitStatus,
+    endTime,
+  });
 
   await loggingPlatform.send({
     type: "task_complete",
@@ -352,6 +441,7 @@ export async function runNode4Task(
     booked_findings: booked.count,
     role_pack: pack.id,
     open_goals: goals.snapshot().openCount,
+    llm_usage: llmUsage,
   });
 
   await writeFile(
@@ -368,6 +458,9 @@ export async function runNode4Task(
         roleSource: roleResolved.source,
         openGoals: goals.snapshot().openCount,
         goals: goals.snapshot().goals,
+        llm_usage: llmUsage,
+        startedAt,
+        endTime,
       },
       null,
       2,

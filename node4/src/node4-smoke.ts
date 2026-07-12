@@ -45,6 +45,25 @@ import {
   midRunBookingNudge,
   FINDING_TOOL_DESCRIPTION,
 } from "./runtime/booking-harness.js";
+import {
+  LlmUsageLedger,
+  loadLlmCostRatesFromEnv,
+  messageTokenTotal,
+} from "./runtime/llm-usage.js";
+import { PanelAgentTracker } from "./runtime/panel-agents.js";
+import {
+  buildTodoPlanTreePayload,
+  emitTodoPlanTreeUpdate,
+} from "./runtime/plan-projection.js";
+import {
+  CheckpointThrottle,
+  PlatformTextStream,
+  assistantText,
+  buildNode4Checkpoint,
+  emitCheckpointUpdate,
+  handleNode4SessionEvent,
+  type ObservabilityContext,
+} from "./runtime/platform-observability.js";
 import type { PlatformMessage, PlatformSink, TaskEnvelope, ToolRuntime } from "./types.js";
 
 function assert(cond: unknown, msg: string): asserts cond {
@@ -317,6 +336,45 @@ async function main() {
   assert(clampTimeoutSec(999) === 600, "shell timeout clamp max");
   assert(PENTEST_ROLE_PACK.workLines.some((l) => /shell-first|in-loop/i.test(l)), "pack encodes in-loop shell-first");
 
+  // --- Platform parity: llm_usage ledger + checkpoint ---
+  process.env.LLM_COST_INPUT_PER_MTOK = "1";
+  process.env.LLM_COST_OUTPUT_PER_MTOK = "2";
+  const rates = loadLlmCostRatesFromEnv();
+  assert(rates.input === 1 && rates.output === 2, "cost rates from env");
+  const usageLedger = new LlmUsageLedger(rates);
+  assert(
+    usageLedger.recordAssistantMessage({
+      role: "assistant",
+      model: "test-model",
+      usage: {
+        input: 1000,
+        output: 500,
+        cacheRead: 100,
+        cacheWrite: 0,
+        reasoning: 50,
+        totalTokens: 1650,
+        cost: { total: 0 },
+      },
+    }),
+    "record assistant usage",
+  );
+  const usageSnap = usageLedger.snapshot({ tool_calls: 3 });
+  assert(usageSnap.input_tokens === 1000, `input=${usageSnap.input_tokens}`);
+  assert(usageSnap.output_tokens === 500, `output=${usageSnap.output_tokens}`);
+  assert(usageSnap.cached_tokens === 100, `cached=${usageSnap.cached_tokens}`);
+  assert(usageSnap.reasoning_tokens === 50, `reasoning=${usageSnap.reasoning_tokens}`);
+  assert(usageSnap.total_tokens === 1650, `total=${usageSnap.total_tokens}`);
+  assert(usageSnap.requests === 1, "requests=1");
+  assert(usageSnap.cost > 0, `cost from rates expected >0 got ${usageSnap.cost}`);
+  assert(usageSnap.model === "test-model", "model recorded");
+  assert(
+    messageTokenTotal({
+      role: "assistant",
+      usage: { input: 10, output: 5, totalTokens: 15 },
+    }) === 15,
+    "messageTokenTotal",
+  );
+
   // OMP-style goal mode + complete gates (full-clearance oriented)
   const goals = new GoalStore();
   const g1 = goals.create({ objective: "Map attack surface and book proven issues" });
@@ -533,6 +591,139 @@ async function main() {
   );
 
   await exec(createTodoTool(runtime), "t", { op: "init", items: ["a", "b"] });
+  // Todo mutations must project plan_tree for platform Tasks panel.
+  const planMsgs = messages.filter((m) => m.type === "plan_tree_updated");
+  assert(planMsgs.length >= 1, "todo init emits plan_tree_updated");
+  const plan0 = planMsgs[planMsgs.length - 1] as {
+    plan_tree?: Array<{ title?: string; status?: string; source?: string }>;
+    todo_phases?: unknown[];
+    todo_open_count?: number;
+  };
+  assert(Array.isArray(plan0.plan_tree) && plan0.plan_tree.length >= 2, "plan_tree has phase+tasks");
+  assert(plan0.plan_tree!.some((n) => n.title === "a" || n.title === "b"), "plan titles match todo items");
+  assert(plan0.plan_tree!.every((n) => n.source === "todo"), "plan source=todo");
+  assert(Array.isArray(plan0.todo_phases), "todo_phases present");
+  assert(typeof plan0.todo_open_count === "number" && plan0.todo_open_count >= 1, "todo_open_count");
+
+  await exec(createTodoTool(runtime), "t2", { op: "done", task: "a" });
+  const planAfterDone = messages.filter((m) => m.type === "plan_tree_updated").pop() as {
+    plan_tree?: Array<{ title?: string; status?: string }>;
+  };
+  const doneNode = planAfterDone.plan_tree?.find((n) => n.title === "a");
+  assert(doneNode?.status === "done", `done maps to plan status=done got ${doneNode?.status}`);
+  const runningNode = planAfterDone.plan_tree?.find((n) => n.title === "b");
+  assert(runningNode?.status === "running" || runningNode?.status === "pending", "next task still open");
+
+  // Pure plan projection helper
+  const pureTodo = new TodoStore();
+  pureTodo.apply({ op: "init", list: [{ phase: "Recon", items: ["Map surface", "Auth"] }] });
+  pureTodo.apply({ op: "done", task: "Map surface" });
+  const purePlan = buildTodoPlanTreePayload(pureTodo);
+  assert(purePlan.plan_tree.some((n) => n.title === "Recon" && n.level === "phase"), "phase node");
+  assert(purePlan.plan_tree.some((n) => n.title === "Map surface" && n.status === "done"), "done item");
+  assert(purePlan.progress.percent > 0, "progress percent");
+
+  // --- Platform text stream + checkpoint builder + session event path ---
+  const obsMessages: PlatformMessage[] = [];
+  const obsPlatform: PlatformSink = {
+    async send(m) {
+      obsMessages.push(m);
+      messages.push(m);
+    },
+  };
+  const obsTask: TaskEnvelope = {
+    taskId: "obs-task",
+    conversationId: "c-obs",
+    instruction: "obs smoke",
+    target: { value: "http://127.0.0.1:99" },
+    scope: { allow: ["127.0.0.1"] },
+    engagement: "pentest",
+  };
+  const obsGoals = new GoalStore();
+  obsGoals.create({ objective: "maximize verified issues" });
+  const obsTodo = new TodoStore();
+  obsTodo.apply({ op: "init", items: ["Step one", "Step two"] });
+  const obsPanel = new PanelAgentTracker(obsTask.instruction);
+  obsPanel.noteSubagentStart({ id: "sub_obs_1", assignment: "child work", goalId: obsGoals.getMode()!.id });
+  obsPanel.noteSubagentEnd({ id: "sub_obs_1", ok: true, summary: "ok" });
+  const obsUsage = new LlmUsageLedger(rates);
+  const obsRuntime: ToolRuntime = {
+    task: obsTask,
+    workspaceDir: root,
+    taskDir,
+    platform: obsPlatform,
+    todo: obsTodo,
+    evidence: runtime.evidence,
+    findingsDir: runtime.findingsDir,
+    goals: obsGoals,
+    rolePackId: "pentest",
+    lifecycle: { panelAgents: obsPanel },
+  };
+  const obsCtx: ObservabilityContext = {
+    platform: obsPlatform,
+    task: obsTask,
+    runtime: obsRuntime,
+    goals: obsGoals,
+    usage: obsUsage,
+    panel: obsPanel,
+    startedAt: new Date().toISOString(),
+    rolePackId: "pentest",
+    counters: { toolCallCount: 0, phase: "starting" },
+  };
+  const textStream = new PlatformTextStream(obsPlatform, obsTask);
+  const throttle = new CheckpointThrottle();
+
+  // Text emit (message_end path)
+  assert(assistantText({ content: [{ type: "text", text: "hello world" }] }) === "hello world", "assistantText");
+  await textStream.emitFinalText("Agent found a path.");
+  const textEv = obsMessages.filter((m) => m.type === "text");
+  assert(textEv.length >= 1, "platform type=text emitted");
+  const textContent = (textEv[0] as { content?: { text?: string; stream_id?: string } }).content;
+  assert(textContent?.text === "Agent found a path.", "text content body");
+  assert(Boolean(textContent?.stream_id), "text stream_id present");
+
+  // Session event: message_end records usage + goal tokens + checkpoint
+  await handleNode4SessionEvent(obsCtx, textStream, throttle, {
+    type: "message_end",
+    message: {
+      role: "assistant",
+      model: "obs-model",
+      content: [{ type: "text", text: "more" }],
+      usage: {
+        input: 2000,
+        output: 400,
+        cacheRead: 0,
+        totalTokens: 2400,
+        cost: { total: 0.01 },
+      },
+    },
+  });
+  assert(obsUsage.snapshot().total_tokens === 2400, "session event recorded usage");
+  assert(obsUsage.snapshot().cost === 0.01, "prefers reported cost.total");
+  assert(obsGoals.getMode()!.tokensUsed === 2400, "goal.tokensUsed accumulated from message");
+
+  // Force checkpoint emit (throttle may block second within 10s — call builder directly + emit)
+  const checkpoint = await emitCheckpointUpdate(obsCtx, { terminal: false });
+  assert(checkpoint.llm_usage && (checkpoint.llm_usage as any).total_tokens === 2400, "checkpoint has llm_usage");
+  assert(Array.isArray(checkpoint.panel_agents) && (checkpoint.panel_agents as any[]).length >= 2, "panel_agents main+sub");
+  assert((checkpoint.panel_agents as any[]).some((a) => a.id === "node4-main"), "main agent id");
+  assert((checkpoint.panel_agents as any[]).some((a) => a.id === "sub_obs_1" && a.status === "completed"), "subagent completed");
+  assert(checkpoint.goal && (checkpoint.goal as any).tokensUsed === 2400, "checkpoint goal tokens");
+  assert(Array.isArray(checkpoint.plan_tree) && (checkpoint.plan_tree as any[]).length > 0, "checkpoint plan_tree");
+  assert(Array.isArray(checkpoint.targets_info), "targets_info");
+  assert(obsMessages.some((m) => m.type === "checkpoint_update"), "checkpoint_update event");
+  const built = buildNode4Checkpoint(obsCtx, { terminal: true, status: "completed", endTime: new Date().toISOString() });
+  assert(built.llm_usage && built.end_time && built.status === "completed", "terminal checkpoint fields");
+
+  // Direct plan emit API
+  const planOnly: PlatformMessage[] = [];
+  await emitTodoPlanTreeUpdate(
+    { async send(m) { planOnly.push(m); } },
+    obsTask,
+    obsTodo,
+    "todo.test",
+  );
+  assert(planOnly[0]?.type === "plan_tree_updated", "emitTodoPlanTreeUpdate type");
 
   const write = createWriteTool(runtime);
   await exec(write, "w", { path: "scripts/p.py", content: "print('x')\n" });
@@ -609,6 +800,12 @@ async function main() {
         shell_process_group: true,
         no_session_wall: true,
         post_run_inspectable: true,
+        llm_usage: true,
+        checkpoint_update: true,
+        plan_tree_updated: true,
+        platform_text: true,
+        panel_agents: true,
+        goal_tokensUsed: true,
         taskDir,
       },
       null,

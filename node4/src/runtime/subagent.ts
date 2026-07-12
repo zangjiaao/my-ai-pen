@@ -35,6 +35,8 @@ export type SubagentHostOptions = {
   evidence: EvidenceStoreLike;
   platform: PlatformSink;
   goals: GoalStore;
+  /** Optional right-panel agent tree tracker. */
+  panelAgents?: import("./panel-agents.js").PanelAgentTracker;
 };
 
 let subSeq = 0;
@@ -65,6 +67,12 @@ export class SubagentHost {
       `# Subagent ${subagentId}\n\n${options.assignment}\n\ngoalId: ${options.goalId || ""}\n`,
       "utf8",
     );
+
+    this.opts.panelAgents?.noteSubagentStart({
+      id: subagentId,
+      assignment: options.assignment,
+      goalId: options.goalId,
+    });
 
     await this.opts.platform.send({
       type: "subagent_started",
@@ -113,6 +121,8 @@ export class SubagentHost {
       summary: `subagent ${subagentId}: ${summary.slice(0, 200)}`,
       data: payload,
     });
+
+    this.opts.panelAgents?.noteSubagentEnd({ id: subagentId, ok, summary });
 
     await this.opts.platform.send({
       type: "subagent_finished",
