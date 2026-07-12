@@ -181,11 +181,46 @@ export default function ConversationPage() {
   }, [activeConversation?.node_id, activeConversationNodeId, agentNodes, kanban?.workflow_kind, pendingWorkflowKind]);
   const shouldShowRightPanel = useMemo(() => {
     if (!activeId) return false;
-    if (["pentest", "strix"].includes(activeWorkflowKind)) return true;
-    if (["pentest", "strix"].includes(String(kanban?.workflow_kind || ""))) return true;
+
+    // Work artifacts from a worker node — always show (including history reopen).
     if (strixAgents.length || strixNotes.length || findings.length || assets.length) return true;
-    return planTree.some((node) => ["strix_todo", "agent", "coverage", "auditor"].includes(String(node.source || "")));
-  }, [activeId, activeWorkflowKind, assets.length, findings.length, kanban?.workflow_kind, planTree, strixAgents.length, strixNotes.length]);
+    if (planTree.some((node) => ["strix_todo", "agent", "coverage", "auditor", "worker", "pi_tool", "pi_workflow"].includes(String(node.source || "")))) {
+      return true;
+    }
+    if (strixRun && (strixRun.start_time || strixRun.scan_mode || (strixRun.targets_info || []).length > 0)) return true;
+
+    const assignedNodeId = activeConversation?.node_id || activeConversationNodeId || "";
+    if (!assignedNodeId) return false;
+
+    // Bound node is working or has already produced a runtime kanban surface.
+    const stage = String(kanban?.current_stage || "").toLowerCase();
+    if (kanban && stage && stage !== "idle" && stage !== "confirming") return true;
+    if (["pentest", "strix"].includes(String(kanban?.workflow_kind || "")) && stage) return true;
+    if (isActiveConversationRunning && (Boolean(agentState.phase) || Boolean(agentState.activeTool) || planTree.length > 0 || Boolean(kanban))) {
+      return true;
+    }
+    // Terminal session that was bound to a node but artifacts not yet hydrated — show if status proves work ran.
+    const status = String(activeConversation?.status || "").toLowerCase();
+    if (["completed", "incomplete", "failed", "paused"].includes(status) && (Boolean(kanban) || planTree.length > 0 || Boolean(agentState.phase))) {
+      return true;
+    }
+    return false;
+  }, [
+    activeConversation?.node_id,
+    activeConversation?.status,
+    activeConversationNodeId,
+    activeId,
+    agentState.activeTool,
+    agentState.phase,
+    assets.length,
+    findings.length,
+    isActiveConversationRunning,
+    kanban,
+    planTree,
+    strixAgents.length,
+    strixNotes.length,
+    strixRun,
+  ]);
   const platformAgentNodeId = useMemo(() => agentNodes.find(node => node.type === "platform")?.id || null, [agentNodes]);
   const fallbackPentestNodeId = useMemo(() => {
     const pentestNodeIds = agentNodes.filter(node => node.type === "pentest").map(node => node.id);
@@ -406,6 +441,8 @@ export default function ConversationPage() {
       }));
       void refreshConversationState(convId);
     },
+    // Legacy alias only: older nodes may still emit task_incomplete.
+    // New Node2 incomplete path uses task_complete(status=incomplete) exclusively.
     task_incomplete: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
@@ -413,9 +450,10 @@ export default function ConversationPage() {
       clearPendingAgentMessage(convId);
       markMessageAutoScroll();
       setRunning(false);
+      const status = String(m.status || "incomplete").toLowerCase();
       addMessageToConversation(convId, makeMessage(convId, "system", "status", {
-        text: "Task incomplete - " + String(m.summary || ""),
-        status: "incomplete",
+        text: (status === "blocked" ? "Task blocked - " : "Task incomplete - ") + String(m.summary || ""),
+        status: status === "blocked" ? "blocked" : "incomplete",
         audit: m.audit,
         summary: m.summary,
         message_id: m.message_id,
@@ -588,10 +626,14 @@ export default function ConversationPage() {
       clearPendingAgentMessage(convId);
       markMessageAutoScroll();
       setRunning(false);
-      const incomplete = m.status === "incomplete";
+      // Single terminal channel: completed | incomplete | blocked (no separate task_incomplete).
+      const status = String(m.status || "completed").toLowerCase();
+      const incomplete = status === "incomplete" || status === "blocked";
       addMessageToConversation(convId, makeMessage(convId, "system", "status", {
-        text: incomplete ? "Task incomplete - " + String(m.summary || "") : "Task complete - " + JSON.stringify(m.summary || {}),
-        status: incomplete ? "incomplete" : "completed",
+        text: incomplete
+          ? (status === "blocked" ? "Task blocked - " : "Task incomplete - ") + String(m.summary || "")
+          : "Task complete - " + JSON.stringify(m.summary || {}),
+        status: incomplete ? status : "completed",
         summary: m.summary || {},
         audit: m.audit,
         message_id: m.message_id,
@@ -1237,6 +1279,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               kanban={kanban}
               workflowKind={activeWorkflowKind}
               running={isActiveConversationRunning}
+              conversationStatus={activeConversation?.status}
               planTree={planTree}
               strixAgents={strixAgents}
               strixNotes={strixNotes}
@@ -1528,21 +1571,28 @@ function resultTimelineEventForMessage(message: Message): TimelineEvent | null {
       };
     }
     case "task_complete": {
-      const status = readString(content.status);
+      const status = readString(content.status) || "completed";
+      const title =
+        status === "incomplete" || status === "blocked"
+          ? status === "blocked"
+            ? "任务阻塞"
+            : "任务未完成"
+          : "任务完成";
       return {
         id,
         at,
         category: "Task",
-        title: status === "incomplete" ? "任务未完成" : "任务完成",
+        title,
         detail: clipTimeline(readString(content.summary), 180),
-        status: status || "completed",
+        status,
       };
     }
     case "task_incomplete":
+      // Legacy msg_type from older nodes; same terminal meaning as task_complete incomplete.
       return {
         id,
         at,
-        category: "Gate",
+        category: "Task",
         title: "任务未完成",
         detail: clipTimeline(readString(content.summary), 180),
         status: "incomplete",

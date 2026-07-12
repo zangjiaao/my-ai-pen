@@ -294,6 +294,9 @@ function isPrimaryFlagFinding(finding: Record<string, unknown>): boolean {
   const title = String(finding.title || "").trim();
   if (!title) return false;
   if (/^flag\{[^{}\n]{2,120}\}$/i.test(title) || /^FLAG\{[^{}\n]{2,120}\}$/.test(title)) return true;
+  // Agent/product convention: "Flag · …" / "Flag: …" is the Flag object card even when the
+  // challenge name embeds "XSS"/"SQLi" (those words describe the challenge, not a Vuln kind).
+  if (/^flag\s*[·•:：\-–—]/i.test(title) || /^flag\s+/i.test(title)) return true;
   if (/^(captured\s+)?flag\b/i.test(title) && !hasVulnSignalsInFinding(finding)) return true;
   // Title focuses on flag capture/value without exploit class.
   if (

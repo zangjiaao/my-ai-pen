@@ -116,6 +116,8 @@ interface Props {
   kanban?: KanbanSummary;
   workflowKind?: string;
   running?: boolean;
+  /** Conversation lifecycle status — used to close stale Tasks when completed. */
+  conversationStatus?: string;
   planTree?: PlanNode[];
   strixAgents?: StrixAgentStatus[];
   strixNotes?: StrixNote[];
@@ -160,6 +162,7 @@ export default function RightPanel({
   kanban,
   workflowKind,
   running = false,
+  conversationStatus,
   planTree = [],
   strixAgents = [],
   strixNotes = [],
@@ -210,16 +213,21 @@ export default function RightPanel({
   const kanbanSummary = normalizeKanban(kanban, planTree, progress, workflowKind);
   const isStrixWorkflow = workflowKind === "strix" || kanbanSummary.workflow_kind === "strix" || planTree.some((node) => String(node.source || "") === "strix_todo");
   // Unified right-panel layout (Node3 baseline) for both Strix and Node2/pentest.
-  const displayAgents = orderedStrixAgents.length > 0
-    ? orderedStrixAgents
-    : synthesizeMainAgent(activeTool, running, workflowKind);
+  // If the conversation is no longer running, never leave Main/Worker agents stuck on "running"
+  // (stale checkpoint.panel_agents can lag behind conversation status).
+  const displayAgents = normalizeAgentsForConversationRunning(
+    orderedStrixAgents.length > 0
+      ? orderedStrixAgents
+      : synthesizeMainAgent(activeTool, running, workflowKind),
+    running,
+  );
   const hasStatusData = running || Boolean(activeTool) || planTree.length > 0 || displayAgents.length > 0 || findings.length > 0 || assets.length > 0 || timeline.length > 0 || Boolean(strixRun);
   const visiblePlanTree = isStrixWorkflow ? mainAgentPlanTree(planTree, displayAgents) : planTree;
   const phasePlan = hasStatusData ? buildPhasePlan(visiblePlanTree, kanbanSummary.current_stage, activeTool, running, findings.length, isStrixWorkflow) : [];
   // Node3-style flat task list for all workflows (phase tree remains available via plan data).
   const taskItems = isStrixWorkflow
     ? phasePlan.flatMap((phase) => phase.items)
-    : unifiedTodoItems(visiblePlanTree);
+    : normalizeTasksForConversationStatus(unifiedTodoItems(visiblePlanTree), conversationStatus, running);
   const displayRun = strixRun && hasRunSummaryData(strixRun) ? strixRun : undefined;
   const elapsedBaseSeconds = normalizeSeconds(kanbanSummary.elapsed_seconds);
   const intake = normalizeIntake(intakeResult, intakeStatus);
@@ -1048,6 +1056,47 @@ function synthesizeMainAgent(activeTool: string | undefined, running: boolean, w
     current_tool: activeTool || "",
     current_action: running ? "working" : "done",
   }];
+}
+
+/** Align collaboration tree with conversation lifecycle (timer already stopped when running=false). */
+function normalizeAgentsForConversationRunning(agents: StrixAgentStatus[], running: boolean): StrixAgentStatus[] {
+  if (running || agents.length === 0) return agents;
+  const open = new Set(["running", "pending", "todo", "llm_waiting", "tool_running", "working", ""]);
+  return agents.map((agent) => {
+    const status = String(agent.status || "").toLowerCase();
+    if (!open.has(status)) return agent;
+    return {
+      ...agent,
+      status: "completed",
+      current_tool: "",
+      current_action: "done",
+      pending_count: 0,
+    };
+  });
+}
+
+/**
+ * Display recovery only: if a completed conversation still has stale pending Tasks
+ * (agent failed to maintain checklist mid-run), show them closed so UI matches lifecycle.
+ * Runtime path requires the agent to update coverage(plan) during work — not this.
+ */
+function normalizeTasksForConversationStatus(
+  nodes: PlanNode[],
+  conversationStatus: string | undefined,
+  running: boolean,
+): PlanNode[] {
+  if (nodes.length === 0) return nodes;
+  const status = String(conversationStatus || "").toLowerCase();
+  // Prefer explicit conversation status; fall back to !running for legacy callers.
+  const closeOpen = status ? status === "completed" : !running;
+  if (!closeOpen) return nodes;
+  return nodes.map((node) => {
+    const nodeStatus = String(node.status || "").toLowerCase();
+    if (nodeStatus === "todo" || nodeStatus === "pending" || nodeStatus === "running") {
+      return { ...node, status: "done", result: node.result || "completed" };
+    }
+    return node;
+  });
 }
 
 function hasRunSummaryData(run: StrixRun | undefined): boolean {
@@ -3308,6 +3357,10 @@ function classifyAuthSubtype(finding: Record<string, unknown>): AuthSubtype {
 function hasVulnSignalsInFinding(finding: Record<string, unknown>): boolean {
   if (finding.cwe && String(finding.cwe).trim()) return true;
   const title = String(finding.title || "");
+  // Flag · cards may embed challenge names like "Reflected XSS" — that is not a Vuln kind.
+  if (/^flag\s*[·•:：\-–—]/i.test(title) || /^flag\s+/i.test(title) || /^flag\{/i.test(title)) {
+    return false;
+  }
   const blob = findingTextBlob(finding);
   return (
     /\b(sql\s*injection|sqli|xss|cross[- ]site|rce|remote\s*code|command\s*injection|ssrf|lfi|rfi|xxe|ssti|idor|path\s*traversal|file\s*upload|deserialization|csrf|open\s*redirect|auth(?:entication|orization)?\s*(?:bypass|flaw)|privilege\s*escalation|insecure|vulnerability|漏洞|注入|越权)\b/i.test(
@@ -3332,17 +3385,20 @@ function normalizeExplicitKind(finding: Record<string, unknown>): FindingKindId 
   return undefined;
 }
 
-/** Primary kind for a single badge (chat / exclusive contexts). */
+/** Exclusive kinds: vuln | auth(key) | flag — Flag · titles and finding_kind=flag always win. */
 function classifyFindingKind(finding: Record<string, unknown>): FindingKindId {
   const explicit = normalizeExplicitKind(finding);
   if (explicit) return explicit;
+
+  const title = String(finding.title || "").trim();
+  if (/^flag\{[^{}\n]{2,120}\}$/i.test(title) || /^FLAG\{[^{}\n]{2,120}\}$/.test(title)) return "flag";
+  if (/^flag\s*[·•:：\-–—]/i.test(title) || /^flag\s+/i.test(title)) return "flag";
 
   const flagPresent = hasFlagInFinding(finding);
   const vulnish = hasVulnSignalsInFinding(finding);
   const authish = hasAuthInFinding(finding);
 
   if (flagPresent && !vulnish) {
-    const title = String(finding.title || "").trim();
     if (/\b(?:ctf\s*)?flag\b/i.test(title) || /^flag\{/i.test(title) || !authish) return "flag";
   }
   if (authish && !vulnish) return "auth";

@@ -343,7 +343,9 @@ async def start_report_session(
     )
     await db.commit()
     await db.refresh(conv)
-    started = await _dispatch_retest_if_possible(str(conv.id), str(user_id), target, scope, instruction)
+    started = await _dispatch_retest_if_possible(
+        str(conv.id), str(user_id), target, scope, instruction, engagement="consult"
+    )
     return RetestOut(
         conversation_id=str(conv.id),
         started=started,
@@ -441,7 +443,9 @@ async def retest_vuln(
     await db.commit()
     await db.refresh(conv)
 
-    started = await _dispatch_retest_if_possible(str(conv.id), str(user_id), target, scope, instruction)
+    started = await _dispatch_retest_if_possible(
+        str(conv.id), str(user_id), target, scope, instruction, engagement="retest"
+    )
     return RetestOut(
         conversation_id=str(conv.id),
         started=started,
@@ -534,13 +538,20 @@ def classify_finding_kind(v: Vulnerability) -> str:
     - Vuln: attack-class finding (SQLi/XSS/…); may still contain flag{…} as proof.
     - Key: credential/secret object (PASSWORD / APIKEY / … family).
     - Flag: the flag artifact itself, not an exploit write-up that merely embeds flag{…}.
+
+    Titles like "Flag · L5.1 Reflected XSS · /path" are Flag objects: the XSS wording is
+    the challenge name, not a Vuln kind. Agent finding_kind=flag is the source of truth
+    when present on the message; this classifier recovers kind from stored rows without
+    a kind column.
     """
     title = str(v.title or "").strip()
     blob = "\n".join(str(x or "") for x in (v.title, v.description, v.poc, v.remediation))
-    vulnish = bool(_VULN_RE.search(blob))
-    # Pure flag object
+    # Flag object cards (explicit product convention)
     if _PURE_FLAG_TITLE_RE.match(title):
         return "flag"
+    if re.match(r"^flag\s*[·•:：\-–—]", title, re.I) or re.match(r"^flag\s+", title, re.I):
+        return "flag"
+    vulnish = bool(_VULN_RE.search(blob))
     if re.search(r"\bflag\b", title, re.I) and not vulnish and not _KEY_TITLE_RE.search(title):
         if re.search(r"flag\{", blob, re.I) or re.search(r"FLAG\{", blob):
             return "flag"
@@ -595,7 +606,13 @@ def _retest_instruction(v: Vulnerability, asset: Asset | None, target_value: str
 
 
 async def _dispatch_retest_if_possible(
-    conv_id: str, user_id: str, target: dict, scope: dict, instruction: str
+    conv_id: str,
+    user_id: str,
+    target: dict,
+    scope: dict,
+    instruction: str,
+    *,
+    engagement: str = "retest",
 ) -> bool:
     try:
         from app.ws import router as ws_router
@@ -605,7 +622,12 @@ async def _dispatch_retest_if_possible(
             return False
         node_id = node_ids[0]
         snapshot = await ws_router._conversation_snapshot(conv_id, user_id)
+        if not isinstance(snapshot, dict):
+            snapshot = {}
         snapshot["checkpoint"] = {}
+        # Explicit structured engagement (product field) — Node2 must not NLP the instruction.
+        eng = engagement if engagement in {"assess", "verify", "retest", "consult"} else "retest"
+        snapshot["engagement"] = eng
         task_msg = {
             "type": "task_assign",
             "conversation_id": conv_id,
@@ -613,8 +635,12 @@ async def _dispatch_retest_if_possible(
             "target": target,
             "scope": scope,
             "initial_instruction": instruction,
+            "engagement": eng,
             "snapshot": snapshot,
         }
+        worker_limits = await ws_router._worker_limits_for_node(node_id)
+        if worker_limits:
+            task_msg["worker_limits"] = worker_limits
         await ws_router._bind_conversation_to_node(conv_id, node_id)
         await ws_router._incr_sessions(node_id, 1)
         await ws_router.node_connections[node_id].send_text(json.dumps(task_msg, ensure_ascii=False))

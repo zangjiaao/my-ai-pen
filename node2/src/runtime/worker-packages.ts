@@ -43,16 +43,16 @@ export function buildTimeoutFailureAdvice(input: {
   const task = String(input.task || "").slice(0, 200);
   const stageHints: string[] = [];
   if (/access-control|idor|authz|越权|login|登录/i.test(`${role} ${task}`)) {
-    stageHints.push("先建立有效会话/凭据（actor + login），再拆成单 endpoint 的 access-control 包。");
+    stageHints.push("先建立有效会话/凭据（注册/登录 + actor capture），再拆成单 endpoint 的 access-control 包。");
   }
   if (/xss|stored|反射|存储/i.test(`${role} ${task}`)) {
-    stageHints.push("XSS 包按 endpoint 拆分；存储型需确认是否依赖 bot/外带回调环境。");
+    stageHints.push("XSS 包按 endpoint 拆分；存储型若依赖 bot/外带回调，无环境时记 environment blocker（blocked/incomplete），勿当完整 impact。");
   }
   if (/injection|sqli|sql|rce|反序列/i.test(`${role} ${task}`)) {
     stageHints.push("注入/RCE 包限制为 1–2 个路径；避免一包多关卡。");
   }
-  if (/captcha|验证码|level9/i.test(task)) {
-    stageHints.push("验证码关依赖有效凭据时，先拿账号再爆破/重放验证码。");
+  if (/captcha|验证码|mfa|2fa/i.test(task)) {
+    stageHints.push("验证码/二次校验关若仍需登录态，先完成凭据发现再爆破/重放；勿仅因验证码弱点就整关 blocked。");
   }
   if (!stageHints.length) {
     stageHints.push("将 package 收窄为「单 role + 1–2 endpoint」，或在主会话用 http/browser 补探测。");

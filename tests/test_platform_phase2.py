@@ -177,6 +177,84 @@ class PlatformPhase2Tests(unittest.TestCase):
         self.assertEqual(decision.mode, "missing_target")
         self.assertEqual(decision.agent_node_id, "11111111-1111-1111-1111-111111111111")
 
+    def test_force_dispatch_when_llm_claims_no_pentest_but_node_online(self):
+        """Regression: planner must not platform-chat when pentest.web is online and target is present."""
+
+        async def fake_chat(messages):
+            return json.dumps(
+                {
+                    "action": "answer_user",
+                    "capability": "platform.chat",
+                    "agent": "platform",
+                    "targets": [],
+                    "reason": "only platform.chat and snapshot.qa available, missing pentest.web",
+                    "message": "当前平台仅具备 platform.chat 和 snapshot.qa 能力，缺少 pentest.web",
+                },
+                ensure_ascii=False,
+            )
+
+        node_id = "4a4e347f-856c-442f-a2c5-6314fb6d9323"
+        async def run():
+            set_orchestrator_chat_override(fake_chat)
+            try:
+                return await route_with_platform_agent(
+                    text=(
+                        "【授权 CTF 闯关任务】目标：http://115.190.179.231:52799 "
+                        "请发现全部挑战入口并逐关取出 flag。"
+                    ),
+                    context=OrchestrationContext(
+                        conversation_status="created",
+                        capabilities=[
+                            AgentCapability(
+                                agent_type="pentest",
+                                capability="pentest.web",
+                                node_id=node_id,
+                                name="node2",
+                                online=True,
+                            )
+                        ],
+                    ),
+                )
+            finally:
+                set_orchestrator_chat_override(None)
+
+        decision = asyncio.run(run())
+        self.assertEqual(decision.action, "dispatch_node")
+        self.assertEqual(decision.capability, "pentest.web")
+        self.assertEqual(decision.agent, "pentest")
+        self.assertEqual(decision.agent_node_id, node_id)
+        self.assertTrue(any("115.190.179.231" in t for t in decision.targets))
+
+    def test_no_online_pentest_gives_honest_offline_message(self):
+        async def fake_chat(messages):
+            return '{"action":"start_task","capability":"pentest.web","agent":"pentest","targets":["http://example.com"],"reason":"start"}'
+
+        async def run():
+            set_orchestrator_chat_override(fake_chat)
+            try:
+                return await route_with_platform_agent(
+                    text="授权测试 http://example.com 请扫描",
+                    context=OrchestrationContext(
+                        conversation_status="created",
+                        capabilities=[
+                            AgentCapability(
+                                agent_type="pentest",
+                                capability="pentest.web",
+                                node_id="4a4e347f-856c-442f-a2c5-6314fb6d9323",
+                                name="node2",
+                                online=False,
+                            )
+                        ],
+                    ),
+                )
+            finally:
+                set_orchestrator_chat_override(None)
+
+        decision = asyncio.run(run())
+        self.assertEqual(decision.action, "ask_clarification")
+        self.assertEqual(decision.mode, "no_online_executor")
+        self.assertIn("WebSocket", decision.message or "")
+
     def test_pentest_clarification_keeps_requested_node_attribution(self):
         decision = type("Decision", (), {"agent": "pentest", "agent_node_id": "11111111-1111-1111-1111-111111111111"})()
 
@@ -221,24 +299,33 @@ class PlatformPhase2Tests(unittest.TestCase):
         self.assertEqual(fake_ws.sent[0]["agent_capability"], "pentest.web")
         self.assertEqual(fake_ws.sent[0]["text"], "@node3 hello")
 
-    def test_sticky_node_binding_only_applies_to_running_conversation(self):
+    def test_sticky_node_binding_keeps_living_agent_addressable(self):
         node_id = "11111111-1111-1111-1111-111111111111"
 
-        self.assertTrue(_should_use_sticky_node_binding(
-            conversation_status="running",
-            requested_node_id=None,
-            bound_node_id=node_id,
-        ))
-        for status in ("created", "completed", "incomplete", "failed", "canceled", "paused"):
+        # Living agent stays in the group after work bursts end (not only while running).
+        for status in ("running", "failed", "incomplete", "paused", "completed", "blocked"):
+            self.assertTrue(_should_use_sticky_node_binding(
+                conversation_status=status,
+                requested_node_id=None,
+                bound_node_id=node_id,
+            ), status)
+        # Brand-new room or fully canceled: no sticky participant.
+        for status in ("created", "canceled"):
             self.assertFalse(_should_use_sticky_node_binding(
                 conversation_status=status,
                 requested_node_id=None,
                 bound_node_id=node_id,
-            ))
+            ), status)
+        # Explicit @node mention bypasses sticky (user switching participants).
         self.assertFalse(_should_use_sticky_node_binding(
             conversation_status="running",
             requested_node_id=node_id,
             bound_node_id=node_id,
+        ))
+        self.assertFalse(_should_use_sticky_node_binding(
+            conversation_status="failed",
+            requested_node_id=None,
+            bound_node_id=None,
         ))
 
     def test_candidate_vuln_messages_are_not_persisted_as_vulnerabilities(self):

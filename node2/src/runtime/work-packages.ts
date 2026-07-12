@@ -142,3 +142,111 @@ export function planWorkerAutoDispatch(packages: WorkPackage[]): Array<{ role: s
       task: `[${pkg.id}] ${pkg.task}`,
     }));
 }
+
+export type WorkerTaskNarrowness = {
+  ok: boolean;
+  endpointCount: number;
+  challengeCount: number;
+  surfaceGroupCount: number;
+  reason?: string;
+  guidance?: string;
+};
+
+/**
+ * Keep worker packages narrow so wall-clock budgets are not burned on mega-packages.
+ * Pure heuristic on free-text task — no target-specific challenge lists.
+ *
+ * Allowed: about 1–2 concrete endpoints/paths, or a single focused surface.
+ * Rejected: multi-surface bundles (many paths, many "challenges", multi-level packs).
+ */
+export function assessWorkerTaskNarrowness(task: string): WorkerTaskNarrowness {
+  const text = String(task || "").trim();
+  if (!text) {
+    return { ok: false, endpointCount: 0, challengeCount: 0, surfaceGroupCount: 0, reason: "empty task" };
+  }
+
+  const pathMatches = [
+    ...text.matchAll(/https?:\/\/[^\s)'"<>]+/gi),
+    ...text.matchAll(/\/[\w.~%+\-]+(?:\/[\w.~%+\-{}[\]]+)*/g),
+  ].map((m) => normalizeEndpointToken(m[0]));
+  const endpoints = uniqueStrings(pathMatches).filter((item) => item.length > 1);
+  // Challenge-like unit counts (generic bilingual markers, not fixed vuln names).
+  const challengeHits = [
+    ...text.matchAll(/\bchallenges?\b/gi),
+    ...text.matchAll(/挑战/g),
+    ...text.matchAll(/\bL\d+\s*[-–—]\s*\d+\b/gi),
+    ...text.matchAll(/\bflag\s*\d+\b/gi),
+  ];
+  const challengeCount = challengeHits.length;
+  // Distinct surface groups: levelN / stageN / moduleN style prefixes in paths or free text.
+  const groups = new Set<string>();
+  for (const ep of endpoints) {
+    const g = surfaceGroupFromEndpoint(ep);
+    if (g) groups.add(g);
+  }
+  for (const m of text.matchAll(/\b(?:level|stage|module|round)\s*[-_]?\s*(\d+)\b/gi)) {
+    groups.add(`g${m[1]}`);
+  }
+  for (const m of text.matchAll(/\bL(\d+)\b/g)) {
+    groups.add(`g${m[1]}`);
+  }
+  const surfaceGroupCount = groups.size;
+
+  const multiSurface = surfaceGroupCount >= 2 && endpoints.length >= 2;
+  const tooManyEndpoints = endpoints.length > 2;
+  const tooManyChallenges = challengeCount >= 3 && endpoints.length !== 1;
+  const bulkWords = /全部|所有|整个|整层|全量|all\s+challenges|every\s+challenge|entire\s+level|full\s+level/i.test(text);
+  const bulkWithCount = bulkWords && (endpoints.length > 1 || challengeCount >= 2 || surfaceGroupCount >= 2);
+
+  if (tooManyEndpoints || multiSurface || tooManyChallenges || bulkWithCount) {
+    return {
+      ok: false,
+      endpointCount: endpoints.length,
+      challengeCount,
+      surfaceGroupCount,
+      reason:
+        tooManyEndpoints
+          ? `worker task references ${endpoints.length} endpoints (max 2)`
+          : multiSurface
+            ? `worker task spans ${surfaceGroupCount} surface groups with ${endpoints.length} endpoints`
+            : tooManyChallenges
+              ? `worker task packs ~${challengeCount} challenges into one package`
+              : "worker task is a bulk multi-surface package",
+      guidance:
+        "Split into narrow packages: one role + 1–2 endpoints (or one challenge path) per worker(). " +
+        "Example: separate access-control(login) from access-control(profile IDOR) and xss(stored endpoint). " +
+        "On timeout, re-dispatch even narrower or finish remaining probes in the main session.",
+    };
+  }
+
+  return {
+    ok: true,
+    endpointCount: endpoints.length,
+    challengeCount,
+    surfaceGroupCount,
+  };
+}
+
+function normalizeEndpointToken(raw: string): string {
+  let s = raw.trim();
+  try {
+    if (/^https?:\/\//i.test(s)) {
+      const u = new URL(s);
+      s = u.pathname || s;
+    }
+  } catch {
+    // keep raw
+  }
+  return s.replace(/[?#].*$/, "").replace(/\/+$/, "") || s;
+}
+
+function surfaceGroupFromEndpoint(endpoint: string): string | undefined {
+  const m =
+    endpoint.match(/\/(?:level|stage|module|round)[-_]?(\d+)\b/i) ||
+    endpoint.match(/\/l(\d+)\b/i);
+  return m ? `g${m[1]}` : undefined;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map((v) => v.trim()).filter(Boolean))];
+}

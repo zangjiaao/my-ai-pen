@@ -41,6 +41,8 @@ ALLOWED_SCAN_MODES = frozenset({"quick", "standard", "deep"})
 # Connectivity sparkline: last 24h in 30 buckets (~48 min each).
 CONNECTIVITY_WINDOW_HOURS = 24
 CONNECTIVITY_BUCKETS = 30
+# Ignore offline→online flaps shorter than this (proxy idle, brief reconnect, deploy).
+CONNECTIVITY_BLIP_SECONDS = 120
 
 
 class ConnectivityBar(BaseModel):
@@ -444,8 +446,14 @@ async def _connectivity_by_node(
 
     out: dict[uuid.UUID, list[ConnectivityBar]] = {}
     for n in nodes:
+        raw_events = events_by_node.get(n.id, [])
+        # Drop sub-minute reconnect noise so the strip reflects real outages.
+        events = _collapse_reconnect_blips(
+            raw_events,
+            min_down=timedelta(seconds=CONNECTIVITY_BLIP_SECONDS),
+        )
         out[n.id] = _build_connectivity_bars(
-            events=events_by_node.get(n.id, []),
+            events=events,
             now=now,
             window_start=window_start,
             buckets=CONNECTIVITY_BUCKETS,
@@ -453,6 +461,38 @@ async def _connectivity_by_node(
             registered_at=n.registered_at,
             always_up=n.type == "platform",
         )
+    return out
+
+
+def _collapse_reconnect_blips(
+    events: list[tuple[datetime, bool]],
+    *,
+    min_down: timedelta,
+) -> list[tuple[datetime, bool]]:
+    """Remove offline periods shorter than min_down (false disconnect / reconnect)."""
+    if not events:
+        return []
+    # Collapse consecutive duplicate states first.
+    merged: list[tuple[datetime, bool]] = []
+    for ts, online in events:
+        if merged and merged[-1][1] is online:
+            continue
+        merged.append((ts, online))
+
+    out: list[tuple[datetime, bool]] = []
+    i = 0
+    while i < len(merged):
+        ts, online = merged[i]
+        if (not online) and i + 1 < len(merged) and merged[i + 1][1]:
+            offline_at = ts
+            online_at = merged[i + 1][0]
+            if online_at - offline_at < min_down:
+                # Brief flap: skip offline + the following online re-event.
+                # If we were already online before, stay online with no new event.
+                i += 2
+                continue
+        out.append((ts, online))
+        i += 1
     return out
 
 
@@ -500,39 +540,45 @@ def _build_connectivity_bars(
     for i in range(buckets):
         b_start = window_start + width * i
         b_end = window_start + width * (i + 1)
-        # Apply transitions inside this bucket; track if any online time occurred.
-        saw_up = False
-        saw_down = False
-        if state is True:
-            saw_up = True
-        elif state is False:
-            saw_down = True
+        # Track wall time spent up/down inside the bucket (not just "any event").
+        cursor = b_start
+        up_seconds = 0.0
+        down_seconds = 0.0
+
+        def _add_span(start: datetime, end: datetime, online: bool | None) -> None:
+            nonlocal up_seconds, down_seconds
+            if end <= start or online is None:
+                return
+            secs = (end - start).total_seconds()
+            if online:
+                up_seconds += secs
+            else:
+                down_seconds += secs
 
         while idx < len(events) and events[idx][0] < b_end:
-            state = events[idx][1]
-            if state:
-                saw_up = True
-            else:
-                saw_down = True
+            ts, online = events[idx]
+            _add_span(cursor, ts, state)
+            state = online
+            cursor = ts
             idx += 1
+        _add_span(cursor, b_end, state)
 
-        # Last bucket prefers live status.
+        # Open (last) bucket uses live status as source of truth.
         if i == buckets - 1:
-            if current_online:
-                saw_up = True
-            else:
-                saw_down = True
             state = current_online
 
         if reg and b_end <= reg:
             status = "unknown"
-        elif saw_up and not saw_down:
+        elif i == buckets - 1:
+            # Avoid painting the live bucket red while the node is currently online.
+            status = "up" if current_online else "down"
+        elif up_seconds > 0 and down_seconds <= 0:
             status = "up"
-        elif saw_down and not saw_up:
+        elif down_seconds > 0 and up_seconds <= 0:
             status = "down"
-        elif saw_up and saw_down:
-            # Flapping in bucket → show down to surface instability (or "up" if prefer lenient).
-            status = "down"
+        elif up_seconds > 0 and down_seconds > 0:
+            # Mixed bucket: majority wall time wins (brief reconnect blips stay green).
+            status = "up" if up_seconds >= down_seconds else "down"
         elif state is True:
             status = "up"
         elif state is False:
@@ -548,9 +594,8 @@ def _build_connectivity_bars(
             )
         )
 
-    # If currently online and no offline events in the window, treat remaining
-    # unknown buckets (after registration) as up — avoids empty sparklines when
-    # the node stayed connected without reconnect churn.
+    # If currently online and no (material) offline events in the window, treat
+    # remaining unknown buckets as up — node stayed connected without churn.
     has_down_event = any(not online for ts, online in events if ts >= window_start)
     if current_online and not has_down_event:
         filled: list[ConnectivityBar] = []

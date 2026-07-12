@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import { loadConfig } from "./config.js";
 import { loadDotEnv } from "./env.js";
 import { PlatformWSClient } from "./platform/ws-client.js";
-import { runPentestTask } from "./runtime/session-runner.js";
+import {
+  disposeConversationHost,
+  getConversationHost,
+  getOrCreateConversationHost,
+} from "./runtime/conversation-host.js";
 import type { PlatformMessage, ScanMode, TaskEnvelope } from "./types.js";
 
 loadDotEnv();
@@ -11,51 +15,151 @@ loadDotEnv("node2/.env");
 const config = loadConfig();
 const client = new PlatformWSClient(config.platformWsUrl, config.nodeToken);
 
-let currentAbort: AbortController | undefined;
-let currentTask: Promise<void> | undefined;
+/** Per-conversation abort for the current work burst (not process-wide busy). */
+const burstAborts = new Map<string, AbortController>();
 
 client.on("task_assign", async (message) => {
-  if (currentTask) {
+  const task = normalizeTask(message);
+  const host = getOrCreateConversationHost(task.conversationId, config, client);
+
+  if (host.isBusy()) {
     await client.send({
       type: "task_error",
-      conversation_id: String(message.conversation_id || ""),
-      message: "Node2 is busy",
+      conversation_id: task.conversationId,
+      task_id: task.taskId,
+      message: "This conversation's pentest agent is still working. Wait a moment or send interrupt first.",
     });
     return;
   }
 
-  const task = normalizeTask(message);
-  currentAbort = new AbortController();
-  currentTask = (async () => {
+  const abort = new AbortController();
+  burstAborts.set(task.conversationId, abort);
+  try {
+    await host.startTask(task, abort.signal);
+  } catch (error) {
+    await client.send({
+      type: "task_error",
+      conversation_id: task.conversationId,
+      task_id: task.taskId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  } finally {
+    if (burstAborts.get(task.conversationId) === abort) {
+      burstAborts.delete(task.conversationId);
+    }
+  }
+});
+
+/**
+ * Follow-up in the group chat: same Pi mind, not a new task_assign.
+ * Platform should prefer this after failed/incomplete/complete instead of re-dispatch theater.
+ */
+client.on("user_steer", async (message) => {
+  const conversationId = String(message.conversation_id || "").trim();
+  if (!conversationId) return;
+
+  let host = getConversationHost(conversationId);
+  const contentText =
+    message.content && typeof message.content === "object" && !Array.isArray(message.content)
+      ? String((message.content as Record<string, unknown>).text || "")
+      : "";
+  const text = String(message.text || contentText || message.initial_instruction || "").trim();
+  if (!text) return;
+
+  // Node process restarted (or cancel disposed host): if user re-sends a target,
+  // re-join the group chat with a fresh living session instead of dead-ending.
+  if (!host || host.getStatus() === "disposed") {
+    const recovered = tryRecoverTaskFromSteer(message, conversationId, text);
+    if (!recovered) {
+      await client.send({
+        type: "text",
+        conversation_id: conversationId,
+        content: {
+          text:
+            "No live pentest session for this conversation on this node (process may have restarted). " +
+            "Please re-send the target URL/IP once so a new session can join the group chat.",
+        },
+      });
+      return;
+    }
+    host = getOrCreateConversationHost(conversationId, config, client);
+    const abort = new AbortController();
+    burstAborts.set(conversationId, abort);
     try {
-      await runPentestTask(config, client, task, currentAbort.signal);
+      await host.startTask(recovered, abort.signal);
     } catch (error) {
       await client.send({
         type: "task_error",
-        conversation_id: task.conversationId,
-        task_id: task.taskId,
+        conversation_id: conversationId,
         message: error instanceof Error ? error.message : String(error),
       });
     } finally {
-      currentAbort = undefined;
-      currentTask = undefined;
+      if (burstAborts.get(conversationId) === abort) {
+        burstAborts.delete(conversationId);
+      }
     }
-  })();
+    return;
+  }
+
+  if (host.isBusy()) {
+    await client.send({
+      type: "text",
+      conversation_id: conversationId,
+      content: {
+        text: "This agent is still working on the previous turn. Wait for it to finish, or interrupt first.",
+      },
+    });
+    return;
+  }
+
+  const abort = new AbortController();
+  burstAborts.set(conversationId, abort);
+  try {
+    await host.steer(text, abort.signal);
+  } catch (error) {
+    await client.send({
+      type: "task_error",
+      conversation_id: conversationId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  } finally {
+    if (burstAborts.get(conversationId) === abort) {
+      burstAborts.delete(conversationId);
+    }
+  }
 });
 
 client.on("user_interrupt", async (message) => {
-  currentAbort?.abort();
+  const conversationId = String(message.conversation_id || "").trim();
+  const action = String(message.action || "cancel").toLowerCase();
+  const abort = conversationId ? burstAborts.get(conversationId) : undefined;
+  abort?.abort();
+
+  // Full cancel removes the participant from the group (memory wiped for this process).
+  // pause/resume only stop the current burst; session stays alive.
+  if (action === "cancel" && conversationId) {
+    await disposeConversationHost(conversationId);
+    burstAborts.delete(conversationId);
+  }
+
   await client.send({
     type: "text",
-    conversation_id: String(message.conversation_id || ""),
-    content: { text: "Task interrupted by user." },
+    conversation_id: conversationId,
+    content: {
+      text:
+        action === "cancel"
+          ? "Task interrupted; this conversation's pentest session was closed."
+          : "Interrupt signal sent to the current work burst. Session memory is kept.",
+    },
   });
 });
 
 client.on("user_input", async () => {
   await client.send({
     type: "text",
-    content: { text: "Node2 received user_input, but v1 handles approvals through runtime gates rather than a visible approval tool." },
+    content: {
+      text: "Node2 received user_input, but v1 handles approvals through runtime gates rather than a visible approval tool.",
+    },
   });
 });
 
@@ -88,6 +192,30 @@ function normalizeTask(message: PlatformMessage): TaskEnvelope {
     snapshot: isRecord(message.snapshot) ? message.snapshot : {},
     workerLimits,
   };
+}
+
+/** Rebuild a task envelope from a steer when the living host was lost (node restart). */
+function tryRecoverTaskFromSteer(
+  message: PlatformMessage,
+  conversationId: string,
+  text: string,
+): TaskEnvelope | undefined {
+  if (isRecord(message.target) && String(message.target.value || message.target.url || "").trim()) {
+    return normalizeTask({ ...message, conversation_id: conversationId, type: "task_assign" });
+  }
+  const urlMatch = text.match(/https?:\/\/[^\s<>"']+/i);
+  if (!urlMatch) return undefined;
+  const value = urlMatch[0].replace(/[),.;]+$/, "");
+  return normalizeTask({
+    ...message,
+    type: "task_assign",
+    conversation_id: conversationId,
+    task_id: String(message.task_id || randomUUID()),
+    target: { type: "url", value },
+    scope: { allow: [value], deny: [] },
+    initial_instruction: text,
+    text,
+  });
 }
 
 function normalizeWorkerLimits(raw: unknown): TaskEnvelope["workerLimits"] | undefined {

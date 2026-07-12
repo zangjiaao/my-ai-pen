@@ -8,7 +8,7 @@ from typing import Awaitable, Callable
 
 from app.config import settings
 from app.models.node import PLATFORM_AGENT_NODE_ID
-from app.services.agent_router import RoutingDecision
+from app.services.agent_router import RoutingDecision, extract_targets
 
 
 TARGET_RE = re.compile(r"https?://[^\s'\"<>\u4E00-\u9FFF\uFF0C\u3001,;\uFF1B)\]\}]+|\b(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?\b")
@@ -91,9 +91,12 @@ async def _plan_with_platform_agent(*, text: str, context: OrchestrationContext)
 
 
 def _policy_guard(plan: AgentPlan, *, text: str, context: OrchestrationContext) -> RoutingDecision:
-    targets = _dedupe(plan.targets)
+    # Merge planner targets with URLs/hosts present in the user text so a weak LLM plan
+    # cannot drop an explicit target the user already provided.
+    targets = _dedupe([*plan.targets, *extract_targets(text)])
     requested_agent = _normalize_agent(context.requested_agent)
     agent = _normalize_agent(plan.agent) or _agent_for_capability(plan.capability) or requested_agent or "platform"
+    pentest_online = _online_capability_nodes(context, "pentest.web")
 
     if requested_agent == "pentest" and not targets and context.has_resume_task and plan.action in {"answer_user", "summarize_results", "ask_clarification"}:
         return RoutingDecision(
@@ -115,6 +118,48 @@ def _policy_guard(plan: AgentPlan, *, text: str, context: OrchestrationContext) 
             requires_target=True,
             reason=plan.reason or "user explicitly addressed a pentest node without an execution target",
             message="Please provide the target URL/IP and confirm it is in authorized scope.",
+        )
+
+    # Hard override: online pentest node + explicit target in message must not be answered as
+    # "no pentest capability" platform chat. This is the bug path behind false offline claims.
+    if (
+        pentest_online
+        and targets
+        and plan.action in {"answer_user", "ask_clarification", "summarize_results"}
+        and _should_force_pentest_dispatch(plan=plan, text=text, targets=targets)
+    ):
+        return RoutingDecision(
+            action="dispatch_node",
+            capability="pentest.web",
+            mode=plan.mode or ("completed_followup" if context.conversation_status == "completed" else "new_task"),
+            agent="pentest",
+            agent_node_id=plan.agent_node_id or context.requested_node_id or pentest_online[0],
+            requires_target=False,
+            reason=(
+                plan.reason
+                or "policy forced pentest dispatch: online pentest.web capability and explicit target present"
+            ),
+            targets=targets[:1],
+        )
+
+    # Honest offline path: target present but no connected pentest node.
+    if (
+        not pentest_online
+        and targets
+        and plan.action in {"answer_user", "ask_clarification", "start_task"}
+        and _looks_like_execution_request(text, targets)
+    ):
+        return RoutingDecision(
+            action="ask_clarification",
+            capability="platform.chat",
+            mode="no_online_executor",
+            agent="platform",
+            requires_target=False,
+            reason="no online WebSocket-connected pentest node for dispatch",
+            message=(
+                "当前没有通过 WebSocket 在线连接的渗透节点（pentest.web）。"
+                "节点管理若仍显示 online，可能是状态未同步；请确认 Node2 进程已连接平台后重试。"
+            ),
         )
 
     if plan.action == "ask_clarification":
@@ -182,18 +227,92 @@ def _policy_guard(plan: AgentPlan, *, text: str, context: OrchestrationContext) 
                 message="Please provide the target URL or IP and confirm it is in authorized scope.",
             )
         capability = plan.capability or "pentest.web"
+        if capability == "pentest.web" and not pentest_online:
+            return RoutingDecision(
+                action="ask_clarification",
+                capability="platform.chat",
+                mode="no_online_executor",
+                agent="platform",
+                requires_target=False,
+                reason="start_task requested but no online pentest node",
+                message=(
+                    "当前没有通过 WebSocket 在线连接的渗透节点（pentest.web）。"
+                    "请确认 Node2 已连接平台后重试。"
+                ),
+            )
         return RoutingDecision(
             action="dispatch_node",
             capability=capability,
             mode=plan.mode or ("completed_followup" if context.conversation_status == "completed" else "new_task"),
             agent=agent if agent != "platform" else _agent_for_capability(capability) or "pentest",
-            agent_node_id=plan.agent_node_id or context.requested_node_id,
+            agent_node_id=plan.agent_node_id or context.requested_node_id or (pentest_online[0] if capability == "pentest.web" else None),
             requires_target=False,
             reason=plan.reason or "platform agent chose to start task",
             targets=targets,
         )
 
     raise OrchestrationError(f"Unsupported platform agent action: {plan.action}")
+
+
+def _online_capability_nodes(context: OrchestrationContext, capability: str) -> list[str]:
+    out: list[str] = []
+    for item in context.capabilities or []:
+        if item.online and str(item.capability or "") == capability and item.node_id:
+            out.append(str(item.node_id))
+    return out
+
+
+def _claims_missing_executor(plan: AgentPlan) -> bool:
+    blob = f"{plan.message or ''} {plan.reason or ''}".lower()
+    needles = (
+        "缺少",
+        "没有",
+        "unavailable",
+        "not available",
+        "no online",
+        "无在线",
+        "pentest.web",
+        "等待",
+        "上线",
+        "platform.chat",
+        "snapshot.qa",
+    )
+    # Message that lists only platform caps or claims pentest missing.
+    if "platform.chat" in blob and ("pentest" in blob or "渗透" in f"{plan.message or ''}{plan.reason or ''}"):
+        return True
+    if any(n in blob for n in ("缺少", "unavailable", "not available", "无在线", "等待", "上线")) and (
+        "pentest" in blob or "渗透" in f"{plan.message or ''}{plan.reason or ''}" or "agent" in blob
+    ):
+        return True
+    return False
+
+
+def _looks_like_execution_request(text: str, targets: list[str]) -> bool:
+    if not targets:
+        return False
+    raw = str(text or "")
+    # Long structured task briefs with a target are execution requests, not chat Q&A.
+    if len(raw) >= 160:
+        return True
+    # Explicit authorization / task framing (product language, not engagement NLP routing).
+    if re.search(r"授权|authorized|in[- ]scope|渗透|安全测试|闯关|扫描|复测|验证", raw, re.I):
+        return True
+    return False
+
+
+def _should_force_pentest_dispatch(*, plan: AgentPlan, text: str, targets: list[str]) -> bool:
+    if not targets:
+        return False
+    if _claims_missing_executor(plan):
+        return True
+    if plan.action == "summarize_results":
+        return False
+    # Planner chose platform-only path despite a clear execution brief + target.
+    if plan.capability in {"", "platform.chat", "snapshot.qa"} and _looks_like_execution_request(text, targets):
+        return True
+    if plan.agent in {"", "platform"} and _looks_like_execution_request(text, targets) and plan.action == "answer_user":
+        return True
+    return False
 
 
 def _planner_input(text: str, context: OrchestrationContext) -> dict:
@@ -345,11 +464,17 @@ Rules:
 - Use action=start_task only when the user wants an agent node to perform work.
 - Use action=answer_user when the user is asking the platform a general question.
 - Use action=summarize_results when the user asks about saved findings/results/evidence.
-- Use action=continue_task when the user wants to continue an unfinished task.
+- Use action=continue_task when the user wants to continue an unfinished/failed/incomplete task
+  (e.g. short messages like 继续 / continue / resume) and facts.has_resume_task or facts.has_bound_node is true.
 - Use action=ask_clarification when intent, target, or authorization is unclear.
 - Do not invent targets. Only include targets present in facts or clearly supplied by the user.
 - If multiple different targets are present, include all of them in targets; policy will decide.
-- Select a capability from the provided capabilities when possible.
+- Select a capability from the provided available_capabilities list. Trust online=true entries.
+- CRITICAL: If available_capabilities contains capability "pentest.web" with online=true, you MUST NOT
+  claim that pentest is missing/unavailable. For authorized web testing / CTF / scan tasks with a
+  target URL or IP, choose action=start_task, capability=pentest.web, agent=pentest, and put the
+  target in targets.
+- Only say no executor is available when pentest.web is absent or online=false in available_capabilities.
 
 Return this JSON shape:
 {

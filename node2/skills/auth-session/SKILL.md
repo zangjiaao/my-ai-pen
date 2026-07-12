@@ -16,3 +16,14 @@ Treat session state as test infrastructure.
 
 Do not guess authenticated endpoints without first collecting real traffic when browser access is possible.
 Do not treat a single global cookie jar as sufficient for privilege testing.
+
+## Credential walls (login / captcha / admin)
+
+When a path is gated by authentication, treat **credential discovery** as an explicit sub-goal before declaring the path blocked:
+
+1. Look for in-app registration, invite, demo accounts, password-reset, or credentials revealed by other authorized tests (API docs, dumps) when in scope.
+2. Capture sessions with `actor(capture)` after any successful login/register.
+3. Only after those paths are tried (or proven unavailable) may you mark the gated surface blocked for missing credentials.
+4. Proving a captcha does not refresh / is weak / leaks is not the same as completing an authenticated objective — keep the credential step open or blocked with notes.
+
+Put credential work in its own plan step or worker package when packages are split.

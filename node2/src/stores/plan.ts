@@ -39,9 +39,14 @@ export class PlanStore implements PlanStoreLike {
       return;
     }
     for (const phase of PHASES) this.phaseNode(phase).status = "done";
+    // Only settle runtime tool chrome + phase objectives here.
+    // Intentional agent checklist items must be closed by the agent via coverage(plan)
+    // as work progresses — not silently rewritten at finish time.
     for (const node of this.nodes.values()) {
-      if (node.status === "running") node.status = "done";
-      if (node.level === "objective" && node.status === "pending") node.status = "done";
+      if (node.status === "running" && node.source === "pi_tool") node.status = "done";
+      if (node.level === "objective" && (node.status === "pending" || node.status === "todo" || node.status === "running")) {
+        node.status = "done";
+      }
     }
     this.phase = "complete";
   }
@@ -182,9 +187,14 @@ export class PlanStore implements PlanStoreLike {
     };
   }
 
+  openIntentionalChecklist(): PlanNode[] {
+    return this.snapshot().filter((node) => isOpenIntentionalChecklistNode(node));
+  }
+
   gapPrompt(): string {
     const audit = this.audit();
     const open = audit.openWorkItems.slice(0, 10);
+    const openChecklist = this.openIntentionalChecklist().slice(0, 10);
     const lines = [
       "Runtime completion gate blocked task completion on lightweight safety checks.",
       audit.summary,
@@ -196,6 +206,12 @@ export class PlanStore implements PlanStoreLike {
         `- ${item.node_id}: ${item.title}; status=${item.status}; notes=${clip(item.notes || "", 260)}`,
       );
     }
+    if (openChecklist.length) {
+      lines.push("", "Open intentional Tasks checklist items (update with coverage(plan) as you work — do not leave them pending until the end):");
+      for (const item of openChecklist) {
+        lines.push(`- ${item.node_id}: ${item.title}; status=${item.status}`);
+      }
+    }
     if (audit.findingsWithoutEvidence.length) {
       lines.push("", "Confirmed findings missing evidence_ids:");
       for (const item of audit.findingsWithoutEvidence.slice(0, 10)) lines.push(`- ${item.title}`);
@@ -205,7 +221,7 @@ export class PlanStore implements PlanStoreLike {
     }
     lines.push(
       "",
-      "Do not create or clear broad checklist debt for completion. Summarize once tools are idle and confirmed findings have evidence.",
+      "Keep the intentional Tasks checklist current as you execute. Mark each step running when started and done/blocked/skipped when finished.",
     );
     return lines.join("\n");
   }
@@ -467,6 +483,39 @@ function chooseStatus(existing: PlanStatus | undefined, incoming: string | undef
 
 function isTerminalStatus(status: PlanStatus): boolean {
   return status === "done" || status === "blocked" || status === "failed" || status === "skipped";
+}
+
+const INTENTIONAL_CHECKLIST_SOURCES = new Set(["agent", "plan", "strix_todo"]);
+const INTENTIONAL_CHECKLIST_KINDS = new Set([
+  "plan",
+  "summary",
+  "task",
+  "work",
+  "work_item",
+  "package",
+  "objective",
+  "stage",
+]);
+
+/** User-facing Tasks panel rows the agent must maintain (not tool/coverage telemetry). */
+export function isIntentionalChecklistNode(node: PlanNode): boolean {
+  if (node.level !== "work_item") return false;
+  if (node.source === "pi_tool" || node.source === "coverage" || node.source === "finding" || node.source === "worker") {
+    return false;
+  }
+  const kind = String(node.kind || "");
+  if (["tool", "browser", "http", "poc", "scan", "traffic", "verifier", "test", "coverage", "finish_scan", "workflow"].includes(kind)) {
+    return false;
+  }
+  return (
+    INTENTIONAL_CHECKLIST_SOURCES.has(String(node.source || "")) ||
+    INTENTIONAL_CHECKLIST_KINDS.has(kind)
+  );
+}
+
+export function isOpenIntentionalChecklistNode(node: PlanNode): boolean {
+  if (!isIntentionalChecklistNode(node)) return false;
+  return node.status === "todo" || node.status === "pending" || node.status === "running";
 }
 
 function bucketStatus(nodes: PlanNode[], running: boolean): PlanStatus {

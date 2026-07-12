@@ -262,7 +262,7 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     workflow_kind = workflow_kind_for_checkpoint(checkpoint)
     plan_tree = ensure_plan_tree_shape(raw_plan_tree, agent_state.get("phase"), checkpoint_completed(checkpoint), conversation.status, workflow_kind)
     if conversation.status in {"completed", "incomplete"} and workflow_kind == "pentest":
-        plan_tree = normalize_terminal_pentest_plan_tree(plan_tree)
+        plan_tree = normalize_terminal_pentest_plan_tree(plan_tree, conversation.status)
     kanban = kanban_for_snapshot(checkpoint, plan_tree, agent_state.get("phase"), conversation.status, elapsed_seconds_for_conversation(conversation))
     progress = progress_for_kanban(kanban) or (progress_for_checkpoint(checkpoint, conversation.status) if checkpoint else progress_for_phase(agent_state.get("phase"), conversation.status))
     todos = todos_for_kanban(kanban) or todos_for_plan_tree(plan_tree) or (todos_for_checkpoint(checkpoint, conversation.status) if checkpoint else todos_for_phase(agent_state.get("phase"), conversation.status))
@@ -273,7 +273,7 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     ], "evidence_id")
     snapshot_message_items, omitted = snapshot_messages(messages)
     agent_items = agents_from_messages(messages)
-    strix_agent_items = strix_agents_from_checkpoint(checkpoint)
+    strix_agent_items = strix_agents_from_checkpoint(checkpoint, conversation.status)
     strix_note_items = strix_notes_from_checkpoint(checkpoint)
     strix_run = strix_run_from_checkpoint(checkpoint)
 
@@ -324,7 +324,7 @@ def snapshot_list(value) -> list:
     return list(value) if isinstance(value, list) else []
 
 
-def strix_agents_from_checkpoint(checkpoint: dict) -> list[dict]:
+def strix_agents_from_checkpoint(checkpoint: dict, conversation_status: str | None = None) -> list[dict]:
     if not isinstance(checkpoint, dict):
         return []
     node3 = checkpoint.get("node3_strix") if isinstance(checkpoint.get("node3_strix"), dict) else {}
@@ -333,7 +333,7 @@ def strix_agents_from_checkpoint(checkpoint: dict) -> list[dict]:
         # Node2 panel parity: checkpoint.panel_agents synthesized by the runtime.
         agents = checkpoint.get("panel_agents") if isinstance(checkpoint.get("panel_agents"), list) else []
     if not agents:
-        agents = agents_from_pentest_diagnostics(checkpoint)
+        agents = agents_from_pentest_diagnostics(checkpoint, conversation_status)
     normalized = []
     for item in agents:
         if not isinstance(item, dict):
@@ -355,16 +355,61 @@ def strix_agents_from_checkpoint(checkpoint: dict) -> list[dict]:
             "current_tool": str(item.get("current_tool") or ""),
             "current_action": str(item.get("current_action") or ""),
         })
-    return normalized
+    return normalize_agents_for_conversation_status(normalized, conversation_status)
 
 
-def agents_from_pentest_diagnostics(checkpoint: dict) -> list[dict]:
+def normalize_agents_for_conversation_status(agents: list[dict], conversation_status: str | None) -> list[dict]:
+    """When the conversation is terminal, open agent rows must not stay 'running'."""
+    status = str(conversation_status or "").strip().lower()
+    if status not in {"completed", "incomplete", "failed", "canceled", "cancelled"}:
+        return agents
+    if status in {"failed"}:
+        terminal_status = "failed"
+        terminal_action = "failed"
+    elif status in {"canceled", "cancelled"}:
+        terminal_status = "stopped"
+        terminal_action = "stopped"
+    else:
+        # completed / incomplete — collaboration tree shows finished work.
+        terminal_status = "completed"
+        terminal_action = "done"
+    open_statuses = {"running", "pending", "todo", "llm_waiting", "tool_running", ""}
+    out: list[dict] = []
+    for item in agents:
+        agent = dict(item)
+        current = str(agent.get("status") or "").strip().lower()
+        if current in open_statuses or current in {"working"}:
+            agent["status"] = terminal_status
+            action = str(agent.get("current_action") or "").strip().lower()
+            if not action or action in open_statuses | {"working", "starting"}:
+                agent["current_action"] = terminal_action
+            # Clear in-progress tool chrome when the conversation already ended.
+            if current in open_statuses | {"working"}:
+                agent["current_tool"] = ""
+            agent["pending_count"] = 0
+        out.append(agent)
+    return out
+
+
+def agents_from_pentest_diagnostics(checkpoint: dict, conversation_status: str | None = None) -> list[dict]:
     """Build a Node3-shaped main agent row from Node2 diagnostics when multi-agent data is absent."""
     if str(checkpoint.get("runtime") or "") not in {"node2-pi", "node2"} and workflow_kind_for_checkpoint(checkpoint) != "pentest":
         return []
     diag = checkpoint.get("diagnostics") if isinstance(checkpoint.get("diagnostics"), dict) else {}
     phase = str(diag.get("phase") or "")
-    status = "completed" if phase in {"finished", "agent_end"} else "failed" if phase in {"error", "aborted"} else "running"
+    conv = str(conversation_status or "").strip().lower()
+    if conv in {"completed", "incomplete"}:
+        status = "completed"
+        action = "done"
+        tool = ""
+    elif conv in {"failed", "canceled", "cancelled"}:
+        status = "failed" if conv == "failed" else "stopped"
+        action = status
+        tool = ""
+    else:
+        status = "completed" if phase in {"finished", "agent_end"} else "failed" if phase in {"error", "aborted"} else "running"
+        action = phase
+        tool = str(diag.get("activeTool") or diag.get("lastTool") or "")
     return [{
         "id": "node2-main",
         "name": "Main Agent",
@@ -374,8 +419,8 @@ def agents_from_pentest_diagnostics(checkpoint: dict) -> list[dict]:
         "skills": [],
         "pending_count": 0,
         "role": "main",
-        "current_tool": str(diag.get("activeTool") or diag.get("lastTool") or ""),
-        "current_action": phase,
+        "current_tool": tool,
+        "current_action": action,
     }]
 
 
@@ -864,7 +909,7 @@ def kanban_for_snapshot(checkpoint: dict, plan_tree: list[dict], phase: str | No
     checkpoint_kanban = checkpoint.get("kanban") if isinstance(checkpoint, dict) and isinstance(checkpoint.get("kanban"), dict) else None
     checkpoint_kind = workflow_kind_for_checkpoint(checkpoint)
     if status in {"completed", "incomplete"} and checkpoint_kind == "pentest":
-        plan_tree = normalize_terminal_pentest_plan_tree(plan_tree)
+        plan_tree = normalize_terminal_pentest_plan_tree(plan_tree, status)
     if checkpoint_kanban and not should_recompute_terminal_kanban(checkpoint_kanban, checkpoint_kind, status):
         kanban = dict(checkpoint_kanban)
         kanban["workflow_kind"] = str(kanban.get("workflow_kind") or checkpoint_kind or "")
@@ -953,7 +998,22 @@ def should_recompute_terminal_kanban(kanban: dict, workflow_kind: str, status: s
     return current_stage == "executing" or summary_pending or has_open_totals
 
 
-def normalize_terminal_pentest_plan_tree(plan_tree: list[dict]) -> list[dict]:
+def normalize_terminal_pentest_plan_tree(
+    plan_tree: list[dict],
+    conversation_status: str | None = None,
+) -> list[dict]:
+    """Close stale open plan rows when the conversation lifecycle already ended.
+
+    Agent-authored intentional TODOs (Tasks panel) are often left pending after
+    finish_scan/task_complete because the model never coverage(mark)s them done.
+    For completed conversations, treat remaining open checklist items as done so
+    the UI matches the terminal lifecycle. Incomplete keeps open work visible.
+    """
+    conv = str(conversation_status or "").strip().lower()
+    close_open_checklist = conv == "completed"
+    open_statuses = {"todo", "pending", "running"}
+    checklist_sources = {"agent", "plan", "strix_todo"}
+    checklist_kinds = {"plan", "summary", "task", "work", "work_item", "package", "objective", "stage"}
     normalized = []
     for node in plan_tree or []:
         if not isinstance(node, dict):
@@ -966,6 +1026,13 @@ def normalize_terminal_pentest_plan_tree(plan_tree: list[dict]) -> list[dict]:
             else:
                 item["status"] = "done"
                 item["result"] = item.get("result") or "inconclusive"
+        elif close_open_checklist and str(item.get("status") or "").lower() in open_statuses:
+            source = str(item.get("source") or "").lower()
+            kind = str(item.get("kind") or "").lower()
+            if source in checklist_sources or kind in checklist_kinds:
+                item["status"] = "done"
+                if not item.get("result"):
+                    item["result"] = "completed"
         normalized.append(item)
     return normalized
 
@@ -1390,6 +1457,10 @@ def message_findings(messages: list[Message]) -> list[dict]:
             "agent_name": content.get("agent_name"),
             "timestamp": content.get("timestamp"),
             "evidence_ids": content.get("evidence_ids") or [],
+            "finding_kind": content.get("finding_kind") or content.get("kind") or content.get("category"),
+            "kind": content.get("kind") or content.get("finding_kind") or content.get("category"),
+            "category": content.get("category") or content.get("finding_kind") or content.get("kind"),
+            "flag_value": content.get("flag_value"),
         })
     return findings
 
@@ -1482,6 +1553,10 @@ def asset_summary(a: Asset) -> dict:
 
 
 def vuln_summary(v: Vulnerability) -> dict:
+    # Lazy import avoids circular import with api package during app boot.
+    from app.api.vulnerabilities import classify_finding_kind
+
+    kind = classify_finding_kind(v)
     return {
         "id": str(v.id),
         "vulnerability_id": str(v.id),
@@ -1495,6 +1570,9 @@ def vuln_summary(v: Vulnerability) -> dict:
         "poc": v.poc,
         "remediation": v.remediation,
         "evidence_ids": v.evidence_ids or [],
+        "finding_kind": kind,
+        "kind": kind,
+        "category": kind,
     }
 
 

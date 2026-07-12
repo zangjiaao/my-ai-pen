@@ -24,8 +24,16 @@ pending_approvals: dict[str, dict] = {}
 _round_robin_counter: int = 0
 
 FOLLOW_UP_ACTION_RE = re.compile(
-    "\u786e\u8ba4|\u68c0\u67e5|\u67e5\u770b|\u8bbf\u95ee|\u6253\u5f00|\u590d\u6d4b|\u91cd\u6d4b|\u91cd\u65b0\u6d4b|\u7ee7\u7eed\u6d4b|\u9a8c\u8bc1|\u8bf7\u6c42|\u6293\u53d6|\u767b\u5f55|\u770b\u4e00\u4e0b|"
-    r"\b(check|confirm|verify|retest|rerun|visit|open|fetch|request|scan|test|login)\b",
+    "\u786e\u8ba4|\u68c0\u67e5|\u67e5\u770b|\u8bbf\u95ee|\u6253\u5f00|\u590d\u6d4b|\u91cd\u6d4b|\u91cd\u65b0\u6d4b|"
+    "\u7ee7\u7eed\u6d4b|\u7ee7\u7eed|\u63a5\u7740|\u91cd\u8bd5|\u518d\u8bd5|"
+    "\u9a8c\u8bc1|\u8bf7\u6c42|\u6293\u53d6|\u767b\u5f55|\u770b\u4e00\u4e0b|"
+    r"\b(check|confirm|verify|retest|rerun|resume|continue|retry|visit|open|fetch|request|scan|test|login)\b",
+    re.IGNORECASE,
+)
+
+# Short user messages that mean "resume the previous task" after failed/incomplete.
+CONTINUE_REQUEST_RE = re.compile(
+    r"^\s*(继续|接着|接着做|接着测|继续测|继续扫描|重试|再试|resume|continue|retry)\s*[。.!！？?]*\s*$",
     re.IGNORECASE,
 )
 NODE_MENTION_RE = re.compile(r"@([A-Za-z0-9_.:-]{1,128})")
@@ -218,25 +226,42 @@ async def _conversation_context(conv_id: str) -> dict:
 
 
 async def _update_node_status(node_id: str, status: str, ip: str | None = None):
+    """Update node online/offline. Only audit real transitions (for connectivity bars).
+
+    Never mark offline while a live websocket is still registered for this node —
+    reconnect races used to log false offline events and paint the 24h strip red.
+    """
     try:
         from app.db.base import async_session
         from app.models.node import Node
 
+        # Guard: another (newer) socket may already own this node.
+        if status == "offline" and node_id in node_connections:
+            return
+
         async with async_session() as db:
             result = await db.execute(select(Node).where(Node.id == uuid.UUID(node_id)))
             node = result.scalar_one_or_none()
-            if node:
-                node.status = status
-                if status == "offline":
-                    node.current_sessions = 0
-                node.last_heartbeat = datetime.now(timezone.utc)
-                if ip:
-                    node.ip = ip
-                await db.commit()
+            if not node:
+                return
+            prev = str(node.status or "").strip().lower()
+            next_status = str(status or "").strip().lower()
+            changed = prev != next_status
+
+            node.status = status
+            if next_status == "offline":
+                node.current_sessions = 0
+            node.last_heartbeat = datetime.now(timezone.utc)
+            if ip:
+                node.ip = ip
+            await db.commit()
+
+            # Connectivity sparkline is driven by these audit events — only emit on change.
+            if changed and next_status in {"online", "offline"}:
                 await _audit(
                     actor_type="node",
                     actor_id=uuid.UUID(node_id),
-                    action=f"node.{status}",
+                    action=f"node.{next_status}",
                     resource_type="node",
                     resource_id=uuid.UUID(node_id),
                 )
@@ -309,6 +334,113 @@ async def _set_conversation_status(conv_id: str, status: str) -> bool:
         return False
 
 
+def _terminal_status_from_task_message(msg: dict) -> str:
+    """Map node task_complete/task_error payload to conversation status."""
+    if msg.get("type") == "task_error":
+        return "failed"
+    status = str(msg.get("status") or "").strip().lower()
+    if status in {"incomplete", "blocked"}:
+        return "incomplete"
+    return "completed"
+
+
+async def _settle_running_conversations_for_node(node_id: str, reason: str = "node_offline") -> int:
+    """When a node disconnects, stop timers on conversations still marked running."""
+    if not node_id:
+        return 0
+    settled = 0
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+
+        async with async_session() as db:
+            result = await db.execute(
+                select(Conversation).where(
+                    Conversation.node_id == uuid.UUID(str(node_id)),
+                    Conversation.status == "running",
+                )
+            )
+            rows = list(result.scalars().all())
+            for conv in rows:
+                try:
+                    transition_conversation(conv, "incomplete")
+                    settled += 1
+                except ConversationStatusError:
+                    continue
+            if settled:
+                await db.commit()
+        if settled:
+            print(f"[WS] settled {settled} running conversation(s) for node {node_id[:8]} ({reason})")
+    except Exception as e:
+        print(f"[WS] settle running conversations error: {e}")
+    return settled
+
+
+async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, conv_id: str | None) -> None:
+    """Process one agent-node websocket message. Must not raise into the receive loop."""
+    if conv_id:
+        msg["agent_source"] = "pentest"
+        msg["agent_node_id"] = client_id
+
+    # Settle conversation status before heavy persistence so a large checkpoint
+    # or plan_tree failure cannot leave the session running forever.
+    # Terminal channel is task_complete (status=completed|incomplete|blocked).
+    # task_incomplete is legacy-only: settle status but do not touch session counts
+    # (old dual-send pairs already decrement once on the following task_complete).
+    if msg.get("type") in ("task_complete", "task_error"):
+        if msg.get("type") == "task_error":
+            await _record_node_failure(client_id, msg.get("message") or msg.get("error"))
+        if client_id:
+            await _incr_sessions(client_id, -1)
+        if conv_id:
+            await _set_conversation_status(conv_id, _terminal_status_from_task_message(msg))
+    elif msg.get("type") == "task_incomplete" and conv_id:
+        await _set_conversation_status(
+            conv_id,
+            _terminal_status_from_task_message(
+                {**msg, "type": "task_complete", "status": msg.get("status") or "incomplete"}
+            ),
+        )
+
+    if msg.get("type") == "request_decision" and not msg.get("request_id"):
+        msg["request_id"] = str(uuid.uuid4())
+    if msg.get("type") == "asset_discovered":
+        persisted = await _persist_asset(msg, client_id)
+        if persisted:
+            msg.update({k: v for k, v in persisted.items() if v is not None})
+    elif msg.get("type") == "vuln_found":
+        persisted = await _persist_vulnerability(msg, client_id)
+        if persisted:
+            msg.update({k: v for k, v in persisted.items() if v is not None})
+    elif msg.get("type") in ("tool_output", "evidence_created"):
+        await _persist_evidence(msg, client_id)
+        if msg.get("type") == "tool_output":
+            await _audit_tool_output(msg, client_id)
+    if msg.get("type") == "checkpoint_update":
+        await _remember_conversation_checkpoint(conv_id, msg.get("checkpoint") or {})
+    elif msg.get("type") != "intake_update" and not _is_pentest_runtime_status(msg):
+        await _save_message(msg, "agent")
+    if msg.get("type") == "request_decision":
+        request_id = msg.get("request_id") or str(uuid.uuid4())
+        msg["request_id"] = request_id
+        pending_approvals[request_id] = {"conversation_id": conv_id, "node_id": client_id}
+        actor_uuid = _uuid(client_id)
+        if actor_uuid:
+            await _audit(
+                actor_type="agent",
+                actor_id=actor_uuid,
+                action="approval.request",
+                resource_type="conversation",
+                resource_id=_uuid(conv_id),
+                conversation_id=_uuid(conv_id),
+                detail={"request_id": request_id, "risk_level": msg.get("risk_level")},
+            )
+
+    if conv_id:
+        raw = json.dumps(msg, ensure_ascii=False)
+        await _broadcast_to_conversation(conv_id, raw)
+
+
 async def _incr_sessions(node_id: str, delta: int):
     try:
         from app.db.base import async_session
@@ -343,37 +475,53 @@ async def _record_node_failure(node_id: str | None, reason: object) -> None:
         print(f"[WS] record node failure error: {e}")
 
 async def _available_agent_capabilities() -> list[AgentCapability]:
+    """List platform + worker capabilities.
+
+    online=true only when a live WebSocket is registered in node_connections.
+    DB status=online without a socket is treated as offline so the planner cannot
+    invent "waiting for agent" while also being told capabilities incorrectly.
+    """
     capabilities = [
         AgentCapability(agent_type="platform", capability="platform.chat", node_id=str(PLATFORM_AGENT_NODE_ID), name="Platform Agent", online=True),
         AgentCapability(agent_type="platform", capability="snapshot.qa", node_id=str(PLATFORM_AGENT_NODE_ID), name="Platform Agent", online=True),
     ]
-    if not node_connections:
-        return capabilities
 
     try:
         from app.db.base import async_session
         from app.models.node import Node
 
-        node_ids = [_uuid(item) for item in node_connections.keys()]
-        node_ids = [item for item in node_ids if item]
         async with async_session() as db:
-            result = await db.execute(select(Node).where(Node.id.in_(node_ids)))
-            nodes = {str(item.id): item for item in result.scalars().all()}
+            result = await db.execute(select(Node).where(Node.type != "platform"))
+            nodes = list(result.scalars().all())
     except Exception as e:
         raise OrchestrationError(f"Failed to load agent capabilities: {str(e)[:300]}") from e
 
-    for node_id in sorted(node_connections.keys()):
-        node = nodes.get(node_id)
-        if not node:
-            raise OrchestrationError(f"Connected node {node_id} is missing from the node registry")
-        node_type = str(node.type)
+    connected = set(node_connections.keys())
+    for node in sorted(nodes, key=lambda item: str(item.id)):
+        node_id = str(node.id)
+        node_type = str(node.type or "").strip().lower()
+        if not node_type or node_type == "platform":
+            continue
+        is_connected = node_id in connected
+        # Heal stale DB online flag when socket is gone (best-effort, non-blocking for routing).
+        if not is_connected and str(node.status or "").lower() == "online":
+            try:
+                await _update_node_status(node_id, "offline")
+            except Exception:
+                pass
         capabilities.append(AgentCapability(
             agent_type=node_type,
             capability=_capability_for_node_type(node_type),
             node_id=node_id,
             name=str(getattr(node, "name", None) or node_type),
-            online=True,
+            online=is_connected,
         ))
+
+    # Connected sockets must always appear even if DB row is briefly missing.
+    for node_id in sorted(connected):
+        if any(item.node_id == node_id for item in capabilities):
+            continue
+        raise OrchestrationError(f"Connected node {node_id} is missing from the node registry")
     return capabilities
 
 
@@ -498,13 +646,36 @@ def _agent_target_for_request(
 def _is_active_runtime_status(conversation_status: str | None) -> bool:
     return str(conversation_status or "").strip().lower() == "running"
 
+
+def _has_bound_living_agent_status(conversation_status: str | None) -> bool:
+    """Statuses where a pentest node may still hold conversation-scoped session memory.
+
+    Platform chat is a group room: after a work burst completes/fails, the agent
+    participant should stay addressable — not only while status==running.
+    """
+    return str(conversation_status or "").strip().lower() in {
+        "running",
+        "failed",
+        "incomplete",
+        "paused",
+        "completed",
+        "blocked",
+    }
+
+
 def _should_use_sticky_node_binding(
     *,
     conversation_status: str | None,
     requested_node_id: str | None,
     bound_node_id: str | None,
 ) -> bool:
-    return bool(_is_active_runtime_status(conversation_status) and not requested_node_id and bound_node_id)
+    # Prefer the same bound node whenever a living session is plausible.
+    # Explicit @node mention bypasses sticky so the user can switch participants.
+    return bool(
+        _has_bound_living_agent_status(conversation_status)
+        and not requested_node_id
+        and bound_node_id
+    )
 
 def _decision_agent_attribution(decision) -> tuple[str, str]:
     source = _normalize_agent_identity(getattr(decision, "agent", None), "platform") or "platform"
@@ -546,8 +717,10 @@ def _message_dedupe_key(*, role: str, original_type: str, stored_type: str, cont
         return f"approval:{request_id}" if request_id else None
     if original_type == "task_error":
         return f"task_error:{hashlib.sha256(str(content.get('text') or '').encode()).hexdigest()[:16]}"
+    # Unified terminal status channel: incomplete and completed share one dedupe key so
+    # a legacy task_incomplete + task_complete pair cannot create two UI rows.
     if original_type in {"task_complete", "task_incomplete"}:
-        return "task_complete" if original_type == "task_complete" else "task_incomplete"
+        return "task_complete"
     if original_type == "vuln_found":
         # Dedupe by finding identity (title / vulnerability id), NOT evidence_id.
         # Multiple distinct findings often share one evidence artifact; using
@@ -789,12 +962,25 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                 "round": msg.get("round"),
             }
         elif msg_type == "task_incomplete":
+            # Legacy alias: older nodes may still emit task_incomplete. Prefer a single
+            # task_complete(status=incomplete) channel going forward.
             msg_type = "status"
-            content = {"text": "Task incomplete", "status": "incomplete", "summary": msg.get("summary", {}), "audit": msg.get("audit")}
+            content = {
+                "text": "Task incomplete",
+                "status": "incomplete",
+                "summary": msg.get("summary", {}),
+                "audit": msg.get("audit"),
+            }
         elif msg_type == "task_complete":
             msg_type = "status"
-            if msg.get("status") == "incomplete":
-                content = {"text": "Task incomplete", "status": "incomplete", "summary": msg.get("summary", {}), "audit": msg.get("audit")}
+            terminal = str(msg.get("status") or "completed").strip().lower()
+            if terminal in {"incomplete", "blocked"}:
+                content = {
+                    "text": "Task incomplete" if terminal == "incomplete" else "Task blocked",
+                    "status": terminal,
+                    "summary": msg.get("summary", {}),
+                    "audit": msg.get("audit"),
+                }
             else:
                 content = {"text": "Task complete", "status": "completed", "summary": msg.get("summary", {})}
         elif msg_type == "task_error":
@@ -1479,21 +1665,60 @@ def _user_message_route(msg: dict, conversation_status: str | None) -> dict:
     return {"action": "assign", "target_value": target_value}
 
 
+def _task_context_from_snapshot(resume_context: dict) -> dict:
+    """Snapshot uses task_context; some callers still stash task on the envelope."""
+    if not isinstance(resume_context, dict):
+        return {}
+    for key in ("task_context", "task"):
+        value = resume_context.get(key)
+        if isinstance(value, dict) and value:
+            return value
+    return {}
+
+
+def _has_resumable_task(resume_context: dict) -> bool:
+    task = _task_context_from_snapshot(resume_context)
+    target = task.get("target")
+    if isinstance(target, dict) and str(target.get("value") or "").strip():
+        return True
+    if isinstance(target, str) and target.strip():
+        return True
+    return False
+
+
+def _looks_like_continue_request(text: str) -> bool:
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    if CONTINUE_REQUEST_RE.match(raw):
+        return True
+    # Slightly longer "继续扫剩下的" style, but still short steers.
+    if len(raw) <= 40 and FOLLOW_UP_ACTION_RE.search(raw) and not re.search(r"https?://", raw, re.I):
+        return True
+    return False
+
+
 def _resume_message_from_context(msg: dict, resume_context: dict, *, include_checkpoint: bool = True) -> tuple[dict | None, bool]:
-    task_context = resume_context.get("task_context") or resume_context.get("task") or {}
+    task_context = _task_context_from_snapshot(resume_context)
     if not task_context.get("target"):
         return None, False
 
     base_instruction = str(task_context.get("instruction") or "")
     continue_instruction = str(msg.get("text") or "")
-    combined_instruction = f"{base_instruction}\\n\\nUser continuation: {continue_instruction}".strip()
-    return {
+    combined_instruction = f"{base_instruction}\n\nUser continuation: {continue_instruction}".strip()
+    out = {
         **msg,
         "target": task_context.get("target") or {},
         "scope": task_context.get("scope") or {},
-        "checkpoint": (resume_context.get("checkpoint") or {}) if include_checkpoint else {},
         "text": combined_instruction,
-    }, True
+        "initial_instruction": combined_instruction,
+    }
+    if include_checkpoint:
+        checkpoint = resume_context.get("checkpoint") if isinstance(resume_context.get("checkpoint"), dict) else {}
+        if not checkpoint and isinstance(task_context.get("checkpoint"), dict):
+            checkpoint = task_context.get("checkpoint") or {}
+        out["checkpoint"] = checkpoint or {}
+    return out, True
 
 
 def _message_with_decision_target(msg: dict, decision) -> dict:
@@ -1677,7 +1902,15 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
         client_id = await _find_node_by_token(token)
 
     if client_type == "node" and client_id:
+        # Replace any stale socket for this node. Closing the old one must NOT mark
+        # the node offline (see finally: only the active socket may go offline).
+        old_ws = node_connections.get(client_id)
         node_connections[client_id] = ws
+        if old_ws is not None and old_ws is not ws:
+            try:
+                await old_ws.close(code=4000, reason="replaced by new connection")
+            except Exception:
+                pass
         await _update_node_status(client_id, "online", ip=str(ws.client.host) if ws.client else None)
         print(f"[WS] NODE ONLINE: {client_id[:8]} (total nodes: {len(node_connections)})")
 
@@ -1688,63 +1921,12 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
             conv_id = msg.get("conversation_id")
 
             if client_type == "node":
-                if conv_id:
-                    msg["agent_source"] = "pentest"
-                    msg["agent_node_id"] = client_id
-                    raw = json.dumps(msg, ensure_ascii=False)
-                if msg.get("type") == "request_decision" and not msg.get("request_id"):
-                    msg["request_id"] = str(uuid.uuid4())
-                    raw = json.dumps(msg)
-                if msg.get("type") == "asset_discovered":
-                    persisted = await _persist_asset(msg, client_id)
-                    if persisted:
-                        msg.update({k: v for k, v in persisted.items() if v is not None})
-                    raw = json.dumps(msg, ensure_ascii=False)
-                elif msg.get("type") == "vuln_found":
-                    persisted = await _persist_vulnerability(msg, client_id)
-                    if persisted:
-                        msg.update({k: v for k, v in persisted.items() if v is not None})
-                    raw = json.dumps(msg, ensure_ascii=False)
-                elif msg.get("type") in ("tool_output", "evidence_created"):
-                    await _persist_evidence(msg, client_id)
-                    if msg.get("type") == "tool_output":
-                        await _audit_tool_output(msg, client_id)
-                if msg.get("type") == "checkpoint_update":
-                    await _remember_conversation_checkpoint(conv_id, msg.get("checkpoint") or {})
-                elif msg.get("type") != "intake_update" and not _is_pentest_runtime_status(msg):
-                    await _save_message(msg, "agent")
-                if msg.get("type") == "request_decision":
-                    request_id = msg.get("request_id") or str(uuid.uuid4())
-                    msg["request_id"] = request_id
-                    raw = json.dumps(msg)
-                    pending_approvals[request_id] = {"conversation_id": conv_id, "node_id": client_id}
-                    await _audit(
-                        actor_type="agent",
-                        actor_id=uuid.UUID(client_id),
-                        action="approval.request",
-                        resource_type="conversation",
-                        resource_id=_uuid(conv_id),
-                        conversation_id=_uuid(conv_id),
-                        detail={"request_id": request_id, "risk_level": msg.get("risk_level")},
-                    )
-                elif msg.get("type") in ("task_complete", "task_error"):
-                    if msg.get("type") == "task_error":
-                        await _record_node_failure(client_id, msg.get("message") or msg.get("error"))
-                    if client_id:
-                        await _incr_sessions(client_id, -1)
-                    if conv_id:
-                        try:
-                            from app.db.base import async_session
-                            from app.models.conversation import Conversation
-
-                            next_status = "incomplete" if msg.get("type") == "task_complete" and msg.get("status") == "incomplete" else "completed" if msg.get("type") == "task_complete" else "failed"
-                            await _set_conversation_status(conv_id, next_status)
-                        except Exception as e:
-                            print(f"[WS] update conversation status error: {e}")
-
-                if conv_id:
-                    raw = json.dumps(msg, ensure_ascii=False)
-                    await _broadcast_to_conversation(conv_id, raw)
+                # Isolate each inbound node message so one bad payload cannot drop
+                # the websocket and lose a subsequent task_complete (timer stuck running).
+                try:
+                    await _handle_node_message(ws, client_id, msg, conv_id)
+                except Exception as e:
+                    print(f"[WS] node message handler error type={msg.get('type')}: {e}")
 
             elif client_type == "user":
                 if msg.get("type") == "subscribe" and conv_id:
@@ -1782,31 +1964,60 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                                 "source": "sticky_node_binding",
                                 "node_id": bound_node_id,
                                 "capability": bound_capability,
+                                "conversation_status": conversation_status,
                             },
                         )
                         if sent:
+                            # Resume conversation clock when user talks to a living agent after a terminal burst.
+                            if not _is_active_runtime_status(conversation_status):
+                                await _set_conversation_status(conv_id, "running")
+                                await _incr_sessions(str(bound_node_id), 1)
                             continue
-                        await _persist_and_broadcast(conv_id, {
-                            "type": "task_error",
-                            "conversation_id": conv_id,
-                            "message": "Bound node is unavailable. Mention another online node to switch this conversation.",
-                            "agent_source": "platform",
-                            "agent_node_id": str(PLATFORM_AGENT_NODE_ID),
-                        }, "agent")
-                        continue
+                        # While actively running, do not invent a second node assignment.
+                        if _is_active_runtime_status(conversation_status):
+                            await _persist_and_broadcast(conv_id, {
+                                "type": "task_error",
+                                "conversation_id": conv_id,
+                                "message": "Bound node is unavailable. Mention another online node to switch this conversation.",
+                                "agent_source": "platform",
+                                "agent_node_id": str(PLATFORM_AGENT_NODE_ID),
+                            }, "agent")
+                            continue
+                        # Terminal status + bound node offline: fall through to continue/re-dispatch.
+                    has_resume_task = _has_resumable_task(resume_context)
+                    # After failed/incomplete, short "继续" must resume — do not rely on the planner
+                    # alone (it often answer_user's and leaves the user with no node activity).
+                    force_continue = (
+                        str(conversation_status or "").lower() in {"failed", "incomplete", "paused", "canceled"}
+                        and has_resume_task
+                        and _looks_like_continue_request(str(msg.get("text") or ""))
+                        and (requested_agent or "pentest") != "platform"
+                    )
                     try:
-                        decision = await route_with_platform_agent(
-                            text=str(msg.get("text") or ""),
-                            context=OrchestrationContext(
-                                conversation_status=conversation_status,
-                                requested_agent=requested_agent,
-                                requested_node_id=requested_node_id,
-                                has_resume_task=bool((resume_context.get("task") or {}).get("target")),
-                                has_bound_node=bool(bound_node_id),
-                                bound_node_id=bound_node_id,
-                                capabilities=capabilities,
-                            ),
-                        )
+                        if force_continue:
+                            from app.services.agent_router import RoutingDecision
+
+                            decision = RoutingDecision(
+                                action="continue_task",
+                                capability="pentest.web",
+                                mode="resume_after_terminal",
+                                agent="pentest",
+                                agent_node_id=requested_node_id or bound_node_id,
+                                reason="policy forced continue_task after failed/incomplete with resumable task",
+                            )
+                        else:
+                            decision = await route_with_platform_agent(
+                                text=str(msg.get("text") or ""),
+                                context=OrchestrationContext(
+                                    conversation_status=conversation_status,
+                                    requested_agent=requested_agent,
+                                    requested_node_id=requested_node_id,
+                                    has_resume_task=has_resume_task,
+                                    has_bound_node=bool(bound_node_id),
+                                    bound_node_id=bound_node_id,
+                                    capabilities=capabilities,
+                                ),
+                            )
                     except OrchestrationError as e:
                         await _persist_and_broadcast(conv_id, {
                             "type": "task_error",
@@ -1863,26 +2074,72 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     resumed_from_context = False
                     force_dispatch_resumed_task = False
                     if decision.action == "continue_task":
-                        if _is_active_runtime_status(conversation_status):
-                            steer_msg = {**msg, "type": "user_steer"}
-                            sent = await _send_to_bound_node(conv_id, json.dumps(steer_msg, ensure_ascii=False))
-                            if sent:
-                                await _audit(
-                                    actor_type="user",
-                                    actor_id=uuid.UUID(client_id),
-                                    action="user_steer",
-                                    resource_type="conversation",
-                                    resource_id=uuid.UUID(conv_id),
-                                    conversation_id=uuid.UUID(conv_id),
-                                    detail={"sent": sent, "source": "agent_router"},
-                                )
-                                continue
+                        # Prefer same-session user_steer on the bound living agent.
+                        # Do not re-assign (wipe-and-restart theater) when the node is online.
+                        steer_node_id = (
+                            decision.agent_node_id
+                            or requested_node_id
+                            or bound_node_id
+                            or conversation_node.get(conv_id)
+                        )
+                        if steer_node_id and str(steer_node_id) in node_connections:
+                            steer_msg = {
+                                **msg,
+                                "type": "user_steer",
+                                "conversation_id": conv_id,
+                                "agent_node_id": str(steer_node_id),
+                            }
+                            if decision.capability:
+                                steer_msg["agent_capability"] = decision.capability
+                            conversation_node[conv_id] = str(steer_node_id)
+                            await node_connections[str(steer_node_id)].send_text(
+                                json.dumps(steer_msg, ensure_ascii=False)
+                            )
+                            was_active = _is_active_runtime_status(conversation_status)
+                            if not was_active:
+                                await _set_conversation_status(conv_id, "running")
+                                await _incr_sessions(str(steer_node_id), 1)
+                            status_text = (
+                                "已将继续指令发给正在运行的渗透 Agent（同一会话）。"
+                                if was_active
+                                else "已在同一渗透会话中继续（保留 Agent 记忆，未重新派发任务）。"
+                            )
+                            await _persist_and_broadcast(conv_id, {
+                                "type": "status",
+                                "conversation_id": conv_id,
+                                "text": status_text,
+                                "status": "running",
+                                "agent_source": "platform",
+                                "agent_node_id": str(PLATFORM_AGENT_NODE_ID),
+                            }, "agent")
+                            await _audit(
+                                actor_type="user",
+                                actor_id=uuid.UUID(client_id),
+                                action="user_steer",
+                                resource_type="conversation",
+                                resource_id=uuid.UUID(conv_id),
+                                conversation_id=uuid.UUID(conv_id),
+                                detail={
+                                    "sent": True,
+                                    "source": "continue_same_session",
+                                    "node_id": str(steer_node_id),
+                                    "conversation_status": conversation_status,
+                                },
+                            )
+                            continue
+                        # Bound node offline / no binding: last-resort re-dispatch (new session).
                         resumed_msg, resumed_from_context = _resume_message_from_context(msg, resume_context)
                         if resumed_msg:
                             msg = resumed_msg
                             force_dispatch_resumed_task = True
                         else:
-                            await _answer_with_platform_agent(conv_id, client_id, msg.get("text", ""), "platform", "platform_chat")
+                            await _persist_and_broadcast(conv_id, {
+                                "type": "task_error",
+                                "conversation_id": conv_id,
+                                "message": "无法继续：绑定的渗透节点不在线，且没有可恢复的目标任务上下文。请确认节点在线后重新发送目标 URL/IP。",
+                                "agent_source": "platform",
+                                "agent_node_id": str(PLATFORM_AGENT_NODE_ID),
+                            }, "agent")
                             continue
 
                     if decision.action == "dispatch_node" or force_dispatch_resumed_task:
@@ -1952,8 +2209,19 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             worker_limits = await _worker_limits_for_node(node_id)
                             if worker_limits:
                                 task_msg["worker_limits"] = worker_limits
-                            if _should_announce_agent_assignment(requested_node_id, msg):
+                            # Always tell the user a node was (re)assigned — silent dispatch
+                            # looks like "no reaction" after failed sessions when the user says 继续.
+                            if force_dispatch_resumed_task or _should_announce_agent_assignment(requested_node_id, msg):
                                 await _announce_agent_assignment(conv_id, decision, node_id)
+                            if force_dispatch_resumed_task:
+                                await _persist_and_broadcast(conv_id, {
+                                    "type": "status",
+                                    "conversation_id": conv_id,
+                                    "text": "任务已重新派发到渗透节点，正在从上次进度继续…",
+                                    "status": "running",
+                                    "agent_source": "platform",
+                                    "agent_node_id": str(PLATFORM_AGENT_NODE_ID),
+                                }, "agent")
                             await node_connections[node_id].send_text(json.dumps(task_msg, ensure_ascii=False))
                             continue
 
@@ -2012,5 +2280,12 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                 del conversation_subscribers[conv_id]
 
         if client_type == "node" and client_id:
-            node_connections.pop(client_id, None)
-            await _update_node_status(client_id, "offline")
+            # Only the currently registered socket may mark the node offline.
+            # Without this check, a reconnect race (new socket online → old finally)
+            # would pop the new connection and emit a false node.offline audit.
+            if node_connections.get(client_id) is ws:
+                node_connections.pop(client_id, None)
+                await _update_node_status(client_id, "offline")
+                # Prevent stuck timers when the node dies after finish_scan but
+                # before task_complete is processed.
+                await _settle_running_conversations_for_node(client_id, reason="node_offline")

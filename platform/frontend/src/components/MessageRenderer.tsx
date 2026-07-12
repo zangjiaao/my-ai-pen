@@ -773,11 +773,14 @@ function resolveFindingCardCategory(content: Record<string, unknown>): FindingCa
   const blob = [content.title, content.description, content.impact, content.poc, content.reproduction, content.flag_value]
     .map((v) => String(v || ""))
     .join("\n");
+  const title = String(content.title || "").trim();
+  // "Flag · …" is always a Flag object even when the challenge name contains XSS/SQLi wording.
+  if (/^flag\s*[·•:：\-–—]/i.test(title) || /^flag\s+/i.test(title) || /^flag\{/i.test(title)) {
+    return "flag";
+  }
   if (/flag\{[^{}\n]{2,120}\}/i.test(blob) || /FLAG\{[^{}\n]{2,120}\}/.test(blob)) {
     // Prefer Flag badge when the artifact is mainly the token; keep Vuln if title is a vuln class.
-    if (
-      !/\b(sql\s*injection|sqli|xss|rce|ssrf|lfi|xxe|ssti|idor|漏洞|注入)\b/i.test(String(content.title || ""))
-    ) {
+    if (!/\b(sql\s*injection|sqli|xss|rce|ssrf|lfi|xxe|ssti|idor|漏洞|注入)\b/i.test(title)) {
       return "flag";
     }
   }

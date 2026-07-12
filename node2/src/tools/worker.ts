@@ -17,6 +17,7 @@ import {
   resolveOpenWorkerPackagesForSuccess,
   unresolvedWorkerPackages,
 } from "../runtime/worker-packages.js";
+import { assessWorkerTaskNarrowness } from "../runtime/work-packages.js";
 import { listWorkerRoles, resolveWorkerRole } from "../runtime/worker-roles.js";
 import { emitPlanUpdate, jsonResult, textResult } from "./common.js";
 
@@ -70,8 +71,9 @@ export function createWorkerTool(runtime: ToolRuntime): ToolDefinition<any> {
     promptSnippet: "Dispatch a narrow role-scoped pentest worker (1–2 endpoints)",
     promptGuidelines: [
       "After workflow_run returns work packages (or next_work items), dispatch them with worker(role=..., task=...) instead of doing everything in the main session when packages are separable.",
-      "NARROW PACKAGES ONLY: one role + 1–2 endpoints/challenges per worker call. Never pack an entire level-group (e.g. L8×4 + L5) into one worker — that causes wall-clock timeout.",
+      "NARROW PACKAGES ONLY: one role + 1–2 endpoints (or one challenge path) per worker call. Wide multi-surface packages are rejected before launch.",
       "On worker timeout: re-dispatch a narrower package (same or related role) or finish remaining probes in the main session. After repeated timeouts the package is marked failed with adjustment advice — do not endless-retry the same wide task.",
+      "Auth-gated surfaces: if login is required, put credential discovery (register/login/session capture) in its own package or main-session step before captcha/IDOR/admin packages.",
       "Use recon first when surface is thin; use access-control for dual-actor IDOR; injection for login/search SQLi; xss for browser XSS; general only for small mixed packages.",
       "Main agent remains responsible for overall next_work prioritization and finish_scan.",
       "Do not nest workers inside workers.",
@@ -85,6 +87,23 @@ export function createWorkerTool(runtime: ToolRuntime): ToolDefinition<any> {
       const role = resolveWorkerRole(params.role);
       const task = String(params.task || "").trim();
       if (!task) return textResult("error: task is required");
+
+      const narrow = assessWorkerTaskNarrowness(task);
+      if (!narrow.ok) {
+        return jsonResult({
+          ok: false,
+          blocked: true,
+          error: "worker task too wide for a single package",
+          reason: narrow.reason,
+          endpoint_count: narrow.endpointCount,
+          challenge_count: narrow.challengeCount,
+          surface_group_count: narrow.surfaceGroupCount,
+          guidance: narrow.guidance,
+          instruction:
+            "Split the work: call worker() once per 1–2 endpoints (or per challenge path). " +
+            "Do not combine unrelated surfaces (e.g. access-control pack + xss pack + multi-level suites) into one task string.",
+        });
+      }
 
       const launch = (runtime as ToolRuntime & { workerLaunch?: WorkerLaunchContext }).workerLaunch;
       if (!launch) {

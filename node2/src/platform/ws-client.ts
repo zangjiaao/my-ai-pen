@@ -42,8 +42,24 @@ export class PlatformWSClient {
   }
 
   async send(message: PlatformMessage): Promise<void> {
+    const critical =
+      message.type === "task_complete" ||
+      message.type === "task_incomplete" ||
+      message.type === "task_error";
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       console.warn(`[node2] dropped outbound message, websocket not open: ${message.type}`);
+      if (critical) {
+        // Brief wait for reconnect so conversation status / timer can settle.
+        for (let attempt = 0; attempt < 5; attempt += 1) {
+          await sleep(200 * (attempt + 1));
+          if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify(message));
+            console.warn(`[node2] retried critical message after reconnect: ${message.type}`);
+            return;
+          }
+        }
+        console.error(`[node2] failed to deliver critical message: ${message.type}`);
+      }
       return;
     }
     this.ws.send(JSON.stringify(message));
