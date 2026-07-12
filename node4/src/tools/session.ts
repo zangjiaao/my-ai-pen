@@ -1,9 +1,9 @@
 /**
- * Sessionized HTTP: cookie jar + multi-step requests + short history.
- * Audit-driven: CTF runs spent hundreds of shell turns on curl -b/-c chains.
+ * Sessionized HTTP: multi-actor cookie jars + multi-step requests + history.
+ * Dual-identity: actor=user_a|user_b|browser|default — each has its own jar.
  */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -12,6 +12,7 @@ import { emitEvidence, isInScope, jsonResult, resolveTargetUrl, textResult } fro
 
 type JarMap = Record<string, string>;
 type HistoryRow = {
+  actor: string;
   method: string;
   url: string;
   status: number;
@@ -25,19 +26,26 @@ export function createSessionTool(runtime: ToolRuntime): ToolDefinition<any> {
     name: "session",
     label: "Session HTTP",
     description: [
-      "Sessionized in-scope HTTP with a durable cookie jar and request history.",
-      "Ops: request | chain | jar_get | jar_set | jar_clear | history.",
-      "Use chain for multi-step login/exploit flows instead of hand-rolled curl -b/-c shell loops.",
-      "Still prefer shell for scanners (sqlmap/ffuf) and non-HTTP work.",
+      "Sessionized in-scope HTTP with durable per-actor cookie jars and history.",
+      "Ops: request | chain | jar_get | jar_set | jar_clear | jar_copy | list_actors | compare | history.",
+      "actor (default: default): separate jars for dual-identity tests (user_a vs user_b vs browser).",
+      "jar_copy: copy cookies from one actor to another. compare: same request as two actors (status/length/body hash).",
+      "Use chain for multi-step login/exploit. Prefer browser export_cookies into an actor after JS login.",
+      "shell remains for scanners and non-HTTP work.",
     ].join(" "),
     parameters: Type.Object({
       op: Type.String(),
+      actor: Type.Optional(Type.String()),
+      /** jar_copy / compare: second actor */
+      actor_b: Type.Optional(Type.String()),
+      /** jar_copy: source actor (or use actor as source and actor_b as dest) */
+      from_actor: Type.Optional(Type.String()),
+      to_actor: Type.Optional(Type.String()),
       method: Type.Optional(Type.String()),
       url: Type.Optional(Type.String()),
       headers: Type.Optional(Type.Record(Type.String(), Type.String())),
       body: Type.Optional(Type.String()),
       timeout_seconds: Type.Optional(Type.Number()),
-      /** chain: ordered steps [{method?, url, headers?, body?}] */
       steps: Type.Optional(
         Type.Array(
           Type.Object({
@@ -48,38 +56,133 @@ export function createSessionTool(runtime: ToolRuntime): ToolDefinition<any> {
           }),
         ),
       ),
-      /** jar_set: cookie name/value map to merge */
       cookies: Type.Optional(Type.Record(Type.String(), Type.String())),
       limit: Type.Optional(Type.Number()),
     }),
     async execute(_id: string, params: any) {
       const op = String(params.op || "request").trim().toLowerCase();
-      const dir = join(runtime.taskDir, "session");
-      await mkdir(dir, { recursive: true });
-      const jarPath = join(dir, "cookies.json");
-      const histPath = join(dir, "history.jsonl");
+      const actor = sanitizeActor(params.actor != null ? String(params.actor) : "default");
+      const paths = actorPaths(runtime.taskDir, actor);
+      await mkdir(paths.dir, { recursive: true });
+
+      if (op === "list_actors") {
+        const actors = await listActors(runtime.taskDir);
+        return jsonResult({
+          ok: true,
+          op,
+          actors,
+          guidance: "Use actor=user_a|user_b|admin|browser for dual-identity / priv tests.",
+        });
+      }
 
       if (op === "jar_get") {
-        const jar = await loadJar(jarPath);
-        return jsonResult({ ok: true, op, cookies: jar, cookie_header: formatCookieHeader(jar) });
+        const jar = await loadJar(paths.jar);
+        return jsonResult({
+          ok: true,
+          op,
+          actor,
+          cookies: jar,
+          cookie_header: formatCookieHeader(jar),
+        });
       }
       if (op === "jar_clear") {
-        await writeFile(jarPath, "{}", "utf8");
-        return jsonResult({ ok: true, op, cookies: {} });
+        await saveJar(paths.jar, {});
+        return jsonResult({ ok: true, op, actor, cookies: {} });
       }
       if (op === "jar_set") {
-        const jar = await loadJar(jarPath);
+        const jar = await loadJar(paths.jar);
         const incoming = params.cookies && typeof params.cookies === "object" ? params.cookies : {};
         for (const [k, v] of Object.entries(incoming)) {
           if (k) jar[String(k)] = String(v);
         }
-        await saveJar(jarPath, jar);
-        return jsonResult({ ok: true, op, cookies: jar });
+        await saveJar(paths.jar, jar);
+        return jsonResult({ ok: true, op, actor, cookies: jar });
+      }
+      if (op === "jar_copy") {
+        const from = sanitizeActor(
+          String(params.from_actor || params.actor || "default"),
+        );
+        const to = sanitizeActor(String(params.to_actor || params.actor_b || ""));
+        if (!to || to === from) return textResult("error: jar_copy needs from_actor and to_actor (distinct)");
+        const src = await loadJar(actorPaths(runtime.taskDir, from).jar);
+        const destPaths = actorPaths(runtime.taskDir, to);
+        await mkdir(destPaths.dir, { recursive: true });
+        await saveJar(destPaths.jar, { ...src });
+        return jsonResult({ ok: true, op, from_actor: from, to_actor: to, cookies: src });
       }
       if (op === "history") {
         const limit = Math.min(Math.max(Number(params.limit || 20), 1), 100);
-        const rows = await loadHistory(histPath, limit);
-        return jsonResult({ ok: true, op, count: rows.length, rows });
+        const rows = await loadHistory(paths.hist, limit);
+        return jsonResult({ ok: true, op, actor, count: rows.length, rows });
+      }
+
+      if (op === "compare") {
+        if (!params.url) return textResult("error: compare requires url");
+        const actorB = sanitizeActor(String(params.actor_b || params.to_actor || "user_b"));
+        if (actorB === actor) return textResult("error: compare needs two distinct actors (actor and actor_b)");
+        const method = String(params.method || "GET");
+        const body = params.body != null ? String(params.body) : undefined;
+        const headers = params.headers;
+        const timeout_seconds = params.timeout_seconds;
+        const aPaths = actorPaths(runtime.taskDir, actor);
+        const bPaths = actorPaths(runtime.taskDir, actorB);
+        await mkdir(aPaths.dir, { recursive: true });
+        await mkdir(bPaths.dir, { recursive: true });
+        let jarA = await loadJar(aPaths.jar);
+        let jarB = await loadJar(bPaths.jar);
+        const ra = await doRequest(runtime, {
+          method,
+          url: String(params.url),
+          headers,
+          body,
+          timeout_seconds,
+          jar: jarA,
+          actor,
+        });
+        const rb = await doRequest(runtime, {
+          method,
+          url: String(params.url),
+          headers,
+          body,
+          timeout_seconds,
+          jar: jarB,
+          actor: actorB,
+        });
+        if (ra.ok) {
+          jarA = ra.jar;
+          await saveJar(aPaths.jar, jarA);
+          await appendHistory(aPaths.hist, histRow(actor, ra));
+        }
+        if (rb.ok) {
+          jarB = rb.jar;
+          await saveJar(bPaths.jar, jarB);
+          await appendHistory(bPaths.hist, histRow(actorB, rb));
+        }
+        const evidenceId = await emitEvidence(
+          runtime,
+          "session",
+          `session compare ${actor} vs ${actorB} ${params.url}`,
+          {
+            actor_a: actor,
+            actor_b: actorB,
+            a: summarizeSide(ra),
+            b: summarizeSide(rb),
+          },
+        );
+        return jsonResult({
+          ok: ra.ok && rb.ok,
+          op: "compare",
+          actor_a: actor,
+          actor_b: actorB,
+          a: summarizeSide(ra),
+          b: summarizeSide(rb),
+          same_status: ra.status === rb.status,
+          same_length:
+            (ra.body_preview?.length || 0) === (rb.body_preview?.length || 0),
+          evidence_id: evidenceId,
+          guidance:
+            "Different status/body length often signals IDOR/vertical privilege issues — probe further and book with evidence.",
+        });
       }
 
       if (op === "chain") {
@@ -87,7 +190,7 @@ export function createSessionTool(runtime: ToolRuntime): ToolDefinition<any> {
         if (!steps.length) return textResult("error: chain requires steps[]");
         if (steps.length > 12) return textResult("error: chain max 12 steps");
         const results: unknown[] = [];
-        let jar = await loadJar(jarPath);
+        let jar = await loadJar(paths.jar);
         for (const step of steps) {
           const one = await doRequest(runtime, {
             method: String(step.method || "GET"),
@@ -96,9 +199,10 @@ export function createSessionTool(runtime: ToolRuntime): ToolDefinition<any> {
             body: step.body != null ? String(step.body) : undefined,
             timeout_seconds: params.timeout_seconds,
             jar,
+            actor,
           });
           if (!one.ok) {
-            return jsonResult({ ok: false, op, error: one.error, completed: results, jar });
+            return jsonResult({ ok: false, op, actor, error: one.error, completed: results, cookies: jar });
           }
           jar = one.jar;
           results.push({
@@ -108,32 +212,30 @@ export function createSessionTool(runtime: ToolRuntime): ToolDefinition<any> {
             body_preview: one.body_preview,
             evidence_id: one.evidence_id,
           });
-          await appendHistory(histPath, {
-            method: one.method,
-            url: one.url,
-            status: one.status!,
-            set_cookie_keys: one.set_cookie_keys || [],
-            body_preview: (one.body_preview || "").slice(0, 500),
-            at: new Date().toISOString(),
-          });
+          await appendHistory(paths.hist, histRow(actor, one));
         }
-        await saveJar(jarPath, jar);
-        const evidenceId = await emitEvidence(runtime, "session", `session chain x${results.length}`, {
+        await saveJar(paths.jar, jar);
+        const evidenceId = await emitEvidence(runtime, "session", `session chain actor=${actor} x${results.length}`, {
+          actor,
           steps: results,
           cookies: jar,
         });
         return jsonResult({
           ok: true,
           op,
+          actor,
           steps: results,
           cookies: jar,
           evidence_id: evidenceId,
         });
       }
 
-      // default: request
-      if (op !== "request") return textResult("error: op must be request|chain|jar_get|jar_set|jar_clear|history");
-      let jar = await loadJar(jarPath);
+      if (op !== "request") {
+        return textResult(
+          "error: op must be request|chain|jar_get|jar_set|jar_clear|jar_copy|list_actors|compare|history",
+        );
+      }
+      let jar = await loadJar(paths.jar);
       const one = await doRequest(runtime, {
         method: String(params.method || "GET"),
         url: String(params.url || ""),
@@ -141,21 +243,16 @@ export function createSessionTool(runtime: ToolRuntime): ToolDefinition<any> {
         body: params.body != null ? String(params.body) : undefined,
         timeout_seconds: params.timeout_seconds,
         jar,
+        actor,
       });
       if (!one.ok) return textResult(`error: ${one.error}`);
       jar = one.jar;
-      await saveJar(jarPath, jar);
-      await appendHistory(histPath, {
-        method: one.method,
-        url: one.url,
-        status: one.status!,
-        set_cookie_keys: one.set_cookie_keys || [],
-        body_preview: (one.body_preview || "").slice(0, 500),
-        at: new Date().toISOString(),
-      });
+      await saveJar(paths.jar, jar);
+      await appendHistory(paths.hist, histRow(actor, one));
       return jsonResult({
         ok: true,
         op: "request",
+        actor,
         status: one.status,
         url: one.url,
         headers: one.headers,
@@ -169,6 +266,90 @@ export function createSessionTool(runtime: ToolRuntime): ToolDefinition<any> {
   };
 }
 
+function sanitizeActor(raw: string): string {
+  const s = raw.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "_").slice(0, 48);
+  return s || "default";
+}
+
+function actorPaths(taskDir: string, actor: string): { dir: string; jar: string; hist: string } {
+  // Keep default jar at session/cookies.json for backward compatibility.
+  if (actor === "default") {
+    const dir = join(taskDir, "session");
+    return {
+      dir,
+      jar: join(dir, "cookies.json"),
+      hist: join(dir, "history.jsonl"),
+    };
+  }
+  const dir = join(taskDir, "session", "actors", actor);
+  return {
+    dir,
+    jar: join(dir, "cookies.json"),
+    hist: join(dir, "history.jsonl"),
+  };
+}
+
+async function listActors(taskDir: string): Promise<string[]> {
+  const names = new Set<string>(["default"]);
+  try {
+    await readFile(join(taskDir, "session", "cookies.json"), "utf8");
+  } catch {
+    /* default may be empty */
+  }
+  try {
+    const entries = await readdir(join(taskDir, "session", "actors"), { withFileTypes: true });
+    for (const e of entries) {
+      if (e.isDirectory()) names.add(e.name);
+    }
+  } catch {
+    /* no actors yet */
+  }
+  return [...names].sort();
+}
+
+function histRow(
+  actor: string,
+  one: {
+    method: string;
+    url: string;
+    status?: number;
+    set_cookie_keys?: string[];
+    body_preview?: string;
+  },
+): HistoryRow {
+  return {
+    actor,
+    method: one.method,
+    url: one.url,
+    status: one.status || 0,
+    set_cookie_keys: one.set_cookie_keys || [],
+    body_preview: (one.body_preview || "").slice(0, 500),
+    at: new Date().toISOString(),
+  };
+}
+
+function summarizeSide(one: {
+  ok: boolean;
+  error?: string;
+  status?: number;
+  url?: string;
+  body_preview?: string;
+  set_cookie_keys?: string[];
+  evidence_id?: string;
+}) {
+  const body = one.body_preview || "";
+  return {
+    ok: one.ok,
+    error: one.error,
+    status: one.status,
+    url: one.url,
+    body_length: body.length,
+    body_preview: body.slice(0, 400),
+    set_cookie_keys: one.set_cookie_keys,
+    evidence_id: one.evidence_id,
+  };
+}
+
 async function doRequest(
   runtime: ToolRuntime,
   input: {
@@ -178,6 +359,7 @@ async function doRequest(
     body?: string;
     timeout_seconds?: number;
     jar: JarMap;
+    actor: string;
   },
 ): Promise<{
   ok: boolean;
@@ -196,7 +378,13 @@ async function doRequest(
   try {
     url = resolveTargetUrl(runtime, input.url);
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e), method: input.method, url: input.url, jar: input.jar };
+    return {
+      ok: false,
+      error: e instanceof Error ? e.message : String(e),
+      method: input.method,
+      url: input.url,
+      jar: input.jar,
+    };
   }
   if (!isInScope(runtime, url)) {
     return { ok: false, error: `out of scope: ${url}`, method: input.method, url, jar: input.jar };
@@ -222,14 +410,20 @@ async function doRequest(
     const resHeaders = Object.fromEntries(res.headers.entries());
     const jar = { ...input.jar };
     const setKeys = mergeSetCookie(jar, res.headers);
-    const evidence_id = await emitEvidence(runtime, "session", `${method} ${url} → ${res.status}`, {
-      method,
-      url,
-      status: res.status,
-      headers: resHeaders,
-      body_preview,
-      set_cookie_keys: setKeys,
-    });
+    const evidence_id = await emitEvidence(
+      runtime,
+      "session",
+      `${input.actor} ${method} ${url} → ${res.status}`,
+      {
+        actor: input.actor,
+        method,
+        url,
+        status: res.status,
+        headers: resHeaders,
+        body_preview,
+        set_cookie_keys: setKeys,
+      },
+    );
     return {
       ok: true,
       method,

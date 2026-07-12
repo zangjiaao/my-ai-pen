@@ -40,6 +40,9 @@ import { createSubagentTool } from "./tools/subagent.js";
 import { createGoalTool } from "./tools/goal.js";
 import { createSessionTool } from "./tools/session.js";
 import { createSkillTool } from "./tools/skill.js";
+import { createBrowserTool } from "./tools/browser.js";
+import { createCaptchaTool } from "./tools/captcha.js";
+import { parseCookiesJson } from "./runtime/agent-browser-cli.js";
 import { createNode4Tools, NODE4_TOOL_NAMES, toolNamesForPack } from "./tools/index.js";
 import { buildSystemPrompt } from "./runtime/prompt.js";
 import { auditCtfEventsJsonl } from "./runtime/ctf-audit.js";
@@ -119,6 +122,8 @@ async function main() {
   assert(ctfRes.pack.id !== PENTEST_ROLE_PACK.id, "ctf pack distinct from pentest");
   assert(toolNamesForPack(CTF_ROLE_PACK).includes("session"), "ctf has session tool");
   assert(toolNamesForPack(CTF_ROLE_PACK).includes("skill"), "ctf has skill tool");
+  assert(toolNamesForPack(CTF_ROLE_PACK).includes("browser"), "ctf has browser tool");
+  assert(toolNamesForPack(CTF_ROLE_PACK).includes("captcha"), "ctf has captcha tool");
   assert(CTF_ROLE_PACK.skillIds && CTF_ROLE_PACK.skillIds.length >= 2, "ctf skill index ≥2");
   assert(Boolean(CTF_ROLE_PACK.defaultGoalObjective?.includes("flag")), "ctf default goal maximize flags");
   assert(!toolNamesForPack(PENTEST_ROLE_PACK).includes("session"), "pentest pack does not force session");
@@ -127,6 +132,7 @@ async function main() {
     CTF_ROLE_PACK,
   );
   assert(ctfPrompt.includes("ctf") && ctfPrompt.includes("session"), "ctf prompt mentions pack/session");
+  assert(ctfPrompt.includes("browser") || ctfPrompt.includes("captcha"), "ctf prompt mentions browser/captcha");
   assert(ctfPrompt.includes("skill"), "ctf prompt mentions skills");
   clearExtraRolePacks();
   registerRolePack({
@@ -664,12 +670,17 @@ async function main() {
     assert(!skillContainsAnswerKey((body as { body: string }).body), `no answer key in ${id}`);
   }
 
-  // --- Session tool (local http server optional: use mock via undici? skip network if fails) ---
-  // Structural: factory present on ctf tools
+  // --- Session dual-identity + browser/captcha factories ---
   const ctfTools = createNode4Tools(runtime, CTF_ROLE_PACK);
   assert(ctfTools.some((t) => t.name === "session"), "ctf tools include session");
   assert(ctfTools.some((t) => t.name === "skill"), "ctf tools include skill");
-  // Session jar_get works offline
+  assert(ctfTools.some((t) => t.name === "browser"), "ctf tools include browser");
+  assert(ctfTools.some((t) => t.name === "captcha"), "ctf tools include captcha");
+  assert(createBrowserTool(runtime).name === "browser", "browser factory");
+  assert(createCaptchaTool(runtime).name === "captcha", "captcha factory");
+  assert(parseCookiesJson('[{"name":"a","value":"1"}]').a === "1", "parseCookiesJson array");
+  assert(parseCookiesJson("a=1; b=2").b === "2", "parseCookiesJson header");
+
   const sessionTool = createSessionTool(runtime);
   const jarGet = JSON.parse(textOf(await exec(sessionTool, "sess1", { op: "jar_get" })));
   assert(jarGet.ok && jarGet.cookies && typeof jarGet.cookies === "object", "session jar_get");
@@ -679,6 +690,27 @@ async function main() {
   assert(jarSet.ok && jarSet.cookies.sid === "abc", "session jar_set");
   const jarGet2 = JSON.parse(textOf(await exec(sessionTool, "sess3", { op: "jar_get" })));
   assert(jarGet2.cookies.sid === "abc", "session jar durable on disk");
+  // Dual identity: separate actors
+  await exec(sessionTool, "sess4", { op: "jar_set", actor: "user_a", cookies: { role: "user" } });
+  await exec(sessionTool, "sess5", { op: "jar_set", actor: "user_b", cookies: { role: "admin" } });
+  const jarA = JSON.parse(textOf(await exec(sessionTool, "sess6", { op: "jar_get", actor: "user_a" })));
+  const jarB = JSON.parse(textOf(await exec(sessionTool, "sess7", { op: "jar_get", actor: "user_b" })));
+  assert(jarA.cookies.role === "user" && jarB.cookies.role === "admin", "dual actor jars isolated");
+  const listed = JSON.parse(textOf(await exec(sessionTool, "sess8", { op: "list_actors" })));
+  assert(listed.ok && Array.isArray(listed.actors) && listed.actors.includes("user_a"), "list_actors");
+  await exec(sessionTool, "sess9", {
+    op: "jar_copy",
+    from_actor: "user_b",
+    to_actor: "browser",
+  });
+  const jarBrowser = JSON.parse(
+    textOf(await exec(sessionTool, "sess10", { op: "jar_get", actor: "browser" })),
+  );
+  assert(jarBrowser.cookies.role === "admin", "jar_copy to browser actor");
+  // captcha info offline
+  const captchaTool = createCaptchaTool(runtime);
+  const capInfo = JSON.parse(textOf(await exec(captchaTool, "cap1", { op: "info" })));
+  assert(capInfo.ok && typeof capInfo.tesseract_available === "boolean", "captcha info");
 
   await exec(createTodoTool(runtime), "t", { op: "init", items: ["a", "b"] });
   // Todo mutations must project plan_tree for platform Tasks panel.
@@ -918,6 +950,9 @@ async function main() {
         ctf_audit: true,
         ctf_skills: true,
         session_tool: true,
+        dual_actor_session: true,
+        browser_tool: true,
+        captcha_tool: true,
         taskDir,
       },
       null,

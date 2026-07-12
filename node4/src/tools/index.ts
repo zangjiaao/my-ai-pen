@@ -1,6 +1,8 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { RolePack } from "../roles/index.js";
 import type { ToolRuntime } from "../types.js";
+import { createBrowserTool } from "./browser.js";
+import { createCaptchaTool } from "./captcha.js";
 import { createFindingTool } from "./finding.js";
 import { createEditTool, createReadTool, createWriteTool } from "./fs-tools.js";
 import { createGoalTool } from "./goal.js";
@@ -21,6 +23,8 @@ export const ALL_NODE4_TOOL_FACTORIES: Record<string, (runtime: ToolRuntime) => 
   read: createReadTool,
   http: createHttpTool,
   session: createSessionTool,
+  browser: createBrowserTool,
+  captcha: createCaptchaTool,
   script: createScriptTool,
   finding: createFindingTool,
   subagent: createSubagentTool,
