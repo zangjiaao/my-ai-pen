@@ -194,7 +194,12 @@ export class TodoStore {
     };
   }
 
-  /** Project phases into plan-like nodes for platform Tasks panel (source=todo). */
+  /**
+   * Project phases into plan-like nodes for platform Tasks panel.
+   * Shapes must pass RightPanel.unifiedTodoItems filters:
+   * work items need level=work_item and (source in agent|strix_todo|plan OR kind in task|work|work_item|...).
+   * Use kind=task + source=plan so Tasks list is non-empty (kind=todo-task + source=todo is filtered out).
+   */
   toPlanNodes(): Array<{
     node_id: string;
     title: string;
@@ -224,10 +229,11 @@ export class TodoStore {
         node_id: phaseId,
         title: phase.name,
         status: phaseDone ? "done" : phaseRunning ? "running" : "pending",
-        kind: "todo-phase",
+        // Phases are level=phase (not shown in Tasks list); keep plan-compatible source.
+        kind: "phase",
         level: "phase",
         parent_id: null,
-        source: "todo",
+        source: "plan",
         priority: phasePriority,
       });
       let taskPriority = phasePriority + 1;
@@ -236,10 +242,11 @@ export class TodoStore {
           node_id: `todo-task-${slug(phase.name)}-${slug(task.content)}`,
           title: task.content,
           status: mapStatus(task.status),
-          kind: "todo-task",
+          // kind=task + source=plan: accepted by platform RightPanel.unifiedTodoItems
+          kind: "task",
           level: "work_item",
           parent_id: phaseId,
-          source: "todo",
+          source: "plan",
           priority: taskPriority++,
         });
       }

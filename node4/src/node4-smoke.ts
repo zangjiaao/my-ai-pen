@@ -54,6 +54,7 @@ import { PanelAgentTracker } from "./runtime/panel-agents.js";
 import {
   buildTodoPlanTreePayload,
   emitTodoPlanTreeUpdate,
+  unifiedTodoItemsFilter,
 } from "./runtime/plan-projection.js";
 import {
   CheckpointThrottle,
@@ -595,13 +596,21 @@ async function main() {
   const planMsgs = messages.filter((m) => m.type === "plan_tree_updated");
   assert(planMsgs.length >= 1, "todo init emits plan_tree_updated");
   const plan0 = planMsgs[planMsgs.length - 1] as {
-    plan_tree?: Array<{ title?: string; status?: string; source?: string }>;
+    plan_tree?: Array<{ title?: string; status?: string; source?: string; kind?: string; level?: string }>;
     todo_phases?: unknown[];
     todo_open_count?: number;
   };
   assert(Array.isArray(plan0.plan_tree) && plan0.plan_tree.length >= 2, "plan_tree has phase+tasks");
   assert(plan0.plan_tree!.some((n) => n.title === "a" || n.title === "b"), "plan titles match todo items");
-  assert(plan0.plan_tree!.every((n) => n.source === "todo"), "plan source=todo");
+  // Must pass RightPanel.unifiedTodoItems (source=plan + kind=task for work items).
+  assert(plan0.plan_tree!.every((n) => n.source === "plan"), "plan source=plan for Tasks filter");
+  const workItems = plan0.plan_tree!.filter((n) => n.level === "work_item" || n.title === "a" || n.title === "b");
+  assert(
+    workItems.every((n) => n.kind === "task" || n.kind === "work" || n.kind === "work_item"),
+    `work item kind must be task-like, got ${workItems.map((n) => n.kind).join(",")}`,
+  );
+  const panelVisible = unifiedTodoItemsFilter(plan0.plan_tree);
+  assert(panelVisible.length >= 2, `RightPanel filter must keep task items, got ${panelVisible.length}`);
   assert(Array.isArray(plan0.todo_phases), "todo_phases present");
   assert(typeof plan0.todo_open_count === "number" && plan0.todo_open_count >= 1, "todo_open_count");
 
@@ -622,6 +631,16 @@ async function main() {
   assert(purePlan.plan_tree.some((n) => n.title === "Recon" && n.level === "phase"), "phase node");
   assert(purePlan.plan_tree.some((n) => n.title === "Map surface" && n.status === "done"), "done item");
   assert(purePlan.progress.percent > 0, "progress percent");
+  // Spot-check: old shape (todo-task + source=todo) yields 0 panel items; new shape does not.
+  const rejectedLegacy = unifiedTodoItemsFilter([
+    { node_id: "x", title: "Legacy", status: "pending", kind: "todo-task", level: "work_item", source: "todo" },
+  ]);
+  assert(rejectedLegacy.length === 0, "legacy todo-task/source=todo must be filtered out by platform");
+  assert(purePlan.task_panel_items.length >= 2, `task_panel_items must be non-empty got ${purePlan.task_panel_items.length}`);
+  assert(
+    purePlan.task_panel_items.every((n) => n.kind === "task" && n.source === "plan"),
+    "panel items use kind=task source=plan",
+  );
 
   // --- Platform text stream + checkpoint builder + session event path ---
   const obsMessages: PlatformMessage[] = [];
