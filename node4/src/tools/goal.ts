@@ -5,7 +5,7 @@ import { jsonResult, textResult } from "./common.js";
 
 /**
  * OMP-style goal tool: create / get / complete / drop / resume / pause / list.
- * Active goal enables session-runner goal-continuation after natural stops.
+ * complete is gated so maximize-style goals cannot soft-exit after partial wins.
  */
 export function createGoalTool(runtime: ToolRuntime): ToolDefinition<any> {
   return {
@@ -14,20 +14,23 @@ export function createGoalTool(runtime: ToolRuntime): ToolDefinition<any> {
     description: [
       "OMP-style long-task goal mode (single active objective).",
       "Ops: create|get|complete|drop|resume|pause|list.",
-      "create: objective (required), token_budget? (optional soft cap).",
-      "complete: only after verified completion audit against current evidence.",
-      "While status=active the harness may auto-continue after you stop with tools.",
-      "Does NOT replace shell work; does not hard-gate settlement if never used.",
+      "create: objective (required), token_budget?.",
+      "complete: requires audit_notes; rejected until harness goal_continuations + no-progress stalls pass.",
+      "remaining_unsolved>0 is always rejected — keep working remaining items from your recon.",
+      "While active the harness auto-continues after natural stops (capped).",
     ].join(" "),
     parameters: Type.Object({
       op: Type.String(),
       objective: Type.Optional(Type.String()),
-      /** Alias for objective (compat with older soft goals). */
       title: Type.Optional(Type.String()),
       id: Type.Optional(Type.String()),
       token_budget: Type.Optional(Type.Number()),
       detail: Type.Optional(Type.String()),
       status: Type.Optional(Type.String()),
+      /** Required for complete: detailed audit of remaining surface and blockers. */
+      audit_notes: Type.Optional(Type.String()),
+      /** From agent recon: how many challenges/items still unsolved (0 only when truly done). */
+      remaining_unsolved: Type.Optional(Type.Number()),
     }),
     async execute(_id: string, params: any) {
       const op = String(params.op || "list").trim().toLowerCase();
@@ -63,7 +66,7 @@ export function createGoalTool(runtime: ToolRuntime): ToolDefinition<any> {
             goal: g,
             summary: goals.formatForPrompt(),
             guidance:
-              "Goal mode active. Keep working until complete audit passes; harness may auto-continue while active.",
+              "Goal active. Keep dense shell work on remaining surface. complete is gated until continuations+stalls+audit_notes.",
           });
         } catch (e) {
           return textResult(`error: ${e instanceof Error ? e.message : String(e)}`);
@@ -71,21 +74,44 @@ export function createGoalTool(runtime: ToolRuntime): ToolDefinition<any> {
       }
 
       if (op === "complete") {
-        const g = goals.complete(params.id != null ? String(params.id) : undefined);
-        if (!g) return textResult("error: no active goal to complete");
+        const result = goals.tryComplete({
+          id: params.id != null ? String(params.id) : undefined,
+          auditNotes: params.audit_notes != null ? String(params.audit_notes) : undefined,
+          remainingUnsolved:
+            params.remaining_unsolved != null ? Number(params.remaining_unsolved) : undefined,
+        });
+        if (!result.ok) {
+          await runtime.platform.send({
+            type: "goal_updated",
+            conversation_id: runtime.task.conversationId,
+            task_id: runtime.task.taskId,
+            op: "complete_rejected",
+            blockers: result.blockers,
+            goal: result.goal,
+            open_count: goals.snapshot().openCount,
+          });
+          return jsonResult({
+            ok: false,
+            error: result.error,
+            blockers: result.blockers,
+            progress: goals.snapshot().progress,
+            summary: goals.formatForPrompt(),
+            guidance: "Keep working the full objective with dense shell; do not shrink success criteria.",
+          });
+        }
         await runtime.platform.send({
           type: "goal_updated",
           conversation_id: runtime.task.conversationId,
           task_id: runtime.task.taskId,
           op: "complete",
-          goal: g,
-          open_count: goals.snapshot().openCount,
+          goal: result.goal,
+          open_count: 0,
         });
         return jsonResult({
           ok: true,
-          goal: g,
+          goal: result.goal,
           summary: goals.formatForPrompt(),
-          guidance: "Goal marked complete. Auto-continuation stops. You may stop with no tools.",
+          guidance: "Goal complete accepted. Auto-continuation stops.",
         });
       }
 
@@ -133,13 +159,24 @@ export function createGoalTool(runtime: ToolRuntime): ToolDefinition<any> {
         }
       }
 
-      // Compat: update status on mode goal
       if (op === "update") {
         const status = params.status != null ? String(params.status).toLowerCase() : "";
         if (status === "done" || status === "complete") {
-          const g = goals.complete(params.id != null ? String(params.id) : undefined);
-          if (!g) return textResult("error: no goal");
-          return jsonResult({ ok: true, goal: g, summary: goals.formatForPrompt() });
+          const result = goals.tryComplete({
+            id: params.id != null ? String(params.id) : undefined,
+            auditNotes: params.audit_notes != null ? String(params.audit_notes) : undefined,
+            remainingUnsolved:
+              params.remaining_unsolved != null ? Number(params.remaining_unsolved) : undefined,
+          });
+          if (!result.ok) {
+            return jsonResult({
+              ok: false,
+              error: result.error,
+              blockers: result.blockers,
+              summary: goals.formatForPrompt(),
+            });
+          }
+          return jsonResult({ ok: true, goal: result.goal, summary: goals.formatForPrompt() });
         }
         if (status === "dropped" || status === "drop") {
           const g = goals.drop(params.id != null ? String(params.id) : undefined);

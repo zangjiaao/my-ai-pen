@@ -156,7 +156,8 @@ export async function runNode4Task(
   const maxContinues = Math.max(0, Number(process.env.NODE4_MAX_CONTINUES ?? 16));
   const maxEmptyStopStreak = Math.max(0, Number(process.env.NODE4_MAX_EMPTY_STOPS ?? 1));
   const maxPrematureStops = Math.max(0, Number(process.env.NODE4_MAX_PREMATURE_STOPS ?? 3));
-  const maxGoalContinues = Math.max(0, Number(process.env.NODE4_MAX_GOAL_CONTINUES ?? 12));
+  // Allow enough goal pushes to cover multi-level CTF tails without empty thrash.
+  const maxGoalContinues = Math.max(0, Number(process.env.NODE4_MAX_GOAL_CONTINUES ?? 16));
   let continueCount = 0;
   let emptyStopStreak = 0;
   let bookingContinueUsed = false;
@@ -220,6 +221,15 @@ export async function runNode4Task(
 
     const evidenceList = await runtime.evidence.list().catch(() => []);
     const bookedSoFar = await loadConfirmedFindings(runtime.findingsDir).catch(() => ({ count: 0 }));
+    // Feed goal complete-gates (stall / progress) before deciding continue.
+    if (goals.isActive()) {
+      goals.noteSegmentProgress({
+        bookedFindings: bookedSoFar.count,
+        evidenceCount: evidenceList.length,
+        toolsInSegment: toolsInLast,
+        goalContinueCount,
+      });
+    }
     const bookingSnap =
       pack.bookingMode === "finding"
         ? {
@@ -257,7 +267,10 @@ export async function runNode4Task(
 
     if (decision.kind === "booking_gap") bookingContinueUsed = true;
     if (decision.kind === "premature") prematureStopCount += 1;
-    if (decision.kind === "goal") goalContinueCount += 1;
+    if (decision.kind === "goal") {
+      goalContinueCount += 1;
+      goals.setGoalContinueCount(goalContinueCount);
+    }
     continueCount = decision.nextContinueCount;
     segmentCounter.tools = 0;
     runtime.lifecycle.toolsInLastSegment = 0;

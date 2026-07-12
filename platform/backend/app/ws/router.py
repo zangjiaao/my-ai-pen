@@ -1716,8 +1716,9 @@ def _looks_like_continue_request(text: str) -> bool:
 # Default objective when UI enables goal mode without custom text (not NLP on free text).
 DEFAULT_GOAL_OBJECTIVE = (
     "Within authorized scope, maximize verified findings, flags, and challenge unlocks "
-    "with evidence-backed booking. Call goal complete only after auditing that remaining "
-    "surface cannot be productively advanced."
+    "with evidence-backed booking. Enumerate challenges/modules yourself. "
+    "Do not mark goal complete until remaining items from your recon are solved or proven blocked; "
+    "goal complete requires audit_notes and harness progress gates (continuations + no-progress stalls)."
 )
 
 

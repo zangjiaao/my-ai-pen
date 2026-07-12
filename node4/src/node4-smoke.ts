@@ -317,14 +317,32 @@ async function main() {
   assert(clampTimeoutSec(999) === 600, "shell timeout clamp max");
   assert(PENTEST_ROLE_PACK.workLines.some((l) => /shell-first|in-loop/i.test(l)), "pack encodes in-loop shell-first");
 
-  // OMP-style goal mode
+  // OMP-style goal mode + complete gates
   const goals = new GoalStore();
   const g1 = goals.create({ objective: "Map attack surface and book proven issues" });
   assert(g1.status === "active" && goals.isActive(), "goal active");
   goals.attachSubagent(g1.id, "sub_test");
   assert(goals.get(g1.id)!.subagentIds.includes("sub_test"), "goal attach subagent");
-  goals.complete(g1.id);
-  assert(!goals.isActive() && goals.snapshot().openCount === 0, "complete clears active");
+  // Early complete must fail (no continuations / stalls / audit)
+  const early = goals.tryComplete({ auditNotes: "short" });
+  assert(!early.ok, "early complete rejected");
+  goals.noteSegmentProgress({ bookedFindings: 0, evidenceCount: 1, toolsInSegment: 5, goalContinueCount: 0 });
+  const early2 = goals.tryComplete({
+    auditNotes: "x".repeat(100),
+    remainingUnsolved: 3,
+  });
+  assert(!early2.ok && early2.blockers.some((b) => b.includes("remaining_unsolved") || b.includes("goal_continuation")), "complete blocked while unsolved/gates");
+  // Simulate two goal continues + two no-progress segments
+  goals.setGoalContinueCount(2);
+  goals.noteSegmentProgress({ bookedFindings: 5, evidenceCount: 10, toolsInSegment: 3, goalContinueCount: 2 });
+  goals.noteSegmentProgress({ bookedFindings: 5, evidenceCount: 10, toolsInSegment: 2, goalContinueCount: 2 });
+  goals.noteSegmentProgress({ bookedFindings: 5, evidenceCount: 11, toolsInSegment: 1, goalContinueCount: 2 });
+  const okComplete = goals.tryComplete({
+    auditNotes:
+      "Audited remaining levels: no further shell approaches succeed on L8/L9 residuals; evidence reviewed.",
+    remainingUnsolved: 0,
+  });
+  assert(okComplete.ok && !goals.isActive(), `complete after gates: ${JSON.stringify(okComplete)}`);
   // New goal after complete
   goals.create({ objective: "Still open later long-task" });
   assert(goals.isActive() && goals.snapshot().openCount === 1, "goal active again");
@@ -355,7 +373,6 @@ async function main() {
     goalContinueCount: 12,
     maxGoalContinues: 12,
   });
-  assert(!goalCap.continue || goalCap.reason === "natural_stop_after_tools" || goalCap.reason === "max_continues" || !goalCap.continue, "goal continue capped");
   assert(!goalCap.continue, `goal continue exhausted: ${JSON.stringify(goalCap)}`);
 
   // Shell process group (per-tool timeout only — no session wall)
@@ -456,8 +473,15 @@ async function main() {
   // Goal tool (already created above — list/get)
   const glist = JSON.parse(textOf(await exec(createGoalTool(runtime), "g2", { op: "list" })));
   assert((glist.openCount ?? glist.open_count) >= 1 && glist.active === true, "goal list active");
-  await exec(createGoalTool(runtime), "g3", { op: "complete" });
-  assert(!goalStore.isActive(), "goal tool complete deactivates");
+  // complete without gates must fail
+  const rej = JSON.parse(
+    textOf(await exec(createGoalTool(runtime), "g3", { op: "complete", audit_notes: "too short" })),
+  );
+  assert(rej.ok === false, "goal tool rejects early complete");
+  assert(goalStore.isActive(), "still active after reject");
+  // force path via store for settle tests
+  goalStore.tryComplete({ force: true });
+  assert(!goalStore.isActive(), "force complete deactivates");
   // recreate for settle-with-open-goal assertion later
   const gOpen = goalStore.create({ objective: "May remain open at settle" });
 
