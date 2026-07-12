@@ -317,29 +317,46 @@ async function main() {
   assert(clampTimeoutSec(999) === 600, "shell timeout clamp max");
   assert(PENTEST_ROLE_PACK.workLines.some((l) => /shell-first|in-loop/i.test(l)), "pack encodes in-loop shell-first");
 
-  // OMP-style goal mode + complete gates
+  // OMP-style goal mode + complete gates (full-clearance oriented)
   const goals = new GoalStore();
   const g1 = goals.create({ objective: "Map attack surface and book proven issues" });
   assert(g1.status === "active" && goals.isActive(), "goal active");
   goals.attachSubagent(g1.id, "sub_test");
   assert(goals.get(g1.id)!.subagentIds.includes("sub_test"), "goal attach subagent");
-  // Early complete must fail (no continuations / stalls / audit)
+  // Early complete must fail (no continuations / stalls / audit / remaining_unsolved)
   const early = goals.tryComplete({ auditNotes: "short" });
   assert(!early.ok, "early complete rejected");
+  assert(
+    early.blockers.some((b) => b.includes("remaining_unsolved") || b.includes("audit_notes")),
+    "early complete names required fields",
+  );
   goals.noteSegmentProgress({ bookedFindings: 0, evidenceCount: 1, toolsInSegment: 5, goalContinueCount: 0 });
   const early2 = goals.tryComplete({
-    auditNotes: "x".repeat(100),
+    auditNotes: "x".repeat(130),
     remainingUnsolved: 3,
   });
-  assert(!early2.ok && early2.blockers.some((b) => b.includes("remaining_unsolved") || b.includes("goal_continuation")), "complete blocked while unsolved/gates");
-  // Simulate two goal continues + two no-progress segments
-  goals.setGoalContinueCount(2);
-  goals.noteSegmentProgress({ bookedFindings: 5, evidenceCount: 10, toolsInSegment: 3, goalContinueCount: 2 });
-  goals.noteSegmentProgress({ bookedFindings: 5, evidenceCount: 10, toolsInSegment: 2, goalContinueCount: 2 });
-  goals.noteSegmentProgress({ bookedFindings: 5, evidenceCount: 11, toolsInSegment: 1, goalContinueCount: 2 });
+  assert(
+    !early2.ok &&
+      early2.blockers.some((b) => b.includes("remaining_unsolved") || b.includes("goal_continuation")),
+    "complete blocked while unsolved/gates",
+  );
+  // Omit remaining_unsolved even with long audit — still rejected
+  const omitRem = goals.tryComplete({ auditNotes: "x".repeat(130) });
+  assert(
+    !omitRem.ok && omitRem.blockers.some((b) => b.includes("remaining_unsolved")),
+    "remaining_unsolved required",
+  );
+  // Simulate enough goal continues + no-progress segments for defaults (3+3)
+  goals.setGoalContinueCount(3);
+  goals.noteSegmentProgress({ bookedFindings: 5, evidenceCount: 10, toolsInSegment: 3, goalContinueCount: 3 });
+  goals.noteSegmentProgress({ bookedFindings: 5, evidenceCount: 10, toolsInSegment: 2, goalContinueCount: 3 });
+  goals.noteSegmentProgress({ bookedFindings: 5, evidenceCount: 11, toolsInSegment: 1, goalContinueCount: 3 });
+  goals.noteSegmentProgress({ bookedFindings: 5, evidenceCount: 12, toolsInSegment: 1, goalContinueCount: 3 });
+  // ensure ≥3 stalls with no finding/evidence jump ≥3
+  goals.noteSegmentProgress({ bookedFindings: 5, evidenceCount: 12, toolsInSegment: 1, goalContinueCount: 3 });
   const okComplete = goals.tryComplete({
     auditNotes:
-      "Audited remaining levels: no further shell approaches succeed on L8/L9 residuals; evidence reviewed.",
+      "Audited remaining levels from recon: L residual approaches exhausted after encoding/auth rotations; no further shell path.",
     remainingUnsolved: 0,
   });
   assert(okComplete.ok && !goals.isActive(), `complete after gates: ${JSON.stringify(okComplete)}`);

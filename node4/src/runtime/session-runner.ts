@@ -194,7 +194,7 @@ export async function runNode4Task(
     goals.formatForPrompt(),
     "",
     `Role pack: ${pack.id}. OMP essence: keep tool-calling in-loop; shell-first multi-step + multi-call same turn; http is single-probe only.`,
-    "Long multi-challenge work: call goal(op=create, objective=...) early so the harness can auto-continue (OMP goal mode) until you complete/drop after a real audit.",
+    "Long multi-challenge work: call goal(op=create, objective=...) early so the harness can auto-continue (OMP goal mode) until full clearance — complete only with remaining_unsolved=0 after real audit (partial wins are not done).",
     pack.bookingMode === "finding"
       ? "Book via finding(confirm)+evidence_ids (batch after a shell burst). When truly stuck after dense shell work, stop with no tools — no finish tool; harness settles."
       : "This pack does not book findings. When finished, simply stop — harness settles.",

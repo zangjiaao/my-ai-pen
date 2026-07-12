@@ -62,9 +62,10 @@ export function goalCompleteGatesFromEnv(): {
   minAuditChars: number;
 } {
   return {
-    minGoalContinues: Math.max(0, Number(process.env.NODE4_GOAL_MIN_CONTINUES ?? 2)),
-    minStalls: Math.max(0, Number(process.env.NODE4_GOAL_MIN_STALLS ?? 2)),
-    minAuditChars: Math.max(20, Number(process.env.NODE4_GOAL_MIN_AUDIT_CHARS ?? 80)),
+    // Defaults favor multi-level maximize runs (CTF/DVWA tails need several outer pushes).
+    minGoalContinues: Math.max(0, Number(process.env.NODE4_GOAL_MIN_CONTINUES ?? 3)),
+    minStalls: Math.max(0, Number(process.env.NODE4_GOAL_MIN_STALLS ?? 3)),
+    minAuditChars: Math.max(20, Number(process.env.NODE4_GOAL_MIN_AUDIT_CHARS ?? 120)),
   };
 }
 
@@ -161,22 +162,27 @@ export class GoalStore {
     const audit = String(opts?.auditNotes || "").trim();
     if (audit.length < gates.minAuditChars) {
       blockers.push(
-        `audit_notes required (≥${gates.minAuditChars} chars) listing remaining challenges/hypotheses and why each is blocked`,
+        `audit_notes required (≥${gates.minAuditChars} chars): re-list every challenge/level from YOUR recon, mark solved vs blocked, and why each residual is exhausted`,
       );
     }
     if (g.goalContinueCount < gates.minGoalContinues) {
       blockers.push(
-        `need at least ${gates.minGoalContinues} harness goal_continuation(s) before complete (have ${g.goalContinueCount}); keep working — do not shrink the objective`,
+        `need at least ${gates.minGoalContinues} harness goal_continuation(s) before complete (have ${g.goalContinueCount}); keep working the FULL objective — do not shrink success to easy wins`,
       );
     }
     if (g.segmentsWithoutProgress < gates.minStalls) {
       blockers.push(
-        `need ${gates.minStalls} consecutive no-progress segments after pushes (have ${g.segmentsWithoutProgress}); try other categories/levels with dense shell`,
+        `need ${gates.minStalls} consecutive no-progress segments after pushes (have ${g.segmentsWithoutProgress}); rotate techniques on stalled items and attack remaining levels from your recon`,
       );
     }
-    if (opts?.remainingUnsolved != null && Number(opts.remainingUnsolved) > 0) {
+    // remaining_unsolved is required (agent's own recon count) — omit is not "done".
+    if (opts?.remainingUnsolved == null || !Number.isFinite(Number(opts.remainingUnsolved))) {
       blockers.push(
-        `remaining_unsolved=${opts.remainingUnsolved} > 0 — keep attacking remaining items from your own recon`,
+        "remaining_unsolved is required: set to your recon count of unfinished challenges; use 0 only after every enumerated item is solved or proven blocked",
+      );
+    } else if (Number(opts.remainingUnsolved) > 0) {
+      blockers.push(
+        `remaining_unsolved=${opts.remainingUnsolved} > 0 — keep attacking remaining items from your own recon; do not complete partial maximize runs`,
       );
     }
     return blockers;
@@ -252,12 +258,13 @@ export class GoalStore {
 
   snapshot(): GoalSnapshot {
     const mode = this.getMode();
-    const blockers = this.completeBlockers({ auditNotes: "x".repeat(200), force: false });
-    // canComplete ignores audit for display — show structural readiness
+    // Structural readiness assumes agent will supply long audit + remaining_unsolved=0.
     const structural = mode
-      ? this.completeBlockers({ auditNotes: "x".repeat(200), force: false }).filter(
-          (b) => !b.startsWith("audit_notes"),
-        )
+      ? this.completeBlockers({
+          auditNotes: "x".repeat(200),
+          remainingUnsolved: 0,
+          force: false,
+        }).filter((b) => !b.startsWith("audit_notes") && !b.startsWith("remaining_unsolved"))
       : ["no active goal"];
     return {
       mode,
@@ -284,16 +291,17 @@ export class GoalStore {
       const blockers = this.completeBlockers({ force: false });
       return [
         "<goal_context>",
-        "Goal mode is active. Treat the objective as the full task (do not shrink it).",
+        "Goal mode is active. Treat the objective as the FULL task (do not shrink to easy wins).",
         `<objective>\n${g.objective}\n</objective>`,
         `status: active; id: ${g.id}`,
         `progress: booked_findings=${g.lastBookedFindingCount} evidence=${g.lastEvidenceCount} stalls=${g.segmentsWithoutProgress} goal_continues=${g.goalContinueCount}`,
-        `complete_gates: min_goal_continues=${gates.minGoalContinues} min_stalls=${gates.minStalls} (complete rejected until gates pass + audit_notes)`,
+        `complete_gates: min_goal_continues=${gates.minGoalContinues} min_stalls=${gates.minStalls} audit_chars≥${gates.minAuditChars}; remaining_unsolved must be 0`,
         blockers.length
           ? `complete_blockers_now: ${blockers.join(" | ")}`
-          : "complete_gates: structural ok — still require detailed audit_notes",
-        "Keep attacking remaining levels/categories from YOUR recon with dense shell. NEVER redefine success around easy wins only.",
-        "goal(op=complete) requires audit_notes; remaining_unsolved>0 is rejected.",
+          : "complete_gates: structural ok — still require detailed audit_notes + remaining_unsolved=0",
+        "Keep attacking remaining levels/categories from YOUR recon with dense shell until every enumerated item is solved or proven blocked.",
+        "goal(op=complete) requires audit_notes AND remaining_unsolved=0; incomplete maximize runs are rejected.",
+        "Do not goal(drop) to soft-exit a maximize objective — finish residual levels first.",
         "Harness auto-continues while active. There is no finish tool.",
         "</goal_context>",
       ].join("\n");
@@ -304,17 +312,25 @@ export class GoalStore {
 
 /** OMP-like hidden continuation after agent_end while goal still active. */
 export function buildGoalContinuationPrompt(goal: ModeGoal): string {
+  const stallHint =
+    goal.segmentsWithoutProgress > 0
+      ? `You have ${goal.segmentsWithoutProgress} no-progress segment(s). Rotate techniques on stalled challenges (encoding, auth path, alternate params, source/JS recon, multi-step shell pipelines) — do not re-run the same single probe.`
+      : `Findings are still growing or a fresh push just started — keep dense shell on the next unfinished item from your recon.`;
   return [
     `<system-injection customType="goal-continuation">`,
     `Continue work on the active goal (harness goal_continuation #${goal.goalContinueCount + 1}).`,
     `<objective>`,
     goal.objective,
     `</objective>`,
-    `Progress so far (harness): booked_findings≈${goal.lastBookedFindingCount}, no_progress_segments=${goal.segmentsWithoutProgress}.`,
-    `NEVER redefine success around a smaller subset. Keep going after remaining challenges/levels from your own enumeration.`,
-    `Prefer high-density shell (multi-step pipelines; multiple shell calls same turn). Do not spam single http probes.`,
-    `goal(op=complete) will be REJECTED until: (1) enough goal_continuations, (2) several no-progress segments, (3) long audit_notes, (4) remaining_unsolved is 0 or omitted.`,
-    `If unfinished: just keep working. Do not only narrate. Book new flags/vulns with finding(confirm)+evidence_ids.`,
+    `Progress so far (harness): booked_findings≈${goal.lastBookedFindingCount}, evidence≈${goal.lastEvidenceCount}, no_progress_segments=${goal.segmentsWithoutProgress}.`,
+    stallHint,
+    `Mandatory this segment:`,
+    `1) Mentally re-list every level/challenge you already discovered; pick ONE unfinished item and attack it with dense shell now.`,
+    `2) Prefer multi-step shell pipelines and multiple shell calls in the same turn. Do not spam single http probes.`,
+    `3) Book any new flag/vuln with finding(confirm)+evidence_ids immediately.`,
+    `4) Do NOT call goal(complete) unless remaining_unsolved=0 after a full re-enumeration of your recon (and gates pass). Do not drop the goal to soft-exit.`,
+    `NEVER redefine success around a smaller subset of easy wins. Partial clearance is not done.`,
+    `If unfinished: just keep working. Do not only narrate.`,
     `There is no finish tool.`,
     `</system-injection>`,
   ].join("\n");

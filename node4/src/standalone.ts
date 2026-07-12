@@ -28,7 +28,7 @@ async function main(): Promise<void> {
   const goalObjective = args["goal-objective"]?.trim()
     ? args["goal-objective"].trim()
     : goalMode
-      ? "Within authorized scope, maximize verified findings, flags, and challenge unlocks with evidence-backed booking. Enumerate challenges yourself. Do not complete until remaining recon items are solved or proven blocked; complete needs audit_notes and harness gates."
+      ? "Within authorized scope, maximize verified findings, flags, and challenge unlocks with evidence-backed booking. Enumerate challenges yourself. Do not complete until remaining recon items are solved or proven blocked; complete needs audit_notes, remaining_unsolved=0, and harness gates. Partial clearance is not done."
       : undefined;
   const task: TaskEnvelope = {
     taskId,

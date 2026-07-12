@@ -1718,7 +1718,8 @@ DEFAULT_GOAL_OBJECTIVE = (
     "Within authorized scope, maximize verified findings, flags, and challenge unlocks "
     "with evidence-backed booking. Enumerate challenges/modules yourself. "
     "Do not mark goal complete until remaining items from your recon are solved or proven blocked; "
-    "goal complete requires audit_notes and harness progress gates (continuations + no-progress stalls)."
+    "partial clearance is not done. Complete requires audit_notes, remaining_unsolved=0, "
+    "and harness progress gates (continuations + no-progress stalls)."
 )
 
 

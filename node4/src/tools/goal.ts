@@ -15,8 +15,9 @@ export function createGoalTool(runtime: ToolRuntime): ToolDefinition<any> {
       "OMP-style long-task goal mode (single active objective).",
       "Ops: create|get|complete|drop|resume|pause|list.",
       "create: objective (required), token_budget?.",
-      "complete: requires audit_notes; rejected until harness goal_continuations + no-progress stalls pass.",
-      "remaining_unsolved>0 is always rejected — keep working remaining items from your recon.",
+      "complete: requires audit_notes + remaining_unsolved=0; rejected until harness goal_continuations + no-progress stalls pass.",
+      "remaining_unsolved is required; >0 always rejected — keep working remaining items from your recon until full clearance.",
+      "Do not drop a maximize objective to soft-exit partial progress.",
       "While active the harness auto-continues after natural stops (capped).",
     ].join(" "),
     parameters: Type.Object({
@@ -90,14 +91,18 @@ export function createGoalTool(runtime: ToolRuntime): ToolDefinition<any> {
             goal: result.goal,
             open_count: goals.snapshot().openCount,
           });
-          return jsonResult({
-            ok: false,
-            error: result.error,
-            blockers: result.blockers,
-            progress: goals.snapshot().progress,
-            summary: goals.formatForPrompt(),
-            guidance: "Keep working the full objective with dense shell; do not shrink success criteria.",
-          });
+          return jsonResult(
+            {
+              ok: false,
+              error: result.error,
+              blockers: result.blockers,
+              progress: goals.snapshot().progress,
+              summary: goals.formatForPrompt(),
+              guidance:
+                "COMPLETE REJECTED. Keep dense shell on remaining items from YOUR recon until remaining_unsolved=0 and gates pass. Do not shrink the objective; do not only narrate.",
+            },
+            { isError: true },
+          );
         }
         await runtime.platform.send({
           type: "goal_updated",
@@ -169,12 +174,16 @@ export function createGoalTool(runtime: ToolRuntime): ToolDefinition<any> {
               params.remaining_unsolved != null ? Number(params.remaining_unsolved) : undefined,
           });
           if (!result.ok) {
-            return jsonResult({
-              ok: false,
-              error: result.error,
-              blockers: result.blockers,
-              summary: goals.formatForPrompt(),
-            });
+            return jsonResult(
+              {
+                ok: false,
+                error: result.error,
+                blockers: result.blockers,
+                summary: goals.formatForPrompt(),
+                guidance: "COMPLETE REJECTED — keep working remaining recon items with dense shell.",
+              },
+              { isError: true },
+            );
           }
           return jsonResult({ ok: true, goal: result.goal, summary: goals.formatForPrompt() });
         }
