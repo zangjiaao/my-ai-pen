@@ -210,7 +210,7 @@ function deriveLeverage(shapes: CtfAuditShellShape, tools: CtfAuditToolCounts): 
     recs.push("session tool: multi-step HTTP with cookie jar + history (replace curl -b/-c chains)");
   }
   if (shapes.gopher > 0 || shapes.python > 0) {
-    recs.push("recipes: documented non-answer CTF scripts (ssrf-gopher, multi-step login) under recipes/ctf");
+    recs.push("recipes: documented non-answer CTF scripts under experts/ctf/recipes (after pack install)");
   }
   recs.push("skills: ctf-web-recon, ctf-flag-verify, ctf-stuck-rotation (load on demand)");
   if (!tools.session) recs.push("wire session into ctf pack toolNames");

@@ -12,7 +12,7 @@
 | Pack id | `ctf` (distinct from `pentest`) |
 | Tools | todo, shell, fs, http, **session** (multi-actor), **browser**, **captcha**, script, finding, subagent, goal, **skill** |
 | Skills | `ctf-web-recon`, `ctf-flag-verify`, `ctf-stuck-rotation` (list/load; not dumped into system prompt) |
-| Recipes | `node4/recipes/ctf/` non-answer templates |
+| Recipes | `experts/ctf/recipes/` non-answer templates (with pack) |
 | Default goal | Maximize unique flags; partial clearance is not done |
 
 ## Session tool (dual identity)

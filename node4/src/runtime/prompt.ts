@@ -27,7 +27,11 @@ export function buildSystemPrompt(
     );
   }
   if (pack.recipeDir) {
-    lines.push(`Recipes (non-answer templates): ${pack.recipeDir}/ — copy into task scripts/ or follow session examples.`);
+    const root = (pack as { packRoot?: string }).packRoot;
+    const recipePath = root ? `${root}/${pack.recipeDir}` : `experts/<pack>/${pack.recipeDir}`;
+    lines.push(
+      `Recipes (non-answer templates): ${recipePath} — copy into task scripts/ or follow session examples.`,
+    );
   }
   lines.push(
     "Stay in authorized scope.",
