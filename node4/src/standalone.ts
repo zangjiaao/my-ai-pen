@@ -30,6 +30,12 @@ async function main(): Promise<void> {
     : goalMode
       ? "Within authorized scope, maximize verified findings, flags, and challenge unlocks with evidence-backed booking. Enumerate challenges yourself. Do not complete until remaining recon items are solved or proven blocked; complete needs audit_notes, remaining_unsolved=0, and harness gates. Partial clearance is not done."
       : undefined;
+  // No default engagement → bare OMP runtime when no expert pack is installed.
+  // Pass --engagement pentest|ctf|… only after `expert-cli install <id>`.
+  // --engagement runtime (or bare) forces bare pack even if experts are installed.
+  const rawEng = (args.engagement || args.role || "").trim();
+  const engagement =
+    !rawEng || rawEng === "bare" || rawEng === "runtime" ? undefined : rawEng;
   const task: TaskEnvelope = {
     taskId,
     conversationId: args["conversation-id"] || taskId,
@@ -38,8 +44,8 @@ async function main(): Promise<void> {
       `Authorized security test of ${target}. Use todo → shell/http/script → finding(confirm)+evidence. Use subagent for separable packages. No finish tool; harness ends the session.`,
     target: { type: "url", value: target },
     scope: { allow: (args.scope || target).split(",").map((s) => s.trim()).filter(Boolean) },
-    engagement: args.engagement || args.role || "pentest",
-    role: args.role,
+    engagement,
+    role: args.role && args.role !== "bare" && args.role !== "runtime" ? args.role : undefined,
     goalObjective,
   };
   if (args.output) config.workspaceDir = resolve(args.output);
