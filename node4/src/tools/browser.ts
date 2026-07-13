@@ -1,13 +1,19 @@
 /**
- * Browser tool — host agent-browser CLI (assistive eyes for SPA/login/captcha UI).
- * Cookies can be exported into session actor jars for dual-identity HTTP replay.
+ * Browser tool — prefer Docker strix-sandbox agent-browser (Node2/3 class);
+ * host agent-browser only as fallback when sandbox cannot start.
+ * Cookies export into session actor jars for dual-identity HTTP replay.
  */
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { parseCookiesJson, runAgentBrowser } from "../runtime/agent-browser-cli.js";
+import { parseCookiesJson } from "../runtime/agent-browser-cli.js";
+import {
+  rewriteUrlForSandbox,
+  runBrowserCommand,
+  stopBrowserSandbox,
+} from "../runtime/browser-sandbox.js";
 import type { ToolRuntime } from "../types.js";
 import { emitEvidence, isInScope, jsonResult, resolveTargetUrl, textResult } from "./common.js";
 
@@ -31,12 +37,13 @@ export function createBrowserTool(runtime: ToolRuntime): ToolDefinition<any> {
     name: "browser",
     label: "Browser",
     description: [
-      "Real browser automation via agent-browser (host Chromium).",
+      "Real browser automation via agent-browser.",
+      "Default: Docker strix-sandbox (isolated Chromium + deps). Host fallback if sandbox unavailable.",
       `Actions: ${ACTIONS.join(", ")}.`,
       "Use for JS-heavy pages, captcha UI, stored XSS verification, multi-step forms.",
       "Workflow: open → snapshot -i → click/fill @refs → re-snapshot.",
       "export_cookies: write browser cookies into session actor jar (default actor=browser) for dual-identity HTTP.",
-      "Does not restrict you — when browser is unavailable the error explains install steps; shell remains available.",
+      "Does not restrict shell — when browser fails, error includes setup hints.",
     ].join(" "),
     parameters: Type.Object({
       action: Type.String(),
@@ -45,7 +52,6 @@ export function createBrowserTool(runtime: ToolRuntime): ToolDefinition<any> {
       text: Type.Optional(Type.String()),
       key: Type.Optional(Type.String()),
       path: Type.Optional(Type.String()),
-      /** Target session actor when exporting cookies (default: browser). */
       actor: Type.Optional(Type.String()),
       interactive: Type.Optional(Type.Boolean()),
       full_page: Type.Optional(Type.Boolean()),
@@ -58,18 +64,16 @@ export function createBrowserTool(runtime: ToolRuntime): ToolDefinition<any> {
 
       await mkdir(join(runtime.taskDir, "browser"), { recursive: true });
       const run = (args: string[], timeoutMs?: number) =>
-        runAgentBrowser(args, {
-          taskId: runtime.task.taskId,
-          taskDir: runtime.taskDir,
-          timeoutMs,
-        });
+        runBrowserCommand(runtime, args, timeoutMs);
 
       if (action === "close") {
         const r = await run(["close"], 30_000);
+        await stopBrowserSandbox(runtime.task.taskId).catch(() => {});
         return jsonResult({
           ok: r.exitCode === 0,
           action: "close",
-          text: (r.stdout || r.stderr || r.error || "").slice(0, 2000),
+          via: r.via,
+          text: (r.text || r.error || "").slice(0, 2000),
         });
       }
 
@@ -82,25 +86,35 @@ export function createBrowserTool(runtime: ToolRuntime): ToolDefinition<any> {
           return textResult(`error: ${e instanceof Error ? e.message : String(e)}`);
         }
         if (!isInScope(runtime, url)) return textResult(`error: out of scope: ${url}`);
-        const opened = await run(["open", url], 120_000);
-        if (opened.unavailable) return textResult(`error: ${opened.error}`);
-        if (opened.exitCode !== 0 && !/https?:\/\//i.test(opened.stdout + opened.stderr)) {
+        // Container reaches host services via host.docker.internal
+        const openUrl = rewriteUrlForSandbox(url);
+        const opened = await run(["open", openUrl], 120_000);
+        if (opened.unavailable) {
           return textResult(
-            `error: browser open failed: ${(opened.error || opened.stderr || opened.stdout).slice(0, 800)}`,
+            `error: browser unavailable: ${opened.error || "no docker/host agent-browser"}. Prefer Docker image ghcr.io/usestrix/strix-sandbox:1.0.0 (NODE4_BROWSER_SANDBOX=1). Host needs: agent-browser install --with-deps`,
+          );
+        }
+        if (opened.exitCode !== 0 && !/https?:\/\//i.test(opened.text)) {
+          return textResult(
+            `error: browser open failed (via=${opened.via}): ${opened.text.slice(0, 800) || opened.error}`,
           );
         }
         await run(["wait", "800"], 15_000);
         const snap = await run(["snapshot", "-i"], 60_000);
         const evidenceId = await emitEvidence(runtime, "browser", `browser open ${url}`, {
           url,
-          snapshot: snap.stdout.slice(0, 12_000),
-          cli: opened.stdout.slice(0, 2000),
+          open_url: openUrl,
+          via: opened.via,
+          snapshot: snap.text.slice(0, 12_000),
+          cli: opened.text.slice(0, 2000),
         });
         return jsonResult({
           ok: true,
           action: "open",
           url,
-          snapshot: snap.stdout.slice(0, 12_000),
+          open_url: openUrl,
+          via: opened.via,
+          snapshot: snap.text.slice(0, 12_000),
           evidence_id: evidenceId,
           guidance: "Use refs like @e3 from snapshot for click/fill. Re-snapshot after navigation.",
         });
@@ -112,12 +126,14 @@ export function createBrowserTool(runtime: ToolRuntime): ToolDefinition<any> {
         const r = await run(args, 60_000);
         if (r.unavailable) return textResult(`error: ${r.error}`);
         const evidenceId = await emitEvidence(runtime, "browser", "browser snapshot", {
-          snapshot: r.stdout.slice(0, 16_000),
+          via: r.via,
+          snapshot: r.text.slice(0, 16_000),
         });
         return jsonResult({
-          ok: r.exitCode === 0 || r.stdout.length > 0,
+          ok: r.exitCode === 0 || r.text.length > 0,
           action: "snapshot",
-          snapshot: r.stdout.slice(0, 16_000),
+          via: r.via,
+          snapshot: r.text.slice(0, 16_000),
           evidence_id: evidenceId,
         });
       }
@@ -128,11 +144,12 @@ export function createBrowserTool(runtime: ToolRuntime): ToolDefinition<any> {
         if (r.unavailable) return textResult(`error: ${r.error}`);
         const snap = await run(["snapshot", "-i"], 45_000);
         return jsonResult({
-          ok: r.exitCode === 0 || /click|✓|Done/i.test(r.stdout + r.stderr),
+          ok: r.exitCode === 0 || /click|✓|Done/i.test(r.text),
           action: "click",
+          via: r.via,
           selector: params.selector,
-          cli: (r.stdout || r.stderr).slice(0, 1500),
-          snapshot: snap.stdout.slice(0, 10_000),
+          cli: r.text.slice(0, 1500),
+          snapshot: snap.text.slice(0, 10_000),
         });
       }
 
@@ -142,10 +159,11 @@ export function createBrowserTool(runtime: ToolRuntime): ToolDefinition<any> {
         const r = await run([cmd, String(params.selector), String(params.text ?? "")], 60_000);
         if (r.unavailable) return textResult(`error: ${r.error}`);
         return jsonResult({
-          ok: r.exitCode === 0 || /fill|type|✓|Done/i.test(r.stdout + r.stderr),
+          ok: r.exitCode === 0 || /fill|type|✓|Done/i.test(r.text),
           action,
+          via: r.via,
           selector: params.selector,
-          cli: (r.stdout || r.stderr).slice(0, 1500),
+          cli: r.text.slice(0, 1500),
         });
       }
 
@@ -154,10 +172,11 @@ export function createBrowserTool(runtime: ToolRuntime): ToolDefinition<any> {
         const r = await run(["press", key], 30_000);
         if (r.unavailable) return textResult(`error: ${r.error}`);
         return jsonResult({
-          ok: r.exitCode === 0 || /press|✓|Done/i.test(r.stdout + r.stderr),
+          ok: r.exitCode === 0 || /press|✓|Done/i.test(r.text),
           action: "press",
+          via: r.via,
           key,
-          cli: (r.stdout || r.stderr).slice(0, 1000),
+          cli: r.text.slice(0, 1000),
         });
       }
 
@@ -167,7 +186,7 @@ export function createBrowserTool(runtime: ToolRuntime): ToolDefinition<any> {
           try {
             const u = resolveTargetUrl(runtime, String(params.url));
             if (!isInScope(runtime, u)) return textResult(`error: out of scope: ${u}`);
-            args[1] = u;
+            args[1] = rewriteUrlForSandbox(u);
           } catch (e) {
             return textResult(`error: ${e instanceof Error ? e.message : String(e)}`);
           }
@@ -175,50 +194,62 @@ export function createBrowserTool(runtime: ToolRuntime): ToolDefinition<any> {
         const r = await run(args, 60_000);
         if (r.unavailable) return textResult(`error: ${r.error}`);
         const evidenceId = await emitEvidence(runtime, "browser", "browser read", {
-          text: r.stdout.slice(0, 12_000),
+          via: r.via,
+          text: r.text.slice(0, 12_000),
         });
         return jsonResult({
           ok: true,
           action: "read",
-          text: r.stdout.slice(0, 12_000),
+          via: r.via,
+          text: r.text.slice(0, 12_000),
           evidence_id: evidenceId,
         });
       }
 
       if (action === "screenshot") {
-        const path =
+        // Screenshots inside container: write under /tmp then docker cp is complex;
+        // use agent-browser default path and return CLI text; prefer snapshot when sandbox.
+        const pathHint =
           params.path != null
             ? String(params.path)
             : join(runtime.taskDir, "browser", `shot_${Date.now()}.png`);
         const args = ["screenshot"];
         if (params.selector) args.push(String(params.selector));
-        args.push(path);
+        // In sandbox, path is inside container; keep basename under /tmp
+        const containerPath = `/tmp/n4-shot-${Date.now()}.png`;
+        args.push(containerPath);
         if (params.full_page) args.push("--full");
         const r = await run(args, 60_000);
         if (r.unavailable) return textResult(`error: ${r.error}`);
-        const evidenceId = await emitEvidence(runtime, "browser", `browser screenshot ${path}`, {
-          path,
-          cli: (r.stdout || r.stderr).slice(0, 1500),
+        const evidenceId = await emitEvidence(runtime, "browser", `browser screenshot`, {
+          via: r.via,
+          path_hint: pathHint,
+          container_path: containerPath,
+          cli: r.text.slice(0, 1500),
         });
         return jsonResult({
-          ok: r.exitCode === 0 || /saved|screenshot|png|jpeg/i.test(r.stdout + r.stderr + path),
+          ok: r.exitCode === 0 || /saved|screenshot|png|jpeg/i.test(r.text),
           action: "screenshot",
-          path,
-          cli: (r.stdout || r.stderr).slice(0, 1500),
+          via: r.via,
+          path_hint: pathHint,
+          container_path: r.via === "sandbox" ? containerPath : pathHint,
+          cli: r.text.slice(0, 1500),
           evidence_id: evidenceId,
-          guidance: "Use path with captcha tool or read image offline; for OCR try captcha(op=ocr, image_path=...)",
+          guidance:
+            "For captcha, prefer captcha(fetch,url=image) with session actor, or browser snapshot + interact. OCR via captcha(ocr) if tesseract on host.",
         });
       }
 
       if (action === "cookies") {
         const r = await run(["cookies", "get", "--json"], 30_000);
         if (r.unavailable) return textResult(`error: ${r.error}`);
-        const jar = parseCookiesJson(r.stdout || r.stderr);
+        const jar = parseCookiesJson(r.stdout || r.text);
         return jsonResult({
           ok: true,
           action: "cookies",
+          via: r.via,
           cookies: jar,
-          raw: (r.stdout || "").slice(0, 4000),
+          raw: r.text.slice(0, 4000),
         });
       }
 
@@ -226,32 +257,35 @@ export function createBrowserTool(runtime: ToolRuntime): ToolDefinition<any> {
         const actor = sanitizeActor(params.actor != null ? String(params.actor) : "browser");
         const r = await run(["cookies", "get", "--json"], 30_000);
         if (r.unavailable) return textResult(`error: ${r.error}`);
-        const jar = parseCookiesJson(r.stdout || r.stderr);
+        const jar = parseCookiesJson(r.stdout || r.text);
         const dir = join(runtime.taskDir, "session", "actors", actor);
         await mkdir(dir, { recursive: true });
         const jarPath = join(dir, "cookies.json");
-        // merge with existing actor jar
         let existing: Record<string, string> = {};
         try {
-          const { readFile } = await import("node:fs/promises");
           existing = JSON.parse(await readFile(jarPath, "utf8")) as Record<string, string>;
         } catch {
           existing = {};
         }
         const merged = { ...existing, ...jar };
         await writeFile(jarPath, JSON.stringify(merged, null, 2), "utf8");
-        // also mirror default path if actor is default
         if (actor === "default") {
           await mkdir(join(runtime.taskDir, "session"), { recursive: true });
-          await writeFile(join(runtime.taskDir, "session", "cookies.json"), JSON.stringify(merged, null, 2), "utf8");
+          await writeFile(
+            join(runtime.taskDir, "session", "cookies.json"),
+            JSON.stringify(merged, null, 2),
+            "utf8",
+          );
         }
         const evidenceId = await emitEvidence(runtime, "browser", `export cookies → session actor=${actor}`, {
           actor,
+          via: r.via,
           cookies: merged,
         });
         return jsonResult({
           ok: true,
           action: "export_cookies",
+          via: r.via,
           actor,
           cookies: merged,
           jar_path: jarPath,

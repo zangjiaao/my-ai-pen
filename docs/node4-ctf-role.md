@@ -26,8 +26,12 @@ Audit of real CTF runs showed hundreds of `curl -b/-c` shell turns. Use:
 
 ## Browser + captcha (assist, don’t restrict)
 
-- **browser**: host `agent-browser` (install: `npm i -g agent-browser && agent-browser install`). Actions include open/snapshot/click/fill/screenshot/export_cookies.
-- **captcha**: `fetch` image with actor cookies; `ocr` via tesseract if present (best-effort).
+- **browser (preferred path)**: Docker **strix-sandbox** (`ghcr.io/usestrix/strix-sandbox:1.0.0`) with in-container `agent-browser` — same class as Node2/Node3. Chromium + system deps live in the image; host does not need Chrome libraries.
+  - Env: `NODE4_BROWSER_SANDBOX=1` (default). Set `0` / `host` to force host CLI.
+  - Image override: `NODE4_BROWSER_SANDBOX_IMAGE`.
+- **browser (host fallback)**: `npm i -g agent-browser && agent-browser install` (+ `install --with-deps` if shared libs missing). Used only when sandbox cannot start.
+- Actions: open/snapshot/click/fill/screenshot/export_cookies (cookies → session actor jars).
+- **captcha**: `fetch` image with actor cookies; `ocr` via host tesseract if present (best-effort).
 - If browser/OCR missing, tools return install guidance — agent may still use shell.
 
 ## Offline audit

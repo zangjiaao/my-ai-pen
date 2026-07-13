@@ -43,6 +43,7 @@ import { createSkillTool } from "./tools/skill.js";
 import { createBrowserTool } from "./tools/browser.js";
 import { createCaptchaTool } from "./tools/captcha.js";
 import { parseCookiesJson } from "./runtime/agent-browser-cli.js";
+import { isBrowserSandboxPreferred, rewriteUrlForSandbox } from "./runtime/browser-sandbox.js";
 import { createNode4Tools, NODE4_TOOL_NAMES, toolNamesForPack } from "./tools/index.js";
 import { buildSystemPrompt } from "./runtime/prompt.js";
 import { auditCtfEventsJsonl } from "./runtime/ctf-audit.js";
@@ -680,6 +681,12 @@ async function main() {
   assert(createCaptchaTool(runtime).name === "captcha", "captcha factory");
   assert(parseCookiesJson('[{"name":"a","value":"1"}]').a === "1", "parseCookiesJson array");
   assert(parseCookiesJson("a=1; b=2").b === "2", "parseCookiesJson header");
+  assert(isBrowserSandboxPreferred() === true || process.env.NODE4_BROWSER_SANDBOX, "sandbox preferred by default");
+  assert(
+    rewriteUrlForSandbox("http://127.0.0.1:8080/x").includes("host.docker.internal"),
+    "sandbox rewrites localhost for container",
+  );
+  assert(rewriteUrlForSandbox("http://example.com/").includes("example.com"), "external URL unchanged");
 
   const sessionTool = createSessionTool(runtime);
   const jarGet = JSON.parse(textOf(await exec(sessionTool, "sess1", { op: "jar_get" })));
