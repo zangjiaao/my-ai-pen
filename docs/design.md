@@ -1,6 +1,6 @@
 ---
 name: ai-sec-platform-design
-description: "A security operations console built on a monochrome canvas — white paper, black ink, one weight-graded type family, and severity colors as the only chromatic interruption. The chrome (sidebar, body, inputs, tables) stays rigorously black-and-white; the accent and severity palette earns its place by signaling risk, not decorating. Geist carries the UI voice at fine weight increments; JetBrains Mono speaks for the machine — tool output, code, severity badges. Pill-shaped CTAs, border-based surface elevation, and a confident editorial cadence inherited from Figma's design language."
+description: "A security operations console built on a monochrome canvas — white paper, black ink, one weight-graded type family, and severity colors as the only chromatic interruption. The chrome (sidebar, body, inputs, tables) stays rigorously black-and-white; the accent and severity palette earns its place by signaling risk, not decorating. Geist carries the UI voice at fine weight increments; JetBrains Mono speaks for the machine — tool output, code, severity badges. Pill-shaped CTAs, border-based surface elevation, and a confident editorial cadence inherited from Figma's design language. Product scope: platform UI for the single Node4 runtime (see docs/prd.md)."
 version: "1.0"
 
 colors:

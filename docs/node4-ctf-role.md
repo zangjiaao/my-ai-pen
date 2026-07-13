@@ -47,4 +47,5 @@ Pure parser: `auditCtfEventsJsonl` in `src/runtime/ctf-audit.ts`.
 
 - Platform Goal switch can still supply a custom `goal_objective`; otherwise the pack seeds `defaultGoalObjective`.
 - No challenge answer keys in skills or recipes.
-- Next role (pentest+) can reuse the same pipeline: audit → tools/skills → pack.
+- Selected only when the node **offers** include `ctf` (platform install) and the conversation sets structured `engagement=ctf`.
+- Other roles reuse the same harness; see `docs/node4-harness.md` and `docs/prd.md`. Product runtime is Node4 only.

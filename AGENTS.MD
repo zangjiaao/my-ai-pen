@@ -1,5 +1,9 @@
 # Agent Engineering Rules
 
+**Spec precedence (when documents disagree):** `AGENTS.md` → `docs/prd.md` → `docs/node4-harness.md` → other `docs/*`.  
+**Runtime to maintain:** `node4/` only. Trees `node/`, `node2/`, `node3/` are reference; do not expand product behavior there.  
+**Archived specs** under `docs/archive/` are not implementation authority.
+
 ## No Hardcoded Behavior Without Approval
 
 - Do not hardcode user-visible workflow text, tool progress text, security findings, attack-surface assumptions, coverage conclusions, or product behavior to simulate intelligent agent behavior.

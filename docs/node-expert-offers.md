@@ -62,3 +62,6 @@ On `task_complete`, the platform records audit action `expert.usage` with `billi
 - Gate + usage: `platform/backend/app/ws/router.py`
 - UI: `platform/frontend/src/pages/ConversationPage.tsx`, offers on `NodePage`
 - Tests: `tests/test_expert_offers.py`
+- Role resolution on worker: `node4/src/roles/` (product Node runtime)
+
+Product node line is **Node4 only**; see `docs/prd.md`.

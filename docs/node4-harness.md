@@ -1,26 +1,26 @@
-# Node4 Agent Runtime — OMP-class harness, pentest role
+# Node4 Agent Runtime — OMP-class harness
 
 > **Commercial clean-room design** (no oh-my-pi / OMP source dependency).  
-> Calibrated: 2026-07-12  
-> Role: **penetration testing agent**, not a coding agent.  
-> Runtime: **OMP-class** (shell/write/edit/todo/continue/long session).  
+> Calibrated: 2026-07-13  
+> **This is the only product Node runtime.** Code lives in `node4/`.  
+> Legacy trees (`node/`, `node2/`, `node3/`) are reference-only and will be removed later.  
 > **No agent finish tool** — session end is harness/platform only.
 
-Related: `product-roadmap.md`, `architecture.md`, `harness-v2.md` (Node2 lessons).
+Related product specs: `docs/prd.md`, `AGENTS.md`, `docs/node-expert-offers.md`, `docs/node4-ctf-role.md`.
 
 ---
 
 ## 1. North star
 
 ```text
-OMP-class loop:  Map(todo) → Act(shell/write/edit/http) → Book(finding+evidence)* → continue…
+OMP-class loop:  Map(todo) → Act(shell/write/edit/http…) → Book(finding+evidence)* → continue…
 Product booking: structured tools only (never chat-only conclusions)
-Task end:        platform / user cancel / natural stop / continue caps — NOT an agent finish tool; no session wall/max-time
-Inspectability:  post-run task dir remains fully queryable (like OMP session files)
+Task end:        platform / user cancel / natural stop / continue caps — NOT an agent finish tool
+Inspectability:  post-run task dir remains fully queryable
 ```
 
-Node4 is **not** a coding agent. System prompt is **pentest** (scope, exploit, evidence).  
-Harness mechanics follow OMP: high-density act tools, empty/premature-stop continue, durable sessions, todo map + session glue.
+Node4 is **not** a coding agent. Role packs supply mission + tool surface (default **pentest**).  
+Harness mechanics: high-density act tools, empty/premature-stop continue, durable task dirs, light todo map.
 
 Interactive **TUI remains deferred**.
 
@@ -28,14 +28,16 @@ Interactive **TUI remains deferred**.
 
 ## 2. Principles
 
-1. **Pentest role, OMP harness** — replace coding system prompt; keep bash/write/edit/todo/continue semantics.
-2. **Booking ≠ stop** — `finding`/`evidence` may fire many times mid-run and **never** ends the loop.
-3. **Chat is not product truth** — vuln/flag/auth only via `finding` + `evidence_ids`.
-4. **No agent finish tool** — there is no `finish_scan` / agent `status` end tool. `task_complete` is harness/platform settlement after budgets or idle-stop cap.
-5. **Findings alone ≠ job done** — having N findings does not stop attacking or force completed mid-loop.
-6. **Post-run inspectability** — after dispose, operators can read task workspace artifacts without a live process.
-7. **No OMP source** — clean-room only.
-8. **No target answer keys**.
+1. **OMP harness, role-specific mission** — keep bash/write/edit/todo/continue density; swap pack prompt/tools, not the runner.
+2. **Booking ≠ stop** — `finding`/`evidence` may fire many times and **never** ends the loop.
+3. **Chat is not product truth** — vuln/flag/auth only via `finding` + `evidence_ids` when pack books findings.
+4. **No agent finish tool** — no `finish_scan` / agent terminal status tool. `task_complete` is harness/platform settlement.
+5. **Findings alone ≠ job done** — N findings do not force mid-loop completed.
+6. **Discovery in-loop** — keep acting while concrete untested hypotheses remain; do not drive the loop from a coverage matrix gate.
+7. **Simple is strong** — prefer shell + environment (sandbox browser, scanners via shell) over a large mandatory first-class catalog. Extra tools (session, browser, skill) are **assistive**, not process prisons.
+8. **Harness over restriction** — weak behavior → prompt / envelope / assistive tools first; not answer keys, expected vuln counts, or default validators.
+9. **No target answer keys**.
+10. **Post-run inspectability** — task workspace readable after dispose.
 
 ---
 
@@ -43,74 +45,65 @@ Interactive **TUI remains deferred**.
 
 | Step | Behavior |
 |------|----------|
-| Start | Task envelope → durable task dir; eager-todo injection on first prompt |
-| Map | `todo` phases (content-keyed; single in_progress; auto-promote) |
-| Act | `shell`, `write`, `edit`, `read`, `http`, `script` under task cwd |
-| Book | `finding` + auto/manual evidence (repeatable) |
-| Continue | **Rare recovery only** (OMP essence): empty-stop retries (default 1), **one** booking-gap if evidence without findings, and a **small open-work premature budget** (first tools-then-stop recovery always once; further premature only while open todos/goals remain). **Not** empty thrash or score padding. Discovery stays **in-loop**. |
-| Session wall / max-time | **None** by design (OMP default style). Only platform/user cancel aborts the session. Per-tool shell timeouts remain. |
-| Settle | Runner emits `task_complete` when agent naturally stops / empty-stop cap / wall / abort |
+| Start | Task envelope → durable task dir; coarse todo injection on first prompt |
+| Map | `todo` phases (content-keyed; single in_progress; auto-promote); **map not prison** |
+| Act | Pack tools under task cwd (shell-first) |
+| Book | `finding` + evidence when `bookingMode=finding` |
+| Continue | Rare recovery: empty-stop budget, booking-gap, small premature budget, optional **goal_continuation** while goal active |
+| Session wall | **None** by design; per-tool timeouts remain |
+| Settle | Runner emits `task_complete` (natural stop / continue caps / abort) |
 
 ---
 
-## 4. Role packs (extensible)
+## 4. Role packs
 
-Explicit structured `TaskEnvelope.engagement` / `role` selects a **role pack** (no free-text NLP).  
-Default: `pentest`. Stub extension: `consult` (no finding tool). Register more via `registerRolePack`.
+Explicit structured `TaskEnvelope.engagement` / `role` selects a pack (**no free-text NLP**).  
+Platform may also gate by node **offers** (`docs/node-expert-offers.md`).
 
 | Pack | Tools (summary) | Booking |
 |------|-----------------|---------|
-| `pentest` | todo, shell, fs, http, script, finding, subagent, goal | finding+evidence |
+| `pentest` (default) | todo, shell, write/edit/read, http, script, finding, subagent, goal | finding+evidence |
+| `ctf` | + session, browser, captcha, skill; CTF skills on disk | finding+evidence |
 | `consult` (stub) | todo, shell, read, goal | none |
 
-See `src/roles/` and `docs/node4-roadmap-memo.md`.
+Aliases (e.g. assess/retest → pentest object; ctf-web → ctf) live in pack registry.  
+See `node4/src/roles/`. CTF operator notes: `docs/node4-ctf-role.md`.
 
-## 5. Tools (pentest pack)
+---
+
+## 5. Tools (default pentest pack)
 
 | Tool | Role |
 |------|------|
-| `todo` | Progress map (OMP-class ops) |
-| `shell` | High-density bash; specialist scanners via shell when installed; process-group kill on timeout/wall |
-| `write` / `edit` / `read` | File iteration under task dir |
-| `http` | Single HTTP probe |
-| `script` | Optional multi-file run helper |
-| `finding` | **Only** product conclusion path (when pack.bookingMode=finding) |
-| `subagent` | Child work package → structured result + evidence |
-| `goal` | Long-task anchors (do not hard-gate settlement) |
+| `todo` | Progress map (OMP-class ops; coarse categories) |
+| `shell` | High-density bash; scanners via shell when installed |
+| `write` / `edit` / `read` | Files under task dir |
+| `http` | Single in-scope probe |
+| `script` | Optional multi-file helper |
+| `finding` | Only product conclusion path when bookingMode=finding |
+| `subagent` | Separable work package |
+| `goal` | Long-task objective; continuation while active |
 
-**P1 posture:** Prefer shell + environment/sandbox (browser, sqlmap, nuclei, Caido) over a large first-class tool catalog.  
+**Assistive extensions** (used by CTF pack today; may be added to pentest when lab audits show shell boilerplate, not as mandatory ceremony): `session`, `browser`, `captcha`, `skill`.
 
-**Not present:** `finish_scan`, agent `status` end tool, or any agent-callable terminal.
+**Not present:** `finish_scan`, agent-callable terminal status tool.
 
 ---
 
 ## 6. Subagent + goals
 
-| `goal` mode (OMP-style) | Single active `objective`; while `status=active`, harness injects **goal_continuation** after natural stops (cap `NODE4_MAX_GOAL_CONTINUES`, default 12). `complete` only after evidence audit; not a settlement hard gate if never used. Seed via tool or structured `TaskEnvelope.goalObjective`. |
-
-
-
 | Mechanism | Behavior |
 |-----------|----------|
-| `subagent` tool / `SubagentHost` | Spawn child under `taskDir/subagents/<id>`; worker returns structured data; **evidence** always written |
-| `goal` store/tool | Open/done/dropped anchors; attach subagent ids; re-injected on continue; **not** required empty for settle |
-| Platform events | `subagent_started` / `subagent_finished` / `goal_updated` |
+| `goal` | Active objective → harness may inject goal_continuation after natural stops (cap via env, e.g. `NODE4_MAX_CONTINUES` / goal continue limits). `complete` may be rejected if evidence audit fails; open goals do not alone invent product findings. |
+| `subagent` | Child under `taskDir/subagents/<id>`; evidence written |
 
-## 7. Todo session glue (OMP-class, clean-room)
+---
 
-**Usage style (aligned to OMP lab runs):** light coarse map — **one** `init` with phases + category-level tasks, then **occasional** `done` when a whole category/phase is largely finished. **Not** a per-challenge / per-finding ledger. Prefer shell density over frequent todo updates.
+## 7. Todo session glue
 
-| Mechanism | Behavior |
-|-----------|----------|
-| Tool description | Content-id rules, ops table, auto-promote; sparingly / coarse-only guidance |
-| Eager todo | First prompt: forced coarse `todo.init` (categories, not micro-items) |
-| Mid-run nudge | Only if open count ≥ 3; tells agent not to bookkeep per probe |
-| Error reminder | Failed todo sets pending errors; next continue injects retry once |
-| Summary | Remaining items + active phase + full tree (OMP-shaped) |
-| Eager booking | First prompt: book via `finding` (may batch after a shell burst) |
-| Booking backlog nudge | Continue when evidence≫0 and findings=0 (or evidence far ahead) |
+Light coarse map — **one** init with category phases, occasional `done` when a category is exhausted. **Not** one-todo-per-finding. Prefer shell density over bookkeeping.
 
-Open todos never block booking or harness settlement. Booking is product truth; chat is not.
+Open todos **never** block booking or harness settlement.
 
 ---
 
@@ -118,30 +111,29 @@ Open todos never block booking or harness settlement. Booking is product truth; 
 
 | Concern | Mechanism |
 |---------|-----------|
-| Evidence | Tool outputs may create evidence records |
-| Confirmed vuln/flag/auth | `finding` only |
-| End of billing/session | Harness: wall budget, continue cap, abort → `task_complete` |
+| Evidence | Tool outputs / explicit evidence |
+| Confirmed vuln/flag | `finding` only |
+| End of session | Harness continue caps / natural stop / abort → `task_complete` |
 
-Terminal status policy (harness):
+Typical terminal policy (harness; refine in code carefully):
 
-- `completed` if ≥1 evidence-backed finding **and** loop ended without abort  
-- else `incomplete`  
+- `completed` when settlement criteria met (e.g. evidence-backed findings and clean stop)  
+- otherwise `incomplete` / failed on abort  
+
+Exact rules live in runner settlement — docs must not invent stricter product gates (no module matrix complete).
 
 ---
 
-## 9. Post-run inspectability (OMP-like)
-
-Each task directory retains at least:
+## 9. Post-run inspectability
 
 | Path | Content |
 |------|---------|
-| `events.jsonl` | Platform/tool events |
-| `transcript.jsonl` | Serialized agent messages after run |
-| `session-manifest.json` | Index of artifact paths + terminal status |
-| `pi-sessions/` | Pi session manager files |
-| `findings/`, `evidence/`, `scripts/` | Product + act artifacts |
+| `events.jsonl` | Tool/platform events |
+| `findings/`, `evidence/`, `scripts/` | Artifacts |
+| `pi-sessions/` | Model session files |
+| `agent-summary.json` | Terminal + usage summary |
 
-Operators reconstruct the run offline by reading this directory.
+Offline audit helpers (e.g. `node4` ctf-audit CLI) parse events for engineering — not for injecting answers.
 
 ---
 
@@ -149,33 +141,30 @@ Operators reconstruct the run offline by reading this directory.
 
 | Event | Meaning |
 |-------|---------|
-| `tool_output` | Act/tool progress |
+| `tool_output` | Act progress |
 | `evidence_created` / `vuln_found` | Booking |
-| `todo_updated` | Progress map |
-| `status_update` | Harness progress notes (not agent finish) |
+| `todo_updated` / `goal_updated` | Map / anchors |
+| `status_update` | Harness notes (not agent finish) |
 | `task_complete` | **Harness** terminal settlement only |
 
 ---
 
-## 11. Node2 coexistence
+## 11. Legacy runtimes
 
-Node2: legacy (may still expose `finish_scan`). Node4: capability path. Same platform channel, different loop.
+| Tree | Status |
+|------|--------|
+| `node4/` | **Product** — maintain |
+| `node/`, `node2/`, `node3/` | Reference only; do not expand product features here; planned cleanup |
 
 ---
 
 ## 12. Non-goals
 
-- oh-my-pi dependency  
-- Full TUI / sticky todo panel  
-- Coverage/worker ceremony  
-- Hardcoded lab answers  
-- Exact OMP score parity  
-- Agent finish/status end tool  
-- Node↔Node P2P multi-agent mesh (collaboration is **platform-orchestrated**; see memo)  
-
----
-
-## 13. Related memos (not implementation specs)
-
-- **`node4-roadmap-memo.md`** — multi-role (CTF / remediate / IR), multi-env Node registration, multi-agent via platform only; **no large Node4 rewrite required now** for future collaboration.  
-- Optional later: envelope pass-through fields (`role`, `parent_task_id`) without consuming them in the runner.
+- oh-my-pi source dependency  
+- Full TUI  
+- Coverage/phase/finding-gate state machines as the main loop  
+- Hardcoded lab answers or expected vuln counts in runtime  
+- Exact OMP score parity as a pass bar  
+- Agent finish tool  
+- Node↔Node P2P mesh (any multi-agent work is **platform-orchestrated**)  
+- Multiple commercial Node product lines  
