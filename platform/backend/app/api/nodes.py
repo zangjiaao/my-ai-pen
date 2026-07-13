@@ -16,9 +16,9 @@ from app.services.expert_offers import (
     ACTION_INSTALL,
     ACTION_UNINSTALL,
     DEFAULT_OFFERS,
-    KNOWN_PACK_IDS,
     effective_offers,
     install_offer,
+    known_pack_ids,
     uninstall_offer,
 )
 
@@ -256,7 +256,7 @@ async def get_node_offers(
         "node_id": str(n.id),
         "name": n.name,
         "offers": offers,
-        "known_packs": sorted(KNOWN_PACK_IDS),
+        "known_packs": sorted(known_pack_ids()),
     }
 
 

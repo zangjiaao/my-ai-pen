@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "description": "Shared expert pack catalog. Node installs packs from here into its local install root; platform offers use the same ids.",
+  "packs": [
+    {
+      "id": "pentest",
+      "label": "Penetration testing",
+      "aliases": ["assess", "verify", "retest"]
+    },
+    {
+      "id": "ctf",
+      "label": "CTF web player",
+      "aliases": ["ctf-web", "challenge"]
+    },
+    {
+      "id": "consult",
+      "label": "Consult (stub)",
+      "aliases": []
+    }
+  ]
+}

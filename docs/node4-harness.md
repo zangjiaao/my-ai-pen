@@ -3,10 +3,11 @@
 > **Commercial clean-room design** (no oh-my-pi / OMP source dependency).  
 > Calibrated: 2026-07-13  
 > **This is the only product Node runtime.** Code lives in `node4/`.  
+> **Expert packs** live under repo **`experts/`** (catalog); Node **installs** copies into a local install root to enable them.  
 > Legacy trees (`node/`, `node2/`, `node3/`) are reference-only and will be removed later.  
 > **No agent finish tool** — session end is harness/platform only.
 
-Related product specs: `docs/prd.md`, `AGENTS.md`, `docs/node-expert-offers.md`, `docs/node4-ctf-role.md`.
+Related product specs: `docs/prd.md`, `AGENTS.md`, `docs/node-expert-offers.md`, `docs/node4-ctf-role.md`, `experts/README.md`.
 
 ---
 
@@ -55,19 +56,28 @@ Interactive **TUI remains deferred**.
 
 ---
 
-## 4. Role packs
+## 4. Expert packs (catalog + install)
 
-Explicit structured `TaskEnvelope.engagement` / `role` selects a pack (**no free-text NLP**).  
-Platform may also gate by node **offers** (`docs/node-expert-offers.md`).
+Pack **definitions** are maintained under `experts/<id>/` (`pack.json`, `mission.md`, `work.md`, `skills/`).  
+Node **enables** a pack by installing it into the local install root (default `node4/installed-experts/`):
+
+```bash
+cd node4 && npx tsx src/expert-cli.ts install ctf
+cd node4 && npx tsx src/expert-cli.ts uninstall ctf
+```
+
+Empty install set → effective **pentest only** (loaded from catalog).  
+Task resolve uses **installed** packs only; engagement/role remain structured fields (**no free-text NLP**).  
+Platform **offers** may also gate dispatch (`docs/node-expert-offers.md`).
 
 | Pack | Tools (summary) | Booking |
 |------|-----------------|---------|
-| `pentest` (default) | todo, shell, fs, http, **session**, **browser**, script, finding, subagent, goal, **skill** (meta: recon + stuck-rotation) | finding+evidence |
-| `ctf` | + captcha; CTF skills on disk | finding+evidence |
+| `pentest` (default) | todo, shell, fs, http, **session**, **browser**, script, finding, subagent, goal, **skill** (meta) | finding+evidence |
+| `ctf` | + captcha; CTF skills under `experts/ctf/skills` | finding+evidence |
 | `consult` (stub) | todo, shell, read, goal | none |
 
-Aliases (e.g. assess/retest → pentest object; ctf-web → ctf) live in pack registry.  
-See `node4/src/roles/`. CTF operator notes: `docs/node4-ctf-role.md`.
+Aliases live in each pack’s `pack.json` / `experts/catalog.json`.  
+Loader: `node4/src/experts/`. CTF notes: `docs/node4-ctf-role.md`.
 
 ---
 

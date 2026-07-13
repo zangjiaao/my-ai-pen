@@ -2,10 +2,14 @@
 
 ## Model
 
-- A **Node** is a **container** (worker process / runtime), not one fixed expert forever.
-- **Experts** are installable **role packs** (`pentest`, `ctf`, `consult`, …) listed on `node.config.offers`.
-- **Default**: when `offers` is missing or empty, the effective list is **`["pentest"]` only**.
+- A **Node** is a **container** / **expert-pack runtime** (Node4), not one fixed expert forever.
+- **Expert packs** are maintained under the shared catalog **`experts/`** (independent of harness code): `pack.json`, mission/work, pack-scoped skills.
+- **Two install layers:**
+  1. **Platform offers** (`node.config.offers`) — product permission + billing hooks (this document’s APIs).
+  2. **Node install root** (`node4/installed-experts/` or `NODE4_EXPERTS_INSTALL`) — copy of pack content from catalog via `npx tsx src/expert-cli.ts install <id>`. Uninstall removes only the local copy; **catalog is never deleted**.
+- **Default**: when platform offers / node install set is empty, effective pack is **`pentest` only** (loaded from catalog).
 - Task assignment must carry an **explicit structured** `engagement` and/or `role` field. The platform **does not** invent engagement by scanning free-text instructions (no NLP routing).
+- Remote marketplace / network hot-load of packs is **out of scope**.
 
 ## Dispatch gate
 
@@ -57,11 +61,14 @@ On `task_complete`, the platform records audit action `expert.usage` with `billi
 
 ## Code map
 
-- Pure helpers: `platform/backend/app/services/expert_offers.py`
+- Catalog: `experts/` + `experts/catalog.json` (shared pack ids/aliases)
+- Platform catalog load: `platform/backend/app/services/expert_catalog.py`
+- Platform offers helpers: `platform/backend/app/services/expert_offers.py`
 - Node API: `platform/backend/app/api/nodes.py`
 - Gate + usage: `platform/backend/app/ws/router.py`
+- Node install/load: `node4/src/experts/`, CLI `node4/src/expert-cli.ts`
+- Resolve: `node4/src/roles/resolve.ts` (installed set only)
 - UI: `platform/frontend/src/pages/ConversationPage.tsx`, offers on `NodePage`
-- Tests: `tests/test_expert_offers.py`
-- Role resolution on worker: `node4/src/roles/` (product Node runtime)
+- Tests: `tests/test_expert_offers.py`, `node4` smoke
 
 Product node line is **Node4 only**; see `docs/prd.md`.

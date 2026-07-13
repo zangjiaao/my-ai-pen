@@ -10,6 +10,7 @@ BACKEND = ROOT / "platform" / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
+from app.services.expert_catalog import catalog_pack_ids, load_experts_catalog
 from app.services.expert_offers import (
     ACTION_INSTALL,
     ACTION_UNINSTALL,
@@ -22,6 +23,7 @@ from app.services.expert_offers import (
     engagement_allowed,
     engagement_from_task_message,
     install_offer,
+    known_pack_ids,
     normalize_pack_id,
     uninstall_offer,
     usage_billing_detail,
@@ -204,6 +206,19 @@ class AssignPayloadBuilderTests(unittest.TestCase):
         self.assertEqual(pentest["engagement"], "pentest")
         self.assertNotIn("engagement", default)
         self.assertNotEqual(ctf["engagement"], pentest["engagement"])
+
+
+class CatalogAlignmentTests(unittest.TestCase):
+    def test_known_ids_from_experts_catalog_file(self):
+        cat = load_experts_catalog()
+        self.assertEqual(cat["source"], "file", f"expected file catalog, got {cat}")
+        ids = known_pack_ids()
+        self.assertIn("pentest", ids)
+        self.assertIn("ctf", ids)
+        self.assertIn("consult", ids)
+        self.assertEqual(ids, catalog_pack_ids())
+        # Must not be a hand-maintained set that ignores catalog path
+        self.assertTrue(str(cat["path"]).endswith("experts/catalog.json") or "experts" in str(cat["path"]))
 
 
 if __name__ == "__main__":

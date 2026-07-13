@@ -56,6 +56,16 @@ export async function runNode4Task(
 
   const roleResolved = resolveRolePack({ engagement: task.engagement, role: task.role });
   const pack = roleResolved.pack;
+  if (roleResolved.blocked) {
+    const msg = `Expert pack '${roleResolved.requested}' is not installed on this node. Install from catalog (expert-cli install) or use an offered engagement. Effective default is pentest.`;
+    await platform.send({
+      type: "task_error",
+      conversation_id: task.conversationId,
+      task_id: task.taskId,
+      message: msg,
+    } as any);
+    return { terminalStatus: "failed", taskDir };
+  }
   const startedAt = new Date().toISOString();
 
   const eventsPath = join(taskDir, "events.jsonl");
@@ -72,7 +82,11 @@ export async function runNode4Task(
   const usage = createUsageLedgerFromEnv();
   const textStream = new PlatformTextStream(loggingPlatform, task);
   const checkpointThrottle = new CheckpointThrottle();
-  const skills = new SkillStore(join(node4Root(), "skills"));
+  // Pack-scoped skills under experts/<id>/skills (catalog or install copy)
+  const skillsDir =
+    (pack as { skillsRoot?: string }).skillsRoot ||
+    join(node4Root(), "skills");
+  const skills = new SkillStore(skillsDir);
 
   const runtime: ToolRuntime = {
     task,

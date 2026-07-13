@@ -1,0 +1,9 @@
+{
+  "id": "consult",
+  "label": "Consult (stub)",
+  "aliases": [],
+  "toolNames": ["todo", "shell", "read", "goal"],
+  "skillIds": [],
+  "bookingMode": "none",
+  "settlementNote": "Harness settles incomplete/completed by policy without requiring findings for this stub pack."
+}

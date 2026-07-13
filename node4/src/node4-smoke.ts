@@ -104,11 +104,45 @@ async function main() {
   assert(agentCanForceCompleted() === false, "agent cannot force completed");
   assert(!(NODE4_TOOL_NAMES as readonly string[]).includes("finish_scan"), "no finish_scan tool");
 
-  // Role packs: structured fields only
+  // Expert catalog + install/uninstall (isolated install root for this smoke)
+  const { mkdtempSync, rmSync, existsSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join: pathJoin } = await import("node:path");
+  const {
+    installExpert,
+    uninstallExpert,
+    listInstalledPackIds,
+    effectiveInstalledPackIds,
+    expertsCatalogRoot,
+  } = await import("./experts/index.js");
+  const installRoot = mkdtempSync(pathJoin(tmpdir(), "node4-experts-install-"));
+  process.env.NODE4_EXPERTS_INSTALL = installRoot;
+  assert(existsSync(pathJoin(expertsCatalogRoot(), "pentest", "pack.json")), "catalog pentest exists");
+  assert(existsSync(pathJoin(expertsCatalogRoot(), "ctf", "pack.json")), "catalog ctf exists");
+  assert(listInstalledPackIds().length === 0, "fresh install root empty");
+  assert(effectiveInstalledPackIds().join(",") === "pentest", "empty install → effective pentest only");
+
+  // Role packs: structured fields only; default empty install → pentest
   const def = resolveRolePack({});
   assert(def.pack.id === "pentest" && def.source === "default", "default pentest pack");
+  // ctf not installed → blocked (does not silently run ctf tools)
+  const ctfBlocked = resolveRolePack({ engagement: "ctf" });
+  assert(ctfBlocked.blocked === true || ctfBlocked.pack.id === "pentest", "ctf blocked when not installed");
+  // Once any pack is installed, only install-root packs run — seed pentest + ctf + consult
+  const instPentest = installExpert("pentest");
+  assert(instPentest.ok && instPentest.installed.includes("pentest"), `install pentest: ${instPentest.message}`);
+  const instCtf = installExpert("ctf");
+  assert(instCtf.ok && instCtf.installed.includes("ctf"), `install ctf: ${instCtf.message}`);
+  assert(existsSync(pathJoin(installRoot, "ctf", "pack.json")), "install copies pack files");
+  assert(existsSync(pathJoin(expertsCatalogRoot(), "ctf", "pack.json")), "catalog ctf still present after install");
+  // uninstall consult if present then verify blocked
+  uninstallExpert("consult");
+  const byEngConsultPre = resolveRolePack({ engagement: "consult" });
+  assert(byEngConsultPre.blocked === true, "consult blocked when not installed");
+  const instConsult = installExpert("consult");
+  assert(instConsult.ok, `install consult: ${instConsult.message}`);
   const byEng = resolveRolePack({ engagement: "consult" });
-  assert(byEng.pack.id === "consult" && byEng.source === "engagement", "consult via engagement");
+  assert(byEng.pack.id === "consult" && byEng.source === "engagement" && !byEng.blocked, "consult via engagement after install");
   const byRole = resolveRolePack({ role: "pentest" });
   assert(byRole.pack.id === "pentest" && byRole.source === "role", "pentest via role");
   // Free-text instruction must NOT be used for routing — only structured fields.
@@ -133,9 +167,9 @@ async function main() {
   );
   assert(pentestPrompt.includes("session"), "pentest prompt mentions session");
   assert(pentestPrompt.includes("skill") || pentestPrompt.includes("session"), "pentest assistive tools in prompt");
-  // CTF pack: distinct from pentest, structured engagement only
+  // CTF pack: distinct from pentest, structured engagement only (after install)
   const ctfRes = resolveRolePack({ engagement: "ctf" });
-  assert(ctfRes.pack.id === "ctf" && ctfRes.source === "engagement", "ctf via engagement");
+  assert(ctfRes.pack.id === "ctf" && ctfRes.source === "engagement", "ctf via engagement after install");
   assert(ctfRes.pack.id !== PENTEST_ROLE_PACK.id, "ctf pack distinct from pentest");
   assert(toolNamesForPack(CTF_ROLE_PACK).includes("session"), "ctf has session tool");
   assert(toolNamesForPack(CTF_ROLE_PACK).includes("skill"), "ctf has skill tool");
@@ -150,6 +184,14 @@ async function main() {
   assert(ctfPrompt.includes("ctf") && ctfPrompt.includes("session"), "ctf prompt mentions pack/session");
   assert(ctfPrompt.includes("browser") || ctfPrompt.includes("captcha"), "ctf prompt mentions browser/captcha");
   assert(ctfPrompt.includes("skill"), "ctf prompt mentions skills");
+  // Uninstall ctf → no longer runnable; catalog remains
+  const un = uninstallExpert("ctf");
+  assert(un.ok && !un.installed.includes("ctf"), `uninstall ctf: ${un.message}`);
+  assert(existsSync(pathJoin(expertsCatalogRoot(), "ctf", "pack.json")), "catalog survives uninstall");
+  const ctfAfterUn = resolveRolePack({ engagement: "ctf" });
+  assert(ctfAfterUn.blocked || ctfAfterUn.pack.id === "pentest", "ctf not runnable after uninstall");
+  // reinstall for later skill tests that need ctf skill ids on disk
+  installExpert("ctf");
   clearExtraRolePacks();
   registerRolePack({
     id: "custom_test",
@@ -163,6 +205,13 @@ async function main() {
   assert(resolveRolePack({ role: "custom_test" }).pack.id === "custom_test", "register extra pack");
   assert(listRolePackIds().includes("custom_test"), "list includes extra");
   clearExtraRolePacks();
+  // cleanup install root after pack section (skills tests use catalog paths via CTF_ROLE_PACK.skillsRoot)
+  try {
+    rmSync(installRoot, { recursive: true, force: true });
+  } catch {
+    /* ignore */
+  }
+  delete process.env.NODE4_EXPERTS_INSTALL;
 
   // tools then stop + maxPrematureStops=0 → natural end
   const natural = shouldContinueAfterNaturalStop({
@@ -664,8 +713,12 @@ async function main() {
   assert(audit.flag_count >= 1, "audit extracts flags from evidence text");
   assert(audit.goal_ops.includes("complete_rejected"), "audit goal ops");
 
-  // --- Skills list/load (real skill files on disk) ---
-  const skillStore = new SkillStore(join(node4Root(), "skills"));
+  // --- Skills list/load (pack-scoped under experts/<id>/skills) ---
+  const ctfSkillsRoot =
+    (CTF_ROLE_PACK as { skillsRoot?: string }).skillsRoot || join(node4Root(), "../experts/ctf/skills");
+  const pentestSkillsRoot =
+    (PENTEST_ROLE_PACK as { skillsRoot?: string }).skillsRoot || join(node4Root(), "../experts/pentest/skills");
+  const skillStore = new SkillStore(ctfSkillsRoot);
   runtime.skills = skillStore;
   runtime.skillIds = CTF_ROLE_PACK.skillIds;
   const skillTool = createSkillTool(runtime);
@@ -685,6 +738,7 @@ async function main() {
     assert(!("error" in body), `skill ${id} loads`);
     assert(!skillContainsAnswerKey((body as { body: string }).body), `no answer key in ${id}`);
   }
+  runtime.skills = new SkillStore(pentestSkillsRoot);
   runtime.skillIds = PENTEST_ROLE_PACK.skillIds;
   const pentestSkillList = JSON.parse(textOf(await exec(skillTool, "sk3", { op: "list" })));
   assert(pentestSkillList.ok && pentestSkillList.count >= 2, `pentest skill list count=${pentestSkillList.count}`);
@@ -693,7 +747,7 @@ async function main() {
     "list filtered to pentest skills",
   );
   for (const id of PENTEST_ROLE_PACK.skillIds || []) {
-    const body = await skillStore.load(id);
+    const body = await runtime.skills.load(id);
     assert(!("error" in body), `skill ${id} loads`);
     assert(!skillContainsAnswerKey((body as { body: string }).body), `no answer key in ${id}`);
   }

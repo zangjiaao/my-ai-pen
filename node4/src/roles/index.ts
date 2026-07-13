@@ -7,5 +7,8 @@ export {
   clearExtraRolePacks,
   listRolePackIds,
   getRolePackById,
+  getRunnablePack,
+  isPackInstalled,
+  skillsRootForPack,
 } from "./packs.js";
 export { resolveRolePack } from "./resolve.js";

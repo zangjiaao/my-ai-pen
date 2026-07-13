@@ -1,0 +1,26 @@
+{
+  "id": "ctf",
+  "label": "CTF web player",
+  "aliases": ["ctf-web", "challenge"],
+  "toolNames": [
+    "todo",
+    "shell",
+    "write",
+    "edit",
+    "read",
+    "http",
+    "session",
+    "browser",
+    "captcha",
+    "script",
+    "finding",
+    "subagent",
+    "goal",
+    "skill"
+  ],
+  "skillIds": ["ctf-web-recon", "ctf-flag-verify", "ctf-stuck-rotation"],
+  "bookingMode": "finding",
+  "settlementNote": "Maximize verified flags with evidence. Goal complete only after full recon audit (remaining_unsolved=0 + harness gates). No finish tool.",
+  "defaultGoalObjective": "Within authorized scope, maximize verified unique flag{...} (or challenge unlocks) for all reachable challenges. Enumerate levels yourself; never invent answer keys. Partial clearance is not done. Complete only with audit_notes, remaining_unsolved=0, and harness gates.",
+  "recipeDir": "recipes"
+}

@@ -1,31 +1,19 @@
 """Node expert offers: default pentest, install/uninstall, engagement gate, billing hooks.
 
 Node is a container; experts are installable packs listed in ``node.config.offers``.
-Assignment must carry structured engagement/role (no free-text NLP).
+Pack **content** lives in the shared ``experts/`` catalog; platform offers are the
+permission/billing layer. Assignment must carry structured engagement/role (no free-text NLP).
 Billing events are structured hooks only — no payment provider.
 """
 from __future__ import annotations
 
 from typing import Any
 
+from app.services.expert_catalog import catalog_alias_map, catalog_pack_ids
+
 # Default when node.config.offers is missing or empty: commercial pentest only.
 DEFAULT_OFFER = "pentest"
 DEFAULT_OFFERS: tuple[str, ...] = (DEFAULT_OFFER,)
-
-# Canonical pack ids that can appear as installed offers (matches Node4 role packs).
-KNOWN_PACK_IDS: frozenset[str] = frozenset({"pentest", "ctf", "consult"})
-
-# Engagement / role aliases → canonical pack id (mirrors node4 resolve; no NLP of free text).
-ENGAGEMENT_TO_PACK: dict[str, str] = {
-    "pentest": "pentest",
-    "assess": "pentest",
-    "verify": "pentest",
-    "retest": "pentest",
-    "ctf": "ctf",
-    "ctf-web": "ctf",
-    "challenge": "ctf",
-    "consult": "consult",
-}
 
 # Stable billing codes for install/uninstall/usage hooks (not real charges).
 BILLING_CODES: dict[str, str] = {
@@ -40,6 +28,19 @@ ACTION_UNINSTALL = "expert.uninstall"
 ACTION_USAGE = "expert.usage"
 
 
+def known_pack_ids() -> frozenset[str]:
+    """Pack ids published under experts/catalog.json (or fallback)."""
+    return catalog_pack_ids()
+
+
+# Back-compat name used by API modules.
+KNOWN_PACK_IDS = known_pack_ids()  # evaluated at import; tests can reload module
+
+
+def _refresh_known() -> frozenset[str]:
+    return catalog_pack_ids()
+
+
 def normalize_pack_id(value: object) -> str | None:
     """Map engagement/role/alias to a canonical pack id, or None if empty/unknown."""
     if value is None:
@@ -47,9 +48,10 @@ def normalize_pack_id(value: object) -> str | None:
     key = str(value).strip().lower()
     if not key:
         return None
-    if key in ENGAGEMENT_TO_PACK:
-        return ENGAGEMENT_TO_PACK[key]
-    if key in KNOWN_PACK_IDS:
+    aliases = catalog_alias_map()
+    if key in aliases:
+        return aliases[key]
+    if key in catalog_pack_ids():
         return key
     return None
 
@@ -72,14 +74,14 @@ def effective_offers(config: object) -> list[str]:
         return list(DEFAULT_OFFERS)
     if not isinstance(raw, (list, tuple)):
         return list(DEFAULT_OFFERS)
+    known = catalog_pack_ids()
     out: list[str] = []
     seen: set[str] = set()
     for item in raw:
         pid = normalize_pack_id(item)
         if not pid or pid in seen:
             continue
-        # Only installable known packs count as offers (aliases fold to canonical).
-        if pid not in KNOWN_PACK_IDS:
+        if pid not in known:
             continue
         seen.add(pid)
         out.append(pid)
@@ -100,7 +102,6 @@ def engagement_allowed(offers: object, engagement: object) -> bool:
         if isinstance(offers, (list, tuple))
         else effective_offers({"offers": offers} if offers is not None else {})
     )
-    # Normalize offer list the same way (in case caller passed raw config list).
     offer_set = set()
     for o in offer_list:
         pid = normalize_pack_id(o) or (str(o).strip().lower() if o else "")
@@ -115,7 +116,6 @@ def engagement_allowed(offers: object, engagement: object) -> bool:
 
     pack = normalize_pack_id(raw)
     if pack is None:
-        # Explicit but unknown engagement: do not silently map via NLP.
         return False
     return pack in offer_set
 
@@ -142,13 +142,13 @@ def install_offer(config: object, expert_id: object) -> tuple[dict[str, Any], di
     Idempotent: re-installing an already-present pack still returns success detail.
     """
     pack = normalize_pack_id(expert_id)
-    if pack is None or pack not in KNOWN_PACK_IDS:
+    known = catalog_pack_ids()
+    if pack is None or pack not in known:
         raise ValueError(
-            f"Unknown expert pack id: {expert_id!r}. Known: {', '.join(sorted(KNOWN_PACK_IDS))}"
+            f"Unknown expert pack id: {expert_id!r}. Known: {', '.join(sorted(known))}"
         )
     cfg = dict(config) if isinstance(config, dict) else {}
     current = effective_offers(cfg)
-    # If config had no offers key, effective is [pentest]; start from that when installing.
     if "offers" not in cfg or not isinstance(cfg.get("offers"), (list, tuple)):
         offers = list(current)
     else:
@@ -171,18 +171,17 @@ def uninstall_offer(config: object, expert_id: object) -> tuple[dict[str, Any], 
     """Remove an expert pack from config.offers. Returns (new_config, billing_detail).
 
     Raises ValueError for unknown expert ids.
-    Cannot remove the last remaining offer (node must always offer at least one pack);
-    if removing would empty offers, raises ValueError.
+    Cannot remove the last remaining offer (node must always offer at least one pack).
     """
     pack = normalize_pack_id(expert_id)
-    if pack is None or pack not in KNOWN_PACK_IDS:
+    known = catalog_pack_ids()
+    if pack is None or pack not in known:
         raise ValueError(
-            f"Unknown expert pack id: {expert_id!r}. Known: {', '.join(sorted(KNOWN_PACK_IDS))}"
+            f"Unknown expert pack id: {expert_id!r}. Known: {', '.join(sorted(known))}"
         )
     cfg = dict(config) if isinstance(config, dict) else {}
     current = effective_offers(cfg)
     if pack not in current:
-        # Not installed — still emit a remove-style detail with no-op offers.
         detail = {
             "billing_code": billing_code_for(pack),
             "expert_id": pack,
@@ -190,7 +189,6 @@ def uninstall_offer(config: object, expert_id: object) -> tuple[dict[str, Any], 
             "was_installed": False,
             "offers": list(current),
         }
-        # Persist explicit offers list so defaults stay inspectable after ops.
         cfg["offers"] = list(current)
         return cfg, detail
     offers = [o for o in current if o != pack]
@@ -246,7 +244,6 @@ def engagement_from_task_message(msg: dict | None) -> str:
         val = msg.get(key)
         if isinstance(val, str) and val.strip():
             return val.strip()
-    # Nested snapshot (retest path stores engagement on snapshot).
     snap = msg.get("snapshot")
     if isinstance(snap, dict):
         for key in ("engagement", "role"):

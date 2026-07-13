@@ -1,5 +1,6 @@
 /**
  * Role packs: explicit structured engagement/role → prompt + tool surface + booking posture.
+ * Pack content is maintained under repo `experts/`; Node installs copies to run.
  * Routing MUST NOT scan free-text instructions (Agents.md).
  */
 
@@ -25,8 +26,12 @@ export type RolePack = {
   defaultGoalObjective?: string;
   /** Skill ids surfaced by skill(list) for this pack (load on demand). */
   skillIds?: readonly string[];
-  /** Relative recipe dir under node4 root (e.g. recipes/ctf). */
+  /** Relative recipe dir under pack root (e.g. recipes). */
   recipeDir?: string;
+  /** Absolute pack root when loaded from experts/ (catalog or install). */
+  packRoot?: string;
+  /** Absolute skills directory for this pack. */
+  skillsRoot?: string;
 };
 
 export type RoleResolveInput = {
