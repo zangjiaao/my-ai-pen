@@ -70,7 +70,7 @@
 - 平台 WebSocket：`task_assign` → 工具事件 / `vuln_found` / evidence → harness `task_complete`。
 - Standalone CLI（`node4` standalone）便于 lab 调试，同一 harness。
 - **Role pack** 由 `engagement` / `role` 选择（默认 pentest；已实现 ctf、consult stub）。
-- 工具与循环语义遵循 `docs/node4-harness.md`（todo、shell、fs、http、script、finding、subagent、goal；CTF 等 pack 可扩展 session/browser/skill 等 **assistive** 工具）。
+- 工具与循环语义遵循 `docs/node4-harness.md`（todo、shell、fs、http、**session**、**browser**、script、finding、subagent、goal、**skill**；CTF 另有 captcha 与 CTF skills。均为 **assistive 密度**，非流程关卡）。
 - 任务目录可排查：`events.jsonl`、evidence、findings 等。
 
 **P1**

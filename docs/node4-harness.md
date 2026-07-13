@@ -62,8 +62,8 @@ Platform may also gate by node **offers** (`docs/node-expert-offers.md`).
 
 | Pack | Tools (summary) | Booking |
 |------|-----------------|---------|
-| `pentest` (default) | todo, shell, write/edit/read, http, script, finding, subagent, goal | finding+evidence |
-| `ctf` | + session, browser, captcha, skill; CTF skills on disk | finding+evidence |
+| `pentest` (default) | todo, shell, fs, http, **session**, **browser**, script, finding, subagent, goal, **skill** (meta: recon + stuck-rotation) | finding+evidence |
+| `ctf` | + captcha; CTF skills on disk | finding+evidence |
 | `consult` (stub) | todo, shell, read, goal | none |
 
 Aliases (e.g. assess/retest → pentest object; ctf-web → ctf) live in pack registry.  
@@ -79,14 +79,17 @@ See `node4/src/roles/`. CTF operator notes: `docs/node4-ctf-role.md`.
 | `shell` | High-density bash; scanners via shell when installed |
 | `write` / `edit` / `read` | Files under task dir |
 | `http` | Single in-scope probe |
+| `session` | Multi-step HTTP + per-actor jars (assistive density; not a gate) |
+| `browser` | SPA/DOM assist when API recon is insufficient |
 | `script` | Optional multi-file helper |
 | `finding` | Only product conclusion path when bookingMode=finding |
 | `subagent` | Separable work package |
 | `goal` | Long-task objective; continuation while active |
+| `skill` | Optional load of **meta** methodology (`pentest-web-recon`, `pentest-stuck-rotation`) — not a vuln-class matrix |
 
-**Assistive extensions** (used by CTF pack today; may be added to pentest when lab audits show shell boilerplate, not as mandatory ceremony): `session`, `browser`, `captcha`, `skill`.
+**CTF-only assistive:** `captcha` (+ CTF skill set). Do not grow first-class catalogs without lab-driven need.
 
-**Not present:** `finish_scan`, agent-callable terminal status tool.
+**Not present:** `finish_scan`, agent-callable terminal status tool, coverage complete hard gates.
 
 ---
 

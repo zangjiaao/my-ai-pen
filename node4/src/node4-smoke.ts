@@ -117,6 +117,22 @@ async function main() {
   assert(toolNamesForPack(PENTEST_ROLE_PACK).includes("finding"), "pentest has finding");
   assert(!toolNamesForPack(CONSULT_STUB_ROLE_PACK).includes("finding"), "consult stub has no finding");
   assert(toolNamesForPack(PENTEST_ROLE_PACK).includes("subagent"), "pentest has subagent");
+  // Pentest OMP assist: session/browser/skill (not process prisons; no captcha by default)
+  assert(toolNamesForPack(PENTEST_ROLE_PACK).includes("session"), "pentest has session tool");
+  assert(toolNamesForPack(PENTEST_ROLE_PACK).includes("skill"), "pentest has skill tool");
+  assert(toolNamesForPack(PENTEST_ROLE_PACK).includes("browser"), "pentest has browser tool");
+  assert(!toolNamesForPack(PENTEST_ROLE_PACK).includes("captcha"), "pentest does not force captcha");
+  assert(PENTEST_ROLE_PACK.skillIds && PENTEST_ROLE_PACK.skillIds.length >= 2, "pentest meta skills ≥2");
+  assert(
+    (PENTEST_ROLE_PACK.skillIds || []).every((id) => String(id).startsWith("pentest-")),
+    "pentest skill ids prefixed",
+  );
+  const pentestPrompt = buildSystemPrompt(
+    { taskId: "t", conversationId: "c", instruction: "assess", target: {}, scope: {} },
+    PENTEST_ROLE_PACK,
+  );
+  assert(pentestPrompt.includes("session"), "pentest prompt mentions session");
+  assert(pentestPrompt.includes("skill") || pentestPrompt.includes("session"), "pentest assistive tools in prompt");
   // CTF pack: distinct from pentest, structured engagement only
   const ctfRes = resolveRolePack({ engagement: "ctf" });
   assert(ctfRes.pack.id === "ctf" && ctfRes.source === "engagement", "ctf via engagement");
@@ -127,7 +143,6 @@ async function main() {
   assert(toolNamesForPack(CTF_ROLE_PACK).includes("captcha"), "ctf has captcha tool");
   assert(CTF_ROLE_PACK.skillIds && CTF_ROLE_PACK.skillIds.length >= 2, "ctf skill index ≥2");
   assert(Boolean(CTF_ROLE_PACK.defaultGoalObjective?.includes("flag")), "ctf default goal maximize flags");
-  assert(!toolNamesForPack(PENTEST_ROLE_PACK).includes("session"), "pentest pack does not force session");
   const ctfPrompt = buildSystemPrompt(
     { taskId: "t", conversationId: "c", instruction: "play", target: {}, scope: {} },
     CTF_ROLE_PACK,
@@ -666,6 +681,18 @@ async function main() {
   assert(loaded.ok && String(loaded.body).includes("Enumerate"), "load skill body");
   assert(!skillContainsAnswerKey(String(loaded.body)), "skill body has no fixed flag keys");
   for (const id of CTF_ROLE_PACK.skillIds || []) {
+    const body = await skillStore.load(id);
+    assert(!("error" in body), `skill ${id} loads`);
+    assert(!skillContainsAnswerKey((body as { body: string }).body), `no answer key in ${id}`);
+  }
+  runtime.skillIds = PENTEST_ROLE_PACK.skillIds;
+  const pentestSkillList = JSON.parse(textOf(await exec(skillTool, "sk3", { op: "list" })));
+  assert(pentestSkillList.ok && pentestSkillList.count >= 2, `pentest skill list count=${pentestSkillList.count}`);
+  assert(
+    (pentestSkillList.skills as Array<{ id: string }>).every((s) => String(s.id).startsWith("pentest-")),
+    "list filtered to pentest skills",
+  );
+  for (const id of PENTEST_ROLE_PACK.skillIds || []) {
     const body = await skillStore.load(id);
     assert(!("error" in body), `skill ${id} loads`);
     assert(!skillContainsAnswerKey((body as { body: string }).body), `no answer key in ${id}`);

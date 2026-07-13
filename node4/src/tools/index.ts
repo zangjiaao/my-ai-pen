@@ -32,7 +32,7 @@ export const ALL_NODE4_TOOL_FACTORIES: Record<string, (runtime: ToolRuntime) => 
   skill: createSkillTool,
 };
 
-/** Default / pentest pack tool order. */
+/** Default / pentest pack tool order (mirrors PENTEST_ROLE_PACK). */
 export const NODE4_TOOL_NAMES = [
   "todo",
   "shell",
@@ -40,10 +40,13 @@ export const NODE4_TOOL_NAMES = [
   "edit",
   "read",
   "http",
+  "session",
+  "browser",
   "script",
   "finding",
   "subagent",
   "goal",
+  "skill",
 ] as const;
 
 export function createNode4Tools(runtime: ToolRuntime, pack?: RolePack): ToolDefinition<any>[] {
