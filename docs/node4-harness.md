@@ -4,6 +4,7 @@
 > Calibrated: 2026-07-13  
 > **This is the only product Node runtime.** Code lives in `node4/`.  
 > **Expert packs** live under repo **`experts/`** (catalog); Node **installs** copies into a local install root to enable them.  
+> **Default**: no experts installed → **bare OMP runtime** (`runtime`) for clean A/B vs packs.  
 > Legacy trees (`node/`, `node2/`, `node3/`) are reference-only and will be removed later.  
 > **No agent finish tool** — session end is harness/platform only.
 
@@ -66,9 +67,9 @@ cd node4 && npx tsx src/expert-cli.ts install ctf
 cd node4 && npx tsx src/expert-cli.ts uninstall ctf
 ```
 
-Empty install set → effective **pentest only** (loaded from catalog).  
-Task resolve uses **installed** packs only; engagement/role remain structured fields (**no free-text NLP**).  
-Platform **offers** may also gate dispatch (`docs/node-expert-offers.md`).
+Empty install set → **no experts**; blank engagement → **bare runtime** (OMP-class tools only).  
+Explicit engagement must match an **installed** pack (else blocked).  
+Platform **offers** may also gate product dispatch (`docs/node-expert-offers.md`); Node install is independent for experiments.
 
 | Pack | Tools (summary) | Booking |
 |------|-----------------|---------|

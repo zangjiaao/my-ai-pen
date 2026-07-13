@@ -11,4 +11,5 @@ export {
   isPackInstalled,
   skillsRootForPack,
 } from "./packs.js";
+export { BARE_RUNTIME_ID, BARE_RUNTIME_PACK } from "./bare.js";
 export { resolveRolePack } from "./resolve.js";

@@ -83,10 +83,9 @@ export async function runNode4Task(
   const textStream = new PlatformTextStream(loggingPlatform, task);
   const checkpointThrottle = new CheckpointThrottle();
   // Pack-scoped skills under experts/<id>/skills (catalog or install copy)
-  const skillsDir =
-    (pack as { skillsRoot?: string }).skillsRoot ||
-    join(node4Root(), "skills");
-  const skills = new SkillStore(skillsDir);
+  // Pack-scoped skills only when an expert is installed (bare runtime has none)
+  const skillsDir = (pack as { skillsRoot?: string }).skillsRoot;
+  const skills = skillsDir ? new SkillStore(skillsDir) : undefined;
 
   const runtime: ToolRuntime = {
     task,
@@ -99,7 +98,7 @@ export async function runNode4Task(
     goals,
     rolePackId: pack.id,
     skills,
-    skillIds: pack.skillIds,
+    skillIds: pack.skillIds?.length ? pack.skillIds : undefined,
     lifecycle: { toolsInLastSegment: 0, panelAgents: panel },
   };
   runtime.subagents = new SubagentHost({

@@ -1,6 +1,9 @@
 /**
  * Install / uninstall expert packs onto this Node from the shared catalog.
  * Install = copy catalog → install root. Uninstall = remove install copy only.
+ *
+ * Default: empty install root = **no experts** (bare OMP runtime). Expert packs
+ * are optional add-ons for capability A/B comparison.
  */
 import {
   cpSync,
@@ -10,7 +13,6 @@ import {
   existsSync,
   writeFileSync,
   readFileSync,
-  accessSync,
 } from "node:fs";
 import { join } from "node:path";
 import {
@@ -26,6 +28,7 @@ import {
   type LoadedPack,
 } from "./load-pack.js";
 
+/** Catalog id of the commercial default expert (must be installed to use). */
 export const DEFAULT_OFFER = "pentest";
 
 export type InstallResult = {
@@ -55,26 +58,19 @@ export function listInstalledPackIds(): string[] {
 }
 
 /**
- * Effective installed set for resolve.
- * Empty install root → default [pentest] only (content loaded from catalog).
+ * Effective installed expert set for resolve.
+ * Empty install root → **[]** (bare runtime; no expert pack).
+ * Non-empty → exactly the physically installed packs (no auto-seed).
  */
 export function effectiveInstalledPackIds(): string[] {
-  const installed = listInstalledPackIds();
-  if (installed.length === 0) return [DEFAULT_OFFER];
-  return installed;
+  return listInstalledPackIds();
 }
 
-/** Prefer install copy; if nothing installed, default pentest from catalog. */
+/** Prefer install copy; experts are never virtual-loaded from catalog without install. */
 export function resolvePackDir(packId: string): string | null {
   const id = packId.toLowerCase().trim();
   const installDir = installPackDir(id);
   if (dirHasPackSync(installDir)) return installDir;
-
-  const installed = listInstalledPackIds();
-  if (installed.length === 0 && id === DEFAULT_OFFER) {
-    const cat = catalogPackDir(id);
-    if (dirHasPackSync(cat)) return cat;
-  }
   return null;
 }
 
@@ -110,9 +106,7 @@ function copyPackFromCatalog(id: string, catalog: string): void {
 }
 
 /**
- * Install a catalog pack into the node install root.
- * Aligns with platform offers (additive): installing a non-default pack also
- * seeds **pentest** if it is not already installed, so blank engagement still works.
+ * Install a catalog pack into the node install root (exact pack only; no auto-seed).
  */
 export function installExpert(packId: string): InstallResult {
   const id = packId.toLowerCase().trim();
@@ -130,12 +124,6 @@ export function installExpert(packId: string): InstallResult {
   }
   const root = ensureInstallRoot();
   copyPackFromCatalog(id, catalog);
-  // Platform install_offer is additive and keeps default pentest; mirror that here.
-  if (id !== DEFAULT_OFFER && !listInstalledPackIds().includes(DEFAULT_OFFER)) {
-    if (dirHasPackSync(catalogPackDir(DEFAULT_OFFER))) {
-      copyPackFromCatalog(DEFAULT_OFFER, catalog);
-    }
-  }
   return {
     ok: true,
     action: "install",
@@ -173,13 +161,21 @@ export function listExpertsStatus(): {
   catalog: string[];
   installed: string[];
   effective: string[];
+  bareRuntime: boolean;
 } {
   const catalogRoot = expertsCatalogRoot();
   const installRoot = expertsInstallRoot();
   const catalog = loadCatalogIndexSync(catalogRoot).map((p) => p.id);
   const installed = listInstalledPackIds();
   const effective = effectiveInstalledPackIds();
-  return { catalogRoot, installRoot, catalog, installed, effective };
+  return {
+    catalogRoot,
+    installRoot,
+    catalog,
+    installed,
+    effective,
+    bareRuntime: effective.length === 0,
+  };
 }
 
 export function buildAliasMap(): Map<string, string> {

@@ -4,7 +4,7 @@
 import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveRolePack, PENTEST_ROLE_PACK } from "../roles/index.js";
+import { resolveRolePack, PENTEST_ROLE_PACK, BARE_RUNTIME_ID } from "../roles/index.js";
 import { toolNamesForPack } from "../tools/index.js";
 import {
   installExpert,
@@ -23,9 +23,10 @@ try {
     console.log("empty effective", effectiveInstalledPackIds());
     const d = resolveRolePack({});
     console.log("default", d.pack.id, d.source, "blocked", d.blocked);
+    console.log("bare tools session?", toolNamesForPack(d.pack).includes("session"));
     const blocked = resolveRolePack({ engagement: "ctf" });
     console.log("ctf before install", blocked.pack.id, "blocked=", blocked.blocked);
-    // Honest install-only-ctf (auto-seeds pentest)
+    // install-only-ctf (no pentest seed)
     const onlyCtf = installExpert("ctf");
     console.log("install-only-ctf installed", onlyCtf.installed.join(","));
     const blank = resolveRolePack({});
@@ -44,14 +45,12 @@ try {
     );
     console.log("pentest captcha?", toolNamesForPack(PENTEST_ROLE_PACK).includes("captcha"));
     console.log("distinct", ctf.pack.id !== PENTEST_ROLE_PACK.id);
-    uninstallExpert("pentest");
-    const blankNoP = resolveRolePack({});
-    console.log("blank after uninstall pentest", blankNoP.blocked, blankNoP.pack.id);
-    const after = resolveRolePack({ engagement: "ctf" });
-    console.log("ctf still after pentest uninstall", after.pack.id, "blocked", after.blocked);
+    console.log("bare id constant", BARE_RUNTIME_ID);
     uninstallExpert("ctf");
     const ctfGone = resolveRolePack({ engagement: "ctf" });
-    console.log("ctf after full uninstall blocked", ctfGone.blocked, ctfGone.pack.id);
+    console.log("ctf after uninstall blocked", ctfGone.blocked, ctfGone.pack.id);
+    const blankAgain = resolveRolePack({});
+    console.log("blank after empty again", blankAgain.pack.id);
   }
   if (mode === "install" || mode === "all") {
     process.env.NODE4_EXPERTS_INSTALL = root;
@@ -60,7 +59,7 @@ try {
     const a = installExpert("ctf");
     console.log(JSON.stringify(a));
     console.log("install has ctf", listInstalledPackIds().includes("ctf"));
-    console.log("install auto-seeded pentest", listInstalledPackIds().includes("pentest"));
+    console.log("install did NOT auto-seed pentest", !listInstalledPackIds().includes("pentest"));
     console.log("catalog still", existsSync(join(expertsCatalogRoot(), "ctf", "pack.json")));
     const b = uninstallExpert("ctf");
     console.log(JSON.stringify(b));

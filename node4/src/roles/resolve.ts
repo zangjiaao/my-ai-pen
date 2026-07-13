@@ -1,10 +1,14 @@
+import { BARE_RUNTIME_ID, BARE_RUNTIME_PACK } from "./bare.js";
 import { getRunnablePack, PENTEST_ROLE_PACK } from "./packs.js";
 import type { RolePack, RoleResolveInput } from "./types.js";
 
 /**
  * Resolve role pack from **explicit structured fields only**.
  * Does NOT scan instruction free text for keywords (Agents.md intent rules).
- * Pack must be in the node's effective installed set (default: pentest only).
+ *
+ * - Blank engagement + no experts installed → **bare OMP runtime** (not pentest).
+ * - Explicit engagement/role → must be installed; else blocked.
+ * - Blank engagement + some experts installed → bare runtime still (opt-in experts via engagement).
  */
 export function resolveRolePack(input: RoleResolveInput): {
   pack: RolePack;
@@ -16,9 +20,11 @@ export function resolveRolePack(input: RoleResolveInput): {
   const engagement = typeof input.engagement === "string" ? input.engagement.trim() : "";
 
   if (role) {
+    if (role.toLowerCase() === BARE_RUNTIME_ID) {
+      return { pack: BARE_RUNTIME_PACK, source: "role", requested: role };
+    }
     const pack = getRunnablePack(role);
     if (pack) return { pack, source: "role", requested: role };
-    // Explicit but not installed / unknown → blocked (do not run uninstalled packs)
     return {
       pack: PENTEST_ROLE_PACK,
       source: "default",
@@ -27,6 +33,9 @@ export function resolveRolePack(input: RoleResolveInput): {
     };
   }
   if (engagement) {
+    if (engagement.toLowerCase() === BARE_RUNTIME_ID) {
+      return { pack: BARE_RUNTIME_PACK, source: "engagement", requested: engagement };
+    }
     const pack = getRunnablePack(engagement);
     if (pack) return { pack, source: "engagement", requested: engagement };
     return {
@@ -36,14 +45,6 @@ export function resolveRolePack(input: RoleResolveInput): {
       blocked: true,
     };
   }
-  // Blank engagement/role → default pentest only if pentest is in the effective installed set
-  // (empty install root → virtual pentest; install-only ctf auto-seeds pentest; explicit uninstall of pentest blocks).
-  const def = getRunnablePack("pentest");
-  if (def) return { pack: def, source: "default" };
-  return {
-    pack: PENTEST_ROLE_PACK,
-    source: "default",
-    requested: "pentest",
-    blocked: true,
-  };
+  // No structured engagement → bare OMP runtime (clean harness; experts are opt-in).
+  return { pack: BARE_RUNTIME_PACK, source: "default" };
 }

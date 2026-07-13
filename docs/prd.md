@@ -25,7 +25,7 @@
 2. **Chat 不是产品真相** — 漏洞/flag 级结论必须经 `finding` + evidence，不能只靠对话文本。
 3. **Harness over restriction** — 能力不足时优先改进 prompt / 任务信封 / 工具密度；不把靶场答案表、预期漏洞数、coverage 硬门当作默认「智能」。
 4. **结构化意图** — 角色/engagement 来自 UI 或任务信封显式字段；**禁止**用关键词 NLP 扫描用户自然语言猜 workflow。
-5. **Node 是专家包运行平台** — 包内容在共享目录 `experts/` 维护；Node **install/uninstall** 本地启用副本；平台 **offers** 负责许可/计费。默认仅 `pentest`。见 `docs/node-expert-offers.md`、`experts/README.md`。
+5. **Node 是专家包运行平台** — 默认 **不带专家包**（干净 OMP-class runtime，便于与装包后对比）；包内容在 `experts/` 维护，Node **install/uninstall** 本地启用；平台 **offers** 负责产品侧许可/计费。见 `docs/node-expert-offers.md`、`experts/README.md`。
 6. **无靶场答案键** — 不以 DVWA/Juice/CTF flag 列表驱动 runtime 或 prompt。
 7. **远程热装 marketplace** — 非本阶段目标。
 
@@ -70,7 +70,7 @@
 
 - 平台 WebSocket：`task_assign` → 工具事件 / `vuln_found` / evidence → harness `task_complete`。
 - Standalone CLI（`node4` standalone）便于 lab 调试，同一 harness。
-- **Expert pack** 由 `engagement` / `role` 选择（须已 **install** 到本 Node；默认有效仅 pentest；目录见 `experts/`）。
+- **Expert pack** 由 `engagement` / `role` 选择（须已 **install** 到本 Node）；无 engagement 且未装包时跑 **bare runtime**；目录见 `experts/`。
 - 工具与循环语义遵循 `docs/node4-harness.md`（todo、shell、fs、http、**session**、**browser**、script、finding、subagent、goal、**skill**；CTF 另有 captcha。均为 **assistive 密度**，非流程关卡）。
 - 任务目录可排查：`events.jsonl`、evidence、findings 等。
 

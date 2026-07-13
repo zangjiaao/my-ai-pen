@@ -6,8 +6,9 @@
 - **Expert packs** are maintained under the shared catalog **`experts/`** (independent of harness code): `pack.json`, mission/work, pack-scoped skills.
 - **Two install layers:**
   1. **Platform offers** (`node.config.offers`) — product permission + billing hooks (this document’s APIs).
-  2. **Node install root** (`node4/installed-experts/` or `NODE4_EXPERTS_INSTALL`) — copy of pack content from catalog via `npx tsx src/expert-cli.ts install <id>`. Uninstall removes only the local copy; **catalog is never deleted**. Installing a non-default pack **auto-seeds pentest** (additive, like platform offers).
-- **Default**: when platform offers / node install set is empty, effective pack is **`pentest` only** (loaded from catalog). Blank engagement requires pentest in the effective installed set.
+  2. **Node install root** (`node4/installed-experts/` or `NODE4_EXPERTS_INSTALL`) — copy of pack content from catalog via `npx tsx src/expert-cli.ts install <id>`. Uninstall removes only the local copy; **catalog is never deleted**. No auto-seed of other packs.
+- **Node default**: empty install → **bare OMP runtime** (no expert). Experts are opt-in for capability comparison.
+- **Platform default offers** may still default to `["pentest"]` for product UX; that does not force Node-side pack files until install.
 - Task assignment must carry an **explicit structured** `engagement` and/or `role` field. The platform **does not** invent engagement by scanning free-text instructions (no NLP routing).
 - Remote marketplace / network hot-load of packs is **out of scope**.
 
