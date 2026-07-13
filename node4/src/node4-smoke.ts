@@ -124,18 +124,41 @@ async function main() {
 
   // Role packs: structured fields only; default empty install → pentest
   const def = resolveRolePack({});
-  assert(def.pack.id === "pentest" && def.source === "default", "default pentest pack");
+  assert(def.pack.id === "pentest" && def.source === "default" && !def.blocked, "default pentest pack");
   // ctf not installed → blocked (does not silently run ctf tools)
   const ctfBlocked = resolveRolePack({ engagement: "ctf" });
-  assert(ctfBlocked.blocked === true || ctfBlocked.pack.id === "pentest", "ctf blocked when not installed");
-  // Once any pack is installed, only install-root packs run — seed pentest + ctf + consult
-  const instPentest = installExpert("pentest");
-  assert(instPentest.ok && instPentest.installed.includes("pentest"), `install pentest: ${instPentest.message}`);
-  const instCtf = installExpert("ctf");
-  assert(instCtf.ok && instCtf.installed.includes("ctf"), `install ctf: ${instCtf.message}`);
+  assert(ctfBlocked.blocked === true, "ctf blocked when not installed");
+
+  // install-only ctf (no explicit pentest): platform-additive → auto-seeds pentest
+  const instCtfOnly = installExpert("ctf");
+  assert(instCtfOnly.ok && instCtfOnly.installed.includes("ctf"), `install ctf only: ${instCtfOnly.message}`);
+  assert(
+    instCtfOnly.installed.includes("pentest"),
+    `install ctf auto-seeds pentest (got ${instCtfOnly.installed.join(",")})`,
+  );
   assert(existsSync(pathJoin(installRoot, "ctf", "pack.json")), "install copies pack files");
+  assert(existsSync(pathJoin(installRoot, "pentest", "pack.json")), "auto-seeded pentest files present");
   assert(existsSync(pathJoin(expertsCatalogRoot(), "ctf", "pack.json")), "catalog ctf still present after install");
-  // uninstall consult if present then verify blocked
+  const blankAfterCtf = resolveRolePack({});
+  assert(
+    blankAfterCtf.pack.id === "pentest" && !blankAfterCtf.blocked,
+    "blank engagement still pentest after install-only-ctf (seeded)",
+  );
+  const pentestAfterCtf = resolveRolePack({ engagement: "pentest" });
+  assert(pentestAfterCtf.pack.id === "pentest" && !pentestAfterCtf.blocked, "engagement=pentest ok after install-only-ctf");
+  // Explicit uninstall of pentest while ctf remains → blank + pentest blocked; ctf still ok
+  uninstallExpert("pentest");
+  assert(!listInstalledPackIds().includes("pentest"), "pentest removed from install root");
+  assert(listInstalledPackIds().includes("ctf"), "ctf remains after pentest uninstall");
+  const blankNoPentest = resolveRolePack({});
+  assert(blankNoPentest.blocked === true, "blank engagement blocked when pentest uninstalled");
+  const pentestBlocked = resolveRolePack({ engagement: "pentest" });
+  assert(pentestBlocked.blocked === true, "engagement=pentest blocked when uninstalled");
+  const ctfStill = resolveRolePack({ engagement: "ctf" });
+  assert(ctfStill.pack.id === "ctf" && !ctfStill.blocked, "ctf still runnable without pentest");
+  // Restore full set for later pack tests
+  installExpert("pentest");
+  installExpert("ctf");
   uninstallExpert("consult");
   const byEngConsultPre = resolveRolePack({ engagement: "consult" });
   assert(byEngConsultPre.blocked === true, "consult blocked when not installed");

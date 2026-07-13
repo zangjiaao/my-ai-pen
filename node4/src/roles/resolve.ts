@@ -1,4 +1,4 @@
-import { getRunnablePack, isPackInstalled, PENTEST_ROLE_PACK } from "./packs.js";
+import { getRunnablePack, PENTEST_ROLE_PACK } from "./packs.js";
 import type { RolePack, RoleResolveInput } from "./types.js";
 
 /**
@@ -18,16 +18,13 @@ export function resolveRolePack(input: RoleResolveInput): {
   if (role) {
     const pack = getRunnablePack(role);
     if (pack) return { pack, source: "role", requested: role };
-    // Explicit but not installed / unknown → conservative default if allowed
-    if (!isPackInstalled(role)) {
-      return {
-        pack: PENTEST_ROLE_PACK,
-        source: "default",
-        requested: role,
-        blocked: true,
-      };
-    }
-    return { pack: PENTEST_ROLE_PACK, source: "default", requested: role };
+    // Explicit but not installed / unknown → blocked (do not run uninstalled packs)
+    return {
+      pack: PENTEST_ROLE_PACK,
+      source: "default",
+      requested: role,
+      blocked: true,
+    };
   }
   if (engagement) {
     const pack = getRunnablePack(engagement);
@@ -36,10 +33,17 @@ export function resolveRolePack(input: RoleResolveInput): {
       pack: PENTEST_ROLE_PACK,
       source: "default",
       requested: engagement,
-      blocked: !isPackInstalled(engagement),
+      blocked: true,
     };
   }
-  // Default empty → pentest when offered (always effective when install empty)
-  const def = getRunnablePack("pentest") || PENTEST_ROLE_PACK;
-  return { pack: def, source: "default" };
+  // Blank engagement/role → default pentest only if pentest is in the effective installed set
+  // (empty install root → virtual pentest; install-only ctf auto-seeds pentest; explicit uninstall of pentest blocks).
+  const def = getRunnablePack("pentest");
+  if (def) return { pack: def, source: "default" };
+  return {
+    pack: PENTEST_ROLE_PACK,
+    source: "default",
+    requested: "pentest",
+    blocked: true,
+  };
 }

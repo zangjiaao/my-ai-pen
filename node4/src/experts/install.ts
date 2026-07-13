@@ -88,21 +88,8 @@ export function loadInstalledPack(packId: string): LoadedPack | null {
   }
 }
 
-export function installExpert(packId: string): InstallResult {
-  const id = packId.toLowerCase().trim();
-  const catalog = expertsCatalogRoot();
+function copyPackFromCatalog(id: string, catalog: string): void {
   const src = catalogPackDir(id);
-  if (!dirHasPackSync(src)) {
-    const known = loadCatalogIndexSync(catalog).map((p) => p.id);
-    return {
-      ok: false,
-      action: "install",
-      packId: id,
-      installed: listInstalledPackIds(),
-      message: `Unknown expert pack '${id}'. Catalog packs: ${known.join(", ") || "(empty)"}`,
-    };
-  }
-  const root = ensureInstallRoot();
   const dest = installPackDir(id);
   rmSync(dest, { recursive: true, force: true });
   cpSync(src, dest, { recursive: true });
@@ -120,6 +107,35 @@ export function installExpert(packId: string): InstallResult {
     ),
     "utf8",
   );
+}
+
+/**
+ * Install a catalog pack into the node install root.
+ * Aligns with platform offers (additive): installing a non-default pack also
+ * seeds **pentest** if it is not already installed, so blank engagement still works.
+ */
+export function installExpert(packId: string): InstallResult {
+  const id = packId.toLowerCase().trim();
+  const catalog = expertsCatalogRoot();
+  const src = catalogPackDir(id);
+  if (!dirHasPackSync(src)) {
+    const known = loadCatalogIndexSync(catalog).map((p) => p.id);
+    return {
+      ok: false,
+      action: "install",
+      packId: id,
+      installed: listInstalledPackIds(),
+      message: `Unknown expert pack '${id}'. Catalog packs: ${known.join(", ") || "(empty)"}`,
+    };
+  }
+  const root = ensureInstallRoot();
+  copyPackFromCatalog(id, catalog);
+  // Platform install_offer is additive and keeps default pentest; mirror that here.
+  if (id !== DEFAULT_OFFER && !listInstalledPackIds().includes(DEFAULT_OFFER)) {
+    if (dirHasPackSync(catalogPackDir(DEFAULT_OFFER))) {
+      copyPackFromCatalog(DEFAULT_OFFER, catalog);
+    }
+  }
   return {
     ok: true,
     action: "install",
