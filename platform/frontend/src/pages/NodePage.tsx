@@ -1,8 +1,15 @@
-import { authFetch } from "../lib/api";
+import { ApiError, authFetch } from "../lib/api";
 import { useState, useEffect, useMemo, type ReactNode } from "react";
 import { Check, Copy, Eye, EyeOff, RefreshCw } from "lucide-react";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
+import {
+  DEFAULT_EXPERT_ID,
+  EXPERT_PACKS,
+  effectiveOffers,
+  expertLabel,
+  type ExpertId,
+} from "../lib/experts";
 
 const STATUS_FILTERS = ["全部", "online", "offline"] as const;
 const TYPE_FILTERS = ["全部", "pentest", "platform"] as const;
@@ -212,6 +219,8 @@ type NodeRecord = {
   connectivity?: ConnectivityBar[];
   connectivity_uptime_pct?: number | null;
   capabilities?: NodeCapabilities | null;
+  /** Installed expert pack ids (default effective: ["pentest"]). */
+  offers?: string[] | null;
 };
 
 export default function NodePage() {
@@ -243,7 +252,8 @@ export default function NodePage() {
       if (statusFilter !== "全部" && n.status !== statusFilter) return false;
       if (typeFilter !== "全部" && n.type !== typeFilter) return false;
       if (!q) return true;
-      const hay = `${n.name} ${n.ip || ""} ${n.type} ${taskSummary(n.current_task)}`.toLowerCase();
+      const offers = effectiveOffers(n.offers).join(" ");
+      const hay = `${n.name} ${n.ip || ""} ${n.type} ${offers} ${taskSummary(n.current_task)}`.toLowerCase();
       return hay.includes(q);
     });
   }, [nodes, search, statusFilter, typeFilter]);
@@ -403,6 +413,19 @@ export default function NodePage() {
                             预算 {formatWorkerTimeout(n.worker_max_ms)} · 轮次 {n.worker_max_turns ?? 12}
                           </p>
                         )}
+                        {!isPlatform && (
+                          <p className="flex flex-wrap items-center gap-1 pt-0.5">
+                            <span className="text-ink-muted">专家 </span>
+                            {effectiveOffers(n.offers).map((pack) => (
+                              <span
+                                key={pack}
+                                className="rounded-pill border border-hairline bg-canvas-inset px-1.5 py-px font-mono text-[10px] text-ink"
+                              >
+                                {expertLabel(pack)}
+                              </span>
+                            ))}
+                          </p>
+                        )}
                       </div>
                       <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
                         <ConnectivityStrip bars={n.connectivity} uptimePct={n.connectivity_uptime_pct} />
@@ -494,7 +517,10 @@ function NodeDetailDialog({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [saveOk, setSaveOk] = useState(false);
-  type DetailTab = "overview" | "runtime" | "skills" | "workflows" | "tools";
+  const [expertBusy, setExpertBusy] = useState<string | null>(null);
+  const [expertError, setExpertError] = useState("");
+  const [localOffers, setLocalOffers] = useState<ExpertId[]>(() => effectiveOffers(node.offers));
+  type DetailTab = "overview" | "experts" | "runtime" | "skills" | "workflows" | "tools";
   const [detailTab, setDetailTab] = useState<DetailTab>("overview");
 
   const reportedCaps = normalizeCapabilities(node.capabilities);
@@ -512,6 +538,9 @@ function NodeDetailDialog({
 
   const detailTabs: { key: DetailTab; label: string; count?: number }[] = [
     { key: "overview", label: "概览" },
+    ...(!isPlatform
+      ? [{ key: "experts" as const, label: "专家包", count: localOffers.length }]
+      : []),
     ...(isPentest ? [{ key: "runtime" as const, label: "运行参数" }] : []),
     ...((caps?.skills?.length ?? 0) > 0
       ? [{ key: "skills" as const, label: "技能", count: caps!.skills!.length }]
@@ -540,6 +569,9 @@ function NodeDetailDialog({
     setScanMode(node.default_scan_mode || "standard");
     setSaveError("");
     setSaveOk(false);
+    setExpertError("");
+    setExpertBusy(null);
+    setLocalOffers(effectiveOffers(node.offers));
     setDetailTab("overview");
   }, [
     node.id,
@@ -551,7 +583,49 @@ function NodeDetailDialog({
     node.main_max_turns,
     node.max_concurrent_workers,
     node.default_scan_mode,
+    node.offers,
   ]);
+
+  const installExpert = async (expertId: ExpertId) => {
+    setExpertBusy(expertId);
+    setExpertError("");
+    try {
+      const res = await authFetch<{ offers?: string[] }>(`/api/nodes/${node.id}/experts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expert_id: expertId }),
+      });
+      setLocalOffers(effectiveOffers(res.offers ?? [...localOffers, expertId]));
+      window.dispatchEvent(new Event("nodes:changed"));
+      onSaved();
+    } catch (e) {
+      setExpertError(e instanceof ApiError ? e.message : e instanceof Error ? e.message : "安装失败");
+    } finally {
+      setExpertBusy(null);
+    }
+  };
+
+  const uninstallExpert = async (expertId: ExpertId) => {
+    if (localOffers.length <= 1) {
+      setExpertError("节点至少保留一个专家包");
+      return;
+    }
+    setExpertBusy(expertId);
+    setExpertError("");
+    try {
+      const res = await authFetch<{ offers?: string[] }>(
+        `/api/nodes/${node.id}/experts/${encodeURIComponent(expertId)}`,
+        { method: "DELETE" },
+      );
+      setLocalOffers(effectiveOffers(res.offers));
+      window.dispatchEvent(new Event("nodes:changed"));
+      onSaved();
+    } catch (e) {
+      setExpertError(e instanceof ApiError ? e.message : e instanceof Error ? e.message : "卸载失败");
+    } finally {
+      setExpertBusy(null);
+    }
+  };
 
   const saveRename = async () => {
     const trimmed = nameDraft.trim();
@@ -758,6 +832,35 @@ function NodeDetailDialog({
                 />
                 <InfoCard label="注册时间" value={formatDate(node.registered_at)} />
               </section>
+              {!isPlatform && (
+                <section className="rounded-md border border-hairline-soft p-4">
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <p className="text-sm font-medium">已安装专家</p>
+                    <button
+                      type="button"
+                      onClick={() => setDetailTab("experts")}
+                      className="text-xs text-ink-secondary underline-offset-2 hover:underline"
+                    >
+                      管理专家包 →
+                    </button>
+                  </div>
+                  <p className="mb-2 text-xs text-ink-muted">
+                    节点是容器；任务只能派给已安装的专家角色（默认仅 Pentest）。
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {localOffers.map((pack) => (
+                      <span
+                        key={pack}
+                        className="rounded-pill border border-hairline bg-canvas-inset px-2.5 py-0.5 text-xs text-ink"
+                        title={EXPERT_PACKS.find((p) => p.id === pack)?.description}
+                      >
+                        <span className="font-medium">{expertLabel(pack)}</span>
+                        <span className="ml-1 font-mono text-[10px] text-ink-muted">{pack}</span>
+                      </span>
+                    ))}
+                  </div>
+                </section>
+              )}
               <div className="rounded-md border border-hairline-soft p-4">
                 <div className="mb-2 flex items-center justify-between">
                   <p className="text-sm font-medium">Token</p>
@@ -806,6 +909,86 @@ function NodeDetailDialog({
                   {[caps.runtime, caps.version].filter(Boolean).join(" · ")}
                 </p>
               )}
+            </div>
+          )}
+
+          {activeDetailTab === "experts" && !isPlatform && (
+            <div className="space-y-4">
+              <div>
+                <p className="text-sm font-medium">专家包（多角色）</p>
+                <p className="mt-1 text-xs text-ink-muted">
+                  安装后，对话页才能为该节点选择对应 Expert。派发会校验 offers；卸载最后一个专家会被拒绝。
+                  安装/卸载仅写计费钩子（billing hook），不走真实支付。
+                </p>
+              </div>
+              {expertError && (
+                <p className="rounded-md border border-status-error/30 bg-status-error/5 px-3 py-2 text-xs text-status-error">
+                  {expertError}
+                </p>
+              )}
+              <ul className="space-y-3">
+                {EXPERT_PACKS.map((pack) => {
+                  const installed = localOffers.includes(pack.id);
+                  const busy = expertBusy === pack.id;
+                  const onlyOne = installed && localOffers.length <= 1;
+                  return (
+                    <li
+                      key={pack.id}
+                      className="flex flex-col gap-3 rounded-md border border-hairline-soft p-4 sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-medium text-ink">{pack.label}</span>
+                          <span className="font-mono text-[11px] text-ink-muted">{pack.id}</span>
+                          {pack.isDefault && (
+                            <span className="rounded-pill border border-hairline px-1.5 py-px text-[10px] text-ink-muted">
+                              默认
+                            </span>
+                          )}
+                          {installed ? (
+                            <span className="rounded-pill bg-status-success/10 px-1.5 py-px text-[10px] text-status-success">
+                              已安装
+                            </span>
+                          ) : (
+                            <span className="rounded-pill border border-hairline px-1.5 py-px text-[10px] text-ink-muted">
+                              未安装
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-1 text-xs text-ink-secondary">{pack.description}</p>
+                      </div>
+                      <div className="flex shrink-0 gap-2">
+                        {installed ? (
+                          <button
+                            type="button"
+                            disabled={busy || onlyOne}
+                            title={onlyOne ? "至少保留一个专家包" : `卸载 ${pack.label}`}
+                            onClick={() => void uninstallExpert(pack.id)}
+                            className="rounded-md border border-hairline px-3 py-1.5 text-xs text-ink-secondary hover:bg-surface-default disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            {busy ? "处理中…" : "卸载"}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void installExpert(pack.id)}
+                            className="rounded-md bg-ink px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            {busy ? "处理中…" : "安装"}
+                          </button>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+              <p className="text-[11px] text-ink-muted">
+                当前 offers：
+                <span className="ml-1 font-mono text-ink">
+                  {localOffers.join(", ") || DEFAULT_EXPERT_ID}
+                </span>
+              </p>
             </div>
           )}
 

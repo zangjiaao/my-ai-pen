@@ -13,6 +13,13 @@ from app.services.agent_router import extract_target
 from app.services.agent_orchestrator import AgentCapability, OrchestrationContext, OrchestrationError, route_with_platform_agent
 from app.services.platform_agent import answer_clarification, answer_platform_chat, answer_snapshot_qa
 from app.services.conversation_snapshot import build_conversation_snapshot
+from app.services.expert_offers import (
+    ACTION_USAGE,
+    dispatch_gate_error,
+    engagement_from_task_message,
+    normalize_pack_id,
+    usage_billing_detail,
+)
 from app.models.node import PLATFORM_AGENT_NODE_ID
 
 router = APIRouter()
@@ -394,6 +401,9 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
             await _incr_sessions(client_id, -1)
         if conv_id:
             await _set_conversation_status(conv_id, _terminal_status_from_task_message(msg))
+        # Usage billing hook (no payment): record expert pack used on settlement.
+        if msg.get("type") == "task_complete":
+            await _record_expert_usage_billing(msg, node_id=client_id, conv_id=conv_id)
     elif msg.get("type") == "task_incomplete" and conv_id:
         await _set_conversation_status(
             conv_id,
@@ -1596,6 +1606,7 @@ async def _remember_conversation_task(
     scope: dict,
     instruction: str,
     goal_objective: str | None = None,
+    engagement: str | None = None,
 ):
     try:
         from app.db.base import async_session
@@ -1615,11 +1626,89 @@ async def _remember_conversation_task(
             go = str(goal_objective or "").strip()
             if go:
                 task_blob["goal_objective"] = go
+            eng = str(engagement or "").strip()
+            if eng:
+                task_blob["engagement"] = eng
+                pack = normalize_pack_id(eng)
+                if pack:
+                    task_blob["role"] = pack
             context["task"] = task_blob
             c.context = context
             await db.commit()
     except Exception as e:
         print(f"[WS] remember conversation task error: {e}")
+
+
+async def _node_config(node_id: str | None) -> dict:
+    """Load node.config for offers / gate checks. Empty dict if unavailable."""
+    if not node_id:
+        return {}
+    try:
+        from app.db.base import async_session
+        from app.models.node import Node
+
+        async with async_session() as db:
+            result = await db.execute(select(Node).where(Node.id == uuid.UUID(str(node_id))))
+            node = result.scalar_one_or_none()
+            if not node:
+                return {}
+            return dict(node.config) if isinstance(node.config, dict) else {}
+    except Exception as e:
+        print(f"[WS] _node_config error: {e}")
+        return {}
+
+
+async def _gate_engagement_for_node(node_id: str | None, engagement: object) -> str | None:
+    """Return error text if engagement is not offered on the node; else None."""
+    cfg = await _node_config(node_id)
+    return dispatch_gate_error(cfg, engagement)
+
+
+async def _record_expert_usage_billing(
+    msg: dict,
+    *,
+    node_id: str | None,
+    conv_id: str | None,
+) -> None:
+    """Append expert.usage billing hook on task_complete (no payment side effects)."""
+    try:
+        eng = engagement_from_task_message(msg)
+        if not eng and conv_id:
+            # Fall back to structured engagement stored on conversation.task.
+            try:
+                from app.db.base import async_session
+                from app.models.conversation import Conversation
+
+                async with async_session() as db:
+                    r = await db.execute(
+                        select(Conversation).where(Conversation.id == uuid.UUID(str(conv_id)))
+                    )
+                    c = r.scalar_one_or_none()
+                    if c and isinstance(c.context, dict):
+                        task = c.context.get("task") if isinstance(c.context.get("task"), dict) else {}
+                        eng = str(task.get("engagement") or task.get("role") or "").strip()
+            except Exception:
+                pass
+        detail = usage_billing_detail(
+            engagement=eng or None,
+            expert_id=msg.get("expert_id") or msg.get("role") or msg.get("engagement") or eng or None,
+            task_id=msg.get("task_id"),
+            conversation_id=conv_id,
+            node_id=node_id,
+            status=msg.get("status") or "completed",
+        )
+        actor = _uuid(node_id) or uuid.UUID(int=0)
+        await _audit(
+            actor_type="node" if node_id else "system",
+            actor_id=actor,
+            action=ACTION_USAGE,
+            resource_type="conversation" if conv_id else "node",
+            resource_id=_uuid(conv_id) or _uuid(node_id),
+            conversation_id=_uuid(conv_id),
+            detail=detail,
+        )
+    except Exception as e:
+        print(f"[WS] expert usage billing error: {e}")
 
 
 async def _remember_conversation_checkpoint(conv_id: str, checkpoint: dict):
@@ -1795,6 +1884,19 @@ def _task_assign_from_user_message(conv_id: str, msg: dict, task_id: str) -> dic
     if goal_objective:
         out["goal_objective"] = goal_objective
         out["goal_mode"] = True
+    # Explicit structured engagement/role only (UI/API field) — never NLP of text.
+    eng = engagement_from_task_message(msg)
+    if eng:
+        out["engagement"] = eng
+        pack = normalize_pack_id(eng)
+        if pack:
+            out["role"] = pack
+        snap = out.get("snapshot") if isinstance(out.get("snapshot"), dict) else {}
+        snap = dict(snap)
+        snap["engagement"] = eng
+        if pack:
+            snap["role"] = pack
+        out["snapshot"] = snap
     return out
 
 
@@ -2227,6 +2329,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             task_scope = task_msg["scope"]
                             task_instruction = task_msg["initial_instruction"]
                             task_goal = str(task_msg.get("goal_objective") or "").strip() or None
+                            task_engagement = str(task_msg.get("engagement") or "").strip() or None
                             if not resumed_from_context:
                                 await _remember_conversation_task(
                                     conv_id,
@@ -2234,15 +2337,17 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                                     scope=task_scope,
                                     instruction=task_instruction,
                                     goal_objective=task_goal,
+                                    engagement=task_engagement,
                                 )
-                            elif task_goal:
-                                # Resume may re-seed goal mode; keep context in sync.
+                            elif task_goal or task_engagement:
+                                # Resume may re-seed goal/engagement; keep context in sync.
                                 await _remember_conversation_task(
                                     conv_id,
                                     target=task_target,
                                     scope=task_scope,
                                     instruction=task_instruction,
                                     goal_objective=task_goal,
+                                    engagement=task_engagement,
                                 )
                             global _round_robin_counter
                             preferred_node_id = decision.agent_node_id or _agent_node_id(msg)
@@ -2262,6 +2367,19 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                                 idx = _round_robin_counter % len(node_ids)
                                 _round_robin_counter += 1
                                 node_id = node_ids[idx]
+                            # Dispatch gate: engagement pack must be in node's offers.
+                            gate_err = await _gate_engagement_for_node(
+                                node_id, task_msg.get("engagement") or msg.get("engagement") or msg.get("role")
+                            )
+                            if gate_err:
+                                await _persist_and_broadcast(conv_id, {
+                                    "type": "task_error",
+                                    "conversation_id": conv_id,
+                                    "message": gate_err,
+                                    "agent_source": "platform",
+                                    "agent_node_id": str(PLATFORM_AGENT_NODE_ID),
+                                }, "agent")
+                                continue
                             await _bind_conversation_to_node(conv_id, node_id)
                             await _incr_sessions(node_id, 1)
                             task_msg["agent_node_id"] = node_id
@@ -2271,6 +2389,14 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                                 snapshot["checkpoint"] = msg.get("checkpoint") or {}
                             elif not resumed_from_context:
                                 snapshot["checkpoint"] = {}
+                            # Preserve structured engagement on snapshot for the worker.
+                            if task_msg.get("engagement"):
+                                if not isinstance(snapshot, dict):
+                                    snapshot = {}
+                                snapshot = dict(snapshot)
+                                snapshot["engagement"] = task_msg["engagement"]
+                                if task_msg.get("role"):
+                                    snapshot["role"] = task_msg["role"]
                             task_msg["snapshot"] = snapshot
                             worker_limits = await _worker_limits_for_node(node_id)
                             if worker_limits:

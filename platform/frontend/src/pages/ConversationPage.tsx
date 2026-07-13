@@ -15,6 +15,14 @@ import { useInfiniteQuery, useQueryClient, type InfiniteData } from "@tanstack/r
 import { Upload } from "lucide-react";
 import type { AgentIdentity, Conversation, Message } from "../lib/types";
 import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../lib/securityTypes";
+import {
+  DEFAULT_EXPERT_ID,
+  EXPERT_PACKS,
+  coerceEngagementToOffers,
+  effectiveOffers,
+  expertLabel,
+  type ExpertId,
+} from "../lib/experts";
 
 const ACTIVE_CONVERSATION_KEY = "active_conversation_id";
 /** Set by AssetPage when launching a task from selected hosts/ports. */
@@ -22,10 +30,12 @@ const PENDING_ASSET_TASK_KEY = "pending_asset_task";
 const MESSAGE_PAGE_SIZE = 200;
 
 const TEMPLATES = [
-  { label: "Web pentest", text: "Test {URL} for web application vulnerabilities" },
-  { label: "Host scan", text: "Scan {IP range} for exposed services and security issues" },
-  { label: "Access control", text: "Test the following accounts for access-control issues" },
-  { label: "Retest", text: "Retest the vulnerability and verify the fix" },
+  { label: "Web pentest", text: "Test {URL} for web application vulnerabilities", engagement: "pentest" as ExpertId },
+  { label: "Host scan", text: "Scan {IP range} for exposed services and security issues", engagement: "pentest" as ExpertId },
+  { label: "Access control", text: "Test the following accounts for access-control issues", engagement: "pentest" as ExpertId },
+  { label: "Retest", text: "Retest the vulnerability and verify the fix", engagement: "pentest" as ExpertId },
+  { label: "CTF challenge", text: "Play the CTF web challenges at {URL}; maximize verified flags", engagement: "ctf" as ExpertId },
+  { label: "Consult", text: "Explain the security posture of {URL} within authorized scope", engagement: "consult" as ExpertId },
 ];
 
 type Progress = { current: number; total: number; percent: number };
@@ -86,7 +96,15 @@ type StrixRun = {
     agent_count?: number;
   };
 };
-type AgentNode = { id: string; name: string; type: AgentIdentity | string; status: string; token_required?: boolean };
+type AgentNode = {
+  id: string;
+  name: string;
+  type: AgentIdentity | string;
+  status: string;
+  token_required?: boolean;
+  /** Installed expert pack ids from node.config.offers (default effective: pentest). */
+  offers?: string[] | null;
+};
 type MentionState = { start: number; query: string } | null;
 
 type MessageRecord = Record<string, unknown>;
@@ -133,6 +151,12 @@ export default function ConversationPage() {
   /** Explicit long-task Goal mode (structured field → Node4 goalObjective; not NLP). */
   const [goalModeEnabled, setGoalModeEnabled] = useState(false);
   const [goalObjective, setGoalObjective] = useState("");
+  /**
+   * Explicit expert/engagement for task_assign (structured field only — not NLP).
+   * Maps to Node4 role pack ids: pentest (default), ctf, consult.
+   * Coerced to the target node's offers when the node changes.
+   */
+  const [engagement, setEngagement] = useState<ExpertId>(DEFAULT_EXPERT_ID);
   const [importingReport, setImportingReport] = useState(false);
   const [importStatus, setImportStatus] = useState<ImportStatus>(null);
   const [selectedAgent, setSelectedAgent] = useState<AgentNode | null>(null);
@@ -769,6 +793,29 @@ export default function ConversationPage() {
     };
   }, [loadAgentNodes]);
 
+  /** Worker node that will receive the next assign (mention > sticky conv node > first online pentest). */
+  const targetWorkerNode = useMemo(() => {
+    const selected = selectedAgentRef.current || selectedAgent;
+    if (selected && selected.type !== "platform") return selected;
+    const bound = agentNodeById(agentNodes, activeConversationNodeId || activeConversation?.node_id || null);
+    if (bound && bound.type !== "platform") return bound;
+    return (
+      agentNodes.find((n) => n.type !== "platform" && n.status === "online") ||
+      agentNodes.find((n) => n.type !== "platform") ||
+      null
+    );
+  }, [selectedAgent, agentNodes, activeConversationNodeId, activeConversation?.node_id]);
+
+  const targetOffers = useMemo(
+    () => effectiveOffers(targetWorkerNode?.offers),
+    [targetWorkerNode],
+  );
+
+  // Keep engagement on an installed pack when node/offers change.
+  useEffect(() => {
+    setEngagement((prev) => coerceEngagementToOffers(prev, targetOffers));
+  }, [targetOffers]);
+
   useEffect(() => {
     if (restoreAttempted || conversations.length === 0) return;
     const storedId = localStorage.getItem(ACTIVE_CONVERSATION_KEY);
@@ -849,6 +896,8 @@ export default function ConversationPage() {
     /** Explicit Goal mode for this assign (UI switch). */
     goalMode?: boolean;
     goalObjective?: string;
+    /** Explicit expert/engagement (UI select → structured task field only). */
+    engagement?: string;
   }) => {
     const displayText = opts.displayText.trim();
     const text = opts.text.trim() || displayText;
@@ -860,6 +909,10 @@ export default function ConversationPage() {
           goal_mode: true,
           ...(goalObjectiveText ? { goal_objective: goalObjectiveText } : {}),
         }
+      : {};
+    const eng = String(opts.engagement || "").trim();
+    const engagementPayload: Record<string, unknown> = eng
+      ? { engagement: eng, role: eng }
       : {};
 
     const selectedAgentCandidate = selectedAgentRef.current || selectedAgent;
@@ -962,6 +1015,7 @@ export default function ConversationPage() {
         client_message_id: clientMessageId,
         ...agentPayload,
         ...goalPayload,
+        ...engagementPayload,
       });
       return;
     }
@@ -977,6 +1031,7 @@ export default function ConversationPage() {
         client_message_id: clientMessageId,
         ...agentPayload,
         ...goalPayload,
+        ...engagementPayload,
       });
       return;
     }
@@ -990,6 +1045,7 @@ export default function ConversationPage() {
         client_message_id: clientMessageId,
         ...agentPayload,
         ...goalPayload,
+        ...engagementPayload,
       });
       return;
     }
@@ -1013,6 +1069,7 @@ export default function ConversationPage() {
       client_message_id: clientMessageId,
       ...agentPayload,
       ...goalPayload,
+      ...engagementPayload,
     });
   }, [
     selectedAgent,
@@ -1074,8 +1131,9 @@ export default function ConversationPage() {
       text,
       goalMode: goalModeEnabled,
       goalObjective: goalObjective.trim() || undefined,
+      engagement,
     });
-  }, [input, selectedAgent, agentNodes, launchTaskMessage, goalModeEnabled, goalObjective]);
+  }, [input, selectedAgent, agentNodes, launchTaskMessage, goalModeEnabled, goalObjective, engagement]);
 
 
 function renderMentionText(text: string): ReactNode[] {
@@ -1258,12 +1316,82 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               ))}
             </div>
             <div className="border-t border-hairline-soft p-4">
-              <div className="mb-3 flex gap-2">
-                {TEMPLATES.map((t) => (
-                  <button key={t.label} onClick={() => setInput(t.text)} className="rounded-pill border border-hairline px-3 py-1.5 text-xs text-ink-secondary transition-colors hover:bg-surface-default hover:text-ink">{t.label}</button>
-                ))}
+              <div className="mb-3 flex flex-wrap gap-2">
+                {TEMPLATES.map((t) => {
+                  const available = targetOffers.includes(t.engagement);
+                  return (
+                    <button
+                      key={t.label}
+                      type="button"
+                      disabled={!available}
+                      title={
+                        available
+                          ? t.text
+                          : `${expertLabel(t.engagement)} is not installed on the target node — install it under Nodes → Experts`
+                      }
+                      onClick={() => {
+                        setInput(t.text);
+                        if (available) setEngagement(t.engagement);
+                      }}
+                      className="rounded-pill border border-hairline px-3 py-1.5 text-xs text-ink-secondary transition-colors hover:bg-surface-default hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {t.label}
+                    </button>
+                  );
+                })}
               </div>
               <div className="mb-3 flex flex-col gap-2 rounded-md border border-hairline-soft bg-surface-default/40 px-3 py-2">
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-ink-secondary">
+                    <span className="font-medium text-ink">Expert role</span>
+                    {targetWorkerNode ? (
+                      <span className="text-ink-muted">
+                        on{" "}
+                        <span className="font-medium text-ink">{targetWorkerNode.name}</span>
+                        {targetWorkerNode.status !== "online" ? (
+                          <span className="text-severity-critical"> (offline)</span>
+                        ) : null}
+                      </span>
+                    ) : (
+                      <span className="text-ink-muted">— no worker node yet (defaults to pentest offers)</span>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5" role="group" aria-label="Expert engagement">
+                    {EXPERT_PACKS.map((pack) => {
+                      const installed = targetOffers.includes(pack.id);
+                      const active = engagement === pack.id;
+                      return (
+                        <button
+                          key={pack.id}
+                          type="button"
+                          disabled={!installed}
+                          title={
+                            installed
+                              ? pack.description
+                              : `${pack.label} is not installed on this node. Open Nodes → Experts to install.`
+                          }
+                          onClick={() => setEngagement(pack.id)}
+                          className={[
+                            "rounded-md border px-2.5 py-1 text-xs transition-colors",
+                            active
+                              ? "border-ink bg-ink text-white"
+                              : installed
+                                ? "border-hairline bg-canvas text-ink hover:bg-surface-default"
+                                : "cursor-not-allowed border-hairline bg-canvas-inset text-ink-muted opacity-50",
+                          ].join(" ")}
+                        >
+                          <span className="font-medium">{pack.label}</span>
+                          {!installed && <span className="ml-1 text-[10px]">(not installed)</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[11px] text-ink-muted">
+                    Structured engagement only (no free-text routing). Install packs under{" "}
+                    <span className="font-medium text-ink-secondary">Nodes → Experts</span>. Installed:{" "}
+                    <span className="font-mono text-ink">{targetOffers.join(", ")}</span>
+                  </p>
+                </div>
                 <label className="flex cursor-pointer items-center gap-2 text-xs text-ink-secondary">
                   <input
                     type="checkbox"

@@ -12,6 +12,15 @@ from app.middleware.auth import get_current_user
 from app.models.audit import AuditLog
 from app.models.conversation import Conversation
 from app.models.node import Node, PLATFORM_AGENT_NODE_ID, PLATFORM_AGENT_NODE_NAME
+from app.services.expert_offers import (
+    ACTION_INSTALL,
+    ACTION_UNINSTALL,
+    DEFAULT_OFFERS,
+    KNOWN_PACK_IDS,
+    effective_offers,
+    install_offer,
+    uninstall_offer,
+)
 
 router = APIRouter(prefix="/api/nodes", tags=["nodes"])
 
@@ -74,6 +83,8 @@ class NodeOut(BaseModel):
     connectivity_uptime_pct: float | None = None
     # Optional capability manifest from node.config.capabilities (node-reported).
     capabilities: dict | None = None
+    # Installed expert pack ids (node as container). Default effective: ["pentest"].
+    offers: list[str] = Field(default_factory=lambda: list(DEFAULT_OFFERS))
     model_config = {"from_attributes": True}
 
 
@@ -86,6 +97,11 @@ class NodeUpdate(BaseModel):
     main_max_turns: int | None = None
     max_concurrent_workers: int | None = None
     default_scan_mode: str | None = None
+
+
+class ExpertInstallBody(BaseModel):
+    """Install an expert pack on a worker node (structured id only — no NLP)."""
+    expert_id: str = Field(..., min_length=1, max_length=64)
 
 
 @router.get("", response_model=list[NodeOut])
@@ -224,6 +240,92 @@ async def update_node(node_id: str, body: NodeUpdate, current_user: dict = Depen
     tasks = await _current_tasks_by_node(db, [n])
     connectivity = await _connectivity_by_node(db, [n])
     return _node_out(n, tasks.get(n.id), connectivity.get(n.id))
+
+
+@router.get("/{node_id}/offers", response_model=dict)
+async def get_node_offers(
+    node_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """List effective expert offers for a node (default: pentest only)."""
+    await _ensure_platform_node(db)
+    n = await _get_node(db, node_id)
+    offers = effective_offers(n.config)
+    return {
+        "node_id": str(n.id),
+        "name": n.name,
+        "offers": offers,
+        "known_packs": sorted(KNOWN_PACK_IDS),
+    }
+
+
+@router.post("/{node_id}/experts", response_model=dict)
+async def install_node_expert(
+    node_id: str,
+    body: ExpertInstallBody,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Install an expert pack on a node. Emits expert.install billing hook (no payment)."""
+    await _ensure_platform_node(db)
+    n = await _get_node(db, node_id)
+    if n.id == PLATFORM_AGENT_NODE_ID or n.type == "platform":
+        raise HTTPException(400, "Platform node does not install expert packs")
+    try:
+        new_cfg, detail = install_offer(n.config, body.expert_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    n.config = new_cfg
+    await _audit_user(
+        db,
+        uuid.UUID(current_user["user_id"]),
+        ACTION_INSTALL,
+        n.id,
+        detail,
+    )
+    await db.commit()
+    await db.refresh(n)
+    return {
+        "ok": True,
+        "node_id": str(n.id),
+        "offers": effective_offers(n.config),
+        "billing": detail,
+    }
+
+
+@router.delete("/{node_id}/experts/{expert_id}", response_model=dict)
+async def uninstall_node_expert(
+    node_id: str,
+    expert_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove an expert pack from a node. Emits expert.uninstall billing hook (no payment)."""
+    await _ensure_platform_node(db)
+    n = await _get_node(db, node_id)
+    if n.id == PLATFORM_AGENT_NODE_ID or n.type == "platform":
+        raise HTTPException(400, "Platform node does not install expert packs")
+    try:
+        new_cfg, detail = uninstall_offer(n.config, expert_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    n.config = new_cfg
+    await _audit_user(
+        db,
+        uuid.UUID(current_user["user_id"]),
+        ACTION_UNINSTALL,
+        n.id,
+        detail,
+    )
+    await db.commit()
+    await db.refresh(n)
+    return {
+        "ok": True,
+        "node_id": str(n.id),
+        "offers": effective_offers(n.config),
+        "billing": detail,
+    }
 
 
 @router.post("/{node_id}/regenerate-token", response_model=dict)
@@ -674,4 +776,5 @@ def _node_out(
         connectivity=bars,
         connectivity_uptime_pct=_uptime_pct(bars),
         capabilities=_capabilities_from_config(n.config),
+        offers=effective_offers(n.config) if n.type != "platform" else [],
     )

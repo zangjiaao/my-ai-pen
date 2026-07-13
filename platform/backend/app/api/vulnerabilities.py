@@ -626,7 +626,11 @@ async def _dispatch_retest_if_possible(
             snapshot = {}
         snapshot["checkpoint"] = {}
         # Explicit structured engagement (product field) — Node2 must not NLP the instruction.
-        eng = engagement if engagement in {"assess", "verify", "retest", "consult"} else "retest"
+        eng = engagement if engagement in {"assess", "verify", "retest", "consult", "ctf", "pentest"} else "retest"
+        gate_err = await ws_router._gate_engagement_for_node(node_id, eng)
+        if gate_err:
+            print(f"[API] retest dispatch blocked by expert offers: {gate_err}")
+            return False
         snapshot["engagement"] = eng
         task_msg = {
             "type": "task_assign",

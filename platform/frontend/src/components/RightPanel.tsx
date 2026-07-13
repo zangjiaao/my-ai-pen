@@ -374,6 +374,7 @@ export default function RightPanel({
               <StrixTodoList items={taskItems} running={running} />
             </section>
             {intake && <IntakeSummary intake={intake} />}
+            <TaskExpertSummary taskContext={taskContext} />
           </div>
         )}
         {tab === "surface" && (
@@ -860,6 +861,22 @@ function IntakeSummary({ intake }: { intake: ReturnType<typeof normalizeIntake> 
         {intake.connectivity && <p className="break-all">Connectivity: {intake.connectivity}</p>}
         {intake.reason && <p className="break-all text-severity-critical">{intake.reason}</p>}
       </div>
+    </section>
+  );
+}
+
+/** Show structured expert role from conversation.task (engagement/role) — not free-text NLP. */
+function TaskExpertSummary({ taskContext }: { taskContext?: Record<string, unknown> }) {
+  if (!taskContext) return null;
+  const eng = String(taskContext.engagement || taskContext.role || "").trim();
+  if (!eng) return null;
+  return (
+    <section className="rounded-md border border-hairline-soft p-3" data-testid="task-expert-role">
+      <p className="mb-1 text-xs font-medium uppercase tracking-wide text-ink-muted">Expert role</p>
+      <p className="text-sm font-medium text-ink">
+        {eng}
+        <span className="ml-2 font-mono text-[11px] font-normal text-ink-muted">structured engagement</span>
+      </p>
     </section>
   );
 }
