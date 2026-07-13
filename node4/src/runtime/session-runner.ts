@@ -159,7 +159,36 @@ export async function runNode4Task(
   setRuntimeApiKey(authStorage, config.modelProvider);
   const modelRegistry = ModelRegistry.inMemory(authStorage);
   if (config.llmBaseUrl) {
-    modelRegistry.registerProvider(config.modelProvider, { baseUrl: config.llmBaseUrl });
+    // Built-in providers: override base URL only. Unknown providers (e.g. vast
+    // llama.cpp): register the model id from env so OpenAI-compatible endpoints work.
+    const known = modelRegistry.find(config.modelProvider, config.modelId);
+    if (known) {
+      modelRegistry.registerProvider(config.modelProvider, { baseUrl: config.llmBaseUrl });
+    } else {
+      const apiKey =
+        process.env.LLM_API_KEY ||
+        process.env.OPENAI_API_KEY ||
+        process.env.DEEPSEEK_API_KEY ||
+        "sk-no-key";
+      const contextWindow = Math.max(1024, Number(process.env.LLM_CONTEXT_WINDOW || 8192) || 8192);
+      const maxTokens = Math.max(256, Number(process.env.LLM_MAX_TOKENS || 2048) || 2048);
+      modelRegistry.registerProvider(config.modelProvider, {
+        baseUrl: config.llmBaseUrl,
+        api: (process.env.LLM_API as any) || "openai-completions",
+        apiKey,
+        models: [
+          {
+            id: config.modelId,
+            name: config.modelId,
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow,
+            maxTokens,
+          },
+        ],
+      });
+    }
   }
   const model = modelRegistry.find(config.modelProvider, config.modelId);
   if (!model) throw new Error(`model not found: ${config.modelProvider}/${config.modelId}`);
