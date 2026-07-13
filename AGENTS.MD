@@ -24,6 +24,16 @@
 - Keep changes scoped and avoid hiding design problems behind presentation-layer patches.
 - Before adding a workaround, ask whether it should be a temporary patch, a feature flag, or a proper architectural change.
 
+## Documentation Maintenance
+
+- **Keep docs current with code.** When you change product behavior, runtime layout, expert packs, install/uninstall, APIs, or default policies, update the matching living docs in the **same change** (or immediately after), not as a vague follow-up.
+- **Living sources (edit these):** `docs/prd.md`, `docs/node4-harness.md`, `docs/node-expert-offers.md`, `docs/node4-ctf-role.md`, `docs/design.md` (UI only), `docs/README.md`, `experts/README.md`, and this file. Prefer small surgical updates over new parallel docs.
+- **Do not treat `docs/archive/` as truth** — historical only; if a live doc still points at archived paths or old Node1–3 product models, fix or remove the pointer.
+- **Remove leftovers:** if you migrate files (e.g. skills/recipes into `experts/`), delete or replace old paths under `node4/` with a short pointer README so agents do not follow stale locations.
+- **Index and discoverability:** when adding a new living doc, link it from `docs/README.md` (and `experts/README.md` when pack-related).
+- **Accuracy over volume:** do not invent roadmaps or restate large PLAID archives; document what the system **actually** does now (Node4, bare runtime, experts catalog, platform offers).
+- **Commits:** include doc updates in the same commit as the behavioral change when practical so history stays reviewable.
+
 ## Harness Over Restriction
 
 - Do not use target-specific profiles, benchmark expectations, expected vulnerability counts, fixed vulnerability lists, or site-identification logic to simulate security testing ability.
