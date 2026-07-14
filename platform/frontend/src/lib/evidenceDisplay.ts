@@ -17,8 +17,8 @@ export type EvidenceLike = {
 };
 
 export type ParsedEvidenceView = {
-  /** http | scan | browser | tool | generic */
-  kind: "http" | "scan" | "browser" | "tool" | "generic";
+  /** http | scan | browser | shell | tool | generic */
+  kind: "http" | "scan" | "browser" | "shell" | "tool" | "generic";
   /** Short badge e.g. HTTP, SCAN, BROWSER */
   badge: string;
   /** One-line title for cards */
@@ -34,6 +34,13 @@ export type ParsedEvidenceView = {
     requestBody?: string;
     responseHeaders?: string;
     responseBody?: string;
+  };
+  /** Shell / script structured view */
+  shell?: {
+    command?: string;
+    exitCode?: string;
+    stdout?: string;
+    stderr?: string;
   };
   /** Scan / tool body lines (already truncated) */
   bodyPreview?: string;
@@ -131,17 +138,55 @@ export function parseEvidenceView(ev: EvidenceLike): ParsedEvidenceView {
   const summary = str(ev.summary);
   const data = gatherData(ev);
   const type = str(ev.type).toLowerCase();
+  const kindHint = str(data.kind).toLowerCase();
 
-  if (looksHttp(data, summary, tool) || type.includes("http") || type.includes("traffic")) {
+  if (kindHint === "http" || looksHttp(data, summary, tool) || type.includes("http") || type.includes("traffic")) {
     return parseHttpView(ev, data, summary, tool);
+  }
+  if (kindHint === "shell" || tool === "shell" || tool === "script") {
+    return parseShellView(ev, data, summary, tool);
   }
   if (looksScan(data, summary, tool)) {
     return parseScanView(ev, data, summary, tool);
   }
-  if (looksBrowser(data, summary, tool)) {
+  if (kindHint === "browser" || looksBrowser(data, summary, tool)) {
     return parseBrowserView(ev, data, summary, tool);
   }
   return parseGenericToolView(ev, data, summary, tool);
+}
+
+function parseShellView(
+  _ev: EvidenceLike,
+  data: Record<string, unknown>,
+  summary: string,
+  tool: string,
+): ParsedEvidenceView {
+  const command = pick(data, ["command", "file"]) || (summary.startsWith("shell:") ? summary.slice(6).trim() : "");
+  const stdout = pick(data, ["stdout", "output"]) || str(asRecord(data.proof)?.stdout_excerpt);
+  const stderr = pick(data, ["stderr"]);
+  const exitCode = pick(data, ["exitCode", "exit_code"]) || str(asRecord(data.proof)?.exitCode);
+  const shortCmd = command ? truncate(command.replace(/\s+/g, " "), 100) : "";
+  const title =
+    shortCmd
+      ? `${tool || "shell"}: ${shortCmd}`
+      : summary && !summary.trim().startsWith("{")
+        ? truncate(summary, 120)
+        : `${tool || "shell"} output`;
+
+  return {
+    kind: "shell",
+    badge: (tool || "SHELL").toUpperCase().slice(0, 10),
+    title,
+    subtitle: exitCode !== "" ? `exit ${exitCode}` : undefined,
+    toolName: tool || "shell",
+    shell: {
+      command: command ? truncate(command, 2000) : undefined,
+      exitCode: exitCode || undefined,
+      stdout: stdout ? truncate(stdout, 8000) : undefined,
+      stderr: stderr ? truncate(stderr, 2000) : undefined,
+    },
+    bodyPreview: truncate([command && `$ ${command}`, stdout].filter(Boolean).join("\n\n"), 1200),
+  };
 }
 
 function parseHttpView(
@@ -263,21 +308,30 @@ function parseGenericToolView(
   summary: string,
   tool: string,
 ): ParsedEvidenceView {
-  const output = pick(data, ["output", "stdout", "result_text", "result", "text", "message", "detail"]);
+  // If summary is a tool JSON dump, prefer nested stdout/command over raw blob.
+  const nested = parseSummaryBlob(summary) || {};
+  const merged = { ...nested, ...data };
+  const output = pick(merged, ["output", "stdout", "result_text", "result", "text", "message", "detail"]);
   let body = output;
   if (!body) {
-    // Avoid dumping entire JSON; pick a few useful keys.
-    const useful = ["url", "status", "error", "note", "notes", "path", "command", "action"];
-    const lines = useful.map((k) => (data[k] !== undefined ? `${k}: ${truncate(str(data[k]), 200)}` : "")).filter(Boolean);
+    const useful = ["url", "status", "error", "note", "notes", "path", "command", "action", "exitCode"];
+    const lines = useful.map((k) => (merged[k] !== undefined ? `${k}: ${truncate(str(merged[k]), 200)}` : "")).filter(Boolean);
     body = lines.join("\n");
   }
   if (!body && summary && !summary.trim().startsWith("{")) body = summary;
   if (!body) body = "Tool output recorded";
 
+  const title =
+    summary && !summary.trim().startsWith("{")
+      ? truncate(summary, 120)
+      : pick(merged, ["command", "url", "path"])
+        ? truncate(pick(merged, ["command", "url", "path"]), 100)
+        : `${tool || "tool"} output`;
+
   return {
     kind: "tool",
     badge: (tool || str(ev.type) || "TOOL").toUpperCase().slice(0, 12),
-    title: summary && !summary.trim().startsWith("{") ? summary : `${tool || "tool"} output`,
+    title,
     subtitle: tool ? `Tool: ${tool}` : undefined,
     toolName: tool || undefined,
     bodyPreview: truncate(body, 900),

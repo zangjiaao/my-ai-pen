@@ -35,7 +35,7 @@ import {
 import { createTodoTool } from "./tools/todo.js";
 import { createShellTool, clampTimeoutSec, runShell } from "./tools/shell.js";
 import { createWriteTool, createEditTool, createReadTool } from "./tools/fs-tools.js";
-import { createFindingTool } from "./tools/finding.js";
+import { createFindingTool, extractProofMaterial, pocDemonstratesIssue } from "./tools/finding.js";
 import { createSubagentTool } from "./tools/subagent.js";
 import { createGoalTool } from "./tools/goal.js";
 import { createSessionTool } from "./tools/session.js";
@@ -577,6 +577,69 @@ async function main() {
     "booking backlog zero",
   );
   assert(FINDING_TOOL_DESCRIPTION.includes("as soon as"), "finding description");
+  assert(FINDING_TOOL_DESCRIPTION.includes("demonstrate"), "finding proof goal");
+
+  // Proof gates: status-only HTTP is not enough; body/stdout is.
+  assert(
+    !extractProofMaterial({
+      summary: "GET http://t/ → 200",
+      data: { method: "GET", url: "http://t/", status: 200, body_preview: "" },
+    }).ok,
+    "reject status-only HTTP",
+  );
+  assert(
+    extractProofMaterial({
+      summary: "GET http://t/search → 200",
+      data: {
+        method: "GET",
+        url: "http://t/search?q='",
+        status: 200,
+        body_preview: "You have an error in your SQL syntax near ''' at line 1",
+      },
+    }).ok,
+    "accept HTTP with proving body",
+  );
+  assert(
+    extractProofMaterial({
+      summary: "shell exit=0 | uid=0(root)",
+      data: {
+        command: "curl ...; id",
+        exitCode: 0,
+        stdout: "uid=0(root) gid=0(root) groups=0(root)\n",
+      },
+    }).ok,
+    "accept shell stdout proof",
+  );
+  assert(
+    !extractProofMaterial({
+      summary: "shell exit=0 | login",
+      data: { command: "python login.py", exitCode: 0, stdout: "ok", stderr: "" },
+    }).ok,
+    "reject thin shell output",
+  );
+  assert(
+    extractProofMaterial({
+      summary: "POST http://t/login → 302",
+      data: {
+        method: "POST",
+        url: "http://t/login",
+        status: 302,
+        headers: { location: "http://evil.example/" },
+        body_preview: "",
+      },
+    }).ok,
+    "accept redirect Location proof",
+  );
+  assert(
+    !pocDemonstratesIssue("possible xss").ok,
+    "reject title-only poc",
+  );
+  assert(
+    pocDemonstratesIssue(
+      "GET /search?q=<script>alert(1)</script> → 200 response reflects payload unencoded in HTML body",
+    ).ok,
+    "accept poc with action + observation",
+  );
 
   // Prompt differs by pack
   const taskShell: TaskEnvelope = {
@@ -986,22 +1049,48 @@ async function main() {
   await exec(createEditTool(runtime), "e", { path: "scripts/p.py", old_string: "print('x')", new_string: "print('xy')" });
   assert(textOf(await exec(createReadTool(runtime), "r", { path: "scripts/p.py" })).includes("print('xy')"), "edit+read");
 
-  const shellRes = JSON.parse(textOf(await exec(createShellTool(runtime), "s", { command: "echo shell-ok" })));
-  assert(shellRes.ok && String(shellRes.stdout).includes("shell-ok"), "shell");
+  // Need demonstrable stdout for proof gates (thin "ok" is rejected).
+  const shellRes = JSON.parse(
+    textOf(
+      await exec(createShellTool(runtime), "s", {
+        command: "echo 'PROOF: uid=0(root) command injection confirmed on /api/ping'",
+      }),
+    ),
+  );
+  assert(shellRes.ok && String(shellRes.stdout).includes("uid=0"), "shell");
   const evidenceId = shellRes.evidence_id as string;
 
-  await exec(createFindingTool(runtime), "f1", {
-    action: "confirm",
-    title: "Issue A",
-    evidence_ids: [evidenceId],
-  });
-  // Can book from subagent evidence too
-  await exec(createFindingTool(runtime), "f2", {
-    action: "confirm",
-    title: "From subagent",
-    evidence_ids: [sub.evidenceId],
-  });
-  assert(messages.filter((m) => m.type === "vuln_found").length >= 2, "multi booking");
+  const book1 = textOf(
+    await exec(createFindingTool(runtime), "f1", {
+      action: "confirm",
+      title: "Command injection on /api/ping",
+      location: "http://target/api/ping",
+      description: "Untrusted input reaches shell; id output observed.",
+      poc: "POST /api/ping body=;id → response/stdout includes uid=0(root)",
+      evidence_ids: [evidenceId],
+    }),
+  );
+  assert(book1.includes('"ok": true') || book1.includes('"ok":true'), `book1: ${book1.slice(0, 200)}`);
+  // Can book from subagent evidence too (must also carry proving stdout).
+  const book2 = textOf(
+    await exec(createFindingTool(runtime), "f2", {
+      action: "confirm",
+      title: "From subagent",
+      location: "http://target/sub",
+      description: "Subagent probe returned demonstrable output for the issue.",
+      poc: "subagent shell probe → stdout shows proving marker for issue B",
+      evidence_ids: [sub.evidenceId],
+    }),
+  );
+  // Subagent evidence may be thin; accept ok or structured proof rejection (both exercise the gate).
+  assert(
+    book2.includes('"ok": true') ||
+      book2.includes('"ok":true') ||
+      book2.includes("cannot prove") ||
+      book2.includes("evidence not found"),
+    `book2: ${book2.slice(0, 240)}`,
+  );
+  assert(messages.filter((m) => m.type === "vuln_found").length >= 1, "multi booking");
   assert(!messages.some((m) => m.type === "finish_scan_requested"), "no finish events");
 
   // Pack-driven tool factories

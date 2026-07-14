@@ -277,15 +277,8 @@ export async function handleNode4SessionEvent(
   if (event.type === "turn_start") {
     ctx.counters.phase = "llm_waiting";
     ctx.panel.setMainPhase("llm_waiting", "");
-    await ctx.platform.send({
-      type: "status_update",
-      conversation_id: ctx.task.conversationId,
-      task_id: ctx.task.taskId,
-      message: "model turn",
-      agent_phase: "llm_waiting",
-      status: "running",
-      llm_usage: ctx.usage.snapshot({ tool_calls: ctx.counters.toolCallCount }),
-    } as PlatformMessage);
+    // No status_update here — "model turn" was being rendered as agent chat
+    // under the physical node name. Right-panel state comes from throttled checkpoints.
   }
 
   await textStream.handle(event);

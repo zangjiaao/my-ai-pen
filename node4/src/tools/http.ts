@@ -33,11 +33,14 @@ export function createHttpTool(runtime: ToolRuntime): ToolDefinition<any> {
         });
         const text = await res.text();
         const bodyPreview = text.slice(0, 8000);
+        const requestBody = params.body != null ? String(params.body) : undefined;
         const evidenceId = await emitEvidence(runtime, "http", `${method} ${url} → ${res.status}`, {
           method,
           url,
           status: res.status,
           headers: Object.fromEntries(res.headers.entries()),
+          request_headers: params.headers || undefined,
+          request_body: requestBody,
           body_preview: bodyPreview,
         });
         return jsonResult({

@@ -93,7 +93,7 @@ Loader: `node4/src/experts/`. CTF notes: `docs/node4-ctf-role.md`.
 | `session` | Multi-step HTTP + per-actor jars (assistive density; not a gate) |
 | `browser` | SPA/DOM assist when API recon is insufficient |
 | `script` | Optional multi-file helper |
-| `finding` | Only product conclusion path when bookingMode=finding |
+| `finding` | Only product conclusion path when bookingMode=finding; proof-gated (body/stdout + PoC) |
 | `subagent` | Separable work package |
 | `goal` | Long-task objective; continuation while active |
 | `skill` | Optional load of **meta** methodology (`pentest-web-recon`, `pentest-stuck-rotation`) — not a vuln-class matrix |
@@ -125,9 +125,16 @@ Open todos **never** block booking or harness settlement.
 
 | Concern | Mechanism |
 |---------|-----------|
-| Evidence | Tool outputs / explicit evidence |
-| Confirmed vuln/flag | `finding` only |
+| Evidence | Tool outputs via `emitEvidence` (structured properties: HTTP body / shell stdout) |
+| Confirmed vuln/flag | `finding(confirm)` only — must **prove** the issue exists |
 | End of session | Harness continue caps / natural stop / abort → `task_complete` |
+
+**Proof-first booking** (`node4/src/tools/finding.ts`):
+
+- Required fields: `title`, `location|url`, `description`, `poc` (steps **and** observed result), `evidence_ids`
+- Each `evidence_id` must contain demonstrable output: response body / shell stdout / redirect `Location` — **not** HTTP status alone or empty login wrappers
+- Multiple findings may share one evidence record when that record’s output supports each claim; otherwise run a dedicated probe
+- Platform stores `proof_excerpts` / folds proof into the vuln description for report UIs
 
 Typical terminal policy (harness; refine in code carefully):
 

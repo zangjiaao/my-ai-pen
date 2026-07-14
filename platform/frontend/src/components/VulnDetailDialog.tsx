@@ -183,9 +183,13 @@ export default function VulnDetailDialog({
   })();
   const surfaceLine = surfaceFromPanel || [method, surfaceFromUrl].filter(Boolean).join(" ") || "—";
 
-  const description = String(
-    vulnerability?.description || vulnerability?.impact || vulnerability?.poc || "",
+  const descriptionRaw = String(
+    vulnerability?.description || vulnerability?.impact || "",
   ).trim();
+  const { narrative: descriptionNarrative, proof: proofFromDescription } =
+    splitDescriptionAndProof(descriptionRaw);
+  const pocText = String(vulnerability?.poc || "").trim();
+  const description = descriptionRaw || pocText;
   const highlightTokens = collectHighlightTokens(findingKind, flagToken, description, vulnerability);
 
   const timelineEvents = buildDetailTimeline(vulnerability);
@@ -295,11 +299,31 @@ export default function VulnDetailDialog({
             </div>
           )}
           <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-ink-secondary">
-            {description
-              ? renderHighlightedDescription(description, findingKind, flagToken)
+            {descriptionNarrative
+              ? renderHighlightedDescription(descriptionNarrative, findingKind, flagToken)
               : "—"}
           </p>
         </section>
+
+        {/* 3b. PoC — reproduction + observed result (proof of existence) */}
+        {pocText && (
+          <section className="mt-5">
+            <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">Proof of concept</h3>
+            <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md bg-canvas-inset p-3 font-mono text-xs leading-relaxed text-ink-secondary">
+              {pocText}
+            </pre>
+          </section>
+        )}
+
+        {/* 3c. Captured proof excerpts from linked evidence */}
+        {proofFromDescription && (
+          <section className="mt-5">
+            <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">Captured proof</h3>
+            <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border border-hairline-soft bg-canvas p-3 font-mono text-xs leading-relaxed text-ink">
+              {proofFromDescription}
+            </pre>
+          </section>
+        )}
 
         {/* 4. Attack surface — same identity as right-panel Surface tree node */}
         <section className="mt-5">
@@ -385,6 +409,24 @@ function Info({ label, value }: { label: string; value: string }) {
       <div className="mt-1 break-all font-mono text-xs text-ink">{value || "—"}</div>
     </div>
   );
+}
+
+/** Split agent narrative from appended [Proof] block written by platform persist. */
+function splitDescriptionAndProof(raw: string): { narrative: string; proof: string } {
+  const text = String(raw || "").trim();
+  if (!text) return { narrative: "", proof: "" };
+  const marker = "\n\n[Proof]\n";
+  const idx = text.indexOf(marker);
+  if (idx >= 0) {
+    return {
+      narrative: text.slice(0, idx).trim(),
+      proof: text.slice(idx + marker.length).trim(),
+    };
+  }
+  if (text.startsWith("[Proof]\n")) {
+    return { narrative: "", proof: text.slice("[Proof]\n".length).trim() };
+  }
+  return { narrative: text, proof: "" };
 }
 
 function formatDetailTime(value: unknown): string {

@@ -44,9 +44,10 @@ export default function EvidenceDetailDialog({ open, evidenceId, initial, onClos
         onClick={(event) => event.stopPropagation()}
       >
         <div className="mb-4 flex items-start justify-between gap-4">
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <p className="mb-1 text-xs font-medium uppercase tracking-wide text-ink-muted">Evidence</p>
-            <h2 className="break-words text-xl font-semibold">{view.title}</h2>
+            <h2 className="break-words text-lg font-semibold leading-snug text-ink">{view.title}</h2>
+            {view.subtitle && <p className="mt-1 text-xs text-ink-muted">{view.subtitle}</p>}
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
               <span className={`rounded-md px-2 py-0.5 font-mono text-[11px] font-medium uppercase ${badgeClassForKind(view.kind)}`}>
                 {view.badge}
@@ -60,7 +61,7 @@ export default function EvidenceDetailDialog({ open, evidenceId, initial, onClos
               {loading && <span className="text-ink-muted">Loading...</span>}
             </div>
           </div>
-          <button onClick={onClose} className="rounded-md border border-hairline px-3 py-1.5 text-xs hover:bg-surface-default">
+          <button onClick={onClose} className="shrink-0 rounded-md border border-hairline px-3 py-1.5 text-xs hover:bg-surface-default">
             Close
           </button>
         </div>
@@ -69,6 +70,8 @@ export default function EvidenceDetailDialog({ open, evidenceId, initial, onClos
 
         {view.kind === "http" && view.http ? (
           <HttpEvidenceBody http={view.http} />
+        ) : view.kind === "shell" && view.shell ? (
+          <ShellEvidenceBody shell={view.shell} />
         ) : (
           <section>
             <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">
@@ -133,10 +136,50 @@ function HttpEvidenceBody({ http }: { http: NonNullable<ParsedEvidenceView["http
   );
 }
 
+function ShellEvidenceBody({ shell }: { shell: NonNullable<ParsedEvidenceView["shell"]> }) {
+  return (
+    <div className="space-y-4">
+      {shell.exitCode != null && shell.exitCode !== "" && (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Info label="Exit code" value={shell.exitCode} />
+        </div>
+      )}
+      {shell.command && (
+        <section>
+          <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">Command</h3>
+          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md bg-canvas-inset p-3 font-mono text-xs leading-relaxed text-ink">
+            {shell.command}
+          </pre>
+        </section>
+      )}
+      {shell.stdout && (
+        <section>
+          <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">Stdout</h3>
+          <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-canvas-inset p-3 font-mono text-xs leading-relaxed text-ink-secondary">
+            {shell.stdout}
+          </pre>
+        </section>
+      )}
+      {shell.stderr && (
+        <section>
+          <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">Stderr</h3>
+          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md bg-canvas-inset p-3 font-mono text-xs leading-relaxed text-severity-critical">
+            {shell.stderr}
+          </pre>
+        </section>
+      )}
+      {!shell.command && !shell.stdout && !shell.stderr && (
+        <p className="text-sm text-ink-muted">No command or output recorded for this evidence.</p>
+      )}
+    </div>
+  );
+}
+
 function badgeClassForKind(kind: ParsedEvidenceView["kind"]): string {
   if (kind === "http") return "bg-status-running/12 text-status-running";
   if (kind === "scan") return "bg-[#f5f3ff] text-[#6d28d9]";
   if (kind === "browser") return "bg-[#f0fdfa] text-[#0f766e]";
+  if (kind === "shell") return "bg-canvas-inset text-ink";
   return "bg-canvas-inset text-ink-secondary";
 }
 
@@ -160,7 +203,7 @@ function normalizeInitial(initial?: Partial<SecurityEvidence> | null): SecurityE
 
 function Info({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md bg-canvas-inset p-2.5">
+    <div className="min-w-0 rounded-md bg-canvas-inset p-2.5">
       <div className="text-xs text-ink-muted">{label}</div>
       <div className="mt-1 break-all font-mono text-xs text-ink">{value || "—"}</div>
     </div>

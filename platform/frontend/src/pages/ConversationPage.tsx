@@ -675,16 +675,41 @@ export default function ConversationPage() {
       const convId = messageConversationId(msg, activeId);
       clearPendingAgentMessage(convId);
       markMessageAutoScroll();
-      const phase = typeof m.phase === "string" ? m.phase : undefined;
+      // Prefer agent_phase from Node4; legacy used phase.
+      const phase = typeof m.agent_phase === "string"
+        ? m.agent_phase
+        : typeof m.phase === "string"
+          ? m.phase
+          : undefined;
       setAgentState({ phase, activeTool: m.active_tool, intakeResult: m.intake_result, intakeStatus: m.status });
       setProgress(isProgress(m.progress) ? m.progress : progressForPhase(phase, "running"));
       if (isKanbanSummary(m.kanban)) setKanban(m.kanban);
       setRunning(true);
+      // Internal harness ticks (model turn / tool running) update right-panel state only —
+      // never inject as agent chat bubbles (that was showing "model turn" under 测试节点).
       const statusMessage = readString(m.message);
-      if (statusMessage) {
-        addMessageToConversation(convId, makeMessage(convId, "agent", "text", { ...agentAttribution(m), text: statusMessage, message_id: m.message_id }));
+      if (statusMessage && isUserVisibleStatusMessage(statusMessage)) {
+        addMessageToConversation(
+          convId,
+          makeMessage(convId, "system", "status", {
+            ...agentAttribution(m),
+            text: statusMessage,
+            phase,
+            active_tool: m.active_tool,
+            status: m.status,
+            message_id: m.message_id,
+          }),
+        );
       } else if (shouldRenderPhaseStatus(m, activeWorkflowKind)) {
-        addMessageToConversation(convId, makeMessage(convId, "system", "status", { text: phaseLabel(phase), phase, iteration: m.iteration, active_tool: m.active_tool, status: m.status, intake_result: m.intake_result, message_id: m.message_id }));
+        addMessageToConversation(convId, makeMessage(convId, "system", "status", {
+          text: phaseLabel(phase),
+          phase,
+          iteration: m.iteration,
+          active_tool: m.active_tool,
+          status: m.status,
+          intake_result: m.intake_result,
+          message_id: m.message_id,
+        }));
       }
     },
     task_complete: (msg) => {
@@ -1095,7 +1120,7 @@ export default function ConversationPage() {
     const pendingAgentSource: AgentIdentity =
       platformMention || routeAgentTarget === "platform"
         ? "platform"
-        : routeAgentTarget === "pentest" || willSteerDirectly
+        : routeAgentTarget === "pentest" || willSteerDirectly || Boolean(routeExpertId)
           ? "pentest"
           : "platform";
     const pendingAgentNodeId =
@@ -1103,13 +1128,27 @@ export default function ConversationPage() {
       (pendingAgentSource === "pentest"
         ? activeConversationNodeId || activeConversation?.node_id || undefined
         : undefined);
+    // Prefer expert persona for Working... label — never fall back to bare node name when we know the expert.
+    let pendingExpertId = routeExpertId;
+    let pendingExpertName = routeExpertName;
+    if (!pendingExpertId && pendingAgentSource === "pentest" && productExperts.length) {
+      const packHint = eng || "pentest";
+      const match =
+        productExperts.find((e) => e.pack_id === packHint && e.node_id === pendingAgentNodeId)
+        || productExperts.find((e) => e.pack_id === packHint)
+        || productExperts[0];
+      if (match) {
+        pendingExpertId = match.id;
+        pendingExpertName = match.display_name || match.name;
+      }
+    }
     const pendingContent: Record<string, unknown> = {
       text: "Working...",
       agent_source: pendingAgentSource,
     };
     if (pendingAgentNodeId) pendingContent.agent_node_id = pendingAgentNodeId;
-    if (routeExpertId) pendingContent.expert_id = routeExpertId;
-    if (routeExpertName) pendingContent.expert_name = routeExpertName;
+    if (pendingExpertId) pendingContent.expert_id = pendingExpertId;
+    if (pendingExpertName) pendingContent.expert_name = pendingExpertName;
     setConversationMessageData(convId, (data) => {
       const withoutPending = removeMessageRecords(
         data,
@@ -1193,6 +1232,7 @@ export default function ConversationPage() {
     selectedMention,
     mentionTargets,
     agentNodes,
+    productExperts,
     activeId,
     activeConversation,
     conversations,
@@ -2360,7 +2400,27 @@ function agentAttribution(msg: Record<string, unknown>, fallbackSource: AgentIde
   const content = msg.content && typeof msg.content === "object" && !Array.isArray(msg.content) ? msg.content as Record<string, unknown> : {};
   const source = readString(msg.agent_source) || readString(content.agent_source) || fallbackSource;
   const nodeId = readString(msg.agent_node_id) || readString(content.agent_node_id);
-  return nodeId ? { agent_source: source, agent_node_id: nodeId } : { agent_source: source };
+  const expertId = readString(msg.expert_id) || readString(content.expert_id);
+  const expertName = readString(msg.expert_name) || readString(content.expert_name);
+  const expertDisplay = readString(msg.expert_display_name) || readString(content.expert_display_name);
+  const out: Record<string, unknown> = { agent_source: source };
+  if (nodeId) out.agent_node_id = nodeId;
+  if (expertId) out.expert_id = expertId;
+  if (expertName) out.expert_name = expertName;
+  if (expertDisplay) out.expert_display_name = expertDisplay;
+  return out;
+}
+
+/** Harness-only status lines that must not appear as chat from the expert. */
+function isUserVisibleStatusMessage(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  if (!t) return false;
+  if (t === "model turn" || t === "llm_waiting" || t === "tool_running") return false;
+  if (/^[\w.-]+\s+running$/i.test(t)) return false; // "todo running", "shell running"
+  if (t.startsWith("phase:") && t.includes("(iter")) return false;
+  if (t.startsWith("node4 starting") || t.includes(" starting pack=")) return false;
+  // Keep interrupt / error / handoff style notes.
+  return true;
 }
 function messageConversationId(msg: Record<string, unknown>, fallback: string | null): string | null {
   return msg.conversation_id ? String(msg.conversation_id) : fallback;

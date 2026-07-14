@@ -445,10 +445,13 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
         persisted = await _persist_vulnerability(msg, client_id)
         if persisted:
             msg.update({k: v for k, v in persisted.items() if v is not None})
-    elif msg.get("type") in ("tool_output", "evidence_created"):
+    elif msg.get("type") == "evidence_created":
+        # Real proofs from Node4 emitEvidence (structured properties).
         await _persist_evidence(msg, client_id)
-        if msg.get("type") == "tool_output":
-            await _audit_tool_output(msg, client_id)
+    elif msg.get("type") == "tool_output":
+        # Tool cards already stream stdout; do NOT re-book every tool result as
+        # Evidence (that produced messy JSON dumps next to real evidence_created rows).
+        await _audit_tool_output(msg, client_id)
     if msg.get("type") == "checkpoint_update":
         await _remember_conversation_checkpoint(conv_id, msg.get("checkpoint") or {})
     elif msg.get("type") != "intake_update" and not _is_pentest_runtime_status(msg):
@@ -1240,11 +1243,28 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
             content["tool_items"] = [_tool_item_from_content(content)]
         elif msg_type in ("status_update", "phase_changed"):
             msg_type = "status"
+            # Prefer Node4 message / agent_phase over legacy phase+iteration template.
+            human = str(msg.get("message") or msg.get("text") or "").strip()
+            phase = msg.get("agent_phase") or msg.get("phase")
+            active_tool = msg.get("active_tool")
+            if human and human.lower() not in {"model turn", "llm_waiting", "tool_running"}:
+                text = human
+            elif active_tool:
+                text = f"{active_tool}"
+            elif phase:
+                text = str(phase)
+            else:
+                text = f"Phase: {msg.get('phase', '')} (iter {msg.get('iteration', '')})"
+            # Skip persisting pure harness ticks that flood the transcript.
+            if human.lower() in {"model turn"} or (
+                human.lower().endswith(" running") and human.lower() not in {"still running"}
+            ):
+                return None
             content = {
-                "text": f"Phase: {msg.get('phase', '')} (iter {msg.get('iteration', '')})",
-                "phase": msg.get("phase"),
+                "text": text,
+                "phase": phase,
                 "iteration": msg.get("iteration"),
-                "active_tool": msg.get("active_tool"),
+                "active_tool": active_tool,
                 "status": msg.get("status"),
                 "intake_result": msg.get("intake_result"),
             }
@@ -1436,15 +1456,24 @@ async def _persist_evidence(msg: dict, node_id: str | None):
 
         tool_run_id = msg.get("tool_run_id") or msg.get("related_tool_run_id")
         summary = msg.get("summary") or msg.get("line") or msg.get("stdout") or ""
+        # Prefer human summary lines; never store multi-KB JSON tool dumps as the title/summary.
+        if isinstance(summary, (dict, list)):
+            summary = json.dumps(summary, ensure_ascii=False)[:200]
+        summary = str(summary)
+        if summary.lstrip().startswith("{") and len(summary) > 280:
+            summary = summary[:200] + "…"
         raw_hash = msg.get("hash") or hashlib.sha256(str(summary).encode()).hexdigest()
         evidence_id = msg.get("evidence_id") or f"ev-{raw_hash[:12]}"
         incoming_properties = msg.get("properties") if isinstance(msg.get("properties"), dict) else {}
+        # Also accept nested data payloads from Node4 emitEvidence.
+        data_blob = msg.get("data") if isinstance(msg.get("data"), dict) else {}
         properties = {
+            **data_blob,
             **incoming_properties,
             **_proof_properties_from_summary(summary),
-            "status": msg.get("status"),
-            "stderr": msg.get("stderr", ""),
         }
+        # Drop null noise keys that clutter the detail dialog.
+        properties = {k: v for k, v in properties.items() if v is not None and v != ""}
 
         async with async_session() as db:
             existing = await db.execute(select(Evidence).where(Evidence.evidence_id == evidence_id))
@@ -1456,11 +1485,11 @@ async def _persist_evidence(msg: dict, node_id: str | None):
                     user_id=user_id,
                     conversation_id=uuid.UUID(conv_id),
                     node_id=node_uuid,
-                    type=msg.get("evidence_type") or msg.get("type", "tool_output"),
+                    type=msg.get("evidence_type") or "tool_output",
                     source_tool=msg.get("source_tool") or msg.get("tool_name"),
                     tool_run_id=tool_run_id,
                     raw_ref=msg.get("raw_ref"),
-                    summary=str(summary)[:2000],
+                    summary=summary[:500],
                     hash=raw_hash,
                     properties=properties,
                 )
@@ -1473,7 +1502,8 @@ async def _persist_evidence(msg: dict, node_id: str | None):
                 evidence.source_tool = msg.get("source_tool") or msg.get("tool_name") or evidence.source_tool
                 evidence.tool_run_id = tool_run_id or evidence.tool_run_id
                 evidence.raw_ref = msg.get("raw_ref") or evidence.raw_ref
-                evidence.summary = str(summary)[:2000] or evidence.summary
+                if summary and not summary.lstrip().startswith("{"):
+                    evidence.summary = summary[:500]
                 evidence.hash = raw_hash or evidence.hash
                 evidence.properties = {
                     **(evidence.properties or {}),
@@ -1579,11 +1609,44 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
         from sqlalchemy import func
 
         title = str(msg.get("title") or "Untitled finding").strip() or "Untitled finding"
-        location = msg.get("location") or msg.get("poc") or ""
-        poc_value = msg.get("poc") or msg.get("location") or ""
+        location = msg.get("location") or msg.get("url") or msg.get("poc") or ""
+        # Prefer explicit PoC (reproduction + observed result); fall back carefully.
+        poc_value = msg.get("poc") or msg.get("evidence_summary") or msg.get("location") or ""
         severity = _normalize_severity(msg.get("severity"))
         cvss_value = msg.get("cvss")
-        description = msg.get("description") or msg.get("impact") or msg.get("evidence_summary") or ""
+        description = (
+            msg.get("description")
+            or msg.get("impact")
+            or ""
+        )
+        # Always surface proof material so reports can show *why* this is believed real.
+        proof_excerpts = msg.get("proof_excerpts")
+        evidence_summary = str(msg.get("evidence_summary") or "").strip()
+        proof_block = ""
+        if isinstance(proof_excerpts, list) and proof_excerpts:
+            bits = []
+            for item in proof_excerpts[:4]:
+                if isinstance(item, dict) and item.get("excerpt"):
+                    bits.append(str(item.get("excerpt"))[:700])
+            if bits:
+                proof_block = "\n---\n".join(bits)
+        if not proof_block and evidence_summary:
+            proof_block = evidence_summary[:2800]
+        if proof_block:
+            desc_text = str(description or "").strip()
+            if not desc_text:
+                description = proof_block
+            elif proof_block[:120] not in desc_text:
+                description = f"{desc_text}\n\n[Proof]\n{proof_block}"
+            # If agent omitted a real PoC, store proof excerpts instead of bare location.
+            if not str(msg.get("poc") or "").strip():
+                existing_poc = str(poc_value or "").strip()
+                if (
+                    not existing_poc
+                    or existing_poc == str(location or "").strip()
+                    or len(existing_poc) < 40
+                ):
+                    poc_value = proof_block[:4000]
         service_name = msg.get("service") or msg.get("service_name") or ""
         cve_id = msg.get("cve_id") or msg.get("cve") or None
         if cve_id is not None:

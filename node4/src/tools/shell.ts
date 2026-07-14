@@ -44,7 +44,8 @@ export function createShellTool(runtime: ToolRuntime): ToolDefinition<any> {
       const timeoutSec = clampTimeoutSec(params.timeout_seconds);
       const timeoutMs = timeoutSec * 1000;
       const result = await runShell(command, runtime.taskDir, timeoutMs, combined);
-      const evidenceId = await emitEvidence(runtime, "shell", `shell: ${command.slice(0, 120)}`, {
+      // Prefer first meaningful stdout line in summary so Evidence UI is not all "python3 << PYEOF...Login".
+      const evidenceId = await emitEvidence(runtime, "shell", shellEvidenceSummary(command, result), {
         command,
         timeout_seconds: timeoutSec,
         ...result,
@@ -63,6 +64,27 @@ export function clampTimeoutSec(raw: unknown): number {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return DEFAULT_TIMEOUT_SEC;
   return Math.min(MAX_TIMEOUT_SEC, Math.max(MIN_TIMEOUT_SEC, Math.floor(n)));
+}
+
+/** Short, human-readable evidence title: exit + first useful stdout line (not script boilerplate). */
+export function shellEvidenceSummary(
+  command: string,
+  result: { exitCode: number | null; stdout?: string; stderr?: string; timedOut?: boolean; aborted?: boolean },
+): string {
+  const exit =
+    result.aborted ? "aborted" : result.timedOut ? "timeout" : `exit=${result.exitCode ?? "?"}`;
+  const out = String(result.stdout || "")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .find((l) => l && !l.startsWith("===") && l.length > 2);
+  if (out) return `shell ${exit} | ${out.slice(0, 100)}`;
+  const err = String(result.stderr || "")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .find(Boolean);
+  if (err) return `shell ${exit} | stderr: ${err.slice(0, 80)}`;
+  const cmdOne = command.replace(/\s+/g, " ").trim().slice(0, 80);
+  return `shell ${exit} | ${cmdOne}`;
 }
 
 /** Prefer AbortSignal.any when both tool + session-cancel signals exist (Node 20+). */
