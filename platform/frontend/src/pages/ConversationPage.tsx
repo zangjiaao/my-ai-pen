@@ -22,15 +22,6 @@ const ACTIVE_CONVERSATION_KEY = "active_conversation_id";
 const PENDING_ASSET_TASK_KEY = "pending_asset_task";
 const MESSAGE_PAGE_SIZE = 200;
 
-const TEMPLATES = [
-  { label: "Web pentest", text: "Test {URL} for web application vulnerabilities", pack: "pentest" as ExpertId },
-  { label: "Host scan", text: "Scan {IP range} for exposed services and security issues", pack: "pentest" as ExpertId },
-  { label: "Access control", text: "Test the following accounts for access-control issues", pack: "pentest" as ExpertId },
-  { label: "Retest", text: "Retest the vulnerability and verify the fix", pack: "pentest" as ExpertId },
-  { label: "CTF challenge", text: "Play the CTF web challenges at {URL}; maximize verified flags", pack: "ctf" as ExpertId },
-  { label: "Consult", text: "Explain the security posture of {URL} within authorized scope", pack: "consult" as ExpertId },
-];
-
 /** Product expert instance from /api/experts (routable via @name). */
 type ProductExpert = {
   id: string;
@@ -995,11 +986,11 @@ export default function ConversationPage() {
         }
       : {};
 
+    // Expert from toolbar picker (no @ required) or inline @mention token.
     const selectedCandidate = selectedMentionRef.current || selectedMention;
     const resolvedMention =
-      selectedCandidate && displayText.includes(`@${selectedCandidate.name}`)
-        ? selectedCandidate
-        : resolveMentionedTarget(displayText, mentionTargets);
+      selectedCandidate
+        || resolveMentionedTarget(displayText, mentionTargets);
 
     // Structured engagement from expert binding (or explicit opts).
     const eng =
@@ -1246,16 +1237,17 @@ export default function ConversationPage() {
     if (!input.trim()) return;
     const displayText = input.trim();
     const selectedCandidate = selectedMentionRef.current || selectedMention;
-    const resolved =
-      selectedCandidate && displayText.includes(`@${selectedCandidate.name}`)
-        ? selectedCandidate
-        : resolveMentionedTarget(displayText, mentionTargets);
+    // Prefer explicit toolbar expert; else parse @token from the message body.
+    const resolved = selectedCandidate || resolveMentionedTarget(displayText, mentionTargets);
     const text = stripMentionToken(displayText, resolved?.name || null);
+    // Keep selected expert after send so multi-turn stays with the same persona.
+    // (Clear only when user picks "Platform" or another expert.)
     setInput("");
-    selectedMentionRef.current = null;
-    setSelectedMention(null);
     await launchTaskMessage({
-      displayText,
+      displayText:
+        resolved?.kind === "expert" && !displayText.includes(`@${resolved.name}`)
+          ? `@${resolved.name} ${displayText}`
+          : displayText,
       text,
       goalMode: goalModeEnabled,
       goalObjective: goalObjective.trim() || undefined,
@@ -1263,6 +1255,17 @@ export default function ConversationPage() {
       expertId: resolved?.kind === "expert" ? resolved.expertId : undefined,
     });
   }, [input, selectedMention, mentionTargets, launchTaskMessage, goalModeEnabled, goalObjective]);
+
+  const selectExpertFromToolbar = useCallback((key: string) => {
+    if (!key) {
+      selectedMentionRef.current = null;
+      setSelectedMention(null);
+      return;
+    }
+    const target = mentionTargets.find((t) => t.key === key) || null;
+    selectedMentionRef.current = target;
+    setSelectedMention(target);
+  }, [mentionTargets]);
 
 
 function renderMentionText(text: string): ReactNode[] {
@@ -1447,81 +1450,8 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               ))}
             </div>
             <div className="border-t border-hairline-soft p-4">
-              <div className="mb-3 flex flex-wrap gap-2">
-                {TEMPLATES.map((t) => {
-                  const expertForPack = productExperts.find((e) => e.pack_id === t.pack);
-                  return (
-                    <button
-                      key={t.label}
-                      type="button"
-                      title={
-                        expertForPack
-                          ? `Will @${expertForPack.name} (${expertLabel(t.pack)})`
-                          : `No expert for ${expertLabel(t.pack)} — create one under 专家管理`
-                      }
-                      onClick={() => {
-                        if (expertForPack) {
-                          const target: MentionTarget = {
-                            kind: "expert",
-                            key: `expert:${expertForPack.id}`,
-                            name: expertForPack.name,
-                            label: expertForPack.display_name || expertForPack.name,
-                            subtitle: "",
-                            nodeId: expertForPack.node_id,
-                            packId: expertForPack.pack_id,
-                            expertId: expertForPack.id,
-                            status: expertForPack.node_status || undefined,
-                          };
-                          selectedMentionRef.current = target;
-                          setSelectedMention(target);
-                          setInput(`@${expertForPack.name} ${t.text}`);
-                        } else {
-                          setInput(t.text);
-                        }
-                      }}
-                      className="rounded-pill border border-hairline px-3 py-1.5 text-xs text-ink-secondary transition-colors hover:bg-surface-default hover:text-ink"
-                    >
-                      {t.label}
-                    </button>
-                  );
-                })}
-              </div>
-              <div className="mb-3 flex flex-col gap-2 rounded-md border border-hairline-soft bg-surface-default/40 px-3 py-2">
-                <p className="text-[11px] text-ink-muted">
-                  用 <span className="font-mono text-ink">@专家名</span> 路由任务（专家在{" "}
-                  <span className="font-medium text-ink-secondary">专家管理</span> 绑定 Node + 包）。
-                  {productExperts.length === 0 ? (
-                    <span className="text-severity-medium"> 尚未创建专家。</span>
-                  ) : (
-                    <span>
-                      {" "}
-                      可用：
-                      <span className="font-mono text-ink">
-                        {productExperts.map((e) => `@${e.name}`).join(" ")}
-                      </span>
-                    </span>
-                  )}
-                </p>
-                <label className="flex cursor-pointer items-center gap-2 text-xs text-ink-secondary">
-                  <input
-                    type="checkbox"
-                    checked={goalModeEnabled}
-                    onChange={(e) => setGoalModeEnabled(e.target.checked)}
-                    className="rounded border-hairline"
-                  />
-                  <span className="font-medium text-ink">Goal mode (long task)</span>
-                  <span className="text-ink-muted">— 朝目标持续推进直至完成</span>
-                </label>
-                {goalModeEnabled && (
-                  <input
-                    value={goalObjective}
-                    onChange={(e) => setGoalObjective(e.target.value)}
-                    placeholder="Optional objective (default: maximize verified findings/flags in scope)"
-                    className="w-full rounded-md border border-hairline bg-canvas px-3 py-1.5 text-xs text-ink placeholder:text-ink-muted focus:outline-none focus:border-ink"
-                  />
-                )}
-              </div>
-              <div className="relative flex min-w-0 gap-2">
+              {/* Unified composer: multi-line input + toolbar (goal / expert / send) */}
+              <div className="relative rounded-lg border border-hairline bg-canvas focus-within:border-ink">
                 {mentionState && mentionOptions.length > 0 && (
                   <div className="absolute bottom-full left-0 z-20 mb-2 w-80 overflow-hidden rounded-md border border-hairline bg-canvas shadow-lg">
                     {mentionOptions.map((target) => (
@@ -1551,30 +1481,93 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                     ))}
                   </div>
                 )}
-                <div className="relative min-w-0 flex-1 rounded-md border border-hairline bg-canvas focus-within:border-ink">
+                <div className="relative min-w-0">
                   {input && (
-                    <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre px-3.5 py-2.5 text-sm text-ink">
+                    <div
+                      aria-hidden="true"
+                      className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-3.5 py-3 text-sm leading-5 text-ink"
+                    >
                       {renderMentionText(input)}
                     </div>
                   )}
-                  <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void handleSend(); }}
-                    placeholder="Type @ to choose an Expert, then describe the request"
-                    className="relative z-10 w-full bg-transparent px-3.5 py-2.5 text-sm text-transparent caret-ink placeholder:text-ink-muted focus:outline-none" />
-                </div>
-                {running ? (
-                  <button
-                    onClick={() => {
-                      send({ type: "user_interrupt", conversation_id: activeId, action: "cancel" });
-                      setRunning(false);
-                      void refreshConversationState(activeId);
+                  <textarea
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        void handleSend();
+                      }
                     }}
-                    className="rounded-pill bg-severity-critical px-5 py-2.5 text-sm font-medium text-white"
-                  >
-                    Interrupt
-                  </button>
-                ) : (
-                  <button onClick={() => { void handleSend(); }} className="rounded-pill bg-ink px-5 py-2.5 text-sm font-medium text-white">Send</button>
+                    rows={3}
+                    placeholder="Describe the request… (Shift+Enter for new line, @ for expert)"
+                    className="relative z-10 min-h-[4.5rem] w-full resize-none bg-transparent px-3.5 py-3 text-sm leading-5 text-transparent caret-ink placeholder:text-ink-muted focus:outline-none"
+                  />
+                </div>
+                {goalModeEnabled && (
+                  <div className="border-t border-hairline-soft px-3 py-2">
+                    <input
+                      value={goalObjective}
+                      onChange={(e) => setGoalObjective(e.target.value)}
+                      placeholder="Goal objective (optional — default: maximize verified findings in scope)"
+                      className="w-full rounded-md border border-hairline bg-canvas-inset px-2.5 py-1.5 text-xs text-ink placeholder:text-ink-muted focus:border-ink focus:outline-none"
+                    />
+                  </div>
                 )}
+                <div className="flex min-w-0 items-center justify-between gap-3 border-t border-hairline-soft px-3 py-2">
+                  <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
+                    <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-ink-secondary">
+                      <input
+                        type="checkbox"
+                        checked={goalModeEnabled}
+                        onChange={(e) => setGoalModeEnabled(e.target.checked)}
+                        className="rounded border-hairline"
+                      />
+                      <span className="font-medium text-ink">Goal</span>
+                    </label>
+                    <label className="inline-flex min-w-0 items-center gap-1.5 text-xs text-ink-secondary">
+                      <span className="shrink-0 text-ink-muted">Expert</span>
+                      <select
+                        value={selectedMention?.key || ""}
+                        onChange={(e) => selectExpertFromToolbar(e.target.value)}
+                        className="max-w-[12rem] truncate rounded-md border border-hairline bg-canvas px-2 py-1 text-xs text-ink focus:border-ink focus:outline-none"
+                      >
+                        <option value="">Auto / none</option>
+                        {mentionTargets.map((t) => (
+                          <option key={t.key} value={t.key}>
+                            {t.kind === "platform"
+                              ? `${t.label} (platform)`
+                              : `@${t.name}${t.status === "online" ? "" : t.status === "offline" ? " · offline" : ""}`}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="shrink-0">
+                    {running ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          send({ type: "user_interrupt", conversation_id: activeId, action: "cancel" });
+                          setRunning(false);
+                          void refreshConversationState(activeId);
+                        }}
+                        className="rounded-pill bg-severity-critical px-5 py-2 text-sm font-medium text-white"
+                      >
+                        Interrupt
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => { void handleSend(); }}
+                        disabled={!input.trim()}
+                        className="rounded-pill bg-ink px-5 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        Send
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
           </main>
