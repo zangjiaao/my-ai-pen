@@ -134,6 +134,18 @@ class PlatformPhase2Tests(unittest.TestCase):
         self.assertIn("web-node-1", notice)
         self.assertIn("pentest.web", notice)
 
+    def test_agent_assignment_notice_prefers_expert_persona(self):
+        decision = type("Decision", (), {"agent": "pentest", "capability": "pentest.web"})()
+        notice = _agent_assignment_notice(
+            decision,
+            "12345678-1234-1234-1234-123456789abc",
+            "web-node-1",
+            expert_name="\u6e17\u900f",
+        )
+        self.assertIn("\u6e17\u900f", notice)
+        self.assertNotIn("web-node-1", notice)
+        self.assertIn("pentest.web", notice)
+
     def test_agent_assignment_notice_is_suppressed_for_explicit_node_request(self):
         self.assertFalse(_should_announce_agent_assignment("11111111-1111-1111-1111-111111111111", {"text": "@node3 test http://target.local"}))
         self.assertFalse(_should_announce_agent_assignment(None, {"agent_node_id": "11111111-1111-1111-1111-111111111111", "text": "test http://target.local"}))
@@ -299,31 +311,30 @@ class PlatformPhase2Tests(unittest.TestCase):
         self.assertEqual(fake_ws.sent[0]["agent_capability"], "pentest.web")
         self.assertEqual(fake_ws.sent[0]["text"], "@node3 hello")
 
-    def test_sticky_node_binding_keeps_living_agent_addressable(self):
+    def test_sticky_node_binding_only_while_mid_task(self):
         node_id = "11111111-1111-1111-1111-111111111111"
 
-        # Living agent stays in the group after work bursts end (not only while running).
-        for status in ("running", "failed", "incomplete", "paused", "completed", "blocked"):
-            self.assertTrue(_should_use_sticky_node_binding(
-                conversation_status=status,
-                requested_node_id=None,
-                bound_node_id=node_id,
-            ), status)
-        # Brand-new room or fully canceled: no sticky participant.
-        for status in ("created", "canceled"):
+        # Mid-task: forward follow-ups to the active worker.
+        self.assertTrue(_should_use_sticky_node_binding(
+            conversation_status="running",
+            requested_node_id=None,
+            bound_node_id=node_id,
+        ))
+        # After settle: platform re-orchestrates (explain / re-dispatch with expert sticky).
+        for status in ("failed", "incomplete", "paused", "completed", "blocked", "created", "canceled"):
             self.assertFalse(_should_use_sticky_node_binding(
                 conversation_status=status,
                 requested_node_id=None,
                 bound_node_id=node_id,
             ), status)
-        # Explicit @node mention bypasses sticky (user switching participants).
+        # Explicit @expert/@node mention bypasses sticky (user switching participants).
         self.assertFalse(_should_use_sticky_node_binding(
             conversation_status="running",
             requested_node_id=node_id,
             bound_node_id=node_id,
         ))
         self.assertFalse(_should_use_sticky_node_binding(
-            conversation_status="failed",
+            conversation_status="running",
             requested_node_id=None,
             bound_node_id=None,
         ))

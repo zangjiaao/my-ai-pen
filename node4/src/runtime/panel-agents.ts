@@ -22,12 +22,15 @@ export type PanelAgentRecord = {
 export class PanelAgentTracker {
   private readonly children = new Map<string, PanelAgentRecord>();
   private mainTask: string;
+  private mainName: string;
   private mainStatus = "running";
   private activeTool = "";
   private phase = "starting";
 
-  constructor(mainTask: string) {
+  constructor(mainTask: string, mainName?: string) {
     this.mainTask = (mainTask || "Authorized security task").slice(0, 240);
+    // Prefer product expert persona over generic "Main Agent" / node labels.
+    this.mainName = (mainName || "Expert").trim().slice(0, 64) || "Expert";
   }
 
   setMainPhase(phase: string, activeTool?: string): void {
@@ -81,7 +84,7 @@ export class PanelAgentTracker {
       : this.mainStatus;
     const main: PanelAgentRecord = {
       id: "node4-main",
-      name: "Main Agent",
+      name: this.mainName,
       status: mainStatus,
       parent_id: null,
       task: this.mainTask,

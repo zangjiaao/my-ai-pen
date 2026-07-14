@@ -299,7 +299,15 @@ export default function ConversationPage() {
     setPlanTree(snapshot.plan_tree?.length ? snapshot.plan_tree : fallback?.plan_tree || []);
     setStrixAgents(snapshot.strix_agents?.length ? snapshot.strix_agents : fallback?.strix_agents || []);
     setStrixNotes(snapshot.strix_notes?.length ? snapshot.strix_notes : fallback?.strix_notes || []);
-    setStrixRun(snapshot.strix_run || fallback?.strix_run);
+    // Never replace a populated live run with an empty snapshot object ({} is truthy).
+    const nextRun = hasStrixRunSummary(snapshot.strix_run)
+      ? snapshot.strix_run
+      : hasStrixRunSummary(fallback?.strix_run)
+        ? fallback?.strix_run
+        : undefined;
+    if (nextRun) {
+      setStrixRun((prev) => mergeStrixRun(prev, nextRun));
+    }
     setFindings(snapshot.findings?.length ? snapshot.findings : fallback?.findings || []);
     setAssets(snapshot.assets?.length ? snapshot.assets : fallback?.assets || []);
     setPendingApprovals(snapshot.pending_approvals?.length ? snapshot.pending_approvals : fallback?.pending_approvals || []);
@@ -545,21 +553,38 @@ export default function ConversationPage() {
         setStrixNotes(node3Strix.notes.filter(isStrixNote));
       }
       if (isStrixRun(node3Strix.run)) {
-        setStrixRun(node3Strix.run);
-      } else if (checkpoint.llm_usage || checkpoint.started_at || checkpoint.scan_mode || checkpoint.targets_info) {
-        // Node2 synthesizes run-like fields on the checkpoint root (not only under node3_strix).
+        setStrixRun((prev) => mergeStrixRun(prev, node3Strix.run as StrixRun));
+      } else if (
+        checkpoint.llm_usage
+        || checkpoint.started_at
+        || checkpoint.scan_mode
+        || checkpoint.targets_info
+        || checkpoint.task_target
+        || checkpoint.runtime
+      ) {
+        // Node2/Node4 synthesize run-like fields on the checkpoint root (not only under node3_strix).
+        // Merge with previous so a sparse checkpoint cannot flash-wipe tokens/targets.
+        const taskTarget = isRecord(checkpoint.task_target) ? checkpoint.task_target : null;
+        const targetValue = taskTarget
+          ? readString(taskTarget.value) || readString(taskTarget.url)
+          : "";
+        const targetsFromTask = targetValue
+          ? [{ type: "url", target: targetValue, original: targetValue }]
+          : undefined;
         const runLike: StrixRun = {
           run_id: readString(checkpoint.run_id) || readString(checkpoint.task_id),
           status: readString(checkpoint.status),
           start_time: readString(checkpoint.started_at) || readString(checkpoint.start_time),
           end_time: readString(checkpoint.end_time),
-          scan_mode: readString(checkpoint.scan_mode),
+          scan_mode: readString(checkpoint.scan_mode) || readString(checkpoint.engagement),
           targets_info: Array.isArray(checkpoint.targets_info)
             ? (checkpoint.targets_info as StrixRun["targets_info"])
-            : undefined,
+            : targetsFromTask,
           llm_usage: isRecord(checkpoint.llm_usage) ? (checkpoint.llm_usage as StrixRun["llm_usage"]) : undefined,
         };
-        if (runLike.llm_usage || runLike.start_time || runLike.targets_info) setStrixRun(runLike);
+        if (runLike.llm_usage || runLike.start_time || runLike.targets_info || runLike.scan_mode) {
+          setStrixRun((prev) => mergeStrixRun(prev, runLike));
+        }
       }
       if (Array.isArray(node3Strix.vulnerabilities)) {
         const vulnerabilities = node3Strix.vulnerabilities;
@@ -1537,7 +1562,16 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                     className="relative z-10 w-full bg-transparent px-3.5 py-2.5 text-sm text-transparent caret-ink placeholder:text-ink-muted focus:outline-none" />
                 </div>
                 {running ? (
-                  <button onClick={() => { send({ type: "user_interrupt", conversation_id: activeId, action: "cancel" }); setRunning(false); }} className="rounded-pill bg-severity-critical px-5 py-2.5 text-sm font-medium text-white">Interrupt</button>
+                  <button
+                    onClick={() => {
+                      send({ type: "user_interrupt", conversation_id: activeId, action: "cancel" });
+                      setRunning(false);
+                      void refreshConversationState(activeId);
+                    }}
+                    className="rounded-pill bg-severity-critical px-5 py-2.5 text-sm font-medium text-white"
+                  >
+                    Interrupt
+                  </button>
                 ) : (
                   <button onClick={() => { void handleSend(); }} className="rounded-pill bg-ink px-5 py-2.5 text-sm font-medium text-white">Send</button>
                 )}
@@ -2184,6 +2218,54 @@ function isStrixNote(value: unknown): value is StrixNote {
 
 function isStrixRun(value: unknown): value is StrixRun {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+/** True when a run payload has something the right panel can actually display. */
+function hasStrixRunSummary(run: StrixRun | undefined | null): boolean {
+  if (!run || typeof run !== "object") return false;
+  const usage = run.llm_usage || {};
+  const targets = Array.isArray(run.targets_info) ? run.targets_info : [];
+  return Boolean(
+    run.start_time
+    || run.end_time
+    || run.scan_mode
+    || run.run_id
+    || Number(usage.total_tokens || usage.requests || 0) > 0
+    || targets.some((t) => Boolean(t?.target || t?.original)),
+  );
+}
+
+/**
+ * Merge run summaries so a sparse later checkpoint/state cannot wipe tokens/targets
+ * that a fuller live update already painted (the flash-then-empty right-panel bug).
+ */
+function mergeStrixRun(prev: StrixRun | undefined, next: StrixRun | undefined): StrixRun | undefined {
+  if (!next && !prev) return undefined;
+  if (!next) return prev;
+  if (!prev) return next;
+  const prevUsage = prev.llm_usage || {};
+  const nextUsage = next.llm_usage || {};
+  const prevTokens = Number(prevUsage.total_tokens || 0);
+  const nextTokens = Number(nextUsage.total_tokens || 0);
+  const prevRequests = Number(prevUsage.requests || 0);
+  const nextRequests = Number(nextUsage.requests || 0);
+  const preferNextUsage = nextTokens > prevTokens || nextRequests > prevRequests
+    || (nextTokens === prevTokens && nextRequests === prevRequests && Object.keys(nextUsage).length > 0);
+  const prevTargets = Array.isArray(prev.targets_info) ? prev.targets_info : [];
+  const nextTargets = Array.isArray(next.targets_info) ? next.targets_info : [];
+  const mergedTargets = nextTargets.length > 0 ? nextTargets : prevTargets;
+  return {
+    run_id: next.run_id || prev.run_id,
+    run_name: next.run_name || prev.run_name,
+    status: next.status || prev.status,
+    start_time: next.start_time || prev.start_time,
+    end_time: next.end_time || prev.end_time,
+    scan_mode: next.scan_mode || prev.scan_mode,
+    targets_info: mergedTargets.length ? mergedTargets : undefined,
+    llm_usage: preferNextUsage && Object.keys(nextUsage).length
+      ? nextUsage
+      : (Object.keys(prevUsage).length ? prevUsage : nextUsage),
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

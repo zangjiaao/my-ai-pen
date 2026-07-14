@@ -2514,6 +2514,23 @@ class CheckpointResumeTests(unittest.TestCase):
         self.assertTrue(task_msg.get("goal_mode"))
         self.assertEqual(task_msg.get("goal_objective"), "Maximize verified flags in scope")
 
+    def test_task_assign_carries_expert_pack_engagement(self):
+        msg = {
+            "text": "Test http://target.local",
+            "target": {"type": "url", "value": "http://target.local"},
+            "scope": {"allow": ["http://target.local"], "deny": []},
+            "engagement": "pentest",
+            "role": "pentest",
+            "expert_id": "3646a655-c22f-4af8-908e-037d1cec8bc4",
+            "expert_name": "\u6e17\u900f",
+        }
+        task_msg = _task_assign_from_user_message("conv-expert", msg, "task-expert")
+        self.assertEqual(task_msg.get("engagement"), "pentest")
+        self.assertEqual(task_msg.get("role"), "pentest")
+        self.assertEqual(task_msg.get("expert_id"), "3646a655-c22f-4af8-908e-037d1cec8bc4")
+        self.assertEqual(task_msg.get("expert_name"), "\u6e17\u900f")
+        self.assertEqual(task_msg.get("snapshot", {}).get("engagement"), "pentest")
+
     def test_resume_preserves_prior_goal_objective(self):
         resume_context = {
             "task": {

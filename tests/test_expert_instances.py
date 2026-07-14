@@ -69,5 +69,39 @@ class MentionMatchTests(unittest.TestCase):
         self.assertIsNone(match_expert_by_mention_token("WebHunter", experts))
 
 
+class ExpertRouteApplyTests(unittest.TestCase):
+    """Expert is routing primary: pack engagement always comes from the instance."""
+
+    def test_apply_expert_sets_pack_and_node(self):
+        from app.ws.router import _apply_expert_route_to_message, _find_expert_in_list
+
+        expert = SimpleNamespace(
+            id="e1",
+            name="渗透",
+            display_name="渗透专家",
+            pack_id="pentest",
+            node_id="n-worker",
+            enabled=True,
+        )
+        out = _apply_expert_route_to_message({"text": "@渗透 hello", "engagement": "stale"}, expert)
+        self.assertEqual(out["engagement"], "pentest")
+        self.assertEqual(out["role"], "pentest")
+        self.assertEqual(out["agent_node_id"], "n-worker")
+        self.assertEqual(out["expert_id"], "e1")
+        self.assertEqual(out["expert_name"], "渗透")
+        self.assertEqual(out["content"]["expert_display_name"], "渗透专家")
+
+        found = _find_expert_in_list([expert], expert_id="e1")
+        self.assertIs(found, expert)
+        found_by_name = _find_expert_in_list([expert], expert_name="渗透")
+        self.assertIs(found_by_name, expert)
+
+    def test_pack_for_capability_maps_pentest_web(self):
+        from app.ws.router import _pack_for_capability
+
+        self.assertEqual(_pack_for_capability("pentest.web"), "pentest")
+        self.assertEqual(_pack_for_capability("ctf.web"), "ctf")
+
+
 if __name__ == "__main__":
     unittest.main()

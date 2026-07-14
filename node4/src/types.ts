@@ -19,6 +19,9 @@ export type TaskEnvelope = {
    * (not free-text NLP on instruction). When set, session starts with goal active.
    */
   goalObjective?: string;
+  /** Product expert persona for UI labels (not the physical node name). */
+  expertName?: string;
+  expertId?: string;
 };
 
 export type PlatformSink = {

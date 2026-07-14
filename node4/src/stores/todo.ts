@@ -264,11 +264,19 @@ function mapStatus(status: TodoStatus): "pending" | "running" | "done" | "skippe
 }
 
 function slug(value: string): string {
-  return value
+  // Keep CJK / unicode letters — ASCII-only strip collapsed all Chinese titles to "item".
+  const cleaned = value
+    .normalize("NFKC")
+    .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
     .replace(/^-+|-+$/g, "")
-    .slice(0, 64) || "item";
+    .slice(0, 48);
+  if (cleaned) return cleaned;
+  // Stable fallback from content so plan node_ids stay unique.
+  let h = 0;
+  for (let i = 0; i < value.length; i++) h = (h * 31 + value.charCodeAt(i)) >>> 0;
+  return `t${h.toString(16)}`;
 }
 
 function findTaskByContent(phases: TodoPhase[], content: string): { task: TodoItem; phase: TodoPhase } | undefined {

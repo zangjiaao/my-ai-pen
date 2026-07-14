@@ -38,7 +38,8 @@
 **核心故事：**
 
 - 在节点管理为 Node 安装专家包；在专家管理创建专家实例并绑定 Node（多专家可共用同一 Node）。
-- 对话中 `@专家名` 描述授权目标与范围；系统按专家绑定路由到 Node 并带上结构化 engagement，可选 Goal mode。
+- **同一会话为共享群聊**：用户可与平台 Agent 对话（解释资产/漏洞/进度，或由平台分发任务）；也可 `@专家名` 点名专家接手。mention 是多 Agent 共享上下文里的点名渠道，不是独立编排系统。
+- 系统按专家绑定落到 Node，并带上该专家 pack 的结构化 engagement；可选 Goal mode。
 - 观察工具过程、证据与已确认 finding；高风险动作可经平台授权卡确认。
 - 刷新或重开会话后，消息与结果仍可从平台快照恢复。
 
@@ -56,13 +57,12 @@
 - 节点页：注册、token、在线状态、runtime 预算、**专家包 offers** 安装/卸载（运行时能力层）。
 - 资产 / 漏洞列表与详情（来自 Node 回写的结构化事件）。
 - 高风险操作：`request_decision` ↔ 用户 authorize/cancel。
-- **Engagement dashboard**（会话右侧 Status：真实 status / findings / activity，见 `phase-milestones.md` Phase C）。
 - **Findings 报告导出**（`/api/reports/conversations/{id}/findings`，由 booked findings 生成，Phase B）。
 - **计划任务**（`/api/schedules`，结构化 engagement 定时 dispatch，Phase D）。
 
 **P1**
 
-- 右侧面板：任务/Surface/发现摘要、会话 task 上的专家角色展示。
+- 右侧面板：Status（elapsed / tokens / target、协作树、Tasks）、Surface、Findings、Activity——不堆叠重复的 Expert role / Engagement dashboard 卡片。
 - 报告导出 / 导入（现有 sync 能力延续，不阻塞主环）。
 - 审计日志中的专家安装、专家实例 CRUD 与 usage billing hook（非真实支付）。
 - 里程碑与交付门槛见 **`docs/phase-milestones.md`**（Phase A–D）。

@@ -542,11 +542,18 @@ def strix_run_from_checkpoint(checkpoint: dict) -> dict:
     }
 
 
+def _is_pentest_runtime(runtime: object) -> bool:
+    """Node2/Node4 pi workers share the right-panel run summary shape."""
+    value = str(runtime or "").strip().lower()
+    return value in {"node2", "node2-pi", "node4", "node4-pi"} or value.startswith("node2") or value.startswith("node4")
+
+
 def pentest_run_from_checkpoint(checkpoint: dict) -> dict:
-    """Synthesize Node3-shaped run summary from Node2/pi checkpoints for right-panel parity."""
+    """Synthesize Node3-shaped run summary from Node2/Node4/pi checkpoints for right-panel parity."""
     if not isinstance(checkpoint, dict):
         return {}
-    if str(checkpoint.get("runtime") or "") not in {"node2-pi", "node2"} and workflow_kind_for_checkpoint(checkpoint) != "pentest":
+    runtime = str(checkpoint.get("runtime") or "")
+    if not _is_pentest_runtime(runtime) and workflow_kind_for_checkpoint(checkpoint) != "pentest":
         return {}
     diag = checkpoint.get("diagnostics") if isinstance(checkpoint.get("diagnostics"), dict) else {}
     lifecycle = checkpoint.get("lifecycle") if isinstance(checkpoint.get("lifecycle"), dict) else {}
@@ -559,20 +566,34 @@ def pentest_run_from_checkpoint(checkpoint: dict) -> dict:
         if value:
             targets = [{"type": "url", "target": value, "original": value}]
     start_time = str(checkpoint.get("started_at") or diag.get("startedAt") or "")
-    end_time = str(finish.get("calledAt") or "")
+    end_time = str(
+        checkpoint.get("end_time")
+        or finish.get("calledAt")
+        or ""
+    )
     if not end_time and str(diag.get("phase") or "") in {"finished", "error", "aborted"}:
         end_time = str(diag.get("updatedAt") or "")
-    phase = str(diag.get("phase") or "")
-    status = str(finish.get("status") or "")
+    if not end_time and str(checkpoint.get("status") or "") in {"completed", "incomplete", "failed", "blocked"}:
+        # Node4 terminal checkpoints put end_time on the root; status alone is enough to stop the clock.
+        end_time = str(checkpoint.get("end_time") or "")
+    phase = str(diag.get("phase") or checkpoint.get("agent_phase") or "")
+    status = str(finish.get("status") or checkpoint.get("status") or "")
     if not status:
-        status = "completed" if phase in {"finished", "agent_end"} else "failed" if phase in {"error", "aborted"} else "running"
+        status = (
+            "completed"
+            if phase in {"finished", "agent_end"}
+            else "failed"
+            if phase in {"error", "aborted"}
+            else "running"
+        )
+    run_name = "node4" if _is_pentest_runtime(runtime) and str(runtime).startswith("node4") else "node2"
     return {
         "run_id": str(diag.get("taskId") or checkpoint.get("task_id") or ""),
-        "run_name": "node2",
+        "run_name": run_name,
         "status": status,
         "start_time": start_time,
         "end_time": end_time,
-        "scan_mode": str(checkpoint.get("scan_mode") or ""),
+        "scan_mode": str(checkpoint.get("scan_mode") or checkpoint.get("engagement") or ""),
         "targets_info": targets,
         "llm_usage": {
             "requests": safe_int(usage.get("requests") or diag.get("llmTurnCount")),
@@ -1102,7 +1123,14 @@ def workflow_kind_for_checkpoint(checkpoint: dict) -> str:
     if kanban_kind:
         return kanban_kind
     runtime = str(checkpoint.get("runtime") or "") if isinstance(checkpoint, dict) else ""
-    if runtime.startswith("node2"):
+    if runtime.startswith("node2") or runtime.startswith("node4"):
+        return "pentest"
+    # Node4 also stamps scan_mode / engagement without relying on runtime alone.
+    if isinstance(checkpoint, dict) and (
+        str(checkpoint.get("scan_mode") or "").strip()
+        or str(checkpoint.get("engagement") or "").strip()
+        or str(checkpoint.get("role_pack") or "").strip()
+    ):
         return "pentest"
     return ""
 

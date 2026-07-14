@@ -17,7 +17,14 @@
 
 1. **Nodes** — register Node4; install expert packs (offers).
 2. **专家管理** — create Experts: `name` + `pack_id` + bind `node_id`.
-3. **对话** — `@ExpertName` (+ optional Goal mode). System routes to bound Node and sets `engagement` from the Expert’s pack.
+3. **对话（共享 session）** — 用户、平台 Agent、多位专家在同一 conversation 里协作：
+   - **不 @** → 跟平台 Agent 聊（解释资产/漏洞/进度）；平台可代为分发任务给专家。
+   - **`@ExpertName`** → 在同一会话里点名该专家（渠道，不是另一套任务系统）；系统用 Expert 的 `pack_id` 作 engagement，落到绑定 Node 执行。
+   - 可选 **Goal mode**（长任务）。
+
+**Routing primary = Expert**（用户可见参与者）；Node 只是执行座位。Sticky 字段：`expert_id` / `expert_name` / `engagement` 一并粘住，派发时不得丢 pack。
+
+平台代为分发（用户未 @）时：按 capability→pack 自动选择已启用 Expert 实例，再落到其 Node；若无实例，仍写入 structured `engagement`（避免 Node4 bare `runtime`）。
 
 ## Dispatch gate
 
@@ -69,14 +76,15 @@ Rules:
 
 Composer is intentionally thin:
 
-- **`@Expert`** (primary) — mention picker lists product experts (+ platform agent). Selecting an expert injects `agent_node_id` + structured `engagement`/`role` from the instance.
+- **`@Expert`** — mention picker lists product experts (+ platform agent). Selecting an expert injects `expert_id` / `expert_name` / `engagement` / bound `agent_node_id` (structured pack from the instance, not NLP).
+- **No mention** — platform Agent is the default room participant (explain / dispatch).
 - **Goal mode** — optional long-task switch (+ objective). Independent of expert routing.
 - No separate “Expert role” pack picker on the chat composer (role comes from the Expert).
 - Templates may auto-prefix `@ExpertName` when an instance exists for that pack.
 
 Right panel Status still shows conversation `task.engagement` / `task.role` when set.
 
-WS mention order: explicit `agent_node_id` → **@Expert name** → @Node name (legacy/fallback).
+WS mention order: **expert_id / @Expert name** → explicit node_id (legacy) → @Node name (legacy/fallback).
 
 ## Node management UI（物理节点）
 

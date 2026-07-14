@@ -7,11 +7,12 @@ export function eagerTodoInjection(options?: { forced?: boolean }): string {
   if (options?.forced) {
     return [
       "<system-reminder>",
-      "Before substantive work, call todo(op=init) ONCE with a coarse phased map (not a micro-checklist).",
-      "Good: phases like Recon / Exploit categories / Report, with a few 5–10 word category tasks (e.g. \"Solve SQL injection class\", not one task per challenge/vuln).",
-      "Bad: enumerating every endpoint, flag, or challenge as its own todo item.",
+      "Before substantive work, call todo(op=init) ONCE with a coarse phased map (OMP Juice-style — not a project plan).",
+      "Good phases (examples): Recon / Auth / Injection / XSS / Access control / Report — short English or Chinese nouns only.",
+      "Good tasks: 5–10 word attack-surface categories (e.g. \"Map auth endpoints\", \"SQL injection class\", \"Book confirmed findings\").",
+      "Bad: meta prep like \"configure target\", \"load skills\", \"prepare environment\", or one todo per endpoint/flag/challenge.",
       "After init succeeds, spend the rest of the turn on high-density shell/act work — do not keep calling todo every few probes.",
-      "Mark done only when a whole category/phase is largely finished (or use done with phase=...). Occasional done is enough.",
+      "Mark done only when a whole category/phase is largely finished (or use done with phase=...). Call start when you switch category.",
       "</system-reminder>",
     ].join("\n");
   }

@@ -32,7 +32,11 @@ type MarkdownBlock =
   | { type: "table"; headers: string[]; alignments: TableAlignment[]; rows: string[][] };
 
 function agentDisplayName(content: Record<string, unknown>, agentNameById: Record<string, string>, fallbackPentestNodeId?: string | null, platformAgentNodeId?: string | null): string {
-  // Product expert persona wins over physical node name.
+  // Product expert persona wins over physical node name / Node4 internal labels.
+  const expertDisplay = String(content.expert_display_name || content.expertDisplayName || "").trim();
+  if (expertDisplay) {
+    return expertDisplay.startsWith("@") ? expertDisplay.slice(1) : expertDisplay;
+  }
   const expertName = String(content.expert_name || content.expertName || "").trim();
   if (expertName) {
     return expertName.startsWith("@") ? expertName.slice(1) : expertName;
@@ -42,11 +46,18 @@ function agentDisplayName(content: Record<string, unknown>, agentNameById: Recor
     return agentNameById[expertId];
   }
   const source = String(content.agent_source || "pentest");
+  if (source === "platform") {
+    return "\u5e73\u53f0Agent";
+  }
+  // Never surface raw node product names as the speaker when an expert map exists.
   const explicitNodeId = typeof content.agent_node_id === "string" ? content.agent_node_id : "";
-  const fallbackNodeId = source === "platform" ? platformAgentNodeId : fallbackPentestNodeId;
+  const fallbackNodeId = fallbackPentestNodeId;
   const nodeId = explicitNodeId || fallbackNodeId || "";
-  const baseName = nodeId && agentNameById[nodeId] ? agentNameById[nodeId] : source === "platform" ? "\u5e73\u53f0Agent" : "\u6e17\u900fAgent";
-  return baseName;
+  if (nodeId && agentNameById[nodeId]) {
+    // Physical node label only as last resort (legacy).
+    return agentNameById[nodeId];
+  }
+  return "\u6e17\u900fAgent";
 }
 function ToolCallCard({ content, onOpenEvidence }: { content: Record<string, unknown>; onOpenEvidence?: (evidence: Partial<SecurityEvidence>) => void }) {
   const [expanded, setExpanded] = useState(false);

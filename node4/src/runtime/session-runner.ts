@@ -78,7 +78,10 @@ export async function runNode4Task(
   };
 
   const goals = new GoalStore();
-  const panel = new PanelAgentTracker(task.instruction || "Authorized security task");
+  const panelLabel =
+    (typeof task.expertName === "string" && task.expertName.trim()) ||
+    (pack.id && pack.id !== "runtime" ? pack.id : "Expert");
+  const panel = new PanelAgentTracker(task.instruction || "Authorized security task", panelLabel);
   const usage = createUsageLedgerFromEnv();
   const textStream = new PlatformTextStream(loggingPlatform, task);
   const checkpointThrottle = new CheckpointThrottle();
@@ -270,11 +273,12 @@ export async function runNode4Task(
     }
   }
 
+  const who = panelLabel;
   await loggingPlatform.send({
     type: "status_update",
     conversation_id: task.conversationId,
     task_id: task.taskId,
-    message: `Node4 starting role_pack=${pack.id} tools=${toolNames.join(",")} goal_active=${goals.isActive()} (in-loop density; no session wall)`,
+    message: `${who} starting pack=${pack.id} tools=${toolNames.join(",")} goal_active=${goals.isActive()}`,
     agent_phase: "starting",
     status: "running",
     llm_usage: usage.snapshot(),
@@ -533,11 +537,23 @@ export async function runNode4Task(
 }
 
 function setRuntimeApiKey(authStorage: AuthStorage, provider: string): void {
-  const key =
-    process.env.LLM_API_KEY ||
-    process.env.OPENAI_API_KEY ||
-    process.env.DEEPSEEK_API_KEY ||
-    process.env.ANTHROPIC_API_KEY ||
-    "";
+  // Prefer provider-native keys so a leftover LLM_API_KEY (e.g. ollama cloud)
+  // cannot steal DeepSeek/OpenAI credentials.
+  const p = String(provider || "").trim().toLowerCase();
+  let key = "";
+  if (p === "deepseek") {
+    key = process.env.DEEPSEEK_API_KEY || process.env.LLM_API_KEY || "";
+  } else if (p === "openai") {
+    key = process.env.OPENAI_API_KEY || process.env.LLM_API_KEY || "";
+  } else if (p === "anthropic") {
+    key = process.env.ANTHROPIC_API_KEY || process.env.LLM_API_KEY || "";
+  } else {
+    key =
+      process.env.LLM_API_KEY ||
+      process.env.OPENAI_API_KEY ||
+      process.env.DEEPSEEK_API_KEY ||
+      process.env.ANTHROPIC_API_KEY ||
+      "";
+  }
   if (key) (authStorage as any).setRuntimeApiKey?.(provider, key);
 }
