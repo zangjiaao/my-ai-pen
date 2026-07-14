@@ -12,10 +12,82 @@ from app.db.base import get_db
 from app.middleware.auth import get_current_user
 from app.models.conversation import Conversation
 from app.models.message import Message
+from app.models.evidence import Evidence
+from app.models.vulnerability import Vulnerability
 from app.services.conversation_snapshot import message_summary
 from app.services.conversation_snapshot import build_conversation_snapshot
+from app.services.engagement_report import build_engagement_report_markdown
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
+
+
+@router.get("/conversations/{conv_id}/findings")
+async def export_findings_report(
+    conv_id: str,
+    format: str = Query("markdown", pattern="^(markdown|md)$"),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Export a findings-driven engagement report (Phase B)."""
+    user_id = uuid.UUID(current_user["user_id"])
+    result = await db.execute(
+        select(Conversation).where(Conversation.id == uuid.UUID(conv_id), Conversation.user_id == user_id)
+    )
+    conversation = result.scalar_one_or_none()
+    if not conversation:
+        raise HTTPException(404, "Conversation not found")
+
+    snapshot = await build_conversation_snapshot(db, conversation, user_id)
+    vulns_result = await db.execute(
+        select(Vulnerability).where(
+            Vulnerability.conversation_id == conversation.id,
+            Vulnerability.user_id == user_id,
+        )
+    )
+    vulns = list(vulns_result.scalars().all())
+    findings = [
+        {
+            "id": str(v.id),
+            "title": v.title,
+            "severity": v.severity,
+            "status": v.status,
+            "description": v.description,
+            "poc": v.poc,
+            "remediation": v.remediation,
+            "cve_id": v.cve_id,
+            "evidence_ids": list(v.evidence_ids or []),
+        }
+        for v in vulns
+    ]
+    # Prefer snapshot findings if DB empty but snapshot has them
+    if not findings and isinstance(snapshot.get("findings"), list):
+        findings = [f for f in snapshot["findings"] if isinstance(f, dict)]
+
+    ev_result = await db.execute(
+        select(Evidence).where(Evidence.conversation_id == conversation.id, Evidence.user_id == user_id)
+    )
+    evidence_by_id: dict = {}
+    for e in ev_result.scalars().all():
+        key = str(e.evidence_id or e.id)
+        evidence_by_id[key] = {"id": key, "summary": e.summary, "type": e.type}
+
+    ctx = conversation.context if isinstance(conversation.context, dict) else {}
+    task = ctx.get("task") if isinstance(ctx.get("task"), dict) else {}
+    markdown = build_engagement_report_markdown(
+        title=conversation.title or "Penetration Test Report",
+        target=str(task.get("target") or snapshot.get("target") or ""),
+        scope=str(task.get("scope") or task.get("target") or ""),
+        engagement=str(task.get("engagement") or task.get("role") or "pentest"),
+        conversation_id=str(conversation.id),
+        findings=findings,
+        evidence_by_id=evidence_by_id,
+    )
+    basename = _safe_filename(f"{conversation.title or 'findings'}-{str(conversation.id)[:8]}-findings")
+    return Response(
+        content=markdown,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{basename}.md"'},
+    )
 
 
 @router.get("/conversations/{conv_id}")

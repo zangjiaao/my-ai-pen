@@ -27,3 +27,7 @@ api_router.include_router(evidence_router)
 
 from app.api.reports import router as reports_router
 api_router.include_router(reports_router)
+from app.api.schedules import router as schedules_router
+api_router.include_router(schedules_router)
+from app.api.experts import router as experts_router
+api_router.include_router(experts_router)

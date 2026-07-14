@@ -32,8 +32,16 @@ type MarkdownBlock =
   | { type: "table"; headers: string[]; alignments: TableAlignment[]; rows: string[][] };
 
 function agentDisplayName(content: Record<string, unknown>, agentNameById: Record<string, string>, fallbackPentestNodeId?: string | null, platformAgentNodeId?: string | null): string {
+  // Product expert persona wins over physical node name.
+  const expertName = String(content.expert_name || content.expertName || "").trim();
+  if (expertName) {
+    return expertName.startsWith("@") ? expertName.slice(1) : expertName;
+  }
+  const expertId = String(content.expert_id || content.expertId || "").trim();
+  if (expertId && agentNameById[expertId]) {
+    return agentNameById[expertId];
+  }
   const source = String(content.agent_source || "pentest");
-  const mode = String(content.agent_mode || "");
   const explicitNodeId = typeof content.agent_node_id === "string" ? content.agent_node_id : "";
   const fallbackNodeId = source === "platform" ? platformAgentNodeId : fallbackPentestNodeId;
   const nodeId = explicitNodeId || fallbackNodeId || "";

@@ -4,14 +4,18 @@ import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel, Field
 from app.db.base import get_db
 from app.middleware.auth import get_current_user
+from app.models.asset import Asset
 from app.models.audit import AuditLog
 from app.models.conversation import Conversation
+from app.models.evidence import Evidence
+from app.models.expert import Expert
 from app.models.node import Node, PLATFORM_AGENT_NODE_ID, PLATFORM_AGENT_NODE_NAME
+from app.models.vulnerability import Vulnerability
 from app.services.expert_offers import (
     ACTION_INSTALL,
     ACTION_UNINSTALL,
@@ -351,19 +355,57 @@ async def regenerate_token(node_id: str, current_user: dict = Depends(get_curren
 
 @router.delete("/{node_id}")
 async def delete_node(node_id: str, current_user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Delete a worker node.
+
+    Detach ledger rows that reference the node (assets / vulns / conversations /
+    evidence keep data, ``node_id`` cleared). Product experts bound to this node
+    are removed (FK CASCADE). Platform agent cannot be deleted.
+    """
     n = await _get_node(db, node_id)
     if n.id == PLATFORM_AGENT_NODE_ID or n.type == "platform":
         raise HTTPException(400, "Platform node cannot be deleted")
+
+    # Detach optional FKs first — DB constraints are NO ACTION, not CASCADE.
+    for model in (Asset, Vulnerability, Conversation, Evidence):
+        await db.execute(
+            update(model).where(model.node_id == n.id).values(node_id=None)
+        )
+    # Experts are node-bound routing personas; remove with the physical node.
+    expert_rows = (await db.execute(select(Expert).where(Expert.node_id == n.id))).scalars().all()
+    expert_count = len(expert_rows)
+    for exp in expert_rows:
+        await db.delete(exp)
+
     await _audit_user(
         db,
         uuid.UUID(current_user["user_id"]),
         "node.delete",
         n.id,
-        {"name": n.name, "type": n.type},
+        {
+            "name": n.name,
+            "type": n.type,
+            "detached": True,
+            "experts_removed": expert_count,
+        },
     )
     await db.delete(n)
-    await db.commit()
-    return {"ok": True}
+    try:
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            409,
+            f"无法删除节点「{n.name}」：仍有关联数据（{e.__class__.__name__}）。",
+        ) from e
+
+    try:
+        from app.ws import router as ws_router
+
+        await ws_router.revoke_node_connection(str(n.id), "node deleted")
+    except Exception:
+        pass
+
+    return {"ok": True, "id": str(n.id), "experts_removed": expert_count}
 
 
 async def _audit_user(

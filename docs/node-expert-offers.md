@@ -1,20 +1,32 @@
-# Node expert offers (multi-expert container)
+# Node expert offers + product experts (routing)
 
-## Model
+## Model (three layers)
 
-- A **Node** is a **container** / **expert-pack runtime** (Node4), not one fixed expert forever.
-- **Expert packs** are maintained under the shared catalog **`experts/`** (independent of harness code): `pack.json`, mission/work, pack-scoped skills.
-- **Two install layers:**
-  1. **Platform offers** (`node.config.offers`) — product permission + billing hooks (this document’s APIs).
-  2. **Node install root** (`node4/installed-experts/` or `NODE4_EXPERTS_INSTALL`) — copy of pack content from catalog via `npx tsx src/expert-cli.ts install <id>`. Uninstall removes only the local copy; **catalog is never deleted**. No auto-seed of other packs.
-- **Node default**: empty install → **bare OMP runtime** (no expert). Experts are opt-in for capability comparison.
-- **Platform default offers** may still default to `["pentest"]` for product UX; that does not force Node-side pack files until install.
-- Task assignment must carry an **explicit structured** `engagement` and/or `role` field. The platform **does not** invent engagement by scanning free-text instructions (no NLP routing).
+| Layer | What | Where |
+|-------|------|--------|
+| **Catalog pack** | Pack content (`pack.json`, mission/work, skills) | Shared repo `experts/` |
+| **Node offers / install** | Runtime capability on a worker Node | Platform `node.config.offers` + Node4 install root |
+| **Product Expert instance** | User-facing persona: `@name` → Node + pack | Platform table `experts` |
+
+- A **Node** is a **container** / expert-pack **runtime** (Node4), not one fixed product expert forever.
+- **Multiple product Experts may bind to the same Node** (shared runtime, different pack routes or labels).
+- Task assignment still carries **explicit structured** `engagement` / `role` (from the Expert instance or API field). The platform **does not** invent engagement by NLP of free-text instructions.
 - Remote marketplace / network hot-load of packs is **out of scope**.
+
+### Recommended user flow
+
+1. **Nodes** — register Node4; install expert packs (offers).
+2. **专家管理** — create Experts: `name` + `pack_id` + bind `node_id`.
+3. **对话** — `@ExpertName` (+ optional Goal mode). System routes to bound Node and sets `engagement` from the Expert’s pack.
 
 ## Dispatch gate
 
-Before `task_assign` is sent to a worker, the platform checks that the engagement resolves to a pack id that appears in the node’s effective offers. If not, dispatch fails with a clear error (install the expert first).
+Before `task_assign` is sent to a worker, the platform checks that the engagement resolves to a pack id in the node’s effective offers. If not, dispatch fails with a clear error (install the pack on the node first).
+
+`@Expert` resolution also requires:
+
+- Expert exists and `enabled`
+- Bound node still has that pack in offers (create/update API enforces this)
 
 Aliases fold to canonical pack ids (same idea as Node4 `resolveRolePack`):
 
@@ -26,35 +38,58 @@ Aliases fold to canonical pack ids (same idea as Node4 `resolveRolePack`):
 
 Blank engagement defaults to **pentest** (must still be offered).
 
-## Install / uninstall API
+## Node pack install API
 
 Authenticated management endpoints (billing hooks only — **no payment provider**):
 
 - `GET /api/nodes/{node_id}/offers` — list effective offers
-- `POST /api/nodes/{node_id}/experts` body `{"expert_id":"ctf"}` — install; audit `expert.install`
-- `DELETE /api/nodes/{node_id}/experts/{expert_id}` — uninstall; audit `expert.uninstall`
+- `POST /api/nodes/{node_id}/experts` body `{"expert_id":"ctf"}` — install pack on node; audit `expert.install`
+- `DELETE /api/nodes/{node_id}/experts/{expert_id}` — uninstall pack; audit `expert.uninstall`
 
 Billing event detail includes stable `billing_code` (e.g. `expert.ctf`), `expert_id`, and `action` (`install` | `remove`).
 
 Node list/detail also expose `offers` on the node payload.
 
+## Product Expert API
+
+- `GET /api/experts` — list instances (includes `node_name`, `node_status`, `node_offers`)
+- `POST /api/experts` body `{ "name", "pack_id", "node_id", "display_name?", "description?" }`
+- `GET /api/experts/{id}`
+- `PATCH /api/experts/{id}`
+- `DELETE /api/experts/{id}`
+
+Rules:
+
+- `name` is the `@mention` token: Unicode letters (including Chinese), digits, and `_.:-` (1–128), unique; must not collide with a node name. No spaces.
+- `pack_id` must be installed on the bound node (offers gate).
+- Cannot bind to the platform agent node.
+- Audit: `expert.create` / `expert.update` / `expert.delete`.
+
 ## Conversation UI
 
-Conversation composer has an **Expert role** control next to Goal mode:
+Composer is intentionally thin:
 
-- Options come from the shared catalog (`lib/experts.ts`: pentest / ctf / consult).
-- Available choices are filtered by the **target worker node’s** effective offers (mention → sticky conversation node → first online worker).
-- Packs not installed on that node are disabled with an install hint (`Nodes → Experts`).
-- Templates (Web pentest, CTF challenge, Consult, …) also switch engagement when the pack is installed.
-- The choice is sent as structured `engagement` + `role` on `user_message` / task assign — independent of Goal mode and free-text.
+- **`@Expert`** (primary) — mention picker lists product experts (+ platform agent). Selecting an expert injects `agent_node_id` + structured `engagement`/`role` from the instance.
+- **Goal mode** — optional long-task switch (+ objective). Independent of expert routing.
+- No separate “Expert role” pack picker on the chat composer (role comes from the Expert).
+- Templates may auto-prefix `@ExpertName` when an instance exists for that pack.
 
-Right panel Status tab shows the conversation’s structured expert role when `task.engagement` / `task.role` is set.
+Right panel Status still shows conversation `task.engagement` / `task.role` when set.
 
-## Node management UI
+WS mention order: explicit `agent_node_id` → **@Expert name** → @Node name (legacy/fallback).
 
-- Node cards list installed expert chips.
-- Node detail → **专家包** tab: install / uninstall each known pack (calls `POST/DELETE …/experts`).
-- Dispatches `nodes:changed` so the conversation page refreshes offers without a full reload.
+## Node management UI（物理节点）
+
+- Node cards list installed **扩展包** chips.
+- Node detail tabs: **概述** / **配置**（Token + 运行预算）/ **扩展**（install/uninstall packs）。
+- Skills / tools 不再挂在节点上展示，改在专家名片「能力」页。
+
+## Expert management UI（虚拟形象）
+
+- `/experts` 卡片网格（名片）：@名、能力包、绑定节点、在线态。
+- 点开详情：**概述** / **配置**（改名、绑 Node、换包）/ **能力**（pack skills + tools）。
+- 多个专家可绑定同一物理节点。
+- Events `nodes:changed` / `experts:changed` refresh conversation mention lists.
 
 ## Usage billing on complete
 
@@ -62,14 +97,16 @@ On `task_complete`, the platform records audit action `expert.usage` with `billi
 
 ## Code map
 
-- Catalog: `experts/` + `experts/catalog.json` (shared pack ids/aliases)
+- Catalog: `experts/` + `experts/catalog.json`
 - Platform catalog load: `platform/backend/app/services/expert_catalog.py`
-- Platform offers helpers: `platform/backend/app/services/expert_offers.py`
-- Node API: `platform/backend/app/api/nodes.py`
-- Gate + usage: `platform/backend/app/ws/router.py`
+- Offers helpers: `platform/backend/app/services/expert_offers.py`
+- Instance helpers: `platform/backend/app/services/expert_instances.py`
+- Model: `platform/backend/app/models/expert.py`
+- Expert API: `platform/backend/app/api/experts.py`
+- Node pack API: `platform/backend/app/api/nodes.py`
+- Gate + @Expert route: `platform/backend/app/ws/router.py`
 - Node install/load: `node4/src/experts/`, CLI `node4/src/expert-cli.ts`
-- Resolve: `node4/src/roles/resolve.ts` (installed set only)
-- UI: `platform/frontend/src/pages/ConversationPage.tsx`, offers on `NodePage`
-- Tests: `tests/test_expert_offers.py`, `node4` smoke
+- UI: `ExpertPage.tsx`, `ConversationPage.tsx`, `NodePage` offers tab
+- Tests: `tests/test_expert_offers.py`, `tests/test_expert_instances.py`
 
 Product node line is **Node4 only**; see `docs/prd.md`.

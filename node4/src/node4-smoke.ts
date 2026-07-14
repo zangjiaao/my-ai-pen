@@ -175,10 +175,15 @@ async function main() {
   assert(toolNamesForPack(PENTEST_ROLE_PACK).includes("skill"), "pentest has skill tool");
   assert(toolNamesForPack(PENTEST_ROLE_PACK).includes("browser"), "pentest has browser tool");
   assert(!toolNamesForPack(PENTEST_ROLE_PACK).includes("captcha"), "pentest does not force captcha");
-  assert(PENTEST_ROLE_PACK.skillIds && PENTEST_ROLE_PACK.skillIds.length >= 2, "pentest meta skills ≥2");
+  assert(PENTEST_ROLE_PACK.skillIds && PENTEST_ROLE_PACK.skillIds.length >= 6, "pentest methodology skills ≥6");
   assert(
     (PENTEST_ROLE_PACK.skillIds || []).every((id) => String(id).startsWith("pentest-")),
     "pentest skill ids prefixed",
+  );
+  assert(
+    (PENTEST_ROLE_PACK.skillIds || []).includes("pentest-auth-session") &&
+      (PENTEST_ROLE_PACK.skillIds || []).includes("pentest-sql-injection"),
+    "pentest includes auth-session and sql-injection skills",
   );
   const pentestPrompt = buildSystemPrompt(
     { taskId: "t", conversationId: "c", instruction: "assess", target: {}, scope: {} },
@@ -760,11 +765,15 @@ async function main() {
   runtime.skills = new SkillStore(pentestSkillsRoot);
   runtime.skillIds = PENTEST_ROLE_PACK.skillIds;
   const pentestSkillList = JSON.parse(textOf(await exec(skillTool, "sk3", { op: "list" })));
-  assert(pentestSkillList.ok && pentestSkillList.count >= 2, `pentest skill list count=${pentestSkillList.count}`);
+  assert(pentestSkillList.ok && pentestSkillList.count >= 6, `pentest skill list count=${pentestSkillList.count}`);
   assert(
     (pentestSkillList.skills as Array<{ id: string }>).every((s) => String(s.id).startsWith("pentest-")),
     "list filtered to pentest skills",
   );
+  const loadAuth = JSON.parse(
+    textOf(await exec(skillTool, "sk4", { op: "load", id: "pentest-auth-session" })),
+  );
+  assert(loadAuth.ok && String(loadAuth.body || "").toLowerCase().includes("session"), "load pentest-auth-session");
   for (const id of PENTEST_ROLE_PACK.skillIds || []) {
     const body = await runtime.skills.load(id);
     assert(!("error" in body), `skill ${id} loads`);

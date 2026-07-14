@@ -9,7 +9,8 @@
 | [`node4-harness.md`](node4-harness.md) | Node4 runtime north star (OMP-class harness, no agent finish) |
 | [`design.md`](design.md) | UI design system |
 | [`node4-ctf-role.md`](node4-ctf-role.md) | CTF role pack operator notes |
-| [`node-expert-offers.md`](node-expert-offers.md) | Platform offers + Node install of experts |
+| [`node-expert-offers.md`](node-expert-offers.md) | Node packs + product Expert instances (@mention routing) |
+| [`phase-milestones.md`](phase-milestones.md) | Phase A–D gates: expert pack, report, dashboard, schedules |
 | [`../experts/README.md`](../experts/README.md) | Expert pack catalog (source of pack content) |
 
 ## Not product specs

@@ -6,6 +6,7 @@ import ConversationPage from "./pages/ConversationPage";
 import AssetPage from "./pages/AssetPage";
 import VulnerabilityPage from "./pages/VulnerabilityPage";
 import NodePage from "./pages/NodePage";
+import ExpertPage from "./pages/ExpertPage";
 import AuditPage from "./pages/AuditPage";
 import SonnerToast from "./components/SonnerToast";
 
@@ -24,6 +25,7 @@ export default function App() {
         <Route path="/assets" element={user ? <AssetPage /> : <Navigate to="/login" />} />
         <Route path="/vulnerabilities" element={user ? <VulnerabilityPage /> : <Navigate to="/login" />} />
         <Route path="/nodes" element={user ? <NodePage /> : <Navigate to="/login" />} />
+        <Route path="/experts" element={user ? <ExpertPage /> : <Navigate to="/login" />} />
         <Route path="/audit" element={user ? <AuditPage /> : <Navigate to="/login" />} />
         <Route path="/skills" element={<Navigate to="/nodes" replace />} />
         <Route path="/knowledge" element={<Navigate to="/nodes" replace />} />

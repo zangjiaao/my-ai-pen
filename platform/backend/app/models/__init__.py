@@ -6,5 +6,16 @@ from app.models.vulnerability import Vulnerability
 from app.models.node import Node
 from app.models.audit import AuditLog
 from app.models.evidence import Evidence
+from app.models.expert import Expert
 
-__all__ = ["User", "Conversation", "Message", "Asset", "Vulnerability", "Node", "AuditLog", "Evidence"]
+__all__ = [
+    "User",
+    "Conversation",
+    "Message",
+    "Asset",
+    "Vulnerability",
+    "Node",
+    "AuditLog",
+    "Evidence",
+    "Expert",
+]

@@ -12,7 +12,6 @@ import {
 } from "../lib/experts";
 
 const STATUS_FILTERS = ["全部", "online", "offline"] as const;
-const TYPE_FILTERS = ["全部", "pentest", "platform"] as const;
 
 type ConnectivityBar = {
   status: "up" | "down" | "unknown" | string;
@@ -20,177 +19,11 @@ type ConnectivityBar = {
   to_at: string;
 };
 
-/** Optional capability manifest reported by the node (or stored on node.config). */
+/** Optional runtime version info reported by the node. */
 type NodeCapabilities = {
   runtime?: string;
   version?: string;
-  skills?: string[];
-  workflows?: string[];
-  tools?: string[];
 };
-
-type CapabilityMeta = { label: string; description: string };
-
-/**
- * Display metadata for Node2 built-ins (Chinese label + short purpose).
- * Derived from node2 skill packages, workflow specs, and tool modules.
- * Unknown reported ids fall back to the raw id only.
- */
-const CAPABILITY_META: {
-  skills: Record<string, CapabilityMeta>;
-  workflows: Record<string, CapabilityMeta>;
-  tools: Record<string, CapabilityMeta>;
-} = {
-  skills: {
-    "access-control": {
-      label: "访问控制 / IDOR",
-      description: "水平/垂直越权、对象级授权；需双身份对照验证。",
-    },
-    "auth-session": {
-      label: "认证与会话",
-      description: "登录、Cookie/会话捕获、多身份切换与已认证请求回放。",
-    },
-    "business-logic": {
-      label: "业务逻辑",
-      description: "多步骤流程、金额/数量篡改、跳步与跨用户工作流滥用。",
-    },
-    "command-injection": {
-      label: "命令注入",
-      description: "主机/IP/文件名等参数是否导致服务端执行系统命令。",
-    },
-    csrf: {
-      label: "CSRF",
-      description: "状态变更是否仅依赖环境 Cookie，或 Token 缺失/可绕过。",
-    },
-    "file-inclusion": {
-      label: "文件包含 / 路径穿越",
-      description: "page/file/path 等参数是否可读服务端任意路径。",
-    },
-    "file-upload": {
-      label: "文件上传",
-      description: "上传入口的类型限制、落盘路径与可执行性验证。",
-    },
-    "sql-injection": {
-      label: "SQL 注入",
-      description: "查询/筛选/登录等参数是否影响数据库语义或报错。",
-    },
-    "ssrf-open-redirect": {
-      label: "SSRF / 开放重定向",
-      description: "url/redirect/callback 等是否可控跳转或服务端外连。",
-    },
-    "weak-session-id": {
-      label: "弱会话标识",
-      description: "会话/重置 Token 是否可预测、短熵或规律可枚举。",
-    },
-    "web-recon": {
-      label: "Web 侦察",
-      description: "端点、参数、技术栈与登录态摸底，再进入漏洞探测。",
-    },
-    xss: {
-      label: "跨站脚本 (XSS)",
-      description: "反射/存储/DOM 场景下输入是否进入可执行上下文。",
-    },
-  },
-  workflows: {
-    "pentest-web": {
-      label: "全面评估",
-      description: "授权范围内的完整 Web 渗透：侦察、分包测试、证据与收尾门禁。",
-    },
-    "pentest-verify": {
-      label: "假设验证",
-      description: "针对用户给出的漏洞假设或 PoC 路径做最小侦察、严格取证。",
-    },
-    "pentest-retest": {
-      label: "复测回归",
-      description: "按原报告路径复现，判断仍存在 / 已修复 / 无法判定。",
-    },
-    "pentest-consult": {
-      label: "安全咨询",
-      description: "方法与产品问答；仅在明确授权目标且需要事实核对时才探测。",
-    },
-  },
-  tools: {
-    read: {
-      label: "读取",
-      description: "读取工作区文件、技能与上下文材料。",
-    },
-    http: {
-      label: "HTTP 请求",
-      description: "发送/变种 HTTP 请求，支持按身份（actor）回放。",
-    },
-    browser: {
-      label: "浏览器",
-      description: "打开页面、登录、快照 Cookie/存储，覆盖前端重交互。",
-    },
-    actor: {
-      label: "身份角色",
-      description: "捕获、切换、列出多测试身份的会话材料。",
-    },
-    traffic: {
-      label: "流量",
-      description: "检视、同步、回放与分析已捕获流量与候选端点。",
-    },
-    scan: {
-      label: "扫描器",
-      description: "调用 nmap/httpx/nuclei/sqlmap 等专业扫描工具。",
-    },
-    coverage: {
-      label: "覆盖率",
-      description: "攻击面登记、未测项与下一优先探测建议。",
-    },
-    poc: {
-      label: "PoC",
-      description: "漏洞 PoC 目录查询，或在沙箱中编写/运行有限脚本。",
-    },
-    verifier: {
-      label: "验证器",
-      description: "对常见漏洞类做结构化对照验证（含双身份等）。",
-    },
-    finding: {
-      label: "漏洞记录",
-      description: "登记候选/确认发现、证据与复现说明。",
-    },
-    worker: {
-      label: "子任务 Worker",
-      description: "向侦察/注入等角色派发进程内子 Agent 任务。",
-    },
-    finish_scan: {
-      label: "结束扫描",
-      description: "完成门禁检查并以 completed/incomplete 等状态收尾。",
-    },
-    workflow_list: {
-      label: "列出 Workflow",
-      description: "查看当前节点可用的 pi-workflow 列表。",
-    },
-    workflow_run: {
-      label: "运行 Workflow",
-      description: "按名称启动指定 pi-workflow 执行路径。",
-    },
-    workflow_dynamic: {
-      label: "动态 Workflow",
-      description: "按运行时参数动态组装或调整 workflow 步骤。",
-    },
-  },
-};
-
-/** Id lists for defaults — keys of CAPABILITY_META for each kind. */
-const NODE2_DEFAULT_CAPABILITIES: Required<Pick<NodeCapabilities, "skills" | "workflows" | "tools">> = {
-  skills: Object.keys(CAPABILITY_META.skills),
-  workflows: Object.keys(CAPABILITY_META.workflows),
-  tools: Object.keys(CAPABILITY_META.tools),
-};
-
-function resolveCapabilityMeta(
-  kind: keyof typeof CAPABILITY_META,
-  id: string,
-): CapabilityMeta {
-  return (
-    CAPABILITY_META[kind][id] || {
-      label: id,
-      description: "节点上报的能力项（暂无本地说明）。",
-    }
-  );
-}
 
 type NodeRecord = {
   id: string;
@@ -227,7 +60,6 @@ export default function NodePage() {
   const [nodes, setNodes] = useState<NodeRecord[]>([]);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<(typeof STATUS_FILTERS)[number]>("全部");
-  const [typeFilter, setTypeFilter] = useState<(typeof TYPE_FILTERS)[number]>("全部");
   const [showRegister, setShowRegister] = useState(false);
   const [regName, setRegName] = useState("");
   const [registering, setRegistering] = useState(false);
@@ -250,13 +82,12 @@ export default function NodePage() {
     const q = search.trim().toLowerCase();
     return nodes.filter((n) => {
       if (statusFilter !== "全部" && n.status !== statusFilter) return false;
-      if (typeFilter !== "全部" && n.type !== typeFilter) return false;
       if (!q) return true;
       const offers = effectiveOffers(n.offers).join(" ");
-      const hay = `${n.name} ${n.ip || ""} ${n.type} ${offers} ${taskSummary(n.current_task)}`.toLowerCase();
+      const hay = `${n.name} ${n.ip || ""} ${offers} ${taskSummary(n.current_task)}`.toLowerCase();
       return hay.includes(q);
     });
-  }, [nodes, search, statusFilter, typeFilter]);
+  }, [nodes, search, statusFilter]);
 
   const register = async () => {
     setRegistering(true);
@@ -281,9 +112,15 @@ export default function NodePage() {
 
   const deleteNode = async (id: string, name: string) => {
     if (!window.confirm(`确定删除节点 "${name}"？`)) return;
-    await authFetch(`/api/nodes/${id}`, { method: "DELETE" });
-    if (selectedNode?.id === id) setSelectedNode(null);
-    void load();
+    try {
+      await authFetch(`/api/nodes/${id}`, { method: "DELETE" });
+      if (selectedNode?.id === id) setSelectedNode(null);
+      window.dispatchEvent(new Event("nodes:changed"));
+      window.dispatchEvent(new Event("experts:changed"));
+      void load();
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "删除节点失败");
+    }
   };
 
   const regenerateToken = async (id: string) => {
@@ -318,7 +155,7 @@ export default function NodePage() {
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="搜索节点名称、IP、任务…"
+              placeholder="搜索节点名称、IP…"
               className="rounded-md border border-hairline px-3 py-2 text-sm focus:border-ink focus:outline-none"
             />
             <select
@@ -328,18 +165,7 @@ export default function NodePage() {
             >
               {STATUS_FILTERS.map((s) => (
                 <option key={s} value={s}>
-                  {s === "全部" ? "全部状态" : s}
-                </option>
-              ))}
-            </select>
-            <select
-              value={typeFilter}
-              onChange={(e) => setTypeFilter(e.target.value as (typeof TYPE_FILTERS)[number])}
-              className="rounded-md border border-hairline px-3 py-2 text-sm"
-            >
-              {TYPE_FILTERS.map((t) => (
-                <option key={t} value={t}>
-                  {t === "全部" ? "全部类型" : t}
+                  {s === "全部" ? "全部状态" : s === "online" ? "在线" : "离线"}
                 </option>
               ))}
             </select>
@@ -366,6 +192,7 @@ export default function NodePage() {
               {filtered.map((n) => {
                 const isPlatform = n.type === "platform";
                 const online = n.status === "online";
+                const packs = isPlatform ? [] : effectiveOffers(n.offers);
                 return (
                   <button
                     key={n.id}
@@ -378,12 +205,11 @@ export default function NodePage() {
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="flex min-w-0 flex-wrap items-center gap-2">
-                          <span className="min-w-0 truncate text-base font-semibold text-ink">{n.name}</span>
                           <OnlineBadge online={online} />
+                          <span className="min-w-0 truncate text-base font-semibold text-ink">{n.name}</span>
                         </div>
-                        <p className="mt-0.5 font-mono text-[11px] text-ink-muted">
-                          {isPlatform ? "平台 Agent" : n.type}
-                          {n.ip ? ` · ${n.ip}` : ""}
+                        <p className="mt-1 font-mono text-xs text-ink-secondary">
+                          {n.ip || (isPlatform ? "平台内置" : "—")}
                         </p>
                       </div>
                       {!isPlatform && (
@@ -399,37 +225,38 @@ export default function NodePage() {
                       )}
                     </div>
                     <div className="mt-4 flex items-end justify-between gap-4">
-                      <div className="min-w-0 flex-1 space-y-0.5 text-xs text-ink-secondary">
+                      <div className="min-w-0 flex-1 space-y-1.5 text-xs text-ink-secondary">
                         <p>
-                          <span className="text-ink-muted">会话 </span>
-                          <span className="font-mono text-ink">{n.current_sessions || 0}</span>
+                          <span className="text-ink-muted">注册 </span>
+                          <span className="text-ink">{formatDate(n.registered_at)}</span>
                         </p>
-                        <p className="truncate" title={taskSummary(n.current_task)}>
-                          <span className="text-ink-muted">任务 </span>
-                          {taskSummary(n.current_task)}
+                        <p>
+                          <span className="text-ink-muted">心跳 </span>
+                          <span className="text-ink">{formatDate(n.last_heartbeat)}</span>
                         </p>
-                        {n.type === "pentest" && (
-                          <p className="truncate text-ink-muted">
-                            预算 {formatWorkerTimeout(n.worker_max_ms)} · 轮次 {n.worker_max_turns ?? 12}
-                          </p>
-                        )}
                         {!isPlatform && (
                           <p className="flex flex-wrap items-center gap-1 pt-0.5">
-                            <span className="text-ink-muted">专家 </span>
-                            {effectiveOffers(n.offers).map((pack) => (
-                              <span
-                                key={pack}
-                                className="rounded-pill border border-hairline bg-canvas-inset px-1.5 py-px font-mono text-[10px] text-ink"
-                              >
-                                {expertLabel(pack)}
-                              </span>
-                            ))}
+                            <span className="text-ink-muted">专家包 </span>
+                            {packs.length === 0 ? (
+                              <span className="text-ink-muted">—</span>
+                            ) : (
+                              packs.map((pack) => (
+                                <span
+                                  key={pack}
+                                  className="rounded-pill border border-hairline bg-canvas-inset px-1.5 py-px text-[10px] text-ink"
+                                >
+                                  {expertLabel(pack)}
+                                </span>
+                              ))
+                            )}
                           </p>
                         )}
                       </div>
-                      <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
-                        <ConnectivityStrip bars={n.connectivity} uptimePct={n.connectivity_uptime_pct} />
-                      </div>
+                      {!isPlatform && (
+                        <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
+                          <ConnectivityStrip bars={n.connectivity} uptimePct={n.connectivity_uptime_pct} />
+                        </div>
+                      )}
                     </div>
                   </button>
                 );
@@ -520,42 +347,25 @@ function NodeDetailDialog({
   const [expertBusy, setExpertBusy] = useState<string | null>(null);
   const [expertError, setExpertError] = useState("");
   const [localOffers, setLocalOffers] = useState<ExpertId[]>(() => effectiveOffers(node.offers));
-  type DetailTab = "overview" | "experts" | "runtime" | "skills" | "workflows" | "tools";
+  /** Physical node: 概述 / 配置 / 扩展（装包）. Skills live on Expert 名片. */
+  type DetailTab = "overview" | "config" | "extensions";
   const [detailTab, setDetailTab] = useState<DetailTab>("overview");
 
-  const reportedCaps = normalizeCapabilities(node.capabilities);
-  // Always show capability catalog for pentest nodes (read-only). Prefer
-  // node-reported data; fall back to type defaults so the section is never blank.
-  const caps: NodeCapabilities | null = isPentest
-    ? {
-        runtime: reportedCaps?.runtime,
-        version: reportedCaps?.version,
-        skills: reportedCaps?.skills?.length ? reportedCaps.skills : NODE2_DEFAULT_CAPABILITIES.skills,
-        workflows: reportedCaps?.workflows?.length ? reportedCaps.workflows : NODE2_DEFAULT_CAPABILITIES.workflows,
-        tools: reportedCaps?.tools?.length ? reportedCaps.tools : NODE2_DEFAULT_CAPABILITIES.tools,
-      }
-    : reportedCaps;
+  const caps = normalizeCapabilities(node.capabilities);
 
   const detailTabs: { key: DetailTab; label: string; count?: number }[] = [
-    { key: "overview", label: "概览" },
+    { key: "overview", label: "概述" },
     ...(!isPlatform
-      ? [{ key: "experts" as const, label: "专家包", count: localOffers.length }]
-      : []),
-    ...(isPentest ? [{ key: "runtime" as const, label: "运行参数" }] : []),
-    ...((caps?.skills?.length ?? 0) > 0
-      ? [{ key: "skills" as const, label: "技能", count: caps!.skills!.length }]
-      : []),
-    ...((caps?.workflows?.length ?? 0) > 0
-      ? [{ key: "workflows" as const, label: "Workflow", count: caps!.workflows!.length }]
-      : []),
-    ...((caps?.tools?.length ?? 0) > 0
-      ? [{ key: "tools" as const, label: "工具", count: caps!.tools!.length }]
+      ? [
+          { key: "config" as const, label: "配置" },
+          { key: "extensions" as const, label: "扩展", count: localOffers.length },
+        ]
       : []),
   ];
   const activeDetailTab = detailTabs.some((t) => t.key === detailTab)
     ? detailTab
     : (detailTabs[0]?.key ?? "overview");
-  const showSave = isPentest && activeDetailTab === "runtime";
+  const showSave = isPentest && activeDetailTab === "config";
 
   useEffect(() => {
     setNameDraft(node.name);
@@ -718,17 +528,13 @@ function NodeDetailDialog({
     }
   };
 
-  const taskDetail = node.current_task?.conversation_id
-    ? `${taskSummary(node.current_task)}\n${node.current_task.conversation_id}`
-    : taskSummary(node.current_task);
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6" onClick={onClose}>
       <div
         className="flex max-h-[min(88vh,840px)] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-hairline-soft bg-canvas shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header: status, name, id */}
+        {/* Header: status + name */}
         <div className="group/title shrink-0 px-6 pt-4">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0 flex-1">
@@ -769,16 +575,20 @@ function NodeDetailDialog({
                     </button>
                   </>
                 ) : (
-                  <button
-                    type="button"
-                    onClick={() => setEditingName(true)}
-                    className="text-xs text-ink-muted opacity-0 transition-opacity hover:text-ink group-hover/title:opacity-100"
-                  >
-                    改名
-                  </button>
+                  !isPlatform && (
+                    <button
+                      type="button"
+                      onClick={() => setEditingName(true)}
+                      className="text-xs text-ink-muted opacity-0 transition-opacity hover:text-ink group-hover/title:opacity-100"
+                    >
+                      改名
+                    </button>
+                  )
                 )}
               </div>
-              <p className="mt-1 break-all font-mono text-[11px] text-ink-muted">{node.id}</p>
+              <p className="mt-1 font-mono text-sm text-ink-secondary">
+                {node.ip || (isPlatform ? "平台内置" : "—")}
+              </p>
             </div>
             <button type="button" onClick={onClose} className="rounded-md border border-hairline px-3 py-1.5 text-xs">
               关闭
@@ -786,7 +596,7 @@ function NodeDetailDialog({
           </div>
         </div>
 
-        {/* Single-level tabs: 概览 | 运行参数 | 技能 | Workflow | 工具 */}
+        {/* Tabs: 概述 | 配置 | 扩展 */}
         <div className="shrink-0 border-b border-hairline-soft px-6">
           <div className="flex flex-wrap items-center gap-4">
             {detailTabs.map((t) => (
@@ -812,55 +622,68 @@ function NodeDetailDialog({
           </div>
         </div>
 
-        {/* Body grows with content; scrolls only when over max-height */}
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
           {activeDetailTab === "overview" && (
             <div className="space-y-4">
-              <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <InfoCard label="类型" value={isPlatform ? "平台 Agent" : node.type} />
-                <InfoCard label="IP" value={node.ip || "—"} mono />
-                <InfoCard label="状态" value={online ? "在线" : "离线"} />
-                <InfoCard label="关联会话数" value={String(node.current_sessions ?? 0)} mono />
-              </section>
-              <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <InfoCard label="当前任务" value={taskDetail} title={taskDetail} />
+              <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <InfoCard label="IP" value={node.ip || (isPlatform ? "平台内置" : "—")} mono />
                 <InfoCard label="最近心跳" value={formatDate(node.last_heartbeat)} />
-                <InfoCard
-                  label="最近失败"
-                  value={node.last_failure_reason || "—"}
-                  tone={node.last_failure_reason ? "danger" : "default"}
-                />
                 <InfoCard label="注册时间" value={formatDate(node.registered_at)} />
               </section>
+
               {!isPlatform && (
                 <section className="rounded-md border border-hairline-soft p-4">
-                  <div className="mb-1 flex items-center justify-between gap-2">
-                    <p className="text-sm font-medium">已安装专家</p>
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <p className="text-sm font-medium">已安装专家包</p>
                     <button
                       type="button"
-                      onClick={() => setDetailTab("experts")}
+                      onClick={() => setDetailTab("extensions")}
                       className="text-xs text-ink-secondary underline-offset-2 hover:underline"
                     >
-                      管理专家包 →
+                      管理 →
                     </button>
                   </div>
-                  <p className="mb-2 text-xs text-ink-muted">
-                    节点是容器；任务只能派给已安装的专家角色（默认仅 Pentest）。
-                  </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {localOffers.map((pack) => (
-                      <span
-                        key={pack}
-                        className="rounded-pill border border-hairline bg-canvas-inset px-2.5 py-0.5 text-xs text-ink"
-                        title={EXPERT_PACKS.find((p) => p.id === pack)?.description}
-                      >
-                        <span className="font-medium">{expertLabel(pack)}</span>
-                        <span className="ml-1 font-mono text-[10px] text-ink-muted">{pack}</span>
-                      </span>
-                    ))}
-                  </div>
+                  {localOffers.length === 0 ? (
+                    <p className="text-xs text-ink-muted">暂无已安装专家包</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      {localOffers.map((pack) => {
+                        const meta = EXPERT_PACKS.find((p) => p.id === pack);
+                        return (
+                          <div
+                            key={pack}
+                            className="rounded-md border border-hairline bg-canvas-inset/50 px-3 py-2"
+                            title={meta?.description}
+                          >
+                            <p className="text-sm font-medium text-ink">{expertLabel(pack)}</p>
+                            <p className="mt-0.5 font-mono text-[10px] text-ink-muted">{pack}</p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </section>
               )}
+
+              {!isPlatform && node.last_failure_reason ? (
+                <InfoCard
+                  label="最近失败"
+                  value={node.last_failure_reason}
+                  tone="danger"
+                  title={node.last_failure_reason}
+                />
+              ) : null}
+
+              {(caps?.runtime || caps?.version) && (
+                <p className="font-mono text-[11px] text-ink-muted">
+                  {[caps.runtime, caps.version].filter(Boolean).join(" · ")}
+                </p>
+              )}
+            </div>
+          )}
+
+          {activeDetailTab === "config" && (
+            <div className="space-y-4">
               <div className="rounded-md border border-hairline-soft p-4">
                 <div className="mb-2 flex items-center justify-between">
                   <p className="text-sm font-medium">Token</p>
@@ -904,21 +727,141 @@ function NodeDetailDialog({
                   </>
                 )}
               </div>
-              {(caps?.runtime || caps?.version) && (
-                <p className="font-mono text-[11px] text-ink-muted">
-                  {[caps.runtime, caps.version].filter(Boolean).join(" · ")}
-                </p>
+
+              {isPentest ? (
+                <>
+                  <p className="text-xs text-ink-muted">
+                    保存后对<strong>新任务</strong>生效。任务若显式指定扫描深度，将覆盖节点默认值。
+                  </p>
+                  <div className="rounded-md border border-hairline-soft p-4">
+                    <p className="text-sm font-medium">Worker 运行预算</p>
+                    <p className="mt-1 text-xs text-ink-muted">子 Agent 墙钟超时、工具轮次与超时重试。</p>
+                    <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                      <label className="block space-y-1">
+                        <span className="text-[11px] text-ink-muted">超时（秒）</span>
+                        <input
+                          type="number"
+                          min={10}
+                          max={900}
+                          value={timeoutSec}
+                          onChange={(e) => {
+                            setTimeoutSec(e.target.value);
+                            setSaveOk(false);
+                          }}
+                          className="w-full rounded-md border px-2.5 py-2 font-mono text-sm"
+                        />
+                      </label>
+                      <label className="block space-y-1">
+                        <span className="text-[11px] text-ink-muted">最大轮次</span>
+                        <input
+                          type="number"
+                          min={1}
+                          max={40}
+                          value={maxTurns}
+                          onChange={(e) => {
+                            setMaxTurns(e.target.value);
+                            setSaveOk(false);
+                          }}
+                          className="w-full rounded-md border px-2.5 py-2 font-mono text-sm"
+                        />
+                      </label>
+                      <label className="block space-y-1">
+                        <span className="text-[11px] text-ink-muted">超时重试</span>
+                        <input
+                          type="number"
+                          min={0}
+                          max={5}
+                          value={maxRetries}
+                          onChange={(e) => {
+                            setMaxRetries(e.target.value);
+                            setSaveOk(false);
+                          }}
+                          className="w-full rounded-md border px-2.5 py-2 font-mono text-sm"
+                        />
+                      </label>
+                    </div>
+                  </div>
+                  <div className="rounded-md border border-hairline-soft p-4">
+                    <p className="text-sm font-medium">主 Agent 运行预算</p>
+                    <p className="mt-1 text-xs text-ink-muted">整任务主会话墙钟与工具轮次上限。</p>
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                      <label className="block space-y-1">
+                        <span className="text-[11px] text-ink-muted">超时（秒）</span>
+                        <input
+                          type="number"
+                          min={60}
+                          max={7200}
+                          value={mainTimeoutSec}
+                          onChange={(e) => {
+                            setMainTimeoutSec(e.target.value);
+                            setSaveOk(false);
+                          }}
+                          className="w-full rounded-md border px-2.5 py-2 font-mono text-sm"
+                        />
+                      </label>
+                      <label className="block space-y-1">
+                        <span className="text-[11px] text-ink-muted">最大轮次</span>
+                        <input
+                          type="number"
+                          min={5}
+                          max={200}
+                          value={mainMaxTurns}
+                          onChange={(e) => {
+                            setMainMaxTurns(e.target.value);
+                            setSaveOk(false);
+                          }}
+                          className="w-full rounded-md border px-2.5 py-2 font-mono text-sm"
+                        />
+                      </label>
+                    </div>
+                  </div>
+                  <div className="rounded-md border border-hairline-soft p-4">
+                    <p className="text-sm font-medium">调度与深度</p>
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                      <label className="block space-y-1">
+                        <span className="text-[11px] text-ink-muted">最大并发 Worker</span>
+                        <input
+                          type="number"
+                          min={1}
+                          max={4}
+                          value={maxConcurrent}
+                          onChange={(e) => {
+                            setMaxConcurrent(e.target.value);
+                            setSaveOk(false);
+                          }}
+                          className="w-full rounded-md border px-2.5 py-2 font-mono text-sm"
+                        />
+                      </label>
+                      <label className="block space-y-1">
+                        <span className="text-[11px] text-ink-muted">默认扫描深度</span>
+                        <select
+                          value={scanMode}
+                          onChange={(e) => {
+                            setScanMode(e.target.value);
+                            setSaveOk(false);
+                          }}
+                          className="w-full rounded-md border bg-canvas px-2.5 py-2 text-sm"
+                        >
+                          <option value="quick">快速 (quick)</option>
+                          <option value="standard">标准 (standard)</option>
+                          <option value="deep">深度 (deep)</option>
+                        </select>
+                      </label>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <p className="text-xs text-ink-muted">此节点类型无可调运行预算。</p>
               )}
             </div>
           )}
 
-          {activeDetailTab === "experts" && !isPlatform && (
+          {activeDetailTab === "extensions" && !isPlatform && (
             <div className="space-y-4">
               <div>
-                <p className="text-sm font-medium">专家包（多角色）</p>
+                <p className="text-sm font-medium">扩展包</p>
                 <p className="mt-1 text-xs text-ink-muted">
-                  安装后，对话页才能为该节点选择对应 Expert。派发会校验 offers；卸载最后一个专家会被拒绝。
-                  安装/卸载仅写计费钩子（billing hook），不走真实支付。
+                  在物理节点上安装运行时能力包。装好后去「专家管理」创建虚拟专家并绑定本节点。卸载最后一个扩展包会被拒绝。
                 </p>
               </div>
               {expertError && (
@@ -962,7 +905,7 @@ function NodeDetailDialog({
                           <button
                             type="button"
                             disabled={busy || onlyOne}
-                            title={onlyOne ? "至少保留一个专家包" : `卸载 ${pack.label}`}
+                            title={onlyOne ? "至少保留一个扩展包" : `卸载 ${pack.label}`}
                             onClick={() => void uninstallExpert(pack.id)}
                             className="rounded-md border border-hairline px-3 py-1.5 text-xs text-ink-secondary hover:bg-surface-default disabled:cursor-not-allowed disabled:opacity-40"
                           >
@@ -991,144 +934,6 @@ function NodeDetailDialog({
               </p>
             </div>
           )}
-
-          {activeDetailTab === "runtime" && isPentest && (
-            <div className="space-y-4">
-              <p className="text-xs text-ink-muted">
-                保存后对<strong>新任务</strong>生效。任务若显式指定扫描深度，将覆盖节点默认值。
-              </p>
-
-              <div className="rounded-md border border-hairline-soft p-4">
-                <p className="text-sm font-medium">Worker 运行预算</p>
-                <p className="mt-1 text-xs text-ink-muted">子 Agent 墙钟超时、工具轮次与超时重试。</p>
-                <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                  <label className="block space-y-1">
-                    <span className="text-[11px] text-ink-muted">超时（秒）</span>
-                    <input
-                      type="number"
-                      min={10}
-                      max={900}
-                      value={timeoutSec}
-                      onChange={(e) => {
-                        setTimeoutSec(e.target.value);
-                        setSaveOk(false);
-                      }}
-                      className="w-full rounded-md border px-2.5 py-2 font-mono text-sm"
-                    />
-                  </label>
-                  <label className="block space-y-1">
-                    <span className="text-[11px] text-ink-muted">最大轮次</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={40}
-                      value={maxTurns}
-                      onChange={(e) => {
-                        setMaxTurns(e.target.value);
-                        setSaveOk(false);
-                      }}
-                      className="w-full rounded-md border px-2.5 py-2 font-mono text-sm"
-                    />
-                  </label>
-                  <label className="block space-y-1">
-                    <span className="text-[11px] text-ink-muted">超时重试</span>
-                    <input
-                      type="number"
-                      min={0}
-                      max={5}
-                      value={maxRetries}
-                      onChange={(e) => {
-                        setMaxRetries(e.target.value);
-                        setSaveOk(false);
-                      }}
-                      className="w-full rounded-md border px-2.5 py-2 font-mono text-sm"
-                    />
-                  </label>
-                </div>
-              </div>
-
-              <div className="rounded-md border border-hairline-soft p-4">
-                <p className="text-sm font-medium">主 Agent 运行预算</p>
-                <p className="mt-1 text-xs text-ink-muted">整任务主会话墙钟与工具轮次上限（含调度 Worker 的回合）。</p>
-                <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                  <label className="block space-y-1">
-                    <span className="text-[11px] text-ink-muted">超时（秒）</span>
-                    <input
-                      type="number"
-                      min={60}
-                      max={7200}
-                      value={mainTimeoutSec}
-                      onChange={(e) => {
-                        setMainTimeoutSec(e.target.value);
-                        setSaveOk(false);
-                      }}
-                      className="w-full rounded-md border px-2.5 py-2 font-mono text-sm"
-                    />
-                  </label>
-                  <label className="block space-y-1">
-                    <span className="text-[11px] text-ink-muted">最大轮次</span>
-                    <input
-                      type="number"
-                      min={5}
-                      max={200}
-                      value={mainMaxTurns}
-                      onChange={(e) => {
-                        setMainMaxTurns(e.target.value);
-                        setSaveOk(false);
-                      }}
-                      className="w-full rounded-md border px-2.5 py-2 font-mono text-sm"
-                    />
-                  </label>
-                </div>
-              </div>
-
-              <div className="rounded-md border border-hairline-soft p-4">
-                <p className="text-sm font-medium">调度与深度</p>
-                <p className="mt-1 text-xs text-ink-muted">并发子 Agent 数量，以及任务未指定时的默认扫描深度。</p>
-                <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                  <label className="block space-y-1">
-                    <span className="text-[11px] text-ink-muted">最大并发 Worker</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={4}
-                      value={maxConcurrent}
-                      onChange={(e) => {
-                        setMaxConcurrent(e.target.value);
-                        setSaveOk(false);
-                      }}
-                      className="w-full rounded-md border px-2.5 py-2 font-mono text-sm"
-                    />
-                  </label>
-                  <label className="block space-y-1">
-                    <span className="text-[11px] text-ink-muted">默认扫描深度</span>
-                    <select
-                      value={scanMode}
-                      onChange={(e) => {
-                        setScanMode(e.target.value);
-                        setSaveOk(false);
-                      }}
-                      className="w-full rounded-md border bg-canvas px-2.5 py-2 text-sm"
-                    >
-                      <option value="quick">快速 (quick)</option>
-                      <option value="standard">标准 (standard)</option>
-                      <option value="deep">深度 (deep)</option>
-                    </select>
-                  </label>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {activeDetailTab === "skills" && caps?.skills?.length ? (
-            <CapabilityCardList kind="skills" items={caps.skills} />
-          ) : null}
-          {activeDetailTab === "workflows" && caps?.workflows?.length ? (
-            <CapabilityCardList kind="workflows" items={caps.workflows} />
-          ) : null}
-          {activeDetailTab === "tools" && caps?.tools?.length ? (
-            <CapabilityCardList kind="tools" items={caps.tools} />
-          ) : null}
         </div>
 
         {/* Footer only when there is something to save / report */}
@@ -1160,46 +965,12 @@ function NodeDetailDialog({
   );
 }
 
-function CapabilityCardList({
-  kind,
-  items,
-}: {
-  kind: keyof typeof CAPABILITY_META;
-  items: string[];
-}) {
-  return (
-    <div className="grid gap-2 sm:grid-cols-2">
-      {items.map((id) => {
-        const meta = resolveCapabilityMeta(kind, id);
-        return (
-          <div
-            key={id}
-            className="rounded-md border border-hairline-soft bg-canvas-inset/40 px-3 py-2.5"
-            title={id}
-          >
-            <div className="flex min-w-0 items-baseline justify-between gap-2">
-              <p className="truncate text-sm font-medium text-ink">{meta.label}</p>
-              <span className="shrink-0 font-mono text-[10px] text-ink-muted">{id}</span>
-            </div>
-            <p className="mt-1 text-xs leading-relaxed text-ink-secondary">{meta.description}</p>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
 function normalizeCapabilities(raw: unknown): NodeCapabilities | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const o = raw as Record<string, unknown>;
-  const strList = (v: unknown) =>
-    Array.isArray(v) ? v.map((x) => String(x || "").trim()).filter(Boolean) : undefined;
   return {
     runtime: typeof o.runtime === "string" ? o.runtime : undefined,
     version: typeof o.version === "string" ? o.version : undefined,
-    skills: strList(o.skills),
-    workflows: strList(o.workflows),
-    tools: strList(o.tools),
   };
 }
 
@@ -1354,12 +1125,6 @@ function taskSummary(task?: NodeRecord["current_task"]): string {
   if (!task) return "—";
   const target = task.target ? ` · ${task.target}` : "";
   return `${task.title || task.conversation_id}${target}`;
-}
-
-function formatWorkerTimeout(ms?: number | null): string {
-  const n = Number(ms);
-  if (!Number.isFinite(n) || n <= 0) return "300s";
-  return `${Math.round(n / 1000)}s`;
 }
 
 function formatDate(value?: string | null): string {

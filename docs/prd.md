@@ -25,7 +25,7 @@
 2. **Chat 不是产品真相** — 漏洞/flag 级结论必须经 `finding` + evidence，不能只靠对话文本。
 3. **Harness over restriction** — 能力不足时优先改进 prompt / 任务信封 / 工具密度；不把靶场答案表、预期漏洞数、coverage 硬门当作默认「智能」。
 4. **结构化意图** — 角色/engagement 来自 UI 或任务信封显式字段；**禁止**用关键词 NLP 扫描用户自然语言猜 workflow。
-5. **Node 是专家包运行平台** — 默认 **不带专家包**（干净 OMP-class runtime，便于与装包后对比）；包内容在 `experts/` 维护，Node **install/uninstall** 本地启用；平台 **offers** 负责产品侧许可/计费。见 `docs/node-expert-offers.md`、`experts/README.md`。
+5. **Node 是专家包运行平台；Expert 是产品路由实体** — 默认 Node **不带专家包**（干净 OMP-class runtime）；包内容在 `experts/` 维护，Node **install/uninstall** 启用能力；平台 **offers** 许可/计费；**专家管理**创建可 `@` 的专家实例并绑定 Node（多专家共用 Node）。见 `docs/node-expert-offers.md`、`experts/README.md`。
 6. **无靶场答案键** — 不以 DVWA/Juice/CTF flag 列表驱动 runtime 或 prompt。
 7. **远程热装 marketplace** — 非本阶段目标。
 
@@ -37,11 +37,10 @@
 
 **核心故事：**
 
-- 用自然语言描述授权目标与范围，绑定在线 Node，发起任务。
-- 显式选择专家角色（如 Pentest / CTF）与可选 Goal mode，而不是系统猜意图。
+- 在节点管理为 Node 安装专家包；在专家管理创建专家实例并绑定 Node（多专家可共用同一 Node）。
+- 对话中 `@专家名` 描述授权目标与范围；系统按专家绑定路由到 Node 并带上结构化 engagement，可选 Goal mode。
 - 观察工具过程、证据与已确认 finding；高风险动作可经平台授权卡确认。
 - 刷新或重开会话后，消息与结果仍可从平台快照恢复。
-- 在节点管理中注册 Node、查看 offers、安装/卸载专家包。
 
 ---
 
@@ -52,17 +51,21 @@
 **P0**
 
 - 登录与会话：列表、新建、切换、基本管理。
-- 对话页：消息流、工具/状态/漏洞等卡片、working 态。
-- 下发任务：目标/范围（可解析）、可选 `@` 指定节点、结构化 **Expert engagement**、可选 **Goal mode / objective**。
-- 节点页：注册、token、在线状态、runtime 预算、**专家包 offers** 安装/卸载。
+- 对话页：消息流、工具/状态/漏洞等卡片、working 态；`@专家` 路由 + 可选 **Goal mode**（对话页不单独堆 Expert role 选择器）。
+- **专家管理**：创建/删除专家实例（name + pack + 绑定 Node）；多专家可共用 Node。
+- 节点页：注册、token、在线状态、runtime 预算、**专家包 offers** 安装/卸载（运行时能力层）。
 - 资产 / 漏洞列表与详情（来自 Node 回写的结构化事件）。
 - 高风险操作：`request_decision` ↔ 用户 authorize/cancel。
+- **Engagement dashboard**（会话右侧 Status：真实 status / findings / activity，见 `phase-milestones.md` Phase C）。
+- **Findings 报告导出**（`/api/reports/conversations/{id}/findings`，由 booked findings 生成，Phase B）。
+- **计划任务**（`/api/schedules`，结构化 engagement 定时 dispatch，Phase D）。
 
 **P1**
 
 - 右侧面板：任务/Surface/发现摘要、会话 task 上的专家角色展示。
 - 报告导出 / 导入（现有 sync 能力延续，不阻塞主环）。
-- 审计日志中的专家安装与 usage billing hook（非真实支付）。
+- 审计日志中的专家安装、专家实例 CRUD 与 usage billing hook（非真实支付）。
+- 里程碑与交付门槛见 **`docs/phase-milestones.md`**（Phase A–D）。
 
 ### 4.2 Node（Node4）
 
@@ -93,20 +96,22 @@
 ## 5. 任务与角色模型
 
 ```text
-用户消息 / 结构化字段
-  → 平台派发 task_assign（target, scope, instruction, engagement?, role?, goal_mode?, goal_objective?）
+@Expert / 结构化字段
+  → 平台解析 Expert 实例 → node_id + pack engagement
+  → task_assign（target, scope, instruction, engagement, role?, goal_mode?, goal_objective?）
   → Node 解析 role pack（无 NLP）
   → Map(todo) → Act → Book(finding)* → harness continue / settle
   → 平台入库并展示
 ```
 
-| 字段 | 含义 |
-|------|------|
-| `engagement` / `role` | 显式专家/角色；映射 pack（如 pentest、ctf、consult） |
+| 字段 / 实体 | 含义 |
+|-------------|------|
+| Product **Expert** | `@name` 路由实体：绑定 `node_id` + `pack_id` |
+| `engagement` / `role` | 结构化 pack id（来自 Expert 或 API）；如 pentest、ctf、consult |
 | `goal_mode` / `goal_objective` | 长任务目标锚点；与专家选择独立 |
-| Node `config.offers` | 该节点已安装专家；派发前平台可 gate |
+| Node `config.offers` | 节点已安装 pack；创建 Expert 与派发前均 gate |
 
-别名折叠（如 assess/retest → pentest pack）见 offers 文档与 Node4 `resolveRolePack`；**不**从 instruction 自由文本推断。
+别名折叠见 offers 文档与 Node4 `resolveRolePack`；**不**从 instruction 自由文本推断 engagement。
 
 ---
 

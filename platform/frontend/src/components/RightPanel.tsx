@@ -375,6 +375,15 @@ export default function RightPanel({
             </section>
             {intake && <IntakeSummary intake={intake} />}
             <TaskExpertSummary taskContext={taskContext} />
+            {/* Phase C: engagement dashboard strip from real findings + agent state (no fake rows) */}
+            <EngagementDashboardStrip
+              running={running}
+              conversationStatus={conversationStatus}
+              activeTool={activeTool}
+              findings={findings}
+              taskContext={taskContext}
+              timelineCount={timeline.length}
+            />
           </div>
         )}
         {tab === "surface" && (
@@ -877,6 +886,83 @@ function TaskExpertSummary({ taskContext }: { taskContext?: Record<string, unkno
         {eng}
         <span className="ml-2 font-mono text-[11px] font-normal text-ink-muted">structured engagement</span>
       </p>
+    </section>
+  );
+}
+
+/** Phase C dashboard strip: only real findings / agent fields from props. */
+function EngagementDashboardStrip({
+  running,
+  conversationStatus,
+  activeTool,
+  findings,
+  taskContext,
+  timelineCount,
+}: {
+  running?: boolean;
+  conversationStatus?: string;
+  activeTool?: string;
+  findings: Array<Record<string, unknown>>;
+  taskContext?: Record<string, unknown>;
+  timelineCount: number;
+}) {
+  const eng = String(taskContext?.engagement || taskContext?.role || "").trim();
+  const target = String(taskContext?.target || "").trim();
+  const sevCounts: Record<string, number> = {};
+  for (const f of findings) {
+    const s = String(f.severity || "unknown").toLowerCase();
+    sevCounts[s] = (sevCounts[s] || 0) + 1;
+  }
+  const sevLine = ["critical", "high", "medium", "low", "info"]
+    .filter((s) => sevCounts[s])
+    .map((s) => `${s}:${sevCounts[s]}`)
+    .join(" · ");
+  if (!eng && !findings.length && !activeTool && !running) return null;
+  return (
+    <section className="rounded-md border border-hairline p-3" data-testid="engagement-dashboard">
+      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-ink-muted">Engagement dashboard</p>
+      <dl className="space-y-1 text-sm">
+        <div className="flex justify-between gap-2">
+          <dt className="text-ink-muted">Status</dt>
+          <dd className="font-mono text-[12px] text-ink">{running ? "running" : conversationStatus || "idle"}</dd>
+        </div>
+        {eng ? (
+          <div className="flex justify-between gap-2">
+            <dt className="text-ink-muted">Engagement</dt>
+            <dd className="font-mono text-[12px] text-ink">{eng}</dd>
+          </div>
+        ) : null}
+        {target ? (
+          <div className="flex min-w-0 justify-between gap-2">
+            <dt className="shrink-0 text-ink-muted">Target</dt>
+            <dd className="min-w-0 truncate font-mono text-[11px] text-ink" title={target}>{target}</dd>
+          </div>
+        ) : null}
+        {activeTool ? (
+          <div className="flex justify-between gap-2">
+            <dt className="text-ink-muted">Active tool</dt>
+            <dd className="font-mono text-[12px] text-ink">{activeTool}</dd>
+          </div>
+        ) : null}
+        <div className="flex justify-between gap-2">
+          <dt className="text-ink-muted">Findings</dt>
+          <dd className="font-mono text-[12px] text-ink">{findings.length}{sevLine ? ` (${sevLine})` : ""}</dd>
+        </div>
+        <div className="flex justify-between gap-2">
+          <dt className="text-ink-muted">Activity events</dt>
+          <dd className="font-mono text-[12px] text-ink">{timelineCount}</dd>
+        </div>
+      </dl>
+      {findings.length > 0 && (
+        <ul className="mt-2 max-h-28 space-y-1 overflow-y-auto border-t border-hairline-soft pt-2" data-testid="engagement-dashboard-findings">
+          {findings.slice(0, 12).map((f, i) => (
+            <li key={String(f.id || f.title || i)} className="truncate text-[12px] text-ink">
+              <span className="font-mono text-[10px] uppercase text-ink-muted">[{String(f.severity || "?")}]</span>{" "}
+              {String(f.title || "Untitled")}
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }

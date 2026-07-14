@@ -20,6 +20,7 @@ from app.services.expert_offers import (
     normalize_pack_id,
     usage_billing_detail,
 )
+from app.services.expert_instances import match_expert_by_mention_token
 from app.models.node import PLATFORM_AGENT_NODE_ID
 
 router = APIRouter()
@@ -43,7 +44,8 @@ CONTINUE_REQUEST_RE = re.compile(
     r"^\s*(继续|接着|接着做|接着测|继续测|继续扫描|重试|再试|resume|continue|retry)\s*[。.!！？?]*\s*$",
     re.IGNORECASE,
 )
-NODE_MENTION_RE = re.compile(r"@([A-Za-z0-9_.:-]{1,128})")
+# Unicode-aware mention tokens (Chinese expert names, Latin node names, _ . : -).
+NODE_MENTION_RE = re.compile(r"@([\w.:-]{1,128})", re.UNICODE)
 
 
 def _uuid(value: str | uuid.UUID | None) -> uuid.UUID | None:
@@ -388,6 +390,12 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
     if conv_id:
         msg["agent_source"] = "pentest"
         msg["agent_node_id"] = client_id
+        # Attach sticky product expert so UI shows persona, not physical node name.
+        sticky_id, sticky_name = await _conversation_expert_label(conv_id)
+        if sticky_id and not str(msg.get("expert_id") or "").strip():
+            msg["expert_id"] = sticky_id
+        if sticky_name and not str(msg.get("expert_name") or "").strip():
+            msg["expert_name"] = sticky_name
 
     # Settle conversation status before heavy persistence so a large checkpoint
     # or plan_tree failure cannot leave the session running forever.
@@ -618,7 +626,114 @@ def _node_mention_tokens(msg: dict) -> list[str]:
                 tokens.append(token)
     return tokens
 
+
+async def _load_enabled_experts() -> list:
+    """Load product expert instances for @mention routing."""
+    try:
+        from app.db.base import async_session
+        from app.models.expert import Expert
+
+        async with async_session() as db:
+            result = await db.execute(select(Expert).where(Expert.enabled.is_(True)))
+            return list(result.scalars().all())
+    except Exception as e:
+        print(f"[WS] _load_enabled_experts error: {e}")
+        return []
+
+
+def _apply_expert_route_to_message(msg: dict, expert) -> dict:
+    """Inject structured node + engagement from an expert instance (no NLP)."""
+    out = dict(msg)
+    node_id = str(getattr(expert, "node_id", "") or "")
+    pack = str(getattr(expert, "pack_id", "") or "").strip()
+    expert_id = str(getattr(expert, "id", "") or "")
+    expert_name = str(getattr(expert, "name", "") or "")
+    display = str(getattr(expert, "display_name", "") or "").strip() or expert_name
+    content = out.get("content") if isinstance(out.get("content"), dict) else {}
+    content = dict(content)
+    if node_id:
+        out["agent_node_id"] = node_id
+        content["agent_node_id"] = node_id
+    if pack:
+        # Structured engagement/role from expert binding — not free-text NLP.
+        if not str(out.get("engagement") or "").strip():
+            out["engagement"] = pack
+        if not str(out.get("role") or "").strip():
+            out["role"] = pack
+    if expert_id:
+        out["expert_id"] = expert_id
+        out["expert_name"] = expert_name
+        content["expert_id"] = expert_id
+        content["expert_name"] = expert_name
+        if display:
+            content["expert_display_name"] = display
+    out["content"] = content
+    return out
+
+
+async def _resolve_mention_route(
+    msg: dict,
+    capabilities: list[AgentCapability],
+) -> tuple[str | None, dict]:
+    """Resolve @mention to a worker node.
+
+    Preference order:
+      1. Explicit agent_node_id on the message
+      2. @Expert instance name → node_id + pack engagement
+      3. @Node name (legacy / platform agent)
+
+    Returns (node_id, possibly enriched msg).
+    """
+    explicit_node_id = _agent_node_id(msg)
+    if explicit_node_id:
+        # Still allow expert_id on message to fill engagement if provided.
+        expert_id_raw = msg.get("expert_id")
+        if expert_id_raw and not str(msg.get("engagement") or "").strip():
+            experts = await _load_enabled_experts()
+            for e in experts:
+                if str(e.id) == str(expert_id_raw):
+                    return explicit_node_id, _apply_expert_route_to_message(msg, e)
+        return explicit_node_id, msg
+
+    tokens = _node_mention_tokens(msg)
+    if not tokens:
+        return None, msg
+
+    experts = await _load_enabled_experts()
+    for token in tokens:
+        expert = match_expert_by_mention_token(token, experts)
+        if expert is not None:
+            enriched = _apply_expert_route_to_message(msg, expert)
+            return str(expert.node_id), enriched
+
+    # Fallback: node name mention (platform agent, or raw node routing).
+    node_caps = [item for item in capabilities if item.node_id and item.agent_type != "platform"]
+    # Include platform capabilities for @平台Agent style.
+    all_caps = [item for item in capabilities if item.node_id]
+    for token in tokens:
+        matches = [
+            str(item.node_id)
+            for item in all_caps
+            if token == _node_mention_key(item.name) or str(item.node_id).lower().startswith(token)
+        ]
+        if len(matches) == 1:
+            return matches[0], msg
+        # Prefer worker nodes when multiple.
+        worker_matches = [
+            str(item.node_id)
+            for item in node_caps
+            if token == _node_mention_key(item.name) or str(item.node_id).lower().startswith(token)
+        ]
+        if len(worker_matches) == 1:
+            return worker_matches[0], msg
+    return None, msg
+
+
 def _mentioned_node_id(msg: dict, capabilities: list[AgentCapability]) -> str | None:
+    """Sync helper kept for call sites that only need node id (no expert inject).
+
+    Prefer await _resolve_mention_route in async handlers.
+    """
     explicit_node_id = _agent_node_id(msg)
     if explicit_node_id:
         return explicit_node_id
@@ -915,6 +1030,12 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                 content["agent_target"] = target_agent
             if target_node_id:
                 content["agent_node_id"] = target_node_id
+            expert_id = str(msg.get("expert_id") or content.get("expert_id") or "").strip()
+            expert_name = str(msg.get("expert_name") or content.get("expert_name") or "").strip()
+            if expert_id:
+                content["expert_id"] = expert_id
+            if expert_name:
+                content["expert_name"] = expert_name
         elif msg_type == "text":
             inner = msg.get("content", {})
             if isinstance(inner, dict):
@@ -1004,6 +1125,21 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
             agent_node_id = _agent_node_id(msg)
             if agent_node_id:
                 content["agent_node_id"] = agent_node_id
+            # Prefer explicit expert on message; else sticky conversation expert persona.
+            expert_id = str(msg.get("expert_id") or content.get("expert_id") or "").strip()
+            expert_name = str(msg.get("expert_name") or content.get("expert_name") or "").strip()
+            if not expert_id or not expert_name:
+                sticky_id, sticky_name = await _conversation_expert_label(str(conv_id))
+                if not expert_id and sticky_id:
+                    expert_id = sticky_id
+                if not expert_name and sticky_name:
+                    expert_name = sticky_name
+            if expert_id:
+                content["expert_id"] = expert_id
+                msg["expert_id"] = expert_id
+            if expert_name:
+                content["expert_name"] = expert_name
+                msg["expert_name"] = expert_name
 
         dedupe_key = _message_dedupe_key(role=role, original_type=str(original_type), stored_type=str(msg_type), content=content)
         if dedupe_key:
@@ -1607,6 +1743,8 @@ async def _remember_conversation_task(
     instruction: str,
     goal_objective: str | None = None,
     engagement: str | None = None,
+    expert_id: str | None = None,
+    expert_name: str | None = None,
 ):
     try:
         from app.db.base import async_session
@@ -1618,6 +1756,7 @@ async def _remember_conversation_task(
             if not c:
                 return
             context = dict(c.context or {})
+            prev_task = context.get("task") if isinstance(context.get("task"), dict) else {}
             task_blob: dict = {
                 "target": target or {},
                 "scope": scope or {},
@@ -1632,11 +1771,83 @@ async def _remember_conversation_task(
                 pack = normalize_pack_id(eng)
                 if pack:
                     task_blob["role"] = pack
+            # Sticky product expert persona for UI labels (virtual image, not node name).
+            eid = str(expert_id or prev_task.get("expert_id") or "").strip()
+            ename = str(expert_name or prev_task.get("expert_name") or "").strip()
+            if eid:
+                task_blob["expert_id"] = eid
+            if ename:
+                task_blob["expert_name"] = ename
             context["task"] = task_blob
             c.context = context
             await db.commit()
     except Exception as e:
         print(f"[WS] remember conversation task error: {e}")
+
+
+async def _conversation_expert_label(conv_id: str | None) -> tuple[str | None, str | None]:
+    """Return (expert_id, expert_name) sticky on conversation.task, if any."""
+    if not conv_id:
+        return None, None
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+
+        async with async_session() as db:
+            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(str(conv_id))))
+            c = r.scalar_one_or_none()
+            if not c:
+                return None, None
+            task = (c.context or {}).get("task") if isinstance(c.context, dict) else None
+            if not isinstance(task, dict):
+                return None, None
+            eid = str(task.get("expert_id") or "").strip() or None
+            ename = str(task.get("expert_name") or "").strip() or None
+            return eid, ename
+    except Exception:
+        return None, None
+
+
+async def _remember_conversation_expert(
+    conv_id: str | None,
+    *,
+    expert_id: str | None = None,
+    expert_name: str | None = None,
+    engagement: str | None = None,
+) -> None:
+    """Persist sticky expert persona on conversation.context.task without clobbering target."""
+    if not conv_id:
+        return
+    eid = str(expert_id or "").strip()
+    ename = str(expert_name or "").strip()
+    eng = str(engagement or "").strip()
+    if not eid and not ename and not eng:
+        return
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+
+        async with async_session() as db:
+            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(str(conv_id))))
+            c = r.scalar_one_or_none()
+            if not c:
+                return
+            context = dict(c.context or {})
+            task = dict(context.get("task") or {}) if isinstance(context.get("task"), dict) else {}
+            if eid:
+                task["expert_id"] = eid
+            if ename:
+                task["expert_name"] = ename
+            if eng:
+                task["engagement"] = eng
+                pack = normalize_pack_id(eng)
+                if pack:
+                    task["role"] = pack
+            context["task"] = task
+            c.context = context
+            await db.commit()
+    except Exception as e:
+        print(f"[WS] remember conversation expert error: {e}")
 
 
 async def _node_config(node_id: str | None) -> dict:
@@ -2095,7 +2306,15 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     _, bound_node = await _conversation_owner(conv_id)
                     bound_node_id = conversation_node.get(conv_id) or (str(bound_node) if bound_node else None)
                     capabilities = await _available_agent_capabilities()
-                    requested_node_id = _mentioned_node_id(msg, capabilities)
+                    # @Expert mention → node + pack engagement; falls back to @Node.
+                    requested_node_id, msg = await _resolve_mention_route(msg, capabilities)
+                    if msg.get("expert_id") or msg.get("expert_name"):
+                        await _remember_conversation_expert(
+                            conv_id,
+                            expert_id=str(msg.get("expert_id") or "") or None,
+                            expert_name=str(msg.get("expert_name") or "") or None,
+                            engagement=str(msg.get("engagement") or msg.get("role") or "") or None,
+                        )
                     requested_agent = _agent_target_for_request(msg, requested_node_id, capabilities)
                     if _should_use_sticky_node_binding(
                         conversation_status=conversation_status,
@@ -2330,6 +2549,8 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             task_instruction = task_msg["initial_instruction"]
                             task_goal = str(task_msg.get("goal_objective") or "").strip() or None
                             task_engagement = str(task_msg.get("engagement") or "").strip() or None
+                            task_expert_id = str(msg.get("expert_id") or "").strip() or None
+                            task_expert_name = str(msg.get("expert_name") or "").strip() or None
                             if not resumed_from_context:
                                 await _remember_conversation_task(
                                     conv_id,
@@ -2338,9 +2559,11 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                                     instruction=task_instruction,
                                     goal_objective=task_goal,
                                     engagement=task_engagement,
+                                    expert_id=task_expert_id,
+                                    expert_name=task_expert_name,
                                 )
-                            elif task_goal or task_engagement:
-                                # Resume may re-seed goal/engagement; keep context in sync.
+                            elif task_goal or task_engagement or task_expert_id or task_expert_name:
+                                # Resume may re-seed goal/engagement/expert; keep context in sync.
                                 await _remember_conversation_task(
                                     conv_id,
                                     target=task_target,
@@ -2348,6 +2571,8 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                                     instruction=task_instruction,
                                     goal_objective=task_goal,
                                     engagement=task_engagement,
+                                    expert_id=task_expert_id,
+                                    expert_name=task_expert_name,
                                 )
                             global _round_robin_counter
                             preferred_node_id = decision.agent_node_id or _agent_node_id(msg)

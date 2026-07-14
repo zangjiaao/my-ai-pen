@@ -8,7 +8,19 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     server: {
+      host: "0.0.0.0",
       port: 5173,
+      strictPort: true,
+      // WSL/Windows browser often keeps stale modules; never cache in dev.
+      headers: {
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+        Pragma: "no-cache",
+      },
+      // Reliable FS events on /mnt/* mounts.
+      watch: {
+        usePolling: true,
+        interval: 800,
+      },
       proxy: {
         "/api": backendUrl,
       },

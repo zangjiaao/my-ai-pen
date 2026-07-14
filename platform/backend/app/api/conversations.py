@@ -63,6 +63,66 @@ async def get_conversation_state(conv_id: str, current_user: dict = Depends(get_
     return await build_conversation_snapshot(db, c, uuid.UUID(current_user["user_id"]))
 
 
+@router.get("/{conv_id}/dashboard")
+async def get_conversation_dashboard(
+    conv_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Engagement dashboard DTO (Phase C): status + findings from real snapshot/DB."""
+    from app.services.engagement_dashboard import (
+        activity_from_snapshot_messages,
+        build_engagement_dashboard,
+    )
+
+    c = await _get_conv(conv_id, current_user, db)
+    user_id = uuid.UUID(current_user["user_id"])
+    snapshot = await build_conversation_snapshot(db, c, user_id)
+
+    findings = list(snapshot.get("findings") or [])
+    if not findings:
+        vulns = await db.execute(
+            select(Vulnerability).where(
+                Vulnerability.conversation_id == c.id,
+                Vulnerability.user_id == user_id,
+            )
+        )
+        findings = [
+            {
+                "id": str(v.id),
+                "title": v.title,
+                "severity": v.severity,
+                "status": v.status,
+                "evidence_ids": list(v.evidence_ids or []),
+            }
+            for v in vulns.scalars().all()
+        ]
+
+    timeline = activity_from_snapshot_messages(
+        snapshot.get("messages") if isinstance(snapshot.get("messages"), list) else []
+    )
+
+    ctx = c.context if isinstance(c.context, dict) else {}
+    task = ctx.get("task") if isinstance(ctx.get("task"), dict) else {}
+    conv_dict = {
+        "id": str(c.id),
+        "title": c.title,
+        "status": c.status,
+        "task": task,
+        "engagement": task.get("engagement") or task.get("role"),
+        "target": task.get("target"),
+    }
+    return build_engagement_dashboard(
+        conversation=conv_dict,
+        agent_state=snapshot.get("agent_state") if isinstance(snapshot.get("agent_state"), dict) else {},
+        findings=findings,
+        timeline_events=timeline,
+        engagement=str(task.get("engagement") or task.get("role") or "") or None,
+        target=str(task.get("target") or "") or None,
+        progress=snapshot.get("progress") if isinstance(snapshot.get("progress"), dict) else {},
+    )
+
+
 @router.delete("/{conv_id}")
 async def delete_conversation(conv_id: str, current_user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     c = await _get_conv(conv_id, current_user, db)
