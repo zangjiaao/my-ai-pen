@@ -159,6 +159,22 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
         ? message.expertId
         : undefined;
 
+  const engagementTemplate =
+    typeof message.engagement_template === "string"
+      ? message.engagement_template
+      : typeof message.engagementTemplate === "string"
+        ? message.engagementTemplate
+        : undefined;
+  const allowPostexRaw = message.allow_postex ?? message.allowPostex;
+  const allowPostex =
+    typeof allowPostexRaw === "boolean"
+      ? allowPostexRaw
+      : allowPostexRaw === "true"
+        ? true
+        : allowPostexRaw === "false"
+          ? false
+          : undefined;
+
   return {
     taskId,
     conversationId,
@@ -167,6 +183,9 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
     scope,
     engagement: typeof message.engagement === "string" ? message.engagement : undefined,
     role: typeof message.role === "string" ? message.role : undefined,
+    engagementTemplate: engagementTemplate?.trim() || undefined,
+    allowPostex,
+    accounts: message.accounts !== undefined ? message.accounts : undefined,
     goalObjective,
     expertName: expertName?.trim() || undefined,
     expertId: expertId?.trim() || undefined,

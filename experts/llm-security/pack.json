@@ -1,0 +1,26 @@
+{
+  "id": "llm-security",
+  "label": "Model and Agent security",
+  "aliases": ["llm", "llm-redteam", "agent-security"],
+  "toolNames": [
+    "todo",
+    "shell",
+    "write",
+    "edit",
+    "read",
+    "http",
+    "session",
+    "script",
+    "finding",
+    "subagent",
+    "goal",
+    "skill"
+  ],
+  "skillIds": [
+    "llm-prompt-injection",
+    "llm-multi-turn-jailbreak",
+    "llm-agent-tool-abuse"
+  ],
+  "bookingMode": "finding",
+  "settlementNote": "Book only issues proven with transcript/tool-call evidence. Chat prose is not product truth. No finish tool; harness settles."
+}

@@ -20,6 +20,9 @@ BILLING_CODES: dict[str, str] = {
     "pentest": "expert.pentest",
     "ctf": "expert.ctf",
     "consult": "expert.consult",
+    "llm-security": "expert.llm-security",
+    "code-audit": "expert.code-audit",
+    "alert-triage": "expert.alert-triage",
 }
 
 # AuditLog.action values for billing-oriented events.

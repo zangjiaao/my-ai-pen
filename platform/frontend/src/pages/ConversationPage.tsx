@@ -15,7 +15,7 @@ import { useInfiniteQuery, useQueryClient, type InfiniteData } from "@tanstack/r
 import { Upload } from "lucide-react";
 import type { AgentIdentity, Conversation, Message } from "../lib/types";
 import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../lib/securityTypes";
-import { expertLabel, type ExpertId } from "../lib/experts";
+import { ENGAGEMENT_TEMPLATES, expertLabel, type ExpertId } from "../lib/experts";
 
 const ACTIVE_CONVERSATION_KEY = "active_conversation_id";
 /** Set by AssetPage when launching a task from selected hosts/ports. */
@@ -163,6 +163,15 @@ export default function ConversationPage() {
   /** Explicit long-task Goal mode (structured field → Node4 goalObjective; not NLP). */
   const [goalModeEnabled, setGoalModeEnabled] = useState(false);
   const [goalObjective, setGoalObjective] = useState("");
+  /** Structured engagement template (RoE depth) — not NLP. */
+  const [engagementTemplate, setEngagementTemplate] = useState<"app_assessment" | "redteam_deep">("app_assessment");
+  const [caseHandoff, setCaseHandoff] = useState<{
+    suggest_pack_id?: string;
+    reason?: string;
+    expert_id?: string;
+    expert_name?: string;
+    status?: string;
+  } | null>(null);
   const [importingReport, setImportingReport] = useState(false);
   const [importStatus, setImportStatus] = useState<ImportStatus>(null);
   /** Selected @mention target (expert or platform). */
@@ -358,6 +367,34 @@ export default function ConversationPage() {
       if (requestSeq !== stateRefreshSeqRef.current) return;
       applyConversationState(state);
       setStateSnapshotLoaded(true);
+      // Case fields (1 session = 1 case): engagement template + handoff banner
+      try {
+        const caseData = await authFetch<{
+          engagement_template?: string;
+          allow_postex?: boolean;
+          handoff?: {
+            suggest_pack_id?: string;
+            reason?: string;
+            expert_id?: string;
+            expert_name?: string;
+            status?: string;
+          } | null;
+        }>(`/api/conversations/${id}/case`);
+        if (requestSeq !== stateRefreshSeqRef.current) return;
+        const tmpl = String(caseData.engagement_template || "").trim();
+        if (tmpl === "redteam_deep" || tmpl === "app_assessment") {
+          setEngagementTemplate(tmpl);
+        } else if (caseData.allow_postex === true) {
+          setEngagementTemplate("redteam_deep");
+        }
+        if (caseData.handoff && caseData.handoff.status === "suggested") {
+          setCaseHandoff(caseData.handoff);
+        } else {
+          setCaseHandoff(null);
+        }
+      } catch {
+        /* case endpoint optional if older backend */
+      }
     } catch {
       if (requestSeq !== stateRefreshSeqRef.current) return;
       // The live stream remains usable even if a snapshot refresh races startup.
@@ -997,6 +1034,9 @@ export default function ConversationPage() {
     goalObjective?: string;
     /** Explicit engagement from @expert pack (structured; not NLP). */
     engagement?: string;
+    /** Product RoE template (app_assessment | redteam_deep). */
+    engagementTemplate?: string;
+    allowPostex?: boolean;
     expertId?: string;
   }) => {
     const displayText = opts.displayText.trim();
@@ -1021,9 +1061,19 @@ export default function ConversationPage() {
     const eng =
       String(opts.engagement || "").trim() ||
       (resolvedMention?.kind === "expert" ? String(resolvedMention.packId || "").trim() : "");
-    const engagementPayload: Record<string, unknown> = eng
-      ? { engagement: eng, role: eng }
-      : {};
+    const engTemplate = String(opts.engagementTemplate || "").trim();
+    const engagementPayload: Record<string, unknown> = {
+      ...(eng ? { engagement: eng, role: eng } : {}),
+      ...(engTemplate
+        ? {
+            engagement_template: engTemplate,
+            allow_postex:
+              typeof opts.allowPostex === "boolean"
+                ? opts.allowPostex
+                : engTemplate === "redteam_deep",
+          }
+        : {}),
+    };
     const expertId =
       String(opts.expertId || "").trim() ||
       (resolvedMention?.kind === "expert" ? String(resolvedMention.expertId || "").trim() : "");
@@ -1283,6 +1333,7 @@ export default function ConversationPage() {
     // Keep selected expert after send so multi-turn stays with the same persona.
     // (Clear only when user picks "Platform" or another expert.)
     setInput("");
+    const tmpl = engagementTemplate;
     await launchTaskMessage({
       displayText:
         resolved?.kind === "expert" && !displayText.includes(`@${resolved.name}`)
@@ -1291,10 +1342,23 @@ export default function ConversationPage() {
       text,
       goalMode: goalModeEnabled,
       goalObjective: goalObjective.trim() || undefined,
-      engagement: resolved?.kind === "expert" ? resolved.packId : undefined,
+      engagement: resolved?.kind === "expert" ? resolved.packId : tmpl || undefined,
+      engagementTemplate: tmpl,
+      allowPostex: tmpl === "redteam_deep",
       expertId: resolved?.kind === "expert" ? resolved.expertId : undefined,
     });
-  }, [input, selectedMention, mentionTargets, launchTaskMessage, goalModeEnabled, goalObjective]);
+    // Persist case RoE on conversation (1 session = 1 case)
+    if (activeId) {
+      void authFetch(`/api/conversations/${activeId}/case`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          engagement_template: tmpl,
+          allow_postex: tmpl === "redteam_deep",
+        }),
+      }).catch(() => {});
+    }
+  }, [input, selectedMention, mentionTargets, launchTaskMessage, goalModeEnabled, goalObjective, engagementTemplate, activeId]);
 
   const selectExpertFromToolbar = useCallback((key: string) => {
     if (!key) {
@@ -1554,6 +1618,35 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                     />
                   </div>
                 )}
+                {caseHandoff?.suggest_pack_id && caseHandoff.status === "suggested" && (
+                  <div className="mx-3 mb-2 flex flex-wrap items-center gap-2 rounded-md border border-status-running/30 bg-status-running/10 px-3 py-2 text-xs text-ink">
+                    <span className="min-w-0 flex-1">
+                      建议切换专家包 <strong>{caseHandoff.suggest_pack_id}</strong>
+                      {caseHandoff.reason ? ` — ${caseHandoff.reason}` : ""}
+                    </span>
+                    <button
+                      type="button"
+                      className="rounded-md bg-ink px-2.5 py-1 text-[11px] font-medium text-white"
+                      onClick={() => {
+                        const pack = caseHandoff.suggest_pack_id;
+                        const match = mentionTargets.find(
+                          (t) => t.kind === "expert" && (t.packId === pack || t.expertId === caseHandoff.expert_id),
+                        );
+                        if (match) selectExpertFromToolbar(match.key);
+                        setCaseHandoff((h) => (h ? { ...h, status: "accepted" } : null));
+                      }}
+                    >
+                      一键选用
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded-md border border-hairline px-2 py-1 text-[11px] text-ink-secondary"
+                      onClick={() => setCaseHandoff(null)}
+                    >
+                      忽略
+                    </button>
+                  </div>
+                )}
                 <div className="flex min-w-0 items-center justify-between gap-3 px-3 pb-2.5 pt-0.5">
                   <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
                     <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-ink-secondary">
@@ -1564,6 +1657,23 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                         className="rounded border-hairline"
                       />
                       <span className="font-medium text-ink">Goal</span>
+                    </label>
+                    <label className="inline-flex min-w-0 items-center gap-1.5 text-xs text-ink-secondary">
+                      <span className="shrink-0 text-ink-muted">模式</span>
+                      <select
+                        value={engagementTemplate}
+                        onChange={(e) =>
+                          setEngagementTemplate(e.target.value as "app_assessment" | "redteam_deep")
+                        }
+                        title="结构化 engagement 模板（非 NLP）"
+                        className="max-w-[10rem] truncate rounded-md border border-hairline bg-canvas px-2 py-1 text-xs text-ink focus:border-ink focus:outline-none"
+                      >
+                        {ENGAGEMENT_TEMPLATES.map((t) => (
+                          <option key={t.id} value={t.id} title={t.description}>
+                            {t.label}
+                          </option>
+                        ))}
+                      </select>
                     </label>
                     <label className="inline-flex min-w-0 items-center gap-1.5 text-xs text-ink-secondary">
                       <span className="shrink-0 text-ink-muted">Expert</span>

@@ -11,6 +11,18 @@ export type TaskEnvelope = {
   engagement?: string;
   /** Explicit role alias for engagement. */
   role?: string;
+  /**
+   * Product engagement template (app_assessment | redteam_deep | …).
+   * Structured only — never derived from instruction free text.
+   */
+  engagementTemplate?: string;
+  /**
+   * Rules-of-engagement: allow host post-ex / lateral.
+   * When undefined, derived from engagementTemplate (default false).
+   */
+  allowPostex?: boolean;
+  /** Optional test accounts / credentials provided by the customer (structured). */
+  accounts?: unknown;
   scanMode?: string;
   /** Optional parent task for future multi-agent platform orchestration (pass-through). */
   parentTaskId?: string;

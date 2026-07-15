@@ -175,6 +175,19 @@ async def update_conversation(conv_id: str, body: dict, current_user: dict = Dep
             transition_conversation(c, str(body["status"]))
         except ConversationStatusError as e:
             raise HTTPException(400, str(e)) from e
+    # Case-shaped fields (v1: conversation = case)
+    case_keys = ("engagement_template", "allow_postex", "stations", "accounts", "handoff")
+    if any(k in body for k in case_keys):
+        from app.services.case_engagement import merge_case_into_context
+
+        c.context = merge_case_into_context(
+            c.context if isinstance(c.context, dict) else {},
+            engagement_template=body.get("engagement_template"),
+            allow_postex=body.get("allow_postex") if "allow_postex" in body else None,
+            stations=body.get("stations") if "stations" in body else None,
+            handoff=body.get("handoff") if "handoff" in body else None,
+            accounts=body.get("accounts") if "accounts" in body else None,
+        )
     await _audit(db, user_id, "conversation.update", "conversation", c.id, c.id, {
         "fields": sorted(body.keys()),
         "before": before,
@@ -183,6 +196,105 @@ async def update_conversation(conv_id: str, body: dict, current_user: dict = Dep
     await db.commit()
     await db.refresh(c)
     return _out(c).model_dump()
+
+
+@router.get("/{conv_id}/case")
+async def get_conversation_case(
+    conv_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Case view for v1: one conversation = one case (scope, RoE, stations, handoff)."""
+    from app.services.case_engagement import case_fields_from_context
+
+    c = await _get_conv(conv_id, current_user, db)
+    fields = case_fields_from_context(c.context)
+    return {
+        "case_id": str(c.id),
+        "conversation_id": str(c.id),
+        "title": c.title,
+        "status": c.status,
+        **fields,
+    }
+
+
+@router.put("/{conv_id}/case")
+async def put_conversation_case(
+    conv_id: str,
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update Case-shaped fields on conversation (structured engagement/RoE only)."""
+    from app.services.case_engagement import case_fields_from_context, merge_case_into_context
+
+    c = await _get_conv(conv_id, current_user, db)
+    c.context = merge_case_into_context(
+        c.context if isinstance(c.context, dict) else {},
+        engagement_template=body.get("engagement_template"),
+        allow_postex=body.get("allow_postex") if "allow_postex" in body else None,
+        stations=body.get("stations") if "stations" in body else None,
+        handoff=body.get("handoff") if "handoff" in body else None,
+        accounts=body.get("accounts") if "accounts" in body else None,
+    )
+    await _audit(
+        db,
+        uuid.UUID(current_user["user_id"]),
+        "conversation.case.update",
+        "conversation",
+        c.id,
+        c.id,
+        {"fields": sorted(k for k in body.keys() if k in ("engagement_template", "allow_postex", "stations", "handoff", "accounts"))},
+    )
+    await db.commit()
+    await db.refresh(c)
+    fields = case_fields_from_context(c.context)
+    return {"case_id": str(c.id), "conversation_id": str(c.id), **fields}
+
+
+@router.post("/{conv_id}/handoff")
+async def suggest_expert_handoff(
+    conv_id: str,
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Store a structured handoff suggestion (does not auto-switch pack).
+
+    Body: { suggest_pack_id, reason?, artifact_ids?, expert_id?, expert_name? }
+    UI confirms via @expert / send with expert_id — never silent NLP rewrite.
+    """
+    from app.services.case_engagement import case_fields_from_context, merge_case_into_context
+    from app.services.expert_offers import normalize_pack_id
+
+    c = await _get_conv(conv_id, current_user, db)
+    pack = normalize_pack_id(body.get("suggest_pack_id") or body.get("pack_id") or body.get("engagement"))
+    if not pack:
+        raise HTTPException(400, "suggest_pack_id must be a known pack id or alias")
+    handoff = {
+        "suggest_pack_id": pack,
+        "reason": str(body.get("reason") or "").strip()[:2000],
+        "artifact_ids": body.get("artifact_ids") if isinstance(body.get("artifact_ids"), list) else [],
+        "expert_id": str(body.get("expert_id") or "").strip() or None,
+        "expert_name": str(body.get("expert_name") or "").strip() or None,
+        "status": "suggested",
+    }
+    c.context = merge_case_into_context(
+        c.context if isinstance(c.context, dict) else {},
+        handoff=handoff,
+    )
+    await _audit(
+        db,
+        uuid.UUID(current_user["user_id"]),
+        "conversation.handoff.suggest",
+        "conversation",
+        c.id,
+        c.id,
+        handoff,
+    )
+    await db.commit()
+    fields = case_fields_from_context(c.context)
+    return {"ok": True, "handoff": fields.get("handoff"), "case_id": str(c.id)}
 
 
 @router.get("/{conv_id}/messages")

@@ -33,6 +33,7 @@ function textOf(result: { content: Array<{ type: string; text?: string }> }): st
 }
 
 export function normalizeTaskAssign(message: Record<string, unknown>): TaskEnvelope {
+  // Keep in sync with main.ts normalizeTask for platform envelope fields.
   const taskId = String(message.task_id || message.taskId || "t");
   const conversationId = String(message.conversation_id || message.conversationId || taskId);
   const targetRaw = message.target;
@@ -61,6 +62,21 @@ export function normalizeTaskAssign(message: Record<string, unknown>): TaskEnvel
     : goalModeOn
       ? "Within authorized scope, maximize verified findings, flags, and challenge unlocks with evidence-backed booking."
       : undefined;
+  const engagementTemplate =
+    typeof message.engagement_template === "string"
+      ? message.engagement_template
+      : typeof message.engagementTemplate === "string"
+        ? message.engagementTemplate
+        : undefined;
+  const allowPostexRaw = message.allow_postex ?? message.allowPostex;
+  const allowPostex =
+    typeof allowPostexRaw === "boolean"
+      ? allowPostexRaw
+      : allowPostexRaw === "true"
+        ? true
+        : allowPostexRaw === "false"
+          ? false
+          : undefined;
   return {
     taskId,
     conversationId,
@@ -69,6 +85,9 @@ export function normalizeTaskAssign(message: Record<string, unknown>): TaskEnvel
     scope,
     engagement: typeof message.engagement === "string" ? message.engagement : undefined,
     role: typeof message.role === "string" ? message.role : undefined,
+    engagementTemplate: engagementTemplate?.trim() || undefined,
+    allowPostex,
+    accounts: message.accounts !== undefined ? message.accounts : undefined,
     goalObjective,
   };
 }

@@ -4,8 +4,8 @@
   "packs": [
     {
       "id": "pentest",
-      "label": "Penetration testing",
-      "aliases": ["assess", "verify", "retest"]
+      "label": "Application security assessment",
+      "aliases": ["assess", "verify", "retest", "app_assessment", "redteam_deep"]
     },
     {
       "id": "ctf",
@@ -16,6 +16,21 @@
       "id": "consult",
       "label": "Consult (stub)",
       "aliases": []
+    },
+    {
+      "id": "llm-security",
+      "label": "Model and Agent security",
+      "aliases": ["llm", "llm-redteam", "agent-security"]
+    },
+    {
+      "id": "code-audit",
+      "label": "Code security assessment",
+      "aliases": ["code", "sast", "source-audit"]
+    },
+    {
+      "id": "alert-triage",
+      "label": "Alert triage",
+      "aliases": ["soc", "alert", "detection"]
     }
   ]
 }

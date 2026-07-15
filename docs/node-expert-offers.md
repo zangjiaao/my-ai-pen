@@ -45,11 +45,21 @@ Aliases fold to canonical pack ids (same idea as Node4 `resolveRolePack`):
 
 | engagement / role | pack id   |
 |-------------------|-----------|
-| pentest, assess, verify, retest | pentest |
+| pentest, assess, verify, retest, **app_assessment**, **redteam_deep** | pentest |
 | ctf, ctf-web, challenge | ctf |
 | consult | consult |
+| llm-security, llm, llm-redteam, agent-security | llm-security |
+| code-audit, code, sast, source-audit | code-audit |
+| alert-triage, soc, alert, detection | alert-triage |
 
-Blank engagement defaults to **pentest** (must still be offered).
+**Engagement templates (RoE depth, structured UI field — not NLP):**
+
+| Template | allow_postex | Pack |
+|----------|--------------|------|
+| `app_assessment` | false | pentest |
+| `redteam_deep` | true | pentest |
+
+Blank engagement defaults to **pentest** (must still be offered). Unset RoE defaults to **post-ex off** (conservative).
 
 ## Node pack install API
 

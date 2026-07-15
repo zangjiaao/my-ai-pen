@@ -1,0 +1,24 @@
+{
+  "id": "code-audit",
+  "label": "Code security assessment",
+  "aliases": ["code", "sast", "source-audit"],
+  "toolNames": [
+    "todo",
+    "shell",
+    "write",
+    "edit",
+    "read",
+    "script",
+    "finding",
+    "subagent",
+    "goal",
+    "skill"
+  ],
+  "skillIds": [
+    "code-repo-recon",
+    "code-focus-review",
+    "code-candidate-validate"
+  ],
+  "bookingMode": "finding",
+  "settlementNote": "Book code issues with file location and proof excerpts. Suggest runtime verify handoff to application security when needed. No finish tool."
+}

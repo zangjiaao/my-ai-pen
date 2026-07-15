@@ -1983,10 +1983,14 @@ async def _remember_conversation_task(
     engagement: str | None = None,
     expert_id: str | None = None,
     expert_name: str | None = None,
+    engagement_template: str | None = None,
+    allow_postex: bool | None = None,
+    accounts: object = None,
 ):
     try:
         from app.db.base import async_session
         from app.models.conversation import Conversation
+        from app.services.case_engagement import merge_case_into_context, resolve_allow_postex
 
         async with async_session() as db:
             r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id)))
@@ -2017,7 +2021,34 @@ async def _remember_conversation_task(
                 task_blob["expert_id"] = eid
             if ename:
                 task_blob["expert_name"] = ename
+            et = str(
+                engagement_template
+                or prev_task.get("engagement_template")
+                or ""
+            ).strip()
+            if et:
+                task_blob["engagement_template"] = et
+            ap = allow_postex
+            if ap is None and "allow_postex" in prev_task:
+                ap = prev_task.get("allow_postex")
+            if ap is not None or et:
+                task_blob["allow_postex"] = resolve_allow_postex(
+                    engagement_template=et or eng,
+                    engagement=eng,
+                    allow_postex=ap,
+                )
+            if accounts is not None:
+                task_blob["accounts"] = accounts
+            elif prev_task.get("accounts") is not None:
+                task_blob["accounts"] = prev_task.get("accounts")
             context["task"] = task_blob
+            # Keep case block in sync (1 conversation = 1 case)
+            context = merge_case_into_context(
+                context,
+                engagement_template=task_blob.get("engagement_template"),
+                allow_postex=task_blob.get("allow_postex"),
+                accounts=task_blob.get("accounts"),
+            )
             c.context = context
             await db.commit()
     except Exception as e:
@@ -2408,6 +2439,53 @@ def _task_assign_from_user_message(conv_id: str, msg: dict, task_id: str) -> dic
         out["expert_id"] = expert_id
     if expert_name:
         out["expert_name"] = expert_name
+    # RoE / engagement template (structured; may come from message or later sticky merge)
+    et = str(msg.get("engagement_template") or msg.get("engagementTemplate") or "").strip()
+    if et:
+        out["engagement_template"] = et
+    if "allow_postex" in msg or "allowPostex" in msg:
+        raw = msg.get("allow_postex", msg.get("allowPostex"))
+        if isinstance(raw, bool):
+            out["allow_postex"] = raw
+        elif str(raw).strip().lower() in {"true", "1", "yes"}:
+            out["allow_postex"] = True
+        elif str(raw).strip().lower() in {"false", "0", "no"}:
+            out["allow_postex"] = False
+    if msg.get("accounts") is not None:
+        out["accounts"] = msg.get("accounts")
+    return out
+
+
+async def _merge_case_roe_into_task_assign(conv_id: str | None, task_msg: dict) -> dict:
+    """Attach sticky Case RoE fields from conversation when message omits them."""
+    if not conv_id:
+        return task_msg
+    out = dict(task_msg)
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+        from app.services.case_engagement import roe_payload_for_task_assign
+
+        async with async_session() as db:
+            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(str(conv_id))))
+            c = r.scalar_one_or_none()
+            if not c:
+                return out
+            roe = roe_payload_for_task_assign(c.context)
+            if "engagement_template" not in out and roe.get("engagement_template"):
+                out["engagement_template"] = roe["engagement_template"]
+            if "allow_postex" not in out and "allow_postex" in roe:
+                out["allow_postex"] = roe["allow_postex"]
+            if out.get("accounts") is None and roe.get("accounts") is not None:
+                out["accounts"] = roe["accounts"]
+            # If template set but engagement blank, use template (alias → pentest on node)
+            if not engagement_from_task_message(out) and roe.get("engagement_template"):
+                out["engagement"] = roe["engagement_template"]
+                pack = normalize_pack_id(roe["engagement_template"])
+                if pack:
+                    out["role"] = pack
+    except Exception as e:
+        print(f"[WS] merge case roe error: {e}")
     return out
 
 
@@ -2900,6 +2978,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                                 eligible_node_ids=eligible_node_ids,
                             )
                             task_msg = _task_assign_from_user_message(conv_id, msg, str(uuid.uuid4()))
+                            task_msg = await _merge_case_roe_into_task_assign(conv_id, task_msg)
                             task_target = task_msg["target"]
                             task_scope = task_msg["scope"]
                             task_instruction = task_msg["initial_instruction"]

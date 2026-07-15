@@ -38,3 +38,14 @@ npx tsx src/expert-cli.ts uninstall ctf
 Platform `offers` remains product permission/billing (may still default offer pentest for product UX); Node install is independent for lab comparison.
 
 Remote marketplace / network hot-load is out of scope.
+
+## Packs (catalog)
+
+| id | Purpose |
+|----|---------|
+| `pentest` | Application security (Web/API); templates app_assessment / redteam_deep |
+| `ctf` | CTF web player |
+| `consult` | Consult stub (no finding booking) |
+| `llm-security` | Model and Agent security |
+| `code-audit` | Source code assessment |
+| `alert-triage` | Alert / detection triage (blue-purple) |

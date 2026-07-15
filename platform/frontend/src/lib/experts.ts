@@ -4,7 +4,30 @@
  * Mirrors platform expert_offers + experts/ pack.json.
  */
 
-export type ExpertId = "pentest" | "ctf" | "consult";
+export type ExpertId = "pentest" | "ctf" | "consult" | "llm-security" | "code-audit" | "alert-triage";
+
+/** Structured engagement templates (RoE depth) — not free-text NLP. */
+export type EngagementTemplateId = "app_assessment" | "redteam_deep";
+
+export const ENGAGEMENT_TEMPLATES: readonly {
+  id: EngagementTemplateId;
+  label: string;
+  description: string;
+  allowPostex: boolean;
+}[] = [
+  {
+    id: "app_assessment",
+    label: "应用评估",
+    description: "给定资产/账号；常规漏洞与越权；禁止后渗透",
+    allowPostex: false,
+  },
+  {
+    id: "redteam_deep",
+    label: "红队深度",
+    description: "授权外网发现与利用；允许范围内后渗透/横向",
+    allowPostex: true,
+  },
+] as const;
 
 export type CapabilityItem = {
   id: string;
@@ -91,16 +114,23 @@ const TOOL_META: Record<string, { label: string; description: string }> = {
 export const EXPERT_PACKS: readonly ExpertPackMeta[] = [
   {
     id: "pentest",
-    label: "Pentest",
-    description: "授权渗透测试 — 侦察、利用、证据驱动的 finding。",
+    label: "应用安全",
+    description: "授权 Web/API 评估 — 面发现、利用、证据驱动 finding。",
     isDefault: true,
     skillIds: [
       "pentest-web-recon",
+      "pentest-surface-enum",
+      "pentest-external-intel",
       "pentest-auth-session",
       "pentest-sql-injection",
       "pentest-xss",
       "pentest-access-control",
+      "pentest-authz-logic",
       "pentest-file-upload",
+      "pentest-component-rce",
+      "pentest-service-exposure",
+      "pentest-postex-host",
+      "pentest-lateral",
       "pentest-stuck-rotation",
     ],
     toolNames: [
@@ -148,6 +178,27 @@ export const EXPERT_PACKS: readonly ExpertPackMeta[] = [
     skillIds: [],
     toolNames: ["todo", "shell", "read", "goal"],
   },
+  {
+    id: "llm-security",
+    label: "模型安全",
+    description: "LLM / Agent 对抗测试 — 注入、越狱、工具滥用。",
+    skillIds: ["llm-prompt-injection", "llm-multi-turn-jailbreak", "llm-agent-tool-abuse"],
+    toolNames: ["todo", "shell", "write", "edit", "read", "http", "session", "script", "finding", "subagent", "goal", "skill"],
+  },
+  {
+    id: "code-audit",
+    label: "代码审计",
+    description: "源码安全评估 — 静态焦点与候选验证。",
+    skillIds: ["code-repo-recon", "code-focus-review", "code-candidate-validate"],
+    toolNames: ["todo", "shell", "write", "edit", "read", "script", "finding", "subagent", "goal", "skill"],
+  },
+  {
+    id: "alert-triage",
+    label: "告警研判",
+    description: "告警真假阳性与检测缺口（蓝/紫）。",
+    skillIds: ["alert-enrichment", "alert-true-false-positive", "alert-detection-gap"],
+    toolNames: ["todo", "shell", "write", "edit", "read", "http", "script", "finding", "goal", "skill"],
+  },
 ] as const;
 
 export const DEFAULT_EXPERT_ID: ExpertId = "pentest";
@@ -162,10 +213,19 @@ const ENGAGEMENT_ALIASES: Record<string, ExpertId> = {
   assess: "pentest",
   verify: "pentest",
   retest: "pentest",
+  app_assessment: "pentest",
+  redteam_deep: "pentest",
   ctf: "ctf",
   "ctf-web": "ctf",
   challenge: "ctf",
   consult: "consult",
+  "llm-security": "llm-security",
+  llm: "llm-security",
+  "llm-redteam": "llm-security",
+  "code-audit": "code-audit",
+  code: "code-audit",
+  "alert-triage": "alert-triage",
+  soc: "alert-triage",
 };
 
 export function isExpertId(value: unknown): value is ExpertId {

@@ -1,0 +1,24 @@
+{
+  "id": "alert-triage",
+  "label": "Alert triage",
+  "aliases": ["soc", "alert", "detection"],
+  "toolNames": [
+    "todo",
+    "shell",
+    "write",
+    "edit",
+    "read",
+    "http",
+    "script",
+    "finding",
+    "goal",
+    "skill"
+  ],
+  "skillIds": [
+    "alert-enrichment",
+    "alert-true-false-positive",
+    "alert-detection-gap"
+  ],
+  "bookingMode": "finding",
+  "settlementNote": "Triage outcomes and detection gaps need evidence (alert payloads, logs). Prefer linking red-team finding ids when available."
+}

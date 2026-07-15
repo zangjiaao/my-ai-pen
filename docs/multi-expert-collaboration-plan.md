@@ -231,40 +231,40 @@ Do **not**: implement kill-chain state machine as default continue policy.
 ### Phase 0 — Docs & contracts (this doc + index)
 
 - [x] Commit prior OMP todo / pack-boundary work  
-- [ ] Publish this plan; link from `docs/README.md`, `experts/README.md`  
-- [ ] Update `node-expert-offers.md` with expert family table + engagement templates (short pointer)
+- [x] Publish this plan; link from `docs/README.md`, `experts/README.md`  
+- [x] Update `node-expert-offers.md` with expert family table + engagement templates (short pointer)
 
 ### Phase 1 — Engagement + RoE for two scenarios
 
-- [ ] Platform: engagement templates `app_assessment` / `redteam_deep` (UI or API)  
-- [ ] Task envelope: targets, accounts, `allow_postex`, ban list  
-- [ ] Node4: inject RoE into prompt from envelope  
-- [ ] `experts/pentest/work.md`: document both scenarios and skill loading rules  
+- [x] Platform: engagement templates `app_assessment` / `redteam_deep` (UI or API)  
+- [x] Task envelope: targets, accounts, `allow_postex`, ban list  
+- [x] Node4: inject RoE into prompt from envelope  
+- [x] `experts/pentest/work.md`: document both scenarios and skill loading rules  
 
 **Exit:** Scenario B can be started with assets/accounts and post-ex disabled in prompt; Scenario A can enable deep path in prompt.
 
 ### Phase 2 — Skills expansion (`pentest`)
 
-- [ ] Add skills in §5.1 (at least surface-enum, authz-logic strengthen, postex-host + lateral stubs gated)  
-- [ ] Component/service skills without CVE answer keys  
-- [ ] `pack.json` skill list + catalog  
+- [x] Add skills in §5.1 (at least surface-enum, authz-logic strengthen, postex-host + lateral stubs gated)  
+- [x] Component/service skills without CVE answer keys  
+- [x] `pack.json` skill list + catalog  
 
 **Exit:** Agent can load methodology for surface → exploit → (optional) post-ex without new Experts.
 
 ### Phase 3 — Case collaboration MVP (= one conversation)
 
-- [ ] Treat each conversation as one Case; Case fields on conversation (or 1:1 row)  
-- [ ] Artifacts remain conversation-scoped (shared across experts in that chat)  
-- [ ] Structured handoff suggestion + UI one-click @  
-- [ ] Soft stations on Case/conversation UI (display + suggest only)  
+- [x] Treat each conversation as one Case; Case fields on conversation (or 1:1 row)  
+- [x] Artifacts remain conversation-scoped (shared across experts in that chat)  
+- [x] Structured handoff suggestion + UI one-click @  
+- [x] Soft stations on Case/conversation UI (display + suggest only)  
 
 **Exit:** Two Experts in the **same session/case** share findings/evidence; handoff is explicit. No multi-session Case.
 
 ### Phase 4 — New packs (order by product need)
 
-1. [ ] `llm-security` scaffold (pack.json, mission, work, 2–3 skills; DeepTeam as research only)  
-2. [ ] `code-audit` scaffold (static focus; optional validate skill)  
-3. [ ] `alert-triage` scaffold (purple with red findings)  
+1. [x] `llm-security` scaffold (pack.json, mission, work, 2–3 skills; DeepTeam as research only)  
+2. [x] `code-audit` scaffold (static focus; optional validate skill)  
+3. [x] `alert-triage` scaffold (purple with red findings)  
 4. [ ] Optional `threat-intel` only if intel-only product SKU exists  
 
 **Exit:** Installable packs + Expert instances; not required for Scenario A/B spine.
