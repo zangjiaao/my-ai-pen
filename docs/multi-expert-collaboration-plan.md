@@ -351,17 +351,46 @@ When implementing:
 
 ## 13. Suggested goal prompts (implementation)
 
-**Goal 1 (recommended first) — Phase 1 + Phase 2 spine:**
+### 13.1 Single goal: Phase 1 → 4 (recommended when using one long goal)
 
-> Implement `docs/multi-expert-collaboration-plan.md` Phase 1 then Phase 2.  
-> Case model: **1 conversation = 1 case** (no multi-session case).  
-> Deliver: engagement templates (`app_assessment` / `redteam_deep`) + RoE flags in task envelope into Node4 prompts; expand `experts/pentest` skills (surface-enum, authz-logic, engagement-gated postex/lateral); update living docs (`node-expert-offers.md`, `experts/README.md`, this plan checkboxes).  
-> Do not add a default kill-chain state machine. Do not add stage-named Experts. Do not invent engagement via NLP.
+Use this when you want **one** goal run covering the full collaboration spine through new pack scaffolds. Execute **in order**; do not skip ahead to packs before RoE/envelope works.
 
-**Goal 2 — Phase 3 collaboration MVP:**
+> Implement `docs/multi-expert-collaboration-plan.md` **Phases 1 through 4** in order.  
+>  
+> **Case (v1):** 1 conversation = 1 case (no multi-session case). Shared findings/evidence stay conversation-scoped. Multiple Node tasks and @Experts may run inside that one session.  
+>  
+> **Phase 1 — Engagement + RoE**  
+> - Structured engagement templates at least `app_assessment` and `redteam_deep` (UI and/or API + task envelope).  
+> - Envelope fields: targets, accounts, scope, `allow_postex` (or equivalent RoE flags).  
+> - Node4 injects engagement + RoE into the agent prompt; defaults conservative (`app_assessment` / post-ex off when unset).  
+> - Do **not** invent engagement via NLP or target identification (no DVWA-specific engagement).  
+>  
+> **Phase 2 — `experts/pentest` skills**  
+> - Add/expand skills per plan §5.1: surface-enum, external-intel (methodology), component-rce, service-exposure, authz-logic (strengthen), postex-host + lateral **gated by engagement/RoE**.  
+> - Update `pack.json`, catalog, `work.md` for both scenarios A/B. No CVE answer keys.  
+>  
+> **Phase 3 — Case collaboration MVP**  
+> - Case-shaped fields on conversation (or 1:1); soft stations display/suggest only.  
+> - Structured expert handoff suggestion + UI one-click `@` (no silent pack switch).  
+>  
+> **Phase 4 — New packs (scaffold)**  
+> - Create installable packs: `llm-security`, `code-audit`, and `alert-triage` (mission/work/skills stubs + `pack.json` + catalog).  
+> - Content may reference DeepTeam/Argo **ideas** only; do not vendor those codebases or add kill-chain Experts.  
+>  
+> **Hard constraints:** No default kill-chain state machine in Node4 continue policy. No stage-named Experts (recon/foothold/lateral/host/network as separate experts). No NLP engagement routing. Keep docs living: this plan checkboxes, `node-expert-offers.md`, `experts/README.md`, `docs/prd.md` as needed.  
+>  
+> **Done when:** (1) app_assessment vs redteam_deep change prompt/RoE behavior; (2) pentest skills listed and loadable; (3) same conversation can suggest handoff and keep shared artifacts; (4) three new packs install via expert-cli / catalog.
 
-> Implement Phase 3 on top of 1 conversation = 1 case: Case-shaped conversation fields, handoff suggest + one-click @, soft stations UI. Shared artifacts stay conversation-scoped.
+### 13.2 Split goals (if the single goal is too large)
 
-**Goal 3 — Phase 4 packs (when product priority allows):**
+**Goal A — Phase 1 + 2 only:**
 
-> Scaffold packs `llm-security`, `code-audit`, and optionally `alert-triage` under `experts/` per this plan; catalog + install; no stage Experts.
+> Implement plan Phase 1 then 2 only (engagement/RoE + pentest skills). Case remains 1 conversation = 1 case. No kill-chain state machine; no NLP engagement.
+
+**Goal B — Phase 3 only:**
+
+> Implement Phase 3: Case fields on conversation, handoff + one-click @, soft stations. 1 session = 1 case.
+
+**Goal C — Phase 4 only:**
+
+> Scaffold `llm-security`, `code-audit`, `alert-triage` packs per plan §4–5; catalog + install.
