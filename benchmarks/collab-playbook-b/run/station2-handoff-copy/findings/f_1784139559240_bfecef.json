@@ -1,0 +1,21 @@
+{
+  "id": "f_1784139559240_bfecef",
+  "action": "confirm",
+  "title": "Missing authentication across entire API surface",
+  "severity": "high",
+  "finding_kind": "vuln",
+  "location": "src/api/search.py, src/api/orders.py, src/net/fetch.py",
+  "url": "src/api/search.py, src/api/orders.py, src/net/fetch.py",
+  "description": "No authentication, session management, or authorization middleware exists in any of the source files. All API handlers (search, orders, fetch) accept requests without verifying identity. This systemic gap enables unauthenticated access to all endpoints, amplifying the impact of all other vulnerabilities (SQLi, IDOR, SSRF).",
+  "poc": "Static analysis of all 5 Python source files in the codebase. Observed in evidence: none of the files contain any authentication decorators, session checks, token validation, or user context retrieval. The search.py handler takes only 'request' and 'q'; orders.py takes 'request' and 'order_id'; fetch.py takes only 'url'. No middleware, no auth headers parsed, no user identity established anywhere in the codebase — as confirmed by reading every Python file in the source_dump tree.",
+  "evidence_ids": [
+    "ev_1784139501581_a9d85e"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784139501581_a9d85e",
+      "excerpt": "status/exit=0\n$ for f in /mnt/d/Coding/my-ai-pen/benchmarks/collab-playbook-b/source_dump/src/api/search.py /mnt/d/Coding/my-ai-pen/benchmarks/collab-playbook-b/source_dump/src/api/orders.py /mnt/d/Coding/my-ai-pen/benchmarks/collab-playbook-b/source_dump/\n===== /mnt/d/Coding/my-ai-pen/benchmarks/collab-playbook-b/source_dump/src/api/search.py =====\n\"\"\"Search API (fixture).\"\"\"\n\ndef search(request):\n    q = request.args.get(\"q\", \"\")\n    # NOTE (fixture): builds SQL by string formatting -> CWE-89 around line 42 in real tree.\n    sql = \"SELECT * FROM widgets WHERE name LIKE '%\" + q + \"%'\"\n    return db.execute(sql)\n\n===== /mnt/d/Coding/my-ai-pen/benchmarks/collab-playbook-b/source_dump/src/api/orders.py =====\n\"\"\"Orders API (fixture).\"\"\"\n\ndef get_order(request, order_id):\n    # NOTE (fixture): no ownership check on order_id -> IDOR / CWE-639.\n    return repo.find(order_id)\n\n===== /mnt/d/Coding/my-ai-pen/benchmarks/collab-playbook-b/source_dump/src/api/util.py =====\n\"\"\"Utilities (fixture).\"\"\"\nSERVICE_BANNER = \"acme-widgets/1.0\"  # server-derived constant\n\n===== /mnt/d/Coding/my-ai-pen/benchmarks/collab-playbook-b/source_dump/src/net/fetch.py =="
+    }
+  ],
+  "created_at": "2026-07-15T18:19:19.240Z"
+}

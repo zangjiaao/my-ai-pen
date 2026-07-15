@@ -1,0 +1,21 @@
+{
+  "id": "f_1784139559240_320992",
+  "action": "confirm",
+  "title": "IDOR / Missing Access Control in orders API",
+  "severity": "high",
+  "finding_kind": "vuln",
+  "location": "src/api/orders.py:6-7",
+  "url": "src/api/orders.py:6-7",
+  "description": "The get_order() function accepts an order_id route parameter and directly calls repo.find(order_id) without any user ownership check, session validation, or authorization middleware. Any user (authenticated or not) can enumerate or guess order IDs to access any order's data. The entire codebase has no authentication framework at all.",
+  "poc": "Static analysis of source_dump/src/api/orders.py shows: def get_order(request, order_id): return repo.find(order_id). Observed in evidence: no user context, no auth check, no ownership filter exists anywhere in the file or the codebase. An attacker sending GET /orders/42 would retrieve order data for order_id=42 regardless of ownership. No authentication middleware or decorator present to prevent this.",
+  "evidence_ids": [
+    "ev_1784139501581_a9d85e"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784139501581_a9d85e",
+      "excerpt": "status/exit=0\n$ for f in /mnt/d/Coding/my-ai-pen/benchmarks/collab-playbook-b/source_dump/src/api/search.py /mnt/d/Coding/my-ai-pen/benchmarks/collab-playbook-b/source_dump/src/api/orders.py /mnt/d/Coding/my-ai-pen/benchmarks/collab-playbook-b/source_dump/\n===== /mnt/d/Coding/my-ai-pen/benchmarks/collab-playbook-b/source_dump/src/api/search.py =====\n\"\"\"Search API (fixture).\"\"\"\n\ndef search(request):\n    q = request.args.get(\"q\", \"\")\n    # NOTE (fixture): builds SQL by string formatting -> CWE-89 around line 42 in real tree.\n    sql = \"SELECT * FROM widgets WHERE name LIKE '%\" + q + \"%'\"\n    return db.execute(sql)\n\n===== /mnt/d/Coding/my-ai-pen/benchmarks/collab-playbook-b/source_dump/src/api/orders.py =====\n\"\"\"Orders API (fixture).\"\"\"\n\ndef get_order(request, order_id):\n    # NOTE (fixture): no ownership check on order_id -> IDOR / CWE-639.\n    return repo.find(order_id)\n\n===== /mnt/d/Coding/my-ai-pen/benchmarks/collab-playbook-b/source_dump/src/api/util.py =====\n\"\"\"Utilities (fixture).\"\"\"\nSERVICE_BANNER = \"acme-widgets/1.0\"  # server-derived constant\n\n===== /mnt/d/Coding/my-ai-pen/benchmarks/collab-playbook-b/source_dump/src/net/fetch.py =="
+    }
+  ],
+  "created_at": "2026-07-15T18:19:19.240Z"
+}

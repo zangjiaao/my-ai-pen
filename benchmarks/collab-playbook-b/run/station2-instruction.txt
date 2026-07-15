@@ -1,0 +1,16 @@
+【协作剧本B · 站2 code-audit】
+
+上一段 pentest（模拟）已在 lab 获得 RCE，并落盘了应用源码。请只做静态代码安全评估，不要对任何主机发起攻击或端口扫描。
+
+请先读取交接与源码根目录（本机绝对路径）：
+- 交接：/mnt/d/Coding/my-ai-pen/benchmarks/collab-playbook-b/HANDOFF_FROM_PENTEST.md
+- 源码：/mnt/d/Coding/my-ai-pen/benchmarks/collab-playbook-b/source_dump/
+
+要求：
+1) 先 skill(op=list)，再按需 skill(op=load)：code-repo-recon →（可选）code-partition-focus → code-focus-review → code-candidate-validate
+2) 对每个候选给出 file:line、数据流、preconditions；高严重项先 validate 再 finding(confirm)
+3) 在本任务工作区写出 HANDOFF_TO_PENTEST.md，列出需要动态验证的条目与建议 PoC
+4) 结束后明确建议交回 application security / pentest；不要自己做动态利用
+5) 使用 shell/read 读取上述源码；范围仅 source_dump 内代码
+
+完成后停止（无 finish 工具）；确保 HANDOFF_TO_PENTEST.md 已写入。

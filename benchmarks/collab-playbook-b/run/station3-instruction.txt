@@ -1,0 +1,16 @@
+【协作剧本B · 站3 pentest · 回程验证】
+
+code-audit 已完成静态分析。请消费其交接清单，不要从零全盘扫描或 nmap。
+
+请读取：
+- 静态交接：/mnt/d/Coding/my-ai-pen/benchmarks/collab-playbook-b/run/station2-handoff-copy/HANDOFF_TO_PENTEST.md
+  （若该文件不存在，则使用同目录下 findings 摘要）
+- 源码参考（只读理解，非必攻）：/mnt/d/Coding/my-ai-pen/benchmarks/collab-playbook-b/source_dump/
+
+本轮目标：
+1) 对清单中每条候选给出「动态验证计划」：请求/参数/期望证据
+2) 当前没有可达 live 目标：不要扫外网；用 finding(candidate) 或工作区笔记记录验证计划，并标注 needs_runtime / blocked_no_target
+3) 不要重开全站 recon；不要 post-ex
+4) 结束时写 VERIFY_SUMMARY.md 表格：候选 | 静态位置 | confirm/refute/blocked | 证据/计划
+
+完成后停止。
