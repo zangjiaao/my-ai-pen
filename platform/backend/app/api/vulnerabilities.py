@@ -642,6 +642,7 @@ async def _dispatch_retest_if_possible(
             "engagement": eng,
             "snapshot": snapshot,
         }
+        task_msg = await ws_router._attach_case_context_to_task_assign(conv_id, task_msg)
         worker_limits = await ws_router._worker_limits_for_node(node_id)
         if worker_limits:
             task_msg["worker_limits"] = worker_limits

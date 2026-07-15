@@ -13,7 +13,7 @@
 | [`multi-expert-collaboration-plan.md`](multi-expert-collaboration-plan.md) | **Plan:** expert families, Case/handoff, engagements (app vs red-team deep), skills roadmap, gap coverage |
 | [`phase-milestones.md`](phase-milestones.md) | Phase A–D gates: expert pack, report, dashboard, schedules |
 | [`../experts/README.md`](../experts/README.md) | Expert pack catalog (source of pack content) |
-| [`../benchmarks/collab-playbook-b/README.md`](../benchmarks/collab-playbook-b/README.md) | **Manual lab:** multi-expert collaboration dry-run (code-audit ↔ pentest), no live RCE |
+| [`../benchmarks/collab-playbook-b/README.md`](../benchmarks/collab-playbook-b/README.md) | **Manual lab:** multi-expert collaboration dry-run (code-audit ↔ pentest); `case_context` work-group thread |
 
 ## Not product specs
 

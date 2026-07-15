@@ -31,6 +31,7 @@ import { eagerBookingInjection } from "./booking-harness.js";
 import { SubagentHost } from "./subagent.js";
 import { eagerTodoInjection, resetMidRunTodoCycle, createMidRunTodoTracker } from "./todo-harness.js";
 import { formatRoeInjection, resolveEngagementRoe } from "./engagement-roe.js";
+import { formatCaseContextInjection } from "./case-context.js";
 import { buildGoalContinuationPrompt } from "../stores/goal.js";
 import { PanelAgentTracker } from "./panel-agents.js";
 import {
@@ -307,6 +308,8 @@ export async function runNode4Task(
     "",
     formatRoeInjection(roe),
     "",
+    formatCaseContextInjection(task.caseContext),
+    "",
     `Role pack: ${pack.id}. OMP essence: keep tool-calling in-loop; shell-first multi-step + multi-call same turn; http is single-probe only.`,
     "Long multi-challenge work: call goal(op=create, objective=...) early so the harness can auto-continue (OMP goal mode) until full clearance — complete only with remaining_unsolved=0 after real audit (partial wins are not done).",
     pack.bookingMode === "finding"
@@ -315,6 +318,7 @@ export async function runNode4Task(
     `Target: ${JSON.stringify(task.target)}`,
     `Scope: ${JSON.stringify(task.scope)}`,
     task.accounts !== undefined ? `Accounts: ${JSON.stringify(task.accounts)}` : "",
+    "### Your message this turn",
     task.instruction,
   ]
     .filter(Boolean)

@@ -18,6 +18,7 @@ import { createFindingTool } from "./tools/finding.js";
 import { NODE4_TOOL_NAMES } from "./tools/index.js";
 import { resolveRolePack } from "./roles/index.js";
 import type { PlatformMessage, PlatformSink, TaskEnvelope, ToolRuntime } from "./types.js";
+import { parseCaseContext } from "./runtime/case-context.js";
 
 function assert(cond: unknown, msg: string): asserts cond {
   if (!cond) throw new Error(msg);
@@ -89,6 +90,7 @@ export function normalizeTaskAssign(message: Record<string, unknown>): TaskEnvel
     allowPostex,
     accounts: message.accounts !== undefined ? message.accounts : undefined,
     goalObjective,
+    caseContext: parseCaseContext(message.case_context ?? message.caseContext),
   };
 }
 

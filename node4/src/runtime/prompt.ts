@@ -2,6 +2,7 @@ import type { RolePack } from "../roles/index.js";
 import type { TaskEnvelope } from "../types.js";
 import type { GoalStore } from "../stores/goal.js";
 import { formatRoeInjection, resolveEngagementRoe } from "./engagement-roe.js";
+import { formatCaseContextInjection } from "./case-context.js";
 
 /**
  * Build system prompt from an explicit role pack + task envelope.
@@ -52,6 +53,10 @@ export function buildSystemPrompt(
     "",
     formatRoeInjection(roe),
     "",
+  );
+  const caseBlock = formatCaseContextInjection(task.caseContext);
+  if (caseBlock) lines.push(caseBlock, "");
+  lines.push(
     `Target: ${JSON.stringify(task.target)}`,
     `Scope: ${JSON.stringify(task.scope)}`,
     task.accounts !== undefined ? `Accounts: ${JSON.stringify(task.accounts)}` : "",

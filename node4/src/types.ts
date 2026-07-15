@@ -34,6 +34,11 @@ export type TaskEnvelope = {
   /** Product expert persona for UI labels (not the physical node name). */
   expertName?: string;
   expertId?: string;
+  /**
+   * Same-case work-group context from the platform (thread + findings board).
+   * Experts joining mid-case should read this like a group chat.
+   */
+  caseContext?: import("./runtime/case-context.js").CaseContext;
 };
 
 export type PlatformSink = {

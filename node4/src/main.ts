@@ -4,6 +4,7 @@ import { loadDotEnv } from "./env.js";
 import { PlatformWSClient } from "./platform/ws-client.js";
 import { runNode4Task } from "./runtime/session-runner.js";
 import type { TaskEnvelope } from "./types.js";
+import { parseCaseContext } from "./runtime/case-context.js";
 
 loadDotEnv();
 loadDotEnv("node2/.env");
@@ -175,6 +176,8 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
           ? false
           : undefined;
 
+  const caseContext = parseCaseContext(message.case_context ?? message.caseContext);
+
   return {
     taskId,
     conversationId,
@@ -195,6 +198,7 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
         : typeof message.parentTaskId === "string"
           ? message.parentTaskId
           : undefined,
+    caseContext,
   };
 }
 

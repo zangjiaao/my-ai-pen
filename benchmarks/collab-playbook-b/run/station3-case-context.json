@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "conversation_id": "collab-playbook-b",
+  "note": "Same case work-group. Read thread + findings before acting.",
+  "thread": [
+    {
+      "speaker": "user",
+      "kind": "text",
+      "text": "Authorized redteam_deep lab. Dump source after RCE and pull code-audit.",
+      "ts": "t0"
+    },
+    {
+      "speaker": "pentest",
+      "kind": "text",
+      "text": "RCE confirmed (sim). Source at /mnt/d/Coding/my-ai-pen/benchmarks/collab-playbook-b/source_dump/. Requesting code-audit.",
+      "ts": "t1"
+    },
+    {
+      "speaker": "user",
+      "kind": "text",
+      "text": "@code-audit static review of dumped source; hand back for dynamic verify.",
+      "ts": "t2"
+    },
+    {
+      "speaker": "code-audit",
+      "kind": "text",
+      "text": "Static review complete. Booked 3 findings (SQLi/IDOR/SSRF). HANDOFF_TO_PENTEST.md written in prior task dir. Please pentest verify dynamically when live target available; no other host scanning.",
+      "ts": "t3"
+    },
+    {
+      "speaker": "code-audit",
+      "kind": "text",
+      "text": "HANDOFF excerpt: # HANDOFF_TO_PENTEST — Static Code Audit Results **From:** code-audit (static review) **To:** application security (pentest) **Case:** collab-playbook-b · station 2 **Date:** 2026-07-16 --- ## Summary Static review of the `source_dump/` fixture tree identified **3 confirmed vulnerable sinks**. All require **runtime verification** on the lab host to confirm exploitability and impact. No additional command injection sinks beyond the previously known RCE (id=sim-rce-1) were found in the dumped source. --- ## Finding 1: SQL Injection — `search.py` (CRITICAL) | Attribute | Value | |-----------|-------| | **CWE** | 89 | | **Location** | `source_dump/src/api/search.py:6-7` | | **Data flow** | `requ",
+      "ts": "t4"
+    }
+  ],
+  "findings_summary": [
+    {
+      "id": "f_1784143872417_9fdfcb",
+      "title": "IDOR in orders API — no ownership check on order_id (CWE-639)",
+      "severity": "high",
+      "status": "confirmed",
+      "location": "source_dump/src/api/orders.py:4-5"
+    },
+    {
+      "id": "f_1784143872417_caf15e",
+      "title": "SSRF in fetch API — user-supplied URL reaches outbound HTTP (CWE-918)",
+      "severity": "high",
+      "status": "confirmed",
+      "location": "source_dump/src/net/fetch.py:3-4"
+    },
+    {
+      "id": "f_1784143876836_ae10c7",
+      "title": "SQL Injection in search API via unsanitized q parameter (CWE-89)",
+      "severity": "critical",
+      "status": "confirmed",
+      "location": "source_dump/src/api/search.py:6-7"
+    }
+  ],
+  "artifact_hints": [
+    "/mnt/d/Coding/my-ai-pen/benchmarks/collab-playbook-b/source_dump/",
+    "/mnt/d/Coding/my-ai-pen/benchmarks/collab-playbook-b/run/station2-ws-v2/collab-b-s2-v2/HANDOFF_TO_PENTEST.md"
+  ]
+}

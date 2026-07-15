@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "conversation_id": "collab-playbook-b",
+  "note": "Same case work-group thread. Read before acting.",
+  "thread": [
+    {
+      "speaker": "user",
+      "kind": "text",
+      "text": "Authorized redteam_deep lab. Assess the app; if you get RCE, dump source and pull in code-audit.",
+      "ts": "2026-07-16T00:00:00Z"
+    },
+    {
+      "speaker": "pentest",
+      "kind": "text",
+      "text": "RCE confirmed on lab (simulated). Application source tree mirrored to /mnt/d/Coding/my-ai-pen/benchmarks/collab-playbook-b/source_dump/. Please have code-audit review authz, injection, and SSRF sinks. See HANDOFF details in group notes.",
+      "ts": "2026-07-16T00:05:00Z"
+    },
+    {
+      "speaker": "finding",
+      "kind": "vuln_found",
+      "text": "[finding confirmed] critical Command injection RCE @ lab upload/exec",
+      "ts": "2026-07-16T00:05:10Z"
+    },
+    {
+      "speaker": "user",
+      "kind": "text",
+      "text": "@code-audit join this case: static review of the dumped source only; write HANDOFF_TO_PENTEST for runtime verify; no live attacks.",
+      "ts": "2026-07-16T00:06:00Z"
+    }
+  ],
+  "findings_summary": [
+    {
+      "id": "sim-rce-1",
+      "title": "Command injection RCE (simulated prior)",
+      "severity": "critical",
+      "status": "confirmed",
+      "location": "lab host (prior pentest)"
+    }
+  ],
+  "artifact_hints": [
+    "/mnt/d/Coding/my-ai-pen/benchmarks/collab-playbook-b/source_dump/",
+    "/mnt/d/Coding/my-ai-pen/benchmarks/collab-playbook-b/HANDOFF_FROM_PENTEST.md"
+  ]
+}

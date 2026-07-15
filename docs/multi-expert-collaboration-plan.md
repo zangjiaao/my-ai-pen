@@ -187,6 +187,8 @@ Example stations (template-selected, not Agent tool gates):
 
 **Station transitions:** platform UI + explicit handoff; **never** NLP auto-advance.
 
+**Work-group context (P0 shipped):** every `task_assign` attaches `case_context` (trimmed conversation **thread** + **findings_summary** + optional path hints) so the joining expert reads the same case like a group chat—not a blank new memory. Large files stay on disk; tool stdout is not fully inlined.
+
 ### 6.3 Handoff (结构化交接)
 
 ```text

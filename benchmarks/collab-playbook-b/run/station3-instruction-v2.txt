@@ -1,0 +1,8 @@
+【协作剧本B · 站3 pentest · 工作群上下文已注入】
+
+你已回到同一 Case 工作群（见 Case work-group context 中的 thread 与 findings）。
+请消费 code-audit 的静态结论与 HANDOFF 要点：
+1) 对清单中每条给出动态验证计划
+2) 无可达 live 目标时：blocked_no_target / needs_runtime，不要扫外网或其他本机服务（禁止 DVWA/Juice 等范围外目标）
+3) 不要从零全站 recon
+4) 写 VERIFY_SUMMARY.md：候选 | 位置 | confirm/refute/blocked | 证据或计划

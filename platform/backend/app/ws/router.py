@@ -2489,6 +2489,42 @@ async def _merge_case_roe_into_task_assign(conv_id: str | None, task_msg: dict) 
     return out
 
 
+async def _attach_case_context_to_task_assign(conv_id: str | None, task_msg: dict) -> dict:
+    """Attach work-group thread + findings so experts join the same case chat.
+
+    Does not invent engagement. Skips if case_context already present.
+    """
+    if not conv_id:
+        return task_msg
+    out = dict(task_msg)
+    if isinstance(out.get("case_context"), dict) and (
+        out["case_context"].get("thread") is not None
+        or out["case_context"].get("findings_summary") is not None
+    ):
+        return out
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+        from app.services.case_context import load_case_context_for_conversation
+
+        async with async_session() as db:
+            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(str(conv_id))))
+            c = r.scalar_one_or_none()
+            if not c:
+                return out
+            user_id = getattr(c, "user_id", None)
+            ctx = await load_case_context_for_conversation(
+                db,
+                c.id,
+                user_id=user_id,
+            )
+            # Always attach (even empty first turn) so Node knows the field exists
+            out["case_context"] = ctx
+    except Exception as e:
+        print(f"[WS] attach case_context error: {e}")
+    return out
+
+
 async def _worker_limits_for_node(node_id: str | None) -> dict:
     """Attach node-configured runtime budgets (worker + main + schedule) to task_assign."""
     if not node_id:
@@ -2979,6 +3015,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             )
                             task_msg = _task_assign_from_user_message(conv_id, msg, str(uuid.uuid4()))
                             task_msg = await _merge_case_roe_into_task_assign(conv_id, task_msg)
+                            task_msg = await _attach_case_context_to_task_assign(conv_id, task_msg)
                             task_target = task_msg["target"]
                             task_scope = task_msg["scope"]
                             task_instruction = task_msg["initial_instruction"]

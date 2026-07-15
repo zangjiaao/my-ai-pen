@@ -1,0 +1,8 @@
+【协作剧本B · 站2 code-audit · 工作群上下文已注入】
+
+你已加入同一 Case 工作群（见 Case work-group context）。请根据群消息继续：
+- 只做静态代码安全评估，不要端口扫描或打 live 主机
+- 源码与交接路径见群 artifact hints / thread
+- skill：code-repo-recon → focus/validate 按需
+- 写出 HANDOFF_TO_PENTEST.md（本任务工作区）并 book 有证据的静态 finding
+- 结束后在结论中明确建议交回 pentest 做动态验证

@@ -1,4 +1,6 @@
 # Large / ephemeral agent workspaces from local runs
 run/station2-ws/
+run/station2-ws-v2/
 run/station3-ws/
+run/station3-ws-v2/
 run/logs/
