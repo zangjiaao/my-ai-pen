@@ -26,6 +26,12 @@
 
 平台代为分发（用户未 @）时：按 capability→pack 自动选择已启用 Expert 实例，再落到其 Node；若无实例，仍写入 structured `engagement`（避免 Node4 bare `runtime`）。
 
+### Case (v1)
+
+- **1 conversation (session) = 1 Case.** Scope, RoE, engagement template, soft stations, and shared findings/evidence are conversation-scoped.
+- Multiple Node **tasks** and multiple **@Experts** may run inside that same conversation; not multiple chat sessions per case in v1.
+- Full roadmap (expert families, skills, phases): [`multi-expert-collaboration-plan.md`](multi-expert-collaboration-plan.md).
+
 ## Dispatch gate
 
 Before `task_assign` is sent to a worker, the platform checks that the engagement resolves to a pack id in the node’s effective offers. If not, dispatch fails with a clear error (install the pack on the node first).

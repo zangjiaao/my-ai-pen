@@ -150,18 +150,25 @@ CTF / consult: keep separate; do not dump red-team post-ex into CTF.
 
 ### 6.1 Case (案件)
 
-Minimal fields (design target):
+**v1 decision (locked): 1 Conversation (session) = 1 Case.**
+
+- No separate multi-session Case graph for now.
+- Platform **conversation** is the Case: scope, RoE, engagement template, stations, participants, and artifacts all hang on that conversation (or on fields stored as Case-shaped metadata on the conversation row).
+- One Case still allows **many Node tasks** (multiple `task_assign` bursts, steers, expert switches via `@` in the **same** chat).
+- Multi-thread / multi-conversation per Case is **out of scope for v1**; revisit only if product needs isolated audiences or archival splits.
+
+Minimal fields (design target — may live on `conversations` or a 1:1 `cases` row):
 
 | Field | Role |
 |-------|------|
-| `case_id` / conversation linkage | Shared home for artifacts |
+| Case identity | **v1:** `conversation_id` is the case id (or 1:1 `case_id` = conversation) |
 | `scope` / RoE | Assets, bans (e.g. no post-ex) |
 | `engagement_template` | `app_assessment` \| `redteam_deep` \| `ai_app` \| `purple_team` \| … |
 | `stations[]` | Soft workflow UI state |
 | `participants` | Expert instances involved |
-| Artifacts | surface, intel, candidates, findings, alerts, code notes |
+| Artifacts | surface, intel, candidates, findings, alerts, code notes (already often keyed by `conversation_id`) |
 
-v1 may **evolve conversation** into Case-shaped metadata rather than a greenfield product if cheaper — behavior matters more than table name.
+Prefer evolving **conversation** with Case-shaped fields over a heavy greenfield Case product in Phase 3 MVP.
 
 ### 6.2 Stations (工位) — soft pipeline
 
@@ -244,13 +251,14 @@ Do **not**: implement kill-chain state machine as default continue policy.
 
 **Exit:** Agent can load methodology for surface → exploit → (optional) post-ex without new Experts.
 
-### Phase 3 — Case collaboration MVP
+### Phase 3 — Case collaboration MVP (= one conversation)
 
-- [ ] Case-linked artifacts (or conversation-level artifact index)  
+- [ ] Treat each conversation as one Case; Case fields on conversation (or 1:1 row)  
+- [ ] Artifacts remain conversation-scoped (shared across experts in that chat)  
 - [ ] Structured handoff suggestion + UI one-click @  
-- [ ] Soft stations on Case UI (display + suggest only)  
+- [ ] Soft stations on Case/conversation UI (display + suggest only)  
 
-**Exit:** Two Experts can work same Case with shared findings/evidence; handoff is explicit.
+**Exit:** Two Experts in the **same session/case** share findings/evidence; handoff is explicit. No multi-session Case.
 
 ### Phase 4 — New packs (order by product need)
 
@@ -341,6 +349,19 @@ When implementing:
 
 ---
 
-## 13. Suggested goal prompt (for later implementation)
+## 13. Suggested goal prompts (implementation)
 
-> Implement `docs/multi-expert-collaboration-plan.md` Phase 1 then Phase 2: engagement templates + RoE envelope into Node4 prompts; expand `experts/pentest` skills for surface-enum, authz-logic, gated postex/lateral; update living docs. Do not add a default kill-chain state machine. Do not add stage-named Experts.
+**Goal 1 (recommended first) — Phase 1 + Phase 2 spine:**
+
+> Implement `docs/multi-expert-collaboration-plan.md` Phase 1 then Phase 2.  
+> Case model: **1 conversation = 1 case** (no multi-session case).  
+> Deliver: engagement templates (`app_assessment` / `redteam_deep`) + RoE flags in task envelope into Node4 prompts; expand `experts/pentest` skills (surface-enum, authz-logic, engagement-gated postex/lateral); update living docs (`node-expert-offers.md`, `experts/README.md`, this plan checkboxes).  
+> Do not add a default kill-chain state machine. Do not add stage-named Experts. Do not invent engagement via NLP.
+
+**Goal 2 — Phase 3 collaboration MVP:**
+
+> Implement Phase 3 on top of 1 conversation = 1 case: Case-shaped conversation fields, handoff suggest + one-click @, soft stations UI. Shared artifacts stay conversation-scoped.
+
+**Goal 3 — Phase 4 packs (when product priority allows):**
+
+> Scaffold packs `llm-security`, `code-audit`, and optionally `alert-triage` under `experts/` per this plan; catalog + install; no stage Experts.
