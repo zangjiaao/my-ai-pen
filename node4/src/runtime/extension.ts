@@ -2,6 +2,11 @@ import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-a
 import type { RolePack } from "../roles/index.js";
 import type { ToolRuntime } from "../types.js";
 import { createNode4Tools } from "../tools/index.js";
+import {
+  createMidRunTodoTracker,
+  noteToolForMidRunTodoNudge,
+  resetMidRunTodoCycle,
+} from "./todo-harness.js";
 
 export type SegmentCounter = { tools: number };
 
@@ -13,6 +18,11 @@ export function createNode4Extension(
   return (pi: ExtensionAPI) => {
     for (const tool of createNode4Tools(runtime, pack)) {
       pi.registerTool(tool);
+    }
+
+    // OMP mid-run todo tracker: lives on lifecycle so continue cycles can reset it.
+    if (!runtime.lifecycle.midRunTodo) {
+      runtime.lifecycle.midRunTodo = createMidRunTodoTracker();
     }
 
     pi.on("tool_call", async (event) => {
@@ -47,6 +57,31 @@ export function createNode4Extension(
         summary: text.slice(0, 500),
         result_text: text,
       });
+
+      // OMP #3651: after enough act tools without todo, gently ask to mark finished categories.
+      const tracker = runtime.lifecycle.midRunTodo;
+      if (tracker) {
+        const nudge = noteToolForMidRunTodoNudge(tracker, event.toolName, {
+          openTodoCount: runtime.todo.openCount(),
+          isError: Boolean(event.isError),
+        });
+        if (nudge) {
+          try {
+            pi.sendMessage(
+              {
+                customType: "mid-run-todo-nudge",
+                content: nudge,
+                display: false,
+              },
+              { deliverAs: "nextTurn" },
+            );
+          } catch {
+            // Older pi / non-interactive: skip injection; continue-path still has midRunTodoNudge.
+          }
+        }
+      }
     });
   };
 }
+
+export { resetMidRunTodoCycle };

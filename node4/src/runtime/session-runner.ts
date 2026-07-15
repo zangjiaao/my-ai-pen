@@ -29,7 +29,7 @@ import { buildSystemPrompt } from "./prompt.js";
 import { writePostRunInspectArtifacts } from "./session-inspect.js";
 import { eagerBookingInjection } from "./booking-harness.js";
 import { SubagentHost } from "./subagent.js";
-import { eagerTodoInjection } from "./todo-harness.js";
+import { eagerTodoInjection, resetMidRunTodoCycle, createMidRunTodoTracker } from "./todo-harness.js";
 import { buildGoalContinuationPrompt } from "../stores/goal.js";
 import { PanelAgentTracker } from "./panel-agents.js";
 import {
@@ -102,7 +102,11 @@ export async function runNode4Task(
     rolePackId: pack.id,
     skills,
     skillIds: pack.skillIds?.length ? pack.skillIds : undefined,
-    lifecycle: { toolsInLastSegment: 0, panelAgents: panel },
+    lifecycle: {
+      toolsInLastSegment: 0,
+      panelAgents: panel,
+      midRunTodo: createMidRunTodoTracker(),
+    },
   };
   runtime.subagents = new SubagentHost({
     task,
@@ -309,6 +313,7 @@ export async function runNode4Task(
 
   segmentCounter.tools = 0;
   runtime.lifecycle.toolsInLastSegment = 0;
+  if (runtime.lifecycle.midRunTodo) resetMidRunTodoCycle(runtime.lifecycle.midRunTodo);
 
   if (!cancelled()) {
     try {
@@ -376,6 +381,8 @@ export async function runNode4Task(
     continueCount = decision.nextContinueCount;
     segmentCounter.tools = 0;
     runtime.lifecycle.toolsInLastSegment = 0;
+    // New outer cycle: OMP mid-run todo budget resets (mutations + nudge cap).
+    if (runtime.lifecycle.midRunTodo) resetMidRunTodoCycle(runtime.lifecycle.midRunTodo);
 
     const todoErrors = runtime.lifecycle.pendingTodoErrorReminder?.slice();
     runtime.lifecycle.pendingTodoErrorReminder = undefined;
@@ -383,6 +390,9 @@ export async function runNode4Task(
     const modeGoal = goals.getMode();
     const goalContinuationBody =
       decision.kind === "goal" && modeGoal ? buildGoalContinuationPrompt(modeGoal) : undefined;
+    const openTodoTitles = runtime.todo
+      .snapshot()
+      .flatMap((p) => p.tasks.filter((t) => t.status === "pending" || t.status === "in_progress").map((t) => t.content));
 
     await loggingPlatform.send({
       type: "status_update",
@@ -411,6 +421,7 @@ export async function runNode4Task(
           attempt: continueCount,
           max: maxContinues,
           openTodoCount: runtime.todo.openCount(),
+          openTodoTitles,
           todoErrors,
           booking: bookingSnap,
           goalSummary: goalSnap,

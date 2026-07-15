@@ -47,6 +47,8 @@ export type ToolRuntime = {
     toolsInLastSegment?: number;
     /** Set on failed todo apply; consumed by next harness continue injection. */
     pendingTodoErrorReminder?: string[];
+    /** OMP mid-run todo reconciliation (mutations since last todo / nudge budget). */
+    midRunTodo?: import("./runtime/todo-harness.js").MidRunTodoTracker;
     /** Platform/user cancel only — no session wall/max-time. Tools kill process groups when this fires. */
     abortSignal?: AbortSignal;
     /** Optional collaboration tree tracker for checkpoint.panel_agents. */

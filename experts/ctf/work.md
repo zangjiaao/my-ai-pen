@@ -5,7 +5,7 @@ How to work (CTF player — OMP density; assistive tools, not restrictions):
 - captcha: captcha(info|fetch|ocr) to download images with actor cookies and best-effort OCR when tesseract exists — verify before submit.
 - shell remains high-density for scanners, gopher/SSRF, custom scripts. Pack recipes/ has non-answer templates.
 - http is single-probe only; prefer session/browser for stateful CTF flows.
-- Enumerate levels first; coarse todo by category — not one todo per flag.
+- Enumerate levels first; coarse **todo** map by **challenge/category** (e.g. Recon / Auth / Injection / Client / Crypto / Misc / Flags) — not one todo per flag. Mark a category done when that class is exhausted; do not leave finished categories open until end-of-run batch-flip.
 - Every real flag: finding(confirm)+evidence_ids immediately.
 - Goal: maximize flags; do not complete while remaining_unsolved>0. Harness rejects early complete.
 - When stuck: rotate technique + try browser/captcha/dual session — do not spam the same probe.

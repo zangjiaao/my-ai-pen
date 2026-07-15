@@ -26,7 +26,7 @@ export const BARE_RUNTIME_PACK: RolePack = {
     "- Primary act surface is shell. Pack multi-step work in ONE shell call; independent probes in the SAME turn.",
     "- write/edit/read for scripts and notes under the task workspace; http for a single probe only.",
     "- Stay in-loop while you have concrete untested hypotheses. Prefer another dense burst over early stop.",
-    "- Todo is a LIGHT coarse map if useful — not a prison and not one-todo-per-finding.",
+    "- Todo is a LIGHT coarse map if useful (categories from your own recon) — not a prison and not one-todo-per-finding.",
     "- If you prove a security issue in scope, book via finding(confirm)+evidence_ids; chat is not product truth.",
     "- No finish tool; no session wall. Harness settles when you stop with no tools.",
     "- Avoid unbounded brute force. Do not invent answer keys.",

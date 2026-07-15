@@ -18,10 +18,14 @@ import {
 import { inspectArtifactChecklist, writePostRunInspectArtifacts } from "./runtime/session-inspect.js";
 import { SubagentHost } from "./runtime/subagent.js";
 import {
+  createMidRunTodoTracker,
   eagerTodoInjection,
+  incompleteTodoStopReminder,
   midRunTodoNudge,
+  noteToolForMidRunTodoNudge,
   todoErrorReminder,
   TODO_TOOL_DESCRIPTION,
+  MID_RUN_TODO_NUDGE_MUTATION_THRESHOLD,
 } from "./runtime/todo-harness.js";
 import {
   CONSULT_STUB_ROLE_PACK,
@@ -660,13 +664,29 @@ async function main() {
   const pure = applyTodoOp([], { op: "init", items: ["Probe", "Book", "Expand"] });
   assert(pure.phases[0]!.tasks[0]!.status === "in_progress", "todo auto start");
   assert(formatTodoSummary(pure.phases).includes("Remaining items"), "todo summary");
-  // Light-touch todo policy (OMP Juice-style)
-  assert(eagerTodoInjection({ forced: true }).includes("coarse"), "eager todo coarse map");
-  assert(eagerTodoInjection({ forced: true }).includes("NOT") || eagerTodoInjection({ forced: true }).includes("not a micro"), "eager discourages micro checklist");
+  // OMP-aligned todo policy (eager + mid-run reconcile + incomplete stop)
+  assert(eagerTodoInjection({ forced: true }).includes("MUST call todo"), "eager forces init");
+  assert(eagerTodoInjection({ forced: true }).includes("coarse") || eagerTodoInjection({ forced: true }).includes("categor"), "eager coarse map");
+  assert(eagerTodoInjection({ forced: true }).includes("SAME turn") || eagerTodoInjection({ forced: true }).includes("same turn"), "eager same-turn act");
+  // Role-specific phase lists belong in expert packs — not harness.
+  assert(!eagerTodoInjection({ forced: true }).includes("SQL injection class"), "eager has no pentest sample tasks");
+  assert(!TODO_TOOL_DESCRIPTION.includes("Recon, Auth, Injection"), "tool desc has no OWASP phase list");
   assert(midRunTodoNudge(0) === "", "no mid-run todo when none open");
-  assert(midRunTodoNudge(2).includes("open") || midRunTodoNudge(2).includes("shell"), "mid-run nudge when open work remains");
-  assert(midRunTodoNudge(4).includes("category") || midRunTodoNudge(4).includes("coarse"), "mid-run soft when many open");
-  assert(TODO_TOOL_DESCRIPTION.includes("sparingly") || TODO_TOOL_DESCRIPTION.includes("Light"), "tool desc light-touch");
+  assert(midRunTodoNudge(2).includes("still open"), "mid-run nudge when open work remains");
+  assert(midRunTodoNudge(2).includes("mark it done") || midRunTodoNudge(2).includes("finished"), "mid-run asks to reconcile finished work");
+  assert(TODO_TOOL_DESCRIPTION.includes("immediately") || TODO_TOOL_DESCRIPTION.includes("when finished") || TODO_TOOL_DESCRIPTION.includes("after finishing"), "tool desc mark done promptly");
+  assert(incompleteTodoStopReminder(2, ["A", "B"]).includes("incomplete"), "stop reminder lists incompletes");
+  // Mid-run mutation threshold (OMP #3651)
+  const midTrack = createMidRunTodoTracker();
+  let fired = "";
+  for (let i = 0; i < MID_RUN_TODO_NUDGE_MUTATION_THRESHOLD - 1; i++) {
+    fired = noteToolForMidRunTodoNudge(midTrack, "shell", { openTodoCount: 3 });
+    assert(fired === "", `no nudge before threshold at ${i + 1}`);
+  }
+  fired = noteToolForMidRunTodoNudge(midTrack, "shell", { openTodoCount: 3 });
+  assert(fired.includes("still open"), "nudge fires at mutation threshold");
+  assert(noteToolForMidRunTodoNudge(midTrack, "todo", { openTodoCount: 3 }) === "", "todo touch resets without nudge");
+  assert(noteToolForMidRunTodoNudge(midTrack, "skill", { openTodoCount: 3 }) === "", "non-act tools ignored");
 
   const taskId = "align-task";
   const taskDir = join(root, taskId);

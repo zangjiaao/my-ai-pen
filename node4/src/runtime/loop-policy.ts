@@ -8,7 +8,7 @@
  */
 
 import { midRunBookingNudge, type BookingSnapshot } from "./booking-harness.js";
-import { midRunTodoNudge, todoErrorReminder } from "./todo-harness.js";
+import { incompleteTodoStopReminder, midRunTodoNudge, todoErrorReminder } from "./todo-harness.js";
 
 export type ContinueDecision = {
   continue: boolean;
@@ -231,7 +231,7 @@ export function prematureStopContinuePrompt(attempt: number, max: number): strin
     `Do another high-density SHELL burst (not a stream of single http calls): multi-step pipelines, cookie jars, python parse, parallel independent shell calls in the same turn.`,
     `Rotate unexplored categories from YOUR own recon (auth, injection, access control, files, XSS, misconfig, business logic). Do not invent target answer keys.`,
     `Do not stop solely because remaining work "might need SPA" — try API/static JS first; drive headless browser via shell only if available.`,
-    `Keep coarse todo categories open until approaches in that category are exhausted. Book proven issues with finding(confirm)+evidence_ids.`,
+    `If a todo category is finished, mark it done now (do not leave open work stale). Book proven issues with finding(confirm)+evidence_ids.`,
     `If truly stuck after this shell push, stop with no tools. There is no finish tool.`,
     `</system-injection>`,
   ].join("\n");
@@ -242,6 +242,8 @@ export function composeContinuePrompt(options: {
   attempt: number;
   max: number;
   openTodoCount: number;
+  /** Optional open task titles for OMP incomplete-stop reminder. */
+  openTodoTitles?: string[];
   todoErrors?: string[];
   booking?: BookingSnapshot;
   goalSummary?: string;
@@ -267,8 +269,21 @@ export function composeContinuePrompt(options: {
   if (options.todoErrors?.length) {
     parts.push(todoErrorReminder(options.todoErrors));
   }
+  // OMP: empty/premature stops with open todos get an incomplete-list reminder;
+  // other continues keep the gentle mid-run reconcile nudge.
   if (options.openTodoCount > 0) {
-    parts.push(midRunTodoNudge(options.openTodoCount));
+    if (options.kind === "empty" || options.kind === "premature") {
+      parts.push(
+        incompleteTodoStopReminder(
+          options.openTodoCount,
+          options.openTodoTitles || [],
+          options.attempt,
+          options.max,
+        ),
+      );
+    } else {
+      parts.push(midRunTodoNudge(options.openTodoCount));
+    }
   }
   if (options.booking) {
     const bookingNudge = midRunBookingNudge(options.booking);

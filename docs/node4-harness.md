@@ -113,11 +113,24 @@ Loader: `node4/src/experts/`. CTF notes: `docs/node4-ctf-role.md`.
 
 ---
 
-## 7. Todo session glue
+## 7. Todo session glue (OMP-aligned)
 
-Light coarse map — **one** init with category phases, occasional `done` when a category is exhausted. **Not** one-todo-per-finding. Prefer shell density over bookkeeping.
+State machine (`stores/todo.ts`) matches OMP ops: content-keyed tasks, single `in_progress`, auto-promote earliest open on `done`.
 
-Open todos **never** block booking or harness settlement.
+| Layer | Owns |
+|-------|------|
+| **node4 harness** (`todo-harness.ts`) | Mechanics: eager init once, mark done when finished, mid-run reconcile (~12 act tools), stop incomplete reminder, settlement non-blocking |
+| **Expert pack** (`experts/*/work.md`) | **Which categories** to map (pentest attack classes vs CTF challenge groups vs bare judgment) |
+
+| Glue | Behavior |
+|------|----------|
+| Eager init | First turn: force phased `todo(init)` then act in the same turn (role-agnostic) |
+| Tool prompt | OMP ops + live map hygiene; **no** hardcoded OWASP/CTF phase lists |
+| Mid-run nudge | After ~12 act tools without `todo`, inject gentle reconcile (OMP #3651) |
+| Stop reminder | Empty/premature continue with open items lists incomplete todos |
+| Settlement | Open todos **never** block booking or harness settlement |
+
+Prefer act density over todo thrash, but **do not** leave finished categories open until end-of-run batch-flip.
 
 ---
 
