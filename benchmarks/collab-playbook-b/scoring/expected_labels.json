@@ -1,0 +1,24 @@
+[
+  {
+    "label": "SQL injection in widget search",
+    "cwe": "CWE-89",
+    "file": "src/api/search.py",
+    "severity": "High",
+    "note": "SCORING ONLY — never inject into agent prompts"
+  },
+  {
+    "label": "IDOR / missing ownership on order lookup",
+    "cwe": "CWE-639",
+    "aliases": ["CWE-862", "CWE-285"],
+    "file": "src/api/orders.py",
+    "severity": "High",
+    "note": "SCORING ONLY — never inject into agent prompts"
+  },
+  {
+    "label": "SSRF in outbound fetch",
+    "cwe": "CWE-918",
+    "file": "src/net/fetch.py",
+    "severity": "High",
+    "note": "SCORING ONLY — never inject into agent prompts"
+  }
+]
