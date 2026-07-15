@@ -2,6 +2,9 @@
 
 Independent **expert pack** units maintained outside the Node harness.
 
+**Roadmap / collaboration model:** [`docs/multi-expert-collaboration-plan.md`](../docs/multi-expert-collaboration-plan.md)  
+(Experts = target families; stages = skills; pipeline = Case + handoff — not stage-named Experts.)
+
 | Path | Role |
 |------|------|
 | `experts/<id>/pack.json` | Identity, tools, skills, aliases, booking mode |

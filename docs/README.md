@@ -10,6 +10,7 @@
 | [`design.md`](design.md) | UI design system |
 | [`node4-ctf-role.md`](node4-ctf-role.md) | CTF role pack operator notes |
 | [`node-expert-offers.md`](node-expert-offers.md) | Node packs + product Expert instances (@mention routing) |
+| [`multi-expert-collaboration-plan.md`](multi-expert-collaboration-plan.md) | **Plan:** expert families, Case/handoff, engagements (app vs red-team deep), skills roadmap, gap coverage |
 | [`phase-milestones.md`](phase-milestones.md) | Phase A–D gates: expert pack, report, dashboard, schedules |
 | [`../experts/README.md`](../experts/README.md) | Expert pack catalog (source of pack content) |
 
