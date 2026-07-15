@@ -30,7 +30,7 @@
     {
       "id": "alert-triage",
       "label": "Alert triage",
-      "aliases": ["soc", "alert", "detection"]
+      "aliases": ["soc", "alert", "detection", "purple"]
     }
   ]
 }

@@ -17,10 +17,18 @@
     "skill"
   ],
   "skillIds": [
+    "llm-threat-model-roe",
     "llm-prompt-injection",
+    "llm-indirect-rag-injection",
     "llm-multi-turn-jailbreak",
-    "llm-agent-tool-abuse"
+    "llm-encoding-obfuscation",
+    "llm-data-leakage",
+    "llm-mcp-tool-poisoning",
+    "llm-agent-tool-abuse",
+    "llm-goal-hijack-memory",
+    "llm-purple-handoff"
   ],
+  "recipeDir": "recipes",
   "bookingMode": "finding",
   "settlementNote": "Book only issues proven with transcript/tool-call evidence. Chat prose is not product truth. No finish tool; harness settles."
 }

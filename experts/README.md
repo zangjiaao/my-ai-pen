@@ -12,6 +12,7 @@ Independent **expert pack** units maintained outside the Node harness.
 | `experts/<id>/work.md` | How-to-work lines |
 | `experts/<id>/skills/` | Pack-scoped methodology skills |
 | `experts/<id>/recipes/` | Optional non-answer templates |
+| `experts/RESEARCH-SOURCES.md` | Which `research/` trees inform pack methodology (adapted, not vendored) |
 | `catalog.json` | Machine-readable list of pack ids + aliases (platform + Node) |
 
 ## Node as runtime
@@ -46,6 +47,6 @@ Remote marketplace / network hot-load is out of scope.
 | `pentest` | Application security (Web/API); templates app_assessment / redteam_deep |
 | `ctf` | CTF web player |
 | `consult` | Consult stub (no finding booking) |
-| `llm-security` | Model and Agent security |
-| `code-audit` | Source code assessment |
-| `alert-triage` | Alert / detection triage (blue-purple) |
+| `llm-security` | Model and Agent security (Guide + DeepTeam methodology skills) |
+| `code-audit` | Source code assessment (Argo-style validate / partition) |
+| `alert-triage` | Alert / detection triage + purple replay (Guide) |

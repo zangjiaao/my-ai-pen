@@ -16,8 +16,10 @@
   ],
   "skillIds": [
     "code-repo-recon",
+    "code-partition-focus",
     "code-focus-review",
-    "code-candidate-validate"
+    "code-candidate-validate",
+    "code-runtime-handoff"
   ],
   "bookingMode": "finding",
   "settlementNote": "Book code issues with file location and proof excerpts. Suggest runtime verify handoff to application security when needed. No finish tool."

@@ -266,6 +266,7 @@ Do **not**: implement kill-chain state machine as default continue policy.
 2. [x] `code-audit` scaffold (static focus; optional validate skill)  
 3. [x] `alert-triage` scaffold (purple with red findings)  
 4. [ ] Optional `threat-intel` only if intel-only product SKU exists  
+5. [x] Research enrichment wave: methodology skills adapted from `research/AI-Red-Teaming-Guide`, `research/deepteam`, `research/argo` (see `experts/RESEARCH-SOURCES.md`) — not vendored runtimes  
 
 **Exit:** Installable packs + Expert instances; not required for Scenario A/B spine.
 
@@ -273,7 +274,7 @@ Do **not**: implement kill-chain state machine as default continue policy.
 
 - [ ] Batch/parallel subagent for large separable surfaces  
 - [ ] Optional validate expert/subagent on candidates only  
-- [ ] Purple template: exploit → alert-triage  
+- [x] Purple skills: exploit → `pentest-purple-handoff` / `llm-purple-handoff` → `alert-triage` (detection gap + purple replay)  
 
 **Exit:** Large targets can fan-out; quality path optional; small DVWA-class stays single-agent dense.
 

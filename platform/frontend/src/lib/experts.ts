@@ -55,6 +55,14 @@ const SKILL_META: Record<string, { label: string; description: string }> = {
     label: "Web 侦察",
     description: "端点、参数、技术栈与登录态摸底，再进入漏洞探测。",
   },
+  "pentest-surface-enum": {
+    label: "攻击面枚举",
+    description: "端口、证书、域名与可触达服务梳理（授权范围内）。",
+  },
+  "pentest-external-intel": {
+    label: "外部情报",
+    description: "授权范围内的外部信息辅助面发现（非目标答案库）。",
+  },
   "pentest-auth-session": {
     label: "认证与会话",
     description: "登录、Cookie/会话捕获、多身份切换与已认证请求回放。",
@@ -71,9 +79,33 @@ const SKILL_META: Record<string, { label: string; description: string }> = {
     label: "访问控制 / IDOR",
     description: "水平/垂直越权、对象级授权；需双身份对照验证。",
   },
+  "pentest-authz-logic": {
+    label: "授权与业务逻辑",
+    description: "角色边界、流程绕过与业务逻辑滥用（评估模式重点）。",
+  },
   "pentest-file-upload": {
     label: "文件上传",
     description: "上传入口的类型限制、落盘路径与可执行性验证。",
+  },
+  "pentest-component-rce": {
+    label: "组件与 RCE 模式",
+    description: "已知组件利用模式的假设驱动验证（证据优先，无 CVE 答案表）。",
+  },
+  "pentest-service-exposure": {
+    label: "服务暴露",
+    description: "管理面、调试口与未授权服务暴露验证。",
+  },
+  "pentest-postex-host": {
+    label: "后渗透（主机）",
+    description: "仅 redteam_deep / allow_postex 时：主机立足点与证据。",
+  },
+  "pentest-lateral": {
+    label: "横向移动",
+    description: "仅授权深度路径：范围内横向与 hop 证据。",
+  },
+  "pentest-purple-handoff": {
+    label: "紫队交接",
+    description: "将已证明 finding 打包给检测/告警研判（红蓝协作）。",
   },
   "pentest-stuck-rotation": {
     label: "卡点轮换",
@@ -90,6 +122,86 @@ const SKILL_META: Record<string, { label: string; description: string }> = {
   "ctf-stuck-rotation": {
     label: "CTF 卡点轮换",
     description: "无 flag 进展时切换路径与技巧，继续覆盖未解题。",
+  },
+  "llm-threat-model-roe": {
+    label: "威胁建模与 RoE",
+    description: "AI 系统范围、资产与滥用路径规划（结构化授权）。",
+  },
+  "llm-prompt-injection": {
+    label: "提示注入",
+    description: "直接注入 / 系统指令覆盖类探测。",
+  },
+  "llm-indirect-rag-injection": {
+    label: "间接/RAG 注入",
+    description: "检索文档、网页、邮件等不可信内容驱动的间接注入。",
+  },
+  "llm-multi-turn-jailbreak": {
+    label: "多轮越狱",
+    description: "多轮升级与角色扮演类安全策略绕过。",
+  },
+  "llm-encoding-obfuscation": {
+    label: "编码与混淆",
+    description: "编码、语言切换与混淆绕过探测。",
+  },
+  "llm-data-leakage": {
+    label: "数据泄漏",
+    description: "PII/密钥/跨会话或租户泄漏验证。",
+  },
+  "llm-mcp-tool-poisoning": {
+    label: "MCP/工具投毒",
+    description: "工具 schema、MCP 服务与插件投毒面。",
+  },
+  "llm-agent-tool-abuse": {
+    label: "Agent 工具滥用",
+    description: "工具权限越权、过量自主与危险动作。",
+  },
+  "llm-goal-hijack-memory": {
+    label: "目标劫持/记忆",
+    description: "目标漂移、记忆投毒与跨任务污染。",
+  },
+  "llm-purple-handoff": {
+    label: "紫队交接 (LLM)",
+    description: "将模型/Agent 证明打包给检测研判或应用安全。",
+  },
+  "code-repo-recon": {
+    label: "仓库侦察",
+    description: "原型分类、入口与信任边界摸底。",
+  },
+  "code-partition-focus": {
+    label: "焦点切分",
+    description: "互补审计切片，便于串行或多切片深读。",
+  },
+  "code-focus-review": {
+    label: "焦点深审",
+    description: "单焦点 source→sink 证据链审查。",
+  },
+  "code-candidate-validate": {
+    label: "候选对抗验证",
+    description: "入账前尝试证伪候选（可达性/净化/sink 真实性）。",
+  },
+  "code-runtime-handoff": {
+    label: "运行时交接",
+    description: "静态不足时结构化交给应用安全做动态验证。",
+  },
+  "alert-enrichment": {
+    label: "告警 enrichment",
+    description: "资产、身份、时间线与 Case 证据关联。",
+  },
+  "alert-true-false-positive": {
+    label: "真假阳性",
+    description: "基于证据的 TP/FP/不确定结论。",
+  },
+  "alert-detection-gap": {
+    label: "检测缺口",
+    description: "对照红队 PoC 检查是否产生告警。",
+  },
+  "alert-harm-severity": {
+    label: "危害分级",
+    description: "可利用性、爆炸半径、自主性与可恢复性分级。",
+  },
+  "alert-purple-replay": {
+    label: "紫队回放",
+    description: "检测/缓解后复现 PoC，验证检出与遏制。",
   },
 };
 
@@ -131,6 +243,7 @@ export const EXPERT_PACKS: readonly ExpertPackMeta[] = [
       "pentest-service-exposure",
       "pentest-postex-host",
       "pentest-lateral",
+      "pentest-purple-handoff",
       "pentest-stuck-rotation",
     ],
     toolNames: [
@@ -181,22 +294,45 @@ export const EXPERT_PACKS: readonly ExpertPackMeta[] = [
   {
     id: "llm-security",
     label: "模型安全",
-    description: "LLM / Agent 对抗测试 — 注入、越狱、工具滥用。",
-    skillIds: ["llm-prompt-injection", "llm-multi-turn-jailbreak", "llm-agent-tool-abuse"],
+    description: "LLM / Agent 对抗测试 — 注入、越狱、工具/MCP、紫队交接。",
+    skillIds: [
+      "llm-threat-model-roe",
+      "llm-prompt-injection",
+      "llm-indirect-rag-injection",
+      "llm-multi-turn-jailbreak",
+      "llm-encoding-obfuscation",
+      "llm-data-leakage",
+      "llm-mcp-tool-poisoning",
+      "llm-agent-tool-abuse",
+      "llm-goal-hijack-memory",
+      "llm-purple-handoff",
+    ],
     toolNames: ["todo", "shell", "write", "edit", "read", "http", "session", "script", "finding", "subagent", "goal", "skill"],
   },
   {
     id: "code-audit",
     label: "代码审计",
-    description: "源码安全评估 — 静态焦点与候选验证。",
-    skillIds: ["code-repo-recon", "code-focus-review", "code-candidate-validate"],
+    description: "源码安全评估 — 原型侦察、焦点切分、对抗验证与运行时交接。",
+    skillIds: [
+      "code-repo-recon",
+      "code-partition-focus",
+      "code-focus-review",
+      "code-candidate-validate",
+      "code-runtime-handoff",
+    ],
     toolNames: ["todo", "shell", "write", "edit", "read", "script", "finding", "subagent", "goal", "skill"],
   },
   {
     id: "alert-triage",
     label: "告警研判",
-    description: "告警真假阳性与检测缺口（蓝/紫）。",
-    skillIds: ["alert-enrichment", "alert-true-false-positive", "alert-detection-gap"],
+    description: "告警真假阳性、检测缺口与紫队回放（红蓝协作）。",
+    skillIds: [
+      "alert-enrichment",
+      "alert-true-false-positive",
+      "alert-detection-gap",
+      "alert-harm-severity",
+      "alert-purple-replay",
+    ],
     toolNames: ["todo", "shell", "write", "edit", "read", "http", "script", "finding", "goal", "skill"],
   },
 ] as const;
