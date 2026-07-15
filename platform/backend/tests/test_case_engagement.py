@@ -35,13 +35,28 @@ def test_merge_case_round_trip():
     assert fields["allow_postex"] is False
     assert fields["stations"][0]["id"] == "surface"
 
+    # Template upgrade without allow_postex arg must re-derive (not keep stale False).
     ctx2 = merge_case_into_context(ctx, engagement_template="redteam_deep")
     fields2 = case_fields_from_context(ctx2)
+    assert fields2["engagement_template"] == "redteam_deep"
     assert fields2["allow_postex"] is True
+    assert ctx2["case"]["allow_postex"] is True
+    assert ctx2["task"]["allow_postex"] is True
 
     roe = roe_payload_for_task_assign(ctx2)
     assert roe["engagement_template"] == "redteam_deep"
     assert roe["allow_postex"] is True
+
+
+def test_template_change_does_not_keep_stale_postex_false():
+    """Skeptic regression: prior allow_postex=False must not pin deep template off."""
+    ctx = merge_case_into_context({}, engagement_template="app_assessment")
+    assert case_fields_from_context(ctx)["allow_postex"] is False
+    ctx = merge_case_into_context(ctx, engagement_template="redteam_deep")
+    assert case_fields_from_context(ctx)["allow_postex"] is True
+    # Explicit override still works when provided
+    ctx = merge_case_into_context(ctx, engagement_template="redteam_deep", allow_postex=False)
+    assert case_fields_from_context(ctx)["allow_postex"] is False
 
 
 def test_handoff_structured():

@@ -2986,6 +2986,12 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             task_engagement = str(task_msg.get("engagement") or "").strip() or None
                             task_expert_id = str(msg.get("expert_id") or task_msg.get("expert_id") or "").strip() or None
                             task_expert_name = str(msg.get("expert_name") or task_msg.get("expert_name") or "").strip() or None
+                            task_eng_template = (
+                                str(task_msg.get("engagement_template") or "").strip() or None
+                            )
+                            task_allow_postex = task_msg.get("allow_postex")
+                            if not isinstance(task_allow_postex, bool):
+                                task_allow_postex = None
                             await _remember_conversation_task(
                                 conv_id,
                                 target=task_target,
@@ -2995,6 +3001,9 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                                 engagement=task_engagement,
                                 expert_id=task_expert_id,
                                 expert_name=task_expert_name,
+                                engagement_template=task_eng_template,
+                                allow_postex=task_allow_postex,
+                                accounts=task_msg.get("accounts"),
                             )
                             global _round_robin_counter
                             preferred_node_id = (

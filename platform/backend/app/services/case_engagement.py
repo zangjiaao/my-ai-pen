@@ -105,11 +105,21 @@ def merge_case_into_context(
             task["engagement"] = tmpl  # alias → pentest on normalize_pack_id
             task["role"] = "pentest"
 
-    if allow_postex is not None or tmpl:
+    # allow_postex: explicit arg wins; if only template changes, re-derive from the
+    # *new* template — do not treat a stale case.allow_postex as a user override.
+    if allow_postex is not None:
         resolved = resolve_allow_postex(
             engagement_template=case.get("engagement_template") or tmpl,
             engagement=task.get("engagement"),
-            allow_postex=allow_postex if allow_postex is not None else case.get("allow_postex"),
+            allow_postex=allow_postex,
+        )
+        case["allow_postex"] = resolved
+        task["allow_postex"] = resolved
+    elif tmpl:
+        resolved = resolve_allow_postex(
+            engagement_template=tmpl,
+            engagement=task.get("engagement"),
+            allow_postex=None,
         )
         case["allow_postex"] = resolved
         task["allow_postex"] = resolved
