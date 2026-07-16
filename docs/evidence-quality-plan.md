@@ -1,11 +1,12 @@
 # Evidence quality plan (Case collaboration prerequisite)
 
 > **Status:** living tracker  
-> **Precedence:** `AGENTS.md` → `prd.md` → this plan (evidence) / `multi-expert-collaboration-plan.md` (Case collab)  
-> **Why:** Multi-expert Case collaboration assumes **shared findings/evidence** of usable quality. Without durable proof on the Case, `case_context` and “next expert continues” fail.  
+> **Phase scheme:** **A → B → C → D → E** (original plan; do not renumber to B0–Bx)  
+> **Precedence:** `AGENTS.md` → `prd.md` → this plan / `multi-expert-collaboration-plan.md`  
+> **Why:** Multi-expert Case collab assumes **shared findings/evidence** with usable proof. Without durable proof on the Case, `case_context` and “next expert continues” fail.  
 > **Non-goals:** Case shared-disk product; structured handoff protocol; stations.
 
-**Related:** `node4-harness.md` (proof-first booking), `node-expert-offers.md` (Case = session), `benchmarks/collab-playbook-b/` (manual collab lab).
+**Related:** `node4-harness.md`, `node-expert-offers.md`, `benchmarks/collab-playbook-b/`.
 
 ---
 
@@ -13,12 +14,11 @@
 
 | Phase | Goal | Status | Notes |
 |-------|------|--------|-------|
-| **A** | Baseline audit from real samples | **Done** (2026-07-16) | Local workspace + collab runs + `pentest_platform` DB |
-| **B0** | Fix Case evidence “empty shell” (properties) | Pending | P0 — blocks all Case reuse |
-| **B1** | Denoise: what counts as Case evidence | Pending | Drop non-proof tools; prefer finding-linked |
-| **B2** | Collaboration readability (`case_context` + excerpts) | Pending | Next expert can act from Case |
-| **B3** | Proof semantics (1:1 claim support) | Pending | Tighten multi-finding reuse |
-| **B4** | Re-verify (Playbook B / real Case) | Pending | Success criteria below |
+| **A** | 摸清生产/真 Case（只观测） | **Done** (2026-07-16) | Local workspaces + collab runs + `pentest_platform` DB; see §Phase A |
+| **B** | Case 可读证据（P0） | Pending | Includes fixing empty Case `properties` so excerpts exist |
+| **C** | 材料类证据（源码/笔记） | Pending | No shared disk; preview/path on Case |
+| **D** | 降噪与语义 | Pending | proof vs trace; finding-linked; status honesty |
+| **E** | 再跑剧本 B / 验收 | Pending | Success criteria in §Phase E |
 
 Update this table when a phase completes (date + short note / commit).
 
@@ -33,215 +33,215 @@ Case = Session
   └── user @ / select expert
 
 Not required: structured handoff API, Case shared disk, stations
-Materials (source dumps, notes) → book as evidence or clear chat paths
+Materials → evidence (or clear chat paths), not a filesystem product
 ```
 
 ---
 
-## Phase A — Baseline audit (completed 2026-07-16)
+## Phase A — 摸清生产/真 Case（只观测） ✅ Done
 
-### A.1 Samples inspected
+### A.1 Checklist (original)
+
+1. 抽真实 conversation / task：evidence 行数、type 分布、挂 finding 的比例、summary 可读率。  
+2. 对照 UI / Agent：人审是否够；Agent 侧是否看不见 Case 证明。  
+3. 验收指标草案（baseline 测量）：  
+   - finding → evidence 解析率  
+   - 「可证明」比例（有 body/stdout excerpt）  
+   - 跨 task 可获取率  
+
+### A.2 Samples inspected (2026-07-16)
 
 | Source | Scale | Nature |
 |--------|-------|--------|
-| `node4/workspace/c6efe561-ba5e-43a5-a15b-3eb674c72190` | 73 evidence / 17 findings | Live pentest (DVWA / Juice / platform API) |
-| `node4/workspace/f56f5061-b531-4b2e-9073-13052e55623d` | 42 evidence / 20 findings | Live pentest (DVWA) |
-| `node4/workspace/95ebf2f6-9ba0-4894-9f91-6dc501cdafeb` | 32 evidence / 14 findings | Mixed http/session/script |
-| `benchmarks/collab-playbook-b/run/station*-ws*` | 14–31 evidence / 3–10 findings | Collab dry-run (static + verify) |
-| Platform DB `pentest_platform` | **385** evidence / **73** vulns | Two main `conversation_id`s; via `platform-db-1` |
+| `node4/workspace/c6efe561-…` | 73 evidence / 17 findings | Live pentest (DVWA / Juice / platform API) |
+| `node4/workspace/f56f5061-…` | 42 evidence / 20 findings | Live pentest (DVWA) |
+| `node4/workspace/95ebf2f6-…` | 32 evidence / 14 findings | Mixed http/session/script |
+| `benchmarks/collab-playbook-b/run/station*-ws*` | 14–31 evidence / 3–10 findings | Collab dry-run |
+| Platform DB `pentest_platform` | **385** evidence / **73** vulns | Via `platform-db-1`; two main conversations |
 
-### A.2 Architecture (as implemented)
+### A.3 Architecture (as implemented)
 
 | Layer | Storage | Lifetime |
 |-------|---------|----------|
-| Node task | `workspace/<taskId>/evidence/*.json` | Per burst only; `finding(confirm)` validates **here** |
-| Platform Case | DB `evidence` (`conversation_id`, `properties` JSONB) | Session-scoped; filled by WS `evidence_created` |
-
-Flow:
+| Node task | `workspace/<taskId>/evidence/*.json` | Per burst; `finding(confirm)` validates **here** |
+| Platform Case | DB `evidence` (`conversation_id`, `properties`) | Session-scoped; WS `evidence_created` |
 
 ```text
 shell/http/session/… → emitEvidence → local JSON + evidence_created → platform
 finding(confirm) → require local evidence_ids + demonstrable output → vuln_found
 ```
 
-**Gap:** Next expert’s new `taskDir` cannot read prior local files; Case DB is the intended share — but properties content is currently unusable (see A.4).
+**Cross-task:** next expert’s new `taskDir` cannot read prior local files. Case DB is the intended share.
 
-### A.3 Local Node quality (within one task)
+### A.4 Local Node (within one task)
 
 **Strengths**
 
-- Node4 `finding(confirm)` gates: required `evidence_ids`, location, description, PoC structure, **demonstrable** stdout/body/redirect (`node4/src/tools/finding.ts`).
-- Sampled findings: **100% had evidence_ids**; local files resolved (no missing eid files in sampled tasks).
-- Good proof examples: login 200/401 with body; session HTTP captures; collab static findings with `proof_excerpts` from `cat` of source.
+- `finding(confirm)` gates: `evidence_ids`, location, description, PoC shape, demonstrable stdout/body/redirect (`node4/src/tools/finding.ts`).
+- Sampled findings: **100% had evidence_ids**; local files resolved.
+- Good proofs: login 200/401 + body; session HTTP; collab static `proof_excerpts` from `cat` source.
 
-**Weaknesses (local)**
+**Weaknesses**
 
 | Issue | Example |
 |-------|---------|
-| **Orphan evidence** | c6efe ~55/73 unused by any finding; f56f ~29/42; collab s3-v2 ~27/31 |
-| **One evidence → many unrelated findings** | f56f `ev_*9679fd` linked to upload RCE + stored XSS + reflected XSS + CSRF; another eid to blind SQLi + DOM XSS + weak session |
-| **Noise** | `ls` / `total N`, empty stdout, session chain with no body |
-| **Gate only checks “has output”** | Not that the excerpt supports **this** finding’s claim |
-| **No first-class file artifact type** | Source dumps via shell `cat` only; `write` does not emit evidence |
+| Orphan evidence (never referenced by finding) | c6efe ~55/73; f56f ~29/42; collab s3-v2 ~27/31 |
+| One evidence → many unrelated findings | f56f one eid → upload RCE + stored XSS + reflected XSS + CSRF |
+| Noise | `ls` / `total N`, empty stdout, empty session chains |
+| Gate checks “has output”, not “supports this claim” | Shared mega-script stdout reused |
+| No first-class file artifact type | Dumps via shell only; `write` does not emit evidence |
 
-### A.4 Platform Case quality (shared layer) — critical
+### A.5 Platform Case (shared layer) — critical
 
-| Metric (2026-07-16 snapshot) | Result |
-|------------------------------|--------|
+| Metric (2026-07-16) | Result |
+|---------------------|--------|
 | evidence rows | 385 |
 | type `tool_output` / `evidence_created` | 240 / 145 |
 | `raw_ref` empty | **385 / 385** |
 | properties contain `stdout` | **0** |
 | properties contain HTTP body keys | **0** |
-| empty-ish properties (`status`/`stderr` only etc.) | **~354 / 385** |
-| “rich” properties (len > 100) | **~14** |
-| `source_tool` includes non-proof tools | finding, todo, skill, read (~89 rows) |
+| empty-ish properties | **~354 / 385** |
+| non-proof `source_tool` (finding/todo/skill/read…) | ~89 |
 
 **Smoking gun (same `evidence_id`):**
 
-| | Local Node JSON | Platform DB |
-|--|-----------------|-------------|
-| `ev_1784055584931_9679fd` | `data.stdout` ~1603 chars (real script output) | `properties = {"status": null, "stderr": ""}` |
-| summary | Useful command prefix | Command prefix only; **no proof payload** |
+| | Local Node | Platform DB |
+|--|------------|-------------|
+| `ev_1784055584931_9679fd` | `data.stdout` ~1603 chars | `properties ≈ {"status": null, "stderr": ""}` |
 
-So: **IDs sync; proof content is lost or never stored** on the Case.  
-Even if the next expert could fetch by id, they would not get demonstrable proof.
+**IDs sync; proof payload is hollow on Case.**  
+UI may show summary only; Agent cannot reconstruct proof from Case today.
 
-**Pollution examples**
+**Pollution:** tool return JSON as summary; finding/todo as evidence rows; dual noisy rows.
 
-- Summaries that are entire `{"ok": true, "finding": {...}}` tool results stored as evidence.
-- Dual/noisy rows: tool return dumps vs intended `evidence_created`.
-- Session rows with empty body but still listed as evidence.
+### A.6 Baseline metrics (draft values from Phase A)
 
-**Implication for collab:**  
-“Evidence is shared on the Case” is **not true in product terms** today — only **empty shells** are shared.
+| Metric | Baseline (approx.) | Notes |
+|--------|--------------------|--------|
+| finding→evidence 本地解析率 | ~100% on sampled tasks | Local files only |
+| finding→evidence **Case 证明可读** | ~0% | properties empty |
+| 可证明比例（本地 strong stdout/body） | high on linked eids; mixed overall | Many orphans/noise |
+| 跨 task 可获取率（Agent） | **≈0** | No Case proof + no fetch |
+| 跨 task 可获取率（若只认 id 存在） | partial | Ids often exist, content useless |
 
-### A.5 Code pointers (for implementers)
+### A.7 UI / Agent contrast
+
+| Actor | Can see Case evidence id? | Can see proof body? |
+|-------|---------------------------|---------------------|
+| Human (platform UI) | Often yes (list/summary) | **Weak** if properties empty |
+| Next expert (Node) | Only via chat/`case_context` hints (`evidence:id`) | **No** — cannot load prior taskDir or rich Case properties |
+
+### A.8 Code pointers
 
 | Area | Path |
 |------|------|
 | Local store | `node4/src/stores/evidence.ts` |
-| Emit to platform | `node4/src/tools/common.ts` → `emitEvidence` / `evidencePropertiesForPlatform` |
-| Finding gates | `node4/src/tools/finding.ts` → `extractProofMaterial`, `pocDemonstratesIssue` |
+| Emit | `node4/src/tools/common.ts` → `emitEvidence`, `evidencePropertiesForPlatform` |
+| Finding gates | `node4/src/tools/finding.ts` |
 | Booking nudges | `node4/src/runtime/booking-harness.ts` |
-| Platform persist | `platform/backend/app/ws/router.py` → `_persist_evidence`, `_proof_properties_from_summary` |
-| Platform model/API | `platform/backend/app/models/evidence.py`, `api/evidence.py` |
-| Case context (hints only today) | `platform/backend/app/services/case_context.py` — `evidence:id` tokens, **no body** |
+| Platform persist | `platform/backend/app/ws/router.py` → `_persist_evidence` |
+| Model/API | `platform/backend/app/models/evidence.py`, `api/evidence.py` |
+| case_context | `platform/backend/app/services/case_context.py` (hints only today) |
 | Node inject | `node4/src/runtime/case-context.ts` |
 
-### A.6 One-line Phase A conclusion
+### A.9 Phase A one-liner
 
-**Local booking discipline is OK; Case-layer evidence is hollow; multi-expert continuation on Case evidence is not viable until B0–B2 land.**
-
----
-
-## Phase B0 — Fix Case evidence empty shell (P0)
-
-**Goal:** Platform `evidence.properties` retain usable proof fields (truncated OK, empty not OK).
-
-**Work**
-
-1. Trace one `evidence_created` end-to-end: Node outbound payload → WS handler → `_persist_evidence` → DB row.
-2. Fix loss of `stdout` / `body_preview` / `response_body` / `command` / `url` / `status` / `proof` (and HTTP equivalents from `evidencePropertiesForPlatform`).
-3. Ensure updates merge without wiping rich properties with empty `{status, stderr}`.
-4. Add a regression test: persist sample shell/http evidence → DB has non-empty proof keys (or body excerpt).
-
-**Done when**
-
-- For a new run, `GET /api/evidence/{id}` (or SQL) shows the same essential proof as local `evidence/*.json` (clipped).
-- Spot-check ≥5 new ids after a short pentest: 0 with only `{status, stderr}`.
-
-**Out of scope for B0:** UI redesign; shared disk; finding gate changes.
+**Local booking OK; Case evidence hollow; multi-expert continuation on Case proof not viable until Phase B (and D noise control).**
 
 ---
 
-## Phase B1 — Denoise: what counts as Case evidence
+## Phase B — Case 可读证据（P0，核心）
 
-**Goal:** Case evidence list is mostly **proof**, not tool telemetry spam.
+**Goal:** 下一专家不用猜路径也能拿到证明材料。
 
-**Work**
+**Depends on:** Phase A (done). **Must include** fixing empty Case `properties` — otherwise B.1 excerpts stay empty.
 
-1. Only promote **`evidence_created`** from act tools (`shell`, `http`, `session`, `script`, `browser`, …) into the Case evidence product surface.
-2. Stop treating **finding / todo / skill / read** tool results as evidence rows (or hard-exclude them).
-3. Prefer **`case_context` / UI default** to evidence **referenced by findings** (orphans optional “trace” later).
-4. Optional: mark local orphans as `trace` vs `proof` if a field is added; do not invent NLP.
+### B.1 `case_context` 增强（最小）
 
-**Done when**
+- 从 DB 拉本案 top-N **有用** evidence：  
+  `id` / `summary` / `source_tool` / `kind` / path_or_url 提示 / **短 excerpt**  
+- findings 板带上 `evidence_ids`  
+- **仍不塞全文**（控 token）  
+- Prefer evidence **referenced by findings** when selecting top-N (aligns with Phase D; can soft-prefer in B)
 
-- New Case after a session: majority of evidence rows are finding-linked **or** clearly act-tool proofs with non-empty properties.
-- finding/todo JSON summaries no longer appear as evidence titles.
+### B.2 Node 读 Case 证据（二选一或都做）
 
----
+| Option | Approach | Note |
+|--------|----------|------|
+| **B.2a**（推荐先做） | platform 在 `task_assign` 附带 `case_evidence_snippets[]`（或 fold into `case_context`） | 少工具、与现有 assign 一致 |
+| **B.2b** | 工具 `evidence(op=get, id)` → platform API | 更通用、按需拉 |
 
-## Phase B2 — Collaboration readability
+### B.3 入账时固化 proof 到 Case
 
-**Goal:** Joining expert can continue from Case without private taskDir paths.
+- Trace + fix persist so Node `emitEvidence` **properties** (stdout/body/command/url/status/proof) land in DB (truncated OK).  
+- `proof_excerpts` on `vuln_found`: ensure platform **persists** and appears in snapshot / case_context.  
+- Finding 摘要足够时，下一位即使暂无 raw file 也能工作。
 
-**Work**
+### B.4 Done when
 
-1. Extend `case_context` (after B0) with:
-   - findings board including `evidence_ids`
-   - short excerpts for **referenced** evidence (from DB properties)
-   - path/url hints when present
-2. Still cap tokens; do not dump full transcripts.
-3. Optional: Node tool or assign payload to resolve `evidence_id` → Case snippet (if assign payload alone is insufficient).
+- New run: Case evidence for act tools has **non-empty proof fields** (not only `{status, stderr}`).  
+- Joining expert’s prompt includes **usable excerpts** for booked findings’ evidence_ids.  
+- No dependency on copying prior `taskDir` paths for those proofs.
 
-**Done when**
+### B.5 Out of scope for B
 
-- Playbook B station 3 (or equivalent) can work primarily from `case_context` + Case findings/evidence, without manually copying absolute paths / HANDOFF files.
-- Second expert does not need prior `taskDir`.
-
-**Depends on:** B0 (otherwise excerpts stay empty).
-
----
-
-## Phase B3 — Proof semantics
-
-**Goal:** Evidence supports **this** claim, not “any long stdout”.
-
-**Work**
-
-1. Tighten multi-finding reuse: same `evidence_id` on multiple findings only if each has a distinct supporting excerpt / or require separate proof when claims differ.
-2. Align booking status with reality (e.g. dynamic blocked vs static confirmed) — no silent overclaim.
-3. Consider optional `file_artifact` / `source_excerpt` type for static packs (still not a Case disk product).
-4. Use `raw_ref` when there is a durable path/object key (optional).
-
-**Done when**
-
-- Sampled multi-link eids no longer attach unrelated vuln classes to one blob without justification.
-- Static vs dynamic booking language is consistent in findings.
+- Case shared disk; UI redesign only; full noise taxonomy (Phase D).
 
 ---
 
-## Phase B4 — Re-verification
+## Phase C — 材料类证据（源码/笔记）
 
-**Goal:** Prove the stack works for multi-expert Case collaboration.
+**Goal:** 源码 dump / 笔记可作为 Case 材料，而非共享盘。
 
-**Work**
+1. 增加 `file_artifact` / `source_excerpt` 类型（或 shell 自动识别 `cat` 源码并打 kind）。  
+2. 可选：`write` 关键文件时 emit evidence（path + hash + 短 preview）。  
+3. **不搞 Case 共享盘**；内容或 preview 进 platform `properties`，path 作 hint。
 
-1. Re-run `benchmarks/collab-playbook-b` (code-audit → pentest) with **platform path** if possible (not only standalone).
-2. Re-sample platform DB metrics (A.4 table).
-3. Record results in this doc (date + pass/fail).
+**Done when:** Static collab can attach source proof as Case evidence with preview; next expert sees path + excerpt via case_context.
 
-**Success criteria**
+---
+
+## Phase D — 降噪与语义
+
+**Goal:** Case 上默认只有「证明」，且证明支撑 claim。
+
+1. Evidence 分级：`proof` vs `trace`（**仅 proof** 默认进 `case_context`）。  
+2. 或：**仅被 finding 引用的** evidence 进 `case_context`。  
+3. finding 状态与动态失败对齐（`blocked_no_target` vs `confirmed`）。  
+4. Tighten multi-finding reuse of one eid (claim-specific excerpt or disallow blind reuse).  
+5. Stop non-proof tools (finding/todo/skill/read returns) from becoming Case evidence rows.
+
+**Done when:** Orphan/noise rate down vs Phase A; multi-link abuse reduced; status language honest.
+
+---
+
+## Phase E — 再跑剧本 B / 验收
+
+**Goal:** 证明协作闭环成立。
+
+1. Re-run `benchmarks/collab-playbook-b`（优先 platform 路径，不单 standalone）。  
+2. Re-sample platform metrics (A.5 table).  
+3. Record pass/fail in Changelog below.
+
+### Success criteria
 
 | Check | Pass |
 |-------|------|
-| New evidence properties non-empty for act tools | Y/N |
-| Orphan / pollution rate down vs Phase A | Y/N |
-| `case_context` includes usable excerpts for booked findings | Y/N |
-| Next expert continues without private path copy | Y/N |
-| No ambient lab drift when scope is tight (collab B) | Y/N |
+| 站 3 **不靠**手写绝对路径 / 拷 HANDOFF | Y/N |
+| `case_context` 能看到站 2 的 **proof 摘要** + evidence id **可解析出内容** | Y/N |
+| 仍无 DVWA/范围外漂移 | Y/N |
+| **无** Case 共享盘产品 | Y/N |
+| 新 evidence properties 非空壳（act tools） | Y/N |
 
 ---
 
-## Explicit non-goals (keep out of this track)
+## Explicit non-goals
 
-- Case shared filesystem / shared disk product  
-- Structured handoff API as collaboration backbone  
+- Case shared filesystem product  
+- Structured handoff as collaboration backbone  
 - Stations UI  
-- Weakening finding gates to increase booking count  
-- Dumping all shell evidence into LLM context without filter  
+- Weakening finding gates to inflate counts  
+- Dumping all shell evidence into LLM context unfiltered  
 
 ---
 
@@ -249,4 +249,5 @@ Even if the next expert could fetch by id, they would not get demonstrable proof
 
 | Date | Change |
 |------|--------|
-| 2026-07-16 | Phase A completed; B0–B4 planned; doc created from workspace + `pentest_platform` sampling |
+| 2026-07-16 | Phase A completed (local + DB sampling). Documented original **A–E** plan (not B0–Bx). Critical finding: Case properties hollow. |
+| 2026-07-16 | Doc rewritten to restore A–E naming after a temporary B0–B4 renumber; content aligned to original plan + Phase A facts. |

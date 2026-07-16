@@ -3,7 +3,7 @@
 > **Status:** living plan (collaboration model **minimal**: Case + evidence + case_context + user @; no stations / structured handoff / Case disk)  
 > **Precedence:** `AGENTS.md` → `prd.md` → this plan → other living docs  
 > **Runtime:** `node4/` only. Pack content under `experts/`.  
-> **Related:** `node-expert-offers.md`, `node4-harness.md`, `experts/README.md`, **`evidence-quality-plan.md`** (Case evidence Phases A–B4 tracker), research notes on Argo / DeepTeam / OMP (reference only).
+> **Related:** `node-expert-offers.md`, `node4-harness.md`, `experts/README.md`, **`evidence-quality-plan.md`** (Case evidence Phases **A–E** tracker), research notes on Argo / DeepTeam / OMP (reference only).
 
 ---
 
@@ -189,7 +189,7 @@ Minimal fields:
 
 **Evidence as shared materials:** source dumps, notes, screenshots should be **booked or linked as evidence** (or clearly stated in chat). Next expert sees them via Case findings/evidence + `case_context` hints — **not** via a separate Case filesystem product.
 
-**Evidence quality is a hard prerequisite.** Phase A baseline + B0–B4 work items live in [`evidence-quality-plan.md`](evidence-quality-plan.md) (update that tracker when phases complete). As of 2026-07-16, Case DB often stores evidence **ids without proof payloads** — do not assume cross-expert evidence reuse works until B0–B2 land.
+**Evidence quality is a hard prerequisite.** Phases **A–E** live in [`evidence-quality-plan.md`](evidence-quality-plan.md) (A done; B Case-readable proof → E re-verify). As of 2026-07-16, Case DB often stores evidence **ids without proof payloads** — do not assume cross-expert evidence reuse works until **Phase B** (and D noise control) land.
 
 ### 6.3 Engagement templates (RoE depth only)
 
