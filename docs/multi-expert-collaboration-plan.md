@@ -305,10 +305,10 @@ Do **not**: kill-chain state machine; required structured handoff; stations as g
 |----------|---------------|--------------------|
 | **B App assessment** | **High** after Phase 1–2 | Envelope RoE + authz skills |
 | **A Red-team deep** | **Medium–high** after Phase 1–2; stronger with post-ex skill quality | Post-ex skill content + legal/RoE UX; optional network-ops later |
-| **Multi-expert Case** | **Medium** after Phase 3 | Platform Case/handoff implementation |
+| **Multi-expert Case** | **Lower** after case_context | Evidence quality + user @; no handoff/stations product |
 | **LLM / code / alert** | **Scaffolded** in Phase 4 | Separate product priority |
 
-**Conclusion:** The plan **covers both painted scenarios** on one application-security Expert with engagement depth. Collaboration gaps are **platform Case/handoff**, not missing stage Experts. New Experts are **target families**, not kill-chain steps.
+**Conclusion:** The plan **covers both painted scenarios** on one application-security Expert with engagement depth. Collaboration is **Case chat + findings/evidence + case_context + user @** — not stations, shared disk, or structured handoff. New Experts are **target families**, not kill-chain steps.
 
 ---
 
@@ -319,7 +319,7 @@ Do **not**: kill-chain state machine; required structured handoff; stations as g
 | Scenario B runs never book host post-ex findings when `allow_postex=false` | RoE works |
 | Scenario A can complete surface → exploit → (if allowed) post-ex notes with evidence | Deep path works |
 | Small single-app runs keep low subagent rate | No forced fan-out |
-| Handoff to llm-security only after explicit user/platform action | No silent pack switch |
+| Other expert only after explicit user @ / select | No silent pack switch |
 | No new default stage state machine in Node4 continue policy | Harness integrity |
 
 ---
