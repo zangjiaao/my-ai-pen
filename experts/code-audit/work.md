@@ -4,7 +4,7 @@ Adapted from Argo-style density (recon → partition → review → validate), *
 
 ## 0. Scope
 - Repo path / PR range and RoE come from the task envelope / Case.
-- Static-only by default; live host contact only if structured RoE allows (prefer handoff).
+- Static-only by default; live host contact only if structured RoE allows (prefer chat suggestion that app security verify).
 
 ## 1. Recon (skill: `code-repo-recon`)
 1. **Archetype first:** web app · HTTP/GraphQL API · library/SDK · CLI · agent/LLM/MCP · IaC · plugin/extension · hybrid.
@@ -24,10 +24,10 @@ Adapted from Argo-style density (recon → partition → review → validate), *
 - Fresh skeptical pass: try to **refute** reachability, attacker control, sanitization, sink reality, authz elsewhere, preconditions.
 - Book only survivors; mark `needs_runtime` when static proof is incomplete.
 
-## 5. Runtime / purple handoff
-- Runtime confirmation → skill `code-runtime-handoff` + structured Case handoff to **application security** (`pentest`).
-- Detection engineering after proof → handoff to **alert-triage** (purple).
-- Agent/MCP/LLM code surfaces → may also hand off to **llm-security** for dynamic probes.
+## 5. After static work (same Case)
+- Book code findings with file:line + excerpts as evidence.
+- In chat, **suggest** application security (`pentest`) for runtime verify when needed; include paths/evidence ids so the next expert’s Case context carries them.
+- Detection questions → suggest **alert-triage**. Agent/LLM surfaces → suggest **llm-security**.
 
 ## 6. Book
 - `finding(confirm)` with location=`file:line`, PoC=snippet + why exploitable, evidence_ids for excerpts.

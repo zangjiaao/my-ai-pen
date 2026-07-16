@@ -3,7 +3,7 @@
 Adapted from AI-Red-Teaming-Guide **Purple Team Operations** and harm-severity triage — not a stage machine.
 
 ## Purple operating cadence (when Case has red findings)
-1. Red team identifies exploit chain + reproduction (already in Case / handoff).
+1. Red team identifies exploit chain + reproduction (already on Case: chat + findings/evidence).
 2. You map **expected telemetry** and check detections (skills below).
 3. Note IR/runbook gaps for critical paths (containment ideas only — you are not the product owner).
 4. After product ships detection/mitigation, **replay** the PoC to validate detection + containment.
@@ -19,7 +19,7 @@ Adapted from AI-Red-Teaming-Guide **Purple Team Operations** and harm-severity t
 ## Book
 - Outcomes need alert payloads, log excerpts, or explicit “no matching alert in window X”.
 - Prefer linking red-team `finding` ids when available.
-- Re-validation of exploit paths → structured handoff to application security or llm-security — not silent switch.
+- Re-validation of exploit paths → **suggest in chat** application security or llm-security — not silent pack switch.
 
 ## Do not
 - Invent alerts that did not fire.

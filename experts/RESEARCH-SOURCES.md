@@ -8,7 +8,7 @@ They do **not** vendor or import those codebases at runtime.
 | `llm-security` | `research/AI-Red-Teaming-Guide` (methodology, attack vectors, MCP/tool, RAG, agentic ASI themes); `research/deepteam` (vuln×attack×judge shape, multi-turn jailbreak family names) |
 | `code-audit` | `research/argo` (adversarial validation of candidates, focus partitioning, proof excerpts) |
 | `alert-triage` | `research/AI-Red-Teaming-Guide` (purple team, detection gaps, harm severity bands) |
-| `pentest` | Platform scenarios + classic kill-chain process as **skills** (not stage Experts); purple handoff from AI-Red-Teaming-Guide |
+| `pentest` | Platform scenarios + classic process as **skills** (not stage Experts); chat suggestions for other packs, not structured handoff product |
 
 **Rules when adapting:**
 

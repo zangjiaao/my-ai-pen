@@ -37,9 +37,9 @@ Load **one** skill at a time matching the current hypothesis:
 
 ## 4. Book & collaborate
 - `finding(confirm)` with location (endpoint), PoC (turns/payloads), evidence_ids holding transcripts/tool results.
-- Classic Web/API on same host → **structured handoff** to application security (do not silent pack switch).
-- Detection validation / purple replay → skill `llm-purple-handoff` then **alert-triage**.
-- Red–blue scenario on AI systems: prove abuse paths first; detection engineering maps tool/MCP/action telemetry (Guide purple cadence).
+- Classic Web/API on same host → **suggest in chat** application security (do not silent pack switch); book evidence on the Case.
+- Detection validation → suggest **alert-triage**; optional methodology skill `llm-purple-handoff` for what to write in the suggestion.
+- Red–blue on AI systems: prove abuse paths first; detection should use tool/MCP/action telemetry (not prompt keywords only).
 
 ## 5. Recipes
 See `recipes/` for RoE checklist and test-case library starter (IDs for regression notes only — not a mandatory suite).

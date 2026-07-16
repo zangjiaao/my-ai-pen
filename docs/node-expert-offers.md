@@ -26,12 +26,13 @@
 
 平台代为分发（用户未 @）时：按 capability→pack 自动选择已启用 Expert 实例，再落到其 Node；若无实例，仍写入 structured `engagement`（避免 Node4 bare `runtime`）。
 
-### Case (v1)
+### Case (v1) — minimal collaboration
 
-- **1 conversation (session) = 1 Case** (work group). Scope, RoE, engagement template, soft stations, and shared findings/evidence are conversation-scoped.
-- **Expert dispatch carries `case_context`:** trimmed group **thread** (user/agent text + finding cards) + **findings_summary** + optional path hints, so a newly selected expert reads the same case before acting (not a blank memory). Not full tool dumps; not NLP engagement invent.
-- Multiple Node **tasks** and multiple **@Experts** may run inside that same conversation; not multiple chat sessions per case in v1.
-- Full roadmap (expert families, skills, phases): [`multi-expert-collaboration-plan.md`](multi-expert-collaboration-plan.md).
+- **1 conversation (session) = 1 Case** (work group). Scope, RoE, engagement template, and **shared findings/evidence** are conversation-scoped.
+- **Expert dispatch carries `case_context`:** trimmed group **thread** + **findings_summary** + path hints (from chat/evidence) so a newly selected expert reads the case before acting. Not full tool dumps; not NLP pack invent.
+- **Cross-expert handoff protocol is not required:** agents may **suggest in chat** that another expert continue; user `@` / selects the expert. No product dependency on structured handoff APIs, Case shared disk, or stations.
+- Dump source/notes as **evidence** (or clear paths in chat) so the next expert sees materials via Case + `case_context`.
+- Full plan: [`multi-expert-collaboration-plan.md`](multi-expert-collaboration-plan.md).
 
 ## Dispatch gate
 

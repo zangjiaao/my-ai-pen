@@ -12,10 +12,10 @@ description: Package static candidates for structured handoff to runtime (applic
 ## Process
 1. Collect for each candidate: location, data flow, PoC idea, accounts/roles needed, out-of-scope constraints.
 2. Write a short handoff note in workspace (artifact path for Case handoff).
-3. Use **structured Case handoff** to application security (`pentest`) — do not silently switch pack mid-run.
-4. If the defect is agent/LLM-specific behavior, hand off to **llm-security** instead/additionally.
-5. After runtime proof exists in the case, detection gaps may go to **alert-triage** (purple).
+3. In chat, **suggest** application security (`pentest`) continue — do not silently switch pack mid-run.
+4. If the defect is agent/LLM-specific, suggest **llm-security** instead/additionally.
+5. Book dumps/paths as **evidence** on the Case so the next expert’s context can see them.
 
 ## Do not
 - Start live exploitation inside code-audit without RoE.
-- Drop static candidates without either booking static-proof or recording handoff.
+- Drop static candidates without booking or a clear chat suggestion + evidence.

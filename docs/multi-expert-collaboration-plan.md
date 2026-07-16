@@ -1,6 +1,6 @@
 # Multi-expert collaboration & engagement plan
 
-> **Status:** planning (implementation driven by goal / follow-up PRs)  
+> **Status:** living plan (collaboration model **minimal**: Case + evidence + case_context + user @; no stations / structured handoff / Case disk)  
 > **Precedence:** `AGENTS.md` → `prd.md` → this plan → other living docs  
 > **Runtime:** `node4/` only. Pack content under `experts/`.  
 > **Related:** `node-expert-offers.md`, `node4-harness.md`, `experts/README.md`, research notes on Argo / DeepTeam / OMP (reference only).
@@ -12,7 +12,7 @@
 Build a **red/blue security platform** where:
 
 1. **Experts** are stable **target-family** specialists (what is tested + evidence shape), not kill-chain stage names.
-2. **Collaboration** happens via **Case (案件) + shared artifacts + explicit handoff/@**, not a forced Agent stage machine.
+2. **Collaboration** happens via **Case (= session 工作群) + shared findings/evidence + user @/选专家**, not a forced Agent stage machine and not a structured handoff protocol.
 3. Two primary customer scenarios work on the **same application-security spine** with different **engagement / RoE depth**:
    - **Red-team deep:** external discovery → exploit → (optional) post-ex → lateral (in scope).
    - **App assessment:** customer-provided assets/accounts → surface + vulns + **authz/logic**; **no** webshell/privesc/lateral.
@@ -33,16 +33,16 @@ Build a **red/blue security platform** where:
 |-----------|---------|
 | Expert = target family | Distinct surface + tools + evidence + methodology book |
 | Stage = skill / todo | Recon, foothold, lateral live **inside** a pack |
-| Pipeline = Case workflow | Stations + artifacts + handoffs on the **platform** |
+| Pipeline = Case work group | Same conversation: chat + findings/evidence + `case_context` on dispatch |
 | In-loop freedom = OMP | Each expert burst: Map → Act → Book; density over gates |
-| Intent = structured | `engagement` / Expert instance / handoff payload — not keyword NLP |
+| Intent = structured | `engagement` / Expert instance / user @ — not keyword NLP invent of pack |
 | Harness over restriction | Prefer pack prompts, envelope, skills; not new default validators |
 
 **Expert vs skill test:**
 
 > Would a user open a session and **only @ this name** for a complete job?  
 > - Yes → Expert (pack)  
-> - Only a step inside another job → skill (or station content)
+> - Only a step inside another job → skill
 
 ---
 
@@ -137,7 +137,7 @@ CTF / consult: keep separate; do not dump red-team post-ex into CTF.
 
 - Recon-of-repo / focus split as **skills**.
 - Optional adversarial validate skill on candidates.
-- Booking: code location + proof excerpt; optional handoff to app assessment for runtime verify.
+- Booking: code location + proof excerpt; optional chat suggestion that app security runtime-verify.
 
 **`alert-triage`:**
 
@@ -146,70 +146,59 @@ CTF / consult: keep separate; do not dump red-team post-ex into CTF.
 
 ---
 
-## 6. Platform collaboration model (the “pipeline”)
+## 6. Platform collaboration model (minimal)
+
+### 6.0 Glossary (converged — avoid parallel protocols)
+
+| Term | Meaning |
+|------|---------|
+| **Case = Session** | One conversation = one work group. No separate Case graph in v1. |
+| **Shared on Case** | Chat thread, **findings**, **evidence** (paths/ids included), RoE/target sticky. |
+| **`case_context`** | Implementation detail: on each `task_assign`, inject a **trimmed read of the Case** (thread + findings board + path hints from evidence/chat) so the expert is not amnesic. Not a second product object. |
+| **Cross-expert suggestion** | Agent **writes in chat** that another expert should continue (e.g. “建议拉 code-audit 看源码”). User `@` / selects expert. **No required structured handoff API.** |
+| **Stations** | **Out of product scope** — no station UI/protocol required. |
+| **Case shared disk** | **Not required** — dump source / notes as **evidence** (or chat path); Case-shared evidence + `case_context` is enough for the next expert. |
+| **Structured handoff API / banner** | **Not part of the collaboration model.** Legacy code may exist; do not build product flows on it. Prefer chat suggestion + user `@`. |
 
 ### 6.1 Case (案件)
 
 **v1 decision (locked): 1 Conversation (session) = 1 Case.**
 
-- No separate multi-session Case graph for now.
-- Platform **conversation** is the Case: scope, RoE, engagement template, stations, participants, and artifacts all hang on that conversation (or on fields stored as Case-shaped metadata on the conversation row).
-- One Case still allows **many Node tasks** (multiple `task_assign` bursts, steers, expert switches via `@` in the **same** chat).
-- Multi-thread / multi-conversation per Case is **out of scope for v1**; revisit only if product needs isolated audiences or archival splits.
+- Platform **conversation** is the Case: scope, RoE, engagement template, messages, findings, evidence.
+- Many Node **tasks** and many **@Experts** inside that same chat.
+- Multi-conversation per Case: out of scope for v1.
 
-Minimal fields (design target — may live on `conversations` or a 1:1 `cases` row):
+Minimal fields:
 
 | Field | Role |
 |-------|------|
-| Case identity | **v1:** `conversation_id` is the case id (or 1:1 `case_id` = conversation) |
+| Case identity | `conversation_id` |
 | `scope` / RoE | Assets, bans (e.g. no post-ex) |
-| `engagement_template` | `app_assessment` \| `redteam_deep` \| `ai_app` \| `purple_team` \| … |
-| `stations[]` | Soft workflow UI state |
-| `participants` | Expert instances involved |
-| Artifacts | surface, intel, candidates, findings, alerts, code notes (already often keyed by `conversation_id`) |
+| `engagement_template` | `app_assessment` \| `redteam_deep` \| … (structured) |
+| Shared truth | Messages + findings + evidence (conversation-scoped) |
 
-Prefer evolving **conversation** with Case-shaped fields over a heavy greenfield Case product in Phase 3 MVP.
-
-### 6.2 Stations (工位) — soft pipeline
-
-Example stations (template-selected, not Agent tool gates):
-
-| Station | Default Expert | Artifacts |
-|---------|----------------|-----------|
-| Scope & intel | App assessment (+ intel skill) | `intel_brief`, scope |
-| External surface | App assessment | `surface_map` |
-| Exploit / verify | App assessment | candidates + proof findings |
-| Host / internal (optional) | App assessment post-ex skills | host notes, lateral path |
-| Model & Agent (optional) | `llm-security` | LLM test evidence |
-| Code (optional) | `code-audit` | code findings |
-| Detection (optional) | `alert-triage` | alert verdicts |
-| Delivery | App assessment / consult | report |
-
-**Station transitions:** platform UI + explicit handoff; **never** NLP auto-advance.
-
-**Work-group context (P0 shipped):** every `task_assign` attaches `case_context` (trimmed conversation **thread** + **findings_summary** + optional path hints) so the joining expert reads the same case like a group chat—not a blank new memory. Large files stay on disk; tool stdout is not fully inlined.
-
-### 6.3 Handoff (结构化交接)
+### 6.2 How experts collaborate (the only path)
 
 ```text
-suggest_expert_pack: llm-security
-reason: "Primary surface is chat+tools API"
-artifact_ids: [...]
+1. User + Expert A work in the Case (chat + tools + finding/evidence booking)
+2. Expert A may say in chat: “建议 @code-audit / 应用安全 做 …”
+3. User selects the other expert (toolbar / @) — no silent pack switch, no NLP invent
+4. task_assign carries case_context (read the group: thread + findings + evidence path hints)
+5. Expert B continues from Case state — not from a blank mind or a mandatory HANDOFF.md ritual
 ```
 
-User confirms or one-click `@Expert`. Platform must not silently switch pack from free text.
+**Evidence as shared materials:** source dumps, notes, screenshots should be **booked or linked as evidence** (or clearly stated in chat). Next expert sees them via Case findings/evidence + `case_context` hints — **not** via a separate Case filesystem product.
 
-### 6.4 Engagement templates
+### 6.3 Engagement templates (RoE depth only)
 
 | Template | Maps to scenarios | Post-ex | Notes |
-|----------|-------------------|--------|--------|
-| `app_assessment` | B | Off | Customer IP/URL/accounts; logic/authz focus |
+|----------|-------------------|--------|-------|
+| `app_assessment` | B | Off | Customer assets/accounts; authz/logic focus |
 | `redteam_deep` | A | On (in scope) | External discovery + chain + optional lateral |
-| `ai_app` | Hybrid | Off/default | App assessment + station for llm-security |
-| `purple_team` | Hybrid | Off | Exploit then alert-triage |
-| `code_then_runtime` | Hybrid | Off | code-audit → app verify handoff |
 
-Envelope must carry: `engagement`, `scope`, **RoE flags** (e.g. `allow_postex: false`), accounts, targets.
+Optional labels like `ai_app` / `purple_team` are **engagement/RoE or pack choice**, not station machines.
+
+Envelope: `engagement`, `scope`, RoE flags, accounts, targets, **`case_context`**.
 
 ---
 
@@ -217,14 +206,13 @@ Envelope must carry: `engagement`, `scope`, **RoE flags** (e.g. `allow_postex: f
 
 | Item | Purpose |
 |------|---------|
-| Pass RoE / engagement flags into task envelope + system prompt | Scenario B bans post-ex in agent context |
-| Proof-first booking (done / maintain) | Product truth for both scenarios |
-| OMP todo hygiene (done / maintain) | Live map; categories from pack |
-| Subagent batch + structured return | Large separable packages only |
-| Optional validate path | Follow candidates; never first post-recon workstream |
-| Handoff event type (optional) | `expert_handoff_suggested` for UI |
+| Pass RoE / engagement into task envelope + prompt | Scenario B bans post-ex in agent context |
+| **`case_context` on assign** | Work-group read: thread + findings board |
+| Proof-first booking | Product truth |
+| OMP todo hygiene | Live map |
+| Subagent batch | Large separable packages only |
 
-Do **not**: implement kill-chain state machine as default continue policy.
+Do **not**: kill-chain state machine; required structured handoff; stations as gates; Case shared-disk product.
 
 ---
 
@@ -255,12 +243,15 @@ Do **not**: implement kill-chain state machine as default continue policy.
 
 ### Phase 3 — Case collaboration MVP (= one conversation)
 
-- [x] Treat each conversation as one Case; Case fields on conversation (or 1:1 row)  
-- [x] Artifacts remain conversation-scoped (shared across experts in that chat)  
-- [x] Structured handoff suggestion + UI one-click @  
-- [x] Soft stations on Case/conversation UI (display + suggest only)  
+- [x] Treat each conversation as one Case; Case fields on conversation  
+- [x] Findings/evidence conversation-scoped (shared across experts in that chat)  
+- [x] User @ / expert select (structured pack from Expert instance — not NLP)  
+- [x] **`case_context` on task_assign** (thread + findings board)  
+- [ ] ~~Structured handoff API as product path~~ — **dropped from model** (chat suggestion only)  
+- [ ] ~~Stations UI~~ — **dropped from model**  
+- [ ] ~~Case shared disk~~ — **dropped**; use evidence + paths in Case  
 
-**Exit:** Two Experts in the **same session/case** share findings/evidence; handoff is explicit. No multi-session Case.
+**Exit:** Two Experts in the same Case share chat + findings/evidence; joining expert reads `case_context`.
 
 ### Phase 4 — New packs (order by product need)
 
@@ -276,14 +267,14 @@ Do **not**: implement kill-chain state machine as default continue policy.
 
 - [ ] Batch/parallel subagent for large separable surfaces  
 - [ ] Optional validate expert/subagent on candidates only  
-- [x] Purple skills: exploit → `pentest-purple-handoff` / `llm-purple-handoff` → `alert-triage` (detection gap + purple replay)  
+- [x] Purple methodology skills (optional chat suggestions toward alert-triage); not a stations/handoff product  
 
 **Exit:** Large targets can fan-out; quality path optional; small DVWA-class stays single-agent dense.
 
 ### Phase 6 — Network-ops split (only if needed)
 
 - [ ] If post-ex/lateral methodology outgrows app pack, extract `network-ops`  
-- [ ] Keep stations; do not create stage Experts  
+- [x] No stations product; do not create stage Experts  
 
 ---
 
@@ -297,16 +288,16 @@ Do **not**: implement kill-chain state machine as default continue policy.
 | Fastjson/Log4j/framework | `pentest-component-rce` skill | 2 | No CVE answer keys — residual “misses” OK |
 | Redis/DB exposure | `pentest-service-exposure` | 2 | Same |
 | Authz/logic focus | Strengthen access-control / authz-logic | 2 | Multi-account harness may need session actor patterns (already partly in pack) |
-| Multi-expert collaboration | Case + artifacts + handoff | 3 | Needs platform work beyond chat @ |
+| Multi-expert collaboration | Case + evidence + case_context + user @ | 3 | Keep evidence booking quality; no handoff/stations product |
 | LLM app testing | `llm-security` pack | 4 | Not in Scenario A/B spine; intentional |
-| Code audit | `code-audit` pack | 4 | Optional handoff to runtime verify |
+| Code audit | `code-audit` pack | 4 | Suggest pentest for runtime verify via chat + evidence |
 | Blue/purple alerts | `alert-triage` + purple template | 4–5 | |
 | Subagent underuse on small targets | Document “single-slice stay main” | docs | OK |
 | Subagent value on large targets | Phase 5 batch return contract | 5 | |
 | Proof quality | Proof-first booking (shipped) | done | Keep enforcing |
 | Todo batch-flip | OMP mid-run todo (shipped) | done | |
-| Over-restriction / pipeline prison | Explicit non-goals; stations soft | all | Review any new gate in PR |
-| Intent routing abuse | Structured engagement/handoff only | all | |
+| Over-restriction / pipeline prison | Explicit non-goals; no stations product | all | Review any new gate in PR |
+| Intent routing abuse | Structured engagement / user @ only | all | |
 
 ### 9.1 Coverage verdict
 
@@ -338,7 +329,7 @@ Do **not**: implement kill-chain state machine as default continue policy.
 | Research | Use |
 |----------|-----|
 | OMP | In-loop density, todo hygiene, multi-slice subagent only when parallel |
-| Argo | Case artifacts, optional validate-after-candidates, soft stations |
+| Argo | Case evidence patterns, optional validate-after-candidates (no stations product) |
 | DeepTeam | `llm-security` skill/attack/judge **content** only |
 
 ---
@@ -373,8 +364,8 @@ Use this when you want **one** goal run covering the full collaboration spine th
 > - Update `pack.json`, catalog, `work.md` for both scenarios A/B. No CVE answer keys.  
 >  
 > **Phase 3 — Case collaboration MVP**  
-> - Case-shaped fields on conversation (or 1:1); soft stations display/suggest only.  
-> - Structured expert handoff suggestion + UI one-click `@` (no silent pack switch).  
+> - Case-shaped fields on conversation; findings/evidence shared; `case_context` on assign.  
+> - User `@` / expert select (no silent pack switch; no required structured handoff).  
 >  
 > **Phase 4 — New packs (scaffold)**  
 > - Create installable packs: `llm-security`, `code-audit`, and `alert-triage` (mission/work/skills stubs + `pack.json` + catalog).  
@@ -382,7 +373,7 @@ Use this when you want **one** goal run covering the full collaboration spine th
 >  
 > **Hard constraints:** No default kill-chain state machine in Node4 continue policy. No stage-named Experts (recon/foothold/lateral/host/network as separate experts). No NLP engagement routing. Keep docs living: this plan checkboxes, `node-expert-offers.md`, `experts/README.md`, `docs/prd.md` as needed.  
 >  
-> **Done when:** (1) app_assessment vs redteam_deep change prompt/RoE behavior; (2) pentest skills listed and loadable; (3) same conversation can suggest handoff and keep shared artifacts; (4) three new packs install via expert-cli / catalog.
+> **Done when:** (1) app_assessment vs redteam_deep change prompt/RoE behavior; (2) pentest skills listed and loadable; (3) same Case shares findings/evidence + case_context; (4) three new packs install via expert-cli / catalog.
 
 ### 13.2 Split goals (if the single goal is too large)
 
@@ -392,7 +383,7 @@ Use this when you want **one** goal run covering the full collaboration spine th
 
 **Goal B — Phase 3 only:**
 
-> Implement Phase 3: Case fields on conversation, handoff + one-click @, soft stations. 1 session = 1 case.
+> Implement Phase 3: Case fields on conversation, case_context, user @ (no stations/structured handoff product). 1 session = 1 case.
 
 **Goal C — Phase 4 only:**
 
