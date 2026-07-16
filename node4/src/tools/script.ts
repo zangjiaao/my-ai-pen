@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ToolRuntime } from "../types.js";
-import { emitEvidence, jsonResult, textResult } from "./common.js";
+import { recordActObservation, jsonResult, textResult } from "./common.js";
 
 /**
  * Multi-step exploit path: write/read/run scripts under the task workspace.
@@ -14,8 +14,11 @@ export function createScriptTool(runtime: ToolRuntime): ToolDefinition<any> {
   return {
     name: "script",
     label: "Script",
-    description:
-      "Write/read/run Python or JS exploit scripts under the task scripts/ directory. Prefer this for multi-step chains instead of many one-off http calls.",
+    description: [
+      "Write/read/run Python or JS exploit scripts under task scripts/.",
+      "Useful for multi-step chains, but product proof should still show the *observation* (response fragment / payload reflection) in stdout.",
+      "For simple web proofs, prefer http/session so Case evidence is a clear request/response rather than a script path.",
+    ].join(" "),
     parameters: Type.Object({
       action: Type.String(),
       filename: Type.Optional(Type.String()),
@@ -46,8 +49,8 @@ export function createScriptTool(runtime: ToolRuntime): ToolDefinition<any> {
         if (!ext) return textResult("error: only .py, .js, .mjs supported");
         const timeoutMs = Math.min(Math.max(Number(params.timeout_seconds || 60) * 1000, 1000), 180_000);
         const result = await runProcess(ext === "python" ? "python3" : "node", [file, ...(params.args || []).map(String)], dir, timeoutMs);
-        const evidenceId = await emitEvidence(runtime, "script", `script run ${params.filename}`, { file, ...result });
-        return jsonResult({ ok: result.exitCode === 0, evidence_id: evidenceId, ...result });
+        recordActObservation(runtime, "script", `script run ${params.filename}`, { file, ...result });
+        return jsonResult({ ok: result.exitCode === 0, ...result });
       }
       return textResult("error: action must be write, read, run, or list");
     },

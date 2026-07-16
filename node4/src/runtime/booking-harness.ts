@@ -1,20 +1,20 @@
 /**
  * Product booking harness glue (clean-room).
- * Steers the agent to book via finding+evidence immediately when work produces
- * real tool evidence — without target-specific answer keys or scoreboard scraping.
+ *
+ * Model (simple):
+ *   Finding  = user-trustable conclusion
+ *   Evidence = materials created **when booking** from the agent's proof
+ * Act tools only keep recent observations in memory (for anti-hallucination).
+ * Agents do not hunt opaque evidence_ids.
  */
 
 export type BookingSnapshot = {
+  /** Recent act observations (or legacy evidence file count). */
   evidenceCount: number;
   bookedFindingCount: number;
-  /** Tool calls in the last prompt segment (0 = empty stop). */
   toolsInLastSegment: number;
 };
 
-/**
- * Whether evidence backlog suggests the agent is testing without booking.
- * Pure predicate for smokes + continue composition.
- */
 export function bookingBacklog(snapshot: BookingSnapshot): {
   kind: "none" | "zero_bookings" | "lagging";
   unbookedEvidenceHint: number;
@@ -24,7 +24,7 @@ export function bookingBacklog(snapshot: BookingSnapshot): {
   if (bookedFindingCount === 0 && evidenceCount >= 2) {
     return { kind: "zero_bookings", unbookedEvidenceHint: evidenceCount };
   }
-  // Rough lag: several evidence records per booking is normal; large excess is a smell.
+  // Lag: many probes relative to few bookings.
   const excess = evidenceCount - bookedFindingCount * 4;
   if (excess >= 6) {
     return { kind: "lagging", unbookedEvidenceHint: excess };
@@ -32,7 +32,6 @@ export function bookingBacklog(snapshot: BookingSnapshot): {
   return { kind: "none", unbookedEvidenceHint: 0 };
 }
 
-/** Mid-run / continue injection when booking lags tool evidence. */
 export function midRunBookingNudge(snapshot: BookingSnapshot): string {
   const backlog = bookingBacklog(snapshot);
   if (backlog.kind === "none") return "";
@@ -40,30 +39,30 @@ export function midRunBookingNudge(snapshot: BookingSnapshot): string {
   if (backlog.kind === "zero_bookings") {
     return [
       "<system-reminder>",
-      `Booking gap: ${snapshot.evidenceCount} evidence record(s) exist but 0 findings are booked.`,
-      "Product truth is ONLY via finding(confirm) with evidence_ids whose response body/stdout *shows* the issue.",
-      "Required: title, location/url, description, poc (steps + observed result), evidence_ids with demonstrable output.",
-      "Sharing one evidence across findings is fine when that output proves each claim; status-only or empty evidence is rejected.",
-      "Chat prose alone is not a conclusion — book only what the evidence demonstrates.",
+      `Booking gap: ${snapshot.evidenceCount} probe observation(s) but 0 findings booked.`,
+      "Product truth is finding(confirm) with location, description, poc, and proof.",
+      "proof = proving fragment copied from your tool output (response body / reflection / stdout).",
+      "Case evidence is created automatically from that proof — do not hunt evidence_ids.",
+      "Chat prose alone is not a conclusion.",
       "</system-reminder>",
     ].join("\n");
   }
 
   return [
     "<system-reminder>",
-    `Booking lag: evidence≈${snapshot.evidenceCount}, findings=${snapshot.bookedFindingCount}.`,
-    "If tool output proved a new issue, book with finding(confirm)+evidence_ids that contain the proving response/stdout, plus a concrete poc.",
+    `Booking lag: probes≈${snapshot.evidenceCount}, findings=${snapshot.bookedFindingCount}.`,
+    "If a probe proved an issue, book with finding(confirm): location + poc + proof (quote the real observation).",
     "</system-reminder>",
   ].join("\n");
 }
 
-/** First-turn booking rule (always, engagement-agnostic). */
 export function eagerBookingInjection(): string {
   return [
     "<system-reminder>",
-    "Book only issues you can *prove*: finding(confirm) needs location, description, poc (how + observed result), and evidence_ids.",
-    "Evidence must capture demonstrable output (HTTP response body, redirect Location, or shell stdout) — not status-only or empty login wrappers.",
-    "Multiple findings may share one evidence_id when that one output proves each claim; otherwise run a dedicated probe.",
+    "Book only issues you can *prove* with finding(confirm).",
+    "Required: title, location, description, poc (how + observed result), proof (proving fragment from tool output).",
+    "Finding = user-trustable conclusion. Evidence is created from your proof at booking time — one strong proof is enough.",
+    "Do not pass evidence_ids; quote real stdout/response text into proof after probing.",
     "Chat/todo text is never product truth. When done, stop without tools.",
     "</system-reminder>",
   ].join("\n");
@@ -71,10 +70,66 @@ export function eagerBookingInjection(): string {
 
 export const FINDING_TOOL_DESCRIPTION = [
   "ONLY product conclusion path for vuln / flag / challenge unlock / auth impact.",
-  "Goal: book only what tool output can demonstrate exists — as soon as a probe proves an issue.",
-  "action=confirm requires: title, location|url, description, poc (≥40 chars with request/payload/steps AND observed result), evidence_ids.",
-  "Each evidence_id must contain demonstrable output (response body / stdout / redirect), not HTTP status alone.",
-  "Multiple findings may reuse one evidence_id if that evidence's output supports each claim; otherwise use a dedicated probe evidence.",
+  "Finding = user-trustable conclusion; proof = fragment from your tool output that demonstrates the claim.",
+  "action=confirm requires: title, location|url, description, poc (≥40 chars how+result), proof (proving observation ≥24 chars from real tool output).",
+  "Case evidence is created automatically from proof — do not look up or pass evidence_ids.",
+  "Prefer quoting response body / reflection / proving stdout. One strong proof is enough to trust and reproduce.",
   "action=list lists booked findings. Booking does NOT end the engagement.",
   "Chat prose is never product truth.",
 ].join(" ");
+
+/** Soft trust signals after confirm (kept for metrics; short lists are fine). */
+export type BookingChainAssessment = {
+  short_chain: boolean;
+  shared_proof: boolean;
+  chain_length: number;
+  warnings: string[];
+  nudge: string;
+};
+
+export type BookingChainProofStep = {
+  evidence_id: string;
+  excerpt: string;
+  role: "proof" | "support";
+};
+
+/** Soft assessment — book-time single proof is healthy; only warn on weak shared reuse. */
+export function assessBookingChainQuality(input: {
+  evidenceIds: string[];
+  location: string;
+  proofExcerpts: BookingChainProofStep[];
+  reuseCounts: Map<string, number>;
+  locationSupported?: (excerpt: string, location: string) => boolean;
+}): BookingChainAssessment {
+  const evidenceIds = input.evidenceIds.filter(Boolean);
+  const chain_length = evidenceIds.length;
+  const short_chain = chain_length < 2;
+  const warnings: string[] = [];
+  let shared_proof = false;
+
+  for (const step of input.proofExcerpts) {
+    if (step.role !== "proof") continue;
+    const prior = input.reuseCounts.get(step.evidence_id) || 0;
+    if (prior < 1) continue;
+    shared_proof = true;
+    const locOk = input.locationSupported
+      ? input.locationSupported(step.excerpt, input.location)
+      : true;
+    if (!locOk) {
+      warnings.push(
+        `Proof material does not clearly support ${input.location}. Next booking: quote a claim-specific observation for this location.`,
+      );
+    }
+  }
+
+  const uniqueWarnings = [...new Set(warnings)];
+  const nudge =
+    uniqueWarnings.length === 0
+      ? ""
+      : [
+          "booking_nudge (soft — finding was still booked):",
+          ...uniqueWarnings.map((w, i) => `${i + 1}) ${w}`),
+        ].join("\n");
+
+  return { short_chain, shared_proof, chain_length, warnings: uniqueWarnings, nudge };
+}

@@ -149,11 +149,16 @@ async function main() {
 
   await platform.send({ type: "task_start", conversation_id: task.conversationId, task_id: task.taskId });
   await exec(createTodoTool(runtime), "a", { op: "init", items: ["Act", "Book"] });
-  const shell = JSON.parse(textOf(await exec(createShellTool(runtime), "b", { command: "echo p" })));
+  await exec(createShellTool(runtime), "b", {
+    command: "echo 'PROOF: platform smoke observed issue marker on /x'",
+  });
   await exec(createFindingTool(runtime), "c", {
     action: "confirm",
     title: "Plat finding",
-    evidence_ids: [shell.evidence_id],
+    location: "http://127.0.0.1:1/x",
+    description: "Platform smoke booking with grounded proof from shell.",
+    poc: "GET /x → response shows PROOF platform smoke observed issue marker",
+    proof: "PROOF: platform smoke observed issue marker on /x",
   });
 
   // Booking must not emit finish or task_complete

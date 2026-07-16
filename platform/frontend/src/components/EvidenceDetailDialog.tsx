@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { authFetch } from "../lib/api";
 import { asString, type SecurityEvidence } from "../lib/securityTypes";
-import { parseEvidenceView, type EvidenceLike, type ParsedEvidenceView } from "../lib/evidenceDisplay";
+import { evidenceProofSteps, parseEvidenceView, type EvidenceLike, type ParsedEvidenceView } from "../lib/evidenceDisplay";
 
 interface Props {
   open: boolean;
@@ -52,6 +52,15 @@ export default function EvidenceDetailDialog({ open, evidenceId, initial, onClos
               <span className={`rounded-md px-2 py-0.5 font-mono text-[11px] font-medium uppercase ${badgeClassForKind(view.kind)}`}>
                 {view.badge}
               </span>
+              {view.role && (
+                <span
+                  className={`rounded-md px-2 py-0.5 font-mono text-[11px] uppercase ${
+                    view.role === "proof" ? "bg-status-success/15 text-status-success" : "bg-canvas-inset text-ink-muted"
+                  }`}
+                >
+                  {view.role}
+                </span>
+              )}
               {view.toolName && (
                 <span className="rounded-md bg-canvas-inset px-2 py-0.5 text-ink-secondary">{view.toolName}</span>
               )}
@@ -68,21 +77,40 @@ export default function EvidenceDetailDialog({ open, evidenceId, initial, onClos
 
         {error && <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
 
-        {view.kind === "http" && view.http ? (
-          <HttpEvidenceBody http={view.http} />
-        ) : view.kind === "shell" && view.shell ? (
-          <ShellEvidenceBody shell={view.shell} />
-        ) : (
-          <section>
-            <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">
-              {view.kind === "scan" ? "Scan result" : view.kind === "browser" ? "Page observation" : "Tool output"}
-            </h3>
+        {/* Same compact steps as finding panel — no separate “evidence product card”. */}
+        {(() => {
+          const steps = evidenceProofSteps((evidence || {}) as EvidenceLike);
+          if (steps.length) {
+            return (
+              <ol className="space-y-2">
+                {steps.map((s) => (
+                  <li
+                    key={`${s.n}-${s.label}`}
+                    className="min-w-0 overflow-hidden rounded-md border border-hairline-soft"
+                  >
+                    <p className="flex items-center gap-1.5 border-b border-hairline-soft bg-canvas-inset/50 px-2.5 py-1.5 text-[11px] font-medium text-ink">
+                      <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-canvas font-mono text-[10px] text-ink-secondary">
+                        {s.n}
+                      </span>
+                      {s.label}
+                    </p>
+                    <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words px-2.5 py-2 font-mono text-[11px] leading-relaxed text-ink-secondary">
+                      {s.text}
+                    </pre>
+                  </li>
+                ))}
+              </ol>
+            );
+          }
+          if (view.kind === "http" && view.http) return <HttpEvidenceBody http={view.http} />;
+          if (view.kind === "shell" && view.shell) return <ShellEvidenceBody shell={view.shell} />;
+          if (view.kind === "file" && view.file) return <FileEvidenceBody file={view.file} />;
+          return (
             <pre className="max-h-[28rem] overflow-auto whitespace-pre-wrap break-words rounded-md bg-canvas-inset p-3 font-mono text-xs leading-relaxed text-ink-secondary">
               {view.bodyPreview || view.subtitle || "—"}
             </pre>
-          </section>
-        )}
-
+          );
+        })()}
         {evidence?.evidence_id && (
           <p className="mt-4 font-mono text-[10px] text-ink-muted">{evidence.evidence_id}</p>
         )}
@@ -137,26 +165,47 @@ function HttpEvidenceBody({ http }: { http: NonNullable<ParsedEvidenceView["http
 }
 
 function ShellEvidenceBody({ shell }: { shell: NonNullable<ParsedEvidenceView["shell"]> }) {
+  const observation = shell.observation || "";
+  const fullOut = shell.stdout || "";
+  const showFullSeparately =
+    Boolean(fullOut) &&
+    Boolean(observation) &&
+    fullOut.replace(/\s+/g, " ").slice(0, 200) !== observation.replace(/\s+/g, " ").slice(0, 200) &&
+    fullOut.length > observation.length + 40;
+
   return (
     <div className="space-y-4">
-      {shell.exitCode != null && shell.exitCode !== "" && (
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Info label="Exit code" value={shell.exitCode} />
-        </div>
-      )}
-      {shell.command && (
+      {observation ? (
         <section>
-          <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">Command</h3>
-          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md bg-canvas-inset p-3 font-mono text-xs leading-relaxed text-ink">
+          <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">1. Result (what was observed)</h3>
+          <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-hairline-soft bg-canvas p-3 font-mono text-xs leading-relaxed text-ink">
+            {observation}
+          </pre>
+        </section>
+      ) : fullOut ? (
+        <section>
+          <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">1. Result (what was observed)</h3>
+          <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border border-hairline-soft bg-canvas p-3 font-mono text-xs leading-relaxed text-ink">
+            {fullOut}
+          </pre>
+        </section>
+      ) : null}
+
+      {shell.command && (
+        <section className="rounded-md border border-hairline-soft bg-canvas-inset/50 p-3">
+          <h3 className="mb-1 text-xs font-semibold uppercase text-ink-secondary">2. What the agent did</h3>
+          <p className="mb-2 text-[11px] text-ink-muted">Shell command that produced the result.</p>
+          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md bg-canvas p-2 font-mono text-[11px] leading-relaxed text-ink">
             {shell.command}
           </pre>
         </section>
       )}
-      {shell.stdout && (
+
+      {showFullSeparately && (
         <section>
-          <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">Stdout</h3>
-          <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-canvas-inset p-3 font-mono text-xs leading-relaxed text-ink-secondary">
-            {shell.stdout}
+          <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">Full stdout</h3>
+          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md bg-canvas-inset p-3 font-mono text-xs leading-relaxed text-ink-secondary">
+            {fullOut}
           </pre>
         </section>
       )}
@@ -168,8 +217,30 @@ function ShellEvidenceBody({ shell }: { shell: NonNullable<ParsedEvidenceView["s
           </pre>
         </section>
       )}
-      {!shell.command && !shell.stdout && !shell.stderr && (
-        <p className="text-sm text-ink-muted">No command or output recorded for this evidence.</p>
+      {!observation && !fullOut && !shell.command && !shell.stderr && (
+        <p className="text-sm text-ink-muted">No proving observation recorded for this evidence.</p>
+      )}
+    </div>
+  );
+}
+
+function FileEvidenceBody({ file }: { file: NonNullable<ParsedEvidenceView["file"]> }) {
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Info label="Path" value={file.path || "—"} />
+        {file.hash && <Info label="Hash" value={file.hash} />}
+        {file.bytes && <Info label="Bytes" value={file.bytes} />}
+      </div>
+      {file.preview ? (
+        <section>
+          <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">Preview</h3>
+          <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md bg-canvas-inset p-3 font-mono text-xs leading-relaxed text-ink-secondary">
+            {file.preview}
+          </pre>
+        </section>
+      ) : (
+        <p className="text-sm text-ink-muted">No file preview recorded for this evidence.</p>
       )}
     </div>
   );
@@ -180,6 +251,7 @@ function badgeClassForKind(kind: ParsedEvidenceView["kind"]): string {
   if (kind === "scan") return "bg-[#f5f3ff] text-[#6d28d9]";
   if (kind === "browser") return "bg-[#f0fdfa] text-[#0f766e]";
   if (kind === "shell") return "bg-canvas-inset text-ink";
+  if (kind === "file") return "bg-[#fff7ed] text-[#c2410c]";
   return "bg-canvas-inset text-ink-secondary";
 }
 

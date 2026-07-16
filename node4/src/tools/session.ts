@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ToolRuntime } from "../types.js";
-import { emitEvidence, isInScope, jsonResult, resolveTargetUrl, textResult } from "./common.js";
+import { recordActObservation, isInScope, jsonResult, resolveTargetUrl, textResult } from "./common.js";
 
 type JarMap = Record<string, string>;
 type HistoryRow = {
@@ -158,7 +158,7 @@ export function createSessionTool(runtime: ToolRuntime): ToolDefinition<any> {
           await saveJar(bPaths.jar, jarB);
           await appendHistory(bPaths.hist, histRow(actorB, rb));
         }
-        const evidenceId = await emitEvidence(
+        recordActObservation(
           runtime,
           "session",
           `session compare ${actor} vs ${actorB} ${params.url}`,
@@ -179,7 +179,6 @@ export function createSessionTool(runtime: ToolRuntime): ToolDefinition<any> {
           same_status: ra.status === rb.status,
           same_length:
             (ra.body_preview?.length || 0) === (rb.body_preview?.length || 0),
-          evidence_id: evidenceId,
           guidance:
             "Different status/body length often signals IDOR/vertical privilege issues — probe further and book with evidence.",
         });
@@ -210,12 +209,11 @@ export function createSessionTool(runtime: ToolRuntime): ToolDefinition<any> {
             url: one.url,
             set_cookie_keys: one.set_cookie_keys,
             body_preview: one.body_preview,
-            evidence_id: one.evidence_id,
           });
           await appendHistory(paths.hist, histRow(actor, one));
         }
         await saveJar(paths.jar, jar);
-        const evidenceId = await emitEvidence(runtime, "session", `session chain actor=${actor} x${results.length}`, {
+        recordActObservation(runtime, "session", `session chain actor=${actor} x${results.length}`, {
           actor,
           steps: results,
           cookies: jar,
@@ -226,7 +224,6 @@ export function createSessionTool(runtime: ToolRuntime): ToolDefinition<any> {
           actor,
           steps: results,
           cookies: jar,
-          evidence_id: evidenceId,
         });
       }
 
@@ -260,7 +257,6 @@ export function createSessionTool(runtime: ToolRuntime): ToolDefinition<any> {
         truncated: one.truncated,
         set_cookie_keys: one.set_cookie_keys,
         cookies: jar,
-        evidence_id: one.evidence_id,
       });
     },
   };
@@ -335,7 +331,6 @@ function summarizeSide(one: {
   url?: string;
   body_preview?: string;
   set_cookie_keys?: string[];
-  evidence_id?: string;
 }) {
   const body = one.body_preview || "";
   return {
@@ -346,7 +341,6 @@ function summarizeSide(one: {
     body_length: body.length,
     body_preview: body.slice(0, 400),
     set_cookie_keys: one.set_cookie_keys,
-    evidence_id: one.evidence_id,
   };
 }
 
@@ -372,7 +366,6 @@ async function doRequest(
   truncated?: boolean;
   set_cookie_keys?: string[];
   jar: JarMap;
-  evidence_id?: string;
 }> {
   let url: string;
   try {
@@ -410,7 +403,7 @@ async function doRequest(
     const resHeaders = Object.fromEntries(res.headers.entries());
     const jar = { ...input.jar };
     const setKeys = mergeSetCookie(jar, res.headers);
-    const evidence_id = await emitEvidence(
+    recordActObservation(
       runtime,
       "session",
       `${input.actor} ${method} ${url} → ${res.status}`,
@@ -434,7 +427,6 @@ async function doRequest(
       truncated: text.length > body_preview.length,
       set_cookie_keys: setKeys,
       jar,
-      evidence_id,
     };
   } catch (error) {
     return {

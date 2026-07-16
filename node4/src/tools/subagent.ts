@@ -14,7 +14,7 @@ export function createSubagentTool(runtime: ToolRuntime): ToolDefinition<any> {
     name: "subagent",
     label: "Subagent",
     description:
-      "Spawn a child work package under this task workspace. Returns structured result + evidence_id for booking. Optional goal_id attaches a long-task goal. Prefer for separable recon/exploit packages. Params: assignment (required), goal_id?, command? (optional shell for the child).",
+      "Spawn a child work package under this task workspace. Returns structured result (stdout in content). Optional goal_id attaches a long-task goal. Prefer for separable recon/exploit packages. To book: finding(confirm) with proof= quoted from child output.",
     parameters: Type.Object({
       assignment: Type.String(),
       goal_id: Type.Optional(Type.String()),
@@ -72,7 +72,7 @@ export function createSubagentTool(runtime: ToolRuntime): ToolDefinition<any> {
         evidence_id: result.evidenceId,
         goal_id: result.goalId,
         artifact_path: result.artifactPath,
-        guidance: "Use evidence_id with finding(confirm) when the child proved a bookable issue.",
+        guidance: "Quote proving fragments from child output into finding(confirm) proof= when booking.",
       });
     },
   };

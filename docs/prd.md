@@ -76,6 +76,7 @@
 - **Expert pack** 由 `engagement` / `role` 选择（须已 **install** 到本 Node）；无 engagement 且未装包时跑 **bare runtime**；目录见 `experts/`。
 - 工具与循环语义遵循 `docs/node4-harness.md`（todo、shell、fs、http、**session**、**browser**、script、finding、subagent、goal、**skill**；CTF 另有 captcha。均为 **assistive 密度**，非流程关卡）。
 - 任务目录可排查：`events.jsonl`、evidence、findings 等。
+- **Case 共享 evidence**：`task_assign.case_context` 含 findings + `evidence_snippets`（path/excerpt），供多专家接力（如 pentest 源码泄露 → code-audit）；见 `docs/evidence-quality-plan.md`。
 
 **P1**
 

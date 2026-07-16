@@ -1,9 +1,12 @@
 """Case work-group context for expert dispatch.
 
 Same conversation = same case (work group). When any expert is task_assign'd,
-attach a readable thread + findings board so the agent is not amnesic.
+attach a readable thread + findings board + evidence snippets so the next expert
+can continue without prior taskDir paths.
 
 Not NLP engagement invent. Not full tool dumps. Structured envelope only.
+Evidence is Case-shared material for multi-expert collab (e.g. pentest source
+leak → code-audit reads path + preview from evidence_snippets).
 """
 from __future__ import annotations
 
@@ -32,12 +35,32 @@ _STATUS_KEEP_SUBSTRINGS = (
 
 DEFAULT_THREAD_LIMIT = 40
 DEFAULT_FINDINGS_LIMIT = 20
+DEFAULT_EVIDENCE_SNIPPETS = 12
 DEFAULT_LINE_CHARS = 800
+DEFAULT_EXCERPT_CHARS = 480
 DEFAULT_TOTAL_CHARS = 14000
+
+# Meta tools that should not dominate collab context (unless finding-linked).
+# Note: source_tool "finding" is *book-time product proof* (emitCaseEvidence) — not meta noise.
+_TRACE_SOURCE_TOOLS = frozenset({
+    "todo",
+    "skill",
+    "read",
+    "edit",
+    "goal",
+    "subagent",
+})
 
 
 def _clip(text: str, limit: int = DEFAULT_LINE_CHARS) -> str:
     t = " ".join(str(text or "").split())
+    if len(t) <= limit:
+        return t
+    return t[: max(0, limit - 20)] + "…(truncated)"
+
+
+def _clip_block(text: str, limit: int = DEFAULT_EXCERPT_CHARS) -> str:
+    t = str(text or "").strip()
     if len(t) <= limit:
         return t
     return t[: max(0, limit - 20)] + "…(truncated)"
@@ -161,6 +184,16 @@ def build_thread_from_messages(
     return kept
 
 
+def _proof_from_description(description: str | None) -> str:
+    text = str(description or "").strip()
+    if not text:
+        return ""
+    marker = "[Proof]"
+    if marker in text:
+        return _clip_block(text.split(marker, 1)[1].strip(), DEFAULT_EXCERPT_CHARS)
+    return _clip_block(text, 240)
+
+
 def build_findings_summary(
     findings: list[dict],
     *,
@@ -173,13 +206,22 @@ def build_findings_summary(
         title = str(f.get("title") or "").strip()
         if not title:
             continue
-        out.append({
+        eids = f.get("evidence_ids") or []
+        if not isinstance(eids, list):
+            eids = []
+        clean_eids = [str(x) for x in eids if str(x or "").strip()][:12]
+        proof = _proof_from_description(f.get("description") or f.get("poc"))
+        row: dict[str, Any] = {
             "id": str(f.get("id") or f.get("finding_id") or f.get("vulnerability_id") or "")[:80],
             "title": _clip(title, 200),
             "severity": str(f.get("severity") or "medium")[:32],
             "status": str(f.get("status") or "")[:32],
             "location": _clip(str(f.get("location") or f.get("url") or f.get("affected_asset") or ""), 200),
-        })
+            "evidence_ids": clean_eids,
+        }
+        if proof:
+            row["proof_excerpt"] = proof
+        out.append(row)
         if limit > 0 and len(out) >= limit:
             break
     return out
@@ -194,7 +236,6 @@ def extract_artifact_hints(thread: list[dict[str, str]], findings: list[dict]) -
         text = line.get("text") or ""
         if not any(n.lower() in text.lower() for n in needles):
             continue
-        # keep short slices that look like paths
         for token in text.replace(",", " ").split():
             if any(n.lower() in token.lower() for n in needles) and len(token) > 4:
                 t = token.strip("`'\"()[]")
@@ -212,17 +253,205 @@ def extract_artifact_hints(thread: list[dict[str, str]], findings: list[dict]) -
     return hints[:12]
 
 
+def _props_dict(raw: Any) -> dict[str, Any]:
+    return raw if isinstance(raw, dict) else {}
+
+
+def excerpt_from_properties(properties: dict[str, Any] | None, *, limit: int = DEFAULT_EXCERPT_CHARS) -> str:
+    """Build a short collab-facing excerpt from evidence.properties."""
+    p = _props_dict(properties)
+    if p.get("excerpt"):
+        return _clip_block(str(p["excerpt"]), limit)
+    # Book-time proof string (agent quote) may be stored as plain `proof` / `observation`.
+    if isinstance(p.get("proof"), str) and str(p.get("proof") or "").strip():
+        return _clip_block(str(p["proof"]), limit)
+    if isinstance(p.get("observation"), str) and str(p.get("observation") or "").strip():
+        return _clip_block(str(p["observation"]), limit)
+    proof = p.get("proof") if isinstance(p.get("proof"), dict) else {}
+    for key in (
+        "stdout_excerpt",
+        "body_excerpt",
+        "response_body",
+        "body_preview",
+        "stdout",
+        "observation",
+        "preview",
+        "text",
+        "html",
+        "content",
+    ):
+        val = p.get(key) or proof.get(key)
+        if isinstance(val, str) and val.strip():
+            return _clip_block(val, limit)
+    # Nested data blob
+    data = p.get("data")
+    if isinstance(data, dict):
+        for key in ("stdout", "body", "preview", "text"):
+            val = data.get(key)
+            if isinstance(val, str) and val.strip():
+                return _clip_block(val, limit)
+    if isinstance(data, str) and data.strip():
+        return _clip_block(data, limit)
+    return ""
+
+
+def path_or_url_from_properties(properties: dict[str, Any] | None) -> str:
+    p = _props_dict(properties)
+    for key in ("path", "path_or_url", "url", "file", "target", "location"):
+        val = p.get(key)
+        if isinstance(val, str) and val.strip():
+            return _clip(val.strip(), 260)
+    command = str(p.get("command") or "").strip()
+    if command:
+        return _clip(f"$ {command}", 200)
+    return ""
+
+
+def evidence_role(properties: dict[str, Any] | None, source_tool: str | None = None) -> str:
+    p = _props_dict(properties)
+    role = str(p.get("role") or "").strip().lower()
+    if role in {"proof", "trace"}:
+        return role
+    tool = str(source_tool or p.get("source_tool") or "").strip().lower()
+    if tool in _TRACE_SOURCE_TOOLS:
+        return "trace"
+    # Hollow / noise → trace
+    excerpt = excerpt_from_properties(p, limit=80)
+    if not excerpt and not path_or_url_from_properties(p):
+        return "trace"
+    return "proof"
+
+
+def _usefulness_score(
+    *,
+    evidence_id: str,
+    referenced: set[str],
+    properties: dict[str, Any],
+    source_tool: str | None,
+) -> tuple[int, int, int]:
+    """Higher is better: (linked, is_proof, has_excerpt)."""
+    linked = 1 if evidence_id in referenced else 0
+    role = evidence_role(properties, source_tool)
+    is_proof = 1 if role == "proof" else 0
+    has_ex = 1 if excerpt_from_properties(properties, limit=40) or path_or_url_from_properties(properties) else 0
+    return (linked, is_proof, has_ex)
+
+
+def build_evidence_snippets(
+    evidence_rows: list[dict],
+    *,
+    referenced_ids: set[str] | list[str] | None = None,
+    limit: int = DEFAULT_EVIDENCE_SNIPPETS,
+    prefer_linked: bool = True,
+    prefer_proof: bool = True,
+) -> list[dict[str, Any]]:
+    """
+    Select top-N Case evidence for joining experts.
+
+    Prefers finding-linked + proof-role rows with non-empty excerpt/path.
+    """
+    ref = {str(x) for x in (referenced_ids or []) if str(x or "").strip()}
+    scored: list[tuple[tuple[int, int, int], dict[str, Any]]] = []
+    for row in evidence_rows:
+        if not isinstance(row, dict):
+            continue
+        eid = str(row.get("evidence_id") or row.get("id") or "").strip()
+        if not eid:
+            continue
+        props = _props_dict(row.get("properties"))
+        source_tool = str(row.get("source_tool") or "")[:80]
+        tool_l = source_tool.lower()
+        if tool_l in _TRACE_SOURCE_TOOLS and eid not in ref:
+            continue
+        role = evidence_role(props, source_tool)
+        if prefer_proof and role != "proof" and eid not in ref:
+            # Still allow linked trace if referenced
+            continue
+        if prefer_linked and ref and eid not in ref and role != "proof":
+            continue
+        excerpt = excerpt_from_properties(props)
+        path_or_url = path_or_url_from_properties(props)
+        if not excerpt and not path_or_url and eid not in ref:
+            continue
+        kind = str(props.get("kind") or row.get("type") or "tool")[:40]
+        snippet: dict[str, Any] = {
+            "id": eid[:100],
+            "summary": _clip(str(row.get("summary") or ""), 200),
+            "source_tool": source_tool,
+            "kind": kind,
+            "role": role,
+        }
+        if path_or_url:
+            snippet["path_or_url"] = path_or_url
+        if excerpt:
+            snippet["excerpt"] = excerpt
+        # Book-time causality: how the agent obtained the observation (command / HTTP line).
+        how = str(props.get("how_captured") or "").strip()
+        if not how:
+            method = str(props.get("method") or "").strip()
+            url = str(props.get("url") or path_or_url or "").strip()
+            cmd = str(props.get("command") or "").strip()
+            if method and url:
+                how = f"{method} {url}"
+            elif cmd:
+                how = f"$ {cmd[:160]}"
+        if how:
+            snippet["how_captured"] = _clip(how, 220)
+        score = _usefulness_score(
+            evidence_id=eid,
+            referenced=ref,
+            properties=props,
+            source_tool=source_tool,
+        )
+        # If we prefer linked and have refs, demote unlinked slightly via score only
+        if prefer_linked and ref and eid not in ref:
+            score = (0, score[1], score[2])
+        scored.append((score, snippet))
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+    out = [s for _, s in scored[: max(1, limit)] if True]
+    # If nothing passed filters but we have rows, fall back to linked ids only with raw summary
+    if not out and ref:
+        for row in evidence_rows:
+            if not isinstance(row, dict):
+                continue
+            eid = str(row.get("evidence_id") or row.get("id") or "").strip()
+            if eid not in ref:
+                continue
+            props = _props_dict(row.get("properties"))
+            out.append({
+                "id": eid[:100],
+                "summary": _clip(str(row.get("summary") or ""), 200),
+                "source_tool": str(row.get("source_tool") or "")[:80],
+                "kind": str(props.get("kind") or row.get("type") or "tool")[:40],
+                "role": evidence_role(props, row.get("source_tool")),
+                "path_or_url": path_or_url_from_properties(props) or None,
+                "excerpt": excerpt_from_properties(props) or None,
+            })
+            if len(out) >= limit:
+                break
+        # drop Nones
+        cleaned: list[dict[str, Any]] = []
+        for s in out:
+            cleaned.append({k: v for k, v in s.items() if v is not None and v != ""})
+        return cleaned
+    return out
+
+
 def build_case_context_payload(
     *,
     messages: list[dict],
     findings: list[dict] | None = None,
+    evidence_rows: list[dict] | None = None,
     conversation_id: str | None = None,
     thread_limit: int = DEFAULT_THREAD_LIMIT,
     findings_limit: int = DEFAULT_FINDINGS_LIMIT,
+    evidence_limit: int = DEFAULT_EVIDENCE_SNIPPETS,
 ) -> dict[str, Any]:
     """Pure builder for tests and dispatch."""
     thread = build_thread_from_messages(messages, limit=thread_limit)
-    findings_summary = build_findings_summary(findings or [], limit=findings_limit)
+    findings_list = findings or []
+    findings_summary = build_findings_summary(findings_list, limit=findings_limit)
     # Also fold vuln lines already in thread into board if findings empty
     if not findings_summary:
         for line in thread:
@@ -233,18 +462,46 @@ def build_case_context_payload(
                     "severity": "",
                     "status": "",
                     "location": "",
+                    "evidence_ids": [],
                 })
         findings_summary = findings_summary[:findings_limit]
-    hints = extract_artifact_hints(thread, findings or [])
+
+    referenced: set[str] = set()
+    for f in findings_list:
+        for eid in (f.get("evidence_ids") or []) if isinstance(f, dict) else []:
+            if eid:
+                referenced.add(str(eid))
+    for f in findings_summary:
+        for eid in f.get("evidence_ids") or []:
+            if eid:
+                referenced.add(str(eid))
+
+    evidence_snippets = build_evidence_snippets(
+        evidence_rows or [],
+        referenced_ids=referenced,
+        limit=evidence_limit,
+        prefer_linked=True,
+        prefer_proof=True,
+    )
+    hints = extract_artifact_hints(thread, findings_list)
+    # Surface paths from snippets as hints too
+    for sn in evidence_snippets:
+        p = sn.get("path_or_url")
+        if p and str(p) not in hints and not str(p).startswith("$ "):
+            hints.append(str(p))
+        if len(hints) >= 16:
+            break
+
     return {
-        "version": 1,
+        "version": 2,
         "conversation_id": conversation_id,
         "thread": thread,
         "findings_summary": findings_summary,
-        "artifact_hints": hints,
+        "evidence_snippets": evidence_snippets,
+        "artifact_hints": hints[:16],
         "note": (
-            "Same case work-group thread. Read before acting. "
-            "Large files are not inlined — use paths/hints if present."
+            "Same case work-group. Findings + evidence_snippets are shared Case materials. "
+            "Use paths/excerpts to continue; large files are not fully inlined."
         ),
     }
 
@@ -256,12 +513,14 @@ async def load_case_context_for_conversation(
     user_id=None,
     thread_limit: int = DEFAULT_THREAD_LIMIT,
     findings_limit: int = DEFAULT_FINDINGS_LIMIT,
+    evidence_limit: int = DEFAULT_EVIDENCE_SNIPPETS,
 ) -> dict[str, Any]:
-    """Load messages + vulns from DB and build case_context."""
+    """Load messages + vulns + evidence from DB and build case_context."""
     import uuid as uuid_mod
 
     from sqlalchemy import select
 
+    from app.models.evidence import Evidence
     from app.models.message import Message
     from app.models.vulnerability import Vulnerability
     from app.services.conversation_snapshot import message_summary
@@ -291,17 +550,42 @@ async def load_case_context_for_conversation(
                 "location": getattr(v, "location", None)
                 or getattr(v, "affected_asset", None)
                 or getattr(v, "url", None)
+                or getattr(v, "poc", None)
                 or "",
+                "description": getattr(v, "description", None) or "",
+                "poc": getattr(v, "poc", None) or "",
                 "evidence_ids": list(getattr(v, "evidence_ids", None) or []),
             })
     except Exception:
-        # Fall back to vuln_found in messages only
         findings = []
+
+    evidence_rows: list[dict] = []
+    try:
+        eq = select(Evidence).where(Evidence.conversation_id == cid)
+        if user_id is not None:
+            uid = user_id if isinstance(user_id, uuid_mod.UUID) else uuid_mod.UUID(str(user_id))
+            eq = eq.where(Evidence.user_id == uid)
+        # Pull a wider window; snippet builder ranks/filter
+        eq = eq.order_by(Evidence.created_at.desc()).limit(max(80, evidence_limit * 6))
+        for e in (await db.execute(eq)).scalars().all():
+            evidence_rows.append({
+                "evidence_id": e.evidence_id,
+                "id": e.evidence_id,
+                "summary": e.summary or "",
+                "source_tool": e.source_tool or "",
+                "type": e.type or "tool_output",
+                "properties": e.properties if isinstance(e.properties, dict) else {},
+                "created_at": e.created_at.isoformat() if e.created_at else None,
+            })
+    except Exception:
+        evidence_rows = []
 
     return build_case_context_payload(
         messages=messages,
         findings=findings,
+        evidence_rows=evidence_rows,
         conversation_id=str(cid),
         thread_limit=thread_limit,
         findings_limit=findings_limit,
+        evidence_limit=evidence_limit,
     )

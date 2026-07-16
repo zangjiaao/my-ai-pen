@@ -313,7 +313,7 @@ export async function runNode4Task(
     `Role pack: ${pack.id}. OMP essence: keep tool-calling in-loop; shell-first multi-step + multi-call same turn; http is single-probe only.`,
     "Long multi-challenge work: call goal(op=create, objective=...) early so the harness can auto-continue (OMP goal mode) until full clearance — complete only with remaining_unsolved=0 after real audit (partial wins are not done).",
     pack.bookingMode === "finding"
-      ? "Book via finding(confirm)+evidence_ids (batch after a shell burst). When truly stuck after dense shell work, stop with no tools — no finish tool; harness settles."
+      ? "Book via finding(confirm) with proof= quoted from tool output. When truly stuck after dense shell work, stop with no tools — no finish tool; harness settles."
       : "This pack does not book findings. When finished, simply stop — harness settles.",
     `Target: ${JSON.stringify(task.target)}`,
     `Scope: ${JSON.stringify(task.scope)}`,
@@ -339,13 +339,16 @@ export async function runNode4Task(
   while (!cancelled()) {
     const toolsInLast = segmentCounter.tools;
 
+    const actObsCount = runtime.lifecycle.recentObservations?.length || 0;
     const evidenceList = await runtime.evidence.list().catch(() => []);
+    // Prefer act observations (book-time evidence model); fall back to Case evidence files.
+    const probeCount = actObsCount || evidenceList.length;
     const bookedSoFar = await loadConfirmedFindings(runtime.findingsDir).catch(() => ({ count: 0 }));
     // Feed goal complete-gates (stall / progress) before deciding continue.
     if (goals.isActive()) {
       goals.noteSegmentProgress({
         bookedFindings: bookedSoFar.count,
-        evidenceCount: evidenceList.length,
+        evidenceCount: probeCount,
         toolsInSegment: toolsInLast,
         goalContinueCount,
       });
@@ -353,14 +356,14 @@ export async function runNode4Task(
     const bookingSnap =
       pack.bookingMode === "finding"
         ? {
-            evidenceCount: evidenceList.length,
+            evidenceCount: probeCount,
             bookedFindingCount: bookedSoFar.count,
             toolsInLastSegment: toolsInLast,
           }
         : undefined;
-    // bookingGap: has evidence but zero findings (strong signal to allow one continue)
+    // bookingGap: probes without findings (strong signal to allow one continue)
     const bookingGap =
-      pack.bookingMode === "finding" && evidenceList.length >= 2 && bookedSoFar.count === 0;
+      pack.bookingMode === "finding" && probeCount >= 2 && bookedSoFar.count === 0;
     // Soft open work (todos only) for premature; goal mode is separate OMP path.
     const openWorkRemaining = runtime.todo.openCount() > 0;
 

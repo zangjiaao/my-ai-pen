@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ToolRuntime } from "../types.js";
-import { emitEvidence, isInScope, jsonResult, resolveTargetUrl, textResult } from "./common.js";
+import { recordActObservation, isInScope, jsonResult, resolveTargetUrl, textResult } from "./common.js";
 
 export function createHttpTool(runtime: ToolRuntime): ToolDefinition<any> {
   return {
@@ -34,7 +34,7 @@ export function createHttpTool(runtime: ToolRuntime): ToolDefinition<any> {
         const text = await res.text();
         const bodyPreview = text.slice(0, 8000);
         const requestBody = params.body != null ? String(params.body) : undefined;
-        const evidenceId = await emitEvidence(runtime, "http", `${method} ${url} → ${res.status}`, {
+        recordActObservation(runtime, "http", `${method} ${url} → ${res.status}`, {
           method,
           url,
           status: res.status,
@@ -50,7 +50,6 @@ export function createHttpTool(runtime: ToolRuntime): ToolDefinition<any> {
           headers: Object.fromEntries(res.headers.entries()),
           body: bodyPreview,
           truncated: text.length > bodyPreview.length,
-          evidence_id: evidenceId,
         });
       } catch (error) {
         return textResult(`error: ${error instanceof Error ? error.message : String(error)}`);

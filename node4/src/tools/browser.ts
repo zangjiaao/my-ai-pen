@@ -15,7 +15,7 @@ import {
   stopBrowserSandbox,
 } from "../runtime/browser-sandbox.js";
 import type { ToolRuntime } from "../types.js";
-import { emitEvidence, isInScope, jsonResult, resolveTargetUrl, textResult } from "./common.js";
+import { recordActObservation, isInScope, jsonResult, resolveTargetUrl, textResult } from "./common.js";
 
 const ACTIONS = [
   "open",
@@ -101,7 +101,7 @@ export function createBrowserTool(runtime: ToolRuntime): ToolDefinition<any> {
         }
         await run(["wait", "800"], 15_000);
         const snap = await run(["snapshot", "-i"], 60_000);
-        const evidenceId = await emitEvidence(runtime, "browser", `browser open ${url}`, {
+        recordActObservation(runtime, "browser", `browser open ${url}`, {
           url,
           open_url: openUrl,
           via: opened.via,
@@ -115,7 +115,6 @@ export function createBrowserTool(runtime: ToolRuntime): ToolDefinition<any> {
           open_url: openUrl,
           via: opened.via,
           snapshot: snap.text.slice(0, 12_000),
-          evidence_id: evidenceId,
           guidance: "Use refs like @e3 from snapshot for click/fill. Re-snapshot after navigation.",
         });
       }
@@ -125,7 +124,7 @@ export function createBrowserTool(runtime: ToolRuntime): ToolDefinition<any> {
         if (params.interactive !== false) args.push("-i");
         const r = await run(args, 60_000);
         if (r.unavailable) return textResult(`error: ${r.error}`);
-        const evidenceId = await emitEvidence(runtime, "browser", "browser snapshot", {
+        recordActObservation(runtime, "browser", "browser snapshot", {
           via: r.via,
           snapshot: r.text.slice(0, 16_000),
         });
@@ -134,7 +133,6 @@ export function createBrowserTool(runtime: ToolRuntime): ToolDefinition<any> {
           action: "snapshot",
           via: r.via,
           snapshot: r.text.slice(0, 16_000),
-          evidence_id: evidenceId,
         });
       }
 
@@ -193,7 +191,7 @@ export function createBrowserTool(runtime: ToolRuntime): ToolDefinition<any> {
         }
         const r = await run(args, 60_000);
         if (r.unavailable) return textResult(`error: ${r.error}`);
-        const evidenceId = await emitEvidence(runtime, "browser", "browser read", {
+        recordActObservation(runtime, "browser", "browser read", {
           via: r.via,
           text: r.text.slice(0, 12_000),
         });
@@ -202,7 +200,6 @@ export function createBrowserTool(runtime: ToolRuntime): ToolDefinition<any> {
           action: "read",
           via: r.via,
           text: r.text.slice(0, 12_000),
-          evidence_id: evidenceId,
         });
       }
 
@@ -221,7 +218,7 @@ export function createBrowserTool(runtime: ToolRuntime): ToolDefinition<any> {
         if (params.full_page) args.push("--full");
         const r = await run(args, 60_000);
         if (r.unavailable) return textResult(`error: ${r.error}`);
-        const evidenceId = await emitEvidence(runtime, "browser", `browser screenshot`, {
+        recordActObservation(runtime, "browser", `browser screenshot`, {
           via: r.via,
           path_hint: pathHint,
           container_path: containerPath,
@@ -234,7 +231,6 @@ export function createBrowserTool(runtime: ToolRuntime): ToolDefinition<any> {
           path_hint: pathHint,
           container_path: r.via === "sandbox" ? containerPath : pathHint,
           cli: r.text.slice(0, 1500),
-          evidence_id: evidenceId,
           guidance:
             "For captcha, prefer captcha(fetch,url=image) with session actor, or browser snapshot + interact. OCR via captcha(ocr) if tesseract on host.",
         });
@@ -277,7 +273,7 @@ export function createBrowserTool(runtime: ToolRuntime): ToolDefinition<any> {
             "utf8",
           );
         }
-        const evidenceId = await emitEvidence(runtime, "browser", `export cookies → session actor=${actor}`, {
+        recordActObservation(runtime, "browser", `export cookies → session actor=${actor}`, {
           actor,
           via: r.via,
           cookies: merged,
@@ -289,7 +285,6 @@ export function createBrowserTool(runtime: ToolRuntime): ToolDefinition<any> {
           actor,
           cookies: merged,
           jar_path: jarPath,
-          evidence_id: evidenceId,
           guidance: `Use session(op=request|chain, actor="${actor}") to replay as this identity.`,
         });
       }

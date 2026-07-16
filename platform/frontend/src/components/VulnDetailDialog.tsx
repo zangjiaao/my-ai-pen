@@ -1,31 +1,20 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
 import { authFetch } from "../lib/api";
-import { evidenceCardPreview, type EvidenceLike } from "../lib/evidenceDisplay";
+import { evidenceProofSteps, type EvidenceLike } from "../lib/evidenceDisplay";
 import { asString, type SecurityEvidence, type SecurityVulnerability } from "../lib/securityTypes";
 
 interface Props {
   open: boolean;
   vulnerabilityId?: string | null;
   initial?: Partial<SecurityVulnerability> | null;
-  /** Current conversation / session display name when available. */
+  /** @deprecated unused — kept so callers need not change. */
   sessionName?: string | null;
   onClose: () => void;
   onUpdated?: (vulnerability: SecurityVulnerability) => void;
+  /** @deprecated unused — retest button removed. */
   onRetestCreated?: (conversationId: string) => void;
   onOpenEvidence?: (evidence: Partial<SecurityEvidence>) => void;
 }
-
-type RetestResponse = {
-  conversation_id: string;
-  started: boolean;
-  target: Record<string, unknown>;
-  scope: Record<string, unknown>;
-  instruction: string;
-  message: string;
-};
-
-const ACTIVE_CONVERSATION_KEY = "active_conversation_id";
 
 const SEVERITY_CLASSES: Record<string, string> = {
   critical: "bg-severity-critical-subtle text-severity-critical",
@@ -39,15 +28,13 @@ export default function VulnDetailDialog({
   open,
   vulnerabilityId,
   initial,
-  sessionName,
+  sessionName: _sessionName,
   onClose,
-  onRetestCreated,
-  onOpenEvidence,
+  onRetestCreated: _onRetestCreated,
+  onOpenEvidence: _onOpenEvidence,
 }: Props) {
-  const navigate = useNavigate();
   const [detail, setDetail] = useState<SecurityVulnerability | null>(null);
   const [loading, setLoading] = useState(false);
-  const [retesting, setRetesting] = useState(false);
   const [savingStatus, setSavingStatus] = useState(false);
   const [error, setError] = useState("");
 
@@ -90,23 +77,6 @@ export default function VulnDetailDialog({
 
   if (!open) return null;
 
-  const startRetest = async () => {
-    if (!id) return;
-    try {
-      setError("");
-      setRetesting(true);
-      const result = await authFetch<RetestResponse>(`/api/vulnerabilities/${id}/retest`, { method: "POST" });
-      localStorage.setItem(ACTIVE_CONVERSATION_KEY, result.conversation_id);
-      onRetestCreated?.(result.conversation_id);
-      onClose();
-      navigate("/");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "复测启动失败");
-    } finally {
-      setRetesting(false);
-    }
-  };
-
   const updateStatus = async (next: string) => {
     if (!id) return;
     setSavingStatus(true);
@@ -146,16 +116,6 @@ export default function VulnDetailDialog({
         ? "bg-status-success/15 text-status-success"
         : keySub.badgeClass;
 
-  const sessionLabel = asString(
-    sessionName
-      || (initial as { conversation_title?: string } | null)?.conversation_title
-      || (vulnerability as { conversation_title?: string } | null)?.conversation_title
-      || (vulnerability?.conversation_id ? shortSessionId(vulnerability.conversation_id) : ""),
-    "—",
-  );
-  const agentName = asString(vulnerability?.agent_name || vulnerability?.agent_id, "—");
-  const discoveredAt = formatDetailTime(vulnerability?.discovered_at || vulnerability?.timestamp);
-
   const method = vulnerability?.method ? String(vulnerability.method).toUpperCase() : "";
   // Prefer Surface-tree aligned path (set when finding is hung on the panel).
   const surfaceFromPanel = String(
@@ -189,7 +149,7 @@ export default function VulnDetailDialog({
   const { narrative: descriptionNarrative, proof: proofFromDescription } =
     splitDescriptionAndProof(descriptionRaw);
   const pocText = String(vulnerability?.poc || "").trim();
-  const description = descriptionRaw || pocText;
+  const description = descriptionNarrative || descriptionRaw || pocText;
   const highlightTokens = collectHighlightTokens(findingKind, flagToken, description, vulnerability);
 
   const timelineEvents = buildDetailTimeline(vulnerability);
@@ -201,6 +161,11 @@ export default function VulnDetailDialog({
         type: "evidence",
         summary: evidenceId,
       }));
+  const evidenceStepBlocks = evidenceItems.map((item) => evidenceProofSteps(item as EvidenceLike));
+  const hasEvidenceSteps = evidenceStepBlocks.some((s) => s.length > 0);
+  // PoC / [Proof] dump duplicate Evidence steps when book-time proof is present.
+  const showPoc = Boolean(pocText) && !hasEvidenceSteps;
+  const showLegacyProof = Boolean(proofFromDescription) && !hasEvidenceSteps;
   const canMutate = Boolean(id && !String(id).startsWith("finding:"));
 
   return (
@@ -222,29 +187,17 @@ export default function VulnDetailDialog({
             </div>
             {loading && <p className="mt-1 text-xs text-ink-muted">Loading...</p>}
           </div>
-          <div className="flex flex-shrink-0 gap-2">
-            {canMutate && findingKind === "vuln" && (
-              <button
-                onClick={() => void startRetest()}
-                disabled={retesting}
-                className="rounded-md bg-ink px-3 py-1.5 text-xs text-white disabled:opacity-60"
-              >
-                {retesting ? "启动中…" : "复测"}
-              </button>
-            )}
-            <button
-              onClick={onClose}
-              className="rounded-md border border-hairline px-3 py-1.5 text-xs hover:bg-surface-default"
-            >
-              关闭
-            </button>
-          </div>
+          <button
+            onClick={onClose}
+            className="flex-shrink-0 rounded-md border border-hairline px-3 py-1.5 text-xs hover:bg-surface-default"
+          >
+            关闭
+          </button>
         </div>
 
         {/* Lifecycle status */}
         {canMutate && (
           <div className="mb-4 flex flex-wrap items-center gap-2">
-            <span className="text-xs text-ink-muted">处理状态</span>
             {(["to_fix", "fixing", "fixed"] as const).map((st) => {
               const current = normalizeLifecycle(vulnerability?.status);
               const allowed =
@@ -276,15 +229,8 @@ export default function VulnDetailDialog({
           <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
         )}
 
-        {/* 2. Session · Agent · Discovered */}
-        <section className="grid gap-3 sm:grid-cols-3">
-          <Info label="Session" value={sessionLabel} />
-          <Info label="Agent" value={agentName} />
-          <Info label="Discovered" value={discoveredAt} />
-        </section>
-
-        {/* 3. Description — highlight FLAG / KEY material */}
-        <section className="mt-5">
+        {/* Description — highlight FLAG / KEY material */}
+        <section className="mt-1">
           <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">Description</h3>
           {findingKind === "flag" && flagToken && (
             <div className="mb-3 rounded-md border border-status-success/30 bg-status-success/10 px-3 py-2.5">
@@ -305,77 +251,84 @@ export default function VulnDetailDialog({
           </p>
         </section>
 
-        {/* 3b. PoC — reproduction + observed result (proof of existence) */}
-        {pocText && (
-          <section className="mt-5">
-            <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">Proof of concept</h3>
-            <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md bg-canvas-inset p-3 font-mono text-xs leading-relaxed text-ink-secondary">
-              {pocText}
-            </pre>
-          </section>
-        )}
-
-        {/* 3c. Captured proof excerpts from linked evidence */}
-        {proofFromDescription && (
-          <section className="mt-5">
-            <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">Captured proof</h3>
-            <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border border-hairline-soft bg-canvas p-3 font-mono text-xs leading-relaxed text-ink">
-              {proofFromDescription}
-            </pre>
-          </section>
-        )}
-
-        {/* 4. Attack surface — same identity as right-panel Surface tree node */}
+        {/* Location / surface (single place — not repeated in evidence path) */}
         <section className="mt-5">
-          <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">Attack surface</h3>
+          <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">Location</h3>
           <p className="break-all font-mono text-sm leading-relaxed text-ink-secondary">{surfaceLine}</p>
         </section>
 
-        {/* 5. Evidence */}
+        {/* Evidence = single proof path: command → script → result (no parallel PoC / Captured proof) */}
         <section className="mt-5">
           <h3 className="mb-2 text-xs font-semibold uppercase text-ink-secondary">Evidence</h3>
-          <div className="space-y-2">
+          <div className="space-y-4">
             {evidenceItems.map((item, index) => {
-              const preview = evidenceCardPreview(item as EvidenceLike);
-              const thin = !item.summary || preview.detail === "Evidence" || preview.title === item.evidence_id;
+              const steps = evidenceStepBlocks[index] || [];
               return (
-                <button
-                  key={item.id || item.evidence_id || index}
-                  type="button"
-                  onClick={() => onOpenEvidence?.(item)}
-                  className="block w-full rounded-md border border-hairline-soft p-3 text-left transition-colors hover:bg-surface-default"
-                >
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="shrink-0 rounded-md bg-canvas-inset px-2 py-0.5 font-mono text-[10px] font-medium uppercase text-ink-secondary">
-                      {preview.badge}
-                    </span>
-                    <span className="min-w-0 truncate text-sm font-medium text-ink">{preview.title}</span>
-                  </div>
-                  <p className="mt-1.5 line-clamp-2 break-words text-xs text-ink-muted">
-                    {thin
-                      ? "Reference recorded (raw request not captured yet)"
-                      : preview.detail}
-                  </p>
-                </button>
+                <div key={item.id || item.evidence_id || index}>
+                  {evidenceItems.length > 1 && (
+                    <p className="mb-2 text-[11px] font-medium text-ink-muted">
+                      Proof {index + 1}
+                      {item.evidence_id ? (
+                        <span className="ml-2 font-mono font-normal text-ink-muted/80">
+                          {String(item.evidence_id).slice(0, 24)}
+                        </span>
+                      ) : null}
+                    </p>
+                  )}
+                  {steps.length ? (
+                    <ol className="space-y-2">
+                      {steps.map((s) => (
+                        <li
+                          key={`${s.n}-${s.label}`}
+                          className="min-w-0 overflow-hidden rounded-md border border-hairline-soft"
+                        >
+                          <p className="flex items-center gap-1.5 border-b border-hairline-soft bg-canvas-inset/50 px-2.5 py-1.5 text-[11px] font-medium text-ink">
+                            <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-canvas font-mono text-[10px] text-ink-secondary">
+                              {s.n}
+                            </span>
+                            {s.label}
+                          </p>
+                          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words px-2.5 py-2 font-mono text-[11px] leading-relaxed text-ink-secondary">
+                            {s.text}
+                          </pre>
+                        </li>
+                      ))}
+                    </ol>
+                  ) : (
+                    <p className="text-xs text-ink-muted">
+                      {item.summary || "No command/result stored on this evidence."}
+                    </p>
+                  )}
+                </div>
               );
             })}
-            {!evidenceItems.length && (
+            {!evidenceItems.length && showLegacyProof && (
+              <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md border border-hairline-soft px-2.5 py-2 font-mono text-[11px] text-ink-secondary">
+                {proofFromDescription}
+              </pre>
+            )}
+            {!evidenceItems.length && showPoc && (
+              <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md border border-hairline-soft px-2.5 py-2 font-mono text-[11px] text-ink-secondary">
+                {pocText}
+              </pre>
+            )}
+            {!evidenceItems.length && !showLegacyProof && !showPoc && (
               <div className="rounded-md bg-canvas-inset p-3 text-xs text-ink-muted">
-                No evidence linked. Agents should attach HTTP/tool evidence when confirming findings.
+                No evidence linked. Agents should attach a proving observation so this finding is trustworthy.
               </div>
             )}
           </div>
         </section>
 
-        {/* 6. Timeline axis — dots and rail centered in a fixed column */}
-        <section className="mt-5">
-          <h3 className="mb-3 text-xs font-semibold uppercase text-ink-secondary">Timeline</h3>
-          {timelineEvents.length ? (
+        {/* 首次发现 + only real status transitions (no same-time “Updated / 待修复” noise) */}
+        {timelineEvents.length > 0 && (
+          <section className="mt-5">
+            <h3 className="mb-3 text-xs font-semibold uppercase text-ink-secondary">发现记录</h3>
             <div>
               {timelineEvents.map((event, index) => {
                 const isLast = index === timelineEvents.length - 1;
                 return (
-                  <div key={index} className="flex gap-3">
+                  <div key={`${event.at}-${event.label}-${index}`} className="flex gap-3">
                     <div className="flex w-3 shrink-0 flex-col items-center">
                       <span
                         aria-hidden
@@ -393,20 +346,9 @@ export default function VulnDetailDialog({
                 );
               })}
             </div>
-          ) : (
-            <p className="text-sm text-ink-muted">No timeline events</p>
-          )}
-        </section>
+          </section>
+        )}
       </div>
-    </div>
-  );
-}
-
-function Info({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-md bg-canvas-inset p-2.5">
-      <div className="text-xs text-ink-muted">{label}</div>
-      <div className="mt-1 break-all font-mono text-xs text-ink">{value || "—"}</div>
     </div>
   );
 }
@@ -427,16 +369,6 @@ function splitDescriptionAndProof(raw: string): { narrative: string; proof: stri
     return { narrative: "", proof: text.slice("[Proof]\n".length).trim() };
   }
   return { narrative: text, proof: "" };
-}
-
-function formatDetailTime(value: unknown): string {
-  const raw = String(value || "").trim();
-  if (!raw) return "—";
-  return raw.slice(0, 19).replace("T", " ");
-}
-
-function shortSessionId(id: string): string {
-  return id.length > 12 ? `${id.slice(0, 8)}…` : id;
 }
 
 function collectHighlightTokens(
@@ -566,33 +498,80 @@ function detailAuthSubtype(
   return { label: "KEY", badgeClass: "bg-status-running/10 text-status-running" };
 }
 
+function formatTimelineTime(value: unknown): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  return raw.slice(0, 19).replace("T", " ");
+}
+
+/** Map raw status/label to lifecycle bucket used for change detection. */
+function timelineLifecycle(raw: unknown): "to_fix" | "fixing" | "fixed" | null {
+  const s = String(raw || "").toLowerCase();
+  if (!s) return null;
+  // Noise / non-transitions
+  if (/^updated$|update|创建|created|discovered|首次|发现/.test(s)) return null;
+  if (["to_fix", "pending", "confirmed", "open", "candidate", "ignored", "accepted", "false_positive", "risk_accepted", "待修复"].some((k) => s.includes(k) || s === k)) {
+    // "当前状态：待修复" at create time is not a separate transition
+    if (/当前状态/.test(String(raw || ""))) return null;
+    return "to_fix";
+  }
+  if (["fixing", "reported", "in_progress", "retest", "修复中"].some((k) => s.includes(k))) return "fixing";
+  if (["fixed", "closed", "已修复"].some((k) => s.includes(k))) return "fixed";
+  // Explicit lifecycle labels only
+  if (s === "to_fix") return "to_fix";
+  return null;
+}
+
+const TIMELINE_STATUS_LABEL: Record<string, string> = {
+  to_fix: "标记为待修复",
+  fixing: "标记为修复中",
+  fixed: "标记为已修复",
+};
+
+/**
+ * Timeline: always “首次发现” once; extra nodes only when status actually changes.
+ * Drops same-timestamp noise (Updated / 当前状态：待修复).
+ */
 function buildDetailTimeline(
   vulnerability: SecurityVulnerability | null,
 ): Array<{ at: string; label: string }> {
   if (!vulnerability) return [];
   const events: Array<{ at: string; label: string }> = [];
-  const discovered = vulnerability.discovered_at || vulnerability.timestamp;
-  if (discovered) {
-    events.push({ at: String(discovered).slice(0, 19).replace("T", " "), label: "Discovered" });
+  const discoveredRaw = vulnerability.discovered_at || vulnerability.timestamp;
+  const discoveredAt = formatTimelineTime(discoveredRaw);
+  if (discoveredAt) {
+    events.push({ at: discoveredAt, label: "首次发现" });
   }
+
+  let lastLifecycle: "to_fix" | "fixing" | "fixed" | "first" = "first";
+  const seen = new Set<string>(discoveredAt ? [`${discoveredAt}|首次发现`] : []);
+
   for (const event of vulnerability.status_timeline || []) {
-    events.push({
-      at: asString(event.at).slice(0, 19).replace("T", " ") || "—",
-      label: asString(event.label || event.status, "Status update"),
-    });
+    const labelRaw = event.label || event.status;
+    const lifecycle = timelineLifecycle(event.status) || timelineLifecycle(event.label);
+    if (!lifecycle) continue;
+    // First discovery already covers initial open/to_fix
+    if (lastLifecycle === "first" && lifecycle === "to_fix") {
+      lastLifecycle = "to_fix";
+      continue;
+    }
+    if (lifecycle === lastLifecycle) continue;
+    const at = formatTimelineTime(event.at) || "—";
+    // Skip same-second noise as 首次发现
+    if (discoveredAt && at === discoveredAt && lifecycle === "to_fix") {
+      lastLifecycle = "to_fix";
+      continue;
+    }
+    const label = TIMELINE_STATUS_LABEL[lifecycle] || asString(labelRaw, "状态变更");
+    const key = `${at}|${lifecycle}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    events.push({ at, label });
+    lastLifecycle = lifecycle;
   }
-  const updated = vulnerability.updated_at;
-  if (updated && String(updated) !== String(discovered)) {
-    events.push({ at: String(updated).slice(0, 19).replace("T", " "), label: "Updated" });
-  }
-  // Dedupe identical at+label
-  const seen = new Set<string>();
-  return events.filter((e) => {
-    const k = `${e.at}|${e.label}`;
-    if (seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  });
+
+  // Do not invent an "Updated" node from updated_at — only real transitions above.
+  return events;
 }
 
 function normalizeInitial(initial?: Partial<SecurityVulnerability> | null): SecurityVulnerability | null {

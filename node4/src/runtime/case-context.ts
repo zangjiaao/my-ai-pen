@@ -1,6 +1,6 @@
 /**
  * Format Case work-group context for the agent first prompt.
- * Mirrors platform case_context envelope (thread + findings board).
+ * Mirrors platform case_context envelope (thread + findings board + evidence snippets).
  */
 
 export type CaseThreadLine = {
@@ -16,6 +16,18 @@ export type CaseFindingLine = {
   severity?: string;
   status?: string;
   location?: string;
+  evidence_ids?: string[];
+  proof_excerpt?: string;
+};
+
+export type CaseEvidenceSnippet = {
+  id?: string;
+  summary?: string;
+  source_tool?: string;
+  kind?: string;
+  role?: string;
+  path_or_url?: string;
+  excerpt?: string;
 };
 
 export type CaseContext = {
@@ -24,12 +36,14 @@ export type CaseContext = {
   note?: string;
   thread?: CaseThreadLine[];
   findings_summary?: CaseFindingLine[];
+  evidence_snippets?: CaseEvidenceSnippet[];
   artifact_hints?: string[];
 };
 
 const MAX_THREAD_LINES = 50;
 const MAX_FINDINGS = 25;
-const MAX_TOTAL_CHARS = 16000;
+const MAX_EVIDENCE = 12;
+const MAX_TOTAL_CHARS = 18000;
 
 export function parseCaseContext(raw: unknown): CaseContext | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
@@ -40,11 +54,13 @@ export function parseCaseContext(raw: unknown): CaseContext | undefined {
     : Array.isArray(o.findings)
       ? (o.findings as CaseFindingLine[])
       : [];
-  const hints = Array.isArray(o.artifact_hints)
-    ? o.artifact_hints.map(String)
-    : [];
-  if (!thread.length && !findings.length && !hints.length) {
-    // Still allow empty note-only for tests
+  const snippets = Array.isArray(o.evidence_snippets)
+    ? (o.evidence_snippets as CaseEvidenceSnippet[])
+    : Array.isArray(o.case_evidence_snippets)
+      ? (o.case_evidence_snippets as CaseEvidenceSnippet[])
+      : [];
+  const hints = Array.isArray(o.artifact_hints) ? o.artifact_hints.map(String) : [];
+  if (!thread.length && !findings.length && !hints.length && !snippets.length) {
     if (!o.note && !o.conversation_id) return undefined;
   }
   return {
@@ -53,6 +69,7 @@ export function parseCaseContext(raw: unknown): CaseContext | undefined {
     note: o.note != null ? String(o.note) : undefined,
     thread,
     findings_summary: findings,
+    evidence_snippets: snippets,
     artifact_hints: hints,
   };
 }
@@ -63,7 +80,7 @@ export function formatCaseContextInjection(ctx: CaseContext | undefined | null):
   const lines: string[] = [
     "## Case work-group context (same conversation — read before acting)",
     ctx.note ||
-      "You are joining an ongoing case like a work group chat. Prior messages and findings below are shared. Do not pretend you were offline.",
+      "You are joining an ongoing case. Prior messages, findings, and evidence below are shared. Do not pretend you were offline.",
   ];
   if (ctx.conversation_id) {
     lines.push(`Case/conversation id: ${ctx.conversation_id}`);
@@ -90,7 +107,33 @@ export function formatCaseContextInjection(ctx: CaseContext | undefined | null):
       const st = f.status ? ` (${f.status})` : "";
       const loc = f.location ? ` @ ${f.location}` : "";
       const id = f.id ? ` id=${f.id}` : "";
-      lines.push(`- ${sev}${f.title || "finding"}${st}${loc}${id}`);
+      const eids = Array.isArray(f.evidence_ids) && f.evidence_ids.length
+        ? ` evidence=[${f.evidence_ids.slice(0, 6).join(", ")}]`
+        : "";
+      lines.push(`- ${sev}${f.title || "finding"}${st}${loc}${id}${eids}`);
+      if (f.proof_excerpt) {
+        lines.push(`  proof: ${String(f.proof_excerpt).replace(/\s+/g, " ").slice(0, 280)}`);
+      }
+    }
+  }
+
+  const snippets = (ctx.evidence_snippets || []).slice(0, MAX_EVIDENCE);
+  if (snippets.length) {
+    lines.push("", "### Case evidence (shared materials — paths/excerpts for collaboration)");
+    lines.push(
+      "Use these when continuing another expert's work (e.g. source path for code-audit). Full bodies are truncated.",
+    );
+    for (const s of snippets) {
+      const id = s.id ? `id=${s.id}` : "id=?";
+      const kind = s.kind || s.source_tool || "tool";
+      const role = s.role ? ` role=${s.role}` : "";
+      const where = s.path_or_url ? ` @ ${s.path_or_url}` : "";
+      const sum = s.summary ? ` — ${String(s.summary).slice(0, 120)}` : "";
+      lines.push(`- [${kind}] ${id}${role}${where}${sum}`);
+      if (s.excerpt) {
+        const ex = String(s.excerpt).trim().slice(0, 360).replace(/\n/g, " ⏎ ");
+        lines.push(`  excerpt: ${ex}`);
+      }
     }
   }
 
@@ -102,7 +145,7 @@ export function formatCaseContextInjection(ctx: CaseContext | undefined | null):
 
   lines.push(
     "",
-    "Use this context to continue the case. Prefer acting on requests already in the thread. Large source trees are not inlined — open paths via tools when needed.",
+    "Continue this case from the shared findings and evidence above. Prefer evidence paths/excerpts over inventing new dump locations. Large trees are not fully inlined — open or re-fetch only what you need.",
   );
 
   let out = lines.join("\n");

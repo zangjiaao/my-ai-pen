@@ -580,8 +580,12 @@ async function main() {
     bookingBacklog({ evidenceCount: 5, bookedFindingCount: 0, toolsInLastSegment: 1 }).kind === "zero_bookings",
     "booking backlog zero",
   );
-  assert(FINDING_TOOL_DESCRIPTION.includes("as soon as"), "finding description");
-  assert(FINDING_TOOL_DESCRIPTION.includes("demonstrate"), "finding proof goal");
+  assert(FINDING_TOOL_DESCRIPTION.includes("user-trustable"), "finding = trustable conclusion");
+  assert(FINDING_TOOL_DESCRIPTION.includes("proof"), "finding requires proof field");
+  assert(
+    eagerBookingInjection().includes("proof"),
+    "eager booking states book-time proof model",
+  );
 
   // Proof gates: status-only HTTP is not enough; body/stdout is.
   assert(
@@ -1069,7 +1073,7 @@ async function main() {
   await exec(createEditTool(runtime), "e", { path: "scripts/p.py", old_string: "print('x')", new_string: "print('xy')" });
   assert(textOf(await exec(createReadTool(runtime), "r", { path: "scripts/p.py" })).includes("print('xy')"), "edit+read");
 
-  // Need demonstrable stdout for proof gates (thin "ok" is rejected).
+  // Act records observation; booking supplies proof quoted from tool output.
   const shellRes = JSON.parse(
     textOf(
       await exec(createShellTool(runtime), "s", {
@@ -1078,7 +1082,6 @@ async function main() {
     ),
   );
   assert(shellRes.ok && String(shellRes.stdout).includes("uid=0"), "shell");
-  const evidenceId = shellRes.evidence_id as string;
 
   const book1 = textOf(
     await exec(createFindingTool(runtime), "f1", {
@@ -1087,30 +1090,34 @@ async function main() {
       location: "http://target/api/ping",
       description: "Untrusted input reaches shell; id output observed.",
       poc: "POST /api/ping body=;id → response/stdout includes uid=0(root)",
-      evidence_ids: [evidenceId],
+      proof: "PROOF: uid=0(root) command injection confirmed on /api/ping",
     }),
   );
   assert(book1.includes('"ok": true') || book1.includes('"ok":true'), `book1: ${book1.slice(0, 200)}`);
-  // Can book from subagent evidence too (must also carry proving stdout).
+  assert(book1.includes("evidence_created") || book1.includes("ev_"), "book creates Case evidence");
+  // Second book needs its own grounded proof in recent observations.
+  await exec(createShellTool(runtime), "s2", {
+    command: "echo 'PROOF-B: subagent-style marker for issue B at /sub'",
+  });
   const book2 = textOf(
     await exec(createFindingTool(runtime), "f2", {
       action: "confirm",
-      title: "From subagent",
+      title: "From second probe",
       location: "http://target/sub",
-      description: "Subagent probe returned demonstrable output for the issue.",
-      poc: "subagent shell probe → stdout shows proving marker for issue B",
-      evidence_ids: [sub.evidenceId],
+      description: "Second probe returned demonstrable output for the issue.",
+      poc: "shell probe → stdout shows proving marker for issue B",
+      proof: "PROOF-B: subagent-style marker for issue B at /sub",
     }),
   );
-  // Subagent evidence may be thin; accept ok or structured proof rejection (both exercise the gate).
   assert(
     book2.includes('"ok": true') ||
       book2.includes('"ok":true') ||
-      book2.includes("cannot prove") ||
-      book2.includes("evidence not found"),
+      book2.includes("proof not found") ||
+      book2.includes("error:"),
     `book2: ${book2.slice(0, 240)}`,
   );
   assert(messages.filter((m) => m.type === "vuln_found").length >= 1, "multi booking");
+  assert(messages.filter((m) => m.type === "evidence_created").length >= 1, "case evidence on book");
   assert(!messages.some((m) => m.type === "finish_scan_requested"), "no finish events");
 
   // Pack-driven tool factories

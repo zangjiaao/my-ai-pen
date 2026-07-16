@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ToolRuntime } from "../types.js";
-import { emitEvidence, jsonResult, textResult } from "./common.js";
+import { recordActObservation, jsonResult, textResult } from "./common.js";
 
 const DEFAULT_TIMEOUT_SEC = 240;
 const MAX_TIMEOUT_SEC = 600;
@@ -44,15 +44,14 @@ export function createShellTool(runtime: ToolRuntime): ToolDefinition<any> {
       const timeoutSec = clampTimeoutSec(params.timeout_seconds);
       const timeoutMs = timeoutSec * 1000;
       const result = await runShell(command, runtime.taskDir, timeoutMs, combined);
-      // Prefer first meaningful stdout line in summary so Evidence UI is not all "python3 << PYEOF...Login".
-      const evidenceId = await emitEvidence(runtime, "shell", shellEvidenceSummary(command, result), {
+      // Act only — Case evidence is created at finding(confirm) from agent proof.
+      recordActObservation(runtime, "shell", shellEvidenceSummary(command, result), {
         command,
         timeout_seconds: timeoutSec,
         ...result,
       });
       return jsonResult({
         ok: result.exitCode === 0 && !result.timedOut && !result.aborted,
-        evidence_id: evidenceId,
         timeout_seconds: timeoutSec,
         ...result,
       });

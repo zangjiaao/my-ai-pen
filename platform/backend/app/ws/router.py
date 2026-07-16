@@ -1117,6 +1117,73 @@ def _proof_properties_from_summary(summary: object) -> dict:
     return {"proof": proof} if proof else {}
 
 
+def _evidence_properties_are_hollow(properties: object) -> bool:
+    """True when Case evidence lacks collab-usable proof payload."""
+    if not isinstance(properties, dict) or not properties:
+        return True
+    for key in (
+        "stdout",
+        "excerpt",
+        "body_preview",
+        "response_body",
+        "preview",
+        "path",
+        "path_or_url",
+        "url",
+        "command",
+    ):
+        val = properties.get(key)
+        if isinstance(val, str) and val.strip():
+            return False
+    proof = properties.get("proof")
+    if isinstance(proof, dict):
+        for key in ("stdout_excerpt", "body_excerpt"):
+            val = proof.get(key)
+            if isinstance(val, str) and val.strip():
+                return False
+    # Ignore pure noise shells like {status: null, stderr: ""}
+    meaningful = {
+        k: v
+        for k, v in properties.items()
+        if v not in (None, "", {}, []) and k not in {"placeholder", "status", "stderr", "timedOut", "aborted"}
+    }
+    return len(meaningful) == 0
+
+
+def _backfill_evidence_from_proof_excerpts(evidence_rows: list, proof_excerpts: object) -> None:
+    """Merge booking excerpts into hollow Evidence.properties (in-session, before commit)."""
+    if not isinstance(proof_excerpts, list) or not proof_excerpts:
+        return
+    by_id: dict[str, str] = {}
+    for item in proof_excerpts:
+        if not isinstance(item, dict):
+            continue
+        eid = str(item.get("evidence_id") or "").strip()
+        excerpt = str(item.get("excerpt") or "").strip()
+        if eid and excerpt:
+            by_id[eid] = excerpt[:4000]
+    for row in evidence_rows:
+        eid = str(getattr(row, "evidence_id", "") or "")
+        excerpt = by_id.get(eid)
+        if not excerpt:
+            continue
+        props = dict(row.properties or {}) if isinstance(getattr(row, "properties", None), dict) else {}
+        if not _evidence_properties_are_hollow(props) and props.get("excerpt"):
+            continue
+        props.setdefault("role", "proof")
+        props["excerpt"] = excerpt
+        # Best-effort field fill for UI parsers
+        if "stdout" not in props and not props.get("response_body"):
+            props["stdout"] = excerpt[:6000]
+        if "path_or_url" not in props:
+            for token in excerpt.replace("\n", " ").split():
+                if token.startswith("/") or token.startswith("http://") or token.startswith("https://"):
+                    props["path_or_url"] = token[:400]
+                    break
+        props["backfilled_from_proof_excerpts"] = True
+        row.properties = props
+
+
 def _tool_item_from_content(content: dict) -> dict:
     item = {
         "tool_name": content.get("tool_name", ""),
@@ -1472,6 +1539,31 @@ async def _persist_evidence(msg: dict, node_id: str | None):
             **incoming_properties,
             **_proof_properties_from_summary(summary),
         }
+        # Normalize collab-facing fields so Case rows are never silent shells.
+        if not properties.get("excerpt"):
+            for key in ("stdout", "body_preview", "response_body", "preview", "text", "content"):
+                val = properties.get(key)
+                if isinstance(val, str) and val.strip():
+                    properties["excerpt"] = val[:4000]
+                    break
+            if not properties.get("excerpt"):
+                proof = properties.get("proof") if isinstance(properties.get("proof"), dict) else {}
+                for key in ("stdout_excerpt", "body_excerpt"):
+                    val = proof.get(key)
+                    if isinstance(val, str) and val.strip():
+                        properties["excerpt"] = val[:4000]
+                        break
+        if not properties.get("path_or_url"):
+            for key in ("path", "url", "file"):
+                val = properties.get(key)
+                if isinstance(val, str) and val.strip():
+                    properties["path_or_url"] = val[:500]
+                    break
+            if not properties.get("path_or_url") and properties.get("command"):
+                properties["path_or_url"] = f"$ {str(properties.get('command'))[:200]}"
+        if not properties.get("role"):
+            has_body = bool(str(properties.get("excerpt") or "").strip())
+            properties["role"] = "proof" if has_body or properties.get("path_or_url") else "trace"
         # Drop null noise keys that clutter the detail dialog.
         properties = {k: v for k, v in properties.items() if v is not None and v != ""}
 
@@ -1660,9 +1752,14 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                     Evidence.evidence_id.in_(evidence_ids),
                 )
             )
-            known_evidence_ids = {item.evidence_id for item in existing_evidence.scalars().all()}
+            evidence_rows = list(existing_evidence.scalars().all())
+            known_evidence_ids = {item.evidence_id for item in evidence_rows}
             if set(evidence_ids) - known_evidence_ids:
                 return None
+
+            # Backfill hollow Case evidence from booking proof_excerpts so next expert
+            # can read paths/stdout without the original taskDir.
+            _backfill_evidence_from_proof_excerpts(evidence_rows, proof_excerpts)
 
             # Resolve asset first so cross-session dedupe can key on host+port+title.
             asset_id = None

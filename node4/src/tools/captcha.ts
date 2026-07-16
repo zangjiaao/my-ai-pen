@@ -9,7 +9,7 @@ import { spawn } from "node:child_process";
 import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ToolRuntime } from "../types.js";
-import { emitEvidence, isInScope, jsonResult, resolveTargetUrl, textResult } from "./common.js";
+import { recordActObservation, isInScope, jsonResult, resolveTargetUrl, textResult } from "./common.js";
 
 type JarMap = Record<string, string>;
 
@@ -82,7 +82,7 @@ export function createCaptchaTool(runtime: ToolRuntime): ToolDefinition<any> {
                   : "bin";
           const image_path = join(captchaDir, `captcha_${actor}_${Date.now()}.${ext}`);
           await writeFile(image_path, buf);
-          const evidenceId = await emitEvidence(runtime, "captcha", `captcha fetch ${url}`, {
+          recordActObservation(runtime, "captcha", `captcha fetch ${url}`, {
             url,
             actor,
             status: res.status,
@@ -99,7 +99,6 @@ export function createCaptchaTool(runtime: ToolRuntime): ToolDefinition<any> {
             content_type: ct,
             image_path,
             bytes: buf.length,
-            evidence_id: evidenceId,
             next: "captcha(op=ocr, image_path=...) if tesseract available, or browser screenshot + reason",
           });
         } catch (e) {
@@ -132,7 +131,7 @@ export function createCaptchaTool(runtime: ToolRuntime): ToolDefinition<any> {
         }
         const psm = Math.min(Math.max(Number(params.psm ?? 7), 0), 13);
         const ocr = await runTesseract(full, psm);
-        const evidenceId = await emitEvidence(runtime, "captcha", `captcha ocr ${full}`, {
+        recordActObservation(runtime, "captcha", `captcha ocr ${full}`, {
           image_path: full,
           text: ocr.text,
           raw: ocr.raw.slice(0, 2000),
@@ -142,7 +141,6 @@ export function createCaptchaTool(runtime: ToolRuntime): ToolDefinition<any> {
           op: "ocr",
           image_path: full,
           text: ocr.text,
-          evidence_id: evidenceId,
           warning: "OCR is best-effort and often wrong on distorted captchas — verify before submit.",
         });
       }

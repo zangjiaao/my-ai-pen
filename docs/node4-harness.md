@@ -32,12 +32,13 @@ Interactive **TUI remains deferred**.
 
 1. **OMP harness, role-specific mission** — keep bash/write/edit/todo/continue density; swap pack prompt/tools, not the runner.
 2. **Booking ≠ stop** — `finding`/`evidence` may fire many times and **never** ends the loop.
-3. **Chat is not product truth** — vuln/flag/auth only via `finding` + `evidence_ids` when pack books findings.
+3. **Chat is not product truth** — vuln/flag/auth only via `finding(confirm)` with grounded `proof` (Case evidence created at booking).
 4. **No agent finish tool** — no `finish_scan` / agent terminal status tool. `task_complete` is harness/platform settlement.
 5. **Findings alone ≠ job done** — N findings do not force mid-loop completed.
 6. **Discovery in-loop** — keep acting while concrete untested hypotheses remain; do not drive the loop from a coverage matrix gate.
 7. **Simple is strong** — prefer shell + environment (sandbox browser, scanners via shell) over a large mandatory first-class catalog. Extra tools (session, browser, skill) are **assistive**, not process prisons.
-8. **Harness over restriction** — weak behavior → prompt / envelope / assistive tools first; not answer keys, expected vuln counts, or default validators.
+8. **Harness over restriction** — weak behavior → prompt / envelope / assistive tools first; not answer keys, expected vuln counts, or default validators.  
+   **Booking trust model (simple):** Finding = user-trustable conclusion. **Evidence is created at booking** from agent `proof` (fragment grounded in recent tool output). Act tools do not flood Case with logs. One strong proof is enough; agent does not hunt opaque `evidence_ids`.
 9. **No target answer keys**.
 10. **Post-run inspectability** — task workspace readable after dispose.
 
@@ -138,16 +139,18 @@ Prefer act density over todo thrash, but **do not** leave finished categories op
 
 | Concern | Mechanism |
 |---------|-----------|
-| Evidence | Tool outputs via `emitEvidence` (structured properties: HTTP body / shell stdout) |
+| Act observations | `recordActObservation` (memory only; anti-hallucination) |
+| Case evidence | Created at `finding(confirm)` from agent `proof` via `emitCaseEvidence` |
 | Confirmed vuln/flag | `finding(confirm)` only — must **prove** the issue exists |
 | End of session | Harness continue caps / natural stop / abort → `task_complete` |
 
-**Proof-first booking** (`node4/src/tools/finding.ts`):
+**Book-time proof booking** (`node4/src/tools/finding.ts`):
 
-- Required fields: `title`, `location|url`, `description`, `poc` (steps **and** observed result), `evidence_ids`
-- Each `evidence_id` must contain demonstrable output: response body / shell stdout / redirect `Location` — **not** HTTP status alone or empty login wrappers
-- Multiple findings may share one evidence record when that record’s output supports each claim; otherwise run a dedicated probe
+- Required fields: `title`, `location|url`, `description`, `poc` (steps **and** observed result), **`proof`** (fragment grounded in recent tool output)
+- System creates one linked Case evidence row from `proof` — agent does **not** hunt opaque `evidence_ids`
+- One strong proof is enough to trust + reproduce; quote claim-specific observation per finding
 - Platform stores `proof_excerpts` / folds proof into the vuln description for report UIs
+- Multi-expert: next pack reads `case_context` findings + linked proof snippets (not prior taskDir)
 
 Typical terminal policy (harness; refine in code carefully):
 
@@ -176,10 +179,24 @@ Offline audit helpers (e.g. `node4` ctf-audit CLI) parse events for engineering 
 | Event | Meaning |
 |-------|---------|
 | `tool_output` | Act progress |
-| `evidence_created` / `vuln_found` | Booking |
+| `evidence_created` / `vuln_found` | Booking (Case-shared materials + findings) |
 | `todo_updated` / `goal_updated` | Map / anchors |
 | `status_update` | Harness notes (not agent finish) |
 | `task_complete` | **Harness** terminal settlement only |
+
+### Case-shared evidence (multi-expert)
+
+Same conversation = shared Case. Joining experts receive `task_assign.case_context` with:
+
+| Field | Purpose |
+|-------|---------|
+| `findings_summary[]` | Conclusions + `evidence_ids` + short `proof_excerpt` |
+| `evidence_snippets[]` | Prefer **finding-linked** / `role=proof` rows: id, kind, path_or_url, excerpt |
+| `artifact_hints[]` | Path crumbs (not full trees) |
+
+Node `emitEvidence` writes truncated **properties** (`role`, `kind`, `excerpt`, path/url/body/stdout) to the platform so the next expert (e.g. code-audit after a source leak) can continue **without** prior `taskDir`.  
+`write` of material files emits `file_artifact` (path + preview). `read` does not book Case evidence.  
+Details: `docs/evidence-quality-plan.md`.
 
 ---
 

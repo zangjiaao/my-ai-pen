@@ -70,6 +70,11 @@ export type ToolRuntime = {
     abortSignal?: AbortSignal;
     /** Optional collaboration tree tracker for checkpoint.panel_agents. */
     panelAgents?: import("./runtime/panel-agents.js").PanelAgentTracker;
+    /**
+     * Recent act tool observations (memory only) for grounding finding(proof).
+     * Not Case evidence — product evidence is created at booking time.
+     */
+    recentObservations?: import("./tools/common.js").RecentObservation[];
   };
 };
 

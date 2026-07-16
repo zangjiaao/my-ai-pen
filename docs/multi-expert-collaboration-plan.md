@@ -189,7 +189,7 @@ Minimal fields:
 
 **Evidence as shared materials:** source dumps, notes, screenshots should be **booked or linked as evidence** (or clearly stated in chat). Next expert sees them via Case findings/evidence + `case_context` hints — **not** via a separate Case filesystem product.
 
-**Evidence quality is a hard prerequisite.** Phases **A–E** live in [`evidence-quality-plan.md`](evidence-quality-plan.md) (A done; B Case-readable proof → E re-verify). As of 2026-07-16, Case DB often stores evidence **ids without proof payloads** — do not assume cross-expert evidence reuse works until **Phase B** (and D noise control) land.
+**Evidence quality is a hard prerequisite.** Phases **A–E** live in [`evidence-quality-plan.md`](evidence-quality-plan.md). **Book-time model (current):** act tools do not flood Case; each `finding(confirm)` creates linked Case proof from agent `proof` (grounded in recent tool output). Joining experts read `case_context` findings + proof snippets — not prior `taskDir`. Optional: include source path snippets in `proof` when code-audit needs materials.
 
 ### 6.3 Engagement templates (RoE depth only)
 
