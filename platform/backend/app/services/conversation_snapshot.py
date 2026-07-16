@@ -170,11 +170,14 @@ def is_legacy_runtime_phase_node(node: dict) -> bool:
 
 
 def conversation_summary(c: Conversation) -> dict:
+    from app.services.conversation_state import effective_conversation_status
+
     return {
         "id": str(c.id),
         "title": c.title,
         "node_id": str(c.node_id) if c.node_id else None,
-        "status": c.status,
+        # Prefer terminal checkpoint when the row lagged (sidebar green vs gray).
+        "status": effective_conversation_status(c),
         "created_at": c.created_at.isoformat() if c.created_at else None,
         "last_active_at": c.last_active_at.isoformat() if c.last_active_at else None,
     }
@@ -196,6 +199,16 @@ async def get_message_page(db: AsyncSession, conversation_id: uuid.UUID, *, limi
 
 
 async def build_conversation_snapshot(db: AsyncSession, conversation: Conversation, user_id: uuid.UUID) -> dict:
+    from app.services.conversation_state import reconcile_conversation_status_from_checkpoint
+
+    # Persist terminal checkpoint onto the row when bind/task_complete never settled it.
+    if reconcile_conversation_status_from_checkpoint(conversation):
+        try:
+            await db.commit()
+            await db.refresh(conversation)
+        except SQLAlchemyError:
+            await db.rollback()
+
     messages = (await db.execute(
         select(Message).where(Message.conversation_id == conversation.id).order_by(Message.created_at, Message.id)
     )).scalars().all()
@@ -238,7 +251,9 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     context = conversation.context if isinstance(conversation.context, dict) else {}
     checkpoint = (context.get("checkpoint") if isinstance(context, dict) else {}) or {}
     task_context = context.get("task") if isinstance(context.get("task"), dict) else {}
-    agent_state = agent_state_from_checkpoint(checkpoint, conversation.status) if checkpoint else agent_state_from_messages(messages, evidence, conversation.status)
+    # Prefer healed row status (matches sidebar / conversation list).
+    conv_status = conversation.status or "created"
+    agent_state = agent_state_from_checkpoint(checkpoint, conv_status) if checkpoint else agent_state_from_messages(messages, evidence, conv_status)
     findings = merge_many_by_key([
         message_findings(messages),
         checkpoint_findings(checkpoint),
@@ -260,12 +275,18 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     if not raw_plan_tree:
         raw_plan_tree = message_plan_tree(messages) or context.get("exploration_plan_tree") or context.get("plan_tree") or []
     workflow_kind = workflow_kind_for_checkpoint(checkpoint)
-    plan_tree = ensure_plan_tree_shape(raw_plan_tree, agent_state.get("phase"), checkpoint_completed(checkpoint), conversation.status, workflow_kind)
-    if conversation.status in {"completed", "incomplete"} and workflow_kind == "pentest":
-        plan_tree = normalize_terminal_pentest_plan_tree(plan_tree, conversation.status)
-    kanban = kanban_for_snapshot(checkpoint, plan_tree, agent_state.get("phase"), conversation.status, elapsed_seconds_for_conversation(conversation))
-    progress = progress_for_kanban(kanban) or (progress_for_checkpoint(checkpoint, conversation.status) if checkpoint else progress_for_phase(agent_state.get("phase"), conversation.status))
-    todos = todos_for_kanban(kanban) or todos_for_plan_tree(plan_tree) or (todos_for_checkpoint(checkpoint, conversation.status) if checkpoint else todos_for_phase(agent_state.get("phase"), conversation.status))
+    plan_tree = ensure_plan_tree_shape(raw_plan_tree, agent_state.get("phase"), checkpoint_completed(checkpoint), conv_status, workflow_kind)
+    if conv_status in {"completed", "incomplete"} and workflow_kind == "pentest":
+        plan_tree = normalize_terminal_pentest_plan_tree(plan_tree, conv_status)
+    kanban = kanban_for_snapshot(
+        checkpoint,
+        plan_tree,
+        agent_state.get("phase"),
+        conv_status,
+        elapsed_seconds_for_conversation(conversation, checkpoint),
+    )
+    progress = progress_for_kanban(kanban) or (progress_for_checkpoint(checkpoint, conv_status) if checkpoint else progress_for_phase(agent_state.get("phase"), conv_status))
+    todos = todos_for_kanban(kanban) or todos_for_plan_tree(plan_tree) or (todos_for_checkpoint(checkpoint, conv_status) if checkpoint else todos_for_phase(agent_state.get("phase"), conv_status))
     evidence_items = merge_many_by_key([
         [evidence_summary(e) for e in evidence],
         explicit_evidence,
@@ -273,7 +294,7 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     ], "evidence_id")
     snapshot_message_items, omitted = snapshot_messages(messages)
     agent_items = agents_from_messages(messages)
-    strix_agent_items = strix_agents_from_checkpoint(checkpoint, conversation.status)
+    strix_agent_items = strix_agents_from_checkpoint(checkpoint, conv_status)
     strix_note_items = strix_notes_from_checkpoint(checkpoint)
     strix_run = strix_run_from_checkpoint(checkpoint)
 
@@ -731,13 +752,59 @@ def snapshot_messages(messages: list[Message], limit: int = SNAPSHOT_MESSAGE_LIM
     return compacted, {key: value for key, value in omitted.items() if value}
 
 
-def elapsed_seconds_for_conversation(c: Conversation) -> int:
-    if not c.created_at:
+def _parse_iso_datetime(value: object) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        # Accept trailing Z from Node4/ISO run timestamps.
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _run_window_from_checkpoint(checkpoint: dict | None) -> tuple[datetime | None, datetime | None]:
+    """Prefer durable run start/end from checkpoint over conversation row timestamps."""
+    if not isinstance(checkpoint, dict):
+        return None, None
+    node3 = checkpoint.get("node3_strix") if isinstance(checkpoint.get("node3_strix"), dict) else {}
+    run = node3.get("run") if isinstance(node3.get("run"), dict) else {}
+    start = _parse_iso_datetime(
+        run.get("start_time")
+        or checkpoint.get("started_at")
+        or checkpoint.get("start_time")
+    )
+    end = _parse_iso_datetime(
+        run.get("end_time")
+        or checkpoint.get("end_time")
+    )
+    return start, end
+
+
+def elapsed_seconds_for_conversation(c: Conversation, checkpoint: dict | None = None) -> int:
+    """Wall-clock duration for the right-panel Elapsed field.
+
+    Prefer checkpoint run start/end when present (Node4 stores started_at/end_time
+    even if conversation.status/last_active_at lagged). Fall back to conversation
+    created_at / last_active_at, and use now while status is running.
+    """
+    now = datetime.now(timezone.utc)
+    run_start, run_end = _run_window_from_checkpoint(checkpoint)
+    start = run_start or c.created_at
+    if not start:
         return 0
-    end = datetime.now(timezone.utc) if c.status == "running" else (c.last_active_at or datetime.now(timezone.utc))
-    start = c.created_at
     if start.tzinfo is None:
         start = start.replace(tzinfo=timezone.utc)
+
+    if run_end is not None:
+        end = run_end
+    elif str(c.status or "").strip().lower() == "running":
+        end = now
+    else:
+        end = c.last_active_at or now
     if end.tzinfo is None:
         end = end.replace(tzinfo=timezone.utc)
     return max(0, int((end - start).total_seconds()))

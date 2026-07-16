@@ -229,7 +229,12 @@ export default function RightPanel({
     ? phasePlan.flatMap((phase) => phase.items)
     : normalizeTasksForConversationStatus(unifiedTodoItems(visiblePlanTree), conversationStatus, running);
   const displayRun = strixRun && hasRunSummaryData(strixRun) ? strixRun : undefined;
-  const elapsedBaseSeconds = normalizeSeconds(kanbanSummary.elapsed_seconds);
+  // Prefer the larger of kanban.elapsed_seconds and the run start/end window so
+  // Elapsed stays aligned with Started/Ended even when conversation row times lag.
+  const elapsedBaseSeconds = Math.max(
+    normalizeSeconds(kanbanSummary.elapsed_seconds),
+    elapsedSecondsFromRun(strixRun, running),
+  );
   const intake = normalizeIntake(intakeResult, intakeStatus);
   const [elapsedClock, setElapsedClock] = useState(() => ({ seconds: elapsedBaseSeconds, anchorSeconds: elapsedBaseSeconds, anchorMs: Date.now() }));
   const [panelWidth, setPanelWidth] = useState(loadRightPanelWidth);
@@ -3595,6 +3600,23 @@ function todoTitleClass(status: ReturnType<typeof normalizeTodoStatus>): string 
 function normalizeSeconds(seconds: unknown): number {
   const value = Number(seconds || 0);
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+/** Total run seconds from StrixRun start/end (or start→now while running). */
+function elapsedSecondsFromRun(run: StrixRun | undefined, running: boolean): number {
+  if (!run?.start_time) return 0;
+  const startMs = Date.parse(run.start_time);
+  if (!Number.isFinite(startMs)) return 0;
+  let endMs: number;
+  if (run.end_time) {
+    endMs = Date.parse(run.end_time);
+  } else if (running) {
+    endMs = Date.now();
+  } else {
+    return 0;
+  }
+  if (!Number.isFinite(endMs) || endMs < startMs) return 0;
+  return Math.floor((endMs - startMs) / 1000);
 }
 
 function formatDuration(seconds: unknown): string {

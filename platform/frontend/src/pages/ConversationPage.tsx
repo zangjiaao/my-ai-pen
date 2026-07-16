@@ -12,7 +12,7 @@ import { ApiError, authFetch } from "../lib/api";
 import { normalizeExecutionStatus } from "../lib/status";
 import { PHASES, PHASE_LABELS, phaseLabel } from "../lib/phase";
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
-import { Upload } from "lucide-react";
+import { Bot, Check, ChevronDown, Shield, Target, Upload } from "lucide-react";
 import type { AgentIdentity, Conversation, Message } from "../lib/types";
 import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../lib/securityTypes";
 import { ENGAGEMENT_TEMPLATES, expertLabel, type ExpertId } from "../lib/experts";
@@ -160,9 +160,8 @@ export default function ConversationPage() {
   const pendingScrollToBottomRef = useRef(false);
   const shouldStickToBottomRef = useRef(true);
   const [input, setInput] = useState("");
-  /** Explicit long-task Goal mode (structured field → Node4 goalObjective; not NLP). */
+  /** Explicit long-task Goal mode (structured field → Node4; not NLP). */
   const [goalModeEnabled, setGoalModeEnabled] = useState(false);
-  const [goalObjective, setGoalObjective] = useState("");
   /** Structured engagement template (RoE depth) — not NLP. */
   const [engagementTemplate, setEngagementTemplate] = useState<"app_assessment" | "redteam_deep">("app_assessment");
   const [caseHandoff, setCaseHandoff] = useState<{
@@ -174,9 +173,13 @@ export default function ConversationPage() {
   } | null>(null);
   const [importingReport, setImportingReport] = useState(false);
   const [importStatus, setImportStatus] = useState<ImportStatus>(null);
-  /** Selected @mention target (expert or platform). */
+  /** Selected conversation partner (expert or platform). */
   const [selectedMention, setSelectedMention] = useState<MentionTarget | null>(null);
   const selectedMentionRef = useRef<MentionTarget | null>(null);
+  const [partnerMenuOpen, setPartnerMenuOpen] = useState(false);
+  const [modeMenuOpen, setModeMenuOpen] = useState(false);
+  const partnerMenuRef = useRef<HTMLDivElement | null>(null);
+  const modeMenuRef = useRef<HTMLDivElement | null>(null);
   const [agentNodes, setAgentNodes] = useState<AgentNode[]>([]);
   const [productExperts, setProductExperts] = useState<ProductExpert[]>([]);
   const [activeConversationNodeId, setActiveConversationNodeId] = useState<string | null>(null);
@@ -913,35 +916,51 @@ export default function ConversationPage() {
     };
   }, [loadAgentNodes, loadProductExperts]);
 
-  /** @mention options: product experts first, then platform agent. */
+  /** Partner options: platform first (default), then product experts. */
   const mentionTargets = useMemo(() => {
-    const out: MentionTarget[] = productExperts.map((e) => ({
-      kind: "expert" as const,
-      key: `expert:${e.id}`,
-      name: e.name,
-      label: e.display_name && e.display_name !== e.name ? e.display_name : e.name,
-      subtitle: `${expertLabel(e.pack_id)} → ${e.node_name || e.node_id.slice(0, 8)}${
-        e.node_status ? ` (${e.node_status})` : ""
-      }`,
-      nodeId: e.node_id,
-      packId: e.pack_id,
-      expertId: e.id,
-      status: e.node_status || undefined,
-    }));
+    const out: MentionTarget[] = [];
     const platform = agentNodes.find((n) => n.type === "platform");
     if (platform) {
       out.push({
         kind: "platform",
         key: `platform:${platform.id}`,
         name: platform.name,
-        label: platform.name,
+        label: platform.name || "平台助手",
         subtitle: "Platform",
         nodeId: platform.id,
         status: platform.status,
       });
     }
+    for (const e of productExperts) {
+      out.push({
+        kind: "expert" as const,
+        key: `expert:${e.id}`,
+        name: e.name,
+        label: e.display_name && e.display_name !== e.name ? e.display_name : e.name,
+        subtitle: `${expertLabel(e.pack_id)} → ${e.node_name || e.node_id.slice(0, 8)}${
+          e.node_status ? ` (${e.node_status})` : ""
+        }`,
+        nodeId: e.node_id,
+        packId: e.pack_id,
+        expertId: e.id,
+        status: e.node_status || undefined,
+      });
+    }
     return out;
   }, [productExperts, agentNodes]);
+
+  const platformTarget = useMemo(
+    () => mentionTargets.find((t) => t.kind === "platform") || null,
+    [mentionTargets],
+  );
+
+  // Default conversation partner = platform agent (not "none").
+  useEffect(() => {
+    if (selectedMention) return;
+    if (!platformTarget) return;
+    selectedMentionRef.current = platformTarget;
+    setSelectedMention(platformTarget);
+  }, [platformTarget, selectedMention]);
 
   const mentionState = useMemo(() => getMentionState(input), [input]);
   const mentionOptions = useMemo(
@@ -987,18 +1006,20 @@ export default function ConversationPage() {
   }, [activeId, addMessageToConversation, send]);
 
   const chooseMention = useCallback((target: MentionTarget) => {
+    // Select partner only — do not inject "@name" into the composer text.
     const state = getMentionState(input);
-    const mention = `@${target.name} `;
-    if (!state) {
-      setInput((current) => `${current}${current.endsWith(" ") || !current ? "" : " "}${mention}`);
-    } else {
-      setInput(
-        (current) =>
-          `${current.slice(0, state.start)}${mention}${current.slice(state.start + state.query.length + 1)}`,
-      );
+    if (state) {
+      setInput((current) => {
+        const before = current.slice(0, state.start).replace(/\s+$/, "");
+        const after = current.slice(state.start + state.query.length + 1).replace(/^\s+/, "");
+        return [before, after].filter(Boolean).join(" ");
+      });
     }
     selectedMentionRef.current = target;
     setSelectedMention(target);
+    if (!isPentestMentionTarget(target)) {
+      setGoalModeEnabled(false);
+    }
   }, [input]);
 
   const handleImportReport = useCallback(async (file: File | null) => {
@@ -1327,28 +1348,25 @@ export default function ConversationPage() {
     if (!input.trim()) return;
     const displayText = input.trim();
     const selectedCandidate = selectedMentionRef.current || selectedMention;
-    // Prefer explicit toolbar expert; else parse @token from the message body.
+    // Prefer explicit toolbar partner; else parse @token from the message body.
     const resolved = selectedCandidate || resolveMentionedTarget(displayText, mentionTargets);
     const text = stripMentionToken(displayText, resolved?.name || null);
-    // Keep selected expert after send so multi-turn stays with the same persona.
-    // (Clear only when user picks "Platform" or another expert.)
+    // Keep selected partner after send so multi-turn stays with the same persona.
     setInput("");
-    const tmpl = engagementTemplate;
+    const isPentest = isPentestMentionTarget(resolved);
+    const tmpl = isPentest ? engagementTemplate : "";
+    const enableGoal = isPentest && goalModeEnabled;
     await launchTaskMessage({
-      displayText:
-        resolved?.kind === "expert" && !displayText.includes(`@${resolved.name}`)
-          ? `@${resolved.name} ${displayText}`
-          : displayText,
+      displayText,
       text,
-      goalMode: goalModeEnabled,
-      goalObjective: goalObjective.trim() || undefined,
-      engagement: resolved?.kind === "expert" ? resolved.packId : tmpl || undefined,
-      engagementTemplate: tmpl,
-      allowPostex: tmpl === "redteam_deep",
+      goalMode: enableGoal,
+      engagement: resolved?.kind === "expert" ? resolved.packId : undefined,
+      engagementTemplate: tmpl || undefined,
+      allowPostex: isPentest ? tmpl === "redteam_deep" : undefined,
       expertId: resolved?.kind === "expert" ? resolved.expertId : undefined,
     });
-    // Persist case RoE on conversation (1 session = 1 case)
-    if (activeId) {
+    // Persist case RoE only for pentest (1 session = 1 case)
+    if (activeId && isPentest && tmpl) {
       void authFetch(`/api/conversations/${activeId}/case`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -1358,18 +1376,52 @@ export default function ConversationPage() {
         }),
       }).catch(() => {});
     }
-  }, [input, selectedMention, mentionTargets, launchTaskMessage, goalModeEnabled, goalObjective, engagementTemplate, activeId]);
+  }, [input, selectedMention, mentionTargets, launchTaskMessage, goalModeEnabled, engagementTemplate, activeId]);
 
   const selectExpertFromToolbar = useCallback((key: string) => {
-    if (!key) {
-      selectedMentionRef.current = null;
-      setSelectedMention(null);
-      return;
-    }
-    const target = mentionTargets.find((t) => t.key === key) || null;
+    const platform = mentionTargets.find((t) => t.kind === "platform") || null;
+    const target = key
+      ? mentionTargets.find((t) => t.key === key) || platform
+      : platform;
     selectedMentionRef.current = target;
     setSelectedMention(target);
+    // Mode + Goal only apply to pentest experts; reset when leaving that pack.
+    if (!isPentestMentionTarget(target)) {
+      setGoalModeEnabled(false);
+      setModeMenuOpen(false);
+    }
   }, [mentionTargets]);
+
+  const activePartner = selectedMention || platformTarget;
+  const showPentestControls = isPentestMentionTarget(activePartner);
+  const activeModeLabel =
+    ENGAGEMENT_TEMPLATES.find((t) => t.id === engagementTemplate)?.label || "应用评估";
+
+  // Close partner / mode menus on outside click or Escape.
+  useEffect(() => {
+    if (!partnerMenuOpen && !modeMenuOpen) return;
+    const onPointer = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (partnerMenuOpen && partnerMenuRef.current && !partnerMenuRef.current.contains(target)) {
+        setPartnerMenuOpen(false);
+      }
+      if (modeMenuOpen && modeMenuRef.current && !modeMenuRef.current.contains(target)) {
+        setModeMenuOpen(false);
+      }
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setPartnerMenuOpen(false);
+        setModeMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [partnerMenuOpen, modeMenuOpen]);
 
 
 function renderMentionText(text: string): ReactNode[] {
@@ -1394,9 +1446,10 @@ function getMentionState(value: string): MentionState {
 
 function filterMentionTargets(targets: MentionTarget[], query: string): MentionTarget[] {
   const normalized = query.trim().toLowerCase();
+  // Platform first (default partner), then experts A–Z.
   const ordered = [...targets].sort((a, b) => {
-    if (a.kind === "expert" && b.kind !== "expert") return -1;
-    if (b.kind === "expert" && a.kind !== "expert") return 1;
+    if (a.kind === "platform" && b.kind !== "platform") return -1;
+    if (b.kind === "platform" && a.kind !== "platform") return 1;
     return a.name.localeCompare(b.name);
   });
   if (!normalized) return ordered.slice(0, 8);
@@ -1413,6 +1466,13 @@ function filterMentionTargets(targets: MentionTarget[], query: string): MentionT
 
 function resolveMentionedTarget(value: string, targets: MentionTarget[]): MentionTarget | null {
   return targets.find((t) => value.includes(`@${t.name}`)) || null;
+}
+
+/** Pentest pack experts get mode template + Goal switch; platform / other packs do not. */
+function isPentestMentionTarget(target: MentionTarget | null | undefined): boolean {
+  if (!target || target.kind !== "expert") return false;
+  const pack = String(target.packId || "").trim().toLowerCase();
+  return pack === "pentest" || pack.startsWith("pentest");
 }
 
 function stripMentionToken(value: string, name: string | null): string {
@@ -1553,11 +1613,11 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                 </div>
               ))}
             </div>
-            <div className="border-t border-hairline-soft p-4">
-              {/* Unified composer: multi-line input + toolbar (goal / expert / send) */}
-              <div className="relative rounded-lg border border-hairline bg-canvas focus-within:border-ink">
+            <div className="p-4 pt-2">
+              {/* Agent-style composer: partner chip → (pentest: mode + Goal) → send */}
+              <div className="relative rounded-2xl border border-hairline bg-canvas shadow-[0_1px_2px_rgba(0,0,0,0.04)] focus-within:border-ink/40 focus-within:shadow-[0_2px_8px_rgba(0,0,0,0.06)]">
                 {mentionState && mentionOptions.length > 0 && (
-                  <div className="absolute bottom-full left-0 z-20 mb-2 w-80 overflow-hidden rounded-md border border-hairline bg-canvas shadow-lg">
+                  <div className="absolute bottom-full left-0 z-20 mb-2 w-80 overflow-hidden rounded-xl border border-hairline bg-canvas shadow-lg">
                     {mentionOptions.map((target) => (
                       <button
                         key={target.key}
@@ -1566,13 +1626,20 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                           event.preventDefault();
                           chooseMention(target);
                         }}
-                        className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-surface-default"
+                        className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm transition-colors hover:bg-surface-default"
                       >
-                        <span className="min-w-0">
-                          <span className="block truncate font-medium">@{target.name}</span>
-                          <span className="block truncate text-[11px] text-ink-muted">{target.subtitle || target.label}</span>
+                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-canvas-inset text-ink-secondary">
+                          {target.kind === "platform" ? <Bot size={14} /> : <Shield size={14} />}
                         </span>
-                        <span className="ml-2 shrink-0 text-xs text-ink-muted">
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate font-medium text-ink">
+                            {target.label || target.name}
+                          </span>
+                          <span className="block truncate text-[11px] text-ink-muted">
+                            {target.kind === "platform" ? "默认 · 平台助手" : target.subtitle || target.label}
+                          </span>
+                        </span>
+                        <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-ink-muted">
                           {target.kind === "platform"
                             ? "Platform"
                             : target.status === "online"
@@ -1589,7 +1656,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                   {input && (
                     <div
                       aria-hidden="true"
-                      className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-3.5 py-3 text-sm leading-5 text-ink"
+                      className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-4 py-3.5 text-sm leading-5 text-ink"
                     >
                       {renderMentionText(input)}
                     </div>
@@ -1604,29 +1671,23 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                       }
                     }}
                     rows={3}
-                    placeholder="Describe the request… (Shift+Enter for new line, @ for expert)"
-                    className="relative z-10 min-h-[4.5rem] w-full resize-none bg-transparent px-3.5 py-3 text-sm leading-5 text-transparent caret-ink placeholder:text-ink-muted focus:outline-none"
+                    placeholder={
+                      activePartner?.kind === "platform"
+                        ? "和平台助手对话…（Shift+Enter 换行）"
+                        : `向 ${activePartner?.label || activePartner?.name || "专家"} 描述任务…（Shift+Enter 换行）`
+                    }
+                    className="relative z-10 min-h-[4.75rem] w-full resize-none bg-transparent px-4 py-3.5 text-sm leading-5 text-transparent caret-ink placeholder:text-ink-muted focus:outline-none"
                   />
                 </div>
-                {goalModeEnabled && (
-                  <div className="px-3 pb-1">
-                    <input
-                      value={goalObjective}
-                      onChange={(e) => setGoalObjective(e.target.value)}
-                      placeholder="Goal objective (optional — default: maximize verified findings in scope)"
-                      className="w-full rounded-md border border-hairline bg-canvas-inset px-2.5 py-1.5 text-xs text-ink placeholder:text-ink-muted focus:border-ink focus:outline-none"
-                    />
-                  </div>
-                )}
                 {caseHandoff?.suggest_pack_id && caseHandoff.status === "suggested" && (
-                  <div className="mx-3 mb-2 flex flex-wrap items-center gap-2 rounded-md border border-status-running/30 bg-status-running/10 px-3 py-2 text-xs text-ink">
+                  <div className="mx-3 mb-2 flex flex-wrap items-center gap-2 rounded-xl border border-status-running/30 bg-status-running/10 px-3 py-2 text-xs text-ink">
                     <span className="min-w-0 flex-1">
                       建议切换专家包 <strong>{caseHandoff.suggest_pack_id}</strong>
                       {caseHandoff.reason ? ` — ${caseHandoff.reason}` : ""}
                     </span>
                     <button
                       type="button"
-                      className="rounded-md bg-ink px-2.5 py-1 text-[11px] font-medium text-white"
+                      className="rounded-pill bg-ink px-2.5 py-1 text-[11px] font-medium text-white"
                       onClick={() => {
                         const pack = caseHandoff.suggest_pack_id;
                         const match = mentionTargets.find(
@@ -1640,60 +1701,200 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                     </button>
                     <button
                       type="button"
-                      className="rounded-md border border-hairline px-2 py-1 text-[11px] text-ink-secondary"
+                      className="rounded-pill border border-hairline px-2 py-1 text-[11px] text-ink-secondary"
                       onClick={() => setCaseHandoff(null)}
                     >
                       忽略
                     </button>
                   </div>
                 )}
-                <div className="flex min-w-0 items-center justify-between gap-3 px-3 pb-2.5 pt-0.5">
-                  <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
-                    <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-ink-secondary">
-                      <input
-                        type="checkbox"
-                        checked={goalModeEnabled}
-                        onChange={(e) => setGoalModeEnabled(e.target.checked)}
-                        className="rounded border-hairline"
-                      />
-                      <span className="font-medium text-ink">Goal</span>
-                    </label>
-                    <label className="inline-flex min-w-0 items-center gap-1.5 text-xs text-ink-secondary">
-                      <span className="shrink-0 text-ink-muted">模式</span>
-                      <select
-                        value={engagementTemplate}
-                        onChange={(e) =>
-                          setEngagementTemplate(e.target.value as "app_assessment" | "redteam_deep")
-                        }
-                        title="结构化 engagement 模板（非 NLP）"
-                        className="max-w-[10rem] truncate rounded-md border border-hairline bg-canvas px-2 py-1 text-xs text-ink focus:border-ink focus:outline-none"
+                <div className="flex min-w-0 items-center justify-between gap-2 px-2.5 py-2">
+                  {/* Shared chip height: h-8 (32px) for partner / mode / Goal / send */}
+                  <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+                    {/* Partner chip + custom menu */}
+                    <div ref={partnerMenuRef} className="relative">
+                      <button
+                        type="button"
+                        aria-haspopup="listbox"
+                        aria-expanded={partnerMenuOpen}
+                        title="选择对话对象"
+                        onClick={() => {
+                          setPartnerMenuOpen((open) => !open);
+                          setModeMenuOpen(false);
+                        }}
+                        className={`inline-flex h-8 max-w-[13rem] items-center gap-1.5 rounded-full pl-1.5 pr-2 text-xs leading-none text-ink transition-colors ${
+                          partnerMenuOpen ? "bg-surface-elevated ring-1 ring-hairline" : "bg-canvas-inset hover:bg-surface-elevated"
+                        }`}
                       >
-                        {ENGAGEMENT_TEMPLATES.map((t) => (
-                          <option key={t.id} value={t.id} title={t.description}>
-                            {t.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="inline-flex min-w-0 items-center gap-1.5 text-xs text-ink-secondary">
-                      <span className="shrink-0 text-ink-muted">Expert</span>
-                      <select
-                        value={selectedMention?.key || ""}
-                        onChange={(e) => selectExpertFromToolbar(e.target.value)}
-                        className="max-w-[12rem] truncate rounded-md border border-hairline bg-canvas px-2 py-1 text-xs text-ink focus:border-ink focus:outline-none"
+                        <span
+                          className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${
+                            activePartner?.kind === "platform" ? "bg-ink text-white" : "bg-status-running text-white"
+                          }`}
+                        >
+                          {activePartner?.kind === "platform" ? <Bot size={11} /> : <Shield size={11} />}
+                        </span>
+                        <span className="min-w-0 truncate font-medium leading-none">
+                          {activePartner?.label || activePartner?.name || "平台助手"}
+                        </span>
+                        <ChevronDown
+                          size={12}
+                          className={`shrink-0 text-ink-muted transition-transform ${partnerMenuOpen ? "rotate-180" : ""}`}
+                        />
+                      </button>
+                      {partnerMenuOpen && (
+                        <div
+                          role="listbox"
+                          aria-label="对话对象"
+                          className="absolute bottom-full left-0 z-30 mb-2 w-72 overflow-hidden rounded-xl border border-hairline bg-canvas py-1 shadow-[0_8px_30px_rgba(0,0,0,0.08)]"
+                        >
+                          <p className="px-3 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-ink-muted">
+                            对话对象
+                          </p>
+                          {mentionTargets.map((t) => {
+                            const selected = t.key === activePartner?.key;
+                            const statusLabel =
+                              t.kind === "platform"
+                                ? "平台助手"
+                                : t.status === "online"
+                                  ? "在线"
+                                  : t.status === "offline"
+                                    ? "离线"
+                                    : expertLabel(t.packId);
+                            return (
+                              <button
+                                key={t.key}
+                                type="button"
+                                role="option"
+                                aria-selected={selected}
+                                onClick={() => {
+                                  selectExpertFromToolbar(t.key);
+                                  setPartnerMenuOpen(false);
+                                }}
+                                className={`flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors ${
+                                  selected ? "bg-surface-elevated" : "hover:bg-surface-default"
+                                }`}
+                              >
+                                <span
+                                  className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
+                                    t.kind === "platform" ? "bg-ink text-white" : "bg-status-running/15 text-status-running"
+                                  }`}
+                                >
+                                  {t.kind === "platform" ? <Bot size={15} /> : <Shield size={15} />}
+                                </span>
+                                <span className="min-w-0 flex-1">
+                                  <span className="flex items-center gap-1.5">
+                                    <span className="truncate text-sm font-medium text-ink">
+                                      {t.label || t.name}
+                                    </span>
+                                    {t.kind === "expert" && t.status === "online" && (
+                                      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-status-success" />
+                                    )}
+                                  </span>
+                                  <span className="mt-0.5 block truncate text-[11px] text-ink-muted">
+                                    {t.kind === "platform" ? "默认 · 平台对话" : t.subtitle || statusLabel}
+                                  </span>
+                                </span>
+                                {selected ? (
+                                  <Check size={14} className="shrink-0 text-ink" strokeWidth={2.25} />
+                                ) : (
+                                  <span className="shrink-0 text-[10px] font-medium text-ink-muted">
+                                    {statusLabel}
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
+                          {mentionTargets.length === 0 && (
+                            <p className="px-3 py-3 text-xs text-ink-muted">暂无可用对象</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Mode chip — pentest only */}
+                    {showPentestControls && (
+                      <div ref={modeMenuRef} className="relative">
+                        <button
+                          type="button"
+                          aria-haspopup="listbox"
+                          aria-expanded={modeMenuOpen}
+                          title="渗透模式"
+                          onClick={() => {
+                            setModeMenuOpen((open) => !open);
+                            setPartnerMenuOpen(false);
+                          }}
+                          className={`inline-flex h-8 max-w-[11rem] items-center gap-1.5 rounded-full pl-2.5 pr-2 text-xs leading-none text-ink transition-colors ${
+                            modeMenuOpen ? "bg-surface-elevated ring-1 ring-hairline" : "bg-canvas-inset hover:bg-surface-elevated"
+                          }`}
+                        >
+                          <Target size={12} className="shrink-0 text-ink-muted" />
+                          <span className="min-w-0 truncate font-medium leading-none">{activeModeLabel}</span>
+                          <ChevronDown
+                            size={12}
+                            className={`shrink-0 text-ink-muted transition-transform ${modeMenuOpen ? "rotate-180" : ""}`}
+                          />
+                        </button>
+                        {modeMenuOpen && (
+                          <div
+                            role="listbox"
+                            aria-label="渗透模式"
+                            className="absolute bottom-full left-0 z-30 mb-2 w-64 overflow-hidden rounded-xl border border-hairline bg-canvas py-1 shadow-[0_8px_30px_rgba(0,0,0,0.08)]"
+                          >
+                            <p className="px-3 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-ink-muted">
+                              模式
+                            </p>
+                            {ENGAGEMENT_TEMPLATES.map((t) => {
+                              const selected = t.id === engagementTemplate;
+                              return (
+                                <button
+                                  key={t.id}
+                                  type="button"
+                                  role="option"
+                                  aria-selected={selected}
+                                  onClick={() => {
+                                    setEngagementTemplate(t.id);
+                                    setModeMenuOpen(false);
+                                  }}
+                                  className={`flex w-full items-start gap-2.5 px-3 py-2.5 text-left transition-colors ${
+                                    selected ? "bg-surface-elevated" : "hover:bg-surface-default"
+                                  }`}
+                                >
+                                  <span className="min-w-0 flex-1">
+                                    <span className="block text-sm font-medium text-ink">{t.label}</span>
+                                    <span className="mt-0.5 block text-[11px] leading-snug text-ink-muted">
+                                      {t.description}
+                                    </span>
+                                  </span>
+                                  {selected && (
+                                    <Check size={14} className="mt-0.5 shrink-0 text-ink" strokeWidth={2.25} />
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Goal toggle chip — pentest only; selected = ink fill */}
+                    {showPentestControls && (
+                      <button
+                        type="button"
+                        aria-pressed={goalModeEnabled}
+                        aria-label="Goal mode"
+                        title={goalModeEnabled ? "Goal 已开启" : "开启 Goal 模式"}
+                        onClick={() => setGoalModeEnabled((v) => !v)}
+                        className={`inline-flex h-8 items-center rounded-full px-3 text-xs font-medium leading-none transition-colors ${
+                          goalModeEnabled
+                            ? "bg-ink text-white"
+                            : "bg-canvas-inset text-ink-secondary hover:bg-surface-elevated"
+                        }`}
                       >
-                        <option value="">Auto / none</option>
-                        {mentionTargets.map((t) => (
-                          <option key={t.key} value={t.key}>
-                            {t.kind === "platform"
-                              ? `${t.label} (platform)`
-                              : `@${t.name}${t.status === "online" ? "" : t.status === "offline" ? " · offline" : ""}`}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                        Goal
+                      </button>
+                    )}
                   </div>
-                  <div className="shrink-0">
+                  <div className="flex h-8 shrink-0 items-center">
                     {running ? (
                       <button
                         type="button"
@@ -1702,18 +1903,18 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                           setRunning(false);
                           void refreshConversationState(activeId);
                         }}
-                        className="rounded-pill bg-severity-critical px-5 py-2 text-sm font-medium text-white"
+                        className="inline-flex h-8 items-center rounded-pill bg-severity-critical px-4 text-xs font-medium leading-none text-white transition-opacity hover:opacity-90"
                       >
-                        Interrupt
+                        中断
                       </button>
                     ) : (
                       <button
                         type="button"
                         onClick={() => { void handleSend(); }}
                         disabled={!input.trim()}
-                        className="rounded-pill bg-ink px-5 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
+                        className="inline-flex h-8 items-center rounded-pill bg-ink px-4 text-xs font-medium leading-none text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-35"
                       >
-                        Send
+                        发送
                       </button>
                     )}
                   </div>

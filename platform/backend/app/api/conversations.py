@@ -14,7 +14,11 @@ from app.models.evidence import Evidence
 from app.models.message import Message
 from app.models.node import Node
 from app.models.vulnerability import Vulnerability
-from app.services.conversation_state import ConversationStatusError, transition_conversation
+from app.services.conversation_state import (
+    ConversationStatusError,
+    reconcile_conversation_status_from_checkpoint,
+    transition_conversation,
+)
 from app.services.conversation_snapshot import build_conversation_snapshot, conversation_summary, get_message_page
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
@@ -48,7 +52,15 @@ async def list_conversations(status: str | None = Query(None), limit: int = 50, 
         q = q.where(Conversation.status == status)
     q = q.order_by(Conversation.last_active_at.desc()).offset(offset).limit(limit)
     result = await db.execute(q)
-    return [_out(c) for c in result.scalars().all()]
+    rows = list(result.scalars().all())
+    # Heal rows stuck at created/running when checkpoint already terminal (sidebar status).
+    healed = False
+    for conv in rows:
+        if reconcile_conversation_status_from_checkpoint(conv):
+            healed = True
+    if healed:
+        await db.commit()
+    return [_out(c) for c in rows]
 
 
 @router.get("/{conv_id}", response_model=ConversationOut)

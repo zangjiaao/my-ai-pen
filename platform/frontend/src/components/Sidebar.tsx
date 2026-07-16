@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Check, Pencil, Trash2, X } from "lucide-react";
+import { useEffect, useState, type ComponentType } from "react";
+import { Bot, Check, ClipboardList, Network, Pencil, Server, ShieldAlert, Trash2, X } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAuthStore } from "../stores/authStore";
 import { useConversationStore } from "../stores/conversationStore";
@@ -13,12 +13,14 @@ interface Props {
 
 const ACTIVE_CONVERSATION_KEY = "active_conversation_id";
 
-const NAV_ITEMS = [
-  { label: "资产管理", path: "/assets" },
-  { label: "漏洞管理", path: "/vulnerabilities" },
-  { label: "节点管理", path: "/nodes" },
-  { label: "专家管理", path: "/experts" },
-  { label: "操作审计", path: "/audit" },
+type NavIcon = ComponentType<{ size?: number; className?: string; strokeWidth?: number }>;
+
+const NAV_ITEMS: { label: string; path: string; icon: NavIcon }[] = [
+  { label: "资产管理", path: "/assets", icon: Server },
+  { label: "漏洞管理", path: "/vulnerabilities", icon: ShieldAlert },
+  { label: "节点管理", path: "/nodes", icon: Network },
+  { label: "专家管理", path: "/experts", icon: Bot },
+  { label: "操作审计", path: "/audit", icon: ClipboardList },
 ];
 
 export default function Sidebar({ activeId, onSelect }: Props) {
@@ -133,12 +135,24 @@ export default function Sidebar({ activeId, onSelect }: Props) {
 
       <div className="border-t border-hairline-soft px-2 py-2">
         <nav className="space-y-0.5">
-          {NAV_ITEMS.map(({ label, path }) => (
-            <button key={label} onClick={() => navigate(path)}
-              className={`w-full rounded-md px-3 py-2 text-left text-sm transition-colors ${location.pathname === path ? "font-medium text-ink" : "text-ink-secondary hover:bg-surface-default hover:text-ink"}`}>
-              {label}
-            </button>
-          ))}
+          {NAV_ITEMS.map(({ label, path, icon: Icon }) => {
+            const active = location.pathname === path || location.pathname.startsWith(`${path}/`);
+            return (
+              <button
+                key={path}
+                type="button"
+                onClick={() => navigate(path)}
+                className={`flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm transition-colors ${
+                  active
+                    ? "bg-accent-subtle font-medium text-ink"
+                    : "text-ink-secondary hover:bg-surface-default hover:text-ink"
+                }`}
+              >
+                <Icon size={15} strokeWidth={1.75} className={`flex-shrink-0 ${active ? "text-ink" : "text-ink-muted"}`} />
+                <span>{label}</span>
+              </button>
+            );
+          })}
         </nav>
       </div>
 

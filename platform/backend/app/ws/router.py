@@ -2316,6 +2316,11 @@ async def _remember_conversation_checkpoint(conv_id: str, checkpoint: dict):
             if task:
                 context["task"] = task
             c.context = context
+            # Terminal checkpoint should settle the conversation row even if
+            # task_complete status transition was missed earlier.
+            from app.services.conversation_state import reconcile_conversation_status_from_checkpoint
+
+            reconcile_conversation_status_from_checkpoint(c)
             await db.commit()
     except Exception as e:
         print(f"[WS] remember conversation checkpoint error: {e}")
