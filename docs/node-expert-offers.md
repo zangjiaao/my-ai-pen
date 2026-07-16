@@ -32,7 +32,8 @@
 - **Expert dispatch carries `case_context`:** trimmed group **thread** + **findings_summary** + path hints (from chat/evidence) so a newly selected expert reads the case before acting. Not full tool dumps; not NLP pack invent.
 - **Cross-expert handoff protocol is not required:** agents may **suggest in chat** that another expert continue; user `@` / selects the expert. No product dependency on structured handoff APIs, Case shared disk, or stations.
 - Dump source/notes as **evidence** (or clear paths in chat) so the next expert sees materials via Case + `case_context`.
-- Full plan: [`multi-expert-collaboration-plan.md`](multi-expert-collaboration-plan.md).
+- Evidence quality / Case proof tracker: [`evidence-quality-plan.md`](evidence-quality-plan.md).
+- Full collab plan: [`multi-expert-collaboration-plan.md`](multi-expert-collaboration-plan.md).
 
 ## Dispatch gate
 
