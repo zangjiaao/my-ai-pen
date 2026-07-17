@@ -9,7 +9,7 @@
     "smoke": "tsx src/node4-smoke.ts",
     "platform:smoke": "tsx src/platform-smoke.ts",
     "experts": "tsx src/expert-cli.ts",
-    "test:pen-tools": "tsx src/runtime/pen-tools-path.test.ts && tsx src/runtime/pen-tools-shell.test.ts && tsx src/runtime/browser-image.test.ts",
+    "test:pen-tools": "tsx src/runtime/pen-tools-path.test.ts && tsx src/runtime/pen-tools-shell.test.ts && tsx src/runtime/browser-image.test.ts && tsx src/runtime/pentest-sandbox-image.test.ts",
     "check": "tsc --noEmit",
     "build": "tsc -p tsconfig.json"
   },

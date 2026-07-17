@@ -13,9 +13,11 @@ try {
   delete process.env.NODE2_BROWSER_SANDBOX_IMAGE;
   const img = resolveBrowserSandboxImage();
   assert(
-    img === "pen-browser:dev" ||
-      img === "pen-browser:0.1.0" ||
-      img.includes("strix-sandbox"),
+    img.startsWith("pen-sandbox:") ||
+      img.startsWith("pen-browser:") ||
+      img.startsWith("pen-tools:") ||
+      img.includes("strix-sandbox") ||
+      img.includes("pentest-sandbox"),
     `unexpected default image: ${img}`,
   );
 

@@ -26,7 +26,7 @@ export function createShellTool(runtime: ToolRuntime): ToolDefinition<any> {
       "HIGH DENSITY: pack cookie jars, curl pipelines, python one-liners, and parsing in ONE command (chain with && when order matters).",
       "Independent probes: issue multiple shell tool calls in the SAME turn (they can run in parallel).",
       "Prefer shell over http for multi-step recon/exploit. Use scripts/ for longer exploits (write then shell python scripts/x.py).",
-      "Scanners (nuclei/nmap/…) run in first-party pen-tools when Docker image is available (S4: shell-in-container; else host PATH shims). Prefer narrow product tags for commercial stacks.",
+      "Scanners (nuclei/nmap/…) run in first-party pen-sandbox when Docker image is available (shell-in-container; else host PATH shims). Prefer narrow product tags for commercial stacks.",
       "Avoid one-request-per-call thrash and unbounded brute force; use bounded scripted probes.",
       `timeout_seconds optional (default ${DEFAULT_TIMEOUT_SEC}, max ${MAX_TIMEOUT_SEC}); process group / container killed on timeout or session cancel.`,
     ].join(" "),

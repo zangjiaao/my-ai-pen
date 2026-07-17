@@ -1,17 +1,20 @@
 /**
- * S4: run shell commands inside first-party pen-tools container.
+ * S4: run shell commands inside unified pen-sandbox (scanners + browser image).
  *
  * Env:
- * - NODE4_SHELL_IN_PEN_TOOLS=1|true (default **1** when image present; set 0 for host-only)
- * - PEN_TOOLS_IMAGE (default pen-tools:dev; falls back to pentest-sandbox:latest)
+ * - NODE4_SHELL_IN_PEN_TOOLS=auto|1|0 (default auto when image present)
+ * - PEN_SANDBOX_IMAGE / PEN_TOOLS_IMAGE
  * - NODE4_DOCKER_BIN
- *
- * Host path shims (S1) remain as fallback when container mode is off or image missing.
  */
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { randomBytes } from "node:crypto";
+import {
+  dockerImageExists,
+  pentestSandboxImagePresent,
+  resolvePentestSandboxImage,
+} from "./pentest-sandbox-image.js";
 
 const STDOUT_CAP = 250_000;
 const STDERR_CAP = 100_000;
@@ -28,47 +31,25 @@ function dockerBin(): string {
   return process.env.NODE4_DOCKER_BIN?.trim() || process.env.NODE2_DOCKER_BIN?.trim() || "docker";
 }
 
-/** Prefer pen-tools:dev, then versioned, then legacy pentest-sandbox. */
+/** Unified sandbox image (pen-sandbox preferred). */
 export function resolvePenToolsImage(): string {
-  const explicit = process.env.PEN_TOOLS_IMAGE?.trim();
-  if (explicit) return explicit;
-  for (const tag of ["pen-tools:dev", "pen-tools:0.1.0", "pentest-sandbox:latest"]) {
-    if (dockerImageExists(tag)) return tag;
-  }
-  return "pen-tools:dev";
+  return resolvePentestSandboxImage({ allowStrixFallback: false });
 }
 
-export function dockerImageExists(image: string): boolean {
-  try {
-    const r = spawnSync(dockerBin(), ["image", "inspect", image], {
-      encoding: "utf8",
-      timeout: 15_000,
-    });
-    return r.status === 0;
-  } catch {
-    return false;
-  }
-}
+export { dockerImageExists };
 
 /**
  * Default on when image exists; set NODE4_SHELL_IN_PEN_TOOLS=0 to force host.
- * Explicit 1 forces container (may fail if no image).
  */
 export function isShellInPenToolsEnabled(): boolean {
   const raw = (process.env.NODE4_SHELL_IN_PEN_TOOLS ?? "auto").trim().toLowerCase();
   if (raw === "0" || raw === "false" || raw === "off" || raw === "host" || raw === "no") return false;
   if (raw === "1" || raw === "true" || raw === "on" || raw === "yes" || raw === "container") return true;
-  // auto: enable only if a known image is present
-  return (
-    dockerImageExists("pen-tools:dev") ||
-    dockerImageExists("pen-tools:0.1.0") ||
-    dockerImageExists("pentest-sandbox:latest") ||
-    Boolean(process.env.PEN_TOOLS_IMAGE?.trim() && dockerImageExists(process.env.PEN_TOOLS_IMAGE.trim()))
-  );
+  return pentestSandboxImagePresent();
 }
 
 /**
- * docker run --rm --network host -v taskDir:/workspace pen-tools bash -lc <cmd>
+ * docker run --rm --network host -v taskDir:/workspace pen-sandbox bash -lc <cmd>
  */
 export function runShellInPenTools(
   command: string,
