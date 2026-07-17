@@ -26,7 +26,7 @@ Audit of real CTF runs showed hundreds of `curl -b/-c` shell turns. Use:
 
 ## Browser + captcha (assist, don’t restrict)
 
-- **browser (preferred path)**: Docker **strix-sandbox** (`ghcr.io/usestrix/strix-sandbox:1.0.0`) with in-container `agent-browser` — same class as Node2/Node3. Chromium + system deps live in the image; host does not need Chrome libraries.
+- **browser (preferred path)**: Docker **pen-browser** (`pen-browser:dev`, first-party) with in-container `agent-browser`; falls back to Strix (`ghcr.io/usestrix/strix-sandbox:1.0.0`) if pen-browser is not built. Chromium + deps live in the image; host does not need Chrome libraries. See `docs/pen-tools-sandbox.md`.
   - Env: `NODE4_BROWSER_SANDBOX=1` (default). Set `0` / `host` to force host CLI.
   - Image override: `NODE4_BROWSER_SANDBOX_IMAGE`.
 - **browser (host fallback)**: `npm i -g agent-browser && agent-browser install` (+ `install --with-deps` if shared libs missing). Used only when sandbox cannot start.

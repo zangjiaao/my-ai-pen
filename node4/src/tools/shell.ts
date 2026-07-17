@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ToolRuntime } from "../types.js";
 import { buildShellEnv } from "../runtime/pen-tools-path.js";
+import { isShellInPenToolsEnabled, runShellInPenTools } from "../runtime/pen-tools-shell.js";
 import { recordActObservation, jsonResult, textResult } from "./common.js";
 
 const DEFAULT_TIMEOUT_SEC = 240;
@@ -25,9 +26,9 @@ export function createShellTool(runtime: ToolRuntime): ToolDefinition<any> {
       "HIGH DENSITY: pack cookie jars, curl pipelines, python one-liners, and parsing in ONE command (chain with && when order matters).",
       "Independent probes: issue multiple shell tool calls in the SAME turn (they can run in parallel).",
       "Prefer shell over http for multi-step recon/exploit. Use scripts/ for longer exploits (write then shell python scripts/x.py).",
-      "Scanners (nuclei/nmap/…) may be available via first-party pen-tools PATH shims (Docker image); prefer narrow product tags when fingerprinting commercial stacks.",
+      "Scanners (nuclei/nmap/…) run in first-party pen-tools when Docker image is available (S4: shell-in-container; else host PATH shims). Prefer narrow product tags for commercial stacks.",
       "Avoid one-request-per-call thrash and unbounded brute force; use bounded scripted probes.",
-      `timeout_seconds optional (default ${DEFAULT_TIMEOUT_SEC}, max ${MAX_TIMEOUT_SEC}); process group killed on timeout or session cancel.`,
+      `timeout_seconds optional (default ${DEFAULT_TIMEOUT_SEC}, max ${MAX_TIMEOUT_SEC}); process group / container killed on timeout or session cancel.`,
     ].join(" "),
     parameters: Type.Object({
       command: Type.String(),
@@ -117,10 +118,23 @@ export type ShellRunResult = {
 };
 
 /**
- * Spawn bash -lc in a new process group so timeout/abort can kill the tree.
+ * Spawn bash -lc. Prefer pen-tools container (S4) when image present; else host with PATH shims (S1).
  * Exported for smokes.
  */
 export function runShell(
+  command: string,
+  cwd: string,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<ShellRunResult> {
+  if (isShellInPenToolsEnabled()) {
+    return runShellInPenTools(command, cwd, timeoutMs, signal);
+  }
+  return runShellOnHost(command, cwd, timeoutMs, signal);
+}
+
+/** Host bash -lc with pen-tools bin on PATH (wrappers). */
+export function runShellOnHost(
   command: string,
   cwd: string,
   timeoutMs: number,

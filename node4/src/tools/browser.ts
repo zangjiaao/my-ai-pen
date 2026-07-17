@@ -1,6 +1,6 @@
 /**
- * Browser tool — prefer Docker strix-sandbox agent-browser (Node2/3 class);
- * host agent-browser only as fallback when sandbox cannot start.
+ * Browser tool — prefer first-party pen-browser (S5), then Strix fallback;
+ * host agent-browser if sandbox cannot start.
  * Cookies export into session actor jars for dual-identity HTTP replay.
  */
 
@@ -38,7 +38,7 @@ export function createBrowserTool(runtime: ToolRuntime): ToolDefinition<any> {
     label: "Browser",
     description: [
       "Real browser automation via agent-browser.",
-      "Default: Docker strix-sandbox (isolated Chromium + deps). Host fallback if sandbox unavailable.",
+      "Default: Docker pen-browser (Chromium + agent-browser); Strix only if pen-browser image missing. Host fallback if sandbox unavailable.",
       `Actions: ${ACTIONS.join(", ")}.`,
       "Use for JS-heavy pages, captcha UI, stored XSS verification, multi-step forms.",
       "Workflow: open → snapshot -i → click/fill @refs → re-snapshot.",
@@ -91,7 +91,7 @@ export function createBrowserTool(runtime: ToolRuntime): ToolDefinition<any> {
         const opened = await run(["open", openUrl], 120_000);
         if (opened.unavailable) {
           return textResult(
-            `error: browser unavailable: ${opened.error || "no docker/host agent-browser"}. Prefer Docker image ghcr.io/usestrix/strix-sandbox:1.0.0 (NODE4_BROWSER_SANDBOX=1). Host needs: agent-browser install --with-deps`,
+            `error: browser unavailable: ${opened.error || "no docker/host agent-browser"}. Build pen-browser (bash sandbox/pen-browser/scripts/build.sh) or set NODE4_BROWSER_SANDBOX_IMAGE. Host needs: agent-browser install --with-deps`,
           );
         }
         if (opened.exitCode !== 0 && !/https?:\/\//i.test(opened.text)) {

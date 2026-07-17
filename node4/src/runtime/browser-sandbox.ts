@@ -1,16 +1,19 @@
 /**
- * Browser sandbox for Node4 — Docker strix-sandbox (same class as Node2/Node3).
- * Prefer sandbox so Chromium deps live in the container, not on the host.
+ * Browser sandbox for Node4 — first-party pen-browser preferred (S5);
+ * Strix remains fallback. Chromium + agent-browser only (scanners → pen-tools).
  *
  * Env:
  * - NODE4_BROWSER_SANDBOX=0|false → force host agent-browser only
- * - NODE4_BROWSER_SANDBOX_IMAGE (default ghcr.io/usestrix/strix-sandbox:1.0.0)
+ * - NODE4_BROWSER_SANDBOX_IMAGE → pin image (else pen-browser:dev if present, else Strix)
  * - NODE4_DOCKER_BIN (default docker)
  */
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import type { ToolRuntime } from "../types.js";
 import { runAgentBrowser, type AgentBrowserResult } from "./agent-browser-cli.js";
+
+const STRIX_FALLBACK = "ghcr.io/usestrix/strix-sandbox:1.0.0";
+const PEN_BROWSER_DEV = "pen-browser:dev";
 
 export type SandboxExecResult = {
   exitCode: number | null;
@@ -34,12 +37,35 @@ function dockerBin(): string {
   return process.env.NODE4_DOCKER_BIN?.trim() || process.env.NODE2_DOCKER_BIN?.trim() || "docker";
 }
 
-function sandboxImage(): string {
-  return (
+function dockerImageExists(image: string): boolean {
+  try {
+    const r = spawnSync(dockerBin(), ["image", "inspect", image], {
+      encoding: "utf8",
+      timeout: 15_000,
+    });
+    return r.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Prefer first-party pen-browser; fall back to Strix when not built yet.
+ * Explicit NODE4_BROWSER_SANDBOX_IMAGE always wins.
+ */
+export function resolveBrowserSandboxImage(): string {
+  const explicit =
     process.env.NODE4_BROWSER_SANDBOX_IMAGE?.trim() ||
-    process.env.NODE2_SCANNER_SANDBOX_IMAGE?.trim() ||
-    "ghcr.io/usestrix/strix-sandbox:1.0.0"
-  );
+    process.env.NODE2_BROWSER_SANDBOX_IMAGE?.trim() ||
+    "";
+  if (explicit) return explicit;
+  if (dockerImageExists(PEN_BROWSER_DEV)) return PEN_BROWSER_DEV;
+  if (dockerImageExists("pen-browser:0.1.0")) return "pen-browser:0.1.0";
+  return STRIX_FALLBACK;
+}
+
+function sandboxImage(): string {
+  return resolveBrowserSandboxImage();
 }
 
 export function isBrowserSandboxPreferred(): boolean {

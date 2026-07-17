@@ -22,27 +22,37 @@ Lab Phase L showed:
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │ Node4 (OMP runtime — stays pure)                            │
-│  shell  → currently host process (taskDir cwd)              │
-│  browser → Docker image (Chromium + agent-browser)          │
+│  shell  → pen-tools container (S4, default when image ready)│
+│           else host + PATH shims (S1)                       │
+│  browser → pen-browser container (S5 preferred)             │
+│           else Strix fallback / host agent-browser          │
 └─────────────────────────────────────────────────────────────┘
          │                              │
          ▼                              ▼
 ┌──────────────────────┐    ┌──────────────────────────────┐
-│ pen-tools (OURS)     │    │ browser sandbox (strix today)│
-│ nuclei nmap sqlmap   │    │ Chromium, agent-browser      │
-│ ffuf redis-cli …     │    │ future: first-party browser  │
-│ nuclei-templates     │    │ image when we leave Strix    │
+│ pen-tools (OURS)     │    │ pen-browser (OURS)           │
+│ nuclei nmap sqlmap   │    │ Chromium + agent-browser     │
+│ ffuf redis-cli …     │    │ Strix only if image missing  │
+│ nuclei-templates     │    │                              │
 └──────────────────────┘    └──────────────────────────────┘
 ```
 
 | Concern | Image / env | Owner |
 |---------|-------------|--------|
 | Known-issue scans, recon CLIs | **`pen-tools`** | **my-ai-pen** |
-| Browser automation | strix-sandbox (env-overridable) | Upstream for now; pin version |
+| Browser automation | **`pen-browser`** (Strix fallback) | **my-ai-pen** / upstream fallback |
 | Expert methodology | `experts/pentest` pack | my-ai-pen L1 |
-| Shell semantics | Node4 `shell` tool | my-ai-pen runtime |
+| Shell semantics | Node4 `shell` → pen-tools | my-ai-pen runtime |
 
-Strix remains **browser-only**. Do not expect Strix to ship or update nuclei-templates for our nuclei-first policy.
+### Does Strix include a shell?
+
+**Yes.** `ghcr.io/usestrix/strix-sandbox` is a **full Kali-class image**: bash, Chromium, `agent-browser`, **and** nuclei/nmap/etc.  
+Node4 historically only **`docker exec … agent-browser`** into it for the **browser tool**; the **shell tool never entered Strix** — it ran on the host (then PATH shims / pen-tools).
+
+Product choice: **do not** treat Strix as our L2 scanner store (we do not control its template freshness or release cadence). Split:
+
+- **pen-tools** = scanners + shell (S4)  
+- **pen-browser** = browser only (S5)
 
 ---
 
@@ -80,16 +90,18 @@ Strix remains **browser-only**. Do not expect Strix to ship or update nuclei-tem
 
 - Task-start one-liner: nuclei version / template age (not a hard gate).
 
-### S4 — Optional shell-in-container
+### S4 — Shell-in-pen-tools — **done**
 
-- Node4 `shell` option: execute command inside pen-tools with `taskDir` mounted.  
-- Keeps host clean; stronger isolation; bigger runtime change — only after S0/S1 stable.  
-- Must preserve OMP density (timeouts, process group kill, observation recording).
+- `NODE4_SHELL_IN_PEN_TOOLS=auto|1|0` (default **auto**: on when pen-tools image exists).  
+- `runShell` → `docker run --network host -v taskDir:/workspace pen-tools bash -lc …`  
+- Timeout/abort kills the container; host PATH mode remains fallback.  
+- Implementation: `node4/src/runtime/pen-tools-shell.ts`.
 
-### S5 — Browser independence (later)
+### S5 — First-party pen-browser — **done (image + prefer)**
 
-- Evaluate forking or replacing strix with first-party browser image.  
-- Until then: pin Strix digest; document override `NODE4_BROWSER_SANDBOX_IMAGE`.
+- Tree: `sandbox/pen-browser/` (Dockerfile, build script).  
+- `resolveBrowserSandboxImage()`: explicit env → `pen-browser:dev` if present → Strix fallback.  
+- Build: `bash sandbox/pen-browser/scripts/build.sh` (first build can take several minutes).
 
 ---
 
