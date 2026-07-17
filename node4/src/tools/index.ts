@@ -13,6 +13,7 @@ import { createShellTool } from "./shell.js";
 import { createSkillTool } from "./skill.js";
 import { createSubagentTool } from "./subagent.js";
 import { createTodoTool } from "./todo.js";
+import { PLATFORM_TOOL_FACTORIES } from "./platform.js";
 
 /** Full registry of tool factories (role packs select a subset). */
 export const ALL_NODE4_TOOL_FACTORIES: Record<string, (runtime: ToolRuntime) => ToolDefinition<any>> = {
@@ -30,6 +31,7 @@ export const ALL_NODE4_TOOL_FACTORIES: Record<string, (runtime: ToolRuntime) => 
   subagent: createSubagentTool,
   goal: createGoalTool,
   skill: createSkillTool,
+  ...PLATFORM_TOOL_FACTORIES,
 };
 
 /** Bare OMP runtime tool order (no expert pack). Expert packs pass their own toolNames. */

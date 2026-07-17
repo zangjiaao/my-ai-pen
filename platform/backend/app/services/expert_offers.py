@@ -44,6 +44,10 @@ def _refresh_known() -> frozenset[str]:
     return catalog_pack_ids()
 
 
+# Built-in Node seat — not a commercial pack; never offers-gated.
+BUILTIN_SEAT_IDS = frozenset({"default", "consult", "workspace"})
+
+
 def normalize_pack_id(value: object) -> str | None:
     """Map engagement/role/alias to a canonical pack id, or None if empty/unknown."""
     if value is None:
@@ -51,6 +55,8 @@ def normalize_pack_id(value: object) -> str | None:
     key = str(value).strip().lower()
     if not key:
         return None
+    if key in BUILTIN_SEAT_IDS:
+        return "default"
     aliases = catalog_alias_map()
     if key in aliases:
         return aliases[key]
@@ -96,10 +102,15 @@ def effective_offers(config: object) -> list[str]:
 def engagement_allowed(offers: object, engagement: object) -> bool:
     """True if the structured engagement/role resolves to a pack in offers.
 
-    Missing/blank engagement defaults to the pentest pack (must be offered).
+    Built-in default seat (default/consult/workspace) is always allowed.
+    Missing/blank engagement defaults to the **default seat** (always allowed).
     Unknown engagement strings do not invent a pack — treated as not allowed
     unless they normalize to a known pack that is offered.
     """
+    raw = str(engagement or "").strip().lower()
+    if not raw or raw in BUILTIN_SEAT_IDS or normalize_pack_id(raw) == "default":
+        return True
+
     offer_list = (
         list(offers)
         if isinstance(offers, (list, tuple))
@@ -113,18 +124,19 @@ def engagement_allowed(offers: object, engagement: object) -> bool:
     if not offer_set:
         offer_set = set(DEFAULT_OFFERS)
 
-    raw = str(engagement or "").strip()
-    if not raw:
-        return DEFAULT_OFFER in offer_set
-
     pack = normalize_pack_id(raw)
     if pack is None:
         return False
+    if pack == "default":
+        return True
     return pack in offer_set
 
 
 def dispatch_gate_error(node_config: object, engagement: object) -> str | None:
     """Return a user-facing error if engagement is not offered; else None."""
+    raw = str(engagement or "").strip().lower()
+    if not raw or raw in BUILTIN_SEAT_IDS or normalize_pack_id(raw) == "default":
+        return None
     offers = effective_offers(node_config)
     if engagement_allowed(offers, engagement):
         return None

@@ -10,7 +10,7 @@
 | [`design.md`](design.md) | UI design system |
 | [`node4-ctf-role.md`](node4-ctf-role.md) | CTF role pack operator notes |
 | [`node-expert-offers.md`](node-expert-offers.md) | Node packs + product Expert instances (@mention routing); target: Node `default` + experts |
-| [`platform-default-agent-refactor.md`](platform-default-agent-refactor.md) | **Active plan (approved, not shipped):** remove platform conversation Agent → Node built-in `default` + platform data tools |
+| [`platform-default-agent-refactor.md`](platform-default-agent-refactor.md) | **Done:** remove platform conversation Agent → Node built-in `default` + platform data tools |
 | [`../experts/README.md`](../experts/README.md) | Expert pack catalog (source of pack content) |
 | [`../benchmarks/collab-playbook-b/README.md`](../benchmarks/collab-playbook-b/README.md) | **Manual lab:** multi-expert collaboration dry-run (code-audit ↔ pentest); `case_context` work-group thread |
 

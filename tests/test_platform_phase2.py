@@ -163,76 +163,39 @@ class PlatformPhase2Tests(unittest.TestCase):
         self.assertEqual(node_id, "11111111-1111-1111-1111-111111111111")
         self.assertEqual(_agent_target_for_request(msg, node_id, capabilities), "pentest")
 
-    def test_requested_pentest_node_without_target_is_preamble_not_task(self):
-        """Greeting with expert selected: no work burst / no incomplete task status."""
+    def test_default_participant_and_no_platform_agent_chat_peer(self):
+        """Workspace assistant is default; greetings are not execution targets."""
+        from app.ws.router import _is_default_participant, _message_has_task_target
 
-        async def fake_chat(messages):
-            return '{"action":"answer_user","capability":"platform.chat","agent":"platform","targets":[],"reason":"greeting"}'
-
-        async def run():
-            set_orchestrator_chat_override(fake_chat)
-            try:
-                return await route_with_platform_agent(
-                    text="@node3 hello",
-                    context=OrchestrationContext(
-                        conversation_status="created",
-                        requested_agent="pentest",
-                        requested_node_id="11111111-1111-1111-1111-111111111111",
-                        has_resume_task=False,
-                        capabilities=[AgentCapability(agent_type="pentest", capability="pentest.web", node_id="11111111-1111-1111-1111-111111111111", name="node3", online=True)],
-                    ),
-                )
-            finally:
-                set_orchestrator_chat_override(None)
-
-        decision = asyncio.run(run())
-        self.assertEqual(decision.action, "platform_reply")
-        self.assertEqual(decision.mode, "expert_preamble")
-        self.assertEqual(decision.agent, "pentest")
-        self.assertEqual(decision.agent_node_id, "11111111-1111-1111-1111-111111111111")
-        self.assertEqual(decision.targets, [])
-
-    def test_message_has_task_target_rejects_greeting(self):
-        """Router fast-path: 你好 is not an execution target."""
-        from app.ws.router import _message_has_task_target
-
+        self.assertTrue(_is_default_participant({"text": "你好"}))
+        self.assertTrue(_is_default_participant({"engagement": "default", "agent_target": "platform"}))
+        self.assertFalse(
+            _is_default_participant(
+                {
+                    "text": "你好",
+                    "expert_id": "e1",
+                    "expert_name": "渗透大师",
+                    "engagement": "pentest",
+                }
+            )
+        )
         self.assertFalse(_message_has_task_target({"text": "你好", "expert_name": "渗透大师"}))
         self.assertFalse(_message_has_task_target({"text": "hello", "expert_id": "x"}))
         self.assertFalse(_message_has_task_target({"text": "准备好了吗", "target": {}}))
         self.assertTrue(_message_has_task_target({"text": "测一下 http://example.com"}))
-        self.assertTrue(_message_has_task_target({"text": "你好", "target": {"type": "url", "value": "http://example.com"}}))
+        self.assertTrue(
+            _message_has_task_target(
+                {"text": "你好", "target": {"type": "url", "value": "http://example.com"}}
+            )
+        )
         self.assertTrue(_message_has_task_target({"text": "继续", "scope": {"allow": ["http://example.com"]}}))
 
-    def test_expert_room_chat_uses_llm_not_canned_script(self):
-        """Expert pre-target reply must be model-authored, never a hardcoded monologue."""
-        from app.services.platform_agent import answer_expert_room_chat, set_platform_agent_chat_override
+    def test_message_has_task_target_rejects_greeting(self):
+        """你好 is not an execution target."""
+        from app.ws.router import _message_has_task_target
 
-        canned = "你好！我是「渗透大师」。请提供授权目标 URL/IP"
-
-        async def fake_chat(messages):
-            # Model produces distinct natural wording.
-            return "嗨，我在。把授权目标和范围发我，再开测。"
-
-        async def run():
-            set_platform_agent_chat_override(fake_chat)
-            try:
-                return await answer_expert_room_chat(
-                    "00000000-0000-0000-0000-000000000099",
-                    "你好",
-                    expert_name="渗透大师",
-                    expert_id="exp-1",
-                )
-            finally:
-                set_platform_agent_chat_override(None)
-
-        answer = asyncio.run(run())
-        text = (answer.get("content") or {}).get("text") if isinstance(answer.get("content"), dict) else ""
-        self.assertEqual(text, "嗨，我在。把授权目标和范围发我，再开测。")
-        self.assertNotEqual(text, canned)
-        self.assertNotIn("在提供目标之前不会启动扫描或任务", text)
-        self.assertEqual(answer.get("agent_mode"), "expert_room_chat")
-        self.assertEqual(answer.get("agent_source"), "pentest")
-
+        self.assertFalse(_message_has_task_target({"text": "你好", "expert_name": "渗透大师"}))
+        self.assertTrue(_message_has_task_target({"text": "测一下 http://example.com"}))
     def test_force_dispatch_when_llm_claims_no_pentest_but_node_online(self):
         """Regression: planner must not platform-chat when pentest.web is online and target is present."""
 
@@ -442,64 +405,31 @@ class PlatformPhase2Tests(unittest.TestCase):
         self.assertEqual(decision.capability, "pentest.web")
         self.assertEqual(decision.agent, "pentest")
 
-    def test_platform_agent_plan_is_only_target_source_for_dispatch(self):
-        text = "\u5bf9http://host.docker.internal:3000/\u8fdb\u884c Web \u5e94\u7528\u6e17\u900f\u6d4b\u8bd5"
+    def test_ensure_target_from_text_for_node_relay(self):
+        """Relay path copies URL/IP from text into structured target (no platform chat)."""
+        from app.ws.router import _ensure_target_from_text
 
-        async def fake_chat(messages):
-            return '{"action":"start_task","capability":"pentest.web","agent":"pentest","targets":[],"reason":"bad plan missing target"}'
-
-        async def run():
-            set_orchestrator_chat_override(fake_chat)
-            try:
-                return await route_with_platform_agent(
-                    text=text,
-                    context=OrchestrationContext(conversation_status="created"),
-                )
-            finally:
-                set_orchestrator_chat_override(None)
-
-        decision = asyncio.run(run())
-        self.assertEqual(decision.action, "ask_clarification")
-        self.assertEqual(decision.mode, "missing_target")
+        msg = _ensure_target_from_text(
+            {"text": "\u5bf9http://host.docker.internal:3000/\u8fdb\u884c Web \u5e94\u7528\u6e17\u900f\u6d4b\u8bd5"}
+        )
+        self.assertEqual(msg.get("target", {}).get("value"), "http://host.docker.internal:3000/")
+        self.assertTrue((msg.get("scope") or {}).get("allow"))
 
     def test_platform_agent_sanitizes_chinese_suffix_in_plan_target(self):
-        async def fake_chat(messages):
-            return '{"action":"start_task","capability":"pentest.web","agent":"pentest","targets":["http://host.docker.internal:3000/\u8fdb\u884c"],"reason":"single supplied target"}'
+        from app.ws.router import _ensure_target_from_text
 
-        async def run():
-            set_orchestrator_chat_override(fake_chat)
-            try:
-                return await route_with_platform_agent(
-                    text="\u5bf9http://host.docker.internal:3000/\u8fdb\u884c Web \u5e94\u7528\u6e17\u900f\u6d4b\u8bd5",
-                    context=OrchestrationContext(conversation_status="created"),
-                )
-            finally:
-                set_orchestrator_chat_override(None)
-
-        decision = asyncio.run(run())
-        self.assertEqual(decision.action, "dispatch_node")
-        self.assertEqual(decision.targets, ["http://host.docker.internal:3000/"])
+        msg = _ensure_target_from_text(
+            {"text": "\u5bf9http://host.docker.internal:3000/\u8fdb\u884c Web \u5e94\u7528\u6e17\u900f\u6d4b\u8bd5"}
+        )
+        self.assertEqual(msg["target"]["value"], "http://host.docker.internal:3000/")
 
     def test_platform_agent_plan_single_chinese_target_dispatches(self):
+        from app.ws.router import _ensure_target_from_text, _message_has_task_target
+
         text = "\u5bf9http://host.docker.internal:3000/\u8fdb\u884c Web \u5e94\u7528\u6e17\u900f\u6d4b\u8bd5"
-
-        async def fake_chat(messages):
-            return '{"action":"start_task","capability":"pentest.web","agent":"pentest","targets":["http://host.docker.internal:3000/"],"reason":"single supplied target"}'
-
-        async def run():
-            set_orchestrator_chat_override(fake_chat)
-            try:
-                return await route_with_platform_agent(
-                    text=text,
-                    context=OrchestrationContext(conversation_status="created"),
-                )
-            finally:
-                set_orchestrator_chat_override(None)
-
-        decision = asyncio.run(run())
-        self.assertEqual(decision.action, "dispatch_node")
-        self.assertEqual(decision.capability, "pentest.web")
-
+        msg = _ensure_target_from_text({"text": text, "engagement": "pentest", "expert_id": "e1"})
+        self.assertTrue(_message_has_task_target(msg))
+        self.assertEqual(msg["target"]["value"], "http://host.docker.internal:3000/")
     def test_platform_agent_plan_multiple_targets_is_policy_clarification(self):
         async def fake_chat(messages):
             return '{"action":"start_task","capability":"pentest.web","agent":"pentest","targets":["http://one.local","http://two.local"],"reason":"two targets"}'
@@ -537,57 +467,33 @@ class PlatformPhase2Tests(unittest.TestCase):
         self.assertEqual(decision.capability, "platform.chat")
 
     def test_requested_pentest_answer_uses_pentest_snapshot_context(self):
-        async def fake_chat(messages):
-            return '{"action":"answer_user","capability":"platform.chat","agent":"platform","targets":[],"reason":"greeting"}'
+        """Legacy orchestrator snapshot path — product chat is Node-only now."""
+        from app.ws.router import _is_default_participant
 
-        async def run():
-            set_orchestrator_chat_override(fake_chat)
-            try:
-                return await route_with_platform_agent(
-                    text="hello",
-                    context=OrchestrationContext(
-                        conversation_status="completed",
-                        requested_agent="pentest",
-                        requested_node_id="node-1",
-                        has_resume_task=True,
-                        bound_node_id="node-1",
-                    ),
-                )
-            finally:
-                set_orchestrator_chat_override(None)
-
-        decision = asyncio.run(run())
-        self.assertEqual(decision.action, "platform_reply")
-        self.assertEqual(decision.capability, "snapshot.qa")
-        self.assertEqual(decision.mode, "snapshot_qa")
-        self.assertEqual(decision.agent, "pentest")
-        self.assertEqual(decision.agent_node_id, "node-1")
+        # Expert with id is never default seat; platform no longer answers as peer.
+        self.assertFalse(
+            _is_default_participant(
+                {
+                    "text": "hello",
+                    "expert_id": "e1",
+                    "engagement": "pentest",
+                    "agent_node_id": "node-1",
+                }
+            )
+        )
 
     def test_requested_pentest_clarification_uses_pentest_snapshot_when_session_exists(self):
-        async def fake_chat(messages):
-            return '{"action":"ask_clarification","capability":"platform.chat","agent":"platform","targets":[],"reason":"missing target"}'
+        from app.ws.router import _is_default_participant
 
-        async def run():
-            set_orchestrator_chat_override(fake_chat)
-            try:
-                return await route_with_platform_agent(
-                    text="self evaluate the last test",
-                    context=OrchestrationContext(
-                        conversation_status="completed",
-                        requested_agent="pentest",
-                        requested_node_id="node-1",
-                        has_resume_task=True,
-                        bound_node_id="node-1",
-                    ),
-                )
-            finally:
-                set_orchestrator_chat_override(None)
-
-        decision = asyncio.run(run())
-        self.assertEqual(decision.action, "platform_reply")
-        self.assertEqual(decision.capability, "snapshot.qa")
-        self.assertEqual(decision.agent, "pentest")
-
+        self.assertFalse(
+            _is_default_participant(
+                {
+                    "text": "self evaluate the last test",
+                    "expert_id": "e1",
+                    "engagement": "pentest",
+                }
+            )
+        )
     def test_platform_agent_invalid_plan_is_not_routed_by_fallback(self):
         async def fake_chat(messages):
             return 'not json'

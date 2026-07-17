@@ -35,9 +35,9 @@ type ProductExpert = {
   description?: string | null;
 };
 
-/** @mention picker entry: expert persona or platform agent. */
+/** @mention picker entry: workspace assistant (default seat) or product expert. */
 type MentionTarget = {
-  kind: "expert" | "platform";
+  kind: "expert" | "default" | "platform";
   /** Stable key for React list. */
   key: string;
   /** Token after @ */
@@ -1220,19 +1220,25 @@ export default function ConversationPage() {
     };
   }, [loadAgentNodes, loadProductExperts]);
 
-  /** Partner options: platform first (default), then product experts. */
+  /** Partner options: workspace assistant (default@Node) first, then product experts. */
   const mentionTargets = useMemo(() => {
     const out: MentionTarget[] = [];
-    const platform = agentNodes.find((n) => n.type === "platform");
-    if (platform) {
+    const workers = agentNodes.filter((n) => n.type !== "platform" && n.id);
+    const stickyId = activeConversationNodeId || activeConversation?.node_id || null;
+    const preferred =
+      (stickyId && workers.find((n) => n.id === stickyId)) ||
+      workers.find((n) => n.status === "online") ||
+      workers[0];
+    if (preferred) {
       out.push({
-        kind: "platform",
-        key: `platform:${platform.id}`,
-        name: platform.name,
-        label: platform.name || "平台助手",
-        subtitle: "Platform",
-        nodeId: platform.id,
-        status: platform.status,
+        kind: "default",
+        key: `default:${preferred.id}`,
+        name: "工作台助手",
+        label: "工作台助手",
+        subtitle: `default → ${preferred.name || preferred.id.slice(0, 8)}`,
+        nodeId: preferred.id,
+        packId: "default",
+        status: preferred.status,
       });
     }
     for (const e of productExperts) {
@@ -1251,20 +1257,20 @@ export default function ConversationPage() {
       });
     }
     return out;
-  }, [productExperts, agentNodes]);
+  }, [productExperts, agentNodes, activeConversation?.node_id, activeConversationNodeId]);
 
-  const platformTarget = useMemo(
-    () => mentionTargets.find((t) => t.kind === "platform") || null,
+  const defaultTarget = useMemo(
+    () => mentionTargets.find((t) => t.kind === "default") || null,
     [mentionTargets],
   );
 
-  // Default conversation partner = platform agent (not "none").
+  // Default conversation partner = workspace assistant on an online Node.
   useEffect(() => {
     if (selectedMention) return;
-    if (!platformTarget) return;
-    selectedMentionRef.current = platformTarget;
-    setSelectedMention(platformTarget);
-  }, [platformTarget, selectedMention]);
+    if (!defaultTarget) return;
+    selectedMentionRef.current = defaultTarget;
+    setSelectedMention(defaultTarget);
+  }, [defaultTarget, selectedMention]);
 
   const mentionState = useMemo(() => getMentionState(input), [input]);
   const mentionOptions = useMemo(
@@ -1415,7 +1421,8 @@ export default function ConversationPage() {
       (resolvedMention?.kind === "expert" ? String(resolvedMention.expertId || "").trim() : "");
     const expertPayload = expertId ? { expert_id: expertId } : {};
 
-    const platformMention = resolvedMention?.kind === "platform";
+    const platformMention =
+      resolvedMention?.kind === "platform" || resolvedMention?.kind === "default";
     const targetValue = opts.target?.value || extractTarget(text);
     const restartRequested = isRestartRequest(text);
     const completedConversation = isConversationComplete(activeId, conversations, planTree);
@@ -1450,21 +1457,25 @@ export default function ConversationPage() {
     const clientMessageId = crypto.randomUUID();
     const userContent: Record<string, unknown> = { text: displayText, client_message_id: clientMessageId };
 
-    // Route: explicit @expert/platform → node; else sticky conversation node.
+    // Route: default seat or expert → always a worker Node (never platform agent peer).
+    const isDefaultPartner =
+      !resolvedMention ||
+      resolvedMention.kind === "default" ||
+      resolvedMention.kind === "platform";
     let routeNodeId: string | null = resolvedMention?.nodeId || null;
-    let routeAgentTarget: AgentIdentity | undefined = resolvedMention
-      ? resolvedMention.kind === "platform"
-        ? "platform"
-        : "pentest"
-      : undefined;
+    let routeAgentTarget: AgentIdentity | undefined = isDefaultPartner ? "platform" : "pentest";
     if (!routeNodeId) {
       const sticky = agentNodeById(
         agentNodes,
         activeConversationNodeId || activeConversation?.node_id || null,
       );
-      if (sticky) {
-        routeNodeId = sticky.id;
-        routeAgentTarget = agentTargetForNode(sticky);
+      const workers = agentNodes.filter((n) => n.type !== "platform");
+      const pick =
+        sticky && sticky.type !== "platform"
+          ? sticky
+          : workers.find((n) => n.status === "online") || workers[0] || null;
+      if (pick) {
+        routeNodeId = pick.id;
       }
     }
     const routeExpertId =
@@ -1476,21 +1487,37 @@ export default function ConversationPage() {
         ? String(resolvedMention.name || "").trim()
         : "";
 
-    if (routeNodeId && routeAgentTarget) {
-      userContent.agent_target = routeAgentTarget;
+    if (routeNodeId) {
       userContent.agent_node_id = routeNodeId;
+      userContent.agent_target = isDefaultPartner || !routeExpertId ? "platform" : "pentest";
     }
-    if (routeExpertId) userContent.expert_id = routeExpertId;
-    if (routeExpertName) userContent.expert_name = routeExpertName;
+    if (isDefaultPartner || !routeExpertId) {
+      userContent.engagement = "default";
+      userContent.role = "default";
+    } else {
+      if (routeExpertId) userContent.expert_id = routeExpertId;
+      if (routeExpertName) userContent.expert_name = routeExpertName;
+      if (eng) {
+        userContent.engagement = eng;
+        userContent.role = eng;
+      }
+    }
 
     pendingScrollToBottomRef.current = true;
     shouldStickToBottomRef.current = true;
-    const agentPayload: Record<string, unknown> =
-      routeNodeId && routeAgentTarget
-        ? { agent_target: routeAgentTarget, agent_node_id: routeNodeId }
-        : {};
-    if (routeExpertId) agentPayload.expert_id = routeExpertId;
-    if (routeExpertName) agentPayload.expert_name = routeExpertName;
+    const agentPayload: Record<string, unknown> = routeNodeId
+      ? {
+          agent_node_id: routeNodeId,
+          agent_target: isDefaultPartner || !routeExpertId ? "platform" : "pentest",
+          ...(isDefaultPartner || !routeExpertId
+            ? { engagement: "default", role: "default" }
+            : {
+                ...(routeExpertId ? { expert_id: routeExpertId } : {}),
+                ...(routeExpertName ? { expert_name: routeExpertName } : {}),
+                ...(eng ? { engagement: eng, role: eng } : {}),
+              }),
+        }
+      : {};
 
     const shouldContinueExisting = Boolean(
       !explicitConv &&
@@ -1504,20 +1531,15 @@ export default function ConversationPage() {
       !platformMention && shouldContinueExisting && activeConversation?.status === "running",
     );
     const pendingAgentSource: AgentIdentity =
-      platformMention || routeAgentTarget === "platform"
+      isDefaultPartner || !routeExpertId
         ? "platform"
-        : routeAgentTarget === "pentest" || willSteerDirectly || Boolean(routeExpertId)
-          ? "pentest"
-          : "platform";
+        : "pentest";
     const pendingAgentNodeId =
-      routeNodeId ||
-      (pendingAgentSource === "pentest"
-        ? activeConversationNodeId || activeConversation?.node_id || undefined
-        : undefined);
-    // Prefer expert persona for Working... label — never fall back to bare node name when we know the expert.
-    let pendingExpertId = routeExpertId;
-    let pendingExpertName = routeExpertName;
-    if (!pendingExpertId && pendingAgentSource === "pentest" && productExperts.length) {
+      routeNodeId || activeConversationNodeId || activeConversation?.node_id || undefined;
+    // Expert persona only when expert is the active participant.
+    let pendingExpertId = isDefaultPartner ? "" : routeExpertId;
+    let pendingExpertName = isDefaultPartner ? "" : routeExpertName;
+    if (!pendingExpertId && !isDefaultPartner && pendingAgentSource === "pentest" && productExperts.length) {
       const packHint = eng || "pentest";
       const match =
         productExperts.find((e) => e.pack_id === packHint && e.node_id === pendingAgentNodeId)
@@ -1723,10 +1745,10 @@ export default function ConversationPage() {
   }, [input, selectedMention, mentionTargets, launchTaskMessage, goalModeEnabled, engagementTemplate, activeId]);
 
   const selectExpertFromToolbar = useCallback((key: string) => {
-    const platform = mentionTargets.find((t) => t.kind === "platform") || null;
+    const fallback = mentionTargets.find((t) => t.kind === "default") || null;
     const target = key
-      ? mentionTargets.find((t) => t.key === key) || platform
-      : platform;
+      ? mentionTargets.find((t) => t.key === key) || fallback
+      : fallback;
     selectedMentionRef.current = target;
     setSelectedMention(target);
     // Mode + Goal only apply to pentest experts; reset when leaving that pack.
@@ -1736,7 +1758,7 @@ export default function ConversationPage() {
     }
   }, [mentionTargets]);
 
-  const activePartner = selectedMention || platformTarget;
+  const activePartner = selectedMention || defaultTarget;
   const showPentestControls = isPentestMentionTarget(activePartner);
   const activeModeLabel =
     ENGAGEMENT_TEMPLATES.find((t) => t.id === engagementTemplate)?.label || "应用评估";
@@ -1790,10 +1812,11 @@ function getMentionState(value: string): MentionState {
 
 function filterMentionTargets(targets: MentionTarget[], query: string): MentionTarget[] {
   const normalized = query.trim().toLowerCase();
-  // Platform first (default partner), then experts A–Z.
+  // Workspace assistant first, then experts A–Z.
   const ordered = [...targets].sort((a, b) => {
-    if (a.kind === "platform" && b.kind !== "platform") return -1;
-    if (b.kind === "platform" && a.kind !== "platform") return 1;
+    const rank = (t: MentionTarget) => (t.kind === "default" || t.kind === "platform" ? 0 : 1);
+    const d = rank(a) - rank(b);
+    if (d !== 0) return d;
     return a.name.localeCompare(b.name);
   });
   if (!normalized) return ordered.slice(0, 8);
@@ -1973,19 +1996,21 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                         className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm transition-colors hover:bg-surface-default"
                       >
                         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-canvas-inset text-ink-secondary">
-                          {target.kind === "platform" ? <Bot size={14} /> : <Shield size={14} />}
+                          {target.kind === "default" || target.kind === "platform" ? <Bot size={14} /> : <Shield size={14} />}
                         </span>
                         <span className="min-w-0 flex-1">
                           <span className="block truncate font-medium text-ink">
                             {target.label || target.name}
                           </span>
                           <span className="block truncate text-[11px] text-ink-muted">
-                            {target.kind === "platform" ? "默认 · 平台助手" : target.subtitle || target.label}
+                            {target.kind === "default" || target.kind === "platform"
+                              ? "默认 · 工作台助手"
+                              : target.subtitle || target.label}
                           </span>
                         </span>
                         <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-ink-muted">
-                          {target.kind === "platform"
-                            ? "Platform"
+                          {target.kind === "default" || target.kind === "platform"
+                            ? "Default"
                             : target.status === "online"
                               ? "Online"
                               : target.status === "offline"
@@ -2016,8 +2041,8 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                     }}
                     rows={3}
                     placeholder={
-                      activePartner?.kind === "platform"
-                        ? "和平台助手对话…（Shift+Enter 换行）"
+                      activePartner?.kind === "default" || activePartner?.kind === "platform"
+                        ? "和工作台助手对话…（Shift+Enter 换行）"
                         : `向 ${activePartner?.label || activePartner?.name || "专家"} 描述任务…（Shift+Enter 换行）`
                     }
                     className="relative z-10 min-h-[4.75rem] w-full resize-none bg-transparent px-4 py-3.5 text-sm leading-5 text-transparent caret-ink placeholder:text-ink-muted focus:outline-none"
@@ -2072,13 +2097,13 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                       >
                         <span
                           className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${
-                            activePartner?.kind === "platform" ? "bg-ink text-white" : "bg-status-running text-white"
+                            activePartner?.kind === "default" || activePartner?.kind === "platform" ? "bg-ink text-white" : "bg-status-running text-white"
                           }`}
                         >
-                          {activePartner?.kind === "platform" ? <Bot size={11} /> : <Shield size={11} />}
+                          {activePartner?.kind === "default" || activePartner?.kind === "platform" ? <Bot size={11} /> : <Shield size={11} />}
                         </span>
                         <span className="min-w-0 truncate font-medium leading-none">
-                          {activePartner?.label || activePartner?.name || "平台助手"}
+                          {activePartner?.label || activePartner?.name || "工作台助手"}
                         </span>
                         <ChevronDown
                           size={12}
@@ -2096,14 +2121,14 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                           </p>
                           {mentionTargets.map((t) => {
                             const selected = t.key === activePartner?.key;
-                            const statusLabel =
-                              t.kind === "platform"
-                                ? "平台助手"
-                                : t.status === "online"
-                                  ? "在线"
-                                  : t.status === "offline"
-                                    ? "离线"
-                                    : expertLabel(t.packId);
+                            const isDefaultSeat = t.kind === "default" || t.kind === "platform";
+                            const statusLabel = isDefaultSeat
+                              ? "工作台助手"
+                              : t.status === "online"
+                                ? "在线"
+                                : t.status === "offline"
+                                  ? "离线"
+                                  : expertLabel(t.packId);
                             return (
                               <button
                                 key={t.key}
@@ -2120,10 +2145,10 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                               >
                                 <span
                                   className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
-                                    t.kind === "platform" ? "bg-ink text-white" : "bg-status-running/15 text-status-running"
+                                    isDefaultSeat ? "bg-ink text-white" : "bg-status-running/15 text-status-running"
                                   }`}
                                 >
-                                  {t.kind === "platform" ? <Bot size={15} /> : <Shield size={15} />}
+                                  {isDefaultSeat ? <Bot size={15} /> : <Shield size={15} />}
                                 </span>
                                 <span className="min-w-0 flex-1">
                                   <span className="flex items-center gap-1.5">
@@ -2135,7 +2160,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                                     )}
                                   </span>
                                   <span className="mt-0.5 block truncate text-[11px] text-ink-muted">
-                                    {t.kind === "platform" ? "默认 · 平台对话" : t.subtitle || statusLabel}
+                                    {isDefaultSeat ? "默认 · 工作台助手" : t.subtitle || statusLabel}
                                   </span>
                                 </span>
                                 {selected ? (

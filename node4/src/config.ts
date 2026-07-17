@@ -7,6 +7,8 @@ export type Node4Config = {
   nodeName: string;
   nodeToken: string;
   platformWsUrl: string;
+  /** HTTP base for ledger tools (derived from PLATFORM_HTTP_URL or PLATFORM_WS_URL). */
+  platformHttpUrl: string;
   workspaceDir: string;
   piAgentDir: string;
   modelProvider: string;
@@ -15,12 +17,29 @@ export type Node4Config = {
   mainMaxTurns: number;
 };
 
+function derivePlatformHttpUrl(wsUrl: string): string {
+  const explicit = String(process.env.PLATFORM_HTTP_URL || process.env.PLATFORM_API_URL || "").trim();
+  if (explicit) return explicit.replace(/\/$/, "");
+  try {
+    const u = new URL(wsUrl);
+    u.protocol = u.protocol === "wss:" ? "https:" : "http:";
+    u.pathname = "";
+    u.search = "";
+    u.hash = "";
+    return u.toString().replace(/\/$/, "");
+  } catch {
+    return "http://localhost:8000";
+  }
+}
+
 export function loadConfig(): Node4Config {
   const modelProvider = process.env.PI_MODEL_PROVIDER || "openai";
+  const platformWsUrl = process.env.PLATFORM_WS_URL || "ws://localhost:8000/ws";
   return {
     nodeName: process.env.NODE_NAME || "pentest-node4-01",
     nodeToken: process.env.NODE_TOKEN || "",
-    platformWsUrl: process.env.PLATFORM_WS_URL || "ws://localhost:8000/ws",
+    platformWsUrl,
+    platformHttpUrl: derivePlatformHttpUrl(platformWsUrl),
     workspaceDir: resolve(process.env.NODE4_WORKSPACE || process.env.NODE2_WORKSPACE || "./workspace"),
     piAgentDir: resolve(process.env.PI_AGENT_DIR || "./.pi-agent"),
     modelProvider,

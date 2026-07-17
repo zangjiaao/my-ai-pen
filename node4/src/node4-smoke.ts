@@ -124,12 +124,16 @@ async function main() {
   assert(existsSync(pathJoin(expertsCatalogRoot(), "pentest", "pack.json")), "catalog pentest exists");
   assert(existsSync(pathJoin(expertsCatalogRoot(), "ctf", "pack.json")), "catalog ctf exists");
   assert(listInstalledPackIds().length === 0, "fresh install root empty");
-  assert(effectiveInstalledPackIds().length === 0, "empty install → no experts (bare runtime)");
+  assert(effectiveInstalledPackIds().length === 0, "empty install → no experts");
 
-  // Blank engagement → bare OMP runtime (not pentest expert)
+  // Blank engagement → built-in default seat (workspace assistant)
   const { BARE_RUNTIME_ID, BARE_RUNTIME_PACK } = await import("./roles/bare.js");
+  const { DEFAULT_SEAT_ID, DEFAULT_SEAT_PACK } = await import("./roles/default.js");
   const def = resolveRolePack({});
-  assert(def.pack.id === BARE_RUNTIME_ID && def.source === "default" && !def.blocked, "default bare runtime");
+  assert(def.pack.id === DEFAULT_SEAT_ID && def.source === "default" && !def.blocked, "blank → default seat");
+  assert(!toolNamesForPack(DEFAULT_SEAT_PACK).includes("finding"), "default seat has no finding");
+  assert(!toolNamesForPack(DEFAULT_SEAT_PACK).includes("shell"), "default seat has no shell");
+  assert(toolNamesForPack(DEFAULT_SEAT_PACK).some((n) => n.startsWith("platform_")), "default has platform tools");
   assert(!toolNamesForPack(BARE_RUNTIME_PACK).includes("session"), "bare has no session");
   assert(!toolNamesForPack(BARE_RUNTIME_PACK).includes("skill"), "bare has no skill");
   // Explicit expert not installed → blocked
@@ -149,8 +153,8 @@ async function main() {
   assert(existsSync(pathJoin(expertsCatalogRoot(), "ctf", "pack.json")), "catalog ctf still present after install");
   const blankAfterCtf = resolveRolePack({});
   assert(
-    blankAfterCtf.pack.id === BARE_RUNTIME_ID && !blankAfterCtf.blocked,
-    "blank engagement stays bare runtime even when ctf is installed (experts are opt-in via engagement)",
+    blankAfterCtf.pack.id === DEFAULT_SEAT_ID && !blankAfterCtf.blocked,
+    "blank engagement stays default seat even when ctf is installed (experts are opt-in via engagement)",
   );
   const pentestAfterCtf = resolveRolePack({ engagement: "pentest" });
   assert(pentestAfterCtf.blocked === true, "engagement=pentest blocked until pentest installed");
@@ -161,16 +165,17 @@ async function main() {
   assert(listInstalledPackIds().includes("pentest"), "pentest installed");
   const byRole = resolveRolePack({ role: "pentest" });
   assert(byRole.pack.id === "pentest" && byRole.source === "role" && !byRole.blocked, "pentest via role after install");
-  uninstallExpert("consult");
-  const byEngConsultPre = resolveRolePack({ engagement: "consult" });
-  assert(byEngConsultPre.blocked === true, "consult blocked when not installed");
-  const instConsult = installExpert("consult");
-  assert(instConsult.ok, `install consult: ${instConsult.message}`);
-  const byEng = resolveRolePack({ engagement: "consult" });
-  assert(byEng.pack.id === "consult" && byEng.source === "engagement" && !byEng.blocked, "consult via engagement after install");
+  // consult alias maps to built-in default (no install required)
+  const byEngConsult = resolveRolePack({ engagement: "consult" });
+  assert(byEngConsult.pack.id === DEFAULT_SEAT_ID && !byEngConsult.blocked, "consult alias → default seat");
+  const byDefault = resolveRolePack({ engagement: "default" });
+  assert(byDefault.pack.id === DEFAULT_SEAT_ID && !byDefault.blocked, "engagement=default → default seat");
   // Free-text instruction must NOT be used for routing — only structured fields.
   const ignoreInstr = resolveRolePack({});
-  assert(ignoreInstr.pack.id === BARE_RUNTIME_ID, "no NLP: empty fields → bare runtime");
+  assert(ignoreInstr.pack.id === DEFAULT_SEAT_ID, "no NLP: empty fields → default seat");
+  // Explicit lab bare
+  const bare = resolveRolePack({ engagement: BARE_RUNTIME_ID });
+  assert(bare.pack.id === BARE_RUNTIME_ID && !bare.blocked, "explicit runtime → bare pack");
   assert(toolNamesForPack(PENTEST_ROLE_PACK).includes("finding"), "pentest has finding");
   assert(!toolNamesForPack(CONSULT_STUB_ROLE_PACK).includes("finding"), "consult stub has no finding");
   assert(toolNamesForPack(PENTEST_ROLE_PACK).includes("subagent"), "pentest has subagent");
@@ -1157,9 +1162,10 @@ async function main() {
   assert(!messages.some((m) => m.type === "finish_scan_requested"), "no finish events");
 
   // Pack-driven tool factories
-  const consultTools = createNode4Tools(runtime, CONSULT_STUB_ROLE_PACK);
-  assert(consultTools.every((t) => t.name !== "finding"), "consult tools exclude finding");
-  assert(consultTools.some((t) => t.name === "todo"), "consult has todo");
+  const consultTools = createNode4Tools(runtime, DEFAULT_SEAT_PACK);
+  assert(consultTools.every((t) => t.name !== "finding"), "default seat tools exclude finding");
+  assert(consultTools.some((t) => t.name === "todo"), "default seat has todo");
+  assert(consultTools.some((t) => t.name.startsWith("platform_")), "default seat has platform tools");
 
   // Settlement with open goals still completed when findings exist
   const harnessStatus = resolveHarnessTerminalStatus({

@@ -70,11 +70,10 @@ export async function runNode4Task(
   }
   const startedAt = new Date().toISOString();
   /**
-   * Chat-only turn: user selected an expert but provided no target/scope.
-   * OMP work bursts (todo map, booking, goal maximize, outer continues) must NOT
-   * auto-start — respond conversationally and ask for authorized scope first.
+   * Chat-only turn: built-in default seat, or expert without authorized target/scope.
+   * OMP work bursts must NOT auto-start — respond conversationally (and use ledger tools for default).
    */
-  const chatOnly = isChatOnlyTask(task);
+  const chatOnly = isChatOnlyTask(task, pack.id);
 
   const eventsPath = join(taskDir, "events.jsonl");
   await writeFile(eventsPath, "", "utf8");
@@ -112,6 +111,9 @@ export async function runNode4Task(
     workspaceDir: config.workspaceDir,
     taskDir,
     platform: loggingPlatform,
+    platformApi: config.nodeToken
+      ? { baseUrl: config.platformHttpUrl, nodeToken: config.nodeToken }
+      : undefined,
     todo: new TodoStore(),
     evidence: new EvidenceStore(join(taskDir, "evidence")),
     findingsDir: join(taskDir, "findings"),
@@ -604,8 +606,14 @@ export async function runNode4Task(
   return { terminalStatus: emitStatus, taskDir };
 }
 
-/** True when platform dispatched an expert with no authorized target/scope yet. */
-export function isChatOnlyTask(task: TaskEnvelope): boolean {
+/**
+ * True when this turn must not open an execution work-burst UX:
+ * - built-in default seat (always chat/ledger assist), or
+ * - expert dispatch with no authorized target/scope yet.
+ */
+export function isChatOnlyTask(task: TaskEnvelope, packId?: string): boolean {
+  const pack = String(packId || task.engagement || task.role || "").toLowerCase().trim();
+  if (pack === "default" || pack === "consult" || pack === "workspace") return true;
   const target = task.target && typeof task.target === "object" ? task.target : {};
   const value = String(
     (target as { value?: unknown }).value

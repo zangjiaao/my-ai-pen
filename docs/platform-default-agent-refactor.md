@@ -1,11 +1,11 @@
 # Plan: Remove platform conversation Agent → Node built-in `default`
 
-> **Status:** approved direction (product) — **not yet implemented**  
+> **Status:** **DONE** (shipped 2026-07-17)  
 > **Date:** 2026-07-17  
-> **Precedence:** `AGENTS.md` → `prd.md` → this plan → `node-expert-offers.md` / `node4-harness.md`  
+> **Precedence:** `AGENTS.md` → `prd.md` → this plan (historical checklist) → `node-expert-offers.md` / `node4-harness.md`  
 > **Runtime:** `node4/` only. Platform remains ledger + relay + UI — **no peer conversation Agent**.
 
-When this plan is executed end-to-end, update living docs in the **same change** and mark this plan **done** (or fold remaining open items into PRD/offers/harness and archive the rest).
+Shipped: built-in Node `default` seat, platform `/api/node/ledger/*` tools, WS relay-only user_message, UI 工作台助手 partner, chat-only settlement for default/no-target.
 
 ---
 

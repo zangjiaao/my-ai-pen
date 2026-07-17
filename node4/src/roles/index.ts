@@ -12,4 +12,5 @@ export {
   skillsRootForPack,
 } from "./packs.js";
 export { BARE_RUNTIME_ID, BARE_RUNTIME_PACK } from "./bare.js";
+export { DEFAULT_SEAT_ID, DEFAULT_SEAT_ALIASES, DEFAULT_SEAT_PACK } from "./default.js";
 export { resolveRolePack } from "./resolve.js";

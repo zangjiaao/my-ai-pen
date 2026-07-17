@@ -1698,21 +1698,47 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
             agent_node_id = _agent_node_id(msg)
             if agent_node_id:
                 content["agent_node_id"] = agent_node_id
-            # Prefer explicit expert on message; else sticky conversation expert persona.
+            # Only stamp expert persona when THIS message is from an expert speaker.
+            # Never relabel default-seat / platform-system rows with sticky expert.
+            eng = str(
+                msg.get("engagement")
+                or content.get("engagement")
+                or msg.get("role")
+                or content.get("role")
+                or ""
+            ).strip().lower()
+            agent_source = str(content.get("agent_source") or msg.get("agent_source") or "").strip().lower()
+            is_default_seat = eng in {"default", "consult", "workspace"} or agent_source in {
+                "default",
+                "workspace",
+            }
             expert_id = str(msg.get("expert_id") or content.get("expert_id") or "").strip()
             expert_name = str(msg.get("expert_name") or content.get("expert_name") or "").strip()
-            if not expert_id or not expert_name:
+            if not is_default_seat and (expert_id or expert_name):
+                if expert_id:
+                    content["expert_id"] = expert_id
+                    msg["expert_id"] = expert_id
+                if expert_name:
+                    content["expert_name"] = expert_name
+                    msg["expert_name"] = expert_name
+            elif not is_default_seat and agent_source in {"pentest", "expert"}:
+                # Mid-burst node events may omit expert fields — sticky only for expert speakers.
                 sticky_id, sticky_name = await _conversation_expert_label(str(conv_id))
-                if not expert_id and sticky_id:
-                    expert_id = sticky_id
-                if not expert_name and sticky_name:
-                    expert_name = sticky_name
-            if expert_id:
-                content["expert_id"] = expert_id
-                msg["expert_id"] = expert_id
-            if expert_name:
-                content["expert_name"] = expert_name
-                msg["expert_name"] = expert_name
+                if sticky_id:
+                    content["expert_id"] = sticky_id
+                    msg["expert_id"] = sticky_id
+                if sticky_name:
+                    content["expert_name"] = sticky_name
+                    msg["expert_name"] = sticky_name
+            else:
+                # Default seat: strip sticky expert so UI shows workspace assistant.
+                content.pop("expert_id", None)
+                content.pop("expert_name", None)
+                msg.pop("expert_id", None)
+                msg.pop("expert_name", None)
+                if not eng:
+                    content["engagement"] = "default"
+                    content["agent_source"] = content.get("agent_source") or "default"
 
         dedupe_key = _message_dedupe_key(role=role, original_type=str(original_type), stored_type=str(msg_type), content=content)
         if dedupe_key:
@@ -2857,6 +2883,159 @@ def _message_with_decision_target(msg: dict, decision) -> dict:
         "scope": msg.get("scope") or {"allow": [target_value], "deny": []},
     }
 
+def _is_default_participant(msg: dict) -> bool:
+    """True when composer selected workspace assistant (built-in default seat)."""
+    from app.services.expert_offers import BUILTIN_SEAT_IDS, normalize_pack_id
+
+    eng = str(msg.get("engagement") or msg.get("role") or "").strip().lower()
+    if eng in BUILTIN_SEAT_IDS:
+        return True
+    if str(msg.get("expert_id") or "").strip() or str(msg.get("expert_name") or "").strip():
+        return False
+    pack = normalize_pack_id(eng) if eng else "default"
+    if pack and pack != "default":
+        return False
+    target = _agent_target(msg)
+    if target == "platform":
+        return True  # legacy UI "platform" partner → default seat
+    return True
+
+
+def _ensure_target_from_text(msg: dict) -> dict:
+    """If structured target missing, copy first URL/IP from text (no NLP invent)."""
+    target = msg.get("target") if isinstance(msg, dict) else None
+    if isinstance(target, dict) and str(target.get("value") or "").strip():
+        return msg
+    if isinstance(target, str) and target.strip():
+        return msg
+    from app.services.agent_router import extract_targets
+
+    found = extract_targets(str(msg.get("text") or ""))
+    if not found:
+        return msg
+    value = found[0]
+    # Strip trailing path noise already handled by extract_targets regex.
+    ttype = "url" if value.lower().startswith(("http://", "https://")) else "host"
+    out = dict(msg)
+    out["target"] = {"type": ttype, "value": value}
+    if not out.get("scope"):
+        out["scope"] = {"allow": [value], "deny": []}
+    return out
+
+
+async def _pick_online_node_id(
+    *,
+    preferred: str | None,
+    bound: str | None,
+    capabilities: list,
+) -> str | None:
+    online = [str(n) for n in node_connections.keys()]
+    if preferred and preferred in node_connections:
+        return preferred
+    if bound and bound in node_connections:
+        return bound
+    # Prefer online worker (non-platform) nodes
+    workers = [
+        str(item.node_id)
+        for item in (capabilities or [])
+        if item.online
+        and item.node_id
+        and str(item.node_id) in node_connections
+        and str(item.agent_type or "").lower() != "platform"
+    ]
+    if len(workers) == 1:
+        return workers[0]
+    if workers:
+        return workers[0]
+    return online[0] if len(online) == 1 else (online[0] if online else None)
+
+
+async def _dispatch_task_assign_to_node(
+    *,
+    conv_id: str,
+    client_id: str,
+    msg: dict,
+    node_id: str,
+    engagement: str,
+    expert_id: str | None,
+    expert_name: str | None,
+    resume_context: dict | None = None,
+    force_working: bool = True,
+) -> None:
+    """Build task_assign and send to an online Node (default seat or expert)."""
+    task_msg = _task_assign_from_user_message(conv_id, msg, str(uuid.uuid4()))
+    task_msg["engagement"] = engagement
+    task_msg["role"] = engagement if engagement != "default" else "default"
+    if expert_id:
+        task_msg["expert_id"] = expert_id
+    if expert_name:
+        task_msg["expert_name"] = expert_name
+    task_msg = await _merge_case_roe_into_task_assign(conv_id, task_msg)
+    task_msg = await _attach_case_context_to_task_assign(conv_id, task_msg)
+
+    gate_err = await _gate_engagement_for_node(node_id, engagement)
+    if gate_err:
+        await _persist_and_broadcast(
+            conv_id,
+            {
+                "type": "task_error",
+                "conversation_id": conv_id,
+                "message": gate_err,
+                "agent_source": "default" if engagement == "default" else "platform",
+            },
+            "agent",
+        )
+        return
+
+    await _remember_conversation_task(
+        conv_id,
+        target=task_msg.get("target") or {},
+        scope=task_msg.get("scope") or {},
+        instruction=task_msg.get("initial_instruction") or msg.get("text") or "",
+        goal_objective=str(task_msg.get("goal_objective") or "").strip() or None,
+        engagement=engagement,
+        expert_id=expert_id,
+        expert_name=expert_name,
+        engagement_template=str(task_msg.get("engagement_template") or "").strip() or None,
+        allow_postex=task_msg.get("allow_postex") if isinstance(task_msg.get("allow_postex"), bool) else None,
+        accounts=task_msg.get("accounts"),
+    )
+    await _bind_conversation_to_node(conv_id, node_id, active_task_id=str(task_msg.get("task_id") or ""))
+    if force_working:
+        working_payload = await _apply_worker_state(
+            conv_id,
+            node_id=node_id,
+            working=True,
+            task_id=task_msg.get("task_id"),
+            expert_id=expert_id,
+            expert_name=expert_name,
+            interrupt_pending=False,
+        )
+        await _broadcast_conversation_working(working_payload)
+    await _incr_sessions(node_id, 1)
+    task_msg["agent_node_id"] = node_id
+    task_msg["agent_capability"] = "pentest.web" if engagement not in {"default", "consult", "workspace"} else "default.chat"
+    snapshot = await _conversation_snapshot(conv_id, client_id)
+    if resume_context and isinstance(resume_context.get("checkpoint"), dict):
+        snapshot = dict(snapshot or {})
+        snapshot["checkpoint"] = resume_context.get("checkpoint") or {}
+    elif isinstance(snapshot, dict):
+        snapshot = dict(snapshot)
+        # Chat-only default: empty checkpoint
+        if engagement in {"default", "consult", "workspace"} and not _message_has_task_target(msg):
+            snapshot["checkpoint"] = {}
+    task_msg["snapshot"] = snapshot or {}
+    if engagement:
+        snap = dict(task_msg["snapshot"]) if isinstance(task_msg.get("snapshot"), dict) else {}
+        snap["engagement"] = engagement
+        snap["role"] = task_msg.get("role") or engagement
+        task_msg["snapshot"] = snap
+    worker_limits = await _worker_limits_for_node(node_id)
+    if worker_limits:
+        task_msg["worker_limits"] = worker_limits
+    await node_connections[node_id].send_text(json.dumps(task_msg, ensure_ascii=False))
+
+
 def _task_assign_from_user_message(conv_id: str, msg: dict, task_id: str) -> dict:
     task_target = msg.get("target") or {}
     task_scope = msg.get("scope") or {"allow": [task_target.get("value")] if task_target else []}
@@ -3291,444 +3470,109 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     await _save_message(msg, "user")
 
                 if msg.get("type") == "user_message" and conv_id:
+                    # Product model: platform is relay only — always Node participant
+                    # (built-in default seat or expert pack). No platform conversation Agent.
                     conversation_status = await _conversation_status(conv_id)
                     resume_context = await _conversation_snapshot(conv_id, client_id)
                     _, bound_node = await _conversation_owner(conv_id)
                     bound_node_id = conversation_node.get(conv_id) or (str(bound_node) if bound_node else None)
                     capabilities = await _available_agent_capabilities()
-                    # @Expert mention designates participant in the shared room (node is the seat).
                     requested_node_id, msg = await _resolve_mention_route(msg, capabilities)
-                    if msg.get("expert_id") or msg.get("expert_name"):
+                    msg = _ensure_target_from_text(msg)
+
+                    is_default = _is_default_participant(msg)
+                    if not is_default and (msg.get("expert_id") or msg.get("expert_name")):
                         await _remember_conversation_expert(
                             conv_id,
                             expert_id=str(msg.get("expert_id") or "") or None,
                             expert_name=str(msg.get("expert_name") or "") or None,
                             engagement=str(msg.get("engagement") or msg.get("role") or "") or None,
                         )
-                    requested_agent = _agent_target_for_request(msg, requested_node_id, capabilities)
-                    if _should_use_sticky_node_binding(
+
+                    # Mid-task: steer active worker without re-orchestrating.
+                    # Switching to default seat always starts a new default turn (not expert sticky).
+                    if (not is_default) and _should_use_sticky_node_binding(
                         conversation_status=conversation_status,
                         requested_node_id=requested_node_id,
                         bound_node_id=bound_node_id,
                     ):
-                        # Mid-task only: keep talking to the active expert/worker.
                         steer_msg = await _hydrate_sticky_expert_on_message(conv_id, msg)
-                        bound_capability = next((item.capability for item in capabilities if item.node_id == bound_node_id), None)
-                        sent = await _send_direct_node_message(conv_id, bound_node_id, steer_msg, bound_capability)
-                        await _audit(
-                            actor_type="user",
-                            actor_id=uuid.UUID(client_id),
-                            action="user_steer",
-                            resource_type="conversation",
-                            resource_id=uuid.UUID(conv_id),
-                            conversation_id=uuid.UUID(conv_id),
-                            detail={
-                                "sent": sent,
-                                "source": "sticky_mid_task",
-                                "node_id": bound_node_id,
-                                "capability": bound_capability,
-                                "conversation_status": conversation_status,
-                                "expert_id": str(steer_msg.get("expert_id") or "") or None,
-                            },
+                        if is_default:
+                            steer_msg = {**steer_msg, "engagement": "default", "role": "default"}
+                            steer_msg.pop("expert_id", None)
+                            steer_msg.pop("expert_name", None)
+                        bound_capability = next(
+                            (item.capability for item in capabilities if item.node_id == bound_node_id),
+                            None,
                         )
+                        sent = await _send_direct_node_message(conv_id, bound_node_id, steer_msg, bound_capability)
                         if sent:
                             continue
                         await _persist_and_broadcast(conv_id, {
                             "type": "task_error",
                             "conversation_id": conv_id,
-                            "message": "Bound expert runtime is unavailable. @ another online expert to switch, or wait for the node to reconnect.",
-                            "agent_source": "platform",
-                            "agent_node_id": str(PLATFORM_AGENT_NODE_ID),
+                            "message": "Bound Node runtime is unavailable. Select an online node or wait for reconnect.",
+                            "agent_source": "default",
                         }, "agent")
                         continue
-                    has_resume_task = _has_resumable_task(resume_context)
-                    # Pre-target chat (e.g. "你好" with 渗透大师 selected): never open a work
-                    # burst / bind node / flip status to running. Expert-voiced room reply only.
-                    # Structured signal only — explicit expert seat + no target + no resumable task.
-                    if (
-                        requested_agent
-                        and requested_agent != "platform"
-                        and (requested_node_id or msg.get("expert_id") or msg.get("expert_name"))
-                        and not _message_has_task_target(msg)
-                        and not has_resume_task
-                        and not _is_active_runtime_status(conversation_status)
-                    ):
-                        from app.services.agent_router import RoutingDecision
 
-                        await _reply_expert_preamble(
-                            conv_id,
-                            msg,
-                            RoutingDecision(
-                                action="platform_reply",
-                                capability="platform.chat",
-                                mode="expert_preamble",
-                                agent=requested_agent,
-                                agent_node_id=requested_node_id,
-                                requires_target=False,
-                                reason="router fast-path: expert selected, no task target",
-                            ),
-                        )
-                        continue
-                    # After failed/incomplete, short "继续" must resume — do not rely on the planner
-                    # alone (it often answer_user's and leaves the user with no node activity).
-                    force_continue = (
-                        str(conversation_status or "").lower() in {"failed", "incomplete", "paused", "canceled"}
+                    # Resume after terminal: short continue + resumable target → re-dispatch with context.
+                    has_resume_task = _has_resumable_task(resume_context)
+                    if (
+                        not is_default
+                        and str(conversation_status or "").lower() in {"failed", "incomplete", "paused", "canceled"}
                         and has_resume_task
                         and _looks_like_continue_request(str(msg.get("text") or ""))
-                        and (requested_agent or "pentest") != "platform"
-                    )
-                    try:
-                        if force_continue:
-                            from app.services.agent_router import RoutingDecision
-
-                            decision = RoutingDecision(
-                                action="continue_task",
-                                capability="pentest.web",
-                                mode="resume_after_terminal",
-                                agent="pentest",
-                                agent_node_id=requested_node_id or bound_node_id,
-                                reason="policy forced continue_task after failed/incomplete with resumable task",
-                            )
-                        else:
-                            decision = await route_with_platform_agent(
-                                text=str(msg.get("text") or ""),
-                                context=OrchestrationContext(
-                                    conversation_status=conversation_status,
-                                    requested_agent=requested_agent,
-                                    requested_node_id=requested_node_id,
-                                    has_resume_task=has_resume_task,
-                                    has_bound_node=bool(bound_node_id),
-                                    bound_node_id=bound_node_id,
-                                    capabilities=capabilities,
-                                ),
-                            )
-                    except OrchestrationError as e:
-                        await _persist_and_broadcast(conv_id, {
-                            "type": "task_error",
-                            "conversation_id": conv_id,
-                            "message": f"Platform Agent orchestration failed: {str(e)}",
-                            "agent_source": "platform",
-                            "agent_node_id": str(PLATFORM_AGENT_NODE_ID),
-                        }, "agent")
-                        continue
-
-                    if decision.action == "platform_reply":
-                        if str(decision.mode or "") == "expert_preamble":
-                            # Selected expert, no task target: in-room chat only.
-                            # Do not bind/running, do not open right-panel work surface.
-                            await _reply_expert_preamble(conv_id, msg, decision)
-                            continue
-                        await _answer_with_platform_agent(
-                            conv_id,
-                            client_id,
-                            msg.get("text", ""),
-                            decision.agent or "platform",
-                            decision.mode or "platform_chat",
-                            decision.agent_node_id,
-                        )
-                        continue
-
-                    if decision.action == "ask_clarification":
-                        # Mid-task: forward to active expert runtime.
-                        if (
-                            requested_node_id
-                            and requested_agent
-                            and requested_agent != "platform"
-                            and str(requested_node_id) in node_connections
-                            and _is_active_runtime_status(conversation_status)
-                        ):
-                            sent = await _send_direct_node_message(
-                                conv_id, requested_node_id, msg, decision.capability or "pentest.web"
-                            )
-                            await _audit(
-                                actor_type="user",
-                                actor_id=uuid.UUID(client_id),
-                                action="user_steer",
-                                resource_type="conversation",
-                                resource_id=uuid.UUID(conv_id),
-                                conversation_id=uuid.UUID(conv_id),
-                                detail={
-                                    "sent": sent,
-                                    "source": "expert_clarification_steer",
-                                    "node_id": requested_node_id,
-                                    "capability": decision.capability,
-                                    "expert_id": str(msg.get("expert_id") or "") or None,
-                                },
-                            )
-                            if sent:
-                                continue
-                            await _persist_and_broadcast(conv_id, {
-                                "type": "task_error",
-                                "conversation_id": conv_id,
-                                "message": "Requested expert runtime is unavailable.",
-                                "agent_source": "platform",
-                                "agent_node_id": str(PLATFORM_AGENT_NODE_ID),
-                            }, "agent")
-                            continue
-                        # Idle + explicit expert: preamble chat (no task), not "已记下专家".
-                        if (
-                            requested_node_id
-                            and requested_agent
-                            and requested_agent != "platform"
-                        ):
-                            await _reply_expert_preamble(conv_id, msg, decision)
-                            continue
-                        # Platform-only clarification.
-                        prompt = (
-                            decision.message
-                            or "Please provide the target URL or IP and confirm it is in authorized scope."
-                        )
-                        answer = await answer_clarification(
-                            conv_id,
-                            prompt,
-                            mode=decision.mode or "clarification",
-                            agent_source="platform",
-                        )
-                        _apply_agent_attribution(
-                            answer,
-                            agent_source="platform",
-                            agent_node_id=str(PLATFORM_AGENT_NODE_ID),
-                        )
-                        await _persist_and_broadcast(conv_id, answer, "agent")
-                        continue
-
-                    resumed_from_context = False
-                    force_dispatch_resumed_task = False
-                    if decision.action == "continue_task":
-                        # Mid-task: steer the active worker. After settle: re-dispatch with sticky expert pack.
-                        steer_node_id = (
-                            decision.agent_node_id
-                            or requested_node_id
-                            or bound_node_id
-                            or conversation_node.get(conv_id)
-                        )
-                        if (
-                            steer_node_id
-                            and str(steer_node_id) in node_connections
-                            and _is_active_runtime_status(conversation_status)
-                        ):
-                            steer_base = await _hydrate_sticky_expert_on_message(conv_id, msg)
-                            steer_msg = {
-                                **steer_base,
-                                "type": "user_steer",
-                                "conversation_id": conv_id,
-                                "agent_node_id": str(steer_node_id),
-                            }
-                            if decision.capability:
-                                steer_msg["agent_capability"] = decision.capability
-                            conversation_node[conv_id] = str(steer_node_id)
-                            await node_connections[str(steer_node_id)].send_text(
-                                json.dumps(steer_msg, ensure_ascii=False)
-                            )
-                            await _persist_and_broadcast(conv_id, {
-                                "type": "status",
-                                "conversation_id": conv_id,
-                                "text": "已将继续指令发给正在运行的专家（同一会话）。",
-                                "status": "running",
-                                "agent_source": "platform",
-                                "agent_node_id": str(PLATFORM_AGENT_NODE_ID),
-                            }, "agent")
-                            await _audit(
-                                actor_type="user",
-                                actor_id=uuid.UUID(client_id),
-                                action="user_steer",
-                                resource_type="conversation",
-                                resource_id=uuid.UUID(conv_id),
-                                conversation_id=uuid.UUID(conv_id),
-                                detail={
-                                    "sent": True,
-                                    "source": "continue_mid_task",
-                                    "node_id": str(steer_node_id),
-                                    "conversation_status": conversation_status,
-                                },
-                            )
-                            continue
-                        # Settled or offline: re-dispatch (new work burst) with resume context + sticky expert.
-                        resumed_msg, resumed_from_context = _resume_message_from_context(msg, resume_context)
+                    ):
+                        resumed_msg, resumed = _resume_message_from_context(msg, resume_context)
                         if resumed_msg:
                             msg = resumed_msg
-                            force_dispatch_resumed_task = True
-                        else:
-                            await _persist_and_broadcast(conv_id, {
-                                "type": "task_error",
-                                "conversation_id": conv_id,
-                                "message": "无法继续：绑定的渗透节点不在线，且没有可恢复的目标任务上下文。请确认节点在线后重新发送目标 URL/IP。",
-                                "agent_source": "platform",
-                                "agent_node_id": str(PLATFORM_AGENT_NODE_ID),
-                            }, "agent")
-                            continue
 
-                    if decision.action == "dispatch_node" or force_dispatch_resumed_task:
-                        if decision.mode == "completed_followup" and not decision.targets:
-                            resumed_msg, resumed_from_context = _resume_message_from_context(msg, resume_context, include_checkpoint=False)
-                            if resumed_msg:
-                                msg = resumed_msg
-                            elif decision.requires_target:
-                                answer_agent_source, answer_agent_node_id = _decision_agent_attribution(decision)
-                                answer = await answer_clarification(
-                                    conv_id,
-                                    "Please provide the target URL/IP to continue or retest.",
-                                    mode="clarification",
-                                    agent_source=answer_agent_source,
-                                )
-                                _apply_agent_attribution(answer, agent_source=answer_agent_source, agent_node_id=answer_agent_node_id)
-                                await _persist_and_broadcast(conv_id, answer, "agent")
-                                continue
+                    # Resolve engagement for Node seat.
+                    if is_default:
+                        engagement = "default"
+                        expert_id = None
+                        expert_name = None
+                        msg = {**msg, "engagement": "default", "role": "default"}
+                        msg.pop("expert_id", None)
+                        msg.pop("expert_name", None)
+                    else:
+                        eng = str(msg.get("engagement") or msg.get("role") or "").strip()
+                        from app.services.expert_offers import normalize_pack_id
+                        pack = normalize_pack_id(eng) or "pentest"
+                        engagement = pack
+                        expert_id = str(msg.get("expert_id") or "").strip() or None
+                        expert_name = str(msg.get("expert_name") or "").strip() or None
+                        if not eng:
+                            msg = {**msg, "engagement": engagement, "role": engagement}
 
-                        try:
-                            eligible_node_ids = await _eligible_node_ids_for_capability(decision.capability)
-                        except OrchestrationError as e:
-                            await _persist_and_broadcast(conv_id, {
-                                "type": "task_error",
-                                "conversation_id": conv_id,
-                                "message": f"Platform Agent dispatch failed: {str(e)}",
-                                "agent_source": "platform",
-                                "agent_node_id": str(PLATFORM_AGENT_NODE_ID),
-                            }, "agent")
-                            continue
-                        if eligible_node_ids:
-                            msg = _message_with_decision_target(msg, decision)
-                            # Expert is routing primary: sticky → auto-pick expert for pack → pack fallback.
-                            msg = await _ensure_expert_on_dispatch(
-                                conv_id,
-                                msg,
-                                capability=decision.capability,
-                                preferred_node_id=decision.agent_node_id,
-                                eligible_node_ids=eligible_node_ids,
-                            )
-                            task_msg = _task_assign_from_user_message(conv_id, msg, str(uuid.uuid4()))
-                            task_msg = await _merge_case_roe_into_task_assign(conv_id, task_msg)
-                            task_msg = await _attach_case_context_to_task_assign(conv_id, task_msg)
-                            task_target = task_msg["target"]
-                            task_scope = task_msg["scope"]
-                            task_instruction = task_msg["initial_instruction"]
-                            task_goal = str(task_msg.get("goal_objective") or "").strip() or None
-                            task_engagement = str(task_msg.get("engagement") or "").strip() or None
-                            task_expert_id = str(msg.get("expert_id") or task_msg.get("expert_id") or "").strip() or None
-                            task_expert_name = str(msg.get("expert_name") or task_msg.get("expert_name") or "").strip() or None
-                            task_eng_template = (
-                                str(task_msg.get("engagement_template") or "").strip() or None
-                            )
-                            task_allow_postex = task_msg.get("allow_postex")
-                            if not isinstance(task_allow_postex, bool):
-                                task_allow_postex = None
-                            await _remember_conversation_task(
-                                conv_id,
-                                target=task_target,
-                                scope=task_scope,
-                                instruction=task_instruction,
-                                goal_objective=task_goal,
-                                engagement=task_engagement,
-                                expert_id=task_expert_id,
-                                expert_name=task_expert_name,
-                                engagement_template=task_eng_template,
-                                allow_postex=task_allow_postex,
-                                accounts=task_msg.get("accounts"),
-                            )
-                            global _round_robin_counter
-                            preferred_node_id = (
-                                _agent_node_id(msg)
-                                or decision.agent_node_id
-                            )
-                            if preferred_node_id and preferred_node_id not in eligible_node_ids:
-                                await _persist_and_broadcast(conv_id, {
-                                    "type": "task_error",
-                                    "conversation_id": conv_id,
-                                    "message": f"Requested expert runtime is unavailable for capability {decision.capability}.",
-                                    "agent_source": "platform",
-                                    "agent_node_id": str(PLATFORM_AGENT_NODE_ID),
-                                }, "agent")
-                                continue
-                            node_ids = eligible_node_ids
-                            if preferred_node_id:
-                                node_id = preferred_node_id
-                            else:
-                                idx = _round_robin_counter % len(node_ids)
-                                _round_robin_counter += 1
-                                node_id = node_ids[idx]
-                            # Dispatch gate: engagement pack must be in node's offers.
-                            gate_err = await _gate_engagement_for_node(
-                                node_id, task_msg.get("engagement") or msg.get("engagement") or msg.get("role")
-                            )
-                            if gate_err:
-                                await _persist_and_broadcast(conv_id, {
-                                    "type": "task_error",
-                                    "conversation_id": conv_id,
-                                    "message": gate_err,
-                                    "agent_source": "platform",
-                                    "agent_node_id": str(PLATFORM_AGENT_NODE_ID),
-                                }, "agent")
-                                continue
-                            await _bind_conversation_to_node(
-                                conv_id, node_id, active_task_id=str(task_msg.get("task_id") or "")
-                            )
-                            # Optimistic working until Node work_status confirms busy.
-                            working_payload = await _apply_worker_state(
-                                conv_id,
-                                node_id=node_id,
-                                working=True,
-                                task_id=task_msg.get("task_id"),
-                                expert_id=task_expert_id,
-                                expert_name=task_expert_name,
-                                interrupt_pending=False,
-                            )
-                            await _broadcast_conversation_working(working_payload)
-                            await _incr_sessions(node_id, 1)
-                            task_msg["agent_node_id"] = node_id
-                            task_msg["agent_capability"] = decision.capability
-                            if task_expert_id:
-                                task_msg["expert_id"] = task_expert_id
-                            if task_expert_name:
-                                task_msg["expert_name"] = task_expert_name
-                            snapshot = await _conversation_snapshot(conv_id, client_id)
-                            if "checkpoint" in msg:
-                                snapshot["checkpoint"] = msg.get("checkpoint") or {}
-                            elif not resumed_from_context:
-                                snapshot["checkpoint"] = {}
-                            # Preserve structured engagement on snapshot for the worker.
-                            if task_msg.get("engagement"):
-                                if not isinstance(snapshot, dict):
-                                    snapshot = {}
-                                snapshot = dict(snapshot)
-                                snapshot["engagement"] = task_msg["engagement"]
-                                if task_msg.get("role"):
-                                    snapshot["role"] = task_msg["role"]
-                            task_msg["snapshot"] = snapshot
-                            worker_limits = await _worker_limits_for_node(node_id)
-                            if worker_limits:
-                                task_msg["worker_limits"] = worker_limits
-                            # Announce expert handoff (not silent node dispatch).
-                            if force_dispatch_resumed_task or _should_announce_agent_assignment(requested_node_id, msg):
-                                await _announce_agent_assignment(
-                                    conv_id,
-                                    decision,
-                                    node_id,
-                                    expert_name=task_expert_name,
-                                )
-                            if force_dispatch_resumed_task:
-                                resume_label = (
-                                    f"专家「{task_expert_name}」"
-                                    if task_expert_name
-                                    else "专家"
-                                )
-                                await _persist_and_broadcast(conv_id, {
-                                    "type": "status",
-                                    "conversation_id": conv_id,
-                                    "text": f"任务已重新交给{resume_label}，正在从上次进度继续…",
-                                    "status": "running",
-                                    "agent_source": "platform",
-                                    "agent_node_id": str(PLATFORM_AGENT_NODE_ID),
-                                }, "agent")
-                            await node_connections[node_id].send_text(json.dumps(task_msg, ensure_ascii=False))
-                            continue
-
+                    node_id = await _pick_online_node_id(
+                        preferred=requested_node_id or _agent_node_id(msg),
+                        bound=bound_node_id,
+                        capabilities=capabilities,
+                    )
+                    if not node_id or node_id not in node_connections:
                         await _persist_and_broadcast(conv_id, {
                             "type": "task_error",
                             "conversation_id": conv_id,
-                            "message": f"No online agent node provides capability {decision.capability}.",
-                            "agent_source": "platform",
-                            "agent_node_id": str(PLATFORM_AGENT_NODE_ID),
+                            "message": "No online Node is available. Start a Node runtime, then retry.",
+                            "agent_source": "default",
                         }, "agent")
+                        continue
+
+                    await _dispatch_task_assign_to_node(
+                        conv_id=conv_id,
+                        client_id=client_id,
+                        msg=msg,
+                        node_id=node_id,
+                        engagement=engagement,
+                        expert_id=expert_id,
+                        expert_name=expert_name,
+                        resume_context=resume_context if has_resume_task else None,
+                        force_working=True,
+                    )
+                    continue
+
                 elif msg.get("type") == "user_decision" and conv_id:
                     request_id = msg.get("request_id")
                     decision = msg.get("decision", "cancel")

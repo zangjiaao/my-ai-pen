@@ -45,11 +45,19 @@ export type PlatformSink = {
   send(message: PlatformMessage): Promise<void>;
 };
 
+/** HTTP access to platform ledger APIs (Node token auth). */
+export type PlatformApiAccess = {
+  baseUrl: string;
+  nodeToken: string;
+};
+
 export type ToolRuntime = {
   task: TaskEnvelope;
   workspaceDir: string;
   taskDir: string;
   platform: PlatformSink;
+  /** Optional Node→platform HTTP for ledger tools (default seat). */
+  platformApi?: PlatformApiAccess;
   todo: import("./stores/todo.js").TodoStore;
   evidence: EvidenceStoreLike;
   findingsDir: string;
