@@ -35,14 +35,26 @@ We own **pen-sandbox** so template freshness, browser pin, and release cadence a
 
 ---
 
-## 3. Build & templates
+## 3. Build, CI & templates
 
 ```bash
+# Local
 bash sandbox/pen-sandbox/scripts/build.sh
 bash sandbox/pen-sandbox/scripts/update-templates.sh   # nuclei-templates host cache
 ```
 
-Aliases created: `pen-sandbox:dev`, also `pen-tools:dev` / `pen-browser:dev` for old env vars.
+**Docker Hub CI:** `.github/workflows/pen-sandbox.yml`  
+Secrets: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` (access token).  
+Image: `<user>/pen-sandbox:{latest,dev,<version>,sha-*}`.
+
+Aliases at local build: `pen-tools:dev` / `pen-browser:dev` for old env vars.
+
+Worker:
+
+```bash
+export PEN_SANDBOX_IMAGE=<user>/pen-sandbox:latest
+docker pull "$PEN_SANDBOX_IMAGE"
+```
 
 ---
 

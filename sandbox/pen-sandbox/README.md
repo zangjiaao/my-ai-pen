@@ -9,13 +9,43 @@
 
 Not Strix. Not two product images. Optional thin trees `pen-tools/` / `pen-browser/` are **legacy aliases** (see their READMEs).
 
-## Build
+## Build (local)
 
 ```bash
 bash sandbox/pen-sandbox/scripts/build.sh
+# optional push:
+# DOCKERHUB_USERNAME=you PEN_SANDBOX_PUSH=1 bash sandbox/pen-sandbox/scripts/build.sh
 ```
 
 Also tags `pen-tools:dev` and `pen-browser:dev` for older env vars.
+
+## CI → Docker Hub
+
+GitHub Actions: [`.github/workflows/pen-sandbox.yml`](../../.github/workflows/pen-sandbox.yml)
+
+| Secret | Purpose |
+|--------|---------|
+| `DOCKERHUB_USERNAME` | Hub user / org (image namespace) |
+| `DOCKERHUB_TOKEN` | Hub **access token** (not password) |
+
+On push to `main` touching `sandbox/pen-sandbox/**` (or manual **workflow_dispatch**):
+
+```text
+docker.io/<DOCKERHUB_USERNAME>/pen-sandbox:latest
+docker.io/<DOCKERHUB_USERNAME>/pen-sandbox:dev
+docker.io/<DOCKERHUB_USERNAME>/pen-sandbox:<VERSION>
+docker.io/<DOCKERHUB_USERNAME>/pen-sandbox:v<VERSION>
+docker.io/<DOCKERHUB_USERNAME>/pen-sandbox:sha-<short>
+```
+
+PRs build only (no push).
+
+Node4 on a worker:
+
+```bash
+export PEN_SANDBOX_IMAGE=<DOCKERHUB_USERNAME>/pen-sandbox:latest
+docker pull "$PEN_SANDBOX_IMAGE"
+```
 
 ## Templates (data layer)
 

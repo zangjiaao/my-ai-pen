@@ -1,50 +1,64 @@
-# Unified pentest expert sandbox: scanners + agent-browser.
-# Prefer building FROM a known-good scanner base (local pen-tools / pentest-sandbox).
+# Unified pentest expert sandbox for Node4 (shell scanners + browser).
+# Self-contained for CI / Docker Hub — no private base image required.
 #
-# Build:  bash sandbox/pen-sandbox/scripts/build.sh
-# Requires one of: pen-tools:dev | pentest-sandbox:latest (or set PEN_SANDBOX_BASE)
+# Local:  bash sandbox/pen-sandbox/scripts/build.sh
+# CI:     docker/build-push-action with this file
 
-ARG PEN_SANDBOX_BASE=pen-tools:dev
-FROM ${PEN_SANDBOX_BASE}
+FROM kalilinux/kali-rolling:latest
 
 LABEL org.opencontainers.image.title="my-ai-pen pen-sandbox" \
-      org.opencontainers.image.description="Pentest expert sandbox: nuclei/nmap/… + agent-browser"
+      org.opencontainers.image.description="Pentest expert sandbox: nuclei/nmap/sqlmap/ffuf + agent-browser" \
+      org.opencontainers.image.source="https://github.com/local/my-ai-pen"
 
-USER root
 ENV DEBIAN_FRONTEND=noninteractive \
     HOME=/root
 
-# Browser runtime libs (best-effort; base image may already include many)
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-      curl \
-      ca-certificates \
-      gnupg \
-      fonts-liberation \
-      fonts-noto-color-emoji \
-      libnss3 \
-      libnspr4 \
-      libatk-bridge2.0-0 \
-      libdrm2 \
-      libgbm1 \
-      libxkbcommon0 \
-      libxcomposite1 \
-      libxdamage1 \
-      libxfixes3 \
-      libxrandr2 \
-      libasound2t64 \
-      libgtk-3-0 \
-    || apt-get install -y --no-install-recommends \
-      curl ca-certificates fonts-liberation libnss3 libgbm1 libgtk-3-0 \
-    || true \
-    && apt-get clean && rm -rf /var/lib/apt/lists/* || true
+# --- Scanners / recon (keep package list lean; avoid flaky optional browser packages) ---
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    wget \
+    gnupg \
+    nmap \
+    dnsutils \
+    whois \
+    whatweb \
+    httpx-toolkit \
+    gobuster \
+    nuclei \
+    sqlmap \
+    ffuf \
+    git \
+    jq \
+    redis-tools \
+    netcat-openbsd \
+    python3 \
+    python3-pip \
+    fonts-liberation \
+    fonts-noto-color-emoji \
+    libnss3 \
+    libnspr4 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libgbm1 \
+    libgtk-3-0 \
+    libx11-xcb1 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxrandr2 \
+    libxkbcommon0 \
+    libasound2 \
+    xdg-utils \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Node 22 + agent-browser (if node missing on base)
-RUN if ! command -v node >/dev/null 2>&1; then \
-      curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-      && apt-get install -y --no-install-recommends nodejs \
-      && apt-get clean && rm -rf /var/lib/apt/lists/*; \
-    fi \
+RUN nuclei -update-templates || true
+
+# --- Node.js 22 + agent-browser ---
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && apt-get clean && rm -rf /var/lib/apt/lists/* \
     && npm install -g agent-browser@0.11.0 \
     && agent-browser install || true
 
