@@ -3,6 +3,7 @@
 Independent **expert pack** units maintained outside the Node harness.
 
 **Active conversation plan:** [`docs/platform-default-agent-refactor.md`](../docs/platform-default-agent-refactor.md)  
+**Pack capability + maintenance plan:** [`docs/expert-pack-capability-and-maintenance.md`](../docs/expert-pack-capability-and-maintenance.md) (ClaudeBrain-adapted methodology; L1 pack / L2 sandbox / L3 hand PoC; n-day update runbook)  
 **Historical collab notes:** [`docs/archive/multi-expert-collaboration-plan.md`](../docs/archive/multi-expert-collaboration-plan.md)  
 (Experts = target families; stages = skills; pipeline = Case + user @ — not stage-named Experts.)
 
@@ -13,6 +14,9 @@ Independent **expert pack** units maintained outside the Node harness.
 | `experts/<id>/work.md` | How-to-work lines |
 | `experts/<id>/skills/` | Pack-scoped methodology skills |
 | `experts/<id>/recipes/` | Optional non-answer templates |
+| `experts/<id>/refs/` | Optional on-demand payload/component cards (pentest: `refs/payloads`, `refs/components`) |
+| `experts/<id>/CHANGELOG.md` | Pack release notes (versioning; L2 sandbox notes when relevant) |
+| `experts/<id>/pack.json` | Includes optional `"version"` semver |
 | `experts/RESEARCH-SOURCES.md` | Which `research/` trees inform pack methodology (adapted, not vendored) |
 | `catalog.json` | Machine-readable list of pack ids + aliases (platform + Node) |
 
