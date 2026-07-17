@@ -133,7 +133,8 @@ async def create_expert(
         id=uuid.uuid4(),
         user_id=user_uuid,
         name=name,
-        display_name=(body.display_name or "").strip() or name,
+        # Single product name field — display_name mirrors name (legacy column kept).
+        display_name=name,
         pack_id=pack,
         node_id=node.id,
         description=(body.description or "").strip() or None,
@@ -226,10 +227,9 @@ async def update_expert(
         raise HTTPException(400, str(e)) from e
 
     expert.name = name
+    expert.display_name = name  # keep in sync; product has a single name field
     expert.pack_id = pack
     expert.node_id = node.id
-    if body.display_name is not None:
-        expert.display_name = body.display_name.strip() or name
     if body.description is not None:
         expert.description = body.description.strip() or None
     if body.enabled is not None:

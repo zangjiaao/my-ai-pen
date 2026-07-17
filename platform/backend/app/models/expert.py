@@ -26,9 +26,9 @@ class Expert(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     # Owner; optional for single-tenant admin UX (null = shared).
     user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
-    # @mention key — Unicode-capable token matching WS mention regex (CJK allowed).
+    # Product name (also used as @mention token). Unicode-capable (CJK allowed).
     name: Mapped[str] = mapped_column(String(128), nullable=False)
-    # Optional UI display label (may differ from @mention name).
+    # Legacy column — always kept equal to ``name`` (no separate display label in product UI).
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Canonical pack id (pentest | ctf | consult | …).
     pack_id: Mapped[str] = mapped_column(String(64), nullable=False)

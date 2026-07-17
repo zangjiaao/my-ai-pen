@@ -74,7 +74,7 @@ def expert_to_dict(
     out: dict[str, Any] = {
         "id": str(expert.id),
         "name": expert.name,
-        "display_name": expert.display_name or expert.name,
+        "display_name": expert.name,  # single name field; legacy column always mirrors name
         "pack_id": expert.pack_id,
         "node_id": str(expert.node_id),
         "description": expert.description,

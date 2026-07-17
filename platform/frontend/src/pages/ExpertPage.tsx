@@ -96,7 +96,7 @@ export default function ExpertPage() {
     return experts.filter((e) => {
       if (packFilter !== "全部" && e.pack_id !== packFilter) return false;
       if (!q) return true;
-      const hay = `${e.name} ${e.display_name || ""} ${e.pack_id} ${e.node_name || ""} ${e.description || ""}`.toLowerCase();
+      const hay = `${e.name} ${e.pack_id} ${e.node_name || ""} ${e.description || ""}`.toLowerCase();
       return hay.includes(q);
     });
   }, [experts, search, packFilter]);
@@ -181,8 +181,8 @@ export default function ExpertPage() {
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="flex min-w-0 flex-wrap items-center gap-2">
-                          <span className="min-w-0 truncate font-mono text-base font-semibold text-ink">
-                            @{e.name}
+                          <span className="min-w-0 truncate text-base font-semibold text-ink">
+                            {e.name}
                           </span>
                           <NodeOnlineBadge online={online} />
                           {!e.enabled && (
@@ -192,9 +192,7 @@ export default function ExpertPage() {
                           )}
                         </div>
                         <p className="mt-0.5 truncate text-sm text-ink-secondary">
-                          {e.display_name && e.display_name !== e.name
-                            ? e.display_name
-                            : expertLabel(e.pack_id)}
+                          {expertLabel(e.pack_id)}
                         </p>
                       </div>
                       <span
@@ -278,7 +276,6 @@ function CreateExpertDialog({
   onCreated: () => void | Promise<void>;
 }) {
   const [name, setName] = useState("");
-  const [displayName, setDisplayName] = useState("");
   const [nodeId, setNodeId] = useState(nodes[0]?.id || "");
   const [packId, setPackId] = useState<ExpertId>(DEFAULT_EXPERT_ID);
   const [description, setDescription] = useState("");
@@ -305,11 +302,12 @@ function CreateExpertDialog({
     setFormError("");
     setBusy(true);
     try {
+      const n = name.trim();
       await authFetch("/api/experts", {
         method: "POST",
         body: JSON.stringify({
-          name: name.trim(),
-          display_name: displayName.trim() || undefined,
+          name: n,
+          display_name: n,
           pack_id: packId,
           node_id: nodeId,
           description: description.trim() || undefined,
@@ -326,7 +324,7 @@ function CreateExpertDialog({
   return (
     <SimpleDialog
       title="创建专家"
-      description="虚拟形象：@提及名用于对话路由。通用助理（default）内置；其他能力包须先在节点「扩展」中安装。"
+      description="名称即对话中的 @ 路由名。通用助理（default）内置；其他能力包须先在节点「扩展」中安装。"
       confirmLabel={busy ? "创建中…" : "创建"}
       confirming={busy}
       error={formError}
@@ -350,21 +348,12 @@ function CreateExpertDialog({
       ) : (
         <div className="space-y-3">
           <label className="block text-xs text-ink-secondary">
-            @ 提及名（必填，支持中英文；用于对话 @ 路由）
+            名称（必填，支持中英文）
             <input
               autoFocus
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="渗透专家"
-              className="mt-1 w-full rounded-md border border-hairline bg-canvas px-3 py-2 text-sm text-ink focus:border-ink focus:outline-none"
-            />
-          </label>
-          <label className="block text-xs text-ink-secondary">
-            显示名（可选，可与提及名不同）
-            <input
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              placeholder="Web 渗透 · 主攻 DVWA"
               className="mt-1 w-full rounded-md border border-hairline bg-canvas px-3 py-2 text-sm text-ink focus:border-ink focus:outline-none"
             />
           </label>
@@ -431,7 +420,6 @@ function ExpertDetailDialog({
   type DetailTab = "overview" | "config" | "capabilities";
   const [detailTab, setDetailTab] = useState<DetailTab>("overview");
   const [nameDraft, setNameDraft] = useState(expert.name);
-  const [displayDraft, setDisplayDraft] = useState(expert.display_name || "");
   const [nodeId, setNodeId] = useState(expert.node_id);
   const [packId, setPackId] = useState(expert.pack_id);
   const [description, setDescription] = useState(expert.description || "");
@@ -442,7 +430,6 @@ function ExpertDetailDialog({
 
   useEffect(() => {
     setNameDraft(expert.name);
-    setDisplayDraft(expert.display_name || "");
     setNodeId(expert.node_id);
     setPackId(expert.pack_id);
     setDescription(expert.description || "");
@@ -450,7 +437,7 @@ function ExpertDetailDialog({
     setSaveError("");
     setSaveOk(false);
     setDetailTab("overview");
-  }, [expert.id, expert.name, expert.display_name, expert.node_id, expert.pack_id, expert.description, expert.enabled]);
+  }, [expert.id, expert.name, expert.node_id, expert.pack_id, expert.description, expert.enabled]);
 
   const selectedNode = nodes.find((n) => n.id === nodeId) || null;
   const packOptions = useMemo(() => {
@@ -480,11 +467,12 @@ function ExpertDetailDialog({
     setSaveError("");
     setSaveOk(false);
     try {
+      const n = nameDraft.trim();
       await authFetch(`/api/experts/${expert.id}`, {
         method: "PATCH",
         body: JSON.stringify({
-          name: nameDraft.trim(),
-          display_name: displayDraft.trim() || nameDraft.trim(),
+          name: n,
+          display_name: n,
           node_id: nodeId,
           pack_id: packId,
           description: description.trim() || null,
@@ -523,16 +511,12 @@ function ExpertDetailDialog({
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <NodeOnlineBadge online={online} />
-                <h2 className="truncate font-mono text-lg font-semibold text-ink">@{expert.name}</h2>
+                <h2 className="truncate text-lg font-semibold text-ink">{expert.name}</h2>
                 <span className="rounded-pill border border-hairline bg-canvas-inset px-2 py-0.5 text-xs text-ink">
                   {expertLabel(expert.pack_id)}
                 </span>
               </div>
               <p className="mt-1 text-sm text-ink-secondary">
-                {expert.display_name && expert.display_name !== expert.name
-                  ? expert.display_name
-                  : "虚拟专家名片"}
-                {" · "}
                 节点 {expert.node_name || expert.node_id.slice(0, 8)}
               </p>
             </div>
@@ -568,9 +552,8 @@ function ExpertDetailDialog({
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
           {detailTab === "overview" && (
             <div className="space-y-4">
-              <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <InfoCard label="@ 提及名" value={`@${expert.name}`} mono />
-                <InfoCard label="显示名" value={expert.display_name || expert.name} />
+              <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <InfoCard label="名称" value={expert.name} />
                 <InfoCard label="能力包" value={expertLabel(expert.pack_id)} />
                 <InfoCard
                   label="状态"
@@ -605,8 +588,7 @@ function ExpertDetailDialog({
                 </p>
               </section>
               <p className="text-xs text-ink-muted">
-                对话中输入 <span className="font-mono text-ink">@{expert.name}</span>{" "}
-                即可路由到绑定节点并带上该能力包。
+                对话中 @ 或选择「{expert.name}」即可路由到绑定节点并带上该能力包。
               </p>
             </div>
           )}
@@ -614,26 +596,15 @@ function ExpertDetailDialog({
           {detailTab === "config" && (
             <div className="space-y-4">
               <p className="text-xs text-ink-muted">
-                修改提及名、显示名、绑定节点与能力包。能力包必须已在目标节点的「扩展」中安装。
+                修改名称、绑定节点与能力包。通用助理（default）内置；其他能力包须先在节点「扩展」中安装。
               </p>
               <div className="grid gap-3 sm:grid-cols-2">
-                <label className="block text-xs text-ink-secondary">
-                  @ 提及名
+                <label className="block text-xs text-ink-secondary sm:col-span-2">
+                  名称
                   <input
                     value={nameDraft}
                     onChange={(e) => {
                       setNameDraft(e.target.value);
-                      setSaveOk(false);
-                    }}
-                    className="mt-1 w-full rounded-md border border-hairline bg-canvas px-3 py-2 font-mono text-sm text-ink focus:border-ink focus:outline-none"
-                  />
-                </label>
-                <label className="block text-xs text-ink-secondary">
-                  显示名
-                  <input
-                    value={displayDraft}
-                    onChange={(e) => {
-                      setDisplayDraft(e.target.value);
                       setSaveOk(false);
                     }}
                     className="mt-1 w-full rounded-md border border-hairline bg-canvas px-3 py-2 text-sm text-ink focus:border-ink focus:outline-none"
@@ -700,7 +671,7 @@ function ExpertDetailDialog({
                     }}
                     className="rounded border-hairline"
                   />
-                  启用（禁用后不可 @ 提及）
+                  启用（禁用后不可在对话中选用）
                 </label>
               </div>
               <button

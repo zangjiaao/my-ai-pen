@@ -420,7 +420,7 @@ export default function ConversationPage() {
       map[node.id] = node.name;
     }
     for (const e of productExperts) {
-      map[e.id] = e.display_name && e.display_name !== e.name ? e.display_name : e.name;
+      map[e.id] = e.name;
     }
     return map;
   }, [agentNodes, productExperts]);
@@ -1232,7 +1232,7 @@ export default function ConversationPage() {
         kind: "expert" as const,
         key: `expert:${e.id}`,
         name: e.name,
-        label: e.display_name && e.display_name !== e.name ? e.display_name : e.name,
+        label: e.name,
         subtitle: `${expertLabel(e.pack_id)} → ${e.node_name || e.node_id.slice(0, 8)}${
           e.node_status ? ` (${e.node_status})` : ""
         }`,
