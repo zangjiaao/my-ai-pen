@@ -41,16 +41,24 @@ def validate_expert_name(name: object) -> str:
 
 
 def validate_pack_for_node(node_config: object, pack_id: object) -> str:
-    """Ensure pack is known and installed on the node. Returns canonical pack id."""
+    """Ensure pack is known and available on the node. Returns canonical pack id.
+
+    Built-in ``default`` (aliases consult/workspace) is always available.
+    Other packs must be installed as node extension offers.
+    """
+    from app.services.expert_offers import BUILTIN_SEAT_IDS
+
     pack = normalize_pack_id(pack_id)
     if pack is None:
         raise ValueError(f"Unknown expert pack: {pack_id!r}")
+    if pack == "default" or str(pack_id or "").strip().lower() in BUILTIN_SEAT_IDS:
+        return "default"
     offers = effective_offers(node_config)
     if not engagement_allowed(offers, pack):
         raise ValueError(
             f"Pack '{pack}' is not installed on this node. "
-            f"Installed offers: {', '.join(offers)}. "
-            f"Install the pack under Nodes → 专家包 first."
+            f"Installed extensions: {', '.join(offers) or 'none'}. "
+            f"Install under Nodes → 扩展 first (default seat is always built-in)."
         )
     return pack
 

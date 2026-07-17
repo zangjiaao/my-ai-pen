@@ -4,8 +4,7 @@ import { Check, Copy, Eye, EyeOff, RefreshCw } from "lucide-react";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 import {
-  DEFAULT_EXPERT_ID,
-  EXPERT_PACKS,
+  EXTENSION_PACKS,
   effectiveOffers,
   expertLabel,
   type ExpertId,
@@ -863,7 +862,7 @@ function NodeDetailDialog({
               <div>
                 <p className="text-sm font-medium">扩展包</p>
                 <p className="mt-1 text-xs text-ink-muted">
-                  在物理节点上安装运行时能力包。装好后去「专家管理」创建虚拟专家并绑定本节点。卸载最后一个扩展包会被拒绝。
+                  Node 内置通用助理（default），无需安装。此处只管理拓展能力包（渗透/CTF 等）。装好后去「专家管理」创建专家并绑定本节点。
                 </p>
               </div>
               {expertError && (
@@ -872,10 +871,9 @@ function NodeDetailDialog({
                 </p>
               )}
               <ul className="space-y-3">
-                {EXPERT_PACKS.map((pack) => {
+                {EXTENSION_PACKS.map((pack) => {
                   const installed = localOffers.includes(pack.id);
                   const busy = expertBusy === pack.id;
-                  const onlyOne = installed && localOffers.length <= 1;
                   return (
                     <li
                       key={pack.id}
@@ -885,11 +883,6 @@ function NodeDetailDialog({
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="text-sm font-medium text-ink">{pack.label}</span>
                           <span className="font-mono text-[11px] text-ink-muted">{pack.id}</span>
-                          {pack.isDefault && (
-                            <span className="rounded-pill border border-hairline px-1.5 py-px text-[10px] text-ink-muted">
-                              默认
-                            </span>
-                          )}
                           {installed ? (
                             <span className="rounded-pill bg-status-success/10 px-1.5 py-px text-[10px] text-status-success">
                               已安装
@@ -906,8 +899,8 @@ function NodeDetailDialog({
                         {installed ? (
                           <button
                             type="button"
-                            disabled={busy || onlyOne}
-                            title={onlyOne ? "至少保留一个扩展包" : `卸载 ${pack.label}`}
+                            disabled={busy}
+                            title={`卸载 ${pack.label}`}
                             onClick={() => void uninstallExpert(pack.id)}
                             className="rounded-md border border-hairline px-3 py-1.5 text-xs text-ink-secondary hover:bg-surface-default disabled:cursor-not-allowed disabled:opacity-40"
                           >
@@ -929,9 +922,12 @@ function NodeDetailDialog({
                 })}
               </ul>
               <p className="text-[11px] text-ink-muted">
-                当前 offers：
+                内置：
+                <span className="ml-1 font-mono text-ink">default</span>
+                {" · "}
+                已装拓展：
                 <span className="ml-1 font-mono text-ink">
-                  {localOffers.join(", ") || DEFAULT_EXPERT_ID}
+                  {localOffers.join(", ") || "（无）"}
                 </span>
               </p>
             </div>

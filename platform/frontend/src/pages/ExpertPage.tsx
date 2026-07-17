@@ -10,6 +10,8 @@ import TopBar from "../components/TopBar";
 import { ApiError, authFetch } from "../lib/api";
 import {
   EXPERT_PACKS,
+  expertCreatePackOptions,
+  DEFAULT_EXPERT_ID,
   effectiveOffers,
   expertLabel,
   expertMeta,
@@ -130,7 +132,7 @@ export default function ExpertPage() {
               className="rounded-md border border-hairline px-3 py-2 text-sm"
             >
               <option value="全部">全部能力包</option>
-              {EXPERT_PACKS.map((p) => (
+              {EXPERT_PACKS.filter((p) => p.id !== "consult").map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.label}
                 </option>
@@ -278,7 +280,7 @@ function CreateExpertDialog({
   const [name, setName] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [nodeId, setNodeId] = useState(nodes[0]?.id || "");
-  const [packId, setPackId] = useState<ExpertId>("pentest");
+  const [packId, setPackId] = useState<ExpertId>(DEFAULT_EXPERT_ID);
   const [description, setDescription] = useState("");
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState("");
@@ -286,15 +288,18 @@ function CreateExpertDialog({
   const selectedNode = nodes.find((n) => n.id === nodeId) || null;
   const packOptions = useMemo(() => {
     const offers = effectiveOffers(selectedNode?.offers);
-    return EXPERT_PACKS.map((p) => ({ ...p, installed: offers.includes(p.id) }));
+    return expertCreatePackOptions(selectedNode?.offers).map((p) => ({
+      ...p,
+      installed: p.id === "default" || offers.includes(p.id),
+    }));
   }, [selectedNode]);
 
   useEffect(() => {
-    const offers = effectiveOffers(selectedNode?.offers);
-    if (!offers.includes(packId) && offers.length > 0) {
-      setPackId(offers[0] as ExpertId);
+    const allowed = new Set(packOptions.map((p) => p.id));
+    if (!allowed.has(packId) && packOptions.length > 0) {
+      setPackId(packOptions[0]!.id as ExpertId);
     }
-  }, [selectedNode, packId]);
+  }, [selectedNode, packId, packOptions]);
 
   const submit = async () => {
     setFormError("");
@@ -321,7 +326,7 @@ function CreateExpertDialog({
   return (
     <SimpleDialog
       title="创建专家"
-      description="虚拟形象：@提及名用于对话路由；能力包须已在目标节点「扩展」中安装。"
+      description="虚拟形象：@提及名用于对话路由。通用助理（default）内置；其他能力包须先在节点「扩展」中安装。"
       confirmLabel={busy ? "创建中…" : "创建"}
       confirming={busy}
       error={formError}
@@ -372,7 +377,10 @@ function CreateExpertDialog({
             >
               {nodes.map((n) => (
                 <option key={n.id} value={n.id}>
-                  {n.name} ({n.status}) — {effectiveOffers(n.offers).join(", ")}
+                  {n.name} ({n.status}) — 内置 default
+                  {effectiveOffers(n.offers).length
+                    ? ` + ${effectiveOffers(n.offers).join(", ")}`
+                    : ""}
                 </option>
               ))}
             </select>
@@ -447,7 +455,10 @@ function ExpertDetailDialog({
   const selectedNode = nodes.find((n) => n.id === nodeId) || null;
   const packOptions = useMemo(() => {
     const offers = effectiveOffers(selectedNode?.offers ?? expert.node_offers);
-    return EXPERT_PACKS.map((p) => ({ ...p, installed: offers.includes(p.id) }));
+    return expertCreatePackOptions(selectedNode?.offers ?? expert.node_offers).map((p) => ({
+      ...p,
+      installed: p.id === "default" || offers.includes(p.id),
+    }));
   }, [selectedNode, expert.node_offers]);
 
   const caps = packCapabilities(packId);

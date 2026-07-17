@@ -11,9 +11,10 @@ from typing import Any
 
 from app.services.expert_catalog import catalog_alias_map, catalog_pack_ids
 
-# Default when node.config.offers is missing or empty: commercial pentest only.
-DEFAULT_OFFER = "pentest"
-DEFAULT_OFFERS: tuple[str, ...] = (DEFAULT_OFFER,)
+# Built-in seat is always available (not listed in offers).
+# Extension offers: empty means no extension packs installed (not "default to pentest").
+DEFAULT_OFFER = "pentest"  # historical label for billing helpers only
+DEFAULT_OFFERS: tuple[str, ...] = ()
 
 # Stable billing codes for install/uninstall/usage hooks (not real charges).
 BILLING_CODES: dict[str, str] = {
@@ -72,17 +73,15 @@ def billing_code_for(pack_id: str | None) -> str:
 
 
 def effective_offers(config: object) -> list[str]:
-    """Return installed expert pack ids for a node.
+    """Return installed **extension** pack ids for a node.
 
-    Missing or empty ``offers`` → default ``["pentest"]`` only.
-    Unknown / blank entries are dropped; duplicates preserve first-seen order.
+    Built-in ``default`` is never listed. Missing/empty ``offers`` → ``[]``.
+    Unknown / blank / builtin entries are dropped; duplicates preserve first-seen order.
     """
     cfg = config if isinstance(config, dict) else {}
     raw = cfg.get("offers")
-    if raw is None:
-        return list(DEFAULT_OFFERS)
-    if not isinstance(raw, (list, tuple)):
-        return list(DEFAULT_OFFERS)
+    if raw is None or not isinstance(raw, (list, tuple)):
+        return []
     known = catalog_pack_ids()
     out: list[str] = []
     seen: set[str] = set()
@@ -90,12 +89,12 @@ def effective_offers(config: object) -> list[str]:
         pid = normalize_pack_id(item)
         if not pid or pid in seen:
             continue
+        if pid == "default" or pid in BUILTIN_SEAT_IDS:
+            continue
         if pid not in known:
             continue
         seen.add(pid)
         out.append(pid)
-    if not out:
-        return list(DEFAULT_OFFERS)
     return out
 
 
@@ -121,9 +120,6 @@ def engagement_allowed(offers: object, engagement: object) -> bool:
         pid = normalize_pack_id(o) or (str(o).strip().lower() if o else "")
         if pid:
             offer_set.add(pid)
-    if not offer_set:
-        offer_set = set(DEFAULT_OFFERS)
-
     pack = normalize_pack_id(raw)
     if pack is None:
         return False

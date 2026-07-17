@@ -19,7 +19,6 @@ from app.models.vulnerability import Vulnerability
 from app.services.expert_offers import (
     ACTION_INSTALL,
     ACTION_UNINSTALL,
-    DEFAULT_OFFERS,
     effective_offers,
     install_offer,
     known_pack_ids,
@@ -87,8 +86,8 @@ class NodeOut(BaseModel):
     connectivity_uptime_pct: float | None = None
     # Optional capability manifest from node.config.capabilities (node-reported).
     capabilities: dict | None = None
-    # Installed expert pack ids (node as container). Default effective: ["pentest"].
-    offers: list[str] = Field(default_factory=lambda: list(DEFAULT_OFFERS))
+    # Installed extension pack ids (node as container). Empty = only built-in default.
+    offers: list[str] = Field(default_factory=list)
     model_config = {"from_attributes": True}
 
 

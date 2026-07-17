@@ -4,7 +4,17 @@
  * Mirrors platform expert_offers + experts/ pack.json.
  */
 
-export type ExpertId = "pentest" | "ctf" | "consult" | "llm-security" | "code-audit" | "alert-triage";
+export type ExpertId =
+  | "default"
+  | "pentest"
+  | "ctf"
+  | "consult"
+  | "llm-security"
+  | "code-audit"
+  | "alert-triage";
+
+/** Built into every Node — not shown as installable 扩展包. */
+export const BUILTIN_PACK_IDS: ReadonlySet<string> = new Set(["default", "consult", "workspace"]);
 
 /** Structured engagement templates (RoE depth) — not free-text NLP. */
 export type EngagementTemplateId = "app_assessment" | "redteam_deep";
@@ -222,13 +232,33 @@ const TOOL_META: Record<string, { label: string; description: string }> = {
   skill: { label: "Skill", description: "按需加载 pack 技能说明。" },
 };
 
-/** Catalog of installable expert packs (known to platform). */
+/**
+ * All packs usable when creating product Experts (专家管理).
+ * Built-in `default` is always on Node; others must be installed as 扩展包.
+ */
 export const EXPERT_PACKS: readonly ExpertPackMeta[] = [
+  {
+    id: "default",
+    label: "通用助理",
+    description: "Node 内置：会话协助、台账读写；不执行渗透、不登记 finding。",
+    isDefault: true,
+    skillIds: [],
+    toolNames: [
+      "todo",
+      "read",
+      "platform_list_assets",
+      "platform_get_asset",
+      "platform_list_vulnerabilities",
+      "platform_get_vulnerability",
+      "platform_update_finding_status",
+      "platform_enrich_asset",
+      "platform_conversation_snapshot",
+    ],
+  },
   {
     id: "pentest",
     label: "应用安全",
     description: "授权 Web/API 评估 — 面发现、利用、证据驱动 finding。",
-    isDefault: true,
     skillIds: [
       "pentest-web-recon",
       "pentest-surface-enum",
@@ -286,10 +316,10 @@ export const EXPERT_PACKS: readonly ExpertPackMeta[] = [
   },
   {
     id: "consult",
-    label: "Consult",
-    description: "安全咨询（stub）— 解释/分析；不登记产品 finding。",
+    label: "通用助理（consult 别名）",
+    description: "兼容别名 → default 内置座；创建专家时请选「通用助理」。",
     skillIds: [],
-    toolNames: ["todo", "shell", "read", "goal"],
+    toolNames: ["todo", "read"],
   },
   {
     id: "llm-security",
@@ -337,7 +367,16 @@ export const EXPERT_PACKS: readonly ExpertPackMeta[] = [
   },
 ] as const;
 
-export const DEFAULT_EXPERT_ID: ExpertId = "pentest";
+/** Packs shown on Node 「扩展」tab (install/uninstall). Excludes built-in default. */
+export const EXTENSION_PACKS: readonly ExpertPackMeta[] = EXPERT_PACKS.filter(
+  (p) => !BUILTIN_PACK_IDS.has(p.id),
+);
+
+/** Default pack id when creating a general assistant Expert. */
+export const DEFAULT_EXPERT_ID: ExpertId = "default";
+
+/** Prefer pentest when coercing execution engagement without explicit pack. */
+export const DEFAULT_EXECUTION_PACK_ID: ExpertId = "pentest";
 
 const PACK_BY_ID: Record<string, ExpertPackMeta> = Object.fromEntries(
   EXPERT_PACKS.map((p) => [p.id, p]),
@@ -345,6 +384,9 @@ const PACK_BY_ID: Record<string, ExpertPackMeta> = Object.fromEntries(
 
 /** Engagement/role aliases → canonical pack id (same folding as backend). */
 const ENGAGEMENT_ALIASES: Record<string, ExpertId> = {
+  default: "default",
+  workspace: "default",
+  consult: "default",
   pentest: "pentest",
   assess: "pentest",
   verify: "pentest",
@@ -354,7 +396,6 @@ const ENGAGEMENT_ALIASES: Record<string, ExpertId> = {
   ctf: "ctf",
   "ctf-web": "ctf",
   challenge: "ctf",
-  consult: "consult",
   "llm-security": "llm-security",
   llm: "llm-security",
   "llm-redteam": "llm-security",
@@ -407,36 +448,49 @@ export function packCapabilities(packId: string | null | undefined): {
 }
 
 /**
- * Effective installed offers for a node (default pentest-only when missing/empty).
- * Matches backend `effective_offers`.
+ * Effective **extension** offers on a node (empty = none installed).
+ * Built-in `default` is never listed here — it is always on the Node.
  */
 export function effectiveOffers(offers: unknown): ExpertId[] {
   if (!Array.isArray(offers) || offers.length === 0) {
-    return [DEFAULT_EXPERT_ID];
+    return [];
   }
   const out: ExpertId[] = [];
   const seen = new Set<ExpertId>();
   for (const item of offers) {
     const pack = normalizeExpertId(item);
-    if (!pack || seen.has(pack)) continue;
+    if (!pack || seen.has(pack) || BUILTIN_PACK_IDS.has(pack)) continue;
     seen.add(pack);
     out.push(pack);
   }
-  return out.length > 0 ? out : [DEFAULT_EXPERT_ID];
+  return out;
 }
 
+/** True if this pack can be used when creating an Expert on the node. */
 export function nodeOffersExpert(offers: unknown, expertId: unknown): boolean {
   const pack = normalizeExpertId(expertId) ?? DEFAULT_EXPERT_ID;
+  if (BUILTIN_PACK_IDS.has(pack) || pack === "default") return true;
   return effectiveOffers(offers).includes(pack);
 }
 
-/** Prefer an installed expert; fall back to first offer / default. */
+/** Prefer an installed extension; built-in default always available. */
 export function coerceEngagementToOffers(
   engagement: unknown,
   offers: unknown,
 ): ExpertId {
-  const installed = effectiveOffers(offers);
   const pack = normalizeExpertId(engagement);
+  if (pack && (BUILTIN_PACK_IDS.has(pack) || pack === "default")) return "default";
+  const installed = effectiveOffers(offers);
   if (pack && installed.includes(pack)) return pack;
   return installed[0] ?? DEFAULT_EXPERT_ID;
+}
+
+/** Packs selectable when creating/editing an Expert on a given node. */
+export function expertCreatePackOptions(offers: unknown): ExpertPackMeta[] {
+  const installed = new Set(effectiveOffers(offers));
+  return EXPERT_PACKS.filter((p) => {
+    if (p.id === "consult") return false; // use default
+    if (BUILTIN_PACK_IDS.has(p.id) || p.id === "default") return true;
+    return installed.has(p.id);
+  });
 }

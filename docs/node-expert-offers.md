@@ -8,7 +8,7 @@
 
 | Layer | What | Where |
 |-------|------|--------|
-| **Built-in `default` seat** | Workspace assistant on every Node (not a commercial pack) | Node4 always-on; platform data tools |
+| **Built-in `default` pack** | Always on every Node (not listed under 扩展) | Node4 always-on; create product Experts with `pack_id=default` |
 | **Catalog pack** | Expert pack content (`pack.json`, mission/work, skills) | Shared repo `experts/` |
 | **Node offers / install** | Runtime expert capability on a worker Node | Platform `node.config.offers` + Node4 install root |
 | **Product Expert instance** | User-facing persona: `@name` → Node + pack | Platform table `experts` |
@@ -23,11 +23,11 @@
 1. **Nodes** — register Node4 (default seat available immediately); install expert packs (offers) as needed.
 2. **专家管理** — create Experts: `name` + `pack_id` + bind `node_id` (not required for `default`).
 3. **对话（共享 session）** — 用户与 **Node 上的参与者** 在同一 conversation 协作：
-   - **默认 / 工作台助手** → Node `default`：读台账、整理 finding 状态、闲聊；**不**开渗透 work burst。
-   - **`@ExpertName` / 工具栏选专家** → 点名该专家；系统用 Expert 的 `pack_id` 作 engagement，落到绑定 Node 执行。
-   - 可选 **Goal mode**（长任务，面向执行专家）。
+   - **对话对象 = 专家管理列表**（无合成「工作台助手」）。用户在专家管理创建助理/专家（含 `pack_id=default` 通用助理）。
+   - **`@ExpertName` / 工具栏选专家** → 点名该专家；系统用 Expert 的 `pack_id` 作 engagement，落到绑定 Node。
+   - 可选 **Goal mode**（长任务，面向执行专家如 pentest）。
 
-**Routing primary = composer participant**（`default` 或 Expert）；Node 是执行座位。Sticky：`expert_id` / `expert_name` / `engagement` 仅在专家参与时粘住；**不得**把专家身份盖到 default 回复上。
+**Routing primary = product Expert**；Node 是执行座位。`default` 是 pack/seat，不是对话里的独立合成角色。
 
 ### Case (v1) — minimal collaboration
 

@@ -3,6 +3,11 @@
   "description": "Shared expert pack catalog. Node installs packs from here into its local install root; platform offers use the same ids.",
   "packs": [
     {
+      "id": "default",
+      "label": "Built-in workspace assistant (not an installable extension)",
+      "aliases": ["consult", "workspace"]
+    },
+    {
       "id": "pentest",
       "label": "Application security assessment",
       "aliases": ["assess", "verify", "retest", "app_assessment", "redteam_deep"]
@@ -14,7 +19,7 @@
     },
     {
       "id": "consult",
-      "label": "Consult (stub)",
+      "label": "Consult → alias of default (builtin)",
       "aliases": []
     },
     {
