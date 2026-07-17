@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Host PATH shim: run nuclei inside pen-tools image (L2). See sandbox/pen-tools/README.md
+set -euo pipefail
+IMAGE="${PEN_TOOLS_IMAGE:-pen-tools:dev}"
+# Prefer explicit image; fall back to legacy local tag used in some labs
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  if docker image inspect pentest-sandbox:latest >/dev/null 2>&1; then
+    IMAGE=pentest-sandbox:latest
+  fi
+fi
+NET="${PEN_TOOLS_NETWORK:-host}"
+TPL_HOST="${PEN_TOOLS_NUCLEI_TEMPLATES:-$HOME/.cache/pen-tools/nuclei-templates}"
+args=(run --rm --network "$NET")
+# Mount CWD so relative paths work; mount home cache for templates when present
+args+=(-v "$PWD:/workspace" -w /workspace)
+if [[ -d "$TPL_HOST" ]]; then
+  args+=(-v "$TPL_HOST:/root/nuclei-templates")
+fi
+# Pass through common env for rate limits if set
+[[ -n "${NUCLEI_CONFIG:-}" ]] && args+=(-e "NUCLEI_CONFIG=$NUCLEI_CONFIG")
+exec docker "${args[@]}" "$IMAGE" nuclei "$@"

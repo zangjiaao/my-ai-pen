@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IMAGE="${PEN_TOOLS_IMAGE:-pen-tools:dev}"
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  if docker image inspect pentest-sandbox:latest >/dev/null 2>&1; then
+    IMAGE=pentest-sandbox:latest
+  fi
+fi
+NET="${PEN_TOOLS_NETWORK:-host}"
+exec docker run --rm --network "$NET" -v "$PWD:/workspace" -w /workspace "$IMAGE" nmap "$@"
