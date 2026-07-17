@@ -585,14 +585,27 @@ async def _settle_running_conversations_for_node(node_id: str, reason: str = "no
 async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, conv_id: str | None) -> None:
     """Process one agent-node websocket message. Must not raise into the receive loop."""
     if conv_id:
-        msg["agent_source"] = "pentest"
         msg["agent_node_id"] = client_id
-        # Attach sticky product expert so UI shows persona, not physical node name.
-        sticky_id, sticky_name = await _conversation_expert_label(conv_id)
-        if sticky_id and not str(msg.get("expert_id") or "").strip():
-            msg["expert_id"] = sticky_id
-        if sticky_name and not str(msg.get("expert_name") or "").strip():
-            msg["expert_name"] = sticky_name
+        sticky_eng = await _conversation_task_engagement(conv_id)
+        # Detect default BEFORE stamping sticky expert (text frames often omit pack fields).
+        if _is_default_seat_message(msg, sticky_engagement=sticky_eng):
+            msg["agent_source"] = "default"
+            msg["engagement"] = str(msg.get("engagement") or msg.get("role_pack") or "default")
+            if str(msg.get("engagement") or "").strip().lower() in {"", "consult", "workspace"}:
+                msg["engagement"] = "default"
+            _strip_expert_fields(msg)
+            content = msg.get("content")
+            if isinstance(content, dict):
+                content["agent_source"] = "default"
+                content["engagement"] = "default"
+        else:
+            msg["agent_source"] = str(msg.get("agent_source") or "pentest")
+            # Expert speakers only: attach sticky product expert for UI persona.
+            sticky_id, sticky_name = await _conversation_expert_label(conv_id)
+            if sticky_id and not str(msg.get("expert_id") or "").strip():
+                msg["expert_id"] = sticky_id
+            if sticky_name and not str(msg.get("expert_name") or "").strip():
+                msg["expert_name"] = sticky_name
 
     # Pi work-burst lifecycle (not a chat message). Updates session workers SOT
     # and pushes conversation_working so the UI send/interrupt button stays honest.
@@ -1699,46 +1712,40 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
             if agent_node_id:
                 content["agent_node_id"] = agent_node_id
             # Only stamp expert persona when THIS message is from an expert speaker.
-            # Never relabel default-seat / platform-system rows with sticky expert.
-            eng = str(
-                msg.get("engagement")
-                or content.get("engagement")
-                or msg.get("role")
-                or content.get("role")
-                or ""
-            ).strip().lower()
+            # Never relabel default-seat rows with sticky expert (role_pack=default included).
+            sticky_eng = None
+            try:
+                sticky_eng = await _conversation_task_engagement(str(conv_id)) if conv_id else None
+            except Exception:
+                sticky_eng = None
+            is_default_seat = _is_default_seat_message(msg, sticky_engagement=sticky_eng)
             agent_source = str(content.get("agent_source") or msg.get("agent_source") or "").strip().lower()
-            is_default_seat = eng in {"default", "consult", "workspace"} or agent_source in {
-                "default",
-                "workspace",
-            }
-            expert_id = str(msg.get("expert_id") or content.get("expert_id") or "").strip()
-            expert_name = str(msg.get("expert_name") or content.get("expert_name") or "").strip()
-            if not is_default_seat and (expert_id or expert_name):
-                if expert_id:
-                    content["expert_id"] = expert_id
-                    msg["expert_id"] = expert_id
-                if expert_name:
-                    content["expert_name"] = expert_name
-                    msg["expert_name"] = expert_name
-            elif not is_default_seat and agent_source in {"pentest", "expert"}:
-                # Mid-burst node events may omit expert fields — sticky only for expert speakers.
-                sticky_id, sticky_name = await _conversation_expert_label(str(conv_id))
-                if sticky_id:
-                    content["expert_id"] = sticky_id
-                    msg["expert_id"] = sticky_id
-                if sticky_name:
-                    content["expert_name"] = sticky_name
-                    msg["expert_name"] = sticky_name
-            else:
-                # Default seat: strip sticky expert so UI shows workspace assistant.
+            if is_default_seat:
+                _strip_expert_fields(msg)
                 content.pop("expert_id", None)
                 content.pop("expert_name", None)
-                msg.pop("expert_id", None)
-                msg.pop("expert_name", None)
-                if not eng:
-                    content["engagement"] = "default"
-                    content["agent_source"] = content.get("agent_source") or "default"
+                content["engagement"] = "default"
+                content["agent_source"] = "default"
+                msg["agent_source"] = "default"
+                msg["engagement"] = "default"
+            else:
+                expert_id = str(msg.get("expert_id") or content.get("expert_id") or "").strip()
+                expert_name = str(msg.get("expert_name") or content.get("expert_name") or "").strip()
+                if expert_id or expert_name:
+                    if expert_id:
+                        content["expert_id"] = expert_id
+                        msg["expert_id"] = expert_id
+                    if expert_name:
+                        content["expert_name"] = expert_name
+                        msg["expert_name"] = expert_name
+                elif agent_source in {"pentest", "expert", ""}:
+                    sticky_id, sticky_name = await _conversation_expert_label(str(conv_id))
+                    if sticky_id:
+                        content["expert_id"] = sticky_id
+                        msg["expert_id"] = sticky_id
+                    if sticky_name:
+                        content["expert_name"] = sticky_name
+                        msg["expert_name"] = sticky_name
 
         dedupe_key = _message_dedupe_key(role=role, original_type=str(original_type), stored_type=str(msg_type), content=content)
         if dedupe_key:
@@ -2466,13 +2473,25 @@ async def _remember_conversation_task(
                 pack = normalize_pack_id(eng)
                 if pack:
                     task_blob["role"] = pack
-            # Sticky product expert persona for UI labels (virtual image, not node name).
-            eid = str(expert_id or prev_task.get("expert_id") or "").strip()
-            ename = str(expert_name or prev_task.get("expert_name") or "").strip()
-            if eid:
-                task_blob["expert_id"] = eid
-            if ename:
-                task_blob["expert_name"] = ename
+            # Default seat: clear sticky expert persona so later Node frames are not relabeled.
+            pack_now = normalize_pack_id(eng) if eng else None
+            is_default_eng = (not eng) or pack_now == "default" or eng.lower() in {
+                "default",
+                "consult",
+                "workspace",
+            }
+            if is_default_eng and engagement is not None and str(engagement).strip():
+                # Explicit default dispatch — do not inherit prior expert sticky.
+                task_blob.pop("expert_id", None)
+                task_blob.pop("expert_name", None)
+            else:
+                # Sticky product expert persona for UI labels (virtual image, not node name).
+                eid = str(expert_id or prev_task.get("expert_id") or "").strip()
+                ename = str(expert_name or prev_task.get("expert_name") or "").strip()
+                if eid:
+                    task_blob["expert_id"] = eid
+                if ename:
+                    task_blob["expert_name"] = ename
             et = str(
                 engagement_template
                 or prev_task.get("engagement_template")
@@ -2899,6 +2918,49 @@ def _is_default_participant(msg: dict) -> bool:
     if target == "platform":
         return True  # legacy UI "platform" partner → default seat
     return True
+
+
+def _pack_key_from_message(msg: dict) -> str:
+    """Best-effort pack/seat id from a node or agent message (pure; no DB)."""
+    content = msg.get("content") if isinstance(msg.get("content"), dict) else {}
+    for key in ("role_pack", "engagement", "role", "agent_mode"):
+        raw = msg.get(key)
+        if raw is None and content:
+            raw = content.get(key)
+        val = str(raw or "").strip().lower()
+        if val:
+            return val
+    src = str(msg.get("agent_source") or content.get("agent_source") or "").strip().lower()
+    if src in {"default", "workspace"}:
+        return "default"
+    return ""
+
+
+def _is_default_seat_message(msg: dict, *, sticky_engagement: str | None = None) -> bool:
+    """True when this agent/node frame is from the built-in default seat.
+
+    Detects role_pack=default (Node task_start/complete), engagement/role aliases,
+    and sticky conversation engagement when the frame omits pack fields.
+    """
+    from app.services.expert_offers import BUILTIN_SEAT_IDS, normalize_pack_id
+
+    pack = _pack_key_from_message(msg)
+    if pack in BUILTIN_SEAT_IDS or normalize_pack_id(pack) == "default":
+        return True
+    sticky = str(sticky_engagement or "").strip().lower()
+    if sticky in BUILTIN_SEAT_IDS or normalize_pack_id(sticky) == "default":
+        return True
+    return False
+
+
+def _strip_expert_fields(msg: dict) -> None:
+    """Remove expert persona fields from message and nested content (in place)."""
+    for key in ("expert_id", "expert_name"):
+        msg.pop(key, None)
+    content = msg.get("content")
+    if isinstance(content, dict):
+        content.pop("expert_id", None)
+        content.pop("expert_name", None)
 
 
 def _ensure_target_from_text(msg: dict) -> dict:

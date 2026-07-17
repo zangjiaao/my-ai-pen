@@ -1,9 +1,8 @@
 # Node expert offers + product experts (routing)
 
-> **Target conversation model (2026-07-17):** platform has **no** peer chat Agent.  
+> **Conversation model (shipped 2026-07-17):** platform has **no** peer chat Agent.  
 > Default participant = Node built-in **`default`（工作台助手）**.  
-> Full refactor plan: [`platform-default-agent-refactor.md`](platform-default-agent-refactor.md).  
-> Code may still expose a platform Agent until that plan is implemented — treat this doc’s target rules as authority.
+> Refactor record: [`platform-default-agent-refactor.md`](platform-default-agent-refactor.md) (**done**).
 
 ## Model (layers)
 
