@@ -71,8 +71,10 @@ export default function NodePage() {
 
   const load = async () => {
     const data = await authFetch<NodeRecord[]>("/api/nodes");
-    setNodes(data);
-    setSelectedNode((current) => (current ? data.find((n) => n.id === current.id) || null : null));
+    // Worker nodes only (backend also filters); hide any legacy platform agent rows.
+    const workers = data.filter((n) => n.type !== "platform" && n.id !== "00000000-0000-0000-0000-000000000001");
+    setNodes(workers);
+    setSelectedNode((current) => (current ? workers.find((n) => n.id === current.id) || null : null));
   };
   useEffect(() => {
     void load();

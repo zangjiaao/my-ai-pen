@@ -2,28 +2,28 @@ import asyncio
 import uuid
 
 import bcrypt
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import async_session
 from app.models.user import User
-from app.models.node import Node, PLATFORM_AGENT_NODE_ID, PLATFORM_AGENT_NODE_NAME
+from app.models.node import Node, PLATFORM_AGENT_NODE_ID
 
 
 async def seed():
     async with async_session() as db:
-        node_result = await db.execute(select(Node).where(Node.id == PLATFORM_AGENT_NODE_ID))
-        if not node_result.scalar_one_or_none():
-            db.add(Node(
-                id=PLATFORM_AGENT_NODE_ID,
-                name=PLATFORM_AGENT_NODE_NAME,
-                type="platform",
-                status="online",
-                token_hash=None,
-                current_sessions=0,
-                config={"built_in": True},
-            ))
-            print("Platform Agent node created")
+        # Retire leftover built-in platform agent node (product model: worker Nodes only).
+        plat = await db.execute(
+            select(Node).where(
+                or_(Node.id == PLATFORM_AGENT_NODE_ID, Node.type == "platform")
+            )
+        )
+        removed = 0
+        for n in plat.scalars().all():
+            await db.delete(n)
+            removed += 1
+        if removed:
+            print(f"Retired {removed} platform agent node row(s)")
 
         result = await db.execute(select(User).where(User.email == "admin@pentest.local"))
         if result.scalar_one_or_none():

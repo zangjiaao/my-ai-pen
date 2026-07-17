@@ -14,7 +14,7 @@ from app.models.audit import AuditLog
 from app.models.conversation import Conversation
 from app.models.evidence import Evidence
 from app.models.expert import Expert
-from app.models.node import Node, PLATFORM_AGENT_NODE_ID, PLATFORM_AGENT_NODE_NAME
+from app.models.node import Node, PLATFORM_AGENT_NODE_ID
 from app.models.vulnerability import Vulnerability
 from app.services.expert_offers import (
     ACTION_INSTALL,
@@ -110,8 +110,13 @@ class ExpertInstallBody(BaseModel):
 
 @router.get("", response_model=list[NodeOut])
 async def list_nodes(current_user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    await _ensure_platform_node(db)
-    result = await db.execute(select(Node).order_by(Node.type.asc(), Node.registered_at.desc()))
+    # Product model: only worker Nodes (no built-in platform agent node).
+    await _retire_platform_nodes(db)
+    result = await db.execute(
+        select(Node)
+        .where(Node.type != "platform", Node.id != PLATFORM_AGENT_NODE_ID)
+        .order_by(Node.type.asc(), Node.registered_at.desc())
+    )
     nodes = result.scalars().all()
     tasks = await _current_tasks_by_node(db, nodes)
     connectivity = await _connectivity_by_node(db, nodes)
@@ -132,8 +137,7 @@ async def register_node(body: dict, current_user: dict = Depends(get_current_use
 
     node_type = str(body.get("type") or "pentest")
     if node_type == "platform":
-        raise HTTPException(400, "Platform node is built in")
-
+        raise HTTPException(400, "Platform agent node is retired; register a worker Node instead")
     token = secrets.token_hex(32)
     node = Node(id=uuid.uuid4(), name=name, type=node_type,
                 token_hash=hashlib.sha256(token.encode()).hexdigest(),
@@ -153,8 +157,7 @@ async def register_node(body: dict, current_user: dict = Depends(get_current_use
 
 @router.get("/{node_id}", response_model=NodeOut)
 async def get_node(node_id: str, current_user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    await _ensure_platform_node(db)
-    n = await _get_node(db, node_id)
+    n = await _get_worker_node(db, node_id)
     tasks = await _current_tasks_by_node(db, [n])
     connectivity = await _connectivity_by_node(db, [n])
     return _node_out(n, tasks.get(n.id), connectivity.get(n.id))
@@ -162,8 +165,7 @@ async def get_node(node_id: str, current_user: dict = Depends(get_current_user),
 
 @router.patch("/{node_id}", response_model=NodeOut)
 async def update_node(node_id: str, body: NodeUpdate, current_user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    await _ensure_platform_node(db)
-    n = await _get_node(db, node_id)
+    n = await _get_worker_node(db, node_id)
     if body.name is not None:
         name = body.name.strip()
         if not name:
@@ -253,8 +255,7 @@ async def get_node_offers(
     db: AsyncSession = Depends(get_db),
 ):
     """List effective expert offers for a node (default: pentest only)."""
-    await _ensure_platform_node(db)
-    n = await _get_node(db, node_id)
+    n = await _get_worker_node(db, node_id)
     offers = effective_offers(n.config)
     return {
         "node_id": str(n.id),
@@ -272,10 +273,7 @@ async def install_node_expert(
     db: AsyncSession = Depends(get_db),
 ):
     """Install an expert pack on a node. Emits expert.install billing hook (no payment)."""
-    await _ensure_platform_node(db)
-    n = await _get_node(db, node_id)
-    if n.id == PLATFORM_AGENT_NODE_ID or n.type == "platform":
-        raise HTTPException(400, "Platform node does not install expert packs")
+    n = await _get_worker_node(db, node_id)
     try:
         new_cfg, detail = install_offer(n.config, body.expert_id)
     except ValueError as exc:
@@ -306,10 +304,7 @@ async def uninstall_node_expert(
     db: AsyncSession = Depends(get_db),
 ):
     """Remove an expert pack from a node. Emits expert.uninstall billing hook (no payment)."""
-    await _ensure_platform_node(db)
-    n = await _get_node(db, node_id)
-    if n.id == PLATFORM_AGENT_NODE_ID or n.type == "platform":
-        raise HTTPException(400, "Platform node does not install expert packs")
+    n = await _get_worker_node(db, node_id)
     try:
         new_cfg, detail = uninstall_offer(n.config, expert_id)
     except ValueError as exc:
@@ -334,9 +329,7 @@ async def uninstall_node_expert(
 
 @router.post("/{node_id}/regenerate-token", response_model=dict)
 async def regenerate_token(node_id: str, current_user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    n = await _get_node(db, node_id)
-    if n.id == PLATFORM_AGENT_NODE_ID or n.type == "platform":
-        raise HTTPException(400, "Platform node does not use a token")
+    n = await _get_worker_node(db, node_id)
     new_token = secrets.token_hex(32)
     n.token_hash = hashlib.sha256(new_token.encode()).hexdigest()
     n.config = {**(n.config or {}), "token": new_token}
@@ -355,15 +348,13 @@ async def regenerate_token(node_id: str, current_user: dict = Depends(get_curren
 
 @router.delete("/{node_id}")
 async def delete_node(node_id: str, current_user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    """Delete a worker node.
+    """Delete a worker node (or retire a leftover platform agent row).
 
     Detach ledger rows that reference the node (assets / vulns / conversations /
     evidence keep data, ``node_id`` cleared). Product experts bound to this node
-    are removed (FK CASCADE). Platform agent cannot be deleted.
+    are removed.
     """
     n = await _get_node(db, node_id)
-    if n.id == PLATFORM_AGENT_NODE_ID or n.type == "platform":
-        raise HTTPException(400, "Platform node cannot be deleted")
 
     # Detach optional FKs first — DB constraints are NO ACTION, not CASCADE.
     for model in (Asset, Vulnerability, Conversation, Evidence):
@@ -428,29 +419,29 @@ async def _audit_user(
     )
 
 
-async def _ensure_platform_node(db: AsyncSession) -> Node:
-    result = await db.execute(select(Node).where(Node.id == PLATFORM_AGENT_NODE_ID))
-    node = result.scalar_one_or_none()
-    if node:
-        if node.type != "platform" or node.status != "online" or node.token_hash is not None:
-            node.type = "platform"
-            node.status = "online"
-            node.token_hash = None
-            await db.commit()
-        return node
+async def _retire_platform_nodes(db: AsyncSession) -> int:
+    """Remove built-in platform agent node rows (no longer a product entity).
 
-    node = Node(
-        id=PLATFORM_AGENT_NODE_ID,
-        name=PLATFORM_AGENT_NODE_NAME,
-        type="platform",
-        status="online",
-        token_hash=None,
-        current_sessions=0,
-        config={"built_in": True},
+    Detaches FK references first, then deletes. Safe to call on every list.
+    """
+    result = await db.execute(
+        select(Node).where(or_(Node.type == "platform", Node.id == PLATFORM_AGENT_NODE_ID))
     )
-    db.add(node)
-    await db.commit()
-    return node
+    nodes = list(result.scalars().all())
+    if not nodes:
+        return 0
+    removed = 0
+    for n in nodes:
+        for model in (Asset, Vulnerability, Conversation, Evidence):
+            await db.execute(update(model).where(model.node_id == n.id).values(node_id=None))
+        expert_rows = (await db.execute(select(Expert).where(Expert.node_id == n.id))).scalars().all()
+        for exp in expert_rows:
+            await db.delete(exp)
+        await db.delete(n)
+        removed += 1
+    if removed:
+        await db.commit()
+    return removed
 
 
 async def _get_node(db: AsyncSession, node_id: str) -> Node:
@@ -461,6 +452,14 @@ async def _get_node(db: AsyncSession, node_id: str) -> Node:
     result = await db.execute(select(Node).where(Node.id == node_uuid))
     n = result.scalar_one_or_none()
     if not n:
+        raise HTTPException(404, "Node not found")
+    return n
+
+
+async def _get_worker_node(db: AsyncSession, node_id: str) -> Node:
+    """Worker Node only — platform agent rows are retired and not addressable."""
+    n = await _get_node(db, node_id)
+    if n.id == PLATFORM_AGENT_NODE_ID or str(n.type or "") == "platform":
         raise HTTPException(404, "Node not found")
     return n
 

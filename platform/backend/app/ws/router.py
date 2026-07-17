@@ -773,10 +773,8 @@ async def _available_agent_capabilities() -> list[AgentCapability]:
     DB status=online without a socket is treated as offline so the planner cannot
     invent "waiting for agent" while also being told capabilities incorrectly.
     """
-    capabilities = [
-        AgentCapability(agent_type="platform", capability="platform.chat", node_id=str(PLATFORM_AGENT_NODE_ID), name="Platform Agent", online=True),
-        AgentCapability(agent_type="platform", capability="snapshot.qa", node_id=str(PLATFORM_AGENT_NODE_ID), name="Platform Agent", online=True),
-    ]
+    # Worker Nodes only — no synthetic Platform Agent capability (retired product peer).
+    capabilities: list[AgentCapability] = []
 
     try:
         from app.db.base import async_session
