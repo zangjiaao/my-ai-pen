@@ -253,6 +253,7 @@ export const EXPERT_PACKS: readonly ExpertPackMeta[] = [
       "platform_update_finding_status",
       "platform_enrich_asset",
       "platform_conversation_snapshot",
+      "request_user_decision",
     ],
   },
   {
@@ -493,4 +494,39 @@ export function expertCreatePackOptions(offers: unknown): ExpertPackMeta[] {
     if (BUILTIN_PACK_IDS.has(p.id) || p.id === "default") return true;
     return installed.has(p.id);
   });
+}
+
+/** Preset accent colors for expert partner chips (conversation / list). */
+export const EXPERT_COLOR_PRESETS = [
+  "#2563EB", // blue
+  "#0D9488", // teal
+  "#7C3AED", // violet
+  "#DB2777", // pink
+  "#EA580C", // orange
+  "#CA8A04", // yellow/amber
+  "#16A34A", // green
+  "#475569", // slate
+] as const;
+
+const EXPERT_COLOR_RE = /^#[0-9A-Fa-f]{6}$/;
+
+/** Normalize stored color or null. */
+export function normalizeExpertColor(color: unknown): string | null {
+  if (typeof color !== "string") return null;
+  const raw = color.trim();
+  if (!EXPERT_COLOR_RE.test(raw)) return null;
+  return raw.toUpperCase();
+}
+
+/** Stable default when expert has no color yet (hash seed → palette). */
+export function defaultExpertColor(seed?: string | null): string {
+  const s = String(seed || "");
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return EXPERT_COLOR_PRESETS[h % EXPERT_COLOR_PRESETS.length]!;
+}
+
+/** Color used in UI: configured hex, else deterministic default. */
+export function resolveExpertColor(color?: string | null, seed?: string | null): string {
+  return normalizeExpertColor(color) ?? defaultExpertColor(seed);
 }

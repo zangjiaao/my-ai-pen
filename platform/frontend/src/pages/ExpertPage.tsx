@@ -1,6 +1,6 @@
 /**
  * Expert management — virtual personas bound to physical Nodes.
- * Cards mirror Node page; detail: 概述 / 配置 / 能力.
+ * Cards mirror Node page; detail: 配置 / 能力.
  */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
@@ -10,12 +10,13 @@ import TopBar from "../components/TopBar";
 import { ApiError, authFetch } from "../lib/api";
 import {
   EXPERT_PACKS,
+  EXPERT_COLOR_PRESETS,
   expertCreatePackOptions,
   DEFAULT_EXPERT_ID,
   effectiveOffers,
   expertLabel,
-  expertMeta,
   packCapabilities,
+  resolveExpertColor,
   type ExpertId,
 } from "../lib/experts";
 
@@ -37,6 +38,7 @@ type ExpertRow = {
   node_status?: string | null;
   node_offers?: string[] | null;
   description?: string | null;
+  color?: string | null;
   enabled: boolean;
   created_at?: string | null;
 };
@@ -96,7 +98,7 @@ export default function ExpertPage() {
     return experts.filter((e) => {
       if (packFilter !== "全部" && e.pack_id !== packFilter) return false;
       if (!q) return true;
-      const hay = `${e.name} ${e.pack_id} ${e.node_name || ""} ${e.description || ""}`.toLowerCase();
+      const hay = `${e.name} ${e.pack_id} ${e.node_name || ""}`.toLowerCase();
       return hay.includes(q);
     });
   }, [experts, search, packFilter]);
@@ -171,6 +173,7 @@ export default function ExpertPage() {
               {filtered.map((e) => {
                 const online = e.node_status === "online";
                 const caps = packCapabilities(e.pack_id);
+                const accent = resolveExpertColor(e.color, e.id);
                 return (
                   <button
                     key={e.id}
@@ -181,6 +184,11 @@ export default function ExpertPage() {
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="flex min-w-0 flex-wrap items-center gap-2">
+                          <span
+                            className="h-2.5 w-2.5 shrink-0 rounded-full"
+                            style={{ backgroundColor: accent }}
+                            aria-hidden
+                          />
                           <span className="min-w-0 truncate text-base font-semibold text-ink">
                             {e.name}
                           </span>
@@ -220,11 +228,6 @@ export default function ExpertPage() {
                       <p className="text-ink-muted">
                         技能 {caps.skills.length} · 工具 {caps.tools.length}
                       </p>
-                      {e.description ? (
-                        <p className="truncate pt-0.5 text-ink-muted" title={e.description}>
-                          {e.description}
-                        </p>
-                      ) : null}
                     </div>
                   </button>
                 );
@@ -278,7 +281,7 @@ function CreateExpertDialog({
   const [name, setName] = useState("");
   const [nodeId, setNodeId] = useState(nodes[0]?.id || "");
   const [packId, setPackId] = useState<ExpertId>(DEFAULT_EXPERT_ID);
-  const [description, setDescription] = useState("");
+  const [color, setColor] = useState<string>(EXPERT_COLOR_PRESETS[0]!);
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState("");
 
@@ -310,7 +313,7 @@ function CreateExpertDialog({
           display_name: n,
           pack_id: packId,
           node_id: nodeId,
-          description: description.trim() || undefined,
+          color,
         }),
       });
       await onCreated();
@@ -348,10 +351,11 @@ function CreateExpertDialog({
       ) : (
         <div className="space-y-3">
           <label className="block text-xs text-ink-secondary">
-            名称（必填，支持中英文）
+            名称（必填，中英文/数字/_.:-，≤64）
             <input
               autoFocus
               value={name}
+              maxLength={64}
               onChange={(e) => setName(e.target.value)}
               placeholder="渗透专家"
               className="mt-1 w-full rounded-md border border-hairline bg-canvas px-3 py-2 text-sm text-ink focus:border-ink focus:outline-none"
@@ -389,15 +393,26 @@ function CreateExpertDialog({
               ))}
             </select>
           </label>
-          <label className="block text-xs text-ink-secondary">
-            说明（可选）
-            <input
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="例：DVWA 常规 Web 渗透"
-              className="mt-1 w-full rounded-md border border-hairline bg-canvas px-3 py-2 text-sm text-ink focus:border-ink focus:outline-none"
-            />
-          </label>
+          <div>
+            <p className="text-xs text-ink-secondary">标识颜色</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {EXPERT_COLOR_PRESETS.map((hex) => {
+                const selected = color === hex;
+                return (
+                  <button
+                    key={hex}
+                    type="button"
+                    title={hex}
+                    onClick={() => setColor(hex)}
+                    className={`h-7 w-7 rounded-full border-2 transition-transform ${
+                      selected ? "scale-110 border-ink" : "border-transparent hover:scale-105"
+                    }`}
+                    style={{ backgroundColor: hex }}
+                  />
+                );
+              })}
+            </div>
+          </div>
         </div>
       )}
     </SimpleDialog>
@@ -417,12 +432,14 @@ function ExpertDetailDialog({
   onSaved: () => void | Promise<void>;
   onDeleted: () => void | Promise<void>;
 }) {
-  type DetailTab = "overview" | "config" | "capabilities";
-  const [detailTab, setDetailTab] = useState<DetailTab>("overview");
+  type DetailTab = "config" | "capabilities";
+  const [detailTab, setDetailTab] = useState<DetailTab>("config");
   const [nameDraft, setNameDraft] = useState(expert.name);
+  const [editingName, setEditingName] = useState(false);
+  const [renaming, setRenaming] = useState(false);
   const [nodeId, setNodeId] = useState(expert.node_id);
   const [packId, setPackId] = useState(expert.pack_id);
-  const [description, setDescription] = useState(expert.description || "");
+  const [color, setColor] = useState(() => resolveExpertColor(expert.color, expert.id));
   const [enabled, setEnabled] = useState(expert.enabled);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
@@ -430,14 +447,15 @@ function ExpertDetailDialog({
 
   useEffect(() => {
     setNameDraft(expert.name);
+    setEditingName(false);
     setNodeId(expert.node_id);
     setPackId(expert.pack_id);
-    setDescription(expert.description || "");
+    setColor(resolveExpertColor(expert.color, expert.id));
     setEnabled(expert.enabled);
     setSaveError("");
     setSaveOk(false);
-    setDetailTab("overview");
-  }, [expert.id, expert.name, expert.node_id, expert.pack_id, expert.description, expert.enabled]);
+    setDetailTab("config");
+  }, [expert.id, expert.name, expert.node_id, expert.pack_id, expert.color, expert.enabled]);
 
   const selectedNode = nodes.find((n) => n.id === nodeId) || null;
   const packOptions = useMemo(() => {
@@ -449,11 +467,9 @@ function ExpertDetailDialog({
   }, [selectedNode, expert.node_offers]);
 
   const caps = packCapabilities(packId);
-  const pack = expertMeta(packId);
   const online = expert.node_status === "online";
 
   const detailTabs: { key: DetailTab; label: string; count?: number }[] = [
-    { key: "overview", label: "概述" },
     { key: "config", label: "配置" },
     {
       key: "capabilities",
@@ -462,20 +478,43 @@ function ExpertDetailDialog({
     },
   ];
 
+  const saveRename = async () => {
+    const trimmed = nameDraft.trim();
+    if (!trimmed) {
+      setSaveError("专家名称不能为空");
+      return;
+    }
+    if (trimmed === expert.name) {
+      setEditingName(false);
+      return;
+    }
+    setRenaming(true);
+    setSaveError("");
+    try {
+      await authFetch(`/api/experts/${expert.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name: trimmed, display_name: trimmed }),
+      });
+      setEditingName(false);
+      await onSaved();
+    } catch (e) {
+      setSaveError(e instanceof ApiError ? e.message : e instanceof Error ? e.message : "改名失败");
+    } finally {
+      setRenaming(false);
+    }
+  };
+
   const save = async () => {
     setSaving(true);
     setSaveError("");
     setSaveOk(false);
     try {
-      const n = nameDraft.trim();
       await authFetch(`/api/experts/${expert.id}`, {
         method: "PATCH",
         body: JSON.stringify({
-          name: n,
-          display_name: n,
           node_id: nodeId,
           pack_id: packId,
-          description: description.trim() || null,
+          color,
           enabled,
         }),
       });
@@ -487,6 +526,8 @@ function ExpertDetailDialog({
       setSaving(false);
     }
   };
+
+  const accent = resolveExpertColor(color, expert.id);
 
   const remove = async () => {
     if (!window.confirm(`确定删除专家 @${expert.name}？`)) return;
@@ -506,24 +547,89 @@ function ExpertDetailDialog({
         className="flex max-h-[min(88vh,840px)] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-hairline-soft bg-canvas shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="shrink-0 px-6 pt-4">
+        <div className="group/title shrink-0 px-6 pt-4">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 flex-wrap items-center gap-2">
+                {editingName ? (
+                  <input
+                    autoFocus
+                    value={nameDraft}
+                    maxLength={64}
+                    disabled={renaming}
+                    onChange={(e) => setNameDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void saveRename();
+                      if (e.key === "Escape") {
+                        setNameDraft(expert.name);
+                        setEditingName(false);
+                      }
+                    }}
+                    className="min-w-0 flex-1 rounded border border-hairline px-2 py-1 text-xl font-semibold focus:outline-none"
+                  />
+                ) : (
+                  <h2 className="min-w-0 truncate text-xl font-semibold text-ink">{expert.name}</h2>
+                )}
+                {editingName ? (
+                  <>
+                    <button
+                      type="button"
+                      disabled={renaming}
+                      onClick={() => void saveRename()}
+                      className="text-xs text-ink-muted hover:text-ink"
+                    >
+                      {renaming ? "保存中…" : "保存"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNameDraft(expert.name);
+                        setEditingName(false);
+                      }}
+                      className="text-xs text-ink-muted hover:text-ink"
+                    >
+                      取消
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setEditingName(true)}
+                    className="text-xs text-ink-muted opacity-0 transition-opacity hover:text-ink group-hover/title:opacity-100"
+                  >
+                    改名
+                  </button>
+                )}
+              </div>
+              <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5">
+                <span
+                  className="h-2.5 w-2.5 shrink-0 rounded-full"
+                  style={{ backgroundColor: accent }}
+                  aria-hidden
+                />
                 <NodeOnlineBadge online={online} />
-                <h2 className="truncate text-lg font-semibold text-ink">{expert.name}</h2>
                 <span className="rounded-pill border border-hairline bg-canvas-inset px-2 py-0.5 text-xs text-ink">
                   {expertLabel(expert.pack_id)}
                 </span>
+                {!expert.enabled ? (
+                  <span className="rounded-pill border border-hairline bg-canvas-inset px-2 py-0.5 text-xs text-ink-muted">
+                    已禁用
+                  </span>
+                ) : null}
+                <span className="rounded-pill border border-hairline bg-canvas-inset px-2 py-0.5 text-xs text-ink-secondary">
+                  节点 {expert.node_name || expert.node_id.slice(0, 8)}
+                </span>
+                {expert.created_at ? (
+                  <span className="rounded-pill border border-hairline bg-canvas-inset px-2 py-0.5 text-xs text-ink-muted">
+                    创建 {formatExpertDate(expert.created_at)}
+                  </span>
+                ) : null}
               </div>
-              <p className="mt-1 text-sm text-ink-secondary">
-                节点 {expert.node_name || expert.node_id.slice(0, 8)}
-              </p>
             </div>
             <button
               type="button"
               onClick={onClose}
-              className="rounded-md border border-hairline px-2.5 py-1 text-xs text-ink-secondary hover:bg-surface-default"
+              className="shrink-0 rounded-md border border-hairline px-2.5 py-1 text-xs text-ink-secondary hover:bg-surface-default"
             >
               关闭
             </button>
@@ -550,118 +656,85 @@ function ExpertDetailDialog({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-          {detailTab === "overview" && (
-            <div className="space-y-4">
-              <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                <InfoCard label="名称" value={expert.name} />
-                <InfoCard label="能力包" value={expertLabel(expert.pack_id)} />
-                <InfoCard
-                  label="状态"
-                  value={expert.enabled ? (online ? "可用（节点在线）" : "节点离线") : "已禁用"}
-                />
-              </section>
-              <section className="grid gap-3 sm:grid-cols-2">
-                <InfoCard label="物理节点" value={expert.node_name || expert.node_id} />
-                <InfoCard label="节点状态" value={expert.node_status || "—"} />
-              </section>
-              {expert.description ? (
-                <section className="rounded-md border border-hairline-soft p-4">
-                  <p className="text-sm font-medium">说明</p>
-                  <p className="mt-1 text-sm text-ink-secondary">{expert.description}</p>
-                </section>
-              ) : null}
-              <section className="rounded-md border border-hairline-soft p-4">
-                <p className="text-sm font-medium">能力摘要</p>
-                <p className="mt-1 text-xs text-ink-muted">
-                  来自能力包 <span className="font-mono text-ink">{packId}</span>
-                  {pack ? ` — ${pack.description}` : ""}
-                </p>
-                <p className="mt-2 text-sm text-ink-secondary">
-                  技能 {caps.skills.length} · 工具 {caps.tools.length}
-                  <button
-                    type="button"
-                    onClick={() => setDetailTab("capabilities")}
-                    className="ml-2 text-xs text-ink underline-offset-2 hover:underline"
-                  >
-                    查看详情 →
-                  </button>
-                </p>
-              </section>
-              <p className="text-xs text-ink-muted">
-                对话中 @ 或选择「{expert.name}」即可路由到绑定节点并带上该能力包。
-              </p>
-            </div>
-          )}
-
           {detailTab === "config" && (
             <div className="space-y-4">
-              <p className="text-xs text-ink-muted">
-                修改名称、绑定节点与能力包。通用助理（default）内置；其他能力包须先在节点「扩展」中安装。
-              </p>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="block text-xs text-ink-secondary sm:col-span-2">
-                  名称
-                  <input
-                    value={nameDraft}
-                    onChange={(e) => {
-                      setNameDraft(e.target.value);
-                      setSaveOk(false);
-                    }}
-                    className="mt-1 w-full rounded-md border border-hairline bg-canvas px-3 py-2 text-sm text-ink focus:border-ink focus:outline-none"
-                  />
-                </label>
-                <label className="block text-xs text-ink-secondary">
-                  绑定物理节点
-                  <select
-                    value={nodeId}
-                    onChange={(e) => {
-                      setNodeId(e.target.value);
-                      setSaveOk(false);
-                    }}
-                    className="mt-1 w-full rounded-md border border-hairline bg-canvas px-3 py-2 text-sm text-ink focus:border-ink focus:outline-none"
-                  >
-                    {nodes.map((n) => (
-                      <option key={n.id} value={n.id}>
-                        {n.name} ({n.status})
-                      </option>
-                    ))}
-                    {!nodes.some((n) => n.id === nodeId) && (
-                      <option value={nodeId}>
-                        {expert.node_name || nodeId}（当前）
-                      </option>
-                    )}
-                  </select>
-                </label>
-                <label className="block text-xs text-ink-secondary">
-                  能力包
-                  <select
-                    value={packId}
-                    onChange={(e) => {
-                      setPackId(e.target.value);
-                      setSaveOk(false);
-                    }}
-                    className="mt-1 w-full rounded-md border border-hairline bg-canvas px-3 py-2 text-sm text-ink focus:border-ink focus:outline-none"
-                  >
-                    {packOptions.map((p) => (
-                      <option key={p.id} value={p.id} disabled={!p.installed && p.id !== packId}>
-                        {p.label}
-                        {!p.installed ? "（节点未安装）" : ""}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="block text-xs text-ink-secondary sm:col-span-2">
-                  说明
-                  <input
-                    value={description}
-                    onChange={(e) => {
-                      setDescription(e.target.value);
-                      setSaveOk(false);
-                    }}
-                    className="mt-1 w-full rounded-md border border-hairline bg-canvas px-3 py-2 text-sm text-ink focus:border-ink focus:outline-none"
-                  />
-                </label>
-                <label className="flex cursor-pointer items-center gap-2 text-sm text-ink-secondary sm:col-span-2">
+              <div className="rounded-md border border-hairline-soft p-4">
+                <p className="text-sm font-medium">路由绑定</p>
+                <p className="mt-1 text-xs text-ink-muted">
+                  通用助理（default）内置；其他能力包须先在节点「扩展」中安装。
+                </p>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <label className="block space-y-1">
+                    <span className="text-[11px] text-ink-muted">物理节点</span>
+                    <select
+                      value={nodeId}
+                      onChange={(e) => {
+                        setNodeId(e.target.value);
+                        setSaveOk(false);
+                      }}
+                      className="w-full rounded-md border bg-canvas px-2.5 py-2 text-sm focus:outline-none"
+                    >
+                      {nodes.map((n) => (
+                        <option key={n.id} value={n.id}>
+                          {n.name} ({n.status})
+                        </option>
+                      ))}
+                      {!nodes.some((n) => n.id === nodeId) && (
+                        <option value={nodeId}>
+                          {expert.node_name || nodeId}（当前）
+                        </option>
+                      )}
+                    </select>
+                  </label>
+                  <label className="block space-y-1">
+                    <span className="text-[11px] text-ink-muted">能力包</span>
+                    <select
+                      value={packId}
+                      onChange={(e) => {
+                        setPackId(e.target.value);
+                        setSaveOk(false);
+                      }}
+                      className="w-full rounded-md border bg-canvas px-2.5 py-2 text-sm focus:outline-none"
+                    >
+                      {packOptions.map((p) => (
+                        <option key={p.id} value={p.id} disabled={!p.installed && p.id !== packId}>
+                          {p.label}
+                          {!p.installed ? "（节点未安装）" : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              </div>
+
+              <div className="rounded-md border border-hairline-soft p-4">
+                <p className="text-sm font-medium">标识颜色</p>
+                <p className="mt-1 text-xs text-ink-muted">用于对话对象选择，以颜色区分专家。</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {EXPERT_COLOR_PRESETS.map((hex) => {
+                    const selected = color.toUpperCase() === hex;
+                    return (
+                      <button
+                        key={hex}
+                        type="button"
+                        title={hex}
+                        onClick={() => {
+                          setColor(hex);
+                          setSaveOk(false);
+                        }}
+                        className={`h-8 w-8 rounded-full border-2 transition-transform ${
+                          selected ? "scale-110 border-ink" : "border-transparent hover:scale-105"
+                        }`}
+                        style={{ backgroundColor: hex }}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="rounded-md border border-hairline-soft p-4">
+                <p className="text-sm font-medium">可用性</p>
+                <label className="mt-3 flex cursor-pointer items-center gap-2 text-sm text-ink-secondary">
                   <input
                     type="checkbox"
                     checked={enabled}
@@ -674,29 +747,32 @@ function ExpertDetailDialog({
                   启用（禁用后不可在对话中选用）
                 </label>
               </div>
-              <button
-                type="button"
-                onClick={() => void remove()}
-                className="text-xs text-severity-critical underline-offset-2 hover:underline"
-              >
-                删除此专家
-              </button>
+
+              <div className="rounded-md border border-hairline-soft p-4">
+                <p className="text-sm font-medium">删除</p>
+                <p className="mt-1 text-xs text-ink-muted">删除后不可恢复，对话中将无法再选用此专家。</p>
+                <button
+                  type="button"
+                  onClick={() => void remove()}
+                  className="mt-3 rounded-md border border-severity-critical/30 px-3 py-1.5 text-xs text-severity-critical hover:bg-severity-critical/5"
+                >
+                  删除此专家
+                </button>
+              </div>
             </div>
           )}
 
           {detailTab === "capabilities" && (
-            <div className="space-y-5">
-              <p className="text-xs text-ink-muted">
-                能力来自专家绑定的能力包（catalog），不是节点硬件属性。换包或换节点后以包定义为准。
-              </p>
-              <section>
-                <p className="mb-2 text-sm font-medium">
+            <div className="space-y-4">
+              <div className="rounded-md border border-hairline-soft p-4">
+                <p className="text-sm font-medium">
                   技能 <span className="font-normal text-ink-muted">{caps.skills.length}</span>
                 </p>
+                <p className="mt-1 text-xs text-ink-muted">来自当前能力包 catalog，换包后以新包定义为准。</p>
                 {caps.skills.length === 0 ? (
-                  <p className="text-xs text-ink-muted">此包无 skill 条目。</p>
+                  <p className="mt-3 text-xs text-ink-muted">此包无 skill 条目。</p>
                 ) : (
-                  <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
                     {caps.skills.map((s) => (
                       <div
                         key={s.id}
@@ -711,15 +787,16 @@ function ExpertDetailDialog({
                     ))}
                   </div>
                 )}
-              </section>
-              <section>
-                <p className="mb-2 text-sm font-medium">
+              </div>
+
+              <div className="rounded-md border border-hairline-soft p-4">
+                <p className="text-sm font-medium">
                   工具 <span className="font-normal text-ink-muted">{caps.tools.length}</span>
                 </p>
                 {caps.tools.length === 0 ? (
-                  <p className="text-xs text-ink-muted">此包无工具条目。</p>
+                  <p className="mt-3 text-xs text-ink-muted">此包无工具条目。</p>
                 ) : (
-                  <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
                     {caps.tools.map((t) => (
                       <div
                         key={t.id}
@@ -734,7 +811,7 @@ function ExpertDetailDialog({
                     ))}
                   </div>
                 )}
-              </section>
+              </div>
             </div>
           )}
         </div>
@@ -829,21 +906,8 @@ function NodeOnlineBadge({ online }: { online: boolean }) {
   );
 }
 
-function InfoCard({
-  label,
-  value,
-  mono,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-}) {
-  return (
-    <div className="rounded-md border border-hairline-soft px-3 py-2.5">
-      <p className="text-[11px] text-ink-muted">{label}</p>
-      <p className={`mt-0.5 truncate text-sm text-ink ${mono ? "font-mono" : "font-medium"}`} title={value}>
-        {value}
-      </p>
-    </div>
-  );
+function formatExpertDate(value?: string | null): string {
+  if (!value) return "—";
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? value : d.toLocaleString();
 }

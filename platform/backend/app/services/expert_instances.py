@@ -19,25 +19,54 @@ from app.services.expert_offers import (
 
 # Align with WS NODE_MENTION_RE token body.
 # \w is Unicode-aware (CJK letters, Latin, digits, underscore); also allow . : -
-EXPERT_NAME_RE = re.compile(r"^[\w.:-]{1,128}$", re.UNICODE)
+# Intentionally excludes spaces, quotes, braces, newlines — names are also injected
+# into Node system prompts as display labels (prompt-injection surface).
+EXPERT_NAME_RE = re.compile(r"^[\w.:-]{1,64}$", re.UNICODE)
+# Product accent color for partner chips (optional).
+EXPERT_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+# Soft block for names that look like instruction smuggling (display label only).
+_EXPERT_NAME_INJECTION_HINT = re.compile(
+    r"(ignore\s*(all|previous|prior)|system\s*prompt|developer\s*message|"
+    r"you\s*are\s*now|jailbreak|override\s*instructions)",
+    re.IGNORECASE,
+)
 
 
 def validate_expert_name(name: object) -> str:
     """Return normalized mention name or raise ValueError.
 
     Allows Unicode letters (including Chinese), digits, and _ . : -
-    No spaces or @ (token is used as @mention).
+    No spaces or @ (token is used as @mention and prompt persona label).
+    Max 64 chars — keep short to limit prompt-injection payload size.
     """
     raw = str(name or "").strip().lstrip("@")
     if not raw:
         raise ValueError("专家提及名不能为空")
-    if len(raw) > 128:
-        raise ValueError("专家提及名最多 128 个字符")
+    if len(raw) > 64:
+        raise ValueError("专家提及名最多 64 个字符")
+    # Reject control / format characters even if they sneak past \w on some engines.
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in raw):
+        raise ValueError("专家提及名不能包含控制字符")
     if not EXPERT_NAME_RE.match(raw):
         raise ValueError(
             "专家提及名支持中英文、数字及 _ . : -，不能含空格或特殊符号（用于 @ 路由）"
         )
+    # Names are display labels only; block obvious instruction-smuggling phrases.
+    if _EXPERT_NAME_INJECTION_HINT.search(raw.replace("_", " ").replace(".", " ").replace("-", " ")):
+        raise ValueError("专家提及名不能包含疑似指令注入内容")
     return raw
+
+
+def validate_expert_color(color: object) -> str | None:
+    """Return normalized #RRGGBB or None; raise ValueError if non-empty but invalid."""
+    if color is None:
+        return None
+    raw = str(color).strip()
+    if not raw:
+        return None
+    if not EXPERT_COLOR_RE.match(raw):
+        raise ValueError("专家颜色须为 #RRGGBB 格式")
+    return raw.upper()
 
 
 def validate_pack_for_node(node_config: object, pack_id: object) -> str:
@@ -78,6 +107,7 @@ def expert_to_dict(
         "pack_id": expert.pack_id,
         "node_id": str(expert.node_id),
         "description": expert.description,
+        "color": getattr(expert, "color", None),
         "enabled": bool(expert.enabled),
         "created_at": expert.created_at.isoformat() if getattr(expert, "created_at", None) else None,
         "updated_at": expert.updated_at.isoformat() if getattr(expert, "updated_at", None) else None,

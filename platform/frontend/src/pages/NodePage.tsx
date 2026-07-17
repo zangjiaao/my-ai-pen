@@ -7,7 +7,6 @@ import {
   EXTENSION_PACKS,
   effectiveOffers,
   expertLabel,
-  expertMeta,
   type ExpertId,
 } from "../lib/experts";
 
@@ -207,8 +206,8 @@ export default function NodePage() {
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="flex min-w-0 flex-wrap items-center gap-2">
-                          <OnlineBadge online={online} />
                           <span className="min-w-0 truncate text-base font-semibold text-ink">{n.name}</span>
+                          <OnlineBadge online={online} />
                         </div>
                         <p className="mt-1 font-mono text-xs text-ink-secondary">
                           {n.ip || (isPlatform ? "平台内置" : "—")}
@@ -349,24 +348,19 @@ function NodeDetailDialog({
   const [expertBusy, setExpertBusy] = useState<string | null>(null);
   const [expertError, setExpertError] = useState("");
   const [localOffers, setLocalOffers] = useState<ExpertId[]>(() => effectiveOffers(node.offers));
-  /** Physical node: 概述 / 配置 / 扩展（装包）. Skills live on Expert 名片. */
-  type DetailTab = "overview" | "config" | "extensions";
-  const [detailTab, setDetailTab] = useState<DetailTab>("overview");
+  /** Physical node: 配置 / 扩展（装包）. No empty 概述 tab. */
+  type DetailTab = "config" | "extensions";
+  const [detailTab, setDetailTab] = useState<DetailTab>("config");
 
-  const caps = normalizeCapabilities(node.capabilities);
-
-  const detailTabs: { key: DetailTab; label: string; count?: number }[] = [
-    { key: "overview", label: "概述" },
-    ...(!isPlatform
-      ? [
-          { key: "config" as const, label: "配置" },
-          { key: "extensions" as const, label: "扩展", count: localOffers.length },
-        ]
-      : []),
-  ];
+  const detailTabs: { key: DetailTab; label: string; count?: number }[] = !isPlatform
+    ? [
+        { key: "config", label: "配置" },
+        { key: "extensions", label: "扩展", count: localOffers.length },
+      ]
+    : [{ key: "config", label: "配置" }];
   const activeDetailTab = detailTabs.some((t) => t.key === detailTab)
     ? detailTab
-    : (detailTabs[0]?.key ?? "overview");
+    : (detailTabs[0]?.key ?? "config");
   const showSave = isPentest && activeDetailTab === "config";
 
   useEffect(() => {
@@ -384,7 +378,7 @@ function NodeDetailDialog({
     setExpertError("");
     setExpertBusy(null);
     setLocalOffers(effectiveOffers(node.offers));
-    setDetailTab("overview");
+    setDetailTab("config");
   }, [
     node.id,
     node.name,
@@ -536,12 +530,11 @@ function NodeDetailDialog({
         className="flex max-h-[min(88vh,840px)] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-hairline-soft bg-canvas shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header: status + name */}
+        {/* Header: name on top, tags below (same pattern as Expert) */}
         <div className="group/title shrink-0 px-6 pt-4">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <OnlineBadge online={online} />
                 {editingName ? (
                   <input
                     autoFocus
@@ -558,7 +551,7 @@ function NodeDetailDialog({
                     className="min-w-0 flex-1 rounded border border-hairline px-2 py-1 text-xl font-semibold focus:outline-none"
                   />
                 ) : (
-                  <h2 className="min-w-0 break-words text-xl font-semibold">{node.name}</h2>
+                  <h2 className="min-w-0 truncate text-xl font-semibold text-ink">{node.name}</h2>
                 )}
                 {editingName ? (
                   <>
@@ -588,17 +581,32 @@ function NodeDetailDialog({
                   )
                 )}
               </div>
-              <p className="mt-1 font-mono text-sm text-ink-secondary">
-                {node.ip || (isPlatform ? "平台内置" : "—")}
-              </p>
+              <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5">
+                <OnlineBadge online={online} />
+                <span className="rounded-pill border border-hairline bg-canvas-inset px-2 py-0.5 font-mono text-xs text-ink-secondary">
+                  {node.ip || (isPlatform ? "平台内置" : "—")}
+                </span>
+                <span className="rounded-pill border border-hairline bg-canvas-inset px-2 py-0.5 text-xs text-ink-muted">
+                  注册 {formatDate(node.registered_at)}
+                </span>
+                {node.last_heartbeat ? (
+                  <span className="rounded-pill border border-hairline bg-canvas-inset px-2 py-0.5 text-xs text-ink-muted">
+                    心跳 {formatDate(node.last_heartbeat)}
+                  </span>
+                ) : null}
+              </div>
             </div>
-            <button type="button" onClick={onClose} className="rounded-md border border-hairline px-3 py-1.5 text-xs">
+            <button
+              type="button"
+              onClick={onClose}
+              className="shrink-0 rounded-md border border-hairline px-2.5 py-1 text-xs text-ink-secondary hover:bg-surface-default"
+            >
               关闭
             </button>
           </div>
         </div>
 
-        {/* Tabs: 概述 | 配置 | 扩展 */}
+        {/* Tabs: 配置 | 扩展 */}
         <div className="shrink-0 border-b border-hairline-soft px-6">
           <div className="flex flex-wrap items-center gap-4">
             {detailTabs.map((t) => (
@@ -625,67 +633,6 @@ function NodeDetailDialog({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-          {activeDetailTab === "overview" && (
-            <div className="space-y-4">
-              <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                <InfoCard label="IP" value={node.ip || (isPlatform ? "平台内置" : "—")} mono />
-                <InfoCard label="最近心跳" value={formatDate(node.last_heartbeat)} />
-                <InfoCard label="注册时间" value={formatDate(node.registered_at)} />
-              </section>
-
-              {!isPlatform && (
-                <section className="rounded-md border border-hairline-soft p-4">
-                  <div className="mb-3 flex items-center justify-between gap-2">
-                    <p className="text-sm font-medium">已安装专家包</p>
-                    <button
-                      type="button"
-                      onClick={() => setDetailTab("extensions")}
-                      className="text-xs text-ink-secondary underline-offset-2 hover:underline"
-                    >
-                      管理 →
-                    </button>
-                  </div>
-                  {localOffers.length === 0 ? (
-                    <p className="text-xs text-ink-muted">
-                      内置 default 可用；暂无已装拓展包
-                    </p>
-                  ) : (
-                    <div className="flex flex-wrap gap-2">
-                      {localOffers.map((pack) => {
-                        const meta = expertMeta(pack);
-                        return (
-                          <div
-                            key={pack}
-                            className="rounded-md border border-hairline bg-canvas-inset/50 px-3 py-2"
-                            title={meta?.description}
-                          >
-                            <p className="text-sm font-medium text-ink">{expertLabel(pack)}</p>
-                            <p className="mt-0.5 font-mono text-[10px] text-ink-muted">{pack}</p>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </section>
-              )}
-
-              {!isPlatform && node.last_failure_reason ? (
-                <InfoCard
-                  label="最近失败"
-                  value={node.last_failure_reason}
-                  tone="danger"
-                  title={node.last_failure_reason}
-                />
-              ) : null}
-
-              {(caps?.runtime || caps?.version) && (
-                <p className="font-mono text-[11px] text-ink-muted">
-                  {[caps.runtime, caps.version].filter(Boolean).join(" · ")}
-                </p>
-              )}
-            </div>
-          )}
-
           {activeDetailTab === "config" && (
             <div className="space-y-4">
               <div className="rounded-md border border-hairline-soft p-4">
@@ -734,9 +681,6 @@ function NodeDetailDialog({
 
               {isPentest ? (
                 <>
-                  <p className="text-xs text-ink-muted">
-                    保存后对<strong>新任务</strong>生效。任务若显式指定扫描深度，将覆盖节点默认值。
-                  </p>
                   <div className="rounded-md border border-hairline-soft p-4">
                     <p className="text-sm font-medium">Worker 运行预算</p>
                     <p className="mt-1 text-xs text-ink-muted">子 Agent 墙钟超时、工具轮次与超时重试。</p>
@@ -966,15 +910,6 @@ function NodeDetailDialog({
   );
 }
 
-function normalizeCapabilities(raw: unknown): NodeCapabilities | null {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const o = raw as Record<string, unknown>;
-  return {
-    runtime: typeof o.runtime === "string" ? o.runtime : undefined,
-    version: typeof o.version === "string" ? o.version : undefined,
-  };
-}
-
 function SimpleDialog({
   title,
   description,
@@ -1090,33 +1025,6 @@ function ConnectivityStrip({
       </div>
       <div className="font-mono text-[10px] text-ink-muted">
         24h <span className="text-ink-secondary">{pct}</span>
-      </div>
-    </div>
-  );
-}
-
-function InfoCard({
-  label,
-  value,
-  mono,
-  tone = "default",
-  title,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-  tone?: "default" | "danger";
-  title?: string;
-}) {
-  return (
-    <div className="rounded-md bg-canvas-inset p-2.5" title={title}>
-      <div className="text-xs text-ink-muted">{label}</div>
-      <div
-        className={`mt-1 line-clamp-3 break-words text-xs ${mono ? "font-mono" : ""} ${
-          tone === "danger" ? "text-severity-critical" : "text-ink"
-        }`}
-      >
-        {value || "—"}
       </div>
     </div>
   );

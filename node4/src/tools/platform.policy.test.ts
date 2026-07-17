@@ -19,6 +19,10 @@ assert.equal(blank.pack.id, DEFAULT_SEAT_ID);
 assert.equal(blank.blocked, undefined);
 assert.ok(!toolNamesForPack(DEFAULT_SEAT_PACK).includes("finding"));
 assert.ok(toolNamesForPack(DEFAULT_SEAT_PACK).some((n) => n.startsWith("platform_")));
+assert.ok(
+  toolNamesForPack(DEFAULT_SEAT_PACK).includes("request_user_decision"),
+  "default seat can request UI authorization cards",
+);
 
 assert.equal(
   isChatOnlyTask({ taskId: "t", conversationId: "c", instruction: "你好", target: {}, scope: {} }, "default"),

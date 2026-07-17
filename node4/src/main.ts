@@ -5,6 +5,8 @@ import { PlatformWSClient } from "./platform/ws-client.js";
 import { runNode4Task } from "./runtime/session-runner.js";
 import type { TaskEnvelope } from "./types.js";
 import { parseCaseContext } from "./runtime/case-context.js";
+import { sanitizePromptLabel } from "./runtime/prompt.js";
+import { cancelApprovalsForConversation, resolveApproval } from "./runtime/approvals.js";
 
 loadDotEnv();
 loadDotEnv("node2/.env");
@@ -38,13 +40,25 @@ async function emitWorkStatus(
 async function runAssignedTask(message: Record<string, unknown>): Promise<void> {
   const task = normalizeTask(message);
   if (busy.has(task.conversationId)) {
-    await client.send({
-      type: "task_error",
-      conversation_id: task.conversationId,
-      task_id: task.taskId,
-      message: "Node4 agent is busy on this conversation. Interrupt first to stop the current burst.",
-    });
-    return;
+    // Handoff supersede: abort the seat that is waiting (e.g. default after authorize)
+    // so the destination expert can start immediately on the same conversation.
+    const prev = aborts.get(task.conversationId);
+    if (prev) {
+      cancelApprovalsForConversation(task.conversationId);
+      prev.abort();
+      for (let i = 0; i < 40 && busy.has(task.conversationId); i += 1) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    }
+    if (busy.has(task.conversationId)) {
+      await client.send({
+        type: "task_error",
+        conversation_id: task.conversationId,
+        task_id: task.taskId,
+        message: "Node4 agent is busy on this conversation. Interrupt first to stop the current burst.",
+      });
+      return;
+    }
   }
   const abort = new AbortController();
   aborts.set(task.conversationId, abort);
@@ -70,6 +84,7 @@ async function runAssignedTask(message: Record<string, unknown>): Promise<void> 
       });
     }
   } finally {
+    cancelApprovalsForConversation(task.conversationId);
     if (aborts.get(task.conversationId) === abort) {
       aborts.delete(task.conversationId);
     }
@@ -121,10 +136,19 @@ client.on("user_steer", async (message) => {
   });
 });
 
+/** Platform ConfirmCard → resolve request_user_decision waits. */
+client.on("user_input", async (message) => {
+  const requestId = String(message.request_id || message.requestId || "").trim();
+  if (!requestId) return;
+  const response = message.response ?? message.decision ?? message.text ?? "cancel";
+  resolveApproval(requestId, response);
+});
+
 /** Platform Interrupt button → abort in-flight session.prompt / tool children. */
 client.on("user_interrupt", async (message) => {
   const conversationId = String(message.conversation_id || message.conversationId || "").trim();
   if (!conversationId) return;
+  cancelApprovalsForConversation(conversationId);
   const action = String(message.action || "cancel").toLowerCase();
   const abort = aborts.get(conversationId);
   if (abort) {
@@ -186,18 +210,21 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
       ? "Within authorized scope, maximize verified findings, flags, and challenge unlocks with evidence-backed booking. Enumerate challenges yourself. Do not complete until remaining recon items are solved or proven blocked; complete needs audit_notes, remaining_unsolved=0, and harness gates. Partial clearance is not done."
       : undefined;
 
-  const expertName =
+  // Persona labels are untrusted product config — strip prompt-hostile chars early.
+  const expertNameRaw =
     typeof message.expert_name === "string"
       ? message.expert_name
       : typeof message.expertName === "string"
         ? message.expertName
         : undefined;
-  const expertId =
+  const expertIdRaw =
     typeof message.expert_id === "string"
       ? message.expert_id
       : typeof message.expertId === "string"
         ? message.expertId
         : undefined;
+  const expertName = expertNameRaw ? sanitizePromptLabel(expertNameRaw, "") || undefined : undefined;
+  const expertId = expertIdRaw ? sanitizePromptLabel(expertIdRaw, "") || undefined : undefined;
 
   const engagementTemplate =
     typeof message.engagement_template === "string"

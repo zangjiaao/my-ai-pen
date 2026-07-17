@@ -15,6 +15,7 @@ from app.models.expert import Expert
 from app.models.node import Node, PLATFORM_AGENT_NODE_ID
 from app.services.expert_instances import (
     expert_to_dict,
+    validate_expert_color,
     validate_expert_name,
     validate_pack_for_node,
 )
@@ -24,19 +25,21 @@ router = APIRouter(prefix="/api/experts", tags=["experts"])
 
 
 class ExpertCreate(BaseModel):
-    name: str = Field(..., min_length=1, max_length=128)
+    name: str = Field(..., min_length=1, max_length=64)
     pack_id: str = Field(..., min_length=1, max_length=64)
     node_id: str = Field(..., min_length=1)
-    display_name: str | None = Field(None, max_length=255)
+    display_name: str | None = Field(None, max_length=64)
     description: str | None = None
+    color: str | None = Field(None, max_length=32)
 
 
 class ExpertUpdate(BaseModel):
-    name: str | None = Field(None, min_length=1, max_length=128)
+    name: str | None = Field(None, min_length=1, max_length=64)
     pack_id: str | None = Field(None, min_length=1, max_length=64)
     node_id: str | None = Field(None, min_length=1)
-    display_name: str | None = Field(None, max_length=255)
+    display_name: str | None = Field(None, max_length=64)
     description: str | None = None
+    color: str | None = Field(None, max_length=32)
     enabled: bool | None = None
 
 
@@ -123,6 +126,10 @@ async def create_expert(
         pack = validate_pack_for_node(node.config, body.pack_id)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
+    try:
+        color = validate_expert_color(body.color)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
 
     try:
         user_uuid = uuid.UUID(str(current_user["user_id"]))
@@ -138,6 +145,7 @@ async def create_expert(
         pack_id=pack,
         node_id=node.id,
         description=(body.description or "").strip() or None,
+        color=color,
         enabled=True,
     )
     db.add(expert)
@@ -232,6 +240,11 @@ async def update_expert(
     expert.node_id = node.id
     if body.description is not None:
         expert.description = body.description.strip() or None
+    if body.color is not None:
+        try:
+            expert.color = validate_expert_color(body.color)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
     if body.enabled is not None:
         expert.enabled = bool(body.enabled)
 

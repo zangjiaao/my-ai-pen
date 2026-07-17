@@ -12,10 +12,10 @@ import { ApiError, authFetch } from "../lib/api";
 import { normalizeExecutionStatus } from "../lib/status";
 import { PHASES, PHASE_LABELS, phaseLabel } from "../lib/phase";
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
-import { Check, ChevronDown, Shield, Target, Upload } from "lucide-react";
+import { Check, ChevronDown, Target, Upload } from "lucide-react";
 import type { AgentIdentity, Conversation, Message } from "../lib/types";
 import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../lib/securityTypes";
-import { ENGAGEMENT_TEMPLATES, expertLabel, type ExpertId } from "../lib/experts";
+import { ENGAGEMENT_TEMPLATES, expertLabel, resolveExpertColor, type ExpertId } from "../lib/experts";
 
 const ACTIVE_CONVERSATION_KEY = "active_conversation_id";
 /** Set by AssetPage when launching a task from selected hosts/ports. */
@@ -33,6 +33,7 @@ type ProductExpert = {
   node_status?: string | null;
   enabled?: boolean;
   description?: string | null;
+  color?: string | null;
 };
 
 /** @mention picker entry: workspace assistant (default seat) or product expert. */
@@ -47,6 +48,8 @@ type MentionTarget = {
   nodeId: string;
   packId?: string;
   expertId?: string;
+  /** Accent color for partner chip / list (#RRGGBB). */
+  color?: string;
   status?: string;
 };
 
@@ -413,17 +416,14 @@ export default function ConversationPage() {
     const pentestNodeIds = agentNodes.filter(node => node.type === "pentest").map(node => node.id);
     return activeConversation?.node_id || activeConversationNodeId || (pentestNodeIds.length === 1 ? pentestNodeIds[0] : null);
   }, [activeConversation?.node_id, activeConversationNodeId, agentNodes]);
-  /** Display labels: expert id → @name (preferred), node id → physical name (fallback). */
+  /** Display labels: product expert id → name only (never physical node name as speaker). */
   const agentNameById = useMemo(() => {
     const map: Record<string, string> = {};
-    for (const node of agentNodes) {
-      map[node.id] = node.name;
-    }
     for (const e of productExperts) {
       map[e.id] = e.name;
     }
     return map;
-  }, [agentNodes, productExperts]);
+  }, [productExperts]);
   const approvalDecisionByRequestId = useMemo(() => {
     const decisions: Record<string, "authorize" | "cancel"> = {};
     for (const message of messages) {
@@ -997,6 +997,24 @@ export default function ConversationPage() {
       void fetchAll();
       void refreshConversationState(convId);
     },
+    partner_switch: (msg) => {
+      // Platform applied an authorized handoff — align the partner chip with sticky expert.
+      const m = msg as Record<string, unknown>;
+      const expertId = String(m.expert_id || "").trim();
+      const expertName = String(m.expert_name || "").trim();
+      const packId = String(m.pack_id || m.engagement || "").trim();
+      const match = mentionTargets.find(
+        (t) =>
+          t.kind === "expert" &&
+          ((expertId && t.expertId === expertId) ||
+            (expertName && t.name === expertName) ||
+            (packId && t.packId === packId)),
+      );
+      if (match) {
+        selectedMentionRef.current = match;
+        setSelectedMention(match);
+      }
+    },
     text: (msg) => {
       upsertStreamedAgentText(msg, "text");
       // Chat-only platform/expert replies must never leave the session stuck in working.
@@ -1239,6 +1257,7 @@ export default function ConversationPage() {
         nodeId: e.node_id,
         packId: e.pack_id,
         expertId: e.id,
+        color: resolveExpertColor(e.color, e.id),
         status: e.node_status || undefined,
       });
     }
@@ -1942,7 +1961,9 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               <div className="relative rounded-2xl border border-hairline bg-canvas shadow-[0_1px_2px_rgba(0,0,0,0.04)] focus-within:border-ink/40 focus-within:shadow-[0_2px_8px_rgba(0,0,0,0.06)]">
                 {mentionState && mentionOptions.length > 0 && (
                   <div className="absolute bottom-full left-0 z-20 mb-2 w-80 overflow-hidden rounded-xl border border-hairline bg-canvas shadow-lg">
-                    {mentionOptions.map((target) => (
+                    {mentionOptions.map((target) => {
+                      const accent = target.color || resolveExpertColor(null, target.expertId || target.key);
+                      return (
                       <button
                         key={target.key}
                         type="button"
@@ -1952,9 +1973,11 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                         }}
                         className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm transition-colors hover:bg-surface-default"
                       >
-                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-canvas-inset text-ink-secondary">
-                          <Shield size={14} />
-                        </span>
+                        <span
+                          className="h-2.5 w-2.5 shrink-0 rounded-full"
+                          style={{ backgroundColor: accent }}
+                          aria-hidden
+                        />
                         <span className="min-w-0 flex-1">
                           <span className="block truncate font-medium text-ink">
                             {target.label || target.name}
@@ -1971,7 +1994,8 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                               : expertLabel(target.packId)}
                         </span>
                       </button>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
                 <div className="relative min-w-0">
@@ -2044,17 +2068,19 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                           setPartnerMenuOpen((open) => !open);
                           setModeMenuOpen(false);
                         }}
-                        className={`inline-flex h-8 max-w-[13rem] items-center gap-1.5 rounded-full pl-1.5 pr-2 text-xs leading-none text-ink transition-colors ${
+                        className={`inline-flex h-8 max-w-[13rem] items-center gap-1.5 rounded-full pl-2 pr-2 text-xs leading-none text-ink transition-colors ${
                           partnerMenuOpen ? "bg-surface-elevated ring-1 ring-hairline" : "bg-canvas-inset hover:bg-surface-elevated"
                         }`}
                       >
                         <span
-                          className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${
-                            "bg-status-running text-white"
-                          }`}
-                        >
-                          <Shield size={11} />
-                        </span>
+                          className="h-2 w-2 shrink-0 rounded-full"
+                          style={{
+                            backgroundColor:
+                              activePartner?.color ||
+                              resolveExpertColor(null, activePartner?.expertId || activePartner?.key || "none"),
+                          }}
+                          aria-hidden
+                        />
                         <span className="min-w-0 truncate font-medium leading-none">
                           {activePartner?.label || activePartner?.name || "选择专家"}
                         </span>
@@ -2080,6 +2106,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                                 : t.status === "offline"
                                   ? "离线"
                                   : expertLabel(t.packId);
+                            const accent = t.color || resolveExpertColor(null, t.expertId || t.key);
                             return (
                               <button
                                 key={t.key}
@@ -2094,9 +2121,11 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                                   selected ? "bg-surface-elevated" : "hover:bg-surface-default"
                                 }`}
                               >
-                                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-status-running/15 text-status-running">
-                                  <Shield size={15} />
-                                </span>
+                                <span
+                                  className="h-2.5 w-2.5 shrink-0 rounded-full"
+                                  style={{ backgroundColor: accent }}
+                                  aria-hidden
+                                />
                                 <span className="min-w-0 flex-1">
                                   <span className="flex items-center gap-1.5">
                                     <span className="truncate text-sm font-medium text-ink">

@@ -354,6 +354,24 @@ async def _set_conversation_status(conv_id: str, status: str) -> bool:
         return False
 
 
+async def _session_worker_count(conv_id: str | None) -> int:
+    """How many nodes currently track a work-burst on this conversation."""
+    if not conv_id:
+        return 0
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+
+        async with async_session() as db:
+            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(str(conv_id))))
+            c = r.scalar_one_or_none()
+            if not c:
+                return 0
+            return len(_workers_from_context(c.context if isinstance(c.context, dict) else {}))
+    except Exception:
+        return 0
+
+
 def _workers_from_context(context: dict | None) -> dict[str, dict]:
     raw = (context or {}).get("workers") if isinstance(context, dict) else None
     if not isinstance(raw, dict):
@@ -593,14 +611,23 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
             msg["engagement"] = str(msg.get("engagement") or msg.get("role_pack") or "default")
             if str(msg.get("engagement") or "").strip().lower() in {"", "consult", "workspace"}:
                 msg["engagement"] = "default"
-            _strip_expert_fields(msg)
             content = msg.get("content")
             if isinstance(content, dict):
                 content["agent_source"] = "default"
                 content["engagement"] = "default"
+            # Product experts may use pack=default (e.g. 平台助理). Keep sticky
+            # expert_id/name for UI speaker labels — never show physical node name.
+            sticky_id, sticky_name = await _conversation_expert_label(conv_id)
+            if sticky_id or sticky_name:
+                if sticky_id and not str(msg.get("expert_id") or "").strip():
+                    msg["expert_id"] = sticky_id
+                if sticky_name and not str(msg.get("expert_name") or "").strip():
+                    msg["expert_name"] = sticky_name
+            else:
+                _strip_expert_fields(msg)
         else:
             msg["agent_source"] = str(msg.get("agent_source") or "pentest")
-            # Expert speakers only: attach sticky product expert for UI persona.
+            # Expert speakers: attach sticky product expert for UI persona.
             sticky_id, sticky_name = await _conversation_expert_label(conv_id)
             if sticky_id and not str(msg.get("expert_id") or "").strip():
                 msg["expert_id"] = sticky_id
@@ -719,7 +746,23 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
     if msg.get("type") == "request_decision":
         request_id = msg.get("request_id") or str(uuid.uuid4())
         msg["request_id"] = request_id
-        pending_approvals[request_id] = {"conversation_id": conv_id, "node_id": client_id}
+        # Persist structured handoff/confirm intent so authorize can switch expert sticky.
+        # Do NOT fall back to msg expert_id/name — those are the *requesting* speaker
+        # (often 平台助理) stamped for UI attribution, not the handoff destination.
+        pending_approvals[request_id] = {
+            "conversation_id": conv_id,
+            "node_id": client_id,
+            "kind": str(msg.get("kind") or "confirm").strip().lower() or "confirm",
+            "handoff_pack_id": str(
+                msg.get("handoff_pack_id") or msg.get("handoff_pack") or ""
+            ).strip()
+            or None,
+            "handoff_expert_id": str(msg.get("handoff_expert_id") or "").strip() or None,
+            "handoff_expert_name": str(msg.get("handoff_expert_name") or "").strip() or None,
+            "target": msg.get("target"),
+            "proposed_action": msg.get("proposed_action"),
+            "question": msg.get("question"),
+        }
         actor_uuid = _uuid(client_id)
         if actor_uuid:
             await _audit(
@@ -729,7 +772,12 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
                 resource_type="conversation",
                 resource_id=_uuid(conv_id),
                 conversation_id=_uuid(conv_id),
-                detail={"request_id": request_id, "risk_level": msg.get("risk_level")},
+                detail={
+                    "request_id": request_id,
+                    "risk_level": msg.get("risk_level"),
+                    "kind": pending_approvals[request_id].get("kind"),
+                    "handoff_pack_id": pending_approvals[request_id].get("handoff_pack_id"),
+                },
             )
 
 
@@ -1667,7 +1715,11 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                 "target": msg.get("target", ""),
                 "expires_at": msg.get("expires_at", ""),
                 "options": ["authorize", "cancel"],
+                "kind": str(msg.get("kind") or "confirm").strip().lower() or "confirm",
             }
+            for key in ("handoff_pack_id", "handoff_expert_id", "handoff_expert_name", "pack_id"):
+                if msg.get(key) is not None and str(msg.get(key) or "").strip():
+                    content[key] = str(msg.get(key)).strip()
         elif msg_type == "completion_blocked":
             msg_type = "status"
             content = {
@@ -1709,41 +1761,40 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
             agent_node_id = _agent_node_id(msg)
             if agent_node_id:
                 content["agent_node_id"] = agent_node_id
-            # Only stamp expert persona when THIS message is from an expert speaker.
-            # Never relabel default-seat rows with sticky expert (role_pack=default included).
+            # Stamp product expert persona for UI. Default seat still has expert
+            # personas (pack=default experts); only strip when no sticky expert.
             sticky_eng = None
             try:
                 sticky_eng = await _conversation_task_engagement(str(conv_id)) if conv_id else None
             except Exception:
                 sticky_eng = None
             is_default_seat = _is_default_seat_message(msg, sticky_engagement=sticky_eng)
-            agent_source = str(content.get("agent_source") or msg.get("agent_source") or "").strip().lower()
             if is_default_seat:
-                _strip_expert_fields(msg)
-                content.pop("expert_id", None)
-                content.pop("expert_name", None)
                 content["engagement"] = "default"
                 content["agent_source"] = "default"
                 msg["agent_source"] = "default"
                 msg["engagement"] = "default"
+            expert_id = str(msg.get("expert_id") or content.get("expert_id") or "").strip()
+            expert_name = str(msg.get("expert_name") or content.get("expert_name") or "").strip()
+            if expert_id or expert_name:
+                if expert_id:
+                    content["expert_id"] = expert_id
+                    msg["expert_id"] = expert_id
+                if expert_name:
+                    content["expert_name"] = expert_name
+                    msg["expert_name"] = expert_name
             else:
-                expert_id = str(msg.get("expert_id") or content.get("expert_id") or "").strip()
-                expert_name = str(msg.get("expert_name") or content.get("expert_name") or "").strip()
-                if expert_id or expert_name:
-                    if expert_id:
-                        content["expert_id"] = expert_id
-                        msg["expert_id"] = expert_id
-                    if expert_name:
-                        content["expert_name"] = expert_name
-                        msg["expert_name"] = expert_name
-                elif agent_source in {"pentest", "expert", ""}:
-                    sticky_id, sticky_name = await _conversation_expert_label(str(conv_id))
-                    if sticky_id:
-                        content["expert_id"] = sticky_id
-                        msg["expert_id"] = sticky_id
-                    if sticky_name:
-                        content["expert_name"] = sticky_name
-                        msg["expert_name"] = sticky_name
+                sticky_id, sticky_name = await _conversation_expert_label(str(conv_id))
+                if sticky_id:
+                    content["expert_id"] = sticky_id
+                    msg["expert_id"] = sticky_id
+                if sticky_name:
+                    content["expert_name"] = sticky_name
+                    msg["expert_name"] = sticky_name
+                elif is_default_seat:
+                    _strip_expert_fields(msg)
+                    content.pop("expert_id", None)
+                    content.pop("expert_name", None)
 
         dedupe_key = _message_dedupe_key(role=role, original_type=str(original_type), stored_type=str(msg_type), content=content)
         if dedupe_key:
@@ -2471,21 +2522,34 @@ async def _remember_conversation_task(
                 pack = normalize_pack_id(eng)
                 if pack:
                     task_blob["role"] = pack
-            # Default seat: clear sticky expert persona so later Node frames are not relabeled.
+            # Sticky product expert persona for UI labels (virtual image, not node name).
+            # Includes pack=default experts (e.g. 平台助理) — seat ≠ absence of persona.
             pack_now = normalize_pack_id(eng) if eng else None
             is_default_eng = (not eng) or pack_now == "default" or eng.lower() in {
                 "default",
                 "consult",
                 "workspace",
             }
-            if is_default_eng and engagement is not None and str(engagement).strip():
-                # Explicit default dispatch — do not inherit prior expert sticky.
+            eid = str(expert_id or "").strip()
+            ename = str(expert_name or "").strip()
+            if eid or ename:
+                # Explicit expert this turn — always keep (including default pack).
+                if eid:
+                    task_blob["expert_id"] = eid
+                else:
+                    task_blob.pop("expert_id", None)
+                if ename:
+                    task_blob["expert_name"] = ename
+                else:
+                    task_blob.pop("expert_name", None)
+            elif is_default_eng and engagement is not None and str(engagement).strip():
+                # Bare default seat dispatch without expert — clear prior persona.
                 task_blob.pop("expert_id", None)
                 task_blob.pop("expert_name", None)
             else:
-                # Sticky product expert persona for UI labels (virtual image, not node name).
-                eid = str(expert_id or prev_task.get("expert_id") or "").strip()
-                ename = str(expert_name or prev_task.get("expert_name") or "").strip()
+                # Inherit sticky for expert-pack follow-ups that omit fields.
+                eid = str(prev_task.get("expert_id") or "").strip()
+                ename = str(prev_task.get("expert_name") or "").strip()
                 if eid:
                     task_blob["expert_id"] = eid
                 if ename:
@@ -2546,6 +2610,213 @@ async def _conversation_expert_label(conv_id: str | None) -> tuple[str | None, s
     except Exception:
         return None, None
 
+
+async def _apply_authorized_handoff(conv_id: str | None, approval: dict) -> None:
+    """When user Authorizes a handoff card, switch sticky expert + notify UI partner chip.
+
+    Does not invent engagement from free text — pack/expert come only from the
+    structured request_decision fields the agent put on the card.
+    """
+    if not conv_id or not isinstance(approval, dict):
+        return
+    kind = str(approval.get("kind") or "").strip().lower()
+    pack_raw = str(approval.get("handoff_pack_id") or "").strip()
+    if kind not in {"handoff", "transfer", "delegate"} and not pack_raw:
+        return
+    pack = normalize_pack_id(pack_raw) if pack_raw else None
+    if not pack or pack == "default":
+        return
+
+    eid = str(approval.get("handoff_expert_id") or "").strip() or None
+    ename = str(approval.get("handoff_expert_name") or "").strip() or None
+    node_hint = str(approval.get("node_id") or "").strip()
+    expert_obj = None
+
+    try:
+        experts = await _load_enabled_experts()
+        # If an explicit handoff expert id was given, verify its pack matches.
+        if eid:
+            for e in experts:
+                if str(getattr(e, "id", "") or "") != eid:
+                    continue
+                if str(getattr(e, "pack_id", "") or "") == pack:
+                    expert_obj = e
+                    ename = ename or str(getattr(e, "name", "") or "") or None
+                else:
+                    # Wrong speaker id accidentally stored — ignore and resolve by pack.
+                    eid = None
+                break
+        if expert_obj is None:
+            match = None
+            for e in experts:
+                if str(getattr(e, "pack_id", "") or "") != pack:
+                    continue
+                if node_hint and str(getattr(e, "node_id", "") or "") == node_hint:
+                    match = e
+                    break
+                if match is None:
+                    match = e
+            if match is not None:
+                expert_obj = match
+                eid = str(getattr(match, "id", "") or "") or None
+                ename = ename or str(getattr(match, "name", "") or "") or None
+    except Exception as e:
+        print(f"[WS] handoff expert resolve error: {e}")
+
+    if not eid:
+        print(f"[WS] handoff: no enabled product expert for pack={pack}")
+        return
+
+    await _remember_conversation_expert(
+        conv_id,
+        expert_id=eid,
+        expert_name=ename,
+        engagement=pack,
+    )
+
+    # Persist target/scope from the authorization card when present.
+    target_raw = approval.get("target")
+    target: dict = {}
+    if isinstance(target_raw, dict) and str(target_raw.get("value") or "").strip():
+        target = dict(target_raw)
+    elif isinstance(target_raw, str) and target_raw.strip():
+        val = target_raw.strip()
+        ttype = "url" if val.lower().startswith(("http://", "https://")) else "host"
+        target = {"type": ttype, "value": val}
+    else:
+        # Best-effort: first URL/host in proposed_action (structured card body, not free NLP invent).
+        from app.services.agent_router import extract_targets
+
+        found = extract_targets(str(approval.get("proposed_action") or approval.get("question") or ""))
+        if found:
+            val = found[0]
+            ttype = "url" if val.lower().startswith(("http://", "https://")) else "host"
+            target = {"type": ttype, "value": val}
+
+    proposed = str(approval.get("proposed_action") or "").strip()
+    question = str(approval.get("question") or "").strip()
+    instruction = proposed or question or f"Continue authorized {pack} assessment."
+    scope = {"allow": [target["value"]], "deny": []} if target.get("value") else {"allow": [], "deny": []}
+
+    await _remember_conversation_task(
+        conv_id,
+        target=target or {},
+        scope=scope,
+        instruction=instruction,
+        engagement=pack,
+        expert_id=eid,
+        expert_name=ename,
+    )
+
+    try:
+        await _broadcast_to_conversation(
+            conv_id,
+            json.dumps(
+                {
+                    "type": "partner_switch",
+                    "conversation_id": conv_id,
+                    "expert_id": eid,
+                    "expert_name": ename,
+                    "pack_id": pack,
+                    "engagement": pack,
+                    "reason": "authorized_handoff",
+                },
+                ensure_ascii=False,
+            ),
+        )
+    except Exception as e:
+        print(f"[WS] partner_switch broadcast error: {e}")
+
+    # Kick off destination expert ASAP. Requester (default seat) is often still
+    # busy finishing the approval tool — free the session then dispatch.
+    node_id = str(getattr(expert_obj, "node_id", "") or node_hint or "").strip()
+    if not node_id or node_id not in node_connections:
+        print(f"[WS] handoff: destination node offline pack={pack} node={node_id[:8] if node_id else '-'}")
+        return
+
+    owner_id, _ = await _conversation_owner(conv_id)
+    client_id = str(owner_id or "") or "system"
+    dispatch_msg = {
+        "type": "user_message",
+        "conversation_id": conv_id,
+        "text": instruction,
+        "initial_instruction": instruction,
+        "engagement": pack,
+        "role": pack,
+        "expert_id": eid,
+        "expert_name": ename,
+        "target": target or {},
+        "scope": scope,
+        "agent_node_id": node_id,
+    }
+
+    import asyncio
+
+    async def _handoff_dispatch_when_ready() -> None:
+        # Stop the requesting seat so Node is not "busy" on this conversation.
+        try:
+            await _interrupt_all_session_workers(
+                conv_id,
+                {
+                    "type": "user_interrupt",
+                    "action": "cancel",
+                    "conversation_id": conv_id,
+                    "reason": "authorized_handoff",
+                },
+            )
+        except Exception as exc:
+            print(f"[WS] handoff interrupt: {exc}")
+
+        for _ in range(60):
+            try:
+                if await _session_worker_count(conv_id) == 0:
+                    break
+            except Exception:
+                break
+            await asyncio.sleep(0.12)
+
+        # Ensure session can run the new expert (interrupt may have settled status).
+        try:
+            from app.db.base import async_session
+            from app.models.conversation import Conversation
+
+            async with async_session() as db:
+                r = await db.execute(
+                    select(Conversation).where(Conversation.id == uuid.UUID(str(conv_id)))
+                )
+                c = r.scalar_one_or_none()
+                if c and str(c.status or "").lower() in {
+                    "canceled",
+                    "cancelled",
+                    "failed",
+                    "incomplete",
+                    "completed",
+                }:
+                    try:
+                        transition_conversation(c, "running")
+                        await db.commit()
+                    except ConversationStatusError:
+                        pass
+        except Exception as exc:
+            print(f"[WS] handoff status repair: {exc}")
+
+        try:
+            await _dispatch_task_assign_to_node(
+                conv_id=conv_id,
+                client_id=client_id,
+                msg=dispatch_msg,
+                node_id=node_id,
+                engagement=pack,
+                expert_id=eid,
+                expert_name=ename,
+                resume_context=None,
+                force_working=True,
+            )
+            print(f"[WS] handoff dispatch → pack={pack} expert={ename or eid} node={node_id[:8]}")
+        except Exception as exc:
+            print(f"[WS] handoff dispatch error: {exc}")
+
+    asyncio.create_task(_handoff_dispatch_when_ready())
 
 async def _remember_conversation_expert(
     conv_id: str | None,
@@ -2901,14 +3172,23 @@ def _message_with_decision_target(msg: dict, decision) -> dict:
     }
 
 def _is_default_participant(msg: dict) -> bool:
-    """True when composer selected workspace assistant (built-in default seat)."""
+    """True when the turn is bare default seat (no product expert persona).
+
+    Product experts with pack=default (e.g. 平台助理) still carry expert_id/name
+    and are NOT bare default — they need sticky expert labels in the UI.
+    """
     from app.services.expert_offers import BUILTIN_SEAT_IDS, normalize_pack_id
 
-    eng = str(msg.get("engagement") or msg.get("role") or "").strip().lower()
+    content = msg.get("content") if isinstance(msg.get("content"), dict) else {}
+    expert_id = str(msg.get("expert_id") or content.get("expert_id") or "").strip()
+    expert_name = str(msg.get("expert_name") or content.get("expert_name") or "").strip()
+    # Explicit product expert always wins over pack/seat detection.
+    if expert_id or expert_name:
+        return False
+
+    eng = str(msg.get("engagement") or msg.get("role") or content.get("engagement") or "").strip().lower()
     if eng in BUILTIN_SEAT_IDS:
         return True
-    if str(msg.get("expert_id") or "").strip() or str(msg.get("expert_name") or "").strip():
-        return False
     pack = normalize_pack_id(eng) if eng else "default"
     if pack and pack != "default":
         return False
@@ -3648,7 +3928,24 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         "response": decision,
                         "decision": decision,
                     }
-                    sent = await _send_to_bound_node(conv_id, json.dumps(node_msg))
+                    # Prefer the node that issued the approval (may differ from sticky bind).
+                    sent = False
+                    approval_node = str(approval.get("node_id") or "").strip()
+                    if approval_node and approval_node in node_connections:
+                        try:
+                            await node_connections[approval_node].send_text(
+                                json.dumps(node_msg, ensure_ascii=False)
+                            )
+                            sent = True
+                        except Exception as e:
+                            print(f"[WS] approval user_input to node {approval_node[:8]}: {e}")
+                    if not sent:
+                        sent = await _send_to_bound_node(conv_id, json.dumps(node_msg))
+
+                    # Authorized handoff: switch sticky product expert so next turns run that pack.
+                    if str(decision).lower() in {"authorize", "approved", "yes"}:
+                        await _apply_authorized_handoff(conv_id, approval)
+
                     await _audit(
                         actor_type="user",
                         actor_id=uuid.UUID(client_id),
@@ -3656,7 +3953,13 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         resource_type="conversation",
                         resource_id=uuid.UUID(conv_id),
                         conversation_id=uuid.UUID(conv_id),
-                        detail={"request_id": request_id, "sent": sent, "node_id": approval.get("node_id")},
+                        detail={
+                            "request_id": request_id,
+                            "sent": sent,
+                            "node_id": approval.get("node_id"),
+                            "kind": approval.get("kind"),
+                            "handoff_pack_id": approval.get("handoff_pack_id"),
+                        },
                     )
 
                 elif msg.get("type") in ("user_steer", "user_interrupt") and conv_id:
