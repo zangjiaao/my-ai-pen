@@ -1,12 +1,12 @@
 # Evidence quality plan (Case collaboration prerequisite)
 
-> **Status:** living tracker  
-> **Phase scheme:** **A → B → C → D → E** (do not renumber)  
-> **Precedence:** `AGENTS.md` → `prd.md` → this plan / `multi-expert-collaboration-plan.md`  
-> **Why:** Multi-expert Case collab assumes **shared findings/evidence** with usable proof. Without durable proof on the Case, `case_context` and “next expert continues” fail.  
+> **ARCHIVED 2026-07-17** — Phases **A–E complete**. Not implementation authority.  
+> Living behavior: `docs/prd.md`, `docs/node4-harness.md`, Node4 booking / `case_context` code.  
+> **Phase scheme (historical):** **A → B → C → D → E**  
+> **Why (historical):** Multi-expert Case collab needed shared findings/evidence with usable proof.  
 > **Non-goals:** Case shared-disk product; structured handoff protocol; stations.
 
-**Related:** `node4-harness.md`, `node-expert-offers.md`, `benchmarks/collab-playbook-b/`.
+**Related (living):** `docs/prd.md`, `docs/node4-harness.md`, `docs/node-expert-offers.md`.
 
 ---
 

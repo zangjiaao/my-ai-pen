@@ -1,4 +1,8 @@
-"""Asset API — one host (IP/domain) per asset, ports+services, tags for grouping."""
+"""Asset API — one host (IP/domain) per asset, ports+services+urls, tags for grouping.
+
+Ownership: users create/delete host rows. Agents only enrich surface fields
+(ports, services, URLs, API endpoints) on hosts that already exist.
+"""
 from __future__ import annotations
 
 import re
@@ -19,8 +23,10 @@ from app.services.asset_ledger import (
     apply_discover_to_asset_fields,
     conversation_target_blobs,
     enrich_properties_ports,
+    extract_api_endpoints,
     extract_ports,
     extract_services,
+    extract_urls,
     infer_asset_type,
     is_valid_ledger_address,
     merge_discover_properties,
@@ -90,6 +96,13 @@ class ServiceOut(BaseModel):
     note: str | None = None
 
 
+class ApiEndpointOut(BaseModel):
+    method: str | None = None
+    path: str | None = None
+    url: str | None = None
+    name: str | None = None
+
+
 class AssetOut(BaseModel):
     id: str
     user_id: str | None = None
@@ -105,6 +118,8 @@ class AssetOut(BaseModel):
     source_label: str = ""
     open_ports: list[str] = Field(default_factory=list)
     services: list[ServiceOut] = Field(default_factory=list)
+    urls: list[str] = Field(default_factory=list)
+    api_endpoints: list[ApiEndpointOut] = Field(default_factory=list)
     ports_summary: str = ""
     tech_summary: str = ""
     risk: RiskSummaryOut = Field(default_factory=RiskSummaryOut)
@@ -551,15 +566,24 @@ async def upsert_discovered_asset(
     asset_type: str | None = None,
     open_ports: object = None,
     services: object = None,
+    urls: object = None,
+    api_endpoints: object = None,
     port: object = None,
     conversation_id: uuid.UUID | None = None,
     node_id: uuid.UUID | None = None,
-    source: str = "agent_discovered",
+    source: str | None = None,
     identity_scope: str | None = None,
-) -> Asset:
+    allow_create: bool = False,
+) -> Asset | None:
     """
-    Upsert agent-discovered host asset by exact (user_id, host).
-    Merges ports/services; never merges different hosts into one row.
+    Enrich a user-owned host asset by exact (user_id, host).
+
+    Policy: agents never create ledger hosts. Only merge ports/services/urls/
+    api_endpoints onto an existing row. Returns None when the host is unknown
+    (caller should not invent an asset).
+
+    `allow_create=True` is reserved for non-agent paths (tests / rare import
+    helpers). Production agent WS always leaves it False.
     """
     host, addr_port = split_host_port(address)
     if not host:
@@ -567,6 +591,9 @@ async def upsert_discovered_asset(
     port_norm = normalize_port(port) or addr_port
 
     asset = await find_asset_by_host(db, user_id, host)
+    if not asset and not allow_create:
+        return None
+
     existing_fields = None
     if asset:
         existing_fields = {
@@ -583,10 +610,13 @@ async def upsert_discovered_asset(
         asset_type=asset_type,
         open_ports=open_ports,
         services=services,
+        urls=urls,
+        api_endpoints=api_endpoints,
         source=source,
         port=port_norm,
     )
     if not asset:
+        # Explicit create path only (user/import helpers) — never agent default.
         asset = Asset(
             id=uuid.uuid4(),
             user_id=user_id,
@@ -596,14 +626,17 @@ async def upsert_discovered_asset(
             address=fields["address"],
             type=fields["type"],
             tags=[],
-            source=fields["source"],
+            source=fields["source"] if fields.get("source") != "agent_discovered" else "manual",
             properties=fields["properties"],
         )
         db.add(asset)
     else:
-        asset.name = fields["name"]
-        asset.type = fields["type"]
-        asset.source = fields["source"]
+        # Keep user name/type/source stable; only fill empty name, always merge surface.
+        if not (asset.name or "").strip():
+            asset.name = fields["name"]
+        if not (asset.type or "").strip():
+            asset.type = fields["type"]
+        # Never rewrite ownership source from agent enrich.
         asset.properties = fields["properties"]
         if conversation_id:
             asset.conversation_id = conversation_id
@@ -790,6 +823,16 @@ def _out(a: Asset, related: list[RelatedVulnOut] | None = None) -> AssetOut:
         for s in services_raw
         if s.get("port")
     ]
+    api_raw = extract_api_endpoints(props)
+    api_endpoints = [
+        ApiEndpointOut(
+            method=str(e["method"]) if e.get("method") else None,
+            path=str(e["path"]) if e.get("path") else None,
+            url=str(e["url"]) if e.get("url") else None,
+            name=str(e["name"]) if e.get("name") else None,
+        )
+        for e in api_raw
+    ]
     return AssetOut(
         id=str(a.id),
         user_id=str(a.user_id) if a.user_id else None,
@@ -805,6 +848,8 @@ def _out(a: Asset, related: list[RelatedVulnOut] | None = None) -> AssetOut:
         source_label=source_label(a.source),
         open_ports=extract_ports(props),
         services=services,
+        urls=extract_urls(props),
+        api_endpoints=api_endpoints,
         ports_summary=ports_summary(props),
         tech_summary=tech_summary(props),
         risk=RiskSummaryOut(**risk),

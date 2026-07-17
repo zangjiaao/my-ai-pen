@@ -14,7 +14,10 @@ import {
 import type { PanelAgentTracker } from "./panel-agents.js";
 import { buildTodoPlanTreePayload } from "./plan-projection.js";
 
-const TEXT_STREAM_FLUSH_MS = 80;
+/** First token goes out immediately; subsequent flushes coalesce. */
+const TEXT_STREAM_FLUSH_MS = 40;
+/** Force a flush when buffered growth exceeds this (chars) even before the timer. */
+const TEXT_STREAM_MIN_CHARS = 24;
 const DEFAULT_CHECKPOINT_MIN_MS = 10_000;
 
 export type ObservabilityContext = {
@@ -69,64 +72,99 @@ export function assistantText(message: unknown): string {
     .join("\n");
 }
 
+/** Extract thinking/reasoning blocks from a Pi assistant partial. */
+export function assistantThinking(message: unknown): string {
+  if (!message || typeof message !== "object") return "";
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((item: { type?: string }) => item?.type === "thinking")
+    .map((item: { thinking?: string; text?: string }) =>
+      String(item.thinking || item.text || ""),
+    )
+    .filter(Boolean)
+    .join("\n");
+}
+
+type StreamChannel = "text" | "thinking";
+
 /**
- * Stream assistant prose to the platform as type:"text" with stream_id
- * (same protocol ConversationPage already handles for Node2).
+ * Progressive stream of one content channel (visible text or thinking).
+ * Source of truth is the Pi partial message snapshot — never raw `+=` deltas.
  */
-export class PlatformTextStream {
+class ProgressiveContentStream {
   private sequence = 0;
   private streamId = "";
   private text = "";
   private lastSentText = "";
   private timer: ReturnType<typeof setTimeout> | undefined;
   private sending: Promise<void> = Promise.resolve();
+  private firstFlushPending = false;
 
   constructor(
     private readonly platform: PlatformSink,
     private readonly task: TaskEnvelope,
+    private readonly channel: StreamChannel,
+    private readonly extract: (message: unknown) => string,
   ) {}
 
-  async handle(event: { type?: string; message?: unknown; assistantMessageEvent?: { type?: string; delta?: string } }): Promise<void> {
-    const msg = event.message as { role?: string } | undefined;
-    if (event.type === "message_start" && msg?.role === "assistant") {
-      this.startStream();
-      this.text = assistantText(event.message);
-      await this.scheduleFlush();
-      return;
+  /**
+   * Apply a full partial snapshot (already includes latest delta).
+   * Never concatenate deltas — that produced doubled prefixes ("好的好的").
+   */
+  applySnapshot(message: unknown, ame?: { type?: string; delta?: string; partial?: unknown }): void {
+    const fromMessage = this.extract(message);
+    const fromPartial = ame?.partial !== undefined ? this.extract(ame.partial) : "";
+    // Prefer the longer non-empty snapshot; both should already be cumulative full text.
+    let next = fromMessage.length >= fromPartial.length ? fromMessage : fromPartial;
+    if (!next) {
+      // Last resort for providers that only send delta without updating partial body.
+      const delta = String(ame?.delta || "");
+      if (!delta) return;
+      if (!this.text) next = delta;
+      else if (delta.startsWith(this.text)) next = delta; // cumulative delta
+      else if (this.text.endsWith(delta)) next = this.text; // duplicate frame
+      else if (this.text.includes(delta) && delta.length < this.text.length) next = this.text;
+      else next = `${this.text}${delta}`; // true incremental token
     }
-
-    if (event.type === "message_update" && msg?.role === "assistant") {
-      if (!this.streamId) this.startStream();
-      if (event.assistantMessageEvent?.type === "text_delta") {
-        this.text += String(event.assistantMessageEvent.delta || "");
-      } else {
-        this.text = assistantText(event.message) || this.text;
-      }
-      await this.scheduleFlush();
-      return;
-    }
-
-    if (event.type === "message_end" && msg?.role === "assistant") {
-      if (!this.streamId) this.startStream();
-      this.text = assistantText(event.message) || this.text;
-      await this.flush();
-      this.streamId = "";
-      this.text = "";
-      this.lastSentText = "";
-    }
+    if (!next) return;
+    // Allow correction from a doubled longer string to a shorter clean one.
+    if (this.text && next.length < this.text.length && this.text.startsWith(next)) return;
+    this.text = next;
   }
 
-  /** Test helper: drive a complete assistant text emit without full Pi events. */
-  async emitFinalText(text: string): Promise<void> {
-    this.startStream();
-    this.text = text;
+  ensureStream(): void {
+    if (!this.streamId) this.startStream();
+  }
+
+  async maybeFlush(): Promise<void> {
+    if (!this.text) return;
+    await this.scheduleFlush();
+  }
+
+  async finalFlush(message?: unknown): Promise<void> {
+    if (message !== undefined) this.applySnapshot(message);
+    this.ensureStream();
     await this.flush();
+    this.reset();
+  }
+
+  async dispose(): Promise<void> {
+    await this.flush();
+  }
+
+  private reset(): void {
     this.streamId = "";
     this.text = "";
     this.lastSentText = "";
+    this.firstFlushPending = false;
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = undefined;
+    }
   }
 
-  async flush(): Promise<void> {
+  private async flush(): Promise<void> {
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = undefined;
@@ -136,33 +174,124 @@ export class PlatformTextStream {
     const text = this.text;
     const streamId = this.streamId;
     this.lastSentText = text;
-    this.sending = this.sending.then(() =>
-      this.platform.send({
-        type: "text",
-        conversation_id: this.task.conversationId,
-        task_id: this.task.taskId,
-        content: { text, stream_id: streamId },
-      } as PlatformMessage),
-    );
-    return this.sending;
-  }
-
-  async dispose(): Promise<void> {
-    await this.flush();
+    this.firstFlushPending = false;
+    const type = this.channel === "thinking" ? "thinking" : "text";
+    const content =
+      this.channel === "thinking"
+        ? { text, reasoning: text, stream_id: streamId }
+        : { text, stream_id: streamId };
+    // Chain WS sends for order, but never await disk (caller platform must not block).
+    this.sending = this.sending
+      .then(() =>
+        this.platform.send({
+          type,
+          conversation_id: this.task.conversationId,
+          task_id: this.task.taskId,
+          content,
+          stream_id: streamId,
+        } as PlatformMessage),
+      )
+      .catch(() => {});
+    // Do not return the chain to callers — progressive UI must not wait on prior frames.
+    return Promise.resolve();
   }
 
   private startStream(): void {
     this.sequence += 1;
-    this.streamId = `n4-stream-${this.task.taskId}-${this.sequence}`;
+    this.streamId = `n4-${this.channel}-${this.task.taskId}-${this.sequence}`;
     this.text = "";
     this.lastSentText = "";
+    this.firstFlushPending = true;
   }
 
   private async scheduleFlush(): Promise<void> {
-    if (this.timer || !this.streamId || !this.text) return;
+    if (!this.streamId || !this.text) return;
+    if (this.firstFlushPending || this.text.length - this.lastSentText.length >= TEXT_STREAM_MIN_CHARS) {
+      await this.flush();
+      return;
+    }
+    if (this.timer) return;
     this.timer = setTimeout(() => {
+      this.timer = undefined;
       void this.flush();
     }, TEXT_STREAM_FLUSH_MS);
+  }
+}
+
+/**
+ * Stream assistant prose + thinking to the platform progressively.
+ */
+export class PlatformTextStream {
+  private readonly text: ProgressiveContentStream;
+  private readonly thinking: ProgressiveContentStream;
+
+  constructor(
+    platform: PlatformSink,
+    task: TaskEnvelope,
+  ) {
+    this.text = new ProgressiveContentStream(platform, task, "text", assistantText);
+    this.thinking = new ProgressiveContentStream(platform, task, "thinking", assistantThinking);
+  }
+
+  async handle(event: {
+    type?: string;
+    message?: unknown;
+    assistantMessageEvent?: { type?: string; delta?: string; partial?: unknown };
+  }): Promise<void> {
+    const msg = event.message as { role?: string } | undefined;
+    if (event.type === "message_start" && msg?.role === "assistant") {
+      this.text.ensureStream();
+      this.thinking.ensureStream();
+      this.text.applySnapshot(event.message, event.assistantMessageEvent);
+      this.thinking.applySnapshot(event.message, event.assistantMessageEvent);
+      await Promise.all([this.text.maybeFlush(), this.thinking.maybeFlush()]);
+      return;
+    }
+
+    if (event.type === "message_update" && msg?.role === "assistant") {
+      const ame = event.assistantMessageEvent;
+      const kind = String(ame?.type || "");
+      if (kind.startsWith("toolcall_")) return;
+
+      if (kind.startsWith("thinking_")) {
+        this.thinking.ensureStream();
+        this.thinking.applySnapshot(event.message, ame);
+        await this.thinking.maybeFlush();
+        return;
+      }
+
+      if (kind.startsWith("text_") || !kind) {
+        this.text.ensureStream();
+        this.text.applySnapshot(event.message, ame);
+        await this.text.maybeFlush();
+        return;
+      }
+      // Unknown update: try both channels from partial snapshot.
+      this.text.ensureStream();
+      this.thinking.ensureStream();
+      this.text.applySnapshot(event.message, ame);
+      this.thinking.applySnapshot(event.message, ame);
+      await Promise.all([this.text.maybeFlush(), this.thinking.maybeFlush()]);
+      return;
+    }
+
+    if (event.type === "message_end" && msg?.role === "assistant") {
+      await Promise.all([
+        this.text.finalFlush(event.message),
+        this.thinking.finalFlush(event.message),
+      ]);
+    }
+  }
+
+  /** Test helper: drive a complete assistant text emit without full Pi events. */
+  async emitFinalText(text: string): Promise<void> {
+    this.text.ensureStream();
+    this.text.applySnapshot({ role: "assistant", content: [{ type: "text", text }] });
+    await this.text.finalFlush();
+  }
+
+  async dispose(): Promise<void> {
+    await Promise.all([this.text.dispose(), this.thinking.dispose()]);
   }
 }
 

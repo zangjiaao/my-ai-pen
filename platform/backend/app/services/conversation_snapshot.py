@@ -172,12 +172,21 @@ def is_legacy_runtime_phase_node(node: dict) -> bool:
 def conversation_summary(c: Conversation) -> dict:
     from app.services.conversation_state import effective_conversation_status
 
+    context = c.context if isinstance(c.context, dict) else {}
+    workers = context.get("workers") if isinstance(context.get("workers"), dict) else {}
+    working = bool(workers)
+    # Row may lag behind workers (bind race); expose working for UI button SOT.
+    status = effective_conversation_status(c)
+    if working and status not in {"running"}:
+        status = "running"
+
     return {
         "id": str(c.id),
         "title": c.title,
         "node_id": str(c.node_id) if c.node_id else None,
         # Prefer terminal checkpoint when the row lagged (sidebar green vs gray).
-        "status": effective_conversation_status(c),
+        "status": status,
+        "working": working,
         "created_at": c.created_at.isoformat() if c.created_at else None,
         "last_active_at": c.last_active_at.isoformat() if c.last_active_at else None,
     }
@@ -298,8 +307,19 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     strix_note_items = strix_notes_from_checkpoint(checkpoint)
     strix_run = strix_run_from_checkpoint(checkpoint)
 
+    workers = context.get("workers") if isinstance(context.get("workers"), dict) else {}
+    working = bool(workers) or str(conv_status or "").lower() == "running"
+
     return {
         "conversation": conversation_summary(conversation),
+        "working": working,
+        "workers": [
+            {
+                "node_id": wid,
+                **(meta if isinstance(meta, dict) else {}),
+            }
+            for wid, meta in workers.items()
+        ],
         "messages": snapshot_message_items,
         "agents": agent_items,
         "strix_agents": strix_agent_items,

@@ -132,6 +132,9 @@ type ImportReportResult = {
 
 type ConversationSnapshot = {
   conversation?: Conversation;
+  /** Session-level expert work-burst flag (Node busy / workers). */
+  working?: boolean;
+  workers?: Array<Record<string, unknown>>;
   agent_state?: Record<string, unknown>;
   progress?: Progress;
   kanban?: KanbanSummary;
@@ -148,7 +151,7 @@ type ConversationSnapshot = {
 };
 
 export default function ConversationPage() {
-  const { conversations, fetchAll } = useConversationStore();
+  const { conversations, fetchAll, patchConversation } = useConversationStore();
   const queryClient = useQueryClient();
   const [activeId, setActiveId] = useState<string | null>(null);
   const [restoreAttempted, setRestoreAttempted] = useState(false);
@@ -197,6 +200,14 @@ export default function ConversationPage() {
   const [evidence, setEvidence] = useState<Array<Record<string, unknown>>>([]);
   const [taskContext, setTaskContext] = useState<Record<string, unknown> | undefined>();
   const [running, setRunning] = useState(false);
+  /** True while interrupt was sent and nodes have not yet reported idle. */
+  const [interrupting, setInterrupting] = useState(false);
+  /**
+   * Live stream bubbles (text/thinking) updated on every WS frame.
+   * Kept outside React Query so progressive tokens always re-render.
+   * Keyed by stream_id (preferred) or message_id.
+   */
+  const [liveStreams, setLiveStreams] = useState<Record<string, Message>>({});
   const [timelineCursorAt, setTimelineCursorAt] = useState<string | undefined>();
   const [selectedVulnerability, setSelectedVulnerability] = useState<Partial<SecurityVulnerability> | null>(null);
   const [selectedAsset, setSelectedAsset] = useState<Partial<SecurityAsset> | null>(null);
@@ -205,6 +216,30 @@ export default function ConversationPage() {
   /** Debounce high-frequency plan_tree_updated so Status/Tasks does not flicker. */
   const planTreeDebounceRef = useRef<number | null>(null);
   const planTreeRefreshThrottleRef = useRef<number>(0);
+  /**
+   * Optimistic "task just launched" flag. Prevents empty/created snapshots from
+   * flipping the composer between Send (disabled) and Interrupt while the backend
+   * catches up to status=running / work_status.
+   */
+  const launchOptimisticRef = useRef(false);
+  /** Prevents double-fire of the asset-page auto-launch effect. */
+  const pendingAssetLaunchDoneRef = useRef(false);
+  /** Latest loaders for the one-shot asset-page launch (avoids stale mount closure). */
+  const loadConversationRef = useRef<(id: string | null) => Promise<void>>(async () => {});
+  const launchTaskMessageRef = useRef<(opts: {
+    displayText: string;
+    text: string;
+    target?: { type: string; value: string } | null;
+    scope?: { allow: string[]; deny: string[] } | null;
+    forceNewConversation?: boolean;
+    conversationId?: string | null;
+    goalMode?: boolean;
+    goalObjective?: string;
+    engagement?: string;
+    engagementTemplate?: string;
+    allowPostex?: boolean;
+    expertId?: string;
+  }) => Promise<void>>(async () => {});
 
   const messageQuery = useInfiniteQuery({
     queryKey: ["conversation-messages", activeId],
@@ -217,10 +252,89 @@ export default function ConversationPage() {
   });
 
   const messages = useMemo(() => messagesFromQueryData(activeId, messageQuery.data as MessagesInfiniteData | undefined), [activeId, messageQuery.data]);
-  const displayMessages = useMemo(() => groupConsecutiveToolMessages(messages.filter(isRenderableMessage)), [messages]);
+  const displayMessages = useMemo(() => {
+    const hasLive = Object.values(liveStreams).some(
+      (m) => !activeId || !m.conversation_id || m.conversation_id === activeId,
+    );
+    // When live overlay is active, hide the static agent_pending row (avoid flash).
+    const base = messages.filter((m) => {
+      if (!isRenderableMessage(m)) return false;
+      if (hasLive && m.msg_type === "agent_pending") return false;
+      return true;
+    });
+    // Overlay live stream frames (same id/stream replaces; new streams append).
+    const byKey = new Map<string, Message>();
+    for (const m of base) {
+      const streamKey = readString(m.content.stream_id);
+      const key = streamKey ? `stream:${streamKey}` : `id:${m.id}`;
+      byKey.set(key, m);
+    }
+    for (const live of Object.values(liveStreams)) {
+      if (activeId && live.conversation_id && live.conversation_id !== activeId) continue;
+      const streamKey = readString(live.content.stream_id);
+      // live-slot id morphs into thinking without a second bubble.
+      const key = streamKey
+        ? `stream:${streamKey}`
+        : live.id.startsWith("live-slot-")
+          ? `id:${live.id}`
+          : `id:${live.id}`;
+      const prev = byKey.get(key) || (live.id.startsWith("live-slot-") ? undefined : byKey.get(`id:live-slot-${activeId}`));
+      if (!prev) {
+        byKey.set(key, live);
+        // Remove placeholder slot if we added under stream key
+        if (activeId) byKey.delete(`id:live-slot-${activeId}`);
+        continue;
+      }
+      const prevText = readString(prev.content.text) || readString(prev.content.reasoning);
+      const liveText = readString(live.content.text) || readString(live.content.reasoning);
+      const text =
+        liveText.length >= prevText.length || liveText.startsWith(prevText) || prevText.startsWith(liveText)
+          ? (liveText.length >= prevText.length ? liveText : prevText)
+          : liveText || prevText;
+      byKey.set(key, {
+        ...prev,
+        ...live,
+        id: prev.id.startsWith("live-slot-") ? prev.id : live.id,
+        content: {
+          ...prev.content,
+          ...live.content,
+          text,
+          ...(live.msg_type === "thinking" || live.msg_type === "agent_pending"
+            ? { reasoning: text }
+            : {}),
+        },
+      });
+      if (activeId) byKey.delete(`id:live-slot-${activeId}`);
+    }
+    // Preserve base order, then append any live-only streams at the end.
+    const seen = new Set<string>();
+    const merged: Message[] = [];
+    for (const m of base) {
+      const streamKey = readString(m.content.stream_id);
+      const key = streamKey ? `stream:${streamKey}` : `id:${m.id}`;
+      const next = byKey.get(key) || m;
+      merged.push(next);
+      seen.add(key);
+    }
+    for (const [key, live] of byKey) {
+      if (seen.has(key)) continue;
+      merged.push(live);
+    }
+    return groupConsecutiveToolMessages(merged);
+  }, [messages, liveStreams, activeId]);
   const timelineEvents = useMemo(() => timelineFromMessages(messages), [messages]);
   const activeConversation = useMemo(() => conversations.find(c => c.id === activeId), [activeId, conversations]);
-  const isActiveConversationRunning = running || activeConversation?.status === "running";
+  /**
+   * Session work indicator: prefer platform/Node SOT (conversation.working or status=running),
+   * then local optimistic launch. Do not show Send while any expert is mid work-burst.
+   */
+  const isActiveConversationRunning = Boolean(
+    running
+    || interrupting
+    || activeConversation?.working
+    || activeConversation?.status === "running"
+    || launchOptimisticRef.current,
+  );
   const activeWorkflowKind = useMemo(() => {
     if (kanban?.workflow_kind) return kanban.workflow_kind;
     const nodeId = activeConversation?.node_id || activeConversationNodeId || "";
@@ -229,26 +343,51 @@ export default function ConversationPage() {
   const shouldShowRightPanel = useMemo(() => {
     if (!activeId) return false;
 
-    // Work artifacts from a worker node — always show (including history reopen).
-    if (strixAgents.length || strixNotes.length || findings.length || assets.length) return true;
-    if (planTree.some((node) => ["strix_todo", "agent", "coverage", "auditor", "worker", "pi_tool", "pi_workflow"].includes(String(node.source || "")))) {
-      return true;
+    // Pure chat / pre-target room: never open engagement surface.
+    // A lone main panel agent from a chat-only mis-dispatch is NOT work product.
+    const hasRealTarget = Boolean(
+      (taskContext as { target?: { value?: string } } | null | undefined)?.target?.value
+      || (strixRun?.targets_info || []).some((t) => Boolean(t && (t as { target?: string }).target)),
+    );
+    const hasWorkProducts = Boolean(
+      strixNotes.length
+      || findings.length
+      || assets.length
+      || planTree.some((node) =>
+        ["strix_todo", "agent", "coverage", "auditor", "worker", "pi_tool", "pi_workflow"].includes(String(node.source || "")),
+      ),
+    );
+    // Real multi-worker tree (not a single failed main chat agent).
+    const hasWorkerTree = strixAgents.some((a) => {
+      const role = String((a as { role?: string }).role || "").toLowerCase();
+      const parent = String((a as { parent_id?: string }).parent_id || "");
+      return role === "worker" || (parent && parent !== "null");
+    });
+
+    if (!hasRealTarget && !hasWorkProducts && !hasWorkerTree) {
+      // Greeting / clarification only — hide Status/Tasks regardless of status labels.
+      return false;
     }
-    if (strixRun && (strixRun.start_time || strixRun.scan_mode || (strixRun.targets_info || []).length > 0)) return true;
+
+    // Work products from a worker node — always show (including history reopen).
+    if (hasWorkProducts || hasWorkerTree) return true;
+    if (hasRealTarget && strixAgents.length) return true;
+    if (strixRun && hasRealTarget && (strixRun.start_time || strixRun.scan_mode)) return true;
 
     const assignedNodeId = activeConversation?.node_id || activeConversationNodeId || "";
     if (!assignedNodeId) return false;
 
-    // Bound node is working or has already produced a runtime kanban surface.
+    // Bound node is working on a real target (or has already produced a runtime kanban surface).
+    if (!hasRealTarget && !hasWorkProducts) return false;
     const stage = String(kanban?.current_stage || "").toLowerCase();
     if (kanban && stage && stage !== "idle" && stage !== "confirming") return true;
-    if (["pentest", "strix"].includes(String(kanban?.workflow_kind || "")) && stage) return true;
-    if (isActiveConversationRunning && (Boolean(agentState.phase) || Boolean(agentState.activeTool) || planTree.length > 0 || Boolean(kanban))) {
+    if (["pentest", "strix"].includes(String(kanban?.workflow_kind || "")) && stage && hasRealTarget) return true;
+    if (isActiveConversationRunning && hasRealTarget && (Boolean(agentState.phase) || Boolean(agentState.activeTool) || planTree.length > 0 || Boolean(kanban))) {
       return true;
     }
-    // Terminal session that was bound to a node but artifacts not yet hydrated — show if status proves work ran.
+    // Terminal session with real work — show if status proves engagement ran.
     const status = String(activeConversation?.status || "").toLowerCase();
-    if (["completed", "incomplete", "failed", "paused"].includes(status) && (Boolean(kanban) || planTree.length > 0 || Boolean(agentState.phase))) {
+    if (["completed", "incomplete", "failed", "paused"].includes(status) && (hasWorkProducts || (hasRealTarget && (Boolean(kanban) || planTree.length > 0)))) {
       return true;
     }
     return false;
@@ -264,9 +403,10 @@ export default function ConversationPage() {
     isActiveConversationRunning,
     kanban,
     planTree,
-    strixAgents.length,
+    strixAgents,
     strixNotes.length,
     strixRun,
+    taskContext,
   ]);
   const platformAgentNodeId = useMemo(() => agentNodes.find(node => node.type === "platform")?.id || null, [agentNodes]);
   const fallbackPentestNodeId = useMemo(() => {
@@ -322,7 +462,31 @@ export default function ConversationPage() {
     );
     const snapshotConversation = snapshot.conversation || fallback?.conversation;
     if (snapshotConversation) setActiveConversationNodeId(snapshotConversation.node_id || null);
-    setRunning(snapshotConversation?.status === "running");
+    const status = String(snapshotConversation?.status || "").toLowerCase();
+    const snapshotWorking = snapshot.working === true
+      || snapshotConversation?.working === true
+      || status === "running";
+    if (snapshotWorking) {
+      setRunning(true);
+      launchOptimisticRef.current = false;
+    } else if (
+      status === "completed" ||
+      status === "incomplete" ||
+      status === "failed" ||
+      status === "paused" ||
+      status === "blocked" ||
+      status === "canceled" ||
+      status === "cancelled"
+    ) {
+      setRunning(false);
+      setInterrupting(false);
+      launchOptimisticRef.current = false;
+    } else if (!launchOptimisticRef.current) {
+      // created / idle / unknown — only clear when we are not mid-launch.
+      setRunning(false);
+      setInterrupting(false);
+    }
+    // else: keep optimistic running=true so the Interrupt button stays stable.
   }, []);
 
   const isNearMessageBottom = useCallback(() => {
@@ -417,7 +581,39 @@ export default function ConversationPage() {
     setConversationMessageData(conversationId, data => removeMessageRecords(data, record => recordMessageType(record) === "agent_pending"));
   }, [setConversationMessageData]);
 
+  const applyConversationWorking = useCallback((msg: Record<string, unknown>) => {
+    const convId = String(msg.conversation_id || "").trim();
+    if (!convId) return;
+    const working = msg.working === true || msg.busy === true;
+    const interruptingFlag = msg.interrupting === true;
+    const statusRaw = String(msg.status || "").trim().toLowerCase();
+    const status = (statusRaw || undefined) as Conversation["status"] | undefined;
+    patchConversation(convId, {
+      ...(status ? { status } : {}),
+      working,
+    });
+    if (convId !== activeId) return;
+    setRunning(working);
+    setInterrupting(Boolean(interruptingFlag && working));
+    if (working) {
+      launchOptimisticRef.current = false;
+    } else {
+      launchOptimisticRef.current = false;
+      setInterrupting(false);
+    }
+  }, [activeId, patchConversation]);
+
   const { send } = useWebSocket({
+    conversation_working: (msg) => {
+      applyConversationWorking(msg);
+    },
+    work_status: (msg) => {
+      // Legacy/direct path if platform ever forwards raw work_status to the room.
+      applyConversationWorking({
+        ...msg,
+        working: msg.working === true || msg.busy === true,
+      });
+    },
     vuln_found: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
@@ -540,6 +736,7 @@ export default function ConversationPage() {
       const convId = messageConversationId(msg, activeId);
       clearPendingAgentMessage(convId);
       markMessageAutoScroll();
+      launchOptimisticRef.current = false;
       setRunning(false);
       const status = String(m.status || "incomplete").toLowerCase();
       addMessageToConversation(convId, makeMessage(convId, "system", "status", {
@@ -758,7 +955,20 @@ export default function ConversationPage() {
       const convId = messageConversationId(msg, activeId);
       clearPendingAgentMessage(convId);
       markMessageAutoScroll();
+      launchOptimisticRef.current = false;
       setRunning(false);
+      setInterrupting(false);
+      // Live streams are already mirrored into the message cache; drop overlay.
+      setLiveStreams({});
+      const terminal = String(m.status || "completed").toLowerCase();
+      const nextStatus = (
+        terminal === "incomplete" || terminal === "blocked"
+          ? "incomplete"
+          : terminal === "failed"
+            ? "failed"
+            : "completed"
+      ) as Conversation["status"];
+      if (convId) patchConversation(convId, { status: nextStatus, working: false });
       // Single terminal channel: completed | incomplete | blocked (no separate task_incomplete).
       const status = String(m.status || "completed").toLowerCase();
       const incomplete = status === "incomplete" || status === "blocked";
@@ -779,20 +989,110 @@ export default function ConversationPage() {
       const convId = messageConversationId(msg, activeId);
       clearPendingAgentMessage(convId);
       markMessageAutoScroll();
+      launchOptimisticRef.current = false;
       setRunning(false);
+      setInterrupting(false);
+      if (convId) patchConversation(convId, { status: "failed", working: false });
       addMessageToConversation(convId, makeMessage(convId, "system", "status", { text: "Task failed: " + ((msg as Record<string, unknown>).message || ""), message_id: (msg as Record<string, unknown>).message_id }));
       void fetchAll();
       void refreshConversationState(convId);
     },
     text: (msg) => {
-      if (!isActiveMessage(msg, activeId)) return;
-      const c = (msg as Record<string, unknown>).content || msg;
-      const convId = messageConversationId(msg, activeId);
-      clearPendingAgentMessage(convId);
-      markMessageAutoScroll();
-      addMessageToConversation(convId, makeMessage(convId, "agent", "text", { ...agentAttribution(msg as Record<string, unknown>), ...(c as Record<string, unknown>) }));
+      upsertStreamedAgentText(msg, "text");
+      // Chat-only platform/expert replies must never leave the session stuck in working.
+      const content = (msg.content && typeof msg.content === "object" && !Array.isArray(msg.content)
+        ? msg.content as Record<string, unknown>
+        : {}) as Record<string, unknown>;
+      const mode = String(content.agent_mode || msg.agent_mode || "").toLowerCase();
+      if (
+        mode === "expert_preamble"
+        || mode === "expert_room_chat"
+        || mode === "clarification"
+        || mode === "platform_chat"
+        || mode === "missing_target"
+        || mode === "no_online_executor"
+      ) {
+        const convId = messageConversationId(msg, activeId);
+        launchOptimisticRef.current = false;
+        setRunning(false);
+        setInterrupting(false);
+        if (convId) {
+          // Keep idle room status — do not promote to running/failed from chat.
+          const cur = String(activeConversation?.status || "").toLowerCase();
+          if (!cur || cur === "created" || cur === "running") {
+            patchConversation(convId, { working: false, ...(cur === "running" ? { status: "created" } : {}) });
+          } else {
+            patchConversation(convId, { working: false });
+          }
+        }
+      }
+    },
+    thinking: (msg) => {
+      upsertStreamedAgentText(msg, "thinking");
+    },
+    agent_thinking: (msg) => {
+      upsertStreamedAgentText(msg, "thinking");
+    },
+    reasoning: (msg) => {
+      upsertStreamedAgentText(msg, "thinking");
     },
   });
+
+  function upsertStreamedAgentText(msg: Record<string, unknown>, msgType: "text" | "thinking") {
+    if (!isActiveMessage(msg, activeId)) return;
+    const raw = msg;
+    const c = (raw.content && typeof raw.content === "object" && !Array.isArray(raw.content)
+      ? { ...(raw.content as Record<string, unknown>) }
+      : {}) as Record<string, unknown>;
+    const streamId = readString(c.stream_id) || readString(raw.stream_id);
+    const messageId = readString(c.message_id) || readString(raw.message_id);
+    if (streamId) c.stream_id = streamId;
+    if (messageId) c.message_id = messageId;
+    const body = readString(c.text) || readString(c.reasoning) || readString(raw.text);
+    if (!body) return;
+    c.text = body;
+    if (msgType === "thinking") c.reasoning = body;
+    const convId = messageConversationId(raw, activeId);
+    markMessageAutoScroll();
+    const message = makeMessage(convId, "agent", msgType, { ...agentAttribution(raw), ...c });
+    const liveSlotId = convId ? `live-slot-${convId}` : "";
+    // Prefer stream id; first thinking frame reuses live-slot so Working… morphs in place.
+    const liveKey = streamId || message.id || liveSlotId;
+    setLiveStreams((prev) => {
+      const slot = liveSlotId ? prev[liveSlotId] : undefined;
+      const existing = prev[liveKey] || (msgType === "thinking" ? slot : undefined);
+      const prevText = existing
+        ? (readString(existing.content.text) || readString(existing.content.reasoning))
+        : "";
+      const nextText = body;
+      const text =
+        nextText.length >= prevText.length || nextText.startsWith(prevText) || prevText.startsWith(nextText)
+          ? (nextText.length >= prevText.length ? nextText : prevText)
+          : nextText || prevText;
+      const nextMsg: Message = {
+        ...(existing || message),
+        ...message,
+        // Keep stable id for the thinking slot so React does not unmount/remount.
+        id: existing?.id || (msgType === "thinking" && liveSlotId ? liveSlotId : message.id),
+        msg_type: msgType,
+        content: {
+          ...(existing?.content || {}),
+          ...message.content,
+          text,
+          ...(msgType === "thinking" ? { reasoning: text } : {}),
+          message_id: existing?.id || message.id,
+        },
+      };
+      const out: Record<string, Message> = { ...prev, [liveKey]: nextMsg };
+      // Drop the placeholder slot once we have a real stream key.
+      if (liveSlotId && liveKey !== liveSlotId) delete out[liveSlotId];
+      return out;
+    });
+    // Hide cache-level agent_pending without a frame of empty gap (display filters it when live).
+    if (convId) clearPendingAgentMessage(convId);
+    // Mirror final-ish frames into message cache (thinking+text).
+    addMessageToConversation(convId, message);
+  }
   const locateApproval = useCallback((requestId: string) => {
     if (!requestId) return;
     setHighlightedApprovalId(requestId);
@@ -828,11 +1128,14 @@ export default function ConversationPage() {
     setPendingApprovals([]);
     setEvidence([]);
     setTaskContext(undefined);
+    launchOptimisticRef.current = false;
     setRunning(false);
+    setInterrupting(false);
   }, []);
 
   const loadConversation = useCallback(async (id: string | null) => {
     stateRefreshSeqRef.current += 1;
+    setLiveStreams({});
     if (!id) {
       localStorage.removeItem(ACTIVE_CONVERSATION_KEY);
       void queryClient.removeQueries({ queryKey: ["conversation-messages"] });
@@ -870,6 +1173,7 @@ export default function ConversationPage() {
       setStateSnapshotLoaded(false);
     }
   }, [applyConversationState, conversations, fetchAll, queryClient, resetConversationState, send]);
+  loadConversationRef.current = loadConversation;
 
   useEffect(() => {
     if (!activeId || stateSnapshotLoaded || messageQuery.isLoading || messages.length === 0) return;
@@ -969,11 +1273,22 @@ export default function ConversationPage() {
   );
 
   useEffect(() => {
-    if (restoreAttempted || conversations.length === 0) return;
+    if (restoreAttempted) return;
+    // Asset-page launch owns conversation selection; do not race it with restore.
+    if (sessionStorage.getItem(PENDING_ASSET_TASK_KEY)) return;
+
     const storedId = localStorage.getItem(ACTIVE_CONVERSATION_KEY);
-    const stored = storedId ? conversations.find(c => c.id === storedId) : null;
+    // Always honor an explicit stored id — even if the list has not fetched it yet
+    // (freshly created from Assets / Vulns). Falling back to "any running" was
+    // overwriting the new session and routing tasks into the wrong conversation.
+    if (storedId) {
+      setRestoreAttempted(true);
+      void loadConversation(storedId);
+      return;
+    }
+    if (conversations.length === 0) return;
     const runningConversation = conversations.find(c => c.status === "running");
-    const fallback = stored || runningConversation || conversations[0];
+    const fallback = runningConversation || conversations[0];
     setRestoreAttempted(true);
     if (fallback) void loadConversation(fallback.id);
   }, [conversations, loadConversation, restoreAttempted]);
@@ -1213,8 +1528,11 @@ export default function ConversationPage() {
         pendingExpertName = match.display_name || match.name;
       }
     }
+    // Single live slot: same id morphs Working… → Thinking → text (no flash/remove).
+    const liveSlotId = `live-slot-${convId}`;
     const pendingContent: Record<string, unknown> = {
-      text: "Working...",
+      text: "思考中…",
+      message_id: liveSlotId,
       agent_source: pendingAgentSource,
     };
     if (pendingAgentNodeId) pendingContent.agent_node_id = pendingAgentNodeId;
@@ -1234,6 +1552,11 @@ export default function ConversationPage() {
         messageRecordFromMessage(makeMessage(convId!, "agent", "agent_pending", pendingContent)),
       );
     });
+    // Seed live overlay so first thinking frame morphs the same slot (no disappear gap).
+    setLiveStreams((prev) => ({
+      ...prev,
+      [liveSlotId]: makeMessage(convId!, "agent", "agent_pending", pendingContent),
+    }));
 
     const commonPayload = {
       ...agentPayload,
@@ -1254,21 +1577,12 @@ export default function ConversationPage() {
       return;
     }
 
-    if (shouldContinueExisting && !targetValue) {
-      setRunning(true);
-      send({
-        type: "user_message",
-        conversation_id: convId,
-        text,
-        display_text: displayText,
-        resume: true,
-        client_message_id: clientMessageId,
-        ...commonPayload,
-      });
-      return;
-    }
-
+    // No authorized target yet (e.g. "你好"): room chat only.
+    // Do NOT flip conversation into running/task status or open work-surface UI.
     if (!targetValue) {
+      launchOptimisticRef.current = false;
+      setRunning(false);
+      setInterrupting(false);
       send({
         type: "user_message",
         conversation_id: convId,
@@ -1280,7 +1594,10 @@ export default function ConversationPage() {
       return;
     }
 
+    launchOptimisticRef.current = true;
     setRunning(true);
+    setInterrupting(false);
+    if (convId) patchConversation(convId, { working: true, status: "running" });
     setPendingWorkflowKind("pentest");
     setAgentState({});
     setProgress(undefined);
@@ -1313,16 +1630,22 @@ export default function ConversationPage() {
     setConversationMessageData,
     activeConversationNodeId,
     fetchAll,
+    patchConversation,
   ]);
+  launchTaskMessageRef.current = launchTaskMessage;
 
   // Auto-start task launched from Asset management (host/port multi-select).
+  // One-shot mount handoff: use refs so we always call the latest loaders.
   useEffect(() => {
+    if (pendingAssetLaunchDoneRef.current) return;
     const raw = sessionStorage.getItem(PENDING_ASSET_TASK_KEY);
     if (!raw) return;
+
     let draft: {
       text?: string;
       target?: { type: string; value: string };
       scope?: { allow: string[]; deny: string[] };
+      conversationId?: string;
     };
     try {
       draft = JSON.parse(raw);
@@ -1330,19 +1653,40 @@ export default function ConversationPage() {
       sessionStorage.removeItem(PENDING_ASSET_TASK_KEY);
       return;
     }
-    sessionStorage.removeItem(PENDING_ASSET_TASK_KEY);
+
     const text = String(draft.text || "").trim();
-    if (!text) return;
-    const convId = localStorage.getItem(ACTIVE_CONVERSATION_KEY);
-    void launchTaskMessage({
-      displayText: text,
-      text,
-      target: draft.target || null,
-      scope: draft.scope || null,
-      forceNewConversation: false,
-      conversationId: convId,
-    });
-  }, [launchTaskMessage]);
+    const convId = String(draft.conversationId || localStorage.getItem(ACTIVE_CONVERSATION_KEY) || "").trim();
+    if (!text || !convId) {
+      sessionStorage.removeItem(PENDING_ASSET_TASK_KEY);
+      return;
+    }
+
+    // Consume once; pin conversation before any restore fallback can rewrite it.
+    pendingAssetLaunchDoneRef.current = true;
+    sessionStorage.removeItem(PENDING_ASSET_TASK_KEY);
+    localStorage.setItem(ACTIVE_CONVERSATION_KEY, convId);
+    setRestoreAttempted(true);
+
+    const target = draft.target || null;
+    const scope = draft.scope || null;
+    void (async () => {
+      try {
+        // Yield so refs point at post-mount loadConversation / launchTaskMessage.
+        await Promise.resolve();
+        await loadConversationRef.current(convId);
+        await launchTaskMessageRef.current({
+          displayText: text,
+          text,
+          target,
+          scope,
+          forceNewConversation: false,
+          conversationId: convId,
+        });
+      } catch {
+        // loadConversation / launch already surface errors; keep composer usable.
+      }
+    })();
+  }, []);
 
   const handleSend = useCallback(async () => {
     if (!input.trim()) return;
@@ -1895,17 +2239,21 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                     )}
                   </div>
                   <div className="flex h-8 shrink-0 items-center">
-                    {running ? (
+                    {isActiveConversationRunning ? (
                       <button
                         type="button"
+                        disabled={interrupting}
                         onClick={() => {
+                          if (!activeId || interrupting) return;
+                          // Do not clear running optimistically — wait for conversation_working
+                          // after all session workers report idle (or platform settles).
+                          setInterrupting(true);
+                          patchConversation(activeId, { working: true, status: "running" });
                           send({ type: "user_interrupt", conversation_id: activeId, action: "cancel" });
-                          setRunning(false);
-                          void refreshConversationState(activeId);
                         }}
-                        className="inline-flex h-8 items-center rounded-pill bg-severity-critical px-4 text-xs font-medium leading-none text-white transition-opacity hover:opacity-90"
+                        className="inline-flex h-8 items-center rounded-pill bg-severity-critical px-4 text-xs font-medium leading-none text-white transition-opacity hover:opacity-90 disabled:opacity-70"
                       >
-                        中断
+                        {interrupting ? "中断中…" : "中断"}
                       </button>
                     ) : (
                       <button
@@ -2027,11 +2375,59 @@ function shouldUpdateMessageRecord(existing: MessageRecord, incoming: MessageRec
   const existingId = recordMessageId(existing);
   const incomingId = recordMessageId(incoming);
   if (existingId && incomingId && existingId === incomingId) return true;
+  // Progressive assistant text/thinking: same stream_id updates one bubble.
+  const existingType = recordMessageType(existing);
+  const incomingType = recordMessageType(incoming);
+  if (
+    (existingType === "text" || existingType === "thinking")
+    && existingType === incomingType
+  ) {
+    const existingStream = recordStreamId(existing);
+    const incomingStream = recordStreamId(incoming);
+    if (existingStream && incomingStream && existingStream === incomingStream) return true;
+  }
   return recordMessageType(existing) === "tool_call" && recordMessageType(incoming) === "tool_call" && Boolean(recordToolRunKey(existing)) && recordToolRunKey(existing) === recordToolRunKey(incoming);
 }
 
 function mergeMessageRecords(existing: MessageRecord, incoming: MessageRecord): MessageRecord {
-  if (recordMessageType(existing) !== "tool_call" || recordMessageType(incoming) !== "tool_call") return incoming;
+  const existingType = recordMessageType(existing);
+  const incomingType = recordMessageType(incoming);
+  if (
+    (existingType === "text" || existingType === "thinking")
+    && existingType === incomingType
+  ) {
+    const existingContent = recordContent(existing);
+    const incomingContent = recordContent(incoming);
+    const prevText = readString(existingContent.text) || readString(existingContent.reasoning);
+    const nextText = readString(incomingContent.text) || readString(incomingContent.reasoning);
+    // Stream frames carry cumulative full text. Prefer monotonic growth / prefix
+    // relationship — never concatenate (that caused "好的好的" style doubles).
+    let text = nextText;
+    if (!nextText) text = prevText;
+    else if (!prevText) text = nextText;
+    else if (nextText.startsWith(prevText) || prevText.startsWith(nextText)) {
+      text = nextText.length >= prevText.length ? nextText : prevText;
+    } else if (nextText.length >= prevText.length) {
+      text = nextText;
+    } else {
+      text = prevText;
+    }
+    return {
+      ...existing,
+      ...incoming,
+      id: recordMessageId(existing) || recordMessageId(incoming),
+      content: {
+        ...existingContent,
+        ...incomingContent,
+        text,
+        ...(existingType === "thinking" ? { reasoning: text } : {}),
+        stream_id: incomingContent.stream_id || existingContent.stream_id,
+        message_id: existingContent.message_id || incomingContent.message_id,
+      },
+      created_at: existing.created_at || incoming.created_at,
+    };
+  }
+  if (existingType !== "tool_call" || incomingType !== "tool_call") return incoming;
   const existingContent = recordContent(existing);
   const incomingContent = recordContent(incoming);
   return {
@@ -2075,6 +2471,10 @@ function recordMessageId(record: MessageRecord): string {
 
 function recordToolRunKey(record: MessageRecord): string {
   return readString(recordContent(record).tool_run_id);
+}
+
+function recordStreamId(record: MessageRecord): string {
+  return readString(recordContent(record).stream_id);
 }
 
 function appendStdout(current: string, incoming: string): string {

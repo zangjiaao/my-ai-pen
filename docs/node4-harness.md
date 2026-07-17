@@ -1,10 +1,12 @@
 # Node4 Agent Runtime — OMP-class harness
 
 > **Commercial clean-room design** (no oh-my-pi / OMP source dependency).  
-> Calibrated: 2026-07-13  
+> Calibrated: 2026-07-17  
 > **This is the only product Node runtime.** Code lives in `node4/`.  
+> **Built-in seat `default`（工作台助手）** ships with every Node (platform data tools + light assist; no finding booking).  
 > **Expert packs** live under repo **`experts/`** (catalog); Node **installs** copies into a local install root to enable them.  
-> **Default**: no experts installed → **bare OMP runtime** (`runtime`) for clean A/B vs packs.  
+> **Lab-only bare** `runtime`: no experts installed and explicit bare resolve — A/B vs packs; **not** the product UI default participant.  
+> Product conversation model: [`docs/platform-default-agent-refactor.md`](platform-default-agent-refactor.md) (no platform peer Agent).  
 > Legacy trees (`node/`, `node2/`, `node3/`) are reference-only and will be removed later.  
 > **No agent finish tool** — session end is harness/platform only.
 
@@ -21,8 +23,8 @@ Task end:        platform / user cancel / natural stop / continue caps — NOT a
 Inspectability:  post-run task dir remains fully queryable
 ```
 
-Node4 is **not** a coding agent. Role packs supply mission + tool surface (default **pentest**).  
-Harness mechanics: high-density act tools, empty/premature-stop continue, durable task dirs, light todo map.
+Node4 is **not** a coding agent. Built-in **`default`** supplies workspace/ledger assist; **expert** packs supply mission + tool surface (e.g. **pentest**).  
+Harness mechanics: high-density act tools (execution packs), empty/premature-stop continue, durable task dirs, light todo map; **chat-only** turns for `default`/no-target do not use execution continue budgets as failure UX.
 
 Interactive **TUI remains deferred**.
 
@@ -68,18 +70,20 @@ cd node4 && npx tsx src/expert-cli.ts install ctf
 cd node4 && npx tsx src/expert-cli.ts uninstall ctf
 ```
 
-Empty install set → **no experts**; blank engagement → **bare runtime** (OMP-class tools only).  
-Explicit engagement must match an **installed** pack (else blocked).  
-Platform **offers** may also gate product dispatch (`docs/node-expert-offers.md`); Node install is independent for experiments.
+Blank / `default` / `consult` engagement → **built-in `default` seat** (always available; not offers-gated).  
+Explicit **expert** engagement must match an **installed** pack (else blocked).  
+Empty install set → only `default` (+ lab bare if forced). Platform **offers** gate **expert** dispatch (`docs/node-expert-offers.md`).
 
-| Pack | Tools (summary) | Booking |
-|------|-----------------|---------|
-| `pentest` (default) | todo, shell, fs, http, **session**, **browser**, script, finding, subagent, goal, **skill** (meta) | finding+evidence |
+| Pack / seat | Tools (summary) | Booking |
+|-------------|-----------------|---------|
+| **`default`** (built-in) | platform data tools + light assist (`todo`/`read`; shell restricted/off in v1) | **none** |
+| `pentest` | todo, shell, fs, http, **session**, **browser**, script, finding, subagent, goal, **skill** (meta) | finding+evidence |
 | `ctf` | + captcha; CTF skills under `experts/ctf/skills` | finding+evidence |
-| `consult` (stub) | todo, shell, read, goal | none |
+| `consult` | **alias → `default`** during migration (catalog stub retires as separate product) | none |
 
 Aliases live in each pack’s `pack.json` / `experts/catalog.json`.  
-Loader: `node4/src/experts/`. CTF notes: `docs/node4-ctf-role.md`.
+Loader: `node4/src/experts/` + built-in default seat. CTF notes: `docs/node4-ctf-role.md`.  
+Platform data tools: see [`platform-default-agent-refactor.md`](platform-default-agent-refactor.md) §5.
 
 ---
 
@@ -178,11 +182,15 @@ Offline audit helpers (e.g. `node4` ctf-audit CLI) parse events for engineering 
 
 | Event | Meaning |
 |-------|---------|
-| `tool_output` | Act progress |
+| `text` (`stream_id`) | Assistant prose **streamed progressively** (token/coalesced flushes); UI upserts one bubble per stream |
+| `tool_output` | Act progress (running → done) |
 | `evidence_created` / `vuln_found` | Booking (Case-shared materials + findings) |
 | `todo_updated` / `goal_updated` | Map / anchors |
 | `status_update` | Harness notes (not agent finish) |
+| `work_status` | Node busy/idle for session work indicator |
 | `task_complete` | **Harness** terminal settlement only |
+
+Platform broadcasts `text` / `tool_output` to the room **before** DB persist so the chat UI is not blocked on write latency.
 
 ### Case-shared evidence (multi-expert)
 
@@ -196,7 +204,7 @@ Same conversation = shared Case. Joining experts receive `task_assign.case_conte
 
 Node `emitEvidence` writes truncated **properties** (`role`, `kind`, `excerpt`, path/url/body/stdout) to the platform so the next expert (e.g. code-audit after a source leak) can continue **without** prior `taskDir`.  
 `write` of material files emits `file_artifact` (path + preview). `read` does not book Case evidence.  
-Details: `docs/evidence-quality-plan.md`.
+Details (shipped behavior in code + `prd.md`); historical plan: `docs/archive/evidence-quality-plan.md`.
 
 ---
 

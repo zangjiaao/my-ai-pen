@@ -1,9 +1,9 @@
 # Multi-expert collaboration & engagement plan
 
-> **Status:** living plan (collaboration model **minimal**: Case + evidence + case_context + user @; no stations / structured handoff / Case disk)  
-> **Precedence:** `AGENTS.md` → `prd.md` → this plan → other living docs  
-> **Runtime:** `node4/` only. Pack content under `experts/`.  
-> **Related:** `node-expert-offers.md`, `node4-harness.md`, `experts/README.md`, **`evidence-quality-plan.md`** (Case evidence Phases **A–E** tracker), research notes on Argo / DeepTeam / OMP (reference only).
+> **ARCHIVED 2026-07-17** — Minimal Case collab model landed; not implementation authority.  
+> **Living:** `docs/prd.md`, `docs/node-expert-offers.md`, **active plan** [`../platform-default-agent-refactor.md`](../platform-default-agent-refactor.md).  
+> Historical model: Case + evidence + case_context + user @; no stations / structured handoff / Case disk.  
+> Evidence phases A–E: [`evidence-quality-plan.md`](evidence-quality-plan.md) (also archived, complete).
 
 ---
 
@@ -12,7 +12,7 @@
 Build a **red/blue security platform** where:
 
 1. **Experts** are stable **target-family** specialists (what is tested + evidence shape), not kill-chain stage names.
-2. **Collaboration** happens via **Case (= session 工作群) + shared findings/evidence + user @/选专家**, not a forced Agent stage machine and not a structured handoff protocol.
+2. **Collaboration** happens via **Case (= session 工作群) + shared findings/evidence + user 选 default/专家**, not a forced stage machine, not a structured handoff protocol, and **not** a platform-side conversation Agent.
 3. Two primary customer scenarios work on the **same application-security spine** with different **engagement / RoE depth**:
    - **Red-team deep:** external discovery → exploit → (optional) post-ex → lateral (in scope).
    - **App assessment:** customer-provided assets/accounts → surface + vulns + **authz/logic**; **no** webshell/privesc/lateral.

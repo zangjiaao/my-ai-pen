@@ -69,12 +69,27 @@ export async function runNode4Task(
     return { terminalStatus: "failed", taskDir };
   }
   const startedAt = new Date().toISOString();
+  /**
+   * Chat-only turn: user selected an expert but provided no target/scope.
+   * OMP work bursts (todo map, booking, goal maximize, outer continues) must NOT
+   * auto-start — respond conversationally and ask for authorized scope first.
+   */
+  const chatOnly = isChatOnlyTask(task);
 
   const eventsPath = join(taskDir, "events.jsonl");
   await writeFile(eventsPath, "", "utf8");
+  /** High-frequency frames must not wait on workspace disk (WSL /mnt is slow). */
+  const STREAM_TYPES = new Set(["text", "tool_output", "thinking", "agent_thinking", "status_update"]);
   const loggingPlatform: PlatformSink = {
     async send(message) {
-      await appendFile(eventsPath, `${JSON.stringify({ ts: new Date().toISOString(), ...message })}\n`, "utf8");
+      const line = `${JSON.stringify({ ts: new Date().toISOString(), ...message })}\n`;
+      const typ = String((message as { type?: string }).type || "");
+      if (STREAM_TYPES.has(typ)) {
+        // Fire-and-forget: live UI must not queue behind appendFile.
+        void appendFile(eventsPath, line, "utf8").catch(() => {});
+      } else {
+        await appendFile(eventsPath, line, "utf8").catch(() => {});
+      }
       await platform.send(message);
     },
   };
@@ -229,10 +244,12 @@ export async function runNode4Task(
     cwd: taskDir,
     agentDir: config.piAgentDir,
     model,
-    thinkingLevel: "medium",
+    // Greetings/chat: light thinking. Full engagements: medium for denser reasoning.
+    thinkingLevel: chatOnly ? "low" : "medium",
     authStorage,
     modelRegistry,
     resourceLoader,
+    // Chat-only: still register tools but prompt forbids using them until a target exists.
     tools: [...toolNames],
     sessionManager: SessionManager.create(taskDir, piSessionDir),
     settingsManager,
@@ -240,23 +257,23 @@ export async function runNode4Task(
   sessionRef = session as any;
 
   // Platform observability: text stream, llm_usage, throttled checkpoints.
+  // Fire-and-forget so Pi token streaming is not blocked by platform WS/DB latency.
   if (typeof (session as any).subscribe === "function") {
-    (session as any).subscribe(async (event: any) => {
-      try {
-        await handleNode4SessionEvent(obsCtx, textStream, checkpointThrottle, event);
-      } catch {
+    (session as any).subscribe((event: any) => {
+      void handleNode4SessionEvent(obsCtx, textStream, checkpointThrottle, event).catch(() => {
         // Never let observability break the agent loop.
-      }
+      });
     });
   }
 
   // Continues: empty + booking-gap + OMP goal-continuation + rare premature.
   // Discovery is in-loop (pi agent-loop). No session wall.
-  const maxContinues = Math.max(0, Number(process.env.NODE4_MAX_CONTINUES ?? 16));
-  const maxEmptyStopStreak = Math.max(0, Number(process.env.NODE4_MAX_EMPTY_STOPS ?? 1));
-  const maxPrematureStops = Math.max(0, Number(process.env.NODE4_MAX_PREMATURE_STOPS ?? 3));
+  // Chat-only turns: no outer continues (single conversational response).
+  const maxContinues = chatOnly ? 0 : Math.max(0, Number(process.env.NODE4_MAX_CONTINUES ?? 16));
+  const maxEmptyStopStreak = chatOnly ? 0 : Math.max(0, Number(process.env.NODE4_MAX_EMPTY_STOPS ?? 1));
+  const maxPrematureStops = chatOnly ? 0 : Math.max(0, Number(process.env.NODE4_MAX_PREMATURE_STOPS ?? 3));
   // Allow enough goal pushes to cover multi-level CTF tails without empty thrash.
-  const maxGoalContinues = Math.max(0, Number(process.env.NODE4_MAX_GOAL_CONTINUES ?? 16));
+  const maxGoalContinues = chatOnly ? 0 : Math.max(0, Number(process.env.NODE4_MAX_GOAL_CONTINUES ?? 16));
   let continueCount = 0;
   let emptyStopStreak = 0;
   let bookingContinueUsed = false;
@@ -267,8 +284,10 @@ export async function runNode4Task(
 
   // Optional seed goal mode from structured task field (not free-text NLP),
   // else pack defaultGoalObjective when present (e.g. CTF maximize flags).
-  const seedObjective =
-    typeof (task as { goalObjective?: string }).goalObjective === "string"
+  // Never seed goals for chat-only (greeting) turns.
+  const seedObjective = chatOnly
+    ? ""
+    : typeof (task as { goalObjective?: string }).goalObjective === "string"
       ? String((task as { goalObjective?: string }).goalObjective).trim()
       : pack.defaultGoalObjective?.trim() || "";
   if (seedObjective) {
@@ -284,8 +303,10 @@ export async function runNode4Task(
     type: "status_update",
     conversation_id: task.conversationId,
     task_id: task.taskId,
-    message: `${who} starting pack=${pack.id} tools=${toolNames.join(",")} goal_active=${goals.isActive()}`,
-    agent_phase: "starting",
+    message: chatOnly
+      ? `${who} chat mode (no target yet) pack=${pack.id}`
+      : `${who} starting pack=${pack.id} tools=${toolNames.join(",")} goal_active=${goals.isActive()}`,
+    agent_phase: chatOnly ? "chat" : "starting",
     status: "running",
     llm_usage: usage.snapshot(),
   });
@@ -299,30 +320,47 @@ export async function runNode4Task(
     engagement: task.engagement || task.role,
     allowPostex: task.allowPostex,
   });
-  const userPrompt = [
-    eagerTodoInjection({ forced: true }),
-    "",
-    pack.bookingMode === "finding" ? eagerBookingInjection() : "",
-    "",
-    goals.formatForPrompt(),
-    "",
-    formatRoeInjection(roe),
-    "",
-    formatCaseContextInjection(task.caseContext),
-    "",
-    `Role pack: ${pack.id}. OMP essence: keep tool-calling in-loop; shell-first multi-step + multi-call same turn; http is single-probe only.`,
-    "Long multi-challenge work: call goal(op=create, objective=...) early so the harness can auto-continue (OMP goal mode) until full clearance — complete only with remaining_unsolved=0 after real audit (partial wins are not done).",
-    pack.bookingMode === "finding"
-      ? "Book via finding(confirm) with proof= quoted from tool output. When truly stuck after dense shell work, stop with no tools — no finish tool; harness settles."
-      : "This pack does not book findings. When finished, simply stop — harness settles.",
-    `Target: ${JSON.stringify(task.target)}`,
-    `Scope: ${JSON.stringify(task.scope)}`,
-    task.accounts !== undefined ? `Accounts: ${JSON.stringify(task.accounts)}` : "",
-    "### Your message this turn",
-    task.instruction,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const userPrompt = chatOnly
+    ? [
+        `You are the product expert persona for pack «${pack.id}» (${pack.label}).`,
+        "This turn is **conversation only** — the user has not provided an authorized target yet.",
+        "Do NOT start recon, todo maps, goal mode, port scans, crawling, or finding booking.",
+        "Do NOT invent a target. Do NOT call shell/http/browser/session/script tools unless the user already gave a concrete authorized host/URL in this message.",
+        "Respond briefly in the user's language: greet if needed, confirm you are ready, and ask for:",
+        "1) authorized target URL/IP, 2) scope allow/deny, 3) any accounts or constraints.",
+        "When they provide a target later, a new work burst will run full OMP harness. This turn: chat only, then stop (no tools).",
+        "",
+        formatCaseContextInjection(task.caseContext),
+        "",
+        "### User message",
+        task.instruction || "Hello",
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : [
+        eagerTodoInjection({ forced: true }),
+        "",
+        pack.bookingMode === "finding" ? eagerBookingInjection() : "",
+        "",
+        goals.formatForPrompt(),
+        "",
+        formatRoeInjection(roe),
+        "",
+        formatCaseContextInjection(task.caseContext),
+        "",
+        `Role pack: ${pack.id}. OMP essence: keep tool-calling in-loop; shell-first multi-step + multi-call same turn; http is single-probe only.`,
+        "Long multi-challenge work: call goal(op=create, objective=...) early so the harness can auto-continue (OMP goal mode) until full clearance — complete only with remaining_unsolved=0 after real audit (partial wins are not done).",
+        pack.bookingMode === "finding"
+          ? "Book via finding(confirm) with proof= quoted from tool output. When truly stuck after dense shell work, stop with no tools — no finish tool; harness settles."
+          : "This pack does not book findings. When finished, simply stop — harness settles.",
+        `Target: ${JSON.stringify(task.target)}`,
+        `Scope: ${JSON.stringify(task.scope)}`,
+        task.accounts !== undefined ? `Accounts: ${JSON.stringify(task.accounts)}` : "",
+        "### Your message this turn",
+        task.instruction,
+      ]
+        .filter(Boolean)
+        .join("\n");
 
   segmentCounter.tools = 0;
   runtime.lifecycle.toolsInLastSegment = 0;
@@ -481,11 +519,14 @@ export async function runNode4Task(
   }
 
   const booked = await loadConfirmedFindings(runtime.findingsDir);
-  const harnessStatus = resolveHarnessTerminalStatus({
-    bookedFindingCount: booked.count,
-    aborted: cancelled(),
-    stopReason,
-  });
+  const harnessStatus = chatOnly
+    ? // Pure chat turn: never surface as incomplete/failed engagement.
+      (cancelled() ? "incomplete" : "completed")
+    : resolveHarnessTerminalStatus({
+        bookedFindingCount: booked.count,
+        aborted: cancelled(),
+        stopReason,
+      });
   const emitStatus = resolveTerminalTaskStatus({ harnessStatus });
   const endTime = new Date().toISOString();
 
@@ -561,6 +602,27 @@ export async function runNode4Task(
   });
 
   return { terminalStatus: emitStatus, taskDir };
+}
+
+/** True when platform dispatched an expert with no authorized target/scope yet. */
+export function isChatOnlyTask(task: TaskEnvelope): boolean {
+  const target = task.target && typeof task.target === "object" ? task.target : {};
+  const value = String(
+    (target as { value?: unknown }).value
+      ?? (target as { url?: unknown }).url
+      ?? (target as { host?: unknown }).host
+      ?? "",
+  ).trim();
+  if (value) return false;
+  const allow = task.scope && typeof task.scope === "object"
+    ? (task.scope as { allow?: unknown }).allow
+    : undefined;
+  if (Array.isArray(allow)) {
+    for (const item of allow) {
+      if (String(item || "").trim()) return false;
+    }
+  }
+  return true;
 }
 
 function setRuntimeApiKey(authStorage: AuthStorage, provider: string): void {

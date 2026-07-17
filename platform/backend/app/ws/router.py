@@ -9,9 +9,14 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 
 from app.services.conversation_state import ConversationStatusError, transition_conversation
-from app.services.agent_router import extract_target
+from app.services.agent_router import extract_target, extract_targets
 from app.services.agent_orchestrator import AgentCapability, OrchestrationContext, OrchestrationError, route_with_platform_agent
-from app.services.platform_agent import answer_clarification, answer_platform_chat, answer_snapshot_qa
+from app.services.platform_agent import (
+    answer_clarification,
+    answer_expert_room_chat,
+    answer_platform_chat,
+    answer_snapshot_qa,
+)
 from app.services.conversation_snapshot import build_conversation_snapshot
 from app.services.expert_offers import (
     ACTION_USAGE,
@@ -349,6 +354,192 @@ async def _set_conversation_status(conv_id: str, status: str) -> bool:
         return False
 
 
+def _workers_from_context(context: dict | None) -> dict[str, dict]:
+    raw = (context or {}).get("workers") if isinstance(context, dict) else None
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, dict] = {}
+    for key, value in raw.items():
+        node_id = str(key or "").strip()
+        if not node_id:
+            continue
+        if isinstance(value, dict):
+            out[node_id] = dict(value)
+        else:
+            out[node_id] = {"task_id": str(value or "")}
+    return out
+
+
+async def _apply_worker_state(
+    conv_id: str,
+    *,
+    node_id: str | None = None,
+    working: bool = False,
+    task_id: object = None,
+    expert_id: object = None,
+    expert_name: object = None,
+    reason: object = None,
+    interrupt_pending: bool | None = None,
+    clear_all_workers: bool = False,
+) -> dict:
+    """
+    Track per-node work-bursts for a conversation.
+
+    Source of truth for "is an expert working on this session" — driven by Node4
+    busy set via work_status, and by bind/task_complete as backup.
+    Returns a conversation_working payload for UI subscribers.
+    """
+    empty = {
+        "type": "conversation_working",
+        "conversation_id": conv_id,
+        "working": False,
+        "status": "created",
+        "workers": [],
+        "interrupting": False,
+    }
+    if not conv_id:
+        return empty
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+
+        async with async_session() as db:
+            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id)))
+            c = r.scalar_one_or_none()
+            if not c:
+                return empty
+            context = dict(c.context or {})
+            workers = _workers_from_context(context)
+            nid = str(node_id or "").strip()
+            tid = str(task_id or "").strip()
+            if clear_all_workers:
+                workers = {}
+            elif nid:
+                if working:
+                    entry = dict(workers.get(nid) or {})
+                    if tid:
+                        entry["task_id"] = tid
+                    if expert_id is not None and str(expert_id).strip():
+                        entry["expert_id"] = str(expert_id).strip()
+                    if expert_name is not None and str(expert_name).strip():
+                        entry["expert_name"] = str(expert_name).strip()
+                    entry["since"] = entry.get("since") or datetime.now(timezone.utc).isoformat()
+                    workers[nid] = entry
+                    if tid:
+                        context["active_task_id"] = tid
+                else:
+                    existing = workers.get(nid)
+                    existing_tid = str((existing or {}).get("task_id") or "").strip()
+                    # Only drop when task matches or task id unknown (stale clear OK).
+                    if not tid or not existing_tid or existing_tid == tid:
+                        workers.pop(nid, None)
+            context["workers"] = workers
+            if interrupt_pending is True:
+                context["interrupt_pending"] = True
+            elif interrupt_pending is False or (not workers and context.get("interrupt_pending")):
+                context.pop("interrupt_pending", None)
+
+            active = bool(workers)
+            interrupting = bool(context.get("interrupt_pending")) and active
+            current = str(c.status or "created").strip().lower()
+            reason_text = str(reason or "").strip().lower()
+
+            if active:
+                try:
+                    transition_conversation(c, "running")
+                except ConversationStatusError:
+                    pass
+            elif current == "running" and reason_text in {
+                "interrupted", "not_busy", "canceled", "cancel", "interrupt"
+            }:
+                # All experts idle after interrupt — settle session.
+                try:
+                    transition_conversation(c, "canceled")
+                except ConversationStatusError:
+                    try:
+                        transition_conversation(c, "incomplete")
+                    except ConversationStatusError:
+                        pass
+
+            c.context = context
+            await db.commit()
+            await db.refresh(c)
+
+            status = str(c.status or "created")
+            worker_list = [
+                {
+                    "node_id": wid,
+                    "task_id": (meta or {}).get("task_id"),
+                    "expert_id": (meta or {}).get("expert_id"),
+                    "expert_name": (meta or {}).get("expert_name"),
+                }
+                for wid, meta in workers.items()
+            ]
+            return {
+                "type": "conversation_working",
+                "conversation_id": conv_id,
+                "working": active,
+                "status": status,
+                "workers": worker_list,
+                "interrupting": interrupting,
+                "node_id": nid or None,
+                "task_id": tid or None,
+                "reason": str(reason or "") or None,
+            }
+    except Exception as e:
+        print(f"[WS] apply worker state error: {e}")
+        return empty
+
+
+async def _broadcast_conversation_working(payload: dict) -> None:
+    conv_id = str(payload.get("conversation_id") or "").strip()
+    if not conv_id or not payload:
+        return
+    await _broadcast_to_conversation(conv_id, json.dumps(payload, ensure_ascii=False))
+
+
+async def _interrupt_all_session_workers(conv_id: str, raw_msg: dict) -> dict:
+    """
+    Fan-out user_interrupt to every node that is (or may be) working this session.
+
+    Includes tracked workers, bound node, and in-memory conversation_node map.
+    """
+    targets: set[str] = set()
+    bound = conversation_node.get(conv_id)
+    if bound:
+        targets.add(str(bound))
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+
+        async with async_session() as db:
+            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id)))
+            c = r.scalar_one_or_none()
+            if c:
+                if c.node_id:
+                    targets.add(str(c.node_id))
+                for wid in _workers_from_context(c.context if isinstance(c.context, dict) else {}):
+                    targets.add(wid)
+    except Exception as e:
+        print(f"[WS] interrupt target resolve error: {e}")
+
+    payload = {
+        **raw_msg,
+        "type": "user_interrupt",
+        "conversation_id": conv_id,
+    }
+    raw = json.dumps(payload, ensure_ascii=False)
+    sent_to: list[str] = []
+    for node_id in targets:
+        if node_id in node_connections:
+            try:
+                await node_connections[node_id].send_text(raw)
+                sent_to.append(node_id)
+            except Exception as e:
+                print(f"[WS] interrupt send to {node_id[:8]} failed: {e}")
+    return {"sent_to": sent_to, "targets": sorted(targets)}
+
+
 def _terminal_status_from_task_message(msg: dict) -> str:
     """Map node task_complete/task_error payload to conversation status."""
     if msg.get("type") == "task_error":
@@ -403,6 +594,25 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
         if sticky_name and not str(msg.get("expert_name") or "").strip():
             msg["expert_name"] = sticky_name
 
+    # Pi work-burst lifecycle (not a chat message). Updates session workers SOT
+    # and pushes conversation_working so the UI send/interrupt button stays honest.
+    if msg.get("type") == "work_status" and conv_id:
+        working_raw = msg.get("working")
+        if working_raw is None:
+            working_raw = msg.get("busy")
+        working = working_raw is True or str(working_raw).strip().lower() in {"1", "true", "yes"}
+        payload = await _apply_worker_state(
+            conv_id,
+            node_id=client_id,
+            working=working,
+            task_id=msg.get("task_id"),
+            expert_id=msg.get("expert_id"),
+            expert_name=msg.get("expert_name"),
+            reason=msg.get("reason"),
+        )
+        await _broadcast_conversation_working(payload)
+        return
+
     # Settle conversation status before heavy persistence so a large checkpoint
     # or plan_tree failure cannot leave the session running forever.
     # Terminal channel is task_complete (status=completed|incomplete|blocked).
@@ -423,6 +633,16 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
             if conv_id:
                 await _set_conversation_status(conv_id, _terminal_status_from_task_message(msg))
                 await _clear_active_task_id(conv_id, msg.get("task_id"))
+                # Mirror Node idle: clear this node from workers even if work_status was missed.
+                payload = await _apply_worker_state(
+                    conv_id,
+                    node_id=client_id,
+                    working=False,
+                    task_id=msg.get("task_id"),
+                    reason="settled" if msg.get("type") == "task_complete" else "error",
+                    interrupt_pending=False,
+                )
+                await _broadcast_conversation_working(payload)
             # Usage billing hook (no payment): record expert pack used on settlement.
             if msg.get("type") == "task_complete":
                 await _record_expert_usage_billing(msg, node_id=client_id, conv_id=conv_id)
@@ -452,10 +672,37 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
         # Tool cards already stream stdout; do NOT re-book every tool result as
         # Evidence (that produced messy JSON dumps next to real evidence_created rows).
         await _audit_tool_output(msg, client_id)
-    if msg.get("type") == "checkpoint_update":
+    msg_type = str(msg.get("type") or "")
+    stream_fast = msg_type in {"text", "tool_output", "thinking", "agent_thinking", "reasoning"}
+    should_save = (
+        msg_type not in {"intake_update", "work_status", "checkpoint_update"}
+        and not _is_pentest_runtime_status(msg)
+    )
+
+    if msg_type == "checkpoint_update":
         await _remember_conversation_checkpoint(conv_id, msg.get("checkpoint") or {})
-    elif msg.get("type") != "intake_update" and not _is_pentest_runtime_status(msg):
-        await _save_message(msg, "agent")
+
+    if stream_fast and conv_id:
+        # Progressive UI: broadcast immediately. Never await DB on the hot path —
+        # serial await save was delaying the receive loop so frames burst at end.
+        _stamp_stream_message_ids(msg, conv_id)
+        await _broadcast_to_conversation(conv_id, json.dumps(msg, ensure_ascii=False))
+        if should_save:
+            import asyncio
+
+            async def _persist_stream_frame(payload: dict = dict(msg)) -> None:
+                try:
+                    await _save_message(payload, "agent")
+                except Exception as exc:
+                    print(f"[WS] async stream persist error type={payload.get('type')}: {exc}")
+
+            asyncio.create_task(_persist_stream_frame())
+    else:
+        if should_save:
+            await _save_message(msg, "agent")
+        if conv_id and msg_type not in {"intake_update", "work_status"}:
+            await _broadcast_to_conversation(conv_id, json.dumps(msg, ensure_ascii=False))
+
     if msg.get("type") == "request_decision":
         request_id = msg.get("request_id") or str(uuid.uuid4())
         msg["request_id"] = request_id
@@ -471,10 +718,6 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
                 conversation_id=_uuid(conv_id),
                 detail={"request_id": request_id, "risk_level": msg.get("risk_level")},
             )
-
-    if conv_id:
-        raw = json.dumps(msg, ensure_ascii=False)
-        await _broadcast_to_conversation(conv_id, raw)
 
 
 async def _incr_sessions(node_id: str, delta: int):
@@ -1003,9 +1246,10 @@ def _message_dedupe_key(*, role: str, original_type: str, stored_type: str, cont
     if original_type == "tool_output":
         tool_run_id = content.get("tool_run_id")
         return f"tool:{tool_run_id}" if tool_run_id else None
-    if role == "agent" and original_type == "text":
+    if role == "agent" and original_type in {"text", "thinking", "agent_thinking", "reasoning"}:
         stream_id = content.get("stream_id")
-        return f"text:{stream_id}" if stream_id else None
+        prefix = "thinking" if original_type in {"thinking", "agent_thinking", "reasoning"} else "text"
+        return f"{prefix}:{stream_id}" if stream_id else None
     if original_type == "plan_tree_updated":
         return _plan_tree_dedupe_key(content)
     if original_type in {"status_update", "phase_changed"}:
@@ -1233,7 +1477,21 @@ def _merge_tool_items(existing: dict, incoming: dict) -> list[dict]:
 
 def _merge_saved_message_content(existing: dict, incoming: dict, msg_type: str) -> dict:
     if msg_type != "tool_call":
-        return {**existing, **incoming}
+        # Streaming text/thinking: always keep the longer body so partial frames
+        # cannot regress a fuller snapshot that arrived out of order.
+        merged = {**existing, **incoming}
+        if msg_type in {"text", "thinking"}:
+            prev = str(existing.get("text") or existing.get("reasoning") or "")
+            nxt = str(incoming.get("text") or incoming.get("reasoning") or "")
+            if len(prev) > len(nxt):
+                merged["text"] = prev
+                if msg_type == "thinking":
+                    merged["reasoning"] = prev
+            elif nxt:
+                merged["text"] = nxt
+                if msg_type == "thinking":
+                    merged["reasoning"] = nxt
+        return merged
     stdout = _append_tool_stdout(existing.get("stdout"), incoming.get("stdout"))
     return {
         **existing,
@@ -1244,6 +1502,47 @@ def _merge_saved_message_content(existing: dict, incoming: dict, msg_type: str) 
         "status": incoming.get("status") or existing.get("status") or "running",
         "tool_items": _merge_tool_items(existing, incoming),
     }
+
+
+def _stamp_stream_message_ids(msg: dict, conv_id: str) -> None:
+    """
+    Attach a stable message_id before broadcast so the UI can upsert stream frames
+    without waiting for the DB write to finish.
+    """
+    content = msg.get("content") if isinstance(msg.get("content"), dict) else {}
+    stream_id = str(
+        content.get("stream_id")
+        or msg.get("stream_id")
+        or ""
+    ).strip()
+    tool_run_id = str(
+        msg.get("tool_run_id")
+        or content.get("tool_run_id")
+        or ""
+    ).strip()
+    existing = str(msg.get("message_id") or content.get("message_id") or "").strip()
+    if existing:
+        # Keep content.message_id in sync for frontend makeMessage().
+        if isinstance(msg.get("content"), dict) and not content.get("message_id"):
+            msg["content"]["message_id"] = existing
+        return
+    if msg.get("type") == "text" and stream_id:
+        mid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"text:{conv_id}:{stream_id}"))
+    elif msg.get("type") in {"thinking", "agent_thinking", "reasoning"} and stream_id:
+        mid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"thinking:{conv_id}:{stream_id}"))
+    elif msg.get("type") == "tool_output" and tool_run_id:
+        mid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"tool:{conv_id}:{tool_run_id}"))
+    else:
+        mid = str(uuid.uuid4())
+    msg["message_id"] = mid
+    if isinstance(msg.get("content"), dict):
+        msg["content"]["message_id"] = mid
+        if stream_id and not msg["content"].get("stream_id"):
+            msg["content"]["stream_id"] = stream_id
+    elif msg.get("type") == "text":
+        msg["content"] = {"text": str(msg.get("text") or ""), "stream_id": stream_id, "message_id": mid}
+    if stream_id and not msg.get("stream_id"):
+        msg["stream_id"] = stream_id
 
 async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
     try:
@@ -1288,6 +1587,18 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                 content["text"] = inner.get("text", str(msg))
             else:
                 content = {"text": str(inner)}
+            if msg.get("stream_id") and not content.get("stream_id"):
+                content["stream_id"] = msg.get("stream_id")
+        elif msg_type in ("thinking", "agent_thinking", "reasoning"):
+            msg_type = "thinking"
+            inner = msg.get("content", {})
+            if isinstance(inner, dict):
+                content = dict(inner)
+                body = str(inner.get("reasoning") or inner.get("text") or "")
+                content["text"] = body
+                content["reasoning"] = body
+            else:
+                content = {"text": str(inner), "reasoning": str(inner)}
             if msg.get("stream_id") and not content.get("stream_id"):
                 content["stream_id"] = msg.get("stream_id")
         elif msg_type == "tool_output":
@@ -1407,8 +1718,14 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
         if dedupe_key:
             content["dedupe_key"] = dedupe_key
 
-        message_id = uuid.uuid4()
+        # Honor pre-stamped stream ids so broadcast→save keep the same row key.
+        pre_id = str(msg.get("message_id") or content.get("message_id") or "").strip()
+        try:
+            message_id = uuid.UUID(pre_id) if pre_id else uuid.uuid4()
+        except ValueError:
+            message_id = uuid.uuid4()
         msg["message_id"] = str(message_id)
+        content["message_id"] = str(message_id)
         if isinstance(msg.get("content"), dict):
             msg["content"]["message_id"] = str(message_id)
         async with async_session() as db:
@@ -1432,6 +1749,20 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                     await db.commit()
                     return message_id
 
+            # Also match by primary key when stream stamped the id first.
+            by_pk = await db.execute(
+                select(Message).where(
+                    Message.id == message_id,
+                    Message.conversation_id == uuid.UUID(conv_id),
+                )
+            )
+            existing_pk = by_pk.scalar_one_or_none()
+            if existing_pk:
+                existing_pk.content = _merge_saved_message_content(existing_pk.content or {}, content, msg_type)
+                existing_pk.msg_type = msg_type
+                await db.commit()
+                return message_id
+
             content["message_id"] = str(message_id)
             db.add(Message(
                 id=message_id,
@@ -1448,7 +1779,12 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
 
 
 async def _persist_asset(msg: dict, node_id: str | None):
-    """Upsert one host asset (IP/domain); merge ports/services under that host."""
+    """
+    Enrich an existing user-owned host asset (ports/services/urls/api endpoints).
+
+    Agents never create ledger hosts — only users add assets. Unknown hosts are
+    ignored for the global ledger (conversation cards may still show surface).
+    """
     conv_id = msg.get("conversation_id")
     if not conv_id:
         return None
@@ -1474,6 +1810,8 @@ async def _persist_asset(msg: dict, node_id: str | None):
         raw_type = msg.get("asset_type")
         asset_type = str(raw_type).strip() if raw_type is not None and str(raw_type).strip() else None
         port = msg.get("port") or addr_port
+        urls = msg.get("urls") or msg.get("web_urls")
+        api_endpoints = msg.get("api_endpoints") or msg.get("endpoints") or msg.get("apis")
         async with async_session() as db:
             asset = await upsert_discovered_asset(
                 db,
@@ -1483,11 +1821,16 @@ async def _persist_asset(msg: dict, node_id: str | None):
                 asset_type=asset_type,
                 open_ports=msg.get("open_ports"),
                 services=msg.get("services"),
+                urls=urls,
+                api_endpoints=api_endpoints,
                 port=port,
                 conversation_id=uuid.UUID(conv_id),
                 node_id=node_uuid,
-                source="agent_discovered",
+                allow_create=False,
             )
+            if not asset:
+                # Host not in user ledger — do not invent an asset row.
+                return None
             await db.commit()
             props = asset.properties or {}
             return {
@@ -1503,6 +1846,8 @@ async def _persist_asset(msg: dict, node_id: str | None):
                 "properties": props,
                 "open_ports": props.get("open_ports") or [],
                 "services": props.get("services") or [],
+                "urls": props.get("urls") or [],
+                "api_endpoints": props.get("api_endpoints") or [],
             }
     except Exception as e:
         print(f"[WS] persist asset error: {e}")
@@ -1668,7 +2013,6 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
     node_uuid = _uuid(node_id) or bound_node
     try:
         from app.db.base import async_session
-        from app.models.asset import Asset
         from app.models.evidence import Evidence
         from app.models.vulnerability import Vulnerability
 
@@ -1761,48 +2105,33 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
             # can read paths/stdout without the original taskDir.
             _backfill_evidence_from_proof_excerpts(evidence_rows, proof_excerpts)
 
-            # Resolve asset first so cross-session dedupe can key on host+port+title.
+            # Link to user-owned host only; agents never create ledger assets.
+            # Findings may book with asset_id=None when host is unknown / not on ledger.
             asset_id = None
             if host and is_valid_ledger_address(host):
                 services = None
                 if port:
-                    services = [{"port": port, "name": str(service_name).strip() if service_name else ""}]
+                    svc: dict = {"port": port, "name": str(service_name).strip() if service_name else ""}
+                    loc = str(msg.get("location") or msg.get("url") or "").strip()
+                    if loc and "://" in loc:
+                        svc["url"] = loc
+                    services = [svc]
+                location_url = str(msg.get("location") or msg.get("url") or "").strip()
+                urls_in = [location_url] if location_url and "://" in location_url else None
                 asset = await upsert_discovered_asset(
                     db,
                     user_id=user_id,
                     address=host,
                     open_ports=[port] if port else None,
                     services=services,
+                    urls=urls_in,
                     port=port,
                     conversation_id=uuid.UUID(conv_id),
                     node_id=node_uuid,
-                    source="agent_discovered",
+                    allow_create=False,
                 )
-                asset_id = asset.id
-            else:
-                fallback_address = f"unknown:{conv_id}"
-                existing_asset = await db.execute(
-                    select(Asset).where(
-                        Asset.user_id == user_id,
-                        Asset.conversation_id == uuid.UUID(conv_id),
-                        Asset.address == fallback_address,
-                    )
-                )
-                asset = existing_asset.scalar_one_or_none()
-                if not asset:
-                    asset = Asset(
-                        id=uuid.uuid4(),
-                        user_id=user_id,
-                        conversation_id=uuid.UUID(conv_id),
-                        node_id=node_uuid,
-                        name=fallback_address,
-                        address=fallback_address,
-                        type="host",
-                        source="agent_discovered",
-                    )
-                    db.add(asset)
-                    await db.flush()
-                asset_id = asset.id
+                if asset:
+                    asset_id = asset.id
 
             # Cross-session dedupe: same user + asset + title (+ port) → one ledger row.
             title_key = normalize_finding_title(title)
@@ -2427,6 +2756,29 @@ def _has_resumable_task(resume_context: dict) -> bool:
     return False
 
 
+def _message_has_task_target(msg: dict) -> bool:
+    """True only when this user message carries an authorized execution target.
+
+    Structured product fields (target/scope) or explicit URL/IP in text — not
+    free-text intent guessing. Greetings like "你好" must return False.
+    """
+    if not isinstance(msg, dict):
+        return False
+    target = msg.get("target")
+    if isinstance(target, dict) and str(target.get("value") or "").strip():
+        return True
+    if isinstance(target, str) and target.strip():
+        return True
+    scope = msg.get("scope")
+    if isinstance(scope, dict):
+        allow = scope.get("allow")
+        if isinstance(allow, list) and any(str(item or "").strip() for item in allow):
+            return True
+    if extract_targets(str(msg.get("text") or "")):
+        return True
+    return False
+
+
 def _looks_like_continue_request(text: str) -> bool:
     raw = str(text or "").strip()
     if not raw:
@@ -2789,6 +3141,95 @@ async def _answer_with_platform_agent(conv_id: str, user_id: str, text: str, age
     await _broadcast_to_conversation(conv_id, json.dumps(answer, ensure_ascii=False))
 
 
+async def _recent_room_chat_turns(conv_id: str, *, limit: int = 12) -> list[dict]:
+    """Prior user/agent text turns for multi-turn expert room chat (LLM context)."""
+    try:
+        from app.db.base import async_session
+        from app.models.message import Message
+
+        async with async_session() as db:
+            result = await db.execute(
+                select(Message)
+                .where(Message.conversation_id == uuid.UUID(conv_id))
+                .order_by(Message.created_at.desc())
+                .limit(max(1, min(limit, 40)))
+            )
+            rows = list(reversed(result.scalars().all()))
+    except Exception as e:
+        print(f"[WS] load room chat turns error: {e}")
+        return []
+
+    turns: list[dict] = []
+    for row in rows:
+        content = row.content if isinstance(row.content, dict) else {}
+        text = str(content.get("text") or content.get("display_text") or "").strip()
+        if not text:
+            continue
+        role = str(row.role or "").strip().lower()
+        if role == "user":
+            turns.append({"role": "user", "content": text})
+        elif role in {"agent", "assistant", "system"}:
+            # Only chat text — skip status/task_complete noise.
+            msg_type = str(getattr(row, "msg_type", "") or content.get("type") or "text")
+            if msg_type in {"text", "agent_text", ""} or content.get("agent_mode"):
+                turns.append({"role": "assistant", "content": text})
+    return turns
+
+
+async def _reply_expert_preamble(conv_id: str, msg: dict, decision) -> None:
+    """
+    Expert selected, no authorized target yet: LLM-authored room chat only.
+
+    Does not bind node workers, does not set conversation running, does not open
+    a Node work burst. User-visible wording comes from the model — never a
+    hardcoded monologue.
+    """
+    expert_name = str(msg.get("expert_name") or "").strip().lstrip("@") or "渗透专家"
+    expert_id = str(msg.get("expert_id") or "").strip() or None
+    eng = str(msg.get("engagement") or msg.get("role") or "").strip() or None
+    node_id = str(
+        getattr(decision, "agent_node_id", None)
+        or msg.get("agent_node_id")
+        or ""
+    ).strip() or None
+    user_text = str(msg.get("text") or msg.get("display_text") or "").strip()
+
+    await _remember_conversation_expert(
+        conv_id,
+        expert_id=expert_id,
+        expert_name=expert_name,
+        engagement=eng,
+    )
+
+    recent = await _recent_room_chat_turns(conv_id)
+    # Drop the just-saved current user turn from history so we do not double-send it.
+    if recent and recent[-1].get("role") == "user" and str(recent[-1].get("content") or "").strip() == user_text:
+        recent = recent[:-1]
+
+    answer = await answer_expert_room_chat(
+        conv_id,
+        user_text,
+        expert_name=expert_name,
+        expert_id=expert_id,
+        engagement=eng,
+        recent_turns=recent,
+    )
+    if isinstance(answer.get("content"), dict):
+        answer["content"]["expert_name"] = expert_name
+        if expert_id:
+            answer["content"]["expert_id"] = expert_id
+    if node_id:
+        answer["agent_node_id"] = node_id
+        if isinstance(answer.get("content"), dict):
+            answer["content"]["agent_node_id"] = node_id
+    _apply_agent_attribution(
+        answer,
+        agent_source="pentest",
+        agent_node_id=str(node_id or PLATFORM_AGENT_NODE_ID),
+    )
+    await _persist_and_broadcast(conv_id, answer, "agent")
+
+
 async def _broadcast_to_conversation(conv_id: str, raw: str):
     if conv_id in conversation_subscribers:
         for sub in list(conversation_subscribers[conv_id]):
@@ -2901,6 +3342,33 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         }, "agent")
                         continue
                     has_resume_task = _has_resumable_task(resume_context)
+                    # Pre-target chat (e.g. "你好" with 渗透大师 selected): never open a work
+                    # burst / bind node / flip status to running. Expert-voiced room reply only.
+                    # Structured signal only — explicit expert seat + no target + no resumable task.
+                    if (
+                        requested_agent
+                        and requested_agent != "platform"
+                        and (requested_node_id or msg.get("expert_id") or msg.get("expert_name"))
+                        and not _message_has_task_target(msg)
+                        and not has_resume_task
+                        and not _is_active_runtime_status(conversation_status)
+                    ):
+                        from app.services.agent_router import RoutingDecision
+
+                        await _reply_expert_preamble(
+                            conv_id,
+                            msg,
+                            RoutingDecision(
+                                action="platform_reply",
+                                capability="platform.chat",
+                                mode="expert_preamble",
+                                agent=requested_agent,
+                                agent_node_id=requested_node_id,
+                                requires_target=False,
+                                reason="router fast-path: expert selected, no task target",
+                            ),
+                        )
+                        continue
                     # After failed/incomplete, short "继续" must resume — do not rely on the planner
                     # alone (it often answer_user's and leaves the user with no node activity).
                     force_continue = (
@@ -2945,17 +3413,29 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         continue
 
                     if decision.action == "platform_reply":
-                        await _answer_with_platform_agent(conv_id, client_id, msg.get("text", ""), decision.agent or "platform", decision.mode or "platform_chat", decision.agent_node_id)
+                        if str(decision.mode or "") == "expert_preamble":
+                            # Selected expert, no task target: in-room chat only.
+                            # Do not bind/running, do not open right-panel work surface.
+                            await _reply_expert_preamble(conv_id, msg, decision)
+                            continue
+                        await _answer_with_platform_agent(
+                            conv_id,
+                            client_id,
+                            msg.get("text", ""),
+                            decision.agent or "platform",
+                            decision.mode or "platform_chat",
+                            decision.agent_node_id,
+                        )
                         continue
 
                     if decision.action == "ask_clarification":
-                        # Mid-task @expert chat: forward into the active worker.
-                        # Otherwise platform speaks in the room (no silent drop).
+                        # Mid-task: forward to active expert runtime.
                         if (
-                            _is_active_runtime_status(conversation_status)
-                            and requested_node_id
+                            requested_node_id
                             and requested_agent
                             and requested_agent != "platform"
+                            and str(requested_node_id) in node_connections
+                            and _is_active_runtime_status(conversation_status)
                         ):
                             sent = await _send_direct_node_message(
                                 conv_id, requested_node_id, msg, decision.capability or "pentest.web"
@@ -2969,7 +3449,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                                 conversation_id=uuid.UUID(conv_id),
                                 detail={
                                     "sent": sent,
-                                    "source": "mid_task_expert_mention",
+                                    "source": "expert_clarification_steer",
                                     "node_id": requested_node_id,
                                     "capability": decision.capability,
                                     "expert_id": str(msg.get("expert_id") or "") or None,
@@ -2985,18 +3465,19 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                                 "agent_node_id": str(PLATFORM_AGENT_NODE_ID),
                             }, "agent")
                             continue
-                        # Shared-room facilitator: clarify target / intent; sticky expert kept for next dispatch.
-                        expert_label = str(msg.get("expert_name") or "").strip().lstrip("@")
-                        if expert_label and str(decision.mode or "") == "missing_target":
-                            prompt = (
-                                f"已记下专家「{expert_label}」。请提供授权目标 URL/IP 与测试范围，我再请该专家接手。"
-                            )
-                        else:
-                            prompt = (
-                                decision.message
-                                or "Please provide the target URL or IP and confirm it is in authorized scope."
-                            )
-                        # Platform agent answers in the room; expert is sticky for the next work burst.
+                        # Idle + explicit expert: preamble chat (no task), not "已记下专家".
+                        if (
+                            requested_node_id
+                            and requested_agent
+                            and requested_agent != "platform"
+                        ):
+                            await _reply_expert_preamble(conv_id, msg, decision)
+                            continue
+                        # Platform-only clarification.
+                        prompt = (
+                            decision.message
+                            or "Please provide the target URL or IP and confirm it is in authorized scope."
+                        )
                         answer = await answer_clarification(
                             conv_id,
                             prompt,
@@ -3181,6 +3662,17 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             await _bind_conversation_to_node(
                                 conv_id, node_id, active_task_id=str(task_msg.get("task_id") or "")
                             )
+                            # Optimistic working until Node work_status confirms busy.
+                            working_payload = await _apply_worker_state(
+                                conv_id,
+                                node_id=node_id,
+                                working=True,
+                                task_id=task_msg.get("task_id"),
+                                expert_id=task_expert_id,
+                                expert_name=task_expert_name,
+                                interrupt_pending=False,
+                            )
+                            await _broadcast_conversation_working(working_payload)
                             await _incr_sessions(node_id, 1)
                             task_msg["agent_node_id"] = node_id
                             task_msg["agent_capability"] = decision.capability
@@ -3262,24 +3754,61 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                 elif msg.get("type") in ("user_steer", "user_interrupt") and conv_id:
                     if msg.get("type") == "user_interrupt":
                         action = str(msg.get("action") or "cancel").lower()
-                        next_status = {"cancel": "canceled", "pause": "paused", "resume": "running"}.get(action)
-                        if next_status:
-                            await _set_conversation_status(conv_id, next_status)
-                        sent = await _send_to_bound_node(conv_id, raw)
-                        # Always surface interrupt outcome in the room (Node4 may be mid-tool).
-                        if sent:
+                        # Keep session status=running while experts wind down; fan-out
+                        # interrupt to every worker on this conversation (not only sticky bind).
+                        fanout = await _interrupt_all_session_workers(conv_id, msg)
+                        sent_to = fanout.get("sent_to") or []
+                        if sent_to:
+                            # Ensure each target is tracked as working so UI stays on
+                            # Interrupt until every node emits work_status(idle).
+                            working_payload = {
+                                "type": "conversation_working",
+                                "conversation_id": conv_id,
+                                "working": True,
+                                "status": "running",
+                                "workers": [],
+                                "interrupting": True,
+                            }
+                            for nid in sent_to:
+                                working_payload = await _apply_worker_state(
+                                    conv_id,
+                                    node_id=nid,
+                                    working=True,
+                                    interrupt_pending=True,
+                                    reason="interrupt" if action != "pause" else "pause",
+                                )
+                            working_payload["interrupting"] = True
+                            working_payload["working"] = True
+                        else:
+                            # No online runtime — clear ghost workers and leave interrupt mode.
+                            working_payload = await _apply_worker_state(
+                                conv_id,
+                                working=False,
+                                interrupt_pending=False,
+                                clear_all_workers=True,
+                                reason="not_busy",
+                            )
+                            await _set_conversation_status(
+                                conv_id,
+                                "paused" if action == "pause" else "canceled",
+                            )
+                            working_payload["status"] = "paused" if action == "pause" else "canceled"
+                            working_payload["working"] = False
+                        await _broadcast_conversation_working(working_payload)
+                        if sent_to:
                             note = (
-                                "已发送中止指令给专家，正在停止当前工作…"
+                                f"已向 {len(sent_to)} 个专家运行时发送中止，正在停止本会话全部工作…"
                                 if action != "pause"
-                                else "已发送暂停指令给专家…"
+                                else f"已向 {len(sent_to)} 个专家运行时发送暂停…"
                             )
                         else:
-                            note = "未找到绑定的在线专家运行时，无法中止。请确认节点在线后重试。"
+                            note = "当前会话没有在线专家在工作，已解除运行态。"
                         await _persist_and_broadcast(conv_id, {
                             "type": "status",
                             "conversation_id": conv_id,
                             "text": note,
-                            "status": next_status or "canceled",
+                            "status": "running" if sent_to else ("paused" if action == "pause" else "canceled"),
+                            "working": bool(sent_to),
                             "agent_source": "platform",
                             "agent_node_id": str(PLATFORM_AGENT_NODE_ID),
                         }, "agent")
@@ -3290,7 +3819,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             resource_type="conversation",
                             resource_id=uuid.UUID(conv_id),
                             conversation_id=uuid.UUID(conv_id),
-                            detail={"sent": sent, "action": action},
+                            detail={"sent_to": sent_to, "targets": fanout.get("targets"), "action": action},
                         )
                     else:
                         sent = await _send_to_bound_node(conv_id, raw)

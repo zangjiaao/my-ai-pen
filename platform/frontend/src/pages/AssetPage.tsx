@@ -4,6 +4,7 @@ import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 import { authFetch } from "../lib/api";
 import AssetDetailDialog from "../components/AssetDetailDialog";
+import ConfirmDialog from "../components/ConfirmDialog";
 import { buildRiskChips } from "../components/cards/FindingCard";
 
 type RelatedVuln = {
@@ -69,6 +70,8 @@ export type PendingAssetTask = {
   text: string;
   target: { type: string; value: string };
   scope: { allow: string[]; deny: string[] };
+  /** Conversation created for this launch — must win over restore races. */
+  conversationId: string;
 };
 
 export default function AssetPage() {
@@ -91,6 +94,9 @@ export default function AssetPage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [launching, setLaunching] = useState(false);
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkDeleteError, setBulkDeleteError] = useState("");
 
   /** assetId → selected ports (or HOST_ONLY). */
   const [checkedPorts, setCheckedPorts] = useState<Record<string, string[]>>({});
@@ -218,17 +224,38 @@ export default function AssetPage() {
   const selectedSummary = useMemo(() => {
     let assetsCount = 0;
     let portsCount = 0;
+    const ids: string[] = [];
     for (const [assetId, ports] of Object.entries(checkedPorts)) {
       if (!ports.length) continue;
       assetsCount += 1;
+      ids.push(assetId);
       if (ports.includes(HOST_ONLY)) {
         // host-only counts as one target, not a port
       } else {
         portsCount += ports.length;
       }
     }
-    return { assetsCount, portsCount };
+    return { assetsCount, portsCount, ids };
   }, [checkedPorts]);
+
+  const bulkDeleteTargets = useMemo(() => {
+    const byId = new Map(assets.map((a) => [a.id, a]));
+    return selectedSummary.ids
+      .map((id) => byId.get(id))
+      .filter((a): a is Asset => Boolean(a));
+  }, [assets, selectedSummary.ids]);
+
+  const bulkDeleteDescription = useMemo(() => {
+    const n = bulkDeleteTargets.length;
+    if (!n) return "请先勾选要删除的资产。";
+    const labels = bulkDeleteTargets.map((a) => a.address || a.name || a.id);
+    const preview = labels.slice(0, 8).map((x) => `· ${x}`).join("\n");
+    const more = labels.length > 8 ? `\n· …共 ${labels.length} 个` : "";
+    return (
+      `确定删除以下 ${n} 个主机资产？\n\n${preview}${more}\n\n` +
+      "关联漏洞仅解绑，不会删除。此操作不可撤销。"
+    );
+  }, [bulkDeleteTargets]);
 
   const toggleExpand = (assetId: string, e: { stopPropagation: () => void }) => {
     e.stopPropagation();
@@ -307,7 +334,7 @@ export default function AssetPage() {
 
   const clearSelection = () => setCheckedPorts({});
 
-  const buildTaskPayload = (): PendingAssetTask | null => {
+  const buildTaskPayload = (): Omit<PendingAssetTask, "conversationId"> | null => {
     const allow: string[] = [];
     const lines: string[] = [];
     for (const asset of assets) {
@@ -377,8 +404,11 @@ export default function AssetPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       });
+      const pending: PendingAssetTask = { ...payload, conversationId: conv.id };
+      // Pin active conversation before navigation so ConversationPage restore cannot
+      // fall back to a different running session.
       localStorage.setItem(ACTIVE_CONVERSATION_KEY, conv.id);
-      sessionStorage.setItem(PENDING_ASSET_TASK_KEY, JSON.stringify(payload));
+      sessionStorage.setItem(PENDING_ASSET_TASK_KEY, JSON.stringify(pending));
       setNotice("正在打开会话并创建任务…");
       navigate("/");
     } catch (err) {
@@ -386,6 +416,66 @@ export default function AssetPage() {
     } finally {
       setLaunching(false);
     }
+  };
+
+  const openBulkDeleteConfirm = () => {
+    if (!bulkDeleteTargets.length) {
+      setError("请先勾选要删除的资产");
+      return;
+    }
+    setBulkDeleteError("");
+    setConfirmBulkDelete(true);
+  };
+
+  const closeBulkDeleteConfirm = () => {
+    if (bulkDeleting) return;
+    setConfirmBulkDelete(false);
+    setBulkDeleteError("");
+  };
+
+  const confirmBulkDeleteAssets = async () => {
+    const targets = bulkDeleteTargets;
+    if (!targets.length) {
+      setBulkDeleteError("没有可删除的资产");
+      return;
+    }
+    setBulkDeleting(true);
+    setBulkDeleteError("");
+    setError("");
+    const failed: string[] = [];
+    const deletedIds: string[] = [];
+    for (const asset of targets) {
+      try {
+        await authFetch(`/api/assets/${asset.id}`, { method: "DELETE" });
+        deletedIds.push(asset.id);
+      } catch (err) {
+        const label = asset.address || asset.name || asset.id;
+        const msg = err instanceof Error ? err.message : "删除失败";
+        failed.push(`${label}：${msg}`);
+      }
+    }
+    setBulkDeleting(false);
+    if (deletedIds.length) {
+      setCheckedPorts((prev) => {
+        const next = { ...prev };
+        for (const id of deletedIds) delete next[id];
+        return next;
+      });
+      if (selected && deletedIds.includes(selected.id)) {
+        setSelected(null);
+      }
+      await load();
+      void loadFilterOptions();
+    }
+    if (failed.length) {
+      setBulkDeleteError(
+        `成功 ${deletedIds.length} 个，失败 ${failed.length} 个：\n${failed.slice(0, 5).join("\n")}`,
+      );
+      // Keep dialog open so the user can see partial failures.
+      return;
+    }
+    setConfirmBulkDelete(false);
+    setNotice(`已删除 ${deletedIds.length} 个资产`);
   };
 
   return (
@@ -468,7 +558,7 @@ export default function AssetPage() {
                 </span>
                 <button
                   type="button"
-                  disabled={launching}
+                  disabled={launching || bulkDeleting}
                   onClick={() => void launchTask()}
                   className="rounded-md bg-ink px-3 py-1 text-[11px] font-medium text-white disabled:opacity-50"
                 >
@@ -476,8 +566,17 @@ export default function AssetPage() {
                 </button>
                 <button
                   type="button"
+                  disabled={bulkDeleting || launching}
+                  onClick={openBulkDeleteConfirm}
+                  className="rounded-md border border-severity-critical/40 px-2.5 py-1 text-[11px] font-medium text-severity-critical hover:bg-severity-critical/10 disabled:opacity-50"
+                >
+                  删除
+                </button>
+                <button
+                  type="button"
+                  disabled={bulkDeleting}
                   onClick={clearSelection}
-                  className="rounded-md border px-2.5 py-1 text-[11px] text-ink-secondary hover:bg-canvas"
+                  className="rounded-md border px-2.5 py-1 text-[11px] text-ink-secondary hover:bg-canvas disabled:opacity-50"
                 >
                   清除选择
                 </button>
@@ -652,11 +751,28 @@ export default function AssetPage() {
               void load();
               void loadFilterOptions();
             }}
-            onDeleted={() => {
+            onDeleted={(id) => {
               setSelected(null);
+              setCheckedPorts((prev) => {
+                if (!(id in prev)) return prev;
+                const next = { ...prev };
+                delete next[id];
+                return next;
+              });
               void load();
               void loadFilterOptions();
             }}
+          />
+
+          <ConfirmDialog
+            open={confirmBulkDelete}
+            title={bulkDeleteTargets.length > 1 ? "批量删除资产" : "删除资产"}
+            description={bulkDeleteDescription}
+            busy={bulkDeleting}
+            confirmLabel={bulkDeleteTargets.length > 1 ? `删除 ${bulkDeleteTargets.length} 个` : "删除"}
+            onCancel={closeBulkDeleteConfirm}
+            onConfirm={() => void confirmBulkDeleteAssets()}
+            error={bulkDeleteError || null}
           />
 
           {showForm && (

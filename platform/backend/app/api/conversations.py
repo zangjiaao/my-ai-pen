@@ -28,6 +28,8 @@ class ConversationOut(BaseModel):
     title: str
     node_id: str | None
     status: str
+    # True when any expert runtime is mid work-burst on this session.
+    working: bool = False
     created_at: str | None
     last_active_at: str | None
     model_config = {"from_attributes": True}

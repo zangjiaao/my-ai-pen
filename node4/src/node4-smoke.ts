@@ -1025,6 +1025,42 @@ async function main() {
   assert(textContent?.text === "Agent found a path.", "text content body");
   assert(Boolean(textContent?.stream_id), "text stream_id present");
 
+  // Progressive stream must use partial full-text SOT — never double-prefix from
+  // cumulative deltas (regression: "好的好的" / "登录登录").
+  const streamMsgs: Array<Record<string, unknown>> = [];
+  const streamPlatform = {
+    send: async (m: Record<string, unknown>) => {
+      streamMsgs.push(m);
+    },
+  };
+  const progressive = new PlatformTextStream(streamPlatform as any, obsTask);
+  const partial = (t: string) => ({ role: "assistant", content: [{ type: "text", text: t }] });
+  await progressive.handle({ type: "message_start", message: partial("") });
+  await progressive.handle({
+    type: "message_update",
+    message: partial("好的"),
+    assistantMessageEvent: { type: "text_delta", delta: "好的", partial: partial("好的") },
+  });
+  await progressive.handle({
+    type: "message_update",
+    // Cumulative-style delta (wrong but real for some proxies) + correct partial.
+    message: partial("好的，我来复测"),
+    assistantMessageEvent: {
+      type: "text_delta",
+      delta: "好的，我来复测",
+      partial: partial("好的，我来复测"),
+    },
+  });
+  await progressive.handle({ type: "message_end", message: partial("好的，我来复测这个漏洞。") });
+  const lastStream = [...streamMsgs].reverse().find((m) => m.type === "text") as
+    | { content?: { text?: string } }
+    | undefined;
+  assert(
+    lastStream?.content?.text === "好的，我来复测这个漏洞。",
+    `no doubled prefix, got ${JSON.stringify(lastStream?.content?.text)}`,
+  );
+  assert(!String(lastStream?.content?.text || "").startsWith("好的好的"), "no 好的好的");
+
   // Session event: message_end records usage + goal tokens + checkpoint
   await handleNode4SessionEvent(obsCtx, textStream, throttle, {
     type: "message_end",

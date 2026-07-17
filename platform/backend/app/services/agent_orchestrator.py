@@ -97,27 +97,60 @@ def _policy_guard(plan: AgentPlan, *, text: str, context: OrchestrationContext) 
     requested_agent = _normalize_agent(context.requested_agent)
     agent = _normalize_agent(plan.agent) or _agent_for_capability(plan.capability) or requested_agent or "platform"
     pentest_online = _online_capability_nodes(context, "pentest.web")
+    requested_node_id = str(context.requested_node_id or "").strip() or None
+    requested_node_online = bool(
+        requested_node_id
+        and any(
+            item.online and str(item.node_id or "") == requested_node_id
+            for item in (context.capabilities or [])
+        )
+    )
 
-    if requested_agent == "pentest" and not targets and context.has_resume_task and plan.action in {"answer_user", "summarize_results", "ask_clarification"}:
+    # Explicit expert/node selection (toolbar / @expert / agent_target) must route to that
+    # expert — never let the platform facilitator speak as "已记下专家…请提供目标".
+    # Shared-room model: the selected expert owns greetings and target clarification.
+    if (
+        requested_agent
+        and requested_agent != "platform"
+        and requested_node_id
+        and requested_node_online
+    ):
+        if targets:
+            return RoutingDecision(
+                action="dispatch_node",
+                capability="pentest.web" if requested_agent == "pentest" else (plan.capability or "pentest.web"),
+                mode=plan.mode
+                or ("completed_followup" if context.conversation_status == "completed" else "new_task"),
+                agent=requested_agent,
+                agent_node_id=requested_node_id,
+                requires_target=False,
+                reason=plan.reason or "explicit expert selection with target",
+                targets=targets[:1],
+            )
+        if context.has_resume_task and plan.action in {
+            "answer_user",
+            "summarize_results",
+            "ask_clarification",
+        }:
+            return RoutingDecision(
+                action="platform_reply",
+                capability="snapshot.qa",
+                mode="snapshot_qa",
+                agent=requested_agent,
+                agent_node_id=requested_node_id or context.bound_node_id,
+                reason=plan.reason or "user explicitly addressed the expert for session context",
+            )
+        # No authorized target yet (e.g. "你好"): do NOT open a work burst / task status.
+        # Reply in-room as the selected expert persona and wait for a real target.
         return RoutingDecision(
             action="platform_reply",
-            capability="snapshot.qa",
-            mode="snapshot_qa",
-            agent="pentest",
-            agent_node_id=plan.agent_node_id or context.requested_node_id or context.bound_node_id,
-            reason=plan.reason or "user explicitly addressed the pentest agent for session context",
-        )
-
-    if requested_agent == "pentest" and context.requested_node_id and not targets and not context.has_resume_task and plan.action in {"answer_user", "summarize_results"}:
-        return RoutingDecision(
-            action="ask_clarification",
-            capability="pentest.web",
-            mode="missing_target",
-            agent="pentest",
-            agent_node_id=plan.agent_node_id or context.requested_node_id,
-            requires_target=True,
-            reason=plan.reason or "user explicitly addressed a pentest node without an execution target",
-            message="Please provide the target URL/IP and confirm it is in authorized scope.",
+            capability="platform.chat",
+            mode="expert_preamble",
+            agent=requested_agent,
+            agent_node_id=requested_node_id,
+            requires_target=False,
+            reason="explicit expert selected but no target — chat only, no task lifecycle",
+            targets=[],
         )
 
     # Hard override: online pentest node + explicit target in message must not be answered as

@@ -1,10 +1,11 @@
 # Product milestones: Phase A–D (pentest expert sell)
 
-Living gate board for the **penetration-testing expert** as the main product sell, plus report, dashboard, and scheduled tasks.
+> **ARCHIVED 2026-07-17** — Engineering gates A–D marked shipped; not implementation authority.  
+> Living product direction: `docs/prd.md`, `docs/platform-default-agent-refactor.md`.
 
-Aligned with `prd.md`, `node-expert-offers.md`, `AGENTS.md`, and research-inspired product shape (skills + evidence booking + visible engagement + cron retest).
+Historical gate board for the **penetration-testing expert** as the main product sell, plus report, dashboard, and scheduled tasks.
 
-**Last updated:** 2026-07-14
+**Last updated:** 2026-07-14 (content); archived 2026-07-17.
 
 ---
 

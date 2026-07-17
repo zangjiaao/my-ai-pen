@@ -17,6 +17,8 @@ export interface Conversation {
   title: string;
   node_id: string | null;
   status: "created" | "running" | "paused" | "completed" | "incomplete" | "failed" | "canceled";
+  /** True when any expert runtime reports a work-burst on this session. */
+  working?: boolean;
   created_at: string;
   last_active_at: string;
 }

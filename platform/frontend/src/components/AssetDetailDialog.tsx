@@ -817,7 +817,10 @@ export default function AssetDetailDialog({
         open={confirmDelete}
         title="删除资产"
         description={`确定删除资产「${host || form.address || "该资产"}」？关联漏洞仅解绑，不会删除。此操作不可撤销。`}
-        onCancel={() => setConfirmDelete(false)}
+        busy={deleting}
+        onCancel={() => {
+          if (!deleting) setConfirmDelete(false);
+        }}
         onConfirm={() => void deleteAsset()}
         error={error || null}
       />
@@ -825,7 +828,10 @@ export default function AssetDetailDialog({
         open={Boolean(confirmRemovePort)}
         title="删除端口"
         description={`确定从该资产移除端口 ${confirmRemovePort || ""}？关联漏洞不会被删除，仅从端口清单中去掉。`}
-        onCancel={() => setConfirmRemovePort(null)}
+        busy={Boolean(removingPort)}
+        onCancel={() => {
+          if (!removingPort) setConfirmRemovePort(null);
+        }}
         onConfirm={() => {
           if (confirmRemovePort) void removePort(confirmRemovePort);
         }}

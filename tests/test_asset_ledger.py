@@ -16,10 +16,13 @@ from app.services.asset_ledger import (  # noqa: E402
     compute_security_changes,
     conversation_target_blobs,
     enrich_properties_ports,
+    extract_api_endpoints,
     extract_ports,
     extract_ports_for_host,
     extract_services,
+    extract_urls,
     is_valid_ledger_address,
+    merge_discover_properties,
     merge_tags,
     normalize_address,
     normalize_port,
@@ -217,6 +220,7 @@ class AssetLedgerMergeTests(unittest.TestCase):
             asset_type="domain",
             open_ports=[443],
             services=[{"port": 443, "name": "https"}],
+            source="manual",
         )
         rediscover = apply_discover_to_asset_fields(
             existing=existing,
@@ -225,10 +229,69 @@ class AssetLedgerMergeTests(unittest.TestCase):
             asset_type=None,
             open_ports=[22],
             services=[{"port": 22, "name": "ssh"}],
+            source="agent_discovered",
         )
         self.assertEqual(rediscover["name"], "支付网关")
         self.assertEqual(rediscover["type"], "domain")
         self.assertEqual(extract_ports(rediscover["properties"]), ["22", "443"])
+        # Agent enrich must not rewrite user ownership source.
+        self.assertEqual(rediscover["source"], "manual")
+
+    def test_agent_enrich_merges_urls_and_api_endpoints(self):
+        base = apply_discover_to_asset_fields(
+            existing=None,
+            address="app.example.com",
+            source="manual",
+            open_ports=[443],
+            services=[{"port": 443, "name": "https", "url": "https://app.example.com"}],
+        )
+        again = apply_discover_to_asset_fields(
+            existing=base,
+            address="app.example.com",
+            services=[{"port": 443, "name": "https", "product": "nginx"}],
+            urls=["https://app.example.com/login", "https://app.example.com/admin"],
+            api_endpoints=[
+                {"method": "GET", "path": "/api/v1/users"},
+                {"method": "POST", "path": "/api/v1/login", "url": "https://app.example.com/api/v1/login"},
+            ],
+        )
+        props = again["properties"]
+        self.assertEqual(again["source"], "manual")
+        self.assertEqual(extract_urls(props), [
+            "https://app.example.com/login",
+            "https://app.example.com/admin",
+        ])
+        apis = extract_api_endpoints(props)
+        self.assertEqual(len(apis), 2)
+        self.assertEqual(apis[0]["method"], "GET")
+        self.assertEqual(apis[0]["path"], "/api/v1/users")
+        by_port = {s["port"]: s for s in extract_services(props)}
+        self.assertEqual(by_port["443"].get("url"), "https://app.example.com")
+        self.assertEqual(by_port["443"].get("product"), "nginx")
+
+        # Second enrich unions without dropping prior surface.
+        third = merge_discover_properties(
+            props,
+            urls=["https://app.example.com/login", "https://app.example.com/health"],
+            api_endpoints=[{"method": "GET", "path": "/api/v1/users"}, {"path": "/api/health"}],
+        )
+        self.assertEqual(extract_urls(third), [
+            "https://app.example.com/login",
+            "https://app.example.com/admin",
+            "https://app.example.com/health",
+        ])
+        self.assertEqual(len(extract_api_endpoints(third)), 3)
+
+    def test_service_url_merges_on_rediscover(self):
+        first = merge_discover_properties(
+            {},
+            services=[{"port": "8080", "name": "http"}],
+        )
+        second = merge_discover_properties(
+            first,
+            services=[{"port": "8080", "name": "http", "url": "http://10.0.0.5:8080/app"}],
+        )
+        self.assertEqual(extract_services(second)[0].get("url"), "http://10.0.0.5:8080/app")
 
 
 class AssetLedgerRiskAndExportTests(unittest.TestCase):

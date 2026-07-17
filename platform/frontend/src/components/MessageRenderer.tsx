@@ -936,9 +936,13 @@ function normalizeSeverity(value: unknown): string {
   return ["critical", "high", "medium", "low", "info"].includes(severity) ? severity : "info";
 }
 function AgentPendingCard({ content }: { content: Record<string, unknown> }) {
+  // Same visual language as Thinking so the slot morphs without a jarring swap.
   return (
-    <div className="my-2 min-w-0 max-w-full text-sm leading-relaxed text-ink-secondary">
-      {String(content.text || "Working...")}
+    <div className="my-2 min-w-0 max-w-full rounded-md border border-hairline bg-surface-default">
+      <div className="flex w-full min-w-0 items-center gap-2 px-3 py-2 text-sm text-ink-secondary">
+        <span className="inline-flex h-2 w-2 shrink-0 animate-pulse rounded-full bg-status-running" />
+        <span className="font-medium">{String(content.text || "思考中…")}</span>
+      </div>
     </div>
   );
 }

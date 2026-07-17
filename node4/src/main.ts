@@ -17,6 +17,24 @@ const busy = new Set<string>();
 /** Per-conversation abort for platform user_interrupt. */
 const aborts = new Map<string, AbortController>();
 
+/** Tell the platform whether this node is mid work-burst for a conversation. */
+async function emitWorkStatus(
+  conversationId: string,
+  taskId: string,
+  working: boolean,
+  extra: Record<string, unknown> = {},
+): Promise<void> {
+  await client.send({
+    type: "work_status",
+    conversation_id: conversationId,
+    task_id: taskId,
+    working,
+    // Pi/runtime knows busy set membership; platform UI must mirror this.
+    busy: working,
+    ...extra,
+  });
+}
+
 async function runAssignedTask(message: Record<string, unknown>): Promise<void> {
   const task = normalizeTask(message);
   if (busy.has(task.conversationId)) {
@@ -31,10 +49,19 @@ async function runAssignedTask(message: Record<string, unknown>): Promise<void> 
   const abort = new AbortController();
   aborts.set(task.conversationId, abort);
   busy.add(task.conversationId);
+  await emitWorkStatus(task.conversationId, task.taskId, true, {
+    expert_id: task.expertId,
+    expert_name: task.expertName,
+  });
+  let endReason = "settled";
   try {
     await runNode4Task(config, client, task, abort.signal);
+    if (abort.signal.aborted) endReason = "interrupted";
   } catch (error) {
-    if (!abort.signal.aborted) {
+    if (abort.signal.aborted) {
+      endReason = "interrupted";
+    } else {
+      endReason = "error";
       await client.send({
         type: "task_error",
         conversation_id: task.conversationId,
@@ -47,6 +74,11 @@ async function runAssignedTask(message: Record<string, unknown>): Promise<void> 
       aborts.delete(task.conversationId);
     }
     busy.delete(task.conversationId);
+    await emitWorkStatus(task.conversationId, task.taskId, false, {
+      reason: endReason,
+      expert_id: task.expertId,
+      expert_name: task.expertName,
+    });
   }
 }
 
@@ -97,12 +129,14 @@ client.on("user_interrupt", async (message) => {
   const abort = aborts.get(conversationId);
   if (abort) {
     abort.abort();
+    // work_status(working=false) is emitted in runAssignedTask finally after settle.
     await client.send({
       type: "status_update",
       conversation_id: conversationId,
       message: action === "pause" ? "Paused by user." : "Interrupted by user — stopping this work burst.",
       status: action === "pause" ? "paused" : "canceled",
       agent_phase: "aborted",
+      working: true, // still winding down until finally
     });
     return;
   }
@@ -111,6 +145,11 @@ client.on("user_interrupt", async (message) => {
     conversation_id: conversationId,
     message: "No active work burst to interrupt on this node.",
     status: "idle",
+    working: false,
+  });
+  // Explicit idle so platform clears a stale worker entry for this node.
+  await emitWorkStatus(conversationId, String(message.task_id || ""), false, {
+    reason: "not_busy",
   });
 });
 

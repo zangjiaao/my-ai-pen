@@ -163,7 +163,9 @@ class PlatformPhase2Tests(unittest.TestCase):
         self.assertEqual(node_id, "11111111-1111-1111-1111-111111111111")
         self.assertEqual(_agent_target_for_request(msg, node_id, capabilities), "pentest")
 
-    def test_requested_pentest_node_without_target_asks_for_target(self):
+    def test_requested_pentest_node_without_target_is_preamble_not_task(self):
+        """Greeting with expert selected: no work burst / no incomplete task status."""
+
         async def fake_chat(messages):
             return '{"action":"answer_user","capability":"platform.chat","agent":"platform","targets":[],"reason":"greeting"}'
 
@@ -184,10 +186,52 @@ class PlatformPhase2Tests(unittest.TestCase):
                 set_orchestrator_chat_override(None)
 
         decision = asyncio.run(run())
-        self.assertEqual(decision.action, "ask_clarification")
-        self.assertEqual(decision.capability, "pentest.web")
-        self.assertEqual(decision.mode, "missing_target")
+        self.assertEqual(decision.action, "platform_reply")
+        self.assertEqual(decision.mode, "expert_preamble")
+        self.assertEqual(decision.agent, "pentest")
         self.assertEqual(decision.agent_node_id, "11111111-1111-1111-1111-111111111111")
+        self.assertEqual(decision.targets, [])
+
+    def test_message_has_task_target_rejects_greeting(self):
+        """Router fast-path: 你好 is not an execution target."""
+        from app.ws.router import _message_has_task_target
+
+        self.assertFalse(_message_has_task_target({"text": "你好", "expert_name": "渗透大师"}))
+        self.assertFalse(_message_has_task_target({"text": "hello", "expert_id": "x"}))
+        self.assertFalse(_message_has_task_target({"text": "准备好了吗", "target": {}}))
+        self.assertTrue(_message_has_task_target({"text": "测一下 http://example.com"}))
+        self.assertTrue(_message_has_task_target({"text": "你好", "target": {"type": "url", "value": "http://example.com"}}))
+        self.assertTrue(_message_has_task_target({"text": "继续", "scope": {"allow": ["http://example.com"]}}))
+
+    def test_expert_room_chat_uses_llm_not_canned_script(self):
+        """Expert pre-target reply must be model-authored, never a hardcoded monologue."""
+        from app.services.platform_agent import answer_expert_room_chat, set_platform_agent_chat_override
+
+        canned = "你好！我是「渗透大师」。请提供授权目标 URL/IP"
+
+        async def fake_chat(messages):
+            # Model produces distinct natural wording.
+            return "嗨，我在。把授权目标和范围发我，再开测。"
+
+        async def run():
+            set_platform_agent_chat_override(fake_chat)
+            try:
+                return await answer_expert_room_chat(
+                    "00000000-0000-0000-0000-000000000099",
+                    "你好",
+                    expert_name="渗透大师",
+                    expert_id="exp-1",
+                )
+            finally:
+                set_platform_agent_chat_override(None)
+
+        answer = asyncio.run(run())
+        text = (answer.get("content") or {}).get("text") if isinstance(answer.get("content"), dict) else ""
+        self.assertEqual(text, "嗨，我在。把授权目标和范围发我，再开测。")
+        self.assertNotEqual(text, canned)
+        self.assertNotIn("在提供目标之前不会启动扫描或任务", text)
+        self.assertEqual(answer.get("agent_mode"), "expert_room_chat")
+        self.assertEqual(answer.get("agent_source"), "pentest")
 
     def test_force_dispatch_when_llm_claims_no_pentest_but_node_online(self):
         """Regression: planner must not platform-chat when pentest.web is online and target is present."""

@@ -38,6 +38,21 @@ PENTEST_SNAPSHOT_PROMPT = """\u4f60\u662f\u672c\u6b21\u4f1a\u8bdd\u91cc\u7684\u6
 - \u53ef\u4ee5\u7528\u7b2c\u4e00\u4eba\u79f0\u89e3\u91ca\u6b64\u524d\u5224\u65ad\u4f9d\u636e\u3001\u5229\u7528\u4ef7\u503c\u3001\u98ce\u9669\u6392\u5e8f\u548c\u5efa\u8bae\u3002
 - \u7528\u4e2d\u6587\u56de\u7b54\u3002"""
 
+# Harness steering only — the model must author the actual user-visible wording.
+# Never paste a canned greeting; each reply is generated for the current turn.
+EXPERT_ROOM_CHAT_PROMPT = """You are the selected product expert in a shared security-testing room.
+Speak in first person as that expert persona (use the given display name when natural).
+
+Runtime facts for this turn (not user-visible script):
+- The user has selected you, but has not yet provided an authorized target URL/IP or scope for execution.
+- This turn is conversation only: no scan, recon, tools, or task lifecycle has started.
+- Do not claim you already started testing, opened a work burst, or produced findings.
+- If the user greets or chats without a target, respond naturally and invite them to share authorized target/scope when ready.
+- Match the user's language. Be concise and professional. Vary wording across turns; do not repeat identical boilerplate.
+- Do not invent hosts, vulnerabilities, or progress.
+
+Output only the reply the user should see — no JSON, no system notes."""
+
 
 def set_platform_agent_chat_override(chat: ChatFn | None) -> None:
     global _chat_override
@@ -95,6 +110,57 @@ async def answer_clarification(
 ) -> dict:
     normalized_agent = "pentest" if agent_source == "pentest" else "platform"
     return _agent_text(conv_id, normalized_agent, mode, message)
+
+
+async def answer_expert_room_chat(
+    conv_id: str,
+    text: str,
+    *,
+    expert_name: str,
+    expert_id: str | None = None,
+    engagement: str | None = None,
+    recent_turns: list[dict] | None = None,
+) -> dict:
+    """LLM-authored expert room reply when no authorized target is present yet.
+
+    The model writes the user-visible text. Platform only supplies persona +
+    harness constraints (no task, no forged scan claims).
+    """
+    who = str(expert_name or "").strip().lstrip("@") or "专家"
+    eng = str(engagement or "").strip() or None
+    facts = {
+        "expert_display_name": who,
+        "expert_id": expert_id,
+        "engagement": eng,
+        "authorized_target_present": False,
+        "user_message": str(text or "").strip(),
+    }
+    messages: list[dict] = [
+        {"role": "system", "content": EXPERT_ROOM_CHAT_PROMPT},
+        {
+            "role": "user",
+            "content": "Turn context (JSON):\n" + json.dumps(facts, ensure_ascii=False, default=str),
+        },
+    ]
+    for turn in recent_turns or []:
+        role = str(turn.get("role") or "").strip()
+        content = str(turn.get("content") or "").strip()
+        if role in {"user", "assistant"} and content:
+            messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": str(text or "").strip() or "你好"})
+
+    content = await _chat(messages)
+    # Honest failure only — never substitute a canned expert monologue.
+    if not str(content or "").strip() or str(content).startswith("LLM call failed"):
+        body = str(content or "").strip() or "模型暂时无法生成回复，请稍后重试。"
+        return _agent_text(conv_id, "pentest", "expert_room_chat", body)
+
+    answer = _agent_text(conv_id, "pentest", "expert_room_chat", content)
+    if isinstance(answer.get("content"), dict):
+        answer["content"]["expert_name"] = who
+        if expert_id:
+            answer["content"]["expert_id"] = str(expert_id)
+    return answer
 
 
 async def _load_snapshot(conv_id: str, user_id: str) -> tuple[dict, bool]:

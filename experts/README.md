@@ -2,8 +2,9 @@
 
 Independent **expert pack** units maintained outside the Node harness.
 
-**Roadmap / collaboration model:** [`docs/multi-expert-collaboration-plan.md`](../docs/multi-expert-collaboration-plan.md)  
-(Experts = target families; stages = skills; pipeline = Case + handoff — not stage-named Experts.)
+**Active conversation plan:** [`docs/platform-default-agent-refactor.md`](../docs/platform-default-agent-refactor.md)  
+**Historical collab notes:** [`docs/archive/multi-expert-collaboration-plan.md`](../docs/archive/multi-expert-collaboration-plan.md)  
+(Experts = target families; stages = skills; pipeline = Case + user @ — not stage-named Experts.)
 
 | Path | Role |
 |------|------|
@@ -17,10 +18,11 @@ Independent **expert pack** units maintained outside the Node harness.
 
 ## Node as runtime
 
-Node4 is a **clean OMP-class agent runtime** by default (no experts installed).
+Node4 is an OMP-class agent runtime with a **built-in `default` seat** (工作台助手) plus optional expert packs.
 
-1. **Catalog** — this tree (source of pack content; not auto-loaded).
-2. **Install root** — local copies enabled on this node (`node4/installed-experts/` by default, override `NODE4_EXPERTS_INSTALL`).
+1. **Built-in `default`** — always available; platform ledger tools + light assist; **no** finding booking. Product target: [`docs/platform-default-agent-refactor.md`](../docs/platform-default-agent-refactor.md).
+2. **Catalog** — this tree (source of **expert** pack content; not auto-loaded).
+3. **Install root** — local expert copies (`node4/installed-experts/` by default, override `NODE4_EXPERTS_INSTALL`).
 
 ```bash
 # From node4/
@@ -30,13 +32,14 @@ npx tsx src/expert-cli.ts install pentest
 npx tsx src/expert-cli.ts uninstall ctf
 ```
 
-- **Default**: empty install → **no expert packs**; blank `engagement` runs **bare runtime** (`id=runtime`: shell/todo density, no session/skill/captcha).
-- **install** copies `experts/<id>` → install root only (does **not** auto-seed other packs; catalog unchanged).
-- **uninstall** removes only that install-root copy.
-- Explicit `engagement`/`role` must match an **installed** pack or the task is blocked.
-- This split enables A/B: bare OMP runtime vs same runtime + expert pack.
+- **Product default participant**: `default` seat (not bare `runtime`).
+- **Empty expert install** → only `default` (lab may still force bare `runtime` for A/B).
+- **install** copies `experts/<id>` → install root only.
+- **uninstall** removes only that install-root copy; cannot “uninstall” built-in `default`.
+- Explicit **expert** `engagement`/`role` must match an **installed** pack or the task is blocked.
+- `consult` catalog entry → **alias / migration path to `default`**.
 
-Platform `offers` remains product permission/billing (may still default offer pentest for product UX); Node install is independent for lab comparison.
+Platform `offers` remains permission/billing for **expert** packs; Node install is independent for lab comparison.
 
 Remote marketplace / network hot-load is out of scope.
 
@@ -44,9 +47,10 @@ Remote marketplace / network hot-load is out of scope.
 
 | id | Purpose |
 |----|---------|
+| `default` | **Target built-in seat** (workspace assistant); not a commercial Expert instance |
 | `pentest` | Application security (Web/API); templates app_assessment / redteam_deep |
 | `ctf` | CTF web player |
-| `consult` | Consult stub (no finding booking) |
+| `consult` | **Legacy alias → `default`** (stub pack during migration) |
 | `llm-security` | Model and Agent security (Guide + DeepTeam methodology skills) |
 | `code-audit` | Source code assessment (Argo-style validate / partition) |
 | `alert-triage` | Alert / detection triage + purple replay (Guide) |

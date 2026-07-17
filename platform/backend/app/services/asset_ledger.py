@@ -1,10 +1,15 @@
 """Asset ledger helpers: one host (IP/domain) per asset, ports+services, tags.
 
 Model:
-  Asset = single IP or domain (equivalent as host keys)
+  Asset = single IP or domain (host keys only). Users create assets; agents do not.
   Asset.tags = multi labels for grouping hosts
-  properties.services = [{port, name, ...}]  # one service per port
+  properties.services = [{port, name, url, ...}]  # one service per port
+  properties.urls = [url strings under this host]
+  properties.api_endpoints = [{method?, path?, url?, ...}] or URL strings
   Vulnerability links via asset_id + port (agent associates by host+port)
+
+Agent policy: enrich ports/services/urls/api_endpoints on existing hosts only.
+Never invent a new host row from agent discovery.
 
 Pure functions (no DB) so unit tests can drive the real shipped logic.
 """
@@ -29,9 +34,11 @@ TYPE_LABELS = {
 
 SOURCE_LABELS = {
     "manual": "人工录入",
-    "agent_discovered": "Agent 发现",
-    "agent": "Agent 发现",
+    # Historical rows only — agents no longer create ledger hosts.
+    "agent_discovered": "Agent 发现（历史）",
+    "agent": "Agent 发现（历史）",
     "import": "导入",
+    "standalone_import": "导入",
 }
 
 # Statuses treated as still open for risk / remediation export.
@@ -817,9 +824,15 @@ def merge_service_lists(existing: object, incoming: object) -> list[dict[str, An
             by_port[port] = cleaned
             order.append(port)
             continue
-        for field in ("version", "product", "name", "service", "protocol", "state", "banner"):
+        for field in ("version", "product", "name", "service", "protocol", "state", "banner", "url", "uri", "endpoint"):
             if item.get(field):
                 prev[field] = item[field]
+        # Canonical url from uri/endpoint aliases when url empty.
+        if not prev.get("url"):
+            for alt in ("uri", "endpoint"):
+                if prev.get(alt):
+                    prev["url"] = prev[alt]
+                    break
         # User/agent notes: only overwrite when incoming explicitly sets note/remark.
         if item.get("_note_set") or "note" in item or "remark" in item:
             note = _service_note(item)
@@ -841,14 +854,141 @@ def _service_note(item: dict[str, Any]) -> str:
     return str(item.get("note") or item.get("remark") or item.get("comment") or "").strip()
 
 
+def normalize_url_list(value: object) -> list[str]:
+    """De-dupe URL strings (order-preserving, case-sensitive path)."""
+    if value is None:
+        return []
+    items: list[object]
+    if isinstance(value, str):
+        items = re.split(r"[\n,;]+", value)
+    elif isinstance(value, list):
+        items = value
+    else:
+        items = [value]
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if isinstance(item, dict):
+            text = str(
+                item.get("url") or item.get("uri") or item.get("href") or item.get("endpoint") or ""
+            ).strip()
+        else:
+            text = str(item or "").strip()
+        if not text or text in seen:
+            continue
+        # Accept absolute URLs, relative paths, or host/path forms; drop bare tokens.
+        if "://" not in text and not text.startswith("/"):
+            first = text.split("/", 1)[0]
+            if "." not in first and first not in {"localhost", "host.docker.internal"}:
+                continue
+        seen.add(text)
+        out.append(text)
+    return out
+
+
+def normalize_api_endpoint_list(value: object) -> list[dict[str, Any]]:
+    """Normalize API endpoints to dicts with at least path or url."""
+    if value is None:
+        return []
+    items: list[object]
+    if isinstance(value, str):
+        items = re.split(r"[\n,;]+", value)
+    elif isinstance(value, list):
+        items = value
+    else:
+        items = [value]
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items:
+        if isinstance(item, dict):
+            method = str(item.get("method") or item.get("verb") or "").strip().upper()
+            path = str(item.get("path") or item.get("route") or "").strip()
+            url = str(item.get("url") or item.get("uri") or item.get("endpoint") or "").strip()
+            if not path and not url:
+                continue
+            key = f"{method}|{path}|{url}".lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            row: dict[str, Any] = {}
+            if method:
+                row["method"] = method
+            if path:
+                row["path"] = path
+            if url:
+                row["url"] = url
+            name = str(item.get("name") or item.get("summary") or "").strip()
+            if name:
+                row["name"] = name
+            out.append(row)
+            continue
+        text = str(item or "").strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        if text.startswith("/") or "://" not in text:
+            out.append({"path": text})
+        else:
+            out.append({"url": text})
+    return out
+
+
+def merge_url_lists(existing: object, incoming: object) -> list[str]:
+    return normalize_url_list(list(normalize_url_list(existing)) + list(normalize_url_list(incoming)))
+
+
+def merge_api_endpoint_lists(existing: object, incoming: object) -> list[dict[str, Any]]:
+    """Union endpoints; later non-empty fields enrich same method+path/url key."""
+    by_key: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for item in normalize_api_endpoint_list(existing) + normalize_api_endpoint_list(incoming):
+        method = str(item.get("method") or "").strip().upper()
+        path = str(item.get("path") or "").strip()
+        url = str(item.get("url") or "").strip()
+        key = f"{method}|{path}|{url}".lower() if (path or url) else ""
+        if not key:
+            continue
+        # Prefer method+path identity when both present so URL can fill in later.
+        identity = f"{method}|{path}".lower() if path else key
+        prev = by_key.get(identity) or by_key.get(key)
+        if not prev:
+            cleaned = dict(item)
+            by_key[identity] = cleaned
+            if identity not in order:
+                order.append(identity)
+            continue
+        for field in ("method", "path", "url", "name"):
+            if item.get(field):
+                prev[field] = item[field]
+        by_key[identity] = prev
+    return [by_key[k] for k in order if k in by_key]
+
+
+def extract_urls(properties: object) -> list[str]:
+    props = properties if isinstance(properties, dict) else {}
+    return normalize_url_list(props.get("urls") or props.get("web_urls") or [])
+
+
+def extract_api_endpoints(properties: object) -> list[dict[str, Any]]:
+    props = properties if isinstance(properties, dict) else {}
+    return normalize_api_endpoint_list(
+        props.get("api_endpoints") or props.get("endpoints") or props.get("apis") or []
+    )
+
+
 def merge_discover_properties(
     existing_properties: object,
     *,
     open_ports: object = None,
     services: object = None,
+    urls: object = None,
+    api_endpoints: object = None,
     extra: dict | None = None,
 ) -> dict[str, Any]:
-    """Merge discover payload; services keyed by port, open_ports derived."""
+    """Merge discover payload; services keyed by port, open_ports derived; urls/apis unioned."""
     base = dict(existing_properties) if isinstance(existing_properties, dict) else {}
     # Drop multi-host fields — one asset = one host.
     base.pop("aliases", None)
@@ -865,11 +1005,20 @@ def merge_discover_properties(
     base["services"] = merged_services
     base["open_ports"] = [str(s.get("port")) for s in merged_services if s.get("port")]
 
+    if urls is not None:
+        base["urls"] = merge_url_lists(base.get("urls") or base.get("web_urls"), urls)
+    if api_endpoints is not None:
+        base["api_endpoints"] = merge_api_endpoint_lists(
+            base.get("api_endpoints") or base.get("endpoints") or base.get("apis"),
+            api_endpoints,
+        )
+
     if extra:
         for key, value in extra.items():
             if key in {
                 "open_ports", "services", "ports", "fingerprints",
                 "aliases", "identities", "system", "business_system",
+                "urls", "web_urls", "api_endpoints", "endpoints", "apis",
             }:
                 continue
             base[key] = value
@@ -884,7 +1033,9 @@ def apply_discover_to_asset_fields(
     asset_type: str | None = None,
     open_ports: object = None,
     services: object = None,
-    source: str = "agent_discovered",
+    urls: object = None,
+    api_endpoints: object = None,
+    source: str | None = None,
     identity_scope: str | None = None,
     port: object = None,
 ) -> dict[str, Any]:
@@ -893,7 +1044,11 @@ def apply_discover_to_asset_fields(
 
     One asset = one host (IP or domain). Ports from the address, `port` arg,
     open_ports, or services are unioned under properties.services.
+    URLs and API endpoints are unioned under properties.urls / api_endpoints.
     Different hosts never merge into the same asset.
+
+    When existing is None, returns a field dict suitable for *user* create only.
+    Agent paths must not create rows from this alone — see upsert_discovered_asset.
     """
     host, addr_port = split_host_port(address)
     if not host:
@@ -928,12 +1083,20 @@ def apply_discover_to_asset_fields(
             existing.get("properties"),
             open_ports=ports_in,
             services=services_in,
+            urls=urls,
+            api_endpoints=api_endpoints,
+        )
+        # Preserve ledger ownership source (manual/import). Agent enrich never rewrites it.
+        kept_source = (
+            _nonempty_str(existing.get("source"))
+            or _nonempty_str(source)
+            or "manual"
         )
         return {
             "address": primary,
             "name": name_in or _nonempty_str(existing.get("name")) or primary,
             "type": type_in or _nonempty_str(existing.get("type")) or infer_asset_type(primary),
-            "source": _nonempty_str(source) or _nonempty_str(existing.get("source")) or "agent_discovered",
+            "source": kept_source,
             "properties": props,
         }
 
@@ -941,12 +1104,14 @@ def apply_discover_to_asset_fields(
         {},
         open_ports=ports_in or [],
         services=services_in or [],
+        urls=urls,
+        api_endpoints=api_endpoints,
     )
     return {
         "address": host,
         "name": name_in or host,
         "type": type_in or infer_asset_type(host),
-        "source": _nonempty_str(source) or "agent_discovered",
+        "source": _nonempty_str(source) or "manual",
         "properties": props,
     }
 
