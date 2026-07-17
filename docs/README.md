@@ -14,6 +14,7 @@
 | [`../experts/README.md`](../experts/README.md) | Expert pack catalog (source of pack content) |
 | [`expert-pack-capability-and-maintenance.md`](expert-pack-capability-and-maintenance.md) | **Active plan:** enhance pack discovery (ClaudeBrain-adapted methodology) + long-term pack/sandbox maintenance (L1/L2/L3, n-day runbook) |
 | [`pentest-next-steps.md`](pentest-next-steps.md) | **Near-term roadmap** after pack 1.1.1: lab validation, sandbox nuclei hygiene, gap-driven patches, optional FOFA/OSINT (from main + BTW agreements) |
+| [`../benchmarks/pentest-lab-1.1.1/README.md`](../benchmarks/pentest-lab-1.1.1/README.md) | Docker lab targets + standalone run recipes; [`LAB-NOTES.md`](../benchmarks/pentest-lab-1.1.1/LAB-NOTES.md) Phase L observations |
 | [`../benchmarks/collab-playbook-b/README.md`](../benchmarks/collab-playbook-b/README.md) | **Manual lab:** multi-expert collaboration dry-run (code-audit ↔ pentest); `case_context` work-group thread |
 
 ## Not product specs
