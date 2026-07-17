@@ -13,7 +13,13 @@ Expert packs assume scanners may live in L2; they do not vendor binaries.
 ## Build
 
 ```bash
-# from repo root
+# from repo root (tags pen-tools:dev, pen-tools:<VERSION>, pen-tools:YYYY.MM.DD)
+bash sandbox/pen-tools/scripts/build.sh
+```
+
+Or manually:
+
+```bash
 docker build -t pen-tools:dev -f sandbox/pen-tools/Dockerfile sandbox/pen-tools
 ```
 
@@ -22,6 +28,12 @@ Optional: retag local legacy image while iterating:
 ```bash
 docker tag pentest-sandbox:latest pen-tools:dev   # if already built from node/Dockerfile.sandbox
 ```
+
+## Node4 integration (S1)
+
+Node4 `shell` **prepends** this `bin/` to `PATH` automatically when the directory exists
+(disable with `NODE4_PEN_TOOLS=0`). No manual `export PATH=…` required for standalone/worker
+running from the monorepo checkout.
 
 ## Templates (data layer)
 

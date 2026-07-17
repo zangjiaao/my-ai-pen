@@ -60,25 +60,33 @@ Strix remains **browser-only**. Do not expect Strix to ship or update nuclei-tem
 
 ## 4. Ownership roadmap
 
-### S0 — Document + wrappers (this change)
+### S0 — Document + wrappers — **done**
 
 - First-party `sandbox/pen-tools/Dockerfile` + README.  
 - Host `bin/nuclei` (etc.) shims → `docker run pen-tools|pentest-sandbox`.  
 - Lab PATH can include shims so Agent shell finds `nuclei` without host apt install.
 
-### S1 — Image as product artifact
+### S1 — Image + Node PATH productization — **done (local)**
 
-- CI builds/publishes `pen-tools:<semver>` (registry TBD).  
-- Node/lab env: `PEN_TOOLS_IMAGE=pen-tools:x.y.z`.  
-- Template **data volume** update path documented (no rebuild per n-day).
+- `VERSION` + `scripts/build.sh` / `scripts/update-templates.sh`.  
+- Node4 `shell` **auto-prepends** pen-tools bin (`buildShellEnv`); env:
+  - `NODE4_PEN_TOOLS=0` disable  
+  - `NODE4_PEN_TOOLS_BIN` / `PEN_TOOLS_BIN` override bin dir  
+  - `PEN_TOOLS_IMAGE` (default `pen-tools:dev`) for wrappers  
+- Template **data volume** path in update-templates script.  
+- CI registry publish still optional (ops).
 
-### S2 — Optional shell-in-container
+### S2 — Optional tooling health blurb
+
+- Task-start one-liner: nuclei version / template age (not a hard gate).
+
+### S4 — Optional shell-in-container
 
 - Node4 `shell` option: execute command inside pen-tools with `taskDir` mounted.  
 - Keeps host clean; stronger isolation; bigger runtime change — only after S0/S1 stable.  
 - Must preserve OMP density (timeouts, process group kill, observation recording).
 
-### S3 — Browser independence (later)
+### S5 — Browser independence (later)
 
 - Evaluate forking or replacing strix with first-party browser image.  
 - Until then: pin Strix digest; document override `NODE4_BROWSER_SANDBOX_IMAGE`.
@@ -101,11 +109,24 @@ Changelog for pen-tools: `sandbox/pen-tools/CHANGELOG.md` (create on first publi
 
 ## 6. Lab / ops checklist
 
-- [ ] `docker build -t pen-tools:dev -f sandbox/pen-tools/Dockerfile sandbox/pen-tools` **or** `docker tag pentest-sandbox:latest pen-tools:dev`  
-- [ ] `export PATH="$REPO/sandbox/pen-tools/bin:$PATH"`  
-- [ ] `nuclei -version` works via shim  
-- [ ] Re-run MinIO lab: expect real `nuclei -tags minio` (or equivalent), not only “nuclei not found”  
-- [ ] Keep templates fresh: volume mount + periodic `-update-templates`  
+```bash
+# Build (or retag legacy)
+bash sandbox/pen-tools/scripts/build.sh
+# or: docker tag pentest-sandbox:latest pen-tools:dev
+
+# Templates (host cache, no rebuild)
+bash sandbox/pen-tools/scripts/update-templates.sh
+
+# Node4: PATH injection is automatic when repo layout is present
+cd node4 && npx tsx src/runtime/pen-tools-path.test.ts
+npx tsx src/runtime/pen-tools-shell-smoke.ts   # needs docker + image
+```
+
+- [x] Wrappers + Dockerfile tree  
+- [x] Node4 shell PATH auto-inject  
+- [x] MinIO lab with real `nuclei -tags minio` (Phase L S0 re-run)  
+- [ ] CI publish `pen-tools` to registry (when deploy needs it)  
+- [ ] Periodic template job in ops
 
 ---
 

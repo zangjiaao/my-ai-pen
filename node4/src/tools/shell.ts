@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ToolRuntime } from "../types.js";
+import { buildShellEnv } from "../runtime/pen-tools-path.js";
 import { recordActObservation, jsonResult, textResult } from "./common.js";
 
 const DEFAULT_TIMEOUT_SEC = 240;
@@ -24,6 +25,7 @@ export function createShellTool(runtime: ToolRuntime): ToolDefinition<any> {
       "HIGH DENSITY: pack cookie jars, curl pipelines, python one-liners, and parsing in ONE command (chain with && when order matters).",
       "Independent probes: issue multiple shell tool calls in the SAME turn (they can run in parallel).",
       "Prefer shell over http for multi-step recon/exploit. Use scripts/ for longer exploits (write then shell python scripts/x.py).",
+      "Scanners (nuclei/nmap/…) may be available via first-party pen-tools PATH shims (Docker image); prefer narrow product tags when fingerprinting commercial stacks.",
       "Avoid one-request-per-call thrash and unbounded brute force; use bounded scripted probes.",
       `timeout_seconds optional (default ${DEFAULT_TIMEOUT_SEC}, max ${MAX_TIMEOUT_SEC}); process group killed on timeout or session cancel.`,
     ].join(" "),
@@ -134,9 +136,10 @@ export function runShell(
     };
 
     // detached + new process group: kill(-pid) reaps children (python brute, curl, etc.)
+    // Prepend sandbox/pen-tools/bin so nuclei/nmap shims resolve without host apt install.
     const child = spawn("/bin/bash", ["-lc", command], {
       cwd,
-      env: { ...process.env, HOME: cwd },
+      env: { ...buildShellEnv(process.env), HOME: cwd },
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
