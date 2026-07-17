@@ -7,6 +7,7 @@ import {
   EXTENSION_PACKS,
   effectiveOffers,
   expertLabel,
+  expertMeta,
   type ExpertId,
 } from "../lib/experts";
 
@@ -645,11 +646,13 @@ function NodeDetailDialog({
                     </button>
                   </div>
                   {localOffers.length === 0 ? (
-                    <p className="text-xs text-ink-muted">暂无已安装专家包</p>
+                    <p className="text-xs text-ink-muted">
+                      内置 default 可用；暂无已装拓展包
+                    </p>
                   ) : (
                     <div className="flex flex-wrap gap-2">
                       {localOffers.map((pack) => {
-                        const meta = EXPERT_PACKS.find((p) => p.id === pack);
+                        const meta = expertMeta(pack);
                         return (
                           <div
                             key={pack}
