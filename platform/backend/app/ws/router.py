@@ -2939,14 +2939,18 @@ def _pack_key_from_message(msg: dict) -> str:
 def _is_default_seat_message(msg: dict, *, sticky_engagement: str | None = None) -> bool:
     """True when this agent/node frame is from the built-in default seat.
 
-    Detects role_pack=default (Node task_start/complete), engagement/role aliases,
-    and sticky conversation engagement when the frame omits pack fields.
+    Detects role_pack=default (Node task_start/complete), engagement/role aliases.
+    Sticky conversation engagement is used **only when the frame omits pack fields**.
+    A non-empty non-default pack (e.g. role_pack=pentest) always wins over sticky default.
     """
     from app.services.expert_offers import BUILTIN_SEAT_IDS, normalize_pack_id
 
     pack = _pack_key_from_message(msg)
-    if pack in BUILTIN_SEAT_IDS or normalize_pack_id(pack) == "default":
-        return True
+    if pack:
+        # Explicit pack on the frame is authoritative — never override with sticky.
+        if pack in BUILTIN_SEAT_IDS or normalize_pack_id(pack) == "default":
+            return True
+        return False
     sticky = str(sticky_engagement or "").strip().lower()
     if sticky in BUILTIN_SEAT_IDS or normalize_pack_id(sticky) == "default":
         return True

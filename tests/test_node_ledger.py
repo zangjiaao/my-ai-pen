@@ -158,6 +158,7 @@ class NodeLedgerPolicyTests(unittest.TestCase):
                 sticky_engagement=None,
             )
         )
+        # Bare text + sticky default → default (omitted pack fields)
         self.assertTrue(
             _is_default_seat_message(
                 {"type": "text", "content": {"text": "hi"}},
@@ -168,6 +169,20 @@ class NodeLedgerPolicyTests(unittest.TestCase):
             _is_default_seat_message(
                 {"type": "text", "role_pack": "pentest"},
                 sticky_engagement=None,
+            )
+        )
+        # Explicit expert pack must NOT become default when conversation sticky is default
+        # (user switched to 工作台助手 while an expert burst still emits frames).
+        self.assertFalse(
+            _is_default_seat_message(
+                {"type": "text", "role_pack": "pentest", "expert_id": "e1"},
+                sticky_engagement="default",
+            )
+        )
+        self.assertFalse(
+            _is_default_seat_message(
+                {"type": "task_complete", "engagement": "pentest"},
+                sticky_engagement="default",
             )
         )
         msg = {
