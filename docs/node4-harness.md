@@ -54,7 +54,7 @@ Interactive **TUI remains deferred**.
 | Map | `todo` phases (content-keyed; single in_progress; auto-promote); **map not prison** |
 | Act | Pack tools under task cwd (shell-first) |
 | Book | `finding` + evidence when `bookingMode=finding` |
-| Continue | Rare recovery: empty-stop budget, booking-gap, small premature budget, optional **goal_continuation** while goal active |
+| Continue | Rare recovery: empty-stop budget, booking-gap, **breadth premature** (until `NODE4_MAX_PREMATURE_STOPS`, not gated on open todos), optional **goal_continuation** while goal active |
 | Session wall | **None** by design; per-tool timeouts remain |
 | Settle | Runner emits `task_complete` (natural stop / continue caps / abort) |
 
@@ -107,6 +107,12 @@ Platform data tools: see [`platform-default-agent-refactor.md`](platform-default
 **CTF-only assistive:** `captcha` (+ CTF skill set). Do not grow first-class catalogs without lab-driven need.
 
 **Not present:** `finish_scan`, agent-callable terminal status tool, coverage complete hard gates.
+
+### Discovery breadth continues
+
+Outer **premature** continues (default up to `NODE4_MAX_PREMATURE_STOPS`, often 3) run when the model stops after tools **without** requiring open todos. Lab evidence: agents mark the todo map complete before finishing recon surfaces; gating continue on open todos caused early `natural_stop` with only “easy” findings booked.
+
+Continue inject text steers: re-check recon/facts for untested surfaces, prefer `scripts/` enumerate+probe, rotate skill on untested class — **no** target answer keys or module scoreboard gates.
 
 ### Shell output governance (C3)
 

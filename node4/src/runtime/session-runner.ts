@@ -474,7 +474,7 @@ export async function runNode4Task(
     // bookingGap: probes without findings (strong signal to allow one continue)
     const bookingGap =
       pack.bookingMode === "finding" && probeCount >= 2 && bookedSoFar.count === 0;
-    // Soft open work (todos only) for premature; goal mode is separate OMP path.
+    // Soft open work (todos) for continue prompts; premature breadth no longer requires open todos.
     const openWorkRemaining = runtime.todo.openCount() > 0;
 
     // Pass previous emptyStopStreak only — evaluateContinueAfterSegment increments once.

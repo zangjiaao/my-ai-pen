@@ -367,7 +367,7 @@ export function proofGroundedInRecentWork(
     return {
       ok: false,
       reason:
-        "proof not found in recent tool outputs — quote a real fragment from your last probe (response body / stdout / reflection), not a paraphrased guess",
+        "proof not found in recent tool outputs — re-run one short act (shell/session/http) that shows the effect, then finding(confirm) with proof= an exact substring from that output (response body / stdout / reflection), not a paraphrased guess",
     };
   }
 

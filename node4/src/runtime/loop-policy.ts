@@ -29,8 +29,11 @@ export type ContinueDecision = {
  * - bookingGap once → booking_gap_continue
  * - tools==0 → limited empty-stop retries
  * - tools>0 then stop → if OMP goal mode active → goal_continuation (until complete/cap)
- * - else premature only while budget remains AND open work (todos), with one free recovery
+ * - else premature while budget remains (breadth recovery — not gated on open todos)
  * - else natural_stop_after_tools
+ *
+ * Lab evidence: agents often mark all todos done before finishing recon surfaces.
+ * Gating premature on openWork caused early natural_stop after the first free push.
  */
 export function shouldContinueAfterNaturalStop(options: {
   aborted: boolean;
@@ -46,7 +49,8 @@ export function shouldContinueAfterNaturalStop(options: {
   /** Max premature continues; default 0 in pure unit tests. */
   maxPrematureStops?: number;
   /**
-   * Soft open work (open todos). Used for premature (not goal mode).
+   * Soft open work (open todos). Kept for prompts/telemetry; no longer required
+   * for premature breadth continues (see discovery-breadth policy).
    */
   openWorkRemaining?: boolean;
   /**
@@ -117,13 +121,11 @@ export function shouldContinueAfterNaturalStop(options: {
     };
   }
 
-  // Rare premature recovery when not in goal mode (or goal exhausted).
+  // Breadth recovery when not in goal mode (or goal exhausted).
+  // Cap only — do not require open todos (map-complete ≠ surface complete).
   const prematureUsed = Math.max(0, options.prematureStopCount ?? 0);
   const maxPremature = Math.max(0, options.maxPrematureStops ?? 0);
-  const openWork = Boolean(options.openWorkRemaining);
-  const allowPremature =
-    prematureUsed < maxPremature && (prematureUsed === 0 || openWork);
-  if (allowPremature) {
+  if (prematureUsed < maxPremature) {
     return {
       continue: true,
       reason: "premature_stop_continue",
@@ -223,17 +225,32 @@ export function bookingGapContinuePrompt(): string {
 
 /**
  * Limited recovery push — shell-first, in-loop density, no answer keys.
+ * Emphasizes breadth: todo map complete is not coverage of recon surfaces.
  */
 export function prematureStopContinuePrompt(attempt: number, max: number): string {
   return [
     `<system-injection>`,
-    `Recovery push ${attempt}/${max} (OMP-style rare continue — discovery should mostly stay in-loop).`,
+    `Breadth recovery push ${attempt}/${max} (rare outer continue — prefer keeping tool-calling in-loop).`,
     `Do another high-density SHELL burst (not a stream of single http calls): multi-step pipelines, cookie jars, python parse, parallel independent shell calls in the same turn.`,
-    `Rotate unexplored categories from YOUR own recon (auth, injection, access control, files, XSS, misconfig, business logic). Do not invent target answer keys.`,
+    `CRITICAL: Completing the todo map is NOT the same as finishing discovery. Re-read YOUR recon notes/facts — if modules, params, or flows were listed but not yet probed with act tools, test them now.`,
+    `Prefer write scripts/ under the task dir for multi-module apps (enumerate + probe), then shell them — not only one-off curls.`,
+    `Rotate unexplored categories from YOUR own recon (auth, session, injection, access control, files, XSS variants, CSRF, misconfig, business logic). Do not invent target answer keys or fixed vuln lists.`,
+    `Skill: if stuck on a class, load ONE different skill matching an untested observed surface (still at most one body loaded at a time).`,
     `Do not stop solely because remaining work "might need SPA" — try API/static JS first; drive headless browser via shell only if available.`,
-    `If a todo category is finished, mark it done now (do not leave open work stale). Book proven issues with finding(confirm)+evidence_ids.`,
-    `If truly stuck after this shell push, stop with no tools. There is no finish tool.`,
+    `Only mark a todo category done when you acted on it or recorded an explicit deadend note. Book proven issues with finding(confirm)+proof (quote real tool output).`,
+    `If truly stuck after dense work on remaining recon surfaces, stop with no tools. There is no finish tool.`,
     `</system-injection>`,
+  ].join("\n");
+}
+
+/** When todos are empty on a premature continue — still push untested recon surfaces. */
+export function discoveryBreadthReminder(): string {
+  return [
+    `<system-reminder>`,
+    `Todo map shows no open items — that does not mean every recon surface was tested.`,
+    `From your own notes/facts/session history: list untested modules or param families and probe them in this turn, or stop only if none remain.`,
+    `Do not invent modules that never appeared in recon.`,
+    `</system-reminder>`,
   ].join("\n");
 }
 
@@ -284,6 +301,9 @@ export function composeContinuePrompt(options: {
     } else {
       parts.push(midRunTodoNudge(options.openTodoCount));
     }
+  } else if (options.kind === "premature") {
+    // Map-complete false finish: still steer toward untested recon surfaces.
+    parts.push(discoveryBreadthReminder());
   }
   if (options.booking) {
     const bookingNudge = midRunBookingNudge(options.booking);

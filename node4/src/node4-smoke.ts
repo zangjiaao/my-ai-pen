@@ -317,7 +317,7 @@ async function main() {
   });
   assert(natural.continue === false && natural.reason === "natural_stop_after_tools", `natural stop: ${JSON.stringify(natural)}`);
 
-  // First tools-then-stop: one free recovery premature even without open work
+  // Breadth premature: until maxPrematureStops, even with no open todos (map-complete ≠ done)
   const premature1 = shouldContinueAfterNaturalStop({
     aborted: false,
     toolsInLastSegment: 4,
@@ -333,8 +333,7 @@ async function main() {
     premature1.continue === true && premature1.reason === "premature_stop_continue" && premature1.kind === "premature",
     `premature once: ${JSON.stringify(premature1)}`,
   );
-  // Second premature requires open work (not blind score pad)
-  const prematureNoOpen = shouldContinueAfterNaturalStop({
+  const premature2NoOpen = shouldContinueAfterNaturalStop({
     aborted: false,
     toolsInLastSegment: 2,
     emptyStopStreak: 0,
@@ -346,21 +345,9 @@ async function main() {
     openWorkRemaining: false,
   });
   assert(
-    prematureNoOpen.continue === false && prematureNoOpen.reason === "natural_stop_after_tools",
-    `no open work → natural after first premature: ${JSON.stringify(prematureNoOpen)}`,
+    premature2NoOpen.continue === true && premature2NoOpen.reason === "premature_stop_continue",
+    `breadth premature without open todos: ${JSON.stringify(premature2NoOpen)}`,
   );
-  const premature2 = shouldContinueAfterNaturalStop({
-    aborted: false,
-    toolsInLastSegment: 2,
-    emptyStopStreak: 0,
-    continueCount: 1,
-    maxContinues: 6,
-    maxEmptyStopStreak: 1,
-    prematureStopCount: 1,
-    maxPrematureStops: 2,
-    openWorkRemaining: true,
-  });
-  assert(premature2.continue === true && premature2.reason === "premature_stop_continue", "premature twice with open work");
   const prematureCap = shouldContinueAfterNaturalStop({
     aborted: false,
     toolsInLastSegment: 2,
@@ -375,6 +362,24 @@ async function main() {
   assert(
     prematureCap.continue === false && prematureCap.reason === "natural_stop_after_tools",
     `premature cap then natural: ${JSON.stringify(prematureCap)}`,
+  );
+  // Map-complete premature inject includes discovery breadth reminder
+  const breadthInject = composeContinuePrompt({
+    attempt: 2,
+    max: 6,
+    openTodoCount: 0,
+    kind: "premature",
+    prematureAttempt: 2,
+    prematureMax: 3,
+  });
+  assert(
+    breadthInject.includes("Todo map") || breadthInject.includes("untested"),
+    "premature with empty todos injects breadth reminder",
+  );
+  assert(
+    prematureStopContinuePrompt(1, 3).toLowerCase().includes("todo map") ||
+      prematureStopContinuePrompt(1, 3).toLowerCase().includes("breadth"),
+    "premature prompt mentions map vs discovery",
   );
 
   // Empty stop: limited retry
@@ -458,7 +463,7 @@ async function main() {
   });
   assert(afterTools.continue === false && afterTools.nextEmptyStopStreak === 0, "runner: tools reset empty streak");
 
-  // Runner-level: first premature free; second needs openWorkRemaining; then natural
+  // Runner-level: breadth premature until cap (open todos optional)
   let prematureUsed = 0;
   const p1 = evaluateContinueAfterSegment({
     aborted: false,
@@ -482,9 +487,9 @@ async function main() {
     maxEmptyStopStreak: 1,
     prematureStopCount: prematureUsed,
     maxPrematureStops: 2,
-    openWorkRemaining: true,
+    openWorkRemaining: false,
   });
-  assert(p2.continue && p2.reason === "premature_stop_continue", "runner: second premature with open work");
+  assert(p2.continue && p2.reason === "premature_stop_continue", "runner: second premature without open todos");
   prematureUsed += 1;
   const p3 = evaluateContinueAfterSegment({
     aborted: false,
