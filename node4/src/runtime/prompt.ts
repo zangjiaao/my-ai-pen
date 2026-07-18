@@ -1,6 +1,10 @@
 import type { RolePack } from "../roles/index.js";
 import type { TaskEnvelope } from "../types.js";
 import type { GoalStore } from "../stores/goal.js";
+import {
+  formatProcessFactIndexInjection,
+  type ProcessFactIndexEntry,
+} from "../stores/process-fact.js";
 import { formatRoeInjection, resolveEngagementRoe } from "./engagement-roe.js";
 import { formatCaseContextInjection } from "./case-context.js";
 
@@ -91,7 +95,7 @@ export function renderPromptTemplate(text: string, vars: Record<string, string>)
 export function buildSystemPrompt(
   task: TaskEnvelope,
   pack: RolePack,
-  options?: { goals?: GoalStore },
+  options?: { goals?: GoalStore; processFactIndex?: ProcessFactIndexEntry[] },
 ): string {
   const vars = promptTemplateVars(task, pack);
   const render = (line: string) => renderPromptTemplate(line, vars);
@@ -121,14 +125,24 @@ export function buildSystemPrompt(
       ? pack.skillIds
       : pack.skillIds.filter((id) => !/postex|lateral/i.test(id));
     lines.push(
-      `Skills available (load on demand via skill tool): ${gated.join(", ")}.`,
-      "Call skill(op=list) then skill(op=load, id=...) for methodology — do not assume full skill text is already in context.",
+      `Skills available (load on demand via skill tool — ids only, not full bodies): ${gated.join(", ")}.`,
+      "Progressive load: skill(op=list) returns id/name/description only; skill(op=load, id=...) for one body when needed. Never bulk-load the catalog. Skills are methodology, not permission ACLs.",
     );
     if (!roe.allowPostex) {
       lines.push(
         "Post-ex/lateral skills are withheld for this engagement (allow_postex=false).",
       );
     }
+  }
+  if (pack.toolNames.includes("subagent")) {
+    lines.push(
+      "Subagent handoff: require target, scope, already_done, this_turn_goal, success_criteria. Nested subagent is disallowed.",
+    );
+  }
+  if (pack.toolNames.includes("fact")) {
+    lines.push(
+      "Process facts (fact tool): write confirmed cognition immediately (ports/auth/deadends); separate from finding booking; list is index-only — get body before relying on detail.",
+    );
   }
   if (pack.recipeDir) {
     const root = (pack as { packRoot?: string }).packRoot;
@@ -145,6 +159,8 @@ export function buildSystemPrompt(
   );
   const caseBlock = formatCaseContextInjection(task.caseContext);
   if (caseBlock) lines.push(caseBlock, "");
+  const factBlock = formatProcessFactIndexInjection(options?.processFactIndex);
+  if (factBlock) lines.push(factBlock, "");
   lines.push(
     `Target: ${JSON.stringify(task.target)}`,
     `Scope: ${JSON.stringify(task.scope)}`,

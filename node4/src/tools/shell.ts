@@ -5,10 +5,12 @@ import type { ToolRuntime } from "../types.js";
 import { buildShellEnv } from "../runtime/pen-tools-path.js";
 import { isShellInPenToolsEnabled, runShellInPenTools } from "../runtime/pen-tools-shell.js";
 import { recordActObservation, jsonResult, textResult } from "./common.js";
+import { archiveAndGovernToolOutput } from "../runtime/tool-output-governance.js";
 
 const DEFAULT_TIMEOUT_SEC = 240;
 const MAX_TIMEOUT_SEC = 600;
 const MIN_TIMEOUT_SEC = 1;
+/** Capture cap while streaming from the process (full archive if truncated for model). */
 const STDOUT_CAP = 250_000;
 const STDERR_CAP = 100_000;
 
@@ -29,6 +31,7 @@ export function createShellTool(runtime: ToolRuntime): ToolDefinition<any> {
       "Scanners (nuclei/nmap/…) run in first-party pen-sandbox when Docker image is available (shell-in-container; else host PATH shims). Prefer narrow product tags for commercial stacks.",
       "Avoid one-request-per-call thrash and unbounded brute force; use bounded scripted probes.",
       `timeout_seconds optional (default ${DEFAULT_TIMEOUT_SEC}, max ${MAX_TIMEOUT_SEC}); process group / container killed on timeout or session cancel.`,
+      "Large stdout/stderr is truncated for the model and archived under task tool-output/ for read re-fetch.",
     ].join(" "),
     parameters: Type.Object({
       command: Type.String(),
@@ -47,16 +50,39 @@ export function createShellTool(runtime: ToolRuntime): ToolDefinition<any> {
       const timeoutSec = clampTimeoutSec(params.timeout_seconds);
       const timeoutMs = timeoutSec * 1000;
       const result = await runShell(command, runtime.taskDir, timeoutMs, combined);
+      const governed = await archiveAndGovernToolOutput({
+        taskDir: runtime.taskDir,
+        tool: "shell",
+        command,
+        stdout: result.stdout,
+        stderr: result.stderr,
+      });
+      const modelResult = {
+        exitCode: result.exitCode,
+        stdout: governed.stdout,
+        stderr: governed.stderr,
+        timedOut: result.timedOut,
+        aborted: result.aborted,
+        output_truncated: governed.truncated,
+        output_archive: governed.archived_path || null,
+        output_original_chars: governed.original_total_chars,
+      };
       // Act only — Case evidence is created at finding(confirm) from agent proof.
+      // Observations keep fuller streams (pre-model truncate) when still in capture cap.
       recordActObservation(runtime, "shell", shellEvidenceSummary(command, result), {
         command,
         timeout_seconds: timeoutSec,
-        ...result,
+        exitCode: result.exitCode,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        timedOut: result.timedOut,
+        aborted: result.aborted,
+        output_archive: governed.archived_path,
       });
       return jsonResult({
         ok: result.exitCode === 0 && !result.timedOut && !result.aborted,
         timeout_seconds: timeoutSec,
-        ...result,
+        ...modelResult,
       });
     },
   };

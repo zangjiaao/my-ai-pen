@@ -99,13 +99,46 @@ Platform data tools: see [`platform-default-agent-refactor.md`](platform-default
 | `browser` | SPA/DOM assist when API recon is insufficient |
 | `script` | Optional multi-file helper |
 | `finding` | Only product conclusion path when bookingMode=finding; proof-gated (body/stdout + PoC) |
-| `subagent` | Separable work package |
+| `fact` | Process cognition (ports/auth/deadends) under `taskDir/facts/` — **not** product vulns; index inject short |
+| `subagent` | Separable work package — **required handoff fields**; nest ban |
 | `goal` | Long-task objective; continuation while active |
-| `skill` | Optional load of **meta** methodology (`pentest-web-recon`, `pentest-stuck-rotation`) — not a vuln-class matrix |
+| `skill` | Progressive load of methodology (`list` short / `load` one body) — **not** a permission ACL |
 
 **CTF-only assistive:** `captcha` (+ CTF skill set). Do not grow first-class catalogs without lab-driven need.
 
 **Not present:** `finish_scan`, agent-callable terminal status tool, coverage complete hard gates.
+
+### Shell output governance (C3)
+
+| Layer | Behavior |
+|-------|----------|
+| Capture | Process streams capped while running (`STDOUT_CAP` / `STDERR_CAP`) |
+| Model-facing | Soft truncate (~48k combined) with head+tail |
+| Archive | When truncated, full text under `taskDir/tool-output/<stamp>-shell-*.txt`; path returned for `read` |
+
+### Permissions vs skills (B2 / E2)
+
+| Owns | What |
+|------|------|
+| Pack `toolNames` + seat | Which tools exist for this engagement |
+| Platform `request_decision` / HITL | High-risk authorize cards (see HITL tiers below) |
+| Skills | Methodology only — progressive list/load; **never** grants tools or scope |
+
+### HITL tiers for `request_user_decision` / `request_decision` (B1)
+
+| Tier | Examples | Expectation |
+|------|----------|-------------|
+| **Read-ish free** | `todo`, `read`, `skill list/load`, platform list vulns/reports, fact list/get | No authorize card by default |
+| **Act in scope** | `shell`/`http`/`session`/`browser` against authorized target | Proceed under task RoE; no card per probe |
+| **High-risk / handoff** | Start another expert (`kind=handoff`), destructive/out-of-scope proposal, user-visible commit beyond engagement | **One** `request_user_decision` card with full plan; wait Authorize/Cancel |
+| **Not implemented** | CyberStrike-style automated `audit_agent` reviewer | Deferred — human cards only |
+
+### Process facts (A2 / A3 / A5)
+
+- Path: `taskDir/facts/<key>.json` via `fact` tool (`upsert` / `list` / `get`).
+- Inject: short **index** (key + summary) at session start; full body on demand — do not invent from summaries.
+- Write-as-you-go when cognition is confirmed; still book product issues only via `finding(confirm)`.
+- **Does not create host IP/domain assets** (PRD: user-created only).
 
 ---
 
@@ -115,6 +148,24 @@ Platform data tools: see [`platform-default-agent-refactor.md`](platform-default
 |-----------|----------|
 | `goal` | Active objective → harness may inject goal_continuation after natural stops (cap via env, e.g. `NODE4_MAX_CONTINUES` / goal continue limits). `complete` may be rejected if evidence audit fails; open goals do not alone invent product findings. |
 | `subagent` | Child under `taskDir/subagents/<id>`; evidence written |
+
+### Subagent handoff contract (A1 / D3)
+
+Required structured fields on every `subagent` tool call (child does **not** inherit parent chat):
+
+| Field | Meaning |
+|-------|---------|
+| `target` | URL \| IP:Port \| domain+path |
+| `scope` | In-scope boundary / constraints |
+| `already_done` | Parent progress the child must not re-do equivalently |
+| `this_turn_goal` | Single objective for this package |
+| `success_criteria` | Evidence shape that means success |
+
+Optional: `assignment` (notes), `command` (bounded shell in child), `goal_id`.
+
+**Nested subagent-from-subagent is disallowed** (`lifecycle.subagentDepth >= 1` rejects). Children return structured evidence to the parent only. Exception would require explicit platform/docs enablement (none by default).
+
+Validation: `node4/src/runtime/subagent-handoff.ts`.
 
 ---
 

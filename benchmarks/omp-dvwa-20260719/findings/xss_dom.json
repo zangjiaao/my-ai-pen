@@ -1,0 +1,10 @@
+{
+  "title": "Cross-Site Scripting (XSS) - DOM-based",
+  "severity": "High",
+  "location": "/vulnerabilities/xss_d/",
+  "proof": "GET /vulnerabilities/xss_d/?default=%3Cscript%3Ealert(1)%3C/script%3E - the page JavaScript reads window.location.href for the 'default=' parameter and writes it via document.write() without sanitization: 'document.write(\"<option value='\" + lang + \"'>\" + decodeURI(lang) + \"</option>\");'. The decodeURI call allows script injection through the URL fragment or query string.",
+  "poc_steps": [
+    "GET /vulnerabilities/xss_d/?default=<script>alert(1)</script>",
+    "Script executes client-side via document.write"
+  ]
+}

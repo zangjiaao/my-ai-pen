@@ -828,11 +828,16 @@ async function main() {
   // recreate for settle-with-open-goal assertion later
   const gOpen = goalStore.create({ objective: "May remain open at settle" });
 
-  // Subagent tool with command (attach to current open goal)
+  // Subagent tool with command (attach to current open goal) — full handoff (A1)
   const subTool = JSON.parse(
     textOf(
       await exec(createSubagentTool(runtime), "s1", {
-        assignment: "run proof command",
+        target: "http://127.0.0.1:9/",
+        scope: "127.0.0.1 only",
+        already_done: "smoke parent setup",
+        this_turn_goal: "run proof command",
+        success_criteria: "stdout contains via-tool",
+        assignment: "optional notes",
         goal_id: gOpen.id,
         command: "echo via-tool",
         timeout_seconds: 30,
@@ -840,6 +845,25 @@ async function main() {
     ),
   );
   assert(subTool.ok && subTool.evidence_id, `subagent tool: ${JSON.stringify(subTool).slice(0, 200)}`);
+  // Nested ban (D3)
+  runtime.lifecycle.subagentDepth = 1;
+  const nestBan = textOf(
+    await exec(createSubagentTool(runtime), "nest", {
+      target: "http://127.0.0.1:9/",
+      scope: "x",
+      already_done: "y",
+      this_turn_goal: "z",
+      success_criteria: "w",
+      command: "echo no",
+    }),
+  );
+  assert(nestBan.includes("nested subagent"), `nest ban: ${nestBan.slice(0, 160)}`);
+  runtime.lifecycle.subagentDepth = 0;
+  // Missing handoff fields
+  const missHand = textOf(
+    await exec(createSubagentTool(runtime), "miss", { assignment: "only notes", command: "echo no" }),
+  );
+  assert(missHand.includes("handoff incomplete") || missHand.includes("missing"), "missing handoff rejected");
 
   // Compose continue with goals
   const composed = composeContinuePrompt({

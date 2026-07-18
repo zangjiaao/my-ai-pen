@@ -1,0 +1,11 @@
+{
+  "title": "Weak Session IDs - Non-Rotating Session Identifiers",
+  "severity": "Medium",
+  "location": "/vulnerabilities/weak_id/",
+  "proof": "Three consecutive POST requests to /vulnerabilities/weak_id/ with generate=true returned the same PHPSESSID (6jkivvspcogpbedvbplp4cruu4). Session ID does not rotate after authentication or on demand, enabling session fixation and long-lived session hijacking.",
+  "poc_steps": [
+    "POST /vulnerabilities/weak_id/ with generate=true - record PHPSESSID",
+    "Repeat step 1 - same PHPSESSID returned",
+    "Session is predictable/fixed"
+  ]
+}

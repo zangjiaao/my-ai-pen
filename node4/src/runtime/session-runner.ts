@@ -13,6 +13,7 @@ import { node4Root } from "../config.js";
 import { resolveRolePack } from "../roles/index.js";
 import { EvidenceStore } from "../stores/evidence.js";
 import { GoalStore } from "../stores/goal.js";
+import { ProcessFactStore } from "../stores/process-fact.js";
 import { SkillStore } from "../stores/skill.js";
 import { TodoStore } from "../stores/todo.js";
 import type { PlatformSink, TaskEnvelope, ToolRuntime } from "../types.js";
@@ -59,6 +60,8 @@ export async function runNode4Task(
   await mkdir(join(taskDir, "findings"), { recursive: true });
   await mkdir(join(taskDir, "scripts"), { recursive: true });
   await mkdir(join(taskDir, "subagents"), { recursive: true });
+  await mkdir(join(taskDir, "facts"), { recursive: true });
+  await mkdir(join(taskDir, "tool-output"), { recursive: true });
 
   const roleResolved = resolveRolePack({ engagement: task.engagement, role: task.role });
   const pack = roleResolved.pack;
@@ -111,6 +114,8 @@ export async function runNode4Task(
   // Pack-scoped skills only when an expert is installed (bare runtime has none)
   const skillsDir = (pack as { skillsRoot?: string }).skillsRoot;
   const skills = skillsDir ? new SkillStore(skillsDir) : undefined;
+  const processFacts = new ProcessFactStore(join(taskDir, "facts"));
+  await processFacts.ensureDir();
 
   const runtime: ToolRuntime = {
     task,
@@ -127,10 +132,12 @@ export async function runNode4Task(
     rolePackId: pack.id,
     skills,
     skillIds: pack.skillIds?.length ? pack.skillIds : undefined,
+    processFacts,
     lifecycle: {
       toolsInLastSegment: 0,
       panelAgents: panel,
       midRunTodo: createMidRunTodoTracker(),
+      subagentDepth: 0,
     },
   };
   runtime.subagents = new SubagentHost({
@@ -231,7 +238,11 @@ export async function runNode4Task(
   });
 
   const segmentCounter = { tools: 0 };
-  const systemPrompt = buildSystemPrompt(task, pack, { goals });
+  const processFactIndex = await processFacts.list();
+  const systemPrompt = buildSystemPrompt(task, pack, {
+    goals,
+    processFactIndex,
+  });
   const resourceLoader = new DefaultResourceLoader({
     cwd: taskDir,
     agentDir: config.piAgentDir,

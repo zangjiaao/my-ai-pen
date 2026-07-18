@@ -12,6 +12,7 @@ import { createSessionTool } from "./session.js";
 import { createShellTool } from "./shell.js";
 import { createSkillTool } from "./skill.js";
 import { createSubagentTool } from "./subagent.js";
+import { createFactTool } from "./fact.js";
 import { createTodoTool } from "./todo.js";
 import { PLATFORM_TOOL_FACTORIES } from "./platform.js";
 import { createRequestUserDecisionTool } from "./decision.js";
@@ -29,6 +30,7 @@ export const ALL_NODE4_TOOL_FACTORIES: Record<string, (runtime: ToolRuntime) => 
   captcha: createCaptchaTool,
   script: createScriptTool,
   finding: createFindingTool,
+  fact: createFactTool,
   subagent: createSubagentTool,
   goal: createGoalTool,
   skill: createSkillTool,
@@ -46,6 +48,7 @@ export const NODE4_TOOL_NAMES = [
   "http",
   "script",
   "finding",
+  "fact",
   "subagent",
   "goal",
 ] as const;

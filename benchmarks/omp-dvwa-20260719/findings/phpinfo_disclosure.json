@@ -1,0 +1,10 @@
+{
+  "title": "Information Disclosure - phpinfo() Exposed",
+  "severity": "Medium",
+  "location": "/phpinfo.php",
+  "proof": "GET /phpinfo.php returns full PHP configuration including: Server API (Apache 2.0 Handler), System (Linux 5.15.167.4), PHP Version, Configuration File Path (/etc/php/7.0/apache2/php.ini), database credentials, and all environment variables. Full disclosure of server internals with no access control.",
+  "poc_steps": [
+    "GET /phpinfo.php",
+    "Full PHP configuration visible including environment variables and DB credentials"
+  ]
+}

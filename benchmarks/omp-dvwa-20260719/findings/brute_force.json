@@ -1,0 +1,11 @@
+{
+  "title": "Brute Force - No Rate Limiting or Account Lockout",
+  "severity": "High",
+  "location": "/vulnerabilities/brute/",
+  "proof": "GET /vulnerabilities/brute/?username=admin&password=password&Login=Login - the brute force module accepts GET requests with no rate limiting, no CAPTCHA, and no account lockout mechanism. Username enumeration is possible via response differences ('Welcome' vs 'Login failed'). Combined with SQL-injected password hashes, all accounts are compromised.",
+  "poc_steps": [
+    "GET /vulnerabilities/brute/?username=admin&password=XXXX&Login=Login for each candidate",
+    "No rate limiting or lockout exists",
+    "Password hashes already extracted via SQLi"
+  ]
+}

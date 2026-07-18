@@ -68,6 +68,8 @@ export type ToolRuntime = {
   skills?: import("./stores/skill.js").SkillStore;
   /** Pack-scoped skill ids for skill(list) filter. */
   skillIds?: readonly string[];
+  /** Process cognition facts (taskDir/facts) — separate from finding booking. */
+  processFacts?: import("./stores/process-fact.js").ProcessFactStore;
   lifecycle: {
     toolsInLastSegment?: number;
     /** Set on failed todo apply; consumed by next harness continue injection. */
@@ -83,6 +85,10 @@ export type ToolRuntime = {
      * Not Case evidence — product evidence is created at booking time.
      */
     recentObservations?: import("./tools/common.js").RecentObservation[];
+    /**
+     * Subagent nest depth: 0 = top-level agent tools; >=1 rejects further subagent (D3).
+     */
+    subagentDepth?: number;
   };
 };
 

