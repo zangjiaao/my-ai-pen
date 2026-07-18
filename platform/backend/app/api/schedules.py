@@ -32,9 +32,14 @@ class ScheduleCreate(BaseModel):
     instruction: str = Field(..., min_length=1)
     interval: str = "1h"
     node_id: str | None = None
-    goal_mode: bool = True
+    # Open-ended discovery: goal off by default (V1 product choice).
+    goal_mode: bool = False
     goal_objective: str | None = None
     fire_immediately: bool = False
+
+
+class SchedulePatch(BaseModel):
+    enabled: bool | None = None
 
 
 class ScheduleOut(BaseModel):
@@ -78,6 +83,21 @@ async def create_schedule(body: ScheduleCreate, current_user: dict = Depends(get
         )
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
+    return ScheduleOut(**st.to_dict())
+
+
+@router.patch("/{schedule_id}", response_model=ScheduleOut)
+async def patch_schedule(
+    schedule_id: str,
+    body: SchedulePatch,
+    current_user: dict = Depends(get_current_user),
+):
+    store = _store()
+    if body.enabled is None:
+        raise HTTPException(400, "enabled required")
+    st = store.set_enabled(schedule_id, user_id=current_user["user_id"], enabled=body.enabled)
+    if not st:
+        raise HTTPException(404, "Schedule not found")
     return ScheduleOut(**st.to_dict())
 
 

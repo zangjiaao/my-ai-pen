@@ -206,6 +206,22 @@ class ScheduleStore:
             self._save()
             return True
 
+    def set_enabled(
+        self,
+        schedule_id: str,
+        *,
+        user_id: str,
+        enabled: bool,
+    ) -> ScheduledTask | None:
+        with self._lock:
+            st = self._items.get(schedule_id)
+            if not st or st.user_id != user_id:
+                return None
+            st.enabled = bool(enabled)
+            self._items[schedule_id] = st
+            self._save()
+            return st
+
     def tick(
         self,
         now: datetime | None = None,

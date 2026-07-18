@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   Bot,
+  CalendarClock,
   Check,
   ClipboardList,
   LayoutDashboard,
@@ -30,6 +31,7 @@ const NAV_ITEMS: { label: string; path: string; icon: LucideIcon }[] = [
   { label: "状态看板", path: "/dashboard", icon: LayoutDashboard },
   { label: "资产管理", path: "/assets", icon: Server },
   { label: "漏洞管理", path: "/vulnerabilities", icon: ShieldAlert },
+  { label: "任务计划", path: "/schedules", icon: CalendarClock },
   { label: "节点管理", path: "/nodes", icon: Network },
   { label: "专家管理", path: "/experts", icon: Bot },
   { label: "操作审计", path: "/audit", icon: ClipboardList },
