@@ -1,9 +1,8 @@
 /**
- * Scheduled engagement tasks — UI over /api/schedules.
- * Positioning: periodic retest / surface patrol, not unattended full pentest.
+ * Scheduled engagement tasks — table-first layout (like AssetPage),
+ * create form in a modal dialog.
  */
-import { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 import { authFetch } from "../lib/api";
@@ -54,7 +53,8 @@ function formatWhen(iso?: string | null): string {
 const EMPTY_FORM = {
   target: "",
   scope: "",
-  instruction: "Authorized scheduled surface check of the target. Book only proven findings with evidence.",
+  instruction:
+    "Authorized scheduled surface check of the target. Book only proven findings with evidence.",
   engagement: "pentest",
   interval: "1d",
   node_id: "",
@@ -63,14 +63,15 @@ const EMPTY_FORM = {
 };
 
 export default function SchedulesPage() {
-  const navigate = useNavigate();
   const [items, setItems] = useState<Schedule[]>([]);
   const [nodes, setNodes] = useState<NodeOpt[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
+  const [formError, setFormError] = useState("");
   const [saving, setSaving] = useState(false);
   const [ticking, setTicking] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -103,8 +104,37 @@ export default function SchedulesPage() {
     })();
   }, []);
 
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter(
+      (s) =>
+        s.target.toLowerCase().includes(q) ||
+        s.engagement.toLowerCase().includes(q) ||
+        (s.instruction || "").toLowerCase().includes(q) ||
+        (s.scope || "").toLowerCase().includes(q),
+    );
+  }, [items, search]);
+
+  const openCreateDialog = () => {
+    setForm(EMPTY_FORM);
+    setFormError("");
+    setShowForm(true);
+  };
+
+  const closeCreateDialog = () => {
+    if (saving) return;
+    setShowForm(false);
+    setFormError("");
+  };
+
   const create = async () => {
+    if (!form.target.trim() || !form.instruction.trim()) {
+      setFormError("目标与指令为必填");
+      return;
+    }
     setSaving(true);
+    setFormError("");
     setError("");
     setNotice("");
     try {
@@ -126,7 +156,7 @@ export default function SchedulesPage() {
       setNotice("计划已创建");
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "创建失败");
+      setFormError(e instanceof Error ? e.message : "创建失败");
     } finally {
       setSaving(false);
     }
@@ -161,16 +191,13 @@ export default function SchedulesPage() {
     setError("");
     setNotice("");
     try {
-      const res = await authFetch<{ count: number; fired: { conversation_id?: string }[] }>(
+      const res = await authFetch<{ count: number }>(
         "/api/schedules/tick",
         { method: "POST" },
       );
       const n = res.count ?? 0;
       setNotice(n > 0 ? `已触发 ${n} 个到期计划（新建会话派工）` : "当前没有到期计划");
       await load();
-      if (n > 0 && res.fired?.[0]?.conversation_id) {
-        // optional: stay on page; user can open conversations
-      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "触发失败");
     } finally {
@@ -178,81 +205,196 @@ export default function SchedulesPage() {
     }
   };
 
+  const nodeName = (id?: string | null) => {
+    if (!id) return "—";
+    return nodes.find((n) => n.id === id)?.name || id.slice(0, 8);
+  };
+
   return (
     <div className="flex h-screen bg-canvas">
       <Sidebar activeId={null} onSelect={() => {}} />
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex flex-1 flex-col overflow-hidden">
         <TopBar title="任务计划" />
-        <main className="flex-1 overflow-y-auto p-6">
-          <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h1 className="text-lg font-semibold tracking-tight">任务计划</h1>
-              <p className="mt-1 max-w-xl text-sm text-ink-secondary">
-                按周期对已授权目标做复测 / 表面巡检。不是无人全自动挖洞。到期后通过「立即检查到期」或后续后台 tick 派工到会话。
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
+        <div className="flex flex-1 overflow-hidden">
+          <main className="flex-1 overflow-y-auto p-6">
+            <div className="mb-4 flex flex-wrap items-center gap-3">
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="搜索目标 / pack / 指令"
+                className="min-w-[12rem] rounded-md border border-hairline px-3 py-2 text-sm focus:border-ink focus:outline-none"
+              />
               <button
                 type="button"
                 onClick={() => void runTick()}
                 disabled={ticking}
-                className="rounded-pill border border-hairline px-4 py-2 text-sm text-ink hover:bg-canvas-inset disabled:opacity-50"
+                className="rounded-md border border-hairline px-4 py-2 text-sm text-ink hover:bg-canvas-inset disabled:opacity-50"
               >
                 {ticking ? "检查中…" : "立即检查到期"}
               </button>
               <button
                 type="button"
-                onClick={() => setShowForm(true)}
-                className="rounded-pill bg-ink px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+                onClick={openCreateDialog}
+                className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-white hover:opacity-90"
               >
-                + 新建计划
+                新建计划
               </button>
             </div>
-          </div>
 
-          {error && (
-            <div className="mb-4 rounded-md bg-severity-critical-subtle px-4 py-3 text-sm text-severity-critical">
-              {error}
-            </div>
-          )}
-          {notice && (
-            <div className="mb-4 rounded-md border border-hairline bg-canvas-inset px-4 py-3 text-sm text-ink">
-              {notice}
-            </div>
-          )}
+            {error && (
+              <div className="mb-4 rounded-md border border-severity-critical/30 bg-severity-critical-subtle px-4 py-3 text-sm text-severity-critical">
+                {error}
+              </div>
+            )}
+            {notice && (
+              <div className="mb-4 rounded-md border border-hairline-soft bg-surface-default px-4 py-3 text-sm text-ink-secondary">
+                {notice}
+              </div>
+            )}
 
-          {showForm && (
-            <div className="mb-6 max-w-xl space-y-3 rounded-lg border border-hairline p-4">
-              <h2 className="text-sm font-medium">新建计划</h2>
+            <div className="overflow-x-auto rounded-md border border-hairline-soft bg-surface-raised">
+              <table className="w-full min-w-[900px] table-fixed">
+                <thead>
+                  <tr className="border-b border-hairline bg-surface-default text-left text-xs font-medium text-ink-secondary">
+                    <th className="min-w-0 px-3 py-2.5">目标</th>
+                    <th className="w-24 px-3 py-2.5">Pack</th>
+                    <th className="w-24 px-3 py-2.5">周期</th>
+                    <th className="w-36 px-3 py-2.5">节点</th>
+                    <th className="w-40 px-3 py-2.5">下次执行</th>
+                    <th className="w-40 px-3 py-2.5">上次执行</th>
+                    <th className="w-20 px-3 py-2.5">状态</th>
+                    <th className="w-28 px-3 py-2.5">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loading ? (
+                    <tr>
+                      <td colSpan={8} className="px-3 py-10 text-center text-sm text-ink-muted">
+                        加载中…
+                      </td>
+                    </tr>
+                  ) : filtered.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="px-3 py-10 text-center text-sm text-ink-muted">
+                        {items.length === 0
+                          ? "暂无计划。点击「新建计划」创建周期复测 / 表面巡检。"
+                          : "没有匹配搜索条件的计划。"}
+                      </td>
+                    </tr>
+                  ) : (
+                    filtered.map((s) => (
+                      <tr
+                        key={s.id}
+                        className="border-b border-hairline-soft last:border-0 hover:bg-canvas-inset/50"
+                      >
+                        <td className="min-w-0 px-3 py-2.5">
+                          <p className="truncate font-mono text-xs text-ink" title={s.target}>
+                            {s.target}
+                          </p>
+                          {s.instruction ? (
+                            <p className="mt-0.5 truncate text-[11px] text-ink-muted" title={s.instruction}>
+                              {s.instruction}
+                            </p>
+                          ) : null}
+                        </td>
+                        <td className="px-3 py-2.5 text-xs">{s.engagement}</td>
+                        <td className="px-3 py-2.5 text-xs">{formatInterval(s.interval_seconds)}</td>
+                        <td className="truncate px-3 py-2.5 text-xs text-ink-secondary" title={s.node_id || ""}>
+                          {nodeName(s.node_id)}
+                        </td>
+                        <td className="px-3 py-2.5 text-xs text-ink-secondary">{formatWhen(s.next_fire_at)}</td>
+                        <td className="px-3 py-2.5 text-xs text-ink-secondary">{formatWhen(s.last_fire_at)}</td>
+                        <td className="px-3 py-2.5">
+                          <span
+                            className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                              s.enabled
+                                ? "bg-status-success/15 text-status-success"
+                                : "bg-canvas-inset text-ink-muted"
+                            }`}
+                          >
+                            {s.enabled ? "启用" : "停用"}
+                          </span>
+                        </td>
+                        <td className="space-x-2 px-3 py-2.5 text-xs">
+                          <button
+                            type="button"
+                            className="text-ink-secondary hover:text-ink"
+                            onClick={() => void toggleEnabled(s)}
+                          >
+                            {s.enabled ? "停用" : "启用"}
+                          </button>
+                          <button
+                            type="button"
+                            className="text-ink-secondary hover:text-severity-critical"
+                            onClick={() => setDeleteId(s.id)}
+                          >
+                            删除
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </main>
+        </div>
+      </div>
+
+      <ConfirmDialog
+        open={Boolean(deleteId)}
+        title="删除计划"
+        description="确定删除该定时计划？不会删除已产生的会话或漏洞。"
+        confirmLabel="删除"
+        onConfirm={() => void remove()}
+        onCancel={() => setDeleteId(null)}
+      />
+
+      {showForm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+          onClick={closeCreateDialog}
+        >
+          <div
+            className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg border border-hairline-soft bg-canvas p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-semibold">新建计划</h2>
+            <p className="mt-1 text-xs text-ink-muted">
+              按周期对已授权目标做复测 / 表面巡检，不是无人全自动挖洞。
+            </p>
+            <div className="mt-4 space-y-3">
               <Field label="目标 URL / 主机">
                 <input
-                  className={inputCls}
                   value={form.target}
                   onChange={(e) => setForm({ ...form, target: e.target.value })}
-                  placeholder="https://app.example.com"
+                  placeholder="例如 https://app.example.com"
+                  className="w-full rounded-md border border-hairline px-3 py-2 font-mono text-sm focus:border-ink focus:outline-none"
+                  autoFocus
                 />
               </Field>
-              <Field label="范围 scope（默认=目标）">
+              <Field label="范围 scope（可选，默认=目标）">
                 <input
-                  className={inputCls}
                   value={form.scope}
                   onChange={(e) => setForm({ ...form, scope: e.target.value })}
-                  placeholder="可选"
+                  placeholder="授权边界，可留空"
+                  className="w-full rounded-md border border-hairline px-3 py-2 text-sm focus:border-ink focus:outline-none"
                 />
               </Field>
               <Field label="指令 instruction">
                 <textarea
-                  className={`${inputCls} min-h-[80px]`}
                   value={form.instruction}
                   onChange={(e) => setForm({ ...form, instruction: e.target.value })}
+                  rows={4}
+                  className="w-full rounded-md border border-hairline px-3 py-2 text-sm focus:border-ink focus:outline-none"
                 />
               </Field>
               <div className="grid grid-cols-2 gap-3">
                 <Field label="专家 pack">
                   <select
-                    className={inputCls}
                     value={form.engagement}
                     onChange={(e) => setForm({ ...form, engagement: e.target.value })}
+                    className="w-full rounded-md border border-hairline px-3 py-2 text-sm focus:border-ink focus:outline-none"
                   >
                     <option value="pentest">pentest</option>
                     <option value="ctf">ctf</option>
@@ -260,9 +402,9 @@ export default function SchedulesPage() {
                 </Field>
                 <Field label="周期">
                   <select
-                    className={inputCls}
                     value={form.interval}
                     onChange={(e) => setForm({ ...form, interval: e.target.value })}
+                    className="w-full rounded-md border border-hairline px-3 py-2 text-sm focus:border-ink focus:outline-none"
                   >
                     {INTERVAL_OPTIONS.map((o) => (
                       <option key={o.value} value={o.value}>
@@ -274,14 +416,15 @@ export default function SchedulesPage() {
               </div>
               <Field label="绑定节点（可选）">
                 <select
-                  className={inputCls}
                   value={form.node_id}
                   onChange={(e) => setForm({ ...form, node_id: e.target.value })}
+                  className="w-full rounded-md border border-hairline px-3 py-2 text-sm focus:border-ink focus:outline-none"
                 >
                   <option value="">（自动 / 未指定）</option>
                   {nodes.map((n) => (
                     <option key={n.id} value={n.id}>
-                      {n.name} {n.status === "online" ? "· online" : ""}
+                      {n.name}
+                      {n.status === "online" ? " · online" : ""}
                     </option>
                   ))}
                 </select>
@@ -300,105 +443,34 @@ export default function SchedulesPage() {
                   checked={form.fire_immediately}
                   onChange={(e) => setForm({ ...form, fire_immediately: e.target.checked })}
                 />
-                创建后尽快到期（仍需点「立即检查到期」或等待 tick）
+                创建后尽快到期（仍需点「立即检查到期」）
               </label>
-              <div className="flex gap-2 pt-1">
-                <button
-                  type="button"
-                  disabled={saving || !form.target.trim() || !form.instruction.trim()}
-                  onClick={() => void create()}
-                  className="rounded-pill bg-ink px-4 py-2 text-sm text-white disabled:opacity-50"
-                >
-                  {saving ? "保存中…" : "创建"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowForm(false)}
-                  className="rounded-pill border border-hairline px-4 py-2 text-sm"
-                >
-                  取消
-                </button>
-              </div>
             </div>
-          )}
-
-          {loading ? (
-            <p className="text-sm text-ink-muted">加载中…</p>
-          ) : items.length === 0 ? (
-            <p className="py-12 text-center text-sm text-ink-muted">
-              暂无计划。创建后可定期对授权目标做巡检。
-            </p>
-          ) : (
-            <div className="overflow-hidden rounded-lg border border-hairline">
-              <table className="w-full text-left text-sm">
-                <thead className="border-b border-hairline bg-canvas-inset text-[11px] font-medium uppercase tracking-wider text-ink-muted">
-                  <tr>
-                    <th className="px-3 py-2">目标</th>
-                    <th className="px-3 py-2">Pack</th>
-                    <th className="px-3 py-2">周期</th>
-                    <th className="px-3 py-2">下次</th>
-                    <th className="px-3 py-2">上次</th>
-                    <th className="px-3 py-2">状态</th>
-                    <th className="px-3 py-2" />
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-hairline-soft">
-                  {items.map((s) => (
-                    <tr key={s.id} className="hover:bg-canvas-inset/60">
-                      <td className="max-w-[200px] truncate px-3 py-2.5 font-mono text-xs">{s.target}</td>
-                      <td className="px-3 py-2.5 text-xs">{s.engagement}</td>
-                      <td className="px-3 py-2.5 text-xs">{formatInterval(s.interval_seconds)}</td>
-                      <td className="px-3 py-2.5 text-xs text-ink-secondary">{formatWhen(s.next_fire_at)}</td>
-                      <td className="px-3 py-2.5 text-xs text-ink-secondary">{formatWhen(s.last_fire_at)}</td>
-                      <td className="px-3 py-2.5">
-                        <span
-                          className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                            s.enabled
-                              ? "bg-status-success/15 text-status-success"
-                              : "bg-canvas-inset text-ink-muted"
-                          }`}
-                        >
-                          {s.enabled ? "启用" : "停用"}
-                        </span>
-                      </td>
-                      <td className="space-x-2 px-3 py-2.5 text-right text-xs">
-                        <button type="button" className="text-ink-secondary hover:text-ink" onClick={() => void toggleEnabled(s)}>
-                          {s.enabled ? "停用" : "启用"}
-                        </button>
-                        <button type="button" className="text-ink-secondary hover:text-ink" onClick={() => setDeleteId(s.id)}>
-                          删除
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            {formError && <p className="mt-3 text-xs text-severity-critical">{formError}</p>}
+            <div className="mt-6 flex justify-end gap-2 border-t border-hairline-soft pt-4">
+              <button
+                type="button"
+                disabled={saving}
+                onClick={closeCreateDialog}
+                className="rounded-md border border-hairline px-3 py-1.5 text-xs"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => void create()}
+                className="rounded-md bg-ink px-4 py-1.5 text-xs font-medium text-white disabled:opacity-60"
+              >
+                {saving ? "保存中…" : "保存"}
+              </button>
             </div>
-          )}
-
-          <p className="mt-6 text-xs text-ink-muted">
-            提示：当前到期触发依赖「立即检查到期」或后续平台后台 tick。派工会创建新会话；请确保 Node 在线且专家包已安装。
-          </p>
-          <button type="button" onClick={() => navigate("/")} className="mt-3 text-sm text-ink-secondary hover:text-ink">
-            ← 回到会话
-          </button>
-        </main>
-      </div>
-
-      <ConfirmDialog
-        open={Boolean(deleteId)}
-        title="删除计划"
-        description="确定删除该定时计划？不会删除已产生的会话或漏洞。"
-        confirmLabel="删除"
-        onConfirm={() => void remove()}
-        onCancel={() => setDeleteId(null)}
-      />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
-
-const inputCls =
-  "w-full rounded-md border border-hairline bg-canvas px-3 py-2 text-sm text-ink placeholder:text-ink-muted focus:border-ink focus:outline-none";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (

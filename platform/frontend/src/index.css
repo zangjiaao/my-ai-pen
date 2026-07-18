@@ -4,38 +4,202 @@
 
 body { margin: 0; }
 
+/* —— Sidebar single-column width (content swaps; no dual rail) —— */
+.sidebar-shell {
+  transition: width 200ms ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-shell {
+    transition: none;
+  }
+}
+
+/* —— Sidebar logo wordmark —— */
+.sidebar-logo {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  max-width: 100%;
+  line-height: 1.15;
+  font-family: "Nunito", system-ui, sans-serif;
+  font-size: 1.375rem;
+  letter-spacing: -0.01em;
+  color: #0a0a0a;
+}
+.sidebar-logo-cyber {
+  flex-shrink: 0;
+  font-weight: 800;
+}
+.sidebar-logo-security {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 400;
+  color: #404040;
+}
+.sidebar-logo:hover {
+  opacity: 0.82;
+}
+
+/* Login hero wordmark (inverted) */
+.login-hero-logo {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  font-family: "Nunito", system-ui, sans-serif;
+  font-size: 1.375rem;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+}
+.login-hero-logo-cyber {
+  font-weight: 800;
+  color: #fafafa;
+}
+.login-hero-logo-security {
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+/* Login form mobile wordmark */
+.login-form-logo {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  font-family: "Nunito", system-ui, sans-serif;
+  font-size: 1.3125rem;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+}
+.login-form-logo-cyber {
+  font-weight: 800;
+  color: #0a0a0a;
+}
+.login-form-logo-security {
+  font-weight: 400;
+  color: #555555;
+}
+
 /* —— Login hero (left panel) —— */
 .login-hero-grid {
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+    linear-gradient(rgba(255, 255, 255, 0.12) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.12) 1px, transparent 1px);
   background-size: 40px 40px;
-  mask-image: radial-gradient(ellipse 80% 70% at 40% 40%, black 20%, transparent 75%);
+  mask-image: radial-gradient(ellipse 85% 75% at 45% 45%, black 25%, transparent 80%);
+  animation: login-grid-drift 18s linear infinite;
+  opacity: 0.9;
+}
+
+.login-hero-vignette {
+  background:
+    radial-gradient(ellipse 70% 60% at 65% 55%, rgba(255, 255, 255, 0.1), transparent 55%),
+    radial-gradient(ellipse 90% 80% at 30% 20%, rgba(255, 255, 255, 0.06), transparent 50%);
 }
 
 .login-hero-scan {
   top: -20%;
+  height: 7rem;
   background: linear-gradient(
     to bottom,
     transparent,
-    rgba(255, 255, 255, 0.12),
+    rgba(255, 255, 255, 0.28),
     transparent
   );
-  animation: login-scan 7s ease-in-out infinite;
+  animation: login-scan 5s ease-in-out infinite;
+}
+
+/* Radar: recon / surface-scan metaphor */
+.login-hero-radar {
+  right: -6%;
+  bottom: 6%;
+  width: min(480px, 78vw);
+  height: min(480px, 78vw);
+  opacity: 0.95;
+}
+.login-radar-ring {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  border-radius: 9999px;
+  border: 1.5px solid rgba(255, 255, 255, 0.28);
+  box-shadow:
+    0 0 32px rgba(255, 255, 255, 0.08) inset,
+    0 0 18px rgba(255, 255, 255, 0.06);
+}
+.login-radar-ring-1 {
+  width: 36%;
+  height: 36%;
+  animation: login-radar-breathe 4.5s ease-in-out infinite;
+}
+.login-radar-ring-2 {
+  width: 62%;
+  height: 62%;
+  animation: login-radar-breathe 4.5s ease-in-out 0.6s infinite;
+}
+.login-radar-ring-3 {
+  width: 92%;
+  height: 92%;
+  animation: login-radar-breathe 4.5s ease-in-out 1.2s infinite;
+}
+.login-radar-sweep {
+  position: absolute;
+  inset: 4%;
+  border-radius: 9999px;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg,
+    rgba(255, 255, 255, 0.08) 8deg,
+    rgba(255, 255, 255, 0.38) 28deg,
+    rgba(255, 255, 255, 0.1) 42deg,
+    transparent 58deg
+  );
+  mask-image: radial-gradient(circle, transparent 14%, black 15%, black 72%, transparent 73%);
+  -webkit-mask-image: radial-gradient(circle, transparent 14%, black 15%, black 72%, transparent 73%);
+  animation: login-radar-spin 5.5s linear infinite;
+  opacity: 1;
+}
+
+/* Floating particles (telemetry / traffic) */
+.login-particle {
+  position: absolute;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow:
+    0 0 8px rgba(255, 255, 255, 0.55),
+    0 0 16px rgba(255, 255, 255, 0.25);
+  transform: translate(-50%, -50%);
+  animation-name: login-particle-drift;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+  will-change: transform, opacity;
+}
+
+/* Graph links between hubs */
+.login-hero-graph {
+  opacity: 0.95;
+}
+.login-graph-link {
+  stroke: rgba(255, 255, 255, 0.55);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 7;
+  animation: login-link-flow 2.2s linear infinite;
 }
 
 .login-node {
   position: absolute;
-  width: 6px;
-  height: 6px;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  margin-top: -5px;
   border-radius: 9999px;
-  background: rgba(255, 255, 255, 0.45);
-  box-shadow: 0 0 12px rgba(255, 255, 255, 0.25);
-  animation: login-pulse 4s ease-in-out infinite;
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow:
+    0 0 0 5px rgba(255, 255, 255, 0.14),
+    0 0 0 10px rgba(255, 255, 255, 0.05),
+    0 0 22px rgba(255, 255, 255, 0.55);
+  animation: login-pulse 2.8s ease-in-out infinite;
 }
-.login-node-a { top: 28%; left: 22%; animation-delay: 0s; }
-.login-node-b { top: 52%; left: 58%; animation-delay: 1.2s; }
-.login-node-c { top: 68%; left: 34%; animation-delay: 2.1s; }
 
 .login-hero-enter {
   animation: login-fade-up 0.55s ease-out both;
@@ -49,17 +213,50 @@ body { margin: 0; }
 
 @keyframes login-scan {
   0% { transform: translateY(0); opacity: 0; }
-  15% { opacity: 0.35; }
-  50% { opacity: 0.25; }
+  12% { opacity: 0.7; }
+  45% { opacity: 0.45; }
   100% { transform: translateY(420%); opacity: 0; }
 }
 @keyframes login-pulse {
-  0%, 100% { opacity: 0.35; transform: scale(1); }
-  50% { opacity: 0.9; transform: scale(1.35); }
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.65); }
 }
 @keyframes login-fade-up {
   from { opacity: 0; transform: translateY(12px); }
   to { opacity: 1; transform: translateY(0); }
+}
+@keyframes login-grid-drift {
+  0% { background-position: 0 0, 0 0; }
+  100% { background-position: 40px 40px, 40px 40px; }
+}
+@keyframes login-radar-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+@keyframes login-radar-breathe {
+  0%, 100% { opacity: 0.45; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.06); }
+}
+@keyframes login-particle-drift {
+  0% {
+    opacity: 0.35;
+    transform: translate(-50%, -50%) translateY(0) scale(0.95);
+  }
+  25% { opacity: 1; }
+  50% {
+    opacity: 0.75;
+    transform: translate(-50%, -50%) translateY(-32px) translateX(12px) scale(1.35);
+  }
+  75% { opacity: 0.9; }
+  100% {
+    opacity: 0.35;
+    transform: translate(-50%, -50%) translateY(0) scale(0.95);
+  }
+}
+@keyframes login-link-flow {
+  0% { stroke-dashoffset: 0; opacity: 0.4; }
+  50% { opacity: 0.95; }
+  100% { stroke-dashoffset: -24; opacity: 0.4; }
 }
 
 /* —— Conversation right panel enter —— */
@@ -80,11 +277,19 @@ body { margin: 0; }
 
 @media (prefers-reduced-motion: reduce) {
   .login-hero-scan,
+  .login-hero-grid,
   .login-node,
+  .login-particle,
+  .login-graph-link,
+  .login-radar-sweep,
+  .login-radar-ring,
   .login-hero-enter,
   .login-hero-enter-delay,
   .login-form-enter,
   .right-panel-enter {
     animation: none !important;
+  }
+  .login-radar-sweep {
+    opacity: 0.25;
   }
 }

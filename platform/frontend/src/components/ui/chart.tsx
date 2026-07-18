@@ -70,6 +70,7 @@ export function ChartTooltipContent({
   label,
   className,
   hideLabel,
+  hideZero,
   nameKey,
 }: {
   active?: boolean;
@@ -77,10 +78,16 @@ export function ChartTooltipContent({
   label?: string;
   className?: string;
   hideLabel?: boolean;
+  /** Skip series with value 0 (useful for stacked charts). */
+  hideZero?: boolean;
   nameKey?: string;
 }) {
   const { config } = useChart();
   if (!active || !payload?.length) return null;
+  const rows = hideZero
+    ? payload.filter((item) => item.value !== 0 && item.value !== undefined && item.value !== null)
+    : payload;
+  if (!rows.length) return null;
 
   return (
     <div
@@ -91,7 +98,7 @@ export function ChartTooltipContent({
     >
       {!hideLabel && label ? <div className="font-medium text-ink">{label}</div> : null}
       <div className="grid gap-1">
-        {payload.map((item, i) => {
+        {rows.map((item, i) => {
           const key = String(nameKey || item.dataKey || item.name || "value");
           const itemConfig = config[key];
           const name = itemConfig?.label || item.name || key;

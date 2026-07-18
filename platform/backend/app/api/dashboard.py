@@ -2,7 +2,7 @@
 
 Card layout (frontend):
   1. KPI strip
-  2. 资产对应漏洞 | 新增漏洞 | 修复状态
+  2. 每日未修复漏洞 (2/3 stacked bar) | 新增漏洞列表 (1/3)
   3. 节点 | 专家 | 任务
 """
 from __future__ import annotations
@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import uuid
 from collections import Counter, defaultdict
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends
@@ -33,6 +34,7 @@ router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 _SEVERITIES = ("critical", "high", "medium", "low", "info")
 _STATUSES = ("to_fix", "fixing", "fixed")
 _SEV_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+_DAILY_OPEN_DAYS = 14
 
 _STATUS_LABEL = {
     "to_fix": "待修复",
@@ -65,8 +67,42 @@ class VulnSection(BaseModel):
     recent: list[FindingItem] = Field(default_factory=list)
 
 
+class DailyOpenPoint(BaseModel):
+    """One day of currently unrepaired findings, stacked by severity."""
+
+    date: str
+    critical: int = 0
+    high: int = 0
+    medium: int = 0
+    low: int = 0
+    info: int = 0
+    total: int = 0
+
+
+class OpenFindingPoint(BaseModel):
+    """Unrepaired finding point for client-side daily chart + asset filter."""
+
+    date: str
+    severity: str
+    asset_id: str | None = None
+
+
+class DailyOpenSection(BaseModel):
+    """Daily unrepaired counts (bucketed by first_seen/discovered date)."""
+
+    days: int = _DAILY_OPEN_DAYS
+    series: list[DailyOpenPoint] = Field(default_factory=list)
+    open_points: list[OpenFindingPoint] = Field(default_factory=list)
+
+
+class ChartAssetOption(BaseModel):
+    id: str
+    name: str
+    address: str
+
+
 class AssetRiskItem(BaseModel):
-    """Asset with open vulnerability stats (资产对应漏洞)."""
+    """Asset with open vulnerability stats (kept for KPI / future cards)."""
 
     id: str
     name: str
@@ -83,6 +119,8 @@ class AssetSection(BaseModel):
     total: int = 0
     with_open_vulns: int = 0
     items: list[AssetRiskItem] = Field(default_factory=list)
+    # Full list for chart asset filter (id / name / address)
+    chart_options: list[ChartAssetOption] = Field(default_factory=list)
 
 
 class NodeItem(BaseModel):
@@ -150,6 +188,7 @@ class ScheduleSection(BaseModel):
 
 class DashboardSummaryOut(BaseModel):
     vulnerabilities: VulnSection = Field(default_factory=VulnSection)
+    daily_open: DailyOpenSection = Field(default_factory=DailyOpenSection)
     assets: AssetSection = Field(default_factory=AssetSection)
     nodes: NodeSection = Field(default_factory=NodeSection)
     experts: ExpertSection = Field(default_factory=ExpertSection)
@@ -180,6 +219,47 @@ def _highest_sev(sevs: list[str]) -> str | None:
     return min(sevs, key=lambda s: _SEV_RANK.get(s, 9))
 
 
+def _vuln_day(v: Vulnerability) -> date | None:
+    """Calendar day for chart bucketing (first_seen preferred, else discovered)."""
+    raw = v.first_seen_at or v.discovered_at
+    if raw is None:
+        return None
+    if raw.tzinfo is None:
+        raw = raw.replace(tzinfo=timezone.utc)
+    return raw.astimezone(timezone.utc).date()
+
+
+def _build_daily_open(open_points: list[OpenFindingPoint], days: int = _DAILY_OPEN_DAYS) -> list[DailyOpenPoint]:
+    today = datetime.now(timezone.utc).date()
+    start = today - timedelta(days=days - 1)
+    buckets: dict[str, Counter[str]] = {
+        (start + timedelta(days=i)).isoformat(): Counter({s: 0 for s in _SEVERITIES})
+        for i in range(days)
+    }
+    for p in open_points:
+        if p.date not in buckets:
+            continue
+        sev = p.severity if p.severity in buckets[p.date] else "info"
+        buckets[p.date][sev] += 1
+    out: list[DailyOpenPoint] = []
+    for i in range(days):
+        d = (start + timedelta(days=i)).isoformat()
+        c = buckets[d]
+        total = sum(c.values())
+        out.append(
+            DailyOpenPoint(
+                date=d,
+                critical=int(c.get("critical", 0)),
+                high=int(c.get("high", 0)),
+                medium=int(c.get("medium", 0)),
+                low=int(c.get("low", 0)),
+                info=int(c.get("info", 0)),
+                total=total,
+            )
+        )
+    return out
+
+
 @router.get("/summary", response_model=DashboardSummaryOut)
 async def dashboard_summary(
     current_user: dict = Depends(get_current_user),
@@ -196,6 +276,7 @@ async def dashboard_summary(
     by_severity = Counter({s: 0 for s in _SEVERITIES})
     open_by_asset: dict[str, list[str]] = defaultdict(list)
     total_by_asset: Counter[str] = Counter()
+    open_points: list[OpenFindingPoint] = []
     for v in vulns:
         st = normalize_status(v.status)
         by_status[st] = by_status.get(st, 0) + 1
@@ -203,11 +284,21 @@ async def dashboard_summary(
         if sev not in by_severity:
             sev = "info"
         by_severity[sev] = by_severity.get(sev, 0) + 1
-        if v.asset_id:
-            aid = str(v.asset_id)
+        aid = str(v.asset_id) if v.asset_id else None
+        if aid:
             total_by_asset[aid] += 1
             if st in ("to_fix", "fixing"):
                 open_by_asset[aid].append(sev)
+        if st in ("to_fix", "fixing"):
+            day = _vuln_day(v)
+            if day is not None:
+                open_points.append(
+                    OpenFindingPoint(
+                        date=day.isoformat(),
+                        severity=sev,
+                        asset_id=aid,
+                    )
+                )
     open_total = int(by_status.get("to_fix", 0) + by_status.get("fixing", 0))
     sorted_vulns = sorted(
         vulns,
@@ -234,6 +325,11 @@ async def dashboard_summary(
         by_severity=dict(by_severity),
         recent=recent_findings,
     )
+    daily_open_section = DailyOpenSection(
+        days=_DAILY_OPEN_DAYS,
+        series=_build_daily_open(open_points, _DAILY_OPEN_DAYS),
+        open_points=open_points,
+    )
 
     # --- assets + open vuln mapping ---
     assets = (
@@ -242,6 +338,7 @@ async def dashboard_summary(
         )
     ).scalars().all()
     asset_items: list[AssetRiskItem] = []
+    chart_options: list[ChartAssetOption] = []
     with_open = 0
     for a in assets:
         aid = str(a.id)
@@ -249,6 +346,9 @@ async def dashboard_summary(
         open_n = len(open_sevs)
         if open_n:
             with_open += 1
+        chart_options.append(
+            ChartAssetOption(id=aid, name=a.name or a.address, address=a.address)
+        )
         asset_items.append(
             AssetRiskItem(
                 id=aid,
@@ -264,10 +364,12 @@ async def dashboard_summary(
         )
     # Prefer assets with open vulns first for the card
     asset_items.sort(key=lambda x: (-x.open_vulns, x.address))
+    chart_options.sort(key=lambda x: x.address)
     asset_section = AssetSection(
         total=len(assets),
         with_open_vulns=with_open,
         items=asset_items[:12],
+        chart_options=chart_options,
     )
 
     # --- nodes ---
@@ -393,6 +495,7 @@ async def dashboard_summary(
 
     return DashboardSummaryOut(
         vulnerabilities=vuln_section,
+        daily_open=daily_open_section,
         assets=asset_section,
         nodes=node_section,
         experts=expert_section,

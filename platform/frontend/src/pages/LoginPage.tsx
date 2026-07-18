@@ -1,9 +1,6 @@
 import { useState } from "react";
 import { useAuthStore } from "../stores/authStore";
-import BrandLogo from "../components/BrandLogo";
 import LoginHero from "../components/LoginHero";
-import { BRAND_NAME } from "../lib/brand";
-
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -33,12 +30,13 @@ export default function LoginPage() {
           onSubmit={handleSubmit}
           className="login-form-enter w-full max-w-sm space-y-6"
         >
-          <div className="md:hidden">
-            <BrandLogo size={28} showWordmark />
-          </div>
           <div>
+            <p className="login-form-logo mb-3 md:hidden" aria-label="Cyber Security">
+              <span className="login-form-logo-cyber">Cyber</span>
+              <span className="login-form-logo-security">Security</span>
+            </p>
             <h1 className="text-2xl font-semibold tracking-tight text-ink">登录</h1>
-            <p className="mt-1 text-sm text-ink-secondary">进入 {BRAND_NAME}</p>
+            <p className="mt-1 text-sm text-ink-secondary">进入 Cyber Security</p>
           </div>
 
           {error && (

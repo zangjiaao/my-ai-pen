@@ -3,12 +3,12 @@
  *
  * Layout:
  *  1. KPI strip (small cards)
- *  2. 资产对应漏洞 | 新增漏洞信息 | 修复状态
- *  3. 节点信息 | 专家信息 | 任务
+ *  2. 每日未修复漏洞 chart (2/3) | 新增漏洞列表 (1/3)
+ *  3. 节点信息 | 专家信息 | 计划任务
  */
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bar, BarChart, Cell, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, Legend, XAxis, YAxis } from "recharts";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 import {
@@ -30,6 +30,22 @@ type FindingItem = {
   asset_id?: string | null;
 };
 
+type OpenFindingPoint = {
+  date: string;
+  severity: string;
+  asset_id?: string | null;
+};
+
+type DailyOpenPoint = {
+  date: string;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  info: number;
+  total: number;
+};
+
 type Summary = {
   vulnerabilities: {
     total: number;
@@ -37,6 +53,11 @@ type Summary = {
     by_status: Record<string, number>;
     by_severity: Record<string, number>;
     recent: FindingItem[];
+  };
+  daily_open?: {
+    days: number;
+    series: DailyOpenPoint[];
+    open_points: OpenFindingPoint[];
   };
   assets: {
     total: number;
@@ -52,6 +73,7 @@ type Summary = {
       tags: string[];
       updated_at?: string | null;
     }[];
+    chart_options?: { id: string; name: string; address: string }[];
   };
   nodes: {
     total: number;
@@ -109,6 +131,8 @@ type Summary = {
   schedules_total?: number;
 };
 
+const SEVERITIES = ["critical", "high", "medium", "low", "info"] as const;
+
 const SEV_CLASS: Record<string, string> = {
   critical: "bg-severity-critical-subtle text-severity-critical",
   high: "bg-severity-high-subtle text-severity-high",
@@ -116,32 +140,29 @@ const SEV_CLASS: Record<string, string> = {
   low: "bg-severity-low-subtle text-severity-low",
   info: "bg-canvas-inset text-ink-secondary",
 };
-const STATUS_LABEL: Record<string, string> = {
-  to_fix: "待修复",
-  fixing: "修复中",
-  fixed: "已修复",
-};
-const STATUS_COLOR: Record<string, string> = {
-  to_fix: "#d97706",
-  fixing: "#2563eb",
-  fixed: "#16a34a",
-};
-const TASK_STATUS_LABEL: Record<string, string> = {
-  created: "已创建",
-  running: "运行中",
-  working: "工作中",
-  busy: "忙碌",
-  completed: "已完成",
-  failed: "失败",
-  cancelled: "已取消",
-  incomplete: "未完成",
+
+const SEV_COLOR: Record<(typeof SEVERITIES)[number], string> = {
+  critical: "#dc2626",
+  high: "#ea580c",
+  medium: "#d97706",
+  low: "#2563eb",
+  info: "#a3a3a3",
 };
 
-const statusChartConfig = {
-  count: { label: "数量", color: "#171717" },
-  to_fix: { label: "待修复", color: STATUS_COLOR.to_fix },
-  fixing: { label: "修复中", color: STATUS_COLOR.fixing },
-  fixed: { label: "已修复", color: STATUS_COLOR.fixed },
+const SEV_LABEL: Record<(typeof SEVERITIES)[number], string> = {
+  critical: "严重",
+  high: "高危",
+  medium: "中危",
+  low: "低危",
+  info: "信息",
+};
+
+const dailyOpenChartConfig = {
+  critical: { label: SEV_LABEL.critical, color: SEV_COLOR.critical },
+  high: { label: SEV_LABEL.high, color: SEV_COLOR.high },
+  medium: { label: SEV_LABEL.medium, color: SEV_COLOR.medium },
+  low: { label: SEV_LABEL.low, color: SEV_COLOR.low },
+  info: { label: SEV_LABEL.info, color: SEV_COLOR.info },
 } satisfies ChartConfig;
 
 function formatWhen(iso?: string | null): string {
@@ -160,11 +181,59 @@ function formatInterval(sec: number): string {
   return `${sec}s`;
 }
 
+function formatDayLabel(isoDate: string): string {
+  // YYYY-MM-DD → M/D
+  const parts = isoDate.split("-");
+  if (parts.length !== 3) return isoDate;
+  return `${Number(parts[1])}/${Number(parts[2])}`;
+}
+
+function buildDailySeries(
+  points: OpenFindingPoint[],
+  days: number,
+  assetId: string | null,
+): Array<DailyOpenPoint & { label: string }> {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const dayKeys: string[] = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(today.getDate() - i);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    dayKeys.push(`${y}-${m}-${day}`);
+  }
+
+  const buckets = new Map<string, Record<(typeof SEVERITIES)[number], number>>();
+  for (const key of dayKeys) {
+    buckets.set(key, { critical: 0, high: 0, medium: 0, low: 0, info: 0 });
+  }
+
+  for (const p of points) {
+    if (assetId && p.asset_id !== assetId) continue;
+    const bucket = buckets.get(p.date);
+    if (!bucket) continue;
+    const sev = (SEVERITIES as readonly string[]).includes(p.severity)
+      ? (p.severity as (typeof SEVERITIES)[number])
+      : "info";
+    bucket[sev] += 1;
+  }
+
+  return dayKeys.map((date) => {
+    const b = buckets.get(date)!;
+    const total = SEVERITIES.reduce((sum, s) => sum + b[s], 0);
+    return { date, label: formatDayLabel(date), ...b, total };
+  });
+}
+
 export default function DashboardPage() {
   const navigate = useNavigate();
   const [summary, setSummary] = useState<Summary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  /** Empty string = all assets */
+  const [chartAssetId, setChartAssetId] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -185,21 +254,25 @@ export default function DashboardPage() {
     };
   }, []);
 
-  const byStatus = summary?.vulnerabilities?.by_status ?? {};
   const openTotal = summary?.vulnerabilities?.open_total ?? summary?.open_total ?? 0;
   const vulnsTotal = summary?.vulnerabilities?.total ?? summary?.vulns_total ?? 0;
   const recentFindings = summary?.vulnerabilities?.recent ?? [];
 
-  const statusData = useMemo(
-    () =>
-      (["to_fix", "fixing", "fixed"] as const).map((st) => ({
-        key: st,
-        name: STATUS_LABEL[st],
-        count: byStatus[st] ?? 0,
-        fill: STATUS_COLOR[st],
-      })),
-    [byStatus],
+  const chartAssetOptions = summary?.assets?.chart_options ?? [];
+  const days = summary?.daily_open?.days ?? 14;
+  const openPoints = summary?.daily_open?.open_points ?? [];
+
+  const dailyChartData = useMemo(
+    () => buildDailySeries(openPoints, days, chartAssetId || null),
+    [openPoints, days, chartAssetId],
   );
+
+  const chartOpenTotal = useMemo(
+    () => dailyChartData.reduce((sum, d) => sum + d.total, 0),
+    [dailyChartData],
+  );
+
+  const hasChartData = chartOpenTotal > 0;
 
   return (
     <div className="flex h-screen bg-canvas">
@@ -217,7 +290,7 @@ export default function DashboardPage() {
           {summary && !loading && (
             <div className="space-y-6">
               {/* 1. KPI strip */}
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
                 <Kpi label="待处理漏洞" value={openTotal} onClick={() => navigate("/vulnerabilities?status=to_fix")} />
                 <Kpi label="漏洞总数" value={vulnsTotal} onClick={() => navigate("/vulnerabilities")} />
                 <Kpi label="资产" value={summary.assets?.total ?? 0} onClick={() => navigate("/assets")} />
@@ -232,131 +305,151 @@ export default function DashboardPage() {
                   value={summary.experts?.total ?? summary.experts_total ?? 0}
                   onClick={() => navigate("/experts")}
                 />
-                <Kpi
-                  label="进行中任务"
-                  value={summary.tasks?.running ?? 0}
-                  hint={`会话 ${summary.tasks?.total ?? 0}`}
-                  onClick={() => navigate("/")}
-                />
               </div>
 
-              {/* 2. 资产对应漏洞 | 新增漏洞 | 修复状态 */}
-              <div className="grid gap-4 lg:grid-cols-3">
-                <Card
-                  title="资产对应漏洞"
-                  meta={`${summary.assets?.with_open_vulns ?? 0} 个资产有待处理漏洞`}
-                  actionLabel="资产"
-                  onAction={() => navigate("/assets")}
-                >
-                  {(summary.assets?.items?.length ?? 0) === 0 ? (
-                    <Empty>暂无资产</Empty>
-                  ) : (
-                    <table className="w-full text-left text-sm">
-                      <thead>
-                        <tr className="border-b border-hairline text-xs text-ink-secondary">
-                          <th className="pb-2 pr-2 font-medium">资产</th>
-                          <th className="pb-2 pr-2 font-medium">开放</th>
-                          <th className="pb-2 font-medium">最高</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-hairline-soft">
-                        {summary.assets.items.map((a) => (
-                          <tr
-                            key={a.id}
-                            className="cursor-pointer hover:bg-canvas-inset"
-                            onClick={() => navigate("/assets")}
-                          >
-                            <td className="max-w-[10rem] truncate py-2 pr-2 font-mono text-xs" title={a.address}>
-                              {a.address}
-                            </td>
-                            <td className="py-2 pr-2 font-mono text-xs">
-                              {a.open_vulns}
-                              <span className="text-ink-muted">/{a.total_vulns}</span>
-                            </td>
-                            <td className="py-2">
-                              {a.highest_severity ? (
-                                <span
-                                  className={`rounded px-1.5 py-0.5 font-mono text-[10px] uppercase ${SEV_CLASS[a.highest_severity] || SEV_CLASS.info}`}
-                                >
-                                  {a.highest_severity}
-                                </span>
-                              ) : (
-                                <span className="text-xs text-ink-muted">—</span>
-                              )}
-                            </td>
-                          </tr>
+              {/* 2. 每日未修复 chart (2/3) | 新增漏洞 (1/3) */}
+              <div className="grid gap-4 lg:grid-cols-3 lg:items-stretch">
+                <section className="flex h-[400px] min-h-0 flex-col overflow-hidden rounded-lg border border-hairline bg-canvas p-4 lg:col-span-2">
+                  <div className="mb-2 flex shrink-0 flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h2 className="text-sm font-semibold tracking-tight text-ink">每日未修复漏洞</h2>
+                      <p className="mt-0.5 text-[11px] text-ink-muted">
+                        近 {days} 天 · 仅统计待修复 / 修复中
+                        {chartOpenTotal > 0 ? ` · 合计 ${chartOpenTotal}` : ""}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <label htmlFor="chart-asset-filter" className="sr-only">
+                        筛选资产
+                      </label>
+                      <select
+                        id="chart-asset-filter"
+                        value={chartAssetId}
+                        onChange={(e) => setChartAssetId(e.target.value)}
+                        className="max-w-[14rem] rounded-md border border-hairline bg-canvas px-2.5 py-1.5 text-xs text-ink outline-none focus:border-ink-muted"
+                      >
+                        <option value="">全部资产</option>
+                        {chartAssetOptions.map((a) => (
+                          <option key={a.id} value={a.id}>
+                            {a.address || a.name}
+                          </option>
                         ))}
-                      </tbody>
-                    </table>
-                  )}
-                </Card>
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => navigate("/vulnerabilities?status=to_fix")}
+                        className="shrink-0 text-xs text-ink-secondary hover:text-ink"
+                      >
+                        漏洞 →
+                      </button>
+                    </div>
+                  </div>
 
-                <Card
-                  title="新增漏洞信息"
-                  meta={`最近 ${recentFindings.length} 条`}
-                  actionLabel="漏洞"
-                  onAction={() => navigate("/vulnerabilities")}
-                >
-                  {recentFindings.length === 0 ? (
-                    <Empty>暂无新增漏洞</Empty>
+                  {!hasChartData ? (
+                    <Empty>所选范围内暂无未修复漏洞</Empty>
                   ) : (
-                    <ul className="divide-y divide-hairline-soft">
-                      {recentFindings.slice(0, 8).map((f) => (
-                        <li key={f.id}>
-                          <button
-                            type="button"
-                            onClick={() => navigate(`/vulnerabilities?highlight=${f.id}`)}
-                            className="flex w-full items-start gap-2 py-2 text-left hover:bg-canvas-inset"
-                          >
-                            <span
-                              className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase ${SEV_CLASS[f.severity] || SEV_CLASS.info}`}
-                            >
-                              {f.severity}
-                            </span>
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate text-sm text-ink">{f.title}</p>
-                              <p className="text-[11px] text-ink-muted">
-                                {f.status_label}
-                                {f.discovered_at ? ` · ${formatWhen(f.discovered_at)}` : ""}
-                              </p>
-                            </div>
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </Card>
-
-                <Card
-                  title="修复状态"
-                  meta={`待修复 ${byStatusCount(byStatus, "to_fix")} · 修复中 ${byStatusCount(byStatus, "fixing")} · 已修复 ${byStatusCount(byStatus, "fixed")}`}
-                  actionLabel="漏洞"
-                  onAction={() => navigate("/vulnerabilities")}
-                >
-                  <ChartContainer config={statusChartConfig} className="h-[220px] w-full aspect-auto">
-                    <BarChart
-                      data={statusData}
-                      margin={{ top: 8, right: 8, left: 0, bottom: 0 }}
-                      onClick={(state) => {
-                        const key = (state?.activePayload?.[0]?.payload as { key?: string })?.key;
-                        if (key) navigate(`/vulnerabilities?status=${key}`);
-                      }}
-                      style={{ cursor: "pointer" }}
+                    <ChartContainer
+                      config={dailyOpenChartConfig}
+                      className="min-h-0 w-full flex-1 aspect-auto"
                     >
-                      <XAxis dataKey="name" tickLine={false} axisLine={false} tick={{ fontSize: 11, fill: "#8b8b8b" }} />
-                      <YAxis allowDecimals={false} tickLine={false} axisLine={false} width={28} tick={{ fontSize: 11, fill: "#8b8b8b" }} />
-                      <ChartTooltip content={<ChartTooltipContent hideLabel nameKey="name" />} />
-                      <Bar dataKey="count" radius={[4, 4, 0, 0]} maxBarSize={48}>
-                        {statusData.map((e) => (
-                          <Cell key={e.key} fill={e.fill} />
+                      <BarChart
+                        data={dailyChartData}
+                        margin={{ top: 8, right: 8, left: 0, bottom: 0 }}
+                      >
+                        <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="#e5e5e5" />
+                        <XAxis
+                          dataKey="date"
+                          tickLine={false}
+                          axisLine={false}
+                          tick={{ fontSize: 11, fill: "#8b8b8b" }}
+                          tickFormatter={formatDayLabel}
+                          interval="preserveStartEnd"
+                          minTickGap={16}
+                        />
+                        <YAxis
+                          allowDecimals={false}
+                          tickLine={false}
+                          axisLine={false}
+                          width={28}
+                          tick={{ fontSize: 11, fill: "#8b8b8b" }}
+                        />
+                        <ChartTooltip content={<ChartTooltipContent hideZero />} />
+                        <Legend
+                          verticalAlign="top"
+                          height={28}
+                          iconType="square"
+                          iconSize={8}
+                          formatter={(value) => (
+                            <span className="text-[11px] text-ink-secondary">
+                              {SEV_LABEL[value as (typeof SEVERITIES)[number]] || value}
+                            </span>
+                          )}
+                        />
+                        {/* Bottom → top: info … critical so highest severity sits on top */}
+                        {[...SEVERITIES].reverse().map((sev, idx, arr) => (
+                          <Bar
+                            key={sev}
+                            dataKey={sev}
+                            name={sev}
+                            stackId="open"
+                            fill={`var(--color-${sev})`}
+                            radius={idx === arr.length - 1 ? [2, 2, 0, 0] : [0, 0, 0, 0]}
+                            maxBarSize={36}
+                          />
                         ))}
-                      </Bar>
-                    </BarChart>
-                  </ChartContainer>
-                </Card>
+                      </BarChart>
+                    </ChartContainer>
+                  )}
+                </section>
+
+                <section className="flex h-[400px] min-h-0 flex-col overflow-hidden rounded-lg border border-hairline bg-canvas p-4">
+                  <div className="mb-2 flex shrink-0 items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <h2 className="text-sm font-semibold tracking-tight text-ink">新增漏洞</h2>
+                      <p className="mt-0.5 text-[11px] text-ink-muted">最近 {recentFindings.length} 条</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => navigate("/vulnerabilities")}
+                      className="shrink-0 text-xs text-ink-secondary hover:text-ink"
+                    >
+                      漏洞 →
+                    </button>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-y-auto">
+                    {recentFindings.length === 0 ? (
+                      <Empty>暂无新增漏洞</Empty>
+                    ) : (
+                      <ul className="divide-y divide-hairline-soft">
+                        {recentFindings.map((f) => (
+                          <li key={f.id}>
+                            <button
+                              type="button"
+                              onClick={() => navigate(`/vulnerabilities?highlight=${f.id}`)}
+                              className="flex w-full items-start gap-2 py-2 text-left hover:bg-canvas-inset"
+                            >
+                              <span
+                                className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase ${SEV_CLASS[f.severity] || SEV_CLASS.info}`}
+                              >
+                                {f.severity}
+                              </span>
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate text-sm text-ink">{f.title}</p>
+                                <p className="text-[11px] text-ink-muted">
+                                  {f.status_label}
+                                  {f.discovered_at ? ` · ${formatWhen(f.discovered_at)}` : ""}
+                                </p>
+                              </div>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </section>
               </div>
 
-              {/* 3. 节点 | 专家 | 任务 */}
+              {/* 3. 节点 | 专家 | 计划任务 */}
               <div className="grid gap-4 lg:grid-cols-3">
                 <Card
                   title="节点信息"
@@ -439,85 +532,50 @@ export default function DashboardPage() {
                 </Card>
 
                 <Card
-                  title="任务"
-                  meta={`进行中 ${summary.tasks?.running ?? 0} · 会话 ${summary.tasks?.total ?? 0} · 计划 ${summary.schedules?.enabled ?? 0}/${summary.schedules?.total ?? 0}`}
-                  actionLabel="会话"
-                  onAction={() => navigate("/")}
+                  title="计划任务"
+                  meta={`启用 ${summary.schedules?.enabled ?? 0} / 共 ${summary.schedules?.total ?? 0}`}
+                  actionLabel="计划"
+                  onAction={() => navigate("/schedules")}
                 >
-                  {(summary.tasks?.recent?.length ?? 0) === 0 &&
-                  (summary.schedules?.items?.length ?? 0) === 0 ? (
-                    <Empty>暂无任务与计划</Empty>
+                  {(summary.schedules?.items?.length ?? 0) === 0 ? (
+                    <Empty>暂无计划任务</Empty>
                   ) : (
-                    <div className="space-y-3">
-                      {(summary.tasks?.recent?.length ?? 0) > 0 && (
-                        <ul className="divide-y divide-hairline-soft rounded-md border border-hairline-soft">
-                          {summary.tasks.recent.slice(0, 6).map((t) => (
-                            <li key={t.id}>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  localStorage.setItem("active_conversation_id", t.id);
-                                  navigate("/");
-                                }}
-                                className="flex w-full items-center gap-2 px-2.5 py-2 text-left hover:bg-canvas-inset"
+                    <table className="w-full text-left text-sm">
+                      <thead>
+                        <tr className="border-b border-hairline text-xs text-ink-secondary">
+                          <th className="pb-2 pr-2 font-medium">目标</th>
+                          <th className="pb-2 pr-2 font-medium">周期</th>
+                          <th className="pb-2 font-medium">状态</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-hairline-soft">
+                        {summary.schedules.items.map((s) => (
+                          <tr
+                            key={s.id}
+                            className="cursor-pointer hover:bg-canvas-inset"
+                            onClick={() => navigate("/schedules")}
+                          >
+                            <td className="max-w-[8rem] truncate py-2 pr-2 font-mono text-xs" title={s.target}>
+                              {s.target}
+                            </td>
+                            <td className="py-2 pr-2 text-xs text-ink-secondary">
+                              {formatInterval(s.interval_seconds)}
+                            </td>
+                            <td className="py-2">
+                              <span
+                                className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                                  s.enabled
+                                    ? "bg-status-success/15 text-status-success"
+                                    : "bg-canvas-inset text-ink-muted"
+                                }`}
                               >
-                                <span
-                                  className={`h-2 w-2 shrink-0 rounded-full ${
-                                    t.working || t.status === "running"
-                                      ? "bg-status-running"
-                                      : t.status === "completed"
-                                        ? "bg-status-success"
-                                        : t.status === "failed"
-                                          ? "bg-status-error"
-                                          : "bg-ink-muted"
-                                  }`}
-                                />
-                                <div className="min-w-0 flex-1">
-                                  <p className="truncate text-xs font-medium text-ink">{t.title}</p>
-                                  <p className="text-[11px] text-ink-muted">
-                                    {TASK_STATUS_LABEL[t.status] || t.status}
-                                    {t.working ? " · 工作中" : ""}
-                                  </p>
-                                </div>
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                      {(summary.schedules?.items?.length ?? 0) > 0 && (
-                        <div>
-                          <div className="mb-1 flex items-center justify-between">
-                            <p className="text-[11px] font-medium uppercase tracking-wider text-ink-muted">
-                              计划任务
-                            </p>
-                            <button
-                              type="button"
-                              className="text-[11px] text-ink-secondary hover:text-ink"
-                              onClick={() => navigate("/schedules")}
-                            >
-                              全部 →
-                            </button>
-                          </div>
-                          <ul className="divide-y divide-hairline-soft rounded-md border border-hairline-soft">
-                            {summary.schedules.items.slice(0, 4).map((s) => (
-                              <li
-                                key={s.id}
-                                className="flex cursor-pointer items-center justify-between gap-2 px-2.5 py-2 hover:bg-canvas-inset"
-                                onClick={() => navigate("/schedules")}
-                              >
-                                <span className="min-w-0 truncate font-mono text-[11px] text-ink" title={s.target}>
-                                  {s.target}
-                                </span>
-                                <span className="shrink-0 text-[11px] text-ink-muted">
-                                  {formatInterval(s.interval_seconds)}
-                                  {s.enabled ? "" : " · 停"}
-                                </span>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                    </div>
+                                {s.enabled ? "启用" : "停用"}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   )}
                 </Card>
               </div>
@@ -529,10 +587,6 @@ export default function DashboardPage() {
   );
 }
 
-function byStatusCount(by: Record<string, number>, key: string): number {
-  return by[key] ?? 0;
-}
-
 function Card(props: {
   title: string;
   meta?: string;
@@ -541,8 +595,8 @@ function Card(props: {
   onAction?: () => void;
 }) {
   return (
-    <section className="flex min-h-[280px] flex-col rounded-lg border border-hairline bg-canvas p-4">
-      <div className="mb-3 flex items-start justify-between gap-2">
+    <section className="flex h-[260px] min-h-0 flex-col overflow-hidden rounded-lg border border-hairline bg-canvas p-4">
+      <div className="mb-2 flex shrink-0 items-start justify-between gap-2">
         <div className="min-w-0">
           <h2 className="text-sm font-semibold tracking-tight text-ink">{props.title}</h2>
           {props.meta ? <p className="mt-0.5 text-[11px] text-ink-muted">{props.meta}</p> : null}
@@ -553,13 +607,13 @@ function Card(props: {
           </button>
         ) : null}
       </div>
-      <div className="min-h-0 flex-1 overflow-auto">{props.children}</div>
+      <div className="min-h-0 flex-1 overflow-y-auto">{props.children}</div>
     </section>
   );
 }
 
 function Empty({ children }: { children: React.ReactNode }) {
-  return <p className="flex h-full min-h-[120px] items-center justify-center text-sm text-ink-muted">{children}</p>;
+  return <p className="flex h-full min-h-[80px] items-center justify-center text-sm text-ink-muted">{children}</p>;
 }
 
 function Kpi(props: { label: string; value: number; hint?: string; onClick?: () => void }) {
