@@ -2,10 +2,18 @@
  * Operations status board — not the product home.
  * Home remains conversation (Agent). Sidebar entry above 资产管理.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { Bar, BarChart, Cell, Legend, Pie, PieChart, XAxis, YAxis } from "recharts";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
+import {
+  ChartContainer,
+  ChartLegendContent,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from "../components/ui/chart";
 import { authFetch } from "../lib/api";
 
 type RecentFinding = {
@@ -45,11 +53,39 @@ const SEV_CLASS: Record<string, string> = {
   low: "bg-severity-low-subtle text-severity-low",
   info: "bg-canvas-inset text-ink-secondary",
 };
+/** Align with tailwind severity tokens for recharts fills */
+const SEV_COLOR: Record<string, string> = {
+  critical: "#d73a31",
+  high: "#d97706",
+  medium: "#b45309",
+  low: "#2563eb",
+  info: "#6b7280",
+};
 const STATUS_LABEL: Record<string, string> = {
   to_fix: "待修复",
   fixing: "修复中",
   fixed: "已修复",
 };
+const STATUS_COLOR: Record<string, string> = {
+  to_fix: "#d97706",
+  fixing: "#2563eb",
+  fixed: "#16a34a",
+};
+
+const statusChartConfig = {
+  count: { label: "数量", color: "#171717" },
+  to_fix: { label: "待修复", color: STATUS_COLOR.to_fix },
+  fixing: { label: "修复中", color: STATUS_COLOR.fixing },
+  fixed: { label: "已修复", color: STATUS_COLOR.fixed },
+} satisfies ChartConfig;
+
+const severityChartConfig = {
+  critical: { label: "CRITICAL", color: SEV_COLOR.critical },
+  high: { label: "HIGH", color: SEV_COLOR.high },
+  medium: { label: "MEDIUM", color: SEV_COLOR.medium },
+  low: { label: "LOW", color: SEV_COLOR.low },
+  info: { label: "INFO", color: SEV_COLOR.info },
+} satisfies ChartConfig;
 
 export default function DashboardPage() {
   const navigate = useNavigate();
@@ -76,19 +112,34 @@ export default function DashboardPage() {
     };
   }, []);
 
+  const statusData = useMemo(() => {
+    if (!summary) return [];
+    return (["to_fix", "fixing", "fixed"] as const).map((st) => ({
+      key: st,
+      name: STATUS_LABEL[st],
+      count: summary.by_status?.[st] ?? 0,
+      fill: STATUS_COLOR[st],
+    }));
+  }, [summary]);
+
+  const severityData = useMemo(() => {
+    if (!summary) return [];
+    return SEV_ORDER.map((sev) => ({
+      key: sev,
+      name: SEV_LABEL[sev],
+      value: summary.by_severity?.[sev] ?? 0,
+      fill: SEV_COLOR[sev],
+    })).filter((d) => d.value > 0);
+  }, [summary]);
+
+  const severityEmpty = severityData.length === 0;
+
   return (
     <div className="flex h-screen bg-canvas">
       <Sidebar activeId={null} onSelect={() => {}} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar title="状态看板" showBrand />
+        <TopBar title="状态看板" />
         <main className="flex-1 overflow-y-auto p-6">
-          <div className="mb-6 max-w-5xl">
-            <h1 className="text-lg font-semibold tracking-tight text-ink">状态看板</h1>
-            <p className="mt-1 text-sm text-ink-secondary">
-              台账透视：漏洞与资产概况。日常工作请从左侧会话进入 Agent。
-            </p>
-          </div>
-
           {loading && <p className="text-sm text-ink-muted">加载中…</p>}
           {error && (
             <div className="mb-4 max-w-xl rounded-md bg-severity-critical-subtle px-4 py-3 text-sm text-severity-critical">
@@ -125,57 +176,81 @@ export default function DashboardPage() {
 
               <div className="grid gap-4 md:grid-cols-2">
                 <section className="rounded-lg border border-hairline bg-canvas p-4">
-                  <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-ink-muted">
+                  <h2 className="mb-1 text-xs font-medium uppercase tracking-wider text-ink-muted">
                     生命周期
                   </h2>
-                  <div className="space-y-2">
-                    {(["to_fix", "fixing", "fixed"] as const).map((st) => {
-                      const n = summary.by_status?.[st] ?? 0;
-                      const total = summary.vulns_total || 1;
-                      const pct = Math.round((n / total) * 100);
-                      return (
-                        <button
-                          key={st}
-                          type="button"
-                          onClick={() => navigate(`/vulnerabilities?status=${st}`)}
-                          className="flex w-full items-center gap-3 rounded-md px-1 py-1.5 text-left hover:bg-canvas-inset"
-                        >
-                          <span className="w-16 shrink-0 text-xs text-ink-secondary">
-                            {STATUS_LABEL[st]}
-                          </span>
-                          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-canvas-inset">
-                            <div
-                              className="h-full rounded-full bg-ink/70"
-                              style={{ width: `${pct}%` }}
-                            />
-                          </div>
-                          <span className="w-8 text-right font-mono text-xs text-ink">{n}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
+                  <p className="mb-3 text-[11px] text-ink-muted">点击柱条筛选漏洞列表</p>
+                  <ChartContainer config={statusChartConfig} className="aspect-[4/3] w-full max-h-[240px]">
+                    <BarChart
+                      data={statusData}
+                      margin={{ top: 8, right: 8, left: 0, bottom: 0 }}
+                      onClick={(state) => {
+                        const key = (state?.activePayload?.[0]?.payload as { key?: string } | undefined)?.key;
+                        if (key) navigate(`/vulnerabilities?status=${key}`);
+                      }}
+                      style={{ cursor: "pointer" }}
+                    >
+                      <XAxis
+                        dataKey="name"
+                        tickLine={false}
+                        axisLine={false}
+                        tick={{ fontSize: 11, fill: "#8b8b8b" }}
+                      />
+                      <YAxis
+                        allowDecimals={false}
+                        tickLine={false}
+                        axisLine={false}
+                        width={28}
+                        tick={{ fontSize: 11, fill: "#8b8b8b" }}
+                      />
+                      <ChartTooltip content={<ChartTooltipContent hideLabel nameKey="name" />} />
+                      <Bar dataKey="count" radius={[4, 4, 0, 0]} maxBarSize={48}>
+                        {statusData.map((entry) => (
+                          <Cell key={entry.key} fill={entry.fill} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ChartContainer>
                 </section>
 
                 <section className="rounded-lg border border-hairline bg-canvas p-4">
-                  <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-ink-muted">
+                  <h2 className="mb-1 text-xs font-medium uppercase tracking-wider text-ink-muted">
                     严重级别
                   </h2>
-                  <div className="flex flex-wrap gap-2">
-                    {SEV_ORDER.map((sev) => {
-                      const n = summary.by_severity?.[sev] ?? 0;
-                      return (
-                        <button
-                          key={sev}
-                          type="button"
-                          onClick={() => navigate(`/vulnerabilities?severity=${sev}`)}
-                          className={`inline-flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs font-medium ${SEV_CLASS[sev]}`}
+                  <p className="mb-3 text-[11px] text-ink-muted">点击扇区筛选漏洞列表</p>
+                  {severityEmpty ? (
+                    <p className="flex h-[220px] items-center justify-center text-sm text-ink-muted">
+                      暂无按级别统计的数据
+                    </p>
+                  ) : (
+                    <ChartContainer
+                      config={severityChartConfig}
+                      className="aspect-[4/3] w-full max-h-[240px]"
+                    >
+                      <PieChart>
+                        <ChartTooltip content={<ChartTooltipContent nameKey="name" hideLabel />} />
+                        <Pie
+                          data={severityData}
+                          dataKey="value"
+                          nameKey="name"
+                          innerRadius={48}
+                          outerRadius={80}
+                          paddingAngle={2}
+                          strokeWidth={0}
+                          style={{ cursor: "pointer" }}
+                          onClick={(_, index) => {
+                            const row = severityData[index];
+                            if (row) navigate(`/vulnerabilities?severity=${row.key}`);
+                          }}
                         >
-                          {SEV_LABEL[sev]}
-                          <span className="font-mono opacity-80">{n}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
+                          {severityData.map((entry) => (
+                            <Cell key={entry.key} fill={entry.fill} />
+                          ))}
+                        </Pie>
+                        <Legend content={<ChartLegendContent nameKey="key" />} />
+                      </PieChart>
+                    </ChartContainer>
+                  )}
                 </section>
               </div>
 
@@ -225,23 +300,6 @@ export default function DashboardPage() {
                   </ul>
                 )}
               </section>
-
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => navigate("/")}
-                  className="rounded-pill bg-ink px-4 py-2 text-sm font-medium text-white hover:opacity-90"
-                >
-                  回到会话
-                </button>
-                <button
-                  type="button"
-                  onClick={() => navigate("/assets")}
-                  className="rounded-pill border border-hairline px-4 py-2 text-sm text-ink hover:bg-canvas-inset"
-                >
-                  资产管理
-                </button>
-              </div>
             </div>
           )}
         </main>
