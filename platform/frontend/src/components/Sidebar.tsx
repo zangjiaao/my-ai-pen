@@ -1,24 +1,11 @@
 import { useEffect, useState } from "react";
-import {
-  Bot,
-  CalendarClock,
-  Check,
-  ClipboardList,
-  LayoutDashboard,
-  Network,
-  Pencil,
-  Server,
-  ShieldAlert,
-  Trash2,
-  X,
-  type LucideIcon,
-} from "lucide-react";
+import { Check, Pencil, Trash2, X } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAuthStore } from "../stores/authStore";
 import { useConversationStore } from "../stores/conversationStore";
 import { authFetch } from "../lib/api";
 import ConfirmDialog from "./ConfirmDialog";
-import BrandLogo from "./BrandLogo";
+import { BRAND_NAME } from "../lib/brand";
 
 interface Props {
   activeId: string | null;
@@ -27,15 +14,16 @@ interface Props {
 
 const ACTIVE_CONVERSATION_KEY = "active_conversation_id";
 
-const NAV_ITEMS: { label: string; path: string; icon: LucideIcon }[] = [
+/** Text-only nav — no decorative icons. */
+const NAV_ITEMS: { label: string; path: string }[] = [
   // Status board only — not product home (Agent conversation stays primary).
-  { label: "状态看板", path: "/dashboard", icon: LayoutDashboard },
-  { label: "资产管理", path: "/assets", icon: Server },
-  { label: "漏洞管理", path: "/vulnerabilities", icon: ShieldAlert },
-  { label: "任务计划", path: "/schedules", icon: CalendarClock },
-  { label: "节点管理", path: "/nodes", icon: Network },
-  { label: "专家管理", path: "/experts", icon: Bot },
-  { label: "操作审计", path: "/audit", icon: ClipboardList },
+  { label: "状态看板", path: "/dashboard" },
+  { label: "资产管理", path: "/assets" },
+  { label: "漏洞管理", path: "/vulnerabilities" },
+  { label: "任务计划", path: "/schedules" },
+  { label: "节点管理", path: "/nodes" },
+  { label: "专家管理", path: "/experts" },
+  { label: "操作审计", path: "/audit" },
 ];
 
 export default function Sidebar({ activeId, onSelect }: Props) {
@@ -96,10 +84,10 @@ export default function Sidebar({ activeId, onSelect }: Props) {
         <button
           type="button"
           onClick={() => { localStorage.removeItem(ACTIVE_CONVERSATION_KEY); navigate("/"); onSelect(""); }}
-          className="min-w-0 text-left"
+          className="min-w-0 truncate text-left text-sm font-semibold tracking-tight text-ink"
           title="回到会话"
         >
-          <BrandLogo size={24} showWordmark />
+          {BRAND_NAME}
         </button>
       </div>
       <div className="p-3">
@@ -160,20 +148,19 @@ export default function Sidebar({ activeId, onSelect }: Props) {
 
       <div className="border-t border-hairline-soft px-2 py-2">
         <nav className="space-y-0.5">
-          {NAV_ITEMS.map(({ label, path, icon: Icon }) => {
+          {NAV_ITEMS.map(({ label, path }) => {
             const active = location.pathname === path || location.pathname.startsWith(`${path}/`);
             return (
               <button
                 key={path}
                 type="button"
                 onClick={() => navigate(path)}
-                className={`flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm transition-colors ${
+                className={`flex w-full items-center rounded-md px-3 py-2 text-left text-sm transition-colors ${
                   active
                     ? "bg-accent-subtle font-medium text-ink"
                     : "text-ink-secondary hover:bg-surface-default hover:text-ink"
                 }`}
               >
-                <Icon size={15} strokeWidth={1.75} className={`flex-shrink-0 ${active ? "text-ink" : "text-ink-muted"}`} />
                 <span>{label}</span>
               </button>
             );

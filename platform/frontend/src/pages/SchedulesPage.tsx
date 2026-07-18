@@ -182,7 +182,7 @@ export default function SchedulesPage() {
     <div className="flex h-screen bg-canvas">
       <Sidebar activeId={null} onSelect={() => {}} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar title="任务计划" showBrand />
+        <TopBar title="任务计划" />
         <main className="flex-1 overflow-y-auto p-6">
           <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
             <div>
