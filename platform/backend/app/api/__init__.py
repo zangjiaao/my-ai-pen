@@ -13,6 +13,8 @@ from app.api.assets import router as assets_router
 api_router.include_router(assets_router)
 from app.api.vulnerabilities import router as vulns_router
 api_router.include_router(vulns_router)
+from app.api.dashboard import router as dashboard_router
+api_router.include_router(dashboard_router)
 from app.api.sync import router as sync_router
 api_router.include_router(sync_router)
 from app.api.knowledge import router as knowledge_router

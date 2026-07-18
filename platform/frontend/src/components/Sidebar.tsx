@@ -1,5 +1,17 @@
-import { useEffect, useState, type ComponentType } from "react";
-import { Bot, Check, ClipboardList, Network, Pencil, Server, ShieldAlert, Trash2, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import {
+  Bot,
+  Check,
+  ClipboardList,
+  LayoutDashboard,
+  Network,
+  Pencil,
+  Server,
+  ShieldAlert,
+  Trash2,
+  X,
+  type LucideIcon,
+} from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAuthStore } from "../stores/authStore";
 import { useConversationStore } from "../stores/conversationStore";
@@ -13,9 +25,9 @@ interface Props {
 
 const ACTIVE_CONVERSATION_KEY = "active_conversation_id";
 
-type NavIcon = ComponentType<{ size?: number; className?: string; strokeWidth?: number }>;
-
-const NAV_ITEMS: { label: string; path: string; icon: NavIcon }[] = [
+const NAV_ITEMS: { label: string; path: string; icon: LucideIcon }[] = [
+  // Status board only — not product home (Agent conversation stays primary).
+  { label: "状态看板", path: "/dashboard", icon: LayoutDashboard },
   { label: "资产管理", path: "/assets", icon: Server },
   { label: "漏洞管理", path: "/vulnerabilities", icon: ShieldAlert },
   { label: "节点管理", path: "/nodes", icon: Network },
