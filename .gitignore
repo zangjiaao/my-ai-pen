@@ -61,5 +61,10 @@ node4/workspace/
 node4/tmp/
 node4/.pi-agent/
 
+# Ad-hoc lab run dumps (sessions, local findings) — not product
+benchmarks/**/sessions/
+benchmarks/**/sessions-probe/
+benchmarks/omp-*/
+
 # Claude local
 .claude/settings.local.json
