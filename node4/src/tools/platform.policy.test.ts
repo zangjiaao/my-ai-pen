@@ -3,7 +3,7 @@
  */
 import assert from "node:assert/strict";
 import { isHostCreateAttempt } from "./platform.js";
-import { isChatOnlyTask } from "../runtime/session-runner.js";
+import { isChatOnlyTask, isLedgerAssistSeat } from "../runtime/session-runner.js";
 import { resolveRolePack } from "../roles/index.js";
 import { DEFAULT_SEAT_ID, DEFAULT_SEAT_PACK } from "../roles/default.js";
 import { toolNamesForPack } from "./index.js";
@@ -54,6 +54,17 @@ assert.equal(
   ),
   true,
   "default seat always chat-only",
+);
+assert.equal(isLedgerAssistSeat("default"), true);
+assert.equal(isLedgerAssistSeat("consult"), true);
+assert.equal(isLedgerAssistSeat("pentest"), false);
+assert.ok(
+  toolNamesForPack(DEFAULT_SEAT_PACK).includes("platform_create_report"),
+  "default seat can persist delivery reports",
+);
+assert.ok(
+  toolNamesForPack(DEFAULT_SEAT_PACK).includes("platform_list_reports"),
+  "default seat can list reports",
 );
 
 console.log("platform.policy.test.ts ok");

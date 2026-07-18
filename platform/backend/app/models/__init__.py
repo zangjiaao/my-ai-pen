@@ -7,6 +7,7 @@ from app.models.node import Node
 from app.models.audit import AuditLog
 from app.models.evidence import Evidence
 from app.models.expert import Expert
+from app.models.conversation_report import ConversationReport
 
 __all__ = [
     "User",
@@ -18,4 +19,5 @@ __all__ = [
     "AuditLog",
     "Evidence",
     "Expert",
+    "ConversationReport",
 ]

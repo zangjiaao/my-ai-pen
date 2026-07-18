@@ -80,6 +80,31 @@ Templates still update via **volume** without full rebuild. Browser and scanners
 
 ---
 
-## 6. One-line summary
+## 6. Tooling health (doctor) — observability only
 
-**One first-party pen-sandbox for the pentest expert — shell and browser; Strix only as emergency browser fallback.**
+Phase **S3**: Node4 can report whether the L2 shell path is ready **without blocking** tasks, tools, booking, or settlement.
+
+| Surface | How |
+|---------|-----|
+| CLI | `cd node4 && npm run doctor:pen-tools` (or `npx tsx src/tooling-health-cli.ts`) |
+| Flags | `--json` machine-readable; `--fast` skip container binary probe (image/shim/host only) |
+| Task start | Non-chat execution packs with `shell`: write `taskDir/tooling-health.json` + one `status_update` summary |
+| Code | `node4/src/runtime/tooling-health.ts` |
+
+**Report fields (factual env state only):** resolved sandbox image + present?, shell mode (`container` \| `host`), host pen-tools bin/PATH shim, key tools (`nuclei`, `nmap`, `sqlmap`, `ffuf`, `redis-cli`). `gating` is always `false`. Missing `nuclei` marks `degraded: true` but **exit code stays 0** and the harness still runs.
+
+```bash
+cd node4
+npm run doctor:pen-tools
+# optional
+npm run doctor:pen-tools -- --fast
+npm run doctor:pen-tools -- --json
+```
+
+Do **not** treat doctor output as agent planning text or as a hard gate.
+
+---
+
+## 7. One-line summary
+
+**One first-party pen-sandbox for the pentest expert — shell and browser; Strix only as emergency browser fallback. Tooling health is optional observability, never a gate.**

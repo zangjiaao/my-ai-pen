@@ -173,6 +173,11 @@ Exact rules live in runner settlement — docs must not invent stricter product 
 | `findings/`, `evidence/`, `scripts/` | Artifacts |
 | `pi-sessions/` | Model session files |
 | `agent-summary.json` | Terminal + usage summary |
+| `tooling-health.json` | L2 sandbox/PATH/scanner readiness snapshot at task start (**observability only**, never a gate) |
+
+### On-demand delivery reports
+
+When the user asks for a vulnerability/detection report, seats with platform report tools (`default`, pentest pack) may call `platform_list_vulnerabilities` then `platform_create_report` to persist a Case revision. Product UI lists revisions in the top-bar **报告** drawer (multi-report; MD/HTML download). Not a harness gate; not created on every booking.
 
 Offline audit helpers (e.g. `node4` ctf-audit CLI) parse events for engineering — not for injecting answers.
 

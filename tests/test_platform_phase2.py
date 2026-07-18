@@ -9,7 +9,10 @@ BACKEND = ROOT / "platform" / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
-from app.api.reports import _render_markdown
+from app.services.engagement_report import (
+    build_engagement_report_html,
+    build_engagement_report_markdown,
+)
 from app.services.agent_orchestrator import (
     AgentCapability,
     OrchestrationContext,
@@ -512,22 +515,56 @@ class PlatformPhase2Tests(unittest.TestCase):
             asyncio.run(run())
 
     def test_report_markdown_contains_deliverable_sections(self):
-        markdown = _render_markdown({
-            "conversation": {"id": "c1", "title": "Demo", "status": "completed"},
-            "counts": {"assets": 1, "findings": 1, "evidence": 1},
-            "agent_state": {"phase": "complete"},
-            "progress": {"current": 6, "total": 6},
-            "checkpoint": {"target": {"value": "http://target.local"}, "scope": {"allow": ["http://target.local"]}, "phase": "complete", "phases_completed": ["intake", "recon"]},
-            "assets": [{"address": "http://target.local", "type": "web", "source": "agent_discovered", "properties": {"open_ports": [80]}}],
-            "findings": [{"title": "Reflected XSS", "severity": "medium", "status": "confirmed", "confidence": "high", "location": "/search", "description": "Impact", "poc": "curl ...", "remediation": "Encode output", "evidence_ids": ["ev-1"]}],
-            "evidence": [{"evidence_id": "ev-1", "type": "http", "source_tool": "http_request", "summary": "HTTP 200"}],
-            "messages": [{"created_at": "2026-07-01T00:00:00Z", "role": "agent", "msg_type": "status", "content": {"text": "Phase: complete"}}],
-        })
-        for heading in ["## Summary", "## Assets", "## Vulnerabilities", "## Evidence", "## Timeline", "## Disclaimer"]:
+        """Product export uses findings-driven delivery report (not legacy snapshot dump)."""
+        findings = [
+            {
+                "title": "Reflected XSS",
+                "severity": "medium",
+                "status": "confirmed",
+                "location": "http://target.local/search",
+                "description": "name reflected unescaped",
+                "poc": "curl ...",
+                "remediation": "Encode output",
+                "impact": "Session theft if cookies lack HttpOnly",
+                "evidence_ids": ["ev-1"],
+            }
+        ]
+        markdown = build_engagement_report_markdown(
+            title="Demo",
+            target="http://target.local",
+            scope="http://target.local",
+            engagement="pentest",
+            conversation_id="c1",
+            findings=findings,
+            evidence_by_id={"ev-1": {"summary": "HTTP 200"}},
+        )
+        for heading in [
+            "## 1. Executive summary",
+            "## 2. Scope and methodology",
+            "## 3. Findings",
+            "## 4. Remediation roadmap",
+            "## 6. Disclaimer",
+        ]:
             self.assertIn(heading, markdown)
         self.assertIn("http://target.local", markdown)
         self.assertIn("Reflected XSS", markdown)
         self.assertIn("ev-1", markdown)
+        self.assertIn("Proof of Concept / reproduction", markdown)
+        # Legacy conversation-archive headings must not appear
+        self.assertNotIn("## Timeline", markdown)
+        self.assertNotIn("Workflow Stage", markdown)
+        self.assertNotIn("## Checkpoint Summary", markdown)
+
+        html_body = build_engagement_report_html(
+            title="Demo",
+            findings=findings,
+            evidence_by_id={"ev-1": {"summary": "HTTP 200"}},
+            target="http://target.local",
+        )
+        self.assertIn("<h1>", html_body)
+        self.assertIn("Reflected XSS", html_body)
+        self.assertIn("Executive summary", html_body)
+        self.assertNotIn("Workflow Stage", html_body)
 
 
 if __name__ == "__main__":

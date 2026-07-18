@@ -1,8 +1,13 @@
-"""Conversation report export API."""
-import html
+"""Conversation detection reports — multi-revision delivery exports.
+
+Product UI lists agent/ledger-generated report revisions and downloads MD/HTML.
+Live ledger snapshot export remains available as a one-shot draft path.
+"""
+from __future__ import annotations
+
 import re
 import uuid
-from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import select
@@ -10,34 +15,54 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
 from app.middleware.auth import get_current_user
+from app.models.asset import Asset
 from app.models.conversation import Conversation
-from app.models.message import Message
 from app.models.evidence import Evidence
 from app.models.vulnerability import Vulnerability
-from app.services.conversation_snapshot import message_summary
+from app.services.conversation_reports import (
+    content_disposition_attachment,
+    create_report,
+    delete_report,
+    get_report,
+    list_reports,
+    render_report_download,
+    report_to_dict,
+)
 from app.services.conversation_snapshot import build_conversation_snapshot
-from app.services.engagement_report import build_engagement_report_markdown
+from app.services.delivery_findings import map_vulnerability_orm
+from app.services.engagement_report import (
+    build_engagement_report_html,
+    build_engagement_report_markdown,
+)
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
 
-@router.get("/conversations/{conv_id}/findings")
-async def export_findings_report(
-    conv_id: str,
-    format: str = Query("markdown", pattern="^(markdown|md)$"),
-    current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Export a findings-driven engagement report (Phase B)."""
-    user_id = uuid.UUID(current_user["user_id"])
+async def _get_owned_conversation(
+    db: AsyncSession, conv_id: str, user_id: uuid.UUID
+) -> Conversation:
+    try:
+        cid = uuid.UUID(conv_id)
+    except ValueError as e:
+        raise HTTPException(400, "invalid conversation id") from e
     result = await db.execute(
-        select(Conversation).where(Conversation.id == uuid.UUID(conv_id), Conversation.user_id == user_id)
+        select(Conversation).where(Conversation.id == cid, Conversation.user_id == user_id)
     )
     conversation = result.scalar_one_or_none()
     if not conversation:
         raise HTTPException(404, "Conversation not found")
+    return conversation
 
+
+async def _load_delivery_context(
+    db: AsyncSession,
+    *,
+    conversation: Conversation,
+    user_id: uuid.UUID,
+) -> dict[str, Any]:
+    """Load booked findings + evidence (ledger only — no candidate snapshot)."""
     snapshot = await build_conversation_snapshot(db, conversation, user_id)
+
     vulns_result = await db.execute(
         select(Vulnerability).where(
             Vulnerability.conversation_id == conversation.id,
@@ -45,288 +70,254 @@ async def export_findings_report(
         )
     )
     vulns = list(vulns_result.scalars().all())
-    findings = [
-        {
-            "id": str(v.id),
-            "title": v.title,
-            "severity": v.severity,
-            "status": v.status,
-            "description": v.description,
-            "poc": v.poc,
-            "remediation": v.remediation,
-            "cve_id": v.cve_id,
-            "evidence_ids": list(v.evidence_ids or []),
-        }
-        for v in vulns
-    ]
-    # Prefer snapshot findings if DB empty but snapshot has them
-    if not findings and isinstance(snapshot.get("findings"), list):
-        findings = [f for f in snapshot["findings"] if isinstance(f, dict)]
+
+    asset_ids = [v.asset_id for v in vulns if getattr(v, "asset_id", None)]
+    assets_by_id: dict[Any, Asset] = {}
+    if asset_ids:
+        assets_result = await db.execute(select(Asset).where(Asset.id.in_(asset_ids)))
+        for a in assets_result.scalars().all():
+            assets_by_id[a.id] = a
+
+    findings: list[dict[str, Any]] = []
+    for v in vulns:
+        asset = assets_by_id.get(v.asset_id) if v.asset_id else None
+        mapped = map_vulnerability_orm(v, asset)
+        if mapped:
+            findings.append(mapped)
 
     ev_result = await db.execute(
-        select(Evidence).where(Evidence.conversation_id == conversation.id, Evidence.user_id == user_id)
+        select(Evidence).where(
+            Evidence.conversation_id == conversation.id,
+            Evidence.user_id == user_id,
+        )
     )
-    evidence_by_id: dict = {}
+    evidence_by_id: dict[str, Any] = {}
     for e in ev_result.scalars().all():
         key = str(e.evidence_id or e.id)
         evidence_by_id[key] = {"id": key, "summary": e.summary, "type": e.type}
 
     ctx = conversation.context if isinstance(conversation.context, dict) else {}
     task = ctx.get("task") if isinstance(ctx.get("task"), dict) else {}
-    markdown = build_engagement_report_markdown(
-        title=conversation.title or "Penetration Test Report",
-        target=str(task.get("target") or snapshot.get("target") or ""),
-        scope=str(task.get("scope") or task.get("target") or ""),
-        engagement=str(task.get("engagement") or task.get("role") or "pentest"),
-        conversation_id=str(conversation.id),
-        findings=findings,
-        evidence_by_id=evidence_by_id,
-    )
-    basename = _safe_filename(f"{conversation.title or 'findings'}-{str(conversation.id)[:8]}-findings")
-    return Response(
-        content=markdown,
-        media_type="text/markdown; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{basename}.md"'},
-    )
+    target = str(task.get("target") or snapshot.get("target") or "")
+    scope_raw = task.get("scope")
+    if isinstance(scope_raw, dict):
+        allow = scope_raw.get("allow") if isinstance(scope_raw.get("allow"), list) else []
+        deny = scope_raw.get("deny") if isinstance(scope_raw.get("deny"), list) else []
+        parts = []
+        if allow:
+            parts.append("allow=" + ", ".join(map(str, allow)))
+        if deny:
+            parts.append("deny=" + ", ".join(map(str, deny)))
+        scope = "; ".join(parts) if parts else str(target or "")
+    else:
+        scope = str(scope_raw or target or "")
+
+    return {
+        "title": conversation.title or "Security Assessment Report",
+        "target": target,
+        "scope": scope,
+        "engagement": str(task.get("engagement") or task.get("role") or "pentest"),
+        "conversation_id": str(conversation.id),
+        "findings": findings,
+        "evidence_by_id": evidence_by_id,
+    }
 
 
-@router.get("/conversations/{conv_id}")
-async def export_conversation_report(
+def _safe_filename(value: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9._-]+", "-", value).strip("-._")
+    return cleaned[:120] or "detection-report"
+
+
+# --- Multi-report revisions (primary product path) ---
+
+
+@router.get("/conversations/{conv_id}/revisions")
+async def list_conversation_report_revisions(
     conv_id: str,
-    format: str = Query("markdown", pattern="^(markdown|md|html)$"),
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """List delivery report revisions for a Case/Session (newest first)."""
     user_id = uuid.UUID(current_user["user_id"])
-    result = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id), Conversation.user_id == user_id))
-    conversation = result.scalar_one_or_none()
-    if not conversation:
-        raise HTTPException(404, "Conversation not found")
+    conversation = await _get_owned_conversation(db, conv_id, user_id)
+    rows = await list_reports(db, conversation_id=conversation.id, user_id=user_id)
+    return {
+        "ok": True,
+        "conversation_id": str(conversation.id),
+        "reports": [report_to_dict(r) for r in rows],
+        "count": len(rows),
+    }
 
-    snapshot = await build_conversation_snapshot(db, conversation, user_id)
-    messages_result = await db.execute(
-        select(Message)
-        .where(Message.conversation_id == conversation.id)
-        .order_by(Message.created_at, Message.id)
-        .limit(500)
+
+@router.post("/conversations/{conv_id}/revisions")
+async def create_conversation_report_revision(
+    conv_id: str,
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a report revision.
+
+    - source=agent (default): body must include agent-authored markdown.
+    - source=ledger: synthesize from booked findings only (quick draft).
+    """
+    user_id = uuid.UUID(current_user["user_id"])
+    conversation = await _get_owned_conversation(db, conv_id, user_id)
+    body = body if isinstance(body, dict) else {}
+    source = str(body.get("source") or "agent").strip().lower() or "agent"
+
+    if source == "ledger":
+        ctx = await _load_delivery_context(db, conversation=conversation, user_id=user_id)
+        title = str(body.get("title") or ctx["title"] or "Security Assessment Report").strip()
+        markdown = build_engagement_report_markdown(
+            title=title,
+            target=ctx["target"],
+            scope=ctx["scope"],
+            engagement=ctx["engagement"],
+            conversation_id=ctx["conversation_id"],
+            findings=ctx["findings"],
+            evidence_by_id=ctx["evidence_by_id"],
+        )
+        finding_ids = [str(f.get("id")) for f in ctx["findings"] if f.get("id")]
+        summary = f"Ledger snapshot · {len(finding_ids)} confirmed finding(s)"
+        try:
+            row = await create_report(
+                db,
+                conversation_id=conversation.id,
+                user_id=user_id,
+                title=title,
+                markdown=markdown,
+                summary=summary,
+                source="ledger",
+                created_by=str(body.get("created_by") or "ui-ledger"),
+                finding_ids=finding_ids,
+                meta={"kind": "ledger_snapshot"},
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        return {"ok": True, "report": report_to_dict(row, include_markdown=False)}
+
+    title = str(body.get("title") or "").strip() or "Security Assessment Report"
+    markdown = str(body.get("markdown") or body.get("body") or "").strip()
+    summary = str(body.get("summary") or "").strip() or None
+    finding_ids_raw = body.get("finding_ids") or body.get("vulnerability_ids") or []
+    finding_ids = [str(x) for x in finding_ids_raw if x] if isinstance(finding_ids_raw, list) else []
+    try:
+        row = await create_report(
+            db,
+            conversation_id=conversation.id,
+            user_id=user_id,
+            title=title,
+            markdown=markdown,
+            summary=summary,
+            source="agent" if source == "agent" else source[:32],
+            created_by=str(body.get("created_by") or current_user.get("email") or "user")[:255],
+            finding_ids=finding_ids,
+            meta=body.get("meta") if isinstance(body.get("meta"), dict) else {},
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return {"ok": True, "report": report_to_dict(row, include_markdown=False)}
+
+
+@router.get("/conversations/{conv_id}/revisions/{report_id}")
+async def get_conversation_report_revision(
+    conv_id: str,
+    report_id: str,
+    format: str = Query("json", pattern="^(json|markdown|md|html|htm)$"),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fetch one report revision as JSON metadata or download body."""
+    user_id = uuid.UUID(current_user["user_id"])
+    conversation = await _get_owned_conversation(db, conv_id, user_id)
+    try:
+        rid = uuid.UUID(report_id)
+    except ValueError as e:
+        raise HTTPException(400, "invalid report id") from e
+    row = await get_report(db, report_id=rid, user_id=user_id, conversation_id=conversation.id)
+    if not row:
+        raise HTTPException(404, "Report not found")
+
+    fmt = (format or "json").lower()
+    if fmt == "json":
+        return {"ok": True, "report": report_to_dict(row, include_markdown=True)}
+
+    body, media, filename = render_report_download(row, fmt)
+    # Encode as UTF-8 bytes so Chinese markdown/html never trips latin-1 defaults.
+    payload = body if isinstance(body, (bytes, bytearray)) else str(body).encode("utf-8")
+    return Response(
+        content=payload,
+        media_type=media,
+        headers={"Content-Disposition": content_disposition_attachment(filename)},
     )
-    snapshot["messages"] = [message_summary(message) for message in messages_result.scalars().all()]
-    markdown = _render_markdown(snapshot)
-    basename = _safe_filename(f"{conversation.title or 'conversation'}-{str(conversation.id)[:8]}")
-    if format == "html":
-        body = _render_html(snapshot, markdown)
+
+
+@router.delete("/conversations/{conv_id}/revisions/{report_id}")
+async def delete_conversation_report_revision(
+    conv_id: str,
+    report_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete one delivery report revision owned by the current user."""
+    user_id = uuid.UUID(current_user["user_id"])
+    conversation = await _get_owned_conversation(db, conv_id, user_id)
+    try:
+        rid = uuid.UUID(report_id)
+    except ValueError as e:
+        raise HTTPException(400, "invalid report id") from e
+    removed = await delete_report(
+        db, report_id=rid, user_id=user_id, conversation_id=conversation.id
+    )
+    if not removed:
+        raise HTTPException(404, "Report not found")
+    return {"ok": True, "deleted": str(rid)}
+
+
+# --- Live snapshot (one-shot, does not persist unless client POSTs source=ledger) ---
+
+
+@router.get("/conversations/{conv_id}/findings")
+@router.get("/conversations/{conv_id}")
+async def export_live_findings_snapshot(
+    conv_id: str,
+    format: str = Query("markdown", pattern="^(markdown|md|html|htm)$"),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """One-shot live ledger snapshot export (not stored as a revision)."""
+    user_id = uuid.UUID(current_user["user_id"])
+    conversation = await _get_owned_conversation(db, conv_id, user_id)
+    ctx = await _load_delivery_context(db, conversation=conversation, user_id=user_id)
+    basename = _safe_filename(f"{conversation.title or 'detection-report'}-{str(conversation.id)[:8]}-live")
+    fmt = (format or "markdown").lower().strip()
+    if fmt in ("html", "htm"):
+        body = build_engagement_report_html(
+            title=ctx["title"],
+            target=ctx["target"],
+            scope=ctx["scope"],
+            engagement=ctx["engagement"],
+            conversation_id=ctx["conversation_id"],
+            findings=ctx["findings"],
+            evidence_by_id=ctx["evidence_by_id"],
+        )
         return Response(
             content=body,
             media_type="text/html; charset=utf-8",
             headers={"Content-Disposition": f'attachment; filename="{basename}.html"'},
         )
+    markdown = build_engagement_report_markdown(
+        title=ctx["title"],
+        target=ctx["target"],
+        scope=ctx["scope"],
+        engagement=ctx["engagement"],
+        conversation_id=ctx["conversation_id"],
+        findings=ctx["findings"],
+        evidence_by_id=ctx["evidence_by_id"],
+    )
     return Response(
         content=markdown,
         media_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{basename}.md"'},
     )
-
-
-def _render_markdown(snapshot: dict) -> str:
-    conversation = snapshot.get("conversation") or {}
-    counts = snapshot.get("counts") or {}
-    agent_state = snapshot.get("agent_state") or {}
-    progress = snapshot.get("progress") or {}
-    checkpoint = snapshot.get("checkpoint") or {}
-    kanban = snapshot.get("kanban") if isinstance(snapshot.get("kanban"), dict) else {}
-    checkpoint_kanban = checkpoint.get("kanban") if isinstance(checkpoint.get("kanban"), dict) else {}
-    workflow_kind = kanban.get("workflow_kind") or checkpoint.get("workflow_kind") or checkpoint_kanban.get("workflow_kind") or "-"
-    workflow_stage = kanban.get("current_stage") or checkpoint.get("workflow_stage") or checkpoint_kanban.get("current_stage") or "-"
-    target = _target_from_snapshot(snapshot)
-    scope = _scope_from_snapshot(snapshot)
-    generated_at = datetime.now(timezone.utc).isoformat()
-
-    lines = [
-        f"# {conversation.get('title') or 'Penetration Test Report'}",
-        "",
-        "## Summary",
-        f"- Conversation ID: `{conversation.get('id') or '-'}`",
-        f"- Status: `{conversation.get('status') or '-'}`",
-        f"- Generated At: `{generated_at}`",
-        f"- Target: `{target or '-'}`",
-        f"- Scope: `{scope or '-'}`",
-        f"- Workflow: `{workflow_kind}`",
-        f"- Workflow Stage: `{workflow_stage}`",
-        f"- Progress: `{progress.get('current', 0)}/{progress.get('total', 0)}`",
-        f"- Assets: `{counts.get('assets', 0)}`",
-        f"- Vulnerabilities: `{counts.get('findings', 0)}`",
-        f"- Evidence: `{counts.get('evidence', 0)}`",
-        "",
-        "## Assets",
-    ]
-    assets = snapshot.get("assets") or []
-    if assets:
-        for asset in assets:
-            props = asset.get("properties") if isinstance(asset.get("properties"), dict) else {}
-            ports = asset.get("open_ports") or props.get("open_ports") or []
-            services = asset.get("services") or props.get("services") or []
-            lines.extend([
-                f"### {asset.get('address') or asset.get('name') or 'Asset'}",
-                f"- Type: `{asset.get('type') or asset.get('asset_type') or '-'}`",
-                f"- Source: `{asset.get('source') or '-'}`",
-                f"- Session: `{asset.get('conversation_id') or '-'}`",
-                f"- Ports: `{', '.join(map(str, ports)) if isinstance(ports, list) and ports else '-'}`",
-                f"- Services: `{_service_summary(services)}`",
-                "",
-            ])
-    else:
-        lines.extend(["No assets recorded.", ""])
-
-    lines.append("## Vulnerabilities")
-    findings = snapshot.get("findings") or []
-    if findings:
-        for finding in findings:
-            lines.extend([
-                f"### {finding.get('title') or 'Untitled vulnerability'}",
-                f"- Severity: `{finding.get('severity') or 'info'}`",
-                f"- Status: `{finding.get('status') or '-'}`",
-                f"- Confidence: `{finding.get('confidence') or '-'}`",
-                f"- Location: `{finding.get('location') or finding.get('affected_asset') or '-'}`",
-                f"- Evidence IDs: `{', '.join(map(str, finding.get('evidence_ids') or [])) or '-'}`",
-                "",
-                "**Description / Impact**",
-                "",
-                str(finding.get("description") or "-").strip(),
-                "",
-                "**Reproduction / PoC**",
-                "",
-                "```",
-                str(finding.get("poc") or finding.get("location") or "-").strip(),
-                "```",
-                "",
-                "**Remediation**",
-                "",
-                str(finding.get("remediation") or "-").strip(),
-                "",
-            ])
-    else:
-        lines.extend(["No vulnerabilities recorded.", ""])
-
-    lines.append("## Evidence")
-    evidence = snapshot.get("evidence") or []
-    if evidence:
-        for item in evidence:
-            lines.extend([
-                f"### {item.get('evidence_id') or item.get('id') or 'Evidence'}",
-                f"- Type: `{item.get('type') or '-'}`",
-                f"- Source Tool: `{item.get('source_tool') or '-'}`",
-                f"- Tool Run ID: `{item.get('tool_run_id') or '-'}`",
-                f"- Hash: `{item.get('hash') or '-'}`",
-                f"- Raw Ref: `{item.get('raw_ref') or '-'}`",
-                "",
-                str(item.get("summary") or "-").strip(),
-                "",
-            ])
-    else:
-        lines.extend(["No evidence recorded.", ""])
-
-    lines.extend([
-        "## Timeline",
-    ])
-    for message in (snapshot.get("messages") or [])[-80:]:
-        lines.append(f"- `{message.get('created_at') or '-'}` **{message.get('role')}/{message.get('msg_type')}**: {_message_text(message)}")
-    if not snapshot.get("messages"):
-        lines.append("Timeline is available in the conversation message log.")
-
-    lines.extend([
-        "",
-        "## Disclaimer",
-        "This MVP report is generated from platform-stored conversation, asset, vulnerability, evidence, and checkpoint data. Findings should be reviewed before customer delivery.",
-        "",
-        "## Checkpoint Summary",
-        f"- Workflow Kind: `{workflow_kind}`",
-        f"- Workflow Stage: `{workflow_stage}`",
-    ])
-    return "\n".join(lines).strip() + "\n"
-
-
-def _render_html(snapshot: dict, markdown: str) -> str:
-    title = html.escape((snapshot.get("conversation") or {}).get("title") or "Penetration Test Report")
-    paragraphs = []
-    for line in markdown.splitlines():
-        escaped = html.escape(line)
-        if line.startswith("# "):
-            paragraphs.append(f"<h1>{html.escape(line[2:])}</h1>")
-        elif line.startswith("## "):
-            paragraphs.append(f"<h2>{html.escape(line[3:])}</h2>")
-        elif line.startswith("### "):
-            paragraphs.append(f"<h3>{html.escape(line[4:])}</h3>")
-        elif line.startswith("- "):
-            paragraphs.append(f"<p class='item'>{escaped}</p>")
-        elif line == "```":
-            paragraphs.append("<hr />")
-        elif line.strip():
-            paragraphs.append(f"<p>{escaped}</p>")
-        else:
-            paragraphs.append("<br />")
-    return f"""<!doctype html>
-<html>
-<head>
-  <meta charset=\"utf-8\" />
-  <title>{title}</title>
-  <style>
-    body {{ font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 40px; color: #172033; line-height: 1.55; }}
-    h1, h2, h3 {{ line-height: 1.2; }}
-    h1 {{ border-bottom: 1px solid #d8dee8; padding-bottom: 12px; }}
-    h2 {{ margin-top: 32px; }}
-    code {{ background: #f3f5f8; padding: 1px 4px; border-radius: 4px; }}
-    .item {{ margin: 4px 0; }}
-    hr {{ border: 0; border-top: 1px dashed #ccd3df; margin: 8px 0; }}
-  </style>
-</head>
-<body>
-{''.join(paragraphs)}
-</body>
-</html>"""
-
-
-def _target_from_snapshot(snapshot: dict) -> str:
-    checkpoint = snapshot.get("checkpoint") if isinstance(snapshot.get("checkpoint"), dict) else {}
-    checkpoint_target = checkpoint.get("target") if isinstance(checkpoint.get("target"), dict) else {}
-    task_context = snapshot.get("task_context") if isinstance(snapshot.get("task_context"), dict) else {}
-    task_target = task_context.get("target") if isinstance(task_context.get("target"), dict) else {}
-    return str(checkpoint_target.get("value") or checkpoint.get("resolved_target") or task_target.get("value") or "")
-
-
-def _scope_from_snapshot(snapshot: dict) -> str:
-    checkpoint = snapshot.get("checkpoint") if isinstance(snapshot.get("checkpoint"), dict) else {}
-    task_context = snapshot.get("task_context") if isinstance(snapshot.get("task_context"), dict) else {}
-    scope = checkpoint.get("scope") if isinstance(checkpoint.get("scope"), dict) else {}
-    if not scope and isinstance(task_context.get("scope"), dict):
-        scope = task_context.get("scope") or {}
-    allow = scope.get("allow") if isinstance(scope.get("allow"), list) else []
-    deny = scope.get("deny") if isinstance(scope.get("deny"), list) else []
-    parts = []
-    if allow:
-        parts.append("allow=" + ", ".join(map(str, allow)))
-    if deny:
-        parts.append("deny=" + ", ".join(map(str, deny)))
-    return "; ".join(parts)
-
-
-def _service_summary(services: object) -> str:
-    if not isinstance(services, list) or not services:
-        return "-"
-    out = []
-    for service in services[:8]:
-        if isinstance(service, dict):
-            out.append("/".join(str(service.get(k) or "") for k in ("port", "name", "version") if service.get(k)))
-        else:
-            out.append(str(service))
-    return ", ".join(item for item in out if item) or "-"
-
-
-def _message_text(message: dict) -> str:
-    content = message.get("content") if isinstance(message.get("content"), dict) else {}
-    text = content.get("text") or content.get("tool_name") or content.get("summary") or message.get("msg_type") or ""
-    return str(text).replace("\n", " ")[:220]
-
-
-def _safe_filename(value: str) -> str:
-    cleaned = re.sub(r"[^a-zA-Z0-9._-]+", "-", value).strip("-._")
-    return cleaned[:120] or "conversation-report"

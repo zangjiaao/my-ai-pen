@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
-import { Check, Copy, Download } from "lucide-react";
-import { authDownload } from "../lib/api";
+import { Check, Copy } from "lucide-react";
+import ReportDrawer from "./ReportDrawer";
 
 interface Props {
   title?: string;
@@ -11,7 +11,6 @@ interface Props {
 
 export default function TopBar({ title, conversationId, actions }: Props) {
   const [copied, setCopied] = useState(false);
-  const [exporting, setExporting] = useState<string | null>(null);
   const shortId = conversationId ? conversationId.slice(0, 8) : "";
 
   const copyConversationId = async () => {
@@ -22,24 +21,6 @@ export default function TopBar({ title, conversationId, actions }: Props) {
       window.setTimeout(() => setCopied(false), 1600);
     } catch {
       setCopied(false);
-    }
-  };
-
-  const exportReport = async (format: "markdown" | "html") => {
-    if (!conversationId) return;
-    try {
-      setExporting(format);
-      const { blob, filename } = await authDownload(`/api/reports/conversations/${conversationId}?format=${format}`);
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-    } finally {
-      setExporting(null);
     }
   };
 
@@ -62,26 +43,7 @@ export default function TopBar({ title, conversationId, actions }: Props) {
       </div>
       <div className="flex items-center gap-2">
         {actions}
-        {conversationId && (
-          <>
-            <button
-              type="button"
-              onClick={() => void exportReport("markdown")}
-              disabled={Boolean(exporting)}
-              className="inline-flex items-center gap-1.5 rounded-md border border-hairline px-2.5 py-1.5 text-xs text-ink-secondary transition-colors hover:bg-surface-default hover:text-ink disabled:opacity-60"
-            >
-              <Download size={13} /> MD
-            </button>
-            <button
-              type="button"
-              onClick={() => void exportReport("html")}
-              disabled={Boolean(exporting)}
-              className="inline-flex items-center gap-1.5 rounded-md border border-hairline px-2.5 py-1.5 text-xs text-ink-secondary transition-colors hover:bg-surface-default hover:text-ink disabled:opacity-60"
-            >
-              <Download size={13} /> HTML
-            </button>
-          </>
-        )}
+        {conversationId ? <ReportDrawer conversationId={conversationId} /> : null}
         <span className="text-xs text-ink-muted">v0.1.0</span>
       </div>
     </header>

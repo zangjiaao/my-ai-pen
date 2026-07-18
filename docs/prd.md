@@ -63,7 +63,7 @@
   - **Agent 可维护的附属信息：** 对已存在主机合并端口、服务指纹、URL、API 端点等表面信息；漏洞可挂到匹配的已有资产上，未知主机的 finding 允许 `asset_id` 为空。
 - **会话工作态（Send / 中断）：** 以 Node 侧 work-burst（`busy` / `work_status`）为真相源；平台维护会话 `workers` 并广播 `conversation_working`。当前会话只要有专家在工作，UI 显示中断；中断会扇出到该会话全部在线专家运行时。
 - 高风险操作：`request_decision` ↔ 用户 authorize/cancel。
-- **Findings 报告导出**（`/api/reports/conversations/{id}/findings`，由 booked findings 生成，Phase B）。
+- **会话检测报告（按需、可多份）**：用户在对话中说明需要漏洞/检测报告时，工作台助手或专家读取台账已确认 finding，撰写交付 Markdown，经 `platform_create_report` 落库为 Case 的 report revision。顶栏 **报告** 抽屉列出全部版本；每份可选 Markdown/HTML 下载。亦支持 UI「快速合成」仅用台账字段生成草稿（`source=ledger`）。**不**用 NLP 猜 intent；**不**在每次 booking 时自动写报告；**不**发明未 book 的漏洞。
 - **计划任务**（`/api/schedules`，结构化 engagement 定时 dispatch，Phase D）。
 
 **P1**

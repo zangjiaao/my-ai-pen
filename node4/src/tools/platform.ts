@@ -228,6 +228,98 @@ export function createPlatformConversationSnapshotTool(runtime: ToolRuntime): To
   };
 }
 
+export function createPlatformListReportsTool(runtime: ToolRuntime): ToolDefinition<any> {
+  return {
+    name: "platform_list_reports",
+    label: "Platform list reports",
+    description:
+      "List delivery report revisions already saved for this conversation/Case (newest first). Read-only.",
+    parameters: Type.Object({
+      limit: Type.Optional(Type.Number()),
+    }),
+    async execute(_id: string, params: any) {
+      const cid = String(runtime.task.conversationId || "").trim();
+      if (!cid) return textResult("error: no conversation_id on task", { isError: true });
+      const limit = Math.min(100, Math.max(1, Number(params.limit || 50) || 50));
+      const res = await platformLedgerFetch(
+        runtime,
+        "GET",
+        `/api/node/ledger/conversations/${encodeURIComponent(cid)}/reports?limit=${limit}`,
+      );
+      return jsonResult(res.data, { isError: !res.ok });
+    },
+  };
+}
+
+export function createPlatformCreateReportTool(runtime: ToolRuntime): ToolDefinition<any> {
+  return {
+    name: "platform_create_report",
+    label: "Platform create report",
+    description:
+      "REQUIRED when the user asks for a vulnerability/detection/delivery report. " +
+      "First platform_list_vulnerabilities, then pass a full professional markdown body " +
+      "(## 1 summary … ## 6 disclaimer continuous; each finding: title/severity/location/description/PoC/impact/remediation). " +
+      "Do NOT only paste the report in chat — this tool persists a Case report revision for the top-bar 报告 drawer. " +
+      "Do not invent findings not on the ledger. Not for every booking — only on explicit report request.",
+    parameters: Type.Object({
+      title: Type.String(),
+      markdown: Type.String(),
+      summary: Type.Optional(Type.String()),
+      finding_ids: Type.Optional(Type.Array(Type.String())),
+      created_by: Type.Optional(Type.String()),
+    }),
+    async execute(_id: string, params: any) {
+      const cid = String(runtime.task.conversationId || "").trim();
+      if (!cid) return textResult("error: no conversation_id on task", { isError: true });
+      const title = String(params.title || "").trim();
+      const markdown = String(params.markdown || "").trim();
+      if (!title) return textResult("error: title required", { isError: true });
+      if (markdown.length < 40) {
+        return textResult(
+          "error: markdown too short — write a full delivery report body (summary + findings with PoC/impact/remediation)",
+          { isError: true },
+        );
+      }
+      const findingIds = Array.isArray(params.finding_ids)
+        ? params.finding_ids.map(String).filter(Boolean)
+        : [];
+      const body = {
+        title,
+        markdown,
+        summary: String(params.summary || "").trim() || undefined,
+        finding_ids: findingIds,
+        created_by:
+          String(params.created_by || "").trim() ||
+          String((runtime.task as { expertName?: string }).expertName || "agent"),
+        meta: {
+          seat: runtime.rolePackId || "default",
+          task_id: runtime.task.taskId,
+        },
+      };
+      const res = await platformLedgerFetch(
+        runtime,
+        "POST",
+        `/api/node/ledger/conversations/${encodeURIComponent(cid)}/reports`,
+        body,
+      );
+      // Notify platform UI that a new report revision exists.
+      if (res.ok) {
+        try {
+          await runtime.platform.send({
+            type: "report_created",
+            conversation_id: cid,
+            task_id: runtime.task.taskId,
+            report: (res.data as { report?: unknown })?.report ?? res.data,
+          } as any);
+        } catch {
+          /* non-fatal */
+        }
+      }
+      return jsonResult(res.data, { isError: !res.ok });
+    },
+  };
+}
+
 /** Register all platform.* tool factories used by the default seat. */
 export const PLATFORM_TOOL_FACTORIES: Record<string, (runtime: ToolRuntime) => ToolDefinition<any>> = {
   platform_list_assets: createPlatformListAssetsTool,
@@ -237,4 +329,6 @@ export const PLATFORM_TOOL_FACTORIES: Record<string, (runtime: ToolRuntime) => T
   platform_update_finding_status: createPlatformUpdateFindingStatusTool,
   platform_enrich_asset: createPlatformEnrichAssetTool,
   platform_conversation_snapshot: createPlatformConversationSnapshotTool,
+  platform_list_reports: createPlatformListReportsTool,
+  platform_create_report: createPlatformCreateReportTool,
 };

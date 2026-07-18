@@ -9,8 +9,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
+from app.models.conversation import Conversation
 from app.models.node import Node
 from app.services import node_ledger as ledger
+from app.services.conversation_reports import create_report, list_reports, report_to_dict
 
 router = APIRouter(prefix="/api/node/ledger", tags=["node-ledger"])
 
@@ -179,3 +181,68 @@ async def conversation_snapshot(
     except ledger.NodeLedgerError as e:
         raise HTTPException(e.status_code, e.message) from e
     return {"ok": True, "snapshot": snap}
+
+
+@router.get("/conversations/{conversation_id}/reports")
+async def list_conversation_reports_node(
+    conversation_id: str,
+    limit: int = Query(default=50, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    node: Node = Depends(get_node_from_token),
+):
+    """List delivery report revisions for the conversation (node tools)."""
+    _ = node
+    user_id = await _user_for_conversation(db, conversation_id)
+    if not user_id:
+        raise HTTPException(404, "conversation not found")
+    try:
+        cid = uuid.UUID(conversation_id)
+    except ValueError as e:
+        raise HTTPException(400, "invalid conversation id") from e
+    rows = await list_reports(db, conversation_id=cid, user_id=user_id, limit=limit)
+    return {"ok": True, "reports": [report_to_dict(r) for r in rows], "count": len(rows)}
+
+
+@router.post("/conversations/{conversation_id}/reports")
+async def create_conversation_report_node(
+    conversation_id: str,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    node: Node = Depends(get_node_from_token),
+):
+    """Agent creates a delivery report revision from authored markdown + findings data."""
+    user_id = await _user_for_conversation(db, conversation_id)
+    if not user_id:
+        raise HTTPException(404, "conversation not found")
+    try:
+        cid = uuid.UUID(conversation_id)
+    except ValueError as e:
+        raise HTTPException(400, "invalid conversation id") from e
+    # Ensure conversation exists
+    result = await db.execute(select(Conversation).where(Conversation.id == cid, Conversation.user_id == user_id))
+    if not result.scalar_one_or_none():
+        raise HTTPException(404, "conversation not found")
+
+    body = body if isinstance(body, dict) else {}
+    title = str(body.get("title") or "").strip() or "Security Assessment Report"
+    markdown = str(body.get("markdown") or body.get("body") or "").strip()
+    summary = str(body.get("summary") or "").strip() or None
+    finding_ids_raw = body.get("finding_ids") or body.get("vulnerability_ids") or []
+    finding_ids = [str(x) for x in finding_ids_raw if x] if isinstance(finding_ids_raw, list) else []
+    created_by = str(body.get("created_by") or node.name or node.id or "node")[:255]
+    try:
+        row = await create_report(
+            db,
+            conversation_id=cid,
+            user_id=user_id,
+            title=title,
+            markdown=markdown,
+            summary=summary,
+            source="agent",
+            created_by=created_by,
+            finding_ids=finding_ids,
+            meta=body.get("meta") if isinstance(body.get("meta"), dict) else {"node_id": str(node.id)},
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return {"ok": True, "report": report_to_dict(row, include_markdown=False)}

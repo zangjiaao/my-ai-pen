@@ -16,7 +16,10 @@ from app.services.engagement_dashboard import (
     activity_from_snapshot_messages,
     build_engagement_dashboard,
 )
-from app.services.engagement_report import build_engagement_report_markdown
+from app.services.engagement_report import (
+    build_engagement_report_html,
+    build_engagement_report_markdown,
+)
 from app.services.schedule_tasks import (
     ScheduleStore,
     build_task_assign_envelope,
@@ -62,11 +65,107 @@ class EngagementReportTests(unittest.TestCase):
         self.assertIn("ev-1", md)
         self.assertIn("_(none in source data)_", md)  # no invented CVE
         self.assertNotIn("CVE-2024-FAKE", md)
+        # HackerOne-aligned section headings from booked data
+        self.assertIn("Proof of Concept / reproduction", md)
+        self.assertIn("Remediation", md)
+        self.assertIn("Evidence linkage", md)
+
+    def test_full_field_finding_surfaces_hackerone_sections(self):
+        """All optional source fields present → sections carry source text only."""
+        findings = [
+            {
+                "title": "SSRF to metadata",
+                "severity": "critical",
+                "status": "confirmed",
+                "location": "https://app.example/preview?url=",
+                "host": "app.example",
+                "port": "443",
+                "cvss": 9.1,
+                "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N",
+                "cve_id": "CVE-2021-44228",
+                "description": "URL fetch parameter triggers server-side request.",
+                "root_cause": "Unvalidated user-controlled URL passed to HTTP client.",
+                "poc": "1. POST url=http://169.254.169.254/\n2. Observe metadata body",
+                "impact": "Cloud credentials readable from IMDS.",
+                "remediation": "Block link-local ranges; allowlist schemes/hosts.",
+                "evidence_ids": ["ev-ssrf"],
+            }
+        ]
+        md = build_engagement_report_markdown(
+            title="Full field report",
+            findings=findings,
+            evidence_by_id={"ev-ssrf": {"summary": "IMDS body excerpt"}},
+        )
+        self.assertIn("SSRF to metadata", md)
+        self.assertIn("**Severity:** `critical`", md)
+        self.assertIn("9.1", md)
+        self.assertIn("CVSS:3.1/AV:N", md)
+        self.assertIn("app.example", md)
+        self.assertIn("https://app.example/preview?url=", md)
+        self.assertIn("CVE-2021-44228", md)
+        self.assertIn("Unvalidated user-controlled URL", md)
+        self.assertIn("169.254.169.254", md)
+        self.assertIn("Cloud credentials readable", md)
+        self.assertIn("Block link-local ranges", md)
+        self.assertIn("ev-ssrf", md)
+        self.assertIn("IMDS body excerpt", md)
+        self.assertIn("**Impact**", md)
+        self.assertIn("**Description / root cause**", md)
+
+    def test_sparse_finding_placeholders_no_invention(self):
+        """Missing optional fields → honest placeholders; no invented CVE/PoC/remediation."""
+        md = build_engagement_report_markdown(
+            findings=[
+                {
+                    "title": "Possible open redirect",
+                    "severity": "low",
+                    "description": "Only a title and short note in source.",
+                }
+            ]
+        )
+        self.assertIn("Possible open redirect", md)
+        self.assertIn("**CVSS:** _(none in source data)_", md)
+        self.assertIn("**CVE:** _(none in source data)_", md)
+        self.assertIn("_No PoC text in source record", md)
+        self.assertIn("_No remediation text in source record._", md)
+        self.assertIn("_No impact statement in source record._", md)
+        self.assertIn("_No evidence ids in source record._", md)
+        self.assertNotIn("CVE-2024", md)
+        self.assertNotIn("curl -X", md)  # no fabricated PoC recipe
 
     def test_empty_findings_no_fabricated_rows(self):
         md = build_engagement_report_markdown(findings=[])
-        self.assertIn("Findings booked: **0**", md)
+        self.assertIn("**Confirmed findings:** **0**", md)
         self.assertIn("_No confirmed findings", md)
+        self.assertIn("_Empty._", md)
+        self.assertIn("## 6. Disclaimer", md)
+        self.assertNotIn("Workflow Stage", md)
+        self.assertNotIn("## Timeline", md)
+
+    def test_html_delivery_shares_findings_body(self):
+        findings = [
+            {
+                "title": "IDOR on /orders",
+                "severity": "high",
+                "location": "https://app.example/orders/12",
+                "description": "User B reads User A order",
+                "poc": "session B GET /orders/12",
+                "remediation": "Authorize object ownership",
+                "evidence_ids": ["e1"],
+            }
+        ]
+        html_body = build_engagement_report_html(
+            title="Delivery HTML",
+            findings=findings,
+            evidence_by_id={"e1": {"summary": "200 body has PII"}},
+            target="https://app.example",
+        )
+        self.assertIn("<!doctype html>", html_body.lower())
+        self.assertIn("IDOR on /orders", html_body)
+        self.assertIn("Executive summary", html_body)
+        self.assertIn("Remediation", html_body)
+        self.assertNotIn("Workflow Stage", html_body)
+        self.assertNotIn("## Timeline", html_body)
 
 
 class EngagementDashboardTests(unittest.TestCase):
