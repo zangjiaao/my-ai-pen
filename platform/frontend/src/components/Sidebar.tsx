@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot,
   CalendarClock,
@@ -31,6 +31,8 @@ interface Props {
 
 const ACTIVE_CONVERSATION_KEY = "active_conversation_id";
 const SIDEBAR_COLLAPSED_KEY = "sidebar_collapsed";
+/** When collapsing: switch to icons slightly before width ends (shell is 180ms). */
+const SIDEBAR_COMPACT_MS = 110;
 
 const FEATURE_ITEMS: { label: string; path: string; icon: LucideIcon }[] = [
   { label: "资产管理", path: "/assets", icon: Server },
@@ -110,7 +112,12 @@ export default function Sidebar({ activeId, onSelect }: Props) {
   const { conversations, fetchAll, removeLocal } = useConversationStore();
   const navigate = useNavigate();
   const location = useLocation();
-  const [collapsed, setCollapsed] = useState(readCollapsed);
+  const initialCollapsed = readCollapsed();
+  /** Controls shell width only. */
+  const [narrow, setNarrow] = useState(initialCollapsed);
+  /** Controls icon-only vs full layout (lags behind narrow when collapsing). */
+  const [compact, setCompact] = useState(initialCollapsed);
+  const animTimerRef = useRef<number | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
   const [renameTarget, setRenameTarget] = useState<{ id: string; title: string } | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -121,23 +128,56 @@ export default function Sidebar({ activeId, onSelect }: Props) {
   }, [fetchAll]);
 
   useEffect(() => {
+    return () => {
+      if (animTimerRef.current != null) window.clearTimeout(animTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
     const onStorage = (e: StorageEvent) => {
-      if (e.key === SIDEBAR_COLLAPSED_KEY) setCollapsed(e.newValue === "1");
+      if (e.key !== SIDEBAR_COLLAPSED_KEY) return;
+      const next = e.newValue === "1";
+      if (animTimerRef.current != null) {
+        window.clearTimeout(animTimerRef.current);
+        animTimerRef.current = null;
+      }
+      setNarrow(next);
+      setCompact(next);
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
   }, []);
 
+  const persistCollapsed = (next: boolean) => {
+    try {
+      localStorage.setItem(SIDEBAR_COLLAPSED_KEY, next ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  };
+
   const toggleCollapsed = () => {
-    setCollapsed((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem(SIDEBAR_COLLAPSED_KEY, next ? "1" : "0");
-      } catch {
-        /* ignore */
-      }
-      return next;
-    });
+    if (animTimerRef.current != null) {
+      window.clearTimeout(animTimerRef.current);
+      animTimerRef.current = null;
+    }
+
+    if (!narrow) {
+      // Collapse: shrink width first (full layout clips via overflow), then switch to icons.
+      setNarrow(true);
+      persistCollapsed(true);
+      animTimerRef.current = window.setTimeout(() => {
+        setCompact(true);
+        animTimerRef.current = null;
+      }, SIDEBAR_COMPACT_MS);
+    } else {
+      // Expand: restore full layout first, then grow width so labels clip-reveal.
+      setCompact(false);
+      persistCollapsed(false);
+      requestAnimationFrame(() => {
+        setNarrow(false);
+      });
+    }
   };
 
   const goHomeNewChat = () => {
@@ -199,85 +239,81 @@ export default function Sidebar({ activeId, onSelect }: Props) {
   return (
     <aside
       className={`sidebar-shell flex flex-shrink-0 flex-col overflow-hidden border-r border-hairline bg-surface-sidebar ${
-        collapsed ? "w-16" : "w-[280px]"
+        narrow ? "w-16" : "w-[280px]"
       }`}
     >
-      {/* 1. Logo */}
-      {collapsed ? (
-        <div className="flex h-16 shrink-0 flex-col items-center justify-center gap-1">
+      {/*
+        Inner keeps expanded min-width while shell shrinks so items clip instead of
+        reflowing into icons mid-animation. Compact layout only after width ends.
+      */}
+      <div
+        className={`flex h-full min-h-0 flex-col ${
+          compact ? "w-16" : "w-[280px] min-w-[280px]"
+        }`}
+      >
+      {/* 1. Header: full logo while !compact; compact = expand control only */}
+      <div
+        className={`flex h-16 shrink-0 items-center ${
+          compact ? "justify-center px-1" : "justify-between gap-1 px-2"
+        }`}
+      >
+        {!compact && (
           <button
             type="button"
             onClick={goHomeNewChat}
-            className="sidebar-logo flex items-center justify-center rounded-lg hover:opacity-80"
-            title="Cyber Security"
-            aria-label={BRAND_NAME}
-          >
-            <span className="sidebar-logo-cyber">C</span>
-          </button>
-        </div>
-      ) : (
-        <div className="flex h-16 shrink-0 items-center justify-between gap-1 px-2">
-          <button
-            type="button"
-            onClick={goHomeNewChat}
-            className="sidebar-logo group min-w-0 px-3 text-left"
+            className="sidebar-logo group min-w-0 whitespace-nowrap px-3 text-left"
             title="回到会话"
             aria-label={BRAND_NAME}
           >
             <span className="sidebar-logo-cyber">Cyber</span>
             <span className="sidebar-logo-security">Security</span>
           </button>
-          <button
-            type="button"
-            onClick={toggleCollapsed}
-            className="mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ink-muted hover:bg-surface-default hover:text-ink"
-            title="折叠侧栏"
-            aria-label="折叠侧栏"
-            aria-expanded
-          >
-            <PanelLeftClose size={16} strokeWidth={1.75} />
-          </button>
-        </div>
-      )}
-
-      {/* 2. 快捷区 */}
-      <div className={`shrink-0 space-y-0.5 pt-0.5 ${collapsed ? "px-1" : "px-2"}`}>
-        {collapsed && (
-          <button
-            type="button"
-            onClick={toggleCollapsed}
-            title="展开侧栏"
-            aria-label="展开侧栏"
-            className="mx-auto flex h-9 w-9 items-center justify-center rounded-lg text-ink-muted hover:bg-surface-default hover:text-ink"
-          >
-            <PanelLeft size={16} strokeWidth={1.75} />
-          </button>
         )}
+        <button
+          type="button"
+          onClick={toggleCollapsed}
+          className={`flex shrink-0 items-center justify-center rounded-lg text-ink-muted hover:bg-surface-default hover:text-ink ${
+            compact ? "h-9 w-9" : "mr-1 h-8 w-8"
+          }`}
+          title={compact ? "展开侧栏" : "折叠侧栏"}
+          aria-label={compact ? "展开侧栏" : "折叠侧栏"}
+          aria-expanded={!narrow}
+        >
+          {compact ? (
+            <PanelLeft size={16} strokeWidth={1.75} />
+          ) : (
+            <PanelLeftClose size={16} strokeWidth={1.75} />
+          )}
+        </button>
+      </div>
+
+      {/* 2. 快捷区 — layout follows compact; width follows narrow */}
+      <div className={`shrink-0 space-y-0.5 pt-0.5 ${compact ? "px-1" : "px-2"}`}>
         <NavRow
           icon={LayoutDashboard}
           label="状态看板"
           active={dashboardActive}
-          collapsed={collapsed}
+          collapsed={compact}
           onClick={() => navigate("/dashboard")}
         />
         <NavRow
           icon={MessageSquarePlus}
           label="新建会话"
           active={onConversationHome && !activeId}
-          collapsed={collapsed}
+          collapsed={compact}
           onClick={goHomeNewChat}
         />
       </div>
 
       {/* 3. 会话 */}
-      <div className={`mt-3 flex min-h-0 flex-1 flex-col ${collapsed ? "px-1" : "px-2"}`}>
-        {!collapsed && (
+      <div className={`mt-3 flex min-h-0 flex-1 flex-col ${compact ? "px-1" : "px-2"}`}>
+        {!compact && (
           <p className="shrink-0 px-3 pb-1.5 pt-1 font-mono text-[11px] font-medium uppercase tracking-wider text-ink-muted">
             会话
           </p>
         )}
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          {collapsed ? (
+        <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
+          {compact ? (
             <div className="flex flex-col items-center gap-1 py-1">
               {conversations.slice(0, 8).map((c) => (
                 <button
@@ -391,13 +427,13 @@ export default function Sidebar({ activeId, onSelect }: Props) {
       </div>
 
       {/* 4. 功能区 */}
-      <div className={`shrink-0 border-t border-hairline-soft py-2 ${collapsed ? "px-1" : "px-2"}`}>
-        {!collapsed && (
+      <div className={`shrink-0 border-t border-hairline-soft py-2 ${compact ? "px-1" : "px-2"}`}>
+        {!compact && (
           <p className="px-3 pb-1.5 pt-0.5 font-mono text-[11px] font-medium uppercase tracking-wider text-ink-muted">
             功能
           </p>
         )}
-        <nav className={collapsed ? "flex flex-col items-center gap-0.5" : "space-y-0.5"}>
+        <nav className={compact ? "flex flex-col items-center gap-0.5" : "space-y-0.5"}>
           {FEATURE_ITEMS.map(({ label, path, icon }) => {
             const active =
               location.pathname === path || location.pathname.startsWith(`${path}/`);
@@ -407,7 +443,7 @@ export default function Sidebar({ activeId, onSelect }: Props) {
                 icon={icon}
                 label={label}
                 active={active}
-                collapsed={collapsed}
+                collapsed={compact}
                 onClick={() => navigate(path)}
               />
             );
@@ -416,8 +452,8 @@ export default function Sidebar({ activeId, onSelect }: Props) {
       </div>
 
       {/* 5. 用户 */}
-      <div className={`shrink-0 border-t border-hairline-soft ${collapsed ? "p-1.5" : "p-2"}`}>
-        {collapsed ? (
+      <div className={`shrink-0 border-t border-hairline-soft ${compact ? "p-1.5" : "p-2"}`}>
+        {compact ? (
           <div className="flex flex-col items-center gap-1">
             <div
               className="flex h-9 w-9 items-center justify-center rounded-full bg-ink text-[11px] font-semibold tracking-wide text-white"
@@ -457,6 +493,7 @@ export default function Sidebar({ activeId, onSelect }: Props) {
             </button>
           </div>
         )}
+      </div>
       </div>
 
       <ConfirmDialog

@@ -6,7 +6,7 @@ body { margin: 0; }
 
 /* —— Sidebar single-column width (content swaps; no dual rail) —— */
 .sidebar-shell {
-  transition: width 200ms ease;
+  transition: width 180ms ease;
 }
 @media (prefers-reduced-motion: reduce) {
   .sidebar-shell {
