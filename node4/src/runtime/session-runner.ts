@@ -33,7 +33,10 @@ import { SubagentHost } from "./subagent.js";
 import { eagerTodoInjection, resetMidRunTodoCycle, createMidRunTodoTracker } from "./todo-harness.js";
 import { formatRoeInjection, resolveEngagementRoe } from "./engagement-roe.js";
 import { formatCaseContextInjection } from "./case-context.js";
-import { buildGoalContinuationPrompt } from "../stores/goal.js";
+import {
+  buildGoalBudgetLimitPrompt,
+  buildGoalContinuationPrompt,
+} from "../stores/goal.js";
 import { PanelAgentTracker } from "./panel-agents.js";
 import {
   CheckpointThrottle,
@@ -436,7 +439,7 @@ export async function runNode4Task(
         formatCaseContextInjection(task.caseContext),
         "",
         `Role pack: ${pack.id}. OMP essence: keep tool-calling in-loop; shell-first multi-step + multi-call same turn; http is single-probe only.`,
-        "Long multi-challenge work: call goal(op=create, objective=...) early so the harness auto-continues while active with **no continue-count cap** (OMP). Optional token_budget → budget-limited soft stop. complete only with remaining_unsolved=0 after real audit when clearance fields apply (partial wins are not done).",
+        "Long multi-challenge work: call goal(op=create, objective=...) early so the harness auto-continues while active with **no continue-count cap** (OMP). Optional token_budget → budget-limited soft stop (budget exhaustion is not completion). Call goal(complete) only after a real completion audit against current evidence — never because a turn is ending.",
         pack.bookingMode === "finding"
           ? "Book via finding(confirm) with proof= quoted from tool output. When truly stuck after dense shell work, stop with no tools — no finish tool; harness settles."
           : "This pack does not book findings. When finished, simply stop — harness settles.",
@@ -469,8 +472,8 @@ export async function runNode4Task(
     // Prefer act observations (book-time evidence model); fall back to Case evidence files.
     const probeCount = actObsCount || evidenceList.length;
     const bookedSoFar = await loadConfirmedFindings(runtime.findingsDir).catch(() => ({ count: 0 }));
-    // Feed goal complete-gates (stall / progress) before deciding continue.
-    if (goals.isActive()) {
+    // Feed goal progress (stall telemetry) while accounting (active or budget-limited).
+    if (goals.isAccounting()) {
       goals.noteSegmentProgress({
         bookedFindings: bookedSoFar.count,
         evidenceCount: probeCount,
@@ -478,6 +481,30 @@ export async function runNode4Task(
         goalContinueCount,
       });
     }
+
+    // OMP: one-shot budget-limit steer when token_budget just flipped status.
+    const budgetSteerGoal = goals.takePendingBudgetLimitSteer();
+    if (budgetSteerGoal && !cancelled()) {
+      await loggingPlatform.send({
+        type: "status_update",
+        conversation_id: task.conversationId,
+        task_id: task.taskId,
+        message: `goal budget-limited tokens=${budgetSteerGoal.tokensUsed}/${budgetSteerGoal.tokenBudget ?? "?"} — steer wrap-up (not complete)`,
+        agent_phase: "goal_budget_limit",
+        status: "running",
+        llm_usage: usage.snapshot({ tool_calls: obsCounters.toolCallCount }),
+      });
+      segmentCounter.tools = 0;
+      runtime.lifecycle.toolsInLastSegment = 0;
+      try {
+        await session.prompt(buildGoalBudgetLimitPrompt(budgetSteerGoal), { source: "interactive" });
+      } catch (err) {
+        if (cancelled()) break;
+        throw err;
+      }
+      continue;
+    }
+
     const bookingSnap =
       pack.bookingMode === "finding"
         ? {
@@ -529,11 +556,14 @@ export async function runNode4Task(
     runtime.lifecycle.pendingTodoErrorReminder = undefined;
     const goalSnap = goals.formatForPrompt();
     const modeGoal = goals.getMode();
-    const goalContinuationBody =
-      decision.kind === "goal" && modeGoal ? buildGoalContinuationPrompt(modeGoal) : undefined;
     const openTodoTitles = runtime.todo
       .snapshot()
       .flatMap((p) => p.tasks.filter((t) => t.status === "pending" || t.status === "in_progress").map((t) => t.content));
+    const openTodoCount = runtime.todo.openCount();
+    const goalContinuationBody =
+      decision.kind === "goal" && modeGoal
+        ? buildGoalContinuationPrompt(modeGoal, { openTodoTitles, openTodoCount })
+        : undefined;
 
     await loggingPlatform.send({
       type: "status_update",
@@ -561,7 +591,7 @@ export async function runNode4Task(
         composeContinuePrompt({
           attempt: continueCount,
           max: maxContinues,
-          openTodoCount: runtime.todo.openCount(),
+          openTodoCount,
           openTodoTitles,
           todoErrors,
           booking: bookingSnap,
@@ -593,7 +623,7 @@ export async function runNode4Task(
         if (usage.recordAssistantMessage(msg)) {
           const after = usage.snapshot().total_tokens;
           const delta = after - before;
-          if (delta > 0 && goals.isActive()) goals.addTokensUsed(delta);
+          if (delta > 0 && goals.isAccounting()) goals.addTokensUsed(delta);
         }
       }
     }

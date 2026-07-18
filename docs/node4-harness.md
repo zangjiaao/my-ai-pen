@@ -54,7 +54,7 @@ Interactive **TUI remains deferred**.
 | Map | `todo` phases (content-keyed; single in_progress; auto-promote); **map not prison** |
 | Act | Pack tools under task cwd (shell-first) |
 | Book | `finding` + evidence when `bookingMode=finding` |
-| Continue | Rare recovery: empty-stop budget, booking-gap, **breadth premature** (until `NODE4_MAX_PREMATURE_STOPS`, not gated on open todos). **goal_continuation** while goal `active` is **unbounded** (OMP; no default continue count). Outer `NODE4_MAX_CONTINUES` does **not** stop goal mode. Optional lab cap only via `NODE4_MAX_GOAL_CONTINUES`. Optional `token_budget` → `budget-limited` stops auto-continue |
+| Continue | Rare recovery: empty-stop / booking-gap / breadth premature. **goal_continuation** while `active` is **unbounded** (OMP). Outer `NODE4_MAX_CONTINUES` does **not** stop goal mode. Optional lab cap: `NODE4_MAX_GOAL_CONTINUES`. Optional `token_budget` → `budget-limited` + one-shot budget-limit steer (not complete) |
 | Session wall | **None** by design; per-tool timeouts remain |
 | Settle | Runner emits `task_complete` (natural stop / goal complete|drop|budget-limited / non-goal continue caps / abort) |
 
@@ -152,7 +152,7 @@ Continue inject text steers: re-check recon/facts for untested surfaces, prefer 
 
 | Mechanism | Behavior |
 |-----------|----------|
-| `goal` | Active objective → harness injects **goal_continuation** after natural stops while `active` (**unbounded**, OMP-aligned; no default count). Optional `token_budget` → `budget-limited` soft stop. Lab-only hard cap: `NODE4_MAX_GOAL_CONTINUES`. Outer `NODE4_MAX_CONTINUES` does not stop goal mode. Product maximize may still require `audit_notes` + `remaining_unsolved=0` on complete; min continues/stalls default **0**. Open goals do not invent product findings. |
+| `goal` | **OMP-class:** while `active`, harness injects **goal_continuation** (unbounded; no default count). `complete` is **free in code** (active \| budget-limited); honesty is **prompt-steered** (completion audit on continuation — never complete because budget/turn ends). Optional `token_budget` → `budget-limited` + one-shot wrap-up steer (budget ≠ complete). Lab-only: `NODE4_MAX_GOAL_CONTINUES`, `NODE4_GOAL_REQUIRE_CLEARANCE=1` for hard audit fields. Outer `NODE4_MAX_CONTINUES` does not stop goal mode. Open goals do not invent product findings. |
 | `subagent` | Child under `taskDir/subagents/<id>`; evidence written |
 
 ### Subagent handoff contract (A1 / D3)

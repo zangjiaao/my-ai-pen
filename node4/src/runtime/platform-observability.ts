@@ -416,7 +416,8 @@ export async function handleNode4SessionEvent(
     const recorded = ctx.usage.recordAssistantMessage(event.message);
     if (recorded) {
       const delta = messageTokenTotal(event.message);
-      if (delta > 0 && ctx.goals.isActive()) {
+      // OMP: account while active or budget-limited (isAccounting).
+      if (delta > 0 && ctx.goals.isAccounting()) {
         ctx.goals.addTokensUsed(delta);
       }
     }

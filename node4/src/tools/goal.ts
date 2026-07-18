@@ -5,8 +5,8 @@ import { jsonResult, textResult } from "./common.js";
 
 /**
  * OMP-style goal tool: create / get / complete / drop / resume / pause / list.
- * Auto-continue is unbounded while active (OMP); optional token_budget → budget-limited.
- * Product maximize may still require audit_notes + remaining_unsolved=0 on complete.
+ * Auto-continue unbounded while active; optional token_budget → budget-limited.
+ * complete is free in code (OMP); honesty is prompt-steered on continuations.
  */
 export function createGoalTool(runtime: ToolRuntime): ToolDefinition<any> {
   return {
@@ -16,9 +16,9 @@ export function createGoalTool(runtime: ToolRuntime): ToolDefinition<any> {
       "OMP-style long-task goal mode (single active objective).",
       "Ops: create|get|complete|drop|resume|pause|list.",
       "create: objective (required), token_budget? (optional soft stop — when exhausted status becomes budget-limited and auto-continue stops).",
-      "While active the harness auto-continues after natural stops with **no default continue count** (OMP-aligned).",
-      "complete: product maximize may require audit_notes + remaining_unsolved=0; min continues/stalls default off.",
-      "Do not drop a maximize objective to soft-exit partial progress.",
+      "While active the harness auto-continues after natural stops with **no default continue count** (OMP).",
+      "complete: only when the objective is actually verified done against current evidence — NEVER because a budget is low or a turn is ending.",
+      "Budget exhaustion is not completion. Do not drop a maximize objective to soft-exit partial progress.",
     ].join(" "),
     parameters: Type.Object({
       op: Type.String(),
@@ -28,9 +28,9 @@ export function createGoalTool(runtime: ToolRuntime): ToolDefinition<any> {
       token_budget: Type.Optional(Type.Number()),
       detail: Type.Optional(Type.String()),
       status: Type.Optional(Type.String()),
-      /** Required for complete: detailed audit of remaining surface and blockers. */
+      /** Optional notes; not required for complete (OMP free complete). */
       audit_notes: Type.Optional(Type.String()),
-      /** From agent recon: how many challenges/items still unsolved (0 only when truly done). */
+      /** Optional recon remaining count; not required for complete by default. */
       remaining_unsolved: Type.Optional(Type.Number()),
     }),
     async execute(_id: string, params: any) {
@@ -67,7 +67,7 @@ export function createGoalTool(runtime: ToolRuntime): ToolDefinition<any> {
             goal: g,
             summary: goals.formatForPrompt(),
             guidance:
-              "Goal active. Harness auto-continues while active (unbounded OMP). Optional token_budget is the soft stop. Keep dense shell on remaining surface.",
+              "Goal active. Harness auto-continues while active (unbounded OMP). Optional token_budget is the soft stop. Call complete only after a real completion audit against current evidence.",
           });
         } catch (e) {
           return textResult(`error: ${e instanceof Error ? e.message : String(e)}`);
@@ -99,7 +99,7 @@ export function createGoalTool(runtime: ToolRuntime): ToolDefinition<any> {
               progress: goals.snapshot().progress,
               summary: goals.formatForPrompt(),
               guidance:
-                "COMPLETE REJECTED. Keep dense shell on remaining items from YOUR recon until remaining_unsolved=0 and gates pass. Do not shrink the objective; do not only narrate.",
+                "COMPLETE REJECTED. Keep working remaining items from YOUR recon with dense shell. Do not shrink the objective; do not only narrate.",
             },
             { isError: true },
           );

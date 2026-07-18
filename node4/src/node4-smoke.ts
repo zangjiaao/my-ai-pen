@@ -5,7 +5,11 @@ import { mkdir, writeFile, readdir, readFile, access } from "node:fs/promises";
 import { join } from "node:path";
 import { applyTodoOp, TodoStore, formatTodoSummary } from "./stores/todo.js";
 import { EvidenceStore } from "./stores/evidence.js";
-import { GoalStore } from "./stores/goal.js";
+import {
+  GoalStore,
+  buildGoalBudgetLimitPrompt,
+  buildGoalContinuationPrompt,
+} from "./stores/goal.js";
 import { agentCanForceCompleted, resolveTerminalTaskStatus } from "./runtime/harness-settlement.js";
 import {
   composeContinuePrompt,
@@ -565,46 +569,35 @@ async function main() {
     "messageTokenTotal",
   );
 
-  // OMP-style goal mode: unbounded continue while active; product clearance fields still gate complete
+  // OMP-style goal mode: free complete in code; unbounded continue while active
   const goals = new GoalStore();
   const g1 = goals.create({ objective: "Map attack surface and book proven issues" });
   assert(g1.status === "active" && goals.isActive(), "goal active");
   goals.attachSubagent(g1.id, "sub_test");
   assert(goals.get(g1.id)!.subagentIds.includes("sub_test"), "goal attach subagent");
-  // Early complete must fail (audit / remaining_unsolved — min continues/stalls default 0)
-  const early = goals.tryComplete({ auditNotes: "short" });
-  assert(!early.ok, "early complete rejected");
-  assert(
-    early.blockers.some((b) => b.includes("remaining_unsolved") || b.includes("audit_notes")),
-    "early complete names required fields",
-  );
-  goals.noteSegmentProgress({ bookedFindings: 0, evidenceCount: 1, toolsInSegment: 5, goalContinueCount: 0 });
-  const early2 = goals.tryComplete({
-    auditNotes: "x".repeat(130),
-    remainingUnsolved: 3,
-  });
-  assert(
-    !early2.ok && early2.blockers.some((b) => b.includes("remaining_unsolved")),
-    "complete blocked while unsolved",
-  );
-  // Omit remaining_unsolved even with long audit — still rejected
-  const omitRem = goals.tryComplete({ auditNotes: "x".repeat(130) });
-  assert(
-    !omitRem.ok && omitRem.blockers.some((b) => b.includes("remaining_unsolved")),
-    "remaining_unsolved required",
-  );
-  // Clearance fields satisfied — OMP default min continues/stalls = 0 so complete may succeed without artificial waits
-  goals.setGoalContinueCount(0);
-  const okComplete = goals.tryComplete({
-    auditNotes:
-      "Audited remaining levels from recon: L residual approaches exhausted after encoding/auth rotations; no further shell path.",
-    remainingUnsolved: 0,
-  });
-  assert(okComplete.ok && !goals.isActive(), `complete after clearance: ${JSON.stringify(okComplete)}`);
+  // OMP free complete: no audit_notes / remaining_unsolved required by default
+  const earlyOk = goals.tryComplete({});
+  assert(earlyOk.ok && !goals.isActive(), `OMP free complete: ${JSON.stringify(earlyOk)}`);
+  // Lab clearance mode can re-enable hard gates
+  const labGoals = new GoalStore();
+  labGoals.create({ objective: "lab clearance maximize" });
+  const prevClearance = process.env.NODE4_GOAL_REQUIRE_CLEARANCE;
+  process.env.NODE4_GOAL_REQUIRE_CLEARANCE = "1";
+  const labReject = labGoals.tryComplete({ auditNotes: "short" });
+  assert(!labReject.ok && labReject.blockers.some((b) => b.includes("audit") || b.includes("clearance")), "lab clearance rejects short audit");
+  if (prevClearance === undefined) delete process.env.NODE4_GOAL_REQUIRE_CLEARANCE;
+  else process.env.NODE4_GOAL_REQUIRE_CLEARANCE = prevClearance;
   // New goal after complete
   goals.create({ objective: "Still open later long-task" });
   assert(goals.isActive() && goals.snapshot().openCount === 1, "goal active again");
   assert(goals.formatForPrompt().includes("Still open") || goals.formatForPrompt().includes("objective"), "goal prompt format");
+  assert(
+    goals.formatForPrompt().includes("completion audit") || goals.formatForPrompt().includes("NEVER redefine"),
+    "active context steers honest complete",
+  );
+  const contPrompt = buildGoalContinuationPrompt(goals.getMode()!, { openTodoCount: 0 });
+  assert(contPrompt.includes("completion audit") && contPrompt.includes("goal-continuation"), "continuation has OMP audit");
+  assert(contPrompt.includes("todo_context") || contPrompt.includes("Todo map"), "continuation notes empty todo map");
   // Goal continuation policy: active goal → continue after tools (OMP unbounded by default)
   const goalCont = shouldContinueAfterNaturalStop({
     aborted: false,
@@ -649,12 +642,21 @@ async function main() {
     maxGoalContinues: 12,
   });
   assert(!goalCap.continue, `optional goal continue lab cap: ${JSON.stringify(goalCap)}`);
-  // token_budget → budget-limited stops isActive (auto-continue)
+  // token_budget → budget-limited stops isActive; one-shot budget-limit steer
   const budgetGoals = new GoalStore();
   budgetGoals.create({ objective: "budget test", tokenBudget: 100 });
   assert(budgetGoals.addTokensUsed(50) === false && budgetGoals.isActive(), "under budget still active");
   assert(budgetGoals.addTokensUsed(60) === true, "flip to budget-limited");
   assert(!budgetGoals.isActive() && budgetGoals.getMode()!.status === "budget-limited", "budget-limited not active");
+  assert(budgetGoals.isAccounting(), "budget-limited still accounting");
+  const steer = budgetGoals.takePendingBudgetLimitSteer();
+  assert(steer && steer.status === "budget-limited", "pending budget steer once");
+  assert(budgetGoals.takePendingBudgetLimitSteer() === null, "budget steer is one-shot");
+  assert(
+    buildGoalBudgetLimitPrompt(steer!).includes("budget-limit") &&
+      buildGoalBudgetLimitPrompt(steer!).includes("NOT completion"),
+    "budget-limit prompt steers wrap-up",
+  );
   assert(
     !shouldContinueAfterNaturalStop({
       aborted: false,
@@ -669,6 +671,9 @@ async function main() {
     }).continue,
     "budget-limited does not goal_continue",
   );
+  // budget-limited may still complete (OMP)
+  const budgetComplete = budgetGoals.tryComplete({});
+  assert(budgetComplete.ok, "budget-limited may complete");
 
   // Shell process group (per-tool timeout only — no session wall)
   const hung = await runShell("sleep 30", process.cwd(), 400);
@@ -851,15 +856,12 @@ async function main() {
   // Goal tool (already created above — list/get)
   const glist = JSON.parse(textOf(await exec(createGoalTool(runtime), "g2", { op: "list" })));
   assert((glist.openCount ?? glist.open_count) >= 1 && glist.active === true, "goal list active");
-  // complete without gates must fail
-  const rej = JSON.parse(
-    textOf(await exec(createGoalTool(runtime), "g3", { op: "complete", audit_notes: "too short" })),
+  // OMP free complete: tool accepts complete without audit fields
+  const okToolComplete = JSON.parse(
+    textOf(await exec(createGoalTool(runtime), "g3", { op: "complete" })),
   );
-  assert(rej.ok === false, "goal tool rejects early complete");
-  assert(goalStore.isActive(), "still active after reject");
-  // force path via store for settle tests
-  goalStore.tryComplete({ force: true });
-  assert(!goalStore.isActive(), "force complete deactivates");
+  assert(okToolComplete.ok === true, "goal tool OMP free complete");
+  assert(!goalStore.isActive(), "complete deactivates");
   // recreate for settle-with-open-goal assertion later
   const gOpen = goalStore.create({ objective: "May remain open at settle" });
 

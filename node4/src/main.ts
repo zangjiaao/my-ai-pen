@@ -207,7 +207,7 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
   const goalObjective = goalObjectiveRaw.trim()
     ? goalObjectiveRaw.trim()
     : goalModeOn
-      ? "Within authorized scope, maximize verified findings, flags, and challenge unlocks with evidence-backed booking. Enumerate challenges yourself. Do not complete until remaining recon items are solved or proven blocked; complete needs audit_notes, remaining_unsolved=0, and harness gates. Partial clearance is not done."
+      ? "Within authorized scope, maximize verified findings, flags, and challenge unlocks with evidence-backed booking. Enumerate challenges yourself from recon. Keep the full objective intact across turns — do not redefine success around easy wins. Call goal(complete) only after a completion audit against current tool evidence proves every recon deliverable is solved or proven blocked. Budget exhaustion is not completion. Partial clearance is not done."
       : undefined;
 
   // Persona labels are untrusted product config — strip prompt-hostile chars early.

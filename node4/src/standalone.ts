@@ -30,7 +30,7 @@ async function main(): Promise<void> {
   const goalObjective = args["goal-objective"]?.trim()
     ? args["goal-objective"].trim()
     : goalMode
-      ? "Within authorized scope, maximize verified findings, flags, and challenge unlocks with evidence-backed booking. Enumerate challenges yourself. Do not complete until remaining recon items are solved or proven blocked; complete needs audit_notes, remaining_unsolved=0, and harness gates. Partial clearance is not done."
+      ? "Within authorized scope, maximize verified findings, flags, and challenge unlocks with evidence-backed booking. Enumerate challenges yourself from recon. Keep the full objective intact across turns — do not redefine success around easy wins. Call goal(complete) only after a completion audit against current tool evidence proves every recon deliverable is solved or proven blocked. Budget exhaustion is not completion. Partial clearance is not done."
       : undefined;
   // No default engagement → bare OMP runtime when no expert pack is installed.
   // Pass --engagement pentest|ctf|… only after `expert-cli install <id>`.
