@@ -1,15 +1,19 @@
 import { useState, type ReactNode } from "react";
 import { Check, Copy } from "lucide-react";
 import ReportDrawer from "./ReportDrawer";
+import BrandLogo from "./BrandLogo";
+import { BRAND_NAME } from "../lib/brand";
 
 interface Props {
   title?: string;
   conversationId?: string | null;
   /** Extra controls on the right, before version (e.g. 注册节点). */
   actions?: ReactNode;
+  /** Show mark next to title (management pages). Conversation uses Sidebar brand. */
+  showBrand?: boolean;
 }
 
-export default function TopBar({ title, conversationId, actions }: Props) {
+export default function TopBar({ title, conversationId, actions, showBrand = false }: Props) {
   const [copied, setCopied] = useState(false);
   const shortId = conversationId ? conversationId.slice(0, 8) : "";
 
@@ -27,7 +31,8 @@ export default function TopBar({ title, conversationId, actions }: Props) {
   return (
     <header className="flex h-14 flex-shrink-0 items-center justify-between border-b border-hairline bg-canvas px-6">
       <div className="flex min-w-0 items-center gap-3">
-        <span className="truncate text-sm font-medium">{title || "AI 安全运营平台"}</span>
+        {showBrand ? <BrandLogo size={22} /> : null}
+        <span className="truncate text-sm font-medium">{title || BRAND_NAME}</span>
         {conversationId && (
           <button
             type="button"

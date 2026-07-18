@@ -319,7 +319,7 @@ export default function RightPanel({
 
   return (
     <aside
-      className={`relative flex flex-shrink-0 flex-col border-l border-hairline bg-canvas ${resizing ? "select-none" : ""}`}
+      className={`right-panel-enter relative flex flex-shrink-0 flex-col border-l border-hairline bg-canvas ${resizing ? "select-none" : ""}`}
       style={{ width: panelWidth, minWidth: MIN_RIGHT_PANEL_WIDTH }}
     >
       <button

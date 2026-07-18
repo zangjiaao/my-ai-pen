@@ -3,3 +3,88 @@
 @tailwind utilities;
 
 body { margin: 0; }
+
+/* —— Login hero (left panel) —— */
+.login-hero-grid {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+  background-size: 40px 40px;
+  mask-image: radial-gradient(ellipse 80% 70% at 40% 40%, black 20%, transparent 75%);
+}
+
+.login-hero-scan {
+  top: -20%;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    rgba(255, 255, 255, 0.12),
+    transparent
+  );
+  animation: login-scan 7s ease-in-out infinite;
+}
+
+.login-node {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.45);
+  box-shadow: 0 0 12px rgba(255, 255, 255, 0.25);
+  animation: login-pulse 4s ease-in-out infinite;
+}
+.login-node-a { top: 28%; left: 22%; animation-delay: 0s; }
+.login-node-b { top: 52%; left: 58%; animation-delay: 1.2s; }
+.login-node-c { top: 68%; left: 34%; animation-delay: 2.1s; }
+
+.login-hero-enter {
+  animation: login-fade-up 0.55s ease-out both;
+}
+.login-hero-enter-delay {
+  animation: login-fade-up 0.55s ease-out 0.12s both;
+}
+.login-form-enter {
+  animation: login-fade-up 0.45s ease-out 0.08s both;
+}
+
+@keyframes login-scan {
+  0% { transform: translateY(0); opacity: 0; }
+  15% { opacity: 0.35; }
+  50% { opacity: 0.25; }
+  100% { transform: translateY(420%); opacity: 0; }
+}
+@keyframes login-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(1); }
+  50% { opacity: 0.9; transform: scale(1.35); }
+}
+@keyframes login-fade-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* —— Conversation right panel enter —— */
+.right-panel-enter {
+  animation: right-panel-in 0.28s ease-out both;
+}
+
+@keyframes right-panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-hero-scan,
+  .login-node,
+  .login-hero-enter,
+  .login-hero-enter-delay,
+  .login-form-enter,
+  .right-panel-enter {
+    animation: none !important;
+  }
+}

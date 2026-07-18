@@ -18,6 +18,7 @@ import { useAuthStore } from "../stores/authStore";
 import { useConversationStore } from "../stores/conversationStore";
 import { authFetch } from "../lib/api";
 import ConfirmDialog from "./ConfirmDialog";
+import BrandLogo from "./BrandLogo";
 
 interface Props {
   activeId: string | null;
@@ -91,6 +92,16 @@ export default function Sidebar({ activeId, onSelect }: Props) {
 
   return (
     <aside className="flex w-[280px] flex-shrink-0 flex-col border-r border-hairline bg-surface-sidebar">
+      <div className="flex items-center gap-2 border-b border-hairline-soft px-4 py-3">
+        <button
+          type="button"
+          onClick={() => { localStorage.removeItem(ACTIVE_CONVERSATION_KEY); navigate("/"); onSelect(""); }}
+          className="min-w-0 text-left"
+          title="回到会话"
+        >
+          <BrandLogo size={24} showWordmark />
+        </button>
+      </div>
       <div className="p-3">
         <button onClick={() => { localStorage.removeItem(ACTIVE_CONVERSATION_KEY); navigate("/"); onSelect(""); }} className="w-full rounded-pill bg-ink px-4 py-2.5 text-sm font-medium text-white transition-opacity hover:opacity-90">
           + 新建会话

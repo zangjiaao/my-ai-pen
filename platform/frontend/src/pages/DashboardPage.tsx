@@ -80,7 +80,7 @@ export default function DashboardPage() {
     <div className="flex h-screen bg-canvas">
       <Sidebar activeId={null} onSelect={() => {}} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar title="状态看板" />
+        <TopBar title="状态看板" showBrand />
         <main className="flex-1 overflow-y-auto p-6">
           <div className="mb-6 max-w-5xl">
             <h1 className="text-lg font-semibold tracking-tight text-ink">状态看板</h1>
