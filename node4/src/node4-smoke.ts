@@ -565,13 +565,13 @@ async function main() {
     "messageTokenTotal",
   );
 
-  // OMP-style goal mode + complete gates (full-clearance oriented)
+  // OMP-style goal mode: unbounded continue while active; product clearance fields still gate complete
   const goals = new GoalStore();
   const g1 = goals.create({ objective: "Map attack surface and book proven issues" });
   assert(g1.status === "active" && goals.isActive(), "goal active");
   goals.attachSubagent(g1.id, "sub_test");
   assert(goals.get(g1.id)!.subagentIds.includes("sub_test"), "goal attach subagent");
-  // Early complete must fail (no continuations / stalls / audit / remaining_unsolved)
+  // Early complete must fail (audit / remaining_unsolved — min continues/stalls default 0)
   const early = goals.tryComplete({ auditNotes: "short" });
   assert(!early.ok, "early complete rejected");
   assert(
@@ -584,9 +584,8 @@ async function main() {
     remainingUnsolved: 3,
   });
   assert(
-    !early2.ok &&
-      early2.blockers.some((b) => b.includes("remaining_unsolved") || b.includes("goal_continuation")),
-    "complete blocked while unsolved/gates",
+    !early2.ok && early2.blockers.some((b) => b.includes("remaining_unsolved")),
+    "complete blocked while unsolved",
   );
   // Omit remaining_unsolved even with long audit — still rejected
   const omitRem = goals.tryComplete({ auditNotes: "x".repeat(130) });
@@ -594,25 +593,19 @@ async function main() {
     !omitRem.ok && omitRem.blockers.some((b) => b.includes("remaining_unsolved")),
     "remaining_unsolved required",
   );
-  // Simulate enough goal continues + no-progress segments for defaults (3+3)
-  goals.setGoalContinueCount(3);
-  goals.noteSegmentProgress({ bookedFindings: 5, evidenceCount: 10, toolsInSegment: 3, goalContinueCount: 3 });
-  goals.noteSegmentProgress({ bookedFindings: 5, evidenceCount: 10, toolsInSegment: 2, goalContinueCount: 3 });
-  goals.noteSegmentProgress({ bookedFindings: 5, evidenceCount: 11, toolsInSegment: 1, goalContinueCount: 3 });
-  goals.noteSegmentProgress({ bookedFindings: 5, evidenceCount: 12, toolsInSegment: 1, goalContinueCount: 3 });
-  // ensure ≥3 stalls with no finding/evidence jump ≥3
-  goals.noteSegmentProgress({ bookedFindings: 5, evidenceCount: 12, toolsInSegment: 1, goalContinueCount: 3 });
+  // Clearance fields satisfied — OMP default min continues/stalls = 0 so complete may succeed without artificial waits
+  goals.setGoalContinueCount(0);
   const okComplete = goals.tryComplete({
     auditNotes:
       "Audited remaining levels from recon: L residual approaches exhausted after encoding/auth rotations; no further shell path.",
     remainingUnsolved: 0,
   });
-  assert(okComplete.ok && !goals.isActive(), `complete after gates: ${JSON.stringify(okComplete)}`);
+  assert(okComplete.ok && !goals.isActive(), `complete after clearance: ${JSON.stringify(okComplete)}`);
   // New goal after complete
   goals.create({ objective: "Still open later long-task" });
   assert(goals.isActive() && goals.snapshot().openCount === 1, "goal active again");
   assert(goals.formatForPrompt().includes("Still open") || goals.formatForPrompt().includes("objective"), "goal prompt format");
-  // Goal continuation policy: active goal → continue after tools
+  // Goal continuation policy: active goal → continue after tools (OMP unbounded by default)
   const goalCont = shouldContinueAfterNaturalStop({
     aborted: false,
     toolsInLastSegment: 3,
@@ -623,9 +616,26 @@ async function main() {
     maxPrematureStops: 0,
     goalModeActive: true,
     goalContinueCount: 0,
-    maxGoalContinues: 12,
+    // omit maxGoalContinues → unlimited
   });
   assert(goalCont.continue && goalCont.reason === "goal_continuation" && goalCont.kind === "goal", "goal mode continues after tools");
+  // Past outer maxContinues still continues when goal active (OMP)
+  const pastOuterCap = shouldContinueAfterNaturalStop({
+    aborted: false,
+    toolsInLastSegment: 2,
+    emptyStopStreak: 0,
+    continueCount: 100,
+    maxContinues: 16,
+    maxEmptyStopStreak: 1,
+    maxPrematureStops: 0,
+    goalModeActive: true,
+    goalContinueCount: 99,
+  });
+  assert(
+    pastOuterCap.continue && pastOuterCap.reason === "goal_continuation",
+    `goal continues past maxContinues: ${JSON.stringify(pastOuterCap)}`,
+  );
+  // Optional lab cap still honored when maxGoalContinues is a positive finite number
   const goalCap = shouldContinueAfterNaturalStop({
     aborted: false,
     toolsInLastSegment: 2,
@@ -638,7 +648,27 @@ async function main() {
     goalContinueCount: 12,
     maxGoalContinues: 12,
   });
-  assert(!goalCap.continue, `goal continue exhausted: ${JSON.stringify(goalCap)}`);
+  assert(!goalCap.continue, `optional goal continue lab cap: ${JSON.stringify(goalCap)}`);
+  // token_budget → budget-limited stops isActive (auto-continue)
+  const budgetGoals = new GoalStore();
+  budgetGoals.create({ objective: "budget test", tokenBudget: 100 });
+  assert(budgetGoals.addTokensUsed(50) === false && budgetGoals.isActive(), "under budget still active");
+  assert(budgetGoals.addTokensUsed(60) === true, "flip to budget-limited");
+  assert(!budgetGoals.isActive() && budgetGoals.getMode()!.status === "budget-limited", "budget-limited not active");
+  assert(
+    !shouldContinueAfterNaturalStop({
+      aborted: false,
+      toolsInLastSegment: 1,
+      emptyStopStreak: 0,
+      continueCount: 0,
+      maxContinues: 16,
+      maxEmptyStopStreak: 1,
+      maxPrematureStops: 0,
+      goalModeActive: budgetGoals.isActive(),
+      goalContinueCount: 0,
+    }).continue,
+    "budget-limited does not goal_continue",
+  );
 
   // Shell process group (per-tool timeout only — no session wall)
   const hung = await runShell("sleep 30", process.cwd(), 400);

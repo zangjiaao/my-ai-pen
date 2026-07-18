@@ -5,7 +5,8 @@ import { jsonResult, textResult } from "./common.js";
 
 /**
  * OMP-style goal tool: create / get / complete / drop / resume / pause / list.
- * complete is gated so maximize-style goals cannot soft-exit after partial wins.
+ * Auto-continue is unbounded while active (OMP); optional token_budget → budget-limited.
+ * Product maximize may still require audit_notes + remaining_unsolved=0 on complete.
  */
 export function createGoalTool(runtime: ToolRuntime): ToolDefinition<any> {
   return {
@@ -14,11 +15,10 @@ export function createGoalTool(runtime: ToolRuntime): ToolDefinition<any> {
     description: [
       "OMP-style long-task goal mode (single active objective).",
       "Ops: create|get|complete|drop|resume|pause|list.",
-      "create: objective (required), token_budget?.",
-      "complete: requires audit_notes + remaining_unsolved=0; rejected until harness goal_continuations + no-progress stalls pass.",
-      "remaining_unsolved is required; >0 always rejected — keep working remaining items from your recon until full clearance.",
+      "create: objective (required), token_budget? (optional soft stop — when exhausted status becomes budget-limited and auto-continue stops).",
+      "While active the harness auto-continues after natural stops with **no default continue count** (OMP-aligned).",
+      "complete: product maximize may require audit_notes + remaining_unsolved=0; min continues/stalls default off.",
       "Do not drop a maximize objective to soft-exit partial progress.",
-      "While active the harness auto-continues after natural stops (capped).",
     ].join(" "),
     parameters: Type.Object({
       op: Type.String(),
@@ -67,7 +67,7 @@ export function createGoalTool(runtime: ToolRuntime): ToolDefinition<any> {
             goal: g,
             summary: goals.formatForPrompt(),
             guidance:
-              "Goal active. Keep dense shell work on remaining surface. complete is gated until continuations+stalls+audit_notes.",
+              "Goal active. Harness auto-continues while active (unbounded OMP). Optional token_budget is the soft stop. Keep dense shell on remaining surface.",
           });
         } catch (e) {
           return textResult(`error: ${e instanceof Error ? e.message : String(e)}`);

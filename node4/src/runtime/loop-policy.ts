@@ -5,6 +5,10 @@
  * model emits no tools). Outer continues are **rare recovery** only:
  * empty-stop glitches, one booking gap, and a small open-work premature
  * budget. No session wall. No empty thrash as a score engine.
+ *
+ * **OMP goal mode:** while goal status is active, auto-continue is **unbounded**
+ * (no default continue count). Optional lab cap only when maxGoalContinues is a
+ * positive finite number. Optional token_budget → budget-limited stops auto-continue.
  */
 
 import { midRunBookingNudge, type BookingSnapshot } from "./booking-harness.js";
@@ -19,6 +23,28 @@ export type ContinueDecision = {
 };
 
 /**
+ * OMP goal_continuation allowance.
+ *
+ * - goal inactive → false
+ * - maxGoalContinues omitted / non-finite / negative → **unlimited** (OMP default)
+ * - maxGoalContinues === 0 → goal continues off (unit tests / chat-only)
+ * - maxGoalContinues > 0 → optional lab/env cap only
+ */
+export function goalContinuationAllowed(options: {
+  goalModeActive?: boolean;
+  goalContinueCount?: number;
+  maxGoalContinues?: number;
+}): boolean {
+  if (!options.goalModeActive) return false;
+  const maxGoal = options.maxGoalContinues;
+  if (maxGoal == null || !Number.isFinite(maxGoal) || maxGoal < 0) {
+    return true;
+  }
+  if (maxGoal === 0) return false;
+  return Math.max(0, options.goalContinueCount ?? 0) < maxGoal;
+}
+
+/**
  * After session.prompt returns (natural model stop or abort), decide whether to
  * inject another user message.
  *
@@ -27,8 +53,8 @@ export type ContinueDecision = {
  * Policy:
  * - abort → end
  * - bookingGap once → booking_gap_continue
- * - tools==0 → limited empty-stop retries
- * - tools>0 then stop → if OMP goal mode active → goal_continuation (until complete/cap)
+ * - tools==0 → limited empty-stop retries (or goal_continuation if goal active after empty budget)
+ * - tools>0 then stop → if OMP goal mode active → goal_continuation (unlimited while active)
  * - else premature while budget remains (breadth recovery — not gated on open todos)
  * - else natural_stop_after_tools
  *
@@ -56,17 +82,29 @@ export function shouldContinueAfterNaturalStop(options: {
   /**
    * OMP-style goal mode still active (status=active). Takes priority over premature
    * for long-task continuation after tools (and after empty once recovered).
+   * While active, outer maxContinues does **not** stop goal_continuation (OMP).
    */
   goalModeActive?: boolean;
-  /** How many goal-continuation injects already used this run. */
+  /** How many goal-continuation injects already used this run (telemetry / optional cap). */
   goalContinueCount?: number;
-  /** Cap goal continuations (prevents infinite open-ended goals). Default 0 = off in pure tests. */
+  /**
+   * Optional goal continuation cap. OMP default = unlimited (omit / Infinity / negative).
+   * 0 = off; positive = lab-only hard cap.
+   */
   maxGoalContinues?: number;
 }): ContinueDecision {
   if (options.aborted) {
     return { continue: false, reason: "aborted", nextContinueCount: options.continueCount };
   }
-  if (options.continueCount >= options.maxContinues) {
+
+  const goalOk = goalContinuationAllowed({
+    goalModeActive: options.goalModeActive,
+    goalContinueCount: options.goalContinueCount,
+    maxGoalContinues: options.maxGoalContinues,
+  });
+
+  // Outer continue budget bounds non-goal recovery only. OMP goal mode is unbounded.
+  if (options.continueCount >= options.maxContinues && !goalOk) {
     return { continue: false, reason: "max_continues", nextContinueCount: options.continueCount };
   }
 
@@ -84,10 +122,8 @@ export function shouldContinueAfterNaturalStop(options: {
 
   if (empty) {
     if (emptyStreak > options.maxEmptyStopStreak) {
-      // Empty streak exhausted: if goal still active, one more path via goal continue.
-      const goalUsed = Math.max(0, options.goalContinueCount ?? 0);
-      const maxGoal = Math.max(0, options.maxGoalContinues ?? 0);
-      if (options.goalModeActive && goalUsed < maxGoal) {
+      // Empty streak exhausted: if goal still active, continue via goal path (OMP).
+      if (goalOk) {
         return {
           continue: true,
           reason: "goal_continuation",
@@ -101,6 +137,10 @@ export function shouldContinueAfterNaturalStop(options: {
         nextContinueCount: options.continueCount,
       };
     }
+    // Prefer empty-stop recovery first; still allow when past maxContinues if goal keeps session alive.
+    if (options.continueCount >= options.maxContinues && !goalOk) {
+      return { continue: false, reason: "max_continues", nextContinueCount: options.continueCount };
+    }
     return {
       continue: true,
       reason: "empty_stop_continue",
@@ -109,10 +149,8 @@ export function shouldContinueAfterNaturalStop(options: {
     };
   }
 
-  // Tools ran then stop: OMP goal mode continues while active (long-task).
-  const goalUsed = Math.max(0, options.goalContinueCount ?? 0);
-  const maxGoal = Math.max(0, options.maxGoalContinues ?? 0);
-  if (options.goalModeActive && goalUsed < maxGoal) {
+  // Tools ran then stop: OMP goal mode continues while active (unbounded by default).
+  if (goalOk) {
     return {
       continue: true,
       reason: "goal_continuation",
@@ -121,8 +159,13 @@ export function shouldContinueAfterNaturalStop(options: {
     };
   }
 
-  // Breadth recovery when not in goal mode (or goal exhausted).
+  // Breadth recovery when not in goal mode (or goal not active / capped).
   // Cap only — do not require open todos (map-complete ≠ surface complete).
+  // Past maxContinues: do not grant premature either.
+  if (options.continueCount >= options.maxContinues) {
+    return { continue: false, reason: "max_continues", nextContinueCount: options.continueCount };
+  }
+
   const prematureUsed = Math.max(0, options.prematureStopCount ?? 0);
   const maxPremature = Math.max(0, options.maxPrematureStops ?? 0);
   if (prematureUsed < maxPremature) {

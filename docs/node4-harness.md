@@ -5,7 +5,7 @@
 > **This is the only product Node runtime.** Code lives in `node4/`.  
 > **Built-in seat `default`（工作台助手）** ships with every Node (platform data tools + light assist; no finding booking).  
 > **Expert packs** live under repo **`experts/`** (catalog); Node **installs** copies into a local install root to enable them.  
-> **Lab-only bare** `runtime`: no experts installed and explicit bare resolve — A/B vs packs; **not** the product UI default participant.  
+> **Lab bare** `runtime`: clean OMP-aligned Agent Runtime (no expert pack) — goal auto-continue unbounded while active; optional `token_budget` → budget-limited; no session wall. A/B vs packs; **not** the product UI default participant.  
 > Product conversation model: [`docs/platform-default-agent-refactor.md`](platform-default-agent-refactor.md) (no platform peer Agent).  
 > Legacy trees (`node/`, `node2/`, `node3/`) are reference-only and will be removed later.  
 > **No agent finish tool** — session end is harness/platform only.
@@ -19,7 +19,7 @@ Related product specs: `docs/prd.md`, `AGENTS.md`, `docs/node-expert-offers.md`,
 ```text
 OMP-class loop:  Map(todo) → Act(shell/write/edit/http…) → Book(finding+evidence)* → continue…
 Product booking: structured tools only (never chat-only conclusions)
-Task end:        platform / user cancel / natural stop / continue caps — NOT an agent finish tool
+Task end:        platform / user cancel / natural stop / goal complete|budget-limited / non-goal continue caps — NOT an agent finish tool
 Inspectability:  post-run task dir remains fully queryable
 ```
 
@@ -54,9 +54,9 @@ Interactive **TUI remains deferred**.
 | Map | `todo` phases (content-keyed; single in_progress; auto-promote); **map not prison** |
 | Act | Pack tools under task cwd (shell-first) |
 | Book | `finding` + evidence when `bookingMode=finding` |
-| Continue | Rare recovery: empty-stop budget, booking-gap, **breadth premature** (until `NODE4_MAX_PREMATURE_STOPS`, not gated on open todos), optional **goal_continuation** while goal active |
+| Continue | Rare recovery: empty-stop budget, booking-gap, **breadth premature** (until `NODE4_MAX_PREMATURE_STOPS`, not gated on open todos). **goal_continuation** while goal `active` is **unbounded** (OMP; no default continue count). Outer `NODE4_MAX_CONTINUES` does **not** stop goal mode. Optional lab cap only via `NODE4_MAX_GOAL_CONTINUES`. Optional `token_budget` → `budget-limited` stops auto-continue |
 | Session wall | **None** by design; per-tool timeouts remain |
-| Settle | Runner emits `task_complete` (natural stop / continue caps / abort) |
+| Settle | Runner emits `task_complete` (natural stop / goal complete|drop|budget-limited / non-goal continue caps / abort) |
 
 ---
 
@@ -152,7 +152,7 @@ Continue inject text steers: re-check recon/facts for untested surfaces, prefer 
 
 | Mechanism | Behavior |
 |-----------|----------|
-| `goal` | Active objective → harness may inject goal_continuation after natural stops (cap via env, e.g. `NODE4_MAX_CONTINUES` / goal continue limits). `complete` may be rejected if evidence audit fails; open goals do not alone invent product findings. |
+| `goal` | Active objective → harness injects **goal_continuation** after natural stops while `active` (**unbounded**, OMP-aligned; no default count). Optional `token_budget` → `budget-limited` soft stop. Lab-only hard cap: `NODE4_MAX_GOAL_CONTINUES`. Outer `NODE4_MAX_CONTINUES` does not stop goal mode. Product maximize may still require `audit_notes` + `remaining_unsolved=0` on complete; min continues/stalls default **0**. Open goals do not invent product findings. |
 | `subagent` | Child under `taskDir/subagents/<id>`; evidence written |
 
 ### Subagent handoff contract (A1 / D3)

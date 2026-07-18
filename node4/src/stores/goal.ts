@@ -1,12 +1,13 @@
 /**
  * OMP-style goal mode (clean-room): one persistent objective + status machine.
  * While status is "active", the session-runner injects goal-continuation after
- * natural stops. complete() is gated so the agent cannot soft-exit maximize
- * objectives after partial progress (no target answer keys — progress is
- * measured by booked findings / evidence growth).
+ * natural stops — **unbounded** (no default continue count; OMP-aligned).
+ * Optional token_budget → status becomes budget-limited and auto-continue stops.
+ * complete() may still apply product maximize gates (audit / remaining_unsolved);
+ * min continues/stalls default to 0 (OMP free complete on those axes).
  */
 
-export type GoalModeStatus = "active" | "paused" | "complete" | "dropped";
+export type GoalModeStatus = "active" | "paused" | "budget-limited" | "complete" | "dropped";
 
 /** Single long-task goal (OMP Goal shape, simplified). */
 export type ModeGoal = {
@@ -23,7 +24,7 @@ export type ModeGoal = {
   lastEvidenceCount: number;
   /** Consecutive segments with no growth in findings (and no big evidence jump). */
   segmentsWithoutProgress: number;
-  /** How many goal_continuation injects the harness has already done. */
+  /** How many goal_continuation injects the harness has already done (telemetry). */
   goalContinueCount: number;
 };
 
@@ -43,7 +44,7 @@ export type GoalSnapshot = {
 
 export type CompleteAttempt = {
   id?: string;
-  /** Required non-trivial audit text unless force. */
+  /** Required non-trivial audit text unless force (when gates demand it). */
   auditNotes?: string;
   /** Optional agent estimate of remaining unsolved items from its own recon. */
   remainingUnsolved?: number;
@@ -60,12 +61,21 @@ export function goalCompleteGatesFromEnv(): {
   minGoalContinues: number;
   minStalls: number;
   minAuditChars: number;
+  /** When true (default), require audit_notes + remaining_unsolved=0 (product maximize). */
+  requireClearanceFields: boolean;
 } {
+  // OMP complete is free on continue/stall counts. Defaults are 0 (no artificial wait).
+  // Product maximize can still require audit + remaining_unsolved via requireClearanceFields.
+  const requireClearanceRaw = process.env.NODE4_GOAL_REQUIRE_CLEARANCE;
+  const requireClearanceFields =
+    requireClearanceRaw == null || requireClearanceRaw === ""
+      ? true
+      : !["0", "false", "off", "no"].includes(requireClearanceRaw.toLowerCase());
   return {
-    // Defaults favor multi-level maximize runs (CTF/DVWA tails need several outer pushes).
-    minGoalContinues: Math.max(0, Number(process.env.NODE4_GOAL_MIN_CONTINUES ?? 3)),
-    minStalls: Math.max(0, Number(process.env.NODE4_GOAL_MIN_STALLS ?? 3)),
+    minGoalContinues: Math.max(0, Number(process.env.NODE4_GOAL_MIN_CONTINUES ?? 0)),
+    minStalls: Math.max(0, Number(process.env.NODE4_GOAL_MIN_STALLS ?? 0)),
     minAuditChars: Math.max(20, Number(process.env.NODE4_GOAL_MIN_AUDIT_CHARS ?? 120)),
+    requireClearanceFields,
   };
 }
 
@@ -78,6 +88,7 @@ export class GoalStore {
     return this.mode ? { ...this.mode, subagentIds: [...this.mode.subagentIds] } : null;
   }
 
+  /** True only when status is active — budget-limited / paused do not auto-continue. */
   isActive(): boolean {
     return this.mode?.status === "active";
   }
@@ -127,7 +138,7 @@ export class GoalStore {
     toolsInSegment: number;
     goalContinueCount?: number;
   }): void {
-    if (!this.mode || this.mode.status !== "active") return;
+    if (!this.mode || (this.mode.status !== "active" && this.mode.status !== "budget-limited")) return;
     const booked = Math.max(0, Math.floor(input.bookedFindings));
     const evidence = Math.max(0, Math.floor(input.evidenceCount));
     if (input.goalContinueCount != null) {
@@ -152,47 +163,83 @@ export class GoalStore {
     this.mode.updatedAt = new Date().toISOString();
   }
 
-  /** OMP-style: accumulate tokens from assistant turns while goal is active. */
-  addTokensUsed(delta: number): void {
-    if (!this.mode || this.mode.status !== "active") return;
+  /**
+   * OMP-style: accumulate tokens from assistant turns while goal is accounting
+   * (active or budget-limited). When tokenBudget is set and tokensUsed >= budget,
+   * flips status to budget-limited (auto-continuation stops).
+   * @returns true if this call flipped status to budget-limited
+   */
+  addTokensUsed(delta: number): boolean {
+    if (!this.mode) return false;
+    if (this.mode.status !== "active" && this.mode.status !== "budget-limited") return false;
     const n = Math.max(0, Math.floor(Number(delta) || 0));
-    if (n <= 0) return;
+    if (n <= 0) return false;
     this.mode.tokensUsed += n;
     this.mode.updatedAt = new Date().toISOString();
+    if (
+      this.mode.tokenBudget !== undefined &&
+      this.mode.tokensUsed >= this.mode.tokenBudget &&
+      this.mode.status === "active"
+    ) {
+      this.mode.status = "budget-limited";
+      return true;
+    }
+    return false;
+  }
+
+  /** Optional raise/clear budget (OMP setBudget). May re-activate from budget-limited. */
+  setTokenBudget(budget: number | undefined): ModeGoal | undefined {
+    if (!this.mode) return undefined;
+    if (budget !== undefined && (!Number.isFinite(budget) || budget <= 0)) {
+      throw new Error("token_budget must be a positive number when provided");
+    }
+    this.mode.tokenBudget = budget;
+    this.mode.updatedAt = new Date().toISOString();
+    if (budget !== undefined && this.mode.tokensUsed >= budget) {
+      if (this.mode.status === "active") this.mode.status = "budget-limited";
+    } else if (this.mode.status === "budget-limited") {
+      this.mode.status = "active";
+    }
+    return this.getMode()!;
   }
 
   /** Compute whether complete is allowed (pure helper for smokes). */
   completeBlockers(opts?: CompleteAttempt): string[] {
     const gates = goalCompleteGatesFromEnv();
     const g = this.mode;
-    if (!g || g.status !== "active") return ["no active goal"];
+    if (!g) return ["no active goal"];
+    if (g.status === "complete") return ["goal already complete"];
+    if (g.status === "dropped") return ["goal was dropped"];
+    if (g.status === "paused") return ["goal is paused — resume first"];
+    // active and budget-limited may complete (OMP).
     if (opts?.force) return [];
     const blockers: string[] = [];
-    const audit = String(opts?.auditNotes || "").trim();
-    if (audit.length < gates.minAuditChars) {
-      blockers.push(
-        `audit_notes required (≥${gates.minAuditChars} chars): re-list every challenge/level from YOUR recon, mark solved vs blocked, and why each residual is exhausted`,
-      );
-    }
-    if (g.goalContinueCount < gates.minGoalContinues) {
+    if (gates.minGoalContinues > 0 && g.goalContinueCount < gates.minGoalContinues) {
       blockers.push(
         `need at least ${gates.minGoalContinues} harness goal_continuation(s) before complete (have ${g.goalContinueCount}); keep working the FULL objective — do not shrink success to easy wins`,
       );
     }
-    if (g.segmentsWithoutProgress < gates.minStalls) {
+    if (gates.minStalls > 0 && g.segmentsWithoutProgress < gates.minStalls) {
       blockers.push(
         `need ${gates.minStalls} consecutive no-progress segments after pushes (have ${g.segmentsWithoutProgress}); rotate techniques on stalled items and attack remaining levels from your recon`,
       );
     }
-    // remaining_unsolved is required (agent's own recon count) — omit is not "done".
-    if (opts?.remainingUnsolved == null || !Number.isFinite(Number(opts.remainingUnsolved))) {
-      blockers.push(
-        "remaining_unsolved is required: set to your recon count of unfinished challenges; use 0 only after every enumerated item is solved or proven blocked",
-      );
-    } else if (Number(opts.remainingUnsolved) > 0) {
-      blockers.push(
-        `remaining_unsolved=${opts.remainingUnsolved} > 0 — keep attacking remaining items from your own recon; do not complete partial maximize runs`,
-      );
+    if (gates.requireClearanceFields) {
+      const audit = String(opts?.auditNotes || "").trim();
+      if (audit.length < gates.minAuditChars) {
+        blockers.push(
+          `audit_notes required (≥${gates.minAuditChars} chars): re-list every challenge/level from YOUR recon, mark solved vs blocked, and why each residual is exhausted`,
+        );
+      }
+      if (opts?.remainingUnsolved == null || !Number.isFinite(Number(opts.remainingUnsolved))) {
+        blockers.push(
+          "remaining_unsolved is required: set to your recon count of unfinished challenges; use 0 only after every enumerated item is solved or proven blocked",
+        );
+      } else if (Number(opts.remainingUnsolved) > 0) {
+        blockers.push(
+          `remaining_unsolved=${opts.remainingUnsolved} > 0 — keep attacking remaining items from your own recon; do not complete partial maximize runs`,
+        );
+      }
     }
     return blockers;
   }
@@ -202,11 +249,27 @@ export class GoalStore {
     if (opts?.id && this.mode.id !== opts.id) {
       return { ok: false, error: "goal id mismatch", blockers: ["goal id mismatch"], goal: this.getMode() };
     }
-    if (this.mode.status !== "active") {
+    if (this.mode.status === "complete") {
       return {
         ok: false,
-        error: `goal status is ${this.mode.status}`,
-        blockers: [`status=${this.mode.status}`],
+        error: "goal status is complete",
+        blockers: ["status=complete"],
+        goal: this.getMode(),
+      };
+    }
+    if (this.mode.status === "dropped") {
+      return {
+        ok: false,
+        error: "goal status is dropped",
+        blockers: ["status=dropped"],
+        goal: this.getMode(),
+      };
+    }
+    if (this.mode.status === "paused") {
+      return {
+        ok: false,
+        error: "goal status is paused",
+        blockers: ["status=paused"],
         goal: this.getMode(),
       };
     }
@@ -249,7 +312,15 @@ export class GoalStore {
     if (!this.mode) return undefined;
     if (this.mode.status === "complete") throw new Error("Goal is already complete");
     if (this.mode.status === "dropped") throw new Error("Goal was dropped");
-    this.mode.status = "active";
+    // From paused or budget-limited → active when under budget (or no budget).
+    if (
+      this.mode.tokenBudget !== undefined &&
+      this.mode.tokensUsed >= this.mode.tokenBudget
+    ) {
+      this.mode.status = "budget-limited";
+    } else {
+      this.mode.status = "active";
+    }
     this.mode.updatedAt = new Date().toISOString();
     return this.getMode()!;
   }
@@ -267,7 +338,7 @@ export class GoalStore {
 
   snapshot(): GoalSnapshot {
     const mode = this.getMode();
-    // Structural readiness assumes agent will supply long audit + remaining_unsolved=0.
+    // Structural readiness assumes agent will supply long audit + remaining_unsolved=0 when required.
     const structural = mode
       ? this.completeBlockers({
           auditNotes: "x".repeat(200),
@@ -277,7 +348,10 @@ export class GoalStore {
       : ["no active goal"];
     return {
       mode,
-      openCount: mode?.status === "active" || mode?.status === "paused" ? 1 : 0,
+      openCount:
+        mode?.status === "active" || mode?.status === "paused" || mode?.status === "budget-limited"
+          ? 1
+          : 0,
       goals: this.list(),
       progress: mode
         ? {
@@ -298,20 +372,39 @@ export class GoalStore {
     if (g.status === "active") {
       const gates = goalCompleteGatesFromEnv();
       const blockers = this.completeBlockers({ force: false });
+      const budgetLine =
+        g.tokenBudget !== undefined
+          ? `tokens: ${g.tokensUsed} / ${g.tokenBudget} (auto-continue stops at budget → budget-limited)`
+          : `tokens: ${g.tokensUsed} used (no token_budget — unbounded OMP continue while active)`;
       return [
         "<goal_context>",
         "Goal mode is active. Treat the objective as the FULL task (do not shrink to easy wins).",
         `<objective>\n${g.objective}\n</objective>`,
         `status: active; id: ${g.id}`,
+        budgetLine,
         `progress: booked_findings=${g.lastBookedFindingCount} evidence=${g.lastEvidenceCount} stalls=${g.segmentsWithoutProgress} goal_continues=${g.goalContinueCount}`,
-        `complete_gates: min_goal_continues=${gates.minGoalContinues} min_stalls=${gates.minStalls} audit_chars≥${gates.minAuditChars}; remaining_unsolved must be 0`,
+        gates.requireClearanceFields
+          ? `complete_gates: min_goal_continues=${gates.minGoalContinues} min_stalls=${gates.minStalls} audit_chars≥${gates.minAuditChars}; remaining_unsolved must be 0`
+          : `complete_gates: OMP-free complete (no clearance fields required); optional min_goal_continues=${gates.minGoalContinues} min_stalls=${gates.minStalls}`,
         blockers.length
           ? `complete_blockers_now: ${blockers.join(" | ")}`
-          : "complete_gates: structural ok — still require detailed audit_notes + remaining_unsolved=0",
+          : "complete_gates: structural ok — still require detailed audit_notes + remaining_unsolved=0 if clearance fields enabled",
         "Keep attacking remaining levels/categories from YOUR recon with dense shell until every enumerated item is solved or proven blocked.",
-        "goal(op=complete) requires audit_notes AND remaining_unsolved=0; incomplete maximize runs are rejected.",
+        gates.requireClearanceFields
+          ? "goal(op=complete) requires audit_notes AND remaining_unsolved=0; incomplete maximize runs are rejected."
+          : "goal(op=complete) ends auto-continuation (OMP).",
         "Do not goal(drop) to soft-exit a maximize objective — finish residual levels first.",
-        "Harness auto-continues while active. There is no finish tool.",
+        "Harness auto-continues while active with **no default continue count** (OMP). Optional token_budget is the soft stop. There is no finish tool.",
+        "</goal_context>",
+      ].join("\n");
+    }
+    if (g.status === "budget-limited") {
+      return [
+        "<goal_context>",
+        "Goal mode is **budget-limited** (token budget exhausted). Auto-continuation has stopped.",
+        `<objective>\n${g.objective}\n</objective>`,
+        `tokens: ${g.tokensUsed}${g.tokenBudget != null ? ` / ${g.tokenBudget}` : ""}`,
+        "You may goal(complete) if the objective is done, goal(drop), or ask the user to raise budget / resume after setTokenBudget.",
         "</goal_context>",
       ].join("\n");
     }
@@ -325,13 +418,17 @@ export function buildGoalContinuationPrompt(goal: ModeGoal): string {
     goal.segmentsWithoutProgress > 0
       ? `You have ${goal.segmentsWithoutProgress} no-progress segment(s). Rotate techniques on stalled challenges (encoding, auth path, alternate params, source/JS recon, multi-step shell pipelines) — do not re-run the same single probe.`
       : `Findings are still growing or a fresh push just started — keep dense shell on the next unfinished item from your recon.`;
+  const budgetHint =
+    goal.tokenBudget !== undefined
+      ? `Token budget: ${goal.tokensUsed} / ${goal.tokenBudget} used.`
+      : `Token budget: unbounded (OMP).`;
   return [
     `<system-injection customType="goal-continuation">`,
     `Continue work on the active goal (harness goal_continuation #${goal.goalContinueCount + 1}).`,
     `<objective>`,
     goal.objective,
     `</objective>`,
-    `Progress so far (harness): booked_findings≈${goal.lastBookedFindingCount}, evidence≈${goal.lastEvidenceCount}, no_progress_segments=${goal.segmentsWithoutProgress}.`,
+    `Progress so far (harness): booked_findings≈${goal.lastBookedFindingCount}, evidence≈${goal.lastEvidenceCount}, no_progress_segments=${goal.segmentsWithoutProgress}. ${budgetHint}`,
     stallHint,
     `Mandatory this segment:`,
     `1) Mentally re-list every level/challenge you already discovered; pick ONE unfinished item and attack it with dense shell now.`,
@@ -340,7 +437,7 @@ export function buildGoalContinuationPrompt(goal: ModeGoal): string {
     `4) Do NOT call goal(complete) unless remaining_unsolved=0 after a full re-enumeration of your recon (and gates pass). Do not drop the goal to soft-exit.`,
     `NEVER redefine success around a smaller subset of easy wins. Partial clearance is not done.`,
     `If unfinished: just keep working. Do not only narrate.`,
-    `There is no finish tool.`,
+    `There is no finish tool. Harness keeps auto-continuing while goal is active (no continue-count cap).`,
     `</system-injection>`,
   ].join("\n");
 }

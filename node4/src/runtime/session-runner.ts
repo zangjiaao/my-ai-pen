@@ -289,6 +289,7 @@ export async function runNode4Task(
   // Discovery is in-loop (pi agent-loop). No session wall.
   // Pure chat-only (expert, no target): no outer continues.
   // Ledger-assist default seat: small continue budget so report = list vulns → create_report can finish.
+  // maxContinues bounds **non-goal** recovery only; while goal is active, OMP auto-continue is unbounded.
   const maxContinues = ledgerAssistSeat
     ? Math.max(0, Number(process.env.NODE4_MAX_CONTINUES_DEFAULT ?? 6))
     : chatOnly
@@ -297,9 +298,23 @@ export async function runNode4Task(
   const maxEmptyStopStreak = chatOnly && !ledgerAssistSeat ? 0 : Math.max(0, Number(process.env.NODE4_MAX_EMPTY_STOPS ?? 1));
   const maxPrematureStops =
     chatOnly && !ledgerAssistSeat ? 0 : Math.max(0, Number(process.env.NODE4_MAX_PREMATURE_STOPS ?? 3));
-  // Allow enough goal pushes to cover multi-level CTF tails without empty thrash.
-  const maxGoalContinues =
-    chatOnly && !ledgerAssistSeat ? 0 : Math.max(0, Number(process.env.NODE4_MAX_GOAL_CONTINUES ?? 16));
+  // OMP-aligned: unlimited goal_continuation while active (no default count).
+  // Set NODE4_MAX_GOAL_CONTINUES to a positive integer only for lab hard caps.
+  // Unset / "unlimited" / negative → unlimited (undefined). 0 = goal continues off.
+  const maxGoalContinues = (() => {
+    if (chatOnly && !ledgerAssistSeat) return 0;
+    const raw = process.env.NODE4_MAX_GOAL_CONTINUES;
+    if (raw == null || raw.trim() === "" || raw.trim().toLowerCase() === "unlimited") {
+      return undefined;
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) return undefined;
+    return Math.floor(n);
+  })();
+  const maxGoalLabel =
+    maxGoalContinues == null || !Number.isFinite(maxGoalContinues) || maxGoalContinues < 0
+      ? "∞"
+      : String(maxGoalContinues);
   let continueCount = 0;
   let emptyStopStreak = 0;
   let bookingContinueUsed = false;
@@ -421,7 +436,7 @@ export async function runNode4Task(
         formatCaseContextInjection(task.caseContext),
         "",
         `Role pack: ${pack.id}. OMP essence: keep tool-calling in-loop; shell-first multi-step + multi-call same turn; http is single-probe only.`,
-        "Long multi-challenge work: call goal(op=create, objective=...) early so the harness can auto-continue (OMP goal mode) until full clearance — complete only with remaining_unsolved=0 after real audit (partial wins are not done).",
+        "Long multi-challenge work: call goal(op=create, objective=...) early so the harness auto-continues while active with **no continue-count cap** (OMP). Optional token_budget → budget-limited soft stop. complete only with remaining_unsolved=0 after real audit when clearance fields apply (partial wins are not done).",
         pack.bookingMode === "finding"
           ? "Book via finding(confirm) with proof= quoted from tool output. When truly stuck after dense shell work, stop with no tools — no finish tool; harness settles."
           : "This pack does not book findings. When finished, simply stop — harness settles.",
@@ -524,7 +539,7 @@ export async function runNode4Task(
       type: "status_update",
       conversation_id: task.conversationId,
       task_id: task.taskId,
-      message: `continue ${continueCount}/${maxContinues} (${decision.reason}) goal=${goalContinueCount}/${maxGoalContinues} premature=${prematureStopCount}/${maxPrematureStops} evidence=${evidenceList.length} findings=${bookedSoFar.count}`,
+      message: `continue ${continueCount}/${maxContinues} (${decision.reason}) goal=${goalContinueCount}/${maxGoalLabel} premature=${prematureStopCount}/${maxPrematureStops} evidence=${evidenceList.length} findings=${bookedSoFar.count}`,
       agent_phase: "continue",
       status: "running",
       llm_usage: usage.snapshot({ tool_calls: obsCounters.toolCallCount }),
