@@ -1,13 +1,15 @@
 """Global operations dashboard — information hub (user-scoped).
 
-Sections: vulnerabilities, assets, nodes, tasks (conversations), schedules.
-Conversation remains the product home; this is a status board only.
+Card layout (frontend):
+  1. KPI strip
+  2. 资产对应漏洞 | 新增漏洞 | 修复状态
+  3. 节点 | 专家 | 任务
 """
 from __future__ import annotations
 
 import os
 import uuid
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
 from fastapi import APIRouter, Depends
@@ -20,6 +22,7 @@ from app.db.base import get_db
 from app.middleware.auth import get_current_user
 from app.models.asset import Asset
 from app.models.conversation import Conversation
+from app.models.expert import Expert
 from app.models.node import PLATFORM_AGENT_NODE_ID, Node
 from app.models.vulnerability import Vulnerability
 from app.services.conversation_state import reconcile_conversation_status_from_checkpoint
@@ -29,6 +32,7 @@ router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 _SEVERITIES = ("critical", "high", "medium", "low", "info")
 _STATUSES = ("to_fix", "fixing", "fixed")
+_SEV_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
 _STATUS_LABEL = {
     "to_fix": "待修复",
@@ -42,9 +46,6 @@ def _schedule_store():
     return get_schedule_store(Path(path) if path else None)
 
 
-# ----- section models -----
-
-
 class FindingItem(BaseModel):
     id: str
     title: str
@@ -53,6 +54,7 @@ class FindingItem(BaseModel):
     status_label: str
     discovered_at: str | None = None
     conversation_id: str | None = None
+    asset_id: str | None = None
 
 
 class VulnSection(BaseModel):
@@ -63,18 +65,24 @@ class VulnSection(BaseModel):
     recent: list[FindingItem] = Field(default_factory=list)
 
 
-class AssetItem(BaseModel):
+class AssetRiskItem(BaseModel):
+    """Asset with open vulnerability stats (资产对应漏洞)."""
+
     id: str
     name: str
     address: str
     type: str
+    open_vulns: int = 0
+    total_vulns: int = 0
+    highest_severity: str | None = None
     tags: list[str] = Field(default_factory=list)
     updated_at: str | None = None
 
 
 class AssetSection(BaseModel):
     total: int = 0
-    recent: list[AssetItem] = Field(default_factory=list)
+    with_open_vulns: int = 0
+    items: list[AssetRiskItem] = Field(default_factory=list)
 
 
 class NodeItem(BaseModel):
@@ -84,6 +92,7 @@ class NodeItem(BaseModel):
     type: str
     current_sessions: int = 0
     last_heartbeat: str | None = None
+    offers: list[str] = Field(default_factory=list)
 
 
 class NodeSection(BaseModel):
@@ -91,6 +100,20 @@ class NodeSection(BaseModel):
     online: int = 0
     offline: int = 0
     items: list[NodeItem] = Field(default_factory=list)
+
+
+class ExpertItem(BaseModel):
+    id: str
+    name: str
+    pack_id: str
+    node_id: str
+    node_name: str | None = None
+    enabled: bool = True
+
+
+class ExpertSection(BaseModel):
+    total: int = 0
+    items: list[ExpertItem] = Field(default_factory=list)
 
 
 class TaskItem(BaseModel):
@@ -126,15 +149,14 @@ class ScheduleSection(BaseModel):
 
 
 class DashboardSummaryOut(BaseModel):
-    """Aggregated hub payload."""
-
     vulnerabilities: VulnSection = Field(default_factory=VulnSection)
     assets: AssetSection = Field(default_factory=AssetSection)
     nodes: NodeSection = Field(default_factory=NodeSection)
+    experts: ExpertSection = Field(default_factory=ExpertSection)
     tasks: TaskSection = Field(default_factory=TaskSection)
     schedules: ScheduleSection = Field(default_factory=ScheduleSection)
 
-    # Back-compat flat fields (older frontend / bookmarks)
+    # flat KPI helpers
     assets_total: int = 0
     conversations_total: int = 0
     nodes_online: int = 0
@@ -144,11 +166,18 @@ class DashboardSummaryOut(BaseModel):
     by_severity: dict[str, int] = Field(default_factory=dict)
     open_total: int = 0
     recent_findings: list[FindingItem] = Field(default_factory=list)
+    experts_total: int = 0
+    schedules_total: int = 0
 
 
 def _conv_working(status: str) -> bool:
-    s = (status or "").lower()
-    return s in {"running", "working", "busy"}
+    return (status or "").lower() in {"running", "working", "busy"}
+
+
+def _highest_sev(sevs: list[str]) -> str | None:
+    if not sevs:
+        return None
+    return min(sevs, key=lambda s: _SEV_RANK.get(s, 9))
 
 
 @router.get("/summary", response_model=DashboardSummaryOut)
@@ -159,37 +188,89 @@ async def dashboard_summary(
     user_id = uuid.UUID(str(current_user["user_id"]))
     uid_str = str(current_user["user_id"])
 
-    # --- assets ---
+    # --- vulnerabilities ---
+    vulns = (
+        await db.execute(select(Vulnerability).where(Vulnerability.user_id == user_id))
+    ).scalars().all()
+    by_status = Counter({s: 0 for s in _STATUSES})
+    by_severity = Counter({s: 0 for s in _SEVERITIES})
+    open_by_asset: dict[str, list[str]] = defaultdict(list)
+    total_by_asset: Counter[str] = Counter()
+    for v in vulns:
+        st = normalize_status(v.status)
+        by_status[st] = by_status.get(st, 0) + 1
+        sev = str(v.severity or "info").strip().lower() or "info"
+        if sev not in by_severity:
+            sev = "info"
+        by_severity[sev] = by_severity.get(sev, 0) + 1
+        if v.asset_id:
+            aid = str(v.asset_id)
+            total_by_asset[aid] += 1
+            if st in ("to_fix", "fixing"):
+                open_by_asset[aid].append(sev)
+    open_total = int(by_status.get("to_fix", 0) + by_status.get("fixing", 0))
+    sorted_vulns = sorted(
+        vulns,
+        key=lambda v: v.discovered_at or v.updated_at,
+        reverse=True,
+    )[:12]
+    recent_findings = [
+        FindingItem(
+            id=str(v.id),
+            title=v.title,
+            severity=str(v.severity or "info").lower(),
+            status=normalize_status(v.status),
+            status_label=_STATUS_LABEL.get(normalize_status(v.status), normalize_status(v.status)),
+            discovered_at=v.discovered_at.isoformat() if v.discovered_at else None,
+            conversation_id=str(v.conversation_id) if v.conversation_id else None,
+            asset_id=str(v.asset_id) if v.asset_id else None,
+        )
+        for v in sorted_vulns
+    ]
+    vuln_section = VulnSection(
+        total=len(vulns),
+        open_total=open_total,
+        by_status=dict(by_status),
+        by_severity=dict(by_severity),
+        recent=recent_findings,
+    )
+
+    # --- assets + open vuln mapping ---
     assets = (
         await db.execute(
-            select(Asset)
-            .where(Asset.user_id == user_id)
-            .order_by(Asset.updated_at.desc())
-            .limit(8)
+            select(Asset).where(Asset.user_id == user_id).order_by(Asset.updated_at.desc())
         )
     ).scalars().all()
-    assets_total = int(
-        (
-            await db.execute(select(func.count()).select_from(Asset).where(Asset.user_id == user_id))
-        ).scalar_one()
-        or 0
-    )
-    asset_section = AssetSection(
-        total=assets_total,
-        recent=[
-            AssetItem(
-                id=str(a.id),
+    asset_items: list[AssetRiskItem] = []
+    with_open = 0
+    for a in assets:
+        aid = str(a.id)
+        open_sevs = open_by_asset.get(aid) or []
+        open_n = len(open_sevs)
+        if open_n:
+            with_open += 1
+        asset_items.append(
+            AssetRiskItem(
+                id=aid,
                 name=a.name,
                 address=a.address,
                 type=a.type,
+                open_vulns=open_n,
+                total_vulns=int(total_by_asset.get(aid, 0)),
+                highest_severity=_highest_sev(open_sevs),
                 tags=list(a.tags or []),
                 updated_at=a.updated_at.isoformat() if a.updated_at else None,
             )
-            for a in assets
-        ],
+        )
+    # Prefer assets with open vulns first for the card
+    asset_items.sort(key=lambda x: (-x.open_vulns, x.address))
+    asset_section = AssetSection(
+        total=len(assets),
+        with_open_vulns=with_open,
+        items=asset_items[:12],
     )
 
-    # --- nodes (worker only) ---
+    # --- nodes ---
     nodes = (
         await db.execute(
             select(Node)
@@ -210,12 +291,35 @@ async def dashboard_summary(
                 type=n.type or "pentest",
                 current_sessions=int(n.current_sessions or 0),
                 last_heartbeat=n.last_heartbeat.isoformat() if n.last_heartbeat else None,
+                offers=list((n.config or {}).get("offers") or [])
+                if isinstance(n.config, dict)
+                else [],
             )
             for n in nodes[:12]
         ],
     )
+    node_name_by_id = {str(n.id): n.name for n in nodes}
 
-    # --- tasks / conversations ---
+    # --- experts ---
+    experts = (
+        await db.execute(select(Expert).order_by(Expert.name.asc()).limit(40))
+    ).scalars().all()
+    expert_section = ExpertSection(
+        total=len(experts),
+        items=[
+            ExpertItem(
+                id=str(e.id),
+                name=e.name,
+                pack_id=e.pack_id,
+                node_id=str(e.node_id),
+                node_name=node_name_by_id.get(str(e.node_id)),
+                enabled=bool(getattr(e, "enabled", True)),
+            )
+            for e in experts[:12]
+        ],
+    )
+
+    # --- tasks ---
     convs = (
         await db.execute(
             select(Conversation)
@@ -239,10 +343,6 @@ async def dashboard_summary(
         ).scalar_one()
         or 0
     )
-    by_task_status: Counter[str] = Counter()
-    for c in convs:
-        by_task_status[str(c.status or "unknown")] += 1
-    # Approximate global by_status from recent page if total > sample — better query all statuses lightly
     all_status_rows = (
         await db.execute(
             select(Conversation.status, func.count())
@@ -251,7 +351,6 @@ async def dashboard_summary(
         )
     ).all()
     by_task_status = Counter({str(s or "unknown"): int(n) for s, n in all_status_rows})
-    # Active tasks only (running / working / busy)
     active_running = sum(
         n for s, n in by_task_status.items() if str(s).lower() in {"running", "working", "busy"}
     )
@@ -272,46 +371,7 @@ async def dashboard_summary(
         ],
     )
 
-    # --- vulnerabilities ---
-    vulns = (
-        await db.execute(select(Vulnerability).where(Vulnerability.user_id == user_id))
-    ).scalars().all()
-    by_status = Counter({s: 0 for s in _STATUSES})
-    by_severity = Counter({s: 0 for s in _SEVERITIES})
-    for v in vulns:
-        st = normalize_status(v.status)
-        by_status[st] = by_status.get(st, 0) + 1
-        sev = str(v.severity or "info").strip().lower() or "info"
-        if sev not in by_severity:
-            sev = "info"
-        by_severity[sev] = by_severity.get(sev, 0) + 1
-    open_total = int(by_status.get("to_fix", 0) + by_status.get("fixing", 0))
-    sorted_vulns = sorted(
-        vulns,
-        key=lambda v: v.discovered_at or v.updated_at,
-        reverse=True,
-    )[:10]
-    recent_findings = [
-        FindingItem(
-            id=str(v.id),
-            title=v.title,
-            severity=str(v.severity or "info").lower(),
-            status=normalize_status(v.status),
-            status_label=_STATUS_LABEL.get(normalize_status(v.status), normalize_status(v.status)),
-            discovered_at=v.discovered_at.isoformat() if v.discovered_at else None,
-            conversation_id=str(v.conversation_id) if v.conversation_id else None,
-        )
-        for v in sorted_vulns
-    ]
-    vuln_section = VulnSection(
-        total=len(vulns),
-        open_total=open_total,
-        by_status=dict(by_status),
-        by_severity=dict(by_severity),
-        recent=recent_findings,
-    )
-
-    # --- schedules ---
+    # --- schedules (still in payload for task card footer / future) ---
     store = _schedule_store()
     schedules = store.list_for_user(uid_str)
     schedule_section = ScheduleSection(
@@ -327,10 +387,7 @@ async def dashboard_summary(
                 next_fire_at=s.next_fire_at,
                 last_fire_at=s.last_fire_at,
             )
-            for s in sorted(
-                schedules,
-                key=lambda x: x.next_fire_at or x.created_at or "",
-            )[:10]
+            for s in sorted(schedules, key=lambda x: x.next_fire_at or x.created_at or "")[:8]
         ],
     )
 
@@ -338,9 +395,10 @@ async def dashboard_summary(
         vulnerabilities=vuln_section,
         assets=asset_section,
         nodes=node_section,
+        experts=expert_section,
         tasks=task_section,
         schedules=schedule_section,
-        assets_total=assets_total,
+        assets_total=len(assets),
         conversations_total=conv_total,
         nodes_online=online,
         nodes_total=len(nodes),
@@ -349,4 +407,6 @@ async def dashboard_summary(
         by_severity=dict(by_severity),
         open_total=open_total,
         recent_findings=recent_findings,
+        experts_total=len(experts),
+        schedules_total=len(schedules),
     )
