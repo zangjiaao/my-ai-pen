@@ -1,0 +1,51 @@
+# Product path smoke (platform + node4). Does not scan research/ or legacy node trees.
+name: product-smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "platform/**"
+      - "node4/**"
+      - "experts/**"
+      - ".github/workflows/product-smoke.yml"
+  pull_request:
+    paths:
+      - "platform/**"
+      - "node4/**"
+      - "experts/**"
+      - ".github/workflows/product-smoke.yml"
+
+jobs:
+  frontend-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: platform/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: platform/frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+  node4-smoke:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: node4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: node4/package-lock.json
+      - run: npm ci
+      - run: npx tsx src/node4-smoke.ts
+        env:
+          # No live LLM required for unit smokes
+          CI: "1"

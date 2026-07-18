@@ -84,14 +84,16 @@ Spec 权威：`AGENTS.md` → `docs/prd.md` → `docs/node4-harness.md`。
 
 ## 7. 验收清单（够用就发）
 
-- [ ] 登录 → 默认进入 **会话**（Agent 主入口）  
-- [ ] 侧栏可打开 **状态看板**，数字来自台账  
-- [ ] 在线 Node + 专家包 → 对白名单目标执行 → finding 入漏洞页  
-- [ ] 证据可打开；报告可下载  
-- [ ] 可中断任务；高风险可授权卡  
-- [ ] 定时计划可创建/启停（若 worker 可用则可见 last fire）  
-- [ ] Logo / 登录分栏可用；右栏入场不卡消息流  
-- [ ] 本文档与 compose/env 示例可按步骤起环境  
+- [x] 登录 → 默认进入 **会话**（Agent 主入口）  
+- [x] 侧栏 **状态看板**（`/dashboard`，在资产管理上方）  
+- [x] 漏洞页 query 深链（`?status=` / `?severity=`）  
+- [x] 任务计划 UI（`/schedules` + 手动 tick）  
+- [x] Logo / favicon / 登录左右分栏动效 / 右栏进入动效  
+- [ ] 在线 Node + 专家包 → 对白名单目标执行 → finding 入漏洞页（需环境联调）  
+- [ ] 证据可打开；报告可下载（需环境联调）  
+- [ ] 可中断任务；高风险可授权卡（需环境联调）  
+- [x] 本文档与 `platform/backend/.env.example`、`node4/.env.example`  
+- [x] 最小 CI：`.github/workflows/product-smoke.yml`
 
 ---
 
