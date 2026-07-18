@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 import RightPanel from "../components/RightPanel";
@@ -20,7 +21,16 @@ import { ENGAGEMENT_TEMPLATES, expertLabel, resolveExpertColor, type ExpertId } 
 const ACTIVE_CONVERSATION_KEY = "active_conversation_id";
 /** Set by AssetPage when launching a task from selected hosts/ports. */
 const PENDING_ASSET_TASK_KEY = "pending_asset_task";
+/**
+ * Set by Sidebar「新建会话」. Survives React StrictMode remount (unlike a one-shot
+ * consume-before-remount session flag alone). Cleared after blank restore.
+ */
+const PREFER_BLANK_CHAT_KEY = "prefer_blank_chat";
 const MESSAGE_PAGE_SIZE = 200;
+
+type ConversationLocationState = {
+  preferBlankChat?: boolean;
+};
 
 /** Product expert instance from /api/experts (routable via @name). */
 type ProductExpert = {
@@ -156,6 +166,8 @@ type ConversationSnapshot = {
 export default function ConversationPage() {
   const { conversations, fetchAll, patchConversation } = useConversationStore();
   const queryClient = useQueryClient();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [activeId, setActiveId] = useState<string | null>(null);
   const [restoreAttempted, setRestoreAttempted] = useState(false);
   const [stateSnapshotLoaded, setStateSnapshotLoaded] = useState(false);
@@ -1161,6 +1173,12 @@ export default function ConversationPage() {
       resetConversationState();
       return;
     }
+    // Selecting a real session cancels any pending blank-chat intent.
+    try {
+      sessionStorage.removeItem(PREFER_BLANK_CHAT_KEY);
+    } catch {
+      /* ignore */
+    }
 
     setStateSnapshotLoaded(false);
     pendingScrollToBottomRef.current = true;
@@ -1292,21 +1310,48 @@ export default function ConversationPage() {
     // Asset-page launch owns conversation selection; do not race it with restore.
     if (sessionStorage.getItem(PENDING_ASSET_TASK_KEY)) return;
 
+    const locState = (location.state || null) as ConversationLocationState | null;
+    const preferBlank =
+      locState?.preferBlankChat === true ||
+      (() => {
+        try {
+          return sessionStorage.getItem(PREFER_BLANK_CHAT_KEY) === "1";
+        } catch {
+          return false;
+        }
+      })();
+
+    // Sidebar「新建会话」: stay on blank composer. Do NOT fall back to first/running
+    // session (that was the bug from other pages). Keep session flag until after
+    // restore so React StrictMode remount still sees it.
+    if (preferBlank) {
+      setRestoreAttempted(true);
+      void loadConversation(null).finally(() => {
+        try {
+          sessionStorage.removeItem(PREFER_BLANK_CHAT_KEY);
+        } catch {
+          /* ignore */
+        }
+        // Drop one-shot location state so refresh keeps normal restore behavior.
+        if (locState?.preferBlankChat) {
+          navigate(".", { replace: true, state: {} });
+        }
+      });
+      return;
+    }
+
     const storedId = localStorage.getItem(ACTIVE_CONVERSATION_KEY);
     // Always honor an explicit stored id — even if the list has not fetched it yet
-    // (freshly created from Assets / Vulns). Falling back to "any running" was
-    // overwriting the new session and routing tasks into the wrong conversation.
+    // (freshly created from Assets / Vulns).
     if (storedId) {
       setRestoreAttempted(true);
       void loadConversation(storedId);
       return;
     }
-    if (conversations.length === 0) return;
-    const runningConversation = conversations.find(c => c.status === "running");
-    const fallback = runningConversation || conversations[0];
+
+    // No stored id → blank composer. Do not auto-pick conversations[0] / running.
     setRestoreAttempted(true);
-    if (fallback) void loadConversation(fallback.id);
-  }, [conversations, loadConversation, restoreAttempted]);
+  }, [conversations, loadConversation, location.state, navigate, restoreAttempted]);
 
   useEffect(() => {
     if (activeId) send({ type: "subscribe", conversation_id: activeId });

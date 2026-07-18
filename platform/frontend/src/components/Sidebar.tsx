@@ -31,6 +31,8 @@ interface Props {
 
 const ACTIVE_CONVERSATION_KEY = "active_conversation_id";
 const SIDEBAR_COLLAPSED_KEY = "sidebar_collapsed";
+/** Must match ConversationPage — skip restore fallback when starting a blank chat. */
+const PREFER_BLANK_CHAT_KEY = "prefer_blank_chat";
 /** When collapsing: switch to icons slightly before width ends (shell is 180ms). */
 const SIDEBAR_COMPACT_MS = 110;
 
@@ -182,7 +184,14 @@ export default function Sidebar({ activeId, onSelect }: Props) {
 
   const goHomeNewChat = () => {
     localStorage.removeItem(ACTIVE_CONVERSATION_KEY);
-    navigate("/");
+    // Survive StrictMode remount: session flag + router state. ConversationPage no longer
+    // falls back to conversations[0] when these are set / when stored id is empty.
+    try {
+      sessionStorage.setItem(PREFER_BLANK_CHAT_KEY, "1");
+    } catch {
+      /* ignore */
+    }
+    navigate("/", { state: { preferBlankChat: true } });
     onSelect("");
   };
 
