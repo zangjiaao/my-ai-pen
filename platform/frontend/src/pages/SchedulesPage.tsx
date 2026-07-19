@@ -235,7 +235,7 @@ export default function SchedulesPage() {
               <button
                 type="button"
                 onClick={openCreateDialog}
-                className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+                className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-on-ink hover:opacity-90"
               >
                 新建计划
               </button>
@@ -352,7 +352,7 @@ export default function SchedulesPage() {
 
       {showForm && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+          className="fixed inset-0 z-50 flex items-center justify-center theme-overlay px-4"
           onClick={closeCreateDialog}
         >
           <div
@@ -460,7 +460,7 @@ export default function SchedulesPage() {
                 type="button"
                 disabled={saving}
                 onClick={() => void create()}
-                className="rounded-md bg-ink px-4 py-1.5 text-xs font-medium text-white disabled:opacity-60"
+                className="rounded-md bg-ink px-4 py-1.5 text-xs font-medium text-on-ink disabled:opacity-60"
               >
                 {saving ? "保存中…" : "保存"}
               </button>

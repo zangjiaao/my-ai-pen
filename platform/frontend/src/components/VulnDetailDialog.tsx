@@ -169,7 +169,7 @@ export default function VulnDetailDialog({
   const canMutate = Boolean(id && !String(id).startsWith("finding:"));
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center theme-overlay px-4" onClick={onClose}>
       <div
         className="max-h-[88vh] w-full max-w-3xl overflow-y-auto rounded-lg border border-hairline-soft bg-canvas p-6 shadow-xl"
         onClick={(event) => event.stopPropagation()}
@@ -214,7 +214,7 @@ export default function VulnDetailDialog({
                   }}
                   className={`rounded-md border px-2.5 py-1 text-[11px] font-medium disabled:opacity-40 ${
                     st === current
-                      ? "border-ink bg-ink text-white"
+                      ? "border-ink bg-ink text-on-ink"
                       : "border-hairline text-ink-secondary hover:bg-surface-default"
                   }`}
                 >
@@ -226,7 +226,7 @@ export default function VulnDetailDialog({
         )}
 
         {error && !String(error).toLowerCase().includes("not found") && (
-          <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
+          <div className="mb-4 rounded-md border border-severity-critical/30 bg-severity-critical-subtle px-3 py-2 text-sm text-severity-critical">{error}</div>
         )}
 
         {/* Description — highlight FLAG / KEY material */}

@@ -8,6 +8,8 @@ import { BrowserRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
 import "./index.css";
+// Initialize theme store (applies html.dark from localStorage / system preference).
+import "./stores/themeStore";
 
 const queryClient = new QueryClient();
 

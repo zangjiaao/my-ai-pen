@@ -2078,7 +2078,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                     </span>
                     <button
                       type="button"
-                      className="rounded-pill bg-ink px-2.5 py-1 text-[11px] font-medium text-white"
+                      className="rounded-pill bg-ink px-2.5 py-1 text-[11px] font-medium text-on-ink"
                       onClick={() => {
                         const pack = caseHandoff.suggest_pack_id;
                         const match = mentionTargets.find(
@@ -2276,7 +2276,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                         onClick={() => setGoalModeEnabled((v) => !v)}
                         className={`inline-flex h-8 items-center rounded-full px-3 text-xs font-medium leading-none transition-colors ${
                           goalModeEnabled
-                            ? "bg-ink text-white"
+                            ? "bg-ink text-on-ink"
                             : "bg-canvas-inset text-ink-secondary hover:bg-surface-elevated"
                         }`}
                       >
@@ -2306,7 +2306,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                         type="button"
                         onClick={() => { void handleSend(); }}
                         disabled={!input.trim()}
-                        className="inline-flex h-8 items-center rounded-pill bg-ink px-4 text-xs font-medium leading-none text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-35"
+                        className="inline-flex h-8 items-center rounded-pill bg-ink px-4 text-xs font-medium leading-none text-on-ink transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-35"
                       >
                         发送
                       </button>

@@ -544,7 +544,7 @@ export default function AssetPage() {
               <button
                 type="button"
                 onClick={openCreateDialog}
-                className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+                className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-on-ink hover:opacity-90"
               >
                 添加资产
               </button>
@@ -560,7 +560,7 @@ export default function AssetPage() {
                   type="button"
                   disabled={launching || bulkDeleting}
                   onClick={() => void launchTask()}
-                  className="rounded-md bg-ink px-3 py-1 text-[11px] font-medium text-white disabled:opacity-50"
+                  className="rounded-md bg-ink px-3 py-1 text-[11px] font-medium text-on-ink disabled:opacity-50"
                 >
                   {launching ? "创建中…" : "创建任务"}
                 </button>
@@ -777,7 +777,7 @@ export default function AssetPage() {
 
           {showForm && (
             <div
-              className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+              className="fixed inset-0 z-50 flex items-center justify-center theme-overlay px-4"
               onClick={closeCreateDialog}
             >
               <div
@@ -827,7 +827,7 @@ export default function AssetPage() {
                     type="button"
                     disabled={saving}
                     onClick={() => void createAsset()}
-                    className="rounded-md bg-ink px-4 py-1.5 text-xs font-medium text-white disabled:opacity-60"
+                    className="rounded-md bg-ink px-4 py-1.5 text-xs font-medium text-on-ink disabled:opacity-60"
                   >
                     {saving ? "保存中…" : "保存"}
                   </button>

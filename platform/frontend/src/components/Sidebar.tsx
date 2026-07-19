@@ -465,7 +465,7 @@ export default function Sidebar({ activeId, onSelect }: Props) {
         {compact ? (
           <div className="flex flex-col items-center gap-1">
             <div
-              className="flex h-9 w-9 items-center justify-center rounded-full bg-ink text-[11px] font-semibold tracking-wide text-white"
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-ink text-[11px] font-semibold tracking-wide text-canvas"
               title={`${displayLabel}\n${user?.email || ""}`}
             >
               {initials}
@@ -481,7 +481,7 @@ export default function Sidebar({ activeId, onSelect }: Props) {
           </div>
         ) : (
           <div className="flex items-center gap-2.5 rounded-xl px-2 py-2 hover:bg-surface-default">
-            <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-ink text-[11px] font-semibold tracking-wide text-white">
+            <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-ink text-[11px] font-semibold tracking-wide text-canvas">
               {initials}
             </div>
             <div className="min-w-0 flex-1">

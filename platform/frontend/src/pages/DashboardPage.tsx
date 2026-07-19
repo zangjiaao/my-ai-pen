@@ -142,11 +142,11 @@ const SEV_CLASS: Record<string, string> = {
 };
 
 const SEV_COLOR: Record<(typeof SEVERITIES)[number], string> = {
-  critical: "#dc2626",
-  high: "#ea580c",
-  medium: "#d97706",
-  low: "#2563eb",
-  info: "#a3a3a3",
+  critical: "var(--color-severity-critical)",
+  high: "var(--color-severity-high)",
+  medium: "var(--color-severity-medium)",
+  low: "var(--color-severity-low)",
+  info: "var(--color-severity-info)",
 };
 
 const SEV_LABEL: Record<(typeof SEVERITIES)[number], string> = {
@@ -356,12 +356,12 @@ export default function DashboardPage() {
                         data={dailyChartData}
                         margin={{ top: 8, right: 8, left: 0, bottom: 0 }}
                       >
-                        <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="#e5e5e5" />
+                        <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--color-chart-grid)" />
                         <XAxis
                           dataKey="date"
                           tickLine={false}
                           axisLine={false}
-                          tick={{ fontSize: 11, fill: "#8b8b8b" }}
+                          tick={{ fontSize: 11, fill: "var(--color-chart-tick)" }}
                           tickFormatter={formatDayLabel}
                           interval="preserveStartEnd"
                           minTickGap={16}
@@ -371,7 +371,7 @@ export default function DashboardPage() {
                           tickLine={false}
                           axisLine={false}
                           width={28}
-                          tick={{ fontSize: 11, fill: "#8b8b8b" }}
+                          tick={{ fontSize: 11, fill: "var(--color-chart-tick)" }}
                         />
                         <ChartTooltip content={<ChartTooltipContent hideZero />} />
                         <Legend

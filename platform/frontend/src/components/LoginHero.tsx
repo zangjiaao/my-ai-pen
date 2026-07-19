@@ -54,7 +54,7 @@ const LINKS: [number, number][] = [
 /** Left-panel brand hero: scan / graph / particle field (CSS only). */
 export default function LoginHero() {
   return (
-    <div className="login-hero relative flex h-full min-h-[280px] flex-col justify-between overflow-hidden bg-ink px-10 py-12 text-white md:min-h-0">
+    <div className="login-hero relative flex h-full min-h-[280px] flex-col justify-between overflow-hidden bg-[#0a0a0a] px-10 py-12 text-white md:min-h-0">
       {/* Ambient layers */}
       <div className="login-hero-grid pointer-events-none absolute inset-0" aria-hidden />
       <div className="login-hero-vignette pointer-events-none absolute inset-0" aria-hidden />

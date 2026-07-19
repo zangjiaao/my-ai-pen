@@ -11,6 +11,22 @@
       href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;520&family=Nunito:wght@400;600;700;800&display=swap"
       rel="stylesheet"
     />
+    <script>
+      // Apply theme before paint to avoid flash (matches src/lib/theme.ts).
+      (function () {
+        try {
+          var k = "ui_theme";
+          var t = localStorage.getItem(k);
+          if (t !== "light" && t !== "dark") {
+            t = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light";
+          }
+          if (t === "dark") document.documentElement.classList.add("dark");
+          document.documentElement.style.colorScheme = t;
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body class="bg-canvas text-ink font-sans antialiased">
     <div id="root"></div>

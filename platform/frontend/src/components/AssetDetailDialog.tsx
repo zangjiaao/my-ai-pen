@@ -350,7 +350,7 @@ export default function AssetDetailDialog({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center theme-overlay px-4 py-6" onClick={onClose}>
       <div
         className="flex max-h-[min(88vh,720px)] w-full max-w-xl flex-col overflow-hidden rounded-lg border border-hairline-soft bg-canvas shadow-xl"
         onClick={(e) => e.stopPropagation()}
@@ -491,7 +491,7 @@ export default function AssetDetailDialog({
                       type="button"
                       disabled={addingPort || !addPortForm.port.trim()}
                       onClick={() => void addPort()}
-                      className="rounded-md bg-ink px-2.5 py-1 text-[11px] font-medium text-white disabled:opacity-50"
+                      className="rounded-md bg-ink px-2.5 py-1 text-[11px] font-medium text-on-ink disabled:opacity-50"
                     >
                       {addingPort ? "添加中…" : "添加"}
                     </button>
@@ -588,7 +588,7 @@ export default function AssetDetailDialog({
                                 type="button"
                                 disabled={savingNotePort === card.port}
                                 onClick={() => void savePortEdit(card.port)}
-                                className="rounded-md bg-ink px-2.5 py-1 text-[11px] font-medium text-white disabled:opacity-50"
+                                className="rounded-md bg-ink px-2.5 py-1 text-[11px] font-medium text-on-ink disabled:opacity-50"
                               >
                                 {savingNotePort === card.port ? "保存中…" : "保存"}
                               </button>
@@ -797,7 +797,7 @@ export default function AssetDetailDialog({
                 type="button"
                 disabled={saving || !id}
                 onClick={() => void saveEdit()}
-                className="rounded-md bg-ink px-4 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+                className="rounded-md bg-ink px-4 py-1.5 text-xs font-medium text-on-ink disabled:opacity-50"
               >
                 {saving ? "保存中…" : "保存"}
               </button>

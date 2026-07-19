@@ -38,7 +38,7 @@ export default function EvidenceDetailDialog({ open, evidenceId, initial, onClos
   const view = parseEvidenceView((evidence || {}) as EvidenceLike);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center theme-overlay px-4" onClick={onClose}>
       <div
         className="max-h-[88vh] w-full max-w-3xl overflow-y-auto rounded-lg border border-hairline-soft bg-canvas p-6 shadow-xl"
         onClick={(event) => event.stopPropagation()}
@@ -75,7 +75,7 @@ export default function EvidenceDetailDialog({ open, evidenceId, initial, onClos
           </button>
         </div>
 
-        {error && <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
+        {error && <div className="mb-4 rounded-md border border-severity-critical/30 bg-severity-critical-subtle px-3 py-2 text-sm text-severity-critical">{error}</div>}
 
         {/* Same compact steps as finding panel — no separate “evidence product card”. */}
         {(() => {

@@ -59,7 +59,7 @@ export default function ConfirmCard({
               ? "bg-status-success text-white"
               : selected
                 ? "border border-hairline bg-canvas text-ink-muted"
-                : "bg-ink text-white"
+                : "bg-ink text-on-ink"
           }`}
         >
           {authorizeSelected ? "已授权" : "授权"}

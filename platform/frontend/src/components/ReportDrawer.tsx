@@ -174,7 +174,7 @@ export default function ReportDrawer({ conversationId }: Props) {
 
           <div className="max-h-[360px] overflow-y-auto px-2 py-2">
             {error && (
-              <p className="mb-2 rounded bg-red-50 px-2 py-1 text-[11px] text-red-700">{error}</p>
+              <p className="mb-2 rounded bg-severity-critical-subtle px-2 py-1 text-[11px] text-severity-critical">{error}</p>
             )}
             {loading && reports.length === 0 ? (
               <p className="px-2 py-6 text-center text-xs text-ink-muted">加载中…</p>
@@ -245,7 +245,7 @@ export default function ReportDrawer({ conversationId }: Props) {
                           title="删除此报告"
                           disabled={deleting === r.id}
                           onClick={() => void remove(r)}
-                          className="inline-flex items-center gap-1 rounded-md border border-hairline bg-canvas px-2 py-1 text-[11px] text-red-600 hover:bg-red-50 disabled:opacity-50"
+                          className="inline-flex items-center gap-1 rounded-md border border-hairline bg-canvas px-2 py-1 text-[11px] text-severity-critical hover:bg-severity-critical-subtle disabled:opacity-50"
                         >
                           {deleting === r.id ? (
                             <Loader2 size={12} className="animate-spin" />

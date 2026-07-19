@@ -2935,7 +2935,7 @@ function SurfaceTreeView({
                         ? "bg-status-running/12 text-status-running"
                         : chip.id === "vuln"
                           ? "bg-severity-high-subtle text-severity-high"
-                          : "bg-ink text-white"
+                          : "bg-ink text-on-ink"
                     : "bg-canvas-inset text-ink-muted hover:bg-surface-default hover:text-ink"
                 }`}
               >

@@ -176,7 +176,7 @@ export default function NodePage() {
                 setRegisterError("");
                 setShowRegister(true);
               }}
-              className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-white"
+              className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-on-ink"
             >
               注册节点
             </button>
@@ -525,7 +525,7 @@ function NodeDetailDialog({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center theme-overlay px-4 py-6" onClick={onClose}>
       <div
         className="flex max-h-[min(88vh,840px)] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-hairline-soft bg-canvas shadow-xl"
         onClick={(e) => e.stopPropagation()}
@@ -858,7 +858,7 @@ function NodeDetailDialog({
                             type="button"
                             disabled={busy}
                             onClick={() => void installExpert(pack.id)}
-                            className="rounded-md bg-ink px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                            className="rounded-md bg-ink px-3 py-1.5 text-xs font-medium text-on-ink hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
                           >
                             {busy ? "处理中…" : "安装"}
                           </button>
@@ -896,7 +896,7 @@ function NodeDetailDialog({
                     type="button"
                     disabled={saving}
                     onClick={() => void saveWorkerLimits()}
-                    className="rounded-md bg-ink px-4 py-1.5 text-xs font-medium text-white disabled:opacity-60"
+                    className="rounded-md bg-ink px-4 py-1.5 text-xs font-medium text-on-ink disabled:opacity-60"
                   >
                     {saving ? "保存中…" : "保存"}
                   </button>
@@ -930,7 +930,7 @@ function SimpleDialog({
   onConfirm: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center theme-overlay px-4" onClick={onClose}>
       <div className="w-full max-w-md rounded-lg border border-hairline-soft bg-canvas p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-lg font-semibold">{title}</h2>
         {description && <p className="mt-1 text-xs text-ink-muted">{description}</p>}
@@ -944,7 +944,7 @@ function SimpleDialog({
             type="button"
             disabled={confirming}
             onClick={onConfirm}
-            className="rounded-md bg-ink px-4 py-1.5 text-xs font-medium text-white disabled:opacity-60"
+            className="rounded-md bg-ink px-4 py-1.5 text-xs font-medium text-on-ink disabled:opacity-60"
           >
             {confirmLabel}
           </button>
@@ -957,7 +957,7 @@ function SimpleDialog({
 function TokenIssuedDialog({ token, onClose }: { token: string; onClose: () => void }) {
   const [copied, setCopied] = useState(false);
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center theme-overlay px-4" onClick={onClose}>
       <div className="w-full max-w-md rounded-lg border border-hairline-soft bg-canvas p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-lg font-semibold">节点注册成功</h2>
         <p className="mt-1 text-xs text-ink-muted">请保存 Token。启动 Node 时设置 NODE_TOKEN。</p>
@@ -974,7 +974,7 @@ function TokenIssuedDialog({ token, onClose }: { token: string; onClose: () => v
           {copied ? <Check size={14} className="text-status-success" /> : <Copy size={14} />}
         </button>
         <div className="mt-6 flex justify-end border-t border-hairline-soft pt-4">
-          <button type="button" onClick={onClose} className="rounded-md bg-ink px-4 py-1.5 text-xs font-medium text-white">
+          <button type="button" onClick={onClose} className="rounded-md bg-ink px-4 py-1.5 text-xs font-medium text-on-ink">
             完成
           </button>
         </div>

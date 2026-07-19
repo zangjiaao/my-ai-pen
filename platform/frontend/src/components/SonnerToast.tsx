@@ -37,15 +37,15 @@ export default function SonnerToast() {
   return (
     <div className="fixed right-4 top-16 z-50 w-[340px] max-w-[calc(100vw-2rem)] space-y-2">
       {notifications.map(item => (
-        <div key={item.id} data-testid="sonner-toast" className="rounded-md bg-ink px-4 py-3 text-sm text-white shadow-lg">
+        <div key={item.id} data-testid="sonner-toast" className="rounded-md bg-ink px-4 py-3 text-sm text-on-ink shadow-lg">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <p className="font-medium">{item.message}</p>
-              {item.description && <p className="mt-1 line-clamp-2 text-xs text-white/75">{item.description}</p>}
+              {item.description && <p className="mt-1 line-clamp-2 text-xs text-on-ink/75">{item.description}</p>}
             </div>
-            <button type="button" onClick={() => dismiss(item.id)} className="rounded px-1 text-xs text-white/70 hover:text-white" aria-label="Dismiss">x</button>
+            <button type="button" onClick={() => dismiss(item.id)} className="rounded px-1 text-xs text-on-ink/70 hover:text-on-ink" aria-label="Dismiss">x</button>
           </div>
-          <button data-testid="sonner-locate" type="button" onClick={() => locate(item)} className="mt-3 rounded-pill bg-white/20 px-3 py-1 text-xs font-medium hover:bg-white/30">View</button>
+          <button data-testid="sonner-locate" type="button" onClick={() => locate(item)} className="mt-3 rounded-pill bg-on-ink/15 px-3 py-1 text-xs font-medium text-on-ink hover:bg-on-ink/25">View</button>
         </div>
       ))}
     </div>

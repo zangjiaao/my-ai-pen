@@ -151,7 +151,7 @@ export default function ExpertPage() {
             <button
               type="button"
               onClick={() => setShowCreate(true)}
-              className="inline-flex items-center gap-1.5 rounded-md bg-ink px-4 py-2 text-sm font-medium text-white"
+              className="inline-flex items-center gap-1.5 rounded-md bg-ink px-4 py-2 text-sm font-medium text-on-ink"
             >
               <Plus className="h-4 w-4" />
               创建专家
@@ -542,7 +542,7 @@ function ExpertDetailDialog({
   const showSave = detailTab === "config";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center theme-overlay px-4 py-6" onClick={onClose}>
       <div
         className="flex max-h-[min(88vh,840px)] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-hairline-soft bg-canvas shadow-xl"
         onClick={(e) => e.stopPropagation()}
@@ -830,7 +830,7 @@ function ExpertDetailDialog({
                     type="button"
                     disabled={saving}
                     onClick={() => void save()}
-                    className="rounded-md bg-ink px-4 py-1.5 text-xs font-medium text-white disabled:opacity-60"
+                    className="rounded-md bg-ink px-4 py-1.5 text-xs font-medium text-on-ink disabled:opacity-60"
                   >
                     {saving ? "保存中…" : "保存"}
                   </button>
@@ -866,7 +866,7 @@ function SimpleDialog({
   onConfirm: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center theme-overlay px-4" onClick={onClose}>
       <div
         className="w-full max-w-md rounded-lg border border-hairline-soft bg-canvas p-6 shadow-xl"
         onClick={(e) => e.stopPropagation()}
@@ -883,7 +883,7 @@ function SimpleDialog({
             type="button"
             disabled={confirming || confirmDisabled}
             onClick={onConfirm}
-            className="rounded-md bg-ink px-4 py-1.5 text-xs font-medium text-white disabled:opacity-60"
+            className="rounded-md bg-ink px-4 py-1.5 text-xs font-medium text-on-ink disabled:opacity-60"
           >
             {confirmLabel}
           </button>
