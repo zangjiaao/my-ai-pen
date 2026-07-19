@@ -2,13 +2,18 @@
  * Continue / settlement policy — OMP essence (clean-room).
  *
  * Discovery belongs **in-loop** (pi agent-loop keeps tool-calling until the
- * model emits no tools). Outer continues are **rare recovery** only:
- * empty-stop glitches, one booking gap, and a small open-work premature
- * budget. No session wall. No empty thrash as a score engine.
+ * model emits no tools). No session wall.
  *
- * **OMP goal mode:** while goal status is active, auto-continue is **unbounded**
- * (no default continue count). Optional lab cap only when maxGoalContinues is a
- * positive finite number. Optional token_budget → budget-limited stops auto-continue.
+ * **Product default:** outer recovery is **OFF** (maxContinues / empty / premature /
+ * goal inject all 0). Agent natural-stop settles the work burst. See
+ * `resolveOuterContinueBudgets`.
+ *
+ * **Lab opt-in:** raise env caps to re-enable empty-stop, booking-gap, premature
+ * breadth, or goal_continuation injects. Pure functions here stay available for
+ * that path; they are not product workflow stage machines.
+ *
+ * Optional token_budget → budget-limited stops goal auto-continue when lab goal
+ * inject is enabled.
  */
 
 import { midRunBookingNudge, type BookingSnapshot } from "./booking-harness.js";
@@ -23,12 +28,12 @@ export type ContinueDecision = {
 };
 
 /**
- * OMP goal_continuation allowance.
+ * Goal outer-inject allowance (lab recovery path).
  *
  * - goal inactive → false
- * - maxGoalContinues omitted / non-finite / negative → **unlimited** (OMP default)
- * - maxGoalContinues === 0 → goal continues off (unit tests / chat-only)
- * - maxGoalContinues > 0 → optional lab/env cap only
+ * - maxGoalContinues === 0 → off (**product default** via resolveOuterContinueBudgets)
+ * - maxGoalContinues omitted / non-finite / negative → **unlimited** (lab only)
+ * - maxGoalContinues > 0 → hard cap
  */
 export function goalContinuationAllowed(options: {
   goalModeActive?: boolean;
@@ -42,6 +47,70 @@ export function goalContinuationAllowed(options: {
   }
   if (maxGoal === 0) return false;
   return Math.max(0, options.goalContinueCount ?? 0) < maxGoal;
+}
+
+function envNonNegInt(raw: string | undefined, defaultValue: number): number {
+  if (raw == null || String(raw).trim() === "") return defaultValue;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return defaultValue;
+  return Math.floor(n);
+}
+
+/**
+ * Product outer-continue budgets from env.
+ *
+ * Defaults are all **0** (no empty / premature / booking-gap / goal inject).
+ * Lab re-enable:
+ * - NODE4_MAX_CONTINUES / NODE4_MAX_CONTINUES_DEFAULT (ledger seat) → positive
+ * - NODE4_MAX_EMPTY_STOPS, NODE4_MAX_PREMATURE_STOPS → positive
+ * - NODE4_MAX_GOAL_CONTINUES=unlimited | positive int (unset/0 = off)
+ */
+export function resolveOuterContinueBudgets(
+  env: NodeJS.ProcessEnv = process.env,
+  options?: { ledgerAssistSeat?: boolean },
+): {
+  maxContinues: number;
+  maxEmptyStopStreak: number;
+  maxPrematureStops: number;
+  /** 0 = off (product). undefined = unlimited lab. positive = lab cap. */
+  maxGoalContinues: number | undefined;
+} {
+  const maxContinues = options?.ledgerAssistSeat
+    ? envNonNegInt(env.NODE4_MAX_CONTINUES_DEFAULT, 0)
+    : envNonNegInt(env.NODE4_MAX_CONTINUES, 0);
+  const maxEmptyStopStreak = envNonNegInt(env.NODE4_MAX_EMPTY_STOPS, 0);
+  const maxPrematureStops = envNonNegInt(env.NODE4_MAX_PREMATURE_STOPS, 0);
+
+  let maxGoalContinues: number | undefined = 0;
+  const rawGoal = env.NODE4_MAX_GOAL_CONTINUES;
+  if (rawGoal != null && String(rawGoal).trim() !== "") {
+    const t = String(rawGoal).trim().toLowerCase();
+    if (t === "unlimited") {
+      maxGoalContinues = undefined;
+    } else {
+      const n = Number(rawGoal);
+      maxGoalContinues = Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+    }
+  }
+
+  return { maxContinues, maxEmptyStopStreak, maxPrematureStops, maxGoalContinues };
+}
+
+/**
+ * When outer budgets are product-off (0) the policy may report max_continues /
+ * max_empty_stops on the first natural stop. Map those to clean settle reasons
+ * for telemetry (not recovery thrash).
+ */
+export function normalizeProductStopReason(options: {
+  reason: string;
+  continueCount: number;
+  toolsInLastSegment: number;
+}): string {
+  if (options.continueCount > 0) return options.reason;
+  if (options.reason === "max_continues" || options.reason === "max_empty_stops") {
+    return options.toolsInLastSegment > 0 ? "natural_stop_after_tools" : "natural_stop";
+  }
+  return options.reason;
 }
 
 /**

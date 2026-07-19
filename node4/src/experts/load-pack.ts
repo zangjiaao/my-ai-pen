@@ -5,6 +5,10 @@ import { readFileSync, existsSync, readdirSync, accessSync } from "node:fs";
 import { readFile, access, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { BookingMode, RolePack } from "../roles/types.js";
+import {
+  mergePlatformCitizenMission,
+  mergePlatformCitizenTools,
+} from "../roles/platform-citizen.js";
 
 export type PackManifest = {
   id: string;
@@ -44,16 +48,18 @@ function packFromParts(packDir: string, manifest: PackManifest, missionRaw: stri
   const missionLines = linesFromMarkdown(missionRaw);
   const workLines = linesFromMarkdown(workRaw);
   const bookingMode: BookingMode = manifest.bookingMode === "none" ? "none" : "finding";
+  // Model B: every expert pack gets platform citizen tools + Scope/ledger rules.
+  const baseMission = missionLines.length
+    ? missionLines
+    : [`You are Node4 in the **${manifest.id}** role pack.`];
   return {
     id: String(manifest.id).toLowerCase().trim(),
     label: manifest.label || manifest.id,
-    missionLines: missionLines.length
-      ? missionLines
-      : [`You are Node4 in the **${manifest.id}** role pack.`],
+    missionLines: mergePlatformCitizenMission(baseMission),
     workLines: workLines.length
       ? workLines
       : ["Work within authorized scope. No finish tool; harness settles."],
-    toolNames: manifest.toolNames.map(String),
+    toolNames: mergePlatformCitizenTools(manifest.toolNames.map(String)),
     bookingMode,
     settlementNote: manifest.settlementNote || "Harness settles the session.",
     defaultGoalObjective: manifest.defaultGoalObjective,

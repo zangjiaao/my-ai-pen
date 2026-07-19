@@ -18,7 +18,15 @@ import {
   resolveHarnessTerminalStatus,
   shouldContinueAfterNaturalStop,
   evaluateContinueAfterSegment,
+  resolveOuterContinueBudgets,
+  normalizeProductStopReason,
 } from "./runtime/loop-policy.js";
+import {
+  PLATFORM_CITIZEN_MARKER,
+  mergePlatformCitizenMission,
+  mergePlatformCitizenTools,
+} from "./roles/platform-citizen.js";
+import { loadPackFromDirSync } from "./experts/load-pack.js";
 import { inspectArtifactChecklist, writePostRunInspectArtifacts } from "./runtime/session-inspect.js";
 import { SubagentHost } from "./runtime/subagent.js";
 import {
@@ -138,6 +146,39 @@ async function main() {
   assert(!toolNamesForPack(DEFAULT_SEAT_PACK).includes("finding"), "default seat has no finding");
   assert(!toolNamesForPack(DEFAULT_SEAT_PACK).includes("shell"), "default seat has no shell");
   assert(toolNamesForPack(DEFAULT_SEAT_PACK).some((n) => n.startsWith("platform_")), "default has platform tools");
+  assert(toolNamesForPack(DEFAULT_SEAT_PACK).includes("platform_create_report"), "default has create_report");
+  assert(
+    DEFAULT_SEAT_PACK.missionLines.some((l) => l.includes(PLATFORM_CITIZEN_MARKER)),
+    "default mission has platform-citizen layer",
+  );
+  // Model B: citizen tools/mission injected on every expert pack at load
+  assert(
+    mergePlatformCitizenTools(["shell", "platform_list_assets"]).filter((n) => n === "platform_list_assets")
+      .length === 1,
+    "citizen tools de-dupe",
+  );
+  assert(mergePlatformCitizenTools(["shell"])[0] === "platform_list_assets", "citizen tools prepend");
+  assert(
+    mergePlatformCitizenMission(["x"]).some((l) => l.includes(PLATFORM_CITIZEN_MARKER)),
+    "citizen mission inject",
+  );
+  assert(
+    mergePlatformCitizenMission([`${PLATFORM_CITIZEN_MARKER} already`]).filter((l) =>
+      l.includes(PLATFORM_CITIZEN_MARKER),
+    ).length === 1,
+    "citizen mission idempotent",
+  );
+  const pentestLoaded = loadPackFromDirSync(pathJoin(expertsCatalogRoot(), "pentest"));
+  assert(pentestLoaded.toolNames.includes("platform_list_assets"), "pentest has list_assets (citizen)");
+  assert(pentestLoaded.toolNames.includes("shell"), "pentest keeps shell");
+  assert(pentestLoaded.toolNames.includes("finding"), "pentest keeps finding");
+  assert(
+    pentestLoaded.missionLines.some((l) => l.includes(PLATFORM_CITIZEN_MARKER)),
+    "pentest mission has citizen layer",
+  );
+  const ctfLoaded = loadPackFromDirSync(pathJoin(expertsCatalogRoot(), "ctf"));
+  assert(ctfLoaded.toolNames.includes("platform_list_assets"), "ctf has list_assets (citizen)");
+  assert(ctfLoaded.toolNames.includes("captcha"), "ctf keeps captcha");
   // Persona template: product expert name injected into default-seat system prompt
   const {
     renderPromptTemplate,
@@ -386,7 +427,72 @@ async function main() {
     "premature prompt mentions map vs discovery",
   );
 
-  // Empty stop: limited retry
+  // Product default budgets: all outer recovery OFF
+  const productBudgets = resolveOuterContinueBudgets({}, {});
+  assert(
+    productBudgets.maxContinues === 0 &&
+      productBudgets.maxEmptyStopStreak === 0 &&
+      productBudgets.maxPrematureStops === 0 &&
+      productBudgets.maxGoalContinues === 0,
+    `product outer budgets off: ${JSON.stringify(productBudgets)}`,
+  );
+  const productEmpty = shouldContinueAfterNaturalStop({
+    aborted: false,
+    toolsInLastSegment: 0,
+    emptyStopStreak: 0,
+    continueCount: 0,
+    maxContinues: 0,
+    maxEmptyStopStreak: 0,
+    maxPrematureStops: 0,
+    maxGoalContinues: 0,
+  });
+  assert(productEmpty.continue === false, `product: empty natural stop does not continue: ${JSON.stringify(productEmpty)}`);
+  assert(
+    normalizeProductStopReason({
+      reason: productEmpty.reason,
+      continueCount: 0,
+      toolsInLastSegment: 0,
+    }) === "natural_stop",
+    "product: empty stop reason normalizes to natural_stop",
+  );
+  const productAfterTools = shouldContinueAfterNaturalStop({
+    aborted: false,
+    toolsInLastSegment: 4,
+    emptyStopStreak: 0,
+    continueCount: 0,
+    maxContinues: 0,
+    maxEmptyStopStreak: 0,
+    maxPrematureStops: 0,
+    maxGoalContinues: 0,
+  });
+  assert(productAfterTools.continue === false, "product: tools then stop does not outer-continue");
+  assert(
+    normalizeProductStopReason({
+      reason: productAfterTools.reason,
+      continueCount: 0,
+      toolsInLastSegment: 4,
+    }) === "natural_stop_after_tools",
+    "product: tools stop reason normalizes",
+  );
+  // Lab env opt-in still parses
+  const labBudgets = resolveOuterContinueBudgets(
+    {
+      NODE4_MAX_CONTINUES: "16",
+      NODE4_MAX_EMPTY_STOPS: "1",
+      NODE4_MAX_PREMATURE_STOPS: "3",
+      NODE4_MAX_GOAL_CONTINUES: "unlimited",
+    },
+    {},
+  );
+  assert(
+    labBudgets.maxContinues === 16 &&
+      labBudgets.maxEmptyStopStreak === 1 &&
+      labBudgets.maxPrematureStops === 3 &&
+      labBudgets.maxGoalContinues === undefined,
+    `lab outer budgets: ${JSON.stringify(labBudgets)}`,
+  );
+
+  // Empty stop: limited retry (lab path when caps > 0)
   const emptyOnce = shouldContinueAfterNaturalStop({
     aborted: false,
     toolsInLastSegment: 0,
@@ -598,7 +704,7 @@ async function main() {
   const contPrompt = buildGoalContinuationPrompt(goals.getMode()!, { openTodoCount: 0 });
   assert(contPrompt.includes("completion audit") && contPrompt.includes("goal-continuation"), "continuation has OMP audit");
   assert(contPrompt.includes("todo_context") || contPrompt.includes("Todo map"), "continuation notes empty todo map");
-  // Goal continuation policy: active goal → continue after tools (OMP unbounded by default)
+  // Goal continuation policy (lab): active + unlimited maxGoalContinues → continue after tools
   const goalCont = shouldContinueAfterNaturalStop({
     aborted: false,
     toolsInLastSegment: 3,
@@ -609,10 +715,24 @@ async function main() {
     maxPrematureStops: 0,
     goalModeActive: true,
     goalContinueCount: 0,
-    // omit maxGoalContinues → unlimited
+    // omit maxGoalContinues → unlimited (lab path)
   });
-  assert(goalCont.continue && goalCont.reason === "goal_continuation" && goalCont.kind === "goal", "goal mode continues after tools");
-  // Past outer maxContinues still continues when goal active (OMP)
+  assert(goalCont.continue && goalCont.reason === "goal_continuation" && goalCont.kind === "goal", "lab goal mode continues after tools");
+  // Product default maxGoalContinues=0: goal active does not outer-inject
+  const productGoalOff = shouldContinueAfterNaturalStop({
+    aborted: false,
+    toolsInLastSegment: 3,
+    emptyStopStreak: 0,
+    continueCount: 0,
+    maxContinues: 0,
+    maxEmptyStopStreak: 0,
+    maxPrematureStops: 0,
+    goalModeActive: true,
+    goalContinueCount: 0,
+    maxGoalContinues: 0,
+  });
+  assert(productGoalOff.continue === false, `product: goal does not outer-continue: ${JSON.stringify(productGoalOff)}`);
+  // Past outer maxContinues still continues when goal active and unlimited (lab)
   const pastOuterCap = shouldContinueAfterNaturalStop({
     aborted: false,
     toolsInLastSegment: 2,
@@ -626,7 +746,7 @@ async function main() {
   });
   assert(
     pastOuterCap.continue && pastOuterCap.reason === "goal_continuation",
-    `goal continues past maxContinues: ${JSON.stringify(pastOuterCap)}`,
+    `lab goal continues past maxContinues: ${JSON.stringify(pastOuterCap)}`,
   );
   // Optional lab cap still honored when maxGoalContinues is a positive finite number
   const goalCap = shouldContinueAfterNaturalStop({
@@ -1218,6 +1338,8 @@ async function main() {
   assert(obsMessages.some((m) => m.type === "checkpoint_update"), "checkpoint_update event");
   const built = buildNode4Checkpoint(obsCtx, { terminal: true, status: "completed", endTime: new Date().toISOString() });
   assert(built.llm_usage && built.end_time && built.status === "completed", "terminal checkpoint fields");
+  assert(typeof built.started_at === "string" && String(built.started_at).length > 0, "checkpoint started_at (task_start hook)");
+  assert(typeof built.end_time === "string" && String(built.end_time).length > 0, "checkpoint end_time (task_complete hook)");
 
   // Direct plan emit API
   const planOnly: PlatformMessage[] = [];

@@ -10,6 +10,13 @@ import {
 
 export type SegmentCounter = { tools: number };
 
+/**
+ * Pi extension: tools + observability hooks.
+ *
+ * Wall-clock for the right panel is **task lifecycle** (`task_start` /
+ * `task_complete` + checkpoint started_at/end_time in session-runner) — not
+ * per-tool. These hooks only stream tool activity and mid-run todo nudges.
+ */
 export function createNode4Extension(
   runtime: ToolRuntime,
   segmentCounter?: SegmentCounter,
@@ -20,12 +27,13 @@ export function createNode4Extension(
       pi.registerTool(tool);
     }
 
-    // OMP mid-run todo tracker: lives on lifecycle so continue cycles can reset it.
+    // Mid-run todo tracker (lab / soft nudge). Outer continue cycles may reset it when enabled.
     if (!runtime.lifecycle.midRunTodo) {
       runtime.lifecycle.midRunTodo = createMidRunTodoTracker();
     }
 
     pi.on("tool_call", async (event) => {
+      // Observability only — does not open/close the work-burst timer.
       if (segmentCounter) segmentCounter.tools += 1;
       runtime.lifecycle.toolsInLastSegment = (runtime.lifecycle.toolsInLastSegment || 0) + 1;
       await runtime.platform.send({

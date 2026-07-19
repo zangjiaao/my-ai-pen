@@ -582,8 +582,9 @@ async def upsert_discovered_asset(
     api_endpoints onto an existing row. Returns None when the host is unknown
     (caller should not invent an asset).
 
-    `allow_create=True` is reserved for non-agent paths (tests / rare import
-    helpers). Production agent WS always leaves it False.
+    `allow_create=True` is reserved for **user-authorized** paths:
+    open-task / handoff Scope registration, next-scope promote, tests/import.
+    Agent discovery and vuln_found enrichment always leave it False.
     """
     host, addr_port = split_host_port(address)
     if not host:

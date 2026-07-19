@@ -17,14 +17,15 @@ Related product specs: `docs/prd.md`, `AGENTS.md`, `docs/node-expert-offers.md`,
 ## 1. North star
 
 ```text
-OMP-class loop:  Map(todo) → Act(shell/write/edit/http…) → Book(finding+evidence)* → continue…
+OMP-class loop:  Map(todo) → Act(shell/write/edit/http…) → Book(finding+evidence)*  (in-loop)
 Product booking: structured tools only (never chat-only conclusions)
-Task end:        platform / user cancel / natural stop / goal complete|budget-limited / non-goal continue caps — NOT an agent finish tool
+Task end:        platform / user cancel / natural model stop / abort — NOT an agent finish tool
+Timing:          task_start → started_at; task_complete → end_time (right-panel Elapsed)
 Inspectability:  post-run task dir remains fully queryable
 ```
 
-Node4 is **not** a coding agent. Built-in **`default`** supplies workspace/ledger assist; **expert** packs supply mission + tool surface (e.g. **pentest**).  
-Harness mechanics: high-density act tools (execution packs), empty/premature-stop continue, durable task dirs, light todo map; **chat-only** turns for `default`/no-target do not use execution continue budgets as failure UX.
+Node4 is **not** a coding agent. Built-in **`default`** supplies workspace/ledger assist (intent → chat / ledger / report / expert handoff); **expert** packs supply mission + tool surface (e.g. **pentest**).  
+Harness mechanics: high-density act tools (execution packs), durable task dirs, light todo map. **Product default: no outer empty/premature/goal inject** — settle when the model naturally stops after in-loop tool use. Lab may re-enable outer recovery via env (`NODE4_MAX_*`).
 
 Interactive **TUI remains deferred**.
 
@@ -32,7 +33,7 @@ Interactive **TUI remains deferred**.
 
 ## 2. Principles
 
-1. **OMP harness, role-specific mission** — keep bash/write/edit/todo/continue density; swap pack prompt/tools, not the runner.
+1. **OMP harness, role-specific mission** — keep bash/write/edit/todo density in-loop; swap pack prompt/tools, not the runner. Outer recovery is lab opt-in, not product workflow.
 2. **Booking ≠ stop** — `finding`/`evidence` may fire many times and **never** ends the loop.
 3. **Chat is not product truth** — vuln/flag/auth only via `finding(confirm)` with grounded `proof` (Case evidence created at booking).
 4. **No agent finish tool** — no `finish_scan` / agent terminal status tool. `task_complete` is harness/platform settlement.
@@ -50,13 +51,14 @@ Interactive **TUI remains deferred**.
 
 | Step | Behavior |
 |------|----------|
-| Start | Task envelope → durable task dir; coarse todo injection on first prompt |
+| Start | Task envelope → durable task dir; emit `task_start` + checkpoint `started_at` (panel timer opens) |
 | Map | `todo` phases (content-keyed; single in_progress; auto-promote); **map not prison** |
-| Act | Pack tools under task cwd (shell-first) |
+| Act | Pack tools under task cwd (shell-first); multi tool-calls **in-loop** until the model stops |
 | Book | `finding` + evidence when `bookingMode=finding` |
-| Continue | Rare recovery: empty-stop / booking-gap / breadth premature. **goal_continuation** while `active` is **unbounded** (OMP). Outer `NODE4_MAX_CONTINUES` does **not** stop goal mode. Optional lab cap: `NODE4_MAX_GOAL_CONTINUES`. Optional `token_budget` → `budget-limited` + one-shot budget-limit steer (not complete) |
+| Outer continue | **Product default OFF.** Lab opt-in only: `NODE4_MAX_CONTINUES` / `NODE4_MAX_CONTINUES_DEFAULT`, `NODE4_MAX_EMPTY_STOPS`, `NODE4_MAX_PREMATURE_STOPS`, `NODE4_MAX_GOAL_CONTINUES=unlimited\|N`. Policy pure functions remain in `loop-policy.ts`. |
 | Session wall | **None** by design; per-tool timeouts remain |
-| Settle | Runner emits `task_complete` (natural stop / goal complete|drop|budget-limited / non-goal continue caps / abort) |
+| Settle | Natural stop → terminal checkpoint `end_time` + `task_complete` (panel timer closes). Abort / user cancel also settle. Execution bursts may attach `attack_surface_candidates` / `next_scope_candidates` (out-of-scope hosts) for UI next-Scope — **no** mid-run asset create. |
+| Booking | `finding(confirm)` sends `affected_asset`/`port` (location host or task Scope host) so platform can link ledger assets; path-class soft dedupe merges title-drift rediscoveries. |
 
 ---
 
@@ -76,10 +78,12 @@ Empty install set → only `default` (+ lab bare if forced). Platform **offers**
 
 | Pack / seat | Tools (summary) | Booking |
 |-------------|-----------------|---------|
-| **`default`** (built-in) | platform data tools + light assist (`todo`/`read`; shell restricted/off in v1) | **none** |
-| `pentest` | todo, shell, fs, http, **session**, **browser**, script, finding, subagent, goal, **skill** (meta) | finding+evidence |
-| `ctf` | + captcha; CTF skills under `experts/ctf/skills` | finding+evidence |
-| `consult` | **alias → `default`** during migration (catalog stub retires as separate product) | none |
+| **`default`** (built-in) | **platform citizen** (full ledger R/W + report) + light assist; no shell/finding | **none** |
+| `pentest` | **citizen read layer** + todo, shell, fs, http, session, browser, script, finding, subagent, goal, skill | finding+evidence |
+| `ctf` | **citizen read layer** + captcha + CTF skills | finding+evidence |
+| `consult` | **alias → `default`** during migration | none |
+
+**Model B (platform citizen base):** every pack loaded via `experts/load-pack` gets injected read tools (`platform_list_assets`, `platform_get_asset`, `platform_list_vulnerabilities`, `platform_get_vulnerability`, `platform_conversation_snapshot`) + Scope/ledger mission lines (`node4/src/roles/platform-citizen.ts`). Specialists add act tools; they do **not** silently create hosts (Authorize / next-scope / asset page only).
 
 Aliases live in each pack’s `pack.json` / `experts/catalog.json`.  
 Loader: `node4/src/experts/` + built-in default seat. CTF notes: `docs/node4-ctf-role.md`.  
@@ -108,11 +112,20 @@ Platform data tools: see [`platform-default-agent-refactor.md`](platform-default
 
 **Not present:** `finish_scan`, agent-callable terminal status tool, coverage complete hard gates.
 
-### Discovery breadth continues
+### Discovery breadth (in-loop; outer premature is lab-only)
 
-Outer **premature** continues (default up to `NODE4_MAX_PREMATURE_STOPS`, often 3) run when the model stops after tools **without** requiring open todos. Lab evidence: agents mark the todo map complete before finishing recon surfaces; gating continue on open todos caused early `natural_stop` with only “easy” findings booked.
+**Product:** breadth is prompt/skill-steered inside the first natural tool loop. Outer **premature** inject is **off** unless `NODE4_MAX_PREMATURE_STOPS` > 0 (lab). When enabled, premature continues do not require open todos (map-complete ≠ surface complete).
 
-Continue inject text steers: re-check recon/facts for untested surfaces, prefer `scripts/` enumerate+probe, rotate skill on untested class — **no** target answer keys or module scoreboard gates.
+Lab inject text steers: re-check recon/facts for untested surfaces, prefer `scripts/` enumerate+probe, rotate skill on untested class — **no** target answer keys or module scoreboard gates.
+
+### Right-panel Elapsed (task hooks)
+
+| Hook | Field |
+|------|--------|
+| `task_start` / runner entry | `checkpoint.started_at` |
+| `task_complete` / settle | `checkpoint.end_time` |
+
+UI Elapsed = that window (local tick while running). Tool-call hooks do **not** restart the timer.
 
 ### Shell output governance (C3)
 
@@ -152,7 +165,7 @@ Continue inject text steers: re-check recon/facts for untested surfaces, prefer 
 
 | Mechanism | Behavior |
 |-----------|----------|
-| `goal` | **OMP-class:** while `active`, harness injects **goal_continuation** (unbounded; no default count). `complete` is **free in code** (active \| budget-limited); honesty is **prompt-steered** (completion audit on continuation — never complete because budget/turn ends). Optional `token_budget` → `budget-limited` + one-shot wrap-up steer (budget ≠ complete). Lab-only: `NODE4_MAX_GOAL_CONTINUES`, `NODE4_GOAL_REQUIRE_CLEARANCE=1` for hard audit fields. Outer `NODE4_MAX_CONTINUES` does not stop goal mode. Open goals do not invent product findings. |
+| `goal` | Tracks long-task objective + optional `token_budget` for display/telemetry. **Product default:** no outer `goal_continuation` inject (`NODE4_MAX_GOAL_CONTINUES` unset/0). Lab: `NODE4_MAX_GOAL_CONTINUES=unlimited` (or positive cap) re-enables outer inject while active. `complete` is free in code (active \| budget-limited); honesty is prompt-steered. Lab-only hard audit: `NODE4_GOAL_REQUIRE_CLEARANCE=1`. Open goals do not invent product findings. |
 | `subagent` | Child under `taskDir/subagents/<id>`; evidence written |
 
 ### Subagent handoff contract (A1 / D3)

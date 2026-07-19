@@ -354,6 +354,61 @@ export function createFindingTool(runtime: ToolRuntime): ToolDefinition<any> {
   };
 }
 
+/**
+ * Host/port for platform ledger linking.
+ * Prefer full URL in location; else task.target / scope.allow (authorized Scope).
+ */
+export function resolveAffectedHostPort(
+  location: string,
+  task: { target?: Record<string, unknown>; scope?: Record<string, unknown> },
+): { host: string; port?: string; source: string } {
+  const fromLoc = parseHostPort(location);
+  if (fromLoc.host) return { ...fromLoc, source: "location" };
+  const target = task.target && typeof task.target === "object" ? task.target : {};
+  const tval = String(
+    (target as { value?: unknown }).value
+      ?? (target as { url?: unknown }).url
+      ?? (target as { host?: unknown }).host
+      ?? "",
+  ).trim();
+  const fromTarget = parseHostPort(tval);
+  if (fromTarget.host) return { ...fromTarget, source: "task_target" };
+  const allow = task.scope && typeof task.scope === "object"
+    ? (task.scope as { allow?: unknown }).allow
+    : undefined;
+  if (Array.isArray(allow)) {
+    for (const item of allow) {
+      const fromAllow = parseHostPort(String(item || "").trim());
+      if (fromAllow.host) return { ...fromAllow, source: "scope_allow" };
+    }
+  }
+  return { host: "", source: "none" };
+}
+
+export function parseHostPort(raw: string): { host: string; port?: string } {
+  const s = String(raw || "").trim();
+  if (!s) return { host: "" };
+  try {
+    const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? s : s.startsWith("//") ? `http:${s}` : "";
+    if (withScheme || s.includes("://")) {
+      const u = new URL(withScheme || s);
+      const host = (u.hostname || "").toLowerCase();
+      const port = u.port || undefined;
+      if (host) return { host, port };
+    }
+  } catch {
+    // fall through
+  }
+  // host:port bare
+  const m = s.match(
+    /^(?:https?:\/\/)?((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}|localhost|host\.docker\.internal|\d{1,3}(?:\.\d{1,3}){3})(?::(\d{1,5}))?/i,
+  );
+  if (m) {
+    return { host: m[1]!.toLowerCase(), port: m[2] };
+  }
+  return { host: "" };
+}
+
 async function finalizeFinding(
   runtime: ToolRuntime,
   input: {
@@ -385,6 +440,9 @@ async function finalizeFinding(
     })
     .join("\n---\n")
     .slice(0, 4000);
+  const affected = resolveAffectedHostPort(input.location, runtime.task);
+  const locPort = parseHostPort(input.location).port;
+  const port = locPort || affected.port;
   const record = {
     id,
     action: "confirm",
@@ -399,6 +457,8 @@ async function finalizeFinding(
     how_captured: input.howCaptured || undefined,
     evidence_ids: input.evidenceIds,
     proof_excerpts: input.proofExcerpts,
+    affected_asset: affected.host || undefined,
+    port: port || undefined,
     created_at: new Date().toISOString(),
   };
   await mkdir(runtime.findingsDir, { recursive: true });
@@ -420,6 +480,10 @@ async function finalizeFinding(
     how_captured: record.how_captured,
     proof_excerpts: input.proofExcerpts,
     evidence_summary: evidenceSummary,
+    // Platform ledger linking (Scope host when location is path-only).
+    affected_asset: affected.host || undefined,
+    target: affected.host || undefined,
+    port: port || undefined,
   });
 
   const chainQuality = assessBookingChainQuality({
@@ -463,7 +527,7 @@ export async function loadConfirmedFindings(
   return { titles, evidenceIds, count: titles.length };
 }
 
-async function loadFindings(dir: string): Promise<Array<Record<string, unknown>>> {
+export async function loadFindings(dir: string): Promise<Array<Record<string, unknown>>> {
   try {
     const names = await readdir(dir);
     const out: Array<Record<string, unknown>> = [];

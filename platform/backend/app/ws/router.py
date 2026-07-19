@@ -686,6 +686,8 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
             # Usage billing hook (no payment): record expert pack used on settlement.
             if msg.get("type") == "task_complete":
                 await _record_expert_usage_billing(msg, node_id=client_id, conv_id=conv_id)
+                if conv_id:
+                    await _remember_next_scope_candidates(conv_id, msg)
     elif msg.get("type") == "task_incomplete" and conv_id:
         if await _is_active_task_event(conv_id, msg.get("task_id")):
             await _set_conversation_status(
@@ -2102,8 +2104,15 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
         from app.services.asset_ledger import is_valid_ledger_address, normalize_port, split_host_port
 
         context = await _conversation_context(conv_id)
+        title = str(msg.get("title") or "Untitled finding").strip() or "Untitled finding"
+        location = msg.get("location") or msg.get("url") or msg.get("poc") or ""
+        # Host resolution: explicit affected_asset → location URL → conversation task target.
         raw_target = msg.get("affected_asset") or msg.get("target") or ""
         host, port_from_target = split_host_port(raw_target)
+        if not host or not is_valid_ledger_address(host):
+            host_loc, port_loc = split_host_port(location)
+            if host_loc and is_valid_ledger_address(host_loc):
+                host, port_from_target = host_loc, port_from_target or port_loc
         if not host or not is_valid_ledger_address(host):
             fallback = _target_address_from_context(context)
             host, port_from_fallback = split_host_port(fallback)
@@ -2112,7 +2121,7 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
         port = normalize_port(msg.get("port")) or port_from_target
         # Also try location/URL for port when agent put full URL in location.
         if not port:
-            _, port_from_loc = split_host_port(msg.get("location") or msg.get("poc") or "")
+            _, port_from_loc = split_host_port(str(location or "") or msg.get("poc") or "")
             port = port_from_loc
 
         from datetime import datetime, timezone
@@ -2120,14 +2129,13 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
         from app.services.finding_dedupe import (
             append_discovery_event,
             is_same_finding,
+            location_path_class,
             normalize_finding_title,
             pick_canonical_vuln,
             ports_equal,
+            row_location_blob,
         )
         from sqlalchemy import func
-
-        title = str(msg.get("title") or "Untitled finding").strip() or "Untitled finding"
-        location = msg.get("location") or msg.get("url") or msg.get("poc") or ""
         # Prefer explicit PoC (reproduction + observed result); fall back carefully.
         poc_value = msg.get("poc") or msg.get("evidence_summary") or msg.get("location") or ""
         severity = _normalize_severity(msg.get("severity"))
@@ -2215,46 +2223,98 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                 if asset:
                     asset_id = asset.id
 
-            # Cross-session dedupe: same user + asset + title (+ port) → one ledger row.
+            # Cross-session dedupe: title match OR same path class on asset+port.
             title_key = normalize_finding_title(title)
+            path_key = location_path_class(location)
             candidates: list = []
-            if asset_id and title_key:
-                result = await db.execute(
-                    select(Vulnerability).where(
-                        Vulnerability.user_id == user_id,
-                        Vulnerability.asset_id == asset_id,
-                        func.lower(func.trim(Vulnerability.title)) == title_key,
-                    )
+            pool: list = []
+            if asset_id:
+                # Load asset-scoped rows (port-filtered when possible) for path-class match.
+                q = select(Vulnerability).where(
+                    Vulnerability.user_id == user_id,
+                    Vulnerability.asset_id == asset_id,
                 )
-                for row in result.scalars().all():
+                if port:
+                    q = q.where(
+                        (Vulnerability.port == port)
+                        | (Vulnerability.port.is_(None))
+                        | (Vulnerability.port == "")
+                    )
+                pool.extend((await db.execute(q)).scalars().all())
+            elif title_key:
+                # Unlinked: still try exact title under this user (legacy).
+                pool.extend(
+                    (
+                        await db.execute(
+                            select(Vulnerability).where(
+                                Vulnerability.user_id == user_id,
+                                Vulnerability.asset_id.is_(None),
+                                func.lower(func.trim(Vulnerability.title)) == title_key,
+                            )
+                        )
+                    ).scalars().all()
+                )
+            # Same-conversation title rows (any asset).
+            if title_key:
+                pool.extend(
+                    (
+                        await db.execute(
+                            select(Vulnerability).where(
+                                Vulnerability.user_id == user_id,
+                                Vulnerability.conversation_id == uuid.UUID(conv_id),
+                                func.lower(func.trim(Vulnerability.title)) == title_key,
+                            )
+                        )
+                    ).scalars().all()
+                )
+            seen_ids: set = set()
+            for row in pool:
+                rid = getattr(row, "id", None)
+                if rid in seen_ids:
+                    continue
+                if is_same_finding(
+                    {
+                        "title": row.title,
+                        "asset_id": row.asset_id,
+                        "port": row.port,
+                        "cve_id": row.cve_id,
+                        "location": row_location_blob(row),
+                        "poc": getattr(row, "poc", None),
+                        "description": getattr(row, "description", None),
+                    },
+                    title=title,
+                    asset_id=asset_id,
+                    port=port,
+                    cve_id=cve_id,
+                    location=location,
+                ):
+                    candidates.append(row)
+                    seen_ids.add(rid)
+            # Optional: path-class only scan when asset set and no candidates yet.
+            if asset_id and path_key and not candidates:
+                q2 = select(Vulnerability).where(
+                    Vulnerability.user_id == user_id,
+                    Vulnerability.asset_id == asset_id,
+                )
+                for row in (await db.execute(q2)).scalars().all():
                     if is_same_finding(
                         {
                             "title": row.title,
                             "asset_id": row.asset_id,
                             "port": row.port,
                             "cve_id": row.cve_id,
+                            "location": row_location_blob(row),
+                            "poc": getattr(row, "poc", None),
+                            "description": getattr(row, "description", None),
                         },
                         title=title,
                         asset_id=asset_id,
                         port=port,
                         cve_id=cve_id,
-                    ) and ports_equal(row.port, port):
+                        location=location,
+                    ):
                         candidates.append(row)
-            # Also catch same-conversation exact title rows (legacy duplicates).
-            conv_rows = (
-                await db.execute(
-                    select(Vulnerability).where(
-                        Vulnerability.user_id == user_id,
-                        Vulnerability.conversation_id == uuid.UUID(conv_id),
-                        func.lower(func.trim(Vulnerability.title)) == title_key,
-                    )
-                )
-            ).scalars().all()
-            seen_ids = {getattr(c, "id", None) for c in candidates}
-            for row in conv_rows:
-                if row.id not in seen_ids:
-                    candidates.append(row)
-                    seen_ids.add(row.id)
+                        break
 
             vuln = pick_canonical_vuln(candidates)
             created = vuln is None
@@ -2494,6 +2554,7 @@ async def _remember_conversation_task(
     engagement_template: str | None = None,
     allow_postex: bool | None = None,
     accounts: object = None,
+    asset_id: str | None = None,
 ):
     try:
         from app.db.base import async_session
@@ -2512,6 +2573,9 @@ async def _remember_conversation_task(
                 "scope": scope or {},
                 "instruction": instruction or "",
             }
+            aid = str(asset_id or prev_task.get("asset_id") or "").strip()
+            if aid:
+                task_blob["asset_id"] = aid
             go = str(goal_objective or "").strip() or str(prev_task.get("goal_objective") or "").strip()
             if go:
                 task_blob["goal_objective"] = go
@@ -2698,6 +2762,50 @@ async def _apply_authorized_handoff(conv_id: str | None, approval: dict) -> None
     instruction = proposed or question or f"Continue authorized {pack} assessment."
     scope = {"allow": [target["value"]], "deny": []} if target.get("value") else {"allow": [], "deny": []}
 
+    # Scope main host: user-authorized open-task may register ledger asset (default yes).
+    register_raw = approval.get("register_asset")
+    register_asset = True if register_raw is None else bool(register_raw) and str(register_raw).lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+    asset_id_str = None
+    if register_asset and target.get("value"):
+        try:
+            from app.api.assets import upsert_discovered_asset
+            from app.db.base import async_session
+            from app.services.asset_ledger import is_valid_ledger_address, split_host_port
+
+            owner_id, _ = await _conversation_owner(conv_id)
+            host, tport = split_host_port(target.get("value"))
+            if owner_id and host and is_valid_ledger_address(host):
+                name_hint = str(approval.get("asset_name") or "").strip() or None
+                urls = None
+                val = str(target.get("value") or "")
+                if "://" in val:
+                    urls = [val]
+                async with async_session() as db:
+                    asset = await upsert_discovered_asset(
+                        db,
+                        user_id=owner_id,
+                        address=host,
+                        name=name_hint,
+                        open_ports=[tport] if tport else None,
+                        urls=urls,
+                        port=tport,
+                        conversation_id=uuid.UUID(conv_id) if conv_id else None,
+                        node_id=_uuid(str(getattr(expert_obj, "node_id", "") or node_hint or "")) if expert_obj or node_hint else None,
+                        source="user_authorized_scope",
+                        allow_create=True,
+                    )
+                    await db.commit()
+                    if asset:
+                        asset_id_str = str(asset.id)
+                        print(f"[WS] handoff registered scope asset host={host} id={asset_id_str[:8]}")
+        except Exception as e:
+            print(f"[WS] handoff asset register error: {e}")
+
     await _remember_conversation_task(
         conv_id,
         target=target or {},
@@ -2706,6 +2814,7 @@ async def _apply_authorized_handoff(conv_id: str | None, approval: dict) -> None
         engagement=pack,
         expert_id=eid,
         expert_name=ename,
+        asset_id=asset_id_str,
     )
 
     try:
@@ -2958,6 +3067,10 @@ async def _remember_conversation_checkpoint(conv_id: str, checkpoint: dict):
                 task["scope"] = checkpoint.get("scope") or {}
             if task:
                 context["task"] = task
+            # Surface candidates for right panel / next-scope UI.
+            cands = checkpoint.get("attack_surface_candidates")
+            if isinstance(cands, list):
+                context["attack_surface_candidates"] = cands
             c.context = context
             # Terminal checkpoint should settle the conversation row even if
             # task_complete status transition was missed earlier.
@@ -2967,6 +3080,53 @@ async def _remember_conversation_checkpoint(conv_id: str, checkpoint: dict):
             await db.commit()
     except Exception as e:
         print(f"[WS] remember conversation checkpoint error: {e}")
+
+
+async def _remember_next_scope_candidates(conv_id: str, msg: dict) -> None:
+    """Persist out-of-scope hosts after execution settle for next-Scope UI."""
+    if not conv_id or not isinstance(msg, dict):
+        return
+    cands = msg.get("next_scope_candidates") or msg.get("attack_surface_candidates")
+    if not isinstance(cands, list):
+        return
+    # Prefer only out-of-scope when both present.
+    next_only = [c for c in cands if isinstance(c, dict) and not c.get("in_scope")]
+    if not next_only and msg.get("next_scope_candidates") is None:
+        next_only = [c for c in cands if isinstance(c, dict)]
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+
+        async with async_session() as db:
+            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id)))
+            c = r.scalar_one_or_none()
+            if not c:
+                return
+            context = dict(c.context or {})
+            context["next_scope_candidates"] = next_only
+            if isinstance(msg.get("attack_surface_candidates"), list):
+                context["attack_surface_candidates"] = msg.get("attack_surface_candidates")
+            # Non-blocking UI signal (no agent wait).
+            context["next_scope_suggested"] = bool(next_only)
+            c.context = context
+            await db.commit()
+        if next_only:
+            try:
+                await _broadcast_to_conversation(
+                    conv_id,
+                    json.dumps(
+                        {
+                            "type": "next_scope_suggested",
+                            "conversation_id": conv_id,
+                            "candidates": next_only,
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+            except Exception as be:
+                print(f"[WS] next_scope broadcast error: {be}")
+    except Exception as e:
+        print(f"[WS] remember next_scope candidates error: {e}")
 
 
 async def _is_active_task_event(conv_id: str | None, task_id: object) -> bool:

@@ -55,15 +55,17 @@ User ── conversation ──▶ Platform (ledger / WS / UI)
 - **Technical id:** `default` (alias: `consult` for pack/catalog continuity during migration).  
 - **Not** listed as a user-created Expert in 专家管理 (system seat, not uninstallable commercial pack).  
 - **Ships with Node install** — no empty “bare runtime only” as the product default participant.  
-- **Mission:** help the user manage and understand **platform data** and session context; prepare for handoff to an expert when execution is needed.  
+- **Mission:** judge user intent each turn (chat / ledger / report / handoff); help manage **platform data** and session context; hand off to an expert via **one** Authorize card when execution is needed. Product harness settles on natural stop (no outer empty-stop recovery).
 - **Does not** run penetration / CTF exploit work bursts; does not book product findings (`bookingMode=none`).  
-- May **suggest** switching to a named expert; does not invent engagement via NLP.
+- May **suggest** switching to a named expert; does not invent engagement via NLP.  
+- **Model B:** default is the full **platform citizen** seat (ledger R/W + report). Expert packs inherit the same **read** citizen layer at load time (`node4/src/roles/platform-citizen.ts`) plus specialist act tools — they do not hand off to default just to list assets.
 
 ### 3.2 Experts
 
 - Unchanged three-layer model: catalog pack → node offers → product Expert instance (`@name` → node + pack).  
 - User switches partner in composer: **工作台助手** vs **@渗透大师** etc.  
-- Expert dispatch still carries structured `engagement` / `expert_id` / target / RoE / optional goal.
+- Expert dispatch still carries structured `engagement` / `expert_id` / target / RoE / optional goal.  
+- At load: **platform citizen read tools + Scope/ledger mission** injected for every pack; host create remains user-authorized platform boundaries only.
 
 ### 3.3 Platform
 

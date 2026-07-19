@@ -24,7 +24,14 @@ Independent **expert pack** units maintained outside the Node harness.
 
 Node4 is an OMP-class agent runtime with a **built-in `default` seat** (工作台助手) plus optional expert packs.
 
-1. **Built-in `default`** — always available; platform ledger tools + light assist; **no** finding booking. Product target: [`docs/platform-default-agent-refactor.md`](../docs/platform-default-agent-refactor.md).
+**Model B — platform citizen base + specialist overlay:**
+
+- At pack load (`node4/src/experts/load-pack.ts`), every expert pack is injected with **read** ledger tools + Scope/asset rules (`roles/platform-citizen.ts`). You do **not** need to list those tools in every `pack.json` (optional for docs; runtime de-dupes).
+- **default** = full citizen (R/W ledger, reports, handoff orchestration).
+- **pentest / ctf / …** = citizen **read** + act tools (shell, finding, skills). Session isolation remains; platform knowledge is shared.
+- Host **create** is never a free agent tool — user asset page, open-task Authorize, or next-scope / promote only.
+
+1. **Built-in `default`** — always available; full platform ledger tools + light assist; **no** finding booking. Product target: [`docs/platform-default-agent-refactor.md`](../docs/platform-default-agent-refactor.md).
 2. **Catalog** — this tree (source of **expert** pack content; not auto-loaded).
 3. **Install root** — local expert copies (`node4/installed-experts/` by default, override `NODE4_EXPERTS_INSTALL`).
 

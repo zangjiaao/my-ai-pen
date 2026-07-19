@@ -27,7 +27,8 @@
 2. **Chat 不是产品真相** — 漏洞/flag 级结论必须经 `finding` + evidence，不能只靠对话文本。
 3. **Harness over restriction** — 能力不足时优先改进 prompt / 任务信封 / 工具密度；不把靶场答案表、预期漏洞数、coverage 硬门当作默认「智能」。
 4. **结构化意图** — 角色/engagement 来自 UI 或任务信封显式字段；**禁止**用关键词 NLP 扫描用户自然语言猜 workflow。
-5. **Node 是唯一 Agent Runtime；Expert 是产品路由实体** — Node **始终**带内置 **`default`（工作台助手）**；商业/专项能力以 **专家包** 形式 install；平台 **offers** 许可/计费；**专家管理** 创建可 `@` 的专家实例并绑定 Node。见 `docs/node-expert-offers.md`、`docs/platform-default-agent-refactor.md`。
+5. **Node 是唯一 Agent Runtime；Expert 是产品路由实体** — Node **始终**带内置 **`default`（工作台助手）**；商业/专项能力以 **专家包** 形式 install；平台 **offers** 许可/计费；**专家管理** 创建可 `@` 的专家实例并绑定 Node。见 `docs/node-expert-offers.md`、`docs/platform-default-agent-refactor.md`。  
+   **Model B：** 所有 pack 共享 **platform citizen** 读台账能力 + Scope/资产规则（`node4/src/roles/platform-citizen.ts`）；专家再叠加 act 工具与方法论。主机创建仍仅用户授权边界（开测 Authorize / next-scope / 资产页）。
 6. **单路径协作** — 用户消息经平台鉴权/落库后转发到所选 Node 参与者；台账读写由 Node 调**平台数据 Tools**完成，避免后端 Agent 与 Node 双脑来回路由。
 7. **无靶场答案键** — 不以 DVWA/Juice/CTF flag 列表驱动 runtime 或 prompt。
 8. **远程热装 marketplace** — 非本阶段目标。
@@ -59,8 +60,9 @@
 - **专家管理**：创建/删除专家实例（name + pack + 绑定 Node）；多专家可共用 Node。
 - 节点页：注册、token、在线状态、runtime 预算、**专家包 offers** 安装/卸载（运行时能力层）。
 - 资产 / 漏洞列表与详情。
-  - **资产所有权：** 全局资产台账中的**主机（IP/域名）只能由用户添加**（资产页人工录入，或用户主动导入）。**Agent 不得新建资产行**。
-  - **Agent 可维护的附属信息：** 对已存在主机合并端口、服务指纹、URL、API 端点等表面信息；漏洞可挂到匹配的已有资产上，未知主机的 finding 允许 `asset_id` 为空。
+  - **资产所有权（Scope 模型）：** 正式主机行写入仅在 **用户动作** 下发生——资产页人工录入/导入、**开测授权**（主目标不在表时默认登记）、**下一轮 Scope 勾选**、或右侧攻击面 **promote**。**Agent 不得静默新建资产行**（测中旁路只进攻击面候选）。
+  - **Agent 可维护的附属信息：** 对已存在主机合并端口、服务指纹、URL、API 端点等表面信息；booking 尽量把 finding 挂到 Scope 主 host（path-only location 回退 task target）；未知主机的 finding 允许暂时 `asset_id` 为空，promote 后可回填。
+  - **下一轮 Scope：** 任务结束后若有 out-of-scope 候选 host，UI 多选 → 新任务（新 `scope.allow`），不是同一 work-burst 无限续跑。
 - **会话工作态（Send / 中断）：** 以 Node 侧 work-burst（`busy` / `work_status`）为真相源；平台维护会话 `workers` 并广播 `conversation_working`。当前会话只要有专家在工作，UI 显示中断；中断会扇出到该会话全部在线专家运行时。
 - 高风险操作：`request_decision` ↔ 用户 authorize/cancel。
 - **会话检测报告（按需、可多份）**：用户在对话中说明需要漏洞/检测报告时，工作台助手或专家读取台账已确认 finding，撰写交付 Markdown，经 `platform_create_report` 落库为 Case 的 report revision。顶栏 **报告** 抽屉列出全部版本；每份可选 Markdown/HTML 下载。亦支持 UI「快速合成」仅用台账字段生成草稿（`source=ledger`）。**不**用 NLP 猜 intent；**不**在每次 booking 时自动写报告；**不**发明未 book 的漏洞。

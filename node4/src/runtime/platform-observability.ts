@@ -295,10 +295,22 @@ export class PlatformTextStream {
   }
 }
 
-/** Build Node3-shaped checkpoint root for platform right panel. */
+/**
+ * Build Node3-shaped checkpoint root for platform right panel.
+ *
+ * Timing contract (work-burst hooks):
+ * - `started_at` = task/work-burst start (`task_start`)
+ * - `end_time` = settle (`task_complete` terminal checkpoint)
+ * Elapsed UI should use only this window — not outer continue counters or tool hooks.
+ */
 export function buildNode4Checkpoint(
   ctx: ObservabilityContext,
-  options?: { terminal?: boolean; status?: string; endTime?: string },
+  options?: {
+    terminal?: boolean;
+    status?: string;
+    endTime?: string;
+    attackSurfaceCandidates?: unknown[];
+  },
 ): Record<string, unknown> {
   const usage = ctx.usage.snapshot({
     agent_count: 1 + Math.max(0, (ctx.panel.list().length || 1) - 1),
@@ -350,12 +362,18 @@ export function buildNode4Checkpoint(
     agent_phase: ctx.counters.phase,
     active_tool: ctx.counters.activeTool || "",
     tool_call_count: ctx.counters.toolCallCount,
+    attack_surface_candidates: options?.attackSurfaceCandidates || [],
   };
 }
 
 export async function emitCheckpointUpdate(
   ctx: ObservabilityContext,
-  options?: { terminal?: boolean; status?: string; endTime?: string },
+  options?: {
+    terminal?: boolean;
+    status?: string;
+    endTime?: string;
+    attackSurfaceCandidates?: unknown[];
+  },
 ): Promise<Record<string, unknown>> {
   const checkpoint = buildNode4Checkpoint(ctx, options);
   await ctx.platform.send({

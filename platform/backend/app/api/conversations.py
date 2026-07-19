@@ -352,6 +352,168 @@ async def steer_conversation(conv_id: str, body: dict, current_user: dict = Depe
     return {"ok": True, "sent": True, "queued": False}
 
 
+@router.post("/{conv_id}/next-scope")
+async def start_next_scope(
+    conv_id: str,
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """User-selected next Scope from post-task attack-surface candidates.
+
+    Body:
+      hosts: [{host, port?, url?}, ...]  (required, non-empty)
+      register_assets: bool (default true)
+      instruction?: str
+      engagement / pack_id / expert_id?: optional override (else sticky task)
+
+    Registers selected hosts on the asset ledger (user action), updates task
+    target/scope, and dispatches a **new** work burst — does not await mid-run.
+    """
+    from app.api.assets import upsert_discovered_asset
+    from app.services.asset_ledger import is_valid_ledger_address, normalize_port, split_host_port
+    from app.services.expert_offers import normalize_pack_id
+    from app.ws import router as ws_router
+
+    c = await _get_conv(conv_id, current_user, db)
+    user_id = uuid.UUID(current_user["user_id"])
+    raw_hosts = body.get("hosts") or body.get("candidates") or []
+    if not isinstance(raw_hosts, list) or not raw_hosts:
+        raise HTTPException(400, "hosts must be a non-empty list")
+
+    register_assets = body.get("register_assets")
+    if register_assets is None:
+        register_assets = True
+
+    scope_allow: list[str] = []
+    registered: list[dict] = []
+    primary_target: dict | None = None
+
+    for item in raw_hosts:
+        if isinstance(item, str):
+            host, port = split_host_port(item)
+            url = item if "://" in item else ""
+        elif isinstance(item, dict):
+            url = str(item.get("url") or "").strip()
+            host, port = split_host_port(url or item.get("host") or item.get("address") or "")
+            if not port:
+                port = normalize_port(item.get("port"))
+        else:
+            continue
+        if not host or not is_valid_ledger_address(host):
+            continue
+        allow_entry = url if url and "://" in url else (f"{host}:{port}" if port else host)
+        if allow_entry not in scope_allow:
+            scope_allow.append(allow_entry)
+        if primary_target is None:
+            primary_target = {
+                "type": "url" if url and "://" in url else "host",
+                "value": url if url and "://" in url else host,
+            }
+        if register_assets:
+            asset = await upsert_discovered_asset(
+                db,
+                user_id=user_id,
+                address=host,
+                open_ports=[port] if port else None,
+                urls=[url] if url and "://" in url else None,
+                port=port,
+                conversation_id=c.id,
+                source="user_next_scope",
+                allow_create=True,
+            )
+            if asset:
+                registered.append({"id": str(asset.id), "address": asset.address, "port": port})
+
+    if not scope_allow or not primary_target:
+        raise HTTPException(400, "no valid hosts in selection")
+
+    ctx = dict(c.context or {}) if isinstance(c.context, dict) else {}
+    prev_task = ctx.get("task") if isinstance(ctx.get("task"), dict) else {}
+    eng = str(
+        body.get("engagement")
+        or body.get("pack_id")
+        or prev_task.get("engagement")
+        or prev_task.get("role")
+        or "pentest"
+    ).strip()
+    pack = normalize_pack_id(eng) or eng
+    instruction = str(body.get("instruction") or "").strip() or (
+        "Continue authorized security testing on the selected next-scope targets. "
+        f"Scope allow: {', '.join(scope_allow)}."
+    )
+    expert_id = str(body.get("expert_id") or prev_task.get("expert_id") or "").strip() or None
+    expert_name = str(body.get("expert_name") or prev_task.get("expert_name") or "").strip() or None
+
+    task_blob = {
+        "target": primary_target,
+        "scope": {"allow": scope_allow, "deny": []},
+        "instruction": instruction,
+        "engagement": pack,
+        "role": pack,
+    }
+    if expert_id:
+        task_blob["expert_id"] = expert_id
+    if expert_name:
+        task_blob["expert_name"] = expert_name
+    ctx["task"] = task_blob
+    ctx["next_scope_suggested"] = False
+    ctx["next_scope_candidates"] = []
+    c.context = ctx
+
+    await _audit(
+        db,
+        user_id,
+        "conversation.next_scope",
+        "conversation",
+        c.id,
+        c.id,
+        {"hosts": scope_allow, "register_assets": bool(register_assets), "registered": registered, "pack": pack},
+    )
+    await db.commit()
+
+    # Dispatch new work burst (same path as authorized handoff kickoff).
+    node_id = str(c.node_id or "").strip()
+    agent_node = str(body.get("agent_node_id") or node_id or "").strip()
+    dispatch = {
+        "type": "user_message",
+        "conversation_id": conv_id,
+        "text": instruction,
+        "initial_instruction": instruction,
+        "engagement": pack,
+        "role": pack,
+        "target": primary_target,
+        "scope": {"allow": scope_allow, "deny": []},
+        "expert_id": expert_id,
+        "expert_name": expert_name,
+        "agent_node_id": agent_node,
+    }
+    sent = False
+    if agent_node:
+        try:
+            await ws_router._dispatch_task_assign_to_node(
+                conv_id=conv_id,
+                client_id=str(user_id),
+                msg=dispatch,
+                node_id=agent_node,
+                engagement=pack,
+                expert_id=expert_id,
+                expert_name=expert_name,
+                force_working=True,
+            )
+            sent = True
+        except Exception as e:
+            print(f"[api] next-scope dispatch error: {e}")
+    return {
+        "ok": True,
+        "sent": sent,
+        "scope": {"allow": scope_allow, "deny": []},
+        "target": primary_target,
+        "registered_assets": registered,
+        "engagement": pack,
+    }
+
+
 async def _audit(db: AsyncSession, user_id: uuid.UUID, action: str, resource_type: str, resource_id: uuid.UUID, conversation_id: uuid.UUID | None, detail: dict, status: str = "success") -> None:
     db.add(AuditLog(
         actor_type="user",

@@ -2,10 +2,29 @@ import type { PlatformMessage } from "../types.js";
 
 type Handler = (message: PlatformMessage) => Promise<void> | void;
 
+/** Types we must not drop when the socket is briefly reconnecting. */
+const RELIABLE_TYPES = new Set([
+  "task_complete",
+  "task_error",
+  "text",
+  "thinking",
+  "tool_output",
+  "status_update",
+  "vuln_found",
+  "evidence_created",
+  "work_status",
+  "checkpoint_update",
+  "task_start",
+]);
+
+const MAX_QUEUE = 300;
+
 export class PlatformWSClient {
   private ws?: WebSocket;
   private readonly handlers = new Map<string, Handler[]>();
   private reconnect = true;
+  /** Outbound buffer while socket is closed (prevents truncated chat). */
+  private outboundQueue: PlatformMessage[] = [];
 
   constructor(
     private readonly url: string,
@@ -27,6 +46,7 @@ export class PlatformWSClient {
         await waitOpen(this.ws);
         attempt = 0;
         console.log(`[node4] websocket connected: ${this.url}`);
+        this.flushOutboundQueue();
         await new Promise<void>((resolve) => {
           if (!this.ws) return resolve();
           this.ws.onmessage = (event) => void this.dispatch(String(event.data));
@@ -44,26 +64,59 @@ export class PlatformWSClient {
   }
 
   async send(message: PlatformMessage): Promise<void> {
-    const critical = message.type === "task_complete" || message.type === "task_error";
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      console.warn(`[node4] dropped outbound message: ${message.type}`);
-      if (critical) {
-        for (let attempt = 0; attempt < 5; attempt += 1) {
-          await sleep(200 * (attempt + 1));
-          if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify(message));
-            return;
-          }
-        }
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      try {
+        this.ws.send(JSON.stringify(message));
+        return;
+      } catch (err) {
+        console.warn(`[node4] send failed: ${err instanceof Error ? err.message : String(err)}`);
       }
+    }
+
+    const typ = String(message.type || "");
+    if (RELIABLE_TYPES.has(typ)) {
+      this.outboundQueue.push(message);
+      if (this.outboundQueue.length > MAX_QUEUE) {
+        this.outboundQueue.splice(0, this.outboundQueue.length - MAX_QUEUE);
+      }
+      console.warn(`[node4] queued outbound message: ${typ} (queue=${this.outboundQueue.length})`);
+    } else {
+      console.warn(`[node4] dropped outbound message: ${typ}`);
       return;
     }
-    this.ws.send(JSON.stringify(message));
+
+    // Brief wait — common during platform-side replace/reconnect.
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      await sleep(150 * (attempt + 1));
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.flushOutboundQueue();
+        return;
+      }
+    }
   }
 
   close(): void {
     this.reconnect = false;
     this.ws?.close();
+  }
+
+  private flushOutboundQueue(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.outboundQueue.length) return;
+    const pending = this.outboundQueue.splice(0, this.outboundQueue.length);
+    for (const message of pending) {
+      try {
+        this.ws.send(JSON.stringify(message));
+      } catch (err) {
+        // Re-queue remainder + failed message
+        this.outboundQueue.unshift(message, ...pending.slice(pending.indexOf(message) + 1));
+        console.warn(`[node4] flush failed, re-queued: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
+    }
+    if (pending.length) {
+      console.log(`[node4] flushed ${pending.length} queued outbound message(s)`);
+    }
   }
 
   private async dispatch(raw: string): Promise<void> {

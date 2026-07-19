@@ -189,6 +189,12 @@ export default function ConversationPage() {
     expert_name?: string;
     status?: string;
   } | null>(null);
+  /** Post-task out-of-scope hosts → user picks next Scope (new task). */
+  const [nextScopeCandidates, setNextScopeCandidates] = useState<
+    Array<{ host: string; port?: string; urls?: string[]; in_scope?: boolean }>
+  >([]);
+  const [nextScopeSelected, setNextScopeSelected] = useState<Record<string, boolean>>({});
+  const [nextScopeBusy, setNextScopeBusy] = useState(false);
   const [importingReport, setImportingReport] = useState(false);
   const [importStatus, setImportStatus] = useState<ImportStatus>(null);
   /** Selected conversation partner (expert or platform). */
@@ -647,7 +653,26 @@ export default function ConversationPage() {
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, string>;
       const convId = messageConversationId(msg, activeId);
-      clearPendingAgentMessage(convId);
+      // Keep a live "working" slot while tools run — clearing pending alone removes all feedback.
+      if (convId) {
+        const liveSlotId = `live-slot-${convId}`;
+        const toolName = String(m.tool_name || "tool").trim() || "tool";
+        const status = normalizeExecutionStatus(m.status);
+        const label =
+          status === "running" || status === "pending"
+            ? `正在调用 ${toolName}…`
+            : `已完成 ${toolName}`;
+        setLiveStreams((prev) => ({
+          ...prev,
+          [liveSlotId]: makeMessage(convId, "agent", "agent_pending", {
+            text: label,
+            message_id: liveSlotId,
+            ...agentAttribution(m),
+          }),
+        }));
+        // Remove static pending row; live-slot carries the placeholder.
+        clearPendingAgentMessage(convId);
+      }
       markMessageAutoScroll();
       const incoming = makeMessage(convId, "agent", "tool_call", {
         ...agentAttribution(m),
@@ -1026,6 +1051,24 @@ export default function ConversationPage() {
         selectedMentionRef.current = match;
         setSelectedMention(match);
       }
+    },
+    next_scope_suggested: (msg) => {
+      if (!isActiveMessage(msg, activeId)) return;
+      const m = msg as Record<string, unknown>;
+      const list = Array.isArray(m.candidates) ? m.candidates : [];
+      const cleaned = list
+        .filter((c): c is Record<string, unknown> => Boolean(c && typeof c === "object"))
+        .map((c) => ({
+          host: String(c.host || "").trim(),
+          port: c.port != null ? String(c.port) : undefined,
+          urls: Array.isArray(c.urls) ? c.urls.map(String) : [],
+          in_scope: Boolean(c.in_scope),
+        }))
+        .filter((c) => c.host && !c.in_scope);
+      setNextScopeCandidates(cleaned);
+      const sel: Record<string, boolean> = {};
+      for (const c of cleaned) sel[`${c.host}|${c.port || ""}`] = true;
+      setNextScopeSelected(sel);
     },
     text: (msg) => {
       upsertStreamedAgentText(msg, "text");
@@ -1626,12 +1669,13 @@ export default function ConversationPage() {
       return;
     }
 
-    // No authorized target yet (e.g. "你好"): room chat only.
-    // Do NOT flip conversation into running/task status or open work-surface UI.
+    // No authorized target yet (e.g. "你好"): room chat only — still show Working/pending
+    // until Node settles. Do not open recon work-surface (no target).
     if (!targetValue) {
-      launchOptimisticRef.current = false;
-      setRunning(false);
+      launchOptimisticRef.current = true;
+      setRunning(true);
       setInterrupting(false);
+      if (convId) patchConversation(convId, { working: true });
       send({
         type: "user_message",
         conversation_id: convId,
@@ -2097,6 +2141,77 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                     >
                       忽略
                     </button>
+                  </div>
+                )}
+                {nextScopeCandidates.length > 0 && !running && (
+                  <div className="mx-3 mb-2 space-y-2 rounded-xl border border-hairline bg-surface-elevated px-3 py-2 text-xs text-ink">
+                    <p className="font-medium">
+                      本轮发现范围外主机 — 勾选作为<strong>下一轮 Scope</strong>（新任务，并默认登记资产）
+                    </p>
+                    <ul className="max-h-28 space-y-1 overflow-y-auto">
+                      {nextScopeCandidates.map((c) => {
+                        const key = `${c.host}|${c.port || ""}`;
+                        const label = c.port ? `${c.host}:${c.port}` : c.host;
+                        return (
+                          <li key={key} className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(nextScopeSelected[key])}
+                              onChange={(e) =>
+                                setNextScopeSelected((prev) => ({ ...prev, [key]: e.target.checked }))
+                              }
+                            />
+                            <span className="font-mono text-[11px]">{label}</span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        disabled={nextScopeBusy || !Object.values(nextScopeSelected).some(Boolean)}
+                        className="rounded-pill bg-ink px-2.5 py-1 text-[11px] font-medium text-on-ink disabled:opacity-40"
+                        onClick={() => {
+                          if (!activeId) return;
+                          const hosts = nextScopeCandidates
+                            .filter((c) => nextScopeSelected[`${c.host}|${c.port || ""}`])
+                            .map((c) => ({
+                              host: c.host,
+                              port: c.port,
+                              url: c.urls?.[0],
+                            }));
+                          if (!hosts.length) return;
+                          setNextScopeBusy(true);
+                          void authFetch(`/api/conversations/${activeId}/next-scope`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ hosts, register_assets: true }),
+                          })
+                            .then(() => {
+                              setNextScopeCandidates([]);
+                              setNextScopeSelected({});
+                              void refreshConversationState(activeId);
+                              void fetchAll();
+                            })
+                            .catch(() => {
+                              /* leave banner for retry */
+                            })
+                            .finally(() => setNextScopeBusy(false));
+                        }}
+                      >
+                        {nextScopeBusy ? "启动中…" : "开始下一轮 Scope"}
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-pill border border-hairline px-2 py-1 text-[11px] text-ink-secondary"
+                        onClick={() => {
+                          setNextScopeCandidates([]);
+                          setNextScopeSelected({});
+                        }}
+                      >
+                        忽略
+                      </button>
+                    </div>
                   </div>
                 )}
                 <div className="flex min-w-0 items-center justify-between gap-2 px-2.5 py-2">
