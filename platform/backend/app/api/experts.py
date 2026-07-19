@@ -5,7 +5,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
@@ -41,6 +41,8 @@ class ExpertUpdate(BaseModel):
     description: str | None = None
     color: str | None = Field(None, max_length=32)
     enabled: bool | None = None
+    # When true, this expert becomes the sole default conversation partner.
+    is_default: bool | None = None
 
 
 def _parse_uuid(value: str, label: str = "id") -> uuid.UUID:
@@ -247,6 +249,22 @@ async def update_expert(
             raise HTTPException(400, str(e)) from e
     if body.enabled is not None:
         expert.enabled = bool(body.enabled)
+        # Disabled experts cannot remain the default partner.
+        if not expert.enabled:
+            expert.is_default = False
+
+    if body.is_default is not None:
+        want_default = bool(body.is_default)
+        if want_default and not expert.enabled:
+            raise HTTPException(400, "Cannot set a disabled expert as the default conversation partner")
+        if want_default:
+            # Exactly one default: clear others first.
+            await db.execute(
+                update(Expert).where(Expert.id != expert.id).values(is_default=False)
+            )
+            expert.is_default = True
+        else:
+            expert.is_default = False
 
     try:
         user_uuid = uuid.UUID(str(current_user["user_id"]))
@@ -265,6 +283,7 @@ async def update_expert(
                 "pack_id": expert.pack_id,
                 "node_id": str(expert.node_id),
                 "enabled": expert.enabled,
+                "is_default": bool(getattr(expert, "is_default", False)),
             },
             status="success",
         )

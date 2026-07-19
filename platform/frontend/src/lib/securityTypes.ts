@@ -90,8 +90,13 @@ export type SecurityVulnerability = {
   evidence_ids?: string[];
   evidence?: SecurityEvidence[];
   status_timeline?: Array<Record<string, unknown>>;
+  first_seen_at?: string | null;
   discovered_at?: string | null;
   updated_at?: string | null;
+  /** Times re-confirmed after first booking (platform history.rediscovered). */
+  rediscovery_count?: number | null;
+  discovery_count?: number | null;
+  multiple_discoveries?: boolean | null;
 };
 
 export function shortId(value?: string | null) {

@@ -104,7 +104,12 @@ export function createPlatformListVulnerabilitiesTool(runtime: ToolRuntime): Too
   return {
     name: "platform_list_vulnerabilities",
     label: "Platform list vulnerabilities",
-    description: "List vulnerabilities/findings from the platform ledger. Read-only.",
+    description:
+      "List vulnerabilities/findings from the platform ledger (user-wide by default). " +
+      "Call at task start on a known Scope host: open priors are a re-verify workstream " +
+      "(re-prove + finding(confirm) → rediscovery merge), not a skip list. " +
+      "Also check before booking to avoid inventing duplicate titles for the same issue. " +
+      "Rows with multiple_discoveries=true were rediscovered before. Read-only.",
     parameters: Type.Object({
       limit: Type.Optional(Type.Number()),
       status: Type.Optional(Type.String()),
@@ -320,6 +325,44 @@ export function createPlatformCreateReportTool(runtime: ToolRuntime): ToolDefini
   };
 }
 
+export function createPlatformListExpertsTool(runtime: ToolRuntime): ToolDefinition<any> {
+  return {
+    name: "platform_list_experts",
+    label: "Platform list experts",
+    description:
+      "List product experts (id, name, pack_id, online) for multi-agent handoff. " +
+      "Call before request_user_decision(kind=handoff). If count is 0, handoff is impossible — stay on default / current seat.",
+    parameters: Type.Object({
+      pack_id: Type.Optional(Type.String({ description: "Filter by pack e.g. pentest | ctf | code-audit" })),
+    }),
+    async execute(_id: string, params: any) {
+      const packFilter = String(params.pack_id || "").trim().toLowerCase();
+      const res = await platformLedgerFetch(runtime, "GET", "/api/node/ledger/experts");
+      if (!res.ok || !res.data || typeof res.data !== "object") {
+        return jsonResult(res.data ?? { error: "list experts failed" }, { isError: true });
+      }
+      const data = res.data as {
+        experts?: Array<Record<string, unknown>>;
+        pack_ids?: string[];
+        can_handoff?: boolean;
+        note?: string;
+      };
+      let experts = Array.isArray(data.experts) ? data.experts : [];
+      if (packFilter) {
+        experts = experts.filter((e) => String(e.pack_id || "").toLowerCase() === packFilter);
+      }
+      return jsonResult({
+        ok: true,
+        experts,
+        count: experts.length,
+        pack_ids: data.pack_ids || [],
+        can_handoff: Boolean(data.can_handoff) && experts.length > 0,
+        note: data.note,
+      });
+    },
+  };
+}
+
 /** Register all platform.* tool factories used by the default seat. */
 export const PLATFORM_TOOL_FACTORIES: Record<string, (runtime: ToolRuntime) => ToolDefinition<any>> = {
   platform_list_assets: createPlatformListAssetsTool,
@@ -331,4 +374,5 @@ export const PLATFORM_TOOL_FACTORIES: Record<string, (runtime: ToolRuntime) => T
   platform_conversation_snapshot: createPlatformConversationSnapshotTool,
   platform_list_reports: createPlatformListReportsTool,
   platform_create_report: createPlatformCreateReportTool,
+  platform_list_experts: createPlatformListExpertsTool,
 };

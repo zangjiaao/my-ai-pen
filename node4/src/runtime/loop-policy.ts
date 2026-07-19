@@ -346,7 +346,7 @@ export function prematureStopContinuePrompt(attempt: number, max: number): strin
     `Do another high-density SHELL burst (not a stream of single http calls): multi-step pipelines, cookie jars, python parse, parallel independent shell calls in the same turn.`,
     `CRITICAL: Completing the todo map is NOT the same as finishing discovery. Re-read YOUR recon notes/facts — if modules, params, or flows were listed but not yet probed with act tools, test them now.`,
     `Prefer write scripts/ under the task dir for multi-module apps (enumerate + probe), then shell them — not only one-off curls.`,
-    `Rotate unexplored categories from YOUR own recon (auth, session, injection, access control, files, XSS variants, CSRF, misconfig, business logic). Do not invent target answer keys or fixed vuln lists.`,
+    `Rotate unexplored categories from YOUR own recon (auth, session, injection, access control, files, XSS variants, CSRF, misconfig, business logic). If open ledger priors remain on this Scope host, re-verify a few with fresh proof (rediscovery) before stopping. Do not invent target answer keys or fixed vuln lists.`,
     `Skill: if stuck on a class, load ONE different skill matching an untested observed surface (still at most one body loaded at a time).`,
     `Do not stop solely because remaining work "might need SPA" — try API/static JS first; drive headless browser via shell only if available.`,
     `Only mark a todo category done when you acted on it or recorded an explicit deadend note. Book proven issues with finding(confirm)+proof (quote real tool output).`,

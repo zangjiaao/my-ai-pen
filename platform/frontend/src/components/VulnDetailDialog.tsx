@@ -181,6 +181,14 @@ export default function VulnDetailDialog({
               <span className={`inline-block shrink-0 rounded-md px-2.5 py-0.5 font-mono text-[11px] font-medium uppercase ${badgeClass}`}>
                 {badgeLabel}
               </span>
+              {(vulnerability?.multiple_discoveries || Number(vulnerability?.rediscovery_count || 0) > 0) && (
+                <span
+                  className="inline-block shrink-0 rounded-md bg-status-running/12 px-2 py-0.5 font-mono text-[11px] font-medium text-status-running"
+                  title={`再次确认 ${Number(vulnerability?.rediscovery_count || 0)} 次`}
+                >
+                  多次发现
+                </span>
+              )}
               <h2 className={`min-w-0 break-words text-xl font-semibold ${findingKind === "flag" ? "font-mono" : ""}`}>
                 {headline}
               </h2>
@@ -505,31 +513,36 @@ function formatTimelineTime(value: unknown): string {
 }
 
 /** Map raw status/label to lifecycle bucket used for change detection. */
-function timelineLifecycle(raw: unknown): "to_fix" | "fixing" | "fixed" | null {
+function timelineLifecycle(raw: unknown): "to_fix" | "fixing" | "fixed" | "rediscovered" | "discovered" | null {
   const s = String(raw || "").toLowerCase();
   if (!s) return null;
+  // Discovery events (must not be filtered as noise — 发现记录 depends on them)
+  if (s === "rediscovered" || s === "rediscover" || s.includes("再次发现") || s.includes("最近发现")) {
+    return "rediscovered";
+  }
+  if (s === "discovered" || s === "首次发现") return "discovered";
   // Noise / non-transitions
-  if (/^updated$|update|创建|created|discovered|首次|发现/.test(s)) return null;
+  if (/^updated$|update|create|created/.test(s)) return null;
+  if (/当前状态/.test(String(raw || ""))) return null;
   if (["to_fix", "pending", "confirmed", "open", "candidate", "ignored", "accepted", "false_positive", "risk_accepted", "待修复"].some((k) => s.includes(k) || s === k)) {
-    // "当前状态：待修复" at create time is not a separate transition
-    if (/当前状态/.test(String(raw || ""))) return null;
     return "to_fix";
   }
   if (["fixing", "reported", "in_progress", "retest", "修复中"].some((k) => s.includes(k))) return "fixing";
   if (["fixed", "closed", "已修复"].some((k) => s.includes(k))) return "fixed";
-  // Explicit lifecycle labels only
   if (s === "to_fix") return "to_fix";
   return null;
 }
 
 const TIMELINE_STATUS_LABEL: Record<string, string> = {
+  discovered: "首次发现",
+  rediscovered: "再次发现",
   to_fix: "标记为待修复",
   fixing: "标记为修复中",
   fixed: "标记为已修复",
 };
 
 /**
- * Timeline: always “首次发现” once; extra nodes only when status actually changes.
+ * Timeline: discovery history (首次/再次) + real management status changes.
  * Drops same-timestamp noise (Updated / 当前状态：待修复).
  */
 function buildDetailTimeline(
@@ -537,40 +550,63 @@ function buildDetailTimeline(
 ): Array<{ at: string; label: string }> {
   if (!vulnerability) return [];
   const events: Array<{ at: string; label: string }> = [];
-  const discoveredRaw = vulnerability.discovered_at || vulnerability.timestamp;
-  const discoveredAt = formatTimelineTime(discoveredRaw);
-  if (discoveredAt) {
-    events.push({ at: discoveredAt, label: "首次发现" });
+  const seen = new Set<string>();
+
+  const push = (atRaw: unknown, label: string, keyExtra = "") => {
+    const at = formatTimelineTime(atRaw) || "—";
+    const key = `${at}|${label}|${keyExtra}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    events.push({ at, label });
+  };
+
+  // Prefer structured history from API (discovered / rediscovered events).
+  const timeline = vulnerability.status_timeline || [];
+  let sawDiscovery = false;
+  for (const event of timeline) {
+    const lifecycle = timelineLifecycle(event.status) || timelineLifecycle(event.label);
+    if (lifecycle === "discovered") {
+      push(event.at, "首次发现", "disc");
+      sawDiscovery = true;
+      continue;
+    }
+    if (lifecycle === "rediscovered") {
+      push(event.at, "再次发现", String(event.at || ""));
+      sawDiscovery = true;
+      continue;
+    }
   }
 
-  let lastLifecycle: "to_fix" | "fixing" | "fixed" | "first" = "first";
-  const seen = new Set<string>(discoveredAt ? [`${discoveredAt}|首次发现`] : []);
+  // Fallback when history missing: first_seen + optional last rediscover from timestamps.
+  if (!sawDiscovery) {
+    const firstRaw = vulnerability.first_seen_at || vulnerability.discovered_at || vulnerability.timestamp;
+    if (firstRaw) push(firstRaw, "首次发现", "first");
+    const lastRaw = vulnerability.discovered_at;
+    if (
+      lastRaw
+      && vulnerability.first_seen_at
+      && formatTimelineTime(lastRaw) !== formatTimelineTime(vulnerability.first_seen_at)
+    ) {
+      push(lastRaw, "再次发现", "last");
+    }
+  }
 
-  for (const event of vulnerability.status_timeline || []) {
-    const labelRaw = event.label || event.status;
+  // Management transitions only (skip initial to_fix noise).
+  let lastLifecycle: "to_fix" | "fixing" | "fixed" | "first" = "first";
+  for (const event of timeline) {
     const lifecycle = timelineLifecycle(event.status) || timelineLifecycle(event.label);
-    if (!lifecycle) continue;
-    // First discovery already covers initial open/to_fix
+    if (!lifecycle || lifecycle === "discovered" || lifecycle === "rediscovered") continue;
     if (lastLifecycle === "first" && lifecycle === "to_fix") {
       lastLifecycle = "to_fix";
       continue;
     }
     if (lifecycle === lastLifecycle) continue;
-    const at = formatTimelineTime(event.at) || "—";
-    // Skip same-second noise as 首次发现
-    if (discoveredAt && at === discoveredAt && lifecycle === "to_fix") {
-      lastLifecycle = "to_fix";
-      continue;
-    }
-    const label = TIMELINE_STATUS_LABEL[lifecycle] || asString(labelRaw, "状态变更");
-    const key = `${at}|${lifecycle}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    events.push({ at, label });
+    const label = TIMELINE_STATUS_LABEL[lifecycle] || asString(event.label || event.status, "状态变更");
+    push(event.at, label, lifecycle);
     lastLifecycle = lifecycle;
   }
 
-  // Do not invent an "Updated" node from updated_at — only real transitions above.
+  events.sort((a, b) => String(a.at).localeCompare(String(b.at)));
   return events;
 }
 

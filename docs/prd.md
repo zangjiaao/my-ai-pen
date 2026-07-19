@@ -75,6 +75,12 @@
   - **1 会话 = 1 Case**：`conversation.context.participants` 按 `expert_id`（或 pack+name）记录每位参与者；checkpoint 只更新对应角色，不整表覆盖。
   - **协作树**：每个产品专家 / default 座位一行 root；该角色最近一轮的 subagent 挂在其下；当前 sticky 角色高亮。
   - **Tasks**：todo 投影带 `owner_expert_id/name`；多角色 todo 按 owner 合并展示，不因 handoff 抹掉另一角色清单。
+  - **漏洞台账 / 再次发现**：专家与 default 均可 `platform_list_vulnerabilities`；任务 `case_context.findings_summary` 含 Case 资产上的历史 finding。同资产+路径/模块再次 booking → 平台 **rediscover**（保留 `first_seen_at`，`history` 记「再次发现」），不新建重复行；UI 卡片与详情展示 **多次发现** 徽章与发现时间线。
+  - **补扫再确认（harness）**：Scope 主机上已有 open prior 时，agent 须把其当作 **re-verify 工作流**（短证明 + `finding(confirm)` 新鲜 proof → rediscovery），与未测面 **穿插**；不得因「台账已有」整表跳过。判断抽样时优先 high/critical；不再复现则 fact/状态更新。见 `experts/pentest/work.md`、`platform-citizen` mission、`case_context` note。
+  - **同模块去重身份**：平台 `finding_dedupe` 用 **path 集合相交（含 upload 证据路径别名）+ 标题 stem（去掉 Low/Medium 级别、中英同类头）** 识别同一 finding；安全级别/新绕过不是新行。存量可用 `scripts/repair_finding_ledger.py`。
+  - **节点输出语言**：节点详情「配置」可设 `agent_language`：`auto`（跟用户）/ `zh-CN` / `en`。经 `task_assign.worker_limits` 注入 Node4 系统提示，约束**对话回复**与**漏洞台账文案**（标题/描述/PoC 叙述）；工具原始 stdout 不强制翻译。
+  - **默认对话角色**：专家管理可勾选「设为默认对话角色」（`experts.is_default`，全站仅一位）。新建会话 / 空白 composer 优先选该专家；未设置时优先 `pack_id=default`，再 online / 列表首位。
+  - **诚实计数（harness）**：收尾总结中「重新验证 N」= 本会话成功 `finding(confirm)` 次数，不是 prior 列表长度；「新发现」仅指新台账身份，同 path 合并只能称 rediscovery。见 `experts/pentest/work.md` Honest counts。
 - 报告导出 / 导入（现有 sync 能力延续，不阻塞主环）。
 - 审计日志中的专家安装、专家实例 CRUD 与 usage billing hook（非真实支付）。
 - 历史里程碑 A–D 见 **`docs/archive/phase-milestones.md`**（已归档）；现行优先项见 **`docs/platform-default-agent-refactor.md`**。

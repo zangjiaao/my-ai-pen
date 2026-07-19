@@ -40,6 +40,8 @@ const block = formatCaseContextInjection(ctx);
 assert.match(block, /Case work-group context/);
 assert.match(block, /Please audit the dumped source/);
 assert.match(block, /RCE via upload/);
+assert.match(block, /re-verify open ones/);
+assert.match(block, /rediscovery/);
 assert.match(block, /ev_src_1/);
 assert.match(block, /Case evidence/);
 assert.match(block, /Main\.java/);

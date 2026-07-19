@@ -87,6 +87,8 @@ def split_host_port(value: object) -> tuple[str, str | None]:
 
     Port may come from explicit :port or URL port; default http/https ports are kept
     only when written in the string (urlparse returns them when present).
+
+    Never raises — finding PoCs / free-text blobs may look like invalid IPv6 URLs.
     """
     raw = str(value or "").strip().strip("'\"")
     if not raw:
@@ -103,8 +105,27 @@ def split_host_port(value: object) -> tuple[str, str | None]:
         )
         if host_match:
             raw = host_match.group(0).rstrip("/.")
+        else:
+            # No recognizable host token — avoid urlparse on arbitrary prose
+            # (e.g. "[Proof] …" can raise Invalid IPv6 URL).
+            return "", None
 
-    parsed = urlparse(raw if "://" in raw else f"//{raw}")
+    try:
+        parsed = urlparse(raw if "://" in raw else f"//{raw}")
+    except ValueError:
+        # Manual fallback for host:port without scheme.
+        m = re.match(
+            r"^(?P<host>(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}|localhost|host\.docker\.internal|(?:\d{1,3}\.){3}\d{1,3})(?::(?P<port>\d{1,5}))?(?:/.*)?$",
+            raw,
+            flags=re.IGNORECASE,
+        )
+        if not m:
+            return "", None
+        host = m.group("host").lower()
+        if _FILE_LIKE_EXT.search(host) or host in _REJECT_ADDRESS_TOKENS:
+            return "", None
+        return host, normalize_port(m.group("port"))
+
     if parsed.hostname:
         host = parsed.hostname.lower()
         if _FILE_LIKE_EXT.search(host) or host in _REJECT_ADDRESS_TOKENS:
@@ -616,18 +637,27 @@ def service_hints_for_host(host: object, *blobs: object) -> list[dict[str, Any]]
         text = str(blob or "")
         for um in url_pat.finditer(text):
             raw = um.group(0)
-            h, p = split_host_port(raw)
+            try:
+                h, p = split_host_port(raw)
+            except Exception:
+                continue
             if h != host_n or not p:
                 continue
             scheme = "https" if raw.lower().startswith("https://") else "http"
             prev = by_port.get(p)
             if prev != "https":
                 by_port[p] = scheme
-        h, p = split_host_port(text.strip())
-        if h == host_n and p:
-            scheme = "https" if str(text).lower().startswith("https://") else "http"
-            if by_port.get(p) != "https":
-                by_port[p] = scheme
+        # Only try whole-blob parse when it looks like a single address/URL.
+        stripped = text.strip()
+        if stripped and len(stripped) < 260 and ("://" in stripped or re.search(r":\d{2,5}(?:/|$)", stripped)):
+            try:
+                h, p = split_host_port(stripped)
+            except Exception:
+                h, p = "", None
+            if h == host_n and p:
+                scheme = "https" if stripped.lower().startswith("https://") else "http"
+                if by_port.get(p) != "https":
+                    by_port[p] = scheme
     # bare host:port without scheme → empty name (still a port card)
     for p in extract_ports_for_host(host_n, *blobs):
         by_port.setdefault(p, "")

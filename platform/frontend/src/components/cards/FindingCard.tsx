@@ -55,6 +55,14 @@ export default function FindingCard({ finding, onOpen, className = "" }: Props) 
             Flag
           </span>
         )}
+        {isMultipleDiscoveries(row) && (
+          <span
+            className="inline-block shrink-0 rounded-md bg-status-running/12 px-1.5 py-0.5 font-mono text-[10px] font-medium text-status-running"
+            title={multipleDiscoveriesTitle(row)}
+          >
+            多次发现
+          </span>
+        )}
         <span className="truncate text-sm font-medium">{findingDisplayTitle(row, kind)}</span>
       </div>
       <p className="break-words text-xs text-ink-muted">{findingMetaLine(row, kind)}</p>
@@ -214,6 +222,20 @@ export function buildRiskChips(findings: Array<Record<string, unknown>>): RiskCh
     });
   }
   return chips;
+}
+
+function isMultipleDiscoveries(finding: Record<string, unknown>): boolean {
+  if (finding.multiple_discoveries === true) return true;
+  const n = Number(finding.rediscovery_count ?? 0);
+  if (Number.isFinite(n) && n > 0) return true;
+  const d = Number(finding.discovery_count ?? 0);
+  return Number.isFinite(d) && d > 1;
+}
+
+function multipleDiscoveriesTitle(finding: Record<string, unknown>): string {
+  const n = Number(finding.rediscovery_count ?? 0);
+  if (Number.isFinite(n) && n > 0) return `再次确认 ${n} 次（首次之后仍未修复）`;
+  return "此前已在台账中发现过，本次为再次确认";
 }
 
 function findingTextBlob(finding: Record<string, unknown>): string {

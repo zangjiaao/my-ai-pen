@@ -40,6 +40,9 @@ class Expert(Base):
     # Accent hex (#RRGGBB) for conversation partner chips; optional.
     color: Mapped[str | None] = mapped_column(String(32), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # At most one enabled expert should be is_default=True (enforced in API).
+    # Used as the default conversation partner for new chats.
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

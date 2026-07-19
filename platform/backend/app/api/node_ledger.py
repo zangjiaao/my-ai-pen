@@ -110,6 +110,29 @@ async def create_asset_denied(
     raise HTTPException(403, "host create denied: only users may create host assets")
 
 
+@router.get("/experts")
+async def list_experts_for_node(
+    enabled_only: bool = Query(default=True),
+    db: AsyncSession = Depends(get_db),
+    node: Node = Depends(get_node_from_token),
+):
+    """Product experts for handoff discovery (Node-authenticated)."""
+    _ = node
+    items = await ledger.list_experts(db, enabled_only=enabled_only)
+    packs = sorted({str(i.get("pack_id") or "") for i in items if i.get("pack_id")})
+    return {
+        "ok": True,
+        "experts": items,
+        "count": len(items),
+        "pack_ids": packs,
+        "can_handoff": len(items) > 0,
+        "note": (
+            "Use these rows for request_user_decision(kind=handoff). "
+            "If can_handoff is false, only the default seat exists — stay in chat/ledger or ask the user to create an Expert."
+        ),
+    }
+
+
 @router.get("/vulnerabilities")
 async def list_vulns(
     conversation_id: str | None = Query(default=None),

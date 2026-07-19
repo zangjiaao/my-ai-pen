@@ -244,6 +244,24 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
 
   const caseContext = parseCaseContext(message.case_context ?? message.caseContext);
 
+  // Language: top-level agent_language or worker_limits.agent_language from node config.
+  const limits =
+    message.worker_limits && typeof message.worker_limits === "object" && !Array.isArray(message.worker_limits)
+      ? (message.worker_limits as Record<string, unknown>)
+      : message.workerLimits && typeof message.workerLimits === "object" && !Array.isArray(message.workerLimits)
+        ? (message.workerLimits as Record<string, unknown>)
+        : {};
+  const agentLanguageRaw =
+    typeof message.agent_language === "string"
+      ? message.agent_language
+      : typeof message.agentLanguage === "string"
+        ? message.agentLanguage
+        : typeof limits.agent_language === "string"
+          ? limits.agent_language
+          : typeof limits.agentLanguage === "string"
+            ? limits.agentLanguage
+            : undefined;
+
   return {
     taskId,
     conversationId,
@@ -265,6 +283,7 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
           ? message.parentTaskId
           : undefined,
     caseContext,
+    agentLanguage: agentLanguageRaw?.trim() || undefined,
   };
 }
 

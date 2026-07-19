@@ -101,7 +101,11 @@ export function formatCaseContextInjection(ctx: CaseContext | undefined | null):
 
   const findings = (ctx.findings_summary || []).slice(0, MAX_FINDINGS);
   if (findings.length) {
-    lines.push("", "### Findings already on this case");
+    lines.push(
+      "",
+      "### Findings already on ledger (re-verify open ones — do not skip)",
+      "Open priors on this asset are work to re-prove with **fresh** acts, then finding(confirm) (platform rediscovery merge). Prefer high/critical first. Interleave with remaining untested surface from recon.",
+    );
     for (const f of findings) {
       const sev = f.severity ? `[${f.severity}] ` : "";
       const st = f.status ? ` (${f.status})` : "";
@@ -147,6 +151,11 @@ export function formatCaseContextInjection(ctx: CaseContext | undefined | null):
     "",
     "Continue this case from the shared findings and evidence above. Prefer evidence paths/excerpts over inventing new dump locations. Large trees are not fully inlined — open or re-fetch only what you need.",
   );
+  if (findings.length) {
+    lines.push(
+      "When open ledger findings exist on Scope assets: **re-verify** them with fresh proof (rediscovery), then keep discovering untested modules — listing priors is not completion.",
+    );
+  }
 
   let out = lines.join("\n");
   if (out.length > MAX_TOTAL_CHARS) {

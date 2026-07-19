@@ -48,6 +48,8 @@ type NodeRecord = {
   main_max_turns?: number | null;
   max_concurrent_workers?: number | null;
   default_scan_mode?: string | null;
+  /** auto | zh-CN | en — agent chat + finding narrative language */
+  agent_language?: string | null;
   connectivity?: ConnectivityBar[];
   connectivity_uptime_pct?: number | null;
   capabilities?: NodeCapabilities | null;
@@ -342,6 +344,7 @@ function NodeDetailDialog({
   const [mainMaxTurns, setMainMaxTurns] = useState(String(node.main_max_turns ?? 80));
   const [maxConcurrent, setMaxConcurrent] = useState(String(node.max_concurrent_workers ?? 1));
   const [scanMode, setScanMode] = useState(node.default_scan_mode || "standard");
+  const [agentLanguage, setAgentLanguage] = useState(node.agent_language || "auto");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [saveOk, setSaveOk] = useState(false);
@@ -373,6 +376,7 @@ function NodeDetailDialog({
     setMainMaxTurns(String(node.main_max_turns ?? 80));
     setMaxConcurrent(String(node.max_concurrent_workers ?? 1));
     setScanMode(node.default_scan_mode || "standard");
+    setAgentLanguage(node.agent_language || "auto");
     setSaveError("");
     setSaveOk(false);
     setExpertError("");
@@ -389,6 +393,7 @@ function NodeDetailDialog({
     node.main_max_turns,
     node.max_concurrent_workers,
     node.default_scan_mode,
+    node.agent_language,
     node.offers,
   ]);
 
@@ -497,6 +502,10 @@ function NodeDetailDialog({
       setSaveError("默认扫描深度无效");
       return;
     }
+    if (!["auto", "zh-CN", "en"].includes(agentLanguage)) {
+      setSaveError("输出语言无效");
+      return;
+    }
     setSaving(true);
     setSaveError("");
     setSaveOk(false);
@@ -512,6 +521,7 @@ function NodeDetailDialog({
           main_max_turns: Math.round(mainTurns),
           max_concurrent_workers: Math.round(concurrent),
           default_scan_mode: scanMode,
+          agent_language: agentLanguage,
         }),
       });
       setSaveOk(true);
@@ -796,6 +806,27 @@ function NodeDetailDialog({
                         </select>
                       </label>
                     </div>
+                  </div>
+                  <div className="rounded-md border border-hairline-soft p-4">
+                    <p className="text-sm font-medium">输出语言</p>
+                    <p className="mt-1 text-xs text-ink-muted">
+                      控制本节点上 Agent 的对话回复与漏洞台账文案（标题、描述、PoC 叙述）。工具原始输出（命令 stdout 等）仍按目标系统语言，不做翻译。
+                    </p>
+                    <label className="mt-3 block space-y-1">
+                      <span className="text-[11px] text-ink-muted">语言策略</span>
+                      <select
+                        value={agentLanguage}
+                        onChange={(e) => {
+                          setAgentLanguage(e.target.value);
+                          setSaveOk(false);
+                        }}
+                        className="w-full rounded-md border bg-canvas px-2.5 py-2 text-sm"
+                      >
+                        <option value="auto">跟随用户（auto）</option>
+                        <option value="zh-CN">中文（zh-CN）</option>
+                        <option value="en">English（en）</option>
+                      </select>
+                    </label>
                   </div>
                 </>
               ) : (

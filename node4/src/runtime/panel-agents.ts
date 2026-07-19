@@ -34,6 +34,7 @@ export function humanizeToolName(tool: string): string {
     platform_list_assets: "查询资产台账",
     platform_get_asset: "读取资产详情",
     platform_list_vulnerabilities: "查询漏洞台账",
+    platform_list_experts: "查询可用专家",
     platform_get_vulnerability: "读取漏洞详情",
     platform_update_finding_status: "更新漏洞状态",
     platform_enrich_asset: "补充资产信息",

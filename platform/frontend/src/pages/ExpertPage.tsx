@@ -40,6 +40,8 @@ type ExpertRow = {
   description?: string | null;
   color?: string | null;
   enabled: boolean;
+  /** Sole default conversation partner for new chats. */
+  is_default?: boolean;
   created_at?: string | null;
 };
 
@@ -193,6 +195,11 @@ export default function ExpertPage() {
                             {e.name}
                           </span>
                           <NodeOnlineBadge online={online} />
+                          {e.is_default && e.enabled && (
+                            <span className="rounded-md bg-status-running/12 px-1.5 py-0.5 text-[10px] font-medium text-status-running">
+                              默认
+                            </span>
+                          )}
                           {!e.enabled && (
                             <span className="rounded-md bg-canvas-inset px-1.5 py-0.5 text-[10px] text-ink-muted">
                               已禁用
@@ -441,6 +448,7 @@ function ExpertDetailDialog({
   const [packId, setPackId] = useState(expert.pack_id);
   const [color, setColor] = useState(() => resolveExpertColor(expert.color, expert.id));
   const [enabled, setEnabled] = useState(expert.enabled);
+  const [isDefault, setIsDefault] = useState(Boolean(expert.is_default));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [saveOk, setSaveOk] = useState(false);
@@ -452,10 +460,11 @@ function ExpertDetailDialog({
     setPackId(expert.pack_id);
     setColor(resolveExpertColor(expert.color, expert.id));
     setEnabled(expert.enabled);
+    setIsDefault(Boolean(expert.is_default));
     setSaveError("");
     setSaveOk(false);
     setDetailTab("config");
-  }, [expert.id, expert.name, expert.node_id, expert.pack_id, expert.color, expert.enabled]);
+  }, [expert.id, expert.name, expert.node_id, expert.pack_id, expert.color, expert.enabled, expert.is_default]);
 
   const selectedNode = nodes.find((n) => n.id === nodeId) || null;
   const packOptions = useMemo(() => {
@@ -516,6 +525,7 @@ function ExpertDetailDialog({
           pack_id: packId,
           color,
           enabled,
+          is_default: isDefault,
         }),
       });
       setSaveOk(true);
@@ -611,6 +621,11 @@ function ExpertDetailDialog({
                 <span className="rounded-pill border border-hairline bg-canvas-inset px-2 py-0.5 text-xs text-ink">
                   {expertLabel(expert.pack_id)}
                 </span>
+                {expert.is_default && expert.enabled ? (
+                  <span className="rounded-pill bg-status-running/12 px-2 py-0.5 text-xs font-medium text-status-running">
+                    默认角色
+                  </span>
+                ) : null}
                 {!expert.enabled ? (
                   <span className="rounded-pill border border-hairline bg-canvas-inset px-2 py-0.5 text-xs text-ink-muted">
                     已禁用
@@ -739,13 +754,35 @@ function ExpertDetailDialog({
                     type="checkbox"
                     checked={enabled}
                     onChange={(e) => {
-                      setEnabled(e.target.checked);
+                      const on = e.target.checked;
+                      setEnabled(on);
+                      if (!on) setIsDefault(false);
                       setSaveOk(false);
                     }}
                     className="rounded border-hairline"
                   />
                   启用（禁用后不可在对话中选用）
                 </label>
+                <label
+                  className={`mt-3 flex cursor-pointer items-center gap-2 text-sm ${
+                    enabled ? "text-ink-secondary" : "text-ink-muted"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isDefault}
+                    disabled={!enabled}
+                    onChange={(e) => {
+                      setIsDefault(e.target.checked);
+                      setSaveOk(false);
+                    }}
+                    className="rounded border-hairline"
+                  />
+                  设为默认对话角色（新建会话时自动选中；全站仅一位）
+                </label>
+                <p className="mt-2 text-xs text-ink-muted">
+                  建议将「通用助理 / default」设为默认；需要开测时再切换渗透等专家。
+                </p>
               </div>
 
               <div className="rounded-md border border-hairline-soft p-4">

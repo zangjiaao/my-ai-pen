@@ -31,9 +31,11 @@ from app.models.vulnerability import Vulnerability
 from app.services.asset_ledger import is_valid_ledger_address, split_host_port
 from app.services.finding_dedupe import (
     append_discovery_event,
+    expand_path_classes,
+    finding_path_classes,
     is_same_finding,
-    location_path_class,
     pick_canonical_vuln,
+    preferred_path_class,
     row_location_blob,
 )
 
@@ -91,62 +93,71 @@ async def run(*, apply: bool) -> int:
                     v.port = port
             await db.flush()
 
-        # Reload after links for merge clustering
+        # Reload after links. Cluster by (user, asset, port) then pairwise is_same_finding
+        # so path-alias and title-stem matches are found even when one row is path-less.
         vulns = (await db.execute(select(Vulnerability))).scalars().all()
-        clusters: dict[tuple, list[Vulnerability]] = defaultdict(list)
+        buckets: dict[tuple, list[Vulnerability]] = defaultdict(list)
         for v in vulns:
-            if not v.user_id or not v.asset_id:
-                # cluster null-asset by path only if path present
-                pk = location_path_class(row_location_blob(v))
-                if not pk:
-                    continue
-                key = (str(v.user_id), "", str(v.port or ""), pk)
-            else:
-                pk = location_path_class(row_location_blob(v))
-                if pk:
-                    key = (str(v.user_id), str(v.asset_id), str(v.port or ""), f"path:{pk}")
-                else:
-                    key = (
-                        str(v.user_id),
-                        str(v.asset_id),
-                        str(v.port or ""),
-                        f"title:{(v.title or '').strip().lower()}",
-                    )
-            clusters[key].append(v)
+            if not v.user_id:
+                continue
+            key = (str(v.user_id), str(v.asset_id or ""), str(v.port or ""))
+            buckets[key].append(v)
 
-        merge_groups = {k: rows for k, rows in clusters.items() if len(rows) > 1}
-        print(f"merge_groups={len(merge_groups)} extras={sum(len(r) - 1 for r in merge_groups.values())}")
+        def _same(a: Vulnerability, b: Vulnerability) -> bool:
+            return is_same_finding(
+                {
+                    "title": a.title,
+                    "asset_id": a.asset_id,
+                    "port": a.port,
+                    "cve_id": a.cve_id,
+                    "location": row_location_blob(a),
+                    "poc": a.poc,
+                    "description": a.description,
+                },
+                title=b.title,
+                asset_id=b.asset_id,
+                port=b.port,
+                cve_id=b.cve_id,
+                location=row_location_blob(b),
+                description=b.description,
+                poc=b.poc,
+            )
+
+        # Connected components of pairwise same-finding within each bucket.
+        merge_groups: list[list[Vulnerability]] = []
+        for rows in buckets.values():
+            if len(rows) < 2:
+                continue
+            remaining = list(rows)
+            while remaining:
+                seed = remaining.pop(0)
+                component = [seed]
+                changed = True
+                while changed:
+                    changed = False
+                    still = []
+                    for other in remaining:
+                        if any(_same(m, other) for m in component):
+                            component.append(other)
+                            changed = True
+                        else:
+                            still.append(other)
+                    remaining = still
+                if len(component) > 1:
+                    merge_groups.append(component)
+
+        extras_n = sum(len(r) - 1 for r in merge_groups)
+        print(f"merge_groups={len(merge_groups)} extras={extras_n}")
 
         if apply:
             deleted = 0
-            for rows in merge_groups.values():
-                # Re-check pairwise with is_same_finding so we don't over-merge title-only keys wrongly
+            for rows in merge_groups:
                 remaining = list(rows)
                 while len(remaining) > 1:
                     canon = pick_canonical_vuln(remaining)
                     if not canon:
                         break
-                    extras = []
-                    for other in remaining:
-                        if other.id == canon.id:
-                            continue
-                        if is_same_finding(
-                            {
-                                "title": canon.title,
-                                "asset_id": canon.asset_id,
-                                "port": canon.port,
-                                "cve_id": canon.cve_id,
-                                "location": row_location_blob(canon),
-                                "poc": canon.poc,
-                                "description": canon.description,
-                            },
-                            title=other.title,
-                            asset_id=other.asset_id,
-                            port=other.port,
-                            cve_id=other.cve_id,
-                            location=row_location_blob(other),
-                        ):
-                            extras.append(other)
+                    extras = [o for o in remaining if o.id != canon.id and _same(canon, o)]
                     if not extras:
                         remaining = [r for r in remaining if r.id != canon.id]
                         continue
@@ -155,11 +166,25 @@ async def run(*, apply: bool) -> int:
                             set(canon.evidence_ids or []) | set(duplicate.evidence_ids or [])
                         )
                         canon.description = canon.description or duplicate.description
-                        canon.poc = canon.poc or duplicate.poc
+                        # Prefer path-bearing PoC when canonical is payload-only.
+                        if not preferred_path_class(
+                            expand_path_classes(finding_path_classes(canon.poc, canon.title))
+                        ) and preferred_path_class(
+                            expand_path_classes(finding_path_classes(duplicate.poc, duplicate.title))
+                        ):
+                            canon.poc = duplicate.poc or canon.poc
+                        else:
+                            canon.poc = canon.poc or duplicate.poc
                         canon.remediation = canon.remediation or duplicate.remediation
                         canon.asset_id = canon.asset_id or duplicate.asset_id
                         if not canon.port and duplicate.port:
                             canon.port = duplicate.port
+                        # Prefer higher severity when merging level variants.
+                        sev_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+                        if sev_rank.get(str(duplicate.severity or "").lower(), 9) < sev_rank.get(
+                            str(canon.severity or "").lower(), 9
+                        ):
+                            canon.severity = duplicate.severity
                         hist = list(canon.history or [])
                         for item in list(duplicate.history or []):
                             if item not in hist:
@@ -183,12 +208,11 @@ async def run(*, apply: bool) -> int:
                 print(f"  link {str(v.id)[:8]} → {asset.address} port={port or v.port} title={str(v.title)[:60]}")
             if len(link_plan) > 15:
                 print(f"  ... +{len(link_plan) - 15} more links")
-            shown = 0
-            for key, rows in list(merge_groups.items())[:10]:
-                print(f"  merge n={len(rows)} key={key[1:]} titles={[str(r.title)[:40] for r in rows[:4]]}")
-                shown += 1
-            if len(merge_groups) > shown:
-                print(f"  ... +{len(merge_groups) - shown} more groups")
+            for rows in merge_groups[:15]:
+                titles = [str(r.title)[:45] for r in rows]
+                print(f"  merge n={len(rows)} titles={titles}")
+            if len(merge_groups) > 15:
+                print(f"  ... +{len(merge_groups) - 15} more groups")
     return 0
 
 

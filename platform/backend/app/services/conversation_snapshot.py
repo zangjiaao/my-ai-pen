@@ -263,10 +263,13 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     # Prefer healed row status (matches sidebar / conversation list).
     conv_status = conversation.status or "created"
     agent_state = agent_state_from_checkpoint(checkpoint, conv_status) if checkpoint else agent_state_from_messages(messages, evidence, conv_status)
+    # Prefer ledger rows (vuln_summary) so rediscovery badges / status / first_seen
+    # survive snapshot merge. Message/checkpoint cards often omit history fields;
+    # when titles match, first group wins — DB must come first.
     findings = merge_many_by_key([
+        [vuln_summary(v) for v in vulns],
         message_findings(messages),
         checkpoint_findings(checkpoint),
-        [vuln_summary(v) for v in vulns],
     ], "title")
     asset_items = merge_many_by_key([
         [asset_summary(a) for a in assets],
@@ -420,24 +423,59 @@ def strix_agents_for_snapshot(
 
 
 def merge_plan_trees_by_owner(primary: list, secondary: list) -> list[dict]:
-    """Union plan nodes; primary (participant trees) wins on owner+id collision."""
+    """Union plan nodes for multi-role Cases.
+
+    Participant trees (primary) are preferred. Checkpoint trees often lack
+    ``owner_*``; older merge keyed only on ``owner:node_id`` so the same
+    ``node_id`` appeared twice — once with an expert chip and once without.
+
+    Rules:
+    - Same ``owner + node_id`` → keep first (primary wins).
+    - Same ``node_id`` with no owner when an owned copy already exists → drop unowned.
+    - Different owners, same local ``node_id`` → keep both (true multi-role).
+    """
     out: list[dict] = []
-    seen: set[str] = set()
+    seen_owner_nid: set[str] = set()
+    nids_with_owner: set[str] = set()
+    unowned_nids: set[str] = set()
 
-    def _key(node: dict) -> str:
-        owner = str(node.get("owner_expert_id") or node.get("owner_expert_name") or "").strip()
-        nid = str(node.get("node_id") or node.get("id") or node.get("title") or "").strip()
-        return f"{owner}:{nid}"
+    def _owner(node: dict) -> str:
+        return str(node.get("owner_expert_id") or node.get("owner_expert_name") or "").strip()
 
+    def _nid(node: dict) -> str:
+        return str(node.get("node_id") or node.get("id") or node.get("title") or "").strip()
+
+    # Pass 1: owned nodes (primary first).
     for source in (primary, secondary):
         for item in source or []:
             if not isinstance(item, dict):
                 continue
-            key = _key(item)
-            if not key or key in seen:
+            owner = _owner(item)
+            if not owner:
                 continue
-            seen.add(key)
+            nid = _nid(item)
+            if not nid:
+                continue
+            key = f"{owner}:{nid}"
+            if key in seen_owner_nid:
+                continue
+            seen_owner_nid.add(key)
+            nids_with_owner.add(nid)
             out.append(dict(item))
+
+    # Pass 2: unowned only when no owned copy of that node_id exists.
+    for source in (primary, secondary):
+        for item in source or []:
+            if not isinstance(item, dict):
+                continue
+            if _owner(item):
+                continue
+            nid = _nid(item)
+            if not nid or nid in nids_with_owner or nid in unowned_nids:
+                continue
+            unowned_nids.add(nid)
+            out.append(dict(item))
+
     return out
 
 
@@ -1671,7 +1709,7 @@ def message_findings(messages: list[Message]) -> list[dict]:
             continue
         content = m.content
         finding_id = content.get("id") or content.get("vulnerability_id") or content.get("finding_id") or str(m.id)
-        findings.append({
+        row = {
             "id": str(finding_id),
             "vulnerability_id": str(content.get("vulnerability_id") or content.get("id") or ""),
             "strix_vulnerability_id": content.get("strix_vulnerability_id"),
@@ -1704,7 +1742,19 @@ def message_findings(messages: list[Message]) -> list[dict]:
             "kind": content.get("kind") or content.get("finding_kind") or content.get("category"),
             "category": content.get("category") or content.get("finding_kind") or content.get("kind"),
             "flag_value": content.get("flag_value"),
-        })
+        }
+        # Live/persisted vuln_found may carry rediscovery fields after ledger book.
+        if content.get("first_seen_at") is not None:
+            row["first_seen_at"] = content.get("first_seen_at")
+        if content.get("discovered_at") is not None:
+            row["discovered_at"] = content.get("discovered_at")
+        if content.get("rediscovery_count") is not None:
+            row["rediscovery_count"] = content.get("rediscovery_count")
+        if content.get("discovery_count") is not None:
+            row["discovery_count"] = content.get("discovery_count")
+        if content.get("multiple_discoveries") is not None:
+            row["multiple_discoveries"] = content.get("multiple_discoveries")
+        findings.append(row)
     return findings
 
 
@@ -1798,8 +1848,12 @@ def asset_summary(a: Asset) -> dict:
 def vuln_summary(v: Vulnerability) -> dict:
     # Lazy import avoids circular import with api package during app boot.
     from app.api.vulnerabilities import classify_finding_kind
+    from app.services.finding_dedupe import discovery_count, rediscovery_count
 
     kind = classify_finding_kind(v)
+    history = getattr(v, "history", None)
+    rcount = rediscovery_count(history)
+    first = getattr(v, "first_seen_at", None) or v.discovered_at
     return {
         "id": str(v.id),
         "vulnerability_id": str(v.id),
@@ -1809,6 +1863,7 @@ def vuln_summary(v: Vulnerability) -> dict:
         "confidence": v.confidence,
         "status": v.status,
         "asset_id": str(v.asset_id) if v.asset_id else None,
+        "port": str(v.port) if getattr(v, "port", None) else None,
         "description": v.description,
         "poc": v.poc,
         "remediation": v.remediation,
@@ -1816,6 +1871,11 @@ def vuln_summary(v: Vulnerability) -> dict:
         "finding_kind": kind,
         "kind": kind,
         "category": kind,
+        "first_seen_at": first.isoformat() if first else None,
+        "discovered_at": v.discovered_at.isoformat() if v.discovered_at else None,
+        "rediscovery_count": rcount,
+        "discovery_count": discovery_count(history),
+        "multiple_discoveries": rcount > 0,
     }
 
 

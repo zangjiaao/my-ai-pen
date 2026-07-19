@@ -560,6 +560,20 @@ function chatAuthSubtype(content: Record<string, unknown>): { label: string; bad
   return { label: "KEY", badgeClass: "bg-status-running/10 text-status-running" };
 }
 
+function isChatMultipleDiscoveries(content: Record<string, unknown>): boolean {
+  if (content.multiple_discoveries === true) return true;
+  const n = Number(content.rediscovery_count ?? 0);
+  if (Number.isFinite(n) && n > 0) return true;
+  const d = Number(content.discovery_count ?? 0);
+  return Number.isFinite(d) && d > 1;
+}
+
+function chatMultipleDiscoveriesTitle(content: Record<string, unknown>): string {
+  const n = Number(content.rediscovery_count ?? 0);
+  if (Number.isFinite(n) && n > 0) return `再次确认 ${n} 次（首次之后仍未修复）`;
+  return "此前已在台账中发现过，本次为再次确认";
+}
+
 function VulnCard({ content, onOpen }: { content: Record<string, unknown>; onOpen?: (finding: Partial<SecurityVulnerability>) => void }) {
   const category = resolveFindingCardCategory(content);
   const severity = normalizeSeverity(content.severity);
@@ -602,6 +616,7 @@ function VulnCard({ content, onOpen }: { content: Record<string, unknown>; onOpe
       ? `${description.slice(0, 177)}…`
       : description
     : String(content.location || content.endpoint || content.affected_asset || "").trim() || "-";
+  const rediscovered = isChatMultipleDiscoveries(content);
 
   return (
     <button
@@ -618,6 +633,14 @@ function VulnCard({ content, onOpen }: { content: Record<string, unknown>; onOpe
     >
       <div className="mb-1 flex min-w-0 items-center gap-2">
         <span className={`inline-block flex-shrink-0 rounded-md px-2.5 py-0.5 font-mono text-[11px] font-medium uppercase ${badgeClass}`}>{label}</span>
+        {rediscovered && (
+          <span
+            className="inline-block flex-shrink-0 rounded-md bg-status-running/12 px-2 py-0.5 font-mono text-[11px] font-medium text-status-running"
+            title={chatMultipleDiscoveriesTitle(content)}
+          >
+            多次发现
+          </span>
+        )}
         <span className="min-w-0 truncate font-semibold">{findingCardTitle(content, category)}</span>
       </div>
       <p className="line-clamp-2 break-words text-sm text-ink-secondary [overflow-wrap:anywhere]">{subtitle}</p>

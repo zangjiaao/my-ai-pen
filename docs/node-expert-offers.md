@@ -110,6 +110,13 @@ Right panel Status shows engagement when a **real execution** surface is active 
 
 WS resolution order: **explicit participant** → expert_id / @Expert name → sticky expert (mid expert work) → **default@Node** → explicit node_id (legacy).
 
+### Multi-agent handoff (authorized)
+
+- **default** (and any seat with `request_user_decision`) may propose `kind=handoff` with structured `handoff_pack_id` / `handoff_expert_id` + target/scope on the card.
+- **User Authorize** is required before sticky expert switch + destination `task_assign`. Cancel keeps the current seat.
+- Agents call **`platform_list_experts`** first: if no product expert for that pack (or none at all), handoff is refused — no silent switch, no inventing peers.
+- Destination expert owns execution confirmation and booking after handoff; default does not scan.
+
 ## Node management UI（物理节点）
 
 - Node cards list installed **扩展包** chips.

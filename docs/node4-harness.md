@@ -58,7 +58,10 @@ Interactive **TUI remains deferred**.
 | Outer continue | **Product default OFF.** Lab opt-in only: `NODE4_MAX_CONTINUES` / `NODE4_MAX_CONTINUES_DEFAULT`, `NODE4_MAX_EMPTY_STOPS`, `NODE4_MAX_PREMATURE_STOPS`, `NODE4_MAX_GOAL_CONTINUES=unlimited\|N`. Policy pure functions remain in `loop-policy.ts`. |
 | Session wall | **None** by design; per-tool timeouts remain |
 | Settle | Natural stop → terminal checkpoint `end_time` + `task_complete` (panel timer closes). Abort / user cancel also settle. Execution bursts may attach `attack_surface_candidates` / `next_scope_candidates` (out-of-scope hosts) for UI next-Scope — **no** mid-run asset create. |
-| Booking | `finding(confirm)` sends `affected_asset`/`port` (location host or task Scope host) so platform can link ledger assets; path-class soft dedupe merges title-drift rediscoveries. |
+| Booking | `finding(confirm)` sends `affected_asset`/`port` (location host or task Scope host) so platform can link ledger assets; path-class soft dedupe merges title-drift rediscoveries. `location` must include a request path/URL (not payload-only). |
+| Prior re-verify | When `case_context.findings_summary` / `platform_list_vulnerabilities` shows open findings on Scope assets, agent re-proves them with fresh proof (rediscovery merge), interleaved with new surface — priors are not a skip list. Citizen mission + pack `work.md` steer this; no expected-vuln count gates. |
+| Same-module identity | Platform merges by path∩alias + title stem (security level ≠ new row). `/hackable/uploads` aliases `/vulnerabilities/upload`. sqli ≠ sqli_blind. |
+| Output language | Node config `agent_language` (`auto` \| `zh-CN` \| `en`) → `task_assign.worker_limits.agent_language` → system prompt block. Applies to chat + finding fields; not tool raw output. |
 
 ---
 
@@ -149,7 +152,7 @@ UI Elapsed = that window (local tick while running). Tool-call hooks do **not** 
 |------|----------|-------------|
 | **Read-ish free** | `todo`, `read`, `skill list/load`, platform list vulns/reports, fact list/get | No authorize card by default |
 | **Act in scope** | `shell`/`http`/`session`/`browser` against authorized target | Proceed under task RoE; no card per probe |
-| **High-risk / handoff** | Start another expert (`kind=handoff`), destructive/out-of-scope proposal, user-visible commit beyond engagement | **One** `request_user_decision` card with full plan; wait Authorize/Cancel |
+| **High-risk / handoff** | Start another expert (`kind=handoff`), multi-agent transfer, destructive/out-of-scope proposal | **One** `request_user_decision` card with full plan; wait Authorize/Cancel. Preflight: `platform_list_experts` — no pack peer → refuse card. |
 | **Not implemented** | CyberStrike-style automated `audit_agent` reviewer | Deferred — human cards only |
 
 ### Process facts (A2 / A3 / A5)

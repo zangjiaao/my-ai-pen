@@ -94,6 +94,10 @@ def asset_to_dict(a: Asset) -> dict[str, Any]:
 
 
 def vuln_to_dict(v: Vulnerability) -> dict[str, Any]:
+    from app.services.finding_dedupe import discovery_count, rediscovery_count
+
+    history = getattr(v, "history", None)
+    rcount = rediscovery_count(history)
     return {
         "id": str(v.id),
         "title": v.title,
@@ -104,10 +108,19 @@ def vuln_to_dict(v: Vulnerability) -> dict[str, Any]:
         "port": v.port,
         "conversation_id": str(v.conversation_id) if v.conversation_id else None,
         "description": v.description,
+        "poc": (v.poc or "")[:500] if getattr(v, "poc", None) else None,
         "cve_id": v.cve_id,
         "cvss": v.cvss,
+        "first_seen_at": (
+            v.first_seen_at.isoformat()
+            if getattr(v, "first_seen_at", None)
+            else (v.discovered_at.isoformat() if v.discovered_at else None)
+        ),
         "discovered_at": v.discovered_at.isoformat() if v.discovered_at else None,
         "updated_at": v.updated_at.isoformat() if v.updated_at else None,
+        "rediscovery_count": rcount,
+        "discovery_count": discovery_count(history),
+        "multiple_discoveries": rcount > 0,
     }
 
 
@@ -144,6 +157,43 @@ async def get_asset(db: AsyncSession, asset_id: str, *, user_id: uuid.UUID | Non
     return asset_to_dict(a)
 
 
+async def list_experts(
+    db: AsyncSession,
+    *,
+    enabled_only: bool = True,
+) -> list[dict[str, Any]]:
+    """Product experts available for structured handoff (pack + id + name + node)."""
+    from app.models.expert import Expert
+    from app.models.node import Node
+    from app.services.expert_offers import effective_offers
+
+    stmt = select(Expert).order_by(Expert.created_at.desc())
+    if enabled_only:
+        stmt = stmt.where(Expert.enabled.is_(True))
+    experts = list((await db.execute(stmt)).scalars().all())
+    node_ids = {e.node_id for e in experts if e.node_id}
+    nodes: dict = {}
+    if node_ids:
+        nres = await db.execute(select(Node).where(Node.id.in_(node_ids)))
+        nodes = {n.id: n for n in nres.scalars().all()}
+    out: list[dict[str, Any]] = []
+    for e in experts:
+        n = nodes.get(e.node_id)
+        out.append(
+            {
+                "id": str(e.id),
+                "name": e.name,
+                "pack_id": str(e.pack_id or "").strip(),
+                "enabled": bool(e.enabled),
+                "node_id": str(e.node_id) if e.node_id else None,
+                "node_name": n.name if n else None,
+                "node_status": n.status if n else None,
+                "node_online": bool(n and str(getattr(n, "status", "") or "").lower() == "online"),
+            }
+        )
+    return out
+
+
 async def list_vulnerabilities(
     db: AsyncSession,
     *,
@@ -151,12 +201,20 @@ async def list_vulnerabilities(
     conversation_id: str | None = None,
     status: str | None = None,
     limit: int = 50,
+    conversation_only: bool = False,
 ) -> list[dict[str, Any]]:
+    """
+    List ledger findings for agent tools.
+
+    Default: **user-wide** (all Cases) so experts can see prior findings on the
+    same asset before booking and treat matches as rediscovery — not only this
+    conversation's rows. Pass conversation_only=True to restrict.
+    """
     limit = max(1, min(int(limit or 50), 100))
     stmt = select(Vulnerability).order_by(Vulnerability.updated_at.desc()).limit(limit)
     if user_id:
         stmt = stmt.where(or_(Vulnerability.user_id == user_id, Vulnerability.user_id.is_(None)))
-    if conversation_id:
+    if conversation_only and conversation_id:
         try:
             cid = uuid.UUID(str(conversation_id))
             stmt = stmt.where(

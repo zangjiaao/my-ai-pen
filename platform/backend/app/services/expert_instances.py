@@ -109,6 +109,7 @@ def expert_to_dict(
         "description": expert.description,
         "color": getattr(expert, "color", None),
         "enabled": bool(expert.enabled),
+        "is_default": bool(getattr(expert, "is_default", False)),
         "created_at": expert.created_at.isoformat() if getattr(expert, "created_at", None) else None,
         "updated_at": expert.updated_at.isoformat() if getattr(expert, "updated_at", None) else None,
     }

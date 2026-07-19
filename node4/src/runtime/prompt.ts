@@ -88,6 +88,45 @@ export function renderPromptTemplate(text: string, vars: Record<string, string>)
   });
 }
 
+/** Normalize node-configured agent language (auto | zh-CN | en). */
+export function normalizeAgentLanguage(raw: unknown): "auto" | "zh-CN" | "en" {
+  const s = String(raw || "auto").trim();
+  if (s === "zh-CN" || s === "en" || s === "auto") return s;
+  const low = s.toLowerCase().replace(/_/g, "-");
+  if (low === "zh" || low === "zh-cn" || low === "chinese" || s === "中文") return "zh-CN";
+  if (low === "en" || low === "en-us" || low === "english") return "en";
+  return "auto";
+}
+
+/**
+ * Language policy for chat + finding narratives.
+ * Tool stdout / raw protocol traffic is never required to be translated.
+ */
+export function formatAgentLanguageInjection(language: unknown): string {
+  const lang = normalizeAgentLanguage(language);
+  if (lang === "zh-CN") {
+    return [
+      "## Output language (node policy: zh-CN)",
+      "Write **all user-facing chat** and **finding ledger fields** (title, description, impact, remediation, poc narrative) in **Simplified Chinese**.",
+      "Do not default to English for findings when this policy is set — even if tool output or payloads are English.",
+      "Keep technical tokens as-is when needed (paths, headers, CVE ids, code, shell stdout excerpts in proof).",
+      "Tool raw output is not rewritten; only your narration and booked finding text must be Chinese.",
+    ].join("\n");
+  }
+  if (lang === "en") {
+    return [
+      "## Output language (node policy: en)",
+      "Write **all user-facing chat** and **finding ledger fields** (title, description, impact, remediation, poc narrative) in **English**.",
+      "Do not switch to Chinese for findings when this policy is set.",
+      "Keep technical tokens as-is (paths, headers, CVE ids, code, shell stdout excerpts in proof).",
+    ].join("\n");
+  }
+  return [
+    "## Output language (node policy: auto)",
+    "Match the **user's language** for chat and finding narratives. If the user writes Chinese, reply and book findings in Chinese; if English, use English.",
+  ].join("\n");
+}
+
 /**
  * Build system prompt from an explicit role pack + task envelope.
  * Mission/work lines may use {{ expert_name }} etc.; rendered here.
@@ -111,6 +150,8 @@ export function buildSystemPrompt(
     ...pack.missionLines.map(render),
     "",
     ...pack.workLines.map(render),
+    "",
+    formatAgentLanguageInjection(task.agentLanguage),
     "",
     `Role pack: ${vars.pack_id} (${vars.pack_label}).`,
     // Label isolated as JSON string — treat as display data, not instructions.

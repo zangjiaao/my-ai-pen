@@ -39,6 +39,11 @@ export type TaskEnvelope = {
    * Experts joining mid-case should read this like a group chat.
    */
   caseContext?: import("./runtime/case-context.js").CaseContext;
+  /**
+   * Node-configured output language: auto | zh-CN | en.
+   * Controls chat replies + finding title/description narrative (not tool stdout).
+   */
+  agentLanguage?: string;
 };
 
 export type PlatformSink = {

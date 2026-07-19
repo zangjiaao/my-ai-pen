@@ -101,8 +101,12 @@ class VulnOut(BaseModel):
     evidence: list[EvidenceOut] = Field(default_factory=list)
     status_timeline: list[dict] = Field(default_factory=list)
     allowed_next_statuses: list[str] = Field(default_factory=list)
+    first_seen_at: str | None = None
     discovered_at: str | None
     updated_at: str | None
+    rediscovery_count: int = 0
+    discovery_count: int = 1
+    multiple_discoveries: bool = False
     model_config = {"from_attributes": True}
 
 
@@ -118,6 +122,10 @@ class RetestOut(BaseModel):
 class BatchStatusBody(BaseModel):
     ids: list[str] = Field(default_factory=list)
     status: str
+
+
+class BatchDeleteBody(BaseModel):
+    ids: list[str] = Field(default_factory=list)
 
 
 class ReportSessionBody(BaseModel):
@@ -255,6 +263,57 @@ async def batch_update_status(
         updated += 1
     await db.commit()
     return {"updated": updated, "skipped": skipped, "status": next_status, "status_label": LIFECYCLE[next_status]}
+
+
+@router.post("/batch-delete")
+async def batch_delete_vulnerabilities(
+    body: BatchDeleteBody,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Hard-delete selected findings from the user ledger (batch)."""
+    user_id = uuid.UUID(current_user["user_id"])
+    ids: list[uuid.UUID] = []
+    for raw in body.ids or []:
+        try:
+            ids.append(uuid.UUID(str(raw)))
+        except ValueError:
+            continue
+    # Dedupe while preserving order
+    seen: set[uuid.UUID] = set()
+    uniq: list[uuid.UUID] = []
+    for i in ids:
+        if i in seen:
+            continue
+        seen.add(i)
+        uniq.append(i)
+    if not uniq:
+        raise HTTPException(400, "请选择至少一条漏洞")
+    result = await db.execute(
+        select(Vulnerability).where(Vulnerability.user_id == user_id, Vulnerability.id.in_(uniq))
+    )
+    rows = list(result.scalars().all())
+    deleted = 0
+    for v in rows:
+        await _audit(
+            db,
+            user_id,
+            "vulnerability.delete",
+            "vulnerability",
+            v.id,
+            v.conversation_id,
+            {
+                "title": v.title,
+                "severity": v.severity,
+                "status": v.status,
+                "asset_id": str(v.asset_id) if v.asset_id else None,
+                "batch": True,
+            },
+        )
+        await db.delete(v)
+        deleted += 1
+    await db.commit()
+    return {"deleted": deleted, "requested": len(uniq)}
 
 
 @router.post("/report-session", response_model=RetestOut)
@@ -796,8 +855,13 @@ def _out(
     asset: Asset | None = None,
     evidence: list[Evidence] | None = None,
 ) -> VulnOut:
+    from app.services.finding_dedupe import discovery_count, rediscovery_count
+
     st = normalize_status(v.status)
     kind = classify_finding_kind(v)
+    history = getattr(v, "history", None)
+    rcount = rediscovery_count(history)
+    first = getattr(v, "first_seen_at", None) or v.discovered_at
     return VulnOut(
         id=str(v.id),
         user_id=str(v.user_id) if v.user_id else None,
@@ -821,6 +885,10 @@ def _out(
         evidence=[_evidence_out(e) for e in (evidence or [])],
         status_timeline=_status_timeline(v),
         allowed_next_statuses=sorted(TRANSITIONS.get(st, set())),
+        first_seen_at=first.isoformat() if first else None,
         discovered_at=v.discovered_at.isoformat() if v.discovered_at else None,
         updated_at=v.updated_at.isoformat() if v.updated_at else None,
+        rediscovery_count=rcount,
+        discovery_count=discovery_count(history),
+        multiple_discoveries=rcount > 0,
     )

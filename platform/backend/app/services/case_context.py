@@ -219,6 +219,15 @@ def build_findings_summary(
             "location": _clip(str(f.get("location") or f.get("url") or f.get("affected_asset") or ""), 200),
             "evidence_ids": clean_eids,
         }
+        if f.get("asset_id"):
+            row["asset_id"] = str(f.get("asset_id"))[:80]
+        if f.get("port"):
+            row["port"] = str(f.get("port"))[:16]
+        if f.get("first_seen_at"):
+            row["first_seen_at"] = str(f.get("first_seen_at"))[:40]
+        if f.get("multiple_discoveries") or int(f.get("rediscovery_count") or 0) > 0:
+            row["multiple_discoveries"] = True
+            row["rediscovery_count"] = int(f.get("rediscovery_count") or 0)
         if proof:
             row["proof_excerpt"] = proof
         out.append(row)
@@ -500,7 +509,13 @@ def build_case_context_payload(
         "evidence_snippets": evidence_snippets,
         "artifact_hints": hints[:16],
         "note": (
-            "Same case work-group. Findings + evidence_snippets are shared Case materials. "
+            "Same case work-group. findings_summary includes this Case and prior ledger "
+            "findings on Case assets. Open priors are a re-verify workstream: re-run minimal "
+            "proof, then finding(confirm) with fresh tool-output (platform rediscovery merge; "
+            "do not invent a second row for the same asset+path/module). Interleave with "
+            "untested surface — do not skip priors just because they are already listed. "
+            "Honest counts: rediscovery N = confirms this session only; 新发现 only for new "
+            "ledger identities (not same-path merge). Never claim 全部重新验证 from list length. "
             "Use paths/excerpts to continue; large files are not fully inlined."
         ),
     }
@@ -535,15 +550,45 @@ async def load_case_context_for_conversation(
 
     findings: list[dict] = []
     try:
-        q = select(Vulnerability).where(Vulnerability.conversation_id == cid)
+        from app.models.asset import Asset
+        from app.services.finding_dedupe import discovery_count, rediscovery_count
+
+        uid = None
         if user_id is not None:
             uid = user_id if isinstance(user_id, uuid_mod.UUID) else uuid_mod.UUID(str(user_id))
+
+        # This Case's findings + prior ledger findings on assets used by this Case
+        # so joining experts see "already booked" surface before re-booking.
+        asset_ids: list = []
+        try:
+            aq = select(Asset.id).where(Asset.conversation_id == cid)
+            if uid is not None:
+                aq = aq.where(Asset.user_id == uid)
+            asset_ids = list((await db.execute(aq.limit(40))).scalars().all())
+        except Exception:
+            asset_ids = []
+
+        from sqlalchemy import or_
+
+        conds = [Vulnerability.conversation_id == cid]
+        if asset_ids:
+            conds.append(Vulnerability.asset_id.in_(asset_ids))
+        q = select(Vulnerability).where(or_(*conds))
+        if uid is not None:
             q = q.where(Vulnerability.user_id == uid)
-        q = q.order_by(Vulnerability.discovered_at.desc()).limit(findings_limit * 2)
+        q = q.order_by(Vulnerability.updated_at.desc()).limit(max(findings_limit * 3, 40))
         vulns = (await db.execute(q)).scalars().all()
+        seen: set[str] = set()
         for v in vulns:
+            vid = str(getattr(v, "id", "") or "")
+            if vid and vid in seen:
+                continue
+            if vid:
+                seen.add(vid)
+            hist = getattr(v, "history", None)
+            rcount = rediscovery_count(hist)
             findings.append({
-                "id": str(getattr(v, "id", "") or ""),
+                "id": vid,
                 "title": getattr(v, "title", None) or "Untitled",
                 "severity": getattr(v, "severity", None) or "medium",
                 "status": getattr(v, "status", None) or "",
@@ -555,7 +600,19 @@ async def load_case_context_for_conversation(
                 "description": getattr(v, "description", None) or "",
                 "poc": getattr(v, "poc", None) or "",
                 "evidence_ids": list(getattr(v, "evidence_ids", None) or []),
+                "asset_id": str(v.asset_id) if getattr(v, "asset_id", None) else None,
+                "port": str(v.port) if getattr(v, "port", None) else None,
+                "first_seen_at": (
+                    v.first_seen_at.isoformat()
+                    if getattr(v, "first_seen_at", None)
+                    else (v.discovered_at.isoformat() if getattr(v, "discovered_at", None) else None)
+                ),
+                "rediscovery_count": rcount,
+                "multiple_discoveries": rcount > 0,
+                "discovery_count": discovery_count(hist),
             })
+            if len(findings) >= findings_limit * 2:
+                break
     except Exception:
         findings = []
 

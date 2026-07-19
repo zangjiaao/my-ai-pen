@@ -200,6 +200,17 @@ export function createFindingTool(runtime: ToolRuntime): ToolDefinition<any> {
           "error: location or url required — the concrete place the issue was observed (path, endpoint, or full URL)",
         );
       }
+      // Path-bearing location helps platform rediscovery merge (asset+path identity).
+      // Reject payload-only strings with no URL/path token.
+      const hasPathToken =
+        /https?:\/\//i.test(location) ||
+        /\/[A-Za-z0-9._~-]{1,}/.test(location) ||
+        /^[A-Za-z0-9._-]+:\d{1,5}\//.test(location);
+      if (!hasPathToken) {
+        return textResult(
+          "error: location must include a request path or URL (e.g. /vulnerabilities/exec/ or https://host/path) — not payload-only text; put the payload in poc=",
+        );
+      }
       const poc = String(params.poc || "").trim();
       const pocCheck = pocDemonstratesIssue(poc);
       if (!pocCheck.ok) {
@@ -498,7 +509,10 @@ async function finalizeFinding(
     finding: record,
     evidence_created: input.evidenceIds[0],
     how_captured: record.how_captured,
-    note: "Case evidence was created from your proof at booking time (observation + how captured).",
+    note:
+      "Case evidence was created from your proof at booking time (observation + how captured). " +
+      "Platform may **merge** this confirm into an existing ledger row (rediscovery / 再次发现) when asset+path/module match — that is **not** a new finding. " +
+      "For end-of-task counts: only tally successful finding(confirm) this session; use platform_list_vulnerabilities / Case Findings; never claim 新发现 for a merge or 全部重新验证 from prior list length alone.",
     chain_quality: {
       chain_length: chainQuality.chain_length,
       short_chain: chainQuality.short_chain,

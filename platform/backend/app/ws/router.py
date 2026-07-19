@@ -2331,6 +2331,8 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                     port=port,
                     cve_id=cve_id,
                     location=location,
+                    description=description,
+                    poc=poc_value,
                 ):
                     candidates.append(row)
                     seen_ids.add(rid)
@@ -2356,6 +2358,8 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                         port=port,
                         cve_id=cve_id,
                         location=location,
+                        description=description,
+                        poc=poc_value,
                     ):
                         candidates.append(row)
                         break
@@ -2439,7 +2443,12 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                     pass
                 else:
                     vuln.status = lifecycle_status
-                # Keep original conversation_id (first session); latest is in history.
+                # Pin to current Case so Findings panel shows the row; first Case
+                # remains on history[0].conversation_id / first_seen_at.
+                try:
+                    vuln.conversation_id = uuid.UUID(str(conv_id))
+                except (ValueError, TypeError):
+                    pass
 
             # Merge any extra duplicate rows into the canonical one, then delete them.
             extras = [r for r in candidates if r is not None and r.id != vuln.id]
@@ -2497,6 +2506,11 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                     "fingerprint_title": title_key,
                 },
             )
+            from app.services.finding_dedupe import discovery_count, rediscovery_count
+
+            hist = getattr(vuln, "history", None)
+            rcount = rediscovery_count(hist)
+            first = getattr(vuln, "first_seen_at", None) or vuln.discovered_at
             return {
                 "id": str(vuln.id),
                 "vulnerability_id": str(vuln.id),
@@ -2529,6 +2543,12 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                 "agent_name": msg.get("agent_name"),
                 "timestamp": msg.get("timestamp"),
                 "evidence_ids": vuln.evidence_ids or [],
+                "finding_kind": msg.get("finding_kind") or msg.get("kind") or "vuln",
+                "first_seen_at": first.isoformat() if first else None,
+                "discovered_at": vuln.discovered_at.isoformat() if vuln.discovered_at else None,
+                "rediscovery_count": rcount,
+                "discovery_count": discovery_count(hist),
+                "multiple_discoveries": rcount > 0 or bool(rediscovered and not created),
             }
     except Exception as e:
         print(f"[WS] persist vuln error: {e}")
@@ -2773,6 +2793,25 @@ async def _apply_authorized_handoff(conv_id: str | None, approval: dict) -> None
 
     if not eid:
         print(f"[WS] handoff: no enabled product expert for pack={pack}")
+        try:
+            await _broadcast_to_conversation(
+                conv_id,
+                json.dumps(
+                    {
+                        "type": "status_update",
+                        "conversation_id": conv_id,
+                        "status": "handoff_failed",
+                        "message": (
+                            f"移交失败：没有可用的产品专家（pack={pack}）。"
+                            "请在「专家管理」创建并绑定对应专家后再试。"
+                        ),
+                        "agent_phase": "finished",
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        except Exception as pe:
+            print(f"[WS] handoff failure notice error: {pe}")
         return
 
     await _remember_conversation_expert(

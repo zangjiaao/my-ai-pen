@@ -36,6 +36,9 @@ DEFAULT_MAIN_MAX_MS = 1_800_000  # 30 min whole-task wall clock
 DEFAULT_MAIN_MAX_TURNS = 80
 DEFAULT_MAX_CONCURRENT_WORKERS = 1
 DEFAULT_SCAN_MODE = "standard"
+# Agent chat + finding narrative language (prompt policy; not UI i18n).
+DEFAULT_AGENT_LANGUAGE = "auto"
+ALLOWED_AGENT_LANGUAGES = frozenset({"auto", "zh-CN", "en"})
 MIN_WORKER_MAX_MS = 10_000
 MAX_WORKER_MAX_MS = 900_000
 MIN_WORKER_MAX_TURNS = 1
@@ -81,6 +84,8 @@ class NodeOut(BaseModel):
     main_max_turns: int | None = None
     max_concurrent_workers: int | None = None
     default_scan_mode: str | None = None
+    # Chat + finding title/description language policy for agents on this node.
+    agent_language: str | None = None
     # Uptime-style bars for the last 24h (card sparkline).
     connectivity: list[ConnectivityBar] = Field(default_factory=list)
     connectivity_uptime_pct: float | None = None
@@ -100,6 +105,7 @@ class NodeUpdate(BaseModel):
     main_max_turns: int | None = None
     max_concurrent_workers: int | None = None
     default_scan_mode: str | None = None
+    agent_language: str | None = None
 
 
 class ExpertInstallBody(BaseModel):
@@ -181,6 +187,7 @@ async def update_node(node_id: str, body: NodeUpdate, current_user: dict = Depen
         body.main_max_turns,
         body.max_concurrent_workers,
         body.default_scan_mode,
+        body.agent_language,
     )
     changed_fields: list[str] = []
     if body.name is not None:
@@ -231,6 +238,20 @@ async def update_node(node_id: str, body: NodeUpdate, current_user: dict = Depen
                 raise HTTPException(400, "default_scan_mode must be quick, standard, or deep")
             cfg["default_scan_mode"] = mode
             changed_fields.append("default_scan_mode")
+        if body.agent_language is not None:
+            lang = str(body.agent_language).strip()
+            # Accept zh-cn / en-US style loosely for zh-CN / en / auto
+            lang_norm = lang if lang in ALLOWED_AGENT_LANGUAGES else lang.replace("_", "-")
+            if lang_norm.lower() in {"zh", "zh-cn", "zh_cn", "chinese", "中文"}:
+                lang_norm = "zh-CN"
+            elif lang_norm.lower() in {"en", "en-us", "en_us", "english"}:
+                lang_norm = "en"
+            elif lang_norm.lower() in {"auto", "follow", "match"}:
+                lang_norm = "auto"
+            if lang_norm not in ALLOWED_AGENT_LANGUAGES:
+                raise HTTPException(400, "agent_language must be auto, zh-CN, or en")
+            cfg["agent_language"] = lang_norm
+            changed_fields.append("agent_language")
         n.config = cfg
     if changed_fields:
         await _audit_user(
@@ -511,6 +532,23 @@ def _clamp_int(value: object, lo: int, hi: int, default: int) -> int:
     return max(lo, min(hi, n))
 
 
+def normalize_agent_language(value: object) -> str:
+    """Return auto | zh-CN | en from free-form node config."""
+    raw = str(value or DEFAULT_AGENT_LANGUAGE).strip()
+    if not raw:
+        return DEFAULT_AGENT_LANGUAGE
+    if raw in ALLOWED_AGENT_LANGUAGES:
+        return raw
+    low = raw.lower().replace("_", "-")
+    if low in {"zh", "zh-cn", "chinese", "中文"}:
+        return "zh-CN"
+    if low in {"en", "en-us", "english"}:
+        return "en"
+    if low in {"auto", "follow", "match"}:
+        return "auto"
+    return DEFAULT_AGENT_LANGUAGE
+
+
 def worker_limits_from_config(config: object) -> dict:
     """Normalize runtime limits from node.config (worker + main + schedule) with defaults."""
     cfg = config if isinstance(config, dict) else {}
@@ -543,6 +581,7 @@ def worker_limits_from_config(config: object) -> dict:
             DEFAULT_MAX_CONCURRENT_WORKERS,
         ),
         "default_scan_mode": mode,
+        "agent_language": normalize_agent_language(cfg.get("agent_language")),
     }
 
 
@@ -813,6 +852,7 @@ def _node_out(
         main_max_turns=limits.get("main_max_turns"),
         max_concurrent_workers=limits.get("max_concurrent_workers"),
         default_scan_mode=limits.get("default_scan_mode"),
+        agent_language=limits.get("agent_language") if n.type == "pentest" else None,
         connectivity=bars,
         connectivity_uptime_pct=_uptime_pct(bars),
         capabilities=_capabilities_from_config(n.config),

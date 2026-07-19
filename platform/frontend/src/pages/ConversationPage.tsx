@@ -59,6 +59,8 @@ type ProductExpert = {
   node_name?: string | null;
   node_status?: string | null;
   enabled?: boolean;
+  /** Expert management: sole default partner for new chats. */
+  is_default?: boolean;
   description?: string | null;
   color?: string | null;
 };
@@ -303,8 +305,18 @@ export default function ConversationPage() {
    * catches up to status=running / work_status.
    */
   const launchOptimisticRef = useRef(false);
-  /** Prevents double-fire of the asset-page auto-launch effect. */
+  /** Prevents double-fire of the asset-page handoff effect. */
   const pendingAssetLaunchDoneRef = useRef(false);
+  /**
+   * Structured target/scope from Asset「创建任务」— applied on first send after
+   * user picks an expert (no auto-dispatch).
+   */
+  const pendingAssetTaskRef = useRef<{
+    conversationId: string;
+    text: string;
+    target: { type: string; value: string } | null;
+    scope: { allow: string[]; deny: string[] } | null;
+  } | null>(null);
   /** Latest loaders for the one-shot asset-page launch (avoids stale mount closure). */
   const loadConversationRef = useRef<(id: string | null) => Promise<void>>(async () => {});
   const launchTaskMessageRef = useRef<(opts: {
@@ -546,6 +558,22 @@ export default function ConversationPage() {
     }
     return map;
   }, [productExperts]);
+  /** Ledger findings (snapshot) carry rediscovery badges; chat vuln_found cards often don't. */
+  const findingsById = useMemo(() => {
+    const map = new Map<string, Record<string, unknown>>();
+    for (const f of findings) {
+      const ids = [f.id, f.vulnerability_id, f.finding_id]
+        .map((v) => String(v || "").trim())
+        .filter(Boolean);
+      for (const id of ids) {
+        if (!map.has(id)) map.set(id, f);
+      }
+      const title = String(f.title || "").trim().toLowerCase();
+      if (title && !map.has(`title:${title}`)) map.set(`title:${title}`, f);
+    }
+    return map;
+  }, [findings]);
+
   const approvalDecisionByRequestId = useMemo(() => {
     const decisions: Record<string, "authorize" | "cancel"> = {};
     for (const message of messages) {
@@ -1459,22 +1487,23 @@ export default function ConversationPage() {
     return out;
   }, [productExperts]);
 
-  // Default partner = first expert in 专家管理 (prefer online node).
+  // Default partner: expert marked is_default in 专家管理, else pack=default, else first online.
   useEffect(() => {
     if (selectedMention) {
       // Drop selection if expert was deleted.
       if (!mentionTargets.some((t) => t.key === selectedMention.key)) {
-        selectedMentionRef.current = mentionTargets[0] || null;
-        setSelectedMention(mentionTargets[0] || null);
+        const fallback = pickDefaultMentionTarget(mentionTargets, productExperts);
+        selectedMentionRef.current = fallback;
+        setSelectedMention(fallback);
       }
       return;
     }
     if (!mentionTargets.length) return;
-    const online = mentionTargets.find((t) => t.status === "online");
-    const pick = online || mentionTargets[0];
+    const pick = pickDefaultMentionTarget(mentionTargets, productExperts);
+    if (!pick) return;
     selectedMentionRef.current = pick;
     setSelectedMention(pick);
-  }, [mentionTargets, selectedMention]);
+  }, [mentionTargets, selectedMention, productExperts]);
 
   const mentionState = useMemo(() => getMentionState(input), [input]);
   const mentionOptions = useMemo(
@@ -1861,8 +1890,8 @@ export default function ConversationPage() {
   ]);
   launchTaskMessageRef.current = launchTaskMessage;
 
-  // Auto-start task launched from Asset management (host/port multi-select).
-  // One-shot mount handoff: use refs so we always call the latest loaders.
+  // Handoff from Asset management: open the new Case + prefill draft (no auto-send).
+  // User chooses @专家 then clicks 发送 — structured target/scope applied on first send.
   useEffect(() => {
     if (pendingAssetLaunchDoneRef.current) return;
     const raw = sessionStorage.getItem(PENDING_ASSET_TASK_KEY);
@@ -1873,6 +1902,7 @@ export default function ConversationPage() {
       target?: { type: string; value: string };
       scope?: { allow: string[]; deny: string[] };
       conversationId?: string;
+      autoSend?: boolean;
     };
     try {
       draft = JSON.parse(raw);
@@ -1888,7 +1918,7 @@ export default function ConversationPage() {
       return;
     }
 
-    // Consume once; pin conversation before any restore fallback can rewrite it.
+    // Consume session flag once; pin conversation before restore can rewrite it.
     pendingAssetLaunchDoneRef.current = true;
     sessionStorage.removeItem(PENDING_ASSET_TASK_KEY);
     localStorage.setItem(ACTIVE_CONVERSATION_KEY, convId);
@@ -1896,19 +1926,39 @@ export default function ConversationPage() {
 
     const target = draft.target || null;
     const scope = draft.scope || null;
+    const autoSend = draft.autoSend === true;
+
+    pendingAssetTaskRef.current = {
+      conversationId: convId,
+      text,
+      target,
+      scope,
+    };
+    // Prefill composer + optimistic task envelope for Status/Surface seed.
+    setInput(text);
+    if (target || scope) {
+      setTaskContext({
+        ...(target ? { target } : {}),
+        ...(scope ? { scope } : {}),
+      });
+    }
+
     void (async () => {
       try {
-        // Yield so refs point at post-mount loadConversation / launchTaskMessage.
         await Promise.resolve();
         await loadConversationRef.current(convId);
-        await launchTaskMessageRef.current({
-          displayText: text,
-          text,
-          target,
-          scope,
-          forceNewConversation: false,
-          conversationId: convId,
-        });
+        // Legacy path only if autoSend explicitly requested.
+        if (autoSend) {
+          pendingAssetTaskRef.current = null;
+          await launchTaskMessageRef.current({
+            displayText: text,
+            text,
+            target,
+            scope,
+            forceNewConversation: false,
+            conversationId: convId,
+          });
+        }
       } catch {
         // loadConversation / launch already surface errors; keep composer usable.
       }
@@ -1927,11 +1977,26 @@ export default function ConversationPage() {
     const isPentest = isPentestMentionTarget(resolved);
     const tmpl = isPentest ? engagementTemplate : "";
     const enableGoal = isPentest && goalModeEnabled;
+    // Asset「创建任务」draft: attach structured target/scope on first send after expert pick.
+    const pendingAsset = pendingAssetTaskRef.current;
+    const usePendingAsset =
+      pendingAsset
+      && (!activeId || pendingAsset.conversationId === activeId || pendingAsset.conversationId === localStorage.getItem(ACTIVE_CONVERSATION_KEY));
+    if (usePendingAsset) {
+      pendingAssetTaskRef.current = null;
+    }
     await launchTaskMessage({
       displayText,
       text,
       goalMode: enableGoal,
       engagement: resolved?.kind === "expert" ? resolved.packId : undefined,
+      ...(usePendingAsset
+        ? {
+            target: pendingAsset!.target,
+            scope: pendingAsset!.scope,
+            conversationId: pendingAsset!.conversationId,
+          }
+        : {}),
       engagementTemplate: tmpl || undefined,
       allowPostex: isPentest ? tmpl === "redteam_deep" : undefined,
       expertId: resolved?.kind === "expert" ? resolved.expertId : undefined,
@@ -2035,6 +2100,31 @@ function resolveMentionedTarget(value: string, targets: MentionTarget[]): Mentio
 }
 
 /** Pentest pack experts get mode template + Goal switch; platform / other packs do not. */
+/**
+ * New-chat partner priority:
+ * 1) expert.is_default from 专家管理
+ * 2) pack_id === default (通用助理)
+ * 3) online node
+ * 4) first target
+ */
+function pickDefaultMentionTarget(
+  targets: MentionTarget[],
+  experts: ProductExpert[],
+): MentionTarget | null {
+  if (!targets.length) return null;
+  const byId = new Map(experts.map((e) => [e.id, e]));
+  const flagged = targets.find((t) => {
+    if (!t.expertId) return false;
+    const e = byId.get(t.expertId);
+    return Boolean(e?.is_default && e.enabled !== false);
+  });
+  if (flagged) return flagged;
+  const builtin = targets.find((t) => String(t.packId || "").toLowerCase() === "default");
+  if (builtin) return builtin;
+  const online = targets.find((t) => t.status === "online");
+  return online || targets[0] || null;
+}
+
 function isPentestMentionTarget(target: MentionTarget | null | undefined): boolean {
   if (!target || target.kind !== "expert") return false;
   const pack = String(target.packId || "").trim().toLowerCase();
@@ -2197,7 +2287,19 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               {messageQuery.hasNextPage && !messageQuery.isFetchingNextPage && <button type="button" onClick={fetchOlderMessages} className="mx-auto block rounded-pill border border-hairline px-3 py-1.5 text-xs text-ink-secondary">Load older messages</button>}
               {displayMessages.map((msg, index) => (
                 <div key={msg.id} data-message-created-at={msg.created_at}>
-                  <MessageRenderer message={msg} previousMessage={displayMessages[index - 1]} agentNameById={agentNameById} fallbackPentestNodeId={fallbackPentestNodeId} platformAgentNodeId={platformAgentNodeId} onDecision={handleDecision} onOpenVulnerability={setSelectedVulnerability} onOpenAsset={setSelectedAsset} onOpenEvidence={setSelectedEvidence} highlightedApprovalId={highlightedApprovalId} approvalDecisionByRequestId={approvalDecisionByRequestId} />
+                  <MessageRenderer
+                    message={enrichVulnMessageFromFindings(msg, findingsById)}
+                    previousMessage={displayMessages[index - 1]}
+                    agentNameById={agentNameById}
+                    fallbackPentestNodeId={fallbackPentestNodeId}
+                    platformAgentNodeId={platformAgentNodeId}
+                    onDecision={handleDecision}
+                    onOpenVulnerability={setSelectedVulnerability}
+                    onOpenAsset={setSelectedAsset}
+                    onOpenEvidence={setSelectedEvidence}
+                    highlightedApprovalId={highlightedApprovalId}
+                    approvalDecisionByRequestId={approvalDecisionByRequestId}
+                  />
                 </div>
               ))}
             </div>
@@ -3236,6 +3338,49 @@ function readString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+/** Overlay rediscovery fields from Case findings onto chat vuln cards (historical msgs lack them). */
+function enrichVulnMessageFromFindings(
+  message: Message,
+  findingsById: Map<string, Record<string, unknown>>,
+): Message {
+  if (message.msg_type !== "vuln_found" && message.msg_type !== "vuln_card") return message;
+  const content = message.content || {};
+  if (content.multiple_discoveries === true || Number(content.rediscovery_count || 0) > 0) {
+    return message;
+  }
+  const ids = [content.vulnerability_id, content.id, content.finding_id]
+    .map((v) => String(v || "").trim())
+    .filter(Boolean);
+  let match: Record<string, unknown> | undefined;
+  for (const id of ids) {
+    match = findingsById.get(id);
+    if (match) break;
+  }
+  if (!match) {
+    const title = String(content.title || "").trim().toLowerCase();
+    if (title) match = findingsById.get(`title:${title}`);
+  }
+  if (!match) return message;
+  const rediscoveryCount = Number(match.rediscovery_count ?? 0);
+  const discoveryCount = Number(match.discovery_count ?? 0);
+  const multiple =
+    match.multiple_discoveries === true ||
+    (Number.isFinite(rediscoveryCount) && rediscoveryCount > 0) ||
+    (Number.isFinite(discoveryCount) && discoveryCount > 1);
+  if (!multiple) return message;
+  return {
+    ...message,
+    content: {
+      ...content,
+      rediscovery_count: match.rediscovery_count ?? rediscoveryCount,
+      discovery_count: match.discovery_count ?? discoveryCount,
+      multiple_discoveries: true,
+      first_seen_at: content.first_seen_at ?? match.first_seen_at,
+      discovered_at: content.discovered_at ?? match.discovered_at,
+    },
+  };
+}
+
 function isProgress(value: unknown): value is Progress {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const item = value as Record<string, unknown>;
@@ -3414,29 +3559,65 @@ function patchMainAgentActivity(
 }
 
 /** Merge plan trees by owner so multi-role Case Tasks keep both sides. */
+/**
+ * Merge live plan_tree_updated into Case Tasks.
+ * Drop unowned nodes when the same node_id already has an owner (checkpoint vs participant).
+ * When an owner re-publishes, replace that owner's previous nodes only.
+ */
 function mergePlanTreeByOwner(prev: PlanNode[], incoming: PlanNode[]): PlanNode[] {
   if (!incoming.length) return prev;
-  if (!prev.length) return incoming;
+  if (!prev.length) return dedupePlanTreePreferOwner(incoming);
 
   const ownerKey = (node: PlanNode) =>
     String(node.owner_expert_id || node.owner_expert_name || "").trim();
+  const nodeId = (node: PlanNode) =>
+    String(node.node_id || node.id || node.title || "").trim();
   const incomingOwners = new Set(incoming.map(ownerKey).filter(Boolean));
 
   // No owner on either side → classic replace (single-agent path).
   if (incomingOwners.size === 0 && !prev.some((n) => ownerKey(n))) {
-    return incoming;
+    return dedupePlanTreePreferOwner(incoming);
   }
 
   const kept = prev.filter((node) => {
     const owner = ownerKey(node);
     if (!owner) {
-      // Keep unscoped nodes only when incoming is also unscoped.
-      return incomingOwners.size === 0;
+      // Drop unowned prev when any owned tree is present (or incoming is owned).
+      return incomingOwners.size === 0 && !prev.some((n) => ownerKey(n));
     }
     // Drop previous nodes for owners that just re-published a full tree.
     return !incomingOwners.has(owner);
   });
-  return [...kept, ...incoming];
+  return dedupePlanTreePreferOwner([...kept, ...incoming]);
+}
+
+/** Prefer owned rows when the same node_id appears with and without owner. */
+function dedupePlanTreePreferOwner(nodes: PlanNode[]): PlanNode[] {
+  const ownedNids = new Set<string>();
+  for (const n of nodes) {
+    const owner = String(n.owner_expert_id || n.owner_expert_name || "").trim();
+    const nid = String(n.node_id || n.id || n.title || "").trim();
+    if (owner && nid) ownedNids.add(nid);
+  }
+  const out: PlanNode[] = [];
+  const seenOwnerKey = new Set<string>();
+  const seenUnownedNid = new Set<string>();
+  for (const n of nodes) {
+    const owner = String(n.owner_expert_id || n.owner_expert_name || "").trim();
+    const nid = String(n.node_id || n.id || n.title || "").trim();
+    if (!nid) continue;
+    if (owner) {
+      const key = `${owner}:${nid}`;
+      if (seenOwnerKey.has(key)) continue;
+      seenOwnerKey.add(key);
+      out.push(n);
+      continue;
+    }
+    if (ownedNids.has(nid) || seenUnownedNid.has(nid)) continue;
+    seenUnownedNid.add(nid);
+    out.push(n);
+  }
+  return out;
 }
 
 /** Ensure main agent row exists, then upsert a worker child for live collaboration tree. */

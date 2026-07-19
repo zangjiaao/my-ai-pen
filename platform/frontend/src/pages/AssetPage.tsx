@@ -63,7 +63,11 @@ const HOST_ONLY = "__host__";
 
 const EMPTY_FORM = { address: "", tags: "" };
 const ACTIVE_CONVERSATION_KEY = "active_conversation_id";
-/** Consumed by ConversationPage to auto-start a pentest with target/scope. */
+/**
+ * Consumed by ConversationPage after Asset「创建任务」.
+ * Creates a Case with prefilled target/scope + composer draft — does **not** auto-send
+ * so the user can pick @专家 before dispatch.
+ */
 export const PENDING_ASSET_TASK_KEY = "pending_asset_task";
 
 export type PendingAssetTask = {
@@ -72,6 +76,8 @@ export type PendingAssetTask = {
   scope: { allow: string[]; deny: string[] };
   /** Conversation created for this launch — must win over restore races. */
   conversationId: string;
+  /** When false/omitted, open Case + draft only; user sends after choosing expert. */
+  autoSend?: boolean;
 };
 
 export default function AssetPage() {
@@ -335,8 +341,16 @@ export default function AssetPage() {
   const clearSelection = () => setCheckedPorts({});
 
   const buildTaskPayload = (): Omit<PendingAssetTask, "conversationId"> | null => {
+    // scope.allow must be host / origin level (http://host:port), NEVER deep paths.
+    // Service.url notes like …/vulnerabilities/brute/ are focus hints only — if they go
+    // into allow, the agent correctly refuses to leave that single path (one-vuln trap).
     const allow: string[] = [];
     const lines: string[] = [];
+    const pushAllow = (entry: string) => {
+      const e = String(entry || "").trim();
+      if (!e || allow.includes(e)) return;
+      allow.push(e);
+    };
     for (const asset of assets) {
       const sel = checkedPorts[asset.id];
       if (!sel?.length) continue;
@@ -348,41 +362,54 @@ export default function AssetPage() {
       );
 
       if (sel.includes(HOST_ONLY) || (ports.length && ports.every((p) => sel.includes(p)))) {
-        // Whole host
-        allow.push(host);
+        // Whole host (+ origins for each known port)
+        pushAllow(host);
         if (ports.length) {
           for (const p of ports) {
-            const url = serviceUrl(asset, p);
-            if (url && !allow.includes(url)) allow.push(url);
+            const origin = scopeOriginForPort(asset, p);
+            pushAllow(origin);
+            const focus = serviceFocusPath(asset, p);
             const note = notesByPort[p];
-            lines.push(
-              note
-                ? `- ${url || `${host}:${p}`}（备注：${note}）`
-                : `- ${url || `${host}:${p}`}`,
-            );
+            const label = origin;
+            const extra = [focus && focus !== origin ? `入口：${focus}` : "", note ? `备注：${note}` : ""]
+              .filter(Boolean)
+              .join("；");
+            lines.push(extra ? `- ${label}（${extra}）` : `- ${label}`);
           }
         } else {
           lines.push(`- ${host}（全部端口/服务，以资产台账为准）`);
         }
       } else {
+        // Selected ports only — still host:port / origin scope, not module path
+        pushAllow(host);
         for (const p of sel) {
-          const url = serviceUrl(asset, p);
-          const target = url || `${host}:${p}`;
-          if (!allow.includes(target)) allow.push(target);
+          const origin = scopeOriginForPort(asset, p);
+          pushAllow(origin);
+          const focus = serviceFocusPath(asset, p);
           const note = notesByPort[p];
           const svc = services.find((s) => s.port === p);
           const svcLabel = svc?.name ? `${p}/${svc.name}` : p;
-          lines.push(note ? `- ${host} · ${svcLabel} · ${target}（备注：${note}）` : `- ${host} · ${svcLabel} · ${target}`);
+          const extra = [focus && focus !== origin ? `优先入口：${focus}` : "", note ? `备注：${note}` : ""]
+            .filter(Boolean)
+            .join("；");
+          lines.push(
+            extra
+              ? `- ${host} · ${svcLabel} · ${origin}（${extra}）`
+              : `- ${host} · ${svcLabel} · ${origin}`,
+          );
         }
       }
     }
     if (!allow.length) return null;
-    const primary = allow[0];
+    // Prefer origin URL as primary target when present
+    const primary = allow.find((a) => a.startsWith("http")) || allow[0]!;
     const text =
-      "请对以下授权目标进行安全测试。范围以 scope.allow 为准，不要超出。\n\n" +
+      "请对以下授权目标进行安全测试。\n\n" +
+      "**Scope（scope.allow）是主机/源站级边界**（host 或 http(s)://host:port），" +
+      "同一源站下的路径与模块均在授权范围内，不要把备注里的「优先入口」当成唯一可测路径。\n\n" +
       "目标清单：\n" +
       lines.join("\n") +
-      "\n\n若目标含端口备注，请优先参考备注理解服务与测试重点。";
+      "\n\n若条目含「优先入口」或端口备注，请优先覆盖该入口，但仍应做合理同源扩展（同端口下的其他攻击面），除非用户明确禁止。";
     return {
       text,
       target: { type: primary.startsWith("http") ? "url" : "host", value: primary },
@@ -404,12 +431,17 @@ export default function AssetPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       });
-      const pending: PendingAssetTask = { ...payload, conversationId: conv.id };
+      // Create Case + draft only — do not auto-dispatch so user can switch @专家 first.
+      const pending: PendingAssetTask = {
+        ...payload,
+        conversationId: conv.id,
+        autoSend: false,
+      };
       // Pin active conversation before navigation so ConversationPage restore cannot
       // fall back to a different running session.
       localStorage.setItem(ACTIVE_CONVERSATION_KEY, conv.id);
       sessionStorage.setItem(PENDING_ASSET_TASK_KEY, JSON.stringify(pending));
-      setNotice("正在打开会话并创建任务…");
+      setNotice("已创建会话，请选择专家后发送…");
       navigate("/");
     } catch (err) {
       setError(err instanceof Error ? err.message : "创建任务失败");
@@ -852,19 +884,57 @@ function listPorts(asset: Asset): string[] {
   return [...set].sort((a, b) => Number(a) - Number(b) || a.localeCompare(b));
 }
 
-function serviceUrl(asset: Asset, port: string): string | null {
-  const svc = (asset.services || []).find((s) => s.port === port);
-  if (svc?.url) return svc.url;
+/**
+ * Scope-safe origin for a port: scheme://host[:port] only.
+ * Never return deep paths from service.url (those over-constrain the agent).
+ */
+function scopeOriginForPort(asset: Asset, port: string): string {
   const host = asset.address;
+  const svc = (asset.services || []).find((s) => String(s.port) === String(port));
   const name = (svc?.name || "").toLowerCase();
+  if (svc?.url) {
+    try {
+      const raw = String(svc.url).trim();
+      const withScheme = /^https?:\/\//i.test(raw) ? raw : `http://${raw}`;
+      const u = new URL(withScheme);
+      const h = u.hostname || host;
+      if (u.port) return `${u.protocol}//${h}:${u.port}`;
+      if (u.protocol === "https:") return `https://${h}`;
+      // Default port omitted — keep host-only http/https
+      if (port === "80" || port === "443") return `${u.protocol}//${h}`;
+      return `${u.protocol}//${h}:${port}`;
+    } catch {
+      /* fall through */
+    }
+  }
   if (port === "443" || name === "https") return `https://${host}`;
   if (port === "80" || name === "http") return `http://${host}`;
-  // High ports / unknown: prefer http URL form for web tasks
   if (/^\d+$/.test(port) && Number(port) > 0) {
     if (name === "https" || port === "8443") return `https://${host}:${port}`;
     return `http://${host}:${port}`;
   }
+  return `${host}:${port}`;
+}
+
+/** Optional deep path from service.url for instruction focus (not scope.allow). */
+function serviceFocusPath(asset: Asset, port: string): string | null {
+  const svc = (asset.services || []).find((s) => String(s.port) === String(port));
+  const raw = String(svc?.url || "").trim();
+  if (!raw) return null;
+  try {
+    const withScheme = /^https?:\/\//i.test(raw) ? raw : `http://${raw}`;
+    const u = new URL(withScheme);
+    const path = u.pathname || "/";
+    if (path && path !== "/") return raw.startsWith("http") ? raw : withScheme;
+  } catch {
+    if (raw.includes("/") && !/^[a-z0-9.-]+(?::\d+)?$/i.test(raw)) return raw;
+  }
   return null;
+}
+
+/** @deprecated prefer scopeOriginForPort for task scope; kept for display callers */
+function serviceUrl(asset: Asset, port: string): string | null {
+  return scopeOriginForPort(asset, port);
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {

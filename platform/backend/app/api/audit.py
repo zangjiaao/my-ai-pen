@@ -30,6 +30,7 @@ SYSTEM_ACTIONS = frozenset({
     "node.regenerate_token",
     "node.delete",
     "vulnerability.update",
+    "vulnerability.delete",
     "vuln.retest",
     "sync.import_report",
 })
@@ -48,6 +49,7 @@ ACTION_LABELS: dict[str, str] = {
     "node.regenerate_token": "刷新节点 Token",
     "node.delete": "删除节点",
     "vulnerability.update": "更新漏洞",
+    "vulnerability.delete": "删除漏洞",
     "vuln.retest": "发起复测",
     "sync.import_report": "导入报告",
 }
@@ -77,7 +79,7 @@ CATEGORY_ACTIONS: dict[str, frozenset[str]] = {
         "node.regenerate_token",
         "node.delete",
     }),
-    "vulnerability": frozenset({"vulnerability.update", "vuln.retest"}),
+    "vulnerability": frozenset({"vulnerability.update", "vulnerability.delete", "vuln.retest"}),
     "sync": frozenset({"sync.import_report"}),
 }
 

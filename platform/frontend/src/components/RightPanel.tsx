@@ -614,12 +614,14 @@ function StrixTodoItem({ item }: { item: PlanNode }) {
     (/^follow-up\b/i.test(String(item.title || "")) || String(item.node_id || item.id || "").startsWith("plan-followup-"));
   // Show more of adjustment advice on failed follow-ups.
   const noteLimit = isFollowUp && (status === "failed" || workerBadge?.label === "failed") ? 320 : 150;
+  // Agent sometimes bakes status into content ("…（已完成）"); strip for display — icon is SOT.
+  const displayTitle = displayTodoTitle(String(item.title || "Untitled task"));
   return (
     <div className="flex min-w-0 items-start gap-2 rounded-md px-2 py-2 hover:bg-canvas-inset">
       <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${todoStatusIconClass(status)}`} />
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-          <p className={`min-w-0 break-words text-sm font-medium [overflow-wrap:anywhere] ${todoTitleClass(status)}`}>{String(item.title || "Untitled task")}</p>
+          <p className={`min-w-0 break-words text-sm font-medium [overflow-wrap:anywhere] ${todoTitleClass(status)}`}>{displayTitle}</p>
           {ownerLabel && (
             <span
               className="shrink-0 rounded-sm bg-canvas-inset px-1.5 py-0.5 text-[10px] font-medium text-ink-secondary"
@@ -1057,7 +1059,7 @@ function unifiedTodoItems(nodes: PlanNode[]): PlanNode[] {
     "surface", "request", "test", "worker", "stage",
   ]);
 
-  return nodes
+  const filtered = nodes
     .filter((node) => {
       if ((node.level || "work_item") !== "work_item") return false;
       const source = String(node.source || "");
@@ -1077,7 +1079,33 @@ function unifiedTodoItems(nodes: PlanNode[]): PlanNode[] {
       if (["task", "work", "work_item", "package", "objective"].includes(kind)) return true;
       if (parent.startsWith("workflow-") || id.startsWith("ctf-") || id.startsWith("workflow-")) return true;
       return false;
-    })
+    });
+
+  // Collapse checkpoint duplicates: same node_id with and without owner chip.
+  const ownedIds = new Set(
+    filtered
+      .filter((n) => String(n.owner_expert_id || n.owner_expert_name || "").trim())
+      .map((n) => String(n.node_id || n.id || "").trim())
+      .filter(Boolean),
+  );
+  const seenOwnerKey = new Set<string>();
+  const seenUnowned = new Set<string>();
+  const deduped = filtered.filter((node) => {
+    const id = String(node.node_id || node.id || "").trim();
+    const owner = String(node.owner_expert_id || node.owner_expert_name || "").trim();
+    if (!id) return true;
+    if (owner) {
+      const key = `${owner}:${id}`;
+      if (seenOwnerKey.has(key)) return false;
+      seenOwnerKey.add(key);
+      return true;
+    }
+    if (ownedIds.has(id) || seenUnowned.has(id)) return false;
+    seenUnowned.add(id);
+    return true;
+  });
+
+  return deduped
     .sort((left, right) => {
       // Stable primary sort by priority/id so lists do not thrash order on every status tick.
       // Secondary: active work slightly preferred when priorities tie.
@@ -3883,6 +3911,22 @@ function planItemDotClass(status: string): string {
   if (status === "running") return "bg-ink";
   if (isTerminalPlanStatus(status)) return "bg-hairline";
   return "bg-canvas-inset";
+}
+
+/**
+ * Strip agent-baked status suffixes from todo content for display.
+ * Status lives on the plan node / icon — not inside the title string.
+ */
+function displayTodoTitle(title: string): string {
+  let t = String(title || "").trim();
+  if (!t) return "Untitled task";
+  // Full-width / half-width parentheses: （已完成） (已完成) [done] etc.
+  t = t.replace(
+    /\s*[（(]\s*(已完成|已发现|完成|已跳过|已放弃|完成了|done|completed|found|skipped|abandoned)\s*[）)]\s*$/i,
+    "",
+  );
+  t = t.replace(/\s*[-–—]\s*(已完成|已发现|done|completed)\s*$/i, "");
+  return t.trim() || String(title || "").trim() || "Untitled task";
 }
 
 function normalizeTodoStatus(status: PlanStatus | undefined): "running" | "done" | "failed" | "blocked" | "skipped" | "pending" {
