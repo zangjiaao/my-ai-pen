@@ -833,17 +833,18 @@ function AgentRow({
         />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-start justify-between gap-2">
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
+              {/* Name + active sit together; do not flex-1 the title or active is pushed right. */}
               <div className="flex min-w-0 items-center gap-1.5">
                 <AgentRoleBadge primary={primary} />
-                <p className="min-w-0 flex-1 truncate text-sm font-medium">{agent.name || agent.id}</p>
+                <p className="min-w-0 truncate text-sm font-medium">{agent.name || agent.id}</p>
                 {highlighted && (
                   <span className="shrink-0 rounded-sm bg-status-running/15 px-1.5 py-0.5 text-[10px] font-medium text-status-running">
                     active
                   </span>
                 )}
               </div>
-              <p className="mt-0.5 text-xs text-ink-secondary">{summary}</p>
+              <p className="mt-0.5 min-w-0 truncate text-xs text-ink-secondary" title={summary}>{summary}</p>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
               {childCount > 0 && <span className="font-mono text-[10px] text-ink-muted" title={`${childCount} sub-agents`}>{childCount}</span>}
@@ -1444,19 +1445,20 @@ function collectSurfaceEntries(
     }
   }
 
-  // Assets: host + open ports / services
+  // Assets: host + open ports / services + known URLs
   for (const asset of assets) {
     const host = normalizeAssetHost(String(asset.address || asset.name || ""));
     if (!host) continue;
+    const props = (asset.properties as Record<string, unknown> | undefined) || {};
     const ports = Array.isArray(asset.open_ports)
       ? asset.open_ports
-      : Array.isArray((asset.properties as Record<string, unknown> | undefined)?.open_ports)
-        ? ((asset.properties as Record<string, unknown>).open_ports as unknown[])
+      : Array.isArray(props.open_ports)
+        ? (props.open_ports as unknown[])
         : [];
     const services = Array.isArray(asset.services)
       ? asset.services
-      : Array.isArray((asset.properties as Record<string, unknown> | undefined)?.services)
-        ? ((asset.properties as Record<string, unknown>).services as unknown[])
+      : Array.isArray(props.services)
+        ? (props.services as unknown[])
         : [];
 
     for (const p of ports) {
@@ -1467,8 +1469,10 @@ function collectSurfaceEntries(
         const rec = s && typeof s === "object" ? (s as Record<string, unknown>) : {};
         const sp = String(rec.port || rec.port_id || "").trim();
         const name = String(rec.name || rec.service || rec.product || "").toLowerCase();
-        if (sp === port || name) {
-          if (name) svc = normalizeServiceName(name) || svc;
+        if (sp === port && name) {
+          svc = normalizeServiceName(name) || svc;
+        } else if (!sp && name && normalizeServiceName(name) === "web" && serviceFromPort(port) === "web") {
+          svc = "web";
         }
       }
       pushParsed(
@@ -1483,7 +1487,18 @@ function collectSurfaceEntries(
         { source: "asset" },
       );
     }
-    // Host-only asset with no ports still appears as a host shell via empty port web root? skip.
+    // URLs recorded on the asset (path inventory) — avoid path-only findings forming a second tree.
+    const urls = Array.isArray(props.urls) ? props.urls : Array.isArray(asset.urls) ? (asset.urls as unknown[]) : [];
+    for (const u of urls) {
+      if (typeof u !== "string" || !u.trim()) continue;
+      considerRaw(u.trim(), null, "asset-url", "web");
+    }
+    // Service-level URL notes (e.g. DVWA module links)
+    for (const s of services) {
+      const rec = s && typeof s === "object" ? (s as Record<string, unknown>) : {};
+      const url = String(rec.url || "").trim();
+      if (url) considerRaw(url, null, "asset-url", "web");
+    }
   }
 
   for (const finding of findings) {
@@ -1578,6 +1593,10 @@ function canonicalizeSurfaceEntries(
     } catch {
       const m = rawAddr.match(/:(\d{2,5})(?:\/|$)/);
       if (m) port = m[1];
+    }
+    if (!port) {
+      // Prefer a known web open_port so path-only findings do not create a second "service" tree.
+      port = pickPrimaryWebPortFromAsset(asset);
     }
     const label = host + (port ? `:${port}` : "");
     assetMetas.push({
@@ -1871,7 +1890,135 @@ function canonicalizeSurfaceEntries(
     });
   }
 
-  return Array.from(merged.values());
+  // Collapse port-less web rows onto the dominant web port for the same host
+  // (path-only finding refs were creating a second empty-port "service" tree).
+  return collapsePortlessWebEntries(Array.from(merged.values()));
+}
+
+/**
+ * Path-only / host-only web inventory rows without :port split the Surface tree
+ * into a parallel "service" branch next to :8080 / :3000. Fold them onto the
+ * host's dominant web port when one is known.
+ */
+function collapsePortlessWebEntries(entries: SurfaceEntry[]): SurfaceEntry[] {
+  const webPortsByHost = new Map<string, Map<string, number>>();
+  for (const e of entries) {
+    if (e.service !== "web" || !e.host || !e.port) continue;
+    const h = e.host.toLowerCase();
+    const ports = webPortsByHost.get(h) || new Map<string, number>();
+    // Prefer ports that already have real paths over bare roots.
+    const weight = e.path && e.path !== "/" ? 3 : 1;
+    ports.set(e.port, (ports.get(e.port) || 0) + weight);
+    webPortsByHost.set(h, ports);
+  }
+
+  const pickPort = (host: string): string => {
+    const ports = webPortsByHost.get(host.toLowerCase());
+    if (!ports || !ports.size) return "";
+    let best = "";
+    let n = -1;
+    for (const [p, c] of ports) {
+      if (c > n) {
+        best = p;
+        n = c;
+      }
+    }
+    // Prefer classic web ports when counts are close.
+    if (ports.has("8080") && (ports.get("8080") || 0) >= n - 1) return "8080";
+    if (ports.has("80") && (ports.get("80") || 0) >= n - 1) return "80";
+    if (ports.has("443") && (ports.get("443") || 0) >= n - 1) return "443";
+    return best;
+  };
+
+  const out = new Map<string, SurfaceEntry>();
+  for (const e of entries) {
+    let next = e;
+    if (e.service === "web" && e.host && !e.port) {
+      const port = pickPort(e.host);
+      if (port) {
+        const origin = `${e.host}:${port}`;
+        const path = e.path || "/";
+        next = {
+          ...e,
+          port,
+          origin,
+          path,
+          key: `${origin}|web|${path}`,
+          title: `${origin}${path === "/" ? "" : path}`,
+        };
+      }
+    }
+    const k = next.key.toLowerCase();
+    const prev = out.get(k);
+    if (!prev) {
+      out.set(k, next);
+      continue;
+    }
+    const methods = mergeMethodList(prev.method, next.method);
+    out.set(k, {
+      ...prev,
+      method: methods.length ? methods.join(",") : prev.method,
+      source: prev.source || next.source,
+      hostAliases: [...new Set([...(prev.hostAliases || []), ...(next.hostAliases || [])])],
+      isTarget: prev.isTarget || next.isTarget,
+      isDiscovered: (prev.isDiscovered || next.isDiscovered) && !(prev.isTarget || next.isTarget),
+    });
+  }
+  return Array.from(out.values());
+}
+
+function pickPrimaryWebPortFromAsset(asset: Record<string, unknown>): string {
+  const props = (asset.properties as Record<string, unknown> | undefined) || {};
+  const ports = Array.isArray(asset.open_ports)
+    ? asset.open_ports
+    : Array.isArray(props.open_ports)
+      ? (props.open_ports as unknown[])
+      : [];
+  const services = Array.isArray(asset.services)
+    ? asset.services
+    : Array.isArray(props.services)
+      ? (props.services as unknown[])
+      : [];
+  const webPorts: string[] = [];
+  for (const p of ports) {
+    const port = String(p).replace(/\/.*$/, "").trim();
+    if (!/^\d{1,5}$/.test(port)) continue;
+    let svc = serviceFromPort(port);
+    for (const s of services) {
+      const rec = s && typeof s === "object" ? (s as Record<string, unknown>) : {};
+      if (String(rec.port || "") === port) {
+        const name = String(rec.name || rec.service || "").toLowerCase();
+        if (name) svc = normalizeServiceName(name) || svc;
+      }
+    }
+    if (svc === "web") webPorts.push(port);
+  }
+  // URLs on the asset often identify the engagement web port (e.g. DVWA :8080).
+  for (const u of Array.isArray(props.urls) ? props.urls : []) {
+    if (typeof u !== "string") continue;
+    try {
+      const parsed = new URL(/^https?:\/\//i.test(u) ? u : `http://${u}`);
+      if (parsed.port) webPorts.push(parsed.port);
+      else if (parsed.protocol === "https:") webPorts.push("443");
+      else webPorts.push("80");
+    } catch {
+      /* ignore */
+    }
+  }
+  if (!webPorts.length) return "";
+  // Prefer the port that appears most in URL inventory, then common web ports.
+  const counts = new Map<string, number>();
+  for (const p of webPorts) counts.set(p, (counts.get(p) || 0) + 1);
+  let best = "";
+  let n = 0;
+  for (const [p, c] of counts) {
+    if (c > n) {
+      best = p;
+      n = c;
+    }
+  }
+  if (counts.has("8080") && (counts.get("8080") || 0) >= n - 2) return "8080";
+  return best;
 }
 
 function normalizeAssetHost(raw: string): string {
