@@ -398,11 +398,17 @@ export async function handleNode4SessionEvent(
   if (!event || typeof event !== "object") return;
 
   // Prefer Pi session tool_execution_* (extension tool_call is separate and already emits tool_output).
+  let panelChanged = false;
   if (event.type === "tool_execution_start") {
     ctx.counters.toolCallCount += 1;
     ctx.counters.activeTool = String(event.toolName || event.tool_name || "tool");
     ctx.counters.phase = "tool_running";
-    ctx.panel.setMainPhase("tool_running", ctx.counters.activeTool);
+    ctx.panel.setMainActivity({
+      phase: "tool_running",
+      tool: ctx.counters.activeTool,
+    });
+    panelChanged = true;
+    const panel = ctx.panel.list()[0];
     await ctx.platform.send({
       type: "status_update",
       conversation_id: ctx.task.conversationId,
@@ -410,22 +416,51 @@ export async function handleNode4SessionEvent(
       message: `${ctx.counters.activeTool} running`,
       active_tool: ctx.counters.activeTool,
       agent_phase: "tool_running",
+      current_detail: panel?.current_detail,
       status: "running",
       llm_usage: ctx.usage.snapshot({ tool_calls: ctx.counters.toolCallCount }),
+      // Live panel patch so UI does not wait for throttled checkpoint.
+      panel_agents: ctx.panel.list(),
     } as PlatformMessage);
   }
 
   if (event.type === "tool_execution_end") {
     ctx.counters.phase = "llm_waiting";
     ctx.counters.activeTool = undefined;
-    ctx.panel.setMainPhase("llm_waiting", "");
+    // Clear active tool; lastTool is retained for "分析…结果" detail.
+    ctx.panel.setMainActivity({ phase: "llm_waiting", tool: "" });
+    panelChanged = true;
+    await ctx.platform.send({
+      type: "status_update",
+      conversation_id: ctx.task.conversationId,
+      task_id: ctx.task.taskId,
+      message: "llm_waiting",
+      active_tool: "",
+      agent_phase: "llm_waiting",
+      current_detail: ctx.panel.list()[0]?.current_detail,
+      status: "running",
+      llm_usage: ctx.usage.snapshot({ tool_calls: ctx.counters.toolCallCount }),
+      panel_agents: ctx.panel.list(),
+    } as PlatformMessage);
   }
 
   if (event.type === "turn_start") {
     ctx.counters.phase = "llm_waiting";
-    ctx.panel.setMainPhase("llm_waiting", "");
-    // No status_update here — "model turn" was being rendered as agent chat
-    // under the physical node name. Right-panel state comes from throttled checkpoints.
+    ctx.panel.setMainActivity({ phase: "llm_waiting", tool: "" });
+    panelChanged = true;
+    // No chatty status_update body — panel via checkpoint / status_update below.
+    await ctx.platform.send({
+      type: "status_update",
+      conversation_id: ctx.task.conversationId,
+      task_id: ctx.task.taskId,
+      message: "llm_waiting",
+      active_tool: "",
+      agent_phase: "llm_waiting",
+      current_detail: ctx.panel.list()[0]?.current_detail,
+      status: "running",
+      llm_usage: ctx.usage.snapshot({ tool_calls: ctx.counters.toolCallCount }),
+      panel_agents: ctx.panel.list(),
+    } as PlatformMessage);
   }
 
   await textStream.handle(event);
@@ -439,6 +474,13 @@ export async function handleNode4SessionEvent(
         ctx.goals.addTokensUsed(delta);
       }
     }
+  }
+
+  // Tool phase changes: always refresh checkpoint so right panel stays in sync.
+  if (panelChanged) {
+    await emitCheckpointUpdate(ctx);
+    throttle.markEmitted();
+    return;
   }
 
   if (

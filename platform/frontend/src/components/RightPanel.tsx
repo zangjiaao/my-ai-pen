@@ -67,7 +67,11 @@ type StrixAgentStatus = {
   pending_count?: number;
   role?: string;
   current_tool?: string;
+  /** Machine phase (tool_running / llm_waiting / …). */
   current_action?: string;
+  /** Human-readable activity from Node (preferred). */
+  current_detail?: string;
+  last_tool?: string;
 };
 
 type StrixNote = {
@@ -782,7 +786,11 @@ function AgentRow({
       aria-expanded={rowInteractive ? expanded : undefined}
     >
       <div className="flex min-w-0 items-start gap-2">
-        <span aria-hidden="true" className={`mt-2 h-2 w-2 shrink-0 rounded-full ${agentStatusDotClass(agent.status)}`} />
+        <span
+          aria-hidden="true"
+          className={`mt-2 h-2 w-2 shrink-0 rounded-full ${agentStatusDotClass(agent.status)}`}
+          title={agentStatusLabel(agent.status)}
+        />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-start justify-between gap-2">
             <div className="min-w-0">
@@ -1049,24 +1057,28 @@ function synthesizeMainAgent(activeTool: string | undefined, running: boolean, w
   // Only synthesize for pentest/Node2 when the platform did not send multi-agent rows.
   if (workflowKind === "strix") return [];
   if (!running && !activeTool) return [];
+  const tool = String(activeTool || "").trim();
   return [{
-    id: "node2-main",
-    name: "Main Agent",
+    id: "node4-main",
+    name: "Agent",
     status: running ? "running" : "completed",
     parent_id: null,
     task: "",
     skills: [],
     pending_count: 0,
     role: "main",
-    current_tool: activeTool || "",
-    current_action: running ? "working" : "done",
+    current_tool: tool,
+    current_action: running ? (tool ? "tool_running" : "llm_waiting") : "finished",
+    current_detail: running
+      ? (tool ? `正在${friendlyToolLabel(tool)}` : "等待模型思考与回复")
+      : "本轮工作已结束",
   }];
 }
 
 /** Align collaboration tree with conversation lifecycle (timer already stopped when running=false). */
 function normalizeAgentsForConversationRunning(agents: StrixAgentStatus[], running: boolean): StrixAgentStatus[] {
   if (running || agents.length === 0) return agents;
-  const open = new Set(["running", "pending", "todo", "llm_waiting", "tool_running", "working", ""]);
+  const open = new Set(["running", "pending", "todo", "llm_waiting", "tool_running", "working", "chat", "starting", ""]);
   return agents.map((agent) => {
     const status = String(agent.status || "").toLowerCase();
     if (!open.has(status)) return agent;
@@ -1074,7 +1086,8 @@ function normalizeAgentsForConversationRunning(agents: StrixAgentStatus[], runni
       ...agent,
       status: "completed",
       current_tool: "",
-      current_action: "done",
+      current_action: "finished",
+      current_detail: "本轮工作已结束",
       pending_count: 0,
     };
   });
@@ -3489,7 +3502,10 @@ function isInterruptedAgentStatus(status: string): boolean {
 
 function agentStatusDotClass(status: string | undefined): string {
   const normalized = agentStatusLabel(status);
-  if (normalized === "running") return "bg-status-running";
+  // Match ThinkingCard / AgentPending: breathing blue while active.
+  if (normalized === "running" || normalized === "tool_running" || normalized === "llm_waiting" || normalized === "working" || normalized === "chat" || normalized === "starting") {
+    return "animate-pulse bg-status-running";
+  }
   if (normalized === "pending") return "bg-[#d97706]";
   if (normalized === "timeout") return "bg-severity-high";
   if (isInterruptedAgentStatus(normalized)) return "bg-severity-critical";
@@ -3508,32 +3524,90 @@ function agentStatusBadgeClass(status: string | undefined): string {
 }
 
 function summarizeAgentAction(agent: StrixAgentStatus): string {
-  const tool = String(agent.current_tool || "").trim();
-  const action = String(agent.current_action || "").trim();
   const status = agentStatusLabel(agent.status);
-  if (status === "timeout") return "Timed out before package finished";
-  if (status === "failed") return "Worker failed — re-dispatch or continue probes";
-  if (status === "aborted" || status === "stopped") return "Worker stopped early";
-  if (tool) {
-    const toolLabel = friendlyActionName(tool);
-    if (action) return clip(`${toolLabel}: ${compactAgentAction(action)}`, 110);
-    return `${toolLabel} running`;
+  if (status === "timeout") return "超时结束";
+  if (status === "failed") return "执行失败";
+  if (status === "aborted" || status === "stopped") return "已中止";
+
+  // Prefer Node-authored human detail (current activity).
+  const detail = String(agent.current_detail || "").trim();
+  if (detail && !isOpaquePhaseToken(detail)) return clip(detail, 120);
+
+  const tool = String(agent.current_tool || "").trim();
+  const lastTool = String(agent.last_tool || "").trim();
+  const action = String(agent.current_action || "").trim();
+
+  if (action === "tool_running" || tool) {
+    return `正在${friendlyToolLabel(tool || "tool")}`;
   }
-  if (action && !["done", "completed", "timeout", "failed"].includes(action)) return compactAgentAction(action);
-  if (agent.task) return clip(agent.task, 90);
-  return status === "done" ? "Finished assigned work" : "Waiting for work";
+  if (action === "llm_waiting" || action === "model_turn") {
+    if (lastTool) return `分析「${friendlyToolLabel(lastTool)}」结果，规划下一步`;
+    return "等待模型思考与回复";
+  }
+  if (action === "chat") return "对话中，准备回复";
+  if (action === "starting") return "任务启动中";
+  if (action === "running") return "工作进行中";
+  if (action === "continue") return "继续推进任务";
+  if (action === "finished" || action === "completed") return "本轮工作已结束";
+  if (action && !isOpaquePhaseToken(action) && !["done", "timeout", "failed"].includes(action)) {
+    return compactAgentAction(action);
+  }
+  if (status === "done") return "本轮工作已结束";
+  if (agent.task) return clip(String(agent.task), 90);
+  return "等待工作";
+}
+
+function isOpaquePhaseToken(value: string): boolean {
+  const t = value.trim().toLowerCase();
+  return /^(tool_running|llm_waiting|model_turn|starting|running|continue|finished|completed|chat|working|done)$/i.test(t);
 }
 
 function compactAgentAction(value: string): string {
   const text = value.replace(/\s+/g, " ").trim();
-  if (/^running command:/i.test(text)) return "Running a command";
-  if (/^creating sub-agent:/i.test(text)) return text.replace(/^creating sub-agent:/i, "Delegating to").trim();
-  if (/^reporting finding:/i.test(text)) return text.replace(/^reporting finding:/i, "Recording").trim();
+  if (/^running command:/i.test(text)) return "正在执行命令";
+  if (/^creating sub-agent:/i.test(text)) return text.replace(/^creating sub-agent:/i, "委派子代理").trim();
+  if (/^reporting finding:/i.test(text)) return text.replace(/^reporting finding:/i, "登记发现").trim();
   return clip(text, 90);
 }
 
 function friendlyActionName(tool: string): string {
-  return tool.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+  return friendlyToolLabel(tool);
+}
+
+/** Tool id → short Chinese label for the right panel. */
+function friendlyToolLabel(tool: string): string {
+  const t = String(tool || "").trim();
+  if (!t) return "工具";
+  const map: Record<string, string> = {
+    platform_list_assets: "查询资产台账",
+    platform_get_asset: "读取资产详情",
+    platform_list_vulnerabilities: "查询漏洞台账",
+    platform_get_vulnerability: "读取漏洞详情",
+    platform_update_finding_status: "更新漏洞状态",
+    platform_enrich_asset: "补充资产信息",
+    platform_conversation_snapshot: "读取会话快照",
+    platform_list_reports: "查询报告列表",
+    platform_create_report: "生成交付报告",
+    request_user_decision: "请求用户授权",
+    shell: "执行命令",
+    http: "HTTP 探测",
+    session: "会话化 HTTP",
+    browser: "浏览器探测",
+    script: "运行脚本",
+    write: "写入文件",
+    edit: "编辑文件",
+    read: "读取文件",
+    finding: "登记发现/漏洞",
+    fact: "记录过程事实",
+    todo: "更新任务清单",
+    skill: "加载技能",
+    subagent: "启动子代理",
+    goal: "更新目标",
+    captcha: "处理验证码",
+  };
+  if (map[t]) return map[t];
+  if (t.startsWith("platform_")) return `平台：${t.replace(/^platform_/, "").replace(/_/g, " ")}`;
+  return t.replace(/_/g, " ");
 }
 
 function friendlySkillName(skill: string): string {

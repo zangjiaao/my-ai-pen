@@ -76,11 +76,11 @@ function ToolCallCard({ content, onOpenEvidence }: { content: Record<string, unk
         <span className="min-w-6 flex-1" aria-hidden="true" />
       </button>
       {expanded && (
-        <div className="ml-7 space-y-0.5 pb-1">
+        <div className="space-y-0.5 pb-1 pl-2">
           {items.length ? items.map((item, index) => (
             <ToolItemRow key={`${item.runId || item.evidenceId || index}-${index}`} item={item} onOpenEvidence={onOpenEvidence} />
           )) : (
-            <div className="rounded-sm bg-canvas-inset px-3 py-1.5 text-xs text-ink-secondary">{fallbackSummary}</div>
+            <div className="py-1 text-xs text-ink-secondary">{fallbackSummary}</div>
           )}
         </div>
       )}
@@ -659,12 +659,21 @@ function normalizeSeverity(value: unknown): string {
   return ["critical", "high", "medium", "low", "info"].includes(severity) ? severity : "info";
 }
 function AgentPendingCard({ content }: { content: Record<string, unknown> }) {
-  // Same visual language as Thinking so the slot morphs without a jarring swap.
+  // Same shell as ToolCallCard / ThinkingCard for a continuous timeline.
+  const label = String(content.text || "思考中…");
   return (
-    <div className="my-2 min-w-0 max-w-full rounded-md border border-hairline bg-surface-default">
-      <div className="flex w-full min-w-0 items-center gap-2 px-3 py-2 text-sm text-ink-secondary">
-        <span className="inline-flex h-2 w-2 shrink-0 animate-pulse rounded-full bg-status-running" />
-        <span className="font-medium">{String(content.text || "思考中…")}</span>
+    <div data-testid="agent-pending-card" className="my-2 min-w-0 max-w-full rounded-md bg-surface-default/70">
+      <div className="flex w-full min-w-0 items-center gap-1.5 py-1.5 text-left">
+        <div className="flex flex-shrink-0 items-center gap-1">
+          <span className="inline-flex h-5 w-5 items-center justify-center text-ink-muted">
+            <span className="inline-flex h-2 w-2 animate-pulse rounded-full bg-status-running" />
+          </span>
+        </div>
+        <span className="min-w-0 max-w-[34%] flex-shrink truncate font-sans text-sm text-ink-secondary">
+          {label.includes("调用") ? "工具" : "思考"}
+        </span>
+        <span className="min-w-0 truncate text-xs text-ink-secondary">{label}</span>
+        <span className="min-w-6 flex-1" aria-hidden="true" />
       </div>
     </div>
   );

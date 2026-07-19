@@ -203,8 +203,11 @@ export async function runNode4Task(
     role_source: roleResolved.source,
     started_at: startedAt,
   });
-  panel.setMainPhase("running");
-  obsCounters.phase = "running";
+  panel.setMainActivity({
+    phase: chatOnly ? "chat" : "starting",
+    detail: chatOnly ? "对话中，准备回复" : "任务启动中",
+  });
+  obsCounters.phase = chatOnly ? "chat" : "starting";
 
   const authStorage = AuthStorage.create(join(config.piAgentDir, "auth.json"));
   setRuntimeApiKey(authStorage, config.modelProvider);

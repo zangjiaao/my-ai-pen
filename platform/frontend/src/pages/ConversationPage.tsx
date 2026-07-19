@@ -92,6 +92,8 @@ type StrixAgentStatus = {
   role?: string;
   current_tool?: string;
   current_action?: string;
+  current_detail?: string;
+  last_tool?: string;
 };
 type StrixNote = {
   id: string;
@@ -659,7 +661,7 @@ export default function ConversationPage() {
         const toolName = String(m.tool_name || "tool").trim() || "tool";
         const status = normalizeExecutionStatus(m.status);
         const label =
-          status === "running" || status === "pending"
+          status === "running" || String(m.status || "").toLowerCase() === "pending"
             ? `正在调用 ${toolName}…`
             : `已完成 ${toolName}`;
         setLiveStreams((prev) => ({
@@ -922,43 +924,36 @@ export default function ConversationPage() {
         addMessageToConversation(convId, makeMessage(convId, "system", "status", { text: phaseLabel(phase), phase, active_tool: m.active_tool, status: m.status, intake_result: m.intake_result, message_id: m.message_id }));
       }
     },
-    thinking: (msg) => {
-      if (!isActiveMessage(msg, activeId)) return;
-      const convId = messageConversationId(msg, activeId);
-      clearPendingAgentMessage(convId);
-      markMessageAutoScroll();
-      addMessageToConversation(convId, makeMessage(convId, "agent", "thinking", msg as Record<string, unknown>));
-    },
-    reasoning: (msg) => {
-      if (!isActiveMessage(msg, activeId)) return;
-      const convId = messageConversationId(msg, activeId);
-      clearPendingAgentMessage(convId);
-      markMessageAutoScroll();
-      addMessageToConversation(convId, makeMessage(convId, "agent", "reasoning", msg as Record<string, unknown>));
-    },
-    agent_thinking: (msg) => {
-      if (!isActiveMessage(msg, activeId)) return;
-      const convId = messageConversationId(msg, activeId);
-      clearPendingAgentMessage(convId);
-      markMessageAutoScroll();
-      addMessageToConversation(convId, makeMessage(convId, "agent", "agent_thinking", msg as Record<string, unknown>));
-    },
+    // thinking / reasoning / agent_thinking: streamed via upsertStreamedAgentText (handlers below).
     status_update: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
       const convId = messageConversationId(msg, activeId);
-      clearPendingAgentMessage(convId);
-      markMessageAutoScroll();
       // Prefer agent_phase from Node4; legacy used phase.
       const phase = typeof m.agent_phase === "string"
         ? m.agent_phase
         : typeof m.phase === "string"
           ? m.phase
           : undefined;
+      const activeTool = m.active_tool != null ? String(m.active_tool) : undefined;
+      const currentDetail = typeof m.current_detail === "string" ? m.current_detail : undefined;
       setAgentState({ phase, activeTool: m.active_tool, intakeResult: m.intake_result, intakeStatus: m.status });
       setProgress(isProgress(m.progress) ? m.progress : progressForPhase(phase, "running"));
       if (isKanbanSummary(m.kanban)) setKanban(m.kanban);
       setRunning(true);
+      // Live-patch Main agent activity without waiting for the next checkpoint.
+      if (Array.isArray(m.panel_agents) && m.panel_agents.length) {
+        setStrixAgents(m.panel_agents.filter(isStrixAgentStatus));
+      } else if (phase || activeTool || currentDetail) {
+        setStrixAgents((prev) =>
+          patchMainAgentActivity(prev, {
+            phase,
+            activeTool: activeTool || "",
+            currentDetail,
+            running: true,
+          }),
+        );
+      }
       // Internal harness ticks (model turn / tool running) update right-panel state only —
       // never inject as agent chat bubbles (that was showing "model turn" under 测试节点).
       const statusMessage = readString(m.message);
@@ -3095,10 +3090,61 @@ function isStrixAgentStatus(value: unknown): value is StrixAgentStatus {
   return Boolean(value && typeof value === "object" && !Array.isArray(value) && readString((value as Record<string, unknown>).id));
 }
 
+/** Patch main agent row from live status_update (tool / LLM phase). */
+function patchMainAgentActivity(
+  prev: StrixAgentStatus[],
+  input: {
+    phase?: string;
+    activeTool?: string;
+    currentDetail?: string;
+    running?: boolean;
+  },
+): StrixAgentStatus[] {
+  const phase = String(input.phase || "").trim();
+  const tool = input.activeTool != null ? String(input.activeTool) : undefined;
+  const detail = input.currentDetail != null ? String(input.currentDetail).trim() : "";
+  const mainIdx = prev.findIndex((a) => a.id === "node4-main" || a.id === "node2-main" || a.role === "main");
+  const base: StrixAgentStatus =
+    mainIdx >= 0
+      ? prev[mainIdx]!
+      : {
+          id: "node4-main",
+          name: "Agent",
+          status: "running",
+          parent_id: null,
+          task: "",
+          skills: [],
+          pending_count: 0,
+          role: "main",
+        };
+  const lastTool =
+    tool && tool.length > 0 ? tool : String(base.last_tool || base.current_tool || "").trim();
+  const next: StrixAgentStatus = {
+    ...base,
+    status: input.running === false ? base.status : "running",
+    parent_id: null,
+    role: base.role || "main",
+    current_tool: tool !== undefined ? tool : base.current_tool,
+    current_action: phase || base.current_action || "running",
+    last_tool: lastTool || base.last_tool,
+    current_detail:
+      detail ||
+      (phase === "tool_running" && tool
+        ? `正在调用 ${tool}`
+        : phase === "llm_waiting"
+          ? lastTool
+            ? `分析「${lastTool}」结果，规划下一步`
+            : "等待模型思考与回复"
+          : base.current_detail),
+  };
+  if (mainIdx < 0) return [next, ...prev];
+  return prev.map((a, i) => (i === mainIdx ? next : a));
+}
+
 /** Ensure main agent row exists, then upsert a worker child for live collaboration tree. */
 function upsertWorkerAgent(prev: StrixAgentStatus[], worker: StrixAgentStatus): StrixAgentStatus[] {
-  const main: StrixAgentStatus = prev.find((a) => a.id === "node2-main" || a.role === "main") || {
-    id: "node2-main",
+  const main: StrixAgentStatus = prev.find((a) => a.id === "node2-main" || a.id === "node4-main" || a.role === "main") || {
+    id: "node4-main",
     name: "Main Agent",
     status: "running",
     parent_id: null,

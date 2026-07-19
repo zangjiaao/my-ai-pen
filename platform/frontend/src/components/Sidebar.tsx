@@ -340,7 +340,7 @@ export default function Sidebar({ activeId, onSelect }: Props) {
                       : "hover:bg-surface-default"
                   }`}
                 >
-                  <span className={`h-2 w-2 rounded-full ${statusDotClass(c.status)}`} />
+                  <span className={`h-2 w-2 rounded-full ${statusDotClass(c.status, c.working)}`} />
                 </button>
               ))}
             </div>
@@ -408,7 +408,8 @@ export default function Sidebar({ activeId, onSelect }: Props) {
                     >
                       <div className="flex items-center gap-2">
                         <span
-                          className={`inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full ${statusDotClass(c.status)}`}
+                          className={`inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full ${statusDotClass(c.status, c.working)}`}
+                          title={c.working || c.status === "running" ? "运行中" : c.status}
                         />
                         <span className="truncate">{c.title}</span>
                       </div>
@@ -532,11 +533,11 @@ export default function Sidebar({ activeId, onSelect }: Props) {
   );
 }
 
-function statusDotClass(status: string) {
-  if (status === "running") return "bg-status-running";
+/** Conversation status light — running/working matches ThinkingCard breath (animate-pulse + blue). */
+function statusDotClass(status: string, working?: boolean) {
+  if (status === "running" || working === true) return "animate-pulse bg-status-running";
   if (status === "completed") return "bg-status-success";
   if (status === "incomplete") return "bg-severity-medium";
   if (status === "failed" || status === "canceled") return "bg-severity-critical";
-  if (status === "paused") return "bg-ink-secondary";
-  return "bg-ink-muted";
+  if (status === "paused") return "bg-ink-secondary";  return "bg-ink-muted";
 }

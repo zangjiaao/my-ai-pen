@@ -27,6 +27,11 @@ import {
   mergePlatformCitizenTools,
 } from "./roles/platform-citizen.js";
 import { loadPackFromDirSync } from "./experts/load-pack.js";
+import {
+  PanelAgentTracker,
+  describeMainActivity,
+  humanizeToolName,
+} from "./runtime/panel-agents.js";
 import { inspectArtifactChecklist, writePostRunInspectArtifacts } from "./runtime/session-inspect.js";
 import { SubagentHost } from "./runtime/subagent.js";
 import {
@@ -150,6 +155,24 @@ async function main() {
   assert(
     DEFAULT_SEAT_PACK.missionLines.some((l) => l.includes(PLATFORM_CITIZEN_MARKER)),
     "default mission has platform-citizen layer",
+  );
+  // Right-panel activity labels (user-visible current work)
+  assert(humanizeToolName("platform_list_assets").includes("资产"), "humanize list assets");
+  assert(describeMainActivity({ phase: "tool_running", tool: "shell" }).includes("执行命令"), "activity tool");
+  assert(
+    describeMainActivity({ phase: "llm_waiting", lastTool: "platform_list_vulnerabilities" }).includes("分析"),
+    "activity after tool",
+  );
+  const panelProbe = new PanelAgentTracker("测一下", "平台助理");
+  panelProbe.setMainActivity({ phase: "tool_running", tool: "platform_list_assets" });
+  assert(
+    panelProbe.list()[0]!.current_detail?.includes("查询资产"),
+    `panel detail tool: ${panelProbe.list()[0]!.current_detail}`,
+  );
+  panelProbe.setMainActivity({ phase: "llm_waiting", tool: "" });
+  assert(
+    panelProbe.list()[0]!.current_detail?.includes("分析") || panelProbe.list()[0]!.current_detail?.includes("漏洞"),
+    `panel detail after tool: ${panelProbe.list()[0]!.current_detail}`,
   );
   // Model B: citizen tools/mission injected on every expert pack at load
   assert(
