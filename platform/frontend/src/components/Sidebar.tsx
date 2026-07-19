@@ -347,8 +347,17 @@ export default function Sidebar({ activeId, onSelect }: Props) {
           ) : conversations.length === 0 ? (
             <p className="px-3 py-4 text-center text-sm text-ink-muted">暂无会话</p>
           ) : (
-            conversations.map((c) => (
-              <div key={c.id} className="group flex min-h-[36px] items-center gap-0.5 rounded-lg">
+            conversations.map((c) => {
+              const selected = c.id === activeId && onConversationHome;
+              return (
+              <div
+                key={c.id}
+                className={`group flex min-h-[36px] items-center gap-0.5 rounded-lg pr-0.5 transition-colors ${
+                  selected
+                    ? "bg-accent-subtle"
+                    : "hover:bg-surface-default"
+                }`}
+              >
                 {renameTarget?.id === c.id ? (
                   <div className="flex flex-1 items-center gap-1 px-1 py-1">
                     <input
@@ -367,7 +376,7 @@ export default function Sidebar({ activeId, onSelect }: Props) {
                       onClick={() => {
                         void submitRename();
                       }}
-                      className="rounded-md p-1.5 text-ink-secondary hover:bg-surface-default hover:text-ink"
+                      className="rounded-md p-1.5 text-ink-secondary hover:bg-canvas-inset hover:text-ink"
                       title="保存名称"
                     >
                       <Check size={14} />
@@ -376,7 +385,7 @@ export default function Sidebar({ activeId, onSelect }: Props) {
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
                       onClick={() => setRenameTarget(null)}
-                      className="rounded-md p-1.5 text-ink-secondary hover:bg-surface-default hover:text-ink"
+                      className="rounded-md p-1.5 text-ink-secondary hover:bg-canvas-inset hover:text-ink"
                       title="取消重命名"
                     >
                       <X size={14} />
@@ -392,9 +401,9 @@ export default function Sidebar({ activeId, onSelect }: Props) {
                         onSelect(c.id);
                       }}
                       className={`min-w-0 flex-1 rounded-lg px-3 py-2 text-left text-sm transition-colors ${
-                        c.id === activeId && onConversationHome
-                          ? "bg-accent-subtle font-medium text-ink"
-                          : "text-ink-secondary hover:bg-surface-default hover:text-ink"
+                        selected
+                          ? "font-medium text-ink"
+                          : "text-ink-secondary group-hover:text-ink"
                       }`}
                     >
                       <div className="flex items-center gap-2">
@@ -410,7 +419,7 @@ export default function Sidebar({ activeId, onSelect }: Props) {
                         e.stopPropagation();
                         startRename(c);
                       }}
-                      className="rounded-md p-1.5 text-ink-muted opacity-0 transition-opacity hover:bg-surface-default hover:text-ink group-hover:opacity-100"
+                      className="rounded-md p-1.5 text-ink-muted opacity-0 transition-opacity hover:bg-canvas-inset hover:text-ink group-hover:opacity-100"
                       title="重命名会话"
                     >
                       <Pencil size={14} />
@@ -422,7 +431,7 @@ export default function Sidebar({ activeId, onSelect }: Props) {
                         setDeleteError(null);
                         setDeleteTarget({ id: c.id, title: c.title });
                       }}
-                      className="mr-0.5 rounded-md p-1.5 text-ink-muted opacity-0 transition-opacity hover:bg-surface-default hover:text-severity-critical group-hover:opacity-100"
+                      className="mr-0.5 rounded-md p-1.5 text-ink-muted opacity-0 transition-opacity hover:bg-canvas-inset hover:text-severity-critical group-hover:opacity-100"
                       title="删除会话"
                     >
                       <Trash2 size={14} />
@@ -430,7 +439,8 @@ export default function Sidebar({ activeId, onSelect }: Props) {
                   </>
                 )}
               </div>
-            ))
+              );
+            })
           )}
         </div>
       </div>
