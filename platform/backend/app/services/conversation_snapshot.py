@@ -283,6 +283,16 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     raw_plan_tree = checkpoint_tree + [item for item in strix_todo_tree if item.get("node_id") not in {node.get("node_id") for node in checkpoint_tree}]
     if not raw_plan_tree:
         raw_plan_tree = message_plan_tree(messages) or context.get("exploration_plan_tree") or context.get("plan_tree") or []
+    # Multi-role Case: merge per-participant plan trees so one role's todo map
+    # does not wipe another role's tasks after handoff.
+    try:
+        from app.services.case_participants import plan_tree_from_participants
+
+        participant_plan = plan_tree_from_participants(context)
+    except Exception:
+        participant_plan = []
+    if participant_plan:
+        raw_plan_tree = merge_plan_trees_by_owner(participant_plan, raw_plan_tree)
     workflow_kind = workflow_kind_for_checkpoint(checkpoint)
     plan_tree = ensure_plan_tree_shape(raw_plan_tree, agent_state.get("phase"), checkpoint_completed(checkpoint), conv_status, workflow_kind)
     if conv_status in {"completed", "incomplete"} and workflow_kind == "pentest":
@@ -303,9 +313,25 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     ], "evidence_id")
     snapshot_message_items, omitted = snapshot_messages(messages)
     agent_items = agents_from_messages(messages)
-    strix_agent_items = strix_agents_from_checkpoint(checkpoint, conv_status)
+    # Prefer Case multi-role roster (participants) over last-checkpoint-only agents.
+    strix_agent_items = strix_agents_for_snapshot(context, checkpoint, conv_status, task_context)
     strix_note_items = strix_notes_from_checkpoint(checkpoint)
     strix_run = strix_run_from_checkpoint(checkpoint)
+    case_run = context.get("case_run") if isinstance(context.get("case_run"), dict) else {}
+    if not case_run:
+        try:
+            from app.services.case_participants import recompute_case_run
+
+            case_run = recompute_case_run(context).get("case_run") or {}
+        except Exception:
+            case_run = {}
+    strix_run = merge_case_run_into_strix_run(strix_run, case_run, conversation, checkpoint)
+    try:
+        from app.services.case_participants import participants_list
+
+        participant_rows = participants_list(context)
+    except Exception:
+        participant_rows = []
 
     workers = context.get("workers") if isinstance(context.get("workers"), dict) else {}
     working = bool(workers) or str(conv_status or "").lower() == "running"
@@ -320,6 +346,8 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
             }
             for wid, meta in workers.items()
         ],
+        "participants": participant_rows,
+        "case_run": case_run or {},
         "messages": snapshot_message_items,
         "agents": agent_items,
         "strix_agents": strix_agent_items,
@@ -354,6 +382,7 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
             "agents": len(agent_items),
             "strix_agents": len(strix_agent_items),
             "strix_notes": len(strix_note_items),
+            "participants": len(participant_rows),
             "has_strix_run": bool(strix_run),
             "has_task_context": bool(task_context),
         },
@@ -363,6 +392,101 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
 
 def snapshot_list(value) -> list:
     return list(value) if isinstance(value, list) else []
+
+
+def strix_agents_for_snapshot(
+    context: dict,
+    checkpoint: dict,
+    conversation_status: str | None,
+    task_context: dict | None = None,
+) -> list[dict]:
+    """Case participants first (multi-role); fall back to last checkpoint panel agents."""
+    task_meta = task_context if isinstance(task_context, dict) else {}
+    try:
+        from app.services.case_participants import agents_from_participants, participants_map
+
+        if participants_map(context):
+            agents = agents_from_participants(
+                context,
+                conversation_status=conversation_status,
+                active_expert_id=task_meta.get("expert_id"),
+            )
+            if agents:
+                # Preserve current_detail / expert fields already set by agents_from_participants.
+                return normalize_agents_for_conversation_status(agents, conversation_status)
+    except Exception:
+        pass
+    return strix_agents_from_checkpoint(checkpoint, conversation_status)
+
+
+def merge_plan_trees_by_owner(primary: list, secondary: list) -> list[dict]:
+    """Union plan nodes; primary (participant trees) wins on owner+id collision."""
+    out: list[dict] = []
+    seen: set[str] = set()
+
+    def _key(node: dict) -> str:
+        owner = str(node.get("owner_expert_id") or node.get("owner_expert_name") or "").strip()
+        nid = str(node.get("node_id") or node.get("id") or node.get("title") or "").strip()
+        return f"{owner}:{nid}"
+
+    for source in (primary, secondary):
+        for item in source or []:
+            if not isinstance(item, dict):
+                continue
+            key = _key(item)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            out.append(dict(item))
+    return out
+
+
+def merge_case_run_into_strix_run(
+    strix_run: dict | None,
+    case_run: dict | None,
+    conversation,
+    checkpoint: dict | None = None,
+) -> dict:
+    """Prefer Case-level rollup for tokens/cost/start when multi-role sums exceed last burst."""
+    run = dict(strix_run or {}) if isinstance(strix_run, dict) else {}
+    cr = case_run if isinstance(case_run, dict) else {}
+    cr_usage = cr.get("llm_usage") if isinstance(cr.get("llm_usage"), dict) else {}
+    run_usage = run.get("llm_usage") if isinstance(run.get("llm_usage"), dict) else {}
+    cr_tokens = safe_int(cr_usage.get("total_tokens"))
+    run_tokens = safe_int(run_usage.get("total_tokens"))
+    if cr_tokens > run_tokens or (cr_tokens and not run_usage):
+        merged_usage = {
+            "requests": max(safe_int(run_usage.get("requests")), safe_int(cr_usage.get("requests"))),
+            "input_tokens": safe_int(run_usage.get("input_tokens")),
+            "cached_tokens": safe_int(run_usage.get("cached_tokens")),
+            "output_tokens": safe_int(run_usage.get("output_tokens")),
+            "reasoning_tokens": safe_int(run_usage.get("reasoning_tokens")),
+            "total_tokens": max(run_tokens, cr_tokens),
+            "cost": max(safe_float(run_usage.get("cost")), safe_float(cr_usage.get("cost"))),
+            "agent_count": max(
+                safe_int(run_usage.get("agent_count")),
+                safe_int(cr.get("participant_count")),
+                1 if cr_tokens else 0,
+            ),
+        }
+        run["llm_usage"] = merged_usage
+    if not run.get("start_time") and cr.get("started_at"):
+        run["start_time"] = str(cr.get("started_at"))
+    if not run and not cr:
+        return {}
+    if not run.get("start_time") and getattr(conversation, "created_at", None):
+        try:
+            run["start_time"] = conversation.created_at.isoformat()
+        except Exception:
+            pass
+    if not run.get("targets_info") and isinstance(checkpoint, dict):
+        # Keep checkpoint targets if Case rollup only had usage.
+        fallback = strix_run_from_checkpoint(checkpoint) if checkpoint else {}
+        if isinstance(fallback, dict) and fallback.get("targets_info"):
+            run["targets_info"] = fallback.get("targets_info")
+        if not run.get("scan_mode") and fallback.get("scan_mode"):
+            run["scan_mode"] = fallback.get("scan_mode")
+    return run
 
 
 def strix_agents_from_checkpoint(checkpoint: dict, conversation_status: str | None = None) -> list[dict]:
@@ -395,6 +519,10 @@ def strix_agents_from_checkpoint(checkpoint: dict, conversation_status: str | No
             "role": str(item.get("role") or ("child" if parent_id else "main")),
             "current_tool": str(item.get("current_tool") or ""),
             "current_action": str(item.get("current_action") or ""),
+            "current_detail": str(item.get("current_detail") or ""),
+            "expert_id": str(item.get("expert_id") or ""),
+            "pack_id": str(item.get("pack_id") or ""),
+            "highlighted": bool(item.get("highlighted")),
         })
     return normalize_agents_for_conversation_status(normalized, conversation_status)
 

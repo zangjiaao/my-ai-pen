@@ -432,7 +432,8 @@ async def _apply_worker_state(
             tid = str(task_id or "").strip()
             if clear_all_workers:
                 workers = {}
-            elif nid:
+            cleared_worker: dict = {}
+            if nid:
                 if working:
                     entry = dict(workers.get(nid) or {})
                     if tid:
@@ -450,6 +451,8 @@ async def _apply_worker_state(
                     existing_tid = str((existing or {}).get("task_id") or "").strip()
                     # Only drop when task matches or task id unknown (stale clear OK).
                     if not tid or not existing_tid or existing_tid == tid:
+                        if isinstance(existing, dict):
+                            cleared_worker = dict(existing)
                         workers.pop(nid, None)
             context["workers"] = workers
             if interrupt_pending is True:
@@ -479,6 +482,41 @@ async def _apply_worker_state(
                     except ConversationStatusError:
                         pass
 
+            # Case multi-role roster: track participants by expert_id (not only node).
+            try:
+                from app.services.case_participants import mark_participant_idle, upsert_participant
+
+                task_ctx = context.get("task") if isinstance(context.get("task"), dict) else {}
+                pack = str(
+                    task_ctx.get("engagement") or task_ctx.get("role") or task_ctx.get("pack_id") or ""
+                ).strip()
+                eid = expert_id if expert_id is not None else task_ctx.get("expert_id")
+                ename = expert_name if expert_name is not None else task_ctx.get("expert_name")
+                if working and (eid or ename or pack):
+                    context = upsert_participant(
+                        context,
+                        expert_id=eid,
+                        expert_name=ename or pack or "Agent",
+                        pack_id=pack or "default",
+                        last_status="running",
+                        last_task_id=tid or None,
+                        touch=True,
+                    )
+                elif not working and (eid or ename or pack or cleared_worker or nid):
+                    context = mark_participant_idle(
+                        context,
+                        expert_id=eid
+                        or cleared_worker.get("expert_id")
+                        or task_ctx.get("expert_id"),
+                        expert_name=ename
+                        or cleared_worker.get("expert_name")
+                        or task_ctx.get("expert_name"),
+                        pack_id=pack or task_ctx.get("engagement") or "default",
+                        last_detail="本轮工作已结束",
+                    )
+            except Exception as pe:
+                print(f"[WS] participant upsert error: {pe}")
+
             c.context = context
             await db.commit()
             await db.refresh(c)
@@ -493,12 +531,16 @@ async def _apply_worker_state(
                 }
                 for wid, meta in workers.items()
             ]
+            from app.services.case_participants import participants_list
+
             return {
                 "type": "conversation_working",
                 "conversation_id": conv_id,
                 "working": active,
                 "status": status,
                 "workers": worker_list,
+                "participants": participants_list(context),
+                "case_run": (context.get("case_run") if isinstance(context.get("case_run"), dict) else {}),
                 "interrupting": interrupting,
                 "node_id": nid or None,
                 "task_id": tid or None,
@@ -723,6 +765,8 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
 
     if msg_type == "checkpoint_update":
         await _remember_conversation_checkpoint(conv_id, msg.get("checkpoint") or {})
+    if msg_type == "plan_tree_updated" and conv_id:
+        await _remember_participant_plan_tree(conv_id, msg)
 
     if stream_fast and conv_id:
         # Progressive UI: broadcast immediately. Never await DB on the hot path —
@@ -3071,6 +3115,30 @@ async def _remember_conversation_checkpoint(conv_id: str, checkpoint: dict):
             cands = checkpoint.get("attack_surface_candidates")
             if isinstance(cands, list):
                 context["attack_surface_candidates"] = cands
+            # Case multi-role roster: update only the matching participant.
+            try:
+                from app.services.case_participants import apply_checkpoint_to_participant
+
+                task_meta = task if isinstance(task, dict) else {}
+                terminal = str(checkpoint.get("status") or "").lower() in {
+                    "completed",
+                    "incomplete",
+                    "failed",
+                    "blocked",
+                }
+                context = apply_checkpoint_to_participant(
+                    context,
+                    checkpoint,
+                    expert_id=task_meta.get("expert_id") or checkpoint.get("expert_id"),
+                    expert_name=task_meta.get("expert_name") or checkpoint.get("expert_name"),
+                    pack_id=task_meta.get("engagement")
+                    or task_meta.get("role")
+                    or checkpoint.get("role_pack"),
+                    task_id=checkpoint.get("task_id") or task_meta.get("task_id"),
+                    running=not terminal,
+                )
+            except Exception as pe:
+                print(f"[WS] checkpoint participant error: {pe}")
             c.context = context
             # Terminal checkpoint should settle the conversation row even if
             # task_complete status transition was missed earlier.
@@ -3080,6 +3148,43 @@ async def _remember_conversation_checkpoint(conv_id: str, checkpoint: dict):
             await db.commit()
     except Exception as e:
         print(f"[WS] remember conversation checkpoint error: {e}")
+
+
+async def _remember_participant_plan_tree(conv_id: str, msg: dict) -> None:
+    """Persist plan_tree onto the matching Case participant (multi-role Tasks)."""
+    if not conv_id or not isinstance(msg, dict):
+        return
+    plan = msg.get("plan_tree")
+    if not isinstance(plan, list) or not plan:
+        return
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+        from app.services.case_participants import apply_plan_tree_to_participant
+
+        async with async_session() as db:
+            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id)))
+            c = r.scalar_one_or_none()
+            if not c:
+                return
+            context = dict(c.context or {})
+            task = context.get("task") if isinstance(context.get("task"), dict) else {}
+            context = apply_plan_tree_to_participant(
+                context,
+                plan,
+                expert_id=msg.get("expert_id") or task.get("expert_id"),
+                expert_name=msg.get("expert_name") or task.get("expert_name"),
+                pack_id=msg.get("role_pack")
+                or msg.get("engagement")
+                or task.get("engagement")
+                or task.get("role")
+                or "default",
+                task_id=msg.get("task_id") or task.get("task_id"),
+            )
+            c.context = context
+            await db.commit()
+    except Exception as e:
+        print(f"[WS] participant plan_tree error: {e}")
 
 
 async def _remember_next_scope_candidates(conv_id: str, msg: dict) -> None:

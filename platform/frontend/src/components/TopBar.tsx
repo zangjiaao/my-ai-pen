@@ -7,7 +7,7 @@ import { useThemeStore } from "../stores/themeStore";
 interface Props {
   title?: string;
   conversationId?: string | null;
-  /** Extra controls on the right, before theme toggle (e.g. 注册节点). */
+  /** Extra controls after Report, before theme toggle (e.g. Status panel toggle). */
   actions?: ReactNode;
 }
 
@@ -47,8 +47,9 @@ export default function TopBar({ title, conversationId, actions }: Props) {
         )}
       </div>
       <div className="flex items-center gap-2">
-        {actions}
         {conversationId ? <ReportDrawer conversationId={conversationId} /> : null}
+        {/* Slot after Report (e.g. Status panel toggle). */}
+        {actions}
         <button
           type="button"
           onClick={toggleTheme}

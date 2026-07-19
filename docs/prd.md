@@ -70,7 +70,11 @@
 
 **P1**
 
-- 右侧面板：Status（elapsed / tokens / target、协作树、Tasks）、Surface、Findings、Activity——不堆叠重复的 Expert role / Engagement dashboard 卡片。
+- 右侧面板：Status（Case 级 elapsed / tokens / target、**多角色参与者花名册**、Tasks 带 owner 芯片）、Surface、Findings、Activity——不堆叠重复的 Expert role / Engagement dashboard 卡片。
+  - **可见性**：普通对话也可手动打开；**默认折叠**；有任务/目标/工作产物后自动展开。
+  - **1 会话 = 1 Case**：`conversation.context.participants` 按 `expert_id`（或 pack+name）记录每位参与者；checkpoint 只更新对应角色，不整表覆盖。
+  - **协作树**：每个产品专家 / default 座位一行 root；该角色最近一轮的 subagent 挂在其下；当前 sticky 角色高亮。
+  - **Tasks**：todo 投影带 `owner_expert_id/name`；多角色 todo 按 owner 合并展示，不因 handoff 抹掉另一角色清单。
 - 报告导出 / 导入（现有 sync 能力延续，不阻塞主环）。
 - 审计日志中的专家安装、专家实例 CRUD 与 usage billing hook（非真实支付）。
 - 历史里程碑 A–D 见 **`docs/archive/phase-milestones.md`**（已归档）；现行优先项见 **`docs/platform-default-agent-refactor.md`**。

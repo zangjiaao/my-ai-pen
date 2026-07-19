@@ -13,7 +13,7 @@ import { ApiError, authFetch } from "../lib/api";
 import { normalizeExecutionStatus } from "../lib/status";
 import { PHASES, PHASE_LABELS, phaseLabel } from "../lib/phase";
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
-import { Check, ChevronDown, Target, Upload } from "lucide-react";
+import { Check, ChevronDown, PanelRight, PanelRightClose, Target, Upload } from "lucide-react";
 import type { AgentIdentity, Conversation, Message } from "../lib/types";
 import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../lib/securityTypes";
 import { ENGAGEMENT_TEMPLATES, expertLabel, resolveExpertColor, type ExpertId } from "../lib/experts";
@@ -26,7 +26,24 @@ const PENDING_ASSET_TASK_KEY = "pending_asset_task";
  * consume-before-remount session flag alone). Cleared after blank restore.
  */
 const PREFER_BLANK_CHAT_KEY = "prefer_blank_chat";
+/**
+ * Status panel open/closed preference.
+ * Default is collapsed; auto-expands when a task / work surface appears.
+ * Manual toggle still wins until the next auto-expand edge or conversation switch.
+ */
+const RIGHT_PANEL_COLLAPSED_KEY = "right_panel_collapsed";
 const MESSAGE_PAGE_SIZE = 200;
+
+function readRightPanelCollapsed(): boolean {
+  try {
+    const raw = localStorage.getItem(RIGHT_PANEL_COLLAPSED_KEY);
+    // Default collapsed (ordinary chat). Only explicit "0" means user left it open.
+    if (raw === "0") return false;
+    return true;
+  } catch {
+    return true;
+  }
+}
 
 type ConversationLocationState = {
   preferBlankChat?: boolean;
@@ -64,7 +81,29 @@ type MentionTarget = {
 };
 
 type Progress = { current: number; total: number; percent: number };
-type PlanNode = { node_id?: string; id?: string; title?: string; status?: string; parent_id?: string | null; kind?: string; level?: string; method?: string | null; endpoint?: string | null; parameter?: string | null; parameters?: string[]; vuln_type?: string | null; result?: string | null; notes?: string | null; evidence_ids?: string[]; priority?: number; source?: string; agent_id?: string; linked_agent_id?: string; };
+type PlanNode = {
+  node_id?: string;
+  id?: string;
+  title?: string;
+  status?: string;
+  parent_id?: string | null;
+  kind?: string;
+  level?: string;
+  method?: string | null;
+  endpoint?: string | null;
+  parameter?: string | null;
+  parameters?: string[];
+  vuln_type?: string | null;
+  result?: string | null;
+  notes?: string | null;
+  evidence_ids?: string[];
+  priority?: number;
+  source?: string;
+  agent_id?: string;
+  linked_agent_id?: string;
+  owner_expert_id?: string;
+  owner_expert_name?: string;
+};
 type KanbanBucket = { id: string; title: string; done: number; total: number; status: string };
 type KanbanSummary = {
   workflow_kind?: string;
@@ -94,6 +133,20 @@ type StrixAgentStatus = {
   current_action?: string;
   current_detail?: string;
   last_tool?: string;
+  expert_id?: string;
+  pack_id?: string;
+  highlighted?: boolean;
+};
+
+type CaseRunSummary = {
+  started_at?: string;
+  last_active_at?: string;
+  participant_count?: number;
+  llm_usage?: {
+    total_tokens?: number;
+    cost?: number;
+    requests?: number;
+  };
 };
 type StrixNote = {
   id: string;
@@ -150,6 +203,8 @@ type ConversationSnapshot = {
   /** Session-level expert work-burst flag (Node busy / workers). */
   working?: boolean;
   workers?: Array<Record<string, unknown>>;
+  participants?: Array<Record<string, unknown>>;
+  case_run?: CaseRunSummary;
   agent_state?: Record<string, unknown>;
   progress?: Progress;
   kanban?: KanbanSummary;
@@ -217,6 +272,9 @@ export default function ConversationPage() {
   const [strixAgents, setStrixAgents] = useState<StrixAgentStatus[]>([]);
   const [strixNotes, setStrixNotes] = useState<StrixNote[]>([]);
   const [strixRun, setStrixRun] = useState<StrixRun | undefined>();
+  const [caseRun, setCaseRun] = useState<CaseRunSummary | undefined>();
+  /** User preference: hide Status panel (like sidebar collapse). Independent of content availability. */
+  const [rightPanelCollapsed, setRightPanelCollapsed] = useState(readRightPanelCollapsed);
   const [findings, setFindings] = useState<Array<Record<string, unknown>>>([]);
   const [assets, setAssets] = useState<Array<Record<string, unknown>>>([]);
   const [pendingApprovals, setPendingApprovals] = useState<Array<Record<string, unknown>>>([]);
@@ -363,11 +421,13 @@ export default function ConversationPage() {
     const nodeId = activeConversation?.node_id || activeConversationNodeId || "";
     return String(agentNodes.find(node => node.id === nodeId)?.type || pendingWorkflowKind || "");
   }, [activeConversation?.node_id, activeConversationNodeId, agentNodes, kanban?.workflow_kind, pendingWorkflowKind]);
-  const shouldShowRightPanel = useMemo(() => {
+  /**
+   * True when this Case has a real task / engagement surface (target, todos, findings…).
+   * Used to auto-expand the Status panel — not to gate whether the user may open it.
+   */
+  const hasTaskSurface = useMemo(() => {
     if (!activeId) return false;
 
-    // Pure chat / pre-target room: never open engagement surface.
-    // A lone main panel agent from a chat-only mis-dispatch is NOT work product.
     const hasRealTarget = Boolean(
       (taskContext as { target?: { value?: string } } | null | undefined)?.target?.value
       || (strixRun?.targets_info || []).some((t) => Boolean(t && (t as { target?: string }).target)),
@@ -377,7 +437,7 @@ export default function ConversationPage() {
       || findings.length
       || assets.length
       || planTree.some((node) =>
-        ["strix_todo", "agent", "coverage", "auditor", "worker", "pi_tool", "pi_workflow"].includes(String(node.source || "")),
+        ["strix_todo", "agent", "coverage", "auditor", "worker", "pi_tool", "pi_workflow", "plan"].includes(String(node.source || "")),
       ),
     );
     // Real multi-worker tree (not a single failed main chat agent).
@@ -386,21 +446,21 @@ export default function ConversationPage() {
       const parent = String((a as { parent_id?: string }).parent_id || "");
       return role === "worker" || (parent && parent !== "null");
     });
+    // Multi-role Case participants (even after idle) count as task surface.
+    const hasMultiRole = strixAgents.filter((a) => !a.parent_id).length > 1
+      || strixAgents.some((a) => Boolean(a.expert_id) || String(a.id || "").startsWith("role-"));
 
-    if (!hasRealTarget && !hasWorkProducts && !hasWorkerTree) {
-      // Greeting / clarification only — hide Status/Tasks regardless of status labels.
+    if (!hasRealTarget && !hasWorkProducts && !hasWorkerTree && !hasMultiRole) {
       return false;
     }
 
-    // Work products from a worker node — always show (including history reopen).
-    if (hasWorkProducts || hasWorkerTree) return true;
+    if (hasWorkProducts || hasWorkerTree || hasMultiRole) return true;
     if (hasRealTarget && strixAgents.length) return true;
     if (strixRun && hasRealTarget && (strixRun.start_time || strixRun.scan_mode)) return true;
 
     const assignedNodeId = activeConversation?.node_id || activeConversationNodeId || "";
     if (!assignedNodeId) return false;
 
-    // Bound node is working on a real target (or has already produced a runtime kanban surface).
     if (!hasRealTarget && !hasWorkProducts) return false;
     const stage = String(kanban?.current_stage || "").toLowerCase();
     if (kanban && stage && stage !== "idle" && stage !== "confirming") return true;
@@ -408,7 +468,6 @@ export default function ConversationPage() {
     if (isActiveConversationRunning && hasRealTarget && (Boolean(agentState.phase) || Boolean(agentState.activeTool) || planTree.length > 0 || Boolean(kanban))) {
       return true;
     }
-    // Terminal session with real work — show if status proves engagement ran.
     const status = String(activeConversation?.status || "").toLowerCase();
     if (["completed", "incomplete", "failed", "paused"].includes(status) && (hasWorkProducts || (hasRealTarget && (Boolean(kanban) || planTree.length > 0)))) {
       return true;
@@ -431,6 +490,49 @@ export default function ConversationPage() {
     strixRun,
     taskContext,
   ]);
+  /** Any open conversation can open Status; ordinary chat stays collapsed by default. */
+  const rightPanelAvailable = Boolean(activeId);
+  const rightPanelOpen = rightPanelAvailable && !rightPanelCollapsed;
+  const setRightPanelCollapsedPersist = useCallback((collapsed: boolean) => {
+    setRightPanelCollapsed(collapsed);
+    try {
+      localStorage.setItem(RIGHT_PANEL_COLLAPSED_KEY, collapsed ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }, []);
+  const toggleRightPanel = useCallback(() => {
+    setRightPanelCollapsedPersist(!rightPanelCollapsed);
+  }, [rightPanelCollapsed, setRightPanelCollapsedPersist]);
+  /** Rising-edge tracker for auto-expand when a task appears. */
+  const prevHasTaskSurfaceRef = useRef(false);
+  const rightPanelConvRef = useRef<string | null>(null);
+
+  // Conversation switch → start collapsed; task surface will rising-edge expand after load.
+  useEffect(() => {
+    if (!activeId) {
+      rightPanelConvRef.current = null;
+      prevHasTaskSurfaceRef.current = false;
+      return;
+    }
+    if (rightPanelConvRef.current !== activeId) {
+      rightPanelConvRef.current = activeId;
+      // Assume "had task" until cleared state settles, so stale surface cannot false-trigger expand.
+      prevHasTaskSurfaceRef.current = true;
+      setRightPanelCollapsedPersist(true);
+    }
+  }, [activeId, setRightPanelCollapsedPersist]);
+
+  // Auto-expand only on false → true (new task / snapshot with work products).
+  useEffect(() => {
+    if (!activeId) return;
+    const had = prevHasTaskSurfaceRef.current;
+    const has = hasTaskSurface;
+    if (has && !had) {
+      setRightPanelCollapsedPersist(false);
+    }
+    prevHasTaskSurfaceRef.current = has;
+  }, [activeId, hasTaskSurface, setRightPanelCollapsedPersist]);
   const platformAgentNodeId = useMemo(() => agentNodes.find(node => node.type === "platform")?.id || null, [agentNodes]);
   const fallbackPentestNodeId = useMemo(() => {
     const pentestNodeIds = agentNodes.filter(node => node.type === "pentest").map(node => node.id);
@@ -471,6 +573,10 @@ export default function ConversationPage() {
     if (nextRun) {
       setStrixRun((prev) => mergeStrixRun(prev, nextRun));
     }
+    const nextCaseRun = snapshot.case_run && Object.keys(snapshot.case_run).length
+      ? snapshot.case_run
+      : fallback?.case_run;
+    if (nextCaseRun) setCaseRun(nextCaseRun);
     setFindings(snapshot.findings?.length ? snapshot.findings : fallback?.findings || []);
     setAssets(snapshot.assets?.length ? snapshot.assets : fallback?.assets || []);
     setPendingApprovals(snapshot.pending_approvals?.length ? snapshot.pending_approvals : fallback?.pending_approvals || []);
@@ -621,7 +727,15 @@ export default function ConversationPage() {
       launchOptimisticRef.current = false;
       setInterrupting(false);
     }
-  }, [activeId, patchConversation]);
+    // Multi-role Case roster: light case_run patch; full snapshot only when multi-role.
+    if (isRecord(msg.case_run)) {
+      setCaseRun(msg.case_run as CaseRunSummary);
+    }
+    const participants = Array.isArray(msg.participants) ? msg.participants : [];
+    if (participants.length > 1 || (participants.length === 1 && !working)) {
+      void refreshConversationState(convId);
+    }
+  }, [activeId, patchConversation, refreshConversationState]);
 
   const { send } = useWebSocket({
     conversation_working: (msg) => {
@@ -735,10 +849,18 @@ export default function ConversationPage() {
       const convId = messageConversationId(msg, activeId);
       const tree = Array.isArray(m.plan_tree) ? m.plan_tree as PlanNode[] : m.plan_node ? [m.plan_node as PlanNode] : [];
       if (tree.length) {
+        const ownerId = readString(m.expert_id);
+        const ownerName = readString(m.expert_name);
+        const stamped = tree.map((node) => ({
+          ...node,
+          owner_expert_id: readString(node.owner_expert_id) || ownerId || undefined,
+          owner_expert_name: readString(node.owner_expert_name) || ownerName || undefined,
+        }));
         // Coalesce rapid plan broadcasts (tool start/end) into one UI update.
+        // Multi-role: merge by owner so handoff does not wipe the other role's todos.
         if (planTreeDebounceRef.current) window.clearTimeout(planTreeDebounceRef.current);
         planTreeDebounceRef.current = window.setTimeout(() => {
-          setPlanTree(tree);
+          setPlanTree((prev) => mergePlanTreeByOwner(prev, stamped));
           planTreeDebounceRef.current = null;
         }, 250);
       }
@@ -806,11 +928,19 @@ export default function ConversationPage() {
       const convId = messageConversationId(msg, activeId);
       const checkpoint = m.checkpoint && typeof m.checkpoint === "object" && !Array.isArray(m.checkpoint) ? m.checkpoint as Record<string, unknown> : {};
       const node3Strix = checkpoint.node3_strix && typeof checkpoint.node3_strix === "object" && !Array.isArray(checkpoint.node3_strix) ? checkpoint.node3_strix as Record<string, unknown> : {};
-      // Node3 agents, or Node2 panel_agents (worker tree), or diagnostics fallback from snapshot path.
+      // Multi-role: merge live panel into existing roster; never wipe other Case participants.
       if (Array.isArray(node3Strix.agents) && node3Strix.agents.length) {
-        setStrixAgents(node3Strix.agents.filter(isStrixAgentStatus));
+        const next = node3Strix.agents.filter(isStrixAgentStatus);
+        setStrixAgents((prev) => mergeLivePanelAgents(prev, next, {
+          expert_id: readString(m.expert_id) || readString(checkpoint.expert_id),
+          expert_name: readString(m.expert_name) || readString(checkpoint.expert_name),
+        }));
       } else if (Array.isArray(checkpoint.panel_agents) && checkpoint.panel_agents.length) {
-        setStrixAgents(checkpoint.panel_agents.filter(isStrixAgentStatus));
+        const next = checkpoint.panel_agents.filter(isStrixAgentStatus);
+        setStrixAgents((prev) => mergeLivePanelAgents(prev, next, {
+          expert_id: readString(m.expert_id) || readString(checkpoint.expert_id),
+          expert_name: readString(m.expert_name) || readString(checkpoint.expert_name),
+        }));
       }
       if (Array.isArray(node3Strix.todos)) {
         const todoPlan = strixTodosToPlanTree(node3Strix.todos);
@@ -941,9 +1071,13 @@ export default function ConversationPage() {
       setProgress(isProgress(m.progress) ? m.progress : progressForPhase(phase, "running"));
       if (isKanbanSummary(m.kanban)) setKanban(m.kanban);
       setRunning(true);
-      // Live-patch Main agent activity without waiting for the next checkpoint.
+      // Live-patch active role activity without wiping other Case participants.
       if (Array.isArray(m.panel_agents) && m.panel_agents.length) {
-        setStrixAgents(m.panel_agents.filter(isStrixAgentStatus));
+        const next = m.panel_agents.filter(isStrixAgentStatus);
+        setStrixAgents((prev) => mergeLivePanelAgents(prev, next, {
+          expert_id: readString(m.expert_id),
+          expert_name: readString(m.expert_name),
+        }));
       } else if (phase || activeTool || currentDetail) {
         setStrixAgents((prev) =>
           patchMainAgentActivity(prev, {
@@ -951,6 +1085,8 @@ export default function ConversationPage() {
             activeTool: activeTool || "",
             currentDetail,
             running: true,
+            expert_id: readString(m.expert_id),
+            expert_name: readString(m.expert_name),
           }),
         );
       }
@@ -1191,6 +1327,7 @@ export default function ConversationPage() {
     setStrixAgents([]);
     setStrixNotes([]);
     setStrixRun(undefined);
+    setCaseRun(undefined);
     setFindings([]);
     setAssets([]);
     setPendingApprovals([]);
@@ -1222,6 +1359,8 @@ export default function ConversationPage() {
     pendingScrollToBottomRef.current = true;
     shouldStickToBottomRef.current = true;
     void queryClient.removeQueries({ queryKey: ["conversation-messages"] });
+    // Clear previous Case surface first so Status auto-expand does not use stale task data.
+    resetConversationState();
     setActiveId(id);
     setActiveConversationNodeId(conversations.find(c => c.id === id)?.node_id || null);
     localStorage.setItem(ACTIVE_CONVERSATION_KEY, id);
@@ -1989,9 +2128,31 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
     <div className="flex h-screen overflow-hidden bg-canvas">
       <Sidebar activeId={activeId} onSelect={(id) => { void loadConversation(id || null); }} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar title={activeId ? conversations?.find(c => c.id === activeId)?.title : undefined} conversationId={activeId} />
+        <TopBar
+          title={activeId ? conversations?.find(c => c.id === activeId)?.title : undefined}
+          conversationId={activeId}
+          actions={
+            rightPanelAvailable ? (
+              <button
+                type="button"
+                data-testid="right-panel-toggle"
+                onClick={toggleRightPanel}
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-ink-muted transition-colors hover:bg-canvas-inset hover:text-ink"
+                title={rightPanelOpen ? "折叠状态面板" : "展开状态面板"}
+                aria-label={rightPanelOpen ? "折叠状态面板" : "展开状态面板"}
+                aria-pressed={rightPanelOpen}
+              >
+                {rightPanelOpen ? (
+                  <PanelRightClose size={16} strokeWidth={1.75} />
+                ) : (
+                  <PanelRight size={16} strokeWidth={1.75} />
+                )}
+              </button>
+            ) : null
+          }
+        />
         <div className="flex min-w-0 flex-1 overflow-hidden">
-          <main data-testid="conversation-main" data-active-conversation-id={activeId || ""} className={`flex min-w-0 flex-1 flex-col ${shouldShowRightPanel ? "border-r border-hairline-soft" : ""}`}>
+          <main data-testid="conversation-main" data-active-conversation-id={activeId || ""} className={`flex min-w-0 flex-1 flex-col ${rightPanelOpen ? "border-r border-hairline-soft" : ""}`}>
             <div ref={messageScrollerRef} onScroll={handleMessageScroll} className="min-w-0 flex-1 overflow-y-auto px-6 py-4 space-y-4">
               {messages.length === 0 && !activeId && (
                 <div className="flex h-full items-center justify-center">
@@ -2426,7 +2587,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               </div>
             </div>
           </main>
-          {shouldShowRightPanel && (
+          {rightPanelOpen && (
             <RightPanel
               phase={agentState.phase as string}
               activeTool={agentState.activeTool as string}
@@ -2441,6 +2602,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               strixAgents={strixAgents}
               strixNotes={strixNotes}
               strixRun={strixRun}
+              caseRun={caseRun}
               timeline={timelineEvents}
               timelineCursorAt={timelineCursorAt}
               findings={findings}
@@ -3090,7 +3252,88 @@ function isStrixAgentStatus(value: unknown): value is StrixAgentStatus {
   return Boolean(value && typeof value === "object" && !Array.isArray(value) && readString((value as Record<string, unknown>).id));
 }
 
-/** Patch main agent row from live status_update (tool / LLM phase). */
+/** True when the Status list already has a multi-role Case roster. */
+function isMultiRoleRoster(agents: StrixAgentStatus[]): boolean {
+  const roots = agents.filter((a) => !a.parent_id);
+  if (roots.length > 1) return true;
+  return roots.some(
+    (r) =>
+      Boolean(r.expert_id) ||
+      String(r.id || "").startsWith("role-") ||
+      Boolean(r.highlighted),
+  );
+}
+
+/**
+ * Merge a live single-burst panel_agents payload into an existing Case roster.
+ * Replaces only when the previous list is single-role / empty.
+ */
+function mergeLivePanelAgents(
+  prev: StrixAgentStatus[],
+  panel: StrixAgentStatus[],
+  meta?: { expert_id?: string; expert_name?: string },
+): StrixAgentStatus[] {
+  if (!panel.length) return prev;
+  if (!prev.length || !isMultiRoleRoster(prev)) return panel;
+
+  const eid = String(meta?.expert_id || "").trim();
+  const ename = String(meta?.expert_name || "").trim().toLowerCase();
+  const panelMain = panel.find((a) => !a.parent_id) || panel[0]!;
+  const panelChildren = panel.filter((a) => a.parent_id);
+
+  let rootIdx = -1;
+  if (eid) {
+    rootIdx = prev.findIndex((a) => !a.parent_id && String(a.expert_id || "") === eid);
+  }
+  if (rootIdx < 0 && ename) {
+    rootIdx = prev.findIndex((a) => !a.parent_id && String(a.name || "").toLowerCase() === ename);
+  }
+  if (rootIdx < 0) {
+    rootIdx = prev.findIndex((a) => !a.parent_id && a.highlighted);
+  }
+  if (rootIdx < 0) {
+    rootIdx = prev.findIndex((a) => !a.parent_id && String(a.status || "").toLowerCase() === "running");
+  }
+  if (rootIdx < 0) {
+    rootIdx = prev.findIndex((a) => !a.parent_id);
+  }
+  if (rootIdx < 0) return panel;
+
+  const root = prev[rootIdx]!;
+  const rootId = root.id;
+  const withoutRootAndKids = prev.filter(
+    (a) => a.id !== rootId && a.parent_id !== rootId && !(a.parent_id && String(a.parent_id) === rootId),
+  );
+  // Also drop legacy single-main children that belonged to this burst id.
+  const cleaned = withoutRootAndKids.filter((a) => {
+    if (a.parent_id && panel.some((p) => p.id === a.id)) return false;
+    return true;
+  });
+
+  const nextRoot: StrixAgentStatus = {
+    ...root,
+    status: panelMain.status || "running",
+    current_tool: panelMain.current_tool || root.current_tool,
+    current_action: panelMain.current_action || root.current_action,
+    current_detail: panelMain.current_detail || root.current_detail,
+    last_tool: panelMain.last_tool || root.last_tool,
+    highlighted: true,
+    expert_id: eid || root.expert_id,
+  };
+  const nextKids = panelChildren.map((child) => ({
+    ...child,
+    parent_id: rootId,
+    id: child.id.startsWith(rootId) ? child.id : `${rootId}-${child.id}`,
+    expert_id: eid || root.expert_id,
+  }));
+  // Clear highlight on other roots.
+  const others = cleaned.map((a) =>
+    !a.parent_id ? { ...a, highlighted: false } : a,
+  );
+  return [nextRoot, ...others, ...nextKids];
+}
+
+/** Patch active role root from live status_update (tool / LLM phase). */
 function patchMainAgentActivity(
   prev: StrixAgentStatus[],
   input: {
@@ -3098,24 +3341,47 @@ function patchMainAgentActivity(
     activeTool?: string;
     currentDetail?: string;
     running?: boolean;
+    expert_id?: string;
+    expert_name?: string;
   },
 ): StrixAgentStatus[] {
   const phase = String(input.phase || "").trim();
   const tool = input.activeTool != null ? String(input.activeTool) : undefined;
   const detail = input.currentDetail != null ? String(input.currentDetail).trim() : "";
-  const mainIdx = prev.findIndex((a) => a.id === "node4-main" || a.id === "node2-main" || a.role === "main");
+  const eid = String(input.expert_id || "").trim();
+  const ename = String(input.expert_name || "").trim().toLowerCase();
+
+  let mainIdx = -1;
+  if (eid) {
+    mainIdx = prev.findIndex((a) => !a.parent_id && String(a.expert_id || "") === eid);
+  }
+  if (mainIdx < 0 && ename) {
+    mainIdx = prev.findIndex((a) => !a.parent_id && String(a.name || "").toLowerCase() === ename);
+  }
+  if (mainIdx < 0) {
+    mainIdx = prev.findIndex((a) => !a.parent_id && a.highlighted);
+  }
+  if (mainIdx < 0) {
+    mainIdx = prev.findIndex(
+      (a) => a.id === "node4-main" || a.id === "node2-main" || (!a.parent_id && a.role === "main"),
+    );
+  }
+  if (mainIdx < 0) {
+    mainIdx = prev.findIndex((a) => !a.parent_id);
+  }
   const base: StrixAgentStatus =
     mainIdx >= 0
       ? prev[mainIdx]!
       : {
           id: "node4-main",
-          name: "Agent",
+          name: input.expert_name || "Agent",
           status: "running",
           parent_id: null,
           task: "",
           skills: [],
           pending_count: 0,
           role: "main",
+          expert_id: eid || undefined,
         };
   const lastTool =
     tool && tool.length > 0 ? tool : String(base.last_tool || base.current_tool || "").trim();
@@ -3124,6 +3390,8 @@ function patchMainAgentActivity(
     status: input.running === false ? base.status : "running",
     parent_id: null,
     role: base.role || "main",
+    expert_id: eid || base.expert_id,
+    highlighted: true,
     current_tool: tool !== undefined ? tool : base.current_tool,
     current_action: phase || base.current_action || "running",
     last_tool: lastTool || base.last_tool,
@@ -3138,7 +3406,37 @@ function patchMainAgentActivity(
           : base.current_detail),
   };
   if (mainIdx < 0) return [next, ...prev];
-  return prev.map((a, i) => (i === mainIdx ? next : a));
+  return prev.map((a, i) => {
+    if (i === mainIdx) return next;
+    if (!a.parent_id && a.highlighted) return { ...a, highlighted: false };
+    return a;
+  });
+}
+
+/** Merge plan trees by owner so multi-role Case Tasks keep both sides. */
+function mergePlanTreeByOwner(prev: PlanNode[], incoming: PlanNode[]): PlanNode[] {
+  if (!incoming.length) return prev;
+  if (!prev.length) return incoming;
+
+  const ownerKey = (node: PlanNode) =>
+    String(node.owner_expert_id || node.owner_expert_name || "").trim();
+  const incomingOwners = new Set(incoming.map(ownerKey).filter(Boolean));
+
+  // No owner on either side → classic replace (single-agent path).
+  if (incomingOwners.size === 0 && !prev.some((n) => ownerKey(n))) {
+    return incoming;
+  }
+
+  const kept = prev.filter((node) => {
+    const owner = ownerKey(node);
+    if (!owner) {
+      // Keep unscoped nodes only when incoming is also unscoped.
+      return incomingOwners.size === 0;
+    }
+    // Drop previous nodes for owners that just re-published a full tree.
+    return !incomingOwners.has(owner);
+  });
+  return [...kept, ...incoming];
 }
 
 /** Ensure main agent row exists, then upsert a worker child for live collaboration tree. */

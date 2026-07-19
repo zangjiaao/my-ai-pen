@@ -27,6 +27,9 @@ type PlanNode = {
   source?: string;
   agent_id?: string;
   linked_agent_id?: string;
+  /** Case multi-role: which product expert owns this todo. */
+  owner_expert_id?: string;
+  owner_expert_name?: string;
 };
 
 type KanbanBucket = { id: string; title: string; done: number; total: number; status: PlanStatus };
@@ -72,6 +75,11 @@ type StrixAgentStatus = {
   /** Human-readable activity from Node (preferred). */
   current_detail?: string;
   last_tool?: string;
+  /** Product expert id for Case multi-role roster. */
+  expert_id?: string;
+  pack_id?: string;
+  /** Currently sticky / active speaker role. */
+  highlighted?: boolean;
 };
 
 type StrixNote = {
@@ -111,6 +119,17 @@ type PhasePlan = {
   items: PlanNode[];
 };
 
+type CaseRunSummary = {
+  started_at?: string;
+  last_active_at?: string;
+  participant_count?: number;
+  llm_usage?: {
+    total_tokens?: number;
+    cost?: number;
+    requests?: number;
+  };
+};
+
 interface Props {
   phase?: string;
   activeTool?: string;
@@ -126,6 +145,8 @@ interface Props {
   strixAgents?: StrixAgentStatus[];
   strixNotes?: StrixNote[];
   strixRun?: StrixRun;
+  /** Case-level rollup (multi-role tokens / start). */
+  caseRun?: CaseRunSummary;
   timeline?: TimelineEvent[];
   timelineCursorAt?: string;
   findings?: Array<Record<string, unknown>>;
@@ -171,6 +192,7 @@ export default function RightPanel({
   strixAgents = [],
   strixNotes = [],
   strixRun,
+  caseRun,
   timeline = [],
   timelineCursorAt,
   findings = [],
@@ -225,19 +247,23 @@ export default function RightPanel({
       : synthesizeMainAgent(activeTool, running, workflowKind),
     running,
   );
-  const hasStatusData = running || Boolean(activeTool) || planTree.length > 0 || displayAgents.length > 0 || findings.length > 0 || assets.length > 0 || timeline.length > 0 || Boolean(strixRun);
+  const hasStatusData = running || Boolean(activeTool) || planTree.length > 0 || displayAgents.length > 0 || findings.length > 0 || assets.length > 0 || timeline.length > 0 || Boolean(strixRun) || Boolean(caseRun?.started_at || caseRun?.llm_usage?.total_tokens);
   const visiblePlanTree = isStrixWorkflow ? mainAgentPlanTree(planTree, displayAgents) : planTree;
   const phasePlan = hasStatusData ? buildPhasePlan(visiblePlanTree, kanbanSummary.current_stage, activeTool, running, findings.length, isStrixWorkflow) : [];
   // Node3-style flat task list for all workflows (phase tree remains available via plan data).
   const taskItems = isStrixWorkflow
     ? phasePlan.flatMap((phase) => phase.items)
     : normalizeTasksForConversationStatus(unifiedTodoItems(visiblePlanTree), conversationStatus, running);
-  const displayRun = strixRun && hasRunSummaryData(strixRun) ? strixRun : undefined;
+  const displayRun = useMemo(
+    () => mergeCaseRunIntoDisplayRun(strixRun, caseRun, running),
+    [strixRun, caseRun, running],
+  );
   // Prefer the larger of kanban.elapsed_seconds and the run start/end window so
   // Elapsed stays aligned with Started/Ended even when conversation row times lag.
   const elapsedBaseSeconds = Math.max(
     normalizeSeconds(kanbanSummary.elapsed_seconds),
-    elapsedSecondsFromRun(strixRun, running),
+    elapsedSecondsFromRun(displayRun || strixRun, running),
+    elapsedSecondsFromCaseRun(caseRun, running),
   );
   const intake = normalizeIntake(intakeResult, intakeStatus);
   const [elapsedClock, setElapsedClock] = useState(() => ({ seconds: elapsedBaseSeconds, anchorSeconds: elapsedBaseSeconds, anchorMs: Date.now() }));
@@ -360,11 +386,13 @@ export default function RightPanel({
                 <p className="font-mono text-xl font-semibold leading-none tracking-normal">{elapsedText}</p>
               </section>
             )}
-            {/* Agent collaboration tree */}
+            {/* Case multi-role roster (one root per product expert / default seat) */}
             {displayAgents.length > 0 && (
               <section>
                 <div className="mb-2 flex items-center justify-between gap-2">
-                  <p className="text-xs text-ink-muted">Agent collaboration</p>
+                  <p className="text-xs text-ink-muted">
+                    {displayAgents.filter((a) => !a.parent_id).length > 1 ? "Case participants" : "Agent collaboration"}
+                  </p>
                   <p className="font-mono text-[11px] text-ink-muted">{agentStatusCount(displayAgents)}</p>
                 </div>
                 <StrixAgentList agents={displayAgents} />
@@ -580,6 +608,7 @@ function StrixTodoItem({ item }: { item: PlanNode }) {
   const Icon = todoStatusIcon(status);
   const isWorker = String(item.kind || "") === "worker" || String(item.source || "") === "worker";
   const workerBadge = isWorker ? workerOutcomeBadge(item) : null;
+  const ownerLabel = String(item.owner_expert_name || "").trim();
   const isFollowUp =
     String(item.source || "") === "worker" &&
     (/^follow-up\b/i.test(String(item.title || "")) || String(item.node_id || item.id || "").startsWith("plan-followup-"));
@@ -591,6 +620,14 @@ function StrixTodoItem({ item }: { item: PlanNode }) {
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           <p className={`min-w-0 break-words text-sm font-medium [overflow-wrap:anywhere] ${todoTitleClass(status)}`}>{String(item.title || "Untitled task")}</p>
+          {ownerLabel && (
+            <span
+              className="shrink-0 rounded-sm bg-canvas-inset px-1.5 py-0.5 text-[10px] font-medium text-ink-secondary"
+              title={`Owner: ${ownerLabel}`}
+            >
+              {ownerLabel}
+            </span>
+          )}
           {workerBadge && (
             <span className={`shrink-0 rounded-sm px-1.5 py-0.5 text-[10px] font-medium uppercase ${workerBadge.className}`}>{workerBadge.label}</span>
           )}
@@ -776,14 +813,17 @@ function AgentRow({
     event.preventDefault();
     onToggle?.();
   };
+  const highlighted = Boolean(agent.highlighted) && primary;
   return (
     <div
-      className={`min-w-0 rounded-md py-2 pr-2 pl-3.5 bg-transparent ${rowInteractive ? "cursor-pointer hover:bg-canvas-inset focus-visible:outline focus-visible:outline-2 focus-visible:outline-status-running/40" : "hover:bg-canvas-inset"}`}
+      className={`min-w-0 rounded-md py-2 pr-2 pl-3.5 ${highlighted ? "bg-status-running/8 ring-1 ring-status-running/25" : "bg-transparent"} ${rowInteractive ? "cursor-pointer hover:bg-canvas-inset focus-visible:outline focus-visible:outline-2 focus-visible:outline-status-running/40" : "hover:bg-canvas-inset"}`}
       onClick={rowInteractive ? onToggle : undefined}
       onKeyDown={handleRowKeyDown}
       role={rowInteractive ? "button" : undefined}
       tabIndex={rowInteractive ? 0 : undefined}
       aria-expanded={rowInteractive ? expanded : undefined}
+      data-highlighted={highlighted ? "true" : undefined}
+      data-expert-id={agent.expert_id || undefined}
     >
       <div className="flex min-w-0 items-start gap-2">
         <span
@@ -797,6 +837,11 @@ function AgentRow({
               <div className="flex min-w-0 items-center gap-1.5">
                 <AgentRoleBadge primary={primary} />
                 <p className="min-w-0 flex-1 truncate text-sm font-medium">{agent.name || agent.id}</p>
+                {highlighted && (
+                  <span className="shrink-0 rounded-sm bg-status-running/15 px-1.5 py-0.5 text-[10px] font-medium text-status-running">
+                    active
+                  </span>
+                )}
               </div>
               <p className="mt-0.5 text-xs text-ink-secondary">{summary}</p>
             </div>
@@ -1128,6 +1173,58 @@ function hasRunSummaryData(run: StrixRun | undefined): boolean {
     Number(usage.total_tokens || usage.requests || 0) > 0 ||
     targets.some((target) => target.target || target.original),
   );
+}
+
+/** Fold Case multi-role rollup (tokens/start) into the Status top strip. */
+function mergeCaseRunIntoDisplayRun(
+  run: StrixRun | undefined,
+  caseRun: CaseRunSummary | undefined,
+  _running: boolean,
+): StrixRun | undefined {
+  const base = run && hasRunSummaryData(run) ? { ...run, llm_usage: { ...(run.llm_usage || {}) } } : undefined;
+  const crUsage = caseRun?.llm_usage || {};
+  const crTokens = Number(crUsage.total_tokens || 0);
+  const crCost = Number(crUsage.cost || 0);
+  const crRequests = Number(crUsage.requests || 0);
+  if (!base && !caseRun) return undefined;
+  if (!base) {
+    if (!crTokens && !caseRun?.started_at && !crRequests) return undefined;
+    return {
+      start_time: caseRun?.started_at,
+      llm_usage: {
+        total_tokens: crTokens || undefined,
+        cost: crCost || undefined,
+        requests: crRequests || undefined,
+        agent_count: caseRun?.participant_count,
+      },
+    };
+  }
+  const baseTokens = Number(base.llm_usage?.total_tokens || 0);
+  if (crTokens > baseTokens) {
+    base.llm_usage = {
+      ...base.llm_usage,
+      total_tokens: crTokens,
+      cost: Math.max(Number(base.llm_usage?.cost || 0), crCost),
+      requests: Math.max(Number(base.llm_usage?.requests || 0), crRequests),
+      agent_count: Math.max(
+        Number(base.llm_usage?.agent_count || 0),
+        Number(caseRun?.participant_count || 0),
+      ) || undefined,
+    };
+  }
+  if (!base.start_time && caseRun?.started_at) {
+    base.start_time = caseRun.started_at;
+  }
+  return hasRunSummaryData(base) ? base : undefined;
+}
+
+function elapsedSecondsFromCaseRun(caseRun: CaseRunSummary | undefined, running: boolean): number {
+  if (!caseRun?.started_at) return 0;
+  const start = Date.parse(caseRun.started_at);
+  if (!Number.isFinite(start)) return 0;
+  const endRaw = running ? Date.now() : Date.parse(String(caseRun.last_active_at || "")) || Date.now();
+  if (!Number.isFinite(endRaw) || endRaw < start) return 0;
+  return Math.max(0, Math.floor((endRaw - start) / 1000));
 }
 
 function countLabel(base: string, count: number): string {

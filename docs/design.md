@@ -868,8 +868,8 @@ Sidebar 会话项同步显示待处理数量 badge（红色圆点 + 数字）。
 
 ### Collapsing
 
-- **Sidebar**: ≥1024px 完整 280px；<1024px 收为 64px 图标栏；<768px 汉堡菜单。
-- **Right Panel**: ≥1280px 完整 360px；1024-1280px 收至 280px；<1024px 底部 Tab bar。
+- **Sidebar**: ≥1024px 完整 280px；<1024px 收为 64px 图标栏；<768px 汉堡菜单。可手动折叠为 64px 图标轨（`localStorage.sidebar_collapsed`）。
+- **Right Panel**（会话 Status / Surface / Findings / Activity）：任意打开的会话均可在顶栏「报告」右侧用 `PanelRight` 开关查看；**默认折叠**；出现任务/目标/工作产物后**自动展开**（用户仍可再折叠）。宽度可拖（默认约 480px）。
 - **对话区**: 始终 flex 占满剩余空间。
 
 ---

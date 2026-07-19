@@ -19,6 +19,9 @@ export type PlanNodeLike = {
   parent_id?: string | null;
   source?: string;
   priority?: number;
+  /** Product expert that owns this todo (Case multi-role Tasks chip). */
+  owner_expert_id?: string;
+  owner_expert_name?: string;
 };
 
 /**
@@ -103,6 +106,21 @@ export function buildTodoPlanTreePayload(todo: TodoStore): {
   };
 }
 
+/** Stamp product expert ownership on plan nodes for multi-role Case Tasks. */
+export function stampPlanTreeOwner(
+  planTree: PlanNodeLike[],
+  task: TaskEnvelope,
+): PlanNodeLike[] {
+  const ownerId = String(task.expertId || "").trim();
+  const ownerName = String(task.expertName || "").trim();
+  if (!ownerId && !ownerName) return planTree;
+  return planTree.map((node) => ({
+    ...node,
+    owner_expert_id: ownerId || node.owner_expert_id,
+    owner_expert_name: ownerName || node.owner_expert_name,
+  }));
+}
+
 /** Emit plan_tree_updated so ConversationPage Tasks list updates live. */
 export async function emitTodoPlanTreeUpdate(
   platform: PlatformSink,
@@ -111,14 +129,18 @@ export async function emitTodoPlanTreeUpdate(
   reason: string,
 ): Promise<void> {
   const payload = buildTodoPlanTreePayload(todo);
+  const plan_tree = stampPlanTreeOwner(payload.plan_tree, task);
   await platform.send({
     type: "plan_tree_updated",
     conversation_id: task.conversationId,
     task_id: task.taskId,
     reason,
-    plan_tree: payload.plan_tree,
+    plan_tree,
     todo_phases: payload.todo_phases,
     todo_open_count: payload.todo_open_count,
     progress: payload.progress,
+    expert_id: task.expertId,
+    expert_name: task.expertName,
+    engagement: task.engagement || task.role,
   } as PlatformMessage);
 }
