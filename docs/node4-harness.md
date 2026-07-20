@@ -195,7 +195,7 @@ Configs: `experts/pentest/graphs/`. Loader: `node4/src/runtime/pentest-graph.ts`
 
 **Surface ledger:** `taskDir/surfaces/ledger.json` — recon `surfaces[]` work queue; Graph `todo(done)` requires act/deadend/skip (see `docs/node4-task-graph.md`).
 
-**Parallel batch:** `subagent({ packages: [...] })` concurrent (default `NODE4_SUBAGENT_CONCURRENCY=3`). Path re-dispatch ≤2. **Session promote:** child → parent jars after each package; **seed:** parent → next child. **Idle reuse:** warm LLM session parked by pathKey for same-path re-dispatch (`NODE4_SUBAGENT_IDLE`, default on). Missing `result.json` may be salvaged.
+**Parallel batch:** `subagent({ packages: [...] })` concurrent (default `NODE4_SUBAGENT_CONCURRENCY=8`). Path re-dispatch ≤2. **Session promote/seed** parent↔child. **Worker keep-alive:** park by `agent_id`; warm only with `resume_agent_id` + same-path affinity (`NODE4_SUBAGENT_IDLE`). Orthogonal paths cold-fan-out. Missing `result.json` may be salvaged.
 
 ### Subagent handoff contract (A1 / D3)
 

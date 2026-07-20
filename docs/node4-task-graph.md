@@ -49,11 +49,11 @@ Main DISPATCH (goal + success_criteria)
 ## Parallel subagent batch (OMP-style, v1)
 
 - Tool `subagent` accepts **flat** one package or **batch** `packages[]` + optional shared `context`.
-- Batch runs with `mapWithConcurrencyLimit` — default concurrency **3** (`NODE4_SUBAGENT_CONCURRENCY`, clamp 1–8). Safety ceiling 32 packages (not a quality gate).
+- Batch runs with `mapWithConcurrencyLimit` — default concurrency **8** (`NODE4_SUBAGENT_CONCURRENCY`, clamp 1–16). Safety ceiling 32 packages (not a quality gate).
 - Sync only: soft package failure → `results[i].ok=false`; siblings continue.
 - **Path re-dispatch budget:** same pathname ≤ **2** dispatches/task.
 - **Session seed + promote:** child jars seed from parent `session/`; after each package, child cookies **promote back to parent** (Graph hard Main cannot call session tools — otherwise seed always empty).
-- **OMP idle / warm reuse:** after a package, the LLM session may park by `pathKey` (`SubagentIdlePool`). Same-path re-dispatch re-prompts the warm session (no `createAgentSession` cold start). Disable: `NODE4_SUBAGENT_IDLE=0`. Caps: `NODE4_SUBAGENT_IDLE_MAX` (default 4), `NODE4_SUBAGENT_IDLE_TTL_MS`, `NODE4_SUBAGENT_IDLE_MAX_PACKAGES` (default 4).
+- **Worker keep-alive (OMP-style):** after LLM packages, park by **`agent_id`**. Default spawn is **cold**. Warm only via explicit `resume_agent_id` + **same-path affinity** (skill mismatch rejects). Orthogonal modules stay cold and fan out. Disable: `NODE4_SUBAGENT_IDLE=0`. Caps: `NODE4_SUBAGENT_IDLE_MAX` (default 8), TTL, max packages/worker (default 4).
 - **Salvage:** missing `result.json` → candidates from tool-output/facts when possible.
 - Ledger/post-process mutex-serialized. Main still books.
 

@@ -43,13 +43,17 @@ export async function mapWithConcurrencyLimit<T, R>(
   return { results, aborted: Boolean(signal?.aborted) };
 }
 
-/** Default subagent batch concurrency for pentest (not OMP's 32). */
+/**
+ * Default subagent batch concurrency for pentest.
+ * Orthogonal modules should cold-fan-out (OMP-style wall-clock win).
+ * Cap 16 (OMP default 32 — we stay conservative).
+ */
 export function resolveSubagentConcurrency(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env.NODE4_SUBAGENT_CONCURRENCY;
-  if (raw == null || String(raw).trim() === "") return 3;
+  if (raw == null || String(raw).trim() === "") return 8;
   const n = Number(raw);
-  if (!Number.isFinite(n)) return 3;
-  return Math.max(1, Math.min(8, Math.floor(n)));
+  if (!Number.isFinite(n)) return 8;
+  return Math.max(1, Math.min(16, Math.floor(n)));
 }
 
 /**

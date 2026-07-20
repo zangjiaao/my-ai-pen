@@ -127,8 +127,8 @@ export type ToolRuntime = {
      */
     subagentPathDispatchCounts?: Record<string, number>;
     /**
-     * OMP-style idle LLM sessions parked by pathKey after a package finishes.
-     * Same-path re-dispatch re-prompts instead of cold createAgentSession.
+     * OMP-style idle workers parked by agent_id after a package finishes.
+     * Warm resume only via explicit resume_agent_id + same-path affinity.
      * Disposed on task end. Disable: NODE4_SUBAGENT_IDLE=0.
      */
     subagentIdlePool?: import("./runtime/subagent-idle-pool.js").SubagentIdlePool;

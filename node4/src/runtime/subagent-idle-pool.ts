@@ -1,13 +1,25 @@
 /**
- * OMP-style idle subagent pool: keep LLM sessions warm after a package so
- * same-path re-dispatch re-prompts instead of cold createAgentSession.
+ * OMP-style idle subagent worker registry.
  *
- * Keyed by pathKey (pathname). Exclusive take — concurrent packages on the
- * same path still cold-start the second one.
+ * Workers stay warm after a package (keep-alive) and are resumed only by
+ * **explicit agent_id** with an **affinity gate** (same pathKey required).
+ * Orthogonal paths always cold-start — no automatic pathKey grab.
+ *
+ * Disable: NODE4_SUBAGENT_IDLE=0.
  */
 
-export type IdleSubagentHandle = {
+export type WorkerAffinity = {
   pathKey: string;
+  nodeType?: string;
+  skillId?: string;
+};
+
+export type IdleSubagentHandle = {
+  /** Stable worker id returned to Main as agent_id (usually host subagent id). */
+  agentId: string;
+  pathKey: string;
+  nodeType?: string;
+  skillId?: string;
   /** Live pi AgentSession (must not be disposed while parked). */
   session: {
     prompt: (text: string, opts?: { source?: string }) => Promise<unknown>;
@@ -24,16 +36,30 @@ export type IdleSubagentHandle = {
   clearAbort?: () => void;
 };
 
+export type ResumeResult =
+  | { ok: true; handle: IdleSubagentHandle }
+  | { ok: false; reason: ResumeRejectReason };
+
+export type ResumeRejectReason =
+  | "disabled"
+  | "missing_agent_id"
+  | "not_found"
+  | "expired"
+  | "max_packages"
+  | "path_mismatch"
+  | "skill_mismatch"
+  | "empty_path";
+
 export type SubagentIdlePoolOptions = {
-  /** Max parked sessions (LRU dispose). Default 4. */
+  /** Max parked workers (LRU dispose). Default 8. */
   maxIdle?: number;
   /** Idle TTL ms; expired slots disposed on access. Default 15 min. */
   ttlMs?: number;
-  /** Max packages per warm session before force-dispose. Default 4. */
+  /** Max packages per warm worker before force-dispose. Default 4. */
   maxPackages?: number;
 };
 
-const DEFAULT_MAX_IDLE = 4;
+const DEFAULT_MAX_IDLE = 8;
 const DEFAULT_TTL_MS = 15 * 60 * 1000;
 const DEFAULT_MAX_PACKAGES = 4;
 
@@ -43,7 +69,7 @@ export function resolveIdlePoolEnabled(env: NodeJS.ProcessEnv = process.env): bo
 }
 
 export function resolveIdlePoolOptions(env: NodeJS.ProcessEnv = process.env): Required<SubagentIdlePoolOptions> {
-  const maxIdle = clampInt(env.NODE4_SUBAGENT_IDLE_MAX, DEFAULT_MAX_IDLE, 1, 16);
+  const maxIdle = clampInt(env.NODE4_SUBAGENT_IDLE_MAX, DEFAULT_MAX_IDLE, 1, 32);
   const ttlMs = clampInt(env.NODE4_SUBAGENT_IDLE_TTL_MS, DEFAULT_TTL_MS, 30_000, 3_600_000);
   const maxPackages = clampInt(env.NODE4_SUBAGENT_IDLE_MAX_PACKAGES, DEFAULT_MAX_PACKAGES, 1, 20);
   return { maxIdle, ttlMs, maxPackages };
@@ -70,10 +96,34 @@ async function safeDispose(handle: IdleSubagentHandle): Promise<void> {
 }
 
 /**
- * In-memory idle registry for one parent task lifecycle.
+ * Affinity gate: same path required; skill mismatch when both set rejects.
+ * node_type may change on same path (e.g. gap re-dispatch).
+ */
+export function checkAffinity(
+  handle: Pick<IdleSubagentHandle, "pathKey" | "skillId" | "packagesCompleted">,
+  affinity: WorkerAffinity,
+  opts: { maxPackages: number; ttlMs: number },
+  now = Date.now(),
+  lastUsedAt?: number,
+): ResumeRejectReason | null {
+  const want = String(affinity.pathKey || "").trim();
+  const have = String(handle.pathKey || "").trim();
+  if (!want || !have) return "empty_path";
+  if (want !== have) return "path_mismatch";
+  const wantSkill = String(affinity.skillId || "").trim();
+  const haveSkill = String(handle.skillId || "").trim();
+  if (wantSkill && haveSkill && wantSkill !== haveSkill) return "skill_mismatch";
+  if (handle.packagesCompleted >= opts.maxPackages) return "max_packages";
+  if (lastUsedAt != null && now - lastUsedAt > opts.ttlMs) return "expired";
+  return null;
+}
+
+/**
+ * In-memory worker registry for one parent task lifecycle.
+ * Keyed by agentId (not pathKey).
  */
 export class SubagentIdlePool {
-  private readonly byPath = new Map<string, IdleSubagentHandle>();
+  private readonly byId = new Map<string, IdleSubagentHandle>();
   private readonly opts: Required<SubagentIdlePoolOptions>;
 
   constructor(opts?: SubagentIdlePoolOptions) {
@@ -85,47 +135,70 @@ export class SubagentIdlePool {
   }
 
   get size(): number {
-    return this.byPath.size;
+    return this.byId.size;
   }
 
   get options(): Required<SubagentIdlePoolOptions> {
     return this.opts;
   }
 
-  /** Snapshot path keys currently parked (for tests / telemetry). */
-  keys(): string[] {
-    return [...this.byPath.keys()];
+  /** Snapshot idle agent ids (for tests / telemetry). */
+  ids(): string[] {
+    return [...this.byId.keys()];
   }
 
   /**
-   * Exclusive take: removes from pool so concurrent packages cannot share one session.
-   * Returns undefined if miss, expired, or over maxPackages (expired disposed).
+   * Non-mutating affinity probe (does not exclusive-take).
+   * Used by the tool layer before choosing spawn subagentId.
    */
-  tryTake(pathKey: string, now = Date.now()): IdleSubagentHandle | undefined {
-    const key = String(pathKey || "").trim();
-    if (!key) return undefined;
-    const handle = this.byPath.get(key);
-    if (!handle) return undefined;
-    this.byPath.delete(key);
-
-    if (now - handle.lastUsedAt > this.opts.ttlMs) {
-      void safeDispose(handle);
-      return undefined;
-    }
-    if (handle.packagesCompleted >= this.opts.maxPackages) {
-      void safeDispose(handle);
-      return undefined;
-    }
-    return handle;
+  checkResume(agentId: string, affinity: WorkerAffinity, now = Date.now()): ResumeResult {
+    const id = String(agentId || "").trim();
+    if (!id) return { ok: false, reason: "missing_agent_id" };
+    const handle = this.byId.get(id);
+    if (!handle) return { ok: false, reason: "not_found" };
+    const reason = checkAffinity(handle, affinity, this.opts, now, handle.lastUsedAt);
+    if (reason) return { ok: false, reason };
+    return { ok: true, handle };
   }
 
   /**
-   * Park a finished session for later same-path reuse.
-   * Evicts LRU when over maxIdle. No-ops empty pathKey.
+   * Exclusive resume: removes from pool so concurrent callers cannot share.
+   * Affinity gate enforced. On reject, handle stays parked (except expired/max → disposed).
+   */
+  tryResume(agentId: string, affinity: WorkerAffinity, now = Date.now()): ResumeResult {
+    const id = String(agentId || "").trim();
+    if (!id) return { ok: false, reason: "missing_agent_id" };
+    const handle = this.byId.get(id);
+    if (!handle) return { ok: false, reason: "not_found" };
+
+    const reason = checkAffinity(handle, affinity, this.opts, now, handle.lastUsedAt);
+    if (reason === "expired" || reason === "max_packages") {
+      this.byId.delete(id);
+      void safeDispose(handle);
+      return { ok: false, reason };
+    }
+    if (reason) return { ok: false, reason };
+
+    this.byId.delete(id);
+    return { ok: true, handle };
+  }
+
+  /**
+   * @deprecated Use tryResume(agentId, affinity). Kept for tests that used pathKey take —
+   * now no-ops path-only grab (always miss) to avoid silent pollution.
+   */
+  tryTake(_pathKey: string, _now = Date.now()): IdleSubagentHandle | undefined {
+    return undefined;
+  }
+
+  /**
+   * Park a finished worker for later explicit resume.
+   * Evicts LRU when over maxIdle.
    */
   park(handle: IdleSubagentHandle, now = Date.now()): void {
+    const id = String(handle.agentId || "").trim();
     const key = String(handle.pathKey || "").trim();
-    if (!key) {
+    if (!id || !key) {
       void safeDispose(handle);
       return;
     }
@@ -134,34 +207,34 @@ export class SubagentIdlePool {
       return;
     }
 
-    // Replace existing idle for same path (dispose old).
-    const prev = this.byPath.get(key);
+    const prev = this.byId.get(id);
     if (prev && prev !== handle) {
-      this.byPath.delete(key);
+      this.byId.delete(id);
       void safeDispose(prev);
     }
 
+    handle.agentId = id;
     handle.pathKey = key;
     handle.lastUsedAt = now;
     handle.clearAbort?.();
     handle.clearAbort = undefined;
-    this.byPath.set(key, handle);
+    this.byId.set(id, handle);
 
-    while (this.byPath.size > this.opts.maxIdle) {
-      const lruKey = this.findLruKey();
-      if (!lruKey) break;
-      const evicted = this.byPath.get(lruKey);
-      this.byPath.delete(lruKey);
+    while (this.byId.size > this.opts.maxIdle) {
+      const lruId = this.findLruId();
+      if (!lruId) break;
+      const evicted = this.byId.get(lruId);
+      this.byId.delete(lruId);
       if (evicted) void safeDispose(evicted);
     }
   }
 
-  /** Drop expired without take (periodic / before batch). */
+  /** Drop expired without take. */
   evictExpired(now = Date.now()): number {
     let n = 0;
-    for (const [key, handle] of [...this.byPath.entries()]) {
+    for (const [id, handle] of [...this.byId.entries()]) {
       if (now - handle.lastUsedAt > this.opts.ttlMs) {
-        this.byPath.delete(key);
+        this.byId.delete(id);
         void safeDispose(handle);
         n++;
       }
@@ -169,20 +242,20 @@ export class SubagentIdlePool {
     return n;
   }
 
-  /** Dispose all parked sessions (task end / abort). */
+  /** Dispose all parked workers (task end / abort). */
   async disposeAll(): Promise<void> {
-    const all = [...this.byPath.values()];
-    this.byPath.clear();
+    const all = [...this.byId.values()];
+    this.byId.clear();
     await Promise.all(all.map((h) => safeDispose(h)));
   }
 
-  private findLruKey(): string | undefined {
+  private findLruId(): string | undefined {
     let best: string | undefined;
     let bestTs = Infinity;
-    for (const [key, h] of this.byPath) {
+    for (const [id, h] of this.byId) {
       if (h.lastUsedAt < bestTs) {
         bestTs = h.lastUsedAt;
-        best = key;
+        best = id;
       }
     }
     return best;

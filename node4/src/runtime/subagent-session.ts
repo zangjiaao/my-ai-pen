@@ -74,6 +74,11 @@ export type SubagentLlmSessionInput = {
   skillsRoot?: string;
   /** Abort from parent task. */
   abortSignal?: AbortSignal;
+  /**
+   * Exclusive warm handle from registry.tryResume (tool layer).
+   * When set, re-prompt this session; do not cold-create.
+   */
+  warmHandle?: IdleSubagentHandle;
 };
 
 export type SubagentLlmSessionOutput = {
@@ -254,10 +259,13 @@ function buildUserPrompt(assignment: string, sessionSeeded: boolean, resume: boo
   const parts = [
     resume
       ? [
-          "## Resume assignment (same worker session)",
+          "## Resume assignment (same worker — affinity follow-up only)",
           "You continue in an existing worker. Prior tool history may be in context.",
-          "Focus ONLY on this NEW package. Overwrite ./result.json for THIS package only.",
-          "Do not re-do already_done work. Prefer session cookies already present; re-login only on auth failure.",
+          "Hard boundaries for THIS package:",
+          "- this_turn_goal is the ONLY objective; ignore prior candidates/deadends unless listed in already_done.",
+          "- Do not re-probe orthogonal paths; stay on target.",
+          "- Overwrite ./result.json for THIS package only (previous result.json is obsolete).",
+          "- Prefer session cookies already present; re-login only on auth failure.",
           "",
         ].join("\n")
       : "",
@@ -292,24 +300,26 @@ async function ensureChildDirs(workDir: string): Promise<void> {
 /**
  * Run a same-pack child LLM session. Natural stop only (no outer continues).
  * Dry-run when NODE4_SUBAGENT_DRY=1 (no model call; writes empty structured result).
- * On success, parks session by pathKey for OMP-style reuse (unless idle disabled).
+ *
+ * Keep-alive: after success, park by agent_id. Warm resume only when
+ * `resumeAgentId` is set and affinity (same pathKey) passes — never auto path grab.
  */
 export async function runSubagentLlmSession(
   input: SubagentLlmSessionInput,
 ): Promise<SubagentLlmSessionOutput> {
-  const { assignment, handoff, parent, subagentId } = input;
+  const { handoff, parent, subagentId } = input;
   const pk = resolvePathKey(handoff);
   const pool = getOrCreateIdlePool(parent.lifecycle);
   const abort = input.abortSignal || parent.lifecycle.abortSignal;
 
-  // Prefer warm session for this path (OMP idle/reuse).
-  const warm = pk && pool ? pool.tryTake(pk) : undefined;
-  if (warm) {
+  // Warm path: tool layer already exclusive-took the handle (affinity-gated).
+  if (input.warmHandle && pool) {
     return runWarmPackage({
       input,
-      warm,
-      pool: pool!,
-      pathKey: pk,
+      warm: input.warmHandle,
+      pool,
+      pathKey: pk || input.warmHandle.pathKey,
+      agentId: input.warmHandle.agentId || subagentId,
       abort,
     });
   }
@@ -318,8 +328,8 @@ export async function runSubagentLlmSession(
     input,
     pool,
     pathKey: pk,
+    agentId: subagentId,
     abort,
-    // Host may pass a fresh workDir; use it for cold start.
     workDir: input.workDir,
   });
 }
@@ -329,12 +339,19 @@ async function runWarmPackage(args: {
   warm: IdleSubagentHandle;
   pool: SubagentIdlePool;
   pathKey: string;
+  agentId: string;
   abort?: AbortSignal;
 }): Promise<SubagentLlmSessionOutput> {
-  const { input, warm, pool, pathKey: pk, abort } = args;
+  const { input, warm, pool, pathKey: pk, agentId, abort } = args;
   const workDir = warm.workDir;
   await ensureChildDirs(workDir);
   await clearResultFile(workDir);
+
+  // Refresh affinity labels on the handle for this package.
+  warm.nodeType = input.nodeType || warm.nodeType;
+  warm.skillId = input.skillId || warm.skillId;
+  warm.pathKey = pk || warm.pathKey;
+  warm.agentId = agentId;
 
   const sessionSeed = await seedChildSessionFromParent(input.parent.taskDir, workDir);
   const userPrompt = buildUserPrompt(input.assignment, sessionSeed.seeded, true);
@@ -362,7 +379,8 @@ async function runWarmPackage(args: {
     !race.aborted &&
     !race.timedOut &&
     !race.error &&
-    Boolean(pk);
+    Boolean(pk) &&
+    Boolean(agentId);
 
   if (shouldPark) {
     pool.park(warm);
@@ -385,6 +403,7 @@ async function runWarmPackage(args: {
       handoff: input.handoff,
       node_type: input.nodeType,
       skill_id: input.skillId,
+      agent_id: agentId,
       tools: warm.segmentCounter.tools,
       tools_this_package: toolsUsed,
       workDir,
@@ -393,6 +412,7 @@ async function runWarmPackage(args: {
       salvaged,
       session_reuse: {
         hit: true,
+        agent_id: agentId,
         path_key: pk,
         packages_completed: warm.packagesCompleted,
         parked: shouldPark,
@@ -405,10 +425,11 @@ async function runColdPackage(args: {
   input: SubagentLlmSessionInput;
   pool: SubagentIdlePool | undefined;
   pathKey: string;
+  agentId: string;
   abort?: AbortSignal;
   workDir: string;
 }): Promise<SubagentLlmSessionOutput> {
-  const { input, pool, pathKey: pk, abort, workDir } = args;
+  const { input, pool, pathKey: pk, agentId, abort, workDir } = args;
   const { assignment, handoff, parent, subagentId } = input;
   await ensureChildDirs(workDir);
 
@@ -438,8 +459,14 @@ async function runColdPackage(args: {
         kind: "llm_dry",
         structured,
         handoff,
+        agent_id: agentId,
         session_seed: sessionSeed,
-        session_reuse: { hit: false, path_key: pk, dry: true },
+        session_reuse: {
+          hit: false,
+          agent_id: agentId,
+          path_key: pk,
+          dry: true,
+        },
       },
     };
   }
@@ -614,7 +641,10 @@ async function runColdPackage(args: {
 
   if (shouldPark && pool) {
     const handle: IdleSubagentHandle = {
+      agentId,
       pathKey: pk,
+      nodeType: input.nodeType,
+      skillId: input.skillId,
       session: session as IdleSubagentHandle["session"],
       workDir,
       segmentCounter,
@@ -641,6 +671,7 @@ async function runColdPackage(args: {
       handoff,
       node_type: input.nodeType,
       skill_id: input.skillId,
+      agent_id: agentId,
       tools: segmentCounter.tools,
       workDir,
       session_seed: sessionSeed,
@@ -648,6 +679,7 @@ async function runColdPackage(args: {
       salvaged,
       session_reuse: {
         hit: false,
+        agent_id: agentId,
         path_key: pk,
         packages_completed: 1,
         parked: shouldPark,

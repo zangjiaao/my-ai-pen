@@ -32,11 +32,14 @@ import {
   resolveSubagentConcurrency,
 } from "../runtime/concurrency.js";
 import { promoteChildSessionToParent } from "../runtime/subagent-session-seed.js";
+import { getOrCreateIdlePool } from "../runtime/subagent-idle-pool.js";
 import { dirname } from "node:path";
 
 export type SubagentPackageResult = {
   ok: boolean;
   subagent_id: string;
+  /** Keep-alive worker id for same-path follow-up via resume_agent_id. */
+  agent_id?: string;
   node_type?: string;
   skill_id?: string;
   summary: string;
@@ -49,6 +52,8 @@ export type SubagentPackageResult = {
   goal_id?: string;
   error?: string;
   assignment_label?: string;
+  /** Warm resume telemetry (hit / reject reason). */
+  session_reuse?: Record<string, unknown>;
 };
 
 type ResolvedPackage = {
@@ -63,6 +68,8 @@ type ResolvedPackage = {
   goal_id?: string;
   command?: string;
   timeout_seconds: number;
+  /** Explicit warm follow-up of a parked worker (affinity: same path). */
+  resume_agent_id?: string;
 };
 
 const packageItemSchema = Type.Object({
@@ -77,6 +84,12 @@ const packageItemSchema = Type.Object({
   goal_id: Type.Optional(Type.String()),
   command: Type.Optional(Type.String()),
   timeout_seconds: Type.Optional(Type.Number()),
+  resume_agent_id: Type.Optional(
+    Type.String({
+      description:
+        "Warm follow-up: prior agent_id. Same path required; orthogonal targets must omit (cold spawn).",
+    }),
+  ),
 });
 
 /**
@@ -92,11 +105,12 @@ export function createSubagentTool(runtime: ToolRuntime): ToolDefinition<any> {
     description: [
       "Spawn child work package(s) under this task workspace.",
       "FLAT: target, scope, already_done, this_turn_goal, success_criteria (+ optional node_type/skill_id).",
-      "BATCH (OMP-style parallel): packages=[{target,this_turn_goal,success_criteria,...}] with optional shared context/scope/already_done.",
-      "Batch: concurrent packages (NODE4_SUBAGENT_CONCURRENCY default 3). Same path re-dispatch ≤2 then deadend.",
-      "Prefer distinct open ledger paths; session cookies seed/promote parent↔child; same-path re-dispatch reuses warm LLM session (OMP idle) when available.",
+      "BATCH: packages=[{target,this_turn_goal,success_criteria,...}] concurrent (NODE4_SUBAGENT_CONCURRENCY default 8).",
+      "COLD default: each package is a new worker (agent_id). Orthogonal paths MUST stay cold — fan out in packages[].",
+      "WARM follow-up only: pass resume_agent_id from a prior result.agent_id on the SAME path (gap re-dispatch). Affinity gate rejects path/skill mismatch → cold.",
+      "Same path re-dispatch ≤2 then deadend. Session cookies seed/promote parent↔child.",
       "Without command=: LLM child (preferred). Graph rejects command=.",
-      "Returns candidates + surfaces + acceptance (flat) or results[] (batch).",
+      "Returns agent_id + candidates + surfaces + acceptance (flat) or results[] (batch).",
       "Nested subagent is DISALLOWED.",
     ].join(" "),
     parameters: Type.Object({
@@ -114,6 +128,12 @@ export function createSubagentTool(runtime: ToolRuntime): ToolDefinition<any> {
       skill_id: Type.Optional(Type.String()),
       node_type: Type.Optional(Type.String()),
       timeout_seconds: Type.Optional(Type.Number()),
+      resume_agent_id: Type.Optional(
+        Type.String({
+          description:
+            "Flat warm follow-up: prior agent_id. Same path only; omit for cold spawn / orthogonal targets.",
+        }),
+      ),
       // Batch
       context: Type.Optional(
         Type.String({
@@ -203,9 +223,9 @@ export function createSubagentTool(runtime: ToolRuntime): ToolDefinition<any> {
           },
           guidance: [
             "BATCH ACCEPTANCE: for each results[i].acceptance.ready_to_book → finding(confirm) with location/candidate.",
-            "Soft-failed packages (ok:false) → at most one re-dispatch with tighter success_criteria, then deadend; same path max 2 dispatches.",
-            "Book successful packages immediately. Session jars promote parent←child after each package so later seeds skip re-login.",
-            "Same-path re-dispatch may reuse a warm LLM session (no cold createAgentSession) — still max 2 dispatches per path.",
+            "Soft-failed packages (ok:false) → at most one re-dispatch with resume_agent_id=results[i].agent_id on SAME path, then deadend; path max 2.",
+            "Orthogonal modules: new cold packages[] (no resume_agent_id). Do not reuse a worker across different paths.",
+            "Book successful packages immediately. Cookies seed/promote parent↔child.",
           ].join(" "),
         });
       }
@@ -228,6 +248,7 @@ export function createSubagentTool(runtime: ToolRuntime): ToolDefinition<any> {
         return jsonResult({
           ok: one.ok,
           subagent_id: one.subagent_id,
+          agent_id: one.agent_id,
           summary: one.summary,
           node_type: one.node_type,
           skill_id: one.skill_id,
@@ -245,13 +266,14 @@ export function createSubagentTool(runtime: ToolRuntime): ToolDefinition<any> {
           artifact_path: one.artifact_path,
           handoff: one.handoff,
           assignment_label: one.assignment_label,
+          session_reuse: one.session_reuse,
           observations_recorded: true,
           error: one.error,
           guidance: [
             "ACCEPTANCE LOOP (verbatim book is harness-assisted):",
             "1) For each acceptance.ready_to_book: finding(confirm) with title/location + optional candidate_index.",
-            "2) needs_more_evidence → re-dispatch with redispatch_hint (max 2) then deadend.",
-            "3) Prefer packages[] to fan out independent open ledger paths in parallel.",
+            "2) needs_more_evidence → re-dispatch SAME path with resume_agent_id=agent_id (warm) + redispatch_hint; max 2 then deadend.",
+            "3) Orthogonal open ledger paths → packages[] cold spawns (no resume_agent_id).",
             "4) Graph: todo(done) needs act/deadend/skip on surfaces.",
           ].join(" "),
         });
@@ -313,6 +335,12 @@ function resolvePackageInput(
       node_type: src.node_type != null ? String(src.node_type).trim() : item ? undefined : (top.node_type != null ? String(top.node_type).trim() : undefined),
       goal_id: src.goal_id != null ? String(src.goal_id).trim() : undefined,
       command: src.command != null ? String(src.command).trim() : undefined,
+      resume_agent_id:
+        src.resume_agent_id != null
+          ? String(src.resume_agent_id).trim()
+          : !item && top.resume_agent_id != null
+            ? String(top.resume_agent_id).trim()
+            : undefined,
       timeout_seconds,
     },
   };
@@ -373,6 +401,7 @@ function softFailPackage(pkg: ResolvedPackage, error: string): SubagentPackageRe
   return {
     ok: false,
     subagent_id: "",
+    agent_id: undefined,
     node_type: pkg.node_type,
     skill_id: pkg.skill_id,
     summary: error,
@@ -418,10 +447,39 @@ async function runSubagentPackage(
     .join(" ")
     .slice(0, 500);
 
-  const result = await runtime.subagents.spawn({
+  // Exclusive warm resume at tool layer (affinity: same path). Else cold spawn.
+  const resumeWanted = String(pkg.resume_agent_id || "").trim();
+  const pool = getOrCreateIdlePool(runtime.lifecycle);
+  const pk =
+    pathKey(handoff.handoff.target) ||
+    String(handoff.handoff.target || "")
+      .trim()
+      .toLowerCase()
+      .slice(0, 180);
+  let warmHandle: import("../runtime/subagent-idle-pool.js").IdleSubagentHandle | undefined;
+  let resumeReject: string | undefined;
+  if (resumeWanted && command) {
+    resumeReject = "command_package";
+  } else if (resumeWanted && pool) {
+    const taken = pool.tryResume(resumeWanted, {
+      pathKey: pk,
+      nodeType,
+      skillId,
+    });
+    if (taken.ok) warmHandle = taken.handle;
+    else resumeReject = taken.reason;
+  } else if (resumeWanted && !pool) {
+    resumeReject = "disabled";
+  }
+
+  let result;
+  try {
+    result = await runtime.subagents.spawn({
     assignment: handoff.packageText,
     goalId: pkg.goal_id || undefined,
     nodeType,
+    // Same workDir only when we hold a warm handle.
+    subagentId: warmHandle ? warmHandle.agentId : undefined,
     worker: async (ctx) => {
       if (command) {
         const shellOut = await runShell(
@@ -458,6 +516,8 @@ async function runSubagentPackage(
             structured,
             node_type: nodeType,
             skill_id: skillId,
+            agent_id: ctx.subagentId,
+            session_reuse: { hit: false, agent_id: ctx.subagentId, shell: true },
           },
         };
       }
@@ -465,21 +525,53 @@ async function runSubagentPackage(
       const llmOut = await runSubagentLlmSession({
         parent: runtime,
         subagentId: ctx.subagentId,
-        workDir: ctx.workDir,
+        // Warm session is bound to warm workDir; host workDir may match via subagentId.
+        workDir: warmHandle?.workDir || ctx.workDir,
         assignment: handoff.packageText,
         handoff: handoff.handoff,
         skillId,
         nodeType,
         skillIds: runtime.skillIds,
         abortSignal: runtime.lifecycle.abortSignal,
+        warmHandle,
       });
+      const data =
+        llmOut.data && typeof llmOut.data === "object"
+          ? {
+              ...(llmOut.data as Record<string, unknown>),
+              agent_id:
+                (llmOut.data as any).agent_id ||
+                (llmOut.data as any).session_reuse?.agent_id ||
+                ctx.subagentId,
+            }
+          : llmOut.data;
+      if (
+        resumeReject &&
+        data &&
+        typeof data === "object" &&
+        (data as any).session_reuse &&
+        !(data as any).session_reuse.hit
+      ) {
+        (data as any).session_reuse.resume_reject = resumeReject;
+      }
       return {
         ok: llmOut.ok,
         summary: llmOut.summary,
-        data: llmOut.data,
+        data,
       };
     },
   });
+  } catch (err) {
+    // Re-park exclusive warm handle if spawn failed before lifecycle park.
+    if (warmHandle && pool) {
+      try {
+        pool.park(warmHandle);
+      } catch {
+        /* ignore */
+      }
+    }
+    throw err;
+  }
 
   // Shell path / any package: promote cookies parent←child (Graph hard needs this)
   try {
@@ -572,9 +664,22 @@ async function runSubagentPackage(
       at: Date.now(),
     });
 
+    const rawData = result.data as Record<string, unknown> | null;
+    const agentId =
+      (rawData && typeof rawData.agent_id === "string" && rawData.agent_id) ||
+      (rawData?.session_reuse &&
+        typeof (rawData.session_reuse as any).agent_id === "string" &&
+        (rawData.session_reuse as any).agent_id) ||
+      result.subagentId;
+    const sessionReuse =
+      rawData && typeof rawData.session_reuse === "object" && rawData.session_reuse
+        ? (rawData.session_reuse as Record<string, unknown>)
+        : undefined;
+
     return {
       ok: result.ok,
       subagent_id: result.subagentId,
+      agent_id: agentId,
       node_type: nt,
       skill_id: skillId,
       summary: result.summary,
@@ -586,6 +691,7 @@ async function runSubagentPackage(
       artifact_path: result.artifactPath,
       goal_id: result.goalId,
       assignment_label: assignmentLabel,
+      session_reuse: sessionReuse,
       error: result.ok ? undefined : result.summary,
     };
   });

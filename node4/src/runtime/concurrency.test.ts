@@ -53,9 +53,9 @@ import {
   assert.deepEqual(order, [1, 2, 3]);
 }
 
-assert.equal(resolveSubagentConcurrency({}), 3);
+assert.equal(resolveSubagentConcurrency({}), 8);
 assert.equal(resolveSubagentConcurrency({ NODE4_SUBAGENT_CONCURRENCY: "2" }), 2);
-assert.equal(resolveSubagentConcurrency({ NODE4_SUBAGENT_CONCURRENCY: "99" }), 8);
+assert.equal(resolveSubagentConcurrency({ NODE4_SUBAGENT_CONCURRENCY: "99" }), 16);
 assert.equal(MAX_SUBAGENT_BATCH, 32);
 
 console.log("concurrency.test.ts: ok");
