@@ -126,6 +126,12 @@ export type ToolRuntime = {
      * Soft-limits re-dispatch spam (default max 2 per path).
      */
     subagentPathDispatchCounts?: Record<string, number>;
+    /**
+     * OMP-style idle LLM sessions parked by pathKey after a package finishes.
+     * Same-path re-dispatch re-prompts instead of cold createAgentSession.
+     * Disposed on task end. Disable: NODE4_SUBAGENT_IDLE=0.
+     */
+    subagentIdlePool?: import("./runtime/subagent-idle-pool.js").SubagentIdlePool;
   };
 };
 

@@ -94,7 +94,7 @@ export function createSubagentTool(runtime: ToolRuntime): ToolDefinition<any> {
       "FLAT: target, scope, already_done, this_turn_goal, success_criteria (+ optional node_type/skill_id).",
       "BATCH (OMP-style parallel): packages=[{target,this_turn_goal,success_criteria,...}] with optional shared context/scope/already_done.",
       "Batch: concurrent packages (NODE4_SUBAGENT_CONCURRENCY default 3). Same path re-dispatch ≤2 then deadend.",
-      "Prefer distinct open ledger paths; session cookies seed from parent after first login package (avoid re-login tax).",
+      "Prefer distinct open ledger paths; session cookies seed/promote parent↔child; same-path re-dispatch reuses warm LLM session (OMP idle) when available.",
       "Without command=: LLM child (preferred). Graph rejects command=.",
       "Returns candidates + surfaces + acceptance (flat) or results[] (batch).",
       "Nested subagent is DISALLOWED.",
@@ -205,6 +205,7 @@ export function createSubagentTool(runtime: ToolRuntime): ToolDefinition<any> {
             "BATCH ACCEPTANCE: for each results[i].acceptance.ready_to_book → finding(confirm) with location/candidate.",
             "Soft-failed packages (ok:false) → at most one re-dispatch with tighter success_criteria, then deadend; same path max 2 dispatches.",
             "Book successful packages immediately. Session jars promote parent←child after each package so later seeds skip re-login.",
+            "Same-path re-dispatch may reuse a warm LLM session (no cold createAgentSession) — still max 2 dispatches per path.",
           ].join(" "),
         });
       }

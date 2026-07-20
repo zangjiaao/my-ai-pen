@@ -53,6 +53,7 @@ Main DISPATCH (goal + success_criteria)
 - Sync only: soft package failure → `results[i].ok=false`; siblings continue.
 - **Path re-dispatch budget:** same pathname ≤ **2** dispatches/task.
 - **Session seed + promote:** child jars seed from parent `session/`; after each package, child cookies **promote back to parent** (Graph hard Main cannot call session tools — otherwise seed always empty).
+- **OMP idle / warm reuse:** after a package, the LLM session may park by `pathKey` (`SubagentIdlePool`). Same-path re-dispatch re-prompts the warm session (no `createAgentSession` cold start). Disable: `NODE4_SUBAGENT_IDLE=0`. Caps: `NODE4_SUBAGENT_IDLE_MAX` (default 4), `NODE4_SUBAGENT_IDLE_TTL_MS`, `NODE4_SUBAGENT_IDLE_MAX_PACKAGES` (default 4).
 - **Salvage:** missing `result.json` → candidates from tool-output/facts when possible.
 - Ledger/post-process mutex-serialized. Main still books.
 

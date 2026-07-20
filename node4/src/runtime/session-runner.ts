@@ -208,6 +208,8 @@ export async function runNode4Task(
         })
         .catch(() => {});
       void Promise.resolve(sessionRef.abort?.()).catch(() => {});
+      // Drop warm subagent sessions so cancelled tasks do not leak LLM handles.
+      void runtime.lifecycle.subagentIdlePool?.disposeAll?.().catch(() => {});
     };
     if (signal.aborted) onCancel();
     else signal.addEventListener("abort", onCancel, { once: true });
@@ -667,6 +669,13 @@ export async function runNode4Task(
 
   try {
     session.dispose?.();
+  } catch {
+    // ignore
+  }
+
+  // OMP idle subagent sessions: dispose parked children at task end.
+  try {
+    await runtime.lifecycle.subagentIdlePool?.disposeAll?.();
   } catch {
     // ignore
   }

@@ -1,9 +1,13 @@
 /**
  * Homogeneous OMP child session: same-pack act tools, no parent chat,
  * no nested subagent, no finding booking (Main books).
+ *
+ * OMP-style keep-alive: after a successful package the session may park in
+ * SubagentIdlePool (keyed by pathKey) and be re-prompted on same-path re-dispatch
+ * instead of createAgentSession cold start.
  */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   AuthStorage,
@@ -33,6 +37,12 @@ import {
   promoteChildSessionToParent,
   seedChildSessionFromParent,
 } from "./subagent-session-seed.js";
+import { pathKey } from "./subagent-booking.js";
+import {
+  getOrCreateIdlePool,
+  type IdleSubagentHandle,
+  type SubagentIdlePool,
+} from "./subagent-idle-pool.js";
 
 /** Act tools for child workers — no subagent, finding, goal, or platform ledger. */
 export const SUBAGENT_CHILD_TOOL_NAMES = [
@@ -128,14 +138,148 @@ async function readResultFile(workDir: string): Promise<unknown | undefined> {
   }
 }
 
-/**
- * Run a same-pack child LLM session. Natural stop only (no outer continues).
- * Dry-run when NODE4_SUBAGENT_DRY=1 (no model call; writes empty structured result).
- */
-export async function runSubagentLlmSession(
-  input: SubagentLlmSessionInput,
-): Promise<SubagentLlmSessionOutput> {
-  const { workDir, assignment, handoff, parent, subagentId } = input;
+async function clearResultFile(workDir: string): Promise<void> {
+  try {
+    await unlink(join(workDir, "result.json"));
+  } catch {
+    /* ok if missing */
+  }
+}
+
+function resolvePathKey(handoff: SubagentHandoffFields): string {
+  return pathKey(handoff.target) || String(handoff.target || "").trim().toLowerCase().slice(0, 180);
+}
+
+function sessionTimeoutMs(): number {
+  return Math.min(
+    Math.max(Number(process.env.NODE4_SUBAGENT_TIMEOUT_MS || 600_000) || 600_000, 30_000),
+    1_800_000,
+  );
+}
+
+type PromptRaceResult = {
+  aborted: boolean;
+  timedOut: boolean;
+  error?: string;
+};
+
+async function raceSessionPrompt(
+  session: IdleSubagentHandle["session"],
+  userPrompt: string,
+  abort: AbortSignal | undefined,
+): Promise<PromptRaceResult> {
+  let aborted = false;
+  const onAbort = () => {
+    aborted = true;
+    void Promise.resolve(session.abort?.()).catch(() => {});
+  };
+  if (abort) {
+    if (abort.aborted) onAbort();
+    else abort.addEventListener("abort", onAbort, { once: true });
+  }
+
+  const timeoutMs = sessionTimeoutMs();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  try {
+    await Promise.race([
+      session.prompt(userPrompt, { source: "interactive" }),
+      new Promise<void>((_, reject) => {
+        timer = setTimeout(() => {
+          timedOut = true;
+          void Promise.resolve(session.abort?.()).catch(() => {});
+          reject(new Error(`subagent LLM session timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+    return { aborted, timedOut: false };
+  } catch (err) {
+    if (aborted) return { aborted: true, timedOut: false };
+    const msg = err instanceof Error ? err.message : String(err);
+    return { aborted, timedOut, error: msg };
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (abort) abort.removeEventListener("abort", onAbort);
+  }
+}
+
+async function collectStructuredResult(input: {
+  workDir: string;
+  handoff: SubagentHandoffFields;
+  toolsUsed: number;
+  aborted: boolean;
+  promptError?: string;
+}): Promise<{ structured: SubagentStructuredResult; salvaged: boolean }> {
+  if (input.promptError && !input.aborted) {
+    const existing = await readResultFile(input.workDir);
+    const structured = normalizeSubagentResult(
+      existing ?? {
+        ok: false,
+        summary: input.promptError,
+        deadends: ["session_error"],
+      },
+      input.promptError,
+    );
+    if (!existing) {
+      await writeFile(join(input.workDir, "result.json"), JSON.stringify(structured, null, 2), "utf8");
+    }
+    return { structured, salvaged: false };
+  }
+
+  let fileResult = await readResultFile(input.workDir);
+  if (fileResult) {
+    return {
+      structured: normalizeSubagentResult(fileResult, input.handoff.this_turn_goal),
+      salvaged: false,
+    };
+  }
+
+  const structured = await salvageSubagentResult({
+    workDir: input.workDir,
+    handoff: input.handoff,
+    toolsUsed: input.toolsUsed,
+    aborted: input.aborted,
+    fallbackSummary: input.aborted
+      ? "subagent aborted"
+      : input.toolsUsed > 0
+        ? "subagent finished (no result.json)"
+        : "subagent stopped without tools or result.json",
+  });
+  const salvaged = structured.candidates.length > 0;
+  await writeFile(join(input.workDir, "result.json"), JSON.stringify(structured, null, 2), "utf8");
+  return { structured, salvaged };
+}
+
+function buildUserPrompt(assignment: string, sessionSeeded: boolean, resume: boolean): string {
+  const parts = [
+    resume
+      ? [
+          "## Resume assignment (same worker session)",
+          "You continue in an existing worker. Prior tool history may be in context.",
+          "Focus ONLY on this NEW package. Overwrite ./result.json for THIS package only.",
+          "Do not re-do already_done work. Prefer session cookies already present; re-login only on auth failure.",
+          "",
+        ].join("\n")
+      : "",
+    assignment,
+    "",
+    sessionSeeded
+      ? [
+          "## Session seed",
+          "Parent cookie jars were copied into this workDir (`session/`).",
+          "Use session tools with the existing jar first; re-login only if requests return login page / 401 / unauthenticated.",
+          "",
+        ].join("\n")
+      : "",
+    formatSubagentReturnContractPrompt(),
+    "",
+    "Begin acting toward this_turn_goal. Prefer session/http over browser unless DOM/JS is required.",
+    "Before you stop: write ./result.json with surfaces/candidates as required — this is mandatory.",
+  ];
+  return parts.filter(Boolean).join("\n");
+}
+
+async function ensureChildDirs(workDir: string): Promise<void> {
   await mkdir(workDir, { recursive: true });
   await mkdir(join(workDir, "facts"), { recursive: true });
   await mkdir(join(workDir, "evidence"), { recursive: true });
@@ -143,6 +287,130 @@ export async function runSubagentLlmSession(
   await mkdir(join(workDir, "scripts"), { recursive: true });
   await mkdir(join(workDir, "tool-output"), { recursive: true });
   await mkdir(join(workDir, "pi-sessions"), { recursive: true });
+}
+
+/**
+ * Run a same-pack child LLM session. Natural stop only (no outer continues).
+ * Dry-run when NODE4_SUBAGENT_DRY=1 (no model call; writes empty structured result).
+ * On success, parks session by pathKey for OMP-style reuse (unless idle disabled).
+ */
+export async function runSubagentLlmSession(
+  input: SubagentLlmSessionInput,
+): Promise<SubagentLlmSessionOutput> {
+  const { assignment, handoff, parent, subagentId } = input;
+  const pk = resolvePathKey(handoff);
+  const pool = getOrCreateIdlePool(parent.lifecycle);
+  const abort = input.abortSignal || parent.lifecycle.abortSignal;
+
+  // Prefer warm session for this path (OMP idle/reuse).
+  const warm = pk && pool ? pool.tryTake(pk) : undefined;
+  if (warm) {
+    return runWarmPackage({
+      input,
+      warm,
+      pool: pool!,
+      pathKey: pk,
+      abort,
+    });
+  }
+
+  return runColdPackage({
+    input,
+    pool,
+    pathKey: pk,
+    abort,
+    // Host may pass a fresh workDir; use it for cold start.
+    workDir: input.workDir,
+  });
+}
+
+async function runWarmPackage(args: {
+  input: SubagentLlmSessionInput;
+  warm: IdleSubagentHandle;
+  pool: SubagentIdlePool;
+  pathKey: string;
+  abort?: AbortSignal;
+}): Promise<SubagentLlmSessionOutput> {
+  const { input, warm, pool, pathKey: pk, abort } = args;
+  const workDir = warm.workDir;
+  await ensureChildDirs(workDir);
+  await clearResultFile(workDir);
+
+  const sessionSeed = await seedChildSessionFromParent(input.parent.taskDir, workDir);
+  const userPrompt = buildUserPrompt(input.assignment, sessionSeed.seeded, true);
+
+  const toolsBefore = warm.segmentCounter.tools;
+  const race = await raceSessionPrompt(warm.session, userPrompt, abort);
+  const toolsUsed = Math.max(0, warm.segmentCounter.tools - toolsBefore);
+
+  const { structured, salvaged } = await collectStructuredResult({
+    workDir,
+    handoff: input.handoff,
+    toolsUsed: warm.segmentCounter.tools,
+    aborted: race.aborted,
+    promptError: race.error,
+  });
+
+  const sessionPromote = await promoteChildSessionToParent(workDir, input.parent.taskDir);
+  const ok = structured.ok && !race.aborted && !race.timedOut;
+
+  warm.packagesCompleted += 1;
+  warm.lastUsedAt = Date.now();
+
+  const shouldPark =
+    Boolean(pool) &&
+    !race.aborted &&
+    !race.timedOut &&
+    !race.error &&
+    Boolean(pk);
+
+  if (shouldPark) {
+    pool.park(warm);
+  } else {
+    try {
+      warm.clearAbort?.();
+      await Promise.resolve(warm.session.dispose?.());
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return {
+    ok,
+    summary: structured.summary,
+    structured,
+    data: {
+      kind: "llm_session",
+      structured,
+      handoff: input.handoff,
+      node_type: input.nodeType,
+      skill_id: input.skillId,
+      tools: warm.segmentCounter.tools,
+      tools_this_package: toolsUsed,
+      workDir,
+      session_seed: sessionSeed,
+      session_promote: sessionPromote,
+      salvaged,
+      session_reuse: {
+        hit: true,
+        path_key: pk,
+        packages_completed: warm.packagesCompleted,
+        parked: shouldPark,
+      },
+    },
+  };
+}
+
+async function runColdPackage(args: {
+  input: SubagentLlmSessionInput;
+  pool: SubagentIdlePool | undefined;
+  pathKey: string;
+  abort?: AbortSignal;
+  workDir: string;
+}): Promise<SubagentLlmSessionOutput> {
+  const { input, pool, pathKey: pk, abort, workDir } = args;
+  const { assignment, handoff, parent, subagentId } = input;
+  await ensureChildDirs(workDir);
 
   // Prefer parent session jars so packages need not re-login every time.
   const sessionSeed = await seedChildSessionFromParent(parent.taskDir, workDir);
@@ -166,7 +434,13 @@ export async function runSubagentLlmSession(
       ok: true,
       summary: structured.summary,
       structured,
-      data: { kind: "llm_dry", structured, handoff, session_seed: sessionSeed },
+      data: {
+        kind: "llm_dry",
+        structured,
+        handoff,
+        session_seed: sessionSeed,
+        session_reuse: { hit: false, path_key: pk, dry: true },
+      },
     };
   }
 
@@ -182,7 +456,6 @@ export async function runSubagentLlmSession(
 
   const processFacts = new ProcessFactStore(join(workDir, "facts"));
   await processFacts.ensureDir();
-  // Reuse parent SkillStore when available
   const skillStore = parent.skills ?? (input.skillsRoot ? new SkillStore(input.skillsRoot) : undefined);
 
   let skillBody = "";
@@ -213,7 +486,7 @@ export async function runSubagentLlmSession(
       toolsInLastSegment: 0,
       recentObservations: [],
       subagentDepth: 1,
-      abortSignal: input.abortSignal || parent.lifecycle.abortSignal,
+      abortSignal: abort,
     },
   };
 
@@ -238,24 +511,7 @@ export async function runSubagentLlmSession(
     `Scope envelope: ${JSON.stringify(childTask.scope)}`,
   ].join("\n");
 
-  const userPrompt = [
-    assignment,
-    "",
-    sessionSeed.seeded
-      ? [
-          "## Session seed",
-          "Parent cookie jars were copied into this workDir (`session/`).",
-          "Use session tools with the existing jar first; re-login only if requests return login page / 401 / unauthenticated.",
-          "",
-        ].join("\n")
-      : "",
-    formatSubagentReturnContractPrompt(),
-    "",
-    "Begin acting toward this_turn_goal. Prefer session/http over browser unless DOM/JS is required.",
-    "Before you stop: write ./result.json with surfaces/candidates as required — this is mandatory.",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const userPrompt = buildUserPrompt(assignment, sessionSeed.seeded, false);
 
   const authStorage = AuthStorage.create(join(config.piAgentDir, "auth.json"));
   setRuntimeApiKey(authStorage, config.modelProvider);
@@ -336,57 +592,38 @@ export async function runSubagentLlmSession(
     settingsManager,
   });
 
-  const abort = input.abortSignal || parent.lifecycle.abortSignal;
-  let aborted = false;
-  const onAbort = () => {
-    aborted = true;
-    void Promise.resolve((session as any).abort?.()).catch(() => {});
-  };
-  if (abort) {
-    if (abort.aborted) onAbort();
-    else abort.addEventListener("abort", onAbort, { once: true });
-  }
+  const race = await raceSessionPrompt(session as IdleSubagentHandle["session"], userPrompt, abort);
 
-  const timeoutMs = Math.min(
-    Math.max(Number(process.env.NODE4_SUBAGENT_TIMEOUT_MS || 600_000) || 600_000, 30_000),
-    1_800_000,
-  );
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      session.prompt(userPrompt, { source: "interactive" }),
-      new Promise<void>((_, reject) => {
-        timer = setTimeout(() => {
-          void Promise.resolve((session as any).abort?.()).catch(() => {});
-          reject(new Error(`subagent LLM session timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-      }),
-    ]);
-  } catch (err) {
-    if (!aborted) {
-      const msg = err instanceof Error ? err.message : String(err);
-      const existing = await readResultFile(workDir);
-      const structured = normalizeSubagentResult(
-        existing ?? {
-          ok: false,
-          summary: msg,
-          deadends: ["session_error"],
-        },
-        msg,
-      );
-      if (!existing) {
-        await writeFile(join(workDir, "result.json"), JSON.stringify(structured, null, 2), "utf8");
-      }
-      return {
-        ok: false,
-        summary: structured.summary,
-        structured,
-        data: { kind: "llm_session", structured, handoff, error: msg, tools: segmentCounter.tools },
-      };
-    }
-  } finally {
-    if (timer) clearTimeout(timer);
-    if (abort) abort.removeEventListener("abort", onAbort);
+  const { structured, salvaged } = await collectStructuredResult({
+    workDir,
+    handoff,
+    toolsUsed: segmentCounter.tools,
+    aborted: race.aborted,
+    promptError: race.error,
+  });
+
+  const sessionPromote = await promoteChildSessionToParent(workDir, parent.taskDir);
+  const ok = structured.ok && !race.aborted && !race.timedOut;
+
+  const shouldPark =
+    Boolean(pool) &&
+    Boolean(pk) &&
+    !race.aborted &&
+    !race.timedOut &&
+    !race.error;
+
+  if (shouldPark && pool) {
+    const handle: IdleSubagentHandle = {
+      pathKey: pk,
+      session: session as IdleSubagentHandle["session"],
+      workDir,
+      segmentCounter,
+      packagesCompleted: 1,
+      createdAt: Date.now(),
+      lastUsedAt: Date.now(),
+    };
+    pool.park(handle);
+  } else {
     try {
       await Promise.resolve((session as any).dispose?.());
     } catch {
@@ -394,33 +631,8 @@ export async function runSubagentLlmSession(
     }
   }
 
-  let fileResult = await readResultFile(workDir);
-  let structured: SubagentStructuredResult;
-  let salvaged = false;
-  if (fileResult) {
-    structured = normalizeSubagentResult(fileResult, handoff.this_turn_goal);
-  } else {
-    // Salvage tool-output/facts so Main can book or deadend without re-dispatch spam.
-    structured = await salvageSubagentResult({
-      workDir,
-      handoff,
-      toolsUsed: segmentCounter.tools,
-      aborted,
-      fallbackSummary: aborted
-        ? "subagent aborted"
-        : segmentCounter.tools > 0
-          ? "subagent finished (no result.json)"
-          : "subagent stopped without tools or result.json",
-    });
-    salvaged = structured.candidates.length > 0;
-    await writeFile(join(workDir, "result.json"), JSON.stringify(structured, null, 2), "utf8");
-  }
-
-  // Graph hard: Main cannot use session tools — push child cookies up so later packages seed.
-  const sessionPromote = await promoteChildSessionToParent(workDir, parent.taskDir);
-
   return {
-    ok: structured.ok && !aborted,
+    ok,
     summary: structured.summary,
     structured,
     data: {
@@ -434,6 +646,12 @@ export async function runSubagentLlmSession(
       session_seed: sessionSeed,
       session_promote: sessionPromote,
       salvaged,
+      session_reuse: {
+        hit: false,
+        path_key: pk,
+        packages_completed: 1,
+        parked: shouldPark,
+      },
     },
   };
 }
