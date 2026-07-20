@@ -40,6 +40,8 @@ export type SubagentPackageResult = {
   subagent_id: string;
   /** Keep-alive worker id for same-path follow-up via resume_agent_id. */
   agent_id?: string;
+  /** idle = kept for resume; released = disposed (TTL/cap/abort). */
+  worker_status?: "idle" | "released";
   node_type?: string;
   skill_id?: string;
   summary: string;
@@ -54,6 +56,8 @@ export type SubagentPackageResult = {
   assignment_label?: string;
   /** Warm resume telemetry (hit / reject reason). */
   session_reuse?: Record<string, unknown>;
+  /** When idle: prefer this for same-path gap re-dispatch. */
+  resume_hint?: { agent_id: string; path_key: string; reason: string };
 };
 
 type ResolvedPackage = {
@@ -94,7 +98,7 @@ const packageItemSchema = Type.Object({
 
 /**
  * Agent-facing subagent tool.
- * Flat: one package. Batch: packages[] run concurrently (OMP-style, default concurrency 3).
+ * Flat / batch spawn, warm resume, list idle workers, explicit release (OMP lifecycle).
  */
 export function createSubagentTool(runtime: ToolRuntime): ToolDefinition<any> {
   const postLock = createMutex();
@@ -103,17 +107,21 @@ export function createSubagentTool(runtime: ToolRuntime): ToolDefinition<any> {
     name: "subagent",
     label: "Subagent",
     description: [
-      "Spawn child work package(s) under this task workspace.",
-      "FLAT: target, scope, already_done, this_turn_goal, success_criteria (+ optional node_type/skill_id).",
-      "BATCH: packages=[{target,this_turn_goal,success_criteria,...}] concurrent (NODE4_SUBAGENT_CONCURRENCY default 8).",
-      "COLD default: each package is a new worker (agent_id). Orthogonal paths MUST stay cold — fan out in packages[].",
-      "WARM follow-up only: pass resume_agent_id from a prior result.agent_id on the SAME path (gap re-dispatch). Affinity gate rejects path/skill mismatch → cold.",
-      "Same path re-dispatch ≤2 then deadend. Session cookies seed/promote parent↔child.",
-      "Without command=: LLM child (preferred). Graph rejects command=.",
-      "Returns agent_id + candidates + surfaces + acceptance (flat) or results[] (batch).",
-      "Nested subagent is DISALLOWED.",
+      "Child work packages under this task workspace (OMP keep-alive).",
+      "SPAWN FLAT: target, scope, already_done, this_turn_goal, success_criteria (+ node_type/skill_id).",
+      "SPAWN BATCH: packages=[{...}] concurrent (NODE4_SUBAGENT_CONCURRENCY default 8). Orthogonal paths = cold workers.",
+      "WARM: resume_agent_id=prior agent_id on SAME path (gap/timeout follow-up). Soft-fail workers stay idle for resume.",
+      "LIST: op=list → idle_workers[] (agent_id, path_key, …).",
+      "RELEASE: op=release + agent_id (or release_agent_id) — dispose worker now; else idle TTL (~420s) / maxIdle LRU auto-releases.",
+      "Same path ≤2 dispatches. Cookies seed/promote. Graph rejects command=. Nested subagent DISALLOWED.",
+      "Returns agent_id, worker_status idle|released, resume_hint, candidates/acceptance.",
     ].join(" "),
     parameters: Type.Object({
+      op: Type.Optional(
+        Type.String({
+          description: "spawn (default) | list | release",
+        }),
+      ),
       // Flat fields (optional when packages provided)
       target: Type.Optional(Type.String({ description: "Flat: URL | IP:Port | domain+path" })),
       scope: Type.Optional(Type.String({ description: "Flat or batch default scope" })),
@@ -134,6 +142,12 @@ export function createSubagentTool(runtime: ToolRuntime): ToolDefinition<any> {
             "Flat warm follow-up: prior agent_id. Same path only; omit for cold spawn / orthogonal targets.",
         }),
       ),
+      agent_id: Type.Optional(
+        Type.String({ description: "For op=release: worker id to dispose" }),
+      ),
+      release_agent_id: Type.Optional(
+        Type.String({ description: "Alias of agent_id for op=release" }),
+      ),
       // Batch
       context: Type.Optional(
         Type.String({
@@ -147,6 +161,56 @@ export function createSubagentTool(runtime: ToolRuntime): ToolDefinition<any> {
 
       const nest = assertSubagentNestAllowed(runtime.lifecycle.subagentDepth);
       if (!nest.ok) return textResult(nest.error, { isError: true });
+
+      const op = String(params.op || "spawn").trim().toLowerCase() || "spawn";
+
+      if (op === "list") {
+        const pool = getOrCreateIdlePool(runtime.lifecycle);
+        const idle_workers = pool?.listIdle() ?? [];
+        return jsonResult({
+          ok: true,
+          op: "list",
+          idle_workers,
+          count: idle_workers.length,
+          guidance:
+            "Idle workers are resumable via resume_agent_id on the SAME path_key. " +
+            "Release with op=release when done, or wait idle TTL / maxIdle auto-release.",
+        });
+      }
+
+      if (op === "release") {
+        const aid = String(params.agent_id || params.release_agent_id || "").trim();
+        if (!aid) {
+          return textResult("error: op=release requires agent_id (or release_agent_id)", {
+            isError: true,
+          });
+        }
+        const pool = getOrCreateIdlePool(runtime.lifecycle);
+        if (!pool) {
+          return jsonResult({
+            ok: true,
+            op: "release",
+            agent_id: aid,
+            released: false,
+            reason: "idle_pool_disabled",
+          });
+        }
+        const released = await pool.release(aid);
+        return jsonResult({
+          ok: true,
+          op: "release",
+          agent_id: aid,
+          released,
+          reason: released ? "disposed" : "not_found",
+          idle_remaining: pool.size,
+        });
+      }
+
+      if (op !== "spawn") {
+        return textResult(`error: unknown subagent op=${op} (use spawn|list|release)`, {
+          isError: true,
+        });
+      }
 
       const packagesRaw = Array.isArray(params.packages) ? params.packages : null;
       const isBatch = Boolean(packagesRaw && packagesRaw.length > 0);
@@ -222,11 +286,12 @@ export function createSubagentTool(runtime: ToolRuntime): ToolDefinition<any> {
             surface_ledger: ledgerSum ?? null,
           },
           guidance: [
-            "BATCH ACCEPTANCE: for each results[i].acceptance.ready_to_book → finding(confirm) with location/candidate.",
-            "Soft-failed packages (ok:false) → at most one re-dispatch with resume_agent_id=results[i].agent_id on SAME path, then deadend; path max 2.",
-            "Orthogonal modules: new cold packages[] (no resume_agent_id). Do not reuse a worker across different paths.",
-            "Book successful packages immediately. Cookies seed/promote parent↔child.",
+            "BATCH ACCEPTANCE: for each results[i].acceptance.ready_to_book → finding(confirm).",
+            "worker_status=idle → same-path gap/timeout: resume_agent_id=results[i].agent_id (max 2 path dispatches).",
+            "Done with a worker → subagent(op=release, agent_id=…) or wait idle TTL; orthogonal modules stay cold packages[].",
+            "Cookies seed/promote parent↔child.",
           ].join(" "),
+          idle_workers: getOrCreateIdlePool(runtime.lifecycle)?.listIdle() ?? [],
         });
       }
 
@@ -249,6 +314,7 @@ export function createSubagentTool(runtime: ToolRuntime): ToolDefinition<any> {
           ok: one.ok,
           subagent_id: one.subagent_id,
           agent_id: one.agent_id,
+          worker_status: one.worker_status,
           summary: one.summary,
           node_type: one.node_type,
           skill_id: one.skill_id,
@@ -267,15 +333,18 @@ export function createSubagentTool(runtime: ToolRuntime): ToolDefinition<any> {
           handoff: one.handoff,
           assignment_label: one.assignment_label,
           session_reuse: one.session_reuse,
+          resume_hint: one.resume_hint,
           observations_recorded: true,
           error: one.error,
           guidance: [
-            "ACCEPTANCE LOOP (verbatim book is harness-assisted):",
-            "1) For each acceptance.ready_to_book: finding(confirm) with title/location + optional candidate_index.",
-            "2) needs_more_evidence → re-dispatch SAME path with resume_agent_id=agent_id (warm) + redispatch_hint; max 2 then deadend.",
-            "3) Orthogonal open ledger paths → packages[] cold spawns (no resume_agent_id).",
-            "4) Graph: todo(done) needs act/deadend/skip on surfaces.",
+            "ACCEPTANCE LOOP:",
+            "1) ready_to_book → finding(confirm) with location/candidate_index.",
+            "2) needs_more_evidence or timeout with worker_status=idle → resume_agent_id=agent_id same path; max 2 then deadend.",
+            "3) Orthogonal paths → cold packages[] only.",
+            "4) Finished with worker → op=release agent_id=… (or idle TTL auto-release).",
+            "5) Graph: todo(done) needs act/deadend/skip on surfaces.",
           ].join(" "),
+          idle_workers: getOrCreateIdlePool(runtime.lifecycle)?.listIdle() ?? [],
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -675,11 +744,27 @@ async function runSubagentPackage(
       rawData && typeof rawData.session_reuse === "object" && rawData.session_reuse
         ? (rawData.session_reuse as Record<string, unknown>)
         : undefined;
+    const workerStatus =
+      (rawData && typeof rawData.worker_status === "string"
+        ? (rawData.worker_status as "idle" | "released")
+        : undefined) ||
+      (sessionReuse?.parked === true ? "idle" : sessionReuse ? "released" : undefined);
+    const resumeHint =
+      rawData && typeof rawData.resume_hint === "object" && rawData.resume_hint
+        ? (rawData.resume_hint as { agent_id: string; path_key: string; reason: string })
+        : workerStatus === "idle" && agentId
+          ? {
+              agent_id: agentId,
+              path_key: pk,
+              reason: "same_path_followup",
+            }
+          : undefined;
 
     return {
       ok: result.ok,
       subagent_id: result.subagentId,
       agent_id: agentId,
+      worker_status: workerStatus,
       node_type: nt,
       skill_id: skillId,
       summary: result.summary,
@@ -692,6 +777,7 @@ async function runSubagentPackage(
       goal_id: result.goalId,
       assignment_label: assignmentLabel,
       session_reuse: sessionReuse,
+      resume_hint: resumeHint,
       error: result.ok ? undefined : result.summary,
     };
   });

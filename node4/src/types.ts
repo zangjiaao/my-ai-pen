@@ -127,9 +127,10 @@ export type ToolRuntime = {
      */
     subagentPathDispatchCounts?: Record<string, number>;
     /**
-     * OMP-style idle workers parked by agent_id after a package finishes.
-     * Warm resume only via explicit resume_agent_id + same-path affinity.
-     * Disposed on task end. Disable: NODE4_SUBAGENT_IDLE=0.
+     * OMP-style idle workers by agent_id (keep-alive after package, incl. soft-fail).
+     * Resume: resume_agent_id + same-path affinity.
+     * Release: idle TTL timer, maxIdle LRU, maxPackages, op=release, task end disposeAll.
+     * Disable: NODE4_SUBAGENT_IDLE=0.
      */
     subagentIdlePool?: import("./runtime/subagent-idle-pool.js").SubagentIdlePool;
   };

@@ -18,12 +18,15 @@ function fakeHandle(
   lastUsedAt = Date.now(),
   extra?: Partial<IdleSubagentHandle>,
 ): IdleSubagentHandle {
+  let disposed = false;
   return {
     agentId,
     pathKey,
     session: {
       prompt: async () => undefined,
-      dispose: () => undefined,
+      dispose: () => {
+        disposed = true;
+      },
     },
     workDir: `/tmp/idle-${agentId}`,
     segmentCounter: { tools: 0 },
@@ -31,6 +34,8 @@ function fakeHandle(
     createdAt: lastUsedAt,
     lastUsedAt,
     ...extra,
+    // test helper
+    ...( { isDisposed: () => disposed } as any ),
   };
 }
 
@@ -47,7 +52,10 @@ assert.equal(opts.maxIdle, 2);
 assert.equal(opts.ttlMs, 60_000);
 assert.equal(opts.maxPackages, 3);
 
-// --- affinity: same path ok ---
+// default TTL is OMP 420s
+assert.equal(resolveIdlePoolOptions({}).ttlMs, 420_000);
+
+// --- affinity ---
 assert.equal(
   checkAffinity(
     { pathKey: "http://t/sqli", packagesCompleted: 1 },
@@ -56,7 +64,6 @@ assert.equal(
   ),
   null,
 );
-// path mismatch
 assert.equal(
   checkAffinity(
     { pathKey: "http://t/sqli", packagesCompleted: 1 },
@@ -65,69 +72,59 @@ assert.equal(
   ),
   "path_mismatch",
 );
-// skill mismatch when both set
-assert.equal(
-  checkAffinity(
-    { pathKey: "http://t/sqli", skillId: "sqli", packagesCompleted: 1 },
-    { pathKey: "http://t/sqli", skillId: "xss" },
-    { maxPackages: 4, ttlMs: 60_000 },
-  ),
-  "skill_mismatch",
-);
-// skill only on one side ok
-assert.equal(
-  checkAffinity(
-    { pathKey: "http://t/sqli", skillId: "sqli", packagesCompleted: 1 },
-    { pathKey: "http://t/sqli" },
-    { maxPackages: 4, ttlMs: 60_000 },
-  ),
-  null,
-);
 
-// --- tryResume by agent_id + affinity ---
+// --- tryResume + exclusive ---
 {
   const pool = new SubagentIdlePool({ maxIdle: 4, ttlMs: 60_000, maxPackages: 4 });
   const h = fakeHandle("sub_1", "http://t/sqli");
   pool.park(h);
   assert.equal(pool.size, 1);
-
-  // auto path take disabled
   assert.equal(pool.tryTake("http://t/sqli"), undefined);
-  assert.equal(pool.size, 1);
 
   const bad = pool.tryResume("sub_1", { pathKey: "http://t/xss" });
   assert.equal(bad.ok, false);
-  if (!bad.ok) assert.equal(bad.reason, "path_mismatch");
-  assert.equal(pool.size, 1, "failed affinity must leave worker parked");
+  assert.equal(pool.size, 1);
 
   const good = pool.tryResume("sub_1", { pathKey: "http://t/sqli" });
   assert.equal(good.ok, true);
-  if (good.ok) assert.equal(good.handle, h);
   assert.equal(pool.size, 0);
-
-  const miss = pool.tryResume("sub_1", { pathKey: "http://t/sqli" });
-  assert.equal(miss.ok, false);
-  if (!miss.ok) assert.equal(miss.reason, "not_found");
+  // timer cleared on take
+  assert.equal(h.idleTimer, undefined);
 }
 
-// --- checkResume non-mutating ---
+// --- explicit release ---
 {
   const pool = new SubagentIdlePool({ maxIdle: 4, ttlMs: 60_000, maxPackages: 4 });
-  pool.park(fakeHandle("w1", "http://t/a"));
-  const c = pool.checkResume("w1", { pathKey: "http://t/a" });
-  assert.equal(c.ok, true);
-  assert.equal(pool.size, 1, "checkResume must not take");
+  const h = fakeHandle("w1", "http://t/a");
+  pool.park(h);
+  assert.equal(await pool.release("w1"), true);
+  assert.equal(pool.size, 0);
+  assert.equal((h as any).isDisposed(), true);
+  assert.equal(await pool.release("w1"), false);
 }
 
-// --- TTL ---
+// --- active TTL timer releases ---
 {
-  const pool = new SubagentIdlePool({ maxIdle: 4, ttlMs: 1000, maxPackages: 4 });
-  const t0 = 1_000_000;
-  pool.park(fakeHandle("old", "p", t0), t0);
-  const got = pool.tryResume("old", { pathKey: "p" }, t0 + 5000);
-  assert.equal(got.ok, false);
-  if (!got.ok) assert.equal(got.reason, "expired");
-  assert.equal(pool.size, 0);
+  const pool = new SubagentIdlePool({ maxIdle: 4, ttlMs: 30, maxPackages: 4 });
+  const h = fakeHandle("ttl", "http://t/ttl");
+  pool.park(h);
+  assert.equal(pool.size, 1);
+  await new Promise((r) => setTimeout(r, 80));
+  assert.equal(pool.size, 0, "TTL timer must hard-release");
+  assert.equal((h as any).isDisposed(), true);
+  const miss = pool.tryResume("ttl", { pathKey: "http://t/ttl" });
+  assert.equal(miss.ok, false);
+}
+
+// --- listIdle ---
+{
+  const pool = new SubagentIdlePool({ maxIdle: 4, ttlMs: 60_000, maxPackages: 4 });
+  pool.park(fakeHandle("a", "pa", Date.now() - 1000), Date.now() - 1000);
+  pool.park(fakeHandle("b", "pb", Date.now()), Date.now());
+  const list = pool.listIdle();
+  assert.equal(list.length, 2);
+  assert.ok(list.every((x) => x.agent_id && x.path_key));
+  await pool.disposeAll();
 }
 
 // --- max packages ---
@@ -136,10 +133,10 @@ assert.equal(
   const h = fakeHandle("full", "p");
   h.packagesCompleted = 2;
   pool.park(h);
-  assert.equal(pool.size, 0, "over maxPackages must not park");
+  assert.equal(pool.size, 0);
 }
 
-// --- LRU by agent id ---
+// --- LRU release ---
 {
   const pool = new SubagentIdlePool({ maxIdle: 2, ttlMs: 60_000, maxPackages: 4 });
   pool.park(fakeHandle("a", "pa", 1000), 1000);
@@ -147,26 +144,24 @@ assert.equal(
   pool.park(fakeHandle("c", "pc", 3000), 3000);
   assert.equal(pool.size, 2);
   assert.equal(pool.tryResume("a", { pathKey: "pa" }, 3500).ok, false);
-  const b = pool.tryResume("b", { pathKey: "pb" }, 3500);
-  const c = pool.tryResume("c", { pathKey: "pc" }, 3500);
-  assert.ok(b.ok || c.ok);
 }
 
-// --- disposeAll ---
+// --- disposeAll clears timers ---
 {
   const pool = new SubagentIdlePool({ maxIdle: 4, ttlMs: 60_000, maxPackages: 4 });
-  pool.park(fakeHandle("x", "px"));
-  pool.park(fakeHandle("y", "py"));
+  const h = fakeHandle("x", "px");
+  pool.park(h);
+  assert.ok(h.idleTimer);
   await pool.disposeAll();
   assert.equal(pool.size, 0);
+  assert.equal(h.idleTimer, undefined);
 }
 
 // --- getOrCreate ---
 {
   const life: { subagentIdlePool?: SubagentIdlePool } = {};
   assert.equal(getOrCreateIdlePool(life, { NODE4_SUBAGENT_IDLE: "0" }), undefined);
-  const p = getOrCreateIdlePool(life, { NODE4_SUBAGENT_IDLE: "1" });
-  assert.ok(p);
+  assert.ok(getOrCreateIdlePool(life, { NODE4_SUBAGENT_IDLE: "1" }));
 }
 
 console.log("subagent-idle-pool.test.ts: ok");

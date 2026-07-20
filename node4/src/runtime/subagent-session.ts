@@ -374,13 +374,9 @@ async function runWarmPackage(args: {
   warm.packagesCompleted += 1;
   warm.lastUsedAt = Date.now();
 
+  // OMP: finished + soft-failed stay interrogable (timeout/salvage OK). Parent abort → release.
   const shouldPark =
-    Boolean(pool) &&
-    !race.aborted &&
-    !race.timedOut &&
-    !race.error &&
-    Boolean(pk) &&
-    Boolean(agentId);
+    Boolean(pool) && Boolean(pk) && Boolean(agentId) && !race.aborted;
 
   if (shouldPark) {
     pool.park(warm);
@@ -393,6 +389,7 @@ async function runWarmPackage(args: {
     }
   }
 
+  const workerStatus = shouldPark ? "idle" : "released";
   return {
     ok,
     summary: structured.summary,
@@ -404,6 +401,7 @@ async function runWarmPackage(args: {
       node_type: input.nodeType,
       skill_id: input.skillId,
       agent_id: agentId,
+      worker_status: workerStatus,
       tools: warm.segmentCounter.tools,
       tools_this_package: toolsUsed,
       workDir,
@@ -416,7 +414,16 @@ async function runWarmPackage(args: {
         path_key: pk,
         packages_completed: warm.packagesCompleted,
         parked: shouldPark,
+        worker_status: workerStatus,
+        timed_out: race.timedOut || undefined,
       },
+      resume_hint: shouldPark
+        ? {
+            agent_id: agentId,
+            path_key: pk,
+            reason: "same_path_followup",
+          }
+        : undefined,
     },
   };
 }
@@ -632,12 +639,10 @@ async function runColdPackage(args: {
   const sessionPromote = await promoteChildSessionToParent(workDir, parent.taskDir);
   const ok = structured.ok && !race.aborted && !race.timedOut;
 
+  // OMP keep-alive: park success + soft-fail/timeout so same agent_id can resume.
+  // Parent abort or missing identity → dispose immediately (release).
   const shouldPark =
-    Boolean(pool) &&
-    Boolean(pk) &&
-    !race.aborted &&
-    !race.timedOut &&
-    !race.error;
+    Boolean(pool) && Boolean(pk) && Boolean(agentId) && !race.aborted;
 
   if (shouldPark && pool) {
     const handle: IdleSubagentHandle = {
@@ -661,6 +666,7 @@ async function runColdPackage(args: {
     }
   }
 
+  const workerStatus = shouldPark ? "idle" : "released";
   return {
     ok,
     summary: structured.summary,
@@ -672,6 +678,7 @@ async function runColdPackage(args: {
       node_type: input.nodeType,
       skill_id: input.skillId,
       agent_id: agentId,
+      worker_status: workerStatus,
       tools: segmentCounter.tools,
       workDir,
       session_seed: sessionSeed,
@@ -683,7 +690,16 @@ async function runColdPackage(args: {
         path_key: pk,
         packages_completed: 1,
         parked: shouldPark,
+        worker_status: workerStatus,
+        timed_out: race.timedOut || undefined,
       },
+      resume_hint: shouldPark
+        ? {
+            agent_id: agentId,
+            path_key: pk,
+            reason: "same_path_followup",
+          }
+        : undefined,
     },
   };
 }

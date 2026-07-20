@@ -1,9 +1,15 @@
 /**
  * OMP-style idle subagent worker registry.
  *
- * Workers stay warm after a package (keep-alive) and are resumed only by
- * **explicit agent_id** with an **affinity gate** (same pathKey required).
- * Orthogonal paths always cold-start — no automatic pathKey grab.
+ * Keep-alive: after a package the worker stays idle (live session) for
+ * explicit resume_agent_id + same-path affinity.
+ *
+ * Bounded release (prevents unbounded AgentSession growth):
+ * - Active idle TTL timer → hard release (dispose + drop) — OMP default 420s
+ * - maxIdle LRU release
+ * - maxPackages → refuse re-park / release
+ * - explicit release(agent_id)
+ * - disposeAll on task end / abort
  *
  * Disable: NODE4_SUBAGENT_IDLE=0.
  */
@@ -20,7 +26,7 @@ export type IdleSubagentHandle = {
   pathKey: string;
   nodeType?: string;
   skillId?: string;
-  /** Live pi AgentSession (must not be disposed while parked). */
+  /** Live pi AgentSession (must not be disposed while idle). */
   session: {
     prompt: (text: string, opts?: { source?: string }) => Promise<unknown>;
     abort?: () => unknown;
@@ -34,6 +40,18 @@ export type IdleSubagentHandle = {
   lastUsedAt: number;
   /** Detach package-scoped abort listener if any. */
   clearAbort?: () => void;
+  /** Active idle TTL timer handle (cleared on take / release). */
+  idleTimer?: ReturnType<typeof setTimeout>;
+};
+
+export type IdleWorkerSnapshot = {
+  agent_id: string;
+  path_key: string;
+  node_type?: string;
+  skill_id?: string;
+  packages_completed: number;
+  idle_ms: number;
+  work_dir: string;
 };
 
 export type ResumeResult =
@@ -51,16 +69,20 @@ export type ResumeRejectReason =
   | "empty_path";
 
 export type SubagentIdlePoolOptions = {
-  /** Max parked workers (LRU dispose). Default 8. */
+  /** Max idle workers (LRU release). Default 8. */
   maxIdle?: number;
-  /** Idle TTL ms; expired slots disposed on access. Default 15 min. */
+  /**
+   * Idle TTL ms; active timer hard-releases the worker (dispose session).
+   * Default 420_000 (OMP task.agentIdleTtlMs).
+   */
   ttlMs?: number;
-  /** Max packages per warm worker before force-dispose. Default 4. */
+  /** Max packages per warm worker before force-release. Default 4. */
   maxPackages?: number;
 };
 
+/** OMP-aligned default idle TTL (7 minutes). */
 const DEFAULT_MAX_IDLE = 8;
-const DEFAULT_TTL_MS = 15 * 60 * 1000;
+const DEFAULT_TTL_MS = 420_000;
 const DEFAULT_MAX_PACKAGES = 4;
 
 export function resolveIdlePoolEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -70,7 +92,7 @@ export function resolveIdlePoolEnabled(env: NodeJS.ProcessEnv = process.env): bo
 
 export function resolveIdlePoolOptions(env: NodeJS.ProcessEnv = process.env): Required<SubagentIdlePoolOptions> {
   const maxIdle = clampInt(env.NODE4_SUBAGENT_IDLE_MAX, DEFAULT_MAX_IDLE, 1, 32);
-  const ttlMs = clampInt(env.NODE4_SUBAGENT_IDLE_TTL_MS, DEFAULT_TTL_MS, 30_000, 3_600_000);
+  const ttlMs = clampInt(env.NODE4_SUBAGENT_IDLE_TTL_MS, DEFAULT_TTL_MS, 5_000, 3_600_000);
   const maxPackages = clampInt(env.NODE4_SUBAGENT_IDLE_MAX_PACKAGES, DEFAULT_MAX_PACKAGES, 1, 20);
   return { maxIdle, ttlMs, maxPackages };
 }
@@ -83,6 +105,7 @@ function clampInt(raw: string | undefined, fallback: number, min: number, max: n
 }
 
 async function safeDispose(handle: IdleSubagentHandle): Promise<void> {
+  clearIdleTimer(handle);
   try {
     handle.clearAbort?.();
   } catch {
@@ -92,6 +115,13 @@ async function safeDispose(handle: IdleSubagentHandle): Promise<void> {
     await Promise.resolve(handle.session.dispose?.());
   } catch {
     /* ignore */
+  }
+}
+
+function clearIdleTimer(handle: IdleSubagentHandle): void {
+  if (handle.idleTimer) {
+    clearTimeout(handle.idleTimer);
+    handle.idleTimer = undefined;
   }
 }
 
@@ -147,9 +177,25 @@ export class SubagentIdlePool {
     return [...this.byId.keys()];
   }
 
+  /** OMP-style roster for Main (no secrets). */
+  listIdle(now = Date.now()): IdleWorkerSnapshot[] {
+    const out: IdleWorkerSnapshot[] = [];
+    for (const h of this.byId.values()) {
+      out.push({
+        agent_id: h.agentId,
+        path_key: h.pathKey,
+        node_type: h.nodeType,
+        skill_id: h.skillId,
+        packages_completed: h.packagesCompleted,
+        idle_ms: Math.max(0, now - h.lastUsedAt),
+        work_dir: h.workDir,
+      });
+    }
+    return out.sort((a, b) => a.idle_ms - b.idle_ms);
+  }
+
   /**
    * Non-mutating affinity probe (does not exclusive-take).
-   * Used by the tool layer before choosing spawn subagentId.
    */
   checkResume(agentId: string, affinity: WorkerAffinity, now = Date.now()): ResumeResult {
     const id = String(agentId || "").trim();
@@ -162,8 +208,8 @@ export class SubagentIdlePool {
   }
 
   /**
-   * Exclusive resume: removes from pool so concurrent callers cannot share.
-   * Affinity gate enforced. On reject, handle stays parked (except expired/max → disposed).
+   * Exclusive resume: removes from pool, clears TTL timer.
+   * Affinity gate enforced. Expired/max → release.
    */
   tryResume(agentId: string, affinity: WorkerAffinity, now = Date.now()): ResumeResult {
     const id = String(agentId || "").trim();
@@ -173,19 +219,18 @@ export class SubagentIdlePool {
 
     const reason = checkAffinity(handle, affinity, this.opts, now, handle.lastUsedAt);
     if (reason === "expired" || reason === "max_packages") {
-      this.byId.delete(id);
-      void safeDispose(handle);
+      void this.release(id);
       return { ok: false, reason };
     }
     if (reason) return { ok: false, reason };
 
     this.byId.delete(id);
+    clearIdleTimer(handle);
     return { ok: true, handle };
   }
 
   /**
-   * @deprecated Use tryResume(agentId, affinity). Kept for tests that used pathKey take —
-   * now no-ops path-only grab (always miss) to avoid silent pollution.
+   * @deprecated pathKey auto-take disabled (pollution).
    */
   tryTake(_pathKey: string, _now = Date.now()): IdleSubagentHandle | undefined {
     return undefined;
@@ -193,7 +238,8 @@ export class SubagentIdlePool {
 
   /**
    * Park a finished worker for later explicit resume.
-   * Evicts LRU when over maxIdle.
+   * Arms idle TTL timer (OMP). Evicts LRU when over maxIdle.
+   * Over maxPackages → hard release instead of park.
    */
   park(handle: IdleSubagentHandle, now = Date.now()): void {
     const id = String(handle.agentId || "").trim();
@@ -218,35 +264,68 @@ export class SubagentIdlePool {
     handle.lastUsedAt = now;
     handle.clearAbort?.();
     handle.clearAbort = undefined;
+    clearIdleTimer(handle);
     this.byId.set(id, handle);
+    this.armIdleTimer(handle);
 
     while (this.byId.size > this.opts.maxIdle) {
       const lruId = this.findLruId();
-      if (!lruId) break;
-      const evicted = this.byId.get(lruId);
-      this.byId.delete(lruId);
-      if (evicted) void safeDispose(evicted);
+      if (!lruId || lruId === id) {
+        // Prefer evicting someone else; if only self, still enforce cap by releasing self.
+        if (lruId === id && this.byId.size > this.opts.maxIdle) {
+          void this.release(id);
+        }
+        break;
+      }
+      void this.release(lruId);
     }
   }
 
-  /** Drop expired without take. */
+  /**
+   * Hard remove (OMP release): clear timer, dispose session, drop id.
+   * Returns true if the worker was present.
+   */
+  async release(agentId: string): Promise<boolean> {
+    const id = String(agentId || "").trim();
+    if (!id) return false;
+    const handle = this.byId.get(id);
+    if (!handle) return false;
+    this.byId.delete(id);
+    await safeDispose(handle);
+    return true;
+  }
+
+  /** Drop expired without waiting for timer (best-effort sync). */
   evictExpired(now = Date.now()): number {
     let n = 0;
     for (const [id, handle] of [...this.byId.entries()]) {
       if (now - handle.lastUsedAt > this.opts.ttlMs) {
-        this.byId.delete(id);
-        void safeDispose(handle);
+        void this.release(id);
         n++;
       }
     }
     return n;
   }
 
-  /** Dispose all parked workers (task end / abort). */
+  /** Dispose all idle workers (task end / abort). */
   async disposeAll(): Promise<void> {
-    const all = [...this.byId.values()];
-    this.byId.clear();
-    await Promise.all(all.map((h) => safeDispose(h)));
+    const ids = [...this.byId.keys()];
+    await Promise.all(ids.map((id) => this.release(id)));
+  }
+
+  private armIdleTimer(handle: IdleSubagentHandle): void {
+    if (this.opts.ttlMs <= 0) return;
+    clearIdleTimer(handle);
+    const id = handle.agentId;
+    const timer = setTimeout(() => {
+      // Only release if still the same parked entry.
+      const cur = this.byId.get(id);
+      if (cur === handle) {
+        void this.release(id);
+      }
+    }, this.opts.ttlMs);
+    timer.unref?.();
+    handle.idleTimer = timer;
   }
 
   private findLruId(): string | undefined {
