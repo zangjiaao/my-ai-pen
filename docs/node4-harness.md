@@ -44,6 +44,7 @@ Interactive **TUI remains deferred**.
    **Booking trust model (simple):** Finding = user-trustable conclusion. **Evidence is created at booking** from agent `proof` (fragment grounded in recent tool output). Act tools do not flood Case with logs. One strong proof is enough; agent does not hunt opaque `evidence_ids`.
 9. **No target answer keys**.
 10. **Post-run inspectability** — task workspace readable after dispose.
+11. **Lean system prompt (serve the LLM)** — single-source rules: runtime `<work-mode>` / RoE for mode truth; pack `work.md` for act discipline; platform-citizen for ledger/handoff. Do not triple-stack Graph soft, priors, or subagent acceptance into every layer. Prefer progressive skill/refs load over encyclopedia system prompts.
 
 ---
 
@@ -59,7 +60,7 @@ Interactive **TUI remains deferred**.
 | Session wall | **None** by design; per-tool timeouts remain |
 | Settle | Natural stop → terminal checkpoint `end_time` + `task_complete` (panel timer closes). Abort / user cancel also settle. Execution bursts may attach `attack_surface_candidates` / `next_scope_candidates` (out-of-scope hosts) for UI next-Scope — **no** mid-run asset create. |
 | Booking | `finding(confirm)` sends `affected_asset`/`port` (location host or task Scope host) so platform can link ledger assets; path-class soft dedupe merges title-drift rediscoveries. `location` must include a request path/URL (not payload-only). |
-| Prior re-verify | When `case_context.findings_summary` / `platform_list_vulnerabilities` shows open findings on Scope assets, agent re-proves them with fresh proof (rediscovery merge), interleaved with new surface — priors are not a skip list. Citizen mission + pack `work.md` steer this; no expected-vuln count gates. |
+| Prior re-verify | When `case_context.findings_summary` / `platform_list_vulnerabilities` shows open findings on Scope assets, agent re-proves them with fresh proof (rediscovery merge), interleaved with new surface — priors are not a skip list. **Citizen** owns short ledger/honest-count rules; pack `work.md` owns short act-side re-verify only (no duplicate essays). |
 | Same-module identity | Platform merges by path∩alias + title stem (security level ≠ new row). `/hackable/uploads` aliases `/vulnerabilities/upload`. sqli ≠ sqli_blind. |
 | Output language | Node config `agent_language` (`auto` \| `zh-CN` \| `en`) → `task_assign.worker_limits.agent_language` → system prompt block. Applies to chat + finding fields; not tool raw output. |
 
