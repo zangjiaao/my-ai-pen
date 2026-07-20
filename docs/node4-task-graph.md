@@ -46,6 +46,14 @@ Main DISPATCH (goal + success_criteria)
 - **Graph `todo(done)`** blocked while open/in_probe remain unless `note=deadend|skipped_roe` or path already acted. No bare batch-flip.
 - Settlement still does not require empty ledger; honesty is about todo green ≠ coverage.
 
+## Parallel subagent batch (OMP-style, v1)
+
+- Tool `subagent` accepts **flat** one package or **batch** `packages[]` (max 8) + optional shared `context`.
+- Batch runs with `mapWithConcurrencyLimit` — default concurrency **3** (`NODE4_SUBAGENT_CONCURRENCY`, clamp 1–8).
+- Sync only: tool blocks until all packages settle. Soft package failure → `results[i].ok=false`; siblings continue (no fail-fast).
+- Child `taskDir=workDir` isolates session jars. Ledger/post-process mutations are mutex-serialized.
+- Main still books; no auto-retry. Prompt: surface serial, then fan independent open paths.
+
 ## Non-goals
 
 - Kill-chain as hard `force_order` state machine  

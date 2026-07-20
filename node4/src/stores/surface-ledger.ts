@@ -7,6 +7,7 @@
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { createMutex } from "../runtime/concurrency.js";
 import { pathKey, pathsMatch } from "../runtime/subagent-booking.js";
 import type { SubagentSurface } from "../runtime/subagent-result.js";
 
@@ -92,8 +93,15 @@ function asParams(v: unknown): string[] | undefined {
 
 export class SurfaceLedgerStore {
   private cache: SurfaceLedgerFile | null = null;
+  /** Serialize load/mutate/save across concurrent subagent post-process. */
+  private readonly withLock = createMutex();
 
   constructor(private readonly ledgerPath: string) {}
+
+  /** Run ledger mutations under the store mutex (also used by parent post-process). */
+  async runExclusive<T>(fn: () => Promise<T>): Promise<T> {
+    return this.withLock(fn);
+  }
 
   static dirFromTaskDir(taskDir: string): string {
     return join(taskDir, "surfaces");
@@ -180,52 +188,53 @@ export class SurfaceLedgerStore {
     surfaces: SubagentSurface[],
     meta?: { source_subagent_id?: string },
   ): Promise<{ added: number; total: number }> {
-    const data = await this.load();
-    let added = 0;
-    const byId = new Map(data.surfaces.map((s) => [s.id, s]));
+    return this.withLock(async () => {
+      const data = await this.load();
+      let added = 0;
+      const byId = new Map(data.surfaces.map((s) => [s.id, s]));
 
-    for (const raw of surfaces.slice(0, MAX_SURFACES)) {
-      const location = String(raw.location || "").trim();
-      if (!location || location.length < 2) continue;
-      const id = idFromLocation(location);
-      if (!id) continue;
-      const existing = byId.get(id);
-      if (existing) {
-        if (raw.kind && !existing.kind) existing.kind = String(raw.kind).slice(0, 64);
-        if (raw.auth && !existing.auth) existing.auth = String(raw.auth).slice(0, 64);
-        const params = asParams(raw.params);
-        if (params?.length && !existing.params?.length) existing.params = params;
-        if (raw.note && !existing.note) existing.note = String(raw.note).slice(0, 500);
-        existing.updated_at = nowIso();
-        continue;
+      for (const raw of surfaces.slice(0, MAX_SURFACES)) {
+        const location = String(raw.location || "").trim();
+        if (!location || location.length < 2) continue;
+        const id = idFromLocation(location);
+        if (!id) continue;
+        const existing = byId.get(id);
+        if (existing) {
+          if (raw.kind && !existing.kind) existing.kind = String(raw.kind).slice(0, 64);
+          if (raw.auth && !existing.auth) existing.auth = String(raw.auth).slice(0, 64);
+          const params = asParams(raw.params);
+          if (params?.length && !existing.params?.length) existing.params = params;
+          if (raw.note && !existing.note) existing.note = String(raw.note).slice(0, 500);
+          existing.updated_at = nowIso();
+          continue;
+        }
+        if (data.surfaces.length >= MAX_SURFACES) break;
+        const item: SurfaceItem = {
+          id,
+          location: location.slice(0, 500),
+          path_key: pathKey(location) || id,
+          kind: raw.kind ? String(raw.kind).slice(0, 64) : undefined,
+          params: asParams(raw.params),
+          auth: raw.auth ? String(raw.auth).slice(0, 64) : undefined,
+          status: "open",
+          note: raw.note ? String(raw.note).slice(0, 500) : undefined,
+          updated_at: nowIso(),
+          source_subagent_id: meta?.source_subagent_id,
+        };
+        data.surfaces.push(item);
+        byId.set(id, item);
+        added += 1;
       }
-      if (data.surfaces.length >= MAX_SURFACES) break;
-      const item: SurfaceItem = {
-        id,
-        location: location.slice(0, 500),
-        path_key: pathKey(location) || id,
-        kind: raw.kind ? String(raw.kind).slice(0, 64) : undefined,
-        params: asParams(raw.params),
-        auth: raw.auth ? String(raw.auth).slice(0, 64) : undefined,
-        status: "open",
-        note: raw.note ? String(raw.note).slice(0, 500) : undefined,
-        updated_at: nowIso(),
-        source_subagent_id: meta?.source_subagent_id,
-      };
-      data.surfaces.push(item);
-      byId.set(id, item);
-      added += 1;
-    }
-    this.cache = data;
-    await this.save();
-    return { added, total: data.surfaces.length };
+      this.cache = data;
+      await this.save();
+      return { added, total: data.surfaces.length };
+    });
   }
 
-  private async setStatus(
+  private async setStatusUnlocked(
     locations: string[],
     status: SurfaceStatus,
     note?: string,
-    options?: { onlyFrom?: SurfaceStatus[] },
   ): Promise<number> {
     const data = await this.load();
     let n = 0;
@@ -234,29 +243,16 @@ export class SurfaceLedgerStore {
       if (!target) continue;
       for (const s of data.surfaces) {
         if (!pathsMatch(target, s.location) && !pathsMatch(target, s.path_key)) continue;
-        if (options?.onlyFrom && !options.onlyFrom.includes(s.status)) {
-          // Still allow upgrade booked from anything; for in_probe only from open
-          if (status === "booked") {
-            /* always allow booked */
-          } else if (status === "probed" && TERMINAL.has(s.status) && s.status !== "probed") {
-            continue; // don't downgrade booked/deadend/skip to probed
-          } else if (options.onlyFrom && !options.onlyFrom.includes(s.status)) {
-            if (!(status === "probed" && s.status === "in_probe")) {
-              if (!(status === "in_probe" && s.status === "open")) {
-                if (!(status === "probed" && s.status === "open")) {
-                  if (s.status !== "open" && s.status !== "in_probe" && status !== "booked") {
-                    continue;
-                  }
-                }
-              }
-            }
-          }
-        }
-        // Never downgrade booked → probed
         if (s.status === "booked" && status !== "booked") continue;
         if (s.status === "deadend" && (status === "open" || status === "in_probe")) continue;
         if (s.status === "skipped_roe" && (status === "open" || status === "in_probe")) continue;
-
+        if (status === "in_probe" && s.status !== "open" && s.status !== "in_probe") continue;
+        if (
+          status === "probed" &&
+          (s.status === "booked" || s.status === "deadend" || s.status === "skipped_roe")
+        ) {
+          continue;
+        }
         s.status = status;
         if (note) s.note = note.slice(0, 500);
         s.updated_at = nowIso();
@@ -270,29 +266,20 @@ export class SurfaceLedgerStore {
     return n;
   }
 
+  private async setStatus(
+    locations: string[],
+    status: SurfaceStatus,
+    note?: string,
+  ): Promise<number> {
+    return this.withLock(() => this.setStatusUnlocked(locations, status, note));
+  }
+
   async markInProbe(locations: string[]): Promise<number> {
-    return this.setStatus(locations, "in_probe", undefined, { onlyFrom: ["open"] });
+    return this.setStatus(locations, "in_probe");
   }
 
   async markProbed(locations: string[]): Promise<number> {
-    const data = await this.load();
-    let n = 0;
-    for (const loc of locations) {
-      const target = String(loc || "").trim();
-      if (!target) continue;
-      for (const s of data.surfaces) {
-        if (!pathsMatch(target, s.location) && !pathsMatch(target, s.path_key)) continue;
-        if (s.status === "booked" || s.status === "deadend" || s.status === "skipped_roe") continue;
-        s.status = "probed";
-        s.updated_at = nowIso();
-        n += 1;
-      }
-    }
-    if (n) {
-      this.cache = data;
-      await this.save();
-    }
-    return n;
+    return this.setStatus(locations, "probed");
   }
 
   async markBooked(location: string): Promise<number> {

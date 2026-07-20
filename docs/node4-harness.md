@@ -195,6 +195,8 @@ Configs: `experts/pentest/graphs/`. Loader: `node4/src/runtime/pentest-graph.ts`
 
 **Surface ledger:** `taskDir/surfaces/ledger.json` — recon `surfaces[]` work queue; Graph `todo(done)` requires act/deadend/skip (see `docs/node4-task-graph.md`).
 
+**Parallel batch:** `subagent({ packages: [...] })` runs packages concurrently (default `NODE4_SUBAGENT_CONCURRENCY=3`). Flat single-package calls remain supported.
+
 ### Subagent handoff contract (A1 / D3)
 
 Required structured fields on every `subagent` tool call (child does **not** inherit parent chat):
