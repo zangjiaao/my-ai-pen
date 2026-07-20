@@ -14,6 +14,7 @@ import { resolveRolePack } from "../roles/index.js";
 import { EvidenceStore } from "../stores/evidence.js";
 import { GoalStore } from "../stores/goal.js";
 import { ProcessFactStore } from "../stores/process-fact.js";
+import { SurfaceLedgerStore } from "../stores/surface-ledger.js";
 import { SkillStore } from "../stores/skill.js";
 import { TodoStore } from "../stores/todo.js";
 import type { PlatformSink, TaskEnvelope, ToolRuntime } from "../types.js";
@@ -35,6 +36,11 @@ import { SubagentHost } from "./subagent.js";
 import { eagerTodoInjection, resetMidRunTodoCycle, createMidRunTodoTracker } from "./todo-harness.js";
 import { formatRoeInjection, resolveEngagementRoe } from "./engagement-roe.js";
 import { formatCaseContextInjection } from "./case-context.js";
+import {
+  applyMainActToolFilter,
+  buildPentestGraphContext,
+  resolvePentestGraph,
+} from "./pentest-graph.js";
 import {
   buildGoalBudgetLimitPrompt,
   buildGoalContinuationPrompt,
@@ -68,6 +74,7 @@ export async function runNode4Task(
   await mkdir(join(taskDir, "scripts"), { recursive: true });
   await mkdir(join(taskDir, "subagents"), { recursive: true });
   await mkdir(join(taskDir, "facts"), { recursive: true });
+  await mkdir(join(taskDir, "surfaces"), { recursive: true });
   await mkdir(join(taskDir, "tool-output"), { recursive: true });
 
   const roleResolved = resolveRolePack({ engagement: task.engagement, role: task.role });
@@ -124,6 +131,9 @@ export async function runNode4Task(
   const skills = skillsDir ? new SkillStore(skillsDir) : undefined;
   const processFacts = new ProcessFactStore(join(taskDir, "facts"));
   await processFacts.ensureDir();
+  const surfaceLedger = new SurfaceLedgerStore(SurfaceLedgerStore.pathFromTaskDir(taskDir));
+  await surfaceLedger.ensureDir();
+  await surfaceLedger.load();
 
   const runtime: ToolRuntime = {
     task,
@@ -141,6 +151,7 @@ export async function runNode4Task(
     skills,
     skillIds: pack.skillIds?.length ? pack.skillIds : undefined,
     processFacts,
+    surfaceLedger,
     lifecycle: {
       toolsInLastSegment: 0,
       panelAgents: panel,
@@ -156,6 +167,15 @@ export async function runNode4Task(
     goals,
     panelAgents: panel,
   });
+
+  // Free vs Graph work mode (pentest scenario graphs; other packs stay free)
+  const graphResolved = await resolvePentestGraph({
+    task,
+    packId: pack.id,
+    packRoot: (pack as { packRoot?: string }).packRoot,
+  });
+  const graphCtx = buildPentestGraphContext(graphResolved);
+  runtime.lifecycle.pentestGraph = graphCtx;
 
   const obsCounters = {
     toolCallCount: 0,
@@ -254,15 +274,26 @@ export async function runNode4Task(
 
   const segmentCounter = { tools: 0 };
   const processFactIndex = await processFacts.list();
-  const systemPrompt = buildSystemPrompt(task, pack, {
+  // Graph hard: strip Main act tools; Free/soft keep full pack surface.
+  const toolNames = applyMainActToolFilter(
+    toolNamesForPack(pack),
+    graphResolved.mainAct,
+    graphResolved.mode,
+  );
+  const packForTools =
+    toolNames.length !== pack.toolNames.length ? { ...pack, toolNames } : pack;
+  const systemPrompt = buildSystemPrompt(task, packForTools, {
     goals,
     processFactIndex,
+    workModeInjection: graphCtx.formatInjection(),
+    allowPostexOverride:
+      graphResolved.mode === "graph" ? graphResolved.allowPostex : task.allowPostex,
   });
   const resourceLoader = new DefaultResourceLoader({
     cwd: taskDir,
     agentDir: config.piAgentDir,
     settingsManager,
-    extensionFactories: [createNode4Extension(runtime, segmentCounter, pack)],
+    extensionFactories: [createNode4Extension(runtime, segmentCounter, packForTools)],
     noExtensions: true,
     noSkills: true,
     noPromptTemplates: true,
@@ -273,7 +304,6 @@ export async function runNode4Task(
 
   const piSessionDir = join(taskDir, "pi-sessions");
   await mkdir(piSessionDir, { recursive: true });
-  const toolNames = toolNamesForPack(pack);
   const { session } = await createAgentSession({
     cwd: taskDir,
     agentDir: config.piAgentDir,
@@ -343,9 +373,17 @@ export async function runNode4Task(
     task_id: task.taskId,
     message: chatOnly
       ? `${who} chat mode (no target yet) pack=${pack.id}`
-      : `${who} starting pack=${pack.id} tools=${toolNames.join(",")} goal_active=${goals.isActive()}`,
+      : `${who} starting pack=${pack.id} work_mode=${
+          graphResolved.mode === "graph"
+            ? `graph:${graphResolved.graphId}:${graphResolved.mainAct}`
+            : "free"
+        } tools=${toolNames.join(",")} goal_active=${goals.isActive()}`,
     agent_phase: chatOnly ? "chat" : "starting",
     status: "running",
+    work_mode:
+      graphResolved.mode === "graph"
+        ? `graph:${graphResolved.graphId}:${graphResolved.mainAct}`
+        : "free",
     llm_usage: usage.snapshot(),
   });
 
@@ -367,10 +405,12 @@ export async function runNode4Task(
   }
 
   const roe = resolveEngagementRoe({
-    engagementTemplate: task.engagementTemplate,
+    engagementTemplate: task.engagementTemplate || task.graphId,
     engagement: task.engagement || task.role,
-    allowPostex: task.allowPostex,
+    allowPostex:
+      graphResolved.mode === "graph" ? graphResolved.allowPostex : task.allowPostex,
   });
+  const workModeBlock = graphCtx.formatInjection();
   const userPrompt = ledgerAssistSeat
     ? [
         `You are the product expert persona for pack «${pack.id}» (${pack.label}) — workspace / ledger assistant.`,
@@ -423,6 +463,8 @@ export async function runNode4Task(
         "",
         formatRoeInjection(roe),
         "",
+        workModeBlock,
+        "",
         formatCaseContextInjection(task.caseContext),
         "",
         `Role pack: ${pack.id}. Keep tool-calling in-loop; shell-first multi-step + multi-call same turn; http is single-probe only.`,
@@ -430,6 +472,9 @@ export async function runNode4Task(
         pack.bookingMode === "finding"
           ? "Book via finding(confirm) with proof= quoted from tool output. When stuck after dense work, stop with no tools — no finish tool; harness settles."
           : "This pack does not book findings. When finished, simply stop — harness settles.",
+        graphResolved.mode === "graph"
+          ? "Graph mode: prefer subagent(node_type=…, full handoff) for dense act packages; you remain Main and book findings. default_plan is a soft todo skeleton only."
+          : "Free mode: act yourself or voluntarily spawn subagent; node_type optional.",
         `Target: ${JSON.stringify(task.target)}`,
         `Scope: ${JSON.stringify(task.scope)}`,
         task.accounts !== undefined ? `Accounts: ${JSON.stringify(task.accounts)}` : "",

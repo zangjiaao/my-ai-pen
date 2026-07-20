@@ -3,6 +3,7 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { formatTodoSummary, type TodoOpName, type TodoParams } from "../stores/todo.js";
 import { TODO_TOOL_DESCRIPTION } from "../runtime/todo-harness.js";
 import { emitTodoPlanTreeUpdate } from "../runtime/plan-projection.js";
+import { assertTodoDoneAllowed } from "../stores/surface-ledger.js";
 import type { ToolRuntime } from "../types.js";
 import { jsonResult, textResult } from "./common.js";
 
@@ -19,10 +20,40 @@ export function createTodoTool(runtime: ToolRuntime): ToolDefinition<any> {
       task: Type.Optional(Type.String()),
       phase: Type.Optional(Type.String()),
       items: Type.Optional(Type.Array(Type.String())),
+      /** Graph coverage note: deadend|skipped_roe|probed|booked|n/a — blocks bare done when ledger has open surfaces */
+      note: Type.Optional(Type.String()),
     }),
     async execute(_id: string, params: any) {
       const op = String(params.op || "").trim().toLowerCase() as TodoOpName;
       if (!OPS.includes(op as (typeof OPS)[number])) return textResult(`error: op must be one of ${OPS.join(", ")}`);
+
+      // Graph: surface ledger is coverage truth — reject bare todo(done) while paths are open.
+      if (op === "done" && runtime.lifecycle.pentestGraph?.mode === "graph" && runtime.surfaceLedger) {
+        await runtime.surfaceLedger.load();
+        const summary = runtime.surfaceLedger.summary();
+        if (summary.total >= 1) {
+          const gate = assertTodoDoneAllowed({
+            task: params.task != null ? String(params.task) : undefined,
+            phase: params.phase != null ? String(params.phase) : undefined,
+            note: params.note != null ? String(params.note) : undefined,
+            summary,
+            hasActedMatch: (t) => runtime.surfaceLedger!.hasActedMatch(t),
+            findByLocationHint: (t) => runtime.surfaceLedger!.findByLocationHint(t),
+          });
+          if (!gate.ok) {
+            runtime.lifecycle.pendingTodoErrorReminder = [gate.error];
+            return textResult(gate.error, { isError: true });
+          }
+          if (gate.ledgerOp) {
+            if (gate.ledgerOp.op === "deadend") {
+              await runtime.surfaceLedger.markDeadend(gate.ledgerOp.location, gate.ledgerOp.note);
+            } else {
+              await runtime.surfaceLedger.markSkipped(gate.ledgerOp.location, gate.ledgerOp.note);
+            }
+          }
+        }
+      }
+
       const input: TodoParams = {
         op,
         list: Array.isArray(params.list)

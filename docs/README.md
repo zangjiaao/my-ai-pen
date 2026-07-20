@@ -8,6 +8,7 @@
 | [`prd.md`](prd.md) | Product requirements — **platform + single Node (Node4)** |
 | [`v1-delivery.md`](v1-delivery.md) | **V1 小交付**：范围 / 非目标 / 安装边界 / 已知限制（会话主入口；看板非 home） |
 | [`node4-harness.md`](node4-harness.md) | Node4 runtime north star (OMP-class harness, no agent finish) |
+| [`node4-task-graph.md`](node4-task-graph.md) | Pentest Free vs Graph work mode (scenario graphs, not LangGraph) |
 | [`design.md`](design.md) | UI design system |
 | [`node4-ctf-role.md`](node4-ctf-role.md) | CTF role pack operator notes |
 | [`node-expert-offers.md`](node-expert-offers.md) | Node packs + product Expert instances (@mention routing); target: Node `default` + experts |

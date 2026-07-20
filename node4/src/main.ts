@@ -232,6 +232,23 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
       : typeof message.engagementTemplate === "string"
         ? message.engagementTemplate
         : undefined;
+  const graphIdRaw =
+    typeof message.graph_id === "string"
+      ? message.graph_id
+      : typeof message.graphId === "string"
+        ? message.graphId
+        : undefined;
+  const graphMainActRaw = String(
+    message.graph_main_act ?? message.graphMainAct ?? "",
+  )
+    .trim()
+    .toLowerCase();
+  const graphMainAct =
+    graphMainActRaw === "delegate_only" || graphMainActRaw === "hard"
+      ? ("delegate_only" as const)
+      : graphMainActRaw === "delegate_preferred" || graphMainActRaw === "soft"
+        ? ("delegate_preferred" as const)
+        : undefined;
   const allowPostexRaw = message.allow_postex ?? message.allowPostex;
   const allowPostex =
     typeof allowPostexRaw === "boolean"
@@ -271,6 +288,8 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
     engagement: typeof message.engagement === "string" ? message.engagement : undefined,
     role: typeof message.role === "string" ? message.role : undefined,
     engagementTemplate: engagementTemplate?.trim() || undefined,
+    graphId: graphIdRaw?.trim() || undefined,
+    graphMainAct,
     allowPostex,
     accounts: message.accounts !== undefined ? message.accounts : undefined,
     goalObjective,

@@ -16,8 +16,11 @@ export type ExpertId =
 /** Built into every Node — not shown as installable 扩展包. */
 export const BUILTIN_PACK_IDS: ReadonlySet<string> = new Set(["default", "consult", "workspace"]);
 
-/** Structured engagement templates (RoE depth) — not free-text NLP. */
-export type EngagementTemplateId = "app_assessment" | "redteam_deep";
+/**
+ * Structured work mode / RoE for pentest — not free-text NLP.
+ * free = no scenario Graph (pure OMP); other ids load pack graphs.
+ */
+export type EngagementTemplateId = "free" | "app_assessment" | "redteam_deep";
 
 export const ENGAGEMENT_TEMPLATES: readonly {
   id: EngagementTemplateId;
@@ -26,15 +29,21 @@ export const ENGAGEMENT_TEMPLATES: readonly {
   allowPostex: boolean;
 }[] = [
   {
+    id: "free",
+    label: "自由 OMP",
+    description: "默认：Main 自执行；自愿 subagent；无场景图",
+    allowPostex: false,
+  },
+  {
     id: "app_assessment",
-    label: "应用评估",
-    description: "给定资产/账号；常规漏洞与越权；禁止后渗透",
+    label: "应用评估 (Graph)",
+    description: "场景图 + 强制 Subagent 委派；Main 入账；禁止后渗透",
     allowPostex: false,
   },
   {
     id: "redteam_deep",
-    label: "红队深度",
-    description: "授权外网发现与利用；允许范围内后渗透/横向",
+    label: "红队深度 (Graph)",
+    description: "场景图 + 强制 Subagent 委派；可后渗透/横向（授权内）",
     allowPostex: true,
   },
 ] as const;

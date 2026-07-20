@@ -134,7 +134,14 @@ export function formatAgentLanguageInjection(language: unknown): string {
 export function buildSystemPrompt(
   task: TaskEnvelope,
   pack: RolePack,
-  options?: { goals?: GoalStore; processFactIndex?: ProcessFactIndexEntry[] },
+  options?: {
+    goals?: GoalStore;
+    processFactIndex?: ProcessFactIndexEntry[];
+    /** Free vs Graph work-mode block from pentest-graph. */
+    workModeInjection?: string;
+    /** When Graph mode resolves RoE, override allow_postex. */
+    allowPostexOverride?: boolean;
+  },
 ): string {
   const vars = promptTemplateVars(task, pack);
   const render = (line: string) => renderPromptTemplate(line, vars);
@@ -142,9 +149,12 @@ export function buildSystemPrompt(
 
   const tools = pack.toolNames.join(", ");
   const roe = resolveEngagementRoe({
-    engagementTemplate: task.engagementTemplate,
+    engagementTemplate: task.engagementTemplate || task.graphId,
     engagement: task.engagement || task.role,
-    allowPostex: task.allowPostex,
+    allowPostex:
+      typeof options?.allowPostexOverride === "boolean"
+        ? options.allowPostexOverride
+        : task.allowPostex,
   });
   const lines = [
     ...pack.missionLines.map(render),
@@ -161,6 +171,9 @@ export function buildSystemPrompt(
     `Tools: ${tools}.`,
     `Booking mode: ${pack.bookingMode}. ${render(pack.settlementNote)}`,
   ];
+  if (options?.workModeInjection) {
+    lines.push("", options.workModeInjection, "");
+  }
   if (pack.skillIds?.length) {
     const gated = roe.allowPostex
       ? pack.skillIds
@@ -178,6 +191,8 @@ export function buildSystemPrompt(
   if (pack.toolNames.includes("subagent")) {
     lines.push(
       "Subagent handoff: require target, scope, already_done, this_turn_goal, success_criteria. Nested subagent is disallowed.",
+      "Without command=: child is a same-pack LLM loop (act tools only; no finding booking). Parent books with finding(confirm)+proof from child structured.candidates / tool output.",
+      "Optional command= runs a bounded shell probe only (deterministic).",
     );
   }
   if (pack.toolNames.includes("fact")) {

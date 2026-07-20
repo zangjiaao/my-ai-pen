@@ -1045,6 +1045,75 @@ async function main() {
   );
   assert(missHand.includes("handoff incomplete") || missHand.includes("missing"), "missing handoff rejected");
 
+  // LLM child path dry-run (no model call)
+  const prevDry = process.env.NODE4_SUBAGENT_DRY;
+  process.env.NODE4_SUBAGENT_DRY = "1";
+  const llmDry = JSON.parse(
+    textOf(
+      await exec(createSubagentTool(runtime), "s-llm-dry", {
+        target: "http://127.0.0.1:9/",
+        scope: "127.0.0.1 only",
+        already_done: "none",
+        this_turn_goal: "dry child package",
+        success_criteria: "result.json written",
+      }),
+    ),
+  );
+  if (prevDry === undefined) delete process.env.NODE4_SUBAGENT_DRY;
+  else process.env.NODE4_SUBAGENT_DRY = prevDry;
+  assert(llmDry.ok === true, `llm dry subagent: ${JSON.stringify(llmDry).slice(0, 200)}`);
+  assert(llmDry.structured?.summary, "llm dry has structured summary");
+
+  // Graph mode: node_type required + reject unknown
+  const { buildPentestGraphContext, resolvePentestGraph } = await import("./runtime/pentest-graph.js");
+  const gRes = await resolvePentestGraph({
+    task: {
+      ...runtime.task,
+      engagementTemplate: "app_assessment",
+    },
+    packId: "pentest",
+  });
+  runtime.lifecycle.pentestGraph = buildPentestGraphContext(gRes);
+  assert(runtime.lifecycle.pentestGraph.mode === "graph", "graph mode active for smoke");
+  const needNode = textOf(
+    await exec(createSubagentTool(runtime), "g-miss-node", {
+      target: "http://127.0.0.1:9/",
+      scope: "127.0.0.1 only",
+      already_done: "parent recon done",
+      this_turn_goal: "should require node_type",
+      success_criteria: "harness rejects missing node",
+      command: "echo ok",
+    }),
+  );
+  assert(needNode.includes("node_type") || needNode.includes("Graph mode"), `graph requires node_type: ${needNode.slice(0, 160)}`);
+  const badNode = textOf(
+    await exec(createSubagentTool(runtime), "g-bad-node", {
+      target: "http://127.0.0.1:9/",
+      scope: "127.0.0.1 only",
+      already_done: "parent recon done",
+      this_turn_goal: "illegal postex on assessment",
+      success_criteria: "harness rejects postex node",
+      node_type: "postex",
+      command: "echo ok",
+    }),
+  );
+  assert(badNode.includes("not in") || badNode.includes("error"), `graph rejects postex on assessment: ${badNode.slice(0, 160)}`);
+  const goodNode = JSON.parse(
+    textOf(
+      await exec(createSubagentTool(runtime), "g-ok-node", {
+        target: "http://127.0.0.1:9/",
+        scope: "127.0.0.1 only",
+        already_done: "parent recon done",
+        this_turn_goal: "surface slice",
+        success_criteria: "stdout contains graph-ok",
+        node_type: "surface",
+        command: "echo graph-ok",
+      }),
+    ),
+  );
+  assert(goodNode.ok === true && goodNode.node_type === "surface", `graph surface ok: ${JSON.stringify(goodNode).slice(0, 200)}`);
+  runtime.lifecycle.pentestGraph = undefined;
+
   // Compose continue with goals
   const composed = composeContinuePrompt({
     attempt: 1,

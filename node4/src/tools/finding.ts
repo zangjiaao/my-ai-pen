@@ -9,6 +9,11 @@ import {
   FINDING_TOOL_DESCRIPTION,
 } from "../runtime/booking-harness.js";
 import {
+  fallbackProofFromInjectedCandidates,
+  formatBookingHelpHint,
+  resolveBookingMaterialFromSubagentEvidence,
+} from "../runtime/subagent-booking.js";
+import {
   bookTimeEvidenceData,
   emitCaseEvidence,
   extractObservationHighlight,
@@ -178,12 +183,17 @@ export function createFindingTool(runtime: ToolRuntime): ToolDefinition<any> {
       location: Type.Optional(Type.String()),
       url: Type.Optional(Type.String()),
       description: Type.Optional(Type.String()),
-      /** Proving fragment from real tool output — primary path. */
+      /** Proving fragment from real tool output — primary path. Optional when subagent candidates exist. */
       proof: Type.Optional(Type.String()),
       observation: Type.Optional(Type.String()),
       /** Optional extra materials (rarely needed). */
       evidence_ids: Type.Optional(Type.Array(Type.String())),
       poc: Type.Optional(Type.String()),
+      /**
+       * Optional index into last subagent candidates / acceptance.ready_to_book.
+       * When set (or when location/title matches a candidate), harness uses VERBATIM proof_excerpt.
+       */
+      candidate_index: Type.Optional(Type.Number()),
     }),
     async execute(_id: string, params: any) {
       const action = String(params.action || "confirm").toLowerCase();
@@ -194,7 +204,7 @@ export function createFindingTool(runtime: ToolRuntime): ToolDefinition<any> {
       if (action !== "confirm") return textResult("error: action must be confirm or list");
       const title = String(params.title || "").trim();
       if (!title) return textResult("error: title required");
-      const location = String(params.location || params.url || "").trim();
+      let location = String(params.location || params.url || "").trim();
       if (!location) {
         return textResult(
           "error: location or url required — the concrete place the issue was observed (path, endpoint, or full URL)",
@@ -211,11 +221,6 @@ export function createFindingTool(runtime: ToolRuntime): ToolDefinition<any> {
           "error: location must include a request path or URL (e.g. /vulnerabilities/exec/ or https://host/path) — not payload-only text; put the payload in poc=",
         );
       }
-      const poc = String(params.poc || "").trim();
-      const pocCheck = pocDemonstratesIssue(poc);
-      if (!pocCheck.ok) {
-        return textResult(`error: ${pocCheck.reason}`);
-      }
       const description = String(params.description || "").trim();
       if (description.length < MIN_DESC_LEN) {
         return textResult(
@@ -223,21 +228,88 @@ export function createFindingTool(runtime: ToolRuntime): ToolDefinition<any> {
         );
       }
 
-      const proofText = String(params.proof || params.observation || "").trim();
+      const candidateIndex =
+        params.candidate_index != null && Number.isFinite(Number(params.candidate_index))
+          ? Number(params.candidate_index)
+          : undefined;
+      let poc = String(params.poc || "").trim();
+      let proofText = String(params.proof || params.observation || "").trim();
+      let bookSourceNote = "";
+
+      // Verbatim path: fill/replace proof+poc from last subagent candidates when matched.
+      const material = resolveBookingMaterialFromSubagentEvidence(runtime, {
+        title,
+        location,
+        proof: proofText,
+        poc,
+        candidate_index: candidateIndex,
+      });
+      if (material) {
+        // Always prefer candidate verbatim proof when a candidate matched (anti-paraphrase).
+        proofText = material.proof;
+        if (!poc || !pocDemonstratesIssue(poc).ok) {
+          poc = material.poc || poc;
+        }
+        bookSourceNote = material.note || "";
+      }
+
+      let pocCheck = pocDemonstratesIssue(poc);
+      if (!pocCheck.ok && material?.poc) {
+        poc = material.poc;
+        pocCheck = pocDemonstratesIssue(poc);
+      }
+      if (!pocCheck.ok) {
+        // Last try: ready_to_book poc from fallback
+        const fb = fallbackProofFromInjectedCandidates(runtime, { title, location });
+        if (fb?.poc && pocDemonstratesIssue(fb.poc).ok) {
+          poc = fb.poc;
+          if (!proofText || proofText.length < MIN_PROOF_LEN) proofText = fb.proof;
+          bookSourceNote = fb.note;
+          pocCheck = pocDemonstratesIssue(poc);
+        }
+      }
+      if (!pocCheck.ok) {
+        return textResult(`error: ${pocCheck.reason}`);
+      }
+
       const legacyIds = Array.isArray(params.evidence_ids)
         ? params.evidence_ids.map(String).filter(Boolean).filter((id, i, arr) => arr.indexOf(id) === i)
         : [];
 
-      // Primary path: agent supplies proof at booking time → system creates Case evidence.
+      // If still no proof, try candidate fill once more without agent proof
+      if (!proofText || proofText.length < MIN_PROOF_LEN) {
+        const fb = fallbackProofFromInjectedCandidates(runtime, { title, location });
+        if (fb) {
+          proofText = fb.proof;
+          bookSourceNote = fb.note;
+        }
+      }
+
+      // Primary path: proof (agent or harness-filled from candidate) → Case evidence.
       if (proofText) {
         if (proofText.length < MIN_PROOF_LEN) {
           return textResult(
-            `error: proof too short (≥${MIN_PROOF_LEN} chars) — paste the proving observation from tool output`,
+            `error: proof too short (≥${MIN_PROOF_LEN} chars) — paste the proving observation from tool output, or pass candidate_index / matching location from last subagent ready_to_book`,
           );
         }
-        const grounded = proofGroundedInRecentWork(proofText, runtime.lifecycle.recentObservations);
+        let grounded = proofGroundedInRecentWork(proofText, runtime.lifecycle.recentObservations);
         if (!grounded.ok) {
-          return textResult(`error: ${grounded.reason}`);
+          // Auto-swap to candidate verbatim if agent paraphrased
+          const fb = fallbackProofFromInjectedCandidates(runtime, { title, location });
+          if (fb && fb.proof !== proofText) {
+            const g2 = proofGroundedInRecentWork(fb.proof, runtime.lifecycle.recentObservations);
+            if (g2.ok) {
+              proofText = fb.proof;
+              if (!pocDemonstratesIssue(poc).ok && fb.poc) poc = fb.poc;
+              grounded = g2;
+              bookSourceNote = fb.note;
+            }
+          }
+        }
+        if (!grounded.ok) {
+          return textResult(
+            `error: ${grounded.reason}` + formatBookingHelpHint(runtime),
+          );
         }
 
         const evidencePayload = bookTimeEvidenceData({
@@ -270,7 +342,7 @@ export function createFindingTool(runtime: ToolRuntime): ToolDefinition<any> {
           },
         ];
 
-        return finalizeFinding(runtime, {
+        const finalized = await finalizeFinding(runtime, {
           title,
           location,
           poc,
@@ -282,12 +354,34 @@ export function createFindingTool(runtime: ToolRuntime): ToolDefinition<any> {
           proofText,
           howCaptured: how,
         });
+        // Coverage ledger: mark matching surface booked
+        try {
+          await runtime.surfaceLedger?.markBooked(location);
+        } catch {
+          /* non-fatal */
+        }
+        // Attach booking assist note for model/debug (json path only)
+        if (bookSourceNote && finalized && typeof finalized === "object") {
+          try {
+            const content = (finalized as { content?: Array<{ type?: string; text?: string }> }).content;
+            const textItem = content?.find((c) => c.type === "text");
+            if (textItem?.text?.trim().startsWith("{")) {
+              const obj = JSON.parse(textItem.text);
+              obj.booking_assist = bookSourceNote;
+              textItem.text = JSON.stringify(obj, null, 2);
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+        return finalized;
       }
 
       // Legacy: evidence_ids only (smokes / older agents). Prefer proof path.
       if (!legacyIds.length) {
         return textResult(
-          "error: proof required — after probing, call finding(confirm) with proof= the proving fragment from tool output (Case evidence is created from it). Do not hunt evidence_ids.",
+          "error: proof required — after subagent, pass location matching a candidate path (query ignored) or candidate_index=N; harness fills VERBATIM proof_excerpt." +
+            formatBookingHelpHint(runtime),
         );
       }
 

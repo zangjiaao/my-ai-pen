@@ -239,8 +239,8 @@ export default function ConversationPage() {
   const [input, setInput] = useState("");
   /** Explicit long-task Goal mode (structured field → Node4; not NLP). */
   const [goalModeEnabled, setGoalModeEnabled] = useState(false);
-  /** Structured engagement template (RoE depth) — not NLP. */
-  const [engagementTemplate, setEngagementTemplate] = useState<"app_assessment" | "redteam_deep">("app_assessment");
+  /** Structured work mode: free (default) | app_assessment | redteam_deep — not NLP. */
+  const [engagementTemplate, setEngagementTemplate] = useState<"free" | "app_assessment" | "redteam_deep">("free");
   const [caseHandoff, setCaseHandoff] = useState<{
     suggest_pack_id?: string;
     reason?: string;
@@ -703,7 +703,9 @@ export default function ConversationPage() {
         }>(`/api/conversations/${id}/case`);
         if (requestSeq !== stateRefreshSeqRef.current) return;
         const tmpl = String(caseData.engagement_template || "").trim();
-        if (tmpl === "redteam_deep" || tmpl === "app_assessment") {
+        if (tmpl === "free" || tmpl === "none") {
+          setEngagementTemplate("free");
+        } else if (tmpl === "redteam_deep" || tmpl === "app_assessment") {
           setEngagementTemplate(tmpl);
         } else if (caseData.allow_postex === true) {
           setEngagementTemplate("redteam_deep");
@@ -1975,7 +1977,11 @@ export default function ConversationPage() {
     // Keep selected partner after send so multi-turn stays with the same persona.
     setInput("");
     const isPentest = isPentestMentionTarget(resolved);
-    const tmpl = isPentest ? engagementTemplate : "";
+    // free/none → omit template (Node Free mode). Graph ids pass through.
+    const tmpl =
+      isPentest && engagementTemplate && engagementTemplate !== "free" && engagementTemplate !== "none"
+        ? engagementTemplate
+        : "";
     const enableGoal = isPentest && goalModeEnabled;
     // Asset「创建任务」draft: attach structured target/scope on first send after expert pick.
     const pendingAsset = pendingAssetTaskRef.current;
@@ -2031,7 +2037,7 @@ export default function ConversationPage() {
   const activePartner = selectedMention || mentionTargets[0] || null;
   const showPentestControls = isPentestMentionTarget(activePartner);
   const activeModeLabel =
-    ENGAGEMENT_TEMPLATES.find((t) => t.id === engagementTemplate)?.label || "应用评估";
+    ENGAGEMENT_TEMPLATES.find((t) => t.id === engagementTemplate)?.label || "自由 OMP";
 
   // Close partner / mode menus on outside click or Escape.
   useEffect(() => {

@@ -164,12 +164,36 @@ UI Elapsed = that window (local tick while running). Tool-call hooks do **not** 
 
 ---
 
-## 6. Subagent + goals
+## 6. Subagent + goals + Free/Graph work mode
 
 | Mechanism | Behavior |
 |-----------|----------|
 | `goal` | Tracks long-task objective + optional `token_budget` for display/telemetry. **Product default:** no outer `goal_continuation` inject (`NODE4_MAX_GOAL_CONTINUES` unset/0). Lab: `NODE4_MAX_GOAL_CONTINUES=unlimited` (or positive cap) re-enables outer inject while active. `complete` is free in code (active \| budget-limited); honesty is prompt-steered. Lab-only hard audit: `NODE4_GOAL_REQUIRE_CLEARANCE=1`. Open goals do not invent product findings. |
 | `subagent` | Child under `taskDir/subagents/<id>`; evidence written |
+| Work mode | **Free** (no scenario graph) vs **Graph** (`app_assessment` / `redteam_deep` via `graph_id` or `engagement_template`) |
+
+### OMP subagent scheduling
+
+Main (current seat session) decides when to spawn — not a separate Coordinator service and not a LangGraph DAG interpreter.
+
+| Path | Behavior |
+|------|----------|
+| No `command=` | **Homogeneous child LLM session** (same pack act tools: shell/http/session/browser/script/fs/fact/skill/todo). No parent chat. No nested subagent. **No finding booking** (Main books). Child writes `result.json` with structured candidates/facts/deadends. |
+| `command=` set | Bounded shell probe only (deterministic / smokes). |
+| Lab dry | `NODE4_SUBAGENT_DRY=1` skips LLM and writes a dry structured result. |
+
+### Free vs Graph (pentest)
+
+| Mode | Selection (structured only) | Discipline |
+|------|----------------------------|------------|
+| **Free** (default) | No graph / `free` | Pure OMP — Main may self-act; subagent optional |
+| **Graph** (product = hard) | `app_assessment` / `redteam_deep` | Node menu; Main **loses** shell/http/session/browser/script; dense act via subagent; child proofs → parent `recentObservations` for booking |
+
+Lab soft only: `NODE4_GRAPH_MAIN_ACT=soft`. UI default = Free. Lab: `scripts/bench-dvwa-work-modes.sh`.
+
+Configs: `experts/pentest/graphs/`. Loader: `node4/src/runtime/pentest-graph.ts`. Status emits `work_mode=free|graph:<id>`.
+
+**Surface ledger:** `taskDir/surfaces/ledger.json` — recon `surfaces[]` work queue; Graph `todo(done)` requires act/deadend/skip (see `docs/node4-task-graph.md`).
 
 ### Subagent handoff contract (A1 / D3)
 
@@ -183,11 +207,11 @@ Required structured fields on every `subagent` tool call (child does **not** inh
 | `this_turn_goal` | Single objective for this package |
 | `success_criteria` | Evidence shape that means success |
 
-Optional: `assignment` (notes), `command` (bounded shell in child), `goal_id`.
+Optional: `assignment` (notes), `command` (bounded shell in child), `goal_id`, `skill_id`, `node_type` (required in Graph mode).
 
 **Nested subagent-from-subagent is disallowed** (`lifecycle.subagentDepth >= 1` rejects). Children return structured evidence to the parent only. Exception would require explicit platform/docs enablement (none by default).
 
-Validation: `node4/src/runtime/subagent-handoff.ts`.
+Validation: `node4/src/runtime/subagent-handoff.ts`. Child session: `node4/src/runtime/subagent-session.ts`.
 
 ---
 

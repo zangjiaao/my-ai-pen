@@ -151,18 +151,20 @@ export class PanelAgentTracker {
     });
   }
 
-  noteSubagentStart(input: { id: string; assignment: string; goalId?: string }): void {
+  noteSubagentStart(input: { id: string; assignment: string; goalId?: string; nodeType?: string }): void {
+    const node = String(input.nodeType || "").trim();
+    const shortGoal = clipSubTask(input.assignment);
     this.children.set(input.id, {
       id: input.id,
-      name: `Subagent ${input.id.slice(0, 12)}`,
+      name: node ? `Subagent [${node}]` : `Subagent ${input.id.slice(0, 12)}`,
       status: "running",
       parent_id: "node4-main",
       task: input.assignment.slice(0, 240),
-      skills: [],
+      skills: node ? [node] : [],
       pending_count: 0,
       role: "subagent",
       current_action: "running",
-      current_detail: clipSubTask(input.assignment),
+      current_detail: node ? `[${node}] ${shortGoal}`.slice(0, 160) : shortGoal,
       goal_id: input.goalId,
     });
   }

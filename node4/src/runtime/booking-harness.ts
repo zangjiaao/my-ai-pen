@@ -70,8 +70,10 @@ export function eagerBookingInjection(): string {
 
 export const FINDING_TOOL_DESCRIPTION = [
   "ONLY product conclusion path for vuln / flag / challenge unlock / auth impact.",
-  "Finding = user-trustable conclusion; proof = fragment from your tool output that demonstrates the claim.",
-  "action=confirm requires: title, location|url, description, poc (≥40 chars how+result), proof (proving observation ≥24 chars from real tool output).",
+  "Finding = user-trustable conclusion; proof = fragment from tool/subagent output that demonstrates the claim.",
+  "action=confirm requires: title, location|url, description, poc (≥40 chars how+result).",
+  "proof: preferred; after subagent, harness can fill VERBATIM proof_excerpt when location/title matches a candidate or candidate_index is set.",
+  "Optional candidate_index indexes last subagent candidates / acceptance.ready_to_book.",
   "Case evidence is created automatically from proof — do not look up or pass evidence_ids.",
   "Prefer quoting response body / reflection / proving stdout. One strong proof is enough to trust and reproduce.",
   "action=list lists booked findings. Booking does NOT end the engagement.",

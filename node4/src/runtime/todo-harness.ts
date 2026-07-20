@@ -154,6 +154,7 @@ export const TODO_TOOL_DESCRIPTION = [
   "- done / drop / rm: task or phase or neither (all)",
   "- append: phase + items (creates phase if missing) — only when a new category appears",
   "- view: read-only",
+  "- optional note on done (Graph): deadend:<path> | skipped_roe:<path> | probed | booked | n/a (meta only)",
   "",
   "Anatomy: phase = short noun phrase (no \"1.\" / \"Phase 1:\" prefixes); task = 5–10 words, category-level, unique.",
   "Rules:",
@@ -161,5 +162,6 @@ export const TODO_TOOL_DESCRIPTION = [
   "- Prefer completing earlier phases before leaving them open while working ahead.",
   "- Keep task/phase strings stable; view if text lost.",
   "- Open todos never block product booking or harness settlement.",
+  "- Graph: surface ledger is coverage truth — bare done is rejected while open/in_probe paths remain; act via subagent or note=deadend|skipped_roe.",
   "- Follow role/mission for which categories to include; do not invent target answer keys.",
 ].join("\n");

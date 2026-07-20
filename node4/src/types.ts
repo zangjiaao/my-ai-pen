@@ -14,8 +14,20 @@ export type TaskEnvelope = {
   /**
    * Product engagement template (app_assessment | redteam_deep | …).
    * Structured only — never derived from instruction free text.
+   * Alias of scenario Graph id when using Graph work mode.
    */
   engagementTemplate?: string;
+  /**
+   * Explicit scenario Graph id (Free when unset/none).
+   * Prefer over engagementTemplate when both set. Structured only — no NLP.
+   */
+  graphId?: string;
+  /**
+   * Graph Main act discipline override (structured).
+   * delegate_preferred = soft prompt; delegate_only = strip Main act tools.
+   * Env NODE4_GRAPH_MAIN_ACT may also set this.
+   */
+  graphMainAct?: "delegate_preferred" | "delegate_only";
   /**
    * Rules-of-engagement: allow host post-ex / lateral.
    * When undefined, derived from engagementTemplate (default false).
@@ -75,6 +87,8 @@ export type ToolRuntime = {
   skillIds?: readonly string[];
   /** Process cognition facts (taskDir/facts) — separate from finding booking. */
   processFacts?: import("./stores/process-fact.js").ProcessFactStore;
+  /** Attack-surface ledger (taskDir/surfaces/ledger.json) — recon coverage truth. */
+  surfaceLedger?: import("./stores/surface-ledger.js").SurfaceLedgerStore;
   lifecycle: {
     toolsInLastSegment?: number;
     /** Set on failed todo apply; consumed by next harness continue injection. */
@@ -94,6 +108,19 @@ export type ToolRuntime = {
      * Subagent nest depth: 0 = top-level agent tools; >=1 rejects further subagent (D3).
      */
     subagentDepth?: number;
+    /**
+     * Optional pentest scenario Graph (Free vs Graph mode).
+     * Set by session-runner when pack is pentest.
+     */
+    pentestGraph?: import("./runtime/pentest-graph.js").PentestGraphContext;
+    /**
+     * Last subagent evidence package for verbatim finding(confirm) booking.
+     */
+    lastSubagentEvidence?: import("./runtime/subagent-booking.js").LastSubagentEvidence;
+    /** Multi-package cache (newest last); empty shell packages do not wipe prior candidates. */
+    subagentEvidenceCache?: import("./runtime/subagent-booking.js").LastSubagentEvidence[];
+    /** Flattened index rebuilt from cache for pathname matching / candidate_index. */
+    subagentCandidateIndex?: import("./runtime/subagent-booking.js").CachedCandidate[];
   };
 };
 

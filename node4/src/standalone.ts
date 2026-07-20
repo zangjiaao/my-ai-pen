@@ -54,6 +54,26 @@ async function main(): Promise<void> {
     caseContext = parseCaseContext(raw);
   }
 
+  // Work mode: --graph-id free|none|app_assessment|redteam_deep
+  // Soft vs hard Graph: --graph-main-act delegate_preferred|delegate_only (or soft|hard)
+  const graphIdArg = (args["graph-id"] || args.graph || args["engagement-template"] || "").trim();
+  const graphMainActArg = String(args["graph-main-act"] || args["main-act"] || "")
+    .trim()
+    .toLowerCase();
+  const graphMainAct =
+    graphMainActArg === "delegate_only" || graphMainActArg === "hard"
+      ? ("delegate_only" as const)
+      : graphMainActArg === "delegate_preferred" || graphMainActArg === "soft"
+        ? ("delegate_preferred" as const)
+        : undefined;
+
+  // If graph id is a known scenario, also set engagementTemplate for RoE resolve.
+  // free/none → Free mode (no template).
+  const graphIsFree = !graphIdArg || ["free", "none", "off"].includes(graphIdArg.toLowerCase());
+  const engagementTemplate = graphIsFree
+    ? undefined
+    : graphIdArg;
+
   const task: TaskEnvelope = {
     taskId,
     conversationId: args["conversation-id"] || taskId,
@@ -62,6 +82,9 @@ async function main(): Promise<void> {
     scope: { allow: (args.scope || target).split(",").map((s) => s.trim()).filter(Boolean) },
     engagement,
     role: args.role && args.role !== "bare" && args.role !== "runtime" ? args.role : undefined,
+    engagementTemplate,
+    graphId: graphIsFree ? undefined : graphIdArg,
+    graphMainAct,
     goalObjective,
     caseContext,
   };

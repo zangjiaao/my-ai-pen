@@ -53,6 +53,8 @@ export class SubagentHost {
     goalId?: string;
     worker: SubagentWorker;
     subagentId?: string;
+    /** Graph node type for panel label (optional). */
+    nodeType?: string;
   }): Promise<SubagentResult> {
     const subagentId = options.subagentId?.trim() || `sub_${Date.now()}_${++subSeq}`;
     const workDir = join(this.opts.taskDir, "subagents", subagentId);
@@ -64,7 +66,7 @@ export class SubagentHost {
 
     await writeFile(
       join(workDir, "assignment.md"),
-      `# Subagent ${subagentId}\n\n${options.assignment}\n\ngoalId: ${options.goalId || ""}\n`,
+      `# Subagent ${subagentId}\n\n${options.assignment}\n\ngoalId: ${options.goalId || ""}\nnodeType: ${options.nodeType || ""}\n`,
       "utf8",
     );
 
@@ -72,6 +74,7 @@ export class SubagentHost {
       id: subagentId,
       assignment: options.assignment,
       goalId: options.goalId,
+      nodeType: options.nodeType,
     });
 
     await this.opts.platform.send({
