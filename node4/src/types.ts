@@ -24,7 +24,7 @@ export type TaskEnvelope = {
   graphId?: string;
   /**
    * Graph Main act discipline override (structured).
-   * delegate_preferred = soft prompt; delegate_only = strip Main act tools.
+   * Product default: delegate_preferred (Main may act). delegate_only = lab hard strip.
    * Env NODE4_GRAPH_MAIN_ACT may also set this.
    */
   graphMainAct?: "delegate_preferred" | "delegate_only";

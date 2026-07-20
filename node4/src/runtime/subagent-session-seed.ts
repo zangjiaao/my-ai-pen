@@ -40,8 +40,8 @@ export async function seedChildSessionFromParent(
 
 /**
  * Promote child session jars back to parent after a package runs.
- * Required for Graph hard: Main cannot call session tools, so only children
- * create cookies — without promote, every package re-logins.
+ * Useful always; required under lab Graph hard when Main has no session tools
+ * (only children create cookies — without promote, every package re-logins).
  *
  * Merge strategy: copy child session tree onto parent (child cookies win on conflict).
  * No-op if child has no session/ or no cookie files.

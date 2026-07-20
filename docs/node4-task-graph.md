@@ -14,11 +14,11 @@
 | Mode | How selected | Behavior |
 |------|--------------|----------|
 | **Free** (product default) | No graph / `free` | Pure OMP; Main may self-act; voluntary subagent |
-| **Graph** (product = hard) | `app_assessment` or `redteam_deep` | Node menu + RoE; **Main act tools stripped**; dense act via subagent; Main books. Child proofs inject into parent observations for `finding(confirm)`. |
+| **Graph** (product = **soft**) | `app_assessment` or `redteam_deep` | Node menu + RoE + coverage honesty; **Main may act** and finish work; **sub optional** (heavy / polluting work); Main books. Child proofs inject into parent observations when sub is used. |
 
-Lab-only soft Graph: `NODE4_GRAPH_MAIN_ACT=soft` (not a product UI mode).
+Lab-only hard Graph (strip Main act tools): `NODE4_GRAPH_MAIN_ACT=hard` or task `graphMainAct=delegate_only`.
 
-UI default: **自由 OMP**.
+UI default: **自由 OMP**. Graph’s job is **plan + coverage**, not forced fan-out.
 
 ## Subagent + acceptance loop
 
@@ -52,7 +52,7 @@ Main DISPATCH (goal + success_criteria)
 - Batch runs with `mapWithConcurrencyLimit` — default concurrency **8** (`NODE4_SUBAGENT_CONCURRENCY`, clamp 1–16). Safety ceiling 32 packages (not a quality gate).
 - Sync only: soft package failure → `results[i].ok=false`; siblings continue.
 - **Path re-dispatch budget:** same pathname ≤ **2** dispatches/task.
-- **Session seed + promote:** child jars seed from parent `session/`; after each package, child cookies **promote back to parent** (Graph hard Main cannot call session tools — otherwise seed always empty).
+- **Session seed + promote:** child jars seed from parent `session/`; after each package, child cookies **promote back to parent** (still useful when Main does not re-login; required under lab hard).
 - **Worker keep-alive (OMP-style):** after LLM packages (incl. soft-fail/timeout), idle by **`agent_id`**. Default spawn **cold**. Warm only via `resume_agent_id` + **same-path affinity**. **Release:** active idle TTL (default **420s**), maxIdle LRU (8), maxPackages (4), `subagent(op=release)`, task-end `disposeAll`. List: `op=list`. Disable: `NODE4_SUBAGENT_IDLE=0`.
 - **Salvage:** missing `result.json` → candidates from tool-output/facts when possible.
 - Ledger/post-process mutex-serialized. Main still books.

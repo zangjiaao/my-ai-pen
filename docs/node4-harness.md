@@ -187,9 +187,9 @@ Main (current seat session) decides when to spawn — not a separate Coordinator
 | Mode | Selection (structured only) | Discipline |
 |------|----------------------------|------------|
 | **Free** (default) | No graph / `free` | Pure OMP — Main may self-act; subagent optional |
-| **Graph** (product = hard) | `app_assessment` / `redteam_deep` | Node menu; Main **loses** shell/http/session/browser/script; dense act via subagent; child proofs → parent `recentObservations` for booking |
+| **Graph** (product = **soft**) | `app_assessment` / `redteam_deep` | Node menu + coverage honesty; **Main may act**; sub optional for heavy/polluting work; Main books; child proofs → parent observations when sub used |
 
-Lab soft only: `NODE4_GRAPH_MAIN_ACT=soft`. UI default = Free. Lab: `scripts/bench-dvwa-work-modes.sh`.
+Lab hard (strip Main act): `NODE4_GRAPH_MAIN_ACT=hard`. UI default = Free. Lab: `scripts/bench-dvwa-work-modes.sh`.
 
 Configs: `experts/pentest/graphs/`. Loader: `node4/src/runtime/pentest-graph.ts`. Status emits `work_mode=free|graph:<id>`.
 
