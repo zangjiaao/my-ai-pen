@@ -195,7 +195,7 @@ Configs: `experts/pentest/graphs/`. Loader: `node4/src/runtime/pentest-graph.ts`
 
 **Surface ledger:** `taskDir/surfaces/ledger.json` — recon `surfaces[]` work queue; Graph `todo(done)` requires act/deadend/skip (see `docs/node4-task-graph.md`).
 
-**Parallel batch:** `subagent({ packages: [...] })` runs packages concurrently (default `NODE4_SUBAGENT_CONCURRENCY=3`, max 5 packages/call). Path re-dispatch ≤2. Parent session jars seeded into children. Missing `result.json` may be salvaged from tool-output.
+**Parallel batch:** `subagent({ packages: [...] })` concurrent (default `NODE4_SUBAGENT_CONCURRENCY=3`). Path re-dispatch ≤2. **Session promote:** child → parent jars after each package; **seed:** parent → next child. Missing `result.json` may be salvaged.
 
 ### Subagent handoff contract (A1 / D3)
 

@@ -52,8 +52,11 @@ export function resolveSubagentConcurrency(env: NodeJS.ProcessEnv = process.env)
   return Math.max(1, Math.min(8, Math.floor(n)));
 }
 
-/** Soft product max packages per batch (pentest — avoid 15+ one-module packs). */
-export const MAX_SUBAGENT_BATCH = 5;
+/**
+ * Safety ceiling only (abuse/DoS). Not a product quality gate —
+ * concurrent fan-out is bounded by NODE4_SUBAGENT_CONCURRENCY instead.
+ */
+export const MAX_SUBAGENT_BATCH = 32;
 
 /** Max dispatches per pathname per task (re-dispatch budget). */
 export const MAX_PATH_DISPATCHES = 2;

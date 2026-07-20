@@ -31,6 +31,8 @@ import {
   MAX_SUBAGENT_BATCH,
   resolveSubagentConcurrency,
 } from "../runtime/concurrency.js";
+import { promoteChildSessionToParent } from "../runtime/subagent-session-seed.js";
+import { dirname } from "node:path";
 
 export type SubagentPackageResult = {
   ok: boolean;
@@ -91,8 +93,8 @@ export function createSubagentTool(runtime: ToolRuntime): ToolDefinition<any> {
       "Spawn child work package(s) under this task workspace.",
       "FLAT: target, scope, already_done, this_turn_goal, success_criteria (+ optional node_type/skill_id).",
       "BATCH (OMP-style parallel): packages=[{target,this_turn_goal,success_criteria,...}] with optional shared context/scope/already_done.",
-      "Batch: concurrent (NODE4_SUBAGENT_CONCURRENCY default 3), max 5 packages/call. Prefer different paths; same path re-dispatch ≤2 then deadend.",
-      "Do NOT one-package-per-every-module forever — group or prioritize open ledger paths. Prefer session seed (parent jar) over re-login.",
+      "Batch: concurrent packages (NODE4_SUBAGENT_CONCURRENCY default 3). Same path re-dispatch ≤2 then deadend.",
+      "Prefer distinct open ledger paths; session cookies seed from parent after first login package (avoid re-login tax).",
       "Without command=: LLM child (preferred). Graph rejects command=.",
       "Returns candidates + surfaces + acceptance (flat) or results[] (batch).",
       "Nested subagent is DISALLOWED.",
@@ -132,8 +134,7 @@ export function createSubagentTool(runtime: ToolRuntime): ToolDefinition<any> {
       if (isBatch) {
         if (packagesRaw!.length > MAX_SUBAGENT_BATCH) {
           return textResult(
-            `error: packages length ${packagesRaw!.length} exceeds max ${MAX_SUBAGENT_BATCH}. ` +
-              "Prioritize open ledger paths; do not open one package per every module.",
+            `error: packages length ${packagesRaw!.length} exceeds safety ceiling ${MAX_SUBAGENT_BATCH}.`,
             { isError: true },
           );
         }
@@ -203,7 +204,7 @@ export function createSubagentTool(runtime: ToolRuntime): ToolDefinition<any> {
           guidance: [
             "BATCH ACCEPTANCE: for each results[i].acceptance.ready_to_book → finding(confirm) with location/candidate.",
             "Soft-failed packages (ok:false) → at most one re-dispatch with tighter success_criteria, then deadend; same path max 2 dispatches.",
-            "Book successful packages immediately; do not wait for every path. Prefer parent session seed over re-login.",
+            "Book successful packages immediately. Session jars promote parent←child after each package so later seeds skip re-login.",
           ].join(" "),
         });
       }
@@ -478,6 +479,15 @@ async function runSubagentPackage(
       };
     },
   });
+
+  // Shell path / any package: promote cookies parent←child (Graph hard needs this)
+  try {
+    if (result.artifactPath) {
+      await promoteChildSessionToParent(dirname(result.artifactPath), runtime.taskDir);
+    }
+  } catch {
+    /* non-fatal */
+  }
 
   const structured = normalizeSubagentResult(result.data, result.summary);
   const usedCommandOnly = Boolean(command);

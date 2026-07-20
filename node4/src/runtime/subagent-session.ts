@@ -29,7 +29,10 @@ import {
 } from "./subagent-result.js";
 import type { SubagentHandoffFields } from "./subagent-handoff.js";
 import { salvageSubagentResult } from "./subagent-salvage.js";
-import { seedChildSessionFromParent } from "./subagent-session-seed.js";
+import {
+  promoteChildSessionToParent,
+  seedChildSessionFromParent,
+} from "./subagent-session-seed.js";
 
 /** Act tools for child workers — no subagent, finding, goal, or platform ledger. */
 export const SUBAGENT_CHILD_TOOL_NAMES = [
@@ -413,6 +416,9 @@ export async function runSubagentLlmSession(
     await writeFile(join(workDir, "result.json"), JSON.stringify(structured, null, 2), "utf8");
   }
 
+  // Graph hard: Main cannot use session tools — push child cookies up so later packages seed.
+  const sessionPromote = await promoteChildSessionToParent(workDir, parent.taskDir);
+
   return {
     ok: structured.ok && !aborted,
     summary: structured.summary,
@@ -426,6 +432,7 @@ export async function runSubagentLlmSession(
       tools: segmentCounter.tools,
       workDir,
       session_seed: sessionSeed,
+      session_promote: sessionPromote,
       salvaged,
     },
   };

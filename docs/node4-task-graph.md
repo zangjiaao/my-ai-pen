@@ -48,14 +48,13 @@ Main DISPATCH (goal + success_criteria)
 
 ## Parallel subagent batch (OMP-style, v1)
 
-- Tool `subagent` accepts **flat** one package or **batch** `packages[]` (**max 5**/call) + optional shared `context`.
-- Batch runs with `mapWithConcurrencyLimit` — default concurrency **3** (`NODE4_SUBAGENT_CONCURRENCY`, clamp 1–8).
-- Sync only: tool blocks until all packages settle. Soft package failure → `results[i].ok=false`; siblings continue (no fail-fast).
-- **Path re-dispatch budget:** same pathname ≤ **2** dispatches/task (`MAX_PATH_DISPATCHES`); further attempts soft-fail with deadend guidance.
-- **Session seed:** parent `session/` cookie jars are copied into each child workDir so packages need not re-login when parent already authenticated.
-- **Salvage:** if child omits `result.json`, harness rebuilds candidates from tool-output/facts when possible (reduces empty re-dispatch loops).
-- Child `taskDir=workDir` isolates jars; ledger/post-process mutex-serialized.
-- Main still books; no auto-retry. Prefer quality waves over one-package-per-module forever.
+- Tool `subagent` accepts **flat** one package or **batch** `packages[]` + optional shared `context`.
+- Batch runs with `mapWithConcurrencyLimit` — default concurrency **3** (`NODE4_SUBAGENT_CONCURRENCY`, clamp 1–8). Safety ceiling 32 packages (not a quality gate).
+- Sync only: soft package failure → `results[i].ok=false`; siblings continue.
+- **Path re-dispatch budget:** same pathname ≤ **2** dispatches/task.
+- **Session seed + promote:** child jars seed from parent `session/`; after each package, child cookies **promote back to parent** (Graph hard Main cannot call session tools — otherwise seed always empty).
+- **Salvage:** missing `result.json` → candidates from tool-output/facts when possible.
+- Ledger/post-process mutex-serialized. Main still books.
 
 ## Non-goals
 

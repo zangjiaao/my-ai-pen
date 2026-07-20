@@ -47,5 +47,22 @@ const copied = await import("node:fs/promises").then((fs) =>
 );
 assert.match(copied, /PHPSESSID/);
 
+// promote child → parent (Graph hard path)
+const { promoteChildSessionToParent } = await import("./subagent-session-seed.js");
+const parent2 = join(root, "parent2");
+const child3 = join(root, "child3");
+await mkdir(join(child3, "session"), { recursive: true });
+await writeFile(join(child3, "session", "cookies.json"), JSON.stringify({ PHPSESSID: "from-child" }), "utf8");
+const prom = await promoteChildSessionToParent(child3, parent2);
+assert.equal(prom.promoted, true);
+const up = await import("node:fs/promises").then((fs) =>
+  fs.readFile(join(parent2, "session", "cookies.json"), "utf8"),
+);
+assert.match(up, /from-child/);
+// next seed from promoted parent
+const child4 = join(root, "child4");
+const seed2 = await seedChildSessionFromParent(parent2, child4);
+assert.equal(seed2.seeded, true);
+
 await rm(root, { recursive: true, force: true });
 console.log("subagent-salvage.test.ts: ok");
