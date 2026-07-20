@@ -27,6 +27,7 @@ import {
 import {
   createMutex,
   mapWithConcurrencyLimit,
+  MAX_PATH_DISPATCHES,
   MAX_SUBAGENT_BATCH,
   resolveSubagentConcurrency,
 } from "../runtime/concurrency.js";
@@ -90,7 +91,8 @@ export function createSubagentTool(runtime: ToolRuntime): ToolDefinition<any> {
       "Spawn child work package(s) under this task workspace.",
       "FLAT: target, scope, already_done, this_turn_goal, success_criteria (+ optional node_type/skill_id).",
       "BATCH (OMP-style parallel): packages=[{target,this_turn_goal,success_criteria,...}] with optional shared context/scope/already_done.",
-      "Batch runs packages concurrently (NODE4_SUBAGENT_CONCURRENCY default 3, max 8 packages). Soft package failures do not cancel siblings.",
+      "Batch: concurrent (NODE4_SUBAGENT_CONCURRENCY default 3), max 5 packages/call. Prefer different paths; same path re-dispatch ≤2 then deadend.",
+      "Do NOT one-package-per-every-module forever — group or prioritize open ledger paths. Prefer session seed (parent jar) over re-login.",
       "Without command=: LLM child (preferred). Graph rejects command=.",
       "Returns candidates + surfaces + acceptance (flat) or results[] (batch).",
       "Nested subagent is DISALLOWED.",
@@ -130,11 +132,13 @@ export function createSubagentTool(runtime: ToolRuntime): ToolDefinition<any> {
       if (isBatch) {
         if (packagesRaw!.length > MAX_SUBAGENT_BATCH) {
           return textResult(
-            `error: packages length ${packagesRaw!.length} exceeds max ${MAX_SUBAGENT_BATCH}`,
+            `error: packages length ${packagesRaw!.length} exceeds max ${MAX_SUBAGENT_BATCH}. ` +
+              "Prioritize open ledger paths; do not open one package per every module.",
             { isError: true },
           );
         }
         const resolved: ResolvedPackage[] = [];
+        const skipped: SubagentPackageResult[] = [];
         for (let i = 0; i < packagesRaw!.length; i++) {
           const raw = packagesRaw![i];
           const r = resolvePackageInput(params, raw, i);
@@ -143,6 +147,11 @@ export function createSubagentTool(runtime: ToolRuntime): ToolDefinition<any> {
           if (g) return textResult(g, { isError: true });
           if (r.pkg.goal_id && !runtime.goals.get(r.pkg.goal_id)) {
             return textResult(`error: goal not found: ${r.pkg.goal_id}`, { isError: true });
+          }
+          const pathLimit = checkAndCountPathDispatch(runtime, r.pkg.target);
+          if (!pathLimit.ok) {
+            skipped.push(softFailPackage(r.pkg, pathLimit.error!));
+            continue;
           }
           resolved.push(r.pkg);
         }
@@ -162,9 +171,12 @@ export function createSubagentTool(runtime: ToolRuntime): ToolDefinition<any> {
           runtime.lifecycle.abortSignal,
         );
 
-        const results: SubagentPackageResult[] = rawResults.map((r, i) =>
-          r ?? softFailPackage(resolved[i]!, "package cancelled or failed before result"),
-        );
+        const results: SubagentPackageResult[] = [
+          ...rawResults.map((r, i) =>
+            r ?? softFailPackage(resolved[i]!, "package cancelled or failed before result"),
+          ),
+          ...skipped,
+        ];
         const succeeded = results.filter((r) => r.ok).length;
         const failed = results.length - succeeded;
         let ready_total = 0;
@@ -190,8 +202,8 @@ export function createSubagentTool(runtime: ToolRuntime): ToolDefinition<any> {
           },
           guidance: [
             "BATCH ACCEPTANCE: for each results[i].acceptance.ready_to_book → finding(confirm) with location/candidate.",
-            "Soft-failed packages (ok:false) → re-dispatch that package or note=deadend on its path; siblings already ran.",
-            "Do not require all packages to succeed before booking successful ones.",
+            "Soft-failed packages (ok:false) → at most one re-dispatch with tighter success_criteria, then deadend; same path max 2 dispatches.",
+            "Book successful packages immediately; do not wait for every path. Prefer parent session seed over re-login.",
           ].join(" "),
         });
       }
@@ -203,6 +215,10 @@ export function createSubagentTool(runtime: ToolRuntime): ToolDefinition<any> {
       if (g) return textResult(g, { isError: true });
       if (flat.pkg.goal_id && !runtime.goals.get(flat.pkg.goal_id)) {
         return textResult(`error: goal not found: ${flat.pkg.goal_id}`, { isError: true });
+      }
+      const pathLimit = checkAndCountPathDispatch(runtime, flat.pkg.target);
+      if (!pathLimit.ok) {
+        return textResult(pathLimit.error!, { isError: true });
       }
 
       try {
@@ -319,6 +335,29 @@ function validateGraphAndCommand(runtime: ToolRuntime, pkg: ResolvedPackage): st
     );
   }
   return null;
+}
+
+function checkAndCountPathDispatch(
+  runtime: ToolRuntime,
+  target: string,
+): { ok: true } | { ok: false; error: string } {
+  const key = pathKey(target) || String(target || "").trim().toLowerCase().slice(0, 180);
+  if (!key) return { ok: true };
+  if (!runtime.lifecycle.subagentPathDispatchCounts) {
+    runtime.lifecycle.subagentPathDispatchCounts = {};
+  }
+  const counts = runtime.lifecycle.subagentPathDispatchCounts;
+  const prev = counts[key] || 0;
+  if (prev >= MAX_PATH_DISPATCHES) {
+    return {
+      ok: false,
+      error:
+        `error: path already dispatched ${prev} times (${key}). ` +
+        `Max ${MAX_PATH_DISPATCHES} per path — mark todo note=deadend:${key} or book existing candidates; do not re-open the same package.`,
+    };
+  }
+  counts[key] = prev + 1;
+  return { ok: true };
 }
 
 function softFailPackage(pkg: ResolvedPackage, error: string): SubagentPackageResult {

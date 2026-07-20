@@ -52,7 +52,11 @@ export function resolveSubagentConcurrency(env: NodeJS.ProcessEnv = process.env)
   return Math.max(1, Math.min(8, Math.floor(n)));
 }
 
-export const MAX_SUBAGENT_BATCH = 8;
+/** Soft product max packages per batch (pentest — avoid 15+ one-module packs). */
+export const MAX_SUBAGENT_BATCH = 5;
+
+/** Max dispatches per pathname per task (re-dispatch budget). */
+export const MAX_PATH_DISPATCHES = 2;
 
 /** Simple promise chain mutex for serializing short critical sections. */
 export function createMutex(): <T>(fn: () => Promise<T>) => Promise<T> {

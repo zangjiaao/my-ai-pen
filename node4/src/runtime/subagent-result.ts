@@ -410,6 +410,8 @@ export function formatSubagentReturnContractPrompt(): string {
     "- If you claim any vulnerability / exploitable issue, `candidates` MUST be non-empty.",
     "- Every candidate MUST include `location` + `proof_excerpt` (real tool output quote, not paraphrase-only).",
     "- `poc_hint` MUST include both how to reproduce AND what was observed.",
+    "- **Mandatory:** write `./result.json` before stop. Stopping without it forces incomplete salvage.",
+    "- Prefer session/http; use browser only for DOM/JS. If cookies were seeded, re-login only on auth failure.",
     "- Do **not** call finding(confirm) — the parent Main agent books product findings.",
     "- Do **not** call subagent — nested delegation is forbidden.",
     "- The parent cannot re-probe the target; your proof_excerpt is the only ground truth for booking.",

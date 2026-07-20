@@ -48,11 +48,14 @@ Main DISPATCH (goal + success_criteria)
 
 ## Parallel subagent batch (OMP-style, v1)
 
-- Tool `subagent` accepts **flat** one package or **batch** `packages[]` (max 8) + optional shared `context`.
+- Tool `subagent` accepts **flat** one package or **batch** `packages[]` (**max 5**/call) + optional shared `context`.
 - Batch runs with `mapWithConcurrencyLimit` — default concurrency **3** (`NODE4_SUBAGENT_CONCURRENCY`, clamp 1–8).
 - Sync only: tool blocks until all packages settle. Soft package failure → `results[i].ok=false`; siblings continue (no fail-fast).
-- Child `taskDir=workDir` isolates session jars. Ledger/post-process mutations are mutex-serialized.
-- Main still books; no auto-retry. Prompt: surface serial, then fan independent open paths.
+- **Path re-dispatch budget:** same pathname ≤ **2** dispatches/task (`MAX_PATH_DISPATCHES`); further attempts soft-fail with deadend guidance.
+- **Session seed:** parent `session/` cookie jars are copied into each child workDir so packages need not re-login when parent already authenticated.
+- **Salvage:** if child omits `result.json`, harness rebuilds candidates from tool-output/facts when possible (reduces empty re-dispatch loops).
+- Child `taskDir=workDir` isolates jars; ledger/post-process mutex-serialized.
+- Main still books; no auto-retry. Prefer quality waves over one-package-per-module forever.
 
 ## Non-goals
 

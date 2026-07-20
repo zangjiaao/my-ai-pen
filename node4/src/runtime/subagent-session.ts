@@ -28,6 +28,8 @@ import {
   type SubagentStructuredResult,
 } from "./subagent-result.js";
 import type { SubagentHandoffFields } from "./subagent-handoff.js";
+import { salvageSubagentResult } from "./subagent-salvage.js";
+import { seedChildSessionFromParent } from "./subagent-session-seed.js";
 
 /** Act tools for child workers — no subagent, finding, goal, or platform ledger. */
 export const SUBAGENT_CHILD_TOOL_NAMES = [
@@ -80,8 +82,10 @@ function childRolePack(parentPackId: string, skillIds?: readonly string[], skill
     ],
     workLines: [
       "Prefer act tools over long chat.",
+      "Prefer session/http over browser unless DOM/JS interaction is required.",
+      "If session cookies were seeded from parent, try them first — re-login only when auth fails.",
       "Write process facts with fact(upsert) when cognition is confirmed.",
-      "When done or blocked, write ./result.json per the return contract, then stop (no tools).",
+      "When done or blocked, write ./result.json per the return contract, then stop (no tools). result.json is mandatory.",
       "Never call subagent. Never book product findings (no finding tool).",
     ],
     toolNames: [...SUBAGENT_CHILD_TOOL_NAMES],
@@ -137,6 +141,9 @@ export async function runSubagentLlmSession(
   await mkdir(join(workDir, "tool-output"), { recursive: true });
   await mkdir(join(workDir, "pi-sessions"), { recursive: true });
 
+  // Prefer parent session jars so packages need not re-login every time.
+  const sessionSeed = await seedChildSessionFromParent(parent.taskDir, workDir);
+
   const dry =
     process.env.NODE4_SUBAGENT_DRY === "1" ||
     process.env.NODE4_SUBAGENT_DRY === "true";
@@ -149,14 +156,14 @@ export async function runSubagentLlmSession(
       facts: [],
       deadends: [],
       artifacts: [],
-      notes: "NODE4_SUBAGENT_DRY=1 — no LLM child session",
+      notes: `NODE4_SUBAGENT_DRY=1 — no LLM child session; session_seed=${sessionSeed.seeded}`,
     });
     await writeFile(join(workDir, "result.json"), JSON.stringify(structured, null, 2), "utf8");
     return {
       ok: true,
       summary: structured.summary,
       structured,
-      data: { kind: "llm_dry", structured, handoff },
+      data: { kind: "llm_dry", structured, handoff, session_seed: sessionSeed },
     };
   }
 
@@ -231,10 +238,21 @@ export async function runSubagentLlmSession(
   const userPrompt = [
     assignment,
     "",
+    sessionSeed.seeded
+      ? [
+          "## Session seed",
+          "Parent cookie jars were copied into this workDir (`session/`).",
+          "Use session tools with the existing jar first; re-login only if requests return login page / 401 / unauthenticated.",
+          "",
+        ].join("\n")
+      : "",
     formatSubagentReturnContractPrompt(),
     "",
-    "Begin acting toward this_turn_goal. When finished, write result.json and stop.",
-  ].join("\n");
+    "Begin acting toward this_turn_goal. Prefer session/http over browser unless DOM/JS is required.",
+    "Before you stop: write ./result.json with surfaces/candidates as required — this is mandatory.",
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   const authStorage = AuthStorage.create(join(config.piAgentDir, "auth.json"));
   setRuntimeApiKey(authStorage, config.modelProvider);
@@ -373,24 +391,25 @@ export async function runSubagentLlmSession(
     }
   }
 
-  const fileResult = await readResultFile(workDir);
-  const structured = normalizeSubagentResult(
-    fileResult ?? {
-      ok: segmentCounter.tools > 0 && !aborted,
-      summary: aborted
+  let fileResult = await readResultFile(workDir);
+  let structured: SubagentStructuredResult;
+  let salvaged = false;
+  if (fileResult) {
+    structured = normalizeSubagentResult(fileResult, handoff.this_turn_goal);
+  } else {
+    // Salvage tool-output/facts so Main can book or deadend without re-dispatch spam.
+    structured = await salvageSubagentResult({
+      workDir,
+      handoff,
+      toolsUsed: segmentCounter.tools,
+      aborted,
+      fallbackSummary: aborted
         ? "subagent aborted"
         : segmentCounter.tools > 0
-          ? "subagent finished (no result.json — parent should treat as incomplete structure)"
+          ? "subagent finished (no result.json)"
           : "subagent stopped without tools or result.json",
-      candidates: [],
-      facts: [],
-      deadends: fileResult ? [] : ["missing_result_json"],
-      artifacts: [],
-    },
-    handoff.this_turn_goal,
-  );
-
-  if (!fileResult) {
+    });
+    salvaged = structured.candidates.length > 0;
     await writeFile(join(workDir, "result.json"), JSON.stringify(structured, null, 2), "utf8");
   }
 
@@ -406,6 +425,8 @@ export async function runSubagentLlmSession(
       skill_id: input.skillId,
       tools: segmentCounter.tools,
       workDir,
+      session_seed: sessionSeed,
+      salvaged,
     },
   };
 }

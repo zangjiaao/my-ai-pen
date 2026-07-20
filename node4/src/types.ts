@@ -121,6 +121,11 @@ export type ToolRuntime = {
     subagentEvidenceCache?: import("./runtime/subagent-booking.js").LastSubagentEvidence[];
     /** Flattened index rebuilt from cache for pathname matching / candidate_index. */
     subagentCandidateIndex?: import("./runtime/subagent-booking.js").CachedCandidate[];
+    /**
+     * Pathname → how many times Main already dispatched a subagent package for it.
+     * Soft-limits re-dispatch spam (default max 2 per path).
+     */
+    subagentPathDispatchCounts?: Record<string, number>;
   };
 };
 
