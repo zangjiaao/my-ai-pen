@@ -2,9 +2,8 @@
 
 Independent **expert pack** units maintained outside the Node harness.
 
-**Active conversation plan:** [`docs/platform-default-agent-refactor.md`](../docs/platform-default-agent-refactor.md)  
-**Pack capability + maintenance plan:** [`docs/expert-pack-capability-and-maintenance.md`](../docs/expert-pack-capability-and-maintenance.md) (ClaudeBrain-adapted methodology; L1 pack / L2 sandbox / L3 hand PoC; n-day update runbook)  
-**Historical collab notes:** [`docs/archive/multi-expert-collaboration-plan.md`](../docs/archive/multi-expert-collaboration-plan.md)  
+**Runtime contracts:** [`docs/specs/expert-offers.md`](../docs/specs/expert-offers.md), [`docs/specs/harness.md`](../docs/specs/harness.md), [`docs/specs/pen-tools-sandbox.md`](../docs/specs/pen-tools-sandbox.md)  
+**Product:** [`docs/prd.md`](../docs/prd.md) · **Cleanup plan:** [`docs/project-cleanup-plan.md`](../docs/project-cleanup-plan.md)  
 (Experts = target families; stages = skills; pipeline = Case + user @ — not stage-named Experts.)
 
 | Path | Role |

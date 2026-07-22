@@ -2,7 +2,7 @@
  * L2 pen-sandbox / pen-tools tooling health probe (observability only).
  * Never gates task start, tool use, booking, or settlement.
  *
- * See docs/pen-tools-sandbox.md § tooling health.
+ * See docs/specs/pen-tools-sandbox.md § tooling health.
  */
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
