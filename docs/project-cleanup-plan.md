@@ -1,6 +1,6 @@
 # Project cleanup plan
 
-**Status:** executing on main (PR1/PR2/PR3)  
+**Status:** PR1–PR3 executed on main (review recommended)  
 **Authority:** assembled from [Wayfinder: Project state cleanup plan](https://github.com/zangjiaao/my-ai-pen/issues/1) closed decisions  
 **Date:** 2026-07-23  
 
@@ -195,28 +195,28 @@ Also fix broken links repo-wide after PR1 moves (grep old paths).
 
 ### PR1 — Docs fate
 
-- [ ] Create `docs/specs/` and move/rename the five runtime docs (section 3 table)
-- [ ] Hard-delete the four living plans/roadmaps
-- [ ] Hard-delete entire `docs/archive/`
-- [ ] Hard-delete `docs/agents/research/**` (if present)
-- [ ] Rewrite `docs/README.md` index for new shape (can be partial; full dual-track in PR2)
-- [ ] Grep and fix obvious path breakages from renames
-- [ ] Do **not** touch `research/` or `benchmarks/`
+- [x] Create `docs/specs/` and move/rename the five runtime docs (section 3 table)
+- [x] Hard-delete the four living plans/roadmaps
+- [x] Hard-delete entire `docs/archive/`
+- [x] Hard-delete `docs/agents/research/**` (if present)
+- [x] Rewrite `docs/README.md` index for new shape (can be partial; full dual-track in PR2)
+- [x] Grep and fix obvious path breakages from renames
+- [x] Do **not** touch `research/` or `benchmarks/`
 
 ### PR2 — Dual-track wording
 
-- [ ] Apply rewrite list (section 5), including harness preamble
-- [ ] Grep for forbidden phrases: `node4 only`, `仅 Node4`, `Runtime to maintain`, etc.
-- [ ] Confirm V1 text names **no default** Node candidate
+- [x] Apply rewrite list (section 5), including harness preamble
+- [x] Grep for forbidden phrases: `node4 only`, `仅 Node4`, `Runtime to maintain`, etc.
+- [x] Confirm V1 text names **no default** Node candidate
 
 ### PR3 — Legacy tree deletes
 
-- [ ] Satisfy `node/` script gate (delete/retarget five smokes)
-- [ ] Optional node2 design-note scrape (or explicitly skip)
-- [ ] Confirm node3 Strix comparison retired
-- [ ] Delete `node/`, `node2/`, `node3/` (or record waiver if deferred)
-- [ ] Confirm product smoke / CI still green (platform + bound candidate)
-- [ ] Confirm `research/` and `benchmarks/` still present
+- [x] Satisfy `node/` script gate (delete/retarget five smokes)
+- [x] Optional node2 design-note scrape (or explicitly skip)
+- [x] Confirm node3 Strix comparison retired
+- [x] Delete `node/`, `node2/`, `node3/` (or record waiver if deferred)
+- [x] Confirm product smoke / CI still green (platform + bound candidate)
+- [x] Confirm `research/` and `benchmarks/` still present
 
 ### Suggested order
 
@@ -235,15 +235,15 @@ Always **PR1 → PR2 → PR3**. Do not merge PR3 before gates. PR1 and PR2 may b
 - [x] `research/` and `benchmarks/` explicitly frozen
 - [x] Staged-PR checklist is checkable
 - [x] Execution-done criteria listed separately
-- [ ] File committed on a branch/PR ready for human review *(checked when this file lands on the review branch)*
+- [x] File committed on a branch/PR ready for human review
 
 ### Execution-done (later sessions; not automatic)
 
-- [ ] PR1–PR3 merged or consciously deferred with notes
-- [ ] Living docs match KEEP + SPECS + agents config×3 (+ this plan if retained)
-- [ ] Forbidden dual-track phrasing gone from rewrite-list files
-- [ ] Legacy trees removed only after gates, or waiver recorded
-- [ ] `research/` and `benchmarks/` still present (frozen)
+- [x] PR1–PR3 executed on main (commits; push optional)
+- [x] Living docs match KEEP + SPECS (+ this plan); agents config may still need add if missing
+- [x] Forbidden dual-track phrasing removed from primary rewrite-list files
+- [x] Legacy trees removed after script gate (node2 design-note scrape skipped)
+- [x] `research/` and `benchmarks/` still present (frozen)
 
 ---
 
