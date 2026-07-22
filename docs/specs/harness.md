@@ -1,16 +1,16 @@
-# Node4 Agent Runtime — OMP-class harness
+# Agent Runtime harness — OMP-class (node4 candidate detail)
 
-> **Commercial clean-room design** (no oh-my-pi / OMP source dependency).  
-> Calibrated: 2026-07-17  
-> **This is the only product Node runtime.** Code lives in `node4/`.  
+> **Dual-track preamble (pre-PK):** This file describes **one Node candidate’s** harness behavior — primarily the implementation in **`node4/`**. Peer candidate **`node5/`** is co-equal; documentation does **not** declare a PK winner. Platform binds to exactly one candidate per deployment.  
+> **Commercial clean-room design** for the node4 path (no oh-my-pi / OMP source dependency).  
+> Calibrated: 2026-07-23  
 > **Built-in seat `default`（工作台助手）** ships with every Node (platform data tools + light assist; no finding booking).  
 > **Expert packs** live under repo **`experts/`** (catalog); Node **installs** copies into a local install root to enable them.  
 > **Lab bare** `runtime`: clean OMP-aligned Agent Runtime (no expert pack) — goal auto-continue unbounded while active; optional `token_budget` → budget-limited; no session wall. A/B vs packs; **not** the product UI default participant.  
-> Product conversation model: [`docs/platform-default-agent-refactor.md`](platform-default-agent-refactor.md) (no platform peer Agent).  
-> Legacy trees (`node/`, `node2/`, `node3/`) are reference-only and will be removed later.  
+> Product conversation model: platform has **no** peer chat Agent; Node `default` + experts (shipped).  
+> Legacy trees (`node/`, `node2/`, `node3/`) are plan-delete after gates — do not expand.  
 > **No agent finish tool** — session end is harness/platform only.
 
-Related product specs: `docs/prd.md`, `AGENTS.md`, `docs/node-expert-offers.md`, `docs/node4-ctf-role.md`, `experts/README.md`.
+Related product specs: `docs/prd.md`, `AGENTS.md`, `docs/specs/expert-offers.md`, `docs/specs/ctf-role.md`, `docs/specs/task-graph.md`, `experts/README.md`.
 
 ---
 
@@ -78,7 +78,7 @@ cd node4 && npx tsx src/expert-cli.ts uninstall ctf
 
 Blank / `default` / `consult` engagement → **built-in `default` seat** (always available; not offers-gated).  
 Explicit **expert** engagement must match an **installed** pack (else blocked).  
-Empty install set → only `default` (+ lab bare if forced). Platform **offers** gate **expert** dispatch (`docs/node-expert-offers.md`).
+Empty install set → only `default` (+ lab bare if forced). Platform **offers** gate **expert** dispatch (`docs/specs/expert-offers.md`).
 
 | Pack / seat | Tools (summary) | Booking |
 |-------------|-----------------|---------|
@@ -90,8 +90,8 @@ Empty install set → only `default` (+ lab bare if forced). Platform **offers**
 **Model B (platform citizen base):** every pack loaded via `experts/load-pack` gets injected read tools (`platform_list_assets`, `platform_get_asset`, `platform_list_vulnerabilities`, `platform_get_vulnerability`, `platform_conversation_snapshot`) + Scope/ledger mission lines (`node4/src/roles/platform-citizen.ts`). Specialists add act tools; they do **not** silently create hosts (Authorize / next-scope / asset page only).
 
 Aliases live in each pack’s `pack.json` / `experts/catalog.json`.  
-Loader: `node4/src/experts/` + built-in default seat. CTF notes: `docs/node4-ctf-role.md`.  
-Platform data tools: see [`platform-default-agent-refactor.md`](platform-default-agent-refactor.md) §5.
+Loader: `node4/src/experts/` + built-in default seat. CTF notes: `docs/specs/ctf-role.md`.  
+Platform data tools: see [`Node default + ledger tools (shipped)`](Node default + ledger tools (shipped)) §5.
 
 ---
 
@@ -194,7 +194,7 @@ Lab hard (strip Main act): `NODE4_GRAPH_MAIN_ACT=hard`. UI default = Free. Lab: 
 
 Configs: `experts/pentest/graphs/`. Loader: `node4/src/runtime/pentest-graph.ts`. Status emits `work_mode=free|graph:<id>`.
 
-**Surface ledger:** `taskDir/surfaces/ledger.json` — recon `surfaces[]` work queue; Graph `todo(done)` requires act/deadend/skip (see `docs/node4-task-graph.md`).
+**Surface ledger:** `taskDir/surfaces/ledger.json` — recon `surfaces[]` work queue; Graph `todo(done)` requires act/deadend/skip (see `docs/specs/task-graph.md`).
 
 **Parallel batch:** `subagent({ packages: [...] })` concurrent (default `NODE4_SUBAGENT_CONCURRENCY=8`). Path re-dispatch ≤2. **Session promote/seed** parent↔child. **Worker keep-alive (OMP):** idle by `agent_id` after package (incl. soft-fail); warm with `resume_agent_id` + same-path affinity; **release** via idle TTL (~420s), maxIdle, `op=release`, or task end (`NODE4_SUBAGENT_IDLE_*`). Orthogonal paths cold-fan-out. Missing `result.json` may be salvaged.
 
@@ -309,7 +309,7 @@ Same conversation = shared Case. Joining experts receive `task_assign.case_conte
 
 Node `emitEvidence` writes truncated **properties** (`role`, `kind`, `excerpt`, path/url/body/stdout) to the platform so the next expert (e.g. code-audit after a source leak) can continue **without** prior `taskDir`.  
 `write` of material files emits `file_artifact` (path + preview). `read` does not book Case evidence.  
-Details (shipped behavior in code + `prd.md`); historical plan: `docs/archive/evidence-quality-plan.md`.
+Details (shipped behavior in code + `prd.md`); historical plan: git history.
 
 ---
 

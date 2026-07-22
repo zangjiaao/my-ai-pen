@@ -1,6 +1,6 @@
 # Pentest Free vs Graph work mode
 
-> Living companion to `docs/node4-harness.md` §6.  
+> Living companion to `docs/specs/harness.md` §6.  
 > Calibrated: 2026-07-21
 
 **Prompt single-source:** Graph captain/ledger/acceptance/packages live in runtime `formatGraphInjection` (`<work-mode>`). Pack `work.md` only points at that block for Graph detail — do not re-expand the same rules in work.md.

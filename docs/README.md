@@ -4,30 +4,48 @@
 
 | Doc | Role |
 |-----|------|
-| [`../AGENTS.md`](../AGENTS.md) | Agent engineering rules (no hardcoded behavior, harness over restriction, structured engagement) |
-| [`prd.md`](prd.md) | Product requirements — **platform + single Node (Node4)** |
-| [`v1-delivery.md`](v1-delivery.md) | **V1 小交付**：范围 / 非目标 / 安装边界 / 已知限制（会话主入口；看板非 home） |
-| [`node4-harness.md`](node4-harness.md) | Node4 runtime north star (OMP-class harness, no agent finish) |
-| [`node4-task-graph.md`](node4-task-graph.md) | Pentest Free vs Graph work mode (scenario graphs, not LangGraph) |
+| [`../AGENTS.md`](../AGENTS.md) | Agent engineering rules; pre-PK dual Node candidates |
+| [`prd.md`](prd.md) | Product requirements — platform + bound Node candidate + experts |
+| [`v1-delivery.md`](v1-delivery.md) | V1 delivery scope / non-goals / install boundary |
 | [`design.md`](design.md) | UI design system |
-| [`node4-ctf-role.md`](node4-ctf-role.md) | CTF role pack operator notes |
-| [`node-expert-offers.md`](node-expert-offers.md) | Node packs + product Expert instances (@mention routing); target: Node `default` + experts |
-| [`platform-default-agent-refactor.md`](platform-default-agent-refactor.md) | **Done:** remove platform conversation Agent → Node built-in `default` + platform data tools |
-| [`../experts/README.md`](../experts/README.md) | Expert pack catalog (source of pack content) |
-| [`expert-pack-capability-and-maintenance.md`](expert-pack-capability-and-maintenance.md) | **Active plan:** enhance pack discovery (ClaudeBrain-adapted methodology) + long-term pack/sandbox maintenance (L1/L2/L3, n-day runbook) |
-| [`pentest-next-steps.md`](pentest-next-steps.md) | **Near-term roadmap** after pack 1.1.1: lab validation, sandbox nuclei hygiene, gap-driven patches, optional FOFA/OSINT (from main + BTW agreements) |
-| [`cyberstrikeai-reference.md`](cyberstrikeai-reference.md) | CyberStrikeAI 参考清单：**A–E `[THIS]` done**; F1/F2 deferred; 不 vendor 对方运行时 |
-| [`../benchmarks/pentest-lab-1.1.1/README.md`](../benchmarks/pentest-lab-1.1.1/README.md) | Docker lab targets + standalone run recipes; [`LAB-NOTES.md`](../benchmarks/pentest-lab-1.1.1/LAB-NOTES.md) Phase L observations |
-| [`pen-tools-sandbox.md`](pen-tools-sandbox.md) | **L2:** unified **pen-sandbox** for pentest expert (shell + browser); Strix fallback only; Docker Hub CI |
-| [`../benchmarks/collab-playbook-b/README.md`](../benchmarks/collab-playbook-b/README.md) | **Manual lab:** multi-expert collaboration dry-run (code-audit ↔ pentest); `case_context` work-group thread |
+| [`project-cleanup-plan.md`](project-cleanup-plan.md) | Executable cleanup plan (staged PR checklist) |
 
-## Not product specs
+### Runtime contracts (`docs/specs/`)
+
+Candidate-specific implementation detail. See each file preamble for dual-track framing.
+
+| Doc | Role |
+|-----|------|
+| [`specs/harness.md`](specs/harness.md) | OMP-class harness (no agent finish) — primarily documents `node4/` candidate |
+| [`specs/task-graph.md`](specs/task-graph.md) | Free vs Graph work mode (scenario graphs) |
+| [`specs/pen-tools-sandbox.md`](specs/pen-tools-sandbox.md) | Unified pen-sandbox (shell + browser) |
+| [`specs/expert-offers.md`](specs/expert-offers.md) | Node packs + Expert instances (@mention routing) |
+| [`specs/ctf-role.md`](specs/ctf-role.md) | CTF role pack operator notes |
+
+### Agent process config
+
+| Doc | Role |
+|-----|------|
+| [`agents/issue-tracker.md`](agents/issue-tracker.md) | GitHub Issues / wayfinder operations |
+| [`agents/triage-labels.md`](agents/triage-labels.md) | Triage label vocabulary |
+| [`agents/domain.md`](agents/domain.md) | Domain docs consumer rules |
+
+### Related (outside `docs/`)
 
 | Path | Notes |
 |------|--------|
-| [`archive/`](archive/) | Historical only — **not** implementation authority. Includes finished plans (evidence A–E, phase milestones A–D, multi-expert collab v1) and older PLAID/Node2 drafts. |
+| [`../experts/README.md`](../experts/README.md) | Expert pack catalog |
+| [`../benchmarks/`](../benchmarks/) | **Frozen** lab evaluation assets (not product authority) |
+| [`../research/`](../research/) | **Frozen** third-party reference clones (not product) |
+| [`../node5/README.md`](../node5/README.md) | Node5 candidate (CLI research control arm) |
 
 ## Runtime code
 
-- **Maintain:** `node4/` — commercial execution kernel
-- **Reference only (future cleanup):** `node/`, `node2/`, `node3/`
+- **Co-equal Node candidates (pre-PK):** `node4/`, `node5/` — platform binds **exactly one** per deployment; docs do not declare a winner
+- **Product:** `platform/`, `experts/`, `sandbox/` (pen-sandbox)
+- **Legacy (plan-delete after gates):** `node/`, `node2/`, `node3/` — do not expand product behavior
+- **Frozen:** `research/`, `benchmarks/`
+
+## Spec precedence
+
+`AGENTS.md` → `docs/prd.md` → `docs/specs/harness.md` (candidate-specific) → other `docs/specs/*` / `docs/v1-delivery.md`

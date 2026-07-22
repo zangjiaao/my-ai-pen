@@ -26,7 +26,7 @@ Audit of real CTF runs showed hundreds of `curl -b/-c` shell turns. Use:
 
 ## Browser + captcha (assist, don’t restrict)
 
-- **browser (preferred path)**: Docker **pen-sandbox** (unified pentest image: `pen-sandbox:dev`) with in-container `agent-browser`; falls back to Strix if no first-party image. Same image runs **shell** scanners. See `docs/pen-tools-sandbox.md`.
+- **browser (preferred path)**: Docker **pen-sandbox** (unified pentest image: `pen-sandbox:dev`) with in-container `agent-browser`; falls back to Strix if no first-party image. Same image runs **shell** scanners. See `docs/specs/pen-tools-sandbox.md`.
   - Env: `NODE4_BROWSER_SANDBOX=1` (default). Set `0` / `host` to force host CLI.
   - Image override: `NODE4_BROWSER_SANDBOX_IMAGE`.
 - **browser (host fallback)**: `npm i -g agent-browser && agent-browser install` (+ `install --with-deps` if shared libs missing). Used only when sandbox cannot start.
@@ -48,4 +48,4 @@ Pure parser: `auditCtfEventsJsonl` in `src/runtime/ctf-audit.ts`.
 - Platform Goal switch can still supply a custom `goal_objective`; otherwise the pack seeds `defaultGoalObjective`.
 - No challenge answer keys in skills or recipes.
 - Selected only when the node **offers** include `ctf` (platform install) and the conversation sets structured `engagement=ctf`.
-- Other roles reuse the same harness; see `docs/node4-harness.md` and `docs/prd.md`. Product runtime is Node4 only.
+- Other roles reuse the same harness; see `docs/specs/harness.md` and `docs/prd.md`. Product runtime is Node4 only.

@@ -22,7 +22,7 @@ Independent **expert pack** units maintained outside the Node harness.
 
 ## Node as runtime
 
-Node4 is an OMP-class agent runtime with a **built-in `default` seat** (工作台助手) plus optional expert packs.
+The bound Node candidate (commonly `node4` today) is an OMP-class agent runtime with a **built-in `default` seat** (工作台助手) plus optional expert packs. Peer candidate `node5/` is co-equal pre-PK.
 
 **Model B — platform citizen base + specialist overlay:**
 
@@ -31,7 +31,7 @@ Node4 is an OMP-class agent runtime with a **built-in `default` seat** (工作�
 - **pentest / ctf / …** = citizen **read** + act tools (shell, finding, skills). Session isolation remains; platform knowledge is shared.
 - Host **create** is never a free agent tool — user asset page, open-task Authorize, or next-scope / promote only.
 
-1. **Built-in `default`** — always available; full platform ledger tools + light assist; **no** finding booking. Product target: [`docs/platform-default-agent-refactor.md`](../docs/platform-default-agent-refactor.md).
+1. **Built-in `default`** — always available; full platform ledger tools + light assist; **no** finding booking.
 2. **Catalog** — this tree (source of **expert** pack content; not auto-loaded).
 3. **Install root** — local expert copies (`node4/installed-experts/` by default, override `NODE4_EXPERTS_INSTALL`).
 

@@ -1,6 +1,6 @@
 # Project cleanup plan
 
-**Status:** ready for execution (staged PRs)  
+**Status:** executing on main (PR1/PR2/PR3)  
 **Authority:** assembled from [Wayfinder: Project state cleanup plan](https://github.com/zangjiaao/my-ai-pen/issues/1) closed decisions  
 **Date:** 2026-07-23  
 
@@ -82,11 +82,11 @@ Converge a half-rewritten repo into a navigable state:
 
 | From (today) | To (target) |
 |--------------|-------------|
-| `docs/node4-harness.md` | `docs/specs/harness.md` |
-| `docs/node4-task-graph.md` | `docs/specs/task-graph.md` |
-| `docs/pen-tools-sandbox.md` | `docs/specs/pen-tools-sandbox.md` |
-| `docs/node-expert-offers.md` | `docs/specs/expert-offers.md` |
-| `docs/node4-ctf-role.md` | `docs/specs/ctf-role.md` |
+| `docs/specs/harness.md` | `docs/specs/harness.md` |
+| `docs/specs/task-graph.md` | `docs/specs/task-graph.md` |
+| `docs/specs/pen-tools-sandbox.md` | `docs/specs/pen-tools-sandbox.md` |
+| `docs/specs/expert-offers.md` | `docs/specs/expert-offers.md` |
+| `docs/specs/ctf-role.md` | `docs/specs/ctf-role.md` |
 
 Content merge of harness + task-graph is **optional** and **not** required for plan completeness. After move, refresh all in-repo links.
 
@@ -185,7 +185,7 @@ Apply dual-track mandates (section 2) to:
 | 2 | `docs/prd.md` | Product model: dual candidates + bind-exactly-one; remove permanent node4-only claims |
 | 3 | `docs/v1-delivery.md` | Delivery boundary: no default candidate; ship path describes binding a candidate + platform + experts |
 | 4 | `docs/README.md` | Index for trunk + `docs/specs/` + dual-track; drop pointers to deleted plans/archive |
-| 5 | `docs/specs/harness.md` **preamble only** | After move from `node4-harness.md`: open with “describes **one candidate’s** harness behavior; peer is `node5/`; no winner declared.” Body may still document node4 implementation detail |
+| 5 | `docs/specs/harness.md` **preamble only** | After move from `docs/specs/harness.md`: open with “describes **one candidate’s** harness behavior; peer is `node5/`; no winner declared.” Body may still document node4 implementation detail |
 
 Also fix broken links repo-wide after PR1 moves (grep old paths).
 
