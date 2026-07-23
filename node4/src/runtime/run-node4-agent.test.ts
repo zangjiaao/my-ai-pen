@@ -1,12 +1,19 @@
 /**
- * Seam tests for runNode4Agent (core-only Agent Runtime).
+ * Seam tests for runNode4Agent / createBoundNode4Session (core-only Agent Runtime).
  * Fake session backend — no live LLM, no coding-agent.
  */
 
 import assert from "node:assert/strict";
-import { runNode4Agent, type Node4AgentSession } from "./run-node4-agent.js";
+import {
+  attachProductToolEventBridge,
+  resolveNode4Model,
+  runNode4Agent,
+  type Node4AgentSession,
+} from "./run-node4-agent.js";
 import type { AgentEvent } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
+import type { Node4Config } from "../config.js";
+import type { ToolRuntime } from "../types.js";
 
 const dummyModel = {
   id: "test",
@@ -46,6 +53,7 @@ function fakeSession(opts?: {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    followUp: () => {},
     get messages() {
       return [];
     },
@@ -112,6 +120,7 @@ async function testAbortStopsFurtherWork() {
           aborted = true;
         },
         subscribe: () => () => {},
+        followUp: () => {},
         get messages() {
           return [];
         },
@@ -124,8 +133,70 @@ async function testAbortStopsFurtherWork() {
   assert.equal(prompts, 1);
 }
 
+async function testToolEventBridgeSingleFanOut() {
+  const platformMsgs: Array<{ type: string; status?: string }> = [];
+  const segmentCounter = { tools: 0 };
+  const runtime = {
+    task: { conversationId: "c", taskId: "t" },
+    platform: {
+      send: async (msg: { type: string; status?: string }) => {
+        platformMsgs.push({ type: msg.type, status: msg.status });
+      },
+    },
+    lifecycle: { toolsInLastSegment: 0 },
+  } as unknown as ToolRuntime;
+
+  const session = fakeSession({
+    events: [
+      {
+        type: "tool_execution_start",
+        toolCallId: "1",
+        toolName: "shell",
+        args: {},
+      } as AgentEvent,
+      {
+        type: "tool_execution_end",
+        toolCallId: "1",
+        toolName: "shell",
+        result: { content: [{ type: "text", text: "ok" }], details: {} },
+        isError: false,
+      } as AgentEvent,
+    ],
+  });
+  attachProductToolEventBridge(session, runtime, segmentCounter);
+  await session.prompt("x");
+  assert.equal(segmentCounter.tools, 1);
+  assert.equal(runtime.lifecycle.toolsInLastSegment, 1);
+  assert.ok(platformMsgs.some((m) => m.type === "tool_output" && m.status === "running"));
+  assert.ok(platformMsgs.some((m) => m.type === "tool_output" && m.status === "done"));
+}
+
+async function testResolveModelOverrideBaseUrl() {
+  const cfg = {
+    modelProvider: "openai",
+    modelId: "gpt-4o",
+    llmBaseUrl: "http://127.0.0.1:4000/v1",
+  } as Node4Config;
+  const m = resolveNode4Model(cfg);
+  assert.equal(m.baseUrl, "http://127.0.0.1:4000/v1");
+  // Known catalog model should keep real api when present
+  if (m.api) assert.ok(typeof m.api === "string");
+}
+
+async function testResolveModelUnknownSynthetic() {
+  const cfg = {
+    modelProvider: "my-lab-proxy",
+    modelId: "local-llama",
+    llmBaseUrl: "http://127.0.0.1:11434/v1",
+  } as Node4Config;
+  const m = resolveNode4Model(cfg);
+  assert.equal(m.provider, "my-lab-proxy");
+  assert.equal(m.id, "local-llama");
+  assert.equal(m.baseUrl, "http://127.0.0.1:11434/v1");
+  assert.equal(m.api, process.env.LLM_API || "openai-completions");
+}
+
 async function testNoCodingAgentImportInModule() {
-  // Static contract: this file's implementation module must not depend on coding-agent.
   const fs = await import("node:fs/promises");
   const path = await import("node:path");
   const { fileURLToPath } = await import("node:url");
@@ -136,13 +207,16 @@ async function testNoCodingAgentImportInModule() {
     false,
     "run-node4-agent must not import coding-agent",
   );
-  assert.ok(src.includes("pi-agent-core"));
-  assert.ok(src.includes("pi-ai"));
+  assert.ok(src.includes("createBoundNode4Session"));
+  assert.ok(src.includes("getBuiltinModel") || src.includes("providers/all"));
 }
 
 async function main() {
   await testPromptAndEvents();
   await testAbortStopsFurtherWork();
+  await testToolEventBridgeSingleFanOut();
+  await testResolveModelOverrideBaseUrl();
+  await testResolveModelUnknownSynthetic();
   await testNoCodingAgentImportInModule();
   console.log("run-node4-agent.test.ts: ok");
 }

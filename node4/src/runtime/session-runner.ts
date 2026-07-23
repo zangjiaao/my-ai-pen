@@ -12,8 +12,7 @@ import { TodoStore } from "../stores/todo.js";
 import type { PlatformSink, TaskEnvelope, ToolRuntime } from "../types.js";
 import { toolNamesForPack } from "../tools/index.js";
 import { loadConfirmedFindings } from "../tools/finding.js";
-import { createNode4RuntimeBindings } from "./extension.js";
-import { resolveNode4Model, runNode4Agent } from "./run-node4-agent.js";
+import { createBoundNode4Session, type Node4AgentSession } from "./run-node4-agent.js";
 import { resolveTerminalTaskStatus } from "./harness-settlement.js";
 import {
   composeContinuePrompt,
@@ -219,7 +218,7 @@ export async function runNode4Task(
     counters: obsCounters,
   };
 
-  let sessionRef: { abort?: () => Promise<void>; subscribe?: (fn: (e: any) => void) => void } = {};
+  let sessionRef: Node4AgentSession | undefined;
   // No session wall/max-time (OMP-default style). Only platform/user cancel aborts.
   runtime.lifecycle.abortSignal = signal;
   if (signal) {
@@ -232,7 +231,11 @@ export async function runNode4Task(
           message: "harness abort: cancelled",
         })
         .catch(() => {});
-      void Promise.resolve(sessionRef.abort?.()).catch(() => {});
+      try {
+        sessionRef?.abort();
+      } catch {
+        /* ignore */
+      }
       // Drop warm subagent sessions so cancelled tasks do not leak LLM handles.
       void runtime.lifecycle.subagentIdlePool?.disposeAll?.().catch(() => {});
     };
@@ -256,9 +259,6 @@ export async function runNode4Task(
   });
   obsCounters.phase = chatOnly ? "chat" : "starting";
 
-  const model = resolveNode4Model(config);
-
-  const segmentCounter = { tools: 0 };
   const processFactIndex = await processFacts.list();
   // Graph hard: strip Main act tools; Free/soft keep full pack surface.
   const toolNames = applyMainActToolFilter(
@@ -275,21 +275,17 @@ export async function runNode4Task(
     allowPostexOverride:
       graphResolved.mode === "graph" ? graphResolved.allowPostex : task.allowPostex,
   });
-  const bindings = createNode4RuntimeBindings(runtime, segmentCounter, packForTools);
   // Chat-only: still register tools but prompt forbids using them until a target exists.
-  const session = await runNode4Agent({
+  const { session, segmentCounter } = await createBoundNode4Session({
+    config,
+    runtime,
+    pack: packForTools,
     systemPrompt,
-    tools: bindings.tools,
-    model,
     thinkingLevel: chatOnly ? "low" : "medium",
-    beforeToolCall: bindings.beforeToolCall,
-    afterToolCall: bindings.afterToolCall,
-    onAgent: bindings.attachAgent,
   });
-  sessionRef = session as any;
+  sessionRef = session;
 
-  // Platform observability: text stream, llm_usage, throttled checkpoints.
-  // Fire-and-forget so Pi token streaming is not blocked by platform WS/DB latency.
+  // Panel / text stream / usage — tool_output already bridged in createBoundNode4Session.
   session.subscribe((event) => {
     void handleNode4SessionEvent(obsCtx, textStream, checkpointThrottle, event).catch(() => {
       // Never let observability break the agent loop.
@@ -632,7 +628,7 @@ export async function runNode4Task(
   }
 
   try {
-    session.dispose?.();
+    session.dispose();
   } catch {
     // ignore
   }

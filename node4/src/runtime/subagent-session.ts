@@ -17,8 +17,7 @@ import { ProcessFactStore } from "../stores/process-fact.js";
 import { SkillStore } from "../stores/skill.js";
 import { TodoStore } from "../stores/todo.js";
 import type { TaskEnvelope, ToolRuntime } from "../types.js";
-import { createNode4RuntimeBindings } from "./extension.js";
-import { resolveNode4Model, runNode4Agent } from "./run-node4-agent.js";
+import { createBoundNode4Session } from "./run-node4-agent.js";
 import {
   formatSubagentReturnContractPrompt,
   normalizeSubagentResult,
@@ -520,17 +519,12 @@ async function runColdPackage(args: {
 
   const userPrompt = buildUserPrompt(assignment, sessionSeed.seeded, false);
 
-  const model = resolveNode4Model(config);
-  const segmentCounter = { tools: 0 };
-  const bindings = createNode4RuntimeBindings(childRuntime, segmentCounter, pack);
-  const session = await runNode4Agent({
+  const { session, segmentCounter } = await createBoundNode4Session({
+    config,
+    runtime: childRuntime,
+    pack,
     systemPrompt,
-    tools: bindings.tools,
-    model,
     thinkingLevel: "low",
-    beforeToolCall: bindings.beforeToolCall,
-    afterToolCall: bindings.afterToolCall,
-    onAgent: bindings.attachAgent,
   });
 
   const race = await raceSessionPrompt(session, userPrompt, abort);

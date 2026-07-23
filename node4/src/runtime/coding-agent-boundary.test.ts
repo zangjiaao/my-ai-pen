@@ -29,9 +29,17 @@ async function main() {
     "src/runtime/session-runner.ts",
     "src/runtime/subagent-session.ts",
     "src/runtime/hard-graph-stage-executor.ts",
+    "src/runtime/hard-graph-task.ts",
     "src/runtime/run-node4-agent.ts",
     "src/tools/index.ts",
   ];
+  // extension.ts must be gone (old coding-agent ExtensionAPI path)
+  try {
+    await readFile(join(node4Root, "src/runtime/extension.ts"), "utf8");
+    assert.fail("extension.ts should be removed");
+  } catch (err) {
+    assert.equal((err as NodeJS.ErrnoException).code, "ENOENT");
+  }
   for (const rel of files) {
     const src = await readFile(join(node4Root, rel), "utf8");
     assert.equal(

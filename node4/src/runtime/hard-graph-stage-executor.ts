@@ -2,7 +2,7 @@
  * Core-only stage executor for Hard Graph (Graph × Pi).
  *
  * Builds a **real** child ToolRuntime (stores + parent platform) like subagent
- * sessions — no fake goals/evidence stubs. Agent Runtime via runNode4Agent.
+ * sessions — no fake goals/evidence stubs. Agent Runtime via createBoundNode4Session.
  */
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -14,9 +14,8 @@ import { EvidenceStore } from "../stores/evidence.js";
 import { GoalStore } from "../stores/goal.js";
 import { ProcessFactStore } from "../stores/process-fact.js";
 import { TodoStore } from "../stores/todo.js";
-import { createNode4RuntimeBindings } from "./extension.js";
 import type { StageExecutor, StageExecutorInput, StageExecutorOutput } from "./hard-graph-runner.js";
-import { resolveNode4Model, runNode4Agent } from "./run-node4-agent.js";
+import { createBoundNode4Session } from "./run-node4-agent.js";
 import {
   absorbStageResultIntoParent,
   seedStageLifecycleFromParent,
@@ -115,9 +114,9 @@ function buildChildRuntime(options: {
 }
 
 /**
- * Build a StageExecutor that uses pi createAgentSession with a real child ToolRuntime.
+ * StageExecutor: real child ToolRuntime + createBoundNode4Session (core-only Runtime).
  */
-export function createPiHardGraphStageExecutor(options: {
+export function createHardGraphStageExecutor(options: {
   config: Node4Config;
   /** Parent Expert task runtime (platform, findingsDir, skills, …). */
   parentRuntime: ToolRuntime;
@@ -232,17 +231,12 @@ export function createPiHardGraphStageExecutor(options: {
           deadends: [deadend],
         });
 
-      const model = resolveNode4Model(config);
-      const segmentCounter = { tools: 0 };
-      const bindings = createNode4RuntimeBindings(childRuntime, segmentCounter, packForStage);
-      const session = await runNode4Agent({
+      const { session } = await createBoundNode4Session({
+        config,
+        runtime: childRuntime,
+        pack: packForStage,
         systemPrompt,
-        tools: bindings.tools,
-        model,
         thinkingLevel: "low",
-        beforeToolCall: bindings.beforeToolCall,
-        afterToolCall: bindings.afterToolCall,
-        onAgent: bindings.attachAgent,
       });
 
       try {
