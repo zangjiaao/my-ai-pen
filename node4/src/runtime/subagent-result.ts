@@ -28,6 +28,12 @@ export type SubagentFactNote = {
 export type SubagentStructuredResult = {
   ok: boolean;
   summary: string;
+  /**
+   * True when summary came from payload or explicit fallback argument.
+   * False when only the normalize default filler was used — Hard Graph gates use this
+   * instead of string-matching the default prose.
+   */
+  summaryProvided: boolean;
   candidates: SubagentCandidate[];
   /** Concrete entrypoints from recon (required for node_type=surface). */
   surfaces: SubagentSurface[];
@@ -153,11 +159,12 @@ export function normalizeSubagentResult(input: unknown, fallbackSummary = ""): S
   const topFacts = asFacts(body.facts);
   const nestedFacts = nestedStructured ? asFacts(nestedStructured.facts) : [];
 
-  const summary =
+  const summaryFromInput =
     asString(body.summary, 2000) ||
     asString(nestedStructured?.summary, 2000) ||
-    asString(fallbackSummary, 2000) ||
-    "subagent finished";
+    asString(fallbackSummary, 2000);
+  const summaryProvided = Boolean(summaryFromInput);
+  const summary = summaryFromInput || "subagent finished";
 
   const okRaw = typeof body.ok === "boolean" ? body.ok : nestedStructured?.ok;
   const ok =
@@ -166,6 +173,7 @@ export function normalizeSubagentResult(input: unknown, fallbackSummary = ""): S
   return {
     ok,
     summary,
+    summaryProvided,
     // Prefer non-empty candidate lists (nested structured often holds the real list)
     candidates: topCandidates.length ? topCandidates : nestedCandidates,
     surfaces: topSurfaces.length ? topSurfaces : nestedSurfaces,

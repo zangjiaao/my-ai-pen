@@ -101,54 +101,6 @@ export async function runNode4Task(
   /** default/consult/workspace: chat + ledger/report tools (not recon). Multi-tool work is in-loop, not outer continue. */
   const ledgerAssistSeat = isLedgerAssistSeat(pack.id);
 
-  /**
-   * Graph × Pi Hard Graph path (ownership inversion).
-   * Default / ledger-assist seats never enter Expert Hard Graph.
-   * Soft scenario menu remains the non-hard path below.
-   */
-  if (!chatOnly && !ledgerAssistSeat) {
-    const packRootForHard = (pack as { packRoot?: string }).packRoot;
-    const hardResolved = await resolveHardGraph({
-      task,
-      packRoot: packRootForHard,
-      packId: pack.id,
-      env: process.env,
-    });
-    if (hardResolved.mode === "hard") {
-      const hardOut = await runHardGraphExpertTask({
-        config,
-        platform,
-        task,
-        taskDir,
-        pack,
-        graph: hardResolved.graph,
-        signal,
-      });
-      // Harness settlement: runner-owned stages; no Main outer continues (ownership inversion).
-      const endTime = new Date().toISOString();
-      const emitStatus =
-        hardOut.terminalStatus === "completed"
-          ? "completed"
-          : hardOut.terminalStatus === "cancelled"
-            ? "incomplete"
-            : "failed";
-      await platform.send({
-        type: "task_complete",
-        conversation_id: task.conversationId,
-        task_id: task.taskId,
-        status: emitStatus,
-        summary: `Hard Graph ${hardOut.graphId} terminal=${hardOut.hardGraphTerminal}`,
-        stop_reason: `hard_graph_${hardOut.hardGraphTerminal}`,
-        continue_count: 0,
-        booked_findings: 0,
-        role_pack: pack.id,
-        work_mode: `hard_graph:${hardOut.graphId}:terminal:${hardOut.hardGraphTerminal}`,
-        end_time: endTime,
-      } as any);
-      return { terminalStatus: emitStatus, taskDir };
-    }
-  }
-
   const eventsPath = join(taskDir, "events.jsonl");
   await writeFile(eventsPath, "", "utf8");
   /** High-frequency frames must not wait on workspace disk (WSL /mnt is slow). */
@@ -218,7 +170,37 @@ export async function runNode4Task(
     panelAgents: panel,
   });
 
-  // Free vs Graph work mode (pentest scenario graphs; other packs stay free)
+  /**
+   * Graph × Pi Hard Graph path (ownership inversion).
+   * Runs only after parent ToolRuntime exists so stage sessions use real stores/platform.
+   * Default / ledger-assist seats never enter Expert Hard Graph.
+   * Settlement is sole ownership of settleHardGraphTask (not a second dialect here).
+   */
+  if (!chatOnly && !ledgerAssistSeat) {
+    const packRootForHard = (pack as { packRoot?: string }).packRoot;
+    const hardResolved = await resolveHardGraph({
+      task,
+      packRoot: packRootForHard,
+      packId: pack.id,
+      env: process.env,
+    });
+    if (hardResolved.mode === "hard") {
+      runtime.lifecycle.abortSignal = signal;
+      const hardOut = await runHardGraphExpertTask({
+        config,
+        platform: loggingPlatform,
+        task,
+        taskDir,
+        pack,
+        graph: hardResolved.graph,
+        parentRuntime: runtime,
+        signal,
+      });
+      return { terminalStatus: hardOut.harnessStatus, taskDir };
+    }
+  }
+
+  // Free vs soft scenario Graph (OMP Main path)
   const graphResolved = await resolvePentestGraph({
     task,
     packId: pack.id,

@@ -1,5 +1,5 @@
 /**
- * Ownership inversion + observability (fake stage executor, no live pi).
+ * Ownership inversion + observability + settlement (fake stage executor).
  * Run: npx tsx src/runtime/hard-graph-task.test.ts
  */
 import assert from "node:assert/strict";
@@ -10,7 +10,10 @@ import { tmpdir } from "node:os";
 import { loadHardGraphFile } from "./hard-graph-definition.js";
 import { runHardGraphExpertTask, emitHardGraphStageStatus } from "./hard-graph-task.js";
 import type { HardGraphStageEvent } from "./hard-graph-runner.js";
-import type { PlatformMessage } from "../types.js";
+import type { PlatformMessage, ToolRuntime } from "../types.js";
+import { TodoStore } from "../stores/todo.js";
+import { GoalStore } from "../stores/goal.js";
+import { EvidenceStore } from "../stores/evidence.js";
 
 const repoExperts = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -45,6 +48,19 @@ const pack = {
   toolNames: ["todo", "read", "fact", "skill", "shell", "http", "finding", "session", "browser", "script"],
 };
 
+const parentRuntime = {
+  task,
+  workspaceDir: taskDir,
+  taskDir,
+  platform,
+  todo: new TodoStore(),
+  evidence: new EvidenceStore(join(taskDir, "evidence")),
+  findingsDir: join(taskDir, "findings"),
+  goals: new GoalStore(),
+  rolePackId: "pentest",
+  lifecycle: { toolsInLastSegment: 0, subagentDepth: 0 },
+} as ToolRuntime;
+
 const fakeExecutor = async (input: {
   stage: { id: string };
   tools: string[];
@@ -70,37 +86,40 @@ const result = await runHardGraphExpertTask({
   config: {
     workspaceDir: taskDir,
     piAgentDir: join(taskDir, "pi"),
-    model: "test",
+    modelId: "test",
+    modelProvider: "openai",
   } as any,
   platform,
   task,
   taskDir,
   pack: pack as any,
   graph: graph!,
+  parentRuntime,
   stageExecutor: fakeExecutor as any,
 });
 
-assert.equal(result.hardGraphTerminal, "completed");
-assert.equal(result.terminalStatus, "completed");
+assert.equal(result.terminal, "completed");
+assert.equal(result.harnessStatus, "completed");
 assert.equal(result.graphId, "app_assessment_thin");
 
-// Observability: work_mode carries hard_graph:graph:stage
+// Single settlement dialect: exactly one task_complete
+const completes = messages.filter((m) => m.type === "task_complete");
+assert.equal(completes.length, 1);
+assert.equal((completes[0] as any).status, "completed");
+assert.equal((completes[0] as any).stop_reason, "hard_graph_completed");
+assert.ok(String((completes[0] as any).work_mode).includes("hard_graph:app_assessment_thin"));
+
 const workModes = messages
   .filter((m) => m.type === "work_status" || m.type === "status_update")
   .map((m) => String((m as any).work_mode || ""));
 assert.ok(workModes.some((w) => w.startsWith("hard_graph:app_assessment_thin")));
 assert.ok(workModes.some((w) => w.includes("surface")));
 
-const statusWithHard = messages.filter(
-  (m) => m.type === "status_update" && (m as any).hard_graph,
-);
-assert.ok(statusWithHard.length >= 2);
-
 const raw = await readFile(join(taskDir, "hard-graph", "run-result.json"), "utf8");
 const saved = JSON.parse(raw);
 assert.equal(saved.terminal, "completed");
 
-// emitHardGraphStageStatus unit
+// emitHardGraphStageStatus unit — no as-any required for PlatformMessage
 const ev: HardGraphStageEvent = {
   type: "stage_start",
   graphId: "g",

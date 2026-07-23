@@ -169,13 +169,12 @@ export async function resolveHardGraph(options: {
   )
     .trim()
     .toLowerCase();
-  const aliased = HARD_GRAPH_ALIASES[rawId] || (rawId === "app_assessment_thin" ? rawId : null);
+  const aliased = HARD_GRAPH_ALIASES[rawId] ?? null;
 
-  let hardId: string | null = null;
-  if (aliased) {
-    hardId = aliased;
-  } else if (taskHard || envHard) {
-    hardId = aliased || "app_assessment_thin";
+  // Explicit hard graph id, or discipline/env → default thin path.
+  let hardId: string | null = aliased;
+  if (!hardId && (taskHard || envHard)) {
+    hardId = "app_assessment_thin";
   }
 
   if (!hardId || !options.packRoot) {

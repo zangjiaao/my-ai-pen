@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { loadHardGraphFile } from "./hard-graph-definition.js";
 import {
   evaluateStageGate,
+  hardGraphToHarnessStatus,
   runHardGraph,
   type StageExecutor,
 } from "./hard-graph-runner.js";
@@ -41,11 +42,15 @@ const goodSurf = normalizeSubagentResult({
 });
 assert.equal(evaluateStageGate(surfaceStage, goodSurf).ok, true);
 
-// Empty summary fails init
+// Empty summary fails init — summaryProvided false (no magic string match)
 const initStage = graph!.stages.find((s) => s.id === "init")!;
+const emptyNorm = normalizeSubagentResult({ ok: true });
+assert.equal(emptyNorm.summaryProvided, false);
+assert.equal(evaluateStageGate(initStage, emptyNorm).ok, false);
+// Explicit summary works
 assert.equal(
-  evaluateStageGate(initStage, normalizeSubagentResult({ ok: true, summary: "" })).ok,
-  false,
+  evaluateStageGate(initStage, normalizeSubagentResult({ ok: true, summary: "init ok" })).ok,
+  true,
 );
 
 // Happy path with fake executor — hard order, all pass
@@ -101,21 +106,19 @@ assert.deepEqual(
 assert.ok(result.handoff.surfaces.some((s) => s.location === "http://t/"));
 assert.ok(result.handoff.completed_stages.includes("surface"));
 assert.ok(events.includes("run:completed"));
-// Tool profile on init excludes shell
 assert.ok(seenTools.init);
 assert.ok(!seenTools.init.includes("shell"));
 assert.ok(seenTools.init.includes("todo"));
-// surface allows shell
 assert.ok(seenTools.surface?.includes("shell"));
 
-// Fail-closed: surface never returns surfaces → blocked, later stages not run
+// Fail-closed: surface never returns surfaces → blocked; intermediate attempts are failed_attempt
 const order2: string[] = [];
+const attemptOutcomes: string[] = [];
 const blockedExec: StageExecutor = async (input) => {
   order2.push(input.stage.id);
   if (input.stage.id === "init") {
     return { structured: { ok: true, summary: "init ok", surfaces: [], candidates: [] } };
   }
-  // surface always empty
   return { structured: { ok: true, summary: "empty", surfaces: [], candidates: [] } };
 };
 
@@ -123,10 +126,20 @@ const blocked = await runHardGraph({
   graph: graph!,
   executeStage: blockedExec,
   availableTools: ["todo", "read", "shell", "http", "fact", "skill", "finding"],
+  onEvent: (e) => {
+    if (e.type === "stage_end" && e.stageId === "surface") {
+      attemptOutcomes.push(e.outcome);
+    }
+  },
 });
 assert.equal(blocked.terminal, "blocked");
-assert.deepEqual(order2.filter((id, i, a) => a.indexOf(id) === i), ["init", "surface"]);
+assert.equal(hardGraphToHarnessStatus("blocked"), "failed");
+assert.equal(hardGraphToHarnessStatus("aborted"), "incomplete");
+assert.equal(hardGraphToHarnessStatus("completed"), "completed");
 assert.ok(!order2.includes("class_probe"), "must not skip to later stages");
+assert.ok(attemptOutcomes.includes("failed_attempt"), "retryable failure is failed_attempt");
+assert.ok(attemptOutcomes.includes("blocked"), "final failure is blocked");
+assert.notEqual(attemptOutcomes[0], "blocked", "first surface fail is not terminal blocked");
 const surfaceRec = blocked.stages.find((s) => s.stageId === "surface");
 assert.equal(surfaceRec?.outcome, "blocked");
 assert.ok((surfaceRec?.attempts ?? 0) >= 2, "retries for surface max_retries=1");
@@ -161,8 +174,6 @@ const retried = await runHardGraph({
 });
 assert.equal(retried.terminal, "completed");
 assert.equal(surfaceAttempts, 2);
-
-// Cannot invent out-of-order stages: runner only walks definition order
 assert.equal(
   retried.stages.map((s) => s.stageId).join(","),
   graph!.stages.map((s) => s.id).join(","),

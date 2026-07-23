@@ -21,7 +21,6 @@ export type HardGraphHandoff = {
   facts: SubagentStructuredResult["facts"];
   deadends: string[];
   notes?: string;
-  /** Accumulated stage ids completed */
   completed_stages: string[];
 };
 
@@ -30,26 +29,28 @@ export type StageExecutorInput = {
   stageIndex: number;
   graphId: string;
   handoff: HardGraphHandoff;
-  /** Effective tool names after profile */
   tools: string[];
   toolProfile: HardGraphToolProfile;
 };
 
 export type StageExecutorOutput = {
-  /** Arbitrary structured payload; normalized via subagent result contract */
   structured?: unknown;
   summary?: string;
 };
 
 export type StageExecutor = (input: StageExecutorInput) => Promise<StageExecutorOutput>;
 
-export type StageOutcome = "passed" | "blocked" | "aborted";
+/** Attempt-level outcome (emitted on stage_end). */
+export type StageAttemptOutcome = "passed" | "failed_attempt" | "blocked" | "aborted";
+
+/** Final stage row in run result. */
+export type StageFinalOutcome = "passed" | "blocked" | "aborted";
 
 export type HardGraphStageRecord = {
   stageId: string;
   stageIndex: number;
   attempts: number;
-  outcome: StageOutcome;
+  outcome: StageFinalOutcome;
   errors: string[];
   summary?: string;
 };
@@ -68,7 +69,8 @@ export type HardGraphStageEvent =
       stageId: string;
       stageIndex: number;
       attempt: number;
-      outcome: StageOutcome;
+      /** failed_attempt = will retry; blocked = terminal for stage */
+      outcome: StageAttemptOutcome;
       errors: string[];
       summary?: string;
     }
@@ -78,6 +80,7 @@ export type HardGraphStageEvent =
       terminal: HardGraphTerminal;
     };
 
+/** Single terminal vocabulary for Hard Graph runs. */
 export type HardGraphTerminal = "completed" | "blocked" | "aborted";
 
 export type HardGraphRunResult = {
@@ -91,6 +94,7 @@ export type StageGateResult = { ok: true } | { ok: false; errors: string[] };
 
 /**
  * Fail-closed Feedback: evaluate normalized structured result against stage.require.
+ * Uses summaryProvided (not prose string-match) for summary gates.
  */
 export function evaluateStageGate(
   stage: HardGraphStageDef,
@@ -100,11 +104,8 @@ export function evaluateStageGate(
   const errors: string[] = [];
 
   const wantSummary = require.summary !== false;
-  if (wantSummary) {
-    const s = String(structured.summary || "").trim();
-    if (!s || s === "subagent finished") {
-      errors.push("summary_required");
-    }
+  if (wantSummary && !structured.summaryProvided) {
+    errors.push("summary_required");
   }
 
   if (typeof require.surfaces_min === "number" && require.surfaces_min > 0) {
@@ -123,7 +124,6 @@ export function evaluateStageGate(
     }
   }
 
-  // Explicit ok:false from stage is a gate failure (fail-closed)
   if (structured.ok === false) {
     errors.push("structured_ok_false");
   }
@@ -156,7 +156,7 @@ function mergeHandoff(
     }
   }
   return {
-    summary: structured.summary || prev.summary,
+    summary: structured.summaryProvided ? structured.summary : prev.summary,
     surfaces,
     candidates: [...prev.candidates, ...structured.candidates].slice(0, 80),
     facts: [...prev.facts, ...structured.facts].slice(0, 80),
@@ -166,13 +166,21 @@ function mergeHandoff(
   };
 }
 
+function runEndResult(
+  graphId: string,
+  terminal: HardGraphTerminal,
+  stages: HardGraphStageRecord[],
+  handoff: HardGraphHandoff,
+): HardGraphRunResult {
+  return { graphId, terminal, stages, handoff };
+}
+
 /**
  * Run Hard Graph stages in hard order. Cannot skip. Feedback is runner-owned.
  */
 export async function runHardGraph(options: {
   graph: HardGraphDefinition;
   executeStage: StageExecutor;
-  /** Universe of tool names available to the Expert seat before profile filter */
   availableTools: readonly string[];
   initialHandoff?: HardGraphHandoff;
   onEvent?: (event: HardGraphStageEvent) => void | Promise<void>;
@@ -191,12 +199,7 @@ export async function runHardGraph(options: {
 
   for (let stageIndex = 0; stageIndex < graph.stages.length; stageIndex++) {
     if (options.abortSignal?.aborted) {
-      const result: HardGraphRunResult = {
-        graphId: graph.id,
-        terminal: "aborted",
-        stages: records,
-        handoff,
-      };
+      const result = runEndResult(graph.id, "aborted", records, handoff);
       await emit({ type: "run_end", graphId: graph.id, terminal: "aborted" });
       return result;
     }
@@ -248,12 +251,12 @@ export async function runHardGraph(options: {
             facts: [],
             deadends: ["stage_executor_threw"],
           },
-          "stage_executor_error",
+          err instanceof Error ? err.message : "stage_executor_error",
         );
       }
 
       const gate = evaluateStageGate(stage, structured);
-      lastSummary = structured.summary;
+      lastSummary = structured.summaryProvided ? structured.summary : lastSummary;
 
       if (gate.ok) {
         handoff = mergeHandoff(handoff, structured, stage.id);
@@ -279,31 +282,24 @@ export async function runHardGraph(options: {
         stageId: stage.id,
         stageIndex,
         attempt,
-        outcome: isLast ? "blocked" : "blocked",
+        outcome: isLast ? "blocked" : "failed_attempt",
         errors: gate.errors,
         summary: structured.summary,
       });
-      // retry loop continues unless last
     }
 
     if (!passed) {
+      const aborted = Boolean(options.abortSignal?.aborted);
       records.push({
         stageId: stage.id,
         stageIndex,
         attempts,
-        outcome: options.abortSignal?.aborted ? "aborted" : "blocked",
+        outcome: aborted ? "aborted" : "blocked",
         errors: lastErrors,
         summary: lastSummary,
       });
-      const terminal: HardGraphTerminal = options.abortSignal?.aborted
-        ? "aborted"
-        : "blocked";
-      const result: HardGraphRunResult = {
-        graphId: graph.id,
-        terminal,
-        stages: records,
-        handoff,
-      };
+      const terminal: HardGraphTerminal = aborted ? "aborted" : "blocked";
+      const result = runEndResult(graph.id, terminal, records, handoff);
       await emit({ type: "run_end", graphId: graph.id, terminal });
       return result;
     }
@@ -318,12 +314,16 @@ export async function runHardGraph(options: {
     });
   }
 
-  const result: HardGraphRunResult = {
-    graphId: graph.id,
-    terminal: "completed",
-    stages: records,
-    handoff,
-  };
+  const result = runEndResult(graph.id, "completed", records, handoff);
   await emit({ type: "run_end", graphId: graph.id, terminal: "completed" });
   return result;
+}
+
+/** Map Hard Graph terminal → platform harness task_complete status (single dictionary). */
+export function hardGraphToHarnessStatus(
+  terminal: HardGraphTerminal,
+): "completed" | "incomplete" | "failed" {
+  if (terminal === "completed") return "completed";
+  if (terminal === "aborted") return "incomplete";
+  return "failed";
 }
