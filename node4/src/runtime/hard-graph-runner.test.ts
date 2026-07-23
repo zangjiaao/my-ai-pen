@@ -133,7 +133,7 @@ const blocked = await runHardGraph({
   },
 });
 assert.equal(blocked.terminal, "blocked");
-assert.equal(hardGraphToHarnessStatus("blocked"), "failed");
+assert.equal(hardGraphToHarnessStatus("blocked"), "blocked");
 assert.equal(hardGraphToHarnessStatus("aborted"), "incomplete");
 assert.equal(hardGraphToHarnessStatus("completed"), "completed");
 assert.ok(!order2.includes("class_probe"), "must not skip to later stages");

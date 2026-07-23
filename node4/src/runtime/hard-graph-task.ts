@@ -21,8 +21,8 @@ import { createPiHardGraphStageExecutor } from "./hard-graph-stage-executor.js";
 import { settleHardGraphTask } from "./hard-graph-settlement.js";
 
 export type HardGraphTaskResult = {
-  /** Platform harness status (single map from HardGraphTerminal). */
-  harnessStatus: "completed" | "incomplete" | "failed";
+  /** Platform task_complete.status (completed | incomplete | blocked). */
+  harnessStatus: "completed" | "incomplete" | "blocked";
   taskDir: string;
   graphId: string;
   terminal: HardGraphTerminal;
@@ -127,7 +127,13 @@ export async function emitHardGraphStageStatus(options: {
     task_id: task.taskId,
     message: `hard_graph run_end graph=${event.graphId} terminal=${event.terminal}`,
     agent_phase: "hard_graph",
-    status: event.terminal === "completed" ? "completed" : "failed",
+    // Align with harness vocabulary (not "failed" — platform maps that poorly).
+    status:
+      event.terminal === "completed"
+        ? "completed"
+        : event.terminal === "aborted"
+          ? "incomplete"
+          : "blocked",
     work_mode,
     hard_graph,
     started_at: startedAt,

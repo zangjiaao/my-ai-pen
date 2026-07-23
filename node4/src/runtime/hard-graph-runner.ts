@@ -319,11 +319,14 @@ export async function runHardGraph(options: {
   return result;
 }
 
-/** Map Hard Graph terminal → platform harness task_complete status (single dictionary). */
+/**
+ * Map Hard Graph terminal → platform task_complete.status.
+ * Platform expects completed | incomplete | blocked (not "failed" — that falls through to completed).
+ */
 export function hardGraphToHarnessStatus(
   terminal: HardGraphTerminal,
-): "completed" | "incomplete" | "failed" {
+): "completed" | "incomplete" | "blocked" {
   if (terminal === "completed") return "completed";
   if (terminal === "aborted") return "incomplete";
-  return "failed";
+  return "blocked";
 }

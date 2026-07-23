@@ -10,7 +10,8 @@ import {
 } from "./hard-graph-runner.js";
 
 export type HardGraphSettlementResult = {
-  harnessStatus: "completed" | "incomplete" | "failed";
+  /** Platform task_complete.status vocabulary only. */
+  harnessStatus: "completed" | "incomplete" | "blocked";
   workMode: string;
 };
 
