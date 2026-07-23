@@ -1101,19 +1101,22 @@ async function main() {
     }),
   );
   assert(badNode.includes("not in") || badNode.includes("error"), `graph rejects postex on assessment: ${badNode.slice(0, 160)}`);
-  const goodNode = JSON.parse(
-    textOf(
-      await exec(createSubagentTool(runtime), "g-ok-node", {
-        target: "http://127.0.0.1:9/",
-        scope: "127.0.0.1 only",
-        already_done: "parent recon done",
-        this_turn_goal: "surface slice",
-        success_criteria: "stdout contains graph-ok",
-        node_type: "surface",
-        command: "echo graph-ok",
-      }),
-    ),
+  // Graph mode rejects command= shell packages; use dry LLM path for a valid surface node_type.
+  process.env.NODE4_SUBAGENT_DRY = "1";
+  const goodText = textOf(
+    await exec(createSubagentTool(runtime), "g-ok-node", {
+      target: "http://127.0.0.1:9/",
+      scope: "127.0.0.1 only",
+      already_done: "parent recon done",
+      this_turn_goal: "surface slice",
+      success_criteria: "result.json written",
+      node_type: "surface",
+    }),
   );
+  if (prevDry === undefined) delete process.env.NODE4_SUBAGENT_DRY;
+  else process.env.NODE4_SUBAGENT_DRY = prevDry;
+  assert(!goodText.trimStart().toLowerCase().startsWith("error:"), `graph surface not error: ${goodText.slice(0, 200)}`);
+  const goodNode = JSON.parse(goodText);
   assert(goodNode.ok === true && goodNode.node_type === "surface", `graph surface ok: ${JSON.stringify(goodNode).slice(0, 200)}`);
   runtime.lifecycle.pentestGraph = undefined;
 
