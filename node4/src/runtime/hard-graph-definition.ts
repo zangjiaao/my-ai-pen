@@ -52,6 +52,12 @@ export type SoftScenarioGraphShape = {
   discipline?: string;
 };
 
+/**
+ * Structural Hard Graph check + handoff tool contract.
+ * Stage end reads workdir `result.json` only. A non-empty tools.allow must
+ * include `write` so the stage can emit that file (empty/missing allow =
+ * unrestricted pack tools → write still reachable when the pack offers it).
+ */
 export function isHardGraphDefinition(value: unknown): value is HardGraphDefinition {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const o = value as Record<string, unknown>;
@@ -60,11 +66,27 @@ export function isHardGraphDefinition(value: unknown): value is HardGraphDefinit
   if (!Array.isArray(o.stages) || o.stages.length === 0) return false;
   for (const s of o.stages) {
     if (!s || typeof s !== "object") return false;
-    if (typeof (s as { id?: unknown }).id !== "string" || !(s as { id: string }).id.trim()) {
+    const stage = s as { id?: unknown; tools?: unknown };
+    if (typeof stage.id !== "string" || !stage.id.trim()) {
+      return false;
+    }
+    if (!stageHasResultJsonWritePath(stage.tools)) {
       return false;
     }
   }
   return true;
+}
+
+/** Non-empty allow without `write` cannot satisfy fail-closed result.json handoff. */
+function stageHasResultJsonWritePath(tools: unknown): boolean {
+  if (tools == null || typeof tools !== "object" || Array.isArray(tools)) {
+    return true;
+  }
+  const allow = (tools as { allow?: unknown }).allow;
+  if (allow == null) return true;
+  if (!Array.isArray(allow)) return false;
+  if (allow.length === 0) return true;
+  return allow.some((t) => t === "write");
 }
 
 /**

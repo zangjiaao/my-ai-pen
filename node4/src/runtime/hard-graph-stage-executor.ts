@@ -21,7 +21,10 @@ import {
   seedStageLifecycleFromParent,
   type StageContinuitySeed,
 } from "./hard-graph-continuity.js";
-import { normalizeSubagentResult } from "./subagent-result.js";
+import {
+  normalizeSubagentResult,
+  type SubagentStructuredResult,
+} from "./subagent-result.js";
 import {
   promoteChildSessionToParent,
   seedChildSessionFromParent,
@@ -36,14 +39,47 @@ export type HardGraphStageSessionFactory = (options: {
   abortSignal?: AbortSignal;
 }) => Promise<{ structured: unknown; summary?: string }>;
 
+/**
+ * Post-session handoff: Feedback reads stage workdir `result.json` only.
+ * Missing/invalid → fail-closed structured result (does not invent surfaces).
+ */
+export async function loadStageResultJson(
+  workDir: string,
+  stageId: string,
+): Promise<SubagentStructuredResult> {
+  const resultPath = join(workDir, "result.json");
+  try {
+    const raw = await readFile(resultPath, "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    const structured = normalizeSubagentResult(parsed);
+    await writeFile(
+      join(workDir, "normalized-result.json"),
+      JSON.stringify(structured, null, 2),
+      "utf8",
+    );
+    return structured;
+  } catch {
+    return normalizeSubagentResult({
+      ok: false,
+      summary: `stage ${stageId}: missing or invalid result.json`,
+      surfaces: [],
+      candidates: [],
+      deadends: ["missing_result_json"],
+    });
+  }
+}
+
 function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope): string {
+  const toolList = input.tools.length ? input.tools.join(", ") : "(none)";
   return [
     "You are a **Hard Graph stage agent** (Graph × Pi).",
     `Graph: ${input.graphId}  Stage: ${input.stage.id} (index ${input.stageIndex})`,
     input.stage.success ? `Stage success criteria: ${input.stage.success}` : "",
     "You do NOT schedule other stages. Complete only this stage.",
-    "When done, write structured JSON to result.json in the stage work dir with fields:",
+    `Allowed tools for this stage: ${toolList}`,
+    "When done, use the **write** tool to create **result.json** in the stage work dir (path: result.json) with fields:",
     "  ok, summary, surfaces[], candidates[], facts[], deadends[]",
+    "Facts alone are not the stage handoff — Feedback reads result.json only.",
     "Fail closed: do not invent surfaces or proof.",
     `Target: ${JSON.stringify(task.target)}`,
     `Scope: ${JSON.stringify(task.scope)}`,
@@ -74,7 +110,7 @@ function stageUserPrompt(input: StageExecutorInput, task: TaskEnvelope): string 
     "### Task instruction",
     task.instruction || "",
     "",
-    "Complete this stage only. Write result.json then stop.",
+    "Complete this stage only. Use write to emit result.json, then stop.",
   ].join("\n");
 }
 
@@ -275,31 +311,12 @@ export function createHardGraphStageExecutor(options: {
         }
       }
 
-      const resultPath = join(workDir, "result.json");
-      try {
-        const raw = await readFile(resultPath, "utf8");
-        const parsed = JSON.parse(raw) as unknown;
-        const structured = normalizeSubagentResult(parsed);
-        await writeFile(
-          join(workDir, "normalized-result.json"),
-          JSON.stringify(structured, null, 2),
-          "utf8",
-        );
-        return await finalizeStage({
-          structured,
-          child: childRuntime,
-          seed: continuitySeed,
-        });
-      } catch {
-        return await finalizeStage({
-          structured: failStructured(
-            `stage ${input.stage.id}: missing or invalid result.json`,
-            "missing_result_json",
-          ),
-          child: childRuntime,
-          seed: continuitySeed,
-        });
-      }
+      const structured = await loadStageResultJson(workDir, input.stage.id);
+      return await finalizeStage({
+        structured,
+        child: childRuntime,
+        seed: continuitySeed,
+      });
     } finally {
       // Promote once even on throw (no absorb of garbage structured).
       await promoteSession();

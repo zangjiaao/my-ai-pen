@@ -90,7 +90,7 @@ const happy: StageExecutor = async (input) => {
 const result = await runHardGraph({
   graph: graph!,
   executeStage: happy,
-  availableTools: ["todo", "read", "fact", "skill", "shell", "http", "session", "browser", "script", "finding"],
+  availableTools: ["todo", "read", "fact", "skill", "write", "shell", "http", "session", "browser", "script", "finding"],
   onEvent: (e) => {
     if (e.type === "stage_start") events.push(`start:${e.stageId}`);
     if (e.type === "stage_end") events.push(`end:${e.stageId}:${e.outcome}`);
@@ -109,7 +109,10 @@ assert.ok(events.includes("run:completed"));
 assert.ok(seenTools.init);
 assert.ok(!seenTools.init.includes("shell"));
 assert.ok(seenTools.init.includes("todo"));
+assert.ok(seenTools.init.includes("write"), "init must allow write for result.json");
 assert.ok(seenTools.surface?.includes("shell"));
+assert.ok(seenTools.surface?.includes("write"));
+assert.ok(seenTools.validate_book?.includes("write"));
 
 // Fail-closed: surface never returns surfaces → blocked; intermediate attempts are failed_attempt
 const order2: string[] = [];

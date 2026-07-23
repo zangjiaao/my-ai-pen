@@ -133,7 +133,7 @@ NODE4_HARD_GRAPH=1 npx tsx src/standalone.ts \
 
 - Soft `default_plan` / node menu from `app_assessment.json`
 - Main OMP outer loop scheduling stages
-- Stage tool allowlists omit **`subagent`** on every thin stage; `validate_book` has **finding** but no act tools (`app_assessment_thin.json`)
+- Stage tool allowlists omit **`subagent`** on every thin stage; every stage includes **`write`** for `result.json` handoff; `validate_book` has **finding** but no recon act tools (`app_assessment_thin.json`)
 
 ---
 
