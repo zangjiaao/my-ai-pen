@@ -19,8 +19,8 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "file:../research/pi/packages/agent",
-    "@earendil-works/pi-ai": "file:../research/pi/packages/ai",
+    "@earendil-works/pi-agent-core": "0.80.2",
+    "@earendil-works/pi-ai": "0.80.2",
     "typebox": "1.1.38"
   },
   "devDependencies": {
