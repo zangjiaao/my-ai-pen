@@ -1,0 +1,6 @@
+{
+  "fact_key": "stage_status",
+  "summary": "Init stage progress",
+  "body": "Stage: init (index 0)\nTarget: http://127.0.0.1:3010\nApplication: OWASP Juice Shop\nScope: 127.0.0.1, localhost only\nRoE: app_assessment - no post-ex host takeover off-box\nPort: 3010 (HTTP)\n\nStatus: Understanding target and RoE. Unable to probe target directly due to tool limitations (no HTTP client available in current toolset). This stage focuses on acknowledging the target, scope, and rules of engagement before handoff to next stage.\n\nSurface mapping: Not yet performed - no HTTP probe capability in this stage. Surfaces remain empty per handoff snapshot. Next stages should perform actual recon.",
+  "updated_at": "2026-07-23T19:11:25.881Z"
+}

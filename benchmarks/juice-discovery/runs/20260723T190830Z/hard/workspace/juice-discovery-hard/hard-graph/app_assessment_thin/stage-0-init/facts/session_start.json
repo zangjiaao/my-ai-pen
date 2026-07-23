@@ -1,0 +1,6 @@
+{
+  "fact_key": "session_start",
+  "summary": "Init stage started",
+  "body": "Starting init stage for target http://127.0.0.1:3010. Need to probe availability and map initial surface.",
+  "updated_at": "2026-07-23T19:09:09.854Z"
+}

@@ -1,0 +1,22 @@
+{
+  "arm": "hard",
+  "authoritative": true,
+  "runtime": "core-only runNode4Agent",
+  "piPackages": ["@earendil-works/pi-ai", "@earendil-works/pi-agent-core"],
+  "piCodingAgent": false,
+  "graphId": "app_assessment_thin",
+  "workMode": "hard_graph:app_assessment_thin",
+  "target": "http://127.0.0.1:3010",
+  "container": "juice-discovery-hard",
+  "terminalStatus": "blocked",
+  "stopReason": "hard_graph_blocked",
+  "bookedFindings": 0,
+  "wallClockSec": 204,
+  "start": "2026-07-23T19:08:30Z",
+  "end": "2026-07-23T19:11:54Z",
+  "nodeSha": "0efb2623c600391c623a677202ddfde8443804b8",
+  "branch": "main",
+  "blockErrors": ["structured_ok_false"],
+  "blockSummary": "stage init: missing or invalid result.json (attempts exhausted)",
+  "supersedesStamp": "20260723T184122Z"
+}
