@@ -1105,7 +1105,8 @@ async function main() {
   process.env.NODE4_SUBAGENT_DRY = "1";
   const goodText = textOf(
     await exec(createSubagentTool(runtime), "g-ok-node", {
-      target: "http://127.0.0.1:9/",
+      // Distinct path so prior smoke packages do not hit path re-dispatch budget.
+      target: "http://127.0.0.1:9/graph-surface-ok",
       scope: "127.0.0.1 only",
       already_done: "parent recon done",
       this_turn_goal: "surface slice",
