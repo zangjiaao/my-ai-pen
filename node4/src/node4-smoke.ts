@@ -1043,7 +1043,10 @@ async function main() {
   const missHand = textOf(
     await exec(createSubagentTool(runtime), "miss", { assignment: "only notes", command: "echo no" }),
   );
-  assert(missHand.includes("handoff incomplete") || missHand.includes("missing"), "missing handoff rejected");
+  assert(
+    /handoff incomplete|incomplete handoff|missing/i.test(missHand),
+    `missing handoff rejected: ${missHand.slice(0, 160)}`,
+  );
 
   // LLM child path dry-run (no model call)
   const prevDry = process.env.NODE4_SUBAGENT_DRY;
