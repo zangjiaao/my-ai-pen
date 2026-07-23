@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
 import { jsonResult, textResult } from "./common.js";
 
@@ -8,7 +8,7 @@ import { jsonResult, textResult } from "./common.js";
  * Auto-continue unbounded while active; optional token_budget → budget-limited.
  * complete is free in code (OMP); honesty is prompt-steered on continuations.
  */
-export function createGoalTool(runtime: ToolRuntime): ToolDefinition<any> {
+export function createGoalTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "goal",
     label: "Goal",

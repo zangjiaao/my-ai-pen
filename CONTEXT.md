@@ -29,8 +29,8 @@ Optional pentest node menu + soft default_plan (existing OMP assist). Not Hard G
 _Avoid_: calling soft menu "Hard Graph"
 
 **Agent Runtime**:
-The loop that runs an agent with tools inside a graph stage or Default seat (pi for Expert stages).
-_Avoid_: calling the Graph framework itself "the Agent Runtime" when Graph and Runtime are layered
+The loop that runs an agent with tools inside a graph stage or Default seat. Product packages: **pi-ai** (models) + **pi-agent-core** (loop). Product API: **Agent** + **AgentTool** + events/hooks via seam **runNode4Agent**. Not coding-agent shell, not AgentHarness, not pi-tui.
+_Avoid_: calling the Graph framework itself "the Agent Runtime" when Graph and Runtime are layered; treating pi-coding-agent as required Runtime
 
 **Graph × Pi**:
 The **locked** product shape: Hard Graph orchestrates flow and gates; pi Agent Runtime runs exploration inside expert graph stages. Default seat stays outside expert hard Graph.
@@ -39,3 +39,11 @@ _Avoid_: hybrid (unqualified), soft OMP graph, Main-as-scheduler as hard Graph
 **Graph model vs Graph framework**:
 The model (Task / Agent / Feedback semantics) is required; a framework (e.g. Google ADK) is a replaceable implementation.
 _Avoid_: "must use ADK" as a product requirement without a model reason
+
+**Product state (SOT)**:
+Node4-owned domain truth: multi-actor session jars, Hard Graph handoff/continuity (parent lifecycle, surface ledger, structured stage results), findings/booking inputs, Feedback/settlement inputs.
+_Avoid_: treating LLM transcript or Agent Runtime session files as domain authority
+
+**Runtime transcript**:
+Turn-local agent messages inside the Agent Runtime. Optional Node4 projection from Runtime events for debug/stream; not required as a product session format; never used as fail-closed gate input.
+_Avoid_: dual cookie stores; Feedback parsing private Runtime/session formats; salvage handoff from transcript

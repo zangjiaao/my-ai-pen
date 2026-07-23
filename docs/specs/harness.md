@@ -1,6 +1,6 @@
 # Agent Runtime harness — OMP-class (node4 candidate detail)
 
-> **Product path:** This file describes the **Node4 lineage** harness (Graph × Pi product path). Soft scenario Graph is assistive OMP; **Hard Graph** (`graphDiscipline=hard` / hard graph ids / `NODE4_HARD_GRAPH`) is runner-owned stage order with fail-closed Feedback — see `docs/specs/task-graph.md` and ADR 0001. **Node5** is lab reference / fallback B, not co-equal product expansion. Platform binds to exactly one Node process per deployment.  
+> **Product path:** This file describes the **Node4 lineage** harness (Graph × Pi product path). Soft scenario Graph is assistive OMP; **Hard Graph** (`graphDiscipline=hard` / hard graph ids / `NODE4_HARD_GRAPH`) is runner-owned stage order with fail-closed Feedback — see `docs/specs/task-graph.md` and ADR 0001. **Agent Runtime** is **pi-ai + pi-agent-core** via product seam `runNode4Agent` (not pi-coding-agent). **Node5** is lab reference / fallback B, not co-equal product expansion. Platform binds to exactly one Node process per deployment.  
 
 > **Commercial clean-room design** for the node4 path (no oh-my-pi / OMP source dependency).  
 > Calibrated: 2026-07-23  

@@ -1,21 +1,12 @@
 /**
- * Pi-backed stage executor for Hard Graph (Graph × Pi).
+ * Core-only stage executor for Hard Graph (Graph × Pi).
  *
  * Builds a **real** child ToolRuntime (stores + parent platform) like subagent
- * sessions — no fake goals/evidence stubs. Model/session boot follows the same
- * pattern as runSubagentLlmSession.
+ * sessions — no fake goals/evidence stubs. Agent Runtime via runNode4Agent.
  */
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import {
-  AuthStorage,
-  createAgentSession,
-  DefaultResourceLoader,
-  ModelRegistry,
-  SessionManager,
-  SettingsManager,
-} from "@earendil-works/pi-coding-agent";
 import type { Node4Config } from "../config.js";
 import type { RolePack } from "../roles/types.js";
 import type { TaskEnvelope, ToolRuntime } from "../types.js";
@@ -23,8 +14,9 @@ import { EvidenceStore } from "../stores/evidence.js";
 import { GoalStore } from "../stores/goal.js";
 import { ProcessFactStore } from "../stores/process-fact.js";
 import { TodoStore } from "../stores/todo.js";
-import { createNode4Extension } from "./extension.js";
+import { createNode4RuntimeBindings } from "./extension.js";
 import type { StageExecutor, StageExecutorInput, StageExecutorOutput } from "./hard-graph-runner.js";
+import { resolveNode4Model, runNode4Agent } from "./run-node4-agent.js";
 import {
   absorbStageResultIntoParent,
   seedStageLifecycleFromParent,
@@ -44,26 +36,6 @@ export type HardGraphStageSessionFactory = (options: {
   workDir: string;
   abortSignal?: AbortSignal;
 }) => Promise<{ structured: unknown; summary?: string }>;
-
-function setRuntimeApiKey(authStorage: AuthStorage, provider: string): void {
-  const p = String(provider || "").trim().toLowerCase();
-  let key = "";
-  if (p === "deepseek") {
-    key = process.env.DEEPSEEK_API_KEY || process.env.LLM_API_KEY || "";
-  } else if (p === "openai") {
-    key = process.env.OPENAI_API_KEY || process.env.LLM_API_KEY || "";
-  } else if (p === "anthropic") {
-    key = process.env.ANTHROPIC_API_KEY || process.env.LLM_API_KEY || "";
-  } else {
-    key =
-      process.env.LLM_API_KEY ||
-      process.env.OPENAI_API_KEY ||
-      process.env.DEEPSEEK_API_KEY ||
-      process.env.ANTHROPIC_API_KEY ||
-      "";
-  }
-  if (key) (authStorage as { setRuntimeApiKey?: (p: string, k: string) => void }).setRuntimeApiKey?.(provider, key);
-}
 
 function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope): string {
   return [
@@ -105,45 +77,6 @@ function stageUserPrompt(input: StageExecutorInput, task: TaskEnvelope): string 
     "",
     "Complete this stage only. Write result.json then stop.",
   ].join("\n");
-}
-
-async function resolveModel(config: Node4Config, authStorage: AuthStorage) {
-  setRuntimeApiKey(authStorage, config.modelProvider);
-  const modelRegistry = ModelRegistry.inMemory(authStorage);
-  if (config.llmBaseUrl) {
-    const known = modelRegistry.find(config.modelProvider, config.modelId);
-    if (known) {
-      modelRegistry.registerProvider(config.modelProvider, { baseUrl: config.llmBaseUrl });
-    } else {
-      const apiKey =
-        process.env.LLM_API_KEY ||
-        process.env.OPENAI_API_KEY ||
-        process.env.DEEPSEEK_API_KEY ||
-        "sk-no-key";
-      const contextWindow = Math.max(1024, Number(process.env.LLM_CONTEXT_WINDOW || 8192) || 8192);
-      const maxTokens = Math.max(256, Number(process.env.LLM_MAX_TOKENS || 2048) || 2048);
-      modelRegistry.registerProvider(config.modelProvider, {
-        baseUrl: config.llmBaseUrl,
-        api: (process.env.LLM_API as "openai-completions") || "openai-completions",
-        apiKey,
-        models: [
-          {
-            id: config.modelId,
-            name: config.modelId,
-            reasoning: false,
-            input: ["text" as const],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow,
-            maxTokens,
-          },
-        ],
-      });
-    }
-  }
-  return {
-    modelRegistry,
-    model: modelRegistry.find(config.modelProvider, config.modelId),
-  };
 }
 
 function buildChildRuntime(options: {
@@ -299,48 +232,17 @@ export function createPiHardGraphStageExecutor(options: {
           deadends: [deadend],
         });
 
-      const authStorage = AuthStorage.create(join(config.piAgentDir, "auth.json"));
-      const { modelRegistry, model } = await resolveModel(config, authStorage);
-      if (!model) {
-        return await finalizeStage({
-          structured: failStructured(
-            `hard-graph stage: model not available (${config.modelProvider}/${config.modelId})`,
-            "model_unavailable",
-          ),
-          child: childRuntime,
-          seed: continuitySeed,
-        });
-      }
-
-      const settingsManager = SettingsManager.inMemory({
-        compaction: { enabled: true },
-        retry: { enabled: true, maxRetries: 1 },
-      });
+      const model = resolveNode4Model(config);
       const segmentCounter = { tools: 0 };
-      const resourceLoader = new DefaultResourceLoader({
-        cwd: workDir,
-        agentDir: config.piAgentDir,
-        settingsManager,
-        extensionFactories: [createNode4Extension(childRuntime, segmentCounter, packForStage)],
-        noExtensions: true,
-        noSkills: true,
-        noPromptTemplates: true,
-        noContextFiles: true,
+      const bindings = createNode4RuntimeBindings(childRuntime, segmentCounter, packForStage);
+      const session = await runNode4Agent({
         systemPrompt,
-      });
-      await resourceLoader.reload();
-
-      const { session } = await createAgentSession({
-        cwd: workDir,
-        agentDir: config.piAgentDir,
+        tools: bindings.tools,
         model,
         thinkingLevel: "low",
-        authStorage,
-        modelRegistry,
-        resourceLoader,
-        tools: [...input.tools],
-        sessionManager: SessionManager.create(workDir, join(workDir, "pi-sessions")),
-        settingsManager,
+        beforeToolCall: bindings.beforeToolCall,
+        afterToolCall: bindings.afterToolCall,
+        onAgent: bindings.attachAgent,
       });
 
       try {
@@ -351,7 +253,17 @@ export function createPiHardGraphStageExecutor(options: {
             seed: continuitySeed,
           });
         }
-        await session.prompt(userPrompt, { source: "interactive" });
+        if (abortSignal) {
+          const onAbort = () => session.abort();
+          abortSignal.addEventListener("abort", onAbort, { once: true });
+          try {
+            await session.prompt(userPrompt);
+          } finally {
+            abortSignal.removeEventListener("abort", onAbort);
+          }
+        } else {
+          await session.prompt(userPrompt);
+        }
       } catch (err) {
         if (abortSignal?.aborted) {
           return await finalizeStage({
@@ -363,7 +275,7 @@ export function createPiHardGraphStageExecutor(options: {
         throw err;
       } finally {
         try {
-          await Promise.resolve((session as { dispose?: () => void | Promise<void> }).dispose?.());
+          await Promise.resolve(session.dispose());
         } catch {
           /* ignore */
         }

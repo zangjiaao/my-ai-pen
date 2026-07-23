@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { Type } from "typebox";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
 import { buildShellEnv } from "../runtime/pen-tools-path.js";
 import { isShellInPenToolsEnabled, runShellInPenTools } from "../runtime/pen-tools-shell.js";
@@ -19,7 +19,7 @@ const STDERR_CAP = 100_000;
  * Multi-step probes in one call; independent probes as parallel tool calls same turn.
  * Timeout kills the whole process group so hung children cannot outlive the tool.
  */
-export function createShellTool(runtime: ToolRuntime): ToolDefinition<any> {
+export function createShellTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "shell",
     label: "Shell",

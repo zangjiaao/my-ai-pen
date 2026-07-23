@@ -1,4 +1,4 @@
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { RolePack } from "../roles/index.js";
 import type { ToolRuntime } from "../types.js";
 import { createBrowserTool } from "./browser.js";
@@ -18,7 +18,7 @@ import { PLATFORM_TOOL_FACTORIES } from "./platform.js";
 import { createRequestUserDecisionTool } from "./decision.js";
 
 /** Full registry of tool factories (role packs select a subset). */
-export const ALL_NODE4_TOOL_FACTORIES: Record<string, (runtime: ToolRuntime) => ToolDefinition<any>> = {
+export const ALL_NODE4_TOOL_FACTORIES: Record<string, (runtime: ToolRuntime) => AgentTool<any>> = {
   todo: createTodoTool,
   shell: createShellTool,
   write: createWriteTool,
@@ -53,9 +53,9 @@ export const NODE4_TOOL_NAMES = [
   "goal",
 ] as const;
 
-export function createNode4Tools(runtime: ToolRuntime, pack?: RolePack): ToolDefinition<any>[] {
+export function createNode4Tools(runtime: ToolRuntime, pack?: RolePack): AgentTool<any>[] {
   const names = pack?.toolNames?.length ? pack.toolNames : NODE4_TOOL_NAMES;
-  const tools: ToolDefinition<any>[] = [];
+  const tools: AgentTool<any>[] = [];
   for (const name of names) {
     const factory = ALL_NODE4_TOOL_FACTORIES[name];
     if (factory) tools.push(factory(runtime));

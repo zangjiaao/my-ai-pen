@@ -4,19 +4,11 @@
  *
  * OMP-style keep-alive: after a successful package the session may park in
  * SubagentIdlePool (keyed by pathKey) and be re-prompted on same-path re-dispatch
- * instead of createAgentSession cold start.
+ * instead of runNode4Agent cold start.
  */
 
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import {
-  AuthStorage,
-  createAgentSession,
-  DefaultResourceLoader,
-  ModelRegistry,
-  SessionManager,
-  SettingsManager,
-} from "@earendil-works/pi-coding-agent";
 import { loadConfig } from "../config.js";
 import type { RolePack } from "../roles/types.js";
 import { EvidenceStore } from "../stores/evidence.js";
@@ -25,7 +17,8 @@ import { ProcessFactStore } from "../stores/process-fact.js";
 import { SkillStore } from "../stores/skill.js";
 import { TodoStore } from "../stores/todo.js";
 import type { TaskEnvelope, ToolRuntime } from "../types.js";
-import { createNode4Extension } from "./extension.js";
+import { createNode4RuntimeBindings } from "./extension.js";
+import { resolveNode4Model, runNode4Agent } from "./run-node4-agent.js";
 import {
   formatSubagentReturnContractPrompt,
   normalizeSubagentResult,
@@ -112,26 +105,6 @@ function childRolePack(parentPackId: string, skillIds?: readonly string[], skill
     skillIds: skillIds?.length ? skillIds : undefined,
     skillsRoot,
   };
-}
-
-function setRuntimeApiKey(authStorage: AuthStorage, provider: string): void {
-  const p = String(provider || "").trim().toLowerCase();
-  let key = "";
-  if (p === "deepseek") {
-    key = process.env.DEEPSEEK_API_KEY || process.env.LLM_API_KEY || "";
-  } else if (p === "openai") {
-    key = process.env.OPENAI_API_KEY || process.env.LLM_API_KEY || "";
-  } else if (p === "anthropic") {
-    key = process.env.ANTHROPIC_API_KEY || process.env.LLM_API_KEY || "";
-  } else {
-    key =
-      process.env.LLM_API_KEY ||
-      process.env.OPENAI_API_KEY ||
-      process.env.DEEPSEEK_API_KEY ||
-      process.env.ANTHROPIC_API_KEY ||
-      "";
-  }
-  if (key) (authStorage as any).setRuntimeApiKey?.(provider, key);
 }
 
 async function readResultFile(workDir: string): Promise<unknown | undefined> {
@@ -547,86 +520,20 @@ async function runColdPackage(args: {
 
   const userPrompt = buildUserPrompt(assignment, sessionSeed.seeded, false);
 
-  const authStorage = AuthStorage.create(join(config.piAgentDir, "auth.json"));
-  setRuntimeApiKey(authStorage, config.modelProvider);
-  const modelRegistry = ModelRegistry.inMemory(authStorage);
-  if (config.llmBaseUrl) {
-    const known = modelRegistry.find(config.modelProvider, config.modelId);
-    if (known) {
-      modelRegistry.registerProvider(config.modelProvider, { baseUrl: config.llmBaseUrl });
-    } else {
-      const apiKey =
-        process.env.LLM_API_KEY ||
-        process.env.OPENAI_API_KEY ||
-        process.env.DEEPSEEK_API_KEY ||
-        "sk-no-key";
-      const contextWindow = Math.max(1024, Number(process.env.LLM_CONTEXT_WINDOW || 8192) || 8192);
-      const maxTokens = Math.max(256, Number(process.env.LLM_MAX_TOKENS || 2048) || 2048);
-      modelRegistry.registerProvider(config.modelProvider, {
-        baseUrl: config.llmBaseUrl,
-        api: (process.env.LLM_API as any) || "openai-completions",
-        apiKey,
-        models: [
-          {
-            id: config.modelId,
-            name: config.modelId,
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow,
-            maxTokens,
-          },
-        ],
-      });
-    }
-  }
-  const model = modelRegistry.find(config.modelProvider, config.modelId);
-  if (!model) {
-    const structured = normalizeSubagentResult({
-      ok: false,
-      summary: `subagent model not found: ${config.modelProvider}/${config.modelId}`,
-      candidates: [],
-      facts: [],
-      deadends: ["model_unavailable"],
-      artifacts: [],
-    });
-    await writeFile(join(workDir, "result.json"), JSON.stringify(structured, null, 2), "utf8");
-    return { ok: false, summary: structured.summary, structured, data: { kind: "llm_error", structured } };
-  }
-
-  const settingsManager = SettingsManager.inMemory({
-    compaction: { enabled: true },
-    retry: { enabled: true, maxRetries: 1 },
-  });
+  const model = resolveNode4Model(config);
   const segmentCounter = { tools: 0 };
-  const resourceLoader = new DefaultResourceLoader({
-    cwd: workDir,
-    agentDir: config.piAgentDir,
-    settingsManager,
-    extensionFactories: [createNode4Extension(childRuntime, segmentCounter, pack)],
-    noExtensions: true,
-    noSkills: true,
-    noPromptTemplates: true,
-    noContextFiles: true,
+  const bindings = createNode4RuntimeBindings(childRuntime, segmentCounter, pack);
+  const session = await runNode4Agent({
     systemPrompt,
-  });
-  await resourceLoader.reload();
-
-  const piSessionDir = join(workDir, "pi-sessions");
-  const { session } = await createAgentSession({
-    cwd: workDir,
-    agentDir: config.piAgentDir,
+    tools: bindings.tools,
     model,
     thinkingLevel: "low",
-    authStorage,
-    modelRegistry,
-    resourceLoader,
-    tools: [...pack.toolNames],
-    sessionManager: SessionManager.create(workDir, piSessionDir),
-    settingsManager,
+    beforeToolCall: bindings.beforeToolCall,
+    afterToolCall: bindings.afterToolCall,
+    onAgent: bindings.attachAgent,
   });
 
-  const race = await raceSessionPrompt(session as IdleSubagentHandle["session"], userPrompt, abort);
+  const race = await raceSessionPrompt(session, userPrompt, abort);
 
   const { structured, salvaged } = await collectStructuredResult({
     workDir,

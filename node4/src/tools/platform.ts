@@ -3,7 +3,7 @@
  * Policy (user-only host create) is enforced server-side; client also refuses create ops.
  */
 import { Type } from "typebox";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
 import { jsonResult, textResult } from "./common.js";
 
@@ -57,7 +57,7 @@ function convQuery(runtime: ToolRuntime): string {
   return id ? `?conversation_id=${encodeURIComponent(id)}` : "";
 }
 
-export function createPlatformListAssetsTool(runtime: ToolRuntime): ToolDefinition<any> {
+export function createPlatformListAssetsTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "platform_list_assets",
     label: "Platform list assets",
@@ -79,7 +79,7 @@ export function createPlatformListAssetsTool(runtime: ToolRuntime): ToolDefiniti
   };
 }
 
-export function createPlatformGetAssetTool(runtime: ToolRuntime): ToolDefinition<any> {
+export function createPlatformGetAssetTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "platform_get_asset",
     label: "Platform get asset",
@@ -100,7 +100,7 @@ export function createPlatformGetAssetTool(runtime: ToolRuntime): ToolDefinition
   };
 }
 
-export function createPlatformListVulnerabilitiesTool(runtime: ToolRuntime): ToolDefinition<any> {
+export function createPlatformListVulnerabilitiesTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "platform_list_vulnerabilities",
     label: "Platform list vulnerabilities",
@@ -127,7 +127,7 @@ export function createPlatformListVulnerabilitiesTool(runtime: ToolRuntime): Too
   };
 }
 
-export function createPlatformGetVulnerabilityTool(runtime: ToolRuntime): ToolDefinition<any> {
+export function createPlatformGetVulnerabilityTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "platform_get_vulnerability",
     label: "Platform get vulnerability",
@@ -148,7 +148,7 @@ export function createPlatformGetVulnerabilityTool(runtime: ToolRuntime): ToolDe
   };
 }
 
-export function createPlatformUpdateFindingStatusTool(runtime: ToolRuntime): ToolDefinition<any> {
+export function createPlatformUpdateFindingStatusTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "platform_update_finding_status",
     label: "Platform update finding status",
@@ -175,7 +175,7 @@ export function createPlatformUpdateFindingStatusTool(runtime: ToolRuntime): Too
   };
 }
 
-export function createPlatformEnrichAssetTool(runtime: ToolRuntime): ToolDefinition<any> {
+export function createPlatformEnrichAssetTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "platform_enrich_asset",
     label: "Platform enrich asset",
@@ -214,7 +214,7 @@ export function createPlatformEnrichAssetTool(runtime: ToolRuntime): ToolDefinit
   };
 }
 
-export function createPlatformConversationSnapshotTool(runtime: ToolRuntime): ToolDefinition<any> {
+export function createPlatformConversationSnapshotTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "platform_conversation_snapshot",
     label: "Platform conversation snapshot",
@@ -233,7 +233,7 @@ export function createPlatformConversationSnapshotTool(runtime: ToolRuntime): To
   };
 }
 
-export function createPlatformListReportsTool(runtime: ToolRuntime): ToolDefinition<any> {
+export function createPlatformListReportsTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "platform_list_reports",
     label: "Platform list reports",
@@ -256,7 +256,7 @@ export function createPlatformListReportsTool(runtime: ToolRuntime): ToolDefinit
   };
 }
 
-export function createPlatformCreateReportTool(runtime: ToolRuntime): ToolDefinition<any> {
+export function createPlatformCreateReportTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "platform_create_report",
     label: "Platform create report",
@@ -325,7 +325,7 @@ export function createPlatformCreateReportTool(runtime: ToolRuntime): ToolDefini
   };
 }
 
-export function createPlatformListExpertsTool(runtime: ToolRuntime): ToolDefinition<any> {
+export function createPlatformListExpertsTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "platform_list_experts",
     label: "Platform list experts",
@@ -364,7 +364,7 @@ export function createPlatformListExpertsTool(runtime: ToolRuntime): ToolDefinit
 }
 
 /** Register all platform.* tool factories used by the default seat. */
-export const PLATFORM_TOOL_FACTORIES: Record<string, (runtime: ToolRuntime) => ToolDefinition<any>> = {
+export const PLATFORM_TOOL_FACTORIES: Record<string, (runtime: ToolRuntime) => AgentTool<any>> = {
   platform_list_assets: createPlatformListAssetsTool,
   platform_get_asset: createPlatformGetAssetTool,
   platform_list_vulnerabilities: createPlatformListVulnerabilitiesTool,

@@ -6,7 +6,7 @@
 import { mkdir, readFile, writeFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { Type } from "typebox";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
 import { recordActObservation, isInScope, jsonResult, resolveTargetUrl, textResult } from "./common.js";
 
@@ -21,7 +21,7 @@ type HistoryRow = {
   at: string;
 };
 
-export function createSessionTool(runtime: ToolRuntime): ToolDefinition<any> {
+export function createSessionTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "session",
     label: "Session HTTP",

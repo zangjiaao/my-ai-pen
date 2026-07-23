@@ -3,11 +3,11 @@
  * Never creates host assets.
  */
 import { Type } from "typebox";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
 import { jsonResult, textResult } from "./common.js";
 
-export function createFactTool(runtime: ToolRuntime): ToolDefinition<any> {
+export function createFactTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "fact",
     label: "Process fact",

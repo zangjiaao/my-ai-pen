@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { formatTodoSummary, type TodoOpName, type TodoParams } from "../stores/todo.js";
 import { TODO_TOOL_DESCRIPTION } from "../runtime/todo-harness.js";
 import { emitTodoPlanTreeUpdate } from "../runtime/plan-projection.js";
@@ -9,7 +9,7 @@ import { jsonResult, textResult } from "./common.js";
 
 const OPS = ["init", "start", "done", "rm", "drop", "append", "view"] as const;
 
-export function createTodoTool(runtime: ToolRuntime): ToolDefinition<any> {
+export function createTodoTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "todo",
     label: "Todo",

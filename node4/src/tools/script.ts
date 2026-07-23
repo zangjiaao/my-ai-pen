@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { Type } from "typebox";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
 import { recordActObservation, jsonResult, textResult } from "./common.js";
 
@@ -10,7 +10,7 @@ import { recordActObservation, jsonResult, textResult } from "./common.js";
  * Multi-step exploit path: write/read/run scripts under the task workspace.
  * Bounded timeout; production deployments should wrap with Docker isolation.
  */
-export function createScriptTool(runtime: ToolRuntime): ToolDefinition<any> {
+export function createScriptTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "script",
     label: "Script",
