@@ -80,6 +80,8 @@ function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope): strin
     "When done, use the **write** tool to create **result.json** in the stage work dir (path: result.json) with fields:",
     "  ok, summary, surfaces[], candidates[], facts[], deadends[]",
     "Facts alone are not the stage handoff — Feedback reads result.json only.",
+    "Bookable candidates MUST include: title, location (URL/path), proof_excerpt (verbatim tool stdout/body ≥24 chars), optional poc_hint.",
+    "Without proof_excerpt the next stage cannot finding(confirm) — narrative notes alone are not bookable.",
     "Fail closed: do not invent surfaces or proof.",
     `Target: ${JSON.stringify(task.target)}`,
     `Scope: ${JSON.stringify(task.scope)}`,

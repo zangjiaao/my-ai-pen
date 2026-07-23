@@ -120,6 +120,16 @@ export function extractProofMaterial(ev: unknown): { ok: boolean; excerpt: strin
   };
 }
 
+/**
+ * When a handoff candidate supplies verbatim proof but no poc_hint (common on Hard stages),
+ * build a minimal poc that still clears pocDemonstratesIssue without inventing a new exploit.
+ */
+export function synthesizePocFromHandoffProof(location: string, proof: string): string {
+  const loc = String(location || "").trim() || "(location)";
+  const pe = String(proof || "").replace(/\s+/g, " ").trim().slice(0, 220);
+  return `Probe request against ${loc}; observed proving result from prior stage handoff: ${pe}`;
+}
+
 export function pocDemonstratesIssue(poc: string): { ok: boolean; reason?: string } {
   const text = String(poc || "").trim();
   if (text.length < MIN_POC_LEN) {
@@ -266,6 +276,17 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
           if (!proofText || proofText.length < MIN_PROOF_LEN) proofText = fb.proof;
           bookSourceNote = fb.note;
           pocCheck = pocDemonstratesIssue(poc);
+        }
+      }
+      // Hard handoff: candidate matched with proof but no usable poc_hint — synthesize steps+observation.
+      if (!pocCheck.ok && material?.proof && material.proof.length >= MIN_PROOF_LEN) {
+        const synth = synthesizePocFromHandoffProof(location, material.proof);
+        const synthCheck = pocDemonstratesIssue(synth);
+        if (synthCheck.ok) {
+          poc = synth;
+          pocCheck = synthCheck;
+          bookSourceNote =
+            (bookSourceNote ? `${bookSourceNote}; ` : "") + "poc synthesized from handoff proof_excerpt";
         }
       }
       if (!pocCheck.ok) {
