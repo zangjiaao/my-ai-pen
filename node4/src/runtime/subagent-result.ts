@@ -231,9 +231,33 @@ const RESULT_SIGNAL_RE =
 const STEP_SIGNAL_RE =
   /get |post |curl |payload|param|request|step|inject|send |visit |set |login|→|->|then /i;
 
+const MIN_PROOF_EXCERPT = 24;
+const MIN_POC_HINT = 40;
+
+/**
+ * When a handoff candidate has verbatim proof but weak/missing poc_hint, build a
+ * minimal poc that still documents steps + observed result (aligned with finding book path).
+ * Platform harness assist — does not invent exploit steps beyond the proof quote.
+ */
+export function synthesizePocFromHandoffProof(location: string, proof: string): string {
+  const loc = String(location || "").trim() || "(location)";
+  const pe = String(proof || "").replace(/\s+/g, " ").trim().slice(0, 220);
+  return `Probe request against ${loc}; observed proving result from prior stage handoff: ${pe}`;
+}
+
+function pocHintCoversStepsAndResult(poc: string): boolean {
+  const text = String(poc || "").trim();
+  if (text.length < MIN_POC_HINT) return false;
+  const hasStep = STEP_SIGNAL_RE.test(text) || /['"`]/.test(text) || /https?:\/\//i.test(text);
+  const hasResult = RESULT_SIGNAL_RE.test(text);
+  return hasStep && hasResult;
+}
+
 /**
  * Light assistive judgment for Main (not a settlement gate).
- * Ready = location + proof_excerpt long enough + poc_hint covers steps and observed result.
+ * Ready = location + proof_excerpt long enough.
+ * poc_hint preferred; if missing/weak but proof is solid, synthesize poc_hint so acceptance
+ * matches finding(confirm) book-from-handoff (no dual-track thrash).
  */
 export function evaluateCandidatesForAcceptance(
   candidates: SubagentCandidate[],
@@ -280,7 +304,7 @@ export function evaluateCandidatesForAcceptance(
       "No ready_to_book candidates.",
       surfaces_accepted
         ? `Recorded ${surfaces_accepted} surface(s) into the work queue — dispatch class_probe (etc.) on open paths.`
-        : "If the package claimed issues: re-dispatch with success_criteria requiring candidates[].proof_excerpt + poc_hint.",
+        : "If the package claimed issues: re-dispatch with success_criteria requiring candidates[].proof_excerpt (poc_hint optional when proof is verbatim).",
       "Do not invent proof files. Do not re-probe on Main when Graph hard.",
     ];
     if (package_gaps.length) hintParts.push(`Package: ${package_gaps.join("; ")}`);
@@ -297,18 +321,19 @@ export function evaluateCandidatesForAcceptance(
     const title = String(c.title || c.claim || `candidate_${index}`).slice(0, 200);
     const location = String(c.location || "").trim();
     const proof = String(c.proof_excerpt || "").trim();
-    const poc = String(c.poc_hint || "").trim();
+    let poc = String(c.poc_hint || "").trim();
     const gaps: string[] = [];
 
     if (!location || location.length < 3) gaps.push("missing location (URL or path)");
-    if (proof.length < 24) gaps.push("proof_excerpt short or missing (need ≥24 chars tool quote)");
-    if (poc.length < 40) {
-      gaps.push("poc_hint too short (need steps AND observed result)");
-    } else {
-      const hasStep = STEP_SIGNAL_RE.test(poc) || /['"`]/.test(poc);
-      const hasResult = RESULT_SIGNAL_RE.test(poc);
-      if (!hasStep) gaps.push("poc_hint missing reproduce steps");
-      if (!hasResult) gaps.push("poc_hint missing observed result");
+    if (proof.length < MIN_PROOF_EXCERPT) {
+      gaps.push("proof_excerpt short or missing (need ≥24 chars tool quote)");
+    }
+
+    // Align with finding book path: solid proof+location can fill weak poc_hint.
+    let reason = "location + proof_excerpt + poc_hint (steps+result)";
+    if (!gaps.length && !pocHintCoversStepsAndResult(poc)) {
+      poc = synthesizePocFromHandoffProof(location, proof);
+      reason = "location + proof_excerpt (poc_hint synthesized for book path)";
     }
 
     if (!gaps.length) {
@@ -316,7 +341,7 @@ export function evaluateCandidatesForAcceptance(
         index,
         title,
         location,
-        reason: "location + proof_excerpt + poc_hint (steps+result)",
+        reason,
         proof_excerpt: proof,
         poc_hint: poc,
       });
@@ -331,8 +356,8 @@ export function evaluateCandidatesForAcceptance(
   });
 
   const hintParts = [
-    "Acceptance loop: (1) finding(confirm) each ready_to_book with proof= VERBATIM proof_excerpt and poc= poc_hint.",
-    "(2) For needs_more_evidence: re-dispatch subagent with already_done + this_turn_goal = redispatch_hint; max 2 gap retries then deadend.",
+    "Acceptance loop: (1) finding(confirm) each ready_to_book with proof= VERBATIM proof_excerpt (location or candidate_index match).",
+    "(2) For needs_more_evidence: re-dispatch with redispatch_hint; max 2 gap retries then deadend/bookable_unbooked — do not thrash identical finding(confirm).",
     "(3) Never write synthetic *proof*.txt files; never paraphrase proof.",
     "(4) Open surfaces in the ledger are the work queue — todo(done) cannot green without act/deadend/skip.",
   ];

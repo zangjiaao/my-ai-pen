@@ -91,6 +91,23 @@ assert.equal(accReady.ready_to_book.length, 1);
 assert.equal(accReady.needs_more_evidence.length, 0);
 assert.match(accReady.ready_to_book[0]!.proof_excerpt, /SQL syntax/);
 
+// Proof-only (no poc_hint) is ready — aligns with finding book-from-handoff
+const accProofOnly = evaluateCandidatesForAcceptance([
+  {
+    title: "Key exposure",
+    location: "http://127.0.0.1:3010/encryptionkeys/premium.key",
+    proof_excerpt:
+      "GET /encryptionkeys/premium.key returns 1337133713371337.EA99A61D92D2955B1E9285B55BF2AD42 key material in body",
+  },
+]);
+assert.equal(accProofOnly.ready_to_book.length, 1, "proof_excerpt + location without poc_hint is ready_to_book");
+assert.equal(accProofOnly.needs_more_evidence.length, 0);
+assert.ok(
+  (accProofOnly.ready_to_book[0]!.poc_hint || "").length >= 40,
+  "acceptance synthesizes poc_hint when missing",
+);
+assert.match(accProofOnly.ready_to_book[0]!.reason || "", /synthesized|proof_excerpt/i);
+
 const accGap = evaluateCandidatesForAcceptance([
   {
     title: "Maybe XSS",

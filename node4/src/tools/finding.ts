@@ -13,6 +13,7 @@ import {
   formatBookingHelpHint,
   resolveBookingMaterialFromSubagentEvidence,
 } from "../runtime/subagent-booking.js";
+import { synthesizePocFromHandoffProof } from "../runtime/subagent-result.js";
 import {
   bookTimeEvidenceData,
   emitCaseEvidence,
@@ -21,6 +22,8 @@ import {
   proofGroundedInRecentWork,
   textResult,
 } from "./common.js";
+
+export { synthesizePocFromHandoffProof } from "../runtime/subagent-result.js";
 
 const MIN_POC_LEN = 40;
 const MIN_DESC_LEN = 16;
@@ -120,16 +123,6 @@ export function extractProofMaterial(ev: unknown): { ok: boolean; excerpt: strin
   };
 }
 
-/**
- * When a handoff candidate supplies verbatim proof but no poc_hint (common on Hard stages),
- * build a minimal poc that still clears pocDemonstratesIssue without inventing a new exploit.
- */
-export function synthesizePocFromHandoffProof(location: string, proof: string): string {
-  const loc = String(location || "").trim() || "(location)";
-  const pe = String(proof || "").replace(/\s+/g, " ").trim().slice(0, 220);
-  return `Probe request against ${loc}; observed proving result from prior stage handoff: ${pe}`;
-}
-
 export function pocDemonstratesIssue(poc: string): { ok: boolean; reason?: string } {
   const text = String(poc || "").trim();
   if (text.length < MIN_POC_LEN) {
@@ -178,6 +171,34 @@ function pickHeader(headers: unknown, name: string): string {
     }
   }
   return "";
+}
+
+function findingConfirmFailKey(title: string, location: string): string {
+  return `${String(title || "").trim().toLowerCase()}|${String(location || "").trim().toLowerCase()}`;
+}
+
+/**
+ * Record a failed confirm and return judgment/anti-thrash suffix for the error string.
+ */
+export function noteFindingConfirmGroundFailure(
+  runtime: ToolRuntime,
+  title: string,
+  location: string,
+): string {
+  const life = runtime.lifecycle || (runtime.lifecycle = {});
+  const counts = (life.findingConfirmFailCounts ||= {});
+  const key = findingConfirmFailKey(title, location);
+  const n = (counts[key] || 0) + 1;
+  counts[key] = n;
+  if (n >= 2) {
+    return (
+      ` — judgment: bookable_unbooked (identical finding(confirm) failed ${n}× for this title+location). ` +
+      `Stop thrashing the same confirm. Either re-probe for grounded proof_excerpt, match location/candidate_index to handoff candidates, or record deadend/bookable_unbooked in stage result.json.`
+    );
+  }
+  return (
+    " — if this claim lacks matching handoff proof_excerpt, treat as bookable_unbooked (do not retry identical confirm without new evidence)."
+  );
 }
 
 export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
@@ -329,7 +350,9 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
         }
         if (!grounded.ok) {
           return textResult(
-            `error: ${grounded.reason}` + formatBookingHelpHint(runtime),
+            `error: ${grounded.reason}` +
+              formatBookingHelpHint(runtime) +
+              noteFindingConfirmGroundFailure(runtime, title, location),
           );
         }
 
@@ -402,7 +425,8 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
       if (!legacyIds.length) {
         return textResult(
           "error: proof required — after subagent, pass location matching a candidate path (query ignored) or candidate_index=N; harness fills VERBATIM proof_excerpt." +
-            formatBookingHelpHint(runtime),
+            formatBookingHelpHint(runtime) +
+            noteFindingConfirmGroundFailure(runtime, title, location),
         );
       }
 

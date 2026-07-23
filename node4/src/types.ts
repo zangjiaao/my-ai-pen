@@ -139,6 +139,11 @@ export type ToolRuntime = {
      * Disable: NODE4_SUBAGENT_IDLE=0.
      */
     subagentIdlePool?: import("./runtime/subagent-idle-pool.js").SubagentIdlePool;
+    /**
+     * finding(confirm) ground-fail counts by title|location — anti-thrash for identical retries.
+     * After ≥2 failures, errors include bookable_unbooked judgment guidance.
+     */
+    findingConfirmFailCounts?: Record<string, number>;
   };
 };
 

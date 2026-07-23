@@ -298,4 +298,55 @@ assert.ok(
   `proof_excerpt-only candidate must book even without poc_hint: ${noPocHint.slice(0, 320)}`,
 );
 
+// --- Pack present but wrong location + paraphrased proof fails closed ---
+
+const parent6 = await bookRuntime();
+const probe6 = {
+  lifecycle: { recentObservations: [], subagentEvidenceCache: [] },
+} as unknown as ToolRuntime;
+const seed6 = seedStageLifecycleFromParent(parent6, probe6);
+absorbStageResultIntoParent(parent6, {
+  stageId: "class_probe",
+  structured: multiCandStructured(),
+  child: probe6,
+  seed: seed6,
+});
+const book6 = await bookRuntime();
+book6.findingsDir = parent6.findingsDir;
+book6.evidence = parent6.evidence;
+book6.task = parent6.task;
+book6.platform = parent6.platform;
+seedStageLifecycleFromParent(parent6, book6);
+const finding6 = createFindingTool(book6);
+// Title + location both miss candidate match → paraphrased proof must fail (not title-loose-fill)
+const wrongLoc = textOf(
+  await finding6.execute("wrong-loc", {
+    action: "confirm",
+    title: "Invented RCE on Unrelated Endpoint",
+    severity: "critical",
+    location: "http://127.0.0.1:3010/totally-unrelated-path",
+    description: "Claimed issue with no matching handoff candidate location or title.",
+    proof: "totally fabricated uid=0(root) never observed in any stage tool output whatsoever",
+    poc: "POST evil payload to wrong path; observed uid=0(root) which never appeared in handoff",
+  }),
+);
+assert.ok(wrongLoc.startsWith("error:"), `mismatch must fail closed: ${wrongLoc.slice(0, 200)}`);
+assert.match(wrongLoc, /proof not found|no subagent candidates|not found|bookable_unbooked/i);
+
+// Second identical fail → stronger bookable_unbooked thrash guidance
+const wrongLoc2 = textOf(
+  await finding6.execute("wrong-loc-2", {
+    action: "confirm",
+    title: "Invented RCE on Unrelated Endpoint",
+    severity: "critical",
+    location: "http://127.0.0.1:3010/totally-unrelated-path",
+    description: "Claimed issue with no matching handoff candidate location or title again.",
+    proof: "totally fabricated uid=0(root) never observed in any stage tool output whatsoever",
+    poc: "POST evil payload to wrong path; observed uid=0(root) which never appeared in handoff",
+  }),
+);
+assert.ok(wrongLoc2.startsWith("error:"), wrongLoc2.slice(0, 200));
+assert.match(wrongLoc2, /bookable_unbooked/i);
+assert.match(wrongLoc2, /thrash|identical|2×|2x/i);
+
 console.log("hard-graph-book-handoff.test.ts: ok");
