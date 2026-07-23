@@ -11,7 +11,7 @@ import {
   pathsMatch,
   formatBookingHelpHint,
 } from "./subagent-booking.js";
-import { injectParentObservationsFromChild } from "../tools/subagent.js";
+import { injectParentObservationsFromChild } from "./subagent-parent-obs.js";
 import { proofGroundedInRecentWork } from "../tools/common.js";
 import { normalizeSubagentResult } from "./subagent-result.js";
 import { evaluateCandidatesForAcceptance } from "./subagent-result.js";

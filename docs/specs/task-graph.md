@@ -20,8 +20,8 @@ Per-stage pi sessions still use isolated work dirs (`taskDir/hard-graph/<graphId
 
 | Concern | Behavior |
 |---------|----------|
-| **Booking / proof (A1)** | After each stage, structured candidates inject into **parent** lifecycle (same observation + multi-package candidate cache path as soft subagent). The next stage child is **seeded** from that parent cache so a book-only stage can `finding(confirm)` with matching `location` / `candidate_index` and verbatim `proof_excerpt` without re-probing. Hallucinated proof still fails closed. |
-| **Session jars (A4)** | Before a stage: seed `parent taskDir/session/` → stage workDir. After a stage: promote stage `session/` → parent (best-effort; child cookies win). Multi-step auth chains survive stage boundaries. |
+| **Booking / proof (A1)** | After each stage, structured **candidates** upsert into **parent** lifecycle by `hard-stage:<stageId>` (same observation inject + candidate cache as soft subagent; retry replaces prior pack for that stage). Empty-candidate attempts do not wipe a prior pack. Next stage child is **seeded** from parent so book-only stages can `finding(confirm)` with matching `location` / `candidate_index` and verbatim `proof_excerpt`. Hallucinated proof still fails closed. |
+| **Session jars (A4)** | Before a stage: seed `parent taskDir/session/` → stage workDir via session-seed helpers. After a stage: promote stage `session/` → parent (best-effort; child cookies win). |
 
 Handoff JSON in the stage prompt remains informational; booking authority is lifecycle cache + groundable observations, not prompt-only tables. No expected-finding counts or answer keys in gates. Settlement still does not require N bookings.
 

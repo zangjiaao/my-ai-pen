@@ -3,7 +3,7 @@
  * Run: npx tsx src/runtime/subagent-parent-obs.test.ts
  */
 import assert from "node:assert/strict";
-import { injectParentObservationsFromChild } from "../tools/subagent.js";
+import { injectParentObservationsFromChild } from "./subagent-parent-obs.js";
 import { proofGroundedInRecentWork } from "../tools/common.js";
 import type { ToolRuntime } from "../types.js";
 import { normalizeSubagentResult } from "./subagent-result.js";

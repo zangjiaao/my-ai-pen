@@ -37,7 +37,7 @@ export type RecentObservation = {
 };
 
 /** Keep enough act history so book-time proof can still find the shell/script that produced it. */
-const RECENT_OBS_CAP = 80;
+export const RECENT_OBS_CAP = 80;
 const MIN_GROUND_NEEDLE = 24;
 
 export type EmitEvidenceOptions = {

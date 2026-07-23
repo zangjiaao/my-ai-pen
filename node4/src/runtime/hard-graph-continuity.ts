@@ -1,17 +1,20 @@
 /**
- * Hard Graph stage continuity (A1 booking/proof + A4 session).
+ * Hard Graph stage continuity (A1 booking/proof + A4 session lifecycle).
  *
- * Reuses soft/OMP primitives:
- * - injectParentObservationsFromChild + rememberSubagentEvidence for bookable proof
- * - seedChildSessionFromParent / promoteChildSessionToParent for cookie jars
+ * Parent lifecycle is SOT between stages. Session jars use
+ * seedChildSessionFromParent / promoteChildSessionToParent directly (no wrappers).
  *
- * Parent lifecycle is SOT between stages; each stage child is seeded at start
- * and absorbed at end. Session jars live under stage workDir and promote to
- * parent taskDir/session.
+ * Retry policy: when a stage re-absorbs with candidates, upsert by stageKey
+ * (drop prior pack + inject observations for that key). Empty-candidate absorbs
+ * do not wipe a prior pack for the same stage.
  */
 
 import type { ToolRuntime } from "../types.js";
-import { injectParentObservationsFromChild } from "../tools/subagent.js";
+import {
+  RECENT_OBS_CAP,
+  type RecentObservation,
+} from "../tools/common.js";
+import { injectParentObservationsFromChild } from "./subagent-parent-obs.js";
 import {
   rememberSubagentEvidence,
   type LastSubagentEvidence,
@@ -20,17 +23,25 @@ import {
   evaluateCandidatesForAcceptance,
   type SubagentStructuredResult,
 } from "./subagent-result.js";
-import {
-  promoteChildSessionToParent,
-  seedChildSessionFromParent,
-} from "./subagent-session-seed.js";
-
-const RECENT_OBS_CAP = 80;
 
 export type StageContinuitySeed = {
-  /** Length of recentObservations after seed (only newer child acts merge back). */
-  observationCount: number;
+  /**
+   * Fingerprints of observations present on the child after seed.
+   * Merge any child observation not in this set (append or full array replace).
+   */
+  fingerprints: Set<string>;
 };
+
+export function observationFingerprint(o: RecentObservation): string {
+  return [
+    o.at,
+    o.sourceTool,
+    o.excerpt,
+    o.path_or_url || "",
+    o.capture?.command || "",
+    o.capture?.via || "",
+  ].join("\0");
+}
 
 /**
  * Copy booking continuity from parent into a fresh stage child runtime.
@@ -43,7 +54,10 @@ export function seedStageLifecycleFromParent(
   const c = child.lifecycle || (child.lifecycle = {} as ToolRuntime["lifecycle"]);
 
   const obs = p.recentObservations || [];
-  c.recentObservations = obs.map((o) => ({ ...o, capture: o.capture ? { ...o.capture } : undefined }));
+  c.recentObservations = obs.map((o) => ({
+    ...o,
+    capture: o.capture ? { ...o.capture } : undefined,
+  }));
 
   const cache = p.subagentEvidenceCache || [];
   c.subagentEvidenceCache = cache.map((pack) => ({
@@ -64,38 +78,77 @@ export function seedStageLifecycleFromParent(
     ? p.subagentCandidateIndex.map((x) => ({ ...x }))
     : undefined;
 
-  return { observationCount: c.recentObservations.length };
+  const fingerprints = new Set(c.recentObservations.map(observationFingerprint));
+  return { fingerprints };
+}
+
+/** Drop prior inject observations and cache packs for a hard-stage key. */
+export function dropStageKeyContinuity(parent: ToolRuntime, stageKey: string): void {
+  const life = parent.lifecycle || (parent.lifecycle = {});
+  if (life.recentObservations?.length) {
+    life.recentObservations = life.recentObservations.filter(
+      (o) => !String(o.summary || "").includes(stageKey),
+    );
+  }
+  if (life.subagentEvidenceCache?.length) {
+    life.subagentEvidenceCache = life.subagentEvidenceCache.filter(
+      (p) => p.subagentId !== stageKey,
+    );
+  }
+  if (life.lastSubagentEvidence?.subagentId === stageKey) {
+    life.lastSubagentEvidence = undefined;
+  }
+}
+
+function mergeNewChildObservations(
+  parent: ToolRuntime,
+  child: ToolRuntime,
+  seed: StageContinuitySeed,
+): void {
+  const childObs = child.lifecycle?.recentObservations || [];
+  if (!childObs.length) return;
+  const parentLife = parent.lifecycle || (parent.lifecycle = {});
+  const list = (parentLife.recentObservations ||= []);
+  const parentFps = new Set(list.map(observationFingerprint));
+  for (const o of childObs) {
+    const fp = observationFingerprint(o);
+    if (seed.fingerprints.has(fp)) continue;
+    if (parentFps.has(fp)) continue;
+    list.push({ ...o, capture: o.capture ? { ...o.capture } : undefined });
+    parentFps.add(fp);
+  }
+  while (list.length > RECENT_OBS_CAP) list.shift();
 }
 
 /**
  * Merge stage outcomes into parent so the next stage (e.g. validate_book) can book.
+ * Upserts bookable material by stageKey when candidates are present.
+ * Propagates absorb errors (do not swallow) — session promote is caller's best-effort.
  */
 export function absorbStageResultIntoParent(
   parent: ToolRuntime,
   input: {
     stageId: string;
-    stageIndex?: number;
     structured: SubagentStructuredResult;
     child?: ToolRuntime;
     seed?: StageContinuitySeed;
   },
 ): void {
-  const parentLife = parent.lifecycle || (parent.lifecycle = {});
-
-  // Promote only observations the child added after seed (avoid duplicating seed copies).
-  if (input.child?.lifecycle?.recentObservations && input.seed) {
-    const newObs = input.child.lifecycle.recentObservations.slice(input.seed.observationCount);
-    if (newObs.length) {
-      const list = (parentLife.recentObservations ||= []);
-      for (const o of newObs) {
-        list.push({ ...o, capture: o.capture ? { ...o.capture } : undefined });
-      }
-      while (list.length > RECENT_OBS_CAP) list.shift();
-    }
+  if (input.child && input.seed) {
+    mergeNewChildObservations(parent, input.child, input.seed);
   }
 
   const stageKey = `hard-stage:${input.stageId}`;
   const structured = input.structured;
+  const hasCandidates = (structured.candidates || []).length > 0;
+
+  // Empty-candidate attempt (failed retry, surface-only): keep prior stageKey pack if any.
+  if (!hasCandidates) {
+    return;
+  }
+
+  // Last absorb with candidates for this stage wins (retry-safe upsert).
+  dropStageKeyContinuity(parent, stageKey);
 
   injectParentObservationsFromChild(parent, {
     subagentId: stageKey,
@@ -117,20 +170,4 @@ export function absorbStageResultIntoParent(
     at: Date.now(),
   };
   rememberSubagentEvidence(parent, pack);
-}
-
-/** A4: seed parent task session/ into stage workDir (best-effort). */
-export async function seedStageSession(
-  parentTaskDir: string,
-  stageWorkDir: string,
-): Promise<{ seeded: boolean; detail: string }> {
-  return seedChildSessionFromParent(parentTaskDir, stageWorkDir);
-}
-
-/** A4: promote stage workDir session/ back to parent (best-effort). */
-export async function promoteStageSession(
-  stageWorkDir: string,
-  parentTaskDir: string,
-): Promise<{ promoted: boolean; detail: string }> {
-  return promoteChildSessionToParent(stageWorkDir, parentTaskDir);
 }
