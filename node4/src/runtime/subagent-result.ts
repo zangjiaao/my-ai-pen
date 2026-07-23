@@ -28,6 +28,12 @@ export type SubagentFactNote = {
 export type SubagentStructuredResult = {
   ok: boolean;
   summary: string;
+  /**
+   * True when summary came from payload or explicit fallback argument.
+   * False when only the normalize default filler was used — Hard Graph gates use this
+   * instead of string-matching the default prose.
+   */
+  summaryProvided: boolean;
   candidates: SubagentCandidate[];
   /** Concrete entrypoints from recon (required for node_type=surface). */
   surfaces: SubagentSurface[];
@@ -153,11 +159,12 @@ export function normalizeSubagentResult(input: unknown, fallbackSummary = ""): S
   const topFacts = asFacts(body.facts);
   const nestedFacts = nestedStructured ? asFacts(nestedStructured.facts) : [];
 
-  const summary =
+  const summaryFromInput =
     asString(body.summary, 2000) ||
     asString(nestedStructured?.summary, 2000) ||
-    asString(fallbackSummary, 2000) ||
-    "subagent finished";
+    asString(fallbackSummary, 2000);
+  const summaryProvided = Boolean(summaryFromInput);
+  const summary = summaryFromInput || "subagent finished";
 
   const okRaw = typeof body.ok === "boolean" ? body.ok : nestedStructured?.ok;
   const ok =
@@ -166,6 +173,7 @@ export function normalizeSubagentResult(input: unknown, fallbackSummary = ""): S
   return {
     ok,
     summary,
+    summaryProvided,
     // Prefer non-empty candidate lists (nested structured often holds the real list)
     candidates: topCandidates.length ? topCandidates : nestedCandidates,
     surfaces: topSurfaces.length ? topSurfaces : nestedSurfaces,
@@ -374,44 +382,25 @@ export function buildParentObservationBlob(structured: SubagentStructuredResult)
   return parts.join("\n\n---\n\n").slice(0, 48_000);
 }
 
-/** Instructions embedded in the child worker prompt. */
+/** Instructions embedded in the child worker prompt (childRolePack already bans nested sub / finding book). */
 export function formatSubagentReturnContractPrompt(): string {
   return [
-    "## Return contract (required before you stop)",
-    "When this_turn_goal is done or blocked, **write** a JSON file at `./result.json` (task workDir) with:",
+    "## Return contract (required before stop)",
+    "Write `./result.json` when this_turn_goal is done or blocked:",
     "```json",
-    "{",
+    '{',
     '  "ok": true,',
-    '  "summary": "one paragraph of what you did and found",',
-    '  "surfaces": [',
-    '    {',
-    '      "location": "full URL or path of an entrypoint YOU observed (form/API/module)",',
-    '      "kind": "form|api|upload|page|other",',
-    '      "params": ["id", "q"],',
-    '      "auth": "none|session|basic"',
-    "    }",
-    "  ],",
-    '  "candidates": [',
-    '    {',
-    '      "title": "short issue title",',
-    '      "location": "full URL or path of the request",',
-    '      "claim": "what is wrong / impact in one sentence",',
-    '      "proof_excerpt": "VERBATIM quote from tool stdout/body proving the issue (min ~32 chars)",',
-    '      "poc_hint": "steps: request/payload AND observed result"',
-    "    }",
-    "  ],",
-    '  "facts": [{ "key": "optional", "summary": "confirmed cognition" }],',
+    '  "summary": "one paragraph",',
+    '  "surfaces": [{ "location": "URL/path YOU observed", "kind": "form|api|upload|page|other", "params": ["id"], "auth": "none|session|basic" }],',
+    '  "candidates": [{ "title": "...", "location": "URL/path", "claim": "impact", "proof_excerpt": "VERBATIM tool quote (~32+ chars)", "poc_hint": "steps + observed result" }],',
+    '  "facts": [{ "key": "optional", "summary": "cognition" }],',
     '  "deadends": ["vector exhausted because ..."],',
-    '  "artifacts": ["relative paths you wrote"]',
+    '  "artifacts": ["relative paths"]',
     "}",
     "```",
-    "**Hard rules:**",
-    "- **Surface/recon packages:** `surfaces` MUST list concrete locations from **live** recon (menu/HTML/JS/responses). Never invent modules.",
-    "- If you claim any vulnerability / exploitable issue, `candidates` MUST be non-empty.",
-    "- Every candidate MUST include `location` + `proof_excerpt` (real tool output quote, not paraphrase-only).",
-    "- `poc_hint` MUST include both how to reproduce AND what was observed.",
-    "- Do **not** call finding(confirm) — the parent Main agent books product findings.",
-    "- Do **not** call subagent — nested delegation is forbidden.",
-    "- The parent cannot re-probe the target; your proof_excerpt is the only ground truth for booking.",
+    "- Surface/recon: `surfaces` from **live** recon only — never invent modules.",
+    "- Any vuln claim → non-empty `candidates` with `location` + real `proof_excerpt` (not paraphrase-only).",
+    "- `poc_hint`: reproduce steps AND observed result. Parent books via finding(confirm) from your proof_excerpt — no re-probe.",
+    "- Mandatory `./result.json` before stop (else salvage). Prefer session/http; re-login only if seeded cookies fail.",
   ].join("\n");
 }

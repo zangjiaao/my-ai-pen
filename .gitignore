@@ -68,3 +68,9 @@ benchmarks/omp-*/
 
 # Claude local
 .claude/settings.local.json
+
+# Node5 local runtime / benches
+node5/workspace/
+node5/.venv/
+node5/.pytest_cache/
+node5/.env

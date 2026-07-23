@@ -24,10 +24,16 @@ export type TaskEnvelope = {
   graphId?: string;
   /**
    * Graph Main act discipline override (structured).
-   * delegate_preferred = soft prompt; delegate_only = strip Main act tools.
+   * Product default: delegate_preferred (Main may act). delegate_only = lab hard strip.
    * Env NODE4_GRAPH_MAIN_ACT may also set this.
    */
   graphMainAct?: "delegate_preferred" | "delegate_only";
+  /**
+   * Hard Graph vs soft scenario menu (structured only — no NLP).
+   * "hard" → Graph × Pi runner owns stage order (see hard-graph-*).
+   * Soft/unset keeps existing OMP + optional soft scenario graph.
+   */
+  graphDiscipline?: "soft" | "hard";
   /**
    * Rules-of-engagement: allow host post-ex / lateral.
    * When undefined, derived from engagementTemplate (default false).
@@ -121,6 +127,18 @@ export type ToolRuntime = {
     subagentEvidenceCache?: import("./runtime/subagent-booking.js").LastSubagentEvidence[];
     /** Flattened index rebuilt from cache for pathname matching / candidate_index. */
     subagentCandidateIndex?: import("./runtime/subagent-booking.js").CachedCandidate[];
+    /**
+     * Pathname → how many times Main already dispatched a subagent package for it.
+     * Soft-limits re-dispatch spam (default max 2 per path).
+     */
+    subagentPathDispatchCounts?: Record<string, number>;
+    /**
+     * OMP-style idle workers by agent_id (keep-alive after package, incl. soft-fail).
+     * Resume: resume_agent_id + same-path affinity.
+     * Release: idle TTL timer, maxIdle LRU, maxPackages, op=release, task end disposeAll.
+     * Disable: NODE4_SUBAGENT_IDLE=0.
+     */
+    subagentIdlePool?: import("./runtime/subagent-idle-pool.js").SubagentIdlePool;
   };
 };
 

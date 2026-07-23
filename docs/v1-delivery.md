@@ -28,7 +28,7 @@
 | **状态看板** | 全局 KPI / 严重级别 / 近期 finding（侧栏入口，非默认首页） |
 | **定时任务** | 结构化 engagement 周期派工（UI + 现有 schedules API） |
 | **品牌与登录** | Logo / favicon；登录页左宣传 + 右表单；对话右栏轻入场动效 |
-| **运行时** | Node4 + experts packs + pen-sandbox（shell/browser） |
+| **运行时** | 已绑定的 Node 候选（`node4` 或 `node5`，须显式配置）+ experts packs + pen-sandbox（shell/browser） |
 | **文档** | 安装边界、已知限制、RoE 提示 |
 
 ---
@@ -46,14 +46,16 @@
 
 ## 4. 产品代码边界（发布包）
 
-| 维护并发布 | 参照不发布 |
-|------------|------------|
-| `platform/` | `node/` `node2/` `node3/` |
-| `node4/` | `research/` |
-| `experts/` | 本地 `node4/workspace/`、lab session dumps |
-| `sandbox/`（pen-sandbox 说明/镜像） | |
+| 维护并发布 | 冻结 / 不发布 |
+|------------|---------------|
+| `platform/` | `research/`（冻结参照） |
+| 已绑定的 Node 候选：`node4/` **或** `node5/` | `benchmarks/`（冻结 lab 评估） |
+| `experts/` | 本地 `*/workspace/`、lab session dumps |
+| `sandbox/`（pen-sandbox 说明/镜像） | legacy `node/` `node2/` `node3/`（计划删除） |
 
-Spec 权威：`AGENTS.md` → `docs/prd.md` → `docs/node4-harness.md`。
+**V1 产品默认绑定 Node4 血统（Graph × Pi）。** 每次部署仍须显式绑定恰好一个 Node 进程；`node5` 不作默认产品路径（lab/退路，见 ADR 0001）。
+
+Spec 权威：`AGENTS.md` → `docs/prd.md` → `docs/specs/harness.md`（候选实现细节）→ 其他 `docs/specs/*`。
 
 ---
 
@@ -61,8 +63,8 @@ Spec 权威：`AGENTS.md` → `docs/prd.md` → `docs/node4-harness.md`。
 
 ```text
 1. platform: docker compose（db + rabbitmq + backend）+ frontend dev/build
-2. node4: 本机或同机进程，配置平台 WS + 模型 API Key
-3. pen-sandbox 镜像（shell/browser）；见 docs/pen-tools-sandbox.md
+2. 绑定一个 Node 候选（示例：node4 本机进程，或 node5 CLI/对接方式）— 配置平台 WS + 模型 API Key
+3. pen-sandbox 镜像（shell/browser）；见 docs/specs/pen-tools-sandbox.md
 4. 节点管理安装专家包（如 pentest）；专家管理创建实例并绑定 Node
 5. 用户创建资产（主机）→ 会话中 @专家 → 授权范围测试
 ```

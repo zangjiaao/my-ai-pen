@@ -2,9 +2,8 @@
 
 Independent **expert pack** units maintained outside the Node harness.
 
-**Active conversation plan:** [`docs/platform-default-agent-refactor.md`](../docs/platform-default-agent-refactor.md)  
-**Pack capability + maintenance plan:** [`docs/expert-pack-capability-and-maintenance.md`](../docs/expert-pack-capability-and-maintenance.md) (ClaudeBrain-adapted methodology; L1 pack / L2 sandbox / L3 hand PoC; n-day update runbook)  
-**Historical collab notes:** [`docs/archive/multi-expert-collaboration-plan.md`](../docs/archive/multi-expert-collaboration-plan.md)  
+**Runtime contracts:** [`docs/specs/expert-offers.md`](../docs/specs/expert-offers.md), [`docs/specs/harness.md`](../docs/specs/harness.md), [`docs/specs/pen-tools-sandbox.md`](../docs/specs/pen-tools-sandbox.md)  
+**Product:** [`docs/prd.md`](../docs/prd.md) · **Cleanup plan:** [`docs/project-cleanup-plan.md`](../docs/project-cleanup-plan.md)  
 (Experts = target families; stages = skills; pipeline = Case + user @ — not stage-named Experts.)
 
 | Path | Role |
@@ -22,7 +21,7 @@ Independent **expert pack** units maintained outside the Node harness.
 
 ## Node as runtime
 
-Node4 is an OMP-class agent runtime with a **built-in `default` seat** (工作台助手) plus optional expert packs.
+The product Node (**Node4 lineage / Graph × Pi**) is an OMP-class agent runtime with a **built-in `default` seat** (工作台助手; never Expert Hard Graph) plus optional expert packs. Expert Hard Graph stages use pi inside a product-owned runner. **Node5** is lab/semantic reference only while A is in pursuit.
 
 **Model B — platform citizen base + specialist overlay:**
 
@@ -31,7 +30,7 @@ Node4 is an OMP-class agent runtime with a **built-in `default` seat** (工作�
 - **pentest / ctf / …** = citizen **read** + act tools (shell, finding, skills). Session isolation remains; platform knowledge is shared.
 - Host **create** is never a free agent tool — user asset page, open-task Authorize, or next-scope / promote only.
 
-1. **Built-in `default`** — always available; full platform ledger tools + light assist; **no** finding booking. Product target: [`docs/platform-default-agent-refactor.md`](../docs/platform-default-agent-refactor.md).
+1. **Built-in `default`** — always available; full platform ledger tools + light assist; **no** finding booking.
 2. **Catalog** — this tree (source of **expert** pack content; not auto-loaded).
 3. **Install root** — local expert copies (`node4/installed-experts/` by default, override `NODE4_EXPERTS_INSTALL`).
 

@@ -1,8 +1,8 @@
 # Agent Engineering Rules
 
-**Spec precedence (when documents disagree):** `AGENTS.md` → `docs/prd.md` → `docs/node4-harness.md` → other `docs/*`.  
-**Runtime to maintain:** `node4/` only. Trees `node/`, `node2/`, `node3/` are reference; do not expand product behavior there.  
-**Archived specs** under `docs/archive/` are not implementation authority.
+**Spec precedence (when documents disagree):** `AGENTS.md` → `docs/prd.md` → `docs/specs/harness.md` (candidate-specific) → other `docs/specs/*` / `docs/v1-delivery.md`.
+
+**Product Node path (locked):** **Graph × Pi** on the **Node4 lineage** (Hard Graph runner owns Expert stage order; pi is in-node Agent Runtime). **Default** seat never enters Expert Hard Graph. **Node5** is a **lab / semantic reference** and formal fallback B only under documented hard triggers (see `docs/adr/0001-graph-x-pi-product-path.md`) — do **not** expand Node5 as a co-equal product kernel while A is in pursuit. Platform binds to **exactly one** Node process per deployment (product default: Node4 lineage). **Legacy** `node/`, `node2/`, `node3/`: plan-delete after gates — do not expand product behavior there. **`research/`**: frozen third-party reference (not product). **`benchmarks/`**: frozen lab evaluation assets (not product authority). Product work targets platform + Node4 lineage + `experts/`.
 
 ## No Hardcoded Behavior Without Approval
 
@@ -27,11 +27,12 @@
 ## Documentation Maintenance
 
 - **Keep docs current with code.** When you change product behavior, runtime layout, expert packs, install/uninstall, APIs, or default policies, update the matching living docs in the **same change** (or immediately after), not as a vague follow-up.
-- **Living sources (edit these):** `docs/prd.md`, `docs/node4-harness.md`, `docs/node-expert-offers.md`, `docs/node4-ctf-role.md`, `docs/design.md` (UI only), `docs/README.md`, `experts/README.md`, and this file. Prefer small surgical updates over new parallel docs.
-- **Do not treat `docs/archive/` as truth** — historical only; if a live doc still points at archived paths or old Node1–3 product models, fix or remove the pointer.
-- **Remove leftovers:** if you migrate files (e.g. skills/recipes into `experts/`), delete or replace old paths under `node4/` with a short pointer README so agents do not follow stale locations.
+- **Living sources (edit these):** `docs/prd.md`, `docs/v1-delivery.md`, `docs/specs/*`, `docs/design.md` (UI only), `docs/README.md`, `docs/project-cleanup-plan.md` (ops), `docs/agents/*` (skill process), `experts/README.md`, and this file. Prefer small surgical updates over new parallel docs.
+- **Do not invent archive trees** for obsolete plans — hard-delete when done (git history is backup).
+- **Remove leftovers:** if you migrate files (e.g. skills/recipes into `experts/`), delete or replace old paths under a Node candidate with a short pointer README so agents do not follow stale locations.
 - **Index and discoverability:** when adding a new living doc, link it from `docs/README.md` (and `experts/README.md` when pack-related).
-- **Accuracy over volume:** do not invent roadmaps or restate large PLAID archives; document what the system **actually** does now (Node4, bare runtime, experts catalog, platform offers).
+- **Accuracy over volume:** document what the system **actually** does now (platform + bound Node candidate + experts). Do not declare a PK winner in living docs.
+- **Frozen trees:** do not delete or relocate `research/` or `benchmarks/` without an explicit new decision.
 - **Commits:** include doc updates in the same commit as the behavioral change when practical so history stays reviewable.
 
 ## Harness Over Restriction

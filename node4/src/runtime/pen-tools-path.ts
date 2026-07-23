@@ -1,7 +1,7 @@
 /**
  * First-party L2 pen-tools discovery for Node4 shell PATH.
  * Wrappers under sandbox/pen-tools/bin docker-run scanners (nuclei, nmap, …).
- * See docs/pen-tools-sandbox.md.
+ * See docs/specs/pen-tools-sandbox.md.
  *
  * Env:
  * - NODE4_PEN_TOOLS=0|false → disable PATH injection

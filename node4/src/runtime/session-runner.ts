@@ -41,6 +41,8 @@ import {
   buildPentestGraphContext,
   resolvePentestGraph,
 } from "./pentest-graph.js";
+import { resolveHardGraph } from "./hard-graph-definition.js";
+import { runHardGraphExpertTask } from "./hard-graph-task.js";
 import {
   buildGoalBudgetLimitPrompt,
   buildGoalContinuationPrompt,
@@ -168,7 +170,37 @@ export async function runNode4Task(
     panelAgents: panel,
   });
 
-  // Free vs Graph work mode (pentest scenario graphs; other packs stay free)
+  /**
+   * Graph × Pi Hard Graph path (ownership inversion).
+   * Runs only after parent ToolRuntime exists so stage sessions use real stores/platform.
+   * Default / ledger-assist seats never enter Expert Hard Graph.
+   * Settlement is sole ownership of settleHardGraphTask (not a second dialect here).
+   */
+  if (!chatOnly && !ledgerAssistSeat) {
+    const packRootForHard = (pack as { packRoot?: string }).packRoot;
+    const hardResolved = await resolveHardGraph({
+      task,
+      packRoot: packRootForHard,
+      packId: pack.id,
+      env: process.env,
+    });
+    if (hardResolved.mode === "hard") {
+      runtime.lifecycle.abortSignal = signal;
+      const hardOut = await runHardGraphExpertTask({
+        config,
+        platform: loggingPlatform,
+        task,
+        taskDir,
+        pack,
+        graph: hardResolved.graph,
+        parentRuntime: runtime,
+        signal,
+      });
+      return { terminalStatus: hardOut.harnessStatus, taskDir };
+    }
+  }
+
+  // Free vs soft scenario Graph (OMP Main path)
   const graphResolved = await resolvePentestGraph({
     task,
     packId: pack.id,
@@ -208,6 +240,8 @@ export async function runNode4Task(
         })
         .catch(() => {});
       void Promise.resolve(sessionRef.abort?.()).catch(() => {});
+      // Drop warm subagent sessions so cancelled tasks do not leak LLM handles.
+      void runtime.lifecycle.subagentIdlePool?.disposeAll?.().catch(() => {});
     };
     if (signal.aborted) onCancel();
     else signal.addEventListener("abort", onCancel, { once: true });
@@ -667,6 +701,13 @@ export async function runNode4Task(
 
   try {
     session.dispose?.();
+  } catch {
+    // ignore
+  }
+
+  // OMP idle subagent sessions: dispose parked children at task end.
+  try {
+    await runtime.lifecycle.subagentIdlePool?.disposeAll?.();
   } catch {
     // ignore
   }

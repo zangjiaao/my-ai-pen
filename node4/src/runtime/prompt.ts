@@ -189,10 +189,9 @@ export function buildSystemPrompt(
     }
   }
   if (pack.toolNames.includes("subagent")) {
+    // Graph/free <work-mode> already owns captain/dispatch detail — one line here only.
     lines.push(
-      "Subagent handoff: require target, scope, already_done, this_turn_goal, success_criteria. Nested subagent is disallowed.",
-      "Without command=: child is a same-pack LLM loop (act tools only; no finding booking). Parent books with finding(confirm)+proof from child structured.candidates / tool output.",
-      "Optional command= runs a bounded shell probe only (deterministic).",
+      "Subagent: require target, scope, already_done, this_turn_goal, success_criteria; nested disallowed; parent books from child candidates/proof (no command= preferred for LLM child).",
     );
   }
   if (pack.toolNames.includes("fact")) {
