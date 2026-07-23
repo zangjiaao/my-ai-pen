@@ -82,6 +82,13 @@ function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope): strin
     "Facts alone are not the stage handoff — Feedback reads result.json only.",
     "Bookable candidates MUST include: title, location (URL/path), proof_excerpt (verbatim tool stdout/body ≥24 chars), optional poc_hint.",
     "Without proof_excerpt the next stage cannot finding(confirm) — narrative notes alone are not bookable.",
+    input.tools.includes("subagent")
+      ? [
+          "Agent Graph: when surfaces justify multi-class work, fan-out with subagent packages[] (skill/path-scoped workers).",
+          "Workers return candidates[] with verbatim proof_excerpt; you Join into result.json candidates (do not rephrase proof).",
+          "No nested subagent inside workers. Stay in RoE/scope. Prefer packages over one serial monologue across all classes.",
+        ].join(" ")
+      : "",
     "Fail closed: do not invent surfaces or proof.",
     `Target: ${JSON.stringify(task.target)}`,
     `Scope: ${JSON.stringify(task.scope)}`,

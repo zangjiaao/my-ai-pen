@@ -157,19 +157,35 @@ export async function listHardGraphIds(packRoot: string): Promise<string[]> {
   }
 }
 
+/**
+ * Explicit Hard Graph ids/aliases (structured only).
+ * Do **not** map bare `app_assessment` here — that id is the soft scenario graph
+ * unless graphDiscipline/env selects hard (then DEFAULT_HARD_GRAPH_ID applies).
+ *
+ * Mature Expert primary file: graphs/hard/app_assessment.json
+ * Thin lab/compat file: graphs/hard/app_assessment_thin.json
+ */
 const HARD_GRAPH_ALIASES: Record<string, string> = {
+  // Mature Expert hard
+  hard_app_assessment: "app_assessment",
+  app_assessment_hard: "app_assessment",
+  hard: "app_assessment",
+  // Thin lab / compatibility (always hard when this id is used)
   app_assessment_thin: "app_assessment_thin",
-  hard_app_assessment: "app_assessment_thin",
+  hard_app_assessment_thin: "app_assessment_thin",
   thin: "app_assessment_thin",
 };
+
+/** Default Hard Graph id when graphDiscipline/env selects hard without a thin/lab id. */
+export const DEFAULT_HARD_GRAPH_ID = "app_assessment";
 
 /**
  * Resolve whether this task wants Hard Graph and which definition to load.
  * Structured fields only — no free-text NLP on instruction.
  *
- * - graphDiscipline === "hard" → load hard graph (graphId or default app_assessment_thin)
- * - graphId maps to a known hard id / alias
- * - env NODE4_HARD_GRAPH=1|true with graphId alias support
+ * - Explicit thin/hard aliases → hard mode with that file
+ * - graphDiscipline === "hard" or NODE4_HARD_GRAPH → hard (mature default, or alias if set)
+ * - bare soft id `app_assessment` without hard discipline → not_hard
  */
 export async function resolveHardGraph(options: {
   task: Pick<TaskEnvelope, "graphId" | "engagementTemplate" | "graphDiscipline">;
@@ -193,10 +209,13 @@ export async function resolveHardGraph(options: {
     .toLowerCase();
   const aliased = HARD_GRAPH_ALIASES[rawId] ?? null;
 
-  // Explicit hard graph id, or discipline/env → default thin path.
-  let hardId: string | null = aliased;
-  if (!hardId && (taskHard || envHard)) {
-    hardId = "app_assessment_thin";
+  let hardId: string | null = null;
+  if (aliased) {
+    // Explicit hard alias (thin or mature hard_*) always enters Hard Graph.
+    hardId = aliased;
+  } else if (taskHard || envHard) {
+    // Discipline/env hard without an explicit thin/hard_* alias → mature Expert primary.
+    hardId = DEFAULT_HARD_GRAPH_ID;
   }
 
   if (!hardId || !options.packRoot) {

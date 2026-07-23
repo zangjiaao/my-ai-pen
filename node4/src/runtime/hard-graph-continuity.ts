@@ -137,13 +137,36 @@ function mergeNewChildObservations(
 }
 
 /**
+ * Stable Product-state package key for Hard stage / Agent Graph worker Join.
+ * - Stage captain / result.json: `hard-stage:<stageId>`
+ * - Fan-out worker package: `hard-stage:<stageId>:<workerId>`
+ * Worker ids are sanitized to [a-zA-Z0-9_-] so inject summary token boundaries stay safe.
+ */
+export function hardStagePackageKey(stageId: string, workerId?: string): string {
+  const stage = String(stageId || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  const base = `hard-stage:${stage || "stage"}`;
+  const worker = String(workerId || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  if (!worker) return base;
+  return `${base}:${worker}`;
+}
+
+/**
  * Merge stage outcomes into parent so the next stage (e.g. validate_book) can book.
- * Upserts bookable material by stageKey when candidates are present.
+ * Upserts bookable material by package key when candidates are present.
  * Propagates absorb errors (do not swallow) — session promote is caller's best-effort.
  *
  * Policy: child shell/http acts merge append-only across retries (sticky grounding).
- * Only inject-tagged rows for this stageKey are dropped on candidate upsert; booking
+ * Only inject-tagged rows for this package key are dropped on candidate upsert; booking
  * cache still resolves the latest pack's verbatim proof.
+ *
+ * Agent Graph fan-out: pass `workerId` so multiple packages Join under distinct keys
+ * without wiping sibling workers. Empty-candidate absorb never wipes prior packs.
  */
 export function absorbStageResultIntoParent(
   parent: ToolRuntime,
@@ -152,22 +175,24 @@ export function absorbStageResultIntoParent(
     structured: SubagentStructuredResult;
     child?: ToolRuntime;
     seed?: StageContinuitySeed;
+    /** Optional fan-out package id (skill/path worker). */
+    workerId?: string;
   },
 ): void {
   if (input.child && input.seed) {
     mergeNewChildObservations(parent, input.child, input.seed);
   }
 
-  const stageKey = `hard-stage:${input.stageId}`;
+  const stageKey = hardStagePackageKey(input.stageId, input.workerId);
   const structured = input.structured;
   const hasCandidates = (structured.candidates || []).length > 0;
 
-  // Empty-candidate attempt (failed retry, surface-only): keep prior stageKey pack if any.
+  // Empty-candidate attempt (failed retry, surface-only): keep prior package if any.
   if (!hasCandidates) {
     return;
   }
 
-  // Last absorb with candidates for this stage wins (retry-safe upsert).
+  // Last absorb with candidates for this package key wins (retry-safe upsert).
   dropStageKeyContinuity(parent, stageKey);
 
   injectParentObservationsFromChild(parent, {

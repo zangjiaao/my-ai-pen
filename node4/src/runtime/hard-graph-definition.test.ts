@@ -58,13 +58,16 @@ if (r1.mode === "hard") {
   assert.equal(r1.graph.id, "app_assessment_thin");
 }
 
-// Resolve via graphDiscipline hard + default thin id
+// Resolve via graphDiscipline hard + default mature Expert primary
 const r2 = await resolveHardGraph({
   task: { graphDiscipline: "hard" },
   packRoot: repoExperts,
   packId: "pentest",
 });
 assert.equal(r2.mode, "hard");
+if (r2.mode === "hard") {
+  assert.equal(r2.graph.id, "app_assessment", "hard default is mature app_assessment");
+}
 
 // Soft graphId alone without discipline → not hard
 const r3 = await resolveHardGraph({
