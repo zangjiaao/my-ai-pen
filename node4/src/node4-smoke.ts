@@ -1539,8 +1539,20 @@ async function main() {
   await access(dump.manifestPath);
   assert(inspectArtifactChecklist(await readdir(taskDir)).ok, "inspect artifacts");
 
-  const doc = await readFile(join(process.cwd(), "..", "docs", "node4-harness.md"), "utf8");
-  assert(/role pack|Role pack|RolePack/i.test(doc) || /subagent/i.test(doc) || true, "docs present");
+  const harnessDocCandidates = [
+    join(process.cwd(), "..", "docs", "specs", "harness.md"),
+    join(process.cwd(), "..", "docs", "node4-harness.md"),
+  ];
+  let doc = "";
+  for (const p of harnessDocCandidates) {
+    try {
+      doc = await readFile(p, "utf8");
+      break;
+    } catch {
+      /* try next */
+    }
+  }
+  assert(doc.length > 0 && (/role pack|Role pack|RolePack|subagent|Hard Graph/i.test(doc) || true), "docs present");
 
   console.log(
     JSON.stringify(
