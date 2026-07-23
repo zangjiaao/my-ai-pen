@@ -1,0 +1,6 @@
+{
+  "fact_key": "ftp_exposure",
+  "summary": "FTP directory listing exposes sensitive files",
+  "body": "/ftp/ directory listing enabled, exposes files:\n- acquisitions.md - confidential business acquisition plans\n- announcement_encrypted.md - encrypted announcement\n- incident-support.kdbx - KeePass database (downloadable binary)\n- legal.md - legal info\n- coupons_2013.md.bak (403 only .md/.pdf)\n- encrypt.pyc (403)\n- eastere.gg (403)\n- suspicious_errors.yml (403)\n- package.json.bak (403)\n- package-lock.json.bak (403)\nFile server restricts to .md and .pdf but kdbx bypassed check.",
+  "updated_at": "2026-07-23T20:10:12.492Z"
+}

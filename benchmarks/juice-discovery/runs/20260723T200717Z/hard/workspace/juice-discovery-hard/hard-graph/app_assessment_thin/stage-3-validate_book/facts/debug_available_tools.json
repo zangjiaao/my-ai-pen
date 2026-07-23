@@ -1,0 +1,6 @@
+{
+  "fact_key": "debug_available_tools",
+  "summary": "Checking available tools",
+  "body": "Available tools as per system prompt: todo, write, read, finding, fact, skill. But error message suggests http/shell/session tools should exist. Let me check if any are available by trying them.",
+  "updated_at": "2026-07-23T20:21:47.222Z"
+}

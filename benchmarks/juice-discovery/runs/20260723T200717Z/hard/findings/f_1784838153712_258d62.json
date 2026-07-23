@@ -1,0 +1,28 @@
+{
+  "id": "f_1784838153712_258d62",
+  "action": "confirm",
+  "title": "Directory Listing Enabled on /ftp/ Endpoints",
+  "severity": "medium",
+  "finding_kind": "vuln",
+  "location": "/ftp/",
+  "url": "/ftp/",
+  "description": "Directory listing is enabled on the /ftp/ endpoint, revealing the contents of the FTP-accessible directory including acquisitions.md, legal.md, and a quarantine/ subdirectory. This exposes the file inventory to unauthenticated attackers and aids in identifying potential targets for path traversal or sensitive file access.",
+  "poc": "GET /ftp/ → HTTP 200 with HTML directory listing showing files: acquisitions.md, legal.md, quarantine/",
+  "proof": "Observed directory listing on /ftp/ endpoint. GET /ftp/ returns HTTP 200 with an HTML directory listing showing files including acquisitions.md, legal.md, and quarantine/ subdirectory.",
+  "how_captured": "script: evidence/directory_listing.txt",
+  "evidence_ids": [
+    "ev_1784838153592_41c2a1"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784838153592_41c2a1",
+      "excerpt": "Observed directory listing on /ftp/ endpoint. GET /ftp/ returns HTTP 200 with an HTML directory listing showing files including acquisitions.md, legal.md, and quarantine/ subdirectory.",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "script: evidence/directory_listing.txt"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "3010",
+  "created_at": "2026-07-23T20:22:33.712Z"
+}

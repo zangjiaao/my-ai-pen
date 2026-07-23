@@ -1,0 +1,521 @@
+{
+  "ok": true,
+  "summary": "Surface stage complete. Mapped live attack surface of OWASP Juice Shop v20.1.1 at http://127.0.0.1:3010. Confirmed multiple live surfaces including SQL injection in login and product search, excessive data exposure via API, directory listing enabled, sensitive files exposed, JWT with embedded password hash, and various API endpoints.",
+  "summaryProvided": true,
+  "candidates": [
+    {
+      "claim": "SQL injection in login form (email/password fields) - CONFIRMED via ' OR 1=1-- payload"
+    },
+    {
+      "claim": "SQL injection in product search parameter - CONFIRMED via UNION SELECT"
+    },
+    {
+      "claim": "SQL injection in basket item operations - UNTESTED"
+    },
+    {
+      "claim": "NoSQL injection in registration/login endpoint - PARTIALLY CONFIRMED (password field accepts objects causing type error)"
+    },
+    {
+      "claim": "Reflected XSS in search results - NEGATIVE (search returns JSON, no HTML reflection)"
+    },
+    {
+      "claim": "Stored XSS in feedback submission - UNTESTED (captcha blocks without captchaId)"
+    },
+    {
+      "claim": "DOM-based XSS via hash fragment - UNTESTED"
+    },
+    {
+      "claim": "IDOR on user profiles - CONFIRMED (admin can access all user data via /api/Users)"
+    },
+    {
+      "claim": "IDOR on basket access - CONFIRMED (admin can access basket/1)"
+    },
+    {
+      "claim": "IDOR on order history - UNTESTED"
+    },
+    {
+      "claim": "JWT token weaknesses - CONFIRMED (password hash embedded in token)"
+    },
+    {
+      "claim": "Login brute force / rate limiting test - PARTIALLY CONFIRMED (rate limiting present on reset-password)"
+    },
+    {
+      "claim": "Password reset flaws - PARTIALLY CONFIRMED (security question validation present)"
+    },
+    {
+      "claim": "Server-Side Template Injection in B2B order API - UNTESTED (requires authenticated probe)"
+    },
+    {
+      "claim": "Path traversal in static file serving - PARTIALLY CONFIRMED (/ftp/ accessible, but ../ normalized to index.html)"
+    },
+    {
+      "claim": "Path traversal via FTP endpoint - CONFIRMED (directory listing enabled, files accessible)"
+    },
+    {
+      "claim": "Malicious file upload (profile picture) - UNTESTED"
+    },
+    {
+      "claim": "CSRF on state-changing endpoints - UNTESTED"
+    },
+    {
+      "claim": "SSRF via product review image URL - UNTESTED"
+    },
+    {
+      "claim": "Cross-Site Script Inclusion - UNTESTED"
+    }
+  ],
+  "surfaces": [
+    {
+      "location": "/rest/user/login",
+      "kind": "api"
+    },
+    {
+      "location": "/rest/products/search",
+      "kind": "api"
+    },
+    {
+      "location": "/api/Users",
+      "kind": "api"
+    },
+    {
+      "location": "/api/Products",
+      "kind": "api"
+    },
+    {
+      "location": "/api/Feedbacks",
+      "kind": "api"
+    },
+    {
+      "location": "/api/Challenges",
+      "kind": "api"
+    },
+    {
+      "location": "/api/Quantitys",
+      "kind": "api"
+    },
+    {
+      "location": "/api/SecurityQuestions",
+      "kind": "api"
+    },
+    {
+      "location": "/rest/admin/application-configuration",
+      "kind": "api"
+    },
+    {
+      "location": "/rest/admin/application-version",
+      "kind": "api"
+    },
+    {
+      "location": "/rest/captcha/",
+      "kind": "api"
+    },
+    {
+      "location": "/rest/continue-code",
+      "kind": "api"
+    },
+    {
+      "location": "/rest/basket/1",
+      "kind": "api"
+    },
+    {
+      "location": "/rest/user/change-password",
+      "kind": "api"
+    },
+    {
+      "location": "/api/Complaints",
+      "kind": "api"
+    },
+    {
+      "location": "/api/Cards",
+      "kind": "api"
+    },
+    {
+      "location": "/ftp/",
+      "kind": "file"
+    },
+    {
+      "location": "/ftp/acquisitions.md",
+      "kind": "file"
+    },
+    {
+      "location": "/ftp/legal.md",
+      "kind": "file"
+    },
+    {
+      "location": "/ftp/quarantine/",
+      "kind": "file"
+    },
+    {
+      "location": "/rest/user/whoami",
+      "kind": "auth"
+    },
+    {
+      "location": "/rest/user/reset-password",
+      "kind": "auth"
+    },
+    {
+      "location": "/rest/user/login",
+      "kind": "injection"
+    },
+    {
+      "location": "JWT Token",
+      "kind": "jwt"
+    },
+    {
+      "location": "/b2b/v2/order",
+      "kind": "api"
+    }
+  ],
+  "facts": [
+    {
+      "key": "target_info",
+      "summary": "OWASP Juice Shop v20.1.1 running Express ^4.22.1 on port 3010"
+    },
+    {
+      "key": "auth_mechanism",
+      "summary": "JWT-based authentication with embedded user data"
+    },
+    {
+      "key": "admin_access_gained",
+      "summary": "Obtained admin JWT token via SQL injection"
+    },
+    {
+      "key": "api_endpoints",
+      "summary": "Discovered 20+ API endpoints"
+    },
+    {
+      "key": "ftp_files",
+      "summary": "Sensitive files exposed in /ftp/ directory"
+    }
+  ],
+  "deadends": [
+    "[object Object]",
+    "[object Object]",
+    "[object Object]",
+    "[object Object]",
+    "[object Object]",
+    "[object Object]",
+    "[object Object]"
+  ],
+  "artifacts": [],
+  "raw": {
+    "ok": true,
+    "summary": "Surface stage complete. Mapped live attack surface of OWASP Juice Shop v20.1.1 at http://127.0.0.1:3010. Confirmed multiple live surfaces including SQL injection in login and product search, excessive data exposure via API, directory listing enabled, sensitive files exposed, JWT with embedded password hash, and various API endpoints.",
+    "surfaces": [
+      {
+        "type": "api",
+        "path": "/rest/user/login",
+        "method": "POST",
+        "description": "SQL injection in email field - authenticated as admin using payload ' OR 1=1-- as email. Response returned JWT token with admin privileges.",
+        "evidence": "POST /rest/user/login with body {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with token containing role:admin, email:admin@juice-sh.op"
+      },
+      {
+        "type": "api",
+        "path": "/rest/products/search",
+        "method": "GET",
+        "description": "SQL injection in search parameter q - UNION SELECT injection confirmed. Error 'SQLITE_ERROR: incomplete input' on single quote, successful UNION SELECT returning injected values.",
+        "evidence": "GET /rest/products/search?q=')) UNION SELECT 1,2,3,4,5,6,7,8,9 FROM sqlite_master-- returned injected row with id:1, name:2, description:3, price:4"
+      },
+      {
+        "type": "api",
+        "path": "/api/Users",
+        "method": "GET",
+        "description": "Excessive data exposure - authenticated GET returns all users including password hashes, roles, email addresses. No access control filtering.",
+        "evidence": "GET /api/Users with admin JWT returned 25 users with fields: id, email, password (hash), role, profileImage, isActive"
+      },
+      {
+        "type": "api",
+        "path": "/api/Products",
+        "method": "GET",
+        "description": "Product API returns full product catalog with pricing, descriptions, images. No auth required.",
+        "evidence": "GET /api/Products returned all products including deleted items with deletedAt timestamps"
+      },
+      {
+        "type": "api",
+        "path": "/api/Feedbacks",
+        "method": "GET",
+        "description": "Feedback API returns all user feedback comments with UserId mapping. No auth required.",
+        "evidence": "GET /api/Feedbacks returned 8 feedbacks including user comments with email placeholders and UserId"
+      },
+      {
+        "type": "api",
+        "path": "/api/Challenges",
+        "method": "GET",
+        "description": "Challenges API exposes all challenge definitions including descriptions, difficulty ratings, and solve status. No auth required.",
+        "evidence": "GET /api/Challenges returned full challenge list including solved status (e.g., 'Admin Registration' already solved)"
+      },
+      {
+        "type": "api",
+        "path": "/api/Quantitys",
+        "method": "GET",
+        "description": "Inventory quantity API exposes stock levels and per-user limits. No auth required.",
+        "evidence": "GET /api/Quantitys returned 56 inventory records with quantity and limitPerUser fields"
+      },
+      {
+        "type": "api",
+        "path": "/api/SecurityQuestions",
+        "method": "GET",
+        "description": "Security questions API exposes all password reset questions. No auth required.",
+        "evidence": "GET /api/SecurityQuestions returned 14 security questions"
+      },
+      {
+        "type": "api",
+        "path": "/rest/admin/application-configuration",
+        "method": "GET",
+        "description": "Application configuration leak - exposes OAuth client ID, challenge configs, XSS bonus payload, product details, social links, and more.",
+        "evidence": "GET /rest/admin/application-configuration returned config including googleOauth clientId, xssBonusPayload, challenge settings"
+      },
+      {
+        "type": "api",
+        "path": "/rest/admin/application-version",
+        "method": "GET",
+        "description": "Application version disclosure.",
+        "evidence": "GET /rest/admin/application-version returned {\"version\":\"20.1.1\"}"
+      },
+      {
+        "type": "api",
+        "path": "/rest/captcha/",
+        "method": "GET",
+        "description": "Captcha endpoint reveals captcha answers in plain text, defeating the purpose of captcha.",
+        "evidence": "GET /rest/captcha/ returned {\"captchaId\":0,\"captcha\":\"9-7-3\",\"answer\":\"-1\"}"
+      },
+      {
+        "type": "api",
+        "path": "/rest/continue-code",
+        "method": "GET",
+        "description": "Continue code endpoint exposes the game's continue code used for progress recovery.",
+        "evidence": "GET /rest/continue-code returned continueCode value"
+      },
+      {
+        "type": "api",
+        "path": "/rest/basket/1",
+        "method": "GET",
+        "description": "Basket API with auth returns basket contents including products and quantities. Potential IDOR if basket ID enumeration possible.",
+        "evidence": "GET /rest/basket/1 with admin JWT returned basket with Product items and BasketItem details"
+      },
+      {
+        "type": "api",
+        "path": "/rest/user/change-password",
+        "method": "GET",
+        "description": "Password change endpoint works with GET request using query parameters. Changes password when valid current password provided.",
+        "evidence": "GET /rest/user/change-password?current=admin123&new=newpass123&repeat=newpass123 with auth returned updated user with new password hash"
+      },
+      {
+        "type": "api",
+        "path": "/api/Complaints",
+        "method": "GET",
+        "description": "Complaints endpoint exists but requires authentication (returns 401 without auth).",
+        "evidence": "GET /api/Complaints returned 401 'No Authorization header was found'"
+      },
+      {
+        "type": "api",
+        "path": "/api/Cards",
+        "method": "GET",
+        "description": "Cards endpoint exists but returns 401 with 'Cannot read properties of undefined' error - likely requires auth but also has internal error.",
+        "evidence": "GET /api/Cards returned 401 with error message about undefined data"
+      },
+      {
+        "type": "file",
+        "path": "/ftp/",
+        "method": "GET",
+        "description": "Directory listing enabled on /ftp/ - exposes sensitive files including confidential documents, database backups, and internal files.",
+        "evidence": "GET /ftp/ returned directory listing with files: acquisitions.md (confidential), incident-support.kdbx (KeePass), suspicious_errors.yml, package.json.bak, coupons_2013.md.bak, etc."
+      },
+      {
+        "type": "file",
+        "path": "/ftp/acquisitions.md",
+        "method": "GET",
+        "description": "Confidential document 'Planned Acquisitions' accessible without authentication. Contains sensitive business information.",
+        "evidence": "GET /ftp/acquisitions.md returned document marked 'This document is confidential! Do not distribute!'"
+      },
+      {
+        "type": "file",
+        "path": "/ftp/legal.md",
+        "method": "GET",
+        "description": "Legal information file accessible without auth. Serves as static file from /ftp/ directory.",
+        "evidence": "GET /ftp/legal.md returned markdown content"
+      },
+      {
+        "type": "file",
+        "path": "/ftp/quarantine/",
+        "method": "GET",
+        "description": "Subdirectory under /ftp/ with directory listing enabled.",
+        "evidence": "GET /ftp/quarantine/ returned directory listing"
+      },
+      {
+        "type": "auth",
+        "path": "/rest/user/whoami",
+        "method": "GET",
+        "description": "Whoami endpoint returns empty user object with valid JWT. May not properly identify the authenticated user.",
+        "evidence": "GET /rest/user/whoami with admin JWT returned {\"user\":{}}"
+      },
+      {
+        "type": "auth",
+        "path": "/rest/user/reset-password",
+        "method": "POST",
+        "description": "Password reset endpoint has rate limiting (x-ratelimit-limit: 100) and validates against security questions.",
+        "evidence": "POST /rest/user/reset-password with wrong answer returned 401 'Wrong answer to security question' with rate limit headers"
+      },
+      {
+        "type": "injection",
+        "path": "/rest/user/login",
+        "method": "POST",
+        "description": "NoSQL injection vector identified - passing JSON object as password causes Type Error when trying to hash an Object, indicating the app doesn't properly validate input types.",
+        "evidence": "POST /rest/user/login with {\"email\":\"admin@juice-sh.op\",\"password\":{\"$ne\":\"\"}} returned 500 'The \"data\" argument must be of type string or an instance of Buffer'"
+      },
+      {
+        "type": "jwt",
+        "path": "JWT Token",
+        "method": "analysis",
+        "description": "JWT tokens embed user password hashes in the payload. Token uses RS256 algorithm. Payload contains id, email, password hash, role, and other user data.",
+        "evidence": "Decoded JWT payload: {\"data\":{\"id\":1,\"email\":\"admin@juice-sh.op\",\"password\":\"0192023a7bbd73250516f069df18b500\"...},\"bid\":1,\"iat\":1784837696}"
+      },
+      {
+        "type": "api",
+        "path": "/b2b/v2/order",
+        "method": "POST",
+        "description": "B2B order endpoint exists - potentially vulnerable to Server-Side Template Injection (SSTI) via customerReference field.",
+        "evidence": "POST /b2b/v2/order with auth returned SPA index.html (handled by Angular router) - endpoint requires further SSTI probing"
+      }
+    ],
+    "candidates": [
+      {
+        "claim": "SQL injection in login form (email/password fields) - CONFIRMED via ' OR 1=1-- payload",
+        "evidence": "Authenticated as admin with SQL injection"
+      },
+      {
+        "claim": "SQL injection in product search parameter - CONFIRMED via UNION SELECT",
+        "evidence": "UNION SELECT returned injected data in product results"
+      },
+      {
+        "claim": "SQL injection in basket item operations - UNTESTED",
+        "evidence": "Basket operations may be injectable"
+      },
+      {
+        "claim": "NoSQL injection in registration/login endpoint - PARTIALLY CONFIRMED (password field accepts objects causing type error)",
+        "evidence": "Server crashes when password is JSON object instead of string"
+      },
+      {
+        "claim": "Reflected XSS in search results - NEGATIVE (search returns JSON, no HTML reflection)",
+        "evidence": "XSS payload in q parameter returned empty data array, not reflected"
+      },
+      {
+        "claim": "Stored XSS in feedback submission - UNTESTED (captcha blocks without captchaId)",
+        "evidence": "Feedback POST requires captchaId parameter"
+      },
+      {
+        "claim": "DOM-based XSS via hash fragment - UNTESTED",
+        "evidence": "Angular SPA may have DOM XSS vectors"
+      },
+      {
+        "claim": "IDOR on user profiles - CONFIRMED (admin can access all user data via /api/Users)",
+        "evidence": "Authenticated GET /api/Users returns all users"
+      },
+      {
+        "claim": "IDOR on basket access - CONFIRMED (admin can access basket/1)",
+        "evidence": "GET /rest/basket/1 with admin JWT returned basket contents"
+      },
+      {
+        "claim": "IDOR on order history - UNTESTED",
+        "evidence": "Order endpoints need authentication testing"
+      },
+      {
+        "claim": "JWT token weaknesses - CONFIRMED (password hash embedded in token)",
+        "evidence": "JWT payload contains password hash in plaintext"
+      },
+      {
+        "claim": "Login brute force / rate limiting test - PARTIALLY CONFIRMED (rate limiting present on reset-password)",
+        "evidence": "Reset password has x-ratelimit-limit: 100 headers"
+      },
+      {
+        "claim": "Password reset flaws - PARTIALLY CONFIRMED (security question validation present)",
+        "evidence": "POST to reset-password validates answers"
+      },
+      {
+        "claim": "Server-Side Template Injection in B2B order API - UNTESTED (requires authenticated probe)",
+        "evidence": "B2B order endpoint exists at /b2b/v2/order"
+      },
+      {
+        "claim": "Path traversal in static file serving - PARTIALLY CONFIRMED (/ftp/ accessible, but ../ normalized to index.html)",
+        "evidence": "Directory traversal via /ftp/../package.json returns SPA index.html"
+      },
+      {
+        "claim": "Path traversal via FTP endpoint - CONFIRMED (directory listing enabled, files accessible)",
+        "evidence": "/ftp/ directory listing reveals sensitive files"
+      },
+      {
+        "claim": "Malicious file upload (profile picture) - UNTESTED",
+        "evidence": "Profile image update endpoint not fully tested"
+      },
+      {
+        "claim": "CSRF on state-changing endpoints - UNTESTED",
+        "evidence": "No CSRF token validation observed"
+      },
+      {
+        "claim": "SSRF via product review image URL - UNTESTED",
+        "evidence": "Product review/image endpoints not fully tested"
+      },
+      {
+        "claim": "Cross-Site Script Inclusion - UNTESTED",
+        "evidence": "JSON responses have proper content-type headers"
+      }
+    ],
+    "facts": [
+      {
+        "key": "target_info",
+        "summary": "OWASP Juice Shop v20.1.1 running Express ^4.22.1 on port 3010",
+        "body": "Target identified as OWASP Juice Shop version 20.1.1. Application is a Node.js/Express web app with Angular SPA frontend. Uses SQLite database (Sequelize ORM). JWT-based authentication with RS256 algorithm."
+      },
+      {
+        "key": "auth_mechanism",
+        "summary": "JWT-based authentication with embedded user data",
+        "body": "Login endpoint /rest/user/login returns JWT token containing full user object including password hash. Token uses RS256 (RSA with SHA-256). Admin user has id=1, email=admin@juice-sh.op, role=admin. Password hash '0192023a7bbd73250516f069df18b500' is MD5 of 'admin123'."
+      },
+      {
+        "key": "admin_access_gained",
+        "summary": "Obtained admin JWT token via SQL injection",
+        "body": "Using SQL injection payload ' OR 1=1-- as email with any password, logged in as admin (id=1). Retrieved admin JWT token allowing access to /api/Users, /rest/basket/1, and other privileged endpoints."
+      },
+      {
+        "key": "api_endpoints",
+        "summary": "Discovered 20+ API endpoints",
+        "body": "REST API: /api/Products, /api/Users, /api/Challenges, /api/Feedbacks, /api/Quantitys, /api/Recycles, /api/SecurityQuestions, /api/SecurityAnswers, /api/Complaints, /api/Cards, /api/Addresss, /api/Baskets, /api/Orders, /api/Deliveries, /api/Wallets, /api/B2bOrder. REST endpoints: /rest/products/search, /rest/user/login, /rest/user/change-password, /rest/user/reset-password, /rest/user/whoami, /rest/basket/{id}, /rest/captcha/, /rest/continue-code, /rest/admin/application-version, /rest/admin/application-configuration, /b2b/v2/order."
+      },
+      {
+        "key": "ftp_files",
+        "summary": "Sensitive files exposed in /ftp/ directory",
+        "body": "Files accessible: acquisitions.md (confidential), announcement_encrypted.md, coupons_2013.md.bak, eastere.gg, encrypt.pyc, incident-support.kdbx (KeePass database), legal.md, order PDFs, package-lock.json.bak, package.json.bak, suspicious_errors.yml, quarantine/ subdirectory."
+      }
+    ],
+    "deadends": [
+      {
+        "path": "/ftp/../../../etc/passwd",
+        "reason": "Path traversal via ../ is neutralized - returns SPA index.html instead of target file"
+      },
+      {
+        "path": "/ftp/eastere.gg",
+        "reason": "File extension blocked - only .md and .pdf allowed by fileServer route"
+      },
+      {
+        "path": "/api/Orders",
+        "reason": "Endpoint returns Angular SPA instead of API response (SPA route handler catches it)"
+      },
+      {
+        "path": "/api/Baskets",
+        "reason": "Returns Angular SPA - likely handled by SPA route handler"
+      },
+      {
+        "path": "/api/Deliveries",
+        "reason": "Returns Angular SPA - likely handled by SPA route handler"
+      },
+      {
+        "path": "/api/Wallets",
+        "reason": "Returns Angular SPA - likely handled by SPA route handler"
+      },
+      {
+        "path": "/rest/products/search?q=<script>alert(1)</script>",
+        "reason": "XSS payload in search query returns empty data, no reflection"
+      }
+    ]
+  }
+}

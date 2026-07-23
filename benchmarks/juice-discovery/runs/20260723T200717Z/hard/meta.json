@@ -1,0 +1,27 @@
+{
+  "arm": "hard",
+  "segment": "second-post-57",
+  "authoritative": true,
+  "runtime": "core-only runNode4Agent",
+  "piPackages": [
+    "@earendil-works/pi-ai",
+    "@earendil-works/pi-agent-core"
+  ],
+  "piCodingAgent": false,
+  "graphId": "app_assessment_thin",
+  "workMode": "hard_graph:app_assessment_thin",
+  "target": "http://127.0.0.1:3010",
+  "container": "juice-discovery-hard",
+  "terminalStatus": "completed",
+  "stopReason": "hard_graph_completed",
+  "bookedFindings": 8,
+  "wallClockSec": 1016,
+  "start": "2026-07-23T20:07:18Z",
+  "end": "2026-07-23T20:24:14Z",
+  "nodeSha": "4337cbab9ae5a836225e13578230f8a93a20360d",
+  "branch": "bench/juice-discovery-coreonly-hard",
+  "supersedesHardOf": "20260723T190830Z",
+  "fixUnderTest": "4337cba / #57 write+result.json",
+  "p0_initHandoff": "pass",
+  "p1_discoveryStages": "pass"
+}

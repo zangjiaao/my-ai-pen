@@ -1,0 +1,371 @@
+{
+  "ok": true,
+  "summary": "Init stage complete. Target identified as OWASP Juice Shop (Node.js/Express) at http://127.0.0.1:3010. RoE understood: app_assessment, scope limited to 127.0.0.1/localhost, no off-box post-ex. Initial attack surface map documented from known Juice Shop architecture. Ready for recon stage handoff.",
+  "surfaces": [
+    {
+      "id": "rest-api",
+      "type": "api",
+      "protocol": "http",
+      "method": "*",
+      "endpoint": "/api/*",
+      "description": "REST API endpoints - Juice Shop exposes /api/Users, /api/Products, /api/Basket, /api/Orders, etc.",
+      "auth": "mixed (some public, some JWT-protected)"
+    },
+    {
+      "id": "rest-api-b2b",
+      "type": "api",
+      "protocol": "http",
+      "method": "*",
+      "endpoint": "/b2b/v2/*",
+      "description": "B2B API endpoint - known SSTI vulnerability surface in Juice Shop",
+      "auth": "likely auth-required"
+    },
+    {
+      "id": "web-interface",
+      "type": "web",
+      "protocol": "http",
+      "method": "GET",
+      "endpoint": "/",
+      "description": "Main web application (Angular SPA)",
+      "auth": "public"
+    },
+    {
+      "id": "auth-endpoints",
+      "type": "api",
+      "protocol": "http",
+      "method": "POST",
+      "endpoint": "/api/Users/login",
+      "description": "Authentication endpoint (login)",
+      "auth": "public"
+    },
+    {
+      "id": "registration",
+      "type": "api",
+      "protocol": "http",
+      "method": "POST",
+      "endpoint": "/api/Users/register",
+      "description": "User registration endpoint",
+      "auth": "public"
+    },
+    {
+      "id": "file-upload",
+      "type": "upload",
+      "protocol": "http",
+      "method": "POST",
+      "endpoint": "/api/Users/upload",
+      "description": "File upload functionality (profile pictures)",
+      "auth": "authenticated"
+    },
+    {
+      "id": "product-search",
+      "type": "api",
+      "protocol": "http",
+      "method": "GET",
+      "endpoint": "/api/Products/search",
+      "description": "Product search endpoint - potential injection surface",
+      "auth": "public"
+    },
+    {
+      "id": "static-files",
+      "type": "web",
+      "protocol": "http",
+      "method": "GET",
+      "endpoint": "/*.html, /assets/*",
+      "description": "Static file serving - potential path traversal / information disclosure",
+      "auth": "public"
+    },
+    {
+      "id": "graphql",
+      "type": "api",
+      "protocol": "http",
+      "method": "POST",
+      "endpoint": "/graphql",
+      "description": "GraphQL endpoint (present in modern Juice Shop)",
+      "auth": "public/introspection possible"
+    },
+    {
+      "id": "socket-io",
+      "type": "api",
+      "protocol": "ws",
+      "endpoint": "/socket.io/*",
+      "description": "WebSocket endpoint for real-time features",
+      "auth": "unknown"
+    },
+    {
+      "id": "admin-panel",
+      "type": "web",
+      "protocol": "http",
+      "method": "GET",
+      "endpoint": "/administration",
+      "description": "Administration panel (if accessible)",
+      "auth": "admin only"
+    },
+    {
+      "id": "ftp",
+      "type": "service",
+      "protocol": "ftp",
+      "endpoint": "/ftp/*",
+      "description": "FTP file access (path traversal via URL encoding)",
+      "auth": "public"
+    },
+    {
+      "id": "api-docs",
+      "type": "api",
+      "protocol": "http",
+      "method": "GET",
+      "endpoint": "/api-docs",
+      "description": "API documentation / Swagger if exposed",
+      "auth": "public"
+    },
+    {
+      "id": "prometheus",
+      "type": "api",
+      "protocol": "http",
+      "method": "GET",
+      "endpoint": "/metrics",
+      "description": "Prometheus metrics endpoint (if enabled)",
+      "auth": "public"
+    }
+  ],
+  "candidates": [
+    {
+      "id": "cand-auth-sqli",
+      "class": "injection",
+      "subclass": "sql-injection",
+      "target": "/api/Users/login",
+      "description": "SQL injection in login form (email/password fields) - classic Juice Shop vulnerability",
+      "hypothesis": "POST /api/Users/login with SQL injection payload in email field may bypass authentication",
+      "priority": 1
+    },
+    {
+      "id": "cand-search-sqli",
+      "class": "injection",
+      "subclass": "sql-injection",
+      "target": "/api/Products/search",
+      "description": "SQL injection in product search parameter",
+      "hypothesis": "GET /api/Products/search?q= injection test",
+      "priority": 2
+    },
+    {
+      "id": "cand-basket-sqli",
+      "class": "injection",
+      "subclass": "sql-injection",
+      "target": "/api/BasketItems/*",
+      "description": "SQL injection in basket item operations",
+      "hypothesis": "Basket item endpoints may be vulnerable to SQL injection via product ID or quantity",
+      "priority": 3
+    },
+    {
+      "id": "cand-registration-nosqli",
+      "class": "injection",
+      "subclass": "nosql-injection",
+      "target": "/api/Users/register",
+      "description": "NoSQL injection in registration endpoint",
+      "hypothesis": "JSON body with $ne or $gt operators may bypass validation",
+      "priority": 2
+    },
+    {
+      "id": "cand-xss-reflected",
+      "class": "xss",
+      "subclass": "reflected",
+      "target": "/api/Products/search",
+      "description": "Reflected XSS in search results",
+      "hypothesis": "Search query parameter may be reflected unsanitized in response",
+      "priority": 2
+    },
+    {
+      "id": "cand-xss-stored",
+      "class": "xss",
+      "subclass": "stored",
+      "target": "/api/Feedbacks",
+      "description": "Stored XSS in feedback submission",
+      "hypothesis": "Feedback comment may be stored and rendered without sanitization",
+      "priority": 2
+    },
+    {
+      "id": "cand-xss-dom",
+      "class": "xss",
+      "subclass": "dom",
+      "target": "/#/*",
+      "description": "DOM-based XSS via hash fragment",
+      "hypothesis": "Angular SPA may process hash fragment unsafely",
+      "priority": 3
+    },
+    {
+      "id": "cand-idor-users",
+      "class": "access-control",
+      "subclass": "idor",
+      "target": "/api/Users/*",
+      "description": "IDOR on user profiles",
+      "hypothesis": "Authenticated user may access other users' profile data by modifying user ID",
+      "priority": 1
+    },
+    {
+      "id": "cand-idor-basket",
+      "class": "access-control",
+      "subclass": "idor",
+      "target": "/api/Basket/*",
+      "description": "IDOR on basket access",
+      "hypothesis": "User may access/modify another user's basket by changing basket ID",
+      "priority": 2
+    },
+    {
+      "id": "cand-idor-orders",
+      "class": "access-control",
+      "subclass": "idor",
+      "target": "/api/Orders/*",
+      "description": "IDOR on order history",
+      "hypothesis": "User may access another user's order details",
+      "priority": 2
+    },
+    {
+      "id": "cand-auth-jwt",
+      "class": "auth",
+      "subclass": "jwt",
+      "target": "/api/*",
+      "description": "JWT token weaknesses",
+      "hypothesis": "JWT may use weak secret, allow none algorithm, or contain sensitive data",
+      "priority": 1
+    },
+    {
+      "id": "cand-auth-brute",
+      "class": "auth",
+      "subclass": "brute-force",
+      "target": "/api/Users/login",
+      "description": "Login brute force / rate limiting test",
+      "hypothesis": "Login endpoint may lack rate limiting allowing credential brute force",
+      "priority": 3
+    },
+    {
+      "id": "cand-auth-reset",
+      "class": "auth",
+      "subclass": "password-reset",
+      "target": "/api/Users/reset-password",
+      "description": "Password reset flaws",
+      "hypothesis": "Password reset token may be predictable or bypassable",
+      "priority": 2
+    },
+    {
+      "id": "cand-ssti",
+      "class": "injection",
+      "subclass": "ssti",
+      "target": "/b2b/v2/orders",
+      "description": "Server-Side Template Injection in B2B order API",
+      "hypothesis": "B2B order quantity/price template may evaluate user input",
+      "priority": 1
+    },
+    {
+      "id": "cand-path-traversal",
+      "class": "misconfig",
+      "subclass": "path-traversal",
+      "target": "/assets/*",
+      "description": "Path traversal in static file serving",
+      "hypothesis": "Static file endpoints may allow directory traversal with ../",
+      "priority": 2
+    },
+    {
+      "id": "cand-ftp-traversal",
+      "class": "misconfig",
+      "subclass": "path-traversal",
+      "target": "/ftp/*",
+      "description": "Path traversal via FTP endpoint",
+      "hypothesis": "FTP endpoint may allow directory traversal with URL encoding tricks",
+      "priority": 2
+    },
+    {
+      "id": "cand-file-upload",
+      "class": "upload",
+      "subclass": "malicious-file",
+      "target": "/api/Users/upload",
+      "description": "Malicious file upload (profile picture)",
+      "hypothesis": "Profile picture upload may accept .js/.html files leading to XSS or code execution",
+      "priority": 2
+    },
+    {
+      "id": "cand-csrf",
+      "class": "csrf",
+      "subclass": "cross-site-request-forgery",
+      "target": "/api/*",
+      "description": "CSRF on state-changing endpoints",
+      "hypothesis": "API may lack CSRF tokens allowing cross-site requests",
+      "priority": 3
+    },
+    {
+      "id": "cand-ssrf",
+      "class": "ssrf",
+      "subclass": "server-side-request-forgery",
+      "target": "/api/Products/reviews",
+      "description": "SSRF via product review image URL",
+      "hypothesis": "Image URL parameter may be fetched server-side allowing SSRF",
+      "priority": 2
+    },
+    {
+      "id": "cand-xssi",
+      "class": "misconfig",
+      "subclass": "xssi",
+      "target": "/api/*",
+      "description": "Cross-Site Script Inclusion - JSON responses may be contamitable via script tags",
+      "hypothesis": "API JSON responses may be parseable via script tags leading to data exfiltration",
+      "priority": 3
+    },
+    {
+      "id": "cand-mass-assignment",
+      "class": "business-logic",
+      "subclass": "mass-assignment",
+      "target": "/api/Users/register",
+      "description": "Mass assignment during registration",
+      "hypothesis": "Registration may allow setting admin/role fields via JSON body",
+      "priority": 1
+    },
+    {
+      "id": "cand-graphql-introspection",
+      "class": "misconfig",
+      "subclass": "exposure",
+      "target": "/graphql",
+      "description": "GraphQL introspection enabled",
+      "hypothesis": "GraphQL endpoint may expose full schema via introspection query",
+      "priority": 1
+    },
+    {
+      "id": "cand-insecure-cors",
+      "class": "misconfig",
+      "subclass": "cors",
+      "target": "/api/*",
+      "description": "Overly permissive CORS policy",
+      "hypothesis": "API may allow arbitrary origins via CORS headers",
+      "priority": 2
+    },
+    {
+      "id": "cand-info-disclosure",
+      "class": "misconfig",
+      "subclass": "information-disclosure",
+      "target": "/*",
+      "description": "Sensitive information disclosure in client-side source",
+      "hypothesis": "Source maps, API keys, or internal paths may be exposed in JS files",
+      "priority": 2
+    },
+    {
+      "id": "cand-xxe",
+      "class": "injection",
+      "subclass": "xxe",
+      "target": "/api/*",
+      "description": "XML External Entity injection",
+      "hypothesis": "API may accept XML content type and be vulnerable to XXE",
+      "priority": 3
+    }
+  ],
+  "facts": [
+    "Target is OWASP Juice Shop - a Node.js/Express intentionally vulnerable web application",
+    "Target URL: http://127.0.0.1:3010",
+    "Scope limited to 127.0.0.1 and localhost only",
+    "RoE: app_assessment - no post-ex host takeover off-box, no attacking other hosts/ports",
+    "Juice Shop uses SQLite database by default (can be MariaDB)",
+    "Juice Shop uses Angular for frontend SPA with REST API backend",
+    "Juice Shop uses JWT (JSON Web Tokens) for authentication",
+    "Common vulnerability classes: SQLi, XSS, NoSQLi, SSTI, IDOR, Path Traversal, File Upload, CSRF, SSRF, Mass Assignment, GraphQL issues",
+    "Juice Shop has a known B2B API endpoint at /b2b/v2/orders vulnerable to SSTI",
+    "Juice Shop has an FTP file access surface at /ftp with path traversal protection that can be bypassed",
+    "Stage init complete - no live reconnaissance performed yet"
+  ],
+  "deadends": []
+}

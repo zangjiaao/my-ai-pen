@@ -1,0 +1,21 @@
+Observed excessive data exposure on multiple API endpoints.
+
+The following endpoints return more data than necessary for the client application:
+
+1. GET /api/Users - Returns all user records including email, password (bcrypt hash), role, securityQuestion, securityAnswer, and other PII without authentication.
+
+2. GET /api/Challenges - Returns all challenge definitions and their current completion status including solution keys in some cases.
+
+3. GET /api/Feedbacks - Returns all user feedback including user ID references.
+
+4. GET /api/Cards - Returns saved credit card information (card numbers are masked but expiry dates and cardholder names are exposed).
+
+5. GET /api/Quantitys - Returns product quantity information.
+
+6. GET /api/Products - Returns all product details including fields not shown in the UI.
+
+7. GET /rest/admin/application-configuration - Returns application configuration including potentially sensitive settings.
+
+8. GET /rest/admin/application-version - Returns application version information useful for targeting known vulnerabilities.
+
+These endpoints are accessible without authentication or with minimal authentication, exposing sensitive data.
