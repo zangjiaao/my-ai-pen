@@ -2,7 +2,7 @@ import { mkdir, writeFile, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { Type } from "typebox";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
 import {
   assessBookingChainQuality,
@@ -170,7 +170,7 @@ function pickHeader(headers: unknown, name: string): string {
   return "";
 }
 
-export function createFindingTool(runtime: ToolRuntime): ToolDefinition<any> {
+export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "finding",
     label: "Finding",

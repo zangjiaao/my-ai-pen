@@ -35,8 +35,11 @@ function assert(cond: unknown, msg: string): asserts cond {
   if (!cond) throw new Error(`ASSERT: ${msg}`);
 }
 
-function textOf(result: { content?: Array<{ text?: string }> }): string {
-  return (result.content || []).map((c) => c.text || "").join("\n");
+function textOf(result: { content?: Array<{ type?: string; text?: string }> }): string {
+  return (result.content || [])
+    .filter((c) => c && (c.type === "text" || c.text != null))
+    .map((c) => c.text || "")
+    .join("\n");
 }
 
 function hollow(props: Record<string, unknown> | undefined): boolean {

@@ -397,7 +397,8 @@ export async function handleNode4SessionEvent(
 ): Promise<void> {
   if (!event || typeof event !== "object") return;
 
-  // Prefer Pi session tool_execution_* (extension tool_call is separate and already emits tool_output).
+  // tool_output is emitted only by attachProductToolEventBridge (createBoundNode4Session).
+  // This handler owns panel / status / text stream / usage for Main.
   let panelChanged = false;
   if (event.type === "tool_execution_start") {
     ctx.counters.toolCallCount += 1;

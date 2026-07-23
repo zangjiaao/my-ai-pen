@@ -7,7 +7,7 @@
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Type } from "typebox";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { parseCookiesJson } from "../runtime/agent-browser-cli.js";
 import {
   rewriteUrlForSandbox,
@@ -32,7 +32,7 @@ const ACTIONS = [
   "close",
 ] as const;
 
-export function createBrowserTool(runtime: ToolRuntime): ToolDefinition<any> {
+export function createBrowserTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "browser",
     label: "Browser",

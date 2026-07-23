@@ -17,7 +17,7 @@ import {
   type HardGraphTerminal,
   type StageExecutor,
 } from "./hard-graph-runner.js";
-import { createPiHardGraphStageExecutor } from "./hard-graph-stage-executor.js";
+import { createHardGraphStageExecutor } from "./hard-graph-stage-executor.js";
 import { settleHardGraphTask } from "./hard-graph-settlement.js";
 
 export type HardGraphTaskResult = {
@@ -188,7 +188,7 @@ export async function runHardGraphExpertTask(options: {
   const availableTools = toolNamesForPack(pack);
   const executeStage =
     options.stageExecutor ??
-    createPiHardGraphStageExecutor({
+    createHardGraphStageExecutor({
       config,
       parentRuntime,
       pack,

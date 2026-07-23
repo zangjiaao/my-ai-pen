@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile, stat } from "node:fs/promises";
 import { dirname, join, resolve, relative } from "node:path";
 import { Type } from "typebox";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
 import { recordActObservation, jsonResult, textResult } from "./common.js";
 
@@ -44,7 +44,7 @@ function looksLikeSourceMaterial(relPath: string, content: string): boolean {
   return content.length >= 200;
 }
 
-export function createWriteTool(runtime: ToolRuntime): ToolDefinition<any> {
+export function createWriteTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "write",
     label: "Write",
@@ -84,7 +84,7 @@ export function createWriteTool(runtime: ToolRuntime): ToolDefinition<any> {
   };
 }
 
-export function createReadTool(runtime: ToolRuntime): ToolDefinition<any> {
+export function createReadTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "read",
     label: "Read",
@@ -107,7 +107,7 @@ export function createReadTool(runtime: ToolRuntime): ToolDefinition<any> {
   };
 }
 
-export function createEditTool(runtime: ToolRuntime): ToolDefinition<any> {
+export function createEditTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "edit",
     label: "Edit",

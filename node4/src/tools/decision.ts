@@ -4,7 +4,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
 import { jsonResult, textResult } from "./common.js";
 import { registerApprovalWait } from "../runtime/approvals.js";
@@ -12,7 +12,7 @@ import { platformLedgerFetch } from "./platform.js";
 
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
 
-export function createRequestUserDecisionTool(runtime: ToolRuntime): ToolDefinition<any> {
+export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "request_user_decision",
     label: "Request user authorization",

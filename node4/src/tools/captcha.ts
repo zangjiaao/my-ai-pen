@@ -7,13 +7,13 @@ import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { Type } from "typebox";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
 import { recordActObservation, isInScope, jsonResult, resolveTargetUrl, textResult } from "./common.js";
 
 type JarMap = Record<string, string>;
 
-export function createCaptchaTool(runtime: ToolRuntime): ToolDefinition<any> {
+export function createCaptchaTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "captcha",
     label: "Captcha",

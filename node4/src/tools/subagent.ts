@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { runShell } from "./shell.js";
 import type { ToolRuntime } from "../types.js";
 import { jsonResult, textResult } from "./common.js";
@@ -102,7 +102,7 @@ const packageItemSchema = Type.Object({
  * Agent-facing subagent tool.
  * Flat / batch spawn, warm resume, list idle workers, explicit release (OMP lifecycle).
  */
-export function createSubagentTool(runtime: ToolRuntime): ToolDefinition<any> {
+export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
   const postLock = createMutex();
 
   return {

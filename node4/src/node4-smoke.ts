@@ -1043,7 +1043,10 @@ async function main() {
   const missHand = textOf(
     await exec(createSubagentTool(runtime), "miss", { assignment: "only notes", command: "echo no" }),
   );
-  assert(missHand.includes("handoff incomplete") || missHand.includes("missing"), "missing handoff rejected");
+  assert(
+    /handoff incomplete|incomplete handoff|missing/i.test(missHand),
+    `missing handoff rejected: ${missHand.slice(0, 160)}`,
+  );
 
   // LLM child path dry-run (no model call)
   const prevDry = process.env.NODE4_SUBAGENT_DRY;
@@ -1098,19 +1101,23 @@ async function main() {
     }),
   );
   assert(badNode.includes("not in") || badNode.includes("error"), `graph rejects postex on assessment: ${badNode.slice(0, 160)}`);
-  const goodNode = JSON.parse(
-    textOf(
-      await exec(createSubagentTool(runtime), "g-ok-node", {
-        target: "http://127.0.0.1:9/",
-        scope: "127.0.0.1 only",
-        already_done: "parent recon done",
-        this_turn_goal: "surface slice",
-        success_criteria: "stdout contains graph-ok",
-        node_type: "surface",
-        command: "echo graph-ok",
-      }),
-    ),
+  // Graph mode rejects command= shell packages; use dry LLM path for a valid surface node_type.
+  process.env.NODE4_SUBAGENT_DRY = "1";
+  const goodText = textOf(
+    await exec(createSubagentTool(runtime), "g-ok-node", {
+      // Distinct path so prior smoke packages do not hit path re-dispatch budget.
+      target: "http://127.0.0.1:9/graph-surface-ok",
+      scope: "127.0.0.1 only",
+      already_done: "parent recon done",
+      this_turn_goal: "surface slice",
+      success_criteria: "result.json written",
+      node_type: "surface",
+    }),
   );
+  if (prevDry === undefined) delete process.env.NODE4_SUBAGENT_DRY;
+  else process.env.NODE4_SUBAGENT_DRY = prevDry;
+  assert(!goodText.trimStart().toLowerCase().startsWith("error:"), `graph surface not error: ${goodText.slice(0, 200)}`);
+  const goodNode = JSON.parse(goodText);
   assert(goodNode.ok === true && goodNode.node_type === "surface", `graph surface ok: ${JSON.stringify(goodNode).slice(0, 200)}`);
   runtime.lifecycle.pentestGraph = undefined;
 
@@ -1532,8 +1539,20 @@ async function main() {
   await access(dump.manifestPath);
   assert(inspectArtifactChecklist(await readdir(taskDir)).ok, "inspect artifacts");
 
-  const doc = await readFile(join(process.cwd(), "..", "docs", "node4-harness.md"), "utf8");
-  assert(/role pack|Role pack|RolePack/i.test(doc) || /subagent/i.test(doc) || true, "docs present");
+  const harnessDocCandidates = [
+    join(process.cwd(), "..", "docs", "specs", "harness.md"),
+    join(process.cwd(), "..", "docs", "node4-harness.md"),
+  ];
+  let doc = "";
+  for (const p of harnessDocCandidates) {
+    try {
+      doc = await readFile(p, "utf8");
+      break;
+    } catch {
+      /* try next */
+    }
+  }
+  assert(doc.length > 0 && (/role pack|Role pack|RolePack|subagent|Hard Graph/i.test(doc) || true), "docs present");
 
   console.log(
     JSON.stringify(

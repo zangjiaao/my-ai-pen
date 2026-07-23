@@ -1,13 +1,5 @@
 import { mkdir, writeFile, appendFile } from "node:fs/promises";
 import { join } from "node:path";
-import {
-  AuthStorage,
-  createAgentSession,
-  DefaultResourceLoader,
-  ModelRegistry,
-  SessionManager,
-  SettingsManager,
-} from "@earendil-works/pi-coding-agent";
 import type { Node4Config } from "../config.js";
 import { node4Root } from "../config.js";
 import { resolveRolePack } from "../roles/index.js";
@@ -20,7 +12,7 @@ import { TodoStore } from "../stores/todo.js";
 import type { PlatformSink, TaskEnvelope, ToolRuntime } from "../types.js";
 import { toolNamesForPack } from "../tools/index.js";
 import { loadConfirmedFindings } from "../tools/finding.js";
-import { createNode4Extension } from "./extension.js";
+import { createBoundNode4Session, type Node4AgentSession } from "./run-node4-agent.js";
 import { resolveTerminalTaskStatus } from "./harness-settlement.js";
 import {
   composeContinuePrompt,
@@ -226,7 +218,7 @@ export async function runNode4Task(
     counters: obsCounters,
   };
 
-  let sessionRef: { abort?: () => Promise<void>; subscribe?: (fn: (e: any) => void) => void } = {};
+  let sessionRef: Node4AgentSession | undefined;
   // No session wall/max-time (OMP-default style). Only platform/user cancel aborts.
   runtime.lifecycle.abortSignal = signal;
   if (signal) {
@@ -239,7 +231,11 @@ export async function runNode4Task(
           message: "harness abort: cancelled",
         })
         .catch(() => {});
-      void Promise.resolve(sessionRef.abort?.()).catch(() => {});
+      try {
+        sessionRef?.abort();
+      } catch {
+        /* ignore */
+      }
       // Drop warm subagent sessions so cancelled tasks do not leak LLM handles.
       void runtime.lifecycle.subagentIdlePool?.disposeAll?.().catch(() => {});
     };
@@ -263,50 +259,6 @@ export async function runNode4Task(
   });
   obsCounters.phase = chatOnly ? "chat" : "starting";
 
-  const authStorage = AuthStorage.create(join(config.piAgentDir, "auth.json"));
-  setRuntimeApiKey(authStorage, config.modelProvider);
-  const modelRegistry = ModelRegistry.inMemory(authStorage);
-  if (config.llmBaseUrl) {
-    // Built-in providers: override base URL only. Unknown providers (e.g. vast
-    // llama.cpp): register the model id from env so OpenAI-compatible endpoints work.
-    const known = modelRegistry.find(config.modelProvider, config.modelId);
-    if (known) {
-      modelRegistry.registerProvider(config.modelProvider, { baseUrl: config.llmBaseUrl });
-    } else {
-      const apiKey =
-        process.env.LLM_API_KEY ||
-        process.env.OPENAI_API_KEY ||
-        process.env.DEEPSEEK_API_KEY ||
-        "sk-no-key";
-      const contextWindow = Math.max(1024, Number(process.env.LLM_CONTEXT_WINDOW || 8192) || 8192);
-      const maxTokens = Math.max(256, Number(process.env.LLM_MAX_TOKENS || 2048) || 2048);
-      modelRegistry.registerProvider(config.modelProvider, {
-        baseUrl: config.llmBaseUrl,
-        api: (process.env.LLM_API as any) || "openai-completions",
-        apiKey,
-        models: [
-          {
-            id: config.modelId,
-            name: config.modelId,
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow,
-            maxTokens,
-          },
-        ],
-      });
-    }
-  }
-  const model = modelRegistry.find(config.modelProvider, config.modelId);
-  if (!model) throw new Error(`model not found: ${config.modelProvider}/${config.modelId}`);
-
-  const settingsManager = SettingsManager.inMemory({
-    compaction: { enabled: true },
-    retry: { enabled: true, maxRetries: 2 },
-  });
-
-  const segmentCounter = { tools: 0 };
   const processFactIndex = await processFacts.list();
   // Graph hard: strip Main act tools; Free/soft keep full pack surface.
   const toolNames = applyMainActToolFilter(
@@ -323,46 +275,22 @@ export async function runNode4Task(
     allowPostexOverride:
       graphResolved.mode === "graph" ? graphResolved.allowPostex : task.allowPostex,
   });
-  const resourceLoader = new DefaultResourceLoader({
-    cwd: taskDir,
-    agentDir: config.piAgentDir,
-    settingsManager,
-    extensionFactories: [createNode4Extension(runtime, segmentCounter, packForTools)],
-    noExtensions: true,
-    noSkills: true,
-    noPromptTemplates: true,
-    noContextFiles: true,
+  // Chat-only: still register tools but prompt forbids using them until a target exists.
+  const { session, segmentCounter } = await createBoundNode4Session({
+    config,
+    runtime,
+    pack: packForTools,
     systemPrompt,
-  });
-  await resourceLoader.reload();
-
-  const piSessionDir = join(taskDir, "pi-sessions");
-  await mkdir(piSessionDir, { recursive: true });
-  const { session } = await createAgentSession({
-    cwd: taskDir,
-    agentDir: config.piAgentDir,
-    model,
-    // Greetings/chat: light thinking. Full engagements: medium for denser reasoning.
     thinkingLevel: chatOnly ? "low" : "medium",
-    authStorage,
-    modelRegistry,
-    resourceLoader,
-    // Chat-only: still register tools but prompt forbids using them until a target exists.
-    tools: [...toolNames],
-    sessionManager: SessionManager.create(taskDir, piSessionDir),
-    settingsManager,
   });
-  sessionRef = session as any;
+  sessionRef = session;
 
-  // Platform observability: text stream, llm_usage, throttled checkpoints.
-  // Fire-and-forget so Pi token streaming is not blocked by platform WS/DB latency.
-  if (typeof (session as any).subscribe === "function") {
-    (session as any).subscribe((event: any) => {
-      void handleNode4SessionEvent(obsCtx, textStream, checkpointThrottle, event).catch(() => {
-        // Never let observability break the agent loop.
-      });
+  // Panel / text stream / usage — tool_output already bridged in createBoundNode4Session.
+  session.subscribe((event) => {
+    void handleNode4SessionEvent(obsCtx, textStream, checkpointThrottle, event).catch(() => {
+      // Never let observability break the agent loop.
     });
-  }
+  });
 
   // Outer continues: product default OFF (settle on natural stop). Lab opt-in via env.
   // Discovery / multi-tool work stays in-loop (pi agent-loop). No session wall.
@@ -700,7 +628,7 @@ export async function runNode4Task(
   }
 
   try {
-    session.dispose?.();
+    session.dispose();
   } catch {
     // ignore
   }
@@ -858,24 +786,3 @@ export function isLedgerAssistSeat(packId?: string): boolean {
   return pack === "default" || pack === "consult" || pack === "workspace";
 }
 
-function setRuntimeApiKey(authStorage: AuthStorage, provider: string): void {
-  // Prefer provider-native keys so a leftover LLM_API_KEY (e.g. ollama cloud)
-  // cannot steal DeepSeek/OpenAI credentials.
-  const p = String(provider || "").trim().toLowerCase();
-  let key = "";
-  if (p === "deepseek") {
-    key = process.env.DEEPSEEK_API_KEY || process.env.LLM_API_KEY || "";
-  } else if (p === "openai") {
-    key = process.env.OPENAI_API_KEY || process.env.LLM_API_KEY || "";
-  } else if (p === "anthropic") {
-    key = process.env.ANTHROPIC_API_KEY || process.env.LLM_API_KEY || "";
-  } else {
-    key =
-      process.env.LLM_API_KEY ||
-      process.env.OPENAI_API_KEY ||
-      process.env.DEEPSEEK_API_KEY ||
-      process.env.ANTHROPIC_API_KEY ||
-      "";
-  }
-  if (key) (authStorage as any).setRuntimeApiKey?.(provider, key);
-}
