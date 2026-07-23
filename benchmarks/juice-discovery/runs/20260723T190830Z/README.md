@@ -3,11 +3,12 @@
 | Field | Value |
 |-------|-------|
 | Stamp | 20260723T190830Z |
-| Runtime | **origin/main core-only** (`runNode4Agent` / pi-ai + pi-agent-core; **no** pi-coding-agent) |
-| Node SHA | 0efb2623c600391c623a677202ddfde8443804b8 |
+| Runtime | core-only `runNode4Agent` (no pi-coding-agent) |
+| Hard | `hard/` — `app_assessment_thin` → **blocked@init**, 0 findings, ~204s |
+| Soft | `soft/` — `app_assessment` soft → **completed**, **6** findings, ~410s |
 | Hard target | http://127.0.0.1:3010 |
-| Soft target | http://127.0.0.1:3011 (not yet) |
+| Soft target | http://127.0.0.1:3011 |
 | Map | https://github.com/zangjiaao/my-ai-pen/issues/46 |
-| Hard ticket | https://github.com/zangjiaao/my-ai-pen/issues/53 |
+| Product fix | https://github.com/zangjiaao/my-ai-pen/issues/57 (init result.json) |
 
-Supersedes non-authoritative stamp `20260723T184122Z` (stale coding-agent tree).
+Soft control ≠ Hard Graph claim. Scorecard next (#55).
