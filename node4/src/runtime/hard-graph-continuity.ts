@@ -62,13 +62,13 @@ export function seedStageLifecycleFromParent(
   const cache = p.subagentEvidenceCache || [];
   c.subagentEvidenceCache = cache.map((pack) => ({
     ...pack,
-    candidates: [...(pack.candidates || [])],
+    candidates: (pack.candidates || []).map((cand) => ({ ...cand })),
   }));
 
   if (p.lastSubagentEvidence) {
     c.lastSubagentEvidence = {
       ...p.lastSubagentEvidence,
-      candidates: [...(p.lastSubagentEvidence.candidates || [])],
+      candidates: (p.lastSubagentEvidence.candidates || []).map((cand) => ({ ...cand })),
     };
   } else {
     c.lastSubagentEvidence = undefined;
@@ -82,12 +82,28 @@ export function seedStageLifecycleFromParent(
   return { fingerprints };
 }
 
+/**
+ * True when an inject observation summary belongs to exactly this stageKey.
+ * Inject format: `subagent ${subagentId} …` or `subagent ${subagentId} candidate: …`
+ * Token boundary after the key so `hard-stage:class` does not match `hard-stage:class_probe`.
+ */
+export function observationSummaryBelongsToStageKey(
+  summary: string,
+  stageKey: string,
+): boolean {
+  const prefix = `subagent ${stageKey}`;
+  if (!String(summary || "").startsWith(prefix)) return false;
+  const next = summary.charAt(prefix.length);
+  // End, whitespace, or inject delimiters — not another id character (_-alphanumeric).
+  return next === "" || /[\s\[:]/.test(next);
+}
+
 /** Drop prior inject observations and cache packs for a hard-stage key. */
 export function dropStageKeyContinuity(parent: ToolRuntime, stageKey: string): void {
   const life = parent.lifecycle || (parent.lifecycle = {});
   if (life.recentObservations?.length) {
     life.recentObservations = life.recentObservations.filter(
-      (o) => !String(o.summary || "").includes(stageKey),
+      (o) => !observationSummaryBelongsToStageKey(String(o.summary || ""), stageKey),
     );
   }
   if (life.subagentEvidenceCache?.length) {
@@ -124,6 +140,10 @@ function mergeNewChildObservations(
  * Merge stage outcomes into parent so the next stage (e.g. validate_book) can book.
  * Upserts bookable material by stageKey when candidates are present.
  * Propagates absorb errors (do not swallow) — session promote is caller's best-effort.
+ *
+ * Policy: child shell/http acts merge append-only across retries (sticky grounding).
+ * Only inject-tagged rows for this stageKey are dropped on candidate upsert; booking
+ * cache still resolves the latest pack's verbatim proof.
  */
 export function absorbStageResultIntoParent(
   parent: ToolRuntime,

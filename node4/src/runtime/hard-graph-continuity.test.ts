@@ -18,6 +18,8 @@ import {
 } from "./subagent-session-seed.js";
 import {
   absorbStageResultIntoParent,
+  dropStageKeyContinuity,
+  observationSummaryBelongsToStageKey,
   seedStageLifecycleFromParent,
 } from "./hard-graph-continuity.js";
 
@@ -252,6 +254,94 @@ assert.ok(
 );
 assert.ok(after.length > midCount || after.some((o) => o.sourceTool === "shell"));
 assert.ok(after.length <= 80, "observation list stays capped");
+
+// --- Token-safe stageKey drop (prefix collision: class vs class_probe) ---
+
+assert.equal(
+  observationSummaryBelongsToStageKey(
+    "subagent hard-stage:class [class]: found form",
+    "hard-stage:class",
+  ),
+  true,
+);
+assert.equal(
+  observationSummaryBelongsToStageKey(
+    "subagent hard-stage:class_probe [class_probe]: probed",
+    "hard-stage:class",
+  ),
+  false,
+  "shorter key must not match longer stage id",
+);
+assert.equal(
+  observationSummaryBelongsToStageKey(
+    "subagent hard-stage:class_probe candidate: SQLi",
+    "hard-stage:class_probe",
+  ),
+  true,
+);
+
+const prefixParent = bareRuntime();
+const shortChild = bareRuntime();
+const shortSeed = seedStageLifecycleFromParent(prefixParent, shortChild);
+absorbStageResultIntoParent(prefixParent, {
+  stageId: "class",
+  structured: normalizeSubagentResult({
+    ok: true,
+    summary: "short stage",
+    candidates: [
+      {
+        title: "Short",
+        location: "http://t/short",
+        claim: "c",
+        proof_excerpt: "SHORT proof excerpt with enough characters for inject filter gate",
+        poc_hint: "GET /short → short body",
+      },
+    ],
+  }),
+  child: shortChild,
+  seed: shortSeed,
+});
+const longChild = bareRuntime();
+const longSeed = seedStageLifecycleFromParent(prefixParent, longChild);
+absorbStageResultIntoParent(prefixParent, {
+  stageId: "class_probe",
+  structured: normalizeSubagentResult({
+    ok: true,
+    summary: "long stage",
+    candidates: [
+      {
+        title: "Long",
+        location: "http://t/long",
+        claim: "c",
+        proof_excerpt: "LONG proof excerpt with enough characters for inject filter gate xx",
+        poc_hint: "GET /long → long body",
+      },
+    ],
+  }),
+  child: longChild,
+  seed: longSeed,
+});
+
+// Drop only the short stageKey — class_probe pack + injects must remain
+dropStageKeyContinuity(prefixParent, "hard-stage:class");
+const packsLeft = prefixParent.lifecycle.subagentEvidenceCache || [];
+assert.ok(
+  packsLeft.some((p) => p.subagentId === "hard-stage:class_probe"),
+  "class_probe pack survives drop of class",
+);
+assert.ok(
+  !packsLeft.some((p) => p.subagentId === "hard-stage:class"),
+  "class pack removed",
+);
+const obsLeft = prefixParent.lifecycle.recentObservations || [];
+assert.ok(
+  obsLeft.some((o) => observationSummaryBelongsToStageKey(o.summary, "hard-stage:class_probe")),
+  "class_probe inject observations survive",
+);
+assert.ok(
+  !obsLeft.some((o) => observationSummaryBelongsToStageKey(o.summary, "hard-stage:class")),
+  "class inject observations removed",
+);
 
 // --- A4: session seed / promote (canonical session-seed helpers) ---
 
