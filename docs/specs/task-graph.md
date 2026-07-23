@@ -1,7 +1,7 @@
 # Pentest work modes: OMP, soft scenario Graph, Hard Graph × Pi
 
 > Living companion to `docs/specs/harness.md` §6.  
-> Calibrated: 2026-07-23 (Graph × Pi first cut)
+> Calibrated: 2026-07-23 (Graph × Pi first cut + stage continuity A1/A4)
 
 **Prompt single-source (soft scenario):** Graph captain/ledger/acceptance/packages live in runtime `formatGraphInjection` (`<work-mode>`). Pack `work.md` only points at that block for soft Graph detail — do not re-expand the same rules in work.md.
 
@@ -13,6 +13,17 @@
 **Soft scenario Graph** — optional node menu + soft plan (Main may still schedule).  
 **Hard Graph × Pi** — outer runner owns stages; pi runs inside stages; fail-closed gates.  
 **Case** holds long-term shared state.
+
+### Hard Graph stage continuity (A1 + A4)
+
+Per-stage pi sessions still use isolated work dirs (`taskDir/hard-graph/<graphId>/stage-…`) for `result.json` / stage evidence audit. Continuity is explicit:
+
+| Concern | Behavior |
+|---------|----------|
+| **Booking / proof (A1)** | After each stage, structured **candidates** upsert into **parent** lifecycle by `hard-stage:<stageId>` (same observation inject + candidate cache as soft subagent; retry replaces prior pack for that stage). Empty-candidate attempts do not wipe a prior pack. Next stage child is **seeded** from parent so book-only stages can `finding(confirm)` with matching `location` / `candidate_index` and verbatim `proof_excerpt`. Hallucinated proof still fails closed. |
+| **Session jars (A4)** | Before a stage: seed `parent taskDir/session/` → stage workDir via session-seed helpers. After a stage: promote stage `session/` → parent (best-effort; child cookies win). |
+
+Handoff JSON in the stage prompt remains informational; booking authority is lifecycle cache + groundable observations, not prompt-only tables. No expected-finding counts or answer keys in gates. Settlement still does not require N bookings.
 
 ## Modes
 

@@ -25,7 +25,16 @@ import { ProcessFactStore } from "../stores/process-fact.js";
 import { TodoStore } from "../stores/todo.js";
 import { createNode4Extension } from "./extension.js";
 import type { StageExecutor, StageExecutorInput, StageExecutorOutput } from "./hard-graph-runner.js";
+import {
+  absorbStageResultIntoParent,
+  seedStageLifecycleFromParent,
+  type StageContinuitySeed,
+} from "./hard-graph-continuity.js";
 import { normalizeSubagentResult } from "./subagent-result.js";
+import {
+  promoteChildSessionToParent,
+  seedChildSessionFromParent,
+} from "./subagent-session-seed.js";
 
 export type HardGraphStageSessionFactory = (options: {
   stageId: string;
@@ -198,135 +207,196 @@ export function createPiHardGraphStageExecutor(options: {
     await mkdir(join(workDir, "facts"), { recursive: true });
     await mkdir(join(workDir, "pi-sessions"), { recursive: true });
 
+    // A4: cookies from prior stages → this stage workDir (best-effort)
+    await seedChildSessionFromParent(parentRuntime.taskDir, workDir).catch(() => ({
+      seeded: false,
+      detail: "seed failed",
+    }));
+
     const systemPrompt = stageSystemPrompt(input, task);
     const userPrompt = stageUserPrompt(input, task);
 
-    if (sessionFactory) {
-      const out = await sessionFactory({
+    // Single session promote site (best-effort); absorb only on intentional returns.
+    let sessionPromoted = false;
+    const promoteSession = async () => {
+      if (sessionPromoted) return;
+      sessionPromoted = true;
+      await promoteChildSessionToParent(workDir, parentRuntime.taskDir).catch(() => ({
+        promoted: false,
+        detail: "promote failed",
+      }));
+    };
+
+    /**
+     * A1 absorb (throws on failure) then A4 promote.
+     * Absorb upserts by stageKey when candidates present (retry-safe).
+     */
+    const finalizeStage = async (opts: {
+      structured: ReturnType<typeof normalizeSubagentResult>;
+      child?: ToolRuntime;
+      seed?: StageContinuitySeed;
+      summaryOverride?: string;
+    }): Promise<StageExecutorOutput> => {
+      absorbStageResultIntoParent(parentRuntime, {
         stageId: input.stage.id,
-        tools: input.tools,
-        systemPrompt,
-        userPrompt,
+        structured: opts.structured,
+        child: opts.child,
+        seed: opts.seed,
+      });
+      await promoteSession();
+      return {
+        structured: opts.structured,
+        summary:
+          opts.summaryOverride ??
+          (opts.structured.summaryProvided ? opts.structured.summary : undefined),
+      };
+    };
+
+    try {
+      if (sessionFactory) {
+        const out = await sessionFactory({
+          stageId: input.stage.id,
+          tools: input.tools,
+          systemPrompt,
+          userPrompt,
+          workDir,
+          abortSignal,
+        });
+        // Factory path: structured-only absorb (no child lifecycle). Documented for runner tests.
+        const structured = normalizeSubagentResult(
+          out.structured ?? {
+            ok: false,
+            summary: out.summary || `stage ${input.stage.id}: factory returned no structured`,
+            surfaces: [],
+            candidates: [],
+            deadends: ["factory_no_structured"],
+          },
+        );
+        return await finalizeStage({
+          structured,
+          summaryOverride:
+            out.summary ?? (structured.summaryProvided ? structured.summary : undefined),
+        });
+      }
+
+      const { childRuntime, packForStage } = buildChildRuntime({
+        parent: parentRuntime,
         workDir,
+        tools: input.tools,
+        pack,
         abortSignal,
       });
-      return { structured: out.structured, summary: out.summary };
-    }
+      // A1: prior stage candidates + observations into book-capable stages
+      const continuitySeed = seedStageLifecycleFromParent(parentRuntime, childRuntime);
+      await childRuntime.processFacts?.ensureDir?.().catch(() => {});
 
-    const { childRuntime, packForStage } = buildChildRuntime({
-      parent: parentRuntime,
-      workDir,
-      tools: input.tools,
-      pack,
-      abortSignal,
-    });
-    await childRuntime.processFacts?.ensureDir?.().catch(() => {});
-
-    const authStorage = AuthStorage.create(join(config.piAgentDir, "auth.json"));
-    const { modelRegistry, model } = await resolveModel(config, authStorage);
-    if (!model) {
-      return {
-        structured: {
+      const failStructured = (summary: string, deadend: string) =>
+        normalizeSubagentResult({
           ok: false,
-          summary: `hard-graph stage: model not available (${config.modelProvider}/${config.modelId})`,
+          summary,
           surfaces: [],
           candidates: [],
-          deadends: ["model_unavailable"],
-        },
-        summary: `hard-graph stage: model not available (${config.modelProvider}/${config.modelId})`,
-      };
-    }
+          deadends: [deadend],
+        });
 
-    const settingsManager = SettingsManager.inMemory({
-      compaction: { enabled: true },
-      retry: { enabled: true, maxRetries: 1 },
-    });
-    const segmentCounter = { tools: 0 };
-    const resourceLoader = new DefaultResourceLoader({
-      cwd: workDir,
-      agentDir: config.piAgentDir,
-      settingsManager,
-      extensionFactories: [createNode4Extension(childRuntime, segmentCounter, packForStage)],
-      noExtensions: true,
-      noSkills: true,
-      noPromptTemplates: true,
-      noContextFiles: true,
-      systemPrompt,
-    });
-    await resourceLoader.reload();
-
-    const { session } = await createAgentSession({
-      cwd: workDir,
-      agentDir: config.piAgentDir,
-      model,
-      thinkingLevel: "low",
-      authStorage,
-      modelRegistry,
-      resourceLoader,
-      tools: [...input.tools],
-      sessionManager: SessionManager.create(workDir, join(workDir, "pi-sessions")),
-      settingsManager,
-    });
-
-    try {
-      if (abortSignal?.aborted) {
-        return {
-          structured: {
-            ok: false,
-            summary: "aborted before stage",
-            surfaces: [],
-            candidates: [],
-            deadends: ["aborted"],
-          },
-          summary: "aborted before stage",
-        };
+      const authStorage = AuthStorage.create(join(config.piAgentDir, "auth.json"));
+      const { modelRegistry, model } = await resolveModel(config, authStorage);
+      if (!model) {
+        return await finalizeStage({
+          structured: failStructured(
+            `hard-graph stage: model not available (${config.modelProvider}/${config.modelId})`,
+            "model_unavailable",
+          ),
+          child: childRuntime,
+          seed: continuitySeed,
+        });
       }
-      await session.prompt(userPrompt, { source: "interactive" });
-    } catch (err) {
-      if (abortSignal?.aborted) {
-        return {
-          structured: {
-            ok: false,
-            summary: "aborted",
-            surfaces: [],
-            candidates: [],
-            deadends: ["aborted"],
-          },
-          summary: "aborted",
-        };
-      }
-      throw err;
-    } finally {
+
+      const settingsManager = SettingsManager.inMemory({
+        compaction: { enabled: true },
+        retry: { enabled: true, maxRetries: 1 },
+      });
+      const segmentCounter = { tools: 0 };
+      const resourceLoader = new DefaultResourceLoader({
+        cwd: workDir,
+        agentDir: config.piAgentDir,
+        settingsManager,
+        extensionFactories: [createNode4Extension(childRuntime, segmentCounter, packForStage)],
+        noExtensions: true,
+        noSkills: true,
+        noPromptTemplates: true,
+        noContextFiles: true,
+        systemPrompt,
+      });
+      await resourceLoader.reload();
+
+      const { session } = await createAgentSession({
+        cwd: workDir,
+        agentDir: config.piAgentDir,
+        model,
+        thinkingLevel: "low",
+        authStorage,
+        modelRegistry,
+        resourceLoader,
+        tools: [...input.tools],
+        sessionManager: SessionManager.create(workDir, join(workDir, "pi-sessions")),
+        settingsManager,
+      });
+
       try {
-        await Promise.resolve((session as { dispose?: () => void | Promise<void> }).dispose?.());
-      } catch {
-        /* ignore */
+        if (abortSignal?.aborted) {
+          return await finalizeStage({
+            structured: failStructured("aborted before stage", "aborted"),
+            child: childRuntime,
+            seed: continuitySeed,
+          });
+        }
+        await session.prompt(userPrompt, { source: "interactive" });
+      } catch (err) {
+        if (abortSignal?.aborted) {
+          return await finalizeStage({
+            structured: failStructured("aborted", "aborted"),
+            child: childRuntime,
+            seed: continuitySeed,
+          });
+        }
+        throw err;
+      } finally {
+        try {
+          await Promise.resolve((session as { dispose?: () => void | Promise<void> }).dispose?.());
+        } catch {
+          /* ignore */
+        }
       }
-    }
 
-    const resultPath = join(workDir, "result.json");
-    try {
-      const raw = await readFile(resultPath, "utf8");
-      const parsed = JSON.parse(raw) as unknown;
-      const structured = normalizeSubagentResult(parsed);
-      await writeFile(
-        join(workDir, "normalized-result.json"),
-        JSON.stringify(structured, null, 2),
-        "utf8",
-      );
-      return { structured, summary: structured.summaryProvided ? structured.summary : undefined };
-    } catch {
-      return {
-        structured: {
-          ok: false,
-          summary: `stage ${input.stage.id}: missing or invalid result.json`,
-          surfaces: [],
-          candidates: [],
-          facts: [],
-          deadends: ["missing_result_json"],
-        },
-        summary: `stage ${input.stage.id}: missing or invalid result.json`,
-      };
+      const resultPath = join(workDir, "result.json");
+      try {
+        const raw = await readFile(resultPath, "utf8");
+        const parsed = JSON.parse(raw) as unknown;
+        const structured = normalizeSubagentResult(parsed);
+        await writeFile(
+          join(workDir, "normalized-result.json"),
+          JSON.stringify(structured, null, 2),
+          "utf8",
+        );
+        return await finalizeStage({
+          structured,
+          child: childRuntime,
+          seed: continuitySeed,
+        });
+      } catch {
+        return await finalizeStage({
+          structured: failStructured(
+            `stage ${input.stage.id}: missing or invalid result.json`,
+            "missing_result_json",
+          ),
+          child: childRuntime,
+          seed: continuitySeed,
+        });
+      }
+    } finally {
+      // Promote once even on throw (no absorb of garbage structured).
+      await promoteSession();
     }
   };
 }
