@@ -1,0 +1,4 @@
+runs/**/workspace/**/pi-sessions/
+runs/**/workspace/**/events.jsonl
+runs/**/workspace/**/transcript.jsonl
+runs/**/workspace-free-mode-fallback/

@@ -1,0 +1,28 @@
+{
+  "id": "f_1784835616089_36e337",
+  "action": "confirm",
+  "title": "IDOR - Unauthorized Access to Another User's Basket",
+  "severity": "high",
+  "finding_kind": "vuln",
+  "location": "GET /rest/basket/1",
+  "url": "GET /rest/basket/1",
+  "description": "The /rest/basket/1 endpoint is accessible with any valid JWT token regardless of basket ownership. A regular customer (test@test.com, UserId=24, role=customer) can access basket ID 1 which belongs to admin user (UserId=1). The API does not verify that the requesting user's basket ID matches the requested basket ID, allowing unauthorized access to other users' shopping cart data.",
+  "poc": "1. Login as customer test@test.com (UserId=24)\\n2. GET /rest/basket/1 with customer's JWT\\n3. Response shows basket belongs to UserId=1 (admin)",
+  "proof": "Status: success, Basket ID: 1, UserId: 1, Accessed by: test@test.com (UserId=24, role=customer), Products: 3 items",
+  "how_captured": "shell: # Re-run IDOR proof for booking - customer JWT accessing admin's basket CUSTOMER_JWT=\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJkYXRhIjp7ImlkIjoyNCwidXNlcm5hbWUiO",
+  "evidence_ids": [
+    "ev_1784835616055_a91711"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784835616055_a91711",
+      "excerpt": "Status: success, Basket ID: 1, UserId: 1, Accessed by: test@test.com (UserId=24, role=customer), Products: 3 items",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "shell: # Re-run IDOR proof for booking - customer JWT accessing admin's basket CUSTOMER_JWT=\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJkYXRhIjp7ImlkIjoyNCwidXNlcm5hbWUiO"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "3011",
+  "created_at": "2026-07-23T19:40:16.090Z"
+}

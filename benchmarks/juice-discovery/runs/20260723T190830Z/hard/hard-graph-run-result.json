@@ -1,0 +1,23 @@
+{
+  "graphId": "app_assessment_thin",
+  "terminal": "blocked",
+  "stages": [
+    {
+      "stageId": "init",
+      "stageIndex": 0,
+      "attempts": 2,
+      "outcome": "blocked",
+      "errors": [
+        "structured_ok_false"
+      ],
+      "summary": "stage init: missing or invalid result.json"
+    }
+  ],
+  "handoff": {
+    "surfaces": [],
+    "candidates": [],
+    "facts": [],
+    "deadends": [],
+    "completed_stages": []
+  }
+}

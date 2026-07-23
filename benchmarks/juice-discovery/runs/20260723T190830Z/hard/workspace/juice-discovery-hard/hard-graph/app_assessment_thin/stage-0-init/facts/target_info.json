@@ -1,0 +1,6 @@
+{
+  "fact_key": "target_info",
+  "summary": "Target: OWASP Juice Shop on http://127.0.0.1:3010",
+  "body": "Target URL: http://127.0.0.1:3010\nApplication: OWASP Juice Shop (Node.js/Express)\nScope: 127.0.0.1, localhost only\nRoE: app_assessment (no post-ex host takeover off-box)\nPort: 3010 (HTTP only per URL)",
+  "updated_at": "2026-07-23T19:10:03.119Z"
+}

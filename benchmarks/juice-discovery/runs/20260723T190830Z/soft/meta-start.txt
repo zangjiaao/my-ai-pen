@@ -1,0 +1,10 @@
+START=2026-07-23T19:35:10Z
+START_EPOCH=1784835310
+SHA=04af509d8a75d3c3cb87269af366574081991373
+BRANCH=bench/juice-discovery-coreonly-hard
+RUNTIME=core-only runNode4Agent
+ARM=product_soft
+GRAPH_ID=app_assessment
+GRAPH_MAIN_ACT=soft/delegate_preferred
+PI_CODING_AGENT=forbidden
+TARGET=http://127.0.0.1:3011

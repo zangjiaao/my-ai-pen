@@ -1,0 +1,22 @@
+{
+  "arm": "soft",
+  "authoritative": true,
+  "runtime": "core-only runNode4Agent",
+  "piPackages": ["@earendil-works/pi-ai", "@earendil-works/pi-agent-core"],
+  "piCodingAgent": false,
+  "graphId": "app_assessment",
+  "workMode": "graph:app_assessment:delegate_preferred",
+  "notHardGraph": true,
+  "target": "http://127.0.0.1:3011",
+  "container": "juice-discovery-soft",
+  "terminalStatus": "completed",
+  "stopReason": "natural_stop_after_tools",
+  "bookedFindings": 6,
+  "wallClockSec": 410,
+  "start": "2026-07-23T19:35:10Z",
+  "end": "2026-07-23T19:42:00Z",
+  "nodeSha": "04af509d8a75d3c3cb87269af366574081991373",
+  "branch": "bench/juice-discovery-coreonly-hard",
+  "pairedHardStamp": "same stamp hard/ (blocked@init, 0 findings)",
+  "fairnessNotes": "Soft had shell/http/finding; Hard thin never left init (no recon tools, result.json gate). Same core-only Runtime SHA family; not an equal-stage discovery bake-off."
+}

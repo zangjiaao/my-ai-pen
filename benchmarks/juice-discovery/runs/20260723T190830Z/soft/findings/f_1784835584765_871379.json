@@ -1,0 +1,28 @@
+{
+  "id": "f_1784835584765_871379",
+  "action": "confirm",
+  "title": "Sensitive Data Exposure - Admin Application Configuration",
+  "severity": "medium",
+  "finding_kind": "vuln",
+  "location": "/rest/admin/application-configuration",
+  "url": "/rest/admin/application-configuration",
+  "description": "The /rest/admin/application-configuration endpoint exposes the full application configuration including server base URL, domain configuration, chatBot model and settings (gemma4:e4b), social media links, altcoin name, privacy contact email, and other internal system details. While it requires admin JWT authentication, the sensitive data disclosure aids further attacks.",
+  "poc": "GET /rest/admin/application-configuration with admin JWT → Full config JSON returned",
+  "proof": "curl -s -H \"Authorization: Bearer <admin_jwt>\" \"http://127.0.0.1:3011/rest/admin/application-configuration\" → {\"config\":{\"server\":{\"port\":3000,\"baseUrl\":\"http://localhost:3000\"},\"application\":{\"domain\":\"juice-sh.op\",\"name\":\"OWASP Juice Shop\"},\"chatBot\":{\"model\":\"gemma4:e4b\"}...}} - full config exposed",
+  "how_captured": "shell: ADMIN_JWT=\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJkYXRhIjp7ImlkIjoxLCJ1c2VybmFtZSI6IiIsImVtYWlsIjoiYWRtaW5AanVpY2Utc2gub3AiLCJwYXNzd29yZCI6IjAxOTIwMjNhN2JiZDcz",
+  "evidence_ids": [
+    "ev_1784835584748_ba9052"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784835584748_ba9052",
+      "excerpt": "curl -s -H \"Authorization: Bearer <admin_jwt>\" \"http://127.0.0.1:3011/rest/admin/application-configuration\" → {\"config\":{\"server\":{\"port\":3000,\"baseUrl\":\"http://localhost:3000\"},\"application\":{\"domain\":\"juice-sh.op\",\"name\":\"OWASP Juice Shop\"},\"chatBot\":{\"model\":\"gemma4:e4b\"}...}} - full config exposed",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "shell: ADMIN_JWT=\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJkYXRhIjp7ImlkIjoxLCJ1c2VybmFtZSI6IiIsImVtYWlsIjoiYWRtaW5AanVpY2Utc2gub3AiLCJwYXNzd29yZCI6IjAxOTIwMjNhN2JiZDcz"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "3011",
+  "created_at": "2026-07-23T19:39:44.766Z"
+}

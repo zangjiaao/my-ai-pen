@@ -16,7 +16,7 @@
 
 ### Hard Graph stage continuity (A1 + A4)
 
-Per-stage pi sessions still use isolated work dirs (`taskDir/hard-graph/<graphId>/stage-…`) for `result.json` / stage evidence audit. Continuity is explicit:
+Per-stage pi sessions still use isolated work dirs (`taskDir/hard-graph/<graphId>/stage-…`) for `result.json` / stage evidence audit. **Handoff contract:** stage Feedback reads **`result.json` only** (not process facts / transcripts). Hard Graph load rejects stages whose non-empty `tools.allow` omits **`write`** (so handoff is tool-reachable); stage prompts name the write path. Missing/invalid `result.json` still fail-closes. Continuity is explicit:
 
 | Concern | Behavior |
 |---------|----------|
