@@ -1,6 +1,6 @@
 # AI 安全运营平台
 
-平台 Web 工作台 + **可绑定的 Node 候选运行时**（pre-PK：`node4/` 与 `node5/` 对等；部署须显式绑定其一）。  
+平台 Web 工作台 + **可绑定的 Node 运行时**（产品路径：**Graph × Pi / `node4/`**；`node5/` 为 lab 参考与退路，非默认绑定）。  
 Legacy `node/`、`node2/`、`node3/` 计划删除，禁止扩展。`research/` 与 `benchmarks/` 冻结。
 
 规格入口：

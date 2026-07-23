@@ -1,8 +1,9 @@
 # Node5 — ADK three-layer Graph control arm (CLI only)
 
-**Research / lab对照**，不是产品执行核。产品执行核仍是 **Node4**。
+**Lab / 语义参考（冻结产品化）。** 产品路径已锁为 **Graph × Pi / Node4 血统**（见 `docs/adr/0001-graph-x-pi-product-path.md`）。  
+**不要**在未触发退路 hard triggers 前把 Node5 接到平台或扩展产品行为。Node5 的价值是 Hard Graph **语义**对照与 lab 实验。
 
-对照问题：渗透专家在 **Task + Agent + Feedback Graph** 组合下 vs Node4 Soft OMP 的表现。
+对照问题：渗透专家在 **Task + Agent + Feedback Graph** 组合下 vs Node4 Soft OMP / Hard Graph × Pi 的表现。
 
 ---
 

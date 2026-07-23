@@ -1,26 +1,30 @@
-# Pentest Free vs Graph work mode
+# Pentest work modes: OMP, soft scenario Graph, Hard Graph × Pi
 
 > Living companion to `docs/specs/harness.md` §6.  
-> Calibrated: 2026-07-21
+> Calibrated: 2026-07-23 (Graph × Pi first cut)
 
-**Prompt single-source:** Graph captain/ledger/acceptance/packages live in runtime `formatGraphInjection` (`<work-mode>`). Pack `work.md` only points at that block for Graph detail — do not re-expand the same rules in work.md.
+**Prompt single-source (soft scenario):** Graph captain/ledger/acceptance/packages live in runtime `formatGraphInjection` (`<work-mode>`). Pack `work.md` only points at that block for soft Graph detail — do not re-expand the same rules in work.md.
+
+**Hard Graph:** product-owned runner (`hard-graph-*`); stage order and Feedback are **not** Main OMP scheduling. Soft scenario Graph is **not** Hard Graph DoD.
 
 ## One sentence
 
-**OMP** decides who schedules whom (Main loop + optional subagent).  
-**Scenario Graph** (optional) supplies a professional node menu and soft plan skeleton.  
-**Case** holds long-term shared state. No LangGraph second runtime.
+**Default / free OMP** — Main loop schedules itself (Default seat never Hard Graph).  
+**Soft scenario Graph** — optional node menu + soft plan (Main may still schedule).  
+**Hard Graph × Pi** — outer runner owns stages; pi runs inside stages; fail-closed gates.  
+**Case** holds long-term shared state.
 
 ## Modes
 
 | Mode | How selected | Behavior |
 |------|--------------|----------|
-| **Free** (product default) | No graph / `free` | Pure OMP; Main may self-act; voluntary subagent |
-| **Graph** (product = **soft**) | `app_assessment` or `redteam_deep` | Node menu + RoE + coverage honesty; **Main may act** and finish work; **sub optional** (heavy / polluting work); Main books. Child proofs inject into parent observations when sub is used. |
+| **Default / free OMP** | No expert Hard Graph; Default seat or free expert | Pure OMP; Main may self-act; voluntary subagent |
+| **Soft scenario Graph** | `graphId` app_assessment / redteam_deep without hard discipline | Node menu + RoE; **Main may act**; soft default_plan; **not** Hard Graph DoD |
+| **Hard Graph × Pi** | `graphDiscipline=hard`, hard graph id (e.g. `app_assessment_thin`), or `NODE4_HARD_GRAPH=1` | Runner drives ordered stages; pi stage sessions; tool profiles; fail-closed Feedback; **Main is not the stage scheduler**; no outer-continue fight |
 
-Lab-only hard Graph (strip Main act tools): `NODE4_GRAPH_MAIN_ACT=hard` or task `graphMainAct=delegate_only`.
+Lab-only Main act strip (soft path): `NODE4_GRAPH_MAIN_ACT=hard` or task `graphMainAct=delegate_only` — distinct from product Hard Graph runner.
 
-UI default: **自由 OMP**. Graph’s job is **plan + coverage**, not forced fan-out.
+UI default for casual work: **Default / free OMP**. Expert Hard Graph is explicit structured selection.
 
 ## Subagent + acceptance loop
 

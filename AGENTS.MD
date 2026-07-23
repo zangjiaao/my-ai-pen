@@ -2,7 +2,7 @@
 
 **Spec precedence (when documents disagree):** `AGENTS.md` → `docs/prd.md` → `docs/specs/harness.md` (candidate-specific) → other `docs/specs/*` / `docs/v1-delivery.md`.
 
-**Runtime candidates (pre-PK):** `node4/` and `node5/` are **co-equal Node implementation candidates**. The platform binds to **exactly one** candidate per deployment; documentation does **not** declare a winner. **Legacy** `node/`, `node2/`, `node3/`: plan-delete after gates — do not expand product behavior there. **`research/`**: frozen third-party reference (not product). **`benchmarks/`**: frozen lab evaluation assets (not product authority). Product work targets platform + the bound candidate + `experts/`.
+**Product Node path (locked):** **Graph × Pi** on the **Node4 lineage** (Hard Graph runner owns Expert stage order; pi is in-node Agent Runtime). **Default** seat never enters Expert Hard Graph. **Node5** is a **lab / semantic reference** and formal fallback B only under documented hard triggers (see `docs/adr/0001-graph-x-pi-product-path.md`) — do **not** expand Node5 as a co-equal product kernel while A is in pursuit. Platform binds to **exactly one** Node process per deployment (product default: Node4 lineage). **Legacy** `node/`, `node2/`, `node3/`: plan-delete after gates — do not expand product behavior there. **`research/`**: frozen third-party reference (not product). **`benchmarks/`**: frozen lab evaluation assets (not product authority). Product work targets platform + Node4 lineage + `experts/`.
 
 ## No Hardcoded Behavior Without Approval
 

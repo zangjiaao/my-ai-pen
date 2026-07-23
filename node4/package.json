@@ -13,6 +13,7 @@
     "test:pen-tools": "tsx src/runtime/pen-tools-path.test.ts && tsx src/runtime/pen-tools-shell.test.ts && tsx src/runtime/browser-image.test.ts && tsx src/runtime/pentest-sandbox-image.test.ts && tsx src/runtime/tooling-health.test.ts",
     "test:cyberstrike": "tsx src/runtime/subagent-handoff.test.ts && tsx src/stores/process-fact.test.ts && tsx src/runtime/tool-output-governance.test.ts && tsx src/tools/cyberstrike-adopted.smoke.ts",
     "test:graph": "tsx src/runtime/subagent-result.test.ts && tsx src/runtime/pentest-graph.test.ts && tsx src/runtime/subagent-parent-obs.test.ts && tsx src/runtime/subagent-booking.test.ts",
+    "test:hard-graph": "tsx src/runtime/hard-graph-definition.test.ts && tsx src/runtime/hard-graph-runner.test.ts && tsx src/runtime/hard-graph-task.test.ts",
     "check": "tsc --noEmit",
     "build": "tsc -p tsconfig.json"
   },

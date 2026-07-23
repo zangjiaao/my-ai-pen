@@ -53,7 +53,7 @@
 | `experts/` | 本地 `*/workspace/`、lab session dumps |
 | `sandbox/`（pen-sandbox 说明/镜像） | legacy `node/` `node2/` `node3/`（计划删除） |
 
-**V1 不指定默认 Node 候选。** 每次部署须在配置中绑定 platform 到 **恰好一个** 候选（`node4` 或 `node5`），两者在文档中对等列出、不排序赢家。
+**V1 产品默认绑定 Node4 血统（Graph × Pi）。** 每次部署仍须显式绑定恰好一个 Node 进程；`node5` 不作默认产品路径（lab/退路，见 ADR 0001）。
 
 Spec 权威：`AGENTS.md` → `docs/prd.md` → `docs/specs/harness.md`（候选实现细节）→ 其他 `docs/specs/*`。
 

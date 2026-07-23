@@ -4,7 +4,7 @@
 
 | Doc | Role |
 |-----|------|
-| [`../AGENTS.md`](../AGENTS.md) | Agent engineering rules; pre-PK dual Node candidates |
+| [`../AGENTS.md`](../AGENTS.md) | Agent engineering rules; Graph × Pi product path |
 | [`prd.md`](prd.md) | Product requirements — platform + bound Node candidate + experts |
 | [`v1-delivery.md`](v1-delivery.md) | V1 delivery scope / non-goals / install boundary |
 | [`design.md`](design.md) | UI design system |
@@ -41,7 +41,7 @@ Candidate-specific implementation detail. See each file preamble for dual-track 
 
 ## Runtime code
 
-- **Co-equal Node candidates (pre-PK):** `node4/`, `node5/` — platform binds **exactly one** per deployment; docs do not declare a winner
+- **Product Node path:** Graph × Pi on `node4/` (ADR 0001); `node5/` lab/fallback B — bind **exactly one** Node process per deployment
 - **Product:** `platform/`, `experts/`, `sandbox/` (pen-sandbox)
 - **Legacy (plan-delete after gates):** `node/`, `node2/`, `node3/` — do not expand product behavior
 - **Frozen:** `research/`, `benchmarks/`

@@ -29,6 +29,12 @@ export type TaskEnvelope = {
    */
   graphMainAct?: "delegate_preferred" | "delegate_only";
   /**
+   * Hard Graph vs soft scenario menu (structured only — no NLP).
+   * "hard" → Graph × Pi runner owns stage order (see hard-graph-*).
+   * Soft/unset keeps existing OMP + optional soft scenario graph.
+   */
+  graphDiscipline?: "soft" | "hard";
+  /**
    * Rules-of-engagement: allow host post-ex / lateral.
    * When undefined, derived from engagementTemplate (default false).
    */

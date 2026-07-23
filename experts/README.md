@@ -21,7 +21,7 @@ Independent **expert pack** units maintained outside the Node harness.
 
 ## Node as runtime
 
-The bound Node candidate (commonly `node4` today) is an OMP-class agent runtime with a **built-in `default` seat** (工作台助手) plus optional expert packs. Peer candidate `node5/` is co-equal pre-PK.
+The product Node (**Node4 lineage / Graph × Pi**) is an OMP-class agent runtime with a **built-in `default` seat** (工作台助手; never Expert Hard Graph) plus optional expert packs. Expert Hard Graph stages use pi inside a product-owned runner. **Node5** is lab/semantic reference only while A is in pursuit.
 
 **Model B — platform citizen base + specialist overlay:**
 
