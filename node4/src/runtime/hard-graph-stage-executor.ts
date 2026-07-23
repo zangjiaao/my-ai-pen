@@ -25,6 +25,13 @@ import { ProcessFactStore } from "../stores/process-fact.js";
 import { TodoStore } from "../stores/todo.js";
 import { createNode4Extension } from "./extension.js";
 import type { StageExecutor, StageExecutorInput, StageExecutorOutput } from "./hard-graph-runner.js";
+import {
+  absorbStageResultIntoParent,
+  promoteStageSession,
+  seedStageLifecycleFromParent,
+  seedStageSession,
+  type StageContinuitySeed,
+} from "./hard-graph-continuity.js";
 import { normalizeSubagentResult } from "./subagent-result.js";
 
 export type HardGraphStageSessionFactory = (options: {
@@ -198,19 +205,65 @@ export function createPiHardGraphStageExecutor(options: {
     await mkdir(join(workDir, "facts"), { recursive: true });
     await mkdir(join(workDir, "pi-sessions"), { recursive: true });
 
+    // A4: cookies from prior stages (parent taskDir/session) → this stage workDir
+    await seedStageSession(parentRuntime.taskDir, workDir).catch(() => ({
+      seeded: false,
+      detail: "seed failed",
+    }));
+
     const systemPrompt = stageSystemPrompt(input, task);
     const userPrompt = stageUserPrompt(input, task);
 
+    const absorbAndPromote = async (
+      structured: ReturnType<typeof normalizeSubagentResult>,
+      child?: ToolRuntime,
+      seed?: StageContinuitySeed,
+    ) => {
+      try {
+        absorbStageResultIntoParent(parentRuntime, {
+          stageId: input.stage.id,
+          stageIndex: input.stageIndex,
+          structured,
+          child,
+          seed,
+        });
+      } catch {
+        /* non-fatal: stage result still returned */
+      }
+      try {
+        await promoteStageSession(workDir, parentRuntime.taskDir);
+      } catch {
+        /* best-effort */
+      }
+    };
+
     if (sessionFactory) {
-      const out = await sessionFactory({
-        stageId: input.stage.id,
-        tools: input.tools,
-        systemPrompt,
-        userPrompt,
-        workDir,
-        abortSignal,
-      });
-      return { structured: out.structured, summary: out.summary };
+      try {
+        const out = await sessionFactory({
+          stageId: input.stage.id,
+          tools: input.tools,
+          systemPrompt,
+          userPrompt,
+          workDir,
+          abortSignal,
+        });
+        const structured = normalizeSubagentResult(out.structured ?? {
+          ok: false,
+          summary: out.summary || `stage ${input.stage.id}: factory returned no structured`,
+          surfaces: [],
+          candidates: [],
+          deadends: ["factory_no_structured"],
+        });
+        await absorbAndPromote(structured);
+        return { structured, summary: out.summary ?? (structured.summaryProvided ? structured.summary : undefined) };
+      } catch (err) {
+        try {
+          await promoteStageSession(workDir, parentRuntime.taskDir);
+        } catch {
+          /* best-effort */
+        }
+        throw err;
+      }
     }
 
     const { childRuntime, packForStage } = buildChildRuntime({
@@ -220,20 +273,24 @@ export function createPiHardGraphStageExecutor(options: {
       pack,
       abortSignal,
     });
+    // A1: prior stage candidates + observations into book-capable stages
+    const continuitySeed = seedStageLifecycleFromParent(parentRuntime, childRuntime);
     await childRuntime.processFacts?.ensureDir?.().catch(() => {});
 
     const authStorage = AuthStorage.create(join(config.piAgentDir, "auth.json"));
     const { modelRegistry, model } = await resolveModel(config, authStorage);
     if (!model) {
-      return {
-        structured: {
-          ok: false,
-          summary: `hard-graph stage: model not available (${config.modelProvider}/${config.modelId})`,
-          surfaces: [],
-          candidates: [],
-          deadends: ["model_unavailable"],
-        },
+      const structured = normalizeSubagentResult({
+        ok: false,
         summary: `hard-graph stage: model not available (${config.modelProvider}/${config.modelId})`,
+        surfaces: [],
+        candidates: [],
+        deadends: ["model_unavailable"],
+      });
+      await absorbAndPromote(structured, childRuntime, continuitySeed);
+      return {
+        structured,
+        summary: structured.summary,
       };
     }
 
@@ -270,30 +327,33 @@ export function createPiHardGraphStageExecutor(options: {
 
     try {
       if (abortSignal?.aborted) {
-        return {
-          structured: {
-            ok: false,
-            summary: "aborted before stage",
-            surfaces: [],
-            candidates: [],
-            deadends: ["aborted"],
-          },
+        const structured = normalizeSubagentResult({
+          ok: false,
           summary: "aborted before stage",
-        };
+          surfaces: [],
+          candidates: [],
+          deadends: ["aborted"],
+        });
+        await absorbAndPromote(structured, childRuntime, continuitySeed);
+        return { structured, summary: structured.summary };
       }
       await session.prompt(userPrompt, { source: "interactive" });
     } catch (err) {
       if (abortSignal?.aborted) {
-        return {
-          structured: {
-            ok: false,
-            summary: "aborted",
-            surfaces: [],
-            candidates: [],
-            deadends: ["aborted"],
-          },
+        const structured = normalizeSubagentResult({
+          ok: false,
           summary: "aborted",
-        };
+          surfaces: [],
+          candidates: [],
+          deadends: ["aborted"],
+        });
+        await absorbAndPromote(structured, childRuntime, continuitySeed);
+        return { structured, summary: structured.summary };
+      }
+      try {
+        await promoteStageSession(workDir, parentRuntime.taskDir);
+      } catch {
+        /* best-effort */
       }
       throw err;
     } finally {
@@ -314,18 +374,21 @@ export function createPiHardGraphStageExecutor(options: {
         JSON.stringify(structured, null, 2),
         "utf8",
       );
+      await absorbAndPromote(structured, childRuntime, continuitySeed);
       return { structured, summary: structured.summaryProvided ? structured.summary : undefined };
     } catch {
-      return {
-        structured: {
-          ok: false,
-          summary: `stage ${input.stage.id}: missing or invalid result.json`,
-          surfaces: [],
-          candidates: [],
-          facts: [],
-          deadends: ["missing_result_json"],
-        },
+      const structured = normalizeSubagentResult({
+        ok: false,
         summary: `stage ${input.stage.id}: missing or invalid result.json`,
+        surfaces: [],
+        candidates: [],
+        facts: [],
+        deadends: ["missing_result_json"],
+      });
+      await absorbAndPromote(structured, childRuntime, continuitySeed);
+      return {
+        structured,
+        summary: structured.summary,
       };
     }
   };
