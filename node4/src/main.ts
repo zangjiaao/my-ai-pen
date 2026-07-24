@@ -5,6 +5,7 @@ import { PlatformWSClient } from "./platform/ws-client.js";
 import { runNode4Task } from "./runtime/session-runner.js";
 import type { TaskEnvelope } from "./types.js";
 import { parseCaseContext } from "./runtime/case-context.js";
+import { parseGraphExecution } from "./runtime/hard-graph-definition.js";
 import { sanitizePromptLabel } from "./runtime/prompt.js";
 import { cancelApprovalsForConversation, resolveApproval } from "./runtime/approvals.js";
 
@@ -249,6 +250,7 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
       : graphMainActRaw === "delegate_preferred" || graphMainActRaw === "soft"
         ? ("delegate_preferred" as const)
         : undefined;
+  const graphExecution = parseGraphExecution(message);
   const allowPostexRaw = message.allow_postex ?? message.allowPostex;
   const allowPostex =
     typeof allowPostexRaw === "boolean"
@@ -290,6 +292,7 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
     engagementTemplate: engagementTemplate?.trim() || undefined,
     graphId: graphIdRaw?.trim() || undefined,
     graphMainAct,
+    graphExecution,
     allowPostex,
     accounts: message.accounts !== undefined ? message.accounts : undefined,
     goalObjective,

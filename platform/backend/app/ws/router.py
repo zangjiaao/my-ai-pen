@@ -3620,6 +3620,8 @@ async def _dispatch_task_assign_to_node(
         task_msg["expert_name"] = expert_name
     task_msg = await _merge_case_roe_into_task_assign(conv_id, task_msg)
     task_msg = await _attach_case_context_to_task_assign(conv_id, task_msg)
+    # C1 (#78): after Expert Graph completed, sticky template must not full-run Hard stages.
+    task_msg = await _apply_graph_execution_c1(conv_id, task_msg, msg)
 
     gate_err = await _gate_engagement_for_node(node_id, engagement)
     if gate_err:
@@ -3734,6 +3736,44 @@ def _task_assign_from_user_message(conv_id: str, msg: dict, task_id: str) -> dic
             out["allow_postex"] = False
     if msg.get("accounts") is not None:
         out["accounts"] = msg.get("accounts")
+    return out
+
+
+async def _apply_graph_execution_c1(conv_id: str | None, task_msg: dict, msg: dict) -> dict:
+    """Attach structured graph_execution when C1 policy resolves (pure helper owns rules)."""
+    from app.services.case_engagement import resolve_graph_execution
+
+    out = dict(task_msg or {})
+    explicit = (
+        msg.get("graph_execution")
+        or msg.get("graphExecution")
+        or out.get("graph_execution")
+        or out.get("graphExecution")
+        or ""
+    )
+    et = str(out.get("engagement_template") or out.get("engagementTemplate") or "").strip()
+    status: str | None = None
+    if conv_id:
+        try:
+            status = await _conversation_status(str(conv_id))
+        except Exception:
+            # Leave execution unset on status fetch failure (Node first-run full when hard).
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "graph_execution C1: conversation status fetch failed conv_id=%s",
+                conv_id,
+                exc_info=True,
+            )
+            status = None
+
+    resolved = resolve_graph_execution(
+        engagement_template=et,
+        conversation_status=status,
+        explicit_execution=explicit,
+    )
+    if resolved is not None:
+        out["graph_execution"] = resolved
     return out
 
 

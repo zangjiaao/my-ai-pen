@@ -172,7 +172,7 @@ UI Elapsed = that window (local tick while running). Tool-call hooks do **not** 
 |-----------|----------|
 | `goal` | Tracks long-task objective + optional `token_budget` for display/telemetry. **Product default:** no outer `goal_continuation` inject (`NODE4_MAX_GOAL_CONTINUES` unset/0). Lab: `NODE4_MAX_GOAL_CONTINUES=unlimited` (or positive cap) re-enables outer inject while active. `complete` is free in code (active \| budget-limited); honesty is prompt-steered. Lab-only hard audit: `NODE4_GOAL_REQUIRE_CLEARANCE=1`. Open goals do not invent product findings. |
 | `subagent` | Child under `taskDir/subagents/<id>`; evidence written |
-| Work mode | **Free** (no Expert Graph) vs **Expert Graph** (product `app_assessment` → Hard Graph runner; Soft scenario mode retired #76) |
+| Work mode | **Free** (Default seat only) vs **Expert Graph** (product `app_assessment` / `redteam_deep` → Hard Graph runner; Soft retired #76; C1 continue-chat after complete) |
 
 ### OMP subagent scheduling
 
