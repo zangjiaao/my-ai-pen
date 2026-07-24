@@ -21,7 +21,7 @@ Independent **expert pack** units maintained outside the Node harness.
 
 ## Node as runtime
 
-The product Node (**Node4 lineage / Graph × Pi**) is an OMP-class agent runtime with a **built-in `default` seat** (工作台助手; never Expert Hard Graph) plus optional expert packs. Expert Hard Graph stages use pi inside a product-owned runner. **Node5** is lab/semantic reference only while A is in pursuit.
+The product Node (**Node4 lineage / Graph × Pi**) is an OMP-class agent runtime with a **built-in `default` seat** (工作台助手; never Expert Hard Graph) plus optional expert packs. **Expert pentest DoD** = **Hard Graph × Pi** (mature `graphs/hard/app_assessment.json`; thin lab alias only). Soft scenario graphs are Default/light assist — not Expert DoD. Expert Hard stages use pi inside a product-owned runner (Task + Agent fan-out + Feedback process metrics). **Node5** is lab/semantic reference for that three-layer model only while A is in pursuit (ADR 0001).
 
 **Model B — platform citizen base + specialist overlay:**
 

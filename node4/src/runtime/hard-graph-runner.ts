@@ -13,6 +13,11 @@ import type {
   HardGraphToolProfile,
 } from "./hard-graph-definition.js";
 import { applyHardGraphToolProfile } from "./hard-graph-definition.js";
+import {
+  accumulateStageFeedback,
+  emptyHardProcessMetrics,
+  type HardProcessMetrics,
+} from "./hard-graph-feedback.js";
 
 export type HardGraphHandoff = {
   summary?: string;
@@ -88,6 +93,8 @@ export type HardGraphRunResult = {
   terminal: HardGraphTerminal;
   stages: HardGraphStageRecord[];
   handoff: HardGraphHandoff;
+  /** Process Feedback metrics (structure / yield / coverage attempts) — no answer keys. */
+  processMetrics?: HardProcessMetrics;
 };
 
 export type StageGateResult = { ok: true } | { ok: false; errors: string[] };
@@ -171,8 +178,9 @@ function runEndResult(
   terminal: HardGraphTerminal,
   stages: HardGraphStageRecord[],
   handoff: HardGraphHandoff,
+  processMetrics?: HardProcessMetrics,
 ): HardGraphRunResult {
-  return { graphId, terminal, stages, handoff };
+  return { graphId, terminal, stages, handoff, processMetrics };
 }
 
 /**
@@ -193,13 +201,14 @@ export async function runHardGraph(options: {
 
   let handoff = options.initialHandoff ?? emptyHandoff();
   const records: HardGraphStageRecord[] = [];
+  let processMetrics = emptyHardProcessMetrics();
   const emit = async (e: HardGraphStageEvent) => {
     await options.onEvent?.(e);
   };
 
   for (let stageIndex = 0; stageIndex < graph.stages.length; stageIndex++) {
     if (options.abortSignal?.aborted) {
-      const result = runEndResult(graph.id, "aborted", records, handoff);
+      const result = runEndResult(graph.id, "aborted", records, handoff, processMetrics);
       await emit({ type: "run_end", graphId: graph.id, terminal: "aborted" });
       return result;
     }
@@ -214,6 +223,7 @@ export async function runHardGraph(options: {
     let lastErrors: string[] = [];
     let lastSummary: string | undefined;
     let attempts = 0;
+    let lastStructured: SubagentStructuredResult | undefined;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       attempts = attempt;
@@ -255,11 +265,19 @@ export async function runHardGraph(options: {
         );
       }
 
+      lastStructured = structured;
       const gate = evaluateStageGate(stage, structured);
       lastSummary = structured.summaryProvided ? structured.summary : lastSummary;
 
       if (gate.ok) {
         handoff = mergeHandoff(handoff, structured, stage.id);
+        processMetrics = accumulateStageFeedback(processMetrics, {
+          stageId: stage.id,
+          structured,
+          structureFailed: false,
+          fanoutPackagesN: tools.includes("subagent") ? structured.candidates.length > 0 ? 1 : 0 : 0,
+          handoffSurfacesN: handoff.surfaces.length,
+        });
         passed = true;
         await emit({
           type: "stage_end",
@@ -275,6 +293,12 @@ export async function runHardGraph(options: {
       }
 
       lastErrors = gate.errors;
+      processMetrics = accumulateStageFeedback(processMetrics, {
+        stageId: stage.id,
+        structured,
+        structureFailed: true,
+        handoffSurfacesN: handoff.surfaces.length,
+      });
       const isLast = attempt >= maxAttempts;
       await emit({
         type: "stage_end",
@@ -298,8 +322,16 @@ export async function runHardGraph(options: {
         errors: lastErrors,
         summary: lastSummary,
       });
+      if (lastStructured) {
+        processMetrics = accumulateStageFeedback(processMetrics, {
+          stageId: stage.id,
+          structured: lastStructured,
+          structureFailed: true,
+          handoffSurfacesN: handoff.surfaces.length,
+        });
+      }
       const terminal: HardGraphTerminal = aborted ? "aborted" : "blocked";
-      const result = runEndResult(graph.id, terminal, records, handoff);
+      const result = runEndResult(graph.id, terminal, records, handoff, processMetrics);
       await emit({ type: "run_end", graphId: graph.id, terminal });
       return result;
     }
@@ -314,7 +346,7 @@ export async function runHardGraph(options: {
     });
   }
 
-  const result = runEndResult(graph.id, "completed", records, handoff);
+  const result = runEndResult(graph.id, "completed", records, handoff, processMetrics);
   await emit({ type: "run_end", graphId: graph.id, terminal: "completed" });
   return result;
 }

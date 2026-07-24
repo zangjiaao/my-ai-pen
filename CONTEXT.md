@@ -21,12 +21,12 @@ _Avoid_: pre-PK dual product kernel, treating node5 as default bind target
 ### Runtime shape
 
 **Hard Graph**:
-Normative Task-stage control of expert work: ordered stages, fail-closed Feedback gates, stage tool profiles. Runner owns scheduling — not Main-as-scheduler.
-_Avoid_: soft scenario menu alone, prompt-only workflow, force_order as hints only
+Normative Task-stage control of **Expert** work (esp. pentest): ordered stages, fail-closed Feedback gates, stage tool profiles, Agent Graph fan-out on probe stages. Runner owns scheduling — not Main-as-scheduler. Product Expert DoD = Hard Graph × Pi (mature hard graph primary; thin = lab alias only).
+_Avoid_: soft scenario menu alone, prompt-only workflow, force_order as hints only, treating thin stub as full Expert DoD
 
 **Soft scenario graph**:
-Optional pentest node menu + soft default_plan (existing OMP assist). Not Hard Graph DoD.
-_Avoid_: calling soft menu "Hard Graph"
+Optional node menu + soft default_plan for **Default / light assist** (existing OMP assist). Not Expert Hard Graph DoD.
+_Avoid_: calling soft menu "Hard Graph"; treating Soft as Expert pentest framework
 
 **Agent Runtime**:
 The loop that runs an agent with tools inside a graph stage or Default seat. Product packages: **pi-ai** (models) + **pi-agent-core** (loop). Product API: **Agent** + **AgentTool** + events/hooks via seam **runNode4Agent**. Not coding-agent shell, not AgentHarness, not pi-tui.

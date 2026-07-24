@@ -161,7 +161,7 @@ Lab（DVWA/Juice 等）仅用于**离线对照与工程调试**，不作为「�
 2. 渗透 pack：按 OMP 原则用真实 lab events 减样板，少加 gate。
 3. 平台 ↔ 绑定 Node 候选 WS 硬化与可观测性。
 4. 执行 `docs/project-cleanup-plan.md`（docs 收敛 + legacy 树删除门槛）。
-5. Node 路径已锁 Graph × Pi / Node4（ADR 0001）；Node5 仅 lab/退路，不重开 PK 除非 hard triggers。
+5. Node 路径已锁 Graph × Pi / Node4（ADR 0001）；**Expert 渗透 DoD = Hard Graph × Pi**（成熟 hard 图主路径）；Soft/Default 为轻助理，非 Expert DoD。Node5 仅 lab/语义参考（Task/Agent/Feedback 模型），不重开 PK 除非 hard triggers。
 
 ---
 

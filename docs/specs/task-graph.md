@@ -1,18 +1,29 @@
 # Pentest work modes: OMP, soft scenario Graph, Hard Graph × Pi
 
 > Living companion to `docs/specs/harness.md` §6.  
-> Calibrated: 2026-07-23 (Graph × Pi first cut + stage continuity A1/A4)
+> Calibrated: 2026-07-24 (Hard maturity: book-from-handoff, Agent Graph fan-out, mature Task Graph, process Feedback)
 
 **Prompt single-source (soft scenario):** Graph captain/ledger/acceptance/packages live in runtime `formatGraphInjection` (`<work-mode>`). Pack `work.md` only points at that block for soft Graph detail — do not re-expand the same rules in work.md.
 
-**Hard Graph:** product-owned runner (`hard-graph-*`); stage order and Feedback are **not** Main OMP scheduling. Soft scenario Graph is **not** Hard Graph DoD.
+**Hard Graph:** product-owned runner (`hard-graph-*`); stage order and Feedback are **not** Main OMP scheduling. Soft scenario Graph is **not** Expert Hard Graph DoD.
+
+**Product seats:** **Default / Soft-light** = assistant paths (never Expert Hard DoD). **Expert pentest framework** = **Hard Graph × Pi** (mature hard graph primary). **Node5** = lab / semantic reference for Task / Agent / Feedback model only (ADR 0001).
 
 ## One sentence
 
 **Default / free OMP** — Main loop schedules itself (Default seat never Hard Graph).  
-**Soft scenario Graph** — optional node menu + soft plan (Main may still schedule).  
-**Hard Graph × Pi** — outer runner owns stages; pi runs inside stages; fail-closed gates.  
+**Soft scenario Graph** — optional node menu + soft plan (Main may still schedule); **Default/light**, not Expert DoD.  
+**Hard Graph × Pi** — outer runner owns stages; pi runs inside stages; fail-closed gates; **Expert pentest DoD**.  
 **Case** holds long-term shared state.
+
+### Node5 → Hard semantic mapping (model parity, not ADK clone)
+
+| Node5 layer | Node4 Hard product |
+|-------------|-------------------|
+| **Task Graph** (hard stage order) | Hard Graph runner + pack `graphs/hard/*` (mature `app_assessment` primary; `app_assessment_thin` lab alias) |
+| **Agent Graph** (class_probe workers) | Stage captain depth-0 + `subagent` packages when allowed; Join → parent `hard-stage:<stageId>[:<workerId>]` |
+| **Feedback Graph** | Stage `require` structure gates + process metrics (discovery yield soft-fail, coverage attempts) on Product state |
+| PenState handoff | Parent lifecycle candidates + surface ledger + session jars (A1/A4) |
 
 ### Hard Graph stage continuity (A1 + A4)
 
@@ -20,18 +31,20 @@ Per-stage pi sessions still use isolated work dirs (`taskDir/hard-graph/<graphId
 
 | Concern | Behavior |
 |---------|----------|
-| **Booking / proof (A1)** | After each stage, structured **candidates** upsert into **parent** lifecycle by `hard-stage:<stageId>` (same observation inject + candidate cache as soft subagent; retry replaces prior pack for that stage). Empty-candidate attempts do not wipe a prior pack. Next stage child is **seeded** from parent so book-only stages can `finding(confirm)` with matching `location` / `candidate_index` and verbatim `proof_excerpt`. Hallucinated proof still fails closed. |
+| **Booking / proof (A1)** | After each stage, structured **candidates** upsert into **parent** lifecycle by package key `hard-stage:<stageId>` or fan-out `hard-stage:<stageId>:<workerId>`. Empty-candidate attempts do not wipe a prior pack for that key. Worker packages promoted from stage child cache on finalize. Next stage is **seeded** so book-only stages can `finding(confirm)` with matching `location` / `candidate_index` and verbatim `proof_excerpt` (poc may be synthesized from handoff proof). Hallucinated proof still fails closed; repeated identical fails surface **bookable_unbooked** anti-thrash. |
 | **Session jars (A4)** | Before a stage: seed `parent taskDir/session/` → stage workDir via session-seed helpers. After a stage: promote stage `session/` → parent (best-effort; child cookies win). |
+| **Agent Graph** | Hard stage child is **depth 0** with `SubagentHost` when tools allow `subagent` (not nest-banned). Workers nest-ban at depth ≥1. |
+| **Process Feedback** | Runner accumulates `processMetrics`: structure fails, discovery-yield soft-fails (rich surfaces + empty cand/deadend), coverage attempts (attempted/deadend/untested) — **no** expected-finding counts. |
 
-Handoff JSON in the stage prompt remains informational; booking authority is lifecycle cache + groundable observations, not prompt-only tables. No expected-finding counts or answer keys in gates. Settlement still does not require N bookings.
+Handoff JSON in the stage prompt remains informational; booking authority is lifecycle cache + groundable observations, not prompt-only tables. Settlement still does not require N bookings.
 
 ## Modes
 
 | Mode | How selected | Behavior |
 |------|--------------|----------|
-| **Default / free OMP** | No expert Hard Graph; Default seat or free expert | Pure OMP; Main may self-act; voluntary subagent |
-| **Soft scenario Graph** | `graphId` app_assessment / redteam_deep without hard discipline | Node menu + RoE; **Main may act**; soft default_plan; **not** Hard Graph DoD |
-| **Hard Graph × Pi** | `graphDiscipline=hard`, hard graph id (e.g. `app_assessment_thin`), or `NODE4_HARD_GRAPH=1` | Runner drives ordered stages; pi stage sessions; tool profiles; fail-closed Feedback; **Main is not the stage scheduler**; no outer-continue fight |
+| **Default / free OMP** | No expert Hard Graph; Default seat or free expert | Pure OMP; Main may self-act; voluntary subagent; **not** Expert DoD |
+| **Soft scenario Graph** | `graphId` app_assessment / redteam_deep **without** hard discipline | Node menu + RoE; **Main may act**; soft default_plan; **Default/light — not Expert DoD** |
+| **Hard Graph × Pi (Expert)** | `graphDiscipline=hard`, hard alias (`app_assessment_hard` / thin lab ids), or `NODE4_HARD_GRAPH=1` | Runner drives ordered stages; **default graph id `app_assessment` (mature)** under `graphs/hard/`; thin = `app_assessment_thin` lab only; fail-closed Feedback; **Main is not the stage scheduler** |
 
 Lab-only Main act strip (soft path): `NODE4_GRAPH_MAIN_ACT=hard` or task `graphMainAct=delegate_only` — distinct from product Hard Graph runner.
 
@@ -83,8 +96,8 @@ Main DISPATCH (goal + success_criteria)
 
 ## Pack files
 
-- `experts/pentest/graphs/app_assessment.json`
-- `experts/pentest/graphs/redteam_deep.json`
+- Soft scenario: `experts/pentest/graphs/app_assessment.json`, `experts/pentest/graphs/redteam_deep.json`
+- Hard (Expert): `experts/pentest/graphs/hard/app_assessment.json` (mature primary), `experts/pentest/graphs/hard/app_assessment_thin.json` (lab/compat)
 
 ## DVWA three-way lab
 
