@@ -648,7 +648,7 @@ Figma 用 lime/lilac/cream/mint/pink 色块来区分叙事段落。我们的平�
 | [Web] | "对 {URL} 进行 Web 应用渗透测试，包括信息收集、漏洞扫描、认证测试和越权检测。" |
 | [主机] | "对 {IP 或 IP 段} 进行全面主机安全扫描，包括端口扫描、服务识别和已知漏洞检测。" |
 | [权限] | "使用以下账号测试权限控制和越权漏洞：admin / ***（高权限），viewer / ***（低权限）。" |
-| [复测] | "针对漏洞 {漏洞标题或编号} 进行复测验证，确认修复状态。" |
+| [复测] | ~~prompt chip only~~ **not product intent** — retest is Case chat + Agent (map #81 N1); no `/retest` API. |
 
 **会话自动命名**：用户发送第一条消息后自动生成会话标题（平台非对话逻辑或 Node default），替换 Sidebar 中的"新会话"。用户可点击标题手动重命名。
 

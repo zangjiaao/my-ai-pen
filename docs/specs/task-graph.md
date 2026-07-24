@@ -46,7 +46,7 @@ Handoff JSON in the stage prompt remains informational; booking authority is lif
 
 Product Expert UI selects **only** scenario Graphs (`app_assessment`, `redteam_deep`) — no Expert free chip.  
 `redteam_deep` loads `graphs/hard/redteam_deep.json` (assessment fork + `chain`/`postex`/`lateral`; `roe.allow_postex: true`).  
-Post-Graph continue-chat: structured `graph_execution=continue` (C1) keeps envelope without full Hard re-run; structured retest/re-entry is map #81.  
+Post-Graph continue-chat: structured `graph_execution=continue` (C1) keeps envelope without full Hard re-run. Product retest is **not** a free OMP `/api/vulnerabilities/{id}/retest` path (retired N1); dig-deeper / finding retest is Case chat + Agent intent with optional F1 fields `retest_finding_ids` / `focus_note` on normal `task_assign` (map #81).  
 If a task carries structured Graph intent but no hard Graph resolves, the Node **fail-closes** (`task_error` / failed) — never silent free OMP.
 
 UI: casual work → **Default**. Expert work → explicit Graph template selection.

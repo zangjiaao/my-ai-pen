@@ -227,3 +227,37 @@ def resolve_graph_execution(
     if status in {"completed", "complete", "done"}:
         return "continue"
     return None
+
+
+def f1_focus_fields_from_message(msg: dict | None) -> dict[str, Any]:
+    """
+    Extract optional F1 dig-deeper / retest focus fields for task_assign (map #81).
+
+    Accepts snake_case or camelCase. Never invents values from free-text NLP.
+    Returns only keys present: retest_finding_ids (list[str]), focus_note (str).
+    """
+    if not isinstance(msg, dict):
+        return {}
+    out: dict[str, Any] = {}
+    raw_ids = msg.get("retest_finding_ids")
+    if raw_ids is None:
+        raw_ids = msg.get("retestFindingIds")
+    ids: list[str] = []
+    if isinstance(raw_ids, (list, tuple)):
+        for x in raw_ids:
+            s = str(x or "").strip()
+            if s:
+                ids.append(s)
+    elif isinstance(raw_ids, str) and raw_ids.strip():
+        for part in raw_ids.split(","):
+            s = part.strip()
+            if s:
+                ids.append(s)
+    if ids:
+        out["retest_finding_ids"] = ids
+    raw_note = msg.get("focus_note")
+    if raw_note is None:
+        raw_note = msg.get("focusNote")
+    if isinstance(raw_note, str) and raw_note.strip():
+        out["focus_note"] = raw_note.strip()
+    return out

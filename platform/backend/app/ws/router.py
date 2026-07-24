@@ -3736,6 +3736,14 @@ def _task_assign_from_user_message(conv_id: str, msg: dict, task_id: str) -> dic
             out["allow_postex"] = False
     if msg.get("accounts") is not None:
         out["accounts"] = msg.get("accounts")
+    # Map #81 F1 — optional dig-deeper / retest focus (structured only; no NLP invent).
+    from app.services.case_engagement import f1_focus_fields_from_message
+
+    f1 = f1_focus_fields_from_message(msg if isinstance(msg, dict) else None)
+    if f1.get("retest_finding_ids") is not None:
+        out["retest_finding_ids"] = f1["retest_finding_ids"]
+    if f1.get("focus_note") is not None:
+        out["focus_note"] = f1["focus_note"]
     return out
 
 

@@ -5,7 +5,8 @@
  * Proves booking events + harness task_complete (no agent finish tool).
  */
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { TodoStore } from "./stores/todo.js";
 import { EvidenceStore } from "./stores/evidence.js";
 import { GoalStore } from "./stores/goal.js";
@@ -71,6 +72,22 @@ export function normalizeTaskAssign(message: Record<string, unknown>): TaskEnvel
         ? message.engagementTemplate
         : undefined;
   const graphExecution = parseGraphExecution(message);
+  const retestFindingIdsRaw = message.retest_finding_ids ?? message.retestFindingIds;
+  let retestFindingIds: string[] | undefined;
+  if (Array.isArray(retestFindingIdsRaw)) {
+    const ids = retestFindingIdsRaw.map((x) => String(x ?? "").trim()).filter(Boolean);
+    retestFindingIds = ids.length ? ids : undefined;
+  } else if (typeof retestFindingIdsRaw === "string" && retestFindingIdsRaw.trim()) {
+    const ids = retestFindingIdsRaw.split(",").map((s) => s.trim()).filter(Boolean);
+    retestFindingIds = ids.length ? ids : undefined;
+  }
+  const focusNoteRaw =
+    typeof message.focus_note === "string"
+      ? message.focus_note
+      : typeof message.focusNote === "string"
+        ? message.focusNote
+        : undefined;
+  const focusNote = focusNoteRaw?.trim() ? focusNoteRaw.trim() : undefined;
   const allowPostexRaw = message.allow_postex ?? message.allowPostex;
   const allowPostex =
     typeof allowPostexRaw === "boolean"
@@ -90,6 +107,8 @@ export function normalizeTaskAssign(message: Record<string, unknown>): TaskEnvel
     role: typeof message.role === "string" ? message.role : undefined,
     engagementTemplate: engagementTemplate?.trim() || undefined,
     graphExecution,
+    retestFindingIds,
+    focusNote,
     allowPostex,
     accounts: message.accounts !== undefined ? message.accounts : undefined,
     goalObjective,
@@ -216,7 +235,13 @@ async function main() {
   );
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+// Only run smoke when executed as the entry script (not when imported for normalizeTaskAssign).
+const isMain =
+  typeof process.argv[1] === "string" &&
+  fileURLToPath(import.meta.url) === resolve(process.argv[1]);
+if (isMain) {
+  main().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+}

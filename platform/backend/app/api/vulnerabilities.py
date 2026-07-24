@@ -402,7 +402,7 @@ async def start_report_session(
     )
     await db.commit()
     await db.refresh(conv)
-    started = await _dispatch_retest_if_possible(
+    started = await _dispatch_vuln_session_if_possible(
         str(conv.id), str(user_id), target, scope, instruction, engagement="consult"
     )
     return RetestOut(
@@ -431,87 +431,27 @@ async def get_vuln(
     return _out(v, asset=asset, evidence=evidence)
 
 
-@router.post("/{vuln_id}/retest", response_model=RetestOut)
-async def retest_vuln(
+@router.post("/{vuln_id}/retest")
+async def retest_vuln_gone(
     vuln_id: str,
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
-    user_id = uuid.UUID(current_user["user_id"])
-    v = await _get(vuln_id, current_user, db)
-    asset = None
-    if v.asset_id:
-        assets = await _assets_by_id(db, user_id, [v.asset_id])
-        asset = assets.get(v.asset_id)
+    """
+    Product retest HTTP is retired (map #81 / N1).
 
-    target_value = _retest_target(v, asset)
-    if not target_value:
-        raise HTTPException(400, "无法复测：缺少关联资产或可访问目标")
-
-    # Auto-move 待修复 → 修复中 when starting retest (plan verification).
-    current = normalize_status(v.status)
-    if current == "to_fix" and "fixing" in TRANSITIONS.get(current, set()):
-        v.status = "fixing"
-
-    target = {
-        "type": "url" if str(target_value).startswith(("http://", "https://")) else "host",
-        "value": target_value,
-    }
-    scope = {"allow": [target_value], "deny": []}
-    instruction = _retest_instruction(v, asset, target_value)
-    context = {
-        "task": {"target": target, "scope": scope, "instruction": instruction},
-        "retest": {
-            "source_vulnerability_id": str(v.id),
-            "source_conversation_id": str(v.conversation_id),
-            "asset_id": str(v.asset_id) if v.asset_id else None,
-            "title": v.title,
-            "severity": v.severity,
-            "status_before_retest": current,
-            "evidence_ids": v.evidence_ids or [],
-            "goal": "若已不可复现，将状态推进为已修复；若仍可利用，保持/回退为待修复并补充证据。",
-        },
-    }
-    conv = Conversation(
-        id=uuid.uuid4(),
-        user_id=user_id,
-        title=f"复测: {v.title}"[:255],
-        status="created",
-        context=context,
-    )
-    db.add(conv)
-    await db.flush()
-    db.add(
-        Message(
-            id=uuid.uuid4(),
-            conversation_id=conv.id,
-            role="user",
-            msg_type="text",
-            content={"text": instruction, "retest": context["retest"]},
-        )
-    )
-    await _audit(
-        db,
-        user_id,
-        "vuln.retest",
-        "vulnerability",
-        v.id,
-        conv.id,
-        {"source_conversation_id": str(v.conversation_id), "target": target},
-    )
-    await db.commit()
-    await db.refresh(conv)
-
-    started = await _dispatch_retest_if_possible(
-        str(conv.id), str(user_id), target, scope, instruction, engagement="retest"
-    )
-    return RetestOut(
-        conversation_id=str(conv.id),
-        started=started,
-        target=target,
-        scope=scope,
-        instruction=instruction,
-        message="复测已启动" if started else "复测会话已创建；当前无在线节点",
+    Retest / dig-deeper is Case chat + Agent intent on the source conversation —
+    not free OMP on a new Conversation via this endpoint.
+    No side effects: no Conversation create, no status change, no task_assign.
+    """
+    # Authenticate + bind route param so callers get a stable product error, not 404 routing noise.
+    _ = current_user
+    _ = vuln_id
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "Vulnerability retest API is gone. Open the source Case conversation "
+            "and continue with the Expert agent; do not use free engagement=retest dispatch."
+        ),
     )
 
 
@@ -622,57 +562,21 @@ def classify_finding_kind(v: Vulnerability) -> str:
     return "vuln"
 
 
-def _retest_target(v: Vulnerability, asset: Asset | None) -> str:
-    if asset and asset.address:
-        port = getattr(v, "port", None)
-        addr = asset.address
-        # Prefer URL when web port known.
-        if port and str(port) not in {"80", "443"}:
-            return f"http://{addr}:{port}"
-        if port == "443":
-            return f"https://{addr}"
-        if port == "80":
-            return f"http://{addr}"
-        return addr
-    poc = v.poc or ""
-    for token in poc.split():
-        if token.startswith(("http://", "https://")):
-            return token.strip("'\"` ,")
-    return ""
-
-
-def _retest_instruction(v: Vulnerability, asset: Asset | None, target_value: str) -> str:
-    asset_line = f"资产：{asset.address}" if asset else f"目标：{target_value}"
-    if asset and getattr(v, "port", None):
-        asset_line += f" · 端口 {v.port}"
-    st = normalize_status(v.status)
-    evidence = ", ".join(v.evidence_ids or []) or "无"
-    return (
-        "【复测任务】请验证下列问题是否仍可复现，并据此更新处理结论。\n"
-        f"{asset_line}\n"
-        f"标题：{v.title}\n"
-        f"严重级别：{v.severity}\n"
-        f"当前状态：{LIFECYCLE.get(st, st)}\n"
-        f"原始复现/位置：{v.poc or '—'}\n"
-        f"原始证据 ID：{evidence}\n"
-        f"修复建议：{v.remediation or '—'}\n\n"
-        "要求：\n"
-        "1. 针对本问题做最小范围复测，不要扩大成全量评估。\n"
-        "2. 若仍可利用：补充新证据，结论保持「待修复」。\n"
-        "3. 若已不可复现/已修复：给出证据说明，建议将状态推进为「已修复」。\n"
-        "4. 输出简明复测结论（仍存在 / 已修复 / 无法判定）。"
-    )
-
-
-async def _dispatch_retest_if_possible(
+async def _dispatch_vuln_session_if_possible(
     conv_id: str,
     user_id: str,
     target: dict,
     scope: dict,
     instruction: str,
     *,
-    engagement: str = "retest",
+    engagement: str,
 ) -> bool:
+    """
+    Dispatch a structured task_assign for vuln-adjacent sessions (e.g. report-session).
+
+    Product free retest via engagement=retest is retired (map #81 N1). Callers must
+    pass an explicit engagement; this helper never defaults to retest.
+    """
     try:
         from app.ws import router as ws_router
 
@@ -684,11 +588,15 @@ async def _dispatch_retest_if_possible(
         if not isinstance(snapshot, dict):
             snapshot = {}
         snapshot["checkpoint"] = {}
-        # Explicit structured engagement (product field) — Node2 must not NLP the instruction.
-        eng = engagement if engagement in {"assess", "verify", "retest", "consult", "ctf", "pentest"} else "retest"
+        # Explicit structured engagement only — never invent retest as a default.
+        allowed = {"assess", "verify", "consult", "ctf", "pentest"}
+        eng = engagement if engagement in allowed else "consult"
+        if engagement == "retest":
+            print("[API] refusing free engagement=retest product dispatch (N1 retired)")
+            return False
         gate_err = await ws_router._gate_engagement_for_node(node_id, eng)
         if gate_err:
-            print(f"[API] retest dispatch blocked by expert offers: {gate_err}")
+            print(f"[API] vuln session dispatch blocked by expert offers: {gate_err}")
             return False
         snapshot["engagement"] = eng
         task_msg = {
@@ -710,7 +618,7 @@ async def _dispatch_retest_if_possible(
         await ws_router.node_connections[node_id].send_text(json.dumps(task_msg, ensure_ascii=False))
         return True
     except Exception as exc:
-        print(f"[API] retest dispatch error: {exc}")
+        print(f"[API] vuln session dispatch error: {exc}")
         return False
 
 

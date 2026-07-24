@@ -43,6 +43,16 @@ export type TaskEnvelope = {
    */
   graphExecution?: "full" | "continue";
   /**
+   * Optional finding ids for dig-deeper / retest focus (map #81 F1).
+   * Structured only — platform/Agent may set; never NLP-invented by Node.
+   */
+  retestFindingIds?: string[];
+  /**
+   * Optional short focus note for dig-deeper / retest (map #81 F1).
+   * Structured only — not free-text intent routing.
+   */
+  focusNote?: string;
+  /**
    * Rules-of-engagement: allow host post-ex / lateral.
    * When undefined, derived from engagementTemplate (default false).
    */

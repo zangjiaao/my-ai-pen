@@ -137,8 +137,9 @@ def main() -> None:
                 vuln_id = client.portal.call(create_vuln)
                 vuln_patch = client.patch(f"/api/vulnerabilities/{vuln_id}", headers=user_headers, json={"status": "confirmed"})
                 assert vuln_patch.status_code == 200, vuln_patch.text
+                # N1: retest HTTP is gone — no new Conversation / free retest dispatch.
                 retest = client.post(f"/api/vulnerabilities/{vuln_id}/retest", headers=user_headers)
-                assert retest.status_code == 200, retest.text
+                assert retest.status_code == 410, retest.text
 
                 delete_asset = client.delete(f"/api/assets/{asset_id}", headers=user_headers)
                 assert delete_asset.status_code == 200, delete_asset.text
@@ -155,8 +156,8 @@ def main() -> None:
                     "asset.update",
                     "asset.delete",
                     "vulnerability.update",
-                    "vuln.retest",
                 }
+
                 assert expected <= user_actions, user_actions
 
                 other_actions = _actions(client, other_headers)

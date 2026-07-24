@@ -178,6 +178,26 @@ client.on("user_interrupt", async (message) => {
   });
 });
 
+/** Parse optional structured id list (map #81 F1). Empty → undefined. */
+function parseStringIdList(raw: unknown): string[] | undefined {
+  if (raw == null) return undefined;
+  const items: string[] = [];
+  if (Array.isArray(raw)) {
+    for (const x of raw) {
+      const s = String(x ?? "").trim();
+      if (s) items.push(s);
+    }
+  } else if (typeof raw === "string") {
+    for (const part of raw.split(",")) {
+      const s = part.trim();
+      if (s) items.push(s);
+    }
+  } else {
+    return undefined;
+  }
+  return items.length ? items : undefined;
+}
+
 function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
   const taskId = String(message.task_id || message.taskId || randomUUID());
   const conversationId = String(message.conversation_id || message.conversationId || taskId);
@@ -251,6 +271,16 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
         ? ("delegate_preferred" as const)
         : undefined;
   const graphExecution = parseGraphExecution(message);
+  const retestFindingIds = parseStringIdList(
+    message.retest_finding_ids ?? message.retestFindingIds,
+  );
+  const focusNoteRaw =
+    typeof message.focus_note === "string"
+      ? message.focus_note
+      : typeof message.focusNote === "string"
+        ? message.focusNote
+        : undefined;
+  const focusNote = focusNoteRaw?.trim() ? focusNoteRaw.trim() : undefined;
   const allowPostexRaw = message.allow_postex ?? message.allowPostex;
   const allowPostex =
     typeof allowPostexRaw === "boolean"
@@ -293,6 +323,8 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
     graphId: graphIdRaw?.trim() || undefined,
     graphMainAct,
     graphExecution,
+    retestFindingIds,
+    focusNote,
     allowPostex,
     accounts: message.accounts !== undefined ? message.accounts : undefined,
     goalObjective,
