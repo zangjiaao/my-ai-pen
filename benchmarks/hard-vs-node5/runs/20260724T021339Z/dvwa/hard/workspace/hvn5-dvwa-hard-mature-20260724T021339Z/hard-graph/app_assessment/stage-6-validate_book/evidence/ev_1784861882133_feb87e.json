@@ -1,0 +1,24 @@
+{
+  "id": "ev_1784861882133_feb87e",
+  "type": "tool_output",
+  "source_tool": "finding",
+  "summary": "Directory listing enabled on /config/ and other directories @ http://127.0.0.1:8080/config/",
+  "data": {
+    "kind": "proof",
+    "observation": "$_DVWA[ 'db_server' ]   = '127.0.0.1';\n$_DVWA[ 'db_database' ] = 'dvwa';\n$_DVWA[ 'db_user' ]     = 'app';\n$_DVWA[ 'db_password' ] = 'vulnerables';",
+    "proof": "$_DVWA[ 'db_server' ]   = '127.0.0.1';\n$_DVWA[ 'db_database' ] = 'dvwa';\n$_DVWA[ 'db_user' ]     = 'app';\n$_DVWA[ 'db_password' ] = 'vulnerables';",
+    "path_or_url": "http://127.0.0.1:8080/config/",
+    "location": "http://127.0.0.1:8080/config/",
+    "title": "Directory listing enabled on /config/ and other directories",
+    "stdout": "$_DVWA[ 'db_server' ]   = '127.0.0.1';\n$_DVWA[ 'db_database' ] = 'dvwa';\n$_DVWA[ 'db_user' ]     = 'app';\n$_DVWA[ 'db_password' ] = 'vulnerables';",
+    "body_preview": "$_DVWA[ 'db_server' ]   = '127.0.0.1';\n$_DVWA[ 'db_database' ] = 'dvwa';\n$_DVWA[ 'db_user' ]     = 'app';\n$_DVWA[ 'db_password' ] = 'vulnerables';",
+    "capture_via": "write",
+    "how_captured": "script: proof_dist_config.txt",
+    "script_path": "proof_dist_config.txt",
+    "path": "proof_dist_config.txt",
+    "script_preview": "$_DVWA[ 'db_server' ]   = '127.0.0.1';\n$_DVWA[ 'db_database' ] = 'dvwa';\n$_DVWA[ 'db_user' ]     = 'root';\n$_DVWA[ 'db_password' ] = 'p@ssw0rd';",
+    "source_tool_act": "write",
+    "act_summary": "file write proof_dist_config.txt"
+  },
+  "created_at": "2026-07-24T02:58:02.133Z"
+}

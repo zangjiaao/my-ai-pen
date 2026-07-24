@@ -1,0 +1,330 @@
+{
+  "ok": true,
+  "summary": "Surface stage complete. Mapped DVWA v1.10 *Development* at http://127.0.0.1:8080. Found 4 auth surfaces, 14 vulnerability module endpoints, 6 info-disclosure surfaces, 2 file-inclusion vectors, and static assets. Default credentials admin:password confirmed. Identified bookable candidates for SQL injection, command injection, CSRF, file upload, stored/reflected/DOM XSS, file inclusion, CSP bypass, JavaScript logic, weak session IDs, and brute force via source code disclosure.",
+  "surfaces": [
+    {
+      "type": "url",
+      "value": "http://127.0.0.1:8080/login.php",
+      "method": "GET/POST",
+      "params": ["username", "password", "user_token", "Login"],
+      "auth_required": false,
+      "note": "Main login form with CSRF token protection. Default creds admin:password work. Sets PHPSESSID and security cookies."
+    },
+    {
+      "type": "url",
+      "value": "http://127.0.0.1:8080/logout.php",
+      "method": "GET",
+      "params": [],
+      "auth_required": true,
+      "note": "Logout, redirects to login.php"
+    },
+    {
+      "type": "url",
+      "value": "http://127.0.0.1:8080/setup.php",
+      "method": "GET/POST",
+      "params": ["create_db", "user_token"],
+      "auth_required": true,
+      "note": "Database setup/reset. Reveals MySQL creds, writable paths, PHP settings. CSRF token present."
+    },
+    {
+      "type": "url",
+      "value": "http://127.0.0.1:8080/security.php",
+      "method": "GET/POST",
+      "params": ["security", "seclev_submit", "user_token", "phpids"],
+      "auth_required": true,
+      "note": "Security level settings (low/medium/high/impossible). PHPIDS toggle. IDS log viewer link."
+    },
+    {
+      "type": "url",
+      "value": "http://127.0.0.1:8080/phpinfo.php",
+      "method": "GET",
+      "params": [],
+      "auth_required": true,
+      "note": "Full PHP configuration disclosure: PHP 7.0.30, Apache 2.4.25 (Debian), Linux x86_64"
+    },
+    {
+      "type": "url",
+      "value": "http://127.0.0.1:8080/ids_log.php",
+      "method": "GET",
+      "params": ["clear_log"],
+      "auth_required": true,
+      "note": "PHPIDS log viewer. Log file at /var/www/html/external/phpids/0.6/lib/IDS/tmp/phpids_log.txt"
+    },
+    {
+      "type": "url",
+      "value": "http://127.0.0.1:8080/instructions.php",
+      "method": "GET",
+      "params": ["doc"],
+      "auth_required": true,
+      "note": "Instructions page with file inclusion via ?doc= parameter (readme, PDF, changelog, copying, PHPIDS-license)"
+    },
+    {
+      "type": "url",
+      "value": "http://127.0.0.1:8080/vulnerabilities/fi/",
+      "method": "GET",
+      "params": ["page"],
+      "auth_required": true,
+      "note": "File Inclusion module. allow_url_include disabled (LFI only). Pages: include.php, file1.php, file2.php, file3.php"
+    },
+    {
+      "type": "url",
+      "value": "http://127.0.0.1:8080/vulnerabilities/brute/",
+      "method": "GET",
+      "params": ["username", "password", "Login"],
+      "auth_required": true,
+      "note": "Brute Force login - direct SQL query with md5(password). Source shows no CSRF protection."
+    },
+    {
+      "type": "url",
+      "value": "http://127.0.0.1:8080/vulnerabilities/exec/",
+      "method": "POST",
+      "params": ["ip", "Submit"],
+      "auth_required": true,
+      "note": "Command Injection via ping. Takes IP address and likely passes to shell_exec/passthru."
+    },
+    {
+      "type": "url",
+      "value": "http://127.0.0.1:8080/vulnerabilities/csrf/",
+      "method": "GET",
+      "params": ["password_new", "password_conf", "Change"],
+      "auth_required": true,
+      "note": "CSRF password change. GET request with password_new/password_conf - no CSRF token."
+    },
+    {
+      "type": "url",
+      "value": "http://127.0.0.1:8080/vulnerabilities/upload/",
+      "method": "POST",
+      "params": ["MAX_FILE_SIZE", "uploaded", "Upload"],
+      "auth_required": true,
+      "note": "File upload with multipart form. Uploads to /var/www/html/hackable/uploads/"
+    },
+    {
+      "type": "url",
+      "value": "http://127.0.0.1:8080/vulnerabilities/captcha/",
+      "method": "POST",
+      "params": ["step", "password_new", "password_conf", "Change", "g-recaptcha-response"],
+      "auth_required": true,
+      "note": "Insecure CAPTCHA password change. reCAPTCHA key missing. Step parameter controls logic flow."
+    },
+    {
+      "type": "url",
+      "value": "http://127.0.0.1:8080/vulnerabilities/sqli/",
+      "method": "GET",
+      "params": ["id", "Submit"],
+      "auth_required": true,
+      "note": "SQL Injection - GET parameter ID passed directly into SQL query (source code confirmed)."
+    },
+    {
+      "type": "url",
+      "value": "http://127.0.0.1:8080/vulnerabilities/sqli_blind/",
+      "method": "GET",
+      "params": ["id", "Submit"],
+      "auth_required": true,
+      "note": "SQL Injection Blind - GET parameter ID, same pattern as sqli."
+    },
+    {
+      "type": "url",
+      "value": "http://127.0.0.1:8080/vulnerabilities/weak_id/",
+      "method": "POST",
+      "params": [],
+      "auth_required": true,
+      "note": "Weak Session IDs - generates dvwaSession cookie on POST."
+    },
+    {
+      "type": "url",
+      "value": "http://127.0.0.1:8080/vulnerabilities/xss_d/",
+      "method": "GET",
+      "params": ["default"],
+      "auth_required": true,
+      "note": "DOM XSS - default parameter read from URL via document.location.href and written directly to DOM."
+    },
+    {
+      "type": "url",
+      "value": "http://127.0.0.1:8080/vulnerabilities/xss_r/",
+      "method": "GET",
+      "params": ["name"],
+      "auth_required": true,
+      "note": "Reflected XSS - name parameter reflected in page. X-XSS-Protection header set to 0."
+    },
+    {
+      "type": "url",
+      "value": "http://127.0.0.1:8080/vulnerabilities/xss_s/",
+      "method": "POST",
+      "params": ["txtName", "mtxMessage", "btnSign", "btnClear"],
+      "auth_required": true,
+      "note": "Stored XSS - guestbook with name/message stored and displayed. Maxlength 10/50 chars."
+    },
+    {
+      "type": "url",
+      "value": "http://127.0.0.1:8080/vulnerabilities/csp/",
+      "method": "POST",
+      "params": ["include"],
+      "auth_required": true,
+      "note": "CSP Bypass - accepts external script URL. CSP: script-src 'self' https://pastebin.com example.com code.jquery.com https://ssl.google-analytics.com"
+    },
+    {
+      "type": "url",
+      "value": "http://127.0.0.1:8080/vulnerabilities/javascript/",
+      "method": "POST",
+      "params": ["phrase", "token", "send"],
+      "auth_required": true,
+      "note": "JavaScript Attacks - phrase field validated via MD5(rot13(phrase)) token to submit 'success'."
+    },
+    {
+      "type": "url",
+      "value": "http://127.0.0.1:8080/vulnerabilities/view_source.php",
+      "method": "GET",
+      "params": ["id", "security"],
+      "auth_required": true,
+      "note": "Source code disclosure for specific module and security level."
+    },
+    {
+      "type": "url",
+      "value": "http://127.0.0.1:8080/vulnerabilities/view_source_all.php",
+      "method": "GET",
+      "params": ["id"],
+      "auth_required": true,
+      "note": "Source code comparison across all security levels."
+    },
+    {
+      "type": "url",
+      "value": "http://127.0.0.1:8080/vulnerabilities/view_help.php",
+      "method": "GET",
+      "params": ["id", "security"],
+      "auth_required": true,
+      "note": "Help page for each vulnerability module."
+    },
+    {
+      "type": "file",
+      "value": "/var/www/html/hackable/uploads/",
+      "method": "writable",
+      "auth_required": true,
+      "note": "Writable upload directory confirmed via setup.php. Used by file upload module."
+    },
+    {
+      "type": "file",
+      "value": "/var/www/html/external/phpids/0.6/lib/IDS/tmp/phpids_log.txt",
+      "method": "writable",
+      "auth_required": true,
+      "note": "Writable PHPIDS log file confirmed via setup.php."
+    },
+    {
+      "type": "file",
+      "value": "/var/www/html/config",
+      "method": "writable",
+      "auth_required": true,
+      "note": "Writable config directory confirmed via setup.php. Contains config.inc.php with DB credentials."
+    },
+    {
+      "type": "url",
+      "value": "http://127.0.0.1:8080/robots.txt",
+      "method": "GET",
+      "params": [],
+      "auth_required": false,
+      "note": "Disallow: /"
+    }
+  ],
+  "candidates": [
+    {
+      "title": "SQL Injection (low) in /vulnerabilities/sqli/",
+      "location": "http://127.0.0.1:8080/vulnerabilities/sqli/?id=1&Submit=Submit",
+      "proof_excerpt": "Source code confirms direct injection: $query = \"SELECT * FROM `users` WHERE user = '$user' AND password = '$pass';\"; $result = mysqli_query($GLOBALS[\"___mysqli_ston\"], $query) or die('<pre>' . ((is_object($GLOBALS[\"___mysqli_ston\"])) ? mysqli_error($GLOBALS[\"___mysqli_ston\"]) : (($___mysqli_res = mysqli_connect_error()) ? $___mysqli_res : false)) . '</pre>');",
+      "poc_hint": "Try id=1' OR '1'='1 or id=1 UNION SELECT 1,2,3,4,5,6"
+    },
+    {
+      "title": "Command Injection (low) in /vulnerabilities/exec/",
+      "location": "http://127.0.0.1:8080/vulnerabilities/exec/",
+      "proof_excerpt": "POST form with ip parameter for ping. Likely passes to shell_exec without sanitization. Form action='#' method='post', input name='ip' size='30'.",
+      "poc_hint": "Try ip=127.0.0.1;id or ip=127.0.0.1|id"
+    },
+    {
+      "title": "CSRF Password Change in /vulnerabilities/csrf/",
+      "location": "http://127.0.0.1:8080/vulnerabilities/csrf/?password_new=test123&password_conf=test123&Change=Change",
+      "proof_excerpt": "Form uses GET method with password_new and password_conf fields, no CSRF token visible in the form. <form action=\"#\" method=\"GET\"> <input type=\"password\" name=\"password_new\"> <input type=\"password\" name=\"password_conf\"> <input type=\"submit\" value=\"Change\" name=\"Change\">",
+      "poc_hint": "Submit GET request with password_new=attacker123&password_conf=attacker123&Change=Change as victim"
+    },
+    {
+      "title": "File Upload (low) in /vulnerabilities/upload/",
+      "location": "http://127.0.0.1:8080/vulnerabilities/upload/",
+      "proof_excerpt": "Upload form with enctype='multipart/form-data', hidden MAX_FILE_SIZE=100000, file input name='uploaded'. Upload directory confirmed writable: /var/www/html/hackable/uploads/ [User: www-data] Writable folder Yes.",
+      "poc_hint": "Upload a PHP file (e.g., shell.php) and access at /hackable/uploads/shell.php"
+    },
+    {
+      "title": "Reflected XSS (low) in /vulnerabilities/xss_r/",
+      "location": "http://127.0.0.1:8080/vulnerabilities/xss_r/?name=<script>alert(1)</script>",
+      "proof_excerpt": "X-XSS-Protection header set to 0, name parameter reflected in page. <form name=\"XSS\" action=\"#\" method=\"GET\"> <input type=\"text\" name=\"name\"> <input type=\"submit\" value=\"Submit\">",
+      "poc_hint": "Try ?name=<script>alert(document.cookie)</script>"
+    },
+    {
+      "title": "Stored XSS (low) in /vulnerabilities/xss_s/",
+      "location": "http://127.0.0.1:8080/vulnerabilities/xss_s/",
+      "proof_excerpt": "Guestbook form with txtName and mtxMessage parameters. Existing comment shows: <div id=\"guestbook_comments\">Name: test<br />Message: This is a test comment.<br /></div>",
+      "poc_hint": "POST txtName=<script>alert(1)</script>&mtxMessage=<script>alert(2)</script>&btnSign=Sign+Guestbook"
+    },
+    {
+      "title": "DOM XSS (low) in /vulnerabilities/xss_d/",
+      "location": "http://127.0.0.1:8080/vulnerabilities/xss_d/#default=<script>alert(1)</script>",
+      "proof_excerpt": "JavaScript reads from URL: if (document.location.href.indexOf(\"default=\") >= 0) { var lang = document.location.href.substring(document.location.href.indexOf(\"default=\")+8); document.write(\"<option value='\" + lang + \"'>\" + decodeURI(lang) + \"</option>\"); }",
+      "poc_hint": "Use URL fragment: #default=<script>alert(1)</script>"
+    },
+    {
+      "title": "Local File Inclusion in /vulnerabilities/fi/",
+      "location": "http://127.0.0.1:8080/vulnerabilities/fi/?page=../../../../etc/passwd",
+      "proof_excerpt": "File inclusion module with page parameter. Links: file1.php, file2.php, file3.php. Warning: allow_url_include disabled. [<em><a href=\"?page=file1.php\">file1.php</a></em>] - [<em><a href=\"?page=file2.php\">file2.php</a></em>] - [<em><a href=\"?page=file3.php\">file3.php</a></em>]",
+      "poc_hint": "Try ?page=../../../../etc/passwd or ?page=../../../../proc/self/environ"
+    },
+    {
+      "title": "File Inclusion in /instructions.php via doc parameter",
+      "location": "http://127.0.0.1:8080/instructions.php?doc=../../../../etc/passwd",
+      "proof_excerpt": "Instructions submenu with doc parameter: <div class=\"submenu\"><span class=\"submenu_item selected\"><a href=\"?doc=readme\">Read Me</a></span><span class=\"submenu_item\"><a href=\"?doc=PDF\">PDF Guide</a></span><span class=\"submenu_item\"><a href=\"?doc=changelog\">Change Log</a></span><span class=\"submenu_item\"><a href=\"?doc=copying\">Copying</a></span><span class=\"submenu_item\"><a href=\"?doc=PHPIDS-license\">PHPIDS License</a></span></div>",
+      "poc_hint": "Try ?doc=../../../../etc/passwd (LFI via include)"
+    },
+    {
+      "title": "Insecure CAPTCHA / Logic Bypass in /vulnerabilities/captcha/",
+      "location": "http://127.0.0.1:8080/vulnerabilities/captcha/",
+      "proof_excerpt": "reCAPTCHA API key missing from config. Hidden step parameter. <form action=\"#\" method=\"POST\" style=\"display:none;\"> <input type=\"hidden\" name=\"step\" value=\"1\" /> New password: <input type=\"password\" name=\"password_new\"> Confirm: <input type=\"password\" name=\"password_conf\">",
+      "poc_hint": "Try submitting step=2 (bypass captcha check) with password_new=test&password_conf=test"
+    },
+    {
+      "title": "Weak Session IDs in /vulnerabilities/weak_id/",
+      "location": "http://127.0.0.1:8080/vulnerabilities/weak_id/",
+      "proof_excerpt": "Generates dvwaSession cookie on POST. Predictable session ID generation. <form method=\"post\"> <input type=\"submit\" value=\"Generate\" /> </form>",
+      "poc_hint": "Generate multiple sessions and analyze dvwaSession cookie pattern"
+    },
+    {
+      "title": "CSP Bypass in /vulnerabilities/csp/",
+      "location": "http://127.0.0.1:8080/vulnerabilities/csp/",
+      "proof_excerpt": "CSP header: script-src 'self' https://pastebin.com example.com code.jquery.com https://ssl.google-analytics.com . Form accepts include parameter for external JS URL. <form name=\"csp\" method=\"POST\"> <input size=\"50\" type=\"text\" name=\"include\" value=\"\"> <input type=\"submit\" value=\"Include\" /> </form>",
+      "poc_hint": "Use allowed CDN (code.jquery.com) or pastebin to host malicious JS"
+    },
+    {
+      "title": "JavaScript Logic Bypass in /vulnerabilities/javascript/",
+      "location": "http://127.0.0.1:8080/vulnerabilities/javascript/",
+      "proof_excerpt": "Client-side validation: token = md5(rot13(phrase)). Phrase must equal 'success' but token is computed client-side via JS. <form name=\"low_js\" method=\"post\"> <input type=\"hidden\" name=\"token\" value=\"\" id=\"token\" /> <input type=\"text\" name=\"phrase\" value=\"ChangeMe\" id=\"phrase\" /> <input type=\"submit\" id=\"send\" name=\"send\" value=\"Submit\" /> </form>",
+      "poc_hint": "Compute md5(rot13('success')) and submit directly, or bypass client-side check"
+    },
+    {
+      "title": "Brute Force (low) in /vulnerabilities/brute/",
+      "location": "http://127.0.0.1:8080/vulnerabilities/brute/",
+      "proof_excerpt": "Source code shows direct SQL injection in query: $query = \"SELECT * FROM `users` WHERE user = '$user' AND password = '$pass';\"; md5(password) used. No CSRF token. No rate limiting.",
+      "poc_hint": "SQL injection via username or password field, or brute force with dictionary"
+    }
+  ],
+  "facts": [
+    "Default credentials: admin/password (confirmed working)",
+    "Apache 2.4.25 (Debian) with PHP 7.0.30-0+deb9u1",
+    "MySQL database 'dvwa' on 127.0.0.1 with user 'app'",
+    "CSRF tokens used on login.php, setup.php, security.php",
+    "Security level set to 'low' by default via cookie",
+    "PHPIDS disabled, reCAPTCHA key missing",
+    "Writable paths: /var/www/html/hackable/uploads/, /var/www/html/external/phpids/0.6/lib/IDS/tmp/phpids_log.txt, /var/www/html/config",
+    "allow_url_include disabled (LFI only, no RFI)",
+    "X-XSS-Protection explicitly disabled on xss_r page",
+    "14 vulnerability modules across auth, injection, XSS, CSRF, upload, file inclusion, CSP, logic flaws"
+  ],
+  "deadends": [
+    "/var/www/html/config/config.inc.php - referenced but direct access blocked (Apache blocks .php files in config/)",
+    "allow_url_include=Disabled - remote file inclusion not possible",
+    "reCAPTCHA key missing - captcha module non-functional for Google reCAPTCHA verification"
+  ]
+}

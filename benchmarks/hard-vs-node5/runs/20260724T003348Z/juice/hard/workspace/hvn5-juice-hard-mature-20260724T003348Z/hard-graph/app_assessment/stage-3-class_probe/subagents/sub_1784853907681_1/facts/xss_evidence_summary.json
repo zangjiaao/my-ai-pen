@@ -1,0 +1,6 @@
+{
+  "fact_key": "xss_evidence_summary",
+  "summary": "Summary of XSS findings for result.json",
+  "body": "Found XSS vectors:\n1. Reflected XSS via search q parameter: Angular SPA's search component reads `q` from route snapshot, passes through `bypassSecurityTrustHtml()`, renders via `[innerHTML]`. Source code evidence: `this.searchValue=this.sanitizer.bypassSecurityTrustHtml(e)` and `h(\"innerHTML\",e.searchValue,Je)`.\n2. Stored XSS via product reviews: PUT /rest/products/1/reviews stores unsanitized HTML. Verified payloads `<script>alert(document.cookie)</script>`, `<img src=x onerror=alert(1)>`, and `<iframe src=\"javascript:alert(1)\"></iframe>` stored as-is.\n3. Stored XSS via feedback: Feedback comments rendered via bypassSecurityTrustHtml but server-side filter strips dangerous tags. Allows `<b>`, `<br>`, `<em>`.\n4. Stored XSS in product descriptions: Descriptions rendered via bypassSecurityTrustHtml, some products already contain HTML tags.",
+  "updated_at": "2026-07-24T00:50:45.090Z"
+}

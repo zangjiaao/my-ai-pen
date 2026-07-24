@@ -1,0 +1,565 @@
+{
+  "target": "http://127.0.0.1:3011",
+  "graph_id": "app_assessment",
+  "dry_run": false,
+  "model": "deepseek-v4-flash",
+  "findings_by_severity": {
+    "critical": 6,
+    "high": 5,
+    "medium": 4,
+    "low": 0,
+    "info": 0
+  },
+  "authz_matrix_cells": 23,
+  "layers": {
+    "task_graph": "hard sequential app_assessment",
+    "agent_graph": true,
+    "agent_packages": [
+      "class_probe/pentest-xss-dom",
+      "class_probe/pentest-api",
+      "class_probe/pentest-sql-injection",
+      "class_probe/pentest-authz-logic",
+      "class_probe/pentest-auth-session",
+      "class_probe/pentest-component-rce",
+      "class_probe/pentest-file-upload",
+      "class_probe/pentest-ssrf"
+    ],
+    "forced_packages": [
+      "pentest-sql-injection",
+      "pentest-ssrf",
+      "pentest-xss",
+      "pentest-component-rce"
+    ],
+    "effective_max_workers": 8,
+    "feedback_ok": 42,
+    "feedback_fail": 8,
+    "cookie_keys": [
+      "token"
+    ],
+    "actor_jars": [
+      "actor_a",
+      "actor_b",
+      "actor_forged",
+      "anon",
+      "admin",
+      "user_a"
+    ],
+    "actors_n": 3,
+    "resources_n": 33,
+    "findings_with_precondition": 6,
+    "coverage_ledger_n": 2
+  },
+  "coverage_metrics": {
+    "coverage_required": [
+      "injection_search",
+      "ssrf_url_sink",
+      "jwt_key_material",
+      "graphql",
+      "identity_reset",
+      "identity_change_password",
+      "identity_2fa",
+      "authz_matrix",
+      "sensitive_tech_exposure",
+      "upload",
+      "xss_self_inject",
+      "dom_client",
+      "business_logic",
+      "websocket"
+    ],
+    "coverage_attempted": [
+      "injection_search",
+      "ssrf_url_sink",
+      "jwt_key_material",
+      "identity_reset",
+      "identity_change_password",
+      "identity_2fa",
+      "authz_matrix",
+      "sensitive_tech_exposure",
+      "business_logic"
+    ],
+    "coverage_closed": [
+      "injection_search",
+      "ssrf_url_sink",
+      "jwt_key_material",
+      "identity_reset",
+      "identity_change_password",
+      "identity_2fa",
+      "authz_matrix",
+      "sensitive_tech_exposure",
+      "business_logic"
+    ],
+    "coverage_failed": [],
+    "coverage_blocked": [],
+    "coverage_untested": [
+      "graphql",
+      "upload",
+      "xss_self_inject",
+      "dom_client",
+      "websocket"
+    ],
+    "coverage_required_n": 14,
+    "coverage_attempted_n": 9,
+    "coverage_closed_n": 9,
+    "coverage_blocked_n": 0,
+    "coverage_attempt_rate": 0.643,
+    "coverage_close_rate": 1.0,
+    "coverage_statuses": {
+      "injection_search": "closed",
+      "ssrf_url_sink": "closed",
+      "jwt_key_material": "closed",
+      "graphql": "untested",
+      "identity_reset": "closed",
+      "identity_change_password": "closed",
+      "identity_2fa": "closed",
+      "authz_matrix": "closed",
+      "sensitive_tech_exposure": "closed",
+      "upload": "untested",
+      "xss_self_inject": "untested",
+      "dom_client": "untested",
+      "business_logic": "closed",
+      "websocket": "untested"
+    },
+    "forced_packages": [
+      "pentest-sql-injection",
+      "pentest-ssrf",
+      "pentest-xss",
+      "pentest-component-rce"
+    ],
+    "effective_max_workers": 8,
+    "authz_matrix_cells": 23,
+    "hv_campaigns_opened": 14,
+    "hv_campaigns_attempted": 9,
+    "hv_campaigns_booked": 9,
+    "hv_attempt_rate": 0.643,
+    "hv_success_rate": 1.0,
+    "hv_recon_hits": [
+      "encryptionkeys",
+      "image_url",
+      "search",
+      "logs",
+      "graphql"
+    ],
+    "hv_recon_hit_count": 5
+  },
+  "hv_metrics": {
+    "coverage_required": [
+      "injection_search",
+      "ssrf_url_sink",
+      "jwt_key_material",
+      "graphql",
+      "identity_reset",
+      "identity_change_password",
+      "identity_2fa",
+      "authz_matrix",
+      "sensitive_tech_exposure",
+      "upload",
+      "xss_self_inject",
+      "dom_client",
+      "business_logic",
+      "websocket"
+    ],
+    "coverage_attempted": [
+      "injection_search",
+      "ssrf_url_sink",
+      "jwt_key_material",
+      "identity_reset",
+      "identity_change_password",
+      "identity_2fa",
+      "authz_matrix",
+      "sensitive_tech_exposure",
+      "business_logic"
+    ],
+    "coverage_closed": [
+      "injection_search",
+      "ssrf_url_sink",
+      "jwt_key_material",
+      "identity_reset",
+      "identity_change_password",
+      "identity_2fa",
+      "authz_matrix",
+      "sensitive_tech_exposure",
+      "business_logic"
+    ],
+    "coverage_failed": [],
+    "coverage_blocked": [],
+    "coverage_untested": [
+      "graphql",
+      "upload",
+      "xss_self_inject",
+      "dom_client",
+      "websocket"
+    ],
+    "coverage_required_n": 14,
+    "coverage_attempted_n": 9,
+    "coverage_closed_n": 9,
+    "coverage_blocked_n": 0,
+    "coverage_attempt_rate": 0.643,
+    "coverage_close_rate": 1.0,
+    "coverage_statuses": {
+      "injection_search": "closed",
+      "ssrf_url_sink": "closed",
+      "jwt_key_material": "closed",
+      "graphql": "untested",
+      "identity_reset": "closed",
+      "identity_change_password": "closed",
+      "identity_2fa": "closed",
+      "authz_matrix": "closed",
+      "sensitive_tech_exposure": "closed",
+      "upload": "untested",
+      "xss_self_inject": "untested",
+      "dom_client": "untested",
+      "business_logic": "closed",
+      "websocket": "untested"
+    },
+    "forced_packages": [
+      "pentest-sql-injection",
+      "pentest-ssrf",
+      "pentest-xss",
+      "pentest-component-rce"
+    ],
+    "effective_max_workers": 8,
+    "authz_matrix_cells": 23,
+    "hv_campaigns_opened": 14,
+    "hv_campaigns_attempted": 9,
+    "hv_campaigns_booked": 9,
+    "hv_attempt_rate": 0.643,
+    "hv_success_rate": 1.0,
+    "hv_recon_hits": [
+      "encryptionkeys",
+      "image_url",
+      "search",
+      "logs",
+      "graphql"
+    ],
+    "hv_recon_hit_count": 5
+  },
+  "process_metrics": {
+    "structure_fail_n": 5,
+    "structure_fail_stages": [
+      "auth_session",
+      "authz_logic",
+      "prior_reverify"
+    ],
+    "discovery_yield_soft_fail_n": 1,
+    "discovery_yield_soft_fail_stages": [
+      "prior_reverify"
+    ],
+    "discovery_yield_ok_n": 4,
+    "retry_n": 3,
+    "surface_ledger_fail_n": 0,
+    "ready_by_stage": {
+      "surface": 0,
+      "prior_reverify": 0,
+      "auth_session": 0,
+      "class_probe": 15,
+      "authz_logic": 1,
+      "component": 2
+    },
+    "class_probe_discovery_yield": "new_cands=16 ready=15 structured_workers=7",
+    "note": "process_quality orthogonal to coverage_attempt_rate"
+  },
+  "coverage_ledger_tail": [
+    {
+      "id": "authz_matrix",
+      "outcome": "attempted",
+      "detail": "matrix_start",
+      "paths": []
+    },
+    {
+      "id": "authz_matrix",
+      "outcome": "closed",
+      "detail": "matrix differential booked Authz matrix HTTP proof: anon GET /api/Users → 200 (sensitive collection); cross-actor GET both 200 on id=1 path=/api/Users; anon DELETE /api/Feedbacks/1 id=1 → 200; cross-actor GET both 200 on id=1 path=/api/Feedbacks; write_tried=True; cells_sample=[{\"resource\": \"/api/Users\", \"actor\": \"anon\", \"method\": \"GET\", \"status\": 200, \"id\": null}, {\"resource\": \"/api/Users\", \"actor\": \"actor_a\", \"method\": \"G",
+      "paths": []
+    }
+  ],
+  "stages_done": [
+    "init",
+    "surface",
+    "prior_reverify",
+    "auth_session",
+    "class_probe",
+    "authz_logic",
+    "component",
+    "validate_book",
+    "finalize"
+  ],
+  "surface_count": 62,
+  "candidate_count": 22,
+  "finding_count": 15,
+  "finding_unique_identities": 14,
+  "errors": [],
+  "feedback": [
+    {
+      "loop": "evidence",
+      "stage": "prior_reverify",
+      "ok": true,
+      "detail": "ready=0"
+    },
+    {
+      "loop": "discovery_yield",
+      "stage": "prior_reverify",
+      "ok": true,
+      "detail": "ready=0 tools=70"
+    },
+    {
+      "loop": "structure",
+      "stage": "prior_reverify",
+      "ok": false,
+      "detail": "no parseable JSON"
+    },
+    {
+      "loop": "tool_use",
+      "stage": "prior_reverify",
+      "ok": true,
+      "detail": "calls=70"
+    },
+    {
+      "loop": "evidence",
+      "stage": "auth_session",
+      "ok": true,
+      "detail": "ready=0"
+    },
+    {
+      "loop": "discovery_yield",
+      "stage": "auth_session",
+      "ok": true,
+      "detail": "ready=0 tools=73"
+    },
+    {
+      "loop": "structure",
+      "stage": "auth_session",
+      "ok": false,
+      "detail": "no parseable JSON"
+    },
+    {
+      "loop": "tool_use",
+      "stage": "auth_session",
+      "ok": true,
+      "detail": "calls=73"
+    },
+    {
+      "loop": "retry",
+      "stage": "auth_session",
+      "ok": true,
+      "detail": "JSON/ledger/discovery retry: ['no parseable JSON']"
+    },
+    {
+      "loop": "evidence",
+      "stage": "auth_session",
+      "ok": true,
+      "detail": "ready=0"
+    },
+    {
+      "loop": "discovery_yield",
+      "stage": "auth_session",
+      "ok": true,
+      "detail": "ready=0 tools=47"
+    },
+    {
+      "loop": "structure",
+      "stage": "auth_session",
+      "ok": false,
+      "detail": "no parseable JSON"
+    },
+    {
+      "loop": "tool_use",
+      "stage": "auth_session",
+      "ok": true,
+      "detail": "calls=47"
+    },
+    {
+      "loop": "identity_chain",
+      "stage": "class_probe",
+      "ok": true,
+      "detail": "start id=totp-2fa reason=2fa_signal"
+    },
+    {
+      "loop": "identity_chain",
+      "stage": "class_probe",
+      "ok": true,
+      "detail": "pass=0 tools=56 new_cands=3 id=totp-2fa"
+    },
+    {
+      "loop": "evidence",
+      "stage": "class_probe",
+      "ok": true,
+      "detail": "ready=15"
+    },
+    {
+      "loop": "discovery_yield",
+      "stage": "class_probe",
+      "ok": true,
+      "detail": "new_cands=16 ready=15 structured_workers=7"
+    },
+    {
+      "loop": "injection_depth",
+      "stage": "class_probe",
+      "ok": true,
+      "detail": "sqli_cands=1 deep=1"
+    },
+    {
+      "loop": "coverage",
+      "stage": "class_probe",
+      "ok": true,
+      "detail": "deferred_to_coverage_probe untested=['graphql', 'upload', 'xss_self_inject', 'dom_client', 'websocket']"
+    },
+    {
+      "loop": "structure",
+      "stage": "class_probe",
+      "ok": true,
+      "detail": "json_ok"
+    },
+    {
+      "loop": "tool_use",
+      "stage": "class_probe",
+      "ok": true,
+      "detail": "calls=544"
+    },
+    {
+      "loop": "coverage",
+      "stage": "class_probe",
+      "ok": true,
+      "detail": "new_candidates=16"
+    },
+    {
+      "loop": "evidence",
+      "stage": "authz_logic",
+      "ok": true,
+      "detail": "ready=1"
+    },
+    {
+      "loop": "authz_coverage",
+      "stage": "authz_logic",
+      "ok": true,
+      "detail": "sens=29 authz_cands=1"
+    },
+    {
+      "loop": "structure",
+      "stage": "authz_logic",
+      "ok": false,
+      "detail": "no parseable JSON"
+    },
+    {
+      "loop": "tool_use",
+      "stage": "authz_logic",
+      "ok": true,
+      "detail": "calls=36"
+    },
+    {
+      "loop": "retry",
+      "stage": "authz_logic",
+      "ok": true,
+      "detail": "JSON/ledger/discovery retry: ['no parseable JSON']"
+    },
+    {
+      "loop": "evidence",
+      "stage": "authz_logic",
+      "ok": true,
+      "detail": "ready=1"
+    },
+    {
+      "loop": "authz_coverage",
+      "stage": "authz_logic",
+      "ok": true,
+      "detail": "sens=29 authz_cands=1"
+    },
+    {
+      "loop": "structure",
+      "stage": "authz_logic",
+      "ok": false,
+      "detail": "no parseable JSON"
+    },
+    {
+      "loop": "tool_use",
+      "stage": "authz_logic",
+      "ok": true,
+      "detail": "calls=18"
+    },
+    {
+      "loop": "authz_soft_skip",
+      "stage": "authz_logic",
+      "ok": true,
+      "detail": "no dual-actor structured result"
+    },
+    {
+      "loop": "evidence",
+      "stage": "component",
+      "ok": true,
+      "detail": "ready=2"
+    },
+    {
+      "loop": "structure",
+      "stage": "component",
+      "ok": true,
+      "detail": "json_ok"
+    },
+    {
+      "loop": "tool_use",
+      "stage": "component",
+      "ok": true,
+      "detail": "calls=55"
+    },
+    {
+      "loop": "dedupe",
+      "stage": "validate_book",
+      "ok": true,
+      "detail": "suppressed_duplicate_candidates=2 unique=22"
+    },
+    {
+      "loop": "evidence",
+      "stage": "validate_book",
+      "ok": true,
+      "detail": "booked=15 skipped_weak_or_incomplete_or_surface=7"
+    },
+    {
+      "loop": "evidence_quality",
+      "stage": "validate_book",
+      "ok": true,
+      "detail": "quality_fail=3 prior_defer=0 booked=15"
+    },
+    {
+      "loop": "coverage",
+      "stage": "finalize",
+      "ok": false,
+      "detail": "untested=['graphql', 'upload', 'xss_self_inject', 'dom_client', 'websocket'] attempt_rate=0.643"
+    },
+    {
+      "loop": "discovery_yield",
+      "stage": "finalize",
+      "ok": false,
+      "detail": "structure_fail_n=5 discovery_soft_fail_n=1 stages=['prior_reverify'] ready_by_stage={'surface': 0, 'prior_reverify': 0, 'auth_session': 0, 'class_probe': 15, 'authz_logic': 1, 'component': 2}"
+    }
+  ],
+  "notes_tail": [
+    "feedback[authz_soft_skip] authz_logic: ok no dual-actor structured result",
+    "authz_logic: live complete tools=54 structured=False surfaces=60",
+    "component: begin",
+    "coverage: injected 6 lines for stage component",
+    "component: identity-merge updated 10 existing candidate(s)",
+    "component: catalog_considered: [jwt-algorithm-confusion, ssrf-url-fetch, idor, mass-assignment, sql-injection, dom-xss, disclosure, auth-bypass, file-upload, websocket]",
+    "component: Component identified: OWASP Juice Shop (Node.js/Express) - version 20.1.1",
+    "component: Stack fingerprint: Node.js v24.17.0, Express ^4.22.1, Angular SPA, SQLite 3.44.2, prom-client metrics",
+    "component: JWT attack successfully proved - both alg:none and algorithm confusion (RS256→HS256 with public key) accepted",
+    "component: DOM XSS proved via browser tool on search q parameter",
+    "component: WebSocket/Socket.IO confirmed at /socket.io/ with WebSocket upgrade",
+    "component: File upload works for allowed image types (image/png, jpeg, gif) but blocks SVG and HTML",
+    "component: GraphQL endpoints (/graphql, /api/graphql) not functional as GraphQL - serve SPA or return 500",
+    "component: All critical findings have ready_to_book=true with tool-proven proof excerpts",
+    "component:summary Stage component complete. Confirmed OWASP Juice Shop (Node.js/Express v4.22.1, Angular SPA). Performed JWT algorithm confusion attack (alg:none + HS256 with RSA public key as HMAC secret) both accepted by server returning admin identity. DOM XSS confirmed via browser on search q parameter. File upload confirmed at /profile/image/file (validated by type, image/* accepted). WebSocket/socket.io confirmed. Multiple unauthenticated API endpoints found. Version 20.1.1.",
+    "feedback[evidence] component: ok ready=2",
+    "feedback[structure] component: ok json_ok",
+    "feedback[tool_use] component: ok calls=55",
+    "component: live complete tools=55 structured=True surfaces=62",
+    "feedback[dedupe] validate_book: ok suppressed_duplicate_candidates=2 unique=22",
+    "validate_book: identity dedupe 24 → 22 (suppressed 2)",
+    "validate_book: quality skip [xss_no_own_injection] DOM XSS in search functionality via unsafe innerHTML",
+    "validate_book: quality skip [meta_scoreboard_or_progress] Excessive Data Exposure on /api/challenges",
+    "validate_book: quality skip [no_tool_effect] Directory Listing - Log File Exposure",
+    "feedback[evidence] validate_book: ok booked=15 skipped_weak_or_incomplete_or_surface=7",
+    "feedback[evidence_quality] validate_book: ok quality_fail=3 prior_defer=0 booked=15",
+    "validate_book: booked 15 unique finding(s) from 22 candidates (surface rows not bookable)",
+    "feedback[coverage] finalize: fail untested=['graphql', 'upload', 'xss_self_inject', 'dom_client', 'websocket'] attempt_rate=0.643",
+    "feedback[discovery_yield] finalize: fail structure_fail_n=5 discovery_soft_fail_n=1 stages=['prior_reverify'] ready_by_stage={'surface': 0, 'prior_reverify': 0, 'auth_session': 0, 'class_probe': 15, 'authz_logic': 1, 'component': 2}",
+    "finalize: stages_done=['init', 'surface', 'prior_reverify', 'auth_session', 'class_probe', 'authz_logic', 'component', 'validate_book', 'finalize'] findings=15 surfaces=62 resources=33 actors=3 candidates=22 coverage_ledger=2 cov_attempt_rate=0.643 cov_close_rate=1.0 untested=['graphql', 'upload', 'xss_self_inject', 'dom_client', 'websocket'] process_structure_fail=5 process_discovery_soft_fail=1 errors=0 feedback_ok=42 feedback_fail=8 cookies=['token'] actor_jars=['actor_a', 'actor_b', 'actor_forged', 'anon', 'admin', 'user_a'] agent_packages=['class_probe/pentest-xss-dom', 'class_probe/pentest-api', 'class_probe/pentest-sql-injection', 'class_probe/pentest-authz-logic', 'class_probe/pentest-auth-session', 'class_probe/pentest-component-rce', 'class_probe/pentest-file-upload', 'class_probe/pentest-ssrf'] forced=['pentest-sql-injection', 'pentest-ssrf', 'pentest-xss', 'pentest-component-rce'] eff_workers=8 findings_with_precondition=6"
+  ]
+}

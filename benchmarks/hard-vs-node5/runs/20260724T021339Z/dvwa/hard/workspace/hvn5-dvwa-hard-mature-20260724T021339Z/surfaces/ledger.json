@@ -1,0 +1,173 @@
+{
+  "version": 1,
+  "updated_at": "2026-07-24T02:44:07.059Z",
+  "surfaces": [
+    {
+      "id": "/vulnerabilities/xss_r",
+      "location": "http://127.0.0.1:8080/vulnerabilities/xss_r/",
+      "path_key": "/vulnerabilities/xss_r",
+      "kind": "form",
+      "params": [
+        "name"
+      ],
+      "auth": "session",
+      "status": "probed",
+      "updated_at": "2026-07-24T02:41:24.567Z",
+      "source_subagent_id": "sub_1784860843755_3"
+    },
+    {
+      "id": "/vulnerabilities/upload",
+      "location": "http://127.0.0.1:8080/vulnerabilities/upload/",
+      "path_key": "/vulnerabilities/upload",
+      "kind": "upload",
+      "params": [
+        "MAX_FILE_SIZE",
+        "uploaded",
+        "Upload"
+      ],
+      "auth": "session",
+      "status": "probed",
+      "updated_at": "2026-07-24T02:41:49.889Z",
+      "source_subagent_id": "sub_1784860843755_1"
+    },
+    {
+      "id": "/hackable/uploads",
+      "location": "http://127.0.0.1:8080/hackable/uploads/",
+      "path_key": "/hackable/uploads",
+      "kind": "page",
+      "auth": "none",
+      "status": "open",
+      "updated_at": "2026-07-24T02:41:49.885Z",
+      "source_subagent_id": "sub_1784860843755_1"
+    },
+    {
+      "id": "/vulnerabilities/javascript",
+      "location": "http://127.0.0.1:8080/vulnerabilities/javascript/",
+      "path_key": "/vulnerabilities/javascript",
+      "kind": "form",
+      "params": [
+        "phrase",
+        "token",
+        "send"
+      ],
+      "auth": "session",
+      "status": "probed",
+      "updated_at": "2026-07-24T02:42:35.780Z",
+      "source_subagent_id": "sub_1784860843755_6"
+    },
+    {
+      "id": "/vulnerabilities/javascript/source/low.php",
+      "location": "http://127.0.0.1:8080/vulnerabilities/javascript/source/low.php",
+      "path_key": "/vulnerabilities/javascript/source/low.php",
+      "kind": "page",
+      "auth": "session",
+      "status": "probed",
+      "updated_at": "2026-07-24T02:42:35.780Z",
+      "source_subagent_id": "sub_1784860843755_6"
+    },
+    {
+      "id": "/vulnerabilities/javascript/source/medium.js",
+      "location": "http://127.0.0.1:8080/vulnerabilities/javascript/source/medium.js",
+      "path_key": "/vulnerabilities/javascript/source/medium.js",
+      "kind": "page",
+      "auth": "none",
+      "status": "probed",
+      "updated_at": "2026-07-24T02:42:35.780Z",
+      "source_subagent_id": "sub_1784860843755_6"
+    },
+    {
+      "id": "/vulnerabilities/javascript/source/high.js",
+      "location": "http://127.0.0.1:8080/vulnerabilities/javascript/source/high.js",
+      "path_key": "/vulnerabilities/javascript/source/high.js",
+      "kind": "page",
+      "auth": "none",
+      "status": "probed",
+      "updated_at": "2026-07-24T02:42:35.780Z",
+      "source_subagent_id": "sub_1784860843755_6"
+    },
+    {
+      "id": "/vulnerabilities/view_source_all.php",
+      "location": "http://127.0.0.1:8080/vulnerabilities/view_source_all.php?id=javascript",
+      "path_key": "/vulnerabilities/view_source_all.php",
+      "kind": "page",
+      "params": [
+        "id"
+      ],
+      "auth": "session",
+      "status": "open",
+      "updated_at": "2026-07-24T02:42:35.774Z",
+      "source_subagent_id": "sub_1784860843755_6"
+    },
+    {
+      "id": "/vulnerabilities/xss_s",
+      "location": "http://127.0.0.1:8080/vulnerabilities/xss_s/",
+      "path_key": "/vulnerabilities/xss_s",
+      "kind": "form",
+      "params": [
+        "txtName",
+        "mtxMessage",
+        "btnSign"
+      ],
+      "auth": "session",
+      "status": "probed",
+      "updated_at": "2026-07-24T02:42:42.054Z",
+      "source_subagent_id": "sub_1784860843755_4"
+    },
+    {
+      "id": "/vulnerabilities/csp",
+      "location": "http://127.0.0.1:8080/vulnerabilities/csp/",
+      "path_key": "/vulnerabilities/csp",
+      "kind": "form",
+      "params": [
+        "include"
+      ],
+      "auth": "session",
+      "status": "probed",
+      "updated_at": "2026-07-24T02:43:16.009Z",
+      "source_subagent_id": "sub_1784860843755_5"
+    },
+    {
+      "id": "/vulnerabilities/brute",
+      "location": "http://127.0.0.1:8080/vulnerabilities/brute/",
+      "path_key": "/vulnerabilities/brute",
+      "kind": "form",
+      "params": [
+        "username",
+        "password",
+        "Login"
+      ],
+      "auth": "session",
+      "status": "probed",
+      "updated_at": "2026-07-24T02:44:07.059Z",
+      "source_subagent_id": "sub_1784860843755_7"
+    },
+    {
+      "id": "/vulnerabilities/view_source.php",
+      "location": "http://127.0.0.1:8080/vulnerabilities/view_source.php?id=brute&security=low",
+      "path_key": "/vulnerabilities/view_source.php",
+      "kind": "page",
+      "params": [
+        "id",
+        "security"
+      ],
+      "auth": "session",
+      "status": "open",
+      "updated_at": "2026-07-24T02:44:07.055Z",
+      "source_subagent_id": "sub_1784860843755_7"
+    },
+    {
+      "id": "/vulnerabilities/view_help.php",
+      "location": "http://127.0.0.1:8080/vulnerabilities/view_help.php?id=brute&security=low",
+      "path_key": "/vulnerabilities/view_help.php",
+      "kind": "page",
+      "params": [
+        "id",
+        "security"
+      ],
+      "auth": "session",
+      "status": "open",
+      "updated_at": "2026-07-24T02:44:07.055Z",
+      "source_subagent_id": "sub_1784860843755_7"
+    }
+  ]
+}

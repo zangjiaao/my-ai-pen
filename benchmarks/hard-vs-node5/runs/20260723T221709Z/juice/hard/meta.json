@@ -1,0 +1,21 @@
+{
+  "arm": "hard",
+  "campaign": "hard-vs-node5-juice-p1",
+  "map": 59,
+  "ticket": 65,
+  "graphId": "app_assessment_thin",
+  "target": "http://127.0.0.1:3010",
+  "container": "juice-hvn5-hard",
+  "modelProvider": "deepseek",
+  "model": "deepseek-v4-flash",
+  "nodeSha": "f373c68fa5b6d152af61e5a3ec96267f950dbaae",
+  "branch": "research/node5-lab-invocation-juice-dvwa",
+  "start": "2026-07-23T22:17:09Z",
+  "startEpoch": 1784845029,
+  "end": "2026-07-23T22:30:19Z",
+  "endEpoch": 1784845819,
+  "wallClockSec": 779,
+  "terminalStatus": "completed",
+  "stopReason": "hard_graph_completed",
+  "bookedFindings": 2
+}

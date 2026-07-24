@@ -1,0 +1,28 @@
+{
+  "id": "f_1784861882929_857632",
+  "action": "confirm",
+  "title": "CSRF token on login not invalidated after use",
+  "severity": "medium",
+  "finding_kind": "auth",
+  "location": "http://127.0.0.1:8080/login.php",
+  "url": "http://127.0.0.1:8080/login.php",
+  "description": "The user_token CSRF token can be reused multiple times with the same PHP session. If an attacker obtains a valid token (e.g., via XSS), they can replay it for repeated authentication attempts.",
+  "poc": "Probe request against http://127.0.0.1:8080/login.php; observed proving result from prior stage handoff: Set-Cookie: PHPSESSID=oh7b9qbtd9c0dueninuaf8i9h1; path=/ Set-Cookie: security=low",
+  "proof": "Set-Cookie: PHPSESSID=oh7b9qbtd9c0dueninuaf8i9h1; path=/\nSet-Cookie: security=low",
+  "how_captured": "script: proof_missing_headers.txt",
+  "evidence_ids": [
+    "ev_1784861882133_79b259"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784861882133_79b259",
+      "excerpt": "Set-Cookie: PHPSESSID=oh7b9qbtd9c0dueninuaf8i9h1; path=/\nSet-Cookie: security=low",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "script: proof_missing_headers.txt"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "8080",
+  "created_at": "2026-07-24T02:58:02.929Z"
+}

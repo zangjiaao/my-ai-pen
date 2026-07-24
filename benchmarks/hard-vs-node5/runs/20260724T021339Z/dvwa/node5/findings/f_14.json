@@ -1,0 +1,10 @@
+{
+  "title": "Insecure CAPTCHA - step parameter bypass (no reCAPTCHA verification on final step)",
+  "location": "/vulnerabilities/captcha",
+  "severity": "medium",
+  "proof": "Source code confirms step=2 flow skips reCAPTCHA check entirely (no recaptcha_check_answer call). Sending POST with step=2&password_new=X&password_conf=X&Change=Change changes password without any CAPTCHA verification. reCAPTCHA API key is missing from config, making step=1 always fail.",
+  "stage": "component",
+  "precondition": "Authenticated session (low security level)",
+  "affected_actor": "admin",
+  "affected_resource": "vulnerability"
+}

@@ -1,0 +1,10 @@
+{
+  "title": "Unauthenticated basket access and order placement (IDOR + authz bypass)",
+  "location": "/rest/basket/{id}",
+  "severity": "critical",
+  "proof": "GET /rest/basket/1 without auth returns admin basket with products. POST /rest/basket/1/checkout without auth places order: {\"orderConfirmation\":\"b642-a1ad8ed4f3015990\"}. Order appears in /rest/order-history with masked email, totalPrice, products.",
+  "stage": "class_probe",
+  "precondition": "",
+  "affected_actor": "",
+  "affected_resource": ""
+}

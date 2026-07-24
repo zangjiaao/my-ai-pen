@@ -1,0 +1,480 @@
+{
+  "target": "http://127.0.0.1:8081",
+  "graph_id": "app_assessment",
+  "dry_run": false,
+  "model": "deepseek-v4-flash",
+  "findings_by_severity": {
+    "critical": 3,
+    "high": 6,
+    "medium": 7,
+    "low": 0,
+    "info": 0
+  },
+  "authz_matrix_cells": 3,
+  "layers": {
+    "task_graph": "hard sequential app_assessment",
+    "agent_graph": true,
+    "agent_packages": [
+      "class_probe/pentest-ssrf",
+      "class_probe/pentest-auth-session",
+      "class_probe/pentest-file-upload",
+      "class_probe/pentest-xss",
+      "class_probe/pentest-sql-injection",
+      "class_probe/pentest-authz-logic"
+    ],
+    "forced_packages": [
+      "pentest-ssrf",
+      "pentest-xss"
+    ],
+    "effective_max_workers": 6,
+    "feedback_ok": 32,
+    "feedback_fail": 4,
+    "cookie_keys": [
+      "PHPSESSID",
+      "security",
+      "dvwaSession"
+    ],
+    "actor_jars": [
+      "admin",
+      "actor_a",
+      "actor_b"
+    ],
+    "actors_n": 4,
+    "resources_n": 23,
+    "findings_with_precondition": 12,
+    "coverage_ledger_n": 2
+  },
+  "coverage_metrics": {
+    "coverage_required": [
+      "ssrf_url_sink",
+      "jwt_key_material",
+      "graphql",
+      "authz_matrix",
+      "sensitive_tech_exposure",
+      "upload",
+      "xss_self_inject",
+      "dom_client"
+    ],
+    "coverage_attempted": [
+      "authz_matrix",
+      "sensitive_tech_exposure",
+      "upload",
+      "xss_self_inject"
+    ],
+    "coverage_closed": [
+      "authz_matrix",
+      "sensitive_tech_exposure",
+      "upload",
+      "xss_self_inject"
+    ],
+    "coverage_failed": [],
+    "coverage_blocked": [],
+    "coverage_untested": [
+      "ssrf_url_sink",
+      "jwt_key_material",
+      "graphql",
+      "dom_client"
+    ],
+    "coverage_required_n": 8,
+    "coverage_attempted_n": 4,
+    "coverage_closed_n": 4,
+    "coverage_blocked_n": 0,
+    "coverage_attempt_rate": 0.5,
+    "coverage_close_rate": 1.0,
+    "coverage_statuses": {
+      "ssrf_url_sink": "untested",
+      "jwt_key_material": "untested",
+      "graphql": "untested",
+      "authz_matrix": "closed",
+      "sensitive_tech_exposure": "closed",
+      "upload": "closed",
+      "xss_self_inject": "closed",
+      "dom_client": "untested"
+    },
+    "forced_packages": [
+      "pentest-ssrf",
+      "pentest-xss"
+    ],
+    "effective_max_workers": 6,
+    "authz_matrix_cells": 3,
+    "hv_campaigns_opened": 8,
+    "hv_campaigns_attempted": 4,
+    "hv_campaigns_booked": 4,
+    "hv_attempt_rate": 0.5,
+    "hv_success_rate": 1.0,
+    "hv_recon_hits": [
+      "encryptionkeys",
+      "image_url",
+      "logs",
+      "graphql"
+    ],
+    "hv_recon_hit_count": 4
+  },
+  "hv_metrics": {
+    "coverage_required": [
+      "ssrf_url_sink",
+      "jwt_key_material",
+      "graphql",
+      "authz_matrix",
+      "sensitive_tech_exposure",
+      "upload",
+      "xss_self_inject",
+      "dom_client"
+    ],
+    "coverage_attempted": [
+      "authz_matrix",
+      "sensitive_tech_exposure",
+      "upload",
+      "xss_self_inject"
+    ],
+    "coverage_closed": [
+      "authz_matrix",
+      "sensitive_tech_exposure",
+      "upload",
+      "xss_self_inject"
+    ],
+    "coverage_failed": [],
+    "coverage_blocked": [],
+    "coverage_untested": [
+      "ssrf_url_sink",
+      "jwt_key_material",
+      "graphql",
+      "dom_client"
+    ],
+    "coverage_required_n": 8,
+    "coverage_attempted_n": 4,
+    "coverage_closed_n": 4,
+    "coverage_blocked_n": 0,
+    "coverage_attempt_rate": 0.5,
+    "coverage_close_rate": 1.0,
+    "coverage_statuses": {
+      "ssrf_url_sink": "untested",
+      "jwt_key_material": "untested",
+      "graphql": "untested",
+      "authz_matrix": "closed",
+      "sensitive_tech_exposure": "closed",
+      "upload": "closed",
+      "xss_self_inject": "closed",
+      "dom_client": "untested"
+    },
+    "forced_packages": [
+      "pentest-ssrf",
+      "pentest-xss"
+    ],
+    "effective_max_workers": 6,
+    "authz_matrix_cells": 3,
+    "hv_campaigns_opened": 8,
+    "hv_campaigns_attempted": 4,
+    "hv_campaigns_booked": 4,
+    "hv_attempt_rate": 0.5,
+    "hv_success_rate": 1.0,
+    "hv_recon_hits": [
+      "encryptionkeys",
+      "image_url",
+      "logs",
+      "graphql"
+    ],
+    "hv_recon_hit_count": 4
+  },
+  "process_metrics": {
+    "structure_fail_n": 2,
+    "structure_fail_stages": [
+      "authz_logic"
+    ],
+    "discovery_yield_soft_fail_n": 0,
+    "discovery_yield_soft_fail_stages": [],
+    "discovery_yield_ok_n": 3,
+    "retry_n": 1,
+    "surface_ledger_fail_n": 0,
+    "ready_by_stage": {
+      "surface": 0,
+      "prior_reverify": 3,
+      "auth_session": 3,
+      "class_probe": 10,
+      "authz_logic": 1,
+      "component": 4
+    },
+    "class_probe_discovery_yield": "new_cands=8 ready=10 structured_workers=5",
+    "note": "process_quality orthogonal to coverage_attempt_rate"
+  },
+  "coverage_ledger_tail": [
+    {
+      "id": "authz_matrix",
+      "outcome": "attempted",
+      "detail": "matrix_start",
+      "paths": []
+    },
+    {
+      "id": "authz_matrix",
+      "outcome": "closed",
+      "detail": "matrix differential booked Authz matrix HTTP proof: anon GET /hackable/users/ → 200 (sensitive collection); write_tried=False; cells_sample=[{\"resource\": \"/hackable/users/\", \"actor\": \"anon\", \"method\": \"GET\", \"status\": 200, \"id\": null}, {\"resource\": \"/profile/image/url\", \"actor\": \"anon\", \"method\": \"GET\", \"status\": 404, \"id\": null}, {\"resource\": \"/hackable/uploads\", \"actor\": \"anon\", \"method\": \"GET\", \"status\": 200, \"id\": null}",
+      "paths": []
+    }
+  ],
+  "stages_done": [
+    "init",
+    "surface",
+    "prior_reverify",
+    "auth_session",
+    "class_probe",
+    "authz_logic",
+    "component",
+    "validate_book",
+    "finalize"
+  ],
+  "surface_count": 52,
+  "candidate_count": 20,
+  "finding_count": 16,
+  "finding_unique_identities": 16,
+  "errors": [],
+  "feedback": [
+    {
+      "loop": "evidence",
+      "stage": "surface",
+      "ok": true,
+      "detail": "ready=0"
+    },
+    {
+      "loop": "surface_ledger",
+      "stage": "surface",
+      "ok": true,
+      "detail": "surfaces=47 appish=36"
+    },
+    {
+      "loop": "surface_model",
+      "stage": "surface",
+      "ok": true,
+      "detail": "resources=19 actors=4"
+    },
+    {
+      "loop": "structure",
+      "stage": "surface",
+      "ok": true,
+      "detail": "json_ok"
+    },
+    {
+      "loop": "tool_use",
+      "stage": "surface",
+      "ok": true,
+      "detail": "calls=55"
+    },
+    {
+      "loop": "evidence",
+      "stage": "prior_reverify",
+      "ok": true,
+      "detail": "ready=3"
+    },
+    {
+      "loop": "discovery_yield",
+      "stage": "prior_reverify",
+      "ok": true,
+      "detail": "ready=3 tools=26"
+    },
+    {
+      "loop": "structure",
+      "stage": "prior_reverify",
+      "ok": true,
+      "detail": "json_ok"
+    },
+    {
+      "loop": "tool_use",
+      "stage": "prior_reverify",
+      "ok": true,
+      "detail": "calls=26"
+    },
+    {
+      "loop": "evidence",
+      "stage": "auth_session",
+      "ok": true,
+      "detail": "ready=3"
+    },
+    {
+      "loop": "discovery_yield",
+      "stage": "auth_session",
+      "ok": true,
+      "detail": "ready=3 tools=51"
+    },
+    {
+      "loop": "structure",
+      "stage": "auth_session",
+      "ok": true,
+      "detail": "json_ok"
+    },
+    {
+      "loop": "tool_use",
+      "stage": "auth_session",
+      "ok": true,
+      "detail": "calls=51"
+    },
+    {
+      "loop": "evidence",
+      "stage": "class_probe",
+      "ok": true,
+      "detail": "ready=10"
+    },
+    {
+      "loop": "discovery_yield",
+      "stage": "class_probe",
+      "ok": true,
+      "detail": "new_cands=8 ready=10 structured_workers=5"
+    },
+    {
+      "loop": "coverage",
+      "stage": "class_probe",
+      "ok": true,
+      "detail": "deferred_to_coverage_probe untested=['ssrf_url_sink', 'authz_matrix', 'dom_client']"
+    },
+    {
+      "loop": "structure",
+      "stage": "class_probe",
+      "ok": true,
+      "detail": "json_ok"
+    },
+    {
+      "loop": "tool_use",
+      "stage": "class_probe",
+      "ok": true,
+      "detail": "calls=470"
+    },
+    {
+      "loop": "coverage",
+      "stage": "class_probe",
+      "ok": true,
+      "detail": "new_candidates=8"
+    },
+    {
+      "loop": "evidence",
+      "stage": "authz_logic",
+      "ok": true,
+      "detail": "ready=1"
+    },
+    {
+      "loop": "authz_coverage",
+      "stage": "authz_logic",
+      "ok": true,
+      "detail": "sens=22 authz_cands=1"
+    },
+    {
+      "loop": "structure",
+      "stage": "authz_logic",
+      "ok": false,
+      "detail": "no parseable JSON"
+    },
+    {
+      "loop": "tool_use",
+      "stage": "authz_logic",
+      "ok": true,
+      "detail": "calls=39"
+    },
+    {
+      "loop": "retry",
+      "stage": "authz_logic",
+      "ok": true,
+      "detail": "JSON/ledger/discovery retry: ['no parseable JSON']"
+    },
+    {
+      "loop": "evidence",
+      "stage": "authz_logic",
+      "ok": true,
+      "detail": "ready=1"
+    },
+    {
+      "loop": "authz_coverage",
+      "stage": "authz_logic",
+      "ok": true,
+      "detail": "sens=22 authz_cands=1"
+    },
+    {
+      "loop": "structure",
+      "stage": "authz_logic",
+      "ok": false,
+      "detail": "no parseable JSON"
+    },
+    {
+      "loop": "tool_use",
+      "stage": "authz_logic",
+      "ok": true,
+      "detail": "calls=16"
+    },
+    {
+      "loop": "authz_soft_skip",
+      "stage": "authz_logic",
+      "ok": true,
+      "detail": "no dual-actor structured result"
+    },
+    {
+      "loop": "evidence",
+      "stage": "component",
+      "ok": true,
+      "detail": "ready=4"
+    },
+    {
+      "loop": "structure",
+      "stage": "component",
+      "ok": true,
+      "detail": "json_ok"
+    },
+    {
+      "loop": "tool_use",
+      "stage": "component",
+      "ok": true,
+      "detail": "calls=58"
+    },
+    {
+      "loop": "evidence",
+      "stage": "validate_book",
+      "ok": true,
+      "detail": "booked=16 skipped_weak_or_incomplete_or_surface=4"
+    },
+    {
+      "loop": "evidence_quality",
+      "stage": "validate_book",
+      "ok": true,
+      "detail": "quality_fail=3 prior_defer=1 booked=16"
+    },
+    {
+      "loop": "coverage",
+      "stage": "finalize",
+      "ok": false,
+      "detail": "untested=['ssrf_url_sink', 'jwt_key_material', 'graphql', 'dom_client'] attempt_rate=0.5"
+    },
+    {
+      "loop": "discovery_yield",
+      "stage": "finalize",
+      "ok": false,
+      "detail": "structure_fail_n=2 discovery_soft_fail_n=0 stages=[] ready_by_stage={'surface': 0, 'prior_reverify': 3, 'auth_session': 3, 'class_probe': 10, 'authz_logic': 1, 'component': 4}"
+    }
+  ],
+  "notes_tail": [
+    "feedback[structure] authz_logic: fail no parseable JSON",
+    "feedback[tool_use] authz_logic: ok calls=16",
+    "authz_logic: soft-complete without structured JSON (bounded); continuing Task Graph",
+    "feedback[authz_soft_skip] authz_logic: ok no dual-actor structured result",
+    "authz_logic: live complete tools=55 structured=False surfaces=47",
+    "component: begin",
+    "coverage: injected 3 lines for stage component",
+    "component: identity-merge updated 9 existing candidate(s)",
+    "component: Component identified: DVWA v1.10 *Development* - deliberately vulnerable PHP/MySQL training application. No CVE/commercial component attacks applicable.",
+    "component: Stack fingerprint: Apache/2.4.25 (Debian) + PHP 7.0.30-0+deb9u1 + MariaDB 10.1.26-0+deb9u1.",
+    "component: High-value component paths (/encryptionkeys, /support/logs, /api-docs, /graphql, /metrics) all returned 404 - not part of DVWA stack.",
+    "component: SSRF coverage gap: /profile/image/url route exists but is non-functional (GET/POST 404). No SSRF sink exploitable in this DVWA configuration.",
+    "component: DOM XSS coverage gap: Vulnerable source code confirmed but browser tool unavailable for live execution proof. Can be upgraded to ready_to_book=true with browser execution.",
+    "component: No JWT endpoints, no NoSQL/Mongo-style APIs, no template engines (SSTI not applicable), no Java serialization - all refuted by PHP stack fingerprint.",
+    "component: Catalog IDs considered: ssrf_url_fetch (non-functional), dom_client (confirmed source, pending browser proof), jwt_advanced (no JWT endpoints), nosql_injection (no NoSQL APIs), file_upload (confirmed working RCE), sqli_injection (confirmed working).",
+    "component:summary Component stage on DVWA v1.10 Development (PHP/MySQL) at http://127.0.0.1:8081. Key component fingerprint: DVWA v1.10 *Development*, Apache/2.4.25 (Debian), PHP 7.0.30-0+deb9u1, MariaDB 10.1.26. All high-value cloud/enterprise component paths (/encryptionkeys, /support/logs, /api-docs, /graphql, /metrics) returned 404 — not part of this stack. /profile/image/url route exists (OPTIONS returns 200 with Allow: GET,HEAD,POST) but GET/POST return 404 and PUT/PATCH return 405, indicating the SSRF sink is not functional in this DVWA configuration. DOM XSS confirmed in source ('No protections, anything goes') but browser tool unavailable for live execution proof. CSP Bypass confirmed via allowlisted script sources including pastebin.com. Insecure CAPTCHA confirmed via step=2 bypass (source code shows step=2 skips reCAPTCHA verification entirely). Catalogue ids considered: ssrf_url_fetch, dom_client, jwt_advanced, nosql_injection (none applicable).",
+    "feedback[evidence] component: ok ready=4",
+    "feedback[structure] component: ok json_ok",
+    "feedback[tool_use] component: ok calls=58",
+    "component: live complete tools=58 structured=True surfaces=52",
+    "validate_book: quality skip [no_tool_effect] PHPIDS log file world-readable",
+    "validate_book: prior_defer [prior_defer_list_or_recon] Unrestricted file upload leading to remote code execution",
+    "validate_book: quality skip [xss_no_own_injection] Reflected XSS in name parameter",
+    "validate_book: quality skip [xss_no_own_injection] DOM Cross-Site Scripting (XSS) in default parameter",
+    "feedback[evidence] validate_book: ok booked=16 skipped_weak_or_incomplete_or_surface=4",
+    "feedback[evidence_quality] validate_book: ok quality_fail=3 prior_defer=1 booked=16",
+    "validate_book: booked 16 unique finding(s) from 20 candidates (surface rows not bookable)",
+    "feedback[coverage] finalize: fail untested=['ssrf_url_sink', 'jwt_key_material', 'graphql', 'dom_client'] attempt_rate=0.5",
+    "feedback[discovery_yield] finalize: fail structure_fail_n=2 discovery_soft_fail_n=0 stages=[] ready_by_stage={'surface': 0, 'prior_reverify': 3, 'auth_session': 3, 'class_probe': 10, 'authz_logic': 1, 'component': 4}",
+    "finalize: stages_done=['init', 'surface', 'prior_reverify', 'auth_session', 'class_probe', 'authz_logic', 'component', 'validate_book', 'finalize'] findings=16 surfaces=52 resources=23 actors=4 candidates=20 coverage_ledger=2 cov_attempt_rate=0.5 cov_close_rate=1.0 untested=['ssrf_url_sink', 'jwt_key_material', 'graphql', 'dom_client'] process_structure_fail=2 process_discovery_soft_fail=0 errors=0 feedback_ok=32 feedback_fail=4 cookies=['PHPSESSID', 'security', 'dvwaSession'] actor_jars=['admin', 'actor_a', 'actor_b'] agent_packages=['class_probe/pentest-ssrf', 'class_probe/pentest-auth-session', 'class_probe/pentest-file-upload', 'class_probe/pentest-xss', 'class_probe/pentest-sql-injection', 'class_probe/pentest-authz-logic'] forced=['pentest-ssrf', 'pentest-xss'] eff_workers=6 findings_with_precondition=12"
+  ]
+}

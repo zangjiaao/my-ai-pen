@@ -1,0 +1,10 @@
+{
+  "title": "Directory Listing - Sensitive Key Disclosure",
+  "location": "/encryptionkeys",
+  "severity": "high",
+  "proof": "Directory listing at /encryptionkeys exposes jwt.pub (RSA public key, 248 bytes) and premium.key (50 bytes, contains deluxe token: 1337133713371337.EA99A61D92D2955B1E9285B55BF2AD42)",
+  "stage": "class_probe",
+  "precondition": "",
+  "affected_actor": "",
+  "affected_resource": ""
+}

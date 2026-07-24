@@ -1,0 +1,10 @@
+{
+  "title": "Broken access control — cross-actor or unauthenticated object access",
+  "location": "/api/users",
+  "severity": "high",
+  "proof": "Authz matrix HTTP proof: anon GET /api/Users → 200 (sensitive collection); cross-actor GET both 200 on id=1 path=/api/Users; anon DELETE /api/Feedbacks/1 id=1 → 200; cross-actor GET both 200 on id=1 path=/api/Feedbacks; write_tried=True; cells_sample=[{\"resource\": \"/api/Users\", \"actor\": \"anon\", \"method\": \"GET\", \"status\": 200, \"id\": null}, {\"resource\": \"/api/Users\", \"actor\": \"actor_a\", \"method\": \"GET\", \"status\": 200, \"id\": null}, {\"resource\": \"/api/Users\", \"actor\": \"actor_b\", \"method\": \"GET\", \"status\": 200, \"id\": null}, {\"resource\": \"/api/Users/1\", \"actor\": \"anon\", \"method\": \"GET\", \"status\": 200, \"id\": \"1\"}, {\"resource\": \"/api/Users/1\", \"actor\": \"actor_a\", \"method\": \"GET\", \"status\": 200, \"id\": \"1\"}, {\"resource\": \"/api/Users/1\", \"actor\": \"actor_b\", \"method\": \"GET\", \"status\": 200, \"id\": \"1\"}, {\"resource\": \"/api/Users/1\", \"actor\": \"anon\", \"method\": \"PUT\", \"status\": 401, \"id\": \"1\"}, {\"resource\": \"/api/Users/1\", \"actor\": \"anon\", \"method\": \"DELETE\", \"status\": 401, \"id\": \"1\"}]",
+  "stage": "authz_logic",
+  "precondition": "dual-actor sessions actor_a/actor_b and/or unauthenticated",
+  "affected_actor": "actor_b",
+  "affected_resource": "/api/Users"
+}

@@ -1,0 +1,28 @@
+{
+  "id": "f_1784845749494_586d03",
+  "action": "confirm",
+  "title": "SQL Injection in Login Endpoint (Auth Bypass)",
+  "severity": "critical",
+  "finding_kind": "vuln",
+  "location": "http://127.0.0.1:3010/rest/user/login",
+  "url": "http://127.0.0.1:3010/rest/user/login",
+  "description": "The login endpoint is vulnerable to SQL injection. Using payload \"' OR 1=1 --\" as the email field bypasses authentication and returns a valid JWT token for the first user in the database (typically admin). This allows full authentication bypass and admin access.",
+  "poc": "POST /rest/user/login with {\"email\":\"' OR 1=1 --\",\"password\":\"test\"} returns 200 with JWT token and user data, demonstrating SQL injection authentication bypass in the email field.",
+  "proof": "Proof: POST /rest/user/login with body {\"email\":\"' OR 1=1 --\",\"password\":\"test\"} returns HTTP 200 with JSON containing token, bid, and email fields. In contrast, invalid credentials return HTTP 401 with {\"error\":\"Invalid email or password\"}. This demonstrates SQL injection authentication bypass. The SQLi payload causes the query to return the first user (admin) regardless of password.",
+  "how_captured": "script: tmp/test_requests.sh",
+  "evidence_ids": [
+    "ev_1784845749485_535ff8"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784845749485_535ff8",
+      "excerpt": "Proof: POST /rest/user/login with body {\"email\":\"' OR 1=1 --\",\"password\":\"test\"} returns HTTP 200 with JSON containing token, bid, and email fields. In contrast, invalid credentials return HTTP 401 with {\"error\":\"Invalid email or password\"}. This demonstrates SQL injection authentication bypass. The SQLi payload causes the query to return the first user (admin) regardless of password.",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "script: tmp/test_requests.sh"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "3010",
+  "created_at": "2026-07-23T22:29:09.494Z"
+}

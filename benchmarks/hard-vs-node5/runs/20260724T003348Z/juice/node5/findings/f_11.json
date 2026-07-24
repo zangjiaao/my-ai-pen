@@ -1,0 +1,10 @@
+{
+  "title": "2FA Bypass via Self-Service TOTP Secret Exposure",
+  "location": "/rest/2fa/setup",
+  "severity": "high",
+  "proof": "1) Registered user worker_user_1744857566@test.com (POST /api/Users). 2) Logged in, got JWT. 3) GET /rest/2fa/status returned secret=24OLLTAN5W5BECFM3I2QZFJUJ7IDCDJ4 and setupToken (even though setup=false). 4) Generated TOTP 388777 via Python TOTP implementation. 5) POST /rest/2fa/setup with {password, initialToken:388777, setupToken} returned 200 (2FA enabled). 6) POST /rest/user/login returned totp_token_required with tmpToken. 7) POST /rest/2fa/verify with {tmpToken, totpToken:854142} returned new JWT. 8) GET /rest/user/whoami with new token returned user identity (id:40, email:worker_user_1744857566@test.com) proving authenticated session.",
+  "stage": "class_probe",
+  "precondition": "",
+  "affected_actor": "",
+  "affected_resource": ""
+}

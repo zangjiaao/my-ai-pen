@@ -1,0 +1,46 @@
+=== Unauthenticated access test ===
+--- http://127.0.0.1:8080/login.php ---
+HTTP 200 | Content-Length: 1523 | First line: 
+--- http://127.0.0.1:8080/setup.php ---
+HTTP 200 | Content-Length: 4075 | First line: 
+--- http://127.0.0.1:8080/security.php ---
+HTTP 302 | Content-Length: 0 | First line: 
+--- http://127.0.0.1:8080/vulnerabilities/sqli/ ---
+HTTP 302 | Content-Length: 0 | First line: 
+--- http://127.0.0.1:8080/vulnerabilities/exec/ ---
+HTTP 302 | Content-Length: 0 | First line: 
+--- http://127.0.0.1:8080/vulnerabilities/csrf/ ---
+HTTP 302 | Content-Length: 0 | First line: 
+--- http://127.0.0.1:8080/vulnerabilities/brute/ ---
+HTTP 302 | Content-Length: 0 | First line: 
+--- http://127.0.0.1:8080/vulnerabilities/fi/ ---
+HTTP 302 | Content-Length: 0 | First line: 
+--- http://127.0.0.1:8080/vulnerabilities/upload/ ---
+HTTP 302 | Content-Length: 0 | First line: 
+--- http://127.0.0.1:8080/vulnerabilities/captcha/ ---
+HTTP 302 | Content-Length: 0 | First line: 
+--- http://127.0.0.1:8080/vulnerabilities/sqli_blind/ ---
+HTTP 302 | Content-Length: 0 | First line: 
+--- http://127.0.0.1:8080/vulnerabilities/weak_id/ ---
+HTTP 302 | Content-Length: 0 | First line: 
+--- http://127.0.0.1:8080/vulnerabilities/xss_r/ ---
+HTTP 302 | Content-Length: 0 | First line: 
+--- http://127.0.0.1:8080/vulnerabilities/xss_s/ ---
+HTTP 302 | Content-Length: 0 | First line: 
+--- http://127.0.0.1:8080/vulnerabilities/xss_d/ ---
+HTTP 302 | Content-Length: 0 | First line: 
+--- http://127.0.0.1:8080/vulnerabilities/csp/ ---
+HTTP 302 | Content-Length: 0 | First line: 
+--- http://127.0.0.1:8080/vulnerabilities/javascript/ ---
+HTTP 302 | Content-Length: 0 | First line: 
+--- http://127.0.0.1:8080/phpinfo.php ---
+HTTP 302 | Content-Length: 0 | First line: 
+--- http://127.0.0.1:8080/config/config.inc.php.bak ---
+HTTP 200 | Content-Length: 1859 | First line: <?php
+--- http://127.0.0.1:8080/instructions.php ---
+HTTP 200 | Content-Length: 14014 | First line: 
+--- http://127.0.0.1:8080/about.php ---
+HTTP 200 | Content-Length: 4840 | First line: 
+--- http://127.0.0.1:8080/ids_log.php ---
+HTTP 302 | Content-Length: 0 | First line: 
+=== Done ===

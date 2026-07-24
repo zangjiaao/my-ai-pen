@@ -1,0 +1,10 @@
+{
+  "title": "Directory listing of /hackable/users/ publicly accessible - username enumeration",
+  "location": "/hackable/users",
+  "severity": "medium",
+  "proof": "Anonymous GET http://127.0.0.1:8081/hackable/users/ returns HTTP 200 with HTML page listing files: admin.jpg, gordonb.jpg, pablo.jpg, smithy.jpg, 1337.jpg. All five avatar files also downloadable without authentication (HTTP 200, sizes 2.9-4.3KB).",
+  "stage": "class_probe",
+  "precondition": "",
+  "affected_actor": "",
+  "affected_resource": ""
+}

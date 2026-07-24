@@ -1,0 +1,21 @@
+{
+  "id": "ev_1784861790623_76d41b",
+  "type": "tool_output",
+  "source_tool": "finding",
+  "summary": "Database credentials disclosure via config backup file @ http://127.0.0.1:8080/config/config.inc.php.bak",
+  "data": {
+    "kind": "proof",
+    "observation": "$_DVWA[ 'db_server' ]   = '127.0.0.1';\n$_DVWA[ 'db_database' ] = 'dvwa';\n$_DVWA[ 'db_user' ]     = 'app';\n$_DVWA[ 'db_password' ] = 'vulnerables';",
+    "proof": "$_DVWA[ 'db_server' ]   = '127.0.0.1';\n$_DVWA[ 'db_database' ] = 'dvwa';\n$_DVWA[ 'db_user' ]     = 'app';\n$_DVWA[ 'db_password' ] = 'vulnerables';",
+    "path_or_url": "http://127.0.0.1:8080/config/config.inc.php.bak",
+    "location": "http://127.0.0.1:8080/config/config.inc.php.bak",
+    "title": "Database credentials disclosure via config backup file",
+    "stdout": "$_DVWA[ 'db_server' ]   = '127.0.0.1';\n$_DVWA[ 'db_database' ] = 'dvwa';\n$_DVWA[ 'db_user' ]     = 'app';\n$_DVWA[ 'db_password' ] = 'vulnerables';",
+    "body_preview": "$_DVWA[ 'db_server' ]   = '127.0.0.1';\n$_DVWA[ 'db_database' ] = 'dvwa';\n$_DVWA[ 'db_user' ]     = 'app';\n$_DVWA[ 'db_password' ] = 'vulnerables';",
+    "capture_via": "subagent",
+    "how_captured": "via subagent",
+    "source_tool_act": "subagent",
+    "act_summary": "subagent hard-stage:component candidate: Database credentials disclosure via config backup file"
+  },
+  "created_at": "2026-07-24T02:56:30.623Z"
+}

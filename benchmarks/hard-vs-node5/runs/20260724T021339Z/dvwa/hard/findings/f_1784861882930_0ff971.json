@@ -1,0 +1,28 @@
+{
+  "id": "f_1784861882930_0ff971",
+  "action": "confirm",
+  "title": "Blind SQL Injection in /vulnerabilities/sqli_blind/",
+  "severity": "critical",
+  "finding_kind": "vuln",
+  "location": "http://127.0.0.1:8080/vulnerabilities/sqli_blind/",
+  "url": "http://127.0.0.1:8080/vulnerabilities/sqli_blind/",
+  "description": "Boolean-based blind SQL injection in the id parameter. Differential responses for true (1=1) vs false (1=2) conditions allow character-by-character data extraction.",
+  "poc": "Probe request against http://127.0.0.1:8080/vulnerabilities/sqli_blind/; observed proving result from prior stage handoff: When id=1' AND 1=1-- -: 'User ID exists in database.' When id=1' AND 1=2-- -: 'User ID is MISSING from database.' Differential response confirms blind SQL injection.",
+  "proof": "When id=1' AND 1=1-- -: 'User ID exists in database.' When id=1' AND 1=2-- -: 'User ID is MISSING from database.' Differential response confirms blind SQL injection.",
+  "how_captured": "script: proof_blind_sqli.txt",
+  "evidence_ids": [
+    "ev_1784861882134_e05de1"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784861882134_e05de1",
+      "excerpt": "When id=1' AND 1=1-- -: 'User ID exists in database.' When id=1' AND 1=2-- -: 'User ID is MISSING from database.' Differential response confirms blind SQL injection.",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "script: proof_blind_sqli.txt"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "8080",
+  "created_at": "2026-07-24T02:58:02.930Z"
+}

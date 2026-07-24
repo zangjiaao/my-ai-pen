@@ -1,0 +1,10 @@
+{
+  "title": "Missing Authentication on Product API (BFLA)",
+  "location": "/api/products/{id}",
+  "severity": "high",
+  "proof": "PUT /api/products/1 with body {\"name\":\"hacked\",\"price\":0.01} returned HTTP 200 with name changed to 'hacked' and price changed to 0.01. No authentication token was required. POST /api/products also allowed creating products (HTTP 201) without auth. Only DELETE required auth (401).",
+  "stage": "class_probe",
+  "precondition": "",
+  "affected_actor": "",
+  "affected_resource": ""
+}

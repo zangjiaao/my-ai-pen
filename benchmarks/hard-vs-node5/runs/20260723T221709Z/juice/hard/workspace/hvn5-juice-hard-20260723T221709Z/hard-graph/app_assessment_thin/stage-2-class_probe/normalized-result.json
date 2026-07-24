@@ -1,0 +1,546 @@
+{
+  "ok": true,
+  "summary": "Completed hypothesis-driven probe of OWASP Juice Shop at http://127.0.0.1:3010. Identified 11 confirmed vulnerabilities across auth/session, injection, access control, XSS, and exposure/misconfig categories. Key findings: SQL injection in login endpoint grants admin access; JWT with alg:none accepted without verification; password change endpoint does not require current password; mass assignment via registration allows admin account creation; password hashes leaked via /rest/memories; IDOR on baskets; stored XSS via product reviews; directory listings and sensitive file exposure. Dead ends: SSRF, SSTI, Open Redirect, CSRF bypass, file upload bypass, command injection, .git exposure.",
+  "summaryProvided": true,
+  "candidates": [
+    {
+      "location": "http://127.0.0.1:3010/"
+    },
+    {
+      "location": "http://127.0.0.1:3010/rest/user/login"
+    },
+    {
+      "location": "http://127.0.0.1:3010/rest/user/change-password"
+    },
+    {
+      "location": "http://127.0.0.1:3010/rest/products/1/reviews"
+    },
+    {
+      "location": "http://127.0.0.1:3010/rest/basket/{id}"
+    },
+    {
+      "location": "http://127.0.0.1:3010/api/Users"
+    },
+    {
+      "location": "http://127.0.0.1:3010/rest/memories"
+    },
+    {
+      "location": "http://127.0.0.1:3010/rest/products/search"
+    },
+    {
+      "location": "http://127.0.0.1:3010/rest/user/security-question"
+    },
+    {
+      "location": "http://127.0.0.1:3010/api/Challenges"
+    },
+    {
+      "location": "http://127.0.0.1:3010/ftp/"
+    },
+    {
+      "location": "http://127.0.0.1:3010/encryptionkeys/jwt.pub"
+    },
+    {
+      "location": "http://127.0.0.1:3010/#/administration"
+    },
+    {
+      "location": "http://127.0.0.1:3010/#/forgot-password"
+    },
+    {
+      "location": "http://127.0.0.1:3010/redirect"
+    }
+  ],
+  "surfaces": [
+    {
+      "location": "http://127.0.0.1:3010/",
+      "kind": "webapp",
+      "note": "OWASP Juice Shop Angular SPA. Angular, Express ^4.22.1. SPA client-side routing (hash-based)."
+    },
+    {
+      "location": "http://127.0.0.1:3010/rest/user/login",
+      "kind": "api",
+      "note": "SQL injection vulnerable. ' OR 1=1-- logs in as admin. Returns JWT token with user data including password hash."
+    },
+    {
+      "location": "http://127.0.0.1:3010/api/Users",
+      "kind": "api",
+      "note": "Authenticated endpoint. Lists all users. Accepts POST for user registration with mass assignment (role, deluxeToken)."
+    },
+    {
+      "location": "http://127.0.0.1:3010/rest/memories",
+      "kind": "api",
+      "note": "Public endpoint. Leaks MD5 password hashes for all users in embedded user data."
+    },
+    {
+      "location": "http://127.0.0.1:3010/rest/user/change-password",
+      "kind": "api",
+      "note": "GET endpoint. Changes password without current password if 'current' param omitted. Requires valid JWT."
+    },
+    {
+      "location": "http://127.0.0.1:3010/rest/products/1/reviews",
+      "kind": "api",
+      "note": "PUT endpoint for product reviews. Stored XSS via message field. No sanitization."
+    },
+    {
+      "location": "http://127.0.0.1:3010/rest/basket/{id}",
+      "kind": "api",
+      "note": "IDOR. Any authenticated user can access any basket by ID."
+    },
+    {
+      "location": "http://127.0.0.1:3010/api/Cards",
+      "kind": "api",
+      "note": "Authenticated endpoint. Returns saved credit card data (masked numbers). Accessible with forged JWT."
+    },
+    {
+      "location": "http://127.0.0.1:3010/api/Feedbacks",
+      "kind": "api",
+      "note": "Public endpoint. Requires captcha for POST. Sanitizes HTML from comments."
+    },
+    {
+      "location": "http://127.0.0.1:3010/api/Challenges",
+      "kind": "api",
+      "note": "Public endpoint. Lists all challenge definitions with keys and difficulty levels."
+    },
+    {
+      "location": "http://127.0.0.1:3010/rest/products/search",
+      "kind": "api",
+      "note": "Public search endpoint. SQL injection confirmed (SQLITE_ERROR on single quote)."
+    },
+    {
+      "location": "http://127.0.0.1:3010/rest/user/security-question",
+      "kind": "api",
+      "note": "Information disclosure. Returns security question for any email address."
+    },
+    {
+      "location": "http://127.0.0.1:3010/rest/captcha",
+      "kind": "api",
+      "note": "Returns math captcha challenge. Used for feedback submission."
+    },
+    {
+      "location": "http://127.0.0.1:3010/encryptionkeys/",
+      "kind": "directory",
+      "note": "Directory listing. Contains jwt.pub (RSA public key) and premium.key."
+    },
+    {
+      "location": "http://127.0.0.1:3010/encryptionkeys/jwt.pub",
+      "kind": "static-file",
+      "note": "RSA public key for JWT verification. Enables JWT algorithm confusion attacks."
+    },
+    {
+      "location": "http://127.0.0.1:3010/encryptionkeys/premium.key",
+      "kind": "static-file",
+      "note": "Premium key: 1337133713371337.EA99A61D92D2955B1E9285B55BF2AD42"
+    },
+    {
+      "location": "http://127.0.0.1:3010/ftp/",
+      "kind": "directory",
+      "note": "Directory listing. Contains confidential documents (acquisitions.md, announcement_encrypted.md, coupons_2013.md.bak, etc.)"
+    },
+    {
+      "location": "http://127.0.0.1:3010/support/logs/",
+      "kind": "directory",
+      "note": "Directory listing. Contains access.log.2026-07-23 and audit.json."
+    },
+    {
+      "location": "http://127.0.0.1:3010/support/logs/access.log.2026-07-23",
+      "kind": "static-file",
+      "note": "Access log exposing all request URLs and IP addresses."
+    },
+    {
+      "location": "http://127.0.0.1:3010/support/logs/audit.json",
+      "kind": "static-file",
+      "note": "Audit configuration with MD5 hash type setting and file hashes."
+    },
+    {
+      "location": "http://127.0.0.1:3010/api/Products",
+      "kind": "api",
+      "note": "Public endpoint. Returns all product data."
+    },
+    {
+      "location": "http://127.0.0.1:3010/api/Feedbacks",
+      "kind": "api",
+      "note": "Public endpoint. Returns user feedback with masked emails."
+    },
+    {
+      "location": "http://127.0.0.1:3010/api/Quantitys",
+      "kind": "api",
+      "note": "Public endpoint. Returns product inventory quantities."
+    },
+    {
+      "location": "http://127.0.0.1:3010/api/SecurityQuestions",
+      "kind": "api",
+      "note": "Public endpoint. Returns all security questions."
+    },
+    {
+      "location": "http://127.0.0.1:3010/rest/languages",
+      "kind": "api",
+      "note": "Public endpoint. Returns available languages."
+    },
+    {
+      "location": "http://127.0.0.1:3010/socket.io/",
+      "kind": "websocket",
+      "note": "Socket.IO WebSocket endpoint."
+    },
+    {
+      "location": "http://127.0.0.1:3010/rest/continue-code",
+      "kind": "api",
+      "note": "Returns continue code string for progress persistence."
+    },
+    {
+      "location": "http://127.0.0.1:3010/video",
+      "kind": "static-file",
+      "note": "Video file (2.2MB mp4)."
+    }
+  ],
+  "facts": [
+    {
+      "summary": "SQL Injection in /rest/user/login: ' OR 1=1-- as email logs in as admin@juice-sh.op, returns admin JWT"
+    },
+    {
+      "summary": "JWT with alg:none accepted: server does not verify signature when algorithm is 'none'"
+    },
+    {
+      "summary": "Password change at /rest/user/change-password does not require current password if 'current' param omitted"
+    },
+    {
+      "summary": "POST /api/Users accepts role=admin during registration, creating admin accounts"
+    },
+    {
+      "summary": "POST /api/Users accepts deluxeToken parameter for premium access"
+    },
+    {
+      "summary": "/rest/memories leaks MD5 password hashes: 9283f1b2e9669749081963be0462e466 (bjoern@owasp.org), 6edd9d726cbdc873c539e41ae8757b8c (bjoern.kimminich@gmail.com), 0192023a7bbd73250516f069df18b500 (admin@juice-sh.op), 00479e957b6b42c459ee5746478e4d45 (john@juice-sh.op), 402f1c4a75e316afec5a6ea63147f739 (emma@juice-sh.op)"
+    },
+    {
+      "summary": "JWT payload contains password hash in plaintext: admin hash = 0192023a7bbd73250516f069df18b500"
+    },
+    {
+      "summary": "PUT /rest/products/1/reviews stores XSS payload <script>alert(1)</script> without sanitization"
+    },
+    {
+      "summary": "IDOR: normal user can access admin basket via /rest/basket/1 with any valid JWT"
+    },
+    {
+      "summary": "IDOR: any authenticated user can list all users via /api/Users"
+    },
+    {
+      "summary": "Directory listing enabled at /ftp/, /encryptionkeys/, /support/logs/"
+    },
+    {
+      "summary": "JWT RSA public key exposed at /encryptionkeys/jwt.pub"
+    },
+    {
+      "summary": "Premium key exposed: 1337133713371337.EA99A61D92D2955B1E9285B55BF2AD42"
+    },
+    {
+      "summary": "/rest/user/security-question?email=admin@juice-sh.op reveals security question: Mother's maiden name? (id=2)"
+    },
+    {
+      "summary": "Access logs available at /support/logs/access.log.2026-07-23"
+    },
+    {
+      "summary": "Audit config at /support/logs/audit.json shows MD5 hash type and file hashes"
+    },
+    {
+      "summary": "CAPTCHA bypass not confirmed: captchaId SQL injection returns 'Wrong answer'"
+    },
+    {
+      "summary": "Product search SQLi confirmed: single quote causes SQLITE_ERROR, UNION causes syntax error"
+    },
+    {
+      "summary": "Feedback sanitizes HTML: <img> tags stripped from comment before storage"
+    },
+    {
+      "summary": "Basket item limit enforced: 'You can order only up to 5 items of this product'"
+    },
+    {
+      "summary": "/rest/continue-code returns: 1r2ba7wRJxDY8VB5PABZhQtvcaSJtjc77hQMtKyI3jAqlkpzgj9n6eZ4EymM"
+    },
+    {
+      "summary": "Login API rejects NoSQL injection: TypeError when email is an object"
+    },
+    {
+      "summary": "Open redirect not exploitable: /redirect returns 406 for unrecognized targets"
+    },
+    {
+      "summary": "File upload endpoint at /profile/image/file checks file type - returns 'Illegal file type' for non-images"
+    },
+    {
+      "summary": "SSTI not found: {{7*7}} not evaluated in any tested endpoint"
+    }
+  ],
+  "deadends": [
+    "ssrf: No internal request endpoints identified; profile image URL update not testable via REST API",
+    "ssti: Login and search endpoints don't evaluate template expressions ({{7*7}}, ${7*7}, #{7*7})",
+    "open_redirect: /redirect validates target URL and returns 406 Not Acceptable for unrecognized targets",
+    "csrf: Password change without auth header blocked (IP banned); rate limiting/anti-automation in place",
+    "file_upload: /profile/image/file rejects non-image files with 'Illegal file type'; SVG files also blocked",
+    "git_exposure: /.git/HEAD returns SPA HTML (Angular catch-all), not actual git data",
+    "env_exposure: /.env returns SPA HTML, not environment configuration",
+    "command_injection: No command injection vectors identified in tested endpoints",
+    "nosql_injection_login: Login endpoint rejects object-type parameters with TypeError",
+    "captcha_bypass: SQL injection on captchaId parameter returns 'Wrong answer to CAPTCHA'"
+  ],
+  "artifacts": [],
+  "raw": {
+    "ok": true,
+    "summary": "Completed hypothesis-driven probe of OWASP Juice Shop at http://127.0.0.1:3010. Identified 11 confirmed vulnerabilities across auth/session, injection, access control, XSS, and exposure/misconfig categories. Key findings: SQL injection in login endpoint grants admin access; JWT with alg:none accepted without verification; password change endpoint does not require current password; mass assignment via registration allows admin account creation; password hashes leaked via /rest/memories; IDOR on baskets; stored XSS via product reviews; directory listings and sensitive file exposure. Dead ends: SSRF, SSTI, Open Redirect, CSRF bypass, file upload bypass, command injection, .git exposure.",
+    "surfaces": [
+      {
+        "location": "http://127.0.0.1:3010/",
+        "kind": "webapp",
+        "note": "OWASP Juice Shop Angular SPA. Angular, Express ^4.22.1. SPA client-side routing (hash-based)."
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/user/login",
+        "kind": "api",
+        "note": "SQL injection vulnerable. ' OR 1=1-- logs in as admin. Returns JWT token with user data including password hash."
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Users",
+        "kind": "api",
+        "note": "Authenticated endpoint. Lists all users. Accepts POST for user registration with mass assignment (role, deluxeToken)."
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/memories",
+        "kind": "api",
+        "note": "Public endpoint. Leaks MD5 password hashes for all users in embedded user data."
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/user/change-password",
+        "kind": "api",
+        "note": "GET endpoint. Changes password without current password if 'current' param omitted. Requires valid JWT."
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/products/1/reviews",
+        "kind": "api",
+        "note": "PUT endpoint for product reviews. Stored XSS via message field. No sanitization."
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/basket/{id}",
+        "kind": "api",
+        "note": "IDOR. Any authenticated user can access any basket by ID."
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Cards",
+        "kind": "api",
+        "note": "Authenticated endpoint. Returns saved credit card data (masked numbers). Accessible with forged JWT."
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Feedbacks",
+        "kind": "api",
+        "note": "Public endpoint. Requires captcha for POST. Sanitizes HTML from comments."
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Challenges",
+        "kind": "api",
+        "note": "Public endpoint. Lists all challenge definitions with keys and difficulty levels."
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/products/search",
+        "kind": "api",
+        "note": "Public search endpoint. SQL injection confirmed (SQLITE_ERROR on single quote)."
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/user/security-question",
+        "kind": "api",
+        "note": "Information disclosure. Returns security question for any email address."
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/captcha",
+        "kind": "api",
+        "note": "Returns math captcha challenge. Used for feedback submission."
+      },
+      {
+        "location": "http://127.0.0.1:3010/encryptionkeys/",
+        "kind": "directory",
+        "note": "Directory listing. Contains jwt.pub (RSA public key) and premium.key."
+      },
+      {
+        "location": "http://127.0.0.1:3010/encryptionkeys/jwt.pub",
+        "kind": "static-file",
+        "note": "RSA public key for JWT verification. Enables JWT algorithm confusion attacks."
+      },
+      {
+        "location": "http://127.0.0.1:3010/encryptionkeys/premium.key",
+        "kind": "static-file",
+        "note": "Premium key: 1337133713371337.EA99A61D92D2955B1E9285B55BF2AD42"
+      },
+      {
+        "location": "http://127.0.0.1:3010/ftp/",
+        "kind": "directory",
+        "note": "Directory listing. Contains confidential documents (acquisitions.md, announcement_encrypted.md, coupons_2013.md.bak, etc.)"
+      },
+      {
+        "location": "http://127.0.0.1:3010/support/logs/",
+        "kind": "directory",
+        "note": "Directory listing. Contains access.log.2026-07-23 and audit.json."
+      },
+      {
+        "location": "http://127.0.0.1:3010/support/logs/access.log.2026-07-23",
+        "kind": "static-file",
+        "note": "Access log exposing all request URLs and IP addresses."
+      },
+      {
+        "location": "http://127.0.0.1:3010/support/logs/audit.json",
+        "kind": "static-file",
+        "note": "Audit configuration with MD5 hash type setting and file hashes."
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Products",
+        "kind": "api",
+        "note": "Public endpoint. Returns all product data."
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Feedbacks",
+        "kind": "api",
+        "note": "Public endpoint. Returns user feedback with masked emails."
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Quantitys",
+        "kind": "api",
+        "note": "Public endpoint. Returns product inventory quantities."
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/SecurityQuestions",
+        "kind": "api",
+        "note": "Public endpoint. Returns all security questions."
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/languages",
+        "kind": "api",
+        "note": "Public endpoint. Returns available languages."
+      },
+      {
+        "location": "http://127.0.0.1:3010/socket.io/",
+        "kind": "websocket",
+        "note": "Socket.IO WebSocket endpoint."
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/continue-code",
+        "kind": "api",
+        "note": "Returns continue code string for progress persistence."
+      },
+      {
+        "location": "http://127.0.0.1:3010/video",
+        "kind": "static-file",
+        "note": "Video file (2.2MB mp4)."
+      }
+    ],
+    "candidates": [
+      {
+        "location": "http://127.0.0.1:3010/",
+        "kind": "webapp",
+        "note": "Angular SPA - potential client-side vulnerabilities (DOM XSS, Angular template injection)"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/user/login",
+        "kind": "api",
+        "note": "SQL injection confirmed. Priv esc via UNION injection possible."
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/user/change-password",
+        "kind": "api",
+        "note": "Vulnerable - password change without current password. Further exploration of bypass scenarios needed."
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/products/1/reviews",
+        "kind": "api",
+        "note": "Stored XSS confirmed. Check if rendered in Angular app without sanitization."
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/basket/{id}",
+        "kind": "api",
+        "note": "IDOR confirmed. Test if can manipulate other users' baskets."
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Users",
+        "kind": "api",
+        "note": "Mass assignment confirmed. Can create admin accounts and set deluxeToken."
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/memories",
+        "kind": "api",
+        "note": "Password hash leak confirmed. Hashes are MD5 - many likely crackable."
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/products/search",
+        "kind": "api",
+        "note": "SQL injection surface. Further UNION-based exploitation possible."
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/user/security-question",
+        "kind": "api",
+        "note": "Information disclosure. Could be used to enumerate valid emails."
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Challenges",
+        "kind": "api",
+        "note": "Reveals all challenge metadata including mitigation URLs."
+      },
+      {
+        "location": "http://127.0.0.1:3010/ftp/",
+        "kind": "directory",
+        "note": "Sensitive files exposed. May contain credentials or other secrets."
+      },
+      {
+        "location": "http://127.0.0.1:3010/encryptionkeys/jwt.pub",
+        "kind": "static-file",
+        "note": "Enables JWT algorithm confusion and key reuse attacks."
+      },
+      {
+        "location": "http://127.0.0.1:3010/#/administration",
+        "kind": "webapp",
+        "note": "Angular route for admin panel. Requires browser testing."
+      },
+      {
+        "location": "http://127.0.0.1:3010/#/forgot-password",
+        "kind": "webapp",
+        "note": "Password reset flow. May have security answer enumeration."
+      },
+      {
+        "location": "http://127.0.0.1:3010/redirect",
+        "kind": "api",
+        "note": "Redirect endpoint validates target (406 on invalid). May have bypass."
+      }
+    ],
+    "facts": [
+      "SQL Injection in /rest/user/login: ' OR 1=1-- as email logs in as admin@juice-sh.op, returns admin JWT",
+      "JWT with alg:none accepted: server does not verify signature when algorithm is 'none'",
+      "Password change at /rest/user/change-password does not require current password if 'current' param omitted",
+      "POST /api/Users accepts role=admin during registration, creating admin accounts",
+      "POST /api/Users accepts deluxeToken parameter for premium access",
+      "/rest/memories leaks MD5 password hashes: 9283f1b2e9669749081963be0462e466 (bjoern@owasp.org), 6edd9d726cbdc873c539e41ae8757b8c (bjoern.kimminich@gmail.com), 0192023a7bbd73250516f069df18b500 (admin@juice-sh.op), 00479e957b6b42c459ee5746478e4d45 (john@juice-sh.op), 402f1c4a75e316afec5a6ea63147f739 (emma@juice-sh.op)",
+      "JWT payload contains password hash in plaintext: admin hash = 0192023a7bbd73250516f069df18b500",
+      "PUT /rest/products/1/reviews stores XSS payload <script>alert(1)</script> without sanitization",
+      "IDOR: normal user can access admin basket via /rest/basket/1 with any valid JWT",
+      "IDOR: any authenticated user can list all users via /api/Users",
+      "Directory listing enabled at /ftp/, /encryptionkeys/, /support/logs/",
+      "JWT RSA public key exposed at /encryptionkeys/jwt.pub",
+      "Premium key exposed: 1337133713371337.EA99A61D92D2955B1E9285B55BF2AD42",
+      "/rest/user/security-question?email=admin@juice-sh.op reveals security question: Mother's maiden name? (id=2)",
+      "Access logs available at /support/logs/access.log.2026-07-23",
+      "Audit config at /support/logs/audit.json shows MD5 hash type and file hashes",
+      "CAPTCHA bypass not confirmed: captchaId SQL injection returns 'Wrong answer'",
+      "Product search SQLi confirmed: single quote causes SQLITE_ERROR, UNION causes syntax error",
+      "Feedback sanitizes HTML: <img> tags stripped from comment before storage",
+      "Basket item limit enforced: 'You can order only up to 5 items of this product'",
+      "/rest/continue-code returns: 1r2ba7wRJxDY8VB5PABZhQtvcaSJtjc77hQMtKyI3jAqlkpzgj9n6eZ4EymM",
+      "Login API rejects NoSQL injection: TypeError when email is an object",
+      "Open redirect not exploitable: /redirect returns 406 for unrecognized targets",
+      "File upload endpoint at /profile/image/file checks file type - returns 'Illegal file type' for non-images",
+      "SSTI not found: {{7*7}} not evaluated in any tested endpoint"
+    ],
+    "deadends": [
+      "ssrf: No internal request endpoints identified; profile image URL update not testable via REST API",
+      "ssti: Login and search endpoints don't evaluate template expressions ({{7*7}}, ${7*7}, #{7*7})",
+      "open_redirect: /redirect validates target URL and returns 406 Not Acceptable for unrecognized targets",
+      "csrf: Password change without auth header blocked (IP banned); rate limiting/anti-automation in place",
+      "file_upload: /profile/image/file rejects non-image files with 'Illegal file type'; SVG files also blocked",
+      "git_exposure: /.git/HEAD returns SPA HTML (Angular catch-all), not actual git data",
+      "env_exposure: /.env returns SPA HTML, not environment configuration",
+      "command_injection: No command injection vectors identified in tested endpoints",
+      "nosql_injection_login: Login endpoint rejects object-type parameters with TypeError",
+      "captcha_bypass: SQL injection on captchaId parameter returns 'Wrong answer to CAPTCHA'"
+    ]
+  }
+}

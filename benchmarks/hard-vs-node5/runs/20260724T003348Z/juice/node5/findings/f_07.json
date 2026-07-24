@@ -1,0 +1,10 @@
+{
+  "title": "Unauthenticated order history disclosure via /rest/order-history",
+  "location": "/rest/order-history",
+  "severity": "medium",
+  "proof": "GET /rest/order-history without auth returns all orders: {\"status\":\"success\",\"data\":[{\"orderId\":\"b642-a1ad8ed4f3015990\",\"email\":\"t*st@t*st.c*m\",\"totalPrice\":17.98,\"products\":[...]},...]}",
+  "stage": "class_probe",
+  "precondition": "",
+  "affected_actor": "",
+  "affected_resource": ""
+}

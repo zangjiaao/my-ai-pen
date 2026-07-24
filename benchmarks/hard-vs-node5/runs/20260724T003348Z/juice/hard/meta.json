@@ -1,0 +1,22 @@
+{
+  "arm": "hard",
+  "campaign": "hard-vs-node5-juice-p1-post69",
+  "map": 59,
+  "ticket": 65,
+  "spec": 69,
+  "graphId": "hard_app_assessment",
+  "graphFile": "graphs/hard/app_assessment.json",
+  "graphNote": "mature Expert Hard primary after #69 \u2014 not thin, not soft app_assessment",
+  "target": "http://127.0.0.1:3010",
+  "container": "juice-hvn5-hard",
+  "modelProvider": "deepseek",
+  "model": "deepseek-v4-flash",
+  "nodeSha": "3e66b7b9952c6257c4653f66e99201b12507bdc3",
+  "branch": "research/node5-lab-invocation-juice-dvwa",
+  "start": "2026-07-24T00:33:50Z",
+  "end": "2026-07-24T01:10:38Z",
+  "wallClockSec": 2200,
+  "terminalStatus": "completed",
+  "stopReason": "hard_graph_completed",
+  "bookedFindings": 18
+}

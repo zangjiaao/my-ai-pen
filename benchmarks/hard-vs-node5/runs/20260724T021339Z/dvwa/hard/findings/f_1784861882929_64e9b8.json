@@ -1,0 +1,28 @@
+{
+  "id": "f_1784861882929_64e9b8",
+  "action": "confirm",
+  "title": "SQL Injection in /vulnerabilities/sqli/ (UNION-based)",
+  "severity": "critical",
+  "finding_kind": "vuln",
+  "location": "http://127.0.0.1:8080/vulnerabilities/sqli/",
+  "url": "http://127.0.0.1:8080/vulnerabilities/sqli/",
+  "description": "The id parameter is vulnerable to UNION-based SQL injection allowing extraction of arbitrary data from the MySQL database, including database user and database name.",
+  "poc": "Probe request against http://127.0.0.1:8080/vulnerabilities/sqli/; observed proving result from prior stage handoff: SQL injection confirmed via boolean condition 1' OR '1'='1. The query returns user data when condition is true.",
+  "proof": "SQL injection confirmed via boolean condition 1' OR '1'='1. The query returns user data when condition is true.",
+  "how_captured": "script: proof_sqli_boolean.txt",
+  "evidence_ids": [
+    "ev_1784861882133_c88e25"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784861882133_c88e25",
+      "excerpt": "SQL injection confirmed via boolean condition 1' OR '1'='1. The query returns user data when condition is true.",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "script: proof_sqli_boolean.txt"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "8080",
+  "created_at": "2026-07-24T02:58:02.929Z"
+}

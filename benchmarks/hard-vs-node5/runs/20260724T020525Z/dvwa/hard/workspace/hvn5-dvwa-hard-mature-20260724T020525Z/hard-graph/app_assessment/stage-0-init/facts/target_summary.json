@@ -1,0 +1,6 @@
+{
+  "fact_key": "target_summary",
+  "summary": "Target: http://127.0.0.1:8080 (DVWA instance)",
+  "body": "Target: http://127.0.0.1:8080\nScope: 127.0.0.1, localhost, host.docker.internal (per RoE allow list)\nRoE: app_assessment, no post-ex host takeover off-box.\nType: Damn Vulnerable Web Application (DVWA) - known web security training app.\nStage: init - no live recon yet.",
+  "updated_at": "2026-07-24T02:06:07.639Z"
+}

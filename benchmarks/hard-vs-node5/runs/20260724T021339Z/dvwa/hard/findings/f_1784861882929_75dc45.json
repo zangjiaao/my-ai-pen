@@ -1,0 +1,28 @@
+{
+  "id": "f_1784861882929_75dc45",
+  "action": "confirm",
+  "title": "Missing security headers (HSTS, X-Frame-Options, X-Content-Type-Options, CSP)",
+  "severity": "low",
+  "finding_kind": "vuln",
+  "location": "http://127.0.0.1:8080/login.php",
+  "url": "http://127.0.0.1:8080/login.php",
+  "description": "Response headers lack Strict-Transport-Security, X-Frame-Options, X-Content-Type-Options, Content-Security-Policy, and Referrer-Policy, making the application susceptible to clickjacking, MIME-type sniffing, and other attacks.",
+  "poc": "Probe request against http://127.0.0.1:8080/login.php; observed proving result from prior stage handoff: Set-Cookie: PHPSESSID=oh7b9qbtd9c0dueninuaf8i9h1; path=/ Set-Cookie: security=low",
+  "proof": "Set-Cookie: PHPSESSID=oh7b9qbtd9c0dueninuaf8i9h1; path=/\nSet-Cookie: security=low",
+  "how_captured": "script: proof_missing_headers.txt",
+  "evidence_ids": [
+    "ev_1784861882133_7e5ee0"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784861882133_7e5ee0",
+      "excerpt": "Set-Cookie: PHPSESSID=oh7b9qbtd9c0dueninuaf8i9h1; path=/\nSet-Cookie: security=low",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "script: proof_missing_headers.txt"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "8080",
+  "created_at": "2026-07-24T02:58:02.929Z"
+}

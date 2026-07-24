@@ -1,0 +1,61 @@
+{
+  "ok": true,
+  "summary": "Tested the DVWA brute force endpoint (low security). The login form uses GET method with username/password parameters and has no rate limiting, no CAPTCHA, no account lockout. Clear response differentiation exists: failed login returns '<pre><br />Username and/or password incorrect.</pre>' while successful login returns '<p>Welcome to the password protected area {username}</p><img src=... />'. Brute force enumeration discovered 3 valid user credentials: gordonb:abc123, pablo:letmein, smithy:password. The source code confirms direct GET parameter usage with no protection mechanisms. The help page explicitly states 'The developer has completely missed out any protections methods'.",
+  "surfaces": [
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/brute/",
+      "kind": "form",
+      "params": ["username", "password", "Login"],
+      "auth": "session"
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/view_source.php?id=brute&security=low",
+      "kind": "page",
+      "params": ["id", "security"],
+      "auth": "session"
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/view_help.php?id=brute&security=low",
+      "kind": "page",
+      "params": ["id", "security"],
+      "auth": "session"
+    }
+  ],
+  "candidates": [
+    {
+      "title": "Brute Force - No Rate Limiting on Login Form",
+      "location": "http://127.0.0.1:8080/vulnerabilities/brute/",
+      "claim": "The login form has no rate limiting, no CAPTCHA, and no account lockout, enabling unlimited password guessing. Attackers can enumerate valid credentials via the clear success/failure response differentiation.",
+      "proof_excerpt": "session response body diff: failed='<pre><br />Username and/or password incorrect.</pre>' vs success='<p>Welcome to the password protected area gordonb</p><img src=\"/hackable/users/gordonb.jpg\" />'",
+      "poc_hint": "1. Send GET request to http://127.0.0.1:8080/vulnerabilities/brute/?username=USER&password=PASS&Login=Login with valid session cookies. 2. Check response body: if it contains 'Welcome to the password protected area' the credentials are valid; if 'Username and/or password incorrect.' they are invalid. 3. No delay or lockout observed after many rapid requests. 4. Example found: gordonb:abc123 returns 'Welcome to the password protected area gordonb' while nonexistent:wrong returns 'Username and/or password incorrect.'"
+    },
+    {
+      "title": "Credentials Discovered via Brute Force",
+      "location": "http://127.0.0.1:8080/vulnerabilities/brute/",
+      "claim": "Valid user credentials were enumerated through brute force testing against the unprotected login form.",
+      "proof_excerpt": "Brute force script output: 'SUCCESS: gordonb:abc123 (displayed: gordonb)\\nSUCCESS: pablo:letmein (displayed: pablo)\\nSUCCESS: smithy:password (displayed: smithy)'",
+      "poc_hint": "Run automated script testing common username/password pairs against the endpoint. Each success returns 'Welcome to the password protected area USERNAME' in the response body. Discovered: gordonb:abc123, pablo:letmein, smithy:password. Total: 3 valid credentials found from ~200 attempts."
+    }
+  ],
+  "facts": [
+    {
+      "key": "brute_force_vulnerable",
+      "summary": "Brute force endpoint has no rate limiting, no CAPTCHA, no account lockout at low security level"
+    },
+    {
+      "key": "found_credentials",
+      "summary": "Found 3 valid user credentials via brute force: gordonb:abc123, pablo:letmein, smithy:password"
+    },
+    {
+      "key": "response_differentiation",
+      "summary": "Clear success/failure response differentiation enables automated brute force"
+    }
+  ],
+  "deadends": [
+    "Admin password not found with tested wordlist (password, admin, 123456, letmein, root, admin123, etc.)",
+    "No SQL injection tested as separate finding; focus was on brute force enumeration only"
+  ],
+  "artifacts": [
+    "workspace/scripts/brute_force.sh"
+  ]
+}

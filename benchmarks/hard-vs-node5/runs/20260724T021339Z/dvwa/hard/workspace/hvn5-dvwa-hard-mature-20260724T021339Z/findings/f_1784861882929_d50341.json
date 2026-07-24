@@ -1,0 +1,28 @@
+{
+  "id": "f_1784861882929_d50341",
+  "action": "confirm",
+  "title": "Setup database reset page accessible without authentication",
+  "severity": "high",
+  "finding_kind": "vuln",
+  "location": "http://127.0.0.1:8080/setup.php",
+  "url": "http://127.0.0.1:8080/setup.php",
+  "description": "The /setup.php page which can create/reset the database and reset admin credentials to 'admin//password' is accessible without any authentication. An unauthenticated attacker could reset the database and credentials.",
+  "poc": "Probe request against http://127.0.0.1:8080/setup.php; observed proving result from prior stage handoff: <h1>Database Setup <img src=\"dvwa/images/spanner.png\" /></h1> <p>Click on the 'Create / Reset Database' button below to create or reset your database.<br />",
+  "proof": "<h1>Database Setup <img src=\"dvwa/images/spanner.png\" /></h1>\n<p>Click on the 'Create / Reset Database' button below to create or reset your database.<br />",
+  "how_captured": "script: proof_setup_noauth.txt",
+  "evidence_ids": [
+    "ev_1784861882133_dab1a5"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784861882133_dab1a5",
+      "excerpt": "<h1>Database Setup <img src=\"dvwa/images/spanner.png\" /></h1>\n<p>Click on the 'Create / Reset Database' button below to create or reset your database.<br />",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "script: proof_setup_noauth.txt"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "8080",
+  "created_at": "2026-07-24T02:58:02.929Z"
+}

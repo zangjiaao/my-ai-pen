@@ -1,0 +1,1 @@
+UNION SELECT user(),database() returns current database user and database name in the response fields.

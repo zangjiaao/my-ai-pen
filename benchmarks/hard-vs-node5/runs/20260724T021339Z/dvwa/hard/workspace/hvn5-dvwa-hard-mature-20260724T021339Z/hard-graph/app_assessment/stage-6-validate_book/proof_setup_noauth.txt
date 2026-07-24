@@ -1,0 +1,2 @@
+<h1>Database Setup <img src="dvwa/images/spanner.png" /></h1>
+<p>Click on the 'Create / Reset Database' button below to create or reset your database.<br />

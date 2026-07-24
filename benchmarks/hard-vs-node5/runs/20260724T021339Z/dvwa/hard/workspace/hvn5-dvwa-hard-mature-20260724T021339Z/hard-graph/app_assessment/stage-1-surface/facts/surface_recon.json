@@ -1,0 +1,6 @@
+{
+  "fact_key": "surface_recon",
+  "summary": "DVWA surface recon complete - all endpoints mapped",
+  "body": "Full surface mapping of DVWA at http://127.0.0.1:8080 completed. Key findings include: login form (CSRF protected), 14 vulnerability modules, phpinfo.php, config backup file with DB credentials, directory listing enabled on several directories, IDS log viewer, and security level settings.",
+  "updated_at": "2026-07-24T02:17:39.870Z"
+}

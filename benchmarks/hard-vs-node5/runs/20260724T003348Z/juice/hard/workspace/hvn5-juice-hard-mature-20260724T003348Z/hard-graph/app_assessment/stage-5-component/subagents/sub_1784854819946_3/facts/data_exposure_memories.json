@@ -1,0 +1,6 @@
+{
+  "fact_key": "data_exposure_memories",
+  "summary": "User data exposure via /rest/memories/ endpoint",
+  "body": "The /rest/memories/ endpoint returns user records including password hashes, email addresses, roles, deluxeTokens, etc. - all without authentication.",
+  "updated_at": "2026-07-24T01:02:33.030Z"
+}

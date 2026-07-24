@@ -1,0 +1,28 @@
+{
+  "id": "f_1784861846942_489c94",
+  "action": "confirm",
+  "title": "PHP info disclosure",
+  "severity": "medium",
+  "finding_kind": "vuln",
+  "location": "http://127.0.0.1:8080/phpinfo.php",
+  "url": "http://127.0.0.1:8080/phpinfo.php",
+  "description": "The phpinfo.php page is accessible, exposing detailed PHP configuration including system paths, enabled modules, and environment variables.",
+  "poc": "Probe request against http://127.0.0.1:8080/phpinfo.php; observed proving result from prior stage handoff: PHP Version 7.0.30-0+deb9u1",
+  "proof": "PHP Version 7.0.30-0+deb9u1",
+  "how_captured": "script: proof_phpinfo.txt",
+  "evidence_ids": [
+    "ev_1784861845276_555d94"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784861845276_555d94",
+      "excerpt": "PHP Version 7.0.30-0+deb9u1",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "script: proof_phpinfo.txt"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "8080",
+  "created_at": "2026-07-24T02:57:26.942Z"
+}

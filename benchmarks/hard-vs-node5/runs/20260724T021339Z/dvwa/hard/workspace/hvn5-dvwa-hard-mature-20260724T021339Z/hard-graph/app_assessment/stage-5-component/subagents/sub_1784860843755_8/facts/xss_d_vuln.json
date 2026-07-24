@@ -1,0 +1,6 @@
+{
+  "fact_key": "xss_d_vuln",
+  "summary": "DOM XSS vulnerability in /vulnerabilities/xss_d/ - unsanitized default parameter written to DOM",
+  "body": "The page /vulnerabilities/xss_d/ contains client-side JavaScript that reads the 'default' parameter from document.location.href and writes it directly to the DOM via document.write() without sanitization.\n\nVulnerable code (from page source):\n```\n<script>\n    if (document.location.href.indexOf(\"default=\") >= 0) {\n        var lang = document.location.href.substring(document.location.href.indexOf(\"default=\")+8);\n        document.write(\"<option value='\" + lang + \"'>\" + decodeURI(lang) + \"</option>\");\n        document.write(\"<option value='' disabled='disabled'>----</option>\");\n    }\n    \n    document.write(\"<option value='English'>English</option>\");\n    ...\n</script>\n```\n\nThe `lang` variable contains the raw URL substring after `default=` and is written directly to the value attribute without HTML encoding. An attacker can break out of the attribute and inject arbitrary HTML/JS.\n\nPHP source (low level): `# No protections, anything goes`\n\nAttack URL: /vulnerabilities/xss_d/?default=English</option></select><script>alert(document.cookie)</script>",
+  "updated_at": "2026-07-24T02:50:33.999Z"
+}

@@ -1,0 +1,28 @@
+{
+  "ok": true,
+  "summary": "Init stage complete. Target understood: DVWA at http://127.0.0.1:8080. Scope restricted to 127.0.0.1/localhost/host.docker.internal. RoE: app_assessment, no off-box takeover. No live recon performed yet; surfaces and candidates remain empty pending next stage.",
+  "summaryProvided": true,
+  "candidates": [],
+  "surfaces": [],
+  "facts": [
+    {
+      "key": "target_summary",
+      "summary": "Target: http://127.0.0.1:8080 (DVWA instance)"
+    }
+  ],
+  "deadends": [],
+  "artifacts": [],
+  "raw": {
+    "ok": true,
+    "summary": "Init stage complete. Target understood: DVWA at http://127.0.0.1:8080. Scope restricted to 127.0.0.1/localhost/host.docker.internal. RoE: app_assessment, no off-box takeover. No live recon performed yet; surfaces and candidates remain empty pending next stage.",
+    "surfaces": [],
+    "candidates": [],
+    "facts": [
+      {
+        "key": "target_summary",
+        "summary": "Target: http://127.0.0.1:8080 (DVWA instance)"
+      }
+    ],
+    "deadends": []
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "id": "f_1784861882928_8b9c73",
+  "action": "confirm",
+  "title": "Weak sequential session IDs in dvwaSession cookie",
+  "severity": "medium",
+  "finding_kind": "auth",
+  "location": "http://127.0.0.1:8080/vulnerabilities/weak_id/",
+  "url": "http://127.0.0.1:8080/vulnerabilities/weak_id/",
+  "description": "The /vulnerabilities/weak_id/ endpoint generates predictable sequential integers as session identifiers (dvwaSession=1, 2, 3...). An attacker can enumerate session IDs and hijack active sessions.",
+  "poc": "Probe request against http://127.0.0.1:8080/vulnerabilities/weak_id/; observed proving result from prior stage handoff: Set-Cookie: dvwaSession=1 Set-Cookie: dvwaSession=2 Set-Cookie: dvwaSession=3 Set-Cookie: dvwaSession=4 Set-Cookie: dvwaSession=5",
+  "proof": "Set-Cookie: dvwaSession=1\nSet-Cookie: dvwaSession=2\nSet-Cookie: dvwaSession=3\nSet-Cookie: dvwaSession=4\nSet-Cookie: dvwaSession=5",
+  "how_captured": "script: proof_weak_session.txt",
+  "evidence_ids": [
+    "ev_1784861882133_e4b50b"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784861882133_e4b50b",
+      "excerpt": "Set-Cookie: dvwaSession=1\nSet-Cookie: dvwaSession=2\nSet-Cookie: dvwaSession=3\nSet-Cookie: dvwaSession=4\nSet-Cookie: dvwaSession=5",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "script: proof_weak_session.txt"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "8080",
+  "created_at": "2026-07-24T02:58:02.928Z"
+}

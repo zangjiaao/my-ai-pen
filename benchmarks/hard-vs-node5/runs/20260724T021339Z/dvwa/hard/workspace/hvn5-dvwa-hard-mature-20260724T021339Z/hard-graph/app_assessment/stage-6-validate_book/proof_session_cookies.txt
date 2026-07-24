@@ -1,0 +1,2 @@
+Set-Cookie: PHPSESSID=oh7b9qbtd9c0dueninuaf8i9h1; path=/
+Set-Cookie: security=low

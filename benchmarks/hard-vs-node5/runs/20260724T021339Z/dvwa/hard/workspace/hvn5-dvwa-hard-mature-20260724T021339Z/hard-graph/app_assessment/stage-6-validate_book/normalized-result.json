@@ -1,0 +1,537 @@
+{
+  "ok": true,
+  "summary": "validate_book stage completed. Reviewed 17 unique candidates from component stage handoff. Booked 17 evidence-backed findings via finding(confirm). The following candidates from the summary lacked proof_excerpts in the candidate list and are marked as bookable_unbooked: File Upload (RCE), Insecure CAPTCHA bypass, Reflected XSS, Stored XSS, CSP Bypass, JavaScript token bypass, DOM XSS. These were mentioned in the component stage summary but not documented with verbatim proof_excerpts in the candidates array.",
+  "summaryProvided": true,
+  "candidates": [
+    {
+      "title": "File Upload - Unrestricted file upload leading to RCE",
+      "location": "http://127.0.0.1:8080/vulnerabilities/upload/",
+      "poc_hint": "The /vulnerabilities/upload/ endpoint allows uploading arbitrary PHP files without proper validation, enabling remote code execution. Requires authentication and low security level."
+    },
+    {
+      "title": "Insecure CAPTCHA - step parameter bypass",
+      "location": "http://127.0.0.1:8080/vulnerabilities/captcha/",
+      "poc_hint": "The CAPTCHA validation can be bypassed by manipulating the 'step' parameter or reusing the same captcha answer multiple times."
+    },
+    {
+      "title": "Reflected XSS in /vulnerabilities/xss_r/",
+      "location": "http://127.0.0.1:8080/vulnerabilities/xss_r/",
+      "poc_hint": "The name parameter in POST to /vulnerabilities/xss_r/ reflects user input without sanitization. Submit name=<script>alert(1)</script> to confirm."
+    },
+    {
+      "title": "Stored XSS in /vulnerabilities/xss_s/",
+      "location": "http://127.0.0.1:8080/vulnerabilities/xss_s/",
+      "poc_hint": "The guestbook at /vulnerabilities/xss_s/ stores user input (name and message fields) without sanitization, which is displayed to all visitors."
+    },
+    {
+      "title": "CSP Bypass via pastebin.com whitelist",
+      "location": "http://127.0.0.1:8080/vulnerabilities/csp/",
+      "poc_hint": "Content-Security-Policy whitelists pastebin.com, allowing an attacker to host malicious JS on Pastebin and execute it in the victim's browser."
+    },
+    {
+      "title": "JavaScript token bypass in /vulnerabilities/javascript/",
+      "location": "http://127.0.0.1:8080/vulnerabilities/javascript/",
+      "poc_hint": "The JavaScript token validation can be bypassed by decoding the obfuscated token generation logic in the JavaScript source code."
+    },
+    {
+      "title": "DOM XSS in /vulnerabilities/xss_d/",
+      "location": "http://127.0.0.1:8080/vulnerabilities/xss_d/",
+      "poc_hint": "The default parameter in the URL reflects into the page DOM without server-side sanitization, enabling client-side XSS."
+    }
+  ],
+  "surfaces": [
+    {
+      "location": "http://127.0.0.1:8080/login.php",
+      "kind": "auth",
+      "params": [
+        "username",
+        "password",
+        "user_token",
+        "Login"
+      ]
+    },
+    {
+      "location": "http://127.0.0.1:8080/logout.php",
+      "kind": "auth"
+    },
+    {
+      "location": "http://127.0.0.1:8080/setup.php",
+      "kind": "form",
+      "params": [
+        "create_db",
+        "user_token"
+      ]
+    },
+    {
+      "location": "http://127.0.0.1:8080/security.php",
+      "kind": "form",
+      "params": [
+        "security",
+        "seclev_submit",
+        "user_token"
+      ]
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/brute/",
+      "kind": "form"
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/exec/",
+      "kind": "form"
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/csrf/",
+      "kind": "form"
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/fi/",
+      "kind": "form",
+      "params": [
+        "page"
+      ]
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/upload/",
+      "kind": "form"
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/captcha/",
+      "kind": "form"
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/sqli/",
+      "kind": "form"
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/sqli_blind/",
+      "kind": "form"
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/weak_id/",
+      "kind": "form"
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/xss_d/",
+      "kind": "client"
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/xss_r/",
+      "kind": "form"
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/xss_s/",
+      "kind": "form"
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/csp/",
+      "kind": "form"
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/javascript/",
+      "kind": "client"
+    },
+    {
+      "location": "http://127.0.0.1:8080/phpinfo.php",
+      "kind": "file"
+    },
+    {
+      "location": "http://127.0.0.1:8080/config/config.inc.php.bak",
+      "kind": "file"
+    },
+    {
+      "location": "http://127.0.0.1:8080/ids_log.php",
+      "kind": "file"
+    },
+    {
+      "location": "http://127.0.0.1:8080/about.php",
+      "kind": "file"
+    },
+    {
+      "location": "http://127.0.0.1:8080/instructions.php",
+      "kind": "file"
+    },
+    {
+      "location": "http://127.0.0.1:8080/robots.txt",
+      "kind": "misc"
+    },
+    {
+      "location": "http://127.0.0.1:8080/config/config.inc.php.dist",
+      "kind": "file"
+    },
+    {
+      "location": "http://127.0.0.1:8080/config/",
+      "kind": "dir"
+    },
+    {
+      "location": "http://127.0.0.1:8080/index.php",
+      "kind": "page"
+    },
+    {
+      "location": "http://127.0.0.1:8080/hackable/uploads/",
+      "kind": "dir"
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/view_source.php",
+      "kind": "page",
+      "params": [
+        "id",
+        "security"
+      ]
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/view_source_all.php",
+      "kind": "page",
+      "params": [
+        "id"
+      ]
+    },
+    {
+      "location": "http://127.0.0.1:8080/vulnerabilities/view_help.php",
+      "kind": "page",
+      "params": [
+        "id",
+        "security"
+      ]
+    },
+    {
+      "location": "http://127.0.0.1:8080/",
+      "kind": "page"
+    },
+    {
+      "location": "http://127.0.0.1:8080/dvwa/includes/",
+      "kind": "dir"
+    },
+    {
+      "location": "http://127.0.0.1:8080/dvwa/js/",
+      "kind": "dir"
+    },
+    {
+      "location": "http://127.0.0.1:8080/dvwa/css/",
+      "kind": "dir"
+    },
+    {
+      "location": "http://127.0.0.1:8080/external/",
+      "kind": "dir"
+    },
+    {
+      "location": "http://127.0.0.1:8080/docs/",
+      "kind": "dir"
+    },
+    {
+      "location": "http://127.0.0.1:8080/DVWA%20Documentation.pdf",
+      "kind": "file"
+    },
+    {
+      "location": "http://127.0.0.1:8080/phpmyadmin/",
+      "kind": "dir"
+    },
+    {
+      "location": "http://127.0.0.1:8080/security.php",
+      "kind": "form",
+      "params": [
+        "security",
+        "seclev_submit",
+        "user_token"
+      ]
+    }
+  ],
+  "facts": [
+    {
+      "summary": "Booked 17 unique findings from handoff candidates"
+    }
+  ],
+  "deadends": [
+    "http://127.0.0.1:8080/.git/config (404)",
+    "http://127.0.0.1:8080/server-info (404)",
+    "http://127.0.0.1:8080/server-status (403)",
+    "http://127.0.0.1:8080/.htaccess (403)",
+    "http://127.0.0.1:8080/.htpasswd (403)",
+    "Session fixation via URL parameter PHPSESSID: PHP does not accept session IDs via GET (server generates new session ID)",
+    "Session fixation via cookie injection: Server regenerates unknown session IDs (mitigated by PHP session handler)",
+    "No password change endpoint outside /vulnerabilities/csrf/ (404 on password.php, change_password.php, changepass.php, account.php, user.php, profile.php)",
+    "http://127.0.0.1:8080/.git/config (404)",
+    "http://127.0.0.1:8080/server-info (404)",
+    "http://127.0.0.1:8080/server-status (403)",
+    "http://127.0.0.1:8080/.htaccess (403)",
+    "http://127.0.0.1:8080/.htpasswd (403)",
+    "http://127.0.0.1:8080/vulnerabilities/xss_d/ (DOM XSS is client-side only, requires browser to verify; no server-side reflection of payload)",
+    "Session fixation via URL parameter PHPSESSID: PHP does not accept session IDs via GET",
+    "No additional password change endpoints found outside /vulnerabilities/csrf/"
+  ],
+  "artifacts": [],
+  "raw": {
+    "ok": true,
+    "summary": "validate_book stage completed. Reviewed 17 unique candidates from component stage handoff. Booked 17 evidence-backed findings via finding(confirm). The following candidates from the summary lacked proof_excerpts in the candidate list and are marked as bookable_unbooked: File Upload (RCE), Insecure CAPTCHA bypass, Reflected XSS, Stored XSS, CSP Bypass, JavaScript token bypass, DOM XSS. These were mentioned in the component stage summary but not documented with verbatim proof_excerpts in the candidates array.",
+    "surfaces": [
+      {
+        "location": "http://127.0.0.1:8080/login.php",
+        "kind": "auth",
+        "params": [
+          "username",
+          "password",
+          "user_token",
+          "Login"
+        ]
+      },
+      {
+        "location": "http://127.0.0.1:8080/logout.php",
+        "kind": "auth"
+      },
+      {
+        "location": "http://127.0.0.1:8080/setup.php",
+        "kind": "form",
+        "params": [
+          "create_db",
+          "user_token"
+        ]
+      },
+      {
+        "location": "http://127.0.0.1:8080/security.php",
+        "kind": "form",
+        "params": [
+          "security",
+          "seclev_submit",
+          "user_token"
+        ]
+      },
+      {
+        "location": "http://127.0.0.1:8080/vulnerabilities/brute/",
+        "kind": "form"
+      },
+      {
+        "location": "http://127.0.0.1:8080/vulnerabilities/exec/",
+        "kind": "form"
+      },
+      {
+        "location": "http://127.0.0.1:8080/vulnerabilities/csrf/",
+        "kind": "form"
+      },
+      {
+        "location": "http://127.0.0.1:8080/vulnerabilities/fi/",
+        "kind": "form",
+        "params": [
+          "page"
+        ]
+      },
+      {
+        "location": "http://127.0.0.1:8080/vulnerabilities/upload/",
+        "kind": "form"
+      },
+      {
+        "location": "http://127.0.0.1:8080/vulnerabilities/captcha/",
+        "kind": "form"
+      },
+      {
+        "location": "http://127.0.0.1:8080/vulnerabilities/sqli/",
+        "kind": "form"
+      },
+      {
+        "location": "http://127.0.0.1:8080/vulnerabilities/sqli_blind/",
+        "kind": "form"
+      },
+      {
+        "location": "http://127.0.0.1:8080/vulnerabilities/weak_id/",
+        "kind": "form"
+      },
+      {
+        "location": "http://127.0.0.1:8080/vulnerabilities/xss_d/",
+        "kind": "client"
+      },
+      {
+        "location": "http://127.0.0.1:8080/vulnerabilities/xss_r/",
+        "kind": "form"
+      },
+      {
+        "location": "http://127.0.0.1:8080/vulnerabilities/xss_s/",
+        "kind": "form"
+      },
+      {
+        "location": "http://127.0.0.1:8080/vulnerabilities/csp/",
+        "kind": "form"
+      },
+      {
+        "location": "http://127.0.0.1:8080/vulnerabilities/javascript/",
+        "kind": "client"
+      },
+      {
+        "location": "http://127.0.0.1:8080/phpinfo.php",
+        "kind": "file"
+      },
+      {
+        "location": "http://127.0.0.1:8080/config/config.inc.php.bak",
+        "kind": "file"
+      },
+      {
+        "location": "http://127.0.0.1:8080/ids_log.php",
+        "kind": "file"
+      },
+      {
+        "location": "http://127.0.0.1:8080/about.php",
+        "kind": "file"
+      },
+      {
+        "location": "http://127.0.0.1:8080/instructions.php",
+        "kind": "file"
+      },
+      {
+        "location": "http://127.0.0.1:8080/robots.txt",
+        "kind": "misc"
+      },
+      {
+        "location": "http://127.0.0.1:8080/config/config.inc.php.dist",
+        "kind": "file"
+      },
+      {
+        "location": "http://127.0.0.1:8080/config/",
+        "kind": "dir"
+      },
+      {
+        "location": "http://127.0.0.1:8080/index.php",
+        "kind": "page"
+      },
+      {
+        "location": "http://127.0.0.1:8080/hackable/uploads/",
+        "kind": "dir"
+      },
+      {
+        "location": "http://127.0.0.1:8080/vulnerabilities/view_source.php",
+        "kind": "page",
+        "params": [
+          "id",
+          "security"
+        ]
+      },
+      {
+        "location": "http://127.0.0.1:8080/vulnerabilities/view_source_all.php",
+        "kind": "page",
+        "params": [
+          "id"
+        ]
+      },
+      {
+        "location": "http://127.0.0.1:8080/vulnerabilities/view_help.php",
+        "kind": "page",
+        "params": [
+          "id",
+          "security"
+        ]
+      },
+      {
+        "location": "http://127.0.0.1:8080/",
+        "kind": "page"
+      },
+      {
+        "location": "http://127.0.0.1:8080/dvwa/includes/",
+        "kind": "dir"
+      },
+      {
+        "location": "http://127.0.0.1:8080/dvwa/js/",
+        "kind": "dir"
+      },
+      {
+        "location": "http://127.0.0.1:8080/dvwa/css/",
+        "kind": "dir"
+      },
+      {
+        "location": "http://127.0.0.1:8080/external/",
+        "kind": "dir"
+      },
+      {
+        "location": "http://127.0.0.1:8080/docs/",
+        "kind": "dir"
+      },
+      {
+        "location": "http://127.0.0.1:8080/DVWA%20Documentation.pdf",
+        "kind": "file"
+      },
+      {
+        "location": "http://127.0.0.1:8080/phpmyadmin/",
+        "kind": "dir"
+      },
+      {
+        "location": "http://127.0.0.1:8080/security.php",
+        "kind": "form",
+        "params": [
+          "security",
+          "seclev_submit",
+          "user_token"
+        ]
+      }
+    ],
+    "candidates": [
+      {
+        "title": "File Upload - Unrestricted file upload leading to RCE",
+        "location": "http://127.0.0.1:8080/vulnerabilities/upload/",
+        "proof_excerpt": "",
+        "poc_hint": "The /vulnerabilities/upload/ endpoint allows uploading arbitrary PHP files without proper validation, enabling remote code execution. Requires authentication and low security level.",
+        "bookable_unbooked": true
+      },
+      {
+        "title": "Insecure CAPTCHA - step parameter bypass",
+        "location": "http://127.0.0.1:8080/vulnerabilities/captcha/",
+        "proof_excerpt": "",
+        "poc_hint": "The CAPTCHA validation can be bypassed by manipulating the 'step' parameter or reusing the same captcha answer multiple times.",
+        "bookable_unbooked": true
+      },
+      {
+        "title": "Reflected XSS in /vulnerabilities/xss_r/",
+        "location": "http://127.0.0.1:8080/vulnerabilities/xss_r/",
+        "proof_excerpt": "",
+        "poc_hint": "The name parameter in POST to /vulnerabilities/xss_r/ reflects user input without sanitization. Submit name=<script>alert(1)</script> to confirm.",
+        "bookable_unbooked": true
+      },
+      {
+        "title": "Stored XSS in /vulnerabilities/xss_s/",
+        "location": "http://127.0.0.1:8080/vulnerabilities/xss_s/",
+        "proof_excerpt": "",
+        "poc_hint": "The guestbook at /vulnerabilities/xss_s/ stores user input (name and message fields) without sanitization, which is displayed to all visitors.",
+        "bookable_unbooked": true
+      },
+      {
+        "title": "CSP Bypass via pastebin.com whitelist",
+        "location": "http://127.0.0.1:8080/vulnerabilities/csp/",
+        "proof_excerpt": "",
+        "poc_hint": "Content-Security-Policy whitelists pastebin.com, allowing an attacker to host malicious JS on Pastebin and execute it in the victim's browser.",
+        "bookable_unbooked": true
+      },
+      {
+        "title": "JavaScript token bypass in /vulnerabilities/javascript/",
+        "location": "http://127.0.0.1:8080/vulnerabilities/javascript/",
+        "proof_excerpt": "",
+        "poc_hint": "The JavaScript token validation can be bypassed by decoding the obfuscated token generation logic in the JavaScript source code.",
+        "bookable_unbooked": true
+      },
+      {
+        "title": "DOM XSS in /vulnerabilities/xss_d/",
+        "location": "http://127.0.0.1:8080/vulnerabilities/xss_d/",
+        "proof_excerpt": "",
+        "poc_hint": "The default parameter in the URL reflects into the page DOM without server-side sanitization, enabling client-side XSS.",
+        "bookable_unbooked": true
+      }
+    ],
+    "facts": [
+      {
+        "fact_key": "validate_book_summary",
+        "summary": "Booked 17 unique findings from handoff candidates"
+      }
+    ],
+    "deadends": [
+      "http://127.0.0.1:8080/.git/config (404)",
+      "http://127.0.0.1:8080/server-info (404)",
+      "http://127.0.0.1:8080/server-status (403)",
+      "http://127.0.0.1:8080/.htaccess (403)",
+      "http://127.0.0.1:8080/.htpasswd (403)",
+      "Session fixation via URL parameter PHPSESSID: PHP does not accept session IDs via GET (server generates new session ID)",
+      "Session fixation via cookie injection: Server regenerates unknown session IDs (mitigated by PHP session handler)",
+      "No password change endpoint outside /vulnerabilities/csrf/ (404 on password.php, change_password.php, changepass.php, account.php, user.php, profile.php)",
+      "http://127.0.0.1:8080/.git/config (404)",
+      "http://127.0.0.1:8080/server-info (404)",
+      "http://127.0.0.1:8080/server-status (403)",
+      "http://127.0.0.1:8080/.htaccess (403)",
+      "http://127.0.0.1:8080/.htpasswd (403)",
+      "http://127.0.0.1:8080/vulnerabilities/xss_d/ (DOM XSS is client-side only, requires browser to verify; no server-side reflection of payload)",
+      "Session fixation via URL parameter PHPSESSID: PHP does not accept session IDs via GET",
+      "No additional password change endpoints found outside /vulnerabilities/csrf/"
+    ]
+  }
+}

@@ -1,0 +1,1 @@
+When id=1' AND 1=1-- -: 'User ID exists in database.' When id=1' AND 1=2-- -: 'User ID is MISSING from database.' Differential response confirms blind SQL injection.

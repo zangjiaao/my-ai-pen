@@ -1,0 +1,6 @@
+{
+  "fact_key": "surface_authentication",
+  "summary": "Authentication surfaces at login.php, logout.php, setup.php, security.php",
+  "body": "## Authentication Endpoints\n\n1. **login.php** (GET/POST)\n   - Form fields: username (text), password (password), user_token (hidden CSRF), Login (submit)\n   - POST to same with valid CSRF token + admin:password logs in (302 → index.php)\n   - Sets cookies: PHPSESSID, security=low\n\n2. **logout.php** (GET)\n   - Destroys session, redirects to login.php\n\n3. **setup.php** (GET/POST)\n   - Create/Reset Database button with CSRF token (user_token)\n   - Reveals creds: MySQL user=app, db=dvwa, host=127.0.0.1\n\n4. **security.php** (GET/POST)\n   - Security level dropdown (low/medium/high/impossible) with CSRF token\n   - PHPIDS enable/disable\n   - Links to ids_log.php",
+  "updated_at": "2026-07-24T02:11:24.716Z"
+}

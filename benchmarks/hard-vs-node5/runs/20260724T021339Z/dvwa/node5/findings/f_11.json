@@ -1,0 +1,10 @@
+{
+  "title": "Blind SQL Injection (Boolean + Time-based) in id parameter - /vulnerabilities/sqli_blind/",
+  "location": "/vulnerabilities/sqli_blind",
+  "severity": "critical",
+  "proof": "Boolean differential: id=1' AND 1=1# → 'User ID exists in the database.' vs id=1' AND 1=2# → 'User ID is MISSING from the database.' Time-based: id=1' AND SLEEP(3)# → 3011ms delay; id=1' AND SLEEP(3) AND 1=2# → 12ms (false prevents sleep).",
+  "stage": "class_probe",
+  "precondition": "",
+  "affected_actor": "",
+  "affected_resource": ""
+}

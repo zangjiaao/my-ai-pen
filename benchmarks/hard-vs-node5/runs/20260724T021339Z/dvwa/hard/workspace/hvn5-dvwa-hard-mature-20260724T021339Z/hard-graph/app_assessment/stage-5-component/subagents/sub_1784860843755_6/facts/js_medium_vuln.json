@@ -1,0 +1,6 @@
+{
+  "fact_key": "js_medium_vuln",
+  "summary": "Medium-level JS uses simple string reversal for token",
+  "body": "medium.js at /vulnerabilities/javascript/source/medium.js shows token = reverse(\"XX\" + phrase + \"XX\"). The do_something function reverses a string. This is also trivially bypassable.",
+  "updated_at": "2026-07-24T02:41:30.991Z"
+}

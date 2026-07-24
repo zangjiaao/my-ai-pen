@@ -1,0 +1,10 @@
+{
+  "title": "Unauthenticated Mass User Data Disclosure via /api/Users",
+  "location": "/api/users",
+  "severity": "critical",
+  "proof": "GET /api/Users without any auth returns all 30+ users with emails, roles, deluxeTokens, lastLoginIp. Response: {\"status\":\"success\",\"data\":[{\"id\":1,\"email\":\"admin@juice-sh.op\",\"role\":\"admin\"},{\"id\":2,\"email\":\"jim@juice-sh.op\",\"role\":\"customer\"},...]}",
+  "stage": "component",
+  "precondition": "",
+  "affected_actor": "",
+  "affected_resource": ""
+}

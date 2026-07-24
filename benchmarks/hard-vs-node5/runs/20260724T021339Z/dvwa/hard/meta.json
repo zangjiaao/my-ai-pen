@@ -1,0 +1,20 @@
+{
+  "arm": "hard",
+  "campaign": "hard-vs-node5-dvwa-p1-post69",
+  "map": 59,
+  "ticket": 66,
+  "spec": 69,
+  "graphId": "hard_app_assessment",
+  "target": "http://127.0.0.1:8080",
+  "container": "dvwa-hvn5-hard",
+  "modelProvider": "deepseek",
+  "model": "deepseek-v4-flash",
+  "nodeSha": "3e66b7b9952c6257c4653f66e99201b12507bdc3",
+  "start": "2026-07-24T02:13:39Z",
+  "fix": "surface value\u2192location alias after blocked@surface on 20260724T020525Z",
+  "end": "2026-07-24T02:59:20Z",
+  "wallClockSec": 2741,
+  "terminalStatus": "completed",
+  "stopReason": "hard_graph_completed",
+  "bookedFindings": 18
+}

@@ -1,0 +1,128 @@
+[
+  {
+    "author": "node5_app_assessment",
+    "id": "260fe6b9-2691-4f5b-aa7d-9fc374bf0bb8",
+    "has_output": true,
+    "stage": "init",
+    "stages_done": [
+      "init"
+    ],
+    "errors": []
+  },
+  {
+    "author": "node5_app_assessment",
+    "id": "000d29a6-612f-4f29-9c3b-e407d05c33c2",
+    "has_output": true,
+    "stage": "surface",
+    "stages_done": [
+      "init",
+      "surface"
+    ],
+    "errors": []
+  },
+  {
+    "author": "node5_app_assessment",
+    "id": "e7fdcf11-93e2-4d1f-bf50-7d33c3bedc12",
+    "has_output": true,
+    "stage": "prior_reverify",
+    "stages_done": [
+      "init",
+      "surface",
+      "prior_reverify"
+    ],
+    "errors": []
+  },
+  {
+    "author": "node5_app_assessment",
+    "id": "1bdd513f-ca84-4b12-9809-2e620b59022e",
+    "has_output": true,
+    "stage": "auth_session",
+    "stages_done": [
+      "init",
+      "surface",
+      "prior_reverify",
+      "auth_session"
+    ],
+    "errors": []
+  },
+  {
+    "author": "node5_app_assessment",
+    "id": "9cb9e17e-0919-4e03-958d-0bd1ed4e497a",
+    "has_output": true,
+    "stage": "class_probe",
+    "stages_done": [
+      "init",
+      "surface",
+      "prior_reverify",
+      "auth_session",
+      "class_probe"
+    ],
+    "errors": []
+  },
+  {
+    "author": "node5_app_assessment",
+    "id": "bc790642-0a2b-4b62-bed8-e80c43d1dbeb",
+    "has_output": true,
+    "stage": "authz_logic",
+    "stages_done": [
+      "init",
+      "surface",
+      "prior_reverify",
+      "auth_session",
+      "class_probe",
+      "authz_logic"
+    ],
+    "errors": []
+  },
+  {
+    "author": "node5_app_assessment",
+    "id": "4110b1a7-35fb-491c-8535-a552efe63c52",
+    "has_output": true,
+    "stage": "component",
+    "stages_done": [
+      "init",
+      "surface",
+      "prior_reverify",
+      "auth_session",
+      "class_probe",
+      "authz_logic",
+      "component"
+    ],
+    "errors": []
+  },
+  {
+    "author": "node5_app_assessment",
+    "id": "c484bdd8-b117-4238-8f7c-4333c7c6029b",
+    "has_output": true,
+    "stage": "validate_book",
+    "stages_done": [
+      "init",
+      "surface",
+      "prior_reverify",
+      "auth_session",
+      "class_probe",
+      "authz_logic",
+      "component",
+      "validate_book"
+    ],
+    "errors": []
+  },
+  {
+    "author": "node5_app_assessment",
+    "id": "4e7c0999-9abd-4fc6-923d-0c3844e00026",
+    "has_output": true,
+    "stage": "finalize",
+    "stages_done": [
+      "init",
+      "surface",
+      "prior_reverify",
+      "auth_session",
+      "class_probe",
+      "authz_logic",
+      "component",
+      "validate_book",
+      "finalize"
+    ],
+    "errors": []
+  }
+]

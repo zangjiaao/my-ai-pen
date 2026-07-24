@@ -1,0 +1,164 @@
+{
+  "arm": "node5",
+  "campaign": "hard-vs-node5-juice-p1-post69",
+  "map": 59,
+  "ticket": 65,
+  "spec": 69,
+  "graphId": "app_assessment",
+  "target": "http://127.0.0.1:3011",
+  "container": "juice-hvn5-node5",
+  "modelProvider": "deepseek",
+  "model": "deepseek-v4-flash",
+  "start": "2026-07-24T01:10:43Z",
+  "end": "2026-07-24T01:58:09Z",
+  "wallClockSec": 2846,
+  "terminalStatus": "completed",
+  "bookedFindings": 15,
+  "candidates": 22,
+  "stages_done": [
+    "init",
+    "surface",
+    "prior_reverify",
+    "auth_session",
+    "class_probe",
+    "authz_logic",
+    "component",
+    "validate_book",
+    "finalize"
+  ],
+  "process_metrics": {
+    "structure_fail_n": 5,
+    "structure_fail_stages": [
+      "auth_session",
+      "authz_logic",
+      "prior_reverify"
+    ],
+    "discovery_yield_soft_fail_n": 1,
+    "discovery_yield_soft_fail_stages": [
+      "prior_reverify"
+    ],
+    "discovery_yield_ok_n": 4,
+    "retry_n": 3,
+    "surface_ledger_fail_n": 0,
+    "ready_by_stage": {
+      "surface": 0,
+      "prior_reverify": 0,
+      "auth_session": 0,
+      "class_probe": 15,
+      "authz_logic": 1,
+      "component": 2
+    },
+    "class_probe_discovery_yield": "new_cands=16 ready=15 structured_workers=7",
+    "note": "process_quality orthogonal to coverage_attempt_rate"
+  },
+  "coverage_metrics": {
+    "coverage_required": [
+      "injection_search",
+      "ssrf_url_sink",
+      "jwt_key_material",
+      "graphql",
+      "identity_reset",
+      "identity_change_password",
+      "identity_2fa",
+      "authz_matrix",
+      "sensitive_tech_exposure",
+      "upload",
+      "xss_self_inject",
+      "dom_client",
+      "business_logic",
+      "websocket"
+    ],
+    "coverage_attempted": [
+      "injection_search",
+      "ssrf_url_sink",
+      "jwt_key_material",
+      "identity_reset",
+      "identity_change_password",
+      "identity_2fa",
+      "authz_matrix",
+      "sensitive_tech_exposure",
+      "business_logic"
+    ],
+    "coverage_closed": [
+      "injection_search",
+      "ssrf_url_sink",
+      "jwt_key_material",
+      "identity_reset",
+      "identity_change_password",
+      "identity_2fa",
+      "authz_matrix",
+      "sensitive_tech_exposure",
+      "business_logic"
+    ],
+    "coverage_failed": [],
+    "coverage_blocked": [],
+    "coverage_untested": [
+      "graphql",
+      "upload",
+      "xss_self_inject",
+      "dom_client",
+      "websocket"
+    ],
+    "coverage_required_n": 14,
+    "coverage_attempted_n": 9,
+    "coverage_closed_n": 9,
+    "coverage_blocked_n": 0,
+    "coverage_attempt_rate": 0.643,
+    "coverage_close_rate": 1.0,
+    "coverage_statuses": {
+      "injection_search": "closed",
+      "ssrf_url_sink": "closed",
+      "jwt_key_material": "closed",
+      "graphql": "untested",
+      "identity_reset": "closed",
+      "identity_change_password": "closed",
+      "identity_2fa": "closed",
+      "authz_matrix": "closed",
+      "sensitive_tech_exposure": "closed",
+      "upload": "untested",
+      "xss_self_inject": "untested",
+      "dom_client": "untested",
+      "business_logic": "closed",
+      "websocket": "untested"
+    },
+    "forced_packages": [
+      "pentest-sql-injection",
+      "pentest-ssrf",
+      "pentest-xss",
+      "pentest-component-rce"
+    ],
+    "effective_max_workers": 8,
+    "authz_matrix_cells": 23,
+    "hv_campaigns_opened": 14,
+    "hv_campaigns_attempted": 9,
+    "hv_campaigns_booked": 9,
+    "hv_attempt_rate": 0.643,
+    "hv_success_rate": 1.0,
+    "hv_recon_hits": [
+      "encryptionkeys",
+      "image_url",
+      "search",
+      "logs",
+      "graphql"
+    ],
+    "hv_recon_hit_count": 5
+  },
+  "run_meta": {
+    "tooling_health": {
+      "ok": true,
+      "docker": true,
+      "image": "pen-sandbox:dev",
+      "image_present": true,
+      "mode": "1",
+      "allow_host": false,
+      "network": "host",
+      "error": "",
+      "browser_ok": true,
+      "browser_error": ""
+    },
+    "finished_at": "2026-07-24T01:57:47.622869+00:00",
+    "finding_count": 15,
+    "error_count": 0,
+    "started_at": "2026-07-24T01:11:00.521607+00:00"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "ok": true,
+  "summary": "Init stage complete. Target: OWASP Juice Shop at http://127.0.0.1:3010. RoE: app_assessment, no off-box post-ex host takeover. Scope: 127.0.0.1, localhost, host.docker.internal. No live recon performed on this stage. Ready for surface discovery and hypothesis-driven testing stages.",
+  "surfaces": [],
+  "candidates": [],
+  "facts": [
+    {
+      "key": "target_info",
+      "summary": "OWASP Juice Shop at http://127.0.0.1:3010"
+    }
+  ],
+  "deadends": []
+}

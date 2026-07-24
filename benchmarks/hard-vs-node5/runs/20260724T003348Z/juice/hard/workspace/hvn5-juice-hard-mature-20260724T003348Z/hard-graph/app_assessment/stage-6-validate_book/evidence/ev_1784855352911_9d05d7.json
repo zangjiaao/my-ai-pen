@@ -1,0 +1,21 @@
+{
+  "id": "ev_1784855352911_9d05d7",
+  "type": "tool_output",
+  "source_tool": "finding",
+  "summary": "Password Reset via Known Security Answer - Bjoern's Account @ POST http://127.0.0.1:3010/rest/user/reset-password",
+  "data": {
+    "kind": "proof",
+    "observation": "GET /api/Challenges returned all challenge definitions including descriptions, difficulty, category tags, and 'solved' status booleans",
+    "proof": "GET /api/Challenges returned all challenge definitions including descriptions, difficulty, category tags, and 'solved' status booleans",
+    "path_or_url": "POST http://127.0.0.1:3010/rest/user/reset-password",
+    "location": "POST http://127.0.0.1:3010/rest/user/reset-password",
+    "title": "Password Reset via Known Security Answer - Bjoern's Account",
+    "stdout": "GET /api/Challenges returned all challenge definitions including descriptions, difficulty, category tags, and 'solved' status booleans",
+    "body_preview": "GET /api/Challenges returned all challenge definitions including descriptions, difficulty, category tags, and 'solved' status booleans",
+    "capture_via": "subagent",
+    "how_captured": "via subagent",
+    "source_tool_act": "subagent",
+    "act_summary": "subagent hard-stage:component candidate: Excessive Data Exposure - All Challenge Definitions (No Auth)"
+  },
+  "created_at": "2026-07-24T01:09:12.911Z"
+}

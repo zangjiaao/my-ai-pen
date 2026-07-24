@@ -1,0 +1,6 @@
+{
+  "fact_key": "stage_validate_book_summary",
+  "summary": "validate_book completed for OWASP Juice Shop",
+  "body": "Stage: validate_book (index 6) completed for http://127.0.0.1:3010. Processed 20 candidates from component stage handoff, deduplicated to 17 unique findings, booked 18 findings via finding(confirm) tool. Findings span: SQL injection (login, search), mass assignment, null byte file bypass, excessive data exposure, directory listing, weak captcha, security question leak, password reset bypass, CSRF password change, JWT data exposure (password hash in token, no expiration, no logout), challenge API data exposure, sensitive file exposure (KeePass, package.json.bak, suspicious_errors.yml). Deadends documented. Result.json emitted.",
+  "updated_at": "2026-07-24T01:09:26.749Z"
+}

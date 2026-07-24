@@ -1,0 +1,10 @@
+{
+  "title": "CSRF - Password change without anti-CSRF token",
+  "location": "/vulnerabilities/csrf",
+  "severity": "critical",
+  "proof": "GET /vulnerabilities/csrf/?password_new=csrfdemo&password_conf=csrfdemo&Change=Change returns '<pre>Password Changed.</pre>'. New password 'csrfdemo' successfully authenticates admin login. Password restored to 'password' via same method. No CSRF token required, no re-authentication.",
+  "stage": "class_probe",
+  "precondition": "Authenticated session (low security level)",
+  "affected_actor": "admin",
+  "affected_resource": "vulnerability"
+}
