@@ -14,6 +14,13 @@ export type CoverageAttempt = {
   note?: string;
 };
 
+export type BookOutcomes = {
+  /** Findings successfully booked this run (cumulative). */
+  booked_n: number;
+  /** Ground/structure/yield reject signals (cumulative). */
+  reject_hints_n: number;
+};
+
 export type HardProcessMetrics = {
   stages_done: string[];
   structure_fail_n: number;
@@ -21,11 +28,16 @@ export type HardProcessMetrics = {
   discovery_yield_notes: string[];
   new_candidates_n: number;
   surfaces_n: number;
+  /**
+   * Cumulative Agent Graph packages joined (real promote/host count from stage executor).
+   * Never inferred solely from candidates.length.
+   */
   fanout_packages_n: number;
   coverage_attempts: CoverageAttempt[];
   /** (attempted+blocked+deadend) / required surfaces; 1 when no surfaces required. */
   coverage_attempt_rate: number;
-  book_outcomes?: { booked_n?: number; reject_hints_n?: number };
+  /** Always present — booking export for dual-arm scorecards. */
+  book_outcomes: BookOutcomes;
 };
 
 export type DiscoveryYieldInput = {
@@ -127,11 +139,13 @@ export function emptyHardProcessMetrics(): HardProcessMetrics {
     fanout_packages_n: 0,
     coverage_attempts: [],
     coverage_attempt_rate: 1,
+    book_outcomes: { booked_n: 0, reject_hints_n: 0 },
   };
 }
 
 /**
  * Fold a completed stage attempt into process metrics (runner-owned Feedback).
+ * `fanoutPackagesN` must be the real Join count from the stage executor (0 if none).
  */
 export function accumulateStageFeedback(
   metrics: HardProcessMetrics,
@@ -139,10 +153,16 @@ export function accumulateStageFeedback(
     stageId: string;
     structured: SubagentStructuredResult;
     structureFailed: boolean;
+    /** Real packages joined this stage (from promote/host). Default 0 — do not invent. */
     fanoutPackagesN?: number;
+    bookOutcomes?: { booked_n?: number; reject_hints_n?: number };
     handoffSurfacesN?: number;
   },
 ): HardProcessMetrics {
+  const fanoutN =
+    typeof input.fanoutPackagesN === "number" && Number.isFinite(input.fanoutPackagesN)
+      ? Math.max(0, Math.floor(input.fanoutPackagesN))
+      : 0;
   const next: HardProcessMetrics = {
     ...metrics,
     stages_done: metrics.stages_done.includes(input.stageId)
@@ -155,20 +175,31 @@ export function accumulateStageFeedback(
       input.handoffSurfacesN ?? 0,
       input.structured.surfaces?.length || 0,
     ),
-    fanout_packages_n: metrics.fanout_packages_n + (input.fanoutPackagesN || 0),
+    fanout_packages_n: metrics.fanout_packages_n + fanoutN,
     discovery_yield_notes: [...metrics.discovery_yield_notes],
+    book_outcomes: {
+      booked_n: metrics.book_outcomes.booked_n + (input.bookOutcomes?.booked_n || 0),
+      reject_hints_n:
+        metrics.book_outcomes.reject_hints_n +
+        (input.structureFailed ? 1 : 0) +
+        (input.bookOutcomes?.reject_hints_n || 0),
+    },
   };
 
   const yieldEval = evaluateDiscoveryYield({
     stageId: input.stageId,
     surfacesN: next.surfaces_n,
-    fanoutPackagesN: input.fanoutPackagesN || 0,
+    fanoutPackagesN: fanoutN,
     newCandidatesN: input.structured.candidates?.length || 0,
     deadendsN: input.structured.deadends?.length || 0,
   });
   if (yieldEval.softFail) {
     next.discovery_yield_soft_fail_n += 1;
     if (yieldEval.reason) next.discovery_yield_notes.push(yieldEval.reason);
+    next.book_outcomes = {
+      ...next.book_outcomes,
+      reject_hints_n: next.book_outcomes.reject_hints_n + 1,
+    };
   }
 
   // Recompute coverage from cumulative surfaces in structured + prior attempts locations

@@ -124,5 +124,41 @@ m = accumulateStageFeedback(m, {
   }),
 });
 assert.ok(m.structure_fail_n >= 1);
+assert.ok(m.book_outcomes, "book_outcomes always present");
+assert.ok(m.book_outcomes.reject_hints_n >= 1, "structure/yield contribute reject_hints");
+
+// Real fanout N accumulates; candidates alone do not invent packages
+let m2 = emptyHardProcessMetrics();
+m2 = accumulateStageFeedback(m2, {
+  stageId: "class_probe",
+  structureFailed: false,
+  fanoutPackagesN: 0,
+  handoffSurfacesN: 2,
+  structured: normalizeSubagentResult({
+    ok: true,
+    summary: "serial monologue with candidates but no packages",
+    candidates: [
+      {
+        title: "x",
+        location: "http://t/a",
+        proof_excerpt: "enough proof text for a candidate excerpt here",
+      },
+    ],
+  }),
+});
+assert.equal(m2.fanout_packages_n, 0, "candidates without fanoutPackagesN must not count as packages");
+m2 = accumulateStageFeedback(m2, {
+  stageId: "class_probe",
+  structureFailed: false,
+  fanoutPackagesN: 3,
+  bookOutcomes: { booked_n: 2, reject_hints_n: 0 },
+  structured: normalizeSubagentResult({
+    ok: true,
+    summary: "joined 3 workers",
+    candidates: [],
+  }),
+});
+assert.equal(m2.fanout_packages_n, 3);
+assert.equal(m2.book_outcomes.booked_n, 2);
 
 console.log("hard-graph-feedback.test.ts: ok");

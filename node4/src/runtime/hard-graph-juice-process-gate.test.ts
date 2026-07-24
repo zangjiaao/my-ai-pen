@@ -115,52 +115,7 @@ const pack: RolePack = {
   skillIds: [],
 };
 
-// Production stage child wiring (fan-out host)
-const workDir = join(taskDir, "hard-graph", "app_assessment", "stage-class_probe");
-const { childRuntime } = buildHardGraphStageChildRuntime({
-  parent,
-  workDir,
-  tools: ["todo", "write", "shell", "http", "subagent", "skill"],
-  pack,
-});
-assert.ok(childRuntime.subagents);
-assert.equal(assertSubagentNestAllowed(childRuntime.lifecycle.subagentDepth).ok, true);
-
-// Two packages as Agent Graph workers would leave cache
-rememberSubagentEvidence(childRuntime, {
-  subagentId: "sub_sqli",
-  nodeType: "class_probe",
-  candidates: [
-    {
-      title: "Login SQLi",
-      location: `${JUICE}/rest/user/login`,
-      proof_excerpt: loginProof,
-    },
-  ],
-  acceptance: evaluateCandidatesForAcceptance([
-    { title: "Login SQLi", location: `${JUICE}/rest/user/login`, proof_excerpt: loginProof },
-  ]),
-  at: Date.now(),
-});
-rememberSubagentEvidence(childRuntime, {
-  subagentId: "sub_mem",
-  nodeType: "class_probe",
-  candidates: [
-    {
-      title: "Memories exposure",
-      location: `${JUICE}/rest/memories`,
-      proof_excerpt: memProof,
-    },
-  ],
-  acceptance: evaluateCandidatesForAcceptance([
-    { title: "Memories exposure", location: `${JUICE}/rest/memories`, proof_excerpt: memProof },
-  ]),
-  at: Date.now(),
-});
-const promoted = promoteStageSubagentPackagesToParent(parent, childRuntime, "class_probe");
-assert.equal(promoted, 2);
-
-// Mature hard graph run with deterministic executor (process metrics)
+// Mature hard graph run: class_probe uses shipped stage child + promote; fanout N enters processMetrics
 const available = ["todo", "read", "fact", "skill", "write", "shell", "http", "subagent", "finding"];
 const run = await runHardGraph({
   graph: mature!,
@@ -191,6 +146,61 @@ const run = await runHardGraph({
       };
     }
     if (id === "class_probe") {
+      // Production fan-out path inside the stage that processMetrics will count
+      const workDir = join(taskDir, "hard-graph", "app_assessment", "stage-class_probe");
+      const { childRuntime } = buildHardGraphStageChildRuntime({
+        parent,
+        workDir,
+        tools: input.tools,
+        pack,
+      });
+      assert.ok(childRuntime.subagents, "class_probe stage host required");
+      assert.equal(assertSubagentNestAllowed(childRuntime.lifecycle.subagentDepth).ok, true);
+      rememberSubagentEvidence(childRuntime, {
+        subagentId: "sub_sqli",
+        nodeType: "class_probe",
+        candidates: [
+          {
+            title: "Login SQLi",
+            location: `${JUICE}/rest/user/login`,
+            proof_excerpt: loginProof,
+          },
+        ],
+        acceptance: evaluateCandidatesForAcceptance([
+          {
+            title: "Login SQLi",
+            location: `${JUICE}/rest/user/login`,
+            proof_excerpt: loginProof,
+          },
+        ]),
+        at: Date.now(),
+      });
+      rememberSubagentEvidence(childRuntime, {
+        subagentId: "sub_mem",
+        nodeType: "class_probe",
+        candidates: [
+          {
+            title: "Memories exposure",
+            location: `${JUICE}/rest/memories`,
+            proof_excerpt: memProof,
+          },
+        ],
+        acceptance: evaluateCandidatesForAcceptance([
+          {
+            title: "Memories exposure",
+            location: `${JUICE}/rest/memories`,
+            proof_excerpt: memProof,
+          },
+        ]),
+        at: Date.now(),
+      });
+      // Real Join count (same promote used by createHardGraphStageExecutor finalize)
+      const fanoutPackagesN = promoteStageSubagentPackagesToParent(
+        parent,
+        childRuntime,
+        "class_probe",
+      );
+      assert.equal(fanoutPackagesN, 2, "promote returns real package count");
       return {
         structured: normalizeSubagentResult({
           ok: true,
@@ -209,15 +219,45 @@ const run = await runHardGraph({
           ],
           deadends: ["ssrf: no internal fetch vector on public rest surface"],
         }),
+        fanoutPackagesN,
       };
     }
     if (id === "validate_book") {
+      // Book from parent packages joined during class_probe (no act tools)
+      const bookChild = {
+        ...parent,
+        lifecycle: { recentObservations: [], subagentEvidenceCache: [] },
+      } as unknown as ToolRuntime;
+      bookChild.findingsDir = parent.findingsDir;
+      bookChild.evidence = parent.evidence;
+      seedStageLifecycleFromParent(parent, bookChild);
+      const finding = createFindingTool(bookChild);
+      let booked = 0;
+      let rejects = 0;
+      for (const loc of [`${JUICE}/rest/user/login`, `${JUICE}/rest/memories`]) {
+        const title = loc.includes("login") ? "Login SQLi" : "Memories exposure";
+        const text = String(
+          (
+            await finding.execute("f", {
+              action: "confirm",
+              title,
+              severity: "high",
+              location: loc,
+              description: `${title} evidence-backed from live Juice process gate.`,
+            })
+          ).content?.find((c: { type?: string }) => c.type === "text")?.text || "",
+        );
+        if (text.startsWith("error:")) rejects += 1;
+        else booked += 1;
+      }
+      assert.equal(booked, 2, "two findings booked without thrash");
       return {
         structured: normalizeSubagentResult({
           ok: true,
           summary: "booked from handoff candidates",
           candidates: input.handoff.candidates.slice(0, 5),
         }),
+        bookOutcomes: { booked_n: booked, reject_hints_n: rejects },
       };
     }
     return {
@@ -240,35 +280,18 @@ assert.ok(
   run.processMetrics!.coverage_attempt_rate > 0,
   "coverage attempts not all silent untested after probe",
 );
-// fan-out activity: parent packs from promote
-assert.ok((parent.lifecycle.subagentEvidenceCache || []).length >= 2, "fan-out packages joined");
+// Feedback export must carry REAL fan-out package N (not candidates>0 heuristic)
+assert.equal(
+  run.processMetrics!.fanout_packages_n,
+  2,
+  `processMetrics.fanout_packages_n must be real Join count, got ${run.processMetrics!.fanout_packages_n}`,
+);
+assert.ok(run.processMetrics!.book_outcomes, "book_outcomes always exported");
+assert.equal(run.processMetrics!.book_outcomes.booked_n, 2, "book_outcomes.booked_n from validate_book");
+assert.ok((parent.lifecycle.subagentEvidenceCache || []).length >= 2, "parent holds joined packages");
 
-// Book without thrash
-const book = {
-  ...parent,
-  lifecycle: { recentObservations: [], subagentEvidenceCache: [] },
-} as unknown as ToolRuntime;
-book.findingsDir = parent.findingsDir;
-book.evidence = parent.evidence;
-seedStageLifecycleFromParent(parent, book);
-const finding = createFindingTool(book);
-for (const loc of [`${JUICE}/rest/user/login`, `${JUICE}/rest/memories`]) {
-  const title = loc.includes("login") ? "Login SQLi" : "Memories exposure";
-  const text = String(
-    (
-      await finding.execute("f", {
-        action: "confirm",
-        title,
-        severity: "high",
-        location: loc,
-        description: `${title} evidence-backed from live Juice process gate.`,
-      })
-    ).content?.find((c: { type?: string }) => c.type === "text")?.text || "",
-  );
-  assert.ok(!text.startsWith("error:"), text.slice(0, 200));
-}
 const files = (await readdir(parent.findingsDir)).filter((f) => f.endsWith(".json"));
-assert.equal(files.length, 2, "two findings booked without thrash");
+assert.equal(files.length, 2, "two findings on disk");
 
 await mkdir(join(SCRATCH, "juice-lab"), { recursive: true });
 await writeFile(
@@ -279,7 +302,9 @@ await writeFile(
       terminal: run.terminal,
       processMetrics: run.processMetrics,
       booked: files.length,
-      fanout_packs: (parent.lifecycle.subagentEvidenceCache || []).length,
+      fanout_packs_lifecycle: (parent.lifecycle.subagentEvidenceCache || []).length,
+      fanout_packages_n_metrics: run.processMetrics!.fanout_packages_n,
+      book_outcomes: run.processMetrics!.book_outcomes,
     },
     null,
     2,

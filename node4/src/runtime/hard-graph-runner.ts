@@ -41,6 +41,13 @@ export type StageExecutorInput = {
 export type StageExecutorOutput = {
   structured?: unknown;
   summary?: string;
+  /**
+   * Real Agent Graph worker packages joined this stage (from
+   * promoteStageSubagentPackagesToParent / host cache). Not a candidates>0 heuristic.
+   */
+  fanoutPackagesN?: number;
+  /** Booking outcomes when the stage books or reports rejects (e.g. validate_book). */
+  bookOutcomes?: { booked_n?: number; reject_hints_n?: number };
 };
 
 export type StageExecutor = (input: StageExecutorInput) => Promise<StageExecutorOutput>;
@@ -238,6 +245,8 @@ export async function runHardGraph(options: {
       });
 
       let structured: SubagentStructuredResult;
+      let outFanoutN: number | undefined;
+      let outBookOutcomes: { booked_n?: number; reject_hints_n?: number } | undefined;
       try {
         const out = await options.executeStage({
           stage,
@@ -251,6 +260,8 @@ export async function runHardGraph(options: {
           out.structured ?? { summary: out.summary, ok: true },
           out.summary || "",
         );
+        outFanoutN = out.fanoutPackagesN;
+        outBookOutcomes = out.bookOutcomes;
       } catch (err) {
         structured = normalizeSubagentResult(
           {
@@ -268,6 +279,12 @@ export async function runHardGraph(options: {
       lastStructured = structured;
       const gate = evaluateStageGate(stage, structured);
       lastSummary = structured.summaryProvided ? structured.summary : lastSummary;
+      // Real package Join count from stage executor (0 if omitted — never invent from candidates).
+      const fanoutPackagesN =
+        typeof outFanoutN === "number" && Number.isFinite(outFanoutN)
+          ? Math.max(0, Math.floor(outFanoutN))
+          : 0;
+      const bookOutcomes = outBookOutcomes;
 
       if (gate.ok) {
         handoff = mergeHandoff(handoff, structured, stage.id);
@@ -275,7 +292,8 @@ export async function runHardGraph(options: {
           stageId: stage.id,
           structured,
           structureFailed: false,
-          fanoutPackagesN: tools.includes("subagent") ? structured.candidates.length > 0 ? 1 : 0 : 0,
+          fanoutPackagesN,
+          bookOutcomes,
           handoffSurfacesN: handoff.surfaces.length,
         });
         passed = true;
@@ -297,6 +315,8 @@ export async function runHardGraph(options: {
         stageId: stage.id,
         structured,
         structureFailed: true,
+        fanoutPackagesN,
+        bookOutcomes,
         handoffSurfacesN: handoff.surfaces.length,
       });
       const isLast = attempt >= maxAttempts;

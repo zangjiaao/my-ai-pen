@@ -178,6 +178,16 @@ export function buildHardGraphStageChildRuntime(options: {
 /** @deprecated use buildHardGraphStageChildRuntime */
 const buildChildRuntime = buildHardGraphStageChildRuntime;
 
+async function countJsonFindings(findingsDir: string): Promise<number> {
+  try {
+    const { readdir } = await import("node:fs/promises");
+    const files = await readdir(findingsDir);
+    return files.filter((f) => f.endsWith(".json")).length;
+  } catch {
+    return 0;
+  }
+}
+
 /**
  * Promote Agent Graph worker packages from the stage child into parent Product state.
  * Keys: hard-stage:<stageId>:<workerFragment> so siblings Join without wipe.
@@ -271,8 +281,13 @@ export function createHardGraphStageExecutor(options: {
       summaryOverride?: string;
     }): Promise<StageExecutorOutput> => {
       // Agent Graph Join first: worker packages from stage child → parent (distinct keys).
+      let fanoutPackagesN = 0;
       if (opts.child) {
-        promoteStageSubagentPackagesToParent(parentRuntime, opts.child, input.stage.id);
+        fanoutPackagesN = promoteStageSubagentPackagesToParent(
+          parentRuntime,
+          opts.child,
+          input.stage.id,
+        );
       }
       // Stage captain result.json candidates → parent pack hard-stage:<stageId>
       absorbStageResultIntoParent(parentRuntime, {
@@ -282,13 +297,23 @@ export function createHardGraphStageExecutor(options: {
         seed: opts.seed,
       });
       await promoteSession();
+      const findingsAfter = await countJsonFindings(parentRuntime.findingsDir);
+      const bookedDelta = Math.max(0, findingsAfter - findingsBefore);
       return {
         structured: opts.structured,
         summary:
           opts.summaryOverride ??
           (opts.structured.summaryProvided ? opts.structured.summary : undefined),
+        fanoutPackagesN,
+        bookOutcomes:
+          bookedDelta > 0 || input.stage.id === "validate_book"
+            ? { booked_n: bookedDelta, reject_hints_n: 0 }
+            : undefined,
       };
     };
+
+    // Snapshot findings count before stage for book_outcomes delta.
+    const findingsBefore = await countJsonFindings(parentRuntime.findingsDir);
 
     try {
       if (sessionFactory) {
