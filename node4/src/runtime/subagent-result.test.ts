@@ -135,6 +135,26 @@ const withSurfaces = normalizeSubagentResult({
 assert.equal(withSurfaces.surfaces.length, 2);
 assert.equal(withSurfaces.surfaces[0]!.kind, "form");
 
+// Agent-shaped surfaces often use value/type instead of location/kind (DVWA thrash class)
+const valueAlias = normalizeSubagentResult({
+  summary: "dvwa map",
+  surfaces: [
+    {
+      type: "url",
+      value: "http://127.0.0.1:8080/login.php",
+      method: "GET/POST",
+      params: ["username", "password"],
+      note: "login form",
+    },
+    { href: "http://127.0.0.1:8080/vulnerabilities/sqli/", type: "form" },
+  ],
+  candidates: [],
+});
+assert.equal(valueAlias.surfaces.length, 2);
+assert.equal(valueAlias.surfaces[0]!.location, "http://127.0.0.1:8080/login.php");
+assert.equal(valueAlias.surfaces[0]!.kind, "url");
+assert.equal(valueAlias.surfaces[1]!.location, "http://127.0.0.1:8080/vulnerabilities/sqli/");
+
 const nestedSurf = normalizeSubagentResult({
   structured: {
     surfaces: [{ location: "/admin", kind: "page" }],

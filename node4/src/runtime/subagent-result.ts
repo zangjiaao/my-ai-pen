@@ -88,7 +88,11 @@ function asSurfaces(v: unknown): SubagentSurface[] {
     }
     if (!item || typeof item !== "object") continue;
     const o = item as Record<string, unknown>;
-    const location = asString(o.location ?? o.url ?? o.path, 500);
+    // Accept common agent shapes: location | url | path | value | href | endpoint
+    const location = asString(
+      o.location ?? o.url ?? o.path ?? o.value ?? o.href ?? o.endpoint,
+      500,
+    );
     if (location.length < 2) continue;
     const params = Array.isArray(o.params)
       ? o.params
