@@ -3774,9 +3774,6 @@ async def _apply_graph_execution_c1(conv_id: str | None, task_msg: dict, msg: di
     )
     if resolved is not None:
         out["graph_execution"] = resolved
-    # Do not emit legacy graph_reentry; structured re-run is graph_execution=full.
-    out.pop("graph_reentry", None)
-    out.pop("graphReentry", None)
     return out
 
 
