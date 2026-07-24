@@ -21,17 +21,20 @@ const repoExperts = join(
   "../../../experts/pentest",
 );
 
-// Soft scenario (existing) is soft, not hard
-const soft = await loadSoftScenarioGraphFile(repoExperts, "app_assessment");
-assert.ok(soft);
-assert.equal(isSoftScenarioGraphDefinition(soft), true);
-assert.equal(isHardGraphDefinition(soft), false);
-
-// Existing loadPentestGraphFile still works (soft menu)
+// Product soft scenario files are retired (#76) — load returns null
+const softGone = await loadSoftScenarioGraphFile(repoExperts, "app_assessment");
+assert.equal(softGone, null, "soft app_assessment file removed from product pack");
 const softLegacy = await loadPentestGraphFile(repoExperts, "app_assessment");
-assert.ok(softLegacy);
-assert.equal(isHardGraphDefinition(softLegacy), false);
-assert.equal(isSoftScenarioGraphDefinition(softLegacy), true);
+assert.equal(softLegacy, null, "soft pack path no longer loads product soft graphs");
+
+// Synthetic soft shape still discriminated from hard
+const syntheticSoft = {
+  id: "synthetic_soft",
+  nodes: { surface: {} },
+  default_plan: ["surface"],
+};
+assert.equal(isSoftScenarioGraphDefinition(syntheticSoft), true);
+assert.equal(isHardGraphDefinition(syntheticSoft), false);
 
 // Hard thin path loads
 const hard = await loadHardGraphFile(repoExperts, "app_assessment_thin");
@@ -43,11 +46,12 @@ assert.equal(hard!.stages[0]!.id, "init");
 assert.equal(isHardGraphDefinition(hard), true);
 assert.equal(isSoftScenarioGraphDefinition(hard), false);
 
-// List includes thin path
+// List includes mature + thin
 const ids = await listHardGraphIds(repoExperts);
 assert.ok(ids.includes("app_assessment_thin"));
+assert.ok(ids.includes("app_assessment"));
 
-// Resolve via graphId alias
+// Resolve via thin lab id
 const r1 = await resolveHardGraph({
   task: { graphId: "app_assessment_thin" },
   packRoot: repoExperts,
@@ -69,14 +73,33 @@ if (r2.mode === "hard") {
   assert.equal(r2.graph.id, "app_assessment", "hard default is mature app_assessment");
 }
 
-// Soft graphId alone without discipline → not hard
+// Product template app_assessment → Expert Graph (Soft retired)
 const r3 = await resolveHardGraph({
   task: { graphId: "app_assessment" },
   packRoot: repoExperts,
   packId: "pentest",
   env: {},
 });
-assert.equal(r3.mode, "not_hard");
+assert.equal(r3.mode, "hard");
+if (r3.mode === "hard") {
+  assert.equal(r3.graph.id, "app_assessment");
+}
+const r3b = await resolveHardGraph({
+  task: { engagementTemplate: "app_assessment" },
+  packRoot: repoExperts,
+  packId: "pentest",
+  env: {},
+});
+assert.equal(r3b.mode, "hard");
+
+// Soft-only redteam_deep has no hard file → not Expert Graph yet (phase 2)
+const rDeep = await resolveHardGraph({
+  task: { graphId: "redteam_deep" },
+  packRoot: repoExperts,
+  packId: "pentest",
+  env: {},
+});
+assert.equal(rDeep.mode, "not_hard", "redteam_deep not product Graph until hard file exists");
 
 // Non-pentest pack never hard
 const r4 = await resolveHardGraph({
@@ -86,7 +109,7 @@ const r4 = await resolveHardGraph({
 });
 assert.equal(r4.mode, "not_hard");
 
-// Env NODE4_HARD_GRAPH enables thin path
+// Env NODE4_HARD_GRAPH enables mature Expert Graph
 const r5 = await resolveHardGraph({
   task: {},
   packRoot: repoExperts,

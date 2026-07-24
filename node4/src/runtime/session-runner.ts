@@ -192,7 +192,8 @@ export async function runNode4Task(
     }
   }
 
-  // Free vs soft scenario Graph (OMP Main path)
+  // Free OMP Main path. Soft scenario Graph is retired on product path (#76);
+  // Expert structured work already returned above via resolveHardGraph + runner.
   const graphResolved = await resolvePentestGraph({
     task,
     packId: pack.id,

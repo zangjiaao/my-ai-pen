@@ -3,6 +3,7 @@ from app.services.case_engagement import (
     case_fields_from_context,
     merge_case_into_context,
     normalize_engagement_template,
+    is_product_graph_template,
     resolve_allow_postex,
     roe_payload_for_task_assign,
 )
@@ -13,6 +14,11 @@ def test_normalize_templates():
     assert normalize_engagement_template("redteam_deep") == "redteam_deep"
     assert normalize_engagement_template("assess") == "app_assessment"
     assert normalize_engagement_template("please hack dvwa") is None
+    # Product Graph set (#76 Soft retire): only app_assessment until hard redteam_deep
+    assert is_product_graph_template("app_assessment") is True
+    assert is_product_graph_template("assess") is True
+    assert is_product_graph_template("redteam_deep") is False
+    assert is_product_graph_template("free") is False
 
 
 def test_allow_postex_defaults_conservative():

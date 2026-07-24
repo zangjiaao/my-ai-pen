@@ -53,7 +53,7 @@ Aliases fold to canonical pack ids (same idea as Node4 `resolveRolePack`):
 | engagement / role | pack id   |
 |-------------------|-----------|
 | **default**, consult, workspace | **default**（内置 seat；`consult` 迁移别名） |
-| pentest, assess, verify, retest, **app_assessment**, **redteam_deep** | pentest |
+| pentest, assess, verify, retest, **app_assessment** | pentest |
 | ctf, ctf-web, challenge | ctf |
 | llm-security, llm, llm-redteam, agent-security | llm-security |
 | code-audit, code, sast, source-audit | code-audit |
@@ -61,10 +61,10 @@ Aliases fold to canonical pack ids (same idea as Node4 `resolveRolePack`):
 
 **Engagement templates (RoE depth, structured UI field — not NLP):**
 
-| Template | allow_postex | Pack |
-|----------|--------------|------|
-| `app_assessment` | false | pentest |
-| `redteam_deep` | true | pentest |
+| Template | allow_postex | Pack | Product |
+|----------|--------------|------|---------|
+| `app_assessment` | false | pentest | **Yes** — Expert Graph |
+| `redteam_deep` | true | pentest | **No** until hard Graph phase 2 (#76); historical Case normalize only |
 
 Blank engagement / no expert selected → **`default` seat** (built-in; not offers-gated).  
 Expert execution still requires pack in offers. Unset RoE defaults to **post-ex off** (conservative).

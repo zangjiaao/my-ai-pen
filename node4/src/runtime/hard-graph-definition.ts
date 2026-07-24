@@ -1,7 +1,8 @@
 /**
- * Hard Graph definition seam (Graph × Pi first cut).
+ * Expert Graph definition seam (Hard Graph runner / Graph × Pi).
  *
- * Soft scenario graphs (pentest-graph.ts): node menu + soft default_plan — NOT Hard Graph DoD.
+ * Soft scenario graphs are retired as product mode (#68 / #76). Expert structured
+ * work loads discipline:hard definitions from pack graphs/hard/*.json only.
  * Hard graphs: ordered stages with fail-closed require gates and tool profiles.
  */
 
@@ -158,34 +159,42 @@ export async function listHardGraphIds(packRoot: string): Promise<string[]> {
 }
 
 /**
- * Explicit Hard Graph ids/aliases (structured only).
- * Do **not** map bare `app_assessment` here — that id is the soft scenario graph
- * unless graphDiscipline/env selects hard (then DEFAULT_HARD_GRAPH_ID applies).
+ * Explicit Expert Graph (Hard Graph runner) ids/aliases (structured only).
  *
- * Mature Expert primary file: graphs/hard/app_assessment.json
- * Thin lab/compat file: graphs/hard/app_assessment_thin.json
+ * Product path (#68 / #76): Soft scenario graphs are retired. Product template
+ * `app_assessment` and aliases resolve to the mature Expert Graph under
+ * graphs/hard/app_assessment.json. Thin lab ids remain explicit.
+ *
+ * `redteam_deep` is intentionally **not** aliased until a hard Graph file ships
+ * (phase 2). Soft-only templates must not enter the Expert Graph runner.
  */
 const HARD_GRAPH_ALIASES: Record<string, string> = {
-  // Mature Expert hard
+  // Product assessment template → mature Expert Graph
+  app_assessment: "app_assessment",
+  assessment: "app_assessment",
+  assess: "app_assessment",
+  "pre-prod": "app_assessment",
+  preprod: "app_assessment",
+  // Explicit mature aliases
   hard_app_assessment: "app_assessment",
   app_assessment_hard: "app_assessment",
   hard: "app_assessment",
-  // Thin lab / compatibility (always hard when this id is used)
+  // Thin lab / compatibility
   app_assessment_thin: "app_assessment_thin",
   hard_app_assessment_thin: "app_assessment_thin",
   thin: "app_assessment_thin",
 };
 
-/** Default Hard Graph id when graphDiscipline/env selects hard without a thin/lab id. */
+/** Default Expert Graph id when graphDiscipline/env selects hard without a thin/lab id. */
 export const DEFAULT_HARD_GRAPH_ID = "app_assessment";
 
 /**
- * Resolve whether this task wants Hard Graph and which definition to load.
+ * Resolve whether this task wants Expert Graph (Hard Graph runner) and which definition to load.
  * Structured fields only — no free-text NLP on instruction.
  *
- * - Explicit thin/hard aliases → hard mode with that file
- * - graphDiscipline === "hard" or NODE4_HARD_GRAPH → hard (mature default, or alias if set)
- * - bare soft id `app_assessment` without hard discipline → not_hard
+ * - Product assessment aliases / explicit thin-hard ids → Expert Graph
+ * - graphDiscipline === "hard" or NODE4_HARD_GRAPH → mature default (or alias if set)
+ * - Unknown / soft-only ids without hard file → not_hard (no Soft fallback here)
  */
 export async function resolveHardGraph(options: {
   task: Pick<TaskEnvelope, "graphId" | "engagementTemplate" | "graphDiscipline">;
@@ -211,11 +220,16 @@ export async function resolveHardGraph(options: {
 
   let hardId: string | null = null;
   if (aliased) {
-    // Explicit hard alias (thin or mature hard_*) always enters Hard Graph.
     hardId = aliased;
   } else if (taskHard || envHard) {
-    // Discipline/env hard without an explicit thin/hard_* alias → mature Expert primary.
+    // Discipline/env hard without an explicit thin/product alias → mature Expert primary.
     hardId = DEFAULT_HARD_GRAPH_ID;
+  } else if (rawId && options.packRoot) {
+    // Any id that already has a hard Graph file is Expert Graph (multi-Graph catalog).
+    const direct = await loadHardGraphFile(options.packRoot, rawId);
+    if (direct) {
+      return { mode: "hard", graph: direct };
+    }
   }
 
   if (!hardId || !options.packRoot) {

@@ -85,14 +85,17 @@ const ids = await listHardGraphIds(repoExperts);
 assert.ok(ids.includes("app_assessment"));
 assert.ok(ids.includes("app_assessment_thin"));
 
-// Resolve: soft bare app_assessment → not hard
-const soft = await resolveHardGraph({
+// Resolve: product app_assessment → mature Expert Graph (Soft retired #76)
+const productAssess = await resolveHardGraph({
   task: { graphId: "app_assessment" },
   packRoot: repoExperts,
   packId: "pentest",
   env: {},
 });
-assert.equal(soft.mode, "not_hard", "bare app_assessment without hard discipline stays soft");
+assert.equal(productAssess.mode, "hard", "product app_assessment is Expert Graph");
+if (productAssess.mode === "hard") {
+  assert.equal(productAssess.graph.id, "app_assessment");
+}
 
 // Resolve: discipline hard → mature primary
 const rHard = await resolveHardGraph({

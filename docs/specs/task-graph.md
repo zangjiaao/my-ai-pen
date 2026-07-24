@@ -1,20 +1,18 @@
-# Pentest work modes: OMP, soft scenario Graph, Hard Graph × Pi
+# Pentest work modes: Default free OMP + Expert Graph × Pi
 
 > Living companion to `docs/specs/harness.md` §6.  
-> Calibrated: 2026-07-24 (Hard maturity: book-from-handoff, Agent Graph fan-out, mature Task Graph, process Feedback)
+> Calibrated: 2026-07-24 (Expert Graph-only: Soft product mode retired #68 / #76)
 
-**Prompt single-source (soft scenario):** Graph captain/ledger/acceptance/packages live in runtime `formatGraphInjection` (`<work-mode>`). Pack `work.md` only points at that block for soft Graph detail — do not re-expand the same rules in work.md.
+**Expert Graph:** product-owned runner (`hard-graph-*`); stage order and Feedback are **not** Main OMP scheduling. Soft scenario Graph is **retired** as a product work mode (not Expert DoD).
 
-**Hard Graph:** product-owned runner (`hard-graph-*`); stage order and Feedback are **not** Main OMP scheduling. Soft scenario Graph is **not** Expert Hard Graph DoD.
-
-**Product seats:** **Default / Soft-light** = assistant paths (never Expert Hard DoD). **Expert pentest framework** = **Hard Graph × Pi** (mature hard graph primary). Three-layer Task / Agent / Feedback semantics are **product-owned** on Node4 (ADR 0001 B1; former Node5 lab tree deleted).
+**Product seats:** **Default** = free platform assistant (never Expert Graph). **Expert** = **Graph mode only** (multi-Graph per expert; mature hard graph primary). Three-layer Task / Agent / Feedback semantics are **product-owned** on Node4 (ADR 0001 B1).
 
 ## One sentence
 
-**Default / free OMP** — Main loop schedules itself (Default seat never Hard Graph).  
-**Soft scenario Graph** — optional node menu + soft plan (Main may still schedule); **Default/light**, not Expert DoD.  
-**Hard Graph × Pi** — outer runner owns stages; pi runs inside stages; fail-closed gates; **Expert pentest DoD**.  
-**Case** holds long-term shared state.
+**Default / free OMP** — Main loop schedules itself (Default seat never Expert Graph).  
+**Expert Graph × Pi** — outer runner owns stages; pi runs inside stages; fail-closed gates; **Expert pentest DoD**. Product template `app_assessment` resolves here.  
+**Soft scenario Graph** — **retired** (historical only; no product UI / no product resolve).  
+**Case** holds long-term shared state. Continue-chat / retest stay in the Graph engagement envelope after runner completes (#68).
 
 ### Three-layer model → Hard product mapping
 
@@ -42,13 +40,13 @@ Handoff JSON in the stage prompt remains informational; booking authority is lif
 
 | Mode | How selected | Behavior |
 |------|--------------|----------|
-| **Default / free OMP** | No expert Hard Graph; Default seat or free expert | Pure OMP; Main may self-act; voluntary subagent; **not** Expert DoD |
-| **Soft scenario Graph** | `graphId` app_assessment / redteam_deep **without** hard discipline | Node menu + RoE; **Main may act**; soft default_plan; **Default/light — not Expert DoD** |
-| **Hard Graph × Pi (Expert)** | `graphDiscipline=hard`, hard alias (`app_assessment_hard` / thin lab ids), or `NODE4_HARD_GRAPH=1` | Runner drives ordered stages; **default graph id `app_assessment` (mature)** under `graphs/hard/`; thin = `app_assessment_thin` lab only; fail-closed Feedback; **Main is not the stage scheduler** |
+| **Default / free OMP** | No Expert Graph template; Default seat or free Expert chat | Pure OMP; Main may self-act; voluntary subagent; **not** Expert DoD |
+| **Expert Graph × Pi** | Product template `app_assessment` (and hard aliases / thin lab ids), `graphDiscipline=hard`, or `NODE4_HARD_GRAPH=1` | Runner drives ordered stages; **mature `app_assessment` under `graphs/hard/`**; thin = `app_assessment_thin` lab only; fail-closed Feedback; **Main is not the stage scheduler** |
+| **Soft scenario Graph** | **Retired** | No product resolve; soft pack JSON removed; lab-only `NODE4_ALLOW_SOFT_GRAPH=1` is non-product archaeology |
 
-Lab-only Main act strip (soft path): `NODE4_GRAPH_MAIN_ACT=hard` or task `graphMainAct=delegate_only` — distinct from product Hard Graph runner.
+`redteam_deep` is **not** a product Graph template until a hard Graph file exists (phase 2 of #76).
 
-UI default for casual work: **Default / free OMP**. Expert Hard Graph is explicit structured selection.
+UI default for casual work: **Default / free**. Expert Graph is explicit structured selection (`app_assessment`).
 
 ## Subagent + acceptance loop
 
@@ -96,8 +94,8 @@ Main DISPATCH (goal + success_criteria)
 
 ## Pack files
 
-- Soft scenario: `experts/pentest/graphs/app_assessment.json`, `experts/pentest/graphs/redteam_deep.json`
-- Hard (Expert): `experts/pentest/graphs/hard/app_assessment.json` (mature primary), `experts/pentest/graphs/hard/app_assessment_thin.json` (lab/compat)
+- Expert Graph: `experts/pentest/graphs/hard/app_assessment.json` (mature primary), `experts/pentest/graphs/hard/app_assessment_thin.json` (lab/compat)
+- Soft pack JSON under `graphs/*.json`: **removed** from product tree (#76)
 
 ## DVWA three-way lab
 

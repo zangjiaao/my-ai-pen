@@ -239,8 +239,8 @@ export default function ConversationPage() {
   const [input, setInput] = useState("");
   /** Explicit long-task Goal mode (structured field → Node4; not NLP). */
   const [goalModeEnabled, setGoalModeEnabled] = useState(false);
-  /** Structured work mode: free (default) | app_assessment | redteam_deep — not NLP. */
-  const [engagementTemplate, setEngagementTemplate] = useState<"free" | "app_assessment" | "redteam_deep">("free");
+  /** Structured work mode: free | app_assessment (Expert Graph) — not NLP. Soft retired; redteam_deep phase 2. */
+  const [engagementTemplate, setEngagementTemplate] = useState<"free" | "app_assessment">("free");
   const [caseHandoff, setCaseHandoff] = useState<{
     suggest_pack_id?: string;
     reason?: string;
@@ -705,10 +705,11 @@ export default function ConversationPage() {
         const tmpl = String(caseData.engagement_template || "").trim();
         if (tmpl === "free" || tmpl === "none") {
           setEngagementTemplate("free");
-        } else if (tmpl === "redteam_deep" || tmpl === "app_assessment") {
-          setEngagementTemplate(tmpl);
-        } else if (caseData.allow_postex === true) {
-          setEngagementTemplate("redteam_deep");
+        } else if (tmpl === "app_assessment") {
+          setEngagementTemplate("app_assessment");
+        } else if (tmpl === "redteam_deep") {
+          // Soft-only deep template retired until hard Graph phase 2 — fall back free
+          setEngagementTemplate("free");
         }
         if (caseData.handoff && caseData.handoff.status === "suggested") {
           setCaseHandoff(caseData.handoff);
@@ -2004,7 +2005,7 @@ export default function ConversationPage() {
           }
         : {}),
       engagementTemplate: tmpl || undefined,
-      allowPostex: isPentest ? tmpl === "redteam_deep" : undefined,
+      allowPostex: isPentest ? false : undefined,
       expertId: resolved?.kind === "expert" ? resolved.expertId : undefined,
     });
     // Persist case RoE only for pentest (1 session = 1 case)
@@ -2014,7 +2015,7 @@ export default function ConversationPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           engagement_template: tmpl,
-          allow_postex: tmpl === "redteam_deep",
+          allow_postex: false,
         }),
       }).catch(() => {});
     }

@@ -21,7 +21,7 @@ Independent **expert pack** units maintained outside the Node harness.
 
 ## Node as runtime
 
-The product Node (**Node4 lineage / Graph × Pi** — unique product Node) is an OMP-class agent runtime with a **built-in `default` seat** (工作台助手; never Expert Hard Graph) plus optional expert packs. **Expert pentest DoD** = **Hard Graph × Pi** (mature `graphs/hard/app_assessment.json`; thin lab alias only). Soft scenario graphs are Default/light assist — not Expert DoD. Expert Hard stages use pi inside a product-owned runner (Task + Agent fan-out + Feedback process metrics). ADR 0001 B1: fallback B retired; no live Node5 tree.
+The product Node (**Node4 lineage / Graph × Pi** — unique product Node) is an OMP-class agent runtime with a **built-in `default` seat** (工作台助手; never Expert Graph) plus optional expert packs. **Expert pentest DoD** = **Expert Graph × Pi** (mature `graphs/hard/app_assessment.json`; thin lab alias only). **Soft scenario graphs are retired** as a product work mode (#68 / #76). Expert Graph stages use pi inside a product-owned runner (Task + Agent fan-out + Feedback process metrics). ADR 0001 B1: fallback B retired; no live Node5 tree.
 
 **Model B — platform citizen base + specialist overlay:**
 
@@ -58,7 +58,7 @@ Remote marketplace / network hot-load is out of scope.
 | id | Purpose |
 |----|---------|
 | `default` | **Target built-in seat** (workspace assistant); not a commercial Expert instance |
-| `pentest` | Application security (Web/API); templates app_assessment / redteam_deep |
+| `pentest` | Application security (Web/API); product Expert Graph template `app_assessment` |
 | `ctf` | CTF web player |
 | `consult` | **Legacy alias → `default`** (stub pack during migration) |
 | `llm-security` | Model and Agent security (Guide + DeepTeam methodology skills) |

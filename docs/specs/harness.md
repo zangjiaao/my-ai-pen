@@ -1,6 +1,6 @@
 # Agent Runtime harness — OMP-class (node4 candidate detail)
 
-> **Product path:** This file describes the **Node4 lineage** harness (Graph × Pi — **unique** product Node). Soft scenario Graph is assistive OMP; **Hard Graph** (`graphDiscipline=hard` / hard graph ids / `NODE4_HARD_GRAPH`) is runner-owned stage order with fail-closed Feedback — see `docs/specs/task-graph.md` and ADR 0001. **Agent Runtime** is **pi-ai + pi-agent-core** via product seam `runNode4Agent` (not pi-coding-agent). Fallback B (elevate Node5) is **retired**; `node5/` is deleted. Platform binds to exactly one Node process per deployment (Node4).  
+> **Product path:** This file describes the **Node4 lineage** harness (Graph × Pi — **unique** product Node). **Expert Graph** (Hard Graph runner: product assessment templates / `graphDiscipline=hard` / hard graph ids / `NODE4_HARD_GRAPH`) is runner-owned stage order with fail-closed Feedback — see `docs/specs/task-graph.md` and ADR 0001. **Soft scenario graph is retired** as a product work mode (#68 / #76). **Default** free OMP never enters Expert Graph. **Agent Runtime** is **pi-ai + pi-agent-core** via product seam `runNode4Agent` (not pi-coding-agent). Fallback B (elevate Node5) is **retired**; `node5/` is deleted. Platform binds to exactly one Node process per deployment (Node4).  
 
 > **Commercial clean-room design** for the node4 path (no oh-my-pi / OMP source dependency).  
 > Calibrated: 2026-07-23  
@@ -172,7 +172,7 @@ UI Elapsed = that window (local tick while running). Tool-call hooks do **not** 
 |-----------|----------|
 | `goal` | Tracks long-task objective + optional `token_budget` for display/telemetry. **Product default:** no outer `goal_continuation` inject (`NODE4_MAX_GOAL_CONTINUES` unset/0). Lab: `NODE4_MAX_GOAL_CONTINUES=unlimited` (or positive cap) re-enables outer inject while active. `complete` is free in code (active \| budget-limited); honesty is prompt-steered. Lab-only hard audit: `NODE4_GOAL_REQUIRE_CLEARANCE=1`. Open goals do not invent product findings. |
 | `subagent` | Child under `taskDir/subagents/<id>`; evidence written |
-| Work mode | **Free** (no scenario graph) vs **Graph** (`app_assessment` / `redteam_deep` via `graph_id` or `engagement_template`) |
+| Work mode | **Free** (no Expert Graph) vs **Expert Graph** (product `app_assessment` → Hard Graph runner; Soft scenario mode retired #76) |
 
 ### OMP subagent scheduling
 
@@ -184,16 +184,15 @@ Main (current seat session) decides when to spawn — not a separate Coordinator
 | `command=` set | Bounded shell probe only (deterministic / smokes). |
 | Lab dry | `NODE4_SUBAGENT_DRY=1` skips LLM and writes a dry structured result. |
 
-### Free vs Graph (pentest)
+### Free vs Expert Graph (pentest)
 
 | Mode | Selection (structured only) | Discipline |
 |------|----------------------------|------------|
-| **Free** (default) | No graph / `free` | Pure OMP — Main may self-act; subagent optional |
-| **Graph** (product = **soft**) | `app_assessment` / `redteam_deep` | Node menu + coverage honesty; **Main may act**; sub optional for heavy/polluting work; Main books; child proofs → parent observations when sub used |
+| **Free** (default) | No graph / `free` | Pure OMP — Main may self-act; subagent optional; **not** Expert DoD |
+| **Expert Graph** | Product `app_assessment` (and hard aliases / thin lab ids) | Hard Graph runner owns stages; fail-closed Feedback; pi in stages; Main is not stage scheduler |
+| **Soft scenario Graph** | **Retired** (#76) | No product resolve; soft pack JSON removed |
 
-Lab hard (strip Main act): `NODE4_GRAPH_MAIN_ACT=hard`. UI default = Free. Lab: `scripts/bench-dvwa-work-modes.sh`.
-
-Configs: `experts/pentest/graphs/`. Loader: `node4/src/runtime/pentest-graph.ts`. Status emits `work_mode=free|graph:<id>`.
+Lab Main-act strip (non-product): `NODE4_GRAPH_MAIN_ACT=hard`. UI default = Free. Expert Graph configs: `experts/pentest/graphs/hard/`. Resolve: `resolveHardGraph`.
 
 **Surface ledger:** `taskDir/surfaces/ledger.json` — recon `surfaces[]` work queue; Graph `todo(done)` requires act/deadend/skip (see `docs/specs/task-graph.md`).
 

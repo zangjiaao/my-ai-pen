@@ -36,8 +36,8 @@ Map [#59](https://github.com/zangjiaao/my-ai-pen/issues/59) ran offline P1 parit
 
 ## Consequences
 
-- Soft scenario Graph remains available but is **not** Hard Graph DoD.
-- Expert Hard path: mature hard graph primary (`graphs/hard/app_assessment.json`); thin lab alias only; Hard Graph runner + pi stage executor; ownership inversion when `graphDiscipline=hard` / hard graph id / `NODE4_HARD_GRAPH`.
+- Soft scenario Graph is **retired as a product work mode** (#68 / #76). Expert structured work is **Graph-only** (Hard Graph runner). Default free OMP never enters Expert Graph.
+- Expert Graph path: mature hard graph primary (`graphs/hard/app_assessment.json`); thin lab alias only; product template `app_assessment` resolves to Expert Graph; Hard Graph runner + pi stage executor.
 - Living docs describe **one** product Node lineage (Node4) — not co-equal kernels, not “A in pursuit / B on standby.”
 - Multi-expert packs share the same base; CTF/audit full Hard Graphs are later waves.
 - Construction: Main / subagent / Hard Graph stages enter via `runNode4Agent`; tools as AgentTool; no coding-agent dependency.

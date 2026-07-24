@@ -18,9 +18,10 @@ export const BUILTIN_PACK_IDS: ReadonlySet<string> = new Set(["default", "consul
 
 /**
  * Structured work mode / RoE for pentest — not free-text NLP.
- * free = no scenario Graph (pure OMP); other ids load pack graphs.
+ * free = Default-style free OMP (no Expert Graph); app_assessment = Expert Graph.
+ * Soft scenario product mode retired (#76). redteam_deep waits hard Graph (phase 2).
  */
-export type EngagementTemplateId = "free" | "app_assessment" | "redteam_deep";
+export type EngagementTemplateId = "free" | "app_assessment";
 
 export const ENGAGEMENT_TEMPLATES: readonly {
   id: EngagementTemplateId;
@@ -30,21 +31,15 @@ export const ENGAGEMENT_TEMPLATES: readonly {
 }[] = [
   {
     id: "free",
-    label: "自由 OMP",
-    description: "默认：Main 自执行；自愿 subagent；无场景图",
+    label: "自由对话",
+    description: "Default/自由助理路径：无 Expert Graph；台账与闲聊",
     allowPostex: false,
   },
   {
     id: "app_assessment",
     label: "应用评估 (Graph)",
-    description: "场景图 + 强制 Subagent 委派；Main 入账；禁止后渗透",
+    description: "Expert Graph：阶段 runner + fail-closed Feedback；禁止后渗透",
     allowPostex: false,
-  },
-  {
-    id: "redteam_deep",
-    label: "红队深度 (Graph)",
-    description: "场景图 + 强制 Subagent 委派；可后渗透/横向（授权内）",
-    allowPostex: true,
   },
 ] as const;
 

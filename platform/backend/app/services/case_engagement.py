@@ -7,8 +7,10 @@ from __future__ import annotations
 from typing import Any
 
 # Product templates (map to pentest pack via catalog aliases; RoE differs).
+# Soft scenario mode retired (#76): product Graph template is app_assessment only.
+# redteam_deep kept as alias for historical Case rows / RoE archaeology until hard Graph phase 2.
 TEMPLATE_APP = "app_assessment"
-TEMPLATE_DEEP = "redteam_deep"
+TEMPLATE_DEEP = "redteam_deep"  # historical / phase-2 placeholder — not a product Soft Graph
 
 _TEMPLATE_ALIASES: dict[str, str] = {
     "app_assessment": TEMPLATE_APP,
@@ -16,11 +18,15 @@ _TEMPLATE_ALIASES: dict[str, str] = {
     "assess": TEMPLATE_APP,
     "pre-prod": TEMPLATE_APP,
     "preprod": TEMPLATE_APP,
+    # Historical deep template id (not product UI; normalize still recognizes Case data)
     "redteam_deep": TEMPLATE_DEEP,
     "redteam": TEMPLATE_DEEP,
     "red-team": TEMPLATE_DEEP,
     "deep": TEMPLATE_DEEP,
 }
+
+# Product-selectable Graph templates (UI / new Case writes). Soft retired; deep waits phase 2.
+PRODUCT_GRAPH_TEMPLATES: frozenset[str] = frozenset({TEMPLATE_APP})
 
 
 def normalize_engagement_template(value: object) -> str | None:
@@ -28,6 +34,12 @@ def normalize_engagement_template(value: object) -> str | None:
     if not key:
         return None
     return _TEMPLATE_ALIASES.get(key) or (key if key in (TEMPLATE_APP, TEMPLATE_DEEP) else None)
+
+
+def is_product_graph_template(value: object) -> bool:
+    """True when template is a currently product-offered Expert Graph id."""
+    tmpl = normalize_engagement_template(value)
+    return tmpl in PRODUCT_GRAPH_TEMPLATES
 
 
 def resolve_allow_postex(

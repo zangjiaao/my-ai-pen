@@ -2,7 +2,8 @@
  * Node4 smokes: role packs, subagent, goals, booking, shell, no finish_scan.
  */
 import { mkdir, writeFile, readdir, readFile, access } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { applyTodoOp, TodoStore, formatTodoSummary } from "./stores/todo.js";
 import { EvidenceStore } from "./stores/evidence.js";
 import {
@@ -1067,58 +1068,30 @@ async function main() {
   assert(llmDry.ok === true, `llm dry subagent: ${JSON.stringify(llmDry).slice(0, 200)}`);
   assert(llmDry.structured?.summary, "llm dry has structured summary");
 
-  // Graph mode: node_type required + reject unknown
-  const { buildPentestGraphContext, resolvePentestGraph } = await import("./runtime/pentest-graph.js");
-  const gRes = await resolvePentestGraph({
+  // Expert Graph resolve (#76 Soft retired): product app_assessment → Hard Graph runner path
+  const { resolveHardGraph } = await import("./runtime/hard-graph-definition.js");
+  const { resolvePentestGraph } = await import("./runtime/pentest-graph.js");
+  const repoPentest = join(dirname(fileURLToPath(import.meta.url)), "../../experts/pentest");
+  const hardSmoke = await resolveHardGraph({
+    task: { engagementTemplate: "app_assessment" },
+    packRoot: repoPentest,
+    packId: "pentest",
+    env: {},
+  });
+  assert(hardSmoke.mode === "hard", "product app_assessment resolves Expert Graph");
+  if (hardSmoke.mode === "hard") {
+    assert(hardSmoke.graph.id === "app_assessment", "mature Expert Graph id");
+    assert(hardSmoke.graph.stages.length > 0, "Expert Graph has stages");
+  }
+  const softRetired = await resolvePentestGraph({
     task: {
       ...runtime.task,
       engagementTemplate: "app_assessment",
     },
     packId: "pentest",
+    packRoot: repoPentest,
   });
-  runtime.lifecycle.pentestGraph = buildPentestGraphContext(gRes);
-  assert(runtime.lifecycle.pentestGraph.mode === "graph", "graph mode active for smoke");
-  const needNode = textOf(
-    await exec(createSubagentTool(runtime), "g-miss-node", {
-      target: "http://127.0.0.1:9/",
-      scope: "127.0.0.1 only",
-      already_done: "parent recon done",
-      this_turn_goal: "should require node_type",
-      success_criteria: "harness rejects missing node",
-      command: "echo ok",
-    }),
-  );
-  assert(needNode.includes("node_type") || needNode.includes("Graph mode"), `graph requires node_type: ${needNode.slice(0, 160)}`);
-  const badNode = textOf(
-    await exec(createSubagentTool(runtime), "g-bad-node", {
-      target: "http://127.0.0.1:9/",
-      scope: "127.0.0.1 only",
-      already_done: "parent recon done",
-      this_turn_goal: "illegal postex on assessment",
-      success_criteria: "harness rejects postex node",
-      node_type: "postex",
-      command: "echo ok",
-    }),
-  );
-  assert(badNode.includes("not in") || badNode.includes("error"), `graph rejects postex on assessment: ${badNode.slice(0, 160)}`);
-  // Graph mode rejects command= shell packages; use dry LLM path for a valid surface node_type.
-  process.env.NODE4_SUBAGENT_DRY = "1";
-  const goodText = textOf(
-    await exec(createSubagentTool(runtime), "g-ok-node", {
-      // Distinct path so prior smoke packages do not hit path re-dispatch budget.
-      target: "http://127.0.0.1:9/graph-surface-ok",
-      scope: "127.0.0.1 only",
-      already_done: "parent recon done",
-      this_turn_goal: "surface slice",
-      success_criteria: "result.json written",
-      node_type: "surface",
-    }),
-  );
-  if (prevDry === undefined) delete process.env.NODE4_SUBAGENT_DRY;
-  else process.env.NODE4_SUBAGENT_DRY = prevDry;
-  assert(!goodText.trimStart().toLowerCase().startsWith("error:"), `graph surface not error: ${goodText.slice(0, 200)}`);
-  const goodNode = JSON.parse(goodText);
-  assert(goodNode.ok === true && goodNode.node_type === "surface", `graph surface ok: ${JSON.stringify(goodNode).slice(0, 200)}`);
+  assert(softRetired.mode === "free", "Soft product path never injects scenario graph");
   runtime.lifecycle.pentestGraph = undefined;
 
   // Compose continue with goals
