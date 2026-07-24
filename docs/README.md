@@ -12,11 +12,11 @@
 
 ### Runtime contracts (`docs/specs/`)
 
-Candidate-specific implementation detail. See each file preamble for dual-track framing.
+Node4 implementation detail (Graph × Pi product path).
 
 | Doc | Role |
 |-----|------|
-| [`specs/harness.md`](specs/harness.md) | OMP-class harness (no agent finish) — primarily documents `node4/` candidate |
+| [`specs/harness.md`](specs/harness.md) | OMP-class harness (no agent finish) — `node4/` |
 | [`specs/task-graph.md`](specs/task-graph.md) | Free vs Graph work mode (scenario graphs) |
 | [`specs/pen-tools-sandbox.md`](specs/pen-tools-sandbox.md) | Unified pen-sandbox (shell + browser) |
 | [`specs/expert-offers.md`](specs/expert-offers.md) | Node packs + Expert instances (@mention routing) |
@@ -35,17 +35,16 @@ Candidate-specific implementation detail. See each file preamble for dual-track 
 | Path | Notes |
 |------|--------|
 | [`../experts/README.md`](../experts/README.md) | Expert pack catalog |
-| [`../benchmarks/`](../benchmarks/) | **Frozen** lab evaluation assets (not product authority) |
+| [`../benchmarks/`](../benchmarks/) | **Frozen** lab evaluation assets (not product authority; includes historical Hard-vs-Node5) |
 | [`../research/`](../research/) | **Frozen** third-party reference clones (not product) |
-| [`../node5/README.md`](../node5/README.md) | Node5 candidate (CLI research control arm) |
 
 ## Runtime code
 
-- **Product Node path:** Graph × Pi on `node4/` (ADR 0001); `node5/` lab/fallback B — bind **exactly one** Node process per deployment
-- **Product:** `platform/`, `experts/`, `sandbox/` (pen-sandbox)
+- **Product Node path:** Graph × Pi on `node4/` only (ADR 0001 B1 — fallback B retired; `node5/` deleted)
+- **Product:** `platform/`, `node4/`, `experts/`, `sandbox/` (pen-sandbox)
 - **Legacy (plan-delete after gates):** `node/`, `node2/`, `node3/` — do not expand product behavior
 - **Frozen:** `research/`, `benchmarks/`
 
 ## Spec precedence
 
-`AGENTS.md` → `docs/prd.md` → `docs/specs/harness.md` (candidate-specific) → other `docs/specs/*` / `docs/v1-delivery.md`
+`AGENTS.md` → `docs/prd.md` → `docs/specs/harness.md` (Node4) → other `docs/specs/*` / `docs/v1-delivery.md`

@@ -1,12 +1,14 @@
 # Research: Node5 lab invocation for Juice Shop and DVWA
 
+> **HISTORICAL (post-X1).** `node5/` was hard-deleted after map [#59](https://github.com/zangjiaao/my-ai-pen/issues/59) P1 pass (task [#67](https://github.com/zangjiaao/my-ai-pen/issues/67); ADR 0001 B1). Paths below refer to the **former** tree in git history. Do not treat this as a live lab runbook.
+
 **Ticket:** [#62](https://github.com/zangjiaao/my-ai-pen/issues/62)  
 **Parent map:** [#59](https://github.com/zangjiaao/my-ai-pen/issues/59)  
 **Canonical path:** `docs/wayfinder/node5-lab-invocation-juice-dvwa.md`  
 **Branch:** `research/node5-lab-invocation-juice-dvwa`  
 **Date:** 2026-07-24  
 **Method:** Primary-source inventory (`node5/` CLI + source + README + `pyproject.toml` + `node5/workspace/*` EVAL/run artifacts + living docs). **No live Juice/DVWA attack runs.**  
-**Related:** Hard Node4 standalone dual-arm research — [`hard-soft-juice-arm-invocation.md`](./hard-soft-juice-arm-invocation.md) (#50). ADR: `docs/adr/0001-graph-x-pi-product-path.md` (Node5 = lab / semantic reference / fallback B only).
+**Related:** Hard Node4 standalone dual-arm research — [`hard-soft-juice-arm-invocation.md`](./hard-soft-juice-arm-invocation.md) (#50). ADR: `docs/adr/0001-graph-x-pi-product-path.md` (B1: fallback B retired; tree deleted).
 
 ---
 

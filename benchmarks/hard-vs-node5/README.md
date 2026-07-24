@@ -1,6 +1,8 @@
 # Hard Graph Node4 vs Node5 (offline evaluation)
 
-**Purpose:** Offline scorecards and run artifacts for **P1 parity** — product **Hard Graph Node4** vs **Node5 lab** on Juice Shop and DVWA.
+> **HISTORICAL / CLOSED (2026-07-24).** Map [#59](https://github.com/zangjiaao/my-ai-pen/issues/59) P1 passed on Juice + DVWA; **X1 deleted `node5/`** and **B1 retired fallback B** (task [#67](https://github.com/zangjiaao/my-ai-pen/issues/67)). This tree is **frozen lab evidence** — not a live dual-arm lab, not product authority. Do not re-run protocol expecting a live `node5/` tree.
+
+**Purpose (archive):** Offline scorecards and run artifacts for **P1 parity** — product **Hard Graph Node4** vs **Node5 lab** on Juice Shop and DVWA.
 
 **Not product authority.** Does not drive prompts, Hard Graph gates, or runtime checklists.
 

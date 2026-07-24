@@ -7,7 +7,7 @@
 
 **Hard Graph:** product-owned runner (`hard-graph-*`); stage order and Feedback are **not** Main OMP scheduling. Soft scenario Graph is **not** Expert Hard Graph DoD.
 
-**Product seats:** **Default / Soft-light** = assistant paths (never Expert Hard DoD). **Expert pentest framework** = **Hard Graph × Pi** (mature hard graph primary). **Node5** = lab / semantic reference for Task / Agent / Feedback model only (ADR 0001).
+**Product seats:** **Default / Soft-light** = assistant paths (never Expert Hard DoD). **Expert pentest framework** = **Hard Graph × Pi** (mature hard graph primary). Three-layer Task / Agent / Feedback semantics are **product-owned** on Node4 (ADR 0001 B1; former Node5 lab tree deleted).
 
 ## One sentence
 
@@ -16,10 +16,10 @@
 **Hard Graph × Pi** — outer runner owns stages; pi runs inside stages; fail-closed gates; **Expert pentest DoD**.  
 **Case** holds long-term shared state.
 
-### Node5 → Hard semantic mapping (model parity, not ADK clone)
+### Three-layer model → Hard product mapping
 
-| Node5 layer | Node4 Hard product |
-|-------------|-------------------|
+| Semantic layer | Node4 Hard product |
+|----------------|-------------------|
 | **Task Graph** (hard stage order) | Hard Graph runner + pack `graphs/hard/*` (mature `app_assessment` primary; `app_assessment_thin` lab alias) |
 | **Agent Graph** (class_probe workers) | Stage captain depth-0 + `subagent` packages when allowed; Join → parent `hard-stage:<stageId>[:<workerId>]` |
 | **Feedback Graph** | Stage `require` structure gates + process metrics (discovery yield soft-fail, coverage attempts) on Product state |

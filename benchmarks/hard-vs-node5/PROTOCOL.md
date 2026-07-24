@@ -1,6 +1,6 @@
 # Protocol — Hard Graph Node4 vs Node5 (Q1 minimal)
 
-> **FROZEN**  
+> **FROZEN / HISTORICAL** — P1 campaigns completed; **X1 deleted `node5/`** (task [#67](https://github.com/zangjiaao/my-ai-pen/issues/67)). Kept for scorecard archaeology only.  
 > Map: [Wayfinder: Hard Node4 parity vs Node5 → delete Node5](https://github.com/zangjiaao/my-ai-pen/issues/59)  
 > Freeze ticket: [Grilling: freeze Hard vs Node5 comparison protocol (Q1)](https://github.com/zangjiaao/my-ai-pen/issues/61)  
 > Scorecard freeze: [Grilling: freeze Hard vs Node5 P1 scorecard (M1)](https://github.com/zangjiaao/my-ai-pen/issues/60)

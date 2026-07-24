@@ -15,8 +15,8 @@ A specialized pack (e.g. pentest, CTF, code audit) installed on the same Node ba
 _Avoid_: role seat, plugin (when meaning a full specialist pack)
 
 **Node candidate**:
-An implementation that can be bound as the product Node. **Product path (locked):** Node4 lineage with Graph × Pi. **Node5:** lab / semantic reference and formal fallback B — not a co-equal product expansion track while A is in pursuit.
-_Avoid_: pre-PK dual product kernel, treating node5 as default bind target
+An implementation that can be bound as the product Node. **Product path (locked):** Node4 lineage with Graph × Pi only. Former Node5 lab tree is deleted; fallback B retired (ADR 0001 B1).
+_Avoid_: dual product kernel, resurrecting node5 as bind target
 
 ### Runtime shape
 
