@@ -42,6 +42,21 @@ def is_product_graph_template(value: object) -> bool:
     return tmpl in PRODUCT_GRAPH_TEMPLATES
 
 
+def normalize_product_engagement_template(value: object) -> str | None:
+    """Template for new product Graph selection.
+
+    free/none → None (free OMP). Product Graph ids only (app_assessment).
+    Historical soft-only ids (e.g. redteam_deep) → None (not product-offered).
+    """
+    key = str(value or "").strip().lower()
+    if not key or key in {"free", "none", "off", "false", "null"}:
+        return None
+    tmpl = normalize_engagement_template(value)
+    if tmpl and is_product_graph_template(tmpl):
+        return tmpl
+    return None
+
+
 def resolve_allow_postex(
     *,
     engagement_template: object = None,
@@ -108,14 +123,18 @@ def merge_case_into_context(
     case = dict(ctx.get("case") or {}) if isinstance(ctx.get("case"), dict) else {}
     task = dict(ctx.get("task") or {}) if isinstance(ctx.get("task"), dict) else {}
 
-    tmpl = normalize_engagement_template(engagement_template)
-    if tmpl:
-        case["engagement_template"] = tmpl
-        task["engagement_template"] = tmpl
-        # Keep pack sticky as pentest for assessment templates (aliases resolve on node).
-        if tmpl in (TEMPLATE_APP, TEMPLATE_DEEP):
-            task["engagement"] = tmpl  # alias → pentest on normalize_pack_id
+    # Product writes: only free or product Graph templates (Soft/deep not product).
+    tmpl = normalize_product_engagement_template(engagement_template)
+    if engagement_template is not None and str(engagement_template).strip() != "":
+        if tmpl:
+            case["engagement_template"] = tmpl
+            task["engagement_template"] = tmpl
+            task["engagement"] = tmpl  # alias → pentest pack on Node
             task["role"] = "pentest"
+        else:
+            # free or non-product (e.g. redteam_deep) — clear Graph template
+            case.pop("engagement_template", None)
+            task.pop("engagement_template", None)
 
     # allow_postex: explicit arg wins; if only template changes, re-derive from the
     # *new* template — do not treat a stale case.allow_postex as a user override.
@@ -135,6 +154,10 @@ def merge_case_into_context(
         )
         case["allow_postex"] = resolved
         task["allow_postex"] = resolved
+    elif engagement_template is not None and str(engagement_template).strip() != "" and not tmpl:
+        # Non-product template cleared → conservative post-ex off
+        case["allow_postex"] = False
+        task["allow_postex"] = False
 
     if isinstance(stations, list):
         case["stations"] = stations

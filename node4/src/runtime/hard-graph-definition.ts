@@ -257,3 +257,29 @@ export function applyHardGraphToolProfile(
   }
   return out;
 }
+
+/**
+ * Product work-path decision after resolveHardGraph (#76 Soft retire).
+ * - chatOnly / ledger assist → free (no Expert Graph execution)
+ * - hard resolved → Expert Graph runner
+ * - structured Graph intent but no hard Graph → fail-closed (never silent free)
+ * - no Graph intent → free OMP
+ */
+export function resolveExpertWorkPath(input: {
+  hardMode: "hard" | "not_hard";
+  /** From resolveGraphIdFromTask — non-null means structured Graph intent. */
+  graphIntent: string | null;
+  chatOnly?: boolean;
+  ledgerAssistSeat?: boolean;
+}): { path: "hard" } | { path: "free" } | { path: "unavailable"; graphId: string } {
+  if (input.chatOnly || input.ledgerAssistSeat) {
+    return { path: "free" };
+  }
+  if (input.hardMode === "hard") {
+    return { path: "hard" };
+  }
+  if (input.graphIntent) {
+    return { path: "unavailable", graphId: input.graphIntent };
+  }
+  return { path: "free" };
+}

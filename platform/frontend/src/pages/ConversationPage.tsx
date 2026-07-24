@@ -703,12 +703,10 @@ export default function ConversationPage() {
         }>(`/api/conversations/${id}/case`);
         if (requestSeq !== stateRefreshSeqRef.current) return;
         const tmpl = String(caseData.engagement_template || "").trim();
-        if (tmpl === "free" || tmpl === "none") {
-          setEngagementTemplate("free");
-        } else if (tmpl === "app_assessment") {
+        // Product templates only (Soft/deep retired until phase 2 hard Graph)
+        if (tmpl === "app_assessment") {
           setEngagementTemplate("app_assessment");
-        } else if (tmpl === "redteam_deep") {
-          // Soft-only deep template retired until hard Graph phase 2 — fall back free
+        } else {
           setEngagementTemplate("free");
         }
         if (caseData.handoff && caseData.handoff.status === "suggested") {
@@ -1639,7 +1637,7 @@ export default function ConversationPage() {
     goalObjective?: string;
     /** Explicit engagement from @expert pack (structured; not NLP). */
     engagement?: string;
-    /** Product RoE template (app_assessment | redteam_deep). */
+    /** Product RoE / Graph template (free omit | app_assessment). */
     engagementTemplate?: string;
     allowPostex?: boolean;
     expertId?: string;
@@ -1673,9 +1671,7 @@ export default function ConversationPage() {
         ? {
             engagement_template: engTemplate,
             allow_postex:
-              typeof opts.allowPostex === "boolean"
-                ? opts.allowPostex
-                : engTemplate === "redteam_deep",
+              typeof opts.allowPostex === "boolean" ? opts.allowPostex : false,
           }
         : {}),
     };

@@ -1068,9 +1068,9 @@ async function main() {
   assert(llmDry.ok === true, `llm dry subagent: ${JSON.stringify(llmDry).slice(0, 200)}`);
   assert(llmDry.structured?.summary, "llm dry has structured summary");
 
-  // Expert Graph resolve (#76 Soft retired): product app_assessment → Hard Graph runner path
-  const { resolveHardGraph } = await import("./runtime/hard-graph-definition.js");
-  const { resolvePentestGraph } = await import("./runtime/pentest-graph.js");
+  // Expert Graph resolve (#76 Soft retired): product app_assessment → hard; soft free only
+  const { resolveExpertWorkPath, resolveHardGraph } = await import("./runtime/hard-graph-definition.js");
+  const { freePentestGraphResolution, resolveGraphIdFromTask } = await import("./runtime/pentest-graph.js");
   const repoPentest = join(dirname(fileURLToPath(import.meta.url)), "../../experts/pentest");
   const hardSmoke = await resolveHardGraph({
     task: { engagementTemplate: "app_assessment" },
@@ -1083,15 +1083,16 @@ async function main() {
     assert(hardSmoke.graph.id === "app_assessment", "mature Expert Graph id");
     assert(hardSmoke.graph.stages.length > 0, "Expert Graph has stages");
   }
-  const softRetired = await resolvePentestGraph({
-    task: {
-      ...runtime.task,
-      engagementTemplate: "app_assessment",
-    },
-    packId: "pentest",
-    packRoot: repoPentest,
-  });
-  assert(softRetired.mode === "free", "Soft product path never injects scenario graph");
+  assert(
+    resolveExpertWorkPath({ hardMode: "hard", graphIntent: "app_assessment" }).path === "hard",
+    "work path hard",
+  );
+  assert(
+    resolveExpertWorkPath({ hardMode: "not_hard", graphIntent: "redteam_deep" }).path === "unavailable",
+    "missing hard Graph fails closed",
+  );
+  assert(resolveGraphIdFromTask({ engagementTemplate: "app_assessment" }) === "app_assessment");
+  assert(freePentestGraphResolution({}).mode === "free");
   runtime.lifecycle.pentestGraph = undefined;
 
   // Compose continue with goals

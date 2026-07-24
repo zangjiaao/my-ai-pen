@@ -44,7 +44,8 @@ Handoff JSON in the stage prompt remains informational; booking authority is lif
 | **Expert Graph × Pi** | Product template `app_assessment` (and hard aliases / thin lab ids), `graphDiscipline=hard`, or `NODE4_HARD_GRAPH=1` | Runner drives ordered stages; **mature `app_assessment` under `graphs/hard/`**; thin = `app_assessment_thin` lab only; fail-closed Feedback; **Main is not the stage scheduler** |
 | **Soft scenario Graph** | **Retired** | No product resolve; soft pack JSON removed; lab-only `NODE4_ALLOW_SOFT_GRAPH=1` is non-product archaeology |
 
-`redteam_deep` is **not** a product Graph template until a hard Graph file exists (phase 2 of #76).
+`redteam_deep` is **not** a product Graph template until a hard Graph file exists (phase 2 of #76).  
+If a task carries structured Graph intent but no hard Graph resolves, the Node **fail-closes** (`task_error` / failed) — never silent free OMP.
 
 UI default for casual work: **Default / free**. Expert Graph is explicit structured selection (`app_assessment`).
 

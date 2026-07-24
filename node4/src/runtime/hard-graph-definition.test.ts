@@ -12,9 +12,9 @@ import {
   listHardGraphIds,
   loadHardGraphFile,
   loadSoftScenarioGraphFile,
+  resolveExpertWorkPath,
   resolveHardGraph,
 } from "./hard-graph-definition.js";
-import { loadPentestGraphFile } from "./pentest-graph.js";
 
 const repoExperts = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -24,8 +24,6 @@ const repoExperts = join(
 // Product soft scenario files are retired (#76) — load returns null
 const softGone = await loadSoftScenarioGraphFile(repoExperts, "app_assessment");
 assert.equal(softGone, null, "soft app_assessment file removed from product pack");
-const softLegacy = await loadPentestGraphFile(repoExperts, "app_assessment");
-assert.equal(softLegacy, null, "soft pack path no longer loads product soft graphs");
 
 // Synthetic soft shape still discriminated from hard
 const syntheticSoft = {
@@ -160,5 +158,36 @@ for (const stage of hard!.stages) {
     assert.ok(allow.includes("write"), `stage ${stage.id} allow must include write`);
   }
 }
+
+// Expert work path: fail-closed when Graph intent but no hard Graph
+assert.deepEqual(
+  resolveExpertWorkPath({ hardMode: "hard", graphIntent: "app_assessment" }),
+  { path: "hard" },
+);
+assert.deepEqual(
+  resolveExpertWorkPath({ hardMode: "not_hard", graphIntent: null }),
+  { path: "free" },
+);
+assert.deepEqual(
+  resolveExpertWorkPath({ hardMode: "not_hard", graphIntent: "redteam_deep" }),
+  { path: "unavailable", graphId: "redteam_deep" },
+);
+assert.deepEqual(
+  resolveExpertWorkPath({
+    hardMode: "hard",
+    graphIntent: "app_assessment",
+    chatOnly: true,
+  }),
+  { path: "free" },
+  "chat-only never enters Expert Graph runner",
+);
+assert.deepEqual(
+  resolveExpertWorkPath({
+    hardMode: "not_hard",
+    graphIntent: "redteam_deep",
+    ledgerAssistSeat: true,
+  }),
+  { path: "free" },
+);
 
 console.log("hard-graph-definition.test.ts: ok");
