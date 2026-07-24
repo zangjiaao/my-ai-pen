@@ -249,6 +249,34 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
       : graphMainActRaw === "delegate_preferred" || graphMainActRaw === "soft"
         ? ("delegate_preferred" as const)
         : undefined;
+  const graphExecutionRaw = String(
+    message.graph_execution ?? message.graphExecution ?? "",
+  )
+    .trim()
+    .toLowerCase();
+  const graphExecution =
+    graphExecutionRaw === "continue" ||
+    graphExecutionRaw === "continue_chat" ||
+    graphExecutionRaw === "envelope"
+      ? ("continue" as const)
+      : graphExecutionRaw === "full" ||
+          graphExecutionRaw === "run" ||
+          graphExecutionRaw === "restart"
+        ? ("full" as const)
+        : undefined;
+  const graphReentryRaw = message.graph_reentry ?? message.graphReentry;
+  const graphReentry =
+    graphReentryRaw === true ||
+    graphReentryRaw === "true" ||
+    graphReentryRaw === 1 ||
+    graphReentryRaw === "1"
+      ? true
+      : graphReentryRaw === false ||
+          graphReentryRaw === "false" ||
+          graphReentryRaw === 0 ||
+          graphReentryRaw === "0"
+        ? false
+        : undefined;
   const allowPostexRaw = message.allow_postex ?? message.allowPostex;
   const allowPostex =
     typeof allowPostexRaw === "boolean"
@@ -290,6 +318,8 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
     engagementTemplate: engagementTemplate?.trim() || undefined,
     graphId: graphIdRaw?.trim() || undefined,
     graphMainAct,
+    graphExecution,
+    graphReentry,
     allowPostex,
     accounts: message.accounts !== undefined ? message.accounts : undefined,
     goalObjective,

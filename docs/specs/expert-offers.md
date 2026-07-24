@@ -63,8 +63,8 @@ Aliases fold to canonical pack ids (same idea as Node4 `resolveRolePack`):
 
 | Template | allow_postex | Pack | Product |
 |----------|--------------|------|---------|
-| `app_assessment` | false | pentest | **Yes** — Expert Graph |
-| `redteam_deep` | true | pentest | **No** until hard Graph phase 2 (#76); historical Case normalize only |
+| `app_assessment` | false | pentest | **Yes** — Expert Graph (应用评估) |
+| `redteam_deep` | true | pentest | **Yes** — Expert Graph (红队深度; hard file phase 2 / #78) |
 
 Blank engagement / no expert selected → **`default` seat** (built-in; not offers-gated).  
 Expert execution still requires pack in offers. Unset RoE defaults to **post-ex off** (conservative).

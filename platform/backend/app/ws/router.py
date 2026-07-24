@@ -3620,6 +3620,8 @@ async def _dispatch_task_assign_to_node(
         task_msg["expert_name"] = expert_name
     task_msg = await _merge_case_roe_into_task_assign(conv_id, task_msg)
     task_msg = await _attach_case_context_to_task_assign(conv_id, task_msg)
+    # C1 (#78): after Expert Graph completed, sticky template must not full-run Hard stages.
+    task_msg = await _apply_graph_execution_c1(conv_id, task_msg, msg)
 
     gate_err = await _gate_engagement_for_node(node_id, engagement)
     if gate_err:
@@ -3734,6 +3736,47 @@ def _task_assign_from_user_message(conv_id: str, msg: dict, task_id: str) -> dic
             out["allow_postex"] = False
     if msg.get("accounts") is not None:
         out["accounts"] = msg.get("accounts")
+    return out
+
+
+async def _apply_graph_execution_c1(conv_id: str | None, task_msg: dict, msg: dict) -> dict:
+    """Set graph_execution=continue after completed Expert Graph (C1), unless structured reentry.
+
+    Structured only — does not parse user text. Explicit graph_reentry / graph_execution=full
+    from the client keeps a full Expert Graph run (#81 later).
+    """
+    out = dict(task_msg or {})
+    # Explicit client structured fields win.
+    raw_exec = str(
+        msg.get("graph_execution") or msg.get("graphExecution") or out.get("graph_execution") or ""
+    ).strip().lower()
+    reentry = msg.get("graph_reentry") if "graph_reentry" in msg else msg.get("graphReentry")
+    if reentry is None:
+        reentry = out.get("graph_reentry")
+    if reentry is True or str(reentry).lower() in {"true", "1", "yes"}:
+        out["graph_execution"] = "full"
+        out["graph_reentry"] = True
+        return out
+    if raw_exec in {"full", "run", "restart"}:
+        out["graph_execution"] = "full"
+        return out
+    if raw_exec in {"continue", "continue_chat", "envelope"}:
+        out["graph_execution"] = "continue"
+        return out
+
+    et = str(out.get("engagement_template") or out.get("engagementTemplate") or "").strip()
+    try:
+        from app.services.case_engagement import is_product_graph_template
+
+        if not is_product_graph_template(et):
+            return out
+    except Exception:
+        return out
+
+    status = await _conversation_status(str(conv_id)) if conv_id else None
+    # Completed Expert Graph work → follow-up chat stays in envelope (not a new Hard schedule).
+    if str(status or "").lower() in {"completed", "complete", "done"}:
+        out["graph_execution"] = "continue"
     return out
 
 

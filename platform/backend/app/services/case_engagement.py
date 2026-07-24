@@ -7,10 +7,9 @@ from __future__ import annotations
 from typing import Any
 
 # Product templates (map to pentest pack via catalog aliases; RoE differs).
-# Soft scenario mode retired (#76): product Graph template is app_assessment only.
-# redteam_deep kept as alias for historical Case rows / RoE archaeology until hard Graph phase 2.
+# Soft scenario mode retired (#76). Phase 2 (#78): product Graphs = app_assessment + redteam_deep.
 TEMPLATE_APP = "app_assessment"
-TEMPLATE_DEEP = "redteam_deep"  # historical / phase-2 placeholder — not a product Soft Graph
+TEMPLATE_DEEP = "redteam_deep"
 
 _TEMPLATE_ALIASES: dict[str, str] = {
     "app_assessment": TEMPLATE_APP,
@@ -18,15 +17,14 @@ _TEMPLATE_ALIASES: dict[str, str] = {
     "assess": TEMPLATE_APP,
     "pre-prod": TEMPLATE_APP,
     "preprod": TEMPLATE_APP,
-    # Historical deep template id (not product UI; normalize still recognizes Case data)
     "redteam_deep": TEMPLATE_DEEP,
     "redteam": TEMPLATE_DEEP,
     "red-team": TEMPLATE_DEEP,
     "deep": TEMPLATE_DEEP,
 }
 
-# Product-selectable Graph templates (UI / new Case writes). Soft retired; deep waits phase 2.
-PRODUCT_GRAPH_TEMPLATES: frozenset[str] = frozenset({TEMPLATE_APP})
+# Product-selectable Expert Graph templates (UI / new Case writes). No free chip here.
+PRODUCT_GRAPH_TEMPLATES: frozenset[str] = frozenset({TEMPLATE_APP, TEMPLATE_DEEP})
 
 
 def normalize_engagement_template(value: object) -> str | None:
@@ -45,8 +43,8 @@ def is_product_graph_template(value: object) -> bool:
 def normalize_product_engagement_template(value: object) -> str | None:
     """Template for new product Graph selection.
 
-    free/none → None (free OMP). Product Graph ids only (app_assessment).
-    Historical soft-only ids (e.g. redteam_deep) → None (not product-offered).
+    free/none → None (Default free seat — not an Expert Graph template).
+    Product Expert Graph ids: app_assessment, redteam_deep (#78 S2).
     """
     key = str(value or "").strip().lower()
     if not key or key in {"free", "none", "off", "false", "null"}:
@@ -123,7 +121,7 @@ def merge_case_into_context(
     case = dict(ctx.get("case") or {}) if isinstance(ctx.get("case"), dict) else {}
     task = dict(ctx.get("task") or {}) if isinstance(ctx.get("task"), dict) else {}
 
-    # Product writes: only free or product Graph templates (Soft/deep not product).
+    # Product writes: free/none clear template; product Graphs (app_assessment, redteam_deep).
     tmpl = normalize_product_engagement_template(engagement_template)
     if engagement_template is not None and str(engagement_template).strip() != "":
         if tmpl:
@@ -132,7 +130,7 @@ def merge_case_into_context(
             task["engagement"] = tmpl  # alias → pentest pack on Node
             task["role"] = "pentest"
         else:
-            # free or non-product (e.g. redteam_deep) — clear Graph template
+            # free or unknown non-product — clear Graph template
             case.pop("engagement_template", None)
             task.pop("engagement_template", None)
 

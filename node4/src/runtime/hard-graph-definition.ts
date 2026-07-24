@@ -159,42 +159,75 @@ export async function listHardGraphIds(packRoot: string): Promise<string[]> {
 }
 
 /**
- * Explicit Expert Graph (Hard Graph runner) ids/aliases (structured only).
+ * Single product Graph catalog (phase 2 / #76 residual #2).
+ * Shared by hard load (`resolveHardGraph`) and fail-closed intent
+ * (`resolveGraphIdFromTask` via `resolveGraphIntentCanonical`).
  *
- * Product path (#68 / #76): Soft scenario graphs are retired. Product template
- * `app_assessment` and aliases resolve to the mature Expert Graph under
- * graphs/hard/app_assessment.json. Thin lab ids remain explicit.
- *
- * `redteam_deep` is intentionally **not** aliased until a hard Graph file ships
- * (phase 2). Soft-only templates must not enter the Expert Graph runner.
+ * - hardId set → Expert Graph file under graphs/hard/{hardId}.json
+ * - hardId omitted → intent-only (fail-closed until a hard file exists)
  */
-const HARD_GRAPH_ALIASES: Record<string, string> = {
-  // Product assessment template → mature Expert Graph
-  app_assessment: "app_assessment",
-  assessment: "app_assessment",
-  assess: "app_assessment",
-  "pre-prod": "app_assessment",
-  preprod: "app_assessment",
-  // Explicit mature aliases
-  hard_app_assessment: "app_assessment",
-  app_assessment_hard: "app_assessment",
-  hard: "app_assessment",
+export type ProductGraphCatalogEntry = {
+  /** Canonical product / intent id */
+  intentId: string;
+  /** Hard Graph file id when this alias loads Expert Graph */
+  hardId?: string;
+};
+
+const PRODUCT_GRAPH_CATALOG: Record<string, ProductGraphCatalogEntry> = {
+  // Product assessment → mature Expert Graph
+  app_assessment: { intentId: "app_assessment", hardId: "app_assessment" },
+  assessment: { intentId: "app_assessment", hardId: "app_assessment" },
+  assess: { intentId: "app_assessment", hardId: "app_assessment" },
+  "pre-prod": { intentId: "app_assessment", hardId: "app_assessment" },
+  preprod: { intentId: "app_assessment", hardId: "app_assessment" },
+  hard_app_assessment: { intentId: "app_assessment", hardId: "app_assessment" },
+  app_assessment_hard: { intentId: "app_assessment", hardId: "app_assessment" },
+  hard: { intentId: "app_assessment", hardId: "app_assessment" },
   // Thin lab / compatibility
-  app_assessment_thin: "app_assessment_thin",
-  hard_app_assessment_thin: "app_assessment_thin",
-  thin: "app_assessment_thin",
+  app_assessment_thin: { intentId: "app_assessment_thin", hardId: "app_assessment_thin" },
+  hard_app_assessment_thin: {
+    intentId: "app_assessment_thin",
+    hardId: "app_assessment_thin",
+  },
+  thin: { intentId: "app_assessment_thin", hardId: "app_assessment_thin" },
+  // Product deep (phase 2) — hard file graphs/hard/redteam_deep.json
+  redteam_deep: { intentId: "redteam_deep", hardId: "redteam_deep" },
+  redteam: { intentId: "redteam_deep", hardId: "redteam_deep" },
+  "red-team": { intentId: "redteam_deep", hardId: "redteam_deep" },
+  deep: { intentId: "redteam_deep", hardId: "redteam_deep" },
 };
 
 /** Default Expert Graph id when graphDiscipline/env selects hard without a thin/lab id. */
 export const DEFAULT_HARD_GRAPH_ID = "app_assessment";
 
+/** Look up catalog entry for a raw structured template/graph id (lowercase). */
+export function lookupProductGraphCatalog(
+  raw: string,
+): ProductGraphCatalogEntry | null {
+  const key = String(raw || "")
+    .trim()
+    .toLowerCase();
+  if (!key) return null;
+  return PRODUCT_GRAPH_CATALOG[key] ?? null;
+}
+
+/** Canonical Graph intent id, or null if not a known Graph template alias. */
+export function resolveGraphIntentCanonical(raw: string): string | null {
+  return lookupProductGraphCatalog(raw)?.intentId ?? null;
+}
+
+/** Hard Graph file id for a product alias, or null if intent-only / unknown. */
+export function resolveHardGraphIdFromAlias(raw: string): string | null {
+  return lookupProductGraphCatalog(raw)?.hardId ?? null;
+}
+
 /**
  * Resolve whether this task wants Expert Graph (Hard Graph runner) and which definition to load.
  * Structured fields only — no free-text NLP on instruction.
  *
- * - Product assessment aliases / explicit thin-hard ids → Expert Graph
+ * - Product catalog aliases with hardId → Expert Graph
  * - graphDiscipline === "hard" or NODE4_HARD_GRAPH → mature default (or alias if set)
- * - Unknown / soft-only ids without hard file → not_hard (no Soft fallback here)
+ * - Unknown ids without hard file → not_hard (no Soft fallback here)
  */
 export async function resolveHardGraph(options: {
   task: Pick<TaskEnvelope, "graphId" | "engagementTemplate" | "graphDiscipline">;
@@ -216,7 +249,7 @@ export async function resolveHardGraph(options: {
   )
     .trim()
     .toLowerCase();
-  const aliased = HARD_GRAPH_ALIASES[rawId] ?? null;
+  const aliased = resolveHardGraphIdFromAlias(rawId);
 
   let hardId: string | null = null;
   if (aliased) {
@@ -259,8 +292,26 @@ export function applyHardGraphToolProfile(
 }
 
 /**
- * Product work-path decision after resolveHardGraph (#76 Soft retire).
+ * C1 (#78 / #80): post-Graph continue-chat stays in envelope without full Hard re-run.
+ * Structured only — `graph_execution=continue` or equivalent; never NLP on instruction.
+ * Explicit `graph_reentry` / `graph_execution=full` forces full Expert Graph path (#81 later).
+ */
+export function isContinueInEnvelopeExecution(input: {
+  graphExecution?: string | null;
+  graphReentry?: boolean | null;
+}): boolean {
+  if (input.graphReentry === true) return false;
+  const ge = String(input.graphExecution || "")
+    .trim()
+    .toLowerCase();
+  if (ge === "full" || ge === "run" || ge === "restart") return false;
+  return ge === "continue" || ge === "continue_chat" || ge === "envelope";
+}
+
+/**
+ * Product work-path decision after resolveHardGraph (#76 Soft retire / #78 C1).
  * - chatOnly / ledger assist → free (no Expert Graph execution)
+ * - continue-in-envelope (C1) → free OMP under sticky Graph RoE/template (not Hard stages)
  * - hard resolved → Expert Graph runner
  * - structured Graph intent but no hard Graph → fail-closed (never silent free)
  * - no Graph intent → free OMP
@@ -271,8 +322,14 @@ export function resolveExpertWorkPath(input: {
   graphIntent: string | null;
   chatOnly?: boolean;
   ledgerAssistSeat?: boolean;
+  /** C1: post-complete follow-up — free-in-envelope, not full Hard schedule. */
+  continueInEnvelope?: boolean;
 }): { path: "hard" } | { path: "free" } | { path: "unavailable"; graphId: string } {
   if (input.chatOnly || input.ledgerAssistSeat) {
+    return { path: "free" };
+  }
+  // C1 before hard path: sticky Graph template must not re-fire stages on chat turns.
+  if (input.continueInEnvelope) {
     return { path: "free" };
   }
   if (input.hardMode === "hard") {

@@ -1,11 +1,11 @@
 # Pentest work modes: Default free OMP + Expert Graph × Pi
 
 > Living companion to `docs/specs/harness.md` §6.  
-> Calibrated: 2026-07-24 (Expert Graph-only: Soft product mode retired #68 / #76)
+> Calibrated: 2026-07-25 (Expert Graph-only; phase 2 product `redteam_deep` #78)
 
 **Expert Graph:** product-owned runner (`hard-graph-*`); stage order and Feedback are **not** Main OMP scheduling. Soft scenario Graph is **retired** as a product work mode (not Expert DoD).
 
-**Product seats:** **Default** = free platform assistant (never Expert Graph). **Expert** = **Graph mode only** (multi-Graph per expert; mature hard graph primary). Three-layer Task / Agent / Feedback semantics are **product-owned** on Node4 (ADR 0001 B1).
+**Product seats:** **Default** = free platform assistant (never Expert Graph). **Expert** = **Graph mode only** (multi-Graph per expert; product templates `app_assessment` + `redteam_deep`; no Expert free/OMP scene). After Graph `task_complete`, same-session follow-ups stay in the Graph envelope without auto full re-run (C1). Three-layer Task / Agent / Feedback semantics are **product-owned** on Node4 (ADR 0001 B1).
 
 ## One sentence
 
@@ -40,14 +40,16 @@ Handoff JSON in the stage prompt remains informational; booking authority is lif
 
 | Mode | How selected | Behavior |
 |------|--------------|----------|
-| **Default / free OMP** | No Expert Graph template; Default seat or free Expert chat | Pure OMP; Main may self-act; voluntary subagent; **not** Expert DoD |
-| **Expert Graph × Pi** | Product template `app_assessment` (and hard aliases / thin lab ids), `graphDiscipline=hard`, or `NODE4_HARD_GRAPH=1` | Runner drives ordered stages; **mature `app_assessment` under `graphs/hard/`**; thin = `app_assessment_thin` lab only; fail-closed Feedback; **Main is not the stage scheduler** |
-| **Soft scenario Graph** | **Retired** | No product resolve; soft pack JSON removed; lab-only `NODE4_ALLOW_SOFT_GRAPH=1` is non-product archaeology |
+| **Default / free OMP** | No Expert Graph template; **Default seat only** | Pure OMP; Main may self-act; voluntary subagent; **not** Expert DoD |
+| **Expert Graph × Pi** | Product templates `app_assessment` / `redteam_deep` (aliases), `graphDiscipline=hard`, or `NODE4_HARD_GRAPH=1`; thin lab ids | Runner drives ordered stages; hard files under `graphs/hard/`; fail-closed Feedback; **Main is not the stage scheduler** |
+| **Soft scenario Graph** | **Retired** | No product resolve; soft pack JSON removed |
 
-`redteam_deep` is **not** a product Graph template until a hard Graph file exists (phase 2 of #76).  
+Product Expert UI selects **only** scenario Graphs (`app_assessment`, `redteam_deep`) — no Expert free chip.  
+`redteam_deep` loads `graphs/hard/redteam_deep.json` (assessment fork + `chain`/`postex`/`lateral`; `roe.allow_postex: true`).  
+Post-Graph continue-chat: structured `graph_execution=continue` (C1) keeps envelope without full Hard re-run; structured retest/re-entry is map #81.  
 If a task carries structured Graph intent but no hard Graph resolves, the Node **fail-closes** (`task_error` / failed) — never silent free OMP.
 
-UI default for casual work: **Default / free**. Expert Graph is explicit structured selection (`app_assessment`).
+UI: casual work → **Default**. Expert work → explicit Graph template selection.
 
 ## Subagent + acceptance loop
 
@@ -95,7 +97,7 @@ Main DISPATCH (goal + success_criteria)
 
 ## Pack files
 
-- Expert Graph: `experts/pentest/graphs/hard/app_assessment.json` (mature primary), `experts/pentest/graphs/hard/app_assessment_thin.json` (lab/compat)
+- Expert Graph: `experts/pentest/graphs/hard/app_assessment.json` (mature primary), `experts/pentest/graphs/hard/redteam_deep.json` (deep + post-ex), `experts/pentest/graphs/hard/app_assessment_thin.json` (lab/compat)
 - Soft pack JSON under `graphs/*.json`: **removed** from product tree (#76)
 
 ## DVWA three-way lab

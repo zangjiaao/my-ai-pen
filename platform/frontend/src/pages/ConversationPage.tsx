@@ -16,7 +16,13 @@ import { useInfiniteQuery, useQueryClient, type InfiniteData } from "@tanstack/r
 import { Check, ChevronDown, PanelRight, PanelRightClose, Target, Upload } from "lucide-react";
 import type { AgentIdentity, Conversation, Message } from "../lib/types";
 import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../lib/securityTypes";
-import { ENGAGEMENT_TEMPLATES, expertLabel, resolveExpertColor, type ExpertId } from "../lib/experts";
+import {
+  ENGAGEMENT_TEMPLATES,
+  expertLabel,
+  resolveExpertColor,
+  type EngagementTemplateId,
+  type ExpertId,
+} from "../lib/experts";
 
 const ACTIVE_CONVERSATION_KEY = "active_conversation_id";
 /** Set by AssetPage when launching a task from selected hosts/ports. */
@@ -239,8 +245,8 @@ export default function ConversationPage() {
   const [input, setInput] = useState("");
   /** Explicit long-task Goal mode (structured field → Node4; not NLP). */
   const [goalModeEnabled, setGoalModeEnabled] = useState(false);
-  /** Structured work mode: free | app_assessment (Expert Graph) — not NLP. Soft retired; redteam_deep phase 2. */
-  const [engagementTemplate, setEngagementTemplate] = useState<"free" | "app_assessment">("free");
+  /** Expert Graph template only (S2/U1 #78) — not free/OMP; free is Default seat. */
+  const [engagementTemplate, setEngagementTemplate] = useState<EngagementTemplateId>("app_assessment");
   const [caseHandoff, setCaseHandoff] = useState<{
     suggest_pack_id?: string;
     reason?: string;
@@ -703,11 +709,11 @@ export default function ConversationPage() {
         }>(`/api/conversations/${id}/case`);
         if (requestSeq !== stateRefreshSeqRef.current) return;
         const tmpl = String(caseData.engagement_template || "").trim();
-        // Product templates only (Soft/deep retired until phase 2 hard Graph)
-        if (tmpl === "app_assessment") {
-          setEngagementTemplate("app_assessment");
+        // Product Expert Graphs only (app_assessment | redteam_deep)
+        if (tmpl === "redteam_deep") {
+          setEngagementTemplate("redteam_deep");
         } else {
-          setEngagementTemplate("free");
+          setEngagementTemplate("app_assessment");
         }
         if (caseData.handoff && caseData.handoff.status === "suggested") {
           setCaseHandoff(caseData.handoff);
@@ -1637,7 +1643,7 @@ export default function ConversationPage() {
     goalObjective?: string;
     /** Explicit engagement from @expert pack (structured; not NLP). */
     engagement?: string;
-    /** Product RoE / Graph template (free omit | app_assessment). */
+    /** Product Expert Graph template (app_assessment | redteam_deep). */
     engagementTemplate?: string;
     allowPostex?: boolean;
     expertId?: string;
@@ -1974,11 +1980,13 @@ export default function ConversationPage() {
     // Keep selected partner after send so multi-turn stays with the same persona.
     setInput("");
     const isPentest = isPentestMentionTarget(resolved);
-    // free/none → omit template (Node Free mode). Graph ids pass through.
-    const tmpl =
-      isPentest && engagementTemplate && engagementTemplate !== "free" && engagementTemplate !== "none"
+    // Expert path requires a scenario Graph template (S2/U1 — no Expert free).
+    const tmpl: EngagementTemplateId | "" =
+      isPentest && (engagementTemplate === "app_assessment" || engagementTemplate === "redteam_deep")
         ? engagementTemplate
         : "";
+    const tmplAllowPostex =
+      ENGAGEMENT_TEMPLATES.find((t) => t.id === tmpl)?.allowPostex === true;
     const enableGoal = isPentest && goalModeEnabled;
     // Asset「创建任务」draft: attach structured target/scope on first send after expert pick.
     const pendingAsset = pendingAssetTaskRef.current;
@@ -2001,7 +2009,7 @@ export default function ConversationPage() {
           }
         : {}),
       engagementTemplate: tmpl || undefined,
-      allowPostex: isPentest ? false : undefined,
+      allowPostex: isPentest ? tmplAllowPostex : undefined,
       expertId: resolved?.kind === "expert" ? resolved.expertId : undefined,
     });
     // Persist case RoE only for pentest (1 session = 1 case)
@@ -2011,7 +2019,7 @@ export default function ConversationPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           engagement_template: tmpl,
-          allow_postex: false,
+          allow_postex: tmplAllowPostex,
         }),
       }).catch(() => {});
     }
@@ -2034,7 +2042,7 @@ export default function ConversationPage() {
   const activePartner = selectedMention || mentionTargets[0] || null;
   const showPentestControls = isPentestMentionTarget(activePartner);
   const activeModeLabel =
-    ENGAGEMENT_TEMPLATES.find((t) => t.id === engagementTemplate)?.label || "自由 OMP";
+    ENGAGEMENT_TEMPLATES.find((t) => t.id === engagementTemplate)?.label || "应用评估";
 
   // Close partner / mode menus on outside click or Escape.
   useEffect(() => {

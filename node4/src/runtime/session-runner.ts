@@ -34,7 +34,11 @@ import {
   freePentestGraphResolution,
   resolveGraphIdFromTask,
 } from "./pentest-graph.js";
-import { resolveExpertWorkPath, resolveHardGraph } from "./hard-graph-definition.js";
+import {
+  isContinueInEnvelopeExecution,
+  resolveExpertWorkPath,
+  resolveHardGraph,
+} from "./hard-graph-definition.js";
 import { runHardGraphExpertTask } from "./hard-graph-task.js";
 import {
   buildGoalBudgetLimitPrompt,
@@ -177,11 +181,16 @@ export async function runNode4Task(
     packId: pack.id,
     env: process.env,
   });
+  const continueInEnvelope = isContinueInEnvelopeExecution({
+    graphExecution: task.graphExecution,
+    graphReentry: task.graphReentry,
+  });
   const workPath = resolveExpertWorkPath({
     hardMode: hardResolved.mode,
     graphIntent: resolveGraphIdFromTask(task),
     chatOnly,
     ledgerAssistSeat,
+    continueInEnvelope,
   });
   if (workPath.path === "hard" && hardResolved.mode === "hard") {
     runtime.lifecycle.abortSignal = signal;
@@ -200,8 +209,8 @@ export async function runNode4Task(
   if (workPath.path === "unavailable") {
     const msg =
       `Expert Graph '${workPath.graphId}' is not available on this product path ` +
-      `(Soft scenario mode retired; hard Graph missing or not product-offered yet). ` +
-      `Use free chat or product template app_assessment.`;
+      `(Soft scenario mode retired; hard Graph missing or not product-offered). ` +
+      `Use Default free chat or product templates app_assessment / redteam_deep.`;
     await loggingPlatform
       .send({
         type: "task_error",

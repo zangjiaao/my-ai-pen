@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   applyHardGraphToolProfile,
+  isContinueInEnvelopeExecution,
   isHardGraphDefinition,
   isSoftScenarioGraphDefinition,
   listHardGraphIds,
@@ -90,14 +91,18 @@ const r3b = await resolveHardGraph({
 });
 assert.equal(r3b.mode, "hard");
 
-// Soft-only redteam_deep has no hard file → not Expert Graph yet (phase 2)
+// Phase 2: redteam_deep hard file → Expert Graph
 const rDeep = await resolveHardGraph({
   task: { graphId: "redteam_deep" },
   packRoot: repoExperts,
   packId: "pentest",
   env: {},
 });
-assert.equal(rDeep.mode, "not_hard", "redteam_deep not product Graph until hard file exists");
+assert.equal(rDeep.mode, "hard", "redteam_deep product Graph loads");
+if (rDeep.mode === "hard") {
+  assert.equal(rDeep.graph.id, "redteam_deep");
+  assert.equal(rDeep.graph.roe?.allow_postex, true);
+}
 
 // Non-pentest pack never hard
 const r4 = await resolveHardGraph({
@@ -169,8 +174,14 @@ assert.deepEqual(
   { path: "free" },
 );
 assert.deepEqual(
-  resolveExpertWorkPath({ hardMode: "not_hard", graphIntent: "redteam_deep" }),
-  { path: "unavailable", graphId: "redteam_deep" },
+  resolveExpertWorkPath({ hardMode: "hard", graphIntent: "redteam_deep" }),
+  { path: "hard" },
+  "deep Graph intent + hard load → Expert path",
+);
+assert.deepEqual(
+  resolveExpertWorkPath({ hardMode: "not_hard", graphIntent: "missing_phase2_graph" }),
+  { path: "unavailable", graphId: "missing_phase2_graph" },
+  "missing hard Graph still fails closed",
 );
 assert.deepEqual(
   resolveExpertWorkPath({
@@ -188,6 +199,43 @@ assert.deepEqual(
     ledgerAssistSeat: true,
   }),
   { path: "free" },
+);
+
+// C1: sticky Graph template + hard load after complete → free-in-envelope (not full Hard)
+assert.deepEqual(
+  resolveExpertWorkPath({
+    hardMode: "hard",
+    graphIntent: "app_assessment",
+    continueInEnvelope: true,
+  }),
+  { path: "free" },
+  "C1 continue-in-envelope skips full Hard schedule",
+);
+assert.deepEqual(
+  resolveExpertWorkPath({
+    hardMode: "hard",
+    graphIntent: "redteam_deep",
+    continueInEnvelope: true,
+  }),
+  { path: "free" },
+  "C1 deep continue skips full Hard schedule",
+);
+assert.deepEqual(
+  resolveExpertWorkPath({
+    hardMode: "hard",
+    graphIntent: "app_assessment",
+    continueInEnvelope: false,
+  }),
+  { path: "hard" },
+  "full Graph run still enters Hard path",
+);
+
+assert.equal(isContinueInEnvelopeExecution({ graphExecution: "continue" }), true);
+assert.equal(isContinueInEnvelopeExecution({ graphExecution: "full" }), false);
+assert.equal(
+  isContinueInEnvelopeExecution({ graphExecution: "continue", graphReentry: true }),
+  false,
+  "structured reentry forces full run",
 );
 
 console.log("hard-graph-definition.test.ts: ok");

@@ -1088,10 +1088,17 @@ async function main() {
     "work path hard",
   );
   assert(
-    resolveExpertWorkPath({ hardMode: "not_hard", graphIntent: "redteam_deep" }).path === "unavailable",
+    resolveExpertWorkPath({ hardMode: "hard", graphIntent: "redteam_deep" }).path === "hard",
+    "deep Graph product path is Expert Graph",
+  );
+  assert(
+    resolveExpertWorkPath({ hardMode: "not_hard", graphIntent: "missing_phase2_graph" }).path ===
+      "unavailable",
     "missing hard Graph fails closed",
   );
   assert(resolveGraphIdFromTask({ engagementTemplate: "app_assessment" }) === "app_assessment");
+  assert(resolveGraphIdFromTask({ engagementTemplate: "redteam_deep" }) === "redteam_deep");
+
   assert(freePentestGraphResolution({}).mode === "free");
   runtime.lifecycle.pentestGraph = undefined;
 

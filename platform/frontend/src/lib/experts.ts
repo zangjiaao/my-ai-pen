@@ -17,12 +17,13 @@ export type ExpertId =
 export const BUILTIN_PACK_IDS: ReadonlySet<string> = new Set(["default", "consult", "workspace"]);
 
 /**
- * Structured work mode / RoE for pentest — not free-text NLP.
- * free = Default-style free OMP (no Expert Graph); app_assessment = Expert Graph.
- * Soft scenario product mode retired (#76). redteam_deep waits hard Graph (phase 2).
+ * Structured Expert Graph templates for pentest — not free-text NLP.
+ * Expert path: scenario Graphs only (S2/U1 #78). free is Default seat only — not listed here.
+ * Soft scenario product mode retired (#76).
  */
-export type EngagementTemplateId = "free" | "app_assessment";
+export type EngagementTemplateId = "app_assessment" | "redteam_deep";
 
+/** Expert Graph chips only (no free). Default free lives on the Default seat, not Expert UI. */
 export const ENGAGEMENT_TEMPLATES: readonly {
   id: EngagementTemplateId;
   label: string;
@@ -30,16 +31,17 @@ export const ENGAGEMENT_TEMPLATES: readonly {
   allowPostex: boolean;
 }[] = [
   {
-    id: "free",
-    label: "自由对话",
-    description: "Default/自由助理路径：无 Expert Graph；台账与闲聊",
+    id: "app_assessment",
+    label: "应用评估",
+    description: "分阶段 Expert Graph：侦察→验证→记账；禁止后渗透",
     allowPostex: false,
   },
   {
-    id: "app_assessment",
-    label: "应用评估 (Graph)",
-    description: "Expert Graph：阶段 runner + fail-closed Feedback；禁止后渗透",
-    allowPostex: false,
+    id: "redteam_deep",
+    label: "红队深度",
+    description:
+      "分阶段 Expert Graph：评估基线 + 利用链/后渗透/横向（RoE 内）；无立足点可诚实结束",
+    allowPostex: true,
   },
 ] as const;
 

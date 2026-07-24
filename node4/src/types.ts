@@ -12,7 +12,7 @@ export type TaskEnvelope = {
   /** Explicit role alias for engagement. */
   role?: string;
   /**
-   * Product engagement template (app_assessment | …; Soft/redteam_deep product Soft retired).
+   * Product engagement template (app_assessment | redteam_deep; Soft retired).
    * Structured only — never derived from instruction free text.
    * Alias of scenario Graph id when using Graph work mode.
    */
@@ -35,6 +35,15 @@ export type TaskEnvelope = {
    * Soft scenario product mode is retired — "soft" is legacy/ignored.
    */
   graphDiscipline?: "soft" | "hard";
+  /**
+   * Expert Graph execution mode (structured only — no NLP). #78 C1:
+   * - "full" / omit on first Graph start → Hard Graph runner
+   * - "continue" after Graph task_complete → free-in-envelope chat (no full re-run)
+   * Explicit graphReentry true forces full run (#81 structured retest later).
+   */
+  graphExecution?: "full" | "continue";
+  /** Structured full Graph re-entry / retest request (not free-text). */
+  graphReentry?: boolean;
   /**
    * Rules-of-engagement: allow host post-ex / lateral.
    * When undefined, derived from engagementTemplate (default false).
