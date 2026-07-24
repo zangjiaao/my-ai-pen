@@ -3740,43 +3740,43 @@ def _task_assign_from_user_message(conv_id: str, msg: dict, task_id: str) -> dic
 
 
 async def _apply_graph_execution_c1(conv_id: str | None, task_msg: dict, msg: dict) -> dict:
-    """Set graph_execution=continue after completed Expert Graph (C1), unless structured reentry.
+    """Attach structured graph_execution when C1 policy resolves (pure helper owns rules)."""
+    from app.services.case_engagement import resolve_graph_execution
 
-    Structured only — does not parse user text. Explicit graph_reentry / graph_execution=full
-    from the client keeps a full Expert Graph run (#81 later).
-    """
     out = dict(task_msg or {})
-    # Explicit client structured fields win.
-    raw_exec = str(
-        msg.get("graph_execution") or msg.get("graphExecution") or out.get("graph_execution") or ""
-    ).strip().lower()
-    reentry = msg.get("graph_reentry") if "graph_reentry" in msg else msg.get("graphReentry")
-    if reentry is None:
-        reentry = out.get("graph_reentry")
-    if reentry is True or str(reentry).lower() in {"true", "1", "yes"}:
-        out["graph_execution"] = "full"
-        out["graph_reentry"] = True
-        return out
-    if raw_exec in {"full", "run", "restart"}:
-        out["graph_execution"] = "full"
-        return out
-    if raw_exec in {"continue", "continue_chat", "envelope"}:
-        out["graph_execution"] = "continue"
-        return out
-
+    explicit = (
+        msg.get("graph_execution")
+        or msg.get("graphExecution")
+        or out.get("graph_execution")
+        or out.get("graphExecution")
+        or ""
+    )
     et = str(out.get("engagement_template") or out.get("engagementTemplate") or "").strip()
-    try:
-        from app.services.case_engagement import is_product_graph_template
+    status: str | None = None
+    if conv_id:
+        try:
+            status = await _conversation_status(str(conv_id))
+        except Exception:
+            # Leave execution unset on status fetch failure (Node first-run full when hard).
+            import logging
 
-        if not is_product_graph_template(et):
-            return out
-    except Exception:
-        return out
+            logging.getLogger(__name__).warning(
+                "graph_execution C1: conversation status fetch failed conv_id=%s",
+                conv_id,
+                exc_info=True,
+            )
+            status = None
 
-    status = await _conversation_status(str(conv_id)) if conv_id else None
-    # Completed Expert Graph work → follow-up chat stays in envelope (not a new Hard schedule).
-    if str(status or "").lower() in {"completed", "complete", "done"}:
-        out["graph_execution"] = "continue"
+    resolved = resolve_graph_execution(
+        engagement_template=et,
+        conversation_status=status,
+        explicit_execution=explicit,
+    )
+    if resolved is not None:
+        out["graph_execution"] = resolved
+    # Do not emit legacy graph_reentry; structured re-run is graph_execution=full.
+    out.pop("graph_reentry", None)
+    out.pop("graphReentry", None)
     return out
 
 

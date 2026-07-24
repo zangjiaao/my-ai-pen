@@ -6,6 +6,7 @@ from app.services.case_engagement import (
     normalize_product_engagement_template,
     is_product_graph_template,
     resolve_allow_postex,
+    resolve_graph_execution,
     roe_payload_for_task_assign,
 )
 
@@ -114,3 +115,110 @@ def test_handoff_structured():
     fields = case_fields_from_context(ctx)
     assert fields["handoff"]["suggest_pack_id"] == "llm-security"
     assert fields["handoff"]["status"] == "suggested"
+
+
+def test_resolve_graph_execution_c1():
+    # Explicit client structured fields win
+    assert (
+        resolve_graph_execution(
+            engagement_template="app_assessment",
+            conversation_status="completed",
+            explicit_execution="full",
+        )
+        == "full"
+    )
+    assert (
+        resolve_graph_execution(
+            engagement_template="app_assessment",
+            conversation_status="working",
+            explicit_execution="run",
+        )
+        == "full"
+    )
+    assert (
+        resolve_graph_execution(
+            engagement_template="app_assessment",
+            conversation_status="working",
+            explicit_execution="continue",
+        )
+        == "continue"
+    )
+    assert (
+        resolve_graph_execution(
+            engagement_template="redteam_deep",
+            conversation_status="created",
+            explicit_execution="continue_chat",
+        )
+        == "continue"
+    )
+    assert (
+        resolve_graph_execution(
+            engagement_template="app_assessment",
+            conversation_status="working",
+            explicit_execution="envelope",
+        )
+        == "continue"
+    )
+
+    # After completed product Graph → continue (C1 sticky follow-up)
+    assert (
+        resolve_graph_execution(
+            engagement_template="app_assessment",
+            conversation_status="completed",
+        )
+        == "continue"
+    )
+    assert (
+        resolve_graph_execution(
+            engagement_template="redteam_deep",
+            conversation_status="complete",
+        )
+        == "continue"
+    )
+    assert (
+        resolve_graph_execution(
+            engagement_template="assess",
+            conversation_status="done",
+        )
+        == "continue"
+    )
+
+    # First run / non-complete → omit (Node full when hard resolves)
+    assert (
+        resolve_graph_execution(
+            engagement_template="app_assessment",
+            conversation_status="working",
+        )
+        is None
+    )
+    assert (
+        resolve_graph_execution(
+            engagement_template="app_assessment",
+            conversation_status=None,
+        )
+        is None
+    )
+    # Non-product template → omit even if completed
+    assert (
+        resolve_graph_execution(
+            engagement_template="free",
+            conversation_status="completed",
+        )
+        is None
+    )
+    assert (
+        resolve_graph_execution(
+            engagement_template=None,
+            conversation_status="completed",
+        )
+        is None
+    )
+    # Explicit full still wins over completed sticky
+    assert (
+        resolve_graph_execution(
+            engagement_template="redteam_deep",
+            conversation_status="completed",
+            explicit_execution="restart",
+        )
+        == "full"
+    )

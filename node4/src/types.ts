@@ -37,13 +37,11 @@ export type TaskEnvelope = {
   graphDiscipline?: "soft" | "hard";
   /**
    * Expert Graph execution mode (structured only — no NLP). #78 C1:
-   * - "full" / omit on first Graph start → Hard Graph runner
+   * - omit / "full" on first Graph start → Hard Graph runner
    * - "continue" after Graph task_complete → free-in-envelope chat (no full re-run)
-   * Explicit graphReentry true forces full run (#81 structured retest later).
+   * Structured retest/re-entry is `graphExecution=full` (map #81 later).
    */
   graphExecution?: "full" | "continue";
-  /** Structured full Graph re-entry / retest request (not free-text). */
-  graphReentry?: boolean;
   /**
    * Rules-of-engagement: allow host post-ex / lateral.
    * When undefined, derived from engagementTemplate (default false).

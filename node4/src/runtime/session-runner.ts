@@ -183,7 +183,6 @@ export async function runNode4Task(
   });
   const continueInEnvelope = isContinueInEnvelopeExecution({
     graphExecution: task.graphExecution,
-    graphReentry: task.graphReentry,
   });
   const workPath = resolveExpertWorkPath({
     hardMode: hardResolved.mode,

@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   isContinueInEnvelopeExecution,
+  parseGraphExecution,
   resolveExpertWorkPath,
   resolveHardGraph,
 } from "./hard-graph-definition.js";
@@ -23,7 +24,6 @@ const followUpTask = {
   engagementTemplate: "app_assessment",
   graphId: undefined as string | undefined,
   graphExecution: "continue" as const,
-  graphReentry: undefined as boolean | undefined,
   // target present (not chatOnly) — the regression sticky+target used to re-fire Graph
   target: { type: "url", value: "https://lab.example/" },
 };
@@ -41,7 +41,6 @@ assert.equal(hard.mode, "hard", "hard definition still loadable (envelope/RoE in
 
 const cont = isContinueInEnvelopeExecution({
   graphExecution: followUpTask.graphExecution,
-  graphReentry: followUpTask.graphReentry,
 });
 assert.equal(cont, true);
 
@@ -57,17 +56,16 @@ assert.equal(
   "C1: sticky Graph + target + continue ⇒ free-in-envelope, not Hard stage schedule",
 );
 
-// Explicit full re-run / reentry still Hard
+// Explicit full re-run still Hard (structured retest = graph_execution=full)
 const reentry = resolveExpertWorkPath({
   hardMode: "hard",
   graphIntent: "redteam_deep",
   chatOnly: false,
   continueInEnvelope: isContinueInEnvelopeExecution({
     graphExecution: "full",
-    graphReentry: true,
   }),
 });
-assert.equal(reentry.path, "hard", "structured reentry still full Hard path");
+assert.equal(reentry.path, "hard", "structured full still full Hard path");
 
 // Deep sticky continue
 const deepCont = resolveExpertWorkPath({
@@ -77,5 +75,25 @@ const deepCont = resolveExpertWorkPath({
   continueInEnvelope: isContinueInEnvelopeExecution({ graphExecution: "continue" }),
 });
 assert.equal(deepCont.path, "free", "deep continue-in-envelope");
+
+// Shared parse collapses synonyms once
+assert.equal(parseGraphExecution({ graph_execution: "continue_chat" }), "continue");
+assert.equal(parseGraphExecution({ graphExecution: "envelope" }), "continue");
+assert.equal(parseGraphExecution({ graph_execution: "run" }), "full");
+assert.equal(parseGraphExecution({ graph_execution: "restart" }), "full");
+assert.equal(parseGraphExecution({}), undefined);
+assert.equal(
+  isContinueInEnvelopeExecution({
+    graphExecution: parseGraphExecution({ graph_execution: "continue_chat" }),
+  }),
+  true,
+  "parse then binary: continue_chat → continue",
+);
+assert.equal(
+  isContinueInEnvelopeExecution({
+    graphExecution: parseGraphExecution({ graph_execution: "full" }),
+  }),
+  false,
+);
 
 console.log("continue-chat-c1.test.ts: ok");

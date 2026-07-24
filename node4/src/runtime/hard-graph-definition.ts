@@ -291,21 +291,34 @@ export function applyHardGraphToolProfile(
   return out;
 }
 
+/** Binary Expert Graph execution after parse (omit = first run uses full when hard resolves). */
+export type GraphExecutionMode = "full" | "continue";
+
+/**
+ * Parse structured graph_execution from task_assign (snake/camel).
+ * Synonyms collapse once: continue_chat|envelope → continue; run|restart → full.
+ * Never NLP on instruction text.
+ */
+export function parseGraphExecution(
+  message: Record<string, unknown> | null | undefined,
+): GraphExecutionMode | undefined {
+  if (!message) return undefined;
+  const raw = message.graph_execution ?? message.graphExecution ?? "";
+  const ge = String(raw).trim().toLowerCase();
+  if (ge === "continue" || ge === "continue_chat" || ge === "envelope") return "continue";
+  if (ge === "full" || ge === "run" || ge === "restart") return "full";
+  return undefined;
+}
+
 /**
  * C1 (#78 / #80): post-Graph continue-chat stays in envelope without full Hard re-run.
- * Structured only — `graph_execution=continue` or equivalent; never NLP on instruction.
- * Explicit `graph_reentry` / `graph_execution=full` forces full Expert Graph path (#81 later).
+ * Structured only — after parse, true iff `graphExecution === "continue"`.
+ * `graphExecution=full` (or omit on first Graph) → full Expert Graph path.
  */
 export function isContinueInEnvelopeExecution(input: {
   graphExecution?: string | null;
-  graphReentry?: boolean | null;
 }): boolean {
-  if (input.graphReentry === true) return false;
-  const ge = String(input.graphExecution || "")
-    .trim()
-    .toLowerCase();
-  if (ge === "full" || ge === "run" || ge === "restart") return false;
-  return ge === "continue" || ge === "continue_chat" || ge === "envelope";
+  return input.graphExecution === "continue";
 }
 
 /**

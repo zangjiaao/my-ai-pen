@@ -107,6 +107,27 @@ def case_fields_from_context(context: object) -> dict[str, Any]:
     }
 
 
+def _clear_product_graph_sticky(case: dict, task: dict) -> None:
+    """Clear product Graph sticky fields so free/none cannot resurrect a Graph template.
+
+    Mutates case/task in place. Clears engagement_template and product-shaped
+    task.engagement; also drops pack role=pentest so case_fields_from_context
+    cannot surface it as a template fallback.
+    """
+    case.pop("engagement_template", None)
+    task.pop("engagement_template", None)
+    sticky_eng = str(task.get("engagement") or "").strip()
+    if sticky_eng and (
+        is_product_graph_template(sticky_eng)
+        or normalize_engagement_template(sticky_eng) is not None
+    ):
+        task.pop("engagement", None)
+    # role was set to pack "pentest" when selecting a Graph; do not let it
+    # surface as engagement_template via case_fields fallback.
+    if str(task.get("role") or "").strip().lower() == "pentest":
+        task.pop("role", None)
+
+
 def merge_case_into_context(
     context: dict | None,
     *,
@@ -130,21 +151,8 @@ def merge_case_into_context(
             task["engagement"] = tmpl  # alias → pentest pack on Node
             task["role"] = "pentest"
         else:
-            # free / none / unknown non-product — clear *all* Graph sticky fields so
-            # case_fields_from_context cannot resurrect app_assessment/redteam_deep
-            # from task.engagement / role fallbacks.
-            case.pop("engagement_template", None)
-            task.pop("engagement_template", None)
-            sticky_eng = str(task.get("engagement") or "").strip()
-            if sticky_eng and (
-                is_product_graph_template(sticky_eng)
-                or normalize_engagement_template(sticky_eng) is not None
-            ):
-                task.pop("engagement", None)
-            # role was set to pack "pentest" when selecting a Graph; do not let it
-            # surface as engagement_template via case_fields fallback.
-            if str(task.get("role") or "").strip().lower() == "pentest":
-                task.pop("role", None)
+            # free / none / unknown non-product — clear sticky Graph fields.
+            _clear_product_graph_sticky(case, task)
 
     # allow_postex: explicit arg wins; if only template changes, re-derive from the
     # *new* template — do not treat a stale case.allow_postex as a user override.
@@ -192,3 +200,30 @@ def roe_payload_for_task_assign(context: object) -> dict[str, Any]:
     if fields.get("accounts") is not None:
         out["accounts"] = fields["accounts"]
     return out
+
+
+def resolve_graph_execution(
+    *,
+    engagement_template: object = None,
+    conversation_status: object = None,
+    explicit_execution: object = None,
+) -> str | None:
+    """Resolve structured graph_execution for task_assign (C1).
+
+    Returns "full" | "continue" | None (omit — Node first-run full when hard resolves).
+    Structured only — never NLP on free-text instruction.
+    Retest / full re-run is explicit graph_execution=full (map #81 later).
+    """
+    raw = str(explicit_execution or "").strip().lower()
+    if raw in {"full", "run", "restart"}:
+        return "full"
+    if raw in {"continue", "continue_chat", "envelope"}:
+        return "continue"
+
+    if not is_product_graph_template(engagement_template):
+        return None
+
+    status = str(conversation_status or "").strip().lower()
+    if status in {"completed", "complete", "done"}:
+        return "continue"
+    return None

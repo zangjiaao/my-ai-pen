@@ -19,6 +19,7 @@ import { NODE4_TOOL_NAMES } from "./tools/index.js";
 import { resolveRolePack } from "./roles/index.js";
 import type { PlatformMessage, PlatformSink, TaskEnvelope, ToolRuntime } from "./types.js";
 import { parseCaseContext } from "./runtime/case-context.js";
+import { parseGraphExecution } from "./runtime/hard-graph-definition.js";
 
 function assert(cond: unknown, msg: string): asserts cond {
   if (!cond) throw new Error(msg);
@@ -69,6 +70,7 @@ export function normalizeTaskAssign(message: Record<string, unknown>): TaskEnvel
       : typeof message.engagementTemplate === "string"
         ? message.engagementTemplate
         : undefined;
+  const graphExecution = parseGraphExecution(message);
   const allowPostexRaw = message.allow_postex ?? message.allowPostex;
   const allowPostex =
     typeof allowPostexRaw === "boolean"
@@ -87,6 +89,7 @@ export function normalizeTaskAssign(message: Record<string, unknown>): TaskEnvel
     engagement: typeof message.engagement === "string" ? message.engagement : undefined,
     role: typeof message.role === "string" ? message.role : undefined,
     engagementTemplate: engagementTemplate?.trim() || undefined,
+    graphExecution,
     allowPostex,
     accounts: message.accounts !== undefined ? message.accounts : undefined,
     goalObjective,

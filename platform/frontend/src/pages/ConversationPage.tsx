@@ -245,8 +245,8 @@ export default function ConversationPage() {
   const [input, setInput] = useState("");
   /** Explicit long-task Goal mode (structured field → Node4; not NLP). */
   const [goalModeEnabled, setGoalModeEnabled] = useState(false);
-  /** Expert Graph template only (S2/U1 #78) — not free/OMP; free is Default seat. */
-  const [engagementTemplate, setEngagementTemplate] = useState<EngagementTemplateId>("app_assessment");
+  /** Expert Graph template only (S2/U1 #78) — null off-pentest; free is Default seat. */
+  const [engagementTemplate, setEngagementTemplate] = useState<EngagementTemplateId | null>(null);
   const [caseHandoff, setCaseHandoff] = useState<{
     suggest_pack_id?: string;
     reason?: string;
@@ -709,11 +709,13 @@ export default function ConversationPage() {
         }>(`/api/conversations/${id}/case`);
         if (requestSeq !== stateRefreshSeqRef.current) return;
         const tmpl = String(caseData.engagement_template || "").trim();
-        // Product Expert Graphs only (app_assessment | redteam_deep)
+        // Product Expert Graphs only (app_assessment | redteam_deep); missing → null
         if (tmpl === "redteam_deep") {
           setEngagementTemplate("redteam_deep");
-        } else {
+        } else if (tmpl === "app_assessment") {
           setEngagementTemplate("app_assessment");
+        } else {
+          setEngagementTemplate(null);
         }
         if (caseData.handoff && caseData.handoff.status === "suggested") {
           setCaseHandoff(caseData.handoff);
@@ -1980,13 +1982,13 @@ export default function ConversationPage() {
     // Keep selected partner after send so multi-turn stays with the same persona.
     setInput("");
     const isPentest = isPentestMentionTarget(resolved);
-    // Expert path requires a scenario Graph template (S2/U1 — no Expert free).
+    // Expert path: only attach product Graph template when set (S2/U1 — no Expert free).
     const tmpl: EngagementTemplateId | "" =
-      isPentest && (engagementTemplate === "app_assessment" || engagementTemplate === "redteam_deep")
+      isPentest && engagementTemplate
         ? engagementTemplate
         : "";
     const tmplAllowPostex =
-      ENGAGEMENT_TEMPLATES.find((t) => t.id === tmpl)?.allowPostex === true;
+      tmpl ? ENGAGEMENT_TEMPLATES.find((t) => t.id === tmpl)?.allowPostex === true : false;
     const enableGoal = isPentest && goalModeEnabled;
     // Asset「创建任务」draft: attach structured target/scope on first send after expert pick.
     const pendingAsset = pendingAssetTaskRef.current;
@@ -2036,11 +2038,21 @@ export default function ConversationPage() {
     if (!isPentestMentionTarget(target)) {
       setGoalModeEnabled(false);
       setModeMenuOpen(false);
+      setEngagementTemplate(null);
+    } else {
+      // Default product Graph when entering pentest Expert without a restored template.
+      setEngagementTemplate((prev) => prev ?? "app_assessment");
     }
   }, [mentionTargets]);
 
   const activePartner = selectedMention || mentionTargets[0] || null;
   const showPentestControls = isPentestMentionTarget(activePartner);
+  // When pentest Expert is active and template unset, default product Graph for UI + send.
+  useEffect(() => {
+    if (showPentestControls && engagementTemplate == null) {
+      setEngagementTemplate("app_assessment");
+    }
+  }, [showPentestControls, engagementTemplate]);
   const activeModeLabel =
     ENGAGEMENT_TEMPLATES.find((t) => t.id === engagementTemplate)?.label || "应用评估";
 

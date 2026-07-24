@@ -13,6 +13,7 @@ import {
   listHardGraphIds,
   loadHardGraphFile,
   loadSoftScenarioGraphFile,
+  parseGraphExecution,
   resolveExpertWorkPath,
   resolveHardGraph,
 } from "./hard-graph-definition.js";
@@ -230,12 +231,26 @@ assert.deepEqual(
   "full Graph run still enters Hard path",
 );
 
+assert.equal(parseGraphExecution({ graph_execution: "continue" }), "continue");
+assert.equal(parseGraphExecution({ graphExecution: "continue_chat" }), "continue");
+assert.equal(parseGraphExecution({ graph_execution: "envelope" }), "continue");
+assert.equal(parseGraphExecution({ graph_execution: "full" }), "full");
+assert.equal(parseGraphExecution({ graph_execution: "run" }), "full");
+assert.equal(parseGraphExecution({ graph_execution: "restart" }), "full");
+assert.equal(parseGraphExecution({}), undefined);
+assert.equal(parseGraphExecution(null), undefined);
+
 assert.equal(isContinueInEnvelopeExecution({ graphExecution: "continue" }), true);
 assert.equal(isContinueInEnvelopeExecution({ graphExecution: "full" }), false);
 assert.equal(
-  isContinueInEnvelopeExecution({ graphExecution: "continue", graphReentry: true }),
+  isContinueInEnvelopeExecution({ graphExecution: undefined }),
   false,
-  "structured reentry forces full run",
+  "omit is not continue (first Graph run)",
+);
+assert.equal(
+  isContinueInEnvelopeExecution({ graphExecution: "continue_chat" }),
+  false,
+  "unparsed synonyms are not continue — parse once at envelope boundary",
 );
 
 console.log("hard-graph-definition.test.ts: ok");
