@@ -79,9 +79,27 @@ def test_product_merge_accepts_deep_graph_template():
 def test_free_clears_product_graph_template():
     ctx = merge_case_into_context({}, engagement_template="app_assessment")
     assert case_fields_from_context(ctx)["engagement_template"] == "app_assessment"
+    # Sticky Graph fields that must not survive free clear
+    assert ctx["task"].get("engagement") == "app_assessment"
+    assert ctx["task"].get("role") == "pentest"
+
     ctx = merge_case_into_context(ctx, engagement_template="free")
     fields = case_fields_from_context(ctx)
     assert not fields.get("engagement_template")
+    assert fields["allow_postex"] is False
+    # No resurrection via task.engagement / role fallbacks
+    assert not ctx.get("task", {}).get("engagement_template")
+    assert not ctx.get("task", {}).get("engagement")
+    assert not is_product_graph_template(ctx.get("task", {}).get("engagement"))
+    assert not is_product_graph_template(fields.get("engagement_template"))
+
+    # Same for deep → free
+    ctx = merge_case_into_context({}, engagement_template="redteam_deep")
+    assert case_fields_from_context(ctx)["engagement_template"] == "redteam_deep"
+    ctx = merge_case_into_context(ctx, engagement_template="none")
+    fields = case_fields_from_context(ctx)
+    assert not fields.get("engagement_template")
+    assert fields["allow_postex"] is False
 
 
 def test_handoff_structured():

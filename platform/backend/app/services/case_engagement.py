@@ -130,9 +130,21 @@ def merge_case_into_context(
             task["engagement"] = tmpl  # alias → pentest pack on Node
             task["role"] = "pentest"
         else:
-            # free or unknown non-product — clear Graph template
+            # free / none / unknown non-product — clear *all* Graph sticky fields so
+            # case_fields_from_context cannot resurrect app_assessment/redteam_deep
+            # from task.engagement / role fallbacks.
             case.pop("engagement_template", None)
             task.pop("engagement_template", None)
+            sticky_eng = str(task.get("engagement") or "").strip()
+            if sticky_eng and (
+                is_product_graph_template(sticky_eng)
+                or normalize_engagement_template(sticky_eng) is not None
+            ):
+                task.pop("engagement", None)
+            # role was set to pack "pentest" when selecting a Graph; do not let it
+            # surface as engagement_template via case_fields fallback.
+            if str(task.get("role") or "").strip().lower() == "pentest":
+                task.pop("role", None)
 
     # allow_postex: explicit arg wins; if only template changes, re-derive from the
     # *new* template — do not treat a stale case.allow_postex as a user override.
@@ -153,7 +165,7 @@ def merge_case_into_context(
         case["allow_postex"] = resolved
         task["allow_postex"] = resolved
     elif engagement_template is not None and str(engagement_template).strip() != "" and not tmpl:
-        # Non-product template cleared → conservative post-ex off
+        # free/none or non-product cleared → conservative post-ex off
         case["allow_postex"] = False
         task["allow_postex"] = False
 
