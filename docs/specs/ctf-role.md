@@ -3,7 +3,7 @@
 **Deliverable CTF “player” role** — selected only via structured fields:
 
 - `engagement: "ctf"` or `role: "ctf"` (aliases: `ctf-web`, `challenge`)
-- **Not** inferred from free-text instructions (Agents.md)
+- **Not** inferred from free-text instructions by platform keyword routing (`AGENTS.md`); Agent/LLM judgment or explicit structured fields only
 
 ## What you get
 

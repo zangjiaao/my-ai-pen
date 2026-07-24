@@ -45,8 +45,14 @@
 
 ## Intent And Workflow Selection
 
-- Do not route user tasks, choose pi-workflows, or set engagement modes by keyword/regex matching on the user's natural-language prompt (including bilingual synonym lists that try to "guess" intent).
-- Prefer the LLM (or an explicit structured field from the product UI / task envelope such as `engagement`) to understand the user's intent and select the matching workflow.
-- Platform code may map an **explicit** structured engagement value to a workflow name and completion gates. It must not invent that engagement by scanning free-text instructions for words like "verify", "retest", or "explain".
-- After the agent runs a workflow, gates and reports should follow the **actually selected workflow / persisted engagement**, not a second keyword pass over the original prompt.
-- When intent is ambiguous and no structured engagement is provided, the agent should decide among published workflows using judgment; defaults in code (if any) must be conservative and disclosed, not disguised NLP.
+**What this forbids:** platform or Node **code** routing tasks, choosing pi-workflows, or inventing `engagement` / mode via keyword/regex/synonym lists on free-text (e.g. `if "复测" in text` / bilingual word lists that "guess" intent).
+
+**What this requires:** intent is either
+1. **understood by the Agent (LLM)** from the user's natural language and task context, or
+2. **carried by an explicit structured field** from the product UI / task envelope (e.g. `engagement`, `role`, selected expert/pack).
+
+**Not what this means:** free-text chat is not illegal; users need not click a mode button. Typing-only tasks are valid — the Agent must interpret them. Structured fields are a fast path and a source of truth when the product already chose a seat/pack, not a requirement that all intent come from UI controls.
+
+- Platform code may map an **already explicit** structured engagement value to a workflow name and completion gates. It must not invent that engagement by scanning instructions for words like "verify", "retest", or "explain".
+- After a workflow is selected, gates and reports follow the **actually selected workflow / persisted engagement**, not a second keyword pass over the original prompt.
+- When intent is ambiguous and no structured engagement is provided, the Agent decides among published workflows by judgment. Code defaults (if any) must be conservative and disclosed — never a hidden keyword table dressed up as "intent detection".
