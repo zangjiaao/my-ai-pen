@@ -29,6 +29,7 @@ import {
   promoteChildSessionToParent,
   seedChildSessionFromParent,
 } from "./subagent-session-seed.js";
+import { SubagentHost } from "./subagent.js";
 
 export type HardGraphStageSessionFactory = (options: {
   stageId: string;
@@ -123,7 +124,11 @@ function stageUserPrompt(input: StageExecutorInput, task: TaskEnvelope): string 
   ].join("\n");
 }
 
-function buildChildRuntime(options: {
+/**
+ * Hard Graph stage agent is runner-owned Main-like for that stage (not a nested subagent).
+ * depth 0 so class_probe can fan-out packages; workers they spawn use depth 1 (nest ban).
+ */
+export function buildHardGraphStageChildRuntime(options: {
   parent: ToolRuntime;
   workDir: string;
   tools: string[];
@@ -133,6 +138,7 @@ function buildChildRuntime(options: {
   const { parent, workDir, tools, pack, abortSignal } = options;
   const packForStage: RolePack = { ...pack, toolNames: tools };
   const processFacts = new ProcessFactStore(join(workDir, "facts"));
+  const allowSubagent = tools.includes("subagent");
   const childRuntime: ToolRuntime = {
     task: parent.task,
     workspaceDir: parent.workspaceDir,
@@ -151,11 +157,61 @@ function buildChildRuntime(options: {
     lifecycle: {
       toolsInLastSegment: 0,
       recentObservations: [],
-      subagentDepth: (parent.lifecycle?.subagentDepth ?? 0) + 1,
+      // Stage captain = depth 0 (can spawn packages). Not parent+1 nest ban.
+      subagentDepth: 0,
       abortSignal,
+      subagentEvidenceCache: [],
     },
   };
+  if (allowSubagent) {
+    childRuntime.subagents = new SubagentHost({
+      task: parent.task,
+      taskDir: workDir,
+      evidence: childRuntime.evidence,
+      platform: parent.platform,
+      goals: childRuntime.goals!,
+    });
+  }
   return { childRuntime, packForStage };
+}
+
+/** @deprecated use buildHardGraphStageChildRuntime */
+const buildChildRuntime = buildHardGraphStageChildRuntime;
+
+/**
+ * Promote Agent Graph worker packages from the stage child into parent Product state.
+ * Keys: hard-stage:<stageId>:<workerFragment> so siblings Join without wipe.
+ */
+export function promoteStageSubagentPackagesToParent(
+  parent: ToolRuntime,
+  child: ToolRuntime,
+  stageId: string,
+): number {
+  const packs = child.lifecycle?.subagentEvidenceCache || [];
+  let n = 0;
+  for (const pack of packs) {
+    const cands = pack.candidates || [];
+    if (!cands.length) continue;
+    const rawId = String(pack.subagentId || `worker_${n}`);
+    // Prefer short fragment after last path segment / sub_ prefix
+    const fragment = rawId
+      .replace(/^hard-stage:[^:]+:/, "")
+      .replace(/^sub_/, "pkg_")
+      .slice(0, 64);
+    absorbStageResultIntoParent(parent, {
+      stageId,
+      workerId: fragment || `pkg_${n}`,
+      structured: normalizeSubagentResult({
+        ok: true,
+        summary: pack.nodeType || stageId,
+        candidates: cands,
+        surfaces: [],
+        deadends: [],
+      }),
+    });
+    n += 1;
+  }
+  return n;
 }
 
 /**
@@ -214,6 +270,11 @@ export function createHardGraphStageExecutor(options: {
       seed?: StageContinuitySeed;
       summaryOverride?: string;
     }): Promise<StageExecutorOutput> => {
+      // Agent Graph Join first: worker packages from stage child → parent (distinct keys).
+      if (opts.child) {
+        promoteStageSubagentPackagesToParent(parentRuntime, opts.child, input.stage.id);
+      }
+      // Stage captain result.json candidates → parent pack hard-stage:<stageId>
       absorbStageResultIntoParent(parentRuntime, {
         stageId: input.stage.id,
         structured: opts.structured,
