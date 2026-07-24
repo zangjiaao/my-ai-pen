@@ -1,7 +1,6 @@
 """Unit tests for case engagement / RoE (structured only)."""
 from app.services.case_engagement import (
     case_fields_from_context,
-    f1_focus_fields_from_message,
     merge_case_into_context,
     normalize_engagement_template,
     normalize_product_engagement_template,

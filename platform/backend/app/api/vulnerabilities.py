@@ -110,7 +110,9 @@ class VulnOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class RetestOut(BaseModel):
+class VulnSessionOut(BaseModel):
+    """Response for vuln-adjacent sessions (e.g. report-session). Not a retest API."""
+
     conversation_id: str
     started: bool
     target: dict
@@ -316,7 +318,7 @@ async def batch_delete_vulnerabilities(
     return {"deleted": deleted, "requested": len(uniq)}
 
 
-@router.post("/report-session", response_model=RetestOut)
+@router.post("/report-session", response_model=VulnSessionOut)
 async def start_report_session(
     body: ReportSessionBody,
     current_user: dict = Depends(get_current_user),
@@ -405,7 +407,7 @@ async def start_report_session(
     started = await _dispatch_vuln_session_if_possible(
         str(conv.id), str(user_id), target, scope, instruction, engagement="consult"
     )
-    return RetestOut(
+    return VulnSessionOut(
         conversation_id=str(conv.id),
         started=started,
         target=target,
@@ -429,30 +431,6 @@ async def get_vuln(
         asset = assets.get(v.asset_id)
     evidence = await _evidence_for(db, user_id, v.evidence_ids or [])
     return _out(v, asset=asset, evidence=evidence)
-
-
-@router.post("/{vuln_id}/retest")
-async def retest_vuln_gone(
-    vuln_id: str,
-    current_user: dict = Depends(get_current_user),
-):
-    """
-    Product retest HTTP is retired (map #81 / N1).
-
-    Retest / dig-deeper is Case chat + Agent intent on the source conversation —
-    not free OMP on a new Conversation via this endpoint.
-    No side effects: no Conversation create, no status change, no task_assign.
-    """
-    # Authenticate + bind route param so callers get a stable product error, not 404 routing noise.
-    _ = current_user
-    _ = vuln_id
-    raise HTTPException(
-        status_code=410,
-        detail=(
-            "Vulnerability retest API is gone. Open the source Case conversation "
-            "and continue with the Expert agent; do not use free engagement=retest dispatch."
-        ),
-    )
 
 
 @router.patch("/{vuln_id}", response_model=VulnOut)
@@ -562,6 +540,10 @@ def classify_finding_kind(v: Vulnerability) -> str:
     return "vuln"
 
 
+# Product structured engagements for vuln-adjacent session dispatch (no free retest).
+_VULN_SESSION_ENGAGEMENTS = frozenset({"assess", "verify", "consult", "ctf", "pentest"})
+
+
 async def _dispatch_vuln_session_if_possible(
     conv_id: str,
     user_id: str,
@@ -574,9 +556,13 @@ async def _dispatch_vuln_session_if_possible(
     """
     Dispatch a structured task_assign for vuln-adjacent sessions (e.g. report-session).
 
-    Product free retest via engagement=retest is retired (map #81 N1). Callers must
-    pass an explicit engagement; this helper never defaults to retest.
+    Callers must pass an explicit engagement in the product allowlist. Free
+    engagement=retest is not supported (map #81 N1).
     """
+    eng = str(engagement or "").strip().lower()
+    if eng not in _VULN_SESSION_ENGAGEMENTS:
+        print(f"[API] vuln session dispatch refused unsupported engagement={engagement!r}")
+        return False
     try:
         from app.ws import router as ws_router
 
@@ -588,12 +574,6 @@ async def _dispatch_vuln_session_if_possible(
         if not isinstance(snapshot, dict):
             snapshot = {}
         snapshot["checkpoint"] = {}
-        # Explicit structured engagement only — never invent retest as a default.
-        allowed = {"assess", "verify", "consult", "ctf", "pentest"}
-        eng = engagement if engagement in allowed else "consult"
-        if engagement == "retest":
-            print("[API] refusing free engagement=retest product dispatch (N1 retired)")
-            return False
         gate_err = await ws_router._gate_engagement_for_node(node_id, eng)
         if gate_err:
             print(f"[API] vuln session dispatch blocked by expert offers: {gate_err}")

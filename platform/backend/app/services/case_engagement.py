@@ -229,17 +229,25 @@ def resolve_graph_execution(
     return None
 
 
-def f1_focus_fields_from_message(msg: dict | None) -> dict[str, Any]:
+def focus_fields_from_message(msg: dict | None) -> dict[str, Any]:
     """
-    Extract optional F1 dig-deeper / retest focus fields for task_assign (map #81).
+    Extract optional dig-deeper / focused re-verify fields for task_assign (map #81 F1).
 
     Accepts snake_case or camelCase. Never invents values from free-text NLP.
-    Returns only keys present: retest_finding_ids (list[str]), focus_note (str).
+    Returns only keys present:
+      - focus_finding_ids (list[str])
+      - focus_note (str)
+
+    Legacy wire aliases still accepted on input: retest_finding_ids / retestFindingIds.
     """
     if not isinstance(msg, dict):
         return {}
     out: dict[str, Any] = {}
-    raw_ids = msg.get("retest_finding_ids")
+    raw_ids = msg.get("focus_finding_ids")
+    if raw_ids is None:
+        raw_ids = msg.get("focusFindingIds")
+    if raw_ids is None:
+        raw_ids = msg.get("retest_finding_ids")
     if raw_ids is None:
         raw_ids = msg.get("retestFindingIds")
     ids: list[str] = []
@@ -254,10 +262,14 @@ def f1_focus_fields_from_message(msg: dict | None) -> dict[str, Any]:
             if s:
                 ids.append(s)
     if ids:
-        out["retest_finding_ids"] = ids
+        out["focus_finding_ids"] = ids
     raw_note = msg.get("focus_note")
     if raw_note is None:
         raw_note = msg.get("focusNote")
     if isinstance(raw_note, str) and raw_note.strip():
         out["focus_note"] = raw_note.strip()
     return out
+
+
+# Back-compat alias for early map #81 call sites / tests
+f1_focus_fields_from_message = focus_fields_from_message

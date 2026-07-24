@@ -21,6 +21,7 @@ import { resolveRolePack } from "./roles/index.js";
 import type { PlatformMessage, PlatformSink, TaskEnvelope, ToolRuntime } from "./types.js";
 import { parseCaseContext } from "./runtime/case-context.js";
 import { parseGraphExecution } from "./runtime/hard-graph-definition.js";
+import { parseF1Focus } from "./runtime/task-envelope-fields.js";
 
 function assert(cond: unknown, msg: string): asserts cond {
   if (!cond) throw new Error(msg);
@@ -72,22 +73,7 @@ export function normalizeTaskAssign(message: Record<string, unknown>): TaskEnvel
         ? message.engagementTemplate
         : undefined;
   const graphExecution = parseGraphExecution(message);
-  const retestFindingIdsRaw = message.retest_finding_ids ?? message.retestFindingIds;
-  let retestFindingIds: string[] | undefined;
-  if (Array.isArray(retestFindingIdsRaw)) {
-    const ids = retestFindingIdsRaw.map((x) => String(x ?? "").trim()).filter(Boolean);
-    retestFindingIds = ids.length ? ids : undefined;
-  } else if (typeof retestFindingIdsRaw === "string" && retestFindingIdsRaw.trim()) {
-    const ids = retestFindingIdsRaw.split(",").map((s) => s.trim()).filter(Boolean);
-    retestFindingIds = ids.length ? ids : undefined;
-  }
-  const focusNoteRaw =
-    typeof message.focus_note === "string"
-      ? message.focus_note
-      : typeof message.focusNote === "string"
-        ? message.focusNote
-        : undefined;
-  const focusNote = focusNoteRaw?.trim() ? focusNoteRaw.trim() : undefined;
+  const f1 = parseF1Focus(message);
   const allowPostexRaw = message.allow_postex ?? message.allowPostex;
   const allowPostex =
     typeof allowPostexRaw === "boolean"
@@ -107,8 +93,8 @@ export function normalizeTaskAssign(message: Record<string, unknown>): TaskEnvel
     role: typeof message.role === "string" ? message.role : undefined,
     engagementTemplate: engagementTemplate?.trim() || undefined,
     graphExecution,
-    retestFindingIds,
-    focusNote,
+    focusFindingIds: f1.focusFindingIds,
+    focusNote: f1.focusNote,
     allowPostex,
     accounts: message.accounts !== undefined ? message.accounts : undefined,
     goalObjective,

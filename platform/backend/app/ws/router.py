@@ -26,6 +26,7 @@ from app.services.expert_offers import (
     usage_billing_detail,
 )
 from app.services.expert_instances import match_expert_by_mention_token
+from app.services.case_engagement import focus_fields_from_message
 from app.models.node import PLATFORM_AGENT_NODE_ID
 
 router = APIRouter()
@@ -3736,14 +3737,8 @@ def _task_assign_from_user_message(conv_id: str, msg: dict, task_id: str) -> dic
             out["allow_postex"] = False
     if msg.get("accounts") is not None:
         out["accounts"] = msg.get("accounts")
-    # Map #81 F1 — optional dig-deeper / retest focus (structured only; no NLP invent).
-    from app.services.case_engagement import f1_focus_fields_from_message
-
-    f1 = f1_focus_fields_from_message(msg if isinstance(msg, dict) else None)
-    if f1.get("retest_finding_ids") is not None:
-        out["retest_finding_ids"] = f1["retest_finding_ids"]
-    if f1.get("focus_note") is not None:
-        out["focus_note"] = f1["focus_note"]
+    # Map #81 F1 dig-deeper focus (structured only; no NLP invent).
+    out.update(focus_fields_from_message(msg if isinstance(msg, dict) else None))
     return out
 
 
