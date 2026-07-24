@@ -1,0 +1,7 @@
+# Ephemeral agent runtime dumps (shell/tool transcripts). Keep scorecards,
+# findings, notes, and stage result JSON for offline review — not raw tool I/O.
+runs/**/tool-output/**
+runs/**/workspace/**/events.jsonl
+runs/**/workspace/**/transcript.jsonl
+runs/**/workspace/**/session/
+*.log

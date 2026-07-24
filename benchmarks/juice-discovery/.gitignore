@@ -1,4 +1,10 @@
+# Runtime agent workspaces (cookies, transcripts, evidence dumps).
+# Soft full trees stay local; hard may keep a few curated hard-graph facts tracked.
+runs/**/soft/workspace/**
 runs/**/workspace/**/pi-sessions/
+runs/**/workspace/**/session/
+runs/**/workspace/**/evidence/
 runs/**/workspace/**/events.jsonl
 runs/**/workspace/**/transcript.jsonl
 runs/**/workspace-free-mode-fallback/
+*.log
