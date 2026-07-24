@@ -1,0 +1,6 @@
+{
+  "fact_key": "authz_findings_security_cookie",
+  "summary": "Security level is entirely client-controlled via 'security' cookie. Setting cookie to 'high' directly changes displayed level without CSRF token validation. This bypasses server-side authorization control.",
+  "body": "The security level in DVWA is stored in a cookie named 'security'. By setting this cookie directly (e.g., via JavaScript document.cookie or browser dev tools), an attacker can change the security level without going through the security.php form and without needing the CSRF token. Additionally, the setup.php page is fully accessible without authentication, allowing unauthenticated attackers to reset the database and admin credentials.",
+  "updated_at": "2026-07-24T02:37:37.374Z"
+}

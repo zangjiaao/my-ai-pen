@@ -12,7 +12,7 @@ export type TaskEnvelope = {
   /** Explicit role alias for engagement. */
   role?: string;
   /**
-   * Product engagement template (app_assessment | redteam_deep | …).
+   * Product engagement template (app_assessment | …; Soft/redteam_deep product Soft retired).
    * Structured only — never derived from instruction free text.
    * Alias of scenario Graph id when using Graph work mode.
    */
@@ -29,9 +29,10 @@ export type TaskEnvelope = {
    */
   graphMainAct?: "delegate_preferred" | "delegate_only";
   /**
-   * Hard Graph vs soft scenario menu (structured only — no NLP).
+   * Expert Graph discipline (structured only — no NLP).
    * "hard" → Graph × Pi runner owns stage order (see hard-graph-*).
-   * Soft/unset keeps existing OMP + optional soft scenario graph.
+   * Product assessment templates also resolve to Expert Graph without this field (#76).
+   * Soft scenario product mode is retired — "soft" is legacy/ignored.
    */
   graphDiscipline?: "soft" | "hard";
   /**
@@ -139,6 +140,11 @@ export type ToolRuntime = {
      * Disable: NODE4_SUBAGENT_IDLE=0.
      */
     subagentIdlePool?: import("./runtime/subagent-idle-pool.js").SubagentIdlePool;
+    /**
+     * finding(confirm) ground-fail counts by title|location — anti-thrash for identical retries.
+     * After ≥2 failures, errors include bookable_unbooked judgment guidance.
+     */
+    findingConfirmFailCounts?: Record<string, number>;
   };
 };
 

@@ -1,0 +1,10 @@
+{
+  "title": "Password Hash Leakage via /rest/memories",
+  "location": "/rest/memories",
+  "severity": "medium",
+  "proof": "GET /rest/memories (authenticated) returned user data including MD5 password hashes for all users: bjoern@owasp.org:9283f1b2e9669749081963be0462e466, bjoern.kimminich@gmail.com (admin):6edd9d726cbdc873c539e41ae8757b8c, emma@juice-sh.op:402f1c4a75e316afec5a6ea63147f739, john@juice-sh.op:00479e957b6b42c459ee5746478e4d45, ethereum@juice-sh.op:2c17c6393771ee3048ae34d6b380c5ec",
+  "stage": "class_probe",
+  "precondition": "",
+  "affected_actor": "",
+  "affected_resource": ""
+}

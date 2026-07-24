@@ -1,0 +1,5 @@
+Set-Cookie: dvwaSession=1
+Set-Cookie: dvwaSession=2
+Set-Cookie: dvwaSession=3
+Set-Cookie: dvwaSession=4
+Set-Cookie: dvwaSession=5

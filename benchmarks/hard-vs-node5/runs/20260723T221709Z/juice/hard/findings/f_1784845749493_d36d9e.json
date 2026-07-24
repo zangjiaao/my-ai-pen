@@ -1,0 +1,28 @@
+{
+  "id": "f_1784845749493_d36d9e",
+  "action": "confirm",
+  "title": "Sensitive File Exposure - Encryption Keys",
+  "severity": "high",
+  "finding_kind": "vuln",
+  "location": "http://127.0.0.1:3010/encryptionkeys/",
+  "url": "http://127.0.0.1:3010/encryptionkeys/",
+  "description": "The /encryptionkeys/ directory has directory listing enabled and exposes critical key material: jwt.pub (RSA public key for JWT verification) and premium.key (premium subscription key '1337133713371337.EA99A61D92D2955B1E9285B55BF2AD42'). The premium key can be used to escalate privileges to deluxe/premium status without payment. The JWT public key enables offline analysis of the signing mechanism.",
+  "poc": "GET /encryptionkeys/ shows directory listing; GET /encryptionkeys/jwt.pub returns RSA public key; GET /encryptionkeys/premium.key returns premium activation key.",
+  "proof": "Proof: GET /encryptionkeys/ returns directory listing HTML with links to jwt.pub and premium.key. GET /encryptionkeys/jwt.pub returns: \"-----BEGIN RSA PUBLIC KEY-----\\nMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA...\" RSA key. GET /encryptionkeys/premium.key returns: \"1337133713371337.EA99A61D92D2955B1E9285B55BF2AD42\".",
+  "how_captured": "shell: # Check the premium key for deluxe access echo \"=== Premium key ===\" curl -s http://127.0.0.1:3010/encryptionkeys/premium.key echo \"\" # Try to apply the premium",
+  "evidence_ids": [
+    "ev_1784845749484_157c73"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784845749484_157c73",
+      "excerpt": "Proof: GET /encryptionkeys/ returns directory listing HTML with links to jwt.pub and premium.key. GET /encryptionkeys/jwt.pub returns: \"-----BEGIN RSA PUBLIC KEY-----\\nMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA...\" RSA key. GET /encryptionkeys/premium.key returns: \"1337133713371337.EA99A61D92D2955B1E9285B55BF2AD42\".",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "shell: # Check the premium key for deluxe access echo \"=== Premium key ===\" curl -s http://127.0.0.1:3010/encryptionkeys/premium.key echo \"\" # Try to apply the premium"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "3010",
+  "created_at": "2026-07-23T22:29:09.494Z"
+}

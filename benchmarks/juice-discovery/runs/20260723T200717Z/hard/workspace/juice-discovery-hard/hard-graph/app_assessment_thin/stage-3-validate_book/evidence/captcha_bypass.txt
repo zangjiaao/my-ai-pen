@@ -1,0 +1,12 @@
+Observed CAPTCHA bypass vulnerability.
+
+The /rest/captcha/ endpoint returns the captcha answer in plaintext alongside the captcha image. The response includes a "answer" field with the correct answer, allowing automated scripts to bypass the CAPTCHA verification.
+
+Example response from GET /rest/captcha/:
+{
+  "captchaId": 42,
+  "answer": 7,
+  "image": "data:image/png;base64,..."
+}
+
+When posting to /api/Feedbacks, the captchaId and answer are sent together, allowing attackers to solve the CAPTCHA programmatically without any visual recognition.

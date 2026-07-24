@@ -1,0 +1,8 @@
+START=2026-07-23T20:07:18Z
+START_EPOCH=1784837238
+SHA=4337cbab9ae5a836225e13578230f8a93a20360d
+BRANCH=bench/juice-discovery-coreonly-hard
+RUNTIME=core-only runNode4Agent
+PI_CODING_AGENT=forbidden
+PURPOSE=second-segment Hard after #57 result.json write fix
+SUPERSEDES_HARD_OF=20260723T190830Z

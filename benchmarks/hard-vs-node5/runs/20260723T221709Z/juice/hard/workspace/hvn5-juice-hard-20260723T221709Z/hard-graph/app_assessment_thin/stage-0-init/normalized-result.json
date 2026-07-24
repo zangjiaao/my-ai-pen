@@ -1,0 +1,32 @@
+{
+  "ok": true,
+  "summary": "Initialization complete. Target: http://127.0.0.1:3010 (OWASP Juice Shop). Scope: 127.0.0.1, localhost, host.docker.internal. RoE: app_assessment — no post-ex host takeover, no OSINT, no attacking other hosts/ports. Ready for surface mapping.",
+  "summaryProvided": true,
+  "candidates": [],
+  "surfaces": [],
+  "facts": [
+    {
+      "summary": "Target is OWASP Juice Shop instance at http://127.0.0.1:3010"
+    },
+    {
+      "summary": "Scope limited to 127.0.0.1, localhost, host.docker.internal"
+    },
+    {
+      "summary": "RoE: app_assessment, no post-ex host takeover off-box"
+    }
+  ],
+  "deadends": [],
+  "artifacts": [],
+  "raw": {
+    "ok": true,
+    "summary": "Initialization complete. Target: http://127.0.0.1:3010 (OWASP Juice Shop). Scope: 127.0.0.1, localhost, host.docker.internal. RoE: app_assessment — no post-ex host takeover, no OSINT, no attacking other hosts/ports. Ready for surface mapping.",
+    "surfaces": [],
+    "candidates": [],
+    "facts": [
+      "Target is OWASP Juice Shop instance at http://127.0.0.1:3010",
+      "Scope limited to 127.0.0.1, localhost, host.docker.internal",
+      "RoE: app_assessment, no post-ex host takeover off-box"
+    ],
+    "deadends": []
+  }
+}

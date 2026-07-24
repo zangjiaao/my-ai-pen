@@ -1,0 +1,24 @@
+{
+  "id": "ev_1784861882133_e4b50b",
+  "type": "tool_output",
+  "source_tool": "finding",
+  "summary": "Weak sequential session IDs in dvwaSession cookie @ http://127.0.0.1:8080/vulnerabilities/weak_id/",
+  "data": {
+    "kind": "proof",
+    "observation": "Set-Cookie: dvwaSession=1\nSet-Cookie: dvwaSession=2\nSet-Cookie: dvwaSession=3\nSet-Cookie: dvwaSession=4\nSet-Cookie: dvwaSession=5",
+    "proof": "Set-Cookie: dvwaSession=1\nSet-Cookie: dvwaSession=2\nSet-Cookie: dvwaSession=3\nSet-Cookie: dvwaSession=4\nSet-Cookie: dvwaSession=5",
+    "path_or_url": "http://127.0.0.1:8080/vulnerabilities/weak_id/",
+    "location": "http://127.0.0.1:8080/vulnerabilities/weak_id/",
+    "title": "Weak sequential session IDs in dvwaSession cookie",
+    "stdout": "Set-Cookie: dvwaSession=1\nSet-Cookie: dvwaSession=2\nSet-Cookie: dvwaSession=3\nSet-Cookie: dvwaSession=4\nSet-Cookie: dvwaSession=5",
+    "body_preview": "Set-Cookie: dvwaSession=1\nSet-Cookie: dvwaSession=2\nSet-Cookie: dvwaSession=3\nSet-Cookie: dvwaSession=4\nSet-Cookie: dvwaSession=5",
+    "capture_via": "write",
+    "how_captured": "script: proof_weak_session.txt",
+    "script_path": "proof_weak_session.txt",
+    "path": "proof_weak_session.txt",
+    "script_preview": "Set-Cookie: dvwaSession=1\nSet-Cookie: dvwaSession=2\nSet-Cookie: dvwaSession=3\nSet-Cookie: dvwaSession=4\nSet-Cookie: dvwaSession=5",
+    "source_tool_act": "write",
+    "act_summary": "file write proof_weak_session.txt"
+  },
+  "created_at": "2026-07-24T02:58:02.133Z"
+}

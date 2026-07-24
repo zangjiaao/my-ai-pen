@@ -1,0 +1,2 @@
+ls -la /mnt/d/Coding/my-ai-pen/benchmarks/hard-vs-node5/runs/20260723T221709Z/juice/hard/workspace/hvn5-juice-hard-20260723T221709Z/hard-graph/app_assessment_thin/stage-3-validate_book/ 2>/dev/null || echo "path not accessible"
+ls -la /mnt/d/Coding/my-ai-pen/benchmarks/hard-vs-node5/runs/20260723T221709Z/juice/hard/workspace/hvn5-juice-hard-20260723T221709Z/hard-graph/app_assessment_thin/ 2>/dev/null || echo "parent path not accessible"

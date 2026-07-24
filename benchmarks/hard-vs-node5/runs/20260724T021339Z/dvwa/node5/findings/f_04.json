@@ -1,0 +1,10 @@
+{
+  "title": "Session fixation - PHPSESSID not regenerated on login",
+  "location": "/login.php",
+  "severity": "high",
+  "proof": "PHPSESSID verified unchanged before and after authentication: pre-login ID '24ofb49tv42etbdgeam3nrn7s6' remains identical post-login with 302 redirect to index.php and full authenticated session; 'You have logged in as admin' confirmed on replayed authenticated request using same PHPSESSID",
+  "stage": "auth_session",
+  "precondition": "Access to login page (no auth required)",
+  "affected_actor": "admin",
+  "affected_resource": "login"
+}

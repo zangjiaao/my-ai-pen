@@ -1,0 +1,48 @@
+[
+  {
+    "author": "node5_app_assessment",
+    "id": "59ce8131-43f9-4040-9f82-942c7ee601e8",
+    "has_output": true,
+    "stage": "init",
+    "stages_done": [
+      "init"
+    ],
+    "errors": []
+  },
+  {
+    "author": "node5_app_assessment",
+    "id": "301a4d71-6255-4bc7-a62b-f2610ef013aa",
+    "has_output": true,
+    "stage": "surface",
+    "stages_done": [
+      "init",
+      "surface"
+    ],
+    "errors": []
+  },
+  {
+    "author": "node5_app_assessment",
+    "id": "e3c1d880-63f9-48a0-9aea-b6f1c814ea52",
+    "has_output": true,
+    "stage": "prior_reverify",
+    "stages_done": [
+      "init",
+      "surface",
+      "prior_reverify"
+    ],
+    "errors": []
+  },
+  {
+    "author": "node5_app_assessment",
+    "id": "5bc0051b-80fb-47b3-8e67-8352ed18ec4c",
+    "has_output": true,
+    "stage": "auth_session",
+    "stages_done": [
+      "init",
+      "surface",
+      "prior_reverify",
+      "auth_session"
+    ],
+    "errors": []
+  }
+]

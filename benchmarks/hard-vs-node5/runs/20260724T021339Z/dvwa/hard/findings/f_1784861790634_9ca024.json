@@ -1,0 +1,28 @@
+{
+  "id": "f_1784861790634_9ca024",
+  "action": "confirm",
+  "title": "Database credentials disclosure via config backup file",
+  "severity": "high",
+  "finding_kind": "vuln",
+  "location": "http://127.0.0.1:8080/config/config.inc.php.bak",
+  "url": "http://127.0.0.1:8080/config/config.inc.php.bak",
+  "description": "The config backup file at /config/config.inc.php.bak is accessible and reveals plaintext database credentials (user: app, password: vulnerables, database: dvwa).",
+  "poc": "Probe request against http://127.0.0.1:8080/config/config.inc.php.bak; observed proving result from prior stage handoff: $_DVWA[ 'db_server' ] = '127.0.0.1'; $_DVWA[ 'db_database' ] = 'dvwa'; $_DVWA[ 'db_user' ] = 'app'; $_DVWA[ 'db_password' ] = 'vulnerables';",
+  "proof": "$_DVWA[ 'db_server' ]   = '127.0.0.1';\n$_DVWA[ 'db_database' ] = 'dvwa';\n$_DVWA[ 'db_user' ]     = 'app';\n$_DVWA[ 'db_password' ] = 'vulnerables';",
+  "how_captured": "via subagent",
+  "evidence_ids": [
+    "ev_1784861790623_76d41b"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784861790623_76d41b",
+      "excerpt": "$_DVWA[ 'db_server' ]   = '127.0.0.1';\n$_DVWA[ 'db_database' ] = 'dvwa';\n$_DVWA[ 'db_user' ]     = 'app';\n$_DVWA[ 'db_password' ] = 'vulnerables';",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "via subagent"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "8080",
+  "created_at": "2026-07-24T02:56:30.635Z"
+}

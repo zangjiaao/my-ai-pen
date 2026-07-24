@@ -1,0 +1,14 @@
+{
+  "arm": "node5",
+  "campaign": "hard-vs-node5-juice-p1",
+  "map": 59,
+  "ticket": 65,
+  "graphId": "app_assessment",
+  "target": "http://127.0.0.1:3011",
+  "container": "juice-hvn5-node5",
+  "modelProvider": "deepseek",
+  "model": "deepseek-v4-flash",
+  "nodeSha": "f373c68fa5b6d152af61e5a3ec96267f950dbaae",
+  "start": "2026-07-23T22:30:35Z",
+  "startEpoch": 1784845835
+}

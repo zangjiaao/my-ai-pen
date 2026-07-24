@@ -1,0 +1,1 @@
+SQL injection confirmed via boolean condition 1' OR '1'='1. The query returns user data when condition is true.

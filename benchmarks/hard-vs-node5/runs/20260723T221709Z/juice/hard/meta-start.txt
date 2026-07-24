@@ -1,0 +1,13 @@
+START=2026-07-23T22:17:09Z
+START_EPOCH=1784845029
+SHA=f373c68fa5b6d152af61e5a3ec96267f950dbaae
+BRANCH=research/node5-lab-invocation-juice-dvwa
+GRAPH=app_assessment_thin
+TARGET=http://127.0.0.1:3010
+CONTAINER=juice-hvn5-hard
+MODEL_PROVIDER=deepseek
+MODEL=deepseek-v4-flash
+MAP=59
+TICKET=65
+CAMPAIGN=hard-vs-node5-juice-p1
+START_EPOCH=1784845040

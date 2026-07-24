@@ -1,0 +1,47 @@
+{
+  "arm": "node5",
+  "campaign": "hard-vs-node5-dvwa-p1-post69",
+  "ticket": 66,
+  "graphId": "app_assessment",
+  "target": "http://127.0.0.1:8081",
+  "container": "dvwa-hvn5-node5",
+  "modelProvider": "deepseek",
+  "model": "deepseek-v4-flash",
+  "start": "2026-07-24T02:59:23Z",
+  "end": "2026-07-24T03:36:06Z",
+  "wallClockSec": 2201,
+  "terminalStatus": "completed",
+  "bookedFindings": 16,
+  "stages_done": [
+    "init",
+    "surface",
+    "prior_reverify",
+    "auth_session",
+    "class_probe",
+    "authz_logic",
+    "component",
+    "validate_book",
+    "finalize"
+  ],
+  "process_metrics": {
+    "structure_fail_n": 2,
+    "structure_fail_stages": [
+      "authz_logic"
+    ],
+    "discovery_yield_soft_fail_n": 0,
+    "discovery_yield_soft_fail_stages": [],
+    "discovery_yield_ok_n": 3,
+    "retry_n": 1,
+    "surface_ledger_fail_n": 0,
+    "ready_by_stage": {
+      "surface": 0,
+      "prior_reverify": 3,
+      "auth_session": 3,
+      "class_probe": 10,
+      "authz_logic": 1,
+      "component": 4
+    },
+    "class_probe_discovery_yield": "new_cands=8 ready=10 structured_workers=5",
+    "note": "process_quality orthogonal to coverage_attempt_rate"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "title": "Brute Force – No CSRF token or rate limiting on login form",
+  "location": "/vulnerabilities/brute",
+  "severity": "medium",
+  "proof": "GET /vulnerabilities/brute/?username=admin&password=wrong&Login=Login → 'Username and/or password incorrect'. GET-based form with no CSRF token, no captcha, no rate limiting observed.",
+  "stage": "class_probe",
+  "precondition": "",
+  "affected_actor": "",
+  "affected_resource": ""
+}

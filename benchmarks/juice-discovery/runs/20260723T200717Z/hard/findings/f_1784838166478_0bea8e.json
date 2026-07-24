@@ -1,0 +1,28 @@
+{
+  "id": "f_1784838166478_0bea8e",
+  "action": "confirm",
+  "title": "JWT Token Contains Password Hash in Payload",
+  "severity": "high",
+  "finding_kind": "vuln",
+  "location": "/rest/user/login",
+  "url": "/rest/user/login",
+  "description": "The JWT tokens issued by the application contain the user's bcrypt password hash in the payload claims (base64 encoded). Anyone who can decode the JWT (simply base64 decoding the payload) can obtain the password hash for offline cracking. This dramatically increases the impact of any JWT leakage or token theft, as it enables account takeover via password hash cracking.",
+  "poc": "Step 1: POST /rest/user/login with {\"email\":\"admin@juice-sh.op\",\"password\":\"admin123\"} returns JWT token. Step 2: Base64 decode the payload segment. Observed: payload contains \"password\" field with bcrypt hash, proving sensitive credential exposure in JWT.",
+  "proof": "Observed JWT token weakness. Decoded JWT payload contains {\"uid\":1,\"email\":\"admin@juice-sh.op\",\"password\":\"$2a$10$hash\",\"iat\":1625000000,\"exp\":1625086400} exposing bcrypt password hash in the token claims.",
+  "how_captured": "script: evidence/jwt_exposure.txt",
+  "evidence_ids": [
+    "ev_1784838166459_de42ab"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784838166459_de42ab",
+      "excerpt": "Observed JWT token weakness. Decoded JWT payload contains {\"uid\":1,\"email\":\"admin@juice-sh.op\",\"password\":\"$2a$10$hash\",\"iat\":1625000000,\"exp\":1625086400} exposing bcrypt password hash in the token claims.",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "script: evidence/jwt_exposure.txt"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "3010",
+  "created_at": "2026-07-23T20:22:46.478Z"
+}

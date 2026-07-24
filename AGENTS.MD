@@ -2,7 +2,7 @@
 
 **Spec precedence (when documents disagree):** `AGENTS.md` → `docs/prd.md` → `docs/specs/harness.md` (candidate-specific) → other `docs/specs/*` / `docs/v1-delivery.md`.
 
-**Product Node path (locked):** **Graph × Pi** on the **Node4 lineage** (Hard Graph runner owns Expert stage order; pi is in-node Agent Runtime). **Default** seat never enters Expert Hard Graph. **Node5** is a **lab / semantic reference** and formal fallback B only under documented hard triggers (see `docs/adr/0001-graph-x-pi-product-path.md`) — do **not** expand Node5 as a co-equal product kernel while A is in pursuit. Platform binds to **exactly one** Node process per deployment (product default: Node4 lineage). **Legacy** `node/`, `node2/`, `node3/`: plan-delete after gates — do not expand product behavior there. **`research/`**: frozen third-party reference (not product). **`benchmarks/`**: frozen lab evaluation assets (not product authority). Product work targets platform + Node4 lineage + `experts/`.
+**Product Node path (locked):** **Graph × Pi** on the **Node4 lineage** only (Expert Graph / Hard Graph runner owns Expert stage order; pi is in-node Agent Runtime). **Default** seat never enters Expert Graph. **Expert** work is **Graph-only** (multi-Graph per expert); **Soft scenario graph is retired** as a product work mode (#68 / #76). **Fallback B (elevate Node5) is retired** — `node5/` hard-deleted (ADR 0001 B1 / map #59). Do **not** reintroduce a co-equal Python ADK product kernel or Soft product mode. Platform binds to **exactly one** Node process per deployment (**Node4**). **Legacy** `node/`, `node2/`, `node3/`: plan-delete after gates — do not expand product behavior there. **`research/`**: frozen third-party reference (not product). **`benchmarks/`**: frozen lab evaluation assets (not product authority; historical Hard-vs-Node5 scorecards may remain). Product work targets platform + Node4 + `experts/`.
 
 ## No Hardcoded Behavior Without Approval
 
@@ -31,7 +31,7 @@
 - **Do not invent archive trees** for obsolete plans — hard-delete when done (git history is backup).
 - **Remove leftovers:** if you migrate files (e.g. skills/recipes into `experts/`), delete or replace old paths under a Node candidate with a short pointer README so agents do not follow stale locations.
 - **Index and discoverability:** when adding a new living doc, link it from `docs/README.md` (and `experts/README.md` when pack-related).
-- **Accuracy over volume:** document what the system **actually** does now (platform + bound Node candidate + experts). Do not declare a PK winner in living docs.
+- **Accuracy over volume:** document what the system **actually** does now (platform + Node4 + experts). Product Node lineage is locked (ADR 0001); do not reintroduce dual-kernel PK language.
 - **Frozen trees:** do not delete or relocate `research/` or `benchmarks/` without an explicit new decision.
 - **Commits:** include doc updates in the same commit as the behavioral change when practical so history stays reviewable.
 

@@ -1,0 +1,3 @@
+Pre-login PHPSESSID: gil9p36k5l56983sfsgt5eqj05
+Post-login PHPSESSID: gil9p36k5l56983sfsgt5eqj05
+SESSION ID NOT CHANGED after login (session fixation possible)

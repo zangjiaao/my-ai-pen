@@ -1,0 +1,432 @@
+{
+  "ok": true,
+  "summary": "Surface mapping complete. Discovered 8+ live surfaces including Angular SPA, public REST APIs (Products, Feedbacks, Challenges, SecurityQuestions, Quantitys), authenticated REST APIs (Users, Cards, Complaints, SecurityAnswers, Basket), exposed directories with directory listing (/ftp/, /encryptionkeys/, /ftp/quarantine/), exposed sensitive files (JWT public key, premium key), WebSocket endpoint, and REST endpoints with excessive data exposure (password hashes leaked via /rest/memories).",
+  "surfaces": [
+    {
+      "type": "webapp",
+      "url": "http://127.0.0.1:3010/",
+      "method": "GET",
+      "status": 200,
+      "note": "OWASP Juice Shop Angular SPA. Technology: Angular, Express ^4.22.1. Features SPA client-side routing (hash-based). Headers include X-Recruiting: /#/jobs, Feature-Policy: payment 'self', X-Frame-Options: SAMEORIGIN, X-Content-Type-Options: nosniff, Access-Control-Allow-Origin: *.",
+      "probe": "curl -s -D - http://127.0.0.1:3010/"
+    },
+    {
+      "type": "api",
+      "url": "http://127.0.0.1:3010/api/Products",
+      "method": "GET",
+      "status": 200,
+      "note": "Public REST endpoint. Returns JSON with all products (id, name, description, price, deluxePrice, image). SQL injection vulnerable (Juice Shop default). No auth required.",
+      "probe": "curl -s http://127.0.0.1:3010/api/Products"
+    },
+    {
+      "type": "api",
+      "url": "http://127.0.0.1:3010/api/Feedbacks",
+      "method": "GET",
+      "status": 200,
+      "note": "Public REST endpoint. Returns user feedback with masked emails. Leaks UserId references. No auth required.",
+      "probe": "curl -s http://127.0.0.1:3010/api/Feedbacks"
+    },
+    {
+      "type": "api",
+      "url": "http://127.0.0.1:3010/api/Challenges",
+      "method": "GET",
+      "status": 200,
+      "note": "Public REST endpoint. Returns all challenge definitions including keys, names, categories, difficulty levels, descriptions, and mitigation URLs. No auth required.",
+      "probe": "curl -s http://127.0.0.1:3010/api/Challenges"
+    },
+    {
+      "type": "api",
+      "url": "http://127.0.0.1:3010/api/Quantitys",
+      "method": "GET",
+      "status": 200,
+      "note": "Public REST endpoint. Returns product inventory quantities and per-user purchase limits. No auth required.",
+      "probe": "curl -s http://127.0.0.1:3010/api/Quantitys"
+    },
+    {
+      "type": "api",
+      "url": "http://127.0.0.1:3010/api/SecurityQuestions",
+      "method": "GET",
+      "status": 200,
+      "note": "Public REST endpoint. Returns all security questions (e.g., 'Name of your favorite pet?', 'Mother's maiden name?'). No auth required.",
+      "probe": "curl -s http://127.0.0.1:3010/api/SecurityQuestions"
+    },
+    {
+      "type": "api",
+      "url": "http://127.0.0.1:3010/api/Recycles",
+      "method": "GET",
+      "status": 200,
+      "note": "Public REST endpoint. Returns error message 'Sorry, this endpoint is not supported.'",
+      "probe": "curl -s http://127.0.0.1:3010/api/Recycles"
+    },
+    {
+      "type": "api",
+      "url": "http://127.0.0.1:3010/rest/products/search",
+      "method": "GET",
+      "status": 200,
+      "note": "Public REST endpoint. Search products by query parameter 'q'. Returns product data including id, name, description, price, deluxePrice, image.",
+      "probe": "curl -s 'http://127.0.0.1:3010/rest/products/search?q='"
+    },
+    {
+      "type": "api",
+      "url": "http://127.0.0.1:3010/rest/languages",
+      "method": "GET",
+      "status": 200,
+      "note": "Public REST endpoint. Returns available languages and their translation completion percentages.",
+      "probe": "curl -s http://127.0.0.1:3010/rest/languages"
+    },
+    {
+      "type": "api",
+      "url": "http://127.0.0.1:3010/rest/user/login",
+      "method": "POST",
+      "status": 200,
+      "note": "Authentication endpoint. Accepts JSON {email, password}. Returns JWT token, basket ID (bid), and user email on success. Returns 'Invalid email or password' on failure. Vulnerable to SQL injection (Juice Shop default).",
+      "probe": "curl -s -X POST http://127.0.0.1:3010/rest/user/login -H 'Content-Type: application/json' -d '{\"email\":\"admin@juice-sh.op\",\"password\":\"admin123\"}'"
+    },
+    {
+      "type": "api",
+      "url": "http://127.0.0.1:3010/api/Users",
+      "method": "GET",
+      "status": 401,
+      "note": "Authenticated REST endpoint. Requires JWT Authorization header. Returns 401 'No Authorization header was found' without auth.",
+      "probe": "curl -s http://127.0.0.1:3010/api/Users"
+    },
+    {
+      "type": "api",
+      "url": "http://127.0.0.1:3010/api/Cards",
+      "method": "GET",
+      "status": 401,
+      "note": "Authenticated REST endpoint. Requires JWT Authorization header. Returns 'Cannot read properties of undefined' error without proper auth context.",
+      "probe": "curl -s http://127.0.0.1:3010/api/Cards"
+    },
+    {
+      "type": "api",
+      "url": "http://127.0.0.1:3010/api/Complaints",
+      "method": "GET",
+      "status": 401,
+      "note": "Authenticated REST endpoint. Requires JWT Authorization header.",
+      "probe": "curl -s http://127.0.0.1:3010/api/Complaints"
+    },
+    {
+      "type": "api",
+      "url": "http://127.0.0.1:3010/api/SecurityAnswers",
+      "method": "GET",
+      "status": 401,
+      "note": "Authenticated REST endpoint. Requires JWT Authorization header.",
+      "probe": "curl -s http://127.0.0.1:3010/api/SecurityAnswers"
+    },
+    {
+      "type": "api",
+      "url": "http://127.0.0.1:3010/rest/basket",
+      "method": "GET",
+      "status": 401,
+      "note": "Authenticated REST endpoint. Requires JWT Authorization header.",
+      "probe": "curl -s http://127.0.0.1:3010/rest/basket"
+    },
+    {
+      "type": "api",
+      "url": "http://127.0.0.1:3010/rest/memories",
+      "method": "GET",
+      "status": 200,
+      "note": "EXCESSIVE DATA EXPOSURE. Public REST endpoint that returns user memories WITH EMBEDDED USER DATA INCLUDING PASSWORD HASHES (MD5). Leaks email, password hash, role, deluxeToken, profileImage for users. Critical finding: password hashes exposed.",
+      "probe": "curl -s http://127.0.0.1:3010/rest/memories"
+    },
+    {
+      "type": "api",
+      "url": "http://127.0.0.1:3010/rest/products/search",
+      "method": "GET",
+      "status": 200,
+      "note": "Search endpoint potentially vulnerable to NoSQL injection (Juice Shop default).",
+      "probe": "curl -s 'http://127.0.0.1:3010/rest/products/search?q='"
+    },
+    {
+      "type": "api",
+      "url": "http://127.0.0.1:3010/rest/admin",
+      "method": "GET",
+      "status": 500,
+      "note": "Admin REST endpoint exists but returns 'Unexpected path' error via Angular router.",
+      "probe": "curl -s http://127.0.0.1:3010/rest/admin"
+    },
+    {
+      "type": "api",
+      "url": "http://127.0.0.1:3010/rest/order",
+      "method": "GET",
+      "status": 500,
+      "note": "Order REST endpoint exists but returns 'Unexpected path' error via Angular router.",
+      "probe": "curl -s http://127.0.0.1:3010/rest/order"
+    },
+    {
+      "type": "api",
+      "url": "http://127.0.0.1:3010/rest/user",
+      "method": "GET",
+      "status": 500,
+      "note": "User REST endpoint exists but returns 'Unexpected path' error via Angular router.",
+      "probe": "curl -s http://127.0.0.1:3010/rest/user"
+    },
+    {
+      "type": "api",
+      "url": "http://127.0.0.1:3010/rest/product",
+      "method": "GET",
+      "status": 500,
+      "note": "Product REST endpoint exists but returns 'Unexpected path' error via Angular router.",
+      "probe": "curl -s http://127.0.0.1:3010/rest/product"
+    },
+    {
+      "type": "api",
+      "url": "http://127.0.0.1:3010/rest/consoles",
+      "method": "GET",
+      "status": 500,
+      "note": "Consoles REST endpoint exists but returns 'Unexpected path' error via Angular router.",
+      "probe": "curl -s http://127.0.0.1:3010/rest/consoles"
+    },
+    {
+      "type": "api",
+      "url": "http://127.0.0.1:3010/rest/tracks",
+      "method": "GET",
+      "status": 500,
+      "note": "Tracks REST endpoint exists but returns 'Unexpected path' error via Angular router.",
+      "probe": "curl -s http://127.0.0.1:3010/rest/tracks"
+    },
+    {
+      "type": "api",
+      "url": "http://127.0.0.1:3010/rest/tasks",
+      "method": "GET",
+      "status": 500,
+      "note": "Tasks REST endpoint exists but returns 'Unexpected path' error via Angular router.",
+      "probe": "curl -s http://127.0.0.1:3010/rest/tasks"
+    },
+    {
+      "type": "api",
+      "url": "http://127.0.0.1:3010/rest/country-mapping",
+      "method": "GET",
+      "status": 500,
+      "note": "Country-mapping REST endpoint exists but returns 'Unexpected path' error via Angular router.",
+      "probe": "curl -s http://127.0.0.1:3010/rest/country-mapping"
+    },
+    {
+      "type": "api",
+      "url": "http://127.0.0.1:3010/rest/image",
+      "method": "GET",
+      "status": 500,
+      "note": "Image REST endpoint exists but returns 'Unexpected path' error via Angular router.",
+      "probe": "curl -s http://127.0.0.1:3010/rest/image"
+    },
+    {
+      "type": "api",
+      "url": "http://127.0.0.1:3010/rest/cloud",
+      "method": "GET",
+      "status": 500,
+      "note": "Cloud REST endpoint exists but returns 'Unexpected path' error via Angular router.",
+      "probe": "curl -s http://127.0.0.1:3010/rest/cloud"
+    },
+    {
+      "type": "api",
+      "url": "http://127.0.0.1:3010/api/Baskets",
+      "method": "GET",
+      "status": 500,
+      "note": "Baskets API endpoint exists but returns 'Unexpected path' error via Angular router.",
+      "probe": "curl -s http://127.0.0.1:3010/api/Baskets"
+    },
+    {
+      "type": "api",
+      "url": "http://127.0.0.1:3010/api/Orders",
+      "method": "GET",
+      "status": 500,
+      "note": "Orders API endpoint exists but returns 'Unexpected path' error via Angular router.",
+      "probe": "curl -s http://127.0.0.1:3010/api/Orders"
+    },
+    {
+      "type": "api",
+      "url": "http://127.0.0.1:3010/rest/user/register",
+      "method": "POST",
+      "status": 500,
+      "note": "User registration endpoint exists. Returns 'Unexpected path' error (requires proper path).",
+      "probe": "curl -s -X POST http://127.0.0.1:3010/rest/user/register -H 'Content-Type: application/json' -d '{\"email\":\"test@test.com\",\"password\":\"test123\"}'"
+    },
+    {
+      "type": "directory",
+      "url": "http://127.0.0.1:3010/ftp/",
+      "method": "GET",
+      "status": 200,
+      "note": "Directory listing enabled. Contains files: acquisitions.md, announcement_encrypted.md, coupons_2013.md.bak, eastere.gg, encrypt.pyc, incident-support.kdbx, legal.md, package-lock.json.bak, package.json.bak, suspicious_errors.yml, quarantine/ subdirectory. Sensitive files exposed.",
+      "probe": "curl -s http://127.0.0.1:3010/ftp/ | grep -oP 'href=\"[^\"]*\"'"
+    },
+    {
+      "type": "directory",
+      "url": "http://127.0.0.1:3010/ftp/quarantine/",
+      "method": "GET",
+      "status": 200,
+      "note": "Directory listing enabled. Contains malware URL shortcut files: juicy_malware_linux_amd_64.url, juicy_malware_linux_arm_64.url, juicy_malware_macos_64.url, juicy_malware_windows_64.exe.url.",
+      "probe": "curl -s http://127.0.0.1:3010/ftp/quarantine/ | grep -oP 'href=\"[^\"]*\"'"
+    },
+    {
+      "type": "directory",
+      "url": "http://127.0.0.1:3010/encryptionkeys/",
+      "method": "GET",
+      "status": 200,
+      "note": "Directory listing enabled. Contains: jwt.pub (RSA public key for JWT token verification) and premium.key (premium subscription key).",
+      "probe": "curl -s http://127.0.0.1:3010/encryptionkeys/"
+    },
+    {
+      "type": "static-file",
+      "url": "http://127.0.0.1:3010/encryptionkeys/jwt.pub",
+      "method": "GET",
+      "status": 200,
+      "note": "RSA public key used for JWT token verification. Could be used to verify forged tokens if private key is weak or known.",
+      "probe": "curl -s http://127.0.0.1:3010/encryptionkeys/jwt.pub"
+    },
+    {
+      "type": "static-file",
+      "url": "http://127.0.0.1:3010/encryptionkeys/premium.key",
+      "method": "GET",
+      "status": 200,
+      "note": "Premium subscription key: '1337133713371337.EA99A61D92D2955B1E9285B55BF2AD42'. Could be used to escalate privileges to deluxe/premium status.",
+      "probe": "curl -s http://127.0.0.1:3010/encryptionkeys/premium.key"
+    },
+    {
+      "type": "static-file",
+      "url": "http://127.0.0.1:3010/ftp/acquisitions.md",
+      "method": "GET",
+      "status": 200,
+      "note": "Confidential document about planned acquisitions. Labeled 'This document is confidential! Do not distribute!'",
+      "probe": "curl -s http://127.0.0.1:3010/ftp/acquisitions.md"
+    },
+    {
+      "type": "websocket",
+      "url": "http://127.0.0.1:3010/socket.io/",
+      "method": "GET",
+      "status": 400,
+      "note": "Socket.IO endpoint detected. Returns 'Transport unknown' on HTTP GET. WebSocket-based real-time communication channel available.",
+      "probe": "curl -s http://127.0.0.1:3010/socket.io/"
+    }
+  ],
+  "candidates": [
+    {
+      "url": "http://127.0.0.1:3010/",
+      "type": "webapp",
+      "reason": "OWASP Juice Shop Angular SPA. All client-side routes accessible via hash (#)."
+    },
+    {
+      "url": "http://127.0.0.1:3010/api/Products",
+      "type": "api",
+      "reason": "Public API. Potential SQL injection via product ID. POST/PUT/DELETE methods likely available."
+    },
+    {
+      "url": "http://127.0.0.1:3010/api/Feedbacks",
+      "type": "api",
+      "reason": "Public API. XSS via feedback comment field. POST method likely available for creating feedback."
+    },
+    {
+      "url": "http://127.0.0.1:3010/rest/user/login",
+      "type": "api",
+      "reason": "Authentication endpoint. SQL injection, NoSQL injection, brute force, credential stuffing."
+    },
+    {
+      "url": "http://127.0.0.1:3010/rest/memories",
+      "type": "api",
+      "reason": "Excessive data exposure - password hashes leaked. IDOR possible to access other users' memories."
+    },
+    {
+      "url": "http://127.0.0.1:3010/rest/products/search",
+      "type": "api",
+      "reason": "Search endpoint potentially vulnerable to NoSQL injection (Juice Shop classic challenge)."
+    },
+    {
+      "url": "http://127.0.0.1:3010/rest/user/change-password",
+      "type": "api",
+      "reason": "Likely exists as a password change endpoint (known Juice Shop feature)."
+    },
+    {
+      "url": "http://127.0.0.1:3010/ftp/",
+      "type": "directory",
+      "reason": "Directory listing enabled. Path traversal vulnerability known in Juice Shop (accessible via ../ftp/)."
+    },
+    {
+      "url": "http://127.0.0.1:3010/encryptionkeys/jwt.pub",
+      "type": "static-file",
+      "reason": "JWT public key exposed. Algorithm confusion attack (RS256 to HS256) possible if library allows key as HMAC secret."
+    },
+    {
+      "url": "http://127.0.0.1:3010/encryptionkeys/premium.key",
+      "type": "static-file",
+      "reason": "Premium key exposed for privilege escalation from customer to deluxe."
+    },
+    {
+      "url": "http://127.0.0.1:3010/#/administration",
+      "type": "webapp",
+      "reason": "Admin panel route. Requires admin privileges. Path traversal and privilege escalation attack surface."
+    },
+    {
+      "url": "http://127.0.0.1:3010/#/forgot-password",
+      "type": "webapp",
+      "reason": "Password reset functionality. Security questions can be brute-forced or guessed."
+    },
+    {
+      "url": "http://127.0.0.1:3010/#/recycle",
+      "type": "webapp",
+      "reason": "Product recycling functionality. File upload potential for arbitrary file write."
+    }
+  ],
+  "facts": [
+    {
+      "key": "technology_stack",
+      "summary": "OWASP Juice Shop running on Express ^4.22.1 with Angular SPA frontend",
+      "body": "Confirmed OWASP Juice Shop. HTTP headers: Express ^4.22.1 revealed in 500 error pages. Angular SPA with main.js, polyfills.js, styles.css. Uses JWT authentication (RS256 via RSA key pair). SQLite database (Juice Shop default). Socket.IO for real-time communication."
+    },
+    {
+      "key": "auth_mechanism",
+      "summary": "JWT-based authentication with RSA-256 signing",
+      "body": "Login at /rest/user/login returns JWT token signed with RS256. Public key exposed at /encryptionkeys/jwt.pub. Token payload includes user data (id, email, password hash, role, etc.). Default admin credentials: admin@juice-sh.op / admin123 (found by testing common passwords)."
+    },
+    {
+      "key": "data_leakage",
+      "summary": "Sensitive data exposure via /rest/memories API endpoint",
+      "body": "GET /rest/memories returns 10 memory entries each with embedded full User objects including: email, MD5 password hash, role, deluxeToken, lastLoginIp, profileImage. No authentication required. Affected users: bjoern@owasp.org (deluxe), bjoern.kimminich@gmail.com (admin), ethereum@juice-sh.op (deluxe), john@juice-sh.op (customer), emma@juice-sh.op (customer)."
+    },
+    {
+      "key": "directory_listing",
+      "summary": "Multiple directories exposed with directory listing enabled",
+      "body": "/ftp/ - contains sensitive documents (acquisitions plan, incident support KDBX, encrypted announcements, backup files). /ftp/quarantine/ - contains malware URL shortcut files. /encryptionkeys/ - contains JWT public key and premium subscription key."
+    },
+    {
+      "key": "admin_credentials",
+      "summary": "Default admin credentials work",
+      "body": "Login with email='admin@juice-sh.op' and password='admin123' (or 'admin') successfully authenticates as admin role user. Returns JWT token granting administrative access."
+    },
+    {
+      "key": "api_surface",
+      "summary": "REST API surface mapped with 25+ endpoints",
+      "body": "API endpoints at /api/* (Products, Feedbacks, Challenges, Quantitys, SecurityQuestions - public; Users, Cards, Complaints, SecurityAnswers - authenticated) and /rest/* (login, languages, memories, products/search - public; basket, change-password - authenticated; admin, order, product, consoles, tracks, tasks, country-mapping, image, cloud - exist but return 500)."
+    },
+    {
+      "key": "websocket_presence",
+      "summary": "Socket.IO endpoint present for real-time communication",
+      "body": "Socket.IO server detected at /socket.io/. Returns 'Transport unknown' on HTTP polling. Used for real-time features including chat, tracking, and notifications."
+    }
+  ],
+  "deadends": [
+    {
+      "path": "http://127.0.0.1:3010/swagger.json",
+      "note": "Returns the Angular index.html (SPA fallback), not actual Swagger/OpenAPI spec."
+    },
+    {
+      "path": "http://127.0.0.1:3010/openapi.json",
+      "note": "Returns the Angular index.html (SPA fallback), not actual OpenAPI spec."
+    },
+    {
+      "path": "http://127.0.0.1:3010/robots.txt",
+      "note": "Returns the Angular index.html (SPA fallback), not a robots.txt file."
+    },
+    {
+      "path": "http://127.0.0.1:3010/.env",
+      "note": "Returns 000 (connection refused)"
+    },
+    {
+      "path": "http://127.0.0.1:3010/.git/config",
+      "note": "Returns 000 (connection refused)"
+    },
+    {
+      "path": "http://127.0.0.1:3010/package.json",
+      "note": "Returns 000 (connection refused)"
+    }
+  ]
+}

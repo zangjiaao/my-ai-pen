@@ -1,0 +1,10 @@
+Observed directory listing on /ftp/ endpoint.
+
+GET /ftp/ returns HTTP 200 with an HTML directory listing showing files including:
+- acquisitions.md
+- legal.md
+- quarantine/ (subdirectory)
+
+Also /ftp/quarantine/ directory listing returns the contents of that subdirectory.
+
+This exposes file inventory to unauthenticated attackers and aids in path traversal exploitation.

@@ -1,0 +1,87 @@
+{
+  "ok": true,
+  "summary": "Authz/Logic differentials probed for DVWA v1.10 at low security. Key findings: (1) Security level authorization bypass via direct cookie manipulation - the 'security' cookie directly controls the application's security posture without server-side validation, bypassing CSRF-protected form on security.php. (2) Cross-Site Request Forgery on password change at /vulnerabilities/csrf/ - accepts GET requests with no CSRF token. (3) Unauthenticated database reset via setup.php - page accessible without authentication allowing attacker to reset DB and admin credentials. (4) CSRF tokens are session-bound and cross-session reuse properly rejected. (5) No IDOR endpoints found. (6) No role-based access control separation (single admin user). (7) Combined CSRF+Command Injection chaining possible due to GET-based state-changing requests.",
+  "surfaces": [
+    {"location": "http://127.0.0.1:8080/login.php", "kind": "auth", "params": ["username","password","user_token","Login"]},
+    {"location": "http://127.0.0.1:8080/logout.php", "kind": "auth"},
+    {"location": "http://127.0.0.1:8080/setup.php", "kind": "form", "params": ["create_db","user_token"]},
+    {"location": "http://127.0.0.1:8080/security.php", "kind": "form", "params": ["security","seclev_submit","user_token"]},
+    {"location": "http://127.0.0.1:8080/vulnerabilities/brute/", "kind": "form"},
+    {"location": "http://127.0.0.1:8080/vulnerabilities/exec/", "kind": "form"},
+    {"location": "http://127.0.0.1:8080/vulnerabilities/csrf/", "kind": "form"},
+    {"location": "http://127.0.0.1:8080/vulnerabilities/fi/", "kind": "form", "params": ["page"]},
+    {"location": "http://127.0.0.1:8080/vulnerabilities/upload/", "kind": "form"},
+    {"location": "http://127.0.0.1:8080/vulnerabilities/captcha/", "kind": "form"},
+    {"location": "http://127.0.0.1:8080/vulnerabilities/sqli/", "kind": "form"},
+    {"location": "http://127.0.0.1:8080/vulnerabilities/sqli_blind/", "kind": "form"},
+    {"location": "http://127.0.0.1:8080/vulnerabilities/weak_id/", "kind": "form"},
+    {"location": "http://127.0.0.1:8080/vulnerabilities/xss_d/", "kind": "client"},
+    {"location": "http://127.0.0.1:8080/vulnerabilities/xss_r/", "kind": "form"},
+    {"location": "http://127.0.0.1:8080/vulnerabilities/xss_s/", "kind": "form"},
+    {"location": "http://127.0.0.1:8080/vulnerabilities/csp/", "kind": "form"},
+    {"location": "http://127.0.0.1:8080/vulnerabilities/javascript/", "kind": "client"},
+    {"location": "http://127.0.0.1:8080/phpinfo.php", "kind": "file"},
+    {"location": "http://127.0.0.1:8080/config/config.inc.php.bak", "kind": "file"}
+  ],
+  "candidates": [
+    {
+      "title": "Security level authorization bypass via direct cookie manipulation",
+      "location": "http://127.0.0.1:8080/security.php",
+      "proof_excerpt": "Original cookie level: low\nAfter directly setting security=high cookie: Security level is currently: high.\nWith low security cookie: SQLi returns user data (First name: admin, Surname: admin)\nWith high security cookie: SQL injection blocked (no results returned)",
+      "poc_hint": "The 'security' cookie directly controls the application's security level without server-side validation. An attacker can change the security level by simply setting the cookie value (e.g., document.cookie='security=high') bypassing the CSRF-protected form. This affects vulnerability behavior: low allows SQL injection, high blocks it. An XSS vulnerability could be used to manipulate the security level."
+    },
+    {
+      "title": "Cross-Site Request Forgery (CSRF) on password change at low security",
+      "location": "http://127.0.0.1:8080/vulnerabilities/csrf/",
+      "proof_excerpt": "GET /vulnerabilities/csrf/?password_new=test123&password_conf=test123&Change=Change -> Response: <pre>Password Changed.</pre>\nNo CSRF token present in form (has password fields: 2, has CSRF token: 0)",
+      "poc_hint": "The password change form at /vulnerabilities/csrf/ uses GET method with no CSRF token. An attacker can change the admin password by tricking an authenticated user into visiting: http://127.0.0.1:8080/vulnerabilities/csrf/?password_new=attackerpass&password_conf=attackerpass&Change=Change"
+    },
+    {
+      "title": "Database setup/reset page accessible without authentication",
+      "location": "http://127.0.0.1:8080/setup.php",
+      "proof_excerpt": "Unauthenticated access: HTTP 200 - page shows 'Create / Reset Database' button\nHas create_db button: 1\nSetup token (no auth): ea7d08dac28331a96477b132da5cc16b\nPOST to create_db with extracted token redirects to /setup.php (DB reset successful)",
+      "poc_hint": "The /setup.php page which can create/reset the database and reset admin credentials to 'admin//password' is accessible without any authentication. An unauthenticated attacker can reset the database and admin credentials by: (1) GET /setup.php to obtain user_token, (2) POST create_db=Create/Reset Database&user_token=EXTRACTED_TOKEN"
+    },
+    {
+      "title": "CSRF token session binding - cross-session reuse rejected",
+      "location": "http://127.0.0.1:8080/security.php",
+      "proof_excerpt": "Session A token used in Session B request -> Security level remains: low (no change)\nSession B token used in Session A request -> Security level remains: low (no change)\nCSRF tokens are properly session-bound and cross-session replay is rejected",
+      "poc_hint": "CSRF tokens on security.php are properly bound to the issuing session. A token obtained in one browser session cannot be reused in another session. This provides effective CSRF protection for the security level form."
+    },
+    {
+      "title": "Combined CSRF + Command Injection attack chain possible",
+      "location": "http://127.0.0.1:8080/vulnerabilities/exec/",
+      "proof_excerpt": "GET-based CSRF on password change confirmed (no token, GET method)\nCommand injection at /vulnerabilities/exec/ accepts semicolon/piped commands\nCombined: CSRF can trigger command injection via GET parameters",
+      "poc_hint": "Since the CSRF endpoint accepts GET requests without tokens and command injection exists at /vulnerabilities/exec/, an attacker can chain these: craft a link that triggers command execution via CSRF, e.g., <img src='http://127.0.0.1:8080/vulnerabilities/exec/?ip=127.0.0.1%3Bid&Submit=Submit'> which would execute commands when the victim (authenticated) visits the page."
+    },
+    {
+      "title": "Security level cookie influences vulnerability behavior",
+      "location": "http://127.0.0.1:8080/security.php",
+      "proof_excerpt": "Low security cookie: SQLi returns all user data (admin, Gordon, Hack, Pablo, Bob)\nHigh security cookie: SQLi returns no results - injection blocked\nCookie manipulation directly affects application security posture without server-side validation",
+      "poc_hint": "The application reads the 'security' cookie to determine vulnerability shields. Setting the cookie to 'low' enables exploitation of vulnerabilities; setting to 'high' blocks them. Combined with XSS, an attacker can downgrade security and then exploit vulnerabilities."
+    }
+  ],
+  "facts": [
+    "Unauthenticated access map: login.php (200), setup.php (200 - with DB reset), config/*.bak (200), instructions.php (200), about.php (200). All /vulnerabilities/*, security.php, phpinfo.php, ids_log.php redirect 302 -> login.php.",
+    "Security level is entirely client-controlled via 'security' cookie. Setting cookie directly changes displayed level without CSRF token validation, bypassing server-side authorization control.",
+    "CSRF tokens on security.php are session-bound - tokens from session A cannot be used in session B's requests. Cross-session replay is properly rejected.",
+    "CSRF on password change at /vulnerabilities/csrf/ uses GET method with no CSRF token. An attacker can craft a simple link to change the victim's password.",
+    "Setup page at /setup.php is fully accessible without authentication. Unauthenticated attackers can reset the database and admin credentials (admin/password) by extracting the user_token from the page and POSTing.",
+    "No IDOR endpoints found - no user-specific pages (account.php, profile.php, user.php, etc.) exist to test direct object reference.",
+    "No role-based access control separation exists in DVWA - only a single 'admin' user role is available, so privilege escalation testing is not applicable.",
+    "Directory listing enabled on /dvwa/includes/, /dvwa/js/, /dvwa/css/, /external/, /docs/ - accessible without authentication."
+  ],
+  "deadends": [
+    "http://127.0.0.1:8080/.git/config (404)",
+    "http://127.0.0.1:8080/server-info (404)",
+    "http://127.0.0.1:8080/server-status (403)",
+    "http://127.0.0.1:8080/.htaccess (403)",
+    "http://127.0.0.1:8080/.htpasswd (403)",
+    "No IDOR endpoints found: account.php, profile.php, user.php, users.php, admin.php, change_password.php all return 404",
+    "No role-based access control in DVWA - only single admin user role exists",
+    "CSRF tokens on security.php are properly session-bound; cross-session token reuse is rejected (effective CSRF protection)",
+    "Login CSRF tokens are rotated on each page refresh (mitigates token fixation)",
+    "All /vulnerabilities/* pages properly redirect unauthenticated users to login.php (302)",
+    "Session fixation via URL parameter PHPSESSID: PHP does not accept session IDs via GET"
+  ]
+}

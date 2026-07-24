@@ -15,18 +15,18 @@ A specialized pack (e.g. pentest, CTF, code audit) installed on the same Node ba
 _Avoid_: role seat, plugin (when meaning a full specialist pack)
 
 **Node candidate**:
-An implementation that can be bound as the product Node. **Product path (locked):** Node4 lineage with Graph × Pi. **Node5:** lab / semantic reference and formal fallback B — not a co-equal product expansion track while A is in pursuit.
-_Avoid_: pre-PK dual product kernel, treating node5 as default bind target
+An implementation that can be bound as the product Node. **Product path (locked):** Node4 lineage with Graph × Pi only. Former Node5 lab tree is deleted; fallback B retired (ADR 0001 B1).
+_Avoid_: dual product kernel, resurrecting node5 as bind target
 
 ### Runtime shape
 
-**Hard Graph**:
-Normative Task-stage control of expert work: ordered stages, fail-closed Feedback gates, stage tool profiles. Runner owns scheduling — not Main-as-scheduler.
-_Avoid_: soft scenario menu alone, prompt-only workflow, force_order as hints only
+**Expert Graph** (implementation synonym: **Hard Graph**):
+Normative Task-stage control of **Expert** work (esp. pentest): ordered stages, fail-closed Feedback gates, stage tool profiles, Agent Graph fan-out on probe stages. Runner owns scheduling — not Main-as-scheduler. Product Expert DoD = Graph × Pi (mature graph primary; thin = lab alias only). Experts may offer **multiple Graphs**.
+_Avoid_: soft scenario menu as product mode; prompt-only workflow; force_order as hints only; treating thin stub as full Expert DoD
 
 **Soft scenario graph**:
-Optional pentest node menu + soft default_plan (existing OMP assist). Not Hard Graph DoD.
-_Avoid_: calling soft menu "Hard Graph"
+**Retired product work mode.** Historical name for node menu + soft default_plan (Main may act). Not Expert DoD; not a third product path. Do not reintroduce on product UI or resolve.
+_Avoid_: calling Soft "Expert Graph"; shipping Soft as optional Expert light path
 
 **Agent Runtime**:
 The loop that runs an agent with tools inside a graph stage or Default seat. Product packages: **pi-ai** (models) + **pi-agent-core** (loop). Product API: **Agent** + **AgentTool** + events/hooks via seam **runNode4Agent**. Not coding-agent shell, not AgentHarness, not pi-tui.

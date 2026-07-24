@@ -2,7 +2,7 @@
 
 > **现行产品规格**（与 `AGENTS.md`、`docs/specs/harness.md` 一致）。  
 > 最近校准：2026-07-23  
-> **Node 路径（已锁）：** 产品核为 **Graph × Pi / Node4 血统**；`node5/` 为 lab 语义参考与退路 B（非对等产品扩）。部署绑定恰好一个 Node 进程（产品默认 Node4）。见 `docs/adr/0001-graph-x-pi-product-path.md`。  
+> **Node 路径（已锁）：** 产品核为 **Graph × Pi / Node4 血统**（唯一产品 Node 血统）。Fallback B（elevate Node5）已退役；`node5/` 已 hard-delete（ADR 0001 B1 / map #59）。部署绑定恰好一个 Node 进程（Node4）。见 `docs/adr/0001-graph-x-pi-product-path.md`。  
 
 > **Legacy：** `node/` / `node2/` / `node3/` 计划删除，不进入产品能力描述，禁止扩展。  
 > **冻结：** `research/`（第三方参照）、`benchmarks/`（lab 评估资产）。  
@@ -17,7 +17,7 @@
 | 部件 | 职责 |
 |------|------|
 | **平台** | 登录、会话、消息、资产、漏洞、证据、节点注册、授权确认、任务下发/中继与结果展示；**台账 SOT**（数据面，不设对话人格 Agent） |
-| **Node（产品绑定运行时）** | 全部用户可见的 Agent 运行时：内置 **`default`**（台账读写 Tools、闲聊与整理；**不**进专家硬 Graph）+ 已安装**专家包**（渗透/CTF 等；专家执行可走 **Hard Graph × Pi**）。产品实现路径为 **`node4/`**；`node5/` 不作默认产品绑定。 |
+| **Node（产品绑定运行时）** | 全部用户可见的 Agent 运行时：内置 **`default`**（台账读写 Tools、闲聊与整理；**不**进专家硬 Graph）+ 已安装**专家包**（渗透/CTF 等；专家执行可走 **Hard Graph × Pi**）。产品实现路径为 **`node4/`**（唯一血统）。 |
 
 产品形态：**一个平台（工作台/台账）+ 一个已绑定的 Node（产品路径 Node4 / Graph × Pi）**。  
 
@@ -93,11 +93,11 @@
 
 **P0**
 
-- 平台 WebSocket：`task_assign` → 工具事件 / `vuln_found` / evidence → harness `task_complete`（当前产品路径实现见 `node4/`；`node5/` 为对等候选对照臂）。
-- Standalone CLI 便于 lab 调试（`node4` standalone；`node5` CLI 对照）。
+- 平台 WebSocket：`task_assign` → 工具事件 / `vuln_found` / evidence → harness `task_complete`（产品路径实现见 `node4/`）。
+- Standalone CLI 便于 lab 调试（`node4` standalone）。
 - **Expert pack** 由 `engagement` / `role` 选择（须已 **install** 到本 Node）；无 engagement 且未装包时跑 **bare runtime**；目录见 `experts/`。
 - 工具与循环语义遵循 `docs/specs/harness.md`（todo、shell、fs、http、**session**、**browser**、script、finding、subagent、goal、**skill**；CTF 另有 captcha。均为 **assistive 密度**，非流程关卡）。
-- **Pentest Free / Graph：** 不选场景图时为 Free（OMP 自愿 subagent）；显式 `app_assessment` / `redteam_deep`（或 `graph_id`）为 Graph 工作模式（节点菜单 + 软 default_plan + RoE）。见 `docs/specs/task-graph.md`。
+- **Pentest Default free / Expert Graph：** 无 Graph 模板时为 free OMP；显式 `app_assessment`（产品 Expert Graph）走 Hard Graph runner（阶段 + fail-closed Feedback）。Soft 场景图产品模式已退役（#68 / #76）。见 `docs/specs/task-graph.md`。
 - 任务目录可排查：`events.jsonl`、evidence、findings 等。
 - **Case 共享 evidence**：`task_assign.case_context` 含 findings + `evidence_snippets`（path/excerpt），供多专家接力（如 pentest 源码泄露 → code-audit）；实现见绑定候选的 booking / harness。
 
@@ -161,7 +161,7 @@ Lab（DVWA/Juice 等）仅用于**离线对照与工程调试**，不作为「�
 2. 渗透 pack：按 OMP 原则用真实 lab events 减样板，少加 gate。
 3. 平台 ↔ 绑定 Node 候选 WS 硬化与可观测性。
 4. 执行 `docs/project-cleanup-plan.md`（docs 收敛 + legacy 树删除门槛）。
-5. Node 路径已锁 Graph × Pi / Node4（ADR 0001）；Node5 仅 lab/退路，不重开 PK 除非 hard triggers。
+5. Node 路径已锁 Graph × Pi / Node4（ADR 0001 B1）；**Expert 渗透 DoD = Hard Graph × Pi**（成熟 hard 图主路径）；Soft/Default 为轻助理，非 Expert DoD。不重开双核 PK；Exit C 仍为 Runtime 互换退路。
 
 ---
 
@@ -169,8 +169,8 @@ Lab（DVWA/Juice 等）仅用于**离线对照与工程调试**，不作为「�
 
 | 文档 | 用途 |
 |------|------|
-| `AGENTS.md` | 实现时的硬约束；pre-PK 双候选 |
-| `docs/specs/harness.md` | 运行时契约（ primarily `node4/` 实现细节） |
+| `AGENTS.md` | 实现时的硬约束；Graph × Pi / Node4 |
+| `docs/specs/harness.md` | 运行时契约（`node4/` 实现细节） |
 | `docs/specs/task-graph.md` | Free / Graph 工作模式 |
 | `docs/specs/expert-offers.md` | 多专家容器 + default 路由 |
 | `docs/specs/ctf-role.md` | CTF pack 操作说明 |

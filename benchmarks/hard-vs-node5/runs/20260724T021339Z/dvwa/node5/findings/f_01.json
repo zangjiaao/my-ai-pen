@@ -1,0 +1,10 @@
+{
+  "title": "Public directory listing of /config/ exposes database credentials",
+  "location": "/config",
+  "severity": "high",
+  "proof": "Anonymous GET http://127.0.0.1:8081/config/ returns directory listing with config.inc.php.bak, config.inc.php.dist, config.inc.php. The .bak file reveals: $_DVWA['db_server']='127.0.0.1'; $_DVWA['db_database']='dvwa'; $_DVWA['db_user']='app'; $_DVWA['db_password']='vulnerables'.",
+  "stage": "class_probe",
+  "precondition": "Authenticated session",
+  "affected_actor": "admin",
+  "affected_resource": "file"
+}

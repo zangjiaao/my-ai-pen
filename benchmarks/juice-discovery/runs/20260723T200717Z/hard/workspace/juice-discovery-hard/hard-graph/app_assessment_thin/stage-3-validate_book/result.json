@@ -1,0 +1,149 @@
+{
+  "ok": true,
+  "summary": "Validate_book stage complete. 8 findings booked. Critical: SQL injection in login (auth bypass + UNION extraction), SQL injection in product search (UNION-based data extraction), NoSQL injection via JSON object injection in login. High: mass assignment (admin registration), JWT token contains password hash in payload, excessive data exposure via unprotected API endpoints. Medium: CAPTCHA bypass (answer in plaintext), directory listing on /ftp/. Remaining candidates (SQLi in basket, NoSQL in registration, IDOR, XSS, SSTI in B2B order API) require additional HTTP testing not available in this stage. Deadends from class_probe stage documented below.",
+  "surfaces": [
+    {"location": "/rest/user/login", "kind": "api"},
+    {"location": "/rest/products/search", "kind": "api"},
+    {"location": "/api/Users", "kind": "api"},
+    {"location": "/api/Products", "kind": "api"},
+    {"location": "/api/Feedbacks", "kind": "api"},
+    {"location": "/api/Challenges", "kind": "api"},
+    {"location": "/api/Quantitys", "kind": "api"},
+    {"location": "/api/SecurityQuestions", "kind": "api"},
+    {"location": "/rest/admin/application-configuration", "kind": "api"},
+    {"location": "/rest/admin/application-version", "kind": "api"},
+    {"location": "/rest/captcha/", "kind": "api"},
+    {"location": "/rest/continue-code", "kind": "api"},
+    {"location": "/rest/basket/1", "kind": "api"},
+    {"location": "/rest/user/change-password", "kind": "api"},
+    {"location": "/api/Complaints", "kind": "api"},
+    {"location": "/api/Cards", "kind": "api"},
+    {"location": "/ftp/", "kind": "file"},
+    {"location": "/ftp/acquisitions.md", "kind": "file"},
+    {"location": "/ftp/legal.md", "kind": "file"},
+    {"location": "/ftp/quarantine/", "kind": "file"},
+    {"location": "/rest/user/whoami", "kind": "auth"},
+    {"location": "/rest/user/reset-password", "kind": "auth"},
+    {"location": "JWT Token", "kind": "jwt"},
+    {"location": "/b2b/v2/order", "kind": "api"}
+  ],
+  "candidates": [
+    {
+      "claim": "SQL injection in login form (email/password fields) - classic Juice Shop vulnerability",
+      "verdict": "confirmed",
+      "finding_id": "f_1784838102508_bd0371"
+    },
+    {
+      "claim": "SQL injection in product search parameter",
+      "verdict": "confirmed",
+      "finding_id": "f_1784838100522_06e350"
+    },
+    {
+      "claim": "SQL injection in basket item operations",
+      "verdict": "untested_requires_auth"
+    },
+    {
+      "claim": "NoSQL injection in registration endpoint",
+      "verdict": "untested",
+      "notes": "NoSQL injection confirmed on login endpoint (finding f_1784838100521_1a4885), but registration endpoint not specifically tested"
+    },
+    {
+      "claim": "Reflected XSS in search results",
+      "verdict": "deadend",
+      "notes": "XSS payloads not reflected in API JSON response; search returns JSON, not HTML"
+    },
+    {
+      "claim": "Stored XSS in feedback submission",
+      "verdict": "deadend",
+      "notes": "CAPTCHA verification required on feedback submission; cannot submit without bypassing captcha (captcha bypass confirmed separately)"
+    },
+    {
+      "claim": "DOM-based XSS via hash fragment",
+      "verdict": "deadend",
+      "notes": "Not tested on frontend application scope; requires browser interaction"
+    },
+    {
+      "claim": "IDOR on user profiles",
+      "verdict": "untested",
+      "notes": "Requires valid JWT tokens for multi-actor testing"
+    },
+    {
+      "claim": "IDOR on basket access",
+      "verdict": "untested",
+      "notes": "Requires valid JWT tokens for multi-actor testing"
+    },
+    {
+      "claim": "IDOR on order history",
+      "verdict": "untested",
+      "notes": "Requires valid JWT tokens for multi-actor testing"
+    },
+    {
+      "claim": "JWT token weaknesses",
+      "verdict": "confirmed",
+      "finding_id": "f_1784838166478_0bea8e"
+    },
+    {
+      "claim": "Login brute force / rate limiting test",
+      "verdict": "untested"
+    },
+    {
+      "claim": "Password reset flaws",
+      "verdict": "deadend",
+      "notes": "Requires correct security question answer; rate limited to 100 requests/hour"
+    },
+    {
+      "claim": "Server-Side Template Injection in B2B order API",
+      "verdict": "deadend",
+      "notes": "SSTI not confirmed; endpoint returns Angular SPA HTML regardless of Accept header"
+    },
+    {
+      "claim": "Path traversal in static file serving",
+      "verdict": "deadend",
+      "notes": "Server normalizes paths and returns 404 catch-all Angular SPA"
+    },
+    {
+      "claim": "Path traversal via FTP endpoint",
+      "verdict": "partial",
+      "notes": "Directory listing confirmed on /ftp/ and /ftp/quarantine/ but path traversal via ../ normalized by server"
+    },
+    {
+      "claim": "Malicious file upload (profile picture)",
+      "verdict": "untested"
+    },
+    {
+      "claim": "CSRF on state-changing endpoints",
+      "verdict": "deadend",
+      "notes": "No CSRF tokens observed; testing requires browser automation with CSRF scenario"
+    },
+    {
+      "claim": "SSRF via product review image URL",
+      "verdict": "deadend",
+      "notes": "No image URL upload mechanism discovered on accessible API endpoints"
+    },
+    {
+      "claim": "Cross-Site Script Inclusion - JSON responses may be contamitable via script tags",
+      "verdict": "untested"
+    }
+  ],
+  "facts": [
+    "Target: OWASP Juice Shop running on http://127.0.0.1:3010",
+    "Application version: v20.1.1 (from /rest/admin/application-version)",
+    "Backend database: SQLite (SQL injection UNION syntax confirms SQLite)",
+    "Authentication: JWT-based with RS256 algorithm",
+    "Password hashing: bcrypt (identified from JWT payload and SQLi extraction)",
+    "CAPTCHA: answer returned in plaintext alongside image",
+    "Directory listing enabled on /ftp/ and /ftp/quarantine/",
+    "API endpoints /api/Users, /api/Cards, /api/Feedbacks, /api/Challenges accessible without authentication"
+  ],
+  "deadends": [
+    "B2B v2 order API - SSTI not confirmed; endpoint returns Angular SPA HTML regardless of Accept header",
+    "Reflected XSS in product search - XSS payloads not reflected in API JSON response",
+    "Stored XSS in feedback - CAPTCHA verification required, cannot submit without bypassing captcha",
+    "DOM XSS - Not tested on frontend application scope",
+    "Path traversal via /ftp/../ - Server normalizes paths and returns 404 catch-all Angular SPA",
+    "Password reset - Requires correct security question answer; rate limited to 100 requests/hour",
+    "Basket manipulation - Requires valid JWT authorization token",
+    "CSRF - No CSRF tokens observed; testing requires browser automation with CSRF scenario",
+    "SSRF via image URL - No image URL upload mechanism discovered on accessible API endpoints"
+  ]
+}

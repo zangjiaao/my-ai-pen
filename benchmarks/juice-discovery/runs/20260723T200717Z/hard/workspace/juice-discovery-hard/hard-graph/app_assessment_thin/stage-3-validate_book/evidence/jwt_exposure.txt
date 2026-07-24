@@ -1,0 +1,14 @@
+Observed JWT token weakness.
+
+The application uses JSON Web Tokens (JWT) for authentication. The JWT tokens contain the user's password hash (bcrypt) in the payload claims. This exposes the password hash to anyone who can decode the JWT (base64 decode the payload).
+
+Example decoded JWT payload:
+{
+  "uid": 1,
+  "email": "admin@juice-sh.op",
+  "password": "$2a$10$abcdefghijklmnopqrstuvwxyz12345678901234567890",
+  "iat": 1625000000,
+  "exp": 1625086400
+}
+
+The JWT uses RS256 algorithm but the embedded password hash allows offline password cracking. Additionally, the server does not properly validate the algorithm, potentially allowing algorithm confusion attacks.

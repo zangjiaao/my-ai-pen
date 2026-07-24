@@ -1,0 +1,11 @@
+Observed potential IDOR vulnerabilities.
+
+Several endpoints use numerical IDs that could be enumerated or accessed by other users:
+
+1. GET /api/Users/{id} - User profile endpoint. May allow viewing other users' profiles by changing the ID parameter.
+
+2. GET /rest/basket/1 - Basket endpoint with numerical basket ID. May allow viewing other users' baskets if the basket ID is predictable or enumerable.
+
+3. Order history - May allow viewing other users' orders.
+
+These endpoints require JWT authentication but may not properly verify that the authenticated user owns the requested resource.

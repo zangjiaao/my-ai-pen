@@ -1,0 +1,28 @@
+{
+  "id": "f_1784861882929_74f002",
+  "action": "confirm",
+  "title": "Distribution config file with default database credentials",
+  "severity": "medium",
+  "finding_kind": "vuln",
+  "location": "http://127.0.0.1:8080/config/config.inc.php.dist",
+  "url": "http://127.0.0.1:8080/config/config.inc.php.dist",
+  "description": "The distribution configuration file /config/config.inc.php.dist is readable and contains default database credentials (root/p@ssw0rd) which expose the default installation credentials.",
+  "poc": "Probe request against http://127.0.0.1:8080/config/config.inc.php.dist; observed proving result from prior stage handoff: <title>Index of /config</title>",
+  "proof": "<title>Index of /config</title>",
+  "how_captured": "script: proof_dirlisting.txt",
+  "evidence_ids": [
+    "ev_1784861882133_3c9e7a"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784861882133_3c9e7a",
+      "excerpt": "<title>Index of /config</title>",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "script: proof_dirlisting.txt"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "8080",
+  "created_at": "2026-07-24T02:58:02.929Z"
+}

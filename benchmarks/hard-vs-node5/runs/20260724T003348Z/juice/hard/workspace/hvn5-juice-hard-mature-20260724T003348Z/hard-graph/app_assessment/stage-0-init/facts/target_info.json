@@ -1,0 +1,7 @@
+{
+  "fact_key": "target_info",
+  "summary": "OWASP Juice Shop at http://127.0.0.1:3010",
+  "body": "Target: http://127.0.0.1:3010\nScope: 127.0.0.1, localhost, host.docker.internal\nApplication: OWASP Juice Shop (Node.js/Express)\nStage: init (no live recon on this stage)\nRoE: app_assessment — no post-ex host takeover off-box",
+  "category": "target",
+  "updated_at": "2026-07-24T00:34:39.395Z"
+}

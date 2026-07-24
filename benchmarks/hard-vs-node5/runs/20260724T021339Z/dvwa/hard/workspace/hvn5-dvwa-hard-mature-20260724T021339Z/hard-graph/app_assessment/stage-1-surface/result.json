@@ -1,0 +1,170 @@
+{
+  "ok": true,
+  "summary": "Surface recon complete. DVWA v1.10 at http://127.0.0.1:8080 is live with login/auth, 14 vulnerability modules, phpinfo, config backup disclosure, directory listing enabled, and IDS log viewer. Session established with default creds (admin/password). Security level: low. Database credentials recovered from config backup file.",
+  "surfaces": [
+    {
+      "type": "auth",
+      "location": "http://127.0.0.1:8080/login.php",
+      "method": "POST",
+      "params": ["username", "password", "user_token", "Login"],
+      "description": "Login form with CSRF token protection. Default credentials: admin/password.",
+      "proof_excerpt": "<form action=\"login.php\" method=\"post\"><fieldset><label for=\"user\">Username</label> <input type=\"text\" class=\"loginInput\" size=\"20\" name=\"username\"><br /><label for=\"pass\">Password</label> <input type=\"password\" class=\"loginInput\" AUTOCOMPLETE=\"off\" size=\"20\" name=\"password\"><br /><p class=\"submit\"><input type=\"submit\" value=\"Login\" name=\"Login\"></p></fieldset><input type='hidden' name='user_token' value='...' /></form>"
+    },
+    {
+      "type": "auth",
+      "location": "http://127.0.0.1:8080/logout.php",
+      "method": "GET",
+      "description": "Logout endpoint, redirects to login.php"
+    },
+    {
+      "type": "form",
+      "location": "http://127.0.0.1:8080/setup.php",
+      "method": "POST",
+      "params": ["create_db", "user_token"],
+      "description": "Database setup/reset page. Also shows PHP configuration status (safe_mode, allow_url_fopen, etc.) and writable directory checks."
+    },
+    {
+      "type": "form",
+      "location": "http://127.0.0.1:8080/security.php",
+      "method": "POST",
+      "params": ["security", "seclev_submit", "user_token"],
+      "description": "Security level selector (low/medium/high/impossible). Also allows enabling PHPIDS WAF."
+    },
+    {
+      "type": "form",
+      "location": "http://127.0.0.1:8080/vulnerabilities/brute/",
+      "description": "Brute Force module - login brute force testing"
+    },
+    {
+      "type": "form",
+      "location": "http://127.0.0.1:8080/vulnerabilities/exec/",
+      "description": "Command Injection module"
+    },
+    {
+      "type": "form",
+      "location": "http://127.0.0.1:8080/vulnerabilities/csrf/",
+      "description": "CSRF module"
+    },
+    {
+      "type": "form",
+      "location": "http://127.0.0.1:8080/vulnerabilities/fi/",
+      "params": ["page"],
+      "description": "File Inclusion module with page parameter"
+    },
+    {
+      "type": "form",
+      "location": "http://127.0.0.1:8080/vulnerabilities/upload/",
+      "description": "File Upload module"
+    },
+    {
+      "type": "form",
+      "location": "http://127.0.0.1:8080/vulnerabilities/captcha/",
+      "description": "Insecure CAPTCHA module"
+    },
+    {
+      "type": "form",
+      "location": "http://127.0.0.1:8080/vulnerabilities/sqli/",
+      "description": "SQL Injection module"
+    },
+    {
+      "type": "form",
+      "location": "http://127.0.0.1:8080/vulnerabilities/sqli_blind/",
+      "description": "SQL Injection (Blind) module"
+    },
+    {
+      "type": "form",
+      "location": "http://127.0.0.1:8080/vulnerabilities/weak_id/",
+      "description": "Weak Session IDs module"
+    },
+    {
+      "type": "client",
+      "location": "http://127.0.0.1:8080/vulnerabilities/xss_d/",
+      "description": "XSS (DOM) module"
+    },
+    {
+      "type": "form",
+      "location": "http://127.0.0.1:8080/vulnerabilities/xss_r/",
+      "description": "XSS (Reflected) module"
+    },
+    {
+      "type": "form",
+      "location": "http://127.0.0.1:8080/vulnerabilities/xss_s/",
+      "description": "XSS (Stored) module"
+    },
+    {
+      "type": "form",
+      "location": "http://127.0.0.1:8080/vulnerabilities/csp/",
+      "description": "CSP Bypass module"
+    },
+    {
+      "type": "client",
+      "location": "http://127.0.0.1:8080/vulnerabilities/javascript/",
+      "description": "JavaScript module"
+    },
+    {
+      "type": "file",
+      "location": "http://127.0.0.1:8080/phpinfo.php",
+      "description": "PHP Info page - exposes PHP configuration details including version, enabled modules, system info.",
+      "proof_excerpt": "<title>phpinfo()</title>...<h1 class=\"p\">PHP Version 7.0.30-0+deb9u1</h1>"
+    },
+    {
+      "type": "file",
+      "location": "http://127.0.0.1:8080/config/config.inc.php.bak",
+      "description": "Exposed backup configuration file containing database credentials.",
+      "proof_excerpt": "$_DVWA[ 'db_server' ]   = '127.0.0.1';\n$_DVWA[ 'db_database' ] = 'dvwa';\n$_DVWA[ 'db_user' ]     = 'app';\n$_DVWA[ 'db_password' ] = 'vulnerables';"
+    },
+    {
+      "type": "file",
+      "location": "http://127.0.0.1:8080/ids_log.php",
+      "description": "PHPIDS log viewer - shows IDS alerts and allows clearing log."
+    },
+    {
+      "type": "file",
+      "location": "http://127.0.0.1:8080/about.php",
+      "description": "About page"
+    },
+    {
+      "type": "file",
+      "location": "http://127.0.0.1:8080/instructions.php",
+      "description": "Instructions page"
+    },
+    {
+      "type": "misc",
+      "location": "http://127.0.0.1:8080/robots.txt",
+      "description": "Disallows all crawlers",
+      "proof_excerpt": "User-agent: *\nDisallow: /"
+    }
+  ],
+  "candidates": [
+    {
+      "title": "Database credentials disclosure via config backup file",
+      "location": "http://127.0.0.1:8080/config/config.inc.php.bak",
+      "proof_excerpt": "$_DVWA[ 'db_server' ]   = '127.0.0.1';\n$_DVWA[ 'db_database' ] = 'dvwa';\n$_DVWA[ 'db_user' ]     = 'app';\n$_DVWA[ 'db_password' ] = 'vulnerables';",
+      "poc_hint": "Accessing /config/config.inc.php.bak reveals plaintext database credentials (user: app, password: vulnerables) which could be used to connect to the MySQL database."
+    },
+    {
+      "title": "PHP info disclosure",
+      "location": "http://127.0.0.1:8080/phpinfo.php",
+      "proof_excerpt": "PHP Version 7.0.30-0+deb9u1",
+      "poc_hint": "The phpinfo.php page is accessible, exposing detailed PHP configuration including system paths, enabled modules, and environment variables."
+    },
+    {
+      "title": "Directory listing enabled on multiple directories",
+      "location": "http://127.0.0.1:8080/config/",
+      "proof_excerpt": "<title>Index of /config</title>",
+      "poc_hint": "Directory listing is enabled on /config/, /dvwa/includes/, /dvwa/js/, /dvwa/css/, /external/ allowing discovery of backup files and source code structure."
+    }
+  ],
+  "facts": [
+    {
+      "key": "surface_recon",
+      "summary": "DVWA surface recon complete - all endpoints mapped",
+      "body": "Full surface mapping of DVWA at http://127.0.0.1:8080 completed. Key findings include: login form (CSRF protected), 14 vulnerability modules, phpinfo.php, config backup file with DB credentials, directory listing enabled on several directories, IDS log viewer, and security level settings."
+    }
+  ],
+  "deadends": [
+    "http://127.0.0.1:8080/.git/config (404)",
+    "http://127.0.0.1:8080/server-info (404)",
+    "http://127.0.0.1:8080/server-status (403)"
+  ]
+}

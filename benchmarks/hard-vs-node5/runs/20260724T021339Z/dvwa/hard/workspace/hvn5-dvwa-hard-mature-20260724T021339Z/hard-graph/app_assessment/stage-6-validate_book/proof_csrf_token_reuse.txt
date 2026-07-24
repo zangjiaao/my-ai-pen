@@ -1,0 +1,3 @@
+Token 1: 1fd92c200dae763e31968a591aa783bc
+Login 1: OK
+Login 2 (same token): OK - token NOT invalidated after use

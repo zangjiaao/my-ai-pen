@@ -1,0 +1,57 @@
+{
+  "graphId": "app_assessment",
+  "terminal": "blocked",
+  "stages": [
+    {
+      "stageId": "init",
+      "stageIndex": 0,
+      "attempts": 1,
+      "outcome": "passed",
+      "errors": [],
+      "summary": "Init stage complete. Target understood: DVWA at http://127.0.0.1:8080. Scope restricted to 127.0.0.1/localhost/host.docker.internal. RoE: app_assessment, no off-box takeover. No live recon performed yet; surfaces and candidates remain empty pending next stage."
+    },
+    {
+      "stageId": "surface",
+      "stageIndex": 1,
+      "attempts": 2,
+      "outcome": "blocked",
+      "errors": [
+        "surfaces_min:1:got:0"
+      ],
+      "summary": "Surface stage complete. Mapped DVWA v1.10 *Development* at http://127.0.0.1:8080. Found 4 auth surfaces, 14 vulnerability module endpoints, 6 info-disclosure surfaces, 2 file-inclusion vectors, and static assets. Default credentials admin:password confirmed. Identified bookable candidates for SQL injection, command injection, CSRF, file upload, stored/reflected/DOM XSS, file inclusion, CSP bypass, JavaScript logic, weak session IDs, and brute force via source code disclosure."
+    }
+  ],
+  "handoff": {
+    "summary": "Init stage complete. Target understood: DVWA at http://127.0.0.1:8080. Scope restricted to 127.0.0.1/localhost/host.docker.internal. RoE: app_assessment, no off-box takeover. No live recon performed yet; surfaces and candidates remain empty pending next stage.",
+    "surfaces": [],
+    "candidates": [],
+    "facts": [
+      {
+        "key": "target_summary",
+        "summary": "Target: http://127.0.0.1:8080 (DVWA instance)"
+      }
+    ],
+    "deadends": [],
+    "completed_stages": [
+      "init"
+    ]
+  },
+  "processMetrics": {
+    "stages_done": [
+      "init",
+      "surface"
+    ],
+    "structure_fail_n": 3,
+    "discovery_yield_soft_fail_n": 0,
+    "discovery_yield_notes": [],
+    "new_candidates_n": 43,
+    "surfaces_n": 0,
+    "fanout_packages_n": 1,
+    "coverage_attempts": [],
+    "coverage_attempt_rate": 1,
+    "book_outcomes": {
+      "booked_n": 0,
+      "reject_hints_n": 3
+    }
+  }
+}

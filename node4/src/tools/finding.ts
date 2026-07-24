@@ -13,6 +13,7 @@ import {
   formatBookingHelpHint,
   resolveBookingMaterialFromSubagentEvidence,
 } from "../runtime/subagent-booking.js";
+import { synthesizePocFromHandoffProof } from "../runtime/subagent-result.js";
 import {
   bookTimeEvidenceData,
   emitCaseEvidence,
@@ -21,6 +22,8 @@ import {
   proofGroundedInRecentWork,
   textResult,
 } from "./common.js";
+
+export { synthesizePocFromHandoffProof } from "../runtime/subagent-result.js";
 
 const MIN_POC_LEN = 40;
 const MIN_DESC_LEN = 16;
@@ -170,6 +173,34 @@ function pickHeader(headers: unknown, name: string): string {
   return "";
 }
 
+function findingConfirmFailKey(title: string, location: string): string {
+  return `${String(title || "").trim().toLowerCase()}|${String(location || "").trim().toLowerCase()}`;
+}
+
+/**
+ * Record a failed confirm and return judgment/anti-thrash suffix for the error string.
+ */
+export function noteFindingConfirmGroundFailure(
+  runtime: ToolRuntime,
+  title: string,
+  location: string,
+): string {
+  const life = runtime.lifecycle || (runtime.lifecycle = {});
+  const counts = (life.findingConfirmFailCounts ||= {});
+  const key = findingConfirmFailKey(title, location);
+  const n = (counts[key] || 0) + 1;
+  counts[key] = n;
+  if (n >= 2) {
+    return (
+      ` — judgment: bookable_unbooked (identical finding(confirm) failed ${n}× for this title+location). ` +
+      `Stop thrashing the same confirm. Either re-probe for grounded proof_excerpt, match location/candidate_index to handoff candidates, or record deadend/bookable_unbooked in stage result.json.`
+    );
+  }
+  return (
+    " — if this claim lacks matching handoff proof_excerpt, treat as bookable_unbooked (do not retry identical confirm without new evidence)."
+  );
+}
+
 export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "finding",
@@ -268,6 +299,17 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
           pocCheck = pocDemonstratesIssue(poc);
         }
       }
+      // Hard handoff: candidate matched with proof but no usable poc_hint — synthesize steps+observation.
+      if (!pocCheck.ok && material?.proof && material.proof.length >= MIN_PROOF_LEN) {
+        const synth = synthesizePocFromHandoffProof(location, material.proof);
+        const synthCheck = pocDemonstratesIssue(synth);
+        if (synthCheck.ok) {
+          poc = synth;
+          pocCheck = synthCheck;
+          bookSourceNote =
+            (bookSourceNote ? `${bookSourceNote}; ` : "") + "poc synthesized from handoff proof_excerpt";
+        }
+      }
       if (!pocCheck.ok) {
         return textResult(`error: ${pocCheck.reason}`);
       }
@@ -308,7 +350,9 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
         }
         if (!grounded.ok) {
           return textResult(
-            `error: ${grounded.reason}` + formatBookingHelpHint(runtime),
+            `error: ${grounded.reason}` +
+              formatBookingHelpHint(runtime) +
+              noteFindingConfirmGroundFailure(runtime, title, location),
           );
         }
 
@@ -381,7 +425,8 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
       if (!legacyIds.length) {
         return textResult(
           "error: proof required — after subagent, pass location matching a candidate path (query ignored) or candidate_index=N; harness fills VERBATIM proof_excerpt." +
-            formatBookingHelpHint(runtime),
+            formatBookingHelpHint(runtime) +
+            noteFindingConfirmGroundFailure(runtime, title, location),
         );
       }
 

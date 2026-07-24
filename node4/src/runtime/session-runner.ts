@@ -31,9 +31,10 @@ import { formatCaseContextInjection } from "./case-context.js";
 import {
   applyMainActToolFilter,
   buildPentestGraphContext,
-  resolvePentestGraph,
+  freePentestGraphResolution,
+  resolveGraphIdFromTask,
 } from "./pentest-graph.js";
-import { resolveHardGraph } from "./hard-graph-definition.js";
+import { resolveExpertWorkPath, resolveHardGraph } from "./hard-graph-definition.js";
 import { runHardGraphExpertTask } from "./hard-graph-task.js";
 import {
   buildGoalBudgetLimitPrompt,
@@ -168,37 +169,52 @@ export async function runNode4Task(
    * Default / ledger-assist seats never enter Expert Hard Graph.
    * Settlement is sole ownership of settleHardGraphTask (not a second dialect here).
    */
-  if (!chatOnly && !ledgerAssistSeat) {
-    const packRootForHard = (pack as { packRoot?: string }).packRoot;
-    const hardResolved = await resolveHardGraph({
+  // Expert Graph vs free OMP (#76 Soft retired). No Soft scenario inject path.
+  const packRootForHard = (pack as { packRoot?: string }).packRoot;
+  const hardResolved = await resolveHardGraph({
+    task,
+    packRoot: packRootForHard,
+    packId: pack.id,
+    env: process.env,
+  });
+  const workPath = resolveExpertWorkPath({
+    hardMode: hardResolved.mode,
+    graphIntent: resolveGraphIdFromTask(task),
+    chatOnly,
+    ledgerAssistSeat,
+  });
+  if (workPath.path === "hard" && hardResolved.mode === "hard") {
+    runtime.lifecycle.abortSignal = signal;
+    const hardOut = await runHardGraphExpertTask({
+      config,
+      platform: loggingPlatform,
       task,
-      packRoot: packRootForHard,
-      packId: pack.id,
-      env: process.env,
+      taskDir,
+      pack,
+      graph: hardResolved.graph,
+      parentRuntime: runtime,
+      signal,
     });
-    if (hardResolved.mode === "hard") {
-      runtime.lifecycle.abortSignal = signal;
-      const hardOut = await runHardGraphExpertTask({
-        config,
-        platform: loggingPlatform,
-        task,
-        taskDir,
-        pack,
-        graph: hardResolved.graph,
-        parentRuntime: runtime,
-        signal,
-      });
-      return { terminalStatus: hardOut.harnessStatus, taskDir };
-    }
+    return { terminalStatus: hardOut.harnessStatus, taskDir };
+  }
+  if (workPath.path === "unavailable") {
+    const msg =
+      `Expert Graph '${workPath.graphId}' is not available on this product path ` +
+      `(Soft scenario mode retired; hard Graph missing or not product-offered yet). ` +
+      `Use free chat or product template app_assessment.`;
+    await loggingPlatform
+      .send({
+        type: "task_error",
+        conversation_id: task.conversationId,
+        task_id: task.taskId,
+        message: msg,
+      } as any)
+      .catch(() => {});
+    return { terminalStatus: "failed", taskDir };
   }
 
-  // Free vs soft scenario Graph (OMP Main path)
-  const graphResolved = await resolvePentestGraph({
-    task,
-    packId: pack.id,
-    packRoot: (pack as { packRoot?: string }).packRoot,
-  });
-  const graphCtx = buildPentestGraphContext(graphResolved);
+  // Free OMP Main path only (Default / free Expert chat — no Soft inject).
+  const graphCtx = buildPentestGraphContext(freePentestGraphResolution(task));
   runtime.lifecycle.pentestGraph = graphCtx;
 
   const obsCounters = {

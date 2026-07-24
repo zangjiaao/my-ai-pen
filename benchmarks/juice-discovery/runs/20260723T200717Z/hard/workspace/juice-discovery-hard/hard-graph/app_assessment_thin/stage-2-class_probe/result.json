@@ -1,0 +1,116 @@
+{
+  "ok": true,
+  "summary": "Class probe stage complete. Identified multiple high-severity vulnerabilities in OWASP Juice Shop v20.1.1 at http://127.0.0.1:3010. SQL injection confirmed in both login and product search endpoints (including UNION-based extraction of user credentials). NoSQL injection confirmed via JSON object injection in login. Mass assignment vulnerability allows admin registration. Excessive data exposure via unprotected APIs and JWT tokens containing password hashes. Directory listing enabled on /ftp/ and subdirectories. CAPTCHA bypass trivial as answer returned in plaintext. JWT uses RS256 with password hash embedded in payload.",
+  "surfaces": [
+    {"location":"/rest/user/login","kind":"api"},
+    {"location":"/rest/products/search","kind":"api"},
+    {"location":"/api/Users","kind":"api","note":"POST creates users (mass assignment); GET requires admin auth"},
+    {"location":"/api/Products","kind":"api"},
+    {"location":"/api/Feedbacks","kind":"api","note":"Requires captchaId and captcha answer"},
+    {"location":"/api/Challenges","kind":"api"},
+    {"location":"/api/Quantitys","kind":"api"},
+    {"location":"/api/SecurityQuestions","kind":"api"},
+    {"location":"/api/Complaints","kind":"api"},
+    {"location":"/api/Cards","kind":"api"},
+    {"location":"/rest/admin/application-configuration","kind":"api"},
+    {"location":"/rest/admin/application-version","kind":"api"},
+    {"location":"/rest/captcha/","kind":"api"},
+    {"location":"/rest/continue-code","kind":"api"},
+    {"location":"/rest/basket/1","kind":"api"},
+    {"location":"/rest/user/change-password","kind":"api"},
+    {"location":"/rest/user/whoami","kind":"api"},
+    {"location":"/rest/user/reset-password","kind":"api","note":"Rate limited (100/hr), requires security answer"},
+    {"location":"/b2b/v2/order","kind":"api","note":"Requires auth; returns SPA HTML (PDF expected)"},
+    {"location":"/ftp/","kind":"file"},
+    {"location":"/ftp/acquisitions.md","kind":"file"},
+    {"location":"/ftp/legal.md","kind":"file"},
+    {"location":"/ftp/quarantine/","kind":"file"}
+  ],
+  "candidates": [
+    {"claim":"SQL injection in login form (email field) using ' OR 1=1-- returns admin JWT"},
+    {"claim":"SQL injection in product search - UNION-based extraction of Users table data via ')) UNION SELECT..."},
+    {"claim":"NoSQL injection via JSON objects passed as email/password in login - causes TypeError crash"},
+    {"claim":"Mass assignment - POST /api/Users with role=admin creates admin user"},
+    {"claim":"Excessive data exposure - JWT token payload contains user password hash"},
+    {"claim":"Excessive data exposure - /rest/admin/application-configuration leaks OAuth clientId, product details, challenge config"},
+    {"claim":"Excessive data exposure - /api/Users leaks all user emails, roles, deluxe tokens"},
+    {"claim":"Directory listing enabled on /ftp/ and /ftp/quarantine/"},
+    {"claim":"Sensitive file exposure - /ftp/acquisitions.md (confidential business document), /ftp/legal.md accessible"},
+    {"claim":"CAPTCHA bypass - /rest/captcha/ returns captchaId and answer in plaintext"},
+    {"claim":"Password reset has rate limiting (100/hr) and security question verification"},
+    {"claim":"Feedback submission requires captcha verification - prevents automated XSS storage without CAPTCHA bypass"}
+  ],
+  "facts": [
+    {
+      "key": "sql_injection_login",
+      "summary": "SQL injection in /rest/user/login via email field",
+      "body": "POST to /rest/user/login with {\"email\":\"' OR 1=1 --\",\"password\":\"test\"} returns 200 with admin JWT token containing password hash. Confirms authentication bypass via SQL injection."
+    },
+    {
+      "key": "sql_injection_search_union",
+      "summary": "UNION-based SQL injection in /rest/products/search",
+      "body": "GET /rest/products/search?q=')) UNION SELECT 1,id,email,password,5,6,7,8,9 FROM Users-- returns all user emails and password hashes from the database. Confirms SQL injection with UNION extraction capability."
+    },
+    {
+      "key": "nosql_injection_login",
+      "summary": "NoSQL injection via JSON object injection in login",
+      "body": "POST to /rest/user/login with {\"email\":{\"$gt\":\"\"},\"password\":{\"$gt\":\"\"}} returns 500 TypeError: 'The \"data\" argument must be of type string... Received an instance of Object'. The application attempts to hash the user input without type checking, confirming NoSQL injection vector exists."
+    },
+    {
+      "key": "mass_assignment_admin_registration",
+      "summary": "Mass assignment allows creating admin users",
+      "body": "POST /api/Users with {\"email\":\"hacker@test.com\",\"password\":\"hack123\",\"role\":\"admin\"} returns 201 Created with user role set to 'admin'. The API accepts role field without authorization check."
+    },
+    {
+      "key": "jwt_password_hash_exposure",
+      "summary": "JWT token payload contains password hash",
+      "body": "The JWT returned from login decodes to: {\"data\":{\"id\":1,\"email\":\"admin@juice-sh.op\",\"password\":\"8b8c039f78b8e5601b3c28ae5e85a370\",\"role\":\"admin\",...}}. The password hash (MD5) is embedded in the JWT payload, exposed to anyone who can decode the token."
+    },
+    {
+      "key": "application_config_exposure",
+      "summary": "Application config endpoint exposes sensitive data",
+      "body": "GET /rest/admin/application-configuration returns full application configuration including Google OAuth client ID, all product listings with reviews, challenge configuration, and other internal settings."
+    },
+    {
+      "key": "user_data_exposure",
+      "summary": "User API endpoint exposes all user data",
+      "body": "GET /api/Users with admin Authorization returns all users including id, email, role, deluxeToken, lastLoginIp, profileImage. 26 users exposed including 8 admin accounts."
+    },
+    {
+      "key": "directory_listing",
+      "summary": "Directory listing enabled on /ftp/ endpoints",
+      "body": "GET /ftp/ and /ftp/quarantine/ return directory listings with file names, sizes, and modification dates."
+    },
+    {
+      "key": "sensitive_file_access",
+      "summary": "Sensitive files accessible via /ftp/",
+      "body": "/ftp/acquisitions.md (confidential business document) and /ftp/legal.md are accessible without authentication. acquisitions.md explicitly states 'This document is confidential! Do not distribute!'"
+    },
+    {
+      "key": "captcha_bypass",
+      "summary": "CAPTCHA answer returned in plaintext",
+      "body": "GET /rest/captcha/ returns {\"captchaId\":1,\"captcha\":\"7-8*6\",\"answer\":\"-41\"}. The answer is provided alongside the challenge, making the CAPTCHA trivially bypassable."
+    },
+    {
+      "key": "sqlite_database",
+      "summary": "Application uses SQLite database",
+      "body": "Error messages from SQL injection attempts reveal 'SQLITE_ERROR', confirming the application uses SQLite as its database backend."
+    },
+    {
+      "key": "version_disclosure",
+      "summary": "Application version disclosed",
+      "body": "GET /rest/admin/application-version returns {\"version\":\"20.1.1\"}. Version is also shown in error pages as 'OWASP Juice Shop (Express ^4.22.1)'."
+    }
+  ],
+  "deadends": [
+    "B2B v2 order API - SSTI not confirmed; endpoint returns Angular SPA HTML regardless of Accept header",
+    "Reflected XSS in product search - XSS payloads not reflected in API JSON response",
+    "Stored XSS in feedback - CAPTCHA verification required, cannot submit without bypassing captcha",
+    "DOM XSS - Not tested on frontend application scope",
+    "Path traversal via /ftp/../ - Server normalizes paths and returns 404 catch-all Angular SPA",
+    "Password reset - Requires correct security question answer; rate limited to 100 requests/hour",
+    "Basket manipulation - Requires valid JWT authorization token",
+    "CSRF - No CSRF tokens observed; testing requires browser automation with CSRF scenario",
+    "SSRF via image URL - No image URL upload mechanism discovered on accessible API endpoints"
+  ]
+}

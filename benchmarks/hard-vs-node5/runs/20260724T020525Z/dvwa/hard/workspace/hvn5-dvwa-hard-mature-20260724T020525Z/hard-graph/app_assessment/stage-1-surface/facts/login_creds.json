@@ -1,0 +1,6 @@
+{
+  "fact_key": "login_creds",
+  "summary": "Default DVWA credentials: admin/password",
+  "body": "Successfully logged into DVWA at http://127.0.0.1:8080/login.php with username=admin, password=password. The login requires a CSRF token (user_token) that must be fetched from the login page first.",
+  "updated_at": "2026-07-24T02:06:50.447Z"
+}

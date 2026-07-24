@@ -1,10 +1,10 @@
 # Project cleanup plan
 
-**Status:** PR1–PR3 executed on main (review recommended)  
-**Authority:** assembled from [Wayfinder: Project state cleanup plan](https://github.com/zangjiaao/my-ai-pen/issues/1) closed decisions  
-**Date:** 2026-07-23  
+**Status:** PR1–PR3 executed on main; **X1 `node5/` delete + B1 fallback B retired** (map [#59](https://github.com/zangjiaao/my-ai-pen/issues/59) / task [#67](https://github.com/zangjiaao/my-ai-pen/issues/67), 2026-07-24)  
+**Authority:** assembled from [Wayfinder: Project state cleanup plan](https://github.com/zangjiaao/my-ai-pen/issues/1) closed decisions; product path ADR 0001  
+**Date:** 2026-07-24  
 
-This document is the **executable cleanup plan**. It does **not** perform deletes or moves by itself—run the checklist in later sessions.
+This document is the **executable cleanup plan**. Remaining work is legacy tree deletes after hygiene gates — not reopening Node PK.
 
 ---
 
@@ -15,54 +15,48 @@ This document is the **executable cleanup plan**. It does **not** perform delete
 Converge a half-rewritten repo into a navigable state:
 
 1. **Docs:** small product trunk + `docs/specs/` runtime contracts; hard-delete obsolete plans and archive noise.
-2. **Code tree:** keep co-equal Node candidates `node4/` and `node5/` until PK; plan-delete legacy `node/`, `node2/`, `node3/` after hygiene gates; **freeze** `research/` and `benchmarks/`.
-3. **Wording:** replace “node4 only” sole-kernel language with dual-candidate rules so docs match product intent.
+2. **Code tree:** product Node = **`node4/` only** (Graph × Pi); `node5/` **hard-deleted** after P1 parity (map #59); plan-delete legacy `node/`, `node2/`, `node3/` after hygiene gates; **freeze** `research/` and `benchmarks/`.
+3. **Wording:** living docs name **unique** Node4 product lineage; do not reintroduce dual-kernel / fallback B language.
 
 ### Non-goals
 
 | Out of scope | Why |
 |--------------|-----|
-| Choosing the final Node (`node4` vs `node5` PK winner) | Separate effort after comparison |
+| Resurrecting `node5/` or dual-kernel PK | Closed by ADR 0001 B1 + X1 |
 | Moving or deleting `research/` | Third-party reference clones; frozen |
-| Moving or deleting `benchmarks/` | Lab evaluation assets for future Node capability scoring; frozen |
+| Moving or deleting `benchmarks/` | Lab evaluation assets (incl. historical Hard-vs-Node5); frozen |
 | tmp / workspace / `node_modules` volume hygiene | Not the primary path of this plan |
 | Expanding product behavior on legacy trees | Forbidden |
 
 ---
 
-## 2. Dual-track wording mandates
+## 2. Product Node wording (post-B1)
 
-### Role model (pre-PK)
+### Role model
 
 | Tree | Label | Rules |
 |------|--------|--------|
-| `node4/` | **Node candidate** (co-equal) | May be bound by platform for a deployment; `docs/specs/*` may describe this candidate’s implementation detail with explicit framing |
-| `node5/` | **Node candidate** (co-equal) | Same status as node4; comparison/lab work allowed; **not** a lesser “side project” in product language |
+| `node4/` | **Product Node** | Platform binds to Node4 per deployment; `docs/specs/*` document this implementation |
+| `node5/` | **Deleted (X1)** | Not in product tree; git history + `benchmarks/hard-vs-node5/` hold archaeology |
 | `node/`, `node2/`, `node3/` | **Legacy reference** | Plan-delete after hygiene gates; do not expand product behavior |
 | `research/` | **Third-party reference** | Frozen; not product |
-| `benchmarks/` | **Lab evaluation assets** | Frozen; not product authority; keep for future Node scoring |
+| `benchmarks/` | **Lab evaluation assets** | Frozen; not product authority |
 
 ### Forbidden phrasing
 
-- “Runtime to maintain: node4 only”
-- “product kernel is permanently node4”
-- “node5 is non-product / ignore”
-- Any sentence that **declares a PK winner**
+- Treating `node5/` as a live bindable candidate
+- “co-equal candidates until PK” / “fallback B on standby”
+- Elevating pure Node5 as product Node without a **new** ADR
 
 ### Required phrasing
 
-- `node4/` and `node5/` are **co-equal candidates** until PK
-- Docs **do not pick a winner**
-- Each deployment **binds platform to exactly one** Node candidate via **explicit configuration**
-- V1 docs **must not name a default** Node candidate; install/ops lists both options without ranking
+- Product Node lineage = **Node4 / Graph × Pi** (ADR 0001)
+- Each deployment **binds platform to exactly one** Node process (**Node4**)
+- Exit C (Runtime swap under Graph ownership) remains; **fallback B retired**
 
-### Mandatory replacement paragraph for `AGENTS.md`
+### Spec precedence
 
-> **Runtime candidates (pre-PK):** `node4/` and `node5/` are **co-equal Node implementation candidates**. The platform binds to **exactly one** candidate per deployment; documentation does **not** declare a winner. **Legacy** `node/`, `node2/`, `node3/`: plan-delete after gates — do not expand product behavior there. **`research/`**: frozen third-party reference (not product). **`benchmarks/`**: frozen lab evaluation assets (not product authority). Product work targets platform + the bound candidate + `experts/`.
-
-### Spec precedence (until PK)
-
-`AGENTS.md` → `docs/prd.md` → `docs/specs/harness.md` (candidate-specific) → other `docs/specs/*` / `docs/v1-delivery.md`
+`AGENTS.md` → `docs/prd.md` → `docs/specs/harness.md` (Node4) → other `docs/specs/*` / `docs/v1-delivery.md`
 
 ---
 
@@ -144,12 +138,11 @@ docs/
 
 ## 4. Code-tree gates
 
-### Keep (pre-PK)
+### Keep (product)
 
 | Tree | Notes |
 |------|--------|
-| `node4/` | Co-equal Node candidate |
-| `node5/` | Co-equal Node candidate |
+| `node4/` | Product Node (Graph × Pi) |
 | `platform/` | Product |
 | `experts/` | Product packs |
 | `sandbox/` | pen-sandbox (product-adjacent) |
@@ -159,35 +152,25 @@ docs/
 | Tree | Notes |
 |------|--------|
 | `research/` | Third-party reference clones |
-| `benchmarks/` | Lab evaluation for future Node capability assessment; not product authority |
+| `benchmarks/` | Lab evaluation (incl. historical Hard-vs-Node5 P1); not product authority |
 
 ### Plan-delete after gates — legacy runtimes
 
-Audit ([#4](https://github.com/zangjiaao/my-ai-pen/issues/4)): **no product-required unique logic** vs node4/node5. Plan-delete all three is supported.
+Audit ([#4](https://github.com/zangjiaao/my-ai-pen/issues/4)): **no product-required unique logic** vs historical node4/node5. Plan-delete all three is supported.
 
 | Tree | Verdict | Hygiene gate before delete |
 |------|---------|----------------------------|
 | `node/` | safe-to-delete-after | Drop or retarget lab scripts that import `pentest_node`: `scripts/agent_autonomy_smoke.py`, `scripts/docker_sandbox_smoke.py`, `scripts/docker_sandbox_real_smoke.py`, `scripts/node_alpha_smoke.py`, `scripts/standalone_import_smoke.py` |
 | `node2/` | safe-to-delete-after | Optional: extract a one-page design note if Caido/traffic archaeology still wanted; **not** a product dependency |
-| `node3/` | safe-to-delete-after | Confirm Strix-on-platform comparison is retired (control arm = Node5). Platform `node3_strix` checkpoint UI may remain as dead-compat |
+| `node3/` | safe-to-delete-after | Confirm Strix-on-platform comparison is retired. Platform `node3_strix` checkpoint UI may remain as dead-compat |
 
-**Do not** delete `node4/` or `node5/` as part of this cleanup.
+**Do not** delete `node4/`. **`node5/` deleted (X1, 2026-07-24)** — not part of remaining cleanup.
 
 ---
 
-## 5. File rewrite list
+## 5. File rewrite list (historical — dual-track era)
 
-Apply dual-track mandates (section 2) to:
-
-| # | Path | What to change |
-|---|------|----------------|
-| 1 | `AGENTS.md` | Replace “Runtime to maintain: node4 only” (and sole-kernel language) with mandatory paragraph; update living-sources list if needed |
-| 2 | `docs/prd.md` | Product model: dual candidates + bind-exactly-one; remove permanent node4-only claims |
-| 3 | `docs/v1-delivery.md` | Delivery boundary: no default candidate; ship path describes binding a candidate + platform + experts |
-| 4 | `docs/README.md` | Index for trunk + `docs/specs/` + dual-track; drop pointers to deleted plans/archive |
-| 5 | `docs/specs/harness.md` **preamble only** | After move from `docs/specs/harness.md`: open with “describes **one candidate’s** harness behavior; peer is `node5/`; no winner declared.” Body may still document node4 implementation detail |
-
-Also fix broken links repo-wide after PR1 moves (grep old paths).
+Pre-B1 dual-candidate rewrites (PR1–PR3) are **done**. Post-B1 living docs must state **Node4 only** (see section 2).
 
 ---
 

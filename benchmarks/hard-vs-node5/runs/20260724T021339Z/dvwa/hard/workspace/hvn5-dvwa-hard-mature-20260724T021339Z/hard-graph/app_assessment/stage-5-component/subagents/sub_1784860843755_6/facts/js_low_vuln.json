@@ -1,0 +1,6 @@
+{
+  "fact_key": "js_low_vuln",
+  "summary": "Low-level JS vulnerability: client-side token generation bypass",
+  "body": "The low-level JavaScript vulnerability page uses client-side token generation. The token is computed as md5(rot13(phrase)). Since the algorithm is exposed in client-side JavaScript, an attacker can compute the correct token for any phrase.\n\nProof: Successfully submitted phrase=\"success\" with computed token=38581812b435834ebf84ebcc2c6424d6 (md5(rot13(\"success\"))) and received \"Well done!\" response.\n\nThe algorithm:\n1. rot13(\"success\") = \"fhpprff\"\n2. md5(\"fhpprff\") = 38581812b435834ebf84ebcc2c6424d6\n\nThe token is set via client-side JS: document.getElementById(\"token\").value = md5(rot13(phrase));\nThis is called on page load with the default \"ChangeMe\" value, but an attacker can easily compute the correct value.",
+  "updated_at": "2026-07-24T02:41:30.990Z"
+}

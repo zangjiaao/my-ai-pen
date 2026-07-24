@@ -1,0 +1,10 @@
+{
+  "title": "No privilege separation between users - identical access levels",
+  "location": "/vulnerabilities/brute",
+  "severity": "medium",
+  "proof": "Dual-actor test: admin (password) and gordonb (abc123) both access the same protected pages (brute, csrf, sqli) with HTTP 200. Both can execute SQL injection to read other users' data. No admin/gordonb privilege distinction exists in the application.",
+  "stage": "class_probe",
+  "precondition": "",
+  "affected_actor": "",
+  "affected_resource": ""
+}

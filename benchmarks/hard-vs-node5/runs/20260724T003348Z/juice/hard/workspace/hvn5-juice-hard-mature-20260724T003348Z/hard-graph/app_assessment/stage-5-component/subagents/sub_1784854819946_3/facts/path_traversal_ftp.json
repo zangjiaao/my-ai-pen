@@ -1,0 +1,6 @@
+{
+  "fact_key": "path_traversal_ftp",
+  "summary": "Path traversal in /ftp/ via null byte injection %2500.md bypass",
+  "body": "The /ftp/ directory has a filter allowing only .md and .pdf files, but it can be bypassed by appending %2500.md (double URL-encoded null byte) to download arbitrary files like .bak, .pyc, .kdbx, .yml, etc.",
+  "updated_at": "2026-07-24T01:02:33.029Z"
+}

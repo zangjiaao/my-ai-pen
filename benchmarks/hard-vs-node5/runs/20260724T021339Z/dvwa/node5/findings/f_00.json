@@ -1,0 +1,10 @@
+{
+  "title": "Sensitive config file exposure (no authentication required)",
+  "location": "/config/config.inc.php.bak",
+  "severity": "high",
+  "proof": "DB password 'vulnerables' readable in backup config WITHOUT authentication: GET /config/config.inc.php.bak as anon user returns $_DVWA['db_password'] = 'vulnerables', $_DVWA['db_user'] = 'app', $_DVWA['db_database'] = 'dvwa'",
+  "stage": "component",
+  "precondition": "None (no authentication required)",
+  "affected_actor": "anon",
+  "affected_resource": "config"
+}

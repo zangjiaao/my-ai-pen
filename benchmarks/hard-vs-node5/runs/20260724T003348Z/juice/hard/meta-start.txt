@@ -1,0 +1,8 @@
+START=2026-07-24T00:33:50Z
+SHA=3e66b7b9952c6257c4653f66e99201b12507bdc3
+BRANCH=research/node5-lab-invocation-juice-dvwa
+GRAPH=hard_app_assessment
+TARGET=http://127.0.0.1:3010
+MODEL=deepseek/deepseek-v4-flash
+SPEC=69
+START_EPOCH=1784853238

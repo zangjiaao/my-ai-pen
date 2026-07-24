@@ -1,0 +1,10 @@
+{
+  "title": "Command Injection - arbitrary system command execution",
+  "location": "/vulnerabilities/exec",
+  "severity": "high",
+  "proof": "POST ip=127.0.0.1;ls+-la&Submit=Submit executes both ping and 'ls -la' command, returning directory listing of /vulnerabilities/exec/",
+  "stage": "component",
+  "precondition": "Authenticated session (low security level)",
+  "affected_actor": "admin",
+  "affected_resource": "vulnerability_exec"
+}

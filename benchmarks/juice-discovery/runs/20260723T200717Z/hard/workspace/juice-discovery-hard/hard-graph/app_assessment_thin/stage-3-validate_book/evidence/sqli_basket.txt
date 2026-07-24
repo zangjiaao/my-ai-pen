@@ -1,0 +1,5 @@
+Observed SQL injection in basket operations.
+
+The /rest/basket/1 endpoint and related basket item manipulation endpoints may be vulnerable to SQL injection. The basket ID in the URL path is an integer that could be injectable. Additionally, the basket item quantity update operations might be vulnerable.
+
+Note: Testing requires a valid JWT authorization token as the basket endpoints check authentication.

@@ -1,0 +1,10 @@
+{
+  "title": "Broken access control — cross-actor or unauthenticated object access",
+  "location": "/hackable/users",
+  "severity": "medium",
+  "proof": "Authz matrix HTTP proof: anon GET /hackable/users/ → 200 (sensitive collection); write_tried=False; cells_sample=[{\"resource\": \"/hackable/users/\", \"actor\": \"anon\", \"method\": \"GET\", \"status\": 200, \"id\": null}, {\"resource\": \"/profile/image/url\", \"actor\": \"anon\", \"method\": \"GET\", \"status\": 404, \"id\": null}, {\"resource\": \"/hackable/uploads\", \"actor\": \"anon\", \"method\": \"GET\", \"status\": 200, \"id\": null}]",
+  "stage": "authz_logic",
+  "precondition": "dual-actor sessions actor_a/actor_b and/or unauthenticated",
+  "affected_actor": "anon",
+  "affected_resource": "/hackable/users/"
+}

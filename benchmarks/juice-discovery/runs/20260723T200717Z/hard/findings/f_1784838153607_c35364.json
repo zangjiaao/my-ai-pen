@@ -1,0 +1,28 @@
+{
+  "id": "f_1784838153607_c35364",
+  "action": "confirm",
+  "title": "CAPTCHA Bypass - Answer Returned in Plaintext",
+  "severity": "medium",
+  "finding_kind": "vuln",
+  "location": "/rest/captcha/",
+  "url": "/rest/captcha/",
+  "description": "The CAPTCHA endpoint at /rest/captcha/ returns the correct answer in the response body alongside the CAPTCHA image. This allows automated scripts to trivially bypass the CAPTCHA verification by reading the 'answer' field. Any endpoint protected by CAPTCHA (such as /api/Feedbacks) can be automated without solving the visual puzzle.",
+  "poc": "GET /rest/captcha/ → HTTP 200 with JSON containing \"answer\" field in plaintext, enabling automated CAPTCHA bypass",
+  "proof": "Observed CAPTCHA bypass vulnerability. GET /rest/captcha/ returns {\"captchaId\":42,\"answer\":7,\"image\":\"data:image/png;base64,...\"} The answer field contains the correct solution in plaintext, allowing programmatic bypass.",
+  "how_captured": "script: evidence/captcha_bypass.txt",
+  "evidence_ids": [
+    "ev_1784838153591_580547"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784838153591_580547",
+      "excerpt": "Observed CAPTCHA bypass vulnerability. GET /rest/captcha/ returns {\"captchaId\":42,\"answer\":7,\"image\":\"data:image/png;base64,...\"} The answer field contains the correct solution in plaintext, allowing programmatic bypass.",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "script: evidence/captcha_bypass.txt"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "3010",
+  "created_at": "2026-07-23T20:22:33.607Z"
+}

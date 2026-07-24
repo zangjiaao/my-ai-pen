@@ -1,0 +1,28 @@
+{
+  "id": "f_1784861790635_f1dd42",
+  "action": "confirm",
+  "title": "Directory listing enabled on /config/ and other directories",
+  "severity": "medium",
+  "finding_kind": "vuln",
+  "location": "http://127.0.0.1:8080/config/",
+  "url": "http://127.0.0.1:8080/config/",
+  "description": "Directory listing is enabled on /config/ allowing discovery of backup files and source code structure. Also confirmed on /dvwa/includes/, /dvwa/js/, /dvwa/css/, /external/.",
+  "poc": "Probe request against http://127.0.0.1:8080/config/; observed proving result from prior stage handoff: $_DVWA[ 'db_server' ] = '127.0.0.1'; $_DVWA[ 'db_database' ] = 'dvwa'; $_DVWA[ 'db_user' ] = 'app'; $_DVWA[ 'db_password' ] = 'vulnerables';",
+  "proof": "$_DVWA[ 'db_server' ]   = '127.0.0.1';\n$_DVWA[ 'db_database' ] = 'dvwa';\n$_DVWA[ 'db_user' ]     = 'app';\n$_DVWA[ 'db_password' ] = 'vulnerables';",
+  "how_captured": "via subagent",
+  "evidence_ids": [
+    "ev_1784861790624_fa1efa"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784861790624_fa1efa",
+      "excerpt": "$_DVWA[ 'db_server' ]   = '127.0.0.1';\n$_DVWA[ 'db_database' ] = 'dvwa';\n$_DVWA[ 'db_user' ]     = 'app';\n$_DVWA[ 'db_password' ] = 'vulnerables';",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "via subagent"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "8080",
+  "created_at": "2026-07-24T02:56:30.635Z"
+}

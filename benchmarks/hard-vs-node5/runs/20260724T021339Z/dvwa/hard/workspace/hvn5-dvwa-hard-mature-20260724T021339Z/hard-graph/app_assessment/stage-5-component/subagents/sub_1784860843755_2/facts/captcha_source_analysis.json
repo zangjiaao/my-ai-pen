@@ -1,0 +1,6 @@
+{
+  "fact_key": "captcha_source_analysis",
+  "summary": "Analyzed CAPTCHA source - step=2 bypasses CAPTCHA check",
+  "body": "Source code at /vulnerabilities/captcha/source/low.php shows:\n- When step=1: CAPTCHA is verified via recaptcha_check_answer(), then shows step=2 form\n- When step=2: NO CAPTCHA check, just validates passwords match and updates DB\n- Bypass: POST directly with step=2, password_new, password_conf, and Change",
+  "updated_at": "2026-07-24T02:41:13.460Z"
+}

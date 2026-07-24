@@ -1,0 +1,10 @@
+{
+  "title": "SSRF via Profile Image URL (Server-Side Request Forgery)",
+  "location": "/profile/image/url",
+  "severity": "high",
+  "proof": "POST /profile/image/url with imageUrl=http://127.0.0.1:3011/rest/admin/application-configuration → server stored URL + dynamically updated CSP img-src + profileImage changed from URL to local file assets/public/images/uploads/24.jpg, proving server-side fetch. The internal /rest/admin/application-configuration endpoint returns full app config including OAuth clientId, authorized redirect URIs, challenge config, and product data.",
+  "stage": "class_probe",
+  "precondition": "Valid JWT token",
+  "affected_actor": "actor_b",
+  "affected_resource": "profile"
+}

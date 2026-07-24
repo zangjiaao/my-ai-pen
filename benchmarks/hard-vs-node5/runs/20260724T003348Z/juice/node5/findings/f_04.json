@@ -1,0 +1,10 @@
+{
+  "title": "Security Question Enumeration via /rest/user/security-question",
+  "location": "/rest/user/security-question",
+  "severity": "medium",
+  "proof": "GET /rest/user/security-question?email=admin@juice-sh.op returns {\"question\":{\"id\":2,\"question\":\"Mother's maiden name?\"}}. No authentication required. Any email address can be queried to reveal the associated security question, enabling targeted social engineering or brute-force answers.",
+  "stage": "class_probe",
+  "precondition": "",
+  "affected_actor": "",
+  "affected_resource": ""
+}

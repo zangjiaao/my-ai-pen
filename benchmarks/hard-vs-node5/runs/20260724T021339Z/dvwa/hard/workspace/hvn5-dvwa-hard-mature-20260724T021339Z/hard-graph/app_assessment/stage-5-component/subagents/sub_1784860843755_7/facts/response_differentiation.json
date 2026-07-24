@@ -1,0 +1,7 @@
+{
+  "fact_key": "response_differentiation",
+  "summary": "Clear success/failure response differentiation enables automated brute force",
+  "body": "Failed login returns: '<pre><br />Username and/or password incorrect.</pre>' (content-length ~1453)\nSuccessful login returns: '<p>Welcome to the password protected area {username}</p><img src=\"/hackable/users/{username}.jpg\" />' (content-length ~1474+)\nThis clear differentiation allows easy automated brute force.",
+  "category": "enumeration",
+  "updated_at": "2026-07-24T02:43:13.922Z"
+}

@@ -1,0 +1,6 @@
+{
+  "fact_key": "target_summary",
+  "summary": "OWASP Juice Shop target at http://127.0.0.1:3010",
+  "body": "Target: OWASP Juice Shop (Node.js/Express)\nURL: http://127.0.0.1:3010\nScope: 127.0.0.1, localhost only\nRoE: app_assessment - no post-ex host takeover off-box\nStage: init - no live recon performed yet\nKnown architecture: Express + SQLite (or MariaDB), Angular frontend, REST API backend\nCommon vuln classes: SQLi, XSS, auth flaws, IDOR, path traversal, CSRF, SSRF, file upload, NoSQLi, SSTI, XXE, access control, business logic",
+  "updated_at": "2026-07-23T20:08:05.193Z"
+}

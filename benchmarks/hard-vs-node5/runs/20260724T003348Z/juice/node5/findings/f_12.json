@@ -1,0 +1,10 @@
+{
+  "title": "TOTP Secret Disclosure via Unauthenticated /rest/2fa/status",
+  "location": "/rest/2fa/status",
+  "severity": "medium",
+  "proof": "GET /rest/2fa/status without any auth token returned {\"setup\":false,\"secret\":\"JKWFAXQ5KVT3RLSHIWPRCEE6IC2LWOTY\",\"email\":\"test@test.com\",\"setupToken\":\"eyJ0eXAi...(RS256 JWT)\"}. The TOTP secret and setupToken are exposed without authentication.",
+  "stage": "class_probe",
+  "precondition": "Valid JWT token",
+  "affected_actor": "actor_a",
+  "affected_resource": "2fa"
+}

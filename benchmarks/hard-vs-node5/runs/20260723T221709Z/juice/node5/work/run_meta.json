@@ -1,0 +1,22 @@
+{
+  "model_label": "deepseek/deepseek-v4-flash @ https://opencode.ai/zen/go/v1",
+  "model": "deepseek-v4-flash",
+  "target": "http://127.0.0.1:3011",
+  "graph_id": "app_assessment",
+  "dry_run": false,
+  "agent_graph": true,
+  "max_workers": 4,
+  "started_at": "2026-07-23T22:31:22.701291+00:00",
+  "tooling_health": {
+    "ok": true,
+    "docker": true,
+    "image": "pen-sandbox:dev",
+    "image_present": true,
+    "mode": "1",
+    "allow_host": false,
+    "network": "host",
+    "error": "",
+    "browser_ok": true,
+    "browser_error": ""
+  }
+}

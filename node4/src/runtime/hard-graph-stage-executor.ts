@@ -29,6 +29,7 @@ import {
   promoteChildSessionToParent,
   seedChildSessionFromParent,
 } from "./subagent-session-seed.js";
+import { SubagentHost } from "./subagent.js";
 
 export type HardGraphStageSessionFactory = (options: {
   stageId: string;
@@ -80,6 +81,15 @@ function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope): strin
     "When done, use the **write** tool to create **result.json** in the stage work dir (path: result.json) with fields:",
     "  ok, summary, surfaces[], candidates[], facts[], deadends[]",
     "Facts alone are not the stage handoff — Feedback reads result.json only.",
+    "Bookable candidates MUST include: title, location (URL/path), proof_excerpt (verbatim tool stdout/body ≥24 chars), optional poc_hint.",
+    "Without proof_excerpt the next stage cannot finding(confirm) — narrative notes alone are not bookable.",
+    input.tools.includes("subagent")
+      ? [
+          "Agent Graph: when surfaces justify multi-class work, fan-out with subagent packages[] (skill/path-scoped workers).",
+          "Workers return candidates[] with verbatim proof_excerpt; you Join into result.json candidates (do not rephrase proof).",
+          "No nested subagent inside workers. Stay in RoE/scope. Prefer packages over one serial monologue across all classes.",
+        ].join(" ")
+      : "",
     "Fail closed: do not invent surfaces or proof.",
     `Target: ${JSON.stringify(task.target)}`,
     `Scope: ${JSON.stringify(task.scope)}`,
@@ -114,7 +124,11 @@ function stageUserPrompt(input: StageExecutorInput, task: TaskEnvelope): string 
   ].join("\n");
 }
 
-function buildChildRuntime(options: {
+/**
+ * Hard Graph stage agent is runner-owned Main-like for that stage (not a nested subagent).
+ * depth 0 so class_probe can fan-out packages; workers they spawn use depth 1 (nest ban).
+ */
+export function buildHardGraphStageChildRuntime(options: {
   parent: ToolRuntime;
   workDir: string;
   tools: string[];
@@ -124,6 +138,7 @@ function buildChildRuntime(options: {
   const { parent, workDir, tools, pack, abortSignal } = options;
   const packForStage: RolePack = { ...pack, toolNames: tools };
   const processFacts = new ProcessFactStore(join(workDir, "facts"));
+  const allowSubagent = tools.includes("subagent");
   const childRuntime: ToolRuntime = {
     task: parent.task,
     workspaceDir: parent.workspaceDir,
@@ -142,11 +157,71 @@ function buildChildRuntime(options: {
     lifecycle: {
       toolsInLastSegment: 0,
       recentObservations: [],
-      subagentDepth: (parent.lifecycle?.subagentDepth ?? 0) + 1,
+      // Stage captain = depth 0 (can spawn packages). Not parent+1 nest ban.
+      subagentDepth: 0,
       abortSignal,
+      subagentEvidenceCache: [],
     },
   };
+  if (allowSubagent) {
+    childRuntime.subagents = new SubagentHost({
+      task: parent.task,
+      taskDir: workDir,
+      evidence: childRuntime.evidence,
+      platform: parent.platform,
+      goals: childRuntime.goals!,
+    });
+  }
   return { childRuntime, packForStage };
+}
+
+/** @deprecated use buildHardGraphStageChildRuntime */
+const buildChildRuntime = buildHardGraphStageChildRuntime;
+
+async function countJsonFindings(findingsDir: string): Promise<number> {
+  try {
+    const { readdir } = await import("node:fs/promises");
+    const files = await readdir(findingsDir);
+    return files.filter((f) => f.endsWith(".json")).length;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Promote Agent Graph worker packages from the stage child into parent Product state.
+ * Keys: hard-stage:<stageId>:<workerFragment> so siblings Join without wipe.
+ */
+export function promoteStageSubagentPackagesToParent(
+  parent: ToolRuntime,
+  child: ToolRuntime,
+  stageId: string,
+): number {
+  const packs = child.lifecycle?.subagentEvidenceCache || [];
+  let n = 0;
+  for (const pack of packs) {
+    const cands = pack.candidates || [];
+    if (!cands.length) continue;
+    const rawId = String(pack.subagentId || `worker_${n}`);
+    // Prefer short fragment after last path segment / sub_ prefix
+    const fragment = rawId
+      .replace(/^hard-stage:[^:]+:/, "")
+      .replace(/^sub_/, "pkg_")
+      .slice(0, 64);
+    absorbStageResultIntoParent(parent, {
+      stageId,
+      workerId: fragment || `pkg_${n}`,
+      structured: normalizeSubagentResult({
+        ok: true,
+        summary: pack.nodeType || stageId,
+        candidates: cands,
+        surfaces: [],
+        deadends: [],
+      }),
+    });
+    n += 1;
+  }
+  return n;
 }
 
 /**
@@ -205,6 +280,16 @@ export function createHardGraphStageExecutor(options: {
       seed?: StageContinuitySeed;
       summaryOverride?: string;
     }): Promise<StageExecutorOutput> => {
+      // Agent Graph Join first: worker packages from stage child → parent (distinct keys).
+      let fanoutPackagesN = 0;
+      if (opts.child) {
+        fanoutPackagesN = promoteStageSubagentPackagesToParent(
+          parentRuntime,
+          opts.child,
+          input.stage.id,
+        );
+      }
+      // Stage captain result.json candidates → parent pack hard-stage:<stageId>
       absorbStageResultIntoParent(parentRuntime, {
         stageId: input.stage.id,
         structured: opts.structured,
@@ -212,13 +297,23 @@ export function createHardGraphStageExecutor(options: {
         seed: opts.seed,
       });
       await promoteSession();
+      const findingsAfter = await countJsonFindings(parentRuntime.findingsDir);
+      const bookedDelta = Math.max(0, findingsAfter - findingsBefore);
       return {
         structured: opts.structured,
         summary:
           opts.summaryOverride ??
           (opts.structured.summaryProvided ? opts.structured.summary : undefined),
+        fanoutPackagesN,
+        bookOutcomes:
+          bookedDelta > 0 || input.stage.id === "validate_book"
+            ? { booked_n: bookedDelta, reject_hints_n: 0 }
+            : undefined,
       };
     };
+
+    // Snapshot findings count before stage for book_outcomes delta.
+    const findingsBefore = await countJsonFindings(parentRuntime.findingsDir);
 
     try {
       if (sessionFactory) {

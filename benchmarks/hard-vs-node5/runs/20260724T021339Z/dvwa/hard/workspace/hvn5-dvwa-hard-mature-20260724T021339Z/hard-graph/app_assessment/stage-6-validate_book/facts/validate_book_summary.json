@@ -1,0 +1,6 @@
+{
+  "fact_key": "validate_book_summary",
+  "summary": "Booked 17 unique findings from handoff candidates",
+  "body": "Booked findings: Database credentials disclosure (config.inc.php.bak), PHP info disclosure, Directory listing on /config/, CSRF password change, Missing cookie flags (HttpOnly/Secure), Session fixation (no ID rotation), Weak sequential session IDs (dvwaSession), No brute force protection, CSRF token reuse, Unauthenticated setup.php access, Missing security headers, Distribution config with default creds, SQLi (boolean), SQLi (UNION), Blind SQLi, Command Execution (RCE), Local File Inclusion (LFI).",
+  "updated_at": "2026-07-24T02:58:17.342Z"
+}

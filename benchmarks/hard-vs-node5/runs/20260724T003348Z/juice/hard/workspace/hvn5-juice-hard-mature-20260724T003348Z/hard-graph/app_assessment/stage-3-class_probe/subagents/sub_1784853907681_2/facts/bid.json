@@ -1,0 +1,6 @@
+{
+  "fact_key": "bid",
+  "summary": "Basket ID for testuser123",
+  "body": "{\"bid\": 8, \"email\": \"testuser123@test.com\"}",
+  "updated_at": "2026-07-24T00:45:35.765Z"
+}

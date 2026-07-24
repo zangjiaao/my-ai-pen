@@ -1,0 +1,6 @@
+{
+  "fact_key": "roe",
+  "summary": "Rules of Engagement understood",
+  "body": "Target: http://127.0.0.1:3010 (OWASP Juice Shop). Scope: 127.0.0.1, localhost, host.docker.internal. Authorization: app_assessment — no post-ex host takeover off-box. No OSINT/FOFA. No attacking other hosts/ports.",
+  "updated_at": "2026-07-23T22:17:55.620Z"
+}

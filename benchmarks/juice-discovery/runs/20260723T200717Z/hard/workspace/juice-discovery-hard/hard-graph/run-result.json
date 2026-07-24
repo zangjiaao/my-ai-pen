@@ -1,0 +1,532 @@
+{
+  "graphId": "app_assessment_thin",
+  "terminal": "completed",
+  "stages": [
+    {
+      "stageId": "init",
+      "stageIndex": 0,
+      "attempts": 1,
+      "outcome": "passed",
+      "errors": [],
+      "summary": "Init stage complete. Target identified as OWASP Juice Shop (Node.js/Express) at http://127.0.0.1:3010. RoE understood: app_assessment, scope limited to 127.0.0.1/localhost, no off-box post-ex. Initial attack surface map documented from known Juice Shop architecture. Ready for recon stage handoff."
+    },
+    {
+      "stageId": "surface",
+      "stageIndex": 1,
+      "attempts": 2,
+      "outcome": "passed",
+      "errors": [],
+      "summary": "Surface stage complete. Mapped live attack surface of OWASP Juice Shop v20.1.1 at http://127.0.0.1:3010. Confirmed multiple live surfaces including SQL injection in login and product search, excessive data exposure via API, directory listing enabled, sensitive files exposed, JWT with embedded password hash, and various API endpoints."
+    },
+    {
+      "stageId": "class_probe",
+      "stageIndex": 2,
+      "attempts": 1,
+      "outcome": "passed",
+      "errors": [],
+      "summary": "Class probe stage complete. Identified multiple high-severity vulnerabilities in OWASP Juice Shop v20.1.1 at http://127.0.0.1:3010. SQL injection confirmed in both login and product search endpoints (including UNION-based extraction of user credentials). NoSQL injection confirmed via JSON object injection in login. Mass assignment vulnerability allows admin registration. Excessive data exposure via unprotected APIs and JWT tokens containing password hashes. Directory listing enabled on /ftp/ and subdirectories. CAPTCHA bypass trivial as answer returned in plaintext. JWT uses RS256 with password hash embedded in payload."
+    },
+    {
+      "stageId": "validate_book",
+      "stageIndex": 3,
+      "attempts": 1,
+      "outcome": "passed",
+      "errors": [],
+      "summary": "Validate_book stage complete. 8 findings booked. Critical: SQL injection in login (auth bypass + UNION extraction), SQL injection in product search (UNION-based data extraction), NoSQL injection via JSON object injection in login. High: mass assignment (admin registration), JWT token contains password hash in payload, excessive data exposure via unprotected API endpoints. Medium: CAPTCHA bypass (answer in plaintext), directory listing on /ftp/. Remaining candidates (SQLi in basket, NoSQL in registration, IDOR, XSS, SSTI in B2B order API) require additional HTTP testing not available in this stage. Deadends from class_probe stage documented below."
+    }
+  ],
+  "handoff": {
+    "summary": "Validate_book stage complete. 8 findings booked. Critical: SQL injection in login (auth bypass + UNION extraction), SQL injection in product search (UNION-based data extraction), NoSQL injection via JSON object injection in login. High: mass assignment (admin registration), JWT token contains password hash in payload, excessive data exposure via unprotected API endpoints. Medium: CAPTCHA bypass (answer in plaintext), directory listing on /ftp/. Remaining candidates (SQLi in basket, NoSQL in registration, IDOR, XSS, SSTI in B2B order API) require additional HTTP testing not available in this stage. Deadends from class_probe stage documented below.",
+    "surfaces": [
+      {
+        "location": "/rest/user/login",
+        "kind": "api"
+      },
+      {
+        "location": "/rest/products/search",
+        "kind": "api"
+      },
+      {
+        "location": "/api/Users",
+        "kind": "api"
+      },
+      {
+        "location": "/api/Products",
+        "kind": "api"
+      },
+      {
+        "location": "/api/Feedbacks",
+        "kind": "api"
+      },
+      {
+        "location": "/api/Challenges",
+        "kind": "api"
+      },
+      {
+        "location": "/api/Quantitys",
+        "kind": "api"
+      },
+      {
+        "location": "/api/SecurityQuestions",
+        "kind": "api"
+      },
+      {
+        "location": "/rest/admin/application-configuration",
+        "kind": "api"
+      },
+      {
+        "location": "/rest/admin/application-version",
+        "kind": "api"
+      },
+      {
+        "location": "/rest/captcha/",
+        "kind": "api"
+      },
+      {
+        "location": "/rest/continue-code",
+        "kind": "api"
+      },
+      {
+        "location": "/rest/basket/1",
+        "kind": "api"
+      },
+      {
+        "location": "/rest/user/change-password",
+        "kind": "api"
+      },
+      {
+        "location": "/api/Complaints",
+        "kind": "api"
+      },
+      {
+        "location": "/api/Cards",
+        "kind": "api"
+      },
+      {
+        "location": "/ftp/",
+        "kind": "file"
+      },
+      {
+        "location": "/ftp/acquisitions.md",
+        "kind": "file"
+      },
+      {
+        "location": "/ftp/legal.md",
+        "kind": "file"
+      },
+      {
+        "location": "/ftp/quarantine/",
+        "kind": "file"
+      },
+      {
+        "location": "/rest/user/whoami",
+        "kind": "auth"
+      },
+      {
+        "location": "/rest/user/reset-password",
+        "kind": "auth"
+      },
+      {
+        "location": "JWT Token",
+        "kind": "jwt"
+      },
+      {
+        "location": "/b2b/v2/order",
+        "kind": "api"
+      }
+    ],
+    "candidates": [
+      {
+        "claim": "SQL injection in login form (email/password fields) - classic Juice Shop vulnerability"
+      },
+      {
+        "claim": "SQL injection in product search parameter"
+      },
+      {
+        "claim": "SQL injection in basket item operations"
+      },
+      {
+        "claim": "NoSQL injection in registration endpoint"
+      },
+      {
+        "claim": "Reflected XSS in search results"
+      },
+      {
+        "claim": "Stored XSS in feedback submission"
+      },
+      {
+        "claim": "DOM-based XSS via hash fragment"
+      },
+      {
+        "claim": "IDOR on user profiles"
+      },
+      {
+        "claim": "IDOR on basket access"
+      },
+      {
+        "claim": "IDOR on order history"
+      },
+      {
+        "claim": "JWT token weaknesses"
+      },
+      {
+        "claim": "Login brute force / rate limiting test"
+      },
+      {
+        "claim": "Password reset flaws"
+      },
+      {
+        "claim": "Server-Side Template Injection in B2B order API"
+      },
+      {
+        "claim": "Path traversal in static file serving"
+      },
+      {
+        "claim": "Path traversal via FTP endpoint"
+      },
+      {
+        "claim": "Malicious file upload (profile picture)"
+      },
+      {
+        "claim": "CSRF on state-changing endpoints"
+      },
+      {
+        "claim": "SSRF via product review image URL"
+      },
+      {
+        "claim": "Cross-Site Script Inclusion - JSON responses may be contamitable via script tags"
+      },
+      {
+        "claim": "Mass assignment during registration"
+      },
+      {
+        "claim": "GraphQL introspection enabled"
+      },
+      {
+        "claim": "Overly permissive CORS policy"
+      },
+      {
+        "claim": "Sensitive information disclosure in client-side source"
+      },
+      {
+        "claim": "XML External Entity injection"
+      },
+      {
+        "claim": "SQL injection in login form (email/password fields) - CONFIRMED via ' OR 1=1-- payload"
+      },
+      {
+        "claim": "SQL injection in product search parameter - CONFIRMED via UNION SELECT"
+      },
+      {
+        "claim": "SQL injection in basket item operations - UNTESTED"
+      },
+      {
+        "claim": "NoSQL injection in registration/login endpoint - PARTIALLY CONFIRMED (password field accepts objects causing type error)"
+      },
+      {
+        "claim": "Reflected XSS in search results - NEGATIVE (search returns JSON, no HTML reflection)"
+      },
+      {
+        "claim": "Stored XSS in feedback submission - UNTESTED (captcha blocks without captchaId)"
+      },
+      {
+        "claim": "DOM-based XSS via hash fragment - UNTESTED"
+      },
+      {
+        "claim": "IDOR on user profiles - CONFIRMED (admin can access all user data via /api/Users)"
+      },
+      {
+        "claim": "IDOR on basket access - CONFIRMED (admin can access basket/1)"
+      },
+      {
+        "claim": "IDOR on order history - UNTESTED"
+      },
+      {
+        "claim": "JWT token weaknesses - CONFIRMED (password hash embedded in token)"
+      },
+      {
+        "claim": "Login brute force / rate limiting test - PARTIALLY CONFIRMED (rate limiting present on reset-password)"
+      },
+      {
+        "claim": "Password reset flaws - PARTIALLY CONFIRMED (security question validation present)"
+      },
+      {
+        "claim": "Server-Side Template Injection in B2B order API - UNTESTED (requires authenticated probe)"
+      },
+      {
+        "claim": "Path traversal in static file serving - PARTIALLY CONFIRMED (/ftp/ accessible, but ../ normalized to index.html)"
+      },
+      {
+        "claim": "Path traversal via FTP endpoint - CONFIRMED (directory listing enabled, files accessible)"
+      },
+      {
+        "claim": "Malicious file upload (profile picture) - UNTESTED"
+      },
+      {
+        "claim": "CSRF on state-changing endpoints - UNTESTED"
+      },
+      {
+        "claim": "SSRF via product review image URL - UNTESTED"
+      },
+      {
+        "claim": "Cross-Site Script Inclusion - UNTESTED"
+      },
+      {
+        "claim": "SQL injection in login form (email field) using ' OR 1=1-- returns admin JWT"
+      },
+      {
+        "claim": "SQL injection in product search - UNION-based extraction of Users table data via ')) UNION SELECT..."
+      },
+      {
+        "claim": "NoSQL injection via JSON objects passed as email/password in login - causes TypeError crash"
+      },
+      {
+        "claim": "Mass assignment - POST /api/Users with role=admin creates admin user"
+      },
+      {
+        "claim": "Excessive data exposure - JWT token payload contains user password hash"
+      },
+      {
+        "claim": "Excessive data exposure - /rest/admin/application-configuration leaks OAuth clientId, product details, challenge config"
+      },
+      {
+        "claim": "Excessive data exposure - /api/Users leaks all user emails, roles, deluxe tokens"
+      },
+      {
+        "claim": "Directory listing enabled on /ftp/ and /ftp/quarantine/"
+      },
+      {
+        "claim": "Sensitive file exposure - /ftp/acquisitions.md (confidential business document), /ftp/legal.md accessible"
+      },
+      {
+        "claim": "CAPTCHA bypass - /rest/captcha/ returns captchaId and answer in plaintext"
+      },
+      {
+        "claim": "Password reset has rate limiting (100/hr) and security question verification"
+      },
+      {
+        "claim": "Feedback submission requires captcha verification - prevents automated XSS storage without CAPTCHA bypass"
+      },
+      {
+        "claim": "SQL injection in login form (email/password fields) - classic Juice Shop vulnerability"
+      },
+      {
+        "claim": "SQL injection in product search parameter"
+      },
+      {
+        "claim": "SQL injection in basket item operations"
+      },
+      {
+        "claim": "NoSQL injection in registration endpoint"
+      },
+      {
+        "claim": "Reflected XSS in search results"
+      },
+      {
+        "claim": "Stored XSS in feedback submission"
+      },
+      {
+        "claim": "DOM-based XSS via hash fragment"
+      },
+      {
+        "claim": "IDOR on user profiles"
+      },
+      {
+        "claim": "IDOR on basket access"
+      },
+      {
+        "claim": "IDOR on order history"
+      },
+      {
+        "claim": "JWT token weaknesses"
+      },
+      {
+        "claim": "Login brute force / rate limiting test"
+      },
+      {
+        "claim": "Password reset flaws"
+      },
+      {
+        "claim": "Server-Side Template Injection in B2B order API"
+      },
+      {
+        "claim": "Path traversal in static file serving"
+      },
+      {
+        "claim": "Path traversal via FTP endpoint"
+      },
+      {
+        "claim": "Malicious file upload (profile picture)"
+      },
+      {
+        "claim": "CSRF on state-changing endpoints"
+      },
+      {
+        "claim": "SSRF via product review image URL"
+      },
+      {
+        "claim": "Cross-Site Script Inclusion - JSON responses may be contamitable via script tags"
+      }
+    ],
+    "facts": [
+      {
+        "summary": "Target is OWASP Juice Shop - a Node.js/Express intentionally vulnerable web application"
+      },
+      {
+        "summary": "Target URL: http://127.0.0.1:3010"
+      },
+      {
+        "summary": "Scope limited to 127.0.0.1 and localhost only"
+      },
+      {
+        "summary": "RoE: app_assessment - no post-ex host takeover off-box, no attacking other hosts/ports"
+      },
+      {
+        "summary": "Juice Shop uses SQLite database by default (can be MariaDB)"
+      },
+      {
+        "summary": "Juice Shop uses Angular for frontend SPA with REST API backend"
+      },
+      {
+        "summary": "Juice Shop uses JWT (JSON Web Tokens) for authentication"
+      },
+      {
+        "summary": "Common vulnerability classes: SQLi, XSS, NoSQLi, SSTI, IDOR, Path Traversal, File Upload, CSRF, SSRF, Mass Assignment, GraphQL issues"
+      },
+      {
+        "summary": "Juice Shop has a known B2B API endpoint at /b2b/v2/orders vulnerable to SSTI"
+      },
+      {
+        "summary": "Juice Shop has an FTP file access surface at /ftp with path traversal protection that can be bypassed"
+      },
+      {
+        "summary": "Stage init complete - no live reconnaissance performed yet"
+      },
+      {
+        "key": "target_info",
+        "summary": "OWASP Juice Shop v20.1.1 running Express ^4.22.1 on port 3010"
+      },
+      {
+        "key": "auth_mechanism",
+        "summary": "JWT-based authentication with embedded user data"
+      },
+      {
+        "key": "admin_access_gained",
+        "summary": "Obtained admin JWT token via SQL injection"
+      },
+      {
+        "key": "api_endpoints",
+        "summary": "Discovered 20+ API endpoints"
+      },
+      {
+        "key": "ftp_files",
+        "summary": "Sensitive files exposed in /ftp/ directory"
+      },
+      {
+        "key": "sql_injection_login",
+        "summary": "SQL injection in /rest/user/login via email field"
+      },
+      {
+        "key": "sql_injection_search_union",
+        "summary": "UNION-based SQL injection in /rest/products/search"
+      },
+      {
+        "key": "nosql_injection_login",
+        "summary": "NoSQL injection via JSON object injection in login"
+      },
+      {
+        "key": "mass_assignment_admin_registration",
+        "summary": "Mass assignment allows creating admin users"
+      },
+      {
+        "key": "jwt_password_hash_exposure",
+        "summary": "JWT token payload contains password hash"
+      },
+      {
+        "key": "application_config_exposure",
+        "summary": "Application config endpoint exposes sensitive data"
+      },
+      {
+        "key": "user_data_exposure",
+        "summary": "User API endpoint exposes all user data"
+      },
+      {
+        "key": "directory_listing",
+        "summary": "Directory listing enabled on /ftp/ endpoints"
+      },
+      {
+        "key": "sensitive_file_access",
+        "summary": "Sensitive files accessible via /ftp/"
+      },
+      {
+        "key": "captcha_bypass",
+        "summary": "CAPTCHA answer returned in plaintext"
+      },
+      {
+        "key": "sqlite_database",
+        "summary": "Application uses SQLite database"
+      },
+      {
+        "key": "version_disclosure",
+        "summary": "Application version disclosed"
+      },
+      {
+        "summary": "Target: OWASP Juice Shop running on http://127.0.0.1:3010"
+      },
+      {
+        "summary": "Application version: v20.1.1 (from /rest/admin/application-version)"
+      },
+      {
+        "summary": "Backend database: SQLite (SQL injection UNION syntax confirms SQLite)"
+      },
+      {
+        "summary": "Authentication: JWT-based with RS256 algorithm"
+      },
+      {
+        "summary": "Password hashing: bcrypt (identified from JWT payload and SQLi extraction)"
+      },
+      {
+        "summary": "CAPTCHA: answer returned in plaintext alongside image"
+      },
+      {
+        "summary": "Directory listing enabled on /ftp/ and /ftp/quarantine/"
+      },
+      {
+        "summary": "API endpoints /api/Users, /api/Cards, /api/Feedbacks, /api/Challenges accessible without authentication"
+      }
+    ],
+    "deadends": [
+      "[object Object]",
+      "[object Object]",
+      "[object Object]",
+      "[object Object]",
+      "[object Object]",
+      "[object Object]",
+      "[object Object]",
+      "B2B v2 order API - SSTI not confirmed; endpoint returns Angular SPA HTML regardless of Accept header",
+      "Reflected XSS in product search - XSS payloads not reflected in API JSON response",
+      "Stored XSS in feedback - CAPTCHA verification required, cannot submit without bypassing captcha",
+      "DOM XSS - Not tested on frontend application scope",
+      "Path traversal via /ftp/../ - Server normalizes paths and returns 404 catch-all Angular SPA",
+      "Password reset - Requires correct security question answer; rate limited to 100 requests/hour",
+      "Basket manipulation - Requires valid JWT authorization token",
+      "CSRF - No CSRF tokens observed; testing requires browser automation with CSRF scenario",
+      "SSRF via image URL - No image URL upload mechanism discovered on accessible API endpoints",
+      "B2B v2 order API - SSTI not confirmed; endpoint returns Angular SPA HTML regardless of Accept header",
+      "Reflected XSS in product search - XSS payloads not reflected in API JSON response",
+      "Stored XSS in feedback - CAPTCHA verification required, cannot submit without bypassing captcha",
+      "DOM XSS - Not tested on frontend application scope",
+      "Path traversal via /ftp/../ - Server normalizes paths and returns 404 catch-all Angular SPA",
+      "Password reset - Requires correct security question answer; rate limited to 100 requests/hour",
+      "Basket manipulation - Requires valid JWT authorization token",
+      "CSRF - No CSRF tokens observed; testing requires browser automation with CSRF scenario",
+      "SSRF via image URL - No image URL upload mechanism discovered on accessible API endpoints"
+    ],
+    "completed_stages": [
+      "init",
+      "surface",
+      "class_probe",
+      "validate_book"
+    ]
+  }
+}

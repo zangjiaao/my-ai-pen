@@ -1,0 +1,28 @@
+{
+  "id": "f_1784838185016_df1e61",
+  "action": "confirm",
+  "title": "Excessive Data Exposure via Unprotected API Endpoints",
+  "severity": "high",
+  "finding_kind": "vuln",
+  "location": "/api/Users",
+  "url": "/api/Users",
+  "description": "Multiple API endpoints expose excessive sensitive data without adequate authentication or authorization. The /api/Users endpoint returns all user records including email addresses, bcrypt password hashes, security questions/answers, and other PII. Other endpoints like /api/Cards (credit card info), /api/Feedbacks, /api/Challenges, /api/Products, and /rest/admin/application-configuration return more data than necessary, often without requiring authentication.",
+  "poc": "Step 1: GET /api/Users without any auth headers returns HTTP 200 with JSON array of all users including bcrypt password hashes. Step 2: GET /api/Cards returns saved credit card data. Observed: sensitive data exposed without authentication.",
+  "proof": "Observed excessive data exposure on multiple API endpoints. GET /api/Users returns all user records including email, password (bcrypt hash), role, securityQuestion, securityAnswer without authentication. GET /api/Cards returns saved credit card information. GET /api/Challenges returns all challenge definitions.",
+  "how_captured": "script: evidence/excessive_data_exposure.txt",
+  "evidence_ids": [
+    "ev_1784838183076_277437"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784838183076_277437",
+      "excerpt": "Observed excessive data exposure on multiple API endpoints. GET /api/Users returns all user records including email, password (bcrypt hash), role, securityQuestion, securityAnswer without authentication. GET /api/Cards returns saved credit card information. GET /api/Challenges returns all challenge definitions.",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "script: evidence/excessive_data_exposure.txt"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "3010",
+  "created_at": "2026-07-23T20:23:05.016Z"
+}

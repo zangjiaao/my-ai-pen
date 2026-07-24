@@ -1,0 +1,24 @@
+{
+  "id": "ev_1784861882133_c88e25",
+  "type": "tool_output",
+  "source_tool": "finding",
+  "summary": "SQL Injection in /vulnerabilities/sqli/ (UNION-based) @ http://127.0.0.1:8080/vulnerabilities/sqli/",
+  "data": {
+    "kind": "proof",
+    "observation": "SQL injection confirmed via boolean condition 1' OR '1'='1. The query returns user data when condition is true.",
+    "proof": "SQL injection confirmed via boolean condition 1' OR '1'='1. The query returns user data when condition is true.",
+    "path_or_url": "http://127.0.0.1:8080/vulnerabilities/sqli/",
+    "location": "http://127.0.0.1:8080/vulnerabilities/sqli/",
+    "title": "SQL Injection in /vulnerabilities/sqli/ (UNION-based)",
+    "stdout": "SQL injection confirmed via boolean condition 1' OR '1'='1. The query returns user data when condition is true.",
+    "body_preview": "SQL injection confirmed via boolean condition 1' OR '1'='1. The query returns user data when condition is true.",
+    "capture_via": "write",
+    "how_captured": "script: proof_sqli_boolean.txt",
+    "script_path": "proof_sqli_boolean.txt",
+    "path": "proof_sqli_boolean.txt",
+    "script_preview": "SQL injection confirmed via boolean condition 1' OR '1'='1. The query returns user data when condition is true.",
+    "source_tool_act": "write",
+    "act_summary": "file write proof_sqli_boolean.txt"
+  },
+  "created_at": "2026-07-24T02:58:02.133Z"
+}

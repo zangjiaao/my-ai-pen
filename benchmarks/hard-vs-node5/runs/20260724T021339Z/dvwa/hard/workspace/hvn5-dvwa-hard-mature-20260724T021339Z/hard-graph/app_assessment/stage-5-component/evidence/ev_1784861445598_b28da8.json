@@ -1,0 +1,69 @@
+{
+  "id": "ev_1784861445598_b28da8",
+  "type": "subagent_result",
+  "source_tool": "subagent",
+  "summary": "subagent sub_1784860843755_8: subagent LLM session timed out after 600000ms",
+  "data": {
+    "subagentId": "sub_1784860843755_8",
+    "ok": false,
+    "summary": "subagent LLM session timed out after 600000ms",
+    "data": {
+      "kind": "llm_session",
+      "structured": {
+        "ok": false,
+        "summary": "subagent LLM session timed out after 600000ms",
+        "summaryProvided": true,
+        "candidates": [],
+        "surfaces": [],
+        "facts": [],
+        "deadends": [
+          "session_error"
+        ],
+        "artifacts": [],
+        "raw": {
+          "ok": false,
+          "summary": "subagent LLM session timed out after 600000ms",
+          "deadends": [
+            "session_error"
+          ]
+        }
+      },
+      "handoff": {
+        "target": "http://127.0.0.1:8080/vulnerabilities/xss_d/",
+        "scope": "127.0.0.1,localhost",
+        "already_done": "Session cookies: PHPSESSID=9kk32r8pdi340ch33to4hbg0s2, security=low. User is logged in as admin.",
+        "this_turn_goal": "Test DOM-based XSS - analyze client-side JS for DOM XSS vulnerabilities",
+        "success_criteria": "Proof of DOM XSS vulnerability with verbatim response"
+      },
+      "agent_id": "sub_1784860843755_8",
+      "worker_status": "idle",
+      "tools": 84,
+      "workDir": "/mnt/d/Coding/my-ai-pen/benchmarks/hard-vs-node5/runs/20260724T021339Z/dvwa/hard/workspace/hvn5-dvwa-hard-mature-20260724T021339Z/hard-graph/app_assessment/stage-5-component/subagents/sub_1784860843755_8",
+      "session_seed": {
+        "seeded": true,
+        "detail": "copied /mnt/d/Coding/my-ai-pen/benchmarks/hard-vs-node5/runs/20260724T021339Z/dvwa/hard/workspace/hvn5-dvwa-hard-mature-20260724T021339Z/hard-graph/app_assessment/stage-5-component/session → /mnt/d/Coding/my-ai-pen/benchmarks/hard-vs-node5/runs/20260724T021339Z/dvwa/hard/workspace/hvn5-dvwa-hard-mature-20260724T021339Z/hard-graph/app_assessment/stage-5-component/subagents/sub_1784860843755_8/session"
+      },
+      "session_promote": {
+        "promoted": true,
+        "detail": "promoted /mnt/d/Coding/my-ai-pen/benchmarks/hard-vs-node5/runs/20260724T021339Z/dvwa/hard/workspace/hvn5-dvwa-hard-mature-20260724T021339Z/hard-graph/app_assessment/stage-5-component/subagents/sub_1784860843755_8/session → /mnt/d/Coding/my-ai-pen/benchmarks/hard-vs-node5/runs/20260724T021339Z/dvwa/hard/workspace/hvn5-dvwa-hard-mature-20260724T021339Z/hard-graph/app_assessment/stage-5-component/session"
+      },
+      "salvaged": false,
+      "session_reuse": {
+        "hit": false,
+        "agent_id": "sub_1784860843755_8",
+        "path_key": "/vulnerabilities/xss_d",
+        "packages_completed": 1,
+        "parked": true,
+        "worker_status": "idle",
+        "timed_out": true
+      },
+      "resume_hint": {
+        "agent_id": "sub_1784860843755_8",
+        "path_key": "/vulnerabilities/xss_d",
+        "reason": "same_path_followup"
+      }
+    },
+    "finishedAt": "2026-07-24T02:50:45.595Z"
+  },
+  "created_at": "2026-07-24T02:50:45.598Z"
+}

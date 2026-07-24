@@ -1,0 +1,28 @@
+{
+  "id": "f_1784861882928_099bdb",
+  "action": "confirm",
+  "title": "Session ID not rotated after login (session fixation)",
+  "severity": "high",
+  "finding_kind": "auth",
+  "location": "http://127.0.0.1:8080/login.php",
+  "url": "http://127.0.0.1:8080/login.php",
+  "description": "The PHPSESSID remains identical before and after successful authentication. If an attacker can preseed a known session ID on the victim's browser, they can hijack the session after the victim logs in.",
+  "poc": "Probe request against http://127.0.0.1:8080/login.php; observed proving result from prior stage handoff: Set-Cookie: PHPSESSID=oh7b9qbtd9c0dueninuaf8i9h1; path=/ Set-Cookie: security=low",
+  "proof": "Set-Cookie: PHPSESSID=oh7b9qbtd9c0dueninuaf8i9h1; path=/\nSet-Cookie: security=low",
+  "how_captured": "script: proof_missing_headers.txt",
+  "evidence_ids": [
+    "ev_1784861882133_0e102a"
+  ],
+  "proof_excerpts": [
+    {
+      "evidence_id": "ev_1784861882133_0e102a",
+      "excerpt": "Set-Cookie: PHPSESSID=oh7b9qbtd9c0dueninuaf8i9h1; path=/\nSet-Cookie: security=low",
+      "role": "proof",
+      "step": 1,
+      "how_captured": "script: proof_missing_headers.txt"
+    }
+  ],
+  "affected_asset": "127.0.0.1",
+  "port": "8080",
+  "created_at": "2026-07-24T02:58:02.928Z"
+}

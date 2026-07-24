@@ -1,0 +1,6 @@
+{
+  "fact_key": "target",
+  "summary": "OWASP Juice Shop at http://127.0.0.1:3010",
+  "body": "Target URL: http://127.0.0.1:3010\nVersion: Juice Shop (likely v20.x)\nIP: 127.0.0.1\nPort: 3010",
+  "updated_at": "2026-07-23T20:20:00.849Z"
+}

@@ -1,0 +1,328 @@
+{
+  "version": 1,
+  "updated_at": "2026-07-24T01:09:19.539Z",
+  "surfaces": [
+    {
+      "id": "/api/basketitems",
+      "location": "http://127.0.0.1:3010/api/BasketItems",
+      "path_key": "/api/basketitems",
+      "kind": "api",
+      "params": [
+        "ProductId",
+        "BasketId",
+        "quantity",
+        "id"
+      ],
+      "auth": "token",
+      "status": "probed",
+      "updated_at": "2026-07-24T01:03:29.094Z",
+      "source_subagent_id": "sub_1784853907681_2"
+    },
+    {
+      "id": "/rest/basket/%7bid%7d",
+      "location": "http://127.0.0.1:3010/rest/basket/{id}",
+      "path_key": "/rest/basket/%7bid%7d",
+      "kind": "api",
+      "params": [
+        "id"
+      ],
+      "auth": "token",
+      "status": "probed",
+      "updated_at": "2026-07-24T00:50:51.742Z",
+      "source_subagent_id": "sub_1784853907681_2"
+    },
+    {
+      "id": "/rest/basket/%7bbid%7d/checkout",
+      "location": "http://127.0.0.1:3010/rest/basket/{bid}/checkout",
+      "path_key": "/rest/basket/%7bbid%7d/checkout",
+      "kind": "api",
+      "params": [
+        "couponData",
+        "orderDetails"
+      ],
+      "auth": "token",
+      "status": "probed",
+      "updated_at": "2026-07-24T00:50:51.742Z",
+      "source_subagent_id": "sub_1784853907681_2"
+    },
+    {
+      "id": "/rest/basket/%7bbid%7d/coupon/%7bcode%7d",
+      "location": "http://127.0.0.1:3010/rest/basket/{bid}/coupon/{code}",
+      "path_key": "/rest/basket/%7bbid%7d/coupon/%7bcode%7d",
+      "kind": "api",
+      "params": [
+        "bid",
+        "code"
+      ],
+      "auth": "token",
+      "status": "probed",
+      "updated_at": "2026-07-24T00:50:51.742Z",
+      "source_subagent_id": "sub_1784853907681_2"
+    },
+    {
+      "id": "/rest/order-history",
+      "location": "http://127.0.0.1:3010/rest/order-history",
+      "path_key": "/rest/order-history",
+      "kind": "api",
+      "auth": "token",
+      "status": "open",
+      "updated_at": "2026-07-24T00:50:51.737Z",
+      "source_subagent_id": "sub_1784853907681_2"
+    },
+    {
+      "id": "/rest/track-order/%7borderid%7d",
+      "location": "http://127.0.0.1:3010/rest/track-order/{orderId}",
+      "path_key": "/rest/track-order/%7borderid%7d",
+      "kind": "api",
+      "params": [
+        "orderId"
+      ],
+      "auth": "none",
+      "status": "probed",
+      "updated_at": "2026-07-24T01:03:29.094Z",
+      "source_subagent_id": "sub_1784853907681_2"
+    },
+    {
+      "id": "/api/quantitys",
+      "location": "http://127.0.0.1:3010/api/Quantitys",
+      "path_key": "/api/quantitys",
+      "kind": "api",
+      "auth": "token",
+      "status": "open",
+      "updated_at": "2026-07-24T01:03:29.094Z",
+      "source_subagent_id": "sub_1784853907681_2"
+    },
+    {
+      "id": "/rest/products/search",
+      "location": "http://127.0.0.1:3010/rest/products/search",
+      "path_key": "/rest/products/search",
+      "kind": "api",
+      "params": [
+        "q"
+      ],
+      "auth": "none",
+      "status": "probed",
+      "updated_at": "2026-07-24T01:03:29.098Z",
+      "source_subagent_id": "sub_1784853907681_2"
+    },
+    {
+      "id": "/",
+      "location": "http://127.0.0.1:3010/#/search?q=PAYLOAD",
+      "path_key": "/",
+      "kind": "page",
+      "params": [
+        "q"
+      ],
+      "auth": "none",
+      "status": "booked",
+      "updated_at": "2026-07-24T01:09:19.539Z",
+      "source_subagent_id": "sub_1784853907681_1"
+    },
+    {
+      "id": "/rest/products/1/reviews",
+      "location": "http://127.0.0.1:3010/rest/products/1/reviews",
+      "path_key": "/rest/products/1/reviews",
+      "kind": "api",
+      "params": [
+        "message",
+        "author"
+      ],
+      "auth": "none",
+      "status": "probed",
+      "updated_at": "2026-07-24T01:03:29.099Z",
+      "source_subagent_id": "sub_1784853907681_1"
+    },
+    {
+      "id": "/api/feedbacks",
+      "location": "http://127.0.0.1:3010/api/Feedbacks",
+      "path_key": "/api/feedbacks",
+      "kind": "api",
+      "params": [
+        "comment",
+        "rating",
+        "captchaId",
+        "captcha"
+      ],
+      "auth": "none",
+      "status": "probed",
+      "updated_at": "2026-07-24T01:03:29.094Z",
+      "source_subagent_id": "sub_1784853907681_1"
+    },
+    {
+      "id": "/api/products",
+      "location": "http://127.0.0.1:3010/api/Products",
+      "path_key": "/api/products",
+      "kind": "api",
+      "params": [
+        "description"
+      ],
+      "auth": "none",
+      "status": "open",
+      "updated_at": "2026-07-24T01:03:29.094Z",
+      "source_subagent_id": "sub_1784853907681_1"
+    },
+    {
+      "id": "/api/challenges",
+      "location": "http://127.0.0.1:3010/api/Challenges",
+      "path_key": "/api/challenges",
+      "kind": "api",
+      "auth": "none",
+      "status": "open",
+      "updated_at": "2026-07-24T01:03:29.094Z",
+      "source_subagent_id": "sub_1784853907681_1"
+    },
+    {
+      "id": "/api/products/1",
+      "location": "http://127.0.0.1:3010/api/Products/1",
+      "path_key": "/api/products/1",
+      "kind": "api",
+      "params": [
+        "id"
+      ],
+      "auth": "none",
+      "status": "open",
+      "updated_at": "2026-07-24T01:03:29.094Z",
+      "source_subagent_id": "sub_1784854819946_3"
+    },
+    {
+      "id": "/api/recycles",
+      "location": "http://127.0.0.1:3010/api/Recycles",
+      "path_key": "/api/recycles",
+      "kind": "api",
+      "auth": "none",
+      "status": "open",
+      "updated_at": "2026-07-24T01:03:29.094Z",
+      "source_subagent_id": "sub_1784854819946_3"
+    },
+    {
+      "id": "/api/securityquestions",
+      "location": "http://127.0.0.1:3010/api/SecurityQuestions",
+      "path_key": "/api/securityquestions",
+      "kind": "api",
+      "auth": "none",
+      "status": "open",
+      "updated_at": "2026-07-24T01:03:29.094Z",
+      "source_subagent_id": "sub_1784854819946_3"
+    },
+    {
+      "id": "/api/users",
+      "location": "http://127.0.0.1:3010/api/Users",
+      "path_key": "/api/users",
+      "kind": "api",
+      "auth": "session",
+      "status": "open",
+      "updated_at": "2026-07-24T01:03:29.094Z",
+      "source_subagent_id": "sub_1784854819946_3"
+    },
+    {
+      "id": "/api/complaints",
+      "location": "http://127.0.0.1:3010/api/Complaints",
+      "path_key": "/api/complaints",
+      "kind": "api",
+      "auth": "session",
+      "status": "open",
+      "updated_at": "2026-07-24T01:03:29.094Z",
+      "source_subagent_id": "sub_1784854819946_3"
+    },
+    {
+      "id": "/api/cards",
+      "location": "http://127.0.0.1:3010/api/Cards",
+      "path_key": "/api/cards",
+      "kind": "api",
+      "auth": "session",
+      "status": "open",
+      "updated_at": "2026-07-24T01:03:29.094Z",
+      "source_subagent_id": "sub_1784854819946_3"
+    },
+    {
+      "id": "/rest/user/whoami",
+      "location": "http://127.0.0.1:3010/rest/user/whoami",
+      "path_key": "/rest/user/whoami",
+      "kind": "api",
+      "auth": "none",
+      "status": "open",
+      "updated_at": "2026-07-24T01:03:29.094Z",
+      "source_subagent_id": "sub_1784854819946_3"
+    },
+    {
+      "id": "/rest/memories",
+      "location": "http://127.0.0.1:3010/rest/memories/",
+      "path_key": "/rest/memories",
+      "kind": "api",
+      "auth": "none",
+      "status": "probed",
+      "updated_at": "2026-07-24T01:03:29.098Z",
+      "source_subagent_id": "sub_1784854819946_3"
+    },
+    {
+      "id": "/rest/captcha",
+      "location": "http://127.0.0.1:3010/rest/captcha/",
+      "path_key": "/rest/captcha",
+      "kind": "api",
+      "auth": "none",
+      "status": "open",
+      "updated_at": "2026-07-24T01:03:29.094Z",
+      "source_subagent_id": "sub_1784854819946_3"
+    },
+    {
+      "id": "/rest/continue-code",
+      "location": "http://127.0.0.1:3010/rest/continue-code/",
+      "path_key": "/rest/continue-code",
+      "kind": "api",
+      "auth": "none",
+      "status": "open",
+      "updated_at": "2026-07-24T01:03:29.094Z",
+      "source_subagent_id": "sub_1784854819946_3"
+    },
+    {
+      "id": "/rest/admin/application-configuration",
+      "location": "http://127.0.0.1:3010/rest/admin/application-configuration",
+      "path_key": "/rest/admin/application-configuration",
+      "kind": "api",
+      "auth": "none",
+      "status": "probed",
+      "updated_at": "2026-07-24T01:03:29.099Z",
+      "source_subagent_id": "sub_1784854819946_3"
+    },
+    {
+      "id": "/rest/admin/application-version",
+      "location": "http://127.0.0.1:3010/rest/admin/application-version",
+      "path_key": "/rest/admin/application-version",
+      "kind": "api",
+      "auth": "none",
+      "status": "open",
+      "updated_at": "2026-07-24T01:03:29.094Z",
+      "source_subagent_id": "sub_1784854819946_3"
+    },
+    {
+      "id": "/b2b/v2/orders",
+      "location": "http://127.0.0.1:3010/b2b/v2/orders",
+      "path_key": "/b2b/v2/orders",
+      "kind": "api",
+      "auth": "bearer",
+      "status": "open",
+      "updated_at": "2026-07-24T01:03:29.094Z",
+      "source_subagent_id": "sub_1784854819946_3"
+    },
+    {
+      "id": "/ftp",
+      "location": "http://127.0.0.1:3010/ftp/",
+      "path_key": "/ftp",
+      "kind": "other",
+      "auth": "none",
+      "status": "probed",
+      "updated_at": "2026-07-24T01:03:29.099Z",
+      "source_subagent_id": "sub_1784854819946_3"
+    },
+    {
+      "id": "/api-docs",
+      "location": "http://127.0.0.1:3010/api-docs/",
+      "path_key": "/api-docs",
+      "kind": "page",
+      "auth": "none",
+      "status": "open",
+      "updated_at": "2026-07-24T01:03:29.094Z",
+      "source_subagent_id": "sub_1784854819946_3"
+    }
+  ]
+}

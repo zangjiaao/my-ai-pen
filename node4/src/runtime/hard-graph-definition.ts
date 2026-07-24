@@ -1,7 +1,8 @@
 /**
- * Hard Graph definition seam (Graph × Pi first cut).
+ * Expert Graph definition seam (Hard Graph runner / Graph × Pi).
  *
- * Soft scenario graphs (pentest-graph.ts): node menu + soft default_plan — NOT Hard Graph DoD.
+ * Soft scenario graphs are retired as product mode (#68 / #76). Expert structured
+ * work loads discipline:hard definitions from pack graphs/hard/*.json only.
  * Hard graphs: ordered stages with fail-closed require gates and tool profiles.
  */
 
@@ -157,19 +158,43 @@ export async function listHardGraphIds(packRoot: string): Promise<string[]> {
   }
 }
 
+/**
+ * Explicit Expert Graph (Hard Graph runner) ids/aliases (structured only).
+ *
+ * Product path (#68 / #76): Soft scenario graphs are retired. Product template
+ * `app_assessment` and aliases resolve to the mature Expert Graph under
+ * graphs/hard/app_assessment.json. Thin lab ids remain explicit.
+ *
+ * `redteam_deep` is intentionally **not** aliased until a hard Graph file ships
+ * (phase 2). Soft-only templates must not enter the Expert Graph runner.
+ */
 const HARD_GRAPH_ALIASES: Record<string, string> = {
+  // Product assessment template → mature Expert Graph
+  app_assessment: "app_assessment",
+  assessment: "app_assessment",
+  assess: "app_assessment",
+  "pre-prod": "app_assessment",
+  preprod: "app_assessment",
+  // Explicit mature aliases
+  hard_app_assessment: "app_assessment",
+  app_assessment_hard: "app_assessment",
+  hard: "app_assessment",
+  // Thin lab / compatibility
   app_assessment_thin: "app_assessment_thin",
-  hard_app_assessment: "app_assessment_thin",
+  hard_app_assessment_thin: "app_assessment_thin",
   thin: "app_assessment_thin",
 };
 
+/** Default Expert Graph id when graphDiscipline/env selects hard without a thin/lab id. */
+export const DEFAULT_HARD_GRAPH_ID = "app_assessment";
+
 /**
- * Resolve whether this task wants Hard Graph and which definition to load.
+ * Resolve whether this task wants Expert Graph (Hard Graph runner) and which definition to load.
  * Structured fields only — no free-text NLP on instruction.
  *
- * - graphDiscipline === "hard" → load hard graph (graphId or default app_assessment_thin)
- * - graphId maps to a known hard id / alias
- * - env NODE4_HARD_GRAPH=1|true with graphId alias support
+ * - Product assessment aliases / explicit thin-hard ids → Expert Graph
+ * - graphDiscipline === "hard" or NODE4_HARD_GRAPH → mature default (or alias if set)
+ * - Unknown / soft-only ids without hard file → not_hard (no Soft fallback here)
  */
 export async function resolveHardGraph(options: {
   task: Pick<TaskEnvelope, "graphId" | "engagementTemplate" | "graphDiscipline">;
@@ -193,10 +218,18 @@ export async function resolveHardGraph(options: {
     .toLowerCase();
   const aliased = HARD_GRAPH_ALIASES[rawId] ?? null;
 
-  // Explicit hard graph id, or discipline/env → default thin path.
-  let hardId: string | null = aliased;
-  if (!hardId && (taskHard || envHard)) {
-    hardId = "app_assessment_thin";
+  let hardId: string | null = null;
+  if (aliased) {
+    hardId = aliased;
+  } else if (taskHard || envHard) {
+    // Discipline/env hard without an explicit thin/product alias → mature Expert primary.
+    hardId = DEFAULT_HARD_GRAPH_ID;
+  } else if (rawId && options.packRoot) {
+    // Any id that already has a hard Graph file is Expert Graph (multi-Graph catalog).
+    const direct = await loadHardGraphFile(options.packRoot, rawId);
+    if (direct) {
+      return { mode: "hard", graph: direct };
+    }
   }
 
   if (!hardId || !options.packRoot) {
@@ -223,4 +256,30 @@ export function applyHardGraphToolProfile(
     out = out.filter((n) => !deny.has(n));
   }
   return out;
+}
+
+/**
+ * Product work-path decision after resolveHardGraph (#76 Soft retire).
+ * - chatOnly / ledger assist → free (no Expert Graph execution)
+ * - hard resolved → Expert Graph runner
+ * - structured Graph intent but no hard Graph → fail-closed (never silent free)
+ * - no Graph intent → free OMP
+ */
+export function resolveExpertWorkPath(input: {
+  hardMode: "hard" | "not_hard";
+  /** From resolveGraphIdFromTask — non-null means structured Graph intent. */
+  graphIntent: string | null;
+  chatOnly?: boolean;
+  ledgerAssistSeat?: boolean;
+}): { path: "hard" } | { path: "free" } | { path: "unavailable"; graphId: string } {
+  if (input.chatOnly || input.ledgerAssistSeat) {
+    return { path: "free" };
+  }
+  if (input.hardMode === "hard") {
+    return { path: "hard" };
+  }
+  if (input.graphIntent) {
+    return { path: "unavailable", graphId: input.graphIntent };
+  }
+  return { path: "free" };
 }

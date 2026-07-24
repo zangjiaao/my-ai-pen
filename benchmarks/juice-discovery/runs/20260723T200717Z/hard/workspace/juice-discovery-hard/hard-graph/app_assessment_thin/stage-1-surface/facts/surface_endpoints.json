@@ -1,0 +1,6 @@
+{
+  "fact_key": "surface_endpoints",
+  "summary": "Initial attack surface map",
+  "body": "Found endpoints:\n- / (SPA root, returns Angular app HTML)\n- /robots.txt -> Disallow: /ftp\n- /ftp/ -> Directory listing enabled (express.js serve-index)\n- /api/ -> 500 Unexpected path\n- /rest/ -> 500 Unexpected path\n- /api/Users -> 401 No Authorization header (protected)\n- /api/Products -> 200 JSON product list (public)\n- /api/Products/{id} -> likely accessible\n- /rest/product/search?q= -> 500 with empty q\n- /socket.io/ -> 400 Transport unknown (Socket.io present)\n- /assets/public/favicon_js.ico -> public asset\n- Error pages reveal: Express ^4.22.1, paths at /juice-shop/build/routes/\n- X-Recruiting header: /#/jobs\n- UI is Angular (SPA with hash routing)",
+  "updated_at": "2026-07-23T20:09:05.632Z"
+}

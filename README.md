@@ -1,13 +1,13 @@
 # AI 安全运营平台
 
-平台 Web 工作台 + **可绑定的 Node 运行时**（产品路径：**Graph × Pi / `node4/`**；`node5/` 为 lab 参考与退路，非默认绑定）。  
+平台 Web 工作台 + **可绑定的 Node 运行时**（唯一产品路径：**Graph × Pi / `node4/`**）。  
 Legacy `node/`、`node2/`、`node3/` 计划删除，禁止扩展。`research/` 与 `benchmarks/` 冻结。
 
 规格入口：
 
 - [`docs/prd.md`](docs/prd.md) — 产品需求  
-- [`docs/specs/harness.md`](docs/specs/harness.md) — 运行时契约（主要描述 node4 实现细节）  
-- [`AGENTS.md`](AGENTS.md) — Agent 工程规则（双候选）  
+- [`docs/specs/harness.md`](docs/specs/harness.md) — 运行时契约（Node4 / Graph × Pi）  
+- [`AGENTS.md`](AGENTS.md) — Agent 工程规则  
 - [`docs/README.md`](docs/README.md) — 文档索引  
 - [`docs/project-cleanup-plan.md`](docs/project-cleanup-plan.md) — 清理执行清单  
 
@@ -54,9 +54,9 @@ npx vite --port 5173
 
 打开 `http://localhost:5173` 登录。
 
-### 4. 绑定一个 Node 候选（示例：node4）
+### 4. 绑定 Node（`node4`）
 
-在平台 **节点管理** 注册节点并复制 `NODE_TOKEN`。下列为 **node4** 示例；也可绑定 **node5**（见 `node5/README.md`）。文档不指定唯一默认。
+在平台 **节点管理** 注册节点并复制 `NODE_TOKEN`。产品唯一 Node 血统为 **node4**（Graph × Pi）。
 
 ```bash
 cd node4
@@ -77,7 +77,7 @@ npx tsx src/standalone.ts \
   --output /tmp/node4-run
 ```
 
-LLM：平台后端 `.env`；Node 候选侧 `.env`（或 `PI_MODEL_*` / `DEEPSEEK_API_KEY` 等）供执行核。
+LLM：平台后端 `.env`；Node 侧 `.env`（或 `PI_MODEL_*` / `DEEPSEEK_API_KEY` 等）供执行核。
 
 ### 5. 专家角色（可选）
 
@@ -91,17 +91,16 @@ LLM：平台后端 `.env`；Node 候选侧 `.env`（或 `PI_MODEL_*` / `DEEPSEEK
 |----|------|
 | 平台后端 | FastAPI + PostgreSQL + WebSocket |
 | 平台前端 | React + Vite + Tailwind + Zustand + TanStack Query |
-| Node | 候选：`node4`（TS/Pi clean-room）或 `node5`（ADK/Graph 对照）— 部署绑定其一 |
+| Node | **`node4`**（TS / Graph × Pi）— 部署绑定该血统 |
 
 ## 仓库布局（简）
 
 ```text
 platform/     平台前后端
-node4/        Node 候选（WS 产品路径实现）
-node5/        Node 候选（CLI 对照臂）
+node4/        产品 Node（WS + standalone）
 experts/      专家包目录
 docs/         产品主干 + specs/ 运行时契约
-benchmarks/   冻结：lab 评估
+benchmarks/   冻结：lab 评估（含历史 Hard-vs-Node5）
 research/     冻结：第三方参照
 node/ node2/ node3/   legacy，计划删除
 ```

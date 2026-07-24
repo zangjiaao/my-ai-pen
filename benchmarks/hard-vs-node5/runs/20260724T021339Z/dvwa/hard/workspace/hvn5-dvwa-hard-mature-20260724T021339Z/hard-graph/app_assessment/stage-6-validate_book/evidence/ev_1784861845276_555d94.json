@@ -1,0 +1,24 @@
+{
+  "id": "ev_1784861845276_555d94",
+  "type": "tool_output",
+  "source_tool": "finding",
+  "summary": "PHP info disclosure @ http://127.0.0.1:8080/phpinfo.php",
+  "data": {
+    "kind": "proof",
+    "observation": "PHP Version 7.0.30-0+deb9u1",
+    "proof": "PHP Version 7.0.30-0+deb9u1",
+    "path_or_url": "http://127.0.0.1:8080/phpinfo.php",
+    "location": "http://127.0.0.1:8080/phpinfo.php",
+    "title": "PHP info disclosure",
+    "stdout": "PHP Version 7.0.30-0+deb9u1",
+    "body_preview": "PHP Version 7.0.30-0+deb9u1",
+    "capture_via": "write",
+    "how_captured": "script: proof_phpinfo.txt",
+    "script_path": "proof_phpinfo.txt",
+    "path": "proof_phpinfo.txt",
+    "script_preview": "PHP Version 7.0.30-0+deb9u1",
+    "source_tool_act": "write",
+    "act_summary": "file write proof_phpinfo.txt"
+  },
+  "created_at": "2026-07-24T02:57:25.276Z"
+}

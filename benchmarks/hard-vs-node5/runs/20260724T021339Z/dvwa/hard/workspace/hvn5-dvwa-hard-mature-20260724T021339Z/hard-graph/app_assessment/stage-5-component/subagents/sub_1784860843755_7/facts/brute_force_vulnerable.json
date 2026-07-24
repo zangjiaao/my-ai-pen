@@ -1,0 +1,7 @@
+{
+  "fact_key": "brute_force_vulnerable",
+  "summary": "Brute force endpoint has no rate limiting, no CAPTCHA, no account lockout at low security level",
+  "body": "The DVWA brute force endpoint at /vulnerabilities/brute/ has no protection mechanisms at low security level. The form uses GET method, passwords are sent in URL parameters, and there is clear response differentiation between success and failure. The help page explicitly states: \"The developer has completely missed out any protections methods\".",
+  "category": "vulnerability",
+  "updated_at": "2026-07-24T02:43:13.921Z"
+}
