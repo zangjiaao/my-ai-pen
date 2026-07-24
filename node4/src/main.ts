@@ -6,7 +6,7 @@ import { runNode4Task } from "./runtime/session-runner.js";
 import type { TaskEnvelope } from "./types.js";
 import { parseCaseContext } from "./runtime/case-context.js";
 import { parseGraphExecution } from "./runtime/hard-graph-definition.js";
-import { parseF1Focus } from "./runtime/task-envelope-fields.js";
+import { parseFocusFields } from "./runtime/task-envelope-fields.js";
 import { sanitizePromptLabel } from "./runtime/prompt.js";
 import { cancelApprovalsForConversation, resolveApproval } from "./runtime/approvals.js";
 
@@ -252,7 +252,7 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
         ? ("delegate_preferred" as const)
         : undefined;
   const graphExecution = parseGraphExecution(message);
-  const f1 = parseF1Focus(message);
+  const focus = parseFocusFields(message);
   const allowPostexRaw = message.allow_postex ?? message.allowPostex;
   const allowPostex =
     typeof allowPostexRaw === "boolean"
@@ -295,8 +295,8 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
     graphId: graphIdRaw?.trim() || undefined,
     graphMainAct,
     graphExecution,
-    focusFindingIds: f1.focusFindingIds,
-    focusNote: f1.focusNote,
+    focusFindingIds: focus.focusFindingIds,
+    focusNote: focus.focusNote,
     allowPostex,
     accounts: message.accounts !== undefined ? message.accounts : undefined,
     goalObjective,

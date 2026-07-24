@@ -1,5 +1,5 @@
 /**
- * Pure parsers for optional structured task_assign fields (map #81 F1).
+ * Pure parsers for optional structured task_assign fields (map #81 focus envelope).
  * Snake_case and camelCase accepted. Never invents values from free-text instruction.
  */
 
@@ -23,15 +23,9 @@ export function parseStringIdList(raw: unknown): string[] | undefined {
   return items.length ? items : undefined;
 }
 
-/**
- * Dig-deeper / finding focus ids (F1).
- * Prefer focus_finding_ids; accept legacy retest_finding_ids as alias.
- */
+/** Dig-deeper / finding focus ids. Wire: focus_finding_ids | focusFindingIds only. */
 export function parseFocusFindingIds(message: Record<string, unknown>): string[] | undefined {
-  return (
-    parseStringIdList(message.focus_finding_ids ?? message.focusFindingIds) ??
-    parseStringIdList(message.retest_finding_ids ?? message.retestFindingIds)
-  );
+  return parseStringIdList(message.focus_finding_ids ?? message.focusFindingIds);
 }
 
 export function parseFocusNote(message: Record<string, unknown>): string | undefined {
@@ -45,16 +39,16 @@ export function parseFocusNote(message: Record<string, unknown>): string | undef
   return trimmed ? trimmed : undefined;
 }
 
-export type F1FocusFields = {
+export type FocusFields = {
   focusFindingIds?: string[];
   focusNote?: string;
 };
 
-/** Bundle F1 focus fields from a task_assign-shaped message. */
-export function parseF1Focus(message: Record<string, unknown>): F1FocusFields {
+/** Bundle focus fields from a task_assign-shaped message. */
+export function parseFocusFields(message: Record<string, unknown>): FocusFields {
   const focusFindingIds = parseFocusFindingIds(message);
   const focusNote = parseFocusNote(message);
-  const out: F1FocusFields = {};
+  const out: FocusFields = {};
   if (focusFindingIds) out.focusFindingIds = focusFindingIds;
   if (focusNote) out.focusNote = focusNote;
   return out;

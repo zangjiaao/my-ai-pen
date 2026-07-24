@@ -43,13 +43,13 @@ export type TaskEnvelope = {
    */
   graphExecution?: "full" | "continue";
   /**
-   * Optional finding ids for dig-deeper / focused re-verify (map #81 F1).
+   * Optional finding ids for dig-deeper / focused re-verify (map #81).
    * Structured only — platform/Agent may set; never NLP-invented by Node.
-   * Wire: focus_finding_ids (legacy alias retest_finding_ids accepted on parse).
+   * Wire: focus_finding_ids | focusFindingIds only.
    */
   focusFindingIds?: string[];
   /**
-   * Optional short focus note for dig-deeper (map #81 F1).
+   * Optional short focus note for dig-deeper (map #81).
    * Structured only — not free-text intent routing.
    */
   focusNote?: string;

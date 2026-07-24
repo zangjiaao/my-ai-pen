@@ -1,4 +1,4 @@
-"""F1 focus fields + graph_execution continue regression (map #81)."""
+"""Focus envelope fields + graph_execution continue regression (map #81)."""
 from __future__ import annotations
 
 import unittest
@@ -27,13 +27,11 @@ class TestFocusFieldsAndContinue(unittest.TestCase):
         )
         self.assertEqual(camel["focus_finding_ids"], ["id1", "id2"])
         self.assertEqual(camel["focus_note"], "note")
-        legacy = focus_fields_from_message({"retest_finding_ids": ["old"]})
-        self.assertEqual(legacy["focus_finding_ids"], ["old"])
-        # Prefer focus_* over legacy when both set
-        prefer = focus_fields_from_message(
-            {"focus_finding_ids": ["new"], "retest_finding_ids": ["old"]}
+        # Legacy retest_* keys ignored (deprecation window closed)
+        self.assertEqual(
+            focus_fields_from_message({"retest_finding_ids": ["old"]}),
+            {},
         )
-        self.assertEqual(prefer["focus_finding_ids"], ["new"])
 
     def test_resolve_graph_execution_continue_regression(self):
         self.assertEqual(
