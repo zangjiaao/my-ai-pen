@@ -109,6 +109,18 @@ assert.equal((completes[0] as any).status, "completed");
 assert.equal((completes[0] as any).stop_reason, "hard_graph_completed");
 assert.ok(String((completes[0] as any).work_mode).includes("hard_graph:app_assessment_thin"));
 
+// Graph L1 plan emitted at start (all stages) — #100
+const plans = messages.filter((m) => m.type === "plan_tree_updated");
+assert.ok(plans.length >= 1, "plan_tree_updated at graph start");
+const firstPlan = (plans[0] as any).plan_tree as Array<{ level?: string; title?: string; status?: string }>;
+const phases = firstPlan.filter((n) => n.level === "phase");
+assert.ok(phases.length >= 2, "L1 has Graph stages");
+assert.ok(phases.every((p) => p.status === "pending" || p.status === "running" || p.status === "done"));
+
+// Terminal checkpoint for Status tokens/panel (#99)
+const checkpoints = messages.filter((m) => m.type === "checkpoint_update");
+assert.ok(checkpoints.length >= 1, "terminal checkpoint_update");
+
 const workModes = messages
   .filter((m) => m.type === "work_status" || m.type === "status_update")
   .map((m) => String((m as any).work_mode || ""));

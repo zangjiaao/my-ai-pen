@@ -22,6 +22,11 @@ export type PlanNodeLike = {
   /** Product expert that owns this todo (Case multi-role Tasks chip). */
   owner_expert_id?: string;
   owner_expert_name?: string;
+  /** Agent Graph worker / subagent identity (Tasks worker chip). */
+  agent_id?: string;
+  linked_agent_id?: string;
+  /** Display label for worker chip (preferred over raw agent_id). */
+  owner_agent_name?: string;
 };
 
 /**
@@ -127,8 +132,19 @@ export async function emitTodoPlanTreeUpdate(
   task: TaskEnvelope,
   todo: TodoStore,
   reason: string,
+  options?: {
+    /** When set (Hard Graph), merge stage todos under L1 Graph stages instead of replace-all. */
+    graphPlan?: import("./hard-graph-plan.js").HardGraphPlanStore;
+    stageId?: string;
+  },
 ): Promise<void> {
   const payload = buildTodoPlanTreePayload(todo);
+  if (options?.graphPlan && options.stageId) {
+    options.graphPlan.setStageTodos(options.stageId, payload.plan_tree);
+    const { emitHardGraphPlanTreeUpdate } = await import("./hard-graph-plan.js");
+    await emitHardGraphPlanTreeUpdate(platform, task, options.graphPlan, reason);
+    return;
+  }
   const plan_tree = stampPlanTreeOwner(payload.plan_tree, task);
   await platform.send({
     type: "plan_tree_updated",

@@ -163,6 +163,14 @@ export type ToolRuntime = {
      * After ≥2 failures, errors include bookable_unbooked judgment guidance.
      */
     findingConfirmFailCounts?: Record<string, number>;
+    /**
+     * Expert Graph Tasks map (L1 stages + L2 todos). Set by Hard Graph task path.
+     */
+    hardGraphPlan?: import("./runtime/hard-graph-plan.js").HardGraphPlanStore;
+    /** Current Hard Graph stage id while a stage session runs (todo → L2 merge). */
+    hardGraphStageId?: string;
+    /** Run-level usage ledger for Hard Graph (merged across stages). */
+    hardGraphUsage?: import("./runtime/llm-usage.js").LlmUsageLedger;
   };
 };
 

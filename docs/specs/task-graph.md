@@ -36,6 +36,22 @@ Per-stage pi sessions still use isolated work dirs (`taskDir/hard-graph/<graphId
 
 Handoff JSON in the stage prompt remains informational; booking authority is lifecycle cache + groundable observations, not prompt-only tables. Settlement still does not require N bookings.
 
+### Expert Graph workbench observability (parity with free path)
+
+Hard Graph stages share the **same platform message contracts** free Expert / Default use for the right panel and chat — stages are not tool-bridge-only.
+
+| Contract | Behavior |
+|----------|----------|
+| **Usage** | Stage sessions record LLM usage; mid-run `checkpoint_update` + terminal `task_complete.llm_usage` / checkpoint feed Status tokens |
+| **Thinking / text** | Progressive `thinking` + `text` streams when the Agent Runtime produces them; stage default thinking level matches free Expert non-chat (medium), not a silent downgrade |
+| **Tasks L1/L2** | L1 = fixed Graph stages (runner definition); L2 = stage-local todos nested under the stage. Stage `todo.init` **merges** under the current stage — never replaces sibling stages or wipes completed history |
+| **Activity** | Timeline accepts product plan sources (`source=plan`) and Graph stage status changes (same plan nodes Tasks shows) |
+| **panel_agents** | Collaboration tree: stage Main + subagent workers when packages run |
+| **Subagent lifecycle** | `subagent_started` / `subagent_finished` on the platform sink when packages spawn |
+| **Worker chips** | Package-owned L2 todos may carry `agent_id` / `owner_agent_name` for Tasks chips |
+
+Probe-class stages that allow `subagent` **prefer packages** when multi-class work is justified (harness steer, not answer keys / fixed N). Serial Main remains allowed. Soft product mode stays retired; Default never enters Expert Graph.
+
 ## Modes
 
 | Mode | How selected | Behavior |

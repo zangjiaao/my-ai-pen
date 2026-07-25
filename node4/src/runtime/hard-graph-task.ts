@@ -19,6 +19,9 @@ import {
 } from "./hard-graph-runner.js";
 import { createHardGraphStageExecutor } from "./hard-graph-stage-executor.js";
 import { settleHardGraphTask } from "./hard-graph-settlement.js";
+import { HardGraphPlanStore, emitHardGraphPlanTreeUpdate } from "./hard-graph-plan.js";
+import { createUsageLedgerFromEnv } from "./platform-observability.js";
+import { PanelAgentTracker } from "./panel-agents.js";
 
 export type HardGraphTaskResult = {
   /** Platform task_complete.status (completed | incomplete | blocked). */
@@ -76,12 +79,18 @@ export async function emitHardGraphStageStatus(options: {
   task: TaskEnvelope;
   event: HardGraphStageEvent;
   startedAt: string;
+  /** Optional L1/L2 Tasks map — updated and re-emitted on stage boundaries. */
+  plan?: HardGraphPlanStore;
 }): Promise<void> {
-  const { platform, task, event, startedAt } = options;
+  const { platform, task, event, startedAt, plan } = options;
   const work_mode = workModeForEvent(event);
   const hard_graph = hardGraphPayload(event);
 
   if (event.type === "stage_start") {
+    if (plan) {
+      plan.setStageStatus(event.stageId, "running");
+      await emitHardGraphPlanTreeUpdate(platform, task, plan, `stage_start:${event.stageId}`);
+    }
     const statusMsg: PlatformMessage = {
       type: "status_update",
       conversation_id: task.conversationId,
@@ -106,6 +115,23 @@ export async function emitHardGraphStageStatus(options: {
   }
 
   if (event.type === "stage_end") {
+    if (plan) {
+      const st =
+        event.outcome === "passed"
+          ? "done"
+          : event.outcome === "aborted"
+            ? "blocked"
+            : event.outcome === "blocked"
+              ? "blocked"
+              : event.outcome === "failed_attempt"
+                ? "running"
+                : "failed";
+      // failed_attempt keeps stage running (retry); terminal outcomes close L1.
+      if (event.outcome !== "failed_attempt") {
+        plan.setStageStatus(event.stageId, st === "done" ? "done" : st === "blocked" ? "blocked" : "failed");
+        await emitHardGraphPlanTreeUpdate(platform, task, plan, `stage_end:${event.stageId}:${event.outcome}`);
+      }
+    }
     const statusMsg: PlatformMessage = {
       type: "status_update",
       conversation_id: task.conversationId,
@@ -163,6 +189,16 @@ export async function runHardGraphExpertTask(options: {
 
   await mkdir(join(taskDir, "hard-graph"), { recursive: true });
 
+  // Run-level Tasks map + usage + panel (shared across stages).
+  const graphPlan = new HardGraphPlanStore(graph);
+  const runUsage = createUsageLedgerFromEnv();
+  const panelLabel =
+    (typeof task.expertName === "string" && task.expertName.trim()) || pack.id || "Expert";
+  const panel = new PanelAgentTracker(task.instruction || "Expert Graph task", panelLabel);
+  parentRuntime.lifecycle.hardGraphPlan = graphPlan;
+  parentRuntime.lifecycle.hardGraphUsage = runUsage;
+  parentRuntime.lifecycle.panelAgents = panel;
+
   const startMsg: PlatformMessage = {
     type: "status_update",
     conversation_id: task.conversationId,
@@ -185,6 +221,9 @@ export async function runHardGraphExpertTask(options: {
   };
   await platform.send(workStart);
 
+  // L1 stage map before any stage todos.
+  await emitHardGraphPlanTreeUpdate(platform, task, graphPlan, "graph_start");
+
   const availableTools = toolNamesForPack(pack);
   const executeStage =
     options.stageExecutor ??
@@ -201,7 +240,7 @@ export async function runHardGraphExpertTask(options: {
     availableTools,
     abortSignal: signal,
     onEvent: (event) =>
-      emitHardGraphStageStatus({ platform, task, event, startedAt }),
+      emitHardGraphStageStatus({ platform, task, event, startedAt, plan: graphPlan }),
   });
 
   await writeFile(
@@ -218,6 +257,13 @@ export async function runHardGraphExpertTask(options: {
     bookedFindings = 0;
   }
 
+  panel.setMainTerminal(
+    result.terminal === "completed" ? "completed" : result.terminal === "aborted" ? "aborted" : "failed",
+  );
+  const llmUsage = runUsage.snapshot({
+    agent_count: panel.list().length,
+  });
+
   const settled = await settleHardGraphTask({
     platform,
     task,
@@ -226,7 +272,32 @@ export async function runHardGraphExpertTask(options: {
     terminal: result.terminal,
     bookedFindings,
     startedAt,
+    llmUsage:
+      llmUsage.requests > 0 || llmUsage.total_tokens > 0
+        ? (llmUsage as unknown as Record<string, unknown>)
+        : undefined,
   });
+
+  // Terminal checkpoint so Status keeps final tokens/panel after settle.
+  await platform.send({
+    type: "checkpoint_update",
+    conversation_id: task.conversationId,
+    task_id: task.taskId,
+    checkpoint: {
+      runtime: "node4-pi",
+      role_pack: pack.id,
+      started_at: startedAt,
+      end_time: new Date().toISOString(),
+      status: settled.harnessStatus,
+      task_id: task.taskId,
+      llm_usage: llmUsage,
+      panel_agents: panel.list({ terminal: true }),
+      plan_tree: graphPlan.toPlanTree(),
+      agent_phase: "finished",
+    },
+  } as PlatformMessage);
+
+  parentRuntime.lifecycle.hardGraphStageId = undefined;
 
   const workEnd: PlatformMessage = {
     type: "work_status",

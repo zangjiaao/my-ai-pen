@@ -26,6 +26,8 @@ export async function settleHardGraphTask(options: {
   terminal: HardGraphTerminal;
   bookedFindings?: number;
   startedAt: string;
+  /** Aggregated run usage (Hard Graph stage ledgers merged). */
+  llmUsage?: Record<string, unknown>;
 }): Promise<HardGraphSettlementResult> {
   const harnessStatus = hardGraphToHarnessStatus(options.terminal);
   const workMode = `hard_graph:${options.graphId}:terminal:${options.terminal}`;
@@ -44,6 +46,7 @@ export async function settleHardGraphTask(options: {
     work_mode: workMode,
     started_at: options.startedAt,
     end_time: endTime,
+    ...(options.llmUsage ? { llm_usage: options.llmUsage } : {}),
   });
 
   return { harnessStatus, workMode };

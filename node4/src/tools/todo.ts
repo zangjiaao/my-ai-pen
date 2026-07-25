@@ -93,7 +93,11 @@ export function createTodoTool(runtime: ToolRuntime): AgentTool<any> {
           open_count: runtime.todo.openCount(),
         });
         // Node2/OMP-style: project into plan_tree_updated so right-panel Tasks updates live.
-        await emitTodoPlanTreeUpdate(runtime.platform, runtime.task, runtime.todo, `todo.${op}`);
+        // Hard Graph: merge under L1 stage map when present (no whole-tree wipe).
+        await emitTodoPlanTreeUpdate(runtime.platform, runtime.task, runtime.todo, `todo.${op}`, {
+          graphPlan: runtime.lifecycle.hardGraphPlan,
+          stageId: runtime.lifecycle.hardGraphStageId,
+        });
       }
       return jsonResult({
         ok: true,

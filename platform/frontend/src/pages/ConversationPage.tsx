@@ -111,6 +111,7 @@ type PlanNode = {
   linked_agent_id?: string;
   owner_expert_id?: string;
   owner_expert_name?: string;
+  owner_agent_name?: string;
 };
 type KanbanBucket = { id: string; title: string; done: number; total: number; status: string };
 type KanbanSummary = {
@@ -3099,8 +3100,12 @@ function resultTimelineEventForMessage(message: Message): TimelineEvent | null {
 }
 
 function isTimelineTaskNode(node: PlanNode): boolean {
-  if ((node.level || "work_item") !== "work_item") return false;
-  if (String(node.source || "") !== "agent") return false;
+  const level = String(node.level || "work_item");
+  // Expert Graph L1 stages (phase) and L2 work items both drive Activity milestones.
+  if (level !== "work_item" && level !== "phase") return false;
+  const source = String(node.source || "");
+  // Node4 todo/Graph projection uses source=plan; legacy Strix used agent.
+  if (source && source !== "agent" && source !== "plan" && source !== "strix_todo") return false;
   const kind = String(node.kind || "task");
   return !["tool", "browser", "http", "poc", "scan", "traffic", "finding"].includes(kind);
 }

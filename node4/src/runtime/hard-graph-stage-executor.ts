@@ -22,6 +22,15 @@ import {
   type StageContinuitySeed,
 } from "./hard-graph-continuity.js";
 import {
+  CheckpointThrottle,
+  PlatformTextStream,
+  createUsageLedgerFromEnv,
+  emitCheckpointUpdate,
+  handleNode4SessionEvent,
+  type ObservabilityContext,
+} from "./platform-observability.js";
+import { PanelAgentTracker } from "./panel-agents.js";
+import {
   normalizeSubagentResult,
   type SubagentStructuredResult,
 } from "./subagent-result.js";
@@ -70,24 +79,30 @@ export async function loadStageResultJson(
   }
 }
 
-function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope): string {
+/** Exported for harness contract tests (#101). */
+export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope): string {
   const toolList = input.tools.length ? input.tools.join(", ") : "(none)";
+  const allowSubagent = input.tools.includes("subagent");
   return [
     "You are a **Hard Graph stage agent** (Graph × Pi).",
     `Graph: ${input.graphId}  Stage: ${input.stage.id} (index ${input.stageIndex})`,
     input.stage.success ? `Stage success criteria: ${input.stage.success}` : "",
     "You do NOT schedule other stages. Complete only this stage.",
     `Allowed tools for this stage: ${toolList}`,
+    // Short progress narration (not fake findings) — workbench shows thinking/text streams.
+    "Briefly narrate progress in assistant text when useful (what you are checking next; what you observed). Do not invent surfaces, proof, or booked findings in prose.",
     "When done, use the **write** tool to create **result.json** in the stage work dir (path: result.json) with fields:",
     "  ok, summary, surfaces[], candidates[], facts[], deadends[]",
     "Facts alone are not the stage handoff — Feedback reads result.json only.",
     "Bookable candidates MUST include: title, location (URL/path), proof_excerpt (verbatim tool stdout/body ≥24 chars), optional poc_hint.",
     "Without proof_excerpt the next stage cannot finding(confirm) — narrative notes alone are not bookable.",
-    input.tools.includes("subagent")
+    allowSubagent
       ? [
-          "Agent Graph: when surfaces justify multi-class work, fan-out with subagent packages[] (skill/path-scoped workers).",
+          "Agent Graph (preferred when multi-class or multi-surface work is justified): fan-out with **subagent** packages[] (skill/path-scoped workers).",
+          "Prefer packages over one long serial monologue across all vulnerability classes or surfaces.",
           "Workers return candidates[] with verbatim proof_excerpt; you Join into result.json candidates (do not rephrase proof).",
-          "No nested subagent inside workers. Stay in RoE/scope. Prefer packages over one serial monologue across all classes.",
+          "No nested subagent inside workers. Stay in RoE/scope.",
+          "Serial Main-only probing is allowed if packages are not justified (single surface / single class) — do not invent package counts.",
         ].join(" ")
       : "",
     "Fail closed: do not invent surfaces or proof.",
@@ -100,7 +115,9 @@ function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope): strin
     .join("\n");
 }
 
-function stageUserPrompt(input: StageExecutorInput, task: TaskEnvelope): string {
+/** Exported for harness contract tests (#101). */
+export function stageUserPrompt(input: StageExecutorInput, task: TaskEnvelope): string {
+  const allowSubagent = input.tools.includes("subagent");
   return [
     `### Hard Graph stage: ${input.stage.id}`,
     input.stage.success || "",
@@ -120,7 +137,9 @@ function stageUserPrompt(input: StageExecutorInput, task: TaskEnvelope): string 
     "### Task instruction",
     task.instruction || "",
     "",
-    "Complete this stage only. Use write to emit result.json, then stop.",
+    allowSubagent
+      ? "Complete this stage only. Prefer subagent packages when multi-class work is justified; narrate briefly; write result.json; then stop."
+      : "Complete this stage only. Narrate briefly when useful; use write to emit result.json; then stop.",
   ].join("\n");
 }
 
@@ -170,8 +189,16 @@ export function buildHardGraphStageChildRuntime(options: {
       evidence: childRuntime.evidence,
       platform: parent.platform,
       goals: childRuntime.goals!,
+      // Share run-level panel tracker so Status collaboration tree sees workers.
+      panelAgents: parent.lifecycle.panelAgents || childRuntime.lifecycle.panelAgents,
     });
   }
+  // Propagate Hard Graph plan / stage id so todo tool merges L2 under L1.
+  childRuntime.lifecycle.hardGraphPlan = parent.lifecycle.hardGraphPlan;
+  childRuntime.lifecycle.hardGraphStageId = parent.lifecycle.hardGraphStageId;
+  childRuntime.lifecycle.hardGraphUsage = parent.lifecycle.hardGraphUsage;
+  childRuntime.lifecycle.panelAgents =
+    parent.lifecycle.panelAgents || childRuntime.lifecycle.panelAgents;
   return { childRuntime, packForStage };
 }
 
@@ -342,6 +369,9 @@ export function createHardGraphStageExecutor(options: {
         });
       }
 
+      // Mark current stage for todo → L2 merge and panel labels.
+      parentRuntime.lifecycle.hardGraphStageId = input.stage.id;
+
       const { childRuntime, packForStage } = buildChildRuntime({
         parent: parentRuntime,
         workDir,
@@ -362,13 +392,57 @@ export function createHardGraphStageExecutor(options: {
           deadends: [deadend],
         });
 
+      // Free-path observability parity: usage, thinking/text stream, checkpoints, panel.
+      const panel =
+        parentRuntime.lifecycle.panelAgents ||
+        new PanelAgentTracker(
+          `stage ${input.stage.id}`,
+          (typeof task.expertName === "string" && task.expertName.trim()) || pack.id || "Expert",
+        );
+      parentRuntime.lifecycle.panelAgents = panel;
+      childRuntime.lifecycle.panelAgents = panel;
+      panel.setMainActivity({
+        phase: "starting",
+        detail: `Graph stage ${input.stage.id}`,
+      });
+
+      const stageUsage = createUsageLedgerFromEnv();
+      const textStream = new PlatformTextStream(parentRuntime.platform, task);
+      const checkpointThrottle = new CheckpointThrottle();
+      const obsCounters = {
+        toolCallCount: 0,
+        activeTool: undefined as string | undefined,
+        phase: `hard_graph:${input.stage.id}`,
+      };
+      const obsCtx: ObservabilityContext = {
+        platform: parentRuntime.platform,
+        task,
+        runtime: childRuntime,
+        goals: childRuntime.goals || new GoalStore(),
+        usage: stageUsage,
+        panel,
+        startedAt: new Date().toISOString(),
+        rolePackId: pack.id,
+        counters: obsCounters,
+      };
+
       const { session } = await createBoundNode4Session({
         config,
         runtime: childRuntime,
         pack: packForStage,
         systemPrompt,
-        thinkingLevel: "low",
+        // Match free Expert non-chat default (not silent "low").
+        thinkingLevel: "medium",
       });
+
+      session.subscribe((event) => {
+        void handleNode4SessionEvent(obsCtx, textStream, checkpointThrottle, event).catch(() => {
+          /* never break stage loop */
+        });
+      });
+
+      // Initial checkpoint so Status has a live panel row for this stage.
+      await emitCheckpointUpdate(obsCtx).catch(() => {});
 
       try {
         if (abortSignal?.aborted) {
@@ -399,6 +473,40 @@ export function createHardGraphStageExecutor(options: {
         }
         throw err;
       } finally {
+        try {
+          await textStream.dispose();
+        } catch {
+          /* ignore */
+        }
+        // Merge stage usage into run-level ledger.
+        parentRuntime.lifecycle.hardGraphUsage?.mergeSnapshot(
+          stageUsage.snapshot({ tool_calls: obsCounters.toolCallCount }),
+        );
+        // Tag package rows on Tasks when workers finished under this stage.
+        const plan = parentRuntime.lifecycle.hardGraphPlan;
+        if (plan) {
+          for (const agent of panel.list()) {
+            if (agent.role !== "subagent" && agent.parent_id !== "node4-main") continue;
+            if (agent.id === "node4-main") continue;
+            if (!agent.parent_id) continue;
+            plan.upsertStageWorkItem(input.stage.id, {
+              node_id: `pkg-${agent.id}`,
+              title: agent.task || agent.name || agent.id,
+              status:
+                agent.status === "completed"
+                  ? "done"
+                  : agent.status === "failed"
+                    ? "failed"
+                    : agent.status === "running"
+                      ? "running"
+                      : "pending",
+              agent_id: agent.id,
+              owner_agent_name: agent.name,
+              kind: "task",
+              source: "plan",
+            });
+          }
+        }
         try {
           await Promise.resolve(session.dispose());
         } catch {

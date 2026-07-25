@@ -87,13 +87,16 @@ export function resolveNode4Model(config: Node4Config): Model<any> {
   const contextWindow = Math.max(1024, Number(process.env.LLM_CONTEXT_WINDOW || 128_000) || 128_000);
   const maxTokens = Math.max(256, Number(process.env.LLM_MAX_TOKENS || 8192) || 8192);
 
+  // Shared free + Graph path: do not force reasoning off for unknown models.
+  // Opt out with PI_MODEL_REASONING=false when the provider cannot emit thinking blocks.
+  const reasoningEnabled = String(process.env.PI_MODEL_REASONING || "true").toLowerCase() !== "false";
   return {
     id,
     name: id,
     api,
     provider,
     baseUrl: overrideBase || defaultBaseUrl(provider),
-    reasoning: false,
+    reasoning: reasoningEnabled,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow,

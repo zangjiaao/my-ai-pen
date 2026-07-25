@@ -30,6 +30,8 @@ type PlanNode = {
   /** Case multi-role: which product expert owns this todo. */
   owner_expert_id?: string;
   owner_expert_name?: string;
+  /** Agent Graph worker display label (Tasks chip). */
+  owner_agent_name?: string;
 };
 
 type KanbanBucket = { id: string; title: string; done: number; total: number; status: PlanStatus };
@@ -398,7 +400,7 @@ export default function RightPanel({
                 <StrixAgentList agents={displayAgents} />
               </section>
             )}
-            {/* Intentional TODO / work packages — not coverage mark noise */}
+            {/* Intentional TODO / work packages — Expert Graph L1 stages + L2 todos when present */}
             <section>
               <div className="mb-2 flex items-center justify-between gap-2">
                 <p className="text-xs text-ink-muted">Tasks</p>
@@ -408,7 +410,7 @@ export default function RightPanel({
                   </p>
                 )}
               </div>
-              <StrixTodoList items={taskItems} running={running} />
+              <GraphAwareTodoList planTree={visiblePlanTree} workItems={taskItems} running={running} />
             </section>
             {intake && <IntakeSummary intake={intake} />}
           </div>
@@ -585,6 +587,71 @@ function SummaryValue({ children }: { children: ReactNode }) {
   return <p className="mt-0.5 min-w-0 break-words font-mono text-sm font-medium text-ink [overflow-wrap:anywhere]">{children}</p>;
 }
 
+/**
+ * Expert Graph: L1 phase nodes as section headers, L2 work items nested.
+ * Free / flat plans: fall back to flat StrixTodoList.
+ */
+function GraphAwareTodoList({
+  planTree,
+  workItems,
+  running,
+}: {
+  planTree: PlanNode[];
+  workItems: PlanNode[];
+  running?: boolean;
+}) {
+  const phases = planTree.filter((n) => String(n.level || "") === "phase");
+  if (!phases.length) {
+    return <StrixTodoList items={workItems} running={running} />;
+  }
+  const byParent = new Map<string, PlanNode[]>();
+  for (const item of workItems) {
+    const pid = String(item.parent_id || "");
+    if (!byParent.has(pid)) byParent.set(pid, []);
+    byParent.get(pid)!.push(item);
+  }
+  const orphan = workItems.filter((item) => {
+    const pid = String(item.parent_id || "");
+    return !pid || !phases.some((p) => String(p.node_id || p.id) === pid);
+  });
+  return (
+    <div className="space-y-3" data-testid="graph-todo-list">
+      {phases.map((phase, index) => {
+        const id = String(phase.node_id || phase.id || index);
+        const children = byParent.get(id) || [];
+        const status = normalizeTodoStatus(phase.status);
+        const Icon = todoStatusIcon(status);
+        return (
+          <div key={id} className="space-y-1">
+            <div className="flex min-w-0 items-center gap-2 px-1">
+              <Icon className={`h-3.5 w-3.5 shrink-0 ${todoStatusIconClass(status)}`} />
+              <p className={`min-w-0 break-words text-xs font-semibold uppercase tracking-wide text-ink-secondary ${todoTitleClass(status)}`}>
+                {String(phase.title || id)}
+              </p>
+              <span className="font-mono text-[10px] text-ink-muted">
+                {children.filter((c) => isTerminalPlanStatus(c.status)).length}/{children.length || 0}
+              </span>
+            </div>
+            {children.length > 0 ? (
+              <div className="ml-1 border-l border-hairline-soft pl-1">
+                <StrixTodoList items={children} running={running} />
+              </div>
+            ) : (
+              <p className="ml-5 text-[11px] text-ink-muted">No stage todos yet</p>
+            )}
+          </div>
+        );
+      })}
+      {orphan.length > 0 && (
+        <div className="space-y-1">
+          <p className="px-1 text-[10px] font-semibold uppercase text-ink-muted">Other</p>
+          <StrixTodoList items={orphan} running={running} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StrixTodoList({ items, running = false }: { items: PlanNode[]; running?: boolean }) {
   if (!items.length) {
     return (
@@ -609,6 +676,11 @@ function StrixTodoItem({ item }: { item: PlanNode }) {
   const isWorker = String(item.kind || "") === "worker" || String(item.source || "") === "worker";
   const workerBadge = isWorker ? workerOutcomeBadge(item) : null;
   const ownerLabel = String(item.owner_expert_name || "").trim();
+  const agentLabel =
+    String(item.owner_agent_name || "").trim() ||
+    (String(item.agent_id || item.linked_agent_id || "").trim()
+      ? String(item.agent_id || item.linked_agent_id).slice(0, 16)
+      : "");
   const isFollowUp =
     String(item.source || "") === "worker" &&
     (/^follow-up\b/i.test(String(item.title || "")) || String(item.node_id || item.id || "").startsWith("plan-followup-"));
@@ -628,6 +700,14 @@ function StrixTodoItem({ item }: { item: PlanNode }) {
               title={`Owner: ${ownerLabel}`}
             >
               {ownerLabel}
+            </span>
+          )}
+          {agentLabel && (
+            <span
+              className="shrink-0 rounded-sm bg-status-running/10 px-1.5 py-0.5 text-[10px] font-medium text-status-running"
+              title={`Agent: ${agentLabel}`}
+            >
+              {agentLabel}
             </span>
           )}
           {workerBadge && (
