@@ -158,14 +158,37 @@ def normalize_pentest_plan_tree(nodes: list[dict]) -> list[dict]:
 
 
 def is_legacy_runtime_phase_node(node: dict) -> bool:
+    """True for old Node2 runtime scaffolding phases — not Expert Graph L1 stages.
+
+    Expert Graph (Hard Graph plan) emits L1 nodes as:
+      node_id=graph-stage-<id>, level/kind=phase, source=plan
+    Those must survive normalize_pentest_plan_tree so snapshot refresh does not
+    flatten Tasks back to a bare work_item list (live plan_tree_updated race).
+    """
     node_id = str(node.get("node_id") or node.get("id") or "")
     level = str(node.get("level") or "")
     kind = str(node.get("kind") or "")
     parent_id = str(node.get("parent_id") or "")
-    if level == "phase" or kind == "phase" or node_id.startswith("plan-phase-"):
+    source = str(node.get("source") or "")
+
+    # Hard Graph L1 stage map — keep.
+    if node_id.startswith("graph-stage-"):
+        return False
+    # Product plan phases (source=plan) that are not legacy plan-phase-* scaffolding.
+    if (level == "phase" or kind == "phase") and source == "plan" and not node_id.startswith("plan-phase-"):
+        return False
+
+    # Old forced recon/analysis scaffolding (plan-phase-* / source=runtime).
+    if node_id.startswith("plan-phase-") or (
+        source == "runtime" and (level == "phase" or kind == "phase")
+    ):
         return True
     if level == "objective" or kind == "objective":
-        return node_id.startswith("plan-objective-") or parent_id.startswith("plan-phase-") or str(node.get("source") or "") == "runtime"
+        return (
+            node_id.startswith("plan-objective-")
+            or parent_id.startswith("plan-phase-")
+            or source == "runtime"
+        )
     return False
 
 

@@ -596,7 +596,17 @@ export default function ConversationPage() {
     setAgentState(hasValues(snapshot.agent_state) ? snapshot.agent_state! : fallback?.agent_state || {});
     setProgress(snapshot.progress || fallback?.progress);
     setKanban(snapshot.kanban || fallback?.kanban);
-    setPlanTree(snapshot.plan_tree?.length ? snapshot.plan_tree : fallback?.plan_tree || []);
+    // Do not let a snapshot without Graph L1 stages wipe a live Expert Graph plan map
+    // (platform used to strip phase nodes as "legacy" — keep richer live tree).
+    setPlanTree((prev) => {
+      const next = snapshot.plan_tree?.length
+        ? snapshot.plan_tree
+        : fallback?.plan_tree?.length
+          ? fallback.plan_tree
+          : [];
+      if (!next.length) return prev.length ? prev : [];
+      return preferRicherPlanTree(prev, next);
+    });
     setStrixAgents(snapshot.strix_agents?.length ? snapshot.strix_agents : fallback?.strix_agents || []);
     setStrixNotes(snapshot.strix_notes?.length ? snapshot.strix_notes : fallback?.strix_notes || []);
     // Never replace a populated live run with an empty snapshot object ({} is truthy).
@@ -3584,6 +3594,35 @@ function patchMainAgentActivity(
     if (!a.parent_id && a.highlighted) return { ...a, highlighted: false };
     return a;
   });
+}
+
+/** Expert Graph L1 stages from Hard Graph plan projection. */
+function countGraphStagePhases(nodes: PlanNode[]): number {
+  return nodes.filter((n) => {
+    const id = String(n.node_id || n.id || "");
+    const level = String(n.level || "");
+    const kind = String(n.kind || "");
+    return id.startsWith("graph-stage-") || ((level === "phase" || kind === "phase") && String(n.source || "") === "plan");
+  }).length;
+}
+
+/**
+ * Prefer the tree that still has Graph L1 structure when a snapshot refresh
+ * would otherwise flatten Tasks (work_items only).
+ */
+function preferRicherPlanTree(prev: PlanNode[], next: PlanNode[]): PlanNode[] {
+  if (!prev.length) return next;
+  if (!next.length) return prev;
+  const prevStages = countGraphStagePhases(prev);
+  const nextStages = countGraphStagePhases(next);
+  if (prevStages > 0 && nextStages === 0) return prev;
+  // Same Graph map: prefer larger node count (includes L2 todos) when stages match.
+  if (prevStages > 0 && nextStages > 0 && next.length < prev.length && nextStages === prevStages) {
+    // Allow growth/shrink of L2 under same L1 — still take next if it has stages
+    // (live updates should win when structured).
+    return next;
+  }
+  return next;
 }
 
 /** Merge plan trees by owner so multi-role Case Tasks keep both sides. */
