@@ -19,7 +19,12 @@ export type SubagentResult = {
   goalId?: string;
   artifactPath?: string;
   /** Hard Graph L2 ownership bind (when plan store present). */
-  planBind?: { path: string; node_id?: string };
+  planBind?: {
+    path: string;
+    node_id?: string;
+    requested_node_id?: string;
+    hint?: string;
+  };
 };
 
 export type SubagentContext = {
@@ -98,7 +103,12 @@ export class SubagentHost {
     label?: string;
     planNodeId?: string;
     status: "running" | "done" | "failed";
-  }): Promise<{ path: string; node_id?: string }> {
+  }): Promise<{
+    path: string;
+    node_id?: string;
+    requested_node_id?: string;
+    hint?: string;
+  }> {
     const plan = this.opts.hardGraphPlan?.();
     const stageId = this.opts.stageId?.();
     if (!plan || !stageId) return { path: "none" };
@@ -106,6 +116,7 @@ export class SubagentHost {
     const title = goal.slice(0, 240) || input.subagentId;
     const workerN = this.opts.panelAgents?.workerIndexFor(input.subagentId) ?? 0;
     const owner = workerN > 0 ? formatWorkerName(workerN) : "Worker";
+    const requested = String(input.planNodeId || "").trim() || undefined;
     const chip = {
       agent_id: input.subagentId,
       owner_agent_name: owner,
@@ -136,9 +147,22 @@ export class SubagentHost {
       `subagent.${input.status}:${input.subagentId}`,
     ).catch(() => {});
 
-    return bound
-      ? { path: bound.path, node_id: bound.node_id }
-      : { path: "pkg", node_id: `pkg-${input.subagentId}` };
+    if (bound) {
+      return {
+        path: bound.path,
+        node_id: bound.node_id,
+        requested_node_id: bound.requested_node_id,
+        hint: bound.hint,
+      };
+    }
+    return {
+      path: "pkg",
+      node_id: `pkg-${input.subagentId}`,
+      requested_node_id: requested,
+      hint: requested
+        ? `plan_node_id "${requested}" not found in stage L2; fell back to pkg. Copy work_items[].node_id from the last todo result.`
+        : "No matching Main todo; host pkg-* row created. Pass plan_node_id when multiple todos are open.",
+    };
   }
 
   /**

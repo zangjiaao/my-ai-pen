@@ -77,12 +77,25 @@ export function scoreTodoGoalMatch(title: string, goal: string): number {
 export type WorkerChipInput = {
   agent_id: string;
   owner_agent_name: string;
-  /** When set, updates the todo status (normalized). When omitted, keeps prior status. */
+  /**
+   * When set, Worker chip also drives L2 status (running/done/failed) so Tasks
+   * shows live ownership progress. Omit to keep prior status (ownership-only).
+   */
   status?: string;
 };
 
 /** How a Worker chip was attached to an L2 todo (telemetry / tool result). */
 export type WorkerBindPath = "explicit" | "reattach" | "single_free" | "fuzzy" | "pkg";
+
+/** Result of resolveWorkerBind (includes explicit-miss fallthrough telemetry). */
+export type WorkerBindResult = {
+  node_id: string;
+  path: WorkerBindPath;
+  /** plan_node_id that was requested but not found in stage L2 (if any). */
+  requested_node_id?: string;
+  /** Human hint when binding was non-explicit or explicit missed then fell back. */
+  hint?: string;
+};
 
 /**
  * Mutable L1/L2 plan for one Hard Graph run.
@@ -248,8 +261,8 @@ export class HardGraphPlanStore {
   }
 
   /**
-   * Deterministic: exactly one free Main-authored L2 row → attach there.
-   * Safer than fuzzy scoring when Main forgot plan_node_id but only has one open todo.
+   * Deterministic: exactly one unbound Main-authored L2 row → attach there.
+   * Free = no agent_id (same-agent updates must use reattachWorkerByAgent).
    */
   bindWorkerToSingleFreeTodo(
     stageId: string,
@@ -262,8 +275,8 @@ export class HardGraphPlanStore {
       const n = list[i]!;
       const id = String(n.node_id || n.id || "");
       if (id.startsWith("pkg-")) continue;
-      const aid = String(n.agent_id || "").trim();
-      if (aid && aid !== input.agent_id) continue;
+      // Truly unbound only — never treat same-agent occupied rows as free.
+      if (String(n.agent_id || "").trim()) continue;
       freeIdx.push(i);
     }
     if (freeIdx.length !== 1) return null;
@@ -307,30 +320,49 @@ export class HardGraphPlanStore {
   }
 
   /**
-   * Resolve Worker chip bind path in priority order.
-   * Returns how ownership was established (for tool result telemetry).
+   * Resolve Worker chip bind path in priority order:
+   * explicit → reattach → single_free → fuzzy.
+   * If plan_node_id was provided but not found, fall through and attach
+   * requested_node_id + hint on the eventual result.
    */
   resolveWorkerBind(
     stageId: string,
     input: WorkerChipInput & { goal?: string; plan_node_id?: string },
-  ): { node_id: string; path: WorkerBindPath } | null {
+  ): WorkerBindResult | null {
     const planNodeId = String(input.plan_node_id || "").trim();
+    let explicitMissed = false;
     if (planNodeId) {
       const id = this.attachWorker(stageId, planNodeId, input);
       if (id) return { node_id: id, path: "explicit" };
+      explicitMissed = true;
     }
+    const decorate = (node_id: string, path: WorkerBindPath): WorkerBindResult => {
+      if (!explicitMissed) return { node_id, path };
+      return {
+        node_id,
+        path,
+        requested_node_id: planNodeId,
+        hint:
+          `plan_node_id "${planNodeId}" not found in stage L2; fell back to ${path}. ` +
+          "Copy work_items[].node_id from the last todo result.",
+      };
+    };
     const re = this.reattachWorkerByAgent(stageId, input);
-    if (re) return { node_id: re, path: "reattach" };
+    if (re) return decorate(re, "reattach");
     const single = this.bindWorkerToSingleFreeTodo(stageId, input);
-    if (single) return { node_id: single, path: "single_free" };
+    if (single) return decorate(single, "single_free");
     const goal = String(input.goal || "").trim();
     if (goal) {
       const fuzzy = this.bindWorkerToBestTodo(stageId, { ...input, goal });
-      if (fuzzy) return { node_id: fuzzy, path: "fuzzy" };
+      if (fuzzy) return decorate(fuzzy, "fuzzy");
     }
     return null;
   }
 
+  /**
+   * Apply Worker ownership chip. When input.status is set, also drive L2 status
+   * (product: bound Worker progress is visible on Tasks while owned).
+   */
   private applyChip(list: PlanNodeLike[], idx: number, input: WorkerChipInput): void {
     const cur = list[idx]!;
     const next: PlanNodeLike = {

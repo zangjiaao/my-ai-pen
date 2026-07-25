@@ -1,22 +1,11 @@
 /**
  * Case Status panel roster + plan_tree merge helpers (ConversationPage).
  */
-import type { StrixAgentStatus } from "../components/AgentCollaborationTree";
+import type { PlanNode, StrixAgentStatus } from "./panelTypes";
 
-export type PlanNodeLike = {
-  node_id?: string;
-  id?: string;
-  title?: string;
-  status?: string;
-  parent_id?: string | null;
-  kind?: string;
-  level?: string;
-  source?: string;
-  owner_expert_id?: string;
-  owner_expert_name?: string;
-  owner_agent_name?: string;
-  [key: string]: unknown;
-};
+export type { PlanNode, StrixAgentStatus } from "./panelTypes";
+/** @deprecated use PlanNode */
+export type PlanNodeLike = PlanNode;
 
 function readString(value: unknown): string {
   return value == null ? "" : String(value);
@@ -242,7 +231,7 @@ export function patchMainAgentActivity(
 }
 
 /** Expert Graph L1 stages from Hard Graph plan projection. */
-export function countGraphStagePhases(nodes: PlanNodeLike[]): number {
+export function countGraphStagePhases(nodes: PlanNode[]): number {
   return nodes.filter((n) => {
     const id = String(n.node_id || n.id || "");
     const level = String(n.level || "");
@@ -255,7 +244,7 @@ export function countGraphStagePhases(nodes: PlanNodeLike[]): number {
  * Prefer the tree that still has Graph L1 structure when a snapshot refresh
  * would otherwise flatten Tasks (work_items only).
  */
-export function preferRicherPlanTree(prev: PlanNodeLike[], next: PlanNodeLike[]): PlanNodeLike[] {
+export function preferRicherPlanTree(prev: PlanNode[], next: PlanNode[]): PlanNode[] {
   if (!prev.length) return next;
   if (!next.length) return prev;
   const prevStages = countGraphStagePhases(prev);
@@ -276,13 +265,13 @@ export function preferRicherPlanTree(prev: PlanNodeLike[], next: PlanNodeLike[])
  * Drop unowned nodes when the same node_id already has an owner (checkpoint vs participant).
  * When an owner re-publishes, replace that owner's previous nodes only.
  */
-export function mergePlanTreeByOwner(prev: PlanNodeLike[], incoming: PlanNodeLike[]): PlanNodeLike[] {
+export function mergePlanTreeByOwner(prev: PlanNode[], incoming: PlanNode[]): PlanNode[] {
   if (!incoming.length) return prev;
   if (!prev.length) return dedupePlanTreePreferOwner(incoming);
 
-  const ownerKey = (node: PlanNodeLike) =>
+  const ownerKey = (node: PlanNode) =>
     String(node.owner_expert_id || node.owner_expert_name || "").trim();
-  const nodeId = (node: PlanNodeLike) =>
+  const nodeId = (node: PlanNode) =>
     String(node.node_id || node.id || node.title || "").trim();
   const incomingOwners = new Set(incoming.map(ownerKey).filter(Boolean));
 
@@ -304,14 +293,14 @@ export function mergePlanTreeByOwner(prev: PlanNodeLike[], incoming: PlanNodeLik
 }
 
 /** Prefer owned rows when the same node_id appears with and without owner. */
-export function dedupePlanTreePreferOwner(nodes: PlanNodeLike[]): PlanNodeLike[] {
+export function dedupePlanTreePreferOwner(nodes: PlanNode[]): PlanNode[] {
   const ownedNids = new Set<string>();
   for (const n of nodes) {
     const owner = String(n.owner_expert_id || n.owner_expert_name || "").trim();
     const nid = String(n.node_id || n.id || n.title || "").trim();
     if (owner && nid) ownedNids.add(nid);
   }
-  const out: PlanNodeLike[] = [];
+  const out: PlanNode[] = [];
   const seenOwnerKey = new Set<string>();
   const seenUnownedNid = new Set<string>();
   for (const n of nodes) {

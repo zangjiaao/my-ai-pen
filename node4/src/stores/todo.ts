@@ -117,9 +117,11 @@ export function formatTodoSummary(phases: TodoPhase[], errors: string[] = [], re
       lines.push(`    - ${checkbox} ${task.content}${tag}  [node_id=${nid}]`);
     }
   }
-  lines.push(
-    "Hint: pass work_items[].node_id as subagent plan_node_id when multiple open todos so the Worker chip binds correctly.",
-  );
+  if (remainingTasks.length > 1) {
+    lines.push(
+      "Hint: pass work_items[].node_id as subagent plan_node_id when multiple open todos so the Worker chip binds correctly.",
+    );
+  }
   return lines.join("\n");
 }
 

@@ -17,6 +17,7 @@ import {
   legacyWorkerDisplayName,
   scrubWorkerPurpose,
 } from "../lib/workerPresentation";
+import type { PlanNode, StrixAgentStatus } from "../lib/panelTypes";
 import {
   isStrixAgentStatus,
   upsertSubagentChild,
@@ -103,30 +104,6 @@ type MentionTarget = {
 };
 
 type Progress = { current: number; total: number; percent: number };
-type PlanNode = {
-  node_id?: string;
-  id?: string;
-  title?: string;
-  status?: string;
-  parent_id?: string | null;
-  kind?: string;
-  level?: string;
-  method?: string | null;
-  endpoint?: string | null;
-  parameter?: string | null;
-  parameters?: string[];
-  vuln_type?: string | null;
-  result?: string | null;
-  notes?: string | null;
-  evidence_ids?: string[];
-  priority?: number;
-  source?: string;
-  agent_id?: string;
-  linked_agent_id?: string;
-  owner_expert_id?: string;
-  owner_expert_name?: string;
-  owner_agent_name?: string;
-};
 type KanbanBucket = { id: string; title: string; done: number; total: number; status: string };
 type KanbanSummary = {
   workflow_kind?: string;
@@ -142,23 +119,6 @@ type TimelineEvent = {
   title: string;
   detail?: string;
   status?: string;
-};
-type StrixAgentStatus = {
-  id: string;
-  name: string;
-  status: string;
-  parent_id?: string | null;
-  task?: string;
-  skills?: string[];
-  pending_count?: number;
-  role?: string;
-  current_tool?: string;
-  current_action?: string;
-  current_detail?: string;
-  last_tool?: string;
-  expert_id?: string;
-  pack_id?: string;
-  highlighted?: boolean;
 };
 
 type CaseRunSummary = {

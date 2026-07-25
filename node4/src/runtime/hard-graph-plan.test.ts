@@ -190,6 +190,39 @@ const weakBind = plan.bindWorkerToBestTodo("class_probe", {
 });
 assert.equal(weakBind, null, "weak goal must not bind");
 
+// single_free: same-agent occupied row is NOT free (only !agent_id).
+// class_probe has one unbound (todo-auth) + two occupied → single_free binds auth.
+const singleUnbound = plan.bindWorkerToSingleFreeTodo("class_probe", {
+  agent_id: "sub_w3",
+  owner_agent_name: "Worker 3",
+  status: "running",
+});
+assert.equal(singleUnbound, "todo-auth", "only unbound row is free");
+// Same agent already on todo-xss: reattach updates status, not single_free inventing.
+const reStatus = plan.resolveWorkerBind("class_probe", {
+  agent_id: "sub_w3",
+  owner_agent_name: "Worker 3",
+  status: "done",
+});
+assert.equal(reStatus?.path, "reattach");
+assert.equal(reStatus?.node_id, "todo-xss");
+
+// Explicit miss → fall through to single_free/fuzzy with telemetry.
+plan.setStageTodos("init", [
+  { node_id: "todo-only", title: "Record RoE", status: "pending", level: "work_item", kind: "task", source: "plan" },
+]);
+const miss = plan.resolveWorkerBind("init", {
+  agent_id: "sub_miss",
+  owner_agent_name: "Worker 8",
+  plan_node_id: "todo-does-not-exist",
+  goal: "Record RoE carefully",
+  status: "running",
+});
+assert.equal(miss?.path, "single_free");
+assert.equal(miss?.node_id, "todo-only");
+assert.equal(miss?.requested_node_id, "todo-does-not-exist");
+assert.ok(miss?.hint && /not found/i.test(miss.hint), "explicit miss hint present");
+
 plan.removeStageWorkItem("class_probe", "pkg-sqli");
 assert.ok(!plan.toPlanTree().some((n) => n.node_id === "pkg-sqli"));
 

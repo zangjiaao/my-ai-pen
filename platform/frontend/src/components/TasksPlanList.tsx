@@ -1,36 +1,9 @@
 import { useState, type ReactNode } from "react";
 import { CheckCircle2, Circle, CircleDashed, XCircle } from "lucide-react";
 import { displayTodoTitle, humanAgentChipName } from "../lib/workerPresentation";
+import type { PlanNode, PlanStatus } from "../lib/panelTypes";
 
-type PlanStatus = "todo" | "pending" | "running" | "done" | "skipped" | "blocked" | "failed" | string;
-
-/** Plan / work-item node shown in the Tasks todo list (Expert Graph or flat Strix plan). */
-export type PlanNode = {
-  node_id?: string;
-  id?: string;
-  title?: string;
-  status?: PlanStatus;
-  kind?: string;
-  level?: string;
-  method?: string | null;
-  endpoint?: string | null;
-  parameter?: string | null;
-  parameters?: string[];
-  vuln_type?: string | null;
-  result?: string | null;
-  parent_id?: string | null;
-  notes?: string | null;
-  evidence_ids?: string[];
-  priority?: number;
-  source?: string;
-  agent_id?: string;
-  linked_agent_id?: string;
-  /** Case multi-role: which product expert owns this todo. */
-  owner_expert_id?: string;
-  owner_expert_name?: string;
-  /** Agent Graph worker display label (Tasks chip). */
-  owner_agent_name?: string;
-};
+export type { PlanNode, PlanStatus } from "../lib/panelTypes";
 
 export type GraphAwareTodoListProps = {
   planTree: PlanNode[];

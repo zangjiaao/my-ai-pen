@@ -27,8 +27,14 @@ for (const w of work) {
 
 const summary = formatTodoSummary(store.snapshot());
 assert.match(summary, /node_id=todo-task-/);
-assert.match(summary, /plan_node_id/);
+assert.match(summary, /plan_node_id/, "hint when multiple open");
 assert.ok(summary.includes(work[0]!.node_id));
 assert.ok(summary.includes(work[1]!.node_id));
+
+// One open item → no multi-todo hint.
+store.apply({ op: "done", task: "SQL Injection (sqli)" });
+const oneOpen = formatTodoSummary(store.snapshot());
+assert.match(oneOpen, /node_id=todo-task-/);
+assert.doesNotMatch(oneOpen, /Hint: pass work_items/);
 
 console.log("todo-node-id.test.ts: ok");

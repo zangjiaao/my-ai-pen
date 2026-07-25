@@ -119,18 +119,21 @@ export function createTodoTool(runtime: ToolRuntime): AgentTool<any> {
           status: n.status,
           parent_id: n.parent_id || null,
         }));
+      const open_count = runtime.todo.openCount();
       return jsonResult({
         ok: true,
         op,
         summary: formatTodoSummary(result.phases, [], result.readOnly),
         work_items,
-        open_count: runtime.todo.openCount(),
+        open_count,
         completed_tasks: result.completedTasks,
         phases: result.phases,
         plan_nodes,
-        /** Copy work_items[].node_id into subagent plan_node_id when multiple todos are open. */
+        // Only when multi-todo: single free binds without plan_node_id.
         plan_node_id_hint:
-          "Pass work_items[].node_id as subagent plan_node_id so Tasks Worker chip binds to that row.",
+          open_count > 1
+            ? "Pass work_items[].node_id as subagent plan_node_id so Tasks Worker chip binds to that row."
+            : undefined,
       });
     },
   };

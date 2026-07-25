@@ -9,28 +9,9 @@ import {
   agentPurposeLine,
   looksLikeHandoffPackage,
 } from "../lib/workerPresentation";
+import type { StrixAgentStatus } from "../lib/panelTypes";
 
-export type StrixAgentStatus = {
-  id: string;
-  name: string;
-  status: string;
-  parent_id?: string | null;
-  task?: string;
-  skills?: string[];
-  pending_count?: number;
-  role?: string;
-  current_tool?: string;
-  /** Machine phase (tool_running / llm_waiting / …). */
-  current_action?: string;
-  /** Human-readable activity from Node (preferred). */
-  current_detail?: string;
-  last_tool?: string;
-  /** Product expert id for Case multi-role roster. */
-  expert_id?: string;
-  pack_id?: string;
-  /** Currently sticky / active speaker role. */
-  highlighted?: boolean;
-};
+export type { StrixAgentStatus } from "../lib/panelTypes";
 
 export function StrixAgentList({ agents }: { agents: StrixAgentStatus[] }) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});

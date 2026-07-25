@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import type { SecurityAsset, SecurityVulnerability } from "../lib/securityTypes";
+import type { PlanNode, PlanStatus, StrixAgentStatus } from "../lib/panelTypes";
 import {
   StrixAgentList,
   agentStatusCount,
   friendlyToolLabel,
   orderStrixAgents,
-  type StrixAgentStatus,
 } from "./AgentCollaborationTree";
 import {
   SurfaceTreeView,
@@ -27,35 +27,7 @@ import FindingCard from "./cards/FindingCard";
 import { GraphAwareTodoList } from "./TasksPlanList";
 
 type Tab = "status" | "surface" | "findings" | "activity";
-type PlanStatus = "todo" | "pending" | "running" | "done" | "skipped" | "blocked" | "failed" | string;
 type WorkflowPhaseId = "recon" | "testing" | "verification" | "summary";
-
-type PlanNode = {
-  node_id?: string;
-  id?: string;
-  title?: string;
-  status?: PlanStatus;
-  kind?: string;
-  level?: string;
-  method?: string | null;
-  endpoint?: string | null;
-  parameter?: string | null;
-  parameters?: string[];
-  vuln_type?: string | null;
-  result?: string | null;
-  parent_id?: string | null;
-  notes?: string | null;
-  evidence_ids?: string[];
-  priority?: number;
-  source?: string;
-  agent_id?: string;
-  linked_agent_id?: string;
-  /** Case multi-role: which product expert owns this todo. */
-  owner_expert_id?: string;
-  owner_expert_name?: string;
-  /** Agent Graph worker display label (Tasks chip). */
-  owner_agent_name?: string;
-};
 
 type KanbanBucket = { id: string; title: string; done: number; total: number; status: PlanStatus };
 type KanbanSummary = {

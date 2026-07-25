@@ -61,7 +61,12 @@ export type SubagentPackageResult = {
   /** When idle: prefer this for same-path gap re-dispatch. */
   resume_hint?: { agent_id: string; path_key: string; reason: string };
   /** Tasks Worker chip bind path (explicit | reattach | single_free | fuzzy | pkg). */
-  plan_bind?: { path: string; node_id?: string; hint?: string };
+  plan_bind?: {
+    path: string;
+    node_id?: string;
+    requested_node_id?: string;
+    hint?: string;
+  };
 };
 
 type ResolvedPackage = {
@@ -816,10 +821,12 @@ async function runSubagentPackage(
         ? {
             path: result.planBind.path,
             node_id: result.planBind.node_id,
+            requested_node_id: result.planBind.requested_node_id,
             hint:
-              result.planBind.path === "fuzzy" || result.planBind.path === "pkg"
+              result.planBind.hint ||
+              (result.planBind.path === "fuzzy" || result.planBind.path === "pkg"
                 ? "Pass plan_node_id (Tasks L2 todo node_id) on next subagent spawn for deterministic Worker chip ownership."
-                : undefined,
+                : undefined),
           }
         : undefined,
       error: result.ok ? undefined : result.summary,
