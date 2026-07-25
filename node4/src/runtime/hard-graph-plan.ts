@@ -81,6 +81,9 @@ export type WorkerChipInput = {
   status?: string;
 };
 
+/** How a Worker chip was attached to an L2 todo (telemetry / tool result). */
+export type WorkerBindPath = "explicit" | "reattach" | "single_free" | "fuzzy" | "pkg";
+
 /**
  * Mutable L1/L2 plan for one Hard Graph run.
  */
@@ -245,9 +248,36 @@ export class HardGraphPlanStore {
   }
 
   /**
+   * Deterministic: exactly one free Main-authored L2 row → attach there.
+   * Safer than fuzzy scoring when Main forgot plan_node_id but only has one open todo.
+   */
+  bindWorkerToSingleFreeTodo(
+    stageId: string,
+    input: WorkerChipInput,
+  ): string | null {
+    if (!this.stageTodos.has(stageId)) return null;
+    const list = this.stageTodos.get(stageId) || [];
+    const freeIdx: number[] = [];
+    for (let i = 0; i < list.length; i++) {
+      const n = list[i]!;
+      const id = String(n.node_id || n.id || "");
+      if (id.startsWith("pkg-")) continue;
+      const aid = String(n.agent_id || "").trim();
+      if (aid && aid !== input.agent_id) continue;
+      freeIdx.push(i);
+    }
+    if (freeIdx.length !== 1) return null;
+    const idx = freeIdx[0]!;
+    const cur = list[idx]!;
+    this.applyChip(list, idx, input);
+    this.stageTodos.set(stageId, list);
+    return String(cur.node_id || cur.id || "");
+  }
+
+  /**
    * Last-resort: attach to free Main todo by title↔goal score.
    * Never steals a row already bound to a different agent.
-   * Prefer attachWorker / reattachWorkerByAgent when possible.
+   * Prefer attachWorker / reattach / single-free when possible.
    */
   bindWorkerToBestTodo(
     stageId: string,
@@ -274,6 +304,31 @@ export class HardGraphPlanStore {
     this.applyChip(list, best.idx, input);
     this.stageTodos.set(stageId, list);
     return String(cur.node_id || cur.id || "");
+  }
+
+  /**
+   * Resolve Worker chip bind path in priority order.
+   * Returns how ownership was established (for tool result telemetry).
+   */
+  resolveWorkerBind(
+    stageId: string,
+    input: WorkerChipInput & { goal?: string; plan_node_id?: string },
+  ): { node_id: string; path: WorkerBindPath } | null {
+    const planNodeId = String(input.plan_node_id || "").trim();
+    if (planNodeId) {
+      const id = this.attachWorker(stageId, planNodeId, input);
+      if (id) return { node_id: id, path: "explicit" };
+    }
+    const re = this.reattachWorkerByAgent(stageId, input);
+    if (re) return { node_id: re, path: "reattach" };
+    const single = this.bindWorkerToSingleFreeTodo(stageId, input);
+    if (single) return { node_id: single, path: "single_free" };
+    const goal = String(input.goal || "").trim();
+    if (goal) {
+      const fuzzy = this.bindWorkerToBestTodo(stageId, { ...input, goal });
+      if (fuzzy) return { node_id: fuzzy, path: "fuzzy" };
+    }
+    return null;
   }
 
   private applyChip(list: PlanNodeLike[], idx: number, input: WorkerChipInput): void {

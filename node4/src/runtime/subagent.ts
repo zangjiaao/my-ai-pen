@@ -18,6 +18,8 @@ export type SubagentResult = {
   evidenceId?: string;
   goalId?: string;
   artifactPath?: string;
+  /** Hard Graph L2 ownership bind (when plan store present). */
+  planBind?: { path: string; node_id?: string };
 };
 
 export type SubagentContext = {
@@ -87,11 +89,8 @@ export class SubagentHost {
   }
 
   /**
-   * Attach Worker chip to Hard Graph L2:
-   * 1) explicit plan_node_id
-   * 2) re-attach by agent_id (status updates)
-   * 3) last-resort title↔goal fuzzy (free rows only)
-   * 4) host-owned pkg-* row
+   * Attach Worker chip to Hard Graph L2 via resolveWorkerBind priority:
+   * explicit → reattach → single_free → fuzzy → pkg-*.
    */
   private async upsertHardGraphPackageChip(input: {
     subagentId: string;
@@ -99,10 +98,10 @@ export class SubagentHost {
     label?: string;
     planNodeId?: string;
     status: "running" | "done" | "failed";
-  }): Promise<void> {
+  }): Promise<{ path: string; node_id?: string }> {
     const plan = this.opts.hardGraphPlan?.();
     const stageId = this.opts.stageId?.();
-    if (!plan || !stageId) return;
+    if (!plan || !stageId) return { path: "none" };
     const goal = resolveSubagentGoal(input.label, input.assignment);
     const title = goal.slice(0, 240) || input.subagentId;
     const workerN = this.opts.panelAgents?.workerIndexFor(input.subagentId) ?? 0;
@@ -111,20 +110,11 @@ export class SubagentHost {
       agent_id: input.subagentId,
       owner_agent_name: owner,
       status: input.status,
+      goal,
+      plan_node_id: input.planNodeId,
     };
 
-    let bound: string | null = null;
-    const planNodeId = String(input.planNodeId || "").trim();
-    if (planNodeId) {
-      bound = plan.attachWorker(stageId, planNodeId, chip);
-    }
-    if (!bound) {
-      bound = plan.reattachWorkerByAgent(stageId, chip);
-    }
-    if (!bound) {
-      bound = plan.bindWorkerToBestTodo(stageId, { ...chip, goal });
-    }
-
+    const bound = plan.resolveWorkerBind(stageId, chip);
     if (!bound) {
       plan.upsertStageWorkItem(stageId, {
         node_id: `pkg-${input.subagentId}`,
@@ -145,6 +135,10 @@ export class SubagentHost {
       plan,
       `subagent.${input.status}:${input.subagentId}`,
     ).catch(() => {});
+
+    return bound
+      ? { path: bound.path, node_id: bound.node_id }
+      : { path: "pkg", node_id: `pkg-${input.subagentId}` };
   }
 
   /**
@@ -189,7 +183,7 @@ export class SubagentHost {
     // Push full collaboration tree immediately — tool_execution_start checkpoint
     // fires before spawn, so without this the UI only ever sees Main.
     await this.emitPanelAgentsSnapshot();
-    await this.upsertHardGraphPackageChip({
+    const planBindStart = await this.upsertHardGraphPackageChip({
       subagentId,
       assignment: options.assignment,
       label: options.label,
@@ -249,7 +243,7 @@ export class SubagentHost {
 
     this.opts.panelAgents?.noteSubagentEnd({ id: subagentId, ok, summary });
     await this.emitPanelAgentsSnapshot();
-    await this.upsertHardGraphPackageChip({
+    const planBindEnd = await this.upsertHardGraphPackageChip({
       subagentId,
       assignment: options.assignment,
       label: options.label,
@@ -269,6 +263,7 @@ export class SubagentHost {
       panel_agents: this.opts.panelAgents?.list() || [],
     });
 
+    const planBind = planBindEnd.path !== "none" ? planBindEnd : planBindStart;
     return {
       ok,
       subagentId,
@@ -277,6 +272,7 @@ export class SubagentHost {
       evidenceId: evidence.id,
       goalId: options.goalId,
       artifactPath,
+      planBind: planBind.path !== "none" ? planBind : undefined,
     };
   }
 }

@@ -60,6 +60,8 @@ export type SubagentPackageResult = {
   session_reuse?: Record<string, unknown>;
   /** When idle: prefer this for same-path gap re-dispatch. */
   resume_hint?: { agent_id: string; path_key: string; reason: string };
+  /** Tasks Worker chip bind path (explicit | reattach | single_free | fuzzy | pkg). */
+  plan_bind?: { path: string; node_id?: string; hint?: string };
 };
 
 type ResolvedPackage = {
@@ -123,7 +125,7 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
       "Child work packages under this task workspace (OMP keep-alive).",
       "SPAWN FLAT: target, scope, already_done, this_turn_goal, success_criteria (+ node_type/skill_id/plan_node_id).",
       "SPAWN BATCH: packages=[{...}] concurrent (NODE4_SUBAGENT_CONCURRENCY default 8). Orthogonal paths = cold workers.",
-      "plan_node_id (or todo_node_id): attach Worker chip to that Tasks L2 todo when known.",
+      "plan_node_id (or todo_node_id): REQUIRED for correct Tasks Worker chip when multiple stage todos exist. Prefer todo node_id from your last todo.init/list.",
       "WARM: resume_agent_id=prior agent_id on SAME path (gap/timeout follow-up). Soft-fail workers stay idle for resume.",
       "LIST: op=list → idle_workers[] (agent_id, path_key, …).",
       "RELEASE: op=release + agent_id (or release_agent_id) — dispose worker now; else idle TTL (~420s) / maxIdle LRU auto-releases.",
@@ -810,6 +812,16 @@ async function runSubagentPackage(
       assignment_label: assignmentLabel,
       session_reuse: sessionReuse,
       resume_hint: resumeHint,
+      plan_bind: result.planBind
+        ? {
+            path: result.planBind.path,
+            node_id: result.planBind.node_id,
+            hint:
+              result.planBind.path === "fuzzy" || result.planBind.path === "pkg"
+                ? "Pass plan_node_id (Tasks L2 todo node_id) on next subagent spawn for deterministic Worker chip ownership."
+                : undefined,
+          }
+        : undefined,
       error: result.ok ? undefined : result.summary,
     };
   });

@@ -127,22 +127,19 @@ export function findAgentByIdExact<T extends { id: string }>(
   return agents.find((a) => a.id.endsWith(`-${id}`));
 }
 
-/** Next Worker N for legacy events without panel_agents (prefer reusing existing name). */
-export function nextWorkerOrdinal(
+/**
+ * Legacy events without panel_agents: reuse existing clean Worker N only.
+ * Never invent a new ordinal (Node PanelAgentTracker is the sole sequencer).
+ */
+export function legacyWorkerDisplayName(
   agents: Array<{ id: string; name?: string }>,
   subId?: string,
-): number {
+): string {
   if (subId) {
     const existing = findAgentByIdExact(agents, subId);
-    const m = String(existing?.name || "").match(/^Worker\s+(\d+)\s*$/i);
-    if (m) return Number(m[1]);
+    if (existing?.name && isWorkerName(existing.name)) return existing.name.trim();
   }
-  let max = 0;
-  for (const a of agents) {
-    const m = String(a.name || "").match(/^Worker\s+(\d+)\s*$/i);
-    if (m) max = Math.max(max, Number(m[1]));
-  }
-  return max + 1;
+  return "Worker";
 }
 
 /** Strip handoff markdown / status suffixes from a todo title for display. */

@@ -14,8 +14,7 @@ import { normalizeExecutionStatus } from "../lib/status";
 import { PHASES, PHASE_LABELS, phaseLabel } from "../lib/phase";
 import {
   findAgentByIdExact,
-  isWorkerName,
-  nextWorkerOrdinal,
+  legacyWorkerDisplayName,
   scrubWorkerPurpose,
 } from "../lib/workerPresentation";
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
@@ -947,13 +946,9 @@ export default function ConversationPage() {
         const purpose = scrubWorkerPurpose(assignment);
         setStrixAgents((prev) => {
           const existing = findAgentByIdExact(prev, subId);
-          const name =
-            existing?.name && isWorkerName(existing.name)
-              ? existing.name
-              : `Worker ${nextWorkerOrdinal(prev, subId)}`;
           return upsertSubagentChild(prev, {
             id: subId,
-            name,
+            name: legacyWorkerDisplayName(prev, subId),
             status: "running",
             parent_id: null,
             task: purpose,
@@ -988,13 +983,9 @@ export default function ConversationPage() {
       setStrixAgents((prev) => {
         const existing = findAgentByIdExact(prev, subId);
         const task = scrubWorkerPurpose(existing?.task || "") || scrubWorkerPurpose(summary);
-        const name =
-          existing?.name && isWorkerName(existing.name)
-            ? existing.name
-            : `Worker ${nextWorkerOrdinal(prev, subId)}`;
         return upsertSubagentChild(prev, {
           id: subId,
-          name,
+          name: legacyWorkerDisplayName(prev, subId),
           status: ok ? "completed" : "failed",
           parent_id: null,
           task,

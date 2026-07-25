@@ -110,14 +110,58 @@ const sqli2 = plan.toPlanTree().find((n) => n.node_id === "todo-sqli") as any;
 assert.equal(sqli2.owner_agent_name, "Worker 2", "worker chip survives todo rewrite");
 assert.equal(sqli2.status, "done");
 
-// Fuzzy last-resort: free XSS row, strong title match.
-const fuzzy = plan.bindWorkerToBestTodo("class_probe", {
+// Single free todo (only XSS free after SQLi is bound) — no scoring.
+const single = plan.bindWorkerToSingleFreeTodo("class_probe", {
   agent_id: "sub_w3",
   owner_agent_name: "Worker 3",
-  goal: "Probe Reflected XSS (xss_r) at /vulnerabilities/xss_r/",
   status: "running",
 });
-assert.equal(fuzzy, "todo-xss");
+assert.equal(single, "todo-xss", "single free todo binds without fuzzy");
+
+// Two free rows → single_free refuses (use surface stage for a clean slate).
+plan.setStageTodos("surface", [
+  { node_id: "todo-s-a", title: "Map A", status: "pending", level: "work_item", kind: "task", source: "plan" },
+  { node_id: "todo-s-b", title: "Map B", status: "pending", level: "work_item", kind: "task", source: "plan" },
+]);
+assert.equal(
+  plan.bindWorkerToSingleFreeTodo("surface", {
+    agent_id: "sub_none",
+    owner_agent_name: "Worker",
+    status: "running",
+  }),
+  null,
+  "two free todos → no single_free",
+);
+
+// Fuzzy last-resort on surface: strong title match to Map A.
+const fuzzy = plan.bindWorkerToBestTodo("surface", {
+  agent_id: "sub_map",
+  owner_agent_name: "Worker 5",
+  goal: "Map A endpoints thoroughly",
+  status: "running",
+});
+assert.equal(fuzzy, "todo-s-a");
+
+// resolveWorkerBind prefers explicit plan_node_id over goal fuzzy.
+const resolved = plan.resolveWorkerBind("class_probe", {
+  agent_id: "sub_w2",
+  owner_agent_name: "Worker 2",
+  plan_node_id: "todo-sqli",
+  goal: "something else entirely",
+  status: "done",
+});
+assert.equal(resolved?.path, "explicit");
+assert.equal(resolved?.node_id, "todo-sqli");
+
+// Without plan_node_id, reattach by agent wins over fuzzy.
+const reattached = plan.resolveWorkerBind("class_probe", {
+  agent_id: "sub_w3",
+  owner_agent_name: "Worker 3",
+  goal: "unrelated goal text that would not match",
+  status: "running",
+});
+assert.equal(reattached?.path, "reattach");
+assert.equal(reattached?.node_id, "todo-xss");
 
 // Never steal another worker's chip even with high score.
 const steal = plan.bindWorkerToBestTodo("class_probe", {
