@@ -51,6 +51,40 @@ let subSeq = 0;
 export class SubagentHost {
   constructor(private readonly opts: SubagentHostOptions) {}
 
+  /** Push Main + children so Status collaboration tree updates live. */
+  private async emitPanelAgentsSnapshot(): Promise<void> {
+    const panel = this.opts.panelAgents;
+    if (!panel) return;
+    const agents = panel.list();
+    await this.opts.platform
+      .send({
+        type: "status_update",
+        conversation_id: this.opts.task.conversationId,
+        task_id: this.opts.task.taskId,
+        message: "panel_agents",
+        agent_phase: "subagent",
+        status: "running",
+        panel_agents: agents,
+        expert_id: this.opts.task.expertId,
+        expert_name: this.opts.task.expertName,
+      })
+      .catch(() => {});
+    // Persist into checkpoint path consumers (Case participants / snapshot).
+    await this.opts.platform
+      .send({
+        type: "checkpoint_update",
+        conversation_id: this.opts.task.conversationId,
+        task_id: this.opts.task.taskId,
+        checkpoint: {
+          runtime: "node4-pi",
+          panel_agents: agents,
+          agent_phase: "subagent",
+          task_id: this.opts.task.taskId,
+        },
+      })
+      .catch(() => {});
+  }
+
   /** Upsert L2 package row on Hard Graph plan when plan+stageId getters are present. */
   private async upsertHardGraphPackageChip(input: {
     subagentId: string;
@@ -115,6 +149,9 @@ export class SubagentHost {
       goalId: options.goalId,
       nodeType: options.nodeType,
     });
+    // Push full collaboration tree immediately — tool_execution_start checkpoint
+    // fires before spawn, so without this the UI only ever sees Main.
+    await this.emitPanelAgentsSnapshot();
     await this.upsertHardGraphPackageChip({
       subagentId,
       assignment: options.assignment,
@@ -129,6 +166,8 @@ export class SubagentHost {
       subagent_id: subagentId,
       goal_id: options.goalId,
       assignment: options.assignment.slice(0, 500),
+      // Include panel so clients that only listen for this event can render kids.
+      panel_agents: this.opts.panelAgents?.list() || [],
     });
 
     let summary = "";
@@ -171,6 +210,7 @@ export class SubagentHost {
     });
 
     this.opts.panelAgents?.noteSubagentEnd({ id: subagentId, ok, summary });
+    await this.emitPanelAgentsSnapshot();
     await this.upsertHardGraphPackageChip({
       subagentId,
       assignment: options.assignment,
@@ -187,6 +227,7 @@ export class SubagentHost {
       ok,
       evidence_id: evidence.id,
       summary: summary.slice(0, 500),
+      panel_agents: this.opts.panelAgents?.list() || [],
     });
 
     return {

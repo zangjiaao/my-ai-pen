@@ -922,6 +922,70 @@ export default function ConversationPage() {
         void refreshConversationState(convId);
       }
     },
+    // Hard Graph Agent Graph packages — keep Status tree in sync while workers run.
+    subagent_started: (msg) => {
+      if (!isActiveMessage(msg, activeId)) return;
+      const m = msg as Record<string, unknown>;
+      setRunning(true);
+      if (Array.isArray(m.panel_agents) && m.panel_agents.length) {
+        const next = m.panel_agents.filter(isStrixAgentStatus);
+        setStrixAgents((prev) => mergeLivePanelAgents(prev, next, {
+          expert_id: readString(m.expert_id),
+          expert_name: readString(m.expert_name),
+        }));
+      } else {
+        const subId = readString(m.subagent_id) || readString(m.id);
+        if (!subId) return;
+        const assignment = readString(m.assignment) || "子代理执行中";
+        setStrixAgents((prev) => upsertSubagentChild(prev, {
+          id: subId,
+          name: `Subagent ${subId.slice(0, 12)}`,
+          status: "running",
+          parent_id: null,
+          task: assignment.slice(0, 240),
+          skills: [],
+          pending_count: 0,
+          role: "subagent",
+          current_action: "running",
+          current_detail: assignment.slice(0, 160),
+          expert_id: readString(m.expert_id),
+        }, {
+          expert_id: readString(m.expert_id),
+          expert_name: readString(m.expert_name),
+        }));
+      }
+    },
+    subagent_finished: (msg) => {
+      if (!isActiveMessage(msg, activeId)) return;
+      const m = msg as Record<string, unknown>;
+      if (Array.isArray(m.panel_agents) && m.panel_agents.length) {
+        const next = m.panel_agents.filter(isStrixAgentStatus);
+        setStrixAgents((prev) => mergeLivePanelAgents(prev, next, {
+          expert_id: readString(m.expert_id),
+          expert_name: readString(m.expert_name),
+        }));
+        return;
+      }
+      const subId = readString(m.subagent_id) || readString(m.id);
+      if (!subId) return;
+      const ok = m.ok !== false && String(m.ok) !== "false";
+      setStrixAgents((prev) => upsertSubagentChild(prev, {
+        id: subId,
+        name: `Subagent ${subId.slice(0, 12)}`,
+        status: ok ? "completed" : "failed",
+        parent_id: null,
+        task: readString(m.summary) || "",
+        skills: [],
+        pending_count: 0,
+        role: "subagent",
+        current_action: ok ? "completed" : "failed",
+        current_detail: readString(m.summary).slice(0, 160) || (ok ? "子任务已完成" : "子任务失败"),
+        expert_id: readString(m.expert_id),
+      }, {
+        expert_id: readString(m.expert_id),
+        expert_name: readString(m.expert_name),
+      }));
+    },
     completion_blocked: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
@@ -3445,6 +3509,60 @@ function isMultiRoleRoster(agents: StrixAgentStatus[]): boolean {
       String(r.id || "").startsWith("role-") ||
       Boolean(r.highlighted),
   );
+}
+
+/**
+ * Attach or update a subagent child under the active Case role root.
+ * Node4 emits parent_id=node4-main; UI roots use role-expert:* ids.
+ */
+function upsertSubagentChild(
+  prev: StrixAgentStatus[],
+  child: StrixAgentStatus,
+  meta?: { expert_id?: string; expert_name?: string },
+): StrixAgentStatus[] {
+  const eid = String(meta?.expert_id || child.expert_id || "").trim();
+  const ename = String(meta?.expert_name || "").trim().toLowerCase();
+  let rootIdx = -1;
+  if (eid) {
+    rootIdx = prev.findIndex((a) => !a.parent_id && String(a.expert_id || "") === eid);
+  }
+  if (rootIdx < 0 && ename) {
+    rootIdx = prev.findIndex((a) => !a.parent_id && String(a.name || "").toLowerCase() === ename);
+  }
+  if (rootIdx < 0) {
+    rootIdx = prev.findIndex((a) => !a.parent_id && a.highlighted);
+  }
+  if (rootIdx < 0) {
+    rootIdx = prev.findIndex((a) => !a.parent_id);
+  }
+  const root = rootIdx >= 0
+    ? prev[rootIdx]!
+    : {
+        id: eid ? `role-expert:${eid}` : "node4-main",
+        name: ename || "Expert",
+        status: "running",
+        parent_id: null,
+        task: "",
+        skills: [] as string[],
+        pending_count: 0,
+        role: "main",
+        expert_id: eid || undefined,
+        highlighted: true,
+      };
+  const rootId = root.id;
+  const childId = child.id.startsWith(rootId) ? child.id : `${rootId}-${child.id}`;
+  const nextChild: StrixAgentStatus = {
+    ...child,
+    id: childId,
+    parent_id: rootId,
+    expert_id: eid || root.expert_id,
+  };
+  const without = prev.filter((a) => a.id !== childId && a.id !== child.id);
+  const hasRoot = without.some((a) => a.id === rootId);
+  const base = hasRoot
+    ? without.map((a) => (a.id === rootId ? { ...a, status: "running", highlighted: true } : a))
+    : [{ ...root, status: "running", highlighted: true }, ...without];
+  return [...base, nextChild];
 }
 
 /**

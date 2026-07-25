@@ -171,6 +171,9 @@ export function buildHardGraphStageChildRuntime(options: {
   const packForStage: RolePack = { ...pack, toolNames: tools };
   const processFacts = new ProcessFactStore(join(workDir, "facts"));
   const allowSubagent = tools.includes("subagent");
+  // Resolve panel before host construction so package spawn can emit children.
+  const sharedPanel =
+    parent.lifecycle.hardGraphRun?.panel || parent.lifecycle.panelAgents;
   const childRuntime: ToolRuntime = {
     task: parent.task,
     workspaceDir: parent.workspaceDir,
@@ -193,6 +196,8 @@ export function buildHardGraphStageChildRuntime(options: {
       subagentDepth: 0,
       abortSignal,
       subagentEvidenceCache: [],
+      hardGraphRun: parent.lifecycle.hardGraphRun,
+      panelAgents: sharedPanel,
     },
   };
   if (allowSubagent) {
@@ -203,21 +208,12 @@ export function buildHardGraphStageChildRuntime(options: {
       platform: parent.platform,
       goals: childRuntime.goals!,
       // Share run-level panel tracker so Status collaboration tree sees workers.
-      panelAgents:
-        parent.lifecycle.hardGraphRun?.panel ||
-        parent.lifecycle.panelAgents ||
-        childRuntime.lifecycle.panelAgents,
+      panelAgents: sharedPanel,
       // Package chips on L2 Tasks map from start/end events (not stage-finally panel scan).
       hardGraphPlan: () => parent.lifecycle.hardGraphRun?.plan,
       stageId: () => parent.lifecycle.hardGraphRun?.stageId,
     });
   }
-  // Propagate single Hard Graph run owner so todo tool merges L2 under L1.
-  childRuntime.lifecycle.hardGraphRun = parent.lifecycle.hardGraphRun;
-  childRuntime.lifecycle.panelAgents =
-    parent.lifecycle.hardGraphRun?.panel ||
-    parent.lifecycle.panelAgents ||
-    childRuntime.lifecycle.panelAgents;
   return { childRuntime, packForStage };
 }
 
