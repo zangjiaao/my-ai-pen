@@ -13,6 +13,7 @@ Answer before deep probing:
 - Adversaries (external user, malicious document, compromised tool)?
 - Access level (black/gray/white box)?
 Build a short prioritized abuse-path list (impact × likelihood). Coarse **todo** by category: injection, jailbreak, leakage, tools/MCP, RAG, multi-agent.
+- Multi-slice via `subagent`: when several todos are open, pass `plan_node_id` from the last `todo` result (`work_items[].node_id`) so Tasks ownership chips stay correct.
 
 ## 2. Execute probes
 Load **one** skill at a time matching the current hypothesis:

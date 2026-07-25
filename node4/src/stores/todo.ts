@@ -52,6 +52,11 @@ export function nextActionableTask(phases: readonly TodoPhase[]): TodoItem | und
   return firstPending;
 }
 
+/** Stable L2 node_id for a todo task (must match TodoStore.toPlanNodes). */
+export function todoTaskNodeId(phaseName: string, taskContent: string): string {
+  return `todo-task-${slug(phaseName)}-${slug(taskContent)}`;
+}
+
 export function formatTodoSummary(phases: TodoPhase[], errors: string[] = [], readOnly = false): string {
   const tasks = phases.flatMap((phase) => phase.tasks);
   if (tasks.length === 0) {
@@ -90,7 +95,8 @@ export function formatTodoSummary(phases: TodoPhase[], errors: string[] = [], re
   } else {
     lines.push(`Remaining items (${remainingTasks.length}):`);
     for (const task of remainingTasks) {
-      lines.push(`  - ${task.content} [${task.status}] (${task.phase})`);
+      const nid = todoTaskNodeId(task.phase, task.content);
+      lines.push(`  - ${task.content} [${task.status}] (${task.phase}) node_id=${nid}`);
     }
   }
   lines.push(`Overall: ${closedAll}/${tasks.length} done, ${remainingTasks.length} open.`);
@@ -107,9 +113,13 @@ export function formatTodoSummary(phases: TodoPhase[], errors: string[] = [], re
       const checkbox = task.status === "completed" ? "[X]" : "[ ]";
       const tag =
         task.status === "in_progress" ? " (in progress)" : task.status === "abandoned" ? " (dropped)" : "";
-      lines.push(`    - ${checkbox} ${task.content}${tag}`);
+      const nid = todoTaskNodeId(phase.name, task.content);
+      lines.push(`    - ${checkbox} ${task.content}${tag}  [node_id=${nid}]`);
     }
   }
+  lines.push(
+    "Hint: pass work_items[].node_id as subagent plan_node_id when multiple open todos so the Worker chip binds correctly.",
+  );
   return lines.join("\n");
 }
 
@@ -239,7 +249,7 @@ export class TodoStore {
       let taskPriority = phasePriority + 1;
       for (const task of phase.tasks) {
         nodes.push({
-          node_id: `todo-task-${slug(phase.name)}-${slug(task.content)}`,
+          node_id: todoTaskNodeId(phase.name, task.content),
           title: task.content,
           status: mapStatus(task.status),
           // kind=task + source=plan: accepted by platform RightPanel.unifiedTodoItems

@@ -14,6 +14,7 @@ Adapted from Argo-style density (recon → partition → review → validate), *
 ## 2. Partition (skill: `code-partition-focus`)
 - Split complementary focuses (authz, injection sinks, SSRF, secrets, supply chain, agent tools) so work can be sequential or multi-slice via subagent when density helps.
 - Each focus needs a one-line hypothesis and in-scope paths.
+- When spawning subagent for a focus that has a **todo** row, pass `plan_node_id` from the last `todo` result (`work_items[].node_id`) so Tasks shows the Worker on the right item.
 
 ## 3. Focus review (skill: `code-focus-review`)
 - Deep-read one focus at a time; trace **source → sink** with file:line.

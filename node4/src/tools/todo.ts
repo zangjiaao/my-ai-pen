@@ -109,14 +109,28 @@ export function createTodoTool(runtime: ToolRuntime): AgentTool<any> {
           await emitTodoPlanTreeUpdate(runtime.platform, runtime.task, runtime.todo, `todo.${op}`);
         }
       }
+      const plan_nodes = runtime.todo.toPlanNodes();
+      // Flat work_items first so models see node_id for subagent plan_node_id without digging phases.
+      const work_items = plan_nodes
+        .filter((n) => n.level === "work_item")
+        .map((n) => ({
+          node_id: n.node_id,
+          title: n.title,
+          status: n.status,
+          parent_id: n.parent_id || null,
+        }));
       return jsonResult({
         ok: true,
         op,
         summary: formatTodoSummary(result.phases, [], result.readOnly),
-        phases: result.phases,
+        work_items,
         open_count: runtime.todo.openCount(),
         completed_tasks: result.completedTasks,
-        plan_nodes: runtime.todo.toPlanNodes(),
+        phases: result.phases,
+        plan_nodes,
+        /** Copy work_items[].node_id into subagent plan_node_id when multiple todos are open. */
+        plan_node_id_hint:
+          "Pass work_items[].node_id as subagent plan_node_id so Tasks Worker chip binds to that row.",
       });
     },
   };

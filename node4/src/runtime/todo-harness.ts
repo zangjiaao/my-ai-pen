@@ -157,6 +157,7 @@ export const TODO_TOOL_DESCRIPTION = [
   "- optional note on done (Graph): deadend:<path> | skipped_roe:<path> | probed | booked | n/a (meta only)",
   "",
   "Anatomy: phase = short noun phrase (no \"1.\" / \"Phase 1:\" prefixes); task = 5–10 words, category-level, unique.",
+  "Each work item has a stable node_id (see work_items[] / summary node_id=…). When spawning subagent with multiple open todos, pass that id as plan_node_id.",
   "Rules:",
   "- Mark a task/phase done immediately after finishing that category (live map — not end-of-run batch).",
   "- Prefer completing earlier phases before leaving them open while working ahead.",
