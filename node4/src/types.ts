@@ -164,13 +164,16 @@ export type ToolRuntime = {
      */
     findingConfirmFailCounts?: Record<string, number>;
     /**
-     * Expert Graph Tasks map (L1 stages + L2 todos). Set by Hard Graph task path.
+     * Single Hard Graph run owner (L1/L2 plan, usage, panel, current stage).
+     * Set by Hard Graph task path; stages and todo tool read this object only.
      */
-    hardGraphPlan?: import("./runtime/hard-graph-plan.js").HardGraphPlanStore;
-    /** Current Hard Graph stage id while a stage session runs (todo → L2 merge). */
-    hardGraphStageId?: string;
-    /** Run-level usage ledger for Hard Graph (merged across stages). */
-    hardGraphUsage?: import("./runtime/llm-usage.js").LlmUsageLedger;
+    hardGraphRun?: {
+      plan: import("./runtime/hard-graph-plan.js").HardGraphPlanStore;
+      usage: import("./runtime/llm-usage.js").LlmUsageLedger;
+      panel: import("./runtime/panel-agents.js").PanelAgentTracker;
+      /** Current stage id while a stage session runs (todo → L2 merge). */
+      stageId?: string;
+    };
   };
 };
 

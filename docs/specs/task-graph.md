@@ -42,9 +42,9 @@ Hard Graph stages share the **same platform message contracts** free Expert / De
 
 | Contract | Behavior |
 |----------|----------|
-| **Usage** | Stage sessions record LLM usage; mid-run `checkpoint_update` + terminal `task_complete.llm_usage` / checkpoint feed Status tokens |
-| **Thinking / text** | Progressive `thinking` + `text` streams when the Agent Runtime produces them; stage default thinking level matches free Expert non-chat (medium), not a silent downgrade |
-| **Tasks L1/L2** | L1 = fixed Graph stages (runner definition); L2 = stage-local todos nested under the stage. Stage `todo.init` **merges** under the current stage — never replaces sibling stages or wipes completed history |
+| **Usage** | Stage sessions record LLM usage; mid-run `checkpoint_update` + terminal `task_complete.llm_usage` / checkpoint feed Status tokens. Run owner: `lifecycle.hardGraphRun` (`plan` + `usage` + `panel` + `stageId`) |
+| **Thinking / text** | Progressive `thinking` + `text` streams when the Agent Runtime produces them; stage default thinking level matches free Expert non-chat (medium), not a silent downgrade. Free path + stages share `attachNode4SessionObservability` |
+| **Tasks L1/L2** | L1 = fixed Graph stages (runner definition); L2 = stage-local todos nested under the stage. Stage `todo.init` **merges** under the current stage via `hardGraphRun.plan` — never replaces sibling stages or wipes completed history |
 | **Activity** | Timeline accepts product plan sources (`source=plan`) and Graph stage status changes (same plan nodes Tasks shows) |
 | **panel_agents** | Collaboration tree: stage Main + subagent workers when packages run |
 | **Subagent lifecycle** | `subagent_started` / `subagent_finished` on the platform sink when packages spawn |

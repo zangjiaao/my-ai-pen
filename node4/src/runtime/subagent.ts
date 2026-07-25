@@ -37,12 +37,43 @@ export type SubagentHostOptions = {
   goals: GoalStore;
   /** Optional right-panel agent tree tracker. */
   panelAgents?: import("./panel-agents.js").PanelAgentTracker;
+  /**
+   * Optional Hard Graph plan getters — on package start/end upsert L2 work items
+   * (agent chips) without a late panel scan.
+   */
+  hardGraphPlan?: () => import("./hard-graph-plan.js").HardGraphPlanStore | undefined;
+  stageId?: () => string | undefined;
 };
 
 let subSeq = 0;
 
 export class SubagentHost {
   constructor(private readonly opts: SubagentHostOptions) {}
+
+  /** Upsert L2 package row on Hard Graph plan when plan+stageId getters are present. */
+  private upsertHardGraphPackageChip(input: {
+    subagentId: string;
+    assignment: string;
+    nodeType?: string;
+    status: "running" | "done" | "failed";
+  }): void {
+    const plan = this.opts.hardGraphPlan?.();
+    const stageId = this.opts.stageId?.();
+    if (!plan || !stageId) return;
+    const node = String(input.nodeType || "").trim();
+    const title = input.assignment.slice(0, 240) || input.subagentId;
+    plan.upsertStageWorkItem(stageId, {
+      node_id: `pkg-${input.subagentId}`,
+      title,
+      status: input.status,
+      agent_id: input.subagentId,
+      owner_agent_name: node
+        ? `Subagent [${node}]`
+        : `Subagent ${input.subagentId.slice(0, 12)}`,
+      kind: "task",
+      source: "plan",
+    });
+  }
 
   /**
    * Run a child unit of work under the task workspace contract.
@@ -75,6 +106,12 @@ export class SubagentHost {
       assignment: options.assignment,
       goalId: options.goalId,
       nodeType: options.nodeType,
+    });
+    this.upsertHardGraphPackageChip({
+      subagentId,
+      assignment: options.assignment,
+      nodeType: options.nodeType,
+      status: "running",
     });
 
     await this.opts.platform.send({
@@ -126,6 +163,12 @@ export class SubagentHost {
     });
 
     this.opts.panelAgents?.noteSubagentEnd({ id: subagentId, ok, summary });
+    this.upsertHardGraphPackageChip({
+      subagentId,
+      assignment: options.assignment,
+      nodeType: options.nodeType,
+      status: ok ? "done" : "failed",
+    });
 
     await this.opts.platform.send({
       type: "subagent_finished",

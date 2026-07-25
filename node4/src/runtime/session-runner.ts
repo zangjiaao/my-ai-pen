@@ -46,10 +46,10 @@ import {
 } from "../stores/goal.js";
 import { PanelAgentTracker } from "./panel-agents.js";
 import {
+  attachNode4SessionObservability,
   CheckpointThrottle,
   createUsageLedgerFromEnv,
   emitCheckpointUpdate,
-  handleNode4SessionEvent,
   PlatformTextStream,
   type ObservabilityContext,
 } from "./platform-observability.js";
@@ -310,10 +310,13 @@ export async function runNode4Task(
   sessionRef = session;
 
   // Panel / text stream / usage — tool_output already bridged in createBoundNode4Session.
-  session.subscribe((event) => {
-    void handleNode4SessionEvent(obsCtx, textStream, checkpointThrottle, event).catch(() => {
-      // Never let observability break the agent loop.
-    });
+  const sessionObs = attachNode4SessionObservability({
+    session,
+    obsCtx,
+    textStream,
+    checkpointThrottle,
+    // session-runner owns end-of-task textStream.dispose below.
+    disposeTextStream: false,
   });
 
   // Outer continues: product default OFF (settle on natural stop). Lab opt-in via env.
@@ -634,6 +637,7 @@ export async function runNode4Task(
   if (cancelled()) stopReason = "aborted";
   // else keep stopReason from last decision (e.g. natural_stop_after_tools)
 
+  sessionObs.unsubscribe();
   await textStream.dispose().catch(() => {});
 
   const messages = Array.isArray((session as any).messages) ? [...(session as any).messages] : [];

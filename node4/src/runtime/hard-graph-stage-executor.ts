@@ -22,11 +22,11 @@ import {
   type StageContinuitySeed,
 } from "./hard-graph-continuity.js";
 import {
+  attachNode4SessionObservability,
   CheckpointThrottle,
   PlatformTextStream,
   createUsageLedgerFromEnv,
   emitCheckpointUpdate,
-  handleNode4SessionEvent,
   type ObservabilityContext,
 } from "./platform-observability.js";
 import { PanelAgentTracker } from "./panel-agents.js";
@@ -39,6 +39,7 @@ import {
   seedChildSessionFromParent,
 } from "./subagent-session-seed.js";
 import { SubagentHost } from "./subagent.js";
+import type { Node4AgentSession } from "./run-node4-agent.js";
 
 export type HardGraphStageSessionFactory = (options: {
   stageId: string;
@@ -48,6 +49,18 @@ export type HardGraphStageSessionFactory = (options: {
   workDir: string;
   abortSignal?: AbortSignal;
 }) => Promise<{ structured: unknown; summary?: string }>;
+
+/**
+ * Test inject: replace createBoundNode4Session but still run observability attach.
+ * Fake sessions must implement subscribe / prompt / dispose.
+ */
+export type HardGraphBoundSessionFactory = (options: {
+  config: Node4Config;
+  runtime: ToolRuntime;
+  pack: RolePack;
+  systemPrompt: string;
+  thinkingLevel?: string;
+}) => Promise<{ session: Node4AgentSession }>;
 
 /**
  * Post-session handoff: Feedback reads stage workdir `result.json` only.
@@ -190,15 +203,21 @@ export function buildHardGraphStageChildRuntime(options: {
       platform: parent.platform,
       goals: childRuntime.goals!,
       // Share run-level panel tracker so Status collaboration tree sees workers.
-      panelAgents: parent.lifecycle.panelAgents || childRuntime.lifecycle.panelAgents,
+      panelAgents:
+        parent.lifecycle.hardGraphRun?.panel ||
+        parent.lifecycle.panelAgents ||
+        childRuntime.lifecycle.panelAgents,
+      // Package chips on L2 Tasks map from start/end events (not stage-finally panel scan).
+      hardGraphPlan: () => parent.lifecycle.hardGraphRun?.plan,
+      stageId: () => parent.lifecycle.hardGraphRun?.stageId,
     });
   }
-  // Propagate Hard Graph plan / stage id so todo tool merges L2 under L1.
-  childRuntime.lifecycle.hardGraphPlan = parent.lifecycle.hardGraphPlan;
-  childRuntime.lifecycle.hardGraphStageId = parent.lifecycle.hardGraphStageId;
-  childRuntime.lifecycle.hardGraphUsage = parent.lifecycle.hardGraphUsage;
+  // Propagate single Hard Graph run owner so todo tool merges L2 under L1.
+  childRuntime.lifecycle.hardGraphRun = parent.lifecycle.hardGraphRun;
   childRuntime.lifecycle.panelAgents =
-    parent.lifecycle.panelAgents || childRuntime.lifecycle.panelAgents;
+    parent.lifecycle.hardGraphRun?.panel ||
+    parent.lifecycle.panelAgents ||
+    childRuntime.lifecycle.panelAgents;
   return { childRuntime, packForStage };
 }
 
@@ -259,10 +278,16 @@ export function createHardGraphStageExecutor(options: {
   /** Parent Expert task runtime (platform, findingsDir, skills, …). */
   parentRuntime: ToolRuntime;
   pack: RolePack;
+  /** Structured-only shortcut (skips pi session + observability). For runner unit tests. */
   sessionFactory?: HardGraphStageSessionFactory;
+  /**
+   * Test inject: fake bound session that still goes through observability attach
+   * (unlike sessionFactory, which skips the real stage path).
+   */
+  boundSessionFactory?: HardGraphBoundSessionFactory;
   abortSignal?: AbortSignal;
 }): StageExecutor {
-  const { config, parentRuntime, pack, sessionFactory, abortSignal } = options;
+  const { config, parentRuntime, pack, sessionFactory, boundSessionFactory, abortSignal } = options;
   const task = parentRuntime.task;
 
   return async (input: StageExecutorInput): Promise<StageExecutorOutput> => {
@@ -369,8 +394,9 @@ export function createHardGraphStageExecutor(options: {
         });
       }
 
-      // Mark current stage for todo → L2 merge and panel labels.
-      parentRuntime.lifecycle.hardGraphStageId = input.stage.id;
+      // Mark current stage for todo → L2 merge and package chips.
+      const graphRun = parentRuntime.lifecycle.hardGraphRun;
+      if (graphRun) graphRun.stageId = input.stage.id;
 
       const { childRuntime, packForStage } = buildChildRuntime({
         parent: parentRuntime,
@@ -394,11 +420,13 @@ export function createHardGraphStageExecutor(options: {
 
       // Free-path observability parity: usage, thinking/text stream, checkpoints, panel.
       const panel =
+        graphRun?.panel ||
         parentRuntime.lifecycle.panelAgents ||
         new PanelAgentTracker(
           `stage ${input.stage.id}`,
           (typeof task.expertName === "string" && task.expertName.trim()) || pack.id || "Expert",
         );
+      if (graphRun) graphRun.panel = panel;
       parentRuntime.lifecycle.panelAgents = panel;
       childRuntime.lifecycle.panelAgents = panel;
       panel.setMainActivity({
@@ -426,19 +454,23 @@ export function createHardGraphStageExecutor(options: {
         counters: obsCounters,
       };
 
-      const { session } = await createBoundNode4Session({
+      const boundOpts = {
         config,
         runtime: childRuntime,
         pack: packForStage,
         systemPrompt,
         // Match free Expert non-chat default (not silent "low").
-        thinkingLevel: "medium",
-      });
+        thinkingLevel: "medium" as const,
+      };
+      const { session } = boundSessionFactory
+        ? await boundSessionFactory(boundOpts)
+        : await createBoundNode4Session(boundOpts);
 
-      session.subscribe((event) => {
-        void handleNode4SessionEvent(obsCtx, textStream, checkpointThrottle, event).catch(() => {
-          /* never break stage loop */
-        });
+      const sessionObs = attachNode4SessionObservability({
+        session,
+        obsCtx,
+        textStream,
+        checkpointThrottle,
       });
 
       // Initial checkpoint so Status has a live panel row for this stage.
@@ -473,40 +505,12 @@ export function createHardGraphStageExecutor(options: {
         }
         throw err;
       } finally {
-        try {
-          await textStream.dispose();
-        } catch {
-          /* ignore */
-        }
+        await sessionObs.dispose();
         // Merge stage usage into run-level ledger.
-        parentRuntime.lifecycle.hardGraphUsage?.mergeSnapshot(
+        graphRun?.usage.mergeSnapshot(
           stageUsage.snapshot({ tool_calls: obsCounters.toolCallCount }),
         );
-        // Tag package rows on Tasks when workers finished under this stage.
-        const plan = parentRuntime.lifecycle.hardGraphPlan;
-        if (plan) {
-          for (const agent of panel.list()) {
-            if (agent.role !== "subagent" && agent.parent_id !== "node4-main") continue;
-            if (agent.id === "node4-main") continue;
-            if (!agent.parent_id) continue;
-            plan.upsertStageWorkItem(input.stage.id, {
-              node_id: `pkg-${agent.id}`,
-              title: agent.task || agent.name || agent.id,
-              status:
-                agent.status === "completed"
-                  ? "done"
-                  : agent.status === "failed"
-                    ? "failed"
-                    : agent.status === "running"
-                      ? "running"
-                      : "pending",
-              agent_id: agent.id,
-              owner_agent_name: agent.name,
-              kind: "task",
-              source: "plan",
-            });
-          }
-        }
+        // Package chips are upserted on subagent start/end (SubagentHost), not a panel scan.
         try {
           await Promise.resolve(session.dispose());
         } catch {

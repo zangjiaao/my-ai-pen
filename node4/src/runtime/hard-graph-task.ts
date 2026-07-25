@@ -20,8 +20,13 @@ import {
 import { createHardGraphStageExecutor } from "./hard-graph-stage-executor.js";
 import { settleHardGraphTask } from "./hard-graph-settlement.js";
 import { HardGraphPlanStore, emitHardGraphPlanTreeUpdate } from "./hard-graph-plan.js";
-import { createUsageLedgerFromEnv } from "./platform-observability.js";
+import {
+  createUsageLedgerFromEnv,
+  emitCheckpointUpdate,
+  type ObservabilityContext,
+} from "./platform-observability.js";
 import { PanelAgentTracker } from "./panel-agents.js";
+import { GoalStore } from "../stores/goal.js";
 
 export type HardGraphTaskResult = {
   /** Platform task_complete.status (completed | incomplete | blocked). */
@@ -189,14 +194,17 @@ export async function runHardGraphExpertTask(options: {
 
   await mkdir(join(taskDir, "hard-graph"), { recursive: true });
 
-  // Run-level Tasks map + usage + panel (shared across stages).
+  // Run-level Tasks map + usage + panel (single hardGraphRun owner).
   const graphPlan = new HardGraphPlanStore(graph);
   const runUsage = createUsageLedgerFromEnv();
   const panelLabel =
     (typeof task.expertName === "string" && task.expertName.trim()) || pack.id || "Expert";
   const panel = new PanelAgentTracker(task.instruction || "Expert Graph task", panelLabel);
-  parentRuntime.lifecycle.hardGraphPlan = graphPlan;
-  parentRuntime.lifecycle.hardGraphUsage = runUsage;
+  parentRuntime.lifecycle.hardGraphRun = {
+    plan: graphPlan,
+    usage: runUsage,
+    panel,
+  };
   parentRuntime.lifecycle.panelAgents = panel;
 
   const startMsg: PlatformMessage = {
@@ -278,26 +286,26 @@ export async function runHardGraphExpertTask(options: {
         : undefined,
   });
 
-  // Terminal checkpoint so Status keeps final tokens/panel after settle.
-  await platform.send({
-    type: "checkpoint_update",
-    conversation_id: task.conversationId,
-    task_id: task.taskId,
-    checkpoint: {
-      runtime: "node4-pi",
-      role_pack: pack.id,
-      started_at: startedAt,
-      end_time: new Date().toISOString(),
-      status: settled.harnessStatus,
-      task_id: task.taskId,
-      llm_usage: llmUsage,
-      panel_agents: panel.list({ terminal: true }),
-      plan_tree: graphPlan.toPlanTree(),
-      agent_phase: "finished",
-    },
-  } as PlatformMessage);
-
-  parentRuntime.lifecycle.hardGraphStageId = undefined;
+  // Terminal checkpoint via shared builder (same plan_tree / llm_usage shapes as mid-run).
+  if (parentRuntime.lifecycle.hardGraphRun) {
+    parentRuntime.lifecycle.hardGraphRun.stageId = undefined;
+  }
+  const terminalObs: ObservabilityContext = {
+    platform,
+    task,
+    runtime: parentRuntime,
+    goals: parentRuntime.goals || new GoalStore(),
+    usage: runUsage,
+    panel,
+    startedAt,
+    rolePackId: pack.id,
+    counters: { toolCallCount: 0, phase: "finished" },
+  };
+  await emitCheckpointUpdate(terminalObs, {
+    terminal: true,
+    status: settled.harnessStatus,
+    endTime: new Date().toISOString(),
+  });
 
   const workEnd: PlatformMessage = {
     type: "work_status",

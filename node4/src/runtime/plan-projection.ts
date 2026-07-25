@@ -126,25 +126,14 @@ export function stampPlanTreeOwner(
   }));
 }
 
-/** Emit plan_tree_updated so ConversationPage Tasks list updates live. */
+/** Emit plan_tree_updated so ConversationPage Tasks list updates live (free-path todo projection only). */
 export async function emitTodoPlanTreeUpdate(
   platform: PlatformSink,
   task: TaskEnvelope,
   todo: TodoStore,
   reason: string,
-  options?: {
-    /** When set (Hard Graph), merge stage todos under L1 Graph stages instead of replace-all. */
-    graphPlan?: import("./hard-graph-plan.js").HardGraphPlanStore;
-    stageId?: string;
-  },
 ): Promise<void> {
   const payload = buildTodoPlanTreePayload(todo);
-  if (options?.graphPlan && options.stageId) {
-    options.graphPlan.setStageTodos(options.stageId, payload.plan_tree);
-    const { emitHardGraphPlanTreeUpdate } = await import("./hard-graph-plan.js");
-    await emitHardGraphPlanTreeUpdate(platform, task, options.graphPlan, reason);
-    return;
-  }
   const plan_tree = stampPlanTreeOwner(payload.plan_tree, task);
   await platform.send({
     type: "plan_tree_updated",

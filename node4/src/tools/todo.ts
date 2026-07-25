@@ -2,7 +2,8 @@ import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { formatTodoSummary, type TodoOpName, type TodoParams } from "../stores/todo.js";
 import { TODO_TOOL_DESCRIPTION } from "../runtime/todo-harness.js";
-import { emitTodoPlanTreeUpdate } from "../runtime/plan-projection.js";
+import { buildTodoPlanTreePayload, emitTodoPlanTreeUpdate } from "../runtime/plan-projection.js";
+import { emitHardGraphPlanTreeUpdate } from "../runtime/hard-graph-plan.js";
 import { assertTodoDoneAllowed } from "../stores/surface-ledger.js";
 import type { ToolRuntime } from "../types.js";
 import { jsonResult, textResult } from "./common.js";
@@ -93,11 +94,20 @@ export function createTodoTool(runtime: ToolRuntime): AgentTool<any> {
           open_count: runtime.todo.openCount(),
         });
         // Node2/OMP-style: project into plan_tree_updated so right-panel Tasks updates live.
-        // Hard Graph: merge under L1 stage map when present (no whole-tree wipe).
-        await emitTodoPlanTreeUpdate(runtime.platform, runtime.task, runtime.todo, `todo.${op}`, {
-          graphPlan: runtime.lifecycle.hardGraphPlan,
-          stageId: runtime.lifecycle.hardGraphStageId,
-        });
+        // Hard Graph: merge under L1 stage map via hardGraphRun (no whole-tree wipe).
+        const graphRun = runtime.lifecycle.hardGraphRun;
+        if (graphRun?.plan && graphRun.stageId) {
+          const payload = buildTodoPlanTreePayload(runtime.todo);
+          graphRun.plan.setStageTodos(graphRun.stageId, payload.plan_tree);
+          await emitHardGraphPlanTreeUpdate(
+            runtime.platform,
+            runtime.task,
+            graphRun.plan,
+            `todo.${op}`,
+          );
+        } else {
+          await emitTodoPlanTreeUpdate(runtime.platform, runtime.task, runtime.todo, `todo.${op}`);
+        }
       }
       return jsonResult({
         ok: true,

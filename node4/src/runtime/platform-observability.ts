@@ -12,7 +12,7 @@ import {
   type LlmUsageSnapshot,
 } from "./llm-usage.js";
 import type { PanelAgentTracker } from "./panel-agents.js";
-import { buildTodoPlanTreePayload } from "./plan-projection.js";
+import { buildTodoPlanTreePayload, type PlanNodeLike } from "./plan-projection.js";
 
 /** First token goes out immediately; subsequent flushes coalesce. */
 const TEXT_STREAM_FLUSH_MS = 40;
@@ -295,6 +295,27 @@ export class PlatformTextStream {
   }
 }
 
+/** Progress summary for a Hard Graph L1/L2 plan_tree (same shape as todo projection). */
+function progressFromPlanTree(planTree: PlanNodeLike[]): {
+  plan_tree: PlanNodeLike[];
+  todo_open_count: number;
+  progress: { percent: number; label: string };
+} {
+  const workItems = planTree.filter((n) => (n.level || "work_item") === "work_item");
+  const done = workItems.filter((n) => n.status === "done" || n.status === "skipped").length;
+  const total = workItems.length;
+  const open = workItems.filter((n) => n.status === "pending" || n.status === "running").length;
+  const percent = total === 0 ? 0 : Math.round((done / total) * 100);
+  return {
+    plan_tree: planTree,
+    todo_open_count: open,
+    progress: {
+      percent,
+      label: total === 0 ? "No stage todos" : `${done}/${total} done (${open} open)`,
+    },
+  };
+}
+
 /**
  * Build Node3-shaped checkpoint root for platform right panel.
  *
@@ -302,6 +323,8 @@ export class PlatformTextStream {
  * - `started_at` = task/work-burst start (`task_start`)
  * - `end_time` = settle (`task_complete` terminal checkpoint)
  * Elapsed UI should use only this window — not outer continue counters or tool hooks.
+ *
+ * plan_tree source: Hard Graph run plan (L1/L2) when present, else free-path TodoStore projection.
  */
 export function buildNode4Checkpoint(
   ctx: ObservabilityContext,
@@ -322,7 +345,18 @@ export function buildNode4Checkpoint(
       : typeof ctx.task.target?.url === "string"
         ? String(ctx.task.target.url)
         : "";
-  const todoPayload = buildTodoPlanTreePayload(ctx.runtime.todo);
+  const graphPlan = ctx.runtime.lifecycle.hardGraphRun?.plan;
+  const planPayload = graphPlan
+    ? progressFromPlanTree(graphPlan.toPlanTree())
+    : (() => {
+        const todoPayload = buildTodoPlanTreePayload(ctx.runtime.todo);
+        return {
+          plan_tree: todoPayload.plan_tree as PlanNodeLike[],
+          todo_open_count: todoPayload.todo_open_count,
+          progress: todoPayload.progress,
+          todo_phases: todoPayload.todo_phases,
+        };
+      })();
   const goalSnap = ctx.goals.snapshot();
   const mode = goalSnap.mode;
 
@@ -341,10 +375,10 @@ export function buildNode4Checkpoint(
       : [],
     llm_usage: usage.requests > 0 || usage.total_tokens > 0 ? usage : usage,
     panel_agents: ctx.panel.list({ terminal: options?.terminal }),
-    plan_tree: todoPayload.plan_tree,
-    todo_phases: todoPayload.todo_phases,
-    todo_open_count: todoPayload.todo_open_count,
-    progress: todoPayload.progress,
+    plan_tree: planPayload.plan_tree,
+    todo_phases: "todo_phases" in planPayload ? planPayload.todo_phases : undefined,
+    todo_open_count: planPayload.todo_open_count,
+    progress: planPayload.progress,
     goal: mode
       ? {
           id: mode.id,
@@ -363,6 +397,60 @@ export function buildNode4Checkpoint(
     active_tool: ctx.counters.activeTool || "",
     tool_call_count: ctx.counters.toolCallCount,
     attack_surface_candidates: options?.attackSurfaceCandidates || [],
+  };
+}
+
+/** Minimal session surface used by free path + Hard Graph stages. */
+export type Node4SessionObservabilityTarget = {
+  subscribe: (listener: (event: unknown) => void) => (() => void) | void;
+};
+
+/**
+ * Shared attach: free path (session-runner) and Hard Graph stages subscribe the same way.
+ * Returns unsubscribe + dispose (dispose also flushes/disposes textStream by default).
+ */
+export function attachNode4SessionObservability(options: {
+  session: Node4SessionObservabilityTarget;
+  obsCtx: ObservabilityContext;
+  textStream: PlatformTextStream;
+  checkpointThrottle: CheckpointThrottle;
+  /** When false, dispose() only unsubscribes (caller owns textStream lifetime). Default true. */
+  disposeTextStream?: boolean;
+}): {
+  unsubscribe: () => void;
+  dispose: () => Promise<void>;
+} {
+  const { session, obsCtx, textStream, checkpointThrottle } = options;
+  const ownTextStream = options.disposeTextStream !== false;
+  const unsubRaw = session.subscribe((event) => {
+    void handleNode4SessionEvent(obsCtx, textStream, checkpointThrottle, event).catch(() => {
+      // Never let observability break the agent loop.
+    });
+  });
+  let unsubscribed = false;
+  const unsubscribe = () => {
+    if (unsubscribed) return;
+    unsubscribed = true;
+    if (typeof unsubRaw === "function") {
+      try {
+        unsubRaw();
+      } catch {
+        /* ignore */
+      }
+    }
+  };
+  return {
+    unsubscribe,
+    dispose: async () => {
+      unsubscribe();
+      if (ownTextStream) {
+        try {
+          await textStream.dispose();
+        } catch {
+          /* ignore */
+        }
+      }
+    },
   };
 }
 
