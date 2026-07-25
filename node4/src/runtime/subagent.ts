@@ -7,6 +7,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { GoalStore } from "../stores/goal.js";
 import type { EvidenceStoreLike, PlatformSink, TaskEnvelope } from "../types.js";
+import { emitHardGraphPlanTreeUpdate } from "./hard-graph-plan.js";
 
 export type SubagentResult = {
   ok: boolean;
@@ -51,12 +52,12 @@ export class SubagentHost {
   constructor(private readonly opts: SubagentHostOptions) {}
 
   /** Upsert L2 package row on Hard Graph plan when plan+stageId getters are present. */
-  private upsertHardGraphPackageChip(input: {
+  private async upsertHardGraphPackageChip(input: {
     subagentId: string;
     assignment: string;
     nodeType?: string;
     status: "running" | "done" | "failed";
-  }): void {
+  }): Promise<void> {
     const plan = this.opts.hardGraphPlan?.();
     const stageId = this.opts.stageId?.();
     if (!plan || !stageId) return;
@@ -73,6 +74,13 @@ export class SubagentHost {
       kind: "task",
       source: "plan",
     });
+    // Push L1/L2 so Tasks chips appear live (not only on next todo mutation).
+    await emitHardGraphPlanTreeUpdate(
+      this.opts.platform,
+      this.opts.task,
+      plan,
+      `subagent.${input.status}:${input.subagentId}`,
+    ).catch(() => {});
   }
 
   /**
@@ -107,7 +115,7 @@ export class SubagentHost {
       goalId: options.goalId,
       nodeType: options.nodeType,
     });
-    this.upsertHardGraphPackageChip({
+    await this.upsertHardGraphPackageChip({
       subagentId,
       assignment: options.assignment,
       nodeType: options.nodeType,
@@ -163,7 +171,7 @@ export class SubagentHost {
     });
 
     this.opts.panelAgents?.noteSubagentEnd({ id: subagentId, ok, summary });
-    this.upsertHardGraphPackageChip({
+    await this.upsertHardGraphPackageChip({
       subagentId,
       assignment: options.assignment,
       nodeType: options.nodeType,
