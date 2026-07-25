@@ -39,13 +39,25 @@ export type GraphAwareTodoListProps = {
 /**
  * Expert Graph: L1 phase nodes as section headers, L2 work items nested.
  * Free / flat plans: fall back to flat StrixTodoList.
+ *
+ * If L1 phases were stripped by a bad snapshot but L2 still parents to
+ * graph-stage-*, synthesize stage headers from those parent_ids.
  */
 export function GraphAwareTodoList({
   planTree,
   workItems,
   running,
 }: GraphAwareTodoListProps) {
-  const phases = planTree.filter((n) => String(n.level || "") === "phase");
+  const explicitPhases = planTree.filter(
+    (n) =>
+      String(n.level || "") === "phase" ||
+      String(n.kind || "") === "phase" ||
+      String(n.node_id || n.id || "").startsWith("graph-stage-"),
+  );
+  const phases =
+    explicitPhases.length > 0
+      ? explicitPhases
+      : synthesizeGraphStagesFromWorkItems(workItems.length ? workItems : planTree);
   if (!phases.length) {
     return <StrixTodoList items={workItems} running={running} />;
   }
@@ -71,7 +83,7 @@ export function GraphAwareTodoList({
             <div className="flex min-w-0 items-center gap-2 px-1">
               <Icon className={`h-3.5 w-3.5 shrink-0 ${todoStatusIconClass(status)}`} />
               <p className={`min-w-0 break-words text-xs font-semibold uppercase tracking-wide text-ink-secondary ${todoTitleClass(status)}`}>
-                {String(phase.title || id)}
+                {String(phase.title || id.replace(/^graph-stage-/, "") || id)}
               </p>
               <span className="font-mono text-[10px] text-ink-muted">
                 {children.filter((c) => isTerminalPlanStatus(c.status)).length}/{children.length || 0}
@@ -95,6 +107,40 @@ export function GraphAwareTodoList({
       )}
     </div>
   );
+}
+
+/** Recover L1 headers when only L2 work_items with graph-stage-* parents remain. */
+function synthesizeGraphStagesFromWorkItems(nodes: PlanNode[]): PlanNode[] {
+  const order: string[] = [];
+  const seen = new Set<string>();
+  const statusByStage = new Map<string, string>();
+  for (const n of nodes) {
+    const pid = String(n.parent_id || "").trim();
+    if (!pid.startsWith("graph-stage-")) continue;
+    if (!seen.has(pid)) {
+      seen.add(pid);
+      order.push(pid);
+    }
+    const st = String(n.status || "pending").toLowerCase();
+    const prev = statusByStage.get(pid) || "pending";
+    // Prefer running > pending > done for header
+    if (st === "running" || (st === "pending" && prev === "done")) {
+      statusByStage.set(pid, st === "running" ? "running" : "pending");
+    } else if (!statusByStage.has(pid)) {
+      statusByStage.set(pid, st === "done" || st === "completed" ? "done" : st || "pending");
+    }
+  }
+  return order.map((id, i) => ({
+    node_id: id,
+    id,
+    title: id.replace(/^graph-stage-/, ""),
+    level: "phase",
+    kind: "phase",
+    source: "plan",
+    parent_id: null,
+    status: statusByStage.get(id) || "pending",
+    priority: (i + 1) * 100,
+  }));
 }
 
 function StrixTodoList({ items, running = false }: { items: PlanNode[]; running?: boolean }) {
