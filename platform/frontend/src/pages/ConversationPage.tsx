@@ -12,6 +12,12 @@ import { useWebSocket } from "../hooks/useWebSocket";
 import { ApiError, authFetch } from "../lib/api";
 import { normalizeExecutionStatus } from "../lib/status";
 import { PHASES, PHASE_LABELS, phaseLabel } from "../lib/phase";
+import {
+  findAgentByIdExact,
+  isWorkerName,
+  nextWorkerOrdinal,
+  scrubWorkerPurpose,
+} from "../lib/workerPresentation";
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { Check, ChevronDown, PanelRight, PanelRightClose, Target, Upload } from "lucide-react";
 import type { AgentIdentity, Conversation, Message } from "../lib/types";
@@ -934,25 +940,34 @@ export default function ConversationPage() {
           expert_name: readString(m.expert_name),
         }));
       } else {
+        // Legacy path: panel_agents missing. Prefer Node panel payload when present.
         const subId = readString(m.subagent_id) || readString(m.id);
         if (!subId) return;
-        const assignment = readString(m.assignment) || "子代理执行中";
-        setStrixAgents((prev) => upsertSubagentChild(prev, {
-          id: subId,
-          name: `Subagent ${subId.slice(0, 12)}`,
-          status: "running",
-          parent_id: null,
-          task: assignment.slice(0, 240),
-          skills: [],
-          pending_count: 0,
-          role: "subagent",
-          current_action: "running",
-          current_detail: assignment.slice(0, 160),
-          expert_id: readString(m.expert_id),
-        }, {
-          expert_id: readString(m.expert_id),
-          expert_name: readString(m.expert_name),
-        }));
+        const assignment = readString(m.assignment) || "";
+        const purpose = scrubWorkerPurpose(assignment);
+        setStrixAgents((prev) => {
+          const existing = findAgentByIdExact(prev, subId);
+          const name =
+            existing?.name && isWorkerName(existing.name)
+              ? existing.name
+              : `Worker ${nextWorkerOrdinal(prev, subId)}`;
+          return upsertSubagentChild(prev, {
+            id: subId,
+            name,
+            status: "running",
+            parent_id: null,
+            task: purpose,
+            skills: existing?.skills || [],
+            pending_count: 0,
+            role: "subagent",
+            current_action: "running",
+            current_detail: purpose.slice(0, 160) || "子任务执行中",
+            expert_id: readString(m.expert_id),
+          }, {
+            expert_id: readString(m.expert_id),
+            expert_name: readString(m.expert_name),
+          });
+        });
       }
     },
     subagent_finished: (msg) => {
@@ -969,22 +984,33 @@ export default function ConversationPage() {
       const subId = readString(m.subagent_id) || readString(m.id);
       if (!subId) return;
       const ok = m.ok !== false && String(m.ok) !== "false";
-      setStrixAgents((prev) => upsertSubagentChild(prev, {
-        id: subId,
-        name: `Subagent ${subId.slice(0, 12)}`,
-        status: ok ? "completed" : "failed",
-        parent_id: null,
-        task: readString(m.summary) || "",
-        skills: [],
-        pending_count: 0,
-        role: "subagent",
-        current_action: ok ? "completed" : "failed",
-        current_detail: readString(m.summary).slice(0, 160) || (ok ? "子任务已完成" : "子任务失败"),
-        expert_id: readString(m.expert_id),
-      }, {
-        expert_id: readString(m.expert_id),
-        expert_name: readString(m.expert_name),
-      }));
+      const summary = readString(m.summary);
+      setStrixAgents((prev) => {
+        const existing = findAgentByIdExact(prev, subId);
+        const task = scrubWorkerPurpose(existing?.task || "") || scrubWorkerPurpose(summary);
+        const name =
+          existing?.name && isWorkerName(existing.name)
+            ? existing.name
+            : `Worker ${nextWorkerOrdinal(prev, subId)}`;
+        return upsertSubagentChild(prev, {
+          id: subId,
+          name,
+          status: ok ? "completed" : "failed",
+          parent_id: null,
+          task,
+          skills: existing?.skills || [],
+          pending_count: 0,
+          role: "subagent",
+          current_action: ok ? "completed" : "failed",
+          current_detail: ok
+            ? (task ? `已完成：${task}`.slice(0, 160) : "子任务已完成")
+            : (summary.slice(0, 160) || "子任务失败"),
+          expert_id: readString(m.expert_id),
+        }, {
+          expert_id: readString(m.expert_id),
+          expert_name: readString(m.expert_name),
+        });
+      });
     },
     completion_blocked: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;

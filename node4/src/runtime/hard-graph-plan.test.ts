@@ -3,7 +3,12 @@
  * Run: npx tsx src/runtime/hard-graph-plan.test.ts
  */
 import assert from "node:assert/strict";
-import { HardGraphPlanStore, emitHardGraphPlanTreeUpdate } from "./hard-graph-plan.js";
+import {
+  HardGraphPlanStore,
+  emitHardGraphPlanTreeUpdate,
+  scoreTodoGoalMatch,
+  FUZZY_BIND_MIN_SCORE,
+} from "./hard-graph-plan.js";
 import type { HardGraphDefinition } from "./hard-graph-definition.js";
 import type { PlatformMessage } from "../types.js";
 
@@ -58,7 +63,7 @@ plan.upsertStageWorkItem("class_probe", {
   title: "Package SQLi",
   status: "running",
   agent_id: "sub_sqli",
-  owner_agent_name: "Subagent [sqli]",
+  owner_agent_name: "Worker 1",
   kind: "task",
   source: "plan",
 });
@@ -67,6 +72,82 @@ const pkg = tree.find((n) => n.node_id === "pkg-sqli");
 assert.ok(pkg);
 assert.equal(pkg!.parent_id, "graph-stage-class_probe");
 assert.equal((pkg as any).agent_id, "sub_sqli");
+
+// Main-authored todos + explicit attach preferred over fuzzy.
+plan.setStageTodos("class_probe", [
+  { node_id: "todo-sqli", title: "SQL Injection (sqli)", status: "pending", level: "work_item", kind: "task", source: "plan" },
+  { node_id: "todo-xss", title: "Reflected XSS (xss_r)", status: "pending", level: "work_item", kind: "task", source: "plan" },
+]);
+// pkg-* from before setStageTodos must be preserved
+assert.ok(plan.toPlanTree().some((n) => n.node_id === "pkg-sqli"), "pkg preserved across setStageTodos");
+
+const explicit = plan.attachWorker("class_probe", "todo-sqli", {
+  agent_id: "sub_w2",
+  owner_agent_name: "Worker 2",
+  status: "running",
+});
+assert.equal(explicit, "todo-sqli");
+const sqli = plan.toPlanTree().find((n) => n.node_id === "todo-sqli") as any;
+assert.equal(sqli.owner_agent_name, "Worker 2");
+assert.equal(sqli.agent_id, "sub_w2");
+assert.equal(sqli.status, "running");
+
+// Re-attach by agent_id updates status without fuzzy.
+const re = plan.reattachWorkerByAgent("class_probe", {
+  agent_id: "sub_w2",
+  owner_agent_name: "Worker 2",
+  status: "done",
+});
+assert.equal(re, "todo-sqli");
+assert.equal((plan.toPlanTree().find((n) => n.node_id === "todo-sqli") as any).status, "done");
+
+// Subsequent todo status update keeps Worker chip
+plan.setStageTodos("class_probe", [
+  { node_id: "todo-sqli", title: "SQL Injection (sqli)", status: "done", level: "work_item", kind: "task", source: "plan" },
+  { node_id: "todo-xss", title: "Reflected XSS (xss_r)", status: "pending", level: "work_item", kind: "task", source: "plan" },
+]);
+const sqli2 = plan.toPlanTree().find((n) => n.node_id === "todo-sqli") as any;
+assert.equal(sqli2.owner_agent_name, "Worker 2", "worker chip survives todo rewrite");
+assert.equal(sqli2.status, "done");
+
+// Fuzzy last-resort: free XSS row, strong title match.
+const fuzzy = plan.bindWorkerToBestTodo("class_probe", {
+  agent_id: "sub_w3",
+  owner_agent_name: "Worker 3",
+  goal: "Probe Reflected XSS (xss_r) at /vulnerabilities/xss_r/",
+  status: "running",
+});
+assert.equal(fuzzy, "todo-xss");
+
+// Never steal another worker's chip even with high score.
+const steal = plan.bindWorkerToBestTodo("class_probe", {
+  agent_id: "sub_thief",
+  owner_agent_name: "Worker 9",
+  goal: "SQL Injection (sqli) full probe",
+  status: "running",
+});
+assert.equal(steal, null, "must not steal Worker 2's todo-sqli");
+assert.equal((plan.toPlanTree().find((n) => n.node_id === "todo-sqli") as any).agent_id, "sub_w2");
+
+// Weak shared-token goals must stay below fuzzy threshold.
+const weakScore = scoreTodoGoalMatch("Authentication bypass", "Test authorization bypass flows");
+assert.ok(weakScore < FUZZY_BIND_MIN_SCORE, `weak token score ${weakScore} should be < ${FUZZY_BIND_MIN_SCORE}`);
+
+plan.setStageTodos("class_probe", [
+  { node_id: "todo-sqli", title: "SQL Injection (sqli)", status: "done", level: "work_item", kind: "task", source: "plan", agent_id: "sub_w2", owner_agent_name: "Worker 2" },
+  { node_id: "todo-xss", title: "Reflected XSS (xss_r)", status: "running", level: "work_item", kind: "task", source: "plan", agent_id: "sub_w3", owner_agent_name: "Worker 3" },
+  { node_id: "todo-auth", title: "Session management", status: "pending", level: "work_item", kind: "task", source: "plan" },
+]);
+const weakBind = plan.bindWorkerToBestTodo("class_probe", {
+  agent_id: "sub_weak",
+  owner_agent_name: "Worker 4",
+  goal: "Generic testing work",
+  status: "running",
+});
+assert.equal(weakBind, null, "weak goal must not bind");
+
+plan.removeStageWorkItem("class_probe", "pkg-sqli");
+assert.ok(!plan.toPlanTree().some((n) => n.node_id === "pkg-sqli"));
 
 const messages: PlatformMessage[] = [];
 await emitHardGraphPlanTreeUpdate(

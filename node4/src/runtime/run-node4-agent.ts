@@ -259,6 +259,11 @@ export async function createBoundNode4Session(
 /**
  * Sole product fan-out for tool start/end → platform tool_output + segment counters.
  * Panel/status for Main still goes through handleNode4SessionEvent on the same events.
+ *
+ * Product policy (A): **subagent package sessions do not emit tool_output into Case chat.**
+ * When `lifecycle.subagentDepth > 0`, still count tools for salvage/settlement, but skip
+ * platform send so Worker shell/http/todo cards do not pollute Main's conversation thread.
+ * Lifecycle milestones (`subagent_started` / `subagent_finished`) remain parent-owned.
  */
 export function attachProductToolEventBridge(
   session: Node4AgentSession,
@@ -269,6 +274,7 @@ export function attachProductToolEventBridge(
     if (event.type === "tool_execution_start") {
       if (segmentCounter) segmentCounter.tools += 1;
       runtime.lifecycle.toolsInLastSegment = (runtime.lifecycle.toolsInLastSegment || 0) + 1;
+      if (isSubagentPackageSession(runtime)) return;
       const toolName = String(event.toolName || "tool");
       const toolCallId = String(event.toolCallId || "");
       await runtime.platform.send({
@@ -285,6 +291,7 @@ export function attachProductToolEventBridge(
     }
 
     if (event.type === "tool_execution_end") {
+      if (isSubagentPackageSession(runtime)) return;
       const toolName = String(event.toolName || "tool");
       const toolCallId = String(event.toolCallId || "");
       const result = (event as { result?: { content?: Array<{ type?: string; text?: string }> } }).result;
@@ -307,4 +314,13 @@ export function attachProductToolEventBridge(
       });
     }
   });
+}
+
+/** True for Agent Graph package workers (not Hard Graph stage Main). */
+export function isSubagentPackageSession(runtime: ToolRuntime): boolean {
+  const depth = Number(runtime.lifecycle?.subagentDepth ?? 0);
+  if (depth > 0) return true;
+  // Belt-and-suspenders: child task ids look like `{taskId}/sub/{subId}`.
+  const tid = String(runtime.task?.taskId || "");
+  return /\/sub\//.test(tid);
 }

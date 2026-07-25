@@ -8,6 +8,7 @@ import { join } from "node:path";
 import type { GoalStore } from "../stores/goal.js";
 import type { EvidenceStoreLike, PlatformSink, TaskEnvelope } from "../types.js";
 import { emitHardGraphPlanTreeUpdate } from "./hard-graph-plan.js";
+import { formatWorkerName, resolveSubagentGoal } from "./panel-agents.js";
 
 export type SubagentResult = {
   ok: boolean;
@@ -85,30 +86,59 @@ export class SubagentHost {
       .catch(() => {});
   }
 
-  /** Upsert L2 package row on Hard Graph plan when plan+stageId getters are present. */
+  /**
+   * Attach Worker chip to Hard Graph L2:
+   * 1) explicit plan_node_id
+   * 2) re-attach by agent_id (status updates)
+   * 3) last-resort title↔goal fuzzy (free rows only)
+   * 4) host-owned pkg-* row
+   */
   private async upsertHardGraphPackageChip(input: {
     subagentId: string;
     assignment: string;
-    nodeType?: string;
+    label?: string;
+    planNodeId?: string;
     status: "running" | "done" | "failed";
   }): Promise<void> {
     const plan = this.opts.hardGraphPlan?.();
     const stageId = this.opts.stageId?.();
     if (!plan || !stageId) return;
-    const node = String(input.nodeType || "").trim();
-    const title = input.assignment.slice(0, 240) || input.subagentId;
-    plan.upsertStageWorkItem(stageId, {
-      node_id: `pkg-${input.subagentId}`,
-      title,
-      status: input.status,
+    const goal = resolveSubagentGoal(input.label, input.assignment);
+    const title = goal.slice(0, 240) || input.subagentId;
+    const workerN = this.opts.panelAgents?.workerIndexFor(input.subagentId) ?? 0;
+    const owner = workerN > 0 ? formatWorkerName(workerN) : "Worker";
+    const chip = {
       agent_id: input.subagentId,
-      owner_agent_name: node
-        ? `Subagent [${node}]`
-        : `Subagent ${input.subagentId.slice(0, 12)}`,
-      kind: "task",
-      source: "plan",
-    });
-    // Push L1/L2 so Tasks chips appear live (not only on next todo mutation).
+      owner_agent_name: owner,
+      status: input.status,
+    };
+
+    let bound: string | null = null;
+    const planNodeId = String(input.planNodeId || "").trim();
+    if (planNodeId) {
+      bound = plan.attachWorker(stageId, planNodeId, chip);
+    }
+    if (!bound) {
+      bound = plan.reattachWorkerByAgent(stageId, chip);
+    }
+    if (!bound) {
+      bound = plan.bindWorkerToBestTodo(stageId, { ...chip, goal });
+    }
+
+    if (!bound) {
+      plan.upsertStageWorkItem(stageId, {
+        node_id: `pkg-${input.subagentId}`,
+        title,
+        status: input.status,
+        agent_id: input.subagentId,
+        owner_agent_name: owner,
+        kind: "task",
+        source: "plan",
+      });
+    } else {
+      plan.removeStageWorkItem(stageId, `pkg-${input.subagentId}`);
+    }
+
     await emitHardGraphPlanTreeUpdate(
       this.opts.platform,
       this.opts.task,
@@ -128,6 +158,11 @@ export class SubagentHost {
     subagentId?: string;
     /** Graph node type for panel label (optional). */
     nodeType?: string;
+    /** Short purpose (this_turn_goal) for Tasks/panel — not full package markdown. */
+    label?: string;
+    skillId?: string;
+    /** Explicit L2 todo node_id for Tasks Worker chip (preferred over fuzzy match). */
+    planNodeId?: string;
   }): Promise<SubagentResult> {
     const subagentId = options.subagentId?.trim() || `sub_${Date.now()}_${++subSeq}`;
     const workDir = join(this.opts.taskDir, "subagents", subagentId);
@@ -139,7 +174,7 @@ export class SubagentHost {
 
     await writeFile(
       join(workDir, "assignment.md"),
-      `# Subagent ${subagentId}\n\n${options.assignment}\n\ngoalId: ${options.goalId || ""}\nnodeType: ${options.nodeType || ""}\n`,
+      `# Subagent ${subagentId}\n\n${options.assignment}\n\ngoalId: ${options.goalId || ""}\nnodeType: ${options.nodeType || ""}\nplanNodeId: ${options.planNodeId || ""}\n`,
       "utf8",
     );
 
@@ -148,6 +183,8 @@ export class SubagentHost {
       assignment: options.assignment,
       goalId: options.goalId,
       nodeType: options.nodeType,
+      label: options.label,
+      skillId: options.skillId,
     });
     // Push full collaboration tree immediately — tool_execution_start checkpoint
     // fires before spawn, so without this the UI only ever sees Main.
@@ -155,7 +192,8 @@ export class SubagentHost {
     await this.upsertHardGraphPackageChip({
       subagentId,
       assignment: options.assignment,
-      nodeType: options.nodeType,
+      label: options.label,
+      planNodeId: options.planNodeId,
       status: "running",
     });
 
@@ -165,7 +203,7 @@ export class SubagentHost {
       task_id: this.opts.task.taskId,
       subagent_id: subagentId,
       goal_id: options.goalId,
-      assignment: options.assignment.slice(0, 500),
+      assignment: (options.label || options.assignment).slice(0, 500),
       // Include panel so clients that only listen for this event can render kids.
       panel_agents: this.opts.panelAgents?.list() || [],
     });
@@ -214,7 +252,8 @@ export class SubagentHost {
     await this.upsertHardGraphPackageChip({
       subagentId,
       assignment: options.assignment,
-      nodeType: options.nodeType,
+      label: options.label,
+      planNodeId: options.planNodeId,
       status: ok ? "done" : "failed",
     });
 

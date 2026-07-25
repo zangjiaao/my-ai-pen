@@ -1,4 +1,6 @@
+import { useState, type ReactNode } from "react";
 import { CheckCircle2, Circle, CircleDashed, XCircle } from "lucide-react";
+import { displayTodoTitle, humanAgentChipName } from "../lib/workerPresentation";
 
 type PlanStatus = "todo" | "pending" | "running" | "done" | "skipped" | "blocked" | "failed" | string;
 
@@ -42,12 +44,17 @@ export type GraphAwareTodoListProps = {
  *
  * If L1 phases were stripped by a bad snapshot but L2 still parents to
  * graph-stage-*, synthesize stage headers from those parent_ids.
+ *
+ * L1 stages are collapsible: completed stages auto-collapse; user can expand/collapse.
  */
 export function GraphAwareTodoList({
   planTree,
   workItems,
   running,
 }: GraphAwareTodoListProps) {
+  // Manual overrides: true=open, false=closed. Missing key → auto policy.
+  const [manual, setManual] = useState<Record<string, boolean>>({});
+
   const explicitPhases = planTree.filter(
     (n) =>
       String(n.level || "") === "phase" ||
@@ -58,9 +65,11 @@ export function GraphAwareTodoList({
     explicitPhases.length > 0
       ? explicitPhases
       : synthesizeGraphStagesFromWorkItems(workItems.length ? workItems : planTree);
+
   if (!phases.length) {
     return <StrixTodoList items={workItems} running={running} />;
   }
+
   const byParent = new Map<string, PlanNode[]>();
   for (const item of workItems) {
     const pid = String(item.parent_id || "");
@@ -71,37 +80,67 @@ export function GraphAwareTodoList({
     const pid = String(item.parent_id || "");
     return !pid || !phases.some((p) => String(p.node_id || p.id) === pid);
   });
+
+  const phaseMeta = phases.map((phase, index) => {
+    const id = String(phase.node_id || phase.id || index);
+    const children = byParent.get(id) || [];
+    const allDone =
+      children.length > 0
+        ? children.every((c) => isTerminalPlanStatus(c.status))
+        : isTerminalPlanStatus(phase.status);
+    const anyRunning =
+      String(phase.status || "").toLowerCase() === "running" ||
+      children.some((c) => normalizeTodoStatus(c.status) === "running");
+    return { phase, id, children, allDone, anyRunning };
+  });
+
+  const isExpanded = (m: (typeof phaseMeta)[0]): boolean => {
+    if (Object.prototype.hasOwnProperty.call(manual, m.id)) return manual[m.id]!;
+    // Auto: expand running / incomplete; collapse fully terminal stages.
+    if (m.anyRunning) return true;
+    if (m.allDone) return false;
+    return true;
+  };
+
   return (
-    <div className="space-y-3" data-testid="graph-todo-list">
-      {phases.map((phase, index) => {
-        const id = String(phase.node_id || phase.id || index);
-        const children = byParent.get(id) || [];
+    <div className="space-y-1" data-testid="graph-todo-list">
+      {phaseMeta.map((m) => {
+        const { phase, id, children } = m;
         const status = normalizeTodoStatus(phase.status);
-        const Icon = todoStatusIcon(status);
+        const open = isExpanded(m);
+        const doneN = children.filter((c) => isTerminalPlanStatus(c.status)).length;
+        const title = String(phase.title || id.replace(/^graph-stage-/, "") || id);
         return (
-          <div key={id} className="space-y-1">
-            <div className="flex min-w-0 items-center gap-2 px-1">
-              <Icon className={`h-3.5 w-3.5 shrink-0 ${todoStatusIconClass(status)}`} />
-              <p className={`min-w-0 break-words text-xs font-semibold uppercase tracking-wide text-ink-secondary ${todoTitleClass(status)}`}>
-                {String(phase.title || id.replace(/^graph-stage-/, "") || id)}
-              </p>
-              <span className="font-mono text-[10px] text-ink-muted">
-                {children.filter((c) => isTerminalPlanStatus(c.status)).length}/{children.length || 0}
-              </span>
-            </div>
-            {children.length > 0 ? (
-              <div className="ml-1 border-l border-hairline-soft pl-1">
-                <StrixTodoList items={children} running={running} />
+          <div key={id} className="space-y-0" data-stage-id={id} data-expanded={open ? "true" : "false"}>
+            {/* L1 uses the same row chrome as L2 (icon + title); click toggles expand without chevron chrome. */}
+            <PlanRow
+              status={status}
+              title={title}
+              meta={children.length ? `${doneN}/${children.length}` : undefined}
+              interactive
+              ariaExpanded={open}
+              onClick={() =>
+                setManual((prev) => ({
+                  ...prev,
+                  [id]: !open,
+                }))
+              }
+            />
+            {open && children.length > 0 ? (
+              <div className="ml-3 border-l border-hairline-soft pl-2">
+                <div className="space-y-0">
+                  {children.map((item, index) => (
+                    <StrixTodoItem key={planNodeKey(item, index)} item={item} />
+                  ))}
+                </div>
               </div>
-            ) : (
-              <p className="ml-5 text-[11px] text-ink-muted">No stage todos yet</p>
-            )}
+            ) : null}
           </div>
         );
       })}
       {orphan.length > 0 && (
-        <div className="space-y-1">
-          <p className="px-1 text-[10px] font-semibold uppercase text-ink-muted">Other</p>
+        <div className="space-y-0">
+          <p className="px-2 py-1 text-[10px] font-semibold uppercase text-ink-muted">Other</p>
           <StrixTodoList items={orphan} running={running} />
         </div>
       )}
@@ -161,17 +200,72 @@ function StrixTodoList({ items, running = false }: { items: PlanNode[]; running?
   );
 }
 
+/** Shared L1/L2 row shell — same icon size and padding so stages and todos read as one list. */
+function PlanRow({
+  status,
+  title,
+  meta,
+  badges,
+  notes,
+  noteLimit = 150,
+  interactive,
+  ariaExpanded,
+  onClick,
+}: {
+  status: ReturnType<typeof normalizeTodoStatus>;
+  title: string;
+  meta?: string;
+  badges?: ReactNode;
+  notes?: string | null;
+  noteLimit?: number;
+  interactive?: boolean;
+  ariaExpanded?: boolean;
+  onClick?: () => void;
+}) {
+  const Icon = todoStatusIcon(status);
+  const body = (
+    <>
+      <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${todoStatusIconClass(status)}`} />
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          <p className={`min-w-0 break-words text-sm font-medium [overflow-wrap:anywhere] ${todoTitleClass(status)}`}>
+            {title}
+          </p>
+          {badges}
+          {meta ? <span className="shrink-0 font-mono text-[10px] text-ink-muted">{meta}</span> : null}
+        </div>
+        {notes ? (
+          <p
+            className="mt-0.5 break-words text-xs text-ink-muted [overflow-wrap:anywhere] whitespace-pre-wrap"
+            title={String(notes)}
+          >
+            {clip(notes, noteLimit)}
+          </p>
+        ) : null}
+      </div>
+    </>
+  );
+  if (interactive) {
+    return (
+      <button
+        type="button"
+        className="flex w-full min-w-0 items-start gap-2 rounded-md px-2 py-2 text-left hover:bg-canvas-inset"
+        onClick={onClick}
+        aria-expanded={ariaExpanded}
+      >
+        {body}
+      </button>
+    );
+  }
+  return <div className="flex min-w-0 items-start gap-2 rounded-md px-2 py-2 hover:bg-canvas-inset">{body}</div>;
+}
+
 function StrixTodoItem({ item }: { item: PlanNode }) {
   const status = normalizeTodoStatus(item.status);
-  const Icon = todoStatusIcon(status);
   const isWorker = String(item.kind || "") === "worker" || String(item.source || "") === "worker";
   const workerBadge = isWorker ? workerOutcomeBadge(item) : null;
   const ownerLabel = String(item.owner_expert_name || "").trim();
-  const agentLabel =
-    String(item.owner_agent_name || "").trim() ||
-    (String(item.agent_id || item.linked_agent_id || "").trim()
-      ? String(item.agent_id || item.linked_agent_id).slice(0, 16)
-      : "");
+  const agentLabel = humanAgentChipName(item.owner_agent_name);
   const isFollowUp =
     String(item.source || "") === "worker" &&
     (/^follow-up\b/i.test(String(item.title || "")) || String(item.node_id || item.id || "").startsWith("plan-followup-"));
@@ -179,42 +273,39 @@ function StrixTodoItem({ item }: { item: PlanNode }) {
   const noteLimit = isFollowUp && (status === "failed" || workerBadge?.label === "failed") ? 320 : 150;
   // Agent sometimes bakes status into content ("…（已完成）"); strip for display — icon is SOT.
   const displayTitle = displayTodoTitle(String(item.title || "Untitled task"));
+  const badges = (
+    <>
+      {ownerLabel && (
+        <span
+          className="shrink-0 rounded-sm bg-canvas-inset px-1.5 py-0.5 text-[10px] font-medium text-ink-secondary"
+          title={`Owner: ${ownerLabel}`}
+        >
+          {ownerLabel}
+        </span>
+      )}
+      {agentLabel && (
+        <span
+          className="shrink-0 rounded-sm bg-status-running/10 px-1.5 py-0.5 text-[10px] font-medium text-status-running"
+          title={`Agent: ${agentLabel}`}
+        >
+          {agentLabel}
+        </span>
+      )}
+      {workerBadge && (
+        <span className={`shrink-0 rounded-sm px-1.5 py-0.5 text-[10px] font-medium uppercase ${workerBadge.className}`}>
+          {workerBadge.label}
+        </span>
+      )}
+    </>
+  );
   return (
-    <div className="flex min-w-0 items-start gap-2 rounded-md px-2 py-2 hover:bg-canvas-inset">
-      <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${todoStatusIconClass(status)}`} />
-      <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-          <p className={`min-w-0 break-words text-sm font-medium [overflow-wrap:anywhere] ${todoTitleClass(status)}`}>{displayTitle}</p>
-          {ownerLabel && (
-            <span
-              className="shrink-0 rounded-sm bg-canvas-inset px-1.5 py-0.5 text-[10px] font-medium text-ink-secondary"
-              title={`Owner: ${ownerLabel}`}
-            >
-              {ownerLabel}
-            </span>
-          )}
-          {agentLabel && (
-            <span
-              className="shrink-0 rounded-sm bg-status-running/10 px-1.5 py-0.5 text-[10px] font-medium text-status-running"
-              title={`Agent: ${agentLabel}`}
-            >
-              {agentLabel}
-            </span>
-          )}
-          {workerBadge && (
-            <span className={`shrink-0 rounded-sm px-1.5 py-0.5 text-[10px] font-medium uppercase ${workerBadge.className}`}>{workerBadge.label}</span>
-          )}
-        </div>
-        {item.notes && (
-          <p
-            className="mt-0.5 break-words text-xs text-ink-muted [overflow-wrap:anywhere] whitespace-pre-wrap"
-            title={String(item.notes)}
-          >
-            {clip(item.notes, noteLimit)}
-          </p>
-        )}
-      </div>
-    </div>
+    <PlanRow
+      status={status}
+      title={displayTitle}
+      badges={badges}
+      notes={item.notes}
+      noteLimit={noteLimit}
+    />
   );
 }
 
@@ -257,23 +348,7 @@ function workerOutcomeBadge(item: PlanNode): { label: string; className: string 
 }
 
 function isTerminalPlanStatus(status: PlanStatus | undefined): boolean {
-  return status === "done" || status === "blocked" || status === "failed" || status === "skipped";
-}
-
-/**
- * Strip agent-baked status suffixes from todo content for display.
- * Status lives on the plan node / icon — not inside the title string.
- */
-function displayTodoTitle(title: string): string {
-  let t = String(title || "").trim();
-  if (!t) return "Untitled task";
-  // Full-width / half-width parentheses: （已完成） (已完成) [done] etc.
-  t = t.replace(
-    /\s*[（(]\s*(已完成|已发现|完成|已跳过|已放弃|完成了|done|completed|found|skipped|abandoned)\s*[）)]\s*$/i,
-    "",
-  );
-  t = t.replace(/\s*[-–—]\s*(已完成|已发现|done|completed)\s*$/i, "");
-  return t.trim() || String(title || "").trim() || "Untitled task";
+  return status === "done" || status === "blocked" || status === "failed" || status === "skipped" || status === "completed";
 }
 
 function normalizeTodoStatus(status: PlanStatus | undefined): "running" | "done" | "failed" | "blocked" | "skipped" | "pending" {

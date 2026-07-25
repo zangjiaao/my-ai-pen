@@ -10,6 +10,19 @@ import type { PlatformMessage, PlatformSink, TaskEnvelope } from "../types.js";
 
 export type GraphStagePlanStatus = "pending" | "running" | "done" | "failed" | "blocked" | "skipped";
 
+/** Normalize worker/plan status vocabulary to plan-store terms. */
+export function normalizePlanWorkStatus(status: string | undefined): string {
+  const s = String(status || "").trim().toLowerCase();
+  if (!s) return "pending";
+  if (s === "completed" || s === "complete" || s === "done") return "done";
+  if (s === "failed" || s === "error" || s === "crashed") return "failed";
+  if (s === "running" || s === "in_progress" || s === "active") return "running";
+  if (s === "blocked") return "blocked";
+  if (s === "skipped") return "skipped";
+  if (s === "pending" || s === "todo") return "pending";
+  return s;
+}
+
 function stageNodeId(stageId: string): string {
   return `graph-stage-${String(stageId || "").trim() || "unknown"}`;
 }
@@ -24,6 +37,49 @@ function slug(value: string): string {
     .slice(0, 48);
   return cleaned || "item";
 }
+
+function normalizeMatchText(value: string): string {
+  return String(value || "")
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/subagent handoff package/gi, " ")
+    .replace(/https?:\/\/\S+/gi, " ")
+    .replace(/[^a-z0-9\u4e00-\u9fff/_.-]+/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Minimum score for last-resort title↔goal binding (avoid weak token hits). */
+export const FUZZY_BIND_MIN_SCORE = 60;
+
+/** Higher = better match between a todo title and worker this_turn_goal. */
+export function scoreTodoGoalMatch(title: string, goal: string): number {
+  const t = normalizeMatchText(title);
+  const g = normalizeMatchText(goal);
+  if (!t || !g) return 0;
+  if (t === g) return 100;
+  if (g.includes(t) || t.includes(g)) return 85;
+  // Path-like tokens (/vulnerabilities/sqli) are strong signals.
+  const pathTokens = [...g.matchAll(/\/[a-z0-9_./-]{3,}/g)].map((m) => m[0]!);
+  for (const p of pathTokens) {
+    if (t.includes(p.replace(/^\//, "")) || t.includes(p)) return 75;
+  }
+  const tParts = new Set(t.split(/[\s/_.-]+/).filter((x) => x.length >= 3));
+  const gParts = new Set(g.split(/[\s/_.-]+/).filter((x) => x.length >= 3));
+  if (!tParts.size || !gParts.size) return 0;
+  let hit = 0;
+  for (const x of tParts) if (gParts.has(x)) hit++;
+  if (hit === 0) return 0;
+  const ratio = hit / Math.min(tParts.size, gParts.size);
+  return Math.round(20 + ratio * 50 + hit * 3);
+}
+
+export type WorkerChipInput = {
+  agent_id: string;
+  owner_agent_name: string;
+  /** When set, updates the todo status (normalized). When omitted, keeps prior status. */
+  status?: string;
+};
 
 /**
  * Mutable L1/L2 plan for one Hard Graph run.
@@ -60,10 +116,15 @@ export class HardGraphPlanStore {
   /**
    * Replace L2 todos for one stage only. Incoming nodes may be raw TodoStore
    * projections; parent_id is rewritten to the Graph stage L1 id.
+   *
+   * Preserves Worker ownership (agent_id / owner_agent_name) on matching node_ids,
+   * and keeps pkg-* package rows that Main's todo snapshot would otherwise wipe.
    */
   setStageTodos(stageId: string, nodes: PlanNodeLike[]): void {
     if (!this.stageTodos.has(stageId)) return;
     const parentId = stageNodeId(stageId);
+    const prev = this.stageTodos.get(stageId) || [];
+    const prevById = new Map(prev.map((n) => [String(n.node_id || n.id || ""), n]));
     const workItems = nodes
       .filter((n) => (n.level || "work_item") === "work_item")
       .map((n, i) => {
@@ -71,7 +132,8 @@ export class HardGraphPlanStore {
         const nodeId =
           String(n.node_id || n.id || "").trim() ||
           `todo-task-${slug(stageId)}-${slug(title)}`;
-        return {
+        const prior = prevById.get(nodeId);
+        const merged: PlanNodeLike = {
           ...n,
           node_id: nodeId,
           id: nodeId,
@@ -83,8 +145,36 @@ export class HardGraphPlanStore {
           status: n.status || "pending",
           priority: typeof n.priority === "number" ? n.priority : 100 + i,
         };
+        // Keep Worker chip if todo tool rewrite omitted ownership.
+        if (prior?.agent_id && !String(merged.agent_id || "").trim()) {
+          merged.agent_id = prior.agent_id;
+          merged.owner_agent_name = prior.owner_agent_name || merged.owner_agent_name;
+          merged.linked_agent_id = prior.linked_agent_id || merged.linked_agent_id;
+        }
+        return merged;
       });
+    const seen = new Set(workItems.map((n) => String(n.node_id || n.id || "")));
+    // Package rows are host-owned; do not drop them on Main todo.init.
+    for (const p of prev) {
+      const id = String(p.node_id || p.id || "");
+      if (id.startsWith("pkg-") && !seen.has(id)) {
+        workItems.push({ ...p, parent_id: parentId });
+        seen.add(id);
+      }
+    }
     this.stageTodos.set(stageId, workItems);
+  }
+
+  /** Remove one L2 row by node_id (e.g. drop pkg-* mirror after binding to a Main todo). */
+  removeStageWorkItem(stageId: string, nodeId: string): void {
+    if (!this.stageTodos.has(stageId)) return;
+    const id = String(nodeId || "").trim();
+    if (!id) return;
+    const list = this.stageTodos.get(stageId) || [];
+    this.stageTodos.set(
+      stageId,
+      list.filter((n) => String(n.node_id || n.id || "") !== id),
+    );
   }
 
   /** Upsert a single L2 work item (e.g. package/worker row with agent chip). */
@@ -109,6 +199,95 @@ export class HardGraphPlanStore {
     if (idx >= 0) list[idx] = { ...list[idx], ...next };
     else list.push(next);
     this.stageTodos.set(stageId, list);
+  }
+
+  /**
+   * Explicit ownership: attach Worker chip to a known L2 node_id.
+   * Preferred over fuzzy goal matching.
+   */
+  attachWorker(
+    stageId: string,
+    nodeId: string,
+    input: WorkerChipInput,
+  ): string | null {
+    if (!this.stageTodos.has(stageId)) return null;
+    const id = String(nodeId || "").trim();
+    if (!id || id.startsWith("pkg-")) return null;
+    const list = this.stageTodos.get(stageId) || [];
+    const idx = list.findIndex((n) => String(n.node_id || n.id || "") === id);
+    if (idx < 0) return null;
+    this.applyChip(list, idx, input);
+    this.stageTodos.set(stageId, list);
+    return id;
+  }
+
+  /**
+   * Re-attach by existing agent_id (status updates after first bind).
+   * Does not steal another worker's row.
+   */
+  reattachWorkerByAgent(
+    stageId: string,
+    input: WorkerChipInput,
+  ): string | null {
+    if (!this.stageTodos.has(stageId)) return null;
+    const agentId = String(input.agent_id || "").trim();
+    if (!agentId) return null;
+    const list = this.stageTodos.get(stageId) || [];
+    const idx = list.findIndex((n) => {
+      const id = String(n.node_id || n.id || "");
+      if (id.startsWith("pkg-")) return false;
+      return String(n.agent_id || n.linked_agent_id || "").trim() === agentId;
+    });
+    if (idx < 0) return null;
+    this.applyChip(list, idx, input);
+    this.stageTodos.set(stageId, list);
+    return String(list[idx]!.node_id || list[idx]!.id || "");
+  }
+
+  /**
+   * Last-resort: attach to free Main todo by title↔goal score.
+   * Never steals a row already bound to a different agent.
+   * Prefer attachWorker / reattachWorkerByAgent when possible.
+   */
+  bindWorkerToBestTodo(
+    stageId: string,
+    input: WorkerChipInput & { goal: string },
+  ): string | null {
+    if (!this.stageTodos.has(stageId)) return null;
+    const goal = String(input.goal || "").trim();
+    if (!goal) return null;
+    const list = this.stageTodos.get(stageId) || [];
+    let best: { idx: number; score: number } | null = null;
+    for (let i = 0; i < list.length; i++) {
+      const n = list[i]!;
+      const id = String(n.node_id || n.id || "");
+      if (id.startsWith("pkg-")) continue;
+      const aid = String(n.agent_id || "").trim();
+      // Never steal another worker's chip.
+      if (aid && aid !== input.agent_id) continue;
+      const score = scoreTodoGoalMatch(String(n.title || ""), goal);
+      if (score < FUZZY_BIND_MIN_SCORE) continue;
+      if (!best || score > best.score) best = { idx: i, score };
+    }
+    if (!best) return null;
+    const cur = list[best.idx]!;
+    this.applyChip(list, best.idx, input);
+    this.stageTodos.set(stageId, list);
+    return String(cur.node_id || cur.id || "");
+  }
+
+  private applyChip(list: PlanNodeLike[], idx: number, input: WorkerChipInput): void {
+    const cur = list[idx]!;
+    const next: PlanNodeLike = {
+      ...cur,
+      agent_id: input.agent_id,
+      owner_agent_name: input.owner_agent_name,
+      linked_agent_id: input.agent_id,
+    };
+    if (input.status !== undefined && String(input.status).trim()) {
+      next.status = normalizePlanWorkStatus(input.status);
+    }
+    list[idx] = next;
   }
 
   toPlanTree(): PlanNodeLike[] {
@@ -147,9 +326,15 @@ export async function emitHardGraphPlanTreeUpdate(
 ): Promise<void> {
   const plan_tree = stampPlanTreeOwner(plan.toPlanTree(), task);
   const workItems = plan_tree.filter((n) => (n.level || "work_item") === "work_item");
-  const done = workItems.filter((n) => n.status === "done" || n.status === "skipped").length;
+  const done = workItems.filter((n) => {
+    const s = normalizePlanWorkStatus(String(n.status || ""));
+    return s === "done" || s === "skipped";
+  }).length;
   const total = workItems.length;
-  const open = workItems.filter((n) => n.status === "pending" || n.status === "running").length;
+  const open = workItems.filter((n) => {
+    const s = normalizePlanWorkStatus(String(n.status || ""));
+    return s === "pending" || s === "running";
+  }).length;
   const percent = total === 0 ? 0 : Math.round((done / total) * 100);
   await platform.send({
     type: "plan_tree_updated",

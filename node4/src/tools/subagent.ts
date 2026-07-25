@@ -72,6 +72,8 @@ type ResolvedPackage = {
   skill_id?: string;
   node_type?: string;
   goal_id?: string;
+  /** Explicit Hard Graph L2 todo node_id for Worker chip ownership. */
+  plan_node_id?: string;
   command?: string;
   timeout_seconds: number;
   /** Explicit warm follow-up of a parked worker (affinity: same path). */
@@ -88,6 +90,15 @@ const packageItemSchema = Type.Object({
   skill_id: Type.Optional(Type.String()),
   node_type: Type.Optional(Type.String()),
   goal_id: Type.Optional(Type.String()),
+  plan_node_id: Type.Optional(
+    Type.String({
+      description:
+        "Hard Graph L2 todo node_id to attach the Worker chip (preferred over title/goal fuzzy match).",
+    }),
+  ),
+  todo_node_id: Type.Optional(
+    Type.String({ description: "Alias of plan_node_id" }),
+  ),
   command: Type.Optional(Type.String()),
   timeout_seconds: Type.Optional(Type.Number()),
   resume_agent_id: Type.Optional(
@@ -110,8 +121,9 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
     label: "Subagent",
     description: [
       "Child work packages under this task workspace (OMP keep-alive).",
-      "SPAWN FLAT: target, scope, already_done, this_turn_goal, success_criteria (+ node_type/skill_id).",
+      "SPAWN FLAT: target, scope, already_done, this_turn_goal, success_criteria (+ node_type/skill_id/plan_node_id).",
       "SPAWN BATCH: packages=[{...}] concurrent (NODE4_SUBAGENT_CONCURRENCY default 8). Orthogonal paths = cold workers.",
+      "plan_node_id (or todo_node_id): attach Worker chip to that Tasks L2 todo when known.",
       "WARM: resume_agent_id=prior agent_id on SAME path (gap/timeout follow-up). Soft-fail workers stay idle for resume.",
       "LIST: op=list → idle_workers[] (agent_id, path_key, …).",
       "RELEASE: op=release + agent_id (or release_agent_id) — dispose worker now; else idle TTL (~420s) / maxIdle LRU auto-releases.",
@@ -137,6 +149,13 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
       command: Type.Optional(Type.String()),
       skill_id: Type.Optional(Type.String()),
       node_type: Type.Optional(Type.String()),
+      plan_node_id: Type.Optional(
+        Type.String({
+          description:
+            "Hard Graph L2 todo node_id for Worker chip ownership (preferred over fuzzy title match).",
+        }),
+      ),
+      todo_node_id: Type.Optional(Type.String({ description: "Alias of plan_node_id" })),
       timeout_seconds: Type.Optional(Type.Number()),
       resume_agent_id: Type.Optional(
         Type.String({
@@ -405,6 +424,13 @@ function resolvePackageInput(
       skill_id: src.skill_id != null ? String(src.skill_id).trim() : undefined,
       node_type: src.node_type != null ? String(src.node_type).trim() : item ? undefined : (top.node_type != null ? String(top.node_type).trim() : undefined),
       goal_id: src.goal_id != null ? String(src.goal_id).trim() : undefined,
+      plan_node_id: (() => {
+        const raw =
+          src.plan_node_id ??
+          src.todo_node_id ??
+          (!item ? top.plan_node_id ?? top.todo_node_id : undefined);
+        return raw != null ? String(raw).trim() || undefined : undefined;
+      })(),
       command: src.command != null ? String(src.command).trim() : undefined,
       resume_agent_id:
         src.resume_agent_id != null
@@ -549,6 +575,10 @@ async function runSubagentPackage(
     assignment: handoff.packageText,
     goalId: pkg.goal_id || undefined,
     nodeType,
+    // Pure this_turn_goal for panel/Tasks — not "[nodeType] goal" or full handoff markdown.
+    label: handoff.handoff.this_turn_goal || assignmentLabel,
+    skillId,
+    planNodeId: pkg.plan_node_id || undefined,
     // Same workDir only when we hold a warm handle.
     subagentId: warmHandle ? warmHandle.agentId : undefined,
     worker: async (ctx) => {

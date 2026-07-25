@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { Bot, ChevronDown, ChevronRight, GitBranch, Search, Tag } from "lucide-react";
 import type { SecurityAsset, SecurityVulnerability } from "../lib/securityTypes";
+import {
+  agentDisplayName,
+  agentPurposeLine,
+  looksLikeHandoffPackage,
+} from "../lib/workerPresentation";
 import FindingCard from "./cards/FindingCard";
 import { GraphAwareTodoList } from "./TasksPlanList";
 
@@ -643,7 +648,24 @@ function StrixAgentList({ agents }: { agents: StrixAgentStatus[] }) {
     if (!parentId) continue;
     childrenByParent.set(parentId, [...(childrenByParent.get(parentId) || []), agent]);
   }
-  const renderAgentNode = (agent: StrixAgentStatus, primary = false, trail: string[] = [], lastSibling = true): ReactNode => {
+  // Legacy dirty names only: sibling order as Worker ordinal when name is not already Worker N.
+  const workerOrdinalById = new Map<string, number>();
+  for (const kids of childrenByParent.values()) {
+    kids.forEach((child, i) => {
+      const fromName = String(child.name || "").match(/^Worker\s+(\d+)\s*$/i);
+      if (fromName) workerOrdinalById.set(child.id, Number(fromName[1]));
+      else if (String(child.role || "").toLowerCase() === "subagent") {
+        workerOrdinalById.set(child.id, i + 1);
+      }
+    });
+  }
+
+  const renderAgentNode = (
+    agent: StrixAgentStatus,
+    primary = false,
+    trail: string[] = [],
+    lastSibling = true,
+  ): ReactNode => {
     const children = childrenByParent.get(agent.id) || [];
     const open = expanded[agent.id] ?? true;
     const canToggle = children.length > 0;
@@ -656,33 +678,33 @@ function StrixAgentList({ agents }: { agents: StrixAgentStatus[] }) {
           <>
             <svg
               aria-hidden="true"
-              viewBox="0 0 26 28"
-              className="pointer-events-none absolute -left-1.5 top-0 h-7 w-[26px] text-hairline"
+              viewBox="0 0 26 22"
+              className="pointer-events-none absolute -left-1.5 top-0 h-[22px] w-[26px] text-hairline"
               fill="none"
             >
-              <path d="M0 0 V14 Q0 20 6 20 H16" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              <path d="M0 0 V10 Q0 16 6 16 H16" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
             </svg>
-            {!lastSibling && <span aria-hidden="true" className="pointer-events-none absolute bottom-0 -left-1.5 top-[21px] w-px bg-hairline" />}
+            {!lastSibling && <span aria-hidden="true" className="pointer-events-none absolute bottom-0 -left-1.5 top-[17px] w-px bg-hairline" />}
           </>
         )}
         <div className="relative">
-          {hasVisibleChildren && <span aria-hidden="true" className="pointer-events-none absolute bottom-0 left-[18px] top-[26px] w-px bg-hairline" />}
+          {hasVisibleChildren && <span aria-hidden="true" className="pointer-events-none absolute bottom-0 left-[18px] top-[22px] w-px bg-hairline" />}
           <AgentRow
             agent={agent}
             primary={primary}
             secondary={!primary}
             childCount={children.length}
             expanded={open}
+            workerOrdinal={workerOrdinalById.get(agent.id)}
             onToggle={canToggle ? () => setExpanded((current) => ({ ...current, [agent.id]: !open })) : undefined}
           />
         </div>
         {children.length > 0 && (
-          <>
-            {open && <span aria-hidden="true" className="pointer-events-none block h-1 w-px bg-hairline ml-[18px]" />}
-            <div className={`${open ? "block" : "hidden"} space-y-1 pl-6`}>
-              {children.map((child, index) => renderAgentNode(child, false, nextTrail, index === children.length - 1))}
-            </div>
-          </>
+          <div className={`${open ? "block" : "hidden"} space-y-0 pl-6`}>
+            {children.map((child, index) =>
+              renderAgentNode(child, false, nextTrail, index === children.length - 1),
+            )}
+          </div>
         )}
       </div>
     );
@@ -700,6 +722,7 @@ function AgentRow({
   secondary = false,
   childCount = 0,
   expanded = false,
+  workerOrdinal,
   onToggle,
 }: {
   agent: StrixAgentStatus;
@@ -707,9 +730,12 @@ function AgentRow({
   secondary?: boolean;
   childCount?: number;
   expanded?: boolean;
+  /** 1-based Worker index when rendering under Main (legacy rename fallback). */
+  workerOrdinal?: number;
   onToggle?: () => void;
 }) {
   const summary = summarizeAgentAction(agent);
+  const displayName = agentDisplayName(agent, workerOrdinal);
   const status = agentStatusLabel(agent.status);
   const rowInteractive = Boolean(onToggle);
   const handleRowKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -719,9 +745,11 @@ function AgentRow({
     onToggle?.();
   };
   const highlighted = Boolean(agent.highlighted) && primary;
+  // Workers (secondary): tighter vertical padding so the fan-out list is denser.
+  const padY = secondary ? "py-0.5" : "py-1.5";
   return (
     <div
-      className={`min-w-0 rounded-md py-2 pr-2 pl-3.5 ${highlighted ? "bg-status-running/8 ring-1 ring-status-running/25" : "bg-transparent"} ${rowInteractive ? "cursor-pointer hover:bg-canvas-inset focus-visible:outline focus-visible:outline-2 focus-visible:outline-status-running/40" : "hover:bg-canvas-inset"}`}
+      className={`min-w-0 rounded-md ${padY} pr-2 pl-3.5 ${highlighted ? "bg-status-running/8 ring-1 ring-status-running/25" : "bg-transparent"} ${rowInteractive ? "cursor-pointer hover:bg-canvas-inset focus-visible:outline focus-visible:outline-2 focus-visible:outline-status-running/40" : "hover:bg-canvas-inset"}`}
       onClick={rowInteractive ? onToggle : undefined}
       onKeyDown={handleRowKeyDown}
       role={rowInteractive ? "button" : undefined}
@@ -733,7 +761,7 @@ function AgentRow({
       <div className="flex min-w-0 items-start gap-2">
         <span
           aria-hidden="true"
-          className={`mt-2 h-2 w-2 shrink-0 rounded-full ${agentStatusDotClass(agent.status)}`}
+          className={`${secondary ? "mt-1.5" : "mt-2"} h-2 w-2 shrink-0 rounded-full ${agentStatusDotClass(agent.status)}`}
           title={agentStatusLabel(agent.status)}
         />
         <div className="min-w-0 flex-1">
@@ -742,14 +770,16 @@ function AgentRow({
               {/* Name + active sit together; do not flex-1 the title or active is pushed right. */}
               <div className="flex min-w-0 items-center gap-1.5">
                 <AgentRoleBadge primary={primary} />
-                <p className="min-w-0 truncate text-sm font-medium">{agent.name || agent.id}</p>
+                <p className="min-w-0 truncate text-sm font-medium" title={displayName}>
+                  {displayName}
+                </p>
                 {highlighted && (
                   <span className="shrink-0 rounded-sm bg-status-running/15 px-1.5 py-0.5 text-[10px] font-medium text-status-running">
                     active
                   </span>
                 )}
               </div>
-              <p className="mt-0.5 min-w-0 truncate text-xs text-ink-secondary" title={summary}>{summary}</p>
+              <p className={`${secondary ? "mt-0" : "mt-0.5"} min-w-0 truncate text-xs text-ink-secondary`} title={summary}>{summary}</p>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
               {childCount > 0 && <span className="font-mono text-[10px] text-ink-muted" title={`${childCount} sub-agents`}>{childCount}</span>}
@@ -3700,19 +3730,33 @@ function agentStatusBadgeClass(status: string | undefined): string {
 
 function summarizeAgentAction(agent: StrixAgentStatus): string {
   const status = agentStatusLabel(agent.status);
+  const isSub = String(agent.role || "").toLowerCase() === "subagent";
+  const purpose = agentPurposeLine(agent);
+
   if (status === "timeout") return "超时结束";
-  if (status === "failed") return "执行失败";
+  if (status === "failed") {
+    if (purpose && !/^子任务失败$/i.test(purpose)) return clip(purpose, 120);
+    return "执行失败";
+  }
   if (status === "aborted" || status === "stopped") return "已中止";
 
-  // Prefer Node-authored human detail (current activity).
+  // Prefer Node-authored human detail (current activity). Trust panel fields when clean.
   const detail = String(agent.current_detail || "").trim();
-  if (detail && !isOpaquePhaseToken(detail)) return clip(detail, 120);
+  if (
+    detail &&
+    !isOpaquePhaseToken(detail) &&
+    !looksLikeHandoffPackage(detail) &&
+    !/^子任务已完成$/.test(detail)
+  ) {
+    return clip(detail, 120);
+  }
 
   const tool = String(agent.current_tool || "").trim();
   const lastTool = String(agent.last_tool || "").trim();
   const action = String(agent.current_action || "").trim();
 
   if (action === "tool_running" || tool) {
+    if (!isSub && /并行\s+\d+\s+个\s*Worker/i.test(detail)) return clip(detail, 120);
     return `正在${friendlyToolLabel(tool || "tool")}`;
   }
   if (action === "llm_waiting" || action === "model_turn") {
@@ -3721,14 +3765,22 @@ function summarizeAgentAction(agent: StrixAgentStatus): string {
   }
   if (action === "chat") return "对话中，准备回复";
   if (action === "starting") return "任务启动中";
-  if (action === "running") return "工作进行中";
+  if (action === "running") {
+    if (isSub && purpose) return clip(purpose, 120);
+    if (!isSub && /并行\s+\d+\s+个\s*Worker/i.test(detail)) return clip(detail, 120);
+    return "工作进行中";
+  }
   if (action === "continue") return "继续推进任务";
-  if (action === "finished" || action === "completed") return "本轮工作已结束";
+  if (action === "finished" || action === "completed" || status === "done") {
+    if (isSub && purpose) {
+      return purpose.startsWith("已完成") ? clip(purpose, 120) : clip(`已完成：${purpose}`, 120);
+    }
+    return "本轮工作已结束";
+  }
   if (action && !isOpaquePhaseToken(action) && !["done", "timeout", "failed"].includes(action)) {
     return compactAgentAction(action);
   }
-  if (status === "done") return "本轮工作已结束";
-  if (agent.task) return clip(String(agent.task), 90);
+  if (purpose) return clip(purpose, 90);
   return "等待工作";
 }
 
