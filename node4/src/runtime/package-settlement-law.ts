@@ -223,7 +223,11 @@ export function recordPackageTerminal(
   return primary;
 }
 
-/** Resolve terminal by primary key or alias (L2 done lookup). */
+/**
+ * Resolve terminal by primary key or exact alias only (L2 done lookup).
+ * No substring fuzzy match — short titles like "a" would otherwise hit every key
+ * containing the letter "a" and falsely block todo(done).
+ */
 export function lookupPackageTerminal(
   terminals: Record<string, PackageTerminalEntry>,
   aliasIndex: Record<string, string> | undefined,
@@ -234,15 +238,6 @@ export function lookupPackageTerminal(
   if (terminals[k]) return terminals[k];
   const primary = aliasIndex?.[k];
   if (primary && terminals[primary]) return terminals[primary];
-  // Fuzzy: primary or alias includes task name
-  for (const [pk, entry] of Object.entries(terminals)) {
-    if (pk.includes(k) || k.includes(pk)) return entry;
-  }
-  if (aliasIndex) {
-    for (const [alias, pk] of Object.entries(aliasIndex)) {
-      if ((alias.includes(k) || k.includes(alias)) && terminals[pk]) return terminals[pk];
-    }
-  }
   return undefined;
 }
 

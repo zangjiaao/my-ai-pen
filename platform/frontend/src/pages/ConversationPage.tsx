@@ -2819,7 +2819,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
       <AssetDetailDialog
         open={Boolean(selectedAsset)}
         assetId={(selectedAsset?.id || selectedAsset?.asset_id) as string | undefined}
-        initial={selectedAsset}
+        initial={selectedAsset as Parameters<typeof AssetDetailDialog>[0]["initial"]}
         onClose={() => setSelectedAsset(null)}
       />
     </div>

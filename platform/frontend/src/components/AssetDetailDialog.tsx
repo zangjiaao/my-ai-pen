@@ -27,7 +27,7 @@ type ServiceRow = {
   note?: string | null;
 };
 
-type AssetDetail = SecurityAsset & {
+type AssetDetail = Omit<SecurityAsset, "services" | "related_vulnerabilities"> & {
   type_label?: string;
   source_label?: string;
   ports_summary?: string;
