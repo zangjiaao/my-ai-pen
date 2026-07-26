@@ -114,6 +114,9 @@ export function createTodoTool(runtime: ToolRuntime): AgentTool<any> {
       // Spec #116 I0.21: Expert Graph coverage SoT = GraphStore only (no TodoStore∥GraphStore dual plan_tree).
       const graphRun = runtime.lifecycle.hardGraphRun;
       const coverageSot = graphCoverageSourceOfTruth(Boolean(graphRun?.plan));
+      // Workers (depth >= 1) keep a private TodoStore for their own loop only.
+      // Never broadcast plan_tree: same expert_id would replace Main/Graph L1+L2 on the right panel.
+      const isSubagent = (runtime.lifecycle.subagentDepth || 0) >= 1;
 
       // Successful mutation: clear error reminder, emit todo + plan_tree for platform Tasks.
       if (!result.readOnly) {
@@ -125,10 +128,14 @@ export function createTodoTool(runtime: ToolRuntime): AgentTool<any> {
           op,
           phases: runtime.todo.snapshot(),
           open_count: runtime.todo.openCount(),
+          // Hint for platform consumers: worker-local, not Case Tasks SoT
+          scope: isSubagent ? "subagent_local" : "case",
         });
-        // Todo tool is a facade: mutate Graph L2 via setStageTodos, emit Graph plan_tree only.
-        // I0.21: never emit TodoStore plan_tree on Expert Graph path (even if stageId missing).
-        if (coverageSot === "graph_store" && graphRun?.plan) {
+        if (isSubagent) {
+          // Local tool result only — no plan_tree_updated, no Graph setStageTodos.
+        } else if (coverageSot === "graph_store" && graphRun?.plan) {
+          // Todo tool is a facade: mutate Graph L2 via setStageTodos, emit Graph plan_tree only.
+          // I0.21: never emit TodoStore plan_tree on Expert Graph path (even if stageId missing).
           if (graphRun.stageId) {
             const payload = buildTodoPlanTreePayload(runtime.todo);
             graphRun.plan.setStageTodos(graphRun.stageId, payload.plan_tree);

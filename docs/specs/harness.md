@@ -180,7 +180,7 @@ Main (current seat session) decides when to spawn — not a separate Coordinator
 
 | Path | Behavior |
 |------|----------|
-| No `command=` | **Homogeneous child LLM session** (same pack act tools: shell/http/session/browser/script/fs/fact/skill/todo). No parent chat. No nested subagent. **No finding booking** (Main books). Child writes `result.json` with structured candidates/facts/deadends. **Salvage without valid result.json ≠ package success** (Spec #116). Graph packages require `plan_node_id`. |
+| No `command=` | **Homogeneous child LLM session** (same pack act tools: shell/http/session/browser/script/fs/fact/skill/todo). No parent chat. No nested subagent. **No finding booking** (Main books). Child writes `result.json` with structured candidates/facts/deadends. **Salvage without valid result.json ≠ package success** (Spec #116). Graph packages require `plan_node_id`. Worker `todo` is local-only — must **not** emit Case `plan_tree_updated` (would wipe Main/Graph Tasks on the right panel). |
 | `command=` set | Bounded shell probe only (deterministic / smokes). |
 | Lab dry | `NODE4_SUBAGENT_DRY=1` skips LLM and writes a dry structured result. |
 
