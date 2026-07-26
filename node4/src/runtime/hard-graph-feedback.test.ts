@@ -185,5 +185,15 @@ m2 = accumulateStageFeedback(m2, {
 });
 assert.equal(m2.fanout_packages_n, 3);
 assert.equal(m2.book_outcomes.booked_n, 2);
+assert.equal(m2.findings_booked_n, 0, "findings_booked_n defaults 0 until Store absolute reported");
+m2 = accumulateStageFeedback(m2, {
+  stageId: "validate_book",
+  structureFailed: false,
+  bookOutcomes: { booked_n: 1 },
+  findingsBookedN: 2,
+  structured: normalizeSubagentResult({ ok: true, summary: "store booked", candidates: [] }),
+});
+assert.equal(m2.findings_booked_n, 2, "absolute Store booked overwrites");
+assert.equal(m2.book_outcomes.booked_n, 3, "book_outcomes still accumulates deltas");
 
 console.log("hard-graph-feedback.test.ts: ok");

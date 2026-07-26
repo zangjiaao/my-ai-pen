@@ -62,12 +62,14 @@ export type HardProcessMetrics = {
    * Do not interpret as "candidate path-match = attempted".
    */
   coverage_attempt_rate: number;
-  /** Always present — booking export for dual-arm scorecards. */
+  /** Always present — booking export for dual-arm scorecards (JSON findings / stage delta). */
   book_outcomes: BookOutcomes;
   /**
-   * Spec #111 findings family: Store booked count when available (I1.4 alignment vs platform).
+   * Spec #111 findings family (I1.4): Finding Store booked count (absolute).
+   * Distinct from book_outcomes.booked_n (stage JSON/platform delta accumulate).
+   * Compare to platform-visible via findingsBookedAlignment.
    */
-  findings_booked_n?: number;
+  findings_booked_n: number;
   /**
    * Spec #111 L2 family: done-only numerator rate (I1.5 S1). Optional when L2 not projected.
    */
@@ -237,6 +239,7 @@ export function emptyHardProcessMetrics(): HardProcessMetrics {
     surface_acted_rate: 1,
     coverage_attempt_rate: 1,
     book_outcomes: { booked_n: 0, reject_hints_n: 0 },
+    findings_booked_n: 0,
   };
 }
 
@@ -272,6 +275,11 @@ export function accumulateStageFeedback(
     /** Real packages joined this stage (from promote/host). Default 0 — do not invent. */
     fanoutPackagesN?: number;
     bookOutcomes?: { booked_n?: number; reject_hints_n?: number };
+    /**
+     * Absolute Finding Store booked count after this stage (I1.4 findings family).
+     * When omitted, prior findings_booked_n is kept (do not invent from candidates).
+     */
+    findingsBookedN?: number;
     handoffSurfacesN?: number;
   },
 ): HardProcessMetrics {
@@ -279,6 +287,7 @@ export function accumulateStageFeedback(
     typeof input.fanoutPackagesN === "number" && Number.isFinite(input.fanoutPackagesN)
       ? Math.max(0, Math.floor(input.fanoutPackagesN))
       : 0;
+  const bookedDelta = input.bookOutcomes?.booked_n || 0;
   const next: HardProcessMetrics = {
     ...metrics,
     stages_done: metrics.stages_done.includes(input.stageId)
@@ -294,12 +303,17 @@ export function accumulateStageFeedback(
     fanout_packages_n: metrics.fanout_packages_n + fanoutN,
     discovery_yield_notes: [...metrics.discovery_yield_notes],
     book_outcomes: {
-      booked_n: metrics.book_outcomes.booked_n + (input.bookOutcomes?.booked_n || 0),
+      booked_n: metrics.book_outcomes.booked_n + bookedDelta,
       reject_hints_n:
         metrics.book_outcomes.reject_hints_n +
         (input.structureFailed ? 1 : 0) +
         (input.bookOutcomes?.reject_hints_n || 0),
     },
+    // Absolute Store count when stage reports it; else keep prior (never invent).
+    findings_booked_n:
+      typeof input.findingsBookedN === "number" && Number.isFinite(input.findingsBookedN)
+        ? Math.max(0, Math.floor(input.findingsBookedN))
+        : metrics.findings_booked_n ?? 0,
   };
 
   const yieldEval = evaluateDiscoveryYield({

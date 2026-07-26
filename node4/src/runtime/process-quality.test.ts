@@ -348,6 +348,31 @@ let m = accumulateStageFeedback(emptyM, {
 });
 assert.equal(m.fanout_packages_n, 0, "I1.3: zero fanout legal (Case B shape)");
 assert.equal(m.surface_acted_rate, m.coverage_attempt_rate);
+assert.equal(m.findings_booked_n, 0, "I1.4: findings_booked_n always present");
+
+// I1.4: Store booked absolute is wired into process metrics (not book_outcomes delta)
+m = accumulateStageFeedback(m, {
+  stageId: "validate_book",
+  structureFailed: false,
+  fanoutPackagesN: 0,
+  bookOutcomes: { booked_n: 1, reject_hints_n: 0 },
+  findingsBookedN: 3,
+  structured: normalizeSubagentResult({
+    ok: true,
+    summary: "booked",
+    candidates: [],
+  }),
+});
+assert.equal(m.book_outcomes.booked_n, 1, "book_outcomes is JSON/platform delta accumulate");
+assert.equal(m.findings_booked_n, 3, "findings_booked_n is absolute Store count");
+assert.equal(
+  findingsBookedAlignment({
+    findings_booked_n: m.findings_booked_n,
+    platform_visible_n: m.book_outcomes.booked_n,
+  }).red_signal,
+  true,
+  "I1.4: Store vs book_outcomes mismatch is alignment red",
+);
 
 // --- Case A shape fixture (partial wave + interrupt honesty) — not answer keys ---
 const caseA = evaluateHonestPartial({

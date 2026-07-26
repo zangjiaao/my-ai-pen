@@ -53,6 +53,11 @@ export type StageExecutorOutput = {
   fanoutPackagesN?: number;
   /** Booking outcomes when the stage books or reports rejects (e.g. validate_book). */
   bookOutcomes?: { booked_n?: number; reject_hints_n?: number };
+  /**
+   * Absolute Finding Store booked count after stage (I1.4 process metrics).
+   * Distinct from bookOutcomes.booked_n (local JSON findings delta).
+   */
+  findingsBookedN?: number;
 };
 
 export type StageExecutor = (input: StageExecutorInput) => Promise<StageExecutorOutput>;
@@ -252,6 +257,7 @@ export async function runHardGraph(options: {
       let structured: SubagentStructuredResult;
       let outFanoutN: number | undefined;
       let outBookOutcomes: { booked_n?: number; reject_hints_n?: number } | undefined;
+      let outFindingsBookedN: number | undefined;
       try {
         const out = await options.executeStage({
           stage,
@@ -269,6 +275,7 @@ export async function runHardGraph(options: {
         );
         outFanoutN = out.fanoutPackagesN;
         outBookOutcomes = out.bookOutcomes;
+        outFindingsBookedN = out.findingsBookedN;
       } catch (err) {
         structured = normalizeSubagentResult(
           {
@@ -292,6 +299,7 @@ export async function runHardGraph(options: {
           ? Math.max(0, Math.floor(outFanoutN))
           : 0;
       const bookOutcomes = outBookOutcomes;
+      const findingsBookedN = outFindingsBookedN;
 
       if (gate.ok) {
         handoff = mergeHandoff(handoff, structured, stage.id);
@@ -301,6 +309,7 @@ export async function runHardGraph(options: {
           structureFailed: false,
           fanoutPackagesN,
           bookOutcomes,
+          findingsBookedN,
           handoffSurfacesN: handoff.surfaces.length,
         });
         passed = true;
@@ -324,6 +333,7 @@ export async function runHardGraph(options: {
         structureFailed: true,
         fanoutPackagesN,
         bookOutcomes,
+        findingsBookedN,
         handoffSurfacesN: handoff.surfaces.length,
       });
       const isLast = attempt >= maxAttempts;

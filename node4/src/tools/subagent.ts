@@ -45,14 +45,6 @@ import {
 import { ingestPackageCandidatesToStore } from "../runtime/finding-store.js";
 import { dirname } from "node:path";
 
-/** Re-export honesty host helpers for callers that previously imported from this module. */
-export {
-  assertGraphPackageAnchor,
-  checkPackageAttemptBudget,
-  markPackageHonesty,
-  evaluateStageHonestPartialFromRuntime,
-} from "../runtime/package-honesty-host.js";
-
 export type SubagentPackageResult = {
   ok: boolean;
   subagent_id: string;

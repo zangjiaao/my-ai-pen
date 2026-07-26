@@ -397,6 +397,9 @@ export function createHardGraphStageExecutor(options: {
       await promoteSession();
       const findingsAfter = await countJsonFindings(parentRuntime.findingsDir);
       const bookedDelta = Math.max(0, findingsAfter - findingsBefore);
+      // I1.4: absolute Store booked (distinct from JSON findings dir delta)
+      const storeBooked = ensureProcessQuality(parentRuntime.lifecycle).findingStore.counts()
+        .booked_n;
       return {
         structured: structuredOut,
         summary:
@@ -407,6 +410,7 @@ export function createHardGraphStageExecutor(options: {
           bookedDelta > 0 || input.stage.id === "validate_book"
             ? { booked_n: bookedDelta, reject_hints_n: 0 }
             : undefined,
+        findingsBookedN: storeBooked,
       };
     };
 
