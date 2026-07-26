@@ -216,6 +216,14 @@ assert.deepEqual(
 );
 console.log("ok", "UI options derived from registry");
 
+// Cross-stack lock: Platform/FE must ship the same wire codes (#136).
+// Documented contract — if you change this list, update:
+//   platform/frontend/src/lib/agentLanguages.ts
+//   platform/backend/app/services/agent_language.py
+const CROSS_STACK_CODES = ["auto", "zh-CN", "zh-TW", "en", "ja"];
+assert.deepEqual([...AGENT_LANGUAGE_CODES], CROSS_STACK_CODES, "cross-stack catalog lock");
+console.log("ok", "cross-stack catalog codes locked");
+
 // renderPromptTemplate still works for persona (regression on optional arg)
 const rendered = renderPromptTemplate("Hello {{ expert_name }}", {
   expert_name: "Alice",
