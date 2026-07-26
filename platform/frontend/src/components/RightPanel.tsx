@@ -538,7 +538,7 @@ function TargetSummary({ targets }: { targets: NonNullable<StrixRun["targets_inf
       <SummaryLabel>Target</SummaryLabel>
       <div className="space-y-1">
         {items.map((target, index) => (
-          <div key={`${target.value}-${index}`} className="flex min-w-0 items-start gap-2">
+          <div key={`${target.value}-${index}`} className="flex min-w-0 items-center gap-2">
             <span className="shrink-0 rounded-sm bg-canvas-inset px-1.5 py-0.5 text-[10px] uppercase text-ink-secondary">{target.type}</span>
             <span className="min-w-0 break-words font-mono text-xs font-medium text-ink [overflow-wrap:anywhere]">{target.value}</span>
           </div>
