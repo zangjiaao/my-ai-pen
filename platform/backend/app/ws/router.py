@@ -3751,6 +3751,15 @@ def _task_assign_from_user_message(conv_id: str, msg: dict, task_id: str) -> dic
             out["allow_postex"] = True
         elif str(raw).strip().lower() in {"false", "0", "no"}:
             out["allow_postex"] = False
+    # Spec #139 NC-RoE-Destructive: pass through when present (lab / explicit RoE).
+    if "allow_destructive" in msg or "allowDestructive" in msg:
+        raw_d = msg.get("allow_destructive", msg.get("allowDestructive"))
+        if isinstance(raw_d, bool):
+            out["allow_destructive"] = raw_d
+        elif str(raw_d).strip().lower() in {"true", "1", "yes"}:
+            out["allow_destructive"] = True
+        elif str(raw_d).strip().lower() in {"false", "0", "no"}:
+            out["allow_destructive"] = False
     if msg.get("accounts") is not None:
         out["accounts"] = msg.get("accounts")
     # Map #81 F1 dig-deeper focus (structured only; no NLP invent).

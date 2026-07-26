@@ -28,6 +28,16 @@ PHASES = ["intake", "recon", "analysis", "verify", "report", "complete"]
 SNAPSHOT_MESSAGE_LIMIT = 120
 SNAPSHOT_TEXT_LIMIT = 2000
 SNAPSHOT_TOOL_STDOUT_LIMIT = 800
+
+
+def _normalize_finding_severity(value: object) -> str | None:
+    """Spec #139 D1 / NC-Severity: fail closed — no silent medium default."""
+    severity = str(value or "").strip().lower()
+    if not severity:
+        return None
+    if severity in {"critical", "high", "medium", "low", "info"}:
+        return severity
+    return None
 PHASE_LABELS = {
     "intake": "\u76ee\u6807\u4e0e\u6388\u6743\u8303\u56f4\u68c0\u67e5",
     "recon": "\u653b\u51fb\u9762\u53d1\u73b0",
@@ -1646,7 +1656,7 @@ def checkpoint_findings(checkpoint: dict) -> list[dict]:
             items.append({
                 "id": str(item.get("id") or item.get("finding_id") or item.get("title") or ""),
                 "title": item.get("title") or "Untitled finding",
-                "severity": item.get("severity") or "medium",
+                "severity": _normalize_finding_severity(item.get("severity")) or "",
                 "location": item.get("location") or item.get("affected_asset") or "",
                 "confidence": item.get("confidence"),
                 "status": item.get("status") or ("confirmed" if source == "confirmed_findings" else "candidate"),
@@ -1664,7 +1674,7 @@ def strix_vulnerability_finding(item: dict) -> dict:
         "vulnerability_id": str(item.get("vulnerability_id") or item.get("id") or ""),
         "strix_vulnerability_id": str(item.get("strix_vulnerability_id") or item.get("id") or ""),
         "title": item.get("title") or "Untitled finding",
-        "severity": item.get("severity") or "medium",
+        "severity": _normalize_finding_severity(item.get("severity")) or "",
         "location": endpoint or item.get("location") or target,
         "confidence": item.get("confidence") or "high",
         "status": item.get("status") or "confirmed",
@@ -1737,7 +1747,7 @@ def message_findings(messages: list[Message]) -> list[dict]:
             "vulnerability_id": str(content.get("vulnerability_id") or content.get("id") or ""),
             "strix_vulnerability_id": content.get("strix_vulnerability_id"),
             "title": content.get("title") or "Untitled finding",
-            "severity": content.get("severity") or "medium",
+            "severity": _normalize_finding_severity(content.get("severity")) or "",
             "location": content.get("location") or content.get("url") or content.get("affected_asset") or content.get("poc") or "",
             "confidence": content.get("confidence"),
             "status": content.get("status") or "pending",

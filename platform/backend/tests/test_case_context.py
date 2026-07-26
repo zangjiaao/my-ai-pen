@@ -1,5 +1,6 @@
 """Unit tests for case work-group context (thread + findings + evidence snippets)."""
 from app.services.case_context import (
+    _normalize_finding_severity,
     build_case_context_payload,
     build_evidence_snippets,
     build_findings_summary,
@@ -73,6 +74,37 @@ def test_findings_summary_includes_evidence_ids_and_proof():
     assert summary[0]["title"] == "Source code leak"
     assert summary[0]["evidence_ids"] == ["ev_src_1", "ev_src_2"]
     assert "notes/source_dump" in summary[0].get("proof_excerpt", "")
+
+
+def test_normalize_finding_severity_fail_closed():
+    assert _normalize_finding_severity("Critical") == "critical"
+    assert _normalize_finding_severity("HIGH") == "high"
+    assert _normalize_finding_severity("medium") == "medium"
+    assert _normalize_finding_severity("low") == "low"
+    assert _normalize_finding_severity("info") == "info"
+    assert _normalize_finding_severity(None) is None
+    assert _normalize_finding_severity("") is None
+    assert _normalize_finding_severity("   ") is None
+    assert _normalize_finding_severity("unknown") is None
+    assert _normalize_finding_severity("sev-high") is None
+
+
+def test_findings_summary_does_not_invent_medium_severity():
+    summary = build_findings_summary(
+        [
+            {"id": "1", "title": "No severity", "location": "/a", "status": "candidate"},
+            {"id": "2", "title": "Empty severity", "severity": "", "location": "/b"},
+            {"id": "3", "title": "Invalid severity", "severity": "urgent", "location": "/c"},
+            {"id": "4", "title": "Valid medium", "severity": "Medium", "location": "/d"},
+        ],
+        limit=10,
+    )
+    by_id = {row["id"]: row for row in summary}
+    assert by_id["1"]["severity"] == ""
+    assert by_id["2"]["severity"] == ""
+    assert by_id["3"]["severity"] == ""
+    assert by_id["4"]["severity"] == "medium"
+    assert all(row["severity"] != "medium" or row["id"] == "4" for row in summary)
 
 
 def test_evidence_snippets_prefer_linked_proof():

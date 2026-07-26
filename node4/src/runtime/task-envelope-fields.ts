@@ -3,6 +3,27 @@
  * Snake_case and camelCase accepted. Never invents values from free-text instruction.
  */
 
+/**
+ * Optional boolean from task_assign wire: true/false or "true"/"false".
+ * Other values → undefined (caller leaves field unset so RoE defaults apply).
+ */
+export function parseOptionalWireBoolean(raw: unknown): boolean | undefined {
+  if (typeof raw === "boolean") return raw;
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  return undefined;
+}
+
+/** RoE allow_postex | allowPostex. Undefined → resolveEngagementRoe derives from template. */
+export function parseAllowPostex(message: Record<string, unknown>): boolean | undefined {
+  return parseOptionalWireBoolean(message.allow_postex ?? message.allowPostex);
+}
+
+/** Spec #139 NC-RoE-Destructive: allow_destructive | allowDestructive. Undefined → default deny. */
+export function parseAllowDestructive(message: Record<string, unknown>): boolean | undefined {
+  return parseOptionalWireBoolean(message.allow_destructive ?? message.allowDestructive);
+}
+
 /** Parse optional structured id list. Empty → undefined. */
 export function parseStringIdList(raw: unknown): string[] | undefined {
   if (raw == null) return undefined;
