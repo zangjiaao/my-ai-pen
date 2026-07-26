@@ -581,6 +581,7 @@ export default function ConversationPage() {
       if (!next.length) return prev.length ? prev : [];
       return preferRicherPlanTree(prev, next);
     });
+    // Backend case_participants.merge_panel_agents is source of truth for Subagent history.
     setStrixAgents(snapshot.strix_agents?.length ? snapshot.strix_agents : fallback?.strix_agents || []);
     setStrixNotes(snapshot.strix_notes?.length ? snapshot.strix_notes : fallback?.strix_notes || []);
     // Never replace a populated live run with an empty snapshot object ({} is truthy).

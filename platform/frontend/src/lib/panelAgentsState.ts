@@ -15,18 +15,6 @@ export function isStrixAgentStatus(value: unknown): value is StrixAgentStatus {
   return Boolean(value && typeof value === "object" && !Array.isArray(value) && readString((value as Record<string, unknown>).id));
 }
 
-/** True when the Status list already has a multi-role Case roster. */
-export function isMultiRoleRoster(agents: StrixAgentStatus[]): boolean {
-  const roots = agents.filter((a) => !a.parent_id);
-  if (roots.length > 1) return true;
-  return roots.some(
-    (r) =>
-      Boolean(r.expert_id) ||
-      String(r.id || "").startsWith("role-") ||
-      Boolean(r.highlighted),
-  );
-}
-
 /**
  * Attach or update a subagent child under the active Case role root.
  * Node4 emits parent_id=node4-main; UI roots use role-expert:* ids.
@@ -81,9 +69,43 @@ export function upsertSubagentChild(
   return [...base, nextChild];
 }
 
+/** Index of the active Case role root (expert → name → highlight → running → first). */
+function findRoleRootIndex(
+  agents: StrixAgentStatus[],
+  meta?: { expert_id?: string; expert_name?: string },
+): number {
+  const eid = String(meta?.expert_id || "").trim();
+  const ename = String(meta?.expert_name || "").trim().toLowerCase();
+  let idx = -1;
+  if (eid) {
+    idx = agents.findIndex((a) => !a.parent_id && String(a.expert_id || "") === eid);
+  }
+  if (idx < 0 && ename) {
+    idx = agents.findIndex((a) => !a.parent_id && String(a.name || "").toLowerCase() === ename);
+  }
+  if (idx < 0) {
+    idx = agents.findIndex((a) => !a.parent_id && a.highlighted);
+  }
+  if (idx < 0) {
+    idx = agents.findIndex(
+      (a) => !a.parent_id && String(a.status || "").toLowerCase() === "running",
+    );
+  }
+  if (idx < 0) {
+    idx = agents.findIndex((a) => !a.parent_id);
+  }
+  return idx;
+}
+
+function isChildOfRoot(agent: StrixAgentStatus, rootId: string): boolean {
+  return agent.parent_id === rootId || String(agent.parent_id || "") === rootId;
+}
+
 /**
  * Merge a live single-burst panel_agents payload into an existing Case roster.
- * Replaces only when the previous list is single-role / empty.
+ *
+ * Invariant: Subagent children under the active root are upserted by id and never
+ * dropped when a new burst sends main-only. Terminal settle is backend-only.
  */
 export function mergeLivePanelAgents(
   prev: StrixAgentStatus[],
@@ -91,63 +113,93 @@ export function mergeLivePanelAgents(
   meta?: { expert_id?: string; expert_name?: string },
 ): StrixAgentStatus[] {
   if (!panel.length) return prev;
-  if (!prev.length || !isMultiRoleRoster(prev)) return panel;
+  if (!prev.length) return panel;
 
   const eid = String(meta?.expert_id || "").trim();
-  const ename = String(meta?.expert_name || "").trim().toLowerCase();
   const panelMain = panel.find((a) => !a.parent_id) || panel[0]!;
   const panelChildren = panel.filter((a) => a.parent_id);
-
-  let rootIdx = -1;
-  if (eid) {
-    rootIdx = prev.findIndex((a) => !a.parent_id && String(a.expert_id || "") === eid);
-  }
-  if (rootIdx < 0 && ename) {
-    rootIdx = prev.findIndex((a) => !a.parent_id && String(a.name || "").toLowerCase() === ename);
-  }
-  if (rootIdx < 0) {
-    rootIdx = prev.findIndex((a) => !a.parent_id && a.highlighted);
-  }
-  if (rootIdx < 0) {
-    rootIdx = prev.findIndex((a) => !a.parent_id && String(a.status || "").toLowerCase() === "running");
-  }
-  if (rootIdx < 0) {
-    rootIdx = prev.findIndex((a) => !a.parent_id);
-  }
+  const rootIdx = findRoleRootIndex(prev, meta);
   if (rootIdx < 0) return panel;
 
   const root = prev[rootIdx]!;
   const rootId = root.id;
-  const withoutRootAndKids = prev.filter(
-    (a) => a.id !== rootId && a.parent_id !== rootId && !(a.parent_id && String(a.parent_id) === rootId),
-  );
-  // Also drop legacy single-main children that belonged to this burst id.
-  const cleaned = withoutRootAndKids.filter((a) => {
-    if (a.parent_id && panel.some((p) => p.id === a.id)) return false;
-    return true;
-  });
+  const prevKids = prev.filter((a) => isChildOfRoot(a, rootId));
+  const others = prev
+    .filter((a) => a.id !== rootId && !isChildOfRoot(a, rootId))
+    // Drop legacy bare child ids that this panel re-introduces under the role root.
+    .filter(
+      (a) =>
+        !(
+          a.parent_id &&
+          panel.some((p) => p.id === a.id || `${rootId}-${p.id}` === a.id)
+        ),
+    )
+    .map((a) => (!a.parent_id ? { ...a, highlighted: false } : a));
 
   const nextRoot: StrixAgentStatus = {
     ...root,
-    status: panelMain.status || "running",
+    status: panelMain.status || root.status || "running",
     current_tool: panelMain.current_tool || root.current_tool,
     current_action: panelMain.current_action || root.current_action,
     current_detail: panelMain.current_detail || root.current_detail,
     last_tool: panelMain.last_tool || root.last_tool,
     highlighted: true,
-    expert_id: eid || root.expert_id,
+    expert_id: eid || root.expert_id || panelMain.expert_id,
   };
-  const nextKids = panelChildren.map((child) => ({
-    ...child,
-    parent_id: rootId,
-    id: child.id.startsWith(rootId) ? child.id : `${rootId}-${child.id}`,
-    expert_id: eid || root.expert_id,
-  }));
-  // Clear highlight on other roots.
-  const others = cleaned.map((a) =>
-    !a.parent_id ? { ...a, highlighted: false } : a,
+  const nextKids = mergePanelChildren(
+    prevKids,
+    panelChildren,
+    rootId,
+    eid || nextRoot.expert_id,
   );
   return [nextRoot, ...others, ...nextKids];
+}
+
+/**
+ * Upsert live kids by normalized id; keep prior Subagents missing from this burst.
+ * Does not invent terminal status — that is case_participants.merge_panel_agents.
+ */
+function mergePanelChildren(
+  prevKids: StrixAgentStatus[],
+  panelChildren: StrixAgentStatus[],
+  rootId: string,
+  expertId?: string,
+): StrixAgentStatus[] {
+  const normalizeId = (child: StrixAgentStatus) =>
+    child.id.startsWith(rootId) ? child.id : `${rootId}-${child.id}`;
+
+  const byId = new Map<string, StrixAgentStatus>();
+  for (const kid of prevKids) {
+    byId.set(kid.id, { ...kid, parent_id: rootId });
+  }
+  for (const child of panelChildren) {
+    const id = normalizeId(child);
+    byId.set(id, {
+      ...child,
+      id,
+      parent_id: rootId,
+      expert_id: expertId || child.expert_id,
+    });
+  }
+
+  const out: StrixAgentStatus[] = [];
+  const seen = new Set<string>();
+  for (const kid of prevKids) {
+    const row = byId.get(kid.id);
+    if (row && !seen.has(row.id)) {
+      out.push(row);
+      seen.add(row.id);
+    }
+  }
+  for (const child of panelChildren) {
+    const id = normalizeId(child);
+    const row = byId.get(id);
+    if (row && !seen.has(id)) {
+      out.push(row);
+      seen.add(id);
+    }
+  }
+  return out;
 }
 
 /** Patch active role root from live status_update (tool / LLM phase). */

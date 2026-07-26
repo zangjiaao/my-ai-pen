@@ -52,6 +52,77 @@ def _num(value: object) -> float:
         return 0.0
 
 
+_RUNNING_PANEL_STATUSES = frozenset(
+    {"running", "tool_running", "llm_waiting", "starting", "working", "chat"}
+)
+
+
+def merge_panel_agents(prev: object, incoming: object) -> list[dict[str, Any]]:
+    """Merge a live burst panel into the Case participant's historical roster.
+
+    Canonical write-path for Case Subagent history (frontend live merge is thinner
+    and must not invent terminal status).
+
+    Invariant: children are append/upsert by id — never dropped because a new
+    work burst (re-chat) emits main-only. No prune / no task_id bucketing yet;
+    same id across bursts overwrites the prior row.
+
+    Rules:
+    - Main (no parent_id): take from incoming when present.
+    - Children: upsert by id; keep previous children not in the new panel.
+    - Orphan children still marked running are settled to completed (burst left).
+    """
+    prev_list = [dict(a) for a in (prev or []) if isinstance(a, dict) and str(a.get("id") or "").strip()]
+    inc_list = [dict(a) for a in (incoming or []) if isinstance(a, dict) and str(a.get("id") or "").strip()]
+    if not inc_list:
+        return prev_list
+    if not prev_list:
+        return inc_list
+
+    by_id: dict[str, dict[str, Any]] = {str(a["id"]): dict(a) for a in prev_list}
+    inc_ids = {str(a["id"]) for a in inc_list}
+    for a in inc_list:
+        by_id[str(a["id"])] = dict(a)
+
+    for aid, row in by_id.items():
+        if aid in inc_ids:
+            continue
+        if not str(row.get("parent_id") or "").strip():
+            continue
+        st = str(row.get("status") or "").lower()
+        if st in _RUNNING_PANEL_STATUSES:
+            row["status"] = "completed"
+            row["current_action"] = "completed"
+
+    main_id = ""
+    for a in inc_list:
+        if not str(a.get("parent_id") or "").strip():
+            main_id = str(a["id"])
+            break
+    if not main_id:
+        for a in prev_list:
+            if not str(a.get("parent_id") or "").strip():
+                main_id = str(a["id"])
+                break
+
+    out: list[dict[str, Any]] = []
+    if main_id and main_id in by_id:
+        out.append(by_id[main_id])
+
+    seen_kids: set[str] = set()
+    for source in (prev_list, inc_list):
+        for a in source:
+            aid = str(a.get("id") or "")
+            if not aid or aid == main_id or aid in seen_kids:
+                continue
+            row = by_id.get(aid)
+            if not row or not str(row.get("parent_id") or "").strip():
+                continue
+            out.append(row)
+            seen_kids.add(aid)
+    return out
+
+
 def participants_map(context: dict | None) -> dict[str, dict[str, Any]]:
     raw = _as_dict(context).get("participants")
     if not isinstance(raw, dict):
@@ -107,7 +178,9 @@ def upsert_participant(
     if last_task_id is not None and str(last_task_id).strip():
         row["last_task_id"] = str(last_task_id).strip()
     if isinstance(panel_agents, list):
-        row["panel_agents"] = [dict(a) for a in panel_agents if isinstance(a, dict)]
+        prev_panel = prev.get("panel_agents") if isinstance(prev.get("panel_agents"), list) else []
+        # Merge so a new burst's main-only panel cannot wipe prior Subagents.
+        row["panel_agents"] = merge_panel_agents(prev_panel, panel_agents)
     # panel_agents=None means leave previous tree in place (e.g. idle mark)
     if isinstance(plan_tree, list):
         stamped: list[dict[str, Any]] = []
