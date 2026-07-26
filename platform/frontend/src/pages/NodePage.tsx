@@ -9,6 +9,10 @@ import {
   expertLabel,
   type ExpertId,
 } from "../lib/experts";
+import {
+  AGENT_LANGUAGE_OPTIONS,
+  isAgentLanguageCode,
+} from "../lib/agentLanguages";
 
 const STATUS_FILTERS = ["全部", "online", "offline"] as const;
 
@@ -502,7 +506,7 @@ function NodeDetailDialog({
       setSaveError("默认扫描深度无效");
       return;
     }
-    if (!["auto", "zh-CN", "en"].includes(agentLanguage)) {
+    if (!isAgentLanguageCode(agentLanguage)) {
       setSaveError("输出语言无效");
       return;
     }
@@ -810,7 +814,7 @@ function NodeDetailDialog({
                   <div className="rounded-md border border-hairline-soft p-4">
                     <p className="text-sm font-medium">输出语言</p>
                     <p className="mt-1 text-xs text-ink-muted">
-                      控制本节点上 Agent 的对话回复与漏洞台账文案（标题、描述、PoC 叙述）。工具原始输出（命令 stdout 等）仍按目标系统语言，不做翻译。
+                      控制本节点上 Agent 的对话、思考叙述、todo/计划、工具意图说明与漏洞台账文案（标题、描述、PoC 叙述）。工具原始输出（命令 stdout 等）仍按目标系统语言，不做翻译。
                     </p>
                     <label className="mt-3 block space-y-1">
                       <span className="text-[11px] text-ink-muted">语言策略</span>
@@ -822,9 +826,11 @@ function NodeDetailDialog({
                         }}
                         className="w-full rounded-md border bg-canvas px-2.5 py-2 text-sm"
                       >
-                        <option value="auto">跟随用户（auto）</option>
-                        <option value="zh-CN">中文（zh-CN）</option>
-                        <option value="en">English（en）</option>
+                        {AGENT_LANGUAGE_OPTIONS.map((opt) => (
+                          <option key={opt.code} value={opt.code}>
+                            {opt.optionLabel}
+                          </option>
+                        ))}
                       </select>
                     </label>
                   </div>

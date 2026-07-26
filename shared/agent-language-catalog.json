@@ -1,0 +1,62 @@
+{
+  "default": "auto",
+  "languages": [
+    {
+      "code": "auto",
+      "ui_label": "跟随用户",
+      "option_label": "跟随用户（auto）",
+      "aliases": ["follow", "match", "跟随用户", "跟随"]
+    },
+    {
+      "code": "zh-CN",
+      "ui_label": "简体中文",
+      "option_label": "简体中文（zh-CN）",
+      "prompt_name": "Simplified Chinese",
+      "aliases": [
+        "zh",
+        "zh-cn",
+        "zh_cn",
+        "chinese",
+        "simplified",
+        "simplified-chinese",
+        "simplified chinese",
+        "中文",
+        "简体",
+        "简体中文"
+      ]
+    },
+    {
+      "code": "zh-TW",
+      "ui_label": "繁體中文",
+      "option_label": "繁體中文（zh-TW）",
+      "prompt_name": "Traditional Chinese",
+      "aliases": [
+        "zh-tw",
+        "zh_tw",
+        "zh-hant",
+        "zh-hk",
+        "traditional",
+        "traditional-chinese",
+        "traditional chinese",
+        "繁體",
+        "繁体",
+        "繁體中文",
+        "繁体中文"
+      ]
+    },
+    {
+      "code": "en",
+      "ui_label": "English",
+      "option_label": "English（en）",
+      "prompt_name": "English",
+      "aliases": ["en-us", "en_us", "en-gb", "english"]
+    },
+    {
+      "code": "ja",
+      "ui_label": "日本語",
+      "option_label": "日本語（ja）",
+      "prompt_name": "Japanese",
+      "aliases": ["jp", "ja-jp", "ja_jp", "japanese", "日本語"]
+    }
+  ]
+}

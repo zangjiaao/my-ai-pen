@@ -103,4 +103,4 @@ Spec 权威：`AGENTS.md` → `docs/prd.md` → `docs/specs/harness.md`（Node4 
 
 - Harness 工程化发现节奏（攻击面枚举，非 Goal）  
 - 漏洞流程加深（复测闭环、指派）  
-- 部署硬化（CI/CD、无 reload 生产 compose）  
+- 部署硬化（CI/CD、无 reload 生产 compose）— 见 living map [`docs/specs/ci-cd.md`](specs/ci-cd.md)

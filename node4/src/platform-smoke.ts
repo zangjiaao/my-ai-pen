@@ -22,6 +22,7 @@ import type { PlatformMessage, PlatformSink, TaskEnvelope, ToolRuntime } from ".
 import { parseCaseContext } from "./runtime/case-context.js";
 import { parseGraphExecution } from "./runtime/hard-graph-definition.js";
 import { parseFocusFields } from "./runtime/task-envelope-fields.js";
+import { extractAgentLanguageFromMessage } from "./runtime/agent-language.js";
 
 function assert(cond: unknown, msg: string): asserts cond {
   if (!cond) throw new Error(msg);
@@ -99,6 +100,8 @@ export function normalizeTaskAssign(message: Record<string, unknown>): TaskEnvel
     accounts: message.accounts !== undefined ? message.accounts : undefined,
     goalObjective,
     caseContext: parseCaseContext(message.case_context ?? message.caseContext),
+    // Same language extract/normalize as main.ts (registry wire code).
+    agentLanguage: extractAgentLanguageFromMessage(message),
   };
 }
 

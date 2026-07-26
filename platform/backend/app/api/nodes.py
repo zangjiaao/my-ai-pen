@@ -16,6 +16,10 @@ from app.models.evidence import Evidence
 from app.models.expert import Expert
 from app.models.node import Node, PLATFORM_AGENT_NODE_ID
 from app.models.vulnerability import Vulnerability
+from app.services.agent_language import (
+    normalize_agent_language,
+    parse_agent_language_for_update,
+)
 from app.services.expert_offers import (
     ACTION_INSTALL,
     ACTION_UNINSTALL,
@@ -36,9 +40,6 @@ DEFAULT_MAIN_MAX_MS = 1_800_000  # 30 min whole-task wall clock
 DEFAULT_MAIN_MAX_TURNS = 80
 DEFAULT_MAX_CONCURRENT_WORKERS = 1
 DEFAULT_SCAN_MODE = "standard"
-# Agent chat + finding narrative language (prompt policy; not UI i18n).
-DEFAULT_AGENT_LANGUAGE = "auto"
-ALLOWED_AGENT_LANGUAGES = frozenset({"auto", "zh-CN", "en"})
 MIN_WORKER_MAX_MS = 10_000
 MAX_WORKER_MAX_MS = 900_000
 MIN_WORKER_MAX_TURNS = 1
@@ -239,17 +240,10 @@ async def update_node(node_id: str, body: NodeUpdate, current_user: dict = Depen
             cfg["default_scan_mode"] = mode
             changed_fields.append("default_scan_mode")
         if body.agent_language is not None:
-            lang = str(body.agent_language).strip()
-            # Accept zh-cn / en-US style loosely for zh-CN / en / auto
-            lang_norm = lang if lang in ALLOWED_AGENT_LANGUAGES else lang.replace("_", "-")
-            if lang_norm.lower() in {"zh", "zh-cn", "zh_cn", "chinese", "中文"}:
-                lang_norm = "zh-CN"
-            elif lang_norm.lower() in {"en", "en-us", "en_us", "english"}:
-                lang_norm = "en"
-            elif lang_norm.lower() in {"auto", "follow", "match"}:
-                lang_norm = "auto"
-            if lang_norm not in ALLOWED_AGENT_LANGUAGES:
-                raise HTTPException(400, "agent_language must be auto, zh-CN, or en")
+            try:
+                lang_norm = parse_agent_language_for_update(body.agent_language)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
             cfg["agent_language"] = lang_norm
             changed_fields.append("agent_language")
         n.config = cfg
@@ -530,23 +524,6 @@ def _clamp_int(value: object, lo: int, hi: int, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return max(lo, min(hi, n))
-
-
-def normalize_agent_language(value: object) -> str:
-    """Return auto | zh-CN | en from free-form node config."""
-    raw = str(value or DEFAULT_AGENT_LANGUAGE).strip()
-    if not raw:
-        return DEFAULT_AGENT_LANGUAGE
-    if raw in ALLOWED_AGENT_LANGUAGES:
-        return raw
-    low = raw.lower().replace("_", "-")
-    if low in {"zh", "zh-cn", "chinese", "中文"}:
-        return "zh-CN"
-    if low in {"en", "en-us", "english"}:
-        return "en"
-    if low in {"auto", "follow", "match"}:
-        return "auto"
-    return DEFAULT_AGENT_LANGUAGE
 
 
 def worker_limits_from_config(config: object) -> dict:

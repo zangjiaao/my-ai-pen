@@ -7,6 +7,12 @@ import {
 } from "../stores/process-fact.js";
 import { formatRoeInjection, resolveEngagementRoe } from "./engagement-roe.js";
 import { formatCaseContextInjection } from "./case-context.js";
+import { formatAgentLanguageInjection } from "./agent-language.js";
+import {
+  promptQuotedLabel,
+  renderPromptTemplate,
+  sanitizePromptLabel,
+} from "./prompt-template.js";
 
 /**
  * Prompt template vars for role pack mission/work lines.
@@ -24,45 +30,26 @@ export type PromptTemplateVars = {
   pack_label: string;
 };
 
-/** Max length of any single prompt-injected label (defense in depth). */
-export const PROMPT_LABEL_MAX = 64;
+// Template primitives live in prompt-template.ts (shared with language policy).
+export {
+  PROMPT_LABEL_MAX,
+  promptQuotedLabel,
+  renderPromptTemplate,
+  sanitizeLanguageTemplateValue,
+  sanitizePromptLabel,
+} from "./prompt-template.js";
 
-/**
- * Characters allowed in prompt-injected persona / pack labels.
- * Aligns with platform EXPERT_NAME_RE (letters, digits, _ . : -).
- * No spaces, quotes, braces, or control characters.
- */
-const PROMPT_LABEL_SAFE_RE = /^[\p{L}\p{N}_.:-]+$/u;
-const PROMPT_LABEL_STRIP_RE = /[^\p{L}\p{N}_.:-]/gu;
-const CONTROL_AND_INVISIBLE_RE =
-  /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202f\u2060-\u206f\ufeff]/g;
-
-/**
- * Sanitize a user- or pack-supplied string before it enters a system prompt.
- * - Strips controls / invisible chars
- * - Drops characters outside the safe alphabet (blocks prompt structure breaks)
- * - Truncates length
- * - Never returns empty when fallback is provided
- */
-export function sanitizePromptLabel(raw: unknown, fallback = "Assistant"): string {
-  let s = String(raw ?? "")
-    .trim()
-    .replace(/^@+/, "")
-    .replace(CONTROL_AND_INVISIBLE_RE, "");
-  if (s.length > PROMPT_LABEL_MAX) s = s.slice(0, PROMPT_LABEL_MAX);
-  if (!PROMPT_LABEL_SAFE_RE.test(s)) {
-    s = s.replace(PROMPT_LABEL_STRIP_RE, "");
-  }
-  // Block residual template delimiters even if alphabet drifts.
-  s = s.replace(/[{}`$\\]/g, "");
-  if (!s) return fallback;
-  return s;
-}
-
-/** JSON-string quote so the value is a single literal (structure-safe embedding). */
-export function promptQuotedLabel(label: string): string {
-  return JSON.stringify(sanitizePromptLabel(label, "Assistant"));
-}
+// Language registry + policy live in agent-language.ts.
+export {
+  normalizeAgentLanguage,
+  formatAgentLanguageInjection,
+  resolveAgentLanguage,
+  AGENT_LANGUAGE_REGISTRY,
+  AGENT_LANGUAGE_CODES,
+  FORCED_AGENT_LANGUAGE_CODES,
+  type AgentLanguageCode,
+  type ResolvedAgentLanguage,
+} from "./agent-language.js";
 
 /** Build vars from task + pack. Product expert name wins over generic pack label. */
 export function promptTemplateVars(task: TaskEnvelope, pack: RolePack): PromptTemplateVars {
@@ -73,58 +60,6 @@ export function promptTemplateVars(task: TaskEnvelope, pack: RolePack): PromptTe
     pack_id: sanitizePromptLabel(pack.id, "runtime"),
     pack_label: sanitizePromptLabel(pack.label || pack.id, "Assistant"),
   };
-}
-
-/**
- * Replace `{{ key }}` / `{{key}}` with vars[key]. Unknown keys → empty string.
- * Does not evaluate expressions (keep deterministic and safe).
- * Values are re-sanitized on substitution as a second belt.
- */
-export function renderPromptTemplate(text: string, vars: Record<string, string>): string {
-  return String(text || "").replace(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g, (_m, key: string) => {
-    if (!Object.prototype.hasOwnProperty.call(vars, key)) return "";
-    // Never re-expand templates from substituted values.
-    return sanitizePromptLabel(vars[key], "");
-  });
-}
-
-/** Normalize node-configured agent language (auto | zh-CN | en). */
-export function normalizeAgentLanguage(raw: unknown): "auto" | "zh-CN" | "en" {
-  const s = String(raw || "auto").trim();
-  if (s === "zh-CN" || s === "en" || s === "auto") return s;
-  const low = s.toLowerCase().replace(/_/g, "-");
-  if (low === "zh" || low === "zh-cn" || low === "chinese" || s === "中文") return "zh-CN";
-  if (low === "en" || low === "en-us" || low === "english") return "en";
-  return "auto";
-}
-
-/**
- * Language policy for chat + finding narratives.
- * Tool stdout / raw protocol traffic is never required to be translated.
- */
-export function formatAgentLanguageInjection(language: unknown): string {
-  const lang = normalizeAgentLanguage(language);
-  if (lang === "zh-CN") {
-    return [
-      "## Output language (node policy: zh-CN)",
-      "Write **all user-facing chat** and **finding ledger fields** (title, description, impact, remediation, poc narrative) in **Simplified Chinese**.",
-      "Do not default to English for findings when this policy is set — even if tool output or payloads are English.",
-      "Keep technical tokens as-is when needed (paths, headers, CVE ids, code, shell stdout excerpts in proof).",
-      "Tool raw output is not rewritten; only your narration and booked finding text must be Chinese.",
-    ].join("\n");
-  }
-  if (lang === "en") {
-    return [
-      "## Output language (node policy: en)",
-      "Write **all user-facing chat** and **finding ledger fields** (title, description, impact, remediation, poc narrative) in **English**.",
-      "Do not switch to Chinese for findings when this policy is set.",
-      "Keep technical tokens as-is (paths, headers, CVE ids, code, shell stdout excerpts in proof).",
-    ].join("\n");
-  }
-  return [
-    "## Output language (node policy: auto)",
-    "Match the **user's language** for chat and finding narratives. If the user writes Chinese, reply and book findings in Chinese; if English, use English.",
-  ].join("\n");
 }
 
 /**

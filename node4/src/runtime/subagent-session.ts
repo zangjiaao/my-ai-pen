@@ -36,6 +36,7 @@ import {
   type IdleSubagentHandle,
   type SubagentIdlePool,
 } from "./subagent-idle-pool.js";
+import { formatAgentLanguageInjection } from "./agent-language.js";
 
 /** Act tools for child workers — no subagent, finding, goal, or platform ledger. */
 export const SUBAGENT_CHILD_TOOL_NAMES = [
@@ -252,6 +253,44 @@ async function collectStructuredResult(input: {
     "utf8",
   );
   return { structured, salvaged };
+}
+
+/**
+ * Pure subagent system-prompt assembly (#134 / #137).
+ * Includes the same Node language policy as free OMP / Hard Graph stages.
+ * Exported for harness contract tests.
+ */
+export function buildSubagentSystemPrompt(options: {
+  pack: Pick<RolePack, "missionLines" | "workLines" | "toolNames">;
+  parentPackId: string;
+  nodeType?: string;
+  skillId?: string;
+  skillBody?: string;
+  childTask: Pick<TaskEnvelope, "target" | "scope" | "agentLanguage">;
+}): string {
+  const { pack, parentPackId, childTask } = options;
+  const nodeLabel = options.nodeType ? `node_type=${options.nodeType}` : "node_type=(free)";
+  return [
+    ...pack.missionLines,
+    "",
+    ...pack.workLines,
+    "",
+    formatAgentLanguageInjection(childTask.agentLanguage),
+    "",
+    `Parent pack: ${parentPackId}. ${nodeLabel}.`,
+    `Tools: ${pack.toolNames.join(", ")}.`,
+    "",
+    formatSubagentReturnContractPrompt(),
+    "",
+    options.skillBody
+      ? `## Loaded skill (${options.skillId})\n${options.skillBody}`
+      : options.skillId
+        ? `## Skill\nRequested skill_id=${options.skillId} was not loaded; use skill tool if needed.`
+        : "Load at most one skill via skill(op=load) if methodology helps.",
+    "",
+    `Target envelope: ${JSON.stringify(childTask.target)}`,
+    `Scope envelope: ${JSON.stringify(childTask.scope)}`,
+  ].join("\n");
 }
 
 function buildUserPrompt(assignment: string, sessionSeeded: boolean, resume: boolean): string {
@@ -528,26 +567,14 @@ async function runColdPackage(args: {
     },
   };
 
-  const nodeLabel = input.nodeType ? `node_type=${input.nodeType}` : "node_type=(free)";
-  const systemPrompt = [
-    ...pack.missionLines,
-    "",
-    ...pack.workLines,
-    "",
-    `Parent pack: ${parentPackId}. ${nodeLabel}.`,
-    `Tools: ${pack.toolNames.join(", ")}.`,
-    "",
-    formatSubagentReturnContractPrompt(),
-    "",
-    skillBody
-      ? `## Loaded skill (${input.skillId})\n${skillBody}`
-      : input.skillId
-        ? `## Skill\nRequested skill_id=${input.skillId} was not loaded; use skill tool if needed.`
-        : "Load at most one skill via skill(op=load) if methodology helps.",
-    "",
-    `Target envelope: ${JSON.stringify(childTask.target)}`,
-    `Scope envelope: ${JSON.stringify(childTask.scope)}`,
-  ].join("\n");
+  const systemPrompt = buildSubagentSystemPrompt({
+    pack,
+    parentPackId,
+    nodeType: input.nodeType,
+    skillId: input.skillId,
+    skillBody: skillBody || undefined,
+    childTask,
+  });
 
   const userPrompt = buildUserPrompt(assignment, sessionSeed.seeded, false);
 
