@@ -21,6 +21,7 @@ Node4 implementation detail (Graph × Pi product path).
 | [`specs/pen-tools-sandbox.md`](specs/pen-tools-sandbox.md) | Unified pen-sandbox (shell + browser) |
 | [`specs/expert-offers.md`](specs/expert-offers.md) | Node packs + Expert instances (@mention routing) |
 | [`specs/ctf-role.md`](specs/ctf-role.md) | CTF role pack operator notes |
+| [`specs/ci-cd.md`](specs/ci-cd.md) | CI/CD backlog map — product smoke, deploy hardening, deferred gates |
 
 ### Agent process config
 
