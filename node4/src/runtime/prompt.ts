@@ -7,6 +7,7 @@ import {
 } from "../stores/process-fact.js";
 import { formatRoeInjection, resolveEngagementRoe } from "./engagement-roe.js";
 import { formatCaseContextInjection } from "./case-context.js";
+import { formatAgentLanguageInjection } from "./agent-language.js";
 
 /**
  * Prompt template vars for role pack mission/work lines.
@@ -79,53 +80,36 @@ export function promptTemplateVars(task: TaskEnvelope, pack: RolePack): PromptTe
  * Replace `{{ key }}` / `{{key}}` with vars[key]. Unknown keys → empty string.
  * Does not evaluate expressions (keep deterministic and safe).
  * Values are re-sanitized on substitution as a second belt.
+ *
+ * Optional `sanitizeValue` lets callers keep spaces (e.g. language prompt
+ * names) while still blocking template smuggling — default remains the strict
+ * persona-label alphabet.
  */
-export function renderPromptTemplate(text: string, vars: Record<string, string>): string {
+export function renderPromptTemplate(
+  text: string,
+  vars: Record<string, string>,
+  options?: { sanitizeValue?: (raw: unknown, fallback?: string) => string },
+): string {
+  const sanitize = options?.sanitizeValue ?? sanitizePromptLabel;
   return String(text || "").replace(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g, (_m, key: string) => {
     if (!Object.prototype.hasOwnProperty.call(vars, key)) return "";
     // Never re-expand templates from substituted values.
-    return sanitizePromptLabel(vars[key], "");
+    return sanitize(vars[key], "");
   });
 }
 
-/** Normalize node-configured agent language (auto | zh-CN | en). */
-export function normalizeAgentLanguage(raw: unknown): "auto" | "zh-CN" | "en" {
-  const s = String(raw || "auto").trim();
-  if (s === "zh-CN" || s === "en" || s === "auto") return s;
-  const low = s.toLowerCase().replace(/_/g, "-");
-  if (low === "zh" || low === "zh-cn" || low === "chinese" || s === "中文") return "zh-CN";
-  if (low === "en" || low === "en-us" || low === "english") return "en";
-  return "auto";
-}
-
-/**
- * Language policy for chat + finding narratives.
- * Tool stdout / raw protocol traffic is never required to be translated.
- */
-export function formatAgentLanguageInjection(language: unknown): string {
-  const lang = normalizeAgentLanguage(language);
-  if (lang === "zh-CN") {
-    return [
-      "## Output language (node policy: zh-CN)",
-      "Write **all user-facing chat** and **finding ledger fields** (title, description, impact, remediation, poc narrative) in **Simplified Chinese**.",
-      "Do not default to English for findings when this policy is set — even if tool output or payloads are English.",
-      "Keep technical tokens as-is when needed (paths, headers, CVE ids, code, shell stdout excerpts in proof).",
-      "Tool raw output is not rewritten; only your narration and booked finding text must be Chinese.",
-    ].join("\n");
-  }
-  if (lang === "en") {
-    return [
-      "## Output language (node policy: en)",
-      "Write **all user-facing chat** and **finding ledger fields** (title, description, impact, remediation, poc narrative) in **English**.",
-      "Do not switch to Chinese for findings when this policy is set.",
-      "Keep technical tokens as-is (paths, headers, CVE ids, code, shell stdout excerpts in proof).",
-    ].join("\n");
-  }
-  return [
-    "## Output language (node policy: auto)",
-    "Match the **user's language** for chat and finding narratives. If the user writes Chinese, reply and book findings in Chinese; if English, use English.",
-  ].join("\n");
-}
+// Language registry + template policy live in agent-language.ts (#134 / #135).
+// Re-export so existing imports from prompt.js keep working.
+export {
+  normalizeAgentLanguage,
+  formatAgentLanguageInjection,
+  resolveAgentLanguage,
+  AGENT_LANGUAGE_REGISTRY,
+  AGENT_LANGUAGE_CODES,
+  FORCED_AGENT_LANGUAGE_CODES,
+  type AgentLanguageCode,
+  type ResolvedAgentLanguage,
+} from "./agent-language.js";
 
 /**
  * Build system prompt from an explicit role pack + task envelope.

@@ -42,7 +42,7 @@ const DEFAULT_MISSION_LINES = [
   "Execution (pentest/CTF/etc.) is **not** your job: first platform_list_experts; if a matching pack/expert exists, emit **exactly one** request_user_decision(kind=handoff, handoff_pack_id=…, handoff_expert_id=… if known, target=URL/host, proposed_action=markdown scope). The **destination expert** owns engagement confirmation and execution after Authorize. If no product expert exists (can_handoff false), tell the user to create/bind an Expert in 专家管理 — do not pretend to pentest yourself.",
   "After Authorize, platform registers the main host if missing, switches sticky expert, and starts that seat — short confirmation only; no second card; no free-text 是/否 for each detail.",
   "Only ask missing critical facts in chat when the ledger truly lacks them (e.g. no asset at all). Prefer ledger defaults when the user already registered a target.",
-  "Language: follow the node **Output language** policy injected in the system prompt (auto / zh-CN / en). Be concise. Never claim you scanned a target yourself.",
+  "Language: follow the node **Output language** policy injected in the system prompt (registry: auto / zh-CN / zh-TW / en / ja). Be concise. Never claim you scanned a target yourself.",
 ];
 
 const DEFAULT_TOOL_NAMES = [

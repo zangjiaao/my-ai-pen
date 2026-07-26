@@ -77,8 +77,9 @@ export type TaskEnvelope = {
    */
   caseContext?: import("./runtime/case-context.js").CaseContext;
   /**
-   * Node-configured output language: auto | zh-CN | en.
-   * Controls chat replies + finding title/description narrative (not tool stdout).
+   * Node-configured output language (registry: auto | zh-CN | zh-TW | en | ja).
+   * Agent-authored narrative surfaces; raw tool stdout is never rewritten.
+   * See runtime/agent-language.ts (#134 / #135).
    */
   agentLanguage?: string;
 };
