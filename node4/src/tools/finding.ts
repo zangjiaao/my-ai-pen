@@ -245,7 +245,7 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
         });
       }
 
-      const store = runtime.lifecycle.findingStore;
+      const store = runtime.lifecycle.processQuality?.findingStore;
       const findingId = String(params.finding_id || params.candidate_id || "").trim();
       // Spec #116 I0.14–16: Expert Graph Store path requires feedback_ok finding_id.
       // Free path without Store activity keeps legacy confirm (handoff candidates) until fully migrated.
@@ -690,8 +690,8 @@ async function finalizeFinding(
   });
 
   // Spec #116 I0.15 path: successful confirm marks Store booked (platform-visible via vuln_found).
-  if (input.storeFindingId && runtime.lifecycle.findingStore) {
-    runtime.lifecycle.findingStore.markBooked(input.storeFindingId, id);
+  if (input.storeFindingId && runtime.lifecycle.processQuality?.findingStore) {
+    runtime.lifecycle.processQuality.findingStore.markBooked(input.storeFindingId, id);
   }
 
   const chainQuality = assessBookingChainQuality({

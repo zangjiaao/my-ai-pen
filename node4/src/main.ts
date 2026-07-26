@@ -153,8 +153,7 @@ client.on("user_input", async (message) => {
 client.on("user_interrupt", async (message) => {
   const conversationId = String(message.conversation_id || message.conversationId || "").trim();
   if (!conversationId) return;
-  // Spec #116 I0.7: UI interrupt ≠ package-fail (shared law)
-  void classifyUserControl({ kind: "ui_interrupt" });
+  // I0.7: UI interrupt ≠ package-fail (classifyUserControl); abort ends this Graph run.
   cancelApprovalsForConversation(conversationId);
   const action = String(message.action || "cancel").toLowerCase();
   const abort = aborts.get(conversationId);

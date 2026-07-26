@@ -59,8 +59,8 @@ export type StagePackageSettlementInput = {
 };
 
 /**
- * I0.2–3 — silent partial forbidden: failed/never_started must be declared;
- * cannot mark L2 done for failed packages.
+ * I0.2–3 — silent partial forbidden: failed/never_started/aborted/salvage-success
+ * must be declared; cannot mark L2 done for unfinished/failed packages.
  */
 export function evaluateHonestPartial(input: StagePackageSettlementInput): {
   ok: boolean;
@@ -75,13 +75,13 @@ export function evaluateHonestPartial(input: StagePackageSettlementInput): {
 
   for (const p of input.packages) {
     const key = String(p.package_key);
-    const bad =
+    const needsDeclaration =
       p.terminal === "failed" ||
       p.terminal === "never_started" ||
       p.terminal === "aborted" ||
       (p.terminal === "success" && p.salvaged);
-    if (p.terminal === "failed" || p.terminal === "never_started") {
-      if (!declared.has(key)) undeclared_failures.push(key);
+    if (needsDeclaration && !declared.has(key)) {
+      undeclared_failures.push(key);
     }
     if (
       (p.terminal === "failed" ||
@@ -93,7 +93,6 @@ export function evaluateHonestPartial(input: StagePackageSettlementInput): {
     ) {
       illegal_l2_done.push(key);
     }
-    void bad;
   }
 
   const silent_partial =
@@ -305,14 +304,6 @@ export function resetPackageAttemptsForStageRetry(
     }
   }
   return { reset_keys, protected_success_keys };
-}
-
-/**
- * I0.9 — captain working session must survive UI interrupt (cancel turn only).
- * Product law: do not dispose captain session as the interrupt path.
- */
-export function shouldDisposeCaptainSessionOnInterrupt(): boolean {
-  return false;
 }
 
 /**

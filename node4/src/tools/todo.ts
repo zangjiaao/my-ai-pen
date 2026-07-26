@@ -75,11 +75,12 @@ export function createTodoTool(runtime: ToolRuntime): AgentTool<any> {
         items: Array.isArray(params.items) ? params.items.map((x: unknown) => String(x)) : undefined,
       };
       // Spec #116 I0.11: cannot done L2 while anchored package failed/running/unfinished
-      if (op === "done" && runtime.lifecycle.packageTerminals && input.task) {
+      if (op === "done" && runtime.lifecycle.processQuality && input.task) {
         const taskName = String(input.task || "").trim();
+        const pq = runtime.lifecycle.processQuality;
         const hit = lookupPackageTerminal(
-          runtime.lifecycle.packageTerminals,
-          runtime.lifecycle.packageTerminalAliasIndex,
+          pq.packageTerminals,
+          pq.packageTerminalAliasIndex,
           taskName,
         );
         if (hit) {

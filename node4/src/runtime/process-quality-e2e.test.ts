@@ -10,7 +10,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FindingStore, ingestPackageCandidatesToStore } from "./finding-store.js";
 import { createFindingTool } from "../tools/finding.js";
-import { checkPackageAttemptBudget } from "../tools/subagent.js";
+import {
+  checkPackageAttemptBudget,
+  createProcessQualityState,
+} from "./package-honesty-host.js";
 import {
   evaluateHonestPartial,
   mayRetryPackage,
@@ -78,10 +81,12 @@ try {
     goals: new GoalStore(),
     lifecycle: {
       subagentDepth: 0,
-      findingStore: store,
+      processQuality: (() => {
+        const pq = createProcessQualityState();
+        pq.findingStore = store;
+        return pq;
+      })(),
       hardGraphRun: { plan: {} as any, usage: {} as any, panel: {} as any, stageId: "class_probe" },
-      packageAttemptCounts: {},
-      packageTerminals: {},
       recentObservations: [
         {
           sourceTool: "http",
@@ -156,7 +161,7 @@ try {
   runtime.lifecycle.subagentDepth = 0;
 
   // Package attempt budget wired (checkPackageAttemptBudget uses mayRetryPackage)
-  runtime.lifecycle.packageAttemptCounts = { "todo-sqli": MAX_PACKAGE_ATTEMPTS };
+  runtime.lifecycle.processQuality!.packageAttemptCounts = { "todo-sqli": MAX_PACKAGE_ATTEMPTS };
   const budget = checkPackageAttemptBudget(runtime, "todo-sqli");
   assert.equal(budget.ok, false);
   assert.equal(mayRetryPackage(0), true);

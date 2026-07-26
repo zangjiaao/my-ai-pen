@@ -27,7 +27,7 @@ import {
 } from "./platform-observability.js";
 import { PanelAgentTracker } from "./panel-agents.js";
 import { GoalStore } from "../stores/goal.js";
-import { FindingStore } from "./finding-store.js";
+import { ensureProcessQuality } from "./package-honesty-host.js";
 
 export type HardGraphTaskResult = {
   /** Platform task_complete.status (completed | incomplete | blocked). */
@@ -207,34 +207,9 @@ export async function runHardGraphExpertTask(options: {
     panel,
   };
   parentRuntime.lifecycle.panelAgents = panel;
-  // Spec #116: ensure Store-first findings survive all stages
-  if (!parentRuntime.lifecycle.findingStore) {
-    parentRuntime.lifecycle.findingStore = new FindingStore();
-  }
-  if (!parentRuntime.lifecycle.packageTerminals) {
-    parentRuntime.lifecycle.packageTerminals = {};
-  }
-  if (!parentRuntime.lifecycle.packageTerminalAliasIndex) {
-    parentRuntime.lifecycle.packageTerminalAliasIndex = {};
-  }
-  if (!parentRuntime.lifecycle.packageAttemptCounts) {
-    parentRuntime.lifecycle.packageAttemptCounts = {};
-  }
+  // Spec #116: ensure Store-first process quality survives all stages
+  ensureProcessQuality(parentRuntime.lifecycle);
 
-  const disposeParkedCaptains = async () => {
-    const parked = parentRuntime.lifecycle.parkedCaptainSessions;
-    if (!parked) return;
-    for (const [sid, sess] of Object.entries(parked)) {
-      try {
-        await Promise.resolve(sess.dispose());
-      } catch {
-        /* ignore */
-      }
-      delete parked[sid];
-    }
-  };
-
-  try {
   const startMsg: PlatformMessage = {
     type: "status_update",
     conversation_id: task.conversationId,
@@ -351,8 +326,4 @@ export async function runHardGraphExpertTask(options: {
     terminal: result.terminal,
     workMode: settled.workMode,
   };
-  } finally {
-    // Spec #116 I0.9: always dispose parked captains (even if settle/platform throws)
-    await disposeParkedCaptains();
-  }
 }

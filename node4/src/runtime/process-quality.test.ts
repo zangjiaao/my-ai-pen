@@ -30,7 +30,6 @@ import {
   requirePlanNodeIdForGraphPackage,
   resetPackageAttemptsForStageRetry,
   shouldAutoReplayBatchAfterInterrupt,
-  shouldDisposeCaptainSessionOnInterrupt,
 } from "./package-settlement-law.js";
 import {
   countFanoutPackagesP1,
@@ -41,7 +40,7 @@ import {
   emptyHardProcessMetrics,
   accumulateStageFeedback,
 } from "./hard-graph-feedback.js";
-import { assertGraphPackageAnchor } from "../tools/subagent.js";
+import { assertGraphPackageAnchor } from "./package-honesty-host.js";
 import { normalizeSubagentResult } from "./subagent-result.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -129,8 +128,13 @@ assert.equal(interrupt.is_package_fail, false, "I0.7: interrupt ≠ package-fail
 
 assert.equal(shouldAutoReplayBatchAfterInterrupt(), false, "I0.8: no auto full-batch replay");
 
-// --- I0.9 captain session survives interrupt ---
-assert.equal(shouldDisposeCaptainSessionOnInterrupt(), false, "I0.9: do not dispose captain on interrupt");
+// --- I0.9: durable captain continue not implemented; interrupt is abort but ≠ package-fail ---
+assert.equal(
+  classifyUserControl({ kind: "ui_interrupt" }).is_package_fail,
+  false,
+  "I0.9/I0.7: interrupt ≠ package-fail",
+);
+assert.equal(classifyUserControl({ kind: "empty_message" }).is_abort, false, "I0.8: empty not abort");
 
 // --- I0.10 package must anchor L2 ---
 assert.equal(requirePlanNodeIdForGraphPackage(undefined).ok, false, "I0.10");

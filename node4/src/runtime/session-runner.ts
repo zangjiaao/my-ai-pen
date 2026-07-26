@@ -9,7 +9,7 @@ import { ProcessFactStore } from "../stores/process-fact.js";
 import { SurfaceLedgerStore } from "../stores/surface-ledger.js";
 import { SkillStore } from "../stores/skill.js";
 import { TodoStore } from "../stores/todo.js";
-import { FindingStore } from "./finding-store.js";
+import { createProcessQualityState } from "./package-honesty-host.js";
 import type { PlatformSink, TaskEnvelope, ToolRuntime } from "../types.js";
 import { toolNamesForPack } from "../tools/index.js";
 import { loadConfirmedFindings } from "../tools/finding.js";
@@ -157,10 +157,7 @@ export async function runNode4Task(
       panelAgents: panel,
       midRunTodo: createMidRunTodoTracker(),
       subagentDepth: 0,
-      findingStore: new FindingStore(),
-      packageTerminals: {},
-      packageTerminalAliasIndex: {},
-      packageAttemptCounts: {},
+      processQuality: createProcessQualityState(),
     },
   };
   runtime.subagents = new SubagentHost({
