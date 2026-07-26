@@ -70,11 +70,11 @@ export function StrixAgentList({ agents }: { agents: StrixAgentStatus[] }) {
           </>
         )}
         <div className="relative">
-          {/* Spine only for nested non-Main parents; Main → Sub uses child elbow connectors alone. */}
-          {hasVisibleChildren && !primary && (
+          {/* Spine under status-dot center (pl-[9px] + 8px dot → ≈13px; left-3/12px keeps column). */}
+          {hasVisibleChildren && (
             <span
               aria-hidden="true"
-              className="pointer-events-none absolute bottom-0 left-[10px] top-[22px] w-px bg-hairline"
+              className="pointer-events-none absolute bottom-0 left-3 top-[19px] w-px bg-hairline"
             />
           )}
           <AgentRow
@@ -88,7 +88,8 @@ export function StrixAgentList({ agents }: { agents: StrixAgentStatus[] }) {
           />
         </div>
         {children.length > 0 && (
-          <div className={`${open ? "block" : "hidden"} space-y-0 pl-1.5`}>
+          /* pl-[18px]: child elbow vertical (-left-1.5) near parent spine at left-3. */
+          <div className={`${open ? "block" : "hidden"} space-y-0 pl-[18px]`}>
             {children.map((child, index) =>
               renderAgentNode(child, false, nextTrail, index === children.length - 1),
             )}
@@ -132,11 +133,14 @@ function AgentRow({
     onToggle?.();
   };
   const highlighted = Boolean(agent.highlighted) && primary;
-  // Sub rows: 5px vertical pad so the status-dot center meets the tree elbow (~16px).
-  const padY = secondary ? "py-[5px]" : "py-1.5";
+  // Same vertical pad for Main/Sub so status-dot centers share one light column with spine/elbows.
+  const padY = "py-[5px]";
+  // Sub: skill chips sit beside the title; Main keeps them in AgentMeta below.
+  const titleSkills =
+    secondary && Array.isArray(agent.skills) ? agent.skills.slice(0, 5) : [];
   return (
     <div
-      className={`min-w-0 rounded-md ${padY} pr-2 pl-1.5 ${highlighted ? "bg-status-running/8 ring-1 ring-status-running/25" : "bg-transparent"} ${rowInteractive ? "cursor-pointer hover:bg-canvas-inset focus-visible:outline focus-visible:outline-2 focus-visible:outline-status-running/40" : "hover:bg-canvas-inset"}`}
+      className={`min-w-0 rounded-md ${padY} pr-2 pl-[9px] ${highlighted ? "bg-status-running/8 ring-1 ring-status-running/25" : "bg-transparent"} ${rowInteractive ? "cursor-pointer hover:bg-canvas-inset focus-visible:outline focus-visible:outline-2 focus-visible:outline-status-running/40" : "hover:bg-canvas-inset"}`}
       onClick={rowInteractive ? onToggle : undefined}
       onKeyDown={handleRowKeyDown}
       role={rowInteractive ? "button" : undefined}
@@ -148,7 +152,7 @@ function AgentRow({
       <div className="flex min-w-0 items-start gap-2">
         <span
           aria-hidden="true"
-          className={`${secondary ? "mt-1.5" : "mt-2"} h-2 w-2 shrink-0 rounded-full ${agentStatusDotClass(agent.status)}`}
+          className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${agentStatusDotClass(agent.status)}`}
           title={agentStatusLabel(agent.status)}
         />
         <div className="min-w-0 flex-1">
@@ -159,6 +163,9 @@ function AgentRow({
                 <p className="min-w-0 truncate text-sm font-medium" title={displayName}>
                   {displayName}
                 </p>
+                {titleSkills.map((skill) => (
+                  <AgentSkillBadge key={skill} skill={skill} />
+                ))}
                 {highlighted && (
                   <span className="shrink-0 rounded-sm bg-status-running/15 px-1.5 py-0.5 text-[10px] font-medium text-status-running">
                     active
@@ -183,7 +190,7 @@ function AgentRow({
               </span>
             </div>
           </div>
-          <AgentMeta agent={agent} primary={primary && !secondary} />
+          <AgentMeta agent={agent} primary={primary && !secondary} skillsInTitle={secondary} />
         </div>
       </div>
     </div>
@@ -204,8 +211,20 @@ function AgentRoleBadge({ primary }: { primary: boolean }) {
   );
 }
 
-function AgentMeta({ agent, primary }: { agent: StrixAgentStatus; primary: boolean }) {
-  const skills = Array.isArray(agent.skills) ? agent.skills.slice(0, primary ? 4 : 5) : [];
+function AgentMeta({
+  agent,
+  primary,
+  skillsInTitle = false,
+}: {
+  agent: StrixAgentStatus;
+  primary: boolean;
+  /** Sub rows render skill chips next to the title; skip them here. */
+  skillsInTitle?: boolean;
+}) {
+  const skills =
+    skillsInTitle || !Array.isArray(agent.skills)
+      ? []
+      : agent.skills.slice(0, primary ? 4 : 5);
   const pendingCount = Number(agent.pending_count || 0);
   if (!skills.length && pendingCount <= 0) return null;
   return (
@@ -268,8 +287,13 @@ function isActiveAgentStatus(status: string | undefined): boolean {
 }
 
 function agentStatusLabel(status: string | undefined): string {
-  const normalized = String(status || "running").toLowerCase();
-  if (normalized === "completed") return "done";
+  // Case Main roots often arrive as "idle"; treat idle/empty as done (green), same as Sub completed.
+  const normalized = String(status ?? "")
+    .trim()
+    .toLowerCase() || "done";
+  if (normalized === "completed" || normalized === "idle" || normalized === "finished" || normalized === "success") {
+    return "done";
+  }
   if (normalized === "crashed") return "failed";
   if (normalized === "waiting") return "pending";
   if (normalized === "timed_out" || normalized === "timeout") return "timeout";
