@@ -82,7 +82,7 @@
   - **漏洞台账 / 再次发现**：专家与 default 均可 `platform_list_vulnerabilities`；任务 `case_context.findings_summary` 含 Case 资产上的历史 finding。同资产+路径/模块再次 booking → 平台 **rediscover**（保留 `first_seen_at`，`history` 记「再次发现」），不新建重复行；UI 卡片与详情展示 **多次发现** 徽章与发现时间线。
   - **补扫再确认（harness）**：Scope 主机上已有 open prior 时，agent 须把其当作 **re-verify 工作流**（短证明 + `finding(confirm)` 新鲜 proof → rediscovery），与未测面 **穿插**；不得因「台账已有」整表跳过。判断抽样时优先 high/critical；不再复现则 fact/状态更新。见 `experts/pentest/work.md`、`platform-citizen` mission、`case_context` note。
   - **同模块去重身份**：平台 `finding_dedupe` 用 **path 集合相交（含 upload 证据路径别名）+ 标题 stem（去掉 Low/Medium 级别、中英同类头）** 识别同一 finding；安全级别/新绕过不是新行。存量可用 `scripts/repair_finding_ledger.py`。
-  - **节点输出语言**：节点详情「配置」可设 `agent_language`：`auto`（跟用户）/ `zh-CN` / `en`。经 `task_assign.worker_limits` 注入 Node4 系统提示，约束**对话回复**与**漏洞台账文案**（标题/描述/PoC 叙述）；工具原始 stdout 不强制翻译。
+  - **节点输出语言**：节点详情「配置」可设 `agent_language`（可扩展注册表，当前：`auto` 跟随用户 / `zh-CN` 简体 / `zh-TW` 繁體 / `en` / `ja`）。经 `task_assign` / steer 重建时的 `worker_limits.agent_language` 注入 **所有** Agent Session 系统提示（free OMP、Hard Graph stage、subagent），约束 **agent 自写叙述**：对话、思考展示、todo/计划、工具意图/进度叙述、台账字段、阶段/包交接叙述、报告 markdown。策略正文为单模板 + `{{ language_code }}` / `{{ language_prompt_name }}` 替换（非 full Jinja）。工具原始 stdout/HTTP body **不翻译**。新增语言 = 扩展 registry 一行（UI/Platform allowlist 同源），不写 per-locale inject 分支。
   - **默认对话角色**：专家管理可勾选「设为默认对话角色」（`experts.is_default`，全站仅一位）。新建会话 / 空白 composer 优先选该专家；未设置时优先 `pack_id=default`，再 online / 列表首位。
   - **诚实计数（harness）**：收尾总结中「重新验证 N」= 本会话成功 `finding(confirm)` 次数，不是 prior 列表长度；「新发现」仅指新台账身份，同 path 合并只能称 rediscovery。见 `experts/pentest/work.md` Honest counts。
 - 报告导出 / 导入（现有 sync 能力延续，不阻塞主环）。

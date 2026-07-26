@@ -9,6 +9,7 @@ import {
   AUTO_LANGUAGE_POLICY_TEMPLATE,
   FORCED_LANGUAGE_POLICY_TEMPLATE,
   agentLanguageUiOptions,
+  extractAgentLanguageFromMessage,
   formatAgentLanguageInjection,
   normalizeAgentLanguage,
   resolveAgentLanguage,
@@ -230,5 +231,42 @@ const rendered = renderPromptTemplate("Hello {{ expert_name }}", {
 });
 assert.equal(rendered, "Hello Alice");
 console.log("ok", "renderPromptTemplate persona path unchanged");
+
+// --- #138: steer / re-burst shaped messages still carry language ---
+assert.equal(
+  extractAgentLanguageFromMessage({
+    type: "user_steer",
+    text: "继续扫",
+    worker_limits: { agent_language: "ja", worker_max_ms: 1000 },
+  }),
+  "ja",
+  "steer with worker_limits.agent_language",
+);
+assert.equal(
+  extractAgentLanguageFromMessage({
+    type: "task_assign",
+    agent_language: "zh-TW",
+  }),
+  "zh-TW",
+  "task_assign top-level agent_language",
+);
+assert.equal(
+  extractAgentLanguageFromMessage({
+    type: "user_steer",
+    text: "go on",
+  }),
+  undefined,
+  "steer without limits → no language (platform must re-attach)",
+);
+// Free path after extract: policy markers present
+const steerLang = extractAgentLanguageFromMessage({
+  worker_limits: { agent_language: "zh-TW" },
+});
+const steerPrompt = buildSystemPrompt(
+  { ...baseTask, agentLanguage: steerLang },
+  PENTEST_ROLE_PACK,
+);
+assert.match(steerPrompt, /node policy: zh-TW/, "language after steer-shaped rebuild");
+console.log("ok", "steer/re-burst language extract + free prompt");
 
 console.log("agent-language.test.ts: ok");

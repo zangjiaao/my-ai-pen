@@ -276,3 +276,35 @@ export function agentLanguageUiOptions(): ReadonlyArray<{
 export function isAgentLanguageCode(raw: unknown): raw is AgentLanguageCode {
   return typeof raw === "string" && CODE_SET.has(raw);
 }
+
+/**
+ * Extract agent language from a platform task_assign or user_steer message.
+ * Accepts top-level agent_language / agentLanguage or worker_limits.* (#138).
+ * Returns the raw wire string (callers may normalize); undefined if absent.
+ */
+export function extractAgentLanguageFromMessage(
+  message: Record<string, unknown>,
+): string | undefined {
+  const limits =
+    message.worker_limits &&
+    typeof message.worker_limits === "object" &&
+    !Array.isArray(message.worker_limits)
+      ? (message.worker_limits as Record<string, unknown>)
+      : message.workerLimits &&
+          typeof message.workerLimits === "object" &&
+          !Array.isArray(message.workerLimits)
+        ? (message.workerLimits as Record<string, unknown>)
+        : {};
+  const raw =
+    typeof message.agent_language === "string"
+      ? message.agent_language
+      : typeof message.agentLanguage === "string"
+        ? message.agentLanguage
+        : typeof limits.agent_language === "string"
+          ? limits.agent_language
+          : typeof limits.agentLanguage === "string"
+            ? limits.agentLanguage
+            : undefined;
+  const trimmed = raw?.trim();
+  return trimmed || undefined;
+}

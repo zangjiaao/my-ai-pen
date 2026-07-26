@@ -7,6 +7,7 @@ from app.api.nodes import worker_limits_from_config
 from app.services.agent_language import (
     ALLOWED_AGENT_LANGUAGES,
     SHIPPED_AGENT_LANGUAGES,
+    merge_worker_limits_into_message,
     normalize_agent_language,
     parse_agent_language_for_update,
 )
@@ -80,6 +81,26 @@ class TestAgentLanguageCatalog(unittest.TestCase):
         # missing → auto
         limits_default = worker_limits_from_config({})
         self.assertEqual(limits_default["agent_language"], "auto")
+
+    def test_merge_worker_limits_preserves_language_on_steer_rebuild(self):
+        """#138: steer/re-burst shaped messages must carry Node language."""
+        limits = worker_limits_from_config({"agent_language": "ja"})
+        steer = {"type": "user_steer", "text": "继续扫", "conversation_id": "c1"}
+        merged = merge_worker_limits_into_message(steer, limits)
+        self.assertEqual(merged["worker_limits"]["agent_language"], "ja")
+        self.assertEqual(merged["agent_language"], "ja")
+        # input not mutated
+        self.assertNotIn("worker_limits", steer)
+        # does not overwrite explicit top-level
+        explicit = merge_worker_limits_into_message(
+            {"type": "task_assign", "agent_language": "zh-TW"},
+            limits,
+        )
+        self.assertEqual(explicit["agent_language"], "zh-TW")
+        self.assertEqual(explicit["worker_limits"]["agent_language"], "ja")
+        # empty limits → passthrough
+        bare = merge_worker_limits_into_message({"type": "user_steer"}, None)
+        self.assertEqual(bare, {"type": "user_steer"})
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ import { parseCaseContext } from "./runtime/case-context.js";
 import { parseGraphExecution } from "./runtime/hard-graph-definition.js";
 import { parseFocusFields } from "./runtime/task-envelope-fields.js";
 import { sanitizePromptLabel } from "./runtime/prompt.js";
+import { extractAgentLanguageFromMessage } from "./runtime/agent-language.js";
 import { cancelApprovalsForConversation, resolveApproval } from "./runtime/approvals.js";
 import { classifyUserControl } from "./runtime/package-settlement-law.js";
 
@@ -269,23 +270,8 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
 
   const caseContext = parseCaseContext(message.case_context ?? message.caseContext);
 
-  // Language: top-level agent_language or worker_limits.agent_language from node config.
-  const limits =
-    message.worker_limits && typeof message.worker_limits === "object" && !Array.isArray(message.worker_limits)
-      ? (message.worker_limits as Record<string, unknown>)
-      : message.workerLimits && typeof message.workerLimits === "object" && !Array.isArray(message.workerLimits)
-        ? (message.workerLimits as Record<string, unknown>)
-        : {};
-  const agentLanguageRaw =
-    typeof message.agent_language === "string"
-      ? message.agent_language
-      : typeof message.agentLanguage === "string"
-        ? message.agentLanguage
-        : typeof limits.agent_language === "string"
-          ? limits.agent_language
-          : typeof limits.agentLanguage === "string"
-            ? limits.agentLanguage
-            : undefined;
+  // Language: top-level or worker_limits (task_assign + steer rebuilds — #138).
+  const agentLanguageRaw = extractAgentLanguageFromMessage(message);
 
   return {
     taskId,

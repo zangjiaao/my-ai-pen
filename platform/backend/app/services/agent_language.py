@@ -96,6 +96,28 @@ def normalize_agent_language(value: object) -> str:
     return DEFAULT_AGENT_LANGUAGE
 
 
+def merge_worker_limits_into_message(
+    msg: dict,
+    limits: dict | None,
+) -> dict:
+    """
+    Attach Node worker_limits (including agent_language) onto a task_assign
+    or user_steer rebuild so language does not silently fall back to auto (#138).
+
+    Pure: does not mutate the input dict.
+    """
+    out = dict(msg)
+    if not limits:
+        return out
+    out["worker_limits"] = limits
+    lang = limits.get("agent_language")
+    if isinstance(lang, str) and lang.strip():
+        # Belt-and-suspenders: top-level field for Node normalizeTask readers.
+        if not out.get("agent_language") and not out.get("agentLanguage"):
+            out["agent_language"] = lang.strip()
+    return out
+
+
 def parse_agent_language_for_update(value: object) -> str:
     """
     Normalize a PATCH body value to a shipped code.

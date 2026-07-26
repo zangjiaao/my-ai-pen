@@ -3683,7 +3683,9 @@ async def _dispatch_task_assign_to_node(
         task_msg["snapshot"] = snap
     worker_limits = await _worker_limits_for_node(node_id)
     if worker_limits:
-        task_msg["worker_limits"] = worker_limits
+        from app.services.agent_language import merge_worker_limits_into_message
+
+        task_msg = merge_worker_limits_into_message(task_msg, worker_limits)
     await node_connections[node_id].send_text(json.dumps(task_msg, ensure_ascii=False))
 
 
@@ -3986,6 +3988,12 @@ async def _send_direct_node_message(conv_id: str, node_id: str | None, msg: dict
     }
     if capability:
         node_msg["agent_capability"] = capability
+    # Re-attach Node language/budgets so steer→new burst does not fall back to auto (#138).
+    worker_limits = await _worker_limits_for_node(node_id)
+    if worker_limits:
+        from app.services.agent_language import merge_worker_limits_into_message
+
+        node_msg = merge_worker_limits_into_message(node_msg, worker_limits)
     conversation_node[conv_id] = node_id
     await node_connections[node_id].send_text(json.dumps(node_msg, ensure_ascii=False))
     return True
