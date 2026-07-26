@@ -35,6 +35,16 @@ import {
 } from "../runtime/concurrency.js";
 import { promoteChildSessionToParent } from "../runtime/subagent-session-seed.js";
 import { getOrCreateIdlePool } from "../runtime/subagent-idle-pool.js";
+import {
+  MAX_PACKAGE_ATTEMPTS,
+  mayRetryPackage,
+  isPackageSuccess,
+  evaluateHonestPartial,
+  recordPackageTerminal,
+  filterPackageTerminalsForStage,
+  type PackageAttemptRecord,
+} from "../runtime/package-settlement-law.js";
+import { ingestPackageCandidatesToStore } from "../runtime/finding-store.js";
 import { dirname } from "node:path";
 
 export type SubagentPackageResult = {
@@ -115,6 +125,24 @@ const packageItemSchema = Type.Object({
     }),
   ),
 });
+
+/**
+ * Spec #116 I0.10 — Expert Graph formal packages must anchor an L2 plan_node_id.
+ * Free/Default path: still optional (Worker chip binding only).
+ */
+export function assertGraphPackageAnchor(
+  runtime: ToolRuntime,
+  pkg: Pick<ResolvedPackage, "plan_node_id">,
+  mode: string,
+): string | null {
+  const inGraph = Boolean(runtime.lifecycle.hardGraphRun?.plan);
+  if (!inGraph) return null;
+  if (String(pkg.plan_node_id || "").trim()) return null;
+  return (
+    `error: ${mode} Graph package requires plan_node_id (L2 anchor); spawn hard-fail ` +
+    `(Spec #116 I0.10 — dispatch is ownership of an existing Tasks L2 row).`
+  );
+}
 
 /**
  * Agent-facing subagent tool.
@@ -256,6 +284,13 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
           const raw = packagesRaw![i];
           const r = resolvePackageInput(params, raw, i);
           if ("error" in r) return textResult(r.error, { isError: true });
+          const anchorErr = assertGraphPackageAnchor(runtime, r.pkg, `packages[${i}]`);
+          if (anchorErr) return textResult(anchorErr, { isError: true });
+          const attemptBudget = checkPackageAttemptBudget(runtime, r.pkg.plan_node_id);
+          if (!attemptBudget.ok) {
+            skipped.push(softFailPackage(r.pkg, attemptBudget.error!, runtime, "never_started"));
+            continue;
+          }
           const g = validateGraphAndCommand(runtime, r.pkg);
           if (g) return textResult(g, { isError: true });
           if (r.pkg.goal_id && !runtime.goals.get(r.pkg.goal_id)) {
@@ -263,7 +298,7 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
           }
           const pathLimit = checkAndCountPathDispatch(runtime, r.pkg.target);
           if (!pathLimit.ok) {
-            skipped.push(softFailPackage(r.pkg, pathLimit.error!));
+            skipped.push(softFailPackage(r.pkg, pathLimit.error!, runtime, "never_started"));
             continue;
           }
           resolved.push(r.pkg);
@@ -278,7 +313,7 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
               return await runSubagentPackage(runtime, pkg, postLock);
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
-              return softFailPackage(pkg, msg);
+              return softFailPackage(pkg, msg, runtime, "failed");
             }
           },
           runtime.lifecycle.abortSignal,
@@ -286,7 +321,13 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
 
         const results: SubagentPackageResult[] = [
           ...rawResults.map((r, i) =>
-            r ?? softFailPackage(resolved[i]!, "package cancelled or failed before result"),
+            r ??
+            softFailPackage(
+              resolved[i]!,
+              "package cancelled or failed before result",
+              runtime,
+              runtime.lifecycle.abortSignal?.aborted ? "aborted" : "never_started",
+            ),
           ),
           ...skipped,
         ];
@@ -326,6 +367,10 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
       // Flat single package
       const flat = resolvePackageInput(params, null, 0);
       if ("error" in flat) return textResult(flat.error, { isError: true });
+      const anchorErr = assertGraphPackageAnchor(runtime, flat.pkg, "flat subagent");
+      if (anchorErr) return textResult(anchorErr, { isError: true });
+      const attemptBudget = checkPackageAttemptBudget(runtime, flat.pkg.plan_node_id);
+      if (!attemptBudget.ok) return textResult(attemptBudget.error!, { isError: true });
       const g = validateGraphAndCommand(runtime, flat.pkg);
       if (g) return textResult(g, { isError: true });
       if (flat.pkg.goal_id && !runtime.goals.get(flat.pkg.goal_id)) {
@@ -494,7 +539,95 @@ function checkAndCountPathDispatch(
   return { ok: true };
 }
 
-function softFailPackage(pkg: ResolvedPackage, error: string): SubagentPackageResult {
+/** Spec #116 I0.1: package attempt budget per plan_node_id (shared law). */
+export function checkPackageAttemptBudget(
+  runtime: ToolRuntime,
+  planNodeId: string | undefined,
+): { ok: true } | { ok: false; error: string } {
+  const key = String(planNodeId || "").trim();
+  if (!key) return { ok: true };
+  const used = runtime.lifecycle.packageAttemptCounts?.[key] || 0;
+  if (!mayRetryPackage(used)) {
+    return {
+      ok: false,
+      error:
+        `error: package plan_node_id=${key} already used ${used} attempt(s) ` +
+        `(max ${MAX_PACKAGE_ATTEMPTS} per package — Spec #116 I0.1; not a stage pool).`,
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * Spec #116 I0.2–3: build honest-partial evaluation from lifecycle package terminals.
+ * Production stage settlement / Feedback should call this (exported for tests).
+ */
+export function evaluateStageHonestPartialFromRuntime(
+  runtime: ToolRuntime,
+  stageId?: string,
+): ReturnType<typeof evaluateHonestPartial> {
+  const terminals = runtime.lifecycle.packageTerminals || {};
+  const packages: PackageAttemptRecord[] = stageId
+    ? filterPackageTerminalsForStage(terminals, stageId)
+    : filterPackageTerminalsForStage(terminals, runtime.lifecycle.hardGraphRun?.stageId || "");
+  const declared_failed_keys = packages
+    .filter((p) => p.terminal === "failed" || p.terminal === "never_started")
+    .map((p) => p.package_key);
+  const declared =
+    (runtime.lifecycle as { declaredFailedPackages?: string[] }).declaredFailedPackages ||
+    declared_failed_keys;
+  return evaluateHonestPartial({
+    packages,
+    declared_failed_keys: declared,
+    l2_done_for_keys: packages
+      .filter((p) => p.terminal === "success" && !p.salvaged)
+      .map((p) => p.package_key),
+  });
+}
+
+// Keep isPackageSuccess available for local assertions
+void isPackageSuccess;
+
+/** Spec #116: write one honesty terminal (running | success | failed | aborted | never_started). */
+function markPackageHonesty(
+  runtime: ToolRuntime,
+  pkg: Pick<ResolvedPackage, "plan_node_id" | "this_turn_goal">,
+  terminal: "running" | "success" | "failed" | "aborted" | "never_started",
+  opts?: { salvaged?: boolean; subagentId?: string },
+): void {
+  if (!runtime.lifecycle.packageTerminals) runtime.lifecycle.packageTerminals = {};
+  if (!runtime.lifecycle.packageTerminalAliasIndex) {
+    runtime.lifecycle.packageTerminalAliasIndex = {};
+  }
+  const primary =
+    String(pkg.plan_node_id || "").trim() ||
+    String(opts?.subagentId || "").trim() ||
+    String(pkg.this_turn_goal || "").trim();
+  if (!primary) return;
+  recordPackageTerminal(
+    runtime.lifecycle.packageTerminals,
+    runtime.lifecycle.packageTerminalAliasIndex,
+    {
+      primary_key: primary,
+      aliases: [pkg.this_turn_goal, opts?.subagentId, pkg.plan_node_id].filter(
+        (x): x is string => Boolean(x && String(x).trim() && String(x).trim() !== primary),
+      ),
+      terminal,
+      salvaged: opts?.salvaged,
+      stage_id: runtime.lifecycle.hardGraphRun?.stageId,
+    },
+  );
+}
+
+function softFailPackage(
+  pkg: ResolvedPackage,
+  error: string,
+  runtime?: ToolRuntime,
+  terminal: "failed" | "never_started" | "aborted" = "failed",
+): SubagentPackageResult {
+  if (runtime) {
+    markPackageHonesty(runtime, pkg, terminal);
+  }
   const handoff = {
     target: pkg.target,
     scope: pkg.scope,
@@ -528,8 +661,11 @@ async function runSubagentPackage(
   postLock: <T>(fn: () => Promise<T>) => Promise<T>,
 ): Promise<SubagentPackageResult> {
   if (!runtime.subagents) {
-    return softFailPackage(pkg, "subagent host not available");
+    return softFailPackage(pkg, "subagent host not available", runtime, "never_started");
   }
+
+  // Spec #116 I0.11: mark running so L2 done is hard-rejected mid-flight
+  markPackageHonesty(runtime, pkg, "running");
 
   const handoff = validateSubagentHandoff({
     target: pkg.target,
@@ -798,6 +934,38 @@ async function runSubagentPackage(
               reason: "same_path_followup",
             }
           : undefined;
+
+    // Spec #116: track package terminal for L2 done gates + Finding Store enqueue
+    const salvaged = Boolean(rawData && rawData.salvaged === true);
+    const aborted = Boolean(runtime.lifecycle.abortSignal?.aborted);
+    const terminal = aborted
+      ? "aborted"
+      : result.ok
+        ? "success"
+        : "failed";
+    markPackageHonesty(runtime, pkg, terminal as "success" | "failed" | "aborted", {
+      salvaged,
+      subagentId: result.subagentId,
+    });
+    // Upsert candidates into Finding Store (Store-first) + L0 Feedback (production path)
+    const fstore = runtime.lifecycle.findingStore;
+    if (fstore && structured.candidates?.length) {
+      ingestPackageCandidatesToStore(fstore, structured.candidates, {
+        package_id: result.subagentId,
+        plan_node_id: pkg.plan_node_id,
+        stage_id: runtime.lifecycle.hardGraphRun?.stageId,
+        agent_id: agentId,
+        fallback_location: handoff.handoff.target,
+      });
+    }
+
+    // Spec #116 I0.1: count package attempts against plan_node_id budget
+    if (pkg.plan_node_id) {
+      if (!runtime.lifecycle.packageAttemptCounts) runtime.lifecycle.packageAttemptCounts = {};
+      const pk = String(pkg.plan_node_id);
+      runtime.lifecycle.packageAttemptCounts[pk] =
+        (runtime.lifecycle.packageAttemptCounts[pk] || 0) + 1;
+    }
 
     return {
       ok: result.ok,

@@ -174,6 +174,28 @@ export type ToolRuntime = {
       /** Current stage id while a stage session runs (todo → L2 merge). */
       stageId?: string;
     };
+    /**
+     * Spec #116 Finding/Candidate Store (Store-first). Survives stage transitions.
+     * Confirm only for feedback_ok ids; Sub must never confirm.
+     */
+    findingStore?: import("./runtime/finding-store.js").FindingStore;
+    /**
+     * package_key / plan_node_id → terminal for L2 done gates (I0.11).
+     */
+    /** Honesty map: primary plan_node_id → terminal only (never alias keys). */
+    packageTerminals?: Record<
+      string,
+      import("./runtime/package-settlement-law.js").PackageTerminalEntry
+    >;
+    /** Alias (goal text / subagent id) → primary plan_node_id for L2 lookup only. */
+    packageTerminalAliasIndex?: Record<string, string>;
+    /** Spec #116 I0.1: attempts used per plan_node_id (≤ MAX_PACKAGE_ATTEMPTS). Shared run-wide. */
+    packageAttemptCounts?: Record<string, number>;
+    /**
+     * Spec #116 I0.9: stage captain sessions parked after UI interrupt (not disposed).
+     * Keyed by stage id. Disposed when Graph task fully ends without continue reuse.
+     */
+    parkedCaptainSessions?: Record<string, import("./runtime/run-node4-agent.js").Node4AgentSession>;
   };
 };
 

@@ -38,6 +38,13 @@ import {
   promoteChildSessionToParent,
   seedChildSessionFromParent,
 } from "./subagent-session-seed.js";
+import {
+  evaluateHonestPartial,
+  filterPackageTerminalsForStage,
+  resetPackageAttemptsForStageRetry,
+  shouldDisposeCaptainSessionOnInterrupt,
+} from "./package-settlement-law.js";
+import { FindingStore } from "./finding-store.js";
 import { SubagentHost } from "./subagent.js";
 import type { Node4AgentSession } from "./run-node4-agent.js";
 
@@ -113,6 +120,8 @@ export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope)
       ? [
           "Agent Graph (preferred when multi-class or multi-surface work is justified): fan-out with **subagent** packages[] (skill/path-scoped workers).",
           "Prefer packages over one long serial monologue across all vulnerability classes or surfaces.",
+          "Each formal package **must** pass plan_node_id (L2 attack-class anchor). No hard package quotas.",
+          "Anti-micro-spawn: do not split trivial single-GET chores into packages.",
           "Workers return candidates[] with verbatim proof_excerpt; you Join into result.json candidates (do not rephrase proof).",
           "No nested subagent inside workers. Stay in RoE/scope.",
           "Serial Main-only probing is allowed if packages are not justified (single surface / single class) — do not invent package counts.",
@@ -174,6 +183,13 @@ export function buildHardGraphStageChildRuntime(options: {
   // Resolve panel before host construction so package spawn can emit children.
   const sharedPanel =
     parent.lifecycle.hardGraphRun?.panel || parent.lifecycle.panelAgents;
+  // Run-wide shared maps (must be same object on every stage child / retry)
+  if (!parent.lifecycle.packageTerminals) parent.lifecycle.packageTerminals = {};
+  if (!parent.lifecycle.packageTerminalAliasIndex) parent.lifecycle.packageTerminalAliasIndex = {};
+  if (!parent.lifecycle.packageAttemptCounts) parent.lifecycle.packageAttemptCounts = {};
+  if (!parent.lifecycle.findingStore) {
+    parent.lifecycle.findingStore = new FindingStore();
+  }
   const childRuntime: ToolRuntime = {
     task: parent.task,
     workspaceDir: parent.workspaceDir,
@@ -198,6 +214,12 @@ export function buildHardGraphStageChildRuntime(options: {
       subagentEvidenceCache: [],
       hardGraphRun: parent.lifecycle.hardGraphRun,
       panelAgents: sharedPanel,
+      // Spec #116: Store survives stages — share parent FindingStore (do not wipe)
+      findingStore: parent.lifecycle.findingStore,
+      packageTerminals: parent.lifecycle.packageTerminals,
+      packageTerminalAliasIndex: parent.lifecycle.packageTerminalAliasIndex,
+      // Spec #116 I0.1: attempt budget must not reset on new stage child / retry
+      packageAttemptCounts: parent.lifecycle.packageAttemptCounts,
     },
   };
   if (allowSubagent) {
@@ -298,6 +320,22 @@ export function createHardGraphStageExecutor(options: {
     await mkdir(join(workDir, "facts"), { recursive: true });
     await mkdir(join(workDir, "pi-sessions"), { recursive: true });
 
+    // Spec #116 I0.6: new stage attempt resets non-success package attempt budgets
+    const stageAttempt = Math.max(1, Math.floor(input.stageAttempt || 1));
+    if (stageAttempt > 1) {
+      if (!parentRuntime.lifecycle.packageAttemptCounts) {
+        parentRuntime.lifecycle.packageAttemptCounts = {};
+      }
+      if (!parentRuntime.lifecycle.packageTerminals) {
+        parentRuntime.lifecycle.packageTerminals = {};
+      }
+      resetPackageAttemptsForStageRetry(
+        parentRuntime.lifecycle.packageAttemptCounts,
+        parentRuntime.lifecycle.packageTerminals,
+        input.stage.id,
+      );
+    }
+
     // A4: cookies from prior stages → this stage workDir (best-effort)
     await seedChildSessionFromParent(parentRuntime.taskDir, workDir).catch(() => ({
       seeded: false,
@@ -337,10 +375,52 @@ export function createHardGraphStageExecutor(options: {
           input.stage.id,
         );
       }
+      // Spec #116 I0.2–3: honest partial for THIS STAGE only (not residual prior-stage terminals)
+      let structuredOut = opts.structured;
+      {
+        const stageId = input.stage.id;
+        const terminals =
+          opts.child?.lifecycle.packageTerminals || parentRuntime.lifecycle.packageTerminals || {};
+        const packages = filterPackageTerminalsForStage(terminals, stageId);
+        if (packages.length) {
+          const failedKeys = packages
+            .filter((p) => p.terminal === "failed" || p.terminal === "never_started")
+            .map((p) => p.package_key);
+          const declared = new Set(
+            [
+              ...(structuredOut.deadends || []),
+              ...((structuredOut as { failed_packages?: string[] }).failed_packages || []),
+            ].map(String),
+          );
+          const declaredFailed = failedKeys.filter(
+            (k) => declared.has(k) || [...declared].some((d) => d.includes(k) || k.includes(d)),
+          );
+          const honesty = evaluateHonestPartial({
+            packages,
+            declared_failed_keys: declaredFailed,
+            claims_full_success: structuredOut.ok === true && failedKeys.length > 0,
+          });
+          if (honesty.undeclared_failures.length) {
+            structuredOut = normalizeSubagentResult({
+              ok: false,
+              summary: structuredOut.summaryProvided
+                ? `${structuredOut.summary} [silent partial undeclared fails]`
+                : `silent partial: undeclared package failures: ${honesty.undeclared_failures.join(",")}`,
+              surfaces: structuredOut.surfaces,
+              candidates: structuredOut.candidates,
+              facts: structuredOut.facts,
+              deadends: [
+                ...(structuredOut.deadends || []),
+                ...honesty.undeclared_failures.map((k) => `undeclared_package_fail:${k}`),
+              ],
+            });
+          }
+        }
+      }
       // Stage captain result.json candidates → parent pack hard-stage:<stageId>
       absorbStageResultIntoParent(parentRuntime, {
         stageId: input.stage.id,
-        structured: opts.structured,
+        structured: structuredOut,
         child: opts.child,
         seed: opts.seed,
       });
@@ -348,10 +428,10 @@ export function createHardGraphStageExecutor(options: {
       const findingsAfter = await countJsonFindings(parentRuntime.findingsDir);
       const bookedDelta = Math.max(0, findingsAfter - findingsBefore);
       return {
-        structured: opts.structured,
+        structured: structuredOut,
         summary:
           opts.summaryOverride ??
-          (opts.structured.summaryProvided ? opts.structured.summary : undefined),
+          (structuredOut.summaryProvided ? structuredOut.summary : undefined),
         fanoutPackagesN,
         bookOutcomes:
           bookedDelta > 0 || input.stage.id === "validate_book"
@@ -491,6 +571,14 @@ export function createHardGraphStageExecutor(options: {
         } else {
           await session.prompt(userPrompt);
         }
+        // Spec #116 I0.7: abort may cancel turn without throw — still fail-closed aborted.
+        if (abortSignal?.aborted) {
+          return await finalizeStage({
+            structured: failStructured("aborted", "aborted"),
+            child: childRuntime,
+            seed: continuitySeed,
+          });
+        }
       } catch (err) {
         if (abortSignal?.aborted) {
           return await finalizeStage({
@@ -506,11 +594,29 @@ export function createHardGraphStageExecutor(options: {
         graphRun?.usage.mergeSnapshot(
           stageUsage.snapshot({ tool_calls: obsCounters.toolCallCount }),
         );
-        // Package chips are upserted on subagent start/end (SubagentHost), not a panel scan.
-        try {
-          await Promise.resolve(session.dispose());
-        } catch {
-          /* ignore */
+        // Spec #116 I0.9: UI interrupt cancels turn only — captain session survives.
+        // Park interrupted captain; dispose only on normal stage completion.
+        const interrupted = Boolean(abortSignal?.aborted);
+        if (interrupted && !shouldDisposeCaptainSessionOnInterrupt()) {
+          if (!parentRuntime.lifecycle.parkedCaptainSessions) {
+            parentRuntime.lifecycle.parkedCaptainSessions = {};
+          }
+          const prev = parentRuntime.lifecycle.parkedCaptainSessions[input.stage.id];
+          if (prev && prev !== session) {
+            try {
+              await Promise.resolve(prev.dispose());
+            } catch {
+              /* ignore */
+            }
+          }
+          parentRuntime.lifecycle.parkedCaptainSessions[input.stage.id] = session;
+        } else {
+          // Package chips are upserted on subagent start/end (SubagentHost), not a panel scan.
+          try {
+            await Promise.resolve(session.dispose());
+          } catch {
+            /* ignore */
+          }
         }
       }
 

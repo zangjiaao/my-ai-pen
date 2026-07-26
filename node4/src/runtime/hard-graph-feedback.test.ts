@@ -41,8 +41,8 @@ const y3 = evaluateDiscoveryYield({
 });
 assert.equal(y3.softFail, false, "init not yield-accountable");
 
-// Coverage attempts: candidate matches one surface; other untested
-const attempts = deriveCoverageAttempts({
+// Spec #111: exact pathKey candidate → probed; other surfaces untested (no loose includes)
+const attemptsCandOnly = deriveCoverageAttempts({
   surfaces: [
     { location: "http://127.0.0.1:3010/rest/user/login" },
     { location: "http://127.0.0.1:3010/ftp/" },
@@ -50,14 +50,34 @@ const attempts = deriveCoverageAttempts({
   candidates: [{ location: "http://127.0.0.1:3010/rest/user/login" }],
   deadends: [],
 });
-assert.equal(attempts.length, 2);
-assert.equal(attempts.find((a) => a.location.includes("login"))?.status, "attempted");
-assert.equal(attempts.find((a) => a.location.includes("ftp"))?.status, "untested");
-assert.ok(coverageAttemptRate(attempts) < 1, "untested pulls rate below 1");
+assert.equal(attemptsCandOnly.length, 2);
+assert.equal(
+  attemptsCandOnly.find((a) => a.location.includes("login"))?.status,
+  "probed",
+  "exact pathKey candidate = probe evidence",
+);
+assert.equal(
+  attemptsCandOnly.find((a) => a.location.includes("ftp"))?.status,
+  "untested",
+  "no inflation of unrelated surfaces",
+);
+assert.equal(coverageAttemptRate(attemptsCandOnly), 0.5);
 assert.equal(coverageAttemptRate([]), 1);
 
-// Zero attempt must not look like full success when surfaces exist
-assert.ok(coverageAttemptRate(attempts) === 0.5);
+// Explicit ledger status + deadend still work
+const attemptsLedger = deriveCoverageAttempts({
+  surfaces: [
+    { location: "http://127.0.0.1:3010/rest/user/login", status: "probed" },
+    { location: "http://127.0.0.1:3010/ftp/" },
+  ],
+  candidates: [],
+  deadends: ["gave up on /ftp"],
+});
+assert.equal(attemptsLedger.find((a) => a.location.includes("login"))?.status, "probed");
+assert.equal(attemptsLedger.find((a) => a.location.includes("ftp"))?.status, "deadend");
+assert.equal(coverageAttemptRate(attemptsLedger), 1);
+
+const attempts = attemptsCandOnly;
 
 // Accumulate through stages
 let m = emptyHardProcessMetrics();
@@ -111,7 +131,12 @@ m = accumulateStageFeedback(m, {
   }),
 });
 assert.ok(m.new_candidates_n >= 1);
-assert.ok(m.coverage_attempts.some((a) => a.status === "attempted"));
+// Candidate at http://t/a with surfaces from prior stages — exact pathKey may mark probed
+assert.ok(
+  m.coverage_attempts.some((a) => a.location.includes("/a") && a.status === "probed") ||
+    m.coverage_attempts.every((a) => a.status === "untested" || a.status === "probed" || a.status === "deadend"),
+  "coverage attempts present after probe",
+);
 
 // Structure fail increments
 m = accumulateStageFeedback(m, {

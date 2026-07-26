@@ -180,7 +180,7 @@ Main (current seat session) decides when to spawn — not a separate Coordinator
 
 | Path | Behavior |
 |------|----------|
-| No `command=` | **Homogeneous child LLM session** (same pack act tools: shell/http/session/browser/script/fs/fact/skill/todo). No parent chat. No nested subagent. **No finding booking** (Main books). Child writes `result.json` with structured candidates/facts/deadends. |
+| No `command=` | **Homogeneous child LLM session** (same pack act tools: shell/http/session/browser/script/fs/fact/skill/todo). No parent chat. No nested subagent. **No finding booking** (Main books). Child writes `result.json` with structured candidates/facts/deadends. **Salvage without valid result.json ≠ package success** (Spec #116). Graph packages require `plan_node_id`. |
 | `command=` set | Bounded shell probe only (deterministic / smokes). |
 | Lab dry | `NODE4_SUBAGENT_DRY=1` skips LLM and writes a dry structured result. |
 
@@ -196,7 +196,7 @@ Lab Main-act strip (non-product): `NODE4_GRAPH_MAIN_ACT=hard`. UI default = Free
 
 **Surface ledger:** `taskDir/surfaces/ledger.json` — recon `surfaces[]` work queue; Graph `todo(done)` requires act/deadend/skip (see `docs/specs/task-graph.md`).
 
-**Parallel batch:** `subagent({ packages: [...] })` concurrent (default `NODE4_SUBAGENT_CONCURRENCY=8`). Path re-dispatch ≤2. **Session promote/seed** parent↔child. **Worker keep-alive (OMP):** idle by `agent_id` after package (incl. soft-fail); warm with `resume_agent_id` + same-path affinity; **release** via idle TTL (~420s), maxIdle, `op=release`, or task end (`NODE4_SUBAGENT_IDLE_*`). Orthogonal paths cold-fan-out. Missing `result.json` may be salvaged.
+**Parallel batch:** `subagent({ packages: [...] })` concurrent (default `NODE4_SUBAGENT_CONCURRENCY=8`). Path re-dispatch ≤2. **Session promote/seed** parent↔child. **Worker keep-alive (OMP):** idle by `agent_id` after package (incl. soft-fail); warm with `resume_agent_id` + same-path affinity; **release** via idle TTL (~420s), maxIdle, `op=release`, or task end (`NODE4_SUBAGENT_IDLE_*`). Orthogonal paths cold-fan-out. Missing `result.json` may be salvaged **for evidence only** — does not count as package success. Package attempt budget ≤2 per package (not stage pool). Honest partial may pass stage; silent partial forbidden. After packages start this stage, Main orchestrates+settles only (no serial erase of package failure). UI interrupt parks captain session (turn cancel); continue is same Case — not dispose+summary reseed.
 
 ### Subagent handoff contract (A1 / D3)
 

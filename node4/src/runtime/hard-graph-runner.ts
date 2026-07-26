@@ -36,6 +36,11 @@ export type StageExecutorInput = {
   handoff: HardGraphHandoff;
   tools: string[];
   toolProfile: HardGraphToolProfile;
+  /**
+   * Spec #116 I0.6: 1-based stage attempt (max_retries + 1 attempts).
+   * When attempt > 1, executor may reset non-success package attempt budgets.
+   */
+  stageAttempt?: number;
 };
 
 export type StageExecutorOutput = {
@@ -255,6 +260,8 @@ export async function runHardGraph(options: {
           handoff,
           tools,
           toolProfile,
+          // Spec #116 I0.6: stage attempt number for independent package-budget reset
+          stageAttempt: attempt,
         });
         structured = normalizeSubagentResult(
           out.structured ?? { summary: out.summary, ok: true },

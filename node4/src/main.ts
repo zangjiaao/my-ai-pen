@@ -9,6 +9,7 @@ import { parseGraphExecution } from "./runtime/hard-graph-definition.js";
 import { parseFocusFields } from "./runtime/task-envelope-fields.js";
 import { sanitizePromptLabel } from "./runtime/prompt.js";
 import { cancelApprovalsForConversation, resolveApproval } from "./runtime/approvals.js";
+import { classifyUserControl } from "./runtime/package-settlement-law.js";
 
 loadDotEnv();
 loadDotEnv("node2/.env");
@@ -128,7 +129,9 @@ client.on("user_steer", async (message) => {
       ? String((message.content as Record<string, unknown>).text || "")
       : "";
   const text = String(message.text || contentText || message.initial_instruction || "").trim();
-  if (!text) return;
+  // Spec #116 I0.8: empty message is not abort (shared law)
+  const ctrl = classifyUserControl({ kind: text ? "steer_text" : "empty_message", text });
+  if (ctrl.reject || !text) return;
 
   await runAssignedTask({
     ...message,
@@ -150,6 +153,8 @@ client.on("user_input", async (message) => {
 client.on("user_interrupt", async (message) => {
   const conversationId = String(message.conversation_id || message.conversationId || "").trim();
   if (!conversationId) return;
+  // Spec #116 I0.7: UI interrupt ≠ package-fail (shared law)
+  void classifyUserControl({ kind: "ui_interrupt" });
   cancelApprovalsForConversation(conversationId);
   const action = String(message.action || "cancel").toLowerCase();
   const abort = aborts.get(conversationId);

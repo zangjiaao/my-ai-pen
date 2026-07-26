@@ -225,6 +225,10 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
        * When set (or when location/title matches a candidate), harness uses VERBATIM proof_excerpt.
        */
       candidate_index: Type.Optional(Type.Number()),
+      /**
+       * Spec #116: Store finding id after Feedback feedback_ok (preferred confirm path).
+       */
+      finding_id: Type.Optional(Type.String()),
     }),
     async execute(_id: string, params: any) {
       const action = String(params.action || "confirm").toLowerCase();
@@ -233,6 +237,50 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
         return jsonResult({ findings: rows });
       }
       if (action !== "confirm") return textResult("error: action must be confirm or list");
+
+      // Spec #116 I0.13: Sub never confirms
+      if ((runtime.lifecycle.subagentDepth || 0) >= 1) {
+        return textResult("error: subagent must not finding(confirm) — Main books only (Spec #116 I0.13)", {
+          isError: true,
+        });
+      }
+
+      const store = runtime.lifecycle.findingStore;
+      const findingId = String(params.finding_id || params.candidate_id || "").trim();
+      // Spec #116 I0.14–16: Expert Graph Store path requires feedback_ok finding_id.
+      // Free path without Store activity keeps legacy confirm (handoff candidates) until fully migrated.
+      const graphStoreGate = Boolean(store && runtime.lifecycle.hardGraphRun);
+      if (graphStoreGate) {
+        if (!findingId) {
+          return textResult(
+            "error: confirm requires finding_id (Store id after Feedback feedback_ok); invent-without-id forbidden (Spec #116)",
+            { isError: true },
+          );
+        }
+        const gate = store!.assertConfirmAllowed(findingId);
+        if (!gate.ok) {
+          return textResult(`error: ${gate.error}`, { isError: true });
+        }
+        if (!String(params.title || "").trim()) params.title = gate.record.title;
+        if (!String(params.location || params.url || "").trim()) {
+          params.location = gate.record.location;
+        }
+        if (!String(params.description || "").trim() && gate.record.description) {
+          params.description = gate.record.description;
+        }
+        if (!String(params.proof || "").trim() && gate.record.proof_excerpt) {
+          params.proof = gate.record.proof_excerpt;
+        }
+        if (!String(params.poc || "").trim() && gate.record.poc) {
+          params.poc = gate.record.poc;
+        }
+      } else if (store && findingId) {
+        const gate = store.assertConfirmAllowed(findingId);
+        if (!gate.ok) {
+          return textResult(`error: ${gate.error}`, { isError: true });
+        }
+      }
+
       const title = String(params.title || "").trim();
       if (!title) return textResult("error: title required");
       let location = String(params.location || params.url || "").trim();
@@ -397,6 +445,7 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
           proofExcerpts,
           proofText,
           howCaptured: how,
+          storeFindingId: findingId || undefined,
         });
         // Coverage ledger: mark matching surface booked
         try {
@@ -499,6 +548,7 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
         evidenceIds: legacyIds,
         proofExcerpts,
         proofText: proofExcerpts[0]?.excerpt || "",
+        storeFindingId: findingId || undefined,
       });
     },
   };
@@ -578,6 +628,8 @@ async function finalizeFinding(
     }>;
     proofText: string;
     howCaptured?: string;
+    /** Spec #116 Store id after successful confirm → mark booked */
+    storeFindingId?: string;
   },
 ) {
   const priorFindings = await loadFindings(runtime.findingsDir);
@@ -634,7 +686,13 @@ async function finalizeFinding(
     affected_asset: affected.host || undefined,
     target: affected.host || undefined,
     port: port || undefined,
+    finding_id: input.storeFindingId || undefined,
   });
+
+  // Spec #116 I0.15 path: successful confirm marks Store booked (platform-visible via vuln_found).
+  if (input.storeFindingId && runtime.lifecycle.findingStore) {
+    runtime.lifecycle.findingStore.markBooked(input.storeFindingId, id);
+  }
 
   const chainQuality = assessBookingChainQuality({
     evidenceIds: input.evidenceIds,
