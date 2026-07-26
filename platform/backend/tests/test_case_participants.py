@@ -104,6 +104,155 @@ def test_recompute_case_run_sums():
     assert ctx["case_run"]["started_at"] == "2026-01-01T00:00:00Z"
 
 
+def test_new_burst_checkpoint_keeps_prior_subagents():
+    """Re-chat starts a new work burst whose panel is main-only; prior Subagents must stay."""
+    ctx = apply_checkpoint_to_participant(
+        {},
+        {
+            "role_pack": "pentest",
+            "task_id": "t1",
+            "panel_agents": [
+                {
+                    "id": "node4-main",
+                    "name": "渗透大师",
+                    "status": "completed",
+                    "parent_id": None,
+                    "current_detail": "本轮工作已结束",
+                },
+                {
+                    "id": "sub_1",
+                    "name": "Worker 1",
+                    "status": "completed",
+                    "parent_id": "node4-main",
+                    "task": "probe API",
+                },
+            ],
+            "llm_usage": {"total_tokens": 50, "cost": 0.002, "requests": 1},
+        },
+        expert_id="e2",
+        expert_name="渗透大师",
+        pack_id="pentest",
+        task_id="t1",
+        running=False,
+    )
+    # New user turn → fresh PanelAgentTracker emits main-only panel.
+    ctx = apply_checkpoint_to_participant(
+        ctx,
+        {
+            "role_pack": "pentest",
+            "task_id": "t2",
+            "panel_agents": [
+                {
+                    "id": "node4-main",
+                    "name": "渗透大师",
+                    "status": "running",
+                    "parent_id": None,
+                    "current_detail": "对话中，准备回复",
+                    "current_action": "chat",
+                },
+            ],
+            "llm_usage": {"total_tokens": 10, "cost": 0.001, "requests": 1},
+        },
+        expert_id="e2",
+        expert_name="渗透大师",
+        pack_id="pentest",
+        task_id="t2",
+        running=True,
+    )
+    agents = agents_from_participants(ctx)
+    root = next(a for a in agents if not a.get("parent_id") and a.get("expert_id") == "e2")
+    kids = [a for a in agents if a.get("parent_id") == root["id"]]
+    assert len(kids) == 1, f"prior Subagent wiped on re-chat: {kids}"
+    assert kids[0]["name"] == "Worker 1"
+    assert kids[0].get("task") == "probe API"
+    assert kids[0]["status"] == "completed"
+
+
+def test_new_burst_upserts_new_subagent_without_dropping_old():
+    ctx = apply_checkpoint_to_participant(
+        {},
+        {
+            "panel_agents": [
+                {"id": "node4-main", "name": "Main", "status": "running", "parent_id": None},
+                {"id": "sub_1", "name": "Worker 1", "status": "completed", "parent_id": "node4-main", "task": "old"},
+            ],
+        },
+        expert_id="e1",
+        expert_name="Main",
+        pack_id="default",
+        running=True,
+    )
+    ctx = apply_checkpoint_to_participant(
+        ctx,
+        {
+            "panel_agents": [
+                {"id": "node4-main", "name": "Main", "status": "running", "parent_id": None},
+                {"id": "sub_2", "name": "Worker 2", "status": "running", "parent_id": "node4-main", "task": "new"},
+            ],
+        },
+        expert_id="e1",
+        expert_name="Main",
+        pack_id="default",
+        running=True,
+    )
+    agents = agents_from_participants(ctx)
+    root = next(a for a in agents if not a.get("parent_id"))
+    kids = [a for a in agents if a.get("parent_id") == root["id"]]
+    assert {k["name"] for k in kids} == {"Worker 1", "Worker 2"}
+    by_name = {k["name"]: k for k in kids}
+    assert by_name["Worker 1"]["status"] == "completed"
+    assert by_name["Worker 1"].get("task") == "old"
+    assert by_name["Worker 2"]["status"] == "running"
+    assert by_name["Worker 2"].get("task") == "new"
+
+
+def test_orphan_running_subagent_settled_on_main_only_burst():
+    from app.services.case_participants import merge_panel_agents
+
+    prev = [
+        {"id": "node4-main", "name": "Main", "status": "running", "parent_id": None},
+        {"id": "sub_1", "name": "Worker 1", "status": "running", "parent_id": "node4-main", "task": "still going"},
+    ]
+    incoming = [
+        {"id": "node4-main", "name": "Main", "status": "running", "parent_id": None, "current_action": "chat"},
+    ]
+    merged = merge_panel_agents(prev, incoming)
+    kids = [a for a in merged if a.get("parent_id")]
+    assert len(kids) == 1
+    assert kids[0]["id"] == "sub_1"
+    assert kids[0]["status"] == "completed"
+    assert kids[0].get("current_action") == "completed"
+
+
+def test_empty_incoming_panel_does_not_wipe():
+    from app.services.case_participants import merge_panel_agents
+
+    prev = [
+        {"id": "node4-main", "name": "Main", "status": "idle", "parent_id": None},
+        {"id": "sub_1", "name": "Worker 1", "status": "completed", "parent_id": "node4-main"},
+    ]
+    assert merge_panel_agents(prev, []) == prev
+    # Missing panel_agents on checkpoint becomes [] at apply_checkpoint — same keep.
+    ctx = apply_checkpoint_to_participant(
+        {},
+        {"panel_agents": prev},
+        expert_id="e1",
+        expert_name="Main",
+        pack_id="default",
+        running=False,
+    )
+    ctx = apply_checkpoint_to_participant(
+        ctx,
+        {"task_id": "t2"},  # no panel_agents key → empty list path
+        expert_id="e1",
+        expert_name="Main",
+        pack_id="default",
+        running=True,
+    )
+    panel = ctx["participants"]["expert:e1"]["panel_agents"]
+    assert any(a.get("id") == "sub_1" for a in panel)
+
+
 def test_plan_tree_per_role_does_not_wipe_other():
     from app.services.case_participants import apply_plan_tree_to_participant, plan_tree_from_participants
 
