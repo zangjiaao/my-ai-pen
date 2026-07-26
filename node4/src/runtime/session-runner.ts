@@ -224,7 +224,9 @@ export async function runNode4Task(
   }
 
   // Free OMP Main path only (Default / free Expert chat — no Soft inject).
-  const graphCtx = buildPentestGraphContext(freePentestGraphResolution(task));
+  // Soft scenario Graph is retired (#76); freePentestGraphResolution is the free-path SOT.
+  const graphResolved = freePentestGraphResolution(task);
+  const graphCtx = buildPentestGraphContext(graphResolved);
   runtime.lifecycle.pentestGraph = graphCtx;
 
   const obsCounters = {
