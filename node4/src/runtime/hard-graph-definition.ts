@@ -54,10 +54,9 @@ export type SoftScenarioGraphShape = {
 };
 
 /**
- * Structural Hard Graph check + handoff tool contract.
- * Stage end reads workdir `result.json` only. A non-empty tools.allow must
- * include `write` so the stage can emit that file (empty/missing allow =
- * unrestricted pack tools → write still reachable when the pack offers it).
+ * Structural Hard Graph check (Spec #125).
+ * Stage Feedback is host settlement (Finding Store + package terminals + surface ledger).
+ * `write` is optional (notes/scripts) — not a handoff prerequisite for result.json.
  */
 export function isHardGraphDefinition(value: unknown): value is HardGraphDefinition {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -71,23 +70,14 @@ export function isHardGraphDefinition(value: unknown): value is HardGraphDefinit
     if (typeof stage.id !== "string" || !stage.id.trim()) {
       return false;
     }
-    if (!stageHasResultJsonWritePath(stage.tools)) {
-      return false;
+    // tools.allow may omit write — host settlement does not require result.json handoff.
+    if (stage.tools != null) {
+      if (typeof stage.tools !== "object" || Array.isArray(stage.tools)) return false;
+      const allow = (stage.tools as { allow?: unknown }).allow;
+      if (allow != null && !Array.isArray(allow)) return false;
     }
   }
   return true;
-}
-
-/** Non-empty allow without `write` cannot satisfy fail-closed result.json handoff. */
-function stageHasResultJsonWritePath(tools: unknown): boolean {
-  if (tools == null || typeof tools !== "object" || Array.isArray(tools)) {
-    return true;
-  }
-  const allow = (tools as { allow?: unknown }).allow;
-  if (allow == null) return true;
-  if (!Array.isArray(allow)) return false;
-  if (allow.length === 0) return true;
-  return allow.some((t) => t === "write");
 }
 
 /**

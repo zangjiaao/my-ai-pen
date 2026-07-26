@@ -13,8 +13,9 @@ export function createFactTool(runtime: ToolRuntime): AgentTool<any> {
     label: "Process fact",
     description: [
       "Persist process cognition (ports, auth state, failed probes, surface notes) under the task workspace.",
-      "Ops: list | get | upsert.",
+      "Ops: list | get | upsert | surface.",
       "list returns short index (key+summary). get returns full body. upsert writes/overwrites one fact_key.",
+      "surface: deposit a live recon location into the surface ledger (host settlement path — Spec #125; not result.json).",
       "Separate from finding(confirm): facts are working memory; product vulns need finding + grounded proof.",
       "Does NOT create platform host IP/domain assets (user-created only).",
       "Write-as-you-go: upsert when you confirm a cognition — do not wait for session end.",
@@ -26,6 +27,10 @@ export function createFactTool(runtime: ToolRuntime): AgentTool<any> {
       summary: Type.Optional(Type.String()),
       body: Type.Optional(Type.String()),
       category: Type.Optional(Type.String()),
+      /** Surface ledger location (op=surface). */
+      location: Type.Optional(Type.String()),
+      kind: Type.Optional(Type.String()),
+      auth: Type.Optional(Type.String()),
     }),
     async execute(_id: string, params: any) {
       const store = runtime.processFacts;
@@ -71,7 +76,44 @@ export function createFactTool(runtime: ToolRuntime): AgentTool<any> {
         });
       }
 
-      return textResult("error: op must be list|get|upsert");
+      // Spec #125: serial Main surface deposit without result.json handoff.
+      if (op === "surface") {
+        const location = String(params.location || params.body || "").trim();
+        if (!location || location.length < 2) {
+          return textResult("error: fact(op=surface) requires location (observed URL/path)");
+        }
+        const ledger = runtime.surfaceLedger;
+        if (!ledger) {
+          return textResult("error: surface ledger not available on this runtime");
+        }
+        const kind = String(params.kind || "").trim() || undefined;
+        const auth = String(params.auth || "").trim() || undefined;
+        const note = String(params.summary || params.body || "").trim() || undefined;
+        const { added, total } = await ledger.upsertFromRecon(
+          [{ location, kind, auth, note }],
+          { source_subagent_id: "main_serial" },
+        );
+        // Mirror as process fact for captain continuity.
+        await store
+          .upsert({
+            fact_key: `surface:${location}`.slice(0, 120),
+            summary: note || `surface ${location}`,
+            body: JSON.stringify({ location, kind, auth }),
+            category: "surface",
+          })
+          .catch(() => ({}));
+        return jsonResult({
+          ok: true,
+          op: "surface",
+          location,
+          added,
+          total,
+          guidance:
+            "Surface deposited to host ledger. Stage Feedback reads ledger — do not write result.json for handoff.",
+        });
+      }
+
+      return textResult("error: op must be list|get|upsert|surface");
     },
   };
 }

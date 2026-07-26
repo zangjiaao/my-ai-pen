@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import {
   HardGraphPlanStore,
+  buildHardGraphProgress,
   emitHardGraphPlanTreeUpdate,
   scoreTodoGoalMatch,
   FUZZY_BIND_MIN_SCORE,
@@ -207,19 +208,20 @@ const reStatus = plan.resolveWorkerBind("class_probe", {
 assert.equal(reStatus?.path, "reattach");
 assert.equal(reStatus?.node_id, "todo-xss");
 
-// Explicit miss → fall through to single_free/fuzzy with telemetry.
+// Explicit miss → fall through with telemetry (single_free or fuzzy).
+// Spec #125 merge keeps completed history (todo-a/todo-b done) so single_free may not apply.
 plan.setStageTodos("init", [
-  { node_id: "todo-only", title: "Record RoE", status: "pending", level: "work_item", kind: "task", source: "plan" },
+  { node_id: "todo-only", title: "Unique fresh todo only", status: "pending", level: "work_item", kind: "task", source: "plan" },
 ]);
 const miss = plan.resolveWorkerBind("init", {
   agent_id: "sub_miss",
   owner_agent_name: "Worker 8",
   plan_node_id: "todo-does-not-exist",
-  goal: "Record RoE carefully",
+  goal: "Unique fresh todo only carefully",
   status: "running",
 });
-assert.equal(miss?.path, "single_free");
-assert.equal(miss?.node_id, "todo-only");
+assert.ok(miss?.path === "single_free" || miss?.path === "fuzzy", `fallthrough path, got ${miss?.path}`);
+assert.ok(miss?.node_id, "bound some L2 row");
 assert.equal(miss?.requested_node_id, "todo-does-not-exist");
 assert.ok(miss?.hint && /not found/i.test(miss.hint), "explicit miss hint present");
 
@@ -237,5 +239,79 @@ assert.equal(messages[0]?.type, "plan_tree_updated");
 const emitted = (messages[0] as any).plan_tree as Array<{ level?: string; owner_expert_name?: string }>;
 assert.ok(emitted.some((n) => n.level === "phase"));
 assert.ok(emitted.every((n) => !n.owner_expert_name || n.owner_expert_name === "渗透大师"));
+
+// --- Spec #125 / #127: L2 merge honesty (f6ffa588 clobber shape) ---
+{
+  const plan2 = new HardGraphPlanStore(graph!);
+  plan2.setStageTodos("class_probe", [
+    {
+      node_id: "todo-csrf",
+      title: "CSRF probe",
+      status: "done",
+      level: "work_item",
+      kind: "task",
+      source: "plan",
+      agent_id: "sub_csrf",
+      owner_agent_name: "Worker CSRF",
+    },
+    {
+      node_id: "todo-weak",
+      title: "Weak session",
+      status: "pending",
+      level: "work_item",
+      kind: "task",
+      source: "plan",
+    },
+  ]);
+  // Package completes L2 done + chip; Main todo.done on another row must not clobber.
+  plan2.setStageTodos("class_probe", [
+    {
+      node_id: "todo-csrf",
+      title: "CSRF probe",
+      status: "pending", // stale Todo snapshot tries to regress
+      level: "work_item",
+      kind: "task",
+      source: "plan",
+    },
+    {
+      node_id: "todo-weak",
+      title: "Weak session",
+      status: "done",
+      level: "work_item",
+      kind: "task",
+      source: "plan",
+    },
+  ]);
+  const csrf = plan2.toPlanTree().find((n) => n.node_id === "todo-csrf") as any;
+  assert.equal(csrf?.status, "done", "package done status preserved against weaker Todo");
+  assert.equal(csrf?.agent_id, "sub_csrf", "worker chip preserved");
+  assert.equal(
+    (plan2.toPlanTree().find((n) => n.node_id === "todo-weak") as any)?.status,
+    "done",
+  );
+
+  // Retry todo.init with new titles must not silently wipe completed package-anchored history
+  plan2.setStageTodos("class_probe", [
+    {
+      node_id: "todo-new-wave",
+      title: "New replan class",
+      status: "pending",
+      level: "work_item",
+      kind: "task",
+      source: "plan",
+    },
+  ]);
+  assert.ok(
+    plan2.toPlanTree().some((n) => n.node_id === "todo-csrf" && (n as any).status === "done"),
+    "retry init must not wipe completed package-anchored L2",
+  );
+  assert.ok(plan2.toPlanTree().some((n) => n.node_id === "todo-new-wave"));
+
+  // Progress must not look full-green success when stage is blocked
+  plan2.setStageStatus("class_probe", "blocked");
+  const prog = buildHardGraphProgress(plan2);
+  assert.equal(prog.stage_blocked, true);
+  assert.match(prog.label, /blocked/i);
+}
 
 console.log("hard-graph-plan.test.ts: ok");

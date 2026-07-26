@@ -131,14 +131,15 @@ assert.deepEqual(
   ["todo"],
 );
 
-// Load-time handoff contract: non-empty allow must include write (result.json)
+// Spec #125: write is optional — not a result.json handoff prerequisite
 assert.equal(
   isHardGraphDefinition({
     discipline: "hard",
-    id: "bad_no_write",
+    id: "no_write_ok",
     stages: [{ id: "init", tools: { allow: ["todo", "fact", "skill"] } }],
   }),
-  false,
+  true,
+  "non-empty allow without write is valid",
 );
 assert.equal(
   isHardGraphDefinition({
@@ -148,7 +149,7 @@ assert.equal(
   }),
   true,
 );
-// No allowlist → all pack tools available (write reachable) → valid
+// No allowlist → valid
 assert.equal(
   isHardGraphDefinition({
     discipline: "hard",
@@ -157,13 +158,15 @@ assert.equal(
   }),
   true,
 );
-// Product thin path satisfies contract (every non-empty allow lists write)
-for (const stage of hard!.stages) {
-  const allow = stage.tools?.allow;
-  if (allow && allow.length > 0) {
-    assert.ok(allow.includes("write"), `stage ${stage.id} allow must include write`);
-  }
-}
+// Malformed allow (not array) still rejected
+assert.equal(
+  isHardGraphDefinition({
+    discipline: "hard",
+    id: "bad_allow",
+    stages: [{ id: "init", tools: { allow: "todo" as unknown as string[] } }],
+  }),
+  false,
+);
 
 // Expert work path: fail-closed when Graph intent but no hard Graph
 assert.deepEqual(

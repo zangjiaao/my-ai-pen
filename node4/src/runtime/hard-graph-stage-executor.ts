@@ -5,7 +5,7 @@
  * sessions — no fake goals/evidence stubs. Agent Runtime via createBoundNode4Session.
  */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Node4Config } from "../config.js";
 import type { RolePack } from "../roles/types.js";
@@ -39,12 +39,38 @@ import {
   seedChildSessionFromParent,
 } from "./subagent-session-seed.js";
 import { resetPackageAttemptsForStageRetry } from "./package-settlement-law.js";
+import { ensureProcessQuality } from "./package-honesty-host.js";
+import { ingestPackageCandidatesToStore } from "./finding-store.js";
 import {
-  ensureProcessQuality,
-  evaluateStageHonestPartialFromRuntime,
-} from "./package-honesty-host.js";
+  settleHostStage,
+  writeHostSettlementAudit,
+} from "./host-stage-settlement.js";
 import { SubagentHost } from "./subagent.js";
 import type { Node4AgentSession } from "./run-node4-agent.js";
+
+/**
+ * Deposit host-trusted structured surfaces/candidates into ledger + Finding Store.
+ * Spec #125: never read agent workdir result.json here (would reintroduce file SoT).
+ * Callers pass structured only from host-trusted inject (test factory) or package paths.
+ */
+async function depositHostTrustedStructured(
+  runtime: ToolRuntime,
+  stageId: string,
+  structured?: SubagentStructuredResult,
+): Promise<void> {
+  if (!structured) return;
+  if (structured.surfaces.length && runtime.surfaceLedger) {
+    await runtime.surfaceLedger.upsertFromRecon(structured.surfaces).catch(() => {});
+  }
+  if (structured.candidates.length) {
+    const fstore = ensureProcessQuality(runtime.lifecycle).findingStore;
+    ingestPackageCandidatesToStore(fstore, structured.candidates, {
+      package_id: `stage:${stageId}`,
+      stage_id: stageId,
+      agent_id: "stage_main",
+    });
+  }
+}
 
 export type HardGraphStageSessionFactory = (options: {
   stageId: string;
@@ -68,36 +94,24 @@ export type HardGraphBoundSessionFactory = (options: {
 }) => Promise<{ session: Node4AgentSession }>;
 
 /**
- * Post-session handoff: Feedback reads stage workdir `result.json` only.
- * Missing/invalid → fail-closed structured result (does not invent surfaces).
+ * @deprecated Spec #125 — agent result.json is not stage Feedback SoT.
+ * Kept only so older tests can prove the file path is ignored; do not call for gates.
  */
 export async function loadStageResultJson(
   workDir: string,
   stageId: string,
 ): Promise<SubagentStructuredResult> {
-  const resultPath = join(workDir, "result.json");
-  try {
-    const raw = await readFile(resultPath, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    const structured = normalizeSubagentResult(parsed);
-    await writeFile(
-      join(workDir, "normalized-result.json"),
-      JSON.stringify(structured, null, 2),
-      "utf8",
-    );
-    return structured;
-  } catch {
-    return normalizeSubagentResult({
-      ok: false,
-      summary: `stage ${stageId}: missing or invalid result.json`,
-      surfaces: [],
-      candidates: [],
-      deadends: ["missing_result_json"],
-    });
-  }
+  void workDir;
+  return normalizeSubagentResult({
+    ok: false,
+    summary: `stage ${stageId}: agent result.json is ignored (host settlement is SoT — Spec #125)`,
+    surfaces: [],
+    candidates: [],
+    deadends: ["agent_result_json_ignored"],
+  });
 }
 
-/** Exported for harness contract tests (#101). */
+/** Exported for harness contract tests (#101 / #125). */
 export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope): string {
   const toolList = input.tools.length ? input.tools.join(", ") : "(none)";
   const allowSubagent = input.tools.includes("subagent");
@@ -107,22 +121,22 @@ export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope)
     input.stage.success ? `Stage success criteria: ${input.stage.success}` : "",
     "You do NOT schedule other stages. Complete only this stage.",
     `Allowed tools for this stage: ${toolList}`,
-    // Short progress narration (not fake findings) — workbench shows thinking/text streams.
     "Briefly narrate progress in assistant text when useful (what you are checking next; what you observed). Do not invent surfaces, proof, or booked findings in prose.",
-    "When done, use the **write** tool to create **result.json** in the stage work dir (path: result.json) with fields:",
-    "  ok, summary, surfaces[], candidates[], facts[], deadends[]",
-    "Facts alone are not the stage handoff — Feedback reads result.json only.",
-    "Bookable candidates MUST include: title, location (URL/path), proof_excerpt (verbatim tool stdout/body ≥24 chars), optional poc_hint.",
-    "Without proof_excerpt the next stage cannot finding(confirm) — narrative notes alone are not bookable.",
+    "**Stage settlement is host-owned** (Spec #125): do **not** write result.json as the stage handoff or booking channel. Host projects stage outcome from Finding Store, package terminals, and surface ledger.",
+    "Bookable candidates must land in **Finding Store** (package settlement auto-ingest, or finding(upsert) for serial Main work) with title, location, proof_excerpt (verbatim tool stdout/body ≥24 chars), optional poc.",
+    "Surfaces for recon: use **fact(op=surface, location=…)** (host ledger) or package workers — never stage result.json as handoff.",
+    "After L0 Feedback marks feedback_ok, Main books with finding(confirm, finding_id=…). Without proof_excerpt candidates stay non-confirmable. Narrative alone is not bookable.",
+    "Do **not** create process-chore L2 todos (e.g. Write result.json, collect subagents, pure meta login prep).",
     allowSubagent
       ? [
           "Agent Graph (preferred when multi-class or multi-surface work is justified): fan-out with **subagent** packages[] (skill/path-scoped workers).",
           "Prefer packages over one long serial monologue across all vulnerability classes or surfaces.",
           "Each formal package **must** pass plan_node_id (L2 attack-class anchor). No hard package quotas.",
           "Anti-micro-spawn: do not split trivial single-GET chores into packages.",
-          "Workers return candidates[] with verbatim proof_excerpt; you Join into result.json candidates (do not rephrase proof).",
+          "Workers return structured candidates/surfaces with verbatim proof_excerpt; host settlement + Finding Store own Join — do not rephrase proof into a result.json ceremony.",
+          "After packages start this stage: orchestrate + settle only (do not serial-erase package failure).",
           "No nested subagent inside workers. Stay in RoE/scope.",
-          "Serial Main-only probing is allowed if packages are not justified (single surface / single class) — do not invent package counts.",
+          "Serial Main-only probing is allowed if packages are not justified (single surface / single class) — deposit Store/surfaces via host paths.",
         ].join(" ")
       : "",
     "Fail closed: do not invent surfaces or proof.",
@@ -135,7 +149,7 @@ export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope)
     .join("\n");
 }
 
-/** Exported for harness contract tests (#101). */
+/** Exported for harness contract tests (#101 / #125). */
 export function stageUserPrompt(input: StageExecutorInput, task: TaskEnvelope): string {
   const allowSubagent = input.tools.includes("subagent");
   return [
@@ -158,8 +172,8 @@ export function stageUserPrompt(input: StageExecutorInput, task: TaskEnvelope): 
     task.instruction || "",
     "",
     allowSubagent
-      ? "Complete this stage only. Prefer subagent packages when multi-class work is justified; narrate briefly; write result.json; then stop."
-      : "Complete this stage only. Narrate briefly when useful; use write to emit result.json; then stop.",
+      ? "Complete this stage only. Prefer subagent packages when multi-class work is justified; narrate briefly; settle via host/Store (no result.json handoff); then stop."
+      : "Complete this stage only. Narrate briefly when useful; deposit surfaces via fact(op=surface) and candidates via finding(upsert) — do not use result.json as stage handoff; then stop.",
   ].join("\n");
 }
 
@@ -340,14 +354,20 @@ export function createHardGraphStageExecutor(options: {
     };
 
     /**
-     * A1 absorb (throws on failure) then A4 promote.
-     * Absorb upserts by stageKey when candidates present (retry-safe).
+     * Spec #125: host settlement is sole stage outcome projector.
+     * Agent structured/result.json is narrative-only (ignored for honesty ok).
      */
     const finalizeStage = async (opts: {
-      structured: ReturnType<typeof normalizeSubagentResult>;
+      /**
+       * Host-trusted structured inject only (test factory / package-free test helpers).
+       * Must NOT be loaded from agent workdir result.json (Spec #125).
+       */
+      structured?: ReturnType<typeof normalizeSubagentResult>;
       child?: ToolRuntime;
       seed?: StageContinuitySeed;
       summaryOverride?: string;
+      /** Stage workdir for optional settlement audit (not gate input). */
+      workDir?: string;
     }): Promise<StageExecutorOutput> => {
       // Agent Graph Join first: worker packages from stage child → parent (distinct keys).
       let fanoutPackagesN = 0;
@@ -358,36 +378,44 @@ export function createHardGraphStageExecutor(options: {
           input.stage.id,
         );
       }
-      // Spec #116 I0.2–3: single honest-partial path (exact declare keys; no fuzzy includes)
-      let structuredOut = opts.structured;
-      {
-        const honestyRuntime = opts.child || parentRuntime;
-        const honesty = evaluateStageHonestPartialFromRuntime(
-          honestyRuntime,
-          input.stage.id,
-          {
-            deadends: structuredOut.deadends,
-            failed_packages: (structuredOut as { failed_packages?: string[] }).failed_packages,
-            ok: structuredOut.ok,
-          },
-        );
-        if (honesty.undeclared_failures.length) {
-          structuredOut = normalizeSubagentResult({
-            ok: false,
-            summary: structuredOut.summaryProvided
-              ? `${structuredOut.summary} [silent partial undeclared fails]`
-              : `silent partial: undeclared package failures: ${honesty.undeclared_failures.join(",")}`,
-            surfaces: structuredOut.surfaces,
-            candidates: structuredOut.candidates,
-            facts: structuredOut.facts,
-            deadends: [
-              ...(structuredOut.deadends || []),
-              ...honesty.undeclared_failures.map((k) => `undeclared_package_fail:${k}`),
-            ],
-          });
+      // Warm surface ledger cache for host projection (best-effort).
+      const settleRuntime = opts.child || parentRuntime;
+      await settleRuntime.surfaceLedger?.load?.().catch(() => {});
+      await parentRuntime.surfaceLedger?.load?.().catch(() => {});
+
+      // Host-trusted inject only (test factory / explicit structured) — never workdir result.json.
+      if (opts.structured) {
+        await depositHostTrustedStructured(settleRuntime, input.stage.id, opts.structured);
+        if (settleRuntime !== parentRuntime) {
+          await depositHostTrustedStructured(parentRuntime, input.stage.id, opts.structured);
         }
       }
-      // Stage captain result.json candidates → parent pack hard-stage:<stageId>
+      await settleRuntime.surfaceLedger?.load?.().catch(() => {});
+      await parentRuntime.surfaceLedger?.load?.().catch(() => {});
+
+      const narrative = opts.structured;
+      const settlement = settleHostStage({
+        stageId: input.stage.id,
+        runtime: settleRuntime,
+        narrative: narrative
+          ? {
+              summary: opts.summaryOverride || (narrative.summaryProvided ? narrative.summary : undefined),
+              facts: narrative.facts,
+              notes: narrative.notes,
+              deadends: (narrative.deadends || []).filter(
+                (d) => !String(d).startsWith("undeclared_package_fail:"),
+              ),
+            }
+          : opts.summaryOverride
+            ? { summary: opts.summaryOverride }
+            : undefined,
+        hostDeclare: true,
+      });
+      const structuredOut = settlement.structured;
+      if (opts.workDir) {
+        await writeHostSettlementAudit(opts.workDir, settlement);
+      }
+      // Host projection → parent continuity (Store/ledger-backed, not agent file).
       absorbStageResultIntoParent(parentRuntime, {
         stageId: input.stage.id,
         structured: structuredOut,
@@ -397,7 +425,6 @@ export function createHardGraphStageExecutor(options: {
       await promoteSession();
       const findingsAfter = await countJsonFindings(parentRuntime.findingsDir);
       const bookedDelta = Math.max(0, findingsAfter - findingsBefore);
-      // I1.4: absolute Store booked (distinct from JSON findings dir delta)
       const storeBooked = ensureProcessQuality(parentRuntime.lifecycle).findingStore.counts()
         .booked_n;
       return {
@@ -427,7 +454,9 @@ export function createHardGraphStageExecutor(options: {
           workDir,
           abortSignal,
         });
-        // Factory path: structured-only absorb (no child lifecycle). Documented for runner tests.
+        // Factory path: agent structured is narrative only; host settlement is gate SoT.
+        // Tests that need surfaces/candidates must deposit them into host state (ledger/Store)
+        // or rely on parentRuntime already prepared — never on agent result.json.
         const structured = normalizeSubagentResult(
           out.structured ?? {
             ok: false,
@@ -441,6 +470,7 @@ export function createHardGraphStageExecutor(options: {
           structured,
           summaryOverride:
             out.summary ?? (structured.summaryProvided ? structured.summary : undefined),
+          workDir,
         });
       }
 
@@ -577,11 +607,37 @@ export function createHardGraphStageExecutor(options: {
         }
       }
 
-      const structured = await loadStageResultJson(workDir, input.stage.id);
+      // Spec #125: never load agent result.json; host settlement projects gate input.
+      // Narrative summary only from real process facts (not synthetic fillers).
+      let narrativeSummary: string | undefined;
+      try {
+        const facts = await childRuntime.processFacts?.list?.();
+        if (Array.isArray(facts) && facts.length) {
+          narrativeSummary = facts
+            .slice(0, 5)
+            .map((f: { key?: string; summary?: string; fact_key?: string }) =>
+              f.summary || f.fact_key || f.key || "",
+            )
+            .filter(Boolean)
+            .join("; ")
+            .slice(0, 500);
+        }
+      } catch {
+        /* ignore */
+      }
       return await finalizeStage({
-        structured,
+        structured: narrativeSummary
+          ? normalizeSubagentResult({
+              ok: true,
+              summary: narrativeSummary,
+              surfaces: [],
+              candidates: [],
+              deadends: [],
+            })
+          : undefined,
         child: childRuntime,
         seed: continuitySeed,
+        workDir,
       });
     } finally {
       // Promote once even on throw (no absorb of garbage structured).

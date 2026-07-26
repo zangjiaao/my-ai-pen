@@ -23,6 +23,23 @@ export function normalizePlanWorkStatus(status: string | undefined): string {
   return s;
 }
 
+/**
+ * Rank for merge: higher rank wins when Todo snapshot would regress package settlement.
+ * pending < running < done/skipped; failed/blocked also beat pending (retain history).
+ */
+function planStatusRank(status: string): number {
+  const s = normalizePlanWorkStatus(status);
+  if (s === "done" || s === "skipped") return 40;
+  if (s === "failed" || s === "blocked") return 30;
+  if (s === "running") return 20;
+  return 10; // pending / unknown
+}
+
+/** True when prior Graph status must not be overwritten by a weaker Todo snapshot. */
+export function isStrongerPlanStatus(prior: string, incoming: string): boolean {
+  return planStatusRank(prior) > planStatusRank(incoming);
+}
+
 function stageNodeId(stageId: string): string {
   return `graph-stage-${String(stageId || "").trim() || "unknown"}`;
 }
@@ -130,11 +147,12 @@ export class HardGraphPlanStore {
   }
 
   /**
-   * Replace L2 todos for one stage only. Incoming nodes may be raw TodoStore
-   * projections; parent_id is rewritten to the Graph stage L1 id.
+   * Merge L2 todos for one stage (Spec #125 / #127).
+   * Incoming nodes may be raw TodoStore projections; parent_id rewritten to Graph L1.
    *
-   * Preserves Worker ownership (agent_id / owner_agent_name) on matching node_ids,
-   * and keeps pkg-* package rows that Main's todo snapshot would otherwise wipe.
+   * GraphStore remains coverage SoT: when Todo snapshot is weaker/stale relative to
+   * package settlement, preserve prior status + Worker ownership on matching node_ids.
+   * Package-anchored / completed / ownership rows are never wiped by routine todo ops.
    */
   setStageTodos(stageId: string, nodes: PlanNodeLike[]): void {
     if (!this.stageTodos.has(stageId)) return;
@@ -149,6 +167,15 @@ export class HardGraphPlanStore {
           String(n.node_id || n.id || "").trim() ||
           `todo-task-${slug(stageId)}-${slug(title)}`;
         const prior = prevById.get(nodeId);
+        const incomingStatus = normalizePlanWorkStatus(String(n.status || "pending"));
+        let status = incomingStatus;
+        // Preserve stronger Graph settlement status when Todo snapshot is weaker.
+        if (prior) {
+          const priorStatus = normalizePlanWorkStatus(String(prior.status || "pending"));
+          if (isStrongerPlanStatus(priorStatus, incomingStatus)) {
+            status = priorStatus;
+          }
+        }
         const merged: PlanNodeLike = {
           ...n,
           node_id: nodeId,
@@ -158,7 +185,7 @@ export class HardGraphPlanStore {
           kind: String(n.kind || "task"),
           source: String(n.source || "plan"),
           parent_id: parentId,
-          status: n.status || "pending",
+          status,
           priority: typeof n.priority === "number" ? n.priority : 100 + i,
         };
         // Keep Worker chip if todo tool rewrite omitted ownership.
@@ -170,10 +197,24 @@ export class HardGraphPlanStore {
         return merged;
       });
     const seen = new Set(workItems.map((n) => String(n.node_id || n.id || "")));
-    // Package rows are host-owned; do not drop them on Main todo.init.
+    // Host-owned / settled rows not present in Todo snapshot must survive merge
+    // (pkg-* rows, package-anchored done rows with ownership, completed history).
     for (const p of prev) {
       const id = String(p.node_id || p.id || "");
-      if (id.startsWith("pkg-") && !seen.has(id)) {
+      if (!id || seen.has(id)) continue;
+      const priorStatus = normalizePlanWorkStatus(String(p.status || ""));
+      const hasOwnership = Boolean(String(p.agent_id || "").trim());
+      const packageAnchored =
+        id.startsWith("pkg-") ||
+        Boolean(String((p as { plan_node_id?: string }).plan_node_id || "").trim());
+      const preserve =
+        id.startsWith("pkg-") ||
+        priorStatus === "done" ||
+        priorStatus === "failed" ||
+        priorStatus === "blocked" ||
+        (hasOwnership && packageAnchored) ||
+        (hasOwnership && (priorStatus === "running" || priorStatus === "done"));
+      if (preserve) {
         workItems.push({ ...p, parent_id: parentId });
         seen.add(id);
       }
@@ -405,14 +446,16 @@ export class HardGraphPlanStore {
   }
 }
 
-export async function emitHardGraphPlanTreeUpdate(
-  platform: PlatformSink,
-  task: TaskEnvelope,
+/**
+ * Build operator-facing progress for Expert Graph plan_tree.
+ * Spec #125 / #127: must not imply stage success when any L1 stage is blocked/failed.
+ */
+export function buildHardGraphProgress(
   plan: HardGraphPlanStore,
-  reason: string,
-): Promise<void> {
-  const plan_tree = stampPlanTreeOwner(plan.toPlanTree(), task);
+): { percent: number; label: string; stage_blocked: boolean } {
+  const plan_tree = plan.toPlanTree();
   const workItems = plan_tree.filter((n) => (n.level || "work_item") === "work_item");
+  const phases = plan_tree.filter((n) => (n.level || "") === "phase");
   const done = workItems.filter((n) => {
     const s = normalizePlanWorkStatus(String(n.status || ""));
     return s === "done" || s === "skipped";
@@ -423,6 +466,36 @@ export async function emitHardGraphPlanTreeUpdate(
     return s === "pending" || s === "running";
   }).length;
   const percent = total === 0 ? 0 : Math.round((done / total) * 100);
+  const blockedStages = phases.filter((n) => {
+    const s = normalizePlanWorkStatus(String(n.status || ""));
+    return s === "blocked" || s === "failed";
+  });
+  const stage_blocked = blockedStages.length > 0;
+  let label =
+    total === 0 ? "No stage todos" : `${done}/${total} done (${open} open)`;
+  if (stage_blocked) {
+    const ids = blockedStages
+      .map((n) => String(n.title || n.node_id || "").replace(/^graph-stage-/, ""))
+      .filter(Boolean)
+      .slice(0, 4);
+    label = `${label} · stage blocked: ${ids.join(",") || "yes"}`;
+  }
+  return { percent, label, stage_blocked };
+}
+
+export async function emitHardGraphPlanTreeUpdate(
+  platform: PlatformSink,
+  task: TaskEnvelope,
+  plan: HardGraphPlanStore,
+  reason: string,
+): Promise<void> {
+  const plan_tree = stampPlanTreeOwner(plan.toPlanTree(), task);
+  const progress = buildHardGraphProgress(plan);
+  const open = plan_tree.filter((n) => {
+    if ((n.level || "work_item") !== "work_item") return false;
+    const s = normalizePlanWorkStatus(String(n.status || ""));
+    return s === "pending" || s === "running";
+  }).length;
   await platform.send({
     type: "plan_tree_updated",
     conversation_id: task.conversationId,
@@ -431,12 +504,16 @@ export async function emitHardGraphPlanTreeUpdate(
     plan_tree,
     todo_open_count: open,
     progress: {
-      percent,
-      label: total === 0 ? "No stage todos" : `${done}/${total} done (${open} open)`,
+      percent: progress.percent,
+      label: progress.label,
     },
     expert_id: task.expertId,
     expert_name: task.expertName,
     engagement: task.engagement || task.role,
-    hard_graph: { graph_id: plan.getGraphId(), event: "plan_tree" },
+    hard_graph: {
+      graph_id: plan.getGraphId(),
+      event: "plan_tree",
+      stage_blocked: progress.stage_blocked,
+    },
   } as PlatformMessage);
 }

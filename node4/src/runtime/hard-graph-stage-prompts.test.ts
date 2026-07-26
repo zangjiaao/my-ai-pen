@@ -42,9 +42,14 @@ assert.match(sys, /narrate progress/i, "encourages short narration");
 assert.match(sys, /Prefer packages/i, "prefer packages when multi-class");
 assert.doesNotMatch(sys, /exactly \d+ packages/i, "no fixed package count");
 assert.doesNotMatch(sys, /DVWA/i, "no answer-key target names");
+// Spec #125: no result.json handoff ceremony
+assert.doesNotMatch(sys, /Feedback reads result\.json only/i);
+assert.match(sys, /host-owned|Finding Store|host settlement/i);
+assert.match(sys, /process-chore|Write result\.json/i);
 
 const user = stageUserPrompt(inputWithSub, task);
 assert.match(user, /Prefer subagent packages/i);
+assert.doesNotMatch(user, /write result\.json/i);
 
 const noSub: StageExecutorInput = {
   ...inputWithSub,

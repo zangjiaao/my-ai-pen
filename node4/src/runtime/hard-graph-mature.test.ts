@@ -53,7 +53,10 @@ for (const id of ["surface", "auth_session", "class_probe", "authz_logic", "comp
     ["todo", "write", "shell", "http", "subagent", "finding", "skill"],
     st.tools,
   );
-  assert.ok(tools.includes("write"), `${id} can write result.json`);
+  // write may remain on allowlists for notes; not a result.json handoff prerequisite (#125)
+  if (st.tools?.allow?.includes("write")) {
+    assert.ok(tools.includes("write"), `${id} keeps write when listed`);
+  }
   if (id === "class_probe" || id === "auth_session" || id === "authz_logic" || id === "component") {
     assert.ok(tools.includes("subagent"), `${id} declares Agent Graph eligibility`);
   }
