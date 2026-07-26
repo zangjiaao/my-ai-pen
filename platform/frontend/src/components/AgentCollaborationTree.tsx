@@ -70,10 +70,11 @@ export function StrixAgentList({ agents }: { agents: StrixAgentStatus[] }) {
           </>
         )}
         <div className="relative">
-          {hasVisibleChildren && (
+          {/* Spine only for nested non-Main parents; Main → Sub uses child elbow connectors alone. */}
+          {hasVisibleChildren && !primary && (
             <span
               aria-hidden="true"
-              className="pointer-events-none absolute bottom-0 left-[18px] top-[22px] w-px bg-hairline"
+              className="pointer-events-none absolute bottom-0 left-[10px] top-[22px] w-px bg-hairline"
             />
           )}
           <AgentRow
@@ -87,7 +88,7 @@ export function StrixAgentList({ agents }: { agents: StrixAgentStatus[] }) {
           />
         </div>
         {children.length > 0 && (
-          <div className={`${open ? "block" : "hidden"} space-y-0 pl-6`}>
+          <div className={`${open ? "block" : "hidden"} space-y-0 pl-1.5`}>
             {children.map((child, index) =>
               renderAgentNode(child, false, nextTrail, index === children.length - 1),
             )}
@@ -131,10 +132,11 @@ function AgentRow({
     onToggle?.();
   };
   const highlighted = Boolean(agent.highlighted) && primary;
-  const padY = secondary ? "py-0.5" : "py-1.5";
+  // Sub rows: 5px vertical pad so the status-dot center meets the tree elbow (~16px).
+  const padY = secondary ? "py-[5px]" : "py-1.5";
   return (
     <div
-      className={`min-w-0 rounded-md ${padY} pr-2 pl-3.5 ${highlighted ? "bg-status-running/8 ring-1 ring-status-running/25" : "bg-transparent"} ${rowInteractive ? "cursor-pointer hover:bg-canvas-inset focus-visible:outline focus-visible:outline-2 focus-visible:outline-status-running/40" : "hover:bg-canvas-inset"}`}
+      className={`min-w-0 rounded-md ${padY} pr-2 pl-1.5 ${highlighted ? "bg-status-running/8 ring-1 ring-status-running/25" : "bg-transparent"} ${rowInteractive ? "cursor-pointer hover:bg-canvas-inset focus-visible:outline focus-visible:outline-2 focus-visible:outline-status-running/40" : "hover:bg-canvas-inset"}`}
       onClick={rowInteractive ? onToggle : undefined}
       onKeyDown={handleRowKeyDown}
       role={rowInteractive ? "button" : undefined}
