@@ -317,6 +317,34 @@ assert.ok(emitted.every((n) => !n.owner_expert_name || n.owner_expert_name === "
   const prog = buildHardGraphProgress(plan2);
   assert.equal(prog.stage_blocked, true);
   assert.match(prog.label, /blocked/i);
+
+  // Package-owned failed must not be greened by Todo done (Spec #125 review)
+  const plan3 = new HardGraphPlanStore(graph!);
+  plan3.setStageTodos("class_probe", [
+    {
+      node_id: "todo-fail-pkg",
+      title: "Failed package class",
+      status: "failed",
+      level: "work_item",
+      kind: "task",
+      source: "plan",
+      agent_id: "sub_fail",
+      owner_agent_name: "Worker Fail",
+    },
+  ]);
+  plan3.setStageTodos("class_probe", [
+    {
+      node_id: "todo-fail-pkg",
+      title: "Failed package class",
+      status: "done", // Todo greening attempt
+      level: "work_item",
+      kind: "task",
+      source: "plan",
+    },
+  ]);
+  const failRow = plan3.toPlanTree().find((n) => n.node_id === "todo-fail-pkg") as any;
+  assert.equal(failRow?.status, "failed", "package-owned failed not greened by Todo done");
+  assert.equal(failRow?.agent_id, "sub_fail", "worker chip retained on failed row");
 }
 
 console.log("hard-graph-plan.test.ts: ok");

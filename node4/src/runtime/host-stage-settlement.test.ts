@@ -262,7 +262,7 @@ assert.equal(
   assert.ok(rec?.errors?.some((e) => e.startsWith("surfaces_min")));
 }
 
-// --- Store candidates project into settlement ---
+// --- Store candidates project into settlement + captain-visible confirm ids ---
 {
   const runtime = makeRuntime({ stageId: "class_probe" });
   const store = ensureProcessQuality(runtime.lifecycle).findingStore;
@@ -282,6 +282,102 @@ assert.equal(
   assert.ok(s.structured.candidates.length >= 1);
   assert.ok(s.feedback_ok_ids.length >= 1, "L0 feedback_ok ids captain-visible");
   assert.equal(s.structured.ok, true);
+  assert.match(
+    String(s.structured.notes || ""),
+    /confirmable_feedback_ok_ids:/,
+    "notes carry captain confirm surface",
+  );
+  assert.match(s.structured.summary, /feedback_ok_ids=/);
+}
+
+// --- Illegal L2 done for failed package fails host settlement ---
+{
+  const { HardGraphPlanStore } = await import("./hard-graph-plan.js");
+  const graph: HardGraphDefinition = {
+    discipline: "hard",
+    id: "l2_illegal",
+    label: "l2",
+    stages: [{ id: "auth_session", require: { summary: true }, max_retries: 0 }],
+  };
+  const plan = new HardGraphPlanStore(graph);
+  plan.setStageTodos("auth_session", [
+    {
+      node_id: "pkg-fail-a",
+      title: "failed pkg",
+      status: "done", // illegal: package failed but L2 done
+      level: "work_item",
+      kind: "task",
+      source: "plan",
+      agent_id: "sub_x",
+    },
+  ]);
+  const runtime = makeRuntime({
+    stageId: "auth_session",
+    packageTerminals: [{ key: "pkg-fail-a", terminal: "failed" }],
+  });
+  (runtime.lifecycle as any).hardGraphRun = {
+    plan,
+    usage: {},
+    panel: {},
+    stageId: "auth_session",
+  };
+  const s = settleHostStage({
+    stageId: "auth_session",
+    runtime,
+    narrative: { summary: "wave" },
+  });
+  assert.equal(s.honesty.ok, false, "illegal L2 done fails honesty");
+  assert.equal(s.structured.ok, false);
+  assert.ok(s.honesty.illegal_l2_done.includes("pkg-fail-a"));
+  assert.ok(s.structured.deadends.some((d) => d.startsWith("illegal_l2_done:")));
+}
+
+// --- runHardGraph stage_end carries feedback_ok_ids ---
+{
+  const graph: HardGraphDefinition = {
+    discipline: "hard",
+    id: "ids_emit",
+    label: "ids",
+    stages: [{ id: "wave", require: { summary: true }, max_retries: 0 }],
+  };
+  let seenIds: string[] | undefined;
+  const exec: StageExecutor = async () => {
+    const runtime = makeRuntime({ stageId: "wave" });
+    const store = ensureProcessQuality(runtime.lifecycle).findingStore;
+    const ids = ingestPackageCandidatesToStore(
+      store,
+      [
+        {
+          title: "X",
+          location: "http://t/x",
+          proof_excerpt: "proof excerpt long enough for L0 mechanical feedback gate xx",
+        },
+      ],
+      { package_id: "p", stage_id: "wave" },
+    );
+    const settlement = settleHostStage({
+      stageId: "wave",
+      runtime,
+      narrative: { summary: "ok" },
+    });
+    return {
+      structured: settlement.structured,
+      feedbackOkIds: settlement.feedback_ok_ids.length
+        ? settlement.feedback_ok_ids
+        : ids,
+    };
+  };
+  await runHardGraph({
+    graph,
+    executeStage: exec,
+    availableTools: ["todo"],
+    onEvent: (e) => {
+      if (e.type === "stage_end" && e.outcome === "passed") {
+        seenIds = e.feedback_ok_ids;
+      }
+    },
+  });
+  assert.ok(seenIds && seenIds.length >= 1, "stage_end emits feedback_ok_ids");
 }
 
 await rm(dir, { recursive: true, force: true });

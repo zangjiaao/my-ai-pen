@@ -1059,7 +1059,7 @@ async function main() {
         scope: "127.0.0.1 only",
         already_done: "none",
         this_turn_goal: "dry child package",
-        success_criteria: "result.json written",
+        success_criteria: "intentional structured settlement into host/Store",
       }),
     ),
   );

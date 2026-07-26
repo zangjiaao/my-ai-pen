@@ -138,7 +138,7 @@ function mergeNewChildObservations(
 
 /**
  * Stable Product-state package key for Hard stage / Agent Graph worker Join.
- * - Stage captain / result.json: `hard-stage:<stageId>`
+ * - Stage captain host settlement: `hard-stage:<stageId>`
  * - Fan-out worker package: `hard-stage:<stageId>:<workerId>`
  * Worker ids are sanitized to [a-zA-Z0-9_-] so inject summary token boundaries stay safe.
  */

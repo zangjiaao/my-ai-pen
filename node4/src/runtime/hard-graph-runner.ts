@@ -58,6 +58,11 @@ export type StageExecutorOutput = {
    * Distinct from bookOutcomes.booked_n (local JSON findings delta).
    */
   findingsBookedN?: number;
+  /**
+   * Spec #125 / #130: captain-visible Store ids with status feedback_ok after host settlement.
+   * Main confirms with finding(confirm, finding_id=…). Empty when zero confirmable rows.
+   */
+  feedbackOkIds?: string[];
 };
 
 export type StageExecutor = (input: StageExecutorInput) => Promise<StageExecutorOutput>;
@@ -95,6 +100,8 @@ export type HardGraphStageEvent =
       outcome: StageAttemptOutcome;
       errors: string[];
       summary?: string;
+      /** Spec #125: confirmable Store ids after host settlement (captain surface). */
+      feedback_ok_ids?: string[];
     }
   | {
       type: "run_end";
@@ -258,6 +265,7 @@ export async function runHardGraph(options: {
       let outFanoutN: number | undefined;
       let outBookOutcomes: { booked_n?: number; reject_hints_n?: number } | undefined;
       let outFindingsBookedN: number | undefined;
+      let outFeedbackOkIds: string[] | undefined;
       try {
         const out = await options.executeStage({
           stage,
@@ -276,6 +284,9 @@ export async function runHardGraph(options: {
         outFanoutN = out.fanoutPackagesN;
         outBookOutcomes = out.bookOutcomes;
         outFindingsBookedN = out.findingsBookedN;
+        outFeedbackOkIds = Array.isArray(out.feedbackOkIds)
+          ? out.feedbackOkIds.map((id) => String(id || "").trim()).filter(Boolean)
+          : undefined;
       } catch (err) {
         structured = normalizeSubagentResult(
           {
@@ -300,6 +311,7 @@ export async function runHardGraph(options: {
           : 0;
       const bookOutcomes = outBookOutcomes;
       const findingsBookedN = outFindingsBookedN;
+      const feedback_ok_ids = outFeedbackOkIds;
 
       if (gate.ok) {
         handoff = mergeHandoff(handoff, structured, stage.id);
@@ -322,6 +334,7 @@ export async function runHardGraph(options: {
           outcome: "passed",
           errors: [],
           summary: structured.summary,
+          ...(feedback_ok_ids?.length ? { feedback_ok_ids } : {}),
         });
         break;
       }
@@ -346,6 +359,7 @@ export async function runHardGraph(options: {
         outcome: isLast ? "blocked" : "failed_attempt",
         errors: gate.errors,
         summary: structured.summary,
+        ...(feedback_ok_ids?.length ? { feedback_ok_ids } : {}),
       });
     }
 

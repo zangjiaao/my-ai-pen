@@ -46,14 +46,16 @@ export function hostDeclareFailedKeys(packages: PackageAttemptRecord[]): string[
 }
 
 /**
- * Host-owned honesty snapshot. Silent partial cannot form: host always declares
- * every package that needs declaration. `ok` is true iff no packages are still running.
+ * Host-owned honesty snapshot.
+ * - Host always declares package failures (undeclared always empty).
+ * - silent_partial only when illegal L2-done for unfinished/failed packages.
+ * - ok when no running packages and no illegal L2-done.
  */
 export type HostHonestySnapshot = {
   ok: boolean;
-  silent_partial: false;
+  silent_partial: boolean;
   undeclared_failures: [];
-  illegal_l2_done: [];
+  illegal_l2_done: string[];
   host_owned_declare: true;
   running_packages: string[];
 };
@@ -190,6 +192,65 @@ function feedbackOkIds(store: FindingStore, stageId: string): string[] {
 }
 
 /**
+ * Spec #125 / I0.2–3: L2 marked done for unfinished/failed/salvage packages is illegal.
+ * Reads Graph plan when present (Expert Graph coverage SoT).
+ */
+export function illegalL2DoneForPackages(
+  runtime: ToolRuntime,
+  packages: PackageAttemptRecord[],
+  stageId: string,
+): string[] {
+  const plan = runtime.lifecycle?.hardGraphRun?.plan as
+    | {
+        toPlanTree?: () => Array<{
+          node_id?: string;
+          id?: string;
+          status?: string;
+          parent_id?: string | null;
+        }>;
+      }
+    | undefined;
+  if (!plan?.toPlanTree) return [];
+  const stageParent = stageId ? `graph-stage-${stageId}` : "";
+  const tree = plan.toPlanTree().filter((n) => {
+    if (!stageParent) return true;
+    const parent = String(n.parent_id || "");
+    // Include L2 under this stage; also rows without parent if package key match later.
+    return !parent || parent === stageParent;
+  });
+  const illegal: string[] = [];
+  for (const p of packages) {
+    const needsHonest =
+      p.terminal === "failed" ||
+      p.terminal === "never_started" ||
+      p.terminal === "aborted" ||
+      p.terminal === "running" ||
+      (p.terminal === "success" && Boolean(p.salvaged));
+    if (!needsHonest) continue;
+    const key = String(p.package_key || "").trim();
+    const planNode = String(p.plan_node_id || key).trim();
+    if (!key) continue;
+    for (const n of tree) {
+      const id = String(n.node_id || n.id || "").trim();
+      if (!id) continue;
+      // Exact package key, plan_node_id, or pkg-* host mirror of that key.
+      const matches =
+        id === key ||
+        id === planNode ||
+        id === `pkg-${key}` ||
+        id === `pkg-${planNode}`;
+      if (!matches) continue;
+      const st = String(n.status || "").toLowerCase();
+      if (st === "done" || st === "completed" || st === "complete" || st === "skipped") {
+        illegal.push(key);
+        break;
+      }
+    }
+  }
+  return illegal;
+}
+
+/**
  * Project stage outcome from host state only.
  * Agent result.json is never read here.
  */
@@ -205,13 +266,15 @@ export function settleHostStage(input: HostStageSettlementInput): HostStageSettl
     .filter((p) => p.terminal === "running")
     .map((p) => p.package_key);
 
-  // Host settlement ok: no in-flight packages. Declare is host-owned metadata only.
-  const settlementOk = running_packages.length === 0;
+  const illegal_l2_done = illegalL2DoneForPackages(runtime, packages, stageId);
+
+  // Host settlement ok: no in-flight packages and no illegal L2 greening of failures.
+  const settlementOk = running_packages.length === 0 && illegal_l2_done.length === 0;
   const honesty: HostHonestySnapshot = {
     ok: settlementOk,
-    silent_partial: false,
+    silent_partial: illegal_l2_done.length > 0,
     undeclared_failures: [],
-    illegal_l2_done: [],
+    illegal_l2_done,
     host_owned_declare: true,
     running_packages,
   };
@@ -247,8 +310,12 @@ export function settleHostStage(input: HostStageSettlementInput): HostStageSettl
   }
   if (surfaces.length) summaryParts.push(`surfaces=${surfaces.length}`);
   if (candidates.length) summaryParts.push(`store_candidates=${candidates.length}`);
+  // Captain machine surface: confirmable Store ids (Spec #125 / #130).
   if (feedback_ok_ids.length) {
     summaryParts.push(`feedback_ok_ids=${feedback_ok_ids.join(",")}`);
+  }
+  if (illegal_l2_done.length) {
+    summaryParts.push(`illegal_l2_done=${illegal_l2_done.join(",")}`);
   }
   const summaryForGate =
     realSummary || hostWorkSignal
@@ -259,9 +326,18 @@ export function settleHostStage(input: HostStageSettlementInput): HostStageSettl
     ...(input.narrative?.deadends || []).map((d) => String(d || "").trim()).filter(Boolean),
     ...host_declared_keys.map((k) => `failed_package:${k}`),
     ...running_packages.map((k) => `running_package:${k}`),
+    ...illegal_l2_done.map((k) => `illegal_l2_done:${k}`),
   ];
 
-  // Gate shape only — host captain fields live on HostStageSettlement, not inside normalize.
+  // Captain-visible confirm instruction in notes (machine + human readable).
+  const captainNotes: string[] = [];
+  if (input.narrative?.notes) captainNotes.push(String(input.narrative.notes));
+  if (feedback_ok_ids.length) {
+    captainNotes.push(
+      `confirmable_feedback_ok_ids: ${feedback_ok_ids.join(",")} — use finding(confirm, finding_id=<id>)`,
+    );
+  }
+
   const structured = normalizeSubagentResult({
     ok: settlementOk,
     ...(summaryForGate ? { summary: summaryForGate } : {}),
@@ -269,7 +345,7 @@ export function settleHostStage(input: HostStageSettlementInput): HostStageSettl
     candidates,
     facts: input.narrative?.facts || [],
     deadends,
-    notes: input.narrative?.notes,
+    notes: captainNotes.length ? captainNotes.join("\n") : undefined,
   });
 
   return {

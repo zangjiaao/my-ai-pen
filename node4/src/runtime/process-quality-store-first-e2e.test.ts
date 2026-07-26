@@ -202,19 +202,34 @@ try {
       structured: settlement.structured,
       fanoutPackagesN: 7,
       findingsBookedN: pq.findingStore.counts().booked_n,
+      feedbackOkIds: settlement.feedback_ok_ids,
     };
   };
 
+  let stageEndIds: string[] | undefined;
   const result = await runHardGraph({
     graph,
     executeStage: exec,
     availableTools: ["todo", "subagent", "fact", "finding"],
+    onEvent: (e) => {
+      if (e.type === "stage_end" && e.stageId === stageId) {
+        stageEndIds = e.feedback_ok_ids;
+      }
+    },
   });
 
   // Honest partial may pass (host declared fails)
   assert.equal(result.terminal, "completed");
   assert.equal(result.processMetrics?.structure_fail_n ?? 0, 0);
   assert.equal(result.processMetrics?.findings_booked_n ?? 0, 0, "zero confirms → booked 0");
+  // Captain surface: confirmable ids after settlement (Spec #130)
+  assert.ok(stageEndIds && stageEndIds.length >= 1, "stage_end feedback_ok_ids for Main");
+  const settleAgain = settleHostStage({
+    stageId,
+    runtime,
+    narrative: { summary: "auth_session wave settled" },
+  });
+  assert.match(String(settleAgain.structured.notes || ""), /confirmable_feedback_ok_ids:/);
 
   // L2 no clobber: Main todo.done on another row
   plan.setStageTodos(stageId, [
@@ -246,6 +261,33 @@ try {
   const csrf = plan.toPlanTree().find((n) => n.node_id === "todo-csrf") as any;
   assert.equal(csrf?.status, "done", "package done not clobbered by Main todo");
   assert.equal(csrf?.agent_id, "sub_csrf", "worker chip survives");
+
+  // Package-owned failed cannot be greened by Todo done
+  plan.upsertStageWorkItem(stageId, {
+    node_id: "todo-fail-owned",
+    title: "failed owned",
+    status: "failed",
+    agent_id: "sub_fail",
+    owner_agent_name: "Worker Fail",
+    level: "work_item",
+    kind: "task",
+    source: "plan",
+  });
+  plan.setStageTodos(stageId, [
+    {
+      node_id: "todo-fail-owned",
+      title: "failed owned",
+      status: "done",
+      level: "work_item",
+      kind: "task",
+      source: "plan",
+    },
+  ]);
+  assert.equal(
+    (plan.toPlanTree().find((n) => n.node_id === "todo-fail-owned") as any)?.status,
+    "failed",
+    "package-owned failed not greened",
+  );
 
   // If stage blocked, progress label must say so (not full-green success fiction)
   plan.setStageStatus(stageId, "blocked");

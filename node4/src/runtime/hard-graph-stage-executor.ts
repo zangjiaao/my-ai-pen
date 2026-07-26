@@ -404,6 +404,8 @@ export function createHardGraphStageExecutor(options: {
       const bookedDelta = Math.max(0, findingsAfter - findingsBefore);
       const storeBooked = ensureProcessQuality(parentRuntime.lifecycle).findingStore.counts()
         .booked_n;
+      // Spec #125 / #130: captain machine surface for confirmable Store ids.
+      const feedbackOkIds = settlement.feedback_ok_ids;
       return {
         structured: structuredOut,
         summary: structuredOut.summaryProvided ? structuredOut.summary : undefined,
@@ -413,6 +415,7 @@ export function createHardGraphStageExecutor(options: {
             ? { booked_n: bookedDelta, reject_hints_n: 0 }
             : undefined,
         findingsBookedN: storeBooked,
+        ...(feedbackOkIds.length ? { feedbackOkIds } : {}),
       };
     };
 

@@ -40,6 +40,39 @@ export function isStrongerPlanStatus(prior: string, incoming: string): boolean {
   return planStatusRank(prior) > planStatusRank(incoming);
 }
 
+/** Package / Worker-owned L2 row (host settlement ownership). */
+export function isPackageOwnedL2(p: PlanNodeLike): boolean {
+  const id = String(p.node_id || p.id || "").trim();
+  if (id.startsWith("pkg-")) return true;
+  if (String(p.agent_id || "").trim()) return true;
+  if (String((p as { plan_node_id?: string }).plan_node_id || "").trim()) return true;
+  return false;
+}
+
+/**
+ * Merge status for one L2 row (Spec #125 / #127).
+ * Package-owned failed/blocked/running must not be greened by Todo `done`/`skipped`.
+ */
+export function mergeL2Status(
+  prior: PlanNodeLike | undefined,
+  incomingStatus: string,
+): string {
+  const inc = normalizePlanWorkStatus(incomingStatus);
+  if (!prior) return inc;
+  const prev = normalizePlanWorkStatus(String(prior.status || "pending"));
+  // Host package settlement: never green over fail/running/blocked via Todo greening.
+  if (isPackageOwnedL2(prior)) {
+    if (
+      (prev === "failed" || prev === "blocked" || prev === "running") &&
+      (inc === "done" || inc === "skipped")
+    ) {
+      return prev;
+    }
+  }
+  if (isStrongerPlanStatus(prev, inc)) return prev;
+  return inc;
+}
+
 /**
  * Orphan L2 rows omitted from a Todo snapshot survive merge only when host/package-owned.
  * Spec #125: package-anchored history + Worker chips; not every Main done todo forever.
@@ -191,15 +224,7 @@ export class HardGraphPlanStore {
           String(n.node_id || n.id || "").trim() ||
           `todo-task-${slug(stageId)}-${slug(title)}`;
         const prior = prevById.get(nodeId);
-        const incomingStatus = normalizePlanWorkStatus(String(n.status || "pending"));
-        let status = incomingStatus;
-        // Preserve stronger Graph settlement status when Todo snapshot is weaker.
-        if (prior) {
-          const priorStatus = normalizePlanWorkStatus(String(prior.status || "pending"));
-          if (isStrongerPlanStatus(priorStatus, incomingStatus)) {
-            status = priorStatus;
-          }
-        }
+        const status = mergeL2Status(prior, String(n.status || "pending"));
         const merged: PlanNodeLike = {
           ...n,
           node_id: nodeId,
