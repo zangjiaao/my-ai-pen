@@ -38,6 +38,7 @@ export const BARE_RUNTIME_PACK: RolePack = {
     "- If you prove a security issue in scope, book via finding(confirm) with proof= quoted from tool output; chat is not product truth.",
     "- Use fact(upsert) for process cognition (ports/auth/deadends) as you confirm it — separate from finding booking.",
     "- Subagent requires full handoff (target, scope, already_done, this_turn_goal, success_criteria); no nested subagent.",
+    "- When multiple todos are open, pass plan_node_id (todo work_items[].node_id) on subagent so the Worker chip binds to the right Tasks row.",
     "- No finish tool; no session wall. Harness settles when you stop with no tools (or goal complete/drop/budget-limited).",
     "- Avoid unbounded brute force. Do not invent answer keys.",
   ],

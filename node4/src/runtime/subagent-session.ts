@@ -30,6 +30,7 @@ import {
   seedChildSessionFromParent,
 } from "./subagent-session-seed.js";
 import { pathKey } from "./subagent-booking.js";
+import { isPackageSuccess } from "./package-settlement-law.js";
 import {
   getOrCreateIdlePool,
   type IdleSubagentHandle,
@@ -341,7 +342,12 @@ async function runWarmPackage(args: {
   });
 
   const sessionPromote = await promoteChildSessionToParent(workDir, input.parent.taskDir);
-  const ok = structured.ok && !race.aborted && !race.timedOut;
+  // Spec #116 I0.4: salvage ≠ package success
+  const ok = isPackageSuccess({
+    ok: structured.ok && !race.aborted && !race.timedOut,
+    salvaged,
+    has_valid_result: !salvaged && structured.ok,
+  });
 
   warm.packagesCompleted += 1;
   warm.lastUsedAt = Date.now();
@@ -538,7 +544,12 @@ async function runColdPackage(args: {
   });
 
   const sessionPromote = await promoteChildSessionToParent(workDir, parent.taskDir);
-  const ok = structured.ok && !race.aborted && !race.timedOut;
+  // Spec #116 I0.4: salvage ≠ package success
+  const ok = isPackageSuccess({
+    ok: structured.ok && !race.aborted && !race.timedOut,
+    salvaged,
+    has_valid_result: !salvaged && structured.ok,
+  });
 
   // OMP keep-alive: park success + soft-fail/timeout so same agent_id can resume.
   // Parent abort or missing identity → dispose immediately (release).

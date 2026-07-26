@@ -174,6 +174,11 @@ export type ToolRuntime = {
       /** Current stage id while a stage session runs (todo → L2 merge). */
       stageId?: string;
     };
+    /**
+     * Spec #116 process quality (Finding Store + package honesty + attempt budgets).
+     * Single run-wide object shared by stage children — see package-honesty-host.
+     */
+    processQuality?: import("./runtime/package-honesty-host.js").ProcessQualityState;
   };
 };
 

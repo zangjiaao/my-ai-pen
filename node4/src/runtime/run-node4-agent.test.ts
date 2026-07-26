@@ -143,7 +143,7 @@ async function testToolEventBridgeSingleFanOut() {
         platformMsgs.push({ type: msg.type, status: msg.status });
       },
     },
-    lifecycle: { toolsInLastSegment: 0 },
+    lifecycle: { toolsInLastSegment: 0, subagentDepth: 0 },
   } as unknown as ToolRuntime;
 
   const session = fakeSession({
@@ -169,6 +169,48 @@ async function testToolEventBridgeSingleFanOut() {
   assert.equal(runtime.lifecycle.toolsInLastSegment, 1);
   assert.ok(platformMsgs.some((m) => m.type === "tool_output" && m.status === "running"));
   assert.ok(platformMsgs.some((m) => m.type === "tool_output" && m.status === "done"));
+}
+
+/** Policy A: package workers must not emit tool_output into Case chat. */
+async function testToolEventBridgeSilentForSubagentDepth() {
+  const platformMsgs: Array<{ type: string; status?: string }> = [];
+  const segmentCounter = { tools: 0 };
+  const runtime = {
+    task: { conversationId: "c", taskId: "t/sub/sub_1" },
+    platform: {
+      send: async (msg: { type: string; status?: string }) => {
+        platformMsgs.push({ type: msg.type, status: msg.status });
+      },
+    },
+    lifecycle: { toolsInLastSegment: 0, subagentDepth: 1 },
+  } as unknown as ToolRuntime;
+
+  const session = fakeSession({
+    events: [
+      {
+        type: "tool_execution_start",
+        toolCallId: "1",
+        toolName: "shell",
+        args: {},
+      } as AgentEvent,
+      {
+        type: "tool_execution_end",
+        toolCallId: "1",
+        toolName: "shell",
+        result: { content: [{ type: "text", text: "ok" }], details: {} },
+        isError: false,
+      } as AgentEvent,
+    ],
+  });
+  attachProductToolEventBridge(session, runtime, segmentCounter);
+  await session.prompt("x");
+  assert.equal(segmentCounter.tools, 1, "still count tools for salvage");
+  assert.equal(runtime.lifecycle.toolsInLastSegment, 1);
+  assert.equal(
+    platformMsgs.filter((m) => m.type === "tool_output").length,
+    0,
+    "no tool_output to Case chat for subagent package",
+  );
 }
 
 async function testResolveModelOverrideBaseUrl() {
@@ -215,6 +257,7 @@ async function main() {
   await testPromptAndEvents();
   await testAbortStopsFurtherWork();
   await testToolEventBridgeSingleFanOut();
+  await testToolEventBridgeSilentForSubagentDepth();
   await testResolveModelOverrideBaseUrl();
   await testResolveModelUnknownSynthetic();
   await testNoCodingAgentImportInModule();

@@ -40,6 +40,30 @@ _Avoid_: hybrid (unqualified), soft OMP graph, Main-as-scheduler as hard Graph
 The model (Task / Agent / Feedback semantics) is required; a framework (e.g. Google ADK) is a replaceable implementation.
 _Avoid_: "must use ADK" as a product requirement without a model reason
 
+**Package (work package)**:
+A unit of Agent Graph work Main assigns to one subagent for a stage objective (often aligned with an attack-class or coverage item).
+_Avoid_: treating a batch tool call as one package; treating Todo process chores as packages
+
+**Wave (package attempt)**:
+One run of one package by a subagent from start to terminal success or failure. Retry budget is per package (product default: at most two attempts), not a stage-wide pool.
+_Avoid_: calling one `packages[]` batch a wave; stage-total wave caps that starve later packages
+
+**Batch**:
+One `packages[]` (or equivalent) dispatch that may start several packages in parallel. Runtime scheduling shape, not the product unit of all-or-nothing honesty.
+_Avoid_: batch = wave; batch failure as the only product settlement law
+
+**Honest partial**:
+A stage may advance when some packages succeeded and others failed, if successes are kept in handoff and failures are explicit. Silent partial (full-green coverage while work failed) is forbidden.
+_Avoid_: any-package-fail discards all successes; pretending failed packages were covered
+
+**Feedback L0 / L1**:
+**L0** is mechanical Feedback (structure and package-outcome honesty gates). **L1** is an optional Critic agent that may require a bounded refine before advance; it cannot bypass L0.
+_Avoid_: Feedback Graph as pure LLM overseer with no hard baseline; field-only Feedback with no refine loop when product wants ADK-like hybrid
+
+**User interrupt (abort)**:
+Cooperative cancel of the **in-flight turn** only (UI stop); not package failure; not empty-message send. In-flight packages stop; Main decides which work to keep, discard, or re-dispatch. The stage captain **working session survives** interrupt; continue is the next turn on that same logical session with full history (Codex-like), not dispose-and-summary-reseed. Padding/steer mid-run is a separate channel that does not cancel the turn.
+_Avoid_: equating abort with package-fail; destroying captain session on interrupt; empty-message-as-abort; auto-replaying the interrupted batch
+
 **Product state (SOT)**:
 Node4-owned domain truth: multi-actor session jars, Hard Graph handoff/continuity (parent lifecycle, surface ledger, structured stage results), findings/booking inputs, Feedback/settlement inputs.
 _Avoid_: treating LLM transcript or Agent Runtime session files as domain authority

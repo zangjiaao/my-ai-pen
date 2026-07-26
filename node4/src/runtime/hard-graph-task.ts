@@ -27,6 +27,7 @@ import {
 } from "./platform-observability.js";
 import { PanelAgentTracker } from "./panel-agents.js";
 import { GoalStore } from "../stores/goal.js";
+import { ensureProcessQuality } from "./package-honesty-host.js";
 
 export type HardGraphTaskResult = {
   /** Platform task_complete.status (completed | incomplete | blocked). */
@@ -206,6 +207,8 @@ export async function runHardGraphExpertTask(options: {
     panel,
   };
   parentRuntime.lifecycle.panelAgents = panel;
+  // Spec #116: ensure Store-first process quality survives all stages
+  ensureProcessQuality(parentRuntime.lifecycle);
 
   const startMsg: PlatformMessage = {
     type: "status_update",

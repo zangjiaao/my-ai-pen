@@ -5,6 +5,11 @@ import { TODO_TOOL_DESCRIPTION } from "../runtime/todo-harness.js";
 import { buildTodoPlanTreePayload, emitTodoPlanTreeUpdate } from "../runtime/plan-projection.js";
 import { emitHardGraphPlanTreeUpdate } from "../runtime/hard-graph-plan.js";
 import { assertTodoDoneAllowed } from "../stores/surface-ledger.js";
+import {
+  mayMarkL2DoneForPackage,
+  lookupPackageTerminal,
+  graphCoverageSourceOfTruth,
+} from "../runtime/package-settlement-law.js";
 import type { ToolRuntime } from "../types.js";
 import { jsonResult, textResult } from "./common.js";
 
@@ -69,6 +74,30 @@ export function createTodoTool(runtime: ToolRuntime): AgentTool<any> {
         phase: params.phase != null ? String(params.phase) : undefined,
         items: Array.isArray(params.items) ? params.items.map((x: unknown) => String(x)) : undefined,
       };
+      // Spec #116 I0.11: cannot done L2 while anchored package failed/running/unfinished
+      if (op === "done" && runtime.lifecycle.processQuality && input.task) {
+        const taskName = String(input.task || "").trim();
+        const pq = runtime.lifecycle.processQuality;
+        const hit = lookupPackageTerminal(
+          pq.packageTerminals,
+          pq.packageTerminalAliasIndex,
+          taskName,
+        );
+        if (hit) {
+          const gate = mayMarkL2DoneForPackage(hit.terminal, hit.salvaged);
+          if (!gate.ok) {
+            return jsonResult(
+              {
+                ok: false,
+                errors: [gate.error || "L2 done rejected for package state"],
+                summary: gate.error,
+              },
+              { isError: true },
+            );
+          }
+        }
+      }
+
       const result = runtime.todo.apply(input);
       if (result.errors.length) {
         runtime.lifecycle.pendingTodoErrorReminder = result.errors.slice();
@@ -82,6 +111,13 @@ export function createTodoTool(runtime: ToolRuntime): AgentTool<any> {
           { isError: true },
         );
       }
+      // Spec #116 I0.21: Expert Graph coverage SoT = GraphStore only (no TodoStore∥GraphStore dual plan_tree).
+      const graphRun = runtime.lifecycle.hardGraphRun;
+      const coverageSot = graphCoverageSourceOfTruth(Boolean(graphRun?.plan));
+      // Workers (depth >= 1) keep a private TodoStore for their own loop only.
+      // Never broadcast plan_tree: same expert_id would replace Main/Graph L1+L2 on the right panel.
+      const isSubagent = (runtime.lifecycle.subagentDepth || 0) >= 1;
+
       // Successful mutation: clear error reminder, emit todo + plan_tree for platform Tasks.
       if (!result.readOnly) {
         runtime.lifecycle.pendingTodoErrorReminder = undefined;
@@ -92,13 +128,18 @@ export function createTodoTool(runtime: ToolRuntime): AgentTool<any> {
           op,
           phases: runtime.todo.snapshot(),
           open_count: runtime.todo.openCount(),
+          // Hint for platform consumers: worker-local, not Case Tasks SoT
+          scope: isSubagent ? "subagent_local" : "case",
         });
-        // Node2/OMP-style: project into plan_tree_updated so right-panel Tasks updates live.
-        // Hard Graph: merge under L1 stage map via hardGraphRun (no whole-tree wipe).
-        const graphRun = runtime.lifecycle.hardGraphRun;
-        if (graphRun?.plan && graphRun.stageId) {
-          const payload = buildTodoPlanTreePayload(runtime.todo);
-          graphRun.plan.setStageTodos(graphRun.stageId, payload.plan_tree);
+        if (isSubagent) {
+          // Local tool result only — no plan_tree_updated, no Graph setStageTodos.
+        } else if (coverageSot === "graph_store" && graphRun?.plan) {
+          // Todo tool is a facade: mutate Graph L2 via setStageTodos, emit Graph plan_tree only.
+          // I0.21: never emit TodoStore plan_tree on Expert Graph path (even if stageId missing).
+          if (graphRun.stageId) {
+            const payload = buildTodoPlanTreePayload(runtime.todo);
+            graphRun.plan.setStageTodos(graphRun.stageId, payload.plan_tree);
+          }
           await emitHardGraphPlanTreeUpdate(
             runtime.platform,
             runtime.task,
@@ -109,14 +150,33 @@ export function createTodoTool(runtime: ToolRuntime): AgentTool<any> {
           await emitTodoPlanTreeUpdate(runtime.platform, runtime.task, runtime.todo, `todo.${op}`);
         }
       }
+      const plan_nodes = runtime.todo.toPlanNodes();
+      // Flat work_items first so models see node_id for subagent plan_node_id without digging phases.
+      const work_items = plan_nodes
+        .filter((n) => n.level === "work_item")
+        .map((n) => ({
+          node_id: n.node_id,
+          title: n.title,
+          status: n.status,
+          parent_id: n.parent_id || null,
+        }));
+      const open_count = runtime.todo.openCount();
       return jsonResult({
         ok: true,
         op,
         summary: formatTodoSummary(result.phases, [], result.readOnly),
-        phases: result.phases,
-        open_count: runtime.todo.openCount(),
+        work_items,
+        open_count,
         completed_tasks: result.completedTasks,
-        plan_nodes: runtime.todo.toPlanNodes(),
+        phases: result.phases,
+        plan_nodes,
+        // Spec #116 I0.10: Expert Graph always requires plan_node_id (dispatch = ownership).
+        plan_node_id_hint:
+          coverageSot === "graph_store" || open_count > 1
+            ? coverageSot === "graph_store"
+              ? "Expert Graph: pass work_items[].node_id as subagent plan_node_id (required L2 anchor)."
+              : "Pass work_items[].node_id as subagent plan_node_id so Tasks Worker chip binds to that row."
+            : undefined,
       });
     },
   };

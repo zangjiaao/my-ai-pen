@@ -96,6 +96,9 @@ export function describeMainActivity(input: {
 
 export class PanelAgentTracker {
   private readonly children = new Map<string, PanelAgentRecord>();
+  /** Stable Worker 1..N index per subagent id (resume keeps the same number). */
+  private readonly workerIndexById = new Map<string, number>();
+  private workerSeq = 0;
   private mainTask: string;
   private mainName: string;
   private mainStatus = "running";
@@ -108,6 +111,17 @@ export class PanelAgentTracker {
     this.mainTask = (mainTask || "Authorized security task").slice(0, 240);
     this.mainName = (mainName || "Expert").trim().slice(0, 64) || "Expert";
     this.detail = describeMainActivity({ phase: this.phase });
+  }
+
+  /** 1-based Worker index for a subagent id (assigns on first see). */
+  workerIndexFor(id: string): number {
+    const key = String(id || "").trim();
+    if (!key) return ++this.workerSeq;
+    const existing = this.workerIndexById.get(key);
+    if (existing) return existing;
+    const n = ++this.workerSeq;
+    this.workerIndexById.set(key, n);
+    return n;
   }
 
   /** @deprecated prefer setMainActivity */
@@ -151,20 +165,30 @@ export class PanelAgentTracker {
     });
   }
 
-  noteSubagentStart(input: { id: string; assignment: string; goalId?: string; nodeType?: string }): void {
-    const node = String(input.nodeType || "").trim();
-    const shortGoal = clipSubTask(input.assignment);
+  noteSubagentStart(input: {
+    id: string;
+    assignment: string;
+    goalId?: string;
+    nodeType?: string;
+    /** Short purpose label (this_turn_goal); preferred over raw package markdown. */
+    label?: string;
+    skillId?: string;
+  }): void {
+    const node = String(input.nodeType || input.skillId || "").trim();
+    const goal = resolveSubagentGoal(input.label, input.assignment);
+    const workerN = this.workerIndexFor(input.id);
+    const name = formatWorkerName(workerN);
     this.children.set(input.id, {
       id: input.id,
-      name: node ? `Subagent [${node}]` : `Subagent ${input.id.slice(0, 12)}`,
+      name,
       status: "running",
       parent_id: "node4-main",
-      task: input.assignment.slice(0, 240),
+      task: goal.slice(0, 240),
       skills: node ? [node] : [],
       pending_count: 0,
       role: "subagent",
       current_action: "running",
-      current_detail: node ? `[${node}] ${shortGoal}`.slice(0, 160) : shortGoal,
+      current_detail: goal.slice(0, 160),
       goal_id: input.goalId,
     });
   }
@@ -172,17 +196,24 @@ export class PanelAgentTracker {
   noteSubagentEnd(input: { id: string; ok: boolean; summary?: string }): void {
     const prev = this.children.get(input.id);
     const status = input.ok ? "completed" : "failed";
+    const task = prev?.task || "";
+    const workerN = this.workerIndexFor(input.id);
+    const doneDetail = input.ok
+      ? task
+        ? `已完成：${task}`.slice(0, 160)
+        : "子任务已完成"
+      : (input.summary || "子任务失败").slice(0, 160);
     this.children.set(input.id, {
       id: input.id,
-      name: prev?.name || `Subagent ${input.id.slice(0, 12)}`,
+      name: prev?.name || formatWorkerName(workerN),
       status,
       parent_id: "node4-main",
-      task: prev?.task || "",
-      skills: [],
+      task,
+      skills: prev?.skills || [],
       pending_count: 0,
       role: "subagent",
       current_action: status,
-      current_detail: input.ok ? "子任务已完成" : (input.summary || "子任务失败").slice(0, 160),
+      current_detail: doneDetail,
       outcome: status,
       error: input.ok ? undefined : (input.summary || "failed").slice(0, 240),
       goal_id: prev?.goal_id,
@@ -196,10 +227,15 @@ export class PanelAgentTracker {
         : this.mainStatus
       : this.mainStatus;
     const phase = options?.terminal && mainStatus === "completed" ? "finished" : this.phase;
-    const detail =
+    let detail =
       options?.terminal && mainStatus === "completed"
         ? "本轮工作已结束"
         : this.detail || describeMainActivity({ phase, tool: this.activeTool, lastTool: this.lastTool });
+    // Any running Worker under Main → fan-out subtitle (structured child count, not detail regex).
+    const runningWorkers = [...this.children.values()].filter((c) => c.status === "running").length;
+    if (!options?.terminal && mainStatus === "running" && runningWorkers > 0) {
+      detail = runningWorkers === 1 ? "并行 1 个 Worker" : `并行 ${runningWorkers} 个 Worker`;
+    }
     const main: PanelAgentRecord = {
       id: "node4-main",
       name: this.mainName,
@@ -218,8 +254,45 @@ export class PanelAgentTracker {
   }
 }
 
-function clipSubTask(s: string): string {
-  const t = String(s || "").replace(/\s+/g, " ").trim();
-  if (!t) return "子代理执行中";
-  return t.length > 80 ? `子代理：${t.slice(0, 77)}…` : `子代理：${t}`;
+/** Prefer explicit label, else parse handoff package "## This-turn goal", else first prose line. */
+export function resolveSubagentGoal(label?: string, assignment?: string): string {
+  const fromLabel = String(label || "").replace(/\s+/g, " ").trim();
+  if (fromLabel && !looksLikeHandoffPackage(fromLabel) && !looksLikeSubagentId(fromLabel)) {
+    return clipGoal(fromLabel);
+  }
+  const raw = String(assignment || "");
+  const section = raw.match(/##\s*This-turn goal[^\n]*\n+([\s\S]*?)(?=\n##\s|\n*$)/i);
+  if (section?.[1]) {
+    const goal = section[1].replace(/\s+/g, " ").trim();
+    if (goal) return clipGoal(goal);
+  }
+  // Drop markdown headers / id noise; take first substantial line.
+  for (const line of raw.split(/\r?\n/)) {
+    const t = line.replace(/^#+\s*/, "").replace(/\s+/g, " ").trim();
+    if (!t || looksLikeHandoffPackage(t) || /^target\b|^scope\b/i.test(t) || looksLikeSubagentId(t)) {
+      continue;
+    }
+    if (t.length >= 8) return clipGoal(t);
+  }
+  return "子代理执行中";
+}
+
+/** Stable display name for collaboration tree / Tasks chip. */
+export function formatWorkerName(index: number): string {
+  const n = Number(index);
+  if (!Number.isFinite(n) || n < 1) return "Worker";
+  return `Worker ${Math.floor(n)}`;
+}
+
+function clipGoal(s: string): string {
+  const t = s.replace(/\s+/g, " ").trim();
+  return t.length > 120 ? `${t.slice(0, 117)}…` : t;
+}
+
+function looksLikeHandoffPackage(s: string): boolean {
+  return /subagent handoff package/i.test(s) || /^#\s*subagent/i.test(s);
+}
+
+function looksLikeSubagentId(s: string): boolean {
+  return /^sub[_-]?\d/i.test(s.trim()) || /^subagent\s+sub_/i.test(s.trim());
 }

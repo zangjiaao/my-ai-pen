@@ -3,7 +3,7 @@ export type RelatedVulnerability = {
   title: string;
   severity: string;
   status: string;
-  confidence: string;
+  confidence?: string;
   port?: string | null;
 };
 
@@ -75,7 +75,6 @@ export type SecurityVulnerability = {
   status_label?: string;
   kind?: string;
   allowed_next_statuses?: string[];
-  port?: string | null;
   description?: string | null;
   impact?: string | null;
   technical_analysis?: string | null;

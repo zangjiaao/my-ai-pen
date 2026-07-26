@@ -30,10 +30,12 @@ export default function VulnDetailDialog({
   initial,
   sessionName: _sessionName,
   onClose,
+  onUpdated,
   onRetestCreated: _onRetestCreated,
-  onOpenEvidence: _onOpenEvidence,
+  onOpenEvidence,
 }: Props) {
   const [detail, setDetail] = useState<SecurityVulnerability | null>(null);
+  const [resolvedEvidence, setResolvedEvidence] = useState<SecurityEvidence[]>([]);
   const [loading, setLoading] = useState(false);
   const [savingStatus, setSavingStatus] = useState(false);
   const [error, setError] = useState("");
@@ -60,18 +62,87 @@ export default function VulnDetailDialog({
     return s || "to_fix";
   };
 
+  // Stabilize deps: parent often passes a new `initial` object each render.
+  const evidenceIdsKey = Array.isArray(initial?.evidence_ids)
+    ? initial!.evidence_ids!.join("|")
+    : "";
+
   useEffect(() => {
     if (!open) return;
+    let cancelled = false;
     setError("");
-    setDetail(normalizeInitial(initial));
-    // Session findings use synthetic ids (finding:...) — no platform vuln record to fetch.
-    if (!id || String(id).startsWith("finding:")) return;
-    setLoading(true);
-    authFetch<SecurityVulnerability>(`/api/vulnerabilities/${id}`)
-      .then(setDetail)
-      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load vulnerability"))
-      .finally(() => setLoading(false));
-  }, [open, id, initial]);
+    setResolvedEvidence([]);
+    const base = normalizeInitial(initial);
+    setDetail(base);
+
+    const hydrateEvidence = async (vuln: SecurityVulnerability | null) => {
+      const ids = collectEvidenceIds(vuln, initial);
+      const existing = Array.isArray(vuln?.evidence) ? vuln!.evidence! : [];
+      const byKey = new Map<string, SecurityEvidence>();
+      for (const e of existing) {
+        const key = String(e.evidence_id || e.id || "").trim();
+        if (key && hasUsableEvidenceBody(e)) byKey.set(key, e);
+      }
+      const missing = ids.filter((eid) => !byKey.has(eid) || !hasUsableEvidenceBody(byKey.get(eid)!));
+      if (missing.length) {
+        const fetched = await Promise.all(
+          missing.map(async (eid) => {
+            try {
+              return await authFetch<SecurityEvidence>(`/api/evidence/${encodeURIComponent(eid)}`);
+            } catch {
+              return null;
+            }
+          }),
+        );
+        for (const e of fetched) {
+          if (!e) continue;
+          const key = String(e.evidence_id || e.id || "").trim();
+          if (key) byKey.set(key, e);
+        }
+      }
+      // Preserve evidence_ids order when possible.
+      const ordered: SecurityEvidence[] = [];
+      const seen = new Set<string>();
+      for (const eid of ids) {
+        const hit = byKey.get(eid);
+        if (hit) {
+          ordered.push(hit);
+          seen.add(eid);
+        }
+      }
+      for (const [key, e] of byKey) {
+        if (!seen.has(key)) ordered.push(e);
+      }
+      if (!cancelled) setResolvedEvidence(ordered);
+    };
+
+    (async () => {
+      // Session findings use synthetic ids (finding:...) — no platform vuln record to fetch.
+      if (!id || String(id).startsWith("finding:")) {
+        await hydrateEvidence(base);
+        return;
+      }
+      setLoading(true);
+      try {
+        const vuln = await authFetch<SecurityVulnerability>(`/api/vulnerabilities/${id}`);
+        if (cancelled) return;
+        setDetail(vuln);
+        await hydrateEvidence(vuln);
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Failed to load vulnerability");
+          await hydrateEvidence(base);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- initial object identity is unstable; use id + evidenceIdsKey
+  }, [open, id, evidenceIdsKey]);
 
   const vulnerability = detail || normalizeInitial(initial);
 
@@ -124,7 +195,12 @@ export default function VulnDetailDialog({
       || "",
   ).trim();
   const surfaceFromUrl = (() => {
-    const raw = String(vulnerability?.endpoint || vulnerability?.location || vulnerability?.url || "").trim();
+    const raw = String(
+      vulnerability?.endpoint ||
+        vulnerability?.location ||
+        (vulnerability as { url?: string } | null)?.url ||
+        "",
+    ).trim();
     if (!raw) return "";
     try {
       if (/^https?:\/\//i.test(raw)) {
@@ -153,15 +229,22 @@ export default function VulnDetailDialog({
   const highlightTokens = collectHighlightTokens(findingKind, flagToken, description, vulnerability);
 
   const timelineEvents = buildDetailTimeline(vulnerability);
-  const evidenceItems = vulnerability?.evidence?.length
-    ? vulnerability.evidence
-    : (vulnerability?.evidence_ids || []).map((evidenceId) => ({
-        id: evidenceId,
-        evidence_id: evidenceId,
-        type: "evidence",
-        summary: evidenceId,
-      }));
-  const evidenceStepBlocks = evidenceItems.map((item) => evidenceProofSteps(item as EvidenceLike));
+  const evidenceIdList = collectEvidenceIds(vulnerability, initial);
+  const evidenceItems: Partial<SecurityEvidence>[] = resolvedEvidence.length
+    ? resolvedEvidence
+    : vulnerability?.evidence?.length
+      ? vulnerability.evidence
+      : evidenceIdList.map((evidenceId) => ({
+          id: evidenceId,
+          evidence_id: evidenceId,
+          type: "evidence",
+          // Do not put raw id in summary — that becomes a fake "Result" line.
+          summary: "",
+        }));
+  const evidenceStepBlocks = evidenceItems.map((item) => {
+    if (!hasUsableEvidenceBody(item)) return [] as ReturnType<typeof evidenceProofSteps>;
+    return evidenceProofSteps(item as EvidenceLike);
+  });
   const hasEvidenceSteps = evidenceStepBlocks.some((s) => s.length > 0);
   // PoC / [Proof] dump duplicate Evidence steps when book-time proof is present.
   const showPoc = Boolean(pocText) && !hasEvidenceSteps;
@@ -271,14 +354,19 @@ export default function VulnDetailDialog({
           <div className="space-y-4">
             {evidenceItems.map((item, index) => {
               const steps = evidenceStepBlocks[index] || [];
+              const eid = String(item.evidence_id || item.id || "").trim();
+              const summaryText = String(item.summary || "").trim();
+              const summaryLooksLikeId =
+                summaryText &&
+                (summaryText === eid || /^ev_\d+/i.test(summaryText));
               return (
-                <div key={item.id || item.evidence_id || index}>
+                <div key={eid || index}>
                   {evidenceItems.length > 1 && (
                     <p className="mb-2 text-[11px] font-medium text-ink-muted">
                       Proof {index + 1}
-                      {item.evidence_id ? (
+                      {eid ? (
                         <span className="ml-2 font-mono font-normal text-ink-muted/80">
-                          {String(item.evidence_id).slice(0, 24)}
+                          {eid.slice(0, 24)}
                         </span>
                       ) : null}
                     </p>
@@ -303,9 +391,31 @@ export default function VulnDetailDialog({
                       ))}
                     </ol>
                   ) : (
-                    <p className="text-xs text-ink-muted">
-                      {item.summary || "No command/result stored on this evidence."}
-                    </p>
+                    <div className="rounded-md border border-hairline-soft px-2.5 py-2">
+                      <p className="text-xs text-ink-muted">
+                        {summaryText && !summaryLooksLikeId
+                          ? summaryText
+                          : "No command/result body stored for this evidence (id-only or missing row)."}
+                      </p>
+                      {eid && onOpenEvidence && (
+                        <button
+                          type="button"
+                          className="mt-2 text-[11px] font-medium text-status-running hover:underline"
+                          onClick={() =>
+                            onOpenEvidence({
+                              evidence_id: eid,
+                              id: eid,
+                              summary: summaryText && !summaryLooksLikeId ? summaryText : undefined,
+                              type: item.type || "evidence",
+                              source_tool: item.source_tool,
+                              properties: item.properties,
+                            })
+                          }
+                        >
+                          Open evidence detail
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
               );
@@ -377,6 +487,39 @@ function splitDescriptionAndProof(raw: string): { narrative: string; proof: stri
     return { narrative: "", proof: text.slice("[Proof]\n".length).trim() };
   }
   return { narrative: text, proof: "" };
+}
+
+function collectEvidenceIds(
+  vuln: SecurityVulnerability | null | undefined,
+  initial?: Partial<SecurityVulnerability> | null,
+): string[] {
+  const raw = [
+    ...(Array.isArray(vuln?.evidence_ids) ? vuln!.evidence_ids! : []),
+    ...(Array.isArray(initial?.evidence_ids) ? initial!.evidence_ids! : []),
+    ...(Array.isArray(vuln?.evidence)
+      ? vuln!.evidence!.map((e) => String(e.evidence_id || e.id || ""))
+      : []),
+  ];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const id of raw) {
+    const s = String(id || "").trim();
+    if (!s || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  return out;
+}
+
+/** True when evidence has properties/summary usable for proof steps (not id-only stub). */
+function hasUsableEvidenceBody(e: Partial<SecurityEvidence> | null | undefined): boolean {
+  if (!e) return false;
+  const props = e.properties && typeof e.properties === "object" ? e.properties : null;
+  if (props && Object.keys(props).length > 0) return true;
+  const summary = String(e.summary || "").trim();
+  const eid = String(e.evidence_id || e.id || "").trim();
+  if (summary && summary !== eid && !/^ev_\d+/i.test(summary)) return true;
+  return false;
 }
 
 function collectHighlightTokens(

@@ -6,7 +6,21 @@
 import type { SubagentStructuredResult, SubagentSurface, SubagentCandidate } from "./subagent-result.js";
 import { pathKey } from "./subagent-booking.js";
 
-export type CoverageAttemptStatus = "attempted" | "blocked" | "deadend" | "untested";
+/**
+ * Surface-family status (Spec #111).
+ * Legacy wire alias: "attempted" is DEPRECATED and must not mean candidate path-match.
+ * Prefer probed | deadend | booked | skipped_roe | in_probe | untested.
+ */
+export type CoverageAttemptStatus =
+  | "probed"
+  | "deadend"
+  | "booked"
+  | "skipped_roe"
+  | "in_probe"
+  | "untested"
+  /** @deprecated Spec #111 — do not emit for candidate-match; maps to probed if needed for old readers */
+  | "attempted"
+  | "blocked";
 
 export type CoverageAttempt = {
   location: string;
@@ -33,11 +47,33 @@ export type HardProcessMetrics = {
    * Never inferred solely from candidates.length.
    */
   fanout_packages_n: number;
+  /**
+   * Surface-family ledger rows (Spec #111 five families: surface).
+   * Statuses are ledger-like; candidate-match alone must not invent probed.
+   */
   coverage_attempts: CoverageAttempt[];
-  /** (attempted+blocked+deadend) / required surfaces; 1 when no surfaces required. */
+  /**
+   * Spec #111 R1 / I1.2: terminal surface statuses only / total (in_probe excluded).
+   * Preferred honest name for the surface family rate.
+   */
+  surface_acted_rate: number;
+  /**
+   * @deprecated Spec #111 — alias of surface_acted_rate (same R1 semantics).
+   * Do not interpret as "candidate path-match = attempted".
+   */
   coverage_attempt_rate: number;
-  /** Always present — booking export for dual-arm scorecards. */
+  /** Always present — booking export for dual-arm scorecards (JSON findings / stage delta). */
   book_outcomes: BookOutcomes;
+  /**
+   * Spec #111 findings family (I1.4): Finding Store booked count (absolute).
+   * Distinct from book_outcomes.booked_n (stage JSON/platform delta accumulate).
+   * Compare to platform-visible via findingsBookedAlignment.
+   */
+  findings_booked_n: number;
+  /**
+   * Spec #111 L2 family: done-only numerator rate (I1.5 S1). Optional when L2 not projected.
+   */
+  l2_done_rate?: number;
 };
 
 export type DiscoveryYieldInput = {
@@ -78,43 +114,73 @@ export function evaluateDiscoveryYield(input: DiscoveryYieldInput): {
 }
 
 /**
- * Coverage attempts derived from recon surfaces vs candidates/deadends (no target keys).
- * - candidate location path-matches surface → attempted
- * - deadend string mentions surface path/location → deadend
+ * Surface coverage from ledger-like statuses (Spec #111).
+ * **I1.2:** candidate path-match alone does **not** mark probed/attempted.
+ * - optional per-surface status from SurfaceLedger
+ * - deadend string mentions surface path → deadend
  * - else untested (must not read as success)
  */
 export function deriveCoverageAttempts(input: {
-  surfaces: Array<Pick<SubagentSurface, "location"> | string>;
-  candidates: Array<Pick<SubagentCandidate, "location"> | string>;
+  surfaces: Array<Pick<SubagentSurface, "location"> | string | { location: string; status?: string }>;
+  /**
+   * Probe evidence locations only. Upgrade surface when **pathKey equals** a candidate location
+   * (exact pathname). Loose substring match is forbidden (Spec #111 I1.2).
+   */
+  candidates?: Array<Pick<SubagentCandidate, "location"> | string>;
   deadends: string[];
 }): CoverageAttempt[] {
-  const surfaces = input.surfaces
-    .map((s) => (typeof s === "string" ? s : String(s.location || "")))
-    .map((s) => s.trim())
-    .filter((s) => s.length >= 2);
-  const candLocs = input.candidates
-    .map((c) => (typeof c === "string" ? c : String(c.location || "")))
-    .map((s) => s.trim())
-    .filter(Boolean);
   const deadText = (input.deadends || []).join("\n").toLowerCase();
+  const candKeys = new Set(
+    (input.candidates || [])
+      .map((c) => (typeof c === "string" ? c : String(c.location || "")))
+      .map((s) => pathKey(s.trim()))
+      .filter((k) => k.length >= 2),
+  );
 
   const seen = new Set<string>();
   const out: CoverageAttempt[] = [];
-  for (const loc of surfaces) {
+  for (const raw of input.surfaces) {
+    const loc =
+      typeof raw === "string"
+        ? raw.trim()
+        : String((raw as { location?: string }).location || "").trim();
+    if (loc.length < 2) continue;
     const key = pathKey(loc) || loc.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    const hitCand = candLocs.some((c) => {
-      const ck = pathKey(c) || c.toLowerCase();
-      return ck === key || ck.includes(key) || key.includes(ck);
-    });
-    if (hitCand) {
-      out.push({ location: loc, status: "attempted", note: "candidate location matched surface" });
+
+    const explicit =
+      typeof raw === "object" && raw && "status" in raw
+        ? String((raw as { status?: string }).status || "")
+            .trim()
+            .toLowerCase()
+        : "";
+    if (
+      explicit === "probed" ||
+      explicit === "booked" ||
+      explicit === "deadend" ||
+      explicit === "skipped_roe" ||
+      explicit === "in_probe" ||
+      explicit === "skipped"
+    ) {
+      const st =
+        explicit === "skipped" ? "skipped_roe" : (explicit as CoverageAttemptStatus);
+      out.push({ location: loc, status: st, note: `ledger status=${explicit}` });
       continue;
     }
+
     const locTok = (pathKey(loc) || loc).toLowerCase();
     if (locTok.length >= 4 && deadText.includes(locTok.slice(0, Math.min(locTok.length, 48)))) {
       out.push({ location: loc, status: "deadend", note: "mentioned in deadends" });
+      continue;
+    }
+    // Exact pathKey match only — not loose includes (Spec #111).
+    if (key && candKeys.has(key)) {
+      out.push({
+        location: loc,
+        status: "probed",
+        note: "candidate at same pathKey (probe evidence)",
+      });
       continue;
     }
     out.push({ location: loc, status: "untested" });
@@ -122,10 +188,42 @@ export function deriveCoverageAttempts(input: {
   return out;
 }
 
-export function coverageAttemptRate(attempts: CoverageAttempt[]): number {
+/** Terminal surface statuses for R1 surface_acted_rate (I1.2). */
+export function isSurfaceTerminalStatus(status: CoverageAttemptStatus | string): boolean {
+  const s = String(status || "");
+  return s === "probed" || s === "deadend" || s === "booked" || s === "skipped_roe" || s === "attempted";
+}
+
+/**
+ * surface_acted_rate R1: terminal only; in_probe excluded from numerator.
+ * Empty ledger → 1 (no surfaces required).
+ */
+export function surfaceActedRate(attempts: CoverageAttempt[]): number {
   if (!attempts.length) return 1;
-  const done = attempts.filter((a) => a.status !== "untested").length;
+  const done = attempts.filter((a) => isSurfaceTerminalStatus(a.status)).length;
   return done / attempts.length;
+}
+
+/** @deprecated Use surfaceActedRate — name kept for callers; semantics are R1 terminal. */
+export function coverageAttemptRate(attempts: CoverageAttempt[]): number {
+  return surfaceActedRate(attempts);
+}
+
+/** Fanout P1: count all executed package attempts (success+fail+abort). */
+export function countFanoutPackagesP1(input: {
+  success_n?: number;
+  fail_n?: number;
+  abort_n?: number;
+  executed_n?: number;
+}): number {
+  if (typeof input.executed_n === "number" && Number.isFinite(input.executed_n)) {
+    return Math.max(0, Math.floor(input.executed_n));
+  }
+  return (
+    Math.max(0, Math.floor(input.success_n || 0)) +
+    Math.max(0, Math.floor(input.fail_n || 0)) +
+    Math.max(0, Math.floor(input.abort_n || 0))
+  );
 }
 
 export function emptyHardProcessMetrics(): HardProcessMetrics {
@@ -138,9 +236,30 @@ export function emptyHardProcessMetrics(): HardProcessMetrics {
     surfaces_n: 0,
     fanout_packages_n: 0,
     coverage_attempts: [],
+    surface_acted_rate: 1,
     coverage_attempt_rate: 1,
     book_outcomes: { booked_n: 0, reject_hints_n: 0 },
+    findings_booked_n: 0,
   };
+}
+
+/**
+ * Five metric families must not impersonate each other (I1.1).
+ * Returns family keys present on process metrics for contract tests.
+ */
+export function metricFamilyKeys(): readonly string[] {
+  return ["surface", "fanout", "findings", "l2", "soft"] as const;
+}
+
+/** I1.4: Store booked vs platform-visible mismatch is a red alignment signal. */
+export function findingsBookedAlignment(input: {
+  findings_booked_n: number;
+  platform_visible_n: number;
+}): { aligned: boolean; red_signal: boolean } {
+  const a = Math.max(0, Math.floor(input.findings_booked_n));
+  const b = Math.max(0, Math.floor(input.platform_visible_n));
+  const aligned = a === b;
+  return { aligned, red_signal: !aligned };
 }
 
 /**
@@ -156,6 +275,11 @@ export function accumulateStageFeedback(
     /** Real packages joined this stage (from promote/host). Default 0 — do not invent. */
     fanoutPackagesN?: number;
     bookOutcomes?: { booked_n?: number; reject_hints_n?: number };
+    /**
+     * Absolute Finding Store booked count after this stage (I1.4 findings family).
+     * When omitted, prior findings_booked_n is kept (do not invent from candidates).
+     */
+    findingsBookedN?: number;
     handoffSurfacesN?: number;
   },
 ): HardProcessMetrics {
@@ -163,6 +287,7 @@ export function accumulateStageFeedback(
     typeof input.fanoutPackagesN === "number" && Number.isFinite(input.fanoutPackagesN)
       ? Math.max(0, Math.floor(input.fanoutPackagesN))
       : 0;
+  const bookedDelta = input.bookOutcomes?.booked_n || 0;
   const next: HardProcessMetrics = {
     ...metrics,
     stages_done: metrics.stages_done.includes(input.stageId)
@@ -178,12 +303,17 @@ export function accumulateStageFeedback(
     fanout_packages_n: metrics.fanout_packages_n + fanoutN,
     discovery_yield_notes: [...metrics.discovery_yield_notes],
     book_outcomes: {
-      booked_n: metrics.book_outcomes.booked_n + (input.bookOutcomes?.booked_n || 0),
+      booked_n: metrics.book_outcomes.booked_n + bookedDelta,
       reject_hints_n:
         metrics.book_outcomes.reject_hints_n +
         (input.structureFailed ? 1 : 0) +
         (input.bookOutcomes?.reject_hints_n || 0),
     },
+    // Absolute Store count when stage reports it; else keep prior (never invent).
+    findings_booked_n:
+      typeof input.findingsBookedN === "number" && Number.isFinite(input.findingsBookedN)
+        ? Math.max(0, Math.floor(input.findingsBookedN))
+        : metrics.findings_booked_n ?? 0,
   };
 
   const yieldEval = evaluateDiscoveryYield({
@@ -229,7 +359,13 @@ export function accumulateStageFeedback(
   // Merge: if prior attempt was better than untested, keep better
   const priorMap = new Map(metrics.coverage_attempts.map((a) => [pathKey(a.location) || a.location, a]));
   const rank = (s: CoverageAttemptStatus) =>
-    s === "attempted" ? 3 : s === "deadend" ? 2 : s === "blocked" ? 2 : 0;
+    s === "booked" || s === "probed" || s === "attempted"
+      ? 3
+      : s === "deadend" || s === "skipped_roe" || s === "blocked"
+        ? 2
+        : s === "in_probe"
+          ? 1
+          : 0;
   next.coverage_attempts = next.coverage_attempts.map((a) => {
     const k = pathKey(a.location) || a.location;
     const prev = priorMap.get(k);
@@ -243,6 +379,8 @@ export function accumulateStageFeedback(
     }
   }
 
-  next.coverage_attempt_rate = coverageAttemptRate(next.coverage_attempts);
+  const rate = surfaceActedRate(next.coverage_attempts);
+  next.surface_acted_rate = rate;
+  next.coverage_attempt_rate = rate; // deprecated alias — same R1 value
   return next;
 }

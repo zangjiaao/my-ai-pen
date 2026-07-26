@@ -32,7 +32,11 @@ Per-stage pi sessions still use isolated work dirs (`taskDir/hard-graph/<graphId
 | **Booking / proof (A1)** | After each stage, structured **candidates** upsert into **parent** lifecycle by package key `hard-stage:<stageId>` or fan-out `hard-stage:<stageId>:<workerId>`. Empty-candidate attempts do not wipe a prior pack for that key. Worker packages promoted from stage child cache on finalize. Next stage is **seeded** so book-only stages can `finding(confirm)` with matching `location` / `candidate_index` and verbatim `proof_excerpt` (poc may be synthesized from handoff proof). Hallucinated proof still fails closed; repeated identical fails surface **bookable_unbooked** anti-thrash. |
 | **Session jars (A4)** | Before a stage: seed `parent taskDir/session/` → stage workDir via session-seed helpers. After a stage: promote stage `session/` → parent (best-effort; child cookies win). |
 | **Agent Graph** | Hard stage child is **depth 0** with `SubagentHost` when tools allow `subagent` (not nest-banned). Workers nest-ban at depth ≥1. |
-| **Process Feedback** | Runner accumulates `processMetrics`: structure fails, discovery-yield soft-fails (rich surfaces + empty cand/deadend), coverage attempts (attempted/deadend/untested) — **no** expected-finding counts. |
+| **Process Feedback** | Runner accumulates `processMetrics`: structure fails, discovery-yield soft-fails (rich surfaces + empty cand/deadend), surface ledger statuses + `surface_acted_rate` (R1 terminal only; **not** candidate path-match = probed), fanout package attempts (P1; hint only) — **no** expected-finding counts (Spec #116 / #111). |
+| **Finding Store** | Store-first candidates/findings (survives stages); package settlement auto-enqueues Feedback; Main `finding(confirm)` only with `finding_id` after `feedback_ok`; confirm ⇒ platform `vuln_found` / ledger (Spec #116 / #112). `result.json` is projection/audit, not sole SoT. |
+| **Package settlement** | Wave = one package attempt (≤2 attempts/package, not a stage pool). Honest partial may pass; silent partial fail-closed. Salvage ≠ success. Stage `max_retries` independent — stage retry resets non-success package budgets; successful evidence kept. |
+| **UI interrupt** | Cancels the in-flight turn only (≠ package-fail). Captain stage session is parked (not disposed) for continue; no empty-message abort; no auto full-batch replay (Spec #116 / #109). |
+| **L2 coverage SoT** | Expert Graph: GraphStore only (todo tool is a facade → `setStageTodos` + Graph `plan_tree`). Non-Graph: TodoStore. Formal Graph packages must anchor existing L2 `plan_node_id`. |
 
 Handoff JSON in the stage prompt remains informational; booking authority is lifecycle cache + groundable observations, not prompt-only tables. Settlement still does not require N bookings.
 
@@ -50,7 +54,7 @@ Hard Graph stages share the **same platform message contracts** free Expert / De
 | **Subagent lifecycle** | `subagent_started` / `subagent_finished` on the platform sink when packages spawn |
 | **Worker chips** | Package-owned L2 todos may carry `agent_id` / `owner_agent_name` for Tasks chips |
 
-Probe-class stages that allow `subagent` **prefer packages** when multi-class work is justified (harness steer, not answer keys / fixed N). Serial Main remains allowed. Soft product mode stays retired; Default never enters Expert Graph.
+Probe-class stages that allow `subagent` **prefer packages** when multi-class work is justified (harness steer, not answer keys / fixed N / hard quotas). **Anti-micro-spawn** for trivial single-URL chores. Expert Graph packages **require `plan_node_id`** (L2 anchor). Serial Main remains allowed if Feedback accepts. Soft product mode stays retired; Default never enters Expert Graph.
 
 ## Modes
 

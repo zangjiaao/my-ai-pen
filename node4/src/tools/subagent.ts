@@ -35,6 +35,14 @@ import {
 } from "../runtime/concurrency.js";
 import { promoteChildSessionToParent } from "../runtime/subagent-session-seed.js";
 import { getOrCreateIdlePool } from "../runtime/subagent-idle-pool.js";
+import {
+  assertGraphPackageAnchor,
+  checkPackageAttemptBudget,
+  markPackageHonesty,
+  bumpPackageAttempt,
+  ensureProcessQuality,
+} from "../runtime/package-honesty-host.js";
+import { ingestPackageCandidatesToStore } from "../runtime/finding-store.js";
 import { dirname } from "node:path";
 
 export type SubagentPackageResult = {
@@ -60,6 +68,13 @@ export type SubagentPackageResult = {
   session_reuse?: Record<string, unknown>;
   /** When idle: prefer this for same-path gap re-dispatch. */
   resume_hint?: { agent_id: string; path_key: string; reason: string };
+  /** Tasks Worker chip bind path (explicit | reattach | single_free | fuzzy | pkg). */
+  plan_bind?: {
+    path: string;
+    node_id?: string;
+    requested_node_id?: string;
+    hint?: string;
+  };
 };
 
 type ResolvedPackage = {
@@ -72,6 +87,8 @@ type ResolvedPackage = {
   skill_id?: string;
   node_type?: string;
   goal_id?: string;
+  /** Explicit Hard Graph L2 todo node_id for Worker chip ownership. */
+  plan_node_id?: string;
   command?: string;
   timeout_seconds: number;
   /** Explicit warm follow-up of a parked worker (affinity: same path). */
@@ -88,6 +105,15 @@ const packageItemSchema = Type.Object({
   skill_id: Type.Optional(Type.String()),
   node_type: Type.Optional(Type.String()),
   goal_id: Type.Optional(Type.String()),
+  plan_node_id: Type.Optional(
+    Type.String({
+      description:
+        "Hard Graph L2 todo node_id to attach the Worker chip (preferred over title/goal fuzzy match).",
+    }),
+  ),
+  todo_node_id: Type.Optional(
+    Type.String({ description: "Alias of plan_node_id" }),
+  ),
   command: Type.Optional(Type.String()),
   timeout_seconds: Type.Optional(Type.Number()),
   resume_agent_id: Type.Optional(
@@ -110,8 +136,9 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
     label: "Subagent",
     description: [
       "Child work packages under this task workspace (OMP keep-alive).",
-      "SPAWN FLAT: target, scope, already_done, this_turn_goal, success_criteria (+ node_type/skill_id).",
+      "SPAWN FLAT: target, scope, already_done, this_turn_goal, success_criteria (+ node_type/skill_id/plan_node_id).",
       "SPAWN BATCH: packages=[{...}] concurrent (NODE4_SUBAGENT_CONCURRENCY default 8). Orthogonal paths = cold workers.",
+      "plan_node_id (or todo_node_id): REQUIRED for correct Tasks Worker chip when multiple stage todos exist. Prefer todo node_id from your last todo.init/list.",
       "WARM: resume_agent_id=prior agent_id on SAME path (gap/timeout follow-up). Soft-fail workers stay idle for resume.",
       "LIST: op=list → idle_workers[] (agent_id, path_key, …).",
       "RELEASE: op=release + agent_id (or release_agent_id) — dispose worker now; else idle TTL (~420s) / maxIdle LRU auto-releases.",
@@ -137,6 +164,13 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
       command: Type.Optional(Type.String()),
       skill_id: Type.Optional(Type.String()),
       node_type: Type.Optional(Type.String()),
+      plan_node_id: Type.Optional(
+        Type.String({
+          description:
+            "Hard Graph L2 todo node_id for Worker chip ownership (preferred over fuzzy title match).",
+        }),
+      ),
+      todo_node_id: Type.Optional(Type.String({ description: "Alias of plan_node_id" })),
       timeout_seconds: Type.Optional(Type.Number()),
       resume_agent_id: Type.Optional(
         Type.String({
@@ -230,6 +264,13 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
           const raw = packagesRaw![i];
           const r = resolvePackageInput(params, raw, i);
           if ("error" in r) return textResult(r.error, { isError: true });
+          const anchorErr = assertGraphPackageAnchor(runtime, r.pkg, `packages[${i}]`);
+          if (anchorErr) return textResult(anchorErr, { isError: true });
+          const attemptBudget = checkPackageAttemptBudget(runtime, r.pkg.plan_node_id);
+          if (!attemptBudget.ok) {
+            skipped.push(softFailPackage(r.pkg, attemptBudget.error!, runtime, "never_started"));
+            continue;
+          }
           const g = validateGraphAndCommand(runtime, r.pkg);
           if (g) return textResult(g, { isError: true });
           if (r.pkg.goal_id && !runtime.goals.get(r.pkg.goal_id)) {
@@ -237,7 +278,7 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
           }
           const pathLimit = checkAndCountPathDispatch(runtime, r.pkg.target);
           if (!pathLimit.ok) {
-            skipped.push(softFailPackage(r.pkg, pathLimit.error!));
+            skipped.push(softFailPackage(r.pkg, pathLimit.error!, runtime, "never_started"));
             continue;
           }
           resolved.push(r.pkg);
@@ -252,7 +293,7 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
               return await runSubagentPackage(runtime, pkg, postLock);
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
-              return softFailPackage(pkg, msg);
+              return softFailPackage(pkg, msg, runtime, "failed");
             }
           },
           runtime.lifecycle.abortSignal,
@@ -260,7 +301,13 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
 
         const results: SubagentPackageResult[] = [
           ...rawResults.map((r, i) =>
-            r ?? softFailPackage(resolved[i]!, "package cancelled or failed before result"),
+            r ??
+            softFailPackage(
+              resolved[i]!,
+              "package cancelled or failed before result",
+              runtime,
+              runtime.lifecycle.abortSignal?.aborted ? "aborted" : "never_started",
+            ),
           ),
           ...skipped,
         ];
@@ -300,6 +347,10 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
       // Flat single package
       const flat = resolvePackageInput(params, null, 0);
       if ("error" in flat) return textResult(flat.error, { isError: true });
+      const anchorErr = assertGraphPackageAnchor(runtime, flat.pkg, "flat subagent");
+      if (anchorErr) return textResult(anchorErr, { isError: true });
+      const attemptBudget = checkPackageAttemptBudget(runtime, flat.pkg.plan_node_id);
+      if (!attemptBudget.ok) return textResult(attemptBudget.error!, { isError: true });
       const g = validateGraphAndCommand(runtime, flat.pkg);
       if (g) return textResult(g, { isError: true });
       if (flat.pkg.goal_id && !runtime.goals.get(flat.pkg.goal_id)) {
@@ -405,6 +456,13 @@ function resolvePackageInput(
       skill_id: src.skill_id != null ? String(src.skill_id).trim() : undefined,
       node_type: src.node_type != null ? String(src.node_type).trim() : item ? undefined : (top.node_type != null ? String(top.node_type).trim() : undefined),
       goal_id: src.goal_id != null ? String(src.goal_id).trim() : undefined,
+      plan_node_id: (() => {
+        const raw =
+          src.plan_node_id ??
+          src.todo_node_id ??
+          (!item ? top.plan_node_id ?? top.todo_node_id : undefined);
+        return raw != null ? String(raw).trim() || undefined : undefined;
+      })(),
       command: src.command != null ? String(src.command).trim() : undefined,
       resume_agent_id:
         src.resume_agent_id != null
@@ -461,7 +519,15 @@ function checkAndCountPathDispatch(
   return { ok: true };
 }
 
-function softFailPackage(pkg: ResolvedPackage, error: string): SubagentPackageResult {
+function softFailPackage(
+  pkg: ResolvedPackage,
+  error: string,
+  runtime?: ToolRuntime,
+  terminal: "failed" | "never_started" | "aborted" = "failed",
+): SubagentPackageResult {
+  if (runtime) {
+    markPackageHonesty(runtime, pkg, terminal);
+  }
   const handoff = {
     target: pkg.target,
     scope: pkg.scope,
@@ -495,8 +561,11 @@ async function runSubagentPackage(
   postLock: <T>(fn: () => Promise<T>) => Promise<T>,
 ): Promise<SubagentPackageResult> {
   if (!runtime.subagents) {
-    return softFailPackage(pkg, "subagent host not available");
+    return softFailPackage(pkg, "subagent host not available", runtime, "never_started");
   }
+
+  // Spec #116 I0.11: mark running so L2 done is hard-rejected mid-flight
+  markPackageHonesty(runtime, pkg, "running");
 
   const handoff = validateSubagentHandoff({
     target: pkg.target,
@@ -549,6 +618,10 @@ async function runSubagentPackage(
     assignment: handoff.packageText,
     goalId: pkg.goal_id || undefined,
     nodeType,
+    // Pure this_turn_goal for panel/Tasks — not "[nodeType] goal" or full handoff markdown.
+    label: handoff.handoff.this_turn_goal || assignmentLabel,
+    skillId,
+    planNodeId: pkg.plan_node_id || undefined,
     // Same workDir only when we hold a warm handle.
     subagentId: warmHandle ? warmHandle.agentId : undefined,
     worker: async (ctx) => {
@@ -762,6 +835,33 @@ async function runSubagentPackage(
             }
           : undefined;
 
+    // Spec #116: track package terminal for L2 done gates + Finding Store enqueue
+    const salvaged = Boolean(rawData && rawData.salvaged === true);
+    const aborted = Boolean(runtime.lifecycle.abortSignal?.aborted);
+    const terminal = aborted
+      ? "aborted"
+      : result.ok
+        ? "success"
+        : "failed";
+    markPackageHonesty(runtime, pkg, terminal as "success" | "failed" | "aborted", {
+      salvaged,
+      subagentId: result.subagentId,
+    });
+    // Upsert candidates into Finding Store (Store-first) + L0 Feedback (production path)
+    const fstore = ensureProcessQuality(runtime.lifecycle).findingStore;
+    if (structured.candidates?.length) {
+      ingestPackageCandidatesToStore(fstore, structured.candidates, {
+        package_id: result.subagentId,
+        plan_node_id: pkg.plan_node_id,
+        stage_id: runtime.lifecycle.hardGraphRun?.stageId,
+        agent_id: agentId,
+        fallback_location: handoff.handoff.target,
+      });
+    }
+
+    // Spec #116 I0.1: count package attempts against plan_node_id budget
+    bumpPackageAttempt(runtime, pkg.plan_node_id);
+
     return {
       ok: result.ok,
       subagent_id: result.subagentId,
@@ -780,6 +880,18 @@ async function runSubagentPackage(
       assignment_label: assignmentLabel,
       session_reuse: sessionReuse,
       resume_hint: resumeHint,
+      plan_bind: result.planBind
+        ? {
+            path: result.planBind.path,
+            node_id: result.planBind.node_id,
+            requested_node_id: result.planBind.requested_node_id,
+            hint:
+              result.planBind.hint ||
+              (result.planBind.path === "fuzzy" || result.planBind.path === "pkg"
+                ? "Pass plan_node_id (Tasks L2 todo node_id) on next subagent spawn for deterministic Worker chip ownership."
+                : undefined),
+          }
+        : undefined,
       error: result.ok ? undefined : result.summary,
     };
   });
