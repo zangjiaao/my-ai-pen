@@ -63,6 +63,11 @@ export type StageExecutorOutput = {
    * Main confirms with finding(confirm, finding_id=…). Empty when zero confirmable rows.
    */
   feedbackOkIds?: string[];
+  /**
+   * Spec #139 D3 / NC-L1: Product-state L1 Critic result after L0 structure gate.
+   * When decision=refine, runner treats stage attempt as failed_attempt (bounded).
+   */
+  l1?: { decision: "pass" | "refine"; gaps: string[] };
 };
 
 export type StageExecutor = (input: StageExecutorInput) => Promise<StageExecutorOutput>;
@@ -266,6 +271,7 @@ export async function runHardGraph(options: {
       let outBookOutcomes: { booked_n?: number; reject_hints_n?: number } | undefined;
       let outFindingsBookedN: number | undefined;
       let outFeedbackOkIds: string[] | undefined;
+      let outL1: { decision: "pass" | "refine"; gaps: string[] } | undefined;
       try {
         const out = await options.executeStage({
           stage,
@@ -287,6 +293,7 @@ export async function runHardGraph(options: {
         outFeedbackOkIds = Array.isArray(out.feedbackOkIds)
           ? out.feedbackOkIds.map((id) => String(id || "").trim()).filter(Boolean)
           : undefined;
+        outL1 = out.l1;
       } catch (err) {
         structured = normalizeSubagentResult(
           {
@@ -313,7 +320,39 @@ export async function runHardGraph(options: {
       const findingsBookedN = outFindingsBookedN;
       const feedback_ok_ids = outFeedbackOkIds;
 
+      // Spec #139 D3: L0 structure first; L1 only after L0 pass; L1 cannot clear L0 fail
       if (gate.ok) {
+        const l1 = outL1;
+        if (l1 && l1.decision === "refine") {
+          const l1Errors = (l1.gaps || []).map((g) => `l1_refine:${g}`).slice(0, 12);
+          lastErrors = l1Errors.length ? l1Errors : ["l1_refine"];
+          processMetrics = accumulateStageFeedback(processMetrics, {
+            stageId: stage.id,
+            structured,
+            structureFailed: false,
+            fanoutPackagesN,
+            bookOutcomes,
+            findingsBookedN,
+            handoffSurfacesN: handoff.surfaces.length,
+          });
+          const isLast = attempt >= maxAttempts;
+          await emit({
+            type: "stage_end",
+            graphId: graph.id,
+            stageId: stage.id,
+            stageIndex,
+            attempt,
+            outcome: isLast ? "blocked" : "failed_attempt",
+            errors: lastErrors,
+            summary: structured.summary,
+            ...(feedback_ok_ids?.length ? { feedback_ok_ids } : {}),
+          });
+          if (isLast) {
+            // exhausted L1 refine budget → do not advance
+            break;
+          }
+          continue;
+        }
         handoff = mergeHandoff(handoff, structured, stage.id);
         processMetrics = accumulateStageFeedback(processMetrics, {
           stageId: stage.id,

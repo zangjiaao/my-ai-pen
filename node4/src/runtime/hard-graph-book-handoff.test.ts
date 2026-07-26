@@ -91,6 +91,7 @@ function multiCandStructured() {
       title: p.title,
       location: p.location,
       claim: p.title,
+      severity: "high",
       proof_excerpt: p.proof,
       poc_hint: p.poc_hint,
     })),
@@ -267,6 +268,7 @@ absorbStageResultIntoParent(parent5, {
       {
         title: "Key Exposure",
         location: "http://127.0.0.1:3010/encryptionkeys/premium.key",
+        severity: "high",
         proof_excerpt: PROOF_ONLY,
         // no poc_hint
       },

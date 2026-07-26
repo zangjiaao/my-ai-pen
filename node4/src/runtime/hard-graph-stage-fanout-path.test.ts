@@ -117,6 +117,7 @@ rememberSubagentEvidence(childRuntime, {
     {
       title: "Login SQLi",
       location: "http://127.0.0.1:3010/rest/user/login",
+      severity: "high",
       proof_excerpt: PROOF_A,
       poc_hint: "POST login with SQLi email; observed 200 JWT for admin in body",
     },
@@ -125,6 +126,7 @@ rememberSubagentEvidence(childRuntime, {
     {
       title: "Login SQLi",
       location: "http://127.0.0.1:3010/rest/user/login",
+      severity: "high",
       proof_excerpt: PROOF_A,
     },
   ]),
@@ -137,6 +139,7 @@ rememberSubagentEvidence(childRuntime, {
     {
       title: "Memories hash leak",
       location: "http://127.0.0.1:3010/rest/memories",
+      severity: "high",
       proof_excerpt: PROOF_B,
     },
   ],
@@ -144,6 +147,7 @@ rememberSubagentEvidence(childRuntime, {
     {
       title: "Memories hash leak",
       location: "http://127.0.0.1:3010/rest/memories",
+      severity: "high",
       proof_excerpt: PROOF_B,
     },
   ]),

@@ -57,7 +57,7 @@ A stage may advance when some packages succeeded and others failed, if successes
 _Avoid_: any-package-fail discards all successes; pretending failed packages were covered
 
 **Feedback L0 / L1**:
-**L0** is mechanical Feedback (structure and package-outcome honesty gates). **L1** is an optional Critic agent that may require a bounded refine before advance; it cannot bypass L0.
+**L0** is mechanical Feedback (structure and package-outcome honesty gates, proof presence, severity present on book path — fail-closed, no silent medium). **L1** is a Critic over Product state that may require a bounded refine before advance after every stage that passes L0 (including init/surface); it cannot bypass L0. Metrics are observability only — not a third Feedback tier.
 _Avoid_: Feedback Graph as pure LLM overseer with no hard baseline; field-only Feedback with no refine loop when product wants ADK-like hybrid
 
 **User interrupt (abort)**:

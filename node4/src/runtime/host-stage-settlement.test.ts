@@ -273,6 +273,7 @@ assert.equal(
         title: "SQLi",
         location: "http://t/login",
         claim: "auth bypass",
+        severity: "high",
         proof_excerpt: "MySQL syntax error near ''' OR 1=1--' at line 1 when submitting login form",
       },
     ],
@@ -350,6 +351,7 @@ assert.equal(
         {
           title: "X",
           location: "http://t/x",
+          severity: "high",
           proof_excerpt: "proof excerpt long enough for L0 mechanical feedback gate xx",
         },
       ],

@@ -3,6 +3,8 @@
  * Run: node --import tsx src/runtime/engagement-roe.test.ts
  */
 import {
+  assertDestructiveAllowed,
+  classifyDestructiveAction,
   formatRoeInjection,
   isKnownEngagementTemplate,
   resolveEngagementRoe,
@@ -44,6 +46,17 @@ assert(
 // Conservative default (blank)
 assert(resolveEngagementRoe({}).allowPostex === false, "blank defaults postex off");
 assert(resolveEngagementRoe({ engagement: "pentest" }).allowPostex === false, "plain pentest postex off");
+
+// Spec #139 NC-RoE-Destructive: default deny
+assert(resolveEngagementRoe({}).allowDestructive === false, "destructive default deny");
+assert(assessText.includes("allow_destructive: false"), "injection has allow_destructive false");
+assert(classifyDestructiveAction("reset database via setup.php").destructive === true, "db wipe classified");
+assert(classifyDestructiveAction("GET /login form fields").destructive === false, "read not destructive");
+const denyWipe = assertDestructiveAllowed(assess, "DROP TABLE users and wipe database");
+assert(denyWipe.ok === false, "wipe denied under assessment");
+const labAllow = resolveEngagementRoe({ engagementTemplate: "app_assessment", allowDestructive: true });
+assert(labAllow.allowDestructive === true, "lab allow_destructive");
+assert(assertDestructiveAllowed(labAllow, "reset database").ok === true, "lab may wipe when allowed");
 
 // Known templates only for isKnown helper (not free-text invent path)
 assert(isKnownEngagementTemplate("app_assessment"), "known app_assessment");

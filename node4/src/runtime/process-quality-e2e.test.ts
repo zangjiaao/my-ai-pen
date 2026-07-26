@@ -38,6 +38,7 @@ try {
         title: "SQL injection login",
         location: "http://host/login.php",
         claim: "Auth bypass via SQLi on login form",
+        severity: "high",
         proof_excerpt:
           "MySQL syntax error near ''' OR 1=1--' at line 1 when submitting login — demonstrable differential",
         poc_hint:
@@ -55,6 +56,7 @@ try {
   const p = pendingStore.upsert({
     title: "x",
     location: "http://t/x",
+    severity: "high",
     proof_excerpt: "proof text long enough for feedback gate requirements here",
   });
   pendingStore.enqueueFeedback([p.id]);

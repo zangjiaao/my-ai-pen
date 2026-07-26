@@ -147,9 +147,12 @@ def _merge_status(current: str | None, incoming: str | None) -> str:
     return incoming_value if rank.get(incoming_value, 1) >= rank.get(current_value, 1) else current_value
 
 
-def _normalize_severity(value: object) -> str:
-    severity = str(value or "medium").strip().lower()
-    return severity if severity in {"critical", "high", "medium", "low", "info"} else "medium"
+def _normalize_severity(value: object) -> str | None:
+    """Spec #139 D1 / NC-Severity: fail closed — no silent medium default."""
+    severity = str(value or "").strip().lower()
+    if not severity:
+        return None
+    return severity if severity in {"critical", "high", "medium", "low", "info"} else None
 
 
 # Agent/runtime events belong in the conversation timeline, not the platform audit ledger.
@@ -2185,6 +2188,18 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
         # Prefer explicit PoC (reproduction + observed result); fall back carefully.
         poc_value = msg.get("poc") or msg.get("evidence_summary") or msg.get("location") or ""
         severity = _normalize_severity(msg.get("severity"))
+        if severity is None:
+            # Spec #139 D1: fail closed — no silent medium on empty/invalid severity
+            await self._send(
+                {
+                    "type": "vuln_found_error",
+                    "conversation_id": conversation_id,
+                    "task_id": msg.get("task_id"),
+                    "error": "severity required (critical|high|medium|low|info); silent medium banned",
+                    "title": msg.get("title"),
+                }
+            )
+            return
         cvss_value = msg.get("cvss")
         description = (
             msg.get("description")

@@ -9,6 +9,9 @@ export type SubagentCandidate = {
   claim?: string;
   proof_excerpt?: string;
   poc_hint?: string;
+  /** Agent-assigned severity (Spec #139 D1) — required for package→Store ingest. */
+  severity?: string;
+  class_key?: string;
 };
 
 /** Attack surface inventory item from recon (live recon only — no invented modules). */
@@ -71,6 +74,8 @@ function asCandidates(v: unknown): SubagentCandidate[] {
       claim: asString(o.claim ?? o.description, 2000) || undefined,
       proof_excerpt: asString(o.proof_excerpt ?? o.proof, 4000) || undefined,
       poc_hint: asString(o.poc_hint ?? o.poc, 2000) || undefined,
+      severity: asString(o.severity, 32) || undefined,
+      class_key: asString(o.class_key ?? o.classKey, 80) || undefined,
     };
     if (c.title || c.location || c.claim || c.proof_excerpt) out.push(c);
   }
@@ -422,7 +427,7 @@ export function formatSubagentReturnContractPrompt(): string {
     '  "ok": true,',
     '  "summary": "one paragraph",',
     '  "surfaces": [{ "location": "URL/path YOU observed", "kind": "form|api|upload|page|other", "params": ["id"], "auth": "none|session|basic" }],',
-    '  "candidates": [{ "title": "...", "location": "URL/path", "claim": "impact", "proof_excerpt": "VERBATIM tool quote (~32+ chars)", "poc_hint": "steps + observed result" }],',
+    '  "candidates": [{ "title": "...", "location": "URL/path", "claim": "impact", "severity": "critical|high|medium|low|info", "proof_excerpt": "VERBATIM tool quote (~32+ chars)", "poc_hint": "steps + observed result" }],',
     '  "facts": [{ "key": "optional", "summary": "cognition" }],',
     '  "deadends": ["vector exhausted because ..."],',
     '  "artifacts": ["relative paths"]',

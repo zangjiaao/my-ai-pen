@@ -43,6 +43,10 @@ import {
   ensureProcessQuality,
 } from "../runtime/package-honesty-host.js";
 import { ingestPackageCandidatesToStore } from "../runtime/finding-store.js";
+import {
+  checkDiscoveryAvoidCollision,
+  listPriorAvoidUnits,
+} from "../runtime/prior-seed.js";
 import { dirname } from "node:path";
 
 export type SubagentPackageResult = {
@@ -93,6 +97,12 @@ type ResolvedPackage = {
   timeout_seconds: number;
   /** Explicit warm follow-up of a parked worker (affinity: same path). */
   resume_agent_id?: string;
+  /** Spec #139 NC-Prior: re-verify packages name prior Store ids. */
+  prior_finding_ids?: string[];
+  /** discovery | re-verify (default discovery for avoid gate). */
+  package_kind?: string;
+  class_key?: string;
+  title?: string;
 };
 
 const packageItemSchema = Type.Object({
@@ -281,6 +291,25 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
             skipped.push(softFailPackage(r.pkg, pathLimit.error!, runtime, "never_started"));
             continue;
           }
+          // Spec #139 NC-Prior: inject prior avoid units into already_done; host hard-fail discovery collision
+          const pq = ensureProcessQuality(runtime.lifecycle);
+          const avoidUnits = listPriorAvoidUnits(pq.findingStore);
+          if (avoidUnits.length && !/prior pathKey|pathKey∩class/i.test(r.pkg.already_done)) {
+            r.pkg.already_done =
+              `${r.pkg.already_done}\n\n## Prior pathKey∩class (do not rediscover)\n` +
+              avoidUnits.map((u) => `- ${u}`).join("\n");
+          }
+          const avoid = checkDiscoveryAvoidCollision({
+            store: pq.findingStore,
+            targetLocation: r.pkg.target,
+            title: r.pkg.title || r.pkg.this_turn_goal,
+            class_key: r.pkg.class_key,
+            priorStoreIds: r.pkg.prior_finding_ids,
+            packageKind: r.pkg.package_kind,
+          });
+          if (!avoid.ok) {
+            return textResult(`error: ${avoid.error}`, { isError: true });
+          }
           resolved.push(r.pkg);
         }
 
@@ -359,6 +388,26 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
       const pathLimit = checkAndCountPathDispatch(runtime, flat.pkg.target);
       if (!pathLimit.ok) {
         return textResult(pathLimit.error!, { isError: true });
+      }
+      {
+        const pq = ensureProcessQuality(runtime.lifecycle);
+        const avoidUnits = listPriorAvoidUnits(pq.findingStore);
+        if (avoidUnits.length && !/prior pathKey|pathKey∩class/i.test(flat.pkg.already_done)) {
+          flat.pkg.already_done =
+            `${flat.pkg.already_done}\n\n## Prior pathKey∩class (do not rediscover)\n` +
+            avoidUnits.map((u) => `- ${u}`).join("\n");
+        }
+        const avoid = checkDiscoveryAvoidCollision({
+          store: pq.findingStore,
+          targetLocation: flat.pkg.target,
+          title: flat.pkg.title || flat.pkg.this_turn_goal,
+          class_key: flat.pkg.class_key,
+          priorStoreIds: flat.pkg.prior_finding_ids,
+          packageKind: flat.pkg.package_kind,
+        });
+        if (!avoid.ok) {
+          return textResult(`error: ${avoid.error}`, { isError: true });
+        }
       }
 
       try {
@@ -471,6 +520,22 @@ function resolvePackageInput(
             ? String(top.resume_agent_id).trim()
             : undefined,
       timeout_seconds,
+      prior_finding_ids: (() => {
+        const raw = src.prior_finding_ids ?? src.prior_store_ids ?? (!item ? top.prior_finding_ids : undefined);
+        if (Array.isArray(raw)) return raw.map((x) => String(x || "").trim()).filter(Boolean);
+        if (typeof raw === "string" && raw.trim()) {
+          return raw.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
+        }
+        return undefined;
+      })(),
+      package_kind:
+        src.package_kind != null
+          ? String(src.package_kind).trim()
+          : !item && top.package_kind != null
+            ? String(top.package_kind).trim()
+            : undefined,
+      class_key: src.class_key != null ? String(src.class_key).trim() : undefined,
+      title: src.title != null ? String(src.title).trim() : undefined,
     },
   };
 }

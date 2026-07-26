@@ -28,6 +28,8 @@ import {
 import { PanelAgentTracker } from "./panel-agents.js";
 import { GoalStore } from "../stores/goal.js";
 import { ensureProcessQuality } from "./package-honesty-host.js";
+import { seedPriorsAtGraphStart } from "./prior-seed.js";
+import { buildEngagementCloseout, writeEngagementCloseout } from "./engagement-closeout.js";
 
 export type HardGraphTaskResult = {
   /** Platform task_complete.status (completed | incomplete | blocked). */
@@ -208,7 +210,14 @@ export async function runHardGraphExpertTask(options: {
   };
   parentRuntime.lifecycle.panelAgents = panel;
   // Spec #116: ensure Store-first process quality survives all stages
-  ensureProcessQuality(parentRuntime.lifecycle);
+  const processQuality = ensureProcessQuality(parentRuntime.lifecycle);
+
+  // Spec #139 D2: host-seed Finding Store priors at graph-start (strip bookable proof)
+  const priorSeed = seedPriorsAtGraphStart(
+    processQuality.findingStore,
+    task.caseContext,
+  );
+  processQuality.priorSeed = priorSeed;
 
   const startMsg: PlatformMessage = {
     type: "status_update",
@@ -259,6 +268,27 @@ export async function runHardGraphExpertTask(options: {
     JSON.stringify(result, null, 2),
     "utf8",
   );
+
+  // Spec #139 NC-Closeout: dual storage on any terminal
+  try {
+    const closeout = buildEngagementCloseout({
+      task,
+      graphId: graph.id,
+      terminal: result.terminal,
+      stages: result.stages,
+      store: processQuality.findingStore,
+      priorSeed: processQuality.priorSeed,
+      unbookable: processQuality.unbookable,
+      l1ByStage: processQuality.l1ByStage,
+      surfaceSummary: parentRuntime.surfaceLedger?.summary?.() as
+        | { total?: number; by_status?: Record<string, number>; sample_paths?: string[] }
+        | undefined,
+    });
+    processQuality.engagementCloseout = closeout as unknown as Record<string, unknown>;
+    await writeEngagementCloseout({ taskDir, platform, task, closeout });
+  } catch {
+    /* non-fatal closeout */
+  }
 
   let bookedFindings = 0;
   try {

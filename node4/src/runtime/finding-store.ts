@@ -4,6 +4,7 @@
  */
 
 import { pathKey } from "./subagent-booking.js";
+import { isValidFindingSeverity, parseFindingSeverity } from "./finding-severity.js";
 
 export type FindingStatus =
   | "open"
@@ -263,7 +264,9 @@ export class FindingStore {
   }
 
   /**
-   * L0 mechanical Feedback (Spec #116): proof_excerpt present → feedback_ok; else reject.
+   * L0 mechanical Feedback (Spec #116 / #139 D1+D3):
+   * proof_excerpt present + valid severity (when book-bound) → feedback_ok; else reject.
+   * Missing severity fails closed — no silent medium.
    * Production must call this after enqueue — confirm hard-requires feedback_ok.
    */
   applyMechanicalL0Feedback(ids?: string[]): FindingRecord[] {
@@ -284,10 +287,17 @@ export class FindingStore {
         this.enqueueFeedback([cur.id]);
       }
       const hasProof = Boolean(String(cur.proof_excerpt || "").trim());
+      const issues: string[] = [];
+      if (!hasProof) issues.push("L0: missing proof_excerpt");
+      // Book-path candidates (have proof or class_key) must carry valid severity (NC-Severity).
+      // Priors without this-run proof are not L0-ok for confirm anyway.
+      if (hasProof && !isValidFindingSeverity(cur.severity)) {
+        issues.push("L0: missing or invalid severity (critical|high|medium|low|info)");
+      }
       const res = this.setFeedbackResult(
         cur.id,
-        hasProof ? "ok" : "reject",
-        hasProof ? undefined : ["L0: missing proof_excerpt"],
+        issues.length === 0 ? "ok" : "reject",
+        issues.length ? issues : undefined,
       );
       if (res.ok) out.push(res.record);
     }
@@ -330,6 +340,12 @@ export class FindingStore {
     if (!String(cur.proof_excerpt || "").trim()) {
       return { ok: false, error: "feedback_ok row missing proof_excerpt" };
     }
+    if (!isValidFindingSeverity(cur.severity)) {
+      return {
+        ok: false,
+        error: "confirm requires Store severity (critical|high|medium|low|info) — silent medium banned",
+      };
+    }
     return { ok: true, record: { ...cur } };
   }
 
@@ -346,7 +362,11 @@ export class FindingStore {
     return { ...next };
   }
 
-  /** Import platform priors (R1) — Scope-related rows. */
+  /**
+   * Import platform priors (R1 / Spec #139 D2 P4).
+   * Strips bookable historical proof; preserves platform severity when valid.
+   * Idempotent on platform_vuln_id when present.
+   */
   importPriors(
     priors: Array<{
       platform_vuln_id?: string;
@@ -355,12 +375,32 @@ export class FindingStore {
       severity?: string;
       description?: string;
       class_key?: string;
+      /** Historical proof is never bookable — always stripped on seed. */
+      proof_excerpt?: string;
     }>,
   ): FindingRecord[] {
     const out: FindingRecord[] = [];
     for (const p of priors) {
+      const platformId = String(p.platform_vuln_id || "").trim();
+      if (platformId) {
+        const existing = [...this.byId.values()].find(
+          (r) => r.prior && String(r.platform_vuln_id || "").trim() === platformId,
+        );
+        if (existing) {
+          out.push({ ...existing });
+          continue;
+        }
+      }
+      const sev = parseFindingSeverity(p.severity) ?? undefined;
       const { record } = this.upsert({
-        ...p,
+        title: p.title,
+        location: p.location,
+        severity: sev,
+        description: p.description,
+        class_key: p.class_key,
+        platform_vuln_id: platformId || undefined,
+        // NC-Prior: never seed confirmable historical proof
+        proof_excerpt: undefined,
         prior: true,
         source: "platform_prior",
       });
@@ -387,6 +427,8 @@ export function ingestPackageCandidatesToStore(
     claim?: string;
     proof_excerpt?: string;
     poc_hint?: string;
+    severity?: string;
+    class_key?: string;
   }>,
   meta: {
     package_id?: string;
@@ -399,13 +441,18 @@ export function ingestPackageCandidatesToStore(
   const ids: string[] = [];
   for (const c of candidates) {
     if (!c.location && !c.title) continue;
+    // NC-Severity: package candidate without valid severity is rejected (not stored as open medium).
+    const sev = parseFindingSeverity(c.severity);
+    if (!sev) continue;
     try {
       const up = store.upsert({
         title: c.title || "candidate",
         location: c.location || meta.fallback_location || "unknown",
         description: c.claim,
+        severity: sev,
         proof_excerpt: c.proof_excerpt,
         poc: c.poc_hint,
+        class_key: c.class_key,
         package_id: meta.package_id,
         plan_node_id: meta.plan_node_id,
         stage_id: meta.stage_id,

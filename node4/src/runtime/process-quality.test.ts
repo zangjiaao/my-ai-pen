@@ -185,6 +185,7 @@ const store = new FindingStore();
 const a = store.upsert({
   title: "SQL injection in login",
   location: "http://t/login.php?id=1",
+  severity: "high",
   proof_excerpt: "MySQL syntax error near ''' at line 1 — enough for proof",
   class_key: "sqli",
   package_id: "pkg-1",
@@ -196,6 +197,7 @@ assert.equal(a.merged, false);
 const b = store.upsert({
   title: "SQLi on login form",
   location: "http://t/login.php?id=2",
+  severity: "high",
   proof_excerpt: "MySQL syntax error near ''' at line 1 — enough for proof",
   class_key: "sqli",
   package_id: "pkg-2",
@@ -209,13 +211,14 @@ assert.equal(store.snapshot().length, 1, "I0.17: no silent twin rows");
 const xss = store.upsert({
   title: "Reflected XSS login",
   location: "http://t/login.php",
+  severity: "medium",
   proof_excerpt: "script alert reflected in body enough characters here",
   class_key: "xss",
 });
 assert.equal(xss.merged, false);
 assert.notEqual(xss.id, a.id);
 
-// Production L0 path: ingest sets feedback_ok when proof present — I0.19
+// Production L0 path: ingest sets feedback_ok when proof + severity present — I0.19 / #139 D1
 const store2 = new FindingStore();
 const ingested = ingestPackageCandidatesToStore(
   store2,
@@ -223,17 +226,33 @@ const ingested = ingestPackageCandidatesToStore(
     {
       title: "SQL injection in login",
       location: "http://t/login.php",
+      severity: "high",
       proof_excerpt: "MySQL syntax error near ''' at line 1 — enough for proof",
     },
   ],
   { package_id: "p1" },
 );
 assert.equal(store2.get(ingested[0]!)?.status, "feedback_ok", "I0.19 auto Feedback → ok");
+assert.equal(store2.get(ingested[0]!)?.severity, "high", "#139 D1: severity preserved");
 
-// No proof → L0 reject
+// No severity → reject package ingest (not stored as open medium)
+const noSev = ingestPackageCandidatesToStore(
+  store2,
+  [
+    {
+      title: "No severity claim",
+      location: "http://t/nosev",
+      proof_excerpt: "has proof but no severity should not land as medium",
+    },
+  ],
+  { package_id: "p1b" },
+);
+assert.equal(noSev.length, 0, "#139 D1: package candidate without severity rejected");
+
+// No proof → L0 reject (severity present)
 const noProofIds = ingestPackageCandidatesToStore(
   store2,
-  [{ title: "Weak claim", location: "http://t/other" }],
+  [{ title: "Weak claim", location: "http://t/other", severity: "low" }],
   { package_id: "p2" },
 );
 assert.equal(store2.get(noProofIds[0]!)?.status, "feedback_reject", "I0.19 L0 reject without proof");
