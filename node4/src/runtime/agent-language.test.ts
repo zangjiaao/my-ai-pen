@@ -1,14 +1,17 @@
 /**
- * Agent language registry + template policy (#134 / #135).
+ * Agent language registry + template policy (#134 / #135) + review fixes.
  * Run: npx tsx src/runtime/agent-language.test.ts
  */
 import assert from "node:assert/strict";
+import { readFileSync, existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   AGENT_LANGUAGE_CODES,
   AGENT_LANGUAGE_REGISTRY,
   AUTO_LANGUAGE_POLICY_TEMPLATE,
   FORCED_LANGUAGE_POLICY_TEMPLATE,
-  agentLanguageUiOptions,
+  agentLanguageCatalogPath,
   extractAgentLanguageFromMessage,
   formatAgentLanguageInjection,
   normalizeAgentLanguage,
@@ -18,11 +21,45 @@ import {
 import { buildSystemPrompt, renderPromptTemplate } from "./prompt.js";
 import { PENTEST_ROLE_PACK } from "../roles/index.js";
 import type { TaskEnvelope } from "../types.js";
+import { normalizeTaskAssign } from "../platform-smoke.js";
 
 function ok(cond: unknown, msg: string): void {
   assert.ok(cond, msg);
   console.log("ok", msg);
 }
+
+// --- Catalog JSON is the single structural source ---
+const catalogPath = agentLanguageCatalogPath();
+const catalog = JSON.parse(readFileSync(catalogPath, "utf8")) as {
+  default: string;
+  languages: Array<{ code: string; ui_label: string; prompt_name?: string; aliases?: string[] }>;
+};
+ok(catalog.default === "auto", "catalog default is auto");
+ok(
+  catalog.languages.map((r) => r.code).join(",") === AGENT_LANGUAGE_CODES.join(","),
+  "registry codes match catalog JSON",
+);
+
+// Cross-stack shipped copies must be byte-identical to Node's catalog.
+const here = dirname(fileURLToPath(import.meta.url));
+const repoRoot = join(here, "../../..");
+const shipPaths = [
+  join(repoRoot, "shared/agent-language-catalog.json"),
+  join(repoRoot, "platform/backend/app/services/agent_language_catalog.json"),
+  join(repoRoot, "platform/frontend/src/lib/agent-language-catalog.json"),
+];
+const nodeBytes = readFileSync(catalogPath);
+for (const p of shipPaths) {
+  if (!existsSync(p)) {
+    throw new Error(`missing shipped catalog copy: ${p}`);
+  }
+  assert.equal(
+    readFileSync(p).toString("utf8"),
+    nodeBytes.toString("utf8"),
+    `catalog byte-identical: ${p}`,
+  );
+}
+console.log("ok", "shipped catalog copies are byte-identical");
 
 // --- Registry shape ---
 ok(
@@ -69,7 +106,7 @@ const aliasCases: Array<[unknown, string]> = [
   ["日本語", "ja"],
   ["JA", "ja"],
   ["not-a-locale", "auto"],
-  ["de", "auto"], // unregistered until added to registry
+  ["de", "auto"],
   ["{{evil}}", "auto"],
 ];
 for (const [raw, want] of aliasCases) {
@@ -98,12 +135,7 @@ for (const code of ["zh-CN", "zh-TW", "en", "ja"] as const) {
   assert.match(block, new RegExp(`node policy: ${code}`), `${code} policy header`);
   assert.match(block, narrativeSurfaces, `${code} lists narrative surfaces`);
   assert.match(block, rawToolExclude, `${code} excludes raw tool rewrite`);
-  // Distinct headers — zh-CN vs zh-TW must both appear as themselves
-  assert.doesNotMatch(
-    block,
-    /node policy: auto/,
-    `${code} is not auto header`,
-  );
+  assert.doesNotMatch(block, /node policy: auto/, `${code} is not auto header`);
 }
 console.log("ok", "forced codes produce distinct policy markers");
 
@@ -115,7 +147,6 @@ const unsetBlock = formatAgentLanguageInjection(undefined);
 assert.equal(unsetBlock, autoBlock, "unset → same as auto policy");
 console.log("ok", "auto / unset policy");
 
-// Template var substitution visible in body
 const jaBlock = formatAgentLanguageInjection("ja");
 assert.match(jaBlock, /in \*\*Japanese\*\*/);
 assert.match(jaBlock, /node policy: ja/);
@@ -127,7 +158,7 @@ assert.match(cnBlock, /in \*\*Simplified Chinese\*\*/);
 assert.notEqual(cnBlock, twBlock, "zh-CN and zh-TW policy bodies differ");
 console.log("ok", "template vars language_code + language_prompt_name");
 
-// --- Smuggle defenses ---
+// --- Smuggle defenses (shared prompt-template engine) ---
 const smuggled = sanitizeLanguageTemplateValue("Evil {{inject}} `x` $y \\z");
 assert.doesNotMatch(smuggled, /\{\{/);
 assert.doesNotMatch(smuggled, /`/);
@@ -135,26 +166,15 @@ assert.doesNotMatch(smuggled, /\$/);
 assert.doesNotMatch(smuggled, /\\/);
 ok(smuggled.includes("Evil"), "keeps safe letters after smuggle strip");
 
-// If someone stuffed braces into promptName path via forced template path:
-const braceInject = renderLanguagePathWithEvil();
-function renderLanguagePathWithEvil(): string {
-  // Force-render template with hostile vars (simulates compromised registry row).
-  return FORCED_LANGUAGE_POLICY_TEMPLATE.replace(
-    /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g,
-    (_m, key: string) => {
-      const vars: Record<string, string> = {
-        language_code: "ja{{nested}}",
-        language_prompt_name: "Japanese{{x}} and more",
-      };
-      return sanitizeLanguageTemplateValue(vars[key] ?? "", "");
-    },
-  );
-}
-assert.doesNotMatch(braceInject, /\{\{/);
-assert.match(braceInject, /node policy: ja/);
-console.log("ok", "template value smuggle defenses");
+const viaSharedEngine = renderPromptTemplate(
+  FORCED_LANGUAGE_POLICY_TEMPLATE,
+  { language_code: "ja{{nested}}", language_prompt_name: "Japanese{{x}}" },
+  { sanitizeValue: sanitizeLanguageTemplateValue },
+);
+assert.doesNotMatch(viaSharedEngine, /\{\{/);
+assert.match(viaSharedEngine, /node policy: ja/);
+console.log("ok", "template value smuggle defenses via prompt-template");
 
-// Spaces preserved in prompt names (unlike strict persona sanitize)
 ok(
   sanitizeLanguageTemplateValue("Simplified Chinese") === "Simplified Chinese",
   "language sanitize keeps spaces",
@@ -175,7 +195,6 @@ for (const code of ["auto", "zh-CN", "zh-TW", "en", "ja"] as const) {
     PENTEST_ROLE_PACK,
   );
   if (code === "auto") {
-    // unset on task → auto
     assert.match(prompt, /node policy: auto/, "free path unset → auto");
   } else {
     assert.match(
@@ -186,15 +205,12 @@ for (const code of ["auto", "zh-CN", "zh-TW", "en", "ja"] as const) {
   }
   assert.match(prompt, /Output language/, `free path has Output language for ${code}`);
 }
-// Explicit auto
 const freeAuto = buildSystemPrompt({ ...baseTask, agentLanguage: "auto" }, PENTEST_ROLE_PACK);
 assert.match(freeAuto, /node policy: auto/, "free path explicit auto");
-// Alias through free path (normalize happens inside formatter)
 const freeJp = buildSystemPrompt({ ...baseTask, agentLanguage: "jp" }, PENTEST_ROLE_PACK);
 assert.match(freeJp, /node policy: ja/, "free path alias jp → ja policy");
 console.log("ok", "free-path system prompt language injection");
 
-// --- No per-language if-branch extension path: template is shared ---
 ok(
   FORCED_LANGUAGE_POLICY_TEMPLATE.includes("{{ language_code }}"),
   "forced template uses language_code var",
@@ -203,44 +219,17 @@ ok(
   FORCED_LANGUAGE_POLICY_TEMPLATE.includes("{{ language_prompt_name }}"),
   "forced template uses language_prompt_name var",
 );
-ok(
-  !AUTO_LANGUAGE_POLICY_TEMPLATE.includes("{{"),
-  "auto template is vars-free fixed text",
-);
+ok(!AUTO_LANGUAGE_POLICY_TEMPLATE.includes("{{"), "auto template is vars-free fixed text");
 
-// UI options mirror registry
-const ui = agentLanguageUiOptions();
-assert.equal(ui.length, AGENT_LANGUAGE_REGISTRY.length);
-assert.deepEqual(
-  ui.map((o) => o.code),
-  [...AGENT_LANGUAGE_CODES],
-);
-console.log("ok", "UI options derived from registry");
-
-// Cross-stack lock: Platform/FE must ship the same wire codes (#136).
-// Documented contract — if you change this list, update:
-//   platform/frontend/src/lib/agentLanguages.ts
-//   platform/backend/app/services/agent_language.py
-const CROSS_STACK_CODES = ["auto", "zh-CN", "zh-TW", "en", "ja"];
-assert.deepEqual([...AGENT_LANGUAGE_CODES], CROSS_STACK_CODES, "cross-stack catalog lock");
-console.log("ok", "cross-stack catalog codes locked");
-
-// renderPromptTemplate still works for persona (regression on optional arg)
-const rendered = renderPromptTemplate("Hello {{ expert_name }}", {
-  expert_name: "Alice",
-});
-assert.equal(rendered, "Hello Alice");
-console.log("ok", "renderPromptTemplate persona path unchanged");
-
-// --- #138: steer / re-burst shaped messages still carry language ---
+// --- Envelope boundary: extract always returns registry code ---
 assert.equal(
   extractAgentLanguageFromMessage({
     type: "user_steer",
     text: "继续扫",
-    worker_limits: { agent_language: "ja", worker_max_ms: 1000 },
+    worker_limits: { agent_language: "jp", worker_max_ms: 1000 },
   }),
   "ja",
-  "steer with worker_limits.agent_language",
+  "extract normalizes alias jp → ja",
 );
 assert.equal(
   extractAgentLanguageFromMessage({
@@ -248,17 +237,12 @@ assert.equal(
     agent_language: "zh-TW",
   }),
   "zh-TW",
-  "task_assign top-level agent_language",
 );
 assert.equal(
-  extractAgentLanguageFromMessage({
-    type: "user_steer",
-    text: "go on",
-  }),
-  undefined,
-  "steer without limits → no language (platform must re-attach)",
+  extractAgentLanguageFromMessage({ type: "user_steer", text: "go on" }),
+  "auto",
+  "missing language → auto (not undefined)",
 );
-// Free path after extract: policy markers present
 const steerLang = extractAgentLanguageFromMessage({
   worker_limits: { agent_language: "zh-TW" },
 });
@@ -267,6 +251,28 @@ const steerPrompt = buildSystemPrompt(
   PENTEST_ROLE_PACK,
 );
 assert.match(steerPrompt, /node policy: zh-TW/, "language after steer-shaped rebuild");
-console.log("ok", "steer/re-burst language extract + free prompt");
+console.log("ok", "envelope extract always returns wire code");
+
+// --- platform-smoke normalizeTaskAssign shares language extract ---
+const smoke = normalizeTaskAssign({
+  type: "task_assign",
+  worker_limits: { agent_language: "ja" },
+  initial_instruction: "hi",
+  target: { type: "url", value: "http://t" },
+});
+assert.equal(smoke.agentLanguage, "ja", "smoke path carries normalized language");
+const smokeAlias = normalizeTaskAssign({
+  agent_language: "繁體",
+  initial_instruction: "x",
+});
+assert.equal(smokeAlias.agentLanguage, "zh-TW", "smoke normalizes alias");
+console.log("ok", "platform-smoke normalizeTaskAssign language parity");
+
+// renderPromptTemplate persona path
+const rendered = renderPromptTemplate("Hello {{ expert_name }}", {
+  expert_name: "Alice",
+});
+assert.equal(rendered, "Hello Alice");
+console.log("ok", "renderPromptTemplate persona path unchanged");
 
 console.log("agent-language.test.ts: ok");

@@ -1,69 +1,22 @@
 """
 Agent output-language catalog for Node config (#134 / #136).
 
-Must stay in lockstep with:
-- node4/src/runtime/agent-language.ts (AGENT_LANGUAGE_REGISTRY)
-- platform/frontend/src/lib/agentLanguages.ts
+Source of truth: agent_language_catalog.json (shipped copy of shared/).
+Must stay byte-identical to:
+- shared/agent-language-catalog.json
+- node4/src/runtime/agent-language-catalog.json
+- platform/frontend/src/lib/agent-language-catalog.json
 
-Adding a language = extend SHIPPED_AGENT_LANGUAGES + aliases here,
-plus Node registry and FE options. No session-path edits.
+Adding a language = edit the shared JSON and re-copy to the three ship paths.
+No session-path edits; no per-locale inject branches.
 """
 from __future__ import annotations
 
-from typing import Final
+import json
+from pathlib import Path
+from typing import Final, Literal
 
-DEFAULT_AGENT_LANGUAGE: Final[str] = "auto"
-
-# Wire codes accepted on Node config / worker_limits (including auto).
-SHIPPED_AGENT_LANGUAGES: Final[tuple[str, ...]] = (
-    "auto",
-    "zh-CN",
-    "zh-TW",
-    "en",
-    "ja",
-)
-
-ALLOWED_AGENT_LANGUAGES: Final[frozenset[str]] = frozenset(SHIPPED_AGENT_LANGUAGES)
-
-# Alias (lowercased latin / as-is CJK) → canonical code.
-# Exact wire codes are accepted before this map.
-_ALIAS_TO_CODE: Final[dict[str, str]] = {
-    # auto
-    "follow": "auto",
-    "match": "auto",
-    "跟随用户": "auto",
-    "跟随": "auto",
-    # zh-CN
-    "zh": "zh-CN",
-    "zh-cn": "zh-CN",
-    "chinese": "zh-CN",
-    "simplified": "zh-CN",
-    "simplified-chinese": "zh-CN",
-    "simplified chinese": "zh-CN",
-    "中文": "zh-CN",
-    "简体": "zh-CN",
-    "简体中文": "zh-CN",
-    # zh-TW (never collapse into zh-CN)
-    "zh-tw": "zh-TW",
-    "zh-hant": "zh-TW",
-    "zh-hk": "zh-TW",
-    "traditional": "zh-TW",
-    "traditional-chinese": "zh-TW",
-    "traditional chinese": "zh-TW",
-    "繁體": "zh-TW",
-    "繁体": "zh-TW",
-    "繁體中文": "zh-TW",
-    "繁体中文": "zh-TW",
-    # en
-    "en-us": "en",
-    "en-gb": "en",
-    "english": "en",
-    # ja
-    "jp": "ja",
-    "ja-jp": "ja",
-    "japanese": "ja",
-    "日本語": "ja",
-}
+_CATALOG_PATH = Path(__file__).with_name("agent_language_catalog.json")
 
 
 def _alias_key(raw: str) -> str:
@@ -73,27 +26,69 @@ def _alias_key(raw: str) -> str:
     return s.lower().replace("_", "-")
 
 
-def normalize_agent_language(value: object) -> str:
+def _load_catalog() -> dict:
+    return json.loads(_CATALOG_PATH.read_text(encoding="utf-8"))
+
+
+_CATALOG = _load_catalog()
+
+DEFAULT_AGENT_LANGUAGE: Final[str] = str(_CATALOG.get("default") or "auto")
+
+SHIPPED_AGENT_LANGUAGES: Final[tuple[str, ...]] = tuple(
+    str(row["code"]) for row in (_CATALOG.get("languages") or [])
+)
+
+ALLOWED_AGENT_LANGUAGES: Final[frozenset[str]] = frozenset(SHIPPED_AGENT_LANGUAGES)
+
+_ALIAS_TO_CODE: Final[dict[str, str]] = {}
+for _row in _CATALOG.get("languages") or []:
+    _code = str(_row["code"])
+    for _alias in _row.get("aliases") or []:
+        _ALIAS_TO_CODE[_alias_key(str(_alias))] = _code
+
+
+def resolve_agent_language(
+    value: object,
+    *,
+    unknown: Literal["auto", "error"] = "auto",
+) -> str:
     """
-    Return a shipped wire code (auto | zh-CN | zh-TW | en | ja).
-    Unknown / empty → auto (safe default for worker_limits inject).
+    Resolve free-form input to a shipped wire code.
+
+    unknown=\"auto\"  — runtime / worker_limits (safe default)
+    unknown=\"error\" — PATCH save (explicit 400 via ValueError)
     """
-    raw = str(value if value is not None else DEFAULT_AGENT_LANGUAGE).strip()
+    raw = str(value if value is not None else "").strip()
     if not raw:
+        if unknown == "error":
+            raise ValueError(
+                "agent_language must be one of: " + ", ".join(SHIPPED_AGENT_LANGUAGES)
+            )
         return DEFAULT_AGENT_LANGUAGE
     if raw in ALLOWED_AGENT_LANGUAGES:
         return raw
     key = _alias_key(raw)
-    if key in ALLOWED_AGENT_LANGUAGES:
-        return key
-    # Case-insensitive match on shipped codes (e.g. JA → ja).
     for code in SHIPPED_AGENT_LANGUAGES:
         if code.lower() == key:
             return code
     mapped = _ALIAS_TO_CODE.get(key)
     if mapped:
         return mapped
+    if unknown == "error":
+        raise ValueError(
+            "agent_language must be one of: " + ", ".join(SHIPPED_AGENT_LANGUAGES)
+        )
     return DEFAULT_AGENT_LANGUAGE
+
+
+def normalize_agent_language(value: object) -> str:
+    """Return a shipped wire code; unknown / empty → auto."""
+    return resolve_agent_language(value, unknown="auto")
+
+
+def parse_agent_language_for_update(value: object) -> str:
+    """Normalize a PATCH body value; raises ValueError on garbage / empty."""
+    return resolve_agent_language(value, unknown="error")
 
 
 def merge_worker_limits_into_message(
@@ -112,33 +107,11 @@ def merge_worker_limits_into_message(
     out["worker_limits"] = limits
     lang = limits.get("agent_language")
     if isinstance(lang, str) and lang.strip():
-        # Belt-and-suspenders: top-level field for Node normalizeTask readers.
         if not out.get("agent_language") and not out.get("agentLanguage"):
             out["agent_language"] = lang.strip()
     return out
 
 
-def parse_agent_language_for_update(value: object) -> str:
-    """
-    Normalize a PATCH body value to a shipped code.
-    Raises ValueError if the input is free-form garbage (not alias/code).
-    Empty string is treated as invalid (prefer explicit 400).
-    """
-    raw = str(value if value is not None else "").strip()
-    if not raw:
-        raise ValueError("agent_language must be one of: " + ", ".join(SHIPPED_AGENT_LANGUAGES))
-    if raw in ALLOWED_AGENT_LANGUAGES:
-        return raw
-    key = _alias_key(raw)
-    if key in ALLOWED_AGENT_LANGUAGES:
-        # only if key is a real code form (ja, en, …) — not alias-only keys in ALLOWED
-        return key
-    for code in SHIPPED_AGENT_LANGUAGES:
-        if code.lower() == key:
-            return code
-    mapped = _ALIAS_TO_CODE.get(key)
-    if mapped:
-        return mapped
-    raise ValueError(
-        "agent_language must be one of: " + ", ".join(SHIPPED_AGENT_LANGUAGES)
-    )
+def catalog_path() -> Path:
+    """Path to the shipped catalog JSON (lock tests)."""
+    return _CATALOG_PATH

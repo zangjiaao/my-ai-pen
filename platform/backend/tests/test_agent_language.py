@@ -1,26 +1,44 @@
-"""Agent language catalog + worker_limits (#134 / #136)."""
+"""Agent language catalog + worker_limits (#134 / #136) + review fixes."""
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 from app.api.nodes import worker_limits_from_config
 from app.services.agent_language import (
     ALLOWED_AGENT_LANGUAGES,
     SHIPPED_AGENT_LANGUAGES,
+    catalog_path,
     merge_worker_limits_into_message,
     normalize_agent_language,
     parse_agent_language_for_update,
+    resolve_agent_language,
 )
 
 
-# Lockstep with node4 AGENT_LANGUAGE_CODES / FE AGENT_LANGUAGE_CODES.
-EXPECTED_CODES = ("auto", "zh-CN", "zh-TW", "en", "ja")
-
-
 class TestAgentLanguageCatalog(unittest.TestCase):
-    def test_shipped_catalog_order(self):
-        self.assertEqual(SHIPPED_AGENT_LANGUAGES, EXPECTED_CODES)
-        self.assertEqual(ALLOWED_AGENT_LANGUAGES, frozenset(EXPECTED_CODES))
+    def test_catalog_file_drives_shipped_codes(self):
+        path = catalog_path()
+        self.assertTrue(path.is_file(), path)
+        self.assertEqual(
+            SHIPPED_AGENT_LANGUAGES,
+            ("auto", "zh-CN", "zh-TW", "en", "ja"),
+        )
+        self.assertEqual(ALLOWED_AGENT_LANGUAGES, frozenset(SHIPPED_AGENT_LANGUAGES))
+
+    def test_catalog_byte_identical_to_shared_and_siblings(self):
+        """Shipped copies must stay in lockstep (edit shared/ then re-copy)."""
+        ours = catalog_path().read_bytes()
+        # platform/backend/app/services → repo root is 4 parents up
+        repo = Path(__file__).resolve().parents[3]
+        siblings = [
+            repo / "shared" / "agent-language-catalog.json",
+            repo / "node4" / "src" / "runtime" / "agent-language-catalog.json",
+            repo / "platform" / "frontend" / "src" / "lib" / "agent-language-catalog.json",
+        ]
+        for p in siblings:
+            self.assertTrue(p.is_file(), f"missing {p}")
+            self.assertEqual(p.read_bytes(), ours, f"catalog drift: {p}")
 
     def test_normalize_aliases(self):
         cases = [
@@ -39,12 +57,19 @@ class TestAgentLanguageCatalog(unittest.TestCase):
             ("ja", "ja"),
             ("jp", "ja"),
             ("日本語", "ja"),
-            ("de", "auto"),  # unregistered → safe default
+            ("de", "auto"),
             ("not-a-lang", "auto"),
         ]
         for raw, want in cases:
             with self.subTest(raw=raw):
                 self.assertEqual(normalize_agent_language(raw), want)
+
+    def test_resolve_unknown_modes(self):
+        self.assertEqual(resolve_agent_language("de", unknown="auto"), "auto")
+        with self.assertRaises(ValueError):
+            resolve_agent_language("de", unknown="error")
+        with self.assertRaises(ValueError):
+            resolve_agent_language("", unknown="error")
 
     def test_zh_cn_and_zh_tw_never_collapse(self):
         self.assertNotEqual(
@@ -72,33 +97,27 @@ class TestAgentLanguageCatalog(unittest.TestCase):
             parse_agent_language_for_update("")
 
     def test_worker_limits_include_agent_language(self):
-        for code in EXPECTED_CODES:
+        for code in SHIPPED_AGENT_LANGUAGES:
             limits = worker_limits_from_config({"agent_language": code})
             self.assertEqual(limits["agent_language"], code, code)
-        # alias through config
         limits_jp = worker_limits_from_config({"agent_language": "jp"})
         self.assertEqual(limits_jp["agent_language"], "ja")
-        # missing → auto
         limits_default = worker_limits_from_config({})
         self.assertEqual(limits_default["agent_language"], "auto")
 
     def test_merge_worker_limits_preserves_language_on_steer_rebuild(self):
-        """#138: steer/re-burst shaped messages must carry Node language."""
         limits = worker_limits_from_config({"agent_language": "ja"})
         steer = {"type": "user_steer", "text": "继续扫", "conversation_id": "c1"}
         merged = merge_worker_limits_into_message(steer, limits)
         self.assertEqual(merged["worker_limits"]["agent_language"], "ja")
         self.assertEqual(merged["agent_language"], "ja")
-        # input not mutated
         self.assertNotIn("worker_limits", steer)
-        # does not overwrite explicit top-level
         explicit = merge_worker_limits_into_message(
             {"type": "task_assign", "agent_language": "zh-TW"},
             limits,
         )
         self.assertEqual(explicit["agent_language"], "zh-TW")
         self.assertEqual(explicit["worker_limits"]["agent_language"], "ja")
-        # empty limits → passthrough
         bare = merge_worker_limits_into_message({"type": "user_steer"}, None)
         self.assertEqual(bare, {"type": "user_steer"})
 

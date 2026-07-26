@@ -77,9 +77,10 @@ export type TaskEnvelope = {
    */
   caseContext?: import("./runtime/case-context.js").CaseContext;
   /**
-   * Node-configured output language (registry: auto | zh-CN | zh-TW | en | ja).
+   * Node-configured output language — registry wire code only
+   * (auto | zh-CN | zh-TW | en | ja). Normalized at the envelope boundary.
    * Agent-authored narrative surfaces; raw tool stdout is never rewritten.
-   * See runtime/agent-language.ts (#134 / #135).
+   * See runtime/agent-language.ts + agent-language-catalog.json.
    */
   agentLanguage?: string;
 };
