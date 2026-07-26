@@ -96,8 +96,8 @@ function childRolePack(parentPackId: string, skillIds?: readonly string[], skill
       "Prefer session/http over browser unless DOM/JS interaction is required.",
       "If session cookies were seeded from parent, try them first — re-login only when auth fails.",
       "Write process facts with fact(upsert) when cognition is confirmed.",
-      "When done or blocked, emit intentional structured settlement (optional ./result.json artifact) per return contract, then stop (no tools).",
-      "result.json is not a business success ritual — host/Finding Store settle the package (Spec #125).",
+      "When done or blocked, emit intentional structured settlement (optional ./settlement.json) per return contract, then stop (no tools).",
+      "Optional settlement file is not a booking channel — host/Finding Store settle the package (Spec #125).",
       "Never call subagent. Never book product findings (no finding tool).",
     ],
     toolNames: [...SUBAGENT_CHILD_TOOL_NAMES],
@@ -111,14 +111,10 @@ function childRolePack(parentPackId: string, skillIds?: readonly string[], skill
 
 /**
  * Intentional structured settlement files (Spec #125).
- * Any of these count as intentional host settlement — not salvage.
- * result.json remains supported as an optional artifact name only.
+ * Prefer settlement.json; result.json accepted for legacy package artifacts only.
+ * Neither is stage Feedback SoT — host/Finding Store settle the package.
  */
-const INTENTIONAL_STRUCTURED_FILES = [
-  "result.json",
-  "structured-return.json",
-  "settlement.json",
-] as const;
+const INTENTIONAL_STRUCTURED_FILES = ["settlement.json", "result.json"] as const;
 
 async function readIntentionalStructuredFile(
   workDir: string,
@@ -134,16 +130,13 @@ async function readIntentionalStructuredFile(
   return undefined;
 }
 
-/** @deprecated use readIntentionalStructuredFile */
-async function readResultFile(workDir: string): Promise<unknown | undefined> {
-  return readIntentionalStructuredFile(workDir);
-}
-
-async function clearResultFile(workDir: string): Promise<void> {
-  try {
-    await unlink(join(workDir, "result.json"));
-  } catch {
-    /* ok if missing */
+async function clearIntentionalStructuredFiles(workDir: string): Promise<void> {
+  for (const name of INTENTIONAL_STRUCTURED_FILES) {
+    try {
+      await unlink(join(workDir, name));
+    } catch {
+      /* ok if missing */
+    }
   }
 }
 
@@ -212,7 +205,7 @@ async function collectStructuredResult(input: {
   promptError?: string;
 }): Promise<{ structured: SubagentStructuredResult; salvaged: boolean }> {
   if (input.promptError && !input.aborted) {
-    const existing = await readResultFile(input.workDir);
+    const existing = await readIntentionalStructuredFile(input.workDir);
     const structured = normalizeSubagentResult(
       existing ?? {
         ok: false,
@@ -222,13 +215,17 @@ async function collectStructuredResult(input: {
       input.promptError,
     );
     if (!existing) {
-      await writeFile(join(input.workDir, "result.json"), JSON.stringify(structured, null, 2), "utf8");
+      await writeFile(
+        join(input.workDir, "settlement.json"),
+        JSON.stringify(structured, null, 2),
+        "utf8",
+      );
     }
     return { structured, salvaged: false };
   }
 
-  // Intentional structured settlement (optional artifact names — not business SoT file ritual).
-  let fileResult = await readIntentionalStructuredFile(input.workDir);
+  // Intentional structured settlement (optional artifact — not business SoT file ritual).
+  const fileResult = await readIntentionalStructuredFile(input.workDir);
   if (fileResult) {
     return {
       structured: normalizeSubagentResult(fileResult, input.handoff.this_turn_goal),
@@ -247,7 +244,7 @@ async function collectStructuredResult(input: {
         ? "subagent finished without intentional structured settlement (salvage path)"
         : "subagent stopped without tools or intentional structured settlement",
   });
-  // Salvage is evidence-only; flag salvaged when we invented structure from tool-output.
+  // Salvage path always ≠ package success (even when no candidates were recovered).
   const salvaged = true;
   await writeFile(
     join(input.workDir, "salvage-evidence.json"),
@@ -284,7 +281,7 @@ function buildUserPrompt(assignment: string, sessionSeeded: boolean, resume: boo
     formatSubagentReturnContractPrompt(),
     "",
     "Begin acting toward this_turn_goal. Prefer session/http over browser unless DOM/JS is required.",
-    "Before you stop: emit intentional structured settlement (surfaces/candidates as required) so host/Store can settle — optional file artifact, not a booking channel.",
+    "Before you stop: emit intentional structured settlement (surfaces/candidates as required) so host/Store can settle — optional ./settlement.json, not a booking channel.",
   ];
   return parts.filter(Boolean).join("\n");
 }
@@ -347,7 +344,7 @@ async function runWarmPackage(args: {
   const { input, warm, pool, pathKey: pk, agentId, abort } = args;
   const workDir = warm.workDir;
   await ensureChildDirs(workDir);
-  await clearResultFile(workDir);
+  await clearIntentionalStructuredFiles(workDir);
 
   // Refresh affinity labels on the handle for this package.
   warm.nodeType = input.nodeType || warm.nodeType;
@@ -464,7 +461,7 @@ async function runColdPackage(args: {
       artifacts: [],
       notes: `NODE4_SUBAGENT_DRY=1 — no LLM child session; session_seed=${sessionSeed.seeded}`,
     });
-    await writeFile(join(workDir, "result.json"), JSON.stringify(structured, null, 2), "utf8");
+    await writeFile(join(workDir, "settlement.json"), JSON.stringify(structured, null, 2), "utf8");
     return {
       ok: true,
       summary: structured.summary,

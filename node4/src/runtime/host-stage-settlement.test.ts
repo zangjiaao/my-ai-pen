@@ -103,17 +103,19 @@ function makeRuntime(opts?: {
       summary: "all packages green and booked",
       deadends: [],
     },
-    hostDeclare: true,
   });
   assert.equal(settlement.agent_result_json_ignored, true);
   assert.deepEqual(settlement.host_declared_keys.sort(), ["pkg-6", "pkg-7"]);
-  assert.equal(settlement.honesty.ok, true, "host declare → honest partial ok");
-  assert.equal(settlement.honesty.undeclared_failures.length, 0);
+  assert.equal(settlement.honesty.host_owned_declare, true);
+  assert.equal(settlement.honesty.silent_partial, false);
+  assert.equal(settlement.honesty.ok, true, "host declare → no running → ok");
   assert.equal(settlement.structured.ok, true, "honest partial may pass");
   assert.ok(
     settlement.structured.deadends.some((d) => d.includes("pkg-6")),
     "declared fails appear in deadends",
   );
+  // Captain surface is on settlement, not stripped normalize extras
+  assert.deepEqual(settlement.host_declared_failed, settlement.host_declared_keys);
 }
 
 // --- Running packages block settlement ok ---

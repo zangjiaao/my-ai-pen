@@ -40,6 +40,30 @@ export function isStrongerPlanStatus(prior: string, incoming: string): boolean {
   return planStatusRank(prior) > planStatusRank(incoming);
 }
 
+/**
+ * Orphan L2 rows omitted from a Todo snapshot survive merge only when host/package-owned.
+ * Spec #125: package-anchored history + Worker chips; not every Main done todo forever.
+ */
+export function shouldPreserveOrphanL2(p: PlanNodeLike): boolean {
+  const id = String(p.node_id || p.id || "").trim();
+  if (!id) return false;
+  if (id.startsWith("pkg-")) return true;
+  const hasOwnership = Boolean(String(p.agent_id || "").trim());
+  if (!hasOwnership) return false;
+  const packageAnchored = Boolean(
+    String((p as { plan_node_id?: string }).plan_node_id || "").trim(),
+  );
+  if (packageAnchored) return true;
+  // Worker-owned row with settlement-ish status (even without plan_node_id field).
+  const status = normalizePlanWorkStatus(String(p.status || ""));
+  return (
+    status === "done" ||
+    status === "failed" ||
+    status === "blocked" ||
+    status === "running"
+  );
+}
+
 function stageNodeId(stageId: string): string {
   return `graph-stage-${String(stageId || "").trim() || "unknown"}`;
 }
@@ -152,7 +176,7 @@ export class HardGraphPlanStore {
    *
    * GraphStore remains coverage SoT: when Todo snapshot is weaker/stale relative to
    * package settlement, preserve prior status + Worker ownership on matching node_ids.
-   * Package-anchored / completed / ownership rows are never wiped by routine todo ops.
+   * Orphan rows (not in Todo snapshot) survive only when host/package-owned — not every done Main todo.
    */
   setStageTodos(stageId: string, nodes: PlanNodeLike[]): void {
     if (!this.stageTodos.has(stageId)) return;
@@ -197,24 +221,12 @@ export class HardGraphPlanStore {
         return merged;
       });
     const seen = new Set(workItems.map((n) => String(n.node_id || n.id || "")));
-    // Host-owned / settled rows not present in Todo snapshot must survive merge
-    // (pkg-* rows, package-anchored done rows with ownership, completed history).
+    // Host-owned orphans only: pkg-* rows, or Worker-owned / package-anchored rows.
+    // Bare Main done/failed rows without ownership may be replaced by a deliberate replan.
     for (const p of prev) {
       const id = String(p.node_id || p.id || "");
       if (!id || seen.has(id)) continue;
-      const priorStatus = normalizePlanWorkStatus(String(p.status || ""));
-      const hasOwnership = Boolean(String(p.agent_id || "").trim());
-      const packageAnchored =
-        id.startsWith("pkg-") ||
-        Boolean(String((p as { plan_node_id?: string }).plan_node_id || "").trim());
-      const preserve =
-        id.startsWith("pkg-") ||
-        priorStatus === "done" ||
-        priorStatus === "failed" ||
-        priorStatus === "blocked" ||
-        (hasOwnership && packageAnchored) ||
-        (hasOwnership && (priorStatus === "running" || priorStatus === "done"));
-      if (preserve) {
+      if (shouldPreserveOrphanL2(p)) {
         workItems.push({ ...p, parent_id: parentId });
         seen.add(id);
       }

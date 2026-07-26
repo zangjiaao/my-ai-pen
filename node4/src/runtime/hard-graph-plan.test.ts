@@ -290,7 +290,7 @@ assert.ok(emitted.every((n) => !n.owner_expert_name || n.owner_expert_name === "
     "done",
   );
 
-  // Retry todo.init with new titles must not silently wipe completed package-anchored history
+  // Retry todo.init with new titles must not silently wipe Worker-owned package history
   plan2.setStageTodos("class_probe", [
     {
       node_id: "todo-new-wave",
@@ -306,6 +306,11 @@ assert.ok(emitted.every((n) => !n.owner_expert_name || n.owner_expert_name === "
     "retry init must not wipe completed package-anchored L2",
   );
   assert.ok(plan2.toPlanTree().some((n) => n.node_id === "todo-new-wave"));
+  // Bare Main done (todo-weak had no agent_id) may be dropped on deliberate replan
+  assert.ok(
+    !plan2.toPlanTree().some((n) => n.node_id === "todo-weak"),
+    "non-owned Main todos are not immortal across replan",
+  );
 
   // Progress must not look full-green success when stage is blocked
   plan2.setStageStatus("class_probe", "blocked");

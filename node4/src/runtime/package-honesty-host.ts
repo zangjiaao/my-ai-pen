@@ -9,10 +9,7 @@ import { FindingStore } from "./finding-store.js";
 import {
   MAX_PACKAGE_ATTEMPTS,
   mayRetryPackage,
-  evaluateHonestPartial,
   recordPackageTerminal,
-  filterPackageTerminalsForStage,
-  type PackageAttemptRecord,
   type PackageTerminalEntry,
 } from "./package-settlement-law.js";
 
@@ -128,6 +125,7 @@ export function bumpPackageAttempt(
  * Exact declare keys only — no fuzzy includes matching.
  * Accepts structured.failed_packages[] or deadends that are exactly the package key
  * or exactly `undeclared_package_fail:<key>` / `failed_package:<key>`.
+ * Kept for package-wave tooling / tests; stage Feedback uses host settlement (#125).
  */
 export function extractDeclaredFailedKeys(
   packageKeys: Iterable<string>,
@@ -159,36 +157,5 @@ export function extractDeclaredFailedKeys(
   return [...declared];
 }
 
-/**
- * Spec #116 I0.2–3: build honest-partial evaluation from lifecycle package terminals.
- * Production stage settlement must pass structured deadends/failed_packages for exact declare matching.
- */
-export function evaluateStageHonestPartialFromRuntime(
-  runtime: ToolRuntime,
-  stageId: string,
-  structured?: { deadends?: string[]; failed_packages?: string[]; ok?: boolean },
-): ReturnType<typeof evaluateHonestPartial> {
-  const pq = ensureProcessQuality(runtime.lifecycle);
-  const sid = String(stageId || "").trim() || runtime.lifecycle.hardGraphRun?.stageId || "";
-  const packages: PackageAttemptRecord[] = filterPackageTerminalsForStage(
-    pq.packageTerminals,
-    sid,
-  );
-  const packageKeys = packages.map((p) => p.package_key);
-  const declared_failed_keys = extractDeclaredFailedKeys(packageKeys, structured);
-  const needDeclare = packages.filter(
-    (p) =>
-      p.terminal === "failed" ||
-      p.terminal === "never_started" ||
-      p.terminal === "aborted" ||
-      (p.terminal === "success" && p.salvaged),
-  );
-  return evaluateHonestPartial({
-    packages,
-    declared_failed_keys,
-    claims_full_success: structured?.ok === true && needDeclare.length > 0,
-    l2_done_for_keys: packages
-      .filter((p) => p.terminal === "success" && !p.salvaged)
-      .map((p) => p.package_key),
-  });
-}
+// Spec #125: stage Feedback no longer uses agent-declare evaluateStageHonestPartialFromRuntime.
+// Host settlement (settleHostStage) owns package declare + stage ok.

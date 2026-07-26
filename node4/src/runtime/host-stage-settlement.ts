@@ -3,7 +3,10 @@
  *
  * Business SoT: Finding Store + package terminals + surface ledger (+ package evidence).
  * Agent-authored result.json is ignored even if present with ok: true.
- * Honesty declaration is host-owned from package terminals (silent partial impossible).
+ * Host owns failure declaration from package terminals (silent partial impossible).
+ *
+ * Settlement ok under host ownership = no running packages.
+ * Host-declared failure keys are metadata for deadends/audit, not an agent honesty ritual.
  */
 
 import { writeFile } from "node:fs/promises";
@@ -15,10 +18,10 @@ import {
   type ProcessQualityState,
 } from "./package-honesty-host.js";
 import {
-  evaluateHonestPartial,
   filterPackageTerminalsForStage,
   type PackageAttemptRecord,
 } from "./package-settlement-law.js";
+import { hardStagePackageKey } from "./hard-graph-continuity.js";
 import {
   normalizeSubagentResult,
   type SubagentCandidate,
@@ -27,7 +30,7 @@ import {
   type SubagentSurface,
 } from "./subagent-result.js";
 
-/** Package terminals that must be declared for honest partial (host-owned). */
+/** Package terminals that host must surface as declared failures (metadata). */
 export function packageNeedsHostDeclaration(p: PackageAttemptRecord): boolean {
   return (
     p.terminal === "failed" ||
@@ -42,34 +45,54 @@ export function hostDeclareFailedKeys(packages: PackageAttemptRecord[]): string[
   return packages.filter(packageNeedsHostDeclaration).map((p) => p.package_key);
 }
 
+/**
+ * Host-owned honesty snapshot. Silent partial cannot form: host always declares
+ * every package that needs declaration. `ok` is true iff no packages are still running.
+ */
+export type HostHonestySnapshot = {
+  ok: boolean;
+  silent_partial: false;
+  undeclared_failures: [];
+  illegal_l2_done: [];
+  host_owned_declare: true;
+  running_packages: string[];
+};
+
+export type HostStageNarrative = {
+  summary?: string;
+  facts?: SubagentFactNote[];
+  notes?: string;
+  deadends?: string[];
+};
+
 export type HostStageSettlementInput = {
   stageId: string;
   runtime: ToolRuntime;
   /**
-   * Optional narrative fields from the stage session (summary/facts/notes).
+   * Optional narrative from the stage session (summary/facts/notes).
    * Never used for honesty ok or as a substitute for Store/ledger surfaces/candidates.
+   * Never deposited into Store/ledger.
    */
-  narrative?: {
-    summary?: string;
-    facts?: SubagentFactNote[];
-    notes?: string;
-    deadends?: string[];
-  };
-  /** When true (default), host auto-declares packages needing declaration. */
-  hostDeclare?: boolean;
-  /**
-   * Optional workdir for settlement audit JSON (forensics only — not gate input).
-   */
-  auditWorkDir?: string;
+  narrative?: HostStageNarrative;
 };
 
-export type HostStageSettlement = {
+/**
+ * Gate-facing structured projection plus captain-visible host fields.
+ * Do not pass host fields through normalizeSubagentResult — they live here.
+ */
+export type HostStageProjection = {
+  /** Shape accepted by evaluateStageGate / handoff merge. */
   structured: SubagentStructuredResult;
-  honesty: ReturnType<typeof evaluateHonestPartial>;
-  host_declared_keys: string[];
   feedback_ok_ids: string[];
+  host_declared_failed: string[];
+  package_terminals_n: number;
   package_count: number;
   running_packages: string[];
+};
+
+export type HostStageSettlement = HostStageProjection & {
+  honesty: HostHonestySnapshot;
+  host_declared_keys: string[];
   agent_result_json_ignored: true;
 };
 
@@ -92,7 +115,6 @@ function storeCandidatesToProjection(rows: FindingRecord[]): SubagentCandidate[]
 function surfacesFromLedger(runtime: ToolRuntime): SubagentSurface[] {
   const ledger = runtime.surfaceLedger;
   if (!ledger) return [];
-  // Prefer in-memory cache; load may be async elsewhere — use all() when warm.
   const items = ledger.all();
   return items.slice(0, 80).map((s) => ({
     location: s.location,
@@ -103,13 +125,28 @@ function surfacesFromLedger(runtime: ToolRuntime): SubagentSurface[] {
   }));
 }
 
+/**
+ * Evidence cache packs for this stage only (hard-stage:<stageId> prefix).
+ * Prevents other stages' package evidence from polluting settlement.
+ */
 function candidatesFromEvidenceCache(
   runtime: ToolRuntime,
   stageId: string,
 ): SubagentCandidate[] {
   const packs = runtime.lifecycle?.subagentEvidenceCache || [];
+  const stagePrefix = hardStagePackageKey(stageId);
   const out: SubagentCandidate[] = [];
   for (const pack of packs) {
+    const id = String(pack.subagentId || "");
+    // Accept exact stage key, worker keys under stage, or packs without id only when stage empty.
+    const inStage =
+      !stageId ||
+      id === stagePrefix ||
+      id.startsWith(`${stagePrefix}:`) ||
+      // Legacy packs keyed only by worker id still include candidates for current stage
+      // when subagentId is empty — skip unscoped packs to avoid cross-stage pollution.
+      false;
+    if (!inStage) continue;
     for (const c of pack.candidates || []) {
       if (c.title || c.location || c.proof_excerpt) {
         out.push({
@@ -122,7 +159,6 @@ function candidatesFromEvidenceCache(
       }
     }
   }
-  void stageId;
   return out.slice(0, 80);
 }
 
@@ -162,23 +198,23 @@ export function settleHostStage(input: HostStageSettlementInput): HostStageSettl
   const runtime = input.runtime;
   const pq: ProcessQualityState = ensureProcessQuality(runtime.lifecycle);
   const packages = filterPackageTerminalsForStage(pq.packageTerminals, stageId);
-  const hostDeclare = input.hostDeclare !== false;
-  const host_declared_keys = hostDeclare ? hostDeclareFailedKeys(packages) : [];
-
-  const honesty = evaluateHonestPartial({
-    packages,
-    // Host-owned declare: silent partial cannot form when host settles.
-    declared_failed_keys: host_declared_keys,
-    // Never trust agent ok:true as full-success claim under host settlement.
-    claims_full_success: false,
-    l2_done_for_keys: packages
-      .filter((p) => p.terminal === "success" && !p.salvaged)
-      .map((p) => p.package_key),
-  });
+  // Host always owns declare — no agent-declare path, no hostDeclare flag.
+  const host_declared_keys = hostDeclareFailedKeys(packages);
 
   const running_packages = packages
     .filter((p) => p.terminal === "running")
     .map((p) => p.package_key);
+
+  // Host settlement ok: no in-flight packages. Declare is host-owned metadata only.
+  const settlementOk = running_packages.length === 0;
+  const honesty: HostHonestySnapshot = {
+    ok: settlementOk,
+    silent_partial: false,
+    undeclared_failures: [],
+    illegal_l2_done: [],
+    host_owned_declare: true,
+    running_packages,
+  };
 
   const storeRows = pq.findingStore
     .snapshot()
@@ -191,26 +227,33 @@ export function settleHostStage(input: HostStageSettlementInput): HostStageSettl
   const feedback_ok_ids = feedbackOkIds(pq.findingStore, stageId);
 
   const narrativeSummary = String(input.narrative?.summary || "").trim();
-  // Spec #125: require.summary must not pass on synthetic host fillers alone.
   const realSummary = narrativeSummary.length > 0;
-  const hostSummaryParts: string[] = [];
-  if (realSummary) hostSummaryParts.push(narrativeSummary);
+  /**
+   * summaryProvided for gates:
+   * - real captain/session narrative, OR
+   * - host work signal (packages started, surfaces in ledger, or store/evidence candidates)
+   * Empty stage with neither narrative nor host work → no summary (fail-closed require.summary).
+   */
+  const hostWorkSignal =
+    packages.length > 0 || surfaces.length > 0 || candidates.length > 0;
+  const summaryParts: string[] = [];
+  if (realSummary) summaryParts.push(narrativeSummary);
   if (packages.length) {
     const okN = packages.filter((p) => p.terminal === "success" && !p.salvaged).length;
     const failN = packages.filter(packageNeedsHostDeclaration).length;
-    hostSummaryParts.push(
+    summaryParts.push(
       `host settlement: packages success=${okN} need_declare=${failN} stage=${stageId}`,
     );
   }
-  if (surfaces.length) hostSummaryParts.push(`surfaces=${surfaces.length}`);
-  if (candidates.length) hostSummaryParts.push(`store_candidates=${candidates.length}`);
+  if (surfaces.length) summaryParts.push(`surfaces=${surfaces.length}`);
+  if (candidates.length) summaryParts.push(`store_candidates=${candidates.length}`);
   if (feedback_ok_ids.length) {
-    hostSummaryParts.push(`feedback_ok_ids=${feedback_ok_ids.join(",")}`);
+    summaryParts.push(`feedback_ok_ids=${feedback_ok_ids.join(",")}`);
   }
-  // Display-only fallback when no narrative — does not set summaryProvided.
-  const displaySummary = hostSummaryParts.length
-    ? hostSummaryParts.join(" · ")
-    : `host settlement stage=${stageId || "unknown"}`;
+  const summaryForGate =
+    realSummary || hostWorkSignal
+      ? summaryParts.join(" · ") || `host settlement stage=${stageId || "unknown"}`
+      : undefined;
 
   const deadends = [
     ...(input.narrative?.deadends || []).map((d) => String(d || "").trim()).filter(Boolean),
@@ -218,15 +261,7 @@ export function settleHostStage(input: HostStageSettlementInput): HostStageSettl
     ...running_packages.map((k) => `running_package:${k}`),
   ];
 
-  // ok = honesty ∧ no running packages (Spec #125 state machine)
-  const settlementOk = honesty.ok && running_packages.length === 0;
-
-  // When no real narrative summary, omit summary so summaryProvided stays false
-  // (fail-closed require.summary) unless packages/surfaces already carry host work signal.
-  const summaryForGate =
-    realSummary || packages.length > 0 || surfaces.length > 0 || candidates.length > 0
-      ? displaySummary
-      : undefined;
+  // Gate shape only — host captain fields live on HostStageSettlement, not inside normalize.
   const structured = normalizeSubagentResult({
     ok: settlementOk,
     ...(summaryForGate ? { summary: summaryForGate } : {}),
@@ -235,10 +270,6 @@ export function settleHostStage(input: HostStageSettlementInput): HostStageSettl
     facts: input.narrative?.facts || [],
     deadends,
     notes: input.narrative?.notes,
-    // Captain-visible confirmable ids (machine surface for Main)
-    feedback_ok_ids,
-    host_declared_failed: host_declared_keys,
-    package_terminals_n: packages.length,
   });
 
   return {
@@ -246,6 +277,8 @@ export function settleHostStage(input: HostStageSettlementInput): HostStageSettl
     honesty,
     host_declared_keys,
     feedback_ok_ids,
+    host_declared_failed: host_declared_keys,
+    package_terminals_n: packages.length,
     package_count: packages.length,
     running_packages,
     agent_result_json_ignored: true,
@@ -273,6 +306,7 @@ export async function writeHostSettlementAudit(
           structured: {
             ok: settlement.structured.ok,
             summary: settlement.structured.summary,
+            summaryProvided: settlement.structured.summaryProvided,
             surfaces_n: settlement.structured.surfaces.length,
             candidates_n: settlement.structured.candidates.length,
             deadends: settlement.structured.deadends,

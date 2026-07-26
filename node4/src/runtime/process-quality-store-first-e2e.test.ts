@@ -190,11 +190,11 @@ try {
       stageId,
       runtime,
       narrative: { summary: "auth_session wave settled" },
-      hostDeclare: true,
     });
     assert.equal(settlement.agent_result_json_ignored, true);
     assert.equal(settlement.host_declared_keys.length, 2);
-    assert.equal(settlement.honesty.ok, true, "host declare → honest partial");
+    assert.equal(settlement.honesty.host_owned_declare, true);
+    assert.equal(settlement.honesty.ok, true, "host declare → no running → ok");
     assert.equal(settlement.structured.ok, true);
     // Zero confirms so far
     assert.equal(pq.findingStore.counts().booked_n, 0);

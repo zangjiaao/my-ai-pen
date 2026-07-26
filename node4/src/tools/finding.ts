@@ -22,6 +22,7 @@ import {
   proofGroundedInRecentWork,
   textResult,
 } from "./common.js";
+import { ingestPackageCandidatesToStore } from "../runtime/finding-store.js";
 
 export { synthesizePocFromHandoffProof } from "../runtime/subagent-result.js";
 
@@ -254,7 +255,6 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
         if (!title || !location) {
           return textResult("error: finding(upsert) requires title and location");
         }
-        const { ingestPackageCandidatesToStore } = await import("../runtime/finding-store.js");
         const ids = ingestPackageCandidatesToStore(
           store,
           [
