@@ -42,7 +42,8 @@ const n3 = normalizeSubagentResult(null, "fallback summary");
 assert.equal(n3.summary, "fallback summary");
 assert.equal(n3.candidates.length, 0);
 
-assert.match(formatSubagentReturnContractPrompt(), /result\.json/);
+assert.match(formatSubagentReturnContractPrompt(), /settlement\.json/);
+assert.match(formatSubagentReturnContractPrompt(), /Finding Store|host\/Store/i);
 assert.match(formatSubagentReturnContractPrompt(), /finding/);
 assert.match(formatSubagentReturnContractPrompt(), /non-empty/);
 

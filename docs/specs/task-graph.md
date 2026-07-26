@@ -25,20 +25,21 @@
 
 ### Hard Graph stage continuity (A1 + A4)
 
-Per-stage pi sessions still use isolated work dirs (`taskDir/hard-graph/<graphId>/stage-…`) for `result.json` / stage evidence audit. **Handoff contract:** stage Feedback reads **`result.json` only** (not process facts / transcripts). Hard Graph load rejects stages whose non-empty `tools.allow` omits **`write`** (so handoff is tool-reachable); stage prompts name the write path. Missing/invalid `result.json` still fail-closes. Continuity is explicit:
+Per-stage pi sessions still use isolated work dirs (`taskDir/hard-graph/<graphId>/stage-…`) for evidence / optional settlement **audit** artifacts. **Handoff contract (Spec #125):** stage Feedback is **host settlement only** — Finding Store rows, package terminals (host-declared honesty), surface ledger, and package evidence. **Agent-authored `result.json` is ignored** for business gates even if present with `ok: true`. Hard Graph load does **not** require `write` solely for a file handoff (`write` may remain for notes/scripts). Continuity is explicit:
 
 | Concern | Behavior |
 |---------|----------|
-| **Booking / proof (A1)** | After each stage, structured **candidates** upsert into **parent** lifecycle by package key `hard-stage:<stageId>` or fan-out `hard-stage:<stageId>:<workerId>`. Empty-candidate attempts do not wipe a prior pack for that key. Worker packages promoted from stage child cache on finalize. Next stage is **seeded** so book-only stages can `finding(confirm)` with matching `location` / `candidate_index` and verbatim `proof_excerpt` (poc may be synthesized from handoff proof). Hallucinated proof still fails closed; repeated identical fails surface **bookable_unbooked** anti-thrash. |
+| **Host stage settlement** | After each stage session, host projects structured outcome for `evaluateStageGate(require)`. Honesty declaration is **host-owned** from package terminals (failed / never_started / aborted / success+salvaged). Honest partial may pass; silent partial impossible under host settlement. Optional `host-settlement-audit.json` is forensics only — not gate input. |
+| **Booking / proof (A1)** | Package settlement upserts candidates into **Finding Store** + L0 mechanical Feedback; parent lifecycle cache still receives projected candidates for continuity. Main books with `finding(confirm, finding_id=…)` after `feedback_ok`. Serial Main may `finding(upsert)` without packages. Hallucinated proof still fails closed; invent-without-id forbidden on Expert Graph. |
 | **Session jars (A4)** | Before a stage: seed `parent taskDir/session/` → stage workDir via session-seed helpers. After a stage: promote stage `session/` → parent (best-effort; child cookies win). |
 | **Agent Graph** | Hard stage child is **depth 0** with `SubagentHost` when tools allow `subagent` (not nest-banned). Workers nest-ban at depth ≥1. |
-| **Process Feedback** | Runner accumulates `processMetrics`: structure fails, discovery-yield soft-fails (rich surfaces + empty cand/deadend), surface ledger statuses + `surface_acted_rate` (R1 terminal only; **not** candidate path-match = probed), fanout package attempts (P1; hint only) — **no** expected-finding counts (Spec #116 / #111). |
-| **Finding Store** | Store-first candidates/findings (survives stages); package settlement auto-enqueues Feedback; Main `finding(confirm)` only with `finding_id` after `feedback_ok`; confirm ⇒ platform `vuln_found` / ledger (Spec #116 / #112). `result.json` is projection/audit, not sole SoT. |
-| **Package settlement** | Wave = one package attempt (≤2 attempts/package, not a stage pool). Honest partial may pass; silent partial fail-closed. Salvage ≠ success. Stage `max_retries` independent — stage retry resets non-success package budgets; successful evidence kept. |
+| **Process Feedback** | Runner accumulates `processMetrics`: structure fails from host settlement honesty/require, discovery-yield soft-fails, surface ledger statuses + `surface_acted_rate`, fanout package attempts — **no** expected-finding counts (Spec #116 / #111 / #125). |
+| **Finding Store** | Store-first SoT for vuln intelligence (survives stages); package settlement auto-enqueues Feedback; Main `finding(confirm)` only with `finding_id` after `feedback_ok`; confirm ⇒ platform `vuln_found` / ledger. Agent files are never the booking channel. |
+| **Package settlement** | Wave = one package attempt (≤2 attempts/package, not a stage pool). Success = intentional structured settlement into host/Store (optional file artifact names only). Salvage ≠ success. Stage `max_retries` independent — stage retry resets non-success package budgets; successful evidence kept. |
 | **UI interrupt** | Cancels the in-flight turn only (≠ package-fail). Captain stage session is parked (not disposed) for continue; no empty-message abort; no auto full-batch replay (Spec #116 / #109). |
-| **L2 coverage SoT** | Expert Graph: GraphStore only (todo tool is a facade → `setStageTodos` + Graph `plan_tree`). Non-Graph: TodoStore. Formal Graph packages must anchor existing L2 `plan_node_id`. |
+| **L2 coverage SoT** | Expert Graph: GraphStore only (todo tool is a facade → merge `setStageTodos` + Graph `plan_tree`). Matching node_ids preserve Graph status/ownership when Todo snapshot is weaker; package-anchored done rows + chips are not wiped by routine `todo.done` / retry init. Progress labels stage blocked when L1 is failed/blocked. Non-Graph: TodoStore. Formal Graph packages must anchor existing L2 `plan_node_id`. |
 
-Handoff JSON in the stage prompt remains informational; booking authority is lifecycle cache + groundable observations, not prompt-only tables. Settlement still does not require N bookings.
+Handoff snapshot in the stage prompt remains informational; booking authority is Finding Store + groundable observations, not prompt-only tables or result.json. Settlement still does not require N bookings.
 
 ### Expert Graph workbench observability (parity with free path)
 
@@ -48,7 +49,7 @@ Hard Graph stages share the **same platform message contracts** free Expert / De
 |----------|----------|
 | **Usage** | Stage sessions record LLM usage; mid-run `checkpoint_update` + terminal `task_complete.llm_usage` / checkpoint feed Status tokens. Run owner: `lifecycle.hardGraphRun` (`plan` + `usage` + `panel` + `stageId`) |
 | **Thinking / text** | Progressive `thinking` + `text` streams when the Agent Runtime produces them; stage default thinking level matches free Expert non-chat (medium), not a silent downgrade. Free path + stages share `attachNode4SessionObservability` |
-| **Tasks L1/L2** | L1 = fixed Graph stages (runner definition); L2 = stage-local todos nested under the stage. Stage `todo.init` **merges** under the current stage via `hardGraphRun.plan` — never replaces sibling stages or wipes completed history |
+| **Tasks L1/L2** | L1 = fixed Graph stages (runner definition); L2 = stage-local todos nested under the stage. Stage `todo` mutations **merge** under the current stage via `hardGraphRun.plan` — preserve package settlement status/ownership; never replace sibling stages or silently wipe completed package-anchored history |
 | **Activity** | Timeline accepts product plan sources (`source=plan`) and Graph stage status changes (same plan nodes Tasks shows) |
 | **panel_agents** | Collaboration tree: stage Main + subagent workers when packages run |
 | **Subagent lifecycle** | `subagent_started` / `subagent_finished` on the platform sink when packages spawn |
@@ -107,7 +108,7 @@ Main DISPATCH (goal + success_criteria)
 - **Path re-dispatch budget:** same pathname ≤ **2** dispatches/task.
 - **Session seed + promote:** child jars seed from parent `session/`; after each package, child cookies **promote back to parent** (still useful when Main does not re-login; required under lab hard).
 - **Worker keep-alive (OMP-style):** after LLM packages (incl. soft-fail/timeout), idle by **`agent_id`**. Default spawn **cold**. Warm only via `resume_agent_id` + **same-path affinity**. **Release:** active idle TTL (default **420s**), maxIdle LRU (8), maxPackages (4), `subagent(op=release)`, task-end `disposeAll`. List: `op=list`. Disable: `NODE4_SUBAGENT_IDLE=0`.
-- **Salvage:** missing `result.json` → candidates from tool-output/facts when possible.
+- **Salvage:** missing intentional structured settlement → candidates from tool-output/facts when possible (**evidence only**; salvage ≠ package success).
 - Ledger/post-process mutex-serialized. Main still books.
 
 ## Non-goals

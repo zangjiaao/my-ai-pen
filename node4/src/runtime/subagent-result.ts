@@ -414,8 +414,9 @@ export function buildParentObservationBlob(structured: SubagentStructuredResult)
 /** Instructions embedded in the child worker prompt (childRolePack already bans nested sub / finding book). */
 export function formatSubagentReturnContractPrompt(): string {
   return [
-    "## Return contract (required before stop)",
-    "Write `./result.json` when this_turn_goal is done or blocked:",
+    "## Return contract (Spec #125 — host/Store settlement)",
+    "When this_turn_goal is done or blocked, emit **intentional structured settlement** so the host can ingest surfaces/candidates into Finding Store.",
+    "Optional on-disk artifact (not a booking or stage-Feedback channel): write `./settlement.json` with:",
     "```json",
     '{',
     '  "ok": true,',
@@ -427,9 +428,11 @@ export function formatSubagentReturnContractPrompt(): string {
     '  "artifacts": ["relative paths"]',
     "}",
     "```",
+    "- Package **success** = valid intentional structured settlement into host/Finding Store — not the mere presence of a file name.",
+    "- Missing intentional settlement may salvage tool-output for **evidence only**; salvage ≠ package success and cannot L2-done package rows.",
     "- Surface/recon: `surfaces` from **live** recon only — never invent modules.",
     "- Any vuln claim → non-empty `candidates` with `location` + real `proof_excerpt` (not paraphrase-only).",
-    "- `poc_hint`: reproduce steps AND observed result. Parent books via finding(confirm) from your proof_excerpt — no re-probe.",
-    "- Mandatory `./result.json` before stop (else salvage). Prefer session/http; re-login only if seeded cookies fail.",
+    "- `poc_hint`: reproduce steps AND observed result. Parent books via finding(confirm, finding_id) after Store L0 — you never book.",
+    "- Prefer session/http; re-login only if seeded cookies fail. Never call subagent. Never invent booked findings.",
   ].join("\n");
 }

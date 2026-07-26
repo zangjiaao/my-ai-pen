@@ -22,6 +22,7 @@ import {
   proofGroundedInRecentWork,
   textResult,
 } from "./common.js";
+import { ingestPackageCandidatesToStore } from "../runtime/finding-store.js";
 
 export { synthesizePocFromHandoffProof } from "../runtime/subagent-result.js";
 
@@ -193,7 +194,7 @@ export function noteFindingConfirmGroundFailure(
   if (n >= 2) {
     return (
       ` — judgment: bookable_unbooked (identical finding(confirm) failed ${n}× for this title+location). ` +
-      `Stop thrashing the same confirm. Either re-probe for grounded proof_excerpt, match location/candidate_index to handoff candidates, or record deadend/bookable_unbooked in stage result.json.`
+      `Stop thrashing the same confirm. Either re-probe for grounded proof_excerpt, match location/candidate_index to Store/handoff candidates, or record deadend/bookable_unbooked via fact — do not invent finding_id or use result.json as booking.`
     );
   }
   return (
@@ -232,11 +233,78 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
     }),
     async execute(_id: string, params: any) {
       const action = String(params.action || "confirm").toLowerCase();
+      const store = runtime.lifecycle.processQuality?.findingStore;
+
+      // Spec #125: Main serial path — upsert candidates into Finding Store (not result.json).
+      if (action === "upsert" || action === "deposit") {
+        if ((runtime.lifecycle.subagentDepth || 0) >= 1) {
+          return textResult(
+            "error: subagent must not finding(upsert) — workers return structured candidates; Main/host settle Store",
+            { isError: true },
+          );
+        }
+        if (!store) {
+          return textResult(
+            "error: Finding Store unavailable (Expert Graph processQuality required for upsert)",
+            { isError: true },
+          );
+        }
+        const title = String(params.title || "").trim();
+        const location = String(params.location || params.url || "").trim();
+        const proof = String(params.proof || params.proof_excerpt || params.observation || "").trim();
+        if (!title || !location) {
+          return textResult("error: finding(upsert) requires title and location");
+        }
+        const ids = ingestPackageCandidatesToStore(
+          store,
+          [
+            {
+              title,
+              location,
+              claim: String(params.description || params.claim || "").trim() || undefined,
+              proof_excerpt: proof || undefined,
+              poc_hint: String(params.poc || "").trim() || undefined,
+            },
+          ],
+          {
+            package_id: "main_serial",
+            stage_id: runtime.lifecycle.hardGraphRun?.stageId,
+            agent_id: "main",
+            fallback_location: location,
+          },
+        );
+        const feedbackOk = store
+          .snapshot()
+          .filter((r) => ids.includes(r.id) && r.status === "feedback_ok")
+          .map((r) => ({ id: r.id, status: r.status, title: r.title }));
+        return jsonResult({
+          ok: true,
+          action: "upsert",
+          finding_ids: ids,
+          feedback_ok: feedbackOk,
+          hint:
+            feedbackOk.length > 0
+              ? `Confirm with finding(confirm, finding_id=${feedbackOk[0]!.id})`
+              : "L0 rejected or pending — need proof_excerpt ≥24 chars for feedback_ok",
+        });
+      }
+
       if (action === "list") {
+        // Prefer Store snapshot when available (captain-visible feedback_ok ids).
+        if (store) {
+          const rows = store.snapshot();
+          return jsonResult({
+            findings: rows,
+            feedback_ok_ids: rows.filter((r) => r.status === "feedback_ok").map((r) => r.id),
+            booked_n: rows.filter((r) => r.status === "booked").length,
+          });
+        }
         const rows = await loadFindings(runtime.findingsDir);
         return jsonResult({ findings: rows });
       }
-      if (action !== "confirm") return textResult("error: action must be confirm or list");
+      if (action !== "confirm") {
+        return textResult("error: action must be confirm, list, or upsert");
+      }
 
       // Spec #116 I0.13: Sub never confirms
       if ((runtime.lifecycle.subagentDepth || 0) >= 1) {
@@ -245,7 +313,6 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
         });
       }
 
-      const store = runtime.lifecycle.processQuality?.findingStore;
       const findingId = String(params.finding_id || params.candidate_id || "").trim();
       // Spec #116 I0.14–16: Expert Graph Store path requires feedback_ok finding_id.
       // Free path without Store activity keeps legacy confirm (handoff candidates) until fully migrated.
