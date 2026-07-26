@@ -53,7 +53,8 @@ const refine = mechanicalProductStateCritic({
 assert.equal(refine.decision, "refine");
 delete process.env.NODE4_L1_YIELD_REFINE;
 
-// Under-severity judgment
+// Under-severity judgment (opt-in; not default host keyword table)
+process.env.NODE4_L1_UNDER_SEVERITY_REFINE = "1";
 const under = mechanicalProductStateCritic({
   stageId: "component",
   storeSummary: {
@@ -64,6 +65,7 @@ const under = mechanicalProductStateCritic({
 });
 assert.equal(under.decision, "refine");
 assert.match(under.gaps.join(" "), /under-severity/i);
+delete process.env.NODE4_L1_UNDER_SEVERITY_REFINE;
 
 const store = new FindingStore();
 store.upsert({

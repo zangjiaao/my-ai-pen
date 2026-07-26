@@ -48,15 +48,12 @@ import {
 import { SubagentHost } from "./subagent.js";
 import type { Node4AgentSession } from "./run-node4-agent.js";
 import { formatAgentLanguageInjection } from "./agent-language.js";
-import {
-  formatPriorSnapshotInjection,
-  type PriorSeedResult,
-} from "./prior-seed.js";
+import { formatPriorSnapshotInjection } from "./prior-seed.js";
 import {
   buildL1InputFromProductState,
-  l1MaxStageRefine,
   runL1Critic,
 } from "./l1-critic.js";
+import { ensureGraphRunQuality } from "./graph-run-quality.js";
 
 /**
  * Deposit host-trusted surfaces/candidates into ledger + Finding Store.
@@ -113,36 +110,46 @@ export type HardGraphBoundSessionFactory = (options: {
 }) => Promise<{ session: Node4AgentSession }>;
 
 /** Exported for harness contract tests (#101 / #125). */
+/** Data-driven stage intent text (Spec #139 I5) — prefers stage.intent over stage id. */
+export function stageIntentPromptLines(stage: {
+  id: string;
+  intent?: string;
+}): string {
+  const intent = String(stage.intent || stage.id || "").toLowerCase();
+  if (intent === "surface") {
+    return [
+      "**Stage intent (surface — Spec #139 I5):** inventory + **bounded smoke** only.",
+      "Bounded smoke = short characterize-or-deadend per observed surface (login form shape, param names, auth requirement) — not multi-class exploitation campaigns.",
+      "Multi-class depth belongs in class_probe+ stages. Do not treat recon as full exploit.",
+      "No candidates_min class quota; opportunistic smoke candidates may deposit but are not required for gate.",
+      "Do not call finding(confirm) on this stage (tool profile forbids).",
+    ].join(" ");
+  }
+  if (intent === "init") {
+    return "Init: RoE + target understanding only; no live recon. Acknowledge priors loaded or honest empty-prior from host seed.";
+  }
+  if (intent === "book") {
+    return "Book stage: confirm feedback_ok Store rows by finding_id only; leftover feedback_ok become explicit unbookable reasons.";
+  }
+  return "";
+}
+
 export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope): string {
   const toolList = input.tools.length ? input.tools.join(", ") : "(none)";
   const allowSubagent = input.tools.includes("subagent");
   const allowFinding = input.tools.includes("finding");
-  const stageId = input.stage.id;
-  const surfaceIntent =
-    stageId === "surface"
-      ? [
-          "**Stage intent (surface — Spec #139 I5):** inventory + **bounded smoke** only.",
-          "Bounded smoke = short characterize-or-deadend per observed surface (login form shape, param names, auth requirement) — not multi-class exploitation campaigns.",
-          "Multi-class depth belongs in class_probe+ stages. Do not treat recon as full exploit.",
-          "No candidates_min class quota; opportunistic smoke candidates may deposit but are not required for gate.",
-          "Do not call finding(confirm) on this stage (tool profile forbids).",
-        ].join(" ")
-      : "";
-  const initIntent =
-    stageId === "init"
-      ? "Init: RoE + target understanding only; no live recon. Acknowledge priors loaded or honest empty-prior from host seed."
-      : "";
-  // Prior snapshot: pass via input.priorSeed or leave empty (executor injects)
-  const priorSeed = (input as StageExecutorInput & { priorSeed?: PriorSeedResult }).priorSeed;
-  const priorBlock = priorSeed ? formatPriorSnapshotInjection(priorSeed) : "";
+  const intentLines = stageIntentPromptLines(input.stage);
+  // Prior snapshot from graph-run quality (hardGraphRun), not processQuality
+  const priorSeed =
+    (input as StageExecutorInput & { priorSnapshot?: string }).priorSnapshot ||
+    "";
   return [
     "You are a **Hard Graph stage agent** (Graph × Pi).",
     `Graph: ${input.graphId}  Stage: ${input.stage.id} (index ${input.stageIndex})`,
     input.stage.success ? `Stage success criteria: ${input.stage.success}` : "",
     "You do NOT schedule other stages. Complete only this stage.",
     `Allowed tools for this stage: ${toolList}`,
-    surfaceIntent,
-    initIntent,
+    intentLines,
     "Briefly narrate progress in assistant text when useful (what you are checking next; what you observed). Do not invent surfaces, proof, or booked findings in prose.",
     "**Stage settlement is host-owned** (Spec #125): do **not** write result.json as the stage handoff or booking channel. Host projects stage outcome from Finding Store, package terminals, and surface ledger.",
     "Bookable candidates must land in **Finding Store** (package settlement auto-ingest, or finding(upsert) for serial Main work) with title, location, **severity** (critical|high|medium|low|info — no silent medium), proof_excerpt (verbatim tool stdout/body ≥24 chars), optional poc.",
@@ -173,7 +180,7 @@ export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope)
     `Scope: ${JSON.stringify(task.scope)}`,
     `Prior handoff stages: ${input.handoff.completed_stages.join(", ") || "(none)"}`,
     `Known surfaces: ${JSON.stringify(input.handoff.surfaces.slice(0, 20))}`,
-    priorBlock,
+    priorSeed,
   ]
     .filter(Boolean)
     .join("\n");
@@ -369,9 +376,12 @@ export function createHardGraphStageExecutor(options: {
       detail: "seed failed",
     }));
 
-    const priorSeed = ensureProcessQuality(parentRuntime.lifecycle).priorSeed;
+    const gq = ensureGraphRunQuality(parentRuntime.lifecycle.hardGraphRun);
+    const priorSnapshot = gq?.priorSeed
+      ? formatPriorSnapshotInjection(gq.priorSeed)
+      : "";
     const systemPrompt = stageSystemPrompt(
-      { ...input, priorSeed } as StageExecutorInput & { priorSeed?: PriorSeedResult },
+      { ...input, priorSnapshot } as StageExecutorInput & { priorSnapshot?: string },
       task,
     );
     const userPrompt = stageUserPrompt(input, task);
@@ -450,14 +460,16 @@ export function createHardGraphStageExecutor(options: {
       // Spec #125 / #130: captain machine surface for confirmable Store ids.
       const feedbackOkIds = settlement.feedback_ok_ids;
 
-      // Spec #139 D3 / NC-L1: L1 Critic after host settlement (L0 structure still gated by runner).
-      // Critic runs on Product state only; result returned for runner to apply refine/pass.
+      // Spec #139 D3 / NC-L1: build Product-state critic input; l0Passed = honesty only.
+      // Runner owns structure gate + L1 refine budget application (refine_n).
       const pq = ensureProcessQuality(parentRuntime.lifecycle);
+      const gqState = ensureGraphRunQuality(parentRuntime.lifecycle.hardGraphRun);
       const honestyFlags: string[] = [];
       if (settlement.honesty) {
         if (!settlement.honesty.ok) honestyFlags.push("package_honesty");
         if (settlement.honesty.silent_partial) honestyFlags.push("silent_partial");
       }
+      const l0HonestyOk = Boolean(settlement.honesty?.ok);
       const l1Input = buildL1InputFromProductState({
         stageId: input.stage.id,
         stageSummary: structuredOut.summaryProvided ? structuredOut.summary : undefined,
@@ -468,43 +480,36 @@ export function createHardGraphStageExecutor(options: {
           | { total?: number; open?: number; probed?: number; booked?: number }
           | undefined,
       });
-      // Structure require is L0 — if settlement.structured.ok is false, L0 failed for honesty path;
-      // runner still evaluates stage.require. We only mark l0Passed for honesty soft signals here;
-      // runner combines with structure gate.
-      const l1Out = await runL1Critic({ l0Passed: true, input: l1Input });
-      if (!pq.l1ByStage) pq.l1ByStage = {};
-      const prev = pq.l1ByStage[input.stage.id] || { refine_n: 0 };
-      if (l1Out.decision === "refine") {
-        prev.refine_n = (prev.refine_n || 0) + 1;
+      const l1Out = await runL1Critic({ l0Passed: l0HonestyOk, input: l1Input });
+      // Stash last decision for close-out (runner increments refine_n when applying refine)
+      if (gqState) {
+        const prev = gqState.l1ByStage[input.stage.id] || { refine_n: 0 };
+        prev.last = { decision: l1Out.decision, gaps: l1Out.gaps };
+        gqState.l1ByStage[input.stage.id] = prev;
       }
-      prev.last = { decision: l1Out.decision, gaps: l1Out.gaps };
-      pq.l1ByStage[input.stage.id] = prev;
-      // Cap refine: if already used max refine budget and still refine, keep refine
-      // (runner blocks advance). l1MaxStageRefine documents budget.
-      void l1MaxStageRefine;
 
-      // validate_book: account leftover feedback_ok as unbookable if not booked this stage
-      if (input.stage.id === "validate_book") {
-        if (!pq.unbookable) pq.unbookable = [];
+      // Data-driven unbookable accounting (validate_book sets unbookable_on_exit)
+      if (input.stage.unbookable_on_exit && gqState) {
         for (const r of pq.findingStore.snapshot()) {
           if (r.status !== "feedback_ok") continue;
-          if (pq.unbookable.some((u) => u.finding_id === r.id)) continue;
-          pq.unbookable.push({
+          if (gqState.unbookable.some((u) => u.finding_id === r.id)) continue;
+          gqState.unbookable.push({
             finding_id: r.id,
             reason: "feedback_ok_not_confirmed_at_validate_book",
           });
         }
       }
 
+      const unbookableN = gqState?.unbookable?.length || 0;
       return {
         structured: structuredOut,
         summary: structuredOut.summaryProvided ? structuredOut.summary : undefined,
         fanoutPackagesN,
         bookOutcomes:
-          bookedDelta > 0 || input.stage.id === "validate_book"
+          bookedDelta > 0 || input.stage.unbookable_on_exit || input.stage.id === "validate_book"
             ? {
                 booked_n: bookedDelta,
-                reject_hints_n: pq.unbookable?.length || 0,
+                reject_hints_n: unbookableN,
               }
             : undefined,
         findingsBookedN: storeBooked,

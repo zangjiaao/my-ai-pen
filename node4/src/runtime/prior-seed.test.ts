@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import { FindingStore } from "./finding-store.js";
 import {
+  applyPriorAvoidOnPackage,
   checkDiscoveryAvoidCollision,
   formatPriorSnapshotInjection,
   openFindingsToPriorInputs,
@@ -91,5 +92,28 @@ const otherClass = checkDiscoveryAvoidCollision({
   class_key: "path_traversal",
 });
 assert.equal(otherClass.ok, true, "other class on same path is not skip-list");
+
+// applyPriorAvoidOnPackage: inject + hard-fail + re-verify requires ids
+const pkg = {
+  target: "http://t/exec",
+  already_done: "recon done",
+  this_turn_goal: "Command injection",
+  title: "Command injection",
+};
+const disc = applyPriorAvoidOnPackage(store, pkg);
+assert.equal(disc.ok, false);
+assert.match(pkg.already_done, /Prior pathKey/);
+const reverifyMissing = applyPriorAvoidOnPackage(store, {
+  ...pkg,
+  package_kind: "re-verify",
+});
+assert.equal(reverifyMissing.ok, false);
+if (!reverifyMissing.ok) assert.match(reverifyMissing.error, /prior_finding_ids/);
+const reverifyOk = applyPriorAvoidOnPackage(store, {
+  ...pkg,
+  package_kind: "re-verify",
+  prior_finding_ids: [seed.ids[0]!],
+});
+assert.equal(reverifyOk.ok, true);
 
 console.log("prior-seed.test.ts: ok");

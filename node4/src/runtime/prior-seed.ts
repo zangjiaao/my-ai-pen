@@ -199,3 +199,48 @@ export function listPriorAvoidUnits(store: FindingStore): string[] {
 export function priorRows(store: FindingStore): FindingRecord[] {
   return store.snapshot().filter((r) => r.prior);
 }
+
+/**
+ * Package spawn policy for NC-Prior dual-use:
+ * inject prior pathKey∩class into already_done; host hard-fail discovery collision.
+ * Mutates pkg.already_done in place when inject applies.
+ */
+export function applyPriorAvoidOnPackage(
+  store: FindingStore,
+  pkg: {
+    target: string;
+    already_done: string;
+    this_turn_goal?: string;
+    title?: string;
+    class_key?: string;
+    prior_finding_ids?: string[];
+    package_kind?: string;
+  },
+): { ok: true } | { ok: false; error: string } {
+  const avoidUnits = listPriorAvoidUnits(store);
+  if (avoidUnits.length && !/prior pathKey|pathKey∩class/i.test(pkg.already_done)) {
+    pkg.already_done =
+      `${pkg.already_done}\n\n## Prior pathKey∩class (do not rediscover)\n` +
+      avoidUnits.map((u) => `- ${u}`).join("\n");
+  }
+  // Re-verify without ids is incomplete dual-use surface
+  const kind = String(pkg.package_kind || "").toLowerCase();
+  if (kind === "re-verify") {
+    const ids = (pkg.prior_finding_ids || []).map((x) => String(x || "").trim()).filter(Boolean);
+    if (!ids.length) {
+      return {
+        ok: false,
+        error:
+          "re-verify package requires prior_finding_ids (Store id(s)) — dual-use re-verify surface (Spec #139 NC-Prior)",
+      };
+    }
+  }
+  return checkDiscoveryAvoidCollision({
+    store,
+    targetLocation: pkg.target,
+    title: pkg.title || pkg.this_turn_goal,
+    class_key: pkg.class_key,
+    priorStoreIds: pkg.prior_finding_ids,
+    packageKind: pkg.package_kind,
+  });
+}

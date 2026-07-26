@@ -18,6 +18,7 @@ import {
   emptyHardProcessMetrics,
   type HardProcessMetrics,
 } from "./hard-graph-feedback.js";
+import { l1MaxStageRefine } from "./l1-critic.js";
 
 export type HardGraphHandoff = {
   summary?: string;
@@ -71,6 +72,16 @@ export type StageExecutorOutput = {
 };
 
 export type StageExecutor = (input: StageExecutorInput) => Promise<StageExecutorOutput>;
+
+/**
+ * Optional L1 refine accounting hook (Spec #139 NC-L1).
+ * Runner owns budget: refine_n increments only when a refine is applied.
+ */
+export type L1BudgetHooks = {
+  getRefineCount: (stageId: string) => number;
+  recordRefine: (stageId: string, gaps: string[]) => void;
+  maxRefine?: number;
+};
 
 /** Attempt-level outcome (emitted on stage_end). */
 export type StageAttemptOutcome = "passed" | "failed_attempt" | "blocked" | "aborted";
@@ -222,6 +233,8 @@ export async function runHardGraph(options: {
   initialHandoff?: HardGraphHandoff;
   onEvent?: (event: HardGraphStageEvent) => void | Promise<void>;
   abortSignal?: AbortSignal;
+  /** Spec #139: L1 refine budget (default l1MaxStageRefine when omitted uses in-memory counter). */
+  l1Budget?: L1BudgetHooks;
 }): Promise<HardGraphRunResult> {
   const graph = options.graph;
   if (graph.discipline !== "hard" || !graph.stages.length) {
@@ -234,6 +247,17 @@ export async function runHardGraph(options: {
   const emit = async (e: HardGraphStageEvent) => {
     await options.onEvent?.(e);
   };
+  // Default L1 budget: in-memory refine counts when caller does not wire graphQuality
+  const localL1Counts = new Map<string, number>();
+  const l1Budget: L1BudgetHooks = options.l1Budget || {
+    getRefineCount: (stageId) => localL1Counts.get(stageId) || 0,
+    recordRefine: (stageId) => {
+      localL1Counts.set(stageId, (localL1Counts.get(stageId) || 0) + 1);
+    },
+    maxRefine: l1MaxStageRefine(),
+  };
+  const maxL1Refine =
+    typeof l1Budget.maxRefine === "number" ? l1Budget.maxRefine : l1MaxStageRefine();
 
   for (let stageIndex = 0; stageIndex < graph.stages.length; stageIndex++) {
     if (options.abortSignal?.aborted) {
@@ -320,10 +344,12 @@ export async function runHardGraph(options: {
       const findingsBookedN = outFindingsBookedN;
       const feedback_ok_ids = outFeedbackOkIds;
 
-      // Spec #139 D3: L0 structure first; L1 only after L0 pass; L1 cannot clear L0 fail
+      // Spec #139 D3: L0 structure first; L1 only after L0 pass; L1 cannot clear L0 fail.
+      // L1 refine budget is separate from stage max_retries (NC-L1 default max 1 refine).
       if (gate.ok) {
         const l1 = outL1;
         if (l1 && l1.decision === "refine") {
+          const already = l1Budget.getRefineCount(stage.id);
           const l1Errors = (l1.gaps || []).map((g) => `l1_refine:${g}`).slice(0, 12);
           lastErrors = l1Errors.length ? l1Errors : ["l1_refine"];
           processMetrics = accumulateStageFeedback(processMetrics, {
@@ -335,6 +361,26 @@ export async function runHardGraph(options: {
             findingsBookedN,
             handoffSurfacesN: handoff.surfaces.length,
           });
+          // Budget exhausted → block advance (do not burn another stage attempt as "refine")
+          if (already >= maxL1Refine) {
+            lastErrors = [
+              ...lastErrors,
+              `l1_budget_exhausted:refine_n=${already}:max=${maxL1Refine}`,
+            ];
+            await emit({
+              type: "stage_end",
+              graphId: graph.id,
+              stageId: stage.id,
+              stageIndex,
+              attempt,
+              outcome: "blocked",
+              errors: lastErrors,
+              summary: structured.summary,
+              ...(feedback_ok_ids?.length ? { feedback_ok_ids } : {}),
+            });
+            break;
+          }
+          l1Budget.recordRefine(stage.id, l1.gaps || []);
           const isLast = attempt >= maxAttempts;
           await emit({
             type: "stage_end",
@@ -348,7 +394,6 @@ export async function runHardGraph(options: {
             ...(feedback_ok_ids?.length ? { feedback_ok_ids } : {}),
           });
           if (isLast) {
-            // exhausted L1 refine budget → do not advance
             break;
           }
           continue;

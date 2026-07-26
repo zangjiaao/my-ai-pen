@@ -419,6 +419,17 @@ export function actorMayConfirm(role: "main" | "sub" | string): boolean {
  * Production package→Store path (Spec #116): upsert candidates, enqueue Feedback, L0 mechanical ok/reject.
  * Must be called from subagent settlement — confirm hard-requires feedback_ok afterward.
  */
+export type PackageIngestRejected = {
+  title?: string;
+  location?: string;
+  reason: string;
+};
+
+export type PackageIngestResult = {
+  ids: string[];
+  rejected: PackageIngestRejected[];
+};
+
 export function ingestPackageCandidatesToStore(
   store: FindingStore,
   candidates: Array<{
@@ -438,12 +449,46 @@ export function ingestPackageCandidatesToStore(
     fallback_location?: string;
   },
 ): string[] {
+  return ingestPackageCandidatesDetailed(store, candidates, meta).ids;
+}
+
+/**
+ * Same as ingestPackageCandidatesToStore but surfaces severity/malformed rejections
+ * for package acceptance feedback (Spec #139 review fix #10).
+ */
+export function ingestPackageCandidatesDetailed(
+  store: FindingStore,
+  candidates: Array<{
+    title?: string;
+    location?: string;
+    claim?: string;
+    proof_excerpt?: string;
+    poc_hint?: string;
+    severity?: string;
+    class_key?: string;
+  }>,
+  meta: {
+    package_id?: string;
+    plan_node_id?: string;
+    stage_id?: string;
+    agent_id?: string;
+    fallback_location?: string;
+  },
+): PackageIngestResult {
   const ids: string[] = [];
+  const rejected: PackageIngestRejected[] = [];
   for (const c of candidates) {
     if (!c.location && !c.title) continue;
     // NC-Severity: package candidate without valid severity is rejected (not stored as open medium).
     const sev = parseFindingSeverity(c.severity);
-    if (!sev) continue;
+    if (!sev) {
+      rejected.push({
+        title: c.title,
+        location: c.location,
+        reason: "missing_or_invalid_severity",
+      });
+      continue;
+    }
     try {
       const up = store.upsert({
         title: c.title || "candidate",
@@ -461,12 +506,16 @@ export function ingestPackageCandidatesToStore(
       });
       ids.push(up.id);
     } catch {
-      /* skip malformed */
+      rejected.push({
+        title: c.title,
+        location: c.location,
+        reason: "malformed_candidate",
+      });
     }
   }
   if (ids.length) {
     store.enqueueFeedback(ids);
     store.applyMechanicalL0Feedback(ids);
   }
-  return ids;
+  return { ids, rejected };
 }

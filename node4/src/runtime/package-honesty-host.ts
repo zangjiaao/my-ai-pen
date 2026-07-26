@@ -19,17 +19,6 @@ export type ProcessQualityState = {
   packageTerminals: Record<string, PackageTerminalEntry>;
   packageTerminalAliasIndex: Record<string, string>;
   packageAttemptCounts: Record<string, number>;
-  /** Spec #139 D2: graph-start prior seed result (for prompts + dual-use). */
-  priorSeed?: import("./prior-seed.js").PriorSeedResult;
-  /** Spec #139 D3 / NC-L1: per-stage L1 refine counts and outcomes. */
-  l1ByStage?: Record<
-    string,
-    { refine_n: number; last?: { decision: string; gaps: string[] } }
-  >;
-  /** Spec #139 validate_book: unbookable feedback_ok accounting. */
-  unbookable?: Array<{ finding_id: string; reason: string }>;
-  /** Spec #139 NC-Closeout snapshot (filled at graph terminal). */
-  engagementCloseout?: Record<string, unknown>;
 };
 
 export function createProcessQualityState(): ProcessQualityState {
@@ -38,8 +27,6 @@ export function createProcessQualityState(): ProcessQualityState {
     packageTerminals: {},
     packageTerminalAliasIndex: {},
     packageAttemptCounts: {},
-    l1ByStage: {},
-    unbookable: [],
   };
 }
 

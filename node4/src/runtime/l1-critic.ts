@@ -71,19 +71,25 @@ export function mechanicalProductStateCritic(input: L1CriticInput): L1CriticOutp
       "probe-like stage had package fanout but zero feedback_ok candidates — refine discovery or record honest deadends",
     );
   }
-  // Severity distribution all-medium with high impact titles → under-severity refine (L1 only)
-  const sev = input.storeSummary?.severity_counts || {};
-  const titles = (input.storeSummary?.sample_titles || []).join(" ").toLowerCase();
-  const med = sev.medium || 0;
-  const totalSev = Object.values(sev).reduce((a, b) => a + b, 0);
-  if (
-    totalSev >= 2 &&
-    med === totalSev &&
-    /(rce|command injection|remote code|credential dump|admin password|unauth)/i.test(titles)
-  ) {
-    gaps.push(
-      "under-severity: high-impact narratives labeled all-medium — re-assign severity (critical/high) with impact proof",
-    );
+  // Under-severity keyword steer is opt-in (not a host answer-key table by default).
+  // LLM Critic inject can always judge under-severity without this path.
+  const underSevRefine =
+    process.env.NODE4_L1_UNDER_SEVERITY_REFINE === "1" ||
+    process.env.NODE4_L1_UNDER_SEVERITY_REFINE === "true";
+  if (underSevRefine) {
+    const sev = input.storeSummary?.severity_counts || {};
+    const titles = (input.storeSummary?.sample_titles || []).join(" ").toLowerCase();
+    const med = sev.medium || 0;
+    const totalSev = Object.values(sev).reduce((a, b) => a + b, 0);
+    if (
+      totalSev >= 2 &&
+      med === totalSev &&
+      /(rce|command injection|remote code|credential dump|admin password|unauth)/i.test(titles)
+    ) {
+      gaps.push(
+        "under-severity: high-impact narratives labeled all-medium — re-assign severity (critical/high) with impact proof",
+      );
+    }
   }
   if (gaps.length) {
     return { decision: "refine", gaps, focus_stage: input.stageId };

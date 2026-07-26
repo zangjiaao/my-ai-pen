@@ -42,11 +42,8 @@ import {
   bumpPackageAttempt,
   ensureProcessQuality,
 } from "../runtime/package-honesty-host.js";
-import { ingestPackageCandidatesToStore } from "../runtime/finding-store.js";
-import {
-  checkDiscoveryAvoidCollision,
-  listPriorAvoidUnits,
-} from "../runtime/prior-seed.js";
+import { ingestPackageCandidatesDetailed } from "../runtime/finding-store.js";
+import { applyPriorAvoidOnPackage } from "../runtime/prior-seed.js";
 import { dirname } from "node:path";
 
 export type SubagentPackageResult = {
@@ -105,6 +102,31 @@ type ResolvedPackage = {
   title?: string;
 };
 
+/** Shared package fields (flat + batch item) — Spec #139 dual-use surface included. */
+const packagePriorFields = {
+  prior_finding_ids: Type.Optional(
+    Type.Array(Type.String(), {
+      description:
+        "Spec #139 re-verify: Finding Store prior id(s). Required when package_kind=re-verify; this-run fresh proof still required.",
+    }),
+  ),
+  package_kind: Type.Optional(
+    Type.String({
+      description: "discovery (default) | re-verify. re-verify may hit prior paths; discovery host-hard-fails pathKey∩class collision.",
+    }),
+  ),
+  class_key: Type.Optional(
+    Type.String({
+      description: "Attack class id for pathKey∩class avoid matching (e.g. sqli, xss, rce).",
+    }),
+  ),
+  title: Type.Optional(
+    Type.String({
+      description: "Optional finding title stem for avoid matching when class_key omitted.",
+    }),
+  ),
+};
+
 const packageItemSchema = Type.Object({
   target: Type.String(),
   scope: Type.Optional(Type.String()),
@@ -132,6 +154,7 @@ const packageItemSchema = Type.Object({
         "Warm follow-up: prior agent_id. Same path required; orthogonal targets must omit (cold spawn).",
     }),
   ),
+  ...packagePriorFields,
 });
 
 /**
@@ -149,6 +172,7 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
       "SPAWN FLAT: target, scope, already_done, this_turn_goal, success_criteria (+ node_type/skill_id/plan_node_id).",
       "SPAWN BATCH: packages=[{...}] concurrent (NODE4_SUBAGENT_CONCURRENCY default 8). Orthogonal paths = cold workers.",
       "plan_node_id (or todo_node_id): REQUIRED for correct Tasks Worker chip when multiple stage todos exist. Prefer todo node_id from your last todo.init/list.",
+      "RE-VERIFY (Spec #139): package_kind=re-verify + prior_finding_ids=[Store id…] + this-run fresh proof. Discovery packages host-hard-fail on prior pathKey∩class; set class_key for precise avoid.",
       "WARM: resume_agent_id=prior agent_id on SAME path (gap/timeout follow-up). Soft-fail workers stay idle for resume.",
       "LIST: op=list → idle_workers[] (agent_id, path_key, …).",
       "RELEASE: op=release + agent_id (or release_agent_id) — dispose worker now; else idle TTL (~420s) / maxIdle LRU auto-releases.",
@@ -188,6 +212,7 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
             "Flat warm follow-up: prior agent_id. Same path only; omit for cold spawn / orthogonal targets.",
         }),
       ),
+      ...packagePriorFields,
       agent_id: Type.Optional(
         Type.String({ description: "For op=release: worker id to dispose" }),
       ),
@@ -291,22 +316,10 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
             skipped.push(softFailPackage(r.pkg, pathLimit.error!, runtime, "never_started"));
             continue;
           }
-          // Spec #139 NC-Prior: inject prior avoid units into already_done; host hard-fail discovery collision
-          const pq = ensureProcessQuality(runtime.lifecycle);
-          const avoidUnits = listPriorAvoidUnits(pq.findingStore);
-          if (avoidUnits.length && !/prior pathKey|pathKey∩class/i.test(r.pkg.already_done)) {
-            r.pkg.already_done =
-              `${r.pkg.already_done}\n\n## Prior pathKey∩class (do not rediscover)\n` +
-              avoidUnits.map((u) => `- ${u}`).join("\n");
-          }
-          const avoid = checkDiscoveryAvoidCollision({
-            store: pq.findingStore,
-            targetLocation: r.pkg.target,
-            title: r.pkg.title || r.pkg.this_turn_goal,
-            class_key: r.pkg.class_key,
-            priorStoreIds: r.pkg.prior_finding_ids,
-            packageKind: r.pkg.package_kind,
-          });
+          const avoid = applyPriorAvoidOnPackage(
+            ensureProcessQuality(runtime.lifecycle).findingStore,
+            r.pkg,
+          );
           if (!avoid.ok) {
             return textResult(`error: ${avoid.error}`, { isError: true });
           }
@@ -390,21 +403,10 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
         return textResult(pathLimit.error!, { isError: true });
       }
       {
-        const pq = ensureProcessQuality(runtime.lifecycle);
-        const avoidUnits = listPriorAvoidUnits(pq.findingStore);
-        if (avoidUnits.length && !/prior pathKey|pathKey∩class/i.test(flat.pkg.already_done)) {
-          flat.pkg.already_done =
-            `${flat.pkg.already_done}\n\n## Prior pathKey∩class (do not rediscover)\n` +
-            avoidUnits.map((u) => `- ${u}`).join("\n");
-        }
-        const avoid = checkDiscoveryAvoidCollision({
-          store: pq.findingStore,
-          targetLocation: flat.pkg.target,
-          title: flat.pkg.title || flat.pkg.this_turn_goal,
-          class_key: flat.pkg.class_key,
-          priorStoreIds: flat.pkg.prior_finding_ids,
-          packageKind: flat.pkg.package_kind,
-        });
+        const avoid = applyPriorAvoidOnPackage(
+          ensureProcessQuality(runtime.lifecycle).findingStore,
+          flat.pkg,
+        );
         if (!avoid.ok) {
           return textResult(`error: ${avoid.error}`, { isError: true });
         }
@@ -914,14 +916,25 @@ async function runSubagentPackage(
     });
     // Upsert candidates into Finding Store (Store-first) + L0 Feedback (production path)
     const fstore = ensureProcessQuality(runtime.lifecycle).findingStore;
+    let severity_rejected: Array<{ title?: string; location?: string; reason: string }> = [];
     if (structured.candidates?.length) {
-      ingestPackageCandidatesToStore(fstore, structured.candidates, {
+      const ing = ingestPackageCandidatesDetailed(fstore, structured.candidates, {
         package_id: result.subagentId,
         plan_node_id: pkg.plan_node_id,
         stage_id: runtime.lifecycle.hardGraphRun?.stageId,
         agent_id: agentId,
         fallback_location: handoff.handoff.target,
       });
+      severity_rejected = ing.rejected;
+      if (severity_rejected.length) {
+        acceptance.package_gaps = [
+          ...(acceptance.package_gaps || []),
+          ...severity_rejected.map(
+            (r) =>
+              `candidate rejected (${r.reason}): ${r.title || "?"} @ ${r.location || "?"} — set severity=critical|high|medium|low|info`,
+          ),
+        ];
+      }
     }
 
     // Spec #116 I0.1: count package attempts against plan_node_id budget

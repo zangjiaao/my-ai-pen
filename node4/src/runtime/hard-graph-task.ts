@@ -30,6 +30,11 @@ import { GoalStore } from "../stores/goal.js";
 import { ensureProcessQuality } from "./package-honesty-host.js";
 import { seedPriorsAtGraphStart } from "./prior-seed.js";
 import { buildEngagementCloseout, writeEngagementCloseout } from "./engagement-closeout.js";
+import {
+  createGraphRunQualityState,
+  ensureGraphRunQuality,
+} from "./graph-run-quality.js";
+import { l1MaxStageRefine } from "./l1-critic.js";
 
 export type HardGraphTaskResult = {
   /** Platform task_complete.status (completed | incomplete | blocked). */
@@ -203,10 +208,12 @@ export async function runHardGraphExpertTask(options: {
   const panelLabel =
     (typeof task.expertName === "string" && task.expertName.trim()) || pack.id || "Expert";
   const panel = new PanelAgentTracker(task.instruction || "Expert Graph task", panelLabel);
+  const graphQuality = createGraphRunQualityState();
   parentRuntime.lifecycle.hardGraphRun = {
     plan: graphPlan,
     usage: runUsage,
     panel,
+    graphQuality,
   };
   parentRuntime.lifecycle.panelAgents = panel;
   // Spec #116: ensure Store-first process quality survives all stages
@@ -217,7 +224,7 @@ export async function runHardGraphExpertTask(options: {
     processQuality.findingStore,
     task.caseContext,
   );
-  processQuality.priorSeed = priorSeed;
+  graphQuality.priorSeed = priorSeed;
 
   const startMsg: PlatformMessage = {
     type: "status_update",
@@ -259,6 +266,16 @@ export async function runHardGraphExpertTask(options: {
     executeStage,
     availableTools,
     abortSignal: signal,
+    l1Budget: {
+      getRefineCount: (stageId) => graphQuality.l1ByStage[stageId]?.refine_n || 0,
+      recordRefine: (stageId, gaps) => {
+        const prev = graphQuality.l1ByStage[stageId] || { refine_n: 0 };
+        prev.refine_n = (prev.refine_n || 0) + 1;
+        prev.last = { decision: "refine", gaps };
+        graphQuality.l1ByStage[stageId] = prev;
+      },
+      maxRefine: l1MaxStageRefine(),
+    },
     onEvent: (event) =>
       emitHardGraphStageStatus({ platform, task, event, startedAt, plan: graphPlan }),
   });
@@ -271,23 +288,36 @@ export async function runHardGraphExpertTask(options: {
 
   // Spec #139 NC-Closeout: dual storage on any terminal
   try {
+    const gq = ensureGraphRunQuality(parentRuntime.lifecycle.hardGraphRun) || graphQuality;
     const closeout = buildEngagementCloseout({
       task,
       graphId: graph.id,
       terminal: result.terminal,
       stages: result.stages,
       store: processQuality.findingStore,
-      priorSeed: processQuality.priorSeed,
-      unbookable: processQuality.unbookable,
-      l1ByStage: processQuality.l1ByStage,
+      priorSeed: gq.priorSeed,
+      unbookable: gq.unbookable,
+      l1ByStage: gq.l1ByStage,
       surfaceSummary: parentRuntime.surfaceLedger?.summary?.() as
         | { total?: number; by_status?: Record<string, number>; sample_paths?: string[] }
         | undefined,
     });
-    processQuality.engagementCloseout = closeout as unknown as Record<string, unknown>;
+    gq.engagementCloseout = closeout;
     await writeEngagementCloseout({ taskDir, platform, task, closeout });
-  } catch {
-    /* non-fatal closeout */
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[hard-graph] engagement close-out failed: ${msg}`);
+    try {
+      await platform.send({
+        type: "engagement_closeout_error",
+        conversation_id: task.conversationId,
+        task_id: task.taskId,
+        message: `engagement_closeout failed: ${msg}`,
+        status: "error",
+      });
+    } catch {
+      /* platform may be down */
+    }
   }
 
   let bookedFindings = 0;
