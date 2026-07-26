@@ -1,10 +1,15 @@
 /**
  * Probe-stage harness: narration + prefer packages (#101).
+ * Language policy injection on stage + free/subagent parity (#134 / #137).
  * Run: npx tsx src/runtime/hard-graph-stage-prompts.test.ts
  */
 import assert from "node:assert/strict";
 import { stageSystemPrompt, stageUserPrompt } from "./hard-graph-stage-executor.js";
 import type { StageExecutorInput } from "./hard-graph-runner.js";
+import { buildSystemPrompt } from "./prompt.js";
+import { buildSubagentSystemPrompt } from "./subagent-session.js";
+import { PENTEST_ROLE_PACK } from "../roles/index.js";
+import type { TaskEnvelope } from "../types.js";
 
 const baseStage = {
   id: "class_probe",
@@ -46,6 +51,8 @@ assert.doesNotMatch(sys, /DVWA/i, "no answer-key target names");
 assert.doesNotMatch(sys, /Feedback reads result\.json only/i);
 assert.match(sys, /host-owned|Finding Store|host settlement/i);
 assert.match(sys, /process-chore|Write result\.json/i);
+// #137: unset language → auto policy on stage prompts
+assert.match(sys, /node policy: auto/, "stage unset language → auto policy");
 
 const user = stageUserPrompt(inputWithSub, task);
 assert.match(user, /Prefer subagent packages/i);
@@ -60,5 +67,44 @@ const noSub: StageExecutorInput = {
 const sysNo = stageSystemPrompt(noSub, task);
 assert.doesNotMatch(sysNo, /Prefer packages/i, "no package steer without subagent tool");
 assert.match(sysNo, /narrate/i, "narration still encouraged");
+
+// --- #137: language policy on stage + subagent + free (shared formatter) ---
+const baseTask: TaskEnvelope = {
+  taskId: "t-lang",
+  conversationId: "c-lang",
+  instruction: "assess",
+  target: { url: "http://t" },
+  scope: {},
+};
+
+for (const code of ["zh-TW", "ja", "zh-CN", "en", "auto"] as const) {
+  const t = { ...baseTask, agentLanguage: code };
+  const stagePrompt = stageSystemPrompt(inputWithSub, t);
+  const freePrompt = buildSystemPrompt(t, PENTEST_ROLE_PACK);
+  const subPrompt = buildSubagentSystemPrompt({
+    pack: {
+      missionLines: ["mission"],
+      workLines: ["work"],
+      toolNames: ["shell", "http"],
+    },
+    parentPackId: "pentest",
+    childTask: t,
+  });
+  const header =
+    code === "auto"
+      ? /node policy: auto/
+      : new RegExp(`node policy: ${code}`);
+  assert.match(stagePrompt, header, `stage has ${code} policy`);
+  assert.match(freePrompt, header, `free has ${code} policy`);
+  assert.match(subPrompt, header, `subagent has ${code} policy`);
+  assert.match(stagePrompt, /agent-authored narrative|user's language/i);
+  assert.match(subPrompt, /agent-authored narrative|user's language/i);
+}
+// Distinct zh-TW vs zh-CN on stage
+const stageTw = stageSystemPrompt(inputWithSub, { ...baseTask, agentLanguage: "zh-TW" });
+const stageCn = stageSystemPrompt(inputWithSub, { ...baseTask, agentLanguage: "zh-CN" });
+assert.match(stageTw, /Traditional Chinese/);
+assert.match(stageCn, /Simplified Chinese/);
+assert.notEqual(stageTw, stageCn);
 
 console.log("hard-graph-stage-prompts.test.ts: ok");

@@ -47,6 +47,7 @@ import {
 } from "./host-stage-settlement.js";
 import { SubagentHost } from "./subagent.js";
 import type { Node4AgentSession } from "./run-node4-agent.js";
+import { formatAgentLanguageInjection } from "./agent-language.js";
 
 /**
  * Deposit host-trusted surfaces/candidates into ledger + Finding Store.
@@ -131,6 +132,10 @@ export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope)
         ].join(" ")
       : "",
     "Fail closed: do not invent surfaces or proof.",
+    "",
+    // Same language policy as free OMP / subagent (#134 / #137).
+    formatAgentLanguageInjection(task.agentLanguage),
+    "",
     `Target: ${JSON.stringify(task.target)}`,
     `Scope: ${JSON.stringify(task.scope)}`,
     `Prior handoff stages: ${input.handoff.completed_stages.join(", ") || "(none)"}`,
