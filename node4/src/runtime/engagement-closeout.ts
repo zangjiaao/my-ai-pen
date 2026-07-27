@@ -98,12 +98,20 @@ export function buildEngagementCloseout(input: {
         ? (s.errors || []).map((e) => `${s.stageId}:${e}`)
         : [`${s.stageId}:${s.outcome}`],
     );
-  const booking_tail_ran = input.stages.some(
+  // Post-block booking tail only (not a normal completed graph that simply ran validate_book).
+  const hasSkippedAfterUpstream = input.stages.some(
+    (s) =>
+      s.outcome === "skipped" ||
+      (s.errors || []).includes("skipped_after_upstream_blocked"),
+  );
+  const bookingStageRan = input.stages.some(
     (s) =>
       (s.stageId === "validate_book" || String(s.stageId).endsWith("_book")) &&
       s.attempts > 0 &&
       (s.outcome === "passed" || s.outcome === "blocked"),
   );
+  const booking_tail_ran =
+    input.terminal === "blocked" && hasSkippedAfterUpstream && bookingStageRan;
   const residual =
     input.residualRisk ||
     [

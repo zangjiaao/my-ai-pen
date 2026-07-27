@@ -149,4 +149,35 @@ await emitHardGraphStageStatus({
 assert.ok(more.some((m) => m.type === "work_status"));
 assert.equal((more.find((m) => m.type === "status_update") as any)?.hard_graph?.stage_id, "s1");
 
+// skipped stage_end → plan status "skipped" (not blocked)
+{
+  const { HardGraphPlanStore } = await import("./hard-graph-plan.js");
+  const plan = new HardGraphPlanStore(graph!);
+  const planMsgs: PlatformMessage[] = [];
+  const skipEv: HardGraphStageEvent = {
+    type: "stage_end",
+    graphId: graph!.id,
+    stageId: "class_probe",
+    stageIndex: 2,
+    attempt: 0,
+    outcome: "skipped",
+    errors: ["skipped_after_upstream_blocked"],
+  };
+  await emitHardGraphStageStatus({
+    platform: { send: async (m) => { planMsgs.push(m); } },
+    task,
+    event: skipEv,
+    startedAt: new Date().toISOString(),
+    plan,
+  });
+  const stageNode = plan.toPlanTree().find(
+    (n) => String(n.title || "") === "class_probe" || String(n.node_id || "").includes("class_probe"),
+  );
+  assert.equal(
+    stageNode?.status,
+    "skipped",
+    "skipped stage_end must map plan status to skipped not blocked",
+  );
+}
+
 console.log("hard-graph-task.test.ts: ok");

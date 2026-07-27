@@ -129,19 +129,17 @@ export async function emitHardGraphStageStatus(options: {
 
   if (event.type === "stage_end") {
     if (plan) {
-      const st =
-        event.outcome === "passed"
-          ? "done"
-          : event.outcome === "aborted"
-            ? "blocked"
-            : event.outcome === "blocked"
-              ? "blocked"
-              : event.outcome === "failed_attempt"
-                ? "running"
-                : "failed";
       // failed_attempt keeps stage running (retry); terminal outcomes close L1.
       if (event.outcome !== "failed_attempt") {
-        plan.setStageStatus(event.stageId, st === "done" ? "done" : st === "blocked" ? "blocked" : "failed");
+        const planStatus =
+          event.outcome === "passed"
+            ? "done"
+            : event.outcome === "skipped"
+              ? "skipped"
+              : event.outcome === "aborted" || event.outcome === "blocked"
+                ? "blocked"
+                : "failed";
+        plan.setStageStatus(event.stageId, planStatus);
         await emitHardGraphPlanTreeUpdate(platform, task, plan, `stage_end:${event.stageId}:${event.outcome}`);
       }
     }

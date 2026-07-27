@@ -53,6 +53,30 @@ assert.ok(closeout.findings.by_severity.critical || closeout.findings.by_severit
 assert.ok(closeout.residual_risk);
 assert.equal(closeout.priors.prior_n, 1);
 
+// completed + validate_book passed is normal path — not a post-block booking tail
+const closeoutCompletedBook = buildEngagementCloseout({
+  task,
+  graphId: "app_assessment",
+  terminal: "completed",
+  stages: [
+    { stageId: "surface", stageIndex: 1, attempts: 1, outcome: "passed", errors: [] },
+    { stageId: "validate_book", stageIndex: 2, attempts: 1, outcome: "passed", errors: [] },
+  ],
+  store,
+  priorSeed: { prior_n: 1, empty_prior: false, ids: [], snapshot: [] },
+});
+assert.equal(closeoutCompletedBook.residual_class, undefined);
+assert.equal(
+  closeoutCompletedBook.booking_tail_ran,
+  undefined,
+  "normal completed path must not set booking_tail_ran",
+);
+assert.doesNotMatch(
+  closeoutCompletedBook.residual_risk,
+  /after upstream block/i,
+  "completed residual_risk must not claim post-block booking tail",
+);
+
 const dir = await mkdtemp(join(tmpdir(), "closeout-"));
 const sent: unknown[] = [];
 await writeEngagementCloseout({

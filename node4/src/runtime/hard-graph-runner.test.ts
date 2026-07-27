@@ -143,6 +143,11 @@ assert.equal(hardGraphToHarnessStatus("blocked"), "blocked");
 assert.equal(hardGraphToHarnessStatus("aborted"), "incomplete");
 assert.equal(hardGraphToHarnessStatus("completed"), "completed");
 assert.ok(!order2.includes("class_probe"), "must not skip to later stages");
+assert.ok(!order2.includes("validate_book"), "structure fail must not run booking-only tail");
+assert.ok(
+  !blocked.stages.some((s) => s.outcome === "skipped"),
+  "structure-only surfaces_min fail: no skipped later stages",
+);
 assert.ok(attemptOutcomes.includes("failed_attempt"), "retryable failure is failed_attempt");
 assert.ok(attemptOutcomes.includes("blocked"), "final failure is blocked");
 assert.notEqual(attemptOutcomes[0], "blocked", "first surface fail is not terminal blocked");
