@@ -125,6 +125,7 @@ m = accumulateStageFeedback(m, {
       {
         title: "x",
         location: "http://t/a",
+        severity: "high",
         proof_excerpt: "enough proof text for a candidate excerpt here",
       },
     ],
@@ -166,6 +167,7 @@ m2 = accumulateStageFeedback(m2, {
       {
         title: "x",
         location: "http://t/a",
+        severity: "high",
         proof_excerpt: "enough proof text for a candidate excerpt here",
       },
     ],

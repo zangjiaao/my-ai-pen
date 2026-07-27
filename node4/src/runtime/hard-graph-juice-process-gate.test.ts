@@ -163,6 +163,7 @@ const run = await runHardGraph({
           {
             title: "Login SQLi",
             location: `${JUICE}/rest/user/login`,
+            severity: "high",
             proof_excerpt: loginProof,
           },
         ],
@@ -170,6 +171,7 @@ const run = await runHardGraph({
           {
             title: "Login SQLi",
             location: `${JUICE}/rest/user/login`,
+            severity: "high",
             proof_excerpt: loginProof,
           },
         ]),
@@ -182,6 +184,7 @@ const run = await runHardGraph({
           {
             title: "Memories exposure",
             location: `${JUICE}/rest/memories`,
+            severity: "high",
             proof_excerpt: memProof,
           },
         ],
@@ -189,6 +192,7 @@ const run = await runHardGraph({
           {
             title: "Memories exposure",
             location: `${JUICE}/rest/memories`,
+            severity: "high",
             proof_excerpt: memProof,
           },
         ]),
@@ -209,11 +213,13 @@ const run = await runHardGraph({
             {
               title: "Login SQLi",
               location: `${JUICE}/rest/user/login`,
+              severity: "high",
               proof_excerpt: loginProof,
             },
             {
               title: "Memories exposure",
               location: `${JUICE}/rest/memories`,
+              severity: "high",
               proof_excerpt: memProof,
             },
           ],

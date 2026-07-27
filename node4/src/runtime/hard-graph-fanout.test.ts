@@ -101,6 +101,7 @@ absorbStageResultIntoParent(parent, {
       {
         title: "Login SQLi",
         location: "http://127.0.0.1:3010/rest/user/login",
+        severity: "high",
         proof_excerpt: PROOF_SQL,
         poc_hint:
           "POST /rest/user/login with SQLi email; observed 200 JWT for admin in response body",
@@ -121,6 +122,7 @@ absorbStageResultIntoParent(parent, {
       {
         title: "Stored XSS reviews",
         location: "http://127.0.0.1:3010/rest/products/1/reviews",
+        severity: "high",
         proof_excerpt: PROOF_XSS,
         poc_hint:
           "PUT review with script tag; observed unescaped script in GET reviews response",

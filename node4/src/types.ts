@@ -58,6 +58,8 @@ export type TaskEnvelope = {
    * When undefined, derived from engagementTemplate (default false).
    */
   allowPostex?: boolean;
+  /** Spec #139 NC-RoE-Destructive: lab may set true; product default false/undefined. */
+  allowDestructive?: boolean;
   /** Optional test accounts / credentials provided by the customer (structured). */
   accounts?: unknown;
   scanMode?: string;
@@ -175,6 +177,11 @@ export type ToolRuntime = {
       panel: import("./runtime/panel-agents.js").PanelAgentTracker;
       /** Current stage id while a stage session runs (todo → L2 merge). */
       stageId?: string;
+      /**
+       * Spec #139 graph-run Product state (not package honesty).
+       * prior seed, L1 refine accounting, unbookable rows, close-out snapshot.
+       */
+      graphQuality?: import("./runtime/graph-run-quality.js").GraphRunQualityState;
     };
     /**
      * Spec #116 process quality (Finding Store + package honesty + attempt budgets).

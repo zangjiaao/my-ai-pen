@@ -6,6 +6,10 @@ import { buildShellEnv } from "../runtime/pen-tools-path.js";
 import { isShellInPenToolsEnabled, runShellInPenTools } from "../runtime/pen-tools-shell.js";
 import { recordActObservation, jsonResult, textResult } from "./common.js";
 import { archiveAndGovernToolOutput } from "../runtime/tool-output-governance.js";
+import {
+  assertDestructiveAllowed,
+  resolveEngagementRoe,
+} from "../runtime/engagement-roe.js";
 
 const DEFAULT_TIMEOUT_SEC = 240;
 const MAX_TIMEOUT_SEC = 600;
@@ -40,6 +44,17 @@ export function createShellTool(runtime: ToolRuntime): AgentTool<any> {
     async execute(_id: string, params: any, signal?: AbortSignal) {
       const command = String(params.command || "").trim();
       if (!command) return textResult("error: command required");
+      // Spec #139 NC-RoE-Destructive: host gate (default deny) before execute
+      const roe = resolveEngagementRoe({
+        engagementTemplate: runtime.task.engagementTemplate || runtime.task.graphId,
+        engagement: runtime.task.engagement || runtime.task.role,
+        allowPostex: runtime.task.allowPostex,
+        allowDestructive: runtime.task.allowDestructive,
+      });
+      const dest = assertDestructiveAllowed(roe, command);
+      if (!dest.ok) {
+        return textResult(`error: ${dest.error}`, { isError: true });
+      }
       const combined = combineSignals(signal, runtime.lifecycle.abortSignal);
       if (combined?.aborted) {
         return jsonResult(

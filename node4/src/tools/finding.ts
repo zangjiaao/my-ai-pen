@@ -23,6 +23,7 @@ import {
   textResult,
 } from "./common.js";
 import { ingestPackageCandidatesToStore } from "../runtime/finding-store.js";
+import { resolveBookSeverity } from "../runtime/finding-severity.js";
 
 export { synthesizePocFromHandoffProof } from "../runtime/subagent-result.js";
 
@@ -255,6 +256,13 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
         if (!title || !location) {
           return textResult("error: finding(upsert) requires title and location");
         }
+        const sevRaw = String(params.severity || "").trim();
+        if (!sevRaw) {
+          return textResult(
+            "error: finding(upsert) requires severity (critical|high|medium|low|info) — silent medium banned (Spec #139 D1)",
+            { isError: true },
+          );
+        }
         const ids = ingestPackageCandidatesToStore(
           store,
           [
@@ -264,6 +272,8 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
               claim: String(params.description || params.claim || "").trim() || undefined,
               proof_excerpt: proof || undefined,
               poc_hint: String(params.poc || "").trim() || undefined,
+              severity: sevRaw,
+              class_key: String(params.class_key || "").trim() || undefined,
             },
           ],
           {
@@ -273,6 +283,12 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
             fallback_location: location,
           },
         );
+        if (!ids.length) {
+          return textResult(
+            "error: finding(upsert) rejected — invalid severity or missing title/location (Spec #139 D1)",
+            { isError: true },
+          );
+        }
         const feedbackOk = store
           .snapshot()
           .filter((r) => ids.includes(r.id) && r.status === "feedback_ok")
@@ -285,7 +301,7 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
           hint:
             feedbackOk.length > 0
               ? `Confirm with finding(confirm, finding_id=${feedbackOk[0]!.id})`
-              : "L0 rejected or pending — need proof_excerpt ≥24 chars for feedback_ok",
+              : "L0 rejected or pending — need proof_excerpt ≥24 chars and valid severity for feedback_ok",
         });
       }
 
@@ -341,12 +357,31 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
         if (!String(params.poc || "").trim() && gate.record.poc) {
           params.poc = gate.record.poc;
         }
+        // Spec #139 D1: fill severity from Store when tool omits (same pattern as proof fill)
+        if (!String(params.severity || "").trim() && gate.record.severity) {
+          params.severity = gate.record.severity;
+        }
       } else if (store && findingId) {
         const gate = store.assertConfirmAllowed(findingId);
         if (!gate.ok) {
           return textResult(`error: ${gate.error}`, { isError: true });
         }
+        if (!String(params.severity || "").trim() && gate.record.severity) {
+          params.severity = gate.record.severity;
+        }
       }
+
+      // Spec #139 D1 / NC-Severity: fail closed — no silent medium
+      const storeSev =
+        store && findingId ? store.get(findingId)?.severity : undefined;
+      const sevResolved = resolveBookSeverity({
+        toolSeverity: params.severity,
+        storeSeverity: storeSev,
+      });
+      if (!sevResolved.ok) {
+        return textResult(`error: ${sevResolved.error}`, { isError: true });
+      }
+      params.severity = sevResolved.severity;
 
       const title = String(params.title || "").trim();
       if (!title) return textResult("error: title required");
@@ -507,7 +542,7 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
           poc,
           description,
           kind: normalizeKind(params.finding_kind),
-          severity: String(params.severity || "medium"),
+          severity: String(params.severity),
           evidenceIds,
           proofExcerpts,
           proofText,
@@ -611,7 +646,7 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
         poc,
         description,
         kind: normalizeKind(params.finding_kind),
-        severity: String(params.severity || "medium"),
+        severity: String(params.severity),
         evidenceIds: legacyIds,
         proofExcerpts,
         proofText: proofExcerpts[0]?.excerpt || "",

@@ -114,6 +114,7 @@ try {
         title: "CSRF token missing",
         location: "http://dvwa/security.php",
         claim: "state-changing request without CSRF token accepted",
+        severity: "high",
         proof_excerpt:
           "POST /security.php without token returned 200 and security level changed — verbatim tool body",
         poc_hint: "POST security.php seclev=low without csrf token → observe 200 and cookie",
@@ -178,6 +179,7 @@ try {
       ok: true,
       summary: "all packages succeeded; findings booked in result.json",
       surfaces: [],
+      severity: "high",
       candidates: [{ title: "booked fiction", location: "http://x", proof_excerpt: "x".repeat(40) }],
       failed_packages: [],
     }),
@@ -362,6 +364,7 @@ try {
     title: "Serial candidate",
     location: "http://dvwa/login.php",
     description: "serial Main deposit path",
+    severity: "high",
     proof: "login response body showed SQL error near quote when testing auth form fields",
     poc: "POST login.php with quote payload → observe SQL error in body",
   });

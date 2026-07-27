@@ -18,6 +18,12 @@ import {
   emptyHardProcessMetrics,
   type HardProcessMetrics,
 } from "./hard-graph-feedback.js";
+import { l1MaxStageRefine } from "./l1-critic.js";
+import {
+  formatL0RepairBrief,
+  isBookingOnlyStage,
+  isHonestyCannotAdvanceErrors,
+} from "./l0-honesty-repair-brief.js";
 
 export type HardGraphHandoff = {
   summary?: string;
@@ -41,6 +47,11 @@ export type StageExecutorInput = {
    * When attempt > 1, executor may reset non-success package attempt budgets.
    */
   stageAttempt?: number;
+  /**
+   * NC-Honesty-Advance: host fixed-template repair brief after a failed prior attempt
+   * (machine signals only — not L1 prose).
+   */
+  l0RepairBrief?: string;
 };
 
 export type StageExecutorOutput = {
@@ -63,15 +74,35 @@ export type StageExecutorOutput = {
    * Main confirms with finding(confirm, finding_id=…). Empty when zero confirmable rows.
    */
   feedbackOkIds?: string[];
+  /**
+   * Spec #139 D3 / NC-L1: Product-state L1 Critic result after L0 structure gate.
+   * When decision=refine, runner treats stage attempt as failed_attempt (bounded).
+   */
+  l1?: { decision: "pass" | "refine"; gaps: string[] };
 };
 
 export type StageExecutor = (input: StageExecutorInput) => Promise<StageExecutorOutput>;
 
+/**
+ * Optional L1 refine accounting hook (Spec #139 NC-L1).
+ * Runner owns budget: refine_n increments only when a refine is applied.
+ */
+export type L1BudgetHooks = {
+  getRefineCount: (stageId: string) => number;
+  recordRefine: (stageId: string, gaps: string[]) => void;
+  maxRefine?: number;
+};
+
 /** Attempt-level outcome (emitted on stage_end). */
-export type StageAttemptOutcome = "passed" | "failed_attempt" | "blocked" | "aborted";
+export type StageAttemptOutcome =
+  | "passed"
+  | "failed_attempt"
+  | "blocked"
+  | "aborted"
+  | "skipped";
 
 /** Final stage row in run result. */
-export type StageFinalOutcome = "passed" | "blocked" | "aborted";
+export type StageFinalOutcome = "passed" | "blocked" | "aborted" | "skipped";
 
 export type HardGraphStageRecord = {
   stageId: string;
@@ -156,7 +187,19 @@ export function evaluateStageGate(
   }
 
   if (structured.ok === false) {
+    // NC-Honesty-Advance: keep generic code + honesty machine reasons from host deadends
+    // so honesty cannot-advance is distinct from structure require misses.
+    // failed_package is residual honest-partial signal — not a gate error code.
     errors.push("structured_ok_false");
+    const seen = new Set<string>();
+    for (const d of structured.deadends || []) {
+      const s = String(d || "").trim();
+      if (!s || seen.has(s)) continue;
+      if (s.startsWith("illegal_l2_done:") || s.startsWith("running_package:")) {
+        seen.add(s);
+        errors.push(s);
+      }
+    }
   }
 
   if (errors.length) return { ok: false, errors };
@@ -208,6 +251,127 @@ function runEndResult(
 }
 
 /**
+ * NC-Honesty-Advance: after honesty cannot-advance block, skip later probe stages
+ * and run booking-only tail. Mutates `records`. Returns updated handoff / abort flag.
+ */
+async function runHonestyBlockedTail(input: {
+  graph: HardGraphDefinition;
+  blockedStageId: string;
+  stageIndex: number;
+  lastErrors: string[];
+  records: HardGraphStageRecord[];
+  handoff: HardGraphHandoff;
+  availableTools: readonly string[];
+  executeStage: StageExecutor;
+  emit: (event: HardGraphStageEvent) => void | Promise<void>;
+  abortSignal?: AbortSignal;
+}): Promise<{ handoff: HardGraphHandoff; aborted: boolean }> {
+  let handoff = input.handoff;
+  const { graph, records, emit } = input;
+
+  for (let j = input.stageIndex + 1; j < graph.stages.length; j++) {
+    if (input.abortSignal?.aborted) {
+      return { handoff, aborted: true };
+    }
+    const tail = graph.stages[j]!;
+    if (!isBookingOnlyStage(tail)) {
+      records.push({
+        stageId: tail.id,
+        stageIndex: j,
+        attempts: 0,
+        outcome: "skipped",
+        errors: ["skipped_after_upstream_blocked"],
+      });
+      await emit({
+        type: "stage_end",
+        graphId: graph.id,
+        stageId: tail.id,
+        stageIndex: j,
+        attempt: 0,
+        outcome: "skipped",
+        errors: ["skipped_after_upstream_blocked"],
+      });
+      continue;
+    }
+
+    const tailTools = applyHardGraphToolProfile(input.availableTools, tail.tools ?? {});
+    await emit({
+      type: "stage_start",
+      graphId: graph.id,
+      stageId: tail.id,
+      stageIndex: j,
+      attempt: 1,
+    });
+    let tailStructured: SubagentStructuredResult;
+    let tailFeedbackOk: string[] | undefined;
+    try {
+      const out = await input.executeStage({
+        stage: tail,
+        stageIndex: j,
+        graphId: graph.id,
+        handoff,
+        tools: tailTools,
+        toolProfile: tail.tools ?? {},
+        stageAttempt: 1,
+        l0RepairBrief: formatL0RepairBrief({
+          stageId: tail.id,
+          failedAttempt: 0,
+          mode: "booking_tail",
+          errors: [
+            `upstream_stage_blocked:${input.blockedStageId}`,
+            ...input.lastErrors.slice(0, 12),
+            "booking_only_tail: confirm remaining feedback_ok; do not open new probe packages",
+          ],
+        }),
+      });
+      tailStructured = normalizeSubagentResult(
+        out.structured ?? { summary: out.summary, ok: true },
+        out.summary || "",
+      );
+      tailFeedbackOk = Array.isArray(out.feedbackOkIds)
+        ? out.feedbackOkIds.map((id) => String(id || "").trim()).filter(Boolean)
+        : undefined;
+    } catch (err) {
+      tailStructured = normalizeSubagentResult(
+        {
+          ok: false,
+          summary: err instanceof Error ? err.message : String(err),
+          deadends: ["booking_tail_executor_threw"],
+        },
+        err instanceof Error ? err.message : "booking_tail_error",
+      );
+    }
+    const tailGate = evaluateStageGate(tail, tailStructured);
+    // Tail stage row may pass; run terminal stays blocked (process incomplete).
+    const tailOutcome: StageFinalOutcome = tailGate.ok ? "passed" : "blocked";
+    records.push({
+      stageId: tail.id,
+      stageIndex: j,
+      attempts: 1,
+      outcome: tailOutcome,
+      errors: tailGate.ok ? [] : tailGate.errors,
+      summary: tailStructured.summaryProvided ? tailStructured.summary : undefined,
+    });
+    if (tailGate.ok) {
+      handoff = mergeHandoff(handoff, tailStructured, tail.id);
+    }
+    await emit({
+      type: "stage_end",
+      graphId: graph.id,
+      stageId: tail.id,
+      stageIndex: j,
+      attempt: 1,
+      outcome: tailGate.ok ? "passed" : "blocked",
+      errors: tailGate.ok ? [] : tailGate.errors,
+      summary: tailStructured.summaryProvided ? tailStructured.summary : undefined,
+      ...(tailFeedbackOk?.length ? { feedback_ok_ids: tailFeedbackOk } : {}),
+    });
+  }
+
+  return { handoff, aborted: false };
+}
+
+/**
  * Run Hard Graph stages in hard order. Cannot skip. Feedback is runner-owned.
  */
 export async function runHardGraph(options: {
@@ -217,6 +381,8 @@ export async function runHardGraph(options: {
   initialHandoff?: HardGraphHandoff;
   onEvent?: (event: HardGraphStageEvent) => void | Promise<void>;
   abortSignal?: AbortSignal;
+  /** Spec #139: L1 refine budget (default l1MaxStageRefine when omitted uses in-memory counter). */
+  l1Budget?: L1BudgetHooks;
 }): Promise<HardGraphRunResult> {
   const graph = options.graph;
   if (graph.discipline !== "hard" || !graph.stages.length) {
@@ -229,6 +395,17 @@ export async function runHardGraph(options: {
   const emit = async (e: HardGraphStageEvent) => {
     await options.onEvent?.(e);
   };
+  // Default L1 budget: in-memory refine counts when caller does not wire graphQuality
+  const localL1Counts = new Map<string, number>();
+  const l1Budget: L1BudgetHooks = options.l1Budget || {
+    getRefineCount: (stageId) => localL1Counts.get(stageId) || 0,
+    recordRefine: (stageId) => {
+      localL1Counts.set(stageId, (localL1Counts.get(stageId) || 0) + 1);
+    },
+    maxRefine: l1MaxStageRefine(),
+  };
+  const maxL1Refine =
+    typeof l1Budget.maxRefine === "number" ? l1Budget.maxRefine : l1MaxStageRefine();
 
   for (let stageIndex = 0; stageIndex < graph.stages.length; stageIndex++) {
     if (options.abortSignal?.aborted) {
@@ -266,7 +443,18 @@ export async function runHardGraph(options: {
       let outBookOutcomes: { booked_n?: number; reject_hints_n?: number } | undefined;
       let outFindingsBookedN: number | undefined;
       let outFeedbackOkIds: string[] | undefined;
+      let outL1: { decision: "pass" | "refine"; gaps: string[] } | undefined;
       try {
+        // Honesty repair brief only when prior attempt failed L0 honesty cannot-advance.
+        // Structure-only / L1 refine retries must not inject M1 honesty duties (review finding #1).
+        const l0RepairBrief =
+          attempt > 1 && isHonestyCannotAdvanceErrors(lastErrors)
+            ? formatL0RepairBrief({
+                stageId: stage.id,
+                failedAttempt: attempt - 1,
+                errors: lastErrors,
+              })
+            : undefined;
         const out = await options.executeStage({
           stage,
           stageIndex,
@@ -276,6 +464,7 @@ export async function runHardGraph(options: {
           toolProfile,
           // Spec #116 I0.6: stage attempt number for independent package-budget reset
           stageAttempt: attempt,
+          ...(l0RepairBrief ? { l0RepairBrief } : {}),
         });
         structured = normalizeSubagentResult(
           out.structured ?? { summary: out.summary, ok: true },
@@ -287,6 +476,7 @@ export async function runHardGraph(options: {
         outFeedbackOkIds = Array.isArray(out.feedbackOkIds)
           ? out.feedbackOkIds.map((id) => String(id || "").trim()).filter(Boolean)
           : undefined;
+        outL1 = out.l1;
       } catch (err) {
         structured = normalizeSubagentResult(
           {
@@ -313,7 +503,60 @@ export async function runHardGraph(options: {
       const findingsBookedN = outFindingsBookedN;
       const feedback_ok_ids = outFeedbackOkIds;
 
+      // Spec #139 D3: L0 structure first; L1 only after L0 pass; L1 cannot clear L0 fail.
+      // L1 refine budget is separate from stage max_retries (NC-L1 default max 1 refine).
       if (gate.ok) {
+        const l1 = outL1;
+        if (l1 && l1.decision === "refine") {
+          const already = l1Budget.getRefineCount(stage.id);
+          const l1Errors = (l1.gaps || []).map((g) => `l1_refine:${g}`).slice(0, 12);
+          lastErrors = l1Errors.length ? l1Errors : ["l1_refine"];
+          processMetrics = accumulateStageFeedback(processMetrics, {
+            stageId: stage.id,
+            structured,
+            structureFailed: false,
+            fanoutPackagesN,
+            bookOutcomes,
+            findingsBookedN,
+            handoffSurfacesN: handoff.surfaces.length,
+          });
+          // Budget exhausted → block advance (do not burn another stage attempt as "refine")
+          if (already >= maxL1Refine) {
+            lastErrors = [
+              ...lastErrors,
+              `l1_budget_exhausted:refine_n=${already}:max=${maxL1Refine}`,
+            ];
+            await emit({
+              type: "stage_end",
+              graphId: graph.id,
+              stageId: stage.id,
+              stageIndex,
+              attempt,
+              outcome: "blocked",
+              errors: lastErrors,
+              summary: structured.summary,
+              ...(feedback_ok_ids?.length ? { feedback_ok_ids } : {}),
+            });
+            break;
+          }
+          l1Budget.recordRefine(stage.id, l1.gaps || []);
+          const isLast = attempt >= maxAttempts;
+          await emit({
+            type: "stage_end",
+            graphId: graph.id,
+            stageId: stage.id,
+            stageIndex,
+            attempt,
+            outcome: isLast ? "blocked" : "failed_attempt",
+            errors: lastErrors,
+            summary: structured.summary,
+            ...(feedback_ok_ids?.length ? { feedback_ok_ids } : {}),
+          });
+          if (isLast) {
+            break;
+          }
+          continue;
+        }
         handoff = mergeHandoff(handoff, structured, stage.id);
         processMetrics = accumulateStageFeedback(processMetrics, {
           stageId: stage.id,
@@ -381,9 +624,37 @@ export async function runHardGraph(options: {
           handoffSurfacesN: handoff.surfaces.length,
         });
       }
-      const terminal: HardGraphTerminal = aborted ? "aborted" : "blocked";
-      const result = runEndResult(graph.id, terminal, records, handoff, processMetrics);
-      await emit({ type: "run_end", graphId: graph.id, terminal });
+      if (aborted) {
+        const result = runEndResult(graph.id, "aborted", records, handoff, processMetrics);
+        await emit({ type: "run_end", graphId: graph.id, terminal: "aborted" });
+        return result;
+      }
+
+      // Structure / L1 budget block: fail-closed stop — no skip records, no booking tail.
+      // Honesty cannot-advance only: skip later probes; run booking-only tail; stay blocked.
+      if (isHonestyCannotAdvanceErrors(lastErrors)) {
+        const tail = await runHonestyBlockedTail({
+          graph,
+          blockedStageId: stage.id,
+          stageIndex,
+          lastErrors,
+          records,
+          handoff,
+          availableTools: options.availableTools,
+          executeStage: options.executeStage,
+          emit,
+          abortSignal: options.abortSignal,
+        });
+        handoff = tail.handoff;
+        if (tail.aborted) {
+          const result = runEndResult(graph.id, "aborted", records, handoff, processMetrics);
+          await emit({ type: "run_end", graphId: graph.id, terminal: "aborted" });
+          return result;
+        }
+      }
+
+      const result = runEndResult(graph.id, "blocked", records, handoff, processMetrics);
+      await emit({ type: "run_end", graphId: graph.id, terminal: "blocked" });
       return result;
     }
 

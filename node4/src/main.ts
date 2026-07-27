@@ -6,7 +6,11 @@ import { runNode4Task } from "./runtime/session-runner.js";
 import type { TaskEnvelope } from "./types.js";
 import { parseCaseContext } from "./runtime/case-context.js";
 import { parseGraphExecution } from "./runtime/hard-graph-definition.js";
-import { parseFocusFields } from "./runtime/task-envelope-fields.js";
+import {
+  parseAllowDestructive,
+  parseAllowPostex,
+  parseFocusFields,
+} from "./runtime/task-envelope-fields.js";
 import { sanitizePromptLabel } from "./runtime/prompt-template.js";
 import { extractAgentLanguageFromMessage } from "./runtime/agent-language.js";
 import { cancelApprovalsForConversation, resolveApproval } from "./runtime/approvals.js";
@@ -258,15 +262,8 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
         : undefined;
   const graphExecution = parseGraphExecution(message);
   const focus = parseFocusFields(message);
-  const allowPostexRaw = message.allow_postex ?? message.allowPostex;
-  const allowPostex =
-    typeof allowPostexRaw === "boolean"
-      ? allowPostexRaw
-      : allowPostexRaw === "true"
-        ? true
-        : allowPostexRaw === "false"
-          ? false
-          : undefined;
+  const allowPostex = parseAllowPostex(message);
+  const allowDestructive = parseAllowDestructive(message);
 
   const caseContext = parseCaseContext(message.case_context ?? message.caseContext);
 
@@ -288,6 +285,7 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
     focusFindingIds: focus.focusFindingIds,
     focusNote: focus.focusNote,
     allowPostex,
+    allowDestructive,
     accounts: message.accounts !== undefined ? message.accounts : undefined,
     goalObjective,
     expertName: expertName?.trim() || undefined,

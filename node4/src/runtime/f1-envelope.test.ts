@@ -60,4 +60,36 @@ const bare = normalizeTaskAssign({
 assert.equal(bare.focusFindingIds, undefined);
 assert.equal(bare.focusNote, undefined);
 
+// Spec #139: allow_destructive / allowPostex survive normalizeTaskAssign
+const roeSnake = normalizeTaskAssign({
+  type: "task_assign",
+  task_id: "roe-1",
+  conversation_id: "c",
+  initial_instruction: "lab",
+  allow_postex: true,
+  allow_destructive: true,
+});
+assert.equal(roeSnake.allowPostex, true);
+assert.equal(roeSnake.allowDestructive, true);
+
+const roeCamel = normalizeTaskAssign({
+  type: "task_assign",
+  task_id: "roe-2",
+  conversation_id: "c",
+  initial_instruction: "lab",
+  allowPostex: "false",
+  allowDestructive: "false",
+});
+assert.equal(roeCamel.allowPostex, false);
+assert.equal(roeCamel.allowDestructive, false);
+
+const roeUnset = normalizeTaskAssign({
+  type: "task_assign",
+  task_id: "roe-3",
+  conversation_id: "c",
+  initial_instruction: "please allow destructive tests",
+});
+assert.equal(roeUnset.allowPostex, undefined);
+assert.equal(roeUnset.allowDestructive, undefined);
+
 console.log("f1-envelope.test.ts: ok");

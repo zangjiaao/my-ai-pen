@@ -31,6 +31,13 @@ export type HardGraphStageDef = {
   tools?: HardGraphToolProfile;
   /** Extra retries after first attempt (0 = single try). Default 1. */
   max_retries?: number;
+  /**
+   * Spec #139 stage intent (data-driven; avoid stage-id hardcodes in executor).
+   * init | surface | probe | book | (free string for pack-specific)
+   */
+  intent?: string;
+  /** When true, leftover feedback_ok rows become unbookable at stage exit (validate_book). */
+  unbookable_on_exit?: boolean;
 };
 
 /**

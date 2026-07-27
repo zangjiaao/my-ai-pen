@@ -48,6 +48,12 @@ import {
 import { SubagentHost } from "./subagent.js";
 import type { Node4AgentSession } from "./run-node4-agent.js";
 import { formatAgentLanguageInjection } from "./agent-language.js";
+import { formatPriorSnapshotInjection } from "./prior-seed.js";
+import {
+  buildL1InputFromProductState,
+  runL1Critic,
+} from "./l1-critic.js";
+import { ensureGraphRunQuality } from "./graph-run-quality.js";
 
 /**
  * Deposit host-trusted surfaces/candidates into ledger + Finding Store.
@@ -104,20 +110,53 @@ export type HardGraphBoundSessionFactory = (options: {
 }) => Promise<{ session: Node4AgentSession }>;
 
 /** Exported for harness contract tests (#101 / #125). */
+/** Data-driven stage intent text (Spec #139 I5) — prefers stage.intent over stage id. */
+export function stageIntentPromptLines(stage: {
+  id: string;
+  intent?: string;
+}): string {
+  const intent = String(stage.intent || stage.id || "").toLowerCase();
+  if (intent === "surface") {
+    return [
+      "**Stage intent (surface — Spec #139 I5):** inventory + **bounded smoke** only.",
+      "Bounded smoke = short characterize-or-deadend per observed surface (login form shape, param names, auth requirement) — not multi-class exploitation campaigns.",
+      "Multi-class depth belongs in class_probe+ stages. Do not treat recon as full exploit.",
+      "No candidates_min class quota; opportunistic smoke candidates may deposit but are not required for gate.",
+      "Do not call finding(confirm) on this stage (tool profile forbids).",
+    ].join(" ");
+  }
+  if (intent === "init") {
+    return "Init: RoE + target understanding only; no live recon. Acknowledge priors loaded or honest empty-prior from host seed.";
+  }
+  if (intent === "book") {
+    return "Book stage: confirm feedback_ok Store rows by finding_id only; leftover feedback_ok become explicit unbookable reasons.";
+  }
+  return "";
+}
+
 export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope): string {
   const toolList = input.tools.length ? input.tools.join(", ") : "(none)";
   const allowSubagent = input.tools.includes("subagent");
+  const allowFinding = input.tools.includes("finding");
+  const intentLines = stageIntentPromptLines(input.stage);
+  // Prior snapshot from graph-run quality (hardGraphRun), not processQuality
+  const priorSeed =
+    (input as StageExecutorInput & { priorSnapshot?: string }).priorSnapshot ||
+    "";
   return [
     "You are a **Hard Graph stage agent** (Graph × Pi).",
     `Graph: ${input.graphId}  Stage: ${input.stage.id} (index ${input.stageIndex})`,
     input.stage.success ? `Stage success criteria: ${input.stage.success}` : "",
     "You do NOT schedule other stages. Complete only this stage.",
     `Allowed tools for this stage: ${toolList}`,
+    intentLines,
     "Briefly narrate progress in assistant text when useful (what you are checking next; what you observed). Do not invent surfaces, proof, or booked findings in prose.",
     "**Stage settlement is host-owned** (Spec #125): do **not** write result.json as the stage handoff or booking channel. Host projects stage outcome from Finding Store, package terminals, and surface ledger.",
-    "Bookable candidates must land in **Finding Store** (package settlement auto-ingest, or finding(upsert) for serial Main work) with title, location, proof_excerpt (verbatim tool stdout/body ≥24 chars), optional poc.",
+    "Bookable candidates must land in **Finding Store** (package settlement auto-ingest, or finding(upsert) for serial Main work) with title, location, **severity** (critical|high|medium|low|info — no silent medium), proof_excerpt (verbatim tool stdout/body ≥24 chars), optional poc.",
     "Surfaces for recon: use **fact(op=surface, location=…)** (host ledger) or package workers — never stage result.json as handoff.",
-    "After L0 Feedback marks feedback_ok, Main books with finding(confirm, finding_id=…). Without proof_excerpt candidates stay non-confirmable. Narrative alone is not bookable.",
+    allowFinding
+      ? "After L0 Feedback marks feedback_ok, Main books with finding(confirm, finding_id=…). Severity fills from Store when omitted; missing severity fails closed."
+      : "This stage cannot finding(confirm). Deposit candidates via packages or fact/surfaces only.",
     "Do **not** create process-chore L2 todos (e.g. Write result.json, collect subagents, pure meta login prep).",
     allowSubagent
       ? [
@@ -125,13 +164,14 @@ export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope)
           "Prefer packages over one long serial monologue across all vulnerability classes or surfaces.",
           "Each formal package **must** pass plan_node_id (L2 attack-class anchor). No hard package quotas.",
           "Anti-micro-spawn: do not split trivial single-GET chores into packages.",
-          "Workers return structured candidates/surfaces with verbatim proof_excerpt; host settlement + Finding Store own Join — do not rephrase proof into a result.json ceremony.",
+          "Workers return structured candidates/surfaces with severity + verbatim proof_excerpt; host settlement + Finding Store own Join — do not rephrase proof into a result.json ceremony.",
+          "Discovery packages: already_done must include prior pathKey∩class; host hard-fails spawn on prior collision — use re-verify packages with prior Store ids for known holes.",
           "After packages start this stage: orchestrate + settle only (do not serial-erase package failure).",
           "No nested subagent inside workers. Stay in RoE/scope.",
           "Serial Main-only probing is allowed if packages are not justified (single surface / single class) — deposit Store/surfaces via host paths.",
         ].join(" ")
       : "",
-    "Fail closed: do not invent surfaces or proof.",
+    "Fail closed: do not invent surfaces or proof. Destructive actions default-deny unless RoE explicitly allows (record skipped_roe when denied).",
     "",
     // Same language policy as free OMP / subagent (#134 / #137).
     formatAgentLanguageInjection(task.agentLanguage),
@@ -140,6 +180,7 @@ export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope)
     `Scope: ${JSON.stringify(task.scope)}`,
     `Prior handoff stages: ${input.handoff.completed_stages.join(", ") || "(none)"}`,
     `Known surfaces: ${JSON.stringify(input.handoff.surfaces.slice(0, 20))}`,
+    priorSeed,
   ]
     .filter(Boolean)
     .join("\n");
@@ -148,10 +189,14 @@ export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope)
 /** Exported for harness contract tests (#101 / #125). */
 export function stageUserPrompt(input: StageExecutorInput, task: TaskEnvelope): string {
   const allowSubagent = input.tools.includes("subagent");
+  const repair =
+    typeof input.l0RepairBrief === "string" && input.l0RepairBrief.trim()
+      ? ["", input.l0RepairBrief.trim(), ""]
+      : [];
   return [
     `### Hard Graph stage: ${input.stage.id}`,
     input.stage.success || "",
-    "",
+    ...repair,
     "### Handoff snapshot",
     JSON.stringify(
       {
@@ -335,7 +380,14 @@ export function createHardGraphStageExecutor(options: {
       detail: "seed failed",
     }));
 
-    const systemPrompt = stageSystemPrompt(input, task);
+    const gq = ensureGraphRunQuality(parentRuntime.lifecycle.hardGraphRun);
+    const priorSnapshot = gq?.priorSeed
+      ? formatPriorSnapshotInjection(gq.priorSeed)
+      : "";
+    const systemPrompt = stageSystemPrompt(
+      { ...input, priorSnapshot } as StageExecutorInput & { priorSnapshot?: string },
+      task,
+    );
     const userPrompt = stageUserPrompt(input, task);
 
     // Single session promote site (best-effort); absorb only on intentional returns.
@@ -411,16 +463,70 @@ export function createHardGraphStageExecutor(options: {
         .booked_n;
       // Spec #125 / #130: captain machine surface for confirmable Store ids.
       const feedbackOkIds = settlement.feedback_ok_ids;
+
+      // Spec #139 D3 / NC-L1: build Product-state critic input; l0Passed = honesty only.
+      // Runner owns structure gate + L1 refine budget application (refine_n).
+      const pq = ensureProcessQuality(parentRuntime.lifecycle);
+      const gqState = ensureGraphRunQuality(parentRuntime.lifecycle.hardGraphRun);
+      const honestyFlags: string[] = [];
+      if (settlement.honesty) {
+        if (!settlement.honesty.ok) honestyFlags.push("package_honesty");
+        if (settlement.honesty.silent_partial) honestyFlags.push("silent_partial");
+      }
+      const l0HonestyOk = Boolean(settlement.honesty?.ok);
+      const l1Input = buildL1InputFromProductState({
+        stageId: input.stage.id,
+        stageSummary: structuredOut.summaryProvided ? structuredOut.summary : undefined,
+        store: pq.findingStore,
+        fanoutPackagesN,
+        honestyFlags,
+        surfaceSummary: settleRuntime.surfaceLedger?.summary?.() as
+          | { total?: number; open?: number; probed?: number; booked?: number }
+          | undefined,
+      });
+      // NC-Honesty-Advance / NC-L1: L1 only after stage L0 honesty pass; never polish L0-fail brief.
+      let l1Payload: { decision: "pass" | "refine"; gaps: string[] } | undefined;
+      if (l0HonestyOk) {
+        const l1Out = await runL1Critic({ l0Passed: true, input: l1Input });
+        l1Payload = { decision: l1Out.decision, gaps: l1Out.gaps };
+        if (gqState) {
+          const prev = gqState.l1ByStage[input.stage.id] || { refine_n: 0 };
+          prev.last = { decision: l1Out.decision, gaps: l1Out.gaps };
+          gqState.l1ByStage[input.stage.id] = prev;
+        }
+      } else if (gqState) {
+        const prev = gqState.l1ByStage[input.stage.id] || { refine_n: 0 };
+        prev.last = { decision: "skipped_l0_fail", gaps: honestyFlags };
+        gqState.l1ByStage[input.stage.id] = prev;
+      }
+
+      // Data-driven unbookable accounting (validate_book sets unbookable_on_exit)
+      if (input.stage.unbookable_on_exit && gqState) {
+        for (const r of pq.findingStore.snapshot()) {
+          if (r.status !== "feedback_ok") continue;
+          if (gqState.unbookable.some((u) => u.finding_id === r.id)) continue;
+          gqState.unbookable.push({
+            finding_id: r.id,
+            reason: "feedback_ok_not_confirmed_at_validate_book",
+          });
+        }
+      }
+
+      const unbookableN = gqState?.unbookable?.length || 0;
       return {
         structured: structuredOut,
         summary: structuredOut.summaryProvided ? structuredOut.summary : undefined,
         fanoutPackagesN,
         bookOutcomes:
-          bookedDelta > 0 || input.stage.id === "validate_book"
-            ? { booked_n: bookedDelta, reject_hints_n: 0 }
+          bookedDelta > 0 || input.stage.unbookable_on_exit || input.stage.id === "validate_book"
+            ? {
+                booked_n: bookedDelta,
+                reject_hints_n: unbookableN,
+              }
             : undefined,
         findingsBookedN: storeBooked,
         ...(feedbackOkIds.length ? { feedbackOkIds } : {}),
+        ...(l1Payload ? { l1: l1Payload } : {}),
       };
     };
 

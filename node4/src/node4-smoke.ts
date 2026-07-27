@@ -1454,6 +1454,8 @@ async function main() {
       description: "Untrusted input reaches shell; id output observed.",
       poc: "POST /api/ping body=;id → response/stdout includes uid=0(root)",
       proof: "PROOF: uid=0(root) command injection confirmed on /api/ping",
+      // Spec #139 D1 / NC-Severity: severity required — no silent medium
+      severity: "critical",
     }),
   );
   assert(book1.includes('"ok": true') || book1.includes('"ok":true'), `book1: ${book1.slice(0, 200)}`);
@@ -1470,6 +1472,7 @@ async function main() {
       description: "Second probe returned demonstrable output for the issue.",
       poc: "shell probe → stdout shows proving marker for issue B",
       proof: "PROOF-B: subagent-style marker for issue B at /sub",
+      severity: "high",
     }),
   );
   assert(

@@ -234,6 +234,7 @@ assert.equal(normalizeSubagentResult(settlement.structured).summaryProvided, tru
             {
               title: "fiction",
               location: "http://poisoned/x",
+              severity: "high",
               proof_excerpt: "x".repeat(40),
             },
           ],

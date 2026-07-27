@@ -42,7 +42,14 @@ import {
   bumpPackageAttempt,
   ensureProcessQuality,
 } from "../runtime/package-honesty-host.js";
-import { ingestPackageCandidatesToStore } from "../runtime/finding-store.js";
+import { ingestPackageCandidatesDetailed } from "../runtime/finding-store.js";
+import { applyPriorAvoidOnPackage } from "../runtime/prior-seed.js";
+import {
+  packageItemSchema,
+  packagePriorFields,
+  resolvePackageInput,
+  type ResolvedPackage,
+} from "./subagent-package.js";
 import { dirname } from "node:path";
 
 export type SubagentPackageResult = {
@@ -77,53 +84,6 @@ export type SubagentPackageResult = {
   };
 };
 
-type ResolvedPackage = {
-  target: string;
-  scope: string;
-  already_done: string;
-  this_turn_goal: string;
-  success_criteria: string;
-  assignment?: string;
-  skill_id?: string;
-  node_type?: string;
-  goal_id?: string;
-  /** Explicit Hard Graph L2 todo node_id for Worker chip ownership. */
-  plan_node_id?: string;
-  command?: string;
-  timeout_seconds: number;
-  /** Explicit warm follow-up of a parked worker (affinity: same path). */
-  resume_agent_id?: string;
-};
-
-const packageItemSchema = Type.Object({
-  target: Type.String(),
-  scope: Type.Optional(Type.String()),
-  already_done: Type.Optional(Type.String()),
-  this_turn_goal: Type.String(),
-  success_criteria: Type.String(),
-  assignment: Type.Optional(Type.String()),
-  skill_id: Type.Optional(Type.String()),
-  node_type: Type.Optional(Type.String()),
-  goal_id: Type.Optional(Type.String()),
-  plan_node_id: Type.Optional(
-    Type.String({
-      description:
-        "Hard Graph L2 todo node_id to attach the Worker chip (preferred over title/goal fuzzy match).",
-    }),
-  ),
-  todo_node_id: Type.Optional(
-    Type.String({ description: "Alias of plan_node_id" }),
-  ),
-  command: Type.Optional(Type.String()),
-  timeout_seconds: Type.Optional(Type.Number()),
-  resume_agent_id: Type.Optional(
-    Type.String({
-      description:
-        "Warm follow-up: prior agent_id. Same path required; orthogonal targets must omit (cold spawn).",
-    }),
-  ),
-});
-
 /**
  * Agent-facing subagent tool.
  * Flat / batch spawn, warm resume, list idle workers, explicit release (OMP lifecycle).
@@ -139,6 +99,7 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
       "SPAWN FLAT: target, scope, already_done, this_turn_goal, success_criteria (+ node_type/skill_id/plan_node_id).",
       "SPAWN BATCH: packages=[{...}] concurrent (NODE4_SUBAGENT_CONCURRENCY default 8). Orthogonal paths = cold workers.",
       "plan_node_id (or todo_node_id): REQUIRED for correct Tasks Worker chip when multiple stage todos exist. Prefer todo node_id from your last todo.init/list.",
+      "RE-VERIFY (Spec #139): package_kind=re-verify + prior_finding_ids=[Store id…] + this-run fresh proof. Discovery packages host-hard-fail on prior pathKey∩class; set class_key for precise avoid.",
       "WARM: resume_agent_id=prior agent_id on SAME path (gap/timeout follow-up). Soft-fail workers stay idle for resume.",
       "LIST: op=list → idle_workers[] (agent_id, path_key, …).",
       "RELEASE: op=release + agent_id (or release_agent_id) — dispose worker now; else idle TTL (~420s) / maxIdle LRU auto-releases.",
@@ -178,6 +139,7 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
             "Flat warm follow-up: prior agent_id. Same path only; omit for cold spawn / orthogonal targets.",
         }),
       ),
+      ...packagePriorFields,
       agent_id: Type.Optional(
         Type.String({ description: "For op=release: worker id to dispose" }),
       ),
@@ -281,6 +243,13 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
             skipped.push(softFailPackage(r.pkg, pathLimit.error!, runtime, "never_started"));
             continue;
           }
+          const avoid = applyPriorAvoidOnPackage(
+            ensureProcessQuality(runtime.lifecycle).findingStore,
+            r.pkg,
+          );
+          if (!avoid.ok) {
+            return textResult(`error: ${avoid.error}`, { isError: true });
+          }
           resolved.push(r.pkg);
         }
 
@@ -360,6 +329,15 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
       if (!pathLimit.ok) {
         return textResult(pathLimit.error!, { isError: true });
       }
+      {
+        const avoid = applyPriorAvoidOnPackage(
+          ensureProcessQuality(runtime.lifecycle).findingStore,
+          flat.pkg,
+        );
+        if (!avoid.ok) {
+          return textResult(`error: ${avoid.error}`, { isError: true });
+        }
+      }
 
       try {
         const one = await runSubagentPackage(runtime, flat.pkg, postLock);
@@ -403,74 +381,6 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
         const msg = err instanceof Error ? err.message : String(err);
         return textResult(`error: subagent failed: ${msg}`, { isError: true });
       }
-    },
-  };
-}
-
-function resolvePackageInput(
-  top: Record<string, unknown>,
-  item: Record<string, unknown> | null,
-  index: number,
-): { pkg: ResolvedPackage } | { error: string } {
-  const src = item ?? top;
-  const context = String(top.context || "").trim();
-  const defaultScope = String(top.scope || "").trim();
-  const defaultDone = String(top.already_done || "").trim();
-  const defaultTimeout = Math.min(Math.max(Number(top.timeout_seconds || 120), 1), 300);
-
-  const target = String(src.target ?? top.target ?? "").trim();
-  const scope = String(src.scope ?? defaultScope).trim();
-  let already_done = String(src.already_done ?? defaultDone).trim();
-  if (context) {
-    already_done = already_done
-      ? `## Shared context\n${context}\n\n## Already done\n${already_done}`
-      : `## Shared context\n${context}`;
-  }
-  const this_turn_goal = String(src.this_turn_goal ?? (item ? "" : top.this_turn_goal) ?? "").trim();
-  const success_criteria = String(
-    src.success_criteria ?? (item ? "" : top.success_criteria) ?? "",
-  ).trim();
-
-  if (!target || !scope || !already_done || !this_turn_goal || !success_criteria) {
-    const mode = item ? `packages[${index}]` : "flat subagent";
-    return {
-      error:
-        `error: ${mode} incomplete handoff — need target, scope, already_done, this_turn_goal, success_criteria ` +
-        `(batch may inherit scope/already_done from top-level; context fills shared background).`,
-    };
-  }
-
-  const timeout_seconds = Math.min(
-    Math.max(Number(src.timeout_seconds ?? defaultTimeout), 1),
-    300,
-  );
-
-  return {
-    pkg: {
-      target,
-      scope,
-      already_done,
-      this_turn_goal,
-      success_criteria,
-      assignment: src.assignment != null ? String(src.assignment) : undefined,
-      skill_id: src.skill_id != null ? String(src.skill_id).trim() : undefined,
-      node_type: src.node_type != null ? String(src.node_type).trim() : item ? undefined : (top.node_type != null ? String(top.node_type).trim() : undefined),
-      goal_id: src.goal_id != null ? String(src.goal_id).trim() : undefined,
-      plan_node_id: (() => {
-        const raw =
-          src.plan_node_id ??
-          src.todo_node_id ??
-          (!item ? top.plan_node_id ?? top.todo_node_id : undefined);
-        return raw != null ? String(raw).trim() || undefined : undefined;
-      })(),
-      command: src.command != null ? String(src.command).trim() : undefined,
-      resume_agent_id:
-        src.resume_agent_id != null
-          ? String(src.resume_agent_id).trim()
-          : !item && top.resume_agent_id != null
-            ? String(top.resume_agent_id).trim()
-            : undefined,
-      timeout_seconds,
     },
   };
 }
@@ -849,14 +759,25 @@ async function runSubagentPackage(
     });
     // Upsert candidates into Finding Store (Store-first) + L0 Feedback (production path)
     const fstore = ensureProcessQuality(runtime.lifecycle).findingStore;
+    let severity_rejected: Array<{ title?: string; location?: string; reason: string }> = [];
     if (structured.candidates?.length) {
-      ingestPackageCandidatesToStore(fstore, structured.candidates, {
+      const ing = ingestPackageCandidatesDetailed(fstore, structured.candidates, {
         package_id: result.subagentId,
         plan_node_id: pkg.plan_node_id,
         stage_id: runtime.lifecycle.hardGraphRun?.stageId,
         agent_id: agentId,
         fallback_location: handoff.handoff.target,
       });
+      severity_rejected = ing.rejected;
+      if (severity_rejected.length) {
+        acceptance.package_gaps = [
+          ...(acceptance.package_gaps || []),
+          ...severity_rejected.map(
+            (r) =>
+              `candidate rejected (${r.reason}): ${r.title || "?"} @ ${r.location || "?"} — set severity=critical|high|medium|low|info`,
+          ),
+        ];
+      }
     }
 
     // Spec #116 I0.1: count package attempts against plan_node_id budget

@@ -59,6 +59,16 @@ def _clip(text: str, limit: int = DEFAULT_LINE_CHARS) -> str:
     return t[: max(0, limit - 20)] + "…(truncated)"
 
 
+def _normalize_finding_severity(value: object) -> str | None:
+    """Spec #139 D1 / NC-Severity: fail closed — no silent medium default."""
+    severity = str(value or "").strip().lower()
+    if not severity:
+        return None
+    if severity in {"critical", "high", "medium", "low", "info"}:
+        return severity
+    return None
+
+
 def _clip_block(text: str, limit: int = DEFAULT_EXCERPT_CHARS) -> str:
     t = str(text or "").strip()
     if len(t) <= limit:
@@ -211,10 +221,11 @@ def build_findings_summary(
             eids = []
         clean_eids = [str(x) for x in eids if str(x or "").strip()][:12]
         proof = _proof_from_description(f.get("description") or f.get("poc"))
+        severity = _normalize_finding_severity(f.get("severity"))
         row: dict[str, Any] = {
             "id": str(f.get("id") or f.get("finding_id") or f.get("vulnerability_id") or "")[:80],
             "title": _clip(title, 200),
-            "severity": str(f.get("severity") or "medium")[:32],
+            "severity": severity or "",
             "status": str(f.get("status") or "")[:32],
             "location": _clip(str(f.get("location") or f.get("url") or f.get("affected_asset") or ""), 200),
             "evidence_ids": clean_eids,
@@ -590,7 +601,7 @@ async def load_case_context_for_conversation(
             findings.append({
                 "id": vid,
                 "title": getattr(v, "title", None) or "Untitled",
-                "severity": getattr(v, "severity", None) or "medium",
+                "severity": _normalize_finding_severity(getattr(v, "severity", None)) or "",
                 "status": getattr(v, "status", None) or "",
                 "location": getattr(v, "location", None)
                 or getattr(v, "affected_asset", None)

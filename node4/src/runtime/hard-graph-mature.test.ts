@@ -179,6 +179,7 @@ const result = await runHardGraph({
                 {
                   title: "Login SQLi",
                   location: "http://127.0.0.1:3010/rest/user/login",
+                  severity: "high",
                   proof_excerpt:
                     "POST login with SQLi email returns 200 JWT admin token in JSON body response",
                 },

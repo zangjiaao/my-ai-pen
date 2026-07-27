@@ -16,6 +16,8 @@ export type CaseFindingLine = {
   severity?: string;
   status?: string;
   location?: string;
+  url?: string;
+  description?: string;
   evidence_ids?: string[];
   proof_excerpt?: string;
 };

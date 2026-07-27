@@ -90,6 +90,7 @@ export function buildSystemPrompt(
       typeof options?.allowPostexOverride === "boolean"
         ? options.allowPostexOverride
         : task.allowPostex,
+    allowDestructive: task.allowDestructive,
   });
   const lines = [
     ...pack.missionLines.map(render),

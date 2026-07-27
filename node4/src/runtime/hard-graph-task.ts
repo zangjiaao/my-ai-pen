@@ -28,6 +28,13 @@ import {
 import { PanelAgentTracker } from "./panel-agents.js";
 import { GoalStore } from "../stores/goal.js";
 import { ensureProcessQuality } from "./package-honesty-host.js";
+import { seedPriorsAtGraphStart } from "./prior-seed.js";
+import { buildEngagementCloseout, writeEngagementCloseout } from "./engagement-closeout.js";
+import {
+  createGraphRunQualityState,
+  ensureGraphRunQuality,
+} from "./graph-run-quality.js";
+import { l1MaxStageRefine } from "./l1-critic.js";
 
 export type HardGraphTaskResult = {
   /** Platform task_complete.status (completed | incomplete | blocked). */
@@ -122,19 +129,17 @@ export async function emitHardGraphStageStatus(options: {
 
   if (event.type === "stage_end") {
     if (plan) {
-      const st =
-        event.outcome === "passed"
-          ? "done"
-          : event.outcome === "aborted"
-            ? "blocked"
-            : event.outcome === "blocked"
-              ? "blocked"
-              : event.outcome === "failed_attempt"
-                ? "running"
-                : "failed";
       // failed_attempt keeps stage running (retry); terminal outcomes close L1.
       if (event.outcome !== "failed_attempt") {
-        plan.setStageStatus(event.stageId, st === "done" ? "done" : st === "blocked" ? "blocked" : "failed");
+        const planStatus =
+          event.outcome === "passed"
+            ? "done"
+            : event.outcome === "skipped"
+              ? "skipped"
+              : event.outcome === "aborted" || event.outcome === "blocked"
+                ? "blocked"
+                : "failed";
+        plan.setStageStatus(event.stageId, planStatus);
         await emitHardGraphPlanTreeUpdate(platform, task, plan, `stage_end:${event.stageId}:${event.outcome}`);
       }
     }
@@ -201,14 +206,23 @@ export async function runHardGraphExpertTask(options: {
   const panelLabel =
     (typeof task.expertName === "string" && task.expertName.trim()) || pack.id || "Expert";
   const panel = new PanelAgentTracker(task.instruction || "Expert Graph task", panelLabel);
+  const graphQuality = createGraphRunQualityState();
   parentRuntime.lifecycle.hardGraphRun = {
     plan: graphPlan,
     usage: runUsage,
     panel,
+    graphQuality,
   };
   parentRuntime.lifecycle.panelAgents = panel;
   // Spec #116: ensure Store-first process quality survives all stages
-  ensureProcessQuality(parentRuntime.lifecycle);
+  const processQuality = ensureProcessQuality(parentRuntime.lifecycle);
+
+  // Spec #139 D2: host-seed Finding Store priors at graph-start (strip bookable proof)
+  const priorSeed = seedPriorsAtGraphStart(
+    processQuality.findingStore,
+    task.caseContext,
+  );
+  graphQuality.priorSeed = priorSeed;
 
   const startMsg: PlatformMessage = {
     type: "status_update",
@@ -250,6 +264,16 @@ export async function runHardGraphExpertTask(options: {
     executeStage,
     availableTools,
     abortSignal: signal,
+    l1Budget: {
+      getRefineCount: (stageId) => graphQuality.l1ByStage[stageId]?.refine_n || 0,
+      recordRefine: (stageId, gaps) => {
+        const prev = graphQuality.l1ByStage[stageId] || { refine_n: 0 };
+        prev.refine_n = (prev.refine_n || 0) + 1;
+        prev.last = { decision: "refine", gaps };
+        graphQuality.l1ByStage[stageId] = prev;
+      },
+      maxRefine: l1MaxStageRefine(),
+    },
     onEvent: (event) =>
       emitHardGraphStageStatus({ platform, task, event, startedAt, plan: graphPlan }),
   });
@@ -259,6 +283,40 @@ export async function runHardGraphExpertTask(options: {
     JSON.stringify(result, null, 2),
     "utf8",
   );
+
+  // Spec #139 NC-Closeout: dual storage on any terminal
+  try {
+    const gq = ensureGraphRunQuality(parentRuntime.lifecycle.hardGraphRun) || graphQuality;
+    const closeout = buildEngagementCloseout({
+      task,
+      graphId: graph.id,
+      terminal: result.terminal,
+      stages: result.stages,
+      store: processQuality.findingStore,
+      priorSeed: gq.priorSeed,
+      unbookable: gq.unbookable,
+      l1ByStage: gq.l1ByStage,
+      surfaceSummary: parentRuntime.surfaceLedger?.summary?.() as
+        | { total?: number; by_status?: Record<string, number>; sample_paths?: string[] }
+        | undefined,
+    });
+    gq.engagementCloseout = closeout;
+    await writeEngagementCloseout({ taskDir, platform, task, closeout });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[hard-graph] engagement close-out failed: ${msg}`);
+    try {
+      await platform.send({
+        type: "engagement_closeout_error",
+        conversation_id: task.conversationId,
+        task_id: task.taskId,
+        message: `engagement_closeout failed: ${msg}`,
+        status: "error",
+      });
+    } catch {
+      /* platform may be down */
+    }
+  }
 
   let bookedFindings = 0;
   try {
