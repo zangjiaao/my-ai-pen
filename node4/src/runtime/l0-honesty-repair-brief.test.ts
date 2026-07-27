@@ -323,6 +323,97 @@ assert.equal(isBookingOnlyStage({ intent: "probe", id: "class_probe" }), false);
   );
 }
 
+// --- Review finding #1: structure-only retry must NOT inject honesty M1 brief ---
+{
+  const graph: HardGraphDefinition = {
+    discipline: "hard",
+    id: "structure_retry_no_honesty_brief",
+    label: "structure retry",
+    stages: [
+      {
+        id: "surface",
+        intent: "surface",
+        require: { summary: true, surfaces_min: 1 },
+        max_retries: 1,
+      },
+    ],
+  };
+  const briefs: Array<{ attempt?: number; hasHonestyBrief: boolean }> = [];
+  let n = 0;
+  const exec: StageExecutor = async (input) => {
+    n += 1;
+    briefs.push({
+      attempt: input.stageAttempt,
+      hasHonestyBrief: Boolean(
+        input.l0RepairBrief?.includes("cannot_advance") ||
+          input.l0RepairBrief?.includes("Main duties (M1)"),
+      ),
+    });
+    // Always structure-fail (ok true, no surfaces)
+    return {
+      structured: {
+        ok: true,
+        summary: "still empty",
+        summaryProvided: true,
+        surfaces: [],
+        candidates: [],
+        facts: [],
+        deadends: [],
+      },
+    };
+  };
+  const result = await runHardGraph({
+    graph,
+    executeStage: exec,
+    availableTools: ["todo"],
+  });
+  assert.equal(result.terminal, "blocked");
+  assert.equal(n, 2, "max_retries=1 → two attempts");
+  const second = briefs.find((b) => b.attempt === 2);
+  assert.ok(second, "second attempt ran");
+  assert.equal(
+    second.hasHonestyBrief,
+    false,
+    "structure-only retry must not inject honesty M1 repair brief",
+  );
+}
+
+// --- Honesty retry still gets repair brief ---
+{
+  const graph: HardGraphDefinition = {
+    discipline: "hard",
+    id: "honesty_retry_brief",
+    label: "honesty retry",
+    stages: [
+      {
+        id: "wave",
+        intent: "probe",
+        require: { summary: true },
+        max_retries: 1,
+      },
+    ],
+  };
+  const briefs: boolean[] = [];
+  const exec: StageExecutor = async (input) => {
+    if ((input.stageAttempt || 1) === 2) {
+      briefs.push(Boolean(input.l0RepairBrief?.includes("cannot_advance")));
+    }
+    return {
+      structured: {
+        ok: false,
+        summary: "illegal",
+        summaryProvided: true,
+        surfaces: [],
+        candidates: [],
+        facts: [],
+        deadends: ["illegal_l2_done:pkg-x"],
+      },
+    };
+  };
+  await runHardGraph({ graph, executeStage: exec, availableTools: ["todo"] });
+  assert.equal(briefs[0], true, "honesty cannot-advance retry still injects repair brief");
+}
+
 // --- close-out residual class + true post-block booking_tail_ran ---
 {
   const store = new FindingStore();

@@ -445,8 +445,10 @@ export async function runHardGraph(options: {
       let outFeedbackOkIds: string[] | undefined;
       let outL1: { decision: "pass" | "refine"; gaps: string[] } | undefined;
       try {
+        // Honesty repair brief only when prior attempt failed L0 honesty cannot-advance.
+        // Structure-only / L1 refine retries must not inject M1 honesty duties (review finding #1).
         const l0RepairBrief =
-          attempt > 1 && lastErrors.length
+          attempt > 1 && isHonestyCannotAdvanceErrors(lastErrors)
             ? formatL0RepairBrief({
                 stageId: stage.id,
                 failedAttempt: attempt - 1,
