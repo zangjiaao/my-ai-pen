@@ -1228,6 +1228,8 @@ export default function ConversationPage() {
       }
     },
     engagement_closeout: (msg) => {
+      // Same msg_type as platform persist path (engagement_closeout) — not a live-only status disguise.
+      // Gist text prefers Node/platform message; do not re-build residual strings here (M2).
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
       const convId = messageConversationId(msg, activeId);
@@ -1241,17 +1243,21 @@ export default function ConversationPage() {
       markMessageAutoScroll();
       const terminal = String(closeout?.terminal || m.status || "unknown");
       const processComplete = closeout?.process_complete;
-      const residual = String(closeout?.residual_risk || "").trim();
+      const nodeText = String(m.message || "").trim();
+      const text =
+        nodeText ||
+        `Engagement close-out · terminal=${terminal}` +
+          (processComplete === false ? " · process incomplete" : "");
       addMessageToConversation(
         convId,
-        makeMessage(convId, "system", "status", {
-          text:
-            `Engagement close-out · terminal=${terminal}` +
-            (processComplete === false ? " · process incomplete" : "") +
-            (residual ? ` · ${residual.slice(0, 160)}` : ""),
+        makeMessage(convId, "system", "engagement_closeout", {
+          text,
           status: terminal,
+          terminal,
           type: "engagement_closeout",
           engagement_closeout: closeout || undefined,
+          process_complete: processComplete,
+          residual_risk: closeout?.residual_risk,
           message_id: m.message_id,
         }),
       );
@@ -3197,6 +3203,19 @@ function resultTimelineEventForMessage(message: Message): TimelineEvent | null {
         detail: clipTimeline(readString(content.summary), 180),
         status: "incomplete",
       };
+    case "engagement_closeout": {
+      // Spec #163: same msg_type live + DB; Activity uses platform gist (content.text).
+      const text = readString(content.text) || "Engagement close-out";
+      const status = readString(content.terminal) || readString(content.status) || "unknown";
+      return {
+        id,
+        at,
+        category: "Task",
+        title: text,
+        detail: status && text !== status ? status : undefined,
+        status,
+      };
+    }
     default:
       return null;
   }
@@ -3294,7 +3313,7 @@ function phaseForStatusMessage(message: Message): string {
 function isRenderableMessage(message: Message): boolean {
   if (message.role === "user" && message.msg_type === "decision") return false;
   if (message.msg_type === "tool_call") return true;
-  if (["text", "status", "confirm_card", "vuln_card", "vuln_found", "asset_card", "asset_discovered", "agent_pending", "thinking", "reasoning", "agent_thinking"].includes(message.msg_type)) return true;
+  if (["text", "status", "engagement_closeout", "confirm_card", "vuln_card", "vuln_found", "asset_card", "asset_discovered", "agent_pending", "thinking", "reasoning", "agent_thinking"].includes(message.msg_type)) return true;
   return false;
 }
 function groupConsecutiveToolMessages(messages: Message[]): Message[] {

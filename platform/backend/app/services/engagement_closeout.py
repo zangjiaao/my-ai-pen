@@ -3,6 +3,11 @@
 Node emits type=engagement_closeout with the same JSON as taskDir
 hard-graph/engagement-closeout.json. Platform stores that payload on
 conversation.context and as a structured timeline message.
+
+Required top keys must stay aligned with:
+- node4 EngagementCloseout type (node4/src/runtime/engagement-closeout.ts)
+- score script CLOSEOUT_REQUIRED (node4/scripts/score-process-discovery-139.py)
+- docs/specs/task-graph.md NC-Closeout row
 """
 
 from __future__ import annotations
@@ -10,10 +15,14 @@ from __future__ import annotations
 from typing import Any
 
 
+# Keep identical to score script CLOSEOUT_REQUIRED + Node EngagementCloseout required fields.
 REQUIRED_TOP_KEYS = (
+    "scope",
+    "target",
     "graphId",
     "terminal",
     "stages",
+    "surfaces",
     "findings",
     "priors",
     "feedback",
@@ -51,14 +60,39 @@ def required_fields_present(closeout: dict[str, Any] | None) -> bool:
         return False
     if not isinstance(closeout.get("feedback"), list):
         return False
+    # scope / target / surfaces: present and object-shaped (dict)
+    if not isinstance(closeout.get("scope"), dict):
+        return False
+    if not isinstance(closeout.get("target"), dict):
+        return False
+    if not isinstance(closeout.get("surfaces"), dict):
+        return False
     return True
+
+
+def accept_engagement_closeout(msg: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Single accept gate for dual-write (context + timeline).
+
+    Extract payload then require NC-Closeout fields. Returns validated closeout
+    dict, or None when the frame must not be remembered or saved.
+    """
+    closeout = extract_closeout_payload(msg)
+    if not required_fields_present(closeout):
+        return None
+    # required_fields_present guarantees a non-empty dict
+    assert isinstance(closeout, dict)
+    return closeout
 
 
 def message_content_from_closeout(
     msg: dict[str, Any],
     closeout: dict[str, Any],
 ) -> dict[str, Any]:
-    """Stable timeline content: human gist + full JSON semantics."""
+    """Stable timeline content: human gist + full JSON semantics.
+
+    Call only after accept_engagement_closeout succeeds — single gist builder
+    for persisted timeline rows (frontend should reuse content.text / msg.message).
+    """
     terminal = str(closeout.get("terminal") or msg.get("status") or "unknown")
     graph_id = str(closeout.get("graphId") or "")
     process_complete = closeout.get("process_complete")
@@ -98,7 +132,10 @@ def merge_closeout_into_context(
     *,
     task_id: str | None = None,
 ) -> dict[str, Any]:
-    """Store latest close-out as Product state on conversation.context."""
+    """Store latest close-out as Product state on conversation.context.
+
+    Latest only — multi-run history is not a product surface yet (no consumer).
+    """
     ctx = dict(context or {})
     # Ignore close-out from a superseded work burst when active_task_id is set.
     active = str(ctx.get("active_task_id") or "").strip()
@@ -106,13 +143,4 @@ def merge_closeout_into_context(
     if active and tid and active != tid:
         return ctx
     ctx["engagement_closeout"] = closeout
-    history = ctx.get("engagement_closeout_history")
-    if not isinstance(history, list):
-        history = []
-    entry = dict(closeout)
-    if tid:
-        entry["_task_id"] = tid
-    history = [h for h in history if isinstance(h, dict)]
-    history.append(entry)
-    ctx["engagement_closeout_history"] = history[-8:]
     return ctx

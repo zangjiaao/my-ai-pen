@@ -729,7 +729,10 @@ function SystemNotice({ content }: { content: Record<string, unknown> }) {
 export default function MessageRenderer({ message, agentNameById = {}, previousMessage, fallbackPentestNodeId, platformAgentNodeId, onDecision, onOpenVulnerability, onOpenAsset, onOpenEvidence, highlightedApprovalId, approvalDecisionByRequestId = {} }: Props) {
   const { role, msg_type, content } = message;
 
-  if (role === "system" || msg_type === "status") return <SystemNotice content={content} />;
+  // Spec #163: engagement_closeout uses content.text (platform gist) via SystemNotice.
+  if (role === "system" || msg_type === "status" || msg_type === "engagement_closeout") {
+    return <SystemNotice content={content} />;
+  }
 
   if (role === "user" && msg_type === "decision") return null;
 
@@ -769,6 +772,7 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
       body = <ThinkingCard content={content} />;
       break;
     case "status":
+    case "engagement_closeout":
       body = <StatusNotice content={content} />;
       break;
     case "text":

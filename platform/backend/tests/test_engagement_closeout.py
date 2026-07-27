@@ -1,6 +1,7 @@
 """Spec #163 NC-Closeout productization helpers."""
 
 from app.services.engagement_closeout import (
+    accept_engagement_closeout,
     extract_closeout_payload,
     merge_closeout_into_context,
     message_content_from_closeout,
@@ -37,6 +38,39 @@ def test_required_fields_present():
     assert required_fields_present(_sample_closeout()) is True
     assert required_fields_present({"terminal": "completed"}) is False
     assert required_fields_present(None) is False
+    # NC-Closeout requires scope / target / surfaces as objects
+    for missing in ("scope", "target", "surfaces"):
+        co = _sample_closeout()
+        del co[missing]
+        assert required_fields_present(co) is False
+    assert required_fields_present(_sample_closeout(scope="http://t")) is False
+    assert required_fields_present(_sample_closeout(surfaces=[])) is False
+
+
+def test_accept_engagement_closeout_gate():
+    co = _sample_closeout()
+    valid_msg = {
+        "type": "engagement_closeout",
+        "message": "engagement_closeout terminal=blocked graph=app_assessment",
+        "engagement_closeout": co,
+    }
+    accepted = accept_engagement_closeout(valid_msg)
+    assert accepted is not None
+    assert accepted["graphId"] == "app_assessment"
+    assert accepted["scope"]["allow"] == ["http://t"]
+
+    # Missing required top key
+    assert accept_engagement_closeout({"engagement_closeout": {"terminal": "blocked"}}) is None
+    # Empty / missing payload
+    assert accept_engagement_closeout({"type": "engagement_closeout"}) is None
+    assert accept_engagement_closeout({}) is None
+    assert accept_engagement_closeout(None) is None
+    # Nested content path (rehydrated)
+    nested = accept_engagement_closeout({"content": {"engagement_closeout": co}})
+    assert nested is not None and nested["terminal"] == "blocked"
+    # Shape rejection: stages must be list
+    bad = _sample_closeout(stages="authz")
+    assert accept_engagement_closeout({"engagement_closeout": bad}) is None
 
 
 def test_extract_from_node_frame():
@@ -68,15 +102,15 @@ def test_message_content_preserves_json_semantics():
     assert "process incomplete" in content["text"]
 
 
-def test_merge_into_context_latest_and_history():
+def test_merge_into_context_latest_only():
     co1 = _sample_closeout(terminal="blocked")
     co2 = _sample_closeout(terminal="completed", process_complete=True, booking_tail_ran=None)
     ctx = merge_closeout_into_context({}, co1, task_id="t1")
     assert ctx["engagement_closeout"]["terminal"] == "blocked"
-    assert len(ctx["engagement_closeout_history"]) == 1
+    assert "engagement_closeout_history" not in ctx
     ctx = merge_closeout_into_context(ctx, co2, task_id="t1")
     assert ctx["engagement_closeout"]["terminal"] == "completed"
-    assert len(ctx["engagement_closeout_history"]) == 2
+    assert "engagement_closeout_history" not in ctx
 
 
 def test_merge_ignores_superseded_task():

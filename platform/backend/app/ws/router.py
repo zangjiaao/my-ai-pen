@@ -761,14 +761,23 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
         # Tool cards already stream stdout; do NOT re-book every tool result as
         # Evidence (that produced messy JSON dumps next to real evidence_created rows).
         await _audit_tool_output(msg, client_id)
-    elif msg.get("type") == "engagement_closeout":
-        # Spec #163 NC-Closeout: dual Product state — timeline message + conversation.context
-        await _remember_engagement_closeout(conv_id, msg)
+    # Spec #163 NC-Closeout: single accept gate before dual-write (context + timeline).
+    # Fail-closed: missing required fields → no remember, no hollow timeline row.
+    engagement_closeout_accepted: dict | None = None
+    if msg.get("type") == "engagement_closeout":
+        from app.services.engagement_closeout import accept_engagement_closeout
+
+        engagement_closeout_accepted = accept_engagement_closeout(msg)
+        if engagement_closeout_accepted is None:
+            print(f"[WS] engagement_closeout rejected (missing required fields) conv={conv_id}")
+        else:
+            await _remember_engagement_closeout(conv_id, msg, engagement_closeout_accepted)
     msg_type = str(msg.get("type") or "")
     stream_fast = msg_type in {"text", "tool_output", "thinking", "agent_thinking", "reasoning"}
     should_save = (
         msg_type not in {"intake_update", "work_status", "checkpoint_update"}
         and not _is_pentest_runtime_status(msg)
+        and not (msg_type == "engagement_closeout" and engagement_closeout_accepted is None)
     )
 
     if msg_type == "checkpoint_update":
@@ -1809,11 +1818,14 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
             content = {"text": f"Task failed: {msg.get('message', msg.get('error', ''))}"}
         elif msg_type == "engagement_closeout":
             from app.services.engagement_closeout import (
-                extract_closeout_payload,
+                accept_engagement_closeout,
                 message_content_from_closeout,
             )
 
-            closeout = extract_closeout_payload(msg) or {}
+            # Same accept gate as remember path — never persist hollow close-out rows.
+            closeout = accept_engagement_closeout(msg)
+            if closeout is None:
+                return None
             content = message_content_from_closeout(msg, closeout)
             # Keep stable msg_type for timeline filters / activity rail
             msg_type = "engagement_closeout"
@@ -3154,23 +3166,18 @@ async def _record_expert_usage_billing(
         print(f"[WS] expert usage billing error: {e}")
 
 
-async def _remember_engagement_closeout(conv_id: str, msg: dict):
-    """Spec #163: persist engagement close-out JSON on conversation.context (Product SoT)."""
-    if not conv_id or not isinstance(msg, dict):
+async def _remember_engagement_closeout(conv_id: str, msg: dict, closeout: dict):
+    """Spec #163: persist accepted engagement close-out on conversation.context (Product SoT).
+
+    Caller must pass a payload already accepted by accept_engagement_closeout.
+    """
+    if not conv_id or not isinstance(msg, dict) or not isinstance(closeout, dict):
         return
     try:
         from app.db.base import async_session
         from app.models.conversation import Conversation
-        from app.services.engagement_closeout import (
-            extract_closeout_payload,
-            merge_closeout_into_context,
-            required_fields_present,
-        )
+        from app.services.engagement_closeout import merge_closeout_into_context
 
-        closeout = extract_closeout_payload(msg)
-        if not required_fields_present(closeout):
-            print(f"[WS] engagement_closeout missing required fields conv={conv_id}")
-            return
         async with async_session() as db:
             r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id)))
             c = r.scalar_one_or_none()
@@ -3179,7 +3186,7 @@ async def _remember_engagement_closeout(conv_id: str, msg: dict):
             task_id = str(msg.get("task_id") or "").strip() or None
             c.context = merge_closeout_into_context(
                 c.context if isinstance(c.context, dict) else {},
-                closeout,  # type: ignore[arg-type]
+                closeout,
                 task_id=task_id,
             )
             await db.commit()

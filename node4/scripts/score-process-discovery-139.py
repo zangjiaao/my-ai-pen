@@ -23,10 +23,14 @@ import sys
 from pathlib import Path
 
 
+# Keep identical to platform REQUIRED_TOP_KEYS (engagement_closeout.py) + Node EngagementCloseout.
 CLOSEOUT_REQUIRED = (
+    "scope",
+    "target",
     "graphId",
     "terminal",
     "stages",
+    "surfaces",
     "findings",
     "priors",
     "feedback",
@@ -77,6 +81,9 @@ def score_task(task_dir: Path, label: str) -> dict:
             and isinstance(closeout.get("findings"), dict)
             and isinstance(closeout.get("priors"), dict)
             and isinstance(closeout.get("feedback"), list)
+            and isinstance(closeout.get("scope"), dict)
+            and isinstance(closeout.get("target"), dict)
+            and isinstance(closeout.get("surfaces"), dict)
             and isinstance(findings_obj.get("by_severity"), dict)
         )
 
@@ -85,7 +92,8 @@ def score_task(task_dir: Path, label: str) -> dict:
     if terminal == "blocked":
         process_complete_honest = process_complete is False
     elif terminal == "completed":
-        process_complete_honest = process_complete is not False
+        # Explicit True required — missing must not pass as honest.
+        process_complete_honest = process_complete is True
 
     residual_class = closeout.get("residual_class")
     unbooked = findings_obj.get("feedback_ok_unbooked") or []
