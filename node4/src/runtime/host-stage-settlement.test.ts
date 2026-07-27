@@ -382,5 +382,172 @@ assert.equal(
   assert.ok(seenIds && seenIds.length >= 1, "stage_end emits feedback_ok_ids");
 }
 
+// --- NC-Honesty-Advance #183: book-path reject does not block stage settlement ---
+{
+  const runtime = makeRuntime({
+    stageId: "class_probe",
+    packageTerminals: [
+      { key: "ok-pkg", terminal: "success" },
+      { key: "fail-pkg", terminal: "failed" },
+    ],
+  });
+  const store = ensureProcessQuality(runtime.lifecycle).findingStore;
+  // severity missing → reject at ingest (not stored)
+  const noSev = ingestPackageCandidatesToStore(
+    store,
+    [
+      {
+        title: "NoSev",
+        location: "http://t/a",
+        proof_excerpt: "proof excerpt long enough for L0 mechanical feedback gate xx",
+      },
+    ],
+    { package_id: "ok-pkg", stage_id: "class_probe" },
+  );
+  assert.equal(noSev.length, 0, "missing severity rejected at ingest");
+  // severity present, proof missing → feedback_reject after L0, not stage fail
+  const weakIds = ingestPackageCandidatesToStore(
+    store,
+    [
+      {
+        title: "NoProof",
+        location: "http://t/b",
+        severity: "high",
+        // proof omitted → mechanical L0 reject
+      },
+    ],
+    { package_id: "ok-pkg", stage_id: "class_probe" },
+  );
+  assert.equal(weakIds.length, 1, "candidate stored then L0-evaluated");
+  const weakRow = store.get(weakIds[0]!);
+  assert.equal(weakRow?.status, "feedback_reject", "book-path L0 reject");
+  const s = settleHostStage({
+    stageId: "class_probe",
+    runtime,
+    narrative: { summary: "partial packages + weak book path" },
+  });
+  assert.equal(s.honesty.ok, true, "book-path rejects do not flip honesty.ok");
+  assert.equal(s.structured.ok, true, "book-path rejects do not flip structured.ok");
+  assert.ok(s.host_declared_keys.includes("fail-pkg"));
+  assert.equal(s.feedback_ok_ids.length, 0, "no feedback_ok from rejected book path");
+  const gate = evaluateStageGate(
+    { id: "class_probe", require: { summary: true } },
+    s.structured,
+  );
+  assert.equal(gate.ok, true, "stage may advance with honest partial + book-path rejects");
+}
+
+// --- NC-Honesty-Advance #183: gate error codes distinguish honesty vs structure ---
+{
+  // structure miss only
+  const structGate = evaluateStageGate(
+    { id: "surface", require: { summary: true, surfaces_min: 2 } },
+    {
+      ok: true,
+      summary: "hi",
+      summaryProvided: true,
+      surfaces: [{ location: "http://t/one" }],
+      candidates: [],
+      facts: [],
+      deadends: [],
+    } as any,
+  );
+  assert.equal(structGate.ok, false);
+  assert.ok(structGate.ok === false && structGate.errors.some((e) => e.startsWith("surfaces_min:")));
+  assert.ok(structGate.ok === false && !structGate.errors.includes("structured_ok_false"));
+
+  // honesty cannot-advance (illegal L2 deadend projected)
+  const honestyGate = evaluateStageGate(
+    { id: "authz_logic", require: { summary: true } },
+    {
+      ok: false,
+      summary: "host settlement · illegal_l2_done=pkg-x",
+      summaryProvided: true,
+      surfaces: [],
+      candidates: [],
+      facts: [],
+      deadends: ["illegal_l2_done:pkg-x", "failed_package:pkg-x"],
+    } as any,
+  );
+  assert.equal(honestyGate.ok, false);
+  assert.ok(honestyGate.ok === false && honestyGate.errors.includes("structured_ok_false"));
+  assert.ok(
+    honestyGate.ok === false && honestyGate.errors.includes("illegal_l2_done:pkg-x"),
+    "honesty machine reason on gate errors",
+  );
+  assert.ok(
+    honestyGate.ok === false && !honestyGate.errors.some((e) => e.startsWith("failed_package:")),
+    "failed_package alone is not a gate error code (honest partial residual)",
+  );
+
+  // running package reason
+  const runGate = evaluateStageGate(
+    { id: "wave", require: { summary: true } },
+    {
+      ok: false,
+      summary: "still running",
+      summaryProvided: true,
+      surfaces: [],
+      candidates: [],
+      facts: [],
+      deadends: ["running_package:p2"],
+    } as any,
+  );
+  assert.ok(runGate.ok === false && runGate.errors.includes("running_package:p2"));
+}
+
+// --- NC-Honesty-Advance #183: illegal L2 → runHardGraph blocked (not honest partial) ---
+{
+  const { HardGraphPlanStore } = await import("./hard-graph-plan.js");
+  const graph: HardGraphDefinition = {
+    discipline: "hard",
+    id: "illegal_blocks",
+    label: "illegal",
+    stages: [{ id: "authz_logic", require: { summary: true }, max_retries: 0 }],
+  };
+  const exec: StageExecutor = async () => {
+    const plan = new HardGraphPlanStore(graph);
+    plan.setStageTodos("authz_logic", [
+      {
+        node_id: "pkg-bad",
+        title: "bad",
+        status: "done",
+        level: "work_item",
+        kind: "task",
+        source: "plan",
+      },
+    ]);
+    const runtime = makeRuntime({
+      stageId: "authz_logic",
+      packageTerminals: [
+        { key: "pkg-good", terminal: "success" },
+        { key: "pkg-bad", terminal: "failed" },
+      ],
+    });
+    (runtime.lifecycle as any).hardGraphRun = {
+      plan,
+      usage: {},
+      panel: {},
+      stageId: "authz_logic",
+    };
+    const settlement = settleHostStage({
+      stageId: "authz_logic",
+      runtime,
+      narrative: { summary: "wave" },
+    });
+    assert.equal(settlement.structured.ok, false);
+    return { structured: settlement.structured };
+  };
+  const blocked = await runHardGraph({
+    graph,
+    executeStage: exec,
+    availableTools: ["todo", "subagent"],
+  });
+  assert.equal(blocked.terminal, "blocked");
+  const rec = blocked.stages.find((s) => s.stageId === "authz_logic");
+  assert.ok(rec?.errors?.includes("structured_ok_false"));
+  assert.ok(rec?.errors?.some((e) => e.startsWith("illegal_l2_done:")));
+}
+
 await rm(dir, { recursive: true, force: true });
 console.log("host-stage-settlement.test.ts: ok");

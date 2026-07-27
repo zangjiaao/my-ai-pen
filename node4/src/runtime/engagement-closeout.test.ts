@@ -47,6 +47,8 @@ const closeout = buildEngagementCloseout({
   l1ByStage: { surface: { last: { decision: "pass", gaps: [] } } },
 });
 assert.equal(closeout.terminal, "completed");
+assert.equal(closeout.process_complete, true);
+assert.equal(closeout.residual_class, undefined, "completed with unbookable is not residual_class blocked");
 assert.ok(closeout.findings.by_severity.critical || closeout.findings.by_severity.medium);
 assert.ok(closeout.residual_risk);
 assert.equal(closeout.priors.prior_n, 1);

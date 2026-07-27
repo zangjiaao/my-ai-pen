@@ -19,6 +19,7 @@ import {
   type HardProcessMetrics,
 } from "./hard-graph-feedback.js";
 import { l1MaxStageRefine } from "./l1-critic.js";
+import { formatL0RepairBrief, isBookingOnlyStage } from "./l0-honesty-repair-brief.js";
 
 export type HardGraphHandoff = {
   summary?: string;
@@ -42,6 +43,11 @@ export type StageExecutorInput = {
    * When attempt > 1, executor may reset non-success package attempt budgets.
    */
   stageAttempt?: number;
+  /**
+   * NC-Honesty-Advance: host fixed-template repair brief after a failed prior attempt
+   * (machine signals only — not L1 prose).
+   */
+  l0RepairBrief?: string;
 };
 
 export type StageExecutorOutput = {
@@ -87,7 +93,7 @@ export type L1BudgetHooks = {
 export type StageAttemptOutcome = "passed" | "failed_attempt" | "blocked" | "aborted";
 
 /** Final stage row in run result. */
-export type StageFinalOutcome = "passed" | "blocked" | "aborted";
+export type StageFinalOutcome = "passed" | "blocked" | "aborted" | "skipped";
 
 export type HardGraphStageRecord = {
   stageId: string;
@@ -172,7 +178,25 @@ export function evaluateStageGate(
   }
 
   if (structured.ok === false) {
+    // NC-Honesty-Advance: keep generic code + machine reasons from host deadends
+    // so honesty cannot-advance is distinct from structure require misses.
     errors.push("structured_ok_false");
+    const seen = new Set<string>();
+    for (const d of structured.deadends || []) {
+      const s = String(d || "").trim();
+      if (!s || seen.has(s)) continue;
+      if (
+        s.startsWith("illegal_l2_done:") ||
+        s.startsWith("running_package:") ||
+        s.startsWith("failed_package:")
+      ) {
+        // failed_package alone is honest partial — only surface when ok=false
+        // (running / illegal L2 already force ok=false; failed_package is residual list).
+        if (s.startsWith("failed_package:")) continue;
+        seen.add(s);
+        errors.push(s);
+      }
+    }
   }
 
   if (errors.length) return { ok: false, errors };
@@ -297,6 +321,14 @@ export async function runHardGraph(options: {
       let outFeedbackOkIds: string[] | undefined;
       let outL1: { decision: "pass" | "refine"; gaps: string[] } | undefined;
       try {
+        const l0RepairBrief =
+          attempt > 1 && lastErrors.length
+            ? formatL0RepairBrief({
+                stageId: stage.id,
+                failedAttempt: attempt - 1,
+                errors: lastErrors,
+              })
+            : undefined;
         const out = await options.executeStage({
           stage,
           stageIndex,
@@ -306,6 +338,7 @@ export async function runHardGraph(options: {
           toolProfile,
           // Spec #116 I0.6: stage attempt number for independent package-budget reset
           stageAttempt: attempt,
+          ...(l0RepairBrief ? { l0RepairBrief } : {}),
         });
         structured = normalizeSubagentResult(
           out.structured ?? { summary: out.summary, ok: true },
@@ -465,9 +498,117 @@ export async function runHardGraph(options: {
           handoffSurfacesN: handoff.surfaces.length,
         });
       }
-      const terminal: HardGraphTerminal = aborted ? "aborted" : "blocked";
-      const result = runEndResult(graph.id, terminal, records, handoff, processMetrics);
-      await emit({ type: "run_end", graphId: graph.id, terminal });
+      if (aborted) {
+        const result = runEndResult(graph.id, "aborted", records, handoff, processMetrics);
+        await emit({ type: "run_end", graphId: graph.id, terminal: "aborted" });
+        return result;
+      }
+
+      // NC-Honesty-Advance D1/V1: mid-graph block → skip later probe stages;
+      // still run booking-only tail (intent=book / unbookable_on_exit). Graph stays blocked.
+      for (let j = stageIndex + 1; j < graph.stages.length; j++) {
+        if (options.abortSignal?.aborted) {
+          const result = runEndResult(graph.id, "aborted", records, handoff, processMetrics);
+          await emit({ type: "run_end", graphId: graph.id, terminal: "aborted" });
+          return result;
+        }
+        const tail = graph.stages[j]!;
+        if (!isBookingOnlyStage(tail)) {
+          records.push({
+            stageId: tail.id,
+            stageIndex: j,
+            attempts: 0,
+            outcome: "skipped",
+            errors: ["skipped_after_upstream_blocked"],
+          });
+          await emit({
+            type: "stage_end",
+            graphId: graph.id,
+            stageId: tail.id,
+            stageIndex: j,
+            attempt: 0,
+            outcome: "blocked",
+            errors: ["skipped_after_upstream_blocked"],
+          });
+          continue;
+        }
+        // Booking-only tail: single attempt, finding tools already profiled by stage def
+        const tailTools = applyHardGraphToolProfile(options.availableTools, tail.tools ?? {});
+        await emit({
+          type: "stage_start",
+          graphId: graph.id,
+          stageId: tail.id,
+          stageIndex: j,
+          attempt: 1,
+        });
+        let tailStructured: SubagentStructuredResult;
+        let tailFeedbackOk: string[] | undefined;
+        try {
+          const out = await options.executeStage({
+            stage: tail,
+            stageIndex: j,
+            graphId: graph.id,
+            handoff,
+            tools: tailTools,
+            toolProfile: tail.tools ?? {},
+            stageAttempt: 1,
+            l0RepairBrief: formatL0RepairBrief({
+              stageId: tail.id,
+              failedAttempt: 0,
+              errors: [
+                `upstream_stage_blocked:${stage.id}`,
+                ...lastErrors.slice(0, 12),
+                "booking_only_tail: confirm remaining feedback_ok; do not open new probe packages",
+              ],
+            }),
+          });
+          tailStructured = normalizeSubagentResult(
+            out.structured ?? { summary: out.summary, ok: true },
+            out.summary || "",
+          );
+          tailFeedbackOk = Array.isArray(out.feedbackOkIds)
+            ? out.feedbackOkIds.map((id) => String(id || "").trim()).filter(Boolean)
+            : undefined;
+        } catch (err) {
+          tailStructured = normalizeSubagentResult(
+            {
+              ok: false,
+              summary: err instanceof Error ? err.message : String(err),
+              deadends: ["booking_tail_executor_threw"],
+            },
+            err instanceof Error ? err.message : "booking_tail_error",
+          );
+        }
+        const tailGate = evaluateStageGate(tail, tailStructured);
+        // Tail must not turn the Graph into completed: always record blocked/passed for the
+        // stage row but run terminal stays blocked (process incomplete).
+        const tailOutcome: StageFinalOutcome = tailGate.ok ? "passed" : "blocked";
+        records.push({
+          stageId: tail.id,
+          stageIndex: j,
+          attempts: 1,
+          outcome: tailOutcome,
+          errors: tailGate.ok ? [] : tailGate.errors,
+          summary: tailStructured.summaryProvided ? tailStructured.summary : undefined,
+        });
+        if (tailGate.ok) {
+          handoff = mergeHandoff(handoff, tailStructured, tail.id);
+        }
+        await emit({
+          type: "stage_end",
+          graphId: graph.id,
+          stageId: tail.id,
+          stageIndex: j,
+          attempt: 1,
+          outcome: tailGate.ok ? "passed" : "blocked",
+          errors: tailGate.ok ? [] : tailGate.errors,
+          summary: tailStructured.summaryProvided ? tailStructured.summary : undefined,
+          ...(tailFeedbackOk?.length ? { feedback_ok_ids: tailFeedbackOk } : {}),
+        });
+      }
+
+      const result = runEndResult(graph.id, "blocked", records, handoff, processMetrics);
+      await emit({ type: "run_end", graphId: graph.id, terminal: "blocked" });
       return result;
     }
 

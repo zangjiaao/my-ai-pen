@@ -189,10 +189,14 @@ export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope)
 /** Exported for harness contract tests (#101 / #125). */
 export function stageUserPrompt(input: StageExecutorInput, task: TaskEnvelope): string {
   const allowSubagent = input.tools.includes("subagent");
+  const repair =
+    typeof input.l0RepairBrief === "string" && input.l0RepairBrief.trim()
+      ? ["", input.l0RepairBrief.trim(), ""]
+      : [];
   return [
     `### Hard Graph stage: ${input.stage.id}`,
     input.stage.success || "",
-    "",
+    ...repair,
     "### Handoff snapshot",
     JSON.stringify(
       {
@@ -480,11 +484,19 @@ export function createHardGraphStageExecutor(options: {
           | { total?: number; open?: number; probed?: number; booked?: number }
           | undefined,
       });
-      const l1Out = await runL1Critic({ l0Passed: l0HonestyOk, input: l1Input });
-      // Stash last decision for close-out (runner increments refine_n when applying refine)
-      if (gqState) {
+      // NC-Honesty-Advance / NC-L1: L1 only after stage L0 honesty pass; never polish L0-fail brief.
+      let l1Payload: { decision: "pass" | "refine"; gaps: string[] } | undefined;
+      if (l0HonestyOk) {
+        const l1Out = await runL1Critic({ l0Passed: true, input: l1Input });
+        l1Payload = { decision: l1Out.decision, gaps: l1Out.gaps };
+        if (gqState) {
+          const prev = gqState.l1ByStage[input.stage.id] || { refine_n: 0 };
+          prev.last = { decision: l1Out.decision, gaps: l1Out.gaps };
+          gqState.l1ByStage[input.stage.id] = prev;
+        }
+      } else if (gqState) {
         const prev = gqState.l1ByStage[input.stage.id] || { refine_n: 0 };
-        prev.last = { decision: l1Out.decision, gaps: l1Out.gaps };
+        prev.last = { decision: "skipped_l0_fail", gaps: honestyFlags };
         gqState.l1ByStage[input.stage.id] = prev;
       }
 
@@ -514,7 +526,7 @@ export function createHardGraphStageExecutor(options: {
             : undefined,
         findingsBookedN: storeBooked,
         ...(feedbackOkIds.length ? { feedbackOkIds } : {}),
-        l1: { decision: l1Out.decision, gaps: l1Out.gaps },
+        ...(l1Payload ? { l1: l1Payload } : {}),
       };
     };
 

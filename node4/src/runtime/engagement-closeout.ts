@@ -15,7 +15,12 @@ export type EngagementCloseout = {
   target: unknown;
   graphId: string;
   terminal: HardGraphTerminal;
-  stages: Array<{ stageId: string; outcome: string; attempts: number }>;
+  stages: Array<{
+    stageId: string;
+    outcome: string;
+    attempts: number;
+    errors?: string[];
+  }>;
   surfaces: {
     total?: number;
     by_status?: Record<string, number>;
@@ -25,6 +30,8 @@ export type EngagementCloseout = {
     by_severity: Record<string, number>;
     booked_titles: string[];
     feedback_ok_unbooked: string[];
+    /** Store ids only (summary companion to titles). */
+    feedback_ok_unbooked_ids?: string[];
     unbookable: Array<{ finding_id: string; reason: string }>;
   };
   priors: {
@@ -40,6 +47,16 @@ export type EngagementCloseout = {
   }>;
   residual_risk: string;
   language?: string;
+  /**
+   * NC-Honesty-Advance C1 / residual class.
+   * Set when terminal=blocked and feedback_ok rows remain unbooked.
+   */
+  residual_class?: "blocked_with_unbooked_feedback_ok" | string;
+  /** Whether a booking-only tail stage ran after mid-graph block. */
+  booking_tail_ran?: boolean;
+  blocked_reasons?: string[];
+  /** Explicit honesty: process is incomplete when terminal is blocked. */
+  process_complete?: boolean;
 };
 
 export function buildEngagementCloseout(input: {
@@ -58,6 +75,7 @@ export function buildEngagementCloseout(input: {
   const by_severity: Record<string, number> = {};
   const booked_titles: string[] = [];
   const feedback_ok_unbooked: string[] = [];
+  const feedback_ok_unbooked_ids: string[] = [];
   let re_verified = 0;
   let still_open_priors = 0;
   for (const r of snap) {
@@ -68,13 +86,30 @@ export function buildEngagementCloseout(input: {
       if (r.prior) re_verified += 1;
     } else if (r.status === "feedback_ok") {
       feedback_ok_unbooked.push(`${r.id}:${r.title}`.slice(0, 120));
+      feedback_ok_unbooked_ids.push(r.id);
     }
     if (r.prior && r.status !== "booked") still_open_priors += 1;
   }
   const unbookable = input.unbookable || [];
+  const blocked_reasons = input.stages
+    .filter((s) => s.outcome === "blocked" || s.outcome === "skipped")
+    .flatMap((s) =>
+      (s.errors || []).length
+        ? (s.errors || []).map((e) => `${s.stageId}:${e}`)
+        : [`${s.stageId}:${s.outcome}`],
+    );
+  const booking_tail_ran = input.stages.some(
+    (s) =>
+      (s.stageId === "validate_book" || String(s.stageId).endsWith("_book")) &&
+      s.attempts > 0 &&
+      (s.outcome === "passed" || s.outcome === "blocked"),
+  );
   const residual =
     input.residualRisk ||
     [
+      input.terminal === "blocked"
+        ? "Graph process incomplete (terminal=blocked) — do not treat as full coverage success"
+        : "",
       still_open_priors > 0 ? `${still_open_priors} prior(s) still open without re-verify booking` : "",
       feedback_ok_unbooked.length
         ? `${feedback_ok_unbooked.length} feedback_ok unbooked`
@@ -83,6 +118,7 @@ export function buildEngagementCloseout(input: {
       (input.surfaceSummary?.by_status?.open || 0) > 0
         ? "open surfaces remain untested"
         : "",
+      booking_tail_ran ? "booking-only tail ran after upstream block" : "",
     ]
       .filter(Boolean)
       .join("; ") || "No residual flags from Product state snapshot.";
@@ -96,6 +132,11 @@ export function buildEngagementCloseout(input: {
     };
   });
 
+  const residual_class =
+    input.terminal === "blocked" && feedback_ok_unbooked_ids.length > 0
+      ? "blocked_with_unbooked_feedback_ok"
+      : undefined;
+
   return {
     scope: input.task.scope,
     target: input.task.target,
@@ -105,12 +146,14 @@ export function buildEngagementCloseout(input: {
       stageId: s.stageId,
       outcome: s.outcome,
       attempts: s.attempts,
+      ...(s.errors?.length ? { errors: s.errors.slice(0, 20) } : {}),
     })),
     surfaces: input.surfaceSummary || {},
     findings: {
       by_severity,
       booked_titles: booked_titles.slice(0, 40),
       feedback_ok_unbooked: feedback_ok_unbooked.slice(0, 40),
+      feedback_ok_unbooked_ids: feedback_ok_unbooked_ids.slice(0, 40),
       unbookable: unbookable.slice(0, 40),
     },
     priors: {
@@ -122,6 +165,10 @@ export function buildEngagementCloseout(input: {
     feedback,
     residual_risk: residual,
     language: input.task.agentLanguage,
+    process_complete: input.terminal === "completed",
+    ...(blocked_reasons.length ? { blocked_reasons: blocked_reasons.slice(0, 40) } : {}),
+    ...(booking_tail_ran ? { booking_tail_ran: true } : {}),
+    ...(residual_class ? { residual_class } : {}),
   };
 }
 
