@@ -69,14 +69,4 @@ export function isHonestyCannotAdvanceErrors(errors: string[]): boolean {
 }
 
 /** Booking-only stages still run after mid-graph honesty block (NC-Honesty-Advance V1). */
-export function isBookingOnlyStage(stage: {
-  intent?: string;
-  unbookable_on_exit?: boolean;
-  id?: string;
-}): boolean {
-  if (stage.unbookable_on_exit) return true;
-  const intent = String(stage.intent || "").toLowerCase();
-  if (intent === "book") return true;
-  const id = String(stage.id || "").toLowerCase();
-  return id === "validate_book" || id.endsWith("_book");
-}
+export { isBookingOnlyStage } from "./book-stage-completeness.js";

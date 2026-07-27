@@ -195,7 +195,11 @@ export function evaluateStageGate(
     for (const d of structured.deadends || []) {
       const s = String(d || "").trim();
       if (!s || seen.has(s)) continue;
-      if (s.startsWith("illegal_l2_done:") || s.startsWith("running_package:")) {
+      if (
+        s.startsWith("illegal_l2_done:") ||
+        s.startsWith("running_package:") ||
+        s.startsWith("empty_book")
+      ) {
         seen.add(s);
         errors.push(s);
       }
@@ -447,8 +451,21 @@ export async function runHardGraph(options: {
       try {
         // Honesty repair brief only when prior attempt failed L0 honesty cannot-advance.
         // Structure-only / L1 refine retries must not inject M1 honesty duties (review finding #1).
-        const l0RepairBrief =
-          attempt > 1 && isHonestyCannotAdvanceErrors(lastErrors)
+        // Empty-book (#161): separate fixed brief — not honesty M1.
+        const emptyBookFail =
+          attempt > 1 &&
+          lastErrors.some((e) => String(e).startsWith("empty_book"));
+        const l0RepairBrief = emptyBookFail
+          ? [
+              "### Host book-stage repair brief (empty book)",
+              `stage_id: ${stage.id}`,
+              `failed_attempt: ${attempt - 1}`,
+              "error: empty_book_with_confirmable_feedback_ok",
+              "Prior attempt booked 0 while confirmable feedback_ok remained.",
+              "Required: finding(list) then finding(confirm, finding_id=…) for Store feedback_ok rows (host captain list in user prompt).",
+              `prior_errors: ${lastErrors.slice(0, 8).join(" | ")}`,
+            ].join("\n")
+          : attempt > 1 && isHonestyCannotAdvanceErrors(lastErrors)
             ? formatL0RepairBrief({
                 stageId: stage.id,
                 failedAttempt: attempt - 1,

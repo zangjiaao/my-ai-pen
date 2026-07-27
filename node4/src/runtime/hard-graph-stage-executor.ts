@@ -54,6 +54,13 @@ import {
   runL1Critic,
 } from "./l1-critic.js";
 import { ensureGraphRunQuality } from "./graph-run-quality.js";
+import {
+  evaluateEmptyBookGate,
+  formatEmptyBookRepairBrief,
+  formatFeedbackOkCaptainSurface,
+  isBookingOnlyStage,
+  type ConfirmableFeedbackOkRow,
+} from "./book-stage-completeness.js";
 
 /**
  * Deposit host-trusted surfaces/candidates into ledger + Finding Store.
@@ -187,16 +194,37 @@ export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope)
 }
 
 /** Exported for harness contract tests (#101 / #125). */
-export function stageUserPrompt(input: StageExecutorInput, task: TaskEnvelope): string {
+export function stageUserPrompt(
+  input: StageExecutorInput,
+  task: TaskEnvelope,
+  options?: {
+    /** Host-owned confirmable Store rows for book stages (#161 / #192). */
+    confirmableFeedbackOk?: ConfirmableFeedbackOkRow[];
+  },
+): string {
   const allowSubagent = input.tools.includes("subagent");
+  const bookStage = isBookingOnlyStage(input.stage);
+  const allowFinding = input.tools.includes("finding");
   const repair =
     typeof input.l0RepairBrief === "string" && input.l0RepairBrief.trim()
       ? ["", input.l0RepairBrief.trim(), ""]
       : [];
+  const captain =
+    bookStage && options?.confirmableFeedbackOk
+      ? ["", formatFeedbackOkCaptainSurface(options.confirmableFeedbackOk), ""]
+      : bookStage
+        ? ["", formatFeedbackOkCaptainSurface([]), ""]
+        : [];
+  const footer = bookStage
+    ? "Complete this book stage only. Use finding(list) then finding(confirm, finding_id=…) for confirmable Store rows; do not invent ids; do not stop with zero confirms while feedback_ok remain; settle via host/Store (no result.json handoff)."
+    : allowSubagent
+      ? "Complete this stage only. Prefer subagent packages when multi-class work is justified; narrate briefly; settle via host/Store (no result.json handoff); then stop."
+      : "Complete this stage only. Narrate briefly when useful; deposit surfaces via fact(op=surface) and candidates via finding(upsert) — do not use result.json as stage handoff; then stop.";
   return [
     `### Hard Graph stage: ${input.stage.id}`,
     input.stage.success || "",
     ...repair,
+    ...captain,
     "### Handoff snapshot",
     JSON.stringify(
       {
@@ -212,11 +240,17 @@ export function stageUserPrompt(input: StageExecutorInput, task: TaskEnvelope): 
     "### Task instruction",
     task.instruction || "",
     "",
-    allowSubagent
-      ? "Complete this stage only. Prefer subagent packages when multi-class work is justified; narrate briefly; settle via host/Store (no result.json handoff); then stop."
-      : "Complete this stage only. Narrate briefly when useful; deposit surfaces via fact(op=surface) and candidates via finding(upsert) — do not use result.json as stage handoff; then stop.",
-  ].join("\n");
+    allowFinding && bookStage
+      ? "Primary tools this stage: finding (list/confirm). Other deposit tools are secondary."
+      : "",
+    footer,
+  ]
+    .filter((x) => x !== undefined && x !== null)
+    .join("\n");
 }
+
+/** Re-export for tests / runner repair brief. */
+export { formatEmptyBookRepairBrief, isBookingOnlyStage };
 
 /**
  * Hard Graph stage agent is runner-owned Main-like for that stage (not a nested subagent).
@@ -388,7 +422,23 @@ export function createHardGraphStageExecutor(options: {
       { ...input, priorSnapshot } as StageExecutorInput & { priorSnapshot?: string },
       task,
     );
-    const userPrompt = stageUserPrompt(input, task);
+    // #161 / #192: captain surface — Store feedback_ok ids at book-stage start
+    const bookStage = isBookingOnlyStage(input.stage);
+    const pqForBook = ensureProcessQuality(parentRuntime.lifecycle);
+    const confirmableAtStart: ConfirmableFeedbackOkRow[] = bookStage
+      ? pqForBook.findingStore
+          .snapshot()
+          .filter((r) => r.status === "feedback_ok")
+          .map((r) => ({
+            id: r.id,
+            title: r.title,
+            severity: r.severity,
+          }))
+      : [];
+    const storeBookedBefore = bookStage ? pqForBook.findingStore.counts().booked_n : 0;
+    const userPrompt = stageUserPrompt(input, task, {
+      confirmableFeedbackOk: bookStage ? confirmableAtStart : undefined,
+    });
 
     // Single session promote site (best-effort); absorb only on intentional returns.
     let sessionPromoted = false;
@@ -459,14 +509,16 @@ export function createHardGraphStageExecutor(options: {
       await promoteSession();
       const findingsAfter = await countJsonFindings(parentRuntime.findingsDir);
       const bookedDelta = Math.max(0, findingsAfter - findingsBefore);
-      const storeBooked = ensureProcessQuality(parentRuntime.lifecycle).findingStore.counts()
-        .booked_n;
+      const pq = ensureProcessQuality(parentRuntime.lifecycle);
+      const storeBooked = pq.findingStore.counts().booked_n;
+      const storeBookedDelta = bookStage
+        ? Math.max(0, storeBooked - storeBookedBefore)
+        : bookedDelta;
       // Spec #125 / #130: captain machine surface for confirmable Store ids.
       const feedbackOkIds = settlement.feedback_ok_ids;
 
       // Spec #139 D3 / NC-L1: build Product-state critic input; l0Passed = honesty only.
       // Runner owns structure gate + L1 refine budget application (refine_n).
-      const pq = ensureProcessQuality(parentRuntime.lifecycle);
       const gqState = ensureGraphRunQuality(parentRuntime.lifecycle.hardGraphRun);
       const honestyFlags: string[] = [];
       if (settlement.honesty) {
@@ -474,9 +526,40 @@ export function createHardGraphStageExecutor(options: {
         if (settlement.honesty.silent_partial) honestyFlags.push("silent_partial");
       }
       const l0HonestyOk = Boolean(settlement.honesty?.ok);
+
+      // #161 / #193 hybrid empty-book: fail-closed before unbookable accounting / L1
+      const emptyBook = evaluateEmptyBookGate({
+        isBookStage: bookStage,
+        confirmableFeedbackOkAtStart: confirmableAtStart.length,
+        storeBookedDelta,
+      });
+      let structuredFinal = structuredOut;
+      if (!emptyBook.ok) {
+        structuredFinal = normalizeSubagentResult(
+          {
+            ok: false,
+            summary: structuredOut.summaryProvided
+              ? structuredOut.summary
+              : `empty_book: ${confirmableAtStart.length} feedback_ok unconfirmed`,
+            surfaces: structuredOut.surfaces,
+            candidates: structuredOut.candidates,
+            facts: structuredOut.facts,
+            deadends: [
+              ...(structuredOut.deadends || []),
+              emptyBook.error,
+              `confirmable_feedback_ok_at_start:${confirmableAtStart.length}`,
+              `store_booked_delta:${storeBookedDelta}`,
+            ],
+          },
+          structuredOut.summaryProvided
+            ? structuredOut.summary
+            : `empty_book: ${confirmableAtStart.length} feedback_ok unconfirmed`,
+        );
+      }
+
       const l1Input = buildL1InputFromProductState({
         stageId: input.stage.id,
-        stageSummary: structuredOut.summaryProvided ? structuredOut.summary : undefined,
+        stageSummary: structuredFinal.summaryProvided ? structuredFinal.summary : undefined,
         store: pq.findingStore,
         fanoutPackagesN,
         honestyFlags,
@@ -485,8 +568,9 @@ export function createHardGraphStageExecutor(options: {
           | undefined,
       });
       // NC-Honesty-Advance / NC-L1: L1 only after stage L0 honesty pass; never polish L0-fail brief.
+      // Empty-book fail is structure L0 — still skip L1 when honesty failed; when honesty ok but empty book, skip L1 polish of fail.
       let l1Payload: { decision: "pass" | "refine"; gaps: string[] } | undefined;
-      if (l0HonestyOk) {
+      if (l0HonestyOk && emptyBook.ok) {
         const l1Out = await runL1Critic({ l0Passed: true, input: l1Input });
         l1Payload = { decision: l1Out.decision, gaps: l1Out.gaps };
         if (gqState) {
@@ -496,12 +580,15 @@ export function createHardGraphStageExecutor(options: {
         }
       } else if (gqState) {
         const prev = gqState.l1ByStage[input.stage.id] || { refine_n: 0 };
-        prev.last = { decision: "skipped_l0_fail", gaps: honestyFlags };
+        prev.last = {
+          decision: "skipped_l0_fail",
+          gaps: emptyBook.ok ? honestyFlags : [emptyBook.error, ...honestyFlags],
+        };
         gqState.l1ByStage[input.stage.id] = prev;
       }
 
-      // Data-driven unbookable accounting (validate_book sets unbookable_on_exit)
-      if (input.stage.unbookable_on_exit && gqState) {
+      // Unbookable accounting only on successful book path (not empty-book fail — keep feedback_ok for retry)
+      if (input.stage.unbookable_on_exit && gqState && emptyBook.ok) {
         for (const r of pq.findingStore.snapshot()) {
           if (r.status !== "feedback_ok") continue;
           if (gqState.unbookable.some((u) => u.finding_id === r.id)) continue;
@@ -514,13 +601,16 @@ export function createHardGraphStageExecutor(options: {
 
       const unbookableN = gqState?.unbookable?.length || 0;
       return {
-        structured: structuredOut,
-        summary: structuredOut.summaryProvided ? structuredOut.summary : undefined,
+        structured: structuredFinal,
+        summary: structuredFinal.summaryProvided ? structuredFinal.summary : undefined,
         fanoutPackagesN,
         bookOutcomes:
-          bookedDelta > 0 || input.stage.unbookable_on_exit || input.stage.id === "validate_book"
+          storeBookedDelta > 0 ||
+          bookedDelta > 0 ||
+          input.stage.unbookable_on_exit ||
+          input.stage.id === "validate_book"
             ? {
-                booked_n: bookedDelta,
+                booked_n: storeBookedDelta > 0 ? storeBookedDelta : bookedDelta,
                 reject_hints_n: unbookableN,
               }
             : undefined,
