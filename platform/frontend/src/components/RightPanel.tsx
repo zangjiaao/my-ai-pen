@@ -128,6 +128,8 @@ interface Props {
   assets?: Array<Record<string, unknown>>;
   /** Authorized engagement from conversation.context.task (target + scope.allow). */
   taskContext?: Record<string, unknown>;
+  /** Spec #163 Graph engagement close-out (Product state). */
+  engagementCloseout?: Record<string, unknown>;
   onOpenVulnerability?: (finding: Partial<SecurityVulnerability>) => void;
   onOpenAsset?: (asset: Partial<SecurityAsset>) => void;
 }
@@ -162,6 +164,7 @@ export default function RightPanel({
   kanban,
   workflowKind,
   running = false,
+  engagementCloseout,
   conversationStatus,
   planTree = [],
   strixAgents = [],
@@ -222,7 +225,7 @@ export default function RightPanel({
       : synthesizeMainAgent(activeTool, running, workflowKind),
     running,
   );
-  const hasStatusData = running || Boolean(activeTool) || planTree.length > 0 || displayAgents.length > 0 || findings.length > 0 || assets.length > 0 || timeline.length > 0 || Boolean(strixRun) || Boolean(caseRun?.started_at || caseRun?.llm_usage?.total_tokens);
+  const hasStatusData = running || Boolean(activeTool) || planTree.length > 0 || displayAgents.length > 0 || findings.length > 0 || assets.length > 0 || timeline.length > 0 || Boolean(strixRun) || Boolean(caseRun?.started_at || caseRun?.llm_usage?.total_tokens) || Boolean(engagementCloseout && Object.keys(engagementCloseout).length);
   const visiblePlanTree = isStrixWorkflow ? mainAgentPlanTree(planTree, displayAgents) : planTree;
   const phasePlan = hasStatusData ? buildPhasePlan(visiblePlanTree, kanbanSummary.current_stage, activeTool, running, findings.length, isStrixWorkflow) : [];
   // Node3-style flat task list for all workflows (phase tree remains available via plan data).
@@ -385,6 +388,9 @@ export default function RightPanel({
               </div>
               <GraphAwareTodoList planTree={visiblePlanTree} workItems={taskItems} running={running} />
             </section>
+            {engagementCloseout && Object.keys(engagementCloseout).length > 0 && (
+              <EngagementCloseoutCard closeout={engagementCloseout} />
+            )}
             {intake && <IntakeSummary intake={intake} />}
           </div>
         )}
@@ -1021,6 +1027,67 @@ function markdownPreview(value: string): string {
     .replace(/[#*_`>\-[\]]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/** Spec #163: compact Graph engagement close-out from Product state (not a PDF report). */
+function EngagementCloseoutCard({ closeout }: { closeout: Record<string, unknown> }) {
+  const terminal = String(closeout.terminal || "unknown");
+  const graphId = String(closeout.graphId || "");
+  const processComplete = closeout.process_complete;
+  const residual = String(closeout.residual_risk || "").trim();
+  const residualClass = closeout.residual_class ? String(closeout.residual_class) : "";
+  const findings = closeout.findings && typeof closeout.findings === "object"
+    ? (closeout.findings as Record<string, unknown>)
+    : {};
+  const bookedN = Array.isArray(findings.booked_titles) ? findings.booked_titles.length : 0;
+  const unbookedN = Array.isArray(findings.feedback_ok_unbooked) ? findings.feedback_ok_unbooked.length : 0;
+  const stages = Array.isArray(closeout.stages) ? closeout.stages : [];
+  const incomplete = processComplete === false || terminal === "blocked" || terminal === "failed";
+  return (
+    <section className="rounded-md border border-hairline bg-canvas/40 p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <p className="text-xs font-medium text-ink">Engagement close-out</p>
+        <p className={`font-mono text-[11px] ${incomplete ? "text-severity-high" : "text-status-success"}`}>
+          {terminal}
+        </p>
+      </div>
+      <dl className="space-y-1 text-[12px] text-ink-muted">
+        {graphId ? (
+          <div className="flex justify-between gap-2">
+            <dt>Graph</dt>
+            <dd className="font-mono text-ink">{graphId}</dd>
+          </div>
+        ) : null}
+        <div className="flex justify-between gap-2">
+          <dt>Process complete</dt>
+          <dd className="font-mono text-ink">{processComplete === false ? "no" : processComplete === true ? "yes" : "—"}</dd>
+        </div>
+        <div className="flex justify-between gap-2">
+          <dt>Stages</dt>
+          <dd className="font-mono text-ink">{stages.length}</dd>
+        </div>
+        <div className="flex justify-between gap-2">
+          <dt>Booked / unbooked</dt>
+          <dd className="font-mono text-ink">{bookedN} / {unbookedN}</dd>
+        </div>
+        {residualClass ? (
+          <div className="flex justify-between gap-2">
+            <dt>Residual class</dt>
+            <dd className="font-mono text-ink">{residualClass}</dd>
+          </div>
+        ) : null}
+        {closeout.booking_tail_ran ? (
+          <div className="flex justify-between gap-2">
+            <dt>Booking tail</dt>
+            <dd className="font-mono text-ink">ran</dd>
+          </div>
+        ) : null}
+      </dl>
+      {residual ? (
+        <p className="mt-2 text-[12px] leading-snug text-ink">{residual.slice(0, 280)}</p>
+      ) : null}
+    </section>
+  );
 }
 
 function timelineCategoryLabel(category: string): string {

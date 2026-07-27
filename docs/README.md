@@ -37,6 +37,8 @@ Node4 implementation detail (Graph × Pi product path).
 |------|--------|
 | [`../experts/README.md`](../experts/README.md) | Expert pack catalog |
 | [`../benchmarks/`](../benchmarks/) | **Frozen** lab evaluation assets (not product authority; includes historical Hard-vs-Node5) |
+| [`wayfinder/lab-scorecard-process-discovery-164.md`](wayfinder/lab-scorecard-process-discovery-164.md) | Dual-target (DVWA+Juice) offline scorecard invocation (#164) |
+| [`../node4/scripts/score-process-discovery-139.py`](../node4/scripts/score-process-discovery-139.py) | Score script for process + close-out Product state |
 | [`../research/`](../research/) | **Frozen** third-party reference clones (not product) |
 
 ## Runtime code

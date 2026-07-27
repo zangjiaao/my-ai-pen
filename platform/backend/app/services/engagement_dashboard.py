@@ -22,6 +22,7 @@ _ACTIVITY_MSG_TYPES = frozenset(
         "tool_call",
         "agent",
         "text",
+        "engagement_closeout",
     }
 )
 
@@ -135,6 +136,11 @@ def build_engagement_dashboard(
         or task_blob.get("role")
         or None
     )
+    closeout = (
+        conversation.get("engagement_closeout")
+        if isinstance(conversation.get("engagement_closeout"), dict)
+        else {}
+    )
     return {
         "conversation_id": str(conversation.get("id") or ""),
         "title": str(conversation.get("title") or ""),
@@ -154,4 +160,6 @@ def build_engagement_dashboard(
         "severity_counts": severity_counts,
         "findings": finding_rows,
         "activity": activity,
+        # Spec #163: operator-facing Graph close-out summary (full JSON under key)
+        "engagement_closeout": closeout or {},
     }

@@ -201,6 +201,8 @@ type ConversationSnapshot = {
   evidence?: Array<Record<string, unknown>>;
   /** Authorized task target / scope from conversation.context.task */
   task_context?: Record<string, unknown>;
+  /** Spec #163 Graph engagement close-out (same JSON as Node taskDir file) */
+  engagement_closeout?: Record<string, unknown>;
 };
 
 export default function ConversationPage() {
@@ -263,6 +265,8 @@ export default function ConversationPage() {
   const [pendingApprovals, setPendingApprovals] = useState<Array<Record<string, unknown>>>([]);
   const [evidence, setEvidence] = useState<Array<Record<string, unknown>>>([]);
   const [taskContext, setTaskContext] = useState<Record<string, unknown> | undefined>();
+  /** Spec #163: latest Graph engagement close-out from conversation.context / WS */
+  const [engagementCloseout, setEngagementCloseout] = useState<Record<string, unknown> | undefined>();
   const [running, setRunning] = useState(false);
   /** True while interrupt was sent and nodes have not yet reported idle. */
   const [interrupting, setInterrupting] = useState(false);
@@ -606,6 +610,13 @@ export default function ConversationPage() {
         ? snapshot.task_context
         : fallback?.task_context,
     );
+    const nextCloseout =
+      snapshot.engagement_closeout && Object.keys(snapshot.engagement_closeout).length
+        ? snapshot.engagement_closeout
+        : fallback?.engagement_closeout;
+    if (nextCloseout && Object.keys(nextCloseout).length) {
+      setEngagementCloseout(nextCloseout);
+    }
     const snapshotConversation = snapshot.conversation || fallback?.conversation;
     if (snapshotConversation) setActiveConversationNodeId(snapshotConversation.node_id || null);
     const status = String(snapshotConversation?.status || "").toLowerCase();
@@ -1216,6 +1227,41 @@ export default function ConversationPage() {
         }));
       }
     },
+    engagement_closeout: (msg) => {
+      // Same msg_type as platform persist path (engagement_closeout) — not a live-only status disguise.
+      // Gist text prefers Node/platform message; do not re-build residual strings here (M2).
+      if (!isActiveMessage(msg, activeId)) return;
+      const m = msg as Record<string, unknown>;
+      const convId = messageConversationId(msg, activeId);
+      const closeout =
+        m.engagement_closeout && typeof m.engagement_closeout === "object" && !Array.isArray(m.engagement_closeout)
+          ? (m.engagement_closeout as Record<string, unknown>)
+          : null;
+      if (closeout && Object.keys(closeout).length) {
+        setEngagementCloseout(closeout);
+      }
+      markMessageAutoScroll();
+      const terminal = String(closeout?.terminal || m.status || "unknown");
+      const processComplete = closeout?.process_complete;
+      const nodeText = String(m.message || "").trim();
+      const text =
+        nodeText ||
+        `Engagement close-out · terminal=${terminal}` +
+          (processComplete === false ? " · process incomplete" : "");
+      addMessageToConversation(
+        convId,
+        makeMessage(convId, "system", "engagement_closeout", {
+          text,
+          status: terminal,
+          terminal,
+          type: "engagement_closeout",
+          engagement_closeout: closeout || undefined,
+          process_complete: processComplete,
+          residual_risk: closeout?.residual_risk,
+          message_id: m.message_id,
+        }),
+      );
+    },
     task_complete: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
@@ -1432,6 +1478,7 @@ export default function ConversationPage() {
     setPendingApprovals([]);
     setEvidence([]);
     setTaskContext(undefined);
+    setEngagementCloseout(undefined);
     launchOptimisticRef.current = false;
     setRunning(false);
     setInterrupting(false);
@@ -2795,6 +2842,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               findings={findings}
               assets={assets}
               taskContext={taskContext}
+              engagementCloseout={engagementCloseout}
               onOpenVulnerability={setSelectedVulnerability}
               onOpenAsset={setSelectedAsset}
             />
@@ -3155,6 +3203,19 @@ function resultTimelineEventForMessage(message: Message): TimelineEvent | null {
         detail: clipTimeline(readString(content.summary), 180),
         status: "incomplete",
       };
+    case "engagement_closeout": {
+      // Spec #163: same msg_type live + DB; Activity uses platform gist (content.text).
+      const text = readString(content.text) || "Engagement close-out";
+      const status = readString(content.terminal) || readString(content.status) || "unknown";
+      return {
+        id,
+        at,
+        category: "Task",
+        title: text,
+        detail: status && text !== status ? status : undefined,
+        status,
+      };
+    }
     default:
       return null;
   }
@@ -3252,7 +3313,7 @@ function phaseForStatusMessage(message: Message): string {
 function isRenderableMessage(message: Message): boolean {
   if (message.role === "user" && message.msg_type === "decision") return false;
   if (message.msg_type === "tool_call") return true;
-  if (["text", "status", "confirm_card", "vuln_card", "vuln_found", "asset_card", "asset_discovered", "agent_pending", "thinking", "reasoning", "agent_thinking"].includes(message.msg_type)) return true;
+  if (["text", "status", "engagement_closeout", "confirm_card", "vuln_card", "vuln_found", "asset_card", "asset_discovered", "agent_pending", "thinking", "reasoning", "agent_thinking"].includes(message.msg_type)) return true;
   return false;
 }
 function groupConsecutiveToolMessages(messages: Message[]): Message[] {

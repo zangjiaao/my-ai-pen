@@ -2,7 +2,8 @@
 
 Independent **expert pack** units maintained outside the Node harness.
 
-**Runtime contracts:** [`docs/specs/expert-offers.md`](../docs/specs/expert-offers.md), [`docs/specs/harness.md`](../docs/specs/harness.md), [`docs/specs/pen-tools-sandbox.md`](../docs/specs/pen-tools-sandbox.md)  
+**Runtime contracts:** [`docs/specs/expert-offers.md`](../docs/specs/expert-offers.md), [`docs/specs/harness.md`](../docs/specs/harness.md), [`docs/specs/pen-tools-sandbox.md`](../docs/specs/pen-tools-sandbox.md), [`docs/specs/task-graph.md`](../docs/specs/task-graph.md) (Graph close-out / book path)  
+**Lab scorecard (offline #164):** [`docs/wayfinder/lab-scorecard-process-discovery-164.md`](../docs/wayfinder/lab-scorecard-process-discovery-164.md) · `node4/scripts/score-process-discovery-139.py`  
 **Product:** [`docs/prd.md`](../docs/prd.md) · **Cleanup plan:** [`docs/project-cleanup-plan.md`](../docs/project-cleanup-plan.md)  
 (Experts = target families; stages = skills; pipeline = Case + user @ — not stage-named Experts.)
 

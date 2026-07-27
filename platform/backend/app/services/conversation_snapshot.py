@@ -396,6 +396,12 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
         "findings": findings,
         "assets": asset_items,
         "checkpoint": checkpoint or {},
+        # Spec #163: latest Graph engagement close-out (same JSON as Node taskDir file)
+        "engagement_closeout": (
+            context.get("engagement_closeout")
+            if isinstance(context.get("engagement_closeout"), dict)
+            else {}
+        ),
         "task_context": task_context,
         "attack_surface": attack_surface_items,
         "coverage": coverage_items,
