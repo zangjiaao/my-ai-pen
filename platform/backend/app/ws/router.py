@@ -761,6 +761,9 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
         # Tool cards already stream stdout; do NOT re-book every tool result as
         # Evidence (that produced messy JSON dumps next to real evidence_created rows).
         await _audit_tool_output(msg, client_id)
+    elif msg.get("type") == "engagement_closeout":
+        # Spec #163 NC-Closeout: dual Product state — timeline message + conversation.context
+        await _remember_engagement_closeout(conv_id, msg)
     msg_type = str(msg.get("type") or "")
     stream_fast = msg_type in {"text", "tool_output", "thinking", "agent_thinking", "reasoning"}
     should_save = (
@@ -1804,6 +1807,16 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
         elif msg_type == "task_error":
             msg_type = "status"
             content = {"text": f"Task failed: {msg.get('message', msg.get('error', ''))}"}
+        elif msg_type == "engagement_closeout":
+            from app.services.engagement_closeout import (
+                extract_closeout_payload,
+                message_content_from_closeout,
+            )
+
+            closeout = extract_closeout_payload(msg) or {}
+            content = message_content_from_closeout(msg, closeout)
+            # Keep stable msg_type for timeline filters / activity rail
+            msg_type = "engagement_closeout"
         else:
             content = dict(msg)
 
@@ -3139,6 +3152,39 @@ async def _record_expert_usage_billing(
         )
     except Exception as e:
         print(f"[WS] expert usage billing error: {e}")
+
+
+async def _remember_engagement_closeout(conv_id: str, msg: dict):
+    """Spec #163: persist engagement close-out JSON on conversation.context (Product SoT)."""
+    if not conv_id or not isinstance(msg, dict):
+        return
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+        from app.services.engagement_closeout import (
+            extract_closeout_payload,
+            merge_closeout_into_context,
+            required_fields_present,
+        )
+
+        closeout = extract_closeout_payload(msg)
+        if not required_fields_present(closeout):
+            print(f"[WS] engagement_closeout missing required fields conv={conv_id}")
+            return
+        async with async_session() as db:
+            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id)))
+            c = r.scalar_one_or_none()
+            if not c:
+                return
+            task_id = str(msg.get("task_id") or "").strip() or None
+            c.context = merge_closeout_into_context(
+                c.context if isinstance(c.context, dict) else {},
+                closeout,  # type: ignore[arg-type]
+                task_id=task_id,
+            )
+            await db.commit()
+    except Exception as e:
+        print(f"[WS] remember engagement_closeout error: {e}")
 
 
 async def _remember_conversation_checkpoint(conv_id: str, checkpoint: dict):

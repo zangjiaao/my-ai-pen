@@ -118,6 +118,7 @@ async def get_conversation_dashboard(
 
     ctx = c.context if isinstance(c.context, dict) else {}
     task = ctx.get("task") if isinstance(ctx.get("task"), dict) else {}
+    closeout = ctx.get("engagement_closeout") if isinstance(ctx.get("engagement_closeout"), dict) else {}
     conv_dict = {
         "id": str(c.id),
         "title": c.title,
@@ -125,6 +126,7 @@ async def get_conversation_dashboard(
         "task": task,
         "engagement": task.get("engagement") or task.get("role"),
         "target": task.get("target"),
+        "engagement_closeout": closeout or snapshot.get("engagement_closeout") or {},
     }
     return build_engagement_dashboard(
         conversation=conv_dict,
