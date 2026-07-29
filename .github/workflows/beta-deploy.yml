@@ -1,5 +1,8 @@
 # SSH deploy to single beta host after product-smoke succeeds on main (Spec #231).
-# Secrets (GitHub only): BETA_SSH_HOST, BETA_SSH_PORT, BETA_SSH_USER, BETA_SSH_KEY
+#
+# GitHub Environment: 测试环境
+#   Environment variables: BETA_SSH_HOST, BETA_SSH_PORT, BETA_SSH_USER
+#   Environment secrets:   BETA_SSH_KEY  (private key PEM)
 # Host holds all business secrets; this workflow never injects JWT/LLM/tunnel tokens.
 name: beta-deploy
 
@@ -15,19 +18,30 @@ concurrency:
 
 jobs:
   deploy:
-    # Only after successful smoke on a push to main; skip when SSH host secret missing (CD optional).
+    # After successful smoke on a push to main.
     if: >-
       ${{ github.event.workflow_run.conclusion == 'success'
-          && github.event.workflow_run.event == 'push'
-          && secrets.BETA_SSH_HOST != '' }}
+          && github.event.workflow_run.event == 'push' }}
     runs-on: ubuntu-latest
+    # Required so Environment vars/secrets below resolve (not repository secrets).
+    environment: 测试环境
     steps:
+      - name: Require SSH host config
+        env:
+          HOST: ${{ vars.BETA_SSH_HOST }}
+        run: |
+          if [ -z "${HOST}" ]; then
+            echo "BETA_SSH_HOST is empty in Environment 测试环境 — configure variables and re-run."
+            exit 1
+          fi
+          echo "Deploy target host is configured."
+
       - name: SSH beta-deploy.sh (pinned smoke SHA)
         uses: appleboy/ssh-action@v1.2.0
         with:
-          host: ${{ secrets.BETA_SSH_HOST }}
-          port: ${{ secrets.BETA_SSH_PORT }}
-          username: ${{ secrets.BETA_SSH_USER }}
+          host: ${{ vars.BETA_SSH_HOST }}
+          port: ${{ vars.BETA_SSH_PORT }}
+          username: ${{ vars.BETA_SSH_USER }}
           key: ${{ secrets.BETA_SSH_KEY }}
           script_stop: true
           command_timeout: 45m

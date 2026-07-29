@@ -83,10 +83,11 @@ This product is an **AI-assisted** security testing workbench. Operators and int
 10. **Register Node4** in platform UI (or API) → put token in `node4/.env` → restart node4 unit.  
 11. **Experts (UI = on-disk):** Install from **节点详情** in the product UI (or API). Platform records offers **and** pushes `expert_install` / `expert_sync` over the node WebSocket so packs land in `node4/installed-experts`. Offline nodes receive `expert_sync` on next connect. `beta-deploy.sh` also runs `expert-cli install pentest` as a safety net.  
 12. **GitHub Actions CD** (optional after first green path)  
-    - Secrets: `BETA_SSH_HOST`, `BETA_SSH_PORT`, `BETA_SSH_USER`, `BETA_SSH_KEY` only  
-    - Business secrets stay on host  
-    - `beta-deploy` runs after **product-smoke** succeeds on `main` **push**, pins `DEPLOY_SHA` to the smoke commit  
-    - Job is skipped when `BETA_SSH_HOST` is unset
+    - Use Environment **`测试环境`** (workflow job `environment: 测试环境`):  
+      - **Variables:** `BETA_SSH_HOST`, `BETA_SSH_PORT`, `BETA_SSH_USER`  
+      - **Secrets:** `BETA_SSH_KEY` (deploy private key PEM only)  
+    - Business secrets stay on host (never in GitHub)  
+    - `beta-deploy` runs after **product-smoke** succeeds on `main` **push**, pins `DEPLOY_SHA` to the smoke commit
 
 ## Multi-user posture
 
