@@ -46,13 +46,11 @@ services:
     profiles: ["beta"]
     image: caddy:2.8-alpine
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:8080:80"
+    # Host network: reverse_proxy 127.0.0.1:8000 (systemd backend) + listen :8080 for tunnel.
+    network_mode: host
     volumes:
       - ../deploy/beta/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./frontend/dist:/srv/frontend:ro
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
 
   cloudflared:
     profiles: ["tunnel"]

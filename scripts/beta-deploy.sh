@@ -62,6 +62,8 @@ else
   exit 1
 fi
 "$UV" sync
+# Alembic env imports app.* — package root must be on PYTHONPATH
+export PYTHONPATH="$REPO_ROOT/platform/backend${PYTHONPATH:+:$PYTHONPATH}"
 "$UV" run alembic upgrade head
 cd "$REPO_ROOT"
 # Do NOT run python -m app.db.seed on every deploy (would clobber beta data).

@@ -54,8 +54,13 @@ awk '
 ' "$COMPOSE" | grep -q 'profiles:.*tunnel' || fail "cloudflared must use profiles: [tunnel]"
 pass "compose cloudflared is profile-gated (tunnel)"
 
-grep -q 'host-gateway' "$COMPOSE" || fail "caddy must set host.docker.internal:host-gateway"
-pass "compose has host-gateway for Caddy → host backend"
+# Caddy uses host networking so reverse_proxy can reach 127.0.0.1:8000
+awk '
+  /^[[:space:]]*caddy:/ {inb=1; next}
+  inb && /^[[:space:]]*[a-zA-Z0-9_-]+:/ && $0 !~ /^[[:space:]]{2,}/ {inb=0}
+  inb {print}
+' "$COMPOSE" | grep -q 'network_mode:.*host' || fail "caddy must use network_mode: host"
+pass "compose caddy uses host network for loopback backend"
 
 if grep -qE '["'\'']5432:5432' "$COMPOSE"; then
   grep -qE '127\.0\.0\.1:5432' "$COMPOSE" || fail "postgres port must bind 127.0.0.1"

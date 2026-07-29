@@ -1,20 +1,18 @@
-# Beta Entry-P: Tunnel → Caddy (:80 inside container, host 127.0.0.1:8080) → FE + API/WS.
-# TLS at Cloudflare edge. Backend is host process on host.docker.internal:8000.
+# Beta Entry-P: Tunnel (host network) → Caddy :8080 → FE + API/WS.
+# Caddy also uses host networking so upstream is 127.0.0.1:8000 (backend systemd).
+# TLS at Cloudflare edge.
 
-:80 {
+:8080 {
 	encode gzip
 
-	# Platform HTTP API
 	handle /api/* {
-		reverse_proxy host.docker.internal:8000
+		reverse_proxy 127.0.0.1:8000
 	}
 
-	# Browser WebSocket (+ any /ws/* paths)
 	handle /ws* {
-		reverse_proxy host.docker.internal:8000
+		reverse_proxy 127.0.0.1:8000
 	}
 
-	# SPA static (deploy mounts platform/frontend/dist → /srv/frontend)
 	handle {
 		root * /srv/frontend
 		try_files {path} /index.html
