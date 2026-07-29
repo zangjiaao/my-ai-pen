@@ -18,6 +18,7 @@
     "test:runtime": "tsx src/runtime/run-node4-agent.test.ts && tsx src/runtime/coding-agent-boundary.test.ts",
     "test:agent-language": "tsx src/runtime/agent-language.test.ts && tsx src/runtime/subagent-language.test.ts && tsx src/runtime/hard-graph-stage-prompts.test.ts",
     "test:ci-pr": "tsx src/experts/reconcile-offers.test.ts && npm run test:agent-language && npm run test:graph && tsx src/runtime/case-context.test.ts && tsx src/reports/build-findings-report.test.ts && tsx src/experts/pentest-pack-capability.test.ts && tsx src/runtime/hard-graph-definition.test.ts && tsx src/runtime/engagement-closeout.test.ts && tsx src/runtime/book-stage-completeness.test.ts && tsx src/runtime/task-envelope-fields.test.ts && tsx src/runtime/f1-envelope.test.ts && tsx src/runtime/finding-severity.test.ts",
+    "test:deep-node4": "npm run test:hard-graph && tsx src/tools/todo-subagent-plan-tree.test.ts",
     "check": "tsc --noEmit",
     "build": "tsc -p tsconfig.json && cp src/runtime/agent-language-catalog.json dist/runtime/"
   },

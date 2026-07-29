@@ -26,7 +26,7 @@ Automate **product-path** verification and **single-host internal beta** deploy 
 | Piece | Behavior |
 |-------|----------|
 | **product-smoke** | Seam-1 contract; FE unit + production build; **backend pytest**; Node4 **test:ci-pr** allowlist + smoke entrypoint |
-| Path filters | `platform/**`, `node4/**`, `experts/**`, `shared/**`, `deploy/**`, deploy scripts, workflows, ci-cd doc |
+| Path filters | `platform/**`, `node4/**`, `experts/**`, `shared/**`, `deploy/**`, deploy scripts, `product-smoke.yml` / `beta-deploy.yml` / `product-deep.yml`, ci-cd doc |
 | **beta-deploy** | `workflow_run` after successful product-smoke on `main` **push** only → SSH → `scripts/beta-deploy.sh` (pin `DEPLOY_SHA`, `git reset --hard`) |
 | **product-deep** | Phase B: **`workflow_dispatch` only** — heavy deterministic suites; **does not** gate merge or beta-deploy |
 | **pen-sandbox** | Independent image build/push on `sandbox/pen-sandbox/**` — not part of product-smoke/CD |
@@ -60,21 +60,21 @@ Local mirror:
 ```bash
 bash scripts/check-beta-deploy-contract.sh
 (cd platform/frontend && npm ci && npm run test:unit && npm run build)
-(cd platform/backend && uv sync --group dev && PYTHONPATH=. uv run pytest tests/ -q)
+(cd platform/backend && uv sync --group dev && uv run pytest tests/ -q)
 (cd node4 && npm ci && npm run test:ci-pr && CI=1 npm run smoke)
 ```
 
 ### Phase B — Deeper gates (#240) — **dispatch scaffold**
 
-Workflow: **`product-deep`** (`workflow_dispatch`).
+Workflow: **`product-deep`** (`workflow_dispatch` only — no `push` / `pull_request` / `schedule` / `workflow_run`).
 
 | Input `suite` | Runs |
 |---------------|------|
 | `node4-process-quality` | `npm run test:process-quality` |
 | `node4-hard-graph` | `npm run test:hard-graph` |
-| `node4-all-heavy` | both of the above |
+| `node4-all-heavy` | `npm run test:deep-node4` (hard-graph + plan-tree only; **no** double-run of overlapping files) |
 | `backend-unit` | same pytest as Phase A (convenience) |
-| `all-deterministic` | heavy Node4 + backend |
+| `all-deterministic` | `test:deep-node4` + backend pytest |
 
 - `allow_llm` reserved: **must stay false** until a suite and Environment secrets are explicitly added (currently fails closed if true).
 - **Not** a required status check; **not** a `workflow_run` predecessor of beta-deploy.

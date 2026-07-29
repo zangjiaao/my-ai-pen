@@ -143,17 +143,29 @@ pass "beta-deploy workflow: smoke gate + SHA pin + SSH, no business secrets"
 
 grep -q 'check-beta-deploy-contract' "$SMOKE_WF" "$DEPLOY_WF" \
   || fail "CI must invoke check-beta-deploy-contract.sh"
-# Phase A: product-smoke must run allowlisted deterministic suites (not smoke-only)
-grep -qE 'test:ci-pr|ci-pr' "$SMOKE_WF" || fail "product-smoke must run node4 test:ci-pr allowlist"
-grep -qE 'pytest|backend-unit' "$SMOKE_WF" || fail "product-smoke must run backend unit tests"
-pass "CI invokes deploy contract check + Phase A jobs"
+# Phase A: exact command needles (not job-name-only / loose alternates)
+grep -qF 'npm run test:ci-pr' "$SMOKE_WF" || fail "product-smoke must run: npm run test:ci-pr"
+grep -qF 'uv run pytest' "$SMOKE_WF" || fail "product-smoke must run: uv run pytest"
+grep -qF 'npm run test:unit' "$SMOKE_WF" || fail "product-smoke must run: npm run test:unit"
+# product-deep edits must re-run Seam-1
+grep -qF 'product-deep.yml' "$SMOKE_WF" \
+  || fail "product-smoke paths must include .github/workflows/product-deep.yml"
+pass "CI invokes deploy contract check + Phase A command needles"
 
 DEEP_WF="$ROOT/.github/workflows/product-deep.yml"
 [[ -f "$DEEP_WF" ]] || fail "missing product-deep workflow (Phase B scaffold)"
 grep -q 'workflow_dispatch' "$DEEP_WF" || fail "product-deep must support workflow_dispatch"
+# Fail closed: no automatic triggers (dispatch-only invariant for #240)
+if grep -E '^[[:space:]]+(push|pull_request|schedule|workflow_run):' "$DEEP_WF" >/dev/null; then
+  fail "product-deep must not declare push/pull_request/schedule/workflow_run (dispatch-only)"
+fi
 # Deep lane must never gate CD
 if grep -q 'product-deep' "$DEPLOY_WF"; then
   fail "beta-deploy must not reference product-deep (deep CI must not gate CD)"
+fi
+# No business secrets in deep workflow (same policy as deploy workflow)
+if grep -qE 'JWT_SECRET|TUNNEL_TOKEN|LLM_API_KEY|secrets\.' "$DEEP_WF"; then
+  fail "product-deep must not reference business secrets / secrets.* (LLM reserved off)"
 fi
 pass "product-deep is dispatch-only scaffold and does not gate beta-deploy"
 

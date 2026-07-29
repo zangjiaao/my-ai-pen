@@ -18,6 +18,7 @@ on:
       - "docs/specs/ci-cd.md"
       - ".github/workflows/product-smoke.yml"
       - ".github/workflows/beta-deploy.yml"
+      - ".github/workflows/product-deep.yml"
   pull_request:
     paths:
       - "platform/**"
@@ -32,6 +33,7 @@ on:
       - "docs/specs/ci-cd.md"
       - ".github/workflows/product-smoke.yml"
       - ".github/workflows/beta-deploy.yml"
+      - ".github/workflows/product-deep.yml"
 
 jobs:
   beta-deploy-contract:

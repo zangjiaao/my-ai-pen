@@ -30,21 +30,32 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  guard-llm:
+  guard:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - name: Refuse LLM until a suite is wired
-        if: ${{ inputs.allow_llm == true || inputs.allow_llm == 'true' }}
+      - name: Refuse LLM + validate suite
+        env:
+          ALLOW_LLM: ${{ inputs.allow_llm }}
+          SUITE: ${{ inputs.suite }}
         run: |
-          echo "allow_llm is reserved and not implemented. Re-run with allow_llm=false."
-          exit 1
-      - name: LLM off
-        if: ${{ inputs.allow_llm != true && inputs.allow_llm != 'true' }}
-        run: echo "LLM digs disabled (default)."
+          set -euo pipefail
+          # Boolean inputs may arrive as true or "true"
+          if [ "${ALLOW_LLM}" = "true" ]; then
+            echo "allow_llm is reserved and not implemented. Re-run with allow_llm=false."
+            exit 1
+          fi
+          case "${SUITE}" in
+            node4-process-quality|node4-hard-graph|node4-all-heavy|backend-unit|all-deterministic) ;;
+            *)
+              echo "Unknown suite: ${SUITE}"
+              exit 1
+              ;;
+          esac
+          echo "LLM digs disabled; suite=${SUITE}"
 
   node4-deep:
-    needs: guard-llm
+    needs: guard
     if: >-
       inputs.suite == 'node4-process-quality'
       || inputs.suite == 'node4-hard-graph'
@@ -63,21 +74,23 @@ jobs:
           cache: npm
           cache-dependency-path: node4/package-lock.json
       - run: npm ci
+      # process-quality alone (subset of hard-graph + plan-tree)
       - name: process-quality suite
-        if: >-
-          inputs.suite == 'node4-process-quality'
-          || inputs.suite == 'node4-all-heavy'
-          || inputs.suite == 'all-deterministic'
+        if: inputs.suite == 'node4-process-quality'
         run: npm run test:process-quality
+      # hard-graph alone (includes most process-quality files)
       - name: hard-graph suite
-        if: >-
-          inputs.suite == 'node4-hard-graph'
-          || inputs.suite == 'node4-all-heavy'
-          || inputs.suite == 'all-deterministic'
+        if: inputs.suite == 'node4-hard-graph'
         run: npm run test:hard-graph
+      # Union without double-running overlapping files: hard-graph + plan-tree only
+      - name: deep-node4 union (no overlap)
+        if: >-
+          inputs.suite == 'node4-all-heavy'
+          || inputs.suite == 'all-deterministic'
+        run: npm run test:deep-node4
 
   backend-unit:
-    needs: guard-llm
+    needs: guard
     if: >-
       inputs.suite == 'backend-unit'
       || inputs.suite == 'all-deterministic'
