@@ -9,9 +9,10 @@ User=deploy
 Group=deploy
 WorkingDirectory=/opt/my-ai-pen/platform/backend
 EnvironmentFile=-/opt/my-ai-pen/platform/backend/.env
-Environment=PATH=/home/deploy/.local/bin:/usr/local/bin:/usr/bin
+Environment=PATH=/home/deploy/.local/bin:/usr/local/bin:/usr/bin:/bin
 # Beta service: production uvicorn (dev hot-reload disabled)
-ExecStart=/home/deploy/.local/bin/uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
+# Prefer uv on PATH (install: curl -LsSf https://astral.sh/uv/install.sh | sh)
+ExecStart=/bin/bash -lc 'exec uv run uvicorn app.main:app --host 127.0.0.1 --port 8000'
 Restart=on-failure
 RestartSec=5
 

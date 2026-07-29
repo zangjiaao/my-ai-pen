@@ -1,8 +1,12 @@
 # Product platform compose.
-# Default (beta / CD): db + rabbitmq + cloudflared + caddy — host runs backend/node4.
-# Local API-in-container (optional): docker compose --profile dev up
 #
-# Secrets: use host env / .env next to this file (never commit real values).
+# Default (local / bare `docker compose up`): db + rabbitmq only.
+# Beta edge (CD / single-host ship): --profile beta  → caddy
+# Tunnel: --profile tunnel → cloudflared (requires TUNNEL_TOKEN)
+# Optional API-in-container: --profile dev → backend with reload
+#
+# Host beta runs backend + node4 under systemd; FE dist served by Caddy.
+# Secrets: host env / platform/.env (never commit real values).
 # See docs/deploy/beta-bootstrap.md and Spec #231.
 
 services:
@@ -39,29 +43,29 @@ services:
       retries: 10
 
   caddy:
-    image: caddy:2-alpine
+    profiles: ["beta"]
+    image: caddy:2.8-alpine
     restart: unless-stopped
     ports:
       - "127.0.0.1:8080:80"
     volumes:
       - ../deploy/beta/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ../platform/frontend/dist:/srv/frontend:ro
+      - ./frontend/dist:/srv/frontend:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    depends_on:
-      - db
-      - rabbitmq
 
-  # Start only when TUNNEL_TOKEN is set: docker compose --profile tunnel up -d cloudflared
   cloudflared:
     profiles: ["tunnel"]
+    # Pin when ops needs reproducibility; latest is fine for internal beta.
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
+    # Host network so Zero Trust ingress http://127.0.0.1:8080 reaches host Caddy
+    # (container bridge 127.0.0.1 would NOT reach the host publish).
+    network_mode: host
     environment:
       TUNNEL_TOKEN: ${TUNNEL_TOKEN:?set TUNNEL_TOKEN for tunnel profile}
-    command: tunnel --no-autoupdate run
-    depends_on:
-      - caddy
+    # Remotely managed tunnel: token required (host platform/.env). network_mode:host → 127.0.0.1:8080.
+    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
 
   # Local dev only — not started by beta CD (host systemd owns uvicorn).
   backend:

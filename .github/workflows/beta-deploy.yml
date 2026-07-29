@@ -15,10 +15,14 @@ concurrency:
 
 jobs:
   deploy:
-    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
+    # Only after successful smoke on a push to main; skip when SSH host secret missing (CD optional).
+    if: >-
+      ${{ github.event.workflow_run.conclusion == 'success'
+          && github.event.workflow_run.event == 'push'
+          && secrets.BETA_SSH_HOST != '' }}
     runs-on: ubuntu-latest
     steps:
-      - name: SSH beta-deploy.sh
+      - name: SSH beta-deploy.sh (pinned smoke SHA)
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.BETA_SSH_HOST }}
@@ -29,5 +33,7 @@ jobs:
           command_timeout: 45m
           script: |
             set -euo pipefail
+            export DEPLOY_SHA='${{ github.event.workflow_run.head_sha }}'
+            echo "DEPLOY_SHA=${DEPLOY_SHA}"
             cd /opt/my-ai-pen
             bash scripts/beta-deploy.sh

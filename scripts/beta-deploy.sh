@@ -6,7 +6,8 @@ set -euo pipefail
 
 REPO_ROOT="${REPO_ROOT:-/opt/my-ai-pen}"
 BRANCH="${DEPLOY_BRANCH:-main}"
-COMPOSE_FILE="${COMPOSE_FILE:-platform/docker-compose.yml}"
+# Optional: pin to the SHA that passed product-smoke (workflow_run.head_sha)
+DEPLOY_SHA="${DEPLOY_SHA:-}"
 
 cd "$REPO_ROOT"
 
@@ -15,31 +16,38 @@ if [[ ! -d .git ]]; then
   exit 1
 fi
 
-# Optional host env for public origin + compose (not rewritten by CD secrets)
-if [[ -f /etc/my-ai-pen/beta.env ]]; then
-  # shellcheck disable=SC1091
-  set -a
-  source /etc/my-ai-pen/beta.env
-  set +a
-fi
-if [[ -f "$REPO_ROOT/platform/.env" ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source "$REPO_ROOT/platform/.env"
-  set +a
-fi
+# Host env for public origin + compose (not rewritten by CD secrets)
+for envf in /etc/my-ai-pen/beta.env /etc/my-ai-pen/tunnel.env "$REPO_ROOT/platform/.env"; do
+  if [[ -f "$envf" ]]; then
+    # shellcheck disable=SC1090
+    set -a
+    source "$envf"
+    set +a
+  fi
+done
 
-echo "==> 1. git fetch + reset to origin/${BRANCH}"
+echo "==> 1. git fetch + checkout"
 git fetch origin
-git reset --hard "origin/${BRANCH}"
+if [[ -n "${DEPLOY_SHA}" ]]; then
+  echo "    pin DEPLOY_SHA=${DEPLOY_SHA}"
+  git checkout --detach "${DEPLOY_SHA}"
+else
+  echo "    branch origin/${BRANCH} (no DEPLOY_SHA pin)"
+  git checkout -B "${BRANCH}" "origin/${BRANCH}"
+fi
 
-echo "==> 2. docker compose up (db rabbitmq caddy; tunnel profile if TUNNEL_TOKEN set)"
+echo "==> 2. docker compose up (db rabbitmq + profile beta caddy; tunnel if token)"
 cd "$REPO_ROOT/platform"
-docker compose -f docker-compose.yml up -d db rabbitmq caddy
+# Ensure dist dir exists so bind-mount does not create a root-owned empty dir by accident
+mkdir -p frontend/dist
+docker compose -f docker-compose.yml up -d db rabbitmq
+docker compose -f docker-compose.yml --profile beta up -d caddy
+EDGE_STATUS="caddy"
 if [[ -n "${TUNNEL_TOKEN:-}" ]]; then
   docker compose -f docker-compose.yml --profile tunnel up -d cloudflared
+  EDGE_STATUS="caddy+cloudflared"
 else
-  echo "    WARN: TUNNEL_TOKEN unset — skipping cloudflared (set token for public edge)"
+  echo "    WARN: TUNNEL_TOKEN unset — skipping cloudflared (public edge incomplete)"
 fi
 cd "$REPO_ROOT"
 
@@ -56,23 +64,12 @@ fi
 "$UV" sync
 "$UV" run alembic upgrade head
 cd "$REPO_ROOT"
-# Note: do NOT run python -m app.db.seed on every deploy (would clobber beta data).
+# Do NOT run python -m app.db.seed on every deploy (would clobber beta data).
 
-echo "==> 4. frontend: npm ci + production build (same-origin)"
+echo "==> 4. frontend: npm ci + production build (same-origin required)"
 cd "$REPO_ROOT/platform/frontend"
-if [[ -z "${BETA_PUBLIC_ORIGIN:-}" ]]; then
-  echo "WARN: BETA_PUBLIC_ORIGIN unset; browser WS may fall back to localhost defaults" >&2
-else
-  export VITE_BACKEND_URL="${BETA_PUBLIC_ORIGIN}"
-  # wss when https
-  if [[ "${BETA_PUBLIC_ORIGIN}" == https://* ]]; then
-    export VITE_WS_URL="${BETA_PUBLIC_ORIGIN/https:/wss:}"
-  else
-    export VITE_WS_URL="${BETA_PUBLIC_ORIGIN/http:/ws:}"
-  fi
-  echo "    VITE_BACKEND_URL=$VITE_BACKEND_URL"
-  echo "    VITE_WS_URL=$VITE_WS_URL"
-fi
+# shellcheck disable=SC1091
+source "$REPO_ROOT/scripts/beta-fe-env.sh"
 npm ci
 npm run build
 cd "$REPO_ROOT"
@@ -82,12 +79,30 @@ cd "$REPO_ROOT/node4"
 npm ci
 cd "$REPO_ROOT"
 
-echo "==> 6. systemctl restart my-ai-pen-backend my-ai-pen-node4"
+echo "==> 6. systemctl restart + health"
 if command -v systemctl >/dev/null 2>&1; then
   sudo systemctl restart my-ai-pen-backend my-ai-pen-node4
-  sudo systemctl --no-pager --full status my-ai-pen-backend my-ai-pen-node4 || true
+  sudo systemctl is-active --quiet my-ai-pen-backend
+  sudo systemctl is-active --quiet my-ai-pen-node4
+  # Backend health (loopback)
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    if curl -fsS "http://127.0.0.1:8000/api/health" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 2
+    if [[ "$i" -eq 10 ]]; then
+      echo "ERROR: backend /api/health not healthy" >&2
+      sudo systemctl --no-pager --full status my-ai-pen-backend my-ai-pen-node4 || true
+      exit 1
+    fi
+  done
+  # Caddy edge (same host)
+  if ! curl -fsS "http://127.0.0.1:8080/api/health" >/dev/null 2>&1; then
+    echo "ERROR: caddy :8080 /api/health failed" >&2
+    exit 1
+  fi
 else
   echo "WARN: systemctl not available (non-systemd host?)" >&2
 fi
 
-echo "==> deploy complete at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "==> deploy complete at $(date -u +%Y-%m-%dT%H:%M:%SZ) edge=${EDGE_STATUS} sha=$(git rev-parse --short HEAD)"

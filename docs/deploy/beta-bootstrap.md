@@ -21,7 +21,16 @@ This product is an **AI-assisted** security testing workbench. Operators and int
 | `platform/backend/.env` | Backend secrets (host only) |
 | `node4/.env` | Node token + model keys (host only) |
 | `platform/.env` | Compose vars: DB/MQ passwords, `TUNNEL_TOKEN` |
-| `/etc/my-ai-pen/beta.env` | Optional: `BETA_PUBLIC_ORIGIN=https://your.domain` for FE build |
+| `/etc/my-ai-pen/beta.env` | **Required for public beta FE build:** `BETA_PUBLIC_ORIGIN=https://your.domain` |
+
+## Compose profiles
+
+| Command | Services |
+|---------|----------|
+| `docker compose up -d` | **db + rabbitmq** only (safe local default) |
+| `docker compose --profile beta up -d` | + **caddy** (edge reverse proxy on `127.0.0.1:8080`) |
+| `docker compose --profile tunnel up -d` | + **cloudflared** (needs `TUNNEL_TOKEN`) |
+| `docker compose --profile dev up -d` | + **backend** container with reload (local only; beta uses systemd) |
 
 ## One-time bootstrap checklist
 
@@ -34,29 +43,48 @@ This product is an **AI-assisted** security testing workbench. Operators and int
    - Strong Postgres + RabbitMQ passwords (not lab `postgres`/`guest`)  
    - Admin: seed once then **change** password from lab default `admin@pentest.local` / `admin123`  
    - Node LLM API keys; after first UI register, set `NODE_TOKEN`  
-   - `TUNNEL_TOKEN` from Cloudflare Zero Trust  
+   - `TUNNEL_TOKEN` from Cloudflare Zero Trust (**host only**, never git / never chat long-term — rotate if exposed)  
    - Bind DB/MQ to **127.0.0.1** only (compose default in-repo)
 6. **Cloudflare**  
-   - Create Tunnel → public hostname → `http://127.0.0.1:8080` (Caddy)  
+   - Create Tunnel → public hostname → **`http://127.0.0.1:8080`** (Caddy)  
    - **Access** application allowlist (emails / IdP) on that hostname  
-   - Copy tunnel token to host `TUNNEL_TOKEN` / compose env  
-7. **Install systemd units** from `deploy/beta/systemd/*.service` into `/etc/systemd/system/`, `daemon-reload`, `enable --now`.
-8. **First start (manual)**  
+   - Copy tunnel token to host `platform/.env` as `TUNNEL_TOKEN=...` (mode `600`)
+7. **Public origin for FE build** in `/etc/my-ai-pen/beta.env`:
    ```bash
-   cd /opt/my-ai-pen/platform && docker compose up -d db rabbitmq caddy
-   # set TUNNEL_TOKEN in platform/.env then:
-   # docker compose --profile tunnel up -d cloudflared
+   BETA_PUBLIC_ORIGIN=https://YOUR_PUBLIC_HOSTNAME
+   ```
+   Vite only inlines `VITE_*`. Always map via:
+   ```bash
+   source /opt/my-ai-pen/scripts/beta-fe-env.sh
+   # exports VITE_BACKEND_URL + VITE_WS_URL from BETA_PUBLIC_ORIGIN
+   ```
+8. **Install systemd units** from `deploy/beta/systemd/*.service` into `/etc/systemd/system/`, `daemon-reload`, `enable`.
+9. **First start (manual)**  
+   ```bash
+   cd /opt/my-ai-pen/platform
+   # platform/.env must include strong DB/MQ passwords + TUNNEL_TOKEN
+   docker compose up -d db rabbitmq
+   docker compose --profile beta up -d caddy
+   docker compose --profile tunnel up -d cloudflared
+
    cd /opt/my-ai-pen/platform/backend && uv sync && uv run alembic upgrade head
    # once only: uv run python -m app.db.seed   # then change admin password
-   cd /opt/my-ai-pen/platform/frontend && BETA_PUBLIC_ORIGIN=https://YOUR_HOST npm ci && npm run build
+
+   source /etc/my-ai-pen/beta.env
+   source /opt/my-ai-pen/scripts/beta-fe-env.sh
+   cd /opt/my-ai-pen/platform/frontend && npm ci && npm run build
+
    cd /opt/my-ai-pen/node4 && npm ci
-   sudo systemctl start my-ai-pen-backend my-ai-pen-node4
+   sudo systemctl enable --now my-ai-pen-backend my-ai-pen-node4
+   curl -fsS http://127.0.0.1:8000/api/health
+   curl -fsS http://127.0.0.1:8080/api/health
    ```
-9. **Register Node4** in platform UI → put token in `node4/.env` → restart node4 unit.
-10. **GitHub Actions CD** (optional after first green path)  
+10. **Register Node4** in platform UI → put token in `node4/.env` → restart node4 unit.
+11. **GitHub Actions CD** (optional after first green path)  
     - Secrets: `BETA_SSH_HOST`, `BETA_SSH_PORT`, `BETA_SSH_USER`, `BETA_SSH_KEY` only  
     - Business secrets stay on host  
-    - `beta-deploy` workflow runs after **product-smoke** succeeds on `main` push
+    - `beta-deploy` runs after **product-smoke** succeeds on `main` **push**, pins `DEPLOY_SHA` to the smoke commit  
+    - Job is skipped when `BETA_SSH_HOST` is unset
 
 ## Multi-user posture
 
@@ -66,11 +94,12 @@ This product is an **AI-assisted** security testing workbench. Operators and int
 
 ## Rotation
 
-Event-driven only (leak, staff leave Access list, host rebuild). Edit host env → restart units/compose. No mandatory periodic rotation for beta.
+Event-driven only (leak, staff leave Access list, host rebuild, token pasted into chat). Edit host env → restart units/compose. No mandatory periodic rotation for beta.
 
 ## Related
 
 - Spec: GitHub issue **#231**  
 - Living CI/CD notes: `docs/specs/ci-cd.md`  
 - Contract check: `scripts/check-beta-deploy-contract.sh`  
-- Deploy script: `scripts/beta-deploy.sh`
+- Deploy script: `scripts/beta-deploy.sh`  
+- FE env helper: `scripts/beta-fe-env.sh`
