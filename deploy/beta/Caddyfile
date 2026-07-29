@@ -2,14 +2,17 @@
 # Caddy also uses host networking so upstream is 127.0.0.1:8000 (backend systemd).
 # TLS at Cloudflare edge.
 
-# Bind loopback only — Cloudflare Tunnel (host network) hits 127.0.0.1:8080.
-# Explicit http:// so Caddy does not enable auto_https for the bare IP (would break tunnel HTTP).
-# Do not expose :8080 on the public NIC (Access protects the hostname, not raw IP).
+# Listen on loopback only (Access protects the public hostname; do not bind :8080 on
+# the public NIC). Use bind + bare :8080 — NOT `http://127.0.0.1:8080` — so Caddy does
+# not require Host: 127.0.0.1. Cloudflare Tunnel forwards Host: my-ai-pen.oak-studio.org;
+# a host-matched site returns 200 with an empty body → white screen, zero /assets/* fetches.
+# auto_https off: plain HTTP for the tunnel hop.
 {
 	auto_https off
 }
 
-http://127.0.0.1:8080 {
+:8080 {
+	bind 127.0.0.1
 	encode gzip
 
 	handle /api/* {
