@@ -62,11 +62,15 @@ echo "==> 2. docker compose up (db rabbitmq + profile beta caddy; tunnel if toke
 cd "$REPO_ROOT/platform"
 # Ensure dist dir exists so bind-mount does not create a root-owned empty dir by accident
 mkdir -p frontend/dist
+# Bootstrap may have used bare `docker run --name platform-caddy-1` / `beta-cloudflared`
+# which conflict with compose project names — remove orphans so compose can own them.
+docker rm -f platform-caddy-1 2>/dev/null || true
 docker compose -f docker-compose.yml up -d db rabbitmq
-docker compose -f docker-compose.yml --profile beta up -d caddy
+docker compose -f docker-compose.yml --profile beta up -d --force-recreate caddy
 EDGE_STATUS="caddy"
 if [[ -n "${TUNNEL_TOKEN:-}" ]]; then
-  docker compose -f docker-compose.yml --profile tunnel up -d cloudflared
+  docker rm -f beta-cloudflared platform-cloudflared-1 2>/dev/null || true
+  docker compose -f docker-compose.yml --profile tunnel up -d --force-recreate cloudflared
   EDGE_STATUS="caddy+cloudflared"
 else
   echo "    WARN: TUNNEL_TOKEN unset — skipping cloudflared (public edge incomplete)"
