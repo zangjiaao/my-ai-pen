@@ -62,6 +62,12 @@ awk '
 ' "$COMPOSE" | grep -q 'network_mode:.*host' || fail "caddy must use network_mode: host"
 pass "compose caddy uses host network for loopback backend"
 
+# Optional tunnel secret must not break bare `docker compose up` via :? expansion
+if grep -qE '\$\{TUNNEL_TOKEN:\?' "$COMPOSE"; then
+  fail "compose must not use \${TUNNEL_TOKEN:?} (breaks default up without token)"
+fi
+pass "compose does not require TUNNEL_TOKEN for non-tunnel up"
+
 if grep -qE '["'\'']5432:5432' "$COMPOSE"; then
   grep -qE '127\.0\.0\.1:5432' "$COMPOSE" || fail "postgres port must bind 127.0.0.1"
 fi
@@ -71,10 +77,11 @@ fi
 pass "compose publishes DB/MQ on loopback when ports are mapped"
 
 [[ -f "$CADDY" ]] || fail "missing Caddyfile"
+grep -qE '127\.0\.0\.1:8080' "$CADDY" || fail "Caddyfile must bind 127.0.0.1:8080 (not all interfaces)"
 grep -qE 'handle /api' "$CADDY" || fail "Caddyfile must route /api"
 grep -qE 'handle /ws' "$CADDY" || fail "Caddyfile must route /ws"
 grep -qiE 'file_server|try_files' "$CADDY" || fail "Caddyfile must serve static UI"
-pass "Caddyfile has /api, /ws, static UI intent"
+pass "Caddyfile has /api, /ws, static UI intent, loopback bind"
 
 [[ -f "$FE_ENV" ]] || fail "missing scripts/beta-fe-env.sh"
 [[ -f "$DEPLOY_SH" ]] || fail "missing scripts/beta-deploy.sh"

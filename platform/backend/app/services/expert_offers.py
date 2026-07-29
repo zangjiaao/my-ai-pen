@@ -6,7 +6,8 @@ Pack **content** lives under ``experts/`` and must also exist on the Node instal
 
 - UI install/uninstall → platform updates offers **and** pushes ``expert_install`` /
   ``expert_uninstall`` / ``expert_sync`` over the node WebSocket when online.
-- Node reconnect → platform pushes ``expert_sync`` so filesystem matches offers.
+- Node reconnect → platform pushes ``expert_sync`` to **install missing** offered packs
+  (uninstall remains explicit; offline uninstall may lag until the node is online).
 
 Assignment still uses structured engagement/role (no free-text NLP). Billing hooks only.
 """

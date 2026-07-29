@@ -15,6 +15,7 @@ const RELIABLE_TYPES = new Set([
   "work_status",
   "checkpoint_update",
   "task_start",
+  "experts_status",
 ]);
 
 const MAX_QUEUE = 300;
@@ -43,11 +44,14 @@ export class PlatformWSClient {
       try {
         const wsUrl = `${this.url}?token=${encodeURIComponent(this.token)}`;
         this.ws = new WebSocket(wsUrl);
+        // Attach message handler BEFORE open completes so platform expert_sync
+        // pushed on NODE ONLINE is not dropped (no listener race).
+        this.ws.onmessage = (event) => void this.dispatch(String(event.data));
         await waitOpen(this.ws);
         attempt = 0;
         console.log(`[node4] websocket connected: ${this.url}`);
         this.flushOutboundQueue();
-        // Notify product handlers (expert sync / status) on every reconnect.
+        // Product handlers (status report); platform also pushes expert_sync on online.
         for (const handler of this.handlers.get("ws_open") || []) {
           try {
             await handler({ type: "ws_open" });
@@ -59,7 +63,6 @@ export class PlatformWSClient {
         }
         await new Promise<void>((resolve) => {
           if (!this.ws) return resolve();
-          this.ws.onmessage = (event) => void this.dispatch(String(event.data));
           this.ws.onclose = () => resolve();
           this.ws.onerror = () => resolve();
         });

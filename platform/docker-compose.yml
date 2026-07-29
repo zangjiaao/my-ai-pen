@@ -60,9 +60,11 @@ services:
     # Host network so Zero Trust ingress http://127.0.0.1:8080 reaches host Caddy
     # (container bridge 127.0.0.1 would NOT reach the host publish).
     network_mode: host
+    # Use ${TUNNEL_TOKEN:-} so bare `docker compose up` (no tunnel profile) does not fail
+    # Compose interpolation. Starting profile tunnel without a real token will exit at runtime.
     environment:
-      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?set TUNNEL_TOKEN for tunnel profile}
-    # Remotely managed tunnel: token required (host platform/.env). network_mode:host → 127.0.0.1:8080.
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    # Remotely managed tunnel: set TUNNEL_TOKEN in platform/.env. network_mode:host → 127.0.0.1:8080.
     command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
 
   # Local dev only — not started by beta CD (host systemd owns uvicorn).

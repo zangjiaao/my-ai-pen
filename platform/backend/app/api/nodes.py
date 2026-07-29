@@ -308,13 +308,8 @@ async def install_node_expert(
     try:
         from app.ws import router as ws_router
 
-        node_delivery = await ws_router.push_node_expert_command(
-            str(n.id),
-            op="expert_install",
-            pack_id=pack,
-        )
-        # Also push full offers list so node can reconcile idempotently.
-        await ws_router.push_expert_sync_for_node(str(n.id))
+        # Full offers reconcile (install missing) is enough; covers single-pack install.
+        node_delivery = await ws_router.push_expert_sync_for_node(str(n.id))
     except Exception as e:
         node_delivery = {"delivered": False, "reason": str(e)}
     return {
@@ -364,7 +359,6 @@ async def uninstall_node_expert(
             op="expert_uninstall",
             pack_id=pack,
         )
-        await ws_router.push_expert_sync_for_node(str(n.id))
     except Exception as e:
         node_delivery = {"delivered": False, "reason": str(e)}
     return {
@@ -373,6 +367,11 @@ async def uninstall_node_expert(
         "offers": effective_offers(n.config),
         "billing": detail,
         "node_delivery": node_delivery,
+        "note": (
+            None
+            if node_delivery.get("delivered")
+            else "Offer removed; pack files remove when the node is online (expert_uninstall)."
+        ),
     }
 
 

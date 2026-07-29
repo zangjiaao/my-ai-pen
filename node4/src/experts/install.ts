@@ -135,9 +135,9 @@ export function installExpert(packId: string): InstallResult {
 }
 
 /**
- * Make filesystem packs match platform UI offers (desired set).
- * Installs each offered pack from the catalog; does not auto-uninstall extras
- * (explicit expert_uninstall handles removal).
+ * Install packs listed in platform UI offers (desired set).
+ * Does **not** auto-uninstall extras absent from offers — removal is only via
+ * explicit expert_uninstall (offline uninstall may leave disk packs until delivered).
  */
 export function reconcilePlatformOffers(offers: string[]): {
   ok: boolean;

@@ -11,6 +11,7 @@ on:
       - "experts/**"
       - "deploy/**"
       - "scripts/beta-deploy.sh"
+      - "scripts/beta-fe-env.sh"
       - "scripts/check-beta-deploy-contract.sh"
       - "docs/deploy/**"
       - "docs/specs/ci-cd.md"
@@ -23,6 +24,7 @@ on:
       - "experts/**"
       - "deploy/**"
       - "scripts/beta-deploy.sh"
+      - "scripts/beta-fe-env.sh"
       - "scripts/check-beta-deploy-contract.sh"
       - "docs/deploy/**"
       - "docs/specs/ci-cd.md"
@@ -65,6 +67,7 @@ jobs:
           cache: npm
           cache-dependency-path: node4/package-lock.json
       - run: npm ci
+      - run: npx tsx src/experts/reconcile-offers.test.ts
       - run: npx tsx src/node4-smoke.ts
         env:
           CI: "1"
