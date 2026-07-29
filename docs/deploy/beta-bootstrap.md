@@ -89,6 +89,8 @@ This product is an **AI-assisted** security testing workbench. Operators and int
       - **Secrets:** `BETA_SSH_KEY` (deploy private key PEM only)  
     - Business secrets stay on host (never in GitHub)  
     - `beta-deploy` runs after **product-smoke** succeeds on `main` **push**, pins `DEPLOY_SHA` to the smoke commit
+    - product-smoke (Phase A) also runs backend pytest, Node4 `test:ci-pr` allowlist, FE unit tests — no LLM keys
+    - **product-deep** (Phase B) is manual `workflow_dispatch` only; it does **not** gate deploy
 
 ## Multi-user posture
 

@@ -105,10 +105,12 @@ do
 done
 grep -qE 'DEPLOY_BRANCH:-main|origin/\$\{BRANCH\}' "$DEPLOY_SH" \
   || fail "beta-deploy.sh must default branch to main"
+# CD host may have emergency hotfixes — pin must hard-reset tracked dirt
+grep -qE 'git reset --hard' "$DEPLOY_SH" || fail "beta-deploy.sh must git reset --hard when pinning DEPLOY_SHA"
 # Hard-fail path for missing public origin (via beta-fe-env)
 grep -q 'BETA_PUBLIC_ORIGIN' "$FE_ENV" || fail "beta-fe-env.sh must require BETA_PUBLIC_ORIGIN"
 grep -q 'ERROR:' "$FE_ENV" || fail "beta-fe-env.sh must fail closed without origin"
-pass "beta-deploy.sh + beta-fe-env hard-require same-origin FE build"
+pass "beta-deploy.sh + beta-fe-env hard-require same-origin FE build + hard-reset pin"
 
 grep -qE 'my-ai-pen-backend' "$DEPLOY_SH" || fail "deploy must restart my-ai-pen-backend"
 grep -qE 'my-ai-pen-node4' "$DEPLOY_SH" || fail "deploy must restart my-ai-pen-node4"
@@ -141,7 +143,19 @@ pass "beta-deploy workflow: smoke gate + SHA pin + SSH, no business secrets"
 
 grep -q 'check-beta-deploy-contract' "$SMOKE_WF" "$DEPLOY_WF" \
   || fail "CI must invoke check-beta-deploy-contract.sh"
-pass "CI invokes deploy contract check"
+# Phase A: product-smoke must run allowlisted deterministic suites (not smoke-only)
+grep -qE 'test:ci-pr|ci-pr' "$SMOKE_WF" || fail "product-smoke must run node4 test:ci-pr allowlist"
+grep -qE 'pytest|backend-unit' "$SMOKE_WF" || fail "product-smoke must run backend unit tests"
+pass "CI invokes deploy contract check + Phase A jobs"
+
+DEEP_WF="$ROOT/.github/workflows/product-deep.yml"
+[[ -f "$DEEP_WF" ]] || fail "missing product-deep workflow (Phase B scaffold)"
+grep -q 'workflow_dispatch' "$DEEP_WF" || fail "product-deep must support workflow_dispatch"
+# Deep lane must never gate CD
+if grep -q 'product-deep' "$DEPLOY_WF"; then
+  fail "beta-deploy must not reference product-deep (deep CI must not gate CD)"
+fi
+pass "product-deep is dispatch-only scaffold and does not gate beta-deploy"
 
 [[ -f "$RUNBOOK" ]] || fail "missing docs/deploy/beta-bootstrap.md"
 grep -qiE 'Cloudflare|Access|TUNNEL' "$RUNBOOK" || fail "runbook must cover Tunnel/Access"

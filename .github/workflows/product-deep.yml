@@ -1,0 +1,96 @@
+# Phase B deep CI (#240) — manual only for now. NOT a merge required check.
+# Does NOT gate beta-deploy (only product-smoke on main push does).
+#
+# Capability honesty: AI-assisted workbench signals, not unattended red team.
+# Prefer deterministic heavy suites; LLM opt-in is reserved and off by default.
+name: product-deep
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Deep suite to run
+        required: true
+        default: node4-process-quality
+        type: choice
+        options:
+          - node4-process-quality
+          - node4-hard-graph
+          - node4-all-heavy
+          - backend-unit
+          - all-deterministic
+      allow_llm:
+        description: Reserved — LLM-backed digs (must stay false until secrets + suite land)
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: product-deep-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  guard-llm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Refuse LLM until a suite is wired
+        if: ${{ inputs.allow_llm == true || inputs.allow_llm == 'true' }}
+        run: |
+          echo "allow_llm is reserved and not implemented. Re-run with allow_llm=false."
+          exit 1
+      - name: LLM off
+        if: ${{ inputs.allow_llm != true && inputs.allow_llm != 'true' }}
+        run: echo "LLM digs disabled (default)."
+
+  node4-deep:
+    needs: guard-llm
+    if: >-
+      inputs.suite == 'node4-process-quality'
+      || inputs.suite == 'node4-hard-graph'
+      || inputs.suite == 'node4-all-heavy'
+      || inputs.suite == 'all-deterministic'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: node4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: node4/package-lock.json
+      - run: npm ci
+      - name: process-quality suite
+        if: >-
+          inputs.suite == 'node4-process-quality'
+          || inputs.suite == 'node4-all-heavy'
+          || inputs.suite == 'all-deterministic'
+        run: npm run test:process-quality
+      - name: hard-graph suite
+        if: >-
+          inputs.suite == 'node4-hard-graph'
+          || inputs.suite == 'node4-all-heavy'
+          || inputs.suite == 'all-deterministic'
+        run: npm run test:hard-graph
+
+  backend-unit:
+    needs: guard-llm
+    if: >-
+      inputs.suite == 'backend-unit'
+      || inputs.suite == 'all-deterministic'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: platform/backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv python install
+      - run: uv sync --group dev
+      - run: uv run pytest tests/ -q
