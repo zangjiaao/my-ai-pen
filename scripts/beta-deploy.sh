@@ -52,10 +52,15 @@ if [[ -n "${DEPLOY_SHA}" ]]; then
     git log -3 --oneline 2>/dev/null || true
     exit 1
   fi
+  # CD host is not a dev worktree: discard tracked dirty files (e.g. emergency
+  # hotfixes) so checkout cannot abort. Untracked secrets (.env) stay.
+  git reset --hard "${DEPLOY_SHA}"
   git checkout --detach "${DEPLOY_SHA}"
 else
   echo "    branch origin/${BRANCH} (no DEPLOY_SHA pin)"
+  git fetch origin "${BRANCH}"
   git checkout -B "${BRANCH}" "origin/${BRANCH}"
+  git reset --hard "origin/${BRANCH}"
 fi
 
 echo "==> 2. docker compose up (db rabbitmq + profile beta caddy; tunnel if token)"
