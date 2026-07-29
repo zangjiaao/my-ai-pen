@@ -1,0 +1,20 @@
+[Unit]
+Description=my-ai-pen platform backend (beta)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=deploy
+Group=deploy
+WorkingDirectory=/opt/my-ai-pen/platform/backend
+EnvironmentFile=-/opt/my-ai-pen/platform/backend/.env
+Environment=PATH=/home/deploy/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Beta service: production uvicorn (dev hot-reload disabled)
+# Prefer uv on PATH (install: curl -LsSf https://astral.sh/uv/install.sh | sh)
+ExecStart=/bin/bash -lc 'exec uv run uvicorn app.main:app --host 127.0.0.1 --port 8000'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

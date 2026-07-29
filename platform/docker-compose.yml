@@ -1,30 +1,83 @@
+# Product platform compose.
+#
+# Default (local / bare `docker compose up`): db + rabbitmq only.
+# Beta edge (CD / single-host ship): --profile beta  → caddy
+# Tunnel: --profile tunnel → cloudflared (requires TUNNEL_TOKEN)
+# Optional API-in-container: --profile dev → backend with reload
+#
+# Host beta runs backend + node4 under systemd; FE dist served by Caddy.
+# Secrets: host env / platform/.env (never commit real values).
+# See docs/deploy/beta-bootstrap.md and Spec #231.
+
 services:
   db:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: pentest_platform
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-pentest_platform}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   rabbitmq:
     image: rabbitmq:3-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
+  caddy:
+    profiles: ["beta"]
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    # Host network: reverse_proxy 127.0.0.1:8000 (systemd backend) + listen :8080 for tunnel.
+    network_mode: host
+    volumes:
+      - ../deploy/beta/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./frontend/dist:/srv/frontend:ro
+
+  cloudflared:
+    profiles: ["tunnel"]
+    # Pin when ops needs reproducibility; latest is fine for internal beta.
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    # Host network so Zero Trust ingress http://127.0.0.1:8080 reaches host Caddy
+    # (container bridge 127.0.0.1 would NOT reach the host publish).
+    network_mode: host
+    # Use ${TUNNEL_TOKEN:-} so bare `docker compose up` (no tunnel profile) does not fail
+    # Compose interpolation. Starting profile tunnel without a real token will exit at runtime.
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    # Remotely managed tunnel: set TUNNEL_TOKEN in platform/.env. network_mode:host → 127.0.0.1:8080.
+    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
+
+  # Local dev only — not started by beta CD (host systemd owns uvicorn).
   backend:
+    profiles: ["dev"]
     build:
       context: ./backend
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/pentest_platform
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
-      JWT_SECRET: change-me-in-production
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://postgres:postgres@db:5432/pentest_platform}
+      RABBITMQ_URL: ${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672/}
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
       LLM_MODEL: ${LLM_MODEL:-gpt-4o}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}

@@ -1,0 +1,39 @@
+# SSH deploy to single beta host after product-smoke succeeds on main (Spec #231).
+# Secrets (GitHub only): BETA_SSH_HOST, BETA_SSH_PORT, BETA_SSH_USER, BETA_SSH_KEY
+# Host holds all business secrets; this workflow never injects JWT/LLM/tunnel tokens.
+name: beta-deploy
+
+on:
+  workflow_run:
+    workflows: ["product-smoke"]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: beta-deploy-single-host
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Only after successful smoke on a push to main; skip when SSH host secret missing (CD optional).
+    if: >-
+      ${{ github.event.workflow_run.conclusion == 'success'
+          && github.event.workflow_run.event == 'push'
+          && secrets.BETA_SSH_HOST != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH beta-deploy.sh (pinned smoke SHA)
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.BETA_SSH_HOST }}
+          port: ${{ secrets.BETA_SSH_PORT }}
+          username: ${{ secrets.BETA_SSH_USER }}
+          key: ${{ secrets.BETA_SSH_KEY }}
+          script_stop: true
+          command_timeout: 45m
+          script: |
+            set -euo pipefail
+            export DEPLOY_SHA='${{ github.event.workflow_run.head_sha }}'
+            echo "DEPLOY_SHA=${DEPLOY_SHA}"
+            cd /opt/my-ai-pen
+            bash scripts/beta-deploy.sh

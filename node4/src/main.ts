@@ -15,6 +15,12 @@ import { sanitizePromptLabel } from "./runtime/prompt-template.js";
 import { extractAgentLanguageFromMessage } from "./runtime/agent-language.js";
 import { cancelApprovalsForConversation, resolveApproval } from "./runtime/approvals.js";
 import { classifyUserControl } from "./runtime/package-settlement-law.js";
+import {
+  installExpert,
+  listInstalledPackIds,
+  reconcilePlatformOffers,
+  uninstallExpert,
+} from "./experts/install.js";
 
 loadDotEnv();
 loadDotEnv("node2/.env");
@@ -107,6 +113,67 @@ async function runAssignedTask(message: Record<string, unknown>): Promise<void> 
 
 client.on("task_assign", async (message) => {
   await runAssignedTask(message);
+});
+
+/** Report physical pack install state so platform logs / future UI can verify. */
+async function reportExpertsStatus(extra: Record<string, unknown> = {}): Promise<void> {
+  const installed = listInstalledPackIds();
+  await client.send({
+    type: "experts_status",
+    installed,
+    effective: installed,
+    ...extra,
+  });
+}
+
+/**
+ * Platform UI install/uninstall updates offers and pushes these commands so
+ * node4/installed-experts matches "already installed" in the product UI.
+ */
+client.on("expert_install", async (message) => {
+  const packId = String(message.pack_id || message.expert_id || message.packId || "").trim();
+  if (!packId) return;
+  const r = installExpert(packId);
+  console.log(`[node4] expert_install ${packId} ok=${r.ok} ${r.message || ""}`);
+  await reportExpertsStatus({
+    action: "install",
+    pack_id: packId,
+    ok: r.ok,
+    message: r.message,
+  });
+});
+
+client.on("expert_uninstall", async (message) => {
+  const packId = String(message.pack_id || message.expert_id || message.packId || "").trim();
+  if (!packId) return;
+  const r = uninstallExpert(packId);
+  console.log(`[node4] expert_uninstall ${packId} ok=${r.ok} ${r.message || ""}`);
+  await reportExpertsStatus({
+    action: "uninstall",
+    pack_id: packId,
+    ok: r.ok,
+    message: r.message,
+  });
+});
+
+/** Full offers list from platform (on UI install and on every node reconnect). */
+client.on("expert_sync", async (message) => {
+  const raw = message.offers;
+  const offers = Array.isArray(raw) ? raw.map((x) => String(x)) : [];
+  const r = reconcilePlatformOffers(offers);
+  console.log(
+    `[node4] expert_sync offers=[${offers.join(",")}] installed=[${r.installed.join(",")}] ok=${r.ok}`,
+  );
+  await reportExpertsStatus({
+    action: "sync",
+    ok: r.ok,
+    offers,
+  });
+});
+
+client.on("ws_open", async () => {
+  // Platform also pushes expert_sync on NODE ONLINE; status report is belt-and-suspenders.
+  await reportExpertsStatus({ action: "hello" });
 });
 
 /**

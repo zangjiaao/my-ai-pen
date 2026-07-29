@@ -1,109 +1,85 @@
-# Spec: CI/CD (product path)
+# Spec: CI/CD (product path + internal beta deploy)
 
-> **Status:** draft map / backlog — not V1 delivery gate.  
+> **Status:** living contract for product smoke + single-host beta deploy (Spec #231).  
 > **Owner:** platform + Node4 maintainers.  
-> **Related:** [v1-delivery §8](../v1-delivery.md) (部署硬化), [harness](harness.md) (test seams), Wayfinder map (GitHub `wayfinder:map` for CI/CD).
+> **Related:** [v1-delivery](../v1-delivery.md), [beta-bootstrap](../deploy/beta-bootstrap.md), Wayfinder map #151.
 
 ---
 
 ## 1. Intent
 
-Automate **product-path** verification and (later) deploy for:
+Automate **product-path** verification and **single-host internal beta** deploy for:
 
 - `platform/` (backend + frontend)
 - `node4/`
 - `experts/`
-- `shared/` (cross-stack constants, e.g. agent-language catalog)
-- pen-sandbox / compose as needed for release
+- `deploy/beta/` (Caddy, systemd templates)
+- `scripts/beta-deploy.sh`, `scripts/check-beta-deploy-contract.sh`
 
-**Not** in scope for this map: full enterprise multi-env mesh, multi-tenant deploy, or scanning frozen `research/` / `benchmarks/`.
-
----
-
-## 2. Current state (as of 2026-07)
-
-| Piece | Today |
-|-------|--------|
-| GitHub Actions | `.github/workflows/product-smoke.yml` — FE `npm run build`, node4 smoke, limited path filters |
-| Path filters | `platform/**`, `node4/**`, `experts/**`, workflow file only — **`shared/**` not covered** |
-| Backend unit tests | Present under `platform/backend/tests/` — **not all wired into product-smoke** |
-| Node focused suites | e.g. `npm run test:agent-language`, `test:hard-graph` — **local / agent-run; not full CI matrix** |
-| Deploy | Manual / compose; V1 explicitly deferred production compose hardening |
-| Catalog locks | Byte-identical tests for `shared/agent-language-catalog.json` ship copies exist in Node + Python tests, but **product-smoke does not run them** |
-
-V1 checklist marks “最小 CI” done; **full CI/CD + deploy** remains §8 “后续”.
+**Not** in scope: full enterprise multi-env mesh, multi-tenant deploy, scanning frozen `research/` / `benchmarks/`, Workers/Vercel platform backend.
 
 ---
 
-## 3. Target shape (when this map is executed)
+## 2. Current shape (2026-07)
 
-Phased — implement as separate tickets under the CI/CD Wayfinder map, not one mega-PR.
+| Piece | Behavior |
+|-------|----------|
+| **product-smoke** | FE `npm run build`; node4 smoke; **beta deploy contract** script |
+| Path filters | `platform/**`, `node4/**`, `experts/**`, `deploy/**`, deploy scripts, workflows |
+| **beta-deploy** | `workflow_run` after successful product-smoke on `main` **push** → SSH → `scripts/beta-deploy.sh` |
+| Host topology | Docker: db, rabbitmq, caddy, cloudflared; systemd: backend + node4; FE dist via Caddy |
+| Secrets | GH: SSH only; host: JWT/DB/MQ/LLM/NODE_TOKEN/TUNNEL; CF dashboard: Access + Tunnel |
 
-### Phase A — Truthful product smoke (tests that exist, always run)
+### Capability honesty (beta copy)
 
-1. Expand `product-smoke` (or split jobs) to run **deterministic** suites:
-   - Node: at least `test:agent-language` (catalog lock + language inject seams)
-   - Platform: `tests/test_agent_language.py` (+ other pure unit modules already green locally)
-2. Path triggers include **`shared/**`** whenever cross-stack constants change.
-3. Docs that claim “CI requires …” must match actual workflow steps (no aspirational harness rows).
-
-### Phase B — Deeper product gates (optional matrix)
-
-1. Curated Node suites: `test:hard-graph` / `test:runtime` / pen-tools as jobs or nightly.
-2. Backend broader unittest/pytest with service deps only if job-isolated and fast.
-3. Frontend typecheck (`tsc --noEmit`) as a job if build alone is insufficient.
-
-### Phase C — Deploy automation
-
-1. Production-oriented compose / image build without dev reload.
-2. Promote artifacts only after Phase A green.
-3. Secrets / env contract documented; no credentials in repo.
-
-Out of scope until product needs it: multi-region, canary, full E2E against live labs in default PR CI.
+AI-assisted testing workbench with **human review**. Not unattended full-coverage red team. Dig path: Node4 + pentest expert → findings ledger. Install ≠ guaranteed dig quality on every target.
 
 ---
 
-## 4. Deferred follow-ups from agent_language review (#134–#138)
+## 3. Phases
 
-These are **intentionally not fixed** in the language epic. Track them here for the CI/CD (or adjacent small hygiene) pass:
+### Phase A — Truthful product smoke (optional follow-up; not first-install blocker)
 
-| ID | Kind | Item | Why defer |
-|----|------|------|-----------|
-| CICD-LANG-1 | CI wire | Run `node4` `test:agent-language` + backend `test_agent_language` in product-smoke; include `shared/**` in path filters | Needs workflow design, not product logic |
-| CICD-LANG-2 | Tooling | `scripts/sync-agent-language-catalog.sh` (or npm/make target) SoT → three ship copies | Ceremony; lock tests already catch drift post-hoc |
-| CICD-LANG-3 | Types | Tighten `TaskEnvelope.agentLanguage` to registry wire type; catalog-driven or documented TS unions | Type hygiene; runtime already normalizes |
-| CICD-LANG-4 | Hygiene | `default` seat mission: drop hardcoded language enum list | One-line copy; not a CI blocker |
-| CICD-LANG-5 | Hygiene | NodePage use `DEFAULT_AGENT_LANGUAGE` constant | Nit |
-| CICD-LANG-6 | Parity | Vuln-session dispatch use `merge_worker_limits_into_message` like chat task_assign/steer | Behaviour already carries language inside `worker_limits` |
+Wire existing deterministic suites (e.g. agent-language catalog locks) into CI when ready. Path filters for `shared/**` when those suites land.
 
-When Phase A lands, **CICD-LANG-1** should be closed as part of that work. LANG-2..6 can be a single “catalog hygiene” child ticket or separate nits.
+### Phase B — Deeper gates (later)
 
----
+Hard-graph / runtime matrix or nightly; broader backend unit jobs.
 
-## 5. Non-goals
+### Phase C — Deploy (this ship)
 
-- Guaranteeing model language compliance via CI (no live-LLM language asserts).
-- Replacing local AFK agent test loops for exploratory Graph work.
-- CI for frozen `research/` / `benchmarks/`.
-- Blocking product merges on full Hard Graph process-quality e2e until jobs are stable and fast enough.
+1. Production-oriented compose (no reload backend as default API).
+2. Promote only after product-smoke green.
+3. Secrets contract documented; no business credentials in repo or GH except deploy SSH.
 
 ---
 
-## 6. Success criteria (map complete)
+## 4. Deploy contract check (Seam 1)
 
-1. PR touching product paths runs a **documented, green** smoke that matches harness/PRD claims about CI.
-2. Catalog (and similar `shared/`) constants cannot land with divergent ship copies without a red job.
-3. Deploy path (when built) is one documented command/workflow after smoke green.
-4. Deferred LANG-* items either closed or explicitly re-scoped; none silently re-open as “language is broken.”
+```bash
+bash scripts/check-beta-deploy-contract.sh
+```
+
+Asserts compose services, Caddy routes, deploy script steps, systemd units, CD workflow structure, and operator docs—without a real VPS.
 
 ---
 
-## 7. Related paths
+## 5. Success criteria
+
+1. PR touching product/deploy paths runs documented green smoke including contract check.
+2. After `main` push smoke green, beta host can be updated via SSH deploy script.
+3. Operators have bootstrap + secrets + capability notes in `docs/deploy/beta-bootstrap.md`.
+4. Phase A/B items either closed later or explicitly deferred—not silent “CI is broken.”
+
+---
+
+## 6. Related paths
 
 | Path | Role |
 |------|------|
-| `.github/workflows/product-smoke.yml` | Current minimal CI |
-| `shared/agent-language-catalog.json` | Cross-stack constant SoT example |
-| `shared/README.md` | Manual re-copy instructions until sync script |
-| `node4/package.json` `test:agent-language` | Language / catalog lock suite |
-| `platform/backend/tests/test_agent_language.py` | Platform catalog / merge suite |
+| `.github/workflows/product-smoke.yml` | Smoke + contract |
+| `.github/workflows/beta-deploy.yml` | SSH CD |
+| `platform/docker-compose.yml` | db/mq/caddy/cloudflared (+ profile `dev` backend) |
+| `deploy/beta/Caddyfile` | Same-origin FE + `/api` + `/ws` |
+| `scripts/beta-deploy.sh` | Host deploy entrypoint |
+| `docs/deploy/beta-bootstrap.md` | Operator runbook |

@@ -1,0 +1,23 @@
+# Beta Entry-P: Tunnel (host network) → Caddy :8080 → FE + API/WS.
+# Caddy also uses host networking so upstream is 127.0.0.1:8000 (backend systemd).
+# TLS at Cloudflare edge.
+
+# Bind loopback only — Cloudflare Tunnel (host network) hits 127.0.0.1:8080.
+# Do not expose :8080 on the public NIC (Access protects the hostname, not raw IP).
+127.0.0.1:8080 {
+	encode gzip
+
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	handle /ws* {
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	handle {
+		root * /srv/frontend
+		try_files {path} /index.html
+		file_server
+	}
+}

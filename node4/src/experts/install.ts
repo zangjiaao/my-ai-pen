@@ -123,6 +123,7 @@ export function installExpert(packId: string): InstallResult {
     };
   }
   const root = ensureInstallRoot();
+  // Idempotent: already present still ok (refresh copy from catalog).
   copyPackFromCatalog(id, catalog);
   return {
     ok: true,
@@ -130,6 +131,32 @@ export function installExpert(packId: string): InstallResult {
     packId: id,
     installed: listInstalledPackIds(),
     message: `Installed '${id}' into ${root}`,
+  };
+}
+
+/**
+ * Install packs listed in platform UI offers (desired set).
+ * Does **not** auto-uninstall extras absent from offers — removal is only via
+ * explicit expert_uninstall (offline uninstall may leave disk packs until delivered).
+ */
+export function reconcilePlatformOffers(offers: string[]): {
+  ok: boolean;
+  installed: string[];
+  results: InstallResult[];
+} {
+  const results: InstallResult[] = [];
+  for (const raw of offers) {
+    const id = String(raw || "")
+      .toLowerCase()
+      .trim();
+    if (!id || id === "default" || id === "consult" || id === "workspace") continue;
+    results.push(installExpert(id));
+  }
+  const installed = listInstalledPackIds();
+  return {
+    ok: results.every((r) => r.ok),
+    installed,
+    results,
   };
 }
 
