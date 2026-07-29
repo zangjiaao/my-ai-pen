@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:unit": "tsx src/lib/panelAgentsState.test.ts && tsx src/lib/workerPresentation.test.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.62.0",
@@ -27,6 +28,7 @@
     "postcss": "^8.4.49",
     "react-grab": "^0.1.48",
     "tailwindcss": "^3.4.16",
+    "tsx": "^4.22.1",
     "typescript": "^5.7.2",
     "vite": "^6.0.3"
   },

@@ -105,10 +105,12 @@ do
 done
 grep -qE 'DEPLOY_BRANCH:-main|origin/\$\{BRANCH\}' "$DEPLOY_SH" \
   || fail "beta-deploy.sh must default branch to main"
+# CD host may have emergency hotfixes — pin must hard-reset tracked dirt
+grep -qE 'git reset --hard' "$DEPLOY_SH" || fail "beta-deploy.sh must git reset --hard when pinning DEPLOY_SHA"
 # Hard-fail path for missing public origin (via beta-fe-env)
 grep -q 'BETA_PUBLIC_ORIGIN' "$FE_ENV" || fail "beta-fe-env.sh must require BETA_PUBLIC_ORIGIN"
 grep -q 'ERROR:' "$FE_ENV" || fail "beta-fe-env.sh must fail closed without origin"
-pass "beta-deploy.sh + beta-fe-env hard-require same-origin FE build"
+pass "beta-deploy.sh + beta-fe-env hard-require same-origin FE build + hard-reset pin"
 
 grep -qE 'my-ai-pen-backend' "$DEPLOY_SH" || fail "deploy must restart my-ai-pen-backend"
 grep -qE 'my-ai-pen-node4' "$DEPLOY_SH" || fail "deploy must restart my-ai-pen-node4"
@@ -141,7 +143,31 @@ pass "beta-deploy workflow: smoke gate + SHA pin + SSH, no business secrets"
 
 grep -q 'check-beta-deploy-contract' "$SMOKE_WF" "$DEPLOY_WF" \
   || fail "CI must invoke check-beta-deploy-contract.sh"
-pass "CI invokes deploy contract check"
+# Phase A: exact command needles (not job-name-only / loose alternates)
+grep -qF 'npm run test:ci-pr' "$SMOKE_WF" || fail "product-smoke must run: npm run test:ci-pr"
+grep -qF 'uv run pytest' "$SMOKE_WF" || fail "product-smoke must run: uv run pytest"
+grep -qF 'npm run test:unit' "$SMOKE_WF" || fail "product-smoke must run: npm run test:unit"
+# product-deep edits must re-run Seam-1
+grep -qF 'product-deep.yml' "$SMOKE_WF" \
+  || fail "product-smoke paths must include .github/workflows/product-deep.yml"
+pass "CI invokes deploy contract check + Phase A command needles"
+
+DEEP_WF="$ROOT/.github/workflows/product-deep.yml"
+[[ -f "$DEEP_WF" ]] || fail "missing product-deep workflow (Phase B scaffold)"
+grep -q 'workflow_dispatch' "$DEEP_WF" || fail "product-deep must support workflow_dispatch"
+# Fail closed: no automatic triggers (dispatch-only invariant for #240)
+if grep -E '^[[:space:]]+(push|pull_request|schedule|workflow_run):' "$DEEP_WF" >/dev/null; then
+  fail "product-deep must not declare push/pull_request/schedule/workflow_run (dispatch-only)"
+fi
+# Deep lane must never gate CD
+if grep -q 'product-deep' "$DEPLOY_WF"; then
+  fail "beta-deploy must not reference product-deep (deep CI must not gate CD)"
+fi
+# No business secrets in deep workflow (same policy as deploy workflow)
+if grep -qE 'JWT_SECRET|TUNNEL_TOKEN|LLM_API_KEY|secrets\.' "$DEEP_WF"; then
+  fail "product-deep must not reference business secrets / secrets.* (LLM reserved off)"
+fi
+pass "product-deep is dispatch-only scaffold and does not gate beta-deploy"
 
 [[ -f "$RUNBOOK" ]] || fail "missing docs/deploy/beta-bootstrap.md"
 grep -qiE 'Cloudflare|Access|TUNNEL' "$RUNBOOK" || fail "runbook must cover Tunnel/Access"
