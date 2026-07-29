@@ -27,9 +27,31 @@ for envf in /etc/my-ai-pen/beta.env /etc/my-ai-pen/tunnel.env "$REPO_ROOT/platfo
 done
 
 echo "==> 1. git fetch + checkout"
-git fetch origin
+# Host may be a shallow/single-branch clone (bootstrap depth=1). Deepen + fetch
+# the smoke SHA so `git checkout DEPLOY_SHA` works under GitHub Actions CD.
+git remote set-branches --add origin "${BRANCH}" 2>/dev/null || true
+git fetch origin "${BRANCH}" --prune
+# Unshallow if possible so arbitrary main SHAs are reachable
+if git rev-parse --is-shallow-repository 2>/dev/null | grep -qx true; then
+  git fetch --unshallow origin 2>/dev/null \
+    || git fetch --deepen=200 origin "${BRANCH}" 2>/dev/null \
+    || true
+fi
+
 if [[ -n "${DEPLOY_SHA}" ]]; then
   echo "    pin DEPLOY_SHA=${DEPLOY_SHA}"
+  # GitHub allows fetch-by-SHA when the commit is on the remote
+  if ! git cat-file -e "${DEPLOY_SHA}^{commit}" 2>/dev/null; then
+    git fetch origin "${DEPLOY_SHA}" 2>/dev/null \
+      || git fetch origin "${BRANCH}" 2>/dev/null \
+      || true
+  fi
+  if ! git cat-file -e "${DEPLOY_SHA}^{commit}" 2>/dev/null; then
+    echo "ERROR: DEPLOY_SHA ${DEPLOY_SHA} not present after fetch (shallow clone or missing commit)" >&2
+    git rev-parse --is-shallow-repository 2>/dev/null || true
+    git log -3 --oneline 2>/dev/null || true
+    exit 1
+  fi
   git checkout --detach "${DEPLOY_SHA}"
 else
   echo "    branch origin/${BRANCH} (no DEPLOY_SHA pin)"
