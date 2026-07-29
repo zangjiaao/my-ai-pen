@@ -49,7 +49,8 @@ This product is an **AI-assisted** security testing workbench. Operators and int
    - Create Tunnel → public hostname → **`http://127.0.0.1:8080`** (Caddy)  
    - **Access** application allowlist (emails / IdP) on that hostname  
    - Copy tunnel token to host `platform/.env` as `TUNNEL_TOKEN=...` (mode `600`)  
-   - **Firewall:** do not publish host `:8080` / `:8000` / DB ports to the public internet (Caddy binds `127.0.0.1:8080`; tunnel uses host network to loopback).
+   - **Firewall:** do not publish host `:8080` / `:8000` / DB ports to the public internet (Caddy binds `127.0.0.1:8080`; tunnel uses host network to loopback).  
+   - **White screen after Access login:** production FE build strips `crossorigin` on module tags so Access cookies are sent for `/assets/*`. Rebuild FE after pull if you still see a blank page.
 7. **Public origin for FE build** in `/etc/my-ai-pen/beta.env`:
    ```bash
    BETA_PUBLIC_ORIGIN=https://YOUR_PUBLIC_HOSTNAME

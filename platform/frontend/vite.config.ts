@@ -6,7 +6,18 @@ export default defineConfig(({ mode }) => {
   const backendUrl = env.VITE_BACKEND_URL || "http://localhost:8000";
 
   return {
-    plugins: [react()],
+    plugins: [
+      react(),
+      // Cloudflare Access: module scripts with crossorigin=anonymous omit cookies, so
+      // CF Access returns 302 HTML for /assets/*.js → white screen after Access login.
+      // Same-origin app does not need CORS mode for these tags.
+      {
+        name: "strip-crossorigin-for-cf-access",
+        transformIndexHtml(html) {
+          return html.replace(/\s+crossorigin(?:="[^"]*")?/gi, "");
+        },
+      },
+    ],
     server: {
       host: "0.0.0.0",
       port: 5173,
