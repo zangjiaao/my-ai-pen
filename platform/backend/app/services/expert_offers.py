@@ -1,9 +1,14 @@
-"""Node expert offers: default pentest, install/uninstall, engagement gate, billing hooks.
+"""Node expert offers: install/uninstall, engagement gate, billing hooks.
 
-Node is a container; experts are installable packs listed in ``node.config.offers``.
-Pack **content** lives in the shared ``experts/`` catalog; platform offers are the
-permission/billing layer. Assignment must carry structured engagement/role (no free-text NLP).
-Billing events are structured hooks only — no payment provider.
+Node is a container; experts are listed in ``node.config.offers`` (UI source of truth).
+Pack **content** lives under ``experts/`` and must also exist on the Node install root
+(``node4/installed-experts``). Product path keeps both in sync:
+
+- UI install/uninstall → platform updates offers **and** pushes ``expert_install`` /
+  ``expert_uninstall`` / ``expert_sync`` over the node WebSocket when online.
+- Node reconnect → platform pushes ``expert_sync`` so filesystem matches offers.
+
+Assignment still uses structured engagement/role (no free-text NLP). Billing hooks only.
 """
 from __future__ import annotations
 

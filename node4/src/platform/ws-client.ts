@@ -47,6 +47,16 @@ export class PlatformWSClient {
         attempt = 0;
         console.log(`[node4] websocket connected: ${this.url}`);
         this.flushOutboundQueue();
+        // Notify product handlers (expert sync / status) on every reconnect.
+        for (const handler of this.handlers.get("ws_open") || []) {
+          try {
+            await handler({ type: "ws_open" });
+          } catch (err) {
+            console.warn(
+              `[node4] ws_open handler error: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }
         await new Promise<void>((resolve) => {
           if (!this.ws) return resolve();
           this.ws.onmessage = (event) => void this.dispatch(String(event.data));

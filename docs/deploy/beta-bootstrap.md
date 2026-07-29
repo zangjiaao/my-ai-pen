@@ -19,7 +19,7 @@ This product is an **AI-assisted** security testing workbench. Operators and int
 | `/opt/my-ai-pen` | Git checkout (may symlink onto data disk) |
 | `/data/docker` | Docker `data-root` (recommended when root disk is small) |
 | `platform/backend/.env` | Backend secrets (host only) |
-| `node4/.env` | Node token + model keys (host only) |
+| `node4/.env` | `NODE_TOKEN` + model keys; `PLATFORM_WS_URL=ws://127.0.0.1:8000/ws` (path is `/ws`, not `/ws/node`) |
 | `platform/.env` | Compose vars: DB/MQ passwords, `TUNNEL_TOKEN` |
 | `/etc/my-ai-pen/beta.env` | **Required for public beta FE build:** `BETA_PUBLIC_ORIGIN=https://your.domain` |
 
@@ -79,8 +79,9 @@ This product is an **AI-assisted** security testing workbench. Operators and int
    curl -fsS http://127.0.0.1:8000/api/health
    curl -fsS http://127.0.0.1:8080/api/health
    ```
-10. **Register Node4** in platform UI → put token in `node4/.env` → restart node4 unit.
-11. **GitHub Actions CD** (optional after first green path)  
+10. **Register Node4** in platform UI (or API) → put token in `node4/.env` → restart node4 unit.  
+11. **Experts (UI = on-disk):** Install from **节点详情** in the product UI (or API). Platform records offers **and** pushes `expert_install` / `expert_sync` over the node WebSocket so packs land in `node4/installed-experts`. Offline nodes receive `expert_sync` on next connect. `beta-deploy.sh` also runs `expert-cli install pentest` as a safety net.  
+12. **GitHub Actions CD** (optional after first green path)  
     - Secrets: `BETA_SSH_HOST`, `BETA_SSH_PORT`, `BETA_SSH_USER`, `BETA_SSH_KEY` only  
     - Business secrets stay on host  
     - `beta-deploy` runs after **product-smoke** succeeds on `main` **push**, pins `DEPLOY_SHA` to the smoke commit  

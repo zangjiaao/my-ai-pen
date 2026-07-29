@@ -302,11 +302,32 @@ async def install_node_expert(
     )
     await db.commit()
     await db.refresh(n)
+    # UI "installed" must mean pack files on the Node, not only platform offers.
+    pack = str(detail.get("expert_id") or body.expert_id or "").strip()
+    node_delivery = {"delivered": False, "reason": "offline"}
+    try:
+        from app.ws import router as ws_router
+
+        node_delivery = await ws_router.push_node_expert_command(
+            str(n.id),
+            op="expert_install",
+            pack_id=pack,
+        )
+        # Also push full offers list so node can reconcile idempotently.
+        await ws_router.push_expert_sync_for_node(str(n.id))
+    except Exception as e:
+        node_delivery = {"delivered": False, "reason": str(e)}
     return {
         "ok": True,
         "node_id": str(n.id),
         "offers": effective_offers(n.config),
         "billing": detail,
+        "node_delivery": node_delivery,
+        "note": (
+            None
+            if node_delivery.get("delivered")
+            else "Offer saved; pack files will install when the node is online (auto expert_sync)."
+        ),
     }
 
 
@@ -333,11 +354,25 @@ async def uninstall_node_expert(
     )
     await db.commit()
     await db.refresh(n)
+    pack = str(detail.get("expert_id") or expert_id or "").strip()
+    node_delivery = {"delivered": False, "reason": "offline"}
+    try:
+        from app.ws import router as ws_router
+
+        node_delivery = await ws_router.push_node_expert_command(
+            str(n.id),
+            op="expert_uninstall",
+            pack_id=pack,
+        )
+        await ws_router.push_expert_sync_for_node(str(n.id))
+    except Exception as e:
+        node_delivery = {"delivered": False, "reason": str(e)}
     return {
         "ok": True,
         "node_id": str(n.id),
         "offers": effective_offers(n.config),
         "billing": detail,
+        "node_delivery": node_delivery,
     }
 
 

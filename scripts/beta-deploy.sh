@@ -76,9 +76,13 @@ npm ci
 npm run build
 cd "$REPO_ROOT"
 
-echo "==> 5. node4: npm ci"
+echo "==> 5. node4: npm ci + ensure expert packs on disk"
 cd "$REPO_ROOT/node4"
 npm ci
+# UI offers alone do not copy pack files — install catalog packs used in product beta.
+if [[ -f src/expert-cli.ts ]]; then
+  npx tsx src/expert-cli.ts install pentest || echo "WARN: expert-cli install pentest failed"
+fi
 cd "$REPO_ROOT"
 
 echo "==> 6. systemctl restart + health"

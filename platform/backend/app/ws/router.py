@@ -300,6 +300,61 @@ async def revoke_node_connection(node_id: str, reason: str = "node revoked"):
             pass
     await _update_node_status(node_id, "offline")
 
+
+async def push_node_expert_command(
+    node_id: str,
+    *,
+    op: str,
+    pack_id: str | None = None,
+    offers: list[str] | None = None,
+) -> dict:
+    """Push expert pack command to a live node WebSocket.
+
+    op: expert_install | expert_uninstall | expert_sync
+    Returns {delivered: bool, reason?: str}. Offline nodes get delivered=False;
+    they will receive expert_sync on next connect.
+    """
+    nid = str(node_id or "").strip()
+    ws = node_connections.get(nid)
+    if not ws:
+        return {"delivered": False, "reason": "offline"}
+    msg: dict = {"type": str(op or "").strip()}
+    if pack_id:
+        pid = str(pack_id).strip()
+        msg["pack_id"] = pid
+        msg["expert_id"] = pid
+    if offers is not None:
+        msg["offers"] = [str(x) for x in offers]
+    try:
+        await ws.send_text(json.dumps(msg, ensure_ascii=False))
+        return {"delivered": True}
+    except Exception as e:
+        print(f"[WS] push_node_expert_command failed node={nid[:8]} op={op}: {e}")
+        return {"delivered": False, "reason": str(e)}
+
+
+async def push_expert_sync_for_node(node_id: str) -> dict:
+    """Load platform offers for node and push expert_sync so filesystem matches UI."""
+    from app.services.expert_offers import effective_offers
+
+    nid = str(node_id or "").strip()
+    offers: list[str] = []
+    try:
+        from app.db.base import async_session
+        from app.models.node import Node
+
+        async with async_session() as db:
+            result = await db.execute(select(Node).where(Node.id == uuid.UUID(nid)))
+            node = result.scalar_one_or_none()
+            if not node:
+                return {"delivered": False, "reason": "unknown_node"}
+            offers = list(effective_offers(node.config))
+    except Exception as e:
+        print(f"[WS] push_expert_sync load offers failed: {e}")
+        return {"delivered": False, "reason": str(e)}
+    return await push_node_expert_command(nid, op="expert_sync", offers=offers)
+
+
 async def _bind_conversation_to_node(conv_id: str, node_id: str, *, active_task_id: str | None = None):
     try:
         from app.db.base import async_session
@@ -649,6 +704,17 @@ async def _settle_running_conversations_for_node(node_id: str, reason: str = "no
 
 async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, conv_id: str | None) -> None:
     """Process one agent-node websocket message. Must not raise into the receive loop."""
+    # Node reports physical pack install state (after expert_sync / expert_install).
+    if msg.get("type") == "experts_status" and client_id:
+        installed = msg.get("installed") or msg.get("effective") or []
+        if isinstance(installed, list):
+            print(
+                f"[WS] experts_status node={client_id[:8]} "
+                f"installed={','.join(str(x) for x in installed) or 'none'} "
+                f"ok={msg.get('ok')} action={msg.get('action')}"
+            )
+        return
+
     if conv_id:
         msg["agent_node_id"] = client_id
         sticky_eng = await _conversation_task_engagement(conv_id)
@@ -4218,6 +4284,12 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                 pass
         await _update_node_status(client_id, "online", ip=str(ws.client.host) if ws.client else None)
         print(f"[WS] NODE ONLINE: {client_id[:8]} (total nodes: {len(node_connections)})")
+        # Reconcile UI offers → node filesystem packs (install if missing).
+        try:
+            sync_result = await push_expert_sync_for_node(client_id)
+            print(f"[WS] expert_sync to {client_id[:8]}: {sync_result}")
+        except Exception as e:
+            print(f"[WS] expert_sync on online failed: {e}")
 
     try:
         while True:
