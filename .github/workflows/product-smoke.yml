@@ -1,4 +1,5 @@
-# Product path smoke (platform + node4). Does not scan research/ or legacy node trees.
+# Product path smoke (platform + node4) + beta deploy contract (Spec #231).
+# Does not scan research/ or legacy node trees.
 name: product-smoke
 
 on:
@@ -8,15 +9,34 @@ on:
       - "platform/**"
       - "node4/**"
       - "experts/**"
+      - "deploy/**"
+      - "scripts/beta-deploy.sh"
+      - "scripts/check-beta-deploy-contract.sh"
+      - "docs/deploy/**"
+      - "docs/specs/ci-cd.md"
       - ".github/workflows/product-smoke.yml"
+      - ".github/workflows/beta-deploy.yml"
   pull_request:
     paths:
       - "platform/**"
       - "node4/**"
       - "experts/**"
+      - "deploy/**"
+      - "scripts/beta-deploy.sh"
+      - "scripts/check-beta-deploy-contract.sh"
+      - "docs/deploy/**"
+      - "docs/specs/ci-cd.md"
       - ".github/workflows/product-smoke.yml"
+      - ".github/workflows/beta-deploy.yml"
 
 jobs:
+  beta-deploy-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check beta deploy contract (Seam 1)
+        run: bash scripts/check-beta-deploy-contract.sh
+
   frontend-build:
     runs-on: ubuntu-latest
     defaults:
@@ -47,5 +67,4 @@ jobs:
       - run: npm ci
       - run: npx tsx src/node4-smoke.ts
         env:
-          # No live LLM required for unit smokes
           CI: "1"

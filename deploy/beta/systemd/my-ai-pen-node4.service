@@ -1,0 +1,20 @@
+[Unit]
+Description=my-ai-pen Node4 product runtime (beta)
+After=network-online.target my-ai-pen-backend.service docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=deploy
+Group=deploy
+WorkingDirectory=/opt/my-ai-pen/node4
+EnvironmentFile=-/opt/my-ai-pen/node4/.env
+Environment=PATH=/usr/local/bin:/usr/bin
+Environment=HOME=/home/deploy
+# Product path: tsx entry (Spec #231)
+ExecStart=/usr/bin/npx tsx src/main.ts
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
