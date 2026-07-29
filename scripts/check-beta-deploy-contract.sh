@@ -77,7 +77,8 @@ fi
 pass "compose publishes DB/MQ on loopback when ports are mapped"
 
 [[ -f "$CADDY" ]] || fail "missing Caddyfile"
-grep -qE '127\.0\.0\.1:8080' "$CADDY" || fail "Caddyfile must bind 127.0.0.1:8080 (not all interfaces)"
+grep -qE 'http://127\.0\.0\.1:8080|127\.0\.0\.1:8080' "$CADDY" || fail "Caddyfile must bind 127.0.0.1:8080 (not all interfaces)"
+grep -qE 'auto_https off|http://127\.0\.0\.1:8080' "$CADDY" || fail "Caddyfile must disable auto HTTPS on loopback HTTP origin"
 grep -qE 'handle /api' "$CADDY" || fail "Caddyfile must route /api"
 grep -qE 'handle /ws' "$CADDY" || fail "Caddyfile must route /ws"
 grep -qiE 'file_server|try_files' "$CADDY" || fail "Caddyfile must serve static UI"
