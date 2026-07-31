@@ -12,7 +12,9 @@
 | [Research: Our platform SOT Graph hypothesis evidence model](https://github.com/zangjiaao/my-ai-pen/issues/263) | [`research-platform-sot-graph-hypothesis.md`](./research-platform-sot-graph-hypothesis.md) |
 | [Research: Blackboard term vs Black-cat vs our shared state](https://github.com/zangjiaao/my-ai-pen/issues/264) | [`research-blackboard-term-alignment.md`](./research-blackboard-term-alignment.md) |
 
-**Charting locks (map #261):** ADR 0001 Graph × Pi stays locked; technique/CVE encyclopedias are not architecture learnings; author tweet ≠ our benchmark; judgments are **value advice**, not merge commitments.
+**Charting locks (map #261):** ADR 0001 Graph × Pi stays locked; author tweet ≠ our benchmark; judgments are **value advice**, not merge commitments.
+
+**Two-leg model (owner refinement after #265):** dig quality needs **process** *and* **domain knowledge**. Rejecting “整包 technique 百科当 gate SOT / answer key” is **not** “Agent 可以零知识只靠假设”. Black-cat effect claims are best read as **hypothesis loop + thick techniques + thin load**, not tracker alone.
 
 ---
 
@@ -20,11 +22,12 @@
 
 | Question | Answer |
 |----------|--------|
-| What is Black-cat? | A **Claude Code skill**: hypothesis-first **state machine** + optional **Engagement Tracker** markdown SOT + ≤2 technique file routing + evidence chain. Not a multi-tenant platform; not a host Graph runner. |
-| What are we? | **Node4 Graph × Pi + platform**: host-owned **Product state** (Finding Store, surface ledger, settlement, Case handoff), Hard Graph stages/packages/Feedback, hypothesis **steered** by mission/`work.md`/stage intent — not a named Hypothesis Store. |
+| What is Black-cat? | A **Claude Code skill**: hypothesis-first **state machine** + optional **Engagement Tracker** markdown SOT + **thick** `techniques/*.md` content loaded with **≤2 explicit signal routing** + evidence chain. Not a multi-tenant platform; not a host Graph runner. |
+| What are we? | **Node4 Graph × Pi + platform**: host-owned **Product state** (Finding Store, surface ledger, settlement, Case handoff), Hard Graph stages/packages/Feedback, hypothesis **steered** by mission/`work.md`/stage intent — not a named Hypothesis Store. Expert pack already has **skills + refs** (attack-class oriented); depth/breadth and **routing discipline** vs Black-cat’s six technique books are an open product risk, not a measured lab result. |
+| Two legs | **Process leg** = how work is remembered and cycled (queue, disprove, gates, SOT). **Knowledge leg** = what hypotheses the agent can *form* (model priors + loadable skills/techniques + signal recognition). **Already-have** on the process/SOT side does **not** guarantee **breadth of attack surface tested**. |
 | Is either a classic **blackboard**? | **No.** Classic = KS + shared board + control (Nii 1986). Black-cat = single-agent SM + tracker. We = blackboard-**like** multi-writer Product state under **Graph + host control**. Prefer product vocabulary; avoid 「黑板架构」 as product name. |
-| Do we already “have shared state”? | **Yes — stronger than Black-cat’s tracker** for multi-actor, multi-stage, fail-closed booking. |
-| Where might dig quality still learn? | **Hypothesis lifecycle visibility** (Active / Killed / Deferred with prove/disprove/revisit), **Decision Log**, **verification-mode ritual**, **stall→defer**, **cleanup ledger**, **stricter progressive skill context** — mostly **pack harness / Product-state shapes**, not kernel replacement. |
+| Do we already “have shared state”? | **Yes — stronger than Black-cat’s tracker** for multi-actor, multi-stage, fail-closed booking (“测到的能诚实落地”). That is **not** the same as “会想到去测什么”. |
+| Where dig quality still learns | **Process:** hypothesis lifecycle (Active/Killed/Deferred + prove/disprove/revisit), Decision Log, verification ritual, stall→defer, cleanup. **Knowledge:** progressive **signal-triggered** technique/skill library (厚内容、薄上下文), attack-class families not answer keys; pair with P0 queue so “还能立哪些类” has somewhere to land. Not kernel replacement. |
 
 ---
 
@@ -42,7 +45,8 @@
 | **Disproof** | Killed + revisit conditions; not delete | deadend / package fail / Store reject; honest partial | We lack first-class “killed hypothesis with revisit” board |
 | **Attack surface** | Tracker Attack Surface zone (append) | `surfaces/ledger.json` status machine | **We already stronger** |
 | **Decisions** | Decision Log at gates (options / chose / why) | Boss loop actionable lists; L0 machine fields; little durable “options considered” log | Learnable as observability / captain memory |
-| **Context routing** | Signal → 1 technique file; max 2; no preload | Skills + progressive load principle; Graph stage tool profiles; risk of encyclopedia prompts | Learn **discipline**, not CVE lists |
+| **Context routing** | Signal → 1 technique file; max 2; no preload | Skills + progressive load principle; Graph stage tool profiles; risk of encyclopedia prompts | Learn **routing discipline** |
+| **Domain knowledge surface** | Six large `techniques/*.md` (web/ad/cloud/db/evasion/reversing) — long-tail methods, CVE chains, escalate paths | Pack `skills/*` + `refs/{payloads,components,chains}` — attack-class oriented; not a measured parity vs Black-cat thickness | **Knowledge leg:** content as **loadable** pack assets, not gate SOT; thin load ≠ thin library |
 | **Multi-agent** | Single agent loop | Main + package subagents; idle pool; Case multi-expert `case_context` | We are multi-actor; Black-cat is not |
 | **Failure / back-edge** | Disprove/fail/new signal → back to earlier SM state | Stage L0 fail → Main re-dispatch/abandon; blocked → booking-only tail + close-out | Different back-edge *shape*; both non-pipeline |
 | **Cleanup** | Cleanup ledger before REPORT | RoE/destructive gates; no first-class engagement cleanup ledger like Black-cat | Relevant for deep/postex graphs |
@@ -67,16 +71,30 @@ Judgments below assume **Graph × Pi remains product path**. “Where it would s
 
 ### 2.1 值得借鉴 (worth learning)
 
+Split into **process** and **knowledge**. Only process → better honesty on a **narrow** hypothesis space. Only knowledge without queue → more ideas, more thrash / forgotten disproofs.
+
+#### Process leg
+
 | # | Mechanism | Why it may help dig quality | Priority | Where it would sit |
 |---|-----------|----------------------------|----------|-------------------|
-| L1 | **Explicit hypothesis queue** with Signal / Test / **Prove if** / **Disprove if** / status Active→Confirmed\|Killed\|Deferred | Agents (and Main) thrash less when candidates are structured; disproof becomes reusable knowledge; closer to author-claimed “human-like” loop | **P0** | Product state or stage-visible Store sibling (not chat); pack `work.md` + Main package framing; optional Graph settlement honesty later |
-| L2 | **Disprove ≠ failure + revisit conditions** (Killed retained) | Prevents “sqlmap negative ⇒ no SQLi forever”; enables rotation with memory | **P0** | Same as L1; package terminal types / deadend notes carry revisit text |
-| L3 | **Decision Log** (options / chose / why) at branch points | Improves captain strategy and post-hoc audit; boss loop today is actionable but weak on *alternatives considered* | **P1** | Stage captain Product-state log or engagement close-out appendix; not Runtime transcript as SOT |
-| L4 | **Stall policy** (N rounds no progress → Deferred; time-budget re-eval) | Cuts endless OODA on one path; Black-cat’s “3 rounds” is a clear agent rule | **P1** | Pack harness + optional host soft signal on package waves / stage budget; avoid hardcoding vuln expectations |
-| L5 | **Verification-mode ritual** before confirm-class work | Cheap anti-confirmation-bias prompt at VALIDATE / validate_book entry | **P1** | Pack `work.md` / book-stage prompt; do **not** replace book-path L0 |
-| L6 | **Progressive technique/skill load** (default 1, max 2 active deep refs) | Author’s core claim: heavy frameworks hurt agents; sparse context helps | **P1** | Pack skill routing + harness “lean system prompt / progressive skill load” already pointed this way — **tighten enforcement** |
-| L7 | **Cleanup ledger** for engagement artifacts | Matters for postex / lateral honesty and RoE close-out | **P2** | Deep graph (`redteam_deep`) + close-out fields; Default seat low need |
-| L8 | **ENUMERATE bar** (e.g. ≥2 Active with disprove conditions before deep VALIDATE) | Forces hypothesis diversity before exploit tunnel vision | **P2** | Soft harness in surface→class_probe handoff language; **not** a fixed finding-count gate |
+| L1 | **Explicit hypothesis queue** with Signal / Test / **Prove if** / **Disprove if** / status Active→Confirmed\|Killed\|Deferred | Structures “立了什么 / 证伪了什么”; closer to human OODA; feeds Main packages | **P0** | Product state or stage-visible sibling (not chat); pack `work.md` + package framing |
+| L2 | **Disprove ≠ failure + revisit conditions** (Killed retained) | “sqlmap negative ⇒ ORM / other path” style rotation with memory | **P0** | Same as L1; deadend notes carry revisit text |
+| L3 | **Decision Log** (options / chose / why) at branch points | Captain strategy + audit; boss loop is weak on *alternatives considered* | **P1** | Stage captain Product-state log / close-out appendix |
+| L4 | **Stall policy** (N rounds no progress → Deferred; time-budget re-eval) | Cuts endless thrash on one path | **P1** | Pack harness + optional host soft signal; no expected-vuln counts |
+| L5 | **Verification-mode ritual** before confirm-class work | Anti-confirmation bias at VALIDATE / validate_book | **P1** | Pack prompts; does **not** replace book-path L0 |
+| L7 | **Cleanup ledger** for engagement artifacts | Postex / lateral / RoE honesty | **P2** | `redteam_deep` + close-out |
+| L8 | **ENUMERATE bar** (≥2 Active with disprove conditions before deep tunnel) | Hypothesis diversity before exploit fixation | **P2** | Soft harness surface→class_probe; **not** fixed finding-count gate |
+
+#### Knowledge leg (owner refinement — first-class, not “out of architecture”)
+
+| # | Mechanism | Why it may help dig quality | Priority | Where it would sit |
+|---|-----------|----------------------------|----------|-------------------|
+| L6 | **Progressive load discipline** — library may be thick; **active context default 1, max 2** deep packs; no full encyclopedia in system prompt | Author’s “framework becomes burden” lesson; sparse *working set* | **P0** | Pack skill/refs routing + harness progressive load — **enforce**, not only document |
+| L9 | **Signal-triggered domain content** — recon/surface signals load attack-class / technique families (JWT → jwt methods pack; GraphQL → gql pack), **not** “this target must have N JWT vulns” | Broadens **hypothesis space** beyond model Top-ish priors; matches Black-cat routing table spirit | **P0** | Expert pack `skills/` + `refs/` + optional technique books; Agent or structured stage chooses load — **no** platform free-text keyword invent of engagement (AGENTS.md) |
+| L10 | **Thick technique depth where product needs breadth** — long-tail methods, escalate chains, AD/cloud only when authorized signal/task | Without content, process only optimizes common classes; Black-cat “效果好” is plausibly **loop + thickness** together | **P0–P1** | Curated pack content (human-maintained); depth by seat/graph (app vs redteam_deep); **never** gate SOT or answer key |
+| L11 | **Restricted auto-load for heavy domains** (Black-cat: ad/evasion only explicit) | Avoids context explosion and unauthorized depth | **P1** | Same as L9 with hard “explicit task/signal only” for AD/postex/evasion |
+
+**Implication for “面不够广”:** as a **product risk judgment** (not a lab scorecard): if Expert loadable knowledge is thinner or poorly routed vs Black-cat’s six technique books, coverage will skew toward model-common classes even with strong Graph/SOT. Fix = **L6+L9+L10 alongside L1+L2**, not either alone.
 
 ### 2.2 已具备不必学 (already covered — do not copy as-if-new)
 
@@ -86,12 +104,13 @@ Judgments below assume **Graph × Pi remains product path**. “Where it would s
 | Multi-writer contribution under control | Packages → Store/ledger; Main books; host gates | Agent Graph + Feedback |
 | Fail-closed evidence for booking | Book-path L0; severity integrity; invent-without-id | Finding Store / `finding(confirm)` |
 | Hypothesis-driven *language* | mission, `work.md`, `class_probe` success, AGENTS harness-over-restriction | Steer, don’t answer-key |
+| Some attack-class skills + refs | `experts/pentest/skills/*`, `refs/payloads|components|chains` | **Not** “zero knowledge”; parity vs Black-cat thickness **unmeasured** |
 | Non-linear recovery | Boss loop; honest partial; booking-only tail; mandatory close-out | Feedback L0/L1 |
-| Attack-surface coverage truth | surface ledger status machine | Stronger than tracker zone |
+| Attack-surface coverage truth | surface ledger status machine | Stronger than tracker zone — coverage *of surfaces*, not *of technique families* |
 | Case multi-run continuity | Handoff Truth+Next+Delivery / case_context | Beyond single skill workspace |
 | Seat separation | Default never Expert Graph | Product seats |
 
-**Implication:** Adopting Black-cat’s **markdown tracker as product SOT** would be a **regression** relative to host Product state — learn **queue semantics**, not the file format.
+**Implication:** Adopting Black-cat’s **markdown tracker as product SOT** would be a **regression** — learn **queue semantics**, not the file format. Adopting **zero domain content** would also be a regression — learn **thick library + thin load**, not “process only.”
 
 ### 2.3 不建议学 (do not learn / reject for product)
 
@@ -99,41 +118,47 @@ Judgments below assume **Graph × Pi remains product path**. “Where it would s
 |---|------------|------------|----------|
 | R1 | Replace Graph × Pi with skill-only Claude Code harness as product kernel | Conflicts with ADR 0001, multi-tenant platform, host settlement, Default/Expert seats | **Hard reject** |
 | R2 | Brand product as 「黑板架构」 | Classic blackboard ≠ us; confuses with Black-cat tracker and X comment | **Hard reject** (vocabulary) |
-| R3 | Port Black-cat `techniques/*.md` CVE/checklist encyclopedia into product as SOT | Content ≠ capability; ages fast; risks answer-key / tool-first behavior; AGENTS harness-over-restriction | **Reject as architecture** (optional human-curated skills later, separate effort) |
+| R3 | Port Black-cat techniques **as gate SOT / fixed module list / expected vuln counts** | Answer-key risk; harness-over-restriction; content ages if treated as product truth | **Reject this *use*** of content — **not** reject having loadable domain knowledge (see L9–L10) |
+| R3b | One-shot dump of full technique encyclopedia into system prompt | Context burden (Black-cat author’s own anti-pattern) | **Hard reject** |
 | R4 | Agent-owned markdown Engagement Tracker as **gate SOT** | Bypasses host settlement; dual SOT with Store/ledger | **Reject** |
-| R5 | Focused mode (no tracker) as Expert DoD | Expert structured work is Graph-only with Product state; Focused is fine as *lab skill habit*, not product Expert path | **Reject for Expert DoD** |
-| R6 | Treat author tweet/comments as proof of superiority without our lab | No shared benchmark; selection bias | **Reject as evidence** |
-| R7 | Classic multi-KS blackboard control (opportunistic KS bidding) as V1 runtime | Not what Black-cat ships; not our Graph model; large redesign for unclear gain | **Reject / defer outside this map** |
+| R5 | Focused mode (no tracker) as Expert DoD | Expert structured work is Graph-only with Product state | **Reject for Expert DoD** |
+| R6 | Treat author tweet/comments as proof of superiority without our lab | No shared benchmark | **Reject as evidence** |
+| R7 | Classic multi-KS blackboard control as V1 runtime | Not Black-cat; not our Graph model | **Reject / defer** |
+| R8 | Assume “hypothesis queue alone” yields Black-cat-like breadth | Hypothesis space is bounded by knowledge + signals | **Reject as product plan** |
 
 ---
 
 ## 3. Priority synthesis (if a future Spec map opens)
 
-Recommended **first Spec theme** (single map, not this one):
+Two **parallel** Spec themes (can be one map with two workstreams, or two maps):
 
-> **Hypothesis working memory on Product state** (L1+L2): Active candidates with prove/disprove/revisit; package and stage prompts consume it; deadend/Killed retained; **no** replacement of Finding Store booking path.
+1. **Process — Hypothesis working memory** (L1+L2): Active/Killed/Deferred with prove/disprove/revisit on Product state; packages consume it; **no** replace Finding Store booking path.  
+2. **Knowledge — Progressive technique/skills** (L6+L9+L10): thick attack-class library + signal-triggered load (max 2 active deep); restricted AD/postex/evasion; content never gate SOT or “N vulns expected.”
 
-Then: Decision Log + stall policy (L3+L4); verification ritual + skill load discipline (L5+L6) can be pack-only PRs without new SOT if desired.
+Then: Decision Log + stall (L3+L4); verification ritual (L5); cleanup (L7).
 
-**Do not open** a Spec to “implement blackboard” or “merge Black-cat skill.”
+**Do not open** a Spec to “implement blackboard,” “merge Black-cat skill wholesale,” or “answer-key module lists.”
 
 ---
 
 ## 4. Open questions (fog for later — not decided here)
 
-1. **Graduate P0 items to a product Spec map?** Owner choice after reading this file.  
-2. **Lab / benchmark** comparing (a) current Graph × Pi pack, (b) same + hypothesis queue, (c) Black-cat skill alone — optional; not required to act on P1 pack rituals.  
-3. **Default vs Expert differentiation:** Default may only need lean assist; hypothesis queue is Expert Graph-centric.  
-4. **How much of L1 is host-enforced vs prompt-steered?** Host enforcement raises dig honesty but costs design; pure prompt is closer to Black-cat’s skill model (weaker guarantees).  
-5. **Cleanup ledger** scope: only `redteam_deep` / postex RoE, or all Expert Graphs?
+1. **Graduate P0 process + knowledge together?** Owner choice — recommended as **paired**, not either-or.  
+2. **Lab / benchmark** (a) current pack, (b) + hypothesis queue, (c) + thicker progressive knowledge, (d) Black-cat skill alone — optional.  
+3. **Default vs Expert:** knowledge + queue are Expert Graph-centric; Default stays lean.  
+4. **L1 host-enforced vs prompt-steered?**  
+5. **Cleanup ledger** scope: only `redteam_deep`?  
+6. **Content parity audit:** which Black-cat technique families lack a pack skill/ref counterpart (web long-tail, AD, cloud, …) — inventory only, no auto-port.
 
 ---
 
 ## 5. One-page narrative for stakeholders
 
-Black-cat’s public story is not “we invented the blackboard.” It is: **stop tool pipelines; run a hypothesis–evidence loop with back-edges; keep a small, explicit work board; don’t drown the model in frameworks or technique dumps.** A commenter called that 「黑板」 loosely.
+Black-cat’s public story is not “we invented the blackboard.” It is: **stop tool pipelines; run a hypothesis–evidence loop with back-edges; keep a small work board; load thick technique knowledge thinly (≤2); don’t drown the model in frameworks.** A commenter called shared memory 「黑板」 loosely.
 
-Our product already does the hard half of “shared board” better: **host Product state, multi-package writers, surface ledger, Finding Store, Feedback, Case handoff.** Where we are thinner is the **soft half Black-cat is loud about**: a **first-class hypothesis lifecycle** (prove/disprove/kill/defer/revisit), **decision rationale logs**, **stall discipline**, and **ruthless context sparsity**. Those are the high-ROI borrowings for **dig quality** — implemented as **harness + Product-state extensions under Graph × Pi**, not as a skill-only rewrite or a classic blackboard rebrand.
+Our product already does **honest multi-actor shared state** better (Product state, Store, ledger, Feedback, Case handoff): **what gets found can land**. That does **not** by itself expand **what the agent thinks to try**. Breadth comes from **model priors + signal-triggered domain content + tools**; process quality multiplies whatever hypothesis space those provide.
+
+High-ROI borrowings under Graph × Pi: **(1) hypothesis lifecycle on Product state**, **(2) progressive thick skills/techniques with ruthless active-context caps**, plus Decision Log / stall / verify ritual. Not a skill-only rewrite, not a classic blackboard rebrand, not answer keys.
 
 ---
 
@@ -150,5 +175,6 @@ Our product already does the hard half of “shared board” better: **host Prod
 
 - Product code or Spec drafting beyond placement hints.  
 - Reopening ADR 0001.  
-- Merging Black-cat into `experts/`.  
-- Closing map #261 automatically (owner may close when satisfied that destination is met).
+- Merging Black-cat into `experts/` wholesale.  
+- Closing map #261 automatically (owner may close when satisfied that destination is met).  
+- Claiming measured coverage parity with Black-cat without a lab run.
