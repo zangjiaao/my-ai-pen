@@ -9,6 +9,7 @@ import type { ToolRuntime } from "../types.js";
 import { jsonResult, textResult } from "./common.js";
 import { ensureProcessQuality } from "../runtime/package-honesty-host.js";
 import {
+  isHypothesisRuntimeModeOn,
   parseHypothesisPackageOutcomes,
   suggestedCommitFromPackageOutcome,
   type HypothesisStatus,
@@ -19,19 +20,6 @@ function requireMain(runtime: ToolRuntime): string | null {
     return "error: subagent must not mutate hypothesis queue — return structured hypothesis_outcomes; Main commits (Spec #274)";
   }
   return null;
-}
-
-function modeEnabled(runtime: ToolRuntime): boolean {
-  // Stage flag on hardGraphRun when set; missing → allow list presence is not enough for writes
-  // when stage explicitly off. Lifecycle carries current stage id via hardGraphRun.stageId.
-  const stageFlag = runtime.lifecycle.hardGraphRun as
-    | { stageId?: string; hypothesisWorkMode?: boolean }
-    | undefined;
-  if (stageFlag && typeof stageFlag.hypothesisWorkMode === "boolean") {
-    return stageFlag.hypothesisWorkMode === true;
-  }
-  // Free seat / unknown: allow read list only if store exists; writes require mode
-  return Boolean(stageFlag?.hypothesisWorkMode);
 }
 
 export function createHypothesisTool(runtime: ToolRuntime): AgentTool<any> {
@@ -89,8 +77,8 @@ export function createHypothesisTool(runtime: ToolRuntime): AgentTool<any> {
         });
       }
 
-      // Writes require stage hypothesis_work_mode: true (missing/false = off)
-      if (op !== "list" && !modeEnabled(runtime)) {
+      // Writes require runtime mode mirror (stage flag set by executor)
+      if (op !== "list" && !isHypothesisRuntimeModeOn(runtime)) {
         return textResult(
           "error: hypothesis writes require stage hypothesis_work_mode: true (missing/false = off; Spec #274)",
           { isError: true },

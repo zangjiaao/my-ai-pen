@@ -280,6 +280,7 @@ export async function resolveHardGraph(options: {
 /**
  * Spec #274: fail-closed when any stage sets hypothesis_work_mode true without pack availability.
  * Call after resolveHardGraph with pack.capabilities.hypothesis_work_mode.
+ * Thin graph-typed entry over assertHypothesisModeGraphLoad (same semantics).
  */
 export function validateHypothesisWorkModeForGraph(
   graph: HardGraphDefinition,
@@ -290,6 +291,9 @@ export function validateHypothesisWorkModeForGraph(
     packHypothesisAvailable,
   });
 }
+
+/** Re-export canonical load assert for callers that prefer the store module name. */
+export { assertHypothesisModeGraphLoad };
 
 /** Apply allow/deny tool profile to a tool name list (fail-closed deny). */
 export function applyHardGraphToolProfile(

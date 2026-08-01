@@ -10,10 +10,10 @@ import {
   buildHypothesisPromoteSummary,
   formatConfirmedNotSeededProjection,
   formatHypothesisQueueInjection,
+  isHypothesisRuntimeModeOn,
   isHypothesisWorkModeOn,
   parseHypothesisPackageOutcomes,
   reseedHypothesisQueue,
-  stageL0IgnoresHypothesisQueue,
   suggestedCommitFromPackageOutcome,
 } from "./hypothesis-store.js";
 
@@ -145,8 +145,19 @@ assert.equal(offOk.ok, true, "no flag → ok without pack capability");
 // Intent alone does not enable (stage without flag)
 assert.equal(isHypothesisWorkModeOn({ intent: "probe" } as any), false);
 
-// L0 ignores queue — contract marker + fullness cannot be settlement input
-assert.equal(stageL0IgnoresHypothesisQueue(), true);
+// Runtime mode helper — single read of hardGraphRun.hypothesisWorkMode
+assert.equal(isHypothesisRuntimeModeOn({}), false);
+assert.equal(isHypothesisRuntimeModeOn({ lifecycle: {} }), false);
+assert.equal(
+  isHypothesisRuntimeModeOn({ lifecycle: { hardGraphRun: { hypothesisWorkMode: true } } }),
+  true,
+);
+assert.equal(
+  isHypothesisRuntimeModeOn({ lifecycle: { hardGraphRun: { hypothesisWorkMode: false } } }),
+  false,
+);
+
+// L0 ignores queue: settlement inputs do not take HypothesisStore (fullness irrelevant)
 const emptyHyp = new HypothesisStore();
 const fullHyp = new HypothesisStore();
 for (let i = 0; i < 5; i++) {
@@ -157,9 +168,7 @@ for (let i = 0; i < 5; i++) {
     disprove_if: "d",
   });
 }
-// Settlement seam does not take hypothesis store — fullness is irrelevant to L0 contract
 assert.notEqual(emptyHyp.counts().active_n, fullHyp.counts().active_n);
-assert.equal(stageL0IgnoresHypothesisQueue(), true);
 
 // Promote + re-seed into NEW store (no shared mutation)
 const promote = buildHypothesisPromoteSummary(store);

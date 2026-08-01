@@ -195,10 +195,10 @@ export type ToolRuntime = {
      */
     processQuality?: import("./runtime/package-honesty-host.js").ProcessQualityState;
     /**
-     * Spec #274 Wave 2: skill body fingerprints loaded this session (id → body text)
-     * for reload dedupe — not gate SOT.
+     * Spec #274 Wave 2: skill body fingerprints (id → sha256 hex) for reload dedupe.
+     * Not gate SOT; does not store full skill bodies.
      */
-    skillBodiesLoaded?: Record<string, string>;
+    skillBodyFingerprints?: Record<string, string>;
   };
 };
 

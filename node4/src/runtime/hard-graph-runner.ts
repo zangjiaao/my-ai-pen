@@ -35,6 +35,21 @@ export type HardGraphHandoff = {
   completed_stages: string[];
 };
 
+/**
+ * Host-built prompt projections for a stage session (Spec #139 priors, #274 queue/skills).
+ * First-class fields — not cast onto StageExecutorInput at call sites.
+ */
+export type StagePromptExtras = {
+  /** Prior Finding Store seed block for stage system prompt. */
+  priorSnapshot?: string;
+  /** Budgeted hypothesis queue projection when stage mode is on. */
+  hypothesisQueueInjection?: string;
+  /** Host L1 skill catalog (id/name/description only) when skill is on the tool surface. */
+  skillL1CatalogInjection?: string;
+  /** Book-stage informational: confirmed hypotheses not yet in Store. */
+  confirmedNotSeededInjection?: string;
+};
+
 export type StageExecutorInput = {
   stage: HardGraphStageDef;
   stageIndex: number;
@@ -52,7 +67,7 @@ export type StageExecutorInput = {
    * (machine signals only — not L1 prose).
    */
   l0RepairBrief?: string;
-};
+} & StagePromptExtras;
 
 export type StageExecutorOutput = {
   structured?: unknown;
@@ -422,16 +437,9 @@ export async function runHardGraph(options: {
     const maxRetries = Math.max(0, stage.max_retries ?? 1);
     const maxAttempts = maxRetries + 1;
     const toolProfile = stage.tools ?? {};
-    let tools = applyHardGraphToolProfile(options.availableTools, toolProfile);
-    // Spec #274: when stage enables hypothesis work mode, ensure Main hypothesis tool is available
-    // if the pack registered it (socket + flag; not implied by probe intent alone).
-    if (
-      stage.hypothesis_work_mode === true &&
-      options.availableTools.includes("hypothesis") &&
-      !tools.includes("hypothesis")
-    ) {
-      tools = [...tools, "hypothesis"];
-    }
+    // Spec #274: hypothesis tool enablement is graph allowlist only (author stages with
+    // hypothesis_work_mode:true include "hypothesis" in tools.allow). No mid-run re-inject.
+    const tools = applyHardGraphToolProfile(options.availableTools, toolProfile);
 
     let passed = false;
     let lastErrors: string[] = [];

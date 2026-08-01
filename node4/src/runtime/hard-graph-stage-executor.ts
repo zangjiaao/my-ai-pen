@@ -157,16 +157,10 @@ export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope)
   const allowHypothesis = input.tools.includes("hypothesis");
   const hypMode = isHypothesisWorkModeOn(input.stage);
   const intentLines = stageIntentPromptLines(input.stage);
-  // Prior snapshot from graph-run quality (hardGraphRun), not processQuality
-  const priorSeed =
-    (input as StageExecutorInput & { priorSnapshot?: string }).priorSnapshot ||
-    "";
-  const hypothesisBlock =
-    (input as StageExecutorInput & { hypothesisQueueInjection?: string }).hypothesisQueueInjection ||
-    "";
-  const skillL1Block =
-    (input as StageExecutorInput & { skillL1CatalogInjection?: string }).skillL1CatalogInjection ||
-    "";
+  // Typed StagePromptExtras (prior / hyp queue / skill L1) — no cast soup
+  const priorSeed = input.priorSnapshot || "";
+  const hypothesisBlock = input.hypothesisQueueInjection || "";
+  const skillL1Block = input.skillL1CatalogInjection || "";
   return [
     "You are a **Hard Graph stage agent** (Graph × Pi).",
     `Graph: ${input.graphId}  Stage: ${input.stage.id} (index ${input.stageIndex})`,
@@ -242,9 +236,7 @@ export function stageUserPrompt(
       : bookStage
         ? ["", formatFeedbackOkCaptainSurface([]), ""]
         : [];
-  const confirmedNotSeeded =
-    (input as StageExecutorInput & { confirmedNotSeededInjection?: string })
-      .confirmedNotSeededInjection || "";
+  const confirmedNotSeeded = input.confirmedNotSeededInjection || "";
   const footer = bookStage
     ? "Complete this book stage only. Use finding(list) then finding(confirm, finding_id=…) for confirmable Store rows; do not invent ids; do not stop with zero confirms while feedback_ok remain; settle via host/Store (no result.json handoff). Book L0 consumes Store only — hypothesis queue is informational."
     : allowSubagent
@@ -328,7 +320,9 @@ export function buildHardGraphStageChildRuntime(options: {
       hardGraphRun: parent.lifecycle.hardGraphRun,
       panelAgents: sharedPanel,
       processQuality,
-      skillBodiesLoaded: parent.lifecycle.skillBodiesLoaded || (parent.lifecycle.skillBodiesLoaded = {}),
+      skillBodyFingerprints:
+        parent.lifecycle.skillBodyFingerprints ||
+        (parent.lifecycle.skillBodyFingerprints = {}),
     },
   };
   if (allowSubagent) {
@@ -466,20 +460,6 @@ export function createHardGraphStageExecutor(options: {
       const l1 = await loadSkillL1Catalog(parentRuntime.skills, pack.skillIds);
       skillL1CatalogInjection = formatSkillL1CatalogInjection(l1);
     }
-    const systemPrompt = stageSystemPrompt(
-      {
-        ...input,
-        priorSnapshot,
-        hypothesisQueueInjection,
-        skillL1CatalogInjection,
-      } as StageExecutorInput & {
-        priorSnapshot?: string;
-        hypothesisQueueInjection?: string;
-        skillL1CatalogInjection?: string;
-      },
-      task,
-    );
-    // #161 / #192: captain surface — Store feedback_ok ids at book-stage start
     const bookStage = isBookingOnlyStage(input.stage);
     const pqForBook = pqForStage;
     const confirmableAtStart: ConfirmableFeedbackOkRow[] = bookStage
@@ -496,16 +476,18 @@ export function createHardGraphStageExecutor(options: {
     const confirmedNotSeededInjection = bookStage
       ? formatConfirmedNotSeededProjection(pqForBook.hypothesisStore, pqForBook.findingStore)
       : "";
-    const userPrompt = stageUserPrompt(
-      {
-        ...input,
-        confirmedNotSeededInjection,
-      } as StageExecutorInput & { confirmedNotSeededInjection?: string },
-      task,
-      {
-        confirmableFeedbackOk: bookStage ? confirmableAtStart : undefined,
-      },
-    );
+    // Typed StagePromptExtras on StageExecutorInput (no cast)
+    const promptInput: StageExecutorInput = {
+      ...input,
+      priorSnapshot,
+      hypothesisQueueInjection,
+      skillL1CatalogInjection,
+      confirmedNotSeededInjection,
+    };
+    const systemPrompt = stageSystemPrompt(promptInput, task);
+    const userPrompt = stageUserPrompt(promptInput, task, {
+      confirmableFeedbackOk: bookStage ? confirmableAtStart : undefined,
+    });
 
     // Single session promote site (best-effort); absorb only on intentional returns.
     let sessionPromoted = false;

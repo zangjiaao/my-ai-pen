@@ -3,6 +3,11 @@
  * Main books findings; child returns candidates/facts/deadends.
  */
 
+import {
+  parseHypothesisPackageOutcomes,
+  type HypothesisPackageOutcome,
+} from "./hypothesis-store.js";
+
 export type SubagentCandidate = {
   title?: string;
   location?: string;
@@ -28,14 +33,11 @@ export type SubagentFactNote = {
   summary: string;
 };
 
-/** Spec #274: Sub hypothesis package outcomes (Main commits queue — Sub never mutates). */
-export type SubagentHypothesisOutcome = {
-  hypothesis_id?: string;
-  result: "proved" | "disproved" | "inconclusive";
-  evidence_refs?: string[];
-  notes?: string;
-  suggested_revisit_if?: string;
-};
+/**
+ * Spec #274: Sub hypothesis package outcomes (Main commits queue — Sub never mutates).
+ * Canonical type lives in hypothesis-store; re-export alias for package contract readers.
+ */
+export type SubagentHypothesisOutcome = HypothesisPackageOutcome;
 
 export type SubagentStructuredResult = {
   ok: boolean;
@@ -56,8 +58,9 @@ export type SubagentStructuredResult = {
   notes?: string;
   /**
    * Spec #274: optional hypothesis outcomes for Main apply — never auto-committed by host.
+   * Canonical parse: parseHypothesisPackageOutcomes (hypothesis-store).
    */
-  hypothesis_outcomes?: SubagentHypothesisOutcome[];
+  hypothesis_outcomes?: HypothesisPackageOutcome[];
   raw?: unknown;
 };
 
@@ -192,13 +195,13 @@ export function normalizeSubagentResult(input: unknown, fallbackSummary = ""): S
   const ok =
     typeof okRaw === "boolean" ? okRaw : !/fail|error|abort/i.test(summary.slice(0, 80));
 
-  // Spec #274: parse optional hypothesis_outcomes (structured only; host does not auto-commit)
+  // Spec #274: single canonical parse (hypothesis-store) — host does not auto-commit
   const hypRaw =
     body.hypothesis_outcomes ??
     body.hypothesisOutcomes ??
     nestedStructured?.hypothesis_outcomes ??
     nestedStructured?.hypothesisOutcomes;
-  const hypothesis_outcomes = parseHypothesisOutcomesField(hypRaw);
+  const hypothesis_outcomes = parseHypothesisPackageOutcomes(hypRaw);
 
   return {
     ok,
@@ -222,26 +225,6 @@ export function normalizeSubagentResult(input: unknown, fallbackSummary = ""): S
     ...(hypothesis_outcomes.length ? { hypothesis_outcomes } : {}),
     raw: input,
   };
-}
-
-function parseHypothesisOutcomesField(raw: unknown): SubagentHypothesisOutcome[] {
-  if (!Array.isArray(raw)) return [];
-  const out: SubagentHypothesisOutcome[] = [];
-  for (const item of raw.slice(0, 40)) {
-    if (!item || typeof item !== "object") continue;
-    const o = item as Record<string, unknown>;
-    const result = String(o.result || "").trim().toLowerCase();
-    if (result !== "proved" && result !== "disproved" && result !== "inconclusive") continue;
-    out.push({
-      hypothesis_id: asString(o.hypothesis_id ?? o.hypothesisId, 120) || undefined,
-      result: result as SubagentHypothesisOutcome["result"],
-      evidence_refs: asStringList(o.evidence_refs ?? o.evidenceRefs, 20),
-      notes: asString(o.notes, 2000) || undefined,
-      suggested_revisit_if:
-        asString(o.suggested_revisit_if ?? o.suggestedRevisitIf, 1000) || undefined,
-    });
-  }
-  return out;
 }
 
 export type AcceptanceReadyItem = {

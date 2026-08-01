@@ -1,7 +1,13 @@
+import { createHash } from "node:crypto";
 import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
 import { jsonResult, textResult } from "./common.js";
+
+/** Fingerprint for skill body dedupe (hash only — not full body on lifecycle). */
+export function skillBodyFingerprint(body: string): string {
+  return createHash("sha256").update(body, "utf8").digest("hex");
+}
 
 /**
  * List/load methodology skills. Default list is scoped to pack.skillIds when set.
@@ -46,10 +52,12 @@ export function createSkillTool(runtime: ToolRuntime): AgentTool<any> {
         if (!id) return textResult("error: id required for load");
         const result = await skills.load(id);
         if ("error" in result) return textResult(`error: ${result.error}`);
-        // Spec #274 Wave 2: re-load same id with identical body → short note, not second full copy.
-        const loaded = runtime.lifecycle.skillBodiesLoaded || (runtime.lifecycle.skillBodiesLoaded = {});
-        const prev = loaded[result.id];
-        if (prev && prev === result.body) {
+        // Spec #274 Wave 2: re-load same id with identical body fingerprint → short note
+        const fps =
+          runtime.lifecycle.skillBodyFingerprints ||
+          (runtime.lifecycle.skillBodyFingerprints = {});
+        const fp = skillBodyFingerprint(result.body);
+        if (fps[result.id] === fp) {
           return jsonResult({
             ok: true,
             op: "load",
@@ -60,7 +68,7 @@ export function createSkillTool(runtime: ToolRuntime): AgentTool<any> {
             note: "Skill body already loaded this session with identical content — not re-injecting full body.",
           });
         }
-        loaded[result.id] = result.body;
+        fps[result.id] = fp;
         return jsonResult({
           ok: true,
           op: "load",

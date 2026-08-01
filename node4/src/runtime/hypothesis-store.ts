@@ -257,9 +257,6 @@ export class HypothesisStore {
     if (input.status !== "confirmed" && input.status !== "killed" && input.status !== "deferred") {
       throw new Error("hypothesis commit status must be confirmed|killed|deferred");
     }
-    if ((input.status === "killed" || input.status === "deferred") && !String(input.revisit_if || row.revisit_if || "").trim()) {
-      // Soft prefer revisit_if; allow empty for V1 but keep field if provided
-    }
     const now = nowIso();
     const next: HypothesisRow = {
       ...row,
@@ -459,15 +456,7 @@ export function reseedHypothesisQueue(
   return { seeded_n: ids.length, ids };
 }
 
-/**
- * Stage settlement L0 must never read the hypothesis queue.
- * Pure helper for contract tests: honesty inputs exclude queue fullness.
- */
-export function stageL0IgnoresHypothesisQueue(): true {
-  return true;
-}
-
-/** True only when stage flag is explicit true (missing/false = off). */
+/** True only when stage flag is explicit true (missing/false = off). Authoring SOT. */
 export function isHypothesisWorkModeOn(stage: {
   hypothesis_work_mode?: unknown;
 }): boolean {
@@ -475,7 +464,18 @@ export function isHypothesisWorkModeOn(stage: {
 }
 
 /**
+ * Runtime mirror for Main tools: hardGraphRun.hypothesisWorkMode set by stage executor.
+ * Single read path — do not re-cast lifecycle elsewhere.
+ */
+export function isHypothesisRuntimeModeOn(runtime: {
+  lifecycle?: { hardGraphRun?: { hypothesisWorkMode?: boolean } };
+}): boolean {
+  return runtime.lifecycle?.hardGraphRun?.hypothesisWorkMode === true;
+}
+
+/**
  * Fail-closed graph load: any stage with hypothesis_work_mode true requires pack availability.
+ * Canonical name for load-time gate (also re-exported as validateHypothesisWorkModeForGraph).
  */
 export function assertHypothesisModeGraphLoad(input: {
   stages: Array<{ id?: string; hypothesis_work_mode?: unknown }>;

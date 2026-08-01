@@ -54,6 +54,22 @@ assert.match(sys, /process-chore|Write result\.json/i);
 // #137: unset language → auto policy on stage prompts
 assert.match(sys, /node policy: auto/, "stage unset language → auto policy");
 
+// Spec #274 review: typed StagePromptExtras — injections land when set on input
+const inputWithExtras: typeof inputWithSub & {
+  priorSnapshot?: string;
+  hypothesisQueueInjection?: string;
+  skillL1CatalogInjection?: string;
+} = {
+  ...inputWithSub,
+  priorSnapshot: "<prior-finding-store>\nempty_prior: true\n</prior-finding-store>",
+  hypothesisQueueInjection: "<hypothesis-queue>\nactive_n=0\n</hypothesis-queue>",
+  skillL1CatalogInjection: "<skill-l1-catalog>\ncount=0\n</skill-l1-catalog>",
+};
+const sysExtras = stageSystemPrompt(inputWithExtras, task);
+assert.match(sysExtras, /prior-finding-store/);
+assert.match(sysExtras, /hypothesis-queue/);
+assert.match(sysExtras, /skill-l1-catalog/);
+
 const user = stageUserPrompt(inputWithSub, task);
 assert.match(user, /Prefer subagent packages/i);
 assert.doesNotMatch(user, /write result\.json/i);
