@@ -61,6 +61,15 @@ import {
   isBookingOnlyStage,
   type ConfirmableFeedbackOkRow,
 } from "./book-stage-completeness.js";
+import {
+  formatConfirmedNotSeededProjection,
+  formatHypothesisQueueInjection,
+  isHypothesisWorkModeOn,
+} from "./hypothesis-store.js";
+import {
+  formatSkillL1CatalogInjection,
+  loadSkillL1Catalog,
+} from "./skill-l1-catalog.js";
 
 /**
  * Deposit host-trusted surfaces/candidates into ledger + Finding Store.
@@ -145,10 +154,18 @@ export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope)
   const toolList = input.tools.length ? input.tools.join(", ") : "(none)";
   const allowSubagent = input.tools.includes("subagent");
   const allowFinding = input.tools.includes("finding");
+  const allowHypothesis = input.tools.includes("hypothesis");
+  const hypMode = isHypothesisWorkModeOn(input.stage);
   const intentLines = stageIntentPromptLines(input.stage);
   // Prior snapshot from graph-run quality (hardGraphRun), not processQuality
   const priorSeed =
     (input as StageExecutorInput & { priorSnapshot?: string }).priorSnapshot ||
+    "";
+  const hypothesisBlock =
+    (input as StageExecutorInput & { hypothesisQueueInjection?: string }).hypothesisQueueInjection ||
+    "";
+  const skillL1Block =
+    (input as StageExecutorInput & { skillL1CatalogInjection?: string }).skillL1CatalogInjection ||
     "";
   return [
     "You are a **Hard Graph stage agent** (Graph × Pi).",
@@ -165,6 +182,14 @@ export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope)
       ? "After L0 Feedback marks feedback_ok, Main books with finding(confirm, finding_id=…). Severity fills from Store when omitted; missing severity fails closed."
       : "This stage cannot finding(confirm). Deposit candidates via packages or fact/surfaces only.",
     "Do **not** create process-chore L2 todos (e.g. Write result.json, collect subagents, pure meta login prep).",
+    hypMode && allowHypothesis
+      ? [
+          "Hypothesis work mode ON for this stage: maintain the host **hypothesis queue** (hypothesis tool) for active/confirmed/killed/deferred exploration.",
+          "Main commits only; Sub packages return structured hypothesis_outcomes (proved|disproved|inconclusive).",
+          "Bind package this_turn_goal / success_criteria to prove_if / disprove_if when applicable.",
+          "Confirmed ≠ booked — never finding(confirm) from hypothesis id alone.",
+        ].join(" ")
+      : "",
     allowSubagent
       ? [
           "Agent Graph (preferred when multi-class or multi-surface work is justified): fan-out with **subagent** packages[] (skill/path-scoped workers).",
@@ -188,6 +213,8 @@ export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope)
     `Prior handoff stages: ${input.handoff.completed_stages.join(", ") || "(none)"}`,
     `Known surfaces: ${JSON.stringify(input.handoff.surfaces.slice(0, 20))}`,
     priorSeed,
+    hypothesisBlock,
+    skillL1Block,
   ]
     .filter(Boolean)
     .join("\n");
@@ -215,8 +242,11 @@ export function stageUserPrompt(
       : bookStage
         ? ["", formatFeedbackOkCaptainSurface([]), ""]
         : [];
+  const confirmedNotSeeded =
+    (input as StageExecutorInput & { confirmedNotSeededInjection?: string })
+      .confirmedNotSeededInjection || "";
   const footer = bookStage
-    ? "Complete this book stage only. Use finding(list) then finding(confirm, finding_id=…) for confirmable Store rows; do not invent ids; do not stop with zero confirms while feedback_ok remain; settle via host/Store (no result.json handoff)."
+    ? "Complete this book stage only. Use finding(list) then finding(confirm, finding_id=…) for confirmable Store rows; do not invent ids; do not stop with zero confirms while feedback_ok remain; settle via host/Store (no result.json handoff). Book L0 consumes Store only — hypothesis queue is informational."
     : allowSubagent
       ? "Complete this stage only. Prefer subagent packages when multi-class work is justified; narrate briefly; settle via host/Store (no result.json handoff); then stop."
       : "Complete this stage only. Narrate briefly when useful; deposit surfaces via fact(op=surface) and candidates via finding(upsert) — do not use result.json as stage handoff; then stop.";
@@ -225,6 +255,7 @@ export function stageUserPrompt(
     input.stage.success || "",
     ...repair,
     ...captain,
+    confirmedNotSeeded,
     "### Handoff snapshot",
     JSON.stringify(
       {
@@ -297,6 +328,7 @@ export function buildHardGraphStageChildRuntime(options: {
       hardGraphRun: parent.lifecycle.hardGraphRun,
       panelAgents: sharedPanel,
       processQuality,
+      skillBodiesLoaded: parent.lifecycle.skillBodiesLoaded || (parent.lifecycle.skillBodiesLoaded = {}),
     },
   };
   if (allowSubagent) {
@@ -418,13 +450,38 @@ export function createHardGraphStageExecutor(options: {
     const priorSnapshot = gq?.priorSeed
       ? formatPriorSnapshotInjection(gq.priorSeed)
       : "";
+    // Spec #274: stage flag + Main tool gate on hardGraphRun
+    const hypMode = isHypothesisWorkModeOn(input.stage);
+    if (parentRuntime.lifecycle.hardGraphRun) {
+      parentRuntime.lifecycle.hardGraphRun.stageId = input.stage.id;
+      parentRuntime.lifecycle.hardGraphRun.hypothesisWorkMode = hypMode;
+    }
+    const pqForStage = ensureProcessQuality(parentRuntime.lifecycle);
+    const hypothesisQueueInjection = hypMode
+      ? formatHypothesisQueueInjection(pqForStage.hypothesisStore)
+      : "";
+    // Wave 2: host L1 skill catalog when skill is on the tool surface (orthogonal to hyp mode)
+    let skillL1CatalogInjection = "";
+    if (input.tools.includes("skill") && parentRuntime.skills) {
+      const l1 = await loadSkillL1Catalog(parentRuntime.skills, pack.skillIds);
+      skillL1CatalogInjection = formatSkillL1CatalogInjection(l1);
+    }
     const systemPrompt = stageSystemPrompt(
-      { ...input, priorSnapshot } as StageExecutorInput & { priorSnapshot?: string },
+      {
+        ...input,
+        priorSnapshot,
+        hypothesisQueueInjection,
+        skillL1CatalogInjection,
+      } as StageExecutorInput & {
+        priorSnapshot?: string;
+        hypothesisQueueInjection?: string;
+        skillL1CatalogInjection?: string;
+      },
       task,
     );
     // #161 / #192: captain surface — Store feedback_ok ids at book-stage start
     const bookStage = isBookingOnlyStage(input.stage);
-    const pqForBook = ensureProcessQuality(parentRuntime.lifecycle);
+    const pqForBook = pqForStage;
     const confirmableAtStart: ConfirmableFeedbackOkRow[] = bookStage
       ? pqForBook.findingStore
           .snapshot()
@@ -436,9 +493,19 @@ export function createHardGraphStageExecutor(options: {
           }))
       : [];
     const storeBookedBefore = bookStage ? pqForBook.findingStore.counts().booked_n : 0;
-    const userPrompt = stageUserPrompt(input, task, {
-      confirmableFeedbackOk: bookStage ? confirmableAtStart : undefined,
-    });
+    const confirmedNotSeededInjection = bookStage
+      ? formatConfirmedNotSeededProjection(pqForBook.hypothesisStore, pqForBook.findingStore)
+      : "";
+    const userPrompt = stageUserPrompt(
+      {
+        ...input,
+        confirmedNotSeededInjection,
+      } as StageExecutorInput & { confirmedNotSeededInjection?: string },
+      task,
+      {
+        confirmableFeedbackOk: bookStage ? confirmableAtStart : undefined,
+      },
+    );
 
     // Single session promote site (best-effort); absorb only on intentional returns.
     let sessionPromoted = false;

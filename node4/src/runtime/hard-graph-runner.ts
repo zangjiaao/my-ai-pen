@@ -422,7 +422,16 @@ export async function runHardGraph(options: {
     const maxRetries = Math.max(0, stage.max_retries ?? 1);
     const maxAttempts = maxRetries + 1;
     const toolProfile = stage.tools ?? {};
-    const tools = applyHardGraphToolProfile(options.availableTools, toolProfile);
+    let tools = applyHardGraphToolProfile(options.availableTools, toolProfile);
+    // Spec #274: when stage enables hypothesis work mode, ensure Main hypothesis tool is available
+    // if the pack registered it (socket + flag; not implied by probe intent alone).
+    if (
+      stage.hypothesis_work_mode === true &&
+      options.availableTools.includes("hypothesis") &&
+      !tools.includes("hypothesis")
+    ) {
+      tools = [...tools, "hypothesis"];
+    }
 
     let passed = false;
     let lastErrors: string[] = [];

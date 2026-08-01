@@ -28,6 +28,15 @@ export type SubagentFactNote = {
   summary: string;
 };
 
+/** Spec #274: Sub hypothesis package outcomes (Main commits queue — Sub never mutates). */
+export type SubagentHypothesisOutcome = {
+  hypothesis_id?: string;
+  result: "proved" | "disproved" | "inconclusive";
+  evidence_refs?: string[];
+  notes?: string;
+  suggested_revisit_if?: string;
+};
+
 export type SubagentStructuredResult = {
   ok: boolean;
   summary: string;
@@ -45,6 +54,10 @@ export type SubagentStructuredResult = {
   artifacts: string[];
   /** Optional free-form notes from the child. */
   notes?: string;
+  /**
+   * Spec #274: optional hypothesis outcomes for Main apply — never auto-committed by host.
+   */
+  hypothesis_outcomes?: SubagentHypothesisOutcome[];
   raw?: unknown;
 };
 
@@ -179,6 +192,14 @@ export function normalizeSubagentResult(input: unknown, fallbackSummary = ""): S
   const ok =
     typeof okRaw === "boolean" ? okRaw : !/fail|error|abort/i.test(summary.slice(0, 80));
 
+  // Spec #274: parse optional hypothesis_outcomes (structured only; host does not auto-commit)
+  const hypRaw =
+    body.hypothesis_outcomes ??
+    body.hypothesisOutcomes ??
+    nestedStructured?.hypothesis_outcomes ??
+    nestedStructured?.hypothesisOutcomes;
+  const hypothesis_outcomes = parseHypothesisOutcomesField(hypRaw);
+
   return {
     ok,
     summary,
@@ -198,8 +219,29 @@ export function normalizeSubagentResult(input: unknown, fallbackSummary = ""): S
         : nestedStructured?.artifacts) ?? [],
     ),
     notes: asString(body.notes ?? nestedStructured?.notes, 4000) || undefined,
+    ...(hypothesis_outcomes.length ? { hypothesis_outcomes } : {}),
     raw: input,
   };
+}
+
+function parseHypothesisOutcomesField(raw: unknown): SubagentHypothesisOutcome[] {
+  if (!Array.isArray(raw)) return [];
+  const out: SubagentHypothesisOutcome[] = [];
+  for (const item of raw.slice(0, 40)) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    const result = String(o.result || "").trim().toLowerCase();
+    if (result !== "proved" && result !== "disproved" && result !== "inconclusive") continue;
+    out.push({
+      hypothesis_id: asString(o.hypothesis_id ?? o.hypothesisId, 120) || undefined,
+      result: result as SubagentHypothesisOutcome["result"],
+      evidence_refs: asStringList(o.evidence_refs ?? o.evidenceRefs, 20),
+      notes: asString(o.notes, 2000) || undefined,
+      suggested_revisit_if:
+        asString(o.suggested_revisit_if ?? o.suggestedRevisitIf, 1000) || undefined,
+    });
+  }
+  return out;
 }
 
 export type AcceptanceReadyItem = {

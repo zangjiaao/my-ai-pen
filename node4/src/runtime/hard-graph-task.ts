@@ -35,6 +35,12 @@ import {
   ensureGraphRunQuality,
 } from "./graph-run-quality.js";
 import { l1MaxStageRefine } from "./l1-critic.js";
+import { validateHypothesisWorkModeForGraph } from "./hard-graph-definition.js";
+import {
+  buildHypothesisPromoteSummary,
+  reseedHypothesisQueue,
+  type HypothesisSeedGist,
+} from "./hypothesis-store.js";
 
 export type HardGraphTaskResult = {
   /** Platform task_complete.status (completed | incomplete | blocked). */
@@ -44,6 +50,42 @@ export type HardGraphTaskResult = {
   terminal: HardGraphTerminal;
   workMode: string;
 };
+
+/** Pull hypothesis gists from case_context Delivery / promote materials (structured only). */
+function extractHypothesisGistsFromCase(
+  caseContext: TaskEnvelope["caseContext"],
+): HypothesisSeedGist[] {
+  if (!caseContext || typeof caseContext !== "object") return [];
+  const raw = caseContext as Record<string, unknown>;
+  const candidates = [
+    raw.hypothesis_summary,
+    raw.hypothesisSummary,
+    (raw.delivery as Record<string, unknown> | undefined)?.hypothesis_summary,
+    (raw.delivery as Record<string, unknown> | undefined)?.hypothesisSummary,
+  ];
+  for (const c of candidates) {
+    if (!c || typeof c !== "object") continue;
+    const gists = (c as { gists?: unknown }).gists;
+    if (Array.isArray(gists) && gists.length) {
+      return gists
+        .filter((g) => g && typeof g === "object")
+        .map((g) => {
+          const o = g as Record<string, unknown>;
+          return {
+            id: o.id != null ? String(o.id) : undefined,
+            status: o.status != null ? String(o.status) : undefined,
+            statement: String(o.statement || "").trim(),
+            signal: o.signal != null ? String(o.signal) : undefined,
+            prove_if: o.prove_if != null ? String(o.prove_if) : undefined,
+            disprove_if: o.disprove_if != null ? String(o.disprove_if) : undefined,
+            revisit_if: o.revisit_if != null ? String(o.revisit_if) : undefined,
+          } as HypothesisSeedGist;
+        })
+        .filter((g) => g.statement);
+    }
+  }
+  return [];
+}
 
 function workModeForEvent(event: HardGraphStageEvent): string {
   if (event.type === "stage_start") {
@@ -217,6 +259,21 @@ export async function runHardGraphExpertTask(options: {
   // Spec #116: ensure Store-first process quality survives all stages
   const processQuality = ensureProcessQuality(parentRuntime.lifecycle);
 
+  // Spec #274: fail-closed if stage enables hypothesis mode without pack availability
+  const hypGate = validateHypothesisWorkModeForGraph(
+    graph,
+    pack.capabilities?.hypothesis_work_mode === true,
+  );
+  if (!hypGate.ok) {
+    throw new Error(hypGate.error);
+  }
+
+  // Spec #274: optional copy-in re-seed from Case Delivery (new run-local store only)
+  const deliveryGists = extractHypothesisGistsFromCase(task.caseContext);
+  if (deliveryGists.length && graph.stages.some((s) => s.hypothesis_work_mode === true)) {
+    reseedHypothesisQueue(processQuality.hypothesisStore, deliveryGists);
+  }
+
   // Spec #139 D2: host-seed Finding Store priors at graph-start (strip bookable proof)
   const priorSeed = seedPriorsAtGraphStart(
     processQuality.findingStore,
@@ -287,6 +344,7 @@ export async function runHardGraphExpertTask(options: {
   // Spec #139 NC-Closeout: dual storage on any terminal
   try {
     const gq = ensureGraphRunQuality(parentRuntime.lifecycle.hardGraphRun) || graphQuality;
+    const hypothesis_summary = buildHypothesisPromoteSummary(processQuality.hypothesisStore);
     const closeout = buildEngagementCloseout({
       task,
       graphId: graph.id,
@@ -299,6 +357,7 @@ export async function runHardGraphExpertTask(options: {
       surfaceSummary: parentRuntime.surfaceLedger?.summary?.() as
         | { total?: number; by_status?: Record<string, number>; sample_paths?: string[] }
         | undefined,
+      hypothesis_summary,
     });
     gq.engagementCloseout = closeout;
     await writeEngagementCloseout({ taskDir, platform, task, closeout });

@@ -9,6 +9,7 @@ import type { FindingStore } from "./finding-store.js";
 import type { HardGraphStageRecord, HardGraphTerminal } from "./hard-graph-runner.js";
 import type { PriorSeedResult } from "./prior-seed.js";
 import type { PlatformSink, TaskEnvelope } from "../types.js";
+import type { HypothesisPromoteSummary } from "./hypothesis-store.js";
 
 export type EngagementCloseout = {
   scope: unknown;
@@ -57,6 +58,11 @@ export type EngagementCloseout = {
   blocked_reasons?: string[];
   /** Explicit honesty: process is incomplete when terminal is blocked. */
   process_complete?: boolean;
+  /**
+   * Spec #274: promote summary of run-local hypothesis queue (not Finding Store).
+   * Cross-Graph continuity via Delivery/Handoff only — not a live shared queue.
+   */
+  hypothesis_summary?: HypothesisPromoteSummary;
 };
 
 export function buildEngagementCloseout(input: {
@@ -70,6 +76,8 @@ export function buildEngagementCloseout(input: {
   l1ByStage?: Record<string, { last?: { decision: string; gaps: string[] } }>;
   surfaceSummary?: { total?: number; by_status?: Record<string, number>; sample_paths?: string[] };
   residualRisk?: string;
+  /** Spec #274 promote summary (optional). */
+  hypothesis_summary?: HypothesisPromoteSummary;
 }): EngagementCloseout {
   const snap = input.store.snapshot();
   const by_severity: Record<string, number> = {};
@@ -177,6 +185,9 @@ export function buildEngagementCloseout(input: {
     ...(blocked_reasons.length ? { blocked_reasons: blocked_reasons.slice(0, 40) } : {}),
     ...(booking_tail_ran ? { booking_tail_ran: true } : {}),
     ...(residual_class ? { residual_class } : {}),
+    ...(input.hypothesis_summary
+      ? { hypothesis_summary: input.hypothesis_summary }
+      : {}),
   };
 }
 

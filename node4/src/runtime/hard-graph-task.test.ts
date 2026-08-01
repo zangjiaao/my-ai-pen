@@ -45,7 +45,20 @@ const pack = {
   id: "pentest",
   label: "Pentest",
   missionLines: [],
-  toolNames: ["todo", "read", "fact", "skill", "shell", "http", "finding", "session", "browser", "script"],
+  toolNames: [
+    "todo",
+    "read",
+    "fact",
+    "skill",
+    "shell",
+    "http",
+    "finding",
+    "session",
+    "browser",
+    "script",
+    "hypothesis",
+  ],
+  capabilities: { hypothesis_work_mode: true },
 };
 
 const parentRuntime = {

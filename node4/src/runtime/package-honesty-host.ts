@@ -6,6 +6,7 @@
 
 import type { ToolRuntime } from "../types.js";
 import { FindingStore } from "./finding-store.js";
+import { HypothesisStore } from "./hypothesis-store.js";
 import {
   MAX_PACKAGE_ATTEMPTS,
   mayRetryPackage,
@@ -16,6 +17,8 @@ import {
 /** Run-wide process-quality state (Store + package honesty + attempt budgets). */
 export type ProcessQualityState = {
   findingStore: FindingStore;
+  /** Spec #274: run-local hypothesis queue (optional work mode). */
+  hypothesisStore: HypothesisStore;
   packageTerminals: Record<string, PackageTerminalEntry>;
   packageTerminalAliasIndex: Record<string, string>;
   packageAttemptCounts: Record<string, number>;
@@ -24,6 +27,7 @@ export type ProcessQualityState = {
 export function createProcessQualityState(): ProcessQualityState {
   return {
     findingStore: new FindingStore(),
+    hypothesisStore: new HypothesisStore(),
     packageTerminals: {},
     packageTerminalAliasIndex: {},
     packageAttemptCounts: {},
@@ -42,6 +46,7 @@ export function ensureProcessQuality(
   }
   const pq = lifecycle.processQuality;
   if (!pq.findingStore) pq.findingStore = new FindingStore();
+  if (!pq.hypothesisStore) pq.hypothesisStore = new HypothesisStore();
   if (!pq.packageTerminals) pq.packageTerminals = {};
   if (!pq.packageTerminalAliasIndex) pq.packageTerminalAliasIndex = {};
   if (!pq.packageAttemptCounts) pq.packageAttemptCounts = {};

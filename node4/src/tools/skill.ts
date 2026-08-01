@@ -5,6 +5,7 @@ import { jsonResult, textResult } from "./common.js";
 
 /**
  * List/load methodology skills. Default list is scoped to pack.skillIds when set.
+ * Wave 2 (#274): optional reload dedupe — identical body → short already-loaded note.
  */
 export function createSkillTool(runtime: ToolRuntime): AgentTool<any> {
   return {
@@ -45,6 +46,21 @@ export function createSkillTool(runtime: ToolRuntime): AgentTool<any> {
         if (!id) return textResult("error: id required for load");
         const result = await skills.load(id);
         if ("error" in result) return textResult(`error: ${result.error}`);
+        // Spec #274 Wave 2: re-load same id with identical body → short note, not second full copy.
+        const loaded = runtime.lifecycle.skillBodiesLoaded || (runtime.lifecycle.skillBodiesLoaded = {});
+        const prev = loaded[result.id];
+        if (prev && prev === result.body) {
+          return jsonResult({
+            ok: true,
+            op: "load",
+            id: result.id,
+            name: result.name,
+            description: result.description,
+            already_loaded: true,
+            note: "Skill body already loaded this session with identical content — not re-injecting full body.",
+          });
+        }
+        loaded[result.id] = result.body;
         return jsonResult({
           ok: true,
           op: "load",

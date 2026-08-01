@@ -65,8 +65,16 @@ Cooperative cancel of the **in-flight turn** only (UI stop); not package failure
 _Avoid_: equating abort with package-fail; destroying captain session on interrupt; empty-message-as-abort; auto-replaying the interrupted batch
 
 **Product state (SOT)**:
-Node4-owned domain truth: multi-actor session jars, Hard Graph handoff/continuity (parent lifecycle, surface ledger, structured stage results), findings/booking inputs, Feedback/settlement inputs.
+Node4-owned domain truth: multi-actor session jars, Hard Graph handoff/continuity (parent lifecycle, surface ledger, structured stage results), findings/booking inputs, Feedback/settlement inputs, optional run-local **hypothesis queue**.
 _Avoid_: treating LLM transcript or Agent Runtime session files as domain authority
+
+**Hypothesis work mode**:
+Optional Expert Graph capability: host-backed **hypothesis queue** while a stage has `hypothesis_work_mode: true` (missing/false = off). Pack declares availability only. Main commits lifecycle (`active` → `confirmed` \| `killed` \| `deferred`); Sub returns structured package outcomes. Not Default seat DoD; not a second booking channel.
+_Avoid_: enabling from probe/explore intent alone; agent markdown tracker as gate SOT; Active → platform confirm without Store `feedback_ok`
+
+**Hypothesis queue**:
+Run-local Product-state working memory of exploration candidates and outcomes. **Not** Finding Store; **not** platform vuln ledger. Cross-Graph continuity via promote/Handoff summary + next-run re-seed only (no live multi-Graph shared queue).
+_Avoid_: treating queue fullness as stage L0 gate; killed/deferred as ledger vulns
 
 **Runtime transcript**:
 Turn-local agent messages inside the Agent Runtime. Optional Node4 projection from Runtime events for debug/stream; not required as a product session format; never used as fail-closed gate input.

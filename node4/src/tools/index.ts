@@ -11,6 +11,7 @@ import { createScriptTool } from "./script.js";
 import { createSessionTool } from "./session.js";
 import { createShellTool } from "./shell.js";
 import { createSkillTool } from "./skill.js";
+import { createHypothesisTool } from "./hypothesis.js";
 import { createSubagentTool } from "./subagent.js";
 import { createFactTool } from "./fact.js";
 import { createTodoTool } from "./todo.js";
@@ -34,6 +35,7 @@ export const ALL_NODE4_TOOL_FACTORIES: Record<string, (runtime: ToolRuntime) => 
   subagent: createSubagentTool,
   goal: createGoalTool,
   skill: createSkillTool,
+  hypothesis: createHypothesisTool,
   request_user_decision: createRequestUserDecisionTool,
   ...PLATFORM_TOOL_FACTORIES,
 };
