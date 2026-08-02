@@ -20,6 +20,7 @@ Node4 implementation detail (Graph × Pi product path).
 | [`specs/task-graph.md`](specs/task-graph.md) | Free vs Graph work mode (scenario graphs) |
 | [`specs/hypothesis-evidence.md`](specs/hypothesis-evidence.md) | Optional Expert Graph hypothesis queue + progressive skill disclosure (map #266) |
 | [`specs/finding-identity.md`](specs/finding-identity.md) | Ledger identity (`vuln_type` + file location) + New-only narration (Spec #275) |
+| [`specs/stream-message-identity.md`](specs/stream-message-identity.md) | Remove live-slot-as-Message; stream_id list identity + pending chrome |
 | [`specs/pen-tools-sandbox.md`](specs/pen-tools-sandbox.md) | Unified pen-sandbox (shell + browser) |
 | [`specs/expert-offers.md`](specs/expert-offers.md) | Node packs + Expert instances (@mention routing) |
 | [`specs/ctf-role.md`](specs/ctf-role.md) | CTF role pack operator notes |
