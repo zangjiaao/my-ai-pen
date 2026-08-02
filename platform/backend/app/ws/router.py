@@ -819,7 +819,13 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
     elif msg.get("type") == "vuln_found":
         persisted = await _persist_vulnerability(msg, client_id)
         if persisted:
-            msg.update({k: v for k, v in persisted.items() if v is not None})
+            # Fail-closed rejects return type=vuln_found_error — replace the frame,
+            # do not merge error fields into a still-typed vuln_found success card.
+            if str(persisted.get("type") or "") == "vuln_found_error":
+                msg.clear()
+                msg.update(persisted)
+            else:
+                msg.update({k: v for k, v in persisted.items() if v is not None})
     elif msg.get("type") == "evidence_created":
         # Real proofs from Node4 emitEvidence (structured properties).
         await _persist_evidence(msg, client_id)
