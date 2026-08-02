@@ -1,6 +1,6 @@
 # Stream message identity — remove live-slot-as-Message
 
-**Status:** ready-for-agent (grilling freeze)  
+**Status:** implemented (Spec #276)  
 **Scope:** Platform frontend conversation stream UI only  
 **Depends on (do not change in this Spec):** Node4 `n4-{thinking|text}-{taskId}-{seq}` stream_ids; platform uuid5 `message_id` stamp per type+stream_id
 

@@ -658,7 +658,8 @@ function normalizeSeverity(value: unknown): string {
   const severity = String(value || "info").toLowerCase();
   return ["critical", "high", "medium", "low", "info"].includes(severity) ? severity : "info";
 }
-function AgentPendingCard({ content }: { content: Record<string, unknown> }) {
+/** List-tail pending chrome (Spec #276) — not a Message; may be used outside msg_type agent_pending. */
+export function AgentPendingCard({ content }: { content: Record<string, unknown> }) {
   // Same shell as ToolCallCard / ThinkingCard for a continuous timeline.
   const label = String(content.text || "思考中…");
   return (
