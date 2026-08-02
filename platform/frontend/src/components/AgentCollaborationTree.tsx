@@ -139,17 +139,9 @@ function AgentRow({
   // Sub: skill chips sit beside the title; Main keeps them in AgentMeta below.
   const titleSkills =
     secondary && Array.isArray(agent.skills) ? agent.skills.slice(0, 5) : [];
-  // Resting: no solid fill (panel is already bg-canvas). Hover/active match list
-  // cards (FindingCard): surface-default token — not raw canvas paint.
-  const surface =
-    highlighted
-      ? "bg-status-running/8 ring-1 ring-status-running/25"
-      : "bg-transparent";
-  const interactive =
-    "transition-colors hover:bg-surface-default focus-visible:outline focus-visible:outline-2 focus-visible:outline-status-running/40";
   return (
     <div
-      className={`min-w-0 rounded-md border border-hairline-soft ${padY} pr-2 pl-[9px] ${surface} ${rowInteractive ? `cursor-pointer ${interactive}` : interactive}`}
+      className={`min-w-0 rounded-md ${padY} pr-2 pl-[9px] ${highlighted ? "bg-status-running/8 ring-1 ring-status-running/25" : "bg-transparent"} ${rowInteractive ? "cursor-pointer hover:bg-canvas-inset focus-visible:outline focus-visible:outline-2 focus-visible:outline-status-running/40" : "hover:bg-canvas-inset"}`}
       onClick={rowInteractive ? onToggle : undefined}
       onKeyDown={handleRowKeyDown}
       role={rowInteractive ? "button" : undefined}
