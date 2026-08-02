@@ -264,14 +264,6 @@ export default function VulnDetailDialog({
               <span className={`inline-block shrink-0 rounded-md px-2.5 py-0.5 font-mono text-[11px] font-medium uppercase ${badgeClass}`}>
                 {badgeLabel}
               </span>
-              {(vulnerability?.multiple_discoveries || Number(vulnerability?.rediscovery_count || 0) > 0) && (
-                <span
-                  className="inline-block shrink-0 rounded-md bg-status-running/12 px-2 py-0.5 font-mono text-[11px] font-medium text-status-running"
-                  title={`再次确认 ${Number(vulnerability?.rediscovery_count || 0)} 次`}
-                >
-                  多次发现
-                </span>
-              )}
               <h2 className={`min-w-0 break-words text-xl font-semibold ${findingKind === "flag" ? "font-mono" : ""}`}>
                 {headline}
               </h2>

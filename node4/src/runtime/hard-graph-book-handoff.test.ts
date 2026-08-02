@@ -135,6 +135,7 @@ for (let i = 0; i < PROOFS.length; i += 1) {
   // Agent supplies weak/short proof+poc; harness must fill from candidate match.
   const raw = await finding.execute(`book-${i}`, {
     action: "confirm",
+    vuln_type: "other",
     title: p.title,
     severity: i === 0 ? "critical" : "high",
     location: p.location,
@@ -187,6 +188,7 @@ const onlyMemories = PROOFS[1]!;
 const byLoc = textOf(
   await finding2.execute("by-loc", {
     action: "confirm",
+    vuln_type: "other",
     title: onlyMemories.title,
     severity: "critical",
     location: onlyMemories.location,
@@ -210,6 +212,7 @@ const finding3 = createFindingTool(book3);
 const hall = textOf(
   await finding3.execute("hall", {
     action: "confirm",
+    vuln_type: "other",
     title: "Invented RCE",
     severity: "critical",
     location: "http://127.0.0.1:3010/rest/user/login",
@@ -287,6 +290,7 @@ const finding5 = createFindingTool(book5);
 const noPocHint = textOf(
   await finding5.execute("no-poc-hint", {
     action: "confirm",
+    vuln_type: "other",
     title: "Key Exposure",
     severity: "high",
     location: "http://127.0.0.1:3010/encryptionkeys/premium.key",
@@ -324,6 +328,7 @@ const finding6 = createFindingTool(book6);
 const wrongLoc = textOf(
   await finding6.execute("wrong-loc", {
     action: "confirm",
+    vuln_type: "other",
     title: "Invented RCE on Unrelated Endpoint",
     severity: "critical",
     location: "http://127.0.0.1:3010/totally-unrelated-path",
@@ -339,6 +344,7 @@ assert.match(wrongLoc, /proof not found|no subagent candidates|not found|bookabl
 const wrongLoc2 = textOf(
   await finding6.execute("wrong-loc-2", {
     action: "confirm",
+    vuln_type: "other",
     title: "Invented RCE on Unrelated Endpoint",
     severity: "critical",
     location: "http://127.0.0.1:3010/totally-unrelated-path",

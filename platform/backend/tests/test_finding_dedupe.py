@@ -1,123 +1,269 @@
-"""Unit tests for finding path-class dedupe."""
+"""Unit tests for Spec #275 finding identity (vuln_type + file location_key)."""
 from app.services.finding_dedupe import (
-    canonical_path_aliases,
+    VALID_VULN_TYPES,
     finding_fingerprint,
-    finding_path_class,
     is_same_finding,
-    location_path_class,
-    normalize_finding_title,
-    normalize_finding_title_stem,
-    preferred_path_class,
-    row_location_blob,
+    location_host_key,
+    location_resource_key,
+    normalize_vuln_type,
 )
 
 
-def test_location_path_class_dvwa_modules():
-    assert location_path_class("http://host.docker.internal:8080/vulnerabilities/sqli/?id=1") == "/vulnerabilities/sqli"
-    assert location_path_class("/vulnerabilities/exec/") == "/vulnerabilities/exec"
-    assert location_path_class("SQL Injection at /vulnerabilities/sqli/") == "/vulnerabilities/sqli"
-    assert location_path_class("http://x/level1/index.php") == "/level1"
-    assert location_path_class("no path here") == ""
-    assert location_path_class("payload: GET xss_r/?name=<script>") == "/vulnerabilities/xss_r"
+def test_normalize_vuln_type_closed_enum():
+    assert normalize_vuln_type("sqli") == "sqli"
+    assert normalize_vuln_type(" SQLI ") == "sqli"
+    assert normalize_vuln_type("file_upload") == "file_upload"
+    assert normalize_vuln_type("") is None
+    assert normalize_vuln_type(None) is None
+    assert normalize_vuln_type("sql_injection") is None  # not in closed set
+    assert normalize_vuln_type("unknown_thing") is None
+    assert "other" in VALID_VULN_TYPES
+    assert len(VALID_VULN_TYPES) == 17
 
 
-def test_same_finding_title_match():
+def test_location_resource_key_file_level():
+    assert (
+        location_resource_key("http://host.docker.internal:8080/vulnerabilities/sqli/?id=1")
+        == "/vulnerabilities/sqli"
+    )
+    assert location_resource_key("/vulnerabilities/exec/") == "/vulnerabilities/exec"
+    assert (
+        location_resource_key("http://h:8080/hackable/uploads/test_upload.php")
+        == "/hackable/uploads/test_upload.php"
+    )
+    assert location_resource_key("http://h/vulnerabilities/upload/") == "/vulnerabilities/upload"
+    assert location_resource_key("SQL Injection at /vulnerabilities/sqli/") == "/vulnerabilities/sqli"
+    assert location_resource_key("http://x/level1/index.php") == "/level1/index.php"
+    assert location_resource_key("no path here") == ""
+
+
+def test_location_resource_key_no_upload_alias_collapse():
+    """Upload family paths stay distinct at file level — no /hackable ↔ /vulnerabilities/upload alias."""
+    a = location_resource_key("http://h/hackable/uploads/shell.php")
+    b = location_resource_key("http://h/vulnerabilities/upload/")
+    assert a == "/hackable/uploads/shell.php"
+    assert b == "/vulnerabilities/upload"
+    assert a != b
+
+
+def test_a18_four_distinct_type_plus_file():
+    """a18-class: four distinct type+file → four identities (must not collapse)."""
+    asset = "a1"
+    port = "8080"
+    cases = [
+        ("rce", "http://h:8080/hackable/uploads/shell.php", "Webshell RCE"),
+        (
+            "credential_exposure",
+            "http://h:8080/hackable/uploads/creds.txt",
+            "Leaked credentials in upload dir",
+        ),
+        ("info_disclosure", "http://h:8080/phpinfo.php", "phpinfo disclosure"),
+        ("dir_listing", "http://h:8080/hackable/uploads/", "Directory listing"),
+    ]
+    rows = []
+    for vtype, loc, title in cases:
+        rows.append(
+            {
+                "title": title,
+                "asset_id": asset,
+                "port": port,
+                "vuln_type": vtype,
+                "location": loc,
+                "location_key": location_resource_key(loc),
+            }
+        )
+    # Pairwise distinct
+    for i, a in enumerate(rows):
+        for j, b in enumerate(rows):
+            if i == j:
+                continue
+            assert not is_same_finding(
+                a,
+                title=b["title"],
+                asset_id=asset,
+                port=port,
+                location=b["location"],
+                vuln_type=b["vuln_type"],
+                location_key=b["location_key"],
+            ), f"must not merge {a['vuln_type']} with {b['vuln_type']}"
+
+
+def test_same_type_same_file_is_same():
     existing = {
-        "title": "SQL Injection on DVWA sqli module",
+        "title": "File Upload (Low) - PHP webshell",
         "asset_id": "a1",
         "port": "8080",
-        "location": "http://h:8080/vulnerabilities/sqli/",
+        "vuln_type": "file_upload",
+        "location": "http://h:8080/vulnerabilities/upload/",
+        "location_key": "/vulnerabilities/upload",
     }
     assert is_same_finding(
         existing,
-        title="SQL Injection on DVWA sqli module",
+        title="File Upload Medium — Content-Type bypass",  # title drift ignored
         asset_id="a1",
         port="8080",
-        location="/vulnerabilities/sqli/?x=1",
+        location="http://h:8080/vulnerabilities/upload/?x=1",
+        vuln_type="file_upload",
     )
 
 
-def test_same_finding_path_class_title_drift():
+def test_upload_alias_must_not_merge_different_files():
+    """Historical path-class alias must NOT merge module page vs evidence file."""
+    existing = {
+        "title": "文件上传漏洞",
+        "asset_id": "a1",
+        "port": "8080",
+        "vuln_type": "file_upload",
+        "location": "http://h:8080/vulnerabilities/upload/",
+        "location_key": "/vulnerabilities/upload",
+    }
+    assert not is_same_finding(
+        existing,
+        title="Webshell RCE via uploaded PHP",
+        asset_id="a1",
+        port="8080",
+        location="http://h:8080/hackable/uploads/test_upload.php",
+        vuln_type="rce",
+    )
+    # Even same type: different file-level keys stay distinct
+    assert not is_same_finding(
+        existing,
+        title="Upload again",
+        asset_id="a1",
+        port="8080",
+        location="http://h:8080/hackable/uploads/other.php",
+        vuln_type="file_upload",
+    )
+
+
+def test_title_drift_must_not_merge():
+    """Title / stem alone never defines identity."""
     existing = {
         "title": "SQL Injection in id parameter at /vulnerabilities/sqli/",
         "asset_id": "a1",
         "port": "8080",
-        "poc": "GET http://h:8080/vulnerabilities/sqli/?id=1'",
-        "description": "union select",
+        "vuln_type": "sqli",
+        "location": "http://h:8080/vulnerabilities/sqli/",
+        "location_key": "/vulnerabilities/sqli",
     }
+    # Same title family but different location → new finding
+    assert not is_same_finding(
+        existing,
+        title="SQL Injection in id parameter at /vulnerabilities/sqli/",
+        asset_id="a1",
+        port="8080",
+        location="http://h:8080/vulnerabilities/sqli_blind/",
+        vuln_type="sqli",
+    )
+    # Title completely different but same type+file → same finding
     assert is_same_finding(
         existing,
         title="SQL注入漏洞 - 数据库信息泄露 (低安全等级)",
         asset_id="a1",
         port="8080",
-        location="http://h:8080/vulnerabilities/sqli/",
+        location="http://h:8080/vulnerabilities/sqli/?id=1",
+        vuln_type="sqli",
     )
 
 
-def test_same_finding_when_poc_is_payload_only():
-    """Real ledger rows often store payload-only PoC; path lives in title."""
-    existing = {
-        "title": "SQL Injection in id parameter at /vulnerabilities/sqli/",
-        "asset_id": "a1",
-        "port": "8080",
-        "poc": "id=1' UNION SELECT 1,group_concat(user,':',password) FROM users --",
-        "description": "classic union",
-    }
-    assert finding_path_class(existing["poc"], existing["title"]) == "/vulnerabilities/sqli"
-    assert is_same_finding(
-        existing,
-        title="SQL 注入漏洞 (Low Security) - UNION 查询数据泄露",
-        asset_id="a1",
-        port="8080",
-        location="1. 访问 /vulnerabilities/sqli/?id=-1' UNION SELECT user(),version()--",
-    )
-    blob = row_location_blob(existing)
-    assert "/vulnerabilities/sqli" in blob
-
-
-def test_verbose_description_does_not_false_merge_modules():
-    """A file-upload writeup that mentions LFI elsewhere must not merge with LFI."""
-    existing = {
-        "title": "Medium Security File Upload Bypass - MIME Type Spoofing",
-        "asset_id": "a1",
-        "port": "8080",
-        "poc": "POST /vulnerabilities/upload/",
-        "description": "Also compared with /vulnerabilities/fi/ earlier in the report.",
-    }
-    assert not is_same_finding(
-        existing,
-        title="本地文件包含 (LFI) (Low Security)",
-        asset_id="a1",
-        port="8080",
-        location="GET /vulnerabilities/fi/?page=../../../../etc/passwd",
-    )
-
-
-def test_different_modules_not_merged():
+def test_missing_vuln_type_does_not_match():
     existing = {
         "title": "SQLi",
         "asset_id": "a1",
         "port": "8080",
         "location": "/vulnerabilities/sqli/",
+        "location_key": "/vulnerabilities/sqli",
+        # no vuln_type — legacy / incomplete
     }
     assert not is_same_finding(
         existing,
-        title="Command Injection",
+        title="SQLi",
         asset_id="a1",
         port="8080",
-        location="/vulnerabilities/exec/",
+        location="/vulnerabilities/sqli/",
+        vuln_type="sqli",
     )
 
 
-def test_fingerprint_prefers_path():
+def test_cve_same_asset_matches():
+    existing = {
+        "title": "OpenSSL bug",
+        "asset_id": "a1",
+        "port": "443",
+        "cve_id": "CVE-2024-1234",
+        "vuln_type": "other",
+        "location_key": "/tls",
+    }
+    assert is_same_finding(
+        existing,
+        title="Different wording",
+        asset_id="a1",
+        port="443",
+        cve_id="CVE-2024-1234",
+        location="/elsewhere",
+        vuln_type="rce",
+    )
+
+
+def test_host_string_when_no_asset():
+    existing = {
+        "title": "XSS",
+        "asset_id": None,
+        "port": "8080",
+        "vuln_type": "xss",
+        "location": "http://lab.example:8080/vuln/xss",
+        "location_key": "/vuln/xss",
+        "host": "lab.example",
+    }
+    assert is_same_finding(
+        existing,
+        title="Reflected XSS",
+        asset_id=None,
+        port="8080",
+        location="http://lab.example:8080/vuln/xss?q=1",
+        vuln_type="xss",
+        host="lab.example",
+    )
+    assert not is_same_finding(
+        existing,
+        title="Reflected XSS",
+        asset_id=None,
+        port="8080",
+        location="http://other.example:8080/vuln/xss",
+        vuln_type="xss",
+        host="other.example",
+    )
+
+
+def test_port_mismatch_not_merged():
+    existing = {
+        "title": "SQLi",
+        "asset_id": "a1",
+        "port": "8080",
+        "vuln_type": "sqli",
+        "location_key": "/vulnerabilities/sqli",
+        "location": "/vulnerabilities/sqli/",
+    }
+    assert not is_same_finding(
+        existing,
+        title="SQLi",
+        asset_id="a1",
+        port="8443",
+        location="/vulnerabilities/sqli/",
+        vuln_type="sqli",
+    )
+
+
+def test_fingerprint_uses_type_and_location():
     fp = finding_fingerprint(
-        title="Anything",
+        vuln_type="xss",
         asset_id="a1",
         port="8080",
         location="http://h/vulnerabilities/xss_r/",
     )
-    assert "path:/vulnerabilities/xss_r" in fp
-    assert normalize_finding_title("  Foo  BAR ") == "foo bar"
+    assert "type:xss" in fp
+    assert "loc:/vulnerabilities/xss_r" in fp
+    assert location_host_key("http://h:8080/x") == "h"
 
 
 def test_rediscovery_count_from_history():
@@ -132,102 +278,3 @@ def test_rediscovery_count_from_history():
     assert discovery_count(hist) == 3
     assert rediscovery_count([]) == 0
     assert discovery_count([]) == 1
-
-
-def test_upload_path_alias_hackable_to_module():
-    assert location_path_class("http://h/hackable/uploads/test.php") == "/hackable/uploads"
-    aliases = canonical_path_aliases("/hackable/uploads")
-    assert "/vulnerabilities/upload" in aliases
-    assert preferred_path_class({"/hackable/uploads"}) == "/vulnerabilities/upload"
-
-
-def test_same_finding_command_injection_level_variant_stem():
-    """Low path-less PoC + Medium /exec — bilingual stem match."""
-    existing = {
-        "title": "命令注入 (Low Security) - 参数拼接绕过",
-        "asset_id": "a1",
-        "port": "8080",
-        "poc": "payload: POST ip=127.0.0.1; id&Submit=Submit. observed: uid=33",
-        "description": "blacklist misses semicolon",
-    }
-    assert is_same_finding(
-        existing,
-        title="Command Injection (Medium Security) - Pipe Bypass via IP Parameter",
-        asset_id="a1",
-        port="8080",
-        location="POST to /vulnerabilities/exec/ with body ip=127.0.0.1 | id",
-    )
-
-
-def test_same_finding_upload_evidence_path_vs_module():
-    existing = {
-        "title": "文件上传漏洞 (Low Security) - PHP Webshell 上传",
-        "asset_id": "a1",
-        "port": "8080",
-        "poc": "payload: POST 上传 PHP。observed: 访问 http://h:8080/hackable/uploads/test_upload.php",
-        "description": "webshell",
-    }
-    assert is_same_finding(
-        existing,
-        title="File Upload (Medium Security) - Content-Type Bypass PHP Upload",
-        asset_id="a1",
-        port="8080",
-        location="POST to /vulnerabilities/upload/ with PHP file and type=image/jpeg",
-    )
-
-
-def test_same_finding_sqli_level_variant_stem():
-    existing = {
-        "title": "SQL 注入漏洞 (Low Security) - UNION 查询数据泄露",
-        "asset_id": "a1",
-        "port": "8080",
-        "poc": "1. 访问 /vulnerabilities/sqli/?id=-1' UNION SELECT user(),version()--",
-        "description": "union",
-    }
-    assert is_same_finding(
-        existing,
-        title="SQL 注入漏洞 (Medium Security) - 数字型注入绕过转义",
-        asset_id="a1",
-        port="8080",
-        location="1. POST id=1 OR 1=1 返回全部5个用户",
-    )
-
-
-def test_sqli_and_blind_sqli_not_merged():
-    existing = {
-        "title": "SQL 注入漏洞 (Low Security) - UNION",
-        "asset_id": "a1",
-        "port": "8080",
-        "poc": "/vulnerabilities/sqli/?id=1",
-    }
-    assert not is_same_finding(
-        existing,
-        title="SQL Injection (Blind) (Low Security) - Boolean-Based Blind Injection",
-        asset_id="a1",
-        port="8080",
-        location="http://h:8080/vulnerabilities/sqli_blind/",
-    )
-    assert normalize_finding_title_stem("SQL Injection (Blind) (Low Security)") == "sql_injection_blind"
-    assert normalize_finding_title_stem("SQL 注入漏洞 (Low Security)") == "sql_injection"
-
-
-def test_stem_strips_security_level():
-    assert normalize_finding_title_stem("Command Injection (Medium Security) - Pipe") == "command_injection"
-    assert normalize_finding_title_stem("命令注入 (Low Security) - 参数拼接") == "command_injection"
-
-
-def test_brute_force_sql_not_merged_with_sqli():
-    existing = {
-        "title": "SQL 注入漏洞 (Low Security) - UNION 查询数据泄露",
-        "asset_id": "a1",
-        "port": "8080",
-        "poc": "/vulnerabilities/sqli/?id=1",
-    }
-    assert not is_same_finding(
-        existing,
-        title="Brute Force SQL 注入绕过 (Low Security)",
-        asset_id="a1",
-        port="8080",
-        location="/vulnerabilities/brute/?username=x",
-    )
-    assert normalize_finding_title_stem("Brute Force SQL 注入绕过 (Low Security)") == "brute_force"

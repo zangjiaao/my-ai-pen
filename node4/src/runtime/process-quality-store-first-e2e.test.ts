@@ -313,6 +313,7 @@ try {
 
   const noId = await execFind("x", {
     action: "confirm",
+    vuln_type: "other",
     title: "CSRF token missing",
     location: "http://dvwa/security.php",
     description: "state-changing request without CSRF token accepted on security level change",
@@ -329,6 +330,7 @@ try {
   const fid = ids[0]!;
   const ok = await execFind("x", {
     action: "confirm",
+    vuln_type: "other",
     finding_id: fid,
     title: "CSRF token missing",
     location: "http://dvwa/security.php",
@@ -347,6 +349,7 @@ try {
   runtime.lifecycle.subagentDepth = 1;
   const subDenied = await execFind("x", {
     action: "confirm",
+    vuln_type: "other",
     finding_id: fid,
     title: "x",
     location: "http://dvwa/x",
