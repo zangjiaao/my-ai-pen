@@ -88,8 +88,9 @@ export function StrixAgentList({ agents }: { agents: StrixAgentStatus[] }) {
           />
         </div>
         {children.length > 0 && (
-          /* pl-[18px]: child elbow vertical (-left-1.5) near parent spine at left-3. */
-          <div className={`${open ? "block" : "hidden"} space-y-0 pl-[18px]`}>
+          /* pl-[18px]: child elbow vertical (-left-1.5) near parent spine at left-3.
+           * mt-1 + space-y-1: breathing room so Sub hover does not cover Main bottom edge. */
+          <div className={`${open ? "block" : "hidden"} mt-1 space-y-1 pl-[18px]`}>
             {children.map((child, index) =>
               renderAgentNode(child, false, nextTrail, index === children.length - 1),
             )}
