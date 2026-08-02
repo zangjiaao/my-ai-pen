@@ -41,6 +41,7 @@ import {
   reseedHypothesisQueue,
   type HypothesisSeedGist,
 } from "./hypothesis-store.js";
+import { isLlmTurnError } from "./llm-turn-error.js";
 
 export type HardGraphTaskResult = {
   /** Platform task_complete.status (completed | incomplete | blocked). */
@@ -316,24 +317,62 @@ export async function runHardGraphExpertTask(options: {
       abortSignal: signal,
     });
 
-  const result = await runHardGraph({
-    graph,
-    executeStage,
-    availableTools,
-    abortSignal: signal,
-    l1Budget: {
-      getRefineCount: (stageId) => graphQuality.l1ByStage[stageId]?.refine_n || 0,
-      recordRefine: (stageId, gaps) => {
-        const prev = graphQuality.l1ByStage[stageId] || { refine_n: 0 };
-        prev.refine_n = (prev.refine_n || 0) + 1;
-        prev.last = { decision: "refine", gaps };
-        graphQuality.l1ByStage[stageId] = prev;
+  let result;
+  try {
+    result = await runHardGraph({
+      graph,
+      executeStage,
+      availableTools,
+      abortSignal: signal,
+      l1Budget: {
+        getRefineCount: (stageId) => graphQuality.l1ByStage[stageId]?.refine_n || 0,
+        recordRefine: (stageId, gaps) => {
+          const prev = graphQuality.l1ByStage[stageId] || { refine_n: 0 };
+          prev.refine_n = (prev.refine_n || 0) + 1;
+          prev.last = { decision: "refine", gaps };
+          graphQuality.l1ByStage[stageId] = prev;
+        },
+        maxRefine: l1MaxStageRefine(),
       },
-      maxRefine: l1MaxStageRefine(),
-    },
-    onEvent: (event) =>
-      emitHardGraphStageStatus({ platform, task, event, startedAt, plan: graphPlan }),
-  });
+      onEvent: (event) =>
+        emitHardGraphStageStatus({ platform, task, event, startedAt, plan: graphPlan }),
+    });
+  } catch (err) {
+    // LlmTurnError: runner already closed stage/run plan events. Emit failed checkpoint
+    // (no task_complete) so Status panel is not left spinning, then rethrow → main task_error.
+    if (isLlmTurnError(err)) {
+      if (parentRuntime.lifecycle.hardGraphRun) {
+        parentRuntime.lifecycle.hardGraphRun.stageId = undefined;
+      }
+      const failObs: ObservabilityContext = {
+        platform,
+        task,
+        runtime: parentRuntime,
+        goals: parentRuntime.goals || new GoalStore(),
+        usage: runUsage,
+        panel,
+        startedAt,
+        rolePackId: pack.id,
+        counters: { toolCallCount: 0, phase: "finished" },
+      };
+      await emitCheckpointUpdate(failObs, {
+        terminal: true,
+        status: "failed",
+        endTime: new Date().toISOString(),
+      }).catch(() => {});
+      await platform
+        .send({
+          type: "work_status",
+          conversation_id: task.conversationId,
+          task_id: task.taskId,
+          working: false,
+          work_mode: `hard_graph:${graph.id}:terminal:llm_error`,
+        })
+        .catch(() => {});
+      throw err;
+    }
+    throw err;
+  }
 
   await writeFile(
     join(taskDir, "hard-graph", "run-result.json"),

@@ -190,4 +190,47 @@ assert.equal(
   graph!.stages.map((s) => s.id).join(","),
 );
 
+// Settlement contract: LlmTurnError after stage_start closes stage (not running) + run_end, rethrows
+{
+  const { LlmTurnError, isLlmTurnError } = await import("./llm-turn-error.js");
+  const llmEvents: Array<{ type: string; stageId?: string; outcome?: string; terminal?: string }> = [];
+  const llmThrowExec: StageExecutor = async (input) => {
+    if (input.stage.id === "init") {
+      return { structured: { ok: true, summary: "init ok", surfaces: [], candidates: [] } };
+    }
+    // surface starts then soft-fails
+    throw new LlmTurnError("403 China opt-in required");
+  };
+  let caught: unknown;
+  try {
+    await runHardGraph({
+      graph: graph!,
+      executeStage: llmThrowExec,
+      availableTools: ["todo", "read", "shell", "http", "fact", "skill", "finding"],
+      onEvent: (e) => {
+        if (e.type === "stage_start") {
+          llmEvents.push({ type: e.type, stageId: e.stageId });
+        } else if (e.type === "stage_end") {
+          llmEvents.push({ type: e.type, stageId: e.stageId, outcome: e.outcome });
+        } else if (e.type === "run_end") {
+          llmEvents.push({ type: e.type, terminal: e.terminal });
+        }
+      },
+    });
+  } catch (err) {
+    caught = err;
+  }
+  assert.ok(isLlmTurnError(caught), "LlmTurnError must rethrow to outer (task_error channel)");
+  assert.ok(
+    llmEvents.some((e) => e.type === "stage_start" && e.stageId === "surface"),
+    "stage_start before throw",
+  );
+  const surfaceEnd = llmEvents.find((e) => e.type === "stage_end" && e.stageId === "surface");
+  assert.ok(surfaceEnd, "stage_end must fire so plan is not left running");
+  assert.equal(surfaceEnd!.outcome, "blocked");
+  const runEnd = llmEvents.find((e) => e.type === "run_end");
+  assert.ok(runEnd, "run_end must fire");
+  assert.equal(runEnd!.terminal, "blocked");
+}
+
 console.log("hard-graph-runner.test.ts: ok");

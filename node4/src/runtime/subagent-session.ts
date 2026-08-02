@@ -37,6 +37,7 @@ import {
   type SubagentIdlePool,
 } from "./subagent-idle-pool.js";
 import { formatAgentLanguageInjection } from "./agent-language.js";
+import { extractLlmTurnError, LlmTurnError } from "./llm-turn-error.js";
 
 /** Act tools for child workers — no subagent, finding, goal, or platform ledger. */
 export const SUBAGENT_CHILD_TOOL_NAMES = [
@@ -398,6 +399,22 @@ async function runWarmPackage(args: {
   const race = await raceSessionPrompt(warm.session, userPrompt, abort);
   const toolsUsed = Math.max(0, warm.segmentCounter.tools - toolsBefore);
 
+  // Soft LLM failure (stopReason=error): fail hard — Main must not see silent empty success.
+  if (!race.aborted) {
+    const llmErr = extractLlmTurnError(
+      (warm.session as { messages?: unknown[] }).messages,
+    );
+    if (llmErr) {
+      try {
+        warm.clearAbort?.();
+        await Promise.resolve(warm.session.dispose?.());
+      } catch {
+        /* ignore */
+      }
+      throw new LlmTurnError(llmErr);
+    }
+  }
+
   const { structured, salvaged } = await collectStructuredResult({
     workDir,
     handoff: input.handoff,
@@ -587,6 +604,21 @@ async function runColdPackage(args: {
   });
 
   const race = await raceSessionPrompt(session, userPrompt, abort);
+
+  // Soft LLM failure (stopReason=error): fail hard — Main must not see silent empty success.
+  if (!race.aborted) {
+    const llmErr = extractLlmTurnError(
+      (session as { messages?: unknown[] }).messages,
+    );
+    if (llmErr) {
+      try {
+        await Promise.resolve((session as any).dispose?.());
+      } catch {
+        /* ignore */
+      }
+      throw new LlmTurnError(llmErr);
+    }
+  }
 
   const { structured, salvaged } = await collectStructuredResult({
     workDir,

@@ -132,9 +132,30 @@ def test_normalize_terminal_plan_keeps_graph_stage_pending():
             "kind": "task",
             "source": "agent",
         },
+        {
+            "node_id": "todo-task-surface-probe",
+            "title": "probe login",
+            "status": "pending",
+            "level": "work_item",
+            "kind": "task",
+            "source": "agent",
+            "parent_id": "graph-stage-surface",
+        },
+        {
+            "node_id": "todo-task-surface-running",
+            "title": "running child",
+            "status": "running",
+            "level": "work_item",
+            "kind": "task",
+            "source": "agent",
+            "parent_id": "graph-stage-surface",
+        },
     ]
     out = normalize_terminal_pentest_plan_tree(tree, "completed")
     by = {n["node_id"]: n["status"] for n in out}
     assert by["graph-stage-class_probe"] == "pending"
     assert by["graph-stage-surface"] == "blocked"
     assert by["agent-todo"] == "done"
+    # L2 under graph-stage parents must not green on completed
+    assert by["todo-task-surface-probe"] == "pending"
+    assert by["todo-task-surface-running"] == "running"

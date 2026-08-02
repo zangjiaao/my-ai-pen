@@ -507,305 +507,316 @@ export async function runNode4Task(
     throw new LlmTurnError(errText);
   };
 
-  try {
-  if (!cancelled()) {
+  /** Single prompt + soft-error assert channel (throws LlmTurnError → main task_error). */
+  const promptAndAssert = async (promptText: string) => {
     try {
-      await session.prompt(userPrompt, { source: "interactive" });
+      await session.prompt(promptText, { source: "interactive" });
     } catch (err) {
       if (!cancelled()) throw err;
+      return;
     }
     await assertNoLlmTurnError();
-  }
+  };
 
-  while (!cancelled()) {
-    const toolsInLast = segmentCounter.tools;
-
-    const actObsCount = runtime.lifecycle.recentObservations?.length || 0;
-    const evidenceList = await runtime.evidence.list().catch(() => []);
-    // Prefer act observations (book-time evidence model); fall back to Case evidence files.
-    const probeCount = actObsCount || evidenceList.length;
-    const bookedSoFar = await loadConfirmedFindings(runtime.findingsDir).catch(() => ({ count: 0 }));
-    // Feed goal progress (stall telemetry) while accounting (active or budget-limited).
-    if (goals.isAccounting()) {
-      goals.noteSegmentProgress({
-        bookedFindings: bookedSoFar.count,
-        evidenceCount: probeCount,
-        toolsInSegment: toolsInLast,
-        goalContinueCount,
-      });
+  try {
+    if (!cancelled()) {
+      await promptAndAssert(userPrompt);
     }
 
-    // OMP: one-shot budget-limit steer when token_budget just flipped status.
-    const budgetSteerGoal = goals.takePendingBudgetLimitSteer();
-    if (budgetSteerGoal && !cancelled()) {
+    while (!cancelled()) {
+      const toolsInLast = segmentCounter.tools;
+
+      const actObsCount = runtime.lifecycle.recentObservations?.length || 0;
+      const evidenceList = await runtime.evidence.list().catch(() => []);
+      // Prefer act observations (book-time evidence model); fall back to Case evidence files.
+      const probeCount = actObsCount || evidenceList.length;
+      const bookedSoFar = await loadConfirmedFindings(runtime.findingsDir).catch(() => ({ count: 0 }));
+      // Feed goal progress (stall telemetry) while accounting (active or budget-limited).
+      if (goals.isAccounting()) {
+        goals.noteSegmentProgress({
+          bookedFindings: bookedSoFar.count,
+          evidenceCount: probeCount,
+          toolsInSegment: toolsInLast,
+          goalContinueCount,
+        });
+      }
+
+      // OMP: one-shot budget-limit steer when token_budget just flipped status.
+      const budgetSteerGoal = goals.takePendingBudgetLimitSteer();
+      if (budgetSteerGoal && !cancelled()) {
+        await loggingPlatform.send({
+          type: "status_update",
+          conversation_id: task.conversationId,
+          task_id: task.taskId,
+          message: `goal budget-limited tokens=${budgetSteerGoal.tokensUsed}/${budgetSteerGoal.tokenBudget ?? "?"} — steer wrap-up (not complete)`,
+          agent_phase: "goal_budget_limit",
+          status: "running",
+          llm_usage: usage.snapshot({ tool_calls: obsCounters.toolCallCount }),
+        });
+        segmentCounter.tools = 0;
+        runtime.lifecycle.toolsInLastSegment = 0;
+        try {
+          await promptAndAssert(buildGoalBudgetLimitPrompt(budgetSteerGoal));
+        } catch (err) {
+          if (cancelled()) break;
+          throw err;
+        }
+        continue;
+      }
+
+      const bookingSnap =
+        pack.bookingMode === "finding"
+          ? {
+              evidenceCount: probeCount,
+              bookedFindingCount: bookedSoFar.count,
+              toolsInLastSegment: toolsInLast,
+            }
+          : undefined;
+      // bookingGap: probes without findings (strong signal to allow one continue)
+      const bookingGap =
+        pack.bookingMode === "finding" && probeCount >= 2 && bookedSoFar.count === 0;
+      // Soft open work (todos) for continue prompts; premature breadth no longer requires open todos.
+      const openWorkRemaining = runtime.todo.openCount() > 0;
+
+      // Pass previous emptyStopStreak only — evaluateContinueAfterSegment increments once.
+      const decision = evaluateContinueAfterSegment({
+        aborted: cancelled(),
+        toolsInLastSegment: toolsInLast,
+        previousEmptyStopStreak: emptyStopStreak,
+        continueCount,
+        maxContinues,
+        maxEmptyStopStreak,
+        bookingGap,
+        bookingContinueUsed,
+        prematureStopCount,
+        maxPrematureStops,
+        openWorkRemaining,
+        goalModeActive: goals.isActive(),
+        goalContinueCount,
+        maxGoalContinues,
+      });
+      emptyStopStreak = decision.nextEmptyStopStreak;
+      stopReason = normalizeProductStopReason({
+        reason: decision.reason,
+        continueCount,
+        toolsInLastSegment: toolsInLast,
+      });
+      if (!decision.continue) break;
+
+      if (decision.kind === "booking_gap") bookingContinueUsed = true;
+      if (decision.kind === "premature") prematureStopCount += 1;
+      if (decision.kind === "goal") {
+        goalContinueCount += 1;
+        goals.setGoalContinueCount(goalContinueCount);
+      }
+      continueCount = decision.nextContinueCount;
+      segmentCounter.tools = 0;
+      runtime.lifecycle.toolsInLastSegment = 0;
+      // New outer cycle: OMP mid-run todo budget resets (mutations + nudge cap).
+      if (runtime.lifecycle.midRunTodo) resetMidRunTodoCycle(runtime.lifecycle.midRunTodo);
+
+      const todoErrors = runtime.lifecycle.pendingTodoErrorReminder?.slice();
+      runtime.lifecycle.pendingTodoErrorReminder = undefined;
+      const goalSnap = goals.formatForPrompt();
+      const modeGoal = goals.getMode();
+      const openTodoTitles = runtime.todo
+        .snapshot()
+        .flatMap((p) =>
+          p.tasks
+            .filter((t) => t.status === "pending" || t.status === "in_progress")
+            .map((t) => t.content),
+        );
+      const openTodoCount = runtime.todo.openCount();
+      const goalContinuationBody =
+        decision.kind === "goal" && modeGoal
+          ? buildGoalContinuationPrompt(modeGoal, { openTodoTitles, openTodoCount })
+          : undefined;
+
       await loggingPlatform.send({
         type: "status_update",
         conversation_id: task.conversationId,
         task_id: task.taskId,
-        message: `goal budget-limited tokens=${budgetSteerGoal.tokensUsed}/${budgetSteerGoal.tokenBudget ?? "?"} — steer wrap-up (not complete)`,
-        agent_phase: "goal_budget_limit",
+        message: `continue ${continueCount}/${maxContinues} (${decision.reason}) goal=${goalContinueCount}/${maxGoalLabel} premature=${prematureStopCount}/${maxPrematureStops} evidence=${evidenceList.length} findings=${bookedSoFar.count}`,
+        agent_phase: "continue",
         status: "running",
         llm_usage: usage.snapshot({ tool_calls: obsCounters.toolCallCount }),
       });
-      segmentCounter.tools = 0;
-      runtime.lifecycle.toolsInLastSegment = 0;
+      // Mid-run checkpoint on outer continues so tokens/tasks refresh even if throttle was idle.
+      await emitCheckpointUpdate(obsCtx);
+      checkpointThrottle.markEmitted();
+
       try {
-        await session.prompt(buildGoalBudgetLimitPrompt(budgetSteerGoal), { source: "interactive" });
-        await assertNoLlmTurnError();
+        const continueKind =
+          decision.kind === "booking_gap"
+            ? "booking_gap"
+            : decision.kind === "goal"
+              ? "goal"
+              : decision.kind === "premature"
+                ? "premature"
+                : "empty";
+        await promptAndAssert(
+          composeContinuePrompt({
+            attempt: continueCount,
+            max: maxContinues,
+            openTodoCount,
+            openTodoTitles,
+            todoErrors,
+            booking: bookingSnap,
+            goalSummary: goalSnap,
+            kind: continueKind,
+            prematureAttempt: prematureStopCount,
+            prematureMax: maxPrematureStops,
+            goalContinuationBody,
+          }),
+        );
       } catch (err) {
         if (cancelled()) break;
         throw err;
       }
-      continue;
     }
 
-    const bookingSnap =
-      pack.bookingMode === "finding"
-        ? {
-            evidenceCount: probeCount,
-            bookedFindingCount: bookedSoFar.count,
-            toolsInLastSegment: toolsInLast,
+    if (cancelled()) stopReason = "aborted";
+    // else keep stopReason from last decision (e.g. natural_stop_after_tools)
+
+    const messages = Array.isArray((session as any).messages) ? [...(session as any).messages] : [];
+    // Fallback: if subscribe never recorded usage (older pi / missed events), scan once.
+    if (usage.snapshot().requests === 0) {
+      for (const msg of messages) {
+        if (msg && (msg as any).role === "assistant") {
+          const before = usage.snapshot().total_tokens;
+          if (usage.recordAssistantMessage(msg)) {
+            const after = usage.snapshot().total_tokens;
+            const delta = after - before;
+            if (delta > 0 && goals.isAccounting()) goals.addTokensUsed(delta);
           }
-        : undefined;
-    // bookingGap: probes without findings (strong signal to allow one continue)
-    const bookingGap =
-      pack.bookingMode === "finding" && probeCount >= 2 && bookedSoFar.count === 0;
-    // Soft open work (todos) for continue prompts; premature breadth no longer requires open todos.
-    const openWorkRemaining = runtime.todo.openCount() > 0;
-
-    // Pass previous emptyStopStreak only — evaluateContinueAfterSegment increments once.
-    const decision = evaluateContinueAfterSegment({
-      aborted: cancelled(),
-      toolsInLastSegment: toolsInLast,
-      previousEmptyStopStreak: emptyStopStreak,
-      continueCount,
-      maxContinues,
-      maxEmptyStopStreak,
-      bookingGap,
-      bookingContinueUsed,
-      prematureStopCount,
-      maxPrematureStops,
-      openWorkRemaining,
-      goalModeActive: goals.isActive(),
-      goalContinueCount,
-      maxGoalContinues,
-    });
-    emptyStopStreak = decision.nextEmptyStopStreak;
-    stopReason = normalizeProductStopReason({
-      reason: decision.reason,
-      continueCount,
-      toolsInLastSegment: toolsInLast,
-    });
-    if (!decision.continue) break;
-
-    if (decision.kind === "booking_gap") bookingContinueUsed = true;
-    if (decision.kind === "premature") prematureStopCount += 1;
-    if (decision.kind === "goal") {
-      goalContinueCount += 1;
-      goals.setGoalContinueCount(goalContinueCount);
-    }
-    continueCount = decision.nextContinueCount;
-    segmentCounter.tools = 0;
-    runtime.lifecycle.toolsInLastSegment = 0;
-    // New outer cycle: OMP mid-run todo budget resets (mutations + nudge cap).
-    if (runtime.lifecycle.midRunTodo) resetMidRunTodoCycle(runtime.lifecycle.midRunTodo);
-
-    const todoErrors = runtime.lifecycle.pendingTodoErrorReminder?.slice();
-    runtime.lifecycle.pendingTodoErrorReminder = undefined;
-    const goalSnap = goals.formatForPrompt();
-    const modeGoal = goals.getMode();
-    const openTodoTitles = runtime.todo
-      .snapshot()
-      .flatMap((p) => p.tasks.filter((t) => t.status === "pending" || t.status === "in_progress").map((t) => t.content));
-    const openTodoCount = runtime.todo.openCount();
-    const goalContinuationBody =
-      decision.kind === "goal" && modeGoal
-        ? buildGoalContinuationPrompt(modeGoal, { openTodoTitles, openTodoCount })
-        : undefined;
-
-    await loggingPlatform.send({
-      type: "status_update",
-      conversation_id: task.conversationId,
-      task_id: task.taskId,
-      message: `continue ${continueCount}/${maxContinues} (${decision.reason}) goal=${goalContinueCount}/${maxGoalLabel} premature=${prematureStopCount}/${maxPrematureStops} evidence=${evidenceList.length} findings=${bookedSoFar.count}`,
-      agent_phase: "continue",
-      status: "running",
-      llm_usage: usage.snapshot({ tool_calls: obsCounters.toolCallCount }),
-    });
-    // Mid-run checkpoint on outer continues so tokens/tasks refresh even if throttle was idle.
-    await emitCheckpointUpdate(obsCtx);
-    checkpointThrottle.markEmitted();
-
-    try {
-      const continueKind =
-        decision.kind === "booking_gap"
-          ? "booking_gap"
-          : decision.kind === "goal"
-            ? "goal"
-            : decision.kind === "premature"
-              ? "premature"
-              : "empty";
-      await session.prompt(
-        composeContinuePrompt({
-          attempt: continueCount,
-          max: maxContinues,
-          openTodoCount,
-          openTodoTitles,
-          todoErrors,
-          booking: bookingSnap,
-          goalSummary: goalSnap,
-          kind: continueKind,
-          prematureAttempt: prematureStopCount,
-          prematureMax: maxPrematureStops,
-          goalContinuationBody,
-        }),
-        { source: "interactive" },
-      );
-      await assertNoLlmTurnError();
-    } catch (err) {
-      if (cancelled()) break;
-      throw err;
-    }
-  }
-
-  if (cancelled()) stopReason = "aborted";
-  // else keep stopReason from last decision (e.g. natural_stop_after_tools)
-
-  const messages = Array.isArray((session as any).messages) ? [...(session as any).messages] : [];
-  // Fallback: if subscribe never recorded usage (older pi / missed events), scan once.
-  if (usage.snapshot().requests === 0) {
-    for (const msg of messages) {
-      if (msg && (msg as any).role === "assistant") {
-        const before = usage.snapshot().total_tokens;
-        if (usage.recordAssistantMessage(msg)) {
-          const after = usage.snapshot().total_tokens;
-          const delta = after - before;
-          if (delta > 0 && goals.isAccounting()) goals.addTokensUsed(delta);
         }
       }
     }
-  }
 
-  // OMP idle subagent sessions: dispose parked children at task end.
-  try {
-    await runtime.lifecycle.subagentIdlePool?.disposeAll?.();
-  } catch {
-    // ignore
-  }
-
-  const booked = await loadConfirmedFindings(runtime.findingsDir);
-  // Chat-only: completed only when a real reply happened (not LLM soft-error — those throw).
-  const harnessStatus = chatOnly
-    ? cancelled()
-      ? "incomplete"
-      : "completed"
-    : resolveHarnessTerminalStatus({
-        bookedFindingCount: booked.count,
-        aborted: cancelled(),
-        stopReason,
-      });
-  const emitStatus = resolveTerminalTaskStatus({ harnessStatus });
-  const endTime = new Date().toISOString();
-
-  panel.setMainTerminal(cancelled() ? "aborted" : emitStatus === "completed" ? "completed" : "failed");
-  obsCounters.phase = "finished";
-
-  const llmUsage = usage.snapshot({
-    agent_count: panel.list().length,
-    tool_calls: obsCounters.toolCallCount,
-  });
-
-  const summary =
-    booked.count > 0
-      ? `Harness settled ${emitStatus} with ${booked.count} booked finding(s). stop=${stopReason} role=${pack.id}`
-      : `Harness settled ${emitStatus}. stop=${stopReason} role=${pack.id}`;
-
-  // Out-of-scope hosts seen this burst → next-Scope candidates (not formal assets).
-  let attackSurfaceCandidates: ReturnType<typeof buildAttackSurfaceCandidates> = [];
-  if (!chatOnly && !ledgerAssistSeat) {
+    // OMP idle subagent sessions: dispose parked children at task end.
     try {
-      const localFindings = await loadFindings(runtime.findingsDir);
-      const locs = localFindings
-        .flatMap((f) => [String((f as any).location || ""), String((f as any).url || ""), String((f as any).poc || "")])
-        .filter(Boolean);
-      attackSurfaceCandidates = buildAttackSurfaceCandidates({ task, locationStrings: locs });
-      await writeFile(
-        join(taskDir, "attack_surface_candidates.json"),
-        JSON.stringify(attackSurfaceCandidates, null, 2),
-        "utf8",
-      );
+      await runtime.lifecycle.subagentIdlePool?.disposeAll?.();
     } catch {
-      attackSurfaceCandidates = [];
+      // ignore
     }
-  }
-  const sideCandidates = attackSurfaceCandidates.filter((c) => !c.in_scope);
 
-  // Hook: work-burst end → panel timer closes (checkpoint.end_time then task_complete).
-  await emitCheckpointUpdate(obsCtx, {
-    terminal: true,
-    status: emitStatus,
-    endTime,
-    attackSurfaceCandidates,
-  });
+    const booked = await loadConfirmedFindings(runtime.findingsDir);
+    // Chat-only: completed only when a real reply happened (not LLM soft-error — those throw).
+    const harnessStatus = chatOnly
+      ? cancelled()
+        ? "incomplete"
+        : "completed"
+      : resolveHarnessTerminalStatus({
+          bookedFindingCount: booked.count,
+          aborted: cancelled(),
+          stopReason,
+        });
+    const emitStatus = resolveTerminalTaskStatus({ harnessStatus });
+    const endTime = new Date().toISOString();
 
-  await loggingPlatform.send({
-    type: "task_complete",
-    conversation_id: task.conversationId,
-    task_id: task.taskId,
-    status: emitStatus,
-    summary,
-    stop_reason: stopReason,
-    continue_count: continueCount,
-    booked_findings: booked.count,
-    role_pack: pack.id,
-    open_goals: goals.snapshot().openCount,
-    llm_usage: llmUsage,
-    started_at: startedAt,
-    end_time: endTime,
-    attack_surface_candidates: attackSurfaceCandidates,
-    next_scope_candidates: sideCandidates,
-  });
+    panel.setMainTerminal(cancelled() ? "aborted" : emitStatus === "completed" ? "completed" : "failed");
+    obsCounters.phase = "finished";
 
-  await writeFile(
-    join(taskDir, "agent-summary.json"),
-    JSON.stringify(
-      {
-        taskId: task.taskId,
-        phase: "finished",
-        terminalStatus: emitStatus,
-        stopReason,
-        continueCount,
-        bookedFindings: booked.count,
-        rolePack: pack.id,
-        roleSource: roleResolved.source,
-        openGoals: goals.snapshot().openCount,
-        goals: goals.snapshot().goals,
-        llm_usage: llmUsage,
-        startedAt,
-        endTime,
-        attackSurfaceCandidates,
-        nextScopeCandidates: sideCandidates,
-      },
-      null,
-      2,
-    ),
-    "utf8",
-  );
+    const llmUsage = usage.snapshot({
+      agent_count: panel.list().length,
+      tool_calls: obsCounters.toolCallCount,
+    });
 
-  await writeFile(join(taskDir, "goals-snapshot.json"), JSON.stringify(goals.snapshot(), null, 2), "utf8");
+    const summary =
+      booked.count > 0
+        ? `Harness settled ${emitStatus} with ${booked.count} booked finding(s). stop=${stopReason} role=${pack.id}`
+        : `Harness settled ${emitStatus}. stop=${stopReason} role=${pack.id}`;
 
-  await writePostRunInspectArtifacts({
-    taskDir,
-    taskId: task.taskId,
-    terminalStatus: emitStatus,
-    summary,
-    messages,
-    continueCount,
-    stopReason,
-    bookedFindingCount: booked.count,
-  });
+    // Out-of-scope hosts seen this burst → next-Scope candidates (not formal assets).
+    let attackSurfaceCandidates: ReturnType<typeof buildAttackSurfaceCandidates> = [];
+    if (!chatOnly && !ledgerAssistSeat) {
+      try {
+        const localFindings = await loadFindings(runtime.findingsDir);
+        const locs = localFindings
+          .flatMap((f) => [
+            String((f as any).location || ""),
+            String((f as any).url || ""),
+            String((f as any).poc || ""),
+          ])
+          .filter(Boolean);
+        attackSurfaceCandidates = buildAttackSurfaceCandidates({ task, locationStrings: locs });
+        await writeFile(
+          join(taskDir, "attack_surface_candidates.json"),
+          JSON.stringify(attackSurfaceCandidates, null, 2),
+          "utf8",
+        );
+      } catch {
+        attackSurfaceCandidates = [];
+      }
+    }
+    const sideCandidates = attackSurfaceCandidates.filter((c) => !c.in_scope);
 
-  return { terminalStatus: emitStatus, taskDir };
+    // Hook: work-burst end → panel timer closes (checkpoint.end_time then task_complete).
+    await emitCheckpointUpdate(obsCtx, {
+      terminal: true,
+      status: emitStatus,
+      endTime,
+      attackSurfaceCandidates,
+    });
+
+    await loggingPlatform.send({
+      type: "task_complete",
+      conversation_id: task.conversationId,
+      task_id: task.taskId,
+      status: emitStatus,
+      summary,
+      stop_reason: stopReason,
+      continue_count: continueCount,
+      booked_findings: booked.count,
+      role_pack: pack.id,
+      open_goals: goals.snapshot().openCount,
+      llm_usage: llmUsage,
+      started_at: startedAt,
+      end_time: endTime,
+      attack_surface_candidates: attackSurfaceCandidates,
+      next_scope_candidates: sideCandidates,
+    });
+
+    await writeFile(
+      join(taskDir, "agent-summary.json"),
+      JSON.stringify(
+        {
+          taskId: task.taskId,
+          phase: "finished",
+          terminalStatus: emitStatus,
+          stopReason,
+          continueCount,
+          bookedFindings: booked.count,
+          rolePack: pack.id,
+          roleSource: roleResolved.source,
+          openGoals: goals.snapshot().openCount,
+          goals: goals.snapshot().goals,
+          llm_usage: llmUsage,
+          startedAt,
+          endTime,
+          attackSurfaceCandidates,
+          nextScopeCandidates: sideCandidates,
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    await writeFile(join(taskDir, "goals-snapshot.json"), JSON.stringify(goals.snapshot(), null, 2), "utf8");
+
+    await writePostRunInspectArtifacts({
+      taskDir,
+      taskId: task.taskId,
+      terminalStatus: emitStatus,
+      summary,
+      messages,
+      continueCount,
+      stopReason,
+      bookedFindingCount: booked.count,
+    });
+
+    return { terminalStatus: emitStatus, taskDir };
   } finally {
     // Always tear down session/stream — including LlmTurnError path (task_error via main).
     try {

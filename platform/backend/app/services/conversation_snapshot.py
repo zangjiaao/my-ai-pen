@@ -1345,6 +1345,7 @@ def normalize_terminal_pentest_plan_tree(
     the UI matches the terminal lifecycle. Incomplete keeps open work visible.
 
     Expert Graph L1 stages (graph-stage-*) are excluded — pending stays pending.
+    L2 work items under graph-stage-* parents are also excluded (do not green on completed).
     """
     conv = str(conversation_status or "").strip().lower()
     close_open_checklist = conv == "completed"
@@ -1358,6 +1359,11 @@ def normalize_terminal_pentest_plan_tree(
         item = dict(node)
         if is_expert_graph_stage_node(item):
             # Never rewrite Graph stage lifecycle (done/blocked/pending/running).
+            normalized.append(item)
+            continue
+        parent_id = str(item.get("parent_id") or "")
+        # L2 under Expert Graph stages: keep true status (do not green on completed).
+        if parent_id.startswith("graph-stage-"):
             normalized.append(item)
             continue
         if is_legacy_resolved_test_node(item):

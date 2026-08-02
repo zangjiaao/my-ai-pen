@@ -24,7 +24,42 @@ import {
   isBookingOnlyStage,
   isHonestyCannotAdvanceErrors,
 } from "./l0-honesty-repair-brief.js";
-import { isLlmTurnError } from "./llm-turn-error.js";
+import { isLlmTurnError, type LlmTurnError } from "./llm-turn-error.js";
+
+/**
+ * After stage_start, an LlmTurnError must close the stage + run before rethrow
+ * so the plan is not left spinning `running` and UI gets stage_end/run_end.
+ * Caller (main) still maps the rethrow to task_error — never task_complete.
+ */
+async function emitLlmStageFailureThenRethrow(options: {
+  emit: (event: HardGraphStageEvent) => void | Promise<void>;
+  graphId: string;
+  stageId: string;
+  stageIndex: number;
+  attempt: number;
+  err: LlmTurnError;
+}): Promise<never> {
+  const msg =
+    options.err instanceof Error
+      ? options.err.message
+      : String(options.err || "llm_error");
+  await options.emit({
+    type: "stage_end",
+    graphId: options.graphId,
+    stageId: options.stageId,
+    stageIndex: options.stageIndex,
+    attempt: options.attempt,
+    outcome: "blocked",
+    errors: ["llm_error", msg].filter(Boolean),
+    summary: msg,
+  });
+  await options.emit({
+    type: "run_end",
+    graphId: options.graphId,
+    terminal: "blocked",
+  });
+  throw options.err;
+}
 
 export type HardGraphHandoff = {
   summary?: string;
@@ -352,6 +387,17 @@ async function runHonestyBlockedTail(input: {
         ? out.feedbackOkIds.map((id) => String(id || "").trim()).filter(Boolean)
         : undefined;
     } catch (err) {
+      // Model/provider soft-failure: close tail stage + run, then rethrow (task_error path).
+      if (isLlmTurnError(err)) {
+        await emitLlmStageFailureThenRethrow({
+          emit,
+          graphId: graph.id,
+          stageId: tail.id,
+          stageIndex: j,
+          attempt: 1,
+          err,
+        });
+      }
       tailStructured = normalizeSubagentResult(
         {
           ok: false,
@@ -513,8 +559,18 @@ export async function runHardGraph(options: {
           : undefined;
         outL1 = out.l1;
       } catch (err) {
-        // Model/provider soft-failure: fail the Graph run so platform gets task_error (user-visible).
-        if (isLlmTurnError(err)) throw err;
+        // Model/provider soft-failure: close stage (not leave running) + run_end, then rethrow.
+        // Main maps LlmTurnError → task_error (never silent task_complete).
+        if (isLlmTurnError(err)) {
+          await emitLlmStageFailureThenRethrow({
+            emit,
+            graphId: graph.id,
+            stageId: stage.id,
+            stageIndex,
+            attempt,
+            err,
+          });
+        }
         structured = normalizeSubagentResult(
           {
             ok: false,

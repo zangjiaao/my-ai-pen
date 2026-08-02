@@ -38,6 +38,34 @@ export function extractLlmTurnError(messages: readonly unknown[] | undefined | n
   return null;
 }
 
+/** Successful / non-error provider stop reasons — do not treat as soft-fail. */
+const SUCCESS_LOOKING_STOPS = new Set([
+  "end_turn",
+  "end-turn",
+  "tool_use",
+  "tool-use",
+  "tool_calls",
+  "tool-calls",
+  "stop",
+  "length",
+  "max_tokens",
+  "content_filter",
+]);
+
+/** Read string error fields only — ignore non-string `error` objects. */
+function stringErrorField(message: AssistantTurnSnapshot | Record<string, unknown>): string {
+  const rec = message as Record<string, unknown>;
+  const candidates = [
+    (message as AssistantTurnSnapshot).errorMessage,
+    rec.error_message,
+    rec.error,
+  ];
+  for (const c of candidates) {
+    if (typeof c === "string" && c.trim()) return c.trim();
+  }
+  return "";
+}
+
 /** Pure helper for one assistant message object (tests + event handlers). */
 export function assistantTurnErrorMessage(message: AssistantTurnSnapshot | Record<string, unknown>): string | null {
   const stop = String(
@@ -47,14 +75,16 @@ export function assistantTurnErrorMessage(message: AssistantTurnSnapshot | Recor
   )
     .trim()
     .toLowerCase();
-  const err = String(
-    (message as AssistantTurnSnapshot).errorMessage ??
-      (message as Record<string, unknown>).error_message ??
-      (message as Record<string, unknown>).error ??
-      "",
-  ).trim();
-  if (stop === "error" || err) {
+  const err = stringErrorField(message);
+
+  // Prefer explicit stopReason/stop_reason === "error".
+  if (stop === "error") {
     return formatLlmErrorForUser(err || "Model request failed (provider stopReason=error)");
+  }
+  // String errorMessage only when stop is empty/missing or not a successful-looking stop.
+  // Stray non-string `error` objects never trip (handled by stringErrorField).
+  if (err && !SUCCESS_LOOKING_STOPS.has(stop)) {
+    return formatLlmErrorForUser(err);
   }
   return null;
 }
