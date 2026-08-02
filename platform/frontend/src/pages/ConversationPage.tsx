@@ -27,6 +27,12 @@ import {
   mergePlanTreeByOwner,
   upsertWorkerAgent,
 } from "../lib/panelAgentsState";
+import {
+  canMorphThinkingFromLiveSlot,
+  mergeProgressiveText,
+  messageListKey,
+  preferNonLiveSlotId,
+} from "../lib/messageStreamIdentity";
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { Check, ChevronDown, PanelRight, PanelRightClose, Target, Upload } from "lucide-react";
 import type { AgentIdentity, Conversation, Message } from "../lib/types";
@@ -350,7 +356,7 @@ export default function ConversationPage() {
     for (const live of Object.values(liveStreams)) {
       if (activeId && live.conversation_id && live.conversation_id !== activeId) continue;
       const streamKey = readString(live.content.stream_id);
-      // live-slot id morphs into thinking without a second bubble.
+      // Live-slot is only a short-lived pending placeholder; stream_id keys progressive bubbles.
       const key = streamKey
         ? `stream:${streamKey}`
         : live.id.startsWith("live-slot-")
@@ -359,18 +365,15 @@ export default function ConversationPage() {
       const prev = byKey.get(key) || (live.id.startsWith("live-slot-") ? undefined : byKey.get(`id:live-slot-${activeId}`));
       if (!prev) {
         byKey.set(key, live);
-        // Remove placeholder slot if we added under stream key
+        // Drop pending placeholder once a real stream entry is present.
         if (activeId) byKey.delete(`id:live-slot-${activeId}`);
         continue;
       }
       const prevText = readString(prev.content.text) || readString(prev.content.reasoning);
       const liveText = readString(live.content.text) || readString(live.content.reasoning);
-      const text =
-        liveText.length >= prevText.length || liveText.startsWith(prevText) || prevText.startsWith(liveText)
-          ? (liveText.length >= prevText.length ? liveText : prevText)
-          : liveText || prevText;
+      const text = mergeProgressiveText(prevText, liveText);
       // Prefer real stream message ids — never pin every thinking bubble to live-slot
-      // (React key={msg.id} would remount all thinking into one DOM node).
+      // (React key would remount all thinking into one DOM node).
       const stableId = preferNonLiveSlotId(live.id, prev.id);
       byKey.set(key, {
         ...prev,
@@ -1394,23 +1397,20 @@ export default function ConversationPage() {
     const message = makeMessage(convId, "agent", msgType, { ...agentAttribution(raw), ...c });
     const liveSlotId = convId ? `live-slot-${convId}` : "";
     // Prefer stream_id so each LLM turn (n4-thinking-…-N) is its own live entry.
-    // Only morph from live-slot placeholder when that slot is still agent_pending.
+    // Live-slot is only a short-lived agent_pending placeholder — morph only when
+    // that slot is still pending AND this frame has a stream_id.
     const liveKey = streamId || messageId || message.id || liveSlotId;
     setLiveStreams((prev) => {
       const slot = liveSlotId ? prev[liveSlotId] : undefined;
       const canMorphFromPending =
-        Boolean(slot) && (slot!.msg_type === "agent_pending" || !streamId);
+        Boolean(slot) && canMorphThinkingFromLiveSlot(slot!.msg_type, streamId);
       const existing =
         prev[liveKey]
         || (msgType === "thinking" && canMorphFromPending ? slot : undefined);
       const prevText = existing
         ? (readString(existing.content.text) || readString(existing.content.reasoning))
         : "";
-      const nextText = body;
-      const text =
-        nextText.length >= prevText.length || nextText.startsWith(prevText) || prevText.startsWith(nextText)
-          ? (nextText.length >= prevText.length ? nextText : prevText)
-          : nextText || prevText;
+      const text = mergeProgressiveText(prevText, body);
       // Stable id per stream: platform uuid5(message_id) or makeMessage id.
       // Do NOT force all thinking onto live-slot-${convId} — that collapses React keys.
       const stableId = preferNonLiveSlotId(
@@ -1434,7 +1434,7 @@ export default function ConversationPage() {
         },
       };
       const out: Record<string, Message> = { ...prev, [liveKey]: nextMsg };
-      // Drop the placeholder slot once we have a real stream key.
+      // Drop the pending placeholder once we have a real stream key.
       if (liveSlotId && liveKey !== liveSlotId) delete out[liveSlotId];
       return out;
     });
@@ -1900,7 +1900,9 @@ export default function ConversationPage() {
       routeNodeId || activeConversationNodeId || activeConversation?.node_id || undefined;
     const pendingExpertId = routeExpertId;
     const pendingExpertName = routeExpertName;
-    // Single live slot: same id morphs Working… → Thinking → text (no flash/remove).
+    // Live-slot is only a short-lived agent_pending placeholder ("思考中…").
+    // Progressive thinking/text frames use per-stream_id keys; the first thinking
+    // frame with a stream_id drops this placeholder from the live map.
     const liveSlotId = `live-slot-${convId}`;
     const pendingContent: Record<string, unknown> = {
       text: "思考中…",
@@ -1924,7 +1926,7 @@ export default function ConversationPage() {
         messageRecordFromMessage(makeMessage(convId!, "agent", "agent_pending", pendingContent)),
       );
     });
-    // Seed live overlay so first thinking frame morphs the same slot (no disappear gap).
+    // Seed live overlay pending placeholder (no disappear gap before first stream frame).
     setLiveStreams((prev) => ({
       ...prev,
       [liveSlotId]: makeMessage(convId!, "agent", "agent_pending", pendingContent),
@@ -3691,18 +3693,4 @@ function upsertBy(items: Array<Record<string, unknown>>, item: Record<string, un
 function makeMessage(conversationId: string | null, role: Message["role"], msg_type: string, content: Record<string, unknown>): Message {
   const messageId = readString(content.message_id);
   return { id: messageId || crypto.randomUUID(), conversation_id: conversationId || "", role, msg_type, content, parent_msg_id: null, created_at: new Date().toISOString() };
-}
-
-/** Prefer real stream/platform ids over the per-conversation live-slot placeholder. */
-function preferNonLiveSlotId(...candidates: Array<string | undefined | null>): string {
-  const cleaned = candidates.map((c) => String(c || "").trim()).filter(Boolean);
-  const real = cleaned.find((id) => !id.startsWith("live-slot-"));
-  return real || cleaned[0] || crypto.randomUUID();
-}
-
-/** React list key: one key per progressive stream so thinking turns do not share a DOM node. */
-function messageListKey(msg: Message): string {
-  const streamId = readString(msg.content?.stream_id);
-  if (streamId) return `stream:${streamId}`;
-  return msg.id || `idx-${msg.created_at || ""}`;
 }
