@@ -141,7 +141,7 @@ function AgentRow({
     secondary && Array.isArray(agent.skills) ? agent.skills.slice(0, 5) : [];
   return (
     <div
-      className={`min-w-0 rounded-md ${padY} pr-2 pl-[9px] ${highlighted ? "bg-status-running/8 ring-1 ring-status-running/25" : "bg-transparent"} ${rowInteractive ? "cursor-pointer hover:bg-canvas-inset focus-visible:outline focus-visible:outline-2 focus-visible:outline-status-running/40" : "hover:bg-canvas-inset"}`}
+      className={`min-w-0 rounded-md ${padY} pr-2 pl-[9px] ${highlighted ? "bg-status-running/8 ring-1 ring-status-running/25" : "bg-surface-default"} ${rowInteractive ? "cursor-pointer hover:bg-canvas-inset focus-visible:outline focus-visible:outline-2 focus-visible:outline-status-running/40" : "hover:bg-canvas-inset"}`}
       onClick={rowInteractive ? onToggle : undefined}
       onKeyDown={handleRowKeyDown}
       role={rowInteractive ? "button" : undefined}
