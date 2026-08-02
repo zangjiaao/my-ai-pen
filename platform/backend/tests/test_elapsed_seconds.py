@@ -53,12 +53,25 @@ def test_transition_bridges_created_to_completed():
 
 
 def test_transition_still_rejects_invalid_paths():
-    c = _conv(status="paused")
+    # canceled cannot go to completed without running first
+    c = _conv(status="canceled")
     try:
         transition_conversation(c, "completed")
         raise AssertionError("expected ConversationStatusError")
     except ConversationStatusError:
         pass
+
+
+def test_paused_normalizes_to_incomplete():
+    """Product convergence: paused is not a product terminal — maps to incomplete."""
+    from app.services.conversation_state import normalize_conversation_status
+
+    assert normalize_conversation_status("paused") == "incomplete"
+    assert normalize_conversation_status("blocked") == "incomplete"
+    # Stored legacy paused row can still settle to completed via incomplete path
+    c = _conv(status="paused")
+    transition_conversation(c, "completed")
+    assert c.status == "completed"
 
 
 def test_reconcile_heals_created_row_from_terminal_checkpoint():
@@ -81,3 +94,47 @@ def test_reconcile_heals_created_row_from_terminal_checkpoint():
     assert reconcile_conversation_status_from_checkpoint(c) is True
     assert c.status == "completed"
     assert c.last_active_at.year == 2026
+
+
+def test_normalize_terminal_plan_keeps_graph_stage_pending():
+    from app.services.conversation_snapshot import normalize_terminal_pentest_plan_tree
+
+    tree = [
+        {
+            "node_id": "graph-stage-init",
+            "title": "init",
+            "status": "done",
+            "level": "phase",
+            "kind": "phase",
+            "source": "plan",
+        },
+        {
+            "node_id": "graph-stage-surface",
+            "title": "surface",
+            "status": "blocked",
+            "level": "phase",
+            "kind": "phase",
+            "source": "plan",
+        },
+        {
+            "node_id": "graph-stage-class_probe",
+            "title": "class_probe",
+            "status": "pending",
+            "level": "phase",
+            "kind": "phase",
+            "source": "plan",
+        },
+        {
+            "node_id": "agent-todo",
+            "title": "manual todo",
+            "status": "pending",
+            "level": "work_item",
+            "kind": "task",
+            "source": "agent",
+        },
+    ]
+    out = normalize_terminal_pentest_plan_tree(tree, "completed")
+    by = {n["node_id"]: n["status"] for n in out}
+    assert by["graph-stage-class_probe"] == "pending"
+    assert by["graph-stage-surface"] == "blocked"
+    assert by["agent-todo"] == "done"

@@ -70,6 +70,7 @@ import {
   formatSkillL1CatalogInjection,
   loadSkillL1Catalog,
 } from "./skill-l1-catalog.js";
+import { extractLlmTurnError, LlmTurnError } from "./llm-turn-error.js";
 
 /**
  * Deposit host-trusted surfaces/candidates into ledger + Finding Store.
@@ -814,6 +815,16 @@ export function createHardGraphStageExecutor(options: {
             seed: continuitySeed,
             workDir,
           });
+        }
+        // Soft LLM failure (403 etc.): surface to user and fail stage — not silent empty settle.
+        const llmErr = extractLlmTurnError(session.messages);
+        if (llmErr) {
+          try {
+            await textStream.emitFinalText(llmErr);
+          } catch {
+            /* best-effort */
+          }
+          throw new LlmTurnError(llmErr);
         }
       } catch (err) {
         if (abortSignal?.aborted) {

@@ -90,11 +90,17 @@ async function runAssignedTask(message: Record<string, unknown>): Promise<void> 
       endReason = "interrupted";
     } else {
       endReason = "error";
+      const raw = error instanceof Error ? error.message : String(error);
+      // LlmTurnError already includes 模型调用失败 prefix; keep message user-facing.
+      const message = raw.startsWith("模型调用失败") || raw.startsWith("llm_error")
+        ? raw.replace(/^llm_error:\s*/i, "")
+        : raw;
       await client.send({
         type: "task_error",
         conversation_id: task.conversationId,
         task_id: task.taskId,
-        message: error instanceof Error ? error.message : String(error),
+        message,
+        stop_reason: /模型调用失败|llm_error/i.test(raw) ? "llm_error" : "error",
       });
     }
   } finally {

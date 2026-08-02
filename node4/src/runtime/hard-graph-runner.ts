@@ -24,6 +24,7 @@ import {
   isBookingOnlyStage,
   isHonestyCannotAdvanceErrors,
 } from "./l0-honesty-repair-brief.js";
+import { isLlmTurnError } from "./llm-turn-error.js";
 
 export type HardGraphHandoff = {
   summary?: string;
@@ -512,6 +513,8 @@ export async function runHardGraph(options: {
           : undefined;
         outL1 = out.l1;
       } catch (err) {
+        // Model/provider soft-failure: fail the Graph run so platform gets task_error (user-visible).
+        if (isLlmTurnError(err)) throw err;
         structured = normalizeSubagentResult(
           {
             ok: false,

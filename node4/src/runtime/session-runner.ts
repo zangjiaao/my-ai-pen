@@ -60,6 +60,10 @@ import {
 } from "./tooling-health.js";
 import { buildAttackSurfaceCandidates } from "./attack-surface.js";
 import { loadFindings } from "../tools/finding.js";
+import {
+  extractLlmTurnError,
+  LlmTurnError,
+} from "./llm-turn-error.js";
 
 export async function runNode4Task(
   config: Node4Config,
@@ -481,12 +485,36 @@ export async function runNode4Task(
   runtime.lifecycle.toolsInLastSegment = 0;
   if (runtime.lifecycle.midRunTodo) resetMidRunTodoCycle(runtime.lifecycle.midRunTodo);
 
+  /** Soft LLM failures (stopReason=error) → user-visible text + LlmTurnError → task_error. */
+  const assertNoLlmTurnError = async () => {
+    if (cancelled()) return;
+    const errText = extractLlmTurnError(session.messages);
+    if (!errText) return;
+    try {
+      await textStream.emitFinalText(errText);
+    } catch {
+      /* best-effort chat bubble */
+    }
+    await loggingPlatform.send({
+      type: "status_update",
+      conversation_id: task.conversationId,
+      task_id: task.taskId,
+      message: errText,
+      agent_phase: "error",
+      status: "failed",
+      llm_usage: usage.snapshot({ tool_calls: obsCounters.toolCallCount }),
+    }).catch(() => {});
+    throw new LlmTurnError(errText);
+  };
+
+  try {
   if (!cancelled()) {
     try {
       await session.prompt(userPrompt, { source: "interactive" });
     } catch (err) {
       if (!cancelled()) throw err;
     }
+    await assertNoLlmTurnError();
   }
 
   while (!cancelled()) {
@@ -523,6 +551,7 @@ export async function runNode4Task(
       runtime.lifecycle.toolsInLastSegment = 0;
       try {
         await session.prompt(buildGoalBudgetLimitPrompt(budgetSteerGoal), { source: "interactive" });
+        await assertNoLlmTurnError();
       } catch (err) {
         if (cancelled()) break;
         throw err;
@@ -632,6 +661,7 @@ export async function runNode4Task(
         }),
         { source: "interactive" },
       );
+      await assertNoLlmTurnError();
     } catch (err) {
       if (cancelled()) break;
       throw err;
@@ -640,9 +670,6 @@ export async function runNode4Task(
 
   if (cancelled()) stopReason = "aborted";
   // else keep stopReason from last decision (e.g. natural_stop_after_tools)
-
-  sessionObs.unsubscribe();
-  await textStream.dispose().catch(() => {});
 
   const messages = Array.isArray((session as any).messages) ? [...(session as any).messages] : [];
   // Fallback: if subscribe never recorded usage (older pi / missed events), scan once.
@@ -659,12 +686,6 @@ export async function runNode4Task(
     }
   }
 
-  try {
-    session.dispose();
-  } catch {
-    // ignore
-  }
-
   // OMP idle subagent sessions: dispose parked children at task end.
   try {
     await runtime.lifecycle.subagentIdlePool?.disposeAll?.();
@@ -673,9 +694,11 @@ export async function runNode4Task(
   }
 
   const booked = await loadConfirmedFindings(runtime.findingsDir);
+  // Chat-only: completed only when a real reply happened (not LLM soft-error — those throw).
   const harnessStatus = chatOnly
-    ? // Pure chat turn: never surface as incomplete/failed engagement.
-      (cancelled() ? "incomplete" : "completed")
+    ? cancelled()
+      ? "incomplete"
+      : "completed"
     : resolveHarnessTerminalStatus({
         bookedFindingCount: booked.count,
         aborted: cancelled(),
@@ -783,6 +806,20 @@ export async function runNode4Task(
   });
 
   return { terminalStatus: emitStatus, taskDir };
+  } finally {
+    // Always tear down session/stream — including LlmTurnError path (task_error via main).
+    try {
+      sessionObs.unsubscribe();
+    } catch {
+      /* ignore */
+    }
+    await textStream.dispose().catch(() => {});
+    try {
+      await Promise.resolve(session.dispose());
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 /**

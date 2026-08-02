@@ -1311,6 +1311,28 @@ def should_recompute_terminal_kanban(kanban: dict, workflow_kind: str, status: s
     return current_stage == "executing" or summary_pending or has_open_totals
 
 
+def is_expert_graph_stage_node(node: dict) -> bool:
+    """Expert Graph L1 stage rows — must not be greened by terminal checklist close-out.
+
+    Hard Graph emits node_id=graph-stage-*, level/kind=phase, source=plan.
+    Never-run stages stay pending (product: keep pending after blocked).
+    """
+    if not isinstance(node, dict):
+        return False
+    node_id = str(node.get("node_id") or node.get("id") or "")
+    if node_id.startswith("graph-stage-"):
+        return True
+    level = str(node.get("level") or "")
+    kind = str(node.get("kind") or "")
+    source = str(node.get("source") or "")
+    # Product plan L1 phases that are not legacy plan-phase-* scaffolding.
+    if (level == "phase" or kind == "phase") and source == "plan" and not node_id.startswith(
+        "plan-phase-"
+    ):
+        return True
+    return False
+
+
 def normalize_terminal_pentest_plan_tree(
     plan_tree: list[dict],
     conversation_status: str | None = None,
@@ -1321,6 +1343,8 @@ def normalize_terminal_pentest_plan_tree(
     finish_scan/task_complete because the model never coverage(mark)s them done.
     For completed conversations, treat remaining open checklist items as done so
     the UI matches the terminal lifecycle. Incomplete keeps open work visible.
+
+    Expert Graph L1 stages (graph-stage-*) are excluded — pending stays pending.
     """
     conv = str(conversation_status or "").strip().lower()
     close_open_checklist = conv == "completed"
@@ -1332,6 +1356,10 @@ def normalize_terminal_pentest_plan_tree(
         if not isinstance(node, dict):
             continue
         item = dict(node)
+        if is_expert_graph_stage_node(item):
+            # Never rewrite Graph stage lifecycle (done/blocked/pending/running).
+            normalized.append(item)
+            continue
         if is_legacy_resolved_test_node(item):
             if notes_imply_not_applicable(item):
                 item["status"] = "skipped"

@@ -896,6 +896,15 @@ function normalizeTasksForConversationStatus(
   if (!closeOpen) return nodes;
   return nodes.map((node) => {
     const nodeStatus = String(node.status || "").toLowerCase();
+    const id = String(node.node_id || node.id || "");
+    // Expert Graph L1 / never-run stages: keep pending (do not green on conversation completed).
+    if (id.startsWith("graph-stage-")) return node;
+    const level = String(node.level || "");
+    const kind = String(node.kind || "");
+    const source = String(node.source || "");
+    if ((level === "phase" || kind === "phase") && source === "plan" && !id.startsWith("plan-phase-")) {
+      return node;
+    }
     if (nodeStatus === "todo" || nodeStatus === "pending" || nodeStatus === "running") {
       return { ...node, status: "done", result: node.result || "completed" };
     }
