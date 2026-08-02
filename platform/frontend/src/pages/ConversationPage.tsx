@@ -369,10 +369,13 @@ export default function ConversationPage() {
         liveText.length >= prevText.length || liveText.startsWith(prevText) || prevText.startsWith(liveText)
           ? (liveText.length >= prevText.length ? liveText : prevText)
           : liveText || prevText;
+      // Prefer real stream message ids — never pin every thinking bubble to live-slot
+      // (React key={msg.id} would remount all thinking into one DOM node).
+      const stableId = preferNonLiveSlotId(live.id, prev.id);
       byKey.set(key, {
         ...prev,
         ...live,
-        id: prev.id.startsWith("live-slot-") ? prev.id : live.id,
+        id: stableId,
         content: {
           ...prev.content,
           ...live.content,
@@ -380,6 +383,7 @@ export default function ConversationPage() {
           ...(live.msg_type === "thinking" || live.msg_type === "agent_pending"
             ? { reasoning: text }
             : {}),
+          message_id: stableId,
         },
       });
       if (activeId) byKey.delete(`id:live-slot-${activeId}`);
@@ -1389,11 +1393,16 @@ export default function ConversationPage() {
     markMessageAutoScroll();
     const message = makeMessage(convId, "agent", msgType, { ...agentAttribution(raw), ...c });
     const liveSlotId = convId ? `live-slot-${convId}` : "";
-    // Prefer stream id; first thinking frame reuses live-slot so Working… morphs in place.
-    const liveKey = streamId || message.id || liveSlotId;
+    // Prefer stream_id so each LLM turn (n4-thinking-…-N) is its own live entry.
+    // Only morph from live-slot placeholder when that slot is still agent_pending.
+    const liveKey = streamId || messageId || message.id || liveSlotId;
     setLiveStreams((prev) => {
       const slot = liveSlotId ? prev[liveSlotId] : undefined;
-      const existing = prev[liveKey] || (msgType === "thinking" ? slot : undefined);
+      const canMorphFromPending =
+        Boolean(slot) && (slot!.msg_type === "agent_pending" || !streamId);
+      const existing =
+        prev[liveKey]
+        || (msgType === "thinking" && canMorphFromPending ? slot : undefined);
       const prevText = existing
         ? (readString(existing.content.text) || readString(existing.content.reasoning))
         : "";
@@ -1402,18 +1411,26 @@ export default function ConversationPage() {
         nextText.length >= prevText.length || nextText.startsWith(prevText) || prevText.startsWith(nextText)
           ? (nextText.length >= prevText.length ? nextText : prevText)
           : nextText || prevText;
+      // Stable id per stream: platform uuid5(message_id) or makeMessage id.
+      // Do NOT force all thinking onto live-slot-${convId} — that collapses React keys.
+      const stableId = preferNonLiveSlotId(
+        messageId || message.id,
+        existing?.id,
+        streamId ? `stream:${streamId}` : "",
+        liveSlotId,
+      );
       const nextMsg: Message = {
         ...(existing || message),
         ...message,
-        // Keep stable id for the thinking slot so React does not unmount/remount.
-        id: existing?.id || (msgType === "thinking" && liveSlotId ? liveSlotId : message.id),
+        id: stableId,
         msg_type: msgType,
         content: {
           ...(existing?.content || {}),
           ...message.content,
           text,
           ...(msgType === "thinking" ? { reasoning: text } : {}),
-          message_id: existing?.id || message.id,
+          stream_id: streamId || readString(existing?.content.stream_id) || undefined,
+          message_id: stableId,
         },
       };
       const out: Record<string, Message> = { ...prev, [liveKey]: nextMsg };
@@ -2402,7 +2419,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               {messageQuery.isFetchingNextPage && <div className="py-2 text-center text-xs text-ink-muted">Loading older messages...</div>}
               {messageQuery.hasNextPage && !messageQuery.isFetchingNextPage && <button type="button" onClick={fetchOlderMessages} className="mx-auto block rounded-pill border border-hairline px-3 py-1.5 text-xs text-ink-secondary">Load older messages</button>}
               {displayMessages.map((msg, index) => (
-                <div key={msg.id} data-message-created-at={msg.created_at}>
+                <div key={messageListKey(msg)} data-message-created-at={msg.created_at}>
                   <MessageRenderer
                     message={msg}
                     previousMessage={displayMessages[index - 1]}
@@ -3674,4 +3691,18 @@ function upsertBy(items: Array<Record<string, unknown>>, item: Record<string, un
 function makeMessage(conversationId: string | null, role: Message["role"], msg_type: string, content: Record<string, unknown>): Message {
   const messageId = readString(content.message_id);
   return { id: messageId || crypto.randomUUID(), conversation_id: conversationId || "", role, msg_type, content, parent_msg_id: null, created_at: new Date().toISOString() };
+}
+
+/** Prefer real stream/platform ids over the per-conversation live-slot placeholder. */
+function preferNonLiveSlotId(...candidates: Array<string | undefined | null>): string {
+  const cleaned = candidates.map((c) => String(c || "").trim()).filter(Boolean);
+  const real = cleaned.find((id) => !id.startsWith("live-slot-"));
+  return real || cleaned[0] || crypto.randomUUID();
+}
+
+/** React list key: one key per progressive stream so thinking turns do not share a DOM node. */
+function messageListKey(msg: Message): string {
+  const streamId = readString(msg.content?.stream_id);
+  if (streamId) return `stream:${streamId}`;
+  return msg.id || `idx-${msg.created_at || ""}`;
 }
