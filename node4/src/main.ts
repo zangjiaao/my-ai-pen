@@ -15,6 +15,7 @@ import { sanitizePromptLabel } from "./runtime/prompt-template.js";
 import { extractAgentLanguageFromMessage } from "./runtime/agent-language.js";
 import { cancelApprovalsForConversation, resolveApproval } from "./runtime/approvals.js";
 import { classifyUserControl } from "./runtime/package-settlement-law.js";
+import { deliverUserSteerToActiveSession } from "./runtime/active-session-registry.js";
 import {
   installExpert,
   listInstalledPackIds,
@@ -184,23 +185,13 @@ client.on("ws_open", async () => {
 
 /**
  * Shared-session follow-up from the platform (mid-task steer or continue).
- * Node4 has no long-lived host after settle — promote steer to a work burst
- * when not busy; otherwise tell the room the expert is still working.
+ * When a work burst is active: inject into the live Agent via steer/followUp
+ * (pi mid-run padding — not a new burst, not "still working" reject).
+ * When idle: promote steer to a new work burst.
  */
 client.on("user_steer", async (message) => {
   const conversationId = String(message.conversation_id || message.conversationId || "").trim();
   if (!conversationId) return;
-
-  if (busy.has(conversationId)) {
-    await client.send({
-      type: "text",
-      conversation_id: conversationId,
-      content: {
-        text: "This expert is still working on the current turn. Wait a moment or interrupt first.",
-      },
-    });
-    return;
-  }
 
   const contentText =
     message.content && typeof message.content === "object" && !Array.isArray(message.content)
@@ -210,6 +201,31 @@ client.on("user_steer", async (message) => {
   // Spec #116 I0.8: empty message is not abort (shared law)
   const ctrl = classifyUserControl({ kind: text ? "steer_text" : "empty_message", text });
   if (ctrl.reject || !text) return;
+
+  if (busy.has(conversationId)) {
+    const delivered = deliverUserSteerToActiveSession(conversationId, text);
+    if (delivered.ok) {
+      // Acknowledge receipt without claiming work finished (panel honesty).
+      await client.send({
+        type: "status_update",
+        conversation_id: conversationId,
+        message: "User message queued for the current work turn.",
+        status: "running",
+        working: true,
+        agent_phase: "user_steer_queued",
+      });
+      return;
+    }
+    // Session not registered yet (race) or inject failed — surface failure, do not silent-drop.
+    await client.send({
+      type: "text",
+      conversation_id: conversationId,
+      content: {
+        text: "Could not deliver your message to the active turn. Try again in a moment, or use Interrupt then resend.",
+      },
+    });
+    return;
+  }
 
   await runAssignedTask({
     ...message,

@@ -53,6 +53,7 @@ function fakeSession(opts?: {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    steer: () => {},
     followUp: () => {},
     get messages() {
       return [];
@@ -120,7 +121,8 @@ async function testAbortStopsFurtherWork() {
           aborted = true;
         },
         subscribe: () => () => {},
-        followUp: () => {},
+        steer: () => {},
+    followUp: () => {},
         get messages() {
           return [];
         },
