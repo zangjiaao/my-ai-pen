@@ -5,7 +5,7 @@
 
 **Expert Graph:** product-owned runner (`hard-graph-*`); stage order and Feedback are **not** Main OMP scheduling. Soft scenario Graph is **retired** as a product work mode (not Expert DoD).
 
-**Product seats:** **Default** = free platform assistant (never Expert Graph). **Expert** = **Graph mode only** (multi-Graph per expert; product templates `app_assessment` + `redteam_deep`; no Expert free/OMP scene). After Graph `task_complete`, same-session follow-ups stay in the Graph envelope without auto full re-run (C1). Three-layer Task / Agent / Feedback semantics are **product-owned** on Node4 (ADR 0001 B1).
+**Product seats:** **Default** = free platform assistant (never Expert Graph unless a future pack declares Graph capability). **Expert** = pack persona on a **Participant Session** (`docs/specs/participant-session.md` / Spec #277): default **work mode Free** (UI Graph **不指定**); **Expert Graph × Pi** only after explicit user permission for a **declared** graph id (`app_assessment`, `redteam_deep`, …). Silent Free→Graph on resume is forbidden. After Graph `task_complete`, same-session follow-ups stay in the Graph envelope without auto full re-run (C1); exit Graph **parks** harness and returns Free. Three-layer Task / Agent / Feedback semantics are **product-owned** on Node4 (ADR 0001 B1).
 
 ## One sentence
 
@@ -67,14 +67,14 @@ Probe-class stages that allow `subagent` **prefer packages** when multi-class wo
 | **Expert Graph × Pi** | Product templates `app_assessment` / `redteam_deep` (aliases), `graphDiscipline=hard`, or `NODE4_HARD_GRAPH=1`; thin lab ids | Runner drives ordered stages; hard files under `graphs/hard/`; fail-closed Feedback; **Main is not the stage scheduler** |
 | **Soft scenario Graph** | **Retired** | No product resolve; soft pack JSON removed |
 
-Product Expert UI selects **only** scenario Graphs (`app_assessment`, `redteam_deep`) — no Expert free chip.  
+Product Expert UI Graph control: **不指定** (= Free) plus declared scenario Graphs (`app_assessment`, `redteam_deep`, …). Mode authority is **per Participant Session**, not Case sticky template alone (`docs/specs/participant-session.md`).  
 `redteam_deep` loads `graphs/hard/redteam_deep.json` (assessment fork + `chain`/`postex`/`lateral`; `roe.allow_postex: true`).  
-Post-Graph continue-chat: structured `graph_execution=continue` (C1) keeps envelope without full Hard re-run. Product retest is **not** a free OMP `/api/vulnerabilities/{id}/retest` path (removed N1); dig-deeper / finding re-verify is Case chat + Agent intent with optional fields `focus_finding_ids` / `focus_note` on normal `task_assign` (map #81).  
+Post-Graph continue-chat: structured `graph_execution=continue` (C1) keeps envelope without auto full Hard re-run. Same-mode fail/interrupt continue preserves Session work mode (#277). Product retest is **not** a free OMP `/api/vulnerabilities/{id}/retest` path (removed N1); dig-deeper / finding re-verify is Case chat + Agent intent with optional fields `focus_finding_ids` / `focus_note` on normal `task_assign` (map #81).  
 
 **Wire deprecation (closed):** transitional `retest_finding_ids` / `retestFindingIds` keys were accepted only during the first F1 land; they are **removed**. Clients and agents must send `focus_finding_ids` / `focusFindingIds` (and `focus_note` / `focusNote`) only.  
 If a task carries structured Graph intent but no hard Graph resolves, the Node **fail-closes** (`task_error` / failed) — never silent free OMP.
 
-UI: casual work → **Default**. Expert work → explicit Graph template selection.
+UI: **不指定** or no Graph capability → Free under current Expert Session. Explicit Graph selection or permitted Agent proposal → Expert Graph × Pi.
 
 ## Subagent + acceptance loop
 

@@ -46,6 +46,7 @@ import type { AgentIdentity, Conversation, Message } from "../lib/types";
 import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../lib/securityTypes";
 import {
   ENGAGEMENT_TEMPLATES,
+  ENGAGEMENT_UNSPECIFIED_LABEL,
   expertLabel,
   resolveExpertColor,
   type EngagementTemplateId,
@@ -2009,7 +2010,7 @@ export default function ConversationPage() {
     // Keep selected partner after send so multi-turn stays with the same persona.
     setInput("");
     const isPentest = isPentestMentionTarget(resolved);
-    // Expert path: only attach product Graph template when set (S2/U1 — no Expert free).
+    // Spec #277: 不指定 / null → Free on the wire (omit engagement_template; never silent Graph).
     const tmpl: EngagementTemplateId | "" =
       isPentest && engagementTemplate
         ? engagementTemplate
@@ -2041,13 +2042,13 @@ export default function ConversationPage() {
       allowPostex: isPentest ? tmplAllowPostex : undefined,
       expertId: resolved?.kind === "expert" ? resolved.expertId : undefined,
     });
-    // Persist case RoE only for pentest (1 session = 1 case)
-    if (activeId && isPentest && tmpl) {
+    // Persist case RoE for pentest: Graph template or free clear (Spec #277 Session Free).
+    if (activeId && isPentest) {
       void authFetch(`/api/conversations/${activeId}/case`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          engagement_template: tmpl,
+          engagement_template: tmpl || "free",
           allow_postex: tmplAllowPostex,
         }),
       }).catch(() => {});
@@ -2066,22 +2067,16 @@ export default function ConversationPage() {
       setGoalModeEnabled(false);
       setModeMenuOpen(false);
       setEngagementTemplate(null);
-    } else {
-      // Default product Graph when entering pentest Expert without a restored template.
-      setEngagementTemplate((prev) => prev ?? "app_assessment");
     }
+    // Spec #277: stay on 不指定 (Free) when entering pentest — do not silent-set app_assessment.
   }, [mentionTargets]);
 
   const activePartner = selectedMention || mentionTargets[0] || null;
   const showPentestControls = isPentestMentionTarget(activePartner);
-  // When pentest Expert is active and template unset, default product Graph for UI + send.
-  useEffect(() => {
-    if (showPentestControls && engagementTemplate == null) {
-      setEngagementTemplate("app_assessment");
-    }
-  }, [showPentestControls, engagementTemplate]);
+  // Spec #277: null engagementTemplate = 不指定 = Free; never auto-force app_assessment.
   const activeModeLabel =
-    ENGAGEMENT_TEMPLATES.find((t) => t.id === engagementTemplate)?.label || "应用评估";
+    ENGAGEMENT_TEMPLATES.find((t) => t.id === engagementTemplate)?.label
+    || ENGAGEMENT_UNSPECIFIED_LABEL;
 
   // Close partner / mode menus on outside click or Escape.
   useEffect(() => {
@@ -2662,6 +2657,31 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                             <p className="px-3 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-ink-muted">
                               模式
                             </p>
+                            {/* Spec #277: 不指定 = Free on the wire (default). */}
+                            <button
+                              type="button"
+                              role="option"
+                              aria-selected={engagementTemplate == null}
+                              onClick={() => {
+                                setEngagementTemplate(null);
+                                setModeMenuOpen(false);
+                              }}
+                              className={`flex w-full items-start gap-2.5 px-3 py-2.5 text-left transition-colors ${
+                                engagementTemplate == null ? "bg-surface-elevated" : "hover:bg-surface-default"
+                              }`}
+                            >
+                              <span className="min-w-0 flex-1">
+                                <span className="block text-sm font-medium text-ink">
+                                  {ENGAGEMENT_UNSPECIFIED_LABEL}
+                                </span>
+                                <span className="mt-0.5 block text-[11px] leading-snug text-ink-muted">
+                                  Free：同 Expert 连续协作，不进入 Expert Graph
+                                </span>
+                              </span>
+                              {engagementTemplate == null && (
+                                <Check size={14} className="mt-0.5 shrink-0 text-ink" strokeWidth={2.25} />
+                              )}
+                            </button>
                             {ENGAGEMENT_TEMPLATES.map((t) => {
                               const selected = t.id === engagementTemplate;
                               return (

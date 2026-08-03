@@ -2724,11 +2724,13 @@ async def _remember_conversation_task(
     allow_postex: bool | None = None,
     accounts: object = None,
     asset_id: str | None = None,
+    work_mode: str | None = None,
 ):
     try:
         from app.db.base import async_session
         from app.models.conversation import Conversation
         from app.services.case_engagement import merge_case_into_context, resolve_allow_postex
+        from app.services.participant_session import merge_session_into_context
 
         async with async_session() as db:
             r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id)))
@@ -2787,17 +2789,26 @@ async def _remember_conversation_task(
                     task_blob["expert_id"] = eid
                 if ename:
                     task_blob["expert_name"] = ename
-            et = str(
-                engagement_template
-                or prev_task.get("engagement_template")
-                or ""
-            ).strip()
+            # Spec #277: Session work_mode is mode SOT. Free must not inherit Case/task sticky Graph.
+            mode = str(work_mode or "").strip().lower()
+            if mode == "free":
+                et = ""
+            elif mode == "graph":
+                et = str(engagement_template or "").strip()
+            else:
+                et = str(
+                    engagement_template
+                    or prev_task.get("engagement_template")
+                    or ""
+                ).strip()
             if et:
                 task_blob["engagement_template"] = et
             ap = allow_postex
-            if ap is None and "allow_postex" in prev_task:
+            if ap is None and "allow_postex" in prev_task and mode != "free":
                 ap = prev_task.get("allow_postex")
-            if ap is not None or et:
+            if mode == "free":
+                task_blob["allow_postex"] = False if ap is None else bool(ap)
+            elif ap is not None or et:
                 task_blob["allow_postex"] = resolve_allow_postex(
                     engagement_template=et or eng,
                     engagement=eng,
@@ -2808,13 +2819,31 @@ async def _remember_conversation_task(
             elif prev_task.get("accounts") is not None:
                 task_blob["accounts"] = prev_task.get("accounts")
             context["task"] = task_blob
-            # Keep case block in sync (1 conversation = 1 case)
-            context = merge_case_into_context(
-                context,
-                engagement_template=task_blob.get("engagement_template"),
-                allow_postex=task_blob.get("allow_postex"),
-                accounts=task_blob.get("accounts"),
-            )
+            # Participant Session private: per-expert work_mode / graph_id (Spec #277).
+            session_eid = str(eid or expert_id or "").strip()
+            if mode in {"free", "graph"} and session_eid:
+                context = merge_session_into_context(
+                    context,
+                    expert_id=session_eid,
+                    work_mode=mode,
+                    graph_id=et if mode == "graph" else None,
+                )
+            # Case block: Free Expert Session clears Graph sticky so UI reload stays 不指定.
+            # Bare default seat does not clear Case sticky (other Experts may still use Graph).
+            if mode == "free" and session_eid:
+                context = merge_case_into_context(
+                    context,
+                    engagement_template="free",
+                    allow_postex=task_blob.get("allow_postex"),
+                    accounts=task_blob.get("accounts"),
+                )
+            else:
+                context = merge_case_into_context(
+                    context,
+                    engagement_template=task_blob.get("engagement_template"),
+                    allow_postex=task_blob.get("allow_postex"),
+                    accounts=task_blob.get("accounts"),
+                )
             c.context = context
             await db.commit()
     except Exception as e:
@@ -3742,6 +3771,7 @@ async def _dispatch_task_assign_to_node(
     expert_name: str | None,
     resume_context: dict | None = None,
     force_working: bool = True,
+    same_mode_continue: bool = False,
 ) -> None:
     """Build task_assign and send to an online Node (default seat or expert)."""
     task_msg = _task_assign_from_user_message(conv_id, msg, str(uuid.uuid4()))
@@ -3753,8 +3783,15 @@ async def _dispatch_task_assign_to_node(
         task_msg["expert_name"] = expert_name
     task_msg = await _merge_case_roe_into_task_assign(conv_id, task_msg)
     task_msg = await _attach_case_context_to_task_assign(conv_id, task_msg)
-    # C1 (#78): after Expert Graph completed, sticky template must not full-run Hard stages.
-    task_msg = await _apply_graph_execution_c1(conv_id, task_msg, msg)
+    # Spec #277: Session work envelope (Free continuity; Case sticky must not silent-promote Graph).
+    # Includes C1 graph_execution when work_mode=graph.
+    task_msg, work_envelope = await _apply_participant_work_envelope(
+        conv_id,
+        task_msg,
+        msg,
+        expert_id=expert_id,
+        same_mode_continue=same_mode_continue,
+    )
 
     gate_err = await _gate_engagement_for_node(node_id, engagement)
     if gate_err:
@@ -3770,6 +3807,7 @@ async def _dispatch_task_assign_to_node(
         )
         return
 
+    envelope_mode = str((work_envelope or {}).get("work_mode") or "").strip().lower() or None
     await _remember_conversation_task(
         conv_id,
         target=task_msg.get("target") or {},
@@ -3782,6 +3820,7 @@ async def _dispatch_task_assign_to_node(
         engagement_template=str(task_msg.get("engagement_template") or "").strip() or None,
         allow_postex=task_msg.get("allow_postex") if isinstance(task_msg.get("allow_postex"), bool) else None,
         accounts=task_msg.get("accounts"),
+        work_mode=envelope_mode,
     )
     await _bind_conversation_to_node(conv_id, node_id, active_task_id=str(task_msg.get("task_id") or ""))
     if force_working:
@@ -3884,7 +3923,11 @@ def _task_assign_from_user_message(conv_id: str, msg: dict, task_id: str) -> dic
 
 
 async def _apply_graph_execution_c1(conv_id: str | None, task_msg: dict, msg: dict) -> dict:
-    """Attach structured graph_execution when C1 policy resolves (pure helper owns rules)."""
+    """Attach structured graph_execution when C1 policy resolves (pure helper owns rules).
+
+    Prefer `_apply_participant_work_envelope` on product dispatch paths (Spec #277);
+    this remains for direct C1-only callers/tests.
+    """
     from app.services.case_engagement import resolve_graph_execution
 
     out = dict(task_msg or {})
@@ -3919,6 +3962,89 @@ async def _apply_graph_execution_c1(conv_id: str | None, task_msg: dict, msg: di
     if resolved is not None:
         out["graph_execution"] = resolved
     return out
+
+
+async def _apply_participant_work_envelope(
+    conv_id: str | None,
+    task_msg: dict,
+    msg: dict,
+    *,
+    expert_id: str | None = None,
+    same_mode_continue: bool = False,
+) -> tuple[dict, dict]:
+    """Resolve Participant Session work envelope and apply to task_assign (Spec #277).
+
+    Mode authority: this-turn composer + Session work_mode. Case sticky template alone
+    must never promote Free → Graph. Returns (task_msg, envelope).
+    """
+    from app.services.case_engagement import case_fields_from_context
+    from app.services.participant_session import (
+        apply_work_envelope_to_task_assign,
+        resolve_work_envelope,
+        session_record_from_context,
+    )
+
+    out = dict(task_msg or {})
+    context: dict = {}
+    status: str | None = None
+    if conv_id:
+        try:
+            from app.db.base import async_session
+            from app.models.conversation import Conversation
+
+            async with async_session() as db:
+                r = await db.execute(
+                    select(Conversation).where(Conversation.id == uuid.UUID(str(conv_id)))
+                )
+                c = r.scalar_one_or_none()
+                if c:
+                    context = dict(c.context or {}) if isinstance(c.context, dict) else {}
+                    status = str(getattr(c, "status", None) or "") or None
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "work envelope: conversation load failed conv_id=%s",
+                conv_id,
+                exc_info=True,
+            )
+
+    eid = str(expert_id or out.get("expert_id") or msg.get("expert_id") or "").strip() or None
+    session = session_record_from_context(context, eid)
+    case_fields = case_fields_from_context(context)
+
+    # This-turn composer only when message carries the field (absent ≠ sticky inject).
+    if "engagement_template" in msg or "engagementTemplate" in msg:
+        composer = msg.get("engagement_template", msg.get("engagementTemplate"))
+    else:
+        composer = None
+
+    explicit = (
+        msg.get("graph_execution")
+        or msg.get("graphExecution")
+        or out.get("graph_execution")
+        or out.get("graphExecution")
+        or ""
+    )
+    force_interrupt = bool(
+        msg.get("force_interrupt")
+        or msg.get("forceInterrupt")
+        or msg.get("interrupt") is True
+    )
+
+    envelope = resolve_work_envelope(
+        expert_id=eid,
+        session_work_mode=session.get("work_mode"),
+        session_graph_id=session.get("graph_id"),
+        composer_template=composer,
+        case_sticky_template=case_fields.get("engagement_template"),
+        conversation_status=status,
+        explicit_execution=explicit,
+        same_mode_continue=same_mode_continue,
+        force_interrupt=force_interrupt,
+    )
+    applied = apply_work_envelope_to_task_assign(out, envelope)
+    return applied, envelope
 
 
 async def _merge_case_roe_into_task_assign(conv_id: str | None, task_msg: dict) -> dict:
@@ -4360,6 +4486,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
 
                     # Resume after terminal: short continue + resumable target → re-dispatch with context.
                     has_resume_task = _has_resumable_task(resume_context)
+                    same_mode_continue = False
                     if (
                         not is_default
                         and str(conversation_status or "").lower() in {"failed", "incomplete", "paused", "canceled"}
@@ -4369,6 +4496,8 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         resumed_msg, resumed = _resume_message_from_context(msg, resume_context)
                         if resumed_msg:
                             msg = resumed_msg
+                            # Spec #277 A1: same-mode continue — Session work_mode wins over sticky Graph.
+                            same_mode_continue = True
 
                     # Resolve engagement for Node seat.
                     if is_default:
@@ -4412,6 +4541,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         expert_name=expert_name,
                         resume_context=resume_context if has_resume_task else None,
                         force_working=True,
+                        same_mode_continue=same_mode_continue,
                     )
                     continue
 

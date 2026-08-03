@@ -7,12 +7,24 @@ Ubiquitous language for the AI security workbench: one platform, one bound Node,
 ### Product seats
 
 **Default**:
-The Node seat with no expert pack installed: tools for ledger management, status understanding, and report assistance. Never enters Expert Hard Graph.
-_Avoid_: Free (as a second product concept), free mode, OMP-only product mode
+The Node seat / pack with no Expert Graph capability (or product assistant without declared graphs): tools for ledger management, status understanding, and report assistance. Does not enter Expert Hard Graph unless a future pack declares Graph capability.
+_Avoid_: treating Default as the only place continuous chat exists
 
 **Expert**:
-A specialized pack (e.g. pentest, CTF, code audit) installed on the same Node base. Execution work uses Hard Graph × Pi when graphDiscipline is hard.
-_Avoid_: role seat, plugin (when meaning a full specialist pack)
+A specialized pack instance (e.g. pentest, CTF, code audit) addressable by @mention. Runs on a **Participant Session** for the Case. Default **work mode Free** (no Graph harness); **Expert Graph × Pi** when the pack declares graph ids and the user permits enter Graph.
+_Avoid_: role seat; plugin (when meaning a full specialist pack); silent Free→Graph on resume
+
+**Case**:
+One conversation = one work group. Shares user-visible thread, Findings, evidence, scope/RoE.
+_Avoid_: Case sticky template as sole work-mode authority for every Expert resume
+
+**Participant Session**:
+Long-lived `conversation_id + expert_id` work identity. Private work mode, parked Graph, working memory. Multiple Sessions may exist on one Case; v1 only the current Mention runs.
+_Avoid_: new amnesiac task_id as the only notion of “session”; equating UI chat continuity with per-stage pi workdirs alone
+
+**Work mode Free**:
+Participant Session without Expert Graph runner (OMP-class Agent Runtime under the same Expert persona). UI Graph control **不指定**.
+_Avoid_: Free as a second product **seat**; Soft scenario Graph; calling Free “Default” when an Expert is selected
 
 **Node candidate**:
 An implementation that can be bound as the product Node. **Product path (locked):** Node4 lineage with Graph × Pi only. Former Node5 lab tree is deleted; fallback B retired (ADR 0001 B1).
