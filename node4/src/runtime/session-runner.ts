@@ -67,6 +67,12 @@ import {
   extractLlmTurnError,
   LlmTurnError,
 } from "./llm-turn-error.js";
+import {
+  decideParkOnEnd,
+  parkWorkingSession,
+  resolveWorkingSessionContinue,
+} from "./working-session-park.js";
+import { runParkedWorkingContinue } from "./run-parked-working-continue.js";
 
 export async function runNode4Task(
   config: Node4Config,
@@ -202,6 +208,28 @@ export async function runNode4Task(
     ledgerAssistSeat,
     continueInEnvelope,
   });
+
+  // Spec #283 I0.9: same-mode continue attaches parked captain when present.
+  // C1 free-in-envelope never consumes Graph park as resume (decideAttach c1_continue).
+  const sessionWorkModeForPark: "free" | "graph" =
+    workPath.path === "hard" && hardResolved.mode === "hard" ? "graph" : "free";
+  const parkContinue = resolveWorkingSessionContinue({
+    conversationId: task.conversationId,
+    expertId: task.expertId || pack.id,
+    sessionWorkMode: sessionWorkModeForPark,
+    continueInEnvelope,
+  });
+  if (parkContinue.action === "attach") {
+    const parkedOut = await runParkedWorkingContinue({
+      config,
+      platform: loggingPlatform,
+      task,
+      parked: parkContinue.entry,
+      signal,
+    });
+    return { terminalStatus: parkedOut.terminalStatus, taskDir };
+  }
+
   if (workPath.path === "hard" && hardResolved.mode === "hard") {
     runtime.lifecycle.abortSignal = signal;
     const hardOut = await runHardGraphExpertTask({
@@ -843,7 +871,8 @@ export async function runNode4Task(
 
     return { terminalStatus: emitStatus, taskDir };
   } finally {
-    // Always tear down session/stream — including LlmTurnError path (task_error via main).
+    // Tear down stream / active-session registration always.
+    // Spec #283 I0.9: on user interrupt, park Free Main captain (do not dispose).
     try {
       unregisterActiveSession();
     } catch {
@@ -855,10 +884,34 @@ export async function runNode4Task(
       /* ignore */
     }
     await textStream.dispose().catch(() => {});
-    try {
-      await Promise.resolve(session.dispose());
-    } catch {
-      /* ignore */
+    const parkDecision = decideParkOnEnd({
+      aborted: cancelled(),
+    });
+    if (parkDecision.disposition === "park") {
+      parkWorkingSession({
+        conversationId: task.conversationId,
+        expertId: String(task.expertId || pack.id || ""),
+        workMode: "free",
+        taskId: task.taskId,
+        session,
+        todo: runtime.todo,
+        accounts: task.accounts,
+        runtime,
+        parkedAt: Date.now(),
+        dispose: () => {
+          try {
+            void Promise.resolve(session.dispose());
+          } catch {
+            /* ignore */
+          }
+        },
+      });
+    } else {
+      try {
+        await Promise.resolve(session.dispose());
+      } catch {
+        /* ignore */
+      }
     }
   }
 }

@@ -1,10 +1,10 @@
 # Spec: Case · Participant Session · work mode continuity
 
 **Status:** Implementable Spec (product contract)  
-**Issue:** [#277](https://github.com/zangjiaao/my-ai-pen/issues/277) (amended by [#282](https://github.com/zangjiaao/my-ai-pen/issues/282) interrupt→continue)  
-**Inputs:** Owner grilling (session analysis `0ab49d25-…`; Free→Graph silent divert; Case vs Session continuity); owner resolution vs map [#213](https://github.com/zangjiaao/my-ai-pen/issues/213) (2026-08-03); field Case `f758d7f5-…` (Graph interrupt → Free cold-start)  
+**Issue:** [#277](https://github.com/zangjiaao/my-ai-pen/issues/277) (amended by [#282](https://github.com/zangjiaao/my-ai-pen/issues/282) mode continuity on interrupt→continue; [#283](https://github.com/zangjiaao/my-ai-pen/issues/283) I0.9 working-runtime continuity)  
+**Inputs:** Owner grilling (session analysis `0ab49d25-…`; Free→Graph silent divert; Case vs Session continuity); owner resolution vs map [#213](https://github.com/zangjiaao/my-ai-pen/issues/213) (2026-08-03); field Case `f758d7f5-…` (Graph interrupt → Free cold-start / working-runtime amnesia)  
 **Product path:** Graph × Pi + Product state (ADR 0001). Soft scenario Graph remains **retired**.  
-**Amends:** `docs/specs/task-graph.md` product rule “Expert = Graph only / no Expert free chip”; `docs/specs/expert-offers.md` Case sticky template as sole mode authority; interrupt continue continuity (#282).  
+**Amends:** `docs/specs/task-graph.md` product rule “Expert = Graph only / no Expert free chip”; `docs/specs/expert-offers.md` Case sticky template as sole mode authority; interrupt continue continuity (#282 mode + #283 I0.9 park/attach).  
 **Supersedes (product law):** map [#213](https://github.com/zangjiaao/my-ai-pen/issues/213) / grilling [#216](https://github.com/zangjiaao/my-ai-pen/issues/216) **standalone Agent Route** (`route_target` as a mandatory pre-work judgment step that may alone select `hard_graph` under 不指定). Continuity and mode authority follow **this Spec**. Reusable pieces of #213 (Case multi-run inheritance schema, Goal adopt families, multi-`graphId` catalog facts) may still feed later Specs — they must not reintroduce silent or Agent-alone Graph divert.  
 **Does not amend:** book-path L0, Finding Store, hypothesis queue ≠ booking, intent NLP ban (`AGENTS.md`).
 
@@ -140,22 +140,43 @@ Consumers: platform WS/task_assign path, composer, Node entry. **No second polic
 | A9 | Under UI 不指定: first turn / Free Session stays Free; Graph Session continues Graph. Enter Graph only via explicit Workflow or accepted enter-Graph permission — **no** Agent-alone `hard_graph` Route write. |
 | A10 | No mandatory pre-work Route step in the product path; judgment to work vs propose Graph vs propose Expert transfer happens inside Free. |
 
-### 5.1 Interrupt → continue (Spec [#282](https://github.com/zangjiaao/my-ai-pen/issues/282))
+### 5.1 Interrupt → continue — mode continuity (Spec [#282](https://github.com/zangjiaao/my-ai-pen/issues/282))
 
 Primary seam: **Participant Session continue after interrupt**. Free and Graph are work modes on the **same** Session (`conversation_id + expert_id`); interrupt cancels **only the in-flight turn**.
+
+**Split:** **#282 = mode continuity** (Graph must not silent-become Free cold OMP via C1 wire collision). **#283 I0.9 = working-runtime continuity** (park captain; continue = next turn on same pi session). Both required for full operator expectation; #282 alone is half product.
 
 | # | Bar |
 |---|-----|
 | I1 | Graph mid-work → interrupt → user「继续」(composer 不指定/omit) → `work_mode` stays **graph**; next turn is **not** Free cold OMP. |
-| I2 | Same-mode continue retains harness todos/plan projection authority (no wipe-to-empty solely due to continue). **v1 platform acceptance:** Graph envelope not stripped on continue (prevents Free empty-Todo cold-start). **Node:** incomplete continue re-enters Hard (stage plan rebind); durable captain park / in-memory todo snapshot across interrupt is I0.9 follow-up. |
-| I3 | Credential/login intent (structured `accounts` and/or Session working memory) remains available on the next turn. |
-| I4 | Free Session + incomplete +「继续」+ Case sticky Graph template stays **Free** (A1). |
-| I5 | Graph **completed** + follow-up chat (C1) remains free-in-envelope; **no** full Hard stage re-fire. |
+| I2 | Same-mode continue retains harness todos/plan projection authority (no wipe-to-empty solely due to continue). **Platform:** Graph envelope not stripped on continue. **Node I0.9:** park Free Main and Graph stage captain; attach same runtime on continue so todos are not wiped-to-empty by continue alone. Park miss → mode-correct reseed (Hard for incomplete Graph). |
+| I3 | Credential/login intent (structured `accounts` and/or Session working memory) remains available on the next turn (I0.9 park retains accounts snapshot). |
+| I4 | Free Session + incomplete +「继续」+ Case sticky Graph template stays **Free** (A1). Free Main parks the same way as Graph (I0.9). |
+| I5 | Graph **completed** + follow-up chat (C1) remains free-in-envelope; **no** full Hard stage re-fire. C1 must not consume a Graph park as incomplete resume. |
 | I6 | Incomplete / interrupted / failed Graph continue must **not** take the C1 free-in-envelope path (I5). Wire adapters must not collapse these into one synonym Node treats as Free. |
 | I7 | Interrupt when Node already idle / no active burst settles Session (no permanent ghost running); subsequent「继续」follows I1/I4 by Session mode. |
 | I8 | Explicit composer graph id this turn still may enter Graph (permission); continuity rules do not break intentional Workflow. |
 
 **Wire adapter (implementation):** post-complete C1 uses `graph_execution=continue` (free-in-envelope). Incomplete Graph same-mode continue uses `graph_execution=resume` (Hard Graph path). Platform `resolve_work_envelope` + Node `parseGraphExecution` / `resolveExpertWorkPath` are thin adapters under this seam.
+
+### 5.2 Working session continue — runtime continuity (Spec [#283](https://github.com/zangjiaao/my-ai-pen/issues/283) I0.9)
+
+Primary seam: **Working session continue after interrupt**.
+
+| # | Bar |
+|---|-----|
+| I0.9-W1 | Graph stage captain mid-work → interrupt →「继续」→ attach **same** parked captain runtime; `work_mode` graph; not Free cold OMP. |
+| I0.9-W2 | Pre-interrupt non-empty todos/plan remain non-empty after continue alone (no wipe-to-empty before agent acts). |
+| I0.9-W3 | Credential/login intent available on next turn after park attach. |
+| I0.9-W4 | Free Main mid-work → interrupt →「继续」→ attach same Free Main parked runtime (not Graph-only park). |
+| I0.9-W5 | Graph completed + C1 follow-up unchanged (#282 I5). |
+| I0.9-W6 | Park miss → mode-correct Graph reseed; never silent Free demotion when Session mode was Graph. |
+| I0.9-W7 | Idle interrupt → honest settle; continue by Session mode (#282 I7). |
+| I0.9-W8 | Steer/padding mid-run ≠ interrupt; does not dispose or park. |
+| I0.9-W9 | Park TTL expiry → honest reseed; Session mode preserved. v1 park is memory-only in the live Node process (default TTL 30 minutes). |
+| I0.9-W10 | Explicit composer Graph after Free may enter Graph (permission); Free park is not forced onto Graph (mode_mismatch reseed). |
+
+**Node adapter:** `working-session-park` registry keyed by `conversation_id + expert_id`. Interrupt parks captain; continue attaches; dispose only on natural terminal / transfer / TTL / process death (then honest reseed).
 
 ---
 
