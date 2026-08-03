@@ -161,3 +161,4 @@ Wave 1:
 - Spec #116 already says Todo is a facade on Graph; this Spec **enforces stage-local scope** so the facade cannot smuggle a Free-style dual timeline.
 - Wave1 prefers **reject bad init** over silent truncation so Agents get a clear retry signal.
 - Implement after seams confirmation; label issue `ready-for-agent`.
+- **Wave1 follow-up (code review on 9ebd851):** `phaseMatchesGraphStage` tightened from bidirectional `includes` to exact normalize equality **or** stage-slug + optional suffix only (`init-checklist`). Multi-phase weak substring hits (e.g. `minit`, mid-string stage fragments) no longer count as stage aliases. Single-phase free labels remain always stage-local. S1 seam tests cover createTodoTool + HardGraphPlanStore (ok / reject / Free regression / neutralize). Harness + `experts/pentest/work.md` document Graph stage-only checklist (no vuln answer keys).

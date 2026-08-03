@@ -5,28 +5,42 @@
 
 export type TodoInitPhaseInput = { phase: string; items: string[] };
 
-function norm(s: string): string {
+/** Normalize for alias compare: lower + keep a-z0-9 and CJK; drop punctuation/space. */
+export function normalizePhaseLabel(s: string): string {
   return String(s || "")
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9\u4e00-\u9fff]+/g, "");
 }
 
-/** Phase name is an alias of the current host stage id (init/surface/…). */
+/**
+ * Phase name is a real alias of the current host stage id (init/surface/…).
+ *
+ * Wave1 (tight): exact normalize equality, OR phase is stage slug with optional
+ * suffix only (e.g. `init-checklist` → `initchecklist` starts with `init`).
+ * Rejects bidirectional substring matches (e.g. stage fragment inside an
+ * unrelated name like `minit` / mid-string hits) so multi-phase maps cannot
+ * slip through as "all aliases".
+ *
+ * Single-phase free labels are accepted at the whole-engagement check layer
+ * (`phases.length <= 1`), not here.
+ */
 export function phaseMatchesGraphStage(phaseName: string, stageId: string): boolean {
-  const p = norm(phaseName);
-  const s = norm(stageId);
+  const p = normalizePhaseLabel(phaseName);
+  const s = normalizePhaseLabel(stageId);
   if (!p || !s) return false;
   if (p === s) return true;
-  // Allow light aliases: "init stage", "surface-enum", Chinese free labels only when single-phase
-  // (multi-phase uses strict match / reject).
-  if (p.includes(s) || s.includes(p)) return true;
+  // stage + optional suffix material only (init-checklist, Init Stage → initstage)
+  if (p.startsWith(s) && p.length > s.length) return true;
   return false;
 }
 
 /**
  * True when init list looks like a Free whole-engagement map on Graph
  * (multiple phases not all tied to current stageId).
+ *
+ * Single phase (any label, including empty free label after trim failure) is
+ * always stage-local for Wave1 — agent may name the phase freely for one checklist.
  */
 export function isWholeEngagementTodoInitOnGraph(
   list: TodoInitPhaseInput[] | undefined,
