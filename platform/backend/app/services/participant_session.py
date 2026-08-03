@@ -15,7 +15,10 @@ from app.services.case_engagement import (
 )
 
 WorkMode = Literal["free", "graph"]
-GraphExecution = Literal["run", "continue_session", "resume_parked", "full_restart"]
+# continue_session = post-complete C1 free-in-envelope (wire "continue")
+# resume = incomplete/interrupted/failed Graph same-mode continue (wire "resume" — Hard path, not C1)
+# resume_parked = permissioned re-enter of parked Graph after exit
+GraphExecution = Literal["run", "continue_session", "resume", "resume_parked", "full_restart"]
 QueueMode = Literal["enqueue", "run_now"]
 
 # Wire values that mean Free / unspecified (UI 不指定).
@@ -208,10 +211,18 @@ def resolve_work_envelope(
         work_mode = "free"
         graph_id = None
 
-    # --- graph_execution (C1 + same-mode) ---
+    # --- graph_execution (C1 post-complete vs incomplete Graph resume — Spec #282) ---
     if work_mode == "graph" and graph_id:
         if graph_execution is None:
-            # Map existing C1 resolver; only after real Graph settle → continue.
+            status = str(conversation_status or "").strip().lower()
+            incomplete_like = status in {
+                "failed",
+                "incomplete",
+                "paused",
+                "canceled",
+                "cancelled",
+            }
+            # Map existing C1 resolver; only after product-settled completed → free-in-envelope.
             c1 = resolve_graph_execution(
                 engagement_template=graph_id,
                 conversation_status=conversation_status,
@@ -219,17 +230,16 @@ def resolve_work_envelope(
             )
             if c1 == "full":
                 graph_execution = "full_restart"
+            elif incomplete_like and sess_mode == "graph":
+                # Spec #282 S1/S6: incomplete/interrupted/failed Graph Session must never
+                # wire as C1 "continue" (Node free-in-envelope). Resume Hard path instead.
+                graph_execution = "resume"
             elif c1 == "continue":
+                # Post-complete (or explicit continue_chat/envelope on completed) → C1.
                 graph_execution = "continue_session"
             elif same_mode_continue and sess_mode == "graph":
-                # Incomplete/failed Graph continue: keep Graph without forcing full restart
-                # when client did not ask for full. Node interprets omit as first-run full
-                # only when hard resolves; for fail continue we prefer continue_session.
-                status = str(conversation_status or "").strip().lower()
-                if status in {"failed", "incomplete", "paused", "canceled", "cancelled"}:
-                    graph_execution = "continue_session"
-                else:
-                    graph_execution = "run"
+                # Same-mode Graph continue without incomplete terminal: re-enter Hard path.
+                graph_execution = "run"
             else:
                 graph_execution = "run"
     else:
@@ -256,11 +266,19 @@ def resolve_work_envelope(
 
 
 def _wire_graph_execution(graph_execution: GraphExecution | None) -> str | None:
-    """Map envelope graph_execution to existing task_assign wire values."""
+    """Map envelope graph_execution to task_assign wire values (Spec #282 split).
+
+    - continue_session → "continue" (C1 free-in-envelope only)
+    - resume / resume_parked → "resume" (Hard Graph path; not C1)
+    - full_restart → "full"
+    - run → omit (Node first-run full when hard resolves)
+    """
     if graph_execution is None:
         return None
-    if graph_execution in {"continue_session", "resume_parked"}:
+    if graph_execution == "continue_session":
         return "continue"
+    if graph_execution in {"resume", "resume_parked"}:
+        return "resume"
     if graph_execution == "full_restart":
         return "full"
     # run → omit (Node first-run full when hard resolves)

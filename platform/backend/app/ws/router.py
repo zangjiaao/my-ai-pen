@@ -5002,7 +5002,8 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     same_mode_continue = False
                     if (
                         not is_default
-                        and str(conversation_status or "").lower() in {"failed", "incomplete", "paused", "canceled"}
+                        and str(conversation_status or "").lower()
+                        in {"failed", "incomplete", "paused", "canceled", "cancelled"}
                         and has_resume_task
                         and _looks_like_continue_request(str(msg.get("text") or ""))
                     ):
@@ -5106,13 +5107,31 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                 elif msg.get("type") in ("user_steer", "user_interrupt") and conv_id:
                     if msg.get("type") == "user_interrupt":
                         action = str(msg.get("action") or "cancel").lower()
-                        # Keep session status=running while experts wind down; fan-out
-                        # interrupt to every worker on this conversation (not only sticky bind).
+                        # Spec #282 S7: interrupt cancels in-flight turn only. When Node
+                        # has no tracked active burst, settle Session honestly — do not
+                        # invent ghost workers / permanent interrupting from bound-node alone.
+                        active_workers: dict = {}
+                        try:
+                            from app.db.base import async_session
+                            from app.models.conversation import Conversation
+
+                            async with async_session() as db:
+                                r = await db.execute(
+                                    select(Conversation).where(Conversation.id == uuid.UUID(conv_id))
+                                )
+                                c = r.scalar_one_or_none()
+                                if c and isinstance(c.context, dict):
+                                    active_workers = _workers_from_context(c.context)
+                        except Exception as e:
+                            print(f"[WS] interrupt workers peek: {e}")
+
+                        # Fan-out interrupt to bound/tracked nodes (no-op if already idle).
                         fanout = await _interrupt_all_session_workers(conv_id, msg)
                         sent_to = fanout.get("sent_to") or []
-                        if sent_to:
-                            # Ensure each target is tracked as working so UI stays on
-                            # Interrupt until every node emits work_status(idle).
+                        # Only wait for wind-down when a real burst is tracked.
+                        wind_down = bool(active_workers) and bool(sent_to)
+                        if wind_down:
+                            # Keep session status=running while tracked workers wind down.
                             working_payload = {
                                 "type": "conversation_working",
                                 "conversation_id": conv_id,
@@ -5121,18 +5140,28 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                                 "workers": [],
                                 "interrupting": True,
                             }
-                            for nid in sent_to:
-                                working_payload = await _apply_worker_state(
-                                    conv_id,
-                                    node_id=nid,
-                                    working=True,
-                                    interrupt_pending=True,
-                                    reason="interrupt" if action != "pause" else "pause",
-                                )
+                            for nid in list(active_workers.keys()):
+                                if nid in sent_to:
+                                    working_payload = await _apply_worker_state(
+                                        conv_id,
+                                        node_id=nid,
+                                        working=True,
+                                        interrupt_pending=True,
+                                        reason="interrupt" if action != "pause" else "pause",
+                                    )
+                                else:
+                                    # Offline tracked worker — drop ghost, do not invent running.
+                                    working_payload = await _apply_worker_state(
+                                        conv_id,
+                                        node_id=nid,
+                                        working=False,
+                                        interrupt_pending=False,
+                                        reason="not_busy",
+                                    )
                             working_payload["interrupting"] = True
                             working_payload["working"] = True
                         else:
-                            # No online runtime — clear ghost workers and leave interrupt mode.
+                            # No active burst (idle Node / ghost / offline) — settle Session.
                             working_payload = await _apply_worker_state(
                                 conv_id,
                                 working=False,
@@ -5149,8 +5178,9 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                                 "incomplete" if action == "pause" else "canceled"
                             )
                             working_payload["working"] = False
+                            working_payload["interrupting"] = False
                         await _broadcast_conversation_working(working_payload)
-                        if sent_to:
+                        if wind_down:
                             note = (
                                 f"已向 {len(sent_to)} 个专家运行时发送中止，正在停止本会话全部工作…"
                                 if action != "pause"
@@ -5158,12 +5188,17 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             )
                         else:
                             note = "当前会话没有在线专家在工作，已解除运行态。"
+                        settle_status = (
+                            "running"
+                            if wind_down
+                            else ("incomplete" if action == "pause" else "canceled")
+                        )
                         await _persist_and_broadcast(conv_id, {
                             "type": "status",
                             "conversation_id": conv_id,
                             "text": note,
-                            "status": "running" if sent_to else ("incomplete" if action == "pause" else "canceled"),
-                            "working": bool(sent_to),
+                            "status": settle_status,
+                            "working": bool(wind_down),
                             "agent_source": "platform",
                             "agent_node_id": str(PLATFORM_AGENT_NODE_ID),
                         }, "agent")
@@ -5174,7 +5209,13 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             resource_type="conversation",
                             resource_id=uuid.UUID(conv_id),
                             conversation_id=uuid.UUID(conv_id),
-                            detail={"sent_to": sent_to, "targets": fanout.get("targets"), "action": action},
+                            detail={
+                                "sent_to": sent_to,
+                                "targets": fanout.get("targets"),
+                                "action": action,
+                                "active_workers": list(active_workers.keys()),
+                                "wind_down": wind_down,
+                            },
                         )
                     else:
                         # Spec #277 §3.3 14a: mid-wait free-text is approval feedback, not steer.

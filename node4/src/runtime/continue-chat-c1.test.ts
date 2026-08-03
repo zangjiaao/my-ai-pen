@@ -96,4 +96,23 @@ assert.equal(
   false,
 );
 
+// Spec #282: incomplete Graph resume must not take C1 free path
+assert.equal(parseGraphExecution({ graph_execution: "resume" }), "resume");
+assert.equal(
+  isContinueInEnvelopeExecution({
+    graphExecution: parseGraphExecution({ graph_execution: "resume" }),
+  }),
+  false,
+  "resume is not C1",
+);
+const resumePath = resolveExpertWorkPath({
+  hardMode: "hard",
+  graphIntent: "app_assessment",
+  chatOnly: false,
+  continueInEnvelope: isContinueInEnvelopeExecution({
+    graphExecution: parseGraphExecution({ graph_execution: "resume" }),
+  }),
+});
+assert.equal(resumePath.path, "hard", "Spec #282: incomplete resume stays Hard");
+
 console.log("continue-chat-c1.test.ts: ok");
