@@ -3,6 +3,7 @@
  * Exclusive kinds: Vuln | Key | Flag (one badge each).
  */
 import type { SecurityVulnerability } from "../../lib/securityTypes";
+import { isFindingNew } from "../../lib/findingNew";
 
 export type FindingKindId = "vuln" | "auth" | "flag";
 
@@ -12,11 +13,14 @@ interface Props {
   finding: FindingLike;
   onOpen?: (finding: Partial<SecurityVulnerability>) => void;
   className?: string;
+  /** Case / engagement start for New badge derivation (RightPanel). */
+  caseStartedAt?: string | null;
 }
 
-export default function FindingCard({ finding, onOpen, className = "" }: Props) {
+export default function FindingCard({ finding, onOpen, className = "", caseStartedAt }: Props) {
   const row = finding as Record<string, unknown>;
   const kind = classifyFindingKind(row);
+  const showNew = isFindingNew(row, { caseStartedAt });
 
   return (
     <button
@@ -55,6 +59,11 @@ export default function FindingCard({ finding, onOpen, className = "" }: Props) 
             Flag
           </span>
         )}
+        {showNew ? (
+          <span className="inline-block shrink-0 rounded-md bg-status-success/15 px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase text-status-success">
+            New
+          </span>
+        ) : null}
         <span className="truncate text-sm font-medium">{findingDisplayTitle(row, kind)}</span>
       </div>
       <p className="break-words text-xs text-ink-muted">{findingMetaLine(row, kind)}</p>

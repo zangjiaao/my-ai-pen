@@ -26,6 +26,7 @@ Operators see Agent claim “新增 N 个漏洞” while the Case Findings panel
 | Delivery | Identity + platform→agent structured outcome; no dual list |
 | UI | Remove “再次发现 / 再次确认 N 次 / multiple_discoveries” badges; old rows default chrome |
 | Narration | **User-visible text only describes New** (ledger `created=true`); rediscover is silent ledger update |
+| New badge | Chat (`vuln_found` / `vuln_card`) and Right panel Findings show a compact **New** mono badge when the row is a true ledger **create** (`created=true` / `is_new=true`, or derived first-ever / first_seen in engagement window). Rediscoveries stay without rediscovery chrome and without **New**. |
 
 ## Identity rules (normative)
 
@@ -52,7 +53,7 @@ Unknown / empty → reject at Node tool and platform ingest.
 1. **Primary (pure):** platform `finding_dedupe` — `location_resource_key`, `normalize_vuln_type`, `is_same_finding` under new rules. Prefer this seam over router integration for identity.
 2. **Ingest boundary:** platform `vuln_found` persist — require `vuln_type`, store it, return `created` (and stop advertising multi-discovery UI fields as product surface).
 3. **Node booking tool:** `finding(confirm)` — require `vuln_type`, pass on wire; tool result must not instruct “新增 N from confirm count”; prefer structured `ledger.created` when platform outcome is available.
-4. **UI chrome:** Finding/chat cards — remove rediscovery / multiple_discoveries badges (history may remain for internal timeline if already stored).
+4. **UI chrome:** Finding/chat cards — remove rediscovery / multiple_discoveries badges (history may remain for internal timeline if already stored). Chat `vuln_found` / `vuln_card` and Right panel Findings show a compact **New** badge for ledger creates (`created=true`, or panel derivation from `is_new` / first-seen in engagement / first-ever). Rediscoveries do not get **New** and do not regain multiple-discovery chrome.
 
 ## Out of scope
 

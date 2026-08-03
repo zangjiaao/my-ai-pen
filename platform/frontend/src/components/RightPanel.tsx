@@ -426,6 +426,7 @@ export default function RightPanel({
                     {group.items.map((finding, index) => (
                       <FindingCard
                         key={(finding.id as string) || (finding.vulnerability_id as string) || `${group.id}-${index}`}
+                        caseStartedAt={caseRun?.started_at || strixRun?.start_time}
                         finding={{
                           ...finding,
                           // Keep group assignment exclusive (Vuln / Key / Flag).

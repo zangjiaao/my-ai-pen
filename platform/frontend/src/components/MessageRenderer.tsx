@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { Brain, Compass, Globe2, Search, ShieldAlert, Terminal, Users, Wrench, type LucideIcon } from "lucide-react";
 import type { Message } from "../lib/types";
 import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../lib/securityTypes";
+import { isTruthyNewFlag } from "../lib/findingNew";
 import { normalizeExecutionStatus } from "../lib/status";
 import { phaseLabel } from "../lib/phase";
 import ConfirmCard from "./cards/ConfirmCard";
@@ -602,6 +603,8 @@ function VulnCard({ content, onOpen }: { content: Record<string, unknown>; onOpe
       ? `${description.slice(0, 177)}…`
       : description
     : String(content.location || content.endpoint || content.affected_asset || "").trim() || "-";
+  // Spec #275 New-only: badge only when ledger create; never rediscovery chrome.
+  const showNew = isTruthyNewFlag(content.created);
 
   return (
     <button
@@ -618,6 +621,11 @@ function VulnCard({ content, onOpen }: { content: Record<string, unknown>; onOpe
     >
       <div className="mb-1 flex min-w-0 items-center gap-2">
         <span className={`inline-block flex-shrink-0 rounded-md px-2.5 py-0.5 font-mono text-[11px] font-medium uppercase ${badgeClass}`}>{label}</span>
+        {showNew ? (
+          <span className="inline-block flex-shrink-0 rounded-md bg-status-success/15 px-2.5 py-0.5 font-mono text-[11px] font-medium uppercase text-status-success">
+            New
+          </span>
+        ) : null}
         <span className="min-w-0 truncate font-semibold">{findingCardTitle(content, category)}</span>
       </div>
       <p className="line-clamp-2 break-words text-sm text-ink-secondary [overflow-wrap:anywhere]">{subtitle}</p>

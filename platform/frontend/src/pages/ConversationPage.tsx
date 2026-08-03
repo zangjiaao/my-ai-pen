@@ -754,6 +754,9 @@ export default function ConversationPage() {
         description: m.description || m.impact,
         poc: m.poc || m.reproduction,
         affected_asset: m.affected_asset || m.url,
+        // Live New badge: keep ledger create signal on panel rows without reload.
+        created: m.created,
+        is_new: m.is_new !== undefined ? m.is_new : m.created,
       }, "title"));
       addMessageToConversation(convId, makeMessage(convId, "agent", "vuln_card", m));
       void refreshConversationState(convId);
