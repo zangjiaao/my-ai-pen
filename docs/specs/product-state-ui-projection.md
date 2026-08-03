@@ -1,10 +1,21 @@
 # Spec: Product state → UI passive projection
 
-**Status:** ready-for-agent (Wave 1: Findings + Evidence read path)  
+**Status:** implemented (Wave 1: Findings + Evidence read path)  
 **Issue:** [#280](https://github.com/zangjiaao/my-ai-pen/issues/280)  
 **Related:** Base booking Spec ([#279](https://github.com/zangjiaao/my-ai-pen/issues/279), `docs/specs/base-booking-finding-id.md`); #275 New badge; #277 panel_agents; stream identity #276
 
 **Product path:** Platform Case storage + frontend subscription; Node Agent Runtime collects and writes; UI does not trust Agent prose as ledger.
+
+### Living status (Wave1)
+
+| Area | Behavior now |
+|------|----------------|
+| Snapshot `findings` | `findings_for_panel` → DB `vulnerabilities` only (`conversation_snapshot.py`) |
+| Snapshot `evidence` | `evidence_for_panel` → evidence table only; no `tool_call` fallback |
+| FE Case Findings | Snapshot arrays (empty wins) + `vuln_found` upsert by ledger `id`; no `mergeByTitle` / Strix shadow |
+| FE chat cards | Still render; `snapshotFromMessages` does **not** set findings/evidence |
+| New badge | Unchanged (#275 `created` / `is_new`) |
+| Tests | `platform/backend/tests/test_conversation_snapshot_purity.py` |
 
 ---
 
@@ -176,6 +187,6 @@ Prefer pure functions extracting “projectFindings(snapshot, events)” if extr
 
 ## Further Notes
 
-- Current code (illustrative debt): snapshot merges `message_findings` + checkpoint findings; evidence falls back to tool messages; FE `vuln_found` upserts findings (OK if payload is persist result) and historically mergeByTitle/Strix paths exist.
+- Wave1 landed: snapshot findings/evidence are ledger-pure; FE no longer merges chat/Strix shadows into Case Findings. Helpers `message_findings` / `checkpoint_findings` / `message_evidence` remain for parsers/tests but are **not** panel SoT.
 - Empty Findings with a long Agent report is **correct** if nothing was booked — pair with booking Spec to fix zero-book causes.
 - Living doc: update when SoT or Wave scope changes; link from `docs/README.md`.

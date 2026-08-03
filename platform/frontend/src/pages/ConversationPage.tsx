@@ -556,10 +556,11 @@ export default function ConversationPage() {
       ? snapshot.case_run
       : fallback?.case_run;
     if (nextCaseRun) setCaseRun(nextCaseRun);
-    setFindings(snapshot.findings?.length ? snapshot.findings : fallback?.findings || []);
+    // Spec #280: empty ledger arrays are correct — do not fall back to chat archaeology.
+    setFindings(Array.isArray(snapshot.findings) ? snapshot.findings : (fallback?.findings || []));
     setAssets(snapshot.assets?.length ? snapshot.assets : fallback?.assets || []);
     setPendingApprovals(snapshot.pending_approvals?.length ? snapshot.pending_approvals : fallback?.pending_approvals || []);
-    setEvidence(snapshot.evidence?.length ? snapshot.evidence : fallback?.evidence || []);
+    setEvidence(Array.isArray(snapshot.evidence) ? snapshot.evidence : (fallback?.evidence || []));
     setTaskContext(
       snapshot.task_context && Object.keys(snapshot.task_context).length
         ? snapshot.task_context
@@ -743,20 +744,24 @@ export default function ConversationPage() {
     vuln_found: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
+      // Spec #280: fail-closed rejects use vuln_found_error — never join Findings.
+      if (String(m.type || "") === "vuln_found_error") return;
       const convId = messageConversationId(m, activeId);
       clearPendingAgentMessage(convId);
       markMessageAutoScroll();
+      const ledgerId = m.vulnerability_id || m.id;
       setFindings(prev => upsertBy(prev, {
         ...m,
-        id: m.vulnerability_id || m.id,
+        id: ledgerId,
+        vulnerability_id: m.vulnerability_id || m.id,
         location: m.location || m.url || m.affected_asset || "",
         description: m.description || m.impact,
         poc: m.poc || m.reproduction,
         affected_asset: m.affected_asset || m.url,
-        // Live New badge: keep ledger create signal on panel rows without reload.
+        // Live New badge: keep ledger create signal on panel rows without reload (#275).
         created: m.created,
         is_new: m.is_new !== undefined ? m.is_new : m.created,
-      }, "title"));
+      }, "id"));
       addMessageToConversation(convId, makeMessage(convId, "agent", "vuln_card", m));
       void refreshConversationState(convId);
     },
@@ -1038,10 +1043,8 @@ export default function ConversationPage() {
           setStrixRun((prev) => mergeStrixRun(prev, runLike));
         }
       }
-      if (Array.isArray(node3Strix.vulnerabilities)) {
-        const vulnerabilities = node3Strix.vulnerabilities;
-        setFindings(prev => mergeByTitle(prev, vulnerabilities.filter(isRecord).map(strixVulnerabilityToFinding)));
-      }
+      // Spec #280 Wave1: do not merge Strix/checkpoint shadow vulnerabilities into Case Findings.
+      // Ledger + vuln_found (post-persist) remain the only panel sources; chat cards still render.
       clearPendingAgentMessage(convId);
       void refreshConversationState(convId);
     },
@@ -3460,34 +3463,11 @@ function snapshotFromMessages(messages: Message[], status: Conversation["status"
   const pending = messages
     .filter(m => m.msg_type === "confirm_card" && readString(m.content.request_id) && !decisions.has(readString(m.content.request_id)))
     .map(m => ({ ...m.content, message_id: m.id }));
-  const findings = messages
-    .filter(m => m.msg_type === "vuln_card" || m.msg_type === "vuln_found")
-    .map(m => ({
-      ...m.content,
-      id: readString(m.content.id) || readString(m.content.vulnerability_id) || readString(m.content.finding_id) || m.id,
-      location: m.content.location || m.content.url || m.content.affected_asset || "",
-      description: m.content.description || m.content.impact,
-      poc: m.content.poc || m.content.reproduction,
-      affected_asset: m.content.affected_asset || m.content.url,
-    }));
+  // Spec #280 Wave1: chat archaeology must not feed Case Findings / Evidence.
+  // Snapshot API + post-persist WS remain SoT; empty is correct when nothing booked.
   const assets = messages
     .filter(m => m.msg_type === "asset_card" || m.msg_type === "asset_discovered")
     .map(m => ({ ...m.content, id: readString(m.content.id) || readString(m.content.asset_id) || m.id, address: m.content.address || m.content.name || "" }));
-  const explicitEvidence = messages
-    .filter(m => m.msg_type === "evidence_created")
-    .map(m => ({ ...m.content, id: readString(m.content.id) || m.id }));
-  const toolEvidence = messages
-    .filter(m => m.msg_type === "tool_call" && readString(m.content.stdout))
-    .map(m => ({
-      id: m.id,
-      evidence_id: readString(m.content.tool_run_id) || m.id,
-      type: "tool_output",
-      source_tool: m.content.tool_name,
-      tool_run_id: m.content.tool_run_id,
-      summary: readString(m.content.stdout),
-      properties: { status: m.content.status },
-    }));
-  const evidence = explicitEvidence.length ? explicitEvidence : toolEvidence;
 
   return {
     conversation: { id: messages[0]?.conversation_id || "", title: "", node_id: null, status: normalizedStatus, created_at: "", last_active_at: "" },
@@ -3500,10 +3480,10 @@ function snapshotFromMessages(messages: Message[], status: Conversation["status"
     },
     progress: progressForPhase(phase, normalizedStatus),
     plan_tree: planTreeForPhase(phase, normalizedStatus),
-    findings,
+    findings: [],
     assets,
     pending_approvals: pending,
-    evidence,
+    evidence: [],
   };
 }
 
@@ -3606,34 +3586,6 @@ function strixTodosToPlanTree(items: unknown[]): PlanNode[] {
 function strixTodoPriority(value: unknown, index: number): number {
   const base: Record<string, number> = { critical: 0, high: 10, medium: 20, normal: 30, low: 40 };
   return (base[String(value || "").toLowerCase()] ?? 30) + index;
-}
-
-function strixVulnerabilityToFinding(item: Record<string, unknown>): Record<string, unknown> {
-  const target = item.target || item.affected_asset || "";
-  return {
-    ...item,
-    id: item.id || item.vulnerability_id || item.title,
-    vulnerability_id: item.vulnerability_id || item.id,
-    strix_vulnerability_id: item.strix_vulnerability_id || item.id,
-    location: item.endpoint || item.location || target,
-    affected_asset: target,
-    status: item.status || "confirmed",
-    confidence: item.confidence || "high",
-    poc: item.poc || item.poc_description || item.poc_script_code,
-    remediation: item.remediation || item.remediation_steps,
-    source: "strix",
-  };
-}
-
-function mergeByTitle(current: Array<Record<string, unknown>>, incoming: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
-  const merged = [...current];
-  for (const item of incoming) {
-    const title = String(item.title || "");
-    const index = merged.findIndex(existing => title && String(existing.title || "") === title);
-    if (index >= 0) merged[index] = { ...merged[index], ...item };
-    else merged.push(item);
-  }
-  return merged;
 }
 
 function shouldRenderPhaseStatus(message: Record<string, unknown>, workflowKind: string): boolean {

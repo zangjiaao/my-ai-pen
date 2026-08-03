@@ -1,9 +1,13 @@
 """Conversation snapshot assembly.
 
 This module is the backend source of truth for restoring a conversation view.
-It deliberately combines the durable message log, read models, and checkpoint
-state so refreshes and page switches do not depend on whichever message page
-the frontend has loaded.
+It combines the durable message log, ledger read models, and checkpoint state
+so refreshes and page switches do not depend on whichever message page the
+frontend has loaded.
+
+Spec #280 Wave1: panel Findings and Evidence are ledger-pure projections —
+vulnerabilities / evidence tables only. Message archaeology and checkpoint
+shadow vulns must not join those arrays.
 """
 from __future__ import annotations
 
@@ -296,21 +300,14 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     # Prefer healed row status (matches sidebar / conversation list).
     conv_status = conversation.status or "created"
     agent_state = agent_state_from_checkpoint(checkpoint, conv_status) if checkpoint else agent_state_from_messages(messages, evidence, conv_status)
-    # Prefer ledger rows (vuln_summary) so rediscovery badges / status / first_seen
-    # survive snapshot merge. Message/checkpoint cards often omit history fields;
-    # when titles match, first group wins — DB must come first.
-    findings = merge_many_by_key([
-        [vuln_summary(v) for v in vulns],
-        message_findings(messages),
-        checkpoint_findings(checkpoint),
-    ], "title")
+    # Spec #280 Wave1: Findings SoT = vulnerabilities for this conversation only.
+    # Do not merge message_findings / checkpoint shadow vulns into the panel list.
+    findings = findings_for_panel(vulns, messages=messages, checkpoint=checkpoint)
     asset_items = merge_many_by_key([
         [asset_summary(a) for a in assets],
         message_assets(messages),
         checkpoint_assets(checkpoint),
     ], "address")
-    explicit_evidence = message_evidence(messages, include_tool_calls=False)
-    fallback_tool_evidence = [] if evidence or explicit_evidence else message_evidence(messages, include_tool_calls=True)
     attack_surface_items = snapshot_list(checkpoint.get("attack_surface")) or snapshot_list(context.get("attack_surface"))
     coverage_items = snapshot_list(checkpoint.get("coverage")) or snapshot_list(context.get("coverage"))
     captured_traffic_items = snapshot_list(checkpoint.get("captured_traffic")) or snapshot_list(context.get("captured_traffic"))
@@ -342,11 +339,8 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     )
     progress = progress_for_kanban(kanban) or (progress_for_checkpoint(checkpoint, conv_status) if checkpoint else progress_for_phase(agent_state.get("phase"), conv_status))
     todos = todos_for_kanban(kanban) or todos_for_plan_tree(plan_tree) or (todos_for_checkpoint(checkpoint, conv_status) if checkpoint else todos_for_phase(agent_state.get("phase"), conv_status))
-    evidence_items = merge_many_by_key([
-        [evidence_summary(e) for e in evidence],
-        explicit_evidence,
-        fallback_tool_evidence,
-    ], "evidence_id")
+    # Spec #280 Wave1: Evidence SoT = evidence table only (no tool_call fallback).
+    evidence_items = evidence_for_panel(evidence, messages=messages)
     snapshot_message_items, omitted = snapshot_messages(messages)
     agent_items = agents_from_messages(messages)
     # Prefer Case multi-role roster (participants) over last-checkpoint-only agents.
@@ -1952,6 +1946,21 @@ def vuln_summary(v: Vulnerability) -> dict:
     }
 
 
+def findings_for_panel(
+    vulns: list,
+    *,
+    messages: list | None = None,
+    checkpoint: dict | None = None,
+) -> list[dict]:
+    """Spec #280 Wave1: Case Findings = vulnerabilities ledger only.
+
+    ``messages`` / ``checkpoint`` are accepted so call sites stay explicit about
+    what is *not* merged — they are intentionally ignored.
+    """
+    _ = messages, checkpoint
+    return [vuln_summary(v) for v in vulns]
+
+
 def evidence_summary(e: Evidence) -> dict:
     return {
         "id": str(e.id),
@@ -1967,3 +1976,17 @@ def evidence_summary(e: Evidence) -> dict:
         "properties": e.properties or {},
         "created_at": e.created_at.isoformat() if e.created_at else None,
     }
+
+
+def evidence_for_panel(
+    evidence_rows: list,
+    *,
+    messages: list | None = None,
+) -> list[dict]:
+    """Spec #280 Wave1: Case Evidence = evidence table only (no tool_call fallback).
+
+    ``messages`` is accepted and ignored so callers cannot reintroduce chat
+    archaeology as the panel Evidence source.
+    """
+    _ = messages
+    return [evidence_summary(e) for e in evidence_rows]
