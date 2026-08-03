@@ -19,6 +19,7 @@ Node4 implementation detail (Graph × Pi product path).
 | [`specs/harness.md`](specs/harness.md) | OMP-class harness (no agent finish) — `node4/` |
 | [`specs/task-graph.md`](specs/task-graph.md) | Free vs Graph work mode (scenario graphs) |
 | [`specs/participant-session.md`](specs/participant-session.md) | Case · Participant Session · work mode continuity (Spec [#277](https://github.com/zangjiaao/my-ai-pen/issues/277)) |
+| [`specs/graph-catalog-work-mode-ui.md`](specs/graph-catalog-work-mode-ui.md) | Graph L1 catalog (skill-like) + dual-rail composer/AgentRow (Spec [#278](https://github.com/zangjiaao/my-ai-pen/issues/278)) |
 | [`specs/hypothesis-evidence.md`](specs/hypothesis-evidence.md) | Optional Expert Graph hypothesis queue + progressive skill disclosure (map #266) |
 | [`specs/finding-identity.md`](specs/finding-identity.md) | Ledger identity (`vuln_type` + file location) + New-only narration (Spec #275) |
 | [`specs/stream-message-identity.md`](specs/stream-message-identity.md) | Remove live-slot-as-Message; stream_id list identity + pending chrome |

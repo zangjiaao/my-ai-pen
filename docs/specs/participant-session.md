@@ -35,7 +35,7 @@ Also kill a second-class product path where a pre-flight **Route** moment alone 
 | **Work mode Free** | Session runs **without** Expert Graph runner. Same Expert persona; OMP-class Agent Runtime loop. **Not** the Default seat; **not** retired Soft scenario Graph. |
 | **Work mode Graph** | Session runs Expert Graph × Pi for a **declared** graph id (`app_assessment`, `redteam_deep`, …). |
 | **Graph capability** | Pack/Expert declares which graph ids it may run. Missing declaration ⇒ cannot enter Graph. No seat special-cases (“assistant never” as hard code) — only capability tables. |
-| **Unspecified (UI)** | Graph composer value **不指定** = work mode **Free** on the wire (not “Agent may silently pick Graph”). Agent may **suggest** enter Graph; user must permit. |
+| **Unspecified (UI)** | Graph composer value **不指定** = omit / free-alias on the wire: **no force mode change** (Spec #278 A1). First turn / Free Session → Free; if Session already Graph, stay Graph. Not “Agent may silently pick Graph”. Exit Graph needs permission card. Agent may **suggest** enter Graph; user must permit. |
 | **Permission event** | Explicit user acceptance to change work mode, transfer Expert, resume parked Graph vs full restart. Via standard card and/or free-text understood by **current** Session Agent then structured commit. Platform code does **not** NLP-invent mode. |
 | **Queue** | While Session has in-flight work, user changes (message, Graph control, Mention) wait unless **force send / interrupt** on the queue chrome. |
 | **Parked Graph** | After exit Graph → Free, Graph stage pointer and harness progress are **suspended**, not wiped. Later re-entry: Agent suggests continue vs full restart; user confirms. |
@@ -64,7 +64,8 @@ _Avoid:_ free mode as a second product **seat**; Soft scenario Graph; platform k
 9. **Same-mode continue** (e.g. LLM 500 then「继续」) = resume **same** Session and work mode; **no** permission card; **no** Route re-judgment that changes mode.  
 10. **Graph list** = capability declaration on pack/Expert; UI options, Agent proposals, and platform validation share one source.  
 10a. **Prefer Free continuity:** the Expert **does the work in Free** unless the user chose a Graph Workflow or accepted an enter-Graph proposal. Judgment “do I dig / plan / ask user / transfer Expert?” happens **inside Free** (normal Agent loop), not in a separate Route kernel.  
-10b. **Minimize Expert transfer:** transfer only when the current pack truly cannot serve; same-Expert Free (and optional later Graph with permission) is the default path.
+10b. **Minimize Expert transfer:** transfer only when the current pack truly cannot serve; same-Expert Free (and optional later Graph with permission) is the default path.  
+10c. **Graph catalog + dual-rail UI:** product Graph L1 (skill-like) and composer vs AgentRow separation — Spec [#278](https://github.com/zangjiaao/my-ai-pen/issues/278) / `docs/specs/graph-catalog-work-mode-ui.md`.
 
 ### 3.3 Permission UX
 

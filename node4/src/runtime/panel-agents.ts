@@ -24,6 +24,10 @@ export type PanelAgentRecord = {
   outcome?: string;
   error?: string;
   goal_id?: string;
+  /** Spec #278: Session actual harness (Free vs Graph) on main row. */
+  work_mode?: "free" | "graph";
+  graph_id?: string;
+  graph_label?: string;
 };
 
 /** Map tool names → short Chinese labels (product UI language). */
@@ -106,11 +110,33 @@ export class PanelAgentTracker {
   private lastTool = "";
   private phase = "starting";
   private detail = "";
+  /** Spec #278 S4: actual Session harness for AgentRow badge. */
+  private workMode: "free" | "graph" = "free";
+  private graphId = "";
+  private graphLabel = "";
 
   constructor(mainTask: string, mainName?: string) {
     this.mainTask = (mainTask || "Authorized security task").slice(0, 240);
     this.mainName = (mainName || "Expert").trim().slice(0, 64) || "Expert";
     this.detail = describeMainActivity({ phase: this.phase });
+  }
+
+  /** Set actual Free/Graph harness for collaboration tree main row. */
+  setWorkMode(input: {
+    work_mode?: "free" | "graph" | string | null;
+    graph_id?: string | null;
+    graph_label?: string | null;
+  }): void {
+    const mode = String(input.work_mode || "").trim().toLowerCase();
+    if (mode === "graph") {
+      this.workMode = "graph";
+      this.graphId = String(input.graph_id || "").trim().slice(0, 64);
+      this.graphLabel = String(input.graph_label || "").trim().slice(0, 48);
+    } else if (mode === "free" || mode === "") {
+      this.workMode = "free";
+      this.graphId = "";
+      this.graphLabel = "";
+    }
   }
 
   /** 1-based Worker index for a subagent id (assigns on first see). */
@@ -249,9 +275,39 @@ export class PanelAgentTracker {
       current_action: phase,
       current_detail: detail,
       last_tool: this.lastTool || undefined,
+      work_mode: this.workMode,
+      graph_id: this.graphId || undefined,
+      graph_label: this.graphLabel || undefined,
     };
     return [main, ...this.children.values()];
   }
+}
+
+/** Short AgentRow badge label from Session actual mode (Spec #278 S4 pure helper). */
+export function formatWorkModeBadge(input: {
+  work_mode?: string | null;
+  graph_id?: string | null;
+  graph_label?: string | null;
+}): string {
+  const mode = String(input.work_mode || "").trim().toLowerCase();
+  if (mode === "graph") {
+    const label = String(input.graph_label || "").trim();
+    if (label) return shortGraphLabel(label);
+    const gid = String(input.graph_id || "").trim().toLowerCase();
+    if (gid === "app_assessment") return "应用评估";
+    if (gid === "redteam_deep") return "红队深度";
+    if (gid) return shortGraphLabel(gid);
+    return "Graph";
+  }
+  return "Free";
+}
+
+function shortGraphLabel(raw: string): string {
+  const t = raw.replace(/\s+/g, " ").trim();
+  // Prefer short Chinese product labels when long Hard Graph titles are used.
+  if (/应用/.test(t) && /评估|安全/.test(t)) return "应用评估";
+  if (/红队/.test(t)) return "红队深度";
+  return t.length > 12 ? `${t.slice(0, 11)}…` : t;
 }
 
 /** Prefer explicit label, else parse handoff package "## This-turn goal", else first prose line. */

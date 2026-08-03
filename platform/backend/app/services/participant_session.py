@@ -112,9 +112,11 @@ def resolve_work_envelope(
     """Resolve immutable work envelope for one dispatch (structured I/O only).
 
     Priority (mode authority):
-    1. Structured permission card (enter/exit/park).
+    1. Structured permission card (enter/exit/switch/park).
     2. This-turn explicit product graph id on composer → graph (user Workflow permission).
-    3. This-turn free / empty string / 不指定 on composer → free.
+    3. This-turn free / empty string / 不指定 on composer → **no mode force** (Spec #278 A1):
+       if Session is already Graph, stay Graph; otherwise Free.
+       (Composer 不指定 is not exit Graph — exit needs permission card.)
     4. Same-mode continue after fail/incomplete → Session work_mode
        (Case sticky alone never upgrades Free→Graph; composer omitted on continue).
     5. Session work_mode when composer omitted.
@@ -130,7 +132,7 @@ def resolve_work_envelope(
     sess_gid = normalize_product_engagement_template(session_graph_id)
     del case_sticky_template  # not mode authority (A1/A9); callers may still pass for clarity
 
-    # Structured permission card (enter graph / exit / resume parked) — optional MVP path.
+    # Structured permission card (enter graph / exit / switch / resume parked).
     perm = permission_decision if isinstance(permission_decision, dict) else {}
     perm_action = str(perm.get("action") or perm.get("kind") or "").strip().lower()
     perm_graph = normalize_product_engagement_template(
@@ -163,6 +165,10 @@ def resolve_work_envelope(
     if perm_action in {"enter_graph", "accept_enter_graph"} and perm_graph:
         work_mode = "graph"
         graph_id = perm_graph
+    elif perm_action in {"switch_graph", "accept_switch_graph"} and perm_graph:
+        work_mode = "graph"
+        graph_id = perm_graph
+        graph_execution = "full_restart"
     elif perm_action in {"exit_graph", "accept_exit_graph"}:
         work_mode = "free"
         graph_id = None
@@ -179,9 +185,14 @@ def resolve_work_envelope(
         work_mode = "graph"
         graph_id = composer_gid
     elif not composer_is_absent and composer_free:
-        # Explicit free / none / 不指定 / empty string this turn.
-        work_mode = "free"
-        graph_id = None
+        # Spec #278 A1: 不指定 / free / empty = do not force mode change.
+        # Session already Graph → stay Graph; otherwise Free (first turn / Free session).
+        if sess_mode == "graph" and sess_gid:
+            work_mode = "graph"
+            graph_id = sess_gid
+        else:
+            work_mode = "free"
+            graph_id = None
     elif same_mode_continue and sess_mode:
         # A1/A9: failed Free + 继续 with composer omitted stays Free despite Case sticky Graph.
         work_mode = "graph" if sess_mode == "graph" else "free"

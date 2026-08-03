@@ -10,6 +10,7 @@ import {
   looksLikeHandoffPackage,
 } from "../lib/workerPresentation";
 import type { StrixAgentStatus } from "../lib/panelTypes";
+import { formatAgentWorkModeBadge } from "../lib/panelAgentsState";
 
 export type { StrixAgentStatus } from "../lib/panelTypes";
 
@@ -164,6 +165,22 @@ function AgentRow({
                 <p className="min-w-0 truncate text-sm font-medium" title={displayName}>
                   {displayName}
                 </p>
+                {primary && (() => {
+                  const modeBadge = formatAgentWorkModeBadge(agent);
+                  return modeBadge ? (
+                    <span
+                      className="shrink-0 rounded-sm bg-canvas-inset px-1.5 py-0.5 text-[10px] font-medium text-ink-secondary"
+                      title={
+                        agent.work_mode === "graph" || String(agent.work_mode || "").startsWith("hard_graph")
+                          ? `Session harness: Graph${agent.graph_id ? ` (${agent.graph_id})` : ""}`
+                          : "Session harness: Free"
+                      }
+                      data-testid="agent-work-mode-badge"
+                    >
+                      {modeBadge}
+                    </span>
+                  ) : null;
+                })()}
                 {titleSkills.map((skill) => (
                   <AgentSkillBadge key={skill} skill={skill} />
                 ))}

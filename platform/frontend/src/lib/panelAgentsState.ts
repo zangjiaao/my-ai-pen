@@ -2,6 +2,7 @@
  * Case Status panel roster + plan_tree merge helpers (ConversationPage).
  */
 import type { PlanNode, StrixAgentStatus } from "./panelTypes";
+import { ENGAGEMENT_TEMPLATES } from "./experts";
 
 export type { PlanNode, StrixAgentStatus } from "./panelTypes";
 /** @deprecated use PlanNode */
@@ -13,6 +14,39 @@ function readString(value: unknown): string {
 
 export function isStrixAgentStatus(value: unknown): value is StrixAgentStatus {
   return Boolean(value && typeof value === "object" && !Array.isArray(value) && readString((value as Record<string, unknown>).id));
+}
+
+/**
+ * Spec #278 S4: AgentRow badge from Session actual work_mode (not composer).
+ * Pure helper — Free or short Graph label.
+ */
+export function formatAgentWorkModeBadge(agent: Pick<
+  StrixAgentStatus,
+  "work_mode" | "graph_id" | "graph_label"
+>): string | null {
+  const mode = String(agent.work_mode || "").trim().toLowerCase();
+  if (!mode) return null;
+  if (mode === "free") return "Free";
+  if (mode === "graph" || mode.startsWith("hard_graph") || mode.startsWith("graph")) {
+    const label = String(agent.graph_label || "").trim();
+    if (label) {
+      if (/应用/.test(label) && /评估|安全/.test(label)) return "应用评估";
+      if (/红队/.test(label)) return "红队深度";
+      return label.length > 12 ? `${label.slice(0, 11)}…` : label;
+    }
+    const gid = String(agent.graph_id || "").trim().toLowerCase();
+    const known = ENGAGEMENT_TEMPLATES.find((t) => t.id === gid);
+    if (known) return known.label;
+    // hard_graph:app_assessment:stage → extract id
+    const m = mode.match(/hard_graph:([a-z0-9_]+)/i);
+    if (m?.[1]) {
+      const fromMode = ENGAGEMENT_TEMPLATES.find((t) => t.id === m[1]);
+      if (fromMode) return fromMode.label;
+    }
+    if (gid) return gid;
+    return "Graph";
+  }
+  return null;
 }
 
 /**

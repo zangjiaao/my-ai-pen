@@ -7,11 +7,16 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   applyHardGraphToolProfile,
+  buildProductGraphL1Catalog,
+  formatGraphL1CatalogInjection,
+  graphL1EntryFromDefinition,
   isContinueInEnvelopeExecution,
   isHardGraphDefinition,
   isSoftScenarioGraphDefinition,
+  isThinGraphId,
   listHardGraphIds,
   loadHardGraphFile,
+  loadProductGraphL1Catalog,
   loadSoftScenarioGraphFile,
   parseGraphExecution,
   resolveExpertWorkPath,
@@ -274,5 +279,63 @@ const hypOk = validateHypothesisWorkModeForGraph(mature!, true);
 assert.equal(hypOk.ok, true);
 const hypFail = validateHypothesisWorkModeForGraph(mature!, false);
 assert.equal(hypFail.ok, false);
+
+// Spec #278 S1: product Graph L1 catalog (thin excluded; when_to_use present)
+assert.equal(isThinGraphId("app_assessment_thin"), true);
+assert.equal(isThinGraphId("app_assessment"), false);
+const pureL1 = buildProductGraphL1Catalog([
+  {
+    id: "app_assessment",
+    label: "应用评估",
+    when_to_use: "full multi-class assessment",
+    roe: { allow_postex: false },
+  },
+  {
+    id: "app_assessment_thin",
+    label: "thin lab",
+    when_to_use: "lab only",
+    roe: { allow_postex: false },
+  },
+  {
+    id: "redteam_deep",
+    label: "红队深度",
+    description: "deep with postex",
+    roe: { allow_postex: true },
+  },
+]);
+assert.deepEqual(
+  pureL1.map((e) => e.id),
+  ["app_assessment", "redteam_deep"],
+  "thin excluded from product L1",
+);
+assert.equal(pureL1[0]!.when_to_use, "full multi-class assessment");
+assert.equal(pureL1[1]!.when_to_use, "deep with postex", "description aliases when_to_use");
+assert.equal(pureL1[0]!.allow_postex, false);
+assert.equal(pureL1[1]!.allow_postex, true);
+
+const loadedL1 = await loadProductGraphL1Catalog(repoExperts);
+assert.ok(loadedL1.some((e) => e.id === "app_assessment"));
+assert.ok(loadedL1.some((e) => e.id === "redteam_deep"));
+assert.ok(!loadedL1.some((e) => e.id === "app_assessment_thin"), "pack load excludes thin");
+const assessL1 = loadedL1.find((e) => e.id === "app_assessment")!;
+assert.ok(assessL1.label.length > 0);
+assert.ok(assessL1.when_to_use.length > 0, "authored when_to_use on product graph");
+assert.equal(assessL1.allow_postex, false);
+const deepL1 = loadedL1.find((e) => e.id === "redteam_deep")!;
+assert.equal(deepL1.allow_postex, true);
+
+const inj = formatGraphL1CatalogInjection(loadedL1, { mode: "free" });
+assert.match(inj, /app_assessment/);
+assert.match(inj, /redteam_deep/);
+assert.match(inj, /enter_graph/);
+assert.match(inj, /mode: free|Current harness: Free/i);
+assert.ok(!inj.includes("app_assessment_thin"));
+
+const row = graphL1EntryFromDefinition({
+  id: "x",
+  label: "L",
+  when_to_use: "use me",
+});
+assert.equal(row?.when_to_use, "use me");
 
 console.log("hard-graph-definition.test.ts: ok");

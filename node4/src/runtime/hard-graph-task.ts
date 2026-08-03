@@ -249,6 +249,11 @@ export async function runHardGraphExpertTask(options: {
   const panelLabel =
     (typeof task.expertName === "string" && task.expertName.trim()) || pack.id || "Expert";
   const panel = new PanelAgentTracker(task.instruction || "Expert Graph task", panelLabel);
+  panel.setWorkMode({
+    work_mode: "graph",
+    graph_id: graph.id,
+    graph_label: graph.label,
+  });
   const graphQuality = createGraphRunQualityState();
   parentRuntime.lifecycle.hardGraphRun = {
     plan: graphPlan,
@@ -282,6 +287,21 @@ export async function runHardGraphExpertTask(options: {
   );
   graphQuality.priorSeed = priorSeed;
 
+  // Spec #278: task_start carries Session actual Graph mode for AgentRow + dual-rail.
+  await platform.send({
+    type: "task_start",
+    conversation_id: task.conversationId,
+    task_id: task.taskId,
+    target: task.target,
+    role_pack: pack.id,
+    started_at: startedAt,
+    work_mode: "graph",
+    graph_id: graph.id,
+    graph_label: graph.label,
+    engagement_template: graph.id,
+    panel_agents: panel.list(),
+  } as PlatformMessage);
+
   const startMsg: PlatformMessage = {
     type: "status_update",
     conversation_id: task.conversationId,
@@ -292,6 +312,8 @@ export async function runHardGraphExpertTask(options: {
     work_mode: `hard_graph:${graph.id}`,
     hard_graph: { graph_id: graph.id, event: "run_start", stages: graph.stages.map((s) => s.id) },
     started_at: startedAt,
+    graph_id: graph.id,
+    graph_label: graph.label,
   };
   await platform.send(startMsg);
 
@@ -301,6 +323,7 @@ export async function runHardGraphExpertTask(options: {
     task_id: task.taskId,
     working: true,
     work_mode: `hard_graph:${graph.id}`,
+    graph_id: graph.id,
   };
   await platform.send(workStart);
 

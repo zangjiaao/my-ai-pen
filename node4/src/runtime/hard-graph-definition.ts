@@ -54,9 +54,127 @@ export type HardGraphDefinition = {
   discipline: "hard";
   id: string;
   label: string;
+  /**
+   * Spec #278 L1 catalog: short when-to-use for Free prompt (skill-like).
+   * Prefer when_to_use; description is an authoring alias.
+   */
+  when_to_use?: string;
+  description?: string;
   stages: HardGraphStageDef[];
   roe?: { allow_postex?: boolean };
 };
+
+/** Spec #278: product Graph L1 row (skill-like; not full stage JSON). */
+export type GraphL1CatalogEntry = {
+  id: string;
+  label: string;
+  when_to_use: string;
+  allow_postex?: boolean;
+};
+
+/**
+ * Pure L1 catalog row from a hard graph definition object (no I/O).
+ * Thin / lab ids (`*_thin`) are excluded by the async pack loader.
+ */
+export function graphL1EntryFromDefinition(
+  def: Pick<HardGraphDefinition, "id" | "label" | "when_to_use" | "description" | "roe">,
+): GraphL1CatalogEntry | null {
+  const id = String(def?.id || "").trim();
+  if (!id) return null;
+  const label = String(def.label || id).trim() || id;
+  const when =
+    String(def.when_to_use || def.description || "")
+      .trim()
+      .slice(0, 400) || label;
+  const entry: GraphL1CatalogEntry = { id, label, when_to_use: when };
+  if (def.roe && typeof def.roe.allow_postex === "boolean") {
+    entry.allow_postex = def.roe.allow_postex;
+  }
+  return entry;
+}
+
+/** True when id is a lab thin graph (excluded from product L1 by default). */
+export function isThinGraphId(graphId: string): boolean {
+  return /_thin$/i.test(String(graphId || "").trim());
+}
+
+/**
+ * Spec #278 S1: build product Graph L1 list from already-loaded definitions.
+ * Excludes thin lab graphs; stable sort by id.
+ */
+export function buildProductGraphL1Catalog(
+  definitions: Iterable<
+    Pick<HardGraphDefinition, "id" | "label" | "when_to_use" | "description" | "roe">
+  >,
+  options?: { includeThin?: boolean },
+): GraphL1CatalogEntry[] {
+  const includeThin = options?.includeThin === true;
+  const byId = new Map<string, GraphL1CatalogEntry>();
+  for (const def of definitions) {
+    const id = String(def?.id || "").trim();
+    if (!id) continue;
+    if (!includeThin && isThinGraphId(id)) continue;
+    const row = graphL1EntryFromDefinition(def);
+    if (row) byId.set(row.id, row);
+  }
+  return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/**
+ * Load product Graph L1 catalog from packRoot/graphs/hard/*.json.
+ * Product default excludes `*_thin`.
+ */
+export async function loadProductGraphL1Catalog(
+  packRoot: string,
+  options?: { includeThin?: boolean },
+): Promise<GraphL1CatalogEntry[]> {
+  const ids = await listHardGraphIds(packRoot);
+  const defs: HardGraphDefinition[] = [];
+  for (const id of ids) {
+    if (!options?.includeThin && isThinGraphId(id)) continue;
+    const g = await loadHardGraphFile(packRoot, id);
+    if (g) defs.push(g);
+  }
+  return buildProductGraphL1Catalog(defs, options);
+}
+
+/**
+ * Format L1 catalog for system prompt (Free and Graph) — skill-list analogue.
+ * Does not dump full stage JSON.
+ */
+export function formatGraphL1CatalogInjection(
+  entries: readonly GraphL1CatalogEntry[],
+  options?: { activeGraphId?: string | null; mode?: "free" | "graph" },
+): string {
+  const mode = options?.mode === "graph" ? "graph" : "free";
+  const lines: string[] = [
+    "<available-graphs>",
+    "Product Expert Graphs (L1 catalog — like skills: overview only, not full stages):",
+  ];
+  if (!entries.length) {
+    lines.push("- (none declared on this pack)");
+  } else {
+    for (const e of entries) {
+      const postex =
+        typeof e.allow_postex === "boolean" ? ` allow_postex=${e.allow_postex}` : "";
+      lines.push(`- ${e.id} — ${e.label}${postex}`);
+      if (e.when_to_use) lines.push(`  when_to_use: ${e.when_to_use}`);
+    }
+  }
+  lines.push(
+    "Default work mode is Free unless the user selected a Workflow Graph this turn or accepted an enter-Graph proposal.",
+    "For multi-stage full assessments, propose Graph via request_user_decision(kind=enter_graph, graph_id=…) — never silent harness switch.",
+    "User composer Graph selection on send is explicit permission (no extra card).",
+    "Exit/switch Graph also requires user permission: kind=exit_graph or kind=switch_graph with graph_id.",
+  );
+  if (mode === "graph" && options?.activeGraphId) {
+    lines.push(`Active harness: graph_id=${options.activeGraphId} (stage detail is injected separately).`);
+  } else if (mode === "free") {
+    lines.push("Current harness: Free (no Expert Graph stages). Stay Free for small talk / ledger Q&A.");
+  }
+  lines.push("</available-graphs>");
+  return lines.join("\n");
+}
 
 /** Soft scenario graph shape (existing pack graphs) — not Hard Graph DoD. */
 export type SoftScenarioGraphShape = {

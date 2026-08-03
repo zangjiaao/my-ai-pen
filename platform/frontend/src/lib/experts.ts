@@ -18,12 +18,13 @@ export const BUILTIN_PACK_IDS: ReadonlySet<string> = new Set(["default", "consul
 
 /**
  * Structured Expert Graph templates for pentest — not free-text NLP.
- * Spec #277: UI 不指定 = Free on the wire (Expert Free work mode, not Default seat).
- * Soft scenario product mode retired (#76).
+ * Spec #278 dual-rail: composer = user Workflow preference for next send;
+ * AgentRow shows Session actual Free/Graph. 不指定 omits template (A1: does not
+ * force Free if Session already Graph). Soft scenario product mode retired (#76).
  */
 export type EngagementTemplateId = "app_assessment" | "redteam_deep";
 
-/** Product Graph options for Expert UI. 不指定 is separate (null / Free) — not a template id. */
+/** Product Graph options for Expert UI. 不指定 is separate (null) — not a template id. */
 export const ENGAGEMENT_TEMPLATES: readonly {
   id: EngagementTemplateId;
   label: string;
@@ -45,7 +46,7 @@ export const ENGAGEMENT_TEMPLATES: readonly {
   },
 ] as const;
 
-/** Composer label when Graph control is 不指定 (Session Free). */
+/** Composer label when Workflow control is 不指定 (no force mode change on send). */
 export const ENGAGEMENT_UNSPECIFIED_LABEL = "不指定";
 
 export type CapabilityItem = {

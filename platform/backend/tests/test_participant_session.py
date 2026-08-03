@@ -244,6 +244,67 @@ def test_permission_enter_graph():
     assert env["graph_id"] == "app_assessment"
 
 
+def test_permission_switch_graph():
+    env = resolve_work_envelope(
+        session_work_mode="graph",
+        session_graph_id="app_assessment",
+        permission_decision={"action": "switch_graph", "graph_id": "redteam_deep"},
+    )
+    assert env["work_mode"] == "graph"
+    assert env["graph_id"] == "redteam_deep"
+    assert env["graph_execution"] == "full_restart"
+
+
+def test_permission_exit_graph():
+    env = resolve_work_envelope(
+        session_work_mode="graph",
+        session_graph_id="app_assessment",
+        permission_decision={"action": "exit_graph"},
+    )
+    assert env["work_mode"] == "free"
+    assert env["graph_id"] is None
+
+
+def test_spec278_a1_unspecified_does_not_kick_graph_session():
+    """Spec #278 A1: composer 不指定 / free / empty while Session is Graph → stay Graph.
+
+    不指定 is not exit Graph; exit needs permission card. FE omits field (absent)
+    or may send free aliases — both must preserve Session Graph.
+    """
+    for composer in ("不指定", "free", "none", "unspecified", ""):
+        env = resolve_work_envelope(
+            expert_id="e1",
+            session_work_mode="graph",
+            session_graph_id="app_assessment",
+            composer_template=composer,
+            case_sticky_template="app_assessment",
+        )
+        assert env["work_mode"] == "graph", composer
+        assert env["graph_id"] == "app_assessment", composer
+        assert env["engagement_template"] == "app_assessment", composer
+
+    # Absent field (FE omit when 不指定) also keeps Graph via Session.
+    env_absent = resolve_work_envelope(
+        expert_id="e1",
+        session_work_mode="graph",
+        session_graph_id="redteam_deep",
+        composer_template=None,
+    )
+    assert env_absent["work_mode"] == "graph"
+    assert env_absent["graph_id"] == "redteam_deep"
+
+
+def test_spec278_a1_unspecified_on_free_session_stays_free():
+    """First / Free Session + 不指定 stays Free (no silent Graph)."""
+    env = resolve_work_envelope(
+        session_work_mode="free",
+        composer_template="不指定",
+        case_sticky_template="app_assessment",
+    )
+    assert env["work_mode"] == "free"
+    assert env["graph_id"] is None
+
+
 def test_alias_assess_resolves_to_app_assessment():
     env = resolve_work_envelope(composer_template="assess")
     assert env["work_mode"] == "graph"
