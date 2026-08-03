@@ -359,6 +359,46 @@ def resolve_interrupt_wind_down(
     }
 
 
+def finalize_interrupt_wind_down(
+    *,
+    initial_wind_down: bool,
+    action: object = "cancel",
+    workers_remaining: bool = False,
+) -> dict[str, Any]:
+    """Spec #282 S7: pure post-apply outcome (after worker state mutations).
+
+    Separates initial decision from apply results so empty-after-apply cannot keep
+    settle_status=running from the pre-apply decision, and so interrupting stays
+    true while online workers remain.
+
+    Returns:
+      wind_down, settle_status, working, interrupting
+    """
+    act = str(action or "cancel").strip().lower()
+    idle_status = "incomplete" if act == "pause" else "canceled"
+    if not initial_wind_down:
+        return {
+            "wind_down": False,
+            "settle_status": idle_status,
+            "working": False,
+            "interrupting": False,
+        }
+    if workers_remaining:
+        return {
+            "wind_down": True,
+            "settle_status": "running",
+            "working": True,
+            "interrupting": True,
+        }
+    # Started wind-down but apply left no workers — honest settle (not "running").
+    return {
+        "wind_down": False,
+        "settle_status": idle_status,
+        "working": False,
+        "interrupting": False,
+    }
+
+
 def wire_graph_execution_for_status(
     *,
     engagement_template: object = None,

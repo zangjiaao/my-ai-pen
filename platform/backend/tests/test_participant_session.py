@@ -1,6 +1,7 @@
 """Unit tests for Participant Session work envelope resolver (Spec #277 / #282)."""
 from app.services.participant_session import (
     apply_work_envelope_to_task_assign,
+    finalize_interrupt_wind_down,
     is_free_composer_value,
     is_incomplete_like_status,
     merge_session_into_context,
@@ -668,3 +669,87 @@ def test_is_incomplete_like_status():
     assert is_incomplete_like_status("cancelled") is True
     assert is_incomplete_like_status("completed") is False
     assert is_incomplete_like_status(None) is False
+
+
+# --- Spec #282 S7 finalize after apply (router edge paths) ---
+
+
+def test_s7_finalize_empty_after_apply_settles_canceled_not_running():
+    """Issue: wind_down started true but apply left no workers → canceled, not running."""
+    # Pre-apply decision would have been settle_status=running
+    pre = resolve_interrupt_wind_down(
+        active_worker_ids={"node-a": {"task_id": "t1"}},
+        sent_to=["node-a"],
+        action="cancel",
+    )
+    assert pre["wind_down"] is True
+    assert pre["settle_status"] == "running"
+
+    final = finalize_interrupt_wind_down(
+        initial_wind_down=True,
+        action="cancel",
+        workers_remaining=False,
+    )
+    assert final["wind_down"] is False
+    assert final["settle_status"] == "canceled"
+    assert final["working"] is False
+    assert final["interrupting"] is False
+    # Must not reuse pre-apply "running"
+    assert final["settle_status"] != pre["settle_status"]
+
+
+def test_s7_finalize_empty_after_apply_pause_incomplete():
+    final = finalize_interrupt_wind_down(
+        initial_wind_down=True,
+        action="pause",
+        workers_remaining=False,
+    )
+    assert final["wind_down"] is False
+    assert final["settle_status"] == "incomplete"
+
+
+def test_s7_finalize_workers_remaining_keeps_interrupting():
+    """Mixed online+offline: after apply with online remaining → interrupting True."""
+    final = finalize_interrupt_wind_down(
+        initial_wind_down=True,
+        action="cancel",
+        workers_remaining=True,
+    )
+    assert final["wind_down"] is True
+    assert final["settle_status"] == "running"
+    assert final["working"] is True
+    assert final["interrupting"] is True
+
+
+def test_s7_finalize_initial_not_wind_down_settles():
+    final = finalize_interrupt_wind_down(
+        initial_wind_down=False,
+        action="cancel",
+        workers_remaining=False,
+    )
+    assert final["wind_down"] is False
+    assert final["settle_status"] == "canceled"
+    assert final["interrupting"] is False
+
+
+def test_s7_mixed_offline_online_decision_then_finalize_interrupting():
+    """Simulate offline-last order risk: decision has both; finalize with workers left."""
+    d = resolve_interrupt_wind_down(
+        active_worker_ids={
+            "node-online": {"task_id": "t1"},
+            "node-offline": {"task_id": "t2"},
+        },
+        sent_to=["node-online"],
+        action="cancel",
+    )
+    assert d["online_active"] == ["node-online"]
+    assert d["offline_ghosts"] == ["node-offline"]
+    assert d["wind_down"] is True
+    # After apply: offline cleared (interrupt_pending left alone), online kept
+    final = finalize_interrupt_wind_down(
+        initial_wind_down=d["wind_down"],
+        action="cancel",
+        workers_remaining=True,
+    )
+    assert final["interrupting"] is True
+    assert final["settle_status"] == "running"
