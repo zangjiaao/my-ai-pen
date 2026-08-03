@@ -69,10 +69,12 @@ export function eagerBookingInjection(): string {
 }
 
 export const FINDING_TOOL_DESCRIPTION = [
-  "ONLY product conclusion path for vuln / flag / challenge unlock / auth impact.",
+  "ONLY product conclusion path for vuln / flag / challenge unlock / auth impact (Free and Graph — same base contract).",
   "Finding = user-trustable conclusion; proof = fragment from tool/subagent output that demonstrates the claim.",
   "action=confirm requires: title, location|url, description, poc (≥40 chars how+result), severity, vuln_type (closed enum).",
   "vuln_type required: rce|command_injection|file_upload|credential_exposure|info_disclosure|dir_listing|sqli|xss|csrf|lfi|ssrf|xxe|idor|auth_bypass|session|misconfig|other.",
+  "finding_id is optional: omit it and the host mints an id on successful book. Do not invent UUIDs.",
+  "If finding_id is a this-run Store feedback_ok id, host uses it for Store-first fill; foreign/unknown ids are treated as omit (still book with valid proof).",
   "Ledger identity = vuln_type + file-level location (title does not merge). User-visible text only describes New ledger rows — never claim 新增 from confirm count alone.",
   "proof: preferred; after subagent, harness can fill VERBATIM proof_excerpt when location/title matches a candidate or candidate_index is set.",
   "Optional candidate_index indexes last subagent candidates / acceptance.ready_to_book.",

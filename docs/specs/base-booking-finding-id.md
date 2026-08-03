@@ -1,6 +1,6 @@
 # Spec: Base booking + unified finding_id
 
-**Status:** ready-for-agent (Wave 1)  
+**Status:** implemented (Wave 1)  
 **Issue:** [#279](https://github.com/zangjiaao/my-ai-pen/issues/279)  
 **Related:** [#275](https://github.com/zangjiaao/my-ai-pen/issues/275) identity/New; Product state → UI projection Spec ([#280](https://github.com/zangjiaao/my-ai-pen/issues/280), `docs/specs/product-state-ui-projection.md`); #274 hypothesis (orthogonal); #277 Session Free/Graph
 
@@ -162,3 +162,11 @@ Pair with the **UI projection Spec**: panel only reads the platform ledger; empt
 - Black-cat / #274 hypothesis queue did not run on Free; this Spec does not require Graph for booking.
 - Living doc: update when confirm contract or mint rules change; link from `docs/README.md`.
 - Implement with Spec `product-state-ui-projection.md` for end-to-end “confirm → panel row”; either order OK if contracts hold.
+
+### Wave 1 implementation notes (Node4)
+
+- **Seam:** `node4/src/tools/finding.ts` `finding(confirm)` — Free and Graph share one path.
+- **Bookable set:** this-run Finding Store row with `assertConfirmAllowed` (status `feedback_ok` + proof + severity). Only then Store-first field fill + `markBooked`.
+- **Omit / foreign / unknown `finding_id`:** treat as no id → L0 (existing book-path) → host mints local `f_*` id; optional `related_prior_id` when input looked like a platform UUID; optional `booking_assist` warning in tool result. **Does not** hard-fail with `unknown finding id — invent-without-id forbidden`.
+- **Invent-without-id** remains a threat-model phrase for “Agent must not mint bookable Store rows / forge ids,” not “any UUID string kills confirm.” Store API `assertConfirmAllowed("")` still rejects empty for callers that need a Store gate.
+- **Tests:** `node4/src/tools/finding.confirm-id.test.ts`; Graph e2e paths in `process-quality-e2e` / `process-quality-store-first-e2e` updated for base contract.

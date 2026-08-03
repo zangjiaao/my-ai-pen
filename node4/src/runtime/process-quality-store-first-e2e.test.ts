@@ -304,27 +304,33 @@ try {
   );
   assert.equal(mayMarkL2DoneForPackage("success", true).ok, false);
 
-  // Confirm path: feedback_ok → finding_id → vuln_found; invent without id fails
+  // Spec #279: confirm without Store id still books with valid L0; Store feedback_ok path remains.
   const tool = createFindingTool(runtime);
   const execFind = tool.execute as (
     id: string,
     params: Record<string, unknown>,
   ) => Promise<{ content: Array<{ type: string; text?: string }> }>;
 
-  const noId = await execFind("x", {
+  // Foreign UUID must not invent-without-id hard-stop (books as new row when L0 passes)
+  const foreign = await execFind("x", {
     action: "confirm",
     vuln_type: "other",
-    title: "CSRF token missing",
+    finding_id: "6194731f-aaaa-bbbb-cccc-ddddeeee0099",
+    title: "CSRF token missing foreign",
     location: "http://dvwa/security.php",
     description: "state-changing request without CSRF token accepted on security level change",
     poc: "POST /security.php seclev=low without csrf → 200 and cookie change observed",
     proof:
       "POST /security.php without token returned 200 and security level changed — verbatim tool body",
+    severity: "medium",
   });
-  const noIdText = noId.content?.map((c) => c.text || "").join(" ") || "";
-  assert.match(noIdText, /finding_id|invent/i);
-
-  // Zero confirms still
+  const foreignText = foreign.content?.map((c) => c.text || "").join(" ") || "";
+  assert.ok(
+    !/invent-without-id|unknown finding id/i.test(foreignText),
+    `foreign id must not hard-stop: ${foreignText.slice(0, 200)}`,
+  );
+  assert.ok(!/^error:/i.test(foreignText.trim()), `foreign id books: ${foreignText.slice(0, 200)}`);
+  // Store feedback_ok row not auto-booked by foreign path
   assert.equal(pq.findingStore.counts().booked_n, 0);
 
   const fid = ids[0]!;
