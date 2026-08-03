@@ -189,4 +189,5 @@ Prefer pure functions extracting “projectFindings(snapshot, events)” if extr
 
 - Wave1 landed: snapshot findings/evidence are ledger-pure; FE no longer merges chat/Strix shadows into Case Findings. Helpers `message_findings` / `checkpoint_findings` / `message_evidence` remain for parsers/tests but are **not** panel SoT.
 - Empty Findings with a long Agent report is **correct** if nothing was booked — pair with booking Spec to fix zero-book causes.
+- **#280 live WS fail-closed:** platform `apply_vuln_persist_result` rewrites outgoing frames when `_persist_vulnerability` returns `None` or a structured `vuln_found_error` (known gates: missing conversation, status≠confirmed, evidence_ids empty/missing in DB, severity/vuln_type, exception). Clients must never receive a bare pre-persist `vuln_found` success for the room; FE ignores `vuln_found_error` for Findings upsert.
 - Living doc: update when SoT or Wave scope changes; link from `docs/README.md`.

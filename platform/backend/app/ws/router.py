@@ -157,6 +157,52 @@ def _normalize_severity(value: object) -> str | None:
     return severity if severity in {"critical", "high", "medium", "low", "info"} else None
 
 
+def _vuln_found_error_frame(msg: dict | None, error: str) -> dict:
+    """Structured fail-closed reject for live vuln booking (Spec #280)."""
+    src = msg if isinstance(msg, dict) else {}
+    return {
+        "type": "vuln_found_error",
+        "conversation_id": src.get("conversation_id"),
+        "task_id": src.get("task_id"),
+        "title": src.get("title"),
+        "error": error,
+        "created": False,
+    }
+
+
+def apply_vuln_persist_result(msg: dict, persisted: dict | None) -> dict:
+    """Apply `_persist_vulnerability` result to the outgoing WS frame (Spec #280).
+
+    Live updates must be post-persist success only:
+    - success dict → merge non-None fields (type stays vuln_found; id/vulnerability_id set)
+    - type=vuln_found_error → replace frame (never leave a success type)
+    - None → rewrite to vuln_found_error (never forward original success claim)
+    """
+    base = dict(msg) if isinstance(msg, dict) else {}
+    if persisted is None:
+        return _vuln_found_error_frame(base, "persist failed")
+    if not isinstance(persisted, dict):
+        return _vuln_found_error_frame(base, "persist failed")
+    if str(persisted.get("type") or "") == "vuln_found_error":
+        err = _vuln_found_error_frame(
+            base,
+            str(persisted.get("error") or "persist failed"),
+        )
+        # Prefer explicit fields from the structured reject when present.
+        for key in ("conversation_id", "task_id", "title", "error", "created"):
+            if key in persisted and persisted.get(key) is not None:
+                err[key] = persisted[key]
+        err["type"] = "vuln_found_error"
+        err["created"] = False
+        return err
+    # Success path: merge ledger fields onto the original frame.
+    out = dict(base)
+    for key, value in persisted.items():
+        if value is not None:
+            out[key] = value
+    return out
+
+
 # Agent/runtime events belong in the conversation timeline, not the platform audit ledger.
 # Keep node.online / node.offline for connectivity sparklines.
 _AUDIT_SKIP_ACTIONS = frozenset({
@@ -879,15 +925,12 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
         if persisted:
             msg.update({k: v for k, v in persisted.items() if v is not None})
     elif msg.get("type") == "vuln_found":
+        # Spec #280: live vuln_found is post-persist success only. Persist None /
+        # structured reject → vuln_found_error (never leave original success frame).
         persisted = await _persist_vulnerability(msg, client_id)
-        if persisted:
-            # Fail-closed rejects return type=vuln_found_error — replace the frame,
-            # do not merge error fields into a still-typed vuln_found success card.
-            if str(persisted.get("type") or "") == "vuln_found_error":
-                msg.clear()
-                msg.update(persisted)
-            else:
-                msg.update({k: v for k, v in persisted.items() if v is not None})
+        applied = apply_vuln_persist_result(msg, persisted)
+        msg.clear()
+        msg.update(applied)
     elif msg.get("type") == "evidence_created":
         # Real proofs from Node4 emitEvidence (structured properties).
         await _persist_evidence(msg, client_id)
@@ -2298,17 +2341,17 @@ async def _audit_tool_output(msg: dict, node_id: str | None):
 async def _persist_vulnerability(msg: dict, node_id: str | None):
     conv_id = msg.get("conversation_id")
     if not conv_id:
-        return None
+        return _vuln_found_error_frame(msg, "missing conversation_id")
     raw_status = str(msg.get("status") or "").lower()
     if raw_status != "confirmed":
-        return None
+        return _vuln_found_error_frame(msg, "status must be confirmed")
     evidence_ids = _clean_evidence_ids(msg.get("evidence_ids", []))
     if not evidence_ids:
-        return None
+        return _vuln_found_error_frame(msg, "evidence_ids required (evidence gate)")
 
     user_id, bound_node = await _conversation_owner(conv_id)
     if not user_id:
-        return None
+        return _vuln_found_error_frame(msg, "conversation not found")
     node_uuid = _uuid(node_id) or bound_node
     try:
         from app.db.base import async_session
@@ -2354,26 +2397,18 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
         severity = _normalize_severity(msg.get("severity"))
         if severity is None:
             # Spec #139 D1: fail closed — no silent medium on empty/invalid severity
-            return {
-                "type": "vuln_found_error",
-                "conversation_id": conv_id,
-                "task_id": msg.get("task_id"),
-                "error": "severity required (critical|high|medium|low|info); silent medium banned",
-                "title": msg.get("title"),
-                "created": False,
-            }
+            return _vuln_found_error_frame(
+                msg,
+                "severity required (critical|high|medium|low|info); silent medium banned",
+            )
         # Spec #275: closed vuln_type required on confirm.
         vuln_type = normalize_vuln_type(msg.get("vuln_type") or msg.get("type_id"))
         if not vuln_type:
             allowed = ", ".join(sorted(VALID_VULN_TYPES))
-            return {
-                "type": "vuln_found_error",
-                "conversation_id": conv_id,
-                "task_id": msg.get("task_id"),
-                "error": f"vuln_type required (closed enum: {allowed})",
-                "title": msg.get("title"),
-                "created": False,
-            }
+            return _vuln_found_error_frame(
+                msg,
+                f"vuln_type required (closed enum: {allowed})",
+            )
         loc_key = location_resource_key(location) or location_resource_key(poc_value)
         cvss_value = msg.get("cvss")
         description = (
@@ -2431,7 +2466,10 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
             evidence_rows = list(existing_evidence.scalars().all())
             known_evidence_ids = {item.evidence_id for item in evidence_rows}
             if set(evidence_ids) - known_evidence_ids:
-                return None
+                return _vuln_found_error_frame(
+                    msg,
+                    "evidence_ids not found in conversation (evidence gate)",
+                )
 
             # Backfill hollow Case evidence from booking proof_excerpts so next expert
             # can read paths/stdout without the original taskDir.
@@ -2718,7 +2756,7 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
             return out
     except Exception as e:
         print(f"[WS] persist vuln error: {e}")
-        return None
+        return _vuln_found_error_frame(msg, f"persist failed: {e}")
 
 async def _find_node_by_token(token: str) -> str | None:
     try:
