@@ -3163,14 +3163,18 @@ async def _apply_authorized_graph_mode(conv_id: str | None, approval: dict) -> N
     except Exception as e:
         print(f"[WS] graph_mode_apply persist: {e}")
 
-    # Short label for FE dual-rail composer sync (D3).
+    # Short label for FE dual-rail composer sync (D3). Prefer pack Graph.short_label
+    # values (experts/pentest/graphs/hard/*.json); keep id fallback only.
+    _PRODUCT_GRAPH_SHORT_LABEL = {
+        "app_assessment": "应用评估",
+        "redteam_deep": "红队深度",
+    }
     graph_label = None
-    if settled_gid == "app_assessment":
-        graph_label = "应用评估"
-    elif settled_gid == "redteam_deep":
-        graph_label = "红队深度"
-    elif settled_gid:
-        graph_label = str(settled_gid)
+    if settled_gid:
+        graph_label = _PRODUCT_GRAPH_SHORT_LABEL.get(
+            str(settled_gid),
+            str(settled_gid),
+        )
 
     try:
         await _broadcast_to_conversation(

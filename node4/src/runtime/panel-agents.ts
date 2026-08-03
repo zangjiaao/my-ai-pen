@@ -288,12 +288,17 @@ export function formatWorkModeBadge(input: {
   work_mode?: string | null;
   graph_id?: string | null;
   graph_label?: string | null;
+  /** Prefer pack Graph `short_label` when stamped on the agent row. */
+  short_label?: string | null;
 }): string {
   const mode = String(input.work_mode || "").trim().toLowerCase();
   if (mode === "graph") {
+    const short = String(input.short_label || "").trim();
+    if (short) return short.length > 12 ? `${short.slice(0, 11)}…` : short;
     const label = String(input.graph_label || "").trim();
     if (label) return shortGraphLabel(label);
     const gid = String(input.graph_id || "").trim().toLowerCase();
+    // Fallbacks must match experts/pentest/graphs/hard/*.json short_label.
     if (gid === "app_assessment") return "应用评估";
     if (gid === "redteam_deep") return "红队深度";
     if (gid) return shortGraphLabel(gid);

@@ -60,6 +60,8 @@ export type HardGraphDefinition = {
    */
   when_to_use?: string;
   description?: string;
+  /** Spec #278 AgentRow / dual-rail short badge (e.g. 应用评估). */
+  short_label?: string;
   stages: HardGraphStageDef[];
   roe?: { allow_postex?: boolean };
 };
@@ -69,6 +71,7 @@ export type GraphL1CatalogEntry = {
   id: string;
   label: string;
   when_to_use: string;
+  short_label?: string;
   allow_postex?: boolean;
 };
 
@@ -77,7 +80,10 @@ export type GraphL1CatalogEntry = {
  * Thin / lab ids (`*_thin`) are excluded by the async pack loader.
  */
 export function graphL1EntryFromDefinition(
-  def: Pick<HardGraphDefinition, "id" | "label" | "when_to_use" | "description" | "roe">,
+  def: Pick<
+    HardGraphDefinition,
+    "id" | "label" | "short_label" | "when_to_use" | "description" | "roe"
+  >,
 ): GraphL1CatalogEntry | null {
   const id = String(def?.id || "").trim();
   if (!id) return null;
@@ -86,7 +92,9 @@ export function graphL1EntryFromDefinition(
     String(def.when_to_use || def.description || "")
       .trim()
       .slice(0, 400) || label;
+  const short = String(def.short_label || "").trim();
   const entry: GraphL1CatalogEntry = { id, label, when_to_use: when };
+  if (short) entry.short_label = short;
   if (def.roe && typeof def.roe.allow_postex === "boolean") {
     entry.allow_postex = def.roe.allow_postex;
   }
@@ -104,7 +112,10 @@ export function isThinGraphId(graphId: string): boolean {
  */
 export function buildProductGraphL1Catalog(
   definitions: Iterable<
-    Pick<HardGraphDefinition, "id" | "label" | "when_to_use" | "description" | "roe">
+    Pick<
+      HardGraphDefinition,
+      "id" | "label" | "short_label" | "when_to_use" | "description" | "roe"
+    >
   >,
   options?: { includeThin?: boolean },
 ): GraphL1CatalogEntry[] {
