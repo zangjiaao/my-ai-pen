@@ -204,6 +204,24 @@ export class HardGraphPlanStore {
   }
 
   /**
+   * Spec #281: when L1 stage leaves running, no L2 child may stay running
+   * (avoids dual progress: init-child running + next stage running).
+   * Unfinished running → pending; done/failed/blocked/skipped unchanged.
+   */
+  neutralizeOpenRunningL2(stageId: string): void {
+    if (!this.stageTodos.has(stageId)) return;
+    const list = this.stageTodos.get(stageId) || [];
+    this.stageTodos.set(
+      stageId,
+      list.map((n) => {
+        const s = normalizePlanWorkStatus(String(n.status || ""));
+        if (s === "running") return { ...n, status: "pending" };
+        return n;
+      }),
+    );
+  }
+
+  /**
    * Merge L2 todos for one stage (Spec #125 / #127).
    * Incoming nodes may be raw TodoStore projections; parent_id rewritten to Graph L1.
    *

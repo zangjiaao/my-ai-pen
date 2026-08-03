@@ -178,6 +178,7 @@ export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope)
       ? "After L0 Feedback marks feedback_ok, Main books with finding(confirm, finding_id=…). Severity fills from Store when omitted; missing severity fails closed."
       : "This stage cannot finding(confirm). Deposit candidates via packages or fact/surfaces only.",
     "Do **not** create process-chore L2 todos (e.g. Write result.json, collect subagents, pure meta login prep).",
+    "Spec #281: If you use todo(init), checklist is **this stage only** (single phase / stage-local items). Do not init a whole-engagement multi-phase map (recon/auth/vuln/report) under Graph — that is Free-mode behavior.",
     hypMode && allowHypothesis
       ? [
           "Hypothesis work mode ON for this stage: maintain the host **hypothesis queue** (hypothesis tool) for active/confirmed/killed/deferred exploration.",

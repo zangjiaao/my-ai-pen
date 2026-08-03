@@ -24,6 +24,7 @@ Node4 implementation detail (Graph × Pi product path).
 | [`specs/finding-identity.md`](specs/finding-identity.md) | Ledger identity (`vuln_type` + file location) + New-only narration (Spec #275) |
 | [`specs/base-booking-finding-id.md`](specs/base-booking-finding-id.md) | Base Runtime booking + unified finding_id mint (Spec [#279](https://github.com/zangjiaao/my-ai-pen/issues/279)) |
 | [`specs/product-state-ui-projection.md`](specs/product-state-ui-projection.md) | Product state → UI passive projection; Findings/Evidence SoT (Spec [#280](https://github.com/zangjiaao/my-ai-pen/issues/280)) |
+| [`specs/graph-stage-todo-l2.md`](specs/graph-stage-todo-l2.md) | Graph Todo = current-stage L2 only; no Free-style whole-map under L1 (Spec [#281](https://github.com/zangjiaao/my-ai-pen/issues/281)) |
 | [`specs/stream-message-identity.md`](specs/stream-message-identity.md) | Remove live-slot-as-Message; stream_id list identity + pending chrome |
 | [`specs/pen-tools-sandbox.md`](specs/pen-tools-sandbox.md) | Unified pen-sandbox (shell + browser) |
 | [`specs/expert-offers.md`](specs/expert-offers.md) | Node packs + Expert instances (@mention routing) |
