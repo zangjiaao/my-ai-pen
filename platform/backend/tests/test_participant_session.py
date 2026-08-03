@@ -1,10 +1,13 @@
-"""Unit tests for Participant Session work envelope resolver (Spec #277)."""
+"""Unit tests for Participant Session work envelope resolver (Spec #277 / #282)."""
 from app.services.participant_session import (
     apply_work_envelope_to_task_assign,
     is_free_composer_value,
+    is_incomplete_like_status,
     merge_session_into_context,
+    resolve_interrupt_wind_down,
     resolve_work_envelope,
     session_record_from_context,
+    wire_graph_execution_for_status,
 )
 
 
@@ -374,10 +377,12 @@ def test_s1_graph_interrupt_continue_stays_graph_not_c1():
 
 
 def test_s2_incomplete_graph_continue_keeps_graph_envelope_not_stripped():
-    """S2: continue under Graph keeps plan-bearing Graph envelope (not Free strip).
+    """S2 (platform seam, Spec #282): continue under Graph keeps Graph envelope.
 
-    Full todo projection lives in Node; at platform seam we lock that continue does not
-    strip engagement_template (which forced Free empty Todo cold-start).
+    Acceptance here is **envelope continuity** — engagement_template + accounts not
+    stripped (the Free cold-start that wiped plan/todos). Full Node captain park /
+    durable todo snapshot restore is I0.9 OOS; Hard re-entry rebinds stage plan
+    projection rather than Free empty TodoStore (see Node path tests for resume→hard).
     """
     task = {
         "type": "task_assign",
@@ -558,3 +563,108 @@ def test_f758_field_scenario_graph_interrupt_continue_not_free():
     assert out["engagement_template"] == "app_assessment"
     assert out["graph_execution"] == "resume"
     assert out["graph_execution"] != "continue"
+
+
+# --- Spec #282 S7 pure interrupt wind-down (router adapter input) ---
+
+
+def test_s7_interrupt_empty_workers_online_bound_settles():
+    """S7: empty workers + online bound (sent_to non-empty) → settle, not wind_down."""
+    d = resolve_interrupt_wind_down(
+        active_worker_ids={},
+        sent_to=["node-online"],
+        action="cancel",
+    )
+    assert d["wind_down"] is False
+    assert d["online_active"] == []
+    assert d["settle_status"] == "canceled"
+
+
+def test_s7_interrupt_online_tracked_worker_winds_down():
+    """S7: tracked worker that is online → wind_down / running."""
+    d = resolve_interrupt_wind_down(
+        active_worker_ids={"node-a": {"task_id": "t1"}},
+        sent_to=["node-a", "node-bound"],
+        action="cancel",
+    )
+    assert d["wind_down"] is True
+    assert d["online_active"] == ["node-a"]
+    assert d["settle_status"] == "running"
+
+
+def test_s7_interrupt_offline_only_workers_plus_online_bound_settles():
+    """S7 / review Issue 1: offline-only ghosts + online bound → settle (not stuck)."""
+    d = resolve_interrupt_wind_down(
+        active_worker_ids={"node-offline-ghost": {"task_id": "stale"}},
+        sent_to=["node-bound-online"],  # bound online, no intersection with workers
+        action="cancel",
+    )
+    assert d["wind_down"] is False
+    assert d["online_active"] == []
+    assert d["offline_ghosts"] == ["node-offline-ghost"]
+    assert d["settle_status"] == "canceled"
+
+
+def test_s7_interrupt_pause_settles_incomplete():
+    d = resolve_interrupt_wind_down(
+        active_worker_ids={},
+        sent_to=["node-x"],
+        action="pause",
+    )
+    assert d["wind_down"] is False
+    assert d["settle_status"] == "incomplete"
+
+
+def test_s7_interrupt_mixed_online_and_offline_winds_down_online_only():
+    d = resolve_interrupt_wind_down(
+        active_worker_ids={
+            "node-online": {"task_id": "t1"},
+            "node-offline": {"task_id": "t2"},
+        },
+        sent_to=["node-online"],
+        action="cancel",
+    )
+    assert d["wind_down"] is True
+    assert d["online_active"] == ["node-online"]
+    assert d["offline_ghosts"] == ["node-offline"]
+
+
+def test_wire_graph_execution_for_status_incomplete_never_c1():
+    """Legacy C1 helper path (#282 Issue 4): incomplete product Graph → resume."""
+    assert (
+        wire_graph_execution_for_status(
+            engagement_template="app_assessment",
+            conversation_status="incomplete",
+            explicit_execution="continue",
+        )
+        == "resume"
+    )
+    assert (
+        wire_graph_execution_for_status(
+            engagement_template="app_assessment",
+            conversation_status="canceled",
+        )
+        == "resume"
+    )
+    assert (
+        wire_graph_execution_for_status(
+            engagement_template="app_assessment",
+            conversation_status="completed",
+        )
+        == "continue"
+    )
+    assert (
+        wire_graph_execution_for_status(
+            engagement_template="app_assessment",
+            conversation_status="completed",
+            explicit_execution="full",
+        )
+        == "full"
+    )
+
+
+def test_is_incomplete_like_status():
+    assert is_incomplete_like_status("failed") is True
+    assert is_incomplete_like_status("cancelled") is True
+    assert is_incomplete_like_status("completed") is False
+    assert is_incomplete_like_status(None) is False

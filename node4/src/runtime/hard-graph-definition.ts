@@ -451,9 +451,15 @@ export type GraphExecutionMode = "full" | "continue" | "resume";
  * Parse structured graph_execution from task_assign (snake/camel).
  * Synonyms collapse once:
  * - continue_chat|envelope → continue (C1 free-in-envelope, post-complete only)
- * - resume|continue_session → resume (incomplete Graph same-mode continue — Hard path)
+ * - resume → incomplete Graph same-mode continue (Hard path; Spec #282)
+ * - continue_session → also resume (defense-in-depth: platform *internal* name must
+ *   never appear on the wire — platform maps continue_session → wire "continue" for
+ *   C1 only. If a stale adapter leaks the internal token, prefer Hard over Free demotion.)
  * - run|restart → full
  * Never NLP on instruction text.
+ *
+ * Naming note: platform **internal** `continue_session` = C1 and wires as `"continue"`.
+ * Node never sees platform-internal enums; wire vocabulary is continue|resume|full.
  */
 export function parseGraphExecution(
   message: Record<string, unknown> | null | undefined,

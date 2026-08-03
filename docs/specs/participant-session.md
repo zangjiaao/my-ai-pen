@@ -147,7 +147,7 @@ Primary seam: **Participant Session continue after interrupt**. Free and Graph a
 | # | Bar |
 |---|-----|
 | I1 | Graph mid-work → interrupt → user「继续」(composer 不指定/omit) → `work_mode` stays **graph**; next turn is **not** Free cold OMP. |
-| I2 | Same-mode continue retains harness todos/plan projection authority (no wipe-to-empty solely due to continue). |
+| I2 | Same-mode continue retains harness todos/plan projection authority (no wipe-to-empty solely due to continue). **v1 platform acceptance:** Graph envelope not stripped on continue (prevents Free empty-Todo cold-start). **Node:** incomplete continue re-enters Hard (stage plan rebind); durable captain park / in-memory todo snapshot across interrupt is I0.9 follow-up. |
 | I3 | Credential/login intent (structured `accounts` and/or Session working memory) remains available on the next turn. |
 | I4 | Free Session + incomplete +「继续」+ Case sticky Graph template stays **Free** (A1). |
 | I5 | Graph **completed** + follow-up chat (C1) remains free-in-envelope; **no** full Hard stage re-fire. |

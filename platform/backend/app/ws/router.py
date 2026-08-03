@@ -4427,12 +4427,13 @@ def _task_assign_from_user_message(conv_id: str, msg: dict, task_id: str) -> dic
 
 
 async def _apply_graph_execution_c1(conv_id: str | None, task_msg: dict, msg: dict) -> dict:
-    """Attach structured graph_execution when C1 policy resolves (pure helper owns rules).
+    """Attach structured graph_execution when C1/resume policy resolves.
 
-    Prefer `_apply_participant_work_envelope` on product dispatch paths (Spec #277);
-    this remains for direct C1-only callers/tests.
+    Prefer `_apply_participant_work_envelope` on product dispatch (Spec #277 / #282).
+    This legacy helper is aligned with #282: incomplete-like product Graph wires
+    ``resume`` (Hard path), never C1 ``continue`` free-in-envelope.
     """
-    from app.services.case_engagement import resolve_graph_execution
+    from app.services.participant_session import wire_graph_execution_for_status
 
     out = dict(task_msg or {})
     explicit = (
@@ -4458,7 +4459,7 @@ async def _apply_graph_execution_c1(conv_id: str | None, task_msg: dict, msg: di
             )
             status = None
 
-    resolved = resolve_graph_execution(
+    resolved = wire_graph_execution_for_status(
         engagement_template=et,
         conversation_status=status,
         explicit_execution=explicit,
@@ -5108,8 +5109,11 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     if msg.get("type") == "user_interrupt":
                         action = str(msg.get("action") or "cancel").lower()
                         # Spec #282 S7: interrupt cancels in-flight turn only. When Node
-                        # has no tracked active burst, settle Session honestly — do not
-                        # invent ghost workers / permanent interrupting from bound-node alone.
+                        # has no tracked *online* burst, settle Session honestly — do not
+                        # invent ghost workers / permanent interrupting from bound-node alone
+                        # or offline-only stale worker map entries.
+                        from app.services.participant_session import resolve_interrupt_wind_down
+
                         active_workers: dict = {}
                         try:
                             from app.db.base import async_session
@@ -5128,10 +5132,15 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         # Fan-out interrupt to bound/tracked nodes (no-op if already idle).
                         fanout = await _interrupt_all_session_workers(conv_id, msg)
                         sent_to = fanout.get("sent_to") or []
-                        # Only wait for wind-down when a real burst is tracked.
-                        wind_down = bool(active_workers) and bool(sent_to)
+                        decision = resolve_interrupt_wind_down(
+                            active_worker_ids=active_workers,
+                            sent_to=sent_to,
+                            action=action,
+                        )
+                        wind_down = bool(decision["wind_down"])
+                        online_active = list(decision["online_active"])
                         if wind_down:
-                            # Keep session status=running while tracked workers wind down.
+                            # Keep session status=running while *online tracked* workers wind down.
                             working_payload = {
                                 "type": "conversation_working",
                                 "conversation_id": conv_id,
@@ -5141,7 +5150,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                                 "interrupting": True,
                             }
                             for nid in list(active_workers.keys()):
-                                if nid in sent_to:
+                                if nid in online_active:
                                     working_payload = await _apply_worker_state(
                                         conv_id,
                                         node_id=nid,
@@ -5158,10 +5167,27 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                                         interrupt_pending=False,
                                         reason="not_busy",
                                     )
-                            working_payload["interrupting"] = True
-                            working_payload["working"] = True
-                        else:
-                            # No active burst (idle Node / ghost / offline) — settle Session.
+                            # Never force working/interrupting True when workers map emptied
+                            # (e.g. all online_active failed to apply); trust last payload.
+                            active_after = bool(working_payload.get("workers"))
+                            working_payload["interrupting"] = bool(
+                                working_payload.get("interrupting") and active_after
+                            )
+                            working_payload["working"] = bool(
+                                working_payload.get("working") and active_after
+                            )
+                            if not active_after:
+                                # Edge: apply left no workers — settle honestly.
+                                wind_down = False
+                                settle_status = (
+                                    "incomplete" if action == "pause" else "canceled"
+                                )
+                                await _set_conversation_status(conv_id, settle_status)
+                                working_payload["status"] = settle_status
+                                working_payload["working"] = False
+                                working_payload["interrupting"] = False
+                        if not wind_down:
+                            # No online tracked burst (idle / ghost / offline-only) — settle.
                             working_payload = await _apply_worker_state(
                                 conv_id,
                                 working=False,
@@ -5169,29 +5195,24 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                                 clear_all_workers=True,
                                 reason="not_busy",
                             )
-                            # Product status set: pause maps to incomplete (not a separate terminal).
-                            await _set_conversation_status(
-                                conv_id,
-                                "incomplete" if action == "pause" else "canceled",
-                            )
-                            working_payload["status"] = (
-                                "incomplete" if action == "pause" else "canceled"
-                            )
+                            settle_status = str(decision["settle_status"])
+                            await _set_conversation_status(conv_id, settle_status)
+                            working_payload["status"] = settle_status
                             working_payload["working"] = False
                             working_payload["interrupting"] = False
                         await _broadcast_conversation_working(working_payload)
                         if wind_down:
                             note = (
-                                f"已向 {len(sent_to)} 个专家运行时发送中止，正在停止本会话全部工作…"
+                                f"已向 {len(online_active)} 个专家运行时发送中止，正在停止本会话全部工作…"
                                 if action != "pause"
-                                else f"已向 {len(sent_to)} 个专家运行时发送暂停…"
+                                else f"已向 {len(online_active)} 个专家运行时发送暂停…"
                             )
                         else:
                             note = "当前会话没有在线专家在工作，已解除运行态。"
                         settle_status = (
                             "running"
                             if wind_down
-                            else ("incomplete" if action == "pause" else "canceled")
+                            else str(decision["settle_status"])
                         )
                         await _persist_and_broadcast(conv_id, {
                             "type": "status",
@@ -5214,6 +5235,8 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                                 "targets": fanout.get("targets"),
                                 "action": action,
                                 "active_workers": list(active_workers.keys()),
+                                "online_active": online_active,
+                                "offline_ghosts": list(decision["offline_ghosts"]),
                                 "wind_down": wind_down,
                             },
                         )
