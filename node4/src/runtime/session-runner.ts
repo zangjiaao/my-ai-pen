@@ -68,8 +68,8 @@ import {
   LlmTurnError,
 } from "./llm-turn-error.js";
 import {
+  applyCaptainEndDisposition,
   decideParkOnEnd,
-  parkWorkingSession,
   resolveWorkingSessionContinue,
 } from "./working-session-park.js";
 import { runParkedWorkingContinue } from "./run-parked-working-continue.js";
@@ -130,6 +130,47 @@ export async function runNode4Task(
     },
   };
 
+  /**
+   * Spec #283 I0.9: resolve park attach **before** allocating cold Free runtime stores
+   * (empty TodoStore / goals / subagent host) so reseed-only paths build those.
+   */
+  const packRootForHard = (pack as { packRoot?: string }).packRoot;
+  const hardResolved = await resolveHardGraph({
+    task,
+    packRoot: packRootForHard,
+    packId: pack.id,
+    env: process.env,
+  });
+  const continueInEnvelope = isContinueInEnvelopeExecution({
+    graphExecution: task.graphExecution,
+  });
+  const workPath = resolveExpertWorkPath({
+    hardMode: hardResolved.mode,
+    graphIntent: resolveGraphIdFromTask(task),
+    chatOnly,
+    ledgerAssistSeat,
+    continueInEnvelope,
+  });
+  const sessionWorkModeForPark: "free" | "graph" =
+    workPath.path === "hard" && hardResolved.mode === "hard" ? "graph" : "free";
+  const parkContinue = resolveWorkingSessionContinue({
+    conversationId: task.conversationId,
+    expertId: task.expertId || pack.id,
+    sessionWorkMode: sessionWorkModeForPark,
+    continueInEnvelope,
+  });
+  if (parkContinue.action === "attach") {
+    const parkedOut = await runParkedWorkingContinue({
+      config,
+      platform: loggingPlatform,
+      task,
+      parked: parkContinue.entry,
+      signal,
+    });
+    return { terminalStatus: parkedOut.terminalStatus, taskDir };
+  }
+
+  // --- Cold reseed path only (no park attach) ---
   const goals = new GoalStore();
   const panelLabel =
     (typeof task.expertName === "string" && task.expertName.trim()) ||
@@ -191,45 +232,6 @@ export async function runNode4Task(
    * Settlement is sole ownership of settleHardGraphTask (not a second dialect here).
    */
   // Expert Graph vs free OMP (#76 Soft retired). No Soft scenario inject path.
-  const packRootForHard = (pack as { packRoot?: string }).packRoot;
-  const hardResolved = await resolveHardGraph({
-    task,
-    packRoot: packRootForHard,
-    packId: pack.id,
-    env: process.env,
-  });
-  const continueInEnvelope = isContinueInEnvelopeExecution({
-    graphExecution: task.graphExecution,
-  });
-  const workPath = resolveExpertWorkPath({
-    hardMode: hardResolved.mode,
-    graphIntent: resolveGraphIdFromTask(task),
-    chatOnly,
-    ledgerAssistSeat,
-    continueInEnvelope,
-  });
-
-  // Spec #283 I0.9: same-mode continue attaches parked captain when present.
-  // C1 free-in-envelope never consumes Graph park as resume (decideAttach c1_continue).
-  const sessionWorkModeForPark: "free" | "graph" =
-    workPath.path === "hard" && hardResolved.mode === "hard" ? "graph" : "free";
-  const parkContinue = resolveWorkingSessionContinue({
-    conversationId: task.conversationId,
-    expertId: task.expertId || pack.id,
-    sessionWorkMode: sessionWorkModeForPark,
-    continueInEnvelope,
-  });
-  if (parkContinue.action === "attach") {
-    const parkedOut = await runParkedWorkingContinue({
-      config,
-      platform: loggingPlatform,
-      task,
-      parked: parkContinue.entry,
-      signal,
-    });
-    return { terminalStatus: parkedOut.terminalStatus, taskDir };
-  }
-
   if (workPath.path === "hard" && hardResolved.mode === "hard") {
     runtime.lifecycle.abortSignal = signal;
     const hardOut = await runHardGraphExpertTask({
@@ -884,11 +886,10 @@ export async function runNode4Task(
       /* ignore */
     }
     await textStream.dispose().catch(() => {});
-    const parkDecision = decideParkOnEnd({
-      aborted: cancelled(),
-    });
-    if (parkDecision.disposition === "park") {
-      parkWorkingSession({
+    // Spec #283 I0.9: shared captain end policy (interrupt → park; settled burst → dispose).
+    applyCaptainEndDisposition({
+      decision: decideParkOnEnd({ aborted: cancelled() }),
+      entry: {
         conversationId: task.conversationId,
         expertId: String(task.expertId || pack.id || ""),
         workMode: "free",
@@ -897,7 +898,6 @@ export async function runNode4Task(
         todo: runtime.todo,
         accounts: task.accounts,
         runtime,
-        parkedAt: Date.now(),
         dispose: () => {
           try {
             void Promise.resolve(session.dispose());
@@ -905,14 +905,8 @@ export async function runNode4Task(
             /* ignore */
           }
         },
-      });
-    } else {
-      try {
-        await Promise.resolve(session.dispose());
-      } catch {
-        /* ignore */
-      }
-    }
+      },
+    });
   }
 }
 

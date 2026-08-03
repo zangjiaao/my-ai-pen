@@ -1,6 +1,9 @@
 /**
  * Spec #283 (I0.9): run the next user turn on a parked captain working runtime.
  * Attach path only — cold reseed is the caller's fallback.
+ *
+ * End policy matches Free/Graph interrupt finallies via decideCaptainEndDisposition:
+ * incomplete / abort → re-park; product-terminal complete → dispose.
  */
 
 import type { Node4Config } from "../config.js";
@@ -17,9 +20,11 @@ import {
 } from "./platform-observability.js";
 import { PanelAgentTracker } from "./panel-agents.js";
 import { extractLlmTurnError, LlmTurnError } from "./llm-turn-error.js";
+import { emitTodoPlanTreeUpdate } from "./plan-projection.js";
 import {
-  decideParkOnEnd,
-  parkWorkingSession,
+  applyCaptainEndDisposition,
+  decideCaptainEndDisposition,
+  harnessStatusAfterParkedContinue,
   type ParkedWorkingRuntime,
   type WorkingWorkMode,
 } from "./working-session-park.js";
@@ -29,10 +34,44 @@ export type ParkedContinueResult = {
   attached: true;
   workMode: WorkingWorkMode;
   sameRuntime: true;
+  /** True when captain was re-parked for a later same-Session continue. */
+  reparked: boolean;
 };
 
 /**
- * Prompt the parked captain with the continue message; re-park on interrupt.
+ * Best-effort: re-project parked todos onto the new task_id so UI Tasks is not empty
+ * solely because task_id changed (does not wipe or re-init store).
+ */
+async function reemitParkedTodos(
+  platform: PlatformSink,
+  task: TaskEnvelope,
+  parked: ParkedWorkingRuntime,
+): Promise<void> {
+  try {
+    const open = parked.todo.openCount();
+    const phases = parked.todo.snapshot();
+    if (!phases.some((p) => p.tasks.length > 0)) return;
+    await platform.send({
+      type: "todo_updated",
+      conversation_id: task.conversationId,
+      task_id: task.taskId,
+      op: "view",
+      phases,
+      open_count: open,
+      scope: "case",
+      parked_continue: true,
+    } as any);
+    // Free / non-GraphStore path: project TodoStore plan_tree under new task_id.
+    // Graph L2 SOT is GraphStore when present; still re-emit Todo projection for mid-stage
+    // park where hardGraphRun may already be gone after aborted Hard run.
+    await emitTodoPlanTreeUpdate(platform, task, parked.todo, "parked_continue.reemit");
+  } catch {
+    /* best-effort — agent memory still holds TodoStore */
+  }
+}
+
+/**
+ * Prompt the parked captain with the continue message; re-park when incomplete.
  */
 export async function runParkedWorkingContinue(options: {
   config: Node4Config;
@@ -44,6 +83,8 @@ export async function runParkedWorkingContinue(options: {
   const { platform, task, parked, signal } = options;
   const workMode = parked.workMode;
   const startedAt = new Date().toISOString();
+  let reparked = false;
+  let harnessStatus: "completed" | "incomplete" = "incomplete";
 
   // Rebind live task/platform onto stored runtime when present.
   if (parked.runtime) {
@@ -52,7 +93,6 @@ export async function runParkedWorkingContinue(options: {
     if (parked.runtime.lifecycle) {
       parked.runtime.lifecycle.abortSignal = signal;
     }
-    // Prefer parked todo as SOT (not wipe-to-empty).
     if (parked.todo) {
       parked.runtime.todo = parked.todo;
     }
@@ -115,19 +155,19 @@ export async function runParkedWorkingContinue(options: {
     stage_id: parked.stageId,
   } as any);
 
+  // Machine-oriented status only (not agent narration / chat bubble copy).
   await platform.send({
     type: "status_update",
     conversation_id: task.conversationId,
     task_id: task.taskId,
-    message:
-      workMode === "graph"
-        ? `parked graph continue stage=${parked.stageId || "?"} graph=${parked.graphId || "?"}`
-        : "parked free continue",
+    message: `parked_continue mode=${workMode} stage=${parked.stageId || "-"} graph=${parked.graphId || "-"}`,
     agent_phase: "parked_continue",
     status: "running",
     work_mode: workMode === "graph" ? `hard_graph:${parked.graphId || "graph"}:parked` : "free",
     parked_continue: true,
   } as any);
+
+  await reemitParkedTodos(platform, task, parked);
 
   const session = parked.session;
   const unregister = registerActiveSession({
@@ -198,13 +238,27 @@ export async function runParkedWorkingContinue(options: {
     }
     await textStream.dispose().catch(() => {});
 
-    const parkDecision = decideParkOnEnd({
-      aborted: stop === "aborted" || cancelled(),
-      naturalComplete: stop === "completed",
+    const aborted = stop === "aborted" || cancelled();
+    let openTodoCount = 0;
+    try {
+      openTodoCount = parked.todo.openCount();
+    } catch {
+      openTodoCount = 0;
+    }
+    // Align harness + disposition: incomplete ⇒ re-park; completed ⇒ dispose.
+    // Never treat a single successful prompt as product-terminal for Graph.
+    harnessStatus = harnessStatusAfterParkedContinue({
+      aborted,
+      workMode,
+      openTodoCount,
     });
-
-    if (parkDecision.disposition === "park") {
-      parkWorkingSession({
+    const decision = decideCaptainEndDisposition({
+      aborted,
+      productTerminal: harnessStatus === "completed",
+    });
+    const applied = applyCaptainEndDisposition({
+      decision,
+      entry: {
         conversationId: task.conversationId,
         expertId: String(task.expertId || parked.expertId || ""),
         workMode: parked.workMode,
@@ -215,32 +269,17 @@ export async function runParkedWorkingContinue(options: {
         todo: parked.todo,
         accounts: task.accounts ?? parked.accounts,
         runtime: parked.runtime,
-        parkedAt: Date.now(),
         dispose: parked.dispose,
-      });
-    } else {
-      try {
-        await Promise.resolve(parked.dispose());
-      } catch {
-        /* ignore */
-      }
-    }
+      },
+    });
+    reparked = applied.parked;
   }
 
   const endTime = new Date().toISOString();
-  // Parked continue after interrupt is typically incomplete unless agent fully settled.
-  // Natural stop of one continue turn without abort → incomplete (mid-work continuity),
-  // so next continue can still attach if we re-parked; if we disposed on naturalComplete
-  // above, terminal reflects best-effort chat complete for free.
-  const harnessStatus: "completed" | "incomplete" =
-    stop === "aborted" || cancelled()
-      ? "incomplete"
-      : workMode === "free"
-        ? "completed"
-        : "incomplete";
+  const aborted = stop === "aborted" || cancelled();
 
   panel.setMainTerminal(
-    stop === "aborted" ? "aborted" : harnessStatus === "completed" ? "completed" : "failed",
+    aborted ? "aborted" : harnessStatus === "completed" ? "completed" : "failed",
   );
   await emitCheckpointUpdate(obsCtx, {
     terminal: true,
@@ -254,12 +293,15 @@ export async function runParkedWorkingContinue(options: {
     task_id: task.taskId,
     status: harnessStatus,
     summary:
-      stop === "aborted"
+      aborted
         ? "Parked working session interrupted again."
-        : "Parked working session continue settled.",
-    stop_reason: stop === "aborted" ? "aborted" : "parked_continue",
+        : reparked
+          ? "Parked working session continue settled (captain re-parked)."
+          : "Parked working session continue settled.",
+    stop_reason: aborted ? "aborted" : "parked_continue",
     work_mode: workMode,
     parked_continue: true,
+    reparked,
     end_time: endTime,
     started_at: startedAt,
   } as any);
@@ -269,5 +311,6 @@ export async function runParkedWorkingContinue(options: {
     attached: true,
     workMode,
     sameRuntime: true,
+    reparked,
   };
 }

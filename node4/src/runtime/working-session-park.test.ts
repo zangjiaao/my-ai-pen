@@ -6,11 +6,14 @@ import assert from "node:assert/strict";
 import { TodoStore } from "../stores/todo.js";
 import type { Node4AgentSession } from "./run-node4-agent.js";
 import {
+  applyCaptainEndDisposition,
   clearWorkingSessionParksForTests,
   countParkedSessionsForTests,
   decideAttachOnContinue,
+  decideCaptainEndDisposition,
   decideParkOnEnd,
   DEFAULT_PARK_TTL_MS,
+  harnessStatusAfterParkedContinue,
   isParkExpired,
   parkSessionKey,
   parkWorkingSession,
@@ -44,20 +47,64 @@ assert.equal(
   false,
 );
 
-// --- decideParkOnEnd ---
-assert.deepEqual(decideParkOnEnd({ aborted: true }), { disposition: "park" });
+// --- decideCaptainEndDisposition / decideParkOnEnd (shared end policy) ---
+assert.deepEqual(decideCaptainEndDisposition({ aborted: true }), {
+  disposition: "park",
+  reason: "interrupted",
+});
+assert.deepEqual(
+  decideCaptainEndDisposition({ aborted: false, productTerminal: false }),
+  { disposition: "park", reason: "incomplete" },
+  "incomplete mid-work re-parks (not dispose)",
+);
+assert.deepEqual(
+  decideCaptainEndDisposition({ aborted: false, productTerminal: true }),
+  { disposition: "dispose", reason: "product_terminal" },
+);
+// abort wins over productTerminal
+assert.deepEqual(
+  decideCaptainEndDisposition({ aborted: true, productTerminal: true }),
+  { disposition: "park", reason: "interrupted" },
+);
+assert.deepEqual(decideParkOnEnd({ aborted: true }), {
+  disposition: "park",
+  reason: "interrupted",
+});
 assert.deepEqual(decideParkOnEnd({ aborted: false }), {
   disposition: "dispose",
-  reason: "settled",
-});
-assert.deepEqual(decideParkOnEnd({ aborted: true, naturalComplete: true }), {
-  disposition: "dispose",
-  reason: "natural_complete",
+  reason: "product_terminal",
 });
 assert.deepEqual(decideParkOnEnd({ aborted: true, expertTransfer: true }), {
   disposition: "dispose",
   reason: "expert_transfer",
 });
+
+// harnessStatusAfterParkedContinue
+assert.equal(
+  harnessStatusAfterParkedContinue({
+    aborted: false,
+    workMode: "graph",
+    openTodoCount: 0,
+  }),
+  "incomplete",
+  "Graph never product-complete from mini-runner alone",
+);
+assert.equal(
+  harnessStatusAfterParkedContinue({
+    aborted: false,
+    workMode: "free",
+    openTodoCount: 2,
+  }),
+  "incomplete",
+);
+assert.equal(
+  harnessStatusAfterParkedContinue({
+    aborted: false,
+    workMode: "free",
+    openTodoCount: 0,
+  }),
+  "completed",
+);
 
 // --- decideAttachOnContinue ---
 assert.deepEqual(
@@ -284,6 +331,31 @@ function makeParked(overrides: Partial<ParkedWorkingRuntime> = {}): ParkedWorkin
   assert.equal(cont.action, "reseed");
   if (cont.action !== "reseed") throw new Error("expected reseed");
   assert.equal(cont.reason, "c1_continue", "W5: do not attach Graph park on C1");
+  assert.equal(
+    countParkedSessionsForTests(),
+    0,
+    "W5/Issue9: C1 drops Graph park",
+  );
+  // Free park also dropped on C1 (predictable; no surprise Free attach later)
+  clearWorkingSessionParksForTests();
+  parkWorkingSession(
+    makeParked({
+      conversationId: "conv-c1-free",
+      expertId: "pentest",
+      workMode: "free",
+    }),
+  );
+  resolveWorkingSessionContinue({
+    conversationId: "conv-c1-free",
+    expertId: "pentest",
+    sessionWorkMode: "free",
+    continueInEnvelope: true,
+  });
+  assert.equal(
+    countParkedSessionsForTests(),
+    0,
+    "W5/Issue9: C1 drops Free park too",
+  );
 }
 
 // ========== W6: park miss → mode-correct Graph reseed, not Free demotion ==========
@@ -454,7 +526,7 @@ assert.equal(
   true,
 );
 
-// --- runParkedWorkingContinue: same runtime, history retained, todos not wiped ---
+// --- runParkedWorkingContinue: re-park on incomplete (Issue 1/2 multi-turn W1) ---
 {
   clearWorkingSessionParksForTests();
   const { runParkedWorkingContinue } = await import("./run-parked-working-continue.js");
@@ -485,11 +557,18 @@ assert.equal(
       sent.push(m);
     },
   };
-  const out = await runParkedWorkingContinue({
-    config: { workspaceDir: "/tmp/node4-park-test", modelProvider: "openai", modelId: "x" } as any,
+  const cfg = {
+    workspaceDir: "/tmp/node4-park-test",
+    modelProvider: "openai",
+    modelId: "x",
+  } as any;
+
+  // Turn 1 after interrupt
+  const out1 = await runParkedWorkingContinue({
+    config: cfg,
     platform: platform as any,
     task: {
-      taskId: "t-new",
+      taskId: "t-new-1",
       conversationId: "conv-run",
       expertId: "pentest",
       instruction: "继续",
@@ -499,9 +578,12 @@ assert.equal(
     },
     parked,
   });
-  assert.equal(out.attached, true);
-  assert.equal(out.sameRuntime, true);
-  assert.equal(out.workMode, "graph");
+  assert.equal(out1.attached, true);
+  assert.equal(out1.sameRuntime, true);
+  assert.equal(out1.workMode, "graph");
+  assert.equal(out1.terminalStatus, "incomplete", "Graph continue stays incomplete");
+  assert.equal(out1.reparked, true, "Issue1: re-park after natural settle");
+  assert.equal(disposed, 0, "Issue1: dispose must not run on incomplete Graph continue");
   assert.ok(session.messages.some((m: any) => m?.content === "继续"), "continue text prompted");
   assert.ok(todo.openCount() >= 1, "todos not wiped by continue runner");
   assert.ok(
@@ -509,11 +591,164 @@ assert.equal(
     "task_start marks parked_continue",
   );
   assert.ok(
-    sent.some((m: any) => m?.type === "task_complete"),
-    "task_complete emitted",
+    sent.some((m: any) => m?.type === "todo_updated" && m?.parked_continue === true),
+    "Issue5: todo re-emitted under new task_id",
   );
-  // Graph natural settle of continue turn disposes (or re-parks only on abort)
-  assert.ok(disposed >= 0);
+  assert.ok(
+    sent.some((m: any) => m?.type === "plan_tree_updated"),
+    "Issue5: plan_tree re-projected",
+  );
+  assert.ok(peekParkedSession("conv-run", "pentest"), "captain still parked after turn 1");
+
+  // Turn 2: multi-continue without new interrupt — same session object
+  const cont2 = resolveWorkingSessionContinue({
+    conversationId: "conv-run",
+    expertId: "pentest",
+    sessionWorkMode: "graph",
+  });
+  assert.equal(cont2.action, "attach", "W1 multi-turn: second continue attaches");
+  if (cont2.action !== "attach") throw new Error("expected attach");
+  assert.equal(cont2.entry.session, session, "W1 multi-turn: same runtime object");
+  assert.ok(parkedTodoNonEmpty(cont2.entry), "todos still present for turn 2");
+
+  const out2 = await runParkedWorkingContinue({
+    config: cfg,
+    platform: platform as any,
+    task: {
+      taskId: "t-new-2",
+      conversationId: "conv-run",
+      expertId: "pentest",
+      instruction: "再继续",
+      target: { type: "url", value: "https://lab.example/" },
+      scope: { allow: [] },
+    },
+    parked: cont2.entry,
+  });
+  assert.equal(out2.sameRuntime, true);
+  assert.equal(out2.reparked, true);
+  assert.equal(disposed, 0, "still not disposed after turn 2");
+  assert.ok(
+    session.messages.some((m: any) => m?.content === "再继续"),
+    "second continue prompted on same session",
+  );
+  clearWorkingSessionParksForTests();
+}
+
+// Free mid-work with open todos also re-parks
+{
+  clearWorkingSessionParksForTests();
+  const { runParkedWorkingContinue } = await import("./run-parked-working-continue.js");
+  const todo = new TodoStore();
+  todo.apply({
+    op: "init",
+    list: [{ phase: "T", items: ["still open"] }],
+  });
+  let disposed = 0;
+  const session = fakeSession();
+  const out = await runParkedWorkingContinue({
+    config: { workspaceDir: "/tmp/node4-park-test", modelProvider: "openai", modelId: "x" } as any,
+    platform: { send: async () => {} } as any,
+    task: {
+      taskId: "tf1",
+      conversationId: "conv-free-mid",
+      expertId: "pentest",
+      instruction: "继续",
+      target: { type: "url", value: "https://lab.example/" },
+      scope: { allow: [] },
+    },
+    parked: makeParked({
+      conversationId: "conv-free-mid",
+      expertId: "pentest",
+      workMode: "free",
+      session,
+      todo,
+      dispose: () => {
+        disposed += 1;
+      },
+    }),
+  });
+  assert.equal(out.terminalStatus, "incomplete");
+  assert.equal(out.reparked, true);
+  assert.equal(disposed, 0);
+  assert.ok(peekParkedSession("conv-free-mid", "pentest"));
+  clearWorkingSessionParksForTests();
+}
+
+// Free product-terminal (no open todos) disposes
+{
+  clearWorkingSessionParksForTests();
+  const { runParkedWorkingContinue } = await import("./run-parked-working-continue.js");
+  const todo = new TodoStore(); // empty
+  let disposed = 0;
+  const out = await runParkedWorkingContinue({
+    config: { workspaceDir: "/tmp/node4-park-test", modelProvider: "openai", modelId: "x" } as any,
+    platform: { send: async () => {} } as any,
+    task: {
+      taskId: "tf2",
+      conversationId: "conv-free-done",
+      expertId: "pentest",
+      instruction: "ok",
+      target: { type: "url", value: "https://lab.example/" },
+      scope: { allow: [] },
+    },
+    parked: makeParked({
+      conversationId: "conv-free-done",
+      expertId: "pentest",
+      workMode: "free",
+      todo,
+      dispose: () => {
+        disposed += 1;
+      },
+    }),
+  });
+  assert.equal(out.terminalStatus, "completed");
+  assert.equal(out.reparked, false);
+  assert.equal(disposed, 1, "product-terminal Free disposes");
+  assert.equal(countParkedSessionsForTests(), 0);
+  clearWorkingSessionParksForTests();
+}
+
+// applyCaptainEndDisposition: interrupt path parks without dispose
+{
+  clearWorkingSessionParksForTests();
+  let disposed = 0;
+  const session = fakeSession();
+  const applied = applyCaptainEndDisposition({
+    decision: decideParkOnEnd({ aborted: true }),
+    entry: {
+      conversationId: "c-fin",
+      expertId: "e",
+      workMode: "graph",
+      stageId: "recon",
+      taskId: "t1",
+      session,
+      todo: new TodoStore(),
+      dispose: () => {
+        disposed += 1;
+      },
+    },
+  });
+  assert.equal(applied.parked, true);
+  assert.equal(applied.disposed, false);
+  assert.equal(disposed, 0);
+  assert.ok(peekParkedSession("c-fin", "e"), "Issue3: interrupt finally path parks");
+  // settled stage/burst disposes
+  const applied2 = applyCaptainEndDisposition({
+    decision: decideParkOnEnd({ aborted: false }),
+    entry: {
+      conversationId: "c-fin2",
+      expertId: "e",
+      workMode: "free",
+      taskId: "t2",
+      session: fakeSession(),
+      todo: new TodoStore(),
+      dispose: () => {
+        disposed += 1;
+      },
+    },
+  });
+  assert.equal(applied2.disposed, true);
+  assert.ok(disposed >= 1);
   clearWorkingSessionParksForTests();
 }
 
@@ -544,4 +779,4 @@ assert.equal(
 }
 
 clearWorkingSessionParksForTests();
-console.log("working-session-park.test.ts: ok (W1–W10)");
+console.log("working-session-park.test.ts: ok (W1–W10 + multi-continue re-park)");

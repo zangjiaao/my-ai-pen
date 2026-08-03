@@ -18,8 +18,8 @@ import type { StageExecutor, StageExecutorInput, StageExecutorOutput } from "./h
 import { createBoundNode4Session } from "./run-node4-agent.js";
 import { registerActiveSession } from "./active-session-registry.js";
 import {
+  applyCaptainEndDisposition,
   decideParkOnEnd,
-  parkWorkingSession,
 } from "./working-session-park.js";
 import {
   absorbStageResultIntoParent,
@@ -862,24 +862,25 @@ export function createHardGraphStageExecutor(options: {
         graphRun?.usage.mergeSnapshot(
           stageUsage.snapshot({ tool_calls: obsCounters.toolCallCount }),
         );
-        // Spec #283 I0.9: park stage captain on interrupt (do not dispose solely for abort).
+        // Spec #283 I0.9: shared captain end policy (interrupt → park; stage settle → dispose).
         // #282 mode wire remains: incomplete continue → Hard path; attach uses park when present.
-        const parkDecision = decideParkOnEnd({
-          aborted: Boolean(abortSignal?.aborted),
-        });
-        if (parkDecision.disposition === "park") {
-          parkWorkingSession({
+        applyCaptainEndDisposition({
+          decision: decideParkOnEnd({
+            aborted: Boolean(abortSignal?.aborted),
+          }),
+          entry: {
             conversationId: task.conversationId,
             expertId: String(task.expertId || pack.id || ""),
             workMode: "graph",
-            graphId: String(input.graphId || task.graphId || task.engagementTemplate || "") || undefined,
+            graphId:
+              String(input.graphId || task.graphId || task.engagementTemplate || "") ||
+              undefined,
             stageId: input.stage.id,
             taskId: task.taskId,
             session,
             todo: childRuntime.todo,
             accounts: task.accounts,
             runtime: childRuntime,
-            parkedAt: Date.now(),
             dispose: () => {
               try {
                 void Promise.resolve(session.dispose());
@@ -887,14 +888,8 @@ export function createHardGraphStageExecutor(options: {
                 /* ignore */
               }
             },
-          });
-        } else {
-          try {
-            await Promise.resolve(session.dispose());
-          } catch {
-            /* ignore */
-          }
-        }
+          },
+        });
       }
 
       // Spec #125: never load agent result.json; host settlement projects gate input.

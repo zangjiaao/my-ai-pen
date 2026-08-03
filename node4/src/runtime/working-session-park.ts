@@ -8,6 +8,11 @@
  * #282 = mode continuity (Graph not Free). I0.9 = working-runtime continuity.
  * Park is memory-only within the live Node process (v1). Process death / TTL
  * miss → honest mode-correct reseed (never silent Free demotion when Graph).
+ *
+ * End policy (shared by Free finally, Graph stage finally, parked-continue):
+ * - interrupt/abort → park
+ * - product-terminal complete → dispose
+ * - incomplete mid-work (incl. natural end of a parked-continue turn) → re-park
  */
 
 import type { Node4AgentSession } from "./run-node4-agent.js";
@@ -38,6 +43,10 @@ export type ParkedWorkingRuntime = {
   dispose: () => void | Promise<void>;
 };
 
+export type CaptainEndDisposition =
+  | { disposition: "park"; reason: "interrupted" | "incomplete" }
+  | { disposition: "dispose"; reason: "product_terminal" | "expert_transfer" | "settled" };
+
 const parks = new Map<string, ParkedWorkingRuntime>();
 
 /** Participant Session key: conversation_id + expert_id (fallback conversation alone). */
@@ -61,26 +70,49 @@ export function isParkExpired(
 }
 
 /**
- * Pure: end-of-burst disposition for the captain working runtime.
- * Interrupt (abort) → park. Natural terminal / transfer → dispose.
+ * Unified captain end disposition — one policy for Free finally, Graph stage finally,
+ * and parked-continue finally (Issue 4: avoid dual end policies).
+ *
+ * - aborted → park (interrupt)
+ * - productTerminal → dispose (true Session/engagement terminal only)
+ * - otherwise incomplete mid-work → park (multi-turn continuity after continue)
  */
-export function decideParkOnEnd(input: {
+export function decideCaptainEndDisposition(input: {
   aborted: boolean;
+  /**
+   * True only when product harness status is terminal **completed**
+   * (not incomplete). Never set merely because one session.prompt returned.
+   */
+  productTerminal?: boolean;
   /** Explicit Expert transfer ends Session park chain. */
   expertTransfer?: boolean;
-  /** Natural completed terminal — do not park. */
-  naturalComplete?: boolean;
-}): { disposition: "park" } | { disposition: "dispose"; reason: string } {
+}): CaptainEndDisposition {
   if (input.expertTransfer) {
     return { disposition: "dispose", reason: "expert_transfer" };
   }
-  if (input.naturalComplete) {
-    return { disposition: "dispose", reason: "natural_complete" };
-  }
   if (input.aborted) {
-    return { disposition: "park" };
+    return { disposition: "park", reason: "interrupted" };
   }
-  return { disposition: "dispose", reason: "settled" };
+  if (input.productTerminal) {
+    return { disposition: "dispose", reason: "product_terminal" };
+  }
+  return { disposition: "park", reason: "incomplete" };
+}
+
+/**
+ * Interrupt-site helper: abort → park; successful stage/burst settle → dispose.
+ * Prefer `decideCaptainEndDisposition` for parked-continue (productTerminal from harness).
+ */
+export function decideParkOnEnd(input: {
+  aborted: boolean;
+  expertTransfer?: boolean;
+}): CaptainEndDisposition {
+  return decideCaptainEndDisposition({
+    aborted: input.aborted,
+    // Non-abort end of Free/Graph harness burst is product settle of that burst.
+    productTerminal: !input.aborted,
+    expertTransfer: input.expertTransfer,
+  });
 }
 
 /**
@@ -131,6 +163,29 @@ export function parkWorkingSession(entry: ParkedWorkingRuntime): string {
   return key;
 }
 
+/**
+ * Apply shared end disposition: park or dispose the captain handle.
+ * Used by Free finally, Graph stage finally, and parked-continue finally.
+ */
+export function applyCaptainEndDisposition(options: {
+  decision: CaptainEndDisposition;
+  entry: Omit<ParkedWorkingRuntime, "parkedAt"> & { parkedAt?: number };
+}): { parked: boolean; disposed: boolean } {
+  if (options.decision.disposition === "park") {
+    parkWorkingSession({
+      ...options.entry,
+      parkedAt: options.entry.parkedAt ?? Date.now(),
+    });
+    return { parked: true, disposed: false };
+  }
+  try {
+    void Promise.resolve(options.entry.dispose());
+  } catch {
+    /* ignore */
+  }
+  return { parked: false, disposed: true };
+}
+
 export function peekParkedSession(
   conversationId: string,
   expertId?: string | null,
@@ -166,7 +221,7 @@ export function takeParkedSession(
   return { ok: true, entry };
 }
 
-/** Drop park without attach (mode mismatch cleanup, tests). */
+/** Drop park without attach (mode mismatch cleanup, C1, tests). */
 export async function dropParkedSession(
   conversationId: string,
   expertId?: string | null,
@@ -186,7 +241,7 @@ export async function dropParkedSession(
 
 /**
  * Resolve attach vs reseed for a continue turn, consuming park on attach.
- * On reseed after mode_mismatch/ttl, park is dropped.
+ * On reseed after mode_mismatch/ttl/c1, park is dropped (Free and Graph).
  */
 export function resolveWorkingSessionContinue(input: {
   conversationId: string;
@@ -218,12 +273,8 @@ export function resolveWorkingSessionContinue(input: {
         decision.reason === "mode_mismatch" ||
         decision.reason === "c1_continue")
     ) {
-      // c1_continue: keep park only if Free park for later Free path — drop Graph park on C1
-      if (decision.reason === "c1_continue" && peeked.workMode === "graph") {
-        void dropParkedSession(input.conversationId, input.expertId);
-      } else if (decision.reason !== "c1_continue") {
-        void dropParkedSession(input.conversationId, input.expertId);
-      }
+      // Drop any leftover park on C1 / TTL / mismatch (predictable; no surprise Free attach after C1).
+      void dropParkedSession(input.conversationId, input.expertId);
     }
     return decision;
   }
@@ -250,6 +301,22 @@ export function parkedTodoNonEmpty(entry: ParkedWorkingRuntime): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Harness status for a parked-continue turn.
+ * Graph never product-completes from the mini-runner alone (stage/run gates live in Hard Graph).
+ * Free completes only when no open todos remain (mid-work Free stays incomplete → re-park).
+ */
+export function harnessStatusAfterParkedContinue(input: {
+  aborted: boolean;
+  workMode: WorkingWorkMode;
+  openTodoCount: number;
+}): "completed" | "incomplete" {
+  if (input.aborted) return "incomplete";
+  if (input.workMode === "graph") return "incomplete";
+  if (input.openTodoCount > 0) return "incomplete";
+  return "completed";
 }
 
 export function clearWorkingSessionParksForTests(): void {
