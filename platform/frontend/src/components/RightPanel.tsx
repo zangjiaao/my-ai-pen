@@ -114,8 +114,6 @@ interface Props {
   kanban?: KanbanSummary;
   workflowKind?: string;
   running?: boolean;
-  /** Conversation lifecycle status — used to close stale Tasks when completed. */
-  conversationStatus?: string;
   planTree?: PlanNode[];
   strixAgents?: StrixAgentStatus[];
   strixNotes?: StrixNote[];
@@ -165,7 +163,6 @@ export default function RightPanel({
   workflowKind,
   running = false,
   engagementCloseout,
-  conversationStatus,
   planTree = [],
   strixAgents = [],
   strixNotes = [],
@@ -229,9 +226,11 @@ export default function RightPanel({
   const visiblePlanTree = isStrixWorkflow ? mainAgentPlanTree(planTree, displayAgents) : planTree;
   const phasePlan = hasStatusData ? buildPhasePlan(visiblePlanTree, kanbanSummary.current_stage, activeTool, running, findings.length, isStrixWorkflow) : [];
   // Node3-style flat task list for all workflows (phase tree remains available via plan data).
+  // Trust plan_tree status only — do not force pending/running → done from conversation.status
+  // (that caused false-green todos when status/running lagged open checklist items).
   const taskItems = isStrixWorkflow
     ? phasePlan.flatMap((phase) => phase.items)
-    : normalizeTasksForConversationStatus(unifiedTodoItems(visiblePlanTree), conversationStatus, running);
+    : unifiedTodoItems(visiblePlanTree);
   const displayRun = useMemo(
     () => mergeCaseRunIntoDisplayRun(strixRun, caseRun, running),
     [strixRun, caseRun, running],
@@ -878,22 +877,6 @@ function normalizeAgentsForConversationRunning(agents: StrixAgentStatus[], runni
       pending_count: 0,
     };
   });
-}
-
-/**
- * Plan/todo display: trust plan_tree only.
- *
- * Previously forced pending/running → done when conversation.status===completed.
- * That caused false-green todos and flicker when status/running oscillated
- * (e.g. another seat completed the Case while plan todos were still open).
- * Do not paint green here — checklist honesty is agent/runtime, not UI rewrite.
- */
-function normalizeTasksForConversationStatus(
-  nodes: PlanNode[],
-  _conversationStatus: string | undefined,
-  _running: boolean,
-): PlanNode[] {
-  return nodes;
 }
 
 function hasRunSummaryData(run: StrixRun | undefined): boolean {
