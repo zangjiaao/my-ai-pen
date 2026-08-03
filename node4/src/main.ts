@@ -15,7 +15,11 @@ import { sanitizePromptLabel } from "./runtime/prompt-template.js";
 import { extractAgentLanguageFromMessage } from "./runtime/agent-language.js";
 import { cancelApprovalsForConversation, resolveApproval } from "./runtime/approvals.js";
 import { classifyUserControl } from "./runtime/package-settlement-law.js";
-import { deliverUserSteerToActiveSession } from "./runtime/active-session-registry.js";
+import {
+  clearPendingSteers,
+  deliverUserSteerToActiveSession,
+  enqueuePendingSteer,
+} from "./runtime/active-session-registry.js";
 import {
   installExpert,
   listInstalledPackIds,
@@ -110,6 +114,8 @@ async function runAssignedTask(message: Record<string, unknown>): Promise<void> 
       aborts.delete(task.conversationId);
     }
     busy.delete(task.conversationId);
+    // Drop steers that never hit a live session (burst ended mid-race).
+    clearPendingSteers(task.conversationId);
     await emitWorkStatus(task.conversationId, task.taskId, false, {
       reason: endReason,
       expert_id: task.expertId,
@@ -205,25 +211,14 @@ client.on("user_steer", async (message) => {
   if (busy.has(conversationId)) {
     const delivered = deliverUserSteerToActiveSession(conversationId, text);
     if (delivered.ok) {
-      // Acknowledge receipt without claiming work finished (panel honesty).
-      await client.send({
-        type: "status_update",
-        conversation_id: conversationId,
-        message: "User message queued for the current work turn.",
-        status: "running",
-        working: true,
-        agent_phase: "user_steer_queued",
-      });
+      // Silent inject — no canned agent/progress chat (AGENTS.md).
       return;
     }
-    // Session not registered yet (race) or inject failed — surface failure, do not silent-drop.
-    await client.send({
-      type: "text",
-      conversation_id: conversationId,
-      content: {
-        text: "Could not deliver your message to the active turn. Try again in a moment, or use Interrupt then resend.",
-      },
-    });
+    // Busy race: session not registered yet. Queue until register flushes.
+    if (delivered.reason === "no_session") {
+      enqueuePendingSteer(conversationId, text);
+      return;
+    }
     return;
   }
 
