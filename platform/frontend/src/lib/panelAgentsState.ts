@@ -327,12 +327,32 @@ export function countGraphStagePhases(nodes: PlanNode[]): number {
 }
 
 /**
+ * Legacy FE archaeology used `plan-phase-intake|recon|…` nodes synthesized from
+ * status phase labels (not Expert Graph L1 / agent todo). Those must never paint
+ * Tasks for Default/assistant chat, and must not stick after a real empty snapshot.
+ */
+export function isLegacySyntheticPhasePlan(nodes: PlanNode[]): boolean {
+  if (!nodes.length) return false;
+  return nodes.every((n) => {
+    const id = String(n.node_id || n.id || "").trim();
+    return id.startsWith("plan-phase-");
+  });
+}
+
+/**
  * Prefer the tree that still has Graph L1 structure when a snapshot refresh
  * would otherwise flatten Tasks (work_items only).
+ * Never preserve legacy synthetic phase lists when next is empty/real.
  */
 export function preferRicherPlanTree(prev: PlanNode[], next: PlanNode[]): PlanNode[] {
   if (!prev.length) return next;
-  if (!next.length) return prev;
+  if (!next.length) {
+    // Empty authoritative snapshot: drop archaeology-only fake phases; keep live Graph.
+    if (isLegacySyntheticPhasePlan(prev)) return [];
+    return prev;
+  }
+  // Real plan must win over leftover synthetic phase shells.
+  if (isLegacySyntheticPhasePlan(prev) && !isLegacySyntheticPhasePlan(next)) return next;
   const prevStages = countGraphStagePhases(prev);
   const nextStages = countGraphStagePhases(next);
   if (prevStages > 0 && nextStages === 0) return prev;

@@ -11,7 +11,7 @@ import { useConversationStore } from "../stores/conversationStore";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { ApiError, authFetch } from "../lib/api";
 import { normalizeExecutionStatus } from "../lib/status";
-import { PHASES, PHASE_LABELS, phaseLabel } from "../lib/phase";
+import { PHASES, phaseLabel } from "../lib/phase";
 import {
   findAgentByIdExact,
   legacyWorkerDisplayName,
@@ -531,13 +531,13 @@ export default function ConversationPage() {
     setKanban(snapshot.kanban || fallback?.kanban);
     // Do not let a snapshot without Graph L1 stages wipe a live Expert Graph plan map
     // (platform used to strip phase nodes as "legacy" — keep richer live tree).
+    // Never invent or stick archaeology `plan-phase-*` shells for Default chat Tasks.
     setPlanTree((prev) => {
       const next = snapshot.plan_tree?.length
         ? snapshot.plan_tree
         : fallback?.plan_tree?.length
           ? fallback.plan_tree
           : [];
-      if (!next.length) return prev.length ? prev : [];
       return preferRicherPlanTree(prev, next);
     });
     // Backend case_participants.merge_panel_agents is source of truth for Subagent history.
@@ -3478,7 +3478,9 @@ function snapshotFromMessages(messages: Message[], status: Conversation["status"
       intakeStatus: lastStatus.status,
     },
     progress: progressForPhase(phase, normalizedStatus),
-    plan_tree: planTreeForPhase(phase, normalizedStatus),
+    // Tasks SoT = plan_tree_updated / Graph plan / checkpoint todos — never invent
+    // pentest phase shells from status.phase (painted Default assistant chat as Graph).
+    plan_tree: [],
     findings: [],
     assets,
     pending_approvals: pending,
@@ -3610,18 +3612,6 @@ function progressForPhase(phase: string | undefined, status: Conversation["statu
   else if (phase && PHASES.includes(phase as typeof PHASES[number])) current = PHASES.indexOf(phase as typeof PHASES[number]) + 1;
   else if (status === "running") current = 1;
   return { current, total, percent: total ? Math.round((current / total) * 100) : 0 };
-}
-
-function planTreeForPhase(phase: string | undefined, status: Conversation["status"] | "running"): PlanNode[] {
-  const currentIndex = phase && PHASES.includes(phase as typeof PHASES[number]) ? PHASES.indexOf(phase as typeof PHASES[number]) : status === "running" ? 0 : -1;
-  return PHASES.map((key, index) => ({
-    node_id: `plan-phase-${key}`,
-    title: PHASE_LABELS[key],
-    kind: "phase",
-    level: "phase",
-    status: status === "completed" || index < currentIndex ? "done" : index === currentIndex ? "running" : "pending",
-    priority: index * 100,
-  }));
 }
 
 function isActiveMessage(msg: Record<string, unknown>, activeId: string | null): boolean {

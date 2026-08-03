@@ -4,9 +4,12 @@
  */
 import {
   formatAgentWorkModeBadge,
+  isLegacySyntheticPhasePlan,
   mergeLivePanelAgents,
+  preferRicherPlanTree,
   type StrixAgentStatus,
 } from "./panelAgentsState";
+import type { PlanNode } from "./panelTypes";
 
 function assert(cond: unknown, msg: string): void {
   if (!cond) throw new Error(msg);
@@ -138,6 +141,53 @@ const liveMainOnly: StrixAgentStatus[] = [
   );
   assert(formatAgentWorkModeBadge({}) === null, "missing mode → null");
   console.log("ok: formatAgentWorkModeBadge");
+}
+
+{
+  // Synthetic archaeology plan-phase-* must not stick as Tasks for Default chat.
+  const synthetic: PlanNode[] = [
+    {
+      node_id: "plan-phase-intake",
+      title: "目标与授权范围检查",
+      kind: "phase",
+      level: "phase",
+      status: "running",
+      priority: 0,
+    },
+    {
+      node_id: "plan-phase-recon",
+      title: "攻击面发现",
+      kind: "phase",
+      level: "phase",
+      status: "pending",
+      priority: 100,
+    },
+  ];
+  assert(isLegacySyntheticPhasePlan(synthetic), "synthetic plan detected");
+  assert(
+    preferRicherPlanTree(synthetic, []).length === 0,
+    "empty snapshot drops synthetic plan-phase list",
+  );
+  const realGraph: PlanNode[] = [
+    {
+      node_id: "graph-stage-init",
+      title: "init",
+      kind: "phase",
+      level: "phase",
+      status: "running",
+      source: "plan",
+      priority: 100,
+    },
+  ];
+  assert(
+    preferRicherPlanTree(realGraph, []).length === 1,
+    "empty snapshot keeps real Graph L1",
+  );
+  assert(
+    preferRicherPlanTree(synthetic, realGraph)[0]?.node_id === "graph-stage-init",
+    "real Graph wins over leftover synthetic shells",
+  );
+  console.log("ok: legacy synthetic plan_tree hygiene");
 }
 
 console.log("panelAgentsState.test.ts: all passed");
