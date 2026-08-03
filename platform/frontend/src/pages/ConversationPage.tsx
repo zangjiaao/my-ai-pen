@@ -2042,13 +2042,14 @@ export default function ConversationPage() {
       allowPostex: isPentest ? tmplAllowPostex : undefined,
       expertId: resolved?.kind === "expert" ? resolved.expertId : undefined,
     });
-    // Persist case RoE for pentest: Graph template or free clear (Spec #277 Session Free).
-    if (activeId && isPentest) {
+    // Persist Case RoE only when user explicitly selected a Graph Workflow (Spec #277:
+    // Free/不指定 mode lives on Participant Session, not by writing Case sticky "free").
+    if (activeId && isPentest && tmpl) {
       void authFetch(`/api/conversations/${activeId}/case`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          engagement_template: tmpl || "free",
+          engagement_template: tmpl,
           allow_postex: tmplAllowPostex,
         }),
       }).catch(() => {});

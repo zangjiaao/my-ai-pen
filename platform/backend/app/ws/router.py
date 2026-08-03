@@ -2820,6 +2820,7 @@ async def _remember_conversation_task(
                 task_blob["accounts"] = prev_task.get("accounts")
             context["task"] = task_blob
             # Participant Session private: per-expert work_mode / graph_id (Spec #277).
+            # Work mode SOT is sessions[expert_id] — do not encode Free by wiping Case sticky.
             session_eid = str(eid or expert_id or "").strip()
             if mode in {"free", "graph"} and session_eid:
                 context = merge_session_into_context(
@@ -2828,19 +2829,18 @@ async def _remember_conversation_task(
                     work_mode=mode,
                     graph_id=et if mode == "graph" else None,
                 )
-            # Case block: Free Expert Session clears Graph sticky so UI reload stays 不指定.
-            # Bare default seat does not clear Case sticky (other Experts may still use Graph).
-            if mode == "free" and session_eid:
+            # Case block: only write Graph template when this dispatch is Graph; Free leaves
+            # Case sticky alone (Session private mode prevents silent Free→Graph on resume).
+            if mode == "graph":
                 context = merge_case_into_context(
                     context,
-                    engagement_template="free",
+                    engagement_template=task_blob.get("engagement_template"),
                     allow_postex=task_blob.get("allow_postex"),
                     accounts=task_blob.get("accounts"),
                 )
             else:
                 context = merge_case_into_context(
                     context,
-                    engagement_template=task_blob.get("engagement_template"),
                     allow_postex=task_blob.get("allow_postex"),
                     accounts=task_blob.get("accounts"),
                 )

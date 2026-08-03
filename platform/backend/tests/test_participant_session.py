@@ -53,12 +53,12 @@ def test_explicit_redteam_deep_this_turn_is_graph():
 
 
 def test_free_session_continue_ignores_sticky_app_assessment():
-    """A1/A9: Free fail + 继续 + Case sticky app_assessment → still Free."""
+    """A1/A9: Free fail + 继续 + Case sticky app_assessment, composer omitted → Free."""
     env = resolve_work_envelope(
         expert_id="e1",
         session_work_mode="free",
         session_graph_id=None,
-        composer_template="app_assessment",  # UI sticky / Case default noise
+        composer_template=None,  # continue path: no this-turn Workflow field
         case_sticky_template="app_assessment",
         conversation_status="failed",
         same_mode_continue=True,
@@ -67,6 +67,20 @@ def test_free_session_continue_ignores_sticky_app_assessment():
     assert env["graph_id"] is None
     assert env["engagement_template"] is None
     assert env["graph_execution"] is None
+
+
+def test_same_mode_continue_explicit_composer_graph_wins():
+    """D7/A2: user selects Graph Workflow on 继续 → Graph (composer before same-mode)."""
+    env = resolve_work_envelope(
+        expert_id="e1",
+        session_work_mode="free",
+        composer_template="app_assessment",
+        case_sticky_template="app_assessment",
+        conversation_status="failed",
+        same_mode_continue=True,
+    )
+    assert env["work_mode"] == "graph"
+    assert env["graph_id"] == "app_assessment"
 
 
 def test_free_session_continue_without_composer_stays_free():
@@ -179,7 +193,7 @@ def test_session_record_round_trip():
 
 
 def test_apply_envelope_strips_sticky_template_when_free():
-    """Critical: after Case RoE merge injected sticky, Free envelope strips it."""
+    """Critical: Case RoE merge injected sticky onto task; Free envelope strips it."""
     task = {
         "type": "task_assign",
         "engagement": "pentest",
@@ -191,7 +205,7 @@ def test_apply_envelope_strips_sticky_template_when_free():
         same_mode_continue=True,
         conversation_status="failed",
         case_sticky_template="app_assessment",
-        composer_template="app_assessment",
+        composer_template=None,  # this-turn message did not select Workflow
     )
     out = apply_work_envelope_to_task_assign(task, env)
     assert "engagement_template" not in out
@@ -249,7 +263,7 @@ def test_scenario_0ab49d25_free_fail_continue_with_sticky():
     sticky = roe_payload_for_task_assign(ctx)
     assert sticky.get("engagement_template") == "app_assessment"
 
-    # task_assign after merge would look like:
+    # Case RoE merge injects sticky onto task_assign; message composer field is absent.
     task = {
         "type": "task_assign",
         "engagement": "pentest",
@@ -260,7 +274,7 @@ def test_scenario_0ab49d25_free_fail_continue_with_sticky():
         expert_id="exp-pen",
         session_work_mode=sess.get("work_mode"),
         session_graph_id=sess.get("graph_id"),
-        composer_template="app_assessment",  # UI sticky noise on 继续
+        composer_template=None,  # 继续 message did not send engagement_template
         case_sticky_template=sticky.get("engagement_template"),
         conversation_status="failed",
         same_mode_continue=True,

@@ -10,7 +10,6 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from app.services.case_engagement import (
-    is_product_graph_template,
     normalize_product_engagement_template,
     resolve_graph_execution,
 )
@@ -113,19 +112,23 @@ def resolve_work_envelope(
     """Resolve immutable work envelope for one dispatch (structured I/O only).
 
     Priority (mode authority):
-    1. This-turn explicit product graph id on composer → graph (user permission).
-    2. This-turn free / empty / 不指定 → free (do not pre-fill graph_id).
-    3. Same-mode continue after fail/incomplete → Session work_mode (never Case sticky upgrade).
-    4. Session work_mode when composer omitted.
-    5. Default → free. Case sticky template alone never forces graph.
+    1. Structured permission card (enter/exit/park).
+    2. This-turn explicit product graph id on composer → graph (user Workflow permission).
+    3. This-turn free / empty string / 不指定 on composer → free.
+    4. Same-mode continue after fail/incomplete → Session work_mode
+       (Case sticky alone never upgrades Free→Graph; composer omitted on continue).
+    5. Session work_mode when composer omitted.
+    6. Default → free.
 
     Does not scan free-text instruction for mode.
+    ``case_sticky_template`` is accepted for call-site symmetry but is never mode authority.
     """
     eid = str(expert_id or "").strip() or None
     sess_mode = str(session_work_mode or "").strip().lower()
     if sess_mode not in {"free", "graph"}:
         sess_mode = ""
     sess_gid = normalize_product_engagement_template(session_graph_id)
+    del case_sticky_template  # not mode authority (A1/A9); callers may still pass for clarity
 
     # Structured permission card (enter graph / exit / resume parked) — optional MVP path.
     perm = permission_decision if isinstance(permission_decision, dict) else {}
@@ -171,19 +174,18 @@ def resolve_work_envelope(
         work_mode = "graph"
         graph_id = perm_graph or composer_gid or sess_gid
         graph_execution = "full_restart"
-    elif same_mode_continue and sess_mode:
-        # A1/A9: failed Free + 继续 stays Free even if UI/Case sticky is app_assessment.
-        # Same for Graph Session continue — do not re-judge via sticky.
-        work_mode = "graph" if sess_mode == "graph" else "free"
-        graph_id = sess_gid if work_mode == "graph" else None
     elif composer_gid:
-        # Explicit product graph this turn → user permission via UI control.
+        # Explicit product graph this turn → user Workflow permission (wins over same-mode continue).
         work_mode = "graph"
         graph_id = composer_gid
     elif not composer_is_absent and composer_free:
         # Explicit free / none / 不指定 / empty string this turn.
         work_mode = "free"
         graph_id = None
+    elif same_mode_continue and sess_mode:
+        # A1/A9: failed Free + 继续 with composer omitted stays Free despite Case sticky Graph.
+        work_mode = "graph" if sess_mode == "graph" else "free"
+        graph_id = sess_gid if work_mode == "graph" else None
     elif sess_mode == "graph" and sess_gid:
         work_mode = "graph"
         graph_id = sess_gid
@@ -191,11 +193,9 @@ def resolve_work_envelope(
         work_mode = "free"
         graph_id = None
     else:
-        # First turn / no Session: default Free. Case sticky is NOT mode authority.
+        # First turn / no Session: default Free.
         work_mode = "free"
         graph_id = None
-        # case_sticky_template intentionally unused for mode (A1/A5/A9).
-        _ = case_sticky_template
 
     # --- graph_execution (C1 + same-mode) ---
     if work_mode == "graph" and graph_id:
@@ -266,9 +266,9 @@ def apply_work_envelope_to_task_assign(task_msg: dict | None, envelope: dict | N
         wire_exec = env.get("wire_graph_execution")
         if wire_exec:
             out["graph_execution"] = wire_exec
-        elif "graph_execution" in out and not env.get("graph_execution"):
-            # Free of stale execution when run
-            pass
+        else:
+            out.pop("graph_execution", None)
+            out.pop("graphExecution", None)
     else:
         # Free: must not carry Case sticky / UI default Graph template.
         out.pop("engagement_template", None)
