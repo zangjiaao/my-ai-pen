@@ -509,12 +509,18 @@ export default function ConversationPage() {
     return map;
   }, [productExperts]);
   const approvalDecisionByRequestId = useMemo(() => {
-    const decisions: Record<string, "authorize" | "cancel"> = {};
+    const decisions: Record<string, "authorize" | "cancel" | "answered"> = {};
     for (const message of messages) {
       if (message.msg_type !== "decision") continue;
       const requestId = readString(message.content.request_id);
       const decision = readString(message.content.decision);
-      if (requestId && (decision === "authorize" || decision === "cancel")) decisions[requestId] = decision;
+      // Spec #277 §3.3 14a: free-text reply greys the card the same as button click.
+      if (
+        requestId
+        && (decision === "authorize" || decision === "cancel" || decision === "answered")
+      ) {
+        decisions[requestId] = decision;
+      }
     }
     return decisions;
   }, [messages]);
@@ -2012,6 +2018,23 @@ export default function ConversationPage() {
     const text = stripMentionToken(displayText, resolved?.name || null);
     // Keep selected partner after send so multi-turn stays with the same persona.
     setInput("");
+    // Spec #277 §3.3 14a: typing while a confirm card is open greys the card immediately
+    // (platform also records decision=answered and forwards text into the Session wait).
+    if (activeId && pendingApprovals.length) {
+      for (const item of pendingApprovals) {
+        const requestId = String(item.request_id || "").trim();
+        if (!requestId) continue;
+        addMessageToConversation(
+          activeId,
+          makeMessage(activeId, "user", "decision", {
+            request_id: requestId,
+            decision: "answered",
+            text: displayText,
+          }),
+        );
+      }
+      setPendingApprovals([]);
+    }
     const isPentest = isPentestMentionTarget(resolved);
     // Spec #277: 不指定 / null → Free on the wire (omit engagement_template; never silent Graph).
     const tmpl: EngagementTemplateId | "" =
@@ -2057,7 +2080,17 @@ export default function ConversationPage() {
         }),
       }).catch(() => {});
     }
-  }, [input, selectedMention, mentionTargets, launchTaskMessage, goalModeEnabled, engagementTemplate, activeId]);
+  }, [
+    input,
+    selectedMention,
+    mentionTargets,
+    launchTaskMessage,
+    goalModeEnabled,
+    engagementTemplate,
+    activeId,
+    pendingApprovals,
+    addMessageToConversation,
+  ]);
 
   const selectExpertFromToolbar = useCallback((key: string) => {
     const fallback = mentionTargets[0] || null;

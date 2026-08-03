@@ -1,27 +1,41 @@
 /**
  * Request a platform authorization card (ConfirmCard).
- * Blocks the tool until the user authorizes or cancels.
+ * Blocks the tool until the user authorizes, cancels, or replies with free text.
+ * Spec #277 §3.3 14a: click and type are the same feedback path into this Session.
  */
 import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
 import { jsonResult, textResult } from "./common.js";
-import { registerApprovalWait } from "../runtime/approvals.js";
+import { registerApprovalWait, type ApprovalDecision } from "../runtime/approvals.js";
 import { platformLedgerFetch } from "./platform.js";
 
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
+
+function speakerFields(runtime: ToolRuntime): { expert_id?: string; expert_name?: string } {
+  // Always attribute the waiting turn to the *requesting* Session persona.
+  // handoff_expert_* is card body only — never top-level speaker.
+  const expertId = String(runtime.task.expertId || "").trim();
+  const expertName = String(runtime.task.expertName || "").trim();
+  const out: { expert_id?: string; expert_name?: string } = {};
+  if (expertId) out.expert_id = expertId;
+  if (expertName) out.expert_name = expertName;
+  return out;
+}
 
 export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "request_user_decision",
     label: "Request user authorization",
     description:
-      "Show ONE authorization card and wait for Authorize/Cancel. " +
+      "Show ONE authorization card and wait for user feedback (Authorize/Cancel button OR a free-text reply). " +
+      "Click and type are the same path — the tool unblocks with the user's response. " +
       "For multi-agent handoff / execution (pentest/CTF/…): kind=handoff + handoff_pack_id (+ handoff_expert_id) + target + full scope in proposed_action. " +
       "Call platform_list_experts first when unsure who can receive the work. " +
-      "Do not chain multiple cards; do not use free-text yes/no for scope details — put defaults on the card. " +
-      "After authorize on handoff, the platform starts the destination expert; keep any follow-up text very short.",
+      "Do not chain multiple cards; put defaults on the card. " +
+      "After authorize on handoff, the platform starts the destination expert; keep any follow-up text very short. " +
+      "If the tool result decision is authorize (including when the user typed an affirming reply), do not re-show the card.",
     parameters: Type.Object({
       question: Type.String({ description: "Card title — short authorization question" }),
       proposed_action: Type.Optional(
@@ -105,6 +119,7 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
         }
       }
 
+      const speaker = speakerFields(runtime);
       const payload: Record<string, unknown> = {
         type: "request_decision",
         conversation_id: conversationId,
@@ -115,6 +130,8 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
         target,
         kind,
         expires_at: "",
+        // Speaker = requesting Session (never handoff destination).
+        ...speaker,
       };
       if (kind === "handoff" || handoffPack) {
         payload.kind = "handoff";
@@ -128,7 +145,7 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
       const waitPromise = registerApprovalWait(requestId, conversationId);
       const abort = runtime.lifecycle.abortSignal;
       let onAbort: (() => void) | undefined;
-      const abortPromise = new Promise<"authorize" | "cancel">((resolve) => {
+      const abortPromise = new Promise<ApprovalDecision>((resolve) => {
         if (!abort) return;
         if (abort.aborted) {
           resolve("cancel");
@@ -137,15 +154,34 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
         onAbort = () => resolve("cancel");
         abort.addEventListener("abort", onAbort, { once: true });
       });
-      const timeoutPromise = new Promise<"authorize" | "cancel">((resolve) => {
+      const timeoutPromise = new Promise<ApprovalDecision>((resolve) => {
         setTimeout(() => resolve("cancel"), DEFAULT_TIMEOUT_MS);
       });
 
-      let decision: "authorize" | "cancel";
+      let decision: ApprovalDecision;
       try {
         decision = await Promise.race([waitPromise, abortPromise, timeoutPromise]);
       } finally {
         if (onAbort && abort) abort.removeEventListener("abort", onAbort);
+      }
+
+      // Session-owned handoff apply: button and free-text both resolve here.
+      // Platform only displays + forwards feedback; this tool starts the destination
+      // when decision is authorize for kind=handoff (single apply path).
+      const isHandoff = String(payload.kind || kind) === "handoff" || Boolean(handoffPack);
+      if (decision === "authorize" && isHandoff) {
+        await runtime.platform.send({
+          type: "handoff_apply",
+          conversation_id: conversationId,
+          request_id: requestId,
+          kind: "handoff",
+          handoff_pack_id: payload.handoff_pack_id || handoffPack || "pentest",
+          handoff_expert_id: handoffExpertId || undefined,
+          handoff_expert_name: handoffExpertName || undefined,
+          target: target || undefined,
+          proposed_action: proposed || undefined,
+          question: question || undefined,
+        });
       }
 
       return jsonResult({

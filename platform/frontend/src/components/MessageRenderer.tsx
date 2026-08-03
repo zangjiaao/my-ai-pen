@@ -20,7 +20,7 @@ interface Props {
   onOpenAsset?: (asset: Partial<SecurityAsset>) => void;
   onOpenEvidence?: (evidence: Partial<SecurityEvidence>) => void;
   highlightedApprovalId?: string | null;
-  approvalDecisionByRequestId?: Record<string, "authorize" | "cancel">;
+  approvalDecisionByRequestId?: Record<string, "authorize" | "cancel" | "answered">;
 }
 
 function agentDisplayName(content: Record<string, unknown>, agentNameById: Record<string, string>, fallbackPentestNodeId?: string | null, platformAgentNodeId?: string | null): string {

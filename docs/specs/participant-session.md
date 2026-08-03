@@ -71,7 +71,8 @@ _Avoid:_ free mode as a second product **seat**; Soft scenario Graph; platform k
 11. **Permission** = standard option cards ∪ natural language.  
 12. **Cards:** current Session Agent requests permission; platform renders **standard shell** (enter Graph / exit Graph / handoff / continue-parked vs restart). Platform does **not** auto-pop “enter Graph?” on resume/fail.  
 13. **Natural language:** interpreted by **current** Session Agent; Agent commits **structured** decision. Platform does not regex-map「可以」→ mode.  
-14. **UI Graph control** includes **不指定** (= Free). Display may follow Agent suggestion; user may override. Effectiveness obeys queue (§3.4).
+14. **UI Graph control** includes **不指定** (= Free). Display may follow Agent suggestion; user may override. Effectiveness obeys queue (§3.4).  
+14a. **Handoff / authorization wait (simple path):** Session tells platform it needs user approval → platform **displays** the card and **forwards user feedback** to the **current Session** only. Clicking Authorize/Cancel and **typing a reply** are the **same feedback path** (not a second task, not a speaker switch). Platform does **not** interpret approve/cancel semantics. After any user feedback, the card is **skipped / greyed** (no second click). **Speaker label** = current Participant Session (header/Mention); `handoff_expert_*` is card content only — never top-level `expert_name` on the waiting turn.
 
 ### 3.4 Queue and Mention
 

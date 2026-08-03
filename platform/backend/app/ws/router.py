@@ -36,6 +36,8 @@ node_connections: dict[str, WebSocket] = {}
 conversation_subscribers: dict[str, set[WebSocket]] = {}
 conversation_node: dict[str, str] = {}
 pending_approvals: dict[str, dict] = {}
+# request_ids already applied via handoff_apply (idempotent double-apply guard).
+_handoff_applied_request_ids: set[str] = set()
 _round_robin_counter: int = 0
 
 FOLLOW_UP_ACTION_RE = re.compile(
@@ -746,6 +748,37 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
                 msg["expert_id"] = sticky_id
             if sticky_name and not str(msg.get("expert_name") or "").strip():
                 msg["expert_name"] = sticky_name
+
+        # Spec #277 §3.3 14a: never use handoff destination as speaker on waiting-turn frames.
+        _sanitize_requesting_speaker(msg)
+
+    # Session tool resolved authorize for handoff (button or free-text). Not a chat frame.
+    if msg.get("type") == "handoff_apply" and conv_id:
+        request_id = str(msg.get("request_id") or "").strip()
+        if request_id and request_id in _handoff_applied_request_ids:
+            return
+        approval = dict(pending_approvals.pop(request_id, {}) if request_id else {})
+        for key in (
+            "kind",
+            "handoff_pack_id",
+            "handoff_expert_id",
+            "handoff_expert_name",
+            "target",
+            "proposed_action",
+            "question",
+            "node_id",
+        ):
+            if msg.get(key) is not None and str(msg.get(key) or "").strip():
+                approval[key] = msg.get(key)
+        if not approval.get("node_id"):
+            approval["node_id"] = client_id
+        if request_id:
+            _handoff_applied_request_ids.add(request_id)
+            if len(_handoff_applied_request_ids) > 500:
+                _handoff_applied_request_ids.clear()
+                _handoff_applied_request_ids.add(request_id)
+        await _apply_authorized_handoff(conv_id, approval)
+        return
 
     # Pi work-burst lifecycle (not a chat message). Updates session workers SOT
     # and pushes conversation_working so the UI send/interrupt button stays honest.
@@ -2873,6 +2906,126 @@ async def _conversation_expert_label(conv_id: str | None) -> tuple[str | None, s
         return None, None
 
 
+def _sanitize_requesting_speaker(msg: dict) -> None:
+    """Ensure waiting-turn frames never use handoff destination as speaker label.
+
+    Spec #277 §3.3 14a: handoff_expert_* is card/tool-arg content only.
+    Mutates msg in place. Pure (no I/O).
+    """
+    if not isinstance(msg, dict):
+        return
+    msg_type = str(msg.get("type") or "")
+    args = msg.get("args") if isinstance(msg.get("args"), dict) else {}
+    handoff_eid = (
+        str(msg.get("handoff_expert_id") or args.get("handoff_expert_id") or "").strip() or None
+    )
+    handoff_ename = (
+        str(msg.get("handoff_expert_name") or args.get("handoff_expert_name") or "").strip() or None
+    )
+    if not handoff_eid and not handoff_ename:
+        return
+    # Only strip when this frame is clearly a handoff authorization wait frame.
+    tool_name = str(msg.get("tool_name") or args.get("name") or "").strip()
+    is_decision_frame = msg_type in {"request_decision", "confirm_card"} or tool_name in {
+        "request_user_decision",
+        "request_decision",
+    }
+    if not is_decision_frame and msg_type != "tool_output":
+        return
+    if msg_type == "tool_output" and tool_name not in {"request_user_decision", "request_decision"}:
+        # tool_output without handoff tool name: still strip if speaker == handoff destination
+        # (args may carry destination while tool is request_user_decision under alternate name).
+        if tool_name and "decision" not in tool_name and "handoff" not in tool_name:
+            # Only act when speaker fields equal handoff fields (clear mis-stamp).
+            pass
+    msg_eid = str(msg.get("expert_id") or "").strip() or None
+    msg_ename = str(msg.get("expert_name") or "").strip() or None
+    if handoff_eid and msg_eid and msg_eid == handoff_eid:
+        msg.pop("expert_id", None)
+    if handoff_ename and msg_ename and msg_ename == handoff_ename:
+        msg.pop("expert_name", None)
+
+
+def _pending_approvals_for_conversation(conv_id: str | None) -> list[tuple[str, dict]]:
+    """Return (request_id, approval) pairs for a conversation, oldest first."""
+    if not conv_id:
+        return []
+    cid = str(conv_id)
+    found: list[tuple[str, dict]] = []
+    for request_id, approval in pending_approvals.items():
+        if not isinstance(approval, dict):
+            continue
+        if str(approval.get("conversation_id") or "") == cid:
+            found.append((str(request_id), approval))
+    return found
+
+
+async def _forward_pending_approval_text(
+    conv_id: str,
+    client_id: str,
+    user_text: str,
+    *,
+    via: str,
+) -> bool:
+    """Forward free-text (or any reply) into the Session approval wait.
+
+    Spec #277 §3.3 14a: platform displays + forwards only; Session tool normalizes.
+    Returns True if a pending approval was consumed.
+    """
+    pending_for_conv = _pending_approvals_for_conversation(conv_id)
+    if not pending_for_conv:
+        return False
+    request_id, approval = pending_for_conv[0]
+    pending_approvals.pop(request_id, None)
+    decision_msg = {
+        "type": "user_decision",
+        "conversation_id": conv_id,
+        "request_id": request_id,
+        "decision": "answered",
+        "text": user_text,
+    }
+    await _save_message(decision_msg, "user")
+    await _broadcast_to_conversation(conv_id, json.dumps(decision_msg, ensure_ascii=False))
+    node_msg = {
+        "type": "user_input",
+        "conversation_id": conv_id,
+        "request_id": request_id,
+        "response": user_text,
+        "text": user_text,
+    }
+    sent = False
+    approval_node = str(approval.get("node_id") or "").strip()
+    if approval_node and approval_node in node_connections:
+        try:
+            await node_connections[approval_node].send_text(
+                json.dumps(node_msg, ensure_ascii=False)
+            )
+            sent = True
+        except Exception as e:
+            print(f"[WS] pending-text user_input to node {approval_node[:8]}: {e}")
+    if not sent:
+        sent = await _send_to_bound_node(conv_id, json.dumps(node_msg))
+    try:
+        await _audit(
+            actor_type="user",
+            actor_id=uuid.UUID(client_id),
+            action="approval.answered_text",
+            resource_type="conversation",
+            resource_id=uuid.UUID(conv_id),
+            conversation_id=uuid.UUID(conv_id),
+            detail={
+                "request_id": request_id,
+                "sent": sent,
+                "node_id": approval.get("node_id"),
+                "kind": approval.get("kind"),
+                "via": via,
+            },
+        )
+    except Exception as e:
+        print(f"[WS] pending-text audit error: {e}")
+    return True
+
+
 async def _apply_authorized_handoff(conv_id: str | None, approval: dict) -> None:
     """When user Authorizes a handoff card, switch sticky expert + notify UI partner chip.
 
@@ -4448,6 +4601,15 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     requested_node_id, msg = await _resolve_mention_route(msg, capabilities)
                     msg = _ensure_target_from_text(msg)
 
+                    # Spec #277 §3.3 14a: pending authorization card — any typed reply is
+                    # feedback to the current Session (same path as Authorize/Cancel click).
+                    # Do not steer-as-busy and do not invent approve/cancel on platform.
+                    user_text_pending = str(msg.get("text") or msg.get("display_text") or "").strip()
+                    if await _forward_pending_approval_text(
+                        conv_id, client_id, user_text_pending, via="user_message"
+                    ):
+                        continue
+
                     is_default = _is_default_participant(msg)
                     if not is_default and (msg.get("expert_id") or msg.get("expert_name")):
                         await _remember_conversation_expert(
@@ -4546,9 +4708,11 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     continue
 
                 elif msg.get("type") == "user_decision" and conv_id:
+                    # Button path: forward feedback only. Session tool normalizes and,
+                    # on handoff authorize, emits handoff_apply (platform does not NLP).
                     request_id = msg.get("request_id")
                     decision = msg.get("decision", "cancel")
-                    approval = pending_approvals.pop(request_id, {}) if request_id else {}
+                    approval = pending_approvals.pop(str(request_id), {}) if request_id else {}
                     node_msg = {
                         "type": "user_input",
                         "conversation_id": conv_id,
@@ -4558,7 +4722,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     }
                     # Prefer the node that issued the approval (may differ from sticky bind).
                     sent = False
-                    approval_node = str(approval.get("node_id") or "").strip()
+                    approval_node = str(approval.get("node_id") or "").strip() if isinstance(approval, dict) else ""
                     if approval_node and approval_node in node_connections:
                         try:
                             await node_connections[approval_node].send_text(
@@ -4570,10 +4734,6 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     if not sent:
                         sent = await _send_to_bound_node(conv_id, json.dumps(node_msg))
 
-                    # Authorized handoff: switch sticky product expert so next turns run that pack.
-                    if str(decision).lower() in {"authorize", "approved", "yes"}:
-                        await _apply_authorized_handoff(conv_id, approval)
-
                     await _audit(
                         actor_type="user",
                         actor_id=uuid.UUID(client_id),
@@ -4584,9 +4744,11 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         detail={
                             "request_id": request_id,
                             "sent": sent,
-                            "node_id": approval.get("node_id"),
-                            "kind": approval.get("kind"),
-                            "handoff_pack_id": approval.get("handoff_pack_id"),
+                            "node_id": approval.get("node_id") if isinstance(approval, dict) else None,
+                            "kind": approval.get("kind") if isinstance(approval, dict) else None,
+                            "handoff_pack_id": (
+                                approval.get("handoff_pack_id") if isinstance(approval, dict) else None
+                            ),
                         },
                     )
 
@@ -4664,6 +4826,15 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             detail={"sent_to": sent_to, "targets": fanout.get("targets"), "action": action},
                         )
                     else:
+                        # Spec #277 §3.3 14a: mid-wait free-text is approval feedback, not steer.
+                        # FE sends user_steer while status=running; do not hit Node busy dead-end.
+                        user_text_pending = str(
+                            msg.get("text") or msg.get("display_text") or ""
+                        ).strip()
+                        if await _forward_pending_approval_text(
+                            conv_id, client_id, user_text_pending, via="user_steer"
+                        ):
+                            continue
                         sent = await _send_to_bound_node(conv_id, raw)
                         await _audit(
                             actor_type="user",
