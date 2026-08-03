@@ -278,3 +278,17 @@ def test_rediscovery_count_from_history():
     assert discovery_count(hist) == 3
     assert rediscovery_count([]) == 0
     assert discovery_count([]) == 1
+
+
+def test_append_discovery_event_related_prior_id():
+    from app.services.finding_dedupe import append_discovery_event
+
+    h = append_discovery_event(
+        [],
+        event="discovered",
+        conversation_id="case-b",
+        related_prior_id="prior-uuid",
+    )
+    assert h[0]["related_prior_id"] == "prior-uuid"
+    bare = append_discovery_event([], event="rediscovered", conversation_id="case-b")
+    assert "related_prior_id" not in bare[0]

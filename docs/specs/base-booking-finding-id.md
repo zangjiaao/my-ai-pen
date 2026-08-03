@@ -170,3 +170,10 @@ Pair with the **UI projection Spec**: panel only reads the platform ledger; empt
 - **Omit / foreign / unknown `finding_id`:** treat as no id → L0 (existing book-path) → host mints local `f_*` id; optional `related_prior_id` when input looked like a platform UUID; optional `booking_assist` warning in tool result. **Does not** hard-fail with `unknown finding id — invent-without-id forbidden`.
 - **Invent-without-id** remains a threat-model phrase for “Agent must not mint bookable Store rows / forge ids,” not “any UUID string kills confirm.” Store API `assertConfirmAllowed("")` still rejects empty for callers that need a Store gate.
 - **Tests:** `node4/src/tools/finding.confirm-id.test.ts`; Graph e2e paths in `process-quality-e2e` / `process-quality-store-first-e2e` updated for base contract.
+
+### Wave 1 implementation notes (Platform #279 follow-up)
+
+- **Seam:** `platform/backend/app/ws/router.py` `_persist_vulnerability` #275 match pool.
+- **Case scope:** identity + CVE short-circuit queries filter `Vulnerability.conversation_id == this Case`. Cross-Case same identity → `created=True` new UUID row; prior Case row is never pinned/moved.
+- **Optional link:** msg `related_prior_id` / `related_prior` is recorded on the discovery history JSONB event and echoed in the WS return dict when present (no DB migration).
+- **Helpers / tests:** `case_scoped_rows` + `select_same_finding_candidates` in `finding_dedupe.py`; `platform/backend/tests/test_vuln_case_scope.py`.

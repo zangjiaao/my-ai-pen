@@ -2344,11 +2344,10 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
         from app.services.finding_dedupe import (
             VALID_VULN_TYPES,
             append_discovery_event,
-            is_same_finding,
             location_resource_key,
             normalize_vuln_type,
             pick_canonical_vuln,
-            row_location_blob,
+            select_same_finding_candidates,
         )
         # Prefer explicit PoC (reproduction + observed result); fall back carefully.
         poc_value = msg.get("poc") or msg.get("evidence_summary") or msg.get("location") or ""
@@ -2414,7 +2413,13 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
         cve_id = msg.get("cve_id") or msg.get("cve") or None
         if cve_id is not None:
             cve_id = str(cve_id).strip() or None
+        # Spec #279: optional link to a prior Case finding (do not overwrite that row).
+        related_prior_raw = msg.get("related_prior_id") or msg.get("related_prior")
+        related_prior_id = str(related_prior_raw).strip() if related_prior_raw else None
+        if related_prior_id == "":
+            related_prior_id = None
         now = datetime.now(timezone.utc)
+        conv_uuid = uuid.UUID(str(conv_id))
 
         async with async_session() as db:
             existing_evidence = await db.execute(
@@ -2461,10 +2466,11 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                     asset_id = asset.id
 
             # Spec #275: identity = asset/host + port + vuln_type + location_key (no title/path alias).
-            candidates: list = []
+            # Spec #279: #275 match pool is Case-scoped — never pin/merge foreign Case rows.
             pool: list = []
             q = select(Vulnerability).where(
                 Vulnerability.user_id == user_id,
+                Vulnerability.conversation_id == conv_uuid,
                 Vulnerability.vuln_type == vuln_type,
             )
             if asset_id:
@@ -2489,50 +2495,34 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                     )
                 )
             pool.extend((await db.execute(q)).scalars().all())
-            # CVE short-circuit pool (same asset).
+            # CVE short-circuit pool (same asset, this Case only).
             if cve_id and asset_id:
                 pool.extend(
                     (
                         await db.execute(
                             select(Vulnerability).where(
                                 Vulnerability.user_id == user_id,
+                                Vulnerability.conversation_id == conv_uuid,
                                 Vulnerability.asset_id == asset_id,
                                 Vulnerability.cve_id == cve_id,
                             )
                         )
                     ).scalars().all()
                 )
-            seen_ids: set = set()
-            for row in pool:
-                rid = getattr(row, "id", None)
-                if rid in seen_ids:
-                    continue
-                if is_same_finding(
-                    {
-                        "title": row.title,
-                        "asset_id": row.asset_id,
-                        "port": row.port,
-                        "cve_id": row.cve_id,
-                        "vuln_type": getattr(row, "vuln_type", None),
-                        "location_key": getattr(row, "location_key", None),
-                        "location": row_location_blob(row),
-                        "poc": getattr(row, "poc", None),
-                        "description": getattr(row, "description", None),
-                        "host": host or None,
-                    },
-                    title=title,
-                    asset_id=asset_id,
-                    port=port,
-                    cve_id=cve_id,
-                    location=location,
-                    description=description,
-                    poc=poc_value,
-                    vuln_type=vuln_type,
-                    location_key=loc_key,
-                    host=host or None,
-                ):
-                    candidates.append(row)
-                    seen_ids.add(rid)
+            candidates = select_same_finding_candidates(
+                pool,
+                conversation_id=conv_id,
+                title=title,
+                asset_id=asset_id,
+                port=port,
+                cve_id=cve_id,
+                location=location,
+                description=description,
+                poc=poc_value,
+                vuln_type=vuln_type,
+                location_key=loc_key,
+                host=host or None,
+            )
 
             vuln = pick_canonical_vuln(candidates)
             created = vuln is None
@@ -2552,7 +2542,7 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                     location_key=loc_key or None,
                     asset_id=asset_id,
                     port=port,
-                    conversation_id=uuid.UUID(conv_id),
+                    conversation_id=conv_uuid,
                     description=description,
                     poc=poc_value,
                     remediation=msg.get("remediation") or "",
@@ -2567,6 +2557,7 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                         conversation_id=conv_id,
                         evidence_ids=evidence_ids,
                         at=now,
+                        related_prior_id=related_prior_id,
                     ),
                 )
                 db.add(vuln)
@@ -2609,6 +2600,7 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                     conversation_id=conv_id,
                     evidence_ids=evidence_ids,
                     at=now,
+                    related_prior_id=related_prior_id,
                 )
                 # Status: reopen fixed findings (regression); keep fixing in progress;
                 # otherwise ensure open as to_fix.
@@ -2619,12 +2611,8 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                     pass
                 else:
                     vuln.status = lifecycle_status
-                # Pin to current Case so Findings panel shows the row; first Case
-                # remains on history[0].conversation_id / first_seen_at.
-                try:
-                    vuln.conversation_id = uuid.UUID(str(conv_id))
-                except (ValueError, TypeError):
-                    pass
+                # Same-Case rediscover: keep conversation_id on this Case (pool already scoped).
+                vuln.conversation_id = conv_uuid
 
             # Merge any extra duplicate rows into the canonical one, then delete them.
             extras = [r for r in candidates if r is not None and r.id != vuln.id]
@@ -2667,7 +2655,7 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                 ),
                 resource_type="vulnerability",
                 resource_id=vuln.id,
-                conversation_id=uuid.UUID(conv_id),
+                conversation_id=conv_uuid,
                 detail={
                     "title": vuln.title,
                     "severity": vuln.severity,
@@ -2681,10 +2669,11 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                     "created": created,
                     "rediscovered": rediscovered and not created,
                     "merged_duplicates": len(extras),
+                    "related_prior_id": related_prior_id,
                 },
             )
             first = getattr(vuln, "first_seen_at", None) or vuln.discovered_at
-            return {
+            out = {
                 "id": str(vuln.id),
                 "vulnerability_id": str(vuln.id),
                 "strix_vulnerability_id": msg.get("strix_vulnerability_id") or msg.get("id"),
@@ -2724,6 +2713,9 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                 # Spec #275: structured created outcome; New-only narration uses this.
                 "created": created,
             }
+            if related_prior_id:
+                out["related_prior_id"] = related_prior_id
+            return out
     except Exception as e:
         print(f"[WS] persist vuln error: {e}")
         return None
