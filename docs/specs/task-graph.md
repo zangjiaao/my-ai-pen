@@ -18,7 +18,7 @@
 
 | Semantic layer | Node4 Hard product |
 |----------------|-------------------|
-| **Task Graph** (hard stage order) | Hard Graph runner + pack `graphs/hard/*` (mature `app_assessment` primary; `app_assessment_thin` lab alias) |
+| **Task Graph** | Hard Graph runner + pack `graphs/hard/*`. **Ordered stage harness** (no `edges`): hard stage order, cannot skip — e.g. frozen `app_assessment`. **Engagement Graph** (Spec [#285](https://github.com/zangjiaao/my-ai-pen/issues/285)): optional declarative `edges` + deterministic host route + hop/back-edge budgets — product `hypothesis_cycle`. Lab thin: `app_assessment_thin`. See `docs/specs/engagement-graph-back-edges.md`. |
 | **Agent Graph** (class_probe workers) | Stage captain depth-0 + `subagent` packages when allowed; Join → parent `hard-stage:<stageId>[:<workerId>]` |
 | **Feedback Graph** | Stage `require` structure gates + process metrics (discovery yield soft-fail, coverage attempts) on Product state |
 | PenState handoff | Parent lifecycle candidates + surface ledger + session jars (A1/A4) |
@@ -64,7 +64,7 @@ Probe-class stages that allow `subagent` **prefer packages** when multi-class wo
 | Mode | How selected | Behavior |
 |------|--------------|----------|
 | **Default / free OMP** | No Expert Graph template; **Default seat only** | Pure OMP; Main may self-act; voluntary subagent; **not** Expert DoD |
-| **Expert Graph × Pi** | Product templates `app_assessment` / `redteam_deep` (aliases), `graphDiscipline=hard`, or `NODE4_HARD_GRAPH=1`; thin lab ids | Runner drives ordered stages; hard files under `graphs/hard/`; fail-closed Feedback; **Main is not the stage scheduler** |
+| **Expert Graph × Pi** | Product templates `app_assessment` / `redteam_deep` / `hypothesis_cycle` (aliases), `graphDiscipline=hard`, or `NODE4_HARD_GRAPH=1`; thin lab ids | Runner drives stages (ordered harness **or** engagement edges when declared); hard files under `graphs/hard/`; fail-closed Feedback; **Main is not the stage scheduler** (whitelist `choice_key` only on Gate nodes) |
 | **Soft scenario Graph** | **Retired** | No product resolve; soft pack JSON removed |
 
 Product Expert UI Graph control: **不指定** (= Free) plus declared scenario Graphs (`app_assessment`, `redteam_deep`, …). Mode authority is **per Participant Session**, not Case sticky template alone (`docs/specs/participant-session.md`).  
