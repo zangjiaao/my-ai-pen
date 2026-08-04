@@ -572,13 +572,26 @@ const CHOICE_KEY_FIELDS = [
   "choiceKey",
 ] as const;
 
+/**
+ * Shared boolean-ish truthy (true / "true" / "1" / "yes").
+ * Does **not** include intent synonyms like "retry" (those stay flag-specific).
+ */
 function truthyFlag(v: unknown): boolean {
   if (v === true) return true;
   if (v === false || v == null) return false;
   const s = String(v)
     .trim()
     .toLowerCase();
-  return s === "true" || s === "1" || s === "yes" || s === "retry";
+  return s === "true" || s === "1" || s === "yes";
+}
+
+/** exploit_failed may use product language "retry" as true; other flags must not. */
+function truthyExploitFailed(v: unknown): boolean {
+  if (truthyFlag(v)) return true;
+  const s = String(v ?? "")
+    .trim()
+    .toLowerCase();
+  return s === "retry";
 }
 
 /**
@@ -597,7 +610,8 @@ function readStringField(
 
 /**
  * Collect plain objects that may carry typed routing fields.
- * Includes input bag, raw payload, nested structured/gate/route — never free-text arrays.
+ * Includes input bag, raw payload, nested structured/gate/route/data — never free-text arrays.
+ * Nested `data` matches normalizeSubagentResult merge parity.
  */
 function structuredRouteObjects(input: {
   raw?: unknown;
@@ -615,11 +629,50 @@ function structuredRouteObjects(input: {
   push(input.raw);
   // Walk one level of common nests on input + raw
   for (const base of [...out]) {
-    for (const nest of ["structured", "gate", "route"] as const) {
+    for (const nest of ["structured", "gate", "route", "data"] as const) {
       push(base[nest]);
     }
   }
   return out;
+}
+
+/** Compact key for exact process-fact / alias match (route_choice_key ↔ routeChoiceKey). */
+function compactRouteKey(k: string): string {
+  return String(k || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[-_/]/g, "");
+}
+
+/**
+ * Product channel (G3): map **exact** process-fact keys deposited by Main `fact` tool
+ * into a typed route bag for S4 parsers. Not free-text scrape of summaries for intent —
+ * only whitelist keys; summary is the field value.
+ *
+ * Keys: route_choice_key | choice_key | exploit_failed | need_more_signal
+ * (camelCase / dashed / route/… variants accepted via compact match).
+ */
+export function buildRouteStructuredFromProcessFacts(
+  facts: readonly { fact_key?: string; key?: string; summary?: string }[],
+): Record<string, unknown> | null {
+  const bag: Record<string, unknown> = {};
+  for (const f of facts || []) {
+    const compact = compactRouteKey(String(f.fact_key || f.key || ""));
+    const summary = String(f.summary || "").trim();
+    if (!compact || !summary) continue;
+    if (
+      compact === "routechoicekey" ||
+      compact === "choicekey" ||
+      compact === "mainchoice"
+    ) {
+      if (bag.route_choice_key == null) bag.route_choice_key = summary.slice(0, 64);
+    } else if (compact === "exploitfailed" || compact === "exploitfailedretryvalidate") {
+      if (bag.exploit_failed == null) bag.exploit_failed = summary;
+    } else if (compact === "needmoresignal") {
+      if (bag.need_more_signal == null) bag.need_more_signal = summary;
+    }
+  }
+  return Object.keys(bag).length ? bag : null;
 }
 
 /**
@@ -672,7 +725,9 @@ export function parseExploitFailedFromStructured(input: {
   void input.deadends;
   void input.notes;
   for (const o of structuredRouteObjects(input)) {
-    if (truthyFlag(o.exploit_failed) || truthyFlag(o.exploitFailed)) return true;
+    if (truthyExploitFailed(o.exploit_failed) || truthyExploitFailed(o.exploitFailed)) {
+      return true;
+    }
   }
   return false;
 }
@@ -680,6 +735,7 @@ export function parseExploitFailedFromStructured(input: {
 /**
  * Parse explicit need_more_signal from **typed structured fields only**.
  * Host must not invent from stage-id + hyp counts (Standards harness / Spec G2).
+ * Uses shared truthy (true/1/yes) only — not exploit-only synonym "retry".
  */
 export function parseNeedMoreSignalFromStructured(input: {
   facts?: readonly { key?: string; summary?: string }[];

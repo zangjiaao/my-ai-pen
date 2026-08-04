@@ -907,35 +907,217 @@ const repoExperts = join(
   assert.equal(retryOut.routeProjection!.stage_pass, true);
 }
 
-// --- Production: empty recon soft-lands to book via empty_recon edge ---
+// --- Production finalize: empty recon via Product-state (NO routeProjection inject) ---
 {
   const g = await loadHardGraphFile(repoExperts, "hypothesis_cycle");
   assert.ok(g);
-  const order: string[] = [];
-  const exec: StageExecutor = async (input) => {
-    order.push(input.stage.id);
-    return {
-      structured: { ok: true, summary: `${input.stage.id} ok` },
-      // zero surfaces / hyps — recon empty_recon → book (not unmatched blocked)
-      routeProjection: {
-        stage_pass: true,
-        surfaces_n: 0,
-        active_hyp_n: 0,
-        active_complete_n: 0,
+  const taskDir = await mkdtemp(join(tmpdir(), "hg-empty-recon-"));
+  await mkdir(taskDir, { recursive: true });
+  const pq = createProcessQualityState(); // empty hyps
+  const plan = new HardGraphPlanStore(g!);
+  const parentRuntime = {
+    task: {
+      taskId: "empty-recon",
+      conversationId: "c1",
+      instruction: "assess",
+      workspaceDir: taskDir,
+      expertId: "e1",
+      expertName: "Expert",
+    },
+    workspaceDir: taskDir,
+    taskDir,
+    platform: { send: async () => {} },
+    todo: new TodoStore(),
+    evidence: new EvidenceStore(join(taskDir, "evidence")),
+    findingsDir: join(taskDir, "findings"),
+    goals: new GoalStore(),
+    processFacts: new ProcessFactStore(join(taskDir, "facts")),
+    surfaceLedger: new SurfaceLedgerStore(SurfaceLedgerStore.pathFromTaskDir(taskDir)),
+    lifecycle: {
+      processQuality: pq,
+      hardGraphRun: {
+        plan,
+        usage: createUsageLedgerFromEnv(),
+        panel: new PanelAgentTracker("empty-recon", "Expert"),
+        stageId: "init",
       },
-    };
-  };
+      toolsInLastSegment: 0,
+      subagentDepth: 0,
+      recentObservations: [],
+      subagentEvidenceCache: [],
+    },
+  } as unknown as ToolRuntime;
+
+  // Single-stage finalize: empty ledger + empty hyp → empty_recon projection
+  const reconStage = g!.stages.find((s) => s.id === "recon")!;
+  const reconExec = createHardGraphStageExecutor({
+    config: {
+      workspaceDir: taskDir,
+      piAgentDir: join(taskDir, "pi"),
+      modelId: "test",
+      modelProvider: "openai",
+    } as any,
+    parentRuntime,
+    pack: { id: "pentest", label: "P", system: "t", tools: ["todo", "fact"] } as any,
+    sessionFactory: async () => ({
+      summary: "recon empty",
+      structured: { ok: true, summary: "recon empty — no surfaces" },
+      // no hostInject surfaces
+    }),
+  });
+  const reconOut = await reconExec({
+    graphId: g!.id,
+    stage: reconStage,
+    stageIndex: 1,
+    stageAttempt: 1,
+    tools: ["todo", "fact"],
+    toolProfile: {},
+    handoff: {
+      summary: "init",
+      surfaces: [],
+      candidates: [],
+      facts: [],
+      deadends: [],
+      completed_stages: ["init"],
+    },
+  });
+  assert.ok(reconOut.routeProjection, "finalize must emit routeProjection");
+  assert.equal(
+    reconOut.routeProjection!.surfaces_n,
+    0,
+    "empty ledger/handoff → surfaces_n 0",
+  );
+  assert.equal(
+    reconOut.routeProjection!.active_hyp_n,
+    0,
+    "empty hyp store → active_hyp_n 0",
+  );
+
+  // Full runner: production executor, no manual routeProjection inject
+  const order: string[] = [];
+  const prodExec = createHardGraphStageExecutor({
+    config: {
+      workspaceDir: taskDir,
+      piAgentDir: join(taskDir, "pi2"),
+      modelId: "test",
+      modelProvider: "openai",
+    } as any,
+    parentRuntime,
+    pack: {
+      id: "pentest",
+      label: "P",
+      system: "t",
+      tools: ["todo", "fact", "hypothesis", "finding"],
+    } as any,
+    sessionFactory: async ({ stageId }) => {
+      order.push(stageId);
+      return {
+        summary: `${stageId} ok`,
+        structured: { ok: true, summary: `${stageId} ok` },
+      };
+    },
+  });
   const run = await runHardGraph({
     graph: g!,
-    executeStage: exec,
+    executeStage: prodExec,
     availableTools: ["todo", "fact", "skill", "write", "hypothesis", "finding"],
   });
   assert.equal(run.terminal, "completed", `order=${order.join(",")}`);
   assert.deepEqual(
     order,
     ["init", "recon", "book"],
-    `empty recon must soft-land to book: ${order.join(",")}`,
+    `empty recon Product-state must soft-land to book: ${order.join(",")}`,
   );
+}
+
+// --- Production finalize: Gate via process-fact exact key (live Product channel) ---
+{
+  const g = await loadHardGraphFile(repoExperts, "hypothesis_cycle");
+  assert.ok(g);
+  const taskDir = await mkdtemp(join(tmpdir(), "hg-fact-gate-"));
+  await mkdir(taskDir, { recursive: true });
+  const pq = createProcessQualityState();
+  const plan = new HardGraphPlanStore(g!);
+  const facts = new ProcessFactStore(join(taskDir, "facts"));
+  // Main fact tool deposit (exact key) — not free-text deadend scrape
+  const up = await facts.upsert({
+    fact_key: "route_choice_key",
+    summary: "to_book",
+    body: "Gate choice deposited by Main fact tool for validate settle",
+  });
+  assert.ok(!("error" in up), "fact upsert must succeed");
+
+  const parentRuntime = {
+    task: {
+      taskId: "fact-gate",
+      conversationId: "c1",
+      instruction: "assess",
+      workspaceDir: taskDir,
+      expertId: "e1",
+      expertName: "Expert",
+    },
+    workspaceDir: taskDir,
+    taskDir,
+    platform: { send: async () => {} },
+    todo: new TodoStore(),
+    evidence: new EvidenceStore(join(taskDir, "evidence")),
+    findingsDir: join(taskDir, "findings"),
+    goals: new GoalStore(),
+    processFacts: facts,
+    surfaceLedger: new SurfaceLedgerStore(SurfaceLedgerStore.pathFromTaskDir(taskDir)),
+    lifecycle: {
+      processQuality: pq,
+      hardGraphRun: {
+        plan,
+        usage: createUsageLedgerFromEnv(),
+        panel: new PanelAgentTracker("fact-gate", "Expert"),
+        stageId: "validate",
+      },
+      toolsInLastSegment: 0,
+      subagentDepth: 0,
+      recentObservations: [],
+      subagentEvidenceCache: [],
+    },
+  } as unknown as ToolRuntime;
+
+  const validateStage = g!.stages.find((s) => s.id === "validate")!;
+  const exec = createHardGraphStageExecutor({
+    config: {
+      workspaceDir: taskDir,
+      piAgentDir: join(taskDir, "pi"),
+      modelId: "test",
+      modelProvider: "openai",
+    } as any,
+    parentRuntime,
+    pack: { id: "pentest", label: "P", system: "t", tools: ["todo", "fact"] } as any,
+    // Structured has no route_choice_key — process-fact Product channel must supply it
+    sessionFactory: async () => ({
+      summary: "validate",
+      structured: { ok: true, summary: "validate settled" },
+    }),
+  });
+  const out = await exec({
+    graphId: g!.id,
+    stage: validateStage,
+    stageIndex: 3,
+    stageAttempt: 1,
+    tools: ["todo", "fact"],
+    toolProfile: {},
+    handoff: {
+      summary: "enum",
+      surfaces: [{ location: "http://t/" }],
+      candidates: [],
+      facts: [],
+      deadends: [],
+      completed_stages: ["init", "recon", "enumerate"],
+    },
+  });
+  assert.equal(
+    out.routeChoiceKey,
+    "to_book",
+    "exact process-fact key must wire Gate choice on production finalize",
+  );
+  assert.equal(out.routeProjection?.choice_key, "to_book");
 }
 
 // silence unused

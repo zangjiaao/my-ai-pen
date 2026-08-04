@@ -7,6 +7,7 @@ import {
   applyRouteCounters,
   buildEngagementRouteSlicesFromProductState,
   buildRouteProjection,
+  buildRouteStructuredFromProcessFacts,
   DEFAULT_GLOBAL_HOP,
   emptyRouteCounters,
   gateChoiceKeysForNode,
@@ -564,6 +565,46 @@ const stageIds = [...HYPOTHESIS_CYCLE_STAGE_IDS];
   assert.equal(
     parseNeedMoreSignalFromStructured({ deadends: ["need_more_signal"] }),
     false,
+  );
+
+  // Nested data: parity with normalizeSubagentResult
+  assert.equal(
+    parseRouteChoiceKeyFromStructured({
+      raw: { data: { route_choice_key: "to_book" } },
+    }),
+    "to_book",
+  );
+  assert.equal(
+    parseExploitFailedFromStructured({
+      raw: { data: { exploit_failed: true } },
+    }),
+    true,
+  );
+
+  // "retry" synonym only for exploit_failed — not need_more_signal
+  assert.equal(parseExploitFailedFromStructured({ exploit_failed: "retry" }), true);
+  assert.equal(
+    parseNeedMoreSignalFromStructured({ need_more_signal: "retry" }),
+    false,
+    "retry must not collapse into need_more_signal",
+  );
+  assert.equal(parseNeedMoreSignalFromStructured({ need_more_signal: "yes" }), true);
+
+  // Product channel: exact process-fact keys → typed bag
+  const fromFacts = buildRouteStructuredFromProcessFacts([
+    { fact_key: "route_choice_key", summary: "to_enumerate" },
+    { fact_key: "exploit_failed", summary: "true" },
+    { fact_key: "unrelated/ports", summary: "80 open" },
+  ]);
+  assert.ok(fromFacts);
+  assert.equal(fromFacts!.route_choice_key, "to_enumerate");
+  assert.equal(fromFacts!.exploit_failed, "true");
+  assert.equal(
+    buildRouteStructuredFromProcessFacts([
+      { fact_key: "ports", summary: "80 open" },
+    ]),
+    null,
+    "non-whitelist fact keys must not invent route bag",
   );
 }
 

@@ -119,9 +119,13 @@ Priority high→low within each `from` (LangGraph-style single path_fn):
 
 Predicate ids are **whitelist only** (implementation maps id → pure check on projection). Exact boolean definitions live with S1 tests.
 
-**Routing signals (G2/G3):** `choice_key` / `route_choice_key`, `exploit_failed`, and `need_more_signal` are read only from **typed structured fields** on stage structured output / `raw` (or nested `gate`/`route` objects). Host must **not** invent them by scraping free-text facts/deadends/notes or by stage-id + hyp-count heuristics. Invalid `choice_key` is fail-closed only when hop budget is **not** exhausted — hop pre-check soft-lands first (G4).
+**Routing signals (G2/G3):** `choice_key` / `route_choice_key`, `exploit_failed`, and `need_more_signal` are read only from **typed structured fields**:
+1. Stage structured output / `raw` (or nested `gate` / `route` / `data` objects) — test/sessionFactory path; or  
+2. **Product deposit:** Main `fact` tool upsert with **exact** `fact_key` ∈ {`route_choice_key`,`choice_key`,`exploit_failed`,`need_more_signal`} (summary = field value) — live Expert Graph path (Spec #125: no agent `result.json` launder).
 
-Gate: only where multiple legitimate strategies exist (validate); Main sets `choice_key` via structured tool; host validates membership.
+Host must **not** invent them by scraping free-text deadends/notes, non-whitelist fact keys, or stage-id + hyp-count heuristics. Invalid `choice_key` is fail-closed only when hop budget is **not** exhausted — hop pre-check soft-lands first (G4).
+
+Gate: only where multiple legitimate strategies exist (validate); Main sets `choice_key` via structured tool or exact fact_key deposit; host validates membership.
 
 ### 6.2 Budgets (defaults)
 

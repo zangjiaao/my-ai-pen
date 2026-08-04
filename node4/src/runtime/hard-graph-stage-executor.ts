@@ -71,7 +71,13 @@ import {
   formatHypothesisQueueInjection,
   isHypothesisWorkModeOn,
 } from "./hypothesis-store.js";
-import { buildEngagementRouteSlicesFromProductState } from "./engagement-graph-route.js";
+import {
+  buildEngagementRouteSlicesFromProductState,
+  buildRouteStructuredFromProcessFacts,
+  parseExploitFailedFromStructured,
+  parseNeedMoreSignalFromStructured,
+  parseRouteChoiceKeyFromStructured,
+} from "./engagement-graph-route.js";
 import {
   formatSkillL1CatalogInjection,
   loadSkillL1Catalog,
@@ -676,12 +682,39 @@ export function createHardGraphStageExecutor(options: {
               typeof surfaceSummary?.probed === "number"
             ? (surfaceSummary.open || 0) + (surfaceSummary.probed || 0)
             : structuredFinal.surfaces?.length || 0;
-      // Prefer original stage structured payload for typed routing fields (G2/G3).
-      // Fall back to settlement raw only — do not invent signals from facts/deadends prose.
+      // G2/G3 typed route bag: merge session structured + process-fact Product deposit + settlement raw.
+      // First non-empty signal wins per field. Never invent from free-text deadends/notes prose.
+      let processFactRoute: Record<string, unknown> | null = null;
+      try {
+        const factStore = opts.child?.processFacts || parentRuntime.processFacts;
+        const index = factStore?.list ? await factStore.list() : [];
+        processFactRoute = buildRouteStructuredFromProcessFacts(index);
+      } catch {
+        processFactRoute = null;
+      }
+      const routeMerged: Record<string, unknown> = {};
+      for (const c of [opts.routeStructured, processFactRoute, structuredFinal.raw]) {
+        if (c == null) continue;
+        const bag = { raw: c };
+        const choice = parseRouteChoiceKeyFromStructured(bag);
+        if (choice && routeMerged.route_choice_key == null) {
+          routeMerged.route_choice_key = choice;
+        }
+        if (
+          parseExploitFailedFromStructured(bag) &&
+          routeMerged.exploit_failed == null
+        ) {
+          routeMerged.exploit_failed = true;
+        }
+        if (
+          parseNeedMoreSignalFromStructured(bag) &&
+          routeMerged.need_more_signal == null
+        ) {
+          routeMerged.need_more_signal = true;
+        }
+      }
       const routeRaw =
-        opts.routeStructured !== undefined && opts.routeStructured !== null
-          ? opts.routeStructured
-          : structuredFinal.raw;
+        Object.keys(routeMerged).length > 0 ? routeMerged : structuredFinal.raw;
       const routeSlices = buildEngagementRouteSlicesFromProductState({
         stageId: input.stage.id,
         hypotheses: pq.hypothesisStore.snapshot().map((r) => ({
@@ -953,7 +986,10 @@ export function createHardGraphStageExecutor(options: {
 
       // Spec #125: never load agent result.json; host settlement projects gate input.
       // Narrative summary only from real process facts (not synthetic fillers).
+      // Spec #285 G3: typed Gate/retry flags via exact process-fact keys (fact tool deposit),
+      // not free-text scrape — finalizeStage maps whitelist keys → routeStructured bag.
       let narrativeSummary: string | undefined;
+      let routeFromFacts: Record<string, unknown> | null = null;
       try {
         const facts = await childRuntime.processFacts?.list?.();
         if (Array.isArray(facts) && facts.length) {
@@ -965,12 +1001,15 @@ export function createHardGraphStageExecutor(options: {
             .filter(Boolean)
             .join("; ")
             .slice(0, 500);
+          routeFromFacts = buildRouteStructuredFromProcessFacts(facts);
         }
       } catch {
         /* ignore */
       }
       return await finalizeStage({
         narrative: narrativeSummary ? { summary: narrativeSummary } : undefined,
+        // Explicit Product deposit for live pi path (same S4 parsers as sessionFactory)
+        ...(routeFromFacts ? { routeStructured: routeFromFacts } : {}),
         child: childRuntime,
         seed: continuitySeed,
         workDir,
