@@ -10,6 +10,19 @@ import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { TaskEnvelope } from "../types.js";
 import { assertHypothesisModeGraphLoad } from "./hypothesis-store.js";
+import {
+  parseEngagementEdges,
+  validateEngagementEdgeTable,
+  type EngagementGraphEdge,
+} from "./engagement-graph-route.js";
+
+/** Spec #285: optional hop / back-edge budgets on a Graph definition. */
+export type HardGraphRouteBudgets = {
+  global_hop?: number;
+  back_edge_caps?: Record<string, number>;
+};
+
+export type { EngagementGraphEdge };
 
 export type HardGraphToolProfile = {
   /** When set, only these tool names are allowed (plus empty = no allowlist). */
@@ -47,8 +60,11 @@ export type HardGraphStageDef = {
 };
 
 /**
- * Product Hard Graph definition — Task-layer sequential stages.
+ * Product Hard Graph definition — Task-layer stages.
  * `discipline: "hard"` is the load-time discriminator vs soft scenario JSON.
+ *
+ * Without `edges`: ordered stage harness (hard order, cannot skip) — Wave1 freeze for app_assessment.
+ * With `edges`: Engagement Graph (Spec #285) — host-owned back-edges + deterministic route.
  */
 export type HardGraphDefinition = {
   discipline: "hard";
@@ -63,8 +79,22 @@ export type HardGraphDefinition = {
   /** Spec #278 AgentRow / dual-rail short badge (e.g. 应用评估). */
   short_label?: string;
   stages: HardGraphStageDef[];
+  /**
+   * Spec #285: declarative engagement edges. When non-empty, runner uses route mode
+   * instead of sole stages[] order. Absent/empty = backward-compatible ordered stages.
+   */
+  edges?: EngagementGraphEdge[];
+  /** Spec #285: hop + hot back-edge budgets (defaults applied in route/runner). */
+  route_budgets?: HardGraphRouteBudgets;
   roe?: { allow_postex?: boolean };
 };
+
+/** True when definition declares a non-empty engagement edge table. */
+export function graphHasEngagementEdges(
+  graph: Pick<HardGraphDefinition, "edges">,
+): boolean {
+  return Array.isArray(graph.edges) && graph.edges.length > 0;
+}
 
 /** Spec #278: product Graph L1 row (skill-like; not full stage JSON). */
 export type GraphL1CatalogEntry = {
@@ -219,6 +249,15 @@ export function isHardGraphDefinition(value: unknown): value is HardGraphDefinit
       if (allow != null && !Array.isArray(allow)) return false;
     }
   }
+  // Spec #285: edges optional; when present must be a parseable array (full validate at load).
+  if (o.edges != null) {
+    if (!Array.isArray(o.edges)) return false;
+    const parsed = parseEngagementEdges(o.edges);
+    if (parsed === null) return false;
+  }
+  if (o.route_budgets != null) {
+    if (typeof o.route_budgets !== "object" || Array.isArray(o.route_budgets)) return false;
+  }
   return true;
 }
 
@@ -253,11 +292,43 @@ export async function loadHardGraphFile(
     const raw = await readFile(path, "utf8");
     const parsed = JSON.parse(raw) as unknown;
     if (!isHardGraphDefinition(parsed)) return null;
+    const base = parsed as HardGraphDefinition;
+    // Spec #285 S2: edge table + predicate whitelist; unknown predicate → load fail.
+    if (base.edges != null) {
+      const edges = parseEngagementEdges(base.edges);
+      if (edges === null) return null;
+      const stageIds = base.stages.map((s) => s.id);
+      const v = validateEngagementEdgeTable({ stageIds, edges });
+      if (!v.ok) return null;
+      return { ...base, id: base.id || id, edges };
+    }
     // Normalize id to filename intent
-    return { ...parsed, id: parsed.id || id };
+    return { ...base, id: base.id || id };
   } catch {
     return null;
   }
+}
+
+/**
+ * In-memory / fixture load helper (same S2 edge validation as pack files).
+ * Returns null when structural or edge validation fails.
+ */
+export function normalizeHardGraphDefinition(
+  value: unknown,
+): HardGraphDefinition | null {
+  if (!isHardGraphDefinition(value)) return null;
+  const base = value as HardGraphDefinition;
+  if (base.edges != null) {
+    const edges = parseEngagementEdges(base.edges);
+    if (edges === null) return null;
+    const v = validateEngagementEdgeTable({
+      stageIds: base.stages.map((s) => s.id),
+      edges,
+    });
+    if (!v.ok) return null;
+    return { ...base, edges };
+  }
+  return { ...base };
 }
 
 /** Soft scenario file under packRoot/graphs/{id}.json (existing layout). */
@@ -327,6 +398,11 @@ const PRODUCT_GRAPH_CATALOG: Record<string, ProductGraphCatalogEntry> = {
   redteam: { intentId: "redteam_deep", hardId: "redteam_deep" },
   "red-team": { intentId: "redteam_deep", hardId: "redteam_deep" },
   deep: { intentId: "redteam_deep", hardId: "redteam_deep" },
+  // Spec #285 product Engagement Graph (hypothesis-first cycles; not thin)
+  hypothesis_cycle: {
+    intentId: "hypothesis_cycle",
+    hardId: "hypothesis_cycle",
+  },
 };
 
 /** Default Expert Graph id when graphDiscipline/env selects hard without a thin/lab id. */

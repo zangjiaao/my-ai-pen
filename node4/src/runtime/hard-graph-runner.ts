@@ -1,6 +1,7 @@
 /**
  * Hard Graph runner — outer orchestrator for Graph × Pi.
- * Owns stage order, retries, and fail-closed Feedback. Stage work is injected.
+ * Owns stage order (or Spec #285 engagement edges), retries, and fail-closed Feedback.
+ * Stage work is injected.
  */
 
 import {
@@ -12,7 +13,19 @@ import type {
   HardGraphStageDef,
   HardGraphToolProfile,
 } from "./hard-graph-definition.js";
-import { applyHardGraphToolProfile } from "./hard-graph-definition.js";
+import {
+  applyHardGraphToolProfile,
+  graphHasEngagementEdges,
+} from "./hard-graph-definition.js";
+import {
+  applyRouteCounters,
+  buildRouteProjection,
+  defaultRouteBudgets,
+  emptyRouteCounters,
+  routeEngagementGraph,
+  type RouteCounters,
+  type RouteProjection,
+} from "./engagement-graph-route.js";
 import {
   accumulateStageFeedback,
   emptyHardProcessMetrics,
@@ -130,6 +143,29 @@ export type StageExecutorOutput = {
    * When decision=refine, runner treats stage attempt as failed_attempt (bounded).
    */
   l1?: { decision: "pass" | "refine"; gaps: string[] };
+  /**
+   * Spec #285 Gate: Main whitelist choice_key after settle (host validates membership).
+   * Never free goto — only declared path_map keys on the node.
+   */
+  routeChoiceKey?: string;
+  /**
+   * Spec #285: optional Product-state slices for engagement route projection.
+   * Host/tests supply counts; runner fills stage_pass / hops / budget.
+   */
+  routeProjection?: Partial<
+    Pick<
+      RouteProjection,
+      | "active_hyp_n"
+      | "active_complete_n"
+      | "surfaces_n"
+      | "confirmed_unexploited_n"
+      | "need_more_signal"
+      | "store_candidates_n"
+      | "exploit_failed"
+      | "choice_key"
+      | "bookable_work"
+    >
+  >;
 };
 
 export type StageExecutor = (input: StageExecutorInput) => Promise<StageExecutorOutput>;
@@ -438,7 +474,10 @@ async function runHonestyBlockedTail(input: {
 }
 
 /**
- * Run Hard Graph stages in hard order. Cannot skip. Feedback is runner-owned.
+ * Run Hard Graph stages.
+ * - No edges: hard order (cannot skip) — backward-compatible ordered stage harness.
+ * - With edges (Spec #285): settle → route → next until terminal / hop soft landing / block.
+ * Feedback is runner-owned. Main never invents edges.
  */
 export async function runHardGraph(options: {
   graph: HardGraphDefinition;
@@ -473,11 +512,49 @@ export async function runHardGraph(options: {
   const maxL1Refine =
     typeof l1Budget.maxRefine === "number" ? l1Budget.maxRefine : l1MaxStageRefine();
 
-  for (let stageIndex = 0; stageIndex < graph.stages.length; stageIndex++) {
+  const edgeMode = graphHasEngagementEdges(graph);
+  const routeBudgets = defaultRouteBudgets({
+    global_hop: graph.route_budgets?.global_hop,
+    back_edge_caps: graph.route_budgets?.back_edge_caps,
+  });
+  let routeCounters: RouteCounters = emptyRouteCounters(routeBudgets);
+  let hopsUsed = 0;
+  /** Accumulated projection extras from stage outputs (Product-state slices). */
+  let projExtras: NonNullable<StageExecutorOutput["routeProjection"]> = {};
+  let pendingChoiceKey: string | null = null;
+  const bookStageId =
+    graph.stages.find((s) => s.intent === "book" || s.id === "book" || s.id === "validate_book")
+      ?.id || "book";
+  const stageIndexById = new Map(graph.stages.map((s, i) => [s.id, i]));
+
+  // Ordered mode: 0..n-1. Edge mode: start at stages[0], then route.
+  let stageIndex = 0;
+  let edgeCurrentId = graph.stages[0]!.id;
+  /** Safety: never exceed hop budget + stage count as hard stop. */
+  const maxLoopIters = edgeMode
+    ? routeBudgets.global_hop + graph.stages.length + 2
+    : graph.stages.length;
+  let loopIter = 0;
+
+  while (loopIter < maxLoopIters) {
+    loopIter++;
     if (options.abortSignal?.aborted) {
       const result = runEndResult(graph.id, "aborted", records, handoff, processMetrics);
       await emit({ type: "run_end", graphId: graph.id, terminal: "aborted" });
       return result;
+    }
+
+    if (edgeMode) {
+      const idx = stageIndexById.get(edgeCurrentId);
+      if (idx == null) {
+        const result = runEndResult(graph.id, "blocked", records, handoff, processMetrics);
+        await emit({ type: "run_end", graphId: graph.id, terminal: "blocked" });
+        return result;
+      }
+      stageIndex = idx;
+      hopsUsed += 1;
+    } else if (stageIndex >= graph.stages.length) {
+      break;
     }
 
     const stage = graph.stages[stageIndex]!;
@@ -512,6 +589,8 @@ export async function runHardGraph(options: {
       let outFindingsBookedN: number | undefined;
       let outFeedbackOkIds: string[] | undefined;
       let outL1: { decision: "pass" | "refine"; gaps: string[] } | undefined;
+      let outRouteChoiceKey: string | undefined;
+      let outRouteProjection: StageExecutorOutput["routeProjection"] | undefined;
       try {
         // Honesty repair brief only when prior attempt failed L0 honesty cannot-advance.
         // Structure-only / L1 refine retries must not inject M1 honesty duties (review finding #1).
@@ -558,6 +637,11 @@ export async function runHardGraph(options: {
           ? out.feedbackOkIds.map((id) => String(id || "").trim()).filter(Boolean)
           : undefined;
         outL1 = out.l1;
+        outRouteChoiceKey =
+          typeof out.routeChoiceKey === "string"
+            ? String(out.routeChoiceKey).trim() || undefined
+            : undefined;
+        outRouteProjection = out.routeProjection;
       } catch (err) {
         // Model/provider soft-failure: close stage (not leave running) + run_end, then rethrow.
         // Main maps LlmTurnError → task_error (never silent task_complete).
@@ -661,6 +745,19 @@ export async function runHardGraph(options: {
           handoffSurfacesN: handoff.surfaces.length,
         });
         passed = true;
+        // Spec #285: absorb projection slices + gate choice for route after settle
+        if (outRouteProjection && typeof outRouteProjection === "object") {
+          projExtras = { ...projExtras, ...outRouteProjection };
+        }
+        // Prefer explicit surfaces from handoff when executor did not override
+        if (projExtras.surfaces_n == null) {
+          projExtras = { ...projExtras, surfaces_n: handoff.surfaces.length };
+        }
+        if (outRouteChoiceKey) {
+          pendingChoiceKey = outRouteChoiceKey;
+        } else if (outRouteProjection?.choice_key != null) {
+          pendingChoiceKey = String(outRouteProjection.choice_key || "").trim() || null;
+        }
         await emit({
           type: "stage_end",
           graphId: graph.id,
@@ -759,6 +856,93 @@ export async function runHardGraph(options: {
       errors: [],
       summary: lastSummary,
     });
+
+    // --- Ordered stage harness (no edges): advance by index ---
+    if (!edgeMode) {
+      stageIndex += 1;
+      continue;
+    }
+
+    // --- Spec #285 engagement route after settle ---
+    const edges = graph.edges || [];
+    const projection = buildRouteProjection({
+      stage_pass: true,
+      hops_used: hopsUsed,
+      hop_budget: routeBudgets.global_hop,
+      active_hyp_n: projExtras.active_hyp_n,
+      active_complete_n: projExtras.active_complete_n,
+      surfaces_n:
+        typeof projExtras.surfaces_n === "number"
+          ? projExtras.surfaces_n
+          : handoff.surfaces.length,
+      confirmed_unexploited_n: projExtras.confirmed_unexploited_n,
+      need_more_signal: projExtras.need_more_signal,
+      store_candidates_n: projExtras.store_candidates_n,
+      exploit_failed: projExtras.exploit_failed,
+      choice_key: pendingChoiceKey,
+    });
+    // Clear one-shot gate choice after use
+    pendingChoiceKey = null;
+
+    const route = routeEngagementGraph({
+      current: stage.id,
+      edges,
+      projection,
+      counters: routeCounters,
+      soft_landing_book_id: bookStageId,
+    });
+
+    if (!route.ok) {
+      if (route.code === "terminal") {
+        // Book (or node with no outgoing edges) completed → run complete
+        break;
+      }
+      if (route.code === "hop_soft_landing") {
+        const land = String(route.soft_landing_to || bookStageId).trim();
+        if (land && land !== stage.id && stageIndexById.has(land)) {
+          edgeCurrentId = land;
+          continue;
+        }
+        // Already on landing node or missing book → stop without bare crash
+        break;
+      }
+      if (route.code === "invalid_choice_key") {
+        const result = runEndResult(graph.id, "blocked", records, handoff, processMetrics);
+        await emit({ type: "run_end", graphId: graph.id, terminal: "blocked" });
+        return result;
+      }
+      // unmatched: fail-closed — prefer soft land to book when bookable work exists
+      const bookable =
+        projection.bookable_work === true ||
+        (projection.store_candidates_n ?? 0) > 0 ||
+        (projection.confirmed_unexploited_n ?? 0) > 0;
+      if (bookable && stage.id !== bookStageId && stageIndexById.has(bookStageId)) {
+        edgeCurrentId = bookStageId;
+        continue;
+      }
+      const result = runEndResult(graph.id, "blocked", records, handoff, processMetrics);
+      await emit({ type: "run_end", graphId: graph.id, terminal: "blocked" });
+      return result;
+    }
+
+    routeCounters = applyRouteCounters(routeCounters, route);
+    if (route.next === stage.id) {
+      // Self-loop without progress would spin; hop budget will soft-land
+      edgeCurrentId = route.next;
+      continue;
+    }
+    edgeCurrentId = route.next;
+  }
+
+  // Edge mode safety: max iterations without clean terminal → soft completed if book passed else blocked
+  if (edgeMode && loopIter >= maxLoopIters) {
+    const bookPassed = records.some(
+      (r) => r.stageId === bookStageId && r.outcome === "passed",
+    );
+    const terminal = bookPassed ? "completed" : "blocked";
+    const result = runEndResult(graph.id, terminal, records, handoff, processMetrics);
+    await emit({ type: "run_end", graphId: graph.id, terminal });
+    return result;
   }
 
   const result = runEndResult(graph.id, "completed", records, handoff, processMetrics);
