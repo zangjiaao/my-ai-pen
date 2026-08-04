@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import {
   applyRouteCounters,
+  buildEngagementRouteSlicesFromProductState,
   buildRouteProjection,
   DEFAULT_GLOBAL_HOP,
   emptyRouteCounters,
@@ -13,6 +14,7 @@ import {
   HYPOTHESIS_CYCLE_STAGE_IDS,
   isKnownRoutePredicateId,
   parseEngagementEdges,
+  parseRouteChoiceKeyFromStructured,
   routeEngagementGraph,
   validateEngagementEdgeTable,
   type EngagementGraphEdge,
@@ -175,7 +177,7 @@ const stageIds = [...HYPOTHESIS_CYCLE_STAGE_IDS];
   }
 }
 
-// --- E3: global hop exhaust → soft landing toward book ---
+// --- E3: global hop exhaust → soft landing toward book (hard pre-route) ---
 {
   const r = routeEngagementGraph({
     current: "recon",
@@ -187,14 +189,30 @@ const stageIds = [...HYPOTHESIS_CYCLE_STAGE_IDS];
       active_hyp_n: 0,
     }),
   });
-  // hop_exhausted edge matches first among remaining (priority 5)
   assert.equal(r.ok, true);
   if (r.ok) {
     assert.equal(r.next, "book");
     assert.equal(r.key, "hop_exhausted");
   }
 
-  // No hop_exhausted edge → soft landing code
+  // Hard pre-check: open surfaces must NOT continue cycle when hop exhausted
+  const withSurfaces = routeEngagementGraph({
+    current: "recon",
+    edges,
+    projection: baseProj({
+      hops_used: DEFAULT_GLOBAL_HOP,
+      hop_budget: DEFAULT_GLOBAL_HOP,
+      surfaces_n: 3,
+      active_hyp_n: 1,
+    }),
+  });
+  assert.equal(withSurfaces.ok, true, "hop exhaust overrides work edges");
+  if (withSurfaces.ok) {
+    assert.equal(withSurfaces.next, "book");
+    assert.equal(withSurfaces.key, "hop_exhausted");
+  }
+
+  // No hop_exhausted edge → soft landing code even with open surfaces
   const linearish: EngagementGraphEdge[] = [
     { from: "recon", when: "surfaces_ge_1", to: "enumerate", priority: 10 },
   ];
@@ -204,7 +222,7 @@ const stageIds = [...HYPOTHESIS_CYCLE_STAGE_IDS];
     projection: baseProj({
       hops_used: 25,
       hop_budget: 25,
-      surfaces_n: 0,
+      surfaces_n: 5,
     }),
     soft_landing_book_id: "book",
   });
@@ -288,26 +306,87 @@ const stageIds = [...HYPOTHESIS_CYCLE_STAGE_IDS];
   if (!term.ok) assert.equal(term.code, "terminal");
 }
 
-// --- exploit_lite paths ---
+// --- exploit_lite paths (reachable with production-like stage_pass:true + exploit_failed) ---
 {
   const okBook = routeEngagementGraph({
     current: "exploit_lite",
     edges,
-    projection: baseProj({ stage_pass: true }),
+    projection: baseProj({ stage_pass: true, exploit_failed: false }),
   });
   assert.equal(okBook.ok, true);
   if (okBook.ok) assert.equal(okBook.next, "book");
 
+  // Production runner may still have structure-pass; exploit_failed must win
   const retry = routeEngagementGraph({
     current: "exploit_lite",
     edges,
-    projection: baseProj({ stage_pass: false, exploit_failed: true }),
+    projection: baseProj({ stage_pass: true, exploit_failed: true }),
   });
   assert.equal(retry.ok, true);
   if (retry.ok) {
     assert.equal(retry.next, "validate");
+    assert.equal(retry.key, "exploit_failed_retry_validate");
     assert.equal(retry.is_hot_back_edge, true);
   }
+}
+
+// --- enumerate intermediate incomplete → re-enter enumerate ---
+{
+  const r = routeEngagementGraph({
+    current: "enumerate",
+    edges,
+    projection: baseProj({
+      active_hyp_n: 1,
+      active_complete_n: 0,
+      surfaces_n: 1,
+    }),
+  });
+  assert.equal(r.ok, true);
+  if (r.ok) {
+    assert.equal(r.next, "enumerate");
+    assert.equal(r.key, "active_hyp_incomplete");
+  }
+}
+
+// --- S4 product-state slices (pure) ---
+{
+  const slices = buildEngagementRouteSlicesFromProductState({
+    stageId: "enumerate",
+    surfaces_n: 2,
+    hypotheses: [
+      {
+        status: "active",
+        signal: "s1",
+        prove_if: "p1",
+        disprove_if: "d1",
+        statement: "A",
+      },
+      {
+        status: "active",
+        signal: "s2",
+        prove_if: "p2",
+        disprove_if: "d2",
+        statement: "B",
+      },
+    ],
+    findings: [],
+  });
+  assert.equal(slices.routeProjection.active_hyp_n, 2);
+  assert.equal(slices.routeProjection.active_complete_n, 2);
+
+  const exploit = buildEngagementRouteSlicesFromProductState({
+    stageId: "exploit_lite",
+    surfaces_n: 1,
+    hypotheses: [],
+    findings: [],
+  });
+  assert.equal(exploit.routeProjection.exploit_failed, true);
+  assert.equal(exploit.routeProjection.stage_pass, false);
+
+  const choice = parseRouteChoiceKeyFromStructured({
+    facts: [{ key: "route_choice_key", summary: "to_book" }],
+  });
+  assert.equal(choice, "to_book");
 }
 
 // --- enumerate complete hyps → validate ---

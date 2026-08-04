@@ -71,6 +71,7 @@ import {
   formatHypothesisQueueInjection,
   isHypothesisWorkModeOn,
 } from "./hypothesis-store.js";
+import { buildEngagementRouteSlicesFromProductState } from "./engagement-graph-route.js";
 import {
   formatSkillL1CatalogInjection,
   loadSkillL1Catalog,
@@ -656,6 +657,45 @@ export function createHardGraphStageExecutor(options: {
       }
 
       const unbookableN = gqState?.unbookable?.length || 0;
+
+      // Spec #285 S4: Product-state route projection from hypothesis queue + Finding Store + surfaces.
+      // Full snapshot each settle (not sticky). Gate choice from structured Main output only.
+      const surfaceSummary = settleRuntime.surfaceLedger?.summary?.() as
+        | { total?: number; open?: number; probed?: number; booked?: number }
+        | undefined;
+      const surfacesFromLedger =
+        typeof surfaceSummary?.total === "number"
+          ? surfaceSummary.total
+          : typeof surfaceSummary?.open === "number" &&
+              typeof surfaceSummary?.probed === "number"
+            ? (surfaceSummary.open || 0) + (surfaceSummary.probed || 0)
+            : structuredFinal.surfaces?.length || 0;
+      const routeSlices = buildEngagementRouteSlicesFromProductState({
+        stageId: input.stage.id,
+        hypotheses: pq.hypothesisStore.snapshot().map((r) => ({
+          status: r.status,
+          signal: r.signal,
+          prove_if: r.prove_if,
+          disprove_if: r.disprove_if,
+          statement: r.statement,
+        })),
+        findings: pq.findingStore.snapshot().map((r) => ({
+          status: r.status,
+          title: r.title,
+        })),
+        surfaces_n: Math.max(
+          surfacesFromLedger,
+          structuredFinal.surfaces?.length || 0,
+          input.handoff?.surfaces?.length || 0,
+        ),
+        structured: {
+          facts: structuredFinal.facts,
+          deadends: structuredFinal.deadends,
+          notes: structuredFinal.notes,
+          raw: structuredFinal.raw,
+        },
+      });
+
       return {
         structured: structuredFinal,
         summary: structuredFinal.summaryProvided ? structuredFinal.summary : undefined,
@@ -673,6 +713,10 @@ export function createHardGraphStageExecutor(options: {
         findingsBookedN: storeBooked,
         ...(feedbackOkIds.length ? { feedbackOkIds } : {}),
         ...(l1Payload ? { l1: l1Payload } : {}),
+        routeProjection: routeSlices.routeProjection,
+        ...(routeSlices.routeChoiceKey
+          ? { routeChoiceKey: routeSlices.routeChoiceKey }
+          : {}),
       };
     };
 

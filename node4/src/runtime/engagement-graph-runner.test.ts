@@ -1,11 +1,20 @@
 /**
  * Spec #285: engagement edges runner integration (fake stage executor) + load + catalog.
  * Covers E2–E6 path through production runHardGraph (not only pure helpers).
+ * Also: production finalizeStage routeProjection from Product state (no manual inject).
  * Run: npx tsx src/runtime/engagement-graph-runner.test.ts
  */
 import assert from "node:assert/strict";
+import { mkdtemp, mkdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { ToolRuntime } from "../types.js";
+import { EvidenceStore } from "../stores/evidence.js";
+import { GoalStore } from "../stores/goal.js";
+import { ProcessFactStore } from "../stores/process-fact.js";
+import { SurfaceLedgerStore } from "../stores/surface-ledger.js";
+import { TodoStore } from "../stores/todo.js";
 import {
   buildProductGraphL1Catalog,
   graphHasEngagementEdges,
@@ -22,6 +31,11 @@ import {
   type StageExecutor,
 } from "./hard-graph-runner.js";
 import type { HardGraphDefinition } from "./hard-graph-definition.js";
+import { createHardGraphStageExecutor } from "./hard-graph-stage-executor.js";
+import { createProcessQualityState } from "./package-honesty-host.js";
+import { HardGraphPlanStore } from "./hard-graph-plan.js";
+import { createUsageLedgerFromEnv } from "./platform-observability.js";
+import { PanelAgentTracker } from "./panel-agents.js";
 
 const repoExperts = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -297,7 +311,7 @@ const repoExperts = join(
   assert.ok(!r.stages.some((s) => s.stageId === "book" && s.outcome === "passed"));
 }
 
-// --- E3: hop exhaust soft-lands toward book ---
+// --- E3: hop exhaust soft-lands toward book (open surfaces must not continue cycle) ---
 {
   const tiny: HardGraphDefinition = {
     discipline: "hard",
@@ -312,7 +326,7 @@ const repoExperts = join(
     ],
     edges: [
       { from: "init", when: "stage_pass", to: "recon", priority: 10 },
-      // Always back-edge recon↔enumerate until hop_exhausted
+      // Work edges higher priority than hop_exhausted — hard pre-check must still soft-land
       { from: "recon", when: "hop_exhausted", to: "book", priority: 5 },
       { from: "recon", when: "always", to: "enumerate", priority: 20 },
       { from: "enumerate", when: "hop_exhausted", to: "book", priority: 5 },
@@ -330,24 +344,100 @@ const repoExperts = join(
   const order: string[] = [];
   const exec: StageExecutor = async (input) => {
     order.push(input.stage.id);
-    return { structured: { ok: true, summary: input.stage.id } };
+    // Keep surfaces open so work edges would match without hop hard-precheck
+    return {
+      structured: {
+        ok: true,
+        summary: input.stage.id,
+        surfaces: [{ location: "http://open/" }],
+      },
+      routeProjection: { surfaces_n: 3, active_hyp_n: 1 },
+    };
   };
   const r = await runHardGraph({
     graph: norm!,
     executeStage: exec,
     availableTools: ["todo"],
   });
+  assert.equal(r.terminal, "completed", `terminal=${r.terminal} order=${order.join(",")}`);
+  assert.ok(order.includes("book"), `must book via hop_exhausted: ${order.join(",")}`);
+  // Visits: hop budget 4 entries + soft-land book entry ≤ 5 (+ small slack for init path)
   assert.ok(
-    r.terminal === "completed" || r.terminal === "blocked",
-    `terminal=${r.terminal}`,
+    order.length <= 6,
+    `visit count ${order.length} exceeds hop budget soft-land bound: ${order.join(",")}`,
   );
-  assert.ok(order.includes("book") || r.terminal === "blocked");
-  // Must not infinite-loop: visits bounded
-  assert.ok(order.length <= 12, `order len ${order.length}: ${order.join(",")}`);
-  // Prefer book soft landing when hop edges fire
-  if (order.includes("book")) {
-    assert.equal(r.terminal, "completed");
-  }
+  // book is last successful path — not maxLoopIters-only salvage without book
+  assert.equal(order[order.length - 1], "book");
+}
+
+// --- exploit_failed_retry_validate reachable with stage_pass true ---
+{
+  const g = await loadHardGraphFile(repoExperts, "hypothesis_cycle");
+  assert.ok(g);
+  const order: string[] = [];
+  let exploitVisits = 0;
+  const exec: StageExecutor = async (input) => {
+    order.push(input.stage.id);
+    if (input.stage.id === "init") return { structured: { ok: true, summary: "i" } };
+    if (input.stage.id === "recon") {
+      return {
+        structured: {
+          ok: true,
+          summary: "r",
+          surfaces: [{ location: "http://t/" }],
+        },
+        routeProjection: { surfaces_n: 1 },
+      };
+    }
+    if (input.stage.id === "enumerate") {
+      return {
+        structured: { ok: true, summary: "e" },
+        routeProjection: { active_complete_n: 2, active_hyp_n: 2 },
+      };
+    }
+    if (input.stage.id === "validate") {
+      return {
+        structured: { ok: true, summary: "v" },
+        routeProjection: { confirmed_unexploited_n: 1 },
+      };
+    }
+    if (input.stage.id === "exploit_lite") {
+      exploitVisits += 1;
+      if (exploitVisits === 1) {
+        return {
+          structured: { ok: true, summary: "exploit miss" },
+          routeProjection: {
+            stage_pass: true,
+            exploit_failed: true,
+            store_candidates_n: 0,
+          },
+        };
+      }
+      return {
+        structured: { ok: true, summary: "exploit ok" },
+        routeProjection: {
+          stage_pass: true,
+          exploit_failed: false,
+          store_candidates_n: 1,
+        },
+      };
+    }
+    return { structured: { ok: true, summary: "b" } };
+  };
+  const r = await runHardGraph({
+    graph: g!,
+    executeStage: exec,
+    availableTools: ["todo", "read", "finding", "hypothesis"],
+  });
+  assert.equal(r.terminal, "completed");
+  assert.ok(exploitVisits >= 1);
+  // first exploit → validate (retry), then forward again
+  const firstEx = order.indexOf("exploit_lite");
+  assert.ok(firstEx >= 0);
+  assert.ok(
+    order.slice(firstEx + 1).includes("validate"),
+    `exploit_failed must return to validate: ${order.join(",")}`,
+  );
 }
 
 // --- Gate valid choice selects edge ---
@@ -400,6 +490,192 @@ const repoExperts = join(
   const g = await loadHardGraphFile(repoExperts, "hypothesis_cycle");
   const rows = buildProductGraphL1Catalog([g!]);
   assert.ok(rows.some((r) => r.id === "hypothesis_cycle"));
+}
+
+// --- Production finalize: routeProjection from Product state (NO manual inject) ---
+{
+  const g = await loadHardGraphFile(repoExperts, "hypothesis_cycle");
+  assert.ok(g);
+  const taskDir = await mkdtemp(join(tmpdir(), "hg-route-prod-"));
+  await mkdir(taskDir, { recursive: true });
+  const pq = createProcessQualityState();
+  // Seed two complete active hyps — finalize must count them without routeProjection inject
+  pq.hypothesisStore.upsert({
+    statement: "SQLi on login",
+    signal: "error-based reflection",
+    prove_if: "union select returns marker",
+    disprove_if: "parameterized no error",
+  });
+  pq.hypothesisStore.upsert({
+    statement: "XSS in search",
+    signal: "reflected param",
+    prove_if: "alert payload executes",
+    disprove_if: "encoded output",
+  });
+  const plan = new HardGraphPlanStore(g!);
+  const parentRuntime = {
+    task: {
+      taskId: "route-prod",
+      conversationId: "c1",
+      instruction: "assess",
+      workspaceDir: taskDir,
+      expertId: "e1",
+      expertName: "Expert",
+    },
+    workspaceDir: taskDir,
+    taskDir,
+    platform: { send: async () => {} },
+    todo: new TodoStore(),
+    evidence: new EvidenceStore(join(taskDir, "evidence")),
+    findingsDir: join(taskDir, "findings"),
+    goals: new GoalStore(),
+    processFacts: new ProcessFactStore(join(taskDir, "facts")),
+    surfaceLedger: new SurfaceLedgerStore(SurfaceLedgerStore.pathFromTaskDir(taskDir)),
+    lifecycle: {
+      processQuality: pq,
+      hardGraphRun: {
+        plan,
+        usage: createUsageLedgerFromEnv(),
+        panel: new PanelAgentTracker("route-prod", "Expert"),
+        stageId: "enumerate",
+      },
+      toolsInLastSegment: 0,
+      subagentDepth: 0,
+      recentObservations: [],
+      subagentEvidenceCache: [],
+    },
+  } as unknown as ToolRuntime;
+
+  const executor = createHardGraphStageExecutor({
+    config: {
+      workspaceDir: taskDir,
+      piAgentDir: join(taskDir, "pi"),
+      modelId: "test",
+      modelProvider: "openai",
+    } as any,
+    parentRuntime,
+    pack: {
+      id: "pentest",
+      label: "P",
+      system: "t",
+      tools: ["todo", "fact", "hypothesis"],
+    } as any,
+    sessionFactory: async () => ({
+      summary: "enumerate done",
+      structured: {
+        ok: true,
+        summary: "enumerate done",
+        // Gate choice via structured facts (production path)
+        facts: [{ key: "route_choice_key", summary: "to_book" }],
+      },
+      hostInject: {
+        ok: true,
+        summary: "enumerate done",
+        surfaces: [{ location: "http://live/login", kind: "form" }],
+      },
+    }),
+  });
+
+  const enumStage = g!.stages.find((s) => s.id === "enumerate")!;
+  const out = await executor({
+    graphId: g!.id,
+    stage: enumStage,
+    stageIndex: 2,
+    stageAttempt: 1,
+    tools: ["todo", "fact", "hypothesis"],
+    toolProfile: {},
+    handoff: {
+      summary: "recon",
+      surfaces: [{ location: "http://live/login", kind: "form" }],
+      candidates: [],
+      facts: [],
+      deadends: [],
+      completed_stages: ["init", "recon"],
+    },
+  });
+
+  assert.ok(out.routeProjection, "production finalize must emit routeProjection");
+  assert.equal(
+    out.routeProjection!.active_complete_n,
+    2,
+    "active complete hyps from Product store",
+  );
+  assert.equal(out.routeProjection!.active_hyp_n, 2);
+  assert.ok(
+    (out.routeProjection!.surfaces_n ?? 0) >= 1,
+    "surfaces from ledger/handoff",
+  );
+  // Gate key parsed from structured facts — not manual routeChoiceKey inject by test caller
+  assert.equal(out.routeChoiceKey, "to_book");
+
+  // Full runner path: production executor, no manual routeProjection on StageExecutorOutput
+  const order: string[] = [];
+  const prodExec = createHardGraphStageExecutor({
+    config: {
+      workspaceDir: taskDir,
+      piAgentDir: join(taskDir, "pi2"),
+      modelId: "test",
+      modelProvider: "openai",
+    } as any,
+    parentRuntime,
+    pack: {
+      id: "pentest",
+      label: "P",
+      system: "t",
+      tools: ["todo", "fact", "hypothesis", "finding"],
+    } as any,
+    sessionFactory: async ({ stageId }) => {
+      order.push(stageId);
+      if (stageId === "init") {
+        return { summary: "init", structured: { ok: true, summary: "init ok" } };
+      }
+      if (stageId === "recon") {
+        return {
+          summary: "recon",
+          structured: { ok: true, summary: "recon ok" },
+          hostInject: {
+            ok: true,
+            summary: "recon",
+            surfaces: [{ location: "http://live/" }],
+          },
+        };
+      }
+      if (stageId === "enumerate") {
+        // hyps already seeded on pq
+        return { summary: "enum", structured: { ok: true, summary: "enum ok" } };
+      }
+      if (stageId === "validate") {
+        pq.hypothesisStore.commit({
+          id: pq.hypothesisStore.list({ status: "active" })[0]!.id,
+          status: "confirmed",
+        });
+        return {
+          summary: "validate",
+          structured: {
+            ok: true,
+            summary: "validate ok",
+            facts: [{ key: "choice_key", summary: "to_book" }],
+          },
+        };
+      }
+      return { summary: stageId, structured: { ok: true, summary: `${stageId} ok` } };
+    },
+  });
+
+  const run = await runHardGraph({
+    graph: g!,
+    executeStage: prodExec,
+    availableTools: ["todo", "fact", "skill", "write", "hypothesis", "finding"],
+  });
+  assert.equal(run.terminal, "completed", `order=${order.join(",")}`);
+  assert.ok(order.includes("enumerate"));
+  assert.ok(order.includes("validate") || order.includes("book"));
+  // Must reach book without thrashing forever on incomplete zeros
+  assert.ok(order.includes("book"), `prod path must book: ${order.join(",")}`);
+  assert.ok(
+    !order.every((s) => s === "recon" || s === "enumerate" || s === "init"),
+    "must progress past recon/enumerate thrash",
+  );
 }
 
 // silence unused

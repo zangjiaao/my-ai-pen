@@ -296,10 +296,18 @@ export async function loadHardGraphFile(
     // Spec #285 S2: edge table + predicate whitelist; unknown predicate → load fail.
     if (base.edges != null) {
       const edges = parseEngagementEdges(base.edges);
-      if (edges === null) return null;
+      if (edges === null) {
+        console.warn(
+          `[hard-graph] ${id}: edges parse failed (invalid edge array shape)`,
+        );
+        return null;
+      }
       const stageIds = base.stages.map((s) => s.id);
       const v = validateEngagementEdgeTable({ stageIds, edges });
-      if (!v.ok) return null;
+      if (!v.ok) {
+        console.warn(`[hard-graph] ${id}: edge table load fail: ${v.error}`);
+        return null;
+      }
       return { ...base, id: base.id || id, edges };
     }
     // Normalize id to filename intent
@@ -620,6 +628,6 @@ export function unavailableGraphTerminal(graphId: string): {
     message:
       `Expert Graph '${id}' is not available on this product path ` +
       `(Soft scenario mode retired; hard Graph missing or not product-offered). ` +
-      `Use Default free chat or product templates app_assessment / redteam_deep.`,
+      `Use Default free chat or product templates app_assessment / redteam_deep / hypothesis_cycle.`,
   };
 }

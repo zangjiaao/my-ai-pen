@@ -150,7 +150,8 @@ export type StageExecutorOutput = {
   routeChoiceKey?: string;
   /**
    * Spec #285: optional Product-state slices for engagement route projection.
-   * Host/tests supply counts; runner fills stage_pass / hops / budget.
+   * Host/tests supply counts; runner fills hops / budget.
+   * Prefer full snapshot each settle (replace). stage_pass here is route-level work success.
    */
   routeProjection?: Partial<
     Pick<
@@ -162,6 +163,7 @@ export type StageExecutorOutput = {
       | "need_more_signal"
       | "store_candidates_n"
       | "exploit_failed"
+      | "stage_pass"
       | "choice_key"
       | "bookable_work"
     >
@@ -745,11 +747,13 @@ export async function runHardGraph(options: {
           handoffSurfacesN: handoff.surfaces.length,
         });
         passed = true;
-        // Spec #285: absorb projection slices + gate choice for route after settle
+        // Spec #285: each settle is Product-state SOT snapshot (replace, not sticky merge).
+        // One-shot flags (need_more_signal / exploit_failed) must not thrash across stages.
         if (outRouteProjection && typeof outRouteProjection === "object") {
-          projExtras = { ...projExtras, ...outRouteProjection };
+          projExtras = { ...outRouteProjection };
+        } else {
+          projExtras = {};
         }
-        // Prefer explicit surfaces from handoff when executor did not override
         if (projExtras.surfaces_n == null) {
           projExtras = { ...projExtras, surfaces_n: handoff.surfaces.length };
         }
@@ -865,8 +869,16 @@ export async function runHardGraph(options: {
 
     // --- Spec #285 engagement route after settle ---
     const edges = graph.edges || [];
+    // Route stage_pass: Product/executor may set false (e.g. exploit_lite PoC fail).
+    // Structure gate already passed for this settle; do not force true over exploit_failed.
+    const routeStagePass =
+      typeof projExtras.stage_pass === "boolean"
+        ? projExtras.stage_pass
+        : projExtras.exploit_failed === true
+          ? false
+          : true;
     const projection = buildRouteProjection({
-      stage_pass: true,
+      stage_pass: routeStagePass,
       hops_used: hopsUsed,
       hop_budget: routeBudgets.global_hop,
       active_hyp_n: projExtras.active_hyp_n,

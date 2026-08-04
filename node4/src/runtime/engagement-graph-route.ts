@@ -153,6 +153,8 @@ export const ROUTE_PREDICATE_IDS = [
   "surfaces_ge_1",
   "hop_exhausted",
   "active_hyp_ge_2_complete",
+  /** Active hyps exist but fewer than 2 complete — re-enter enumerate (Wave1 intermediate). */
+  "active_hyp_incomplete",
   "active_eq_0_and_open_surface",
   "has_confirmed_unexploited",
   "need_more_signal",
@@ -192,6 +194,8 @@ export function evalRoutePredicate(
       return projection.hops_used >= projection.hop_budget;
     case "active_hyp_ge_2_complete":
       return projection.active_complete_n >= 2;
+    case "active_hyp_incomplete":
+      return projection.active_hyp_n >= 1 && projection.active_complete_n < 2;
     case "active_eq_0_and_open_surface":
       return projection.active_hyp_n === 0 && projection.surfaces_n >= 1;
     case "has_confirmed_unexploited":
@@ -379,36 +383,48 @@ export function routeEngagementGraph(input: {
       return a.idx - b.idx;
     });
 
-  for (const { e } of ordered) {
-    const ek = edgeKey(e.from, e.to);
-    const hot = edgeIsHot(e);
-    if (hot) {
-      const used = counts[ek] || 0;
-      const cap =
-        typeof caps[ek] === "number" ? caps[ek]! : DEFAULT_HOT_BACK_EDGE_CAPS[ek] ?? 3;
-      if (used >= cap) {
-        continue; // cap blocks this edge
+  const tryMatch = (
+    candidates: typeof ordered,
+  ): RouteOk | null => {
+    for (const { e } of candidates) {
+      const ek = edgeKey(e.from, e.to);
+      const hot = edgeIsHot(e);
+      if (hot) {
+        const used = counts[ek] || 0;
+        const cap =
+          typeof caps[ek] === "number"
+            ? caps[ek]!
+            : DEFAULT_HOT_BACK_EDGE_CAPS[ek] ?? 3;
+        if (used >= cap) {
+          continue; // cap blocks this edge
+        }
       }
+      if (!evalRoutePredicate(e.when, proj, e)) continue;
+
+      const key =
+        e.when === "main_choice"
+          ? String(e.choice_key || e.when)
+          : String(e.when);
+
+      return {
+        ok: true,
+        next: e.to,
+        key,
+        reason: `matched:${e.when}${e.choice_key ? `:${e.choice_key}` : ""}→${e.to}`,
+        is_hot_back_edge: hot,
+        edge_key: ek,
+      };
     }
-    if (!evalRoutePredicate(e.when, proj, e)) continue;
+    return null;
+  };
 
-    const key =
-      e.when === "main_choice"
-        ? String(e.choice_key || e.when)
-        : String(e.when);
-
-    return {
-      ok: true,
-      next: e.to,
-      key,
-      reason: `matched:${e.when}${e.choice_key ? `:${e.choice_key}` : ""}→${e.to}`,
-      is_hot_back_edge: hot,
-      edge_key: ek,
-    };
-  }
-
-  // Soft landing when hop exhausted and no edge matched (or no hop_exhausted declared)
-  if (proj.hops_used >= proj.hop_budget) {
+  // G4 / E3: hop budget is a hard pre-route check (industry recursion_limit).
+  // When exhausted, only hop_exhausted edges may fire — never work edges that continue the cycle.
+  const hopExhausted = proj.hops_used >= proj.hop_budget;
+  if (hopExhausted) {
+    const hopOnly = ordered.filter((x) => String(x.e.when).trim() === "hop_exhausted");
+    const hopMatch = tryMatch(hopOnly);
+    if (hopMatch) return hopMatch;
     const bookId = String(input.soft_landing_book_id || "book").trim() || "book";
     return {
       ok: false,
@@ -417,6 +433,10 @@ export function routeEngagementGraph(input: {
       soft_landing_to: bookId,
     };
   }
+
+  // Normal work edges (hop not exhausted). hop_exhausted predicates are false here.
+  const workMatch = tryMatch(ordered);
+  if (workMatch) return workMatch;
 
   // No outgoing edges → treat as terminal (book end)
   if (edgesFrom.length === 0) {
@@ -508,6 +528,172 @@ export function buildRouteProjection(input: {
   };
 }
 
+/** Plain hypothesis row for S4 product-state projection (no store I/O). */
+export type HypothesisRouteRow = {
+  status: string;
+  signal?: string;
+  prove_if?: string;
+  disprove_if?: string;
+  statement?: string;
+};
+
+/** Plain finding row for S4 product-state projection. */
+export type FindingRouteRow = {
+  status: string;
+  title?: string;
+};
+
+function hypFieldsComplete(r: HypothesisRouteRow): boolean {
+  return Boolean(
+    String(r.signal || "").trim() &&
+      String(r.prove_if || "").trim() &&
+      String(r.disprove_if || "").trim(),
+  );
+}
+
+/**
+ * Parse Main Gate choice_key from structured stage output (whitelist validated at route).
+ * Sources (first win): raw.route_choice_key / choice_key; facts key; deadends prefix; notes key=.
+ */
+export function parseRouteChoiceKeyFromStructured(input: {
+  facts?: readonly { key?: string; summary?: string }[];
+  deadends?: readonly string[];
+  notes?: string;
+  raw?: unknown;
+}): string | undefined {
+  const raw = input.raw;
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    const o = raw as Record<string, unknown>;
+    for (const k of ["route_choice_key", "routeChoiceKey", "choice_key", "choiceKey"]) {
+      const v = String(o[k] ?? "").trim();
+      if (v) return v.slice(0, 64);
+    }
+  }
+  for (const f of input.facts || []) {
+    const key = String(f.key || "")
+      .trim()
+      .toLowerCase();
+    if (
+      key === "route_choice_key" ||
+      key === "choice_key" ||
+      key === "route_choice" ||
+      key === "main_choice"
+    ) {
+      const v = String(f.summary || "").trim();
+      if (v) return v.slice(0, 64);
+    }
+  }
+  for (const d of input.deadends || []) {
+    const s = String(d || "").trim();
+    const m = /^(?:route_choice_key|choice_key|main_choice)[=:]\s*(\S+)/i.exec(s);
+    if (m?.[1]) return m[1].slice(0, 64);
+  }
+  const notes = String(input.notes || "").trim();
+  if (notes) {
+    const m = /(?:route_choice_key|choice_key)\s*[=:]\s*(\S+)/i.exec(notes);
+    if (m?.[1]) return m[1].slice(0, 64);
+  }
+  return undefined;
+}
+
+/**
+ * S4 product-state → route slices for stage executor finalize (pure).
+ * Rebuild full snapshot each settle — not sticky partial merges.
+ */
+export function buildEngagementRouteSlicesFromProductState(input: {
+  stageId: string;
+  hypotheses?: readonly HypothesisRouteRow[];
+  findings?: readonly FindingRouteRow[];
+  surfaces_n: number;
+  structured?: {
+    facts?: readonly { key?: string; summary?: string }[];
+    deadends?: readonly string[];
+    notes?: string;
+    raw?: unknown;
+  } | null;
+}): {
+  routeProjection: {
+    active_hyp_n: number;
+    active_complete_n: number;
+    surfaces_n: number;
+    confirmed_unexploited_n: number;
+    need_more_signal: boolean;
+    store_candidates_n: number;
+    exploit_failed: boolean;
+    /** Route-level PoC/work success (not structure-gate alone). */
+    stage_pass: boolean;
+    choice_key?: string | null;
+  };
+  routeChoiceKey?: string;
+} {
+  const stageId = String(input.stageId || "").trim();
+  const hyps = input.hypotheses || [];
+  const findings = input.findings || [];
+
+  let active_hyp_n = 0;
+  let active_complete_n = 0;
+  const confirmed: HypothesisRouteRow[] = [];
+  for (const r of hyps) {
+    const st = String(r.status || "").trim().toLowerCase();
+    if (st === "active") {
+      active_hyp_n++;
+      if (hypFieldsComplete(r)) active_complete_n++;
+    } else if (st === "confirmed") {
+      confirmed.push(r);
+    }
+  }
+
+  const storeTitles = new Set(
+    findings
+      .map((f) => String(f.title || "").toLowerCase().slice(0, 80))
+      .filter(Boolean),
+  );
+  const confirmed_unexploited_n = confirmed.filter((r) => {
+    const stem = String(r.statement || "").toLowerCase().slice(0, 80);
+    return !stem || !storeTitles.has(stem);
+  }).length;
+
+  let store_candidates_n = 0;
+  for (const f of findings) {
+    const st = String(f.status || "").trim().toLowerCase();
+    if (st === "open" || st === "feedback_pending" || st === "feedback_ok") {
+      store_candidates_n++;
+    }
+  }
+
+  const surfaces_n = Math.max(0, Math.floor(input.surfaces_n || 0));
+  const routeChoiceKey = parseRouteChoiceKeyFromStructured(input.structured || {});
+
+  // exploit_lite PoC failure: structure may have passed, but no store pipeline rows
+  const exploit_failed =
+    stageId === "exploit_lite" && store_candidates_n === 0;
+
+  // Route stage_pass: structure settle is separate; for exploit_lite, PoC success only
+  const stage_pass = stageId === "exploit_lite" ? !exploit_failed : true;
+
+  // validate needs more enumerate when still active work and nothing ready to exploit
+  const need_more_signal =
+    stageId === "validate" &&
+    confirmed_unexploited_n === 0 &&
+    active_hyp_n > 0 &&
+    !routeChoiceKey;
+
+  return {
+    routeProjection: {
+      active_hyp_n,
+      active_complete_n,
+      surfaces_n,
+      confirmed_unexploited_n,
+      need_more_signal,
+      store_candidates_n,
+      exploit_failed,
+      stage_pass,
+      choice_key: routeChoiceKey ?? null,
+    },
+    ...(routeChoiceKey ? { routeChoiceKey } : {}),
+  };
+}
+
 /**
  * Minimal Wave1 hypothesis_cycle edge table (Spec §6.1) for fixtures / docs parity.
  * Priority high→low within each from.
@@ -532,6 +718,12 @@ export function hypothesisCycleEdgeTable(): EngagementGraphEdge[] {
       to: "recon",
       priority: 20,
       hot_back_edge: true,
+    },
+    {
+      from: "enumerate",
+      when: "active_hyp_incomplete",
+      to: "enumerate",
+      priority: 15,
     },
     { from: "enumerate", when: "hop_exhausted", to: "book", priority: 5 },
 
@@ -572,6 +764,14 @@ export function hypothesisCycleEdgeTable(): EngagementGraphEdge[] {
     { from: "validate", when: "hop_exhausted", to: "book", priority: 5 },
 
     {
+      // Prefer retry when exploit_failed (priority above structure stage_pass)
+      from: "exploit_lite",
+      when: "exploit_failed_retry_validate",
+      to: "validate",
+      priority: 40,
+      hot_back_edge: true,
+    },
+    {
       from: "exploit_lite",
       when: "stage_pass",
       to: "book",
@@ -582,13 +782,6 @@ export function hypothesisCycleEdgeTable(): EngagementGraphEdge[] {
       when: "has_store_candidates",
       to: "book",
       priority: 20,
-    },
-    {
-      from: "exploit_lite",
-      when: "exploit_failed_retry_validate",
-      to: "validate",
-      priority: 15,
-      hot_back_edge: true,
     },
     // book: no outgoing edges → terminal
   ];

@@ -29,7 +29,7 @@ This Spec defines:
 | **G1** | **Host owns topology.** Edges and legal successors are declared in the Graph definition. Main/Agent **never invents** edges or free `goto`. |
 | **G2** | **Route is deterministic.** After a node settles, runner evaluates `route(projection) → key → next` where `next ∈ declared_successors[current]`. No NLP of chat for routing. |
 | **G3** | **A+B routing.** Default: pure host predicates. Optional **Gate**: Main submits `choice_key` from a **whitelist** declared on the node (industry: path_map key / ADK `REFINE\|DONE`). Wave1 Gate is **Agent-only** (no HITL). |
-| **G4** | **Budgets (industry C).** Global hop cap (default **25** node entries) + per hot back-edge cap (default **≤3**). Stage `max_retries` remains **separate** (same-node attempt). Exhaustion → **soft landing** (prefer `book` if bookable work exists; else blocked + booking-tail/close-out pattern). Not a bare process crash as UX. |
+| **G4** | **Budgets (industry C).** Global hop cap (default **25** node entries) + per hot back-edge cap (default **≤3**). Stage `max_retries` remains **separate** (same-node attempt). Exhaustion is a **hard pre-route check**: only `hop_exhausted` edges may fire (else soft-land to `book`/blocked) — work edges must not continue the cycle. Soft landing prefers `book` if bookable work exists; else blocked + booking-tail/close-out pattern. Not a bare process crash as UX. |
 | **G5** | **Two-layer fan-out.** Task-layer edges only between coarse nodes; **packages/subagents stay inside nodes** (industry Send/Parallel workers). Do not explode Task graph into per-vuln-class nodes in Wave1. |
 | **G6** | **State projection.** Route inputs are a **small typed projection** of Product state (surfaces, hypothesis queue summary, store feedback/booked, gate outcomes, hop counters, pending choice). Runner-owned counters. Optional `route-checkpoint` file is **audit only**, not SOT. |
 | **G7** | **Wave1 dual graphs.** `app_assessment` **frozen** (no topology/process change). New `hypothesis_cycle` uses full edge table. Wave2 may add **conservative** back-edges to assessment. |
@@ -106,6 +106,7 @@ Priority high→low within each `from` (LangGraph-style single path_fn):
 | recon | `hop_exhausted` | book |
 | enumerate | `active_hyp_ge_2_complete` | validate |
 | enumerate | `active_eq_0_and_open_surface` | recon |
+| enumerate | `active_hyp_incomplete` (Wave1: active≥1 and complete&lt;2) | enumerate |
 | enumerate | `hop_exhausted` | book |
 | validate | `has_confirmed_unexploited` | exploit_lite |
 | validate | `need_more_signal` | enumerate |
