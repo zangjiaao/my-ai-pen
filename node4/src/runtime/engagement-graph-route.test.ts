@@ -14,6 +14,7 @@ import {
   HYPOTHESIS_CYCLE_STAGE_IDS,
   isKnownRoutePredicateId,
   parseEngagementEdges,
+  parseExploitFailedFromStructured,
   parseRouteChoiceKeyFromStructured,
   routeEngagementGraph,
   validateEngagementEdgeTable,
@@ -374,14 +375,47 @@ const stageIds = [...HYPOTHESIS_CYCLE_STAGE_IDS];
   assert.equal(slices.routeProjection.active_hyp_n, 2);
   assert.equal(slices.routeProjection.active_complete_n, 2);
 
-  const exploit = buildEngagementRouteSlicesFromProductState({
+  // Empty store alone is NOT exploit_failed — honest deadend keeps stage_pass
+  const exploitEmpty = buildEngagementRouteSlicesFromProductState({
     stageId: "exploit_lite",
     surfaces_n: 1,
     hypotheses: [],
     findings: [],
+    structured: { deadends: ["no poc this turn"] },
   });
-  assert.equal(exploit.routeProjection.exploit_failed, true);
-  assert.equal(exploit.routeProjection.stage_pass, false);
+  assert.equal(exploitEmpty.routeProjection.exploit_failed, false);
+  assert.equal(exploitEmpty.routeProjection.stage_pass, true);
+  assert.equal(exploitEmpty.routeProjection.store_candidates_n, 0);
+
+  // Explicit signal → exploit_failed (independent of store)
+  const exploitRetry = buildEngagementRouteSlicesFromProductState({
+    stageId: "exploit_lite",
+    surfaces_n: 1,
+    hypotheses: [],
+    findings: [],
+    structured: { deadends: ["exploit_failed=true"] },
+  });
+  assert.equal(exploitRetry.routeProjection.exploit_failed, true);
+  assert.equal(exploitRetry.routeProjection.stage_pass, true);
+
+  // Honest empty → book via stage_pass (not validate thrash)
+  const honestBook = routeEngagementGraph({
+    current: "exploit_lite",
+    edges,
+    projection: baseProj({
+      stage_pass: true,
+      exploit_failed: false,
+      store_candidates_n: 0,
+    }),
+  });
+  assert.equal(honestBook.ok, true);
+  if (honestBook.ok) {
+    assert.equal(honestBook.next, "book");
+    assert.equal(honestBook.key, "stage_pass");
+  }
+
+  assert.equal(parseExploitFailedFromStructured({ deadends: ["exploit_failed"] }), true);
+  assert.equal(parseExploitFailedFromStructured({ deadends: ["no poc"] }), false);
 
   const choice = parseRouteChoiceKeyFromStructured({
     facts: [{ key: "route_choice_key", summary: "to_book" }],

@@ -596,9 +596,66 @@ export function parseRouteChoiceKeyFromStructured(input: {
   return undefined;
 }
 
+function truthyFlag(v: unknown): boolean {
+  if (v === true) return true;
+  const s = String(v ?? "")
+    .trim()
+    .toLowerCase();
+  return s === "true" || s === "1" || s === "yes" || s === "retry";
+}
+
+/**
+ * Parse explicit exploit_failed retry intent from structured Main/host output.
+ * Empty Finding Store alone is NOT enough (honest deadends may still stage_pass → book).
+ * Sources: raw.exploit_failed; facts key; deadends; notes.
+ */
+export function parseExploitFailedFromStructured(input: {
+  facts?: readonly { key?: string; summary?: string }[];
+  deadends?: readonly string[];
+  notes?: string;
+  raw?: unknown;
+}): boolean {
+  const raw = input.raw;
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    const o = raw as Record<string, unknown>;
+    if (truthyFlag(o.exploit_failed) || truthyFlag(o.exploitFailed)) return true;
+  }
+  for (const f of input.facts || []) {
+    const key = String(f.key || "")
+      .trim()
+      .toLowerCase();
+    if (key === "exploit_failed" || key === "exploit_failed_retry_validate") {
+      const summary = String(f.summary || "").trim();
+      // key alone with empty/true-ish summary counts as signal
+      if (!summary || truthyFlag(summary)) return true;
+    }
+  }
+  for (const d of input.deadends || []) {
+    const s = String(d || "").trim().toLowerCase();
+    if (!s) continue;
+    if (
+      s === "exploit_failed" ||
+      s === "exploit_failed_retry_validate" ||
+      /^exploit_failed[=:]\s*(true|1|yes|retry)?\s*$/i.test(s) ||
+      s.startsWith("exploit_failed_retry")
+    ) {
+      return true;
+    }
+  }
+  const notes = String(input.notes || "").trim();
+  if (notes && /exploit_failed\s*[=:]\s*(true|1|yes|retry)/i.test(notes)) {
+    return true;
+  }
+  return false;
+}
+
 /**
  * S4 product-state → route slices for stage executor finalize (pure).
  * Rebuild full snapshot each settle — not sticky partial merges.
+ *
+ * exploit_failed is **explicit host/agent signal only** (not empty store).
+ * stage_pass defaults true after structure settle so honest deadends can book
+ * via stage_pass / has_store_candidates independently (Spec §6.1).
  */
 export function buildEngagementRouteSlicesFromProductState(input: {
   stageId: string;
@@ -620,7 +677,7 @@ export function buildEngagementRouteSlicesFromProductState(input: {
     need_more_signal: boolean;
     store_candidates_n: number;
     exploit_failed: boolean;
-    /** Route-level PoC/work success (not structure-gate alone). */
+    /** Structure settle success for route (honest empty may still be true). */
     stage_pass: boolean;
     choice_key?: string | null;
   };
@@ -662,14 +719,16 @@ export function buildEngagementRouteSlicesFromProductState(input: {
   }
 
   const surfaces_n = Math.max(0, Math.floor(input.surfaces_n || 0));
-  const routeChoiceKey = parseRouteChoiceKeyFromStructured(input.structured || {});
+  const structured = input.structured || {};
+  const routeChoiceKey = parseRouteChoiceKeyFromStructured(structured);
 
-  // exploit_lite PoC failure: structure may have passed, but no store pipeline rows
+  // Explicit retry intent only — never invent from empty store (honest deadend → book)
   const exploit_failed =
-    stageId === "exploit_lite" && store_candidates_n === 0;
+    stageId === "exploit_lite" && parseExploitFailedFromStructured(structured);
 
-  // Route stage_pass: structure settle is separate; for exploit_lite, PoC success only
-  const stage_pass = stageId === "exploit_lite" ? !exploit_failed : true;
+  // Structure settle is already required before route; keep stage_pass true so
+  // stage_pass / has_store_candidates remain independent book paths (§6.1).
+  const stage_pass = true;
 
   // validate needs more enumerate when still active work and nothing ready to exploit
   const need_more_signal =

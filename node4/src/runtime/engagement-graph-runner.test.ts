@@ -370,7 +370,7 @@ const repoExperts = join(
   assert.equal(order[order.length - 1], "book");
 }
 
-// --- exploit_failed_retry_validate reachable with stage_pass true ---
+// --- exploit_failed_retry_validate only on explicit signal (not empty store) ---
 {
   const g = await loadHardGraphFile(repoExperts, "hypothesis_cycle");
   assert.ok(g);
@@ -404,6 +404,7 @@ const repoExperts = join(
     if (input.stage.id === "exploit_lite") {
       exploitVisits += 1;
       if (exploitVisits === 1) {
+        // Explicit host signal (priority 40), not empty-store invent
         return {
           structured: { ok: true, summary: "exploit miss" },
           routeProjection: {
@@ -431,12 +432,75 @@ const repoExperts = join(
   });
   assert.equal(r.terminal, "completed");
   assert.ok(exploitVisits >= 1);
-  // first exploit → validate (retry), then forward again
   const firstEx = order.indexOf("exploit_lite");
   assert.ok(firstEx >= 0);
   assert.ok(
     order.slice(firstEx + 1).includes("validate"),
-    `exploit_failed must return to validate: ${order.join(",")}`,
+    `explicit exploit_failed must return to validate: ${order.join(",")}`,
+  );
+}
+
+// --- Honest empty exploit_lite → book (no validate thrash) ---
+{
+  const g = await loadHardGraphFile(repoExperts, "hypothesis_cycle");
+  assert.ok(g);
+  const order: string[] = [];
+  const exec: StageExecutor = async (input) => {
+    order.push(input.stage.id);
+    if (input.stage.id === "init") return { structured: { ok: true, summary: "i" } };
+    if (input.stage.id === "recon") {
+      return {
+        structured: {
+          ok: true,
+          summary: "r",
+          surfaces: [{ location: "http://t/" }],
+        },
+        routeProjection: { surfaces_n: 1 },
+      };
+    }
+    if (input.stage.id === "enumerate") {
+      return {
+        structured: { ok: true, summary: "e" },
+        routeProjection: { active_complete_n: 2, active_hyp_n: 2 },
+      };
+    }
+    if (input.stage.id === "validate") {
+      return {
+        structured: { ok: true, summary: "v" },
+        routeProjection: { confirmed_unexploited_n: 1 },
+      };
+    }
+    if (input.stage.id === "exploit_lite") {
+      // Empty store + no exploit_failed signal → stage_pass → book
+      return {
+        structured: {
+          ok: true,
+          summary: "honest deadend",
+          deadends: ["no app-layer poc"],
+        },
+        routeProjection: {
+          stage_pass: true,
+          exploit_failed: false,
+          store_candidates_n: 0,
+        },
+      };
+    }
+    return { structured: { ok: true, summary: "b" } };
+  };
+  const r = await runHardGraph({
+    graph: g!,
+    executeStage: exec,
+    availableTools: ["todo", "read", "finding", "hypothesis"],
+  });
+  assert.equal(r.terminal, "completed");
+  assert.ok(order.includes("exploit_lite"));
+  assert.ok(order.includes("book"));
+  const ex = order.indexOf("exploit_lite");
+  const book = order.indexOf("book");
+  assert.ok(book > ex);
+  assert.ok(
+    !order.slice(ex + 1, book).includes("validate"),
+    `honest empty must not thrash validate: ${order.join(",")}`,
   );
 }
 
@@ -676,6 +740,130 @@ const repoExperts = join(
     !order.every((s) => s === "recon" || s === "enumerate" || s === "init"),
     "must progress past recon/enumerate thrash",
   );
+}
+
+// --- Production finalize: empty store + honest deadend ≠ exploit_failed ---
+{
+  const g = await loadHardGraphFile(repoExperts, "hypothesis_cycle");
+  assert.ok(g);
+  const taskDir = await mkdtemp(join(tmpdir(), "hg-exploit-honest-"));
+  await mkdir(taskDir, { recursive: true });
+  const pq = createProcessQualityState();
+  const plan = new HardGraphPlanStore(g!);
+  const parentRuntime = {
+    task: {
+      taskId: "ex-honest",
+      conversationId: "c1",
+      instruction: "assess",
+      workspaceDir: taskDir,
+      expertId: "e1",
+      expertName: "Expert",
+    },
+    workspaceDir: taskDir,
+    taskDir,
+    platform: { send: async () => {} },
+    todo: new TodoStore(),
+    evidence: new EvidenceStore(join(taskDir, "evidence")),
+    findingsDir: join(taskDir, "findings"),
+    goals: new GoalStore(),
+    processFacts: new ProcessFactStore(join(taskDir, "facts")),
+    surfaceLedger: new SurfaceLedgerStore(SurfaceLedgerStore.pathFromTaskDir(taskDir)),
+    lifecycle: {
+      processQuality: pq,
+      hardGraphRun: {
+        plan,
+        usage: createUsageLedgerFromEnv(),
+        panel: new PanelAgentTracker("ex-honest", "Expert"),
+        stageId: "exploit_lite",
+      },
+      toolsInLastSegment: 0,
+      subagentDepth: 0,
+      recentObservations: [],
+      subagentEvidenceCache: [],
+    },
+  } as unknown as ToolRuntime;
+
+  const exploitStage = g!.stages.find((s) => s.id === "exploit_lite")!;
+  const honestExec = createHardGraphStageExecutor({
+    config: {
+      workspaceDir: taskDir,
+      piAgentDir: join(taskDir, "pi"),
+      modelId: "test",
+      modelProvider: "openai",
+    } as any,
+    parentRuntime,
+    pack: { id: "pentest", label: "P", system: "t", tools: ["todo"] } as any,
+    sessionFactory: async () => ({
+      summary: "honest deadend",
+      structured: {
+        ok: true,
+        summary: "honest deadend",
+        deadends: ["no app-layer poc available"],
+      },
+    }),
+  });
+  const honestOut = await honestExec({
+    graphId: g!.id,
+    stage: exploitStage,
+    stageIndex: 4,
+    stageAttempt: 1,
+    tools: ["todo"],
+    toolProfile: {},
+    handoff: {
+      summary: "prior",
+      surfaces: [{ location: "http://t/" }],
+      candidates: [],
+      facts: [],
+      deadends: [],
+      completed_stages: ["init", "recon", "enumerate", "validate"],
+    },
+  });
+  assert.ok(honestOut.routeProjection);
+  assert.equal(
+    honestOut.routeProjection!.exploit_failed,
+    false,
+    "empty store must not invent exploit_failed",
+  );
+  assert.equal(honestOut.routeProjection!.stage_pass, true);
+  assert.equal(honestOut.routeProjection!.store_candidates_n, 0);
+
+  // Explicit deadend signal → exploit_failed
+  const retryExec = createHardGraphStageExecutor({
+    config: {
+      workspaceDir: taskDir,
+      piAgentDir: join(taskDir, "pi-r"),
+      modelId: "test",
+      modelProvider: "openai",
+    } as any,
+    parentRuntime,
+    pack: { id: "pentest", label: "P", system: "t", tools: ["todo"] } as any,
+    sessionFactory: async () => ({
+      summary: "retry",
+      structured: {
+        ok: true,
+        summary: "retry validate",
+        deadends: ["exploit_failed=true"],
+      },
+    }),
+  });
+  const retryOut = await retryExec({
+    graphId: g!.id,
+    stage: exploitStage,
+    stageIndex: 4,
+    stageAttempt: 1,
+    tools: ["todo"],
+    toolProfile: {},
+    handoff: {
+      summary: "prior",
+      surfaces: [{ location: "http://t/" }],
+      candidates: [],
+      facts: [],
+      deadends: [],
+      completed_stages: ["init", "recon", "enumerate", "validate"],
+    },
+  });
+  assert.equal(retryOut.routeProjection!.exploit_failed, true);
+  assert.equal(retryOut.routeProjection!.stage_pass, true);
 }
 
 // silence unused

@@ -869,14 +869,11 @@ export async function runHardGraph(options: {
 
     // --- Spec #285 engagement route after settle ---
     const edges = graph.edges || [];
-    // Route stage_pass: Product/executor may set false (e.g. exploit_lite PoC fail).
-    // Structure gate already passed for this settle; do not force true over exploit_failed.
+    // Route stage_pass: structure settle already passed. Prefer executor snapshot.
+    // exploit_failed is independent (priority 40 retry edge); do not force stage_pass false
+    // solely because exploit_failed is set — Spec §6.1 keeps stage_pass OR store → book.
     const routeStagePass =
-      typeof projExtras.stage_pass === "boolean"
-        ? projExtras.stage_pass
-        : projExtras.exploit_failed === true
-          ? false
-          : true;
+      typeof projExtras.stage_pass === "boolean" ? projExtras.stage_pass : true;
     const projection = buildRouteProjection({
       stage_pass: routeStagePass,
       hops_used: hopsUsed,
