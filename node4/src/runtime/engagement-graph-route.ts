@@ -160,11 +160,20 @@ export const ROUTE_PREDICATE_IDS = [
   "need_more_signal",
   "has_store_candidates",
   "exploit_failed_retry_validate",
+  /**
+   * Recon settled with zero surfaces and zero active hyps — soft-land to book (G4 spirit).
+   * Declared edge only; not invented from free-text.
+   */
+  "empty_recon",
   /** Gate membership: edge.choice_key must equal projection.choice_key. */
   "main_choice",
-  /** Always true (terminal / explicit fallthrough — rare). */
+  /**
+   * Always true — fixture / priority tests only; product graphs should use real predicates.
+   */
   "always",
-  /** Always false (test / disabled). */
+  /**
+   * Always false — fixture / disabled edge tests only.
+   */
   "never",
 ] as const;
 
@@ -206,6 +215,8 @@ export function evalRoutePredicate(
       return projection.store_candidates_n >= 1;
     case "exploit_failed_retry_validate":
       return projection.exploit_failed === true;
+    case "empty_recon":
+      return projection.surfaces_n === 0 && projection.active_hyp_n === 0;
     case "main_choice": {
       const want = String(edge?.choice_key || "").trim();
       const got = String(projection.choice_key || "").trim();
@@ -362,17 +373,6 @@ export function routeEngagementGraph(input: {
   const proj = input.projection;
   const enforceGate = input.enforce_gate_whitelist !== false;
 
-  // Gate: non-empty choice_key must be declared on this node when gate edges exist
-  const choice = String(proj.choice_key || "").trim();
-  const gateKeys = gateChoiceKeysForNode(input.edges, current);
-  if (enforceGate && choice && gateKeys.length > 0 && !gateKeys.includes(choice)) {
-    return {
-      ok: false,
-      reason: `invalid_choice_key:${choice}`,
-      code: "invalid_choice_key",
-    };
-  }
-
   // Sort by priority desc (stable among equal priority by original order)
   const ordered = edgesFrom
     .map((e, idx) => ({ e, idx }))
@@ -419,6 +419,7 @@ export function routeEngagementGraph(input: {
   };
 
   // G4 / E3: hop budget is a hard pre-route check (industry recursion_limit).
+  // Runs BEFORE invalid choice_key so exhausted hops still soft-land (G4 partial residual).
   // When exhausted, only hop_exhausted edges may fire — never work edges that continue the cycle.
   const hopExhausted = proj.hops_used >= proj.hop_budget;
   if (hopExhausted) {
@@ -431,6 +432,18 @@ export function routeEngagementGraph(input: {
       reason: "hop_exhausted_soft_landing",
       code: "hop_soft_landing",
       soft_landing_to: bookId,
+    };
+  }
+
+  // Gate: non-empty choice_key must be declared on this node when gate edges exist.
+  // Only after hop pre-check so invalid choice cannot block hop soft-landing.
+  const choice = String(proj.choice_key || "").trim();
+  const gateKeys = gateChoiceKeysForNode(input.edges, current);
+  if (enforceGate && choice && gateKeys.length > 0 && !gateKeys.includes(choice)) {
+    return {
+      ok: false,
+      reason: `invalid_choice_key:${choice}`,
+      code: "invalid_choice_key",
     };
   }
 
@@ -551,100 +564,138 @@ function hypFieldsComplete(r: HypothesisRouteRow): boolean {
   );
 }
 
-/**
- * Parse Main Gate choice_key from structured stage output (whitelist validated at route).
- * Sources (first win): raw.route_choice_key / choice_key; facts key; deadends prefix; notes key=.
- */
-export function parseRouteChoiceKeyFromStructured(input: {
-  facts?: readonly { key?: string; summary?: string }[];
-  deadends?: readonly string[];
-  notes?: string;
-  raw?: unknown;
-}): string | undefined {
-  const raw = input.raw;
-  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-    const o = raw as Record<string, unknown>;
-    for (const k of ["route_choice_key", "routeChoiceKey", "choice_key", "choiceKey"]) {
-      const v = String(o[k] ?? "").trim();
-      if (v) return v.slice(0, 64);
-    }
-  }
-  for (const f of input.facts || []) {
-    const key = String(f.key || "")
-      .trim()
-      .toLowerCase();
-    if (
-      key === "route_choice_key" ||
-      key === "choice_key" ||
-      key === "route_choice" ||
-      key === "main_choice"
-    ) {
-      const v = String(f.summary || "").trim();
-      if (v) return v.slice(0, 64);
-    }
-  }
-  for (const d of input.deadends || []) {
-    const s = String(d || "").trim();
-    const m = /^(?:route_choice_key|choice_key|main_choice)[=:]\s*(\S+)/i.exec(s);
-    if (m?.[1]) return m[1].slice(0, 64);
-  }
-  const notes = String(input.notes || "").trim();
-  if (notes) {
-    const m = /(?:route_choice_key|choice_key)\s*[=:]\s*(\S+)/i.exec(notes);
-    if (m?.[1]) return m[1].slice(0, 64);
-  }
-  return undefined;
-}
+/** Choice-key field names accepted on structured / raw objects (G3 whitelist aliases). */
+const CHOICE_KEY_FIELDS = [
+  "route_choice_key",
+  "routeChoiceKey",
+  "choice_key",
+  "choiceKey",
+] as const;
 
 function truthyFlag(v: unknown): boolean {
   if (v === true) return true;
-  const s = String(v ?? "")
+  if (v === false || v == null) return false;
+  const s = String(v)
     .trim()
     .toLowerCase();
   return s === "true" || s === "1" || s === "yes" || s === "retry";
 }
 
 /**
- * Parse explicit exploit_failed retry intent from structured Main/host output.
- * Empty Finding Store alone is NOT enough (honest deadends may still stage_pass → book).
- * Sources: raw.exploit_failed; facts key; deadends; notes.
+ * Read a string field from a plain object (first matching key wins).
+ */
+function readStringField(
+  o: Record<string, unknown>,
+  keys: readonly string[],
+): string | undefined {
+  for (const k of keys) {
+    const v = String(o[k] ?? "").trim();
+    if (v) return v.slice(0, 64);
+  }
+  return undefined;
+}
+
+/**
+ * Collect plain objects that may carry typed routing fields.
+ * Includes input bag, raw payload, nested structured/gate/route — never free-text arrays.
+ */
+function structuredRouteObjects(input: {
+  raw?: unknown;
+  [key: string]: unknown;
+}): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  const seen = new Set<unknown>();
+  const push = (v: unknown) => {
+    if (!v || typeof v !== "object" || Array.isArray(v)) return;
+    if (seen.has(v)) return;
+    seen.add(v);
+    out.push(v as Record<string, unknown>);
+  };
+  push(input);
+  push(input.raw);
+  // Walk one level of common nests on input + raw
+  for (const base of [...out]) {
+    for (const nest of ["structured", "gate", "route"] as const) {
+      push(base[nest]);
+    }
+  }
+  return out;
+}
+
+/**
+ * Parse Main Gate choice_key from **typed structured fields only** (Spec G2/G3).
+ * Accepts top-level / raw / nested gate|route objects:
+ *   route_choice_key | choice_key | routeChoiceKey | choiceKey
+ * Does **not** scrape facts/deadends/notes free-text (no NLP / regex routing).
+ * Whitelist membership is enforced later by routeEngagementGraph.
+ */
+export function parseRouteChoiceKeyFromStructured(input: {
+  facts?: readonly { key?: string; summary?: string }[];
+  deadends?: readonly string[];
+  notes?: string;
+  raw?: unknown;
+  route_choice_key?: unknown;
+  routeChoiceKey?: unknown;
+  choice_key?: unknown;
+  choiceKey?: unknown;
+  gate?: unknown;
+  route?: unknown;
+}): string | undefined {
+  // facts / deadends / notes intentionally ignored for routing (G2)
+  void input.facts;
+  void input.deadends;
+  void input.notes;
+  for (const o of structuredRouteObjects(input)) {
+    const v = readStringField(o, CHOICE_KEY_FIELDS);
+    if (v) return v;
+  }
+  return undefined;
+}
+
+/**
+ * Parse explicit exploit_failed retry intent from **typed structured fields only**.
+ * Empty Finding Store / free-text deadends alone are NOT enough
+ * (honest deadends may still stage_pass → book).
+ * Sources: top-level / raw.exploit_failed | exploitFailed (boolean or true/false string).
  */
 export function parseExploitFailedFromStructured(input: {
   facts?: readonly { key?: string; summary?: string }[];
   deadends?: readonly string[];
   notes?: string;
   raw?: unknown;
+  exploit_failed?: unknown;
+  exploitFailed?: unknown;
+  gate?: unknown;
+  route?: unknown;
 }): boolean {
-  const raw = input.raw;
-  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-    const o = raw as Record<string, unknown>;
+  void input.facts;
+  void input.deadends;
+  void input.notes;
+  for (const o of structuredRouteObjects(input)) {
     if (truthyFlag(o.exploit_failed) || truthyFlag(o.exploitFailed)) return true;
   }
-  for (const f of input.facts || []) {
-    const key = String(f.key || "")
-      .trim()
-      .toLowerCase();
-    if (key === "exploit_failed" || key === "exploit_failed_retry_validate") {
-      const summary = String(f.summary || "").trim();
-      // key alone with empty/true-ish summary counts as signal
-      if (!summary || truthyFlag(summary)) return true;
-    }
-  }
-  for (const d of input.deadends || []) {
-    const s = String(d || "").trim().toLowerCase();
-    if (!s) continue;
-    if (
-      s === "exploit_failed" ||
-      s === "exploit_failed_retry_validate" ||
-      /^exploit_failed[=:]\s*(true|1|yes|retry)?\s*$/i.test(s) ||
-      s.startsWith("exploit_failed_retry")
-    ) {
-      return true;
-    }
-  }
-  const notes = String(input.notes || "").trim();
-  if (notes && /exploit_failed\s*[=:]\s*(true|1|yes|retry)/i.test(notes)) {
-    return true;
+  return false;
+}
+
+/**
+ * Parse explicit need_more_signal from **typed structured fields only**.
+ * Host must not invent from stage-id + hyp counts (Standards harness / Spec G2).
+ */
+export function parseNeedMoreSignalFromStructured(input: {
+  facts?: readonly { key?: string; summary?: string }[];
+  deadends?: readonly string[];
+  notes?: string;
+  raw?: unknown;
+  need_more_signal?: unknown;
+  needMoreSignal?: unknown;
+  gate?: unknown;
+  route?: unknown;
+}): boolean {
+  void input.facts;
+  void input.deadends;
+  void input.notes;
+  for (const o of structuredRouteObjects(input)) {
+    if (truthyFlag(o.need_more_signal) || truthyFlag(o.needMoreSignal)) return true;
   }
   return false;
 }
@@ -653,7 +704,9 @@ export function parseExploitFailedFromStructured(input: {
  * S4 product-state → route slices for stage executor finalize (pure).
  * Rebuild full snapshot each settle — not sticky partial merges.
  *
- * exploit_failed is **explicit host/agent signal only** (not empty store).
+ * Routing flags (choice_key / exploit_failed / need_more_signal) are
+ * **explicit typed structured fields only** — never invented from free-text
+ * facts/deadends/notes or from stage-id + hyp counts (G2/G3).
  * stage_pass defaults true after structure settle so honest deadends can book
  * via stage_pass / has_store_candidates independently (Spec §6.1).
  */
@@ -667,6 +720,16 @@ export function buildEngagementRouteSlicesFromProductState(input: {
     deadends?: readonly string[];
     notes?: string;
     raw?: unknown;
+    route_choice_key?: unknown;
+    routeChoiceKey?: unknown;
+    choice_key?: unknown;
+    choiceKey?: unknown;
+    exploit_failed?: unknown;
+    exploitFailed?: unknown;
+    need_more_signal?: unknown;
+    needMoreSignal?: unknown;
+    gate?: unknown;
+    route?: unknown;
   } | null;
 }): {
   routeProjection: {
@@ -700,6 +763,8 @@ export function buildEngagementRouteSlicesFromProductState(input: {
     }
   }
 
+  // Product-state projection (G6): confirmed hyps not yet represented in Finding Store.
+  // Exact title stem match against store rows only — not free-text chat routing.
   const storeTitles = new Set(
     findings
       .map((f) => String(f.title || "").toLowerCase().slice(0, 80))
@@ -730,12 +795,8 @@ export function buildEngagementRouteSlicesFromProductState(input: {
   // stage_pass / has_store_candidates remain independent book paths (§6.1).
   const stage_pass = true;
 
-  // validate needs more enumerate when still active work and nothing ready to exploit
-  const need_more_signal =
-    stageId === "validate" &&
-    confirmed_unexploited_n === 0 &&
-    active_hyp_n > 0 &&
-    !routeChoiceKey;
+  // Explicit host/agent signal only — do not invent from stage-id + hyp counts.
+  const need_more_signal = parseNeedMoreSignalFromStructured(structured);
 
   return {
     routeProjection: {
@@ -763,6 +824,8 @@ export function hypothesisCycleEdgeTable(): EngagementGraphEdge[] {
 
     { from: "recon", when: "active_hyp_ge_1", to: "enumerate", priority: 30 },
     { from: "recon", when: "surfaces_ge_1", to: "enumerate", priority: 20 },
+    /** Empty recon soft-land: no surfaces and no active hyps → book (G4 spirit). */
+    { from: "recon", when: "empty_recon", to: "book", priority: 10 },
     { from: "recon", when: "hop_exhausted", to: "book", priority: 5 },
 
     {

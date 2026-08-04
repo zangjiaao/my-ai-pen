@@ -522,6 +522,12 @@ export function createHardGraphStageExecutor(options: {
       };
       /** Explicit host-trusted inject only — deposited to Store/ledger. Not narrative. */
       hostInject?: SubagentStructuredResult;
+      /**
+       * Spec #285 G2/G3: original stage structured payload for typed route signals only
+       * (route_choice_key / choice_key / exploit_failed / need_more_signal).
+       * Passed as raw to S4 — never scraped from free-text facts/deadends/notes.
+       */
+      routeStructured?: unknown;
       child?: ToolRuntime;
       seed?: StageContinuitySeed;
       /** Stage workdir for optional settlement audit (not gate input). */
@@ -670,6 +676,12 @@ export function createHardGraphStageExecutor(options: {
               typeof surfaceSummary?.probed === "number"
             ? (surfaceSummary.open || 0) + (surfaceSummary.probed || 0)
             : structuredFinal.surfaces?.length || 0;
+      // Prefer original stage structured payload for typed routing fields (G2/G3).
+      // Fall back to settlement raw only — do not invent signals from facts/deadends prose.
+      const routeRaw =
+        opts.routeStructured !== undefined && opts.routeStructured !== null
+          ? opts.routeStructured
+          : structuredFinal.raw;
       const routeSlices = buildEngagementRouteSlicesFromProductState({
         stageId: input.stage.id,
         hypotheses: pq.hypothesisStore.snapshot().map((r) => ({
@@ -689,10 +701,11 @@ export function createHardGraphStageExecutor(options: {
           input.handoff?.surfaces?.length || 0,
         ),
         structured: {
+          // facts/deadends/notes retained for non-routing consumers; S4 parsers ignore them
           facts: structuredFinal.facts,
           deadends: structuredFinal.deadends,
           notes: structuredFinal.notes,
-          raw: structuredFinal.raw,
+          raw: routeRaw,
         },
       });
 
@@ -735,6 +748,7 @@ export function createHardGraphStageExecutor(options: {
         });
         // Narrative from factory session only; hostInject is explicit deposit (tests).
         // Never launder agent structured into Store/ledger.
+        // routeStructured keeps typed G2/G3 routing fields (choice_key / exploit_failed / …).
         const narrativeBody = out.structured
           ? normalizeSubagentResult(out.structured)
           : undefined;
@@ -755,6 +769,7 @@ export function createHardGraphStageExecutor(options: {
               ? { summary: out.summary }
               : undefined,
           hostInject,
+          routeStructured: out.structured,
           workDir,
         });
       }

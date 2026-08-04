@@ -629,8 +629,8 @@ const repoExperts = join(
       structured: {
         ok: true,
         summary: "enumerate done",
-        // Gate choice via structured facts (production path)
-        facts: [{ key: "route_choice_key", summary: "to_book" }],
+        // Gate choice via typed structured field (production path; raw preserves payload)
+        route_choice_key: "to_book",
       },
       hostInject: {
         ok: true,
@@ -669,7 +669,7 @@ const repoExperts = join(
     (out.routeProjection!.surfaces_n ?? 0) >= 1,
     "surfaces from ledger/handoff",
   );
-  // Gate key parsed from structured facts — not manual routeChoiceKey inject by test caller
+  // Gate key from typed structured field on raw — not manual routeChoiceKey inject
   assert.equal(out.routeChoiceKey, "to_book");
 
   // Full runner path: production executor, no manual routeProjection on StageExecutorOutput
@@ -718,7 +718,7 @@ const repoExperts = join(
           structured: {
             ok: true,
             summary: "validate ok",
-            facts: [{ key: "choice_key", summary: "to_book" }],
+            choice_key: "to_book",
           },
         };
       }
@@ -827,7 +827,48 @@ const repoExperts = join(
   assert.equal(honestOut.routeProjection!.stage_pass, true);
   assert.equal(honestOut.routeProjection!.store_candidates_n, 0);
 
-  // Explicit deadend signal → exploit_failed
+  // Free-text deadend must NOT invent exploit_failed on production finalize
+  const proseExec = createHardGraphStageExecutor({
+    config: {
+      workspaceDir: taskDir,
+      piAgentDir: join(taskDir, "pi-prose"),
+      modelId: "test",
+      modelProvider: "openai",
+    } as any,
+    parentRuntime,
+    pack: { id: "pentest", label: "P", system: "t", tools: ["todo"] } as any,
+    sessionFactory: async () => ({
+      summary: "prose",
+      structured: {
+        ok: true,
+        summary: "looks like retry",
+        deadends: ["exploit_failed=true"],
+      },
+    }),
+  });
+  const proseOut = await proseExec({
+    graphId: g!.id,
+    stage: exploitStage,
+    stageIndex: 4,
+    stageAttempt: 1,
+    tools: ["todo"],
+    toolProfile: {},
+    handoff: {
+      summary: "prior",
+      surfaces: [{ location: "http://t/" }],
+      candidates: [],
+      facts: [],
+      deadends: [],
+      completed_stages: ["init", "recon", "enumerate", "validate"],
+    },
+  });
+  assert.equal(
+    proseOut.routeProjection!.exploit_failed,
+    false,
+    "production finalize must not scrape deadends for exploit_failed",
+  );
+
+  // Explicit typed structured field → exploit_failed (raw preserves payload)
   const retryExec = createHardGraphStageExecutor({
     config: {
       workspaceDir: taskDir,
@@ -842,7 +883,7 @@ const repoExperts = join(
       structured: {
         ok: true,
         summary: "retry validate",
-        deadends: ["exploit_failed=true"],
+        exploit_failed: true,
       },
     }),
   });
@@ -864,6 +905,37 @@ const repoExperts = join(
   });
   assert.equal(retryOut.routeProjection!.exploit_failed, true);
   assert.equal(retryOut.routeProjection!.stage_pass, true);
+}
+
+// --- Production: empty recon soft-lands to book via empty_recon edge ---
+{
+  const g = await loadHardGraphFile(repoExperts, "hypothesis_cycle");
+  assert.ok(g);
+  const order: string[] = [];
+  const exec: StageExecutor = async (input) => {
+    order.push(input.stage.id);
+    return {
+      structured: { ok: true, summary: `${input.stage.id} ok` },
+      // zero surfaces / hyps — recon empty_recon → book (not unmatched blocked)
+      routeProjection: {
+        stage_pass: true,
+        surfaces_n: 0,
+        active_hyp_n: 0,
+        active_complete_n: 0,
+      },
+    };
+  };
+  const run = await runHardGraph({
+    graph: g!,
+    executeStage: exec,
+    availableTools: ["todo", "fact", "skill", "write", "hypothesis", "finding"],
+  });
+  assert.equal(run.terminal, "completed", `order=${order.join(",")}`);
+  assert.deepEqual(
+    order,
+    ["init", "recon", "book"],
+    `empty recon must soft-land to book: ${order.join(",")}`,
+  );
 }
 
 // silence unused

@@ -15,6 +15,7 @@ import {
   isKnownRoutePredicateId,
   parseEngagementEdges,
   parseExploitFailedFromStructured,
+  parseNeedMoreSignalFromStructured,
   parseRouteChoiceKeyFromStructured,
   routeEngagementGraph,
   validateEngagementEdgeTable,
@@ -269,6 +270,22 @@ const stageIds = [...HYPOTHESIS_CYCLE_STAGE_IDS];
   assert.equal(invalid.ok, false);
   if (!invalid.ok) assert.equal(invalid.code, "invalid_choice_key");
 
+  // G4: hop exhausted + invalid choice_key → soft-land/book, not invalid_choice_key blocked
+  const hopThenInvalid = routeEngagementGraph({
+    current: "validate",
+    edges,
+    projection: baseProj({
+      choice_key: "to_mars",
+      hops_used: DEFAULT_GLOBAL_HOP,
+      hop_budget: DEFAULT_GLOBAL_HOP,
+    }),
+  });
+  assert.equal(hopThenInvalid.ok, true, "hop exhaust must win over invalid choice");
+  if (hopThenInvalid.ok) {
+    assert.equal(hopThenInvalid.next, "book");
+    assert.equal(hopThenInvalid.key, "hop_exhausted");
+  }
+
   // Without choice, host predicates still work
   const host = routeEngagementGraph({
     current: "validate",
@@ -294,6 +311,42 @@ const stageIds = [...HYPOTHESIS_CYCLE_STAGE_IDS];
     assert.equal(needMore.next, "enumerate");
     assert.equal(needMore.is_hot_back_edge, true);
   }
+
+  // Without explicit need_more_signal, active hyps alone do not invent the edge
+  const noInvent = routeEngagementGraph({
+    current: "validate",
+    edges,
+    projection: baseProj({
+      need_more_signal: false,
+      confirmed_unexploited_n: 0,
+      active_hyp_n: 2,
+    }),
+  });
+  assert.equal(noInvent.ok, false);
+  if (!noInvent.ok) assert.equal(noInvent.code, "unmatched");
+}
+
+// --- empty recon soft-land (G4 spirit) ---
+{
+  const empty = routeEngagementGraph({
+    current: "recon",
+    edges,
+    projection: baseProj({ surfaces_n: 0, active_hyp_n: 0 }),
+  });
+  assert.equal(empty.ok, true);
+  if (empty.ok) {
+    assert.equal(empty.next, "book");
+    assert.equal(empty.key, "empty_recon");
+  }
+
+  // With surface, empty_recon must not fire
+  const notEmpty = routeEngagementGraph({
+    current: "recon",
+    edges,
+    projection: baseProj({ surfaces_n: 1, active_hyp_n: 0 }),
+  });
+  assert.equal(notEmpty.ok, true);
+  if (notEmpty.ok) assert.equal(notEmpty.next, "enumerate");
 }
 
 // --- book terminal ---
@@ -387,16 +440,40 @@ const stageIds = [...HYPOTHESIS_CYCLE_STAGE_IDS];
   assert.equal(exploitEmpty.routeProjection.stage_pass, true);
   assert.equal(exploitEmpty.routeProjection.store_candidates_n, 0);
 
-  // Explicit signal → exploit_failed (independent of store)
-  const exploitRetry = buildEngagementRouteSlicesFromProductState({
+  // Free-text deadends must NOT invent exploit_failed (G2 structured-only)
+  const proseDeadend = buildEngagementRouteSlicesFromProductState({
     stageId: "exploit_lite",
     surfaces_n: 1,
     hypotheses: [],
     findings: [],
     structured: { deadends: ["exploit_failed=true"] },
   });
+  assert.equal(
+    proseDeadend.routeProjection.exploit_failed,
+    false,
+    "deadends prose must not invent exploit_failed",
+  );
+
+  // Explicit typed structured field → exploit_failed (independent of store)
+  const exploitRetry = buildEngagementRouteSlicesFromProductState({
+    stageId: "exploit_lite",
+    surfaces_n: 1,
+    hypotheses: [],
+    findings: [],
+    structured: { exploit_failed: true },
+  });
   assert.equal(exploitRetry.routeProjection.exploit_failed, true);
   assert.equal(exploitRetry.routeProjection.stage_pass, true);
+
+  // raw payload also accepted (production normalize keeps original as raw)
+  const exploitRaw = buildEngagementRouteSlicesFromProductState({
+    stageId: "exploit_lite",
+    surfaces_n: 1,
+    hypotheses: [],
+    findings: [],
+    structured: { raw: { ok: true, summary: "retry", exploit_failed: "true" } },
+  });
+  assert.equal(exploitRaw.routeProjection.exploit_failed, true);
 
   // Honest empty → book via stage_pass (not validate thrash)
   const honestBook = routeEngagementGraph({
@@ -414,13 +491,80 @@ const stageIds = [...HYPOTHESIS_CYCLE_STAGE_IDS];
     assert.equal(honestBook.key, "stage_pass");
   }
 
-  assert.equal(parseExploitFailedFromStructured({ deadends: ["exploit_failed"] }), true);
+  // Structured-only parsers: free-text ignored; typed fields accepted
+  assert.equal(parseExploitFailedFromStructured({ deadends: ["exploit_failed"] }), false);
   assert.equal(parseExploitFailedFromStructured({ deadends: ["no poc"] }), false);
+  assert.equal(parseExploitFailedFromStructured({ exploit_failed: true }), true);
+  assert.equal(
+    parseExploitFailedFromStructured({ raw: { exploitFailed: "yes" } }),
+    true,
+  );
+  assert.equal(
+    parseRouteChoiceKeyFromStructured({
+      facts: [{ key: "route_choice_key", summary: "to_book" }],
+    }),
+    undefined,
+    "facts prose must not invent choice_key",
+  );
+  assert.equal(
+    parseRouteChoiceKeyFromStructured({
+      notes: "choice_key=to_book",
+    }),
+    undefined,
+  );
+  assert.equal(
+    parseRouteChoiceKeyFromStructured({
+      route_choice_key: "to_book",
+    }),
+    "to_book",
+  );
+  assert.equal(
+    parseRouteChoiceKeyFromStructured({
+      raw: { choice_key: "to_enumerate" },
+    }),
+    "to_enumerate",
+  );
+  assert.equal(
+    parseRouteChoiceKeyFromStructured({
+      raw: { gate: { routeChoiceKey: "to_exploit_lite" } },
+    }),
+    "to_exploit_lite",
+  );
 
-  const choice = parseRouteChoiceKeyFromStructured({
-    facts: [{ key: "route_choice_key", summary: "to_book" }],
+  // need_more_signal: not invented from stage-id + counts
+  const validateNoFlag = buildEngagementRouteSlicesFromProductState({
+    stageId: "validate",
+    surfaces_n: 1,
+    hypotheses: [
+      {
+        status: "active",
+        signal: "s",
+        prove_if: "p",
+        disprove_if: "d",
+        statement: "H",
+      },
+    ],
+    findings: [],
   });
-  assert.equal(choice, "to_book");
+  assert.equal(
+    validateNoFlag.routeProjection.need_more_signal,
+    false,
+    "must not invent need_more_signal from stage-id + hyp counts",
+  );
+
+  const validateFlag = buildEngagementRouteSlicesFromProductState({
+    stageId: "validate",
+    surfaces_n: 1,
+    hypotheses: [],
+    findings: [],
+    structured: { need_more_signal: true },
+  });
+  assert.equal(validateFlag.routeProjection.need_more_signal, true);
+  assert.equal(parseNeedMoreSignalFromStructured({ need_more_signal: true }), true);
+  assert.equal(
+    parseNeedMoreSignalFromStructured({ deadends: ["need_more_signal"] }),
+    false,
+  );
 }
 
 // --- enumerate complete hyps → validate ---

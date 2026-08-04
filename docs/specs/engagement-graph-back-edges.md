@@ -103,20 +103,23 @@ Priority high→low within each `from` (LangGraph-style single path_fn):
 |------|------|-----|
 | init | `stage_pass` | recon |
 | recon | `active_hyp_ge_1` OR `surfaces_ge_1` | enumerate |
+| recon | `empty_recon` (surfaces=0 **and** active_hyp=0) | book |
 | recon | `hop_exhausted` | book |
 | enumerate | `active_hyp_ge_2_complete` | validate |
 | enumerate | `active_eq_0_and_open_surface` | recon |
 | enumerate | `active_hyp_incomplete` (Wave1: active≥1 and complete&lt;2) | enumerate |
 | enumerate | `hop_exhausted` | book |
 | validate | `has_confirmed_unexploited` | exploit_lite |
-| validate | `need_more_signal` | enumerate |
+| validate | `need_more_signal` (explicit Product/host structured flag only) | enumerate |
 | validate | `hop_exhausted` | book |
 | validate | `main_choice:to_enumerate` \| `to_exploit_lite` \| `to_book` | (declared targets) |
 | exploit_lite | `stage_pass` OR `has_store_candidates` | book |
-| exploit_lite | `exploit_failed_retry_validate` | validate |
+| exploit_lite | `exploit_failed_retry_validate` (explicit structured flag only) | validate |
 | book | terminal | END |
 
 Predicate ids are **whitelist only** (implementation maps id → pure check on projection). Exact boolean definitions live with S1 tests.
+
+**Routing signals (G2/G3):** `choice_key` / `route_choice_key`, `exploit_failed`, and `need_more_signal` are read only from **typed structured fields** on stage structured output / `raw` (or nested `gate`/`route` objects). Host must **not** invent them by scraping free-text facts/deadends/notes or by stage-id + hyp-count heuristics. Invalid `choice_key` is fail-closed only when hop budget is **not** exhausted — hop pre-check soft-lands first (G4).
 
 Gate: only where multiple legitimate strategies exist (validate); Main sets `choice_key` via structured tool; host validates membership.
 
