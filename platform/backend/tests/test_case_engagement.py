@@ -14,17 +14,20 @@ from app.services.case_engagement import (
 def test_normalize_templates():
     assert normalize_engagement_template("app_assessment") == "app_assessment"
     assert normalize_engagement_template("redteam_deep") == "redteam_deep"
+    assert normalize_engagement_template("hypothesis_cycle") == "hypothesis_cycle"
     assert normalize_engagement_template("assess") == "app_assessment"
     assert normalize_engagement_template("please hack dvwa") is None
-    # Product Graph set (#78 phase 2): app_assessment + redteam_deep
+    # Product Graph set: app_assessment + redteam_deep (#78) + hypothesis_cycle (#285)
     assert is_product_graph_template("app_assessment") is True
     assert is_product_graph_template("assess") is True
     assert is_product_graph_template("redteam_deep") is True
     assert is_product_graph_template("deep") is True
+    assert is_product_graph_template("hypothesis_cycle") is True
     assert is_product_graph_template("free") is False
     assert normalize_product_engagement_template("app_assessment") == "app_assessment"
     assert normalize_product_engagement_template("assess") == "app_assessment"
     assert normalize_product_engagement_template("redteam_deep") == "redteam_deep"
+    assert normalize_product_engagement_template("hypothesis_cycle") == "hypothesis_cycle"
     assert normalize_product_engagement_template("free") is None
 
 
@@ -32,6 +35,7 @@ def test_allow_postex_defaults_conservative():
     assert resolve_allow_postex() is False
     assert resolve_allow_postex(engagement="pentest") is False
     assert resolve_allow_postex(engagement_template="app_assessment") is False
+    assert resolve_allow_postex(engagement_template="hypothesis_cycle") is False
     assert resolve_allow_postex(engagement_template="redteam_deep") is True
     assert resolve_allow_postex(engagement_template="redteam_deep", allow_postex=False) is False
     assert resolve_allow_postex(engagement_template="app_assessment", allow_postex=True) is True
