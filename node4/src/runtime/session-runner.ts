@@ -42,6 +42,7 @@ import {
   loadProductGraphL1Catalog,
   resolveExpertWorkPath,
   resolveHardGraph,
+  unavailableGraphTerminal,
 } from "./hard-graph-definition.js";
 import { runHardGraphExpertTask } from "./hard-graph-task.js";
 import {
@@ -247,19 +248,17 @@ export async function runNode4Task(
     return { terminalStatus: hardOut.harnessStatus, taskDir };
   }
   if (workPath.path === "unavailable") {
-    const msg =
-      `Expert Graph '${workPath.graphId}' is not available on this product path ` +
-      `(Soft scenario mode retired; hard Graph missing or not product-offered). ` +
-      `Use Default free chat or product templates app_assessment / redteam_deep.`;
+    // Spec #284 G5: fail-closed — never silent Free OMP under Graph intent.
+    const term = unavailableGraphTerminal(workPath.graphId);
     await loggingPlatform
       .send({
-        type: "task_error",
+        type: term.eventType,
         conversation_id: task.conversationId,
         task_id: task.taskId,
-        message: msg,
+        message: term.message,
       } as any)
       .catch(() => {});
-    return { terminalStatus: "failed", taskDir };
+    return { terminalStatus: term.terminalStatus, taskDir };
   }
 
   // Free OMP Main path only (Default / free Expert chat — no Soft inject).

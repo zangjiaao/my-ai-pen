@@ -21,6 +21,7 @@ import {
   parseGraphExecution,
   resolveExpertWorkPath,
   resolveHardGraph,
+  unavailableGraphTerminal,
   validateHypothesisWorkModeForGraph,
 } from "./hard-graph-definition.js";
 import { loadPackFromDirSync } from "../experts/load-pack.js";
@@ -371,5 +372,86 @@ const row = graphL1EntryFromDefinition({
   when_to_use: "use me",
 });
 assert.equal(row?.when_to_use, "use me");
+
+// --- Spec #284 G2/G3: Composer Graph template + packRoot → hard; intent without hard → unavailable ---
+// Field e4876015: Node must not silent Free when engagementTemplate is product Graph.
+const g2Assess = await resolveHardGraph({
+  task: { engagementTemplate: "app_assessment" },
+  packRoot: repoExperts,
+  packId: "pentest",
+});
+assert.equal(g2Assess.mode, "hard", "G2: app_assessment + packRoot → hard");
+if (g2Assess.mode === "hard") {
+  assert.equal(g2Assess.graph.id, "app_assessment");
+}
+const g2Path = resolveExpertWorkPath({
+  hardMode: g2Assess.mode,
+  graphIntent: "app_assessment",
+});
+assert.deepEqual(g2Path, { path: "hard" }, "G2: path hard not free");
+
+const g2Deep = await resolveHardGraph({
+  task: { engagementTemplate: "redteam_deep" },
+  packRoot: repoExperts,
+  packId: "pentest",
+});
+assert.equal(g2Deep.mode, "hard", "G2: redteam_deep + packRoot → hard");
+assert.deepEqual(
+  resolveExpertWorkPath({ hardMode: g2Deep.mode, graphIntent: "redteam_deep" }),
+  { path: "hard" },
+);
+
+// G3: structured Graph intent without hard definition → unavailable (never free)
+assert.deepEqual(
+  resolveExpertWorkPath({
+    hardMode: "not_hard",
+    graphIntent: "app_assessment",
+  }),
+  { path: "unavailable", graphId: "app_assessment" },
+  "G3: graph intent without hard → unavailable not free",
+);
+// C1 free-in-envelope is the only free path under sticky Graph template (not this-turn enter)
+assert.deepEqual(
+  resolveExpertWorkPath({
+    hardMode: "hard",
+    graphIntent: "app_assessment",
+    continueInEnvelope: true,
+  }),
+  { path: "free" },
+  "C1 continue remains free-in-envelope; full Graph enter stays hard above",
+);
+// Resume (incomplete Graph) stays hard — do not collapse resume/continue synonyms
+assert.deepEqual(
+  resolveExpertWorkPath({
+    hardMode: "hard",
+    graphIntent: "app_assessment",
+    continueInEnvelope: isContinueInEnvelopeExecution({
+      graphExecution: parseGraphExecution({ graph_execution: "resume" }),
+    }),
+  }),
+  { path: "hard" },
+  "G5/S282: resume never free-in-envelope",
+);
+
+// Spec #284 G5: unavailable path → task_error terminal (never free OMP)
+const unavail = resolveExpertWorkPath({
+  hardMode: "not_hard",
+  graphIntent: "app_assessment",
+});
+assert.deepEqual(unavail, { path: "unavailable", graphId: "app_assessment" });
+const term = unavailableGraphTerminal(
+  unavail.path === "unavailable" ? unavail.graphId : "x",
+);
+assert.equal(term.terminalStatus, "failed", "G5 terminal failed");
+assert.equal(term.eventType, "task_error", "G5 event task_error");
+assert.match(term.message, /app_assessment/);
+// Platform wire full after completed enter → not C1 free-in-envelope on Node
+assert.equal(
+  isContinueInEnvelopeExecution({
+    graphExecution: parseGraphExecution({ graph_execution: "full" }),
+  }),
+  false,
+  "G4/G5 chain: wire full is not free-in-envelope",
+);
 
 console.log("hard-graph-definition.test.ts: ok");

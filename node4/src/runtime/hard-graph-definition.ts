@@ -524,3 +524,26 @@ export function resolveExpertWorkPath(input: {
   }
   return { path: "free" };
 }
+
+/**
+ * Spec #284 G5: map unavailable Graph path to Node terminal + platform event type.
+ * Never silent Free OMP when structured Graph intent cannot start Hard.
+ * session-runner sends task_error and returns this terminalStatus.
+ */
+export function unavailableGraphTerminal(graphId: string): {
+  terminalStatus: "failed";
+  eventType: "task_error";
+  graphId: string;
+  message: string;
+} {
+  const id = String(graphId || "").trim() || "unknown";
+  return {
+    terminalStatus: "failed",
+    eventType: "task_error",
+    graphId: id,
+    message:
+      `Expert Graph '${id}' is not available on this product path ` +
+      `(Soft scenario mode retired; hard Graph missing or not product-offered). ` +
+      `Use Default free chat or product templates app_assessment / redteam_deep.`,
+  };
+}
