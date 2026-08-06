@@ -456,6 +456,32 @@ export async function runHardGraphExpertTask(options: {
     agent_count: panel.list().length,
   });
 
+  // Spec #311: Hard settle emits Workset proposed from open surfaces + finding locations.
+  let openSurfaces: import("../stores/surface-ledger.js").SurfaceItem[] = [];
+  let locationStrings: string[] = [];
+  try {
+    const ledger = parentRuntime.surfaceLedger;
+    if (ledger) {
+      await ledger.load().catch(() => undefined);
+      openSurfaces = ledger.listOpen();
+    }
+  } catch {
+    openSurfaces = [];
+  }
+  try {
+    const { loadFindings } = await import("../tools/finding.js");
+    const localFindings = await loadFindings(parentRuntime.findingsDir);
+    locationStrings = localFindings
+      .flatMap((f) => [
+        String((f as { location?: unknown }).location || ""),
+        String((f as { url?: unknown }).url || ""),
+        String((f as { poc?: unknown }).poc || ""),
+      ])
+      .filter(Boolean);
+  } catch {
+    locationStrings = [];
+  }
+
   const settled = await settleHardGraphTask({
     platform,
     task,
@@ -468,6 +494,10 @@ export async function runHardGraphExpertTask(options: {
       llmUsage.requests > 0 || llmUsage.total_tokens > 0
         ? (llmUsage as unknown as Record<string, unknown>)
         : undefined,
+    openSurfaces,
+    locationStrings,
+    goalMode: Boolean(parentRuntime.goals?.isActive?.() || task.goalObjective),
+    goalObjective: task.goalObjective,
   });
 
   // Terminal checkpoint via shared builder (same plan_tree / llm_usage shapes as mid-run).

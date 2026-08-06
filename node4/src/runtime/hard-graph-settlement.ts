@@ -1,18 +1,27 @@
 /**
  * Single settlement path for Hard Graph Expert tasks.
  * session-runner must not invent a second task_complete dialect.
+ *
+ * Spec #311: also emit workset_candidates (proposed Next) from open surfaces / OOS hosts.
  */
 
 import type { PlatformSink, TaskEnvelope } from "../types.js";
+import type { SurfaceItem } from "../stores/surface-ledger.js";
 import {
   hardGraphToHarnessStatus,
   type HardGraphTerminal,
 } from "./hard-graph-runner.js";
+import {
+  filterEmitableWorksetCandidates,
+  worksetCandidatesFromHardSettle,
+  type WorksetCandidate,
+} from "./workset-emit.js";
 
 export type HardGraphSettlementResult = {
   /** Platform task_complete.status vocabulary only. */
   harnessStatus: "completed" | "incomplete" | "blocked";
   workMode: string;
+  worksetCandidates: WorksetCandidate[];
 };
 
 /**
@@ -28,10 +37,36 @@ export async function settleHardGraphTask(options: {
   startedAt: string;
   /** Aggregated run usage (Hard Graph stage ledgers merged). */
   llmUsage?: Record<string, unknown>;
+  /** Open / in_probe surfaces from SurfaceLedger (Hard Workset emit). */
+  openSurfaces?: SurfaceItem[];
+  /** Finding location strings for OOS host discovery. */
+  locationStrings?: string[];
+  goalMode?: boolean;
+  goalObjective?: string;
 }): Promise<HardGraphSettlementResult> {
   const harnessStatus = hardGraphToHarnessStatus(options.terminal);
   const workMode = `hard_graph:${options.graphId}:terminal:${options.terminal}`;
   const endTime = new Date().toISOString();
+
+  const worksetCandidates = filterEmitableWorksetCandidates(
+    worksetCandidatesFromHardSettle({
+      task: options.task,
+      openSurfaces: options.openSurfaces,
+      locationStrings: options.locationStrings,
+      source: "hard_settle",
+    }),
+  );
+
+  // Legacy next_scope shape for OOS hosts (platform still migrates into Workset).
+  const nextScopeCandidates = worksetCandidates
+    .filter((c) => c.family === "t_host")
+    .map((c) => ({
+      host: c.host,
+      port: c.port,
+      urls: c.urls || [],
+      source: "hard_settle",
+      in_scope: false,
+    }));
 
   await options.platform.send({
     type: "task_complete",
@@ -47,7 +82,31 @@ export async function settleHardGraphTask(options: {
     started_at: options.startedAt,
     end_time: endTime,
     ...(options.llmUsage ? { llm_usage: options.llmUsage } : {}),
+    workset_candidates: worksetCandidates,
+    workset_source: "hard_settle",
+    next_scope_candidates: nextScopeCandidates,
+    attack_surface_candidates: [
+      ...worksetCandidates
+        .filter((c) => c.family === "t_host")
+        .map((c) => ({
+          host: c.host,
+          port: c.port,
+          urls: c.urls || [],
+          source: "hard_settle",
+          in_scope: false,
+        })),
+      ...worksetCandidates
+        .filter((c) => c.family === "t_surface")
+        .map((c) => ({
+          host: c.host || "",
+          urls: c.location ? [c.location] : c.urls || [],
+          source: "hard_settle",
+          in_scope: true,
+        })),
+    ],
+    goal_mode: Boolean(options.goalMode || options.task.goalObjective),
+    goal_objective: options.goalObjective || options.task.goalObjective || undefined,
   });
 
-  return { harnessStatus, workMode };
+  return { harnessStatus, workMode, worksetCandidates };
 }
