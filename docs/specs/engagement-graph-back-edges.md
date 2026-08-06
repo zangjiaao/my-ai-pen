@@ -227,6 +227,8 @@ No scorecard text, expected vulnerability lists, write-ups, or official walkthro
 
 Update this file when edge predicates, budgets, or Wave2 assessment back-edges change. Index in `docs/README.md`.
 
+**JSON vs code ownership** (what pack JSON may declare vs what stays in the interpreter): see `docs/specs/engagement-graph-json-boundary.md`.
+
 ### Implementation map (Wave1)
 
 | Seam | Location |
