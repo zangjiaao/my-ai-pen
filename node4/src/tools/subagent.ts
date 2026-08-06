@@ -29,9 +29,10 @@ import {
 import {
   createMutex,
   mapWithConcurrencyLimit,
-  MAX_PATH_DISPATCHES,
   MAX_SUBAGENT_BATCH,
   resolveSubagentConcurrency,
+  resolveSubagentTaskBudget,
+  tryAdmitSubagentPackage,
 } from "../runtime/concurrency.js";
 import { promoteChildSessionToParent } from "../runtime/subagent-session-seed.js";
 import { getOrCreateIdlePool } from "../runtime/subagent-idle-pool.js";
@@ -102,13 +103,14 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
     description: [
       "Child work packages under this task workspace (OMP keep-alive).",
       "SPAWN FLAT: target, scope, already_done, this_turn_goal, success_criteria (+ node_type/skill_id/plan_node_id).",
-      "SPAWN BATCH: packages=[{...}] concurrent (NODE4_SUBAGENT_CONCURRENCY default 8). Orthogonal paths = cold workers.",
+      "SPAWN BATCH: packages=[{...}] — concurrency is scheduling only (NODE4_SUBAGENT_CONCURRENCY default 8; extras queue). Same target may fan out freely.",
+      "Per-task admitted package budget default 128 (NODE4_SUBAGENT_TASK_BUDGET; max 1024). Batch length safety ceiling MAX_SUBAGENT_BATCH.",
       "plan_node_id (or todo_node_id): REQUIRED for correct Tasks Worker chip when multiple stage todos exist. Prefer todo node_id from your last todo.init/list.",
       "RE-VERIFY (Spec #139): package_kind=re-verify + prior_finding_ids=[Store id…] + this-run fresh proof. Discovery packages host-hard-fail on prior pathKey∩class; set class_key for precise avoid.",
       "WARM: resume_agent_id=prior agent_id on SAME path (gap/timeout follow-up). Soft-fail workers stay idle for resume.",
       "LIST: op=list → idle_workers[] (agent_id, path_key, …).",
       "RELEASE: op=release + agent_id (or release_agent_id) — dispose worker now; else idle TTL (~420s) / maxIdle LRU auto-releases.",
-      "Same path ≤2 dispatches. Cookies seed/promote. Graph rejects command=. Nested subagent DISALLOWED.",
+      "Cookies seed/promote. Graph rejects command=. Nested subagent DISALLOWED (depth=1).",
       "Returns agent_id, worker_status idle|released, resume_hint, candidates/acceptance.",
     ].join(" "),
     parameters: Type.Object({
@@ -243,11 +245,8 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
           if (r.pkg.goal_id && !runtime.goals.get(r.pkg.goal_id)) {
             return textResult(`error: goal not found: ${r.pkg.goal_id}`, { isError: true });
           }
-          const pathLimit = checkAndCountPathDispatch(runtime, r.pkg.target);
-          if (!pathLimit.ok) {
-            skipped.push(softFailPackage(r.pkg, pathLimit.error!, runtime, "never_started"));
-            continue;
-          }
+          // Spec #302: path dispatch count is observability only — never blocks admit.
+          notePathDispatch(runtime, r.pkg.target);
           const avoid = applyPriorAvoidOnPackage(
             ensureProcessQuality(runtime.lifecycle).findingStore,
             r.pkg,
@@ -255,10 +254,28 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
           if (!avoid.ok) {
             return textResult(`error: ${avoid.error}`, { isError: true });
           }
+          const admit = tryAdmitSubagentPackage(runtime.lifecycle);
+          if (!admit.ok) {
+            skipped.push(softFailPackage(r.pkg, admit.error, runtime, "never_started"));
+            continue;
+          }
           resolved.push(r.pkg);
         }
 
+        // All packages in this call hit task budget before any admit → explicit tool error.
+        if (resolved.length === 0 && skipped.length > 0) {
+          const budgetOnly = skipped.every((s) =>
+            String(s.error || "").includes("task budget exhausted"),
+          );
+          if (budgetOnly) {
+            return textResult(skipped[0]!.error || "error: subagent task budget exhausted", {
+              isError: true,
+            });
+          }
+        }
+
         const concurrency = resolveSubagentConcurrency();
+        const taskBudget = resolveSubagentTaskBudget();
         const { results: rawResults } = await mapWithConcurrencyLimit(
           resolved,
           concurrency,
@@ -294,11 +311,20 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
           gap_total += r.acceptance?.needs_more_evidence?.length || 0;
         }
         const ledgerSum = runtime.surfaceLedger?.summary();
+        const pathWarns = pathDispatchWarnFields(runtime);
 
         return jsonResult({
           ok: true,
           batch: true,
           concurrency,
+          task_budget: {
+            limit: taskBudget,
+            admitted: runtime.lifecycle.subagentPackagesAdmitted ?? 0,
+            remaining: Math.max(
+              0,
+              taskBudget - (runtime.lifecycle.subagentPackagesAdmitted ?? 0),
+            ),
+          },
           total: results.length,
           succeeded,
           failed,
@@ -308,9 +334,11 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
             gap_total,
             surface_ledger: ledgerSum ?? null,
           },
+          ...(pathWarns ? { path_dispatch: pathWarns } : {}),
           guidance: [
             "BATCH ACCEPTANCE: for each results[i].acceptance.ready_to_book → finding(confirm).",
-            "worker_status=idle → same-path gap/timeout: resume_agent_id=results[i].agent_id (max 2 path dispatches).",
+            "worker_status=idle → same-path gap/timeout: resume_agent_id=results[i].agent_id.",
+            "Concurrency queues extras; task budget (NODE4_SUBAGENT_TASK_BUDGET) caps cumulative admits.",
             "Done with a worker → subagent(op=release, agent_id=…) or wait idle TTL; orthogonal modules stay cold packages[].",
             "Cookies seed/promote parent↔child.",
           ].join(" "),
@@ -330,10 +358,8 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
       if (flat.pkg.goal_id && !runtime.goals.get(flat.pkg.goal_id)) {
         return textResult(`error: goal not found: ${flat.pkg.goal_id}`, { isError: true });
       }
-      const pathLimit = checkAndCountPathDispatch(runtime, flat.pkg.target);
-      if (!pathLimit.ok) {
-        return textResult(pathLimit.error!, { isError: true });
-      }
+      // Spec #302: path dispatch count is observability only — never blocks admit.
+      notePathDispatch(runtime, flat.pkg.target);
       {
         const avoid = applyPriorAvoidOnPackage(
           ensureProcessQuality(runtime.lifecycle).findingStore,
@@ -343,9 +369,15 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
           return textResult(`error: ${avoid.error}`, { isError: true });
         }
       }
+      const admit = tryAdmitSubagentPackage(runtime.lifecycle);
+      if (!admit.ok) {
+        return textResult(admit.error, { isError: true });
+      }
 
       try {
         const one = await runSubagentPackage(runtime, flat.pkg, postLock);
+        const taskBudget = resolveSubagentTaskBudget();
+        const pathWarns = pathDispatchWarnFields(runtime);
         return jsonResult({
           ok: one.ok,
           subagent_id: one.subagent_id,
@@ -377,14 +409,24 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
           session_reuse: one.session_reuse,
           resume_hint: one.resume_hint,
           observations_recorded: true,
+          task_budget: {
+            limit: taskBudget,
+            admitted: runtime.lifecycle.subagentPackagesAdmitted ?? 0,
+            remaining: Math.max(
+              0,
+              taskBudget - (runtime.lifecycle.subagentPackagesAdmitted ?? 0),
+            ),
+          },
+          ...(pathWarns ? { path_dispatch: pathWarns } : {}),
           error: one.error,
           guidance: [
             "ACCEPTANCE LOOP:",
             "1) ready_to_book → finding(confirm) with location/candidate_index.",
-            "2) needs_more_evidence or timeout with worker_status=idle → resume_agent_id=agent_id same path; max 2 then deadend.",
+            "2) needs_more_evidence or timeout with worker_status=idle → resume_agent_id=agent_id same path.",
             "3) Orthogonal paths → cold packages[] only.",
             "4) Finished with worker → op=release agent_id=… (or idle TTL auto-release).",
             "5) Graph: todo(done) needs act/deadend/skip on surfaces.",
+            "6) Task package budget: NODE4_SUBAGENT_TASK_BUDGET (default 128); concurrency queues, does not reject.",
           ].join(" "),
           idle_workers: getOrCreateIdlePool(runtime.lifecycle)?.listIdle() ?? [],
         });
@@ -417,27 +459,40 @@ function validateGraphAndCommand(runtime: ToolRuntime, pkg: ResolvedPackage): st
   return null;
 }
 
-function checkAndCountPathDispatch(
-  runtime: ToolRuntime,
-  target: string,
-): { ok: true } | { ok: false; error: string } {
+/**
+ * Observability counter only (Spec #302). Same path may be dispatched many times;
+ * product anti-spam is task budget + Agent judgment + prior-avoid / honest-partial rules.
+ */
+function notePathDispatch(runtime: ToolRuntime, target: string): number {
   const key = pathKey(target) || String(target || "").trim().toLowerCase().slice(0, 180);
-  if (!key) return { ok: true };
+  if (!key) return 0;
   if (!runtime.lifecycle.subagentPathDispatchCounts) {
     runtime.lifecycle.subagentPathDispatchCounts = {};
   }
   const counts = runtime.lifecycle.subagentPathDispatchCounts;
-  const prev = counts[key] || 0;
-  if (prev >= MAX_PATH_DISPATCHES) {
-    return {
-      ok: false,
-      error:
-        `error: path already dispatched ${prev} times (${key}). ` +
-        `Max ${MAX_PATH_DISPATCHES} per path — mark todo note=deadend:${key} or book existing candidates; do not re-open the same package.`,
-    };
-  }
-  counts[key] = prev + 1;
-  return { ok: true };
+  const next = (counts[key] || 0) + 1;
+  counts[key] = next;
+  return next;
+}
+
+/** Non-blocking path-dispatch telemetry for tool results (warn when same path ≥2). */
+function pathDispatchWarnFields(
+  runtime: ToolRuntime,
+): { counts: Record<string, number>; warn?: string } | null {
+  const counts = runtime.lifecycle.subagentPathDispatchCounts;
+  if (!counts || Object.keys(counts).length === 0) return null;
+  const multi = Object.entries(counts).filter(([, n]) => n >= 2);
+  if (!multi.length) return { counts: { ...counts } };
+  const sample = multi
+    .slice(0, 5)
+    .map(([k, n]) => `${k}×${n}`)
+    .join(", ");
+  return {
+    counts: { ...counts },
+    warn:
+      `path_dispatch_observe: repeated path dispatches this task (${sample}). ` +
+      `Not blocked — Agent judgment + task budget apply.`,
+  };
 }
 
 function softFailPackage(

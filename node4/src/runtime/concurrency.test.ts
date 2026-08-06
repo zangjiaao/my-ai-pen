@@ -6,10 +6,14 @@ import {
   createMutex,
   mapWithConcurrencyLimit,
   resolveSubagentConcurrency,
+  resolveSubagentTaskBudget,
+  tryAdmitSubagentPackage,
   MAX_SUBAGENT_BATCH,
+  DEFAULT_SUBAGENT_TASK_BUDGET,
+  MAX_SUBAGENT_TASK_BUDGET,
 } from "./concurrency.js";
 
-// concurrency order + limit
+// concurrency order + limit — queue, never drop
 {
   const active: number[] = [];
   let maxActive = 0;
@@ -23,6 +27,7 @@ import {
   });
   assert.deepEqual(results, [10, 20, 30, 40, 50]);
   assert.ok(maxActive <= 2, `maxActive=${maxActive}`);
+  assert.equal(results.filter((r) => r !== undefined).length, 5);
 }
 
 // soft throw → undefined slot, siblings continue
@@ -57,5 +62,34 @@ assert.equal(resolveSubagentConcurrency({}), 8);
 assert.equal(resolveSubagentConcurrency({ NODE4_SUBAGENT_CONCURRENCY: "2" }), 2);
 assert.equal(resolveSubagentConcurrency({ NODE4_SUBAGENT_CONCURRENCY: "99" }), 16);
 assert.equal(MAX_SUBAGENT_BATCH, 32);
+
+// Spec #302 task budget
+assert.equal(resolveSubagentTaskBudget({}), DEFAULT_SUBAGENT_TASK_BUDGET);
+assert.equal(resolveSubagentTaskBudget({ NODE4_SUBAGENT_TASK_BUDGET: "3" }), 3);
+assert.equal(resolveSubagentTaskBudget({ NODE4_SUBAGENT_TASK_BUDGET: "9999" }), MAX_SUBAGENT_TASK_BUDGET);
+assert.equal(resolveSubagentTaskBudget({ NODE4_SUBAGENT_TASK_BUDGET: "0" }), 1);
+assert.equal(resolveSubagentTaskBudget({ NODE4_SUBAGENT_TASK_BUDGET: "nope" }), DEFAULT_SUBAGENT_TASK_BUDGET);
+
+{
+  const prev = process.env.NODE4_SUBAGENT_TASK_BUDGET;
+  process.env.NODE4_SUBAGENT_TASK_BUDGET = "3";
+  try {
+    const life: { subagentPackagesAdmitted?: number } = {};
+    assert.equal(tryAdmitSubagentPackage(life).ok, true);
+    assert.equal(tryAdmitSubagentPackage(life).ok, true);
+    assert.equal(tryAdmitSubagentPackage(life).ok, true);
+    const fourth = tryAdmitSubagentPackage(life);
+    assert.equal(fourth.ok, false);
+    if (!fourth.ok) {
+      assert.match(fourth.error, /task budget exhausted/);
+      assert.equal(fourth.used, 3);
+      assert.equal(fourth.budget, 3);
+    }
+    assert.equal(life.subagentPackagesAdmitted, 3);
+  } finally {
+    if (prev === undefined) delete process.env.NODE4_SUBAGENT_TASK_BUDGET;
+    else process.env.NODE4_SUBAGENT_TASK_BUDGET = prev;
+  }
+}
 
 console.log("concurrency.test.ts: ok");

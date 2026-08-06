@@ -102,16 +102,20 @@ Main DISPATCH (goal + success_criteria)
 - **Graph `todo(done)`** blocked while open/in_probe remain unless `note=deadend|skipped_roe` or path already acted. No bare batch-flip.
 - Settlement still does not require empty ledger; honesty is about todo green ≠ coverage.
 
-## Parallel subagent batch (OMP-style, v1)
+## Parallel subagent batch (OMP-style, Spec #302)
 
 - Tool `subagent` accepts **flat** one package or **batch** `packages[]` + optional shared `context`.
-- Batch runs with `mapWithConcurrencyLimit` — default concurrency **8** (`NODE4_SUBAGENT_CONCURRENCY`, clamp 1–16). Safety ceiling 32 packages (not a quality gate).
+- Batch runs with `mapWithConcurrencyLimit` — `NODE4_SUBAGENT_CONCURRENCY` (default **8**, clamp 1–16) is **scheduling only** (queue when full; never reject solely for concurrency).
+- **Batch safety ceiling** `MAX_SUBAGENT_BATCH` (**32**): hard error if `packages[]` length exceeds it (DoS rail, not agent thinking limit).
+- **Per-task cumulative admitted package budget** default **128** (`NODE4_SUBAGENT_TASK_BUDGET`, max **1024**). Counts packages admitted after validation; exhaustion → clear tool error; already-running/finished work remains honest partial.
+- **No hard path-dispatch kill** — same pathname may be dispatched many times; path counts are observability only. Repeat work is Agent judgment + task budget + prior-avoid / honest-partial rules.
 - Sync only: soft package failure → `results[i].ok=false`; siblings continue.
-- **Path re-dispatch budget:** same pathname ≤ **2** dispatches/task.
+- **Nest ban:** children (`subagentDepth >= 1`) cannot spawn further subagents (depth = 1).
 - **Session seed + promote:** child jars seed from parent `session/`; after each package, child cookies **promote back to parent** (still useful when Main does not re-login; required under lab hard).
 - **Worker keep-alive (OMP-style):** after LLM packages (incl. soft-fail/timeout), idle by **`agent_id`**. Default spawn **cold**. Warm only via `resume_agent_id` + **same-path affinity**. **Release:** active idle TTL (default **420s**), maxIdle LRU (8), maxPackages (4), `subagent(op=release)`, task-end `disposeAll`. List: `op=list`. Disable: `NODE4_SUBAGENT_IDLE=0`.
 - **Salvage:** missing intentional structured settlement → candidates from tool-output/facts when possible (**evidence only**; salvage ≠ package success).
 - Ledger/post-process mutex-serialized. Main still books.
+- Non-normative Grok comparison: `docs/wayfinder/research-grok-build-subagent-limits.md`.
 
 ## Non-goals
 
