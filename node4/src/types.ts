@@ -139,6 +139,15 @@ export type ToolRuntime = {
      */
     subagentDepth?: number;
     /**
+     * Spec #308: mutable Worker audit scope for package process frames
+     * (agent_id + package_turn_id). Updated each package turn on warm resume.
+     */
+    workerAudit?: {
+      agentId: string;
+      packageTurnId: string;
+      workerOrdinal?: number;
+    } | null;
+    /**
      * Optional pentest scenario Graph (Free vs Graph mode).
      * Set by session-runner when pack is pentest.
      */

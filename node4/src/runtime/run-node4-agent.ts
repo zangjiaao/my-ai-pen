@@ -272,9 +272,9 @@ export async function createBoundNode4Session(
  * Sole product fan-out for tool start/end → platform tool_output + segment counters.
  * Panel/status for Main still goes through handleNode4SessionEvent on the same events.
  *
- * Product policy (A): **subagent package sessions do not emit tool_output into Case chat.**
- * When `lifecycle.subagentDepth > 0`, still count tools for salvage/settlement, but skip
- * platform send so Worker shell/http/todo cards do not pollute Main's conversation thread.
+ * Product policy (A) + Spec #308: **subagent package sessions do not emit Main chat tool_output.**
+ * When `lifecycle.subagentDepth > 0`, still count tools for salvage/settlement; if Worker audit
+ * scope is set (`lifecycle.workerAudit`), emit parallel Worker-channel frames instead.
  * Lifecycle milestones (`subagent_started` / `subagent_finished`) remain parent-owned.
  */
 export function attachProductToolEventBridge(
@@ -286,7 +286,20 @@ export function attachProductToolEventBridge(
     if (event.type === "tool_execution_start") {
       if (segmentCounter) segmentCounter.tools += 1;
       runtime.lifecycle.toolsInLastSegment = (runtime.lifecycle.toolsInLastSegment || 0) + 1;
-      if (isSubagentPackageSession(runtime)) return;
+      if (isSubagentPackageSession(runtime)) {
+        const { emitWorkerToolFrame } = await import("./worker-audit-channel.js");
+        const toolName = String(event.toolName || "tool");
+        const toolCallId = String(event.toolCallId || "");
+        await emitWorkerToolFrame({
+          runtime,
+          toolName,
+          toolCallId,
+          status: "running",
+          summary: `${toolName} running`,
+          args: (event as { args?: Record<string, unknown> }).args || {},
+        });
+        return;
+      }
       const toolName = String(event.toolName || "tool");
       const toolCallId = String(event.toolCallId || "");
       // Speaker = requesting Session (task persona). Never handoff destination.
@@ -308,7 +321,6 @@ export function attachProductToolEventBridge(
     }
 
     if (event.type === "tool_execution_end") {
-      if (isSubagentPackageSession(runtime)) return;
       const toolName = String(event.toolName || "tool");
       const toolCallId = String(event.toolCallId || "");
       const result = (event as { result?: { content?: Array<{ type?: string; text?: string }> } }).result;
@@ -319,6 +331,18 @@ export function attachProductToolEventBridge(
         .join("\n")
         .slice(0, 4000);
       const isError = Boolean((event as { isError?: boolean }).isError);
+      if (isSubagentPackageSession(runtime)) {
+        const { emitWorkerToolFrame } = await import("./worker-audit-channel.js");
+        await emitWorkerToolFrame({
+          runtime,
+          toolName,
+          toolCallId,
+          status: isError ? "error" : "done",
+          summary: text.slice(0, 500),
+          resultText: text,
+        });
+        return;
+      }
       const speaker: Record<string, string> = {};
       if (runtime.task.expertId) speaker.expert_id = String(runtime.task.expertId);
       if (runtime.task.expertName) speaker.expert_name = String(runtime.task.expertName);

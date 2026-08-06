@@ -42,6 +42,13 @@ export type IdleSubagentHandle = {
   clearAbort?: () => void;
   /** Active idle TTL timer handle (cleared on take / release). */
   idleTimer?: ReturnType<typeof setTimeout>;
+  /**
+   * Spec #308: child ToolRuntime kept so warm packages can update workerAudit
+   * package_turn_id (tool/process bridges close over this object).
+   */
+  childRuntime?: import("../types.js").ToolRuntime;
+  /** Spec #308: dispose Worker process stream on hard release. */
+  disposeWorkerAudit?: () => Promise<void>;
 };
 
 export type IdleWorkerSnapshot = {
@@ -108,6 +115,11 @@ async function safeDispose(handle: IdleSubagentHandle): Promise<void> {
   clearIdleTimer(handle);
   try {
     handle.clearAbort?.();
+  } catch {
+    /* ignore */
+  }
+  try {
+    await Promise.resolve(handle.disposeWorkerAudit?.());
   } catch {
     /* ignore */
   }
