@@ -36,6 +36,8 @@ Define an **optional Expert Graph work mode**: structured **hypothesis working m
 
 **Related existing terms (do not redefine):** Product state, Runtime transcript, Finding Store, book-path L0, surface ledger, Package/Wave, Feedback L0/L1, Handoff Truth/Next/Delivery — see `CONTEXT.md`, `docs/specs/task-graph.md`, `docs/specs/harness.md`.
 
+**Routing bind (Spec [#285](https://github.com/zangjiaao/my-ai-pen/issues/285)):** queue/surface projections may feed **host-owned** Engagement Graph route predicates (`hypothesis_cycle`). This Spec still owns the queue; #285 owns declarative edges + hop budgets — see `docs/specs/engagement-graph-back-edges.md`.
+
 ---
 
 ## 3. Wave plan

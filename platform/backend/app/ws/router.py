@@ -3198,6 +3198,7 @@ async def _apply_authorized_graph_mode(conv_id: str | None, approval: dict) -> N
     _PRODUCT_GRAPH_SHORT_LABEL = {
         "app_assessment": "应用评估",
         "redteam_deep": "红队深度",
+        "hypothesis_cycle": "假设循环",
     }
     graph_label = None
     if settled_gid:

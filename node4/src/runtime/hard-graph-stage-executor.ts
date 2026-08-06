@@ -72,6 +72,13 @@ import {
   isHypothesisWorkModeOn,
 } from "./hypothesis-store.js";
 import {
+  buildEngagementRouteSlicesFromProductState,
+  buildRouteStructuredFromProcessFacts,
+  parseExploitFailedFromStructured,
+  parseNeedMoreSignalFromStructured,
+  parseRouteChoiceKeyFromStructured,
+} from "./engagement-graph-route.js";
+import {
   formatSkillL1CatalogInjection,
   loadSkillL1Catalog,
 } from "./skill-l1-catalog.js";
@@ -521,6 +528,12 @@ export function createHardGraphStageExecutor(options: {
       };
       /** Explicit host-trusted inject only — deposited to Store/ledger. Not narrative. */
       hostInject?: SubagentStructuredResult;
+      /**
+       * Spec #285 G2/G3: original stage structured payload for typed route signals only
+       * (route_choice_key / choice_key / exploit_failed / need_more_signal).
+       * Passed as raw to S4 — never scraped from free-text facts/deadends/notes.
+       */
+      routeStructured?: unknown;
       child?: ToolRuntime;
       seed?: StageContinuitySeed;
       /** Stage workdir for optional settlement audit (not gate input). */
@@ -656,6 +669,79 @@ export function createHardGraphStageExecutor(options: {
       }
 
       const unbookableN = gqState?.unbookable?.length || 0;
+
+      // Spec #285 S4: Product-state route projection from hypothesis queue + Finding Store + surfaces.
+      // Full snapshot each settle (not sticky). Gate choice from structured Main output only.
+      const surfaceSummary = settleRuntime.surfaceLedger?.summary?.() as
+        | { total?: number; open?: number; probed?: number; booked?: number }
+        | undefined;
+      const surfacesFromLedger =
+        typeof surfaceSummary?.total === "number"
+          ? surfaceSummary.total
+          : typeof surfaceSummary?.open === "number" &&
+              typeof surfaceSummary?.probed === "number"
+            ? (surfaceSummary.open || 0) + (surfaceSummary.probed || 0)
+            : structuredFinal.surfaces?.length || 0;
+      // G2/G3 typed route bag: merge session structured + process-fact Product deposit + settlement raw.
+      // First non-empty signal wins per field. Never invent from free-text deadends/notes prose.
+      let processFactRoute: Record<string, unknown> | null = null;
+      try {
+        const factStore = opts.child?.processFacts || parentRuntime.processFacts;
+        const index = factStore?.list ? await factStore.list() : [];
+        processFactRoute = buildRouteStructuredFromProcessFacts(index);
+      } catch {
+        processFactRoute = null;
+      }
+      const routeMerged: Record<string, unknown> = {};
+      for (const c of [opts.routeStructured, processFactRoute, structuredFinal.raw]) {
+        if (c == null) continue;
+        const bag = { raw: c };
+        const choice = parseRouteChoiceKeyFromStructured(bag);
+        if (choice && routeMerged.route_choice_key == null) {
+          routeMerged.route_choice_key = choice;
+        }
+        if (
+          parseExploitFailedFromStructured(bag) &&
+          routeMerged.exploit_failed == null
+        ) {
+          routeMerged.exploit_failed = true;
+        }
+        if (
+          parseNeedMoreSignalFromStructured(bag) &&
+          routeMerged.need_more_signal == null
+        ) {
+          routeMerged.need_more_signal = true;
+        }
+      }
+      const routeRaw =
+        Object.keys(routeMerged).length > 0 ? routeMerged : structuredFinal.raw;
+      const routeSlices = buildEngagementRouteSlicesFromProductState({
+        stageId: input.stage.id,
+        hypotheses: pq.hypothesisStore.snapshot().map((r) => ({
+          status: r.status,
+          signal: r.signal,
+          prove_if: r.prove_if,
+          disprove_if: r.disprove_if,
+          statement: r.statement,
+        })),
+        findings: pq.findingStore.snapshot().map((r) => ({
+          status: r.status,
+          title: r.title,
+        })),
+        surfaces_n: Math.max(
+          surfacesFromLedger,
+          structuredFinal.surfaces?.length || 0,
+          input.handoff?.surfaces?.length || 0,
+        ),
+        structured: {
+          // facts/deadends/notes retained for non-routing consumers; S4 parsers ignore them
+          facts: structuredFinal.facts,
+          deadends: structuredFinal.deadends,
+          notes: structuredFinal.notes,
+          raw: routeRaw,
+        },
+      });
+
       return {
         structured: structuredFinal,
         summary: structuredFinal.summaryProvided ? structuredFinal.summary : undefined,
@@ -673,6 +759,10 @@ export function createHardGraphStageExecutor(options: {
         findingsBookedN: storeBooked,
         ...(feedbackOkIds.length ? { feedbackOkIds } : {}),
         ...(l1Payload ? { l1: l1Payload } : {}),
+        routeProjection: routeSlices.routeProjection,
+        ...(routeSlices.routeChoiceKey
+          ? { routeChoiceKey: routeSlices.routeChoiceKey }
+          : {}),
       };
     };
 
@@ -691,6 +781,7 @@ export function createHardGraphStageExecutor(options: {
         });
         // Narrative from factory session only; hostInject is explicit deposit (tests).
         // Never launder agent structured into Store/ledger.
+        // routeStructured keeps typed G2/G3 routing fields (choice_key / exploit_failed / …).
         const narrativeBody = out.structured
           ? normalizeSubagentResult(out.structured)
           : undefined;
@@ -711,6 +802,7 @@ export function createHardGraphStageExecutor(options: {
               ? { summary: out.summary }
               : undefined,
           hostInject,
+          routeStructured: out.structured,
           workDir,
         });
       }
@@ -894,7 +986,10 @@ export function createHardGraphStageExecutor(options: {
 
       // Spec #125: never load agent result.json; host settlement projects gate input.
       // Narrative summary only from real process facts (not synthetic fillers).
+      // Spec #285 G3: typed Gate/retry flags via exact process-fact keys (fact tool deposit),
+      // not free-text scrape — finalizeStage maps whitelist keys → routeStructured bag.
       let narrativeSummary: string | undefined;
+      let routeFromFacts: Record<string, unknown> | null = null;
       try {
         const facts = await childRuntime.processFacts?.list?.();
         if (Array.isArray(facts) && facts.length) {
@@ -906,12 +1001,15 @@ export function createHardGraphStageExecutor(options: {
             .filter(Boolean)
             .join("; ")
             .slice(0, 500);
+          routeFromFacts = buildRouteStructuredFromProcessFacts(facts);
         }
       } catch {
         /* ignore */
       }
       return await finalizeStage({
         narrative: narrativeSummary ? { summary: narrativeSummary } : undefined,
+        // Explicit Product deposit for live pi path (same S4 parsers as sessionFactory)
+        ...(routeFromFacts ? { routeStructured: routeFromFacts } : {}),
         child: childRuntime,
         seed: continuitySeed,
         workDir,

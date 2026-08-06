@@ -35,6 +35,9 @@ for (const v of [null, undefined, ...FREE_COMPOSER_WIRE_ALIASES] as const) {
   assert(deep.allow_postex === true, "catalog default postex for redteam_deep");
   const assess = composerEngagementWireFields("app_assessment", { isPentest: true });
   assert(assess.allow_postex === false, "catalog default postex for app_assessment");
+  const cycle = composerEngagementWireFields("hypothesis_cycle", { isPentest: true });
+  assert(cycle.engagement_template === "hypothesis_cycle", "hypothesis_cycle selectable");
+  assert(cycle.allow_postex === false, "hypothesis_cycle postex false");
 }
 
 // Simulate user_message / user_steer commonPayload spread (G6 contract, no React)

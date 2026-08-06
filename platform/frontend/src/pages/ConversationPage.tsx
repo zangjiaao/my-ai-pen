@@ -1307,6 +1307,7 @@ export default function ConversationPage() {
       if (mode === "graph") {
         if (gid === "redteam_deep") setEngagementTemplate("redteam_deep");
         else if (gid === "app_assessment") setEngagementTemplate("app_assessment");
+        else if (gid === "hypothesis_cycle") setEngagementTemplate("hypothesis_cycle");
         else if (gid === "redteam" || gid === "deep") setEngagementTemplate("redteam_deep");
         else if (gid === "assess" || gid === "assessment") setEngagementTemplate("app_assessment");
       } else if (mode === "free") {

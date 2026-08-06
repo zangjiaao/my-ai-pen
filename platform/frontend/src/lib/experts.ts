@@ -22,7 +22,10 @@ export const BUILTIN_PACK_IDS: ReadonlySet<string> = new Set(["default", "consul
  * AgentRow shows Session actual Free/Graph. 不指定 omits template (A1: does not
  * force Free if Session already Graph). Soft scenario product mode retired (#76).
  */
-export type EngagementTemplateId = "app_assessment" | "redteam_deep";
+export type EngagementTemplateId =
+  | "app_assessment"
+  | "redteam_deep"
+  | "hypothesis_cycle";
 
 /** Product Graph options for Expert UI. 不指定 is separate (null) — not a template id. */
 export const ENGAGEMENT_TEMPLATES: readonly {
@@ -43,6 +46,13 @@ export const ENGAGEMENT_TEMPLATES: readonly {
     description:
       "分阶段 Expert Graph：评估基线 + 利用链/后渗透/横向（RoE 内）；无立足点可诚实结束",
     allowPostex: true,
+  },
+  {
+    id: "hypothesis_cycle",
+    label: "假设循环",
+    description:
+      "假设优先 Engagement Graph：侦察⇄枚举⇄验证可有界回边，再轻量利用与入账；禁止后渗透",
+    allowPostex: false,
   },
 ] as const;
 
@@ -445,6 +455,7 @@ const ENGAGEMENT_ALIASES: Record<string, ExpertId> = {
   retest: "pentest",
   app_assessment: "pentest",
   redteam_deep: "pentest",
+  hypothesis_cycle: "pentest",
   ctf: "ctf",
   "ctf-web": "ctf",
   challenge: "ctf",

@@ -7,9 +7,11 @@ from __future__ import annotations
 from typing import Any
 
 # Product templates (map to pentest pack via catalog aliases; RoE differs).
-# Soft scenario mode retired (#76). Phase 2 (#78): product Graphs = app_assessment + redteam_deep.
+# Soft scenario mode retired (#76). Phase 2 (#78): app_assessment + redteam_deep.
+# Spec #285: hypothesis_cycle (Engagement Graph with host-owned back-edges).
 TEMPLATE_APP = "app_assessment"
 TEMPLATE_DEEP = "redteam_deep"
+TEMPLATE_HYPOTHESIS_CYCLE = "hypothesis_cycle"
 
 _TEMPLATE_ALIASES: dict[str, str] = {
     "app_assessment": TEMPLATE_APP,
@@ -21,17 +23,22 @@ _TEMPLATE_ALIASES: dict[str, str] = {
     "redteam": TEMPLATE_DEEP,
     "red-team": TEMPLATE_DEEP,
     "deep": TEMPLATE_DEEP,
+    "hypothesis_cycle": TEMPLATE_HYPOTHESIS_CYCLE,
 }
 
+_PRODUCT_TEMPLATE_IDS: frozenset[str] = frozenset(
+    {TEMPLATE_APP, TEMPLATE_DEEP, TEMPLATE_HYPOTHESIS_CYCLE}
+)
+
 # Product-selectable Expert Graph templates (UI / new Case writes). No free chip here.
-PRODUCT_GRAPH_TEMPLATES: frozenset[str] = frozenset({TEMPLATE_APP, TEMPLATE_DEEP})
+PRODUCT_GRAPH_TEMPLATES: frozenset[str] = _PRODUCT_TEMPLATE_IDS
 
 
 def normalize_engagement_template(value: object) -> str | None:
     key = str(value or "").strip().lower()
     if not key:
         return None
-    return _TEMPLATE_ALIASES.get(key) or (key if key in (TEMPLATE_APP, TEMPLATE_DEEP) else None)
+    return _TEMPLATE_ALIASES.get(key) or (key if key in _PRODUCT_TEMPLATE_IDS else None)
 
 
 def is_product_graph_template(value: object) -> bool:
@@ -44,7 +51,7 @@ def normalize_product_engagement_template(value: object) -> str | None:
     """Template for new product Graph selection.
 
     free/none → None (Default free seat — not an Expert Graph template).
-    Product Expert Graph ids: app_assessment, redteam_deep (#78 S2).
+    Product Expert Graph ids: app_assessment, redteam_deep (#78 S2), hypothesis_cycle (#285).
     """
     key = str(value or "").strip().lower()
     if not key or key in {"free", "none", "off", "false", "null"}:
