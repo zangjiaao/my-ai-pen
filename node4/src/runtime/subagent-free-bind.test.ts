@@ -69,6 +69,11 @@ assert.equal(result.planBind?.node_id, sqliId);
 
 const planMsgs = messages.filter((m) => m.type === "plan_tree_updated");
 assert.ok(planMsgs.length >= 1, "Free spawn emits plan_tree_updated");
+// Start emit should show running; final emit after worker end should show done.
+const firstTree = (planMsgs[0] as { plan_tree?: Array<Record<string, unknown>> }).plan_tree || [];
+const firstBound = firstTree.find((n) => String(n.node_id || "") === sqliId);
+assert.ok(firstBound, "bound work item present on start");
+assert.equal(firstBound?.status, "running", "Free start chip status running");
 const lastTree = (planMsgs[planMsgs.length - 1] as { plan_tree?: Array<Record<string, unknown>> })
   .plan_tree || [];
 const bound = lastTree.find((n) => String(n.node_id || "") === sqliId);
@@ -79,6 +84,7 @@ assert.ok(
   `owner_agent_name Worker N, got ${bound?.owner_agent_name}`,
 );
 assert.equal(bound?.linked_agent_id, result.subagentId);
+assert.equal(bound?.status, "done", "Free end chip status done without Main link tool");
 
 // Without plan_node_id: host binds via single_free/fuzzy on start; end reattaches same agent.
 messages.length = 0;
@@ -93,9 +99,46 @@ assert.equal(r2.planBind?.node_id, rceId);
 const rceNode = todo.toPlanNodes().find((n) => n.node_id === rceId) as {
   agent_id?: string;
   owner_agent_name?: string;
+  status?: string;
 };
 assert.equal(rceNode?.agent_id, r2.subagentId);
 assert.ok(String(rceNode?.owner_agent_name || "").match(/^Worker\s+\d+$/i));
+assert.equal(rceNode?.status, "done");
+
+// Failed package end → failed status on Free Main todo
+const failTodo = new TodoStore();
+failTodo.apply({
+  op: "init",
+  list: [{ phase: "Tasks", items: ["Will fail package"] }],
+});
+const failId = todoTaskNodeId("Tasks", "Will fail package");
+const failHost = new SubagentHost({
+  task,
+  taskDir: "/tmp/subagent-free-fail",
+  evidence: {
+    create: async () => ({ id: "evf", path: "" }),
+    read: async () => undefined,
+    list: async () => [],
+  },
+  platform,
+  goals: new GoalStore(),
+  panelAgents: new PanelAgentTracker("Fail bind", "Expert"),
+  todo: () => failTodo,
+});
+messages.length = 0;
+const rFail = await failHost.spawn({
+  assignment: "Will fail package",
+  label: "Will fail package",
+  planNodeId: failId,
+  worker: async () => ({ summary: "boom", data: {}, ok: false }),
+});
+assert.equal(rFail.ok, false);
+const failNode = failTodo.toPlanNodes().find((n) => n.node_id === failId) as {
+  status?: string;
+  agent_id?: string;
+};
+assert.equal(failNode?.agent_id, rFail.subagentId);
+assert.equal(failNode?.status, "failed");
 
 // Graph path still preferred when hardGraphPlan + stageId present (no Free overwrite)
 const graph: HardGraphDefinition = {

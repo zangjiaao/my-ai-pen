@@ -20,7 +20,7 @@ const sqliId = todoTaskNodeId("Tasks", "Probe SQLi on login");
 const xssId = todoTaskNodeId("Tasks", "Map XSS surface");
 const sessionId = todoTaskNodeId("Tasks", "Session management");
 
-// Explicit plan_node_id
+// Explicit plan_node_id — ownership + status (Graph applyChip parity)
 const explicit = store.resolveWorkerBind({
   agent_id: "sub_w1",
   owner_agent_name: "Worker 1",
@@ -35,12 +35,19 @@ const sqliNode = tree1.find((n) => n.node_id === sqliId) as {
   agent_id?: string;
   owner_agent_name?: string;
   linked_agent_id?: string;
+  status?: string;
 };
 assert.equal(sqliNode?.agent_id, "sub_w1");
 assert.equal(sqliNode?.owner_agent_name, "Worker 1");
 assert.equal(sqliNode?.linked_agent_id, "sub_w1");
+assert.equal(sqliNode?.status, "running", "host start drives running on Free Main todo");
+const snapRunning = store.snapshot();
+const sqliTask = snapRunning
+  .flatMap((p) => p.tasks)
+  .find((t) => t.content === "Probe SQLi on login");
+assert.equal(sqliTask?.status, "in_progress");
 
-// Reattach by agent_id
+// Reattach by agent_id — end status done
 const re = store.resolveWorkerBind({
   agent_id: "sub_w1",
   owner_agent_name: "Worker 1",
@@ -49,6 +56,18 @@ const re = store.resolveWorkerBind({
 });
 assert.equal(re?.path, "reattach");
 assert.equal(re?.node_id, sqliId);
+assert.equal(
+  (store.toPlanNodes().find((n) => n.node_id === sqliId) as { status?: string }).status,
+  "done",
+  "host end drives done on Free Main todo",
+);
+assert.equal(
+  store
+    .snapshot()
+    .flatMap((p) => p.tasks)
+    .find((t) => t.content === "Probe SQLi on login")?.status,
+  "completed",
+);
 
 // single_free when exactly one unbound (xss + session free after only sqli bound)
 // Bind xss first via single_free — wait, two free → single_free null
@@ -60,7 +79,7 @@ const multiFree = store.resolveWorkerBind({
 });
 assert.equal(multiFree, null, "two free + weak goal → no bind (caller uses pkg)");
 
-// Fuzzy bind
+// Fuzzy bind — failed end maps plan_status failed
 const fuzzy = store.resolveWorkerBind({
   agent_id: "sub_w2",
   owner_agent_name: "Worker 2",
@@ -69,6 +88,21 @@ const fuzzy = store.resolveWorkerBind({
 });
 assert.equal(fuzzy?.path, "fuzzy");
 assert.equal(fuzzy?.node_id, xssId);
+assert.equal(
+  (store.toPlanNodes().find((n) => n.node_id === xssId) as { status?: string }).status,
+  "running",
+);
+const failed = store.resolveWorkerBind({
+  agent_id: "sub_w2",
+  owner_agent_name: "Worker 2",
+  status: "failed",
+});
+assert.equal(failed?.path, "reattach");
+assert.equal(
+  (store.toPlanNodes().find((n) => n.node_id === xssId) as { status?: string }).status,
+  "failed",
+  "failed host outcome projects as failed on Tasks (not silent pending)",
+);
 
 // single_free: only session unbound
 const single = store.resolveWorkerBind({

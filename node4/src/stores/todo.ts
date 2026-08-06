@@ -27,6 +27,11 @@ export type TodoWorkerOwnership = {
   agent_id: string;
   linked_agent_id?: string;
   owner_agent_name: string;
+  /**
+   * Host-driven plan status (Graph applyChip parity). When set, toPlanNodes
+   * projects this instead of raw TodoItem status so running/done/failed show on Tasks.
+   */
+  plan_status?: "pending" | "running" | "done" | "failed" | "skipped";
 };
 
 /** Synthetic pkg-* row when no Main todo can be bound (Free path mirror of Graph L2). */
@@ -296,10 +301,12 @@ export class TodoStore {
       for (const task of phase.tasks) {
         const node_id = todoTaskNodeId(phase.name, task.content);
         const own = this.ownershipByNodeId.get(node_id);
+        // Host chip status wins (Graph applyChip parity); else TodoItem map.
+        const status = own?.plan_status ?? mapStatus(task.status);
         nodes.push({
           node_id,
           title: task.content,
-          status: mapStatus(task.status),
+          status,
           // kind=task + source=plan: accepted by platform RightPanel.unifiedTodoItems
           kind: "task",
           level: "work_item",
@@ -472,12 +479,42 @@ export class TodoStore {
     this.packageItems = this.packageItems.filter((p) => p.node_id !== id);
   }
 
+  /**
+   * Stamp ownership + optional host status (Graph applyChip parity).
+   * When input.status is set: plan_status for Tasks projection and TodoItem
+   * status for openCount (running→in_progress, done→completed, failed→abandoned).
+   * Does not run single-in_progress normalize so parallel packages can all be running.
+   */
   private applyOwnership(nodeId: string, input: WorkerChipInput): void {
-    this.ownershipByNodeId.set(nodeId, {
+    const prev = this.ownershipByNodeId.get(nodeId);
+    const next: TodoWorkerOwnership = {
       agent_id: input.agent_id,
       linked_agent_id: input.agent_id,
       owner_agent_name: input.owner_agent_name,
-    });
+      plan_status: prev?.plan_status,
+    };
+    if (input.status !== undefined && String(input.status).trim()) {
+      next.plan_status = mapChipStatus(input.status, prev?.plan_status || "pending");
+      this.driveTaskStatusFromChip(nodeId, next.plan_status);
+    }
+    this.ownershipByNodeId.set(nodeId, next);
+  }
+
+  /** Map host chip status onto the Main TodoItem row (not worker-local store). */
+  private driveTaskStatusFromChip(
+    nodeId: string,
+    planStatus: NonNullable<TodoWorkerOwnership["plan_status"]>,
+  ): void {
+    const todoStatus = chipPlanStatusToTodoStatus(planStatus);
+    if (!todoStatus) return;
+    for (const phase of this.phases) {
+      for (const task of phase.tasks) {
+        if (todoTaskNodeId(phase.name, task.content) === nodeId) {
+          task.status = todoStatus;
+          return;
+        }
+      }
+    }
   }
 
   private mainWorkItemIds(): Set<string> {
@@ -496,6 +533,17 @@ export class TodoStore {
       if (!live.has(key)) this.ownershipByNodeId.delete(key);
     }
   }
+}
+
+/** Host L2 chip status → TodoItem status for openCount / phases honesty. */
+function chipPlanStatusToTodoStatus(
+  planStatus: NonNullable<TodoWorkerOwnership["plan_status"]>,
+): TodoStatus | null {
+  if (planStatus === "running") return "in_progress";
+  if (planStatus === "done") return "completed";
+  if (planStatus === "failed" || planStatus === "skipped") return "abandoned";
+  if (planStatus === "pending") return "pending";
+  return null;
 }
 
 function mapChipStatus(

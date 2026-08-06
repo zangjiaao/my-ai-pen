@@ -25,6 +25,9 @@ import {
 } from "./SurfaceInventory";
 import FindingCard from "./cards/FindingCard";
 import { GraphAwareTodoList } from "./TasksPlanList";
+import { discloseTaskListCap, TASKS_WORK_ITEM_CAP } from "../lib/tasksListCap";
+
+export { TASKS_WORK_ITEM_CAP };
 
 type Tab = "status" | "surface" | "findings" | "activity";
 type WorkflowPhaseId = "recon" | "testing" | "verification" | "summary";
@@ -773,13 +776,11 @@ function agentPlanItems(nodes: PlanNode[]): PlanNode[] {
   });
 }
 
-/** Spec #301: raise Tasks list cap; never silent-truncate without disclosure. */
-export const TASKS_WORK_ITEM_CAP = 80;
-
 /**
  * Intentional TODO list for Status — CTF/checklist plan items only.
  * Workers live under Agent collaboration (not duplicated here).
  * Tool telemetry / coverage(mark) / findings stay out of Tasks.
+ * Spec #301: cap + hiddenCount via discloseTaskListCap (never silent truncate).
  */
 function unifiedTodoItems(nodes: PlanNode[]): { items: PlanNode[]; hiddenCount: number } {
   const noiseKinds = new Set([
@@ -852,13 +853,7 @@ function unifiedTodoItems(nodes: PlanNode[]): { items: PlanNode[]; hiddenCount: 
     if (byStatus !== 0) return byStatus;
     return String(left.node_id || left.id || left.title || "").localeCompare(String(right.node_id || right.id || right.title || ""));
   });
-  if (sorted.length <= TASKS_WORK_ITEM_CAP) {
-    return { items: sorted, hiddenCount: 0 };
-  }
-  return {
-    items: sorted.slice(0, TASKS_WORK_ITEM_CAP),
-    hiddenCount: sorted.length - TASKS_WORK_ITEM_CAP,
-  };
+  return discloseTaskListCap(sorted, TASKS_WORK_ITEM_CAP);
 }
 
 function synthesizeMainAgent(activeTool: string | undefined, running: boolean, workflowKind?: string): StrixAgentStatus[] {
