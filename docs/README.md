@@ -22,6 +22,7 @@ Node4 implementation detail (Graph × Pi product path).
 | [`specs/graph-catalog-work-mode-ui.md`](specs/graph-catalog-work-mode-ui.md) | Graph L1 catalog (skill-like) + dual-rail composer/AgentRow (Spec [#278](https://github.com/zangjiaao/my-ai-pen/issues/278)) |
 | [`specs/composer-graph-harness-bind.md`](specs/composer-graph-harness-bind.md) | Composer Graph + Expert → harness bind fail-closed; re-verify booking (Spec [#284](https://github.com/zangjiaao/my-ai-pen/issues/284)) |
 | [`specs/engagement-graph-back-edges.md`](specs/engagement-graph-back-edges.md) | Constrained Engagement Graph (declarative back-edges) + `hypothesis_cycle` (Spec [#285](https://github.com/zangjiaao/my-ai-pen/issues/285)) |
+| [`specs/engagement-graph-json-boundary.md`](specs/engagement-graph-json-boundary.md) | Graph JSON data-plane vs code standards-plane (topology/budgets in JSON; interpreter/predicates/projection/booking in code) |
 | [`specs/lab-scorecard-hypothesis-cycle.md`](specs/lab-scorecard-hypothesis-cycle.md) | Offline dual-arm D0–D3 × R0–R3 scorecard (DVWA+Juice); never agent-facing (Spec #285 S6) |
 | [`specs/hypothesis-evidence.md`](specs/hypothesis-evidence.md) | Optional Expert Graph hypothesis queue + progressive skill disclosure (map #266) |
 | [`specs/finding-identity.md`](specs/finding-identity.md) | Ledger identity (`vuln_type` + file location) + New-only narration (Spec #275) |
