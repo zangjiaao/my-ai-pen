@@ -23,23 +23,44 @@ export function thinkingLifecycleTitle(value: unknown): string {
 }
 
 /**
+ * Presentational projection for ThinkingCard (Spec #305 S3 / Issue 13).
+ * defaultExpanded is always true; empty body yields no fake placeholder.
+ */
+export function thinkingCardProjection(content: Record<string, unknown>): {
+  title: string;
+  body: string;
+  defaultExpanded: true;
+  showBodyWhenExpanded: boolean;
+} {
+  const body = String(content.reasoning || content.text || content.summary || "").trim();
+  return {
+    title: thinkingLifecycleTitle(content.status),
+    body,
+    defaultExpanded: true,
+    showBodyWhenExpanded: Boolean(body),
+  };
+}
+
+/**
  * Merge thinking content.status — prefer terminal done over stale running;
  * never drop done when a late partial arrives.
+ * Uses normalizeExecutionStatus so synonym lists stay single-sourced (Issue 8).
  */
 export function mergeThinkingStatus(existing: unknown, incoming: unknown): string | undefined {
-  const e = String(existing ?? "").trim().toLowerCase();
-  const i = String(incoming ?? "").trim().toLowerCase();
-  const isDone = (s: string) =>
-    ["done", "ok", "success", "completed", "complete", "saved", "loaded"].includes(s);
-  if (isDone(e) || isDone(i)) return "done";
-  if (i) return normalizeExecutionStatus(i);
-  if (e) return normalizeExecutionStatus(e);
+  const eRaw = String(existing ?? "").trim();
+  const iRaw = String(incoming ?? "").trim();
+  if (!eRaw && !iRaw) return undefined;
+  if (eRaw && normalizeExecutionStatus(eRaw) === "done") return "done";
+  if (iRaw && normalizeExecutionStatus(iRaw) === "done") return "done";
+  if (iRaw) return normalizeExecutionStatus(iRaw);
+  if (eRaw) return normalizeExecutionStatus(eRaw);
   return undefined;
 }
 
 /**
  * Tool item success for activity summary (Spec #305 S+).
  * Explicit running is never "successful" even if result payload has HTTP 200 / ok.
+ * Empty/missing status may use result hints (legacy stdout rows).
  */
 export function isSuccessfulToolExecution(
   status: unknown,
@@ -47,6 +68,12 @@ export function isSuccessfulToolExecution(
 ): boolean {
   const primary = String(status ?? "").trim().toLowerCase();
   if (primary) {
+    // HTTP codes in status field are not lifecycle status — fall through to hints.
+    if (/^\d{3}$/.test(primary)) {
+      // treat as non-lifecycle; use hints including this code
+      if (Number(primary) < 400) return true;
+      return false;
+    }
     if (normalizeExecutionStatus(primary) === "running") return false;
     if (normalizeExecutionStatus(primary) === "done") return true;
     if (normalizeExecutionStatus(primary) === "fail") return false;
@@ -59,4 +86,79 @@ export function isSuccessfulToolExecution(
     if (/^\d{3}$/.test(s) && Number(s) < 400) return true;
   }
   return false;
+}
+
+/**
+ * Pure tool activity summary kind for S5 tests / ToolCallCard (Issue 3 / 5).
+ * - success family when any item is successful
+ * - 执行中 when none successful and at least one is running or missing-without-success
+ * - 失败 otherwise
+ */
+export function toolActivitySummaryKind(
+  items: Array<{
+    status?: unknown;
+    result?: { status?: unknown; status_code?: unknown } | null;
+  }>,
+): "running" | "done" | "fail" {
+  if (!items.length) return "running";
+  const successful = items.filter((item) =>
+    isSuccessfulToolExecution(item.status, {
+      status: item.result?.status,
+      status_code: item.result?.status_code,
+    }),
+  );
+  if (successful.length) return "done";
+  const anyRunningLike = items.some((item) => {
+    const primary = String(item.status ?? "").trim();
+    if (!primary) return true; // missing → still working unless success hints (already filtered)
+    if (/^\d{3}$/.test(primary)) return Number(primary) >= 400; // failed codes → not running
+    return normalizeExecutionStatus(primary) === "running";
+  });
+  return anyRunningLike ? "running" : "fail";
+}
+
+/** Chinese summary label matching ToolCallCard shell language for the aggregate kind. */
+export function toolActivitySummaryLabel(
+  items: Array<{
+    status?: unknown;
+    toolName?: string;
+    result?: { status?: unknown; status_code?: unknown } | null;
+  }>,
+  fallbackTool = "tool",
+): string {
+  const kind = toolActivitySummaryKind(items);
+  if (kind === "running") return "执行中";
+  if (kind === "fail") return "失败";
+  const successful = items.filter((item) =>
+    isSuccessfulToolExecution(item.status, {
+      status: item.result?.status,
+      status_code: item.result?.status_code,
+    }),
+  );
+  const toolName = successful[successful.length - 1]?.toolName || fallbackTool;
+  const lower = String(toolName).toLowerCase();
+  const count = successful.length || 1;
+  if (/browser|explore|crawl/.test(lower)) return `已浏览${count}个网页`;
+  if (/http|request|replay|fetch|curl/.test(lower)) return `已请求${count}次`;
+  if (/stdin|command input|\binput\b/.test(lower)) return `已发送${count}次输入`;
+  if (/execute|command|shell|docker|process/.test(lower)) return `已执行${count}条命令`;
+  if (/finding|vuln|verify|evidence|confirm/.test(lower)) return `已处理${count}条结果`;
+  if (/search|scan|dir|wordlist|enumerate/.test(lower)) return `已枚举${count}次`;
+  return `已完成${count}次`;
+}
+
+/**
+ * Resolve tool item lifecycle status string for rows (Issue 3).
+ * Keep raw empty when missing so isSuccessfulToolExecution can use result hints.
+ * Do not invent "done"; do not force "running" when success hints exist.
+ */
+export function resolveToolItemStatus(
+  explicitStatus: unknown,
+  resultHints?: { status?: unknown; status_code?: unknown },
+): string {
+  const explicit = String(explicitStatus ?? "").trim();
+  if (explicit) return explicit;
+  // Missing: leave empty (success via hints, or running-like via toolActivitySummaryKind).
+  void resultHints;
+  return "";
 }

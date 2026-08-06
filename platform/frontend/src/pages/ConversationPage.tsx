@@ -32,12 +32,14 @@ import {
   upsertWorkerAgent,
 } from "../lib/panelAgentsState";
 import {
+  buildPendingSendSuccessEvent,
   clearLiveStreams,
   durableStreamSnapshots,
   isProgressiveActivityFrame,
   liveFrameToMessageLike,
   mergeMessagesWithLiveStreams,
   messageListKey,
+  pendingChromeSpeakerContent,
   pendingChromeVisible,
   pruneLiveCatchUp,
   reducePendingChrome,
@@ -1435,8 +1437,8 @@ export default function ConversationPage() {
     const body = readString(c.text) || readString(c.reasoning) || readString(raw.text);
     const status = readString(c.status) || readString(raw.status);
     if (msgType === "thinking" && status) c.status = status;
-    // Spec #305 T1: empty body allowed when thinking status is running.
-    if (!isProgressiveActivityFrame({ streamId, msgType, text: body, status: c.status ?? status })) {
+    // Spec #305: empty running/done thinking is progressive activity (Issue 1 / 4).
+    if (!isProgressiveActivityFrame({ streamId, msgType, text: body, status: c.status || status })) {
       return;
     }
     c.text = body;
@@ -1444,8 +1446,9 @@ export default function ConversationPage() {
     const convId = messageConversationId(raw, activeId);
     markMessageAutoScroll();
     const attribution = agentAttribution(raw);
-    const message = makeMessage(convId, "agent", msgType, { ...attribution, ...c });
-    // Pending chrome hides on first progressive activity (incl. empty running thinking).
+    const content = { ...attribution, ...c };
+    const message = makeMessage(convId, "agent", msgType, content);
+    // Pending chrome hides on first progressive activity (incl. empty running/done thinking).
     setPendingChrome((cur) => reducePendingChrome(cur, { type: "stream_started" }));
     setLiveStreams((prev) =>
       upsertLiveByStreamId(prev, {
@@ -1454,7 +1457,7 @@ export default function ConversationPage() {
         text: body,
         messageId: messageId || message.id || undefined,
         conversationId: convId || undefined,
-        content: { ...attribution, ...c },
+        content,
       }),
     );
     // Scrub any historical agent_pending rows; do not write new ones.
@@ -1892,6 +1895,11 @@ export default function ConversationPage() {
       resolvedMention?.kind === "expert"
         ? String(resolvedMention.name || resolvedMention.label || "").trim()
         : "";
+    // Issue 9: display name from chip/label (prefer label when present).
+    const routeExpertDisplay =
+      resolvedMention?.kind === "expert"
+        ? String(resolvedMention.label || resolvedMention.name || "").trim()
+        : "";
     const engagement = isBuiltinAssistant ? "default" : (eng || packId || "pentest");
 
     if (routeNodeId) {
@@ -1902,6 +1910,7 @@ export default function ConversationPage() {
     userContent.role = engagement;
     if (routeExpertId) userContent.expert_id = routeExpertId;
     if (routeExpertName) userContent.expert_name = routeExpertName;
+    if (routeExpertDisplay) userContent.expert_display_name = routeExpertDisplay;
 
     pendingScrollToBottomRef.current = true;
     shouldStickToBottomRef.current = true;
@@ -1916,6 +1925,7 @@ export default function ConversationPage() {
       role: engagement,
       ...(routeExpertId ? { expert_id: routeExpertId } : {}),
       ...(routeExpertName ? { expert_name: routeExpertName } : {}),
+      ...(routeExpertDisplay ? { expert_display_name: routeExpertDisplay } : {}),
     };
 
     const shouldContinueExisting = Boolean(
@@ -1942,14 +1952,17 @@ export default function ConversationPage() {
       );
     });
     setPendingChrome(
-      reducePendingChrome(null, {
-        type: "send_success",
-        conversationId: convId!,
-        // Spec #305: reuse agent speaker attribution for list-tail pending chrome.
-        ...(routeExpertId ? { expert_id: routeExpertId } : {}),
-        ...(routeExpertName ? { expert_name: routeExpertName } : {}),
-        agent_source: isBuiltinAssistant ? "default" : "pentest",
-      }),
+      reducePendingChrome(
+        null,
+        buildPendingSendSuccessEvent({
+          conversationId: convId!,
+          // Spec #305: reuse agent speaker attribution for list-tail pending chrome.
+          ...(routeExpertId ? { expert_id: routeExpertId } : {}),
+          ...(routeExpertName ? { expert_name: routeExpertName } : {}),
+          ...(routeExpertDisplay ? { expert_display_name: routeExpertDisplay } : {}),
+          agent_source: isBuiltinAssistant ? "default" : "pentest",
+        }),
+      ),
     );
 
     // Spec #311 US3: when a 下一步 item already holds the baton (e.g. after 采纳),
@@ -2495,15 +2508,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               {/* Spec #276: pending is chrome only — not a Message / live-slot row.
                   Spec #305: same speaker row rules as MessageRenderer (first / expert switch only). */}
               {showPendingChrome && pendingChrome && (() => {
-                const pendingContent: Record<string, unknown> = {
-                  text: pendingChrome.label,
-                  ...(pendingChrome.expert_id ? { expert_id: pendingChrome.expert_id } : {}),
-                  ...(pendingChrome.expert_name ? { expert_name: pendingChrome.expert_name } : {}),
-                  ...(pendingChrome.expert_display_name
-                    ? { expert_display_name: pendingChrome.expert_display_name }
-                    : {}),
-                  ...(pendingChrome.agent_source ? { agent_source: pendingChrome.agent_source } : {}),
-                };
+                const pendingContent = pendingChromeSpeakerContent(pendingChrome);
                 const lastAgent = [...displayMessages].reverse().find((m) => m.role === "agent");
                 const showSpeaker = shouldShowAgentSpeakerLabel(
                   pendingContent,

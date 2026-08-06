@@ -305,12 +305,15 @@ export class PlatformTextStream {
   }): Promise<void> {
     const msg = event.message as { role?: string } | undefined;
     if (event.type === "message_start" && msg?.role === "assistant") {
+      // Spec #305 Issue 10: do not open thinking on every message_start (avoids empty
+      // 思考完成 spam on text-only turns). T1 empty running starts on thinking_* only.
       this.text.ensureStream();
-      this.thinking.ensureStream();
-      // Spec #305 T1: announce empty running thinking before first tokens.
-      await this.thinking.ensureRunningStart();
       this.text.applySnapshot(event.message, event.assistantMessageEvent);
       this.thinking.applySnapshot(event.message, event.assistantMessageEvent);
+      // If the first partial already carries thinking blocks, open T1 for this turn.
+      if (assistantThinking(event.message) || assistantThinking(event.assistantMessageEvent?.partial)) {
+        await this.thinking.ensureRunningStart();
+      }
       await Promise.all([this.text.maybeFlush(), this.thinking.maybeFlush()]);
       return;
     }
@@ -321,6 +324,7 @@ export class PlatformTextStream {
       if (kind.startsWith("toolcall_")) return;
 
       if (kind.startsWith("thinking_")) {
+        // Spec #305 T1: first thinking_* opens channel + empty running frame.
         this.thinking.ensureStream();
         await this.thinking.ensureRunningStart();
         this.thinking.applySnapshot(event.message, ame);
@@ -336,10 +340,11 @@ export class PlatformTextStream {
       }
       // Unknown update: try both channels from partial snapshot.
       this.text.ensureStream();
-      this.thinking.ensureStream();
-      await this.thinking.ensureRunningStart();
       this.text.applySnapshot(event.message, ame);
       this.thinking.applySnapshot(event.message, ame);
+      if (assistantThinking(event.message) || assistantThinking(ame?.partial)) {
+        await this.thinking.ensureRunningStart();
+      }
       await Promise.all([this.text.maybeFlush(), this.thinking.maybeFlush()]);
       return;
     }

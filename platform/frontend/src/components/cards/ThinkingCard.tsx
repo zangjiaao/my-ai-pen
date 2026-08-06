@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Brain } from "lucide-react";
-import { thinkingLifecycleTitle } from "../../lib/status";
+import { thinkingCardProjection } from "../../lib/status";
 
 /**
  * Thinking row — same shell language as ToolCallCard (light bar, no heavy border box).
@@ -8,9 +8,8 @@ import { thinkingLifecycleTitle } from "../../lib/status";
  * empty body allowed while running (no fake placeholder copy).
  */
 export default function ThinkingCard({ content }: { content: Record<string, unknown> }) {
-  const reasoning = String(content.reasoning || content.text || content.summary || "").trim();
-  const title = thinkingLifecycleTitle(content.status);
-  const [expanded, setExpanded] = useState(true);
+  const projection = thinkingCardProjection(content);
+  const [expanded, setExpanded] = useState(projection.defaultExpanded);
 
   return (
     <div data-testid="thinking-card" className="my-2 min-w-0 max-w-full rounded-md bg-surface-default/70">
@@ -30,17 +29,17 @@ export default function ThinkingCard({ content }: { content: Record<string, unkn
           data-testid="thinking-card-title"
           className="min-w-0 flex-shrink font-sans text-sm text-ink-secondary"
         >
-          {title}
+          {projection.title}
         </span>
         <span className="min-w-6 flex-1" aria-hidden="true" />
       </button>
-      {expanded && reasoning ? (
+      {expanded && projection.showBodyWhenExpanded ? (
         <div className="space-y-0.5 pb-1 pl-2">
           <div
             data-testid="thinking-card-body"
             className="py-1 text-xs leading-relaxed text-ink-muted whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
           >
-            {reasoning}
+            {projection.body}
           </div>
         </div>
       ) : null}

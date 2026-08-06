@@ -8,7 +8,11 @@ import {
   mergeThinkingStatus,
   normalizeExecutionStatus,
   resolveThinkingUiStatus,
+  resolveToolItemStatus,
+  thinkingCardProjection,
   thinkingLifecycleTitle,
+  toolActivitySummaryKind,
+  toolActivitySummaryLabel,
 } from "./status.ts";
 
 // S3 ThinkingCard projection helpers
@@ -27,14 +31,35 @@ import {
   console.log("ok: S3 thinking title + historical missing → done");
 }
 
-// Platform/FE merge: prefer done over stale running
+// Issue 8: mergeThinkingStatus uses normalizeExecutionStatus synonyms
 {
   assert.equal(mergeThinkingStatus("running", "done"), "done");
   assert.equal(mergeThinkingStatus("done", "running"), "done");
   assert.equal(mergeThinkingStatus("done", undefined), "done");
   assert.equal(mergeThinkingStatus(undefined, "running"), "running");
   assert.equal(mergeThinkingStatus(undefined, undefined), undefined);
-  console.log("ok: mergeThinkingStatus prefers done");
+  assert.equal(mergeThinkingStatus("running", "completed"), "done");
+  assert.equal(mergeThinkingStatus("ok", "running"), "done");
+  console.log("ok: mergeThinkingStatus prefers done via normalize");
+}
+
+// Issue 13: ThinkingCard presentational projection
+{
+  const runningEmpty = thinkingCardProjection({ status: "running", text: "" });
+  assert.equal(runningEmpty.title, "思考中…");
+  assert.equal(runningEmpty.body, "");
+  assert.equal(runningEmpty.defaultExpanded, true);
+  assert.equal(runningEmpty.showBodyWhenExpanded, false);
+
+  const doneBody = thinkingCardProjection({ status: "done", reasoning: "full plan" });
+  assert.equal(doneBody.title, "思考完成");
+  assert.equal(doneBody.body, "full plan");
+  assert.equal(doneBody.showBodyWhenExpanded, true);
+
+  const historical = thinkingCardProjection({ text: "old" });
+  assert.equal(historical.title, "思考完成");
+  assert.ok(!String(historical.body).includes("暂无"), "no fake placeholder copy");
+  console.log("ok: S3 thinkingCardProjection default expanded + empty body");
 }
 
 // S5: running never counts successful even with HTTP 200 in result
@@ -53,6 +78,58 @@ import {
   );
   assert.equal(normalizeExecutionStatus(""), "running");
   console.log("ok: S5 tool running not successful with result hints");
+}
+
+// Issue 3 + 5: tool activity summary surface
+{
+  assert.equal(resolveToolItemStatus(""), "");
+  assert.equal(resolveToolItemStatus("running"), "running");
+  assert.equal(resolveToolItemStatus("done"), "done");
+
+  assert.equal(
+    toolActivitySummaryKind([
+      { status: "running", result: { status_code: 200 } },
+    ]),
+    "running",
+    "explicit running → 执行中 even with 200",
+  );
+  assert.equal(
+    toolActivitySummaryLabel([
+      { status: "running", toolName: "shell", result: { status_code: 200 } },
+    ]),
+    "执行中",
+  );
+
+  assert.equal(
+    toolActivitySummaryKind([
+      { status: "", result: { status_code: 200 } },
+    ]),
+    "done",
+    "missing status + status_code 200 → success family",
+  );
+  assert.ok(
+    toolActivitySummaryLabel([
+      { status: "", toolName: "http_request", result: { status_code: 200 } },
+    ]).includes("请求") || toolActivitySummaryLabel([
+      { status: "", toolName: "http_request", result: { status_code: 200 } },
+    ]).includes("完成"),
+  );
+
+  assert.equal(
+    toolActivitySummaryKind([{ status: "done", toolName: "shell" }]),
+    "done",
+  );
+  assert.equal(
+    toolActivitySummaryLabel([{ status: "done", toolName: "shell" }]),
+    "已执行1条命令",
+  );
+
+  assert.equal(
+    toolActivitySummaryKind([{ status: "error" }]),
+    "fail",
+  );
+  assert.equal(toolActivitySummaryLabel([{ status: "error" }]), "失败");
+  console.log("ok: S5 toolActivitySummary 执行中 vs success family");
 }
 
 console.log("all status Spec #305 tests passed");

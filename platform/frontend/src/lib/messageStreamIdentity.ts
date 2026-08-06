@@ -125,10 +125,16 @@ export type LiveStreamFrame = {
   content?: Record<string, unknown>;
 };
 
+/** Empty thinking body is allowed when protocol status is explicit running or done (Issue 1). */
+function isEmptyThinkingStatusAllowed(status: string): boolean {
+  return status === "running" || status === "done";
+}
+
 /**
  * Upsert progressive frame only when stream_id is present (fail-closed).
  * Missing stream_id → map unchanged; never invents live-slot or synthetic keys.
- * Spec #305 T1: empty body allowed for thinking when content.status === "running".
+ * Spec #305: empty body allowed for thinking when status is running (T1) or done (final empty).
+ * Thinking status merges via mergeThinkingStatus (prefer done; Issue 2).
  */
 export function upsertLiveByStreamId(
   live: Record<string, LiveStreamFrame>,
@@ -146,9 +152,9 @@ export function upsertLiveByStreamId(
   const body = String(input.text || "");
   const statusRaw = input.content?.status;
   const status = String(statusRaw ?? "").trim().toLowerCase();
-  const allowEmptyRunning =
-    input.msgType === "thinking" && status === "running";
-  if (!body && !allowEmptyRunning) return live;
+  const allowEmptyThinking =
+    input.msgType === "thinking" && isEmptyThinkingStatusAllowed(status);
+  if (!body && !allowEmptyThinking) return live;
 
   const existing = live[streamId];
   const prevText = existing?.text || "";
@@ -157,6 +163,11 @@ export function upsertLiveByStreamId(
     ...(existing?.content || {}),
     ...(input.content || {}),
   };
+  if (input.msgType === "thinking") {
+    const mergedStatus = mergeThinkingStatus(existing?.content?.status, input.content?.status);
+    if (mergedStatus !== undefined) mergedContent.status = mergedStatus;
+    else delete mergedContent.status;
+  }
   return {
     ...live,
     [streamId]: {
@@ -186,10 +197,14 @@ export function hasProgressiveLive(live: Record<string, LiveStreamFrame>): boole
 export type DurableStreamSnapshot = {
   streamId: string;
   text: string;
+  /** Optional thinking/tool status for catch-up decisions (Issue 11). */
+  status?: string;
+  msgType?: string;
 };
 
 /**
  * Drop live keys when durable (RQ) already has the same stream_id with text ≥ live.
+ * Spec #305 Issue 11: do not prune empty live running thinking while durable lacks terminal done.
  */
 export function pruneLiveCatchUp(
   live: Record<string, LiveStreamFrame>,
@@ -198,19 +213,38 @@ export function pruneLiveCatchUp(
   const keys = Object.keys(live);
   if (!keys.length) return live;
 
-  const byStream = new Map<string, string>();
+  const byStream = new Map<string, DurableStreamSnapshot>();
   for (const row of durable) {
     const sid = String(row.streamId || "").trim();
     if (!sid) continue;
-    byStream.set(sid, String(row.text || ""));
+    byStream.set(sid, row);
   }
   if (!byStream.size) return live;
 
   let changed = false;
   const next: Record<string, LiveStreamFrame> = {};
   for (const [sid, frame] of Object.entries(live)) {
-    const durableText = byStream.get(sid);
-    if (durableText !== undefined && durableText.length >= (frame.text || "").length) {
+    const row = byStream.get(sid);
+    if (row === undefined) {
+      next[sid] = frame;
+      continue;
+    }
+    const durableText = String(row.text || "");
+    const liveText = frame.text || "";
+    const liveStatus = String(frame.content?.status ?? "").trim().toLowerCase();
+    const durableStatus = String(row.status ?? "").trim().toLowerCase();
+    // Empty running thinking: keep live until durable has done (or longer body).
+    if (
+      frame.msgType === "thinking"
+      && !liveText
+      && liveStatus === "running"
+      && !durableText
+      && durableStatus !== "done"
+    ) {
+      next[sid] = frame;
+      continue;
+    }
+    if (durableText.length >= liveText.length) {
       changed = true;
       continue;
     }
@@ -223,7 +257,7 @@ export function pruneLiveCatchUp(
 export function durableStreamSnapshots(
   messages: Array<{
     msg_type?: string;
-    content?: { stream_id?: unknown; text?: unknown; reasoning?: unknown };
+    content?: { stream_id?: unknown; text?: unknown; reasoning?: unknown; status?: unknown };
   }>,
 ): DurableStreamSnapshot[] {
   const out: DurableStreamSnapshot[] = [];
@@ -234,7 +268,14 @@ export function durableStreamSnapshots(
     const text =
       (typeof m.content?.text === "string" ? m.content.text : "")
       || (typeof m.content?.reasoning === "string" ? m.content.reasoning : "");
-    out.push({ streamId, text });
+    const status =
+      typeof m.content?.status === "string" ? m.content.status.trim() : undefined;
+    out.push({
+      streamId,
+      text,
+      ...(status ? { status } : {}),
+      ...(m.msg_type ? { msgType: m.msg_type } : {}),
+    });
   }
   return out;
 }
@@ -295,7 +336,93 @@ export function isProgressiveActivityFrame(input: {
   if (!streamId) return false;
   const body = String(input.text || "");
   if (body) return true;
-  return input.msgType === "thinking" && String(input.status ?? "").trim().toLowerCase() === "running";
+  // Empty thinking with explicit running (T1) or done (final empty) still counts as activity.
+  const status = String(input.status ?? "").trim().toLowerCase();
+  return input.msgType === "thinking" && isEmptyThinkingStatusAllowed(status);
+}
+
+/** Build send_success event for pending chrome (Issue 4 / 7 / 9). */
+export function buildPendingSendSuccessEvent(input: {
+  conversationId: string;
+  label?: string;
+  expert_id?: string;
+  expert_name?: string;
+  expert_display_name?: string;
+  agent_source?: string;
+}): PendingChromeEvent {
+  return {
+    type: "send_success",
+    conversationId: input.conversationId,
+    ...(input.label ? { label: input.label } : {}),
+    ...(optionalTrimmed(input.expert_id) ? { expert_id: optionalTrimmed(input.expert_id) } : {}),
+    ...(optionalTrimmed(input.expert_name) ? { expert_name: optionalTrimmed(input.expert_name) } : {}),
+    ...(optionalTrimmed(input.expert_display_name)
+      ? { expert_display_name: optionalTrimmed(input.expert_display_name) }
+      : {}),
+    ...(optionalTrimmed(input.agent_source) ? { agent_source: optionalTrimmed(input.agent_source) } : {}),
+  };
+}
+
+/** Content shape used for pending speaker resolution (same fields as agent messages). */
+export function pendingChromeSpeakerContent(
+  pending: NonNullable<PendingChrome>,
+): Record<string, unknown> {
+  return {
+    text: pending.label,
+    ...(pending.expert_id ? { expert_id: pending.expert_id } : {}),
+    ...(pending.expert_name ? { expert_name: pending.expert_name } : {}),
+    ...(pending.expert_display_name
+      ? { expert_display_name: pending.expert_display_name }
+      : {}),
+    ...(pending.agent_source ? { agent_source: pending.agent_source } : {}),
+  };
+}
+
+/**
+ * Pure operator path: progressive frame → live upsert + pending clear (Issue 4 / 6).
+ * Mirrors ConversationPage upsertStreamedAgentText accept gate without React.
+ */
+export function applyProgressiveActivity(
+  state: {
+    live: Record<string, LiveStreamFrame>;
+    pending: PendingChrome;
+  },
+  input: {
+    streamId?: string | null;
+    msgType: "text" | "thinking";
+    text?: string | null;
+    status?: unknown;
+    messageId?: string;
+    conversationId?: string;
+    content?: Record<string, unknown>;
+  },
+): {
+  live: Record<string, LiveStreamFrame>;
+  pending: PendingChrome;
+  accepted: boolean;
+} {
+  const streamId = String(input.streamId || "").trim();
+  const text = String(input.text || "");
+  const status = input.status ?? input.content?.status;
+  if (!isProgressiveActivityFrame({ streamId, msgType: input.msgType, text, status })) {
+    return { live: state.live, pending: state.pending, accepted: false };
+  }
+  const content: Record<string, unknown> = {
+    ...(input.content || {}),
+    ...(status !== undefined && status !== null && String(status).trim()
+      ? { status: String(status).trim() }
+      : {}),
+  };
+  const live = upsertLiveByStreamId(state.live, {
+    streamId,
+    msgType: input.msgType,
+    text,
+    messageId: input.messageId,
+    conversationId: input.conversationId,
+    content,
+  });
+  const pending = reducePendingChrome(state.pending, { type: "stream_started" });
+  return { live, pending, accepted: true };
 }
 
 /**
