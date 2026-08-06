@@ -49,6 +49,7 @@ import {
   composerEngagementWireFields,
   ENGAGEMENT_UNSPECIFIED_LABEL,
   expertLabel,
+  isExpertSchedulable,
   resolveExpertColor,
   type EngagementTemplateId,
   type ExpertId,
@@ -116,6 +117,8 @@ type MentionTarget = {
   /** Accent color for partner chip / list (#RRGGBB). */
   color?: string;
   status?: string;
+  /** Spec #299: offline-bound experts are listed but not selectable. */
+  selectable?: boolean;
 };
 
 type Progress = { current: number; total: number; percent: number };
@@ -1582,6 +1585,7 @@ export default function ConversationPage() {
     const out: MentionTarget[] = [];
     for (const e of productExperts) {
       if (e.enabled === false) continue;
+      const selectable = isExpertSchedulable(e.node_status);
       out.push({
         kind: "expert" as const,
         key: `expert:${e.id}`,
@@ -1589,22 +1593,25 @@ export default function ConversationPage() {
         label: e.name,
         subtitle: `${expertLabel(e.pack_id)} → ${e.node_name || e.node_id.slice(0, 8)}${
           e.node_status ? ` (${e.node_status})` : ""
-        }`,
+        }${selectable ? "" : " · 不可调度"}`,
         nodeId: e.node_id,
         packId: e.pack_id,
         expertId: e.id,
         color: resolveExpertColor(e.color, e.id),
         status: e.node_status || undefined,
+        selectable,
       });
     }
     return out;
   }, [productExperts]);
 
-  // Default partner: expert marked is_default in 专家管理, else pack=default, else first online.
+  // Default partner: online is_default → online pack=default → first online (Spec #299).
+  // Re-pick when current Expert goes offline or is removed.
   useEffect(() => {
     if (selectedMention) {
-      // Drop selection if expert was deleted.
-      if (!mentionTargets.some((t) => t.key === selectedMention.key)) {
+      const current = mentionTargets.find((t) => t.key === selectedMention.key);
+      // Drop if deleted or bound node went offline (not selectable).
+      if (!current || current.selectable === false) {
         const fallback = pickDefaultMentionTarget(mentionTargets, productExperts);
         selectedMentionRef.current = fallback;
         setSelectedMention(fallback);
@@ -1700,6 +1707,8 @@ export default function ConversationPage() {
   }, [activeId, addMessageToConversation, send]);
 
   const chooseMention = useCallback((target: MentionTarget) => {
+    // Spec #299: offline-bound Expert is not a conversation partner.
+    if (target.selectable === false) return;
     // Select partner only — do not inject "@name" into the composer text.
     const state = getMentionState(input);
     if (state) {
@@ -2146,10 +2155,11 @@ export default function ConversationPage() {
   ]);
 
   const selectExpertFromToolbar = useCallback((key: string) => {
-    const fallback = mentionTargets[0] || null;
-    const target = key
-      ? mentionTargets.find((t) => t.key === key) || fallback
-      : fallback;
+    const selectable = mentionTargets.filter((t) => t.selectable !== false);
+    const fallback = selectable[0] || null;
+    const found = key ? mentionTargets.find((t) => t.key === key) : null;
+    // Spec #299: refuse offline-bound Expert as conversation partner.
+    const target = found && found.selectable !== false ? found : fallback;
     selectedMentionRef.current = target;
     setSelectedMention(target);
     // Mode + Goal only apply to pentest experts; reset when leaving that pack.
@@ -2161,7 +2171,10 @@ export default function ConversationPage() {
     // Spec #277: stay on 不指定 (Free) when entering pentest — do not silent-set app_assessment.
   }, [mentionTargets]);
 
-  const activePartner = selectedMention || mentionTargets[0] || null;
+  const activePartner =
+    (selectedMention && selectedMention.selectable !== false ? selectedMention : null)
+    || mentionTargets.find((t) => t.selectable !== false)
+    || null;
   const showPentestControls = isPentestMentionTarget(activePartner);
   // Spec #278: null = 不指定 (user intent rail); actual Session mode is AgentRow badge.
   const activeModeLabel =
@@ -2236,28 +2249,28 @@ function resolveMentionedTarget(value: string, targets: MentionTarget[]): Mentio
 
 /** Pentest pack experts get mode template + Goal switch; platform / other packs do not. */
 /**
- * New-chat partner priority:
- * 1) expert.is_default from 专家管理
- * 2) pack_id === default (通用助理)
- * 3) online node
- * 4) first target
+ * New-chat partner priority (Spec #299: only online / schedulable seats):
+ * 1) expert.is_default from 专家管理 (if online)
+ * 2) pack_id === default (通用助理, if online)
+ * 3) first online target
+ * Never default to an offline-bound Expert.
  */
 function pickDefaultMentionTarget(
   targets: MentionTarget[],
   experts: ProductExpert[],
 ): MentionTarget | null {
-  if (!targets.length) return null;
+  const selectable = targets.filter((t) => t.selectable !== false);
+  if (!selectable.length) return null;
   const byId = new Map(experts.map((e) => [e.id, e]));
-  const flagged = targets.find((t) => {
+  const flagged = selectable.find((t) => {
     if (!t.expertId) return false;
     const e = byId.get(t.expertId);
     return Boolean(e?.is_default && e.enabled !== false);
   });
   if (flagged) return flagged;
-  const builtin = targets.find((t) => String(t.packId || "").toLowerCase() === "default");
+  const builtin = selectable.find((t) => String(t.packId || "").toLowerCase() === "default");
   if (builtin) return builtin;
-  const online = targets.find((t) => t.status === "online");
-  return online || targets[0] || null;
+  return selectable.find((t) => t.status === "online") || selectable[0] || null;
 }
 
 function isPentestMentionTarget(target: MentionTarget | null | undefined): boolean {
@@ -2451,15 +2464,23 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                   <div className="absolute bottom-full left-0 z-20 mb-2 w-80 overflow-hidden rounded-xl border border-hairline bg-canvas shadow-lg">
                     {mentionOptions.map((target) => {
                       const accent = target.color || resolveExpertColor(null, target.expertId || target.key);
+                      const disabled = target.selectable === false;
                       return (
                       <button
                         key={target.key}
                         type="button"
+                        disabled={disabled}
+                        title={disabled ? "绑定节点离线，不可调度" : undefined}
                         onMouseDown={(event) => {
                           event.preventDefault();
+                          if (disabled) return;
                           chooseMention(target);
                         }}
-                        className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm transition-colors hover:bg-surface-default"
+                        className={`flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm transition-colors ${
+                          disabled
+                            ? "cursor-not-allowed opacity-45"
+                            : "hover:bg-surface-default"
+                        }`}
                       >
                         <span
                           className="h-2.5 w-2.5 shrink-0 rounded-full"
@@ -2475,11 +2496,13 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                           </span>
                         </span>
                         <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-ink-muted">
-                          {target.status === "online"
-                            ? "Online"
-                            : target.status === "offline"
-                              ? "Offline"
-                              : expertLabel(target.packId)}
+                          {disabled
+                            ? "不可调度"
+                            : target.status === "online"
+                              ? "Online"
+                              : target.status === "offline"
+                                ? "Offline"
+                                : expertLabel(target.packId)}
                         </span>
                       </button>
                       );
@@ -2659,8 +2682,10 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                           </p>
                           {mentionTargets.map((t) => {
                             const selected = t.key === activePartner?.key;
-                            const statusLabel =
-                              t.status === "online"
+                            const disabled = t.selectable === false;
+                            const statusLabel = disabled
+                              ? "不可调度"
+                              : t.status === "online"
                                 ? "在线"
                                 : t.status === "offline"
                                   ? "离线"
@@ -2672,12 +2697,20 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                                 type="button"
                                 role="option"
                                 aria-selected={selected}
+                                aria-disabled={disabled}
+                                disabled={disabled}
+                                title={disabled ? "绑定节点离线，不可调度" : undefined}
                                 onClick={() => {
+                                  if (disabled) return;
                                   selectExpertFromToolbar(t.key);
                                   setPartnerMenuOpen(false);
                                 }}
                                 className={`flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors ${
-                                  selected ? "bg-surface-elevated" : "hover:bg-surface-default"
+                                  disabled
+                                    ? "cursor-not-allowed opacity-45"
+                                    : selected
+                                      ? "bg-surface-elevated"
+                                      : "hover:bg-surface-default"
                                 }`}
                               >
                                 <span
@@ -2690,7 +2723,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                                     <span className="truncate text-sm font-medium text-ink">
                                       {t.label || t.name}
                                     </span>
-                                    {t.status === "online" && (
+                                    {t.status === "online" && !disabled && (
                                       <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-status-success" />
                                     )}
                                   </span>
@@ -2698,7 +2731,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                                     {t.subtitle || statusLabel}
                                   </span>
                                 </span>
-                                {selected ? (
+                                {selected && !disabled ? (
                                   <Check size={14} className="shrink-0 text-ink" strokeWidth={2.25} />
                                 ) : (
                                   <span className="shrink-0 text-[10px] font-medium text-ink-muted">

@@ -44,10 +44,17 @@
 
 Before `task_assign` is sent to a worker, the platform checks that the engagement resolves to a pack id in the node’s effective offers. If not, dispatch fails with a clear error (install the pack on the node first).
 
+**Offline / unbound seat (normative — map #242 batch-2):**
+
+- Dispatch target is the **bound Node of the selected Expert** (or explicit node for default seat). That node **must be online** (live WS in `node_connections`).
+- If the bound node is offline or has no live socket: **hard fail** with a user-visible error. **No silent fallthrough** to another online worker.
+- Platform `offers` alone do **not** prove disk install; see [Offline Node & pack honesty](#offline-node--pack-honesty).
+
 `@Expert` resolution also requires:
 
 - Expert exists and `enabled`
 - Bound node still has that pack in offers (create/update API enforces this)
+- Bound node is **online** when the Expert is **selected for execution** (conversation picker must not offer offline-bound Experts as selectable; backend must reject assign anyway)
 
 Aliases fold to canonical pack ids (same idea as Node4 `resolveRolePack`):
 
@@ -82,6 +89,8 @@ Billing event detail includes stable `billing_code` (e.g. `expert.ctf`), `expert
 
 Node list/detail also expose `offers` on the node payload.
 
+**Offline install/uninstall is allowed as queue:** mutating `node.config.offers` may succeed while the node is offline. Response **must** include delivery honesty (`node_delivery.delivered`, optional `note`). Clients **must not** treat HTTP `ok: true` alone as “pack runnable on disk.” On next connect, platform pushes `expert_sync` / uninstall as today (`docs/deploy/beta-bootstrap.md`).
+
 ## Product Expert API
 
 - `GET /api/experts` — list instances (includes `node_name`, `node_status`, `node_offers`)
@@ -93,17 +102,70 @@ Node list/detail also expose `offers` on the node payload.
 Rules:
 
 - `name` is the `@mention` token: Unicode letters (including Chinese), digits, and `_.:-` (1–128), unique; must not collide with a node name. No spaces.
-- `pack_id` must be installed on the bound node (offers gate).
+- `pack_id` must be on the bound node’s **platform offers** (offers gate). Offline node may still hold offers as **queued** intent — create/edit Expert remains allowed as **configuration**.
+- Create/edit does **not** require the bound node to be online; product UI must show **offline / not schedulable** when `node_status !== online`.
 - Cannot bind a product Expert to a non-worker / retired “platform agent” node id (if any legacy id remains during migration).
 - Audit: `expert.create` / `expert.update` / `expert.delete`.
 - **`default` is not** a row in `experts` (built-in seat; not user-created).
+
+## Offline Node & pack honesty
+
+> Wayfinder map [#242](https://github.com/zangjiaao/my-ai-pen/issues/242) batch-2 · law [#250](https://github.com/zangjiaao/my-ai-pen/issues/250) · fix [#251](https://github.com/zangjiaao/my-ai-pen/issues/251) · research [#249](https://github.com/zangjiaao/my-ai-pen/issues/249).
+
+### Product law (summary)
+
+| Action | Offline / unpaired Node |
+|--------|-------------------------|
+| Register Node (row + token) | **Allowed** — registration ≠ runnable seat |
+| Mutate offers (install/uninstall intent) | **Allowed as queue** — platform offers write + deferred disk sync |
+| Create/edit product Expert on that node | **Allowed as config** — not schedulable while offline |
+| Select Expert in conversation / @ / toolbar | **Forbidden** — grey out / disable / not selectable |
+| `task_assign` / run work on that seat | **Forbidden** — hard fail; **no silent fallthrough** to another node |
+
+### Three-state pack presentation
+
+Platform offers **≠** “installed and runnable.” UI (节点扩展 chips/tab at minimum) **must** distinguish:
+
+| State | Meaning | Typical signals (minimal — no new per-pack schema required) |
+|-------|---------|---------------------------------------------------------------|
+| **已排队 / 待同步** | Offer recorded; disk not confirmed | Node offline, or last `node_delivery.delivered === false` |
+| **已同步 (可跑)** | Runtime has pack for dispatch purposes after successful online delivery/sync | Node online and last install/sync path succeeded |
+| **失败** | Push/sync/uninstall delivery failed | Visible toast + 扩展 surface; not silent |
+
+FE **must consume** install/uninstall response fields (`node_delivery`, `note`) and node online status. Do **not** label queued offers as bare 「已安装」 implying runnable.
+
+### Dual gate
+
+| Layer | Duty |
+|-------|------|
+| **FE** | 扩展 honesty (three states); Expert cards show offline/not schedulable; conversation picker **disables** offline-bound Experts |
+| **API / WS** | Keep deferred offer mutate; reject execution assign when bound node offline; **never** substitute another online node for that Expert’s seat |
+
+### Historical data
+
+No forced migration of beta phantom offers/Experts. Ship corrects behavior via honesty + non-select + hard assign gate.
+
+### Acceptance (implement)
+
+1. Offline node 扩展: pack add success shows **待同步/已排队**, not runnable 「已安装」.
+2. Create Expert on that node **allowed**; card shows offline / not schedulable.
+3. Conversation Expert list: that Expert **disabled or not selectable**.
+4. API/WS assign attempt while offline: **fails** and **does not** land on another Node.
+5. Online node install still reaches **已同步** and remains usable.
+
+### Non-goals
+
+- Remote marketplace / network hot-load of packs  
+- V1 mandatory cleanup scripts for beta rows  
+- Changing register-offline token bootstrap flow  
+- Per-pack persistent `sync_status` schema (optional later)
 
 ## Conversation UI
 
 Composer is intentionally thin:
 
 - **工作台助手 (`default`)** — default partner when no expert is selected; binds to an online Node’s built-in seat.
-- **`@Expert` / 工具栏专家** — mention/picker lists product experts only (no platform Agent peer). Injects `expert_id` / `expert_name` / `engagement` / bound `agent_node_id` (structured pack from the instance, not NLP).
+- **`@Expert` / 工具栏专家** — mention/picker lists product experts only (no platform Agent peer). Injects `expert_id` / `expert_name` / `engagement` / bound `agent_node_id` (structured pack from the instance, not NLP). **Experts whose bound node is offline are not selectable** (disabled/greyed); do not rely on late dispatch error alone.
 - **Goal mode** — optional long-task switch (+ objective). For execution experts; independent of default chat.
 - No separate free-form pack picker on the composer (role comes from participant / Expert).
 
@@ -120,16 +182,16 @@ WS resolution order: **explicit participant** → expert_id / @Expert name → s
 
 ## Node management UI（物理节点）
 
-- Node cards list installed **扩展包** chips.
-- Node detail tabs: **概述** / **配置**（Token + 运行预算）/ **扩展**（install/uninstall packs）。
+- Node cards list **扩展包** chips with **honesty states** (queued / synced / failed) — not a single ambiguous 「已安装」 for offline/deferred packs.
+- Node detail tabs: **概述** / **配置**（Token + 运行预算）/ **扩展**（install/uninstall packs; offline actions queue with clear copy）。
 - Skills / tools 不再挂在节点上展示，改在专家名片「能力」页。
 
 ## Expert management UI（虚拟形象）
 
-- `/experts` 卡片网格（名片）：@名、能力包、绑定节点、在线态。
-- 点开详情：**概述** / **配置**（改名、绑 Node、换包）/ **能力**（pack skills + tools）。
+- `/experts` 卡片网格（名片）：@名、能力包、绑定节点、在线态；offline 绑定须可读为 **不可调度**。
+- 点开详情：**概述** / **配置**（改名、绑 Node、换包 — 允许在 offline 节点上配置）/ **能力**（pack skills + tools）。
 - 多个专家可绑定同一物理节点。
-- Events `nodes:changed` / `experts:changed` refresh conversation mention lists.
+- Events `nodes:changed` / `experts:changed` refresh conversation mention lists (and re-apply selectable vs disabled).
 
 ## Usage billing on complete
 
