@@ -354,6 +354,95 @@ async def steer_conversation(conv_id: str, body: dict, current_user: dict = Depe
     return {"ok": True, "sent": True, "queued": False}
 
 
+@router.get("/{conv_id}/workset")
+async def get_workset_api(
+    conv_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Case Workset («下一步») projection — open items ordered; survives Graph runs."""
+    from app.services.case_workset import get_workset, project_workset_for_api
+
+    c = await _get_conv(conv_id, current_user, db)
+    ctx = c.context if isinstance(c.context, dict) else {}
+    return project_workset_for_api(get_workset(ctx))
+
+
+@router.patch("/{conv_id}/workset/{item_id}")
+async def patch_workset_item(
+    conv_id: str,
+    item_id: str,
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Host-gated Workset item update (status / clear in_progress). Agent cannot self-adopt."""
+    from app.services.case_workset import (
+        adopt_item,
+        get_workset,
+        project_workset_for_api,
+        put_workset,
+        scope_hosts_from_task,
+        update_item_status,
+    )
+
+    c = await _get_conv(conv_id, current_user, db)
+    ctx = dict(c.context or {}) if isinstance(c.context, dict) else {}
+    ws = get_workset(ctx)
+    task = ctx.get("task") if isinstance(ctx.get("task"), dict) else {}
+    scope_hosts = scope_hosts_from_task(task)
+    status = str(body.get("status") or "").strip()
+    actor = "user"  # HTTP path is always user-gated
+
+    if status == "adopted":
+        ws, item, err = adopt_item(ws, item_id, actor=actor, scope_hosts=scope_hosts)
+    elif status:
+        ws, item, err = update_item_status(ws, item_id, status=status, actor=actor)
+    else:
+        item = next((i for i in ws["items"] if str(i.get("id")) == item_id), None)
+        err = None if item else "not_found"
+        if item and body.get("in_progress") is False:
+            item["in_progress"] = False
+
+    if err:
+        raise HTTPException(400, err)
+    c.context = put_workset(ctx, ws)
+    await _audit(
+        db,
+        uuid.UUID(current_user["user_id"]),
+        "conversation.workset_update",
+        "conversation",
+        c.id,
+        c.id,
+        {"item_id": item_id, "status": status or None},
+    )
+    await db.commit()
+    return {"ok": True, "item": item, "workset": project_workset_for_api(ws)}
+
+
+@router.post("/{conv_id}/workset/reorder")
+async def reorder_workset(
+    conv_id: str,
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """User reorder of open 下一步 items."""
+    from app.services.case_workset import get_workset, project_workset_for_api, put_workset, reorder_items
+
+    c = await _get_conv(conv_id, current_user, db)
+    ctx = dict(c.context or {}) if isinstance(c.context, dict) else {}
+    ordered_ids = body.get("ordered_ids") or body.get("ids") or []
+    if not isinstance(ordered_ids, list):
+        raise HTTPException(400, "ordered_ids must be a list")
+    ws, err = reorder_items(get_workset(ctx), [str(x) for x in ordered_ids])
+    if err:
+        raise HTTPException(400, err)
+    c.context = put_workset(ctx, ws)
+    await db.commit()
+    return {"ok": True, "workset": project_workset_for_api(ws)}
+
+
 @router.post("/{conv_id}/next-scope")
 async def start_next_scope(
     conv_id: str,

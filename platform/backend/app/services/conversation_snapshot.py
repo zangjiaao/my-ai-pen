@@ -396,6 +396,13 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
             if isinstance(context.get("engagement_closeout"), dict)
             else {}
         ),
+        # Spec #311: Case Workset («下一步») — durable multi-discovery parking lot
+        "workset": _workset_projection(context),
+        "goal_outer": (
+            context.get("goal_outer")
+            if isinstance(context.get("goal_outer"), dict)
+            else None
+        ),
         "task_context": task_context,
         "attack_surface": attack_surface_items,
         "coverage": coverage_items,
@@ -424,6 +431,16 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
         },
     }
 
+
+
+def _workset_projection(context: dict) -> dict:
+    """Case Workset for snapshot/UI; empty shape when unset."""
+    try:
+        from app.services.case_workset import get_workset, project_workset_for_api
+
+        return project_workset_for_api(get_workset(context))
+    except Exception:
+        return {"version": 1, "items": [], "open_count": 0, "all_items": []}
 
 
 def snapshot_list(value) -> list:

@@ -3894,19 +3894,29 @@ async def _remember_participant_plan_tree(conv_id: str, msg: dict) -> None:
 
 
 async def _remember_next_scope_candidates(conv_id: str, msg: dict) -> None:
-    """Persist out-of-scope hosts after execution settle for next-Scope UI."""
+    """Persist out-of-scope hosts after execution settle for next-Scope UI.
+
+    Spec #311: also merge into Case Workset (Free + Hard settle emit → proposed).
+    Goal valve auto-adopts only mechanical in-scope t_surface when goal_mode on.
+    """
     if not conv_id or not isinstance(msg, dict):
         return
     cands = msg.get("next_scope_candidates") or msg.get("attack_surface_candidates")
-    if not isinstance(cands, list):
+    workset_cands = msg.get("workset_candidates")
+    has_workset_field = isinstance(workset_cands, list)
+    has_legacy = isinstance(cands, list)
+    if not has_workset_field and not has_legacy:
         return
     # Prefer only out-of-scope when both present.
-    next_only = [c for c in cands if isinstance(c, dict) and not c.get("in_scope")]
-    if not next_only and msg.get("next_scope_candidates") is None:
-        next_only = [c for c in cands if isinstance(c, dict)]
+    next_only: list = []
+    if has_legacy:
+        next_only = [c for c in cands if isinstance(c, dict) and not c.get("in_scope")]
+        if not next_only and msg.get("next_scope_candidates") is None:
+            next_only = [c for c in cands if isinstance(c, dict)]
     try:
         from app.db.base import async_session
         from app.models.conversation import Conversation
+        from app.services.case_workset import apply_settle_to_context, get_workset, project_workset_for_api
 
         async with async_session() as db:
             r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id)))
@@ -3914,13 +3924,48 @@ async def _remember_next_scope_candidates(conv_id: str, msg: dict) -> None:
             if not c:
                 return
             context = dict(c.context or {})
-            context["next_scope_candidates"] = next_only
-            if isinstance(msg.get("attack_surface_candidates"), list):
-                context["attack_surface_candidates"] = msg.get("attack_surface_candidates")
-            # Non-blocking UI signal (no agent wait).
-            context["next_scope_suggested"] = bool(next_only)
+            if has_legacy:
+                context["next_scope_candidates"] = next_only
+                if isinstance(msg.get("attack_surface_candidates"), list):
+                    context["attack_surface_candidates"] = msg.get("attack_surface_candidates")
+                # Non-blocking UI signal (no agent wait).
+                context["next_scope_suggested"] = bool(next_only)
+
+            task = context.get("task") if isinstance(context.get("task"), dict) else {}
+            goal_on = bool(
+                msg.get("goal_mode") in (True, "true", "1", 1)
+                or task.get("goal_mode") in (True, "true", "1", 1)
+                or str(task.get("goal_objective") or msg.get("goal_objective") or "").strip()
+            )
+            source = str(msg.get("workset_source") or "").strip()
+            if not source:
+                work_mode = str(msg.get("work_mode") or "")
+                source = "hard_settle" if work_mode.startswith("hard_graph") else "free_settle"
+            stop_reason = str(msg.get("stop_reason") or "").lower()
+            user_stopped = "abort" in stop_reason or "interrupt" in stop_reason or msg.get("status") == "incomplete"
+            blocked = str(msg.get("status") or "").lower() == "blocked" or "blocked" in stop_reason
+
+            context = apply_settle_to_context(
+                context,
+                candidates=workset_cands if has_workset_field else None,
+                next_scope_candidates=next_only if has_legacy else None,
+                attack_surface_candidates=(
+                    msg.get("attack_surface_candidates")
+                    if isinstance(msg.get("attack_surface_candidates"), list)
+                    else None
+                ),
+                source=source,
+                goal_on=goal_on,
+                goal_objective=str(msg.get("goal_objective") or task.get("goal_objective") or "").strip() or None,
+                user_stopped=user_stopped,
+                blocked=blocked,
+                bump_outer_round=goal_on,
+            )
             c.context = context
             await db.commit()
+
+            ws_proj = project_workset_for_api(get_workset(context))
+            goal_outer = context.get("goal_outer") if isinstance(context.get("goal_outer"), dict) else None
         if next_only:
             try:
                 await _broadcast_to_conversation(
@@ -3936,6 +3981,21 @@ async def _remember_next_scope_candidates(conv_id: str, msg: dict) -> None:
                 )
             except Exception as be:
                 print(f"[WS] next_scope broadcast error: {be}")
+        try:
+            await _broadcast_to_conversation(
+                conv_id,
+                json.dumps(
+                    {
+                        "type": "workset_updated",
+                        "conversation_id": conv_id,
+                        "workset": ws_proj,
+                        "goal_outer": goal_outer,
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        except Exception as be:
+            print(f"[WS] workset broadcast error: {be}")
     except Exception as e:
         print(f"[WS] remember next_scope candidates error: {e}")
 

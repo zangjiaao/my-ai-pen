@@ -467,8 +467,13 @@ def build_case_context_payload(
     thread_limit: int = DEFAULT_THREAD_LIMIT,
     findings_limit: int = DEFAULT_FINDINGS_LIMIT,
     evidence_limit: int = DEFAULT_EVIDENCE_SNIPPETS,
+    workset: dict | None = None,
 ) -> dict[str, Any]:
-    """Pure builder for tests and dispatch."""
+    """Pure builder for tests and dispatch.
+
+    Spec #311: when workset is provided, attach a thin next_work brief (refs only),
+    not a fat dump of every Case field every turn.
+    """
     thread = build_thread_from_messages(messages, limit=thread_limit)
     findings_list = findings or []
     findings_summary = build_findings_summary(findings_list, limit=findings_limit)
@@ -512,7 +517,7 @@ def build_case_context_payload(
         if len(hints) >= 16:
             break
 
-    return {
+    payload: dict[str, Any] = {
         "version": 2,
         "conversation_id": conversation_id,
         "thread": thread,
@@ -530,6 +535,15 @@ def build_case_context_payload(
             "Use paths/excerpts to continue; large files are not fully inlined."
         ),
     }
+    # Spec #311: thin Workset brief at assign boundary (not every mid-turn).
+    if isinstance(workset, dict) and (workset.get("items") or workset.get("goal")):
+        try:
+            from app.services.case_workset import thin_handoff_brief
+
+            payload["next_work"] = thin_handoff_brief(workset, boundary="case_assign")
+        except Exception:
+            pass
+    return payload
 
 
 async def load_case_context_for_conversation(
@@ -648,6 +662,18 @@ async def load_case_context_for_conversation(
     except Exception:
         evidence_rows = []
 
+    workset_blob = None
+    try:
+        from app.models.conversation import Conversation
+        from app.services.case_workset import get_workset
+
+        cr = await db.execute(select(Conversation).where(Conversation.id == cid))
+        conv = cr.scalar_one_or_none()
+        if conv is not None:
+            workset_blob = get_workset(conv.context if isinstance(conv.context, dict) else {})
+    except Exception:
+        workset_blob = None
+
     return build_case_context_payload(
         messages=messages,
         findings=findings,
@@ -656,4 +682,5 @@ async def load_case_context_for_conversation(
         thread_limit=thread_limit,
         findings_limit=findings_limit,
         evidence_limit=evidence_limit,
+        workset=workset_blob,
     )
