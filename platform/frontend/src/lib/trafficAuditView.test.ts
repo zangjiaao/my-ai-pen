@@ -128,6 +128,53 @@ function testUpsertSameId() {
   assert.equal(list[0].status_code, 204);
 }
 
+/** Phase-ranked merge: stale pending must not clobber completed (platform merge_exchange law). */
+function testUpsertStalePendingDoesNotClobberTerminal() {
+  let list: TrafficExchange[] = [];
+  list = upsertTrafficExchange(
+    list,
+    ex({
+      exchange_id: "e1",
+      phase: "completed",
+      status_code: 200,
+      response_body: '{"ok":true}',
+      request_headers: { accept: "json" },
+    }),
+  );
+  list = upsertTrafficExchange(
+    list,
+    ex({
+      exchange_id: "e1",
+      phase: "pending",
+      status_code: null,
+      response_body: null,
+      method: "GET",
+    }),
+  );
+  assert.equal(list.length, 1);
+  assert.equal(list[0].phase, "completed");
+  assert.equal(list[0].status_code, 200);
+  assert.equal(list[0].response_body, '{"ok":true}');
+}
+
+function testUpsertFailedTerminal() {
+  let list: TrafficExchange[] = [];
+  list = upsertTrafficExchange(list, ex({ exchange_id: "f1", phase: "pending", status_code: null }));
+  list = upsertTrafficExchange(
+    list,
+    ex({ exchange_id: "f1", phase: "failed", status_code: null, error: "timeout" }),
+  );
+  assert.equal(list[0].phase, "failed");
+  assert.equal(list[0].error, "timeout");
+  // pending again must not wipe failed
+  list = upsertTrafficExchange(
+    list,
+    ex({ exchange_id: "f1", phase: "pending", status_code: null, error: null }),
+  );
+  assert.equal(list[0].phase, "failed");
+  assert.equal(list[0].error, "timeout");
+}
+
 function testDetailPendingAndTruncation() {
   const pending = projectTrafficDetail(
     ex({ exchange_id: "p1", phase: "pending", status_code: null, response_body: null }),
@@ -173,6 +220,8 @@ testHonestyCopyPresent();
 testN3HidesStaticKeepsStoreConcept();
 testL1ListFields();
 testUpsertSameId();
+testUpsertStalePendingDoesNotClobberTerminal();
+testUpsertFailedTerminal();
 testDetailPendingAndTruncation();
 testEmptyMeansNoExchanges();
 console.log("trafficAuditView.test.ts: ok");

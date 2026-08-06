@@ -162,6 +162,8 @@ export function createBrowserTool(runtime: ToolRuntime): AgentTool<any> {
         if (params.interactive !== false) args.push("-i");
         const r = await run(args, 60_000);
         if (r.unavailable) return textResult(`error: ${r.error}`);
+        // Network may settle after navigation/lazy loads visible at snapshot time.
+        await drainBrowserTraffic(runtime, run);
         recordActObservation(runtime, "browser", "browser snapshot", {
           via: r.via,
           snapshot: r.text.slice(0, 16_000),
@@ -232,6 +234,7 @@ export function createBrowserTool(runtime: ToolRuntime): AgentTool<any> {
         }
         const r = await run(args, 60_000);
         if (r.unavailable) return textResult(`error: ${r.error}`);
+        await drainBrowserTraffic(runtime, run);
         recordActObservation(runtime, "browser", "browser read", {
           via: r.via,
           text: r.text.slice(0, 12_000),
@@ -259,6 +262,7 @@ export function createBrowserTool(runtime: ToolRuntime): AgentTool<any> {
         if (params.full_page) args.push("--full");
         const r = await run(args, 60_000);
         if (r.unavailable) return textResult(`error: ${r.error}`);
+        await drainBrowserTraffic(runtime, run);
         recordActObservation(runtime, "browser", `browser screenshot`, {
           via: r.via,
           path_hint: pathHint,

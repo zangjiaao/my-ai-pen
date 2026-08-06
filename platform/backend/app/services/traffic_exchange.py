@@ -52,12 +52,20 @@ def normalize_traffic_exchange(msg: dict, *, conversation_id: str | None = None)
     conv = str(conversation_id or msg.get("conversation_id") or "").strip()
     if not conv:
         return None
-    source = str(msg.get("source") or "http").strip().lower()
-    if source not in SOURCES:
+    # Fail-closed: unknown source/phase drop the frame (Spec honesty).
+    # Omitted source defaults to http (primary tool channel); empty after strip rejects.
+    if "source" not in msg or msg.get("source") is None or str(msg.get("source")).strip() == "":
         source = "http"
-    phase = str(msg.get("phase") or "pending").strip().lower()
-    if phase not in PHASES:
+    else:
+        source = str(msg.get("source")).strip().lower()
+        if source not in SOURCES:
+            return None
+    if "phase" not in msg or msg.get("phase") is None or str(msg.get("phase")).strip() == "":
         phase = "pending"
+    else:
+        phase = str(msg.get("phase")).strip().lower()
+        if phase not in PHASES:
+            return None
     method = str(msg.get("method") or "GET").strip().upper() or "GET"
     url = str(msg.get("url") or "").strip()
     if not url:

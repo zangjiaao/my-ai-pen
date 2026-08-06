@@ -146,6 +146,43 @@ class TestTrafficExchangeStore(unittest.TestCase):
         self.assertEqual(detail["response_body_bytes"], 99999)
         self.assertEqual(detail["response_body_hash"], "deadbeef")
 
+    def test_invalid_source_rejected(self):
+        """Fail-closed: do not coerce unknown source → http."""
+        bad = normalize_traffic_exchange(_pending(source="shell"))
+        self.assertIsNone(bad)
+        bad2 = normalize_traffic_exchange(_pending(source="not-a-source"))
+        self.assertIsNone(bad2)
+
+    def test_invalid_phase_rejected(self):
+        """Fail-closed: do not coerce unknown phase → pending."""
+        bad = normalize_traffic_exchange(_pending(phase="running"))
+        self.assertIsNone(bad)
+        bad2 = normalize_traffic_exchange(_pending(phase="done"))
+        self.assertIsNone(bad2)
+
+    def test_omitted_source_phase_defaults(self):
+        msg = {
+            "exchange_id": "tx_1",
+            "conversation_id": "conv-a",
+            "url": "https://example.com/",
+            "method": "GET",
+        }
+        ok = normalize_traffic_exchange(msg)
+        self.assertIsNotNone(ok)
+        self.assertEqual(ok["source"], "http")
+        self.assertEqual(ok["phase"], "pending")
+
+    def test_merge_terminal_not_clobbered_by_stale_pending(self):
+        store = upsert_into_store({}, normalize_traffic_exchange(_completed()) or {})
+        stale = normalize_traffic_exchange(
+            _pending(exchange_id="tx_http_1", conversation_id="conv-a")
+        )
+        store = upsert_into_store(store, stale or {})
+        row = store["tx_http_1"]
+        self.assertEqual(row["phase"], "completed")
+        self.assertEqual(row["status_code"], 200)
+        self.assertEqual(row["response_body"], '{"ok":true}')
+
 
 if __name__ == "__main__":
     unittest.main()

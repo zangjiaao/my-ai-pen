@@ -35,13 +35,15 @@ export function createHttpTool(runtime: ToolRuntime): AgentTool<any> {
           ? (params.headers as Record<string, string>)
           : undefined;
 
-      // Spec #309: pending exchange before the network call (two-phase liveness).
-      let pending = await emitHttpPending(runtime, {
+      // Spec #309: pending before network call (R2). emitHttpPending always
+      // returns a local exchange even if platform pending emit fails, so terminal
+      // complete/fail can still land under the same exchange_id.
+      const pending = await emitHttpPending(runtime, {
         method,
         url,
         requestHeaders: requestHeaders || null,
         requestBody: requestBody ?? null,
-      }).catch(() => null);
+      });
 
       try {
         const res = await fetch(url, {
@@ -56,14 +58,12 @@ export function createHttpTool(runtime: ToolRuntime): AgentTool<any> {
         const responseHeaders = headersToRecord(res.headers);
         const contentType = res.headers.get("content-type");
 
-        if (pending) {
-          await emitHttpComplete(runtime, pending, {
-            statusCode: res.status,
-            responseHeaders,
-            responseBody: text,
-            contentType,
-          }).catch(() => {});
-        }
+        await emitHttpComplete(runtime, pending, {
+          statusCode: res.status,
+          responseHeaders,
+          responseBody: text,
+          contentType,
+        });
 
         recordActObservation(runtime, "http", `${method} ${url} → ${res.status}`, {
           method,
@@ -84,9 +84,7 @@ export function createHttpTool(runtime: ToolRuntime): AgentTool<any> {
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        if (pending) {
-          await emitHttpFail(runtime, pending, message).catch(() => {});
-        }
+        await emitHttpFail(runtime, pending, message);
         return textResult(`error: ${message}`);
       } finally {
         clearTimeout(timer);

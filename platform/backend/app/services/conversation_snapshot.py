@@ -310,6 +310,8 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     ], "address")
     attack_surface_items = snapshot_list(checkpoint.get("attack_surface")) or snapshot_list(context.get("attack_surface"))
     coverage_items = snapshot_list(checkpoint.get("coverage")) or snapshot_list(context.get("coverage"))
+    # Legacy act-observation / checkpoint traffic (not Spec #309 panel SoT).
+    # Right-panel Traffic uses traffic_exchanges only; keep dual-channel for other consumers.
     captured_traffic_items = snapshot_list(checkpoint.get("captured_traffic")) or snapshot_list(context.get("captured_traffic"))
     checkpoint_tree = checkpoint_plan_tree(checkpoint)
     strix_todo_tree = strix_todos_plan_tree(checkpoint)

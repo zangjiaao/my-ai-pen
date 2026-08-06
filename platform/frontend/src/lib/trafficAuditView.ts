@@ -136,6 +136,22 @@ export function projectTrafficListRows(
   });
 }
 
+/** Align with platform merge_exchange: pending < completed|failed. */
+const PHASE_RANK: Record<string, number> = {
+  pending: 0,
+  completed: 1,
+  failed: 1,
+};
+
+function phaseRank(phase: string | null | undefined): number {
+  const p = String(phase || "pending").toLowerCase();
+  return PHASE_RANK[p] ?? 0;
+}
+
+/**
+ * Upsert by exchange_id with phase-ranked merge (Spec #309 R2 / platform merge_exchange).
+ * Terminal wins over pending; stale pending must not clobber completed response fields.
+ */
 export function upsertTrafficExchange(
   list: TrafficExchange[],
   incoming: TrafficExchange,
@@ -144,8 +160,70 @@ export function upsertTrafficExchange(
   if (!id) return list;
   const idx = list.findIndex((row) => String(row.exchange_id || "") === id);
   if (idx < 0) return [...list, incoming];
+  const existing = list[idx];
+  const out: TrafficExchange = { ...existing };
+  out.exchange_id = id;
+  if (incoming.conversation_id != null) {
+    out.conversation_id = existing.conversation_id || incoming.conversation_id;
+  }
+  if (incoming.sequence != null) out.sequence = incoming.sequence;
+
+  const requestKeys = [
+    "task_id",
+    "source",
+    "method",
+    "url",
+    "started_at",
+    "browser_resource_class",
+    "is_websocket",
+    "request_headers",
+    "request_body",
+    "request_body_truncated",
+    "request_body_bytes",
+    "request_body_hash",
+    "request_body_binary",
+  ] as const;
+  for (const key of requestKeys) {
+    const val = incoming[key];
+    if (val === undefined) continue;
+    if (
+      (key === "request_body" || key === "request_headers") &&
+      existing[key] &&
+      (val === null || val === undefined)
+    ) {
+      continue;
+    }
+    if (val !== null) (out as Record<string, unknown>)[key] = val;
+  }
+
+  const oldRank = phaseRank(existing.phase);
+  const newRank = phaseRank(incoming.phase);
+  // Only advance or equal phase may overwrite response/terminal fields.
+  if (newRank >= oldRank) {
+    if (incoming.phase != null) out.phase = incoming.phase;
+    const responseKeys = [
+      "status_code",
+      "response_headers",
+      "response_body",
+      "content_type",
+      "completed_at",
+      "duration_ms",
+      "error",
+      "response_body_truncated",
+      "response_body_bytes",
+      "response_body_hash",
+      "response_body_binary",
+    ] as const;
+    for (const key of responseKeys) {
+      if (key in incoming) {
+        (out as Record<string, unknown>)[key] = incoming[key];
+      }
+    }
+  }
+  // newRank < oldRank: keep existing terminal phase/response; request-side merge above still applied.
+
   const next = list.slice();
-  next[idx] = { ...next[idx], ...incoming, exchange_id: id };
+  next[idx] = out;
   return next;
 }
 

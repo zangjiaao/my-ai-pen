@@ -444,6 +444,11 @@ export async function emitTrafficExchange(
   } as any);
 }
 
+/**
+ * Always returns a local pending exchange so a later complete/fail can land
+ * even when the pending platform emit fails (Spec #309 review: terminal must not
+ * depend on pending emit success).
+ */
 export async function emitHttpPending(
   runtime: ToolRuntime,
   input: {
@@ -465,7 +470,7 @@ export async function emitHttpPending(
     requestBody: input.requestBody,
     bodyBudget: input.bodyBudget,
   });
-  await emitTrafficExchange(runtime.platform, exchange);
+  await emitTrafficExchange(runtime.platform, exchange).catch(() => {});
   return exchange;
 }
 
@@ -481,7 +486,7 @@ export async function emitHttpComplete(
   },
 ): Promise<TrafficExchange> {
   const done = completeExchange(pending, input);
-  await emitTrafficExchange(runtime.platform, done);
+  await emitTrafficExchange(runtime.platform, done).catch(() => {});
   return done;
 }
 
@@ -491,15 +496,80 @@ export async function emitHttpFail(
   error: string,
 ): Promise<TrafficExchange> {
   const done = failExchange(pending, error);
-  await emitTrafficExchange(runtime.platform, done);
+  await emitTrafficExchange(runtime.platform, done).catch(() => {});
   return done;
 }
 
+/** Phase rank for browser same-id upgrade (R2). */
+export function trafficPhaseRank(phase: string | null | undefined): number {
+  const p = String(phase || "pending").toLowerCase();
+  if (p === "completed" || p === "failed") return 1;
+  return 0;
+}
+
+/** Richer row score: allow re-emit of same id when later drain has more fields. */
+export function browserExchangeRichness(exchange: TrafficExchange): number {
+  let score = trafficPhaseRank(exchange.phase) * 100;
+  if (exchange.status_code != null) score += 10;
+  if (exchange.response_body) score += 5;
+  if (exchange.response_headers && Object.keys(exchange.response_headers).length) score += 3;
+  if (exchange.request_body) score += 2;
+  if (exchange.request_headers && Object.keys(exchange.request_headers).length) score += 1;
+  if (exchange.error) score += 2;
+  if (exchange.duration_ms != null) score += 1;
+  return score;
+}
+
+export type BrowserSeenEntry = {
+  phase: TrafficPhase;
+  richness: number;
+};
+
+/** Map key → last emitted state (not a permanent drop set). */
+export type BrowserSeenMap = Map<string, BrowserSeenEntry>;
+
+/**
+ * Whether a browser row for this key should re-emit (first sight, phase upgrade,
+ * or richer fields). Same-id terminal must never be permanently dropped after pending.
+ */
+export function shouldEmitBrowserRow(
+  seen: BrowserSeenMap,
+  key: string,
+  exchange: TrafficExchange,
+): boolean {
+  const prev = seen.get(key) || seen.get(exchange.exchange_id);
+  if (!prev) return true;
+  const newRank = trafficPhaseRank(exchange.phase);
+  const oldRank = trafficPhaseRank(prev.phase);
+  if (newRank > oldRank) return true;
+  if (newRank < oldRank) return false;
+  return browserExchangeRichness(exchange) > prev.richness;
+}
+
+export function rememberBrowserEmit(
+  seen: BrowserSeenMap,
+  key: string,
+  exchange: TrafficExchange,
+): void {
+  const entry: BrowserSeenEntry = {
+    phase: exchange.phase,
+    richness: browserExchangeRichness(exchange),
+  };
+  if (key) seen.set(key, entry);
+  seen.set(exchange.exchange_id, entry);
+}
+
+/**
+ * Best-effort drain of agent-browser `network requests` rows.
+ * Same browser request id may appear first as in-flight (pending) then complete —
+ * re-emit upgrades (R2). Residual: if CLI only returns terminal rows, no pending
+ * phase is inventable; still upserts later fuller completions for the same id.
+ */
 export async function drainBrowserNetworkRows(options: {
   platform: PlatformSink;
   task: TaskEnvelope;
   rows: Record<string, unknown>[];
-  seenIds: Set<string>;
+  seenIds: BrowserSeenMap;
   sequenceStart?: number;
   bodyBudget?: number;
 }): Promise<TrafficExchange[]> {
@@ -507,33 +577,43 @@ export async function drainBrowserNetworkRows(options: {
   let seq = options.sequenceStart ?? 0;
   for (const row of options.rows) {
     const key = String(row.id || row.requestId || row.request_id || row.url || "").trim();
-    if (key && options.seenIds.has(key)) continue;
-    seq += 1;
     const exchange = browserNetworkRowToExchange({
       conversationId: options.task.conversationId,
       taskId: options.task.taskId,
-      sequence: seq,
+      sequence: seq + 1,
       row,
       bodyBudget: options.bodyBudget,
     });
     if (!exchange) continue;
-    if (key) options.seenIds.add(key);
-    options.seenIds.add(exchange.exchange_id);
-    await emitTrafficExchange(options.platform, exchange);
+    const mapKey = key || exchange.exchange_id;
+    if (!shouldEmitBrowserRow(options.seenIds, mapKey, exchange)) continue;
+    seq += 1;
+    exchange.sequence = seq;
+    rememberBrowserEmit(options.seenIds, mapKey, exchange);
+    await emitTrafficExchange(options.platform, exchange).catch(() => {});
     emitted.push(exchange);
   }
   return emitted;
 }
 
-export function getBrowserSeenIds(runtime: ToolRuntime): Set<string> {
-  const life = runtime.lifecycle as { trafficBrowserSeen?: Set<string> | string[] };
-  if (life.trafficBrowserSeen instanceof Set) return life.trafficBrowserSeen;
-  if (Array.isArray(life.trafficBrowserSeen)) {
-    const set = new Set(life.trafficBrowserSeen.map(String));
-    life.trafficBrowserSeen = set;
-    return set;
+export function getBrowserSeenIds(runtime: ToolRuntime): BrowserSeenMap {
+  const life = runtime.lifecycle as {
+    trafficBrowserSeen?: BrowserSeenMap | Set<string> | string[] | Map<string, BrowserSeenEntry>;
+  };
+  if (life.trafficBrowserSeen instanceof Map) {
+    return life.trafficBrowserSeen as BrowserSeenMap;
   }
-  const set = new Set<string>();
-  life.trafficBrowserSeen = set;
-  return set;
+  // Migrate legacy Set/array (id-only permanent drop) → empty Map so upgrades work.
+  const map: BrowserSeenMap = new Map();
+  if (life.trafficBrowserSeen instanceof Set) {
+    for (const id of life.trafficBrowserSeen) {
+      map.set(String(id), { phase: "completed", richness: 0 });
+    }
+  } else if (Array.isArray(life.trafficBrowserSeen)) {
+    for (const id of life.trafficBrowserSeen) {
+      map.set(String(id), { phase: "completed", richness: 0 });
+    }
+  }
+  life.trafficBrowserSeen = map;
+  return map;
 }
