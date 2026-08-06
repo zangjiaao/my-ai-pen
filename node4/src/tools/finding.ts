@@ -367,51 +367,49 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
         });
       }
 
-      const findingId = String(params.finding_id || params.candidate_id || "").trim();
-      // Spec #116 I0.14–16: Expert Graph Store path requires feedback_ok finding_id.
-      // Free path without Store activity keeps legacy confirm (handoff candidates) until fully migrated.
-      const graphStoreGate = Boolean(store && runtime.lifecycle.hardGraphRun);
-      if (graphStoreGate) {
-        if (!findingId) {
-          return textResult(
-            "error: confirm requires finding_id (Store id after Feedback feedback_ok); invent-without-id forbidden (Spec #116)",
-            { isError: true },
-          );
-        }
-        const gate = store!.assertConfirmAllowed(findingId);
-        if (!gate.ok) {
-          return textResult(`error: ${gate.error}`, { isError: true });
-        }
-        if (!String(params.title || "").trim()) params.title = gate.record.title;
-        if (!String(params.location || params.url || "").trim()) {
-          params.location = gate.record.location;
-        }
-        if (!String(params.description || "").trim() && gate.record.description) {
-          params.description = gate.record.description;
-        }
-        if (!String(params.proof || "").trim() && gate.record.proof_excerpt) {
-          params.proof = gate.record.proof_excerpt;
-        }
-        if (!String(params.poc || "").trim() && gate.record.poc) {
-          params.poc = gate.record.poc;
-        }
-        // Spec #139 D1: fill severity from Store when tool omits (same pattern as proof fill)
-        if (!String(params.severity || "").trim() && gate.record.severity) {
-          params.severity = gate.record.severity;
-        }
-      } else if (store && findingId) {
-        const gate = store.assertConfirmAllowed(findingId);
-        if (!gate.ok) {
-          return textResult(`error: ${gate.error}`, { isError: true });
-        }
-        if (!String(params.severity || "").trim() && gate.record.severity) {
-          params.severity = gate.record.severity;
+      // Spec #279: one base confirm contract Free and Graph.
+      // finding_id optional — host mints on book when missing/foreign.
+      // This-run Store feedback_ok id remains Store-first fill (Graph overlay).
+      // Foreign / unknown / not-bookable ids → treat as omit (no invent-without-id hard stop).
+      const rawFindingId = String(params.finding_id || params.candidate_id || "").trim();
+      let storeFindingId: string | undefined;
+      let findingIdAssist = "";
+      let relatedPriorId: string | undefined;
+
+      if (store && rawFindingId) {
+        const gate = store.assertConfirmAllowed(rawFindingId);
+        if (gate.ok) {
+          storeFindingId = rawFindingId;
+          if (!String(params.title || "").trim()) params.title = gate.record.title;
+          if (!String(params.location || params.url || "").trim()) {
+            params.location = gate.record.location;
+          }
+          if (!String(params.description || "").trim() && gate.record.description) {
+            params.description = gate.record.description;
+          }
+          if (!String(params.proof || "").trim() && gate.record.proof_excerpt) {
+            params.proof = gate.record.proof_excerpt;
+          }
+          if (!String(params.poc || "").trim() && gate.record.poc) {
+            params.poc = gate.record.poc;
+          }
+          // Spec #139 D1: fill severity from Store when tool omits (same pattern as proof fill)
+          if (!String(params.severity || "").trim() && gate.record.severity) {
+            params.severity = gate.record.severity;
+          }
+        } else {
+          // Not in this Case bookable set (foreign platform UUID, random id, non-feedback_ok).
+          findingIdAssist =
+            "finding_id not in this Case bookable set — treated as omit; host mints on book (Spec #279)";
+          if (looksLikePlatformUuid(rawFindingId)) {
+            relatedPriorId = rawFindingId;
+          }
         }
       }
 
       // Spec #139 D1 / NC-Severity: fail closed — no silent medium
       const storeSev =
-        store && findingId ? store.get(findingId)?.severity : undefined;
+        store && storeFindingId ? store.get(storeFindingId)?.severity : undefined;
       const sevResolved = resolveBookSeverity({
         toolSeverity: params.severity,
         storeSeverity: storeSev,
@@ -596,7 +594,8 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
           proofExcerpts,
           proofText,
           howCaptured: how,
-          storeFindingId: findingId || undefined,
+          storeFindingId: storeFindingId || undefined,
+          relatedPriorId,
         });
         // Coverage ledger: mark matching surface booked
         try {
@@ -605,13 +604,14 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
           /* non-fatal */
         }
         // Attach booking assist note for model/debug (json path only)
-        if (bookSourceNote && finalized && typeof finalized === "object") {
+        const assistNote = [bookSourceNote, findingIdAssist].filter(Boolean).join("; ");
+        if (assistNote && finalized && typeof finalized === "object") {
           try {
             const content = (finalized as { content?: Array<{ type?: string; text?: string }> }).content;
             const textItem = content?.find((c) => c.type === "text");
             if (textItem?.text?.trim().startsWith("{")) {
               const obj = JSON.parse(textItem.text);
-              obj.booking_assist = bookSourceNote;
+              obj.booking_assist = assistNote;
               textItem.text = JSON.stringify(obj, null, 2);
             }
           } catch {
@@ -700,10 +700,18 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
         evidenceIds: legacyIds,
         proofExcerpts,
         proofText: proofExcerpts[0]?.excerpt || "",
-        storeFindingId: findingId || undefined,
+        storeFindingId: storeFindingId || undefined,
+        relatedPriorId,
       });
     },
   };
+}
+
+/** Platform-style UUID (cross-Case prior); not a run-local Store find-* id. */
+export function looksLikePlatformUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    String(value || "").trim(),
+  );
 }
 
 /**
@@ -784,10 +792,13 @@ async function finalizeFinding(
     howCaptured?: string;
     /** Spec #116 Store id after successful confirm → mark booked */
     storeFindingId?: string;
+    /** Spec #279: optional link when re-confirming a foreign/cross-Case prior UUID */
+    relatedPriorId?: string;
   },
 ) {
   const priorFindings = await loadFindings(runtime.findingsDir);
   const reuseCounts = countEvidenceReuse(priorFindings);
+  // Spec #279: host mints finding id at confirm (Agent must not invent UUIDs).
   const id = `f_${Date.now()}_${randomBytes(3).toString("hex")}`;
   const evidenceSummary = input.proofExcerpts
     .map((p) => {
@@ -816,6 +827,7 @@ async function finalizeFinding(
     proof_excerpts: input.proofExcerpts,
     affected_asset: affected.host || undefined,
     port: port || undefined,
+    related_prior_id: input.relatedPriorId || undefined,
     created_at: new Date().toISOString(),
   };
   await mkdir(runtime.findingsDir, { recursive: true });
@@ -842,7 +854,9 @@ async function finalizeFinding(
     affected_asset: affected.host || undefined,
     target: affected.host || undefined,
     port: port || undefined,
-    finding_id: input.storeFindingId || undefined,
+    // Prefer this-run Store id when present; else host-minted local id (Spec #279).
+    finding_id: input.storeFindingId || id,
+    related_prior_id: input.relatedPriorId || undefined,
   });
 
   // Spec #116 I0.15 path: successful confirm marks Store booked (platform-visible via vuln_found).

@@ -157,6 +157,52 @@ def _normalize_severity(value: object) -> str | None:
     return severity if severity in {"critical", "high", "medium", "low", "info"} else None
 
 
+def _vuln_found_error_frame(msg: dict | None, error: str) -> dict:
+    """Structured fail-closed reject for live vuln booking (Spec #280)."""
+    src = msg if isinstance(msg, dict) else {}
+    return {
+        "type": "vuln_found_error",
+        "conversation_id": src.get("conversation_id"),
+        "task_id": src.get("task_id"),
+        "title": src.get("title"),
+        "error": error,
+        "created": False,
+    }
+
+
+def apply_vuln_persist_result(msg: dict, persisted: dict | None) -> dict:
+    """Apply `_persist_vulnerability` result to the outgoing WS frame (Spec #280).
+
+    Live updates must be post-persist success only:
+    - success dict → merge non-None fields (type stays vuln_found; id/vulnerability_id set)
+    - type=vuln_found_error → replace frame (never leave a success type)
+    - None → rewrite to vuln_found_error (never forward original success claim)
+    """
+    base = dict(msg) if isinstance(msg, dict) else {}
+    if persisted is None:
+        return _vuln_found_error_frame(base, "persist failed")
+    if not isinstance(persisted, dict):
+        return _vuln_found_error_frame(base, "persist failed")
+    if str(persisted.get("type") or "") == "vuln_found_error":
+        err = _vuln_found_error_frame(
+            base,
+            str(persisted.get("error") or "persist failed"),
+        )
+        # Prefer explicit fields from the structured reject when present.
+        for key in ("conversation_id", "task_id", "title", "error", "created"):
+            if key in persisted and persisted.get(key) is not None:
+                err[key] = persisted[key]
+        err["type"] = "vuln_found_error"
+        err["created"] = False
+        return err
+    # Success path: merge ledger fields onto the original frame.
+    out = dict(base)
+    for key, value in persisted.items():
+        if value is not None:
+            out[key] = value
+    return out
+
+
 # Agent/runtime events belong in the conversation timeline, not the platform audit ledger.
 # Keep node.online / node.offline for connectivity sparklines.
 _AUDIT_SKIP_ACTIONS = frozenset({
@@ -879,15 +925,12 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
         if persisted:
             msg.update({k: v for k, v in persisted.items() if v is not None})
     elif msg.get("type") == "vuln_found":
+        # Spec #280: live vuln_found is post-persist success only. Persist None /
+        # structured reject → vuln_found_error (never leave original success frame).
         persisted = await _persist_vulnerability(msg, client_id)
-        if persisted:
-            # Fail-closed rejects return type=vuln_found_error — replace the frame,
-            # do not merge error fields into a still-typed vuln_found success card.
-            if str(persisted.get("type") or "") == "vuln_found_error":
-                msg.clear()
-                msg.update(persisted)
-            else:
-                msg.update({k: v for k, v in persisted.items() if v is not None})
+        applied = apply_vuln_persist_result(msg, persisted)
+        msg.clear()
+        msg.update(applied)
     elif msg.get("type") == "evidence_created":
         # Real proofs from Node4 emitEvidence (structured properties).
         await _persist_evidence(msg, client_id)
@@ -2298,17 +2341,17 @@ async def _audit_tool_output(msg: dict, node_id: str | None):
 async def _persist_vulnerability(msg: dict, node_id: str | None):
     conv_id = msg.get("conversation_id")
     if not conv_id:
-        return None
+        return _vuln_found_error_frame(msg, "missing conversation_id")
     raw_status = str(msg.get("status") or "").lower()
     if raw_status != "confirmed":
-        return None
+        return _vuln_found_error_frame(msg, "status must be confirmed")
     evidence_ids = _clean_evidence_ids(msg.get("evidence_ids", []))
     if not evidence_ids:
-        return None
+        return _vuln_found_error_frame(msg, "evidence_ids required (evidence gate)")
 
     user_id, bound_node = await _conversation_owner(conv_id)
     if not user_id:
-        return None
+        return _vuln_found_error_frame(msg, "conversation not found")
     node_uuid = _uuid(node_id) or bound_node
     try:
         from app.db.base import async_session
@@ -2344,37 +2387,28 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
         from app.services.finding_dedupe import (
             VALID_VULN_TYPES,
             append_discovery_event,
-            is_same_finding,
             location_resource_key,
             normalize_vuln_type,
             pick_canonical_vuln,
-            row_location_blob,
+            select_same_finding_candidates,
         )
         # Prefer explicit PoC (reproduction + observed result); fall back carefully.
         poc_value = msg.get("poc") or msg.get("evidence_summary") or msg.get("location") or ""
         severity = _normalize_severity(msg.get("severity"))
         if severity is None:
             # Spec #139 D1: fail closed — no silent medium on empty/invalid severity
-            return {
-                "type": "vuln_found_error",
-                "conversation_id": conv_id,
-                "task_id": msg.get("task_id"),
-                "error": "severity required (critical|high|medium|low|info); silent medium banned",
-                "title": msg.get("title"),
-                "created": False,
-            }
+            return _vuln_found_error_frame(
+                msg,
+                "severity required (critical|high|medium|low|info); silent medium banned",
+            )
         # Spec #275: closed vuln_type required on confirm.
         vuln_type = normalize_vuln_type(msg.get("vuln_type") or msg.get("type_id"))
         if not vuln_type:
             allowed = ", ".join(sorted(VALID_VULN_TYPES))
-            return {
-                "type": "vuln_found_error",
-                "conversation_id": conv_id,
-                "task_id": msg.get("task_id"),
-                "error": f"vuln_type required (closed enum: {allowed})",
-                "title": msg.get("title"),
-                "created": False,
-            }
+            return _vuln_found_error_frame(
+                msg,
+                f"vuln_type required (closed enum: {allowed})",
+            )
         loc_key = location_resource_key(location) or location_resource_key(poc_value)
         cvss_value = msg.get("cvss")
         description = (
@@ -2414,7 +2448,13 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
         cve_id = msg.get("cve_id") or msg.get("cve") or None
         if cve_id is not None:
             cve_id = str(cve_id).strip() or None
+        # Spec #279: optional link to a prior Case finding (do not overwrite that row).
+        related_prior_raw = msg.get("related_prior_id") or msg.get("related_prior")
+        related_prior_id = str(related_prior_raw).strip() if related_prior_raw else None
+        if related_prior_id == "":
+            related_prior_id = None
         now = datetime.now(timezone.utc)
+        conv_uuid = uuid.UUID(str(conv_id))
 
         async with async_session() as db:
             existing_evidence = await db.execute(
@@ -2426,7 +2466,10 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
             evidence_rows = list(existing_evidence.scalars().all())
             known_evidence_ids = {item.evidence_id for item in evidence_rows}
             if set(evidence_ids) - known_evidence_ids:
-                return None
+                return _vuln_found_error_frame(
+                    msg,
+                    "evidence_ids not found in conversation (evidence gate)",
+                )
 
             # Backfill hollow Case evidence from booking proof_excerpts so next expert
             # can read paths/stdout without the original taskDir.
@@ -2461,10 +2504,11 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                     asset_id = asset.id
 
             # Spec #275: identity = asset/host + port + vuln_type + location_key (no title/path alias).
-            candidates: list = []
+            # Spec #279: #275 match pool is Case-scoped — never pin/merge foreign Case rows.
             pool: list = []
             q = select(Vulnerability).where(
                 Vulnerability.user_id == user_id,
+                Vulnerability.conversation_id == conv_uuid,
                 Vulnerability.vuln_type == vuln_type,
             )
             if asset_id:
@@ -2489,50 +2533,34 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                     )
                 )
             pool.extend((await db.execute(q)).scalars().all())
-            # CVE short-circuit pool (same asset).
+            # CVE short-circuit pool (same asset, this Case only).
             if cve_id and asset_id:
                 pool.extend(
                     (
                         await db.execute(
                             select(Vulnerability).where(
                                 Vulnerability.user_id == user_id,
+                                Vulnerability.conversation_id == conv_uuid,
                                 Vulnerability.asset_id == asset_id,
                                 Vulnerability.cve_id == cve_id,
                             )
                         )
                     ).scalars().all()
                 )
-            seen_ids: set = set()
-            for row in pool:
-                rid = getattr(row, "id", None)
-                if rid in seen_ids:
-                    continue
-                if is_same_finding(
-                    {
-                        "title": row.title,
-                        "asset_id": row.asset_id,
-                        "port": row.port,
-                        "cve_id": row.cve_id,
-                        "vuln_type": getattr(row, "vuln_type", None),
-                        "location_key": getattr(row, "location_key", None),
-                        "location": row_location_blob(row),
-                        "poc": getattr(row, "poc", None),
-                        "description": getattr(row, "description", None),
-                        "host": host or None,
-                    },
-                    title=title,
-                    asset_id=asset_id,
-                    port=port,
-                    cve_id=cve_id,
-                    location=location,
-                    description=description,
-                    poc=poc_value,
-                    vuln_type=vuln_type,
-                    location_key=loc_key,
-                    host=host or None,
-                ):
-                    candidates.append(row)
-                    seen_ids.add(rid)
+            candidates = select_same_finding_candidates(
+                pool,
+                conversation_id=conv_id,
+                title=title,
+                asset_id=asset_id,
+                port=port,
+                cve_id=cve_id,
+                location=location,
+                description=description,
+                poc=poc_value,
+                vuln_type=vuln_type,
+                location_key=loc_key,
+                host=host or None,
+            )
 
             vuln = pick_canonical_vuln(candidates)
             created = vuln is None
@@ -2552,7 +2580,7 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                     location_key=loc_key or None,
                     asset_id=asset_id,
                     port=port,
-                    conversation_id=uuid.UUID(conv_id),
+                    conversation_id=conv_uuid,
                     description=description,
                     poc=poc_value,
                     remediation=msg.get("remediation") or "",
@@ -2567,6 +2595,7 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                         conversation_id=conv_id,
                         evidence_ids=evidence_ids,
                         at=now,
+                        related_prior_id=related_prior_id,
                     ),
                 )
                 db.add(vuln)
@@ -2609,6 +2638,7 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                     conversation_id=conv_id,
                     evidence_ids=evidence_ids,
                     at=now,
+                    related_prior_id=related_prior_id,
                 )
                 # Status: reopen fixed findings (regression); keep fixing in progress;
                 # otherwise ensure open as to_fix.
@@ -2619,12 +2649,8 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                     pass
                 else:
                     vuln.status = lifecycle_status
-                # Pin to current Case so Findings panel shows the row; first Case
-                # remains on history[0].conversation_id / first_seen_at.
-                try:
-                    vuln.conversation_id = uuid.UUID(str(conv_id))
-                except (ValueError, TypeError):
-                    pass
+                # Same-Case rediscover: keep conversation_id on this Case (pool already scoped).
+                vuln.conversation_id = conv_uuid
 
             # Merge any extra duplicate rows into the canonical one, then delete them.
             extras = [r for r in candidates if r is not None and r.id != vuln.id]
@@ -2667,7 +2693,7 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                 ),
                 resource_type="vulnerability",
                 resource_id=vuln.id,
-                conversation_id=uuid.UUID(conv_id),
+                conversation_id=conv_uuid,
                 detail={
                     "title": vuln.title,
                     "severity": vuln.severity,
@@ -2681,10 +2707,11 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                     "created": created,
                     "rediscovered": rediscovered and not created,
                     "merged_duplicates": len(extras),
+                    "related_prior_id": related_prior_id,
                 },
             )
             first = getattr(vuln, "first_seen_at", None) or vuln.discovered_at
-            return {
+            out = {
                 "id": str(vuln.id),
                 "vulnerability_id": str(vuln.id),
                 "strix_vulnerability_id": msg.get("strix_vulnerability_id") or msg.get("id"),
@@ -2724,9 +2751,12 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                 # Spec #275: structured created outcome; New-only narration uses this.
                 "created": created,
             }
+            if related_prior_id:
+                out["related_prior_id"] = related_prior_id
+            return out
     except Exception as e:
         print(f"[WS] persist vuln error: {e}")
-        return None
+        return _vuln_found_error_frame(msg, f"persist failed: {e}")
 
 async def _find_node_by_token(token: str) -> str | None:
     try:

@@ -113,20 +113,33 @@ try {
     params: Record<string, unknown>,
   ) => Promise<{ content: Array<{ type: string; text?: string }>; details?: unknown }>;
 
-  // Missing finding_id on Graph → hard fail
+  // Spec #279: missing finding_id on Graph still books with valid L0 (host mints; not invent-without-id hard stop)
   const noId = await exec("x", {
     action: "confirm",
     vuln_type: "other",
-    title: "SQL injection login",
+    title: "SQL injection login (no store id)",
     location: "http://host/login.php",
-    description: "Auth bypass demonstrated with SQL error on login",
-    poc: "POST /login.php username=admin' OR '1'='1 password=x → observe MySQL error and session",
-    proof: "MySQL syntax error near ''' OR 1=1--' at line 1 when submitting login — demonstrable",
+    description: "Auth bypass demonstrated with SQL error on login form path",
+    poc: "POST /login.php username=admin' OR '1'='1 password=x → observe MySQL error and session cookie set",
+    proof:
+      "MySQL syntax error near ''' OR 1=1--' at line 1 when submitting login — demonstrable differential",
+    severity: "high",
   });
   const noIdText = noId.content?.map((c) => c.text || "").join(" ") || "";
-  assert.match(noIdText, /finding_id|feedback_ok|invent/i);
+  assert.ok(
+    !/invent-without-id/i.test(noIdText),
+    `no-id must not invent-without-id hard stop: ${noIdText.slice(0, 200)}`,
+  );
+  assert.ok(!/^error:/i.test(noIdText.trim()), `no-id Graph confirm should book: ${noIdText.slice(0, 200)}`);
+  assert.ok(
+    platformMessages.some((m) => m.type === "vuln_found"),
+    "no-id path still emits vuln_found",
+  );
+  // Store row for feedback_ok id remains unbooked until confirmed with that id
+  assert.equal(store.get(fid)?.status, "feedback_ok");
 
-  // Production confirm with Store id
+  // Production confirm with Store id still Store-first marks booked
+  platformMessages.length = 0;
   const ok = await exec("x", {
     action: "confirm",
     vuln_type: "other",

@@ -238,6 +238,98 @@ def is_same_finding(
     return False
 
 
+def case_scoped_rows(rows: list[Any], conversation_id: object) -> list[Any]:
+    """Keep only rows belonging to this Case (Spec #279).
+
+    #275 same-finding match is Case-scoped: prior Case rows with the same
+    business identity must not match → book creates a new row on this Case.
+    """
+    conv = str(conversation_id or "").strip()
+    if not conv:
+        return []
+    out: list[Any] = []
+    for row in rows:
+        if isinstance(row, dict):
+            rid = row.get("conversation_id")
+        else:
+            rid = getattr(row, "conversation_id", None)
+        if rid is not None and str(rid) == conv:
+            out.append(row)
+    return out
+
+
+def select_same_finding_candidates(
+    pool_rows: list[Any],
+    *,
+    conversation_id: object,
+    title: object = None,
+    asset_id: object = None,
+    port: object = None,
+    cve_id: object = None,
+    location: object = None,
+    description: object = None,
+    poc: object = None,
+    vuln_type: object = None,
+    location_key: object = None,
+    host: object = None,
+) -> list[Any]:
+    """#275 identity match restricted to this Case's rows (Spec #279).
+
+    Pure helper so unit tests can assert cross-Case create vs same-Case
+    rediscover without a live DB. Production SQL also filters by conversation_id.
+    """
+    candidates: list[Any] = []
+    seen_ids: set[Any] = set()
+    for row in case_scoped_rows(pool_rows, conversation_id):
+        if isinstance(row, dict):
+            rid = row.get("id")
+            existing = {
+                "title": row.get("title"),
+                "asset_id": row.get("asset_id"),
+                "port": row.get("port"),
+                "cve_id": row.get("cve_id"),
+                "vuln_type": row.get("vuln_type"),
+                "location_key": row.get("location_key"),
+                "location": row_location_blob(row),
+                "poc": row.get("poc"),
+                "description": row.get("description"),
+                "host": row.get("host") or host,
+            }
+        else:
+            rid = getattr(row, "id", None)
+            existing = {
+                "title": getattr(row, "title", None),
+                "asset_id": getattr(row, "asset_id", None),
+                "port": getattr(row, "port", None),
+                "cve_id": getattr(row, "cve_id", None),
+                "vuln_type": getattr(row, "vuln_type", None),
+                "location_key": getattr(row, "location_key", None),
+                "location": row_location_blob(row),
+                "poc": getattr(row, "poc", None),
+                "description": getattr(row, "description", None),
+                "host": getattr(row, "host", None) or host,
+            }
+        if rid is not None and rid in seen_ids:
+            continue
+        if is_same_finding(
+            existing,
+            title=title,
+            asset_id=asset_id,
+            port=port,
+            cve_id=cve_id,
+            location=location,
+            description=description,
+            poc=poc,
+            vuln_type=vuln_type,
+            location_key=location_key,
+            host=host,
+        ):
+            candidates.append(row)
+            if rid is not None:
+                seen_ids.add(rid)
+    return candidates
+
+
 def append_discovery_event(
     history: object,
     *,
@@ -245,6 +337,7 @@ def append_discovery_event(
     conversation_id: object = None,
     evidence_ids: list[str] | None = None,
     at: datetime | None = None,
+    related_prior_id: object = None,
 ) -> list[dict[str, Any]]:
     """Append a discovery / rediscovery event to the finding timeline."""
     now = at or datetime.now(timezone.utc)
@@ -263,6 +356,10 @@ def append_discovery_event(
         entry["conversation_id"] = str(conversation_id)
     if evidence_ids:
         entry["evidence_ids"] = [str(x) for x in evidence_ids if str(x).strip()]
+    # Spec #279: optional link from a new Case row to a prior Case finding.
+    prior = str(related_prior_id or "").strip()
+    if prior:
+        entry["related_prior_id"] = prior
     base.append(entry)
     # Cap history length for storage hygiene.
     return base[-50:]
