@@ -21,6 +21,9 @@ import {
   legacyWorkerDisplayName,
   scrubWorkerPurpose,
 } from "../lib/workerPresentation";
+import { filterMainChannelMessages, isWorkerAuditScoped } from "../lib/workerAuditChannel";
+import { applyDisplayNameOverrides } from "../lib/workerDisplayName";
+import WorkerAuditDialog from "../components/WorkerAuditDialog";
 import type { PlanNode, StrixAgentStatus } from "../lib/panelTypes";
 import {
   isStrixAgentStatus,
@@ -232,6 +235,8 @@ type ConversationSnapshot = {
   /** Spec #311 Case Workset («下一步») */
   workset?: Record<string, unknown>;
   goal_outer?: Record<string, unknown> | null;
+  /** Spec #308 Case Worker display_name overrides */
+  worker_display_names?: Record<string, string>;
 };
 
 export default function ConversationPage() {
@@ -299,6 +304,14 @@ export default function ConversationPage() {
   /** Spec #311 Case Workset («下一步») — survives Graph; separate from Tasks */
   const [workset, setWorkset] = useState<Record<string, unknown> | undefined>();
   const [worksetBusyId, setWorksetBusyId] = useState<string | null>(null);
+  /** Spec #308: Case Worker display_name overrides (agent_id → name). */
+  const [workerDisplayNames, setWorkerDisplayNames] = useState<Record<string, string>>({});
+  /** Spec #308: open Worker audit dialog from collaboration tree. */
+  const [workerAuditTarget, setWorkerAuditTarget] = useState<{
+    agentId: string;
+    panelName?: string;
+    workerOrdinal?: number;
+  } | null>(null);
   const [running, setRunning] = useState(false);
   /** True while interrupt was sent and nodes have not yet reported idle. */
   const [interrupting, setInterrupting] = useState(false);
@@ -364,8 +377,15 @@ export default function ConversationPage() {
 
   const messages = useMemo(() => messagesFromQueryData(activeId, messageQuery.data as MessagesInfiniteData | undefined), [activeId, messageQuery.data]);
   const displayMessages = useMemo(() => {
-    const base = messages.filter(isRenderableMessage);
-    const merged = mergeMessagesWithLiveStreams(base, liveStreams, {
+    // Spec #308 S-channel: Main chat never renders Worker audit process frames.
+    const base = filterMainChannelMessages(messages.filter(isRenderableMessage));
+    const mainLive: typeof liveStreams = {};
+    for (const [sid, frame] of Object.entries(liveStreams)) {
+      if (!isWorkerAuditScoped({ msg_type: frame.msgType, content: frame.content || {} })) {
+        mainLive[sid] = frame;
+      }
+    }
+    const merged = mergeMessagesWithLiveStreams(base, mainLive, {
       activeConversationId: activeId,
       liveToMessage: (frame) => {
         const like = liveFrameToMessageLike(frame);
@@ -597,6 +617,17 @@ export default function ConversationPage() {
         : fallback?.workset;
     if (nextWorkset && typeof nextWorkset === "object") {
       setWorkset(nextWorkset);
+    const namesRaw =
+      snapshot.worker_display_names && typeof snapshot.worker_display_names === "object"
+        ? snapshot.worker_display_names
+        : fallback?.worker_display_names;
+    if (namesRaw && typeof namesRaw === "object") {
+      const nextNames: Record<string, string> = {};
+      for (const [k, v] of Object.entries(namesRaw)) {
+        const name = String(v || "").trim();
+        if (k && name) nextNames[k] = name;
+      }
+      setWorkerDisplayNames(nextNames);
     }
     const snapshotConversation = snapshot.conversation || fallback?.conversation;
     if (snapshotConversation) setActiveConversationNodeId(snapshotConversation.node_id || null);
@@ -792,23 +823,33 @@ export default function ConversationPage() {
     },
     tool_output: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
-      const m = msg as Record<string, string>;
+      const m = msg as Record<string, unknown>;
       const convId = messageConversationId(msg, activeId);
-      // Spec #276: tools use tool_call cards only — never reseed pending chrome or live-slot.
-      setPendingChrome((cur) => reducePendingChrome(cur, { type: "tool_output" }));
-      markMessageAutoScroll();
-      // Spec #305 R2: keep raw lifecycle (incl. empty) so MessageRenderer can use
-      // result hints for success; do not force missing → "running" here.
-      const rawStatus = String(m.status ?? "").trim();
+      const workerScoped = isWorkerAuditScoped(m as { channel?: string; agent_id?: string; package_turn_id?: string; content?: Record<string, unknown> });
+      // Spec #276: Main tools use tool_call cards only — never reseed pending chrome.
+      // Spec #308: Worker tools also persist for dialog but must not drive Main chrome.
+      if (!workerScoped) {
+        setPendingChrome((cur) => reducePendingChrome(cur, { type: "tool_output" }));
+        markMessageAutoScroll();
+      }
+      const workerStamp: Record<string, unknown> = {};
+      const channel = String(m.channel || "").trim();
+      const agentId = String(m.agent_id || "").trim();
+      const packageTurnId = String(m.package_turn_id || "").trim();
+      if (channel) workerStamp.channel = channel;
+      if (agentId) workerStamp.agent_id = agentId;
+      if (packageTurnId) workerStamp.package_turn_id = packageTurnId;
+      const toolStatus = normalizeExecutionStatus(m.status);
       const incoming = makeMessage(convId, "agent", "tool_call", {
         ...agentAttribution(m),
-        tool_name: m.tool_name || "",
+        ...workerStamp,
+        tool_name: String(m.tool_name || ""),
         tool_run_id: m.tool_run_id,
-        command: m.command || "",
-        status: rawStatus,
-        stdout: m.stdout || (m.line ? `${m.line}\n` : ""),
+        command: String(m.command || ""),
+        status: toolStatus,
+        stdout: String(m.stdout || (m.line ? `${m.line}\n` : "") || ""),
         evidence_id: m.evidence_id,
-        summary: m.summary || m.line || "",
+        summary: String(m.summary || m.line || ""),
         display_title: m.display_title || "",
         category: m.category || "",
         target: m.target || "",
@@ -816,13 +857,13 @@ export default function ConversationPage() {
         result: m.result,
         result_text: m.result_text,
         tool_items: [{
-          tool_name: m.tool_name || "",
+          tool_name: String(m.tool_name || ""),
           tool_run_id: m.tool_run_id,
-          status: rawStatus,
-          stdout: m.stdout || m.line || "",
-          command: m.command || "",
+          status: toolStatus,
+          stdout: String(m.stdout || m.line || ""),
+          command: String(m.command || ""),
           evidence_id: m.evidence_id,
-          summary: m.summary || m.line || "",
+          summary: String(m.summary || m.line || ""),
           display_title: m.display_title || "",
           category: m.category || "",
           target: m.target || "",
@@ -833,7 +874,60 @@ export default function ConversationPage() {
         message_id: m.message_id,
       });
       addMessageToConversation(convId, incoming);
-      void refreshConversationState(convId);
+      if (!workerScoped) void refreshConversationState(convId);
+    },
+    worker_package_start: (msg) => {
+      if (!isActiveMessage(msg, activeId)) return;
+      const m = msg as Record<string, unknown>;
+      const convId = messageConversationId(msg, activeId);
+      const handoff = m.handoff && typeof m.handoff === "object" ? m.handoff as Record<string, unknown> : {};
+      addMessageToConversation(
+        convId,
+        makeMessage(convId, "agent", "worker_package_start", {
+          channel: "worker_audit",
+          agent_id: String(m.agent_id || "").trim(),
+          package_turn_id: String(m.package_turn_id || "").trim(),
+          handoff,
+        }),
+      );
+    },
+    worker_package_delivery: (msg) => {
+      if (!isActiveMessage(msg, activeId)) return;
+      const m = msg as Record<string, unknown>;
+      const convId = messageConversationId(msg, activeId);
+      addMessageToConversation(
+        convId,
+        makeMessage(convId, "agent", "worker_package_delivery", {
+          channel: "worker_audit",
+          agent_id: String(m.agent_id || "").trim(),
+          package_turn_id: String(m.package_turn_id || "").trim(),
+          status: String(m.status || "").trim(),
+          summary: String(m.summary || "").trim(),
+          settlement: m.settlement,
+        }),
+      );
+    },
+    worker_display_name: (msg) => {
+      if (!isActiveMessage(msg, activeId)) return;
+      const m = msg as Record<string, unknown>;
+      if (m.worker_display_names && typeof m.worker_display_names === "object") {
+        const next: Record<string, string> = {};
+        for (const [k, v] of Object.entries(m.worker_display_names as Record<string, unknown>)) {
+          const name = String(v || "").trim();
+          if (k && name) next[k] = name;
+        }
+        setWorkerDisplayNames(next);
+        return;
+      }
+      const aid = String(m.agent_id || "").trim();
+      if (!aid) return;
+      const name = m.display_name == null ? "" : String(m.display_name).trim();
+      setWorkerDisplayNames((prev) => {
+        const next = { ...prev };
+        if (!name) delete next[aid];
+        else next[aid] = name;
+        return next;
+      });
     },
     asset_discovered: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
@@ -1431,6 +1525,13 @@ export default function ConversationPage() {
     const c = (raw.content && typeof raw.content === "object" && !Array.isArray(raw.content)
       ? { ...(raw.content as Record<string, unknown>) }
       : {}) as Record<string, unknown>;
+    // Spec #308: stamp Worker scope from top-level wire onto content for channel filter.
+    const channel = readString(raw.channel) || readString(c.channel);
+    const agentId = readString(raw.agent_id) || readString(c.agent_id);
+    const packageTurnId = readString(raw.package_turn_id) || readString(c.package_turn_id);
+    if (channel) c.channel = channel;
+    if (agentId) c.agent_id = agentId;
+    if (packageTurnId) c.package_turn_id = packageTurnId;
     const streamId = readString(c.stream_id) || readString(raw.stream_id);
     // Fail-closed: progressive live list requires stream_id (Spec #276).
     if (!streamId) return;
@@ -1447,12 +1548,15 @@ export default function ConversationPage() {
     c.text = body;
     if (msgType === "thinking") c.reasoning = body;
     const convId = messageConversationId(raw, activeId);
-    markMessageAutoScroll();
+    const workerScoped = isWorkerAuditScoped({ msg_type: msgType, content: c, channel, agent_id: agentId, package_turn_id: packageTurnId });
+    if (!workerScoped) markMessageAutoScroll();
     const attribution = agentAttribution(raw);
     const content = { ...attribution, ...c };
     const message = makeMessage(convId, "agent", msgType, content);
-    // Pending chrome hides on first progressive activity (incl. empty running/done thinking).
-    setPendingChrome((cur) => reducePendingChrome(cur, { type: "stream_started" }));
+    // Pending chrome only for Main progressive activity (Worker process is dialog-only).
+    if (!workerScoped) {
+      setPendingChrome((cur) => reducePendingChrome(cur, { type: "stream_started" }));
+    }
     setLiveStreams((prev) =>
       upsertLiveByStreamId(prev, {
         streamId,
@@ -1464,8 +1568,8 @@ export default function ConversationPage() {
       }),
     );
     // Scrub any historical agent_pending rows; do not write new ones.
-    if (convId) clearPendingAgentMessage(convId);
-    // Mirror progressive frames into durable message cache (RQ SOT).
+    if (convId && !workerScoped) clearPendingAgentMessage(convId);
+    // Mirror progressive frames into durable message cache (RQ SOT) — Worker too for Case replay.
     addMessageToConversation(convId, message);
   }
   const locateApproval = useCallback((requestId: string) => {
@@ -1505,6 +1609,8 @@ export default function ConversationPage() {
     setEvidence([]);
     setTaskContext(undefined);
     setEngagementCloseout(undefined);
+    setWorkerDisplayNames({});
+    setWorkerAuditTarget(null);
     launchOptimisticRef.current = false;
     setRunning(false);
     setInterrupting(false);
@@ -2983,7 +3089,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               workflowKind={activeWorkflowKind}
               running={isActiveConversationRunning}
               planTree={planTree}
-              strixAgents={strixAgents}
+              strixAgents={applyDisplayNameOverrides(strixAgents, workerDisplayNames)}
               strixNotes={strixNotes}
               strixRun={strixRun}
               caseRun={caseRun}
@@ -3039,10 +3145,55 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               }}
               onOpenVulnerability={setSelectedVulnerability}
               onOpenAsset={setSelectedAsset}
+              onWorkerClick={(agent, workerOrdinal) => {
+                // Prefer bare sub_* id for Case frames (panel may use root-prefixed ids).
+                const rawId = String(agent.id || "").trim();
+                const bare = rawId.includes("-") ? rawId.split("-").slice(-1)[0] : rawId;
+                setWorkerAuditTarget({
+                  agentId: bare || rawId,
+                  panelName: agent.name,
+                  workerOrdinal,
+                });
+              }}
             />
           )}
         </div>
       </div>
+      <WorkerAuditDialog
+        open={Boolean(workerAuditTarget)}
+        agentId={workerAuditTarget?.agentId || ""}
+        panelName={workerAuditTarget?.panelName}
+        workerOrdinal={workerAuditTarget?.workerOrdinal}
+        overrides={workerDisplayNames}
+        messages={messages}
+        onClose={() => setWorkerAuditTarget(null)}
+        onRename={async (agentId, displayName) => {
+          if (!activeId) return;
+          const res = await authFetch<{
+            ok?: boolean;
+            display_name?: string | null;
+            worker_display_names?: Record<string, string>;
+          }>(`/api/conversations/${activeId}/workers/${encodeURIComponent(agentId)}/display-name`, {
+            method: "PUT",
+            body: JSON.stringify({ display_name: displayName }),
+          });
+          if (res.worker_display_names && typeof res.worker_display_names === "object") {
+            const next: Record<string, string> = {};
+            for (const [k, v] of Object.entries(res.worker_display_names)) {
+              const name = String(v || "").trim();
+              if (k && name) next[k] = name;
+            }
+            setWorkerDisplayNames(next);
+          } else {
+            setWorkerDisplayNames((prev) => {
+              const next = { ...prev };
+              if (!displayName) delete next[agentId];
+              else next[agentId] = displayName;
+              return next;
+            });
+          }
+        }}
+      />
       <VulnDetailDialog
         open={Boolean(selectedVulnerability)}
         vulnerabilityId={selectedVulnerability?.vulnerability_id as string | undefined}

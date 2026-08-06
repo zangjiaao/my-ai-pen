@@ -145,6 +145,8 @@ interface Props {
   worksetBusyId?: string | null;
   onOpenVulnerability?: (finding: Partial<SecurityVulnerability>) => void;
   onOpenAsset?: (asset: Partial<SecurityAsset>) => void;
+  /** Spec #308: open Worker process audit dialog. */
+  onWorkerClick?: (agent: StrixAgentStatus, workerOrdinal?: number) => void;
 }
 
 const RIGHT_PANEL_WIDTH_KEY = "my_ai_pen_right_panel_width";
@@ -195,6 +197,7 @@ export default function RightPanel({
   taskContext,
   onOpenVulnerability,
   onOpenAsset,
+  onWorkerClick,
 }: Props) {
   const [tab, setTab] = useState<Tab>("status");
   const engagementTargets = useMemo(() => parseEngagementTargets(taskContext), [taskContext]);
@@ -399,7 +402,7 @@ export default function RightPanel({
                   </p>
                   <p className="font-mono text-[11px] text-ink-muted">{agentStatusCount(displayAgents)}</p>
                 </div>
-                <StrixAgentList agents={displayAgents} />
+                <StrixAgentList agents={displayAgents} onWorkerClick={onWorkerClick} />
               </section>
             )}
             {/* Spec #311: Case Workset backlog — separate from process Tasks */}

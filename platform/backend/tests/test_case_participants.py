@@ -5,7 +5,11 @@ from app.services.case_participants import (
     participant_key,
     participants_list,
     recompute_case_run,
+    resolve_worker_display_name,
+    set_worker_display_name,
     upsert_participant,
+    validate_worker_display_name,
+    worker_display_names_map,
 )
 
 
@@ -275,3 +279,30 @@ def test_plan_tree_per_role_does_not_wipe_other():
     assert titles == {"recon", "sqli"}
     owners = {str(n.get("owner_expert_id")) for n in flat}
     assert owners == {"e1", "e2"}
+
+
+# --- Spec #308 Worker display_name ---
+
+
+def test_resolve_worker_display_name_priority():
+    assert resolve_worker_display_name(agent_id="sub_1", override="Alice", panel_name="Worker 2") == "Alice"
+    assert resolve_worker_display_name(agent_id="sub_1", panel_name="Worker 2") == "Worker 2"
+    assert resolve_worker_display_name(agent_id="sub_1", worker_ordinal=3) == "Worker 3"
+    assert resolve_worker_display_name(agent_id="sub_1") == "Worker"
+
+
+def test_set_worker_display_name_write_clear():
+    ctx = set_worker_display_name({}, agent_id="sub_1", display_name="  Recon bot  ")
+    assert ctx is not None
+    assert worker_display_names_map(ctx) == {"sub_1": "Recon bot"}
+    ctx2 = set_worker_display_name(ctx, agent_id="sub_1", display_name="")
+    assert ctx2 is not None
+    assert worker_display_names_map(ctx2) == {}
+    assert "worker_display_names" not in ctx2
+
+
+def test_validate_worker_display_name():
+    assert validate_worker_display_name("ok") == "ok"
+    assert validate_worker_display_name("  ") == ""
+    assert validate_worker_display_name("a" * 65) is None
+    assert validate_worker_display_name("bad\nname") is None

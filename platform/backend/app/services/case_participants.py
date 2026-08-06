@@ -136,6 +136,95 @@ def participants_map(context: dict | None) -> dict[str, dict[str, Any]]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Spec #308 — Case Worker display_name overrides (platform-owned)
+# ---------------------------------------------------------------------------
+
+_MAX_WORKER_DISPLAY_NAME = 64
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def worker_display_names_map(context: dict | None) -> dict[str, str]:
+    """Return agent_id → display_name overrides from Case context."""
+    raw = _as_dict(context).get("worker_display_names")
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key, value in raw.items():
+        aid = str(key or "").strip()
+        name = str(value or "").strip()
+        if aid and name:
+            out[aid] = name
+    return out
+
+
+def validate_worker_display_name(raw: object) -> str | None:
+    """Return trimmed name, empty string to clear, or None if invalid."""
+    if raw is None:
+        return ""
+    text = str(raw).strip()
+    if not text:
+        return ""
+    if _CONTROL_CHARS.search(text):
+        return None
+    if len(text) > _MAX_WORKER_DISPLAY_NAME:
+        return None
+    return text
+
+
+def set_worker_display_name(
+    context: dict | None,
+    *,
+    agent_id: object,
+    display_name: object,
+) -> dict[str, Any] | None:
+    """Upsert or clear a Case Worker display_name override.
+
+    Returns new context dict, or None if agent_id/display_name invalid.
+    Empty display_name clears the override (fallback to panel Worker N).
+    """
+    aid = str(agent_id or "").strip()
+    if not aid or len(aid) > 128:
+        return None
+    name = validate_worker_display_name(display_name)
+    if name is None:
+        return None
+    ctx = dict(context or {})
+    names = worker_display_names_map(ctx)
+    if not name:
+        names.pop(aid, None)
+    else:
+        names[aid] = name
+    if names:
+        ctx["worker_display_names"] = names
+    else:
+        ctx.pop("worker_display_names", None)
+    return ctx
+
+
+def resolve_worker_display_name(
+    *,
+    agent_id: object,
+    override: object = None,
+    panel_name: object = None,
+    worker_ordinal: object = None,
+) -> str:
+    """S1 resolve: user_display_name ?? panel_agents.name ?? Worker N."""
+    ov = str(override or "").strip()
+    if ov:
+        return ov
+    pn = str(panel_name or "").strip()
+    if pn:
+        return pn
+    try:
+        n = int(worker_ordinal)  # type: ignore[arg-type]
+        if n >= 1:
+            return f"Worker {n}"
+    except (TypeError, ValueError):
+        pass
+    return "Worker"
+
+
 def upsert_participant(
     context: dict | None,
     *,

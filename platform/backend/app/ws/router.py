@@ -1838,6 +1838,38 @@ def _merge_saved_message_content(existing: dict, incoming: dict, msg_type: str) 
     }
 
 
+def _stamp_worker_audit_scope(content: dict, msg: dict) -> None:
+    """Spec #308: persist Worker audit scope keys on Case message content.
+
+    Source: top-level wire fields or nested content (Node may stamp either).
+    Fail-closed filter on FE uses channel / (agent_id + package_turn_id).
+    """
+    if not isinstance(content, dict) or not isinstance(msg, dict):
+        return
+    nested = msg.get("content") if isinstance(msg.get("content"), dict) else {}
+    channel = str(msg.get("channel") or nested.get("channel") or content.get("channel") or "").strip()
+    agent_id = str(msg.get("agent_id") or nested.get("agent_id") or content.get("agent_id") or "").strip()
+    package_turn_id = str(
+        msg.get("package_turn_id") or nested.get("package_turn_id") or content.get("package_turn_id") or ""
+    ).strip()
+    if channel:
+        content["channel"] = channel
+    if agent_id:
+        content["agent_id"] = agent_id
+    if package_turn_id:
+        content["package_turn_id"] = package_turn_id
+    ordinal = msg.get("worker_ordinal")
+    if ordinal is None:
+        ordinal = nested.get("worker_ordinal")
+    if ordinal is not None:
+        try:
+            n = int(ordinal)
+            if n >= 1:
+                content["worker_ordinal"] = n
+        except (TypeError, ValueError):
+            pass
+
+
 def _stamp_stream_message_ids(msg: dict, conv_id: str) -> None:
     """
     Attach a stable message_id before broadcast so the UI can upsert stream frames
@@ -1923,6 +1955,7 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                 content = {"text": str(inner)}
             if msg.get("stream_id") and not content.get("stream_id"):
                 content["stream_id"] = msg.get("stream_id")
+            _stamp_worker_audit_scope(content, msg)
         elif msg_type in ("thinking", "agent_thinking", "reasoning"):
             msg_type = "thinking"
             inner = msg.get("content", {})
@@ -1942,6 +1975,7 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                     content["status"] = status
             if msg.get("stream_id") and not content.get("stream_id"):
                 content["stream_id"] = msg.get("stream_id")
+            _stamp_worker_audit_scope(content, msg)
         elif msg_type == "tool_output":
             msg_type = "tool_call"
             content = {
@@ -1959,7 +1993,35 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                 "result": msg.get("result"),
                 "result_text": msg.get("result_text"),
             }
+            _stamp_worker_audit_scope(content, msg)
             content["tool_items"] = [_tool_item_from_content(content)]
+        elif msg_type == "worker_package_start":
+            # Spec #308: Package handoff card (Worker audit dialog only).
+            handoff = msg.get("handoff") if isinstance(msg.get("handoff"), dict) else {}
+            content = {
+                "handoff": {
+                    "target": str(handoff.get("target") or ""),
+                    "scope": str(handoff.get("scope") or ""),
+                    "already_done": str(handoff.get("already_done") or ""),
+                    "this_turn_goal": str(handoff.get("this_turn_goal") or ""),
+                    "success_criteria": str(handoff.get("success_criteria") or ""),
+                },
+            }
+            if str(handoff.get("assignment") or "").strip():
+                content["handoff"]["assignment"] = str(handoff.get("assignment")).strip()[:4000]
+            _stamp_worker_audit_scope(content, msg)
+        elif msg_type == "worker_package_delivery":
+            # Spec #308: host-sourced Delivery (ok | failed | interrupted).
+            status = str(msg.get("status") or "").strip().lower()
+            if status not in {"ok", "failed", "interrupted"}:
+                status = "failed"
+            content = {
+                "status": status,
+                "summary": str(msg.get("summary") or "")[:2000],
+            }
+            if isinstance(msg.get("settlement"), dict):
+                content["settlement"] = msg.get("settlement")
+            _stamp_worker_audit_scope(content, msg)
         elif msg_type in ("status_update", "phase_changed"):
             msg_type = "status"
             # Prefer Node4 message / agent_phase over legacy phase+iteration template.

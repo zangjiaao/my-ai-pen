@@ -321,6 +321,70 @@ async def get_messages(conv_id: str, limit: int = Query(200, ge=1, le=1000), off
     return await get_message_page(db, c.id, limit=limit, offset=offset, order=order)
 
 
+@router.put("/{conv_id}/workers/{agent_id}/display-name")
+async def put_worker_display_name(
+    conv_id: str,
+    agent_id: str,
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Spec #308: Case-persistent Worker display_name override (empty clears)."""
+    from app.services.case_participants import set_worker_display_name, worker_display_names_map
+    from app.ws import router as ws_router
+
+    c = await _get_conv(conv_id, current_user, db)
+    aid = str(agent_id or "").strip()
+    if not aid:
+        raise HTTPException(400, "agent_id required")
+    raw_name = body.get("display_name") if isinstance(body, dict) else None
+    next_ctx = set_worker_display_name(
+        c.context if isinstance(c.context, dict) else {},
+        agent_id=aid,
+        display_name=raw_name,
+    )
+    if next_ctx is None:
+        raise HTTPException(400, "invalid agent_id or display_name (1–64 chars, no control chars)")
+    c.context = next_ctx
+    names = worker_display_names_map(next_ctx)
+    resolved = names.get(aid) or ""
+    await _audit(
+        db,
+        uuid.UUID(current_user["user_id"]),
+        "conversation.worker_display_name",
+        "conversation",
+        c.id,
+        c.id,
+        {"agent_id": aid, "display_name": resolved or None, "cleared": not resolved},
+    )
+    await db.commit()
+    # Near-real-time: broadcast so tree/dialog/Tasks can refresh without full reload.
+    try:
+        import json as _json
+
+        await ws_router._broadcast_to_conversation(
+            conv_id,
+            _json.dumps(
+                {
+                    "type": "worker_display_name",
+                    "conversation_id": conv_id,
+                    "agent_id": aid,
+                    "display_name": resolved or None,
+                    "worker_display_names": names,
+                },
+                ensure_ascii=False,
+            ),
+        )
+    except Exception as exc:
+        print(f"[API] worker_display_name broadcast: {exc}")
+    return {
+        "ok": True,
+        "agent_id": aid,
+        "display_name": resolved or None,
+        "worker_display_names": names,
+    }
+
+
 @router.post("/{conv_id}/steer")
 async def steer_conversation(conv_id: str, body: dict, current_user: dict = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     c = await _get_conv(conv_id, current_user, db)

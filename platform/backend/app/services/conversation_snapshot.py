@@ -377,6 +377,12 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
             for wid, meta in workers.items()
         ],
         "participants": participant_rows,
+        # Spec #308: Case Worker display_name overrides (agent_id → name).
+        "worker_display_names": (
+            context.get("worker_display_names")
+            if isinstance(context.get("worker_display_names"), dict)
+            else {}
+        ),
         "case_run": case_run or {},
         "messages": snapshot_message_items,
         "agents": agent_items,
