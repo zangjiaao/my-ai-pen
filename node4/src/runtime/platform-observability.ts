@@ -88,15 +88,19 @@ export function assistantThinking(message: unknown): string {
 
 type StreamChannel = "text" | "thinking";
 
+type ThinkingLifecycleStatus = "running" | "done";
+
 /**
  * Progressive stream of one content channel (visible text or thinking).
  * Source of truth is the Pi partial message snapshot — never raw `+=` deltas.
+ * Spec #305: thinking frames stamp content.status running|done; T1 allows empty running start.
  */
 class ProgressiveContentStream {
   private sequence = 0;
   private streamId = "";
   private text = "";
   private lastSentText = "";
+  private lastSentStatus: "" | ThinkingLifecycleStatus = "";
   private timer: ReturnType<typeof setTimeout> | undefined;
   private sending: Promise<void> = Promise.resolve();
   private firstFlushPending = false;
@@ -137,6 +141,17 @@ class ProgressiveContentStream {
     if (!this.streamId) this.startStream();
   }
 
+  /**
+   * Spec #305 T1: when the thinking channel opens, emit an empty running frame
+   * with a stable stream_id so the timeline is not silent before first tokens.
+   */
+  async ensureRunningStart(): Promise<void> {
+    if (this.channel !== "thinking") return;
+    this.ensureStream();
+    if (this.lastSentStatus) return;
+    await this.flush({ status: "running", allowEmpty: true });
+  }
+
   async maybeFlush(): Promise<void> {
     if (!this.text) return;
     await this.scheduleFlush();
@@ -144,12 +159,27 @@ class ProgressiveContentStream {
 
   async finalFlush(message?: unknown): Promise<void> {
     if (message !== undefined) this.applySnapshot(message);
+    if (this.channel === "thinking") {
+      // Only stamp done if this channel was opened / had progressive activity.
+      if (!this.streamId && !this.text) {
+        this.reset();
+        return;
+      }
+      this.ensureStream();
+      await this.flush({ status: "done", force: true, allowEmpty: true });
+      this.reset();
+      return;
+    }
     this.ensureStream();
     await this.flush();
     this.reset();
   }
 
   async dispose(): Promise<void> {
+    if (this.channel === "thinking" && this.streamId && this.lastSentStatus === "running") {
+      await this.flush({ status: "done", force: true, allowEmpty: true });
+      return;
+    }
     await this.flush();
   }
 
@@ -157,6 +187,7 @@ class ProgressiveContentStream {
     this.streamId = "";
     this.text = "";
     this.lastSentText = "";
+    this.lastSentStatus = "";
     this.firstFlushPending = false;
     if (this.timer) {
       clearTimeout(this.timer);
@@ -164,23 +195,52 @@ class ProgressiveContentStream {
     }
   }
 
-  private async flush(): Promise<void> {
+  private async flush(opts?: {
+    status?: ThinkingLifecycleStatus;
+    force?: boolean;
+    allowEmpty?: boolean;
+  }): Promise<void> {
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = undefined;
     }
-    if (!this.streamId || !this.text || this.text === this.lastSentText) return this.sending;
+    if (!this.streamId) return this.sending;
 
     const text = this.text;
+    const status: ThinkingLifecycleStatus | undefined =
+      this.channel === "thinking" ? opts?.status || "running" : undefined;
+
+    if (!text && !opts?.allowEmpty) return this.sending;
+
+    // Skip no-op progressive frames (same body + same status).
+    if (
+      !opts?.force
+      && text === this.lastSentText
+      && (status === undefined || status === this.lastSentStatus)
+    ) {
+      return this.sending;
+    }
+    // Force final: still skip if we already sent identical done frame.
+    if (
+      opts?.force
+      && text === this.lastSentText
+      && status === "done"
+      && this.lastSentStatus === "done"
+    ) {
+      return this.sending;
+    }
+
     const streamId = this.streamId;
     this.lastSentText = text;
+    if (status) this.lastSentStatus = status;
     this.firstFlushPending = false;
     const type = this.channel === "thinking" ? "thinking" : "text";
     const content =
       this.channel === "thinking"
-        ? { text, reasoning: text, stream_id: streamId }
+        ? { text, reasoning: text, stream_id: streamId, status: status || "running" }
         : { text, stream_id: streamId };
-    // Chain WS sends for order, but never await disk (caller platform must not block).
+    // Chain WS sends for order. Progressive flushes stay non-blocking for callers;
+    // force/allowEmpty (final + T1 start) await the chain so status frames are ordered.
     this.sending = this.sending
       .then(() =>
         this.platform.send({
@@ -192,6 +252,10 @@ class ProgressiveContentStream {
         } as PlatformMessage),
       )
       .catch(() => {});
+    if (opts?.force || opts?.allowEmpty) {
+      await this.sending;
+      return;
+    }
     // Do not return the chain to callers — progressive UI must not wait on prior frames.
     return Promise.resolve();
   }
@@ -201,19 +265,20 @@ class ProgressiveContentStream {
     this.streamId = `n4-${this.channel}-${this.task.taskId}-${this.sequence}`;
     this.text = "";
     this.lastSentText = "";
+    this.lastSentStatus = "";
     this.firstFlushPending = true;
   }
 
   private async scheduleFlush(): Promise<void> {
     if (!this.streamId || !this.text) return;
     if (this.firstFlushPending || this.text.length - this.lastSentText.length >= TEXT_STREAM_MIN_CHARS) {
-      await this.flush();
+      await this.flush(this.channel === "thinking" ? { status: "running" } : undefined);
       return;
     }
     if (this.timer) return;
     this.timer = setTimeout(() => {
       this.timer = undefined;
-      void this.flush();
+      void this.flush(this.channel === "thinking" ? { status: "running" } : undefined);
     }, TEXT_STREAM_FLUSH_MS);
   }
 }
@@ -242,6 +307,8 @@ export class PlatformTextStream {
     if (event.type === "message_start" && msg?.role === "assistant") {
       this.text.ensureStream();
       this.thinking.ensureStream();
+      // Spec #305 T1: announce empty running thinking before first tokens.
+      await this.thinking.ensureRunningStart();
       this.text.applySnapshot(event.message, event.assistantMessageEvent);
       this.thinking.applySnapshot(event.message, event.assistantMessageEvent);
       await Promise.all([this.text.maybeFlush(), this.thinking.maybeFlush()]);
@@ -255,6 +322,7 @@ export class PlatformTextStream {
 
       if (kind.startsWith("thinking_")) {
         this.thinking.ensureStream();
+        await this.thinking.ensureRunningStart();
         this.thinking.applySnapshot(event.message, ame);
         await this.thinking.maybeFlush();
         return;
@@ -269,6 +337,7 @@ export class PlatformTextStream {
       // Unknown update: try both channels from partial snapshot.
       this.text.ensureStream();
       this.thinking.ensureStream();
+      await this.thinking.ensureRunningStart();
       this.text.applySnapshot(event.message, ame);
       this.thinking.applySnapshot(event.message, ame);
       await Promise.all([this.text.maybeFlush(), this.thinking.maybeFlush()]);

@@ -3,14 +3,18 @@ import { useLocation, useNavigate } from "react-router-dom";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 import RightPanel from "../components/RightPanel";
-import MessageRenderer, { AgentPendingCard } from "../components/MessageRenderer";
+import MessageRenderer, {
+  AgentPendingCard,
+  agentDisplayName,
+  shouldShowAgentSpeakerLabel,
+} from "../components/MessageRenderer";
 import VulnDetailDialog from "../components/VulnDetailDialog";
 import AssetDetailDialog from "../components/AssetDetailDialog";
 import EvidenceDetailDialog from "../components/EvidenceDetailDialog";
 import { useConversationStore } from "../stores/conversationStore";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { ApiError, authFetch } from "../lib/api";
-import { normalizeExecutionStatus } from "../lib/status";
+import { mergeThinkingStatus, normalizeExecutionStatus } from "../lib/status";
 import { PHASES, phaseLabel } from "../lib/phase";
 import {
   findAgentByIdExact,
@@ -30,6 +34,7 @@ import {
 import {
   clearLiveStreams,
   durableStreamSnapshots,
+  isProgressiveActivityFrame,
   liveFrameToMessageLike,
   mergeMessagesWithLiveStreams,
   messageListKey,
@@ -1428,14 +1433,19 @@ export default function ConversationPage() {
     c.stream_id = streamId;
     if (messageId) c.message_id = messageId;
     const body = readString(c.text) || readString(c.reasoning) || readString(raw.text);
-    if (!body) return;
+    const status = readString(c.status) || readString(raw.status);
+    if (msgType === "thinking" && status) c.status = status;
+    // Spec #305 T1: empty body allowed when thinking status is running.
+    if (!isProgressiveActivityFrame({ streamId, msgType, text: body, status: c.status ?? status })) {
+      return;
+    }
     c.text = body;
     if (msgType === "thinking") c.reasoning = body;
     const convId = messageConversationId(raw, activeId);
     markMessageAutoScroll();
     const attribution = agentAttribution(raw);
     const message = makeMessage(convId, "agent", msgType, { ...attribution, ...c });
-    // Pending chrome hides on first progressive stream; never morph from live-slot.
+    // Pending chrome hides on first progressive activity (incl. empty running thinking).
     setPendingChrome((cur) => reducePendingChrome(cur, { type: "stream_started" }));
     setLiveStreams((prev) =>
       upsertLiveByStreamId(prev, {
@@ -1935,6 +1945,10 @@ export default function ConversationPage() {
       reducePendingChrome(null, {
         type: "send_success",
         conversationId: convId!,
+        // Spec #305: reuse agent speaker attribution for list-tail pending chrome.
+        ...(routeExpertId ? { expert_id: routeExpertId } : {}),
+        ...(routeExpertName ? { expert_name: routeExpertName } : {}),
+        agent_source: isBuiltinAssistant ? "default" : "pentest",
       }),
     );
 
@@ -2478,12 +2492,46 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                   />
                 </div>
               ))}
-              {/* Spec #276: pending is chrome only — not a Message / live-slot row. */}
-              {showPendingChrome && pendingChrome && (
-                <div key="pending-chrome" data-testid="pending-chrome">
-                  <AgentPendingCard content={{ text: pendingChrome.label }} />
-                </div>
-              )}
+              {/* Spec #276: pending is chrome only — not a Message / live-slot row.
+                  Spec #305: same speaker row rules as MessageRenderer (first / expert switch only). */}
+              {showPendingChrome && pendingChrome && (() => {
+                const pendingContent: Record<string, unknown> = {
+                  text: pendingChrome.label,
+                  ...(pendingChrome.expert_id ? { expert_id: pendingChrome.expert_id } : {}),
+                  ...(pendingChrome.expert_name ? { expert_name: pendingChrome.expert_name } : {}),
+                  ...(pendingChrome.expert_display_name
+                    ? { expert_display_name: pendingChrome.expert_display_name }
+                    : {}),
+                  ...(pendingChrome.agent_source ? { agent_source: pendingChrome.agent_source } : {}),
+                };
+                const lastAgent = [...displayMessages].reverse().find((m) => m.role === "agent");
+                const showSpeaker = shouldShowAgentSpeakerLabel(
+                  pendingContent,
+                  lastAgent?.content,
+                  agentNameById,
+                  fallbackPentestNodeId,
+                  platformAgentNodeId,
+                );
+                const speakerLabel = agentDisplayName(
+                  pendingContent,
+                  agentNameById,
+                  fallbackPentestNodeId,
+                  platformAgentNodeId,
+                );
+                return (
+                  <div key="pending-chrome" data-testid="pending-chrome">
+                    {showSpeaker && (
+                      <div
+                        className="mb-1 flex items-center gap-2 text-xs text-ink-muted"
+                        data-testid="pending-chrome-speaker"
+                      >
+                        <span className="font-medium text-ink-secondary">{speakerLabel}</span>
+                      </div>
+                    )}
+                    <AgentPendingCard content={{ text: pendingChrome.label }} />
+                  </div>
+                );
+              })()}
             </div>
             <div className="p-4 pt-2">
               {/* Agent-style composer: partner chip → (pentest: mode + Goal) → send */}
@@ -3103,6 +3151,10 @@ function mergeMessageRecords(existing: MessageRecord, incoming: MessageRecord): 
     } else {
       text = prevText;
     }
+    const mergedStatus =
+      existingType === "thinking"
+        ? mergeThinkingStatus(existingContent.status, incomingContent.status)
+        : incomingContent.status ?? existingContent.status;
     return {
       ...existing,
       ...incoming,
@@ -3112,6 +3164,7 @@ function mergeMessageRecords(existing: MessageRecord, incoming: MessageRecord): 
         ...incomingContent,
         text,
         ...(existingType === "thinking" ? { reasoning: text } : {}),
+        ...(mergedStatus !== undefined ? { status: mergedStatus } : {}),
         stream_id: incomingContent.stream_id || existingContent.stream_id,
         message_id: existingContent.message_id || incomingContent.message_id,
       },

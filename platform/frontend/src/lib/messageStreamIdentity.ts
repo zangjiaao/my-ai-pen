@@ -1,9 +1,12 @@
 /**
- * Progressive stream identity + pending chrome (Spec #276).
+ * Progressive stream identity + pending chrome (Spec #276 / #305).
  *
  * Pending is **chrome**, not a Message. Live overlay keys are **stream_id only**.
  * No live-slot Message dual identity.
+ * Spec #305: thinking may carry content.status; empty running thinking upserts; pending may carry speaker attribution.
  */
+
+import { mergeThinkingStatus } from "./status";
 
 /** React list key: one key per progressive stream so thinking turns do not share a DOM node. */
 export function messageListKey(msg: {
@@ -37,10 +40,23 @@ export function mergeProgressiveText(prev: string, next: string): string {
 export type PendingChrome = {
   conversationId: string;
   label: string;
+  /** Optional speaker attribution (Spec #305) — same fields as agent messages. */
+  expert_id?: string;
+  expert_name?: string;
+  expert_display_name?: string;
+  agent_source?: string;
 } | null;
 
 export type PendingChromeEvent =
-  | { type: "send_success"; conversationId: string; label?: string }
+  | {
+      type: "send_success";
+      conversationId: string;
+      label?: string;
+      expert_id?: string;
+      expert_name?: string;
+      expert_display_name?: string;
+      agent_source?: string;
+    }
   | { type: "stream_started" }
   | { type: "terminal" }
   | { type: "clear" }
@@ -48,6 +64,11 @@ export type PendingChromeEvent =
   | { type: "tool_output" };
 
 const DEFAULT_PENDING_LABEL = "思考中…";
+
+function optionalTrimmed(value: unknown): string | undefined {
+  const s = String(value ?? "").trim();
+  return s || undefined;
+}
 
 /** Pure state machine for post-send “思考中…” chrome. */
 export function reducePendingChrome(
@@ -59,7 +80,16 @@ export function reducePendingChrome(
       const conversationId = String(event.conversationId || "").trim();
       if (!conversationId) return null;
       const label = String(event.label || DEFAULT_PENDING_LABEL).trim() || DEFAULT_PENDING_LABEL;
-      return { conversationId, label };
+      const chrome: NonNullable<PendingChrome> = { conversationId, label };
+      const expertId = optionalTrimmed(event.expert_id);
+      const expertName = optionalTrimmed(event.expert_name);
+      const expertDisplay = optionalTrimmed(event.expert_display_name);
+      const agentSource = optionalTrimmed(event.agent_source);
+      if (expertId) chrome.expert_id = expertId;
+      if (expertName) chrome.expert_name = expertName;
+      if (expertDisplay) chrome.expert_display_name = expertDisplay;
+      if (agentSource) chrome.agent_source = agentSource;
+      return chrome;
     }
     case "stream_started":
     case "terminal":
@@ -98,6 +128,7 @@ export type LiveStreamFrame = {
 /**
  * Upsert progressive frame only when stream_id is present (fail-closed).
  * Missing stream_id → map unchanged; never invents live-slot or synthetic keys.
+ * Spec #305 T1: empty body allowed for thinking when content.status === "running".
  */
 export function upsertLiveByStreamId(
   live: Record<string, LiveStreamFrame>,
@@ -113,11 +144,19 @@ export function upsertLiveByStreamId(
   const streamId = String(input.streamId || "").trim();
   if (!streamId) return live;
   const body = String(input.text || "");
-  if (!body) return live;
+  const statusRaw = input.content?.status;
+  const status = String(statusRaw ?? "").trim().toLowerCase();
+  const allowEmptyRunning =
+    input.msgType === "thinking" && status === "running";
+  if (!body && !allowEmptyRunning) return live;
 
   const existing = live[streamId];
   const prevText = existing?.text || "";
-  const text = mergeProgressiveText(prevText, body);
+  const text = body ? mergeProgressiveText(prevText, body) : prevText;
+  const mergedContent: Record<string, unknown> = {
+    ...(existing?.content || {}),
+    ...(input.content || {}),
+  };
   return {
     ...live,
     [streamId]: {
@@ -127,10 +166,7 @@ export function upsertLiveByStreamId(
       messageId: String(input.messageId || existing?.messageId || "").trim() || undefined,
       conversationId:
         String(input.conversationId || existing?.conversationId || "").trim() || undefined,
-      content: {
-        ...(existing?.content || {}),
-        ...(input.content || {}),
-      },
+      content: mergedContent,
     },
   };
 }
@@ -248,6 +284,20 @@ export function liveFrameToMessageLike(frame: LiveStreamFrame): StreamMessageLik
   };
 }
 
+/** Whether a progressive thinking/text frame should clear pending and enter live (Spec #305). */
+export function isProgressiveActivityFrame(input: {
+  streamId?: string | null;
+  msgType: "text" | "thinking";
+  text?: string | null;
+  status?: unknown;
+}): boolean {
+  const streamId = String(input.streamId || "").trim();
+  if (!streamId) return false;
+  const body = String(input.text || "");
+  if (body) return true;
+  return input.msgType === "thinking" && String(input.status ?? "").trim().toLowerCase() === "running";
+}
+
 /**
  * RQ messages (filter agent_pending) ∪ live by stream_id.
  * Live-only streams append after durable order. No live-slot keys.
@@ -286,6 +336,10 @@ export function mergeMessagesWithLiveStreams<T extends StreamMessageLike>(
       String(prev.content.text || "") || String(prev.content.reasoning || "");
     const text = mergeProgressiveText(prevText, frame.text);
     const stableId = frame.messageId || prev.id;
+    const isThinking = frame.msgType === "thinking" || prev.msg_type === "thinking";
+    const mergedStatus = isThinking
+      ? mergeThinkingStatus(prev.content.status, liveMsg.content.status)
+      : liveMsg.content.status ?? prev.content.status;
     byKey.set(key, {
       ...prev,
       ...liveMsg,
@@ -294,9 +348,8 @@ export function mergeMessagesWithLiveStreams<T extends StreamMessageLike>(
         ...prev.content,
         ...liveMsg.content,
         text,
-        ...(frame.msgType === "thinking" || prev.msg_type === "thinking"
-          ? { reasoning: text }
-          : {}),
+        ...(isThinking ? { reasoning: text } : {}),
+        ...(mergedStatus !== undefined ? { status: mergedStatus } : {}),
         stream_id: streamId,
         message_id: stableId,
       },

@@ -3,7 +3,7 @@ import { Brain, Compass, Globe2, Search, ShieldAlert, Terminal, Users, Wrench, t
 import type { Message } from "../lib/types";
 import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../lib/securityTypes";
 import { isTruthyNewFlag } from "../lib/findingNew";
-import { normalizeExecutionStatus } from "../lib/status";
+import { isSuccessfulToolExecution, normalizeExecutionStatus } from "../lib/status";
 import { phaseLabel } from "../lib/phase";
 import ConfirmCard from "./cards/ConfirmCard";
 import ThinkingCard from "./cards/ThinkingCard";
@@ -23,7 +23,8 @@ interface Props {
   approvalDecisionByRequestId?: Record<string, "authorize" | "cancel" | "answered">;
 }
 
-function agentDisplayName(content: Record<string, unknown>, agentNameById: Record<string, string>, fallbackPentestNodeId?: string | null, platformAgentNodeId?: string | null): string {
+/** Shared speaker resolution for agent messages and list-tail pending chrome (Spec #305). */
+export function agentDisplayName(content: Record<string, unknown>, agentNameById: Record<string, string>, fallbackPentestNodeId?: string | null, platformAgentNodeId?: string | null): string {
   // Product expert persona wins — never show physical Node name as the speaker.
   const expertDisplay = String(content.expert_display_name || content.expertDisplayName || "").trim();
   if (expertDisplay) {
@@ -48,6 +49,25 @@ function agentDisplayName(content: Record<string, unknown>, agentNameById: Recor
   void fallbackPentestNodeId;
   void platformAgentNodeId;
   return "\u6e17\u900fAgent";
+}
+
+/** Same-speaker collapse rule used by MessageRenderer and pending chrome (Spec #305). */
+export function shouldShowAgentSpeakerLabel(
+  content: Record<string, unknown>,
+  previousAgentContent: Record<string, unknown> | null | undefined,
+  agentNameById: Record<string, string> = {},
+  fallbackPentestNodeId?: string | null,
+  platformAgentNodeId?: string | null,
+): boolean {
+  const label = agentDisplayName(content, agentNameById, fallbackPentestNodeId, platformAgentNodeId);
+  if (!previousAgentContent) return true;
+  const previousLabel = agentDisplayName(
+    previousAgentContent,
+    agentNameById,
+    fallbackPentestNodeId,
+    platformAgentNodeId,
+  );
+  return previousLabel !== label;
 }
 function ToolCallCard({ content, onOpenEvidence }: { content: Record<string, unknown>; onOpenEvidence?: (evidence: Partial<SecurityEvidence>) => void }) {
   const [expanded, setExpanded] = useState(false);
@@ -165,9 +185,11 @@ function summarizeToolActivity(items: ToolItem[], fallbackTool: string, aggregat
 }
 
 function isSuccessfulToolItem(item: ToolItem): boolean {
-  const primaryStatus = String(item.status || "").trim().toLowerCase();
-  if (primaryStatus && normalizeExecutionStatus(primaryStatus) !== "running") return isSuccessfulStatus(primaryStatus);
-  return [item.result?.status, item.result?.status_code].some(isSuccessfulStatus);
+  // Spec #305 S+: explicit running never counts as success (ignore partial result HTTP codes).
+  return isSuccessfulToolExecution(item.status, {
+    status: item.result?.status,
+    status_code: item.result?.status_code,
+  });
 }
 
 function isSuccessfulStatus(value: unknown): boolean {
@@ -184,7 +206,8 @@ function toolItemFromStructuredRecord(item: Record<string, unknown>, content: Re
   const output = parseToolOutput(stdout);
   const explicitResult = item.result && typeof item.result === "object" && !Array.isArray(item.result) ? item.result as Record<string, unknown> : null;
   const parsed = explicitResult || output.result;
-  const status = readContentString(item.status) || readContentString(parsed?.status) || readContentString(content.status) || "done";
+  // Spec #305 S+: missing in-flight status defaults to running, not done.
+  const status = readContentString(item.status) || readContentString(parsed?.status) || readContentString(content.status) || "running";
   const command = readContentString(item.command) || readContentString(parsed?.command);
   const evidenceId = readContentString(item.evidence_id) || output.evidenceId || readContentString(parsed?.evidence_id) || readContentString(content.evidence_id);
   const summary = readContentString(item.summary) || readContentString(content.summary);
@@ -255,7 +278,7 @@ function toolItemsFromContent(content: Record<string, unknown>): ToolItem[] {
   const runIds = Array.isArray(content.tool_run_ids) ? content.tool_run_ids.map(item => String(item || "")) : [String(content.tool_run_id || "")];
   const commands = readContentString(content.command).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
   const fallbackTool = String(content.latest_tool_name || content.tool_name || toolNames[0] || "tool");
-  const fallbackStatus = String(content.status || "done");
+  const fallbackStatus = String(content.status || "running");
   const items = lines
     .filter(line => !line.endsWith("..."))
     .map((line, index) => toolItemFromLine(line, {

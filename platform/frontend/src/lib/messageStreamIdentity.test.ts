@@ -1,5 +1,5 @@
 /**
- * Pure stream-identity + pending chrome + prune (Spec #276) — no vitest; run with:
+ * Pure stream-identity + pending chrome + prune (Spec #276 / #305) — no vitest; run with:
  *   npx tsx src/lib/messageStreamIdentity.test.ts
  * (from platform/frontend)
  */
@@ -8,6 +8,7 @@ import {
   clearLiveStreams,
   durableStreamSnapshots,
   hasProgressiveLive,
+  isProgressiveActivityFrame,
   liveFrameToMessageLike,
   mergeMessagesWithLiveStreams,
   mergeProgressiveText,
@@ -99,6 +100,84 @@ import {
   console.log("ok: same stream_id merges progressive text");
 }
 
+// Spec #305 S2: empty running thinking upserts; empty without running rejected
+{
+  let live: Record<string, LiveStreamFrame> = {};
+  const rejected = upsertLiveByStreamId(live, {
+    streamId: "n4-thinking-empty-1",
+    msgType: "thinking",
+    text: "",
+  });
+  assert.equal(Object.keys(rejected).length, 0, "empty without running status rejected");
+
+  live = upsertLiveByStreamId(live, {
+    streamId: "n4-thinking-empty-1",
+    msgType: "thinking",
+    text: "",
+    content: { status: "running" },
+  });
+  assert.ok(live["n4-thinking-empty-1"], "empty running thinking enters live map");
+  assert.equal(live["n4-thinking-empty-1"]!.text, "");
+  assert.equal(live["n4-thinking-empty-1"]!.content?.status, "running");
+
+  live = upsertLiveByStreamId(live, {
+    streamId: "n4-thinking-empty-1",
+    msgType: "thinking",
+    text: "first tokens",
+    content: { status: "running" },
+  });
+  assert.equal(live["n4-thinking-empty-1"]!.text, "first tokens");
+
+  live = upsertLiveByStreamId(live, {
+    streamId: "n4-thinking-empty-1",
+    msgType: "thinking",
+    text: "first tokens full",
+    content: { status: "done" },
+  });
+  assert.equal(live["n4-thinking-empty-1"]!.content?.status, "done");
+  console.log("ok: S2 empty running thinking upsert + body growth");
+}
+
+{
+  assert.equal(
+    isProgressiveActivityFrame({
+      streamId: "n4-thinking-1",
+      msgType: "thinking",
+      text: "",
+      status: "running",
+    }),
+    true,
+  );
+  assert.equal(
+    isProgressiveActivityFrame({
+      streamId: "n4-thinking-1",
+      msgType: "thinking",
+      text: "",
+      status: "done",
+    }),
+    false,
+  );
+  assert.equal(
+    isProgressiveActivityFrame({
+      streamId: "",
+      msgType: "thinking",
+      text: "x",
+      status: "running",
+    }),
+    false,
+    "fail-closed without stream_id",
+  );
+  assert.equal(
+    isProgressiveActivityFrame({
+      streamId: "n4-text-1",
+      msgType: "text",
+      text: "hi",
+    }),
+    true,
+  );
+  console.log("ok: S2 isProgressiveActivityFrame gates");
+}
+
 // ---------------------------------------------------------------------------
 // S2: pending chrome lifecycle
 // ---------------------------------------------------------------------------
@@ -122,10 +201,31 @@ import {
   pending = reducePendingChrome(pending, { type: "tool_output" });
   assert.deepEqual(pending, { conversationId: "conv-1", label: "思考中…" });
 
-  // hide on first stream
+  // hide on first stream (incl. empty running activity → stream_started)
   pending = reducePendingChrome(pending, { type: "stream_started" });
   assert.equal(pending, null);
+
+  // tools never reseed after clear
+  pending = reducePendingChrome(pending, { type: "tool_output" });
+  assert.equal(pending, null);
   console.log("ok: pending show after send, hide on stream, not on tool alone");
+}
+
+// Spec #305 S4: pending chrome may carry speaker attribution
+{
+  const pending = reducePendingChrome(null, {
+    type: "send_success",
+    conversationId: "conv-exp",
+    expert_name: "渗透大师",
+    expert_id: "exp-1",
+    agent_source: "pentest",
+  });
+  assert.equal(pending!.conversationId, "conv-exp");
+  assert.equal(pending!.expert_name, "渗透大师");
+  assert.equal(pending!.expert_id, "exp-1");
+  assert.equal(pending!.agent_source, "pentest");
+  assert.equal(pending!.label, "思考中…");
+  console.log("ok: S4 pending chrome carries speaker attribution");
 }
 
 {
