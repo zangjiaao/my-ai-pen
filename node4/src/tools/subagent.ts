@@ -65,6 +65,11 @@ export type SubagentPackageResult = {
   candidates: SubagentCandidate[];
   surfaces: SubagentSurface[];
   acceptance: AcceptanceEvaluation;
+  /**
+   * Spec #274: structured hypothesis outcomes for Main (queue commit / apply_package_outcome).
+   * Never auto-committed by host; Sub does not mutate the global queue.
+   */
+  hypothesis_outcomes?: import("../runtime/hypothesis-store.js").HypothesisPackageOutcome[];
   handoff: SubagentHandoffFields;
   evidence_id?: string;
   artifact_path?: string;
@@ -354,10 +359,16 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
             summary: one.summary,
             candidates: one.candidates,
             surfaces: one.surfaces,
+            ...(one.hypothesis_outcomes?.length
+              ? { hypothesis_outcomes: one.hypothesis_outcomes }
+              : {}),
           },
           candidates: one.candidates,
           surfaces: one.surfaces,
           acceptance: one.acceptance,
+          ...(one.hypothesis_outcomes?.length
+            ? { hypothesis_outcomes: one.hypothesis_outcomes }
+            : {}),
           evidence_id: one.evidence_id,
           goal_id: one.goal_id,
           artifact_path: one.artifact_path,
@@ -794,6 +805,10 @@ async function runSubagentPackage(
       candidates: structured.candidates,
       surfaces: structured.surfaces,
       acceptance,
+      // Spec #274: forward structured outcomes so Main can apply_package_outcome / commit
+      ...(structured.hypothesis_outcomes?.length
+        ? { hypothesis_outcomes: structured.hypothesis_outcomes }
+        : {}),
       handoff: handoff.handoff,
       evidence_id: result.evidenceId,
       artifact_path: result.artifactPath,

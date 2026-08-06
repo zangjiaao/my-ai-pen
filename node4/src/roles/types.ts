@@ -32,6 +32,13 @@ export type RolePack = {
   packRoot?: string;
   /** Absolute skills directory for this pack. */
   skillsRoot?: string;
+  /**
+   * Spec #274: pack declares availability of optional hypothesis work mode.
+   * Does not alone enable any stage — stages need hypothesis_work_mode: true.
+   */
+  capabilities?: {
+    hypothesis_work_mode?: boolean;
+  };
 };
 
 export type RoleResolveInput = {

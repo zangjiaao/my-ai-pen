@@ -78,6 +78,32 @@ import {
 const blob = buildParentObservationBlob(nested);
 assert.match(blob, /SQL syntax/);
 
+// Spec #274: single canonical parser path — hypothesis_outcomes on structured result
+const withHyp = normalizeSubagentResult({
+  ok: true,
+  summary: "probed",
+  candidates: [],
+  hypothesis_outcomes: [
+    { hypothesis_id: "hyp-1", result: "proved", evidence_refs: ["e1"] },
+    { result: "disproved", suggested_revisit_if: "later" },
+    { result: "nope" },
+  ],
+});
+assert.equal(withHyp.hypothesis_outcomes?.length, 2);
+assert.equal(withHyp.hypothesis_outcomes?.[0]?.result, "proved");
+assert.equal(withHyp.hypothesis_outcomes?.[1]?.result, "disproved");
+
+// Nested structured outcomes
+const nestedHyp = normalizeSubagentResult({
+  structured: {
+    ok: true,
+    summary: "inner",
+    hypothesisOutcomes: [{ hypothesisId: "h2", result: "inconclusive" }],
+  },
+});
+assert.equal(nestedHyp.hypothesis_outcomes?.length, 1);
+assert.equal(nestedHyp.hypothesis_outcomes?.[0]?.hypothesis_id, "h2");
+
 // Acceptance: ready vs needs_more
 const accReady = evaluateCandidatesForAcceptance([
   {

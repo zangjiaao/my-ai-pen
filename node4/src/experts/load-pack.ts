@@ -20,6 +20,10 @@ export type PackManifest = {
   settlementNote?: string;
   defaultGoalObjective?: string;
   recipeDir?: string;
+  /** Spec #274: optional capability flags (availability only). */
+  capabilities?: {
+    hypothesis_work_mode?: boolean;
+  };
 };
 
 export type LoadedPack = RolePack & {
@@ -68,6 +72,11 @@ function packFromParts(packDir: string, manifest: PackManifest, missionRaw: stri
     packRoot: packDir,
     skillsRoot: join(packDir, "skills"),
     aliases: (manifest.aliases || []).map((a) => String(a).toLowerCase().trim()),
+    capabilities: manifest.capabilities
+      ? {
+          hypothesis_work_mode: manifest.capabilities.hypothesis_work_mode === true,
+        }
+      : undefined,
   };
 }
 

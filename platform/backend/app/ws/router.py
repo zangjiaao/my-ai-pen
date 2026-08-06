@@ -4500,11 +4500,14 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                                 clear_all_workers=True,
                                 reason="not_busy",
                             )
+                            # Product status set: pause maps to incomplete (not a separate terminal).
                             await _set_conversation_status(
                                 conv_id,
-                                "paused" if action == "pause" else "canceled",
+                                "incomplete" if action == "pause" else "canceled",
                             )
-                            working_payload["status"] = "paused" if action == "pause" else "canceled"
+                            working_payload["status"] = (
+                                "incomplete" if action == "pause" else "canceled"
+                            )
                             working_payload["working"] = False
                         await _broadcast_conversation_working(working_payload)
                         if sent_to:
@@ -4519,7 +4522,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             "type": "status",
                             "conversation_id": conv_id,
                             "text": note,
-                            "status": "running" if sent_to else ("paused" if action == "pause" else "canceled"),
+                            "status": "running" if sent_to else ("incomplete" if action == "pause" else "canceled"),
                             "working": bool(sent_to),
                             "agent_source": "platform",
                             "agent_node_id": str(PLATFORM_AGENT_NODE_ID),

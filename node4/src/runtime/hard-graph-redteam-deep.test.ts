@@ -79,6 +79,7 @@ const actTools = [
   "browser",
   "script",
   "subagent",
+  "hypothesis", // Spec #274 optional hypothesis queue on probe/deep stages
 ];
 for (const id of ["chain", "postex", "lateral"]) {
   const st = deep!.stages.find((s) => s.id === id)!;
@@ -86,18 +87,21 @@ for (const id of ["chain", "postex", "lateral"]) {
   assert.equal(st.max_retries, 1);
   assert.ok(/honest deadend/i.test(String(st.success || "")), `${id} allows honest deadend`);
   assert.deepEqual(st.tools?.allow, actTools, `${id} component-class tools`);
+  assert.equal(st.hypothesis_work_mode, true, `${id} hypothesis work mode on`);
   const tools = applyHardGraphToolProfile(
-    ["todo", "write", "shell", "http", "subagent", "finding", "skill"],
+    ["todo", "write", "shell", "http", "subagent", "finding", "skill", "hypothesis"],
     st.tools,
   );
   assert.ok(tools.includes("write"));
   assert.ok(tools.includes("subagent"));
+  assert.ok(tools.includes("hypothesis"));
   assert.ok(!tools.includes("finding"), `${id} does not book`);
 }
 
 const book = deep!.stages.find((s) => s.id === "validate_book")!;
-assert.equal(book.max_retries, 0);
+assert.equal(book.max_retries, 1, "validate_book retries align with app_assessment");
 assert.ok(book.tools?.allow?.includes("finding"));
+assert.notEqual(book.hypothesis_work_mode, true, "book stage does not enable hypothesis mode");
 
 const ids = await listHardGraphIds(repoExperts);
 assert.ok(ids.includes("redteam_deep"));

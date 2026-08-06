@@ -178,6 +178,11 @@ export type ToolRuntime = {
       /** Current stage id while a stage session runs (todo → L2 merge). */
       stageId?: string;
       /**
+       * Spec #274: current stage has hypothesis_work_mode: true.
+       * Main hypothesis tool writes require this flag.
+       */
+      hypothesisWorkMode?: boolean;
+      /**
        * Spec #139 graph-run Product state (not package honesty).
        * prior seed, L1 refine accounting, unbookable rows, close-out snapshot.
        */
@@ -186,8 +191,14 @@ export type ToolRuntime = {
     /**
      * Spec #116 process quality (Finding Store + package honesty + attempt budgets).
      * Single run-wide object shared by stage children — see package-honesty-host.
+     * Includes Spec #274 hypothesisStore (run-local queue).
      */
     processQuality?: import("./runtime/package-honesty-host.js").ProcessQualityState;
+    /**
+     * Spec #274 Wave 2: skill body fingerprints (id → sha256 hex) for reload dedupe.
+     * Not gate SOT; does not store full skill bodies.
+     */
+    skillBodyFingerprints?: Record<string, string>;
   };
 };
 

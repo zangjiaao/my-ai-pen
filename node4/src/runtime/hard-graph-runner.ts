@@ -24,6 +24,42 @@ import {
   isBookingOnlyStage,
   isHonestyCannotAdvanceErrors,
 } from "./l0-honesty-repair-brief.js";
+import { isLlmTurnError, type LlmTurnError } from "./llm-turn-error.js";
+
+/**
+ * After stage_start, an LlmTurnError must close the stage + run before rethrow
+ * so the plan is not left spinning `running` and UI gets stage_end/run_end.
+ * Caller (main) still maps the rethrow to task_error — never task_complete.
+ */
+async function emitLlmStageFailureThenRethrow(options: {
+  emit: (event: HardGraphStageEvent) => void | Promise<void>;
+  graphId: string;
+  stageId: string;
+  stageIndex: number;
+  attempt: number;
+  err: LlmTurnError;
+}): Promise<never> {
+  const msg =
+    options.err instanceof Error
+      ? options.err.message
+      : String(options.err || "llm_error");
+  await options.emit({
+    type: "stage_end",
+    graphId: options.graphId,
+    stageId: options.stageId,
+    stageIndex: options.stageIndex,
+    attempt: options.attempt,
+    outcome: "blocked",
+    errors: ["llm_error", msg].filter(Boolean),
+    summary: msg,
+  });
+  await options.emit({
+    type: "run_end",
+    graphId: options.graphId,
+    terminal: "blocked",
+  });
+  throw options.err;
+}
 
 export type HardGraphHandoff = {
   summary?: string;
@@ -33,6 +69,21 @@ export type HardGraphHandoff = {
   deadends: string[];
   notes?: string;
   completed_stages: string[];
+};
+
+/**
+ * Host-built prompt projections for a stage session (Spec #139 priors, #274 queue/skills).
+ * First-class fields — not cast onto StageExecutorInput at call sites.
+ */
+export type StagePromptExtras = {
+  /** Prior Finding Store seed block for stage system prompt. */
+  priorSnapshot?: string;
+  /** Budgeted hypothesis queue projection when stage mode is on. */
+  hypothesisQueueInjection?: string;
+  /** Host L1 skill catalog (id/name/description only) when skill is on the tool surface. */
+  skillL1CatalogInjection?: string;
+  /** Book-stage informational: confirmed hypotheses not yet in Store. */
+  confirmedNotSeededInjection?: string;
 };
 
 export type StageExecutorInput = {
@@ -52,7 +103,7 @@ export type StageExecutorInput = {
    * (machine signals only — not L1 prose).
    */
   l0RepairBrief?: string;
-};
+} & StagePromptExtras;
 
 export type StageExecutorOutput = {
   structured?: unknown;
@@ -336,6 +387,17 @@ async function runHonestyBlockedTail(input: {
         ? out.feedbackOkIds.map((id) => String(id || "").trim()).filter(Boolean)
         : undefined;
     } catch (err) {
+      // Model/provider soft-failure: close tail stage + run, then rethrow (task_error path).
+      if (isLlmTurnError(err)) {
+        await emitLlmStageFailureThenRethrow({
+          emit,
+          graphId: graph.id,
+          stageId: tail.id,
+          stageIndex: j,
+          attempt: 1,
+          err,
+        });
+      }
       tailStructured = normalizeSubagentResult(
         {
           ok: false,
@@ -422,6 +484,8 @@ export async function runHardGraph(options: {
     const maxRetries = Math.max(0, stage.max_retries ?? 1);
     const maxAttempts = maxRetries + 1;
     const toolProfile = stage.tools ?? {};
+    // Spec #274: hypothesis tool enablement is graph allowlist only (author stages with
+    // hypothesis_work_mode:true include "hypothesis" in tools.allow). No mid-run re-inject.
     const tools = applyHardGraphToolProfile(options.availableTools, toolProfile);
 
     let passed = false;
@@ -495,6 +559,18 @@ export async function runHardGraph(options: {
           : undefined;
         outL1 = out.l1;
       } catch (err) {
+        // Model/provider soft-failure: close stage (not leave running) + run_end, then rethrow.
+        // Main maps LlmTurnError → task_error (never silent task_complete).
+        if (isLlmTurnError(err)) {
+          await emitLlmStageFailureThenRethrow({
+            emit,
+            graphId: graph.id,
+            stageId: stage.id,
+            stageIndex,
+            attempt,
+            err,
+          });
+        }
         structured = normalizeSubagentResult(
           {
             ok: false,

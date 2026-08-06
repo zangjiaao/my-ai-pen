@@ -45,7 +45,20 @@ const pack = {
   id: "pentest",
   label: "Pentest",
   missionLines: [],
-  toolNames: ["todo", "read", "fact", "skill", "shell", "http", "finding", "session", "browser", "script"],
+  toolNames: [
+    "todo",
+    "read",
+    "fact",
+    "skill",
+    "shell",
+    "http",
+    "finding",
+    "session",
+    "browser",
+    "script",
+    "hypothesis",
+  ],
+  capabilities: { hypothesis_work_mode: true },
 };
 
 const parentRuntime = {
@@ -177,6 +190,127 @@ assert.equal((more.find((m) => m.type === "status_update") as any)?.hard_graph?.
     stageNode?.status,
     "skipped",
     "skipped stage_end must map plan status to skipped not blocked",
+  );
+}
+
+// Settlement contract: LlmTurnError mid-stage → no task_complete; plan not left running; rethrow
+{
+  const { LlmTurnError, isLlmTurnError } = await import("./llm-turn-error.js");
+  const llmMsgs: PlatformMessage[] = [];
+  const llmPlatform = {
+    send: async (m: PlatformMessage) => {
+      llmMsgs.push(m);
+    },
+  };
+  const llmTaskDir = await mkdtemp(join(tmpdir(), "hard-graph-llm-"));
+  const llmRuntime = {
+    task,
+    workspaceDir: llmTaskDir,
+    taskDir: llmTaskDir,
+    platform: llmPlatform,
+    todo: new TodoStore(),
+    evidence: new EvidenceStore(join(llmTaskDir, "evidence")),
+    findingsDir: join(llmTaskDir, "findings"),
+    goals: new GoalStore(),
+    rolePackId: "pentest",
+    lifecycle: { toolsInLastSegment: 0, subagentDepth: 0 },
+  } as ToolRuntime;
+
+  const llmExecutor = async (input: { stage: { id: string } }) => {
+    if (input.stage.id === "init") {
+      return { structured: { ok: true, summary: "init", surfaces: [], candidates: [] } };
+    }
+    throw new LlmTurnError("403 model not available in region");
+  };
+
+  let caught: unknown;
+  try {
+    await runHardGraphExpertTask({
+      config: {
+        workspaceDir: llmTaskDir,
+        piAgentDir: join(llmTaskDir, "pi"),
+        modelId: "test",
+        modelProvider: "openai",
+      } as any,
+      platform: llmPlatform,
+      task: { ...task, taskId: "t-hard-llm" },
+      taskDir: llmTaskDir,
+      pack: pack as any,
+      graph: graph!,
+      parentRuntime: llmRuntime,
+      stageExecutor: llmExecutor as any,
+    });
+  } catch (err) {
+    caught = err;
+  }
+
+  assert.ok(isLlmTurnError(caught), "LlmTurnError must reach outer (main task_error)");
+  const completes = llmMsgs.filter((m) => m.type === "task_complete");
+  assert.equal(completes.length, 0, "hard graph settle must not emit task_complete on LlmTurnError");
+  // Plan: failing stage must not remain running
+  const planTrees = llmMsgs
+    .filter((m) => m.type === "plan_tree_updated")
+    .map((m) => (m as any).plan_tree as Array<{ node_id?: string; title?: string; status?: string }>);
+  assert.ok(planTrees.length >= 1, "plan updates emitted");
+  const lastPlan = planTrees[planTrees.length - 1] || [];
+  const surfaceNode = lastPlan.find(
+    (n) =>
+      String(n.title || "") === "surface" ||
+      String(n.node_id || "").includes("surface"),
+  );
+  assert.ok(surfaceNode, "surface stage present in plan");
+  assert.notEqual(
+    surfaceNode?.status,
+    "running",
+    "LlmTurnError must not leave stage status running",
+  );
+  assert.ok(
+    surfaceNode?.status === "blocked" || surfaceNode?.status === "failed",
+    `expected blocked/failed, got ${surfaceNode?.status}`,
+  );
+  // Terminal checkpoint failed (Status panel)
+  const cps = llmMsgs.filter((m) => m.type === "checkpoint_update");
+  assert.ok(cps.length >= 1, "failed terminal checkpoint");
+  const lastCp = cps[cps.length - 1] as any;
+  assert.equal(lastCp.status || lastCp.checkpoint?.status, "failed");
+}
+
+// Free-path settlement harness: soft-error extract → LlmTurnError (single channel; no task_complete)
+{
+  const { extractLlmTurnError, LlmTurnError, isLlmTurnError } = await import("./llm-turn-error.js");
+  const softMsgs = [
+    { role: "user", content: "hi" },
+    {
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "403 China opt in",
+      content: [],
+    },
+  ];
+  const errText = extractLlmTurnError(softMsgs);
+  assert.ok(errText);
+  // Thin harness of session-runner assert path: throw LlmTurnError, never invent task_complete
+  const emitted: Array<{ type: string }> = [];
+  const assertPath = (messages: unknown[]) => {
+    const t = extractLlmTurnError(messages);
+    if (!t) return "ok";
+    emitted.push({ type: "status_update" });
+    throw new LlmTurnError(t);
+  };
+  let freeCaught: unknown;
+  try {
+    assertPath(softMsgs);
+    emitted.push({ type: "task_complete" }); // must not reach
+  } catch (err) {
+    freeCaught = err;
+  }
+  assert.ok(isLlmTurnError(freeCaught));
+  assert.equal(emitted.filter((e) => e.type === "task_complete").length, 0);
+  assert.equal(emitted.filter((e) => e.type === "status_update").length, 1);
+  // Normal end_turn must not trip assert path
+  assert.equal(
+    assertPath([{ role: "assistant", stopReason: "end_turn", content: [] }]),
+    "ok",
   );
 }
 

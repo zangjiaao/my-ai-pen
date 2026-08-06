@@ -5,14 +5,15 @@ from datetime import datetime, timezone
 
 from app.models.conversation import Conversation
 
-CONVERSATION_STATUSES = {"created", "running", "paused", "completed", "incomplete", "failed", "canceled"}
+# Product lifecycle (converged): created | running | incomplete | failed | completed | canceled
+# "paused" / "blocked" normalize into incomplete (not product surfaces).
+CONVERSATION_STATUSES = {"created", "running", "completed", "incomplete", "failed", "canceled"}
 
 CONVERSATION_TRANSITIONS: dict[str, set[str]] = {
     "created": {"running", "canceled"},
-    "running": {"paused", "completed", "incomplete", "failed", "canceled"},
-    "paused": {"running", "canceled"},
+    "running": {"completed", "incomplete", "failed", "canceled"},
     "completed": {"running"},
-    "incomplete": {"running", "canceled"},
+    "incomplete": {"running", "canceled", "completed", "failed"},
     "failed": {"running", "canceled"},
     "canceled": {"running"},
 }
@@ -29,7 +30,7 @@ CHECKPOINT_TERMINAL_STATUS = {
 }
 
 # Pre-terminal rows that may be healed from a terminal checkpoint.
-HEALABLE_STATUSES = {"created", "running", "paused"}
+HEALABLE_STATUSES = {"created", "running"}
 
 
 class ConversationStatusError(ValueError):
@@ -42,6 +43,11 @@ def normalize_conversation_status(status: str) -> str:
         return "running"
     if normalized == "cancelled":
         return "canceled"
+    # Product convergence: blocked → incomplete; pause is not a product terminal.
+    if normalized == "blocked":
+        return "incomplete"
+    if normalized == "paused":
+        return "incomplete"
     return normalized
 
 

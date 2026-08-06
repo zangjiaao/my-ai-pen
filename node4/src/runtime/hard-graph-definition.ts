@@ -9,6 +9,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { TaskEnvelope } from "../types.js";
+import { assertHypothesisModeGraphLoad } from "./hypothesis-store.js";
 
 export type HardGraphToolProfile = {
   /** When set, only these tool names are allowed (plus empty = no allowlist). */
@@ -38,6 +39,11 @@ export type HardGraphStageDef = {
   intent?: string;
   /** When true, leftover feedback_ok rows become unbookable at stage exit (validate_book). */
   unbookable_on_exit?: boolean;
+  /**
+   * Spec #274: optional hypothesis–evidence work mode for this stage.
+   * Explicit true only; missing/false = off. Not implied by probe/explore intent.
+   */
+  hypothesis_work_mode?: boolean;
 };
 
 /**
@@ -270,6 +276,24 @@ export async function resolveHardGraph(options: {
   if (!graph) return { mode: "not_hard" };
   return { mode: "hard", graph };
 }
+
+/**
+ * Spec #274: fail-closed when any stage sets hypothesis_work_mode true without pack availability.
+ * Call after resolveHardGraph with pack.capabilities.hypothesis_work_mode.
+ * Thin graph-typed entry over assertHypothesisModeGraphLoad (same semantics).
+ */
+export function validateHypothesisWorkModeForGraph(
+  graph: HardGraphDefinition,
+  packHypothesisAvailable: boolean,
+): { ok: true } | { ok: false; error: string } {
+  return assertHypothesisModeGraphLoad({
+    stages: graph.stages,
+    packHypothesisAvailable,
+  });
+}
+
+/** Re-export canonical load assert for callers that prefer the store module name. */
+export { assertHypothesisModeGraphLoad };
 
 /** Apply allow/deny tool profile to a tool name list (fail-closed deny). */
 export function applyHardGraphToolProfile(

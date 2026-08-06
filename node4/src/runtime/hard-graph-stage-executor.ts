@@ -61,6 +61,16 @@ import {
   isBookingOnlyStage,
   type ConfirmableFeedbackOkRow,
 } from "./book-stage-completeness.js";
+import {
+  formatConfirmedNotSeededProjection,
+  formatHypothesisQueueInjection,
+  isHypothesisWorkModeOn,
+} from "./hypothesis-store.js";
+import {
+  formatSkillL1CatalogInjection,
+  loadSkillL1Catalog,
+} from "./skill-l1-catalog.js";
+import { extractLlmTurnError, LlmTurnError } from "./llm-turn-error.js";
 
 /**
  * Deposit host-trusted surfaces/candidates into ledger + Finding Store.
@@ -145,11 +155,13 @@ export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope)
   const toolList = input.tools.length ? input.tools.join(", ") : "(none)";
   const allowSubagent = input.tools.includes("subagent");
   const allowFinding = input.tools.includes("finding");
+  const allowHypothesis = input.tools.includes("hypothesis");
+  const hypMode = isHypothesisWorkModeOn(input.stage);
   const intentLines = stageIntentPromptLines(input.stage);
-  // Prior snapshot from graph-run quality (hardGraphRun), not processQuality
-  const priorSeed =
-    (input as StageExecutorInput & { priorSnapshot?: string }).priorSnapshot ||
-    "";
+  // Typed StagePromptExtras (prior / hyp queue / skill L1) — no cast soup
+  const priorSeed = input.priorSnapshot || "";
+  const hypothesisBlock = input.hypothesisQueueInjection || "";
+  const skillL1Block = input.skillL1CatalogInjection || "";
   return [
     "You are a **Hard Graph stage agent** (Graph × Pi).",
     `Graph: ${input.graphId}  Stage: ${input.stage.id} (index ${input.stageIndex})`,
@@ -165,6 +177,14 @@ export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope)
       ? "After L0 Feedback marks feedback_ok, Main books with finding(confirm, finding_id=…). Severity fills from Store when omitted; missing severity fails closed."
       : "This stage cannot finding(confirm). Deposit candidates via packages or fact/surfaces only.",
     "Do **not** create process-chore L2 todos (e.g. Write result.json, collect subagents, pure meta login prep).",
+    hypMode && allowHypothesis
+      ? [
+          "Hypothesis work mode ON for this stage: maintain the host **hypothesis queue** (hypothesis tool) for active/confirmed/killed/deferred exploration.",
+          "Main commits only; Sub packages return structured hypothesis_outcomes (proved|disproved|inconclusive).",
+          "Bind package this_turn_goal / success_criteria to prove_if / disprove_if when applicable.",
+          "Confirmed ≠ booked — never finding(confirm) from hypothesis id alone.",
+        ].join(" ")
+      : "",
     allowSubagent
       ? [
           "Agent Graph (preferred when multi-class or multi-surface work is justified): fan-out with **subagent** packages[] (skill/path-scoped workers).",
@@ -188,6 +208,8 @@ export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope)
     `Prior handoff stages: ${input.handoff.completed_stages.join(", ") || "(none)"}`,
     `Known surfaces: ${JSON.stringify(input.handoff.surfaces.slice(0, 20))}`,
     priorSeed,
+    hypothesisBlock,
+    skillL1Block,
   ]
     .filter(Boolean)
     .join("\n");
@@ -215,8 +237,9 @@ export function stageUserPrompt(
       : bookStage
         ? ["", formatFeedbackOkCaptainSurface([]), ""]
         : [];
+  const confirmedNotSeeded = input.confirmedNotSeededInjection || "";
   const footer = bookStage
-    ? "Complete this book stage only. Use finding(list) then finding(confirm, finding_id=…) for confirmable Store rows; do not invent ids; do not stop with zero confirms while feedback_ok remain; settle via host/Store (no result.json handoff)."
+    ? "Complete this book stage only. Use finding(list) then finding(confirm, finding_id=…) for confirmable Store rows; do not invent ids; do not stop with zero confirms while feedback_ok remain; settle via host/Store (no result.json handoff). Book L0 consumes Store only — hypothesis queue is informational."
     : allowSubagent
       ? "Complete this stage only. Prefer subagent packages when multi-class work is justified; narrate briefly; settle via host/Store (no result.json handoff); then stop."
       : "Complete this stage only. Narrate briefly when useful; deposit surfaces via fact(op=surface) and candidates via finding(upsert) — do not use result.json as stage handoff; then stop.";
@@ -225,6 +248,7 @@ export function stageUserPrompt(
     input.stage.success || "",
     ...repair,
     ...captain,
+    confirmedNotSeeded,
     "### Handoff snapshot",
     JSON.stringify(
       {
@@ -297,6 +321,9 @@ export function buildHardGraphStageChildRuntime(options: {
       hardGraphRun: parent.lifecycle.hardGraphRun,
       panelAgents: sharedPanel,
       processQuality,
+      skillBodyFingerprints:
+        parent.lifecycle.skillBodyFingerprints ||
+        (parent.lifecycle.skillBodyFingerprints = {}),
     },
   };
   if (allowSubagent) {
@@ -418,13 +445,24 @@ export function createHardGraphStageExecutor(options: {
     const priorSnapshot = gq?.priorSeed
       ? formatPriorSnapshotInjection(gq.priorSeed)
       : "";
-    const systemPrompt = stageSystemPrompt(
-      { ...input, priorSnapshot } as StageExecutorInput & { priorSnapshot?: string },
-      task,
-    );
-    // #161 / #192: captain surface — Store feedback_ok ids at book-stage start
+    // Spec #274: stage flag + Main tool gate on hardGraphRun
+    const hypMode = isHypothesisWorkModeOn(input.stage);
+    if (parentRuntime.lifecycle.hardGraphRun) {
+      parentRuntime.lifecycle.hardGraphRun.stageId = input.stage.id;
+      parentRuntime.lifecycle.hardGraphRun.hypothesisWorkMode = hypMode;
+    }
+    const pqForStage = ensureProcessQuality(parentRuntime.lifecycle);
+    const hypothesisQueueInjection = hypMode
+      ? formatHypothesisQueueInjection(pqForStage.hypothesisStore)
+      : "";
+    // Wave 2: host L1 skill catalog when skill is on the tool surface (orthogonal to hyp mode)
+    let skillL1CatalogInjection = "";
+    if (input.tools.includes("skill") && parentRuntime.skills) {
+      const l1 = await loadSkillL1Catalog(parentRuntime.skills, pack.skillIds);
+      skillL1CatalogInjection = formatSkillL1CatalogInjection(l1);
+    }
     const bookStage = isBookingOnlyStage(input.stage);
-    const pqForBook = ensureProcessQuality(parentRuntime.lifecycle);
+    const pqForBook = pqForStage;
     const confirmableAtStart: ConfirmableFeedbackOkRow[] = bookStage
       ? pqForBook.findingStore
           .snapshot()
@@ -436,7 +474,19 @@ export function createHardGraphStageExecutor(options: {
           }))
       : [];
     const storeBookedBefore = bookStage ? pqForBook.findingStore.counts().booked_n : 0;
-    const userPrompt = stageUserPrompt(input, task, {
+    const confirmedNotSeededInjection = bookStage
+      ? formatConfirmedNotSeededProjection(pqForBook.hypothesisStore, pqForBook.findingStore)
+      : "";
+    // Typed StagePromptExtras on StageExecutorInput (no cast)
+    const promptInput: StageExecutorInput = {
+      ...input,
+      priorSnapshot,
+      hypothesisQueueInjection,
+      skillL1CatalogInjection,
+      confirmedNotSeededInjection,
+    };
+    const systemPrompt = stageSystemPrompt(promptInput, task);
+    const userPrompt = stageUserPrompt(promptInput, task, {
       confirmableFeedbackOk: bookStage ? confirmableAtStart : undefined,
     });
 
@@ -765,6 +815,16 @@ export function createHardGraphStageExecutor(options: {
             seed: continuitySeed,
             workDir,
           });
+        }
+        // Soft LLM failure (403 etc.): surface to user and fail stage — not silent empty settle.
+        const llmErr = extractLlmTurnError(session.messages);
+        if (llmErr) {
+          try {
+            await textStream.emitFinalText(llmErr);
+          } catch {
+            /* best-effort */
+          }
+          throw new LlmTurnError(llmErr);
         }
       } catch (err) {
         if (abortSignal?.aborted) {

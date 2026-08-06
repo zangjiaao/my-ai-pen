@@ -16,7 +16,9 @@ import {
   parseGraphExecution,
   resolveExpertWorkPath,
   resolveHardGraph,
+  validateHypothesisWorkModeForGraph,
 } from "./hard-graph-definition.js";
+import { loadPackFromDirSync } from "../experts/load-pack.js";
 
 const repoExperts = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -255,5 +257,22 @@ assert.equal(
   false,
   "unparsed synonyms are not continue — parse once at envelope boundary",
 );
+
+// Spec #274: hypothesis_work_mode on stages + pack availability fail-closed
+const mature = await loadHardGraphFile(repoExperts, "app_assessment");
+assert.ok(mature);
+const probeStage = mature!.stages.find((s) => s.id === "class_probe");
+assert.equal(probeStage?.hypothesis_work_mode, true, "reference probe stage enables mode");
+const initStage = mature!.stages.find((s) => s.id === "init");
+assert.notEqual(initStage?.hypothesis_work_mode, true, "init does not enable mode");
+const bookStage = mature!.stages.find((s) => s.id === "validate_book");
+assert.notEqual(bookStage?.hypothesis_work_mode, true, "validate_book does not enable mode");
+
+const pack = loadPackFromDirSync(repoExperts);
+assert.equal(pack.capabilities?.hypothesis_work_mode, true);
+const hypOk = validateHypothesisWorkModeForGraph(mature!, true);
+assert.equal(hypOk.ok, true);
+const hypFail = validateHypothesisWorkModeForGraph(mature!, false);
+assert.equal(hypFail.ok, false);
 
 console.log("hard-graph-definition.test.ts: ok");

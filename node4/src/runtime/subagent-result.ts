@@ -3,6 +3,11 @@
  * Main books findings; child returns candidates/facts/deadends.
  */
 
+import {
+  parseHypothesisPackageOutcomes,
+  type HypothesisPackageOutcome,
+} from "./hypothesis-store.js";
+
 export type SubagentCandidate = {
   title?: string;
   location?: string;
@@ -28,6 +33,12 @@ export type SubagentFactNote = {
   summary: string;
 };
 
+/**
+ * Spec #274: Sub hypothesis package outcomes (Main commits queue — Sub never mutates).
+ * Canonical type lives in hypothesis-store; re-export alias for package contract readers.
+ */
+export type SubagentHypothesisOutcome = HypothesisPackageOutcome;
+
 export type SubagentStructuredResult = {
   ok: boolean;
   summary: string;
@@ -45,6 +56,11 @@ export type SubagentStructuredResult = {
   artifacts: string[];
   /** Optional free-form notes from the child. */
   notes?: string;
+  /**
+   * Spec #274: optional hypothesis outcomes for Main apply — never auto-committed by host.
+   * Canonical parse: parseHypothesisPackageOutcomes (hypothesis-store).
+   */
+  hypothesis_outcomes?: HypothesisPackageOutcome[];
   raw?: unknown;
 };
 
@@ -179,6 +195,14 @@ export function normalizeSubagentResult(input: unknown, fallbackSummary = ""): S
   const ok =
     typeof okRaw === "boolean" ? okRaw : !/fail|error|abort/i.test(summary.slice(0, 80));
 
+  // Spec #274: single canonical parse (hypothesis-store) — host does not auto-commit
+  const hypRaw =
+    body.hypothesis_outcomes ??
+    body.hypothesisOutcomes ??
+    nestedStructured?.hypothesis_outcomes ??
+    nestedStructured?.hypothesisOutcomes;
+  const hypothesis_outcomes = parseHypothesisPackageOutcomes(hypRaw);
+
   return {
     ok,
     summary,
@@ -198,6 +222,7 @@ export function normalizeSubagentResult(input: unknown, fallbackSummary = ""): S
         : nestedStructured?.artifacts) ?? [],
     ),
     notes: asString(body.notes ?? nestedStructured?.notes, 4000) || undefined,
+    ...(hypothesis_outcomes.length ? { hypothesis_outcomes } : {}),
     raw: input,
   };
 }
