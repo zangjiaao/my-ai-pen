@@ -780,6 +780,35 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
         await _apply_authorized_handoff(conv_id, approval)
         return
 
+    # Spec #278 S3: Session tool authorized enter/exit/switch Graph. Not a chat frame.
+    if msg.get("type") == "graph_mode_apply" and conv_id:
+        request_id = str(msg.get("request_id") or "").strip()
+        if request_id and request_id in _handoff_applied_request_ids:
+            return
+        approval = dict(pending_approvals.pop(request_id, {}) if request_id else {})
+        for key in (
+            "kind",
+            "graph_id",
+            "engagement_template",
+            "target",
+            "proposed_action",
+            "question",
+            "node_id",
+            "expert_id",
+            "expert_name",
+        ):
+            if msg.get(key) is not None and str(msg.get(key) or "").strip():
+                approval[key] = msg.get(key)
+        if not approval.get("node_id"):
+            approval["node_id"] = client_id
+        if request_id:
+            _handoff_applied_request_ids.add(request_id)
+            if len(_handoff_applied_request_ids) > 500:
+                _handoff_applied_request_ids.clear()
+                _handoff_applied_request_ids.add(request_id)
+        await _apply_authorized_graph_mode(conv_id, approval)
+        return
+
     # Pi work-burst lifecycle (not a chat message). Updates session workers SOT
     # and pushes conversation_working so the UI send/interrupt button stays honest.
     if msg.get("type") == "work_status" and conv_id:
@@ -927,9 +956,16 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
             or None,
             "handoff_expert_id": str(msg.get("handoff_expert_id") or "").strip() or None,
             "handoff_expert_name": str(msg.get("handoff_expert_name") or "").strip() or None,
+            "graph_id": str(
+                msg.get("graph_id") or msg.get("engagement_template") or ""
+            ).strip()
+            or None,
             "target": msg.get("target"),
             "proposed_action": msg.get("proposed_action"),
             "question": msg.get("question"),
+            # Requesting Session persona (for graph_mode_apply settle on same expert).
+            "expert_id": str(msg.get("expert_id") or "").strip() or None,
+            "expert_name": str(msg.get("expert_name") or "").strip() or None,
         }
         actor_uuid = _uuid(client_id)
         if actor_uuid:
@@ -3024,6 +3060,291 @@ async def _forward_pending_approval_text(
     except Exception as e:
         print(f"[WS] pending-text audit error: {e}")
     return True
+
+
+async def _apply_authorized_graph_mode(conv_id: str | None, approval: dict) -> None:
+    """Spec #278: settle Session work_mode after enter/exit/switch Graph authorization.
+
+    Updates Participant Session private fields, broadcasts work_mode_settled for FE
+    composer dual-rail sync (D3), and re-dispatches Graph when enter/switch.
+    """
+    if not conv_id or not isinstance(approval, dict):
+        return
+    from app.services.case_engagement import (
+        merge_case_into_context,
+        normalize_product_engagement_template,
+        resolve_allow_postex,
+    )
+    from app.services.participant_session import (
+        merge_session_into_context,
+        resolve_work_envelope,
+        session_record_from_context,
+    )
+
+    kind = str(approval.get("kind") or "").strip().lower()
+    graph_raw = approval.get("graph_id") or approval.get("engagement_template")
+    graph_id = normalize_product_engagement_template(graph_raw)
+
+    # Resolve requesting expert (same Session continues — not handoff destination).
+    eid = str(approval.get("expert_id") or "").strip() or None
+    ename = str(approval.get("expert_name") or "").strip() or None
+    if not eid:
+        sticky_id, sticky_name = await _conversation_expert_label(conv_id)
+        eid = sticky_id
+        ename = ename or sticky_name
+
+    # Load prior session for exit park / switch baseline.
+    context: dict = {}
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+
+        async with async_session() as db:
+            r = await db.execute(
+                select(Conversation).where(Conversation.id == uuid.UUID(str(conv_id)))
+            )
+            c = r.scalar_one_or_none()
+            if c:
+                context = dict(c.context or {}) if isinstance(c.context, dict) else {}
+    except Exception as e:
+        print(f"[WS] graph_mode_apply load context: {e}")
+
+    sess = session_record_from_context(context, eid)
+    envelope = resolve_work_envelope(
+        expert_id=eid,
+        session_work_mode=sess.get("work_mode"),
+        session_graph_id=sess.get("graph_id"),
+        composer_template=None,
+        permission_decision={"action": kind, "graph_id": graph_id},
+    )
+    mode = str(envelope.get("work_mode") or "free").strip().lower()
+    settled_gid = envelope.get("graph_id") if mode == "graph" else None
+    if mode == "graph" and not settled_gid and graph_id:
+        settled_gid = graph_id
+
+    # Park prior graph when exiting.
+    parked = None
+    if mode == "free" and str(sess.get("work_mode") or "") == "graph" and sess.get("graph_id"):
+        parked = {
+            "graph_id": sess.get("graph_id"),
+            "parked_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        }
+
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+
+        async with async_session() as db:
+            r = await db.execute(
+                select(Conversation).where(Conversation.id == uuid.UUID(str(conv_id)))
+            )
+            c = r.scalar_one_or_none()
+            if c:
+                ctx = dict(c.context or {}) if isinstance(c.context, dict) else {}
+                ctx = merge_session_into_context(
+                    ctx,
+                    expert_id=eid or "_default",
+                    work_mode=mode,
+                    graph_id=settled_gid,
+                    parked_graph=parked if parked else (False if mode == "graph" else None),
+                )
+                if mode == "graph" and settled_gid:
+                    ctx = merge_case_into_context(
+                        ctx,
+                        engagement_template=settled_gid,
+                        allow_postex=resolve_allow_postex(
+                            engagement_template=settled_gid,
+                            engagement="pentest",
+                            allow_postex=None,
+                        ),
+                    )
+                c.context = ctx
+                await db.commit()
+    except Exception as e:
+        print(f"[WS] graph_mode_apply persist: {e}")
+
+    # Short label for FE dual-rail composer sync (D3). Prefer pack Graph.short_label
+    # values (experts/pentest/graphs/hard/*.json); keep id fallback only.
+    _PRODUCT_GRAPH_SHORT_LABEL = {
+        "app_assessment": "应用评估",
+        "redteam_deep": "红队深度",
+    }
+    graph_label = None
+    if settled_gid:
+        graph_label = _PRODUCT_GRAPH_SHORT_LABEL.get(
+            str(settled_gid),
+            str(settled_gid),
+        )
+
+    try:
+        await _broadcast_to_conversation(
+            conv_id,
+            json.dumps(
+                {
+                    "type": "work_mode_settled",
+                    "conversation_id": conv_id,
+                    "work_mode": mode,
+                    "graph_id": settled_gid,
+                    "graph_label": graph_label,
+                    "kind": kind,
+                    "expert_id": eid,
+                    "expert_name": ename,
+                    "reason": "authorized_graph_mode",
+                },
+                ensure_ascii=False,
+            ),
+        )
+    except Exception as e:
+        print(f"[WS] work_mode_settled broadcast: {e}")
+
+    # Enter/switch: re-dispatch same expert under Graph (mirrors handoff dispatch shape).
+    if mode != "graph" or not settled_gid:
+        return
+
+    node_hint = str(approval.get("node_id") or "").strip()
+    node_id = node_hint
+    if not node_id or node_id not in node_connections:
+        # Fall back to conversation-bound node / expert node.
+        try:
+            experts = await _load_enabled_experts()
+            for e in experts:
+                if eid and str(getattr(e, "id", "") or "") == eid:
+                    node_id = str(getattr(e, "node_id", "") or "").strip()
+                    ename = ename or str(getattr(e, "name", "") or "") or None
+                    break
+        except Exception as e:
+            print(f"[WS] graph_mode expert resolve: {e}")
+    if not node_id or node_id not in node_connections:
+        print(f"[WS] graph_mode_apply: no online node for enter Graph gid={settled_gid}")
+        return
+
+    target_raw = approval.get("target")
+    target: dict = {}
+    if isinstance(target_raw, dict) and str(target_raw.get("value") or "").strip():
+        target = dict(target_raw)
+    elif isinstance(target_raw, str) and target_raw.strip():
+        val = target_raw.strip()
+        ttype = "url" if val.lower().startswith(("http://", "https://")) else "host"
+        target = {"type": ttype, "value": val}
+    else:
+        # Inherit sticky task target when card omitted it.
+        try:
+            task_blob = context.get("task") if isinstance(context.get("task"), dict) else {}
+            prev_t = task_blob.get("target") if isinstance(task_blob.get("target"), dict) else {}
+            if prev_t.get("value"):
+                target = dict(prev_t)
+        except Exception:
+            pass
+
+    proposed = str(approval.get("proposed_action") or "").strip()
+    question = str(approval.get("question") or "").strip()
+    instruction = (
+        proposed
+        or question
+        or f"Continue under Expert Graph {settled_gid} (user authorized)."
+    )
+    scope = (
+        {"allow": [target["value"]], "deny": []}
+        if target.get("value")
+        else {"allow": [], "deny": []}
+    )
+    if not scope["allow"]:
+        try:
+            task_blob = context.get("task") if isinstance(context.get("task"), dict) else {}
+            prev_s = task_blob.get("scope") if isinstance(task_blob.get("scope"), dict) else {}
+            if prev_s:
+                scope = dict(prev_s)
+        except Exception:
+            pass
+
+    owner_id, _ = await _conversation_owner(conv_id)
+    client_id = str(owner_id or "") or "system"
+    dispatch_msg = {
+        "type": "user_message",
+        "conversation_id": conv_id,
+        "text": instruction,
+        "initial_instruction": instruction,
+        "engagement": "pentest",
+        "role": "pentest",
+        "engagement_template": settled_gid,
+        "expert_id": eid,
+        "expert_name": ename,
+        "target": target or {},
+        "scope": scope,
+        "agent_node_id": node_id,
+    }
+    wire_exec = envelope.get("wire_graph_execution")
+    if wire_exec:
+        dispatch_msg["graph_execution"] = wire_exec
+
+    import asyncio
+
+    async def _graph_mode_dispatch_when_ready() -> None:
+        try:
+            await _interrupt_all_session_workers(
+                conv_id,
+                {
+                    "type": "user_interrupt",
+                    "action": "cancel",
+                    "conversation_id": conv_id,
+                    "reason": "authorized_graph_mode",
+                },
+            )
+        except Exception as exc:
+            print(f"[WS] graph_mode interrupt: {exc}")
+
+        for _ in range(60):
+            try:
+                if await _session_worker_count(conv_id) == 0:
+                    break
+            except Exception:
+                break
+            await asyncio.sleep(0.12)
+
+        try:
+            from app.db.base import async_session
+            from app.models.conversation import Conversation
+
+            async with async_session() as db:
+                r = await db.execute(
+                    select(Conversation).where(Conversation.id == uuid.UUID(str(conv_id)))
+                )
+                c = r.scalar_one_or_none()
+                if c and str(c.status or "").lower() in {
+                    "canceled",
+                    "cancelled",
+                    "failed",
+                    "incomplete",
+                    "completed",
+                }:
+                    try:
+                        transition_conversation(c, "running")
+                        await db.commit()
+                    except ConversationStatusError:
+                        pass
+        except Exception as exc:
+            print(f"[WS] graph_mode status repair: {exc}")
+
+        try:
+            await _dispatch_task_assign_to_node(
+                conv_id=conv_id,
+                client_id=client_id,
+                msg=dispatch_msg,
+                node_id=node_id,
+                engagement="pentest",
+                expert_id=eid,
+                expert_name=ename,
+                resume_context=None,
+                force_working=True,
+            )
+            print(
+                f"[WS] graph_mode dispatch → {settled_gid} expert={ename or eid} "
+                f"node={node_id[:8] if node_id else '-'}"
+            )
+        except Exception as exc:
+            print(f"[WS] graph_mode dispatch error: {exc}")
+
+    asyncio.create_task(_graph_mode_dispatch_when_ready())
 
 
 async def _apply_authorized_handoff(conv_id: str | None, approval: dict) -> None:

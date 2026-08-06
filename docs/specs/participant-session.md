@@ -35,7 +35,7 @@ Also kill a second-class product path where a pre-flight **Route** moment alone 
 | **Work mode Free** | Session runs **without** Expert Graph runner. Same Expert persona; OMP-class Agent Runtime loop. **Not** the Default seat; **not** retired Soft scenario Graph. |
 | **Work mode Graph** | Session runs Expert Graph × Pi for a **declared** graph id (`app_assessment`, `redteam_deep`, …). |
 | **Graph capability** | Pack/Expert declares which graph ids it may run. Missing declaration ⇒ cannot enter Graph. No seat special-cases (“assistant never” as hard code) — only capability tables. |
-| **Unspecified (UI)** | Graph composer value **不指定** = work mode **Free** on the wire (not “Agent may silently pick Graph”). Agent may **suggest** enter Graph; user must permit. |
+| **Unspecified (UI)** | Graph composer value **不指定** = omit / free-alias on the wire: **no force mode change** (Spec #278 A1). First turn / Free Session → Free; if Session already Graph, stay Graph. Not “Agent may silently pick Graph”. Exit Graph needs permission card. Agent may **suggest** enter Graph; user must permit. |
 | **Permission event** | Explicit user acceptance to change work mode, transfer Expert, resume parked Graph vs full restart. Via standard card and/or free-text understood by **current** Session Agent then structured commit. Platform code does **not** NLP-invent mode. |
 | **Queue** | While Session has in-flight work, user changes (message, Graph control, Mention) wait unless **force send / interrupt** on the queue chrome. |
 | **Parked Graph** | After exit Graph → Free, Graph stage pointer and harness progress are **suspended**, not wiped. Later re-entry: Agent suggests continue vs full restart; user confirms. |
@@ -57,21 +57,22 @@ _Avoid:_ free mode as a second product **seat**; Soft scenario Graph; platform k
 
 ### 3.2 Work mode authority
 
-5. **Default / first turn / UI「不指定」** = Free **on the wire**. There is **no** mandatory T1 Agent Route that may alone emit `hard_graph`.  
+5. **Default / first turn** with no Session Graph = Free **on the wire**. UI「不指定」= **no force mode change** (Spec #278 A1): Free Session stays Free; Graph Session stays Graph. There is **no** mandatory T1 Agent Route that may alone emit `hard_graph`.  
 6. **Mode follows** last user-permitted or user-selected value for **that Session** — never silent rewrite on resume, failed continue, or Case sticky template alone.  
 7. **Enter / exit Graph** = permission events. Agent may **propose** from Free (or mid-Session); must not divert without permission. User explicit Workflow selection this turn is also permission.  
 8. **Exit Graph** → Free; Graph state **parks**. Re-enter: Agent recommends continue-parked vs full restart; user confirms.  
 9. **Same-mode continue** (e.g. LLM 500 then「继续」) = resume **same** Session and work mode; **no** permission card; **no** Route re-judgment that changes mode.  
 10. **Graph list** = capability declaration on pack/Expert; UI options, Agent proposals, and platform validation share one source.  
 10a. **Prefer Free continuity:** the Expert **does the work in Free** unless the user chose a Graph Workflow or accepted an enter-Graph proposal. Judgment “do I dig / plan / ask user / transfer Expert?” happens **inside Free** (normal Agent loop), not in a separate Route kernel.  
-10b. **Minimize Expert transfer:** transfer only when the current pack truly cannot serve; same-Expert Free (and optional later Graph with permission) is the default path.
+10b. **Minimize Expert transfer:** transfer only when the current pack truly cannot serve; same-Expert Free (and optional later Graph with permission) is the default path.  
+10c. **Graph catalog + dual-rail UI:** product Graph L1 (skill-like) and composer vs AgentRow separation — Spec [#278](https://github.com/zangjiaao/my-ai-pen/issues/278) / `docs/specs/graph-catalog-work-mode-ui.md`.
 
 ### 3.3 Permission UX
 
 11. **Permission** = standard option cards ∪ natural language.  
 12. **Cards:** current Session Agent requests permission; platform renders **standard shell** (enter Graph / exit Graph / handoff / continue-parked vs restart). Platform does **not** auto-pop “enter Graph?” on resume/fail.  
 13. **Natural language:** interpreted by **current** Session Agent; Agent commits **structured** decision. Platform does not regex-map「可以」→ mode.  
-14. **UI Graph control** includes **不指定** (= Free). Display may follow Agent suggestion; user may override. Effectiveness obeys queue (§3.4).  
+14. **UI Graph control** includes **不指定** (user intent: no force mode change). Dual-rail: composer = user preference; AgentRow = Session actual (Spec #278). Sync composer only after mode settlement.  
 14a. **Handoff / authorization wait (simple path):** Session tells platform it needs user approval → platform **displays** the card and **forwards user feedback** to the **current Session** only. Clicking Authorize/Cancel and **typing a reply** are the **same feedback path** (not a second task, not a speaker switch). Platform does **not** interpret approve/cancel semantics. After any user feedback, the card is **skipped / greyed** (no second click). **Speaker label** = current Participant Session (header/Mention); `handoff_expert_*` is card content only — never top-level `expert_name` on the waiting turn.
 
 ### 3.4 Queue and Mention
@@ -129,14 +130,14 @@ Consumers: platform WS/task_assign path, composer, Node entry. **No second polic
 | # | Bar |
 |---|-----|
 | A1 | Failed Free Session + user「继续」resumes **Free** same Participant Session; does **not** start Expert Graph from `init` solely due to UI default / Case sticky template. |
-| A2 | Composer **不指定** ⇒ Free; selecting a declared graph id is explicit mode intent for that Session (subject to queue). |
+| A2 | Composer **declared graph id** this turn ⇒ Graph (explicit permission). Composer **不指定** ⇒ **no force mode change** (Free Session stays Free; Graph Session stays Graph — Spec #278 A1). |
 | A3 | Enter/exit Graph without permission event does not change work mode. |
 | A4 | Exit Graph parks harness; Session remains addressable in Free; re-enter offers continue vs restart via Agent + user confirm. |
 | A5 | Expert transfer: new Expert Free + Case-visible summary; no inherited Graph stage machine. |
 | A6 | In-flight: Graph/Expert changes enqueue; force interrupt applies new demand. |
 | A7 | Platform has no keyword table that sets `work_mode` / `graph_id` from free text. |
 | A8 | Pack without graph capability never surfaces enter-Graph options. |
-| A9 | Under UI 不指定, first and continued dispatches stay Free unless user explicit Workflow or accepted enter-Graph permission — **no** Agent-alone `hard_graph` Route write. |
+| A9 | Under UI 不指定: first turn / Free Session stays Free; Graph Session continues Graph. Enter Graph only via explicit Workflow or accepted enter-Graph permission — **no** Agent-alone `hard_graph` Route write. |
 | A10 | No mandatory pre-work Route step in the product path; judgment to work vs propose Graph vs propose Expert transfer happens inside Free. |
 
 ---

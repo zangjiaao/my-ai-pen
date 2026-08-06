@@ -3,6 +3,7 @@
  *   npx tsx src/lib/panelAgentsState.test.ts
  */
 import {
+  formatAgentWorkModeBadge,
   mergeLivePanelAgents,
   type StrixAgentStatus,
 } from "./panelAgentsState";
@@ -116,6 +117,27 @@ const liveMainOnly: StrixAgentStatus[] = [
     "both workers present",
   );
   console.log("ok: mergeLivePanelAgents appends new subagent without dropping old");
+}
+
+{
+  // Spec #278 S4: work mode badge labels
+  assert(formatAgentWorkModeBadge({ work_mode: "free" }) === "Free", "free badge");
+  assert(
+    formatAgentWorkModeBadge({ work_mode: "graph", graph_id: "app_assessment" }) === "应用评估",
+    "app_assessment badge",
+  );
+  assert(
+    formatAgentWorkModeBadge({ work_mode: "graph", graph_id: "redteam_deep" }) === "红队深度",
+    "redteam badge",
+  );
+  assert(
+    formatAgentWorkModeBadge({
+      work_mode: "hard_graph:app_assessment:surface",
+    }) === "应用评估",
+    "hard_graph work_mode string",
+  );
+  assert(formatAgentWorkModeBadge({}) === null, "missing mode → null");
+  console.log("ok: formatAgentWorkModeBadge");
 }
 
 console.log("panelAgentsState.test.ts: all passed");

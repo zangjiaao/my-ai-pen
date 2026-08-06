@@ -646,7 +646,9 @@ export default function ConversationPage() {
       if (requestSeq !== stateRefreshSeqRef.current) return;
       applyConversationState(state);
       setStateSnapshotLoaded(true);
-      // Case fields (1 session = 1 case): engagement template + handoff banner
+      // Case fields (1 session = 1 case): handoff banner only.
+      // Spec #278 D3: do NOT overwrite composer engagementTemplate from Case sticky /
+      // heartbeat refresh — only work_mode_settled / user menu edits change it.
       try {
         const caseData = await authFetch<{
           engagement_template?: string;
@@ -660,15 +662,6 @@ export default function ConversationPage() {
           } | null;
         }>(`/api/conversations/${id}/case`);
         if (requestSeq !== stateRefreshSeqRef.current) return;
-        const tmpl = String(caseData.engagement_template || "").trim();
-        // Product Expert Graphs only (app_assessment | redteam_deep); missing → null
-        if (tmpl === "redteam_deep") {
-          setEngagementTemplate("redteam_deep");
-        } else if (tmpl === "app_assessment") {
-          setEngagementTemplate("app_assessment");
-        } else {
-          setEngagementTemplate(null);
-        }
         if (caseData.handoff && caseData.handoff.status === "suggested") {
           setCaseHandoff(caseData.handoff);
         } else {
@@ -1152,6 +1145,27 @@ export default function ConversationPage() {
           }),
         );
       }
+      // Spec #278: hard_graph work_mode on status can stamp Graph badge when panel lags.
+      const wm = String(m.work_mode || "").trim();
+      if (wm === "free" || wm === "graph" || wm.startsWith("hard_graph")) {
+        const gid =
+          readString(m.graph_id) ||
+          (wm.startsWith("hard_graph:") ? wm.split(":")[1] || "" : "");
+        setStrixAgents((prev) =>
+          prev.map((a) => {
+            if (a.parent_id) return a;
+            return {
+              ...a,
+              work_mode: wm === "free" ? "free" : "graph",
+              graph_id: wm === "free" ? undefined : gid || a.graph_id,
+              graph_label:
+                wm === "free"
+                  ? undefined
+                  : readString(m.graph_label) || a.graph_label,
+            };
+          }),
+        );
+      }
       // Internal harness ticks (model turn / tool running) update right-panel state only —
       // never inject as agent chat bubbles (that was showing "model turn" under 测试节点).
       const statusMessage = readString(m.message);
@@ -1280,6 +1294,38 @@ export default function ConversationPage() {
         selectedMentionRef.current = match;
         setSelectedMention(match);
       }
+    },
+    // Spec #278 D3: sync composer Workflow control only after mode settlement (once).
+    work_mode_settled: (msg) => {
+      const m = msg as Record<string, unknown>;
+      const mode = String(m.work_mode || "").trim().toLowerCase();
+      const gid = String(m.graph_id || m.engagement_template || "").trim().toLowerCase();
+      if (mode === "graph") {
+        if (gid === "redteam_deep") setEngagementTemplate("redteam_deep");
+        else if (gid === "app_assessment") setEngagementTemplate("app_assessment");
+        else if (gid === "redteam" || gid === "deep") setEngagementTemplate("redteam_deep");
+        else if (gid === "assess" || gid === "assessment") setEngagementTemplate("app_assessment");
+      } else if (mode === "free") {
+        setEngagementTemplate(null);
+      }
+      // Patch highlighted main AgentRow badge from Session actual mode.
+      setStrixAgents((prev) =>
+        prev.map((a) => {
+          if (a.parent_id) return a;
+          if (m.expert_id && a.expert_id && String(a.expert_id) !== String(m.expert_id)) {
+            return a;
+          }
+          return {
+            ...a,
+            work_mode: mode === "graph" ? "graph" : "free",
+            graph_id: mode === "graph" ? gid || undefined : undefined,
+            graph_label:
+              mode === "graph"
+                ? String(m.graph_label || "").trim() || undefined
+                : undefined,
+          };
+        }),
+      );
     },
     next_scope_suggested: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
@@ -2110,7 +2156,7 @@ export default function ConversationPage() {
 
   const activePartner = selectedMention || mentionTargets[0] || null;
   const showPentestControls = isPentestMentionTarget(activePartner);
-  // Spec #277: null engagementTemplate = 不指定 = Free; never auto-force app_assessment.
+  // Spec #278: null = 不指定 (user intent rail); actual Session mode is AgentRow badge.
   const activeModeLabel =
     ENGAGEMENT_TEMPLATES.find((t) => t.id === engagementTemplate)?.label
     || ENGAGEMENT_UNSPECIFIED_LABEL;
@@ -2669,7 +2715,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                           type="button"
                           aria-haspopup="listbox"
                           aria-expanded={modeMenuOpen}
-                          title="渗透模式"
+                          title="工作流偏好（用户意图；AgentRow 显示 Session 实际模式）"
                           onClick={() => {
                             setModeMenuOpen((open) => !open);
                             setPartnerMenuOpen(false);
@@ -2688,13 +2734,13 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                         {modeMenuOpen && (
                           <div
                             role="listbox"
-                            aria-label="渗透模式"
+                            aria-label="工作流偏好"
                             className="absolute bottom-full left-0 z-30 mb-2 w-64 overflow-hidden rounded-xl border border-hairline bg-canvas py-1 shadow-[0_8px_30px_rgba(0,0,0,0.08)]"
                           >
                             <p className="px-3 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-ink-muted">
-                              模式
+                              工作流偏好
                             </p>
-                            {/* Spec #277: 不指定 = Free on the wire (default). */}
+                            {/* Spec #278 A1: 不指定 = no force mode change (omit field on send). */}
                             <button
                               type="button"
                               role="option"
@@ -2712,7 +2758,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                                   {ENGAGEMENT_UNSPECIFIED_LABEL}
                                 </span>
                                 <span className="mt-0.5 block text-[11px] leading-snug text-ink-muted">
-                                  Free：同 Expert 连续协作，不进入 Expert Graph
+                                  不强制改模式：已在 Graph 则保持；否则 Free
                                 </span>
                               </span>
                               {engagementTemplate == null && (

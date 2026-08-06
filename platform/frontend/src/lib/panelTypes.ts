@@ -62,4 +62,8 @@ export type StrixAgentStatus = {
   pack_id?: string;
   /** Currently sticky / active speaker role. */
   highlighted?: boolean;
+  /** Spec #278: Session actual harness (not composer intent). */
+  work_mode?: "free" | "graph" | string;
+  graph_id?: string;
+  graph_label?: string;
 };

@@ -24,6 +24,29 @@ function speakerFields(runtime: ToolRuntime): { expert_id?: string; expert_name?
   return out;
 }
 
+const GRAPH_MODE_KINDS = new Set([
+  "enter_graph",
+  "exit_graph",
+  "switch_graph",
+  "accept_enter_graph",
+  "accept_exit_graph",
+  "accept_switch_graph",
+  "resume_parked",
+  "continue_parked",
+  "full_restart",
+  "restart_graph",
+]);
+
+function normalizeGraphModeKind(kind: string): string {
+  const k = String(kind || "").trim().toLowerCase();
+  if (k === "accept_enter_graph") return "enter_graph";
+  if (k === "accept_exit_graph") return "exit_graph";
+  if (k === "accept_switch_graph") return "switch_graph";
+  if (k === "continue_parked") return "resume_parked";
+  if (k === "restart_graph") return "full_restart";
+  return k;
+}
+
 export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "request_user_decision",
@@ -33,8 +56,11 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
       "Click and type are the same path — the tool unblocks with the user's response. " +
       "For multi-agent handoff / execution (pentest/CTF/…): kind=handoff + handoff_pack_id (+ handoff_expert_id) + target + full scope in proposed_action. " +
       "Call platform_list_experts first when unsure who can receive the work. " +
+      "Graph harness (Spec #278): kind=enter_graph|exit_graph|switch_graph + graph_id (product id e.g. app_assessment|redteam_deep). " +
+      "Never silent-switch Free↔Graph — always card or user composer Workflow. " +
       "Do not chain multiple cards; put defaults on the card. " +
       "After authorize on handoff, the platform starts the destination expert; keep any follow-up text very short. " +
+      "After authorize on enter/switch Graph, platform settles Session work_mode and may re-dispatch Graph. " +
       "If the tool result decision is authorize (including when the user typed an affirming reply), do not re-show the card.",
     parameters: Type.Object({
       question: Type.String({ description: "Card title — short authorization question" }),
@@ -49,7 +75,14 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
       target: Type.Optional(Type.String({ description: "Primary target URL/host (required for handoff when known)" })),
       kind: Type.Optional(
         Type.String({
-          description: "handoff (start execution expert) | confirm (rare non-execution approval)",
+          description:
+            "handoff | enter_graph | exit_graph | switch_graph | confirm. Graph kinds need graph_id (except exit_graph).",
+        }),
+      ),
+      graph_id: Type.Optional(
+        Type.String({
+          description:
+            "When kind=enter_graph|switch_graph: product Graph id (app_assessment | redteam_deep). Not thin lab ids.",
         }),
       ),
       handoff_pack_id: Type.Optional(
@@ -66,13 +99,32 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
 
       const conversationId = String(runtime.task.conversationId || "").trim();
       const requestId = `${conversationId || "sess"}-${randomUUID()}`;
-      const kind = String(params.kind || "confirm").trim().toLowerCase() || "confirm";
+      const kind = normalizeGraphModeKind(
+        String(params.kind || "confirm").trim().toLowerCase() || "confirm",
+      );
       const handoffPack = String(params.handoff_pack_id || params.pack_id || "").trim();
       const proposed = String(params.proposed_action || "").trim();
       const risk = String(params.risk_level || "intrusive").trim() || "intrusive";
       const target = String(params.target || "").trim();
+      const graphId = String(params.graph_id || params.engagement_template || "").trim();
       let handoffExpertId = params.handoff_expert_id ? String(params.handoff_expert_id).trim() : "";
       let handoffExpertName = params.handoff_expert_name ? String(params.handoff_expert_name).trim() : "";
+
+      // Graph mode permission: require graph_id for enter/switch (exit parks current).
+      if (GRAPH_MODE_KINDS.has(kind)) {
+        if ((kind === "enter_graph" || kind === "switch_graph" || kind === "full_restart") && !graphId) {
+          return textResult(
+            "error: graph_id required for enter_graph / switch_graph (e.g. app_assessment or redteam_deep)",
+            { isError: true },
+          );
+        }
+        if (graphId && /_thin$/i.test(graphId)) {
+          return textResult(
+            "error: lab thin graphs are not product L1; use app_assessment or redteam_deep",
+            { isError: true },
+          );
+        }
+      }
 
       // Handoff preflight: refuse the card when no product expert can receive the pack.
       if (kind === "handoff" || handoffPack) {
@@ -139,8 +191,15 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
         if (handoffExpertId) payload.handoff_expert_id = handoffExpertId;
         if (handoffExpertName) payload.handoff_expert_name = handoffExpertName;
       }
+      if (GRAPH_MODE_KINDS.has(kind)) {
+        payload.kind = kind;
+        if (graphId) {
+          payload.graph_id = graphId;
+          payload.engagement_template = graphId;
+        }
+      }
 
-      await runtime.platform.send(payload);
+      await runtime.platform.send(payload as import("../types.js").PlatformMessage);
 
       const waitPromise = registerApprovalWait(requestId, conversationId);
       const abort = runtime.lifecycle.abortSignal;
@@ -184,17 +243,45 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
         });
       }
 
+      // Spec #278 S3: Graph mode permission — settle Session work_mode via platform.
+      const isGraphMode = GRAPH_MODE_KINDS.has(String(payload.kind || kind));
+      if (decision === "authorize" && isGraphMode) {
+        await runtime.platform.send({
+          type: "graph_mode_apply",
+          conversation_id: conversationId,
+          request_id: requestId,
+          kind: payload.kind || kind,
+          graph_id: graphId || undefined,
+          engagement_template: graphId || undefined,
+          target: target || undefined,
+          proposed_action: proposed || undefined,
+          question: question || undefined,
+          expert_id: speaker.expert_id,
+          expert_name: speaker.expert_name,
+        } as import("../types.js").PlatformMessage);
+      }
+
+      const graphAuthorizeMsg =
+        kind === "enter_graph" || kind === "switch_graph"
+          ? "User authorized Graph mode. Platform is settling Session work_mode and may re-dispatch Expert Graph. Reply in at most one short sentence; do not re-show the card; do not claim stages already ran."
+          : kind === "exit_graph"
+            ? "User authorized exit Graph → Free (Graph parked). Platform settled Session work_mode=free. Reply briefly; do not re-show the card."
+            : "User authorized Graph mode change. Platform settled Session work_mode. Reply briefly; do not re-show the card.";
+
       return jsonResult({
         ok: true,
         request_id: requestId,
         decision,
         kind: payload.kind || "confirm",
         handoff_pack_id: payload.handoff_pack_id || null,
+        graph_id: graphId || null,
         message:
           decision === "authorize"
             ? kind === "handoff" || handoffPack
               ? "User authorized handoff. Platform is starting the destination expert now. Reply in at most one short sentence; do not claim you ran the scan; do not emit another decision card."
-              : "User authorized. Proceed within your tool policy; do not emit another decision card for the same plan."
+              : isGraphMode
+                ? graphAuthorizeMsg
+                : "User authorized. Proceed within your tool policy; do not emit another decision card for the same plan."
             : "User canceled or timed out. Do not proceed with the proposed action.",
       });
     },

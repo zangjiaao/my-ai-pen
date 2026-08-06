@@ -36,7 +36,9 @@ import {
   resolveGraphIdFromTask,
 } from "./pentest-graph.js";
 import {
+  formatGraphL1CatalogInjection,
   isContinueInEnvelopeExecution,
+  loadProductGraphL1Catalog,
   resolveExpertWorkPath,
   resolveHardGraph,
 } from "./hard-graph-definition.js";
@@ -126,6 +128,8 @@ export async function runNode4Task(
     (typeof task.expertName === "string" && task.expertName.trim()) ||
     (pack.id && pack.id !== "runtime" ? pack.id : "Expert");
   const panel = new PanelAgentTracker(task.instruction || "Authorized security task", panelLabel);
+  // Free path: main row shows Free (Graph path sets graph badge in hard-graph-task).
+  panel.setWorkMode({ work_mode: "free" });
   const usage = createUsageLedgerFromEnv();
   const textStream = new PlatformTextStream(loggingPlatform, task);
   const checkpointThrottle = new CheckpointThrottle();
@@ -230,7 +234,17 @@ export async function runNode4Task(
   // Free OMP Main path only (Default / free Expert chat — no Soft inject).
   // Soft scenario Graph is retired (#76); freePentestGraphResolution is the free-path SOT.
   const graphResolved = freePentestGraphResolution(task);
-  const graphCtx = buildPentestGraphContext(graphResolved);
+  // Spec #278 S2: skill-like Graph L1 catalog in Free prompt (product ids only).
+  let graphCatalogBlock = "";
+  if (packRootForHard && pack.id === "pentest") {
+    try {
+      const l1 = await loadProductGraphL1Catalog(packRootForHard);
+      graphCatalogBlock = formatGraphL1CatalogInjection(l1, { mode: "free" });
+    } catch {
+      graphCatalogBlock = "";
+    }
+  }
+  const graphCtx = buildPentestGraphContext(graphResolved, { graphCatalogBlock });
   runtime.lifecycle.pentestGraph = graphCtx;
 
   const obsCounters = {
@@ -284,6 +298,9 @@ export async function runNode4Task(
     role_pack: pack.id,
     role_source: roleResolved.source,
     started_at: startedAt,
+    // Spec #278: Session actual mode for AgentRow / dual-rail settlement consumers.
+    work_mode: "free",
+    panel_agents: panel.list(),
   });
   panel.setMainActivity({
     phase: chatOnly ? "chat" : "starting",
