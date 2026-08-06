@@ -168,6 +168,7 @@ const finding = createFindingTool(book);
 const bookSql = textOf(
   await finding.execute("s", {
     action: "confirm",
+    vuln_type: "other",
     title: "Login SQLi",
     severity: "critical",
     location: "http://127.0.0.1:3010/rest/user/login",
@@ -179,6 +180,7 @@ assert.ok(!bookSql.startsWith("error:"), bookSql.slice(0, 280));
 const bookXss = textOf(
   await finding.execute("x", {
     action: "confirm",
+    vuln_type: "other",
     title: "Stored XSS reviews",
     severity: "high",
     location: "http://127.0.0.1:3010/rest/products/1/reviews",

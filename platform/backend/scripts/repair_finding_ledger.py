@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-shot repair: link null-asset vulns + merge path-class soft duplicates.
+"""One-shot repair: link null-asset vulns + merge Spec #275 identity duplicates.
 
 Usage (from platform/backend with venv + DATABASE_URL or docker network):
 
@@ -8,6 +8,10 @@ Usage (from platform/backend with venv + DATABASE_URL or docker network):
 
   # Apply merges/links
   python scripts/repair_finding_ledger.py --apply
+
+Identity (Spec #275): asset_id OR host + port + vuln_type + location_key.
+Title / path-class aliases are NOT merge keys. Rows missing vuln_type are skipped
+(no legacy compatibility — operator clears untyped rows).
 
 Never runs automatically on migrate.
 """
@@ -31,11 +35,10 @@ from app.models.vulnerability import Vulnerability
 from app.services.asset_ledger import is_valid_ledger_address, split_host_port
 from app.services.finding_dedupe import (
     append_discovery_event,
-    expand_path_classes,
-    finding_path_classes,
     is_same_finding,
+    location_resource_key,
+    normalize_vuln_type,
     pick_canonical_vuln,
-    preferred_path_class,
     row_location_blob,
 )
 
@@ -43,7 +46,7 @@ from app.services.finding_dedupe import (
 def _blob(v: Vulnerability) -> str:
     return " ".join(
         str(x or "")
-        for x in (v.poc, v.description, v.title, getattr(v, "location", None))
+        for x in (v.poc, v.description, v.title, getattr(v, "location_key", None))
     )
 
 
@@ -55,13 +58,27 @@ def _guess_host(v: Vulnerability) -> tuple[str, str | None]:
             continue
         if host and is_valid_ledger_address(host):
             return host, port or (str(v.port).strip() if v.port else None)
-    # DVWA lab heuristic: port 8080 content
     text = _blob(v).lower()
     if "8080" in text or "dvwa" in text or "/vulnerabilities/" in text:
         return "host.docker.internal", str(v.port or "8080")
     if "115.190.179.231" in text or "/level" in text:
         return "115.190.179.231", str(v.port).strip() if v.port else None
     return "", None
+
+
+def _row_dict(v: Vulnerability) -> dict:
+    loc_key = getattr(v, "location_key", None) or location_resource_key(row_location_blob(v))
+    return {
+        "title": v.title,
+        "asset_id": v.asset_id,
+        "port": v.port,
+        "cve_id": v.cve_id,
+        "vuln_type": getattr(v, "vuln_type", None),
+        "location_key": loc_key,
+        "location": row_location_blob(v),
+        "poc": v.poc,
+        "description": v.description,
+    }
 
 
 async def run(*, apply: bool) -> int:
@@ -93,34 +110,41 @@ async def run(*, apply: bool) -> int:
                     v.port = port
             await db.flush()
 
-        # Reload after links. Cluster by (user, asset, port) then pairwise is_same_finding
-        # so path-alias and title-stem matches are found even when one row is path-less.
+        # Reload after links. Cluster by (user, asset, port, vuln_type) then pairwise identity.
         vulns = (await db.execute(select(Vulnerability))).scalars().all()
         buckets: dict[tuple, list[Vulnerability]] = defaultdict(list)
+        skipped_untyped = 0
         for v in vulns:
             if not v.user_id:
                 continue
-            key = (str(v.user_id), str(v.asset_id or ""), str(v.port or ""))
+            vtype = normalize_vuln_type(getattr(v, "vuln_type", None))
+            if not vtype:
+                skipped_untyped += 1
+                continue
+            # Backfill location_key when missing (for merge key stability).
+            if not getattr(v, "location_key", None):
+                derived = location_resource_key(row_location_blob(v))
+                if derived and apply:
+                    v.location_key = derived
+            key = (str(v.user_id), str(v.asset_id or ""), str(v.port or ""), vtype)
             buckets[key].append(v)
 
+        print(f"skipped_untyped={skipped_untyped}")
+
         def _same(a: Vulnerability, b: Vulnerability) -> bool:
+            ad = _row_dict(a)
+            bd = _row_dict(b)
             return is_same_finding(
-                {
-                    "title": a.title,
-                    "asset_id": a.asset_id,
-                    "port": a.port,
-                    "cve_id": a.cve_id,
-                    "location": row_location_blob(a),
-                    "poc": a.poc,
-                    "description": a.description,
-                },
-                title=b.title,
-                asset_id=b.asset_id,
-                port=b.port,
-                cve_id=b.cve_id,
-                location=row_location_blob(b),
-                description=b.description,
-                poc=b.poc,
+                ad,
+                title=bd["title"],
+                asset_id=bd["asset_id"],
+                port=bd["port"],
+                cve_id=bd["cve_id"],
+                location=bd["location"],
+                description=bd["description"],
+                poc=bd["poc"],
+                vuln_type=bd["vuln_type"],
+                location_key=bd["location_key"],
             )
 
         # Connected components of pairwise same-finding within each bucket.
@@ -166,20 +190,17 @@ async def run(*, apply: bool) -> int:
                             set(canon.evidence_ids or []) | set(duplicate.evidence_ids or [])
                         )
                         canon.description = canon.description or duplicate.description
-                        # Prefer path-bearing PoC when canonical is payload-only.
-                        if not preferred_path_class(
-                            expand_path_classes(finding_path_classes(canon.poc, canon.title))
-                        ) and preferred_path_class(
-                            expand_path_classes(finding_path_classes(duplicate.poc, duplicate.title))
-                        ):
-                            canon.poc = duplicate.poc or canon.poc
-                        else:
-                            canon.poc = canon.poc or duplicate.poc
+                        canon.poc = canon.poc or duplicate.poc
                         canon.remediation = canon.remediation or duplicate.remediation
                         canon.asset_id = canon.asset_id or duplicate.asset_id
                         if not canon.port and duplicate.port:
                             canon.port = duplicate.port
-                        # Prefer higher severity when merging level variants.
+                        if not getattr(canon, "vuln_type", None):
+                            canon.vuln_type = getattr(duplicate, "vuln_type", None)
+                        if not getattr(canon, "location_key", None):
+                            canon.location_key = getattr(duplicate, "location_key", None) or location_resource_key(
+                                row_location_blob(duplicate)
+                            )
                         sev_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
                         if sev_rank.get(str(duplicate.severity or "").lower(), 9) < sev_rank.get(
                             str(canon.severity or "").lower(), 9
@@ -220,7 +241,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true", help="Write links and merges")
     args = parser.parse_args()
-    # Prefer env from docker-compose defaults when unset
     os.environ.setdefault(
         "DATABASE_URL",
         "postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/pentest_platform",

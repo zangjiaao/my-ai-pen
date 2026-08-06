@@ -246,6 +246,7 @@ const run = await runHardGraph({
           (
             await finding.execute("f", {
               action: "confirm",
+              vuln_type: "other",
               title,
               severity: "high",
               location: loc,

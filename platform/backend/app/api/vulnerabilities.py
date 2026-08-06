@@ -87,6 +87,8 @@ class VulnOut(BaseModel):
     severity: str
     cvss: float | None
     cve_id: str | None
+    vuln_type: str | None = None
+    location_key: str | None = None
     asset_id: str | None
     port: str | None = None
     asset: AssetSummaryOut | None = None
@@ -104,6 +106,7 @@ class VulnOut(BaseModel):
     first_seen_at: str | None = None
     discovered_at: str | None
     updated_at: str | None
+    # Internal history metrics (no product badge chrome — Spec #275).
     rediscovery_count: int = 0
     discovery_count: int = 1
     multiple_discoveries: bool = False
@@ -759,6 +762,8 @@ def _out(
         severity=v.severity,
         cvss=v.cvss,
         cve_id=v.cve_id,
+        vuln_type=getattr(v, "vuln_type", None),
+        location_key=getattr(v, "location_key", None),
         asset_id=str(v.asset_id) if v.asset_id else None,
         port=str(v.port) if getattr(v, "port", None) else None,
         asset=_asset_out(asset),

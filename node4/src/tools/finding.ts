@@ -32,6 +32,38 @@ const MIN_DESC_LEN = 16;
 const MIN_PROOF_LEN = 24;
 const MIN_OUTPUT_PROOF = 32;
 
+/** Spec #275 closed enum — required on finding(confirm); reject unknown. */
+export const VALID_VULN_TYPES = [
+  "rce",
+  "command_injection",
+  "file_upload",
+  "credential_exposure",
+  "info_disclosure",
+  "dir_listing",
+  "sqli",
+  "xss",
+  "csrf",
+  "lfi",
+  "ssrf",
+  "xxe",
+  "idor",
+  "auth_bypass",
+  "session",
+  "misconfig",
+  "other",
+] as const;
+
+export type VulnTypeId = (typeof VALID_VULN_TYPES)[number];
+
+export function normalizeVulnType(value: unknown): VulnTypeId | null {
+  const raw = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[-\s]+/g, "_");
+  if (!raw) return null;
+  return (VALID_VULN_TYPES as readonly string[]).includes(raw) ? (raw as VulnTypeId) : null;
+}
+
 /**
  * How many *other* findings may already cite the same evidence_id (legacy path).
  */
@@ -212,6 +244,12 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
       action: Type.String(),
       title: Type.Optional(Type.String()),
       severity: Type.Optional(Type.String()),
+      /**
+       * Spec #275: closed enum required on confirm (ledger identity).
+       * rce|command_injection|file_upload|credential_exposure|info_disclosure|dir_listing|
+       * sqli|xss|csrf|lfi|ssrf|xxe|idor|auth_bypass|session|misconfig|other
+       */
+      vuln_type: Type.Optional(Type.String()),
       finding_kind: Type.Optional(Type.String()),
       location: Type.Optional(Type.String()),
       url: Type.Optional(Type.String()),
@@ -383,6 +421,16 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
       }
       params.severity = sevResolved.severity;
 
+      // Spec #275: closed vuln_type required on confirm (ledger identity).
+      const vulnType = normalizeVulnType(params.vuln_type);
+      if (!vulnType) {
+        return textResult(
+          `error: vuln_type required (closed enum: ${VALID_VULN_TYPES.join("|")}) — missing/unknown type is rejected; do not invent free-text types`,
+          { isError: true },
+        );
+      }
+      params.vuln_type = vulnType;
+
       const title = String(params.title || "").trim();
       if (!title) return textResult("error: title required");
       let location = String(params.location || params.url || "").trim();
@@ -391,7 +439,7 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
           "error: location or url required — the concrete place the issue was observed (path, endpoint, or full URL)",
         );
       }
-      // Path-bearing location helps platform rediscovery merge (asset+path identity).
+      // Path-bearing location is part of Spec #275 file-level identity (with vuln_type).
       // Reject payload-only strings with no URL/path token.
       const hasPathToken =
         /https?:\/\//i.test(location) ||
@@ -543,6 +591,7 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
           description,
           kind: normalizeKind(params.finding_kind),
           severity: String(params.severity),
+          vulnType: String(params.vuln_type),
           evidenceIds,
           proofExcerpts,
           proofText,
@@ -647,6 +696,7 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
         description,
         kind: normalizeKind(params.finding_kind),
         severity: String(params.severity),
+        vulnType: String(params.vuln_type),
         evidenceIds: legacyIds,
         proofExcerpts,
         proofText: proofExcerpts[0]?.excerpt || "",
@@ -720,6 +770,8 @@ async function finalizeFinding(
     description: string;
     kind: string;
     severity: string;
+    /** Spec #275 closed enum — required identity field on wire */
+    vulnType: string;
     evidenceIds: string[];
     proofExcerpts: Array<{
       evidence_id: string;
@@ -752,6 +804,7 @@ async function finalizeFinding(
     action: "confirm",
     title: input.title,
     severity: input.severity,
+    vuln_type: input.vulnType,
     finding_kind: input.kind,
     location: input.location,
     url: input.location,
@@ -774,6 +827,7 @@ async function finalizeFinding(
     status: "confirmed",
     title: input.title,
     severity: record.severity,
+    vuln_type: input.vulnType,
     finding_kind: input.kind,
     location: record.location,
     url: record.url,
@@ -808,10 +862,17 @@ async function finalizeFinding(
     finding: record,
     evidence_created: input.evidenceIds[0],
     how_captured: record.how_captured,
+    // Spec #275: session confirm success ≠ ledger New. Never claim 新增 from confirm tally.
     note:
-      "Case evidence was created from your proof at booking time (observation + how captured). " +
-      "Platform may **merge** this confirm into an existing ledger row (rediscovery / 再次发现) when asset+path/module match — that is **not** a new finding. " +
-      "For end-of-task counts: only tally successful finding(confirm) this session; use platform_list_vulnerabilities / Case Findings; never claim 新发现 for a merge or 全部重新验证 from prior list length alone.",
+      "Case evidence was created from your proof at booking time. " +
+      "User-visible narration may describe **New** ledger rows only (platform `created=true` / Case Findings / platform_list_vulnerabilities). " +
+      "Do **not** claim 新增/新发现 from local finding(confirm) success count alone — rediscover updates an existing identity silently. " +
+      "Identity = vuln_type + file-level location (title wording does not create a new row).",
+    ledger: {
+      // Platform outcome is fire-and-forget on this path; created is unknown until list/query.
+      created: null as boolean | null,
+      vuln_type: input.vulnType,
+    },
     chain_quality: {
       chain_length: chainQuality.chain_length,
       short_chain: chainQuality.short_chain,

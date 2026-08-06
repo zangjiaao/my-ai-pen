@@ -819,7 +819,13 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
     elif msg.get("type") == "vuln_found":
         persisted = await _persist_vulnerability(msg, client_id)
         if persisted:
-            msg.update({k: v for k, v in persisted.items() if v is not None})
+            # Fail-closed rejects return type=vuln_found_error — replace the frame,
+            # do not merge error fields into a still-typed vuln_found success card.
+            if str(persisted.get("type") or "") == "vuln_found_error":
+                msg.clear()
+                msg.update(persisted)
+            else:
+                msg.update({k: v for k, v in persisted.items() if v is not None})
     elif msg.get("type") == "evidence_created":
         # Real proofs from Node4 emitEvidence (structured properties).
         await _persist_evidence(msg, client_id)
@@ -2267,30 +2273,40 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
         from datetime import datetime, timezone
 
         from app.services.finding_dedupe import (
+            VALID_VULN_TYPES,
             append_discovery_event,
             is_same_finding,
-            location_path_class,
-            normalize_finding_title,
+            location_resource_key,
+            normalize_vuln_type,
             pick_canonical_vuln,
-            ports_equal,
             row_location_blob,
         )
-        from sqlalchemy import func
         # Prefer explicit PoC (reproduction + observed result); fall back carefully.
         poc_value = msg.get("poc") or msg.get("evidence_summary") or msg.get("location") or ""
         severity = _normalize_severity(msg.get("severity"))
         if severity is None:
             # Spec #139 D1: fail closed — no silent medium on empty/invalid severity
-            await self._send(
-                {
-                    "type": "vuln_found_error",
-                    "conversation_id": conversation_id,
-                    "task_id": msg.get("task_id"),
-                    "error": "severity required (critical|high|medium|low|info); silent medium banned",
-                    "title": msg.get("title"),
-                }
-            )
-            return
+            return {
+                "type": "vuln_found_error",
+                "conversation_id": conv_id,
+                "task_id": msg.get("task_id"),
+                "error": "severity required (critical|high|medium|low|info); silent medium banned",
+                "title": msg.get("title"),
+                "created": False,
+            }
+        # Spec #275: closed vuln_type required on confirm.
+        vuln_type = normalize_vuln_type(msg.get("vuln_type") or msg.get("type_id"))
+        if not vuln_type:
+            allowed = ", ".join(sorted(VALID_VULN_TYPES))
+            return {
+                "type": "vuln_found_error",
+                "conversation_id": conv_id,
+                "task_id": msg.get("task_id"),
+                "error": f"vuln_type required (closed enum: {allowed})",
+                "title": msg.get("title"),
+                "created": False,
+            }
+        loc_key = location_resource_key(location) or location_resource_key(poc_value)
         cvss_value = msg.get("cvss")
         description = (
             msg.get("description")
@@ -2375,46 +2391,44 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                 if asset:
                     asset_id = asset.id
 
-            # Cross-session dedupe: title match OR same path class on asset+port.
-            title_key = normalize_finding_title(title)
-            path_key = location_path_class(location)
+            # Spec #275: identity = asset/host + port + vuln_type + location_key (no title/path alias).
             candidates: list = []
             pool: list = []
+            q = select(Vulnerability).where(
+                Vulnerability.user_id == user_id,
+                Vulnerability.vuln_type == vuln_type,
+            )
             if asset_id:
-                # Load asset-scoped rows (port-filtered when possible) for path-class match.
-                q = select(Vulnerability).where(
-                    Vulnerability.user_id == user_id,
-                    Vulnerability.asset_id == asset_id,
+                q = q.where(Vulnerability.asset_id == asset_id)
+            else:
+                q = q.where(Vulnerability.asset_id.is_(None))
+            if port:
+                q = q.where(
+                    (Vulnerability.port == port)
+                    | (Vulnerability.port.is_(None))
+                    | (Vulnerability.port == "")
                 )
-                if port:
-                    q = q.where(
-                        (Vulnerability.port == port)
-                        | (Vulnerability.port.is_(None))
-                        | (Vulnerability.port == "")
+            if loc_key:
+                # Prefer indexable location_key equality; also scan null-key rows for derivation.
+                from sqlalchemy import or_
+
+                q = q.where(
+                    or_(
+                        Vulnerability.location_key == loc_key,
+                        Vulnerability.location_key.is_(None),
+                        Vulnerability.location_key == "",
                     )
-                pool.extend((await db.execute(q)).scalars().all())
-            elif title_key:
-                # Unlinked: still try exact title under this user (legacy).
-                pool.extend(
-                    (
-                        await db.execute(
-                            select(Vulnerability).where(
-                                Vulnerability.user_id == user_id,
-                                Vulnerability.asset_id.is_(None),
-                                func.lower(func.trim(Vulnerability.title)) == title_key,
-                            )
-                        )
-                    ).scalars().all()
                 )
-            # Same-conversation title rows (any asset).
-            if title_key:
+            pool.extend((await db.execute(q)).scalars().all())
+            # CVE short-circuit pool (same asset).
+            if cve_id and asset_id:
                 pool.extend(
                     (
                         await db.execute(
                             select(Vulnerability).where(
                                 Vulnerability.user_id == user_id,
-                                Vulnerability.conversation_id == uuid.UUID(conv_id),
-                                func.lower(func.trim(Vulnerability.title)) == title_key,
+                                Vulnerability.asset_id == asset_id,
+                                Vulnerability.cve_id == cve_id,
                             )
                         )
                     ).scalars().all()
@@ -2430,9 +2444,12 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                         "asset_id": row.asset_id,
                         "port": row.port,
                         "cve_id": row.cve_id,
+                        "vuln_type": getattr(row, "vuln_type", None),
+                        "location_key": getattr(row, "location_key", None),
                         "location": row_location_blob(row),
                         "poc": getattr(row, "poc", None),
                         "description": getattr(row, "description", None),
+                        "host": host or None,
                     },
                     title=title,
                     asset_id=asset_id,
@@ -2441,36 +2458,12 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                     location=location,
                     description=description,
                     poc=poc_value,
+                    vuln_type=vuln_type,
+                    location_key=loc_key,
+                    host=host or None,
                 ):
                     candidates.append(row)
                     seen_ids.add(rid)
-            # Optional: path-class only scan when asset set and no candidates yet.
-            if asset_id and path_key and not candidates:
-                q2 = select(Vulnerability).where(
-                    Vulnerability.user_id == user_id,
-                    Vulnerability.asset_id == asset_id,
-                )
-                for row in (await db.execute(q2)).scalars().all():
-                    if is_same_finding(
-                        {
-                            "title": row.title,
-                            "asset_id": row.asset_id,
-                            "port": row.port,
-                            "cve_id": row.cve_id,
-                            "location": row_location_blob(row),
-                            "poc": getattr(row, "poc", None),
-                            "description": getattr(row, "description", None),
-                        },
-                        title=title,
-                        asset_id=asset_id,
-                        port=port,
-                        cve_id=cve_id,
-                        location=location,
-                        description=description,
-                        poc=poc_value,
-                    ):
-                        candidates.append(row)
-                        break
 
             vuln = pick_canonical_vuln(candidates)
             created = vuln is None
@@ -2486,6 +2479,8 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                     severity=severity,
                     cvss=cvss_value,
                     cve_id=cve_id,
+                    vuln_type=vuln_type,
+                    location_key=loc_key or None,
                     asset_id=asset_id,
                     port=port,
                     conversation_id=uuid.UUID(conv_id),
@@ -2515,6 +2510,10 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                 vuln.user_id = vuln.user_id or user_id
                 vuln.node_id = vuln.node_id or node_uuid
                 vuln.asset_id = vuln.asset_id or asset_id
+                if not getattr(vuln, "vuln_type", None):
+                    vuln.vuln_type = vuln_type
+                if loc_key and not getattr(vuln, "location_key", None):
+                    vuln.location_key = loc_key
                 if port:
                     vuln.port = port
                 if cve_id and not vuln.cve_id:
@@ -2530,7 +2529,7 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                     vuln.remediation = msg.get("remediation")
                 vuln.confidence = str(msg.get("confidence", vuln.confidence or "high"))
                 vuln.evidence_ids = sorted(set(vuln.evidence_ids or []) | set(evidence_ids))
-                # Timeline: record rediscovery event.
+                # Timeline: record rediscovery event (internal; not a product badge surface).
                 try:
                     prev_history = list(vuln.history or [])
                 except Exception:
@@ -2606,18 +2605,15 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                     "status": vuln.status,
                     "host": host or None,
                     "port": vuln.port,
+                    "vuln_type": vuln_type,
+                    "location_key": loc_key or None,
                     "evidence_gate": "passed",
                     "evidence_ids": vuln.evidence_ids or [],
                     "created": created,
                     "rediscovered": rediscovered and not created,
                     "merged_duplicates": len(extras),
-                    "fingerprint_title": title_key,
                 },
             )
-            from app.services.finding_dedupe import discovery_count, rediscovery_count
-
-            hist = getattr(vuln, "history", None)
-            rcount = rediscovery_count(hist)
             first = getattr(vuln, "first_seen_at", None) or vuln.discovered_at
             return {
                 "id": str(vuln.id),
@@ -2629,7 +2625,9 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                 "node_id": str(vuln.node_id) if vuln.node_id else None,
                 "title": vuln.title,
                 "severity": vuln.severity,
-                "location": vuln.poc or location,
+                "vuln_type": getattr(vuln, "vuln_type", None) or vuln_type,
+                "location_key": getattr(vuln, "location_key", None) or loc_key or None,
+                "location": location or vuln.poc,
                 "confidence": vuln.confidence,
                 "status": vuln.status,
                 "affected_asset": host or msg.get("affected_asset"),
@@ -2654,9 +2652,8 @@ async def _persist_vulnerability(msg: dict, node_id: str | None):
                 "finding_kind": msg.get("finding_kind") or msg.get("kind") or "vuln",
                 "first_seen_at": first.isoformat() if first else None,
                 "discovered_at": vuln.discovered_at.isoformat() if vuln.discovered_at else None,
-                "rediscovery_count": rcount,
-                "discovery_count": discovery_count(hist),
-                "multiple_discoveries": rcount > 0 or bool(rediscovered and not created),
+                # Spec #275: structured created outcome; New-only narration uses this.
+                "created": created,
             }
     except Exception as e:
         print(f"[WS] persist vuln error: {e}")

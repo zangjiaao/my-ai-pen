@@ -15,8 +15,10 @@ import {
   extractSupportMaterial,
   locationTokens,
   MAX_OTHER_FINDINGS_PER_EVIDENCE,
+  normalizeVulnType,
   pocDemonstratesIssue,
   synthesizePocFromHandoffProof,
+  VALID_VULN_TYPES,
 } from "./finding.js";
 
 assert.ok(locationTokens("http://host/vulnerabilities/sqli/").some((t) => t.includes("sqli") || t.includes("vulnerabilities")));
@@ -118,6 +120,13 @@ assert.ok(String(enriched.capture?.script_preview || "").includes("import reques
 assert.ok(FINDING_TOOL_DESCRIPTION.includes("proof"), "tool describes proof field");
 assert.ok(eagerBookingInjection().includes("proof"), "eager booking mentions proof");
 assert.ok(FINDING_TOOL_DESCRIPTION.includes("do not look up"), "primary path avoids evidence_ids hunt");
+assert.ok(FINDING_TOOL_DESCRIPTION.includes("vuln_type"), "tool requires vuln_type (Spec #275)");
+assert.equal(normalizeVulnType("sqli"), "sqli");
+assert.equal(normalizeVulnType("SQLI"), "sqli");
+assert.equal(normalizeVulnType(""), null);
+assert.equal(normalizeVulnType("sql_injection"), null);
+assert.ok(VALID_VULN_TYPES.includes("other"));
+assert.equal(VALID_VULN_TYPES.length, 17);
 
 // Single book-time proof is healthy
 const single = assessBookingChainQuality({

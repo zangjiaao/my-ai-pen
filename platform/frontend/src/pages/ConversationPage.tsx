@@ -543,22 +543,6 @@ export default function ConversationPage() {
     }
     return map;
   }, [productExperts]);
-  /** Ledger findings (snapshot) carry rediscovery badges; chat vuln_found cards often don't. */
-  const findingsById = useMemo(() => {
-    const map = new Map<string, Record<string, unknown>>();
-    for (const f of findings) {
-      const ids = [f.id, f.vulnerability_id, f.finding_id]
-        .map((v) => String(v || "").trim())
-        .filter(Boolean);
-      for (const id of ids) {
-        if (!map.has(id)) map.set(id, f);
-      }
-      const title = String(f.title || "").trim().toLowerCase();
-      if (title && !map.has(`title:${title}`)) map.set(`title:${title}`, f);
-    }
-    return map;
-  }, [findings]);
-
   const approvalDecisionByRequestId = useMemo(() => {
     const decisions: Record<string, "authorize" | "cancel"> = {};
     for (const message of messages) {
@@ -2420,7 +2404,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               {displayMessages.map((msg, index) => (
                 <div key={msg.id} data-message-created-at={msg.created_at}>
                   <MessageRenderer
-                    message={enrichVulnMessageFromFindings(msg, findingsById)}
+                    message={msg}
                     previousMessage={displayMessages[index - 1]}
                     agentNameById={agentNameById}
                     fallbackPentestNodeId={fallbackPentestNodeId}
@@ -3486,49 +3470,6 @@ function last<T>(items: T[]): T | undefined {
 
 function readString(value: unknown): string {
   return typeof value === "string" ? value : "";
-}
-
-/** Overlay rediscovery fields from Case findings onto chat vuln cards (historical msgs lack them). */
-function enrichVulnMessageFromFindings(
-  message: Message,
-  findingsById: Map<string, Record<string, unknown>>,
-): Message {
-  if (message.msg_type !== "vuln_found" && message.msg_type !== "vuln_card") return message;
-  const content = message.content || {};
-  if (content.multiple_discoveries === true || Number(content.rediscovery_count || 0) > 0) {
-    return message;
-  }
-  const ids = [content.vulnerability_id, content.id, content.finding_id]
-    .map((v) => String(v || "").trim())
-    .filter(Boolean);
-  let match: Record<string, unknown> | undefined;
-  for (const id of ids) {
-    match = findingsById.get(id);
-    if (match) break;
-  }
-  if (!match) {
-    const title = String(content.title || "").trim().toLowerCase();
-    if (title) match = findingsById.get(`title:${title}`);
-  }
-  if (!match) return message;
-  const rediscoveryCount = Number(match.rediscovery_count ?? 0);
-  const discoveryCount = Number(match.discovery_count ?? 0);
-  const multiple =
-    match.multiple_discoveries === true ||
-    (Number.isFinite(rediscoveryCount) && rediscoveryCount > 0) ||
-    (Number.isFinite(discoveryCount) && discoveryCount > 1);
-  if (!multiple) return message;
-  return {
-    ...message,
-    content: {
-      ...content,
-      rediscovery_count: match.rediscovery_count ?? rediscoveryCount,
-      discovery_count: match.discovery_count ?? discoveryCount,
-      multiple_discoveries: true,
-      first_seen_at: content.first_seen_at ?? match.first_seen_at,
-      discovered_at: content.discovered_at ?? match.discovered_at,
-    },
-  };
 }
 
 function isProgress(value: unknown): value is Progress {

@@ -116,6 +116,7 @@ try {
   // Missing finding_id on Graph → hard fail
   const noId = await exec("x", {
     action: "confirm",
+    vuln_type: "other",
     title: "SQL injection login",
     location: "http://host/login.php",
     description: "Auth bypass demonstrated with SQL error on login",
@@ -128,6 +129,7 @@ try {
   // Production confirm with Store id
   const ok = await exec("x", {
     action: "confirm",
+    vuln_type: "other",
     finding_id: fid,
     title: "SQL injection login",
     location: "http://host/login.php",
@@ -149,6 +151,7 @@ try {
   runtime.lifecycle.subagentDepth = 1;
   const subDenied = await exec("x", {
     action: "confirm",
+    vuln_type: "other",
     finding_id: fid,
     title: "x",
     location: "http://host/login.php",

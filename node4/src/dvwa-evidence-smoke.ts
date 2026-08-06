@@ -170,6 +170,7 @@ async function main(): Promise<void> {
       action: "confirm",
       title: "SQL injection on DVWA /vulnerabilities/sqli/",
       severity: "high",
+      vuln_type: "sqli",
       location: `${DVWA}/vulnerabilities/sqli/`,
       description:
         "User-controlled id parameter reaches SQL query without parameterization; multi-row user data returned on classic OR payload.",

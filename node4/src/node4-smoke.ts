@@ -1456,6 +1456,8 @@ async function main() {
       proof: "PROOF: uid=0(root) command injection confirmed on /api/ping",
       // Spec #139 D1 / NC-Severity: severity required — no silent medium
       severity: "critical",
+      // Spec #275: closed vuln_type required on confirm
+      vuln_type: "command_injection",
     }),
   );
   assert(book1.includes('"ok": true') || book1.includes('"ok":true'), `book1: ${book1.slice(0, 200)}`);
@@ -1473,6 +1475,7 @@ async function main() {
       poc: "shell probe → stdout shows proving marker for issue B",
       proof: "PROOF-B: subagent-style marker for issue B at /sub",
       severity: "high",
+      vuln_type: "other",
     }),
   );
   assert(

@@ -204,6 +204,7 @@ async function main(): Promise<void> {
       action: "confirm",
       title: "SQL Injection on DVWA sqli module",
       severity: "high",
+      vuln_type: "sqli",
       location: `${DVWA}/vulnerabilities/sqli/`,
       description: "User id parameter reaches SQL without parameterization; multi-row data returned.",
       poc: "Login admin/password; GET /vulnerabilities/sqli/?id=1' OR '1'='1 → First name rows in body",
@@ -218,6 +219,7 @@ async function main(): Promise<void> {
       action: "confirm",
       title: "Source material available for audit (sqli source dump)",
       severity: "medium",
+      vuln_type: "info_disclosure",
       location: `${DVWA}/vulnerabilities/sqli/`,
       description: "Source dump recorded for code-audit follow-up on the same endpoint family.",
       poc:
@@ -233,6 +235,7 @@ async function main(): Promise<void> {
       action: "confirm",
       title: "Unrelated claim should not mass-reuse write evidence",
       severity: "low",
+      vuln_type: "file_upload",
       location: `${DVWA}/vulnerabilities/upload/`,
       description: "This claim is about upload and must not blindly reuse sqli dump evidence.",
       poc: "POST /vulnerabilities/upload/ with shell.php → observed response status and body confirm write",

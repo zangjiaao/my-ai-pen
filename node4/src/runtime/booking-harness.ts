@@ -71,7 +71,9 @@ export function eagerBookingInjection(): string {
 export const FINDING_TOOL_DESCRIPTION = [
   "ONLY product conclusion path for vuln / flag / challenge unlock / auth impact.",
   "Finding = user-trustable conclusion; proof = fragment from tool/subagent output that demonstrates the claim.",
-  "action=confirm requires: title, location|url, description, poc (≥40 chars how+result).",
+  "action=confirm requires: title, location|url, description, poc (≥40 chars how+result), severity, vuln_type (closed enum).",
+  "vuln_type required: rce|command_injection|file_upload|credential_exposure|info_disclosure|dir_listing|sqli|xss|csrf|lfi|ssrf|xxe|idor|auth_bypass|session|misconfig|other.",
+  "Ledger identity = vuln_type + file-level location (title does not merge). User-visible text only describes New ledger rows — never claim 新增 from confirm count alone.",
   "proof: preferred; after subagent, harness can fill VERBATIM proof_excerpt when location/title matches a candidate or candidate_index is set.",
   "Optional candidate_index indexes last subagent candidates / acceptance.ready_to_book.",
   "Case evidence is created automatically from proof — do not look up or pass evidence_ids.",

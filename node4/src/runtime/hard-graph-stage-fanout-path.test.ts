@@ -174,6 +174,7 @@ const finding = createFindingTool(book);
 const a = textOf(
   await finding.execute("a", {
     action: "confirm",
+    vuln_type: "other",
     title: "Login SQLi",
     severity: "critical",
     location: "http://127.0.0.1:3010/rest/user/login",
@@ -184,6 +185,7 @@ assert.ok(!a.startsWith("error:"), a.slice(0, 280));
 const b = textOf(
   await finding.execute("b", {
     action: "confirm",
+    vuln_type: "other",
     title: "Memories hash leak",
     severity: "high",
     location: "http://127.0.0.1:3010/rest/memories",

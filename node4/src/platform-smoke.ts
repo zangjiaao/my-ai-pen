@@ -168,6 +168,8 @@ async function main() {
     description: "Platform smoke booking with grounded proof from shell.",
     poc: "GET /x → response shows PROOF platform smoke observed issue marker",
     proof: "PROOF: platform smoke observed issue marker on /x",
+    severity: "medium",
+    vuln_type: "other",
   });
 
   // Booking must not emit finish or task_complete
