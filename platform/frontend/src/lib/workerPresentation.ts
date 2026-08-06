@@ -112,6 +112,56 @@ export function humanAgentChipName(ownerAgentName: string | undefined | null): s
   return "";
 }
 
+/** Numeric ordinal from a clean `Worker N` label, or null. */
+export function workerNameOrdinal(name: string | undefined | null): number | null {
+  const m = String(name || "")
+    .trim()
+    .match(/^Worker\s+(\d+)\s*$/i);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Collaboration roster name compare: numeric for Worker N, else localeCompare.
+ * Spec #301 — Worker 1,2,10,11 not 1,10,11,2.
+ */
+export function compareAgentNames(left: string, right: string): number {
+  const ln = workerNameOrdinal(left);
+  const rn = workerNameOrdinal(right);
+  if (ln != null && rn != null) return ln - rn;
+  if (ln != null) return -1;
+  if (rn != null) return 1;
+  return String(left || "").localeCompare(String(right || ""));
+}
+
+/**
+ * Tasks chip with ownership fallback: owner_agent_name → panel agent name by agent_id.
+ * Never shows raw sub_* when panel has a clean Worker N.
+ */
+export function resolveTasksAgentChip(
+  item: {
+    owner_agent_name?: string | null;
+    agent_id?: string | null;
+    linked_agent_id?: string | null;
+  },
+  agents?: Array<{ id: string; name?: string; role?: string }>,
+): string {
+  const fromName = humanAgentChipName(item.owner_agent_name);
+  if (fromName) return fromName;
+  const id = String(item.agent_id || item.linked_agent_id || "").trim();
+  if (!id || !agents?.length) return "";
+  const agent = findAgentByIdExact(agents, id);
+  if (!agent) return "";
+  const chip = humanAgentChipName(agent.name);
+  if (chip) return chip;
+  // Panel subagent with non-opaque name
+  if (String(agent.role || "").toLowerCase() === "subagent" && isWorkerName(String(agent.name || ""))) {
+    return String(agent.name).trim();
+  }
+  return "";
+}
+
 /**
  * Safe agent lookup: exact id, or root-prefixed `{root}-{subId}`.
  * Does NOT use includes() (would match sub_1 inside sub_10).

@@ -25,6 +25,9 @@ import {
 } from "./SurfaceInventory";
 import FindingCard from "./cards/FindingCard";
 import { GraphAwareTodoList } from "./TasksPlanList";
+import { discloseTaskListCap, TASKS_WORK_ITEM_CAP } from "../lib/tasksListCap";
+
+export { TASKS_WORK_ITEM_CAP };
 
 type Tab = "status" | "surface" | "findings" | "activity";
 type WorkflowPhaseId = "recon" | "testing" | "verification" | "summary";
@@ -228,9 +231,11 @@ export default function RightPanel({
   // Node3-style flat task list for all workflows (phase tree remains available via plan data).
   // Trust plan_tree status only — do not force pending/running → done from conversation.status
   // (that caused false-green todos when status/running lagged open checklist items).
-  const taskItems = isStrixWorkflow
-    ? phasePlan.flatMap((phase) => phase.items)
+  const taskList = isStrixWorkflow
+    ? { items: phasePlan.flatMap((phase) => phase.items), hiddenCount: 0 }
     : unifiedTodoItems(visiblePlanTree);
+  const taskItems = taskList.items;
+  const tasksHiddenCount = taskList.hiddenCount;
   const displayRun = useMemo(
     () => mergeCaseRunIntoDisplayRun(strixRun, caseRun, running),
     [strixRun, caseRun, running],
@@ -381,11 +386,23 @@ export default function RightPanel({
                 <p className="text-xs text-ink-muted">Tasks</p>
                 {taskItems.length > 0 && (
                   <p className="font-mono text-[11px] text-ink-muted">
-                    {taskItems.filter((item) => isTerminalPlanStatus(item.status)).length}/{taskItems.length}
+                    {taskItems.filter((item) => isTerminalPlanStatus(item.status)).length}/
+                    {taskItems.length + tasksHiddenCount}
+                    {tasksHiddenCount > 0 ? ` · +${tasksHiddenCount} more` : ""}
                   </p>
                 )}
               </div>
-              <GraphAwareTodoList planTree={visiblePlanTree} workItems={taskItems} running={running} />
+              <GraphAwareTodoList
+                planTree={visiblePlanTree}
+                workItems={taskItems}
+                running={running}
+                agents={displayAgents}
+              />
+              {tasksHiddenCount > 0 && (
+                <p className="mt-1 px-2 text-[11px] text-ink-muted" data-testid="tasks-overflow-disclosure">
+                  +{tasksHiddenCount} more task{tasksHiddenCount === 1 ? "" : "s"} not shown
+                </p>
+              )}
             </section>
             {engagementCloseout && Object.keys(engagementCloseout).length > 0 && (
               <EngagementCloseoutCard closeout={engagementCloseout} />
@@ -763,8 +780,9 @@ function agentPlanItems(nodes: PlanNode[]): PlanNode[] {
  * Intentional TODO list for Status — CTF/checklist plan items only.
  * Workers live under Agent collaboration (not duplicated here).
  * Tool telemetry / coverage(mark) / findings stay out of Tasks.
+ * Spec #301: cap + hiddenCount via discloseTaskListCap (never silent truncate).
  */
-function unifiedTodoItems(nodes: PlanNode[]): PlanNode[] {
+function unifiedTodoItems(nodes: PlanNode[]): { items: PlanNode[]; hiddenCount: number } {
   const noiseKinds = new Set([
     "tool", "browser", "http", "poc", "scan", "traffic", "finding", "coverage", "verifier",
     "finish_scan", "workflow", "workflow_run", "workflow_list", "workflow_dynamic", "read", "actor",
@@ -817,26 +835,25 @@ function unifiedTodoItems(nodes: PlanNode[]): PlanNode[] {
     return true;
   });
 
-  return deduped
-    .sort((left, right) => {
-      // Stable primary sort by priority/id so lists do not thrash order on every status tick.
-      // Secondary: active work slightly preferred when priorities tie.
-      const rank = (status: string | undefined) => {
-        const s = String(status || "pending");
-        if (s === "running") return 0;
-        if (s === "todo" || s === "pending") return 1;
-        if (s === "blocked") return 2;
-        if (s === "failed") return 3;
-        if (s === "skipped") return 4;
-        return 5;
-      };
-      const byPri = Number(left.priority || 500) - Number(right.priority || 500);
-      if (byPri !== 0) return byPri;
-      const byStatus = rank(left.status) - rank(right.status);
-      if (byStatus !== 0) return byStatus;
-      return String(left.node_id || left.id || left.title || "").localeCompare(String(right.node_id || right.id || right.title || ""));
-    })
-    .slice(0, 40);
+  const sorted = deduped.sort((left, right) => {
+    // Stable primary sort by priority/id so lists do not thrash order on every status tick.
+    // Secondary: active work slightly preferred when priorities tie.
+    const rank = (status: string | undefined) => {
+      const s = String(status || "pending");
+      if (s === "running") return 0;
+      if (s === "todo" || s === "pending") return 1;
+      if (s === "blocked") return 2;
+      if (s === "failed") return 3;
+      if (s === "skipped") return 4;
+      return 5;
+    };
+    const byPri = Number(left.priority || 500) - Number(right.priority || 500);
+    if (byPri !== 0) return byPri;
+    const byStatus = rank(left.status) - rank(right.status);
+    if (byStatus !== 0) return byStatus;
+    return String(left.node_id || left.id || left.title || "").localeCompare(String(right.node_id || right.id || right.title || ""));
+  });
+  return discloseTaskListCap(sorted, TASKS_WORK_ITEM_CAP);
 }
 
 function synthesizeMainAgent(activeTool: string | undefined, running: boolean, workflowKind?: string): StrixAgentStatus[] {

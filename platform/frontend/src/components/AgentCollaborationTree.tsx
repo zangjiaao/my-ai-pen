@@ -7,6 +7,7 @@ import { Bot, GitBranch, Tag } from "lucide-react";
 import {
   agentDisplayName,
   agentPurposeLine,
+  compareAgentNames,
   looksLikeHandoffPackage,
 } from "../lib/workerPresentation";
 import type { StrixAgentStatus } from "../lib/panelTypes";
@@ -287,11 +288,12 @@ export function orderStrixAgents(agents: StrixAgentStatus[]): StrixAgentStatus[]
     }
     return count;
   };
+  // Spec #301: numeric Worker N order (1,2,10,11) — not localeCompare lex (1,10,11,2).
   return [...agents].sort(
     (left, right) =>
       depth(left) - depth(right) ||
       String(left.parent_id || "").localeCompare(String(right.parent_id || "")) ||
-      left.name.localeCompare(right.name),
+      compareAgentNames(left.name, right.name),
   );
 }
 
