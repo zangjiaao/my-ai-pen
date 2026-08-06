@@ -147,17 +147,34 @@ def test_graph_session_continue_stays_graph():
 
 
 def test_graph_completed_c1_continue():
-    """Spec #282 S5: post-complete C1 still wires continue (free-in-envelope)."""
+    """Spec #282 S5: post-complete C1 when composer free/absent (not re-enter Graph).
+
+    Spec #284 B1: this-turn composer product Graph is enter-Hard, not C1.
+    C1 free-in-envelope only when Session already Graph + completed + 不指定/absent.
+    """
     env = resolve_work_envelope(
         expert_id="e1",
         session_work_mode="graph",
         session_graph_id="app_assessment",
-        composer_template="app_assessment",
+        composer_template=None,  # same-mode continue after complete
         conversation_status="completed",
     )
     assert env["work_mode"] == "graph"
     assert env["graph_execution"] == "continue_session"
     assert env["wire_graph_execution"] == "continue"
+
+    # 不指定 / free aliases also keep Graph Session and C1 (A1 + S5).
+    for composer in ("不指定", "free", ""):
+        env_free = resolve_work_envelope(
+            expert_id="e1",
+            session_work_mode="graph",
+            session_graph_id="app_assessment",
+            composer_template=composer,
+            conversation_status="completed",
+        )
+        assert env_free["work_mode"] == "graph", composer
+        assert env_free["graph_execution"] == "continue_session", composer
+        assert env_free["wire_graph_execution"] == "continue", composer
 
 
 def test_explicit_full_restart():
@@ -467,12 +484,15 @@ def test_s4_free_continue_sticky_graph_stays_free():
 
 
 def test_s5_graph_completed_c1_not_resume():
-    """S5: Graph completed + follow-up → C1 continue (free-in-envelope), not resume."""
+    """S5: Graph completed + follow-up without re-select Graph → C1, not resume.
+
+    Spec #284: re-selecting product Graph on composer is Hard full_restart, not C1.
+    """
     env = resolve_work_envelope(
         expert_id="e1",
         session_work_mode="graph",
         session_graph_id="app_assessment",
-        composer_template="app_assessment",
+        composer_template=None,  # same-mode follow-up (no this-turn Workflow re-enter)
         conversation_status="completed",
         same_mode_continue=False,
     )
@@ -667,6 +687,7 @@ def test_wire_graph_execution_for_status_incomplete_never_c1():
 def test_is_incomplete_like_status():
     assert is_incomplete_like_status("failed") is True
     assert is_incomplete_like_status("cancelled") is True
+    assert is_incomplete_like_status("interrupted") is True
     assert is_incomplete_like_status("completed") is False
     assert is_incomplete_like_status(None) is False
 

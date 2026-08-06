@@ -4426,49 +4426,6 @@ def _task_assign_from_user_message(conv_id: str, msg: dict, task_id: str) -> dic
     return out
 
 
-async def _apply_graph_execution_c1(conv_id: str | None, task_msg: dict, msg: dict) -> dict:
-    """Attach structured graph_execution when C1/resume policy resolves.
-
-    Prefer `_apply_participant_work_envelope` on product dispatch (Spec #277 / #282).
-    This legacy helper is aligned with #282: incomplete-like product Graph wires
-    ``resume`` (Hard path), never C1 ``continue`` free-in-envelope.
-    """
-    from app.services.participant_session import wire_graph_execution_for_status
-
-    out = dict(task_msg or {})
-    explicit = (
-        msg.get("graph_execution")
-        or msg.get("graphExecution")
-        or out.get("graph_execution")
-        or out.get("graphExecution")
-        or ""
-    )
-    et = str(out.get("engagement_template") or out.get("engagementTemplate") or "").strip()
-    status: str | None = None
-    if conv_id:
-        try:
-            status = await _conversation_status(str(conv_id))
-        except Exception:
-            # Leave execution unset on status fetch failure (Node first-run full when hard).
-            import logging
-
-            logging.getLogger(__name__).warning(
-                "graph_execution C1: conversation status fetch failed conv_id=%s",
-                conv_id,
-                exc_info=True,
-            )
-            status = None
-
-    resolved = wire_graph_execution_for_status(
-        engagement_template=et,
-        conversation_status=status,
-        explicit_execution=explicit,
-    )
-    if resolved is not None:
-        out["graph_execution"] = resolved
-    return out
-
-
 async def _apply_participant_work_envelope(
     conv_id: str | None,
     task_msg: dict,
@@ -4485,6 +4442,7 @@ async def _apply_participant_work_envelope(
     from app.services.case_engagement import case_fields_from_context
     from app.services.participant_session import (
         apply_work_envelope_to_task_assign,
+        composer_template_from_message,
         resolve_work_envelope,
         session_record_from_context,
     )
@@ -4519,10 +4477,7 @@ async def _apply_participant_work_envelope(
     case_fields = case_fields_from_context(context)
 
     # This-turn composer only when message carries the field (absent ≠ sticky inject).
-    if "engagement_template" in msg or "engagementTemplate" in msg:
-        composer = msg.get("engagement_template", msg.get("engagementTemplate"))
-    else:
-        composer = None
+    composer = composer_template_from_message(msg)
 
     explicit = (
         msg.get("graph_execution")

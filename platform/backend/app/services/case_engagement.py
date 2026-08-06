@@ -202,29 +202,52 @@ def roe_payload_for_task_assign(context: object) -> dict[str, Any]:
     return out
 
 
-def resolve_graph_execution(
-    *,
-    engagement_template: object = None,
-    conversation_status: object = None,
-    explicit_execution: object = None,
-) -> str | None:
-    """Resolve structured graph_execution for task_assign (C1).
+# Product-settled complete terminals (C1 free-in-envelope candidate when Session Graph).
+COMPLETED_LIKE_STATUSES = frozenset({"completed", "complete", "done"})
 
-    Returns "full" | "continue" | None (omit — Node first-run full when hard resolves).
-    Structured only — never NLP on free-text instruction.
-    Retest / full re-run is explicit graph_execution=full (map #81 later).
+
+def is_completed_like_status(status: object) -> bool:
+    """True when conversation status is product-settled complete (not incomplete-like)."""
+    return str(status or "").strip().lower() in COMPLETED_LIKE_STATUSES
+
+
+def parse_explicit_graph_execution(explicit_execution: object = None) -> str | None:
+    """Parse explicit wire graph_execution only — no status invent.
+
+    Returns ``"full"`` | ``"continue"`` | None.
+    Product dispatch (Spec #284) must use this for explicit wire, never status-only C1 invent.
     """
     raw = str(explicit_execution or "").strip().lower()
     if raw in {"full", "run", "restart"}:
         return "full"
     if raw in {"continue", "continue_chat", "envelope"}:
         return "continue"
+    return None
+
+
+def resolve_graph_execution(
+    *,
+    engagement_template: object = None,
+    conversation_status: object = None,
+    explicit_execution: object = None,
+) -> str | None:
+    """Legacy C1 invent helper — **not** product dispatch SOT (Spec #284).
+
+    Explicit wire via ``parse_explicit_graph_execution``; otherwise invents
+    ``continue`` from completed status + product template **without** this-turn
+    enter-Graph gate (unsafe for composer Graph — field e4876015). Product path:
+    ``resolve_work_envelope`` only.
+
+    Returns "full" | "continue" | None.
+    """
+    explicit = parse_explicit_graph_execution(explicit_execution)
+    if explicit is not None:
+        return explicit
 
     if not is_product_graph_template(engagement_template):
         return None
 
-    status = str(conversation_status or "").strip().lower()
-    if status in {"completed", "complete", "done"}:
+    if is_completed_like_status(conversation_status):
         return "continue"
     return None
 

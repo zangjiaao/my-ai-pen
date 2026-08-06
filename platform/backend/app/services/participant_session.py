@@ -10,8 +10,9 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from app.services.case_engagement import (
+    is_completed_like_status,
     normalize_product_engagement_template,
-    resolve_graph_execution,
+    parse_explicit_graph_execution,
 )
 
 WorkMode = Literal["free", "graph"]
@@ -163,15 +164,20 @@ def resolve_work_envelope(
     graph_id: str | None = None
     graph_execution: GraphExecution | None = None
     permission_required: str | None = None
+    # Spec #284 B1: this-turn explicit enter-Graph (composer product id or permission card)
+    # must take Hard path — never demote to C1 free-in-envelope solely because status=completed.
+    explicit_enter_graph = False
 
     # --- Mode resolution ---
     if perm_action in {"enter_graph", "accept_enter_graph"} and perm_graph:
         work_mode = "graph"
         graph_id = perm_graph
+        explicit_enter_graph = True
     elif perm_action in {"switch_graph", "accept_switch_graph"} and perm_graph:
         work_mode = "graph"
         graph_id = perm_graph
         graph_execution = "full_restart"
+        explicit_enter_graph = True
     elif perm_action in {"exit_graph", "accept_exit_graph"}:
         work_mode = "free"
         graph_id = None
@@ -183,10 +189,13 @@ def resolve_work_envelope(
         work_mode = "graph"
         graph_id = perm_graph or composer_gid or sess_gid
         graph_execution = "full_restart"
+        explicit_enter_graph = True
     elif composer_gid:
         # Explicit product graph this turn → user Workflow permission (wins over same-mode continue).
+        # Spec #284 B1: composer product Graph on send = enter-Graph permission for Hard harness.
         work_mode = "graph"
         graph_id = composer_gid
+        explicit_enter_graph = True
     elif not composer_is_absent and composer_free:
         # Spec #278 A1: 不指定 / free / empty = do not force mode change.
         # Session already Graph → stay Graph; otherwise Free (first turn / Free session).
@@ -211,28 +220,33 @@ def resolve_work_envelope(
         work_mode = "free"
         graph_id = None
 
-    # --- graph_execution (C1 post-complete vs incomplete Graph resume — Spec #282) ---
+    # --- graph_execution (C1 post-complete vs incomplete Graph resume — Spec #282 / #284) ---
+    # Product SOT for execution priority: this block only (no dual wire_graph_execution law).
     if work_mode == "graph" and graph_id:
         if graph_execution is None:
             incomplete_like = is_incomplete_like_status(conversation_status)
-            # Map existing C1 resolver; only after product-settled completed → free-in-envelope.
-            c1 = resolve_graph_execution(
-                engagement_template=graph_id,
-                conversation_status=conversation_status,
-                explicit_execution=explicit_execution,
-            )
-            if c1 == "full":
+            completed_like = is_completed_like_status(conversation_status)
+            # Explicit wire only — never status invent (parse_explicit, not resolve_graph_execution).
+            explicit_wire = parse_explicit_graph_execution(explicit_execution)
+            if explicit_wire == "full":
                 graph_execution = "full_restart"
+            elif explicit_enter_graph:
+                # Spec #284 B1/B2: this-turn product Graph → Hard path (never silent Free/C1).
+                # Completed prior work + re-select Graph = full restart of stages.
+                graph_execution = "full_restart" if completed_like else "run"
             elif incomplete_like and sess_mode == "graph":
                 # Spec #282 S1/S6: incomplete/interrupted/failed Graph Session must never
-                # wire as C1 "continue" (Node free-in-envelope). Resume Hard path instead.
+                # wire as C1 "continue" (Node free-in-envelope), even if client sends continue.
                 graph_execution = "resume"
-            elif c1 == "continue":
-                # Post-complete (or explicit continue_chat/envelope on completed) → C1.
+            elif explicit_wire == "continue":
+                # Operator/tool explicitly asked free-in-envelope continue (completed Graph).
+                graph_execution = "continue_session"
+            elif completed_like and sess_mode == "graph":
+                # Post-complete same-mode continue (composer free/absent, Session already Graph)
+                # → C1 free-in-envelope under sticky Graph RoE (Spec #282 S5).
                 graph_execution = "continue_session"
             else:
-                # First Graph run / composer-enter / non-incomplete same-mode: Hard full path.
-                # (same_mode_continue + incomplete is handled above via resume.)
+                # First Graph run / non-incomplete same-mode: Hard full path.
                 graph_execution = "run"
     else:
         graph_execution = None
@@ -300,14 +314,35 @@ def apply_work_envelope_to_task_assign(task_msg: dict | None, envelope: dict | N
 
 
 # Incomplete / interrupted Session terminals (Spec #282 incomplete Graph resume).
+# Includes wire synonym "interrupted" (product settle usually uses canceled/incomplete).
 INCOMPLETE_LIKE_STATUSES = frozenset(
-    {"failed", "incomplete", "paused", "canceled", "cancelled"}
+    {
+        "failed",
+        "incomplete",
+        "paused",
+        "canceled",
+        "cancelled",
+        "interrupted",
+    }
 )
 
 
 def is_incomplete_like_status(status: object) -> bool:
     """True when conversation status is incomplete/interrupted/failed (not completed)."""
     return str(status or "").strip().lower() in INCOMPLETE_LIKE_STATUSES
+
+
+def composer_template_from_message(msg: object) -> object:
+    """This-turn composer template only when the message carries the field.
+
+    Absent key ≠ Case sticky inject (Spec #277 / #284). Used by work-envelope apply.
+    Returns the raw value (including free aliases) or None when the field is omitted.
+    """
+    if not isinstance(msg, dict):
+        return None
+    if "engagement_template" in msg or "engagementTemplate" in msg:
+        return msg.get("engagement_template", msg.get("engagementTemplate"))
+    return None
 
 
 def resolve_interrupt_wind_down(
@@ -405,18 +440,23 @@ def wire_graph_execution_for_status(
     conversation_status: object = None,
     explicit_execution: object = None,
 ) -> str | None:
-    """Legacy C1 helper alignment (Spec #282): incomplete Graph never wires continue.
+    """Thin legacy adapter — **not** product dispatch SOT (Spec #284).
+
+    Product path: ``resolve_work_envelope`` only (enter-Graph / C1 / resume priority).
+    This helper maps incomplete product Graph → wire ``resume`` and otherwise uses
+    explicit parse + status invent for older C1 callers/tests. Does **not** reimplement
+    this-turn enter-Graph law (no ``explicit_enter_graph`` dual contract).
 
     Returns wire value ``"full"`` | ``"continue"`` | ``"resume"`` | None.
-    Prefer ``resolve_work_envelope`` on product dispatch; this is for C1-only callers.
     """
     from app.services.case_engagement import (
         is_product_graph_template,
+        parse_explicit_graph_execution as _parse_explicit,
         resolve_graph_execution,
     )
 
-    raw = str(explicit_execution or "").strip().lower()
-    if raw in {"full", "run", "restart"}:
+    explicit = _parse_explicit(explicit_execution)
+    if explicit == "full":
         return "full"
 
     # Incomplete product Graph must never emit C1 free-in-envelope ``continue``.
@@ -425,8 +465,11 @@ def wire_graph_execution_for_status(
     ):
         return "resume"
 
+    if explicit == "continue":
+        return "continue"
+
     return resolve_graph_execution(
         engagement_template=engagement_template,
         conversation_status=conversation_status,
-        explicit_execution=explicit_execution,
+        explicit_execution=None,  # already handled explicit above
     )

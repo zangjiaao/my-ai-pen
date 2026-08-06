@@ -11,7 +11,7 @@ import { useConversationStore } from "../stores/conversationStore";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { ApiError, authFetch } from "../lib/api";
 import { normalizeExecutionStatus } from "../lib/status";
-import { PHASES, PHASE_LABELS, phaseLabel } from "../lib/phase";
+import { PHASES, phaseLabel } from "../lib/phase";
 import {
   findAgentByIdExact,
   legacyWorkerDisplayName,
@@ -46,6 +46,7 @@ import type { AgentIdentity, Conversation, Message } from "../lib/types";
 import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../lib/securityTypes";
 import {
   ENGAGEMENT_TEMPLATES,
+  composerEngagementWireFields,
   ENGAGEMENT_UNSPECIFIED_LABEL,
   expertLabel,
   resolveExpertColor,
@@ -531,13 +532,13 @@ export default function ConversationPage() {
     setKanban(snapshot.kanban || fallback?.kanban);
     // Do not let a snapshot without Graph L1 stages wipe a live Expert Graph plan map
     // (platform used to strip phase nodes as "legacy" — keep richer live tree).
+    // Never invent or stick archaeology `plan-phase-*` shells for Default chat Tasks.
     setPlanTree((prev) => {
       const next = snapshot.plan_tree?.length
         ? snapshot.plan_tree
         : fallback?.plan_tree?.length
           ? fallback.plan_tree
           : [];
-      if (!next.length) return prev.length ? prev : [];
       return preferRicherPlanTree(prev, next);
     });
     // Backend case_participants.merge_panel_agents is source of truth for Subagent history.
@@ -1774,16 +1775,16 @@ export default function ConversationPage() {
     const eng =
       String(opts.engagement || "").trim() ||
       (resolvedMention?.kind === "expert" ? String(resolvedMention.packId || "").trim() : "");
-    const engTemplate = String(opts.engagementTemplate || "").trim();
+    // Spec #284 G6: product Graph on wire only for pentest seat (pack), never template-as-pack.
+    const launchIsPentest =
+      isPentestMentionTarget(resolvedMention) || eng.toLowerCase() === "pentest";
+    const engTemplateWire = composerEngagementWireFields(opts.engagementTemplate, {
+      isPentest: launchIsPentest,
+      allowPostex: typeof opts.allowPostex === "boolean" ? opts.allowPostex : undefined,
+    });
     const engagementPayload: Record<string, unknown> = {
       ...(eng ? { engagement: eng, role: eng } : {}),
-      ...(engTemplate
-        ? {
-            engagement_template: engTemplate,
-            allow_postex:
-              typeof opts.allowPostex === "boolean" ? opts.allowPostex : false,
-          }
-        : {}),
+      ...engTemplateWire,
     };
     const expertId =
       String(opts.expertId || "").trim() ||
@@ -2085,13 +2086,13 @@ export default function ConversationPage() {
       setPendingApprovals([]);
     }
     const isPentest = isPentestMentionTarget(resolved);
-    // Spec #277: 不指定 / null → Free on the wire (omit engagement_template; never silent Graph).
+    // Spec #277 / #284 G6: wire once here — launch reuses same template + allowPostex (no double-derive).
+    // 不指定 / null → omit; product Graph + pentest seat → engagement_template on user_message.
+    const wireTmpl = composerEngagementWireFields(engagementTemplate, { isPentest });
     const tmpl: EngagementTemplateId | "" =
-      isPentest && engagementTemplate
-        ? engagementTemplate
-        : "";
+      (wireTmpl.engagement_template as EngagementTemplateId | undefined) || "";
     const tmplAllowPostex =
-      tmpl ? ENGAGEMENT_TEMPLATES.find((t) => t.id === tmpl)?.allowPostex === true : false;
+      typeof wireTmpl.allow_postex === "boolean" ? wireTmpl.allow_postex : undefined;
     const enableGoal = isPentest && goalModeEnabled;
     // Asset「创建任务」draft: attach structured target/scope on first send after expert pick.
     const pendingAsset = pendingAssetTaskRef.current;
@@ -2113,19 +2114,21 @@ export default function ConversationPage() {
             conversationId: pendingAsset!.conversationId,
           }
         : {}),
+      // Pass already-resolved template; launchIsPentest gates allowlist again (seat axis only).
       engagementTemplate: tmpl || undefined,
-      allowPostex: isPentest ? tmplAllowPostex : undefined,
+      allowPostex: tmplAllowPostex,
       expertId: resolved?.kind === "expert" ? resolved.expertId : undefined,
     });
     // Persist Case RoE only when user explicitly selected a Graph Workflow (Spec #277:
     // Free/不指定 mode lives on Participant Session, not by writing Case sticky "free").
+    // Same postex boolean as wire (catalog default when omitted).
     if (activeId && isPentest && tmpl) {
       void authFetch(`/api/conversations/${activeId}/case`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           engagement_template: tmpl,
-          allow_postex: tmplAllowPostex,
+          allow_postex: tmplAllowPostex === true,
         }),
       }).catch(() => {});
     }
@@ -3478,7 +3481,9 @@ function snapshotFromMessages(messages: Message[], status: Conversation["status"
       intakeStatus: lastStatus.status,
     },
     progress: progressForPhase(phase, normalizedStatus),
-    plan_tree: planTreeForPhase(phase, normalizedStatus),
+    // Tasks SoT = plan_tree_updated / Graph plan / checkpoint todos — never invent
+    // pentest phase shells from status.phase (painted Default assistant chat as Graph).
+    plan_tree: [],
     findings: [],
     assets,
     pending_approvals: pending,
@@ -3610,18 +3615,6 @@ function progressForPhase(phase: string | undefined, status: Conversation["statu
   else if (phase && PHASES.includes(phase as typeof PHASES[number])) current = PHASES.indexOf(phase as typeof PHASES[number]) + 1;
   else if (status === "running") current = 1;
   return { current, total, percent: total ? Math.round((current / total) * 100) : 0 };
-}
-
-function planTreeForPhase(phase: string | undefined, status: Conversation["status"] | "running"): PlanNode[] {
-  const currentIndex = phase && PHASES.includes(phase as typeof PHASES[number]) ? PHASES.indexOf(phase as typeof PHASES[number]) : status === "running" ? 0 : -1;
-  return PHASES.map((key, index) => ({
-    node_id: `plan-phase-${key}`,
-    title: PHASE_LABELS[key],
-    kind: "phase",
-    level: "phase",
-    status: status === "completed" || index < currentIndex ? "done" : index === currentIndex ? "running" : "pending",
-    priority: index * 100,
-  }));
 }
 
 function isActiveMessage(msg: Record<string, unknown>, activeId: string | null): boolean {

@@ -49,6 +49,47 @@ export const ENGAGEMENT_TEMPLATES: readonly {
 /** Composer label when Workflow control is 不指定 (no force mode change on send). */
 export const ENGAGEMENT_UNSPECIFIED_LABEL = "不指定";
 
+/**
+ * Free / 不指定 aliases on the composer wire (must stay lockstep with platform
+ * `participant_session._FREE_COMPOSER_KEYS` — see living spec + both unit suites).
+ */
+export const FREE_COMPOSER_WIRE_ALIASES: readonly string[] = [
+  "",
+  "free",
+  "none",
+  "off",
+  "false",
+  "null",
+  "unspecified",
+  "不指定",
+] as const;
+
+/**
+ * Spec #284 G6: structured fields for WS user_message when user selected a product Graph.
+ * Case PUT sticky alone is not mode authority — this-turn wire must carry the template.
+ * 不指定 / null / non-pentest → omit (never silent Graph from sticky).
+ *
+ * ``allow_postex`` default when omitted = catalog RoE for that Graph id
+ * (e.g. redteam_deep → true, app_assessment → false), not a hard false.
+ */
+export function composerEngagementWireFields(
+  template: EngagementTemplateId | string | null | undefined,
+  options?: { isPentest?: boolean; allowPostex?: boolean },
+): { engagement_template?: EngagementTemplateId; allow_postex?: boolean } {
+  if (options?.isPentest === false) return {};
+  const raw = String(template || "").trim().toLowerCase();
+  if (!raw || (FREE_COMPOSER_WIRE_ALIASES as readonly string[]).includes(raw)) {
+    return {};
+  }
+  const known = ENGAGEMENT_TEMPLATES.find((t) => t.id === raw);
+  if (!known) return {};
+  return {
+    engagement_template: known.id,
+    allow_postex:
+      typeof options?.allowPostex === "boolean" ? options.allowPostex : known.allowPostex,
+  };
+}
+
 export type CapabilityItem = {
   id: string;
   label: string;

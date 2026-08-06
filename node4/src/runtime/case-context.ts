@@ -106,7 +106,7 @@ export function formatCaseContextInjection(ctx: CaseContext | undefined | null):
     lines.push(
       "",
       "### Findings already on ledger (re-verify open ones — do not skip)",
-      "Open priors on this asset are work to re-prove with **fresh** acts, then finding(confirm) (platform rediscovery merge). Prefer high/critical first. Interleave with remaining untested surface from recon.",
+      "Open priors on this asset are work to re-prove with **fresh** acts, then finding(confirm) with finding_id so **this Case** ledger updates (platform rediscovery merge / vuln_found). Chat “N verified” without confirm is not a Finding. Prefer high/critical first. Interleave with remaining untested surface from recon.",
     );
     for (const f of findings) {
       const sev = f.severity ? `[${f.severity}] ` : "";
@@ -155,7 +155,7 @@ export function formatCaseContextInjection(ctx: CaseContext | undefined | null):
   );
   if (findings.length) {
     lines.push(
-      "When open ledger findings exist on Scope assets: **re-verify** them with fresh proof (rediscovery), then keep discovering untested modules — listing priors is not completion.",
+      "When open ledger findings exist on Scope assets: **re-verify** them with fresh proof (rediscovery) and booking via finding(confirm) — listing priors or chat summary is not completion and does not fill this Case Findings panel.",
     );
   }
 
