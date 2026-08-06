@@ -6,7 +6,7 @@
  * Spec #305: thinking may carry content.status; empty running thinking upserts; pending may carry speaker attribution.
  */
 
-import { mergeThinkingStatus } from "./status";
+import { mergeThinkingStatus, normalizeExecutionStatus } from "./status";
 
 /** React list key: one key per progressive stream so thinking turns do not share a DOM node. */
 export function messageListKey(msg: {
@@ -231,15 +231,20 @@ export function pruneLiveCatchUp(
     }
     const durableText = String(row.text || "");
     const liveText = frame.text || "";
-    const liveStatus = String(frame.content?.status ?? "").trim().toLowerCase();
-    const durableStatus = String(row.status ?? "").trim().toLowerCase();
+    // Spec #305 R2: use normalizeExecutionStatus for running/done parity (not raw ===).
+    const liveRaw = String(frame.content?.status ?? "").trim();
+    const durableRaw = String(row.status ?? "").trim();
+    const liveIsRunning =
+      Boolean(liveRaw) && normalizeExecutionStatus(liveRaw) === "running";
+    const durableIsDone =
+      Boolean(durableRaw) && normalizeExecutionStatus(durableRaw) === "done";
     // Empty running thinking: keep live until durable has done (or longer body).
     if (
       frame.msgType === "thinking"
       && !liveText
-      && liveStatus === "running"
+      && liveIsRunning
       && !durableText
-      && durableStatus !== "done"
+      && !durableIsDone
     ) {
       next[sid] = frame;
       continue;

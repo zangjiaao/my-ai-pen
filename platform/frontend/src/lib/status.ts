@@ -58,6 +58,24 @@ export function mergeThinkingStatus(existing: unknown, incoming: unknown): strin
 }
 
 /**
+ * Merge tool lifecycle status for RQ / grouped tool cards (Spec #305 R2).
+ * Prefer fail, then done over running; keep empty when both missing so result-hint
+ * success can still apply in MessageRenderer (do not invent "running").
+ */
+export function mergeToolLifecycleStatus(existing: unknown, incoming: unknown): string {
+  const eRaw = String(existing ?? "").trim();
+  const iRaw = String(incoming ?? "").trim();
+  if (!eRaw && !iRaw) return "";
+  const eN = eRaw ? normalizeExecutionStatus(eRaw) : null;
+  const iN = iRaw ? normalizeExecutionStatus(iRaw) : null;
+  if (eN === "fail" || iN === "fail") return "fail";
+  if (eN === "done" || iN === "done") return "done";
+  if (iRaw) return iN === "running" ? "running" : iRaw;
+  if (eRaw) return eN === "running" ? "running" : eRaw;
+  return "";
+}
+
+/**
  * Tool item success for activity summary (Spec #305 S+).
  * Explicit running is never "successful" even if result payload has HTTP 200 / ok.
  * Empty/missing status may use result hints (legacy stdout rows).

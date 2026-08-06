@@ -396,6 +396,12 @@ import {
     { streamId: "n4-thinking-run", text: "", status: "done" },
   ]);
   assert.equal(dropped["n4-thinking-run"], undefined, "prune when durable done");
+
+  // R2: durable completed synonym counts as done via normalizeExecutionStatus
+  const droppedCompleted = pruneLiveCatchUp(live, [
+    { streamId: "n4-thinking-run", text: "", status: "completed" },
+  ]);
+  assert.equal(droppedCompleted["n4-thinking-run"], undefined, "prune when durable completed");
   console.log("ok: Issue 11 prune empty running thinking only after durable done");
 }
 

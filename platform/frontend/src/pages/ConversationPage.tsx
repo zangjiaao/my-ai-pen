@@ -14,7 +14,7 @@ import EvidenceDetailDialog from "../components/EvidenceDetailDialog";
 import { useConversationStore } from "../stores/conversationStore";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { ApiError, authFetch } from "../lib/api";
-import { mergeThinkingStatus, normalizeExecutionStatus } from "../lib/status";
+import { mergeThinkingStatus, mergeToolLifecycleStatus, normalizeExecutionStatus } from "../lib/status";
 import { PHASES, phaseLabel } from "../lib/phase";
 import {
   findAgentByIdExact,
@@ -797,12 +797,15 @@ export default function ConversationPage() {
       // Spec #276: tools use tool_call cards only — never reseed pending chrome or live-slot.
       setPendingChrome((cur) => reducePendingChrome(cur, { type: "tool_output" }));
       markMessageAutoScroll();
+      // Spec #305 R2: keep raw lifecycle (incl. empty) so MessageRenderer can use
+      // result hints for success; do not force missing → "running" here.
+      const rawStatus = String(m.status ?? "").trim();
       const incoming = makeMessage(convId, "agent", "tool_call", {
         ...agentAttribution(m),
         tool_name: m.tool_name || "",
         tool_run_id: m.tool_run_id,
         command: m.command || "",
-        status: normalizeExecutionStatus(m.status),
+        status: rawStatus,
         stdout: m.stdout || (m.line ? `${m.line}\n` : ""),
         evidence_id: m.evidence_id,
         summary: m.summary || m.line || "",
@@ -815,7 +818,7 @@ export default function ConversationPage() {
         tool_items: [{
           tool_name: m.tool_name || "",
           tool_run_id: m.tool_run_id,
-          status: normalizeExecutionStatus(m.status),
+          status: rawStatus,
           stdout: m.stdout || m.line || "",
           command: m.command || "",
           evidence_id: m.evidence_id,
@@ -3080,7 +3083,12 @@ function normalizeMessage(conversationId: string) {
     const msgType = String(m.msg_type || "text");
     const content = { ...((m.content || {}) as Record<string, unknown>) };
     content.message_id = String(m.id || content.message_id || "");
-    if (msgType === "tool_call") content.status = normalizeExecutionStatus(content.status);
+    // Spec #305 R2: do not force tool_call missing status → "running" here.
+    // MessageRenderer uses raw status + result hints for 执行中 / success family.
+    if (msgType === "tool_call" && content.status != null && content.status !== "") {
+      // Keep explicit protocol values as stored (running|done|fail synonyms raw).
+      content.status = String(content.status).trim();
+    }
     return {
       id: String(m.id || content.message_id || crypto.randomUUID()),
       conversation_id: String(m.conversation_id || conversationId),
@@ -3179,6 +3187,7 @@ function mergeMessageRecords(existing: MessageRecord, incoming: MessageRecord): 
   if (existingType !== "tool_call" || incomingType !== "tool_call") return incoming;
   const existingContent = recordContent(existing);
   const incomingContent = recordContent(incoming);
+  const mergedStatus = mergeToolLifecycleStatus(existingContent.status, incomingContent.status);
   return {
     ...existing,
     ...incoming,
@@ -3187,7 +3196,8 @@ function mergeMessageRecords(existing: MessageRecord, incoming: MessageRecord): 
       ...incomingContent,
       command: incomingContent.command || existingContent.command || "",
       stdout: appendStdout(readString(existingContent.stdout), readString(incomingContent.stdout)),
-      status: normalizeExecutionStatus(incomingContent.status || existingContent.status),
+      // Prefer done over running; keep empty when both missing (result-hint path).
+      ...(mergedStatus ? { status: mergedStatus } : { status: "" }),
     },
     created_at: incoming.created_at || existing.created_at,
   };
@@ -3613,10 +3623,8 @@ function appendGroupedStdout(current: string, incoming: string): string {
 }
 
 function mergeGroupedToolStatus(previous: string, incoming: string): string {
-  const values = [previous, incoming].map(value => normalizeExecutionStatus(value));
-  if (values.includes("fail")) return "fail";
-  if (values.includes("running")) return "running";
-  return incoming || previous || "done";
+  // Spec #305 R2: prefer fail/done over running; do not invent done/running from empty.
+  return mergeToolLifecycleStatus(previous, incoming);
 }
 function snapshotFromMessages(messages: Message[], status: Conversation["status"] | "running" | string): ConversationSnapshot {
   const normalizedStatus = String(status || "created") as Conversation["status"];

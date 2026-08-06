@@ -1782,10 +1782,18 @@ def _merge_tool_items(existing: dict, incoming: dict) -> list[dict]:
 
 
 def _merge_thinking_status(existing: object, incoming: object) -> str | None:
-    """Prefer terminal done over stale running; never drop done (Spec #305)."""
+    """Prefer terminal done over stale running; never drop done (Spec #305).
+
+    Done synonyms MUST stay aligned with frontend normalizeExecutionStatus
+    (platform/frontend/src/lib/status.ts):
+      done | ok | success | completed | complete | saved | loaded
+    Fail synonyms (for reference; thinking rarely uses them):
+      fail | failed | error | blocked | canceled | cancelled
+    Empty / unknown → not done (caller keeps raw running etc.).
+    """
+    done_vals = {"done", "ok", "success", "completed", "complete", "saved", "loaded"}
     e = str(existing or "").strip().lower()
     i = str(incoming or "").strip().lower()
-    done_vals = {"done", "ok", "success", "completed", "complete", "saved", "loaded"}
     if e in done_vals or i in done_vals:
         return "done"
     if i:

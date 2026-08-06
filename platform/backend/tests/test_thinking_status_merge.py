@@ -9,6 +9,11 @@ def test_merge_thinking_status_prefers_done():
     assert _merge_thinking_status("done", None) == "done"
     assert _merge_thinking_status(None, "running") == "running"
     assert _merge_thinking_status(None, None) is None
+    # FE normalizeExecutionStatus synonym lockstep
+    assert _merge_thinking_status("running", "completed") == "done"
+    assert _merge_thinking_status("ok", "running") == "done"
+    assert _merge_thinking_status("running", "success") == "done"
+    assert _merge_thinking_status("saved", "running") == "done"
 
 
 def test_merge_saved_thinking_keeps_longer_body_and_done_status():

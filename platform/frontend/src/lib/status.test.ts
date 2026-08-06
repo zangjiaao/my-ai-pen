@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import {
   isSuccessfulToolExecution,
   mergeThinkingStatus,
+  mergeToolLifecycleStatus,
   normalizeExecutionStatus,
   resolveThinkingUiStatus,
   resolveToolItemStatus,
@@ -41,6 +42,19 @@ import {
   assert.equal(mergeThinkingStatus("running", "completed"), "done");
   assert.equal(mergeThinkingStatus("ok", "running"), "done");
   console.log("ok: mergeThinkingStatus prefers done via normalize");
+}
+
+// Spec #305 R2: tool lifecycle merge keeps empty; prefer done
+{
+  assert.equal(mergeToolLifecycleStatus("", ""), "");
+  assert.equal(mergeToolLifecycleStatus(undefined, undefined), "");
+  assert.equal(mergeToolLifecycleStatus("running", "done"), "done");
+  assert.equal(mergeToolLifecycleStatus("done", "running"), "done");
+  assert.equal(mergeToolLifecycleStatus("running", "completed"), "done");
+  assert.equal(mergeToolLifecycleStatus("", "running"), "running");
+  assert.equal(mergeToolLifecycleStatus("running", ""), "running");
+  assert.equal(mergeToolLifecycleStatus("error", "done"), "fail");
+  console.log("ok: mergeToolLifecycleStatus prefer-done keeps empty");
 }
 
 // Issue 13: ThinkingCard presentational projection
