@@ -3,9 +3,14 @@ from app.services.case_workset import (
     apply_settle_to_context,
     auto_check_safe,
     adopt_item,
+    clear_in_progress,
+    detect_goal_mode_on,
+    detect_user_stopped_settle,
     evaluate_goal_terminal,
+    expand_task_scope_for_host,
     get_workset,
     goal_auto_adopt,
+    goal_wants_session_free,
     mechanical_gate,
     merge_proposed_items,
     normalize_candidate,
@@ -14,6 +19,7 @@ from app.services.case_workset import (
     put_workset,
     reorder_items,
     scope_hosts_from_task,
+    set_in_progress,
     thin_handoff_brief,
     update_item_status,
 )
@@ -302,10 +308,12 @@ def test_apply_settle_free_path_and_goal_off():
     assert all(i["status"] == "proposed" for i in ws["items"])
 
 
-def test_apply_settle_goal_on_auto_adopt_returns_free():
+def test_apply_settle_goal_on_auto_adopt_keeps_running():
+    """After Goal auto-adopt, unfinished adopted surfaces keep Goal running (not complete)."""
     ctx = {
         "task": {
             **_task(),
+            "goal_mode": True,
             "goal_objective": "Maximize verified findings",
         }
     }
@@ -326,8 +334,207 @@ def test_apply_settle_goal_on_auto_adopt_returns_free():
     assert any(i["status"] == "adopted" for i in surfaces)
     assert all(i["status"] == "proposed" for i in hosts)
     assert ctx2.get("goal_outer", {}).get("return_to") == "free"
-    # With adopted open, may continue (not necessarily complete)
+    # Unfinished adopted deepen work → terminal null / running (Issue 1)
+    assert ctx2.get("goal_outer", {}).get("terminal") is None
     assert ws["goal"] is not None
+    assert ws["goal"].get("status") == "running"
+    assert ws["goal"].get("terminal") is None
+    # Residual hosts still reported while running
+    residual = ctx2.get("goal_outer", {}).get("residual") or ws["goal"].get("residual")
+    assert residual and residual.get("class") == "awaiting_scope_confirm"
+
+
+def test_goal_terminal_running_with_adopted_surface():
+    ws = {
+        "version": 1,
+        "items": [
+            {
+                "id": "a1",
+                "family": "t_surface",
+                "status": "adopted",
+                "title": "deepen /admin",
+                "payload": {"location": "http://target.local/admin", "host": "target.local", "in_scope": True},
+                "auto_eligible": True,
+            },
+            {
+                "id": "h1",
+                "family": "t_host",
+                "status": "proposed",
+                "title": "side.lab",
+                "payload": {"host": "side.lab", "in_scope": False},
+            },
+        ],
+        "goal": {"status": "running", "outer_budget": 8, "outer_rounds": 1},
+    }
+    result = evaluate_goal_terminal(ws, goal_on=True)
+    assert result["terminal"] is None
+    assert result["status"] == "running"
+    assert result["return_to"] == "free"
+    assert result["residual"]["class"] == "awaiting_scope_confirm"
+
+
+def test_goal_terminal_complete_when_no_unfinished_deepen():
+    ws = {
+        "version": 1,
+        "items": [
+            {
+                "id": "d1",
+                "family": "t_surface",
+                "status": "done",
+                "title": "done surface",
+                "payload": {"location": "http://target.local/x", "host": "target.local"},
+            },
+            {
+                "id": "h1",
+                "family": "t_host",
+                "status": "proposed",
+                "title": "pending.lab",
+                "payload": {"host": "pending.lab", "in_scope": False},
+            },
+        ],
+        "goal": {"status": "running", "outer_budget": 8, "outer_rounds": 1},
+    }
+    result = evaluate_goal_terminal(ws, goal_on=True)
+    assert result["terminal"] == "goal_complete"
+    assert result["residual"]["class"] == "awaiting_scope_confirm"
+    assert result["full_coverage"] is False
+
+
+def test_goal_terminal_in_progress_blocks_complete():
+    ws = {
+        "version": 1,
+        "items": [
+            {
+                "id": "run",
+                "family": "t_surface",
+                "status": "adopted",
+                "in_progress": True,
+                "title": "running",
+                "payload": {"location": "http://target.local/y", "host": "target.local"},
+            },
+        ],
+        "goal": {"status": "running", "outer_budget": 8, "outer_rounds": 0},
+    }
+    result = evaluate_goal_terminal(ws, goal_on=True)
+    assert result["terminal"] is None
+    assert result["status"] == "running"
+
+
+def test_incomplete_status_is_not_user_stop():
+    """Harness status=incomplete is normal partial settle — not Goal user-stop."""
+    assert detect_user_stopped_settle({"status": "incomplete"}) is False
+    assert detect_user_stopped_settle({"status": "incomplete", "stop_reason": "hard_graph_incomplete"}) is False
+    assert detect_user_stopped_settle({"status": "completed", "stop_reason": "aborted"}) is True
+    assert detect_user_stopped_settle({"stop_reason": "user_interrupt"}) is True
+    assert detect_user_stopped_settle({"stop_reason": "cancelled"}) is True
+    # incomplete + goal_on settle must not become goal_stopped
+    ctx = apply_settle_to_context(
+        {"task": {**_task(), "goal_mode": True}},
+        candidates=[
+            {"location": "http://target.local/z", "host": "target.local", "in_scope": True},
+        ],
+        source="hard_settle",
+        goal_on=True,
+        user_stopped=detect_user_stopped_settle({"status": "incomplete", "stop_reason": "hard_graph_incomplete"}),
+        bump_outer_round=True,
+    )
+    assert ctx.get("goal_outer", {}).get("terminal") != "goal_stopped"
+    assert get_workset(ctx)["goal"]["status"] != "goal_stopped"
+
+
+def test_goal_mode_prefers_explicit_flag_not_bare_objective():
+    assert detect_goal_mode_on(msg={"goal_mode": True}) is True
+    assert detect_goal_mode_on(task={"goal_mode": True, "goal_objective": "x"}) is True
+    # Bare objective string alone is not Goal-on for Workset valve
+    assert detect_goal_mode_on(msg={"goal_objective": "Maximize findings"}) is False
+    assert detect_goal_mode_on(task={"goal_objective": "Maximize findings"}) is False
+    assert detect_goal_mode_on(msg={}, task={}) is False
+    assert detect_goal_mode_on(msg={"goal_mode": "true"}) is True
+
+
+def test_path_only_surface_not_auto_eligible_when_scope_hosts_nonempty():
+    path_only = {
+        "family": "t_surface",
+        "title": "/admin",
+        "status": "proposed",
+        "payload": {"location": "/admin", "path": "/admin", "in_scope": True},
+    }
+    assert auto_check_safe(path_only, SCOPE) is False
+    gate = mechanical_gate(path_only, scope_hosts=SCOPE, for_auto_adopt=True)
+    assert gate["auto_eligible"] is False
+    # With host in scope, still eligible
+    with_host = {
+        "family": "t_surface",
+        "title": "admin",
+        "status": "proposed",
+        "payload": {
+            "location": "http://target.local/admin",
+            "host": "target.local",
+            "in_scope": True,
+        },
+    }
+    assert auto_check_safe(with_host, SCOPE) is True
+
+
+def test_expand_task_scope_for_host_extends_allow():
+    task = _task()
+    expanded, err = expand_task_scope_for_host(
+        task,
+        host="new-host.lab",
+        port="443",
+        urls=["https://new-host.lab/"],
+    )
+    assert err is None
+    allow = expanded["scope"]["allow"]
+    assert any("new-host.lab" in str(a) for a in allow)
+    # prior allow preserved
+    assert any("target.local" in str(a) for a in allow)
+    bad, err2 = expand_task_scope_for_host(task, host="not a host!!!")
+    assert err2 is not None
+    assert bad is task or bad == task or isinstance(bad, dict)
+
+
+def test_set_and_clear_in_progress_single_baton():
+    ws = merge_proposed_items(
+        {"version": 1, "items": [], "goal": None},
+        [
+            {"location": "http://target.local/a", "host": "target.local", "in_scope": True},
+            {"location": "http://target.local/b", "host": "target.local", "in_scope": True},
+        ],
+        source="free_settle",
+        scope_hosts=SCOPE,
+    )
+    a_id, b_id = ws["items"][0]["id"], ws["items"][1]["id"]
+    ws, _, _ = adopt_item(ws, a_id, actor="user", scope_hosts=SCOPE)
+    ws, _, _ = adopt_item(ws, b_id, actor="user", scope_hosts=SCOPE)
+    ws = set_in_progress(
+        ws,
+        a_id,
+        expert_id="exp1",
+        expert_name="Alice",
+        graph_id="app_assessment",
+        work_mode="graph",
+    )
+    by_id = {i["id"]: i for i in ws["items"]}
+    assert by_id[a_id]["in_progress"] is True
+    assert by_id[a_id]["expert_id"] == "exp1"
+    assert by_id[a_id]["graph_id"] == "app_assessment"
+    assert by_id[b_id].get("in_progress") in (False, None)
+    # Second baton clears first
+    ws = set_in_progress(ws, b_id, expert_id="exp1", work_mode="free")
+    by_id = {i["id"]: i for i in ws["items"]}
+    assert by_id[a_id].get("in_progress") is False
+    assert by_id[b_id]["in_progress"] is True
+    assert by_id[b_id]["work_mode"] == "free"
+    ws = clear_in_progress(ws)
+    assert all(not i.get("in_progress") for i in ws["items"])
+
+
+def test_goal_wants_session_free_when_return_to_free():
+    assert goal_wants_session_free({"return_to": "free", "terminal": None}) is True
+    assert goal_wants_session_free({"return_to": "free", "terminal": "goal_complete"}) is True
+    assert goal_wants_session_free({"return_to": "graph"}) is False
+    assert goal_wants_session_free(None) is False
 
 
 def test_thin_brief_not_fat_dump():

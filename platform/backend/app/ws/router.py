@@ -2816,6 +2816,7 @@ async def _remember_conversation_task(
     scope: dict,
     instruction: str,
     goal_objective: str | None = None,
+    goal_mode: bool | None = None,
     engagement: str | None = None,
     expert_id: str | None = None,
     expert_name: str | None = None,
@@ -2824,11 +2825,13 @@ async def _remember_conversation_task(
     accounts: object = None,
     asset_id: str | None = None,
     work_mode: str | None = None,
+    workset_item_id: str | None = None,
 ):
     try:
         from app.db.base import async_session
         from app.models.conversation import Conversation
         from app.services.case_engagement import merge_case_into_context, resolve_allow_postex
+        from app.services.case_workset import get_workset, put_workset, set_in_progress
         from app.services.participant_session import merge_session_into_context
 
         async with async_session() as db:
@@ -2849,6 +2852,13 @@ async def _remember_conversation_task(
             go = str(goal_objective or "").strip() or str(prev_task.get("goal_objective") or "").strip()
             if go:
                 task_blob["goal_objective"] = go
+            # Sticky goal_mode so settle valve does not depend on bare goal_objective.
+            if goal_mode is True or goal_mode in ("true", "1", 1, "yes"):
+                task_blob["goal_mode"] = True
+            elif goal_mode is False:
+                task_blob["goal_mode"] = False
+            elif prev_task.get("goal_mode") in (True, "true", "1", 1, "yes"):
+                task_blob["goal_mode"] = True
             # Sticky engagement/pack must survive follow-ups that omit the field.
             eng = str(engagement or prev_task.get("engagement") or prev_task.get("role") or "").strip()
             if eng:
@@ -2943,6 +2953,19 @@ async def _remember_conversation_task(
                     allow_postex=task_blob.get("allow_postex"),
                     accounts=task_blob.get("accounts"),
                 )
+            # Spec #311: in-progress 下一步 annotation when baton starts with explicit Next id.
+            next_id = str(workset_item_id or "").strip()
+            if next_id:
+                ws = get_workset(context)
+                ws = set_in_progress(
+                    ws,
+                    next_id,
+                    expert_id=str(task_blob.get("expert_id") or expert_id or "").strip() or None,
+                    expert_name=str(task_blob.get("expert_name") or expert_name or "").strip() or None,
+                    graph_id=et if mode == "graph" else None,
+                    work_mode=mode if mode in {"free", "graph"} else None,
+                )
+                context = put_workset(context, ws)
             c.context = context
             await db.commit()
     except Exception as e:
@@ -3913,6 +3936,7 @@ async def _remember_next_scope_candidates(conv_id: str, msg: dict) -> None:
         next_only = [c for c in cands if isinstance(c, dict) and not c.get("in_scope")]
         if not next_only and msg.get("next_scope_candidates") is None:
             next_only = [c for c in cands if isinstance(c, dict)]
+    free_land: dict | None = None
     try:
         from app.db.base import async_session
         from app.models.conversation import Conversation
@@ -3932,17 +3956,21 @@ async def _remember_next_scope_candidates(conv_id: str, msg: dict) -> None:
                 context["next_scope_suggested"] = bool(next_only)
 
             task = context.get("task") if isinstance(context.get("task"), dict) else {}
-            goal_on = bool(
-                msg.get("goal_mode") in (True, "true", "1", 1)
-                or task.get("goal_mode") in (True, "true", "1", 1)
-                or str(task.get("goal_objective") or msg.get("goal_objective") or "").strip()
+            from app.services.case_workset import (
+                detect_goal_mode_on,
+                detect_user_stopped_settle,
+                goal_wants_session_free,
             )
+
+            # Explicit goal_mode only — bare goal_objective is not Goal-on for Workset valve.
+            goal_on = detect_goal_mode_on(msg=msg, task=task)
             source = str(msg.get("workset_source") or "").strip()
             if not source:
                 work_mode = str(msg.get("work_mode") or "")
                 source = "hard_settle" if work_mode.startswith("hard_graph") else "free_settle"
+            # Real abort/cancel only — harness status=incomplete is not user stop.
+            user_stopped = detect_user_stopped_settle(msg)
             stop_reason = str(msg.get("stop_reason") or "").lower()
-            user_stopped = "abort" in stop_reason or "interrupt" in stop_reason or msg.get("status") == "incomplete"
             blocked = str(msg.get("status") or "").lower() == "blocked" or "blocked" in stop_reason
 
             context = apply_settle_to_context(
@@ -3961,6 +3989,51 @@ async def _remember_next_scope_candidates(conv_id: str, msg: dict) -> None:
                 blocked=blocked,
                 bump_outer_round=goal_on,
             )
+
+            # Spec #311 Free-as-glue: after Goal settle (return_to free), land Participant
+            # Session work_mode Free — no Graph auto-chain. Free kickoff remains human/agent
+            # turn (thin brief on next assign); we only settle mode SOT here.
+            goal_outer_pre = context.get("goal_outer") if isinstance(context.get("goal_outer"), dict) else None
+            if goal_on and goal_wants_session_free(goal_outer_pre):
+                try:
+                    from app.services.participant_session import (
+                        merge_session_into_context,
+                        session_record_from_context,
+                    )
+
+                    task_now = context.get("task") if isinstance(context.get("task"), dict) else {}
+                    session_eid = str(
+                        task_now.get("expert_id")
+                        or msg.get("expert_id")
+                        or ""
+                    ).strip()
+                    if not session_eid:
+                        sessions_map = context.get("sessions") if isinstance(context.get("sessions"), dict) else {}
+                        if len(sessions_map) == 1:
+                            session_eid = str(next(iter(sessions_map.keys())))
+                        else:
+                            session_eid = "_default"
+                    prior_sess = session_record_from_context(context, session_eid)
+                    parked = None
+                    if str(prior_sess.get("work_mode") or "") == "graph" and prior_sess.get("graph_id"):
+                        parked = {
+                            "graph_id": prior_sess.get("graph_id"),
+                            "parked_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                        }
+                    context = merge_session_into_context(
+                        context,
+                        expert_id=session_eid,
+                        work_mode="free",
+                        graph_id=None,
+                        parked_graph=parked if parked else None,
+                    )
+                    free_land = {
+                        "expert_id": session_eid,
+                        "parked": parked,
+                    }
+                except Exception as fe:
+                    print(f"[WS] goal free session land error: {fe}")
+
             c.context = context
             await db.commit()
 
@@ -3996,6 +4069,27 @@ async def _remember_next_scope_candidates(conv_id: str, msg: dict) -> None:
             )
         except Exception as be:
             print(f"[WS] workset broadcast error: {be}")
+        # Dual-rail FE: Session is Free after Graph under Goal (Spec #311 / #277).
+        if free_land:
+            try:
+                await _broadcast_to_conversation(
+                    conv_id,
+                    json.dumps(
+                        {
+                            "type": "work_mode_settled",
+                            "conversation_id": conv_id,
+                            "work_mode": "free",
+                            "graph_id": None,
+                            "graph_label": None,
+                            "kind": "goal_return_free",
+                            "expert_id": free_land.get("expert_id"),
+                            "reason": "goal_outer_return_to_free",
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+            except Exception as be:
+                print(f"[WS] goal free land broadcast error: {be}")
     except Exception as e:
         print(f"[WS] remember next_scope candidates error: {e}")
 
@@ -4394,12 +4488,27 @@ async def _dispatch_task_assign_to_node(
         return
 
     envelope_mode = str((work_envelope or {}).get("work_mode") or "").strip().lower() or None
+    goal_mode_flag = task_msg.get("goal_mode") in (True, "true", "1", 1, "yes") or msg.get("goal_mode") in (
+        True,
+        "true",
+        "1",
+        1,
+        "yes",
+    )
+    next_item_id = str(
+        msg.get("workset_item_id")
+        or msg.get("next_id")
+        or task_msg.get("workset_item_id")
+        or task_msg.get("next_id")
+        or ""
+    ).strip() or None
     await _remember_conversation_task(
         conv_id,
         target=task_msg.get("target") or {},
         scope=task_msg.get("scope") or {},
         instruction=task_msg.get("initial_instruction") or msg.get("text") or "",
         goal_objective=str(task_msg.get("goal_objective") or "").strip() or None,
+        goal_mode=True if goal_mode_flag else None,
         engagement=engagement,
         expert_id=expert_id,
         expert_name=expert_name,
@@ -4407,6 +4516,7 @@ async def _dispatch_task_assign_to_node(
         allow_postex=task_msg.get("allow_postex") if isinstance(task_msg.get("allow_postex"), bool) else None,
         accounts=task_msg.get("accounts"),
         work_mode=envelope_mode,
+        workset_item_id=next_item_id,
     )
     await _bind_conversation_to_node(conv_id, node_id, active_task_id=str(task_msg.get("task_id") or ""))
     if force_working:

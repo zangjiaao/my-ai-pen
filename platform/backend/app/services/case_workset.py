@@ -201,7 +201,11 @@ def mechanical_gate(
 
 
 def auto_check_safe(item: dict[str, Any], scope_hosts: set[str]) -> bool:
-    """Whether Goal may auto-adopt this item (mechanical only)."""
+    """Whether Goal may auto-adopt this item (mechanical only).
+
+    Spec #311: host-checkable in-scope only. Path-only t_surface (no host) is
+    not auto-eligible when scope_hosts is non-empty (or empty — not checkable).
+    """
     family = str(item.get("family") or "")
     if family != "t_surface":
         return False
@@ -209,15 +213,10 @@ def auto_check_safe(item: dict[str, Any], scope_hosts: set[str]) -> bool:
     if payload.get("in_scope") is False:
         return False
     host = _host_from_payload(payload, family)
-    if host:
-        if not scope_hosts or host not in scope_hosts:
-            return False
-    elif not str(
-        payload.get("location") or payload.get("path") or payload.get("url") or payload.get("path_key") or ""
-    ).strip():
+    if not host:
+        # Path-only surfaces are not host-checkable → never Goal auto-adopt.
         return False
-    # If no host but has path and we have scope, treat as in-scope surface deepen.
-    if not host and not scope_hosts:
+    if not scope_hosts or host not in scope_hosts:
         return False
     title = str(item.get("title") or item.get("summary") or "").strip()
     loc = str(
@@ -618,6 +617,100 @@ def clear_in_progress(workset: dict[str, Any]) -> dict[str, Any]:
     return set_in_progress(workset, None)
 
 
+def detect_goal_mode_on(
+    *,
+    msg: dict | None = None,
+    task: dict | None = None,
+) -> bool:
+    """Explicit goal_mode only for Case Workset Goal valve (Spec #311).
+
+    Bare goal_objective string is not treated as Goal-on — product must set
+    goal_mode (UI / task_assign / Node goals.isActive settle field).
+    """
+    for src in (msg, task):
+        if not isinstance(src, dict):
+            continue
+        if src.get("goal_mode") in (True, "true", "1", 1, "yes"):
+            return True
+    return False
+
+
+def detect_user_stopped_settle(msg: dict | None) -> bool:
+    """True only for real abort/cancel/interrupt — not harness status=incomplete."""
+    if not isinstance(msg, dict):
+        return False
+    if msg.get("user_stopped") in (True, "true", "1", 1, "yes"):
+        return True
+    stop_reason = str(msg.get("stop_reason") or msg.get("stopReason") or "").lower()
+    if not stop_reason:
+        return False
+    # Explicit abort / interrupt / cancel tokens only.
+    tokens = ("abort", "interrupt", "cancel", "user_stop", "user_stopped")
+    return any(t in stop_reason for t in tokens)
+
+
+def goal_wants_session_free(goal_outer: dict | None) -> bool:
+    """Whether Goal outer loop asks Session to land Free (no Graph chain)."""
+    if not isinstance(goal_outer, dict):
+        return False
+    return str(goal_outer.get("return_to") or "").strip().lower() == "free"
+
+
+def expand_task_scope_for_host(
+    task: dict | None,
+    *,
+    host: str,
+    port: str | None = None,
+    urls: list | None = None,
+) -> tuple[dict[str, Any], str | None]:
+    """Extend task Scope.allow with a confirmed host (t_host adopt / next-scope spirit).
+
+    Does not wipe prior allow entries. Returns (task, error).
+    """
+    h = str(host or "").strip().lower()
+    if not h or not is_valid_ledger_address(h):
+        return dict(task or {}) if isinstance(task, dict) else {}, "invalid_host"
+    out = dict(task) if isinstance(task, dict) else {}
+    scope = dict(out.get("scope") or {}) if isinstance(out.get("scope"), dict) else {}
+    allow = list(scope.get("allow") or []) if isinstance(scope.get("allow"), list) else []
+    port_s = str(port).strip() if port is not None and str(port).strip() else None
+    url_entries: list[str] = []
+    if isinstance(urls, list):
+        for u in urls:
+            s = str(u or "").strip()
+            if s and "://" in s:
+                url_entries.append(s[:500])
+    candidates: list[str] = []
+    candidates.extend(url_entries)
+    if port_s:
+        candidates.append(f"{h}:{port_s}")
+    candidates.append(h)
+    for entry in candidates:
+        if entry and entry not in allow:
+            allow.append(entry)
+    scope["allow"] = allow
+    if "deny" not in scope:
+        scope["deny"] = list(scope.get("deny") or []) if isinstance(scope.get("deny"), list) else []
+    out["scope"] = scope
+    return out, None
+
+
+def host_expand_fields_from_item(item: dict[str, Any]) -> dict[str, Any] | None:
+    """Extract host/port/urls from a t_host Workset item for Scope expand. None if not t_host."""
+    if not isinstance(item, dict):
+        return None
+    if str(item.get("family") or "") != "t_host":
+        return None
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    host = _host_from_payload(payload, "t_host") or str(payload.get("host") or "").strip().lower()
+    if not host:
+        return None
+    port = payload.get("port")
+    port_s = str(port).strip() if port is not None and str(port).strip() else None
+    urls = payload.get("urls") if isinstance(payload.get("urls"), list) else []
+    return {"host": host, "port": port_s, "urls": [str(u) for u in urls if str(u or "").strip()]}
+
+
 # --- Goal outer loop ---
 
 GOAL_TERMINALS = frozenset({
@@ -689,11 +782,26 @@ def evaluate_goal_terminal(
         i for i in items
         if str(i.get("family") or "") == "t_host" and str(i.get("status") or "") == "proposed"
     ]
+    # Auto-continuable proposed surfaces (Goal valve can still pick them up).
     auto_surfaces = [
         i for i in items
         if str(i.get("status") or "") == "proposed"
         and str(i.get("family") or "") == "t_surface"
         and i.get("auto_eligible")
+    ]
+    # Unfinished adopted / in_progress deepen work keeps Goal running after auto-adopt
+    # (Spec #311 multi-round assembly — do not goal_complete merely because proposed
+    # auto set is empty after the valve moved them to adopted).
+    unfinished_deepen = [
+        i for i in items
+        if str(i.get("family") or "") == "t_surface"
+        and (
+            str(i.get("status") or "") == "adopted"
+            or (
+                bool(i.get("in_progress"))
+                and str(i.get("status") or "") in OPEN_STATUSES
+            )
+        )
     ]
 
     residual: dict[str, Any] | None = None
@@ -713,14 +821,15 @@ def evaluate_goal_terminal(
         rounds = int(goal.get("outer_rounds") or 0)
         if rounds >= budget:
             terminal = "goal_budget_exhausted"
-        elif not auto_surfaces:
-            # No auto-continuable surface remains. Unfinished Next (adopted/hosts)
-            # stay visible after goal_complete (Spec #311 US29) — not full-coverage.
-            terminal = "goal_complete"
-        else:
-            # More auto-eligible surfaces exist after adopt valve → Free continues
-            # (never Graph-chain). Outer rounds track settle loops.
+        elif auto_surfaces or unfinished_deepen:
+            # Still auto-continuable proposed, or unfinished adopted/in_progress deepen
+            # → Free continues (never Graph-chain). Outer rounds track settle loops.
             terminal = None
+        else:
+            # No auto-continuable surface and no unfinished adopted deepen.
+            # Residual hosts / other proposed stay visible after complete (US29) —
+            # not full-coverage greenwash.
+            terminal = "goal_complete"
 
     goal = dict(goal)
     goal["updated_at"] = _now_iso()
@@ -857,6 +966,9 @@ def apply_settle_to_context(
     )
     if raw_cands:
         ws = merge_proposed_items(ws, raw_cands, source=source, scope_hosts=scope_hosts)
+
+    # Settle always clears in-progress baton annotation (baton ends with this burst).
+    ws = clear_in_progress(ws)
 
     # Goal state init / keep
     if goal_on:

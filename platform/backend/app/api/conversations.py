@@ -376,10 +376,16 @@ async def patch_workset_item(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Host-gated Workset item update (status / clear in_progress). Agent cannot self-adopt."""
+    """Host-gated Workset item update (status / clear in_progress). Agent cannot self-adopt.
+
+    Spec #311: t_host adopt expands Scope.allow / assets (same spirit as next-scope);
+    never mark t_host adopted without Scope update.
+    """
     from app.services.case_workset import (
         adopt_item,
+        expand_task_scope_for_host,
         get_workset,
+        host_expand_fields_from_item,
         project_workset_for_api,
         put_workset,
         scope_hosts_from_task,
@@ -389,12 +395,63 @@ async def patch_workset_item(
     c = await _get_conv(conv_id, current_user, db)
     ctx = dict(c.context or {}) if isinstance(c.context, dict) else {}
     ws = get_workset(ctx)
-    task = ctx.get("task") if isinstance(ctx.get("task"), dict) else {}
+    task = dict(ctx.get("task") or {}) if isinstance(ctx.get("task"), dict) else {}
     scope_hosts = scope_hosts_from_task(task)
     status = str(body.get("status") or "").strip()
     actor = "user"  # HTTP path is always user-gated
+    scope_expanded: dict | None = None
+    registered_asset: dict | None = None
 
     if status == "adopted":
+        target = next((i for i in ws["items"] if isinstance(i, dict) and str(i.get("id")) == item_id), None)
+        if not target:
+            raise HTTPException(400, "not_found")
+        # t_host: expand Scope before/with adopt (confirm path). Refuse adopt if expand fails.
+        expand_fields = host_expand_fields_from_item(target)
+        if expand_fields:
+            expanded_task, expand_err = expand_task_scope_for_host(
+                task,
+                host=expand_fields["host"],
+                port=expand_fields.get("port"),
+                urls=expand_fields.get("urls"),
+            )
+            if expand_err:
+                raise HTTPException(400, f"scope_expand_failed:{expand_err}")
+            task = expanded_task
+            ctx["task"] = task
+            scope_hosts = scope_hosts_from_task(task)
+            scope_expanded = {
+                "host": expand_fields["host"],
+                "port": expand_fields.get("port"),
+                "allow": (task.get("scope") or {}).get("allow"),
+            }
+            # Register asset (same spirit as POST next-scope; user confirm).
+            register_assets = body.get("register_assets")
+            if register_assets is None:
+                register_assets = True
+            if register_assets:
+                try:
+                    from app.api.assets import upsert_discovered_asset
+
+                    user_id = uuid.UUID(current_user["user_id"])
+                    port = expand_fields.get("port")
+                    urls = expand_fields.get("urls") or []
+                    asset = await upsert_discovered_asset(
+                        db,
+                        user_id=user_id,
+                        address=expand_fields["host"],
+                        open_ports=[port] if port else None,
+                        urls=urls if urls else None,
+                        port=port,
+                        conversation_id=c.id,
+                        source="user_workset_host_adopt",
+                        allow_create=True,
+                    )
+                    if asset:
+                        registered_asset = {"id": str(asset.id), "address": asset.address, "port": port}
+                except Exception as e:
+                    # Scope already expanded; asset registration failure must not orphan adopt.
+                    print(f"[api] workset t_host asset register error: {e}")
         ws, item, err = adopt_item(ws, item_id, actor=actor, scope_hosts=scope_hosts)
     elif status:
         ws, item, err = update_item_status(ws, item_id, status=status, actor=actor)
@@ -414,10 +471,21 @@ async def patch_workset_item(
         "conversation",
         c.id,
         c.id,
-        {"item_id": item_id, "status": status or None},
+        {
+            "item_id": item_id,
+            "status": status or None,
+            "scope_expanded": scope_expanded,
+            "registered_asset": registered_asset,
+        },
     )
     await db.commit()
-    return {"ok": True, "item": item, "workset": project_workset_for_api(ws)}
+    out: dict = {"ok": True, "item": item, "workset": project_workset_for_api(ws)}
+    if scope_expanded:
+        out["scope"] = {"allow": scope_expanded.get("allow") or [], "deny": (task.get("scope") or {}).get("deny") or []}
+        out["scope_expanded"] = scope_expanded
+    if registered_asset:
+        out["registered_asset"] = registered_asset
+    return out
 
 
 @router.post("/{conv_id}/workset/reorder")

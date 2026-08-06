@@ -1,5 +1,8 @@
 /**
  * Spec #311 — 「下一步」 Case Workset list (separate from Tasks).
+ *
+ * Reorder: POST /workset/reorder exists (API-only this wave). FE drag/reorder
+ * controls deferred as post-wave polish (Spec US7) — discovery/sort_order only in UI.
  */
 import {
   worksetFamilyLabel,
