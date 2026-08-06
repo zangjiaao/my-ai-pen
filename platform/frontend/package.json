@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test:unit": "tsx src/lib/panelAgentsState.test.ts && tsx src/lib/workerPresentation.test.ts && tsx src/lib/orderStrixAgents.test.ts && tsx src/lib/tasksListCap.test.ts && tsx src/lib/messageStreamIdentity.test.ts && tsx src/lib/findingNew.test.ts && tsx src/lib/packHonesty.test.ts"
+    "test:unit": "tsx src/lib/panelAgentsState.test.ts && tsx src/lib/workerPresentation.test.ts && tsx src/lib/orderStrixAgents.test.ts && tsx src/lib/tasksListCap.test.ts && tsx src/lib/messageStreamIdentity.test.ts && tsx src/lib/findingNew.test.ts && tsx src/lib/packHonesty.test.ts && tsx src/lib/workset.test.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.62.0",

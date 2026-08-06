@@ -221,6 +221,9 @@ type ConversationSnapshot = {
   task_context?: Record<string, unknown>;
   /** Spec #163 Graph engagement close-out (same JSON as Node taskDir file) */
   engagement_closeout?: Record<string, unknown>;
+  /** Spec #311 Case Workset («下一步») */
+  workset?: Record<string, unknown>;
+  goal_outer?: Record<string, unknown> | null;
 };
 
 export default function ConversationPage() {
@@ -285,6 +288,9 @@ export default function ConversationPage() {
   const [taskContext, setTaskContext] = useState<Record<string, unknown> | undefined>();
   /** Spec #163: latest Graph engagement close-out from conversation.context / WS */
   const [engagementCloseout, setEngagementCloseout] = useState<Record<string, unknown> | undefined>();
+  /** Spec #311 Case Workset («下一步») — survives Graph; separate from Tasks */
+  const [workset, setWorkset] = useState<Record<string, unknown> | undefined>();
+  const [worksetBusyId, setWorksetBusyId] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   /** True while interrupt was sent and nodes have not yet reported idle. */
   const [interrupting, setInterrupting] = useState(false);
@@ -576,6 +582,13 @@ export default function ConversationPage() {
         : fallback?.engagement_closeout;
     if (nextCloseout && Object.keys(nextCloseout).length) {
       setEngagementCloseout(nextCloseout);
+    }
+    const nextWorkset =
+      snapshot.workset && typeof snapshot.workset === "object"
+        ? snapshot.workset
+        : fallback?.workset;
+    if (nextWorkset && typeof nextWorkset === "object") {
+      setWorkset(nextWorkset);
     }
     const snapshotConversation = snapshot.conversation || fallback?.conversation;
     if (snapshotConversation) setActiveConversationNodeId(snapshotConversation.node_id || null);
@@ -1352,6 +1365,13 @@ export default function ConversationPage() {
       const sel: Record<string, boolean> = {};
       for (const c of cleaned) sel[`${c.host}|${c.port || ""}`] = true;
       setNextScopeSelected(sel);
+    },
+    workset_updated: (msg) => {
+      if (!isActiveMessage(msg, activeId)) return;
+      const m = msg as Record<string, unknown>;
+      if (m.workset && typeof m.workset === "object" && !Array.isArray(m.workset)) {
+        setWorkset(m.workset as Record<string, unknown>);
+      }
     },
     text: (msg) => {
       upsertStreamedAgentText(msg, "text");
@@ -2909,6 +2929,50 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               assets={assets}
               taskContext={taskContext}
               engagementCloseout={engagementCloseout}
+              workset={workset}
+              worksetBusyId={worksetBusyId}
+              onWorksetAdopt={(id) => {
+                if (!activeId) return;
+                setWorksetBusyId(id);
+                void authFetch(`/api/conversations/${activeId}/workset/${id}`, {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ status: "adopted" }),
+                })
+                  .then((res: { workset?: Record<string, unknown> }) => {
+                    if (res?.workset) setWorkset(res.workset);
+                  })
+                  .catch(() => {})
+                  .finally(() => setWorksetBusyId(null));
+              }}
+              onWorksetReject={(id) => {
+                if (!activeId) return;
+                setWorksetBusyId(id);
+                void authFetch(`/api/conversations/${activeId}/workset/${id}`, {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ status: "rejected" }),
+                })
+                  .then((res: { workset?: Record<string, unknown> }) => {
+                    if (res?.workset) setWorkset(res.workset);
+                  })
+                  .catch(() => {})
+                  .finally(() => setWorksetBusyId(null));
+              }}
+              onWorksetDone={(id) => {
+                if (!activeId) return;
+                setWorksetBusyId(id);
+                void authFetch(`/api/conversations/${activeId}/workset/${id}`, {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ status: "done" }),
+                })
+                  .then((res: { workset?: Record<string, unknown> }) => {
+                    if (res?.workset) setWorkset(res.workset);
+                  })
+                  .catch(() => {})
+                  .finally(() => setWorksetBusyId(null));
+              }}
               onOpenVulnerability={setSelectedVulnerability}
               onOpenAsset={setSelectedAsset}
             />
