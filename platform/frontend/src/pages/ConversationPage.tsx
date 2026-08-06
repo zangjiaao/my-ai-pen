@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 import RightPanel from "../components/RightPanel";
-import MessageRenderer from "../components/MessageRenderer";
+import MessageRenderer, { AgentPendingCard } from "../components/MessageRenderer";
 import VulnDetailDialog from "../components/VulnDetailDialog";
 import AssetDetailDialog from "../components/AssetDetailDialog";
 import EvidenceDetailDialog from "../components/EvidenceDetailDialog";
@@ -27,6 +27,19 @@ import {
   mergePlanTreeByOwner,
   upsertWorkerAgent,
 } from "../lib/panelAgentsState";
+import {
+  clearLiveStreams,
+  durableStreamSnapshots,
+  liveFrameToMessageLike,
+  mergeMessagesWithLiveStreams,
+  messageListKey,
+  pendingChromeVisible,
+  pruneLiveCatchUp,
+  reducePendingChrome,
+  upsertLiveByStreamId,
+  type LiveStreamFrame,
+  type PendingChrome,
+} from "../lib/messageStreamIdentity";
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { Check, ChevronDown, PanelRight, PanelRightClose, Target, Upload } from "lucide-react";
 import type { AgentIdentity, Conversation, Message } from "../lib/types";
@@ -271,11 +284,12 @@ export default function ConversationPage() {
   /** True while interrupt was sent and nodes have not yet reported idle. */
   const [interrupting, setInterrupting] = useState(false);
   /**
-   * Live stream bubbles (text/thinking) updated on every WS frame.
-   * Kept outside React Query so progressive tokens always re-render.
-   * Keyed by stream_id (preferred) or message_id.
+   * Live progressive frames (text/thinking) updated on every WS frame.
+   * Keyed by stream_id only (Spec #276). Pending is chrome, not a live-slot Message.
    */
-  const [liveStreams, setLiveStreams] = useState<Record<string, Message>>({});
+  const [liveStreams, setLiveStreams] = useState<Record<string, LiveStreamFrame>>({});
+  /** List-tail “思考中…” after send — not a Message in RQ or live map. */
+  const [pendingChrome, setPendingChrome] = useState<PendingChrome>(null);
   const [timelineCursorAt, setTimelineCursorAt] = useState<string | undefined>();
   const [selectedVulnerability, setSelectedVulnerability] = useState<Partial<SecurityVulnerability> | null>(null);
   const [selectedAsset, setSelectedAsset] = useState<Partial<SecurityAsset> | null>(null);
@@ -331,75 +345,25 @@ export default function ConversationPage() {
 
   const messages = useMemo(() => messagesFromQueryData(activeId, messageQuery.data as MessagesInfiniteData | undefined), [activeId, messageQuery.data]);
   const displayMessages = useMemo(() => {
-    const hasLive = Object.values(liveStreams).some(
-      (m) => !activeId || !m.conversation_id || m.conversation_id === activeId,
-    );
-    // When live overlay is active, hide the static agent_pending row (avoid flash).
-    const base = messages.filter((m) => {
-      if (!isRenderableMessage(m)) return false;
-      if (hasLive && m.msg_type === "agent_pending") return false;
-      return true;
+    const base = messages.filter(isRenderableMessage);
+    const merged = mergeMessagesWithLiveStreams(base, liveStreams, {
+      activeConversationId: activeId,
+      liveToMessage: (frame) => {
+        const like = liveFrameToMessageLike(frame);
+        return {
+          id: like.id,
+          conversation_id: like.conversation_id || activeId || "",
+          role: "agent" as const,
+          msg_type: like.msg_type,
+          content: like.content,
+          parent_msg_id: null,
+          created_at: like.created_at || new Date().toISOString(),
+        } satisfies Message;
+      },
     });
-    // Overlay live stream frames (same id/stream replaces; new streams append).
-    const byKey = new Map<string, Message>();
-    for (const m of base) {
-      const streamKey = readString(m.content.stream_id);
-      const key = streamKey ? `stream:${streamKey}` : `id:${m.id}`;
-      byKey.set(key, m);
-    }
-    for (const live of Object.values(liveStreams)) {
-      if (activeId && live.conversation_id && live.conversation_id !== activeId) continue;
-      const streamKey = readString(live.content.stream_id);
-      // live-slot id morphs into thinking without a second bubble.
-      const key = streamKey
-        ? `stream:${streamKey}`
-        : live.id.startsWith("live-slot-")
-          ? `id:${live.id}`
-          : `id:${live.id}`;
-      const prev = byKey.get(key) || (live.id.startsWith("live-slot-") ? undefined : byKey.get(`id:live-slot-${activeId}`));
-      if (!prev) {
-        byKey.set(key, live);
-        // Remove placeholder slot if we added under stream key
-        if (activeId) byKey.delete(`id:live-slot-${activeId}`);
-        continue;
-      }
-      const prevText = readString(prev.content.text) || readString(prev.content.reasoning);
-      const liveText = readString(live.content.text) || readString(live.content.reasoning);
-      const text =
-        liveText.length >= prevText.length || liveText.startsWith(prevText) || prevText.startsWith(liveText)
-          ? (liveText.length >= prevText.length ? liveText : prevText)
-          : liveText || prevText;
-      byKey.set(key, {
-        ...prev,
-        ...live,
-        id: prev.id.startsWith("live-slot-") ? prev.id : live.id,
-        content: {
-          ...prev.content,
-          ...live.content,
-          text,
-          ...(live.msg_type === "thinking" || live.msg_type === "agent_pending"
-            ? { reasoning: text }
-            : {}),
-        },
-      });
-      if (activeId) byKey.delete(`id:live-slot-${activeId}`);
-    }
-    // Preserve base order, then append any live-only streams at the end.
-    const seen = new Set<string>();
-    const merged: Message[] = [];
-    for (const m of base) {
-      const streamKey = readString(m.content.stream_id);
-      const key = streamKey ? `stream:${streamKey}` : `id:${m.id}`;
-      const next = byKey.get(key) || m;
-      merged.push(next);
-      seen.add(key);
-    }
-    for (const [key, live] of byKey) {
-      if (seen.has(key)) continue;
-      merged.push(live);
-    }
     return groupConsecutiveToolMessages(merged);
   }, [messages, liveStreams, activeId]);
+  const showPendingChrome = pendingChromeVisible(pendingChrome, activeId);
   const timelineEvents = useMemo(() => timelineFromMessages(messages), [messages]);
   const activeConversation = useMemo(() => conversations.find(c => c.id === activeId), [activeId, conversations]);
   /**
@@ -725,6 +689,11 @@ export default function ConversationPage() {
     setConversationMessageData(conversationId, data => removeMessageRecords(data, record => recordMessageType(record) === "agent_pending"));
   }, [setConversationMessageData]);
 
+  const clearProgressiveStreamUi = useCallback(() => {
+    setLiveStreams(clearLiveStreams());
+    setPendingChrome((cur) => reducePendingChrome(cur, { type: "terminal" }));
+  }, []);
+
   const applyConversationWorking = useCallback((msg: Record<string, unknown>) => {
     const convId = String(msg.conversation_id || "").trim();
     if (!convId) return;
@@ -738,11 +707,16 @@ export default function ConversationPage() {
     });
     if (convId !== activeId) return;
     setRunning(working);
-    setInterrupting(Boolean(interruptingFlag && working));
     if (working) {
       launchOptimisticRef.current = false;
+      setInterrupting(Boolean(interruptingFlag));
     } else {
       launchOptimisticRef.current = false;
+      // Interrupt settle only (Spec #276) — not every idle blip (would wipe post-send chrome).
+      if (interrupting || interruptingFlag) {
+        clearProgressiveStreamUi();
+        clearPendingAgentMessage(convId);
+      }
       setInterrupting(false);
     }
     // Multi-role Case roster: light case_run patch; full snapshot only when multi-role.
@@ -753,7 +727,7 @@ export default function ConversationPage() {
     if (participants.length > 1 || (participants.length === 1 && !working)) {
       void refreshConversationState(convId);
     }
-  }, [activeId, patchConversation, refreshConversationState]);
+  }, [activeId, clearPendingAgentMessage, clearProgressiveStreamUi, interrupting, patchConversation, refreshConversationState]);
 
   const { send } = useWebSocket({
     conversation_working: (msg) => {
@@ -787,26 +761,8 @@ export default function ConversationPage() {
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, string>;
       const convId = messageConversationId(msg, activeId);
-      // Keep a live "working" slot while tools run — clearing pending alone removes all feedback.
-      if (convId) {
-        const liveSlotId = `live-slot-${convId}`;
-        const toolName = String(m.tool_name || "tool").trim() || "tool";
-        const status = normalizeExecutionStatus(m.status);
-        const label =
-          status === "running" || String(m.status || "").toLowerCase() === "pending"
-            ? `正在调用 ${toolName}…`
-            : `已完成 ${toolName}`;
-        setLiveStreams((prev) => ({
-          ...prev,
-          [liveSlotId]: makeMessage(convId, "agent", "agent_pending", {
-            text: label,
-            message_id: liveSlotId,
-            ...agentAttribution(m),
-          }),
-        }));
-        // Remove static pending row; live-slot carries the placeholder.
-        clearPendingAgentMessage(convId);
-      }
+      // Spec #276: tools use tool_call cards only — never reseed pending chrome or live-slot.
+      setPendingChrome((cur) => reducePendingChrome(cur, { type: "tool_output" }));
       markMessageAutoScroll();
       const incoming = makeMessage(convId, "agent", "tool_call", {
         ...agentAttribution(m),
@@ -993,6 +949,8 @@ export default function ConversationPage() {
       markMessageAutoScroll();
       launchOptimisticRef.current = false;
       setRunning(false);
+      setInterrupting(false);
+      clearProgressiveStreamUi();
       const status = String(m.status || "incomplete").toLowerCase();
       addMessageToConversation(convId, makeMessage(convId, "system", "status", {
         text: (status === "blocked" ? "Task blocked - " : "Task incomplete - ") + String(m.summary || ""),
@@ -1255,8 +1213,8 @@ export default function ConversationPage() {
       launchOptimisticRef.current = false;
       setRunning(false);
       setInterrupting(false);
-      // Live streams are already mirrored into the message cache; drop overlay.
-      setLiveStreams({});
+      // Live streams are already mirrored into the message cache; drop overlay + chrome.
+      clearProgressiveStreamUi();
       const terminal = String(m.status || "completed").toLowerCase();
       const nextStatus = (
         terminal === "incomplete" || terminal === "blocked"
@@ -1289,6 +1247,7 @@ export default function ConversationPage() {
       launchOptimisticRef.current = false;
       setRunning(false);
       setInterrupting(false);
+      clearProgressiveStreamUi();
       if (convId) patchConversation(convId, { status: "failed", working: false });
       addMessageToConversation(convId, makeMessage(convId, "system", "status", { text: "Task failed: " + ((msg as Record<string, unknown>).message || ""), message_id: (msg as Record<string, unknown>).message_id }));
       void fetchAll();
@@ -1378,8 +1337,10 @@ export default function ConversationPage() {
       ? { ...(raw.content as Record<string, unknown>) }
       : {}) as Record<string, unknown>;
     const streamId = readString(c.stream_id) || readString(raw.stream_id);
+    // Fail-closed: progressive live list requires stream_id (Spec #276).
+    if (!streamId) return;
     const messageId = readString(c.message_id) || readString(raw.message_id);
-    if (streamId) c.stream_id = streamId;
+    c.stream_id = streamId;
     if (messageId) c.message_id = messageId;
     const body = readString(c.text) || readString(c.reasoning) || readString(raw.text);
     if (!body) return;
@@ -1387,43 +1348,23 @@ export default function ConversationPage() {
     if (msgType === "thinking") c.reasoning = body;
     const convId = messageConversationId(raw, activeId);
     markMessageAutoScroll();
-    const message = makeMessage(convId, "agent", msgType, { ...agentAttribution(raw), ...c });
-    const liveSlotId = convId ? `live-slot-${convId}` : "";
-    // Prefer stream id; first thinking frame reuses live-slot so Working… morphs in place.
-    const liveKey = streamId || message.id || liveSlotId;
-    setLiveStreams((prev) => {
-      const slot = liveSlotId ? prev[liveSlotId] : undefined;
-      const existing = prev[liveKey] || (msgType === "thinking" ? slot : undefined);
-      const prevText = existing
-        ? (readString(existing.content.text) || readString(existing.content.reasoning))
-        : "";
-      const nextText = body;
-      const text =
-        nextText.length >= prevText.length || nextText.startsWith(prevText) || prevText.startsWith(nextText)
-          ? (nextText.length >= prevText.length ? nextText : prevText)
-          : nextText || prevText;
-      const nextMsg: Message = {
-        ...(existing || message),
-        ...message,
-        // Keep stable id for the thinking slot so React does not unmount/remount.
-        id: existing?.id || (msgType === "thinking" && liveSlotId ? liveSlotId : message.id),
-        msg_type: msgType,
-        content: {
-          ...(existing?.content || {}),
-          ...message.content,
-          text,
-          ...(msgType === "thinking" ? { reasoning: text } : {}),
-          message_id: existing?.id || message.id,
-        },
-      };
-      const out: Record<string, Message> = { ...prev, [liveKey]: nextMsg };
-      // Drop the placeholder slot once we have a real stream key.
-      if (liveSlotId && liveKey !== liveSlotId) delete out[liveSlotId];
-      return out;
-    });
-    // Hide cache-level agent_pending without a frame of empty gap (display filters it when live).
+    const attribution = agentAttribution(raw);
+    const message = makeMessage(convId, "agent", msgType, { ...attribution, ...c });
+    // Pending chrome hides on first progressive stream; never morph from live-slot.
+    setPendingChrome((cur) => reducePendingChrome(cur, { type: "stream_started" }));
+    setLiveStreams((prev) =>
+      upsertLiveByStreamId(prev, {
+        streamId,
+        msgType,
+        text: body,
+        messageId: messageId || message.id || undefined,
+        conversationId: convId || undefined,
+        content: { ...attribution, ...c },
+      }),
+    );
+    // Scrub any historical agent_pending rows; do not write new ones.
     if (convId) clearPendingAgentMessage(convId);
-    // Mirror final-ish frames into message cache (thinking+text).
+    // Mirror progressive frames into durable message cache (RQ SOT).
     addMessageToConversation(convId, message);
   }
   const locateApproval = useCallback((requestId: string) => {
@@ -1470,7 +1411,8 @@ export default function ConversationPage() {
 
   const loadConversation = useCallback(async (id: string | null) => {
     stateRefreshSeqRef.current += 1;
-    setLiveStreams({});
+    setLiveStreams(clearLiveStreams());
+    setPendingChrome((cur) => reducePendingChrome(cur, { type: "clear" }));
     if (!id) {
       localStorage.removeItem(ACTIVE_CONVERSATION_KEY);
       void queryClient.removeQueries({ queryKey: ["conversation-messages"] });
@@ -1523,6 +1465,14 @@ export default function ConversationPage() {
     const conversationStatus = conversations.find(c => c.id === activeId)?.status || "created";
     applyConversationState(snapshotFromMessages(messages, conversationStatus));
   }, [activeId, conversations, messages, messageQuery.isLoading, stateSnapshotLoaded, applyConversationState]);
+
+  // Spec #276: catch-up prune — drop live keys when RQ already has same stream_id with text ≥ live.
+  useEffect(() => {
+    setLiveStreams((prev) => {
+      if (!Object.keys(prev).length) return prev;
+      return pruneLiveCatchUp(prev, durableStreamSnapshots(messages));
+    });
+  }, [messages]);
 
   useEffect(() => { void fetchAll(); }, [fetchAll]);
 
@@ -1878,40 +1828,24 @@ export default function ConversationPage() {
     const willSteerDirectly = Boolean(
       shouldContinueExisting && activeConversation?.status === "running",
     );
-    const pendingAgentSource: AgentIdentity = isBuiltinAssistant ? "platform" : "pentest";
-    const pendingAgentNodeId =
-      routeNodeId || activeConversationNodeId || activeConversation?.node_id || undefined;
-    const pendingExpertId = routeExpertId;
-    const pendingExpertName = routeExpertName;
-    // Single live slot: same id morphs Working… → Thinking → text (no flash/remove).
-    const liveSlotId = `live-slot-${convId}`;
-    const pendingContent: Record<string, unknown> = {
-      text: "思考中…",
-      message_id: liveSlotId,
-      agent_source: pendingAgentSource,
-    };
-    if (pendingAgentNodeId) pendingContent.agent_node_id = pendingAgentNodeId;
-    if (pendingExpertId) pendingContent.expert_id = pendingExpertId;
-    if (pendingExpertName) pendingContent.expert_name = pendingExpertName;
+    // Optimistic user row only — do not write agent_pending into RQ (Spec #276).
+    // Pending is list-tail chrome until the first progressive stream_id frame.
     setConversationMessageData(convId, (data) => {
       const withoutPending = removeMessageRecords(
         data,
         (record) => recordMessageType(record) === "agent_pending",
       );
-      const withUser = appendMessageRecord(
+      return appendMessageRecord(
         withoutPending,
         messageRecordFromMessage(makeMessage(convId!, "user", "text", userContent)),
       );
-      return appendMessageRecord(
-        withUser,
-        messageRecordFromMessage(makeMessage(convId!, "agent", "agent_pending", pendingContent)),
-      );
     });
-    // Seed live overlay so first thinking frame morphs the same slot (no disappear gap).
-    setLiveStreams((prev) => ({
-      ...prev,
-      [liveSlotId]: makeMessage(convId!, "agent", "agent_pending", pendingContent),
-    }));
+    setPendingChrome(
+      reducePendingChrome(null, {
+        type: "send_success",
+        conversationId: convId!,
+      }),
+    );
 
     const commonPayload = {
       ...agentPayload,
@@ -2402,7 +2336,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               {messageQuery.isFetchingNextPage && <div className="py-2 text-center text-xs text-ink-muted">Loading older messages...</div>}
               {messageQuery.hasNextPage && !messageQuery.isFetchingNextPage && <button type="button" onClick={fetchOlderMessages} className="mx-auto block rounded-pill border border-hairline px-3 py-1.5 text-xs text-ink-secondary">Load older messages</button>}
               {displayMessages.map((msg, index) => (
-                <div key={msg.id} data-message-created-at={msg.created_at}>
+                <div key={messageListKey(msg)} data-message-created-at={msg.created_at}>
                   <MessageRenderer
                     message={msg}
                     previousMessage={displayMessages[index - 1]}
@@ -2418,6 +2352,12 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                   />
                 </div>
               ))}
+              {/* Spec #276: pending is chrome only — not a Message / live-slot row. */}
+              {showPendingChrome && pendingChrome && (
+                <div key="pending-chrome" data-testid="pending-chrome">
+                  <AgentPendingCard content={{ text: pendingChrome.label }} />
+                </div>
+              )}
             </div>
             <div className="p-4 pt-2">
               {/* Agent-style composer: partner chip → (pentest: mode + Goal) → send */}
