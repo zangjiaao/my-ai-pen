@@ -174,6 +174,7 @@ export default function ExpertPage() {
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               {filtered.map((e) => {
                 const online = e.node_status === "online";
+                const schedulable = online && e.enabled !== false;
                 const caps = packCapabilities(e.pack_id);
                 const accent = resolveExpertColor(e.color, e.id);
                 return (
@@ -195,6 +196,11 @@ export default function ExpertPage() {
                             {e.name}
                           </span>
                           <NodeOnlineBadge online={online} />
+                          {!schedulable && e.enabled !== false && (
+                            <span className="rounded-md bg-canvas-inset px-1.5 py-0.5 text-[10px] font-medium text-ink-muted">
+                              不可调度
+                            </span>
+                          )}
                           {e.is_default && e.enabled && (
                             <span className="rounded-md bg-status-running/12 px-1.5 py-0.5 text-[10px] font-medium text-status-running">
                               默认
@@ -208,6 +214,9 @@ export default function ExpertPage() {
                         </div>
                         <p className="mt-0.5 truncate text-sm text-ink-secondary">
                           {expertLabel(e.pack_id)}
+                          {!schedulable && e.enabled !== false
+                            ? " · 绑定节点离线，对话中不可选"
+                            : ""}
                         </p>
                       </div>
                       <span
@@ -618,6 +627,11 @@ function ExpertDetailDialog({
                   aria-hidden
                 />
                 <NodeOnlineBadge online={online} />
+                {!online && expert.enabled ? (
+                  <span className="rounded-pill border border-hairline bg-canvas-inset px-2 py-0.5 text-xs font-medium text-ink-muted">
+                    不可调度
+                  </span>
+                ) : null}
                 <span className="rounded-pill border border-hairline bg-canvas-inset px-2 py-0.5 text-xs text-ink">
                   {expertLabel(expert.pack_id)}
                 </span>
@@ -673,6 +687,11 @@ function ExpertDetailDialog({
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
           {detailTab === "config" && (
             <div className="space-y-4">
+              {!online && expert.enabled ? (
+                <p className="rounded-md border border-status-running/30 bg-status-running/5 px-3 py-2 text-xs text-status-running">
+                  绑定节点离线：可继续改名/换包/绑定配置，但对话中不可选、不可调度任务，直至节点上线。
+                </p>
+              ) : null}
               <div className="rounded-md border border-hairline-soft p-4">
                 <p className="text-sm font-medium">路由绑定</p>
                 <p className="mt-1 text-xs text-ink-muted">

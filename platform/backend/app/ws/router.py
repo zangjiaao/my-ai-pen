@@ -4238,15 +4238,36 @@ def _ensure_target_from_text(msg: dict) -> dict:
     return out
 
 
+def _dispatch_no_node_error_message(*, preferred: str | None) -> str:
+    """User-visible task_error when no live socket can run the assign (Spec #299)."""
+    seat = str(preferred or "").strip()
+    if seat:
+        # Preferred / explicit Expert seat was set but not in node_connections.
+        return (
+            "Selected Expert seat is offline. "
+            "Wait for the bound Node to reconnect, or choose an online Expert."
+        )
+    return "No online Node is available. Start a Node runtime, then retry."
+
+
 async def _pick_online_node_id(
     *,
     preferred: str | None,
     bound: str | None,
     capabilities: list,
 ) -> str | None:
+    """Pick a live Node socket for task_assign.
+
+    Spec #299 / expert-offers offline seat law:
+    when an explicit preferred seat (`agent_node_id` / requested node) is set,
+    return that live socket or **None** — never fall through to another worker.
+    When preferred is unset, keep historical bound → sole/first worker behavior.
+    """
     online = [str(n) for n in node_connections.keys()]
-    if preferred and preferred in node_connections:
-        return preferred
+    preferred_id = str(preferred or "").strip()
+    if preferred_id:
+        # Explicit seat: live socket only. No substitute online worker.
+        return preferred_id if preferred_id in node_connections else None
     if bound and bound in node_connections:
         return bound
     # Prefer online worker (non-platform) nodes
@@ -4988,8 +5009,9 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         if not eng:
                             msg = {**msg, "engagement": engagement, "role": engagement}
 
+                    preferred_for_pick = requested_node_id or _agent_node_id(msg)
                     node_id = await _pick_online_node_id(
-                        preferred=requested_node_id or _agent_node_id(msg),
+                        preferred=preferred_for_pick,
                         bound=bound_node_id,
                         capabilities=capabilities,
                     )
@@ -4997,7 +5019,9 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         await _persist_and_broadcast(conv_id, {
                             "type": "task_error",
                             "conversation_id": conv_id,
-                            "message": "No online Node is available. Start a Node runtime, then retry.",
+                            "message": _dispatch_no_node_error_message(
+                                preferred=preferred_for_pick
+                            ),
                             "agent_source": "default",
                         }, "agent")
                         continue

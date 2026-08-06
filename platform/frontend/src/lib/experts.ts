@@ -529,6 +529,67 @@ export function effectiveOffers(offers: unknown): ExpertId[] {
   return out;
 }
 
+/**
+ * Spec #299 three-state pack honesty (no per-pack persistent schema).
+ * Platform offers alone are not "installed and runnable."
+ */
+export type PackHonestyState = "not_offered" | "queued" | "synced" | "failed";
+
+export type NodeDeliveryInfo = {
+  delivered?: boolean;
+  reason?: string | null;
+};
+
+/** Last install/uninstall response fields used for honesty presentation. */
+export type PackDeliverySnapshot = {
+  node_delivery?: NodeDeliveryInfo | null;
+  note?: string | null;
+};
+
+/**
+ * Present an offer row given node online status + optional last API delivery.
+ * Offline / deferred delivery → queued; online with success or no failure → synced;
+ * explicit failed delivery while not deferred offline → failed.
+ */
+export function packHonestyState(opts: {
+  offered: boolean;
+  nodeOnline: boolean;
+  lastDelivery?: PackDeliverySnapshot | null;
+}): PackHonestyState {
+  if (!opts.offered) return "not_offered";
+  const delivery = opts.lastDelivery?.node_delivery;
+  if (delivery && delivery.delivered === false) {
+    const reason = String(delivery.reason || "").toLowerCase();
+    // Offline / deferred queue is honesty state "queued", not hard failure.
+    if (!opts.nodeOnline || reason === "offline" || reason.includes("offline")) {
+      return "queued";
+    }
+    return "failed";
+  }
+  if (!opts.nodeOnline) return "queued";
+  return "synced";
+}
+
+/** Short Chinese label for chips / 扩展 tab (acceptance #1 / #5). */
+export function packHonestyLabel(state: PackHonestyState): string {
+  switch (state) {
+    case "queued":
+      return "待同步";
+    case "synced":
+      return "已同步";
+    case "failed":
+      return "失败";
+    case "not_offered":
+    default:
+      return "未安装";
+  }
+}
+
+/** Expert bound to offline node is not schedulable (conversation / @ / toolbar). */
+export function isExpertSchedulable(nodeStatus: string | null | undefined): boolean {
+  return String(nodeStatus || "").trim().toLowerCase() === "online";
+}
+
 /** True if this pack can be used when creating an Expert on the node. */
 export function nodeOffersExpert(offers: unknown, expertId: unknown): boolean {
   const pack = normalizeExpertId(expertId) ?? DEFAULT_EXPERT_ID;

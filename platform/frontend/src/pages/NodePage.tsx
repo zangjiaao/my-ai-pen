@@ -7,7 +7,11 @@ import {
   EXTENSION_PACKS,
   effectiveOffers,
   expertLabel,
+  packHonestyLabel,
+  packHonestyState,
   type ExpertId,
+  type PackDeliverySnapshot,
+  type PackHonestyState,
 } from "../lib/experts";
 import {
   AGENT_LANGUAGE_OPTIONS,
@@ -247,14 +251,28 @@ export default function NodePage() {
                             {packs.length === 0 ? (
                               <span className="text-ink-muted">—</span>
                             ) : (
-                              packs.map((pack) => (
-                                <span
-                                  key={pack}
-                                  className="rounded-pill border border-hairline bg-canvas-inset px-1.5 py-px text-[10px] text-ink"
-                                >
-                                  {expertLabel(pack)}
-                                </span>
-                              ))
+                              packs.map((pack) => {
+                                const honesty = packHonestyState({
+                                  offered: true,
+                                  nodeOnline: online,
+                                });
+                                return (
+                                  <span
+                                    key={pack}
+                                    className={`rounded-pill border px-1.5 py-px text-[10px] ${
+                                      honesty === "queued"
+                                        ? "border-status-running/30 bg-status-running/10 text-status-running"
+                                        : honesty === "failed"
+                                          ? "border-status-error/30 bg-status-error/10 text-status-error"
+                                          : "border-hairline bg-canvas-inset text-ink"
+                                    }`}
+                                    title={packHonestyLabel(honesty)}
+                                  >
+                                    {expertLabel(pack)}
+                                    <span className="ml-1 opacity-80">{packHonestyLabel(honesty)}</span>
+                                  </span>
+                                );
+                              })
                             )}
                           </p>
                         )}
@@ -354,7 +372,11 @@ function NodeDetailDialog({
   const [saveOk, setSaveOk] = useState(false);
   const [expertBusy, setExpertBusy] = useState<string | null>(null);
   const [expertError, setExpertError] = useState("");
+  const [expertNote, setExpertNote] = useState("");
   const [localOffers, setLocalOffers] = useState<ExpertId[]>(() => effectiveOffers(node.offers));
+  /** Last install/uninstall delivery per pack (session-local; no persistent schema). */
+  const [packDelivery, setPackDelivery] = useState<Partial<Record<string, PackDeliverySnapshot>>>({});
+  const nodeOnline = node.status === "online";
   /** Physical node: 配置 / 扩展（装包）. No empty 概述 tab. */
   type DetailTab = "config" | "extensions";
   const [detailTab, setDetailTab] = useState<DetailTab>("config");
@@ -384,8 +406,10 @@ function NodeDetailDialog({
     setSaveError("");
     setSaveOk(false);
     setExpertError("");
+    setExpertNote("");
     setExpertBusy(null);
     setLocalOffers(effectiveOffers(node.offers));
+    setPackDelivery({});
     setDetailTab("config");
   }, [
     node.id,
@@ -404,13 +428,24 @@ function NodeDetailDialog({
   const installExpert = async (expertId: ExpertId) => {
     setExpertBusy(expertId);
     setExpertError("");
+    setExpertNote("");
     try {
-      const res = await authFetch<{ offers?: string[] }>(`/api/nodes/${node.id}/experts`, {
+      const res = await authFetch<{
+        offers?: string[];
+        node_delivery?: PackDeliverySnapshot["node_delivery"];
+        note?: string | null;
+      }>(`/api/nodes/${node.id}/experts`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ expert_id: expertId }),
       });
       setLocalOffers(effectiveOffers(res.offers ?? [...localOffers, expertId]));
+      const snap: PackDeliverySnapshot = {
+        node_delivery: res.node_delivery ?? null,
+        note: res.note ?? null,
+      };
+      setPackDelivery((prev) => ({ ...prev, [expertId]: snap }));
+      if (res.note) setExpertNote(String(res.note));
       window.dispatchEvent(new Event("nodes:changed"));
       onSaved();
     } catch (e) {
@@ -427,12 +462,21 @@ function NodeDetailDialog({
     }
     setExpertBusy(expertId);
     setExpertError("");
+    setExpertNote("");
     try {
-      const res = await authFetch<{ offers?: string[] }>(
-        `/api/nodes/${node.id}/experts/${encodeURIComponent(expertId)}`,
-        { method: "DELETE" },
-      );
+      const res = await authFetch<{
+        offers?: string[];
+        node_delivery?: PackDeliverySnapshot["node_delivery"];
+        note?: string | null;
+      }>(`/api/nodes/${node.id}/experts/${encodeURIComponent(expertId)}`, { method: "DELETE" });
       setLocalOffers(effectiveOffers(res.offers));
+      // After uninstall, pack is no longer offered; clear session delivery for that pack.
+      setPackDelivery((prev) => {
+        const next = { ...prev };
+        delete next[expertId];
+        return next;
+      });
+      if (res.note) setExpertNote(String(res.note));
       window.dispatchEvent(new Event("nodes:changed"));
       onSaved();
     } catch (e) {
@@ -846,18 +890,44 @@ function NodeDetailDialog({
               <div>
                 <p className="text-sm font-medium">扩展包</p>
                 <p className="mt-1 text-xs text-ink-muted">
-                  Node 内置通用助理（default），无需安装。此处只管理拓展能力包（渗透/CTF 等）。装好后去「专家管理」创建专家并绑定本节点。
+                  Node 内置通用助理（default），无需安装。此处只管理拓展能力包（渗透/CTF 等）。
+                  离线节点可排队安装，状态为「待同步」——不等于磁盘已可跑；节点上线后自动 expert_sync。
+                  装好后去「专家管理」创建专家并绑定本节点。
                 </p>
+                {!nodeOnline && (
+                  <p className="mt-2 rounded-md border border-status-running/30 bg-status-running/5 px-3 py-2 text-xs text-status-running">
+                    节点离线：安装/卸载会写入平台队列，待连接后同步到运行时。
+                  </p>
+                )}
               </div>
               {expertError && (
                 <p className="rounded-md border border-status-error/30 bg-status-error/5 px-3 py-2 text-xs text-status-error">
                   {expertError}
                 </p>
               )}
+              {expertNote && !expertError && (
+                <p className="rounded-md border border-hairline bg-canvas-inset px-3 py-2 text-xs text-ink-secondary">
+                  {expertNote}
+                </p>
+              )}
               <ul className="space-y-3">
                 {EXTENSION_PACKS.map((pack) => {
-                  const installed = localOffers.includes(pack.id);
+                  const offered = localOffers.includes(pack.id);
+                  const honesty: PackHonestyState = packHonestyState({
+                    offered,
+                    nodeOnline,
+                    lastDelivery: packDelivery[pack.id] ?? null,
+                  });
+                  const honestyLabel = packHonestyLabel(honesty);
                   const busy = expertBusy === pack.id;
+                  const badgeClass =
+                    honesty === "synced"
+                      ? "bg-status-success/10 text-status-success"
+                      : honesty === "queued"
+                        ? "bg-status-running/10 text-status-running"
+                        : honesty === "failed"
+                          ? "bg-status-error/10 text-status-error"
+                          : "border border-hairline text-ink-muted";
                   return (
                     <li
                       key={pack.id}
@@ -867,20 +937,19 @@ function NodeDetailDialog({
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="text-sm font-medium text-ink">{pack.label}</span>
                           <span className="font-mono text-[11px] text-ink-muted">{pack.id}</span>
-                          {installed ? (
-                            <span className="rounded-pill bg-status-success/10 px-1.5 py-px text-[10px] text-status-success">
-                              已安装
-                            </span>
-                          ) : (
-                            <span className="rounded-pill border border-hairline px-1.5 py-px text-[10px] text-ink-muted">
-                              未安装
-                            </span>
-                          )}
+                          <span className={`rounded-pill px-1.5 py-px text-[10px] ${badgeClass}`}>
+                            {honestyLabel}
+                          </span>
                         </div>
                         <p className="mt-1 text-xs text-ink-secondary">{pack.description}</p>
+                        {offered && packDelivery[pack.id]?.note ? (
+                          <p className="mt-1 text-[11px] text-ink-muted">
+                            {packDelivery[pack.id]?.note}
+                          </p>
+                        ) : null}
                       </div>
                       <div className="flex shrink-0 gap-2">
-                        {installed ? (
+                        {offered ? (
                           <button
                             type="button"
                             disabled={busy}
@@ -897,7 +966,7 @@ function NodeDetailDialog({
                             onClick={() => void installExpert(pack.id)}
                             className="rounded-md bg-ink px-3 py-1.5 text-xs font-medium text-on-ink hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
                           >
-                            {busy ? "处理中…" : "安装"}
+                            {busy ? "处理中…" : nodeOnline ? "安装" : "排队安装"}
                           </button>
                         )}
                       </div>
@@ -909,7 +978,7 @@ function NodeDetailDialog({
                 内置：
                 <span className="ml-1 font-mono text-ink">default</span>
                 {" · "}
-                已装拓展：
+                平台 offers：
                 <span className="ml-1 font-mono text-ink">
                   {localOffers.join(", ") || "（无）"}
                 </span>
