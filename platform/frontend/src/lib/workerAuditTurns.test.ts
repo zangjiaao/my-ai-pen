@@ -10,9 +10,12 @@ import {
 } from "./workerAuditTurns";
 
 assert.equal(mapDeliveryStatus("ok"), "ok");
+assert.equal(mapDeliveryStatus("success"), "ok");
 assert.equal(mapDeliveryStatus("failed"), "failed");
+assert.equal(mapDeliveryStatus("timeout"), "failed");
 assert.equal(mapDeliveryStatus("interrupted"), "interrupted");
 assert.equal(mapDeliveryStatus("aborted"), "interrupted");
+assert.equal(mapDeliveryStatus("stopped"), "interrupted");
 assert.notEqual(mapDeliveryStatus("failed"), mapDeliveryStatus("interrupted"));
 
 const frames = [

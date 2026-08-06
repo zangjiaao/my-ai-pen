@@ -18,6 +18,7 @@ import {
   scrubWorkerPurpose,
 } from "../lib/workerPresentation";
 import { filterMainChannelMessages, isWorkerAuditScoped } from "../lib/workerAuditChannel";
+import { mergeHistoryAndLive } from "../lib/workerAuditTurns";
 import { applyDisplayNameOverrides } from "../lib/workerDisplayName";
 import WorkerAuditDialog from "../components/WorkerAuditDialog";
 import type { PlanNode, StrixAgentStatus } from "../lib/panelTypes";
@@ -362,6 +363,30 @@ export default function ConversationPage() {
   });
 
   const messages = useMemo(() => messagesFromQueryData(activeId, messageQuery.data as MessagesInfiniteData | undefined), [activeId, messageQuery.data]);
+  /** Spec #308 S5: dialog path = Case history prefix ∪ live Worker frames (mergeHistoryAndLive). */
+  const workerAuditMessages = useMemo(() => {
+    const liveWorker = Object.values(liveStreams)
+      .filter((frame) =>
+        isWorkerAuditScoped({
+          msg_type: frame.msgType,
+          content: frame.content || {},
+        }),
+      )
+      .map((frame) => {
+        const like = liveFrameToMessageLike(frame);
+        return {
+          id: like.id,
+          conversation_id: like.conversation_id || activeId || "",
+          role: "agent" as const,
+          msg_type: like.msg_type,
+          content: like.content,
+          parent_msg_id: null,
+          created_at: like.created_at || new Date().toISOString(),
+        } satisfies Message;
+      });
+    if (!liveWorker.length) return messages;
+    return mergeHistoryAndLive(messages, liveWorker) as Message[];
+  }, [messages, liveStreams, activeId]);
   const displayMessages = useMemo(() => {
     // Spec #308 S-channel: Main chat never renders Worker audit process frames.
     const base = filterMainChannelMessages(messages.filter(isRenderableMessage));
@@ -3040,9 +3065,14 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
         open={Boolean(workerAuditTarget)}
         agentId={workerAuditTarget?.agentId || ""}
         panelName={workerAuditTarget?.panelName}
+        workerStatus={
+          workerAuditTarget
+            ? findAgentByIdExact(strixAgents, workerAuditTarget.agentId)?.status
+            : undefined
+        }
         workerOrdinal={workerAuditTarget?.workerOrdinal}
         overrides={workerDisplayNames}
-        messages={messages}
+        messages={workerAuditMessages}
         onClose={() => setWorkerAuditTarget(null)}
         onRename={async (agentId, displayName) => {
           if (!activeId) return;

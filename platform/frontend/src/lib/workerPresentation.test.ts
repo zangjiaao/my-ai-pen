@@ -93,15 +93,43 @@ assert.ok(compareAgentNames("Worker 10", "Worker 11") < 0);
 const roster = ["Worker 1", "Worker 10", "Worker 11", "Worker 2"].sort(compareAgentNames);
 assert.deepEqual(roster, ["Worker 1", "Worker 2", "Worker 10", "Worker 11"]);
 
-// Chip fallback: missing owner_agent_name but agent_id maps to panel Worker N
+// Chip: agent_id → panel Worker N when owner missing
 assert.equal(
   resolveTasksAgentChip({ owner_agent_name: "", agent_id: "sub_1" }, agents),
   "Worker 1",
 );
+// Spec #308: panel roster by agent_id wins over sticky Node owner_agent_name
 assert.equal(
   resolveTasksAgentChip({ owner_agent_name: "Worker 3", agent_id: "sub_1" }, agents),
-  "Worker 3",
+  "Worker 1",
 );
 assert.equal(resolveTasksAgentChip({ agent_id: "sub_missing" }, agents), "");
+// owner_agent_name still used when no agent_id / panel row
+assert.equal(
+  resolveTasksAgentChip({ owner_agent_name: "Worker 3", agent_id: "sub_missing" }, agents),
+  "Worker 3",
+);
+assert.equal(resolveTasksAgentChip({ owner_agent_name: "Worker 7" }), "Worker 7");
+
+// Spec #308 S7 / DoD #10: rename on Tasks chips via overrides or agents with override applied
+assert.equal(
+  resolveTasksAgentChip(
+    { owner_agent_name: "Worker 1", agent_id: "sub_1" },
+    agents,
+    { sub_1: "Recon" },
+  ),
+  "Recon",
+);
+const renamedAgents = [
+  { id: "node4-main-sub_1", name: "Recon", role: "subagent" },
+  { id: "node4-main-sub_10", name: "Worker 10", role: "subagent" },
+];
+assert.equal(
+  resolveTasksAgentChip(
+    { owner_agent_name: "Worker 1", agent_id: "sub_1" },
+    renamedAgents,
+  ),
+  "Recon",
+);
 
 console.log("workerPresentation.test.ts: ok");

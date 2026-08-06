@@ -334,7 +334,8 @@ function isActiveAgentStatus(status: string | undefined): boolean {
   return ["running", "waiting", "pending"].includes(String(status || "").toLowerCase());
 }
 
-function agentStatusLabel(status: string | undefined): string {
+/** Normalize panel agent.status for tree / Worker audit header (Spec #308 §4.1). */
+export function agentStatusLabel(status: string | undefined): string {
   // Case Main roots often arrive as "idle"; treat idle/empty as done (green), same as Sub completed.
   const normalized = String(status ?? "")
     .trim()
@@ -371,7 +372,8 @@ function agentStatusDotClass(status: string | undefined): string {
   return "bg-canvas-inset";
 }
 
-function agentStatusBadgeClass(status: string | undefined): string {
+/** Badge chrome for panel agent.status (tree + Worker audit header). */
+export function agentStatusBadgeClass(status: string | undefined): string {
   const normalized = agentStatusLabel(status);
   if (normalized === "running") return "bg-status-running/10 text-status-running";
   if (normalized === "done") return "bg-status-success/10 text-status-success";

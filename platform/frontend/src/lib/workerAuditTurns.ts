@@ -76,12 +76,25 @@ export function parseHandoff(raw: unknown): HandoffFields {
   return out;
 }
 
+/**
+ * Map delivery wire status → card status (S4).
+ * Node host maps race flags via object form in worker-audit-channel.ts;
+ * FE receives string statuses on worker_package_delivery (ok | failed | interrupted)
+ * plus common synonyms from older/alternate emitters.
+ */
 export function mapDeliveryStatus(raw: unknown): DeliveryStatus {
   const s = String(raw || "").trim().toLowerCase();
   if (s === "ok" || s === "success" || s === "completed" || s === "done") return "ok";
-  if (s === "interrupted" || s === "aborted" || s === "canceled" || s === "cancelled") {
+  if (
+    s === "interrupted" ||
+    s === "aborted" ||
+    s === "canceled" ||
+    s === "cancelled" ||
+    s === "stopped"
+  ) {
     return "interrupted";
   }
+  // timed_out / timeout / error / failed / unknown → failed (not interrupt)
   return "failed";
 }
 

@@ -136,8 +136,12 @@ export function compareAgentNames(left: string, right: string): number {
 }
 
 /**
- * Tasks chip with ownership fallback: owner_agent_name → panel agent name by agent_id.
- * Never shows raw sub_* when panel has a clean Worker N.
+ * Tasks chip presentation (Spec #308 rename propagate):
+ *   user_display_name(agent_id) ?? panel roster name ?? owner_agent_name ?? ""
+ *
+ * `agents` should already include Case display_name overrides (applyDisplayNameOverrides).
+ * Optional `overrides` is checked first so rename works even if agents lag.
+ * Never shows raw sub_* when panel has a clean Worker N / renamed label.
  */
 export function resolveTasksAgentChip(
   item: {
@@ -146,19 +150,43 @@ export function resolveTasksAgentChip(
     linked_agent_id?: string | null;
   },
   agents?: Array<{ id: string; name?: string; role?: string }>,
+  overrides?: Record<string, string> | null,
 ): string {
-  const fromName = humanAgentChipName(item.owner_agent_name);
-  if (fromName) return fromName;
   const id = String(item.agent_id || item.linked_agent_id || "").trim();
-  if (!id || !agents?.length) return "";
-  const agent = findAgentByIdExact(agents, id);
-  if (!agent) return "";
-  const chip = humanAgentChipName(agent.name);
-  if (chip) return chip;
-  // Panel subagent with non-opaque name
-  if (String(agent.role || "").toLowerCase() === "subagent" && isWorkerName(String(agent.name || ""))) {
-    return String(agent.name).trim();
+
+  // 1. Case user_display_name(agent_id)
+  if (id && overrides && Object.keys(overrides).length) {
+    const direct = String(overrides[id] || "").trim();
+    if (direct) {
+      const chip = humanAgentChipName(direct);
+      if (chip) return chip;
+    }
+    for (const [key, value] of Object.entries(overrides)) {
+      const k = String(key || "").trim();
+      const v = String(value || "").trim();
+      if (!k || !v) continue;
+      if (k === id || id.endsWith(`-${k}`) || k.endsWith(`-${id}`)) {
+        const chip = humanAgentChipName(v);
+        if (chip) return chip;
+      }
+    }
   }
+
+  // 2. Panel roster name by agent_id (includes overrides when parent applied them)
+  if (id && agents?.length) {
+    const agent = findAgentByIdExact(agents, id);
+    if (agent) {
+      const chip = humanAgentChipName(agent.name);
+      if (chip) return chip;
+      if (String(agent.role || "").toLowerCase() === "subagent" && isWorkerName(String(agent.name || ""))) {
+        return String(agent.name).trim();
+      }
+    }
+  }
+
+  // 3. Sticky Node owner_agent_name (gap fill when no agent_id / panel row)
+  const fromOwner = humanAgentChipName(item.owner_agent_name);
+  if (fromOwner) return fromOwner;
   return "";
 }
 

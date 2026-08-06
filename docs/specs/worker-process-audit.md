@@ -314,6 +314,6 @@ Waves may merge; DoD is §8, not wave labels.
 | Node4 emit | `node4/src/runtime/worker-audit-channel.ts` — package start/delivery, progressive stream, tool frames; attach in `subagent-session.ts`; Policy A evolution in `run-node4-agent.ts` `attachProductToolEventBridge` |
 | Platform persist | `platform/backend/app/ws/router.py` — `worker_package_start` / `worker_package_delivery` + scope stamp on text/thinking/tool_call |
 | Display name | `case_participants.set_worker_display_name` + `PUT /api/conversations/{id}/workers/{agent_id}/display-name` + snapshot `worker_display_names` |
-| FE channel / turns | `platform/frontend/src/lib/workerAuditChannel.ts`, `workerAuditTurns.ts`, `workerDisplayName.ts` |
-| FE dialog | `WorkerAuditDialog.tsx` master–detail C; open from `AgentCollaborationTree` Worker row via `RightPanel` / `ConversationPage` |
-| Pure tests | Node `worker-audit-channel.test.ts`; FE `workerAudit*.test.ts`; BE `test_case_participants` display_name |
+| FE channel / turns | `platform/frontend/src/lib/workerAuditChannel.ts`, `workerAuditTurns.ts` (`mergeHistoryAndLive` on dialog path), `workerDisplayName.ts`; Tasks chip resolve in `workerPresentation.resolveTasksAgentChip` (override → panel → owner_agent_name) |
+| FE dialog | `WorkerAuditDialog.tsx` master–detail C; header = display name + panel Worker status; Delivery collapsible settlement; open from `AgentCollaborationTree` Worker row via `RightPanel` / `ConversationPage` |
+| Pure tests | Node `worker-audit-channel.test.ts`; FE `workerAudit*.test.ts` (incl. `workerAuditReplay.test.ts` S5/S6); BE `test_case_participants` display_name |

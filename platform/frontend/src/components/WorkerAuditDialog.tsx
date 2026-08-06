@@ -12,12 +12,15 @@ import {
   type PackageTurnStatus,
 } from "../lib/workerAuditTurns";
 import { resolveWorkerDisplayName, normalizeDisplayNameWrite } from "../lib/workerDisplayName";
+import { agentStatusBadgeClass, agentStatusLabel } from "./AgentCollaborationTree";
 import ThinkingCard from "./cards/ThinkingCard";
 
 type Props = {
   open: boolean;
   agentId: string;
   panelName?: string;
+  /** Live panel agent.status (running / done / failed / …). */
+  workerStatus?: string;
   workerOrdinal?: number;
   overrides?: Record<string, string>;
   messages: Message[];
@@ -49,6 +52,7 @@ export default function WorkerAuditDialog({
   open,
   agentId,
   panelName,
+  workerStatus,
   workerOrdinal,
   overrides,
   messages,
@@ -61,6 +65,7 @@ export default function WorkerAuditDialog({
     panelName,
     workerOrdinal,
   });
+  const headerStatus = agentStatusLabel(workerStatus);
 
   const turns = useMemo(() => buildPackageTurns(messages, agentId), [messages, agentId]);
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
@@ -131,12 +136,22 @@ export default function WorkerAuditDialog({
         aria-modal="true"
         aria-label={`Worker audit: ${displayName}`}
       >
-        {/* Header */}
+        {/* Header: display name + Worker status (panel agent, not package-turn) */}
         <div className="flex shrink-0 items-center gap-3 border-b border-hairline px-4 py-3">
           <div className="min-w-0 flex-1">
-            <h2 className="truncate text-base font-semibold" data-testid="worker-audit-title">
-              {displayName}
-            </h2>
+            <div className="flex min-w-0 items-center gap-2">
+              <h2 className="truncate text-base font-semibold" data-testid="worker-audit-title">
+                {displayName}
+              </h2>
+              {workerStatus != null && workerStatus !== "" && (
+                <span
+                  className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase ${agentStatusBadgeClass(workerStatus)}`}
+                  data-testid="worker-audit-status"
+                >
+                  {headerStatus}
+                </span>
+              )}
+            </div>
             <p className="truncate font-mono text-[11px] text-ink-muted" title={agentId}>
               {agentId}
             </p>
@@ -346,6 +361,18 @@ function TurnDetail({
           {turn.delivery.summary && (
             <p className="mt-1.5 whitespace-pre-wrap text-xs text-ink-secondary">{turn.delivery.summary}</p>
           )}
+          {turn.delivery.settlement &&
+            typeof turn.delivery.settlement === "object" &&
+            Object.keys(turn.delivery.settlement).length > 0 && (
+              <details className="mt-2" data-testid="worker-delivery-settlement">
+                <summary className="cursor-pointer select-none text-[11px] text-ink-muted hover:text-ink-secondary">
+                  结构化 settlement
+                </summary>
+                <pre className="mt-1.5 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md border border-hairline bg-canvas px-2 py-1.5 font-mono text-[10px] text-ink-secondary">
+                  {JSON.stringify(turn.delivery.settlement, null, 2)}
+                </pre>
+              </details>
+            )}
         </section>
       )}
     </div>
