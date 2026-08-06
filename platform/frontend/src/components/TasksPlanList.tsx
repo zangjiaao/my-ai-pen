@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { CheckCircle2, Circle, CircleDashed, XCircle } from "lucide-react";
-import { displayTodoTitle, humanAgentChipName } from "../lib/workerPresentation";
-import type { PlanNode, PlanStatus } from "../lib/panelTypes";
+import { displayTodoTitle, resolveTasksAgentChip } from "../lib/workerPresentation";
+import type { PlanNode, PlanStatus, StrixAgentStatus } from "../lib/panelTypes";
 
 export type { PlanNode, PlanStatus } from "../lib/panelTypes";
 
@@ -9,6 +9,8 @@ export type GraphAwareTodoListProps = {
   planTree: PlanNode[];
   workItems: PlanNode[];
   running?: boolean;
+  /** Collaboration roster for chip fallback when owner_agent_name is missing. */
+  agents?: StrixAgentStatus[];
 };
 
 /**
@@ -24,6 +26,7 @@ export function GraphAwareTodoList({
   planTree,
   workItems,
   running,
+  agents,
 }: GraphAwareTodoListProps) {
   // Manual overrides: true=open, false=closed. Missing key → auto policy.
   const [manual, setManual] = useState<Record<string, boolean>>({});
@@ -40,7 +43,7 @@ export function GraphAwareTodoList({
       : synthesizeGraphStagesFromWorkItems(workItems.length ? workItems : planTree);
 
   if (!phases.length) {
-    return <StrixTodoList items={workItems} running={running} />;
+    return <StrixTodoList items={workItems} running={running} agents={agents} />;
   }
 
   const byParent = new Map<string, PlanNode[]>();
@@ -103,7 +106,7 @@ export function GraphAwareTodoList({
               <div className="ml-3 border-l border-hairline-soft pl-2">
                 <div className="space-y-0">
                   {children.map((item, index) => (
-                    <StrixTodoItem key={planNodeKey(item, index)} item={item} />
+                    <StrixTodoItem key={planNodeKey(item, index)} item={item} agents={agents} />
                   ))}
                 </div>
               </div>
@@ -114,7 +117,7 @@ export function GraphAwareTodoList({
       {orphan.length > 0 && (
         <div className="space-y-0">
           <p className="px-2 py-1 text-[10px] font-semibold uppercase text-ink-muted">Other</p>
-          <StrixTodoList items={orphan} running={running} />
+          <StrixTodoList items={orphan} running={running} agents={agents} />
         </div>
       )}
     </div>
@@ -155,7 +158,15 @@ function synthesizeGraphStagesFromWorkItems(nodes: PlanNode[]): PlanNode[] {
   }));
 }
 
-function StrixTodoList({ items, running = false }: { items: PlanNode[]; running?: boolean }) {
+function StrixTodoList({
+  items,
+  running = false,
+  agents,
+}: {
+  items: PlanNode[];
+  running?: boolean;
+  agents?: StrixAgentStatus[];
+}) {
   if (!items.length) {
     return (
       <p className="text-sm text-ink-muted">
@@ -168,7 +179,9 @@ function StrixTodoList({ items, running = false }: { items: PlanNode[]; running?
   // Keep caller sort (active-first for Node2); do not re-sort by priority alone.
   return (
     <div className="space-y-1" data-testid="strix-todo-list">
-      {items.map((item, index) => <StrixTodoItem key={planNodeKey(item, index)} item={item} />)}
+      {items.map((item, index) => (
+        <StrixTodoItem key={planNodeKey(item, index)} item={item} agents={agents} />
+      ))}
     </div>
   );
 }
@@ -233,12 +246,13 @@ function PlanRow({
   return <div className="flex min-w-0 items-start gap-2 rounded-md px-2 py-2 hover:bg-canvas-inset">{body}</div>;
 }
 
-function StrixTodoItem({ item }: { item: PlanNode }) {
+function StrixTodoItem({ item, agents }: { item: PlanNode; agents?: StrixAgentStatus[] }) {
   const status = normalizeTodoStatus(item.status);
   const isWorker = String(item.kind || "") === "worker" || String(item.source || "") === "worker";
   const workerBadge = isWorker ? workerOutcomeBadge(item) : null;
   const ownerLabel = String(item.owner_expert_name || "").trim();
-  const agentLabel = humanAgentChipName(item.owner_agent_name);
+  // Spec #301: owner_agent_name first; fall back agent_id → panel Worker name.
+  const agentLabel = resolveTasksAgentChip(item, agents);
   const isFollowUp =
     String(item.source || "") === "worker" &&
     (/^follow-up\b/i.test(String(item.title || "")) || String(item.node_id || item.id || "").startsWith("plan-followup-"));

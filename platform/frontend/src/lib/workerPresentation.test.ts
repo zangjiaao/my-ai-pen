@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import {
   agentDisplayName,
   agentPurposeLine,
+  compareAgentNames,
   displayTodoTitle,
   extractThisTurnGoal,
   findAgentByIdExact,
@@ -14,7 +15,9 @@ import {
   isWorkerName,
   legacyWorkerDisplayName,
   looksLikeHandoffPackage,
+  resolveTasksAgentChip,
   scrubWorkerPurpose,
+  workerNameOrdinal,
 } from "./workerPresentation.ts";
 
 const handoff = `# Subagent handoff package
@@ -81,5 +84,24 @@ assert.equal(legacyWorkerDisplayName([], "sub_1"), "Worker");
 
 assert.ok(displayTodoTitle(handoff).includes("SQL Injection"));
 assert.equal(displayTodoTitle("Map login（已完成）"), "Map login");
+
+// Spec #301 — numeric Worker roster order (1,2,10,11 not 1,10,11,2)
+assert.equal(workerNameOrdinal("Worker 10"), 10);
+assert.equal(workerNameOrdinal("Main"), null);
+assert.ok(compareAgentNames("Worker 2", "Worker 10") < 0, "Worker 2 before Worker 10");
+assert.ok(compareAgentNames("Worker 10", "Worker 11") < 0);
+const roster = ["Worker 1", "Worker 10", "Worker 11", "Worker 2"].sort(compareAgentNames);
+assert.deepEqual(roster, ["Worker 1", "Worker 2", "Worker 10", "Worker 11"]);
+
+// Chip fallback: missing owner_agent_name but agent_id maps to panel Worker N
+assert.equal(
+  resolveTasksAgentChip({ owner_agent_name: "", agent_id: "sub_1" }, agents),
+  "Worker 1",
+);
+assert.equal(
+  resolveTasksAgentChip({ owner_agent_name: "Worker 3", agent_id: "sub_1" }, agents),
+  "Worker 3",
+);
+assert.equal(resolveTasksAgentChip({ agent_id: "sub_missing" }, agents), "");
 
 console.log("workerPresentation.test.ts: ok");

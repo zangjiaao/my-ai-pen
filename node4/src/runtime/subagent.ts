@@ -6,8 +6,10 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { GoalStore } from "../stores/goal.js";
+import type { TodoStore } from "../stores/todo.js";
 import type { EvidenceStoreLike, PlatformSink, TaskEnvelope } from "../types.js";
 import { emitHardGraphPlanTreeUpdate } from "./hard-graph-plan.js";
+import { emitTodoPlanTreeUpdate } from "./plan-projection.js";
 import { formatWorkerName, resolveSubagentGoal } from "./panel-agents.js";
 
 export type SubagentResult = {
@@ -18,7 +20,7 @@ export type SubagentResult = {
   evidenceId?: string;
   goalId?: string;
   artifactPath?: string;
-  /** Hard Graph L2 ownership bind (when plan store present). */
+  /** Case todo ownership bind (Hard Graph L2 or Free Main Todo). */
   planBind?: {
     path: string;
     node_id?: string;
@@ -52,6 +54,11 @@ export type SubagentHostOptions = {
    */
   hardGraphPlan?: () => import("./hard-graph-plan.js").HardGraphPlanStore | undefined;
   stageId?: () => string | undefined;
+  /**
+   * Spec #301 Free Main Todo path — host auto-bind Worker chip when Graph is not active.
+   * Prefer a getter so the store can be attached after host construction.
+   */
+  todo?: () => TodoStore | undefined;
 };
 
 let subSeq = 0;
@@ -94,10 +101,11 @@ export class SubagentHost {
   }
 
   /**
-   * Attach Worker chip to Hard Graph L2 via resolveWorkerBind priority:
-   * explicit → reattach → single_free → fuzzy → pkg-*.
+   * Attach Worker chip to Case todo (Hard Graph L2 or Free Main Todo).
+   * Priority: explicit → reattach → single_free → fuzzy → pkg-* (owner still set).
+   * Spec #301: Main must not need a separate "link" tool.
    */
-  private async upsertHardGraphPackageChip(input: {
+  private async upsertCaseTodoChip(input: {
     subagentId: string;
     assignment: string;
     label?: string;
@@ -111,7 +119,32 @@ export class SubagentHost {
   }> {
     const plan = this.opts.hardGraphPlan?.();
     const stageId = this.opts.stageId?.();
-    if (!plan || !stageId) return { path: "none" };
+    if (plan && stageId) {
+      return this.upsertHardGraphPackageChip(input, plan, stageId);
+    }
+    const todo = this.opts.todo?.();
+    if (todo) {
+      return this.upsertFreeTodoChip(input, todo);
+    }
+    return { path: "none" };
+  }
+
+  private async upsertHardGraphPackageChip(
+    input: {
+      subagentId: string;
+      assignment: string;
+      label?: string;
+      planNodeId?: string;
+      status: "running" | "done" | "failed";
+    },
+    plan: import("./hard-graph-plan.js").HardGraphPlanStore,
+    stageId: string,
+  ): Promise<{
+    path: string;
+    node_id?: string;
+    requested_node_id?: string;
+    hint?: string;
+  }> {
     const goal = resolveSubagentGoal(input.label, input.assignment);
     const title = goal.slice(0, 240) || input.subagentId;
     const workerN = this.opts.panelAgents?.workerIndexFor(input.subagentId) ?? 0;
@@ -165,6 +198,73 @@ export class SubagentHost {
     };
   }
 
+  /** Free Main Todo path — same bind priority; emit plan_tree_updated from TodoStore. */
+  private async upsertFreeTodoChip(
+    input: {
+      subagentId: string;
+      assignment: string;
+      label?: string;
+      planNodeId?: string;
+      status: "running" | "done" | "failed";
+    },
+    todo: TodoStore,
+  ): Promise<{
+    path: string;
+    node_id?: string;
+    requested_node_id?: string;
+    hint?: string;
+  }> {
+    const goal = resolveSubagentGoal(input.label, input.assignment);
+    const title = goal.slice(0, 240) || input.subagentId;
+    const workerN = this.opts.panelAgents?.workerIndexFor(input.subagentId) ?? 0;
+    const owner = workerN > 0 ? formatWorkerName(workerN) : "Worker";
+    const requested = String(input.planNodeId || "").trim() || undefined;
+    const chip = {
+      agent_id: input.subagentId,
+      owner_agent_name: owner,
+      status: input.status,
+      goal,
+      plan_node_id: input.planNodeId,
+    };
+
+    const bound = todo.resolveWorkerBind(chip);
+    if (!bound) {
+      todo.upsertPackageWorkItem({
+        node_id: `pkg-${input.subagentId}`,
+        title,
+        status: input.status,
+        agent_id: input.subagentId,
+        owner_agent_name: owner,
+      });
+    } else {
+      todo.removePackageWorkItem(`pkg-${input.subagentId}`);
+    }
+
+    await emitTodoPlanTreeUpdate(
+      this.opts.platform,
+      this.opts.task,
+      todo,
+      `subagent.${input.status}:${input.subagentId}`,
+    ).catch(() => {});
+
+    if (bound) {
+      return {
+        path: bound.path,
+        node_id: bound.node_id,
+        requested_node_id: bound.requested_node_id,
+        hint: bound.hint,
+      };
+    }
+    return {
+      path: "pkg",
+      node_id: `pkg-${input.subagentId}`,
+      requested_node_id: requested,
+      hint: requested
+        ? `plan_node_id "${requested}" not found in Free todos; fell back to pkg. Copy work_items[].node_id from the last todo result.`
+        : "No matching Main todo; host pkg-* row created. Pass plan_node_id when multiple todos are open.",
+    };
+  }
+
   /**
    * Run a child unit of work under the task workspace contract.
    * `worker` is required for non-LLM deterministic execution; agent tools supply a default.
@@ -207,7 +307,7 @@ export class SubagentHost {
     // Push full collaboration tree immediately — tool_execution_start checkpoint
     // fires before spawn, so without this the UI only ever sees Main.
     await this.emitPanelAgentsSnapshot();
-    const planBindStart = await this.upsertHardGraphPackageChip({
+    const planBindStart = await this.upsertCaseTodoChip({
       subagentId,
       assignment: options.assignment,
       label: options.label,
@@ -267,7 +367,7 @@ export class SubagentHost {
 
     this.opts.panelAgents?.noteSubagentEnd({ id: subagentId, ok, summary });
     await this.emitPanelAgentsSnapshot();
-    const planBindEnd = await this.upsertHardGraphPackageChip({
+    const planBindEnd = await this.upsertCaseTodoChip({
       subagentId,
       assignment: options.assignment,
       label: options.label,

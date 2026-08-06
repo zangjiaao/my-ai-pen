@@ -224,6 +224,8 @@ export async function runNode4Task(
     platform: loggingPlatform,
     goals,
     panelAgents: panel,
+    // Spec #301 Free path: host auto-bind Worker ↔ Case Main todos on spawn.
+    todo: () => runtime.todo,
   });
 
   /**
