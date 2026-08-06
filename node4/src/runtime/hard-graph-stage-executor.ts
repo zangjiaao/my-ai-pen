@@ -859,7 +859,9 @@ export function createHardGraphStageExecutor(options: {
           stageUsage.snapshot({ tool_calls: obsCounters.toolCallCount }),
         );
         // I0.9 durable captain continue (same session resume) is not implemented;
-        // interrupt ends Graph run; Case continue is a new burst. Always dispose.
+        // interrupt ends Graph run; Case continue is a new Hard burst (Spec #282 minimum
+        // bar: wire resume → Hard re-entry, not Free cold OMP; full park/todo snapshot OOS).
+        // Always dispose stage session here.
         try {
           await Promise.resolve(session.dispose());
         } catch {

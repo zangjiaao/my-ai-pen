@@ -441,13 +441,25 @@ export function applyHardGraphToolProfile(
   return out;
 }
 
-/** Binary Expert Graph execution after parse (omit = first run uses full when hard resolves). */
-export type GraphExecutionMode = "full" | "continue";
+/**
+ * Expert Graph execution after parse (omit = first run uses full when hard resolves).
+ * Spec #282: "continue" is C1 free-in-envelope only; "resume" is incomplete Graph Hard path.
+ */
+export type GraphExecutionMode = "full" | "continue" | "resume";
 
 /**
  * Parse structured graph_execution from task_assign (snake/camel).
- * Synonyms collapse once: continue_chat|envelope → continue; run|restart → full.
+ * Synonyms collapse once:
+ * - continue_chat|envelope → continue (C1 free-in-envelope, post-complete only)
+ * - resume → incomplete Graph same-mode continue (Hard path; Spec #282)
+ * - continue_session → also resume (defense-in-depth: platform *internal* name must
+ *   never appear on the wire — platform maps continue_session → wire "continue" for
+ *   C1 only. If a stale adapter leaks the internal token, prefer Hard over Free demotion.)
+ * - run|restart → full
  * Never NLP on instruction text.
+ *
+ * Naming note: platform **internal** `continue_session` = C1 and wires as `"continue"`.
+ * Node never sees platform-internal enums; wire vocabulary is continue|resume|full.
  */
 export function parseGraphExecution(
   message: Record<string, unknown> | null | undefined,
@@ -456,6 +468,8 @@ export function parseGraphExecution(
   const raw = message.graph_execution ?? message.graphExecution ?? "";
   const ge = String(raw).trim().toLowerCase();
   if (ge === "continue" || ge === "continue_chat" || ge === "envelope") return "continue";
+  // Spec #282: platform wires incomplete Graph same-mode continue as resume (not continue).
+  if (ge === "resume" || ge === "continue_session") return "resume";
   if (ge === "full" || ge === "run" || ge === "restart") return "full";
   return undefined;
 }
@@ -463,6 +477,7 @@ export function parseGraphExecution(
 /**
  * C1 (#78 / #80): post-Graph continue-chat stays in envelope without full Hard re-run.
  * Structured only — after parse, true iff `graphExecution === "continue"`.
+ * Spec #282: `resume` (incomplete Graph continue) is NOT C1 — must take Hard path.
  * `graphExecution=full` (or omit on first Graph) → full Expert Graph path.
  */
 export function isContinueInEnvelopeExecution(input: {
@@ -472,12 +487,14 @@ export function isContinueInEnvelopeExecution(input: {
 }
 
 /**
- * Product work-path decision after resolveHardGraph (#76 Soft retire / #78 C1).
+ * Product work-path decision after resolveHardGraph (#76 Soft retire / #78 C1 / #282).
  * - chatOnly / ledger assist → free (no Expert Graph execution)
- * - continue-in-envelope (C1) → free OMP under sticky Graph RoE/template (not Hard stages)
- * - hard resolved → Expert Graph runner
+ * - continue-in-envelope (C1 post-complete only) → free OMP under sticky Graph RoE/template
+ * - hard resolved (including incomplete resume) → Expert Graph runner
  * - structured Graph intent but no hard Graph → fail-closed (never silent free)
  * - no Graph intent → free OMP
+ *
+ * Incomplete Graph continue must set continueInEnvelope=false (parse resume, not continue).
  */
 export function resolveExpertWorkPath(input: {
   hardMode: "hard" | "not_hard";
@@ -485,13 +502,17 @@ export function resolveExpertWorkPath(input: {
   graphIntent: string | null;
   chatOnly?: boolean;
   ledgerAssistSeat?: boolean;
-  /** C1: post-complete follow-up — free-in-envelope, not full Hard schedule. */
+  /**
+   * C1 only: post-complete follow-up — free-in-envelope, not full Hard schedule.
+   * Must not be true for incomplete/interrupted Graph resume (Spec #282).
+   */
   continueInEnvelope?: boolean;
 }): { path: "hard" } | { path: "free" } | { path: "unavailable"; graphId: string } {
   if (input.chatOnly || input.ledgerAssistSeat) {
     return { path: "free" };
   }
-  // C1 before hard path: sticky Graph template must not re-fire stages on chat turns.
+  // C1 before hard path: sticky Graph template must not re-fire stages on post-complete chat.
+  // Incomplete Graph resume must not reach here with continueInEnvelope=true.
   if (input.continueInEnvelope) {
     return { path: "free" };
   }

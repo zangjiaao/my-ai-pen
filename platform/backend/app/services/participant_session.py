@@ -15,7 +15,10 @@ from app.services.case_engagement import (
 )
 
 WorkMode = Literal["free", "graph"]
-GraphExecution = Literal["run", "continue_session", "resume_parked", "full_restart"]
+# continue_session = post-complete C1 free-in-envelope (wire "continue")
+# resume = incomplete/interrupted/failed Graph same-mode continue (wire "resume" — Hard path, not C1)
+# resume_parked = permissioned re-enter of parked Graph after exit
+GraphExecution = Literal["run", "continue_session", "resume", "resume_parked", "full_restart"]
 QueueMode = Literal["enqueue", "run_now"]
 
 # Wire values that mean Free / unspecified (UI 不指定).
@@ -208,10 +211,11 @@ def resolve_work_envelope(
         work_mode = "free"
         graph_id = None
 
-    # --- graph_execution (C1 + same-mode) ---
+    # --- graph_execution (C1 post-complete vs incomplete Graph resume — Spec #282) ---
     if work_mode == "graph" and graph_id:
         if graph_execution is None:
-            # Map existing C1 resolver; only after real Graph settle → continue.
+            incomplete_like = is_incomplete_like_status(conversation_status)
+            # Map existing C1 resolver; only after product-settled completed → free-in-envelope.
             c1 = resolve_graph_execution(
                 engagement_template=graph_id,
                 conversation_status=conversation_status,
@@ -219,18 +223,16 @@ def resolve_work_envelope(
             )
             if c1 == "full":
                 graph_execution = "full_restart"
+            elif incomplete_like and sess_mode == "graph":
+                # Spec #282 S1/S6: incomplete/interrupted/failed Graph Session must never
+                # wire as C1 "continue" (Node free-in-envelope). Resume Hard path instead.
+                graph_execution = "resume"
             elif c1 == "continue":
+                # Post-complete (or explicit continue_chat/envelope on completed) → C1.
                 graph_execution = "continue_session"
-            elif same_mode_continue and sess_mode == "graph":
-                # Incomplete/failed Graph continue: keep Graph without forcing full restart
-                # when client did not ask for full. Node interprets omit as first-run full
-                # only when hard resolves; for fail continue we prefer continue_session.
-                status = str(conversation_status or "").strip().lower()
-                if status in {"failed", "incomplete", "paused", "canceled", "cancelled"}:
-                    graph_execution = "continue_session"
-                else:
-                    graph_execution = "run"
             else:
+                # First Graph run / composer-enter / non-incomplete same-mode: Hard full path.
+                # (same_mode_continue + incomplete is handled above via resume.)
                 graph_execution = "run"
     else:
         graph_execution = None
@@ -256,11 +258,19 @@ def resolve_work_envelope(
 
 
 def _wire_graph_execution(graph_execution: GraphExecution | None) -> str | None:
-    """Map envelope graph_execution to existing task_assign wire values."""
+    """Map envelope graph_execution to task_assign wire values (Spec #282 split).
+
+    - continue_session → "continue" (C1 free-in-envelope only)
+    - resume / resume_parked → "resume" (Hard Graph path; not C1)
+    - full_restart → "full"
+    - run → omit (Node first-run full when hard resolves)
+    """
     if graph_execution is None:
         return None
-    if graph_execution in {"continue_session", "resume_parked"}:
+    if graph_execution == "continue_session":
         return "continue"
+    if graph_execution in {"resume", "resume_parked"}:
+        return "resume"
     if graph_execution == "full_restart":
         return "full"
     # run → omit (Node first-run full when hard resolves)
@@ -287,3 +297,136 @@ def apply_work_envelope_to_task_assign(task_msg: dict | None, envelope: dict | N
         out.pop("graph_execution", None)
         out.pop("graphExecution", None)
     return out
+
+
+# Incomplete / interrupted Session terminals (Spec #282 incomplete Graph resume).
+INCOMPLETE_LIKE_STATUSES = frozenset(
+    {"failed", "incomplete", "paused", "canceled", "cancelled"}
+)
+
+
+def is_incomplete_like_status(status: object) -> bool:
+    """True when conversation status is incomplete/interrupted/failed (not completed)."""
+    return str(status or "").strip().lower() in INCOMPLETE_LIKE_STATUSES
+
+
+def resolve_interrupt_wind_down(
+    *,
+    active_worker_ids: object = None,
+    sent_to: object = None,
+    action: object = "cancel",
+) -> dict[str, Any]:
+    """Spec #282 S7: pure decision — interrupt wind-down vs honest settle.
+
+    Wind-down only when at least one **tracked** worker is also **online** (in sent_to).
+    Offline-only ghosts + online bound-node alone must settle (no permanent interrupting).
+
+    Returns:
+      wind_down: bool
+      online_active: list[str]  tracked workers that received interrupt
+      offline_ghosts: list[str] tracked workers not online
+      settle_status: "running" | "canceled" | "incomplete"
+    """
+    if isinstance(active_worker_ids, dict):
+        workers = {str(k).strip() for k in active_worker_ids if str(k).strip()}
+    elif isinstance(active_worker_ids, (list, tuple, set, frozenset)):
+        workers = {str(x).strip() for x in active_worker_ids if str(x).strip()}
+    else:
+        workers = set()
+
+    if isinstance(sent_to, dict):
+        sent = {str(k).strip() for k in sent_to if str(k).strip()}
+    elif isinstance(sent_to, (list, tuple, set, frozenset)):
+        sent = {str(x).strip() for x in sent_to if str(x).strip()}
+    else:
+        sent = set()
+
+    online_active = sorted(workers & sent)
+    offline_ghosts = sorted(workers - sent)
+    wind_down = bool(online_active)
+    act = str(action or "cancel").strip().lower()
+    if wind_down:
+        settle_status = "running"
+    elif act == "pause":
+        settle_status = "incomplete"
+    else:
+        settle_status = "canceled"
+    return {
+        "wind_down": wind_down,
+        "online_active": online_active,
+        "offline_ghosts": offline_ghosts,
+        "settle_status": settle_status,
+    }
+
+
+def finalize_interrupt_wind_down(
+    *,
+    initial_wind_down: bool,
+    action: object = "cancel",
+    workers_remaining: bool = False,
+) -> dict[str, Any]:
+    """Spec #282 S7: pure post-apply outcome (after worker state mutations).
+
+    Separates initial decision from apply results so empty-after-apply cannot keep
+    settle_status=running from the pre-apply decision, and so interrupting stays
+    true while online workers remain.
+
+    Returns:
+      wind_down, settle_status, working, interrupting
+    """
+    act = str(action or "cancel").strip().lower()
+    idle_status = "incomplete" if act == "pause" else "canceled"
+    if not initial_wind_down:
+        return {
+            "wind_down": False,
+            "settle_status": idle_status,
+            "working": False,
+            "interrupting": False,
+        }
+    if workers_remaining:
+        return {
+            "wind_down": True,
+            "settle_status": "running",
+            "working": True,
+            "interrupting": True,
+        }
+    # Started wind-down but apply left no workers — honest settle (not "running").
+    return {
+        "wind_down": False,
+        "settle_status": idle_status,
+        "working": False,
+        "interrupting": False,
+    }
+
+
+def wire_graph_execution_for_status(
+    *,
+    engagement_template: object = None,
+    conversation_status: object = None,
+    explicit_execution: object = None,
+) -> str | None:
+    """Legacy C1 helper alignment (Spec #282): incomplete Graph never wires continue.
+
+    Returns wire value ``"full"`` | ``"continue"`` | ``"resume"`` | None.
+    Prefer ``resolve_work_envelope`` on product dispatch; this is for C1-only callers.
+    """
+    from app.services.case_engagement import (
+        is_product_graph_template,
+        resolve_graph_execution,
+    )
+
+    raw = str(explicit_execution or "").strip().lower()
+    if raw in {"full", "run", "restart"}:
+        return "full"
+
+    # Incomplete product Graph must never emit C1 free-in-envelope ``continue``.
+    if is_incomplete_like_status(conversation_status) and is_product_graph_template(
+        engagement_template
+    ):
+        return "resume"
+
+    return resolve_graph_execution(
+        engagement_template=engagement_template,
+        conversation_status=conversation_status,
+        explicit_execution=explicit_execution,
+    )

@@ -241,6 +241,39 @@ assert.deepEqual(
   "full Graph run still enters Hard path",
 );
 
+// Spec #282: incomplete Graph resume must take Hard path (not C1 free)
+assert.equal(parseGraphExecution({ graph_execution: "resume" }), "resume");
+assert.equal(parseGraphExecution({ graphExecution: "continue_session" }), "resume");
+assert.equal(
+  isContinueInEnvelopeExecution({
+    graphExecution: parseGraphExecution({ graph_execution: "resume" }),
+  }),
+  false,
+  "resume is not C1 free-in-envelope",
+);
+assert.deepEqual(
+  resolveExpertWorkPath({
+    hardMode: "hard",
+    graphIntent: "app_assessment",
+    continueInEnvelope: isContinueInEnvelopeExecution({
+      graphExecution: parseGraphExecution({ graph_execution: "resume" }),
+    }),
+  }),
+  { path: "hard" },
+  "Spec #282 S1/S6: incomplete Graph resume → Hard path",
+);
+assert.deepEqual(
+  resolveExpertWorkPath({
+    hardMode: "hard",
+    graphIntent: "app_assessment",
+    continueInEnvelope: isContinueInEnvelopeExecution({
+      graphExecution: parseGraphExecution({ graph_execution: "continue" }),
+    }),
+  }),
+  { path: "free" },
+  "Spec #282 S5: post-complete C1 continue still free-in-envelope",
+);
+
 assert.equal(parseGraphExecution({ graph_execution: "continue" }), "continue");
 assert.equal(parseGraphExecution({ graphExecution: "continue_chat" }), "continue");
 assert.equal(parseGraphExecution({ graph_execution: "envelope" }), "continue");
@@ -252,6 +285,7 @@ assert.equal(parseGraphExecution(null), undefined);
 
 assert.equal(isContinueInEnvelopeExecution({ graphExecution: "continue" }), true);
 assert.equal(isContinueInEnvelopeExecution({ graphExecution: "full" }), false);
+assert.equal(isContinueInEnvelopeExecution({ graphExecution: "resume" }), false);
 assert.equal(
   isContinueInEnvelopeExecution({ graphExecution: undefined }),
   false,

@@ -36,12 +36,13 @@ export type TaskEnvelope = {
    */
   graphDiscipline?: "soft" | "hard";
   /**
-   * Expert Graph execution mode (structured only — no NLP). #78 C1:
+   * Expert Graph execution mode (structured only — no NLP). #78 C1 / #282:
    * - omit / "full" on first Graph start → Hard Graph runner
-   * - "continue" after Graph task_complete → free-in-envelope chat (no full re-run)
+   * - "continue" after Graph task_complete → free-in-envelope chat (no full re-run) (C1)
+   * - "resume" after incomplete/interrupted Graph → Hard Graph path (not C1 Free cold OMP)
    * Structured retest/re-entry is `graphExecution=full` (map #81 later).
    */
-  graphExecution?: "full" | "continue";
+  graphExecution?: "full" | "continue" | "resume";
   /**
    * Optional finding ids for dig-deeper / focused re-verify (map #81).
    * Structured only — platform/Agent may set; never NLP-invented by Node.
