@@ -182,6 +182,8 @@ export async function emitHardGraphStageStatus(options: {
               : event.outcome === "aborted" || event.outcome === "blocked"
                 ? "blocked"
                 : "failed";
+        // Spec #281: drop running L2 under ending stage before/while L1 closes.
+        plan.neutralizeOpenRunningL2(event.stageId);
         plan.setStageStatus(event.stageId, planStatus);
         await emitHardGraphPlanTreeUpdate(platform, task, plan, `stage_end:${event.stageId}:${event.outcome}`);
       }

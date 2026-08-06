@@ -2861,7 +2861,6 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               kanban={kanban}
               workflowKind={activeWorkflowKind}
               running={isActiveConversationRunning}
-              conversationStatus={activeConversation?.status}
               planTree={planTree}
               strixAgents={strixAgents}
               strixNotes={strixNotes}

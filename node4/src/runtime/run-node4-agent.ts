@@ -31,7 +31,12 @@ export type Node4AgentSession = {
   abort: () => void;
   dispose: () => void | Promise<void>;
   subscribe: (listener: (event: AgentEvent) => void | Promise<void>) => () => void;
-  /** Inject a user follow-up for the next turn (mid-run product nudges). */
+  /**
+   * Mid-run user padding (pi Agent.steer) — after current tool batch / turn boundary.
+   * Use for live user_steer (e.g. password hint) while the work burst is busy.
+   */
+  steer: (text: string) => void;
+  /** Inject a user follow-up for the next turn (mid-run product nudges / after stop). */
   followUp: (text: string) => void;
   readonly messages: readonly unknown[];
 };
@@ -193,6 +198,13 @@ export function wrapAgentAsSession(agent: Agent): Node4AgentSession {
       agent.subscribe(async (event, _signal) => {
         await listener(event);
       }),
+    steer: (text: string) => {
+      agent.steer({
+        role: "user",
+        content: text,
+        timestamp: Date.now(),
+      });
+    },
     followUp: (text: string) => {
       agent.followUp({
         role: "user",

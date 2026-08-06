@@ -251,7 +251,8 @@ assert.equal(normalizeSubagentResult(settlement.structured).summaryProvided, tru
           subscribe() {
             return () => {};
           },
-          followUp() {},
+          steer() {},
+    followUp() {},
           messages: [],
         } as any,
       };

@@ -114,8 +114,6 @@ interface Props {
   kanban?: KanbanSummary;
   workflowKind?: string;
   running?: boolean;
-  /** Conversation lifecycle status — used to close stale Tasks when completed. */
-  conversationStatus?: string;
   planTree?: PlanNode[];
   strixAgents?: StrixAgentStatus[];
   strixNotes?: StrixNote[];
@@ -165,7 +163,6 @@ export default function RightPanel({
   workflowKind,
   running = false,
   engagementCloseout,
-  conversationStatus,
   planTree = [],
   strixAgents = [],
   strixNotes = [],
@@ -229,9 +226,11 @@ export default function RightPanel({
   const visiblePlanTree = isStrixWorkflow ? mainAgentPlanTree(planTree, displayAgents) : planTree;
   const phasePlan = hasStatusData ? buildPhasePlan(visiblePlanTree, kanbanSummary.current_stage, activeTool, running, findings.length, isStrixWorkflow) : [];
   // Node3-style flat task list for all workflows (phase tree remains available via plan data).
+  // Trust plan_tree status only — do not force pending/running → done from conversation.status
+  // (that caused false-green todos when status/running lagged open checklist items).
   const taskItems = isStrixWorkflow
     ? phasePlan.flatMap((phase) => phase.items)
-    : normalizeTasksForConversationStatus(unifiedTodoItems(visiblePlanTree), conversationStatus, running);
+    : unifiedTodoItems(visiblePlanTree);
   const displayRun = useMemo(
     () => mergeCaseRunIntoDisplayRun(strixRun, caseRun, running),
     [strixRun, caseRun, running],
@@ -877,42 +876,6 @@ function normalizeAgentsForConversationRunning(agents: StrixAgentStatus[], runni
       current_detail: "本轮工作已结束",
       pending_count: 0,
     };
-  });
-}
-
-/**
- * Display recovery only: if a completed conversation still has stale pending Tasks
- * (agent failed to maintain checklist mid-run), show them closed so UI matches lifecycle.
- * Runtime path requires the agent to update coverage(plan) during work — not this.
- */
-function normalizeTasksForConversationStatus(
-  nodes: PlanNode[],
-  conversationStatus: string | undefined,
-  running: boolean,
-): PlanNode[] {
-  if (nodes.length === 0) return nodes;
-  const status = String(conversationStatus || "").toLowerCase();
-  // Prefer explicit conversation status; fall back to !running for legacy callers.
-  const closeOpen = status ? status === "completed" : !running;
-  if (!closeOpen) return nodes;
-  return nodes.map((node) => {
-    const nodeStatus = String(node.status || "").toLowerCase();
-    const id = String(node.node_id || node.id || "");
-    const parentId = String(node.parent_id || "");
-    // Expert Graph L1 / never-run stages: keep pending (do not green on conversation completed).
-    if (id.startsWith("graph-stage-")) return node;
-    // L2 under graph-stage parents: keep true status (do not green on completed).
-    if (parentId.startsWith("graph-stage-")) return node;
-    const level = String(node.level || "");
-    const kind = String(node.kind || "");
-    const source = String(node.source || "");
-    if ((level === "phase" || kind === "phase") && source === "plan" && !id.startsWith("plan-phase-")) {
-      return node;
-    }
-    if (nodeStatus === "todo" || nodeStatus === "pending" || nodeStatus === "running") {
-      return { ...node, status: "done", result: node.result || "completed" };
-    }
-    return node;
   });
 }
 

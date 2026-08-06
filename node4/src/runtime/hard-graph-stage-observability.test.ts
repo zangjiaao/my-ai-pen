@@ -114,6 +114,7 @@ function createFakeSession(workDir: string): Node4AgentSession {
     },
     abort() {},
     dispose() {},
+    steer() {},
     followUp() {},
     messages: [],
   };

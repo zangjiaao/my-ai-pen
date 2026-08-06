@@ -16,6 +16,11 @@ import { extractAgentLanguageFromMessage } from "./runtime/agent-language.js";
 import { cancelApprovalsForConversation, resolveApproval } from "./runtime/approvals.js";
 import { classifyUserControl } from "./runtime/package-settlement-law.js";
 import {
+  clearPendingSteers,
+  deliverUserSteerToActiveSession,
+  enqueuePendingSteer,
+} from "./runtime/active-session-registry.js";
+import {
   installExpert,
   listInstalledPackIds,
   reconcilePlatformOffers,
@@ -109,6 +114,8 @@ async function runAssignedTask(message: Record<string, unknown>): Promise<void> 
       aborts.delete(task.conversationId);
     }
     busy.delete(task.conversationId);
+    // Drop steers that never hit a live session (burst ended mid-race).
+    clearPendingSteers(task.conversationId);
     await emitWorkStatus(task.conversationId, task.taskId, false, {
       reason: endReason,
       expert_id: task.expertId,
@@ -184,23 +191,13 @@ client.on("ws_open", async () => {
 
 /**
  * Shared-session follow-up from the platform (mid-task steer or continue).
- * Node4 has no long-lived host after settle — promote steer to a work burst
- * when not busy; otherwise tell the room the expert is still working.
+ * When a work burst is active: inject into the live Agent via steer/followUp
+ * (pi mid-run padding — not a new burst, not "still working" reject).
+ * When idle: promote steer to a new work burst.
  */
 client.on("user_steer", async (message) => {
   const conversationId = String(message.conversation_id || message.conversationId || "").trim();
   if (!conversationId) return;
-
-  if (busy.has(conversationId)) {
-    await client.send({
-      type: "text",
-      conversation_id: conversationId,
-      content: {
-        text: "This expert is still working on the current turn. Wait a moment or interrupt first.",
-      },
-    });
-    return;
-  }
 
   const contentText =
     message.content && typeof message.content === "object" && !Array.isArray(message.content)
@@ -210,6 +207,20 @@ client.on("user_steer", async (message) => {
   // Spec #116 I0.8: empty message is not abort (shared law)
   const ctrl = classifyUserControl({ kind: text ? "steer_text" : "empty_message", text });
   if (ctrl.reject || !text) return;
+
+  if (busy.has(conversationId)) {
+    const delivered = deliverUserSteerToActiveSession(conversationId, text);
+    if (delivered.ok) {
+      // Silent inject — no canned agent/progress chat (AGENTS.md).
+      return;
+    }
+    // Busy race: session not registered yet. Queue until register flushes.
+    if (delivered.reason === "no_session") {
+      enqueuePendingSteer(conversationId, text);
+      return;
+    }
+    return;
+  }
 
   await runAssignedTask({
     ...message,

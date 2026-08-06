@@ -164,5 +164,6 @@ export const TODO_TOOL_DESCRIPTION = [
   "- Keep task/phase strings stable; view if text lost.",
   "- Open todos never block product booking or harness settlement.",
   "- Graph: surface ledger is coverage truth — bare done is rejected while open/in_probe paths remain; act via subagent or note=deadend|skipped_roe.",
+  "- Expert Graph: todo(init) is current-stage checklist only (single phase / stage-local items). Whole-engagement multi-phase maps (recon/auth/vuln/…) are Free mode.",
   "- Follow role/mission for which categories to include; do not invent target answer keys.",
 ].join("\n");

@@ -12,6 +12,10 @@ import {
 } from "../runtime/package-settlement-law.js";
 import type { ToolRuntime } from "../types.js";
 import { jsonResult, textResult } from "./common.js";
+import {
+  graphStageLocalTodoInitError,
+  isWholeEngagementTodoInitOnGraph,
+} from "../runtime/graph-stage-todo-scope.js";
 
 const OPS = ["init", "start", "done", "rm", "drop", "append", "view"] as const;
 
@@ -32,6 +36,29 @@ export function createTodoTool(runtime: ToolRuntime): AgentTool<any> {
     async execute(_id: string, params: any) {
       const op = String(params.op || "").trim().toLowerCase() as TodoOpName;
       if (!OPS.includes(op as (typeof OPS)[number])) return textResult(`error: op must be one of ${OPS.join(", ")}`);
+
+      // Spec #281: Graph todo(init) = current-stage L2 only (reject Free-style whole maps).
+      const graphRunEarly = runtime.lifecycle.hardGraphRun;
+      if (
+        op === "init" &&
+        graphRunEarly?.plan &&
+        graphRunEarly.stageId &&
+        (runtime.lifecycle.subagentDepth || 0) < 1
+      ) {
+        const rawList = Array.isArray(params.list)
+          ? params.list.map((e: any) => ({
+              phase: String(e?.phase || "").trim(),
+              items: Array.isArray(e?.items)
+                ? e.items.map((x: unknown) => String(x).trim()).filter(Boolean)
+                : [],
+            }))
+          : [];
+        if (isWholeEngagementTodoInitOnGraph(rawList, graphRunEarly.stageId)) {
+          const err = graphStageLocalTodoInitError(graphRunEarly.stageId);
+          runtime.lifecycle.pendingTodoErrorReminder = [err];
+          return textResult(err, { isError: true });
+        }
+      }
 
       // Graph: surface ledger is coverage truth — reject bare todo(done) while paths are open.
       if (op === "done" && runtime.lifecycle.pentestGraph?.mode === "graph" && runtime.surfaceLedger) {

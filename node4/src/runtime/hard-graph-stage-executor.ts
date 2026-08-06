@@ -16,6 +16,7 @@ import { ProcessFactStore } from "../stores/process-fact.js";
 import { TodoStore } from "../stores/todo.js";
 import type { StageExecutor, StageExecutorInput, StageExecutorOutput } from "./hard-graph-runner.js";
 import { createBoundNode4Session } from "./run-node4-agent.js";
+import { registerActiveSession } from "./active-session-registry.js";
 import {
   absorbStageResultIntoParent,
   seedStageLifecycleFromParent,
@@ -177,6 +178,7 @@ export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope)
       ? "After L0 Feedback marks feedback_ok, Main books with finding(confirm, finding_id=…). Severity fills from Store when omitted; missing severity fails closed."
       : "This stage cannot finding(confirm). Deposit candidates via packages or fact/surfaces only.",
     "Do **not** create process-chore L2 todos (e.g. Write result.json, collect subagents, pure meta login prep).",
+    "Spec #281: If you use todo(init), checklist is **this stage only** (single phase / stage-local items). Do not init a whole-engagement multi-phase map (recon/auth/vuln/report) under Graph — that is Free-mode behavior.",
     hypMode && allowHypothesis
       ? [
           "Hypothesis work mode ON for this stage: maintain the host **hypothesis queue** (hypothesis tool) for active/confirmed/killed/deferred exploration.",
@@ -777,6 +779,15 @@ export function createHardGraphStageExecutor(options: {
         ? await boundSessionFactory(boundOpts)
         : await createBoundNode4Session(boundOpts);
 
+      // Mid-run user_steer → current Graph Main stage (replace on stage switch).
+      // Do not register subagent package sessions for conversation-level steer.
+      const unregisterActiveSession = registerActiveSession({
+        conversationId: task.conversationId,
+        taskId: task.taskId,
+        steer: (text) => session.steer(text),
+        followUp: (text) => session.followUp(text),
+      });
+
       const sessionObs = attachNode4SessionObservability({
         session,
         obsCtx,
@@ -837,6 +848,11 @@ export function createHardGraphStageExecutor(options: {
         }
         throw err;
       } finally {
+        try {
+          unregisterActiveSession();
+        } catch {
+          /* ignore */
+        }
         await sessionObs.dispose();
         // Merge stage usage into run-level ledger.
         graphRun?.usage.mergeSnapshot(
