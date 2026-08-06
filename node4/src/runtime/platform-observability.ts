@@ -298,15 +298,32 @@ export class PlatformTextStream {
     this.thinking = new ProgressiveContentStream(platform, task, "thinking", assistantThinking);
   }
 
+  /**
+   * Spec #305 mid-task T1: after tools finish (llm_waiting), open empty running thinking
+   * so the chat timeline is not silent until the first thinking token.
+   * Does not reseed pending chrome (frontend #276) — progressive thinking frames only.
+   */
+  async announceThinkingWaitAfterTools(): Promise<void> {
+    await this.thinking.ensureRunningStart();
+  }
+
   async handle(event: {
     type?: string;
     message?: unknown;
     assistantMessageEvent?: { type?: string; delta?: string; partial?: unknown };
   }): Promise<void> {
+    // Spec #305 residual: tool → llm_waiting gap owns mid-task liveness (not bare message_start).
+    // Prefer tool_execution_end so pure text-only turns never get empty 思考完成 spam.
+    if (event.type === "tool_execution_end") {
+      await this.announceThinkingWaitAfterTools();
+      return;
+    }
+
     const msg = event.message as { role?: string } | undefined;
     if (event.type === "message_start" && msg?.role === "assistant") {
       // Spec #305 Issue 10: do not open thinking on every message_start (avoids empty
-      // 思考完成 spam on text-only turns). T1 empty running starts on thinking_* only.
+      // 思考完成 spam on text-only turns). T1 empty running starts on thinking_* only
+      // (or tool_execution_end for mid-task llm_waiting).
       this.text.ensureStream();
       this.text.applySnapshot(event.message, event.assistantMessageEvent);
       this.thinking.applySnapshot(event.message, event.assistantMessageEvent);
@@ -605,6 +622,8 @@ export async function handleNode4SessionEvent(
       llm_usage: ctx.usage.snapshot({ tool_calls: ctx.counters.toolCallCount }),
       panel_agents: ctx.panel.list(),
     } as PlatformMessage);
+    // Spec #305: textStream.handle(tool_execution_end) opens T1 empty running thinking
+    // so chat is not silent during llm_waiting after tools (before thinking_* tokens).
   }
 
   if (event.type === "turn_start") {
@@ -624,6 +643,8 @@ export async function handleNode4SessionEvent(
       llm_usage: ctx.usage.snapshot({ tool_calls: ctx.counters.toolCallCount }),
       panel_agents: ctx.panel.list(),
     } as PlatformMessage);
+    // Do not open T1 on bare turn_start — pure text-only replies must stay silent
+    // until thinking_* (Issue 10). Mid-task gap is covered by tool_execution_end.
   }
 
   await textStream.handle(event);

@@ -194,12 +194,99 @@ async function testNoDoneWhenThinkingNeverOpened() {
   console.log("ok: S1 no thinking frames on text-only turns");
 }
 
+
+async function testToolEndOpensEmptyRunningBeforeThinkingTokens() {
+  // Spec residual: tool → llm_waiting must not leave chat silent until thinking_*.
+  const platform = fakePlatform();
+  const stream = new PlatformTextStream(platform, task());
+
+  // Prior assistant text-only turn (no thinking) then tools run externally.
+  await stream.handle({
+    type: "message_start",
+    message: { role: "assistant", content: [{ type: "text", text: "calling tool" }] },
+  });
+  await stream.handle({
+    type: "message_end",
+    message: { role: "assistant", content: [{ type: "text", text: "calling tool" }] },
+  });
+  await drain(stream);
+  assert.equal(
+    platform.messages.filter((m) => m.type === "thinking").length,
+    0,
+    "text-only prior turn has no thinking",
+  );
+
+  // tool_execution_end → T1 empty running (mid-task llm_waiting)
+  await stream.handle({
+    type: "tool_execution_end",
+    toolName: "shell",
+    toolCallId: "tc-1",
+  });
+  await drain(stream);
+
+  const afterTool = platform.messages.filter((m) => m.type === "thinking");
+  assert.ok(afterTool.length >= 1, "empty running thinking after tool end");
+  const t1 = afterTool[afterTool.length - 1]!;
+  const t1c = thinkingContent(t1);
+  assert.equal(t1c.status, "running");
+  assert.equal(String(t1c.text || t1c.reasoning || ""), "");
+  assert.ok(String(t1c.stream_id || t1.stream_id || "").startsWith("n4-thinking-"));
+
+  // Later thinking tokens grow the same stream before final done
+  await stream.handle({
+    type: "message_update",
+    message: {
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "after tool analysis" }],
+    },
+    assistantMessageEvent: {
+      type: "thinking_delta",
+      partial: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "after tool analysis" }],
+      },
+    },
+  });
+  await drain(stream);
+  await stream.handle({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "after tool analysis done" }],
+    },
+  });
+  await drain(stream);
+
+  const thinking = platform.messages.filter((m) => m.type === "thinking");
+  assert.ok(thinking.some((m) => thinkingContent(m).status === "running"));
+  const last = thinking[thinking.length - 1]!;
+  assert.equal(thinkingContent(last).status, "done");
+  assert.equal(String(thinkingContent(last).text || ""), "after tool analysis done");
+  console.log("ok: mid-task T1 after tool_execution_end before thinking tokens");
+}
+
+async function testTurnStartDoesNotOpenT1WithoutTools() {
+  // Issue 10 preserved: bare turn_start must not spam empty thinking.
+  const platform = fakePlatform();
+  const stream = new PlatformTextStream(platform, task());
+  await stream.handle({ type: "turn_start" });
+  await drain(stream);
+  assert.equal(
+    platform.messages.filter((m) => m.type === "thinking").length,
+    0,
+    "turn_start alone must not open thinking T1",
+  );
+  console.log("ok: turn_start alone does not open T1");
+}
+
 async function main() {
   await testNoT1OnBareMessageStart();
   await testEmptyRunningOnThinkingChannelOpen();
   await testProgressiveRunningAndFinalDone();
   await testEmptyRunningThenEmptyDone();
   await testNoDoneWhenThinkingNeverOpened();
+  await testToolEndOpensEmptyRunningBeforeThinkingTokens();
+  await testTurnStartDoesNotOpenT1WithoutTools();
   console.log("all platform-observability Spec #305 tests passed");
 }
 
