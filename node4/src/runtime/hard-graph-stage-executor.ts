@@ -18,6 +18,10 @@ import type { StageExecutor, StageExecutorInput, StageExecutorOutput } from "./h
 import { createBoundNode4Session } from "./run-node4-agent.js";
 import { registerActiveSession } from "./active-session-registry.js";
 import {
+  applyCaptainEndDisposition,
+  decideParkOnEnd,
+} from "./working-session-park.js";
+import {
   absorbStageResultIntoParent,
   seedStageLifecycleFromParent,
   type StageContinuitySeed,
@@ -858,15 +862,34 @@ export function createHardGraphStageExecutor(options: {
         graphRun?.usage.mergeSnapshot(
           stageUsage.snapshot({ tool_calls: obsCounters.toolCallCount }),
         );
-        // I0.9 durable captain continue (same session resume) is not implemented;
-        // interrupt ends Graph run; Case continue is a new Hard burst (Spec #282 minimum
-        // bar: wire resume → Hard re-entry, not Free cold OMP; full park/todo snapshot OOS).
-        // Always dispose stage session here.
-        try {
-          await Promise.resolve(session.dispose());
-        } catch {
-          /* ignore */
-        }
+        // Spec #283 I0.9: shared captain end policy (interrupt → park; stage settle → dispose).
+        // #282 mode wire remains: incomplete continue → Hard path; attach uses park when present.
+        applyCaptainEndDisposition({
+          decision: decideParkOnEnd({
+            aborted: Boolean(abortSignal?.aborted),
+          }),
+          entry: {
+            conversationId: task.conversationId,
+            expertId: String(task.expertId || pack.id || ""),
+            workMode: "graph",
+            graphId:
+              String(input.graphId || task.graphId || task.engagementTemplate || "") ||
+              undefined,
+            stageId: input.stage.id,
+            taskId: task.taskId,
+            session,
+            todo: childRuntime.todo,
+            accounts: task.accounts,
+            runtime: childRuntime,
+            dispose: () => {
+              try {
+                void Promise.resolve(session.dispose());
+              } catch {
+                /* ignore */
+              }
+            },
+          },
+        });
       }
 
       // Spec #125: never load agent result.json; host settlement projects gate input.
