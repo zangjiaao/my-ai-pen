@@ -277,6 +277,10 @@ export function attachProductToolEventBridge(
       if (isSubagentPackageSession(runtime)) return;
       const toolName = String(event.toolName || "tool");
       const toolCallId = String(event.toolCallId || "");
+      // Speaker = requesting Session (task persona). Never handoff destination.
+      const speaker: Record<string, string> = {};
+      if (runtime.task.expertId) speaker.expert_id = String(runtime.task.expertId);
+      if (runtime.task.expertName) speaker.expert_name = String(runtime.task.expertName);
       await runtime.platform.send({
         type: "tool_output",
         conversation_id: runtime.task.conversationId,
@@ -286,6 +290,7 @@ export function attachProductToolEventBridge(
         status: "running",
         summary: `${toolName} running`,
         args: (event as { args?: Record<string, unknown> }).args || {},
+        ...speaker,
       });
       return;
     }
@@ -302,6 +307,9 @@ export function attachProductToolEventBridge(
         .join("\n")
         .slice(0, 4000);
       const isError = Boolean((event as { isError?: boolean }).isError);
+      const speaker: Record<string, string> = {};
+      if (runtime.task.expertId) speaker.expert_id = String(runtime.task.expertId);
+      if (runtime.task.expertName) speaker.expert_name = String(runtime.task.expertName);
       await runtime.platform.send({
         type: "tool_output",
         conversation_id: runtime.task.conversationId,
@@ -311,6 +319,7 @@ export function attachProductToolEventBridge(
         status: isError ? "error" : "done",
         summary: text.slice(0, 500),
         result_text: text,
+        ...speaker,
       });
     }
   });

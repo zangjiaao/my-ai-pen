@@ -36,6 +36,8 @@ node_connections: dict[str, WebSocket] = {}
 conversation_subscribers: dict[str, set[WebSocket]] = {}
 conversation_node: dict[str, str] = {}
 pending_approvals: dict[str, dict] = {}
+# request_ids already applied via handoff_apply (idempotent double-apply guard).
+_handoff_applied_request_ids: set[str] = set()
 _round_robin_counter: int = 0
 
 FOLLOW_UP_ACTION_RE = re.compile(
@@ -746,6 +748,37 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
                 msg["expert_id"] = sticky_id
             if sticky_name and not str(msg.get("expert_name") or "").strip():
                 msg["expert_name"] = sticky_name
+
+        # Spec #277 §3.3 14a: never use handoff destination as speaker on waiting-turn frames.
+        _sanitize_requesting_speaker(msg)
+
+    # Session tool resolved authorize for handoff (button or free-text). Not a chat frame.
+    if msg.get("type") == "handoff_apply" and conv_id:
+        request_id = str(msg.get("request_id") or "").strip()
+        if request_id and request_id in _handoff_applied_request_ids:
+            return
+        approval = dict(pending_approvals.pop(request_id, {}) if request_id else {})
+        for key in (
+            "kind",
+            "handoff_pack_id",
+            "handoff_expert_id",
+            "handoff_expert_name",
+            "target",
+            "proposed_action",
+            "question",
+            "node_id",
+        ):
+            if msg.get(key) is not None and str(msg.get(key) or "").strip():
+                approval[key] = msg.get(key)
+        if not approval.get("node_id"):
+            approval["node_id"] = client_id
+        if request_id:
+            _handoff_applied_request_ids.add(request_id)
+            if len(_handoff_applied_request_ids) > 500:
+                _handoff_applied_request_ids.clear()
+                _handoff_applied_request_ids.add(request_id)
+        await _apply_authorized_handoff(conv_id, approval)
+        return
 
     # Pi work-burst lifecycle (not a chat message). Updates session workers SOT
     # and pushes conversation_working so the UI send/interrupt button stays honest.
@@ -2724,11 +2757,13 @@ async def _remember_conversation_task(
     allow_postex: bool | None = None,
     accounts: object = None,
     asset_id: str | None = None,
+    work_mode: str | None = None,
 ):
     try:
         from app.db.base import async_session
         from app.models.conversation import Conversation
         from app.services.case_engagement import merge_case_into_context, resolve_allow_postex
+        from app.services.participant_session import merge_session_into_context
 
         async with async_session() as db:
             r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(conv_id)))
@@ -2787,17 +2822,26 @@ async def _remember_conversation_task(
                     task_blob["expert_id"] = eid
                 if ename:
                     task_blob["expert_name"] = ename
-            et = str(
-                engagement_template
-                or prev_task.get("engagement_template")
-                or ""
-            ).strip()
+            # Spec #277: Session work_mode is mode SOT. Free must not inherit Case/task sticky Graph.
+            mode = str(work_mode or "").strip().lower()
+            if mode == "free":
+                et = ""
+            elif mode == "graph":
+                et = str(engagement_template or "").strip()
+            else:
+                et = str(
+                    engagement_template
+                    or prev_task.get("engagement_template")
+                    or ""
+                ).strip()
             if et:
                 task_blob["engagement_template"] = et
             ap = allow_postex
-            if ap is None and "allow_postex" in prev_task:
+            if ap is None and "allow_postex" in prev_task and mode != "free":
                 ap = prev_task.get("allow_postex")
-            if ap is not None or et:
+            if mode == "free":
+                task_blob["allow_postex"] = False if ap is None else bool(ap)
+            elif ap is not None or et:
                 task_blob["allow_postex"] = resolve_allow_postex(
                     engagement_template=et or eng,
                     engagement=eng,
@@ -2808,13 +2852,31 @@ async def _remember_conversation_task(
             elif prev_task.get("accounts") is not None:
                 task_blob["accounts"] = prev_task.get("accounts")
             context["task"] = task_blob
-            # Keep case block in sync (1 conversation = 1 case)
-            context = merge_case_into_context(
-                context,
-                engagement_template=task_blob.get("engagement_template"),
-                allow_postex=task_blob.get("allow_postex"),
-                accounts=task_blob.get("accounts"),
-            )
+            # Participant Session private: per-expert work_mode / graph_id (Spec #277).
+            # Work mode SOT is sessions[expert_id] — do not encode Free by wiping Case sticky.
+            session_eid = str(eid or expert_id or "").strip()
+            if mode in {"free", "graph"} and session_eid:
+                context = merge_session_into_context(
+                    context,
+                    expert_id=session_eid,
+                    work_mode=mode,
+                    graph_id=et if mode == "graph" else None,
+                )
+            # Case block: only write Graph template when this dispatch is Graph; Free leaves
+            # Case sticky alone (Session private mode prevents silent Free→Graph on resume).
+            if mode == "graph":
+                context = merge_case_into_context(
+                    context,
+                    engagement_template=task_blob.get("engagement_template"),
+                    allow_postex=task_blob.get("allow_postex"),
+                    accounts=task_blob.get("accounts"),
+                )
+            else:
+                context = merge_case_into_context(
+                    context,
+                    allow_postex=task_blob.get("allow_postex"),
+                    accounts=task_blob.get("accounts"),
+                )
             c.context = context
             await db.commit()
     except Exception as e:
@@ -2842,6 +2904,126 @@ async def _conversation_expert_label(conv_id: str | None) -> tuple[str | None, s
             return eid, ename
     except Exception:
         return None, None
+
+
+def _sanitize_requesting_speaker(msg: dict) -> None:
+    """Ensure waiting-turn frames never use handoff destination as speaker label.
+
+    Spec #277 §3.3 14a: handoff_expert_* is card/tool-arg content only.
+    Mutates msg in place. Pure (no I/O).
+    """
+    if not isinstance(msg, dict):
+        return
+    msg_type = str(msg.get("type") or "")
+    args = msg.get("args") if isinstance(msg.get("args"), dict) else {}
+    handoff_eid = (
+        str(msg.get("handoff_expert_id") or args.get("handoff_expert_id") or "").strip() or None
+    )
+    handoff_ename = (
+        str(msg.get("handoff_expert_name") or args.get("handoff_expert_name") or "").strip() or None
+    )
+    if not handoff_eid and not handoff_ename:
+        return
+    # Only strip when this frame is clearly a handoff authorization wait frame.
+    tool_name = str(msg.get("tool_name") or args.get("name") or "").strip()
+    is_decision_frame = msg_type in {"request_decision", "confirm_card"} or tool_name in {
+        "request_user_decision",
+        "request_decision",
+    }
+    if not is_decision_frame and msg_type != "tool_output":
+        return
+    if msg_type == "tool_output" and tool_name not in {"request_user_decision", "request_decision"}:
+        # tool_output without handoff tool name: still strip if speaker == handoff destination
+        # (args may carry destination while tool is request_user_decision under alternate name).
+        if tool_name and "decision" not in tool_name and "handoff" not in tool_name:
+            # Only act when speaker fields equal handoff fields (clear mis-stamp).
+            pass
+    msg_eid = str(msg.get("expert_id") or "").strip() or None
+    msg_ename = str(msg.get("expert_name") or "").strip() or None
+    if handoff_eid and msg_eid and msg_eid == handoff_eid:
+        msg.pop("expert_id", None)
+    if handoff_ename and msg_ename and msg_ename == handoff_ename:
+        msg.pop("expert_name", None)
+
+
+def _pending_approvals_for_conversation(conv_id: str | None) -> list[tuple[str, dict]]:
+    """Return (request_id, approval) pairs for a conversation, oldest first."""
+    if not conv_id:
+        return []
+    cid = str(conv_id)
+    found: list[tuple[str, dict]] = []
+    for request_id, approval in pending_approvals.items():
+        if not isinstance(approval, dict):
+            continue
+        if str(approval.get("conversation_id") or "") == cid:
+            found.append((str(request_id), approval))
+    return found
+
+
+async def _forward_pending_approval_text(
+    conv_id: str,
+    client_id: str,
+    user_text: str,
+    *,
+    via: str,
+) -> bool:
+    """Forward free-text (or any reply) into the Session approval wait.
+
+    Spec #277 §3.3 14a: platform displays + forwards only; Session tool normalizes.
+    Returns True if a pending approval was consumed.
+    """
+    pending_for_conv = _pending_approvals_for_conversation(conv_id)
+    if not pending_for_conv:
+        return False
+    request_id, approval = pending_for_conv[0]
+    pending_approvals.pop(request_id, None)
+    decision_msg = {
+        "type": "user_decision",
+        "conversation_id": conv_id,
+        "request_id": request_id,
+        "decision": "answered",
+        "text": user_text,
+    }
+    await _save_message(decision_msg, "user")
+    await _broadcast_to_conversation(conv_id, json.dumps(decision_msg, ensure_ascii=False))
+    node_msg = {
+        "type": "user_input",
+        "conversation_id": conv_id,
+        "request_id": request_id,
+        "response": user_text,
+        "text": user_text,
+    }
+    sent = False
+    approval_node = str(approval.get("node_id") or "").strip()
+    if approval_node and approval_node in node_connections:
+        try:
+            await node_connections[approval_node].send_text(
+                json.dumps(node_msg, ensure_ascii=False)
+            )
+            sent = True
+        except Exception as e:
+            print(f"[WS] pending-text user_input to node {approval_node[:8]}: {e}")
+    if not sent:
+        sent = await _send_to_bound_node(conv_id, json.dumps(node_msg))
+    try:
+        await _audit(
+            actor_type="user",
+            actor_id=uuid.UUID(client_id),
+            action="approval.answered_text",
+            resource_type="conversation",
+            resource_id=uuid.UUID(conv_id),
+            conversation_id=uuid.UUID(conv_id),
+            detail={
+                "request_id": request_id,
+                "sent": sent,
+                "node_id": approval.get("node_id"),
+                "kind": approval.get("kind"),
+                "via": via,
+            },
+        )
+    except Exception as e:
+        print(f"[WS] pending-text audit error: {e}")
+    return True
 
 
 async def _apply_authorized_handoff(conv_id: str | None, approval: dict) -> None:
@@ -3742,6 +3924,7 @@ async def _dispatch_task_assign_to_node(
     expert_name: str | None,
     resume_context: dict | None = None,
     force_working: bool = True,
+    same_mode_continue: bool = False,
 ) -> None:
     """Build task_assign and send to an online Node (default seat or expert)."""
     task_msg = _task_assign_from_user_message(conv_id, msg, str(uuid.uuid4()))
@@ -3753,8 +3936,15 @@ async def _dispatch_task_assign_to_node(
         task_msg["expert_name"] = expert_name
     task_msg = await _merge_case_roe_into_task_assign(conv_id, task_msg)
     task_msg = await _attach_case_context_to_task_assign(conv_id, task_msg)
-    # C1 (#78): after Expert Graph completed, sticky template must not full-run Hard stages.
-    task_msg = await _apply_graph_execution_c1(conv_id, task_msg, msg)
+    # Spec #277: Session work envelope (Free continuity; Case sticky must not silent-promote Graph).
+    # Includes C1 graph_execution when work_mode=graph.
+    task_msg, work_envelope = await _apply_participant_work_envelope(
+        conv_id,
+        task_msg,
+        msg,
+        expert_id=expert_id,
+        same_mode_continue=same_mode_continue,
+    )
 
     gate_err = await _gate_engagement_for_node(node_id, engagement)
     if gate_err:
@@ -3770,6 +3960,7 @@ async def _dispatch_task_assign_to_node(
         )
         return
 
+    envelope_mode = str((work_envelope or {}).get("work_mode") or "").strip().lower() or None
     await _remember_conversation_task(
         conv_id,
         target=task_msg.get("target") or {},
@@ -3782,6 +3973,7 @@ async def _dispatch_task_assign_to_node(
         engagement_template=str(task_msg.get("engagement_template") or "").strip() or None,
         allow_postex=task_msg.get("allow_postex") if isinstance(task_msg.get("allow_postex"), bool) else None,
         accounts=task_msg.get("accounts"),
+        work_mode=envelope_mode,
     )
     await _bind_conversation_to_node(conv_id, node_id, active_task_id=str(task_msg.get("task_id") or ""))
     if force_working:
@@ -3884,7 +4076,11 @@ def _task_assign_from_user_message(conv_id: str, msg: dict, task_id: str) -> dic
 
 
 async def _apply_graph_execution_c1(conv_id: str | None, task_msg: dict, msg: dict) -> dict:
-    """Attach structured graph_execution when C1 policy resolves (pure helper owns rules)."""
+    """Attach structured graph_execution when C1 policy resolves (pure helper owns rules).
+
+    Prefer `_apply_participant_work_envelope` on product dispatch paths (Spec #277);
+    this remains for direct C1-only callers/tests.
+    """
     from app.services.case_engagement import resolve_graph_execution
 
     out = dict(task_msg or {})
@@ -3919,6 +4115,89 @@ async def _apply_graph_execution_c1(conv_id: str | None, task_msg: dict, msg: di
     if resolved is not None:
         out["graph_execution"] = resolved
     return out
+
+
+async def _apply_participant_work_envelope(
+    conv_id: str | None,
+    task_msg: dict,
+    msg: dict,
+    *,
+    expert_id: str | None = None,
+    same_mode_continue: bool = False,
+) -> tuple[dict, dict]:
+    """Resolve Participant Session work envelope and apply to task_assign (Spec #277).
+
+    Mode authority: this-turn composer + Session work_mode. Case sticky template alone
+    must never promote Free → Graph. Returns (task_msg, envelope).
+    """
+    from app.services.case_engagement import case_fields_from_context
+    from app.services.participant_session import (
+        apply_work_envelope_to_task_assign,
+        resolve_work_envelope,
+        session_record_from_context,
+    )
+
+    out = dict(task_msg or {})
+    context: dict = {}
+    status: str | None = None
+    if conv_id:
+        try:
+            from app.db.base import async_session
+            from app.models.conversation import Conversation
+
+            async with async_session() as db:
+                r = await db.execute(
+                    select(Conversation).where(Conversation.id == uuid.UUID(str(conv_id)))
+                )
+                c = r.scalar_one_or_none()
+                if c:
+                    context = dict(c.context or {}) if isinstance(c.context, dict) else {}
+                    status = str(getattr(c, "status", None) or "") or None
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "work envelope: conversation load failed conv_id=%s",
+                conv_id,
+                exc_info=True,
+            )
+
+    eid = str(expert_id or out.get("expert_id") or msg.get("expert_id") or "").strip() or None
+    session = session_record_from_context(context, eid)
+    case_fields = case_fields_from_context(context)
+
+    # This-turn composer only when message carries the field (absent ≠ sticky inject).
+    if "engagement_template" in msg or "engagementTemplate" in msg:
+        composer = msg.get("engagement_template", msg.get("engagementTemplate"))
+    else:
+        composer = None
+
+    explicit = (
+        msg.get("graph_execution")
+        or msg.get("graphExecution")
+        or out.get("graph_execution")
+        or out.get("graphExecution")
+        or ""
+    )
+    force_interrupt = bool(
+        msg.get("force_interrupt")
+        or msg.get("forceInterrupt")
+        or msg.get("interrupt") is True
+    )
+
+    envelope = resolve_work_envelope(
+        expert_id=eid,
+        session_work_mode=session.get("work_mode"),
+        session_graph_id=session.get("graph_id"),
+        composer_template=composer,
+        case_sticky_template=case_fields.get("engagement_template"),
+        conversation_status=status,
+        explicit_execution=explicit,
+        same_mode_continue=same_mode_continue,
+        force_interrupt=force_interrupt,
+    )
+    applied = apply_work_envelope_to_task_assign(out, envelope)
+    return applied, envelope
 
 
 async def _merge_case_roe_into_task_assign(conv_id: str | None, task_msg: dict) -> dict:
@@ -4322,6 +4601,15 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     requested_node_id, msg = await _resolve_mention_route(msg, capabilities)
                     msg = _ensure_target_from_text(msg)
 
+                    # Spec #277 §3.3 14a: pending authorization card — any typed reply is
+                    # feedback to the current Session (same path as Authorize/Cancel click).
+                    # Do not steer-as-busy and do not invent approve/cancel on platform.
+                    user_text_pending = str(msg.get("text") or msg.get("display_text") or "").strip()
+                    if await _forward_pending_approval_text(
+                        conv_id, client_id, user_text_pending, via="user_message"
+                    ):
+                        continue
+
                     is_default = _is_default_participant(msg)
                     if not is_default and (msg.get("expert_id") or msg.get("expert_name")):
                         await _remember_conversation_expert(
@@ -4360,6 +4648,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
 
                     # Resume after terminal: short continue + resumable target → re-dispatch with context.
                     has_resume_task = _has_resumable_task(resume_context)
+                    same_mode_continue = False
                     if (
                         not is_default
                         and str(conversation_status or "").lower() in {"failed", "incomplete", "paused", "canceled"}
@@ -4369,6 +4658,8 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         resumed_msg, resumed = _resume_message_from_context(msg, resume_context)
                         if resumed_msg:
                             msg = resumed_msg
+                            # Spec #277 A1: same-mode continue — Session work_mode wins over sticky Graph.
+                            same_mode_continue = True
 
                     # Resolve engagement for Node seat.
                     if is_default:
@@ -4412,13 +4703,16 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         expert_name=expert_name,
                         resume_context=resume_context if has_resume_task else None,
                         force_working=True,
+                        same_mode_continue=same_mode_continue,
                     )
                     continue
 
                 elif msg.get("type") == "user_decision" and conv_id:
+                    # Button path: forward feedback only. Session tool normalizes and,
+                    # on handoff authorize, emits handoff_apply (platform does not NLP).
                     request_id = msg.get("request_id")
                     decision = msg.get("decision", "cancel")
-                    approval = pending_approvals.pop(request_id, {}) if request_id else {}
+                    approval = pending_approvals.pop(str(request_id), {}) if request_id else {}
                     node_msg = {
                         "type": "user_input",
                         "conversation_id": conv_id,
@@ -4428,7 +4722,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     }
                     # Prefer the node that issued the approval (may differ from sticky bind).
                     sent = False
-                    approval_node = str(approval.get("node_id") or "").strip()
+                    approval_node = str(approval.get("node_id") or "").strip() if isinstance(approval, dict) else ""
                     if approval_node and approval_node in node_connections:
                         try:
                             await node_connections[approval_node].send_text(
@@ -4440,10 +4734,6 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     if not sent:
                         sent = await _send_to_bound_node(conv_id, json.dumps(node_msg))
 
-                    # Authorized handoff: switch sticky product expert so next turns run that pack.
-                    if str(decision).lower() in {"authorize", "approved", "yes"}:
-                        await _apply_authorized_handoff(conv_id, approval)
-
                     await _audit(
                         actor_type="user",
                         actor_id=uuid.UUID(client_id),
@@ -4454,9 +4744,11 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         detail={
                             "request_id": request_id,
                             "sent": sent,
-                            "node_id": approval.get("node_id"),
-                            "kind": approval.get("kind"),
-                            "handoff_pack_id": approval.get("handoff_pack_id"),
+                            "node_id": approval.get("node_id") if isinstance(approval, dict) else None,
+                            "kind": approval.get("kind") if isinstance(approval, dict) else None,
+                            "handoff_pack_id": (
+                                approval.get("handoff_pack_id") if isinstance(approval, dict) else None
+                            ),
                         },
                     )
 
@@ -4534,6 +4826,15 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             detail={"sent_to": sent_to, "targets": fanout.get("targets"), "action": action},
                         )
                     else:
+                        # Spec #277 §3.3 14a: mid-wait free-text is approval feedback, not steer.
+                        # FE sends user_steer while status=running; do not hit Node busy dead-end.
+                        user_text_pending = str(
+                            msg.get("text") or msg.get("display_text") or ""
+                        ).strip()
+                        if await _forward_pending_approval_text(
+                            conv_id, client_id, user_text_pending, via="user_steer"
+                        ):
+                            continue
                         sent = await _send_to_bound_node(conv_id, raw)
                         await _audit(
                             actor_type="user",

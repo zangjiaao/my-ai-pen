@@ -16,6 +16,8 @@ const RELIABLE_TYPES = new Set([
   "checkpoint_update",
   "task_start",
   "experts_status",
+  "request_decision",
+  "handoff_apply",
 ]);
 
 const MAX_QUEUE = 300;

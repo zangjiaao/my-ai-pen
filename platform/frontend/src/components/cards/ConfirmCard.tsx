@@ -1,6 +1,6 @@
 import MarkdownText from "../MarkdownText";
 
-type ApprovalDecision = "authorize" | "cancel";
+export type ApprovalDecision = "authorize" | "cancel" | "answered";
 
 export default function ConfirmCard({
   content,
@@ -16,9 +16,11 @@ export default function ConfirmCard({
   decision?: ApprovalDecision;
 }) {
   const requestId = String(content.request_id || "");
-  const selected = decision === "authorize" || decision === "cancel";
+  const selected =
+    decision === "authorize" || decision === "cancel" || decision === "answered";
   const authorizeSelected = decision === "authorize";
   const cancelSelected = decision === "cancel";
+  const answeredSelected = decision === "answered";
 
   // Title = the authorization question (e.g. 请确认DVWA渗透测试的授权范围和条件)
   const title =
@@ -26,6 +28,12 @@ export default function ConfirmCard({
     (String(content.kind || "") === "handoff" ? "需要授权移交" : "需要授权");
   // Body = proposed plan / target details (markdown)
   const body = String(content.proposed_action || content.target || "").trim();
+  // Spec #277 §3.3 14a: handoff destination is card content only, not top agent label.
+  const handoffName = String(content.handoff_expert_name || "").trim();
+  const handoffSubtitle =
+    handoffName && String(content.kind || "") === "handoff"
+      ? `移交至：${handoffName}`
+      : "";
 
   return (
     <div
@@ -41,6 +49,9 @@ export default function ConfirmCard({
       }`}
     >
       <p className="text-sm font-medium text-ink">{title}</p>
+      {handoffSubtitle ? (
+        <p className="mt-1 text-xs text-ink-muted">{handoffSubtitle}</p>
+      ) : null}
       {body ? (
         <MarkdownText
           text={body}
@@ -62,7 +73,7 @@ export default function ConfirmCard({
                 : "bg-ink text-on-ink"
           }`}
         >
-          {authorizeSelected ? "已授权" : "授权"}
+          {authorizeSelected ? "已授权" : answeredSelected ? "已回复" : "授权"}
         </button>
         <button
           data-testid="confirm-cancel"
