@@ -23,6 +23,7 @@ import {
 } from "../lib/workerPresentation";
 import { filterMainChannelMessages, isWorkerAuditScoped } from "../lib/workerAuditChannel";
 import { applyDisplayNameOverrides } from "../lib/workerDisplayName";
+import { upsertTrafficExchange, type TrafficExchange } from "../lib/trafficAuditView";
 import WorkerAuditDialog from "../components/WorkerAuditDialog";
 import type { PlanNode, StrixAgentStatus } from "../lib/panelTypes";
 import {
@@ -237,6 +238,8 @@ type ConversationSnapshot = {
   goal_outer?: Record<string, unknown> | null;
   /** Spec #308 Case Worker display_name overrides */
   worker_display_names?: Record<string, string>;
+  /** Spec #309 Case traffic audit store */
+  traffic_exchanges?: TrafficExchange[];
 };
 
 export default function ConversationPage() {
@@ -312,6 +315,8 @@ export default function ConversationPage() {
     panelName?: string;
     workerOrdinal?: number;
   } | null>(null);
+  /** Spec #309: Case traffic audit (right-panel Traffic tab). */
+  const [trafficExchanges, setTrafficExchanges] = useState<TrafficExchange[]>([]);
   const [running, setRunning] = useState(false);
   /** True while interrupt was sent and nodes have not yet reported idle. */
   const [interrupting, setInterrupting] = useState(false);
@@ -403,7 +408,6 @@ export default function ConversationPage() {
     return groupConsecutiveToolMessages(merged);
   }, [messages, liveStreams, activeId]);
   const showPendingChrome = pendingChromeVisible(pendingChrome, activeId);
-  const timelineEvents = useMemo(() => timelineFromMessages(messages), [messages]);
   const activeConversation = useMemo(() => conversations.find(c => c.id === activeId), [activeId, conversations]);
   /**
    * Session work indicator: prefer platform/Node SOT (conversation.working or status=running),
@@ -599,6 +603,14 @@ export default function ConversationPage() {
     setAssets(snapshot.assets?.length ? snapshot.assets : fallback?.assets || []);
     setPendingApprovals(snapshot.pending_approvals?.length ? snapshot.pending_approvals : fallback?.pending_approvals || []);
     setEvidence(Array.isArray(snapshot.evidence) ? snapshot.evidence : (fallback?.evidence || []));
+    // Spec #309: empty traffic list is correct (tool-channel only).
+    setTrafficExchanges(
+      Array.isArray(snapshot.traffic_exchanges)
+        ? (snapshot.traffic_exchanges as TrafficExchange[])
+        : Array.isArray(fallback?.traffic_exchanges)
+          ? (fallback?.traffic_exchanges as TrafficExchange[])
+          : [],
+    );
     setTaskContext(
       snapshot.task_context && Object.keys(snapshot.task_context).length
         ? snapshot.task_context
@@ -796,6 +808,19 @@ export default function ConversationPage() {
         ...msg,
         working: msg.working === true || msg.busy === true,
       });
+    },
+    traffic_exchange: (msg) => {
+      // Spec #309: live upsert by exchange_id after platform persist (not chat SoT).
+      if (!isActiveMessage(msg, activeId)) return;
+      const m = msg as Record<string, unknown>;
+      const id = String(m.exchange_id || "").trim();
+      if (!id) return;
+      setTrafficExchanges((prev) =>
+        upsertTrafficExchange(prev, {
+          ...(m as TrafficExchange),
+          exchange_id: id,
+        }),
+      );
     },
     vuln_found: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
@@ -1607,6 +1632,7 @@ export default function ConversationPage() {
     setAssets([]);
     setPendingApprovals([]);
     setEvidence([]);
+    setTrafficExchanges([]);
     setTaskContext(undefined);
     setEngagementCloseout(undefined);
     setWorkerDisplayNames({});
@@ -3093,8 +3119,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               strixNotes={strixNotes}
               strixRun={strixRun}
               caseRun={caseRun}
-              timeline={timelineEvents}
-              timelineCursorAt={timelineCursorAt}
+              trafficExchanges={trafficExchanges}
               findings={findings}
               assets={assets}
               taskContext={taskContext}

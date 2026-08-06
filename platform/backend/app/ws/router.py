@@ -934,6 +934,15 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
     elif msg.get("type") == "evidence_created":
         # Real proofs from Node4 emitEvidence (structured properties).
         await _persist_evidence(msg, client_id)
+    elif msg.get("type") == "traffic_exchange":
+        # Spec #309: Case traffic audit — persist upsert by exchange_id, then project.
+        persisted_tx = await _persist_traffic_exchange(msg, client_id)
+        if persisted_tx:
+            msg.clear()
+            msg.update(persisted_tx)
+        else:
+            # Fail closed: do not broadcast unpersisted / invalid traffic frames.
+            return
     elif msg.get("type") == "tool_output":
         # Tool cards already stream stdout; do NOT re-book every tool result as
         # Evidence (that produced messy JSON dumps next to real evidence_created rows).
@@ -952,7 +961,13 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
     msg_type = str(msg.get("type") or "")
     stream_fast = msg_type in {"text", "tool_output", "thinking", "agent_thinking", "reasoning"}
     should_save = (
-        msg_type not in {"intake_update", "work_status", "checkpoint_update"}
+        msg_type not in {
+            "intake_update",
+            "work_status",
+            "checkpoint_update",
+            # Spec #309: traffic lives in conversation.context store, not chat message log.
+            "traffic_exchange",
+        }
         and not _is_pentest_runtime_status(msg)
         and not (msg_type == "engagement_closeout" and engagement_closeout_accepted is None)
     )
@@ -2290,6 +2305,56 @@ async def _persist_asset(msg: dict, node_id: str | None):
             }
     except Exception as e:
         print(f"[WS] persist asset error: {e}")
+        return None
+
+
+async def _persist_traffic_exchange(msg: dict, node_id: str | None) -> dict | None:
+    """Spec #309: upsert Case traffic exchange into conversation.context (post-persist project)."""
+    conv_id = msg.get("conversation_id")
+    if not conv_id:
+        return None
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+        from app.services.traffic_exchange import (
+            merge_traffic_into_context,
+            normalize_traffic_exchange,
+        )
+
+        normalized = normalize_traffic_exchange(msg, conversation_id=str(conv_id))
+        if not normalized:
+            return None
+
+        async with async_session() as db:
+            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(str(conv_id))))
+            c = r.scalar_one_or_none()
+            if not c:
+                return None
+            # Assign monotonic sequence if Node omitted one.
+            context = c.context if isinstance(c.context, dict) else {}
+            store = context.get("traffic_exchanges") if isinstance(context, dict) else {}
+            if normalized.get("sequence") is None:
+                next_seq = 1
+                if isinstance(store, dict) and store:
+                    for row in store.values():
+                        if isinstance(row, dict):
+                            try:
+                                next_seq = max(next_seq, int(row.get("sequence") or 0) + 1)
+                            except (TypeError, ValueError):
+                                pass
+                elif isinstance(store, list):
+                    for row in store:
+                        if isinstance(row, dict):
+                            try:
+                                next_seq = max(next_seq, int(row.get("sequence") or 0) + 1)
+                            except (TypeError, ValueError):
+                                pass
+                normalized["sequence"] = next_seq
+            c.context = merge_traffic_into_context(context, normalized)
+            await db.commit()
+            return dict(normalized)
+    except Exception as e:
+        print(f"[WS] persist traffic_exchange error: {e}")
         return None
 
 

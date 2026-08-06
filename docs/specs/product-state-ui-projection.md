@@ -68,7 +68,7 @@ Chat may show a vuln **card** for operator reading; **cards must not feed** the 
 ### Later waves (Spec target architecture, not Wave1 DoD)
 
 - Attack surface inventory projection (same hook pattern).
-- Request recording (future Activity replacement) — Node collects, project to panel; Agent not responsible for “logging UI.”
+- Request recording / Activity replacement — **owned by** [`traffic-audit-activity.md`](traffic-audit-activity.md) (Case traffic audit; Runtime hook collect → store/project → panel).
 - Agent tree / status already largely event-projected — align docs only unless bugs found.
 - Todo remains Agent-written Product state projected read-only; **no** anti-fraud todo gates in this Spec (explicit product choice).
 

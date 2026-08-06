@@ -32,10 +32,19 @@ import {
   worksetHasVisibleContent,
   type WorksetProjection,
 } from "../lib/workset";
+import {
+  TRAFFIC_EMPTY_COPY,
+  TRAFFIC_HONESTY_LINE,
+  bodyDisplayText,
+  formatHeadersBlock,
+  projectTrafficDetail,
+  projectTrafficListRows,
+  type TrafficExchange,
+} from "../lib/trafficAuditView";
 
 export { TASKS_WORK_ITEM_CAP };
 
-type Tab = "status" | "surface" | "findings" | "activity";
+type Tab = "status" | "surface" | "findings" | "traffic";
 type WorkflowPhaseId = "recon" | "testing" | "verification" | "summary";
 
 type KanbanBucket = { id: string; title: string; done: number; total: number; status: PlanStatus };
@@ -55,15 +64,6 @@ type KanbanSummary = {
     percent?: number;
   };
   buckets?: KanbanBucket[];
-};
-
-type TimelineEvent = {
-  id: string;
-  at?: string;
-  category: string;
-  title: string;
-  detail?: string;
-  status?: string;
 };
 
 type StrixNote = {
@@ -129,8 +129,8 @@ interface Props {
   strixRun?: StrixRun;
   /** Case-level rollup (multi-role tokens / start). */
   caseRun?: CaseRunSummary;
-  timeline?: TimelineEvent[];
-  timelineCursorAt?: string;
+  /** Spec #309: Case traffic audit store projection (replaces Activity timeline). */
+  trafficExchanges?: TrafficExchange[];
   findings?: Array<Record<string, unknown>>;
   assets?: Array<Record<string, unknown>>;
   /** Authorized engagement from conversation.context.task (target + scope.allow). */
@@ -190,8 +190,7 @@ export default function RightPanel({
   strixNotes = [],
   strixRun,
   caseRun,
-  timeline = [],
-  timelineCursorAt,
+  trafficExchanges = [],
   findings = [],
   assets = [],
   taskContext,
@@ -200,6 +199,17 @@ export default function RightPanel({
   onWorkerClick,
 }: Props) {
   const [tab, setTab] = useState<Tab>("status");
+  const [selectedTrafficId, setSelectedTrafficId] = useState<string | null>(null);
+  const trafficRows = useMemo(
+    () => projectTrafficListRows(trafficExchanges as TrafficExchange[]),
+    [trafficExchanges],
+  );
+  const selectedTraffic = useMemo(() => {
+    if (!selectedTrafficId) return null;
+    return (trafficExchanges as TrafficExchange[]).find(
+      (row) => String(row.exchange_id || "") === selectedTrafficId,
+    ) || null;
+  }, [selectedTrafficId, trafficExchanges]);
   const engagementTargets = useMemo(() => parseEngagementTargets(taskContext), [taskContext]);
   // Host → port/service → path inventory (not path-only under "/").
   const baseSurfaceEntries = useMemo(
@@ -245,7 +255,7 @@ export default function RightPanel({
       : synthesizeMainAgent(activeTool, running, workflowKind),
     running,
   );
-  const hasStatusData = running || Boolean(activeTool) || planTree.length > 0 || displayAgents.length > 0 || findings.length > 0 || assets.length > 0 || timeline.length > 0 || Boolean(strixRun) || Boolean(caseRun?.started_at || caseRun?.llm_usage?.total_tokens) || Boolean(engagementCloseout && Object.keys(engagementCloseout).length);
+  const hasStatusData = running || Boolean(activeTool) || planTree.length > 0 || displayAgents.length > 0 || findings.length > 0 || assets.length > 0 || trafficExchanges.length > 0 || Boolean(strixRun) || Boolean(caseRun?.started_at || caseRun?.llm_usage?.total_tokens) || Boolean(engagementCloseout && Object.keys(engagementCloseout).length);
   const visiblePlanTree = isStrixWorkflow ? mainAgentPlanTree(planTree, displayAgents) : planTree;
   const phasePlan = hasStatusData ? buildPhasePlan(visiblePlanTree, kanbanSummary.current_stage, activeTool, running, findings.length, isStrixWorkflow) : [];
   // Node3-style flat task list for all workflows (phase tree remains available via plan data).
@@ -351,7 +361,7 @@ export default function RightPanel({
     { key: "status", label: "Status" },
     { key: "surface", label: countLabel("Surface", surfaceItems.length) },
     { key: "findings", label: countLabel("Findings", findings.length), title: findingsTabTitle },
-    { key: "activity", label: countLabel("Activity", timeline.length) },
+    { key: "traffic", label: countLabel("Traffic", trafficRows.length) },
   ];
 
   return (
@@ -522,9 +532,199 @@ export default function RightPanel({
             </div>
           )
         )}
-        {tab === "activity" && <TimelineList events={timeline} cursorAt={timelineCursorAt} />}
+        {tab === "traffic" && (
+          <TrafficAuditList
+            rows={trafficRows}
+            honestyLine={TRAFFIC_HONESTY_LINE}
+            emptyCopy={TRAFFIC_EMPTY_COPY}
+            onOpen={(id) => setSelectedTrafficId(id)}
+          />
+        )}
       </div>
+      {selectedTrafficId && (
+        <TrafficDetailDialog
+          exchange={selectedTraffic}
+          onClose={() => setSelectedTrafficId(null)}
+        />
+      )}
     </aside>
+  );
+}
+
+function TrafficAuditList({
+  rows,
+  honestyLine,
+  emptyCopy,
+  onOpen,
+}: {
+  rows: ReturnType<typeof projectTrafficListRows>;
+  honestyLine: string;
+  emptyCopy: string;
+  onOpen: (exchangeId: string) => void;
+}) {
+  return (
+    <div className="space-y-2" data-testid="traffic-audit-list">
+      <p className="text-[11px] leading-snug text-ink-muted" data-testid="traffic-honesty-line">
+        {honestyLine}
+      </p>
+      {!rows.length ? (
+        <p className="text-sm text-ink-muted" data-testid="traffic-empty">
+          {emptyCopy}
+        </p>
+      ) : (
+        <ul className="divide-y divide-hairline-soft border-t border-hairline-soft">
+          {rows.map((row) => (
+            <li key={row.exchange_id}>
+              <button
+                type="button"
+                data-testid={`traffic-row-${row.exchange_id}`}
+                onClick={() => onOpen(row.exchange_id)}
+                className="flex w-full min-w-0 items-start gap-2 px-0.5 py-2 text-left transition-colors hover:bg-canvas-inset/60"
+              >
+                <span className="shrink-0 rounded-sm bg-canvas-inset px-1.5 py-0.5 font-mono text-[10px] font-semibold text-ink">
+                  {row.method}
+                </span>
+                <span
+                  className={`shrink-0 rounded-sm px-1.5 py-0.5 font-mono text-[10px] ${
+                    row.pending
+                      ? "bg-status-running/15 text-status-running"
+                      : row.phase === "failed"
+                        ? "bg-severity-critical/15 text-severity-critical"
+                        : "bg-canvas-inset text-ink-secondary"
+                  }`}
+                >
+                  {row.status}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-[12px] text-ink" title={row.url}>
+                  {row.hostPath}
+                </span>
+                <span className="shrink-0 rounded-sm bg-canvas-inset px-1 py-0.5 text-[10px] uppercase text-ink-muted">
+                  {row.source}
+                </span>
+                <time className="shrink-0 font-mono text-[10px] text-ink-muted">{row.time}</time>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function TrafficDetailDialog({
+  exchange,
+  onClose,
+}: {
+  exchange: TrafficExchange | null | undefined;
+  onClose: () => void;
+}) {
+  const detail = projectTrafficDetail(exchange || null);
+  if (!detail) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center theme-overlay px-4" onClick={onClose}>
+        <div
+          className="w-full max-w-3xl rounded-lg border border-hairline-soft bg-canvas p-6 shadow-xl"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <p className="text-sm text-ink-muted">Exchange not found.</p>
+          <button type="button" onClick={onClose} className="mt-4 rounded-md border border-hairline px-3 py-1.5 text-xs">
+            Close
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const copyText = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // ignore
+    }
+  };
+
+  const requestRaw = [
+    `${detail.method} ${detail.url}`,
+    formatHeadersBlock(detail.request_headers),
+    "",
+    bodyDisplayText({
+      body: detail.request_body,
+      binary: detail.request_binary,
+      truncated: detail.request_truncated,
+      bytes: detail.request_bytes,
+      hash: detail.request_hash,
+    }),
+  ].join("\n");
+
+  const responseRaw = detail.waiting_response
+    ? bodyDisplayText({ body: null, waiting: true })
+    : [
+        detail.status_code != null ? `HTTP ${detail.status_code}` : detail.error ? `Error: ${detail.error}` : "Response",
+        formatHeadersBlock(detail.response_headers),
+        "",
+        bodyDisplayText({
+          body: detail.response_body,
+          binary: detail.response_binary,
+          truncated: detail.response_truncated,
+          bytes: detail.response_bytes,
+          hash: detail.response_hash,
+          emptyLabel: detail.error ? `(${detail.error})` : "(empty)",
+        }),
+      ].join("\n");
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center theme-overlay px-4 py-6" onClick={onClose} data-testid="traffic-detail-dialog">
+      <div
+        className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-hairline-soft bg-canvas shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-hairline-soft px-5 py-4">
+          <div className="min-w-0 flex-1">
+            <p className="mb-1 text-xs font-medium uppercase tracking-wide text-ink-muted">Traffic</p>
+            <h2 className="break-all font-mono text-sm font-semibold text-ink">
+              <span className="mr-2 rounded-sm bg-canvas-inset px-1.5 py-0.5 text-[11px]">{detail.method}</span>
+              {detail.status_code != null && (
+                <span className="mr-2 rounded-sm bg-canvas-inset px-1.5 py-0.5 text-[11px]">{detail.status_code}</span>
+              )}
+              {detail.waiting_response && (
+                <span className="mr-2 rounded-sm bg-status-running/15 px-1.5 py-0.5 text-[11px] text-status-running">pending</span>
+              )}
+              <span className="text-ink-secondary">{detail.url}</span>
+            </h2>
+            <p className="mt-1 text-[11px] text-ink-muted">
+              source={detail.source} · phase={detail.phase}
+            </p>
+          </div>
+          <button type="button" onClick={onClose} className="shrink-0 rounded-md border border-hairline px-3 py-1.5 text-xs hover:bg-surface-default">
+            Close
+          </button>
+        </div>
+        <div className="grid min-h-0 flex-1 gap-3 overflow-y-auto p-5 md:grid-cols-2">
+          <section className="min-w-0">
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-muted">Request</h3>
+              <button type="button" className="text-[11px] text-ink-secondary hover:text-ink" onClick={() => void copyText(requestRaw)}>
+                Copy
+              </button>
+            </div>
+            <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap break-all rounded-md border border-hairline-soft bg-canvas-inset p-3 font-mono text-[11px] leading-relaxed text-ink">
+              {requestRaw}
+            </pre>
+          </section>
+          <section className="min-w-0">
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-muted">Response</h3>
+              <button type="button" className="text-[11px] text-ink-secondary hover:text-ink" onClick={() => void copyText(responseRaw)}>
+                Copy
+              </button>
+            </div>
+            <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap break-all rounded-md border border-hairline-soft bg-canvas-inset p-3 font-mono text-[11px] leading-relaxed text-ink">
+              {responseRaw}
+            </pre>
+          </section>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -697,35 +897,6 @@ function IntakeSummary({ intake }: { intake: ReturnType<typeof normalizeIntake> 
         {intake.reason && <p className="break-all text-severity-critical">{intake.reason}</p>}
       </div>
     </section>
-  );
-}
-
-function TimelineList({ events, cursorAt }: { events: TimelineEvent[]; cursorAt?: string }) {
-  if (!events.length) return <p className="text-sm text-ink-muted">No activity yet</p>;
-  const cursorMs = cursorAt ? new Date(cursorAt).getTime() : Number.POSITIVE_INFINITY;
-  return (
-    <div className="space-y-0" data-testid="workflow-timeline">
-      {events.map((event, index) => {
-        const eventMs = event.at ? new Date(event.at).getTime() : Number.NEGATIVE_INFINITY;
-        const occurred = Number.isFinite(cursorMs) && Number.isFinite(eventMs) ? eventMs <= cursorMs : true;
-        return (
-          <div key={event.id || index} className={`relative flex min-w-0 gap-2 pb-3 transition-opacity last:pb-0 ${occurred ? "opacity-100" : "opacity-35"}`}>
-            {index < events.length - 1 && <span aria-hidden="true" className={`absolute left-[5px] top-3 h-full w-px ${occurred ? "bg-hairline-soft" : "bg-hairline-soft/60"}`} />}
-            <span aria-hidden="true" className={`relative mt-1 h-2.5 w-2.5 shrink-0 rounded-full border ${occurred ? timelineDotClass(event.category, event.status) : "border-hairline bg-canvas"}`} />
-            <div className="min-w-0 flex-1">
-              <div className="flex min-w-0 items-start justify-between gap-3">
-                <p className={`min-w-0 break-words text-sm font-medium [overflow-wrap:anywhere] ${occurred ? "text-ink" : "text-ink-muted"}`}>{event.title}</p>
-                {event.at && <time className="shrink-0 font-mono text-[10px] text-ink-muted">{formatTimelineTime(event.at)}</time>}
-              </div>
-              <div className="mt-0.5 flex min-w-0 items-start gap-2">
-                <span className="shrink-0 rounded-sm bg-canvas-inset px-1.5 py-0.5 text-[10px] text-ink-secondary">{timelineCategoryLabel(event.category)}</span>
-                {event.detail && <p className="min-w-0 break-words text-[11px] text-ink-muted [overflow-wrap:anywhere]">{event.detail}</p>}
-              </div>
-            </div>
-          </div>
-        );
-      })}
-    </div>
   );
 }
 
@@ -1127,34 +1298,6 @@ function EngagementCloseoutCard({ closeout }: { closeout: Record<string, unknown
       ) : null}
     </section>
   );
-}
-
-function timelineCategoryLabel(category: string): string {
-  const normalized = category.toLowerCase();
-  if (normalized === "workflow") return "Workflow";
-  if (normalized === "task") return "Task";
-  if (normalized === "finding") return "Finding";
-  if (normalized === "asset") return "Asset";
-  if (normalized === "approval") return "Approval";
-  if (normalized === "gate") return "Gate";
-  if (normalized === "status") return "Status";
-  return category;
-}
-
-function timelineDotClass(category: string, status?: string): string {
-  const normalized = `${category} ${status || ""}`.toLowerCase();
-  if (normalized.includes("blocked") || normalized.includes("fail") || normalized.includes("error")) return "border-severity-critical bg-severity-critical";
-  if (normalized.includes("finding") || normalized.includes("vulnerability")) return "border-severity-high bg-severity-high";
-  if (normalized.includes("evidence")) return "border-status-success bg-status-success";
-  if (normalized.includes("workflow")) return "border-ink bg-ink";
-  return "border-hairline bg-canvas";
-}
-
-
-function formatTimelineTime(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 function isTerminalPlanStatus(status: PlanStatus | undefined): boolean {

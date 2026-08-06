@@ -341,6 +341,16 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     todos = todos_for_kanban(kanban) or todos_for_plan_tree(plan_tree) or (todos_for_checkpoint(checkpoint, conv_status) if checkpoint else todos_for_phase(agent_state.get("phase"), conv_status))
     # Spec #280 Wave1: Evidence SoT = evidence table only (no tool_call fallback).
     evidence_items = evidence_for_panel(evidence, messages=messages)
+    # Spec #309: Case traffic audit SoT = conversation.context traffic_exchanges.
+    try:
+        from app.services.traffic_exchange import traffic_exchanges_for_panel
+
+        traffic_exchange_items = traffic_exchanges_for_panel(
+            context,
+            conversation_id=str(conversation.id),
+        )
+    except Exception:
+        traffic_exchange_items = []
     snapshot_message_items, omitted = snapshot_messages(messages)
     agent_items = agents_from_messages(messages)
     # Prefer Case multi-role roster (participants) over last-checkpoint-only agents.
@@ -414,6 +424,8 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
         "coverage": coverage_items,
         "plan_tree": plan_tree,
         "captured_traffic": captured_traffic_items,
+        # Spec #309: Case traffic audit list (replaces right-panel Activity projection).
+        "traffic_exchanges": traffic_exchange_items,
         "pending_approvals": pending,
         "evidence": evidence_items,
         "read_model_errors": read_model_errors,
@@ -426,6 +438,7 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
             "attack_surface": len(attack_surface_items),
             "coverage": len(coverage_items),
             "captured_traffic": len(captured_traffic_items),
+            "traffic_exchanges": len(traffic_exchange_items),
             "plan_tree": len(plan_tree),
             "messages": len(snapshot_message_items),
             "agents": len(agent_items),
