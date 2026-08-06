@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PROTOTYPE — Worker audit dialog (map #253 / #259)</title>
+  <style>
+    /* PROTOTYPE ONLY — throwaway chrome for wayfinder #259. Not product CSS. */
+    :root {
+      --canvas: #fff;
+      --inset: #f7f7f5;
+      --ink: #111;
+      --ink2: #555;
+      --muted: #8b8b8b;
+      --hair: #e6e6e6;
+      --hair2: #f1f1f1;
+      --run: #2563eb;
+      --ok: #16a34a;
+      --err: #d73a31;
+      --overlay: rgba(0,0,0,.45);
+      --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--font);
+      color: var(--ink);
+      background: #e8e8e6;
+      min-height: 100vh;
+    }
+    .banner {
+      background: #1a1a1a;
+      color: #f5f5f4;
+      padding: 8px 16px;
+      font-size: 12px;
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .banner strong { color: #fbbf24; }
+    .banner code { background: #333; padding: 1px 6px; border-radius: 4px; }
+    .stage {
+      display: grid;
+      grid-template-columns: 1fr 280px;
+      gap: 0;
+      max-width: 1200px;
+      margin: 16px auto 96px;
+      background: var(--canvas);
+      border: 1px solid var(--hair);
+      border-radius: 12px;
+      overflow: hidden;
+      min-height: 640px;
+      box-shadow: 0 8px 30px rgba(0,0,0,.06);
+    }
+    .main-chat {
+      border-right: 1px solid var(--hair);
+      display: flex;
+      flex-direction: column;
+      background: var(--canvas);
+    }
+    .main-chat header {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--hair);
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .main-chat .scroll {
+      flex: 1;
+      padding: 16px;
+      overflow: auto;
+      background: var(--inset);
+    }
+    .bubble {
+      max-width: 92%;
+      margin-bottom: 10px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      font-size: 13px;
+      line-height: 1.45;
+      border: 1px solid var(--hair);
+      background: var(--canvas);
+    }
+    .bubble.user { margin-left: auto; background: #111; color: #fff; border-color: #111; }
+    .bubble.hint { font-size: 12px; color: var(--ink2); background: var(--hair2); }
+    .bubble .role { font-size: 10px; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; letter-spacing: .04em; }
+    .bubble.user .role { color: #aaa; }
+    .right {
+      display: flex;
+      flex-direction: column;
+      background: var(--canvas);
+    }
+    .right h2 {
+      margin: 0;
+      padding: 12px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      border-bottom: 1px solid var(--hair);
+      color: var(--ink2);
+    }
+    .tree { padding: 8px 10px; flex: 1; }
+    .row {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 8px 8px 8px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      margin-bottom: 2px;
+    }
+    .row:hover { background: var(--inset); }
+    .row.worker { margin-left: 14px; border-left: 2px solid var(--hair); }
+    .row.selected { background: rgba(37,99,235,.08); ring: 1px solid rgba(37,99,235,.25); outline: 1px solid rgba(37,99,235,.25); }
+    .dot {
+      width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex-shrink: 0;
+      background: var(--muted);
+    }
+    .dot.run { background: var(--run); }
+    .dot.ok { background: var(--ok); }
+    .dot.err { background: var(--err); }
+    .row .name { font-size: 13px; font-weight: 600; }
+    .row .sub { font-size: 11px; color: var(--ink2); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .badge {
+      margin-left: auto;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: var(--inset);
+      color: var(--ink2);
+    }
+    .badge.run { background: rgba(37,99,235,.12); color: var(--run); }
+    .badge.ok { background: rgba(22,163,74,.12); color: var(--ok); }
+
+    /* —— Dialog shells —— */
+    .overlay {
+      position: fixed; inset: 0; background: var(--overlay);
+      display: none; z-index: 40;
+    }
+    .overlay.open { display: block; }
+    .dlg {
+      position: fixed; z-index: 50; background: var(--canvas);
+      border: 1px solid var(--hair); box-shadow: 0 20px 50px rgba(0,0,0,.18);
+      display: none; flex-direction: column;
+    }
+    .dlg.open { display: flex; }
+    .dlg-head {
+      display: flex; align-items: center; gap: 10px;
+      padding: 12px 14px; border-bottom: 1px solid var(--hair);
+    }
+    .dlg-head h3 { margin: 0; font-size: 15px; font-weight: 600; flex: 1; min-width: 0; }
+    .dlg-head .meta { font-size: 11px; color: var(--muted); }
+    .icon-btn {
+      border: 1px solid var(--hair); background: var(--canvas); border-radius: 8px;
+      padding: 6px 10px; font-size: 12px; cursor: pointer; color: var(--ink2);
+    }
+    .icon-btn:hover { background: var(--inset); }
+    .icon-btn.primary { background: #111; color: #fff; border-color: #111; }
+    .dlg-body { flex: 1; overflow: auto; padding: 12px 14px; background: var(--inset); }
+    .turn {
+      margin-bottom: 16px; border: 1px solid var(--hair); border-radius: 12px;
+      background: var(--canvas); overflow: hidden;
+    }
+    .turn-head {
+      padding: 10px 12px; background: #fafaf9; border-bottom: 1px solid var(--hair2);
+      display: flex; gap: 8px; align-items: flex-start;
+    }
+    .turn-head .tag {
+      font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+      color: var(--run); background: rgba(37,99,235,.1); padding: 2px 6px; border-radius: 4px;
+      flex-shrink: 0;
+    }
+    .turn-head .title { font-size: 13px; font-weight: 600; }
+    .turn-head .fields { font-size: 11px; color: var(--ink2); margin-top: 4px; }
+    .turn-head details { font-size: 11px; color: var(--muted); margin-top: 6px; }
+    .turn-head details pre {
+      margin: 6px 0 0; padding: 8px; background: var(--inset); border-radius: 6px;
+      white-space: pre-wrap; font-family: var(--mono); font-size: 10px; color: var(--ink2);
+    }
+    .event {
+      margin: 8px 10px; padding: 8px 10px; border-radius: 8px;
+      border: 1px solid var(--hair); font-size: 12px; line-height: 1.4;
+    }
+    .event.thinking { background: #fafafa; border-style: dashed; color: var(--ink2); }
+    .event.tool { background: #f8fafc; }
+    .event.tool .tname { font-family: var(--mono); font-size: 11px; font-weight: 600; }
+    .event.tool .out {
+      margin-top: 6px; font-family: var(--mono); font-size: 10px;
+      background: #0f172a; color: #e2e8f0; padding: 8px; border-radius: 6px;
+      white-space: pre-wrap; max-height: 80px; overflow: auto;
+    }
+    .event.text { background: var(--canvas); }
+    .event .lab { font-size: 10px; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+    .delivery {
+      margin: 8px 10px 12px; padding: 10px 12px; border-radius: 8px;
+      border: 1px solid rgba(22,163,74,.35); background: rgba(22,163,74,.06);
+      font-size: 12px;
+    }
+    .delivery.fail { border-color: rgba(215,58,49,.35); background: rgba(215,58,49,.06); }
+    .delivery.run {
+      border-color: rgba(37,99,235,.35); background: rgba(37,99,235,.06);
+      border-style: dashed;
+    }
+    .delivery .st { font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
+    .delivery.ok .st { color: var(--ok); }
+    .delivery.fail .st { color: var(--err); }
+    .delivery.run .st { color: var(--run); }
+    .empty {
+      text-align: center; color: var(--muted); font-size: 13px; padding: 40px 16px;
+    }
+    .rename-pop {
+      display: none; position: absolute; right: 48px; top: 48px; z-index: 60;
+      background: var(--canvas); border: 1px solid var(--hair); border-radius: 10px;
+      padding: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.12); width: 240px;
+    }
+    .rename-pop.open { display: block; }
+    .rename-pop input {
+      width: 100%; padding: 8px 10px; border: 1px solid var(--hair); border-radius: 8px;
+      font-size: 13px; margin: 8px 0;
+    }
+    .rename-pop .actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+    /* Variant A — center modal */
+    #dlg-a {
+      top: 50%; left: 50%; transform: translate(-50%,-50%);
+      width: min(720px, 94vw); height: min(78vh, 720px); border-radius: 16px;
+    }
+    /* Variant B — right drawer */
+    #dlg-b {
+      top: 0; right: 0; bottom: 0; width: min(440px, 100vw);
+      border-radius: 0; border-right: none; border-top: none; border-bottom: none;
+    }
+    /* Variant C — split master-detail */
+    #dlg-c {
+      top: 50%; left: 50%; transform: translate(-50%,-50%);
+      width: min(900px, 96vw); height: min(80vh, 740px); border-radius: 16px;
+    }
+    #dlg-c .split {
+      display: grid; grid-template-columns: 220px 1fr; flex: 1; min-height: 0;
+    }
+    #dlg-c .pkg-list {
+      border-right: 1px solid var(--hair); overflow: auto; background: var(--canvas);
+    }
+    #dlg-c .pkg-item {
+      padding: 10px 12px; border-bottom: 1px solid var(--hair2); cursor: pointer; font-size: 12px;
+    }
+    #dlg-c .pkg-item:hover { background: var(--inset); }
+    #dlg-c .pkg-item.active { background: rgba(37,99,235,.08); border-left: 3px solid var(--run); }
+    #dlg-c .pkg-item .n { font-weight: 600; font-size: 12px; }
+    #dlg-c .pkg-item .g { color: var(--ink2); margin-top: 2px; font-size: 11px; }
+    #dlg-c .detail { overflow: auto; background: var(--inset); padding: 12px; }
+
+    .switcher {
+      position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+      z-index: 100; display: flex; align-items: center; gap: 8px;
+      background: #111; color: #fff; padding: 8px 12px; border-radius: 999px;
+      box-shadow: 0 8px 30px rgba(0,0,0,.25); font-size: 12px; user-select: none;
+    }
+    .switcher button {
+      background: #333; color: #fff; border: none; border-radius: 999px;
+      width: 32px; height: 32px; cursor: pointer; font-size: 14px;
+    }
+    .switcher button:hover { background: #444; }
+    .switcher .label { min-width: 200px; text-align: center; }
+    .switcher .label small { display: block; color: #aaa; font-size: 10px; margin-top: 2px; }
+    .note {
+      max-width: 1200px; margin: 0 auto 12px; padding: 0 8px;
+      font-size: 12px; color: #444;
+    }
+  </style>
+</head>
+<body>
+  <div class="banner">
+    <strong>PROTOTYPE · throwaway</strong>
+    <span>Wayfinder map #253 · ticket #259 · Worker audit dialog skeleton</span>
+    <span>Locks: read-only + rename · Package→process→Delivery turns · Main-like bubbles</span>
+    <code>?variant=A|B|C</code>
+  </div>
+
+  <p class="note">
+    Fake Case chrome: left = Main chat (light lifecycle only); right = Agent collaboration.
+    Click a <b>Worker</b> row to open the audit surface. Use bottom bar or ← → to switch structural variants.
+    Rename is UI-only in this prototype (not persisted).
+  </p>
+
+  <div class="stage" id="stage">
+    <section class="main-chat">
+      <header>Main · Case chat <span style="font-weight:400;color:var(--muted)">(process must NOT appear here)</span></header>
+      <div class="scroll">
+        <div class="bubble user"><div class="role">You</div>对 example.com 做注入面探测，可拆 package 给 Worker。</div>
+        <div class="bubble"><div class="role">Main</div>已规划两条 package，分别覆盖登录框与搜索参数。</div>
+        <div class="bubble hint"><div class="role">lifecycle</div>已派发 <b id="hint-name">登录框 SQLi</b>（Worker 2）· 完成时见右侧协作树</div>
+        <div class="bubble"><div class="role">Main · tool subagent</div>
+          packages[0] this_turn_goal: 登录框 SQLi 探测… → <span style="color:var(--ok)">ok</span><br/>
+          packages[1] this_turn_goal: 搜索参数反射… → <span style="color:var(--run)">running</span>
+        </div>
+      </div>
+    </section>
+    <aside class="right">
+      <h2>Agent collaboration</h2>
+      <div class="tree">
+        <div class="row" data-id="main">
+          <span class="dot run"></span>
+          <div style="min-width:0;flex:1">
+            <div class="name">Main</div>
+            <div class="sub">调度 package / 记账</div>
+          </div>
+          <span class="badge run">running</span>
+        </div>
+        <div class="row worker" data-id="w1" data-status="ok" onclick="openWorker('w1')">
+          <span class="dot ok"></span>
+          <div style="min-width:0;flex:1">
+            <div class="name" data-label>Worker 1</div>
+            <div class="sub">搜索面已交付</div>
+          </div>
+          <span class="badge ok">done</span>
+        </div>
+        <div class="row worker selected" data-id="w2" data-status="run" onclick="openWorker('w2')">
+          <span class="dot run"></span>
+          <div style="min-width:0;flex:1">
+            <div class="name" data-label>登录框 SQLi</div>
+            <div class="sub">正在 http 探测…</div>
+          </div>
+          <span class="badge run">running</span>
+        </div>
+      </div>
+      <div style="padding:10px 12px;border-top:1px solid var(--hair);font-size:11px;color:var(--muted)">
+        Tasks chips 示意：<span style="border:1px solid var(--hair);border-radius:4px;padding:1px 6px;background:var(--inset)" id="task-chip">登录框 SQLi</span>
+      </div>
+    </aside>
+  </div>
+
+  <div class="overlay" id="overlay" onclick="closeDlg()"></div>
+
+  <!-- ========== VARIANT A: center modal, continuous timeline ========== -->
+  <div class="dlg" id="dlg-a" role="dialog" aria-label="Variant A">
+    <div class="dlg-head">
+      <div>
+        <h3 data-dlg-title>登录框 SQLi</h3>
+        <div class="meta">agent_id: sub_obs_2 · status: <span data-dlg-status>running</span> · V-A continuous turns</div>
+      </div>
+      <button type="button" class="icon-btn" onclick="toggleRename(event)">重命名</button>
+      <button type="button" class="icon-btn" onclick="closeDlg()">关闭</button>
+    </div>
+    <div class="dlg-body" id="body-a"></div>
+  </div>
+
+  <!-- ========== VARIANT B: right drawer ========== -->
+  <div class="dlg" id="dlg-b" role="dialog" aria-label="Variant B">
+    <div class="dlg-head">
+      <div>
+        <h3 data-dlg-title>登录框 SQLi</h3>
+        <div class="meta">drawer · stays beside collaboration tree</div>
+      </div>
+      <button type="button" class="icon-btn" onclick="toggleRename(event)">重命名</button>
+      <button type="button" class="icon-btn" onclick="closeDlg()">×</button>
+    </div>
+    <div class="dlg-body" id="body-b"></div>
+  </div>
+
+  <!-- ========== VARIANT C: package list + detail ========== -->
+  <div class="dlg" id="dlg-c" role="dialog" aria-label="Variant C">
+    <div class="dlg-head">
+      <div>
+        <h3 data-dlg-title>登录框 SQLi</h3>
+        <div class="meta">master–detail · left = package turns</div>
+      </div>
+      <button type="button" class="icon-btn" onclick="toggleRename(event)">重命名</button>
+      <button type="button" class="icon-btn" onclick="closeDlg()">关闭</button>
+    </div>
+    <div class="split">
+      <div class="pkg-list" id="pkg-list-c"></div>
+      <div class="detail" id="body-c"></div>
+    </div>
+  </div>
+
+  <div class="rename-pop" id="rename-pop">
+    <div style="font-size:12px;font-weight:600">显示名（Case 覆盖）</div>
+    <input id="rename-input" maxlength="64" placeholder="Worker N 或自定义" />
+    <div class="actions">
+      <button type="button" class="icon-btn" onclick="clearRename()">清除</button>
+      <button type="button" class="icon-btn primary" onclick="applyRename()">保存</button>
+    </div>
+  </div>
+
+  <div class="switcher" id="switcher">
+    <button type="button" onclick="cycle(-1)" aria-label="prev">←</button>
+    <div class="label" id="switcher-label">A — Center modal</div>
+    <button type="button" onclick="cycle(1)" aria-label="next">→</button>
+  </div>
+
+  <script>
+    /** PROTOTYPE fixture — encodes #256 timeline contract at low fidelity */
+    const WORKERS = {
+      w1: {
+        id: "w1",
+        agentId: "sub_obs_1",
+        defaultName: "Worker 1",
+        displayName: "Worker 1",
+        status: "completed",
+        turns: [
+          {
+            n: 1,
+            goal: "搜索参数反射 XSS 初筛",
+            target: "https://example.com/search",
+            fields: { scope: "q param only", already_done: "无", success_criteria: "有/无反射证据" },
+            events: [
+              { kind: "thinking", text: "先确认反射点，再试简单 payload。" },
+              { kind: "tool", name: "http", out: "GET /search?q=test → 200, body reflects q" },
+              { kind: "text", text: "确认反射；无过滤器迹象。" },
+            ],
+            delivery: { status: "ok", summary: "候选 1 条 surface；无 confirm 卡（V1 dialog 不含）" },
+          },
+        ],
+      },
+      w2: {
+        id: "w2",
+        agentId: "sub_obs_2",
+        defaultName: "Worker 2",
+        displayName: "登录框 SQLi",
+        status: "running",
+        turns: [
+          {
+            n: 1,
+            goal: "登录框用户名参数 SQLi 探测",
+            target: "https://example.com/login",
+            fields: {
+              scope: "POST /login user field",
+              already_done: "recon 已标 form",
+              success_criteria: "报错/时间差/布尔证据或明确 deadend",
+            },
+            events: [
+              { kind: "thinking", text: "从基础引号探测开始，避免破坏会话。" },
+              { kind: "tool", name: "http", out: "POST user=' → 500 stack: SQL syntax…" },
+              { kind: "text", text: "疑似报错注入；整理 candidate 给 Main 记账。" },
+            ],
+            delivery: { status: "ok", summary: "structured settlement: 1 candidate (error-based)" },
+          },
+          {
+            n: 2,
+            goal: "扩大到 password 字段 + 时间盲注验证",
+            target: "https://example.com/login",
+            fields: {
+              scope: "password field + sleep probe",
+              already_done: "user 字段已报错注入",
+              success_criteria: "确认/否定时间盲注",
+            },
+            events: [
+              { kind: "thinking", text: "对 password 做 SLEEP 对照。" },
+              { kind: "tool", name: "http", out: "… running …" },
+            ],
+            delivery: null, // running — no Delivery yet
+          },
+        ],
+      },
+    };
+
+    let activeWorker = "w2";
+    let variant = (new URLSearchParams(location.search).get("variant") || "A").toUpperCase();
+    if (!["A", "B", "C"].includes(variant)) variant = "A";
+    let selectedTurn = 1;
+
+    const META = {
+      A: { title: "A — Center modal", blurb: "连续回合时间线 · 居中 dialog（最贴 charting「像聊天」）" },
+      B: { title: "B — Right drawer", blurb: "右侧抽屉 · 贴着协作树 · 主聊仍可见" },
+      C: { title: "C — Master–detail", blurb: "左 Package 列表 · 右单回合详情（#256 默认仍是顺序块，此为对照）" },
+    };
+
+    function $(sel, root = document) { return root.querySelector(sel); }
+    function $all(sel, root = document) { return [...root.querySelectorAll(sel)]; }
+
+    function renderEvent(ev) {
+      if (ev.kind === "thinking") {
+        return `<div class="event thinking"><div class="lab">thinking</div>${esc(ev.text)}</div>`;
+      }
+      if (ev.kind === "tool") {
+        return `<div class="event tool"><div class="lab">tool_call</div><div class="tname">${esc(ev.name)}</div><div class="out">${esc(ev.out)}</div></div>`;
+      }
+      return `<div class="event text"><div class="lab">text</div>${esc(ev.text)}</div>`;
+    }
+
+    function renderDelivery(d) {
+      if (!d) {
+        return `<div class="delivery run"><div class="st">running · no delivery yet</div>过程仍在进行；中途打开应看到 live 前缀（#258）。</div>`;
+      }
+      const cls = d.status === "ok" ? "ok" : "fail";
+      return `<div class="delivery ${cls}"><div class="st">delivery · ${esc(d.status)}</div>${esc(d.summary)}
+        <details style="margin-top:6px"><summary>structured settlement</summary><pre>{ "summary": ${JSON.stringify(d.summary)} }</pre></details>
+      </div>`;
+    }
+
+    function renderTurn(t) {
+      const f = t.fields;
+      return `<div class="turn" data-turn="${t.n}">
+        <div class="turn-head">
+          <span class="tag">Package ${t.n}</span>
+          <div style="min-width:0;flex:1">
+            <div class="title">${esc(t.goal)}</div>
+            <div class="fields">target: ${esc(t.target)}</div>
+            <details>
+              <summary>handoff 五字段</summary>
+              <pre>this_turn_goal: ${esc(t.goal)}
+target: ${esc(t.target)}
+scope: ${esc(f.scope)}
+already_done: ${esc(f.already_done)}
+success_criteria: ${esc(f.success_criteria)}</pre>
+            </details>
+          </div>
+        </div>
+        ${t.events.map(renderEvent).join("")}
+        ${renderDelivery(t.delivery)}
+      </div>`;
+    }
+
+    function renderTimeline(workerId, mountId) {
+      const w = WORKERS[workerId];
+      const el = document.getElementById(mountId);
+      if (!w.turns.length) {
+        el.innerHTML = `<div class="empty">尚无派工记录</div>`;
+        return;
+      }
+      el.innerHTML = w.turns.map(renderTurn).join("");
+      // scroll to latest
+      const last = el.lastElementChild;
+      if (last) last.scrollIntoView({ block: "nearest" });
+    }
+
+    function renderVariantC(workerId) {
+      const w = WORKERS[workerId];
+      const list = document.getElementById("pkg-list-c");
+      list.innerHTML = w.turns.map((t) => `
+        <div class="pkg-item ${t.n === selectedTurn ? "active" : ""}" onclick="selectTurn(${t.n})">
+          <div class="n">Package ${t.n} · ${t.delivery ? t.delivery.status : "running"}</div>
+          <div class="g">${esc(t.goal)}</div>
+        </div>`).join("");
+      const t = w.turns.find((x) => x.n === selectedTurn) || w.turns[w.turns.length - 1];
+      selectedTurn = t.n;
+      document.getElementById("body-c").innerHTML = renderTurn(t);
+    }
+
+    function selectTurn(n) {
+      selectedTurn = n;
+      renderVariantC(activeWorker);
+    }
+
+    function syncTitles() {
+      const w = WORKERS[activeWorker];
+      $all("[data-dlg-title]").forEach((n) => { n.textContent = w.displayName; });
+      $all("[data-dlg-status]").forEach((n) => { n.textContent = w.status; });
+      const row = $(`.row.worker[data-id="${activeWorker}"] [data-label]`);
+      if (row) row.textContent = w.displayName;
+      const chip = $("#task-chip");
+      if (chip && activeWorker === "w2") chip.textContent = w.displayName;
+      const hint = $("#hint-name");
+      if (hint && activeWorker === "w2") hint.textContent = w.displayName;
+    }
+
+    function openWorker(id) {
+      activeWorker = id;
+      selectedTurn = WORKERS[id].turns.length;
+      $all(".row.worker").forEach((r) => r.classList.toggle("selected", r.dataset.id === id));
+      syncTitles();
+      showVariant(variant);
+    }
+
+    function showVariant(v) {
+      variant = v;
+      const params = new URLSearchParams(location.search);
+      params.set("variant", v);
+      history.replaceState(null, "", "?" + params.toString());
+
+      $("#overlay").classList.add("open");
+      ["a", "b", "c"].forEach((k) => {
+        const d = document.getElementById("dlg-" + k);
+        d.classList.toggle("open", k === v.toLowerCase());
+      });
+
+      if (v === "A") renderTimeline(activeWorker, "body-a");
+      if (v === "B") renderTimeline(activeWorker, "body-b");
+      if (v === "C") renderVariantC(activeWorker);
+
+      const m = META[v];
+      $("#switcher-label").innerHTML = `${m.title}<small>${m.blurb}</small>`;
+    }
+
+    function closeDlg() {
+      $("#overlay").classList.remove("open");
+      $all(".dlg").forEach((d) => d.classList.remove("open"));
+      $("#rename-pop").classList.remove("open");
+    }
+
+    function cycle(dir) {
+      const order = ["A", "B", "C"];
+      let i = order.indexOf(variant);
+      i = (i + dir + order.length) % order.length;
+      showVariant(order[i]);
+    }
+
+    function toggleRename(e) {
+      e.stopPropagation();
+      const pop = $("#rename-pop");
+      pop.classList.toggle("open");
+      $("#rename-input").value = WORKERS[activeWorker].displayName;
+      $("#rename-input").focus();
+    }
+    function applyRename() {
+      const v = $("#rename-input").value.trim();
+      const w = WORKERS[activeWorker];
+      w.displayName = v || w.defaultName;
+      syncTitles();
+      $("#rename-pop").classList.remove("open");
+      if (document.getElementById("dlg-" + variant.toLowerCase()).classList.contains("open")) {
+        showVariant(variant);
+      }
+    }
+    function clearRename() {
+      const w = WORKERS[activeWorker];
+      w.displayName = w.defaultName;
+      $("#rename-input").value = w.defaultName;
+      applyRename();
+    }
+
+    function esc(s) {
+      return String(s).replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+      })[c]);
+    }
+
+    document.addEventListener("keydown", (e) => {
+      const t = e.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if (e.key === "ArrowLeft") cycle(-1);
+      if (e.key === "ArrowRight") cycle(1);
+      if (e.key === "Escape") closeDlg();
+    });
+
+    // boot: open w2 with current variant so chrome is visible immediately
+    syncTitles();
+    openWorker("w2");
+  </script>
+</body>
+</html>
