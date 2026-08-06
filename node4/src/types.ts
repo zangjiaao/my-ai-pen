@@ -152,10 +152,15 @@ export type ToolRuntime = {
     /** Flattened index rebuilt from cache for pathname matching / candidate_index. */
     subagentCandidateIndex?: import("./runtime/subagent-booking.js").CachedCandidate[];
     /**
-     * Pathname → how many times Main already dispatched a subagent package for it.
-     * Soft-limits re-dispatch spam (default max 2 per path).
+     * Pathname → how many times Main dispatched a subagent package for it this task.
+     * Observability only (Spec #302) — does **not** hard-kill further same-path packages.
      */
     subagentPathDispatchCounts?: Record<string, number>;
+    /**
+     * Cumulative packages **admitted** (after validation) this task for spawn/queue.
+     * Spec #302: NODE4_SUBAGENT_TASK_BUDGET (default 128, max 1024). Exhaustion → clear tool error.
+     */
+    subagentPackagesAdmitted?: number;
     /**
      * OMP-style idle workers by agent_id (keep-alive after package, incl. soft-fail).
      * Resume: resume_agent_id + same-path affinity.
