@@ -54,6 +54,7 @@ import {
   type EngagementTemplateId,
   type ExpertId,
 } from "../lib/experts";
+import { currentInProgressWorksetItemId } from "../lib/workset";
 
 const ACTIVE_CONVERSATION_KEY = "active_conversation_id";
 /** Set by AssetPage when launching a task from selected hosts/ports. */
@@ -1937,11 +1938,17 @@ export default function ConversationPage() {
       }),
     );
 
+    // Spec #311 US3: when a 下一步 item already holds the baton (e.g. after 采纳),
+    // pass workset_item_id so task_assign refreshes expert(+Graph) annotation.
+    const nextWorksetId = currentInProgressWorksetItemId(workset);
+    const worksetPayload = nextWorksetId ? { workset_item_id: nextWorksetId } : {};
+
     const commonPayload = {
       ...agentPayload,
       ...goalPayload,
       ...engagementPayload,
       ...expertPayload,
+      ...worksetPayload,
     };
 
     if (shouldContinueExisting && activeConversation?.status === "running") {
@@ -2011,6 +2018,7 @@ export default function ConversationPage() {
     activeConversationNodeId,
     fetchAll,
     patchConversation,
+    workset,
   ]);
   launchTaskMessageRef.current = launchTaskMessage;
 

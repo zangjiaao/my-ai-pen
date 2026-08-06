@@ -3,6 +3,7 @@
  */
 import assert from "node:assert/strict";
 import {
+  currentInProgressWorksetItemId,
   orderWorksetItems,
   parseWorksetProjection,
   worksetFamilyLabel,
@@ -91,5 +92,10 @@ assert.ok(proj.items.some((i) => i.status === "proposed"));
 // Tasks plan_tree is a different type — ensure we don't mix fields
 const planTreeShape = { node_id: "graph-stage-recon", title: "Recon", status: "done" };
 assert.equal("family" in planTreeShape, false, "Tasks nodes are not Workset items");
+
+// Spec #311 US3: FE passes this id on user_message when baton is held
+assert.equal(currentInProgressWorksetItemId(proj), "run");
+assert.equal(currentInProgressWorksetItemId({ items: [] }), null);
+assert.equal(currentInProgressWorksetItemId(null), null);
 
 console.log("workset.test.ts: ok");

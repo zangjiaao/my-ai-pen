@@ -3,6 +3,7 @@ from app.services.case_workset import (
     apply_settle_to_context,
     auto_check_safe,
     adopt_item,
+    annotation_fields_from_context,
     clear_in_progress,
     detect_goal_mode_on,
     detect_user_stopped_settle,
@@ -20,6 +21,7 @@ from app.services.case_workset import (
     reorder_items,
     scope_hosts_from_task,
     set_in_progress,
+    take_in_progress_baton,
     thin_handoff_brief,
     update_item_status,
 )
@@ -556,3 +558,96 @@ def test_put_get_roundtrip_context():
     ws = get_workset(ctx)
     assert len(ws["items"]) == 1
     assert ws["items"][0]["id"] == "x"
+
+
+def test_user_adopt_then_take_baton_sets_in_progress_annotation():
+    """Spec #311 US3: host adopt path takes the single baton with expert(+Graph)."""
+    ws = merge_proposed_items(
+        {"version": 1, "items": [], "goal": None},
+        [
+            {"location": "http://target.local/a", "host": "target.local", "in_scope": True},
+            {"location": "http://target.local/b", "host": "target.local", "in_scope": True},
+        ],
+        source="free_settle",
+        scope_hosts=SCOPE,
+    )
+    a_id, b_id = ws["items"][0]["id"], ws["items"][1]["id"]
+    ws, adopted, err = adopt_item(ws, a_id, actor="user", scope_hosts=SCOPE)
+    assert err is None
+    assert adopted["status"] == "adopted"
+    # Prefer path used by PATCH /workset/{id} after adopt.
+    ws, item, err = take_in_progress_baton(
+        ws,
+        a_id,
+        expert_id="exp-alice",
+        expert_name="Alice",
+        graph_id="app_assessment",
+        work_mode="graph",
+        force=True,
+    )
+    assert err is None
+    assert item is not None
+    assert item["in_progress"] is True
+    assert item["expert_id"] == "exp-alice"
+    assert item["expert_name"] == "Alice"
+    assert item["graph_id"] == "app_assessment"
+    assert item["work_mode"] == "graph"
+    # Second adopt+baton clears the first (single baton V1).
+    ws, _, err = adopt_item(ws, b_id, actor="user", scope_hosts=SCOPE)
+    assert err is None
+    ws, item_b, err = take_in_progress_baton(
+        ws,
+        b_id,
+        expert_id="exp-alice",
+        expert_name="Alice",
+        work_mode="free",
+        force=True,
+    )
+    assert err is None
+    by_id = {i["id"]: i for i in ws["items"]}
+    assert by_id[a_id].get("in_progress") is False
+    assert by_id[b_id]["in_progress"] is True
+    assert by_id[b_id]["work_mode"] == "free"
+    assert not by_id[b_id].get("graph_id") or item_b.get("work_mode") == "free"
+
+
+def test_take_baton_rejects_proposed_and_closed():
+    ws = merge_proposed_items(
+        {"version": 1, "items": [], "goal": None},
+        [{"location": "http://target.local/c", "host": "target.local", "in_scope": True}],
+        source="free_settle",
+        scope_hosts=SCOPE,
+    )
+    iid = ws["items"][0]["id"]
+    _, _, err = take_in_progress_baton(ws, iid, expert_id="e1", force=True)
+    assert err == "not_adopted"
+    ws, _, _ = adopt_item(ws, iid, actor="user", scope_hosts=SCOPE)
+    ws, _, _ = update_item_status(ws, iid, status="done", actor="user")
+    _, _, err2 = take_in_progress_baton(ws, iid, force=True)
+    assert err2 == "not_open"
+
+
+def test_annotation_fields_from_context_session_graph():
+    ctx = {
+        "task": {
+            "expert_id": "e1",
+            "expert_name": "pentest-1",
+            "engagement_template": "app_assessment",
+        },
+        "sessions": {
+            "e1": {"work_mode": "graph", "graph_id": "app_assessment"},
+        },
+    }
+    ann = annotation_fields_from_context(ctx)
+    assert ann["expert_id"] == "e1"
+    assert ann["expert_name"] == "pentest-1"
+    assert ann["work_mode"] == "graph"
+    assert ann["graph_id"] == "app_assessment"
+    # Free session → expert only (no graph).
+    ctx2 = {
+        "task": {"expert_id": "e1", "expert_name": "pentest-1"},
+        "sessions": {"e1": {"work_mode": "free", "graph_id": None}},
+    }
+    ann2 = annotation_fields_from_context(ctx2)
+    assert ann2["work_mode"] == "free"
+    assert ann2["graph_id"] is None

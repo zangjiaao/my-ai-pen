@@ -133,3 +133,26 @@ export function worksetHasVisibleContent(ws: WorksetProjection): boolean {
   if (ws.goal?.residual) return true;
   return false;
 }
+
+/**
+ * Spec #311 US3: id of the single in-progress 下一步 baton, if any.
+ * Used when sending user_message so platform task_assign can refresh annotation.
+ */
+export function currentInProgressWorksetItemId(
+  ws: WorksetProjection | Record<string, unknown> | null | undefined,
+): string | null {
+  if (!ws || typeof ws !== "object") return null;
+  const raw = ws as WorksetProjection | Record<string, unknown>;
+  const list = Array.isArray((raw as WorksetProjection).items)
+    ? (raw as WorksetProjection).items
+    : Array.isArray((raw as { all_items?: WorksetItem[] }).all_items)
+      ? ((raw as { all_items?: WorksetItem[] }).all_items as WorksetItem[])
+      : [];
+  for (const item of list) {
+    if (!item || typeof item !== "object") continue;
+    if (item.in_progress && String(item.id || "").trim()) {
+      return String(item.id).trim();
+    }
+  }
+  return null;
+}

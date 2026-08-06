@@ -594,6 +594,7 @@ def set_in_progress(
         "goal": dict(workset["goal"]) if isinstance(workset.get("goal"), dict) else None,
     }
     now = _now_iso()
+    mode = str(work_mode or "").strip().lower() if work_mode is not None else None
     for item in ws["items"]:
         if item_id and str(item.get("id")) == item_id:
             item["in_progress"] = True
@@ -602,10 +603,13 @@ def set_in_progress(
                 item["expert_id"] = str(expert_id)[:80]
             if expert_name:
                 item["expert_name"] = str(expert_name)[:80]
-            if graph_id:
+            if mode:
+                item["work_mode"] = mode[:40]
+            # Free: expert-only annotation (US3). Graph: expert · graph_id.
+            if mode == "free":
+                item.pop("graph_id", None)
+            elif graph_id:
                 item["graph_id"] = str(graph_id)[:80]
-            if work_mode:
-                item["work_mode"] = str(work_mode)[:40]
         else:
             if item.get("in_progress"):
                 item["in_progress"] = False
@@ -615,6 +619,86 @@ def set_in_progress(
 
 def clear_in_progress(workset: dict[str, Any]) -> dict[str, Any]:
     return set_in_progress(workset, None)
+
+
+def annotation_fields_from_context(context: object) -> dict[str, str | None]:
+    """Expert + Session work mode/graph for in-progress 下一步 annotation (US3).
+
+    Reads sticky Case task expert and Participant Session private mode — Host-only
+    writer path; no Tasks dual-write.
+    """
+    ctx = context if isinstance(context, dict) else {}
+    task = ctx.get("task") if isinstance(ctx.get("task"), dict) else {}
+    expert_id = str(task.get("expert_id") or "").strip() or None
+    expert_name = str(task.get("expert_name") or "").strip() or None
+    work_mode: str | None = None
+    graph_id: str | None = None
+    try:
+        from app.services.participant_session import session_record_from_context
+
+        sess = session_record_from_context(ctx, expert_id)
+        mode = str(sess.get("work_mode") or "").strip().lower()
+        if mode in {"free", "graph"}:
+            work_mode = mode
+        if mode == "graph":
+            graph_id = (
+                str(sess.get("graph_id") or task.get("engagement_template") or "").strip() or None
+            )
+    except Exception:
+        pass
+    if work_mode is None and (expert_id or expert_name):
+        # Adopt before any Session row: default Free so UI shows expert-only annotation.
+        work_mode = "free"
+    return {
+        "expert_id": expert_id,
+        "expert_name": expert_name,
+        "graph_id": graph_id,
+        "work_mode": work_mode,
+    }
+
+
+def take_in_progress_baton(
+    workset: dict[str, Any],
+    item_id: str,
+    *,
+    expert_id: str | None = None,
+    expert_name: str | None = None,
+    graph_id: str | None = None,
+    work_mode: str | None = None,
+    force: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any] | None, str | None]:
+    """Mark an open Workset item as the single in-progress baton.
+
+    If the item already holds in_progress and force is False, still refreshes
+    annotation fields when provided. Clears any other in_progress item.
+    Returns (workset, item, error).
+    """
+    iid = str(item_id or "").strip()
+    if not iid:
+        return workset, None, "not_found"
+    items = workset.get("items") if isinstance(workset.get("items"), list) else []
+    target = next((i for i in items if isinstance(i, dict) and str(i.get("id")) == iid), None)
+    if not target:
+        return workset, None, "not_found"
+    st = str(target.get("status") or "")
+    if st not in OPEN_STATUSES:
+        return workset, None, "not_open"
+    # Prefer adopted; proposed may take baton only after host adopt (caller).
+    if st == "proposed":
+        return workset, None, "not_adopted"
+    already = bool(target.get("in_progress"))
+    if already and not force and not any((expert_id, expert_name, graph_id, work_mode)):
+        return workset, dict(target), None
+    ws = set_in_progress(
+        workset,
+        iid,
+        expert_id=expert_id,
+        expert_name=expert_name,
+        graph_id=graph_id,
+        work_mode=work_mode,
+    )
+    item = next((i for i in ws["items"] if str(i.get("id")) == iid), None)
+    return ws, item, None
 
 
 def detect_goal_mode_on(

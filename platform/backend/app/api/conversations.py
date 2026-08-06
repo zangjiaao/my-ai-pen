@@ -376,19 +376,24 @@ async def patch_workset_item(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Host-gated Workset item update (status / clear in_progress). Agent cannot self-adopt.
+    """Host-gated Workset item update (status / in_progress baton). Agent cannot self-adopt.
 
     Spec #311: t_host adopt expands Scope.allow / assets (same spirit as next-scope);
     never mark t_host adopted without Scope update.
+
+    User adopt (and in_progress=true 推进) takes the single in-progress baton and
+    stamps expert(+Graph|Free) from Case task + Participant Session for US3 UI.
     """
     from app.services.case_workset import (
         adopt_item,
+        annotation_fields_from_context,
         expand_task_scope_for_host,
         get_workset,
         host_expand_fields_from_item,
         project_workset_for_api,
         put_workset,
         scope_hosts_from_task,
+        take_in_progress_baton,
         update_item_status,
     )
 
@@ -401,6 +406,8 @@ async def patch_workset_item(
     actor = "user"  # HTTP path is always user-gated
     scope_expanded: dict | None = None
     registered_asset: dict | None = None
+    # Explicit baton request (推进): body.in_progress true without status change.
+    want_baton = body.get("in_progress") is True or body.get("in_progress") in ("true", "1", 1)
 
     if status == "adopted":
         target = next((i for i in ws["items"] if isinstance(i, dict) and str(i.get("id")) == item_id), None)
@@ -453,13 +460,44 @@ async def patch_workset_item(
                     # Scope already expanded; asset registration failure must not orphan adopt.
                     print(f"[api] workset t_host asset register error: {e}")
         ws, item, err = adopt_item(ws, item_id, actor=actor, scope_hosts=scope_hosts)
+        # Spec #311 US3: user adopt takes the in-progress baton so expert(+Graph) lights.
+        if not err and item:
+            ann = annotation_fields_from_context(ctx)
+            ws, item, baton_err = take_in_progress_baton(
+                ws,
+                item_id,
+                expert_id=ann.get("expert_id"),
+                expert_name=ann.get("expert_name"),
+                graph_id=ann.get("graph_id"),
+                work_mode=ann.get("work_mode"),
+                force=True,
+            )
+            if baton_err:
+                err = baton_err
     elif status:
         ws, item, err = update_item_status(ws, item_id, status=status, actor=actor)
     else:
         item = next((i for i in ws["items"] if str(i.get("id")) == item_id), None)
         err = None if item else "not_found"
         if item and body.get("in_progress") is False:
-            item["in_progress"] = False
+            from app.services.case_workset import set_in_progress
+
+            # Clear only this item if it holds the baton; leave others untouched.
+            if item.get("in_progress"):
+                ws = set_in_progress(ws, None)
+                item = next((i for i in ws["items"] if str(i.get("id")) == item_id), item)
+        elif item and want_baton:
+            # 推进: switch baton to an already-adopted open item.
+            ann = annotation_fields_from_context(ctx)
+            ws, item, err = take_in_progress_baton(
+                ws,
+                item_id,
+                expert_id=ann.get("expert_id"),
+                expert_name=ann.get("expert_name"),
+                graph_id=ann.get("graph_id"),
+                work_mode=ann.get("work_mode"),
+                force=True,
+            )
 
     if err:
         raise HTTPException(400, err)
