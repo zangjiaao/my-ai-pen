@@ -38,6 +38,14 @@ import {
 } from "./subagent-idle-pool.js";
 import { formatAgentLanguageInjection } from "./agent-language.js";
 import { extractLlmTurnError, LlmTurnError } from "./llm-turn-error.js";
+import {
+  attachWorkerProcessStream,
+  emitWorkerPackageDelivery,
+  emitWorkerPackageStart,
+  mapDeliveryStatus,
+  newPackageTurnId,
+  setWorkerAuditScope,
+} from "./worker-audit-channel.js";
 
 /** Act tools for child workers — no subagent, finding, goal, or platform ledger. */
 export const SUBAGENT_CHILD_TOOL_NAMES = [
@@ -395,6 +403,27 @@ async function runWarmPackage(args: {
   const sessionSeed = await seedChildSessionFromParent(input.parent.taskDir, workDir);
   const userPrompt = buildUserPrompt(input.assignment, sessionSeed.seeded, true);
 
+  // Spec #308: new Package turn on warm resume (same agent_id, new package_turn_id).
+  const packageTurnId = newPackageTurnId(agentId);
+  const auditScope = { agentId, packageTurnId };
+  const auditTask =
+    warm.childRuntime?.task ||
+    ({
+      ...input.parent.task,
+      taskId: `${input.parent.task.taskId}/sub/${agentId}`,
+      instruction: input.handoff.this_turn_goal,
+    } as typeof input.parent.task);
+  if (warm.childRuntime) {
+    setWorkerAuditScope(warm.childRuntime, auditScope);
+  }
+  await emitWorkerPackageStart({
+    platform: input.parent.platform,
+    task: auditTask,
+    scope: auditScope,
+    handoff: input.handoff,
+    assignment: input.assignment,
+  }).catch(() => {});
+
   const toolsBefore = warm.segmentCounter.tools;
   const race = await raceSessionPrompt(warm.session, userPrompt, abort);
   const toolsUsed = Math.max(0, warm.segmentCounter.tools - toolsBefore);
@@ -405,8 +434,16 @@ async function runWarmPackage(args: {
       (warm.session as { messages?: unknown[] }).messages,
     );
     if (llmErr) {
+      await emitWorkerPackageDelivery({
+        platform: input.parent.platform,
+        task: auditTask,
+        scope: auditScope,
+        status: "failed",
+        summary: llmErr,
+      }).catch(() => {});
       try {
         warm.clearAbort?.();
+        await Promise.resolve(warm.disposeWorkerAudit?.());
         await Promise.resolve(warm.session.dispose?.());
       } catch {
         /* ignore */
@@ -431,6 +468,20 @@ async function runWarmPackage(args: {
     has_valid_result: !salvaged && structured.ok,
   });
 
+  const deliveryStatus = mapDeliveryStatus({
+    aborted: race.aborted,
+    ok,
+    timedOut: race.timedOut,
+  });
+  await emitWorkerPackageDelivery({
+    platform: input.parent.platform,
+    task: auditTask,
+    scope: auditScope,
+    status: deliveryStatus,
+    summary: structured.summary,
+    settlement: structured,
+  }).catch(() => {});
+
   warm.packagesCompleted += 1;
   warm.lastUsedAt = Date.now();
 
@@ -443,6 +494,7 @@ async function runWarmPackage(args: {
   } else {
     try {
       warm.clearAbort?.();
+      await Promise.resolve(warm.disposeWorkerAudit?.());
       await Promise.resolve(warm.session.dispose?.());
     } catch {
       /* ignore */
@@ -461,6 +513,7 @@ async function runWarmPackage(args: {
       node_type: input.nodeType,
       skill_id: input.skillId,
       agent_id: agentId,
+      package_turn_id: packageTurnId,
       worker_status: workerStatus,
       tools: warm.segmentCounter.tools,
       tools_this_package: toolsUsed,
@@ -562,6 +615,10 @@ async function runColdPackage(args: {
     }
   }
 
+  // Spec #308: Package turn identity before session create so tool bridge can stamp frames.
+  const packageTurnId = newPackageTurnId(agentId);
+  const auditScope = { agentId, packageTurnId };
+
   const childRuntime: ToolRuntime = {
     task: childTask,
     workspaceDir: parent.workspaceDir,
@@ -581,6 +638,7 @@ async function runColdPackage(args: {
       recentObservations: [],
       subagentDepth: 1,
       abortSignal: abort,
+      workerAudit: auditScope,
     },
   };
 
@@ -603,6 +661,17 @@ async function runColdPackage(args: {
     thinkingLevel: "low",
   });
 
+  // Spec #308: progressive thinking/text on Worker channel (not Main observability).
+  const workerProcess = attachWorkerProcessStream({ session, runtime: childRuntime });
+
+  await emitWorkerPackageStart({
+    platform: parent.platform,
+    task: childTask,
+    scope: auditScope,
+    handoff,
+    assignment,
+  }).catch(() => {});
+
   const race = await raceSessionPrompt(session, userPrompt, abort);
 
   // Soft LLM failure (stopReason=error): fail hard — Main must not see silent empty success.
@@ -611,7 +680,15 @@ async function runColdPackage(args: {
       (session as { messages?: unknown[] }).messages,
     );
     if (llmErr) {
+      await emitWorkerPackageDelivery({
+        platform: parent.platform,
+        task: childTask,
+        scope: auditScope,
+        status: "failed",
+        summary: llmErr,
+      }).catch(() => {});
       try {
+        await workerProcess.dispose();
         await Promise.resolve((session as any).dispose?.());
       } catch {
         /* ignore */
@@ -636,6 +713,20 @@ async function runColdPackage(args: {
     has_valid_result: !salvaged && structured.ok,
   });
 
+  const deliveryStatus = mapDeliveryStatus({
+    aborted: race.aborted,
+    ok,
+    timedOut: race.timedOut,
+  });
+  await emitWorkerPackageDelivery({
+    platform: parent.platform,
+    task: childTask,
+    scope: auditScope,
+    status: deliveryStatus,
+    summary: structured.summary,
+    settlement: structured,
+  }).catch(() => {});
+
   // OMP keep-alive: park success + soft-fail/timeout so same agent_id can resume.
   // Parent abort or missing identity → dispose immediately (release).
   const shouldPark =
@@ -653,10 +744,13 @@ async function runColdPackage(args: {
       packagesCompleted: 1,
       createdAt: Date.now(),
       lastUsedAt: Date.now(),
+      childRuntime,
+      disposeWorkerAudit: () => workerProcess.dispose(),
     };
     pool.park(handle);
   } else {
     try {
+      await workerProcess.dispose();
       await Promise.resolve((session as any).dispose?.());
     } catch {
       /* ignore */
@@ -675,6 +769,7 @@ async function runColdPackage(args: {
       node_type: input.nodeType,
       skill_id: input.skillId,
       agent_id: agentId,
+      package_turn_id: packageTurnId,
       worker_status: workerStatus,
       tools: segmentCounter.tools,
       workDir,

@@ -28,9 +28,11 @@ Node4 implementation detail (Graph × Pi product path).
 | [`specs/finding-identity.md`](specs/finding-identity.md) | Ledger identity (`vuln_type` + file location) + New-only narration (Spec #275) |
 | [`specs/base-booking-finding-id.md`](specs/base-booking-finding-id.md) | Base Runtime booking + unified finding_id mint (Spec [#279](https://github.com/zangjiaao/my-ai-pen/issues/279)) |
 | [`specs/product-state-ui-projection.md`](specs/product-state-ui-projection.md) | Product state → UI passive projection; Findings/Evidence SoT (Spec [#280](https://github.com/zangjiaao/my-ai-pen/issues/280)) |
+| [`specs/traffic-audit-activity.md`](specs/traffic-audit-activity.md) | Case traffic audit replaces right-panel Activity (`http`+`browser` Runtime hooks; not MITM V1) — Spec [#309](https://github.com/zangjiaao/my-ai-pen/issues/309) |
 | [`specs/graph-stage-todo-l2.md`](specs/graph-stage-todo-l2.md) | Graph Todo = current-stage L2 only; no Free-style whole-map under L1 (Spec [#281](https://github.com/zangjiaao/my-ai-pen/issues/281)) |
 | [`specs/stream-message-identity.md`](specs/stream-message-identity.md) | Remove live-slot-as-Message; stream_id list identity + pending chrome |
 | [`specs/timeline-activity-liveness.md`](specs/timeline-activity-liveness.md) | Thinking `status` + T1 empty running; pending speaker reuse; tool running S+ |
+| [`specs/worker-process-audit.md`](specs/worker-process-audit.md) | Worker process audit dialog (Package turns + thinking/tools; Case rename; live + replay) — map [#253](https://github.com/zangjiaao/my-ai-pen/issues/253) / Spec [#308](https://github.com/zangjiaao/my-ai-pen/issues/308) |
 | [`specs/pen-tools-sandbox.md`](specs/pen-tools-sandbox.md) | Unified pen-sandbox (shell + browser) |
 | [`specs/expert-offers.md`](specs/expert-offers.md) | Node packs + Expert instances (@mention routing) |
 | [`specs/ctf-role.md`](specs/ctf-role.md) | CTF role pack operator notes |

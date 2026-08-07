@@ -14,8 +14,45 @@ import {
   runBrowserCommand,
   stopBrowserSandbox,
 } from "../runtime/browser-sandbox.js";
+import {
+  drainBrowserNetworkRows,
+  getBrowserSeenIds,
+  nextSequence,
+  parseBrowserNetworkList,
+} from "../runtime/traffic-collect.js";
 import type { ToolRuntime } from "../types.js";
 import { recordActObservation, isInScope, jsonResult, resolveTargetUrl, textResult } from "./common.js";
+
+/**
+ * Spec #309: passive browser network drain via agent-browser `network requests`.
+ * Best-effort — failures never block the tool; does not invent traffic.
+ */
+async function drainBrowserTraffic(
+  runtime: ToolRuntime,
+  run: (args: string[], timeoutMs?: number) => Promise<{ text: string; stdout?: string; exitCode: number | null; unavailable?: boolean }>,
+): Promise<void> {
+  try {
+    const listed = await run(["network", "requests", "--json"], 20_000);
+    if (listed.unavailable) return;
+    const raw = String(listed.stdout || listed.text || "");
+    const rows = parseBrowserNetworkList(raw);
+    if (!rows.length) return;
+    const seen = getBrowserSeenIds(runtime);
+    const seqStart = Number((runtime.lifecycle as { trafficSequence?: number }).trafficSequence || 0);
+    const emitted = await drainBrowserNetworkRows({
+      platform: runtime.platform,
+      task: runtime.task,
+      rows,
+      seenIds: seen,
+      sequenceStart: seqStart,
+    });
+    if (emitted.length) {
+      for (let i = 0; i < emitted.length; i += 1) nextSequence(runtime);
+    }
+  } catch {
+    // Hook collect must not break browser tools.
+  }
+}
 
 const ACTIONS = [
   "open",
@@ -101,6 +138,7 @@ export function createBrowserTool(runtime: ToolRuntime): AgentTool<any> {
         }
         await run(["wait", "800"], 15_000);
         const snap = await run(["snapshot", "-i"], 60_000);
+        await drainBrowserTraffic(runtime, run);
         recordActObservation(runtime, "browser", `browser open ${url}`, {
           url,
           open_url: openUrl,
@@ -124,6 +162,8 @@ export function createBrowserTool(runtime: ToolRuntime): AgentTool<any> {
         if (params.interactive !== false) args.push("-i");
         const r = await run(args, 60_000);
         if (r.unavailable) return textResult(`error: ${r.error}`);
+        // Network may settle after navigation/lazy loads visible at snapshot time.
+        await drainBrowserTraffic(runtime, run);
         recordActObservation(runtime, "browser", "browser snapshot", {
           via: r.via,
           snapshot: r.text.slice(0, 16_000),
@@ -141,6 +181,7 @@ export function createBrowserTool(runtime: ToolRuntime): AgentTool<any> {
         const r = await run(["click", String(params.selector)], 60_000);
         if (r.unavailable) return textResult(`error: ${r.error}`);
         const snap = await run(["snapshot", "-i"], 45_000);
+        await drainBrowserTraffic(runtime, run);
         return jsonResult({
           ok: r.exitCode === 0 || /click|✓|Done/i.test(r.text),
           action: "click",
@@ -156,6 +197,7 @@ export function createBrowserTool(runtime: ToolRuntime): AgentTool<any> {
         const cmd = action === "fill" ? "fill" : "type";
         const r = await run([cmd, String(params.selector), String(params.text ?? "")], 60_000);
         if (r.unavailable) return textResult(`error: ${r.error}`);
+        await drainBrowserTraffic(runtime, run);
         return jsonResult({
           ok: r.exitCode === 0 || /fill|type|✓|Done/i.test(r.text),
           action,
@@ -169,6 +211,7 @@ export function createBrowserTool(runtime: ToolRuntime): AgentTool<any> {
         const key = String(params.key || "Enter");
         const r = await run(["press", key], 30_000);
         if (r.unavailable) return textResult(`error: ${r.error}`);
+        await drainBrowserTraffic(runtime, run);
         return jsonResult({
           ok: r.exitCode === 0 || /press|✓|Done/i.test(r.text),
           action: "press",
@@ -191,6 +234,7 @@ export function createBrowserTool(runtime: ToolRuntime): AgentTool<any> {
         }
         const r = await run(args, 60_000);
         if (r.unavailable) return textResult(`error: ${r.error}`);
+        await drainBrowserTraffic(runtime, run);
         recordActObservation(runtime, "browser", "browser read", {
           via: r.via,
           text: r.text.slice(0, 12_000),
@@ -218,6 +262,7 @@ export function createBrowserTool(runtime: ToolRuntime): AgentTool<any> {
         if (params.full_page) args.push("--full");
         const r = await run(args, 60_000);
         if (r.unavailable) return textResult(`error: ${r.error}`);
+        await drainBrowserTraffic(runtime, run);
         recordActObservation(runtime, "browser", `browser screenshot`, {
           via: r.via,
           path_hint: pathHint,

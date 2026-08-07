@@ -1,6 +1,12 @@
 import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
+import {
+  emitHttpComplete,
+  emitHttpFail,
+  emitHttpPending,
+  headersToRecord,
+} from "../runtime/traffic-collect.js";
 import { recordActObservation, isInScope, jsonResult, resolveTargetUrl, textResult } from "./common.js";
 
 export function createHttpTool(runtime: ToolRuntime): AgentTool<any> {
@@ -23,17 +29,42 @@ export function createHttpTool(runtime: ToolRuntime): AgentTool<any> {
       const timeoutMs = Math.min(Math.max(Number(params.timeout_seconds || 30) * 1000, 1000), 120_000);
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const requestBody = params.body != null ? String(params.body) : undefined;
+      const requestHeaders =
+        params.headers && typeof params.headers === "object"
+          ? (params.headers as Record<string, string>)
+          : undefined;
+
+      // Spec #309: pending before network call (R2). emitHttpPending always
+      // returns a local exchange even if platform pending emit fails, so terminal
+      // complete/fail can still land under the same exchange_id.
+      const pending = await emitHttpPending(runtime, {
+        method,
+        url,
+        requestHeaders: requestHeaders || null,
+        requestBody: requestBody ?? null,
+      });
+
       try {
         const res = await fetch(url, {
           method,
           headers: params.headers || undefined,
-          body: params.body != null ? String(params.body) : undefined,
+          body: requestBody,
           signal: controller.signal,
           redirect: "manual",
         });
         const text = await res.text();
         const bodyPreview = text.slice(0, 8000);
-        const requestBody = params.body != null ? String(params.body) : undefined;
+        const responseHeaders = headersToRecord(res.headers);
+        const contentType = res.headers.get("content-type");
+
+        await emitHttpComplete(runtime, pending, {
+          statusCode: res.status,
+          responseHeaders,
+          responseBody: text,
+          contentType,
+        });
+
         recordActObservation(runtime, "http", `${method} ${url} → ${res.status}`, {
           method,
           url,
@@ -52,7 +83,9 @@ export function createHttpTool(runtime: ToolRuntime): AgentTool<any> {
           truncated: text.length > bodyPreview.length,
         });
       } catch (error) {
-        return textResult(`error: ${error instanceof Error ? error.message : String(error)}`);
+        const message = error instanceof Error ? error.message : String(error);
+        await emitHttpFail(runtime, pending, message);
+        return textResult(`error: ${message}`);
       } finally {
         clearTimeout(timer);
       }

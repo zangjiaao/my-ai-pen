@@ -15,7 +15,14 @@ import { formatAgentWorkModeBadge } from "../lib/panelAgentsState";
 
 export type { StrixAgentStatus } from "../lib/panelTypes";
 
-export function StrixAgentList({ agents }: { agents: StrixAgentStatus[] }) {
+export function StrixAgentList({
+  agents,
+  onWorkerClick,
+}: {
+  agents: StrixAgentStatus[];
+  /** Spec #308: open Worker audit dialog (Workers only; not Main). */
+  onWorkerClick?: (agent: StrixAgentStatus, workerOrdinal?: number) => void;
+}) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const roots = agents.filter((agent) => !agent.parent_id);
   const rootAgents = roots.length ? roots : agents.slice(0, 1);
@@ -51,6 +58,10 @@ export function StrixAgentList({ agents }: { agents: StrixAgentStatus[] }) {
     const nextTrail = [...trail, agent.id];
     const hasVisibleChildren = children.length > 0 && open;
     if (trail.includes(agent.id)) return null;
+    const isWorker =
+      !primary &&
+      (String(agent.role || "").toLowerCase() === "subagent" || Boolean(agent.parent_id));
+    const workerOrdinal = workerOrdinalById.get(agent.id);
     return (
       <div key={agent.id} className="relative min-w-0">
         {!primary && (
@@ -85,8 +96,13 @@ export function StrixAgentList({ agents }: { agents: StrixAgentStatus[] }) {
             secondary={!primary}
             childCount={children.length}
             expanded={open}
-            workerOrdinal={workerOrdinalById.get(agent.id)}
+            workerOrdinal={workerOrdinal}
             onToggle={canToggle ? () => setExpanded((current) => ({ ...current, [agent.id]: !open })) : undefined}
+            onWorkerOpen={
+              isWorker && onWorkerClick
+                ? () => onWorkerClick(agent, workerOrdinal)
+                : undefined
+            }
           />
         </div>
         {children.length > 0 && (
@@ -116,6 +132,7 @@ function AgentRow({
   expanded = false,
   workerOrdinal,
   onToggle,
+  onWorkerOpen,
 }: {
   agent: StrixAgentStatus;
   primary?: boolean;
@@ -124,16 +141,26 @@ function AgentRow({
   expanded?: boolean;
   workerOrdinal?: number;
   onToggle?: () => void;
+  /** Spec #308: open audit dialog for Worker rows. */
+  onWorkerOpen?: () => void;
 }) {
   const summary = summarizeAgentAction(agent);
   const displayName = agentDisplayName(agent, workerOrdinal);
   const status = agentStatusLabel(agent.status);
-  const rowInteractive = Boolean(onToggle);
+  // Worker open takes precedence for click; expand still via child-count control if needed.
+  const rowInteractive = Boolean(onWorkerOpen || onToggle);
+  const handleRowActivate = () => {
+    if (onWorkerOpen) {
+      onWorkerOpen();
+      return;
+    }
+    onToggle?.();
+  };
   const handleRowKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (!rowInteractive) return;
     if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
-    onToggle?.();
+    handleRowActivate();
   };
   const highlighted = Boolean(agent.highlighted) && primary;
   // Same vertical pad for Main/Sub so status-dot centers share one light column with spine/elbows.
@@ -144,13 +171,14 @@ function AgentRow({
   return (
     <div
       className={`min-w-0 rounded-md ${padY} pr-2 pl-[9px] ${highlighted ? "bg-status-running/8 ring-1 ring-status-running/25" : "bg-surface-default"} ${rowInteractive ? "cursor-pointer hover:bg-canvas-inset focus-visible:outline focus-visible:outline-2 focus-visible:outline-status-running/40" : "hover:bg-canvas-inset"}`}
-      onClick={rowInteractive ? onToggle : undefined}
+      onClick={rowInteractive ? handleRowActivate : undefined}
       onKeyDown={handleRowKeyDown}
       role={rowInteractive ? "button" : undefined}
       tabIndex={rowInteractive ? 0 : undefined}
-      aria-expanded={rowInteractive ? expanded : undefined}
+      aria-expanded={onToggle && !onWorkerOpen ? expanded : undefined}
       data-highlighted={highlighted ? "true" : undefined}
       data-expert-id={agent.expert_id || undefined}
+      data-worker-audit={onWorkerOpen ? "true" : undefined}
     >
       <div className="flex min-w-0 items-start gap-2">
         <span

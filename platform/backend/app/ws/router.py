@@ -934,6 +934,15 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
     elif msg.get("type") == "evidence_created":
         # Real proofs from Node4 emitEvidence (structured properties).
         await _persist_evidence(msg, client_id)
+    elif msg.get("type") == "traffic_exchange":
+        # Spec #309: Case traffic audit — persist upsert by exchange_id, then project.
+        persisted_tx = await _persist_traffic_exchange(msg, client_id)
+        if persisted_tx:
+            msg.clear()
+            msg.update(persisted_tx)
+        else:
+            # Fail closed: do not broadcast unpersisted / invalid traffic frames.
+            return
     elif msg.get("type") == "tool_output":
         # Tool cards already stream stdout; do NOT re-book every tool result as
         # Evidence (that produced messy JSON dumps next to real evidence_created rows).
@@ -952,7 +961,13 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
     msg_type = str(msg.get("type") or "")
     stream_fast = msg_type in {"text", "tool_output", "thinking", "agent_thinking", "reasoning"}
     should_save = (
-        msg_type not in {"intake_update", "work_status", "checkpoint_update"}
+        msg_type not in {
+            "intake_update",
+            "work_status",
+            "checkpoint_update",
+            # Spec #309: traffic lives in conversation.context store, not chat message log.
+            "traffic_exchange",
+        }
         and not _is_pentest_runtime_status(msg)
         and not (msg_type == "engagement_closeout" and engagement_closeout_accepted is None)
     )
@@ -1838,6 +1853,38 @@ def _merge_saved_message_content(existing: dict, incoming: dict, msg_type: str) 
     }
 
 
+def _stamp_worker_audit_scope(content: dict, msg: dict) -> None:
+    """Spec #308: persist Worker audit scope keys on Case message content.
+
+    Source: top-level wire fields or nested content (Node may stamp either).
+    Fail-closed filter on FE uses channel / (agent_id + package_turn_id).
+    """
+    if not isinstance(content, dict) or not isinstance(msg, dict):
+        return
+    nested = msg.get("content") if isinstance(msg.get("content"), dict) else {}
+    channel = str(msg.get("channel") or nested.get("channel") or content.get("channel") or "").strip()
+    agent_id = str(msg.get("agent_id") or nested.get("agent_id") or content.get("agent_id") or "").strip()
+    package_turn_id = str(
+        msg.get("package_turn_id") or nested.get("package_turn_id") or content.get("package_turn_id") or ""
+    ).strip()
+    if channel:
+        content["channel"] = channel
+    if agent_id:
+        content["agent_id"] = agent_id
+    if package_turn_id:
+        content["package_turn_id"] = package_turn_id
+    ordinal = msg.get("worker_ordinal")
+    if ordinal is None:
+        ordinal = nested.get("worker_ordinal")
+    if ordinal is not None:
+        try:
+            n = int(ordinal)
+            if n >= 1:
+                content["worker_ordinal"] = n
+        except (TypeError, ValueError):
+            pass
+
+
 def _stamp_stream_message_ids(msg: dict, conv_id: str) -> None:
     """
     Attach a stable message_id before broadcast so the UI can upsert stream frames
@@ -1923,6 +1970,7 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                 content = {"text": str(inner)}
             if msg.get("stream_id") and not content.get("stream_id"):
                 content["stream_id"] = msg.get("stream_id")
+            _stamp_worker_audit_scope(content, msg)
         elif msg_type in ("thinking", "agent_thinking", "reasoning"):
             msg_type = "thinking"
             inner = msg.get("content", {})
@@ -1942,6 +1990,7 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                     content["status"] = status
             if msg.get("stream_id") and not content.get("stream_id"):
                 content["stream_id"] = msg.get("stream_id")
+            _stamp_worker_audit_scope(content, msg)
         elif msg_type == "tool_output":
             msg_type = "tool_call"
             content = {
@@ -1959,7 +2008,35 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                 "result": msg.get("result"),
                 "result_text": msg.get("result_text"),
             }
+            _stamp_worker_audit_scope(content, msg)
             content["tool_items"] = [_tool_item_from_content(content)]
+        elif msg_type == "worker_package_start":
+            # Spec #308: Package handoff card (Worker audit dialog only).
+            handoff = msg.get("handoff") if isinstance(msg.get("handoff"), dict) else {}
+            content = {
+                "handoff": {
+                    "target": str(handoff.get("target") or ""),
+                    "scope": str(handoff.get("scope") or ""),
+                    "already_done": str(handoff.get("already_done") or ""),
+                    "this_turn_goal": str(handoff.get("this_turn_goal") or ""),
+                    "success_criteria": str(handoff.get("success_criteria") or ""),
+                },
+            }
+            if str(handoff.get("assignment") or "").strip():
+                content["handoff"]["assignment"] = str(handoff.get("assignment")).strip()[:4000]
+            _stamp_worker_audit_scope(content, msg)
+        elif msg_type == "worker_package_delivery":
+            # Spec #308: host-sourced Delivery (ok | failed | interrupted).
+            status = str(msg.get("status") or "").strip().lower()
+            if status not in {"ok", "failed", "interrupted"}:
+                status = "failed"
+            content = {
+                "status": status,
+                "summary": str(msg.get("summary") or "")[:2000],
+            }
+            if isinstance(msg.get("settlement"), dict):
+                content["settlement"] = msg.get("settlement")
+            _stamp_worker_audit_scope(content, msg)
         elif msg_type in ("status_update", "phase_changed"):
             msg_type = "status"
             # Prefer Node4 message / agent_phase over legacy phase+iteration template.
@@ -2228,6 +2305,56 @@ async def _persist_asset(msg: dict, node_id: str | None):
             }
     except Exception as e:
         print(f"[WS] persist asset error: {e}")
+        return None
+
+
+async def _persist_traffic_exchange(msg: dict, node_id: str | None) -> dict | None:
+    """Spec #309: upsert Case traffic exchange into conversation.context (post-persist project)."""
+    conv_id = msg.get("conversation_id")
+    if not conv_id:
+        return None
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+        from app.services.traffic_exchange import (
+            merge_traffic_into_context,
+            normalize_traffic_exchange,
+        )
+
+        normalized = normalize_traffic_exchange(msg, conversation_id=str(conv_id))
+        if not normalized:
+            return None
+
+        async with async_session() as db:
+            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(str(conv_id))))
+            c = r.scalar_one_or_none()
+            if not c:
+                return None
+            # Assign monotonic sequence if Node omitted one.
+            context = c.context if isinstance(c.context, dict) else {}
+            store = context.get("traffic_exchanges") if isinstance(context, dict) else {}
+            if normalized.get("sequence") is None:
+                next_seq = 1
+                if isinstance(store, dict) and store:
+                    for row in store.values():
+                        if isinstance(row, dict):
+                            try:
+                                next_seq = max(next_seq, int(row.get("sequence") or 0) + 1)
+                            except (TypeError, ValueError):
+                                pass
+                elif isinstance(store, list):
+                    for row in store:
+                        if isinstance(row, dict):
+                            try:
+                                next_seq = max(next_seq, int(row.get("sequence") or 0) + 1)
+                            except (TypeError, ValueError):
+                                pass
+                normalized["sequence"] = next_seq
+            c.context = merge_traffic_into_context(context, normalized)
+            await db.commit()
+            return dict(normalized)
+    except Exception as e:
+        print(f"[WS] persist traffic_exchange error: {e}")
         return None
 
 
