@@ -109,7 +109,7 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
         ),
       ),
       selection: Type.Optional(
-        Type.String({ description: "next_steps: multi (default) | single" }),
+        Type.String({ description: "next_steps: single (default, Spec #313) | multi" }),
       ),
       preamble: Type.Optional(Type.String({ description: "Optional markdown preamble for next_steps" })),
     }),
@@ -253,8 +253,8 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
       if (kind === "next_steps" && nextStepsOptions) {
         payload.kind = "next_steps";
         payload.options = nextStepsOptions;
-        const selection = String(params.selection || "multi").trim().toLowerCase();
-        payload.selection = selection === "single" ? "single" : "multi";
+        const selection = String(params.selection || "single").trim().toLowerCase();
+        payload.selection = selection === "multi" ? "multi" : "single";
         const preamble = String(params.preamble || "").trim();
         if (preamble) payload.preamble = preamble;
       }
