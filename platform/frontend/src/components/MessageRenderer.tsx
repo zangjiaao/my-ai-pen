@@ -21,8 +21,13 @@ interface Props {
   fallbackPentestNodeId?: string | null;
   platformAgentNodeId?: string | null;
   onDecision?: (requestId: string, decision: "authorize" | "cancel") => void;
-  /** Spec #312 next_steps multi-select confirm. */
-  onConfirmOptions?: (requestId: string, selectedOptionIds: string[], cardContent: Record<string, unknown>) => void;
+  /** Spec #313 next_steps single-select confirm + optional supplement. */
+  onConfirmOptions?: (
+    requestId: string,
+    selectedOptionIds: string[],
+    cardContent: Record<string, unknown>,
+    supplement?: string,
+  ) => void;
   onOpenVulnerability?: (finding: Partial<SecurityVulnerability>) => void;
   onOpenAsset?: (asset: Partial<SecurityAsset>) => void;
   onOpenEvidence?: (evidence: Partial<SecurityEvidence>) => void;
@@ -802,8 +807,8 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
           disabled={choiceDisabled}
           onAuthorize={() => onDecision?.(content.request_id as string, "authorize")}
           onCancel={() => onDecision?.(content.request_id as string, "cancel")}
-          onConfirmOptions={(ids) =>
-            onConfirmOptions?.(String(content.request_id || ""), ids, content)
+          onConfirmOptions={(ids, supplement) =>
+            onConfirmOptions?.(String(content.request_id || ""), ids, content, supplement)
           }
         />
       );

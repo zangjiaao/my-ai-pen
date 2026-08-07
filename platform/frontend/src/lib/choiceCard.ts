@@ -117,10 +117,9 @@ export function validateChoiceCardPayload(raw: unknown): ValidateChoiceResult {
 
   if (errors.length) return { ok: false, errors };
 
-  // V1 FE is multi-select only (Spec #312 L4). Accept "single" on wire for forward-compat
-  // but normalize product default to multi; ChoiceCard ignores single until implemented.
+  // Spec #313 L8: next_steps product default is single-select (multi only when agent sets it).
   const selection =
-    o.selection === "single" || o.selection === "multi" ? o.selection : "multi";
+    o.selection === "single" || o.selection === "multi" ? o.selection : "single";
 
   return {
     ok: true,
@@ -128,7 +127,7 @@ export function validateChoiceCardPayload(raw: unknown): ValidateChoiceResult {
     value: {
       ...o,
       kind: "next_steps",
-      selection: selection === "single" ? "single" : "multi",
+      selection: selection === "multi" ? "multi" : "single",
       options,
     },
   };
@@ -146,7 +145,11 @@ export function parseChoiceOptions(content: Record<string, unknown> | null | und
 export function expandSelectedOptions(
   card: Record<string, unknown> | null | undefined,
   selected_option_ids: string[] | null | undefined,
-): { workset_item_ids: string[]; summary_titles: string[] } {
+): {
+  workset_item_ids: string[];
+  summary_titles: string[];
+  selected_options: ChoiceOption[];
+} {
   const options = parseChoiceOptions(card || {});
   const want = new Set(
     (Array.isArray(selected_option_ids) ? selected_option_ids : [])
@@ -156,9 +159,11 @@ export function expandSelectedOptions(
   const worksetIds: string[] = [];
   const seenWs = new Set<string>();
   const summary_titles: string[] = [];
+  const selected_options: ChoiceOption[] = [];
   for (const opt of options) {
     if (!want.has(opt.id)) continue;
     summary_titles.push(opt.title || opt.id);
+    selected_options.push(opt);
     for (const wid of opt.workset_item_ids || []) {
       const id = String(wid || "").trim();
       if (!id || seenWs.has(id)) continue;
@@ -166,7 +171,7 @@ export function expandSelectedOptions(
       worksetIds.push(id);
     }
   }
-  return { workset_item_ids: worksetIds, summary_titles };
+  return { workset_item_ids: worksetIds, summary_titles, selected_options };
 }
 
 /** Visible short user summary for selected packages. */
@@ -174,6 +179,33 @@ export function formatSelectedSummary(summary_titles: string[]): string {
   const titles = summary_titles.map((t) => String(t || "").trim()).filter(Boolean);
   if (!titles.length) return "已选择";
   return `已选择：${titles.join("、")}`;
+}
+
+/**
+ * Spec #313 S3 — full confirm text for Session demand:
+ * option title/body + optional supplement (not title-only).
+ */
+export function buildConfirmOptionsText(
+  card: Record<string, unknown> | null | undefined,
+  selected_option_ids: string[] | null | undefined,
+  supplement?: string | null,
+): string {
+  const expanded = expandSelectedOptions(card, selected_option_ids);
+  const parts: string[] = [];
+  if (expanded.selected_options.length) {
+    const lines = ["已选择："];
+    for (const opt of expanded.selected_options) {
+      const title = String(opt.title || opt.id || "").trim();
+      const body = String(opt.body || "").trim();
+      lines.push(body ? `- ${title}：${body}` : `- ${title}`);
+    }
+    parts.push(lines.join("\n"));
+  } else {
+    parts.push(formatSelectedSummary(expanded.summary_titles));
+  }
+  const sup = String(supplement ?? "").trim();
+  if (sup) parts.push(`补充：${sup}`);
+  return parts.join("\n").trim();
 }
 
 export type SoftGateBoundary = "stoppable" | "continue_empty" | string;

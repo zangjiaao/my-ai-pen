@@ -3338,6 +3338,227 @@ def _pending_approvals_for_conversation(conv_id: str | None) -> list[tuple[str, 
     return found
 
 
+async def _freeze_pending_approvals_on_interrupt(conv_id: str, client_id: str) -> int:
+    """Spec #312 L9: interrupt ends open choice waits — persist cancel so cards freeze.
+
+    Node cancelApprovalsForConversation already unblocks the Session tool; platform
+    must also drop pending_approvals and write decision rows so FE cannot submit a
+    stale confirm_options into a dead wait without a continue path.
+    """
+    pending_for_conv = _pending_approvals_for_conversation(conv_id)
+    if not pending_for_conv:
+        return 0
+    for request_id, approval in pending_for_conv:
+        pending_approvals.pop(request_id, None)
+        decision_msg = {
+            "type": "user_decision",
+            "conversation_id": conv_id,
+            "request_id": request_id,
+            "decision": "cancel",
+            "text": "Interrupted — card dismissed",
+        }
+        await _save_message(decision_msg, "user")
+        await _broadcast_to_conversation(conv_id, json.dumps(decision_msg, ensure_ascii=False))
+        # Best-effort node unblock if wait still registered (node also cancels on interrupt).
+        node_msg = {
+            "type": "user_input",
+            "conversation_id": conv_id,
+            "request_id": request_id,
+            "response": "cancel",
+            "decision": "cancel",
+            "text": "Interrupted — card dismissed",
+        }
+        approval_node = str(approval.get("node_id") or "").strip() if isinstance(approval, dict) else ""
+        sent = False
+        if approval_node and approval_node in node_connections:
+            try:
+                await node_connections[approval_node].send_text(json.dumps(node_msg, ensure_ascii=False))
+                sent = True
+            except Exception as e:
+                print(f"[WS] interrupt freeze user_input to node {approval_node[:8]}: {e}")
+        if not sent:
+            await _send_to_bound_node(conv_id, json.dumps(node_msg))
+        try:
+            await _audit(
+                actor_type="user",
+                actor_id=uuid.UUID(client_id),
+                action="approval.interrupt_freeze",
+                resource_type="conversation",
+                resource_id=uuid.UUID(conv_id),
+                conversation_id=uuid.UUID(conv_id),
+                detail={"request_id": request_id, "sent": sent},
+            )
+        except Exception as e:
+            print(f"[WS] interrupt freeze audit error: {e}")
+    return len(pending_for_conv)
+
+
+async def _continue_after_orphaned_confirm_options(
+    *,
+    conv_id: str,
+    client_id: str,
+    msg: dict,
+    selected_option_ids: list,
+    workset_item_ids: list[str],
+) -> None:
+    """When next_steps confirm has no live pending wait, start a new continue turn.
+
+    Spec #312 US9 / #313 L10: structured selection must drive work with sticky
+    target/scope/expert — not empty-target conversation-only chat.
+    Typical case: user interrupted while the card was open (wait cancelled), then clicked 按所选继续.
+    """
+    from app.services.choice_card import build_confirm_continue_message
+
+    resume_context = await _conversation_snapshot(conv_id, client_id)
+    task_context = _task_context_from_snapshot(resume_context or {})
+    sticky_id, sticky_name = await _conversation_expert_label(conv_id)
+    sticky_eng = await _conversation_task_engagement(conv_id)
+    summary = str(msg.get("text") or "").strip()
+    continue_msg = build_confirm_continue_message(
+        text=summary,
+        selected_option_ids=selected_option_ids if isinstance(selected_option_ids, list) else [],
+        workset_item_ids=workset_item_ids,
+        task_context=task_context,
+        expert_id=str(msg.get("expert_id") or sticky_id or "").strip() or None,
+        expert_name=str(msg.get("expert_name") or sticky_name or "").strip() or None,
+        engagement=str(msg.get("engagement") or msg.get("role") or sticky_eng or "").strip() or None,
+    )
+    continue_msg["conversation_id"] = conv_id
+    # Prefer full resume merge when sticky task target exists (instruction continuity).
+    if _has_resumable_task(resume_context or {}):
+        resumed, ok = _resume_message_from_context(continue_msg, resume_context or {})
+        if ok and resumed:
+            # Keep confirm text as the user continuation; resume injects target/scope.
+            continue_msg = resumed
+    continue_msg = await _hydrate_sticky_expert_on_message(conv_id, continue_msg)
+    # Spec #313 L10: forbid empty-target chat-only when prior engagement had a target.
+    if _has_resumable_task(resume_context or {}) and not _message_has_task_target(continue_msg):
+        await _persist_and_broadcast(
+            conv_id,
+            {
+                "type": "task_error",
+                "conversation_id": conv_id,
+                "message": (
+                    "Cannot continue next_steps without sticky target from prior engagement. "
+                    "Re-open the Case with the original target or send a message that includes the target."
+                ),
+                "agent_source": "platform",
+            },
+            "agent",
+        )
+        print(
+            f"[WS] orphaned confirm_options blocked empty-target continue conv={conv_id[:8]}"
+        )
+        return
+    conversation_status = await _conversation_status(conv_id)
+    _, bound_node = await _conversation_owner(conv_id)
+    bound_node_id = conversation_node.get(conv_id) or (str(bound_node) if bound_node else None)
+    capabilities = await _available_agent_capabilities()
+    eng = str(continue_msg.get("engagement") or continue_msg.get("role") or "").strip()
+    from app.services.expert_offers import normalize_pack_id
+
+    pack = normalize_pack_id(eng) or "pentest"
+    engagement = pack
+    expert_id = str(continue_msg.get("expert_id") or "").strip() or None
+    expert_name = str(continue_msg.get("expert_name") or "").strip() or None
+    if not eng:
+        continue_msg = {**continue_msg, "engagement": engagement, "role": engagement}
+    preferred = _agent_node_id(continue_msg) or bound_node_id
+    node_id = await _pick_online_node_id(
+        preferred=preferred,
+        bound=bound_node_id,
+        capabilities=capabilities,
+    )
+    if not node_id or node_id not in node_connections:
+        await _persist_and_broadcast(
+            conv_id,
+            {
+                "type": "task_error",
+                "conversation_id": conv_id,
+                "message": _dispatch_no_node_error_message(preferred=preferred),
+                "agent_source": "default",
+            },
+            "agent",
+        )
+        return
+    same_mode_continue = str(conversation_status or "").lower() in {
+        "failed",
+        "incomplete",
+        "paused",
+        "canceled",
+        "cancelled",
+        "created",
+    }
+    has_resume = _has_resumable_task(resume_context or {})
+    await _dispatch_task_assign_to_node(
+        conv_id=conv_id,
+        client_id=client_id,
+        msg=continue_msg,
+        node_id=node_id,
+        engagement=engagement,
+        expert_id=expert_id,
+        expert_name=expert_name,
+        resume_context=resume_context if has_resume else None,
+        force_working=True,
+        same_mode_continue=same_mode_continue or has_resume,
+    )
+    print(
+        f"[WS] orphaned confirm_options → continue dispatch conv={conv_id[:8]} "
+        f"node={node_id[:8]} options={selected_option_ids} "
+        f"has_target={_message_has_task_target(continue_msg)}"
+    )
+
+
+async def _steer_confirm_options_while_busy(
+    *,
+    conv_id: str,
+    client_id: str,
+    msg: dict,
+    selected_option_ids: list,
+    workset_item_ids: list[str],
+) -> bool:
+    """Spec #313 S1: busy Session + confirm without live wait → demand like user text.
+
+    Steers full confirm text to the bound node (FIFO class with user messages).
+    Returns True when steer was sent.
+    """
+    from app.services.choice_card import build_confirm_continue_message
+
+    resume_context = await _conversation_snapshot(conv_id, client_id)
+    task_context = _task_context_from_snapshot(resume_context or {})
+    sticky_id, sticky_name = await _conversation_expert_label(conv_id)
+    sticky_eng = await _conversation_task_engagement(conv_id)
+    summary = str(msg.get("text") or "").strip()
+    steer_msg = build_confirm_continue_message(
+        text=summary,
+        selected_option_ids=selected_option_ids if isinstance(selected_option_ids, list) else [],
+        workset_item_ids=workset_item_ids,
+        task_context=task_context,
+        expert_id=str(msg.get("expert_id") or sticky_id or "").strip() or None,
+        expert_name=str(msg.get("expert_name") or sticky_name or "").strip() or None,
+        engagement=str(msg.get("engagement") or msg.get("role") or sticky_eng or "").strip() or None,
+    )
+    steer_msg["conversation_id"] = conv_id
+    steer_msg["type"] = "user_message"
+    steer_msg = await _hydrate_sticky_expert_on_message(conv_id, steer_msg)
+    _, bound_node = await _conversation_owner(conv_id)
+    bound_node_id = conversation_node.get(conv_id) or (str(bound_node) if bound_node else None)
+    if not bound_node_id or bound_node_id not in node_connections:
+        return False
+    capabilities = await _available_agent_capabilities()
+    bound_capability = next(
+        (item.capability for item in capabilities if item.node_id == bound_node_id),
+        None,
+    )
+    sent = await _send_direct_node_message(conv_id, bound_node_id, steer_msg, bound_capability)
+    if sent:
+        print(
+            f"[WS] confirm_options busy-steer conv={conv_id[:8]} node={bound_node_id[:8]} "
+            f"options={selected_option_ids}"
+        )
+    return bool(sent)
+
+
 async def _forward_pending_approval_text(
     conv_id: str,
     client_id: str,
@@ -5469,7 +5690,9 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
 
                 if conv_id:
                     conversation_subscribers.setdefault(conv_id, set()).add(ws)
-                    await _save_message(msg, "user")
+                    # Do not persist control frames as empty user text (interrupt/steer).
+                    if msg.get("type") not in ("user_interrupt", "user_steer", "subscribe"):
+                        await _save_message(msg, "user")
 
                 if msg.get("type") == "user_message" and conv_id:
                     # Product model: platform is relay only — always Node participant
@@ -5599,20 +5822,28 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     request_id = msg.get("request_id")
                     decision = msg.get("decision", "cancel")
                     approval = pending_approvals.pop(str(request_id), {}) if request_id else {}
+                    had_live_pending = bool(isinstance(approval, dict) and approval)
                     selected_option_ids = msg.get("selected_option_ids")
                     # Spec #312 S2: always expand from pending card snapshot (ignore client binds).
                     workset_item_ids: list[str] = []
                     if (
                         decision == "confirm_options"
-                        and isinstance(approval, dict)
                         and isinstance(selected_option_ids, list)
                     ):
                         try:
                             from app.services.choice_card import expand_selected_options
 
                             card_snap = {
-                                "kind": approval.get("kind"),
-                                "options": approval.get("options"),
+                                "kind": (
+                                    approval.get("kind")
+                                    if isinstance(approval, dict) and approval
+                                    else "next_steps"
+                                ),
+                                "options": (
+                                    approval.get("options")
+                                    if isinstance(approval, dict) and approval
+                                    else None
+                                ),
                             }
                             expanded = expand_selected_options(card_snap, selected_option_ids)
                             workset_item_ids = list(expanded.get("workset_item_ids") or [])
@@ -5647,27 +5878,112 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     if not sent:
                         sent = await _send_to_bound_node(conv_id, json.dumps(node_msg))
 
-                    await _audit(
-                        actor_type="user",
-                        actor_id=uuid.UUID(client_id),
-                        action=f"approval.{decision}",
-                        resource_type="conversation",
-                        resource_id=uuid.UUID(conv_id),
-                        conversation_id=uuid.UUID(conv_id),
-                        detail={
-                            "request_id": request_id,
-                            "sent": sent,
-                            "node_id": approval.get("node_id") if isinstance(approval, dict) else None,
-                            "kind": approval.get("kind") if isinstance(approval, dict) else None,
-                            "handoff_pack_id": (
-                                approval.get("handoff_pack_id") if isinstance(approval, dict) else None
-                            ),
-                        },
-                    )
+                    try:
+                        await _audit(
+                            actor_type="user",
+                            actor_id=uuid.UUID(client_id),
+                            action=f"approval.{decision}",
+                            resource_type="conversation",
+                            resource_id=uuid.UUID(conv_id),
+                            conversation_id=uuid.UUID(conv_id),
+                            detail={
+                                "request_id": request_id,
+                                "sent": sent,
+                                "had_live_pending": had_live_pending,
+                                "node_id": approval.get("node_id") if isinstance(approval, dict) else None,
+                                "kind": approval.get("kind") if isinstance(approval, dict) else None,
+                                "handoff_pack_id": (
+                                    approval.get("handoff_pack_id") if isinstance(approval, dict) else None
+                                ),
+                            },
+                        )
+                    except Exception as e:
+                        print(f"[WS] approval audit error: {e}")
+
+                    # Spec #312 US9 / #313 S1: "按所选继续" is a Session demand (FIFO with user text).
+                    # live wait → forward_live (user_input already sent above)
+                    # busy without wait → steer_busy (same class as mid-flight user message)
+                    # idle/dead wait → continue_dispatch with sticky target (no empty-target chat)
+                    if str(decision or "").strip() == "confirm_options":
+                        from app.services.choice_card import resolve_confirm_options_delivery
+
+                        delivery = "continue_dispatch"
+                        try:
+                            st = str(await _conversation_status(conv_id) or "").lower()
+                            snap = await _conversation_snapshot(conv_id, client_id)
+                            workers = (
+                                (snap or {}).get("workers") if isinstance(snap, dict) else None
+                            )
+                            working_flag = (
+                                (snap or {}).get("working") if isinstance(snap, dict) else None
+                            )
+                            worker_count = len(workers) if isinstance(workers, list) else 0
+                            force = bool(
+                                msg.get("force_interrupt")
+                                or msg.get("forceInterrupt")
+                                or msg.get("interrupt") is True
+                            )
+                            delivery = resolve_confirm_options_delivery(
+                                had_live_pending=had_live_pending,
+                                conversation_status=st,
+                                working=working_flag if isinstance(working_flag, bool) else None,
+                                worker_count=worker_count,
+                                force_interrupt=force,
+                            )
+                        except Exception as e:
+                            print(f"[WS] confirm_options delivery-check: {e}")
+                            delivery = "continue_dispatch"
+
+                        selected_ids = (
+                            selected_option_ids if isinstance(selected_option_ids, list) else []
+                        )
+                        if delivery == "forward_live":
+                            pass  # user_input already forwarded
+                        elif delivery == "steer_busy":
+                            try:
+                                steered = await _steer_confirm_options_while_busy(
+                                    conv_id=conv_id,
+                                    client_id=client_id,
+                                    msg=msg,
+                                    selected_option_ids=selected_ids,
+                                    workset_item_ids=workset_item_ids,
+                                )
+                                if not steered:
+                                    # Bound node missing — fall through to continue dispatch.
+                                    delivery = "continue_dispatch"
+                            except Exception as e:
+                                print(f"[WS] confirm_options busy-steer error: {e}")
+                                delivery = "continue_dispatch"
+                        if delivery == "continue_dispatch":
+                            try:
+                                await _continue_after_orphaned_confirm_options(
+                                    conv_id=conv_id,
+                                    client_id=client_id,
+                                    msg=msg,
+                                    selected_option_ids=selected_ids,
+                                    workset_item_ids=workset_item_ids,
+                                )
+                            except Exception as e:
+                                print(f"[WS] confirm_options continue dispatch error: {e}")
+                                await _persist_and_broadcast(
+                                    conv_id,
+                                    {
+                                        "type": "task_error",
+                                        "conversation_id": conv_id,
+                                        "message": f"Failed to continue after choice: {e}",
+                                        "agent_source": "platform",
+                                    },
+                                    "agent",
+                                )
 
                 elif msg.get("type") in ("user_steer", "user_interrupt") and conv_id:
                     if msg.get("type") == "user_interrupt":
                         action = str(msg.get("action") or "cancel").lower()
+                        # Spec #312: freeze open ChoiceCards so post-interrupt confirm is not chrome-only.
+                        try:
+                            await _freeze_pending_approvals_on_interrupt(conv_id, client_id)
+                        except Exception as e:
+                            print(f"[WS] interrupt freeze pending: {e}")
                         # Spec #282 S7: interrupt cancels in-flight turn only. When Node
                         # has no tracked *online* burst, settle Session honestly — do not
                         # invent ghost workers / permanent interrupting from bound-node alone

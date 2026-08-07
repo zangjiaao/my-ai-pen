@@ -1,8 +1,8 @@
 # Spec: Unified Choice Card (next steps + authorize)
 
-**Status:** implemented (vertical slice; review fixes applied; soft-gate on assign; no hard gate)  
-**Tracker Spec (to-spec / `ready-for-agent`):** [#312](https://github.com/zangjiaao/my-ai-pen/issues/312)  
-**Related:** Spec [#311](https://github.com/zangjiaao/my-ai-pen/issues/311) Case Workset / Goal outer; `docs/specs/harness.md` Settle; `ConfirmCard` / `request_user_decision`; product-state UI projection [#280](https://github.com/zangjiaao/my-ai-pen/issues/280)
+**Status:** implemented (vertical slice; review fixes applied; soft-gate on assign; no hard gate) — **amended by Spec [#313](https://github.com/zangjiaao/my-ai-pen/issues/313)** (Free continue integrity: single-select next_steps, optional supplement, value-only emission, confirm = FIFO Session demand)  
+**Tracker Spec (to-spec / `ready-for-agent`):** [#312](https://github.com/zangjiaao/my-ai-pen/issues/312); amend [#313](https://github.com/zangjiaao/my-ai-pen/issues/313)  
+**Related:** Spec [#311](https://github.com/zangjiaao/my-ai-pen/issues/311) Case Workset / Goal outer; `docs/specs/harness.md` Settle; `ConfirmCard` / `request_user_decision`; product-state UI projection [#280](https://github.com/zangjiaao/my-ai-pen/issues/280); Free Tasks SoT [`free-tasks-continue-integrity.md`](free-tasks-continue-integrity.md)
 
 **Product path:** Node4 Graph × Pi + platform conversation UI  
 **Does not implement product code in this document** — normative contracts only.
@@ -30,9 +30,9 @@ Operators need **a few thoughtful choices** in the chat stream—like a grill-me
 1. **Agent-curated** structured **Choice Cards** in the **Main conversation stream** (same product language as authorize/handoff cards).  
 2. **One shared chrome** (`ChoiceCard`): title, markdown body/preamble, options, primary CTA.  
    - **`authorize` / handoff** preset → today’s ConfirmCard behavior (授权 / 取消).  
-   - **`next_steps` preset** → 2–5 curated options, **multi-select by default**, confirm “按所选继续.”  
-3. Each next_steps option has **title + required body** (why / what / success shape) and **optional** `workset_item_ids[]` (0..n) to bind Case Workset rows without listing every API as its own chip.  
-4. User confirm → **structured `user_decision`** + short visible “已选择…” user summary.  
+   - **`next_steps` preset** → curated options, **single-select primary direction** (Spec #313; multi-select no longer product default), optional **supplement text** on the card, confirm continues the Session.  
+3. Each next_steps option has **title + required body** (why / what / success shape) and **optional** `workset_item_ids[]` (0..n) to bind Case Workset rows without listing every API as its own chip. Options are **agent-authored from prior work**; emit **only when valuable/purpose-clear** (may omit). Platform rejects empty/broken cards — does **not** supply fixed template options.  
+4. User confirm → **structured `user_decision`** (`selected_option_ids` + full `text` including option title/body + optional supplement) + visible “已选择…” summary; demand is **FIFO Session queue** same as user text (#277 / #313).  
 5. Card **stays in history**; after user continues the conversation without using the card (or after answering), **controls become read-only**.  
 6. **Retire** right-panel Next and mechanical `WorksetChoiceBar` / `WorksetNextList` as user-facing choice UIs.  
 7. Case **Workset remains SoT** for deepen/OOS inventory, Goal outer, and option binding—not a second choice chrome.  
@@ -45,9 +45,9 @@ Operators need **a few thoughtful choices** in the chat stream—like a grill-me
 | # | Lock |
 |---|------|
 | L1 | Options **authored by Agent** (not platform keyword/inventory expansion as primary UI). |
-| L2 | Emit at **stoppable boundaries** (natural settle / Todo empty / about to idle) **and** when user says continue but turn would be empty chat. |
+| L2 | Emit when Agent judges **valuable next work** exists (may omit); soft retry when a boundary expected a card but none arrived — **no** fixed “always four options.” Spec #313. |
 | L3 | Unified **ChoiceCard** shell; Confirm is a preset. |
-| L4 | **next_steps** default **multi-select**; authorize stays two-button. |
+| L4 | **next_steps** default **single-select** + optional supplement text (Spec #313); authorize stays two-button. Multi-select is not the product default. |
 | L5 | Card is a **message in the stream** (not sticky-only chrome). |
 | L6 | Option fields: `id`, `title`, `body`, optional `workset_item_ids[]`, optional coarse `kind`. |
 | L7 | Confirm path: structured decision + visible summary (not silent-only). |
@@ -115,7 +115,8 @@ Operators need **a few thoughtful choices** in the chat stream—like a grill-me
 choice_card | confirm_card (compat):
   request_id: string
   kind: "authorize" | "handoff" | "next_steps" | …
-  selection: "single" | "multi"   # next_steps default multi; authorize N/A (two fixed actions)
+  selection: "single" | "multi"   # next_steps default single (Spec #313); authorize N/A (two fixed actions)
+  # optional FE supplement text merged into user_decision.text on confirm
   preamble?: markdown
   question?: string               # authorize title
   options?: [                     # next_steps

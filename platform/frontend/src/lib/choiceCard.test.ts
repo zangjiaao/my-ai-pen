@@ -1,8 +1,9 @@
 /**
- * Spec #312 S1–S3 pure contracts.
+ * Spec #312 / #313 S1–S3 pure contracts.
  */
 import assert from "node:assert/strict";
 import {
+  buildConfirmOptionsText,
   expandSelectedOptions,
   formatSelectedSummary,
   isChoiceDecisionFinal,
@@ -66,8 +67,20 @@ const nextOk = validateChoiceCardPayload({
 assert.equal(nextOk.ok, true);
 if (nextOk.ok) {
   assert.equal(nextOk.mode, "next_steps");
-  assert.equal(nextOk.value.selection, "multi");
+  // Spec #313 L8: product default single-select
+  assert.equal(nextOk.value.selection, "single");
 }
+
+const nextMulti = validateChoiceCardPayload({
+  kind: "next_steps",
+  selection: "multi",
+  options: [
+    { id: "a", title: "A", body: "ba" },
+    { id: "b", title: "B", body: "bb" },
+  ],
+});
+assert.equal(nextMulti.ok, true);
+if (nextMulti.ok) assert.equal(nextMulti.value.selection, "multi");
 
 // Infer next_steps from structured options without kind
 const inferred = validateChoiceCardPayload({
@@ -113,6 +126,15 @@ assert.deepEqual(emptyExpand.workset_item_ids, []);
 assert.deepEqual(emptyExpand.summary_titles, []);
 
 assert.equal(parseChoiceOptions({ kind: "handoff", question: "x" }).length, 0);
+
+// Spec #313 S3: full confirm text + supplement
+const confirmText = buildConfirmOptionsText(card, ["deepen"], "优先 auth");
+assert.match(confirmText, /加深 surface/);
+assert.match(confirmText, /why/);
+assert.match(confirmText, /补充：优先 auth/);
+const singleOnly = buildConfirmOptionsText(card, ["report"]);
+assert.match(singleOnly, /出报告/);
+assert.doesNotMatch(singleOnly, /补充/);
 
 // --- S3 soft gate ---
 

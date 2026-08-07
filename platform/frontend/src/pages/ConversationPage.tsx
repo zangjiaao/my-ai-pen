@@ -67,8 +67,8 @@ import {
 } from "../lib/experts";
 import { currentInProgressWorksetItemId } from "../lib/workset";
 import {
+  buildConfirmOptionsText,
   expandSelectedOptions,
-  formatSelectedSummary,
   isChoiceDecisionFinal,
   type ChoiceDecision,
 } from "../lib/choiceCard";
@@ -554,6 +554,24 @@ export default function ConversationPage() {
     }
     return decisions;
   }, [messages]);
+
+  /**
+   * Spec #312 / US23: disable controls only while tools are mid-flight — not while
+   * the Session is blocked on an open ChoiceCard. Waiting for next_steps/authorize
+   * still reports conversation.working/running; those cards must stay clickable.
+   */
+  const hasOpenInteractiveChoice = useMemo(() => {
+    for (const item of pendingApprovals) {
+      const requestId = String(item.request_id || "").trim();
+      if (requestId && !approvalDecisionByRequestId[requestId]) return true;
+    }
+    for (const message of messages) {
+      if (message.msg_type !== "confirm_card" && message.msg_type !== "choice_card") continue;
+      const requestId = readString(message.content.request_id);
+      if (requestId && !approvalDecisionByRequestId[requestId]) return true;
+    }
+    return false;
+  }, [pendingApprovals, messages, approvalDecisionByRequestId]);
 
   /** Spec #312: hydrate next_steps checkboxes from structured decision payload. */
   const choiceSelectedByRequestId = useMemo(() => {
@@ -1847,12 +1865,17 @@ export default function ConversationPage() {
     send({ type: "user_decision", conversation_id: activeId, request_id: requestId, decision });
   }, [activeId, addMessageToConversation, send]);
 
-  /** Spec #312: multi-select next_steps → structured user_decision + visible 已选择 summary. */
+  /** Spec #313: next_steps confirm → selected ids + full text (title/body + optional supplement). */
   const handleConfirmOptions = useCallback(
-    (requestId: string, selectedOptionIds: string[], cardContent: Record<string, unknown>) => {
+    (
+      requestId: string,
+      selectedOptionIds: string[],
+      cardContent: Record<string, unknown>,
+      supplement?: string,
+    ) => {
       if (!activeId || !requestId || !selectedOptionIds.length) return;
       const expanded = expandSelectedOptions(cardContent, selectedOptionIds);
-      const summary = formatSelectedSummary(expanded.summary_titles);
+      const text = buildConfirmOptionsText(cardContent, selectedOptionIds, supplement);
       setPendingApprovals((prev) => prev.filter((item) => item.request_id !== requestId));
       addMessageToConversation(
         activeId,
@@ -1861,7 +1884,8 @@ export default function ConversationPage() {
           decision: "confirm_options",
           selected_option_ids: selectedOptionIds,
           workset_item_ids: expanded.workset_item_ids,
-          text: summary,
+          text,
+          supplement: String(supplement || "").trim() || undefined,
         }),
       );
       send({
@@ -1871,7 +1895,8 @@ export default function ConversationPage() {
         decision: "confirm_options",
         selected_option_ids: selectedOptionIds,
         workset_item_ids: expanded.workset_item_ids,
-        text: summary,
+        text,
+        supplement: String(supplement || "").trim() || undefined,
       });
     },
     [activeId, addMessageToConversation, send],
@@ -2656,7 +2681,9 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                     approvalDecisionByRequestId={approvalDecisionByRequestId}
                     choiceSelectedByRequestId={choiceSelectedByRequestId}
                     sessionActive={isActiveConversationRunning}
-                    choiceDisabled={running || interrupting}
+                    choiceDisabled={
+                      interrupting || ((running || Boolean(activeConversation?.working)) && !hasOpenInteractiveChoice)
+                    }
                   />
                 </div>
               ))}

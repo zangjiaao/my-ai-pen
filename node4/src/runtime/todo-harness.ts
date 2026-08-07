@@ -155,6 +155,7 @@ export const TODO_TOOL_DESCRIPTION = [
   "- append: phase + items (creates phase if missing) — only when a new category appears",
   "- view: read-only",
   "- optional note on done (Graph): deadend:<path> | skipped_roe:<path> | probed | booked | n/a (meta only)",
+  "- optional allow_replace on Free init: only after explicit user permission to replace the whole map",
   "",
   "Anatomy: phase = short noun phrase (no \"1.\" / \"Phase 1:\" prefixes); task = 5–10 words, category-level, unique.",
   "Each work item has a stable node_id (see work_items[] / summary node_id=…). When spawning subagent with multiple open todos, pass that id as plan_node_id.",
@@ -163,7 +164,9 @@ export const TODO_TOOL_DESCRIPTION = [
   "- Prefer completing earlier phases before leaving them open while working ahead.",
   "- Keep task/phase strings stable; view if text lost.",
   "- Open todos never block product booking or harness settlement.",
+  "- Free Tasks map is user progress SoT: once a map exists, silent todo.init full replace is forbidden. Maintain with append/start/done/drop/rm. Full replace only with allow_replace after explicit user permission.",
+  "- When offering next steps or a pause narrative with open todos, disclose remaining open progress (honest pause) — do not claim full completion while the map is dirty.",
   "- Graph: surface ledger is coverage truth — bare done is rejected while open/in_probe paths remain; act via subagent or note=deadend|skipped_roe.",
-  "- Expert Graph: todo(init) is current-stage checklist only (single phase / stage-local items). Whole-engagement multi-phase maps (recon/auth/vuln/…) are Free mode.",
+  "- Expert Graph: todo(init) is current-stage checklist only (single phase / stage-local items). Whole-engagement multi-phase maps (recon/auth/vuln/…) are Free mode. Graph stage-local merge is unchanged.",
   "- Follow role/mission for which categories to include; do not invent target answer keys.",
 ].join("\n");

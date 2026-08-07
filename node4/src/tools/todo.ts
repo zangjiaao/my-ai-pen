@@ -32,6 +32,11 @@ export function createTodoTool(runtime: ToolRuntime): AgentTool<any> {
       items: Type.Optional(Type.Array(Type.String())),
       /** Graph coverage note: deadend|skipped_roe|probed|booked|n/a — blocks bare done when ledger has open surfaces */
       note: Type.Optional(Type.String()),
+      /**
+       * Spec #313 Free: full todo.init replace only after explicit user permission.
+       * Ignored on Graph / subagent (stage-local / private maps).
+       */
+      allow_replace: Type.Optional(Type.Boolean()),
     }),
     async execute(_id: string, params: any) {
       const op = String(params.op || "").trim().toLowerCase() as TodoOpName;
@@ -87,6 +92,17 @@ export function createTodoTool(runtime: ToolRuntime): AgentTool<any> {
         }
       }
 
+      // Spec #313: Free Main Tasks = user progress SoT — gate silent init replace.
+      // Graph plan path and subagent-private maps keep prior init semantics.
+      const isSubagentEarly = (runtime.lifecycle.subagentDepth || 0) >= 1;
+      const isFreeMainMap = !isSubagentEarly && !graphRunEarly?.plan;
+      const allowReplace =
+        params.allow_replace === true ||
+        params.allowReplace === true ||
+        String(params.allow_replace || params.allowReplace || "")
+          .trim()
+          .toLowerCase() === "true";
+
       const input: TodoParams = {
         op,
         list: Array.isArray(params.list)
@@ -100,6 +116,8 @@ export function createTodoTool(runtime: ToolRuntime): AgentTool<any> {
         task: params.task != null ? String(params.task) : undefined,
         phase: params.phase != null ? String(params.phase) : undefined,
         items: Array.isArray(params.items) ? params.items.map((x: unknown) => String(x)) : undefined,
+        free_map: isFreeMainMap || undefined,
+        allow_replace: allowReplace || undefined,
       };
       // Spec #116 I0.11: cannot done L2 while anchored package failed/running/unfinished
       if (op === "done" && runtime.lifecycle.processQuality && input.task) {

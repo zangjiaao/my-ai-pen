@@ -11,11 +11,12 @@ NEXT_STEPS_MIN = 2
 NEXT_STEPS_MAX = 5
 
 SOFT_GATE_NOTE = (
-    "Soft gate (Spec #312): stoppable/continue boundary with open Case Workset "
+    "Soft gate (Spec #312/#313): stoppable/continue boundary with open Case Workset "
     "(or open priors) but no legal next_steps choice card was offered. "
     "Emit one request_user_decision(kind=next_steps) with 2–5 curated options "
-    "(title + body; optional workset_item_ids binds). Do not only say 等待指示 "
-    "or prose A/B/C/D menus. Do not invent inventory chips as the product path."
+    "(title + body; optional workset_item_ids binds; single-select default). "
+    "Do not only say 等待指示 or prose A/B/C/D menus. "
+    "Do not invent inventory chips as the product path."
 )
 
 SOFT_GATE_CONTEXT_KEY = "soft_gate_next_steps_injected"
@@ -98,11 +99,10 @@ def validate_choice_card_payload(raw: object) -> dict[str, Any]:
     if errors:
         return {"ok": False, "errors": errors}
 
-    # V1 FE is multi-select only (Spec #312 L4). Wire may send "single" for forward-compat;
-    # product default remains multi until single UX exists.
+    # Spec #313 L8: next_steps product default is single-select (multi only when agent sets it).
     selection = raw.get("selection")
     if selection not in ("single", "multi"):
-        selection = "multi"
+        selection = "single"
 
     value = {**raw, "kind": "next_steps", "selection": selection, "options": options}
     return {"ok": True, "mode": "next_steps", "value": value}
@@ -121,12 +121,13 @@ def expand_selected_options(
     card: dict | None,
     selected_option_ids: list | None,
 ) -> dict[str, Any]:
-    """S2 — selected_option_ids + card → workset_item_ids + summary_titles."""
+    """S2 — selected_option_ids + card → workset_item_ids + summary_titles + selected options."""
     options = parse_choice_options(card)
     want = {_s(x) for x in (selected_option_ids or []) if _s(x)}
     workset_item_ids: list[str] = []
     seen: set[str] = set()
     summary_titles: list[str] = []
+    selected_options: list[dict[str, Any]] = []
     for opt in options:
         if not isinstance(opt, dict):
             continue
@@ -134,6 +135,7 @@ def expand_selected_options(
         if oid not in want:
             continue
         summary_titles.append(_s(opt.get("title")) or oid)
+        selected_options.append(opt)
         for wid in opt.get("workset_item_ids") or []:
             w = _s(wid)
             if not w or w in seen:
@@ -143,6 +145,7 @@ def expand_selected_options(
     return {
         "workset_item_ids": workset_item_ids,
         "summary_titles": summary_titles,
+        "selected_options": selected_options,
     }
 
 
@@ -151,6 +154,41 @@ def format_selected_summary(summary_titles: list[str] | None) -> str:
     if not titles:
         return "已选择"
     return "已选择：" + "、".join(titles)
+
+
+def build_confirm_options_text(
+    card: dict | None,
+    selected_option_ids: list | None,
+    *,
+    supplement: str | None = None,
+) -> str:
+    """Spec #313 S3 — full confirm text: option title/body + optional supplement.
+
+    Used as Session demand text (same class as user messages). Prefer this over
+    title-only summary when feeding continue / queue.
+    """
+    expanded = expand_selected_options(card, selected_option_ids)
+    selected = expanded.get("selected_options") or []
+    parts: list[str] = []
+    if selected:
+        lines: list[str] = ["已选择："]
+        for opt in selected:
+            if not isinstance(opt, dict):
+                continue
+            title = _s(opt.get("title")) or _s(opt.get("id"))
+            body = _s(opt.get("body"))
+            if body:
+                lines.append(f"- {title}：{body}")
+            else:
+                lines.append(f"- {title}")
+        parts.append("\n".join(lines))
+    else:
+        titles = expanded.get("summary_titles") or []
+        parts.append(format_selected_summary(titles if isinstance(titles, list) else []))
+    sup = _s(supplement)
+    if sup:
+        parts.append(f"补充：{sup}")
+    return "\n".join(parts).strip()
 
 
 def should_soft_gate_next_steps(
@@ -211,6 +249,111 @@ def messages_have_legal_next_steps_choice(
         if v.get("ok") and v.get("mode") == "next_steps":
             return True
     return False
+
+
+def resolve_confirm_options_delivery(
+    *,
+    had_live_pending: bool,
+    conversation_status: str | None = None,
+    working: bool | None = None,
+    worker_count: int = 0,
+    force_interrupt: bool = False,
+) -> str:
+    """Spec #313 S1 — how to deliver a next_steps confirm demand.
+
+    Returns one of:
+      - ``forward_live``: live approval wait still owns the Session
+      - ``steer_busy``: Session in-flight without live wait → FIFO demand like user text
+      - ``continue_dispatch``: idle/settled/dead wait → same Session continue turn
+    """
+    st = _s(conversation_status).lower()
+    settled = st in {
+        "failed",
+        "incomplete",
+        "paused",
+        "canceled",
+        "cancelled",
+        "created",
+        "completed",
+        "done",
+    }
+    workers = int(worker_count or 0)
+    # Match WS continue-check: idle when settled, working=False, or no tracked workers.
+    session_idle = settled or working is False or workers == 0
+
+    if force_interrupt:
+        return "continue_dispatch"
+    if had_live_pending and not session_idle:
+        return "forward_live"
+    if not session_idle:
+        # Busy Session, no live wait (or wait already dead): queue/steer like user text.
+        return "steer_busy"
+    return "continue_dispatch"
+
+
+def build_confirm_continue_message(
+    *,
+    text: str | None,
+    selected_option_ids: list | None = None,
+    workset_item_ids: list | None = None,
+    task_context: dict | None = None,
+    expert_id: str | None = None,
+    expert_name: str | None = None,
+    engagement: str | None = None,
+) -> dict[str, Any]:
+    """Spec #313 S1 pure — confirm → user_message-shaped demand with sticky target/scope.
+
+    When prior engagement had a target, always rehydrate it (forbid empty-target chat-only).
+    """
+    summary = _s(text)
+    if not summary:
+        ids = [_s(x) for x in (selected_option_ids or []) if _s(x)]
+        summary = (
+            f"已选择 next_steps: {', '.join(ids)}" if ids else "User confirmed next_steps packages."
+        )
+    out: dict[str, Any] = {
+        "type": "user_message",
+        "text": summary,
+        "display_text": summary,
+    }
+    ids_ws = [_s(x) for x in (workset_item_ids or []) if _s(x)]
+    if ids_ws:
+        out["workset_item_id"] = ids_ws[0]
+        out["workset_item_ids"] = ids_ws
+    if selected_option_ids:
+        out["selected_option_ids"] = [
+            _s(x) for x in selected_option_ids if _s(x)
+        ]
+    tc = task_context if isinstance(task_context, dict) else {}
+    target = tc.get("target")
+    scope = tc.get("scope")
+    has_target = False
+    if isinstance(target, dict) and _s(target.get("value")):
+        out["target"] = target
+        has_target = True
+    elif isinstance(target, str) and _s(target):
+        out["target"] = {"type": "host", "value": _s(target)}
+        has_target = True
+    if isinstance(scope, dict) and scope:
+        out["scope"] = scope
+    elif has_target and isinstance(out.get("target"), dict):
+        val = _s(out["target"].get("value"))
+        if val:
+            out["scope"] = {"allow": [val], "deny": []}
+    # Sticky persona
+    if _s(expert_id):
+        out["expert_id"] = _s(expert_id)
+    if _s(expert_name):
+        out["expert_name"] = _s(expert_name)
+    if _s(engagement):
+        out["engagement"] = _s(engagement)
+        out["role"] = _s(engagement)
+    # Preserve prior goal seed when present
+    prior_goal = _s(tc.get("goal_objective"))
+    if prior_goal:
+        out["goal_objective"] = prior_goal
+        out["goal_mode"] = True
+    return out
 
 
 def apply_soft_gate_note(

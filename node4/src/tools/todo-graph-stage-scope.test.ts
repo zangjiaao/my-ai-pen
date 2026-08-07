@@ -222,6 +222,51 @@ function makeFreeRuntime(opts?: {
 }
 
 // ---------------------------------------------------------------------------
+// Spec #313 S2: Free silent todo.init replace denied; allow_replace + maintain ok
+// ---------------------------------------------------------------------------
+{
+  const platformMessages: Array<Record<string, unknown>> = [];
+  const runtime = makeFreeRuntime({ platformMessages });
+  const todo = createTodoTool(runtime);
+  const exec = todo.execute as (id: string, params: Record<string, unknown>) => Promise<ExecResult>;
+
+  const first = await exec("x", {
+    op: "init",
+    list: [{ phase: "Tasks", items: ["Map surface", "Probe auth"] }],
+  });
+  assert.notEqual(first.details?.isError, true, "first Free init ok");
+  assert.equal(runtime.todo.openCount(), 2);
+
+  const wipe = await exec("x", {
+    op: "init",
+    list: [{ phase: "Tasks", items: ["Brand new A", "Brand new B", "Brand new C"] }],
+  });
+  assert.equal(wipe.details?.isError, true, "silent Free replace denied");
+  assert.equal(runtime.todo.openCount(), 2, "map unchanged after denied wipe");
+  const wipeText = parseToolText(wipe);
+  assert.ok(
+    /allow_replace|forbidden|replace/i.test(wipeText) || wipeText.includes("already exists"),
+    `deny message: ${wipeText.slice(0, 200)}`,
+  );
+
+  const append = await exec("x", {
+    op: "append",
+    phase: "Tasks",
+    items: ["Deepen XSS"],
+  });
+  assert.notEqual(append.details?.isError, true, "append still works after decline");
+  assert.ok(runtime.todo.openCount() >= 3);
+
+  const permitted = await exec("x", {
+    op: "init",
+    allow_replace: true,
+    list: [{ phase: "Tasks", items: ["Replanned only"] }],
+  });
+  assert.notEqual(permitted.details?.isError, true, "allow_replace permits full replace");
+  assert.equal(runtime.todo.openCount(), 1);
+}
+
+// ---------------------------------------------------------------------------
 // S1.4 After neutralize + stage done → no running L2 under that stage
 // ---------------------------------------------------------------------------
 {

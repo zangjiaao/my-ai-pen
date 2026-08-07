@@ -1,7 +1,7 @@
 /**
- * Spec #312 — Unified Choice Card shell.
+ * Spec #312 / #313 — Unified Choice Card shell.
  * authorize/handoff preset = two-button Confirm UX;
- * next_steps preset = multi-select packages + 按所选继续.
+ * next_steps preset = single-select primary direction + optional supplement (Spec #313 L8).
  */
 import { useEffect, useMemo, useState } from "react";
 import MarkdownText from "../MarkdownText";
@@ -26,12 +26,13 @@ export default function ChoiceCard({
   content: Record<string, unknown>;
   onAuthorize?: () => void;
   onCancel?: () => void;
-  onConfirmOptions?: (selectedOptionIds: string[]) => void;
+  /** Spec #313: selected ids + optional supplement text. */
+  onConfirmOptions?: (selectedOptionIds: string[], supplement?: string) => void;
   highlighted?: boolean;
   decision?: ApprovalDecision;
   /** Disable interaction while a turn is running. */
   disabled?: boolean;
-  /** Spec #312: hydrate read-only next_steps checkboxes from decision. */
+  /** Spec #312: hydrate read-only next_steps from decision. */
   selectedOptionIds?: string[];
 }) {
   const requestId = String(content.request_id || "");
@@ -181,9 +182,12 @@ function NextStepsBody({
   highlighted: boolean;
   readOnly: boolean;
   selectedOptionIds?: string[];
-  onConfirmOptions?: (selectedOptionIds: string[]) => void;
+  onConfirmOptions?: (selectedOptionIds: string[], supplement?: string) => void;
 }) {
   const options = useMemo(() => parseChoiceOptions(content), [content]);
+  // Spec #313: product default single-select; agent may set selection=multi.
+  const multi =
+    String(content.selection || "").toLowerCase() === "multi";
   // Hydrate from decision selected_option_ids when read-only (reload / post-confirm).
   const hydratedIds = useMemo(() => {
     const ids = Array.isArray(selectedOptionIds)
@@ -192,6 +196,7 @@ function NextStepsBody({
     return ids;
   }, [selectedOptionIds]);
   const [picked, setPicked] = useState<Set<string>>(() => new Set(hydratedIds));
+  const [supplement, setSupplement] = useState("");
   useEffect(() => {
     if (hydratedIds.length) {
       setPicked(new Set(hydratedIds));
@@ -204,13 +209,17 @@ function NextStepsBody({
     String(content.question || content.preamble || "").trim() || "下一步工作包";
   const preamble = String(content.preamble || content.proposed_action || "").trim();
 
-  const toggle = (id: string) => {
+  const selectOption = (id: string) => {
     if (readOnly) return;
     setPicked((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
+      if (multi) {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      }
+      // single-select: one primary direction
+      return new Set([id]);
     });
   };
 
@@ -220,6 +229,7 @@ function NextStepsBody({
     <div
       data-testid="choice-card"
       data-choice-kind="next_steps"
+      data-choice-selection={multi ? "multi" : "single"}
       data-approval-request-id={requestId}
       data-approval-decision={decision || ""}
       className={`my-2 rounded-md border bg-surface-elevated p-5 transition-shadow ${
@@ -253,11 +263,12 @@ function NextStepsBody({
                 }`}
               >
                 <input
-                  type="checkbox"
+                  type={multi ? "checkbox" : "radio"}
+                  name={multi ? undefined : `choice-${requestId || "next"}`}
                   className="mt-1 h-4 w-4 shrink-0"
                   checked={isOn}
                   disabled={readOnly}
-                  onChange={() => toggle(opt.id)}
+                  onChange={() => selectOption(opt.id)}
                 />
                 <span className="min-w-0 flex-1">
                   <span className="block text-sm font-medium text-ink">{opt.title}</span>
@@ -273,6 +284,22 @@ function NextStepsBody({
           );
         })}
       </ul>
+      {!readOnly ? (
+        <div className="mt-3" data-testid="choice-supplement">
+          <label className="block text-xs text-ink-muted" htmlFor={`choice-sup-${requestId}`}>
+            补充说明（可选）
+          </label>
+          <textarea
+            id={`choice-sup-${requestId}`}
+            data-testid="choice-supplement-input"
+            rows={2}
+            value={supplement}
+            onChange={(e) => setSupplement(e.target.value)}
+            placeholder="可选：约束、范围或补充意图"
+            className="mt-1 w-full resize-y rounded-md border border-hairline bg-canvas px-3 py-2 text-sm text-ink placeholder:text-ink-muted focus:outline-none focus:ring-1 focus:ring-ink/20"
+          />
+        </div>
+      ) : null}
       <div className="mt-3 flex flex-wrap gap-2">
         <button
           data-testid="choice-confirm-options"
@@ -280,7 +307,7 @@ function NextStepsBody({
           disabled={!canSubmit}
           onClick={() => {
             if (!canSubmit) return;
-            onConfirmOptions?.([...picked]);
+            onConfirmOptions?.([...picked], supplement.trim() || undefined);
           }}
           className={`rounded-pill px-4 py-2 text-sm font-medium transition-colors disabled:cursor-default ${
             confirmed
