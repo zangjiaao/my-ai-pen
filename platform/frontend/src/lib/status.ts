@@ -47,7 +47,7 @@ export function thinkingCardProjection(
 ): {
   title: string;
   body: string;
-  defaultExpanded: boolean;
+  defaultExpanded: true;
   showBodyWhenExpanded: boolean;
 } {
   const body = String(content.reasoning || content.text || content.summary || "").trim();

@@ -48,6 +48,13 @@ def _completed(**overrides):
 
 
 class TestTrafficExchangeStore(unittest.TestCase):
+    def test_shell_source_accepted(self):
+        ok = normalize_traffic_exchange(
+            _completed(source="shell", exchange_id="tx_shell_1", conversation_id="conv-a")
+        )
+        self.assertIsNotNone(ok)
+        self.assertEqual(ok["source"], "shell")
+
     def test_normalize_requires_id_url_conversation(self):
         self.assertIsNone(normalize_traffic_exchange({"url": "https://x"}))
         self.assertIsNone(
@@ -148,7 +155,7 @@ class TestTrafficExchangeStore(unittest.TestCase):
 
     def test_invalid_source_rejected(self):
         """Fail-closed: do not coerce unknown source → http."""
-        bad = normalize_traffic_exchange(_pending(source="shell"))
+        bad = normalize_traffic_exchange(_pending(source="proxy"))
         self.assertIsNone(bad)
         bad2 = normalize_traffic_exchange(_pending(source="not-a-source"))
         self.assertIsNone(bad2)

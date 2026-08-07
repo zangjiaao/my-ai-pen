@@ -14,7 +14,8 @@ DEFAULT_ROW_CAP = 500
 # Prefer dropping oldest full bodies before dropping rows.
 STRIP_BODY_AFTER = 300
 
-SOURCES = frozenset({"http", "browser", "mitm"})
+# shell = best-effort CLI capture (curl/wget/httpie) — not MITM; honesty on FE.
+SOURCES = frozenset({"http", "browser", "shell", "mitm"})
 PHASES = frozenset({"pending", "completed", "failed"})
 
 

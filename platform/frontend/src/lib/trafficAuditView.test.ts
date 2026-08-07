@@ -4,12 +4,15 @@
 import assert from "node:assert/strict";
 import {
   TRAFFIC_EMPTY_COPY,
-  TRAFFIC_HONESTY_LINE,
   bodyDisplayText,
+  domainPathFromUrl,
   filterTrafficDefaultView,
+  filterTrafficListRows,
+  formatTrafficDuration,
   isN3DefaultVisible,
   projectTrafficDetail,
   projectTrafficListRows,
+  trafficSourceDisplay,
   upsertTrafficExchange,
   type TrafficExchange,
 } from "./trafficAuditView.ts";
@@ -26,11 +29,15 @@ function ex(partial: Partial<TrafficExchange> & { exchange_id: string }): Traffi
   };
 }
 
-function testHonestyCopyPresent() {
-  assert.ok(TRAFFIC_HONESTY_LINE.includes("Tool-channel"));
-  assert.ok(TRAFFIC_HONESTY_LINE.includes("MITM"));
-  assert.ok(TRAFFIC_EMPTY_COPY.includes("http"));
-  assert.ok(TRAFFIC_EMPTY_COPY.toLowerCase().includes("shell") || TRAFFIC_EMPTY_COPY.includes("curl"));
+function testEmptyCopy() {
+  assert.ok(TRAFFIC_EMPTY_COPY.length > 5);
+}
+
+function testShellSourceVisibleInN3() {
+  assert.equal(
+    isN3DefaultVisible(ex({ exchange_id: "s1", source: "shell", url: "http://h/api" })),
+    true,
+  );
 }
 
 function testN3HidesStaticKeepsStoreConcept() {
@@ -74,7 +81,6 @@ function testN3HidesStaticKeepsStoreConcept() {
       url: "wss://a/ws",
     }),
   ];
-  // Store still has all 7
   assert.equal(rows.length, 7);
   const view = filterTrafficDefaultView(rows);
   const ids = view.map((r) => r.exchange_id);
@@ -83,7 +89,21 @@ function testN3HidesStaticKeepsStoreConcept() {
   assert.equal(isN3DefaultVisible(rows[0]), true);
 }
 
-function testL1ListFields() {
+function testDomainPathAndSourceDisplay() {
+  assert.deepEqual(domainPathFromUrl("https://host.example:8443/path?q=1"), {
+    domain: "host.example:8443",
+    path: "/path?q=1",
+  });
+  assert.equal(trafficSourceDisplay("shell"), "curl");
+  assert.equal(trafficSourceDisplay("http"), "http");
+  assert.equal(trafficSourceDisplay("browser"), "browser");
+  assert.equal(formatTrafficDuration(42, false), "42ms");
+  assert.equal(formatTrafficDuration(1500, false), "1.5s");
+  assert.equal(formatTrafficDuration(null, true), "…");
+  assert.equal(formatTrafficDuration(null, false), "—");
+}
+
+function testL1ListFieldsNewestFirst() {
   const rows = projectTrafficListRows([
     ex({
       exchange_id: "tx1",
@@ -93,6 +113,7 @@ function testL1ListFields() {
       source: "http",
       phase: "completed",
       sequence: 2,
+      duration_ms: 120,
       started_at: "2026-08-07T15:30:00.000Z",
     }),
     ex({
@@ -104,16 +125,69 @@ function testL1ListFields() {
       sequence: 1,
       status_code: null,
     }),
+    ex({
+      exchange_id: "tx-shell",
+      method: "GET",
+      url: "https://api.lab/v1",
+      source: "shell",
+      phase: "completed",
+      sequence: 3,
+      duration_ms: 30,
+      status_code: 200,
+    }),
   ]);
-  assert.equal(rows.length, 2);
-  assert.equal(rows[0].exchange_id, "tx0");
-  assert.equal(rows[0].status, "pending");
-  assert.equal(rows[0].pending, true);
+  assert.equal(rows.length, 3);
+  // Newest (highest sequence) first
+  assert.equal(rows[0].exchange_id, "tx-shell");
+  assert.equal(rows[0].index, 3);
+  assert.equal(rows[0].source, "curl");
+  assert.equal(rows[0].domain, "api.lab");
+  assert.equal(rows[0].path, "/v1");
+  assert.equal(rows[0].duration, "30ms");
+  assert.equal(rows[1].exchange_id, "tx1");
   assert.equal(rows[1].method, "POST");
   assert.equal(rows[1].status, "201");
-  assert.ok(rows[1].hostPath.includes("host.example/path"));
-  assert.equal(rows[1].source, "http");
-  assert.ok(rows[1].time);
+  assert.equal(rows[1].domain, "host.example");
+  assert.equal(rows[1].path, "/path?q=1");
+  assert.equal(rows[1].duration, "120ms");
+  assert.equal(rows[2].exchange_id, "tx0");
+  assert.equal(rows[2].status, "pending");
+  assert.equal(rows[2].pending, true);
+  assert.equal(rows[2].duration, "…");
+}
+
+function testFilterSearchAndSource() {
+  const rows = projectTrafficListRows([
+    ex({
+      exchange_id: "a",
+      sequence: 1,
+      url: "https://a.example/api",
+      source: "http",
+      method: "GET",
+    }),
+    ex({
+      exchange_id: "b",
+      sequence: 2,
+      url: "https://b.example/login",
+      source: "browser",
+      method: "POST",
+      browser_resource_class: "xhr",
+    }),
+    ex({
+      exchange_id: "c",
+      sequence: 3,
+      url: "https://c.example/",
+      source: "shell",
+      method: "GET",
+    }),
+  ]);
+  assert.equal(filterTrafficListRows(rows, { source: "curl" }).length, 1);
+  assert.equal(filterTrafficListRows(rows, { source: "curl" })[0].exchange_id, "c");
+  assert.equal(filterTrafficListRows(rows, { source: "http" }).length, 1);
+  assert.equal(filterTrafficListRows(rows, { query: "login" }).length, 1);
+  assert.equal(filterTrafficListRows(rows, { query: "POST" }).length, 1);
+  assert.equal(filterTrafficListRows(rows, { query: "nope" }).length, 0);
+  assert.equal(filterTrafficListRows(rows, { source: "all" }).length, 3);
 }
 
 function testUpsertSameId() {
@@ -166,7 +240,6 @@ function testUpsertFailedTerminal() {
   );
   assert.equal(list[0].phase, "failed");
   assert.equal(list[0].error, "timeout");
-  // pending again must not wipe failed
   list = upsertTrafficExchange(
     list,
     ex({ exchange_id: "f1", phase: "pending", status_code: null, error: null }),
@@ -213,12 +286,15 @@ function testDetailPendingAndTruncation() {
 function testEmptyMeansNoExchanges() {
   const rows = projectTrafficListRows([]);
   assert.equal(rows.length, 0);
-  assert.ok(TRAFFIC_EMPTY_COPY.length > 20);
+  assert.ok(TRAFFIC_EMPTY_COPY.length > 5);
 }
 
-testHonestyCopyPresent();
+testEmptyCopy();
+testShellSourceVisibleInN3();
 testN3HidesStaticKeepsStoreConcept();
-testL1ListFields();
+testDomainPathAndSourceDisplay();
+testL1ListFieldsNewestFirst();
+testFilterSearchAndSource();
 testUpsertSameId();
 testUpsertStalePendingDoesNotClobberTerminal();
 testUpsertFailedTerminal();

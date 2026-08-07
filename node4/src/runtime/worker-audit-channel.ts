@@ -368,14 +368,30 @@ async function handleWorkerProcessEvent(
   if (event.type === "message_update" && msg?.role === "assistant") {
     const ame = event.assistantMessageEvent;
     const kind = String(ame?.type || "");
-    if (kind.startsWith("toolcall_")) return;
+    if (kind.startsWith("toolcall_")) {
+      await thinking.finalFlush(event.message);
+      return;
+    }
+    if (kind === "thinking_end" || kind === "thinking_done") {
+      // Do not ensureStream first — avoids a second stream after early text_* close.
+      thinking.applySnapshot(event.message, ame);
+      await thinking.finalFlush(event.message);
+      return;
+    }
     if (kind.startsWith("thinking_")) {
       thinking.ensureStream();
       thinking.applySnapshot(event.message, ame);
       await thinking.maybeFlush();
       return;
     }
-    if (kind.startsWith("text_") || !kind) {
+    if (kind.startsWith("text_")) {
+      await thinking.finalFlush(event.message);
+      text.ensureStream();
+      text.applySnapshot(event.message, ame);
+      await text.maybeFlush();
+      return;
+    }
+    if (!kind) {
       text.ensureStream();
       text.applySnapshot(event.message, ame);
       await text.maybeFlush();

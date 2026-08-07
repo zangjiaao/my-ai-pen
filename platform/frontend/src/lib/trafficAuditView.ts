@@ -41,22 +41,27 @@ export type TrafficExchange = {
 /** L1 list row for the Traffic tab. */
 export type TrafficListRow = {
   exchange_id: string;
+  /** Capture order (higher = newer); list is newest-first. */
+  index: number;
   method: string;
+  domain: string;
+  path: string;
   status: string;
-  hostPath: string;
-  time: string;
+  /** Display source: http | browser | curl (shell mapped to curl). */
   source: string;
+  /** Duration label (耗时), e.g. "42ms" / "1.2s" / "…". */
+  duration: string;
   phase: string;
   url: string;
   pending: boolean;
+  /** Raw store source for filtering (http|browser|shell|…). */
+  sourceRaw: string;
 };
 
-export const TRAFFIC_HONESTY_LINE =
-  "Tool-channel capture (http + browser network). Default hides static assets. Not full-site MITM; shell/other egress excluded.";
+/** Source filter options in the Traffic toolbar. */
+export type TrafficSourceFilter = "all" | "http" | "browser" | "curl";
 
-export const TRAFFIC_EMPTY_COPY =
-  "No captured exchanges yet. Traffic appears when the Agent runs the http tool or browser network is observed — not MITM, not shell/curl.";
-
+export const TRAFFIC_EMPTY_COPY = "No captured exchanges yet.";
 /** Browser resource classes shown under N3 default view. */
 const N3_BROWSER_CLASSES = new Set([
   "document",
@@ -70,7 +75,7 @@ const N3_BROWSER_CLASSES = new Set([
 
 export function isN3DefaultVisible(exchange: TrafficExchange): boolean {
   const source = String(exchange.source || "http").toLowerCase();
-  if (source === "http" || source === "mitm") return true;
+  if (source === "http" || source === "shell" || source === "mitm") return true;
   if (source !== "browser") return true;
   if (exchange.is_websocket) return true;
   const cls = String(exchange.browser_resource_class || "").toLowerCase();
@@ -85,24 +90,45 @@ export function filterTrafficDefaultView(exchanges: TrafficExchange[]): TrafficE
   return exchanges.filter(isN3DefaultVisible);
 }
 
-export function hostPathFromUrl(url: string): string {
+/** Split URL into domain (host[:port]) and path+query for list columns. */
+export function domainPathFromUrl(url: string): { domain: string; path: string } {
   const raw = String(url || "").trim();
-  if (!raw) return "";
+  if (!raw) return { domain: "", path: "" };
   try {
     const u = new URL(raw);
-    return `${u.host}${u.pathname}${u.search}`;
+    const path = `${u.pathname || "/"}${u.search || ""}` || "/";
+    return { domain: u.host || "", path };
   } catch {
-    return raw.length > 120 ? `${raw.slice(0, 117)}...` : raw;
+    // Bare path or non-URL
+    if (raw.startsWith("/")) return { domain: "", path: raw };
+    const slash = raw.indexOf("/");
+    if (slash > 0) {
+      return { domain: raw.slice(0, slash), path: raw.slice(slash) };
+    }
+    return { domain: raw, path: "/" };
   }
 }
 
-export function formatTrafficTime(iso: string | null | undefined): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return String(iso).slice(11, 19) || String(iso);
-  return d.toLocaleTimeString(undefined, { hour12: false });
+/** Shell capture surfaces as curl in Source column / detail chrome. */
+export function trafficSourceDisplay(source: string | null | undefined): string {
+  const s = String(source || "http").toLowerCase();
+  if (s === "shell") return "curl";
+  return s || "http";
 }
 
+/** Format duration_ms as human 耗时; pending/missing → "…". */
+export function formatTrafficDuration(durationMs: number | null | undefined, pending?: boolean): string {
+  if (pending) return "…";
+  if (durationMs == null || !Number.isFinite(Number(durationMs))) return "—";
+  const ms = Math.max(0, Number(durationMs));
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 10_000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.round(ms / 1000)}s`;
+}
+/**
+ * L1 list: newest first (sequence desc, then started_at desc).
+ * Columns: index, method, domain, path, status, source, duration.
+ */
 export function projectTrafficListRows(
   exchanges: TrafficExchange[],
   options?: { applyN3?: boolean },
@@ -110,32 +136,74 @@ export function projectTrafficListRows(
   const applyN3 = options?.applyN3 !== false;
   const list = applyN3 ? filterTrafficDefaultView(exchanges) : exchanges.slice();
   const sorted = list.slice().sort((a, b) => {
-    const sa = Number(a.sequence || 0);
-    const sb = Number(b.sequence || 0);
-    if (sa !== sb) return sa - sb;
-    return String(a.started_at || "").localeCompare(String(b.started_at || ""));
+    const sa = Number(a.sequence ?? 0);
+    const sb = Number(b.sequence ?? 0);
+    if (sa !== sb) return sb - sa; // newest (higher sequence) first
+    return String(b.started_at || "").localeCompare(String(a.started_at || ""));
   });
-  return sorted.map((ex) => {
+  const maxSeq = sorted.reduce((m, ex) => Math.max(m, Number(ex.sequence || 0)), 0);
+  return sorted.map((ex, i) => {
     const phase = String(ex.phase || "pending");
     const pending = phase === "pending";
     let status = "…";
     if (pending) status = "pending";
-    else if (phase === "failed") status = ex.error ? `err` : "failed";
+    else if (phase === "failed") status = ex.error ? "err" : "failed";
     else if (ex.status_code != null) status = String(ex.status_code);
+    const url = String(ex.url || "");
+    const { domain, path } = domainPathFromUrl(url);
+    const sourceRaw = String(ex.source || "http").toLowerCase();
+    const seq = Number(ex.sequence);
+    const index = Number.isFinite(seq) && seq > 0 ? seq : maxSeq > 0 ? maxSeq - i : sorted.length - i;
     return {
       exchange_id: String(ex.exchange_id || ""),
+      index,
       method: String(ex.method || "GET").toUpperCase(),
+      domain,
+      path,
       status,
-      hostPath: hostPathFromUrl(String(ex.url || "")),
-      time: formatTrafficTime(ex.started_at || ex.completed_at),
-      source: String(ex.source || "http"),
+      source: trafficSourceDisplay(sourceRaw),
+      duration: formatTrafficDuration(ex.duration_ms, pending),
       phase,
-      url: String(ex.url || ""),
+      url,
       pending,
+      sourceRaw,
     };
   });
 }
 
+/** Toolbar search + source filter over projected rows (client-side). */
+export function filterTrafficListRows(
+  rows: TrafficListRow[],
+  options?: { query?: string; source?: TrafficSourceFilter },
+): TrafficListRow[] {
+  const q = String(options?.query || "")
+    .trim()
+    .toLowerCase();
+  const source = (options?.source || "all") as TrafficSourceFilter;
+  return rows.filter((row) => {
+    if (source !== "all") {
+      if (source === "curl") {
+        if (row.sourceRaw !== "shell" && row.source !== "curl") return false;
+      } else if (row.sourceRaw !== source && row.source !== source) {
+        return false;
+      }
+    }
+    if (!q) return true;
+    const hay = [
+      String(row.index),
+      row.method,
+      row.domain,
+      row.path,
+      row.status,
+      row.source,
+      row.url,
+      row.duration,
+    ]
+      .join(" ")
+      .toLowerCase();
+    return hay.includes(q);
+  });
+}
 /** Align with platform merge_exchange: pending < completed|failed. */
 const PHASE_RANK: Record<string, number> = {
   pending: 0,

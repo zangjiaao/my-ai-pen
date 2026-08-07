@@ -141,6 +141,37 @@ import {
   console.log("ok: S2 empty running thinking upsert + body growth");
 }
 
+// Spec #305 nit: empty thinking accepts done synonyms via normalizeExecutionStatus
+{
+  let live = upsertLiveByStreamId(
+    {},
+    {
+      streamId: "n4-thinking-synonym",
+      msgType: "thinking",
+      text: "",
+      content: { status: "completed" },
+    },
+  );
+  assert.ok(live["n4-thinking-synonym"], "empty + completed synonym enters live");
+  assert.equal(live["n4-thinking-synonym"]!.content?.status, "done");
+
+  live = upsertLiveByStreamId(
+    {},
+    {
+      streamId: "n4-thinking-fail-empty",
+      msgType: "thinking",
+      text: "",
+      content: { status: "error" },
+    },
+  );
+  assert.equal(
+    Object.keys(live).length,
+    0,
+    "empty fail-status thinking still rejected",
+  );
+  console.log("ok: empty thinking status synonyms via normalize");
+}
+
 // Issue 1: empty running → empty done flips status on live map
 {
   let live = upsertLiveByStreamId({}, {

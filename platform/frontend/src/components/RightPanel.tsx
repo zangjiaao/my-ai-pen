@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import type { SecurityAsset, SecurityVulnerability } from "../lib/securityTypes";
 import type { PlanNode, PlanStatus, StrixAgentStatus } from "../lib/panelTypes";
 import {
@@ -11,6 +12,7 @@ import {
   SurfaceTreeView,
   collectSurfaceEntries,
   attachFindingsToSurface,
+  canonicalizeSurfaceEntries,
   parseEngagementTargets,
   parseSurfaceInventoryKey,
   parseSurfaceRef,
@@ -25,21 +27,18 @@ import {
 } from "./SurfaceInventory";
 import FindingCard from "./cards/FindingCard";
 import { GraphAwareTodoList } from "./TasksPlanList";
-import { WorksetNextList } from "./WorksetNextList";
 import { discloseTaskListCap, TASKS_WORK_ITEM_CAP } from "../lib/tasksListCap";
 import {
-  parseWorksetProjection,
-  worksetHasVisibleContent,
-  type WorksetProjection,
-} from "../lib/workset";
-import {
   TRAFFIC_EMPTY_COPY,
-  TRAFFIC_HONESTY_LINE,
   bodyDisplayText,
+  filterTrafficListRows,
   formatHeadersBlock,
   projectTrafficDetail,
   projectTrafficListRows,
+  trafficSourceDisplay,
   type TrafficExchange,
+  type TrafficListRow,
+  type TrafficSourceFilter,
 } from "../lib/trafficAuditView";
 
 export { TASKS_WORK_ITEM_CAP };
@@ -137,12 +136,6 @@ interface Props {
   taskContext?: Record<string, unknown>;
   /** Spec #163 Graph engagement close-out (Product state). */
   engagementCloseout?: Record<string, unknown>;
-  /** Spec #311 Case Workset («下一步») — separate from Tasks. */
-  workset?: WorksetProjection | Record<string, unknown> | null;
-  onWorksetAdopt?: (id: string) => void;
-  onWorksetReject?: (id: string) => void;
-  onWorksetDone?: (id: string) => void;
-  worksetBusyId?: string | null;
   onOpenVulnerability?: (finding: Partial<SecurityVulnerability>) => void;
   onOpenAsset?: (asset: Partial<SecurityAsset>) => void;
   /** Spec #308: open Worker process audit dialog. */
@@ -180,11 +173,6 @@ export default function RightPanel({
   workflowKind,
   running = false,
   engagementCloseout,
-  workset: worksetRaw,
-  onWorksetAdopt,
-  onWorksetReject,
-  onWorksetDone,
-  worksetBusyId,
   planTree = [],
   strixAgents = [],
   strixNotes = [],
@@ -229,11 +217,17 @@ export default function RightPanel({
       // Prefer inventory-key parse (`host:port|web|/path`) — parseSurfaceRef only accepts URLs/paths.
       const parsed = parseSurfaceInventoryKey(raw) || parseSurfaceRef(raw);
       if (!parsed) continue;
+      // Bare toSurfaceEntry lacks assetKey — re-canonicalize below so findings join the asset root.
       const entry = toSurfaceEntry(parsed, { source: "finding" });
       byKey.set(entry.key.toLowerCase(), entry);
     }
-    return Array.from(byKey.values()).sort((a, b) => a.key.localeCompare(b.key));
-  }, [baseSurfaceEntries, findingAttachment]);
+    // Re-fold finding-only leaves into the same host/asset root as inventory (no dual site trees).
+    return canonicalizeSurfaceEntries(
+      Array.from(byKey.values()),
+      assets,
+      engagementTargets,
+    ).sort((a, b) => a.key.localeCompare(b.key));
+  }, [baseSurfaceEntries, findingAttachment, assets, engagementTargets]);
   const findingsByPath = findingAttachment.byPath;
   const unlinkedFindings = findingAttachment.unlinked;
   const surfaceTree = useMemo(() => buildSurfaceTree(surfaceEntries, findingsByPath), [surfaceEntries, findingsByPath]);
@@ -266,11 +260,6 @@ export default function RightPanel({
     : unifiedTodoItems(visiblePlanTree);
   const taskItems = taskList.items;
   const tasksHiddenCount = taskList.hiddenCount;
-  const workset = useMemo(
-    () => parseWorksetProjection(worksetRaw),
-    [worksetRaw],
-  );
-  const showWorkset = worksetHasVisibleContent(workset);
   const displayRun = useMemo(
     () => mergeCaseRunIntoDisplayRun(strixRun, caseRun, running),
     [strixRun, caseRun, running],
@@ -415,27 +404,6 @@ export default function RightPanel({
                 <StrixAgentList agents={displayAgents} onWorkerClick={onWorkerClick} />
               </section>
             )}
-            {/* Spec #311: Case Workset backlog — separate from process Tasks */}
-            {showWorkset && (
-              <section data-testid="workset-section">
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <p className="text-xs text-ink-muted">下一步</p>
-                  {workset.items.length > 0 && (
-                    <p className="font-mono text-[11px] text-ink-muted">
-                      {workset.items.filter((i) => String(i.status) === "adopted" || i.in_progress).length}/
-                      {workset.items.length}
-                    </p>
-                  )}
-                </div>
-                <WorksetNextList
-                  workset={workset}
-                  onAdopt={onWorksetAdopt}
-                  onReject={onWorksetReject}
-                  onDone={onWorksetDone}
-                  busyId={worksetBusyId}
-                />
-              </section>
-            )}
             {/* Intentional TODO / work packages — Expert Graph L1 stages + L2 todos when present */}
             <section data-testid="tasks-section">
               <div className="mb-2 flex items-center justify-between gap-2">
@@ -535,80 +503,160 @@ export default function RightPanel({
         {tab === "traffic" && (
           <TrafficAuditList
             rows={trafficRows}
-            honestyLine={TRAFFIC_HONESTY_LINE}
             emptyCopy={TRAFFIC_EMPTY_COPY}
             onOpen={(id) => setSelectedTrafficId(id)}
           />
         )}
       </div>
-      {selectedTrafficId && (
-        <TrafficDetailDialog
-          exchange={selectedTraffic}
-          onClose={() => setSelectedTrafficId(null)}
-        />
-      )}
+      {selectedTrafficId &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <TrafficDetailDialog
+            exchange={selectedTraffic}
+            onClose={() => setSelectedTrafficId(null)}
+          />,
+          document.body,
+        )}
     </aside>
   );
 }
 
 function TrafficAuditList({
   rows,
-  honestyLine,
   emptyCopy,
   onOpen,
 }: {
-  rows: ReturnType<typeof projectTrafficListRows>;
-  honestyLine: string;
+  rows: TrafficListRow[];
   emptyCopy: string;
   onOpen: (exchangeId: string) => void;
 }) {
+  const [query, setQuery] = useState("");
+  const [sourceFilter, setSourceFilter] = useState<TrafficSourceFilter>("all");
+  const visible = useMemo(
+    () => filterTrafficListRows(rows, { query, source: sourceFilter }),
+    [rows, query, sourceFilter],
+  );
+
   return (
     <div className="space-y-2" data-testid="traffic-audit-list">
-      <p className="text-[11px] leading-snug text-ink-muted" data-testid="traffic-honesty-line">
-        {honestyLine}
-      </p>
+      <div className="flex flex-wrap items-center gap-2" data-testid="traffic-toolbar">
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search method, domain, path…"
+          data-testid="traffic-search"
+          className="min-w-0 flex-1 rounded-md border border-hairline bg-canvas px-2.5 py-1.5 text-[12px] text-ink placeholder:text-ink-muted outline-none focus:border-ink"
+        />
+        <select
+          value={sourceFilter}
+          onChange={(e) => setSourceFilter(e.target.value as TrafficSourceFilter)}
+          data-testid="traffic-source-filter"
+          className="shrink-0 rounded-md border border-hairline bg-canvas px-2 py-1.5 text-[12px] text-ink outline-none focus:border-ink"
+          aria-label="Filter by source"
+        >
+          <option value="all">All sources</option>
+          <option value="http">http</option>
+          <option value="browser">browser</option>
+          <option value="curl">curl</option>
+        </select>
+      </div>
       {!rows.length ? (
         <p className="text-sm text-ink-muted" data-testid="traffic-empty">
           {emptyCopy}
         </p>
+      ) : !visible.length ? (
+        <p className="text-sm text-ink-muted" data-testid="traffic-filter-empty">
+          No exchanges match search/filter
+        </p>
       ) : (
-        <ul className="divide-y divide-hairline-soft border-t border-hairline-soft">
-          {rows.map((row) => (
-            <li key={row.exchange_id}>
-              <button
-                type="button"
-                data-testid={`traffic-row-${row.exchange_id}`}
-                onClick={() => onOpen(row.exchange_id)}
-                className="flex w-full min-w-0 items-start gap-2 px-0.5 py-2 text-left transition-colors hover:bg-canvas-inset/60"
-              >
-                <span className="shrink-0 rounded-sm bg-canvas-inset px-1.5 py-0.5 font-mono text-[10px] font-semibold text-ink">
-                  {row.method}
-                </span>
-                <span
-                  className={`shrink-0 rounded-sm px-1.5 py-0.5 font-mono text-[10px] ${
-                    row.pending
-                      ? "bg-status-running/15 text-status-running"
-                      : row.phase === "failed"
-                        ? "bg-severity-critical/15 text-severity-critical"
-                        : "bg-canvas-inset text-ink-secondary"
-                  }`}
+        <div className="overflow-x-auto border-t border-hairline-soft">
+          <table className="w-full min-w-[420px] border-collapse text-left" data-testid="traffic-table">
+            <thead>
+              <tr className="border-b border-hairline-soft text-[10px] font-medium uppercase tracking-wide text-ink-muted">
+                <th className="px-1 py-1.5 font-medium">#</th>
+                <th className="px-1 py-1.5 font-medium">Method</th>
+                <th className="px-1 py-1.5 font-medium">Domain</th>
+                <th className="px-1 py-1.5 font-medium">Path</th>
+                <th className="px-1 py-1.5 font-medium">Status</th>
+                <th className="px-1 py-1.5 font-medium">Source</th>
+                <th className="px-1 py-1.5 font-medium">Time</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-hairline-soft">
+              {visible.map((row) => (
+                <tr
+                  key={row.exchange_id}
+                  data-testid={`traffic-row-${row.exchange_id}`}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onOpen(row.exchange_id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onOpen(row.exchange_id);
+                    }
+                  }}
+                  className="cursor-pointer font-mono text-[11px] text-ink transition-colors hover:bg-canvas-inset/60 focus-visible:bg-canvas-inset/60 focus-visible:outline-none"
+                  title={row.url}
                 >
-                  {row.status}
-                </span>
-                <span className="min-w-0 flex-1 truncate text-[12px] text-ink" title={row.url}>
-                  {row.hostPath}
-                </span>
-                <span className="shrink-0 rounded-sm bg-canvas-inset px-1 py-0.5 text-[10px] uppercase text-ink-muted">
-                  {row.source}
-                </span>
-                <time className="shrink-0 font-mono text-[10px] text-ink-muted">{row.time}</time>
-              </button>
-            </li>
-          ))}
-        </ul>
+                  <td className="whitespace-nowrap px-1 py-1.5 text-ink-muted">{row.index}</td>
+                  <td className={`whitespace-nowrap px-1 py-1.5 font-semibold ${trafficMethodTextClass(row.method)}`}>
+                    {row.method}
+                  </td>
+                  <td className="max-w-[7rem] truncate px-1 py-1.5" title={row.domain}>
+                    {row.domain || "—"}
+                  </td>
+                  <td className="max-w-[10rem] truncate px-1 py-1.5" title={row.path}>
+                    {row.path || "/"}
+                  </td>
+                  <td className={`whitespace-nowrap px-1 py-1.5 font-medium ${trafficStatusTextClass(row)}`}>
+                    {row.status}
+                  </td>
+                  <td className="whitespace-nowrap px-1 py-1.5 text-ink-muted">{row.source}</td>
+                  <td className="whitespace-nowrap px-1 py-1.5 text-ink-muted">{row.duration}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
+}
+/** Method column color (DevTools-style). */
+function trafficMethodTextClass(method: string): string {
+  switch (String(method || "").toUpperCase()) {
+    case "GET":
+      return "text-status-running";
+    case "POST":
+      return "text-status-success";
+    case "PUT":
+    case "PATCH":
+      return "text-severity-high";
+    case "DELETE":
+      return "text-severity-critical";
+    case "HEAD":
+    case "OPTIONS":
+      return "text-ink-secondary";
+    default:
+      return "text-ink";
+  }
+}
+
+/** Status column color by phase / HTTP class. */
+function trafficStatusTextClass(row: Pick<TrafficListRow, "status" | "pending" | "phase">): string {
+  if (row.pending) return "text-status-running";
+  if (row.phase === "failed" || row.status === "failed" || row.status === "err") {
+    return "text-severity-critical";
+  }
+  const code = Number(row.status);
+  if (!Number.isFinite(code)) return "text-ink-secondary";
+  if (code >= 200 && code < 300) return "text-status-success";
+  if (code >= 300 && code < 400) return "text-status-running";
+  if (code >= 400 && code < 500) return "text-severity-high";
+  if (code >= 500) return "text-severity-critical";
+  return "text-ink-secondary";
 }
 
 function TrafficDetailDialog({
@@ -692,7 +740,7 @@ function TrafficDetailDialog({
               <span className="text-ink-secondary">{detail.url}</span>
             </h2>
             <p className="mt-1 text-[11px] text-ink-muted">
-              source={detail.source} · phase={detail.phase}
+              source={trafficSourceDisplay(detail.source)} · phase={detail.phase}
             </p>
           </div>
           <button type="button" onClick={onClose} className="shrink-0 rounded-md border border-hairline px-3 py-1.5 text-xs hover:bg-surface-default">

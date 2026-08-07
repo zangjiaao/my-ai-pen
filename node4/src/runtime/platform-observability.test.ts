@@ -279,6 +279,79 @@ async function testTurnStartDoesNotOpenT1WithoutTools() {
   console.log("ok: turn_start alone does not open T1");
 }
 
+async function testThinkingDoneBeforeTextStream() {
+  // Done must stamp when text_* starts — not only on message_end after text finishes.
+  const platform = fakePlatform();
+  const stream = new PlatformTextStream(platform, task());
+  await stream.handle({
+    type: "message_start",
+    message: { role: "assistant", content: [] },
+  });
+  await stream.handle({
+    type: "message_update",
+    message: {
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "reason then reply" }],
+    },
+    assistantMessageEvent: {
+      type: "thinking_delta",
+      partial: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "reason then reply" }],
+      },
+    },
+  });
+  await drain(stream);
+  await stream.handle({
+    type: "message_update",
+    message: {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "reason then reply" },
+        { type: "text", text: "你好" },
+      ],
+    },
+    assistantMessageEvent: {
+      type: "text_delta",
+      partial: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "reason then reply" },
+          { type: "text", text: "你好" },
+        ],
+      },
+    },
+  });
+  await drain(stream);
+
+  const thinking = platform.messages.filter((m) => m.type === "thinking");
+  assert.ok(thinking.some((m) => thinkingContent(m).status === "running"), "had running");
+  const lastBeforeEnd = thinking[thinking.length - 1]!;
+  assert.equal(
+    thinkingContent(lastBeforeEnd).status,
+    "done",
+    "text_* must stamp thinking done before message_end",
+  );
+  assert.equal(String(thinkingContent(lastBeforeEnd).text || ""), "reason then reply");
+
+  await stream.handle({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "reason then reply" },
+        { type: "text", text: "你好世界" },
+      ],
+    },
+  });
+  await drain(stream);
+  const doneCount = platform.messages.filter(
+    (m) => m.type === "thinking" && thinkingContent(m).status === "done",
+  ).length;
+  assert.ok(doneCount >= 1, "at least one done frame");
+  console.log("ok: thinking done stamps on text_* before message_end");
+}
+
 async function main() {
   await testNoT1OnBareMessageStart();
   await testEmptyRunningOnThinkingChannelOpen();
@@ -287,6 +360,7 @@ async function main() {
   await testNoDoneWhenThinkingNeverOpened();
   await testToolEndOpensEmptyRunningBeforeThinkingTokens();
   await testTurnStartDoesNotOpenT1WithoutTools();
+  await testThinkingDoneBeforeTextStream();
   console.log("all platform-observability Spec #305 tests passed");
 }
 

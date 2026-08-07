@@ -10,6 +10,7 @@ import {
   assertDestructiveAllowed,
   resolveEngagementRoe,
 } from "../runtime/engagement-roe.js";
+import { emitShellHttpTraffic } from "../runtime/traffic-collect.js";
 
 const DEFAULT_TIMEOUT_SEC = 240;
 const MAX_TIMEOUT_SEC = 600;
@@ -64,7 +65,9 @@ export function createShellTool(runtime: ToolRuntime): AgentTool<any> {
       }
       const timeoutSec = clampTimeoutSec(params.timeout_seconds);
       const timeoutMs = timeoutSec * 1000;
+      const startedMs = Date.now();
       const result = await runShell(command, runtime.taskDir, timeoutMs, combined);
+      const durationMs = Date.now() - startedMs;
       const governed = await archiveAndGovernToolOutput({
         taskDir: runtime.taskDir,
         tool: "shell",
@@ -82,6 +85,17 @@ export function createShellTool(runtime: ToolRuntime): AgentTool<any> {
         output_archive: governed.archived_path || null,
         output_original_chars: governed.original_total_chars,
       };
+      // Spec #309 expansion: best-effort Traffic audit from curl/wget/httpie shell.
+      // Prefer full capture streams (pre-model truncate). Never fail the tool on emit.
+      await emitShellHttpTraffic(runtime, {
+        command,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+        timedOut: result.timedOut,
+        aborted: result.aborted,
+        durationMs,
+      }).catch(() => {});
       // Act only — Case evidence is created at finding(confirm) from agent proof.
       // Observations keep fuller streams (pre-model truncate) when still in capture cap.
       recordActObservation(runtime, "shell", shellEvidenceSummary(command, result), {

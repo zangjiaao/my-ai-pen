@@ -9,6 +9,7 @@ import {
   mergeToolLifecycleStatus,
   normalizeExecutionStatus,
   resolveThinkingUiStatus,
+  resolveThinkingUiStatusForSession,
   resolveToolItemStatus,
   thinkingCardProjection,
   thinkingLifecycleTitle,
@@ -54,6 +55,10 @@ import {
   assert.equal(mergeToolLifecycleStatus("", "running"), "running");
   assert.equal(mergeToolLifecycleStatus("running", ""), "running");
   assert.equal(mergeToolLifecycleStatus("error", "done"), "fail");
+  // Live tool_output must mirror this: missing/empty stays empty (no invent running).
+  assert.equal(String(undefined ?? "").trim() || "", "");
+  assert.equal(resolveToolItemStatus(undefined), "");
+  assert.equal(resolveToolItemStatus(null), "");
   console.log("ok: mergeToolLifecycleStatus prefer-done keeps empty");
 }
 
@@ -73,6 +78,12 @@ import {
   const historical = thinkingCardProjection({ text: "old" });
   assert.equal(historical.title, "思考完成");
   assert.ok(!String(historical.body).includes("暂无"), "no fake placeholder copy");
+
+  // Orphan running thinking when Case is idle (node restart mid-llm_waiting)
+  assert.equal(resolveThinkingUiStatusForSession("running", { sessionActive: false }), "done");
+  assert.equal(resolveThinkingUiStatusForSession("running", { sessionActive: true }), "running");
+  const orphan = thinkingCardProjection({ status: "running", text: "" }, { sessionActive: false });
+  assert.equal(orphan.title, "思考完成");
   console.log("ok: S3 thinkingCardProjection default expanded + empty body");
 }
 

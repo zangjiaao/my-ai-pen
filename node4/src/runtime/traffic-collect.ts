@@ -8,7 +8,7 @@
 import { createHash } from "node:crypto";
 import type { PlatformSink, TaskEnvelope, ToolRuntime } from "../types.js";
 
-export type TrafficSource = "http" | "browser" | "mitm";
+export type TrafficSource = "http" | "browser" | "shell" | "mitm";
 export type TrafficPhase = "pending" | "completed" | "failed";
 export type BrowserResourceClass =
   | "document"
@@ -498,6 +498,318 @@ export async function emitHttpFail(
   const done = failExchange(pending, error);
   await emitTrafficExchange(runtime.platform, done).catch(() => {});
   return done;
+}
+
+// ---------------------------------------------------------------------------
+// Spec #309 expansion: shell HTTP best-effort (curl / wget / httpie)
+// ---------------------------------------------------------------------------
+
+const HTTP_SHELL_CLIENT_RE = /\b(curl|wget|http(?:ie)?)\b/i;
+const ABSOLUTE_URL_RE = /https?:\/\/[^\s"'\\]+/gi;
+
+/** True when command likely performs HTTP via common CLI clients. */
+export function looksLikeHttpShellCommand(command: string): boolean {
+  const c = String(command || "");
+  if (!HTTP_SHELL_CLIENT_RE.test(c)) return false;
+  // Require at least one absolute URL, or curl relative with scheme-less host:port
+  if (ABSOLUTE_URL_RE.test(c)) return true;
+  // Reset lastIndex after global test
+  ABSOLUTE_URL_RE.lastIndex = 0;
+  // curl http:// already covered; allow curl host/path with -X rarely without scheme — skip
+  return /curl\s+[^\n]*https?:\/\//i.test(c);
+}
+
+/** Extract absolute http(s) URLs from a shell command (deduped, order preserved). */
+export function extractUrlsFromShellCommand(command: string): string[] {
+  const c = String(command || "");
+  const found: string[] = [];
+  const seen = new Set<string>();
+  let m: RegExpExecArray | null;
+  const re = /https?:\/\/[^\s"'\\]+/gi;
+  while ((m = re.exec(c)) !== null) {
+    let u = m[0].replace(/[),.;]+$/, "");
+    // Strip trailing quotes artifacts
+    u = u.replace(/['"]+$/, "");
+    if (!u || seen.has(u)) continue;
+    seen.add(u);
+    found.push(u);
+  }
+  return found;
+}
+
+/** Infer HTTP method from curl/wget flags (best-effort). */
+export function inferShellHttpMethod(command: string): string {
+  const c = String(command || "");
+  const x = c.match(/(?:^|\s)(?:-X|--request)\s+([A-Za-z]+)/i);
+  if (x?.[1]) return x[1].toUpperCase();
+  // curl -sI / -I / --head (short flags may be clustered: -sIk)
+  if (/(?:^|\s)--head(?:\s|$)/i.test(c) || /(?:^|\s)-[A-Za-z]*I[A-Za-z]*(?:\s|$|=)/.test(c)) {
+    return "HEAD";
+  }
+  if (/(?:^|\s)(?:-d|--data(?:-raw|-binary|-urlencode)?|--json)\b/i.test(c)) return "POST";
+  if (/\bwget\b/i.test(c) && /--method\s+(\S+)/i.test(c)) {
+    const wm = c.match(/--method\s+(\S+)/i);
+    if (wm?.[1]) return wm[1].toUpperCase();
+  }
+  if (/\bhttp(?:ie)?\b/i.test(c)) {
+    const hm = c.match(/\bhttp(?:ie)?\s+(?:--\S+\s+)*([A-Z]+)\s+https?:\/\//i);
+    if (hm?.[1] && ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"].includes(hm[1])) {
+      return hm[1];
+    }
+  }
+  return "GET";
+}
+
+/** Best-effort -H / --header parse from curl. */
+export function parseShellRequestHeaders(command: string): Record<string, string> | null {
+  const c = String(command || "");
+  const out: Record<string, string> = {};
+  const re = /(?:^|\s)(?:-H|--header)\s+(['"]?)([^'"\n]+)\1/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(c)) !== null) {
+    const raw = String(m[2] || "").trim();
+    const idx = raw.indexOf(":");
+    if (idx <= 0) continue;
+    const k = raw.slice(0, idx).trim();
+    const v = raw.slice(idx + 1).trim();
+    if (k) out[k] = v;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/** Best-effort -d / --data / --json body from curl. */
+export function parseShellRequestBody(command: string): string | null {
+  const c = String(command || "");
+  const patterns = [
+    /(?:^|\s)--json\s+(['"])([\s\S]*?)\1/,
+    /(?:^|\s)--json\s+(\S+)/,
+    /(?:^|\s)(?:-d|--data(?:-raw|-binary|-urlencode)?)\s+(['"])([\s\S]*?)\1/,
+    /(?:^|\s)(?:-d|--data(?:-raw|-binary|-urlencode)?)\s+(\S+)/,
+  ];
+  for (const re of patterns) {
+    const m = c.match(re);
+    if (!m) continue;
+    const body = m[2] != null ? m[2] : m[1];
+    if (body != null && String(body).trim()) return String(body);
+  }
+  return null;
+}
+
+/**
+ * Parse status / headers / body from curl-like stdout.
+ * Handles: `HTTP/1.1 200 OK` + headers; bare status; multi-line `200 /path`.
+ */
+export function parseShellHttpStdout(stdout: string): {
+  statusCode: number | null;
+  responseHeaders: Record<string, string> | null;
+  responseBody: string | null;
+  contentType: string | null;
+  /** Path→status when agent used multi-path probe listing */
+  pathStatuses: Array<{ status: number; path: string }>;
+} {
+  const text = String(stdout || "");
+  const pathStatuses: Array<{ status: number; path: string }> = [];
+  // Multi-line "200 /api/Products" style probes
+  for (const line of text.split(/\r?\n/)) {
+    const pm = line.trim().match(/^(\d{3})\s+(\/\S*)/);
+    if (pm) pathStatuses.push({ status: Number(pm[1]), path: pm[2] });
+  }
+
+  const statusMatch = text.match(/HTTP\/\d(?:\.\d)?\s+(\d{3})\b/i);
+  let statusCode: number | null = statusMatch ? Number(statusMatch[1]) : null;
+  if (statusCode == null && pathStatuses.length === 1) statusCode = pathStatuses[0]!.status;
+
+  let responseHeaders: Record<string, string> | null = null;
+  let responseBody: string | null = text || null;
+  let contentType: string | null = null;
+
+  if (statusMatch) {
+    const after = text.slice(statusMatch.index! + statusMatch[0].length);
+    // Header block until blank line
+    const parts = after.split(/\r?\n\r?\n/);
+    const headerBlock = parts[0] || "";
+    const bodyPart = parts.slice(1).join("\n\n");
+    const headers: Record<string, string> = {};
+    for (const line of headerBlock.split(/\r?\n/)) {
+      const idx = line.indexOf(":");
+      if (idx <= 0) continue;
+      const k = line.slice(0, idx).trim();
+      const v = line.slice(idx + 1).trim();
+      if (k) headers[k] = v;
+    }
+    if (Object.keys(headers).length) {
+      responseHeaders = headers;
+      contentType = headers["content-type"] || headers["Content-Type"] || null;
+    }
+    responseBody = bodyPart.trim() ? bodyPart : text;
+  }
+
+  return { statusCode, responseHeaders, responseBody, contentType, pathStatuses };
+}
+
+/**
+ * Pure: build completed/failed shell-sourced exchanges from one shell tool result.
+ * Returns [] when command is not HTTP-like or no URL can be recovered.
+ */
+export function buildShellHttpExchanges(input: {
+  conversationId: string;
+  taskId?: string;
+  sequenceStart?: number;
+  command: string;
+  stdout: string;
+  stderr?: string;
+  exitCode?: number | null;
+  timedOut?: boolean;
+  aborted?: boolean;
+  durationMs?: number | null;
+  bodyBudget?: number;
+  startedAt?: string;
+}): TrafficExchange[] {
+  const command = String(input.command || "");
+  if (!looksLikeHttpShellCommand(command)) return [];
+  const urls = extractUrlsFromShellCommand(command);
+  if (!urls.length) return [];
+
+  const method = inferShellHttpMethod(command);
+  const reqHeaders = parseShellRequestHeaders(command);
+  const reqBody = parseShellRequestBody(command);
+  const parsed = parseShellHttpStdout(input.stdout || "");
+  const started = input.startedAt || new Date().toISOString();
+  const completed = new Date().toISOString();
+  const budget = input.bodyBudget ?? DEFAULT_BODY_BUDGET;
+  const failed = Boolean(input.aborted || input.timedOut);
+  const error = input.aborted
+    ? "aborted"
+    : input.timedOut
+      ? "timeout"
+      : input.exitCode != null && input.exitCode !== 0 && parsed.statusCode == null
+        ? `exit=${input.exitCode}`
+        : null;
+
+  // Multi path-status listing with single base URL → one row per path when base is origin
+  if (parsed.pathStatuses.length > 1 && urls.length === 1) {
+    try {
+      const base = new URL(urls[0]!);
+      const origin = base.origin;
+      return parsed.pathStatuses.map((ps, i) => {
+        const url = `${origin}${ps.path.startsWith("/") ? ps.path : `/${ps.path}`}`;
+        const res = captureBody(null, { budget });
+        const emptyReq = captureBody(null, { budget });
+        return {
+          type: "traffic_exchange" as const,
+          exchange_id: newExchangeId("shell"),
+          conversation_id: input.conversationId,
+          task_id: input.taskId,
+          sequence: (input.sequenceStart || 0) + i + 1,
+          source: "shell" as const,
+          phase: "completed" as const,
+          method: "GET",
+          url,
+          request_headers: null,
+          request_body: emptyReq.text,
+          status_code: ps.status,
+          response_headers: null,
+          response_body: null,
+          content_type: null,
+          started_at: started,
+          completed_at: completed,
+          duration_ms: input.durationMs ?? null,
+          error: null,
+          request_body_truncated: false,
+          response_body_truncated: false,
+          request_body_bytes: 0,
+          response_body_bytes: 0,
+          request_body_hash: null,
+          response_body_hash: null,
+          request_body_binary: false,
+          response_body_binary: false,
+        };
+      });
+    } catch {
+      // fall through to URL-based rows
+    }
+  }
+
+  const out: TrafficExchange[] = [];
+  for (let i = 0; i < urls.length; i++) {
+    const url = urls[i]!;
+    const req = captureBody(i === 0 ? reqBody : null, { budget });
+    const res = captureBody(i === 0 ? parsed.responseBody : null, { budget });
+    const status =
+      urls.length === 1
+        ? parsed.statusCode
+        : parsed.pathStatuses.find((p) => url.endsWith(p.path))?.status ??
+          (i === 0 ? parsed.statusCode : null);
+    const phase: TrafficPhase = failed && status == null ? "failed" : "completed";
+    out.push({
+      type: "traffic_exchange",
+      exchange_id: newExchangeId("shell"),
+      conversation_id: input.conversationId,
+      task_id: input.taskId,
+      sequence: (input.sequenceStart || 0) + i + 1,
+      source: "shell",
+      phase,
+      method: i === 0 ? method : "GET",
+      url,
+      request_headers: i === 0 ? reqHeaders : null,
+      request_body: req.text,
+      status_code: status,
+      response_headers: i === 0 ? parsed.responseHeaders : null,
+      response_body: res.text,
+      content_type: i === 0 ? parsed.contentType : null,
+      started_at: started,
+      completed_at: completed,
+      duration_ms: input.durationMs ?? null,
+      error: phase === "failed" ? error : null,
+      request_body_truncated: req.truncated,
+      response_body_truncated: res.truncated,
+      request_body_bytes: req.bytes,
+      response_body_bytes: res.bytes,
+      request_body_hash: req.hash,
+      response_body_hash: res.hash,
+      request_body_binary: req.binary,
+      response_body_binary: res.binary,
+    });
+  }
+  return out;
+}
+
+/**
+ * After shell tool completes: if command looks like HTTP CLI, emit completed
+ * exchanges (best-effort; never throws into shell execute).
+ */
+export async function emitShellHttpTraffic(
+  runtime: ToolRuntime,
+  input: {
+    command: string;
+    stdout: string;
+    stderr?: string;
+    exitCode?: number | null;
+    timedOut?: boolean;
+    aborted?: boolean;
+    durationMs?: number | null;
+  },
+): Promise<TrafficExchange[]> {
+  const seq0 = Number((runtime.lifecycle as { trafficSequence?: number }).trafficSequence || 0);
+  const exchanges = buildShellHttpExchanges({
+    conversationId: runtime.task.conversationId,
+    taskId: runtime.task.taskId,
+    sequenceStart: seq0,
+    command: input.command,
+    stdout: input.stdout,
+    stderr: input.stderr,
+    exitCode: input.exitCode,
+    timedOut: input.timedOut,
+    aborted: input.aborted,
+    durationMs: input.durationMs,
+  });
+  if (!exchanges.length) return [];
+  // Advance sequence counter past emitted rows
+  (runtime.lifecycle as { trafficSequence?: number }).trafficSequence = seq0 + exchanges.length;
+  for (const ex of exchanges) {
+    await emitTrafficExchange(runtime.platform, ex).catch(() => {});
+  }
+  return exchanges;
 }
 
 /** Phase rank for browser same-id upgrade (R2). */

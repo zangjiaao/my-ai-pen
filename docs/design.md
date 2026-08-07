@@ -869,7 +869,7 @@ Sidebar 会话项同步显示待处理数量 badge（红色圆点 + 数字）。
 ### Collapsing
 
 - **Sidebar**: ≥1024px 完整 280px；<1024px 收为 64px 图标栏；<768px 汉堡菜单。可手动折叠为 64px 图标轨（`localStorage.sidebar_collapsed`）。
-- **Right Panel**（会话 Status / Surface / Findings / Traffic）：任意打开的会话均可在顶栏「报告」右侧用 `PanelRight` 开关查看；**默认折叠**；出现任务/目标/工作产物后**自动展开**（用户仍可再折叠）。宽度可拖（默认约 480px）。Traffic 为 Case 流量审计列表（替代原 Activity 工作流时间线；见 Spec #309）。
+- **Right Panel**（会话 Status / Surface / Findings / Traffic）：任意打开的会话均可在顶栏「报告」右侧用 `PanelRight` 开关查看；**默认折叠**；出现任务/目标/工作产物后**自动展开**（用户仍可再折叠）。宽度可拖（默认约 480px）。Traffic 为 Case 流量审计表（搜索 + Source 筛选；列：# 倒序最新在上 / Method / Domain / Path / Status / Source / Time 耗时；详情 dialog 居中；见 Spec #309）。
 - **对话区**: 始终 flex 占满剩余空间。
 
 ---
