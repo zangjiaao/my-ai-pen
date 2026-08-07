@@ -1,6 +1,7 @@
 /**
- * Spec #311 — Case Workset («下一步») client helpers.
+ * Spec #311 — Case Workset client helpers (inventory SoT; not choice chrome).
  * Separate from Tasks (plan_tree worker todos).
+ * Spec #312 L10: mechanical Next list retired — keep order/parse/baton helpers only.
  */
 
 export type WorksetFamily = "t_surface" | "t_host";
@@ -84,27 +85,6 @@ export function worksetInProgressLabel(item: WorksetItem): string {
   return expert;
 }
 
-export function worksetFamilyLabel(family: string): string {
-  if (family === "t_host") return "主机";
-  if (family === "t_surface") return "面";
-  return family || "项";
-}
-
-export function worksetStatusLabel(status: string): string {
-  switch (status) {
-    case "proposed":
-      return "待确认";
-    case "adopted":
-      return "已采纳";
-    case "done":
-      return "完成";
-    case "rejected":
-      return "已拒绝";
-    default:
-      return status || "";
-  }
-}
-
 export function parseWorksetProjection(raw: unknown): WorksetProjection {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return { items: [], open_count: 0 };
@@ -135,8 +115,9 @@ export function worksetHasVisibleContent(ws: WorksetProjection): boolean {
 }
 
 /**
- * Spec #311 US3: id of the single in-progress 下一步 baton, if any.
- * Used when sending user_message so platform task_assign can refresh annotation.
+ * Spec #311 US3: id of the single in-progress Workset baton, if any.
+ * Used when sending user_message so platform task_assign can refresh annotation
+ * (system/Goal baton — not user Next chrome).
  */
 export function currentInProgressWorksetItemId(
   ws: WorksetProjection | Record<string, unknown> | null | undefined,

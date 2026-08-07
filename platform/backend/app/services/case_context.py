@@ -543,6 +543,26 @@ def build_case_context_payload(
             payload["next_work"] = thin_handoff_brief(workset, boundary="case_assign")
         except Exception:
             pass
+    # Spec #312: mark whether transcript already has a legal next_steps card (soft-gate input).
+    try:
+        from app.services.choice_card import messages_have_legal_next_steps_choice
+
+        answered: set[str] = set()
+        for m in messages:
+            if not isinstance(m, dict):
+                continue
+            if str(m.get("msg_type") or "").lower() != "decision":
+                continue
+            c = m.get("content") if isinstance(m.get("content"), dict) else {}
+            rid = str(c.get("request_id") or "").strip()
+            if rid:
+                answered.add(rid)
+        has_legal = messages_have_legal_next_steps_choice(messages, answered_request_ids=answered)
+        if isinstance(payload.get("next_work"), dict):
+            payload["next_work"]["has_legal_choice_card"] = has_legal
+        payload["_has_legal_next_steps_choice"] = has_legal
+    except Exception:
+        pass
     return payload
 
 

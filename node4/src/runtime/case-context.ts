@@ -32,6 +32,30 @@ export type CaseEvidenceSnippet = {
   excerpt?: string;
 };
 
+/** Spec #311/#312 — thin Workset refs from platform case_context.next_work. */
+export type CaseNextWorkItem = {
+  id?: string;
+  family?: string;
+  title?: string;
+  status?: string;
+  auto_eligible?: boolean;
+  suggested_expert?: string;
+};
+
+export type CaseNextWork = {
+  boundary?: string;
+  workset_open?: CaseNextWorkItem[];
+  workset_open_count?: number;
+  note?: string;
+  goal?: {
+    status?: string;
+    terminal?: string;
+    outer_rounds?: number;
+    outer_budget?: number;
+    residual?: unknown;
+  };
+};
+
 export type CaseContext = {
   version?: number;
   conversation_id?: string;
@@ -40,12 +64,54 @@ export type CaseContext = {
   findings_summary?: CaseFindingLine[];
   evidence_snippets?: CaseEvidenceSnippet[];
   artifact_hints?: string[];
+  /** Spec #312: open Workset refs for agent-curated next_steps binds (not a choice UI). */
+  next_work?: CaseNextWork;
 };
 
 const MAX_THREAD_LINES = 50;
 const MAX_FINDINGS = 25;
 const MAX_EVIDENCE = 12;
 const MAX_TOTAL_CHARS = 18000;
+
+function parseNextWork(raw: unknown): CaseNextWork | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const o = raw as Record<string, unknown>;
+  const openRaw = Array.isArray(o.workset_open) ? o.workset_open : [];
+  const workset_open: CaseNextWorkItem[] = [];
+  for (const row of openRaw) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+    const r = row as Record<string, unknown>;
+    const item: CaseNextWorkItem = {};
+    if (r.id != null) item.id = String(r.id);
+    if (r.family != null) item.family = String(r.family);
+    if (r.title != null) item.title = String(r.title);
+    if (r.status != null) item.status = String(r.status);
+    if (r.auto_eligible != null) item.auto_eligible = Boolean(r.auto_eligible);
+    if (r.suggested_expert != null) item.suggested_expert = String(r.suggested_expert);
+    workset_open.push(item);
+  }
+  const count =
+    typeof o.workset_open_count === "number"
+      ? o.workset_open_count
+      : workset_open.length;
+  const next: CaseNextWork = {
+    workset_open,
+    workset_open_count: count,
+  };
+  if (o.boundary != null) next.boundary = String(o.boundary);
+  if (o.note != null) next.note = String(o.note);
+  if (o.goal && typeof o.goal === "object" && !Array.isArray(o.goal)) {
+    const g = o.goal as Record<string, unknown>;
+    next.goal = {
+      status: g.status != null ? String(g.status) : undefined,
+      terminal: g.terminal != null ? String(g.terminal) : undefined,
+      outer_rounds: typeof g.outer_rounds === "number" ? g.outer_rounds : undefined,
+      outer_budget: typeof g.outer_budget === "number" ? g.outer_budget : undefined,
+      residual: g.residual,
+    };
+  }
+  return next;
+}
 
 export function parseCaseContext(raw: unknown): CaseContext | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
@@ -62,7 +128,8 @@ export function parseCaseContext(raw: unknown): CaseContext | undefined {
       ? (o.case_evidence_snippets as CaseEvidenceSnippet[])
       : [];
   const hints = Array.isArray(o.artifact_hints) ? o.artifact_hints.map(String) : [];
-  if (!thread.length && !findings.length && !hints.length && !snippets.length) {
+  const next_work = parseNextWork(o.next_work);
+  if (!thread.length && !findings.length && !hints.length && !snippets.length && !next_work) {
     if (!o.note && !o.conversation_id) return undefined;
   }
   return {
@@ -73,6 +140,7 @@ export function parseCaseContext(raw: unknown): CaseContext | undefined {
     findings_summary: findings,
     evidence_snippets: snippets,
     artifact_hints: hints,
+    next_work,
   };
 }
 
@@ -147,6 +215,35 @@ export function formatCaseContextInjection(ctx: CaseContext | undefined | null):
   if (hints.length) {
     lines.push("", "### Artifact / path hints (not full file bodies)");
     for (const h of hints) lines.push(`- ${h}`);
+  }
+
+  // Spec #312 S5: retain next_work refs so Agent can bind next_steps options honestly.
+  const nextWork = ctx.next_work;
+  if (nextWork && (nextWork.workset_open_count || (nextWork.workset_open || []).length)) {
+    const open = (nextWork.workset_open || []).slice(0, 12);
+    const count =
+      typeof nextWork.workset_open_count === "number"
+        ? nextWork.workset_open_count
+        : open.length;
+    lines.push("", "### Case Next / Workset (open)");
+    lines.push(
+      `Open Workset items: ${count} (refs only — inventory SoT, not a user choice UI).`,
+    );
+    lines.push(
+      "At stoppable settle / empty-continue with open Workset: emit structured request_user_decision(kind=next_steps) with 2–5 curated options (title+body; optional workset_item_ids). Do not only say 等待指示 or free-text A/B/C/D.",
+    );
+    for (const item of open) {
+      const id = item.id ? `id=${item.id}` : "id=?";
+      const fam = item.family ? ` [${item.family}]` : "";
+      const st = item.status ? ` (${item.status})` : "";
+      const title = String(item.title || "").trim() || "(untitled)";
+      lines.push(`- ${id}${fam}${st} ${title}`);
+    }
+    if (nextWork.goal && (nextWork.goal.status || nextWork.goal.terminal)) {
+      const gs = nextWork.goal.status ? `status=${nextWork.goal.status}` : "";
+      const gt = nextWork.goal.terminal ? ` terminal=${nextWork.goal.terminal}` : "";
+      lines.push(`Goal: ${gs}${gt}`.trim());
+    }
   }
 
   lines.push(

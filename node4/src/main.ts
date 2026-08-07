@@ -230,12 +230,16 @@ client.on("user_steer", async (message) => {
   });
 });
 
-/** Platform ConfirmCard → resolve request_user_decision waits. */
+/** Platform ConfirmCard / ChoiceCard → resolve request_user_decision waits. */
 client.on("user_input", async (message) => {
   const requestId = String(message.request_id || message.requestId || "").trim();
   if (!requestId) return;
   const response = message.response ?? message.decision ?? message.text ?? "cancel";
-  resolveApproval(requestId, response);
+  resolveApproval(requestId, response, {
+    selected_option_ids: message.selected_option_ids ?? message.selectedOptionIds,
+    workset_item_ids: message.workset_item_ids ?? message.worksetItemIds,
+    text: message.text,
+  });
 });
 
 /** Platform Interrupt button → abort in-flight session.prompt / tool children. */

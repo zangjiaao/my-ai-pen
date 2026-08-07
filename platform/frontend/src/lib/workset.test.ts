@@ -1,12 +1,11 @@
 /**
- * Spec #311 FE contract: 下一步 vs Tasks separation helpers.
+ * Spec #311 FE contract: Workset inventory helpers (not choice chrome).
  */
 import assert from "node:assert/strict";
 import {
   currentInProgressWorksetItemId,
   orderWorksetItems,
   parseWorksetProjection,
-  worksetFamilyLabel,
   worksetHasVisibleContent,
   worksetInProgressLabel,
   type WorksetItem,
@@ -57,7 +56,7 @@ const ordered = orderWorksetItems(items);
 assert.deepEqual(
   ordered.map((i) => i.id),
   ["run", "a1", "s1", "h1"],
-  "default 下一步 order",
+  "default Next order",
 );
 
 assert.equal(worksetInProgressLabel(ordered[0]!), "pentest-1 · app_assessment");
@@ -74,26 +73,13 @@ assert.equal(
   "Free in-progress shows expert only",
 );
 
-assert.equal(worksetFamilyLabel("t_host"), "主机");
-assert.equal(worksetFamilyLabel("t_surface"), "面");
-
 const proj = parseWorksetProjection({
-  version: 1,
   items,
   open_count: 4,
-  goal: { terminal: "goal_complete", residual: { class: "awaiting_scope_confirm" } },
+  goal: { status: "running", residual: { class: "awaiting_scope_confirm", pending_host_count: 1 } },
 });
-assert.equal(proj.items[0]?.id, "run");
+assert.equal(proj.items.length, 4);
 assert.ok(worksetHasVisibleContent(proj));
-
-// Open items survive conceptually: parse does not drop proposed when goal complete
-assert.ok(proj.items.some((i) => i.status === "proposed"));
-
-// Tasks plan_tree is a different type — ensure we don't mix fields
-const planTreeShape = { node_id: "graph-stage-recon", title: "Recon", status: "done" };
-assert.equal("family" in planTreeShape, false, "Tasks nodes are not Workset items");
-
-// Spec #311 US3: FE passes this id on user_message when baton is held
 assert.equal(currentInProgressWorksetItemId(proj), "run");
 assert.equal(currentInProgressWorksetItemId({ items: [] }), null);
 assert.equal(currentInProgressWorksetItemId(null), null);

@@ -1004,10 +1004,44 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
         # Persist structured handoff/confirm intent so authorize can switch expert sticky.
         # Do NOT fall back to msg expert_id/name — those are the *requesting* speaker
         # (often 平台助理) stamped for UI attribution, not the handoff destination.
+        pending_kind = str(msg.get("kind") or "confirm").strip().lower() or "confirm"
+        pending_options = msg.get("options") if isinstance(msg.get("options"), list) else None
+        pending_selection = msg.get("selection")
+        if pending_options and all(isinstance(o, dict) for o in pending_options):
+            if pending_kind in {"confirm", ""}:
+                pending_kind = "next_steps"
+            # Spec #312: validate next_steps snapshot used for S2 expand (fail closed).
+            try:
+                from app.services.choice_card import validate_choice_card_payload
+
+                validated = validate_choice_card_payload(
+                    {
+                        "kind": pending_kind,
+                        "options": pending_options,
+                        "selection": pending_selection,
+                        "request_id": request_id,
+                    }
+                )
+                if validated.get("ok") and validated.get("mode") == "next_steps":
+                    value = validated.get("value") or {}
+                    pending_options = value.get("options")
+                    pending_kind = "next_steps"
+                    pending_selection = value.get("selection") or pending_selection
+                elif pending_kind == "next_steps":
+                    print(
+                        f"[WS] pending next_steps invalid options: {validated.get('errors')}"
+                    )
+                    pending_options = None
+                    pending_kind = "confirm"
+            except Exception as val_exc:
+                print(f"[WS] pending validate_choice_card: {val_exc}")
+                if pending_kind == "next_steps":
+                    pending_options = None
+                    pending_kind = "confirm"
         pending_approvals[request_id] = {
             "conversation_id": conv_id,
             "node_id": client_id,
-            "kind": str(msg.get("kind") or "confirm").strip().lower() or "confirm",
+            "kind": pending_kind,
             "handoff_pack_id": str(
                 msg.get("handoff_pack_id") or msg.get("handoff_pack") or ""
             ).strip()
@@ -1021,6 +1055,9 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
             "target": msg.get("target"),
             "proposed_action": msg.get("proposed_action"),
             "question": msg.get("question"),
+            # Spec #312: retain validated next_steps option snapshot for expand on confirm_options.
+            "options": pending_options,
+            "selection": pending_selection,
             # Requesting Session persona (for graph_mode_apply settle on same expert).
             "expert_id": str(msg.get("expert_id") or "").strip() or None,
             "expert_name": str(msg.get("expert_name") or "").strip() or None,
@@ -1940,11 +1977,51 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
             target_agent = _agent_target(msg)
             target_node_id = _agent_node_id(msg)
             if msg_type == "user_decision":
+                decision_val = msg.get("decision")
+                # Spec #312: next_steps confirm carries selected_option_ids + optional summary text.
+                summary_text = str(msg.get("text") or "").strip()
+                if not summary_text:
+                    summary_text = f"Authorization decision: {decision_val}"
                 content = {
                     "request_id": msg.get("request_id"),
-                    "decision": msg.get("decision"),
-                    "text": f"Authorization decision: {msg.get('decision')}",
+                    "decision": decision_val,
+                    "text": summary_text,
                 }
+                selected_ids = msg.get("selected_option_ids")
+                if isinstance(selected_ids, list):
+                    content["selected_option_ids"] = [
+                        str(x).strip() for x in selected_ids if str(x or "").strip()
+                    ]
+                # Spec #312 S2: always expand workset binds from pending card snapshot —
+                # never trust client workset_item_ids alone.
+                workset_ids: list[str] = []
+                if (
+                    str(decision_val or "").strip() == "confirm_options"
+                    and isinstance(selected_ids, list)
+                ):
+                    try:
+                        from app.services.choice_card import expand_selected_options
+
+                        rid = str(msg.get("request_id") or "").strip()
+                        approval_snap = pending_approvals.get(rid) if rid else None
+                        card_snap = {
+                            "kind": (
+                                approval_snap.get("kind")
+                                if isinstance(approval_snap, dict)
+                                else "next_steps"
+                            ),
+                            "options": (
+                                approval_snap.get("options")
+                                if isinstance(approval_snap, dict)
+                                else None
+                            ),
+                        }
+                        expanded = expand_selected_options(card_snap, selected_ids)
+                        workset_ids = list(expanded.get("workset_item_ids") or [])
+                    except Exception:
+                        workset_ids = []
+                if workset_ids:
+                    content["workset_item_ids"] = workset_ids
                 msg_type = "decision"
             else:
                 content = {"text": msg.get("display_text") or msg.get("text", "")}
@@ -2066,6 +2143,50 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
             }
         elif msg_type == "request_decision":
             msg_type = "confirm_card"
+            kind = str(msg.get("kind") or "confirm").strip().lower() or "confirm"
+            # Spec #312: next_steps carries structured option objects; authorize keeps legacy strings.
+            raw_options = msg.get("options")
+            structured_options = None
+            if isinstance(raw_options, list) and raw_options and all(
+                isinstance(o, dict) for o in raw_options
+            ):
+                structured_options = raw_options
+                if kind in {"confirm", ""}:
+                    kind = "next_steps"
+            # Fail closed for invalid next_steps: drop bad options and log (do not persist junk).
+            if kind == "next_steps" or structured_options is not None:
+                try:
+                    from app.services.choice_card import validate_choice_card_payload
+
+                    validated = validate_choice_card_payload(
+                        {
+                            "kind": "next_steps" if kind == "next_steps" or structured_options else kind,
+                            "options": structured_options,
+                            "selection": msg.get("selection"),
+                            "question": msg.get("question"),
+                            "request_id": msg.get("request_id"),
+                        }
+                    )
+                    if validated.get("ok") and validated.get("mode") == "next_steps":
+                        value = validated.get("value") or {}
+                        structured_options = value.get("options")
+                        kind = "next_steps"
+                        if value.get("selection") in {"single", "multi"}:
+                            msg = {**msg, "selection": value.get("selection")}
+                    else:
+                        print(
+                            f"[WS] request_decision next_steps invalid options: "
+                            f"{validated.get('errors')}"
+                        )
+                        structured_options = None
+                        if kind == "next_steps":
+                            # Fail closed: do not present fake inventory chips.
+                            kind = "confirm"
+                except Exception as val_exc:
+                    print(f"[WS] request_decision validate_choice_card: {val_exc}")
+                    structured_options = None
+                    if kind == "next_steps":
+                        kind = "confirm"
             content = {
                 "request_id": msg.get("request_id"),
                 "risk_level": msg.get("risk_level", "intrusive"),
@@ -2073,9 +2194,15 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                 "proposed_action": msg.get("proposed_action", ""),
                 "target": msg.get("target", ""),
                 "expires_at": msg.get("expires_at", ""),
-                "options": ["authorize", "cancel"],
-                "kind": str(msg.get("kind") or "confirm").strip().lower() or "confirm",
+                "options": structured_options if structured_options is not None else ["authorize", "cancel"],
+                "kind": kind,
             }
+            if structured_options is not None:
+                selection = str(msg.get("selection") or "multi").strip().lower()
+                content["selection"] = selection if selection in {"single", "multi"} else "multi"
+                preamble = str(msg.get("preamble") or "").strip()
+                if preamble:
+                    content["preamble"] = preamble
             for key in ("handoff_pack_id", "handoff_expert_id", "handoff_expert_name", "pack_id"):
                 if msg.get(key) is not None and str(msg.get(key) or "").strip():
                     content[key] = str(msg.get(key)).strip()
@@ -3221,59 +3348,75 @@ async def _forward_pending_approval_text(
     """Forward free-text (or any reply) into the Session approval wait.
 
     Spec #277 §3.3 14a: platform displays + forwards only; Session tool normalizes.
-    Returns True if a pending approval was consumed.
+    Spec #312 L9: mark ALL open pending approvals for this conversation as answered
+    so multiple cards stay read-only after reload (not only the first wait).
+    Returns True if at least one pending approval was consumed.
     """
     pending_for_conv = _pending_approvals_for_conversation(conv_id)
     if not pending_for_conv:
         return False
-    request_id, approval = pending_for_conv[0]
-    pending_approvals.pop(request_id, None)
-    decision_msg = {
-        "type": "user_decision",
-        "conversation_id": conv_id,
-        "request_id": request_id,
-        "decision": "answered",
-        "text": user_text,
-    }
-    await _save_message(decision_msg, "user")
-    await _broadcast_to_conversation(conv_id, json.dumps(decision_msg, ensure_ascii=False))
-    node_msg = {
-        "type": "user_input",
-        "conversation_id": conv_id,
-        "request_id": request_id,
-        "response": user_text,
-        "text": user_text,
-    }
-    sent = False
-    approval_node = str(approval.get("node_id") or "").strip()
-    if approval_node and approval_node in node_connections:
+
+    # Primary wait (oldest): forward free-text into Session tool.
+    # Secondary waits: structured response "answered" → Node normalize to answered
+    # (unblock without handoff/graph apply). Sole author of freeze decision rows so FE
+    # must not pre-pop pending via user_decision before this user_message path.
+    primary_id, primary_approval = pending_for_conv[0]
+    any_sent = False
+    for idx, (request_id, approval) in enumerate(pending_for_conv):
+        pending_approvals.pop(request_id, None)
+        decision_msg = {
+            "type": "user_decision",
+            "conversation_id": conv_id,
+            "request_id": request_id,
+            "decision": "answered",
+            "text": user_text,
+        }
+        await _save_message(decision_msg, "user")
+        await _broadcast_to_conversation(conv_id, json.dumps(decision_msg, ensure_ascii=False))
+
+        # Forward node unblock for every pending wait (each Session tool may be blocked).
+        # Primary: free-text as response → Session may treat as authorize (user engaged).
+        # Secondary: "answered" token → dismiss without apply (Spec #312 L9).
+        node_msg = {
+            "type": "user_input",
+            "conversation_id": conv_id,
+            "request_id": request_id,
+            "response": user_text if idx == 0 else "answered",
+            "text": user_text,
+            "decision": "answered",
+        }
+        sent = False
+        approval_node = str(approval.get("node_id") or "").strip() if isinstance(approval, dict) else ""
+        if approval_node and approval_node in node_connections:
+            try:
+                await node_connections[approval_node].send_text(
+                    json.dumps(node_msg, ensure_ascii=False)
+                )
+                sent = True
+            except Exception as e:
+                print(f"[WS] pending-text user_input to node {approval_node[:8]}: {e}")
+        if not sent:
+            sent = await _send_to_bound_node(conv_id, json.dumps(node_msg))
+        any_sent = any_sent or sent
         try:
-            await node_connections[approval_node].send_text(
-                json.dumps(node_msg, ensure_ascii=False)
+            await _audit(
+                actor_type="user",
+                actor_id=uuid.UUID(client_id),
+                action="approval.answered_text",
+                resource_type="conversation",
+                resource_id=uuid.UUID(conv_id),
+                conversation_id=uuid.UUID(conv_id),
+                detail={
+                    "request_id": request_id,
+                    "sent": sent,
+                    "node_id": approval.get("node_id") if isinstance(approval, dict) else None,
+                    "kind": approval.get("kind") if isinstance(approval, dict) else None,
+                    "via": via,
+                    "primary": request_id == primary_id,
+                },
             )
-            sent = True
         except Exception as e:
-            print(f"[WS] pending-text user_input to node {approval_node[:8]}: {e}")
-    if not sent:
-        sent = await _send_to_bound_node(conv_id, json.dumps(node_msg))
-    try:
-        await _audit(
-            actor_type="user",
-            actor_id=uuid.UUID(client_id),
-            action="approval.answered_text",
-            resource_type="conversation",
-            resource_id=uuid.UUID(conv_id),
-            conversation_id=uuid.UUID(conv_id),
-            detail={
-                "request_id": request_id,
-                "sent": sent,
-                "node_id": approval.get("node_id"),
-                "kind": approval.get("kind"),
-                "via": via,
-            },
-        )
-    except Exception as e:
-        print(f"[WS] pending-text audit error: {e}")
+            print(f"[WS] pending-text audit error: {e}")
     return True
 
 
@@ -4897,20 +5040,21 @@ async def _merge_case_roe_into_task_assign(conv_id: str | None, task_msg: dict) 
 async def _attach_case_context_to_task_assign(conv_id: str | None, task_msg: dict) -> dict:
     """Attach work-group thread + findings so experts join the same case chat.
 
-    Does not invent engagement. Skips if case_context already present.
+    Does not invent engagement.
+    Spec #312: soft-gate note once when open Workset and no legal next_steps card —
+    runs even when case_context is already pre-attached.
     """
     if not conv_id:
         return task_msg
     out = dict(task_msg)
-    if isinstance(out.get("case_context"), dict) and (
-        out["case_context"].get("thread") is not None
-        or out["case_context"].get("findings_summary") is not None
-    ):
-        return out
     try:
         from app.db.base import async_session
         from app.models.conversation import Conversation
         from app.services.case_context import load_case_context_for_conversation
+        from app.services.choice_card import (
+            SOFT_GATE_CONTEXT_KEY,
+            apply_soft_gate_note,
+        )
 
         async with async_session() as db:
             r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(str(conv_id))))
@@ -4918,12 +5062,88 @@ async def _attach_case_context_to_task_assign(conv_id: str | None, task_msg: dic
             if not c:
                 return out
             user_id = getattr(c, "user_id", None)
-            ctx = await load_case_context_for_conversation(
-                db,
-                c.id,
-                user_id=user_id,
+            pre = out.get("case_context") if isinstance(out.get("case_context"), dict) else None
+            pre_attached = bool(
+                pre
+                and (
+                    pre.get("thread") is not None
+                    or pre.get("findings_summary") is not None
+                )
             )
-            # Always attach (even empty first turn) so Node knows the field exists
+            if pre_attached:
+                ctx = dict(pre)
+                # Enrich next_work / legal-card flag when caller pre-attached a thin context.
+                needs_enrich = (
+                    not isinstance(ctx.get("next_work"), dict)
+                    or ctx.get("_has_legal_next_steps_choice") is None
+                )
+                if needs_enrich:
+                    loaded = await load_case_context_for_conversation(
+                        db,
+                        c.id,
+                        user_id=user_id,
+                    )
+                    if isinstance(loaded, dict):
+                        if not isinstance(ctx.get("next_work"), dict) and isinstance(
+                            loaded.get("next_work"), dict
+                        ):
+                            ctx["next_work"] = loaded["next_work"]
+                        if "_has_legal_next_steps_choice" not in ctx:
+                            ctx["_has_legal_next_steps_choice"] = loaded.get(
+                                "_has_legal_next_steps_choice"
+                            )
+                        # Prefer loaded has_legal on next_work when missing.
+                        nw = ctx.get("next_work")
+                        lnw = loaded.get("next_work")
+                        if (
+                            isinstance(nw, dict)
+                            and "has_legal_choice_card" not in nw
+                            and isinstance(lnw, dict)
+                            and "has_legal_choice_card" in lnw
+                        ):
+                            nw = dict(nw)
+                            nw["has_legal_choice_card"] = lnw.get("has_legal_choice_card")
+                            ctx["next_work"] = nw
+            else:
+                ctx = await load_case_context_for_conversation(
+                    db,
+                    c.id,
+                    user_id=user_id,
+                )
+            # Soft gate always (pre-attached or loaded).
+            try:
+                conv_ctx = c.context if isinstance(c.context, dict) else {}
+                already = bool(conv_ctx.get(SOFT_GATE_CONTEXT_KEY))
+                next_work = ctx.get("next_work") if isinstance(ctx, dict) else None
+                has_legal = bool(
+                    (isinstance(next_work, dict) and next_work.get("has_legal_choice_card"))
+                    or (isinstance(ctx, dict) and ctx.get("_has_legal_next_steps_choice"))
+                )
+                open_priors = False
+                for f in (ctx.get("findings_summary") or []) if isinstance(ctx, dict) else []:
+                    if not isinstance(f, dict):
+                        continue
+                    st = str(f.get("status") or "").lower()
+                    if st in {"open", "unverified", "retest", "needs_reverify"}:
+                        open_priors = True
+                        break
+                ctx, injected = apply_soft_gate_note(
+                    ctx if isinstance(ctx, dict) else {},
+                    boundary="case_assign",
+                    already_injected=already,
+                    open_priors=open_priors,
+                    has_legal_choice_card=has_legal,
+                    turn_had_tools=False,
+                )
+                if isinstance(ctx, dict):
+                    ctx.pop("_has_legal_next_steps_choice", None)
+                if injected:
+                    new_ctx = dict(conv_ctx)
+                    new_ctx[SOFT_GATE_CONTEXT_KEY] = True
+                    c.context = new_ctx
+                    await db.commit()
+            except Exception as soft_exc:
+                print(f"[WS] soft_gate_next_steps: {soft_exc}")
             out["case_context"] = ctx
     except Exception as e:
         print(f"[WS] attach case_context error: {e}")
@@ -5375,9 +5595,29 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                 elif msg.get("type") == "user_decision" and conv_id:
                     # Button path: forward feedback only. Session tool normalizes and,
                     # on handoff authorize, emits handoff_apply (platform does not NLP).
+                    # Spec #312: confirm_options carries selected_option_ids (+ expanded workset ids).
                     request_id = msg.get("request_id")
                     decision = msg.get("decision", "cancel")
                     approval = pending_approvals.pop(str(request_id), {}) if request_id else {}
+                    selected_option_ids = msg.get("selected_option_ids")
+                    # Spec #312 S2: always expand from pending card snapshot (ignore client binds).
+                    workset_item_ids: list[str] = []
+                    if (
+                        decision == "confirm_options"
+                        and isinstance(approval, dict)
+                        and isinstance(selected_option_ids, list)
+                    ):
+                        try:
+                            from app.services.choice_card import expand_selected_options
+
+                            card_snap = {
+                                "kind": approval.get("kind"),
+                                "options": approval.get("options"),
+                            }
+                            expanded = expand_selected_options(card_snap, selected_option_ids)
+                            workset_item_ids = list(expanded.get("workset_item_ids") or [])
+                        except Exception:
+                            workset_item_ids = []
                     node_msg = {
                         "type": "user_input",
                         "conversation_id": conv_id,
@@ -5385,6 +5625,14 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         "response": decision,
                         "decision": decision,
                     }
+                    if isinstance(selected_option_ids, list):
+                        node_msg["selected_option_ids"] = [
+                            str(x).strip() for x in selected_option_ids if str(x or "").strip()
+                        ]
+                    if workset_item_ids:
+                        node_msg["workset_item_ids"] = workset_item_ids
+                    if msg.get("text"):
+                        node_msg["text"] = str(msg.get("text"))
                     # Prefer the node that issued the approval (may differ from sticky bind).
                     sent = False
                     approval_node = str(approval.get("node_id") or "").strip() if isinstance(approval, dict) else ""
