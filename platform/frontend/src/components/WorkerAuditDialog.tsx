@@ -1,10 +1,14 @@
 /**
  * Spec #308 — Worker process audit modal (master–detail C).
  * V1: read-only process audit + Case display_name rename.
+ *
+ * Process stream reuses main-chat MessageRenderer (thinking / tool / text) —
+ * do not fork a second card chrome for Worker audit.
  */
 import { useEffect, useMemo, useState } from "react";
 import { X } from "lucide-react";
 import type { Message } from "../lib/types";
+import type { MessageLike } from "../lib/workerAuditChannel";
 import {
   buildPackageTurns,
   selectDefaultTurnId,
@@ -12,7 +16,7 @@ import {
   type PackageTurnStatus,
 } from "../lib/workerAuditTurns";
 import { resolveWorkerDisplayName, normalizeDisplayNameWrite } from "../lib/workerDisplayName";
-import ThinkingCard from "./cards/ThinkingCard";
+import MessageRenderer from "./MessageRenderer";
 
 type Props = {
   open: boolean;
@@ -202,7 +206,7 @@ export default function WorkerAuditDialog({
             <div className="px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-ink-muted">
               Packages
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+            <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-2 pt-0.5">
               {turns.length === 0 ? (
                 <p className="px-2 py-4 text-xs text-ink-muted" data-testid="worker-audit-empty-turns">
                   尚无派工记录
@@ -215,10 +219,8 @@ export default function WorkerAuditDialog({
                       key={turn.packageTurnId}
                       type="button"
                       onClick={() => setSelectedTurnId(turn.packageTurnId)}
-                      className={`mb-1 w-full rounded-lg px-2.5 py-2 text-left transition-colors ${
-                        active
-                          ? "bg-status-running/10 ring-1 ring-status-running/30"
-                          : "hover:bg-canvas"
+                      className={`mb-0.5 w-full rounded-md px-2.5 py-2 text-left transition-colors ${
+                        active ? "bg-status-running/10" : "hover:bg-canvas"
                       }`}
                       data-testid={`worker-package-row-${turn.ordinal}`}
                     >
@@ -309,7 +311,7 @@ function TurnDetail({
         )}
       </section>
 
-      {/* Process stream */}
+      {/* Process stream — same cards as main Conversation chat */}
       <section>
         <h4 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-ink-muted">Process</h4>
         {turn.process.length === 0 ? (
@@ -317,10 +319,23 @@ function TurnDetail({
             过程未记录（历史 Case 或尚未产生 thinking/tool）
           </p>
         ) : (
-          <div className="space-y-1">
-            {turn.process.map((m, idx) => (
-              <ProcessFrame key={m.id || `${turn.packageTurnId}-${idx}`} message={m} />
-            ))}
+          <div className="space-y-0" data-testid="worker-process-stream">
+            {turn.process.map((m, idx) => {
+              const message = toAuditMessage(m, turn.packageTurnId, idx);
+              if (!message) return null;
+              const prevRaw = idx > 0 ? turn.process[idx - 1] : null;
+              const previousMessage = prevRaw
+                ? toAuditMessage(prevRaw, turn.packageTurnId, idx - 1) || undefined
+                : undefined;
+              return (
+                <MessageRenderer
+                  key={message.id}
+                  message={message}
+                  previousMessage={previousMessage}
+                  sessionActive={turn.status === "running"}
+                />
+              );
+            })}
           </div>
         )}
       </section>
@@ -352,44 +367,37 @@ function TurnDetail({
   );
 }
 
-function ProcessFrame({ message }: { message: { msg_type?: string; content?: Record<string, unknown> | null } }) {
-  const t = String(message.msg_type || "");
-  const content = message.content && typeof message.content === "object" ? message.content : {};
-
-  if (t === "thinking" || t === "reasoning" || t === "agent_thinking") {
-    return <ThinkingCard content={content} />;
+/** Map audit process frames onto main-chat Message shape for MessageRenderer. */
+function toAuditMessage(
+  raw: MessageLike,
+  packageTurnId: string,
+  index: number,
+): Message | null {
+  let msgType = String(raw.msg_type || "").trim();
+  if (!msgType) return null;
+  // Progressive alias → tool_call so ToolCallCard matches Main chat.
+  if (msgType === "tool_output") msgType = "tool_call";
+  if (
+    msgType !== "thinking" &&
+    msgType !== "reasoning" &&
+    msgType !== "agent_thinking" &&
+    msgType !== "tool_call" &&
+    msgType !== "text"
+  ) {
+    return null;
   }
-
-  if (t === "tool_call" || t === "tool_output") {
-    const name = String(content.tool_name || "tool");
-    const status = String(content.status || "");
-    const summary = String(content.summary || content.result_text || content.stdout || "").trim();
-    return (
-      <div className="my-1 rounded-md border border-hairline bg-surface-default/70 px-2.5 py-1.5" data-testid="worker-tool-card">
-        <div className="flex items-center gap-2">
-          <span className="font-mono text-xs font-semibold">{name}</span>
-          {status && (
-            <span className="text-[10px] uppercase text-ink-muted">{status}</span>
-          )}
-        </div>
-        {summary && (
-          <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words rounded bg-ink/90 p-2 font-mono text-[10px] text-white/90">
-            {summary.slice(0, 2000)}
-          </pre>
-        )}
-      </div>
-    );
-  }
-
-  if (t === "text") {
-    const text = String(content.text || "").trim();
-    if (!text) return null;
-    return (
-      <div className="my-1 rounded-md border border-hairline bg-canvas px-2.5 py-1.5 text-xs leading-relaxed whitespace-pre-wrap">
-        {text}
-      </div>
-    );
-  }
-
-  return null;
+  const content =
+    raw.content && typeof raw.content === "object" && !Array.isArray(raw.content)
+      ? { ...raw.content }
+      : {};
+  const role = (raw.role === "user" || raw.role === "system" ? raw.role : "agent") as Message["role"];
+  return {
+    id: String(raw.id || `${packageTurnId}-p-${index}`),
+    conversation_id: "",
+    role,
+    msg_type: msgType,
+    content,
+    parent_msg_id: null,
+    created_at: String(raw.created_at || ""),
+  };
 }
