@@ -85,6 +85,27 @@ export function worksetInProgressLabel(item: WorksetItem): string {
   return expert;
 }
 
+export function worksetFamilyLabel(family: string): string {
+  if (family === "t_host") return "主机";
+  if (family === "t_surface") return "面";
+  return family || "项";
+}
+
+export function worksetStatusLabel(status: string): string {
+  switch (status) {
+    case "proposed":
+      return "待确认";
+    case "adopted":
+      return "已采纳";
+    case "done":
+      return "完成";
+    case "rejected":
+      return "已拒绝";
+    default:
+      return status || "";
+  }
+}
+
 export function parseWorksetProjection(raw: unknown): WorksetProjection {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return { items: [], open_count: 0 };

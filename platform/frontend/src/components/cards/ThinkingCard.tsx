@@ -7,9 +7,16 @@ import { thinkingCardProjection } from "../../lib/status";
  * Spec #305: lifecycle title (思考中… / 思考完成), default expanded, no header truncation,
  * empty body allowed while running (no fake placeholder copy).
  */
-export default function ThinkingCard({ content }: { content: Record<string, unknown> }) {
-  const projection = thinkingCardProjection(content);
-  const [expanded, setExpanded] = useState(projection.defaultExpanded);
+export default function ThinkingCard({
+  content,
+  sessionActive,
+}: {
+  content: Record<string, unknown>;
+  /** When false, orphan status=running projects as 思考完成 (idle/incomplete Case). */
+  sessionActive?: boolean;
+}) {
+  const projection = thinkingCardProjection(content, { sessionActive });
+  const [expanded, setExpanded] = useState<boolean>(projection.defaultExpanded);
 
   return (
     <div data-testid="thinking-card" className="my-2 min-w-0 max-w-full rounded-md bg-surface-default/70">
