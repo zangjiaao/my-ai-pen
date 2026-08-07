@@ -104,6 +104,11 @@ class ProgressiveContentStream {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private sending: Promise<void> = Promise.resolve();
   private firstFlushPending = false;
+  /**
+   * Thinking only: after finalFlush stamps done, message_end must not re-open a
+   * second stream_id from the same assistant snapshot (early done on text_ or toolcall_).
+   */
+  private channelClosed = false;
 
   constructor(
     private readonly platform: PlatformSink,
@@ -117,6 +122,8 @@ class ProgressiveContentStream {
    * Never concatenate deltas — that produced doubled prefixes ("好的好的").
    */
   applySnapshot(message: unknown, ame?: { type?: string; delta?: string; partial?: unknown }): void {
+    // Ignore body after thinking channel already stamped done (message_end / late thinking_end).
+    if (this.channel === "thinking" && this.channelClosed) return;
     const fromMessage = this.extract(message);
     const fromPartial = ame?.partial !== undefined ? this.extract(ame.partial) : "";
     // Prefer the longer non-empty snapshot; both should already be cumulative full text.
@@ -158,16 +165,22 @@ class ProgressiveContentStream {
   }
 
   async finalFlush(message?: unknown): Promise<void> {
+    if (this.channel === "thinking" && this.channelClosed) {
+      // Already stamped done for this thinking open (e.g. on text_*); ignore message_end.
+      return;
+    }
     if (message !== undefined) this.applySnapshot(message);
     if (this.channel === "thinking") {
       // Only stamp done if this channel was opened / had progressive activity.
       if (!this.streamId && !this.text) {
         this.reset();
+        this.channelClosed = true;
         return;
       }
       this.ensureStream();
       await this.flush({ status: "done", force: true, allowEmpty: true });
       this.reset();
+      this.channelClosed = true;
       return;
     }
     this.ensureStream();
@@ -176,8 +189,11 @@ class ProgressiveContentStream {
   }
 
   async dispose(): Promise<void> {
+    if (this.channel === "thinking" && this.channelClosed) return;
     if (this.channel === "thinking" && this.streamId && this.lastSentStatus === "running") {
       await this.flush({ status: "done", force: true, allowEmpty: true });
+      this.reset();
+      this.channelClosed = true;
       return;
     }
     await this.flush();
@@ -267,6 +283,7 @@ class ProgressiveContentStream {
     this.lastSentText = "";
     this.lastSentStatus = "";
     this.firstFlushPending = true;
+    this.channelClosed = false;
   }
 
   private async scheduleFlush(): Promise<void> {
@@ -338,7 +355,20 @@ export class PlatformTextStream {
     if (event.type === "message_update" && msg?.role === "assistant") {
       const ame = event.assistantMessageEvent;
       const kind = String(ame?.type || "");
-      if (kind.startsWith("toolcall_")) return;
+      // Leaving thinking for tool calls — stamp done so title is not stuck on 思考中…
+      // until the full assistant message_end (which is after text + toolcall blocks).
+      if (kind.startsWith("toolcall_")) {
+        await this.thinking.finalFlush(event.message);
+        return;
+      }
+
+      if (kind === "thinking_end" || kind === "thinking_done") {
+        // Thinking block closed before text/tools — stamp done with final body.
+        // Do not ensureStream first: after early close (text_*), that would open a 2nd stream.
+        this.thinking.applySnapshot(event.message, ame);
+        await this.thinking.finalFlush(event.message);
+        return;
+      }
 
       if (kind.startsWith("thinking_")) {
         // Spec #305 T1: first thinking_* opens channel + empty running frame.
@@ -349,7 +379,16 @@ export class PlatformTextStream {
         return;
       }
 
-      if (kind.startsWith("text_") || !kind) {
+      if (kind.startsWith("text_")) {
+        // Text started: thinking is complete for this turn — do not wait for message_end.
+        await this.thinking.finalFlush(event.message);
+        this.text.ensureStream();
+        this.text.applySnapshot(event.message, ame);
+        await this.text.maybeFlush();
+        return;
+      }
+
+      if (!kind) {
         this.text.ensureStream();
         this.text.applySnapshot(event.message, ame);
         await this.text.maybeFlush();
@@ -614,7 +653,8 @@ export async function handleNode4SessionEvent(
       type: "status_update",
       conversation_id: ctx.task.conversationId,
       task_id: ctx.task.taskId,
-      message: "llm_waiting",
+      // User-visible (not opaque llm_waiting token) so re-wait / reattempt is scannable.
+      message: "正在请求模型…",
       active_tool: "",
       agent_phase: "llm_waiting",
       current_detail: ctx.panel.list()[0]?.current_detail,
@@ -630,12 +670,11 @@ export async function handleNode4SessionEvent(
     ctx.counters.phase = "llm_waiting";
     ctx.panel.setMainActivity({ phase: "llm_waiting", tool: "" });
     panelChanged = true;
-    // No chatty status_update body — panel via checkpoint / status_update below.
     await ctx.platform.send({
       type: "status_update",
       conversation_id: ctx.task.conversationId,
       task_id: ctx.task.taskId,
-      message: "llm_waiting",
+      message: "正在请求模型…",
       active_tool: "",
       agent_phase: "llm_waiting",
       current_detail: ctx.panel.list()[0]?.current_detail,

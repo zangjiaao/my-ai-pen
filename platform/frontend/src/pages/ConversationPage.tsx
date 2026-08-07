@@ -259,13 +259,6 @@ export default function ConversationPage() {
   const [goalModeEnabled, setGoalModeEnabled] = useState(false);
   /** Expert Graph template only (S2/U1 #78) — null off-pentest; free is Default seat. */
   const [engagementTemplate, setEngagementTemplate] = useState<EngagementTemplateId | null>(null);
-  const [caseHandoff, setCaseHandoff] = useState<{
-    suggest_pack_id?: string;
-    reason?: string;
-    expert_id?: string;
-    expert_name?: string;
-    status?: string;
-  } | null>(null);
   /** Post-task out-of-scope hosts → user picks next Scope (new task). */
   const [importingReport, setImportingReport] = useState(false);
   const [importStatus, setImportStatus] = useState<ImportStatus>(null);
@@ -309,7 +302,6 @@ export default function ConversationPage() {
   const [trafficExchanges, setTrafficExchanges] = useState<TrafficExchange[]>([]);
   /** Spec #311 Case Workset (Next) — display-only panel projection; separate from Tasks */
   const [workset, setWorkset] = useState<Record<string, unknown> | undefined>();
-  const [worksetBusyId, setWorksetBusyId] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   /** True while interrupt was sent and nodes have not yet reported idle. */
   const [interrupting, setInterrupting] = useState(false);
@@ -718,30 +710,9 @@ export default function ConversationPage() {
       if (requestSeq !== stateRefreshSeqRef.current) return;
       applyConversationState(state);
       setStateSnapshotLoaded(true);
-      // Case fields (1 session = 1 case): handoff banner only.
       // Spec #278 D3: do NOT overwrite composer engagementTemplate from Case sticky /
       // heartbeat refresh — only work_mode_settled / user menu edits change it.
-      try {
-        const caseData = await authFetch<{
-          engagement_template?: string;
-          allow_postex?: boolean;
-          handoff?: {
-            suggest_pack_id?: string;
-            reason?: string;
-            expert_id?: string;
-            expert_name?: string;
-            status?: string;
-          } | null;
-        }>(`/api/conversations/${id}/case`);
-        if (requestSeq !== stateRefreshSeqRef.current) return;
-        if (caseData.handoff && caseData.handoff.status === "suggested") {
-          setCaseHandoff(caseData.handoff);
-        } else {
-          setCaseHandoff(null);
-        }
-      } catch {
-        /* case endpoint optional if older backend */
-      }
+      // Spec #312: pack handoff / authorize is ChoiceCard in stream (no composer case banner).
     } catch {
       if (requestSeq !== stateRefreshSeqRef.current) return;
       // The live stream remains usable even if a snapshot refresh races startup.
@@ -2801,35 +2772,6 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                     className="relative z-10 min-h-[4.75rem] w-full resize-none bg-transparent px-4 py-3.5 text-sm leading-5 text-transparent caret-ink placeholder:text-ink-muted focus:outline-none"
                   />
                 </div>
-                {caseHandoff?.suggest_pack_id && caseHandoff.status === "suggested" && (
-                  <div className="mx-3 mb-2 flex flex-wrap items-center gap-2 rounded-xl border border-status-running/30 bg-status-running/10 px-3 py-2 text-xs text-ink">
-                    <span className="min-w-0 flex-1">
-                      建议切换专家包 <strong>{caseHandoff.suggest_pack_id}</strong>
-                      {caseHandoff.reason ? ` — ${caseHandoff.reason}` : ""}
-                    </span>
-                    <button
-                      type="button"
-                      className="rounded-pill bg-ink px-2.5 py-1 text-[11px] font-medium text-on-ink"
-                      onClick={() => {
-                        const pack = caseHandoff.suggest_pack_id;
-                        const match = mentionTargets.find(
-                          (t) => t.kind === "expert" && (t.packId === pack || t.expertId === caseHandoff.expert_id),
-                        );
-                        if (match) selectExpertFromToolbar(match.key);
-                        setCaseHandoff((h) => (h ? { ...h, status: "accepted" } : null));
-                      }}
-                    >
-                      一键选用
-                    </button>
-                    <button
-                      type="button"
-                      className="rounded-pill border border-hairline px-2 py-1 text-[11px] text-ink-secondary"
-                      onClick={() => setCaseHandoff(null)}
-                    >
-                      忽略
-                    </button>
-                  </div>
-                )}
                 <div className="flex min-w-0 items-center justify-between gap-2 px-2.5 py-2">
                   {/* Shared chip height: h-8 (32px) for partner / mode / Goal / send */}
                   <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
@@ -3102,50 +3044,6 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               assets={assets}
               taskContext={taskContext}
               engagementCloseout={engagementCloseout}
-              workset={workset}
-              worksetBusyId={worksetBusyId}
-              onWorksetAdopt={(id) => {
-                if (!activeId) return;
-                setWorksetBusyId(id);
-                void authFetch(`/api/conversations/${activeId}/workset/${id}`, {
-                  method: "PATCH",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ status: "adopted" }),
-                })
-                  .then((res: { workset?: Record<string, unknown> }) => {
-                    if (res?.workset) setWorkset(res.workset);
-                  })
-                  .catch(() => {})
-                  .finally(() => setWorksetBusyId(null));
-              }}
-              onWorksetReject={(id) => {
-                if (!activeId) return;
-                setWorksetBusyId(id);
-                void authFetch(`/api/conversations/${activeId}/workset/${id}`, {
-                  method: "PATCH",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ status: "rejected" }),
-                })
-                  .then((res: { workset?: Record<string, unknown> }) => {
-                    if (res?.workset) setWorkset(res.workset);
-                  })
-                  .catch(() => {})
-                  .finally(() => setWorksetBusyId(null));
-              }}
-              onWorksetDone={(id) => {
-                if (!activeId) return;
-                setWorksetBusyId(id);
-                void authFetch(`/api/conversations/${activeId}/workset/${id}`, {
-                  method: "PATCH",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ status: "done" }),
-                })
-                  .then((res: { workset?: Record<string, unknown> }) => {
-                    if (res?.workset) setWorkset(res.workset);
-                  })
-                  .catch(() => {})
-                  .finally(() => setWorksetBusyId(null));
-              }}
               onOpenVulnerability={setSelectedVulnerability}
               onOpenAsset={setSelectedAsset}
               onWorkerClick={(agent, workerOrdinal) => {

@@ -17,6 +17,11 @@ import {
   newExchangeId,
   parseBrowserNetworkList,
   shouldEmitBrowserRow,
+  buildShellHttpExchanges,
+  looksLikeHttpShellCommand,
+  extractUrlsFromShellCommand,
+  inferShellHttpMethod,
+  parseShellHttpStdout,
   type BrowserSeenMap,
   type TrafficExchange,
 } from "./traffic-collect.js";
@@ -361,14 +366,67 @@ function testBrowserPendingPhaseFromInflightRow() {
   assert.equal(ex!.source, "browser");
 }
 
-function testNoShellSource() {
+function testHttpPendingStillHttpSource() {
   const pending = buildPendingHttpExchange({
     conversationId: "c",
     method: "GET",
     url: "https://x/",
   });
-  assert.notEqual(pending.source, "shell" as any);
-  assert.ok(pending.source === "http" || pending.source === "browser");
+  assert.equal(pending.source, "http");
+}
+
+function testShellHttpBestEffort() {
+  assert.equal(looksLikeHttpShellCommand("ls -la"), false);
+  assert.equal(
+    looksLikeHttpShellCommand("curl -sI 'http://host.docker.internal:3000/'"),
+    true,
+  );
+  assert.deepEqual(
+    extractUrlsFromShellCommand("curl -s 'http://h:3000/api' && curl 'https://h/x'"),
+    ["http://h:3000/api", "https://h/x"],
+  );
+  assert.equal(inferShellHttpMethod("curl -X POST -d '{}' http://h/a"), "POST");
+  assert.equal(inferShellHttpMethod("curl -sI http://h/"), "HEAD");
+
+  const parsed = parseShellHttpStdout(
+    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"ok\":true}",
+  );
+  assert.equal(parsed.statusCode, 200);
+  assert.equal(parsed.contentType, "application/json");
+  assert.ok(String(parsed.responseBody || "").includes("ok"));
+
+  const rows = buildShellHttpExchanges({
+    conversationId: "conv-1",
+    taskId: "t1",
+    command: "curl -sI 'http://host.docker.internal:3000/'",
+    stdout: "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\n\r\n",
+    exitCode: 0,
+  });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.source, "shell");
+  assert.equal(rows[0]!.method, "HEAD");
+  assert.equal(rows[0]!.status_code, 200);
+  assert.equal(rows[0]!.url, "http://host.docker.internal:3000/");
+  assert.equal(rows[0]!.phase, "completed");
+
+  const multi = buildShellHttpExchanges({
+    conversationId: "c",
+    command: "curl -s http://target.local:3000/probe",
+    stdout: "500 /api\n401 /api/Users\n200 /api/Products\n",
+    exitCode: 0,
+  });
+  assert.ok(multi.length >= 3, `expected multi path rows got ${multi.length}`);
+  assert.ok(multi.every((r) => r.source === "shell"));
+  assert.ok(multi.some((r) => r.status_code === 200 && r.url.includes("/api/Products")));
+
+  assert.equal(
+    buildShellHttpExchanges({
+      conversationId: "c",
+      command: "echo hi",
+      stdout: "hi",
+    }).length,
+    0,
+  );
 }
 
 testNewExchangeId();
@@ -385,5 +443,6 @@ await testDrainRicherFieldsUpgrade();
 testShouldEmitBrowserRowHelpers();
 await testHttpCompleteWhenPendingEmitFails();
 testBrowserPendingPhaseFromInflightRow();
-testNoShellSource();
+testHttpPendingStillHttpSource();
+testShellHttpBestEffort();
 console.log("traffic-collect.test.ts: ok");

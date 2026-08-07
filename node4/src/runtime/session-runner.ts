@@ -62,12 +62,10 @@ import {
   recordToolingHealthAtTaskStart,
   shouldEmitToolingHealth,
 } from "./tooling-health.js";
-import { buildAttackSurfaceCandidates } from "./attack-surface.js";
 import {
-  filterEmitableWorksetCandidates,
-  worksetCandidatesFromAttackSurface,
-} from "./workset-emit.js";
-import { loadFindings } from "../tools/finding.js";
+  buildWorksetSettleEmitPackage,
+  writeAttackSurfaceCandidatesArtifact,
+} from "./workset-settle-emit.js";
 import {
   extractLlmTurnError,
   LlmTurnError,
@@ -787,33 +785,17 @@ export async function runNode4Task(
         ? `Harness settled ${emitStatus} with ${booked.count} booked finding(s). stop=${stopReason} role=${pack.id}`
         : `Harness settled ${emitStatus}. stop=${stopReason} role=${pack.id}`;
 
-    // Out-of-scope hosts seen this burst → next-Scope candidates (not formal assets).
-    let attackSurfaceCandidates: ReturnType<typeof buildAttackSurfaceCandidates> = [];
-    if (!chatOnly && !ledgerAssistSeat) {
-      try {
-        const localFindings = await loadFindings(runtime.findingsDir);
-        const locs = localFindings
-          .flatMap((f) => [
-            String((f as any).location || ""),
-            String((f as any).url || ""),
-            String((f as any).poc || ""),
-          ])
-          .filter(Boolean);
-        attackSurfaceCandidates = buildAttackSurfaceCandidates({ task, locationStrings: locs });
-        await writeFile(
-          join(taskDir, "attack_surface_candidates.json"),
-          JSON.stringify(attackSurfaceCandidates, null, 2),
-          "utf8",
-        );
-      } catch {
-        attackSurfaceCandidates = [];
-      }
-    }
-    const sideCandidates = attackSurfaceCandidates.filter((c) => !c.in_scope);
-    // Spec #311: Free settle → Workset proposed (t_host OOS + in-scope t_surface deepen).
-    const worksetCandidates = filterEmitableWorksetCandidates(
-      worksetCandidatesFromAttackSurface(attackSurfaceCandidates, { source: "free_settle" }),
-    );
+    // Spec #311: Free settle → Workset proposed (shared helper with parked continue).
+    const settlePkg = await buildWorksetSettleEmitPackage({
+      task,
+      findingsDir: runtime.findingsDir,
+      source: "free_settle",
+      scanFindings: !chatOnly && !ledgerAssistSeat,
+    });
+    const attackSurfaceCandidates = settlePkg.attackSurfaceCandidates;
+    const sideCandidates = settlePkg.nextScopeCandidates;
+    const worksetCandidates = settlePkg.worksetCandidates;
+    await writeAttackSurfaceCandidatesArtifact(taskDir, attackSurfaceCandidates);
 
     // Hook: work-burst end → panel timer closes (checkpoint.end_time then task_complete).
     await emitCheckpointUpdate(obsCtx, {
@@ -840,7 +822,7 @@ export async function runNode4Task(
       attack_surface_candidates: attackSurfaceCandidates,
       next_scope_candidates: sideCandidates,
       workset_candidates: worksetCandidates,
-      workset_source: "free_settle",
+      workset_source: settlePkg.worksetSource,
       goal_mode: goals.isActive() || Boolean(task.goalObjective),
       goal_objective: task.goalObjective || undefined,
     });

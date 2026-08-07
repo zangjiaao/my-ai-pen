@@ -530,6 +530,7 @@ assert.equal(
 {
   clearWorkingSessionParksForTests();
   const { runParkedWorkingContinue } = await import("./run-parked-working-continue.js");
+  const { PanelAgentTracker } = await import("./panel-agents.js");
   const todo = new TodoStore();
   todo.apply({
     op: "init",
@@ -540,6 +541,10 @@ assert.equal(
     { role: "assistant", content: "prior reply" },
   ]);
   let disposed = 0;
+  // Simulate prior interrupt: panel left in stopped/aborted before park attach.
+  const priorPanel = new PanelAgentTracker("prior aborted task", "渗透大师");
+  priorPanel.setMainTerminal("aborted");
+  assert.equal(priorPanel.list()[0]?.status, "stopped");
   const parked = makeParked({
     conversationId: "conv-run",
     expertId: "pentest",
@@ -550,6 +555,10 @@ assert.equal(
     dispose: () => {
       disposed += 1;
     },
+    runtime: {
+      lifecycle: { panelAgents: priorPanel },
+      findingsDir: "/tmp/node4-park-test/findings-missing",
+    } as any,
   });
   const sent: unknown[] = [];
   const platform = {
@@ -589,6 +598,22 @@ assert.equal(
   assert.ok(
     sent.some((m: any) => m?.type === "task_start" && m?.parked_continue === true),
     "task_start marks parked_continue",
+  );
+  const startPanel = (sent.find((m: any) => m?.type === "task_start") as any)?.panel_agents?.[0];
+  assert.equal(
+    startPanel?.status,
+    "running",
+    "park attach must not leave AgentRow status stopped",
+  );
+  const complete1 = sent.find((m: any) => m?.type === "task_complete") as any;
+  assert.ok(complete1, "task_complete emitted");
+  assert.ok(
+    Array.isArray(complete1.workset_candidates),
+    "Spec #311: parked continue emits workset_candidates (even if empty)",
+  );
+  assert.ok(
+    Array.isArray(complete1.attack_surface_candidates),
+    "parked continue emits attack_surface_candidates for Goal settle seam",
   );
   assert.ok(
     sent.some((m: any) => m?.type === "todo_updated" && m?.parked_continue === true),

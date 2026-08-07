@@ -719,8 +719,24 @@ def detect_goal_mode_on(
     return False
 
 
+def detect_goal_mode_explicit_off(msg: dict | None = None) -> bool:
+    """True when the wire explicitly sets goal_mode=false (not merely missing).
+
+    Used to stop Case Goal outer when the user turns Goal off in the UI and
+    the next user_message/task_complete carries goal_mode: false.
+    """
+    if not isinstance(msg, dict):
+        return False
+    return msg.get("goal_mode") in (False, "false", "0", 0, "no")
+
+
 def detect_user_stopped_settle(msg: dict | None) -> bool:
-    """True only for real abort/cancel/interrupt — not harness status=incomplete."""
+    """True only when the user stops **Goal itself** — not turn cancel.
+
+    Grok-aligned: Esc / abort cancels the in-flight turn only; long Goal stays open
+    unless the user explicitly stops Goal (`user_stopped` or goal-clear tokens).
+    Harness `status=incomplete` is never user-stop.
+    """
     if not isinstance(msg, dict):
         return False
     if msg.get("user_stopped") in (True, "true", "1", 1, "yes"):
@@ -728,8 +744,33 @@ def detect_user_stopped_settle(msg: dict | None) -> bool:
     stop_reason = str(msg.get("stop_reason") or msg.get("stopReason") or "").lower()
     if not stop_reason:
         return False
-    # Explicit abort / interrupt / cancel tokens only.
-    tokens = ("abort", "interrupt", "cancel", "user_stop", "user_stopped")
+    # Explicit Goal-off tokens only — not abort / interrupt / cancel (those are turn cancel).
+    goal_stop_tokens = (
+        "user_stop",
+        "user_stopped",
+        "goal_stop",
+        "goal_stopped",
+        "goal_clear",
+        "stop_goal",
+        "clear_goal",
+    )
+    return any(t in stop_reason for t in goal_stop_tokens)
+
+
+def detect_turn_cancelled_settle(msg: dict | None) -> bool:
+    """True when this settle ends because the in-flight turn was cancelled.
+
+    Grok: Esc / send-now / abort cancel the turn; Goal outer must stay running
+    (not goal_stopped, not premature goal_complete on empty workset).
+    """
+    if not isinstance(msg, dict):
+        return False
+    if detect_user_stopped_settle(msg):
+        return False
+    stop_reason = str(msg.get("stop_reason") or msg.get("stopReason") or "").lower()
+    if not stop_reason:
+        return False
+    tokens = ("abort", "interrupt", "cancel", "cancelled", "canceled")
     return any(t in stop_reason for t in tokens)
 
 
@@ -840,12 +881,19 @@ def evaluate_goal_terminal(
     *,
     goal_on: bool,
     user_stopped: bool = False,
+    turn_cancelled: bool = False,
     blocked: bool = False,
     blocked_reason: str | None = None,
 ) -> dict[str, Any]:
     """Compute Goal outer terminal after settle / Free return.
 
-    Priority: user stop > blocked > outer budget exhausted > complete/continue.
+    Priority (Grok-aligned):
+    - explicit Goal stop → goal_stopped
+    - turn cancel (Esc/abort) → keep running (not stopped, not complete)
+    - blocked → goal_blocked
+    - outer budget exhausted → goal_budget_exhausted
+    - else complete / continue from workset items
+
     goal_complete may carry residual awaiting_scope_confirm for pending t_host.
     Control always returns Free (caller responsibility — no Graph chain).
     """
@@ -898,6 +946,9 @@ def evaluate_goal_terminal(
 
     if user_stopped:
         terminal = "goal_stopped"
+    elif turn_cancelled:
+        # Turn cancel only (Grok Esc): leave Case Goal outer open for continue.
+        terminal = None
     elif blocked:
         terminal = "goal_blocked"
     else:
@@ -1029,6 +1080,8 @@ def apply_settle_to_context(
     goal_on: bool = False,
     goal_objective: str | None = None,
     user_stopped: bool = False,
+    turn_cancelled: bool = False,
+    goal_explicit_off: bool = False,
     blocked: bool = False,
     blocked_reason: str | None = None,
     bump_outer_round: bool = False,
@@ -1036,6 +1089,11 @@ def apply_settle_to_context(
     """Primary platform seam: merge settle candidates into Case Workset + Goal valve.
 
     Returns updated context dict.
+
+    Goal outer (Grok-aligned):
+    - goal_on + not user_stopped → keep/reopen running; turn_cancelled skips complete
+    - user_stopped or goal_explicit_off → goal_stopped
+    - bump_outer_round skipped on turn_cancelled
     """
     ctx = dict(context or {}) if isinstance(context, dict) else {}
     task = ctx.get("task") if isinstance(ctx.get("task"), dict) else {}
@@ -1054,16 +1112,25 @@ def apply_settle_to_context(
     # Settle always clears in-progress baton annotation (baton ends with this burst).
     ws = clear_in_progress(ws)
 
+    stop_goal = bool(user_stopped or goal_explicit_off)
+
     # Goal state init / keep
-    if goal_on:
+    if goal_on and not stop_goal:
         if not isinstance(ws.get("goal"), dict):
             ws["goal"] = init_goal_state(objective=goal_objective or task.get("goal_objective"))
         elif goal_objective and not ws["goal"].get("objective"):
             ws["goal"] = dict(ws["goal"])
             ws["goal"]["objective"] = _clip(goal_objective, 500)
-        if bump_outer_round:
+        # Grok: Goal still on → clear sticky goal_stopped so continue keeps outer running.
+        if isinstance(ws.get("goal"), dict):
+            g = dict(ws["goal"])
+            if str(g.get("status") or "") == "goal_stopped" or str(g.get("terminal") or "") == "goal_stopped":
+                g["status"] = "running"
+                g["terminal"] = None
+                ws["goal"] = g
+        # Do not burn outer budget on turn-cancel settle (Esc / abort).
+        if bump_outer_round and not turn_cancelled:
             ws = bump_goal_outer_round(ws)
-        # Recompute auto_eligible flags after merge
         for item in ws["items"]:
             if str(item.get("status") or "") == "proposed":
                 item["auto_eligible"] = auto_check_safe(item, scope_hosts)
@@ -1071,7 +1138,29 @@ def apply_settle_to_context(
         terminal_eval = evaluate_goal_terminal(
             ws,
             goal_on=True,
-            user_stopped=user_stopped,
+            user_stopped=False,
+            turn_cancelled=turn_cancelled,
+            blocked=blocked,
+            blocked_reason=blocked_reason,
+        )
+        if terminal_eval.get("goal"):
+            ws["goal"] = terminal_eval["goal"]
+        ctx["goal_outer"] = {
+            "terminal": terminal_eval.get("terminal"),
+            "return_to": "free",
+            "residual": terminal_eval.get("residual"),
+            "full_coverage": terminal_eval.get("full_coverage"),
+        }
+    elif stop_goal and isinstance(ws.get("goal"), dict):
+        # Explicit Goal-off (user_stopped flag, goal_clear token, or goal_mode: false).
+        for item in ws["items"]:
+            if str(item.get("status") or "") == "proposed":
+                item["auto_eligible"] = auto_check_safe(item, scope_hosts)
+        terminal_eval = evaluate_goal_terminal(
+            ws,
+            goal_on=True,
+            user_stopped=True,
+            turn_cancelled=False,
             blocked=blocked,
             blocked_reason=blocked_reason,
         )
@@ -1084,7 +1173,7 @@ def apply_settle_to_context(
             "full_coverage": terminal_eval.get("full_coverage"),
         }
     else:
-        # Goal off: never auto-adopt; still refresh auto_eligible for UI ordering
+        # Goal off / no Case goal: never auto-adopt; still refresh auto_eligible for UI.
         for item in ws["items"]:
             if str(item.get("status") or "") == "proposed":
                 item["auto_eligible"] = auto_check_safe(item, scope_hosts)

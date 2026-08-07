@@ -5,7 +5,9 @@ from app.services.case_workset import (
     adopt_item,
     annotation_fields_from_context,
     clear_in_progress,
+    detect_goal_mode_explicit_off,
     detect_goal_mode_on,
+    detect_turn_cancelled_settle,
     detect_user_stopped_settle,
     evaluate_goal_terminal,
     expand_task_scope_for_host,
@@ -231,6 +233,11 @@ def test_goal_terminals_blocked_budget_stopped():
     assert evaluate_goal_terminal(base, goal_on=True, user_stopped=True)["terminal"] == "goal_stopped"
     assert evaluate_goal_terminal(base, goal_on=True, blocked=True)["terminal"] == "goal_blocked"
     assert evaluate_goal_terminal(base, goal_on=True)["terminal"] == "goal_budget_exhausted"
+    # Grok: turn cancel keeps Goal running even on empty workset (no premature complete).
+    cancelled = evaluate_goal_terminal(base, goal_on=True, turn_cancelled=True)
+    assert cancelled["terminal"] is None
+    assert cancelled["status"] == "running"
+    assert cancelled["goal"]["status"] == "running"
 
 
 def test_order_workset_in_progress_first():
@@ -426,9 +433,16 @@ def test_incomplete_status_is_not_user_stop():
     """Harness status=incomplete is normal partial settle — not Goal user-stop."""
     assert detect_user_stopped_settle({"status": "incomplete"}) is False
     assert detect_user_stopped_settle({"status": "incomplete", "stop_reason": "hard_graph_incomplete"}) is False
-    assert detect_user_stopped_settle({"status": "completed", "stop_reason": "aborted"}) is True
-    assert detect_user_stopped_settle({"stop_reason": "user_interrupt"}) is True
-    assert detect_user_stopped_settle({"stop_reason": "cancelled"}) is True
+    # Grok-aligned: abort/interrupt/cancel = turn cancel, not Goal-off.
+    assert detect_user_stopped_settle({"status": "completed", "stop_reason": "aborted"}) is False
+    assert detect_user_stopped_settle({"stop_reason": "user_interrupt"}) is False
+    assert detect_user_stopped_settle({"stop_reason": "cancelled"}) is False
+    assert detect_turn_cancelled_settle({"stop_reason": "aborted"}) is True
+    assert detect_turn_cancelled_settle({"stop_reason": "user_interrupt"}) is True
+    assert detect_turn_cancelled_settle({"stop_reason": "cancelled"}) is True
+    assert detect_user_stopped_settle({"user_stopped": True}) is True
+    assert detect_user_stopped_settle({"stop_reason": "goal_clear"}) is True
+    assert detect_turn_cancelled_settle({"user_stopped": True, "stop_reason": "aborted"}) is False
     # incomplete + goal_on settle must not become goal_stopped
     ctx = apply_settle_to_context(
         {"task": {**_task(), "goal_mode": True}},
@@ -442,6 +456,101 @@ def test_incomplete_status_is_not_user_stop():
     )
     assert ctx.get("goal_outer", {}).get("terminal") != "goal_stopped"
     assert get_workset(ctx)["goal"]["status"] != "goal_stopped"
+
+
+def test_turn_cancel_keeps_goal_running_and_reopens_sticky_stopped():
+    """Esc/abort settle keeps Case Goal outer open (Grok: turn cancel ≠ goal stop)."""
+    msg = {"stop_reason": "aborted", "status": "incomplete"}
+    assert detect_user_stopped_settle(msg) is False
+    assert detect_turn_cancelled_settle(msg) is True
+    ctx = apply_settle_to_context(
+        {
+            "task": {**_task(), "goal_mode": True, "goal_objective": "maximize findings"},
+            "workset": {
+                "version": 1,
+                "items": [],
+                "goal": {
+                    "status": "goal_stopped",
+                    "terminal": "goal_stopped",
+                    "outer_budget": 8,
+                    "outer_rounds": 1,
+                    "objective": "maximize findings",
+                },
+            },
+        },
+        candidates=[],
+        source="free_settle",
+        goal_on=True,
+        user_stopped=detect_user_stopped_settle(msg),
+        turn_cancelled=detect_turn_cancelled_settle(msg),
+        bump_outer_round=True,
+    )
+    assert ctx.get("goal_outer", {}).get("terminal") is None
+    g = get_workset(ctx)["goal"]
+    assert g["status"] == "running"
+    assert g.get("terminal") is None
+    # turn-cancel must not burn outer_rounds
+    assert int(g.get("outer_rounds") or 0) == 1
+
+
+def test_parked_continue_reopens_sticky_goal_stopped():
+    """Legacy sticky goal_stopped + parked_continue settle with goal_on reopens running."""
+    ctx = apply_settle_to_context(
+        {
+            "task": {**_task(), "goal_mode": True, "goal_objective": "maximize findings"},
+            "workset": {
+                "version": 1,
+                "items": [],
+                "goal": {
+                    "status": "goal_stopped",
+                    "terminal": "goal_stopped",
+                    "outer_budget": 8,
+                    "outer_rounds": 2,
+                    "objective": "maximize findings",
+                },
+            },
+        },
+        candidates=[
+            {"location": "http://target.local/a", "host": "target.local", "in_scope": True},
+        ],
+        source="free_settle",
+        goal_on=True,
+        user_stopped=False,
+        turn_cancelled=False,
+        bump_outer_round=True,
+    )
+    g = get_workset(ctx)["goal"]
+    assert g["status"] != "goal_stopped"
+    assert int(g.get("outer_rounds") or 0) == 3  # natural settle may bump
+
+
+def test_goal_explicit_off_stops_goal():
+    assert detect_goal_mode_explicit_off({"goal_mode": False}) is True
+    assert detect_goal_mode_explicit_off({"goal_mode": True}) is False
+    assert detect_goal_mode_explicit_off({}) is False
+    ctx = apply_settle_to_context(
+        {
+            "task": {**_task(), "goal_mode": False},
+            "workset": {
+                "version": 1,
+                "items": [],
+                "goal": {
+                    "status": "running",
+                    "outer_budget": 8,
+                    "outer_rounds": 1,
+                    "objective": "maximize findings",
+                },
+            },
+        },
+        candidates=[],
+        source="free_settle",
+        goal_on=False,
+        user_stopped=True,
+        goal_explicit_off=True,
+        bump_outer_round=False,
+    )
+    assert get_workset(ctx)["goal"]["status"] == "goal_stopped"
+    assert ctx.get("goal_outer", {}).get("terminal") == "goal_stopped"
 
 
 def test_goal_mode_prefers_explicit_flag_not_bare_objective():

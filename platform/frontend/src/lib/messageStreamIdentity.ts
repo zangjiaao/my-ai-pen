@@ -125,9 +125,15 @@ export type LiveStreamFrame = {
   content?: Record<string, unknown>;
 };
 
-/** Empty thinking body is allowed when protocol status is explicit running or done (Issue 1). */
+/**
+ * Empty thinking body is allowed when protocol status maps to running or done
+ * (raw running/done plus synonyms via normalizeExecutionStatus — Spec #305).
+ */
 function isEmptyThinkingStatusAllowed(status: string): boolean {
-  return status === "running" || status === "done";
+  const raw = String(status || "").trim();
+  if (!raw) return false;
+  const n = normalizeExecutionStatus(raw);
+  return n === "running" || n === "done";
 }
 
 /**

@@ -3175,9 +3175,10 @@ async def _remember_conversation_task(
             if go:
                 task_blob["goal_objective"] = go
             # Sticky goal_mode so settle valve does not depend on bare goal_objective.
+            # Explicit false clears sticky Goal-on (Grok: Goal-off is intentional, not Esc).
             if goal_mode is True or goal_mode in ("true", "1", 1, "yes"):
                 task_blob["goal_mode"] = True
-            elif goal_mode is False:
+            elif goal_mode is False or goal_mode in ("false", "0", 0, "no"):
                 task_blob["goal_mode"] = False
             elif prev_task.get("goal_mode") in (True, "true", "1", 1, "yes"):
                 task_blob["goal_mode"] = True
@@ -3288,6 +3289,19 @@ async def _remember_conversation_task(
                     work_mode=mode if mode in {"free", "graph"} else None,
                 )
                 context = put_workset(context, ws)
+            # Explicit Goal-off on assign: terminal Case Goal outer without waiting for settle.
+            if task_blob.get("goal_mode") is False:
+                from app.services.case_workset import apply_settle_to_context
+
+                context = apply_settle_to_context(
+                    context,
+                    candidates=[],
+                    source="free_settle",
+                    goal_on=False,
+                    user_stopped=True,
+                    goal_explicit_off=True,
+                    bump_outer_round=False,
+                )
             c.context = context
             await db.commit()
     except Exception as e:
@@ -4653,19 +4667,24 @@ async def _remember_next_scope_candidates(conv_id: str, msg: dict) -> None:
 
             task = context.get("task") if isinstance(context.get("task"), dict) else {}
             from app.services.case_workset import (
+                detect_goal_mode_explicit_off,
                 detect_goal_mode_on,
+                detect_turn_cancelled_settle,
                 detect_user_stopped_settle,
                 goal_wants_session_free,
             )
 
             # Explicit goal_mode only — bare goal_objective is not Goal-on for Workset valve.
             goal_on = detect_goal_mode_on(msg=msg, task=task)
+            goal_explicit_off = detect_goal_mode_explicit_off(msg)
             source = str(msg.get("workset_source") or "").strip()
             if not source:
                 work_mode = str(msg.get("work_mode") or "")
                 source = "hard_settle" if work_mode.startswith("hard_graph") else "free_settle"
-            # Real abort/cancel only — harness status=incomplete is not user stop.
+            # Grok-aligned: Esc/abort = turn cancel (keep Goal); only explicit Goal-off → goal_stopped.
+            # harness status=incomplete is neither.
             user_stopped = detect_user_stopped_settle(msg)
+            turn_cancelled = detect_turn_cancelled_settle(msg)
             stop_reason = str(msg.get("stop_reason") or "").lower()
             blocked = str(msg.get("status") or "").lower() == "blocked" or "blocked" in stop_reason
 
@@ -4682,8 +4701,11 @@ async def _remember_next_scope_candidates(conv_id: str, msg: dict) -> None:
                 goal_on=goal_on,
                 goal_objective=str(msg.get("goal_objective") or task.get("goal_objective") or "").strip() or None,
                 user_stopped=user_stopped,
+                turn_cancelled=turn_cancelled,
+                goal_explicit_off=goal_explicit_off,
                 blocked=blocked,
-                bump_outer_round=goal_on,
+                # Natural Goal rounds only — do not burn budget on Esc/abort settle.
+                bump_outer_round=goal_on and not turn_cancelled and not user_stopped,
             )
 
             # Spec #311 Free-as-glue: after Goal settle (return_to free), land Participant

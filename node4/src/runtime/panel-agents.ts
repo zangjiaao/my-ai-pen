@@ -191,6 +191,23 @@ export class PanelAgentTracker {
     });
   }
 
+  /**
+   * Parked continue reuses the same PanelAgentTracker. Prior setMainTerminal left
+   * mainStatus=stopped while current_action still updates — AgentRow shows STOP
+   * during live work. Clear terminal state when attaching a continue burst.
+   */
+  resetMainForContinue(input?: { phase?: string; task?: string }): void {
+    this.mainStatus = "running";
+    this.phase = String(input?.phase || "starting").trim() || "starting";
+    const task = String(input?.task || "").trim();
+    if (task) this.mainTask = task.slice(0, 240);
+    this.activeTool = "";
+    this.detail = describeMainActivity({
+      phase: this.phase,
+      lastTool: this.lastTool,
+    });
+  }
+
   noteSubagentStart(input: {
     id: string;
     assignment: string;

@@ -76,18 +76,34 @@ export function parseEngagementTargets(taskContext?: Record<string, unknown>): E
       for (const a of allow) if (typeof a === "string" && a.trim()) values.push(a.trim());
     }
   }
-  const out: EngagementTarget[] = [];
-  const seen = new Set<string>();
+  // Per host: keep every distinct port; host-only collapses when a ported form exists.
+  // Distinct ports must all remain so assetPortAllowed does not drop legitimate ports.
+  const byHost = new Map<string, EngagementTarget[]>();
   for (const raw of values) {
     const parsed = parseSurfaceRef(raw);
     if (!parsed || !parsed.host) continue;
     const origin = parsed.port ? `${parsed.host}:${parsed.port}` : parsed.host;
-    const key = origin.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({ raw, host: parsed.host, port: parsed.port, origin });
+    const hostKey = parsed.host.toLowerCase();
+    const next: EngagementTarget = { raw, host: parsed.host, port: parsed.port, origin };
+    const list = byHost.get(hostKey) || [];
+    if (!next.port) {
+      // Host-only: keep only if we have no ported target yet.
+      if (list.some((t) => t.port)) continue;
+      if (list.some((t) => !t.port)) continue;
+      list.push(next);
+      byHost.set(hostKey, list);
+      continue;
+    }
+    // Ported: drop any host-only rows, then add if this port is new.
+    const withoutHostOnly = list.filter((t) => t.port);
+    if (withoutHostOnly.some((t) => t.port === next.port)) {
+      byHost.set(hostKey, withoutHostOnly);
+      continue;
+    }
+    withoutHostOnly.push(next);
+    byHost.set(hostKey, withoutHostOnly);
   }
-  return out;
+  return Array.from(byHost.values()).flat();
 }
 
 function isEngagementTargetHost(host: string, port: string, targets: EngagementTarget[]): boolean {
@@ -173,6 +189,22 @@ export function collectSurfaceEntries(
     }
   }
 
+  // Ports declared on the engagement for a host (if any). Stale asset inventory on
+  // the same host (e.g. old :8080 DVWA URLs while testing :3000) must not pollute the tree.
+  const engagementPortsByHost = new Map<string, Set<string>>();
+  for (const t of engagementTargets) {
+    const h = String(t.host || "").toLowerCase();
+    if (!h) continue;
+    if (!engagementPortsByHost.has(h)) engagementPortsByHost.set(h, new Set());
+    if (t.port) engagementPortsByHost.get(h)!.add(String(t.port));
+  }
+  const assetPortAllowed = (host: string, port: string): boolean => {
+    const locked = engagementPortsByHost.get(host.toLowerCase());
+    if (!locked || locked.size === 0) return true;
+    if (!port) return true;
+    return locked.has(port);
+  };
+
   // Assets: host + open ports / services + known URLs
   for (const asset of assets) {
     const host = normalizeAssetHost(String(asset.address || asset.name || ""));
@@ -192,6 +224,7 @@ export function collectSurfaceEntries(
     for (const p of ports) {
       const port = String(p).replace(/\/.*$/, "").trim();
       if (!/^\d{1,5}$/.test(port)) continue;
+      if (!assetPortAllowed(host, port)) continue;
       let svc = serviceFromPort(port);
       for (const s of services) {
         const rec = s && typeof s === "object" ? (s as Record<string, unknown>) : {};
@@ -219,13 +252,18 @@ export function collectSurfaceEntries(
     const urls = Array.isArray(props.urls) ? props.urls : Array.isArray(asset.urls) ? (asset.urls as unknown[]) : [];
     for (const u of urls) {
       if (typeof u !== "string" || !u.trim()) continue;
+      const parsed = parseSurfaceRef(u.trim(), null, "web");
+      if (parsed && !assetPortAllowed(parsed.host || host, parsed.port || "")) continue;
       considerRaw(u.trim(), null, "asset-url", "web");
     }
     // Service-level URL notes (e.g. DVWA module links)
     for (const s of services) {
       const rec = s && typeof s === "object" ? (s as Record<string, unknown>) : {};
       const url = String(rec.url || "").trim();
-      if (url) considerRaw(url, null, "asset-url", "web");
+      if (!url) continue;
+      const parsed = parseSurfaceRef(url, null, "web");
+      if (parsed && !assetPortAllowed(parsed.host || host, parsed.port || "")) continue;
+      considerRaw(url, null, "asset-url", "web");
     }
   }
 
@@ -283,7 +321,12 @@ export function toSurfaceEntry(parsed: ParsedSurfaceRef, extra?: Partial<Surface
  * Prefer one root per logical asset so Surface does not splinter into
  * (target) + public IP + junk filenames for the same engagement.
  */
-function canonicalizeSurfaceEntries(
+/**
+ * Assign stable assetKey/assetLabel roots and fold path-only / alias hosts.
+ * Call again after attaching finding-only leaves so they join the same host root
+ * (avoids dual trees: asset:uuid vs host:hostname for the same site).
+ */
+export function canonicalizeSurfaceEntries(
   entries: SurfaceEntry[],
   assets: Array<Record<string, unknown>>,
   engagementTargets: EngagementTarget[] = [],
@@ -326,10 +369,11 @@ function canonicalizeSurfaceEntries(
       // Prefer a known web open_port so path-only findings do not create a second "service" tree.
       port = pickPrimaryWebPortFromAsset(asset);
     }
-    const label = host + (port ? `:${port}` : "");
+    // Host tree root is hostname only — ports live under :port children, never on the root label.
+    // Do not bake historical asset URL ports (e.g. stale :8080) into the asset display name.
     assetMetas.push({
       key: id,
-      label,
+      label: host,
       hosts: new Set([host.toLowerCase()]),
       primaryHost: host,
       primaryPort: port,
@@ -387,14 +431,15 @@ function canonicalizeSurfaceEntries(
     const meta = ak ? assetMetas.find((m) => m.key === ak) : undefined;
     if (meta) {
       defaultAssetKey = meta.key;
-      defaultAssetLabel = meta.label;
+      defaultAssetLabel = meta.primaryHost || meta.label; // hostname only
       defaultPrimaryHost = meta.primaryHost;
-      defaultPrimaryPort = meta.primaryPort || t.port;
+      // This engagement's port wins over stale asset inventory (e.g. old :8080 URLs on same host).
+      defaultPrimaryPort = t.port || meta.primaryPort;
     } else {
-      defaultAssetKey = `target:${t.origin}`;
+      defaultAssetKey = `target:${t.host.toLowerCase()}`;
       defaultPrimaryHost = t.host;
       defaultPrimaryPort = t.port;
-      defaultAssetLabel = t.origin;
+      defaultAssetLabel = t.host; // hostname only — not origin with :port
     }
     for (const et of engagementTargets) {
       rememberHost(et.host, defaultAssetKey);
@@ -409,7 +454,7 @@ function canonicalizeSurfaceEntries(
     const meta = ak ? assetMetas.find((m) => m.key === ak) : undefined;
     if (meta) {
       defaultAssetKey = meta.key;
-      defaultAssetLabel = meta.label;
+      defaultAssetLabel = meta.primaryHost || meta.label;
       defaultPrimaryHost = meta.primaryHost;
       defaultPrimaryPort = meta.primaryPort;
     } else {
@@ -419,13 +464,13 @@ function canonicalizeSurfaceEntries(
         .filter((e) => (pairMerge.get(e.host.toLowerCase()) || e.host.toLowerCase()) === dominantHost && e.port)
         .map((e) => e.port);
       defaultPrimaryPort = mostCommon(ports) || "";
-      defaultAssetLabel = defaultPrimaryPort ? `${dominantHost}:${defaultPrimaryPort}` : dominantHost;
+      defaultAssetLabel = dominantHost; // hostname only
     }
     for (const h of localHosts) rememberHost(h, defaultAssetKey);
     rememberHost(dominantHost, defaultAssetKey);
   } else if (assetMetas.length === 1) {
     defaultAssetKey = assetMetas[0]!.key;
-    defaultAssetLabel = assetMetas[0]!.label;
+    defaultAssetLabel = assetMetas[0]!.primaryHost || assetMetas[0]!.label;
     defaultPrimaryHost = assetMetas[0]!.primaryHost;
     defaultPrimaryPort = assetMetas[0]!.primaryPort;
     for (const h of localHosts) rememberHost(h, defaultAssetKey);
@@ -449,23 +494,30 @@ function canonicalizeSurfaceEntries(
       const ak = hostToAsset.get(h)!;
       const meta = assetMetas.find((m) => m.key === ak);
       if (meta) {
+        // Prefer engagement/default primaryPort over stale asset ports when both exist.
+        const port =
+          defaultPrimaryPort ||
+          entryPort ||
+          meta.primaryPort ||
+          "";
         return {
           key: meta.key,
-          label: meta.label,
+          label: meta.primaryHost || meta.label, // hostname only
           primaryHost: meta.primaryHost,
-          primaryPort: meta.primaryPort || entryPort || defaultPrimaryPort || "",
+          primaryPort: port,
         };
       }
-      if (ak.startsWith("host:")) {
-        const ph = ak.slice(5);
+      if (ak.startsWith("host:") || ak.startsWith("target:")) {
+        const ph = ak.includes(":") ? ak.slice(ak.indexOf(":") + 1) : h;
+        const hostOnly = ph.split(":")[0] || ph;
         return {
           key: ak,
-          label: defaultAssetLabel || ph,
-          primaryHost: ph,
+          label: defaultAssetLabel || hostOnly,
+          primaryHost: defaultPrimaryHost || hostOnly,
           primaryPort: defaultPrimaryPort || entryPort || "",
         };
       }
-      return { key: ak, label: h, primaryHost: h, primaryPort: entryPort || "" };
+      return { key: ak, label: h, primaryHost: h, primaryPort: entryPort || defaultPrimaryPort || "" };
     }
 
     if ((!h || h === "(target)" || isLocalAliasHost(h)) && defaultAssetKey) {
@@ -618,29 +670,78 @@ function canonicalizeSurfaceEntries(
     });
   }
 
-  // Collapse port-less web rows onto the dominant web port for the same host
-  // (path-only finding refs were creating a second empty-port "service" tree).
-  return collapsePortlessWebEntries(Array.from(merged.values()));
+  // Collapse empty / scheme-default (80/443) web rows onto the host's dominant
+  // explicit web port (e.g. :8080) so host.docker.internal and :80 do not fork
+  // a second tree next to host.docker.internal:8080.
+  return collapseRedundantWebPorts(Array.from(merged.values()));
+}
+
+/** Scheme-default ports invented by URL parse when no :port is written. */
+const SCHEME_DEFAULT_PORTS = new Set(["80", "443"]);
+
+function isKnownSurfaceService(name: string): boolean {
+  const n = String(name || "").toLowerCase();
+  return (
+    n === "web" ||
+    n === "redis" ||
+    n === "ssh" ||
+    n === "ftp" ||
+    n === "smtp" ||
+    n === "mysql" ||
+    n === "postgres" ||
+    n === "mongodb" ||
+    n === "memcached" ||
+    n === "elasticsearch" ||
+    n === "rabbitmq" ||
+    n === "rdp" ||
+    n === "smb"
+  );
 }
 
 /**
- * Path-only / host-only web inventory rows without :port split the Surface tree
- * into a parallel "service" branch next to :8080 / :3000. Fold them onto the
- * host's dominant web port when one is known.
+ * Path-only / host-only / scheme-default (80/443) web rows split the Surface tree
+ * into parallel branches next to :8080 / :3000. Fold them onto the host's
+ * dominant explicit web port when one is known.
+ *
+ * Also reclassifies junk non-web "host-only" rows (service polluted by free-text
+ * title blobs) as web roots so they can fold.
  */
-function collapsePortlessWebEntries(entries: SurfaceEntry[]): SurfaceEntry[] {
+function collapseRedundantWebPorts(entries: SurfaceEntry[]): SurfaceEntry[] {
+  // Promote host-only junk services → web so they participate in port collapse.
+  const normalized = entries.map((e) => {
+    if (
+      e.host &&
+      !e.port &&
+      e.service !== "web" &&
+      !isKnownSurfaceService(e.service) &&
+      (!e.path || e.path === "/")
+    ) {
+      return {
+        ...e,
+        service: "web",
+        path: "/",
+        origin: e.host,
+        key: `${e.host}|web|/`,
+        title: e.host,
+      };
+    }
+    return e;
+  });
+
   const webPortsByHost = new Map<string, Map<string, number>>();
-  for (const e of entries) {
+  for (const e of normalized) {
     if (e.service !== "web" || !e.host || !e.port) continue;
     const h = e.host.toLowerCase();
     const ports = webPortsByHost.get(h) || new Map<string, number>();
     // Prefer ports that already have real paths over bare roots.
-    const weight = e.path && e.path !== "/" ? 3 : 1;
-    ports.set(e.port, (ports.get(e.port) || 0) + weight);
+    // Explicit non-80/443 ports get a small bonus so docker :8080 beats scheme-default :80.
+    const pathWeight = e.path && e.path !== "/" ? 3 : 1;
+    const explicitBonus = SCHEME_DEFAULT_PORTS.has(e.port) ? 0 : 2;
+    ports.set(e.port, (ports.get(e.port) || 0) + pathWeight + explicitBonus);
     webPortsByHost.set(h, ports);
   }
 
-  const pickPort = (host: string): string => {
+  const pickDominantPort = (host: string): string => {
     const ports = webPortsByHost.get(host.toLowerCase());
     if (!ports || !ports.size) return "";
     let best = "";
@@ -651,24 +752,44 @@ function collapsePortlessWebEntries(entries: SurfaceEntry[]): SurfaceEntry[] {
         n = c;
       }
     }
-    // Prefer classic web ports when counts are close.
+    // Prefer common docker/dev web ports when counts are close.
     if (ports.has("8080") && (ports.get("8080") || 0) >= n - 1) return "8080";
+    if (ports.has("8000") && (ports.get("8000") || 0) >= n - 1) return "8000";
+    if (ports.has("3000") && (ports.get("3000") || 0) >= n - 1) return "3000";
     if (ports.has("80") && (ports.get("80") || 0) >= n - 1) return "80";
     if (ports.has("443") && (ports.get("443") || 0) >= n - 1) return "443";
     return best;
   };
 
+  /** Prefer folding empty / 80 / 443 onto a stronger explicit port when present. */
+  const pickFoldTarget = (host: string, currentPort: string): string => {
+    const ports = webPortsByHost.get(host.toLowerCase());
+    if (!ports || !ports.size) return "";
+    const dominant = pickDominantPort(host);
+    if (!dominant) return "";
+    // Empty → always fold onto dominant when known.
+    if (!currentPort) return dominant;
+    // Scheme-default only folds when dominant is a different, non-default port
+    // with at least as much weight (avoids collapsing real dual 80+443 sites alone).
+    if (SCHEME_DEFAULT_PORTS.has(currentPort) && !SCHEME_DEFAULT_PORTS.has(dominant) && dominant !== currentPort) {
+      const domW = ports.get(dominant) || 0;
+      const curW = ports.get(currentPort) || 0;
+      if (domW >= curW) return dominant;
+    }
+    return "";
+  };
+
   const out = new Map<string, SurfaceEntry>();
-  for (const e of entries) {
+  for (const e of normalized) {
     let next = e;
-    if (e.service === "web" && e.host && !e.port) {
-      const port = pickPort(e.host);
-      if (port) {
-        const origin = `${e.host}:${port}`;
+    if (e.service === "web" && e.host) {
+      const foldTo = pickFoldTarget(e.host, e.port || "");
+      if (foldTo && foldTo !== e.port) {
+        const origin = `${e.host}:${foldTo}`;
         const path = e.path || "/";
         next = {
           ...e,
-          port,
+          port: foldTo,
           origin,
           path,
           key: `${origin}|web|${path}`,
@@ -694,7 +815,6 @@ function collapsePortlessWebEntries(entries: SurfaceEntry[]): SurfaceEntry[] {
   }
   return Array.from(out.values());
 }
-
 function pickPrimaryWebPortFromAsset(asset: Record<string, unknown>): string {
   const props = (asset.properties as Record<string, unknown> | undefined) || {};
   const ports = Array.isArray(asset.open_ports)
@@ -873,7 +993,8 @@ function serviceFromPort(port: string): string {
 }
 
 function normalizeServiceName(name: string): string {
-  const n = name.toLowerCase();
+  const n = name.toLowerCase().trim();
+  if (!n) return "unknown";
   if (/http|https|www|nginx|apache|iis|tomcat|web/.test(n)) return "web";
   if (/redis/.test(n)) return "redis";
   if (/ssh|openssh/.test(n)) return "ssh";
@@ -886,9 +1007,12 @@ function normalizeServiceName(name: string): string {
   if (/smtp|mail/.test(n)) return "smtp";
   if (/rdp|ms-wbt/.test(n)) return "rdp";
   if (/smb|microsoft-ds/.test(n)) return "smb";
-  return n.slice(0, 24) || "unknown";
+  // Free-text plan titles / host blobs must not become service labels (that
+  // forked a "host only host.docker…" sibling under the Surface tree).
+  // Only compact product tokens are kept as custom service names.
+  if (/^[a-z0-9][a-z0-9._+-]{0,23}$/i.test(n) && !/\s/.test(n)) return n.slice(0, 24);
+  return "unknown";
 }
-
 function inferServiceFromText(text: string): string {
   return normalizeServiceName(text);
 }
@@ -947,8 +1071,16 @@ export function parseSurfaceRef(raw: string, methodHint?: string | null, service
       if (path.length > 1) path = path.replace(/\/+$/, "");
       if (isNoiseSurfacePath(path) && path !== "/") return null;
     }
-    const svc = serviceHint || (port ? serviceFromPort(port) : "web");
+    // Only trust compact known/custom service tokens as hints — free-text
+    // plan titles would otherwise create non-web host-only siblings.
+    const hint = String(serviceHint || "").trim();
+    const hintOk = hint && (isKnownSurfaceService(hint) || /^[a-z0-9][a-z0-9._+-]{0,23}$/i.test(hint));
+    const svc = (hintOk ? hint : "") || (port ? serviceFromPort(port) : "web");
     const origin = port ? `${host}:${port}` : host;
+    // Host-only with unknown service → web root (fold later onto :port).
+    if (svc !== "web" && !path && !port && !isKnownSurfaceService(svc)) {
+      return { host, port: "", origin: host, path: "/", service: "web", method };
+    }
     if (svc !== "web" && !path) {
       return { host, port: port || "", origin, path: "", service: svc, method };
     }

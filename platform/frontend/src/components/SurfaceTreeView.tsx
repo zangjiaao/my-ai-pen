@@ -47,8 +47,23 @@ export function buildSurfaceTree(
   const assets = new Map<string, SurfaceTreeNode>();
 
   const ensureAsset = (entry: SurfaceEntry): SurfaceTreeNode => {
-    const assetKey = entry.assetKey || `host:${entry.host || "(target)"}`;
+    const hostOnly = String(entry.host || entry.assetLabel || "")
+      .split(":")[0]
+      .trim()
+      .toLowerCase();
+    // Prefer explicit assetKey; also collapse same hostname into one root when keys diverge
+    // (e.g. asset:uuid from ledger vs host:hostname from finding-only leaves).
+    let assetKey = entry.assetKey || (hostOnly ? `host:${hostOnly}` : `host:${entry.host || "(target)"}`);
     let node = assets.get(assetKey);
+    if (!node && hostOnly) {
+      for (const [k, existing] of assets) {
+        if (existing.nodeKind === "host" && existing.label.toLowerCase().split(":")[0] === hostOnly) {
+          node = existing;
+          assetKey = k;
+          break;
+        }
+      }
+    }
     if (node) {
       if (entry.hostAliases?.length) {
         const set = new Set([...(node.aliases || []), ...entry.hostAliases]);
@@ -60,15 +75,23 @@ export function buildSurfaceTree(
       } else if (entry.isDiscovered && !node.isTarget) {
         node.isDiscovered = true;
       }
+      // Prefer ledger uuid keys over synthetic host: keys when both appear.
+      if (entry.assetKey && entry.assetKey !== assetKey && !assets.has(entry.assetKey)) {
+        assets.delete(assetKey);
+        assets.set(entry.assetKey, node);
+        node.id = `asset:${entry.assetKey}`;
+      }
       return node;
     }
-    const label = entry.assetLabel || entry.host || "(target)";
+    // Host root label is hostname only (ports are children).
+    const label = hostOnly || entry.assetLabel || entry.host || "(target)";
+    const displayHost = label.includes(":") ? label.split(":")[0]! : label;
     node = {
       id: `asset:${assetKey}`,
-      label,
-      path: label,
+      label: displayHost,
+      path: displayHost,
       nodeKind: "host",
-      aliases: (entry.hostAliases || []).filter((h) => h.toLowerCase() !== label.toLowerCase()),
+      aliases: (entry.hostAliases || []).filter((h) => h.toLowerCase() !== displayHost.toLowerCase()),
       isTarget: Boolean(entry.isTarget),
       isDiscovered: Boolean(entry.isDiscovered) && !entry.isTarget,
       children: [],

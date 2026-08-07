@@ -6,6 +6,7 @@
  * incomplete / abort → re-park; product-terminal complete → dispose.
  */
 
+import { join } from "node:path";
 import type { Node4Config } from "../config.js";
 import type { PlatformSink, TaskEnvelope } from "../types.js";
 import { GoalStore } from "../stores/goal.js";
@@ -21,6 +22,10 @@ import {
 import { PanelAgentTracker } from "./panel-agents.js";
 import { extractLlmTurnError, LlmTurnError } from "./llm-turn-error.js";
 import { emitTodoPlanTreeUpdate } from "./plan-projection.js";
+import {
+  buildWorksetSettleEmitPackage,
+  writeAttackSurfaceCandidatesArtifact,
+} from "./workset-settle-emit.js";
 import {
   applyCaptainEndDisposition,
   decideCaptainEndDisposition,
@@ -104,6 +109,11 @@ export async function runParkedWorkingContinue(options: {
   const panel =
     parked.runtime?.lifecycle?.panelAgents ||
     new PanelAgentTracker(task.instruction || "continue", panelLabel);
+  // Prior park may have setMainTerminal(aborted) → status stopped forever if reused.
+  panel.resetMainForContinue({
+    phase: workMode === "graph" ? "parked_graph_continue" : "parked_free_continue",
+    task: task.instruction || undefined,
+  });
   if (workMode === "graph") {
     panel.setWorkMode({
       work_mode: "graph",
@@ -281,10 +291,28 @@ export async function runParkedWorkingContinue(options: {
   panel.setMainTerminal(
     aborted ? "aborted" : harnessStatus === "completed" ? "completed" : "failed",
   );
+
+  // Spec #311 parity with Free settle (shared helper).
+  const findingsDir =
+    String(parked.runtime?.findingsDir || "").trim() ||
+    join(options.config.workspaceDir, task.taskId, "findings");
+  const taskDir = join(options.config.workspaceDir, task.taskId);
+  const worksetSource = workMode === "graph" ? "hard_settle" : "free_settle";
+  const settlePkg = await buildWorksetSettleEmitPackage({
+    task,
+    findingsDir,
+    source: worksetSource,
+  });
+  await writeAttackSurfaceCandidatesArtifact(taskDir, settlePkg.attackSurfaceCandidates);
+
+  const goals = (parked.runtime?.goals as GoalStore | undefined) || obsCtx.goals;
+  const goalModeOn = Boolean(goals?.isActive?.() || task.goalObjective);
+
   await emitCheckpointUpdate(obsCtx, {
     terminal: true,
     status: harnessStatus,
     endTime,
+    attackSurfaceCandidates: settlePkg.attackSurfaceCandidates,
   }).catch(() => {});
 
   await platform.send({
@@ -304,6 +332,12 @@ export async function runParkedWorkingContinue(options: {
     reparked,
     end_time: endTime,
     started_at: startedAt,
+    attack_surface_candidates: settlePkg.attackSurfaceCandidates,
+    next_scope_candidates: settlePkg.nextScopeCandidates,
+    workset_candidates: settlePkg.worksetCandidates,
+    workset_source: settlePkg.worksetSource,
+    goal_mode: goalModeOn,
+    goal_objective: task.goalObjective || undefined,
   } as any);
 
   return {
