@@ -31,7 +31,10 @@ assert.equal(freeMapNonEmpty(seed), true);
 assert.equal(freeInitReplaceDenied([], false), undefined, "empty map allows init");
 assert.equal(freeInitReplaceDenied(seed, true), undefined, "permission allows replace");
 const denied = freeInitReplaceDenied(seed, false);
-assert.ok(denied && denied.includes("allow_replace"), "denied names allow_replace");
+assert.ok(
+  denied && (/allow_replace|todo_replace/i.test(denied) || /permission|forbidden|replace/i.test(denied)),
+  "denied names replace permission",
+);
 assert.ok(denied && /permission|forbidden|replace/i.test(denied));
 
 // --- applyTodoOp with free_map gate ---

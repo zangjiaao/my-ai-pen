@@ -36,6 +36,12 @@ node_connections: dict[str, WebSocket] = {}
 conversation_subscribers: dict[str, set[WebSocket]] = {}
 conversation_node: dict[str, str] = {}
 pending_approvals: dict[str, dict] = {}
+# Spec #313 L10: durable option snapshot keyed by request_id — survives pending_approvals pop
+# (interrupt freeze / orphaned confirm) so workset expand still works.
+choice_card_snapshots: dict[str, dict] = {}
+# Spec #313 L3: one-shot Free todo.init replace grant (platform-issued only).
+# Set only from structured user confirm (replace_todo_map option or todo_replace_permission).
+todo_replace_grants: dict[str, bool] = {}
 # request_ids already applied via handoff_apply (idempotent double-apply guard).
 _handoff_applied_request_ids: set[str] = set()
 _round_robin_counter: int = 0
@@ -909,6 +915,20 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
                 await _record_expert_usage_billing(msg, node_id=client_id, conv_id=conv_id)
                 if conv_id:
                     await _remember_next_scope_candidates(conv_id, msg)
+                    # Spec #313 L9: Session idle → drain FIFO demand queue (confirm = user text class).
+                    try:
+                        snap = await _conversation_snapshot(conv_id, client_id or "")
+                        workers = (snap or {}).get("workers") if isinstance(snap, dict) else None
+                        still_busy = (
+                            isinstance(workers, list)
+                            and any(
+                                isinstance(w, dict) and w.get("working") is True for w in workers
+                            )
+                        )
+                        if not still_busy:
+                            await _drain_session_demand_queue(conv_id, client_id)
+                    except Exception as drain_exc:
+                        print(f"[WS] session demand drain after task_complete: {drain_exc}")
     elif msg.get("type") == "task_incomplete" and conv_id:
         if await _is_active_task_event(conv_id, msg.get("task_id")):
             await _set_conversation_status(
@@ -1062,6 +1082,18 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
             "expert_id": str(msg.get("expert_id") or "").strip() or None,
             "expert_name": str(msg.get("expert_name") or "").strip() or None,
         }
+        # Spec #313 L10: keep option snapshot after pending_approvals is consumed/frozen.
+        if pending_options is not None or pending_kind:
+            choice_card_snapshots[request_id] = {
+                "conversation_id": conv_id,
+                "kind": pending_kind,
+                "options": pending_options,
+                "selection": pending_selection,
+            }
+            if len(choice_card_snapshots) > 500:
+                # Drop oldest half (dict insertion order).
+                for drop_id in list(choice_card_snapshots.keys())[:250]:
+                    choice_card_snapshots.pop(drop_id, None)
         actor_uuid = _uuid(client_id)
         if actor_uuid:
             await _audit(
@@ -2003,7 +2035,7 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                         from app.services.choice_card import expand_selected_options
 
                         rid = str(msg.get("request_id") or "").strip()
-                        approval_snap = pending_approvals.get(rid) if rid else None
+                        approval_snap = _choice_card_snap_for_request(rid)
                         card_snap = {
                             "kind": (
                                 approval_snap.get("kind")
@@ -2198,8 +2230,9 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                 "kind": kind,
             }
             if structured_options is not None:
-                selection = str(msg.get("selection") or "multi").strip().lower()
-                content["selection"] = selection if selection in {"single", "multi"} else "multi"
+                # Spec #313 L8: product default single-select (not multi).
+                selection = str(msg.get("selection") or "single").strip().lower()
+                content["selection"] = selection if selection in {"single", "multi"} else "single"
                 preamble = str(msg.get("preamble") or "").strip()
                 if preamble:
                     content["preamble"] = preamble
@@ -3324,6 +3357,54 @@ def _sanitize_requesting_speaker(msg: dict) -> None:
         msg.pop("expert_name", None)
 
 
+def _choice_card_snap_for_request(request_id: str | None) -> dict | None:
+    """Spec #313 L10: pending_approvals first, else durable choice_card_snapshots."""
+    rid = str(request_id or "").strip()
+    if not rid:
+        return None
+    approval = pending_approvals.get(rid)
+    if isinstance(approval, dict) and approval:
+        return approval
+    snap = choice_card_snapshots.get(rid)
+    return snap if isinstance(snap, dict) else None
+
+
+def _grant_todo_replace(conv_id: str | None) -> None:
+    """Spec #313 L3: platform-issued one-shot Free todo.init replace grant."""
+    cid = str(conv_id or "").strip()
+    if cid:
+        todo_replace_grants[cid] = True
+
+
+def _consume_todo_replace_grant(conv_id: str | None) -> bool:
+    cid = str(conv_id or "").strip()
+    if not cid:
+        return False
+    return bool(todo_replace_grants.pop(cid, False))
+
+
+def _is_todo_replace_user_permission(msg: dict | None, selected_option_ids: list | None = None) -> bool:
+    """True only for structured confirm — never free-text NLP (AGENTS.md).
+
+    Contract:
+    - user_decision/confirm with selected option id ``replace_todo_map``, or
+    - explicit ``todo_replace_permission: true`` from FE after user confirms a dedicated option.
+    """
+    m = msg if isinstance(msg, dict) else {}
+    if m.get("todo_replace_permission") is True or m.get("todoReplacePermission") is True:
+        return True
+    raw = m.get("todo_replace_permission", m.get("todoReplacePermission"))
+    if str(raw or "").strip().lower() in {"true", "1", "yes"}:
+        return True
+    ids = selected_option_ids if isinstance(selected_option_ids, list) else m.get("selected_option_ids")
+    if not isinstance(ids, list):
+        return False
+    for x in ids:
+        if str(x or "").strip() == "replace_todo_map":
+            return True
+    return False
+
+
 def _pending_approvals_for_conversation(conv_id: str | None) -> list[tuple[str, dict]]:
     """Return (request_id, approval) pairs for a conversation, oldest first."""
     if not conv_id:
@@ -3509,27 +3590,27 @@ async def _continue_after_orphaned_confirm_options(
     )
 
 
-async def _steer_confirm_options_while_busy(
+async def _enqueue_confirm_options_while_busy(
     *,
     conv_id: str,
     client_id: str,
     msg: dict,
     selected_option_ids: list,
     workset_item_ids: list[str],
-) -> bool:
-    """Spec #313 S1: busy Session + confirm without live wait → demand like user text.
+) -> dict:
+    """Spec #313 L9: busy Session + confirm without live wait → FIFO Session demand queue.
 
-    Steers full confirm text to the bound node (FIFO class with user messages).
-    Returns True when steer was sent.
+    Does not steer mid-flight. Returns the enqueued demand item.
     """
     from app.services.choice_card import build_confirm_continue_message
+    from app.services import session_demand_queue as demand_queue
 
     resume_context = await _conversation_snapshot(conv_id, client_id)
     task_context = _task_context_from_snapshot(resume_context or {})
     sticky_id, sticky_name = await _conversation_expert_label(conv_id)
     sticky_eng = await _conversation_task_engagement(conv_id)
     summary = str(msg.get("text") or "").strip()
-    steer_msg = build_confirm_continue_message(
+    continue_shaped = build_confirm_continue_message(
         text=summary,
         selected_option_ids=selected_option_ids if isinstance(selected_option_ids, list) else [],
         workset_item_ids=workset_item_ids,
@@ -3538,25 +3619,114 @@ async def _steer_confirm_options_while_busy(
         expert_name=str(msg.get("expert_name") or sticky_name or "").strip() or None,
         engagement=str(msg.get("engagement") or msg.get("role") or sticky_eng or "").strip() or None,
     )
-    steer_msg["conversation_id"] = conv_id
-    steer_msg["type"] = "user_message"
-    steer_msg = await _hydrate_sticky_expert_on_message(conv_id, steer_msg)
-    _, bound_node = await _conversation_owner(conv_id)
-    bound_node_id = conversation_node.get(conv_id) or (str(bound_node) if bound_node else None)
-    if not bound_node_id or bound_node_id not in node_connections:
-        return False
-    capabilities = await _available_agent_capabilities()
-    bound_capability = next(
-        (item.capability for item in capabilities if item.node_id == bound_node_id),
-        None,
+    item = demand_queue.enqueue(
+        conv_id,
+        kind="confirm_options",
+        client_id=client_id,
+        text=continue_shaped.get("text") or summary,
+        selected_option_ids=list(selected_option_ids) if isinstance(selected_option_ids, list) else [],
+        workset_item_ids=list(workset_item_ids or []),
+        expert_id=continue_shaped.get("expert_id"),
+        expert_name=continue_shaped.get("expert_name"),
+        engagement=continue_shaped.get("engagement"),
+        target=continue_shaped.get("target"),
+        scope=continue_shaped.get("scope"),
+        request_id=str(msg.get("request_id") or "").strip() or None,
+        payload=continue_shaped,
     )
-    sent = await _send_direct_node_message(conv_id, bound_node_id, steer_msg, bound_capability)
-    if sent:
-        print(
-            f"[WS] confirm_options busy-steer conv={conv_id[:8]} node={bound_node_id[:8]} "
-            f"options={selected_option_ids}"
+    # Surface queue state to FE (thin; list chrome can follow).
+    try:
+        await _broadcast_to_conversation(
+            conv_id,
+            json.dumps(
+                {
+                    "type": "session_demand_queued",
+                    "conversation_id": conv_id,
+                    "demand_id": item.get("id"),
+                    "kind": "confirm_options",
+                    "queue_size": demand_queue.size(conv_id),
+                    "text": item.get("text"),
+                },
+                ensure_ascii=False,
+            ),
         )
-    return bool(sent)
+    except Exception as e:
+        print(f"[WS] session_demand_queued broadcast error: {e}")
+    print(
+        f"[WS] confirm_options enqueue conv={conv_id[:8]} demand={str(item.get('id') or '')[:8]} "
+        f"options={selected_option_ids} size={demand_queue.size(conv_id)}"
+    )
+    return item
+
+
+async def _drain_session_demand_queue(conv_id: str, client_id: str | None = None) -> bool:
+    """Spec #313 L9: on idle/task_complete, dequeue head and continue-dispatch if present.
+
+    Returns True when a demand was dispatched.
+    """
+    from app.services import session_demand_queue as demand_queue
+
+    item = demand_queue.pop(conv_id)
+    if not item:
+        return False
+    cid_client = str(client_id or item.get("client_id") or "").strip() or "platform"
+    kind = str(item.get("kind") or "").strip()
+    try:
+        if kind == "confirm_options" or item.get("selected_option_ids") is not None:
+            payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+            msg = {
+                "text": item.get("text") or payload.get("text") or "",
+                "expert_id": item.get("expert_id") or payload.get("expert_id"),
+                "expert_name": item.get("expert_name") or payload.get("expert_name"),
+                "engagement": item.get("engagement") or payload.get("engagement"),
+                "request_id": item.get("request_id"),
+            }
+            if item.get("target") is not None:
+                msg["target"] = item.get("target")
+            if item.get("scope") is not None:
+                msg["scope"] = item.get("scope")
+            selected = item.get("selected_option_ids") or []
+            workset_ids = item.get("workset_item_ids") or []
+            await _continue_after_orphaned_confirm_options(
+                conv_id=conv_id,
+                client_id=cid_client,
+                msg=msg,
+                selected_option_ids=selected if isinstance(selected, list) else [],
+                workset_item_ids=workset_ids if isinstance(workset_ids, list) else [],
+            )
+            print(
+                f"[WS] session demand drained conv={conv_id[:8]} demand={str(item.get('id') or '')[:8]}"
+            )
+            return True
+        # Generic text demand (future): shape as user continue.
+        text = str(item.get("text") or "").strip()
+        if text:
+            msg = {
+                "text": text,
+                "expert_id": item.get("expert_id"),
+                "expert_name": item.get("expert_name"),
+                "engagement": item.get("engagement"),
+            }
+            if item.get("target") is not None:
+                msg["target"] = item.get("target")
+            if item.get("scope") is not None:
+                msg["scope"] = item.get("scope")
+            await _continue_after_orphaned_confirm_options(
+                conv_id=conv_id,
+                client_id=cid_client,
+                msg=msg,
+                selected_option_ids=[],
+                workset_item_ids=list(item.get("workset_item_ids") or []),
+            )
+            return True
+    except Exception as e:
+        print(f"[WS] drain session demand error: {e}")
+        # Re-queue head on failure so demand is not lost.
+        try:
+            demand_queue.enqueue(conv_id, item)
+        except Exception:
+            pass
+    return False
 
 
 async def _forward_pending_approval_text(
@@ -5077,6 +5247,14 @@ async def _dispatch_task_assign_to_node(
     worker_limits = await _worker_limits_for_node(node_id)
     if worker_limits:
         task_msg = merge_worker_limits_into_message(task_msg, worker_limits)
+    # Spec #313 L3: one-shot Free todo.init replace — only when platform granted this turn.
+    # Agent allow_replace alone is never enough; consume so grant cannot be reused.
+    if msg.get("todo_replace_permission") is True or msg.get("todoReplacePermission") is True:
+        _grant_todo_replace(conv_id)
+    if _is_todo_replace_user_permission(msg):
+        _grant_todo_replace(conv_id)
+    if _consume_todo_replace_grant(conv_id):
+        task_msg["todo_replace_allowed"] = True
     await node_connections[node_id].send_text(json.dumps(task_msg, ensure_ascii=False))
 
 
@@ -5141,6 +5319,11 @@ def _task_assign_from_user_message(conv_id: str, msg: dict, task_id: str) -> dic
         out["accounts"] = msg.get("accounts")
     # Map #81 F1 dig-deeper focus (structured only; no NLP invent).
     out.update(focus_fields_from_message(msg if isinstance(msg, dict) else None))
+    # Spec #313 L3: carry explicit structured replace permission when present on demand.
+    if msg.get("todo_replace_permission") is True or msg.get("todoReplacePermission") is True:
+        out["todo_replace_permission"] = True
+    if msg.get("todo_replace_allowed") is True or msg.get("todoReplaceAllowed") is True:
+        out["todo_replace_allowed"] = True
     return out
 
 
@@ -5823,8 +6006,14 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     decision = msg.get("decision", "cancel")
                     approval = pending_approvals.pop(str(request_id), {}) if request_id else {}
                     had_live_pending = bool(isinstance(approval, dict) and approval)
+                    # Spec #313 L10: fall back to durable option snapshot when pending already gone.
+                    card_source = (
+                        approval
+                        if isinstance(approval, dict) and approval
+                        else (_choice_card_snap_for_request(str(request_id) if request_id else None) or {})
+                    )
                     selected_option_ids = msg.get("selected_option_ids")
-                    # Spec #312 S2: always expand from pending card snapshot (ignore client binds).
+                    # Spec #312 S2: always expand from card snapshot (ignore client binds).
                     workset_item_ids: list[str] = []
                     if (
                         decision == "confirm_options"
@@ -5835,13 +6024,13 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
 
                             card_snap = {
                                 "kind": (
-                                    approval.get("kind")
-                                    if isinstance(approval, dict) and approval
+                                    card_source.get("kind")
+                                    if isinstance(card_source, dict) and card_source
                                     else "next_steps"
                                 ),
                                 "options": (
-                                    approval.get("options")
-                                    if isinstance(approval, dict) and approval
+                                    card_source.get("options")
+                                    if isinstance(card_source, dict) and card_source
                                     else None
                                 ),
                             }
@@ -5849,6 +6038,8 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             workset_item_ids = list(expanded.get("workset_item_ids") or [])
                         except Exception:
                             workset_item_ids = []
+                    # Spec #313 L3: structured replace permission only (not free-text NLP).
+                    replace_perm = _is_todo_replace_user_permission(msg, selected_option_ids)
                     node_msg = {
                         "type": "user_input",
                         "conversation_id": conv_id,
@@ -5864,6 +6055,9 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         node_msg["workset_item_ids"] = workset_item_ids
                     if msg.get("text"):
                         node_msg["text"] = str(msg.get("text"))
+                    if replace_perm:
+                        # Live wait: Node consumes via user_input this turn (no platform hold).
+                        node_msg["todo_replace_permission"] = True
                     # Prefer the node that issued the approval (may differ from sticky bind).
                     sent = False
                     approval_node = str(approval.get("node_id") or "").strip() if isinstance(approval, dict) else ""
@@ -5900,14 +6094,19 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     except Exception as e:
                         print(f"[WS] approval audit error: {e}")
 
-                    # Spec #312 US9 / #313 S1: "按所选继续" is a Session demand (FIFO with user text).
+                    # Spec #312 US9 / #313 S1/L9: "按所选继续" is a Session demand (FIFO with user text).
                     # live wait → forward_live (user_input already sent above)
-                    # busy without wait → steer_busy (same class as mid-flight user message)
-                    # idle/dead wait → continue_dispatch with sticky target (no empty-target chat)
+                    # busy without wait → enqueue (not silent mid-flight steer)
+                    # force_interrupt / idle/dead wait → continue_dispatch with sticky target
                     if str(decision or "").strip() == "confirm_options":
                         from app.services.choice_card import resolve_confirm_options_delivery
 
                         delivery = "continue_dispatch"
+                        force = bool(
+                            msg.get("force_interrupt")
+                            or msg.get("forceInterrupt")
+                            or msg.get("interrupt") is True
+                        )
                         try:
                             st = str(await _conversation_status(conv_id) or "").lower()
                             snap = await _conversation_snapshot(conv_id, client_id)
@@ -5918,11 +6117,6 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                                 (snap or {}).get("working") if isinstance(snap, dict) else None
                             )
                             worker_count = len(workers) if isinstance(workers, list) else 0
-                            force = bool(
-                                msg.get("force_interrupt")
-                                or msg.get("forceInterrupt")
-                                or msg.get("interrupt") is True
-                            )
                             delivery = resolve_confirm_options_delivery(
                                 had_live_pending=had_live_pending,
                                 conversation_status=st,
@@ -5938,23 +6132,39 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             selected_option_ids if isinstance(selected_option_ids, list) else []
                         )
                         if delivery == "forward_live":
-                            pass  # user_input already forwarded
-                        elif delivery == "steer_busy":
+                            pass  # user_input already forwarded (incl. todo_replace_permission)
+                        elif delivery == "enqueue":
+                            # Hold grant until dequeue → task_assign one-shot.
+                            if replace_perm:
+                                _grant_todo_replace(conv_id)
                             try:
-                                steered = await _steer_confirm_options_while_busy(
+                                await _enqueue_confirm_options_while_busy(
                                     conv_id=conv_id,
                                     client_id=client_id,
                                     msg=msg,
                                     selected_option_ids=selected_ids,
                                     workset_item_ids=workset_item_ids,
                                 )
-                                if not steered:
-                                    # Bound node missing — fall through to continue dispatch.
-                                    delivery = "continue_dispatch"
                             except Exception as e:
-                                print(f"[WS] confirm_options busy-steer error: {e}")
+                                print(f"[WS] confirm_options enqueue error: {e}")
                                 delivery = "continue_dispatch"
                         if delivery == "continue_dispatch":
+                            if replace_perm:
+                                _grant_todo_replace(conv_id)
+                            # force_interrupt: interrupt in-flight first, then apply demand.
+                            if force:
+                                try:
+                                    await _freeze_pending_approvals_on_interrupt(conv_id, client_id)
+                                    interrupt_msg = {
+                                        "type": "user_interrupt",
+                                        "conversation_id": conv_id,
+                                        "action": "cancel",
+                                    }
+                                    await _send_to_bound_node(
+                                        conv_id, json.dumps(interrupt_msg, ensure_ascii=False)
+                                    )
+                                except Exception as e:
+                                    print(f"[WS] confirm force_interrupt prep error: {e}")
                             try:
                                 await _continue_after_orphaned_confirm_options(
                                     conv_id=conv_id,

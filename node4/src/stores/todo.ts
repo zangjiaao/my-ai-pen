@@ -87,8 +87,9 @@ export function freeInitReplaceDenied(
   if (!freeMapNonEmpty(previous)) return undefined;
   return (
     "Free Tasks map already exists; silent todo.init replace is forbidden. " +
-    "Use append/start/done/drop/rm to maintain the map, or set allow_replace after " +
-    "explicit user permission to replace the checklist."
+    "Use append/start/done/drop/rm to maintain the map, or obtain platform-issued " +
+    "todo_replace_allowed after explicit user permission (ChoiceCard option " +
+    "replace_todo_map / todo_replace_permission) — agent allow_replace alone is not enough."
   );
 }
 

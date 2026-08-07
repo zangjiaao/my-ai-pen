@@ -153,7 +153,7 @@ def test_s1_confirm_continue_retains_sticky_target():
 
 
 def test_s1_confirm_delivery_modes():
-    """Spec #313 S1: busy → steer; live wait → forward; idle → continue."""
+    """Spec #313 S1/L9: busy → enqueue (not steer); live wait → forward; idle → continue."""
     assert (
         resolve_confirm_options_delivery(
             had_live_pending=True,
@@ -170,7 +170,7 @@ def test_s1_confirm_delivery_modes():
             working=True,
             worker_count=1,
         )
-        == "steer_busy"
+        == "enqueue"
     )
     assert (
         resolve_confirm_options_delivery(

@@ -263,8 +263,8 @@ def resolve_confirm_options_delivery(
 
     Returns one of:
       - ``forward_live``: live approval wait still owns the Session
-      - ``steer_busy``: Session in-flight without live wait → FIFO demand like user text
-      - ``continue_dispatch``: idle/settled/dead wait → same Session continue turn
+      - ``enqueue``: Session in-flight without live wait → FIFO demand queue (same class as user text)
+      - ``continue_dispatch``: idle/settled/dead wait / force_interrupt → same Session continue turn
     """
     st = _s(conversation_status).lower()
     settled = st in {
@@ -282,12 +282,13 @@ def resolve_confirm_options_delivery(
     session_idle = settled or working is False or workers == 0
 
     if force_interrupt:
+        # Spec #313 L9/L11: force-send interrupts then applies (not silent steer).
         return "continue_dispatch"
     if had_live_pending and not session_idle:
         return "forward_live"
     if not session_idle:
-        # Busy Session, no live wait (or wait already dead): queue/steer like user text.
-        return "steer_busy"
+        # Busy Session, no live wait (or wait already dead): FIFO enqueue (not mid-flight steer).
+        return "enqueue"
     return "continue_dispatch"
 
 
