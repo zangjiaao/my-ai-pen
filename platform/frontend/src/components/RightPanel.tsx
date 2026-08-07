@@ -25,7 +25,13 @@ import {
 } from "./SurfaceInventory";
 import FindingCard from "./cards/FindingCard";
 import { GraphAwareTodoList } from "./TasksPlanList";
+import { WorksetNextList } from "./WorksetNextList";
 import { discloseTaskListCap, TASKS_WORK_ITEM_CAP } from "../lib/tasksListCap";
+import {
+  parseWorksetProjection,
+  worksetHasVisibleContent,
+  type WorksetProjection,
+} from "../lib/workset";
 
 export { TASKS_WORK_ITEM_CAP };
 
@@ -131,6 +137,12 @@ interface Props {
   taskContext?: Record<string, unknown>;
   /** Spec #163 Graph engagement close-out (Product state). */
   engagementCloseout?: Record<string, unknown>;
+  /** Spec #311 Case Workset («下一步») — separate from Tasks. */
+  workset?: WorksetProjection | Record<string, unknown> | null;
+  onWorksetAdopt?: (id: string) => void;
+  onWorksetReject?: (id: string) => void;
+  onWorksetDone?: (id: string) => void;
+  worksetBusyId?: string | null;
   onOpenVulnerability?: (finding: Partial<SecurityVulnerability>) => void;
   onOpenAsset?: (asset: Partial<SecurityAsset>) => void;
 }
@@ -166,6 +178,11 @@ export default function RightPanel({
   workflowKind,
   running = false,
   engagementCloseout,
+  workset: worksetRaw,
+  onWorksetAdopt,
+  onWorksetReject,
+  onWorksetDone,
+  worksetBusyId,
   planTree = [],
   strixAgents = [],
   strixNotes = [],
@@ -236,6 +253,11 @@ export default function RightPanel({
     : unifiedTodoItems(visiblePlanTree);
   const taskItems = taskList.items;
   const tasksHiddenCount = taskList.hiddenCount;
+  const workset = useMemo(
+    () => parseWorksetProjection(worksetRaw),
+    [worksetRaw],
+  );
+  const showWorkset = worksetHasVisibleContent(workset);
   const displayRun = useMemo(
     () => mergeCaseRunIntoDisplayRun(strixRun, caseRun, running),
     [strixRun, caseRun, running],
@@ -380,8 +402,29 @@ export default function RightPanel({
                 <StrixAgentList agents={displayAgents} />
               </section>
             )}
+            {/* Spec #311: Case Workset backlog — separate from process Tasks */}
+            {showWorkset && (
+              <section data-testid="workset-section">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="text-xs text-ink-muted">下一步</p>
+                  {workset.items.length > 0 && (
+                    <p className="font-mono text-[11px] text-ink-muted">
+                      {workset.items.filter((i) => String(i.status) === "adopted" || i.in_progress).length}/
+                      {workset.items.length}
+                    </p>
+                  )}
+                </div>
+                <WorksetNextList
+                  workset={workset}
+                  onAdopt={onWorksetAdopt}
+                  onReject={onWorksetReject}
+                  onDone={onWorksetDone}
+                  busyId={worksetBusyId}
+                />
+              </section>
+            )}
             {/* Intentional TODO / work packages — Expert Graph L1 stages + L2 todos when present */}
-            <section>
+            <section data-testid="tasks-section">
               <div className="mb-2 flex items-center justify-between gap-2">
                 <p className="text-xs text-ink-muted">Tasks</p>
                 {taskItems.length > 0 && (

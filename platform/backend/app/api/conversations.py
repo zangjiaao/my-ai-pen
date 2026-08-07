@@ -354,6 +354,201 @@ async def steer_conversation(conv_id: str, body: dict, current_user: dict = Depe
     return {"ok": True, "sent": True, "queued": False}
 
 
+@router.get("/{conv_id}/workset")
+async def get_workset_api(
+    conv_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Case Workset («下一步») projection — open items ordered; survives Graph runs."""
+    from app.services.case_workset import get_workset, project_workset_for_api
+
+    c = await _get_conv(conv_id, current_user, db)
+    ctx = c.context if isinstance(c.context, dict) else {}
+    return project_workset_for_api(get_workset(ctx))
+
+
+@router.patch("/{conv_id}/workset/{item_id}")
+async def patch_workset_item(
+    conv_id: str,
+    item_id: str,
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Host-gated Workset item update (status / in_progress baton). Agent cannot self-adopt.
+
+    Spec #311: t_host adopt expands Scope.allow / assets (same spirit as next-scope);
+    never mark t_host adopted without Scope update.
+
+    User adopt (and in_progress=true 推进) takes the single in-progress baton and
+    stamps expert(+Graph|Free) from Case task + Participant Session for US3 UI.
+    """
+    from app.services.case_workset import (
+        adopt_item,
+        annotation_fields_from_context,
+        expand_task_scope_for_host,
+        get_workset,
+        host_expand_fields_from_item,
+        project_workset_for_api,
+        put_workset,
+        scope_hosts_from_task,
+        take_in_progress_baton,
+        update_item_status,
+    )
+
+    c = await _get_conv(conv_id, current_user, db)
+    ctx = dict(c.context or {}) if isinstance(c.context, dict) else {}
+    ws = get_workset(ctx)
+    task = dict(ctx.get("task") or {}) if isinstance(ctx.get("task"), dict) else {}
+    scope_hosts = scope_hosts_from_task(task)
+    status = str(body.get("status") or "").strip()
+    actor = "user"  # HTTP path is always user-gated
+    scope_expanded: dict | None = None
+    registered_asset: dict | None = None
+    # Explicit baton request (推进): body.in_progress true without status change.
+    want_baton = body.get("in_progress") is True or body.get("in_progress") in ("true", "1", 1)
+
+    if status == "adopted":
+        target = next((i for i in ws["items"] if isinstance(i, dict) and str(i.get("id")) == item_id), None)
+        if not target:
+            raise HTTPException(400, "not_found")
+        # t_host: expand Scope before/with adopt (confirm path). Refuse adopt if expand fails.
+        expand_fields = host_expand_fields_from_item(target)
+        if expand_fields:
+            expanded_task, expand_err = expand_task_scope_for_host(
+                task,
+                host=expand_fields["host"],
+                port=expand_fields.get("port"),
+                urls=expand_fields.get("urls"),
+            )
+            if expand_err:
+                raise HTTPException(400, f"scope_expand_failed:{expand_err}")
+            task = expanded_task
+            ctx["task"] = task
+            scope_hosts = scope_hosts_from_task(task)
+            scope_expanded = {
+                "host": expand_fields["host"],
+                "port": expand_fields.get("port"),
+                "allow": (task.get("scope") or {}).get("allow"),
+            }
+            # Register asset (same spirit as POST next-scope; user confirm).
+            register_assets = body.get("register_assets")
+            if register_assets is None:
+                register_assets = True
+            if register_assets:
+                try:
+                    from app.api.assets import upsert_discovered_asset
+
+                    user_id = uuid.UUID(current_user["user_id"])
+                    port = expand_fields.get("port")
+                    urls = expand_fields.get("urls") or []
+                    asset = await upsert_discovered_asset(
+                        db,
+                        user_id=user_id,
+                        address=expand_fields["host"],
+                        open_ports=[port] if port else None,
+                        urls=urls if urls else None,
+                        port=port,
+                        conversation_id=c.id,
+                        source="user_workset_host_adopt",
+                        allow_create=True,
+                    )
+                    if asset:
+                        registered_asset = {"id": str(asset.id), "address": asset.address, "port": port}
+                except Exception as e:
+                    # Scope already expanded; asset registration failure must not orphan adopt.
+                    print(f"[api] workset t_host asset register error: {e}")
+        ws, item, err = adopt_item(ws, item_id, actor=actor, scope_hosts=scope_hosts)
+        # Spec #311 US3: user adopt takes the in-progress baton so expert(+Graph) lights.
+        if not err and item:
+            ann = annotation_fields_from_context(ctx)
+            ws, item, baton_err = take_in_progress_baton(
+                ws,
+                item_id,
+                expert_id=ann.get("expert_id"),
+                expert_name=ann.get("expert_name"),
+                graph_id=ann.get("graph_id"),
+                work_mode=ann.get("work_mode"),
+                force=True,
+            )
+            if baton_err:
+                err = baton_err
+    elif status:
+        ws, item, err = update_item_status(ws, item_id, status=status, actor=actor)
+    else:
+        item = next((i for i in ws["items"] if str(i.get("id")) == item_id), None)
+        err = None if item else "not_found"
+        if item and body.get("in_progress") is False:
+            from app.services.case_workset import set_in_progress
+
+            # Clear only this item if it holds the baton; leave others untouched.
+            if item.get("in_progress"):
+                ws = set_in_progress(ws, None)
+                item = next((i for i in ws["items"] if str(i.get("id")) == item_id), item)
+        elif item and want_baton:
+            # 推进: switch baton to an already-adopted open item.
+            ann = annotation_fields_from_context(ctx)
+            ws, item, err = take_in_progress_baton(
+                ws,
+                item_id,
+                expert_id=ann.get("expert_id"),
+                expert_name=ann.get("expert_name"),
+                graph_id=ann.get("graph_id"),
+                work_mode=ann.get("work_mode"),
+                force=True,
+            )
+
+    if err:
+        raise HTTPException(400, err)
+    c.context = put_workset(ctx, ws)
+    await _audit(
+        db,
+        uuid.UUID(current_user["user_id"]),
+        "conversation.workset_update",
+        "conversation",
+        c.id,
+        c.id,
+        {
+            "item_id": item_id,
+            "status": status or None,
+            "scope_expanded": scope_expanded,
+            "registered_asset": registered_asset,
+        },
+    )
+    await db.commit()
+    out: dict = {"ok": True, "item": item, "workset": project_workset_for_api(ws)}
+    if scope_expanded:
+        out["scope"] = {"allow": scope_expanded.get("allow") or [], "deny": (task.get("scope") or {}).get("deny") or []}
+        out["scope_expanded"] = scope_expanded
+    if registered_asset:
+        out["registered_asset"] = registered_asset
+    return out
+
+
+@router.post("/{conv_id}/workset/reorder")
+async def reorder_workset(
+    conv_id: str,
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """User reorder of open 下一步 items."""
+    from app.services.case_workset import get_workset, project_workset_for_api, put_workset, reorder_items
+
+    c = await _get_conv(conv_id, current_user, db)
+    ctx = dict(c.context or {}) if isinstance(c.context, dict) else {}
+    ordered_ids = body.get("ordered_ids") or body.get("ids") or []
+    if not isinstance(ordered_ids, list):
+        raise HTTPException(400, "ordered_ids must be a list")
+    ws, err = reorder_items(get_workset(ctx), [str(x) for x in ordered_ids])
+    if err:
+        raise HTTPException(400, err)
+    c.context = put_workset(ctx, ws)
+    await db.commit()
+    return {"ok": True, "workset": project_workset_for_api(ws)}
+
+
 @router.post("/{conv_id}/next-scope")
 async def start_next_scope(
     conv_id: str,

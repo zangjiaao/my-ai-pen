@@ -63,6 +63,10 @@ import {
   shouldEmitToolingHealth,
 } from "./tooling-health.js";
 import { buildAttackSurfaceCandidates } from "./attack-surface.js";
+import {
+  filterEmitableWorksetCandidates,
+  worksetCandidatesFromAttackSurface,
+} from "./workset-emit.js";
 import { loadFindings } from "../tools/finding.js";
 import {
   extractLlmTurnError,
@@ -806,6 +810,10 @@ export async function runNode4Task(
       }
     }
     const sideCandidates = attackSurfaceCandidates.filter((c) => !c.in_scope);
+    // Spec #311: Free settle → Workset proposed (t_host OOS + in-scope t_surface deepen).
+    const worksetCandidates = filterEmitableWorksetCandidates(
+      worksetCandidatesFromAttackSurface(attackSurfaceCandidates, { source: "free_settle" }),
+    );
 
     // Hook: work-burst end → panel timer closes (checkpoint.end_time then task_complete).
     await emitCheckpointUpdate(obsCtx, {
@@ -831,6 +839,10 @@ export async function runNode4Task(
       end_time: endTime,
       attack_surface_candidates: attackSurfaceCandidates,
       next_scope_candidates: sideCandidates,
+      workset_candidates: worksetCandidates,
+      workset_source: "free_settle",
+      goal_mode: goals.isActive() || Boolean(task.goalObjective),
+      goal_objective: task.goalObjective || undefined,
     });
 
     await writeFile(
@@ -852,6 +864,7 @@ export async function runNode4Task(
           endTime,
           attackSurfaceCandidates,
           nextScopeCandidates: sideCandidates,
+          worksetCandidates,
         },
         null,
         2,
