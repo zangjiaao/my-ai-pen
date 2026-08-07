@@ -16,6 +16,10 @@ import {
   graphStageLocalTodoInitError,
   isWholeEngagementTodoInitOnGraph,
 } from "../runtime/graph-stage-todo-scope.js";
+import {
+  consumePlatformTodoReplaceGrant,
+  platformTodoReplaceAllowed,
+} from "../runtime/todo-replace-grant.js";
 
 const OPS = ["init", "start", "done", "rm", "drop", "append", "view"] as const;
 
@@ -32,6 +36,11 @@ export function createTodoTool(runtime: ToolRuntime): AgentTool<any> {
       items: Type.Optional(Type.Array(Type.String())),
       /** Graph coverage note: deadend|skipped_roe|probed|booked|n/a — blocks bare done when ledger has open surfaces */
       note: Type.Optional(Type.String()),
+      /**
+       * Spec #313 Free: full todo.init replace only after explicit user permission.
+       * Ignored on Graph / subagent (stage-local / private maps).
+       */
+      allow_replace: Type.Optional(Type.Boolean()),
     }),
     async execute(_id: string, params: any) {
       const op = String(params.op || "").trim().toLowerCase() as TodoOpName;
@@ -87,6 +96,19 @@ export function createTodoTool(runtime: ToolRuntime): AgentTool<any> {
         }
       }
 
+      // Spec #313: Free Main Tasks = user progress SoT — gate silent init replace.
+      // Graph plan path and subagent-private maps keep prior init semantics.
+      // L3: full replace only with platform-issued grant (user confirm), not agent self-attest.
+      const isSubagentEarly = (runtime.lifecycle.subagentDepth || 0) >= 1;
+      const isFreeMainMap = !isSubagentEarly && !graphRunEarly?.plan;
+      // Spec #313 L3: platform grant required for Free replace (agent allow_replace alone denied).
+      const platformGrant = platformTodoReplaceAllowed({
+        taskTodoReplaceAllowed: runtime.task.todoReplaceAllowed === true,
+        conversationId: runtime.task.conversationId,
+      });
+      // Platform alone is enough once user confirmed; agent flag without platform is not.
+      const allowReplace = platformGrant === true;
+
       const input: TodoParams = {
         op,
         list: Array.isArray(params.list)
@@ -100,6 +122,8 @@ export function createTodoTool(runtime: ToolRuntime): AgentTool<any> {
         task: params.task != null ? String(params.task) : undefined,
         phase: params.phase != null ? String(params.phase) : undefined,
         items: Array.isArray(params.items) ? params.items.map((x: unknown) => String(x)) : undefined,
+        free_map: isFreeMainMap || undefined,
+        allow_replace: allowReplace || undefined,
       };
       // Spec #116 I0.11: cannot done L2 while anchored package failed/running/unfinished
       if (op === "done" && runtime.lifecycle.processQuality && input.task) {
@@ -137,6 +161,21 @@ export function createTodoTool(runtime: ToolRuntime): AgentTool<any> {
           },
           { isError: true },
         );
+      }
+      // Spec #313 L3: one-shot — consume platform grant after successful Free replace init.
+      if (
+        op === "init" &&
+        isFreeMainMap &&
+        allowReplace &&
+        !result.readOnly &&
+        !result.errors.length
+      ) {
+        consumePlatformTodoReplaceGrant({
+          task: runtime.task,
+          clearTaskFlag: () => {
+            runtime.task.todoReplaceAllowed = false;
+          },
+        });
       }
       // Spec #116 I0.21: Expert Graph coverage SoT = GraphStore only (no TodoStore∥GraphStore dual plan_tree).
       const graphRun = runtime.lifecycle.hardGraphRun;

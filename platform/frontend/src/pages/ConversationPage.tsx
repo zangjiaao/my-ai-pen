@@ -14,7 +14,7 @@ import EvidenceDetailDialog from "../components/EvidenceDetailDialog";
 import { useConversationStore } from "../stores/conversationStore";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { ApiError, authFetch } from "../lib/api";
-import { mergeThinkingStatus, mergeToolLifecycleStatus, normalizeExecutionStatus } from "../lib/status";
+import { mergeThinkingStatus, mergeToolLifecycleStatus } from "../lib/status";
 import { PHASES, phaseLabel } from "../lib/phase";
 import {
   findAgentByIdExact,
@@ -66,6 +66,12 @@ import {
   type ExpertId,
 } from "../lib/experts";
 import { currentInProgressWorksetItemId } from "../lib/workset";
+import {
+  buildConfirmOptionsText,
+  expandSelectedOptions,
+  isChoiceDecisionFinal,
+  type ChoiceDecision,
+} from "../lib/choiceCard";
 
 const ACTIVE_CONVERSATION_KEY = "active_conversation_id";
 /** Set by AssetPage when launching a task from selected hosts/ports. */
@@ -142,15 +148,6 @@ type KanbanSummary = {
   totals?: Record<string, number>;
   buckets?: KanbanBucket[];
 };
-type TimelineEvent = {
-  id: string;
-  at?: string;
-  category: string;
-  title: string;
-  detail?: string;
-  status?: string;
-};
-
 type CaseRunSummary = {
   started_at?: string;
   last_active_at?: string;
@@ -233,14 +230,15 @@ type ConversationSnapshot = {
   task_context?: Record<string, unknown>;
   /** Spec #163 Graph engagement close-out (same JSON as Node taskDir file) */
   engagement_closeout?: Record<string, unknown>;
-  /** Spec #311 Case Workset («下一步») */
-  workset?: Record<string, unknown>;
-  goal_outer?: Record<string, unknown> | null;
   /** Spec #308 Case Worker display_name overrides */
   worker_display_names?: Record<string, string>;
   /** Spec #309 Case traffic audit store */
   traffic_exchanges?: TrafficExchange[];
+  /** Spec #311 Case Workset (Next) — display-only panel projection */
+  workset?: Record<string, unknown>;
+  goal_outer?: Record<string, unknown> | null;
 };
+
 
 export default function ConversationPage() {
   const { conversations, fetchAll, patchConversation } = useConversationStore();
@@ -269,11 +267,6 @@ export default function ConversationPage() {
     status?: string;
   } | null>(null);
   /** Post-task out-of-scope hosts → user picks next Scope (new task). */
-  const [nextScopeCandidates, setNextScopeCandidates] = useState<
-    Array<{ host: string; port?: string; urls?: string[]; in_scope?: boolean }>
-  >([]);
-  const [nextScopeSelected, setNextScopeSelected] = useState<Record<string, boolean>>({});
-  const [nextScopeBusy, setNextScopeBusy] = useState(false);
   const [importingReport, setImportingReport] = useState(false);
   const [importStatus, setImportStatus] = useState<ImportStatus>(null);
   /** Selected conversation partner (expert or platform). */
@@ -304,9 +297,6 @@ export default function ConversationPage() {
   const [taskContext, setTaskContext] = useState<Record<string, unknown> | undefined>();
   /** Spec #163: latest Graph engagement close-out from conversation.context / WS */
   const [engagementCloseout, setEngagementCloseout] = useState<Record<string, unknown> | undefined>();
-  /** Spec #311 Case Workset («下一步») — survives Graph; separate from Tasks */
-  const [workset, setWorkset] = useState<Record<string, unknown> | undefined>();
-  const [worksetBusyId, setWorksetBusyId] = useState<string | null>(null);
   /** Spec #308: Case Worker display_name overrides (agent_id → name). */
   const [workerDisplayNames, setWorkerDisplayNames] = useState<Record<string, string>>({});
   /** Spec #308: open Worker audit dialog from collaboration tree. */
@@ -317,6 +307,9 @@ export default function ConversationPage() {
   } | null>(null);
   /** Spec #309: Case traffic audit (right-panel Traffic tab). */
   const [trafficExchanges, setTrafficExchanges] = useState<TrafficExchange[]>([]);
+  /** Spec #311 Case Workset (Next) — display-only panel projection; separate from Tasks */
+  const [workset, setWorkset] = useState<Record<string, unknown> | undefined>();
+  const [worksetBusyId, setWorksetBusyId] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   /** True while interrupt was sent and nodes have not yet reported idle. */
   const [interrupting, setInterrupting] = useState(false);
@@ -327,7 +320,6 @@ export default function ConversationPage() {
   const [liveStreams, setLiveStreams] = useState<Record<string, LiveStreamFrame>>({});
   /** List-tail “思考中…” after send — not a Message in RQ or live map. */
   const [pendingChrome, setPendingChrome] = useState<PendingChrome>(null);
-  const [timelineCursorAt, setTimelineCursorAt] = useState<string | undefined>();
   const [selectedVulnerability, setSelectedVulnerability] = useState<Partial<SecurityVulnerability> | null>(null);
   const [selectedAsset, setSelectedAsset] = useState<Partial<SecurityAsset> | null>(null);
   const [selectedEvidence, setSelectedEvidence] = useState<Partial<SecurityEvidence> | null>(null);
@@ -551,20 +543,49 @@ export default function ConversationPage() {
     return map;
   }, [productExperts]);
   const approvalDecisionByRequestId = useMemo(() => {
-    const decisions: Record<string, "authorize" | "cancel" | "answered"> = {};
+    const decisions: Record<string, ChoiceDecision> = {};
     for (const message of messages) {
       if (message.msg_type !== "decision") continue;
       const requestId = readString(message.content.request_id);
       const decision = readString(message.content.decision);
-      // Spec #277 §3.3 14a: free-text reply greys the card the same as button click.
-      if (
-        requestId
-        && (decision === "authorize" || decision === "cancel" || decision === "answered")
-      ) {
-        decisions[requestId] = decision;
+      // Spec #277 §3.3 14a / #312 L9: free-text or confirm freezes the card.
+      if (requestId && isChoiceDecisionFinal(decision)) {
+        decisions[requestId] = decision as ChoiceDecision;
       }
     }
     return decisions;
+  }, [messages]);
+
+  /**
+   * Spec #312 / US23: disable controls only while tools are mid-flight — not while
+   * the Session is blocked on an open ChoiceCard. Waiting for next_steps/authorize
+   * still reports conversation.working/running; those cards must stay clickable.
+   */
+  const hasOpenInteractiveChoice = useMemo(() => {
+    for (const item of pendingApprovals) {
+      const requestId = String(item.request_id || "").trim();
+      if (requestId && !approvalDecisionByRequestId[requestId]) return true;
+    }
+    for (const message of messages) {
+      if (message.msg_type !== "confirm_card" && message.msg_type !== "choice_card") continue;
+      const requestId = readString(message.content.request_id);
+      if (requestId && !approvalDecisionByRequestId[requestId]) return true;
+    }
+    return false;
+  }, [pendingApprovals, messages, approvalDecisionByRequestId]);
+
+  /** Spec #312: hydrate next_steps checkboxes from structured decision payload. */
+  const choiceSelectedByRequestId = useMemo(() => {
+    const map: Record<string, string[]> = {};
+    for (const message of messages) {
+      if (message.msg_type !== "decision") continue;
+      const requestId = readString(message.content.request_id);
+      if (!requestId) continue;
+      const raw = message.content.selected_option_ids;
+      if (!Array.isArray(raw) || !raw.length) continue;
+      map[requestId] = raw.map((x) => String(x || "").trim()).filter(Boolean);
+    }
+    return map;
   }, [messages]);
 
   const applyConversationState = useCallback((snapshot: ConversationSnapshot, fallback?: ConversationSnapshot) => {
@@ -623,12 +644,6 @@ export default function ConversationPage() {
     if (nextCloseout && Object.keys(nextCloseout).length) {
       setEngagementCloseout(nextCloseout);
     }
-    const nextWorkset =
-      snapshot.workset && typeof snapshot.workset === "object"
-        ? snapshot.workset
-        : fallback?.workset;
-    if (nextWorkset && typeof nextWorkset === "object") {
-      setWorkset(nextWorkset);
     const namesRaw =
       snapshot.worker_display_names && typeof snapshot.worker_display_names === "object"
         ? snapshot.worker_display_names
@@ -640,6 +655,13 @@ export default function ConversationPage() {
         if (k && name) nextNames[k] = name;
       }
       setWorkerDisplayNames(nextNames);
+    }
+    // Spec #311: always apply snapshot workset when present (incl. empty projection)
+    // so a Case with no open items clears the previous Case's Next list.
+    if (snapshot.workset != null && typeof snapshot.workset === "object" && !Array.isArray(snapshot.workset)) {
+      setWorkset(snapshot.workset);
+    } else if (fallback?.workset != null && typeof fallback.workset === "object" && !Array.isArray(fallback.workset)) {
+      setWorkset(fallback.workset);
     }
     const snapshotConversation = snapshot.conversation || fallback?.conversation;
     if (snapshotConversation) setActiveConversationNodeId(snapshotConversation.node_id || null);
@@ -686,25 +708,6 @@ export default function ConversationPage() {
       if (!el) return;
       el.scrollTo({ top: el.scrollHeight, behavior });
     });
-  }, []);
-
-  const updateTimelineCursorFromScroll = useCallback(() => {
-    const el = messageScrollerRef.current;
-    if (!el) return;
-    const rows = Array.from(el.querySelectorAll<HTMLElement>("[data-message-created-at]"));
-    if (!rows.length) {
-      setTimelineCursorAt(undefined);
-      return;
-    }
-    const containerRect = el.getBoundingClientRect();
-    const markerY = containerRect.top + el.clientHeight * 0.72;
-    let current = rows[0].dataset.messageCreatedAt || undefined;
-    for (const row of rows) {
-      const rowTop = row.getBoundingClientRect().top;
-      if (rowTop <= markerY) current = row.dataset.messageCreatedAt || current;
-      else break;
-    }
-    setTimelineCursorAt((previous) => previous === current ? previous : current);
   }, []);
 
   const refreshConversationState = useCallback(async (id: string | null) => {
@@ -864,7 +867,9 @@ export default function ConversationPage() {
       if (channel) workerStamp.channel = channel;
       if (agentId) workerStamp.agent_id = agentId;
       if (packageTurnId) workerStamp.package_turn_id = packageTurnId;
-      const toolStatus = normalizeExecutionStatus(m.status);
+      // Spec #305 R2: preserve empty/missing status — do not invent "running".
+      // MessageRenderer / mergeToolLifecycleStatus use result hints when empty.
+      const toolStatus = String(m.status ?? "").trim();
       const incoming = makeMessage(convId, "agent", "tool_call", {
         ...agentAttribution(m),
         ...workerStamp,
@@ -1478,24 +1483,7 @@ export default function ConversationPage() {
         }),
       );
     },
-    next_scope_suggested: (msg) => {
-      if (!isActiveMessage(msg, activeId)) return;
-      const m = msg as Record<string, unknown>;
-      const list = Array.isArray(m.candidates) ? m.candidates : [];
-      const cleaned = list
-        .filter((c): c is Record<string, unknown> => Boolean(c && typeof c === "object"))
-        .map((c) => ({
-          host: String(c.host || "").trim(),
-          port: c.port != null ? String(c.port) : undefined,
-          urls: Array.isArray(c.urls) ? c.urls.map(String) : [],
-          in_scope: Boolean(c.in_scope),
-        }))
-        .filter((c) => c.host && !c.in_scope);
-      setNextScopeCandidates(cleaned);
-      const sel: Record<string, boolean> = {};
-      for (const c of cleaned) sel[`${c.host}|${c.port || ""}`] = true;
-      setNextScopeSelected(sel);
-    },
+    // next_scope_suggested: no composer banner — OOS hosts land in Case Workset → chat-end choice chips.
     workset_updated: (msg) => {
       if (!isActiveMessage(msg, activeId)) return;
       const m = msg as Record<string, unknown>;
@@ -1578,7 +1566,8 @@ export default function ConversationPage() {
     const attribution = agentAttribution(raw);
     const content = { ...attribution, ...c };
     const message = makeMessage(convId, "agent", msgType, content);
-    // Pending chrome only for Main progressive activity (Worker process is dialog-only).
+    // Spec #305: hide pending on first progressive activity (incl. empty running/done thinking).
+    // Spec #308: Worker process is dialog-only — do not drive Main chrome.
     if (!workerScoped) {
       setPendingChrome((cur) => reducePendingChrome(cur, { type: "stream_started" }));
     }
@@ -1637,6 +1626,8 @@ export default function ConversationPage() {
     setEngagementCloseout(undefined);
     setWorkerDisplayNames({});
     setWorkerAuditTarget(null);
+    // Spec #311: clear Case Workset on conversation switch / blank chat (no bleed).
+    setWorkset(undefined);
     launchOptimisticRef.current = false;
     setRunning(false);
     setInterrupting(false);
@@ -1875,6 +1866,43 @@ export default function ConversationPage() {
     send({ type: "user_decision", conversation_id: activeId, request_id: requestId, decision });
   }, [activeId, addMessageToConversation, send]);
 
+  /** Spec #313: next_steps confirm → selected ids + full text (title/body + optional supplement). */
+  const handleConfirmOptions = useCallback(
+    (
+      requestId: string,
+      selectedOptionIds: string[],
+      cardContent: Record<string, unknown>,
+      supplement?: string,
+    ) => {
+      if (!activeId || !requestId || !selectedOptionIds.length) return;
+      const expanded = expandSelectedOptions(cardContent, selectedOptionIds);
+      const text = buildConfirmOptionsText(cardContent, selectedOptionIds, supplement);
+      setPendingApprovals((prev) => prev.filter((item) => item.request_id !== requestId));
+      addMessageToConversation(
+        activeId,
+        makeMessage(activeId, "user", "decision", {
+          request_id: requestId,
+          decision: "confirm_options",
+          selected_option_ids: selectedOptionIds,
+          workset_item_ids: expanded.workset_item_ids,
+          text,
+          supplement: String(supplement || "").trim() || undefined,
+        }),
+      );
+      send({
+        type: "user_decision",
+        conversation_id: activeId,
+        request_id: requestId,
+        decision: "confirm_options",
+        selected_option_ids: selectedOptionIds,
+        workset_item_ids: expanded.workset_item_ids,
+        text,
+        supplement: String(supplement || "").trim() || undefined,
+      });
+    },
+    [activeId, addMessageToConversation, send],
+  );
+
   const chooseMention = useCallback((target: MentionTarget) => {
     // Spec #299: offline-bound Expert is not a conversation partner.
     if (target.selectable === false) return;
@@ -1935,14 +1963,19 @@ export default function ConversationPage() {
     const displayText = opts.displayText.trim();
     const text = opts.text.trim() || displayText;
     if (!displayText) return;
-    const enableGoal = Boolean(opts.goalMode);
     const goalObjectiveText = String(opts.goalObjective || "").trim();
-    const goalPayload: Record<string, unknown> = enableGoal
-      ? {
-          goal_mode: true,
-          ...(goalObjectiveText ? { goal_objective: goalObjectiveText } : {}),
-        }
-      : {};
+    // Explicit goal_mode true|false so platform sticky task can clear Goal-off
+    // (Grok: only explicit off stops Goal outer — not Esc/interrupt).
+    // When off, stamp user_stopped so Case Workset can terminal goal_stopped on assign/settle.
+    const goalPayload: Record<string, unknown> =
+      opts.goalMode === true
+        ? {
+            goal_mode: true,
+            ...(goalObjectiveText ? { goal_objective: goalObjectiveText } : {}),
+          }
+        : opts.goalMode === false
+          ? { goal_mode: false, user_stopped: true }
+          : {};
 
     // Expert from toolbar picker (no @ required) or inline @mention token.
     const selectedCandidate = selectedMentionRef.current || selectedMention;
@@ -2100,7 +2133,7 @@ export default function ConversationPage() {
       ),
     );
 
-    // Spec #311 US3: when a 下一步 item already holds the baton (e.g. after 采纳),
+    // Spec #311 US3: when a Workset item already holds the baton (Goal/system),
     // pass workset_item_id so task_assign refreshes expert(+Graph) annotation.
     const nextWorksetId = currentInProgressWorksetItemId(workset);
     const worksetPayload = nextWorksetId ? { workset_item_id: nextWorksetId } : {};
@@ -2259,21 +2292,33 @@ export default function ConversationPage() {
     })();
   }, []);
 
-  const handleSend = useCallback(async () => {
-    if (!input.trim()) return;
-    const displayText = input.trim();
+  const handleSend = useCallback(async (overrideText?: string) => {
+    const displayText = (typeof overrideText === "string" ? overrideText : input).trim();
+    if (!displayText) return;
     const selectedCandidate = selectedMentionRef.current || selectedMention;
     // Prefer explicit toolbar partner; else parse @token from the message body.
     const resolved = selectedCandidate || resolveMentionedTarget(displayText, mentionTargets);
     const text = stripMentionToken(displayText, resolved?.name || null);
     // Keep selected partner after send so multi-turn stays with the same persona.
     setInput("");
-    // Spec #277 §3.3 14a: typing while a confirm card is open greys the card immediately
-    // (platform also records decision=answered and forwards text into the Session wait).
-    if (activeId && pendingApprovals.length) {
+    // Spec #277 §3.3 14a / #312 L9: free-text freezes open cards via user_message only.
+    // Platform `_forward_pending_approval_text` consumes all pending approvals, persists
+    // decision rows, and unblocks Session — do NOT pre-send user_decision=answered here
+    // (that drained pending and let user_message become a parallel task/steer path).
+    // Optimistic chrome only: grey cards until platform decision broadcasts arrive.
+    if (activeId) {
+      const openIds = new Set<string>();
       for (const item of pendingApprovals) {
         const requestId = String(item.request_id || "").trim();
-        if (!requestId) continue;
+        if (requestId) openIds.add(requestId);
+      }
+      for (const message of messages) {
+        if (message.msg_type !== "confirm_card" && message.msg_type !== "choice_card") continue;
+        const requestId = readString(message.content.request_id);
+        if (!requestId || approvalDecisionByRequestId[requestId]) continue;
+        openIds.add(requestId);
+      }
+      for (const requestId of openIds) {
         addMessageToConversation(
           activeId,
           makeMessage(activeId, "user", "decision", {
@@ -2283,7 +2328,7 @@ export default function ConversationPage() {
           }),
         );
       }
-      setPendingApprovals([]);
+      if (openIds.size) setPendingApprovals([]);
     }
     const isPentest = isPentestMentionTarget(resolved);
     // Spec #277 / #284 G6: wire once here — launch reuses same template + allowPostex (no double-derive).
@@ -2293,7 +2338,9 @@ export default function ConversationPage() {
       (wireTmpl.engagement_template as EngagementTemplateId | undefined) || "";
     const tmplAllowPostex =
       typeof wireTmpl.allow_postex === "boolean" ? wireTmpl.allow_postex : undefined;
-    const enableGoal = isPentest && goalModeEnabled;
+    // Pentest seat always wires explicit goal_mode true|false (not omit) so sticky
+    // Goal-on clears when the UI toggle is off (Grok Goal-off path).
+    const enableGoal = isPentest ? goalModeEnabled : undefined;
     // Asset「创建任务」draft: attach structured target/scope on first send after expert pick.
     const pendingAsset = pendingAssetTaskRef.current;
     const usePendingAsset =
@@ -2341,6 +2388,8 @@ export default function ConversationPage() {
     engagementTemplate,
     activeId,
     pendingApprovals,
+    messages,
+    approvalDecisionByRequestId,
     addMessageToConversation,
   ]);
 
@@ -2522,10 +2571,9 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
     const el = messageScrollerRef.current;
     if (!el) return;
     shouldStickToBottomRef.current = isNearMessageBottom();
-    updateTimelineCursorFromScroll();
     if (el.scrollTop > 96) return;
     fetchOlderMessages();
-  }, [fetchOlderMessages, isNearMessageBottom, updateTimelineCursorFromScroll]);
+  }, [fetchOlderMessages, isNearMessageBottom]);
 
   useEffect(() => {
     const pending = pendingScrollRestoreRef.current;
@@ -2541,16 +2589,10 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
       pendingScrollToBottomRef.current = false;
       shouldStickToBottomRef.current = true;
       scrollMessagesToBottom("auto");
-      window.requestAnimationFrame(() => window.requestAnimationFrame(updateTimelineCursorFromScroll));
       return;
     }
     if (shouldStickToBottomRef.current) scrollMessagesToBottom("auto");
-    window.requestAnimationFrame(updateTimelineCursorFromScroll);
-  }, [activeId, messages, messageQuery.isFetchingNextPage, scrollMessagesToBottom, updateTimelineCursorFromScroll]);
-
-  useEffect(() => {
-    window.requestAnimationFrame(updateTimelineCursorFromScroll);
-  }, [displayMessages.length, updateTimelineCursorFromScroll]);
+  }, [activeId, messages, messageQuery.isFetchingNextPage, scrollMessagesToBottom]);
 
   return (
     <div className="flex h-screen overflow-hidden bg-canvas">
@@ -2632,11 +2674,17 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                     fallbackPentestNodeId={fallbackPentestNodeId}
                     platformAgentNodeId={platformAgentNodeId}
                     onDecision={handleDecision}
+                    onConfirmOptions={handleConfirmOptions}
                     onOpenVulnerability={setSelectedVulnerability}
                     onOpenAsset={setSelectedAsset}
                     onOpenEvidence={setSelectedEvidence}
                     highlightedApprovalId={highlightedApprovalId}
                     approvalDecisionByRequestId={approvalDecisionByRequestId}
+                    choiceSelectedByRequestId={choiceSelectedByRequestId}
+                    sessionActive={isActiveConversationRunning}
+                    choiceDisabled={
+                      interrupting || ((running || Boolean(activeConversation?.working)) && !hasOpenInteractiveChoice)
+                    }
                   />
                 </div>
               ))}
@@ -2672,6 +2720,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                   </div>
                 );
               })()}
+              {/* Spec #312 L10: mechanical WorksetChoiceBar retired — next_steps ChoiceCard in stream. */}
             </div>
             <div className="p-4 pt-2">
               {/* Agent-style composer: partner chip → (pentest: mode + Goal) → send */}
@@ -2779,77 +2828,6 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                     >
                       忽略
                     </button>
-                  </div>
-                )}
-                {nextScopeCandidates.length > 0 && !running && (
-                  <div className="mx-3 mb-2 space-y-2 rounded-xl border border-hairline bg-surface-elevated px-3 py-2 text-xs text-ink">
-                    <p className="font-medium">
-                      本轮发现范围外主机 — 勾选作为<strong>下一轮 Scope</strong>（新任务，并默认登记资产）
-                    </p>
-                    <ul className="max-h-28 space-y-1 overflow-y-auto">
-                      {nextScopeCandidates.map((c) => {
-                        const key = `${c.host}|${c.port || ""}`;
-                        const label = c.port ? `${c.host}:${c.port}` : c.host;
-                        return (
-                          <li key={key} className="flex items-center gap-2">
-                            <input
-                              type="checkbox"
-                              checked={Boolean(nextScopeSelected[key])}
-                              onChange={(e) =>
-                                setNextScopeSelected((prev) => ({ ...prev, [key]: e.target.checked }))
-                              }
-                            />
-                            <span className="font-mono text-[11px]">{label}</span>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        disabled={nextScopeBusy || !Object.values(nextScopeSelected).some(Boolean)}
-                        className="rounded-pill bg-ink px-2.5 py-1 text-[11px] font-medium text-on-ink disabled:opacity-40"
-                        onClick={() => {
-                          if (!activeId) return;
-                          const hosts = nextScopeCandidates
-                            .filter((c) => nextScopeSelected[`${c.host}|${c.port || ""}`])
-                            .map((c) => ({
-                              host: c.host,
-                              port: c.port,
-                              url: c.urls?.[0],
-                            }));
-                          if (!hosts.length) return;
-                          setNextScopeBusy(true);
-                          void authFetch(`/api/conversations/${activeId}/next-scope`, {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ hosts, register_assets: true }),
-                          })
-                            .then(() => {
-                              setNextScopeCandidates([]);
-                              setNextScopeSelected({});
-                              void refreshConversationState(activeId);
-                              void fetchAll();
-                            })
-                            .catch(() => {
-                              /* leave banner for retry */
-                            })
-                            .finally(() => setNextScopeBusy(false));
-                        }}
-                      >
-                        {nextScopeBusy ? "启动中…" : "开始下一轮 Scope"}
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-pill border border-hairline px-2 py-1 text-[11px] text-ink-secondary"
-                        onClick={() => {
-                          setNextScopeCandidates([]);
-                          setNextScopeSelected({});
-                        }}
-                      >
-                        忽略
-                      </button>
-                    </div>
                   </div>
                 )}
                 <div className="flex min-w-0 items-center justify-between gap-2 px-2.5 py-2">
@@ -3419,283 +3397,13 @@ function appendStdout(current: string, incoming: string): string {
   return `${current}${current.endsWith("\n") ? "" : "\n"}${incoming}`;
 }
 
-function timelineFromMessages(messages: Message[]): TimelineEvent[] {
-  const events: TimelineEvent[] = [];
-  const seen = new Set<string>();
-  const taskStatus = new Map<string, string>();
-  const workflowStatus = new Map<string, string>();
-  for (const message of messages) {
-    if (message.msg_type === "plan_tree_updated") {
-      const content = message.content || {};
-      for (const event of workflowEventsForMessage(message, workflowStatus)) {
-        addTimelineEvent(events, seen, event);
-      }
-      const tree = Array.isArray(content.plan_tree) ? content.plan_tree : [];
-      for (const item of tree) {
-        if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-        const node = item as PlanNode;
-        if (!isTimelineTaskNode(node)) continue;
-        const nodeId = String(node.node_id || node.id || node.title || "");
-        if (!nodeId) continue;
-        const status = String(node.status || "pending");
-        const previous = taskStatus.get(nodeId);
-        if (previous === status) continue;
-        taskStatus.set(nodeId, status);
-        addTimelineEvent(events, seen, {
-          id: `${message.id}:${nodeId}:${status}`,
-          at: message.created_at,
-          category: "Task",
-          title: `${taskStatusVerb(status)}：${String(node.title || "未命名任务")}`,
-          detail: taskDetail(node),
-          status,
-        });
-      }
-      continue;
-    }
-
-    const event = resultTimelineEventForMessage(message);
-    if (event) addTimelineEvent(events, seen, event);
-  }
-  return events.slice(-120);
-}
-
-function addTimelineEvent(events: TimelineEvent[], seen: Set<string>, event: TimelineEvent): void {
-  const key = `${event.category}:${event.title}:${event.detail || ""}:${event.status || ""}`;
-  if (seen.has(key)) return;
-  seen.add(key);
-  events.push(event);
-}
-
-function workflowEventsForMessage(message: Message, workflowStatus: Map<string, string>): TimelineEvent[] {
-  const content = message.content || {};
-  const kanban = content.kanban as Record<string, unknown> | undefined;
-  const buckets = kanban?.buckets;
-  if (!Array.isArray(buckets)) return [];
-  const events: TimelineEvent[] = [];
-  for (const bucket of buckets) {
-    if (!bucket || typeof bucket !== "object" || Array.isArray(bucket)) continue;
-    const item = bucket as Record<string, unknown>;
-    const id = readString(item.id) || readString(item.title);
-    if (!id) continue;
-    const status = readString(item.status) || "pending";
-    const previous = workflowStatus.get(id);
-    if (previous === status) continue;
-    workflowStatus.set(id, status);
-    if (status === "pending" && previous) continue;
-    events.push({
-      id: `${message.id}:workflow:${id}:${status}`,
-      at: message.created_at,
-      category: "Workflow",
-      title: `${readString(item.title) || id}：${statusText(status)}`,
-      detail: bucketProgress(item),
-      status,
-    });
-  }
-  return events;
-}
-
-function resultTimelineEventForMessage(message: Message): TimelineEvent | null {
-  const content = message.content || {};
-  const at = message.created_at;
-  const id = message.id;
-  switch (message.msg_type) {
-    case "status": {
-      const text = readString(content.text);
-      const status = readString(content.status);
-      if (!text && !status) return null;
-      if (!["blocked", "incomplete", "failed"].includes(status)) return null;
-      return {
-        id,
-        at,
-        category: status === "blocked" || status === "incomplete" ? "Gate" : "Status",
-        title: text || status,
-        detail: status && text !== status ? status : undefined,
-        status,
-      };
-    }
-    case "vuln_card":
-    case "vuln_found": {
-      const title = readString(content.title) || "Untitled vulnerability";
-      const severity = readString(content.severity);
-      const location = readString(content.location) || readString(content.url) || readString(content.affected_asset);
-      return {
-        id,
-        at,
-        category: "Finding",
-        title: `漏洞：${title}`,
-        detail: [severity, location].filter(Boolean).join(" · "),
-        status: readString(content.status) || severity,
-      };
-    }
-    case "asset_card":
-    case "asset_discovered": {
-      const address = readString(content.address) || readString(content.name) || "Unknown asset";
-      return {
-        id,
-        at,
-        category: "Asset",
-        title: `资产：${address}`,
-        detail: readString(content.asset_type) || readString(content.type),
-      };
-    }
-    case "confirm_card": {
-      return {
-        id,
-        at,
-        category: "Approval",
-        title: "请求用户确认",
-        detail: clipTimeline(readString(content.question) || readString(content.proposed_action), 180),
-        status: readString(content.risk_level),
-      };
-    }
-    case "decision": {
-      return {
-        id,
-        at,
-        category: "Approval",
-        title: `用户确认：${readString(content.decision) || "decision"}`,
-        detail: readString(content.request_id),
-        status: readString(content.decision),
-      };
-    }
-    case "task_complete": {
-      const status = readString(content.status) || "completed";
-      const title =
-        status === "incomplete" || status === "blocked"
-          ? status === "blocked"
-            ? "任务阻塞"
-            : "任务未完成"
-          : "任务完成";
-      return {
-        id,
-        at,
-        category: "Task",
-        title,
-        detail: clipTimeline(readString(content.summary), 180),
-        status,
-      };
-    }
-    case "task_incomplete":
-      // Legacy msg_type from older nodes; same terminal meaning as task_complete incomplete.
-      return {
-        id,
-        at,
-        category: "Task",
-        title: "任务未完成",
-        detail: clipTimeline(readString(content.summary), 180),
-        status: "incomplete",
-      };
-    case "engagement_closeout": {
-      // Spec #163: same msg_type live + DB; Activity uses platform gist (content.text).
-      const text = readString(content.text) || "Engagement close-out";
-      const status = readString(content.terminal) || readString(content.status) || "unknown";
-      return {
-        id,
-        at,
-        category: "Task",
-        title: text,
-        detail: status && text !== status ? status : undefined,
-        status,
-      };
-    }
-    default:
-      return null;
-  }
-}
-
-function isTimelineTaskNode(node: PlanNode): boolean {
-  const level = String(node.level || "work_item");
-  // Expert Graph L1 stages (phase) and L2 work items both drive Activity milestones.
-  if (level !== "work_item" && level !== "phase") return false;
-  const source = String(node.source || "");
-  // Node4 todo/Graph projection uses source=plan; legacy Strix used agent.
-  if (source && source !== "agent" && source !== "plan" && source !== "strix_todo") return false;
-  const kind = String(node.kind || "task");
-  return !["tool", "browser", "http", "poc", "scan", "traffic", "finding"].includes(kind);
-}
-
-function taskStatusVerb(status: string): string {
-  if (status === "running") return "开始";
-  if (status === "done") return "完成";
-  if (status === "blocked") return "阻塞";
-  if (status === "failed") return "失败";
-  if (status === "skipped") return "跳过";
-  return "计划";
-}
-
-function statusText(status: string): string {
-  if (status === "running") return "进行中";
-  if (status === "done") return "完成";
-  if (status === "blocked") return "阻塞";
-  if (status === "failed") return "失败";
-  if (status === "skipped") return "跳过";
-  return "待处理";
-}
-
-function taskDetail(node: PlanNode): string {
-  return [node.endpoint, node.parameter, node.vuln_type, node.notes].map((item) => String(item || "").trim()).filter(Boolean).join(" · ");
-}
-
-function bucketProgress(bucket: Record<string, unknown>): string {
-  const done = Number(bucket.done || 0);
-  const total = Number(bucket.total || 0);
-  return total > 0 ? `${done}/${total}` : "";
-}
-
-function clipTimeline(value: string, limit: number): string {
-  const normalized = String(value || "").replace(/\s+/g, " ").trim();
-  return normalized.length > limit ? `${normalized.slice(0, limit - 1)}…` : normalized;
-}
-
-function phaseEntryMessages(messages: Message[]): Message[] {
-  const result: Message[] = [];
-  let currentPhase = "";
-  for (const message of messages) {
-    const phase = phaseForStatusMessage(message);
-    if (!phase) {
-      result.push(message);
-      continue;
-    }
-
-    if (!currentPhase) {
-      for (const missingPhase of phasesBefore(phase)) {
-        result.push(makeSyntheticPhaseMessage(message, missingPhase));
-      }
-      currentPhase = result.length && phaseForStatusMessage(result[result.length - 1]) ? phaseForStatusMessage(result[result.length - 1]) : "";
-    }
-
-    if (phase === currentPhase) continue;
-    currentPhase = phase;
-    result.push(message);
-  }
-  return result;
-}
-
-function phasesBefore(phase: string): string[] {
-  const index = PHASES.indexOf(phase as typeof PHASES[number]);
-  return index > 0 ? PHASES.slice(0, index) : [];
-}
-
-function makeSyntheticPhaseMessage(anchor: Message, phase: string): Message {
-  return {
-    id: `${anchor.id}-phase-${phase}`,
-    conversation_id: anchor.conversation_id,
-    role: "system",
-    msg_type: "status",
-    content: { phase, text: phaseLabel(phase), synthetic: true },
-    parent_msg_id: null,
-    created_at: anchor.created_at,
-  };
-}
-
-function phaseForStatusMessage(message: Message): string {
-  if (message.msg_type !== "status") return "";
-  return readString(message.content.phase) || parsePhase(readString(message.content.text)) || "";
-}
 function isRenderableMessage(message: Message): boolean {
-  if (message.role === "user" && message.msg_type === "decision") return false;
+  // Spec #312: only structured confirm_options decisions are visible bubbles.
+  if (message.role === "user" && message.msg_type === "decision") {
+    return readString(message.content.decision) === "confirm_options";
+  }
   if (message.msg_type === "tool_call") return true;
-  if (["text", "status", "engagement_closeout", "confirm_card", "vuln_card", "vuln_found", "asset_card", "asset_discovered", "agent_pending", "thinking", "reasoning", "agent_thinking"].includes(message.msg_type)) return true;
+  if (["text", "status", "engagement_closeout", "confirm_card", "choice_card", "vuln_card", "vuln_found", "asset_card", "asset_discovered", "agent_pending", "thinking", "reasoning", "agent_thinking"].includes(message.msg_type)) return true;
   return false;
 }
 function groupConsecutiveToolMessages(messages: Message[]): Message[] {
@@ -3811,8 +3519,13 @@ function snapshotFromMessages(messages: Message[], status: Conversation["status"
   const activeTool = readString(lastStatus.active_tool) || readString(lastTool?.content.tool_name);
   const decisions = new Set(messages.filter(m => m.msg_type === "decision").map(m => readString(m.content.request_id)).filter(Boolean));
   const pending = messages
-    .filter(m => m.msg_type === "confirm_card" && readString(m.content.request_id) && !decisions.has(readString(m.content.request_id)))
-    .map(m => ({ ...m.content, message_id: m.id }));
+    .filter(
+      (m) =>
+        (m.msg_type === "confirm_card" || m.msg_type === "choice_card") &&
+        readString(m.content.request_id) &&
+        !decisions.has(readString(m.content.request_id)),
+    )
+    .map((m) => ({ ...m.content, message_id: m.id }));
   // Spec #280 Wave1: chat archaeology must not feed Case Findings / Evidence.
   // Snapshot API + post-persist WS remain SoT; empty is correct when nothing booked.
   const assets = messages

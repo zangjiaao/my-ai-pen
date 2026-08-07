@@ -8,7 +8,7 @@ import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
 import { jsonResult, textResult } from "./common.js";
-import { registerApprovalWait, type ApprovalDecision } from "../runtime/approvals.js";
+import { registerApprovalWait, type ApprovalResult } from "../runtime/approvals.js";
 import { platformLedgerFetch } from "./platform.js";
 
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
@@ -52,18 +52,20 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
     name: "request_user_decision",
     label: "Request user authorization",
     description:
-      "Show ONE authorization card and wait for user feedback (Authorize/Cancel button OR a free-text reply). " +
+      "Show ONE choice/authorization card and wait for user feedback (button OR free-text reply). " +
       "Click and type are the same path — the tool unblocks with the user's response. " +
       "For multi-agent handoff / execution (pentest/CTF/…): kind=handoff + handoff_pack_id (+ handoff_expert_id) + target + full scope in proposed_action. " +
       "Call platform_list_experts first when unsure who can receive the work. " +
       "Graph harness (Spec #278): kind=enter_graph|exit_graph|switch_graph + graph_id (product id e.g. app_assessment|redteam_deep). " +
       "Never silent-switch Free↔Graph — always card or user composer Workflow. " +
+      "Spec #312 next_steps: at stoppable settle / empty-continue with open Case Workset, emit kind=next_steps + options[2–5] " +
+      "(each id,title,body required; optional workset_item_ids binds). Multi-select; do not only say 等待指示 or prose A/B/C/D. " +
       "Do not chain multiple cards; put defaults on the card. " +
       "After authorize on handoff, the platform starts the destination expert; keep any follow-up text very short. " +
       "After authorize on enter/switch Graph, platform settles Session work_mode and may re-dispatch Graph. " +
-      "If the tool result decision is authorize (including when the user typed an affirming reply), do not re-show the card.",
+      "If the tool result decision is authorize/confirm_options (including free-text reply), do not re-show the card.",
     parameters: Type.Object({
-      question: Type.String({ description: "Card title — short authorization question" }),
+      question: Type.String({ description: "Card title — short authorization question or next_steps preamble" }),
       proposed_action: Type.Optional(
         Type.String({
           description: "Markdown body: target, scope, accounts, method, constraints (one card = complete plan)",
@@ -76,7 +78,7 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
       kind: Type.Optional(
         Type.String({
           description:
-            "handoff | enter_graph | exit_graph | switch_graph | confirm. Graph kinds need graph_id (except exit_graph).",
+            "handoff | enter_graph | exit_graph | switch_graph | confirm | next_steps. Graph kinds need graph_id (except exit_graph). next_steps needs options[2–5].",
         }),
       ),
       graph_id: Type.Optional(
@@ -92,6 +94,24 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
       ),
       handoff_expert_id: Type.Optional(Type.String()),
       handoff_expert_name: Type.Optional(Type.String()),
+      /** Spec #312: curated next_steps options (2–5). */
+      options: Type.Optional(
+        Type.Array(
+          Type.Object({
+            id: Type.String({ description: "Stable option id unique within this card" }),
+            title: Type.String({ description: "Short package title" }),
+            body: Type.String({ description: "Why / what / success shape (required)" }),
+            workset_item_ids: Type.Optional(
+              Type.Array(Type.String(), { description: "Optional Case Workset item id binds" }),
+            ),
+            kind: Type.Optional(Type.String()),
+          }),
+        ),
+      ),
+      selection: Type.Optional(
+        Type.String({ description: "next_steps: single (default, Spec #313) | multi" }),
+      ),
+      preamble: Type.Optional(Type.String({ description: "Optional markdown preamble for next_steps" })),
     }),
     async execute(_id: string, params: any) {
       const question = String(params.question || "").trim();
@@ -99,7 +119,7 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
 
       const conversationId = String(runtime.task.conversationId || "").trim();
       const requestId = `${conversationId || "sess"}-${randomUUID()}`;
-      const kind = normalizeGraphModeKind(
+      let kind = normalizeGraphModeKind(
         String(params.kind || "confirm").trim().toLowerCase() || "confirm",
       );
       const handoffPack = String(params.handoff_pack_id || params.pack_id || "").trim();
@@ -109,6 +129,38 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
       const graphId = String(params.graph_id || params.engagement_template || "").trim();
       let handoffExpertId = params.handoff_expert_id ? String(params.handoff_expert_id).trim() : "";
       let handoffExpertName = params.handoff_expert_name ? String(params.handoff_expert_name).trim() : "";
+
+      // Spec #312: normalize next_steps options (2–5, title+body, unique ids).
+      let nextStepsOptions: Array<Record<string, unknown>> | undefined;
+      const rawOpts = Array.isArray(params.options) ? params.options : null;
+      if (kind === "next_steps" || (rawOpts && rawOpts.length && rawOpts.every((o: unknown) => o && typeof o === "object"))) {
+        kind = "next_steps";
+        const cleaned: Array<Record<string, unknown>> = [];
+        const ids = new Set<string>();
+        for (const row of rawOpts || []) {
+          if (!row || typeof row !== "object") continue;
+          const r = row as Record<string, unknown>;
+          const id = String(r.id || "").trim();
+          const title = String(r.title || "").trim();
+          const body = String(r.body || "").trim();
+          if (!id || !title || !body || ids.has(id)) continue;
+          ids.add(id);
+          const opt: Record<string, unknown> = { id, title, body };
+          if (Array.isArray(r.workset_item_ids)) {
+            const wids = r.workset_item_ids.map((x) => String(x || "").trim()).filter(Boolean);
+            if (wids.length) opt.workset_item_ids = wids;
+          }
+          if (r.kind) opt.kind = String(r.kind);
+          cleaned.push(opt);
+        }
+        if (cleaned.length < 2 || cleaned.length > 5) {
+          return textResult(
+            "error: kind=next_steps requires 2–5 options with unique id + non-empty title + body",
+            { isError: true },
+          );
+        }
+        nextStepsOptions = cleaned;
+      }
 
       // Graph mode permission: require graph_id for enter/switch (exit parks current).
       if (GRAPH_MODE_KINDS.has(kind)) {
@@ -198,31 +250,40 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
           payload.engagement_template = graphId;
         }
       }
+      if (kind === "next_steps" && nextStepsOptions) {
+        payload.kind = "next_steps";
+        payload.options = nextStepsOptions;
+        const selection = String(params.selection || "single").trim().toLowerCase();
+        payload.selection = selection === "multi" ? "multi" : "single";
+        const preamble = String(params.preamble || "").trim();
+        if (preamble) payload.preamble = preamble;
+      }
 
       await runtime.platform.send(payload as import("../types.js").PlatformMessage);
 
       const waitPromise = registerApprovalWait(requestId, conversationId);
       const abort = runtime.lifecycle.abortSignal;
       let onAbort: (() => void) | undefined;
-      const abortPromise = new Promise<ApprovalDecision>((resolve) => {
+      const abortPromise = new Promise<ApprovalResult>((resolve) => {
         if (!abort) return;
         if (abort.aborted) {
-          resolve("cancel");
+          resolve({ decision: "cancel" });
           return;
         }
-        onAbort = () => resolve("cancel");
+        onAbort = () => resolve({ decision: "cancel" });
         abort.addEventListener("abort", onAbort, { once: true });
       });
-      const timeoutPromise = new Promise<ApprovalDecision>((resolve) => {
-        setTimeout(() => resolve("cancel"), DEFAULT_TIMEOUT_MS);
+      const timeoutPromise = new Promise<ApprovalResult>((resolve) => {
+        setTimeout(() => resolve({ decision: "cancel" }), DEFAULT_TIMEOUT_MS);
       });
 
-      let decision: ApprovalDecision;
+      let approvalResult: ApprovalResult;
       try {
-        decision = await Promise.race([waitPromise, abortPromise, timeoutPromise]);
+        approvalResult = await Promise.race([waitPromise, abortPromise, timeoutPromise]);
       } finally {
         if (onAbort && abort) abort.removeEventListener("abort", onAbort);
       }
+      const decision = approvalResult.decision;
 
       // Session-owned handoff apply: button and free-text both resolve here.
       // Platform only displays + forwards feedback; this tool starts the destination
@@ -268,7 +329,16 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
             ? "User authorized exit Graph → Free (Graph parked). Platform settled Session work_mode=free. Reply briefly; do not re-show the card."
             : "User authorized Graph mode change. Platform settled Session work_mode. Reply briefly; do not re-show the card.";
 
-      return jsonResult({
+      const nextStepsMsg =
+        decision === "confirm_options"
+          ? "User confirmed next_steps packages. Proceed with the selected work packages; do not re-show the same card; do not invent a free-text A/B/C/D menu."
+          : decision === "authorize" && kind === "next_steps"
+            ? "User replied on the next_steps card. Proceed from their free-text intent; do not re-show the same card."
+            : decision === "answered"
+              ? "User continued in free text; this card was dismissed without selecting options. Do not re-show it; do not apply handoff or Graph mode from this wait."
+              : null;
+
+      const resultPayload: Record<string, unknown> = {
         ok: true,
         request_id: requestId,
         decision,
@@ -276,14 +346,25 @@ export function createRequestUserDecisionTool(runtime: ToolRuntime): AgentTool<a
         handoff_pack_id: payload.handoff_pack_id || null,
         graph_id: graphId || null,
         message:
-          decision === "authorize"
+          nextStepsMsg ||
+          (decision === "authorize"
             ? kind === "handoff" || handoffPack
               ? "User authorized handoff. Platform is starting the destination expert now. Reply in at most one short sentence; do not claim you ran the scan; do not emit another decision card."
               : isGraphMode
                 ? graphAuthorizeMsg
                 : "User authorized. Proceed within your tool policy; do not emit another decision card for the same plan."
-            : "User canceled or timed out. Do not proceed with the proposed action.",
-      });
+            : "User canceled, dismissed, or timed out. Do not proceed with the proposed action."),
+      };
+      if (approvalResult.selected_option_ids?.length) {
+        resultPayload.selected_option_ids = approvalResult.selected_option_ids;
+      }
+      if (approvalResult.workset_item_ids?.length) {
+        resultPayload.workset_item_ids = approvalResult.workset_item_ids;
+      }
+      if (approvalResult.text) {
+        resultPayload.user_text = approvalResult.text;
+      }
+      return jsonResult(resultPayload);
     },
   };
 }

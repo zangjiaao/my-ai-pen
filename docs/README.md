@@ -33,6 +33,8 @@ Node4 implementation detail (Graph × Pi product path).
 | [`specs/stream-message-identity.md`](specs/stream-message-identity.md) | Remove live-slot-as-Message; stream_id list identity + pending chrome |
 | [`specs/timeline-activity-liveness.md`](specs/timeline-activity-liveness.md) | Thinking `status` + T1 empty running; pending speaker reuse; tool running S+ |
 | [`specs/worker-process-audit.md`](specs/worker-process-audit.md) | Worker process audit dialog (Package turns + thinking/tools; Case rename; live + replay) — map [#253](https://github.com/zangjiaao/my-ai-pen/issues/253) / Spec [#308](https://github.com/zangjiaao/my-ai-pen/issues/308) |
+| [`specs/choice-card-next-steps.md`](specs/choice-card-next-steps.md) | Unified Choice Card (next_steps + authorize preset); retire mechanical Next UI — Spec [#312](https://github.com/zangjiaao/my-ai-pen/issues/312); **amended by** [#313](https://github.com/zangjiaao/my-ai-pen/issues/313) (single-select + supplement + value-only) |
+| [`specs/free-tasks-continue-integrity.md`](specs/free-tasks-continue-integrity.md) | Free Tasks = user progress SoT; ban silent init wipe; next_steps confirm = FIFO Session demand; soft completion honesty — Spec [#313](https://github.com/zangjiaao/my-ai-pen/issues/313) |
 | [`specs/pen-tools-sandbox.md`](specs/pen-tools-sandbox.md) | Unified pen-sandbox (shell + browser) |
 | [`specs/expert-offers.md`](specs/expert-offers.md) | Node packs + Expert instances (@mention routing) |
 | [`specs/ctf-role.md`](specs/ctf-role.md) | CTF role pack operator notes |

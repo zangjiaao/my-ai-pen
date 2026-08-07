@@ -222,6 +222,77 @@ function makeFreeRuntime(opts?: {
 }
 
 // ---------------------------------------------------------------------------
+// Spec #313 S2/L3: Free silent todo.init replace denied; agent allow_replace alone denied;
+// platform grant permits; maintain ops still ok
+// ---------------------------------------------------------------------------
+{
+  const platformMessages: Array<Record<string, unknown>> = [];
+  const runtime = makeFreeRuntime({ platformMessages });
+  const todo = createTodoTool(runtime);
+  const exec = todo.execute as (id: string, params: Record<string, unknown>) => Promise<ExecResult>;
+
+  const first = await exec("x", {
+    op: "init",
+    list: [{ phase: "Tasks", items: ["Map surface", "Probe auth"] }],
+  });
+  assert.notEqual(first.details?.isError, true, "first Free init ok");
+  assert.equal(runtime.todo.openCount(), 2);
+
+  const wipe = await exec("x", {
+    op: "init",
+    list: [{ phase: "Tasks", items: ["Brand new A", "Brand new B", "Brand new C"] }],
+  });
+  assert.equal(wipe.details?.isError, true, "silent Free replace denied");
+  assert.equal(runtime.todo.openCount(), 2, "map unchanged after denied wipe");
+  const wipeText = parseToolText(wipe);
+  assert.ok(
+    /allow_replace|forbidden|replace|todo_replace/i.test(wipeText) || wipeText.includes("already exists"),
+    `deny message: ${wipeText.slice(0, 200)}`,
+  );
+
+  // Spec #313 L3: agent self-attest allow_replace without platform grant → still deny
+  const agentOnly = await exec("x", {
+    op: "init",
+    allow_replace: true,
+    list: [{ phase: "Tasks", items: ["Agent wipe alone"] }],
+  });
+  assert.equal(agentOnly.details?.isError, true, "agent allow_replace alone denied");
+  assert.equal(runtime.todo.openCount(), 2, "map unchanged after agent-only allow_replace");
+
+  const append = await exec("x", {
+    op: "append",
+    phase: "Tasks",
+    items: ["Deepen XSS"],
+  });
+  assert.notEqual(append.details?.isError, true, "append still works after decline");
+  assert.ok(runtime.todo.openCount() >= 3);
+
+  // Platform grant on task envelope → replace ok (one-shot)
+  (runtime.task as { todoReplaceAllowed?: boolean }).todoReplaceAllowed = true;
+  const permitted = await exec("x", {
+    op: "init",
+    allow_replace: true,
+    list: [{ phase: "Tasks", items: ["Replanned only"] }],
+  });
+  assert.notEqual(permitted.details?.isError, true, "platform grant permits full replace");
+  assert.equal(runtime.todo.openCount(), 1);
+  assert.equal(
+    (runtime.task as { todoReplaceAllowed?: boolean }).todoReplaceAllowed,
+    false,
+    "platform grant consumed after successful replace",
+  );
+
+  // Second wipe without re-grant denied
+  const second = await exec("x", {
+    op: "init",
+    allow_replace: true,
+    list: [{ phase: "Tasks", items: ["Again"] }],
+  });
+  assert.equal(second.details?.isError, true, "consumed grant cannot re-wipe");
+  assert.equal(runtime.todo.openCount(), 1);
+}
+
+// ---------------------------------------------------------------------------
 // S1.4 After neutralize + stage done → no running L2 under that stage
 // ---------------------------------------------------------------------------
 {

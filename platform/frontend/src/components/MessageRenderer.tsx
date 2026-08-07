@@ -9,9 +9,10 @@ import {
   toolActivitySummaryLabel,
 } from "../lib/status";
 import { phaseLabel } from "../lib/phase";
-import ConfirmCard from "./cards/ConfirmCard";
+import ChoiceCard from "./cards/ChoiceCard";
 import ThinkingCard from "./cards/ThinkingCard";
 import MarkdownText from "./MarkdownText";
+import type { ChoiceDecision } from "../lib/choiceCard";
 
 interface Props {
   message: Message;
@@ -20,11 +21,24 @@ interface Props {
   fallbackPentestNodeId?: string | null;
   platformAgentNodeId?: string | null;
   onDecision?: (requestId: string, decision: "authorize" | "cancel") => void;
+  /** Spec #313 next_steps single-select confirm + optional supplement. */
+  onConfirmOptions?: (
+    requestId: string,
+    selectedOptionIds: string[],
+    cardContent: Record<string, unknown>,
+    supplement?: string,
+  ) => void;
   onOpenVulnerability?: (finding: Partial<SecurityVulnerability>) => void;
   onOpenAsset?: (asset: Partial<SecurityAsset>) => void;
   onOpenEvidence?: (evidence: Partial<SecurityEvidence>) => void;
   highlightedApprovalId?: string | null;
-  approvalDecisionByRequestId?: Record<string, "authorize" | "cancel" | "answered">;
+  approvalDecisionByRequestId?: Record<string, ChoiceDecision>;
+  /** Spec #312: selected option ids by request_id (hydrate read-only next_steps). */
+  choiceSelectedByRequestId?: Record<string, string[]>;
+  /** Case actively working — false clears orphan 「思考中…」 on idle/incomplete. */
+  sessionActive?: boolean;
+  /** Disable choice controls while a turn is running. */
+  choiceDisabled?: boolean;
 }
 
 /** Shared speaker resolution for agent messages and list-tail pending chrome (Spec #305). */
@@ -687,8 +701,10 @@ function normalizeSeverity(value: unknown): string {
 }
 /** List-tail pending chrome (Spec #276) — not a Message; may be used outside msg_type agent_pending. */
 export function AgentPendingCard({ content }: { content: Record<string, unknown> }) {
-  // Same shell as ToolCallCard / ThinkingCard for a continuous timeline.
-  const label = String(content.text || "思考中…");
+  // Spec #305 copy B: lifecycle title only (思考中… / tool wait) — no stacked 「思考」+ label.
+  // Same shell as ThinkingCard (pulse + single title row).
+  const raw = String(content.text || "思考中…").trim() || "思考中…";
+  const title = raw.includes("调用") ? raw : raw === "思考" ? "思考中…" : raw;
   return (
     <div data-testid="agent-pending-card" className="my-2 min-w-0 max-w-full rounded-md bg-surface-default/70">
       <div className="flex w-full min-w-0 items-center gap-1.5 py-1.5 text-left">
@@ -697,10 +713,12 @@ export function AgentPendingCard({ content }: { content: Record<string, unknown>
             <span className="inline-flex h-2 w-2 animate-pulse rounded-full bg-status-running" />
           </span>
         </div>
-        <span className="min-w-0 max-w-[34%] flex-shrink truncate font-sans text-sm text-ink-secondary">
-          {label.includes("调用") ? "工具" : "思考"}
+        <span
+          data-testid="agent-pending-title"
+          className="min-w-0 flex-shrink font-sans text-sm text-ink-secondary"
+        >
+          {title}
         </span>
-        <span className="min-w-0 truncate text-xs text-ink-secondary">{label}</span>
         <span className="min-w-6 flex-1" aria-hidden="true" />
       </div>
     </div>
@@ -731,7 +749,7 @@ function SystemNotice({ content }: { content: Record<string, unknown> }) {
   return <StatusNotice content={content} />;
 }
 
-export default function MessageRenderer({ message, agentNameById = {}, previousMessage, fallbackPentestNodeId, platformAgentNodeId, onDecision, onOpenVulnerability, onOpenAsset, onOpenEvidence, highlightedApprovalId, approvalDecisionByRequestId = {} }: Props) {
+export default function MessageRenderer({ message, agentNameById = {}, previousMessage, fallbackPentestNodeId, platformAgentNodeId, onDecision, onConfirmOptions, onOpenVulnerability, onOpenAsset, onOpenEvidence, highlightedApprovalId, approvalDecisionByRequestId = {}, choiceSelectedByRequestId = {}, sessionActive, choiceDisabled = false }: Props) {
   const { role, msg_type, content } = message;
 
   // Spec #163: engagement_closeout uses content.text (platform gist) via SystemNotice.
@@ -739,7 +757,19 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
     return <SystemNotice content={content} />;
   }
 
-  if (role === "user" && msg_type === "decision") return null;
+  // Spec #312: only confirm_options decisions show a user bubble (text is display content).
+  if (role === "user" && msg_type === "decision") {
+    const decision = String(content.decision || "").trim();
+    if (decision !== "confirm_options") return null;
+    const decisionText = String(content.text || "").trim() || "已选择";
+    return (
+      <div className="my-2 flex min-w-0 justify-end">
+        <div className="max-w-[70%] break-words rounded-2xl bg-surface-default px-4 py-2.5 text-sm [overflow-wrap:anywhere]">
+          {renderMentionText(decisionText)}
+        </div>
+      </div>
+    );
+  }
 
   if (role === "user") {
     return (
@@ -766,15 +796,31 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
       body = <AssetCard content={content} onOpen={onOpenAsset} />;
       break;
     case "confirm_card":
-      body = <ConfirmCard content={content} decision={approvalDecisionByRequestId[String(content.request_id || "")]} highlighted={Boolean(content.request_id && content.request_id === highlightedApprovalId)} onAuthorize={() => onDecision?.(content.request_id as string, "authorize")} onCancel={() => onDecision?.(content.request_id as string, "cancel")} />;
+    case "choice_card": {
+      const rid = String(content.request_id || "");
+      body = (
+        <ChoiceCard
+          content={content}
+          decision={approvalDecisionByRequestId[rid]}
+          selectedOptionIds={choiceSelectedByRequestId[rid]}
+          highlighted={Boolean(content.request_id && content.request_id === highlightedApprovalId)}
+          disabled={choiceDisabled}
+          onAuthorize={() => onDecision?.(content.request_id as string, "authorize")}
+          onCancel={() => onDecision?.(content.request_id as string, "cancel")}
+          onConfirmOptions={(ids, supplement) =>
+            onConfirmOptions?.(String(content.request_id || ""), ids, content, supplement)
+          }
+        />
+      );
       break;
+    }
     case "agent_pending":
       body = <AgentPendingCard content={content} />;
       break;
     case "thinking":
     case "reasoning":
     case "agent_thinking":
-      body = <ThinkingCard content={content} />;
+      body = <ThinkingCard content={content} sessionActive={sessionActive} />;
       break;
     case "status":
     case "engagement_closeout":

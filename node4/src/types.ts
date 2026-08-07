@@ -80,6 +80,12 @@ export type TaskEnvelope = {
    */
   caseContext?: import("./runtime/case-context.js").CaseContext;
   /**
+   * Spec #313 L3: platform-issued one-shot Free todo.init replace grant.
+   * Set only after explicit user permission (ChoiceCard replace_todo_map or
+   * structured todo_replace_permission). Agent allow_replace alone is never enough.
+   */
+  todoReplaceAllowed?: boolean;
+  /**
    * Node-configured output language — registry wire code only
    * (auto | zh-CN | zh-TW | en | ja). Normalized at the envelope boundary.
    * Agent-authored narrative surfaces; raw tool stdout is never rewritten.

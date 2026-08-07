@@ -230,12 +230,30 @@ client.on("user_steer", async (message) => {
   });
 });
 
-/** Platform ConfirmCard → resolve request_user_decision waits. */
+/** Platform ConfirmCard / ChoiceCard → resolve request_user_decision waits. */
 client.on("user_input", async (message) => {
   const requestId = String(message.request_id || message.requestId || "").trim();
   if (!requestId) return;
+  // Spec #313 L3: mid-run replace permission from structured user confirm (platform-issued).
+  const conversationId = String(message.conversation_id || message.conversationId || "").trim();
+  const selectedRaw = message.selected_option_ids ?? message.selectedOptionIds;
+  const selectedIds = Array.isArray(selectedRaw)
+    ? selectedRaw.map((x) => String(x || "").trim()).filter(Boolean)
+    : [];
+  const replacePerm =
+    message.todo_replace_permission === true ||
+    message.todoReplacePermission === true ||
+    selectedIds.includes("replace_todo_map");
+  if (replacePerm && conversationId) {
+    const { grantTodoReplace } = await import("./runtime/todo-replace-grant.js");
+    grantTodoReplace(conversationId);
+  }
   const response = message.response ?? message.decision ?? message.text ?? "cancel";
-  resolveApproval(requestId, response);
+  resolveApproval(requestId, response, {
+    selected_option_ids: message.selected_option_ids ?? message.selectedOptionIds,
+    workset_item_ids: message.workset_item_ids ?? message.worksetItemIds,
+    text: message.text,
+  });
 });
 
 /** Platform Interrupt button → abort in-flight session.prompt / tool children. */
@@ -354,6 +372,16 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
   // Language: top-level or worker_limits; always a registry wire code (#138).
   const agentLanguage = extractAgentLanguageFromMessage(message);
 
+  // Spec #313 L3: platform-issued Free todo replace grant (one-shot for this task turn).
+  const todoReplaceAllowed =
+    message.todo_replace_allowed === true ||
+    message.todoReplaceAllowed === true ||
+    String(message.todo_replace_allowed ?? message.todoReplaceAllowed ?? "")
+      .trim()
+      .toLowerCase() === "true" ||
+    message.todo_replace_permission === true ||
+    message.todoReplacePermission === true;
+
   return {
     taskId,
     conversationId,
@@ -382,6 +410,7 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
           : undefined,
     caseContext,
     agentLanguage,
+    todoReplaceAllowed: todoReplaceAllowed || undefined,
   };
 }
 

@@ -60,7 +60,38 @@ export type TodoParams = {
   task?: string;
   phase?: string;
   items?: string[];
+  /**
+   * Spec #313 Free: when true, apply Free map init/replace policy
+   * (silent full init replace forbidden while map non-empty).
+   * Graph / subagent / legacy callers omit this and keep full-replace init.
+   */
+  free_map?: boolean;
+  /** Spec #313: explicit user permission to replace Free Tasks map on init. */
+  allow_replace?: boolean;
 };
+
+/** True when Free Tasks map has any phase with tasks (open or closed history). */
+export function freeMapNonEmpty(phases: readonly TodoPhase[]): boolean {
+  return phases.some((phase) => (phase.tasks?.length || 0) > 0);
+}
+
+/**
+ * Spec #313 S2 — Free silent todo.init replace gate (pure).
+ * Returns error text when replace is denied; undefined when allowed.
+ */
+export function freeInitReplaceDenied(
+  previous: readonly TodoPhase[],
+  allowReplace?: boolean,
+): string | undefined {
+  if (allowReplace === true) return undefined;
+  if (!freeMapNonEmpty(previous)) return undefined;
+  return (
+    "Free Tasks map already exists; silent todo.init replace is forbidden. " +
+    "Use append/start/done/drop/rm to maintain the map, or obtain platform-issued " +
+    "todo_replace_allowed after explicit user permission (ChoiceCard option " +
+    "replace_todo_map / todo_replace_permission) — agent allow_replace alone is not enough."
+  );
+}
 
 export type TodoApplyResult = {
   phases: TodoPhase[];
@@ -174,9 +205,18 @@ export function applyTodoOp(previous: TodoPhase[], params: TodoParams): TodoAppl
   }
 
   switch (op) {
-    case "init":
+    case "init": {
+      // Spec #313 Free: silent full replace forbidden when map exists (unless allow_replace).
+      if (params.free_map) {
+        const denied = freeInitReplaceDenied(previous, params.allow_replace === true);
+        if (denied) {
+          errors.push(denied);
+          break;
+        }
+      }
       next = initPhases(params, errors);
       break;
+    }
     case "start": {
       const hit = resolveTaskOrError(next, params.task, errors);
       if (hit) {

@@ -37,7 +37,7 @@ Also kill a second-class product path where a pre-flight **Route** moment alone 
 | **Graph capability** | Pack/Expert declares which graph ids it may run. Missing declaration ⇒ cannot enter Graph. No seat special-cases (“assistant never” as hard code) — only capability tables. |
 | **Unspecified (UI)** | Graph composer value **不指定** = omit / free-alias on the wire: **no force mode change** (Spec #278 A1). First turn / Free Session → Free; if Session already Graph, stay Graph. Not “Agent may silently pick Graph”. Exit Graph needs permission card. Agent may **suggest** enter Graph; user must permit. |
 | **Permission event** | Explicit user acceptance to change work mode, transfer Expert, resume parked Graph vs full restart. Via standard card and/or free-text understood by **current** Session Agent then structured commit. Platform code does **not** NLP-invent mode. |
-| **Queue** | While Session has in-flight work, user changes (message, Graph control, Mention) wait unless **force send / interrupt** on the queue chrome. |
+| **Queue** | While Session has in-flight work, user changes (message, Graph control, Mention, **ChoiceCard confirm**) wait unless **force send / interrupt** on the queue chrome. **FIFO** — confirm is the same class as user text (no decision priority). Spec [#313](https://github.com/zangjiaao/my-ai-pen/issues/313). |
 | **Parked Graph** | After exit Graph → Free, Graph stage pointer and harness progress are **suspended**, not wiped. Later re-entry: Agent suggests continue vs full restart; user confirms. |
 | **Expert transfer** | Cross-Expert: ask → user permit → switch Mention; receiving Session starts Free + Case-visible summary. Prefer **same Expert** continuing in Free/Graph over transfer. |
 | **Case multi-run inheritance** | (Optional later Spec / #213 residue) Truth + next-work projections across Graph **rounds** for the same Case — **not** the same word as Expert transfer. Never named bare “Handoff” without qualifier. |
@@ -77,8 +77,9 @@ _Avoid:_ free mode as a second product **seat**; Soft scenario Graph; platform k
 
 ### 3.4 Queue and Mention
 
-15. **In-flight work:** new user demand (text, Graph control, Mention change) **queues**.  
-16. **Force send / interrupt** on queue chrome: interrupt current turn, then apply new demand (same as single-Agent new goal under interrupt).  
+15. **In-flight work:** new user demand (text, Graph control, Mention change, **ChoiceCard confirm / next_steps selection**) **queues** as one FIFO class.  
+15a. **Confirm delivery (Spec [#313](https://github.com/zangjiaao/my-ai-pen/issues/313)):** live approval wait → forward into current Session; dead wait / busy / restart → enqueue or continue dispatch with full confirm text + sticky target/scope/expert — **not** empty-target chat-only bypass.  
+16. **Force send / interrupt** on queue chrome: interrupt current turn, then apply new demand (same as single-Agent new goal under interrupt). User may **delete** queue items before delivery.  
 17. **Mention change** only retargets **subsequent** routed messages; does not alone kill the running Session (unless force interrupt).  
 18. **Expert transfer:** ask → user permit → switch Mention; **new** Expert Session starts **Free** with Case-visible summary; new Expert enters Graph only via its own permission path. Not a mandatory assembly step before every task.
 
