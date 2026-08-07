@@ -1781,6 +1781,28 @@ def _merge_tool_items(existing: dict, incoming: dict) -> list[dict]:
     return merged
 
 
+def _merge_thinking_status(existing: object, incoming: object) -> str | None:
+    """Prefer terminal done over stale running; never drop done (Spec #305).
+
+    Done synonyms MUST stay aligned with frontend normalizeExecutionStatus
+    (platform/frontend/src/lib/status.ts):
+      done | ok | success | completed | complete | saved | loaded
+    Fail synonyms (for reference; thinking rarely uses them):
+      fail | failed | error | blocked | canceled | cancelled
+    Empty / unknown → not done (caller keeps raw running etc.).
+    """
+    done_vals = {"done", "ok", "success", "completed", "complete", "saved", "loaded"}
+    e = str(existing or "").strip().lower()
+    i = str(incoming or "").strip().lower()
+    if e in done_vals or i in done_vals:
+        return "done"
+    if i:
+        return i
+    if e:
+        return e
+    return None
+
+
 def _merge_saved_message_content(existing: dict, incoming: dict, msg_type: str) -> dict:
     if msg_type != "tool_call":
         # Streaming text/thinking: always keep the longer body so partial frames
@@ -1797,6 +1819,12 @@ def _merge_saved_message_content(existing: dict, incoming: dict, msg_type: str) 
                 merged["text"] = nxt
                 if msg_type == "thinking":
                     merged["reasoning"] = nxt
+            if msg_type == "thinking":
+                status = _merge_thinking_status(existing.get("status"), incoming.get("status"))
+                if status is not None:
+                    merged["status"] = status
+                elif "status" in merged and merged.get("status") in (None, ""):
+                    merged.pop("status", None)
         return merged
     stdout = _append_tool_stdout(existing.get("stdout"), incoming.get("stdout"))
     return {
@@ -1903,8 +1931,15 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                 body = str(inner.get("reasoning") or inner.get("text") or "")
                 content["text"] = body
                 content["reasoning"] = body
+                # Spec #305: keep explicit lifecycle status (running|done).
+                status = str(inner.get("status") or msg.get("status") or "").strip()
+                if status:
+                    content["status"] = status
             else:
                 content = {"text": str(inner), "reasoning": str(inner)}
+                status = str(msg.get("status") or "").strip()
+                if status:
+                    content["status"] = status
             if msg.get("stream_id") and not content.get("stream_id"):
                 content["stream_id"] = msg.get("stream_id")
         elif msg_type == "tool_output":

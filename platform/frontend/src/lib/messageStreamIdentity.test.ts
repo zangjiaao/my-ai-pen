@@ -1,17 +1,21 @@
 /**
- * Pure stream-identity + pending chrome + prune (Spec #276) — no vitest; run with:
+ * Pure stream-identity + pending chrome + prune (Spec #276 / #305) — no vitest; run with:
  *   npx tsx src/lib/messageStreamIdentity.test.ts
  * (from platform/frontend)
  */
 import assert from "node:assert/strict";
 import {
+  applyProgressiveActivity,
+  buildPendingSendSuccessEvent,
   clearLiveStreams,
   durableStreamSnapshots,
   hasProgressiveLive,
+  isProgressiveActivityFrame,
   liveFrameToMessageLike,
   mergeMessagesWithLiveStreams,
   mergeProgressiveText,
   messageListKey,
+  pendingChromeSpeakerContent,
   pendingChromeVisible,
   pruneLiveCatchUp,
   reducePendingChrome,
@@ -99,6 +103,177 @@ import {
   console.log("ok: same stream_id merges progressive text");
 }
 
+// Spec #305 S2: empty running thinking upserts; empty without status rejected
+{
+  let live: Record<string, LiveStreamFrame> = {};
+  const rejected = upsertLiveByStreamId(live, {
+    streamId: "n4-thinking-empty-1",
+    msgType: "thinking",
+    text: "",
+  });
+  assert.equal(Object.keys(rejected).length, 0, "empty without status rejected");
+
+  live = upsertLiveByStreamId(live, {
+    streamId: "n4-thinking-empty-1",
+    msgType: "thinking",
+    text: "",
+    content: { status: "running" },
+  });
+  assert.ok(live["n4-thinking-empty-1"], "empty running thinking enters live map");
+  assert.equal(live["n4-thinking-empty-1"]!.text, "");
+  assert.equal(live["n4-thinking-empty-1"]!.content?.status, "running");
+
+  live = upsertLiveByStreamId(live, {
+    streamId: "n4-thinking-empty-1",
+    msgType: "thinking",
+    text: "first tokens",
+    content: { status: "running" },
+  });
+  assert.equal(live["n4-thinking-empty-1"]!.text, "first tokens");
+
+  live = upsertLiveByStreamId(live, {
+    streamId: "n4-thinking-empty-1",
+    msgType: "thinking",
+    text: "first tokens full",
+    content: { status: "done" },
+  });
+  assert.equal(live["n4-thinking-empty-1"]!.content?.status, "done");
+  console.log("ok: S2 empty running thinking upsert + body growth");
+}
+
+// Issue 1: empty running → empty done flips status on live map
+{
+  let live = upsertLiveByStreamId({}, {
+    streamId: "n4-thinking-empty-done",
+    msgType: "thinking",
+    text: "",
+    content: { status: "running" },
+  });
+  live = upsertLiveByStreamId(live, {
+    streamId: "n4-thinking-empty-done",
+    msgType: "thinking",
+    text: "",
+    content: { status: "done" },
+  });
+  assert.equal(live["n4-thinking-empty-done"]!.content?.status, "done");
+  assert.equal(live["n4-thinking-empty-done"]!.text, "");
+  console.log("ok: Issue 1 empty running → empty done flips status");
+}
+
+// Issue 2: live upsert prefer-done (late running does not demote)
+{
+  let live = upsertLiveByStreamId({}, {
+    streamId: "n4-thinking-prefer-done",
+    msgType: "thinking",
+    text: "full",
+    content: { status: "done" },
+  });
+  live = upsertLiveByStreamId(live, {
+    streamId: "n4-thinking-prefer-done",
+    msgType: "thinking",
+    text: "full",
+    content: { status: "running" },
+  });
+  assert.equal(live["n4-thinking-prefer-done"]!.content?.status, "done");
+  console.log("ok: Issue 2 live upsert prefer-done over late running");
+}
+
+{
+  assert.equal(
+    isProgressiveActivityFrame({
+      streamId: "n4-thinking-1",
+      msgType: "thinking",
+      text: "",
+      status: "running",
+    }),
+    true,
+  );
+  assert.equal(
+    isProgressiveActivityFrame({
+      streamId: "n4-thinking-1",
+      msgType: "thinking",
+      text: "",
+      status: "done",
+    }),
+    true,
+    "empty done is progressive activity",
+  );
+  assert.equal(
+    isProgressiveActivityFrame({
+      streamId: "",
+      msgType: "thinking",
+      text: "x",
+      status: "running",
+    }),
+    false,
+    "fail-closed without stream_id",
+  );
+  assert.equal(
+    isProgressiveActivityFrame({
+      streamId: "n4-text-1",
+      msgType: "text",
+      text: "hi",
+    }),
+    true,
+  );
+  console.log("ok: S2 isProgressiveActivityFrame gates");
+}
+
+// Issue 6: composition send → empty running → pending gone
+{
+  let pending = reducePendingChrome(
+    null,
+    buildPendingSendSuccessEvent({
+      conversationId: "conv-compose",
+      expert_name: "渗透大师",
+      agent_source: "pentest",
+    }),
+  );
+  assert.equal(pendingChromeVisible(pending, "conv-compose"), true);
+  assert.equal(pending!.expert_name, "渗透大师");
+
+  const step = applyProgressiveActivity(
+    { live: {}, pending },
+    {
+      streamId: "n4-thinking-compose-1",
+      msgType: "thinking",
+      text: "",
+      status: "running",
+      conversationId: "conv-compose",
+      content: { status: "running" },
+    },
+  );
+  assert.equal(step.accepted, true);
+  assert.equal(step.pending, null, "pending cleared on empty running");
+  assert.ok(step.live["n4-thinking-compose-1"]);
+  assert.equal(step.live["n4-thinking-compose-1"]!.content?.status, "running");
+
+  // tools never reseed after clear
+  const afterTool = reducePendingChrome(step.pending, { type: "tool_output" });
+  assert.equal(afterTool, null);
+  console.log("ok: Issue 6 compose send → empty running → pending gone");
+}
+
+// Issue 7: pending content shape for speaker
+{
+  const pending = reducePendingChrome(
+    null,
+    buildPendingSendSuccessEvent({
+      conversationId: "c-speaker",
+      expert_id: "e1",
+      expert_name: "渗透大师",
+      expert_display_name: "渗透大师",
+      agent_source: "pentest",
+    }),
+  );
+  const shape = pendingChromeSpeakerContent(pending!);
+  assert.equal(shape.expert_name, "渗透大师");
+  assert.equal(shape.expert_display_name, "渗透大师");
+  assert.equal(shape.agent_source, "pentest");
+  assert.equal(shape.text, "思考中…");
+  console.log("ok: Issue 7 pending speaker content shape");
+}
+
 // ---------------------------------------------------------------------------
 // S2: pending chrome lifecycle
 // ---------------------------------------------------------------------------
@@ -122,10 +297,31 @@ import {
   pending = reducePendingChrome(pending, { type: "tool_output" });
   assert.deepEqual(pending, { conversationId: "conv-1", label: "思考中…" });
 
-  // hide on first stream
+  // hide on first stream (incl. empty running activity → stream_started)
   pending = reducePendingChrome(pending, { type: "stream_started" });
   assert.equal(pending, null);
+
+  // tools never reseed after clear
+  pending = reducePendingChrome(pending, { type: "tool_output" });
+  assert.equal(pending, null);
   console.log("ok: pending show after send, hide on stream, not on tool alone");
+}
+
+// Spec #305 S4: pending chrome may carry speaker attribution
+{
+  const pending = reducePendingChrome(null, {
+    type: "send_success",
+    conversationId: "conv-exp",
+    expert_name: "渗透大师",
+    expert_id: "exp-1",
+    agent_source: "pentest",
+  });
+  assert.equal(pending!.conversationId, "conv-exp");
+  assert.equal(pending!.expert_name, "渗透大师");
+  assert.equal(pending!.expert_id, "exp-1");
+  assert.equal(pending!.agent_source, "pentest");
+  assert.equal(pending!.label, "思考中…");
+  console.log("ok: S4 pending chrome carries speaker attribution");
 }
 
 {
@@ -181,6 +377,34 @@ import {
   console.log("ok: catch-up prune when RQ text ≥ live");
 }
 
+// Issue 11: empty live running not pruned when durable empty without done
+{
+  const live: Record<string, LiveStreamFrame> = {
+    "n4-thinking-run": {
+      streamId: "n4-thinking-run",
+      msgType: "thinking",
+      text: "",
+      content: { status: "running" },
+    },
+  };
+  const kept = pruneLiveCatchUp(live, [
+    { streamId: "n4-thinking-run", text: "", status: "running" },
+  ]);
+  assert.ok(kept["n4-thinking-run"], "keep empty running until durable done");
+
+  const dropped = pruneLiveCatchUp(live, [
+    { streamId: "n4-thinking-run", text: "", status: "done" },
+  ]);
+  assert.equal(dropped["n4-thinking-run"], undefined, "prune when durable done");
+
+  // R2: durable completed synonym counts as done via normalizeExecutionStatus
+  const droppedCompleted = pruneLiveCatchUp(live, [
+    { streamId: "n4-thinking-run", text: "", status: "completed" },
+  ]);
+  assert.equal(droppedCompleted["n4-thinking-run"], undefined, "prune when durable completed");
+  console.log("ok: Issue 11 prune empty running thinking only after durable done");
+}
+
 {
   const durable = durableStreamSnapshots([
     { msg_type: "thinking", content: { stream_id: "s1", text: "t1" } },
@@ -189,8 +413,8 @@ import {
     { msg_type: "agent_pending", content: { stream_id: "", text: "思考中…" } },
   ]);
   assert.deepEqual(durable, [
-    { streamId: "s1", text: "t1" },
-    { streamId: "s2", text: "via reasoning" },
+    { streamId: "s1", text: "t1", msgType: "thinking" },
+    { streamId: "s2", text: "via reasoning", msgType: "text" },
   ]);
   console.log("ok: durableStreamSnapshots extracts stream text");
 }
@@ -248,6 +472,34 @@ import {
   const t1 = merged.find((m) => readSid(m) === "n4-thinking-1")!;
   assert.equal(t1.content.text, "partial more");
   console.log("ok: display merge filters agent_pending and keys by stream_id");
+}
+
+// Issue 12: display merge prefer-done for thinking status
+{
+  const durable = [
+    {
+      id: "uuid-think-done",
+      msg_type: "thinking",
+      role: "agent",
+      content: {
+        stream_id: "n4-thinking-done",
+        text: "full",
+        reasoning: "full",
+        status: "done",
+      },
+    },
+  ];
+  const live: Record<string, LiveStreamFrame> = {
+    "n4-thinking-done": {
+      streamId: "n4-thinking-done",
+      msgType: "thinking",
+      text: "full",
+      content: { status: "running" },
+    },
+  };
+  const merged = mergeMessagesWithLiveStreams(durable, live);
+  assert.equal(merged[0]!.content.status, "done", "durable done wins over live running");
+  console.log("ok: Issue 12 display merge prefer-done");
 }
 
 // mergeProgressiveText

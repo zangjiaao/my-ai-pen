@@ -3,7 +3,11 @@ import { Brain, Compass, Globe2, Search, ShieldAlert, Terminal, Users, Wrench, t
 import type { Message } from "../lib/types";
 import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../lib/securityTypes";
 import { isTruthyNewFlag } from "../lib/findingNew";
-import { normalizeExecutionStatus } from "../lib/status";
+import {
+  normalizeExecutionStatus,
+  resolveToolItemStatus,
+  toolActivitySummaryLabel,
+} from "../lib/status";
 import { phaseLabel } from "../lib/phase";
 import ConfirmCard from "./cards/ConfirmCard";
 import ThinkingCard from "./cards/ThinkingCard";
@@ -23,7 +27,8 @@ interface Props {
   approvalDecisionByRequestId?: Record<string, "authorize" | "cancel" | "answered">;
 }
 
-function agentDisplayName(content: Record<string, unknown>, agentNameById: Record<string, string>, fallbackPentestNodeId?: string | null, platformAgentNodeId?: string | null): string {
+/** Shared speaker resolution for agent messages and list-tail pending chrome (Spec #305). */
+export function agentDisplayName(content: Record<string, unknown>, agentNameById: Record<string, string>, fallbackPentestNodeId?: string | null, platformAgentNodeId?: string | null): string {
   // Product expert persona wins — never show physical Node name as the speaker.
   const expertDisplay = String(content.expert_display_name || content.expertDisplayName || "").trim();
   if (expertDisplay) {
@@ -48,6 +53,25 @@ function agentDisplayName(content: Record<string, unknown>, agentNameById: Recor
   void fallbackPentestNodeId;
   void platformAgentNodeId;
   return "\u6e17\u900fAgent";
+}
+
+/** Same-speaker collapse rule used by MessageRenderer and pending chrome (Spec #305). */
+export function shouldShowAgentSpeakerLabel(
+  content: Record<string, unknown>,
+  previousAgentContent: Record<string, unknown> | null | undefined,
+  agentNameById: Record<string, string> = {},
+  fallbackPentestNodeId?: string | null,
+  platformAgentNodeId?: string | null,
+): boolean {
+  const label = agentDisplayName(content, agentNameById, fallbackPentestNodeId, platformAgentNodeId);
+  if (!previousAgentContent) return true;
+  const previousLabel = agentDisplayName(
+    previousAgentContent,
+    agentNameById,
+    fallbackPentestNodeId,
+    platformAgentNodeId,
+  );
+  return previousLabel !== label;
 }
 function ToolCallCard({ content, onOpenEvidence }: { content: Record<string, unknown>; onOpenEvidence?: (evidence: Partial<SecurityEvidence>) => void }) {
   const [expanded, setExpanded] = useState(false);
@@ -145,36 +169,18 @@ function ToolCategoryIcon({ category }: { category: ToolCategory }) {
 }
 
 function summarizeToolActivity(items: ToolItem[], fallbackTool: string, aggregateStatus: string): string {
-  const candidates: ToolItem[] = items.length ? items : [{ toolName: fallbackTool, status: aggregateStatus, summary: "" }];
-  const successful = candidates.filter(isSuccessfulToolItem);
-  if (!successful.length) {
-    if (candidates.some(item => normalizeExecutionStatus(item.status) === "running")) return "\u6267\u884c\u4e2d";
-    return "\u5931\u8d25";
-  }
-
-  const toolName = successful[successful.length - 1]?.toolName || fallbackTool;
-  const lower = toolName.toLowerCase();
-  const count = successful.length;
-  if (/browser|explore|crawl/.test(lower)) return `\u5df2\u6d4f\u89c8${count}\u4e2a\u7f51\u9875`;
-  if (/http|request|replay|fetch|curl/.test(lower)) return `\u5df2\u8bf7\u6c42${count}\u6b21`;
-  if (/stdin|command input|\binput\b/.test(lower)) return `\u5df2\u53d1\u9001${count}\u6b21\u8f93\u5165`;
-  if (/execute|command|shell|docker|process/.test(lower)) return `\u5df2\u6267\u884c${count}\u6761\u547d\u4ee4`;
-  if (/finding|vuln|verify|evidence|confirm/.test(lower)) return `\u5df2\u5904\u7406${count}\u6761\u7ed3\u679c`;
-  if (/search|scan|dir|wordlist|enumerate/.test(lower)) return `\u5df2\u679a\u4e3e${count}\u6b21`;
-  return `\u5df2\u5b8c\u6210${count}\u6b21`;
-}
-
-function isSuccessfulToolItem(item: ToolItem): boolean {
-  const primaryStatus = String(item.status || "").trim().toLowerCase();
-  if (primaryStatus && normalizeExecutionStatus(primaryStatus) !== "running") return isSuccessfulStatus(primaryStatus);
-  return [item.result?.status, item.result?.status_code].some(isSuccessfulStatus);
-}
-
-function isSuccessfulStatus(value: unknown): boolean {
-  const status = String(value || "").trim().toLowerCase();
-  if (["done", "ok", "success", "completed", "complete", "saved", "loaded"].includes(status)) return true;
-  if (/^\d{3}$/.test(status)) return Number(status) < 400;
-  return normalizeExecutionStatus(status) === "done";
+  const candidates: ToolItem[] = items.length
+    ? items
+    : [{ toolName: fallbackTool, status: aggregateStatus, summary: "" }];
+  // Spec #305 S+ / Issue 3+5: pure surface shares label language with tests.
+  return toolActivitySummaryLabel(
+    candidates.map((item) => ({
+      status: item.status,
+      toolName: item.toolName,
+      result: item.result || null,
+    })),
+    fallbackTool,
+  );
 }
 
 function toolItemFromStructuredRecord(item: Record<string, unknown>, content: Record<string, unknown>): ToolItem {
@@ -184,7 +190,14 @@ function toolItemFromStructuredRecord(item: Record<string, unknown>, content: Re
   const output = parseToolOutput(stdout);
   const explicitResult = item.result && typeof item.result === "object" && !Array.isArray(item.result) ? item.result as Record<string, unknown> : null;
   const parsed = explicitResult || output.result;
-  const status = readContentString(item.status) || readContentString(parsed?.status) || readContentString(content.status) || "done";
+  // Issue 3: keep raw lifecycle empty when missing so result hints can mark success;
+  // do not invent "done" or force "running" over status_code success.
+  const explicitLifecycle = readContentString(item.status) || readContentString(content.status);
+  const resultHints = {
+    status: parsed?.status,
+    status_code: parsed?.status_code,
+  };
+  const status = resolveToolItemStatus(explicitLifecycle, resultHints);
   const command = readContentString(item.command) || readContentString(parsed?.command);
   const evidenceId = readContentString(item.evidence_id) || output.evidenceId || readContentString(parsed?.evidence_id) || readContentString(content.evidence_id);
   const summary = readContentString(item.summary) || readContentString(content.summary);
@@ -255,7 +268,8 @@ function toolItemsFromContent(content: Record<string, unknown>): ToolItem[] {
   const runIds = Array.isArray(content.tool_run_ids) ? content.tool_run_ids.map(item => String(item || "")) : [String(content.tool_run_id || "")];
   const commands = readContentString(content.command).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
   const fallbackTool = String(content.latest_tool_name || content.tool_name || toolNames[0] || "tool");
-  const fallbackStatus = String(content.status || "done");
+  // Issue 3: missing content.status stays empty (not invented done/running).
+  const fallbackStatus = resolveToolItemStatus(content.status);
   const items = lines
     .filter(line => !line.endsWith("..."))
     .map((line, index) => toolItemFromLine(line, {
@@ -279,7 +293,12 @@ function toolItemFromLine(line: string, fallback: { fallbackTool: string; fallba
   const parsed = parseLooseObject(line);
   if (parsed) {
     const toolName = displayToolName(readContentString(parsed.tool_name) || readContentString(parsed.source_tool) || fallback.fallbackTool);
-    const status = readContentString(parsed.status) || readContentString(parsed.status_code) || fallback.fallbackStatus;
+    // Lifecycle from explicit status only; HTTP codes stay on result for hints (Issue 3).
+    const lifecycle = readContentString(parsed.status);
+    const status = resolveToolItemStatus(
+      lifecycle && !/^\d{3}$/.test(lifecycle) ? lifecycle : fallback.fallbackStatus,
+      { status: parsed.status, status_code: parsed.status_code },
+    );
     const command = readContentString(parsed.command) || fallback.fallbackCommand;
     return {
       toolName,

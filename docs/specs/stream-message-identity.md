@@ -2,7 +2,8 @@
 
 **Status:** implemented (Spec #276)  
 **Scope:** Platform frontend conversation stream UI only  
-**Depends on (do not change in this Spec):** Node4 `n4-{thinking|text}-{taskId}-{seq}` stream_ids; platform uuid5 `message_id` stamp per type+stream_id
+**Depends on (do not change in this Spec):** Node4 `n4-{thinking|text}-{taskId}-{seq}` stream_ids; platform uuid5 `message_id` stamp per type+stream_id  
+**Follow-on:** Timeline activity liveness — thinking `status`, empty running thinking, pending speaker reuse — see [`timeline-activity-liveness.md`](timeline-activity-liveness.md) (extends progressive content shape + pending clear triggers; does **not** reseed pending on tool gaps).
 
 ## Problem
 
@@ -18,7 +19,7 @@ That forced morph/align/delete logic across the list, live overlay, and React Qu
 - **Delete live-slot-as-Message.** Pending is **chrome**, not a Message.
 - **Message list identity** for progressive text/thinking = **`stream_id` only**.
 - **RQ** remains durable message SOT; **live overlay** is `Record<streamId, stream frame>` only (no live-slot keys).
-- **Pending chrome:** show “思考中…” at list tail after successful send while conversation is running and no progressive stream yet; hide on first thinking/text with `stream_id`, or task complete/error/user stop. **Do not** re-seed pending on tool gaps.
+- **Pending chrome:** show “思考中…” at list tail after successful send while conversation is running and no progressive stream yet; hide on first progressive **activity** for the turn — thinking/text with `stream_id`, including **empty running thinking** (`content.status === "running"`, Spec #305), or task complete/error/user stop. **Do not** re-seed pending on tool gaps. Thinking progressive frames carry explicit `content.status` (`running` | `done`); see [`timeline-activity-liveness.md`](timeline-activity-liveness.md).
 - **Tool feedback:** tool_call cards only (remove tool_output → pending reseed).
 - **Missing `stream_id`:** fail-closed — do not enter live progressive list; do not invent fallback keys.
 - **Prune live:** clear on conversation load/switch, task_complete, task_error, interrupt settle; optionally drop a live key when RQ already has same stream_id with text ≥ live.
