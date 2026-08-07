@@ -23,18 +23,37 @@ export function thinkingLifecycleTitle(value: unknown): string {
 }
 
 /**
+ * When the Case/session is not actively working, durable thinking left as
+ * `status=running` (node restart mid-llm_waiting, incomplete settle) must not
+ * keep showing 「思考中…」 forever.
+ */
+export function resolveThinkingUiStatusForSession(
+  value: unknown,
+  options?: { sessionActive?: boolean },
+): UiExecutionStatus {
+  const base = resolveThinkingUiStatus(value);
+  if (options?.sessionActive === false && base === "running") return "done";
+  return base;
+}
+
+/**
  * Presentational projection for ThinkingCard (Spec #305 S3 / Issue 13).
  * defaultExpanded is always true; empty body yields no fake placeholder.
+ * @param options.sessionActive when false, orphan running thinking → 思考完成
  */
-export function thinkingCardProjection(content: Record<string, unknown>): {
+export function thinkingCardProjection(
+  content: Record<string, unknown>,
+  options?: { sessionActive?: boolean },
+): {
   title: string;
   body: string;
-  defaultExpanded: true;
+  defaultExpanded: boolean;
   showBodyWhenExpanded: boolean;
 } {
   const body = String(content.reasoning || content.text || content.summary || "").trim();
+  const ui = resolveThinkingUiStatusForSession(content.status, options);
   return {
-    title: thinkingLifecycleTitle(content.status),
+    title: ui === "running" ? "思考中…" : "思考完成",
     body,
     defaultExpanded: true,
     showBodyWhenExpanded: Boolean(body),
