@@ -18,6 +18,8 @@ const baseChild: Pick<TaskEnvelope, "target" | "scope" | "agentLanguage"> = {
   scope: { hosts: ["t"] },
 };
 
+const STANDING_HEADING = "## Standing node policies";
+
 for (const code of ["zh-CN", "zh-TW", "en", "ja", "auto"] as const) {
   const prompt = buildSubagentSystemPrompt({
     pack,
@@ -29,6 +31,11 @@ for (const code of ["zh-CN", "zh-TW", "en", "ja", "auto"] as const) {
   assert.ok(
     prompt.includes(expected),
     `subagent prompt embeds exact shared formatter output for ${code}`,
+  );
+  assert.ok(prompt.startsWith(STANDING_HEADING), `subagent Standing-first for ${code}`);
+  assert.ok(
+    prompt.indexOf(STANDING_HEADING) < prompt.indexOf("You are a package worker."),
+    `subagent Standing before mission for ${code}`,
   );
   assert.match(prompt, /Parent pack: pentest/);
   assert.match(prompt, /settlement\.json|Finding Store/i);

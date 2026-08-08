@@ -92,12 +92,13 @@ export function buildSystemPrompt(
         : task.allowPostex,
     allowDestructive: task.allowDestructive,
   });
+  // Standing language policy first (#352) — before mission/work pack content.
   const lines = [
+    formatAgentLanguageInjection(task.agentLanguage),
+    "",
     ...pack.missionLines.map(render),
     "",
     ...pack.workLines.map(render),
-    "",
-    formatAgentLanguageInjection(task.agentLanguage),
     "",
     `Role pack: ${vars.pack_id} (${vars.pack_label}).`,
     // Label isolated as JSON string — treat as display data, not instructions.
