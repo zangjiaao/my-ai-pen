@@ -8,7 +8,12 @@ import {
   resolveToolItemStatus,
   toolActivitySummaryLabel,
 } from "../lib/status";
-import { phaseLabel } from "../lib/phase";
+import {
+  formatChatMessageTime,
+  isInfraStatusNotice,
+  isLegacyPhaseOnlyStatus,
+  statusNoticeDisplayText,
+} from "../lib/chatStreamChrome";
 import ChoiceCard from "./cards/ChoiceCard";
 import ThinkingCard from "./cards/ThinkingCard";
 import MarkdownText from "./MarkdownText";
@@ -730,37 +735,43 @@ export function AgentPendingCard({ content }: { content: Record<string, unknown>
     </div>
   );
 }
-function statusNoticeText(content: Record<string, unknown>): string {
-  const phase = typeof content.phase === "string" ? content.phase : parsePhaseFromText(String(content.text || ""));
-  return phase ? phaseLabel(phase) : String(content.text || "");
+function StatusNotice({ content, msgType }: { content: Record<string, unknown>; msgType?: string }) {
+  // Spec #326 L9: hide infra status (tooling_health-class); keep engagement_closeout.
+  if (isInfraStatusNotice(content, msgType)) return null;
+  if (msgType !== "engagement_closeout" && isLegacyPhaseOnlyStatus(content)) return null;
+  const text = statusNoticeDisplayText(content);
+  if (!String(text || "").trim()) return null;
+  return (
+    <div className="my-2 text-center text-xs text-ink-muted" data-status-notice>
+      {text}
+    </div>
+  );
 }
 
-function isLegacyPhaseOnlyStatus(content: Record<string, unknown>): boolean {
-  const phase = typeof content.phase === "string" ? content.phase : parsePhaseFromText(String(content.text || ""));
-  if (!["intake", "recon", "analysis", "verify", "report", "complete"].includes(phase)) return false;
-  const text = String(content.text || "").trim();
-  return Boolean(content.synthetic) || !text || text === phaseLabel(phase) || text.startsWith(`Phase: ${phase}`);
+function SystemNotice({ content, msgType }: { content: Record<string, unknown>; msgType?: string }) {
+  return <StatusNotice content={content} msgType={msgType} />;
 }
 
-function parsePhaseFromText(text: string): string {
-  return text.match(/Phase:\s*([^\s(]+)/)?.[1] || "";
-}
-
-function StatusNotice({ content }: { content: Record<string, unknown> }) {
-  if (isLegacyPhaseOnlyStatus(content)) return null;
-  return <div className="my-2 text-center text-xs text-ink-muted">{statusNoticeText(content)}</div>;
-}
-
-function SystemNotice({ content }: { content: Record<string, unknown> }) {
-  return <StatusNotice content={content} />;
+function MessageTimeStamp({ createdAt, align = "end" }: { createdAt?: string; align?: "end" | "start" }) {
+  const clock = formatChatMessageTime(createdAt);
+  if (!clock) return null;
+  return (
+    <div
+      className={`mt-0.5 px-1 text-[10px] leading-none text-ink-muted ${align === "end" ? "text-right" : "text-left"}`}
+      data-chat-message-time={clock}
+    >
+      {clock}
+    </div>
+  );
 }
 
 export default function MessageRenderer({ message, agentNameById = {}, previousMessage, fallbackPentestNodeId, platformAgentNodeId, onDecision, onConfirmOptions, onOpenVulnerability, onOpenAsset, onOpenEvidence, highlightedApprovalId, approvalDecisionByRequestId = {}, choiceSelectedByRequestId = {}, sessionActive, choiceDisabled = false, resultAnchorWorkSeconds: resultAnchorSecondsProp }: Props) {
   const { role, msg_type, content } = message;
 
   // Spec #163: engagement_closeout uses content.text (platform gist) via SystemNotice.
+  // Spec #326: tooling_health-class infra status is not product StatusNotice chrome.
   if (role === "system" || msg_type === "status" || msg_type === "engagement_closeout") {
-    return <SystemNotice content={content} />;
+    return <SystemNotice content={content} msgType={msg_type} />;
   }
 
   // Spec #312: only confirm_options decisions show a user bubble (text is display content).
@@ -769,18 +780,20 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
     if (decision !== "confirm_options") return null;
     const decisionText = String(content.text || "").trim() || "已选择";
     return (
-      <div className="my-2 flex min-w-0 justify-end">
+      <div className="my-2 flex min-w-0 flex-col items-end">
         <div className="max-w-[70%] break-words rounded-2xl bg-surface-default px-4 py-2.5 text-sm [overflow-wrap:anywhere]">
           {renderMentionText(decisionText)}
         </div>
+        <MessageTimeStamp createdAt={message.created_at} align="end" />
       </div>
     );
   }
 
   if (role === "user") {
     return (
-      <div className="my-2 flex min-w-0 justify-end">
+      <div className="my-2 flex min-w-0 flex-col items-end">
         <div className="max-w-[70%] break-words rounded-2xl bg-surface-default px-4 py-2.5 text-sm [overflow-wrap:anywhere]">{renderMentionText(String(content.text || ""))}</div>
+        <MessageTimeStamp createdAt={message.created_at} align="end" />
       </div>
     );
   }
@@ -841,12 +854,15 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
       break;
     case "status":
     case "engagement_closeout":
-      body = <StatusNotice content={content} />;
+      body = <StatusNotice content={content} msgType={msg_type} />;
       break;
     case "text":
     default:
       body = <MarkdownText text={String(content.text || "")} />;
   }
+
+  // Message clock on agent text turns (and status path above); skip tool/thinking chrome noise.
+  const showMessageTime = msg_type === "text" || msg_type === "status" || msg_type === "engagement_closeout";
 
   return (
     <div className="my-2 min-w-0">
@@ -868,6 +884,7 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
             </span>
           </div>
         )}
+        {showMessageTime ? <MessageTimeStamp createdAt={message.created_at} align="start" /> : null}
       </div>
     </div>
   );
