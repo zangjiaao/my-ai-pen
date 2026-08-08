@@ -337,7 +337,13 @@ export function applyCaptainEndDisposition(options: {
   } catch {
     /* ignore */
   }
+  // Clear Session-key pending always after force/explicit dispose.
   clearPendingSessionDispose(options.entry.conversationId, options.entry.expertId);
+  // Spec #354 L1: case-wide pending must not stick after the mid-burst finally
+  // that force-disposed (busy is one-per-Case; next package must re-park normally).
+  if (forceDispose || decision.reason === "case_close") {
+    clearPendingCaseDispose(options.entry.conversationId);
+  }
   return { parked: false, disposed: true };
 }
 

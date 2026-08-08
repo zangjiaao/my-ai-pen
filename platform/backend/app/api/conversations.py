@@ -219,11 +219,22 @@ async def delete_participant_session(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Spec #354 L10: Session Delete — dispose identity; hold incomplete map for handoff."""
+    """Spec #354 L10: Session Delete — dispose identity; hold incomplete map for handoff.
+
+    Also settles mid-run package chrome: workers/working/status light/interrupt button
+    so Navbar and composer leave the running/interrupt state.
+    """
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from app.services.case_participants import (
+        remove_participant,
+        settle_context_after_session_delete,
+    )
     from app.services.session_handoff import put_pending_handoff
 
     c = await _get_conv(conv_id, current_user, db)
     expert_id = str((body.expert_id if body else None) or _active_expert_id(c) or "").strip()
+    node_id = str(c.node_id) if c.node_id else None
     result = await _notify_node_session_op(
         c.node_id,
         "session_dispose",
@@ -231,7 +242,6 @@ async def delete_participant_session(
         expert_id=expert_id or None,
     )
     # Prefer Node open_todos from lifecycle ack (SoT for live TodoStore).
-    # Fall back to platform plan_tree so handoff still works offline / ack timeout.
     open_todos: list = []
     if isinstance(result.get("ack"), dict):
         raw = result["ack"].get("open_todos")
@@ -240,9 +250,9 @@ async def delete_participant_session(
     ctx = dict(c.context) if isinstance(c.context, dict) else {}
     if not open_todos:
         open_todos = _open_todos_from_context(ctx)
+
     if expert_id:
         ctx = put_pending_handoff(ctx, expert_id=expert_id, open_todos=open_todos, source="session_delete")
-        # Clear Session-private work identity for this expert (dispose product Session).
         sessions = dict(ctx.get("sessions") or {}) if isinstance(ctx.get("sessions"), dict) else {}
         if expert_id in sessions:
             sessions.pop(expert_id, None)
@@ -250,7 +260,20 @@ async def delete_participant_session(
                 ctx["sessions"] = sessions
             else:
                 ctx.pop("sessions", None)
-        c.context = ctx
+        ctx = remove_participant(ctx, expert_id=expert_id)
+
+    # Close package busy chrome (workers / interrupt / checkpoint ghost Main).
+    ctx = settle_context_after_session_delete(ctx, expert_id=expert_id or None)
+    # Ensure empty participants dict remains (no checkpoint fallback).
+    if not isinstance(ctx.get("participants"), dict):
+        ctx["participants"] = {}
+    c.context = ctx
+    try:
+        if str(c.status or "").strip().lower() == "running":
+            transition_conversation(c, "incomplete")
+    except ConversationStatusError:
+        pass
+    flag_modified(c, "context")
     await _audit(
         db,
         uuid.UUID(current_user["user_id"]),
@@ -261,6 +284,28 @@ async def delete_participant_session(
         {"expert_id": expert_id or None, "node": result, "held": bool(open_todos)},
     )
     await db.commit()
+
+    # Broadcast so FE Navbar light + interrupt/send update without waiting for poll.
+    try:
+        from app.ws import router as ws_router
+
+        workers = (c.context or {}).get("workers") if isinstance(c.context, dict) else {}
+        payload = {
+            "type": "conversation_working",
+            "conversation_id": str(c.id),
+            "working": bool(workers),
+            "status": str(c.status or "incomplete"),
+            "workers": [
+                {"node_id": nid, **(meta if isinstance(meta, dict) else {})}
+                for nid, meta in (workers or {}).items()
+            ],
+            "interrupting": False,
+            "reason": "session_delete",
+        }
+        await ws_router._broadcast_conversation_working(payload)
+    except Exception as e:
+        print(f"[api] session delete working broadcast error: {e}")
+
     return {
         "ok": True,
         "expert_id": expert_id or None,
@@ -895,9 +940,10 @@ def _out(c: Conversation) -> ConversationOut:
 
 
 def _active_expert_id(c: Conversation) -> str | None:
+    """Resolve real expert_id only (Spec #354 L8 — never pack/engagement as expert key)."""
     ctx = c.context if isinstance(c.context, dict) else {}
     task = ctx.get("task") if isinstance(ctx.get("task"), dict) else {}
-    eid = str(task.get("expert_id") or task.get("engagement") or task.get("role") or "").strip()
+    eid = str(task.get("expert_id") or "").strip()
     return eid or None
 
 

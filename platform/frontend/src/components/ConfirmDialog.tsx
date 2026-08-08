@@ -1,3 +1,5 @@
+import { createPortal } from "react-dom";
+
 interface Props {
   open: boolean;
   title: string;
@@ -11,6 +13,10 @@ interface Props {
   cancelLabel?: string;
 }
 
+/**
+ * Platform-wide confirm dialog. Always portals to document.body so it is a
+ * true global overlay (not trapped by transformed / overflow ancestors like RightPanel).
+ */
 export default function ConfirmDialog({
   open,
   title,
@@ -23,17 +29,33 @@ export default function ConfirmDialog({
   cancelLabel = "取消",
 }: Props) {
   if (!open) return null;
-  return (
+  if (typeof document === "undefined") return null;
+
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center theme-overlay"
+      className="fixed inset-0 z-[100] flex items-center justify-center theme-overlay"
+      data-testid="confirm-dialog-overlay"
       onClick={() => {
         if (!busy) onCancel();
       }}
     >
-      <div className="w-[400px] rounded-3xl border border-hairline-soft bg-canvas p-6 shadow-lg" onClick={e => e.stopPropagation()}>
-        <h3 className="mb-2 text-lg font-semibold">{title}</h3>
+      <div
+        className="w-[400px] max-w-[calc(100vw-2rem)] rounded-3xl border border-hairline-soft bg-canvas p-6 shadow-lg"
+        data-testid="confirm-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="confirm-dialog-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 id="confirm-dialog-title" className="mb-2 text-lg font-semibold">
+          {title}
+        </h3>
         <p className="mb-4 whitespace-pre-line text-sm text-ink-secondary">{description}</p>
-        {error && <p className="mb-4 rounded-md border border-severity-critical/30 bg-severity-critical/10 px-3 py-2 text-sm text-severity-critical">{error}</p>}
+        {error && (
+          <p className="mb-4 rounded-md border border-severity-critical/30 bg-severity-critical/10 px-3 py-2 text-sm text-severity-critical">
+            {error}
+          </p>
+        )}
         <div className="flex justify-end gap-3">
           <button
             type="button"
@@ -53,6 +75,7 @@ export default function ConfirmDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

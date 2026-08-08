@@ -68,6 +68,11 @@ export type StrixAgentStatus = {
   /** Product expert id for Case multi-role roster. */
   expert_id?: string;
   pack_id?: string;
+  /**
+   * Spec #354: durable Participant Session identity on this Case
+   * (typically `expert:{uuid}` / park key material). Shown in collab chrome.
+   */
+  session_id?: string;
   /** Currently sticky / active speaker role. */
   highlighted?: boolean;
   /** Spec #278: Session actual harness (not composer intent). */

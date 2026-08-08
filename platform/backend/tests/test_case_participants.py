@@ -5,6 +5,7 @@ from app.services.case_participants import (
     participant_key,
     participants_list,
     recompute_case_run,
+    remove_participant,
     resolve_worker_display_name,
     set_worker_display_name,
     upsert_participant,
@@ -16,6 +17,60 @@ from app.services.case_participants import (
 def test_participant_key_prefers_expert_id():
     assert participant_key(expert_id="abc", pack_id="default", expert_name="助理") == "expert:abc"
     assert participant_key(pack_id="pentest", expert_name="渗透大师").startswith("pack:pentest:")
+
+
+def test_remove_participant_session_delete_drops_collab_card():
+    """Spec #354 L10: Session Delete must remove roster so UI card disappears."""
+    ctx = {}
+    ctx = upsert_participant(
+        ctx,
+        expert_id="269b0fae-ec27-49a7-8e14-02ad26beb69e",
+        expert_name="平台助理",
+        pack_id="default",
+        last_status="idle",
+    )
+    ctx = upsert_participant(
+        ctx,
+        expert_id="other-expert",
+        expert_name="渗透",
+        pack_id="pentest",
+        last_status="idle",
+    )
+    assert len(agents_from_participants(ctx)) == 2
+    ctx = remove_participant(ctx, expert_id="269b0fae-ec27-49a7-8e14-02ad26beb69e")
+    agents = agents_from_participants(ctx)
+    assert len(agents) == 1
+    assert agents[0].get("expert_id") == "other-expert"
+    # Empty roster keeps participants key so checkpoint cannot resurrect ghosts.
+    ctx = remove_participant(ctx, expert_id="other-expert")
+    assert isinstance(ctx.get("participants"), dict)
+    assert ctx["participants"] == {}
+
+
+def test_settle_context_after_session_delete_clears_workers_and_panel_ghosts():
+    from app.services.case_participants import settle_context_after_session_delete
+
+    ctx = {
+        "participants": {},
+        "workers": {
+            "node-1": {"expert_id": "e1", "task_id": "t1"},
+            "node-2": {"expert_id": "e2", "task_id": "t2"},
+        },
+        "interrupt_pending": True,
+        "active_task_id": "t1",
+        "checkpoint": {
+            "panel_agents": [{"id": "node4-main", "name": "渗透大师", "status": "running"}],
+        },
+    }
+    out = settle_context_after_session_delete(ctx, expert_id="e1")
+    assert "node-1" not in (out.get("workers") or {})
+    assert "node-2" in (out.get("workers") or {})
+    # e2 still busy — keep interrupt only if workers remain; settle clears interrupt always
+    assert out.get("interrupt_pending") is None
+    out2 = settle_context_after_session_delete(out, expert_id="e2")
+    assert out2.get("workers") == {}
+    assert out2.get("active_task_id") is None
+    assert (out2.get("checkpoint") or {}).get("panel_agents") == []
 
 
 def test_upsert_two_roles_preserved():

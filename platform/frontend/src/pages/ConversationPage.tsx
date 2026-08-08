@@ -3265,6 +3265,16 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               engagementCloseout={engagementCloseout}
               conversationId={activeId}
               pendingHandoffExpertIds={pendingHandoffExpertIds}
+              onSessionLifecycleDone={() => {
+                // Spec #354: Session Delete mid-run must flip Navbar light + interrupt → send.
+                if (!activeId) return;
+                setRunning(false);
+                setInterrupting(false);
+                launchOptimisticRef.current = false;
+                patchConversation(activeId, { working: false, status: "incomplete" });
+                clearProgressiveStreamUi();
+                void refreshConversationState(activeId);
+              }}
               onOpenVulnerability={setSelectedVulnerability}
               onOpenAsset={setSelectedAsset}
               onWorkerClick={(agent, workerOrdinal) => {

@@ -28,6 +28,7 @@ import {
 import FindingCard from "./cards/FindingCard";
 import { GraphAwareTodoList } from "./TasksPlanList";
 import TasksMapHeader from "./TasksMapHeader";
+import ConfirmDialog from "./ConfirmDialog";
 import type { TaskMapRevision } from "../lib/taskMapHistory";
 import { isViewingHistory, planTreeForView } from "../lib/taskMapHistory";
 import { discloseTaskListCap, TASKS_WORK_ITEM_CAP } from "../lib/tasksListCap";
@@ -154,6 +155,8 @@ interface Props {
   conversationId?: string | null;
   /** Spec #354 S4: expert ids with pending incomplete-map handoff. */
   pendingHandoffExpertIds?: string[];
+  /** Spec #354: refresh Case snapshot after Session Reset/Delete. */
+  onSessionLifecycleDone?: () => void;
 }
 
 const RIGHT_PANEL_WIDTH_KEY = "my_ai_pen_right_panel_width";
@@ -206,10 +209,42 @@ export default function RightPanel({
   onWorkerClick,
   conversationId = null,
   pendingHandoffExpertIds = [],
+  onSessionLifecycleDone,
 }: Props) {
   const [tab, setTab] = useState<Tab>("status");
   const [selectedTrafficId, setSelectedTrafficId] = useState<string | null>(null);
   const [sessionActionBusy, setSessionActionBusy] = useState(false);
+  const [sessionConfirm, setSessionConfirm] = useState<null | {
+    kind: "reset" | "delete";
+    expertId: string | null;
+    label: string;
+  }>(null);
+  const [sessionActionError, setSessionActionError] = useState<string | null>(null);
+
+  const runSessionLifecycle = async (kind: "reset" | "delete") => {
+    if (!conversationId || !sessionConfirm || sessionConfirm.kind !== kind) return;
+    setSessionActionBusy(true);
+    setSessionActionError(null);
+    try {
+      const path =
+        kind === "reset"
+          ? `/api/conversations/${conversationId}/sessions/reset`
+          : `/api/conversations/${conversationId}/sessions/delete`;
+      await authFetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expert_id: sessionConfirm.expertId }),
+      });
+      setSessionConfirm(null);
+      onSessionLifecycleDone?.();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e || "请求失败");
+      setSessionActionError(msg);
+    } finally {
+      setSessionActionBusy(false);
+    }
+  };
+
   const trafficRows = useMemo(
     () => projectTrafficListRows(trafficExchanges as TrafficExchange[]),
     [trafficExchanges],
@@ -263,14 +298,11 @@ export default function RightPanel({
   const kanbanSummary = normalizeKanban(kanban, planTree, progress, workflowKind);
   const isStrixWorkflow = workflowKind === "strix" || kanbanSummary.workflow_kind === "strix" || planTree.some((node) => String(node.source || "") === "strix_todo");
   // Unified right-panel layout (Node3 baseline) for both Strix and Node2/pentest.
+  // Spec #354: never invent a synthetic Main card (node4-main). Empty roster shows
+  // a one-line empty state like Tasks — Session appears after the user talks / work runs.
   // If the conversation is no longer running, never leave Main/Worker agents stuck on "running"
   // (stale checkpoint.panel_agents can lag behind conversation status).
-  const displayAgents = normalizeAgentsForConversationRunning(
-    orderedStrixAgents.length > 0
-      ? orderedStrixAgents
-      : synthesizeMainAgent(activeTool, running, workflowKind),
-    running,
-  );
+  const displayAgents = normalizeAgentsForConversationRunning(orderedStrixAgents, running);
   const hasStatusData = running || Boolean(activeTool) || planTree.length > 0 || displayAgents.length > 0 || findings.length > 0 || assets.length > 0 || trafficExchanges.length > 0 || Boolean(strixRun) || Boolean(caseRun?.started_at || caseRun?.llm_usage?.total_tokens) || Boolean(engagementCloseout && Object.keys(engagementCloseout).length);
   // Spec #321: history selection shows frozen revision plan_tree; live stays default.
   const viewedPlanTree = planTreeForView({
@@ -405,73 +437,38 @@ export default function RightPanel({
                     Pending handoff · {pendingHandoffExpertIds.join(", ")} — same expert re-entry resumes checklist
                   </p>
                 )}
-                {displayAgents.length > 0 && (
-                  <StrixAgentList agents={displayAgents} onWorkerClick={onWorkerClick} />
-                )}
-                {/* Spec #354 S3: Session Reset / Delete with confirm; Sub End remains on Worker audit. */}
-                {conversationId && (
-                  <div className="mt-2 flex flex-wrap gap-2" data-testid="session-lifecycle-actions">
-                    <button
-                      type="button"
-                      data-testid="session-reset-btn"
-                      disabled={sessionActionBusy}
-                      className="rounded border border-hairline px-2 py-1 text-[11px] text-ink hover:bg-canvas-inset disabled:opacity-50"
-                      onClick={async () => {
-                        if (!window.confirm("Reset this Session? Model memory clears; incomplete Tasks stay.")) return;
-                        setSessionActionBusy(true);
-                        try {
-                          const expertId =
-                            displayAgents.find((a) => !a.parent_id)?.expert_id ||
-                            displayAgents[0]?.expert_id ||
-                            undefined;
-                          await authFetch(`/api/conversations/${conversationId}/sessions/reset`, {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ expert_id: expertId || null }),
-                          });
-                        } catch (e) {
-                          console.error("[RightPanel] session reset failed", e);
-                        } finally {
-                          setSessionActionBusy(false);
-                        }
-                      }}
-                    >
-                      Reset Session
-                    </button>
-                    <button
-                      type="button"
-                      data-testid="session-delete-btn"
-                      disabled={sessionActionBusy}
-                      className="rounded border border-hairline px-2 py-1 text-[11px] text-severity-critical hover:bg-canvas-inset disabled:opacity-50"
-                      onClick={async () => {
-                        if (
-                          !window.confirm(
-                            "Delete this Session? Incomplete Tasks are held for same-expert handoff.",
-                          )
-                        ) {
-                          return;
-                        }
-                        setSessionActionBusy(true);
-                        try {
-                          const expertId =
-                            displayAgents.find((a) => !a.parent_id)?.expert_id ||
-                            displayAgents[0]?.expert_id ||
-                            undefined;
-                          await authFetch(`/api/conversations/${conversationId}/sessions/delete`, {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ expert_id: expertId || null }),
-                          });
-                        } catch (e) {
-                          console.error("[RightPanel] session delete failed", e);
-                        } finally {
-                          setSessionActionBusy(false);
-                        }
-                      }}
-                    >
-                      Delete Session
-                    </button>
-                  </div>
+                {displayAgents.length > 0 ? (
+                  <StrixAgentList
+                    agents={displayAgents}
+                    onWorkerClick={onWorkerClick}
+                    sessionLifecycle={
+                      conversationId
+                        ? {
+                            busy: sessionActionBusy,
+                            onRequestReset: (agent) => {
+                              setSessionActionError(null);
+                              setSessionConfirm({
+                                kind: "reset",
+                                expertId: String(agent.expert_id || "").trim() || null,
+                                label: agentDisplayLabel(agent),
+                              });
+                            },
+                            onRequestDelete: (agent) => {
+                              setSessionActionError(null);
+                              setSessionConfirm({
+                                kind: "delete",
+                                expertId: String(agent.expert_id || "").trim() || null,
+                                label: agentDisplayLabel(agent),
+                              });
+                            },
+                          }
+                        : undefined
+                    }
+                  />
+                ) : (
+                  <p className="text-sm text-ink-muted" data-testid="collab-empty">
+                    No collaboration sessions yet — send a message or dispatch an expert to start
+                  </p>
                 )}
               </section>
             )}
@@ -588,8 +585,56 @@ export default function RightPanel({
           />,
           document.body,
         )}
+      {/* Spec #354: platform ConfirmDialog for Session Reset / Delete (not window.confirm). */}
+      <ConfirmDialog
+        open={sessionConfirm?.kind === "reset"}
+        title="重置 Session"
+        description={
+          sessionConfirm?.kind === "reset"
+            ? `确定重置「${sessionConfirm.label}」的模型工作记忆？\n未完成的 Tasks 会保留，不会冷 reseed 清单。`
+            : ""
+        }
+        confirmLabel="重置"
+        cancelLabel="取消"
+        busy={sessionActionBusy}
+        error={sessionConfirm?.kind === "reset" ? sessionActionError : null}
+        onCancel={() => {
+          if (sessionActionBusy) return;
+          setSessionConfirm(null);
+          setSessionActionError(null);
+        }}
+        onConfirm={() => {
+          void runSessionLifecycle("reset");
+        }}
+      />
+      <ConfirmDialog
+        open={sessionConfirm?.kind === "delete"}
+        title="删除 Session"
+        description={
+          sessionConfirm?.kind === "delete"
+            ? `确定删除「${sessionConfirm.label}」？\n未完成的 Tasks 会进入 Case pending handoff，同 expert 再入时自动接续。`
+            : ""
+        }
+        confirmLabel="删除"
+        cancelLabel="取消"
+        busy={sessionActionBusy}
+        error={sessionConfirm?.kind === "delete" ? sessionActionError : null}
+        onCancel={() => {
+          if (sessionActionBusy) return;
+          setSessionConfirm(null);
+          setSessionActionError(null);
+        }}
+        onConfirm={() => {
+          void runSessionLifecycle("delete");
+        }}
+      />
     </aside>
   );
+}
+
+function agentDisplayLabel(agent: StrixAgentStatus): string {
+  const name = String(agent.name || agent.expert_id || agent.pack_id || "Session").trim();
+  return name || "Session";
 }
 
 function TrafficAuditList({
@@ -1103,27 +1148,6 @@ function unifiedTodoItems(nodes: PlanNode[]): { items: PlanNode[]; hiddenCount: 
     return String(left.node_id || left.id || left.title || "").localeCompare(String(right.node_id || right.id || right.title || ""));
   });
   return discloseTaskListCap(sorted, TASKS_WORK_ITEM_CAP);
-}
-
-function synthesizeMainAgent(activeTool: string | undefined, running: boolean, workflowKind?: string): StrixAgentStatus[] {
-  // Only synthesize for pentest/Node2 when the platform did not send multi-agent rows.
-  if (workflowKind === "strix") return [];
-  if (!running && !activeTool) return [];
-  const tool = String(activeTool || "").trim();
-  return [{
-    id: "node4-main",
-    name: "Agent",
-    status: running ? "running" : "completed",
-    parent_id: null,
-    task: "",
-    skills: [],
-    pending_count: 0,
-    role: "main",
-    current_tool: tool,
-    current_action: running ? (tool ? "tool_running" : "llm_waiting") : "finished",
-    // Spec #324: no work-content summary; runtime via status only.
-    current_detail: "",
-  }];
 }
 
 /** Align collaboration tree with conversation lifecycle (timer already stopped when running=false). */

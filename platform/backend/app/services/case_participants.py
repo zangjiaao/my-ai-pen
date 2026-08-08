@@ -768,6 +768,108 @@ def mark_participant_idle(
     )
 
 
+def remove_participant(
+    context: dict | None,
+    *,
+    expert_id: object = None,
+    pack_id: object = None,
+    expert_name: object = None,
+) -> dict[str, Any]:
+    """Spec #354 L10: remove Case roster row after Session Delete so collab UI drops the card."""
+    ctx = dict(context or {})
+    roster = participants_map(ctx)
+    if not roster:
+        return ctx
+    eid = str(expert_id or "").strip()
+    pack = str(pack_id or "").strip()
+    name = str(expert_name or "").strip()
+    keys_to_drop: list[str] = []
+    if eid:
+        # Drop any row whose expert_id matches (key may be expert:{id} or pack:...).
+        for key, row in roster.items():
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("expert_id") or "").strip() == eid:
+                keys_to_drop.append(key)
+            elif key == f"expert:{eid}" or key.endswith(f":{eid}"):
+                keys_to_drop.append(key)
+    else:
+        key = participant_key(expert_id=None, pack_id=pack or None, expert_name=name or None)
+        if key in roster:
+            keys_to_drop.append(key)
+    if not keys_to_drop:
+        return ctx
+    for key in keys_to_drop:
+        roster.pop(key, None)
+    # Keep empty dict (not pop) so snapshot does not fall back to checkpoint panel_agents
+    # and resurrect a ghost Main card after Session Delete (Spec #354).
+    ctx["participants"] = roster
+    return recompute_case_run(ctx)
+
+
+def settle_context_after_session_delete(
+    context: dict | None,
+    *,
+    expert_id: object = None,
+) -> dict[str, Any]:
+    """Spec #354: after Session Delete mid-run, close package busy state on the Case.
+
+    - Drop workers tied to this expert (or all if expert unknown)
+    - Clear interrupt_pending / active_task_id when no workers remain
+    - Clear checkpoint panel_agents ghosts when roster empty
+    Does not invent new participants.
+    """
+    ctx = dict(context or {})
+    eid = str(expert_id or "").strip()
+    workers_raw = ctx.get("workers") if isinstance(ctx.get("workers"), dict) else {}
+    new_workers: dict[str, Any] = {}
+    for nid, meta in workers_raw.items():
+        if not isinstance(meta, dict):
+            continue
+        meta_eid = str(meta.get("expert_id") or "").strip()
+        if eid and meta_eid and meta_eid != eid:
+            new_workers[str(nid)] = meta
+            continue
+        # Drop matching expert worker, or drop all when expert unknown / untagged.
+        if eid and meta_eid and meta_eid == eid:
+            continue
+        if eid and not meta_eid:
+            # Untagged worker on single-node Cases usually belongs to the deleted Session.
+            continue
+        if not eid:
+            continue
+        new_workers[str(nid)] = meta
+    if not eid:
+        new_workers = {}
+    ctx["workers"] = new_workers
+    ctx.pop("interrupt_pending", None)
+    if not new_workers:
+        ctx.pop("active_task_id", None)
+        # Soft-close work-burst ledger if open.
+        try:
+            from app.services.work_burst_time import finalize_burst, get_ledger, set_ledger
+
+            ledger = get_ledger(ctx)
+            if ledger.get("active_burst_id"):
+                ctx = set_ledger(ctx, finalize_burst(ledger))
+        except Exception:
+            pass
+    # Ghost Main from checkpoint.panel_agents when participants empty.
+    roster = participants_map(ctx)
+    if not roster:
+        cp = dict(ctx.get("checkpoint") or {}) if isinstance(ctx.get("checkpoint"), dict) else {}
+        if cp:
+            if "panel_agents" in cp:
+                cp["panel_agents"] = []
+            node3 = cp.get("node3_strix") if isinstance(cp.get("node3_strix"), dict) else None
+            if node3 is not None:
+                ns = dict(node3)
+                ns["agents"] = []
+                cp["node3_strix"] = ns
+            ctx["checkpoint"] = cp
+    return ctx
+
+
 def participants_list(context: dict | None) -> list[dict[str, Any]]:
     """Sorted: running first, then last_seen desc."""
     rows = list(participants_map(context).values())
@@ -838,6 +940,9 @@ def agents_from_participants(
             "role": "main",
             "pack_id": pack,
             "expert_id": eid,
+            # Spec #354: durable Participant Session identity on this Case (case+expert).
+            # UI shows this instead of an "active" badge for debug / continuity checks.
+            "session_id": key,
             "current_tool": "",
             "current_action": status,
             "current_detail": detail,

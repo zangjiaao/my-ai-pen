@@ -600,10 +600,16 @@ async def _apply_worker_state(
                 except ConversationStatusError:
                     pass
             elif current == "running" and reason_text in {
-                "interrupted", "not_busy", "canceled", "cancel", "interrupt"
+                "interrupted",
+                "not_busy",
+                "canceled",
+                "cancel",
+                "interrupt",
+                "session_delete",
+                "session_reset",
             }:
-                # Spec #354 L5/L7: user interrupt pauses the Task package (yellow/incomplete),
-                # not Case death (canceled/red). Session runtime is retained on Node.
+                # Spec #354 L5/L7: user interrupt / Session Delete pauses the Task package
+                # (yellow/incomplete), not Case death (canceled/red).
                 try:
                     transition_conversation(c, "incomplete")
                 except ConversationStatusError:
@@ -5656,6 +5662,9 @@ async def _dispatch_task_assign_to_node(
     if _consume_todo_replace_grant(conv_id):
         task_msg["todo_replace_allowed"] = True
     await node_connections[node_id].send_text(json.dumps(task_msg, ensure_ascii=False))
+    # Spec #354 S4: consume hold only after successful delivery (peek attached earlier).
+    if task_msg.get("pending_handoff"):
+        await _consume_pending_handoff_after_dispatch(conv_id, expert_id=expert_id or task_msg.get("expert_id"))
 
 
 def _task_assign_from_user_message(conv_id: str, msg: dict, task_id: str) -> dict:
@@ -5847,7 +5856,11 @@ async def _attach_pending_handoff_to_task_assign(
     *,
     expert_id: str | None,
 ) -> dict:
-    """Spec #354 S4: consume Case pending hold for this expert into task_assign."""
+    """Spec #354 S4: peek Case pending hold into task_assign (do not consume yet).
+
+    Hold is consumed only after Node task_assign is successfully delivered
+    (`_consume_pending_handoff_after_dispatch`) so gate/offline failure cannot drop it.
+    """
     if not conv_id:
         return task_msg
     eid = str(expert_id or task_msg.get("expert_id") or "").strip()
@@ -5856,7 +5869,7 @@ async def _attach_pending_handoff_to_task_assign(
     try:
         from app.db.base import async_session
         from app.models.conversation import Conversation
-        from app.services.session_handoff import take_pending_handoff
+        from app.services.session_handoff import peek_pending_handoff
 
         async with async_session() as db:
             r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(str(conv_id))))
@@ -5864,11 +5877,9 @@ async def _attach_pending_handoff_to_task_assign(
             if not c:
                 return task_msg
             ctx = c.context if isinstance(c.context, dict) else {}
-            new_ctx, held = take_pending_handoff(ctx, eid)
+            held = peek_pending_handoff(ctx, eid)
             if not held:
                 return task_msg
-            c.context = new_ctx
-            await db.commit()
             out = dict(task_msg)
             out["pending_handoff_todos"] = held.get("open_todos") or []
             out["pending_handoff"] = True
@@ -5876,6 +5887,39 @@ async def _attach_pending_handoff_to_task_assign(
     except Exception as e:
         print(f"[WS] pending handoff attach error: {e}")
         return task_msg
+
+
+async def _consume_pending_handoff_after_dispatch(
+    conv_id: str | None,
+    *,
+    expert_id: str | None,
+) -> None:
+    """Spec #354 S4: take hold only after task_assign was sent to Node."""
+    if not conv_id:
+        return
+    eid = str(expert_id or "").strip()
+    if not eid:
+        return
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+        from app.services.session_handoff import take_pending_handoff
+        from sqlalchemy.orm.attributes import flag_modified
+
+        async with async_session() as db:
+            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(str(conv_id))))
+            c = r.scalar_one_or_none()
+            if not c:
+                return
+            ctx = c.context if isinstance(c.context, dict) else {}
+            new_ctx, held = take_pending_handoff(ctx, eid)
+            if not held:
+                return
+            c.context = new_ctx
+            flag_modified(c, "context")
+            await db.commit()
+    except Exception as e:
+        print(f"[WS] pending handoff consume error: {e}")
 
 
 async def _attach_case_context_to_task_assign(conv_id: str | None, task_msg: dict) -> dict:

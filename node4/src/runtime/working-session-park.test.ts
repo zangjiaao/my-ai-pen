@@ -918,6 +918,57 @@ assert.equal(
   clearWorkingSessionParksForTests();
 }
 
+// Spec #354 L1: case-wide pending cleared after force dispose (no sticky dispose)
+{
+  clearWorkingSessionParksForTests();
+  clearPendingDisposeForTests();
+  const {
+    markPendingCaseDispose,
+    isPendingDispose,
+    clearPendingDisposeForTests: clearPend,
+  } = await import("./working-session-park.js");
+  markPendingCaseDispose("c-case-pend");
+  assert.equal(isPendingDispose("c-case-pend", "exp"), true);
+  applyCaptainEndDisposition({
+    decision: decideParkOnEnd({ aborted: false }),
+    entry: {
+      conversationId: "c-case-pend",
+      expertId: "exp",
+      workMode: "free",
+      taskId: "t1",
+      session: fakeSession(),
+      todo: new TodoStore(),
+      dispose: () => {},
+    },
+  });
+  assert.equal(
+    isPendingDispose("c-case-pend", "exp"),
+    false,
+    "case pending cleared after force dispose finally",
+  );
+  // Next package end must park, not sticky-dispose
+  let disposedAfter = 0;
+  const parkAfter = applyCaptainEndDisposition({
+    decision: decideParkOnEnd({ aborted: false }),
+    entry: {
+      conversationId: "c-case-pend",
+      expertId: "exp",
+      workMode: "free",
+      taskId: "t2",
+      session: fakeSession(),
+      todo: new TodoStore(),
+      dispose: () => {
+        disposedAfter += 1;
+      },
+    },
+  });
+  assert.equal(parkAfter.parked, true, "after case-pending clear, settle parks");
+  assert.equal(parkAfter.disposed, false);
+  assert.equal(disposedAfter, 0, "park path must not call dispose");
+  clearPend();
+  clearWorkingSessionParksForTests();
+}
+
 // Spec #354: bare conversation pending matches expert-keyed park (missing expert_id)
 {
   clearWorkingSessionParksForTests();

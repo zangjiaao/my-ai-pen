@@ -509,19 +509,31 @@ def strix_agents_for_snapshot(
     conversation_status: str | None,
     task_context: dict | None = None,
 ) -> list[dict]:
-    """Case participants first (multi-role); fall back to last checkpoint panel agents."""
+    """Case participants first (multi-role); fall back to last checkpoint panel agents.
+
+    Spec #354: when ``participants`` key is present (including empty after Session Delete),
+    do **not** resurrect ghost Main cards from checkpoint.panel_agents.
+    """
     task_meta = task_context if isinstance(task_context, dict) else {}
+    ctx = context if isinstance(context, dict) else {}
     try:
         from app.services.case_participants import agents_from_participants, participants_map
 
-        if participants_map(context):
+        # Explicit roster (even empty {}) is product SoT after Session lifecycle ops.
+        if isinstance(ctx.get("participants"), dict):
             agents = agents_from_participants(
-                context,
+                ctx,
+                conversation_status=conversation_status,
+                active_expert_id=task_meta.get("expert_id"),
+            )
+            return normalize_agents_for_conversation_status(agents, conversation_status)
+        if participants_map(ctx):
+            agents = agents_from_participants(
+                ctx,
                 conversation_status=conversation_status,
                 active_expert_id=task_meta.get("expert_id"),
             )
             if agents:
-                # Preserve current_detail / expert fields already set by agents_from_participants.
                 return normalize_agents_for_conversation_status(agents, conversation_status)
     except Exception:
         pass
