@@ -3877,7 +3877,7 @@ function agentAttribution(msg: Record<string, unknown>, fallbackSource: AgentIde
 function isUserVisibleStatusMessage(text: string): boolean {
   const t = text.trim().toLowerCase();
   if (!t) return false;
-  if (t === "model turn" || t === "llm_waiting" || t === "tool_running") return false;
+  if (t === "model turn" || t === "llm_waiting" || t === "llm_stalled" || t === "tool_running") return false;
   if (/^[\w.-]+\s+running$/i.test(t)) return false; // "todo running", "shell running"
   if (t.startsWith("phase:") && t.includes("(iter")) return false;
   if (t.startsWith("node4 starting") || t.includes(" starting pack=")) return false;

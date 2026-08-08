@@ -395,11 +395,13 @@ export function patchMainAgentActivity(
       detail ||
       (phase === "tool_running" && tool
         ? `正在调用 ${tool}`
-        : phase === "llm_waiting"
-          ? lastTool
-            ? `分析「${lastTool}」结果，规划下一步`
-            : "等待模型思考与回复"
-          : base.current_detail),
+        : phase === "llm_stalled"
+          ? "模型流无进度，仍在等待"
+          : phase === "llm_waiting"
+            ? lastTool
+              ? `分析「${lastTool}」结果，规划下一步`
+              : "等待模型思考与回复"
+            : base.current_detail),
   };
   if (mainIdx < 0) return [next, ...prev];
   return prev.map((a, i) => {

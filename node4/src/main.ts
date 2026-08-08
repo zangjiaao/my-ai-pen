@@ -3,6 +3,8 @@ import { loadConfig } from "./config.js";
 import { loadDotEnv } from "./env.js";
 import { PlatformWSClient } from "./platform/ws-client.js";
 import { runNode4Task } from "./runtime/session-runner.js";
+import { isLlmTurnError } from "./runtime/llm-turn-error.js";
+import { streamDiagnosisPayload } from "./runtime/llm-turn-surface.js";
 import type { TaskEnvelope } from "./types.js";
 import { parseCaseContext } from "./runtime/case-context.js";
 import { parseGraphExecution } from "./runtime/hard-graph-definition.js";
@@ -104,18 +106,30 @@ async function runAssignedTask(message: Record<string, unknown>): Promise<void> 
       endReason = "interrupted";
     } else {
       endReason = "error";
-      const raw = error instanceof Error ? error.message : String(error);
-      // LlmTurnError already includes 模型调用失败 prefix; keep message user-facing.
-      const message = raw.startsWith("模型调用失败") || raw.startsWith("llm_error")
-        ? raw.replace(/^llm_error:\s*/i, "")
-        : raw;
-      await client.send({
-        type: "task_error",
-        conversation_id: task.conversationId,
-        task_id: task.taskId,
-        message,
-        stop_reason: /模型调用失败|llm_error/i.test(raw) ? "llm_error" : "error",
-      });
+      // Spec #353: prefer typed LlmTurnError (+ diagnosis) over message regex.
+      if (isLlmTurnError(error)) {
+        const diagnosis = streamDiagnosisPayload(error.diagnosis);
+        await client.send({
+          type: "task_error",
+          conversation_id: task.conversationId,
+          task_id: task.taskId,
+          message: error.userMessage,
+          stop_reason: "llm_error",
+          ...(diagnosis ? { stream_diagnosis: diagnosis } : {}),
+        });
+      } else {
+        const raw = error instanceof Error ? error.message : String(error);
+        const message = raw.startsWith("模型调用失败") || raw.startsWith("llm_error")
+          ? raw.replace(/^llm_error:\s*/i, "")
+          : raw;
+        await client.send({
+          type: "task_error",
+          conversation_id: task.conversationId,
+          task_id: task.taskId,
+          message,
+          stop_reason: "error",
+        });
+      }
     }
   } finally {
     cancelApprovalsForConversation(task.conversationId);

@@ -91,6 +91,11 @@ export function describeMainActivity(input: {
     return "等待模型思考与回复";
   }
 
+  // Spec #353: Runtime-authored stall phase (not #276 pending reseed; not free-text NLP).
+  if (phase === "llm_stalled") {
+    return "模型流无进度，仍在等待";
+  }
+
   if (phase === "chat") return "对话中，准备回复";
   if (phase === "starting") return "任务启动中";
   if (phase === "running") return "工作进行中";

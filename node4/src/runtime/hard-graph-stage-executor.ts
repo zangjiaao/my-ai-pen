@@ -82,7 +82,12 @@ import {
   formatSkillL1CatalogInjection,
   loadSkillL1Catalog,
 } from "./skill-l1-catalog.js";
-import { extractLlmTurnError, LlmTurnError } from "./llm-turn-error.js";
+import { extractLlmTurnError, isLlmTurnError } from "./llm-turn-error.js";
+import {
+  idleTimeoutLlmTurnError,
+  mapPromptFailureToLlmTurnError,
+  surfaceLlmTurnFailure,
+} from "./llm-turn-surface.js";
 
 /**
  * Deposit host-trusted surfaces/candidates into ledger + Finding Store.
@@ -895,11 +900,19 @@ export function createHardGraphStageExecutor(options: {
         followUp: (text) => session.followUp(text),
       });
 
+      // Spec #353: stream health + idle abort for Graph Main stage (same rules as Free).
       const sessionObs = attachNode4SessionObservability({
         session,
         obsCtx,
         textStream,
         checkpointThrottle,
+        onIdleAbort: () => {
+          try {
+            session.abort();
+          } catch {
+            /* best-effort */
+          }
+        },
       });
 
       // Initial checkpoint so Status has a live panel row for this stage (+ session_id).
@@ -925,6 +938,17 @@ export function createHardGraphStageExecutor(options: {
         } else {
           await session.prompt(userPrompt);
         }
+        // Spec #353: idle abort is fail-closed LlmTurnError (not user cancel).
+        if (obsCtx.streamHealth?.isIdleAbortRequested) {
+          throw await surfaceLlmTurnFailure({
+            platform: parentRuntime.platform,
+            conversationId: task.conversationId,
+            taskId: task.taskId,
+            textStream,
+            health: obsCtx.streamHealth,
+            error: idleTimeoutLlmTurnError(obsCtx.streamHealth),
+          });
+        }
         // Spec #116 I0.7: abort may cancel turn without throw — still fail-closed aborted.
         if (abortSignal?.aborted) {
           return await finalizeStage({
@@ -934,17 +958,36 @@ export function createHardGraphStageExecutor(options: {
             workDir,
           });
         }
-        // Soft LLM failure (403 etc.): surface to user and fail stage — not silent empty settle.
+        // Soft LLM failure (403 etc.): single surface — not silent empty settle.
         const llmErr = extractLlmTurnError(session.messages);
         if (llmErr) {
-          try {
-            await textStream.emitFinalText(llmErr);
-          } catch {
-            /* best-effort */
-          }
-          throw new LlmTurnError(llmErr);
+          throw await surfaceLlmTurnFailure({
+            platform: parentRuntime.platform,
+            conversationId: task.conversationId,
+            taskId: task.taskId,
+            textStream,
+            health: obsCtx.streamHealth,
+            providerMessage: llmErr,
+          });
+        }
+        if (obsCtx.streamHealth && obsCtx.streamHealth.state !== "terminal") {
+          obsCtx.streamHealth.terminalSuccess();
         }
       } catch (err) {
+        // Already surfaced in try-body (idle/soft LLM) — rethrow without double publish.
+        if (isLlmTurnError(err) && err.diagnosis) throw err;
+        // Spec #353: structured map only (idle / incomplete / LlmTurnError).
+        const mapped = mapPromptFailureToLlmTurnError(err, obsCtx.streamHealth);
+        if (mapped) {
+          throw await surfaceLlmTurnFailure({
+            platform: parentRuntime.platform,
+            conversationId: task.conversationId,
+            taskId: task.taskId,
+            textStream,
+            health: obsCtx.streamHealth,
+            error: mapped,
+          });
+        }
         if (abortSignal?.aborted) {
           return await finalizeStage({
             narrative: failNarrative("aborted", "aborted"),

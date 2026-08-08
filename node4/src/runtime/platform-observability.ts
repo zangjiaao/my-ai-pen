@@ -13,6 +13,12 @@ import {
 } from "./llm-usage.js";
 import type { PanelAgentTracker } from "./panel-agents.js";
 import { buildTodoPlanTreePayload, type PlanNodeLike } from "./plan-projection.js";
+import {
+  LlmStreamHealth,
+  coarseKindFromAssistantEventType,
+  loadStreamHealthConfigFromEnv,
+  streamStallDetail,
+} from "./llm-stream-health.js";
 
 /** First token goes out immediately; subsequent flushes coalesce. */
 const TEXT_STREAM_FLUSH_MS = 40;
@@ -40,6 +46,11 @@ export type ObservabilityContext = {
     activeTool?: string;
     phase: string;
   };
+  /**
+   * Spec #353: session-scoped LLM stream health (Runtime SoT).
+   * Owned by attachNode4SessionObservability when not pre-set.
+   */
+  streamHealth?: LlmStreamHealth;
 };
 
 export function createUsageLedgerFromEnv(): LlmUsageLedger {
@@ -546,6 +557,8 @@ export type Node4SessionObservabilityTarget = {
 /**
  * Shared attach: free path (session-runner) and Hard Graph stages subscribe the same way.
  * Returns unsubscribe + dispose (dispose also flushes/disposes textStream by default).
+ *
+ * Spec #353: owns stream-health timer (stall + optional idle abort) for Main Free + Graph.
  */
 export function attachNode4SessionObservability(options: {
   session: Node4SessionObservabilityTarget;
@@ -554,12 +567,25 @@ export function attachNode4SessionObservability(options: {
   checkpointThrottle: CheckpointThrottle;
   /** When false, dispose() only unsubscribes (caller owns textStream lifetime). Default true. */
   disposeTextStream?: boolean;
+  /**
+   * Spec #353: when idle exceeds abort threshold, Runtime aborts the in-flight prompt.
+   * Callers typically wire session.abort() and map to LlmTurnError with diagnosis.
+   */
+  onIdleAbort?: () => void;
+  /** Override stream health (tests). Default: new tracker from env. */
+  streamHealth?: LlmStreamHealth;
 }): {
   unsubscribe: () => void;
   dispose: () => Promise<void>;
+  streamHealth: LlmStreamHealth;
 } {
   const { session, obsCtx, textStream, checkpointThrottle } = options;
   const ownTextStream = options.disposeTextStream !== false;
+  const health =
+    options.streamHealth ||
+    obsCtx.streamHealth ||
+    new LlmStreamHealth(loadStreamHealthConfigFromEnv());
+  obsCtx.streamHealth = health;
   // Bind pi-agent-core id for checkpoint projection (collab Session copy).
   const sid = String((session as { sessionId?: string }).sessionId || "").trim();
   if (sid) {
@@ -570,10 +596,24 @@ export function attachNode4SessionObservability(options: {
       // Never let observability break the agent loop.
     });
   });
+  // Spec #353 S1: poll idle while llm_waiting — pure silence has no session events.
+  const tickEvery = Math.min(
+    5_000,
+    Math.max(1_000, Math.floor(health.config.stallThresholdMs / 4) || 2_000),
+  );
+  const watchTimer = setInterval(() => {
+    void applyStreamHealthTick(obsCtx, health, {
+      onIdleAbort: options.onIdleAbort,
+      checkpointThrottle,
+    }).catch(() => {
+      /* never break agent loop */
+    });
+  }, tickEvery);
   let unsubscribed = false;
   const unsubscribe = () => {
     if (unsubscribed) return;
     unsubscribed = true;
+    clearInterval(watchTimer);
     if (typeof unsubRaw === "function") {
       try {
         unsubRaw();
@@ -584,8 +624,10 @@ export function attachNode4SessionObservability(options: {
   };
   return {
     unsubscribe,
+    streamHealth: health,
     dispose: async () => {
       unsubscribe();
+      health.close();
       if (ownTextStream) {
         try {
           await textStream.dispose();
@@ -596,6 +638,61 @@ export function attachNode4SessionObservability(options: {
     },
   };
 }
+
+/**
+ * Spec #353 S1: apply one idle check; emit Runtime stall or idle-abort signal.
+ * Pure enough for tests with injected health + fake platform.
+ */
+export async function applyStreamHealthTick(
+  ctx: ObservabilityContext,
+  health: LlmStreamHealth,
+  options?: {
+    onIdleAbort?: () => void;
+    checkpointThrottle?: CheckpointThrottle;
+  },
+): Promise<"ok" | "stalled" | "abort"> {
+  const outcome = health.tick();
+  if (outcome === "ok") return "ok";
+
+  if (outcome === "stalled") {
+    ctx.counters.phase = "llm_stalled";
+    ctx.panel.setMainActivity({
+      phase: "llm_stalled",
+      tool: "",
+      detail: streamStallDetail(),
+    });
+    const snap = health.snapshot();
+    const panel = ctx.panel.list()[0];
+    await ctx.platform.send({
+      type: "status_update",
+      conversation_id: ctx.task.conversationId,
+      task_id: ctx.task.taskId,
+      message: streamStallDetail(),
+      active_tool: "",
+      agent_phase: "llm_stalled",
+      current_detail: panel?.current_detail || streamStallDetail(),
+      status: "running",
+      stream_health: snap,
+      llm_usage: ctx.usage.snapshot({ tool_calls: ctx.counters.toolCallCount }),
+      panel_agents: ctx.panel.list(),
+    } as PlatformMessage);
+    await emitCheckpointUpdate(ctx);
+    options?.checkpointThrottle?.markEmitted();
+    return "stalled";
+  }
+
+  // abort — health already terminalized by tick(); runners own single user-visible
+  // surface via surfaceLlmTurnFailure (no double status/chat publish here).
+  try {
+    options?.onIdleAbort?.();
+  } catch {
+    /* session.abort best-effort */
+  }
+  return "abort";
+}
+
+/** @deprecated import from llm-turn-surface.js — re-export for existing call sites. */
+export { streamDiagnosisPayload } from "./llm-turn-surface.js";
 
 export async function emitCheckpointUpdate(
   ctx: ObservabilityContext,
@@ -628,10 +725,14 @@ export async function handleNode4SessionEvent(
 ): Promise<void> {
   if (!event || typeof event !== "object") return;
 
+  const health = ctx.streamHealth;
+
   // tool_output is emitted only by attachProductToolEventBridge (createBoundNode4Session).
   // This handler owns panel / status / text stream / usage for Main.
   let panelChanged = false;
   if (event.type === "tool_execution_start") {
+    // Spec #353: tool execution is not an LLM stream wait — close health watch.
+    health?.close();
     ctx.counters.toolCallCount += 1;
     ctx.counters.activeTool = String(event.toolName || event.tool_name || "tool");
     ctx.counters.phase = "tool_running";
@@ -657,6 +758,8 @@ export async function handleNode4SessionEvent(
   }
 
   if (event.type === "tool_execution_end") {
+    // Spec #353: re-enter model wait — open stream health (S1).
+    health?.open();
     ctx.counters.phase = "llm_waiting";
     ctx.counters.activeTool = undefined;
     // Clear active tool; lastTool is retained for "分析…结果" detail.
@@ -672,6 +775,7 @@ export async function handleNode4SessionEvent(
       agent_phase: "llm_waiting",
       current_detail: ctx.panel.list()[0]?.current_detail,
       status: "running",
+      stream_health: health?.snapshot(),
       llm_usage: ctx.usage.snapshot({ tool_calls: ctx.counters.toolCallCount }),
       panel_agents: ctx.panel.list(),
     } as PlatformMessage);
@@ -680,6 +784,7 @@ export async function handleNode4SessionEvent(
   }
 
   if (event.type === "turn_start") {
+    health?.open();
     ctx.counters.phase = "llm_waiting";
     ctx.panel.setMainActivity({ phase: "llm_waiting", tool: "" });
     panelChanged = true;
@@ -692,11 +797,70 @@ export async function handleNode4SessionEvent(
       agent_phase: "llm_waiting",
       current_detail: ctx.panel.list()[0]?.current_detail,
       status: "running",
+      stream_health: health?.snapshot(),
       llm_usage: ctx.usage.snapshot({ tool_calls: ctx.counters.toolCallCount }),
       panel_agents: ctx.panel.list(),
     } as PlatformMessage);
     // Do not open T1 on bare turn_start — pure text-only replies must stay silent
     // until thinking_* (Issue 10). Mid-task gap is covered by tool_execution_end.
+  }
+
+  // Spec #353 S1: record coarse chunk activity; clear stall → open on progress.
+  if (health && (event.type === "message_update" || event.type === "message_start")) {
+    const msgRole = (event.message as { role?: string } | undefined)?.role;
+    if (msgRole === "assistant") {
+      const wasStalled = health.state === "stalled";
+      const ameType = String(event.assistantMessageEvent?.type || "");
+      let toolName = "";
+      if (ameType.startsWith("toolcall_")) {
+        const partial = event.assistantMessageEvent?.partial as
+          | { content?: Array<{ type?: string; name?: string; toolName?: string }> }
+          | undefined;
+        const blocks = Array.isArray(partial?.content) ? partial!.content! : [];
+        for (const b of blocks) {
+          if (b && (b.type === "toolCall" || b.type === "tool_use" || b.type === "toolcall")) {
+            toolName = String(b.name || b.toolName || "").trim();
+            if (toolName) break;
+          }
+        }
+        // Fallback: event-level tool name if present
+        if (!toolName) {
+          toolName = String(
+            event.toolName || event.tool_name || event.assistantMessageEvent?.toolName || "",
+          ).trim();
+        }
+      }
+      health.noteActivity(coarseKindFromAssistantEventType(ameType || "empty_or_other"), {
+        toolName: toolName || undefined,
+      });
+      // noteActivity clears stall → open; re-project open wait (not #276 pending reseed).
+      if (wasStalled) {
+        ctx.counters.phase = "llm_waiting";
+        ctx.panel.setMainActivity({ phase: "llm_waiting", tool: "" });
+        await ctx.platform.send({
+          type: "status_update",
+          conversation_id: ctx.task.conversationId,
+          task_id: ctx.task.taskId,
+          message: "正在请求模型…",
+          active_tool: "",
+          agent_phase: "llm_waiting",
+          current_detail: ctx.panel.list()[0]?.current_detail,
+          status: "running",
+          stream_health: health.snapshot(),
+          llm_usage: ctx.usage.snapshot({ tool_calls: ctx.counters.toolCallCount }),
+          panel_agents: ctx.panel.list(),
+        } as PlatformMessage);
+        panelChanged = true;
+      }
+    }
+  }
+
+  if (event.type === "turn_end") {
+    // Successful turn boundary — close watch until next turn_start.
+    // Terminal failure diagnosis is applied by runners (assertNoLlmTurnError).
+    if (health && health.state !== "terminal") {
+      health.close();
+    }
   }
 
   await textStream.handle(event);

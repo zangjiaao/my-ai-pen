@@ -66,10 +66,12 @@ import {
   buildWorksetSettleEmitPackage,
   writeAttackSurfaceCandidatesArtifact,
 } from "./workset-settle-emit.js";
+import { extractLlmTurnError } from "./llm-turn-error.js";
 import {
-  extractLlmTurnError,
-  LlmTurnError,
-} from "./llm-turn-error.js";
+  idleTimeoutLlmTurnError,
+  mapPromptFailureToLlmTurnError,
+  surfaceLlmTurnFailure,
+} from "./llm-turn-surface.js";
 import {
   applyCaptainEndDisposition,
   decideParkOnEnd,
@@ -400,6 +402,7 @@ export async function runNode4Task(
   });
 
   // Panel / text stream / usage — tool_output already bridged in createBoundNode4Session.
+  // Spec #353: stream health watch + idle abort → session.abort (same failure channel).
   const sessionObs = attachNode4SessionObservability({
     session,
     obsCtx,
@@ -407,6 +410,13 @@ export async function runNode4Task(
     checkpointThrottle,
     // session-runner owns end-of-task textStream.dispose below.
     disposeTextStream: false,
+    onIdleAbort: () => {
+      try {
+        session.abort();
+      } catch {
+        /* best-effort */
+      }
+    },
   });
   // Stamp pi Agent.sessionId on panel Main + checkpoint so FE collab copy sees it
   // on the same path as live panel_agents (not only participants snapshot).
@@ -579,33 +589,60 @@ export async function runNode4Task(
   runtime.lifecycle.toolsInLastSegment = 0;
   if (runtime.lifecycle.midRunTodo) resetMidRunTodoCycle(runtime.lifecycle.midRunTodo);
 
-  /** Soft LLM failures (stopReason=error) → user-visible text + LlmTurnError → task_error. */
+  const health = () => obsCtx.streamHealth;
+  const usageSnap = () => usage.snapshot({ tool_calls: obsCounters.toolCallCount });
+
+  /** Soft LLM failures (stopReason=error) → single surface → task_error. */
   const assertNoLlmTurnError = async () => {
+    // Spec #353: idle abort may cancel the prompt without soft error messages.
+    if (health()?.isIdleAbortRequested) {
+      throw await surfaceLlmTurnFailure({
+        platform: loggingPlatform,
+        conversationId: task.conversationId,
+        taskId: task.taskId,
+        textStream,
+        health: health(),
+        error: idleTimeoutLlmTurnError(health()),
+        llmUsage: usageSnap(),
+      });
+    }
     if (cancelled()) return;
     const errText = extractLlmTurnError(session.messages);
-    if (!errText) return;
-    try {
-      await textStream.emitFinalText(errText);
-    } catch {
-      /* best-effort chat bubble */
+    if (!errText) {
+      if (health() && health()!.state !== "terminal") {
+        health()!.terminalSuccess();
+      }
+      return;
     }
-    await loggingPlatform.send({
-      type: "status_update",
-      conversation_id: task.conversationId,
-      task_id: task.taskId,
-      message: errText,
-      agent_phase: "error",
-      status: "failed",
-      llm_usage: usage.snapshot({ tool_calls: obsCounters.toolCallCount }),
-    }).catch(() => {});
-    throw new LlmTurnError(errText);
+    throw await surfaceLlmTurnFailure({
+      platform: loggingPlatform,
+      conversationId: task.conversationId,
+      taskId: task.taskId,
+      textStream,
+      health: health(),
+      providerMessage: errText,
+      llmUsage: usageSnap(),
+    });
   };
 
-  /** Single prompt + soft-error assert channel (throws LlmTurnError → main task_error). */
+  /** Single prompt + soft-error assert (throws LlmTurnError → main task_error). */
   const promptAndAssert = async (promptText: string) => {
     try {
       await session.prompt(promptText, { source: "interactive" });
     } catch (err) {
+      // Spec #353: structured classes only (idle / incomplete / LlmTurnError).
+      const mapped = mapPromptFailureToLlmTurnError(err, health());
+      if (mapped) {
+        throw await surfaceLlmTurnFailure({
+          platform: loggingPlatform,
+          conversationId: task.conversationId,
+          taskId: task.taskId,
+          textStream,
+          health: health(),
+          error: mapped,
+          llmUsage: usageSnap(),
+        });
+      }
       if (!cancelled()) throw err;
       return;
     }

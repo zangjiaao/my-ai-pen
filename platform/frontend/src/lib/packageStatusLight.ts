@@ -22,6 +22,7 @@ export function packageStatusDotClass(
   if (
     s === "tool_running" ||
     s === "llm_waiting" ||
+    s === "llm_stalled" ||
     s === "working" ||
     s === "chat" ||
     s === "starting"
@@ -77,6 +78,7 @@ export function packageStatusTitle(
   if (
     s === "tool_running" ||
     s === "llm_waiting" ||
+    s === "llm_stalled" ||
     s === "working" ||
     s === "chat" ||
     s === "starting"
@@ -131,6 +133,7 @@ export function resolvePackageLightStatus(input: {
     a === "running" ||
     a === "tool_running" ||
     a === "llm_waiting" ||
+    a === "llm_stalled" ||
     a === "working" ||
     a === "chat" ||
     a === "starting"
