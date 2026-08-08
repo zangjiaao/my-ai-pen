@@ -526,7 +526,11 @@ def strix_agents_for_snapshot(
                 conversation_status=conversation_status,
                 active_expert_id=task_meta.get("expert_id"),
             )
-            return normalize_agents_for_conversation_status(agents, conversation_status)
+            return normalize_agents_for_conversation_status(
+                agents,
+                conversation_status,
+                active_expert_id=task_meta.get("expert_id"),
+            )
         if participants_map(ctx):
             agents = agents_from_participants(
                 ctx,
@@ -534,7 +538,11 @@ def strix_agents_for_snapshot(
                 active_expert_id=task_meta.get("expert_id"),
             )
             if agents:
-                return normalize_agents_for_conversation_status(agents, conversation_status)
+                return normalize_agents_for_conversation_status(
+                    agents,
+                    conversation_status,
+                    active_expert_id=task_meta.get("expert_id"),
+                )
     except Exception:
         pass
     return strix_agents_from_checkpoint(checkpoint, conversation_status)
@@ -683,11 +691,16 @@ def strix_agents_from_checkpoint(checkpoint: dict, conversation_status: str | No
     return normalize_agents_for_conversation_status(normalized, conversation_status)
 
 
-def normalize_agents_for_conversation_status(agents: list[dict], conversation_status: str | None) -> list[dict]:
-    """Align collab Main status with Case Task package status (Spec #354 S2/L7).
+def normalize_agents_for_conversation_status(
+    agents: list[dict],
+    conversation_status: str | None,
+    *,
+    active_expert_id: object = None,
+) -> list[dict]:
+    """Align **current Task expert** Main with Case package status (Spec #354 S2/L7).
 
-    Sidebar and AgentRow Main share package status lights. Do **not** map
-    ``incomplete`` → completed (that made yellow Case lights show green on Main).
+    Other experts keep their own participant status — do not paint every Main
+    with the latest Task light. Do **not** map ``incomplete`` → completed.
     """
     status = str(conversation_status or "").strip().lower()
     if status not in {"completed", "incomplete", "failed", "canceled", "cancelled", "paused"}:
@@ -699,7 +712,6 @@ def normalize_agents_for_conversation_status(agents: list[dict], conversation_st
         package_status = "canceled"
         terminal_action = "stopped"
     elif status in {"incomplete", "paused"}:
-        # Yellow package light — Task pause / interrupt, not "done".
         package_status = "incomplete" if status == "incomplete" else "paused"
         terminal_action = "paused"
     else:
@@ -716,13 +728,54 @@ def normalize_agents_for_conversation_status(agents: list[dict], conversation_st
         "starting",
         "",
     }
-    # Main rows also settle idle→package when Case package already terminal.
     settle_main = open_statuses | {"idle", "completed", "done", "finished", "success"}
+    active_eid = str(active_expert_id or "").strip()
+    # Resolve which Main owns the current Task package (expert_id match).
+    active_main_ids: set[str] = set()
+    for item in agents:
+        if str(item.get("parent_id") or "").strip():
+            continue
+        eid = str(item.get("expert_id") or "").strip()
+        if active_eid and eid == active_eid:
+            active_main_ids.add(str(item.get("id") or "").strip())
+        elif not active_eid and item.get("highlighted"):
+            # No expert on task: only the highlighted Main (single-speaker Cases).
+            active_main_ids.add(str(item.get("id") or "").strip())
+    if not active_main_ids and not active_eid:
+        # Legacy single-Main Cases: settle the sole root if exactly one Main.
+        mains = [
+            str(a.get("id") or "").strip()
+            for a in agents
+            if not str(a.get("parent_id") or "").strip() and str(a.get("id") or "").strip()
+        ]
+        if len(mains) == 1:
+            active_main_ids.add(mains[0])
+
     out: list[dict] = []
     for item in agents:
         agent = dict(item)
         current = str(agent.get("status") or "").strip().lower()
         is_main = not str(agent.get("parent_id") or "").strip()
+        agent_id = str(agent.get("id") or "").strip()
+        parent_id = str(agent.get("parent_id") or "").strip()
+        # Only current Task expert Main (+ its Workers still open) follow package status.
+        on_active_package = False
+        if is_main and agent_id in active_main_ids:
+            on_active_package = True
+        elif parent_id and parent_id in active_main_ids:
+            on_active_package = True
+        elif is_main and active_eid and str(agent.get("expert_id") or "").strip() == active_eid:
+            on_active_package = True
+
+        if not on_active_package:
+            # Other experts: only clear stuck running if truly mid-flight and Case
+            # package ended for *their* row — leave their idle/completed alone.
+            if current in open_statuses or current in {"working"}:
+                # Do not force Case incomplete onto peer experts.
+                pass
+            out.append(agent)
+            continue
+
         should_settle = current in open_statuses or current in {"working"}
         if is_main and current in settle_main:
             should_settle = True

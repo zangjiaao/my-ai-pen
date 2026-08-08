@@ -25,6 +25,20 @@ import {
 export type { StrixAgentStatus } from "../lib/panelTypes";
 
 /** Spec #354: Session lifecycle on Main cards only. */
+
+/** True when this Main is the current Task package expert (package light applies). */
+function isPackageExpert(
+  agent: StrixAgentStatus,
+  packageExpertId?: string | null,
+): boolean {
+  const want = String(packageExpertId || "").trim();
+  if (!want) {
+    // No task expert: only highlighted Main (single-speaker) follows package light.
+    return Boolean(agent.highlighted);
+  }
+  return String(agent.expert_id || "").trim() === want;
+}
+
 export type SessionLifecycleHandlers = {
   onRequestReset?: (agent: StrixAgentStatus) => void;
   onRequestDelete?: (agent: StrixAgentStatus) => void;
@@ -37,15 +51,20 @@ export function StrixAgentList({
   sessionLifecycle,
   packageStatus,
   packageWorking,
+  packageExpertId,
 }: {
   agents: StrixAgentStatus[];
   /** Spec #308: open Worker audit dialog (Workers only; not Main). */
   onWorkerClick?: (agent: StrixAgentStatus, workerOrdinal?: number) => void;
   /** Spec #354 S3: Reset / Delete Session on Main cards (confirm lives in parent). */
   sessionLifecycle?: SessionLifecycleHandlers;
-  /** Spec #354 S2: Case Task package status — Main dots sync with Sidebar. */
+  /**
+   * Spec #354 S2: Task package status light — only for the Main of this expert_id
+   * (current Task speaker). Peer experts keep their own status.
+   */
   packageStatus?: string | null;
   packageWorking?: boolean;
+  packageExpertId?: string | null;
 }) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const roots = agents.filter((agent) => !agent.parent_id);
@@ -133,8 +152,12 @@ export function StrixAgentList({
                 ? sessionLifecycle
                 : undefined
             }
-            packageStatus={primary ? packageStatus : undefined}
-            packageWorking={primary ? packageWorking : undefined}
+            packageStatus={
+              primary && isPackageExpert(agent, packageExpertId) ? packageStatus : undefined
+            }
+            packageWorking={
+              primary && isPackageExpert(agent, packageExpertId) ? packageWorking : undefined
+            }
           />
         </div>
         {children.length > 0 && (

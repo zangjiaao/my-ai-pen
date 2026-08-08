@@ -3295,6 +3295,13 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                 Boolean(conversations.find((c) => c.id === activeId)?.working) ||
                 isActiveConversationRunning
               }
+              packageExpertId={
+                String(
+                  (taskContext as { expert_id?: string } | undefined)?.expert_id ||
+                    selectedMention?.expertId ||
+                    "",
+                ).trim() || null
+              }
               pendingHandoffExpertIds={pendingHandoffExpertIds}
               onSessionLifecycleDone={() => {
                 // Spec #354: Session Delete mid-run must flip Navbar light + interrupt → send.
