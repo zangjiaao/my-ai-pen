@@ -13,6 +13,7 @@ import ChoiceCard from "./cards/ChoiceCard";
 import ThinkingCard from "./cards/ThinkingCard";
 import MarkdownText from "./MarkdownText";
 import type { ChoiceDecision } from "../lib/choiceCard";
+import { formatWorkSeconds, resultAnchorWorkSeconds } from "../lib/workBurstTime";
 
 interface Props {
   message: Message;
@@ -39,6 +40,11 @@ interface Props {
   sessionActive?: boolean;
   /** Disable choice controls while a turn is running. */
   choiceDisabled?: boolean;
+  /**
+   * Spec #325 B1: finalized work-seconds for this message when it is the burst
+   * result anchor (one duration per work-burst; not on tool/thinking cards).
+   */
+  resultAnchorWorkSeconds?: number | null;
 }
 
 /** Shared speaker resolution for agent messages and list-tail pending chrome (Spec #305). */
@@ -749,7 +755,7 @@ function SystemNotice({ content }: { content: Record<string, unknown> }) {
   return <StatusNotice content={content} />;
 }
 
-export default function MessageRenderer({ message, agentNameById = {}, previousMessage, fallbackPentestNodeId, platformAgentNodeId, onDecision, onConfirmOptions, onOpenVulnerability, onOpenAsset, onOpenEvidence, highlightedApprovalId, approvalDecisionByRequestId = {}, choiceSelectedByRequestId = {}, sessionActive, choiceDisabled = false }: Props) {
+export default function MessageRenderer({ message, agentNameById = {}, previousMessage, fallbackPentestNodeId, platformAgentNodeId, onDecision, onConfirmOptions, onOpenVulnerability, onOpenAsset, onOpenEvidence, highlightedApprovalId, approvalDecisionByRequestId = {}, choiceSelectedByRequestId = {}, sessionActive, choiceDisabled = false, resultAnchorWorkSeconds: resultAnchorSecondsProp }: Props) {
   const { role, msg_type, content } = message;
 
   // Spec #163: engagement_closeout uses content.text (platform gist) via SystemNotice.
@@ -782,6 +788,17 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
   const agentLabel = agentDisplayName(content, agentNameById, fallbackPentestNodeId, platformAgentNodeId);
   const previousAgentLabel = previousMessage?.role === "agent" ? agentDisplayName(previousMessage.content, agentNameById, fallbackPentestNodeId, platformAgentNodeId) : "";
   const showAgentLabel = previousAgentLabel !== agentLabel;
+  // Spec #325 B1: one duration per work-burst on result anchor — never on tool/thinking.
+  const isToolOrThinking =
+    msg_type === "tool_call"
+    || msg_type === "thinking"
+    || msg_type === "reasoning"
+    || msg_type === "agent_thinking";
+  const b1Seconds = isToolOrThinking
+    ? null
+    : (resultAnchorSecondsProp != null
+      ? resultAnchorSecondsProp
+      : resultAnchorWorkSeconds(content));
   let body: ReactNode;
   switch (msg_type) {
     case "tool_call":
@@ -838,7 +855,20 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
           <span className="font-medium text-ink-secondary">{agentLabel}</span>
         </div>
       )}
-      {body}
+      <div className="relative min-w-0">
+        {body}
+        {b1Seconds != null && (
+          <div
+            data-testid="burst-result-duration"
+            className="mt-1 flex justify-end"
+            title="本轮工作时长"
+          >
+            <span className="font-mono text-[11px] tabular-nums text-ink-muted">
+              {formatWorkSeconds(b1Seconds)}
+            </span>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

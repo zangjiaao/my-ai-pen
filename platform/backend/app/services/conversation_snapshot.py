@@ -378,6 +378,15 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     workers = context.get("workers") if isinstance(context.get("workers"), dict) else {}
     working = bool(workers) or str(conv_status or "").lower() == "running"
 
+    # Spec #325 S2: work-burst time ledger projection (composer C1 + B1 reload).
+    work_burst_proj: dict = {}
+    try:
+        from app.services.work_burst_time import get_ledger, projection as work_burst_projection
+
+        work_burst_proj = work_burst_projection(get_ledger(context))
+    except Exception:
+        work_burst_proj = {}
+
     return {
         "conversation": conversation_summary(conversation),
         "working": working,
@@ -396,6 +405,7 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
             else {}
         ),
         "case_run": case_run or {},
+        "work_burst": work_burst_proj or {},
         "messages": snapshot_message_items,
         "agents": agent_items,
         "strix_agents": strix_agent_items,
