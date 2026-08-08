@@ -62,6 +62,58 @@ import {
   console.log("ok: status suppression; closeout kept");
 }
 
+// --- Reject epoch / 1970 placeholders -----------------------------------------
+
+{
+  assert.equal(
+    formatChatMessageTime("1970-01-01T00:00:00.000Z"),
+    "",
+    "epoch ISO must not render as a chat stamp",
+  );
+  assert.equal(
+    shouldInsertStreamTimeStamp(undefined, "1970-01-01T00:00:00.000Z"),
+    false,
+    "epoch first message must not force a stamp",
+  );
+  const real = new Date(2026, 7, 8, 12, 0, 0).toISOString();
+  assert.equal(
+    shouldInsertStreamTimeStamp(real, "1970-01-01T00:00:00.000Z"),
+    false,
+    "epoch after real message must not insert 1970 day-change stamp",
+  );
+  const projected = projectStreamWithDaySeparators([
+    { id: "u1", created_at: real, msg_type: "text", role: "user" },
+    {
+      id: "live",
+      created_at: "1970-01-01T00:00:00.000Z",
+      msg_type: "text",
+      role: "agent",
+    },
+  ]);
+  const stamps = projected.filter((p) => p.kind === "time_separator");
+  assert.ok(
+    stamps.every((s) => s.kind === "time_separator" && !s.label.startsWith("1970")),
+    "no 1970 labels in projection",
+  );
+  console.log("ok: epoch placeholders never become stream stamps");
+}
+
+{
+  // Live frame without created_at must not drop the first-message stamp or invent stamps
+  const t0 = new Date(2026, 7, 8, 10, 0, 0).toISOString();
+  const t1 = new Date(2026, 7, 8, 10, 1, 0).toISOString();
+  const projected = projectStreamWithDaySeparators([
+    { id: "u1", created_at: t0, msg_type: "text", role: "user" },
+    { id: "live", created_at: "", msg_type: "text", role: "agent" },
+    { id: "a1", created_at: t1, msg_type: "text", role: "agent" },
+  ]);
+  const stamps = projected.filter((p) => p.kind === "time_separator");
+  assert.equal(stamps.length, 1, "only first durable message stamped within 5min");
+  assert.equal(projected[0]?.kind, "time_separator");
+  assert.equal(projected[1]?.kind, "message");
+  console.log("ok: empty live created_at does not wipe/force stamps");
+}
+
 // --- Centered full datetime when necessary -----------------------------------
 
 {

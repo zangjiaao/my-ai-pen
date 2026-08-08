@@ -332,7 +332,9 @@ export function liveFrameToMessageLike(frame: LiveStreamFrame): StreamMessageLik
       stream_id: frame.streamId,
       message_id: id,
     },
-    created_at: new Date(0).toISOString(),
+    // Do NOT use epoch (Date(0)) as a placeholder — stream chrome treated it as a real
+    // 1970 stamp that flashed then vanished when durable created_at arrived.
+    // Omit until server time exists; merge prefers durable created_at.
   };
 }
 
@@ -482,6 +484,8 @@ export function mergeMessagesWithLiveStreams<T extends StreamMessageLike>(
       ...prev,
       ...liveMsg,
       id: stableId,
+      // Live frames often lack created_at; never clobber durable server time with missing/epoch.
+      created_at: prev.created_at || liveMsg.created_at,
       content: {
         ...prev.content,
         ...liveMsg.content,
