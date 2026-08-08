@@ -626,7 +626,7 @@ async def _apply_worker_state(
                         or cleared_worker.get("expert_name")
                         or task_ctx.get("expert_name"),
                         pack_id=pack or task_ctx.get("engagement") or "default",
-                        last_detail="本轮工作已结束",
+                        last_detail="",  # Spec #324: no work-content narration on idle
                     )
             except Exception as pe:
                 print(f"[WS] participant upsert error: {pe}")

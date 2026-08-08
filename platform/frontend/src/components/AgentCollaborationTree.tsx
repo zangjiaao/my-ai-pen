@@ -12,6 +12,7 @@ import {
 } from "../lib/workerPresentation";
 import type { StrixAgentStatus } from "../lib/panelTypes";
 import { formatAgentWorkModeBadge } from "../lib/panelAgentsState";
+import { formatAgentUsageLine } from "../lib/caseMetering";
 
 export type { StrixAgentStatus } from "../lib/panelTypes";
 
@@ -144,7 +145,8 @@ function AgentRow({
   /** Spec #308: open audit dialog for Worker rows. */
   onWorkerOpen?: () => void;
 }) {
-  const summary = summarizeAgentAction(agent);
+  // Spec #324 D1: secondary line is model · requests · tokens — not tool/work narration.
+  const usageLine = formatAgentUsageLine(agent, { short: secondary });
   const displayName = agentDisplayName(agent, workerOrdinal);
   const status = agentStatusLabel(agent.status);
   // Worker open takes precedence for click; expand still via child-count control if needed.
@@ -219,12 +221,15 @@ function AgentRow({
                   </span>
                 )}
               </div>
-              <p
-                className={`${secondary ? "mt-0" : "mt-0.5"} min-w-0 truncate text-xs text-ink-secondary`}
-                title={summary}
-              >
-                {summary}
-              </p>
+              {usageLine ? (
+                <p
+                  className={`${secondary ? "mt-0" : "mt-0.5"} min-w-0 truncate font-mono text-xs text-ink-secondary`}
+                  title={usageLine}
+                  data-testid={primary ? "agent-usage-line" : "sub-usage-line"}
+                >
+                  {usageLine}
+                </p>
+              ) : null}
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
               {childCount > 0 && (

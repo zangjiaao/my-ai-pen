@@ -29,7 +29,7 @@ From the operator’s view:
 ## Solution
 
 1. **Free-mode Tasks are the user-visible progress source of truth** for that Participant Session’s checklist (not a disposable agent scratchpad).  
-2. **Silent whole-map `todo.init` replace is forbidden** while the Session has meaningful prior todo state; continue work **merges** or mutates in place. Full replace requires **explicit user permission**. Declining replace still allows normal maintain ops (`append` / `start` / `done` / `drop`).  
+2. **Silent whole-map `todo.init` replace is forbidden** while the Session has meaningful prior todo state; continue work **merges** or mutates in place. Full replace requires **explicit user permission**. Declining replace still allows normal maintain ops (`append` / `start` / `done` / `drop`). **Successful replace archives** the prior map (does not discard it); sealed all-terminal maps and RightPanel revision history are Spec [#321](https://github.com/zangjiaao/my-ai-pen/issues/321) / [`task-map-history.md`](task-map-history.md).  
 3. **Completion narrative is soft-aligned:** the Agent may offer next steps or say a phase is pausing **without** zeroing open todos, but must **honestly surface remaining open progress** (no “评估已完成” with a silent dirty map). Open todos do **not** hard-block harness settlement (avoids fake mass-`done`).  
 4. **next_steps Choice Cards** are **agent-authored from prior work**, emitted only when valuable and purposeful; platform rejects empty/broken cards. **Single-select** primary direction; optional **expandable supplement text** on the card.  
 5. Confirm = **structured ids + full display text (option title/body + optional supplement)** enqueued as a **normal FIFO Session demand** (same as user messages under Spec #277). Idle/out-of-queue delivery continues the **same Session** with sticky target/scope/expert and **without** empty-target chat-only bypass.  
@@ -136,7 +136,7 @@ From the operator’s view:
 10. **#312 amendments:** Default next_steps **single-select**; multi-select no longer product default for next_steps; optional supplement control on card chrome; L2 emission guidance = valuable/purpose-clear only (Agent), not “always at settle.” Soft gate for missing card may remain but must not invent options.  
 11. **#277 amendments:** Explicit row: ChoiceCard confirm is a Session demand like user text (FIFO). No change to Free/Graph mode authority.  
 12. **task-graph amendments:** Free TodoStore checklist = user progress SoT; Free silent init wipe forbidden; Graph L2 rules unchanged.  
-13. **UI projection:** Tasks panel continues to project plan_tree/todo phases; after denied wipe, progress label must not jump to a brand-new 0/N map without user replace permission.  
+13. **UI projection:** Tasks panel continues to project plan_tree/todo phases; after denied wipe, progress label must not jump to a brand-new 0/N map without user replace permission. After **allowed** replace or sealed→init, prior map is archived and selectable per Spec [#321](https://github.com/zangjiaao/my-ai-pen/issues/321).  
 14. **No hardcoded option catalogs** for next_steps in platform code (AGENTS.md / no hardcoded behavior without approval).  
 15. **OMOP/OMP-aligned soft loops** (echo remaining list on todo ops, mid-run nudge, stop incomplete reminder) remain desirable but are **supporting**; this Spec’s hard rules are L2–L4, L9–L10.
 

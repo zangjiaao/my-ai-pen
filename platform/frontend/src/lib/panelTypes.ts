@@ -41,6 +41,14 @@ export type PlanNode = {
   owner_agent_name?: string;
 };
 
+/** Spec #324 S1: LLM usage projection for Case metering / AgentRow D1. */
+export type AgentUsageSummary = {
+  total_tokens?: number;
+  cost?: number;
+  requests?: number;
+  model?: string;
+};
+
 /** Collaboration tree agent row (Main / Worker). */
 export type StrixAgentStatus = {
   id: string;
@@ -66,4 +74,8 @@ export type StrixAgentStatus = {
   work_mode?: "free" | "graph" | string;
   graph_id?: string;
   graph_label?: string;
+  /** Spec #324 D1: Participant or Sub cumulative usage (platform rollup). */
+  usage?: AgentUsageSummary;
+  /** Stable metered/configured model id for this seat (not marketing names). */
+  model?: string;
 };
