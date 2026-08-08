@@ -117,12 +117,14 @@ export function selectResultAnchorMessageIds(
   const values = Object.entries(finalized).filter(([k]) => !k.startsWith("task:"));
   if (values.length !== 1) return out;
   const [, secs] = values[0];
-  const resultTypes = new Set(["text", "status", "task_complete", "task_error", "task_incomplete", "engagement_closeout"]);
+  // Align with backend RESULT_ANCHOR_MSG_TYPES — SystemNotice rows (status /
+  // engagement_closeout) do not render B1 chrome.
+  const resultTypes = new Set(["text", "task_complete", "task_error", "task_incomplete"]);
   let lastId = "";
   for (const m of messages) {
     if (m.role !== "agent") continue;
     const mt = String(m.msg_type || "").toLowerCase();
-    if (resultTypes.has(mt) || m.content?.text) {
+    if (resultTypes.has(mt)) {
       lastId = String(m.id || "").trim();
     }
   }

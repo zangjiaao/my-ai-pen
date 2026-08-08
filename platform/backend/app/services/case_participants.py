@@ -361,7 +361,7 @@ def upsert_participant(
     panel_agents: object = None,
     plan_tree: object = None,
     usage_snapshot: object = None,
-    usage_mode: str = "replace",  # replace | merge_max
+    usage_mode: str = "replace",  # replace | merge_max | lifetime
     touch: bool = True,
 ) -> dict[str, Any]:
     """Insert or update one Case participant; returns new context dict."""

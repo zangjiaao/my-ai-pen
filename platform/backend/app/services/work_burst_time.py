@@ -415,6 +415,12 @@ def set_authorize_paused(
         row["open_workers"] = open_workers
         row["paused_workers"] = {}
         row["authorize_paused"] = False
+        ledger["bursts"][active_id] = row
+        # Workers may have gone idle mid-authorize (paused_workers cleared by busy_end).
+        # After authorize resolves with nobody busy, settle the burst (H1 complete).
+        if not open_workers:
+            return finalize_burst(ledger, burst_id=active_id, now=ts)
+        return ledger
 
     ledger["bursts"][active_id] = row
     return ledger
@@ -603,14 +609,14 @@ def work_seconds_for_task(ledger: dict[str, Any], task_id: object) -> int | None
 
 
 # Message types eligible as B1 result anchors (not tool/thinking spam).
+# status / engagement_closeout render via SystemNotice and do not show B1 chrome —
+# stamp only real agent result rows so the duration is visible on the result card.
 RESULT_ANCHOR_MSG_TYPES = frozenset(
     {
         "text",
-        "status",
         "task_complete",
         "task_error",
         "task_incomplete",
-        "engagement_closeout",
     }
 )
 
@@ -620,10 +626,14 @@ def pick_result_anchor_message_id(
     *,
     task_ids: list[str] | None = None,
 ) -> str | None:
-    """Prefer last user-visible agent result for the burst; fall back to any agent row."""
+    """Prefer last user-visible agent result for the burst (B1).
+
+    Only RESULT_ANCHOR_MSG_TYPES are stamp targets so the FE result-card path
+    (not SystemNotice) can render the duration. If none exist, return None —
+    finalized seconds remain on the ledger for reload.
+    """
     task_set = {str(t).strip() for t in (task_ids or []) if str(t).strip()}
     preferred: str | None = None
-    fallback: str | None = None
     for msg in messages:
         role = str(getattr(msg, "role", None) or (msg.get("role") if isinstance(msg, dict) else "") or "").lower()
         if role != "agent":
@@ -639,11 +649,9 @@ def pick_result_anchor_message_id(
         tid = str(content.get("task_id") or "").strip()
         if task_set and tid and tid not in task_set:
             continue
-        if msg_type in RESULT_ANCHOR_MSG_TYPES or content.get("text") or content.get("message"):
+        if msg_type in RESULT_ANCHOR_MSG_TYPES:
             preferred = mid
-        else:
-            fallback = mid
-    return preferred or fallback
+    return preferred
 
 
 def stamp_result_anchor_fields(

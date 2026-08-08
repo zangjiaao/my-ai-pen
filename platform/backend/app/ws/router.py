@@ -652,9 +652,18 @@ async def _apply_worker_state(
                     set_ledger,
                 )
 
-                umk = str(user_message_key or context.get("active_user_message_key") or "").strip() or None
-                if working and umk:
-                    context["active_user_message_key"] = umk
+                # R1: only fall back to active_user_message_key while a burst is
+                # still open / workers busy. Never reopen a prior burst via a
+                # stale key after the Case has fully settled.
+                if working:
+                    umk = (
+                        str(user_message_key or context.get("active_user_message_key") or "").strip()
+                        or None
+                    )
+                    if umk:
+                        context["active_user_message_key"] = umk
+                else:
+                    umk = str(user_message_key or "").strip() or None
                 if worker_transitioned and nid:
                     context = apply_worker_transition(
                         context,
@@ -673,14 +682,25 @@ async def _apply_worker_state(
                         ledger = finalize_burst(ledger)
                         context = set_ledger(context, ledger)
                 # When last worker goes idle, finalize even if this node was already cleared.
+                # H1: do NOT force-finalize while authorize is pending — live timer pauses
+                # but the burst stays open until true settle/resume+idle.
                 if not working and not active:
                     ledger = get_ledger(context)
-                    if ledger.get("active_burst_id"):
-                        from app.services.work_burst_time import finalize_burst
+                    active_id = str(ledger.get("active_burst_id") or "").strip()
+                    if active_id:
+                        active_row = (ledger.get("bursts") or {}).get(active_id) or {}
+                        if not (
+                            isinstance(active_row, dict) and active_row.get("authorize_paused")
+                        ):
+                            from app.services.work_burst_time import finalize_burst
 
-                        ledger = finalize_burst(ledger)
-                        context = set_ledger(context, ledger)
+                            ledger = finalize_burst(ledger)
+                            context = set_ledger(context, ledger)
                 ledger_after = get_ledger(context)
+                # Spec #325 R1: clear stored umk once the Case is fully idle so the
+                # next user turn cannot reopen the previous message's burst clock.
+                if not working and not active and not ledger_after.get("active_burst_id"):
+                    context.pop("active_user_message_key", None)
                 # Spec #325 B1: stamp one finalized duration onto the result-anchor message.
                 if not working and not active and ledger_after.get("bursts"):
                     try:
@@ -805,14 +825,29 @@ async def _set_work_burst_authorize_paused(conv_id: str | None, *, paused: bool)
             if not c:
                 return None
             context = apply_authorize_pause(dict(c.context or {}), paused=paused)
+            ledger = get_ledger(context)
+            # R1: if resume settled an idle burst, drop stored umk so next turn is fresh.
+            if not paused and not ledger.get("active_burst_id"):
+                context.pop("active_user_message_key", None)
+                # B1: stamp result anchor for bursts finalized on resume-settle.
+                try:
+                    await _stamp_burst_result_anchor(db, cid, ledger)
+                    context = {
+                        **context,
+                        "work_burst_ledger": ledger,
+                    }
+                except Exception as stamp_exc:
+                    print(f"[WS] B1 result anchor stamp (authorize resume) error: {stamp_exc}")
             c.context = context
             await db.commit()
             proj = work_burst_projection(get_ledger(context))
             workers = _workers_from_context(context)
+            # After settle-on-resume, do not keep the session "working" for a dead pause.
+            still_authorize = bool(paused and ledger.get("active_burst_id"))
             payload = {
                 "type": "conversation_working",
                 "conversation_id": cid,
-                "working": bool(workers) or paused,
+                "working": bool(workers) or still_authorize,
                 # Keep session "working" while authorize is pending so Send stays as interrupt.
                 "status": str(c.status or "created"),
                 "workers": [

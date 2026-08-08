@@ -74,4 +74,23 @@ import {
   console.log("ok: B1 fallback single finalized");
 }
 
+{
+  // status / engagement_closeout are not B1 fallback targets (SystemNotice path)
+  const msgs = [
+    { id: "s1", role: "agent", msg_type: "status", content: { text: "gist" } },
+    { id: "e1", role: "agent", msg_type: "engagement_closeout", content: {} },
+    { id: "a1", role: "agent", msg_type: "text", content: { text: "ok" } },
+  ];
+  const map = selectResultAnchorMessageIds(msgs, { wb_y: 21 });
+  assert.equal(map.a1, 21);
+  assert.equal(map.s1, undefined);
+  assert.equal(map.e1, undefined);
+  const onlyStatus = selectResultAnchorMessageIds(
+    [{ id: "s1", role: "agent", msg_type: "status", content: { text: "x" } }],
+    { wb_z: 3 },
+  );
+  assert.equal(onlyStatus.s1, undefined);
+  console.log("ok: B1 fallback skips status/closeout");
+}
+
 console.log("workBurstTime.test.ts: all ok");

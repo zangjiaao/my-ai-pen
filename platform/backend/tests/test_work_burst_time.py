@@ -219,3 +219,131 @@ def test_set_ledger_does_not_overwrite_existing_case_run_start():
     ledger, _ = ensure_burst(ledger, task_id="t1", now=1_700_000_000.0)
     ctx = set_ledger(ctx, ledger)
     assert ctx["case_run"]["started_at"] == "2020-01-01T00:00:00Z"
+
+
+def test_r1_new_turn_without_umk_is_distinct_burst():
+    """Review R1: after message A settles, message B without umk must not reopen A.
+
+    Router must clear ``active_user_message_key`` on full idle so a subsequent
+    work start without an explicit umk cannot inject the prior message key.
+    Pure ledger: umk=None after finalize opens a new burst (not R1 reopen).
+    """
+    ctx = {}
+    ctx = apply_worker_transition(
+        ctx,
+        worker_key="node-a",
+        working=True,
+        task_id="t-a",
+        user_message_key="umsg-A",
+        now=0.0,
+    )
+    bid_a = get_ledger(ctx)["active_burst_id"]
+    ctx = apply_worker_transition(
+        ctx, worker_key="node-a", working=False, task_id="t-a", now=40.0
+    )
+    assert get_ledger(ctx)["active_burst_id"] is None
+    assert get_ledger(ctx)["bursts"][bid_a]["status"] == "finalized"
+    # Simulate router clearing active_user_message_key on settle
+    ctx.pop("active_user_message_key", None)
+    # Message B: no umk (task_assign missing client_message_id) — new burst
+    ctx = apply_worker_transition(
+        ctx,
+        worker_key="node-a",
+        working=True,
+        task_id="t-b",
+        user_message_key=None,
+        now=100.0,
+    )
+    bid_b = get_ledger(ctx)["active_burst_id"]
+    assert bid_b is not None and bid_b != bid_a
+    # Explicit new umk also must not reopen A
+    ctx = apply_worker_transition(
+        ctx, worker_key="node-a", working=False, task_id="t-b", now=120.0
+    )
+    ctx = apply_worker_transition(
+        ctx,
+        worker_key="node-a",
+        working=True,
+        task_id="t-c",
+        user_message_key="umsg-C",
+        now=200.0,
+    )
+    bid_c = get_ledger(ctx)["active_burst_id"]
+    assert bid_c is not None and bid_c != bid_a and bid_c != bid_b
+    # Contrast: stale umk injection WOULD reopen A (the bug under fix)
+    ledger_bad = get_ledger({})
+    ledger_bad, bid_stale = ensure_burst(
+        ledger_bad, task_id="t1", user_message_key="umsg-A", now=0.0
+    )
+    ledger_bad = finalize_burst(ledger_bad, burst_id=bid_stale, now=10.0)
+    ledger_bad, bid_reopen = ensure_burst(
+        ledger_bad, task_id="t2", user_message_key="umsg-A", now=20.0
+    )
+    assert bid_reopen == bid_stale  # R1 intentional for same message
+    ledger_bad, bid_fresh = ensure_burst(
+        ledger_bad, task_id="t3", user_message_key=None, now=30.0
+    )
+    # After reopen, active is open with umsg-A; new start without umk reuses open active
+    # (same open burst). After finalize without umk → distinct:
+    ledger_bad = finalize_burst(ledger_bad, burst_id=bid_reopen, now=40.0)
+    ledger_bad, bid_after = ensure_burst(
+        ledger_bad, task_id="t4", user_message_key=None, now=50.0
+    )
+    assert bid_after != bid_stale
+
+
+def test_h1_force_idle_does_not_finalize_while_authorize_paused():
+    """Review H1: workers idle mid-authorize must leave burst open/paused.
+
+    Ledger ``worker_busy_end`` already refuses finalize under authorize_paused;
+    router force-finalize must mirror that gate. Resume with nobody busy settles.
+    """
+    ctx = {}
+    ctx = apply_worker_transition(
+        ctx, worker_key="node-a", working=True, task_id="t1", now=0.0
+    )
+    bid = get_ledger(ctx)["active_burst_id"]
+    ctx = apply_authorize_pause(ctx, paused=True, now=50.0)
+    # Worker drops idle while authorize pending
+    ctx = apply_worker_transition(
+        ctx,
+        worker_key="node-a",
+        working=False,
+        task_id="t1",
+        now=60.0,
+        finalize_if_idle=True,
+    )
+    ledger = get_ledger(ctx)
+    row = ledger["bursts"][bid]
+    assert row["status"] == "open"
+    assert row.get("authorize_paused") is True
+    assert ledger["active_burst_id"] == bid
+    # Live clock frozen at busy-before-pause seconds (gap 50–200 not counted)
+    assert live_work_seconds(ledger, now=200.0) == 50
+    # Resume authorize with no remaining workers → settle / finalize
+    ctx = apply_authorize_pause(ctx, paused=False, now=200.0)
+    ledger = get_ledger(ctx)
+    assert ledger["bursts"][bid]["status"] == "finalized"
+    assert ledger["active_burst_id"] is None
+    assert work_seconds_for_burst(ledger, bid) == 50
+
+
+def test_b1_pick_result_anchor_skips_status_and_closeout():
+    """B1 stamps only real result types (not SystemNotice status/closeout)."""
+    from app.services.work_burst_time import pick_result_anchor_message_id, RESULT_ANCHOR_MSG_TYPES
+
+    assert "status" not in RESULT_ANCHOR_MSG_TYPES
+    assert "engagement_closeout" not in RESULT_ANCHOR_MSG_TYPES
+    msgs = [
+        {"id": "s1", "role": "agent", "msg_type": "status", "content": {"text": "done gist"}},
+        {"id": "e1", "role": "agent", "msg_type": "engagement_closeout", "content": {"text": "close"}},
+        {"id": "t1", "role": "agent", "msg_type": "tool_call", "content": {}},
+        {"id": "a1", "role": "agent", "msg_type": "text", "content": {"text": "result"}},
+    ]
+    assert pick_result_anchor_message_id(msgs) == "a1"
+    # Only status/closeout → no stamp target (ledger keeps finalized seconds)
+    msgs2 = [
+        {"id": "s1", "role": "agent", "msg_type": "status", "content": {"text": "err"}},
+        {"id": "e1", "role": "agent", "msg_type": "engagement_closeout", "content": {}},
+    ]
+    assert pick_result_anchor_message_id(msgs2) is None
