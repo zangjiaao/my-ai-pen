@@ -27,6 +27,9 @@ import {
 } from "./SurfaceInventory";
 import FindingCard from "./cards/FindingCard";
 import { GraphAwareTodoList } from "./TasksPlanList";
+import TasksMapHeader from "./TasksMapHeader";
+import type { TaskMapRevision } from "../lib/taskMapHistory";
+import { isViewingHistory, planTreeForView } from "../lib/taskMapHistory";
 import { discloseTaskListCap, TASKS_WORK_ITEM_CAP } from "../lib/tasksListCap";
 import {
   TRAFFIC_EMPTY_COPY,
@@ -136,6 +139,12 @@ interface Props {
   taskContext?: Record<string, unknown>;
   /** Spec #163 Graph engagement close-out (Product state). */
   engagementCloseout?: Record<string, unknown>;
+  /** Spec #321 Task Map history (product-state; FE view-only for archives). */
+  taskMapRevisions?: TaskMapRevision[];
+  liveRevisionId?: string | null;
+  viewedRevisionId?: string | null;
+  onSelectTaskMapRevision?: (revisionId: string) => void;
+  onReturnToLiveTaskMap?: () => void;
   onOpenVulnerability?: (finding: Partial<SecurityVulnerability>) => void;
   onOpenAsset?: (asset: Partial<SecurityAsset>) => void;
   /** Spec #308: open Worker process audit dialog. */
@@ -182,6 +191,11 @@ export default function RightPanel({
   findings = [],
   assets = [],
   taskContext,
+  taskMapRevisions = [],
+  liveRevisionId = null,
+  viewedRevisionId = null,
+  onSelectTaskMapRevision,
+  onReturnToLiveTaskMap,
   onOpenVulnerability,
   onOpenAsset,
   onWorkerClick,
@@ -250,7 +264,16 @@ export default function RightPanel({
     running,
   );
   const hasStatusData = running || Boolean(activeTool) || planTree.length > 0 || displayAgents.length > 0 || findings.length > 0 || assets.length > 0 || trafficExchanges.length > 0 || Boolean(strixRun) || Boolean(caseRun?.started_at || caseRun?.llm_usage?.total_tokens) || Boolean(engagementCloseout && Object.keys(engagementCloseout).length);
-  const visiblePlanTree = isStrixWorkflow ? mainAgentPlanTree(planTree, displayAgents) : planTree;
+  // Spec #321: history selection shows frozen revision plan_tree; live stays default.
+  const viewedPlanTree = planTreeForView({
+    planTree,
+    revisions: taskMapRevisions,
+    liveRevisionId,
+    viewedRevisionId,
+  });
+  const visiblePlanTree = isStrixWorkflow
+    ? mainAgentPlanTree(viewedPlanTree, displayAgents)
+    : viewedPlanTree;
   const phasePlan = hasStatusData ? buildPhasePlan(visiblePlanTree, kanbanSummary.current_stage, activeTool, running, findings.length, isStrixWorkflow) : [];
   // Node3-style flat task list for all workflows (phase tree remains available via plan data).
   // Trust plan_tree status only — do not force pending/running → done from conversation.status
@@ -260,6 +283,7 @@ export default function RightPanel({
     : unifiedTodoItems(visiblePlanTree);
   const taskItems = taskList.items;
   const tasksHiddenCount = taskList.hiddenCount;
+  const tasksViewingHistory = isViewingHistory(viewedRevisionId, liveRevisionId);
   const intake = normalizeIntake(intakeResult, intakeStatus);
   // Spec #324: Status no longer owns elapsed clock (S2 / #325: composer + B1).
   const [panelWidth, setPanelWidth] = useState(loadRightPanelWidth);
@@ -372,20 +396,20 @@ export default function RightPanel({
             )}
             {/* Intentional TODO / work packages — Expert Graph L1 stages + L2 todos when present */}
             <section data-testid="tasks-section">
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <p className="text-xs text-ink-muted">Tasks</p>
-                {taskItems.length > 0 && (
-                  <p className="font-mono text-[11px] text-ink-muted">
-                    {taskItems.filter((item) => isTerminalPlanStatus(item.status)).length}/
-                    {taskItems.length + tasksHiddenCount}
-                    {tasksHiddenCount > 0 ? ` · +${tasksHiddenCount} more` : ""}
-                  </p>
-                )}
-              </div>
+              <TasksMapHeader
+                revisions={taskMapRevisions}
+                liveRevisionId={liveRevisionId}
+                viewedRevisionId={viewedRevisionId}
+                doneCount={taskItems.filter((item) => isTerminalPlanStatus(item.status)).length}
+                totalCount={taskItems.length}
+                hiddenCount={tasksHiddenCount}
+                onSelectRevision={(id) => onSelectTaskMapRevision?.(id)}
+                onReturnToLive={() => onReturnToLiveTaskMap?.()}
+              />
               <GraphAwareTodoList
                 planTree={visiblePlanTree}
                 workItems={taskItems}
-                running={running}
+                running={tasksViewingHistory ? false : running}
                 agents={displayAgents}
               />
               {tasksHiddenCount > 0 && (

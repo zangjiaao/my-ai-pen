@@ -321,11 +321,20 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     # Multi-role Case: merge per-participant plan trees so one role's todo map
     # does not wipe another role's tasks after handoff.
     try:
-        from app.services.case_participants import plan_tree_from_participants
+        from app.services.case_participants import (
+            plan_tree_from_participants,
+            task_map_projection_from_participants,
+        )
 
         participant_plan = plan_tree_from_participants(context)
+        task_map_proj = task_map_projection_from_participants(context)
     except Exception:
         participant_plan = []
+        task_map_proj = {
+            "task_map_revisions": [],
+            "live_revision_id": None,
+            "live_sealed": False,
+        }
     if participant_plan:
         raw_plan_tree = merge_plan_trees_by_owner(participant_plan, raw_plan_tree)
     workflow_kind = workflow_kind_for_checkpoint(checkpoint)
@@ -435,6 +444,10 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
         "attack_surface": attack_surface_items,
         "coverage": coverage_items,
         "plan_tree": plan_tree,
+        # Spec #321: Task Map history (Session-scoped; FE history view only).
+        "task_map_revisions": task_map_proj.get("task_map_revisions") or [],
+        "live_revision_id": task_map_proj.get("live_revision_id"),
+        "live_sealed": bool(task_map_proj.get("live_sealed")),
         "captured_traffic": captured_traffic_items,
         # Spec #309: Case traffic audit list (replaces right-panel Activity projection).
         "traffic_exchanges": traffic_exchange_items,

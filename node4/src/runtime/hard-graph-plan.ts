@@ -543,6 +543,15 @@ export async function emitHardGraphPlanTreeUpdate(
   task: TaskEnvelope,
   plan: HardGraphPlanStore,
   reason: string,
+  opts?: {
+    /** Spec #321: Session Task Map history — stage advance mutates live only (E5). */
+    taskMap?: import("../stores/task-map.js").TaskMapHistory;
+    /**
+     * Spec #321 E4: when true, archive current map and install this Graph plan as new live
+     * (explicit restart / new Graph participation). Default false = E5 mutate live.
+     */
+    archiveAsNewMap?: boolean;
+  },
 ): Promise<void> {
   const plan_tree = stampPlanTreeOwner(plan.toPlanTree(), task);
   const progress = buildHardGraphProgress(plan);
@@ -551,6 +560,28 @@ export async function emitHardGraphPlanTreeUpdate(
     const s = normalizePlanWorkStatus(String(n.status || ""));
     return s === "pending" || s === "running";
   }).length;
+
+  // Spec #321: whole Graph participation = one live map; stage events do not mint history.
+  const taskMap = opts?.taskMap;
+  if (taskMap) {
+    const meta = {
+      work_mode: "graph" as const,
+      graph_id: plan.getGraphId(),
+    };
+    if (opts?.archiveAsNewMap) {
+      if (taskMap.hasLiveContent()) {
+        taskMap.archiveThenInstall(plan_tree, meta);
+      } else {
+        taskMap.installLive(plan_tree, meta);
+      }
+    } else if (!taskMap.liveRevisionId) {
+      taskMap.installLive(plan_tree, meta);
+    } else {
+      taskMap.mutateLive(plan_tree, meta);
+    }
+  }
+  const taskMapProj = taskMap?.projection();
+
   await platform.send({
     type: "plan_tree_updated",
     conversation_id: task.conversationId,
@@ -570,5 +601,12 @@ export async function emitHardGraphPlanTreeUpdate(
       event: "plan_tree",
       stage_blocked: progress.stage_blocked,
     },
+    ...(taskMapProj
+      ? {
+          task_map_revisions: taskMapProj.task_map_revisions,
+          live_revision_id: taskMapProj.live_revision_id,
+          live_sealed: taskMapProj.live_sealed,
+        }
+      : {}),
   } as PlatformMessage);
 }

@@ -4856,7 +4856,11 @@ async def _remember_conversation_checkpoint(conv_id: str, checkpoint: dict):
 
 
 async def _remember_participant_plan_tree(conv_id: str, msg: dict) -> None:
-    """Persist plan_tree onto the matching Case participant (multi-role Tasks)."""
+    """Persist plan_tree onto the matching Case participant (multi-role Tasks).
+
+    Spec #321: also persist task_map_revisions + live_revision_id when present so
+    snapshot history is product-state, not FE-invented.
+    """
     if not conv_id or not isinstance(msg, dict):
         return
     plan = msg.get("plan_tree")
@@ -4874,6 +4878,9 @@ async def _remember_participant_plan_tree(conv_id: str, msg: dict) -> None:
                 return
             context = dict(c.context or {})
             task = context.get("task") if isinstance(context.get("task"), dict) else {}
+            revs = msg.get("task_map_revisions")
+            live_id = msg.get("live_revision_id")
+            live_sealed = msg.get("live_sealed")
             context = apply_plan_tree_to_participant(
                 context,
                 plan,
@@ -4885,6 +4892,9 @@ async def _remember_participant_plan_tree(conv_id: str, msg: dict) -> None:
                 or task.get("role")
                 or "default",
                 task_id=msg.get("task_id") or task.get("task_id"),
+                task_map_revisions=revs if isinstance(revs, list) else None,
+                live_revision_id=live_id,
+                live_sealed=live_sealed if live_sealed is not None else None,
             )
             c.context = context
             await db.commit()

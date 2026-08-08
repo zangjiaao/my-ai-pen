@@ -1,8 +1,18 @@
 # Spec: Task Map history (archive + revision select)
 
-**Status:** Implementable Spec (product contract)  
+**Status:** Implemented (S1–S3 Free + Graph participation map + RightPanel history view)  
 **Tracker:** [#321](https://github.com/zangjiaao/my-ai-pen/issues/321)  
 **Decision source:** Product grill (RightPanel Tasks overwrite; archive-then-switch; Free + Graph unified map lifecycle).
+
+### Living status
+
+| Seam | Behavior now |
+|------|----------------|
+| **S1** Free lifecycle | `TodoStore` + `TaskMapHistory` — E1 seal, E2 sealed→init archive, E5 maintain, E6 no auto-archive (`node4/src/stores/task-map.ts`) |
+| **S2** Replace | #313 grant still required for open+init; success **archives** prior map; sealed path grant-free |
+| **S3** Projection | `plan_tree_updated` + participant context + conversation snapshot expose `task_map_revisions` / `live_revision_id` |
+| **S3** UI | RightPanel Tasks header selector + 历史·只读 + 返回当前 (`TasksMapHeader`) |
+| **Graph** | Whole participation = one live map; stage advance mutates live only; Graph start archives prior Free/Graph map (E4) |
 
 **Product path:** Node4 Graph × Pi + platform conversation UI (ADR 0001).  
 **Amends (thin):**  
