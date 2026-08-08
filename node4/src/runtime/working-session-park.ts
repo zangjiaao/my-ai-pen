@@ -322,9 +322,13 @@ export function applyCaptainEndDisposition(options: {
     : options.decision;
 
   if (decision.disposition === "park") {
+    const agentSessionId =
+      String(options.entry.agentSessionId || options.entry.session?.sessionId || "").trim() ||
+      undefined;
     parkWorkingSession({
       ...options.entry,
       parkedAt: options.entry.parkedAt ?? Date.now(),
+      agentSessionId,
     });
     return { parked: true, disposed: false };
   }

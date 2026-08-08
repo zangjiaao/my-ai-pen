@@ -408,6 +408,11 @@ export async function runNode4Task(
     // session-runner owns end-of-task textStream.dispose below.
     disposeTextStream: false,
   });
+  // Project pi Agent.sessionId immediately so collab copy chrome has the real id
+  // before the first throttled checkpoint (do not wait for usage ticks).
+  if (obsCtx.agentSessionId) {
+    await emitCheckpointUpdate(obsCtx, { status: "running" }).catch(() => {});
+  }
 
   // Outer continues: product default OFF (settle on natural stop). Lab opt-in via env.
   // Discovery / multi-tool work stays in-loop (pi agent-loop). No session wall.

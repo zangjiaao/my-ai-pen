@@ -367,26 +367,23 @@ function AgentRoleBadge({ primary }: { primary: boolean }) {
   );
 }
 
-/** Full Session id for clipboard + tooltip (always available for Main with expert). */
+/**
+ * pi-agent-core Agent.sessionId only (clipboard + tooltip).
+ * Never expert catalog id — that is product identity, not the Agent instance.
+ */
 function sessionIdFull(agent: StrixAgentStatus): string {
-  // Prefer platform/Node instance id when present (renews after Delete/Reset reseed).
   const sid = String(agent.session_id || "").trim();
-  if (sid) return sid;
-  // Fallback: expert catalog key so copy chrome never disappears.
-  const eid = String(agent.expert_id || "").trim();
-  if (eid) return `expert:${eid}`;
-  return "";
+  if (!sid) return "";
+  // Reject expert-catalog / roster keys (historical mis-projection).
+  if (sid.startsWith("expert:") || sid.startsWith("pack:")) return "";
+  return sid;
 }
 
-/**
- * Compact display form for collab chrome (clipboard still gets full id).
- * `expert:{uuid}` / bare uuid → first 8 of the uuid portion.
- */
+/** Compact display: first 8 of pi Agent.sessionId. */
 function sessionIdDisplay(agent: StrixAgentStatus): string {
   const full = sessionIdFull(agent);
   if (!full) return "";
-  const bare = full.includes(":") ? full.slice(full.indexOf(":") + 1) : full;
-  return bare.slice(0, 8);
+  return full.slice(0, 8);
 }
 
 function AgentMeta({

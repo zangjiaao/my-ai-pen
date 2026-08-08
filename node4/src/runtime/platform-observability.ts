@@ -29,6 +29,11 @@ export type ObservabilityContext = {
   panel: PanelAgentTracker;
   startedAt: string;
   rolePackId: string;
+  /**
+   * pi-agent-core Agent.sessionId — projected on checkpoint for collab copy chrome.
+   * Set after createBoundNode4Session / park attach.
+   */
+  agentSessionId?: string;
   /** Mutable counters from the runner. */
   counters: {
     toolCallCount: number;
@@ -490,6 +495,7 @@ export function buildNode4Checkpoint(
   const goalSnap = ctx.goals.snapshot();
   const mode = goalSnap.mode;
 
+  const agentSessionId = String(ctx.agentSessionId || "").trim();
   return {
     runtime: "node4-pi",
     role_pack: ctx.rolePackId,
@@ -497,6 +503,8 @@ export function buildNode4Checkpoint(
     end_time: options?.endTime,
     status: options?.status,
     task_id: ctx.task.taskId,
+    // Collab copy chrome: pi Agent.sessionId only (not expert catalog).
+    ...(agentSessionId ? { agent_session_id: agentSessionId } : {}),
     scan_mode: ctx.task.scanMode || ctx.task.engagement || "pentest",
     engagement: ctx.task.engagement,
     task_target: ctx.task.target,
@@ -552,6 +560,11 @@ export function attachNode4SessionObservability(options: {
 } {
   const { session, obsCtx, textStream, checkpointThrottle } = options;
   const ownTextStream = options.disposeTextStream !== false;
+  // Bind pi-agent-core id for checkpoint projection (collab Session copy).
+  const sid = String((session as { sessionId?: string }).sessionId || "").trim();
+  if (sid) {
+    obsCtx.agentSessionId = sid;
+  }
   const unsubRaw = session.subscribe((event) => {
     void handleNode4SessionEvent(obsCtx, textStream, checkpointThrottle, event).catch(() => {
       // Never let observability break the agent loop.

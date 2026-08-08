@@ -67,7 +67,7 @@ Case (conversation_id / CaseID)
 | L8 | Same-expert new Session after delete → **auto-handoff** incomplete Tasks from Case holding (strict expert isolation). |
 | L9 | Session **Reset** = clear model/pi working memory, **keep** incomplete Todo. |
 | L10 | Session **Delete** = dispose identity; incomplete Tasks → Case **pending handoff** holding (not fuzzy browse history). |
-| L10a | **pi-agent-core instance lifecycle:** Delete = dispose Agent + drop park; Reset = dispose Agent + mint new `Agent.sessionId` and reseed (pi `/new` style) while keeping incomplete Todo. Operator collab copy may show instance id when known, with `expert:{catalog}` as fallback so chrome never disappears. Expert catalog id remains the roster/park key (case + expert_id). |
+| L10a | **pi-agent-core instance lifecycle:** Delete = dispose Agent + drop park; Reset = dispose Agent + mint new `Agent.sessionId` and reseed (pi `/new` style) while keeping incomplete Todo. Collab copy chrome shows **only** `Agent.sessionId` (Node-projected); never expert catalog id. Expert catalog id remains the roster/park key only (case + expert_id). |
 | L11 | Operator RightPanel **Task Map revision selector retired** (#321 S3 UI). Process records may remain for **audit only**. |
 | L12 | Collab UI lives in RightPanel **case-collab-section**; Session cards: Delete + Reset (confirm dialogs); Sub: End only. |
 

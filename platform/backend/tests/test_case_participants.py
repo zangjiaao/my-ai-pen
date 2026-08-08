@@ -47,34 +47,75 @@ def test_remove_participant_session_delete_drops_collab_card():
     assert ctx["participants"] == {}
 
 
-def test_session_instance_id_renews_after_delete_reentry():
-    """Spec #354: collab Session ID must change after Delete + same-expert re-entry.
-
-    Expert catalog id stays stable; session_instance_id is the operator-visible
-    Session handle (not expert:{catalog_uuid}).
-    """
+def test_collab_session_id_is_pi_agent_session_id_only():
+    """Collab copy chrome shows pi-agent-core Agent.sessionId only — never expert catalog."""
     eid = "269b0fae-ec27-49a7-8e14-02ad26beb69e"
+    # No Agent yet → no session_id on collab card
     ctx = upsert_participant({}, expert_id=eid, expert_name="平台助理", pack_id="default")
+    agents0 = agents_from_participants(ctx)
+    assert len(agents0) == 1
+    assert not agents0[0].get("session_id")
+
+    # Node projects real Agent.sessionId
+    ctx = upsert_participant(
+        ctx,
+        expert_id=eid,
+        expert_name="平台助理",
+        pack_id="default",
+        pi_agent_session_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    )
     agents1 = agents_from_participants(ctx)
-    assert len(agents1) == 1
-    sid1 = str(agents1[0].get("session_id") or "")
-    assert sid1
-    assert sid1 != f"expert:{eid}"
-    assert sid1 != eid
-    # Same expert maintain upsert keeps instance
-    ctx = upsert_participant(ctx, expert_id=eid, expert_name="平台助理", pack_id="default", last_status="running")
-    agents_mid = agents_from_participants(ctx)
-    assert agents_mid[0].get("session_id") == sid1
-    # Delete then re-entry
+    assert agents1[0].get("session_id") == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+    # expert: catalog must not overwrite pi id
+    ctx = upsert_participant(
+        ctx,
+        expert_id=eid,
+        expert_name="平台助理",
+        pack_id="default",
+        pi_agent_session_id=f"expert:{eid}",
+    )
+    agents_bad = agents_from_participants(ctx)
+    assert agents_bad[0].get("session_id") == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+    # Delete → re-entry without Agent yet → no session_id
     ctx = remove_participant(ctx, expert_id=eid)
-    assert agents_from_participants(ctx) == []
     ctx = upsert_participant(ctx, expert_id=eid, expert_name="平台助理", pack_id="default")
+    agents_empty = agents_from_participants(ctx)
+    assert not agents_empty[0].get("session_id")
+
+    # New Agent after reseed → new pi id
+    ctx = upsert_participant(
+        ctx,
+        expert_id=eid,
+        expert_name="平台助理",
+        pack_id="default",
+        pi_agent_session_id="11111111-2222-3333-4444-555555555555",
+    )
     agents2 = agents_from_participants(ctx)
-    assert len(agents2) == 1
-    sid2 = str(agents2[0].get("session_id") or "")
-    assert sid2
-    assert sid2 != sid1
+    assert agents2[0].get("session_id") == "11111111-2222-3333-4444-555555555555"
     assert agents2[0].get("expert_id") == eid
+
+
+def test_checkpoint_projects_agent_session_id():
+    from app.services.case_participants import apply_checkpoint_to_participant
+
+    ctx = apply_checkpoint_to_participant(
+        {},
+        {
+            "task_id": "t1",
+            "status": "running",
+            "agent_session_id": "pi-sid-from-checkpoint",
+            "panel_agents": [{"id": "main", "name": "平台助理", "status": "running"}],
+            "role_pack": "default",
+        },
+        expert_id="269b0fae-ec27-49a7-8e14-02ad26beb69e",
+        expert_name="平台助理",
+        pack_id="default",
+        running=True,
+    )
+    agents = agents_from_participants(ctx)
+    assert agents[0].get("session_id") == "pi-sid-from-checkpoint"
 
 
 def test_settle_context_after_session_delete_clears_workers_and_panel_ghosts():
