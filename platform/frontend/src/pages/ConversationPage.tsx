@@ -395,6 +395,8 @@ export default function ConversationPage() {
       activeConversationId: activeId,
       liveToMessage: (frame) => {
         const like = liveFrameToMessageLike(frame);
+        // Do not invent created_at (epoch or Date.now()) for live frames — stream
+        // chrome must wait for durable server time, or stamps flash/wipe on merge.
         return {
           id: like.id,
           conversation_id: like.conversation_id || activeId || "",
@@ -402,7 +404,7 @@ export default function ConversationPage() {
           msg_type: like.msg_type,
           content: like.content,
           parent_msg_id: null,
-          created_at: like.created_at || new Date().toISOString(),
+          created_at: like.created_at || "",
         } satisfies Message;
       },
     });

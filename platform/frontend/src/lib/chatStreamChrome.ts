@@ -150,10 +150,13 @@ export function formatChatDaySeparator(iso: string, _now?: Date): string {
 }
 
 /**
- * Insert a centered timestamp before this message when:
- * - first renderable message in the stream, or
- * - calendar day changed, or
- * - gap from previous message ≥ STREAM_TIME_STAMP_GAP_MS
+ * Insert a centered timestamp before this message when current has a valid time and:
+ * - there is no prior valid timestamp in the stream (first durable message), or
+ * - calendar day changed vs last valid prior message, or
+ * - gap from last valid prior message ≥ STREAM_TIME_STAMP_GAP_MS
+ *
+ * Messages without a parseable created_at never get a stamp and never reset the
+ * "last valid" anchor (live frames during stream).
  */
 export function shouldInsertStreamTimeStamp(
   previousCreatedAt: string | undefined | null,
@@ -185,6 +188,9 @@ export type StreamChromeItem<T> =
 /**
  * Project chronological messages into stream rows with centered datetime stamps
  * **before** dialogue when necessary (not every message).
+ *
+ * Uses the last *valid* created_at as the gap/day anchor so live frames without
+ * server time do not force false day-change stamps or wipe stable separators.
  */
 export function projectStreamWithDaySeparators<T extends { created_at?: string }>(
   messages: T[],
@@ -192,18 +198,22 @@ export function projectStreamWithDaySeparators<T extends { created_at?: string }
   gapMs: number = STREAM_TIME_STAMP_GAP_MS,
 ): StreamChromeItem<T>[] {
   const out: StreamChromeItem<T>[] = [];
+  let lastValidCreatedAt: string | undefined;
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
-    const prev = i > 0 ? messages[i - 1] : undefined;
-    if (shouldInsertStreamTimeStamp(prev?.created_at, msg.created_at, gapMs)) {
+    if (shouldInsertStreamTimeStamp(lastValidCreatedAt, msg.created_at, gapMs)) {
       const label = formatChatMessageTime(msg.created_at);
       if (label) {
         out.push({
           kind: "time_separator",
-          stampKey: label,
+          // Key by message index + label so remounts stay stable for the same locus.
+          stampKey: `${i}:${label}`,
           label,
         });
       }
+    }
+    if (parseMessageDate(msg.created_at)) {
+      lastValidCreatedAt = msg.created_at;
     }
     out.push({ kind: "message", message: msg });
   }

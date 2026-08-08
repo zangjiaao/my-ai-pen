@@ -98,6 +98,22 @@ import {
   console.log("ok: epoch placeholders never become stream stamps");
 }
 
+{
+  // Live frame without created_at must not drop the first-message stamp or invent stamps
+  const t0 = new Date(2026, 7, 8, 10, 0, 0).toISOString();
+  const t1 = new Date(2026, 7, 8, 10, 1, 0).toISOString();
+  const projected = projectStreamWithDaySeparators([
+    { id: "u1", created_at: t0, msg_type: "text", role: "user" },
+    { id: "live", created_at: "", msg_type: "text", role: "agent" },
+    { id: "a1", created_at: t1, msg_type: "text", role: "agent" },
+  ]);
+  const stamps = projected.filter((p) => p.kind === "time_separator");
+  assert.equal(stamps.length, 1, "only first durable message stamped within 5min");
+  assert.equal(projected[0]?.kind, "time_separator");
+  assert.equal(projected[1]?.kind, "message");
+  console.log("ok: empty live created_at does not wipe/force stamps");
+}
+
 // --- Centered full datetime when necessary -----------------------------------
 
 {
