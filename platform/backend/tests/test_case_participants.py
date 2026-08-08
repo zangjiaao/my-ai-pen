@@ -525,3 +525,42 @@ def test_s1_agents_expose_model_requests_tokens():
     assert root["usage"]["total_tokens"] == 12
     assert root["usage"]["requests"] == 3
     assert root.get("model") == "configured-model-x"
+
+
+def test_s1_pre_upgrade_usage_cursor_no_double_count():
+    """Pre-S1 roster has usage but no usage_own/cursor; first lifetime merge must not 2x."""
+    from app.services.case_participants import apply_checkpoint_to_participant, recompute_case_run
+
+    ctx = {
+        "participants": {
+            "expert:e1": {
+                "expert_id": "e1",
+                "expert_name": "Main",
+                "pack_id": "default",
+                "usage": {"total_tokens": 100, "cost": 0.01, "requests": 5},
+                "last_seen_at": "2026-01-01T00:00:00Z",
+            }
+        }
+    }
+    # recompute migrates via ensure_usage_own
+    ctx = recompute_case_run(ctx)
+    assert ctx["participants"]["expert:e1"]["usage_own"]["total_tokens"] == 100
+    assert ctx["participants"]["expert:e1"]["usage_cursor"]["total_tokens"] == 100
+
+    # Same cumulative checkpoint snap should not re-add 100
+    ctx = apply_checkpoint_to_participant(
+        ctx,
+        {
+            "role_pack": "default",
+            "task_id": "t-new",
+            "panel_agents": [{"id": "main", "name": "Main", "status": "running", "parent_id": None}],
+            "llm_usage": {"total_tokens": 100, "cost": 0.01, "requests": 5},
+        },
+        expert_id="e1",
+        expert_name="Main",
+        pack_id="default",
+        task_id="t-new",
+        running=True,
+    )
+    assert ctx["case_run"]["llm_usage"]["total_tokens"] == 100
+    assert ctx["participants"]["expert:e1"]["usage"]["total_tokens"] == 100

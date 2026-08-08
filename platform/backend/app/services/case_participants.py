@@ -127,10 +127,24 @@ def _panel_children_usage_sum(panel: object) -> dict[str, Any]:
 
 
 def ensure_usage_own(row: dict[str, Any]) -> dict[str, Any]:
-    """Migrate pre-S1 rows: historical ``usage`` was own/checkpoint-only."""
+    """Migrate pre-S1 rows: historical ``usage`` was own/checkpoint-only.
+
+    Seed ``usage_cursor`` to the same baseline so the first post-upgrade
+    ``merge_usage_lifetime`` does not re-add the entire prior total
+    (snap − 0 would double-count; Spec #323 / #324 L3).
+    """
     if row.get("usage_own") is None and isinstance(row.get("usage"), dict):
         # Copy scalars only — do not keep a pointer to the display dict.
-        row["usage_own"] = _usage_fields(row.get("usage"))
+        migrated = _usage_fields(row.get("usage"))
+        row["usage_own"] = migrated
+        if row.get("usage_cursor") is None:
+            row["usage_cursor"] = dict(migrated)
+    elif (
+        isinstance(row.get("usage_own"), dict)
+        and row.get("usage_cursor") is None
+    ):
+        # Own exists without cursor (partial write) — baseline cursor at current own.
+        row["usage_cursor"] = _usage_fields(row.get("usage_own"))
     return row
 
 
