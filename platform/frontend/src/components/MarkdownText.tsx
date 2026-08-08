@@ -1,329 +1,181 @@
+import type { Components } from "react-markdown";
 import type { ReactNode } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkBreaks from "remark-breaks";
+import remarkGfm from "remark-gfm";
 
-type TableAlignment = "left" | "center" | "right";
+const DEFAULT_CLASS_NAME =
+  "my-2 min-w-0 max-w-full space-y-2 text-sm leading-relaxed text-ink [overflow-wrap:anywhere]";
 
-type MarkdownBlock =
-  | { type: "heading"; level: number; text: string }
-  | { type: "paragraph"; text: string }
-  | { type: "list"; ordered: boolean; items: string[] }
-  | { type: "code"; language: string; text: string }
-  | { type: "quote"; text: string }
-  | { type: "table"; headers: string[]; alignments: TableAlignment[]; rows: string[][] };
-
+/**
+ * Shared Case-dialog Markdown renderer for agent-side prose (text, thinking body, Choice).
+ * Full GFM via remark-gfm; no raw HTML; optional soft breaks for thinking streams.
+ */
 export default function MarkdownText({
   text,
-  className = "my-2 min-w-0 max-w-full space-y-2 text-sm leading-relaxed text-ink [overflow-wrap:anywhere]",
+  className = DEFAULT_CLASS_NAME,
+  breaks = false,
 }: {
   text: string;
   className?: string;
+  /** When true, single newlines become hard breaks (thinking density). Default GFM paragraphs. */
+  breaks?: boolean;
 }) {
-  const blocks = parseMarkdown(text);
+  const remarkPlugins = breaks ? [remarkGfm, remarkBreaks] : [remarkGfm];
+
   return (
-    <div className={className}>
-      {blocks.map((block, index) => renderMarkdownBlock(block, index))}
+    <div className={className} data-markdown-root>
+      <ReactMarkdown remarkPlugins={remarkPlugins} components={markdownComponents}>
+        {text}
+      </ReactMarkdown>
     </div>
   );
 }
 
-function renderMarkdownBlock(block: MarkdownBlock, index: number): ReactNode {
-  if (block.type === "heading") {
-    const className =
-      block.level === 1 ? "text-lg font-semibold" : block.level === 2 ? "text-base font-semibold" : "text-sm font-semibold";
-    const children = renderInlineMarkdown(block.text, `h-${index}`);
-    if (block.level === 1) return <h1 key={index} className={className}>{children}</h1>;
-    if (block.level === 2) return <h2 key={index} className={className}>{children}</h2>;
-    return <h3 key={index} className={className}>{children}</h3>;
-  }
+const headingClass: Record<number, string> = {
+  1: "text-lg font-semibold text-ink",
+  2: "text-base font-semibold text-ink",
+  3: "text-sm font-semibold text-ink",
+  4: "text-sm font-semibold text-ink",
+  5: "text-xs font-semibold text-ink",
+  6: "text-xs font-semibold text-ink-secondary",
+};
 
-  if (block.type === "list") {
-    const Tag = block.ordered ? "ol" : "ul";
-    const listClass = block.ordered ? "list-decimal space-y-1 pl-5" : "list-disc space-y-1 pl-5";
-    return (
-      <Tag key={index} className={listClass}>
-        {block.items.map((item, itemIndex) => (
-          <li key={itemIndex}>{renderInlineMarkdown(item, `li-${index}-${itemIndex}`)}</li>
-        ))}
-      </Tag>
-    );
-  }
-
-  if (block.type === "code") {
-    return (
-      <pre
-        key={index}
-        className="max-w-full overflow-x-auto rounded-sm border border-hairline bg-canvas-inset p-3 font-mono text-[13px] leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
-      >
-        {block.language && (
-          <code className="mb-2 block text-[11px] uppercase tracking-wide text-ink-muted">{block.language}</code>
-        )}
-        <code>{block.text}</code>
-      </pre>
-    );
-  }
-
-  if (block.type === "quote") {
-    return (
-      <blockquote key={index} className="border-l-2 border-hairline pl-3 text-ink-secondary">
-        {renderInlineMarkdown(block.text, `q-${index}`)}
-      </blockquote>
-    );
-  }
-
-  if (block.type === "table") {
-    return (
-      <div key={index} className="max-w-full overflow-x-auto rounded-md border border-hairline">
-        <table className="min-w-full border-collapse text-left text-sm">
-          <thead className="bg-surface-default">
-            <tr>
-              {block.headers.map((header, cellIndex) => (
-                <th
-                  key={cellIndex}
-                  className={`border-b border-hairline px-3 py-2 font-semibold ${tableAlignClass(block.alignments[cellIndex])}`}
-                >
-                  {renderInlineMarkdown(header, `th-${index}-${cellIndex}`)}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {block.rows.map((row, rowIndex) => (
-              <tr key={rowIndex} className="border-t border-hairline-soft">
-                {block.headers.map((_, cellIndex) => (
-                  <td
-                    key={cellIndex}
-                    className={`max-w-[320px] px-3 py-2 align-top break-words [overflow-wrap:anywhere] ${tableAlignClass(block.alignments[cellIndex])}`}
-                  >
-                    {renderInlineMarkdown(row[cellIndex] || "", `td-${index}-${rowIndex}-${cellIndex}`)}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    );
-  }
-
-  return <p key={index}>{renderInlineMarkdown(block.text, `p-${index}`)}</p>;
-}
-
-function parseMarkdown(text: string): MarkdownBlock[] {
-  const lines = text.replace(/\r\n/g, "\n").split("\n");
-  const blocks: MarkdownBlock[] = [];
-  let index = 0;
-
-  while (index < lines.length) {
-    const line = lines[index];
-    if (!line.trim()) {
-      index += 1;
-      continue;
-    }
-
-    const fence = line.match(/^```\s*([^`]*)\s*$/);
-    if (fence) {
-      const codeLines: string[] = [];
-      index += 1;
-      while (index < lines.length && !/^```\s*$/.test(lines[index])) {
-        codeLines.push(lines[index]);
-        index += 1;
-      }
-      if (index < lines.length) index += 1;
-      blocks.push({ type: "code", language: fence[1].trim(), text: codeLines.join("\n") });
-      continue;
-    }
-
-    const heading = line.match(/^(#{1,3})\s+(.+)$/);
-    if (heading) {
-      blocks.push({ type: "heading", level: heading[1].length, text: heading[2].trim() });
-      index += 1;
-      continue;
-    }
-
-    const table = tryParseTable(lines, index);
-    if (table) {
-      blocks.push(table.block);
-      index = table.nextIndex;
-      continue;
-    }
-
-    const quote = line.match(/^>\s?(.*)$/);
-    if (quote) {
-      const quoteLines = [quote[1]];
-      index += 1;
-      while (index < lines.length) {
-        const nextQuote = lines[index].match(/^>\s?(.*)$/);
-        if (!nextQuote) break;
-        quoteLines.push(nextQuote[1]);
-        index += 1;
-      }
-      blocks.push({ type: "quote", text: quoteLines.join(" ").trim() });
-      continue;
-    }
-
-    const unordered = line.match(/^\s*[-*]\s+(.+)$/);
-    const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
-    if (unordered || ordered) {
-      const orderedList = Boolean(ordered);
-      const items: string[] = [];
-      while (index < lines.length) {
-        const match = orderedList
-          ? lines[index].match(/^\s*\d+[.)]\s+(.+)$/)
-          : lines[index].match(/^\s*[-*]\s+(.+)$/);
-        if (!match) break;
-        items.push(match[1].trim());
-        index += 1;
-      }
-      blocks.push({ type: "list", ordered: orderedList, items });
-      continue;
-    }
-
-    const paragraphLines = [line.trim()];
-    index += 1;
-    while (index < lines.length && lines[index].trim() && !isMarkdownBoundary(lines[index])) {
-      paragraphLines.push(lines[index].trim());
-      index += 1;
-    }
-    blocks.push({ type: "paragraph", text: paragraphLines.join(" ") });
-  }
-
-  return blocks.length ? blocks : [{ type: "paragraph", text }];
-}
-
-function tryParseTable(lines: string[], index: number): { block: MarkdownBlock; nextIndex: number } | null {
-  if (index + 1 >= lines.length) return null;
-  const headerLine = lines[index].trim();
-  const separatorLine = lines[index + 1].trim();
-  if (!isTableRow(headerLine) || !isTableSeparator(separatorLine)) return null;
-
-  const headers = splitTableRow(headerLine);
-  const separatorCells = splitTableRow(separatorLine);
-  if (headers.length < 2 || separatorCells.length !== headers.length) return null;
-
-  const rows: string[][] = [];
-  let nextIndex = index + 2;
-  while (nextIndex < lines.length && isTableRow(lines[nextIndex].trim())) {
-    const row = splitTableRow(lines[nextIndex].trim());
-    rows.push(headers.map((_, cellIndex) => row[cellIndex] || ""));
-    nextIndex += 1;
-  }
-
-  return {
-    block: {
-      type: "table",
-      headers,
-      alignments: separatorCells.map(tableAlignment),
-      rows,
-    },
-    nextIndex,
+function heading(level: 1 | 2 | 3 | 4 | 5 | 6) {
+  const Tag = `h${level}` as "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
+  return function Heading({ children }: { children?: ReactNode }) {
+    return <Tag className={headingClass[level]}>{children}</Tag>;
   };
 }
 
-function isTableRow(line: string): boolean {
-  return line.includes("|") && splitTableRow(line).length >= 2;
-}
-
-function isTableSeparator(line: string): boolean {
-  if (!line.includes("|")) return false;
-  const cells = splitTableRow(line);
-  return cells.length >= 2 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s/g, "")));
-}
-
-function splitTableRow(line: string): string[] {
-  const trimmed = line.replace(/^\|/, "").replace(/\|$/, "");
-  const cells: string[] = [];
-  let current = "";
-  let escaped = false;
-
-  for (const char of trimmed) {
-    if (escaped) {
-      current += char;
-      escaped = false;
-      continue;
+const markdownComponents: Components = {
+  h1: heading(1),
+  h2: heading(2),
+  h3: heading(3),
+  h4: heading(4),
+  h5: heading(5),
+  h6: heading(6),
+  p: ({ children }) => <p className="min-w-0 [overflow-wrap:anywhere]">{children}</p>,
+  ul: ({ children }) => <ul className="list-disc space-y-1 pl-5">{children}</ul>,
+  ol: ({ children }) => <ol className="list-decimal space-y-1 pl-5">{children}</ol>,
+  li: ({ children, className }) => (
+    <li className={`min-w-0 [overflow-wrap:anywhere] ${className ?? ""}`.trim()}>{children}</li>
+  ),
+  blockquote: ({ children }) => (
+    <blockquote className="border-l-2 border-hairline pl-3 text-ink-secondary">{children}</blockquote>
+  ),
+  hr: () => <hr className="my-3 border-0 border-t border-hairline" />,
+  strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+  em: ({ children }) => <em>{children}</em>,
+  del: ({ children }) => <del className="text-ink-muted">{children}</del>,
+  a: ({ href, children }) => {
+    const safe = sanitizeHref(href);
+    if (!safe) {
+      return <span className="text-ink-muted">{children}</span>;
     }
-    if (char === "\\") {
-      escaped = true;
-      continue;
+    return (
+      <a
+        href={safe}
+        target="_blank"
+        rel="noreferrer"
+        className="text-status-running underline underline-offset-2"
+      >
+        {children}
+      </a>
+    );
+  },
+  /** Never remote-load images from model output (tracking / layout abuse). */
+  img: ({ alt, src }) => {
+    const label = (alt && String(alt).trim()) || (src && String(src).trim()) || "image";
+    const safe = sanitizeHref(typeof src === "string" ? src : undefined);
+    if (safe) {
+      return (
+        <a
+          href={safe}
+          target="_blank"
+          rel="noreferrer"
+          className="inline text-status-running underline underline-offset-2"
+          title={typeof src === "string" ? src : undefined}
+        >
+          [{label}]
+        </a>
+      );
     }
-    if (char === "|") {
-      cells.push(current.trim());
-      current = "";
-      continue;
+    return <span className="text-ink-muted">[{label}]</span>;
+  },
+  // Fenced: <pre><code class="language-…"> (pre owns block chrome). Bare code = inline.
+  // Unlabeled fences may omit language-*; pre still provides mono block layout.
+  code: ({ className, children }) => {
+    if (className) {
+      return <code className={`font-mono ${className}`.trim()}>{children}</code>;
     }
-    current += char;
-  }
+    return (
+      <code className="rounded bg-canvas-inset px-1 py-0.5 font-mono text-[12px]">{children}</code>
+    );
+  },
+  pre: ({ children }) => (
+    <pre className="max-w-full overflow-x-auto rounded-sm border border-hairline bg-canvas-inset p-3 font-mono text-[13px] leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+      {children}
+    </pre>
+  ),
+  table: ({ children }) => (
+    <div className="max-w-full overflow-x-auto rounded-md border border-hairline">
+      <table className="min-w-full border-collapse text-left text-sm">{children}</table>
+    </div>
+  ),
+  thead: ({ children }) => <thead className="bg-surface-default">{children}</thead>,
+  tbody: ({ children }) => <tbody>{children}</tbody>,
+  tr: ({ children }) => <tr className="border-t border-hairline-soft first:border-t-0">{children}</tr>,
+  th: ({ children, style }) => (
+    <th
+      className={`border-b border-hairline px-3 py-2 font-semibold ${alignClass(style?.textAlign)}`}
+      style={style}
+    >
+      {children}
+    </th>
+  ),
+  td: ({ children, style }) => (
+    <td
+      className={`max-w-[320px] px-3 py-2 align-top break-words [overflow-wrap:anywhere] ${alignClass(style?.textAlign)}`}
+      style={style}
+    >
+      {children}
+    </td>
+  ),
+  // GFM task-list checkboxes are display-only (model output, not interactive form).
+  input: ({ checked, type }) => {
+    if (type !== "checkbox") return null;
+    return (
+      <input
+        type="checkbox"
+        defaultChecked={Boolean(checked)}
+        disabled
+        className="mr-1 align-middle"
+      />
+    );
+  },
+};
 
-  cells.push(current.trim());
-  return cells;
-}
-
-function tableAlignment(separator: string): TableAlignment {
-  const value = separator.replace(/\s/g, "");
-  if (value.startsWith(":") && value.endsWith(":")) return "center";
-  if (value.endsWith(":")) return "right";
-  return "left";
-}
-
-function tableAlignClass(alignment: TableAlignment | undefined): string {
-  if (alignment === "center") return "text-center";
-  if (alignment === "right") return "text-right";
+function alignClass(align: string | number | undefined): string {
+  if (align === "center") return "text-center";
+  if (align === "right") return "text-right";
   return "text-left";
 }
 
-function isMarkdownBoundary(line: string): boolean {
-  return (
-    /^```/.test(line) ||
-    /^(#{1,3})\s+/.test(line) ||
-    /^>\s?/.test(line) ||
-    /^\s*[-*]\s+/.test(line) ||
-    /^\s*\d+[.)]\s+/.test(line) ||
-    isTableRow(line)
-  );
-}
+/** Allow relative / http(s) / mailto; reject javascript: and other executable schemes. */
+export function sanitizeHref(href: string | undefined | null): string | undefined {
+  if (href == null) return undefined;
+  const trimmed = String(href).trim();
+  if (!trimmed) return undefined;
 
-function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode[] {
-  const nodes: ReactNode[] = [];
-  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\([^)]+\))/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = pattern.exec(text))) {
-    if (match.index > lastIndex) nodes.push(text.slice(lastIndex, match.index));
-    const token = match[0];
-    const key = `${keyPrefix}-${match.index}`;
-
-    if (token.startsWith("`")) {
-      nodes.push(
-        <code key={key} className="rounded bg-canvas-inset px-1 py-0.5 font-mono text-[12px]">
-          {token.slice(1, -1)}
-        </code>,
-      );
-    } else if (token.startsWith("**")) {
-      nodes.push(
-        <strong key={key} className="font-semibold">
-          {token.slice(2, -2)}
-        </strong>,
-      );
-    } else {
-      const link = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
-      if (link) {
-        nodes.push(
-          <a
-            key={key}
-            href={link[2]}
-            target="_blank"
-            rel="noreferrer"
-            className="text-status-running underline underline-offset-2"
-          >
-            {link[1]}
-          </a>,
-        );
-      } else {
-        nodes.push(token);
-      }
-    }
-    lastIndex = match.index + token.length;
+  // Protocol-relative or scheme present
+  const schemeMatch = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(trimmed);
+  if (schemeMatch) {
+    const scheme = schemeMatch[1].toLowerCase();
+    if (scheme === "http" || scheme === "https" || scheme === "mailto") return trimmed;
+    return undefined;
   }
 
-  if (lastIndex < text.length) nodes.push(text.slice(lastIndex));
-  return nodes;
+  // Relative paths, anchors, query-only — safe for in-app navigation presentation
+  return trimmed;
 }
