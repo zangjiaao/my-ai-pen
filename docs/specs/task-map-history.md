@@ -46,7 +46,7 @@ From the operator’s view:
 
 1. Introduce **Task Map** as the user-visible checklist unit for a **Participant Session**: exactly **one live map** occupies RightPanel Tasks while the participation is active.  
 2. **Archive-then-switch:** when a map is sealed or replaced under policy, the prior map becomes a **frozen historical revision** (read-only); a new live map takes the panel.  
-3. **RightPanel Tasks header** gains a **revision selector** (dropdown) so the operator can open historical maps without mutating them. Agent todo ops always target **live**.  
+3. **~~RightPanel Tasks header revision selector~~** — **superseded by Spec [#354](https://github.com/zangjiaao/my-ai-pen/issues/354)**: operator workbench no longer ships history dropdown; incomplete progress value = Session handoff. Process records may remain audit-only. 
 4. **Unified Free + Graph lifecycle** (not per-stage history rows):  
    - Free: one whole Free checklist = one map.  
    - Graph: **whole Graph participation** = one map while alive (stage advance stays **inside** the live map; #281 stage-local todo rules still apply to mutations).  
@@ -157,7 +157,7 @@ From the operator’s view:
    - open items + grant → archive then init;  
    - sealed + init → archive then init **without** grant;  
    - empty live first init → create live, no archive.  
-3. **Tertiary seam (S3) — UI projection:** Product-state / conversation snapshot exposes `task_map_revisions[]` (id, label, sealed_at / archived_at, work_mode Free|Graph, optional graph id, item counts) + `live_revision_id` + full snapshot payload for the viewed id. RightPanel Tasks header selector binds to this list; default view = live.  
+3. **Tertiary seam (S3) — UI projection:** Product-state may still expose `task_map_revisions[]` for audit/backend. **Operator RightPanel revision selector is retired** (Spec #354). Default view = live only. 
 4. **Graph participation = one map:** While a Graph Participant Session is active, L1/L2 plan_tree updates apply to the **same** live revision (E5). Do not emit a revision per stage completion.  
 5. **Seal evaluation:** Run after todo mutations and after Graph stage settlement side-effects that terminalize L2. Predicate = all user-visible work items terminal; failed L1 with residual open L2 → not sealed.  
 6. **E4 restart Graph:** Wire to existing explicit user Graph start/restart controls only; treat as authorized map switch (archive current). Do not infer restart from free text.  

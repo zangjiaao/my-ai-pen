@@ -31,6 +31,7 @@ import TasksMapHeader from "./TasksMapHeader";
 import type { TaskMapRevision } from "../lib/taskMapHistory";
 import { isViewingHistory, planTreeForView } from "../lib/taskMapHistory";
 import { discloseTaskListCap, TASKS_WORK_ITEM_CAP } from "../lib/tasksListCap";
+import { authFetch } from "../lib/api";
 import {
   TRAFFIC_EMPTY_COPY,
   bodyDisplayText,
@@ -149,6 +150,10 @@ interface Props {
   onOpenAsset?: (asset: Partial<SecurityAsset>) => void;
   /** Spec #308: open Worker process audit dialog. */
   onWorkerClick?: (agent: StrixAgentStatus, workerOrdinal?: number) => void;
+  /** Spec #354: Case id for Session Reset/Delete APIs. */
+  conversationId?: string | null;
+  /** Spec #354 S4: expert ids with pending incomplete-map handoff. */
+  pendingHandoffExpertIds?: string[];
 }
 
 const RIGHT_PANEL_WIDTH_KEY = "my_ai_pen_right_panel_width";
@@ -199,9 +204,12 @@ export default function RightPanel({
   onOpenVulnerability,
   onOpenAsset,
   onWorkerClick,
+  conversationId = null,
+  pendingHandoffExpertIds = [],
 }: Props) {
   const [tab, setTab] = useState<Tab>("status");
   const [selectedTrafficId, setSelectedTrafficId] = useState<string | null>(null);
+  const [sessionActionBusy, setSessionActionBusy] = useState(false);
   const trafficRows = useMemo(
     () => projectTrafficListRows(trafficExchanges as TrafficExchange[]),
     [trafficExchanges],
@@ -375,7 +383,7 @@ export default function RightPanel({
         {tab === "status" && (
           <div className="space-y-4">
             {/* Spec #324 D1: Case tokens+cost primary; active count secondary. No elapsed hero. */}
-            {(displayAgents.length > 0 || Boolean(caseRun?.llm_usage)) && (
+            {(displayAgents.length > 0 || Boolean(caseRun?.llm_usage) || Boolean(conversationId)) && (
               <section data-testid="case-collab-section">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <p className="min-w-0 text-xs text-ink-muted">
@@ -389,8 +397,81 @@ export default function RightPanel({
                     {caseMeteringText}
                   </p>
                 </div>
+                {pendingHandoffExpertIds.length > 0 && (
+                  <p
+                    className="mb-2 rounded-md bg-severity-medium/15 px-2 py-1 text-[11px] text-ink-secondary"
+                    data-testid="pending-handoff-badge"
+                  >
+                    Pending handoff · {pendingHandoffExpertIds.join(", ")} — same expert re-entry resumes checklist
+                  </p>
+                )}
                 {displayAgents.length > 0 && (
                   <StrixAgentList agents={displayAgents} onWorkerClick={onWorkerClick} />
+                )}
+                {/* Spec #354 S3: Session Reset / Delete with confirm; Sub End remains on Worker audit. */}
+                {conversationId && (
+                  <div className="mt-2 flex flex-wrap gap-2" data-testid="session-lifecycle-actions">
+                    <button
+                      type="button"
+                      data-testid="session-reset-btn"
+                      disabled={sessionActionBusy}
+                      className="rounded border border-hairline px-2 py-1 text-[11px] text-ink hover:bg-canvas-inset disabled:opacity-50"
+                      onClick={async () => {
+                        if (!window.confirm("Reset this Session? Model memory clears; incomplete Tasks stay.")) return;
+                        setSessionActionBusy(true);
+                        try {
+                          const expertId =
+                            displayAgents.find((a) => !a.parent_id)?.expert_id ||
+                            displayAgents[0]?.expert_id ||
+                            undefined;
+                          await authFetch(`/api/conversations/${conversationId}/sessions/reset`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ expert_id: expertId || null }),
+                          });
+                        } catch (e) {
+                          console.error("[RightPanel] session reset failed", e);
+                        } finally {
+                          setSessionActionBusy(false);
+                        }
+                      }}
+                    >
+                      Reset Session
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="session-delete-btn"
+                      disabled={sessionActionBusy}
+                      className="rounded border border-hairline px-2 py-1 text-[11px] text-severity-critical hover:bg-canvas-inset disabled:opacity-50"
+                      onClick={async () => {
+                        if (
+                          !window.confirm(
+                            "Delete this Session? Incomplete Tasks are held for same-expert handoff.",
+                          )
+                        ) {
+                          return;
+                        }
+                        setSessionActionBusy(true);
+                        try {
+                          const expertId =
+                            displayAgents.find((a) => !a.parent_id)?.expert_id ||
+                            displayAgents[0]?.expert_id ||
+                            undefined;
+                          await authFetch(`/api/conversations/${conversationId}/sessions/delete`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ expert_id: expertId || null }),
+                          });
+                        } catch (e) {
+                          console.error("[RightPanel] session delete failed", e);
+                        } finally {
+                          setSessionActionBusy(false);
+                        }
+                      }}
+                    >
+                      Delete Session
+                    </button>
+                  </div>
                 )}
               </section>
             )}

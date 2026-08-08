@@ -86,6 +86,16 @@ def objective_title(phase: str, key: str) -> str:
     return titles.get((phase, key), key.replace("_", " ").title())
 
 
+def _pending_handoff_expert_ids(context: object) -> list[str]:
+    """Spec #354: expert ids with incomplete map holds (collab badge)."""
+    try:
+        from app.services.session_handoff import pending_handoff_expert_ids
+
+        return pending_handoff_expert_ids(context if isinstance(context, dict) else {})
+    except Exception:
+        return []
+
+
 def ensure_plan_tree_shape(items: list[dict], phase: str | None, completed: set[str], status: str, workflow_kind: str | None = None) -> list[dict]:
     nodes = [dict(item) for item in items if isinstance(item, dict)]
     if workflow_kind == "strix":
@@ -444,10 +454,12 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
         "attack_surface": attack_surface_items,
         "coverage": coverage_items,
         "plan_tree": plan_tree,
-        # Spec #321: Task Map history (Session-scoped; FE history view only).
+        # Spec #321: Task Map history (audit/backend; operator selector retired by #354).
         "task_map_revisions": task_map_proj.get("task_map_revisions") or [],
         "live_revision_id": task_map_proj.get("live_revision_id"),
         "live_sealed": bool(task_map_proj.get("live_sealed")),
+        # Spec #354 S4: pending incomplete-map holds per expert (collab badge).
+        "pending_handoff_expert_ids": _pending_handoff_expert_ids(context),
         "captured_traffic": captured_traffic_items,
         # Spec #309: Case traffic audit list (replaces right-panel Activity projection).
         "traffic_exchanges": traffic_exchange_items,

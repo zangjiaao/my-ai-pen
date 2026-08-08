@@ -1,3 +1,4 @@
+import asyncio
 import json
 import hashlib
 import re
@@ -36,6 +37,9 @@ node_connections: dict[str, WebSocket] = {}
 conversation_subscribers: dict[str, set[WebSocket]] = {}
 conversation_node: dict[str, str] = {}
 pending_approvals: dict[str, dict] = {}
+# Spec #354: wait for Node session lifecycle acks (dispose/reset/case release).
+# key = f"{type}:{conversation_id}:{expert_id or ''}"
+_session_lifecycle_acks: dict[str, asyncio.Future] = {}
 # Spec #313 L10: durable option snapshot keyed by request_id — survives pending_approvals pop
 # (interrupt freeze / orphaned confirm) so workset expand still works.
 choice_card_snapshots: dict[str, dict] = {}
@@ -598,12 +602,13 @@ async def _apply_worker_state(
             elif current == "running" and reason_text in {
                 "interrupted", "not_busy", "canceled", "cancel", "interrupt"
             }:
-                # All experts idle after interrupt — settle session.
+                # Spec #354 L5/L7: user interrupt pauses the Task package (yellow/incomplete),
+                # not Case death (canceled/red). Session runtime is retained on Node.
                 try:
-                    transition_conversation(c, "canceled")
+                    transition_conversation(c, "incomplete")
                 except ConversationStatusError:
                     try:
-                        transition_conversation(c, "incomplete")
+                        transition_conversation(c, "canceled")
                     except ConversationStatusError:
                         pass
 
@@ -1001,8 +1006,58 @@ async def _settle_running_conversations_for_node(node_id: str, reason: str = "no
     return settled
 
 
+def _session_lifecycle_ack_key(msg_type: str, conversation_id: object, expert_id: object = None) -> str:
+    cid = str(conversation_id or "").strip()
+    eid = str(expert_id or "").strip()
+    return f"{msg_type}:{cid}:{eid}"
+
+
+def resolve_session_lifecycle_ack(msg: dict) -> None:
+    """Complete any waiter for session_dispose_ack / session_reset_ack / case_session_release_ack."""
+    t = str(msg.get("type") or "").strip()
+    if t not in {"session_dispose_ack", "session_reset_ack", "case_session_release_ack"}:
+        return
+    cid = msg.get("conversation_id") or msg.get("conversationId")
+    eid = msg.get("expert_id") or msg.get("expertId")
+    key = _session_lifecycle_ack_key(t, cid, eid)
+    fut = _session_lifecycle_acks.pop(key, None)
+    if fut and not fut.done():
+        fut.set_result(dict(msg))
+
+
+async def wait_session_lifecycle_ack(
+    *,
+    ack_type: str,
+    conversation_id: str,
+    expert_id: str | None = None,
+    timeout_s: float = 5.0,
+) -> dict | None:
+    """Wait for a Node lifecycle ack (Spec #354 handoff SoT)."""
+    key = _session_lifecycle_ack_key(ack_type, conversation_id, expert_id)
+    loop = asyncio.get_running_loop()
+    fut: asyncio.Future = loop.create_future()
+    _session_lifecycle_acks[key] = fut
+    try:
+        return await asyncio.wait_for(fut, timeout=timeout_s)
+    except asyncio.TimeoutError:
+        _session_lifecycle_acks.pop(key, None)
+        return None
+    except Exception:
+        _session_lifecycle_acks.pop(key, None)
+        return None
+
+
 async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, conv_id: str | None) -> None:
     """Process one agent-node websocket message. Must not raise into the receive loop."""
+    # Spec #354: lifecycle acks (no UI row; complete API waiters).
+    if str(msg.get("type") or "") in {
+        "session_dispose_ack",
+        "session_reset_ack",
+        "case_session_release_ack",
+    }:
+        resolve_session_lifecycle_ack(msg)
+        return
+
     # Node reports physical pack install state (after expert_sync / expert_install).
     if msg.get("type") == "experts_status" and client_id:
         installed = msg.get("installed") or msg.get("effective") or []
@@ -5457,6 +5512,8 @@ async def _dispatch_task_assign_to_node(
         task_msg["expert_name"] = expert_name
     task_msg = await _merge_case_roe_into_task_assign(conv_id, task_msg)
     task_msg = await _attach_case_context_to_task_assign(conv_id, task_msg)
+    # Spec #354 S4: same-expert auto-handoff of pending incomplete Todo map.
+    task_msg = await _attach_pending_handoff_to_task_assign(conv_id, task_msg, expert_id=expert_id)
     # Spec #277: Session work envelope (Free continuity; Case sticky must not silent-promote Graph).
     # Includes C1 graph_execution when work_mode=graph.
     task_msg, work_envelope = await _apply_participant_work_envelope(
@@ -5745,6 +5802,43 @@ async def _merge_case_roe_into_task_assign(conv_id: str | None, task_msg: dict) 
     except Exception as e:
         print(f"[WS] merge case roe error: {e}")
     return out
+
+
+async def _attach_pending_handoff_to_task_assign(
+    conv_id: str | None,
+    task_msg: dict,
+    *,
+    expert_id: str | None,
+) -> dict:
+    """Spec #354 S4: consume Case pending hold for this expert into task_assign."""
+    if not conv_id:
+        return task_msg
+    eid = str(expert_id or task_msg.get("expert_id") or "").strip()
+    if not eid:
+        return task_msg
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+        from app.services.session_handoff import take_pending_handoff
+
+        async with async_session() as db:
+            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(str(conv_id))))
+            c = r.scalar_one_or_none()
+            if not c:
+                return task_msg
+            ctx = c.context if isinstance(c.context, dict) else {}
+            new_ctx, held = take_pending_handoff(ctx, eid)
+            if not held:
+                return task_msg
+            c.context = new_ctx
+            await db.commit()
+            out = dict(task_msg)
+            out["pending_handoff_todos"] = held.get("open_todos") or []
+            out["pending_handoff"] = True
+            return out
+    except Exception as e:
+        print(f"[WS] pending handoff attach error: {e}")
+        return task_msg
 
 
 async def _attach_case_context_to_task_assign(conv_id: str | None, task_msg: dict) -> dict:

@@ -152,6 +152,8 @@ async def delete_conversation(conv_id: str, current_user: dict = Depends(get_cur
         n = r.scalar_one_or_none()
         if n:
             n.current_sessions = max(0, (n.current_sessions or 0) - 1)
+    # Spec #354 Case close protocol: release all Node captains for this Case.
+    release_result = await _notify_node_case_session_release(node_id, str(conversation_id))
     await db.execute(delete(Message).where(Message.conversation_id == conversation_id))
     await db.execute(delete(Evidence).where(Evidence.conversation_id == conversation_id))
     # Vulnerability + asset ledgers are user-owned and long-lived: do not cascade-delete.
@@ -170,10 +172,101 @@ async def delete_conversation(conv_id: str, current_user: dict = Depends(get_cur
         "title": title,
         "status": status,
         "node_id": str(node_id) if node_id else None,
+        "case_session_release": release_result,
     })
     await db.delete(c)
     await db.commit()
-    return {"ok": True}
+    return {"ok": True, "case_session_release": release_result}
+
+
+class SessionActionBody(BaseModel):
+    expert_id: str | None = None
+
+
+@router.post("/{conv_id}/sessions/reset")
+async def reset_participant_session(
+    conv_id: str,
+    body: SessionActionBody | None = None,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Spec #354 L9: Session Reset — clear model memory, keep incomplete Todo."""
+    c = await _get_conv(conv_id, current_user, db)
+    expert_id = str((body.expert_id if body else None) or _active_expert_id(c) or "").strip()
+    result = await _notify_node_session_op(
+        c.node_id,
+        "session_reset",
+        conversation_id=str(c.id),
+        expert_id=expert_id or None,
+    )
+    await _audit(
+        db,
+        uuid.UUID(current_user["user_id"]),
+        "session.reset",
+        "conversation",
+        c.id,
+        c.id,
+        {"expert_id": expert_id or None, "node": result},
+    )
+    await db.commit()
+    return {"ok": True, "expert_id": expert_id or None, "node": result}
+
+
+@router.post("/{conv_id}/sessions/delete")
+async def delete_participant_session(
+    conv_id: str,
+    body: SessionActionBody | None = None,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Spec #354 L10: Session Delete — dispose identity; hold incomplete map for handoff."""
+    from app.services.session_handoff import put_pending_handoff
+
+    c = await _get_conv(conv_id, current_user, db)
+    expert_id = str((body.expert_id if body else None) or _active_expert_id(c) or "").strip()
+    result = await _notify_node_session_op(
+        c.node_id,
+        "session_dispose",
+        conversation_id=str(c.id),
+        expert_id=expert_id or None,
+    )
+    # Node dispose is fire-and-forget; prefer Node open_todos when ack is wired later.
+    # Always fall back to platform product-state plan_tree so handoff works offline.
+    open_todos: list = []
+    if isinstance(result.get("ack"), dict):
+        raw = result["ack"].get("open_todos")
+        if isinstance(raw, list) and raw:
+            open_todos = raw
+    ctx = dict(c.context) if isinstance(c.context, dict) else {}
+    if not open_todos:
+        open_todos = _open_todos_from_context(ctx)
+    if expert_id:
+        ctx = put_pending_handoff(ctx, expert_id=expert_id, open_todos=open_todos, source="session_delete")
+        # Clear Session-private work identity for this expert (dispose product Session).
+        sessions = dict(ctx.get("sessions") or {}) if isinstance(ctx.get("sessions"), dict) else {}
+        if expert_id in sessions:
+            sessions.pop(expert_id, None)
+            if sessions:
+                ctx["sessions"] = sessions
+            else:
+                ctx.pop("sessions", None)
+        c.context = ctx
+    await _audit(
+        db,
+        uuid.UUID(current_user["user_id"]),
+        "session.delete",
+        "conversation",
+        c.id,
+        c.id,
+        {"expert_id": expert_id or None, "node": result, "held": bool(open_todos)},
+    )
+    await db.commit()
+    return {
+        "ok": True,
+        "expert_id": expert_id or None,
+        "pending_handoff": bool(open_todos),
+        "node": result,
+    }
 
 
 @router.patch("/{conv_id}")
@@ -799,3 +892,116 @@ async def _get_conv(conv_id: str, current_user: dict, db: AsyncSession) -> Conve
 
 def _out(c: Conversation) -> ConversationOut:
     return ConversationOut(**conversation_summary(c))
+
+
+def _active_expert_id(c: Conversation) -> str | None:
+    ctx = c.context if isinstance(c.context, dict) else {}
+    task = ctx.get("task") if isinstance(ctx.get("task"), dict) else {}
+    eid = str(task.get("expert_id") or task.get("engagement") or task.get("role") or "").strip()
+    return eid or None
+
+
+def _open_todos_from_context(ctx: dict) -> list:
+    """Build incomplete Todo-phase snapshot from platform plan_tree for handoff hold."""
+    tree = ctx.get("plan_tree") if isinstance(ctx.get("plan_tree"), list) else []
+    if not tree:
+        checkpoint = ctx.get("checkpoint") if isinstance(ctx.get("checkpoint"), dict) else {}
+        tree = checkpoint.get("plan_tree") if isinstance(checkpoint.get("plan_tree"), list) else []
+    open_items: list[str] = []
+    for node in tree:
+        if not isinstance(node, dict):
+            continue
+        level = str(node.get("level") or "work_item").lower()
+        if level not in {"work_item", "task", ""}:
+            continue
+        status = str(node.get("status") or "").lower()
+        if status in {"done", "failed", "skipped", "blocked"}:
+            continue
+        title = str(node.get("title") or node.get("name") or "").strip()
+        if title:
+            open_items.append(title)
+    if not open_items:
+        return []
+    return [{"name": "Handoff", "tasks": [{"title": t, "status": "pending"} for t in open_items]}]
+
+
+async def _notify_node_case_session_release(node_id: object, conversation_id: str) -> dict:
+    """Spec #354: structured Case close → Node release all captains."""
+    nid = str(node_id or "").strip()
+    if not nid:
+        return {"delivered": False, "reason": "no_node"}
+    return await _push_node_json(
+        nid,
+        {
+            "type": "case_session_release",
+            "conversation_id": conversation_id,
+        },
+        wait_ack="case_session_release_ack",
+        conversation_id=conversation_id,
+        timeout_s=6.0,
+    )
+
+
+async def _notify_node_session_op(
+    node_id: object,
+    op: str,
+    *,
+    conversation_id: str,
+    expert_id: str | None,
+) -> dict:
+    nid = str(node_id or "").strip()
+    if not nid:
+        return {"delivered": False, "reason": "no_node"}
+    msg: dict = {
+        "type": op,
+        "conversation_id": conversation_id,
+    }
+    if expert_id:
+        msg["expert_id"] = expert_id
+    ack = "session_dispose_ack" if op == "session_dispose" else "session_reset_ack" if op == "session_reset" else None
+    return await _push_node_json(
+        nid,
+        msg,
+        wait_ack=ack,
+        conversation_id=conversation_id,
+        expert_id=expert_id,
+        timeout_s=6.0,
+    )
+
+
+async def _push_node_json(
+    node_id: str,
+    msg: dict,
+    *,
+    wait_ack: str | None = None,
+    conversation_id: str | None = None,
+    expert_id: str | None = None,
+    timeout_s: float = 5.0,
+) -> dict:
+    """Push to live node WebSocket; optionally wait for Spec #354 lifecycle ack."""
+    try:
+        from app.ws import router as ws_router
+    except Exception as e:
+        return {"delivered": False, "reason": f"import:{e}"}
+    ws = ws_router.node_connections.get(str(node_id))
+    if not ws:
+        return {"delivered": False, "reason": "offline"}
+    try:
+        await ws.send_text(json.dumps(msg, ensure_ascii=False))
+    except Exception as e:
+        print(f"[api] push_node_json failed node={str(node_id)[:8]} type={msg.get('type')}: {e}")
+        return {"delivered": False, "reason": str(e)}
+    if not wait_ack or not conversation_id:
+        return {"delivered": True}
+    try:
+        ack = await ws_router.wait_session_lifecycle_ack(
+            ack_type=wait_ack,
+            conversation_id=conversation_id,
+            expert_id=expert_id,
+            timeout_s=timeout_s,
+        )
+        if ack is None:
+            return {"delivered": True, "ack": None, "ack_timeout": True}
+        return {"delivered": True, "ack": ack}
+    except Exception as e:
+        return {"delivered": True, "ack_error": str(e)}

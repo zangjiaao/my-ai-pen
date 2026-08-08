@@ -954,7 +954,7 @@ export function createHardGraphStageExecutor(options: {
         graphRun?.usage.mergeSnapshot(
           stageUsage.snapshot({ tool_calls: obsCounters.toolCallCount }),
         );
-        // Spec #283 I0.9: shared captain end policy (interrupt → park; stage settle → dispose).
+        // Spec #283 I0.9 + #354: interrupt/stage settle → park; Case/Session dispose pending → dispose.
         // #282 mode wire remains: incomplete continue → Hard path; attach uses park when present.
         applyCaptainEndDisposition({
           decision: decideParkOnEnd({

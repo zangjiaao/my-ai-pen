@@ -2,8 +2,8 @@
  * Spec #283 (I0.9): run the next user turn on a parked captain working runtime.
  * Attach path only — cold reseed is the caller's fallback.
  *
- * End policy matches Free/Graph interrupt finallies via decideCaptainEndDisposition:
- * incomplete / abort → re-park; product-terminal complete → dispose.
+ * End policy matches Free/Graph finallies via decideCaptainEndDisposition (Spec #354):
+ * incomplete / abort / package complete → re-park; dispose only via explicit whitelist.
  */
 
 import { join } from "node:path";

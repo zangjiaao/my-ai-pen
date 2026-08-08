@@ -302,6 +302,7 @@ export default function ConversationPage() {
   /** Spec #321 Task Map history — product-state revisions; FE selection is view-only. */
   const [taskMapRevisions, setTaskMapRevisions] = useState<TaskMapRevision[]>([]);
   const [liveRevisionId, setLiveRevisionId] = useState<string | null>(null);
+  const [pendingHandoffExpertIds, setPendingHandoffExpertIds] = useState<string[]>([]);
   const [viewedRevisionId, setViewedRevisionId] = useState<string | null>(null);
   /** Prior live id for selection policy (follow live after archive unless viewing history). */
   const liveRevisionIdRef = useRef<string | null>(null);
@@ -668,6 +669,17 @@ export default function ConversationPage() {
           : [];
       return preferRicherPlanTree(prev, next);
     });
+    // Spec #354 S4: pending incomplete-map holds for collab badge.
+    {
+      const raw =
+        (snapshot as { pending_handoff_expert_ids?: unknown }).pending_handoff_expert_ids ??
+        (fallback as { pending_handoff_expert_ids?: unknown } | undefined)?.pending_handoff_expert_ids;
+      if (Array.isArray(raw)) {
+        setPendingHandoffExpertIds(raw.map((x) => String(x || "").trim()).filter(Boolean));
+      } else {
+        setPendingHandoffExpertIds([]);
+      }
+    }
     // Spec #321: Task Map revisions from product-state (do not invent history on FE).
     // Keep intentional history selection; if user was on live, follow new live after archive.
     {
@@ -3251,6 +3263,8 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               assets={assets}
               taskContext={taskContext}
               engagementCloseout={engagementCloseout}
+              conversationId={activeId}
+              pendingHandoffExpertIds={pendingHandoffExpertIds}
               onOpenVulnerability={setSelectedVulnerability}
               onOpenAsset={setSelectedAsset}
               onWorkerClick={(agent, workerOrdinal) => {

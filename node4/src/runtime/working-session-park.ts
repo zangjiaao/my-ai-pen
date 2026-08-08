@@ -1,26 +1,32 @@
 /**
- * Spec #283 (I0.9): Working session continue after interrupt.
+ * Spec #283 (I0.9) + Spec #354: Session owns runtime; Task is dispatch package only.
  *
- * Park the captain working runtime on user interrupt (do not dispose).
+ * Park the captain working runtime across Task package settle/error/interrupt.
  * Continue (same Participant Session + work mode) attaches the next user
  * message as the next turn on that parked runtime.
  *
- * #282 = mode continuity (Graph not Free). I0.9 = working-runtime continuity.
- * Park is memory-only within the live Node process (v1). Process death / TTL
- * miss → honest mode-correct reseed (never silent Free demotion when Graph).
+ * #282 = mode continuity (Graph not Free). I0.9 / #354 = working-runtime continuity.
+ * Park is memory-only within the live Node process (v1). Process death → honest
+ * mode-correct reseed (never silent Free demotion when Graph).
  *
  * End policy (shared by Free finally, Graph stage finally, parked-continue):
  * - interrupt/abort → park
- * - product-terminal complete → dispose
- * - incomplete mid-work (incl. natural end of a parked-continue turn) → re-park
+ * - Task package complete/error/incomplete → park (never dispose for package settle)
+ * - explicit dispose whitelist only: case_close | session_delete | manual_end | expert_transfer
+ *
+ * L2 (#354): idle park TTL is not product Session death (default disabled).
  */
 
 import type { Node4AgentSession } from "./run-node4-agent.js";
 import type { TodoStore } from "../stores/todo.js";
 import type { ToolRuntime } from "../types.js";
 
-/** Default idle park TTL (30 minutes). Documented product choice for v1. */
-export const DEFAULT_PARK_TTL_MS = 30 * 60 * 1000;
+/**
+ * Default idle park TTL. Spec #354 L2: do not reclaim Participant Session for
+ * product idle reasons. `<= 0` means never expire (see `isParkExpired`).
+ * Callers may still pass an explicit positive ttlMs for tests.
+ */
+export const DEFAULT_PARK_TTL_MS = 0;
 
 export type WorkingWorkMode = "free" | "graph";
 
@@ -45,9 +51,28 @@ export type ParkedWorkingRuntime = {
 
 export type CaptainEndDisposition =
   | { disposition: "park"; reason: "interrupted" | "incomplete" }
-  | { disposition: "dispose"; reason: "product_terminal" | "expert_transfer" | "settled" };
+  | {
+      disposition: "dispose";
+      reason: "product_terminal" | "expert_transfer" | "settled" | "case_close" | "session_delete" | "manual_end";
+    };
+
+/** Explicit product dispose reasons (Spec #354 dispose whitelist). */
+export type CaptainDisposeReason =
+  | "case_close"
+  | "session_delete"
+  | "manual_end"
+  | "expert_transfer";
 
 const parks = new Map<string, ParkedWorkingRuntime>();
+
+/**
+ * Spec #354: pending product dispose while a burst is still live.
+ * Finally must dispose (not park) when Session delete / Case close already requested.
+ * Keys: exact Session key (`conv::expert`) or Case-wide (`conv` / `conv::*` via isPendingDispose).
+ */
+const pendingDisposeKeys = new Set<string>();
+/** Case-wide pending dispose (all experts under conversation). */
+const pendingDisposeCases = new Set<string>();
 
 /** Participant Session key: conversation_id + expert_id (fallback conversation alone). */
 export function parkSessionKey(
@@ -58,6 +83,50 @@ export function parkSessionKey(
   const e = String(expertId || "").trim();
   if (!c) return "";
   return e ? `${c}::${e}` : c;
+}
+
+/** Mark Session for dispose-on-finally (Session delete while mid-burst). */
+export function markPendingSessionDispose(
+  conversationId: string,
+  expertId?: string | null,
+): void {
+  const key = parkSessionKey(conversationId, expertId);
+  if (key) pendingDisposeKeys.add(key);
+}
+
+/** Mark all Sessions under Case for dispose-on-finally (Case close). */
+export function markPendingCaseDispose(conversationId: string): void {
+  const c = String(conversationId || "").trim();
+  if (c) pendingDisposeCases.add(c);
+}
+
+export function clearPendingSessionDispose(
+  conversationId: string,
+  expertId?: string | null,
+): void {
+  const key = parkSessionKey(conversationId, expertId);
+  if (key) pendingDisposeKeys.delete(key);
+}
+
+export function clearPendingCaseDispose(conversationId: string): void {
+  const c = String(conversationId || "").trim();
+  if (c) pendingDisposeCases.delete(c);
+}
+
+export function isPendingDispose(
+  conversationId: string,
+  expertId?: string | null,
+): boolean {
+  const c = String(conversationId || "").trim();
+  if (!c) return false;
+  if (pendingDisposeCases.has(c)) return true;
+  const key = parkSessionKey(conversationId, expertId);
+  return Boolean(key && pendingDisposeKeys.has(key));
+}
+
+export function clearPendingDisposeForTests(): void {
+  pendingDisposeKeys.clear();
+  pendingDisposeCases.clear();
 }
 
 export function isParkExpired(
@@ -73,45 +142,58 @@ export function isParkExpired(
  * Unified captain end disposition — one policy for Free finally, Graph stage finally,
  * and parked-continue finally (Issue 4: avoid dual end policies).
  *
+ * Spec #354: Task package settle is never Session dispose. Dispose only via
+ * explicit whitelist (case_close / session_delete / manual_end / expert_transfer).
+ *
  * - aborted → park (interrupt)
- * - productTerminal → dispose (true Session/engagement terminal only)
- * - otherwise incomplete mid-work → park (multi-turn continuity after continue)
+ * - explicit disposeReason / expertTransfer → dispose
+ * - productTerminal (legacy flag) → still park unless disposeReason set
+ * - otherwise package incomplete/complete/error → park
  */
 export function decideCaptainEndDisposition(input: {
   aborted: boolean;
   /**
-   * True only when product harness status is terminal **completed**
-   * (not incomplete). Never set merely because one session.prompt returned.
+   * @deprecated Spec #354 — package "completed" must not dispose captain.
+   * Kept for call-site compatibility; ignored unless disposeReason is set.
    */
   productTerminal?: boolean;
   /** Explicit Expert transfer ends Session park chain. */
   expertTransfer?: boolean;
+  /** Spec #354 dispose whitelist — only these dispose the captain. */
+  disposeReason?: CaptainDisposeReason;
 }): CaptainEndDisposition {
-  if (input.expertTransfer) {
+  if (input.expertTransfer || input.disposeReason === "expert_transfer") {
     return { disposition: "dispose", reason: "expert_transfer" };
+  }
+  if (input.disposeReason === "case_close") {
+    return { disposition: "dispose", reason: "case_close" };
+  }
+  if (input.disposeReason === "session_delete") {
+    return { disposition: "dispose", reason: "session_delete" };
+  }
+  if (input.disposeReason === "manual_end") {
+    return { disposition: "dispose", reason: "manual_end" };
   }
   if (input.aborted) {
     return { disposition: "park", reason: "interrupted" };
   }
-  if (input.productTerminal) {
-    return { disposition: "dispose", reason: "product_terminal" };
-  }
+  // Spec #354: productTerminal alone no longer disposes (Task ≠ Session death).
   return { disposition: "park", reason: "incomplete" };
 }
 
 /**
- * Interrupt-site helper: abort → park; successful stage/burst settle → dispose.
- * Prefer `decideCaptainEndDisposition` for parked-continue (productTerminal from harness).
+ * Free/Graph finally helper: abort or package settle → park (Spec #354).
+ * Explicit dispose only when disposeReason / expertTransfer is set.
  */
 export function decideParkOnEnd(input: {
   aborted: boolean;
   expertTransfer?: boolean;
+  disposeReason?: CaptainDisposeReason;
 }): CaptainEndDisposition {
   return decideCaptainEndDisposition({
     aborted: input.aborted,
-    // Non-abort end of Free/Graph harness burst is product settle of that burst.
-    productTerminal: !input.aborted,
     expertTransfer: input.expertTransfer,
+    disposeReason: input.disposeReason,
   });
 }
 
@@ -171,18 +253,36 @@ export function applyCaptainEndDisposition(options: {
   decision: CaptainEndDisposition;
   entry: Omit<ParkedWorkingRuntime, "parkedAt"> & { parkedAt?: number };
 }): { parked: boolean; disposed: boolean } {
-  if (options.decision.disposition === "park") {
+  // Spec #354: Session delete / Case close while mid-burst → dispose, never re-park.
+  const forceDispose = isPendingDispose(
+    options.entry.conversationId,
+    options.entry.expertId,
+  );
+  const decision = forceDispose
+    ? ({
+        disposition: "dispose",
+        reason: pendingDisposeCases.has(String(options.entry.conversationId || "").trim())
+          ? "case_close"
+          : "session_delete",
+      } as CaptainEndDisposition)
+    : options.decision;
+
+  if (decision.disposition === "park") {
     parkWorkingSession({
       ...options.entry,
       parkedAt: options.entry.parkedAt ?? Date.now(),
     });
     return { parked: true, disposed: false };
   }
+  // Ensure we do not leave a prior park for this Session.
+  const key = parkSessionKey(options.entry.conversationId, options.entry.expertId);
+  if (key) parks.delete(key);
   try {
     void Promise.resolve(options.entry.dispose());
   } catch {
     /* ignore */
   }
+  clearPendingSessionDispose(options.entry.conversationId, options.entry.expertId);
   return { parked: false, disposed: true };
 }
 
@@ -319,11 +419,121 @@ export function harnessStatusAfterParkedContinue(input: {
   return "completed";
 }
 
+/**
+ * Spec #354 L1/L10: dispose one Participant Session park (Session delete).
+ * Returns open todo snapshot items for Case pending-handoff holding.
+ */
+export async function disposeWorkingSession(
+  conversationId: string,
+  expertId?: string | null,
+): Promise<{ disposed: boolean; openTodos: ReturnType<TodoStore["snapshot"]> }> {
+  const key = parkSessionKey(conversationId, expertId);
+  if (!key) return { disposed: false, openTodos: [] };
+  const entry = parks.get(key);
+  if (!entry) return { disposed: false, openTodos: [] };
+  parks.delete(key);
+  let openTodos: ReturnType<TodoStore["snapshot"]> = [];
+  try {
+    openTodos = entry.todo.snapshot();
+  } catch {
+    openTodos = [];
+  }
+  try {
+    await Promise.resolve(entry.dispose());
+  } catch {
+    /* ignore */
+  }
+  return { disposed: true, openTodos };
+}
+
+/**
+ * Spec #354 L1 / Case close protocol: release all captains for a CaseID.
+ */
+export async function disposeWorkingSessionsForCase(
+  conversationId: string,
+): Promise<{ disposed: number; keys: string[] }> {
+  const c = String(conversationId || "").trim();
+  if (!c) return { disposed: 0, keys: [] };
+  const prefix = `${c}::`;
+  const keys: string[] = [];
+  for (const key of [...parks.keys()]) {
+    if (key === c || key.startsWith(prefix)) {
+      keys.push(key);
+    }
+  }
+  for (const key of keys) {
+    const entry = parks.get(key);
+    if (!entry) continue;
+    parks.delete(key);
+    try {
+      await Promise.resolve(entry.dispose());
+    } catch {
+      /* ignore */
+    }
+  }
+  return { disposed: keys.length, keys };
+}
+
+/**
+ * Spec #354 L9: Session Reset — clear model/pi working memory, keep incomplete Todo.
+ * Disposes the parked pi session handle and re-parks todo-only (session null-safe
+ * reseed on next attach). Marks entry so attach path reseeds Agent while reusing Todo.
+ */
+export async function resetWorkingSessionMemory(
+  conversationId: string,
+  expertId?: string | null,
+): Promise<{ ok: boolean; openTodoCount: number; reason?: string }> {
+  const entry = peekParkedSession(conversationId, expertId);
+  if (!entry) {
+    return { ok: false, openTodoCount: 0, reason: "miss" };
+  }
+  let openTodoCount = 0;
+  try {
+    openTodoCount = entry.todo.openCount();
+  } catch {
+    openTodoCount = 0;
+  }
+  try {
+    await Promise.resolve(entry.dispose());
+  } catch {
+    /* ignore */
+  }
+  // Re-park with a no-op session shell so Todo survives; next attach reseeds Agent.
+  const shell: Node4AgentSession = {
+    prompt: async () => {},
+    abort: () => {},
+    dispose: () => {},
+    subscribe: () => () => {},
+    steer: () => {},
+    followUp: () => {},
+    get messages() {
+      return [];
+    },
+  };
+  parkWorkingSession({
+    ...entry,
+    session: shell,
+    dispose: () => {},
+    parkedAt: Date.now(),
+  });
+  // Flag for attach: empty messages means reseed agent in runner when needed.
+  (shell as { __memoryReset?: boolean }).__memoryReset = true;
+  return { ok: true, openTodoCount };
+}
+
+/** True when park session is a post-Reset shell (needs Agent reseed on attach). */
+export function parkNeedsAgentReseed(entry: ParkedWorkingRuntime): boolean {
+  const msgs = entry.session?.messages;
+  if (!Array.isArray(msgs) || msgs.length > 0) return false;
+  return Boolean((entry.session as { __memoryReset?: boolean } | undefined)?.__memoryReset);
+}
+
 export function clearWorkingSessionParksForTests(): void {
   for (const entry of parks.values()) {
     void Promise.resolve(entry.dispose()).catch(() => {});
   }
   parks.clear();
+  clearPendingDisposeForTests();
 }
 
 export function countParkedSessionsForTests(): number {

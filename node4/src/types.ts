@@ -86,6 +86,13 @@ export type TaskEnvelope = {
    */
   todoReplaceAllowed?: boolean;
   /**
+   * Spec #354 S4: incomplete Todo snapshot from Case pending-handoff holding
+   * (same-expert auto-handoff after Session Delete). Structured only.
+   */
+  pendingHandoffTodos?: unknown;
+  /** Spec #354: true when this assign consumes a Case pending hold (force drop ghost park). */
+  pendingHandoff?: boolean;
+  /**
    * Node-configured output language — registry wire code only
    * (auto | zh-CN | zh-TW | en | ja). Normalized at the envelope boundary.
    * Agent-authored narrative surfaces; raw tool stdout is never rewritten.
