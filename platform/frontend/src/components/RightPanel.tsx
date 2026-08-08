@@ -157,6 +157,9 @@ interface Props {
   pendingHandoffExpertIds?: string[];
   /** Spec #354: refresh Case snapshot after Session Reset/Delete. */
   onSessionLifecycleDone?: () => void;
+  /** Spec #354 S2: Case Task package status light (sync Sidebar ↔ collab Main). */
+  packageStatus?: string | null;
+  packageWorking?: boolean;
 }
 
 const RIGHT_PANEL_WIDTH_KEY = "my_ai_pen_right_panel_width";
@@ -210,6 +213,8 @@ export default function RightPanel({
   conversationId = null,
   pendingHandoffExpertIds = [],
   onSessionLifecycleDone,
+  packageStatus = null,
+  packageWorking = false,
 }: Props) {
   const [tab, setTab] = useState<Tab>("status");
   const [selectedTrafficId, setSelectedTrafficId] = useState<string | null>(null);
@@ -441,6 +446,8 @@ export default function RightPanel({
                   <StrixAgentList
                     agents={displayAgents}
                     onWorkerClick={onWorkerClick}
+                    packageStatus={packageStatus}
+                    packageWorking={packageWorking}
                     sessionLifecycle={
                       conversationId
                         ? {

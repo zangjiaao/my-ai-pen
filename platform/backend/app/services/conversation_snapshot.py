@@ -684,31 +684,53 @@ def strix_agents_from_checkpoint(checkpoint: dict, conversation_status: str | No
 
 
 def normalize_agents_for_conversation_status(agents: list[dict], conversation_status: str | None) -> list[dict]:
-    """When the conversation is terminal, open agent rows must not stay 'running'."""
+    """Align collab Main status with Case Task package status (Spec #354 S2/L7).
+
+    Sidebar and AgentRow Main share package status lights. Do **not** map
+    ``incomplete`` → completed (that made yellow Case lights show green on Main).
+    """
     status = str(conversation_status or "").strip().lower()
-    if status not in {"completed", "incomplete", "failed", "canceled", "cancelled"}:
+    if status not in {"completed", "incomplete", "failed", "canceled", "cancelled", "paused"}:
         return agents
-    if status in {"failed"}:
-        terminal_status = "failed"
+    if status == "failed":
+        package_status = "failed"
         terminal_action = "failed"
     elif status in {"canceled", "cancelled"}:
-        terminal_status = "stopped"
+        package_status = "canceled"
         terminal_action = "stopped"
+    elif status in {"incomplete", "paused"}:
+        # Yellow package light — Task pause / interrupt, not "done".
+        package_status = "incomplete" if status == "incomplete" else "paused"
+        terminal_action = "paused"
     else:
-        # completed / incomplete — collaboration tree shows finished work.
-        terminal_status = "completed"
+        package_status = "completed"
         terminal_action = "done"
-    open_statuses = {"running", "pending", "todo", "llm_waiting", "tool_running", ""}
+    open_statuses = {
+        "running",
+        "pending",
+        "todo",
+        "llm_waiting",
+        "tool_running",
+        "working",
+        "chat",
+        "starting",
+        "",
+    }
+    # Main rows also settle idle→package when Case package already terminal.
+    settle_main = open_statuses | {"idle", "completed", "done", "finished", "success"}
     out: list[dict] = []
     for item in agents:
         agent = dict(item)
         current = str(agent.get("status") or "").strip().lower()
-        if current in open_statuses or current in {"working"}:
-            agent["status"] = terminal_status
+        is_main = not str(agent.get("parent_id") or "").strip()
+        should_settle = current in open_statuses or current in {"working"}
+        if is_main and current in settle_main:
+            should_settle = True
+        if should_settle:
+            agent["status"] = package_status
             action = str(agent.get("current_action") or "").strip().lower()
-            if not action or action in open_statuses | {"working", "starting"}:
+            if not action or action in open_statuses | {"working", "starting", "idle", "done"}:
                 agent["current_action"] = terminal_action
-            # Clear in-progress tool chrome when the conversation already ended.
             if current in open_statuses | {"working"}:
                 agent["current_tool"] = ""
             agent["pending_count"] = 0
