@@ -2687,7 +2687,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
         />
         <div className="flex min-w-0 flex-1 overflow-hidden">
           <main data-testid="conversation-main" data-active-conversation-id={activeId || ""} className={`flex min-w-0 flex-1 flex-col ${rightPanelOpen ? "border-r border-hairline-soft" : ""}`}>
-            <div ref={messageScrollerRef} onScroll={handleMessageScroll} className="min-w-0 flex-1 overflow-y-auto px-6 py-4 space-y-4">
+            <div ref={messageScrollerRef} onScroll={handleMessageScroll} className="min-w-0 flex-1 overflow-y-auto px-20 py-4 space-y-4">
               {messages.length === 0 && !activeId && (
                 <div className="flex h-full items-center justify-center">
                   <div className="max-w-md text-center">
@@ -2814,7 +2814,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               })()}
               {/* Spec #312 L10: mechanical WorksetChoiceBar retired — next_steps ChoiceCard in stream. */}
             </div>
-            <div className="p-4 pt-2">
+            <div className="px-16 pt-4 pb-4">
               {/* Agent-style composer: partner chip → (pentest: mode + Goal) → send */}
               <div className="relative rounded-2xl border border-hairline bg-canvas shadow-[0_1px_2px_rgba(0,0,0,0.04)] focus-within:border-ink/40 focus-within:shadow-[0_2px_8px_rgba(0,0,0,0.06)]">
                 {mentionState && mentionOptions.length > 0 && (

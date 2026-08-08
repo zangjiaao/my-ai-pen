@@ -41,7 +41,7 @@ export default function ThinkingCard({
         <span className="min-w-6 flex-1" aria-hidden="true" />
       </button>
       {expanded && projection.showBodyWhenExpanded ? (
-        <div className="space-y-0.5 pb-1 pl-2">
+        <div className="space-y-0.5">
           <div
             data-testid="thinking-card-body"
             className="py-1 text-xs leading-relaxed text-ink-muted whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
