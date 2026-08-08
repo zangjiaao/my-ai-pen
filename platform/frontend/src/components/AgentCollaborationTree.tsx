@@ -6,12 +6,11 @@ import { useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } fr
 import { Bot, GitBranch, Tag } from "lucide-react";
 import {
   agentDisplayName,
-  agentPurposeLine,
   compareAgentNames,
-  looksLikeHandoffPackage,
 } from "../lib/workerPresentation";
 import type { StrixAgentStatus } from "../lib/panelTypes";
 import { formatAgentWorkModeBadge } from "../lib/panelAgentsState";
+import { formatAgentUsageLine } from "../lib/caseMetering";
 
 export type { StrixAgentStatus } from "../lib/panelTypes";
 
@@ -144,7 +143,8 @@ function AgentRow({
   /** Spec #308: open audit dialog for Worker rows. */
   onWorkerOpen?: () => void;
 }) {
-  const summary = summarizeAgentAction(agent);
+  // Spec #324 D1: secondary line is model · requests · tokens — not tool/work narration.
+  const usageLine = formatAgentUsageLine(agent, { short: secondary });
   const displayName = agentDisplayName(agent, workerOrdinal);
   const status = agentStatusLabel(agent.status);
   // Worker open takes precedence for click; expand still via child-count control if needed.
@@ -219,12 +219,15 @@ function AgentRow({
                   </span>
                 )}
               </div>
-              <p
-                className={`${secondary ? "mt-0" : "mt-0.5"} min-w-0 truncate text-xs text-ink-secondary`}
-                title={summary}
-              >
-                {summary}
-              </p>
+              {usageLine ? (
+                <p
+                  className={`${secondary ? "mt-0" : "mt-0.5"} min-w-0 truncate font-mono text-xs text-ink-secondary`}
+                  title={usageLine}
+                  data-testid={primary ? "agent-usage-line" : "sub-usage-line"}
+                >
+                  {usageLine}
+                </p>
+              ) : null}
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
               {childCount > 0 && (
@@ -381,75 +384,7 @@ function agentStatusBadgeClass(status: string | undefined): string {
   return "bg-canvas-inset text-ink-secondary";
 }
 
-export function summarizeAgentAction(agent: StrixAgentStatus): string {
-  const status = agentStatusLabel(agent.status);
-  const isSub = String(agent.role || "").toLowerCase() === "subagent";
-  const purpose = agentPurposeLine(agent);
-
-  if (status === "timeout") return "超时结束";
-  if (status === "failed") {
-    if (purpose && !/^子任务失败$/i.test(purpose)) return clip(purpose, 120);
-    return "执行失败";
-  }
-  if (status === "aborted" || status === "stopped") return "已中止";
-
-  const detail = String(agent.current_detail || "").trim();
-  if (
-    detail &&
-    !isOpaquePhaseToken(detail) &&
-    !looksLikeHandoffPackage(detail) &&
-    !/^子任务已完成$/.test(detail)
-  ) {
-    return clip(detail, 120);
-  }
-
-  const tool = String(agent.current_tool || "").trim();
-  const lastTool = String(agent.last_tool || "").trim();
-  const action = String(agent.current_action || "").trim();
-
-  if (action === "tool_running" || tool) {
-    if (!isSub && /并行\s+\d+\s+个\s*Worker/i.test(detail)) return clip(detail, 120);
-    return `正在${friendlyToolLabel(tool || "tool")}`;
-  }
-  if (action === "llm_waiting" || action === "model_turn") {
-    if (lastTool) return `分析「${friendlyToolLabel(lastTool)}」结果，规划下一步`;
-    return "等待模型思考与回复";
-  }
-  if (action === "chat") return "对话中，准备回复";
-  if (action === "starting") return "任务启动中";
-  if (action === "running") {
-    if (isSub && purpose) return clip(purpose, 120);
-    if (!isSub && /并行\s+\d+\s+个\s*Worker/i.test(detail)) return clip(detail, 120);
-    return "工作进行中";
-  }
-  if (action === "continue") return "继续推进任务";
-  if (action === "finished" || action === "completed" || status === "done") {
-    if (isSub && purpose) {
-      return purpose.startsWith("已完成") ? clip(purpose, 120) : clip(`已完成：${purpose}`, 120);
-    }
-    return "本轮工作已结束";
-  }
-  if (action && !isOpaquePhaseToken(action) && !["done", "timeout", "failed"].includes(action)) {
-    return compactAgentAction(action);
-  }
-  if (purpose) return clip(purpose, 90);
-  return "等待工作";
-}
-
-function isOpaquePhaseToken(value: string): boolean {
-  return /^(tool_running|llm_waiting|model_turn|starting|running|continue|finished|completed|chat|working|done)$/i.test(
-    value.trim().toLowerCase(),
-  );
-}
-
-function compactAgentAction(value: string): string {
-  const text = value.replace(/\s+/g, " ").trim();
-  if (/^running command:/i.test(text)) return "正在执行命令";
-  if (/^creating sub-agent:/i.test(text)) return text.replace(/^creating sub-agent:/i, "委派子代理").trim();
-  if (/^reporting finding:/i.test(text)) return text.replace(/^reporting finding:/i, "登记发现").trim();
-  return clip(text, 90);
-}
-
+/** Tool → short Chinese label for skill/meta chips (not AgentRow narration). */
 export function friendlyToolLabel(tool: string): string {
   const t = String(tool || "").trim();
   if (!t) return "工具";
@@ -498,9 +433,4 @@ function friendlySkillName(skill: string): string {
   };
   const normalized = String(skill || "").trim();
   return explicit[normalized.toLowerCase()] || friendlyToolLabel(normalized);
-}
-
-function clip(value: string, limit: number): string {
-  const normalized = String(value || "").replace(/\s+/g, " ").trim();
-  return normalized.length > limit ? `${normalized.slice(0, limit - 1)}…` : normalized;
 }

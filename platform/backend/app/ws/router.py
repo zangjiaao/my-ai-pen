@@ -513,6 +513,7 @@ async def _apply_worker_state(
     reason: object = None,
     interrupt_pending: bool | None = None,
     clear_all_workers: bool = False,
+    user_message_key: object = None,
 ) -> dict:
     """
     Track per-node work-bursts for a conversation.
@@ -520,6 +521,9 @@ async def _apply_worker_state(
     Source of truth for "is an expert working on this session" — driven by Node4
     busy set via work_status, and by bind/task_complete as backup.
     Returns a conversation_working payload for UI subscribers.
+
+    Spec #325 S2: also advances the Case work-burst time ledger (busy union,
+    authorize pause, E1 write-once start, B1 finalized seconds).
     """
     empty = {
         "type": "conversation_working",
@@ -528,6 +532,7 @@ async def _apply_worker_state(
         "status": "created",
         "workers": [],
         "interrupting": False,
+        "work_burst": None,
     }
     if not conv_id:
         return empty
@@ -547,6 +552,7 @@ async def _apply_worker_state(
             if clear_all_workers:
                 workers = {}
             cleared_worker: dict = {}
+            worker_transitioned = False
             if nid:
                 if working:
                     entry = dict(workers.get(nid) or {})
@@ -560,6 +566,7 @@ async def _apply_worker_state(
                     workers[nid] = entry
                     if tid:
                         context["active_task_id"] = tid
+                    worker_transitioned = True
                 else:
                     existing = workers.get(nid)
                     existing_tid = str((existing or {}).get("task_id") or "").strip()
@@ -568,6 +575,10 @@ async def _apply_worker_state(
                         if isinstance(existing, dict):
                             cleared_worker = dict(existing)
                         workers.pop(nid, None)
+                        worker_transitioned = True
+            # clear_all_workers: end busy for every tracked worker in the ledger
+            if clear_all_workers:
+                worker_transitioned = True
             context["workers"] = workers
             if interrupt_pending is True:
                 context["interrupt_pending"] = True
@@ -626,10 +637,80 @@ async def _apply_worker_state(
                         or cleared_worker.get("expert_name")
                         or task_ctx.get("expert_name"),
                         pack_id=pack or task_ctx.get("engagement") or "default",
-                        last_detail="本轮工作已结束",
+                        last_detail="",  # Spec #324: no work-content narration on idle
                     )
             except Exception as pe:
                 print(f"[WS] participant upsert error: {pe}")
+
+            # Spec #325 S2: work-burst time ledger (busy union, E1, R1, finalize).
+            work_burst_proj: dict | None = None
+            try:
+                from app.services.work_burst_time import (
+                    apply_worker_transition,
+                    get_ledger,
+                    projection as work_burst_projection,
+                    set_ledger,
+                )
+
+                # R1: only fall back to active_user_message_key while a burst is
+                # still open / workers busy. Never reopen a prior burst via a
+                # stale key after the Case has fully settled.
+                if working:
+                    umk = (
+                        str(user_message_key or context.get("active_user_message_key") or "").strip()
+                        or None
+                    )
+                    if umk:
+                        context["active_user_message_key"] = umk
+                else:
+                    umk = str(user_message_key or "").strip() or None
+                if worker_transitioned and nid:
+                    context = apply_worker_transition(
+                        context,
+                        worker_key=nid,
+                        working=working,
+                        task_id=tid or None,
+                        user_message_key=umk,
+                        finalize_if_idle=not working and not active,
+                    )
+                elif clear_all_workers:
+                    # Finalize any open burst when the session is force-cleared.
+                    from app.services.work_burst_time import finalize_burst
+
+                    ledger = get_ledger(context)
+                    if ledger.get("active_burst_id"):
+                        ledger = finalize_burst(ledger)
+                        context = set_ledger(context, ledger)
+                # When last worker goes idle, finalize even if this node was already cleared.
+                # H1: do NOT force-finalize while authorize is pending — live timer pauses
+                # but the burst stays open until true settle/resume+idle.
+                if not working and not active:
+                    ledger = get_ledger(context)
+                    active_id = str(ledger.get("active_burst_id") or "").strip()
+                    if active_id:
+                        active_row = (ledger.get("bursts") or {}).get(active_id) or {}
+                        if not (
+                            isinstance(active_row, dict) and active_row.get("authorize_paused")
+                        ):
+                            from app.services.work_burst_time import finalize_burst
+
+                            ledger = finalize_burst(ledger)
+                            context = set_ledger(context, ledger)
+                ledger_after = get_ledger(context)
+                # Spec #325 R1: clear stored umk once the Case is fully idle so the
+                # next user turn cannot reopen the previous message's burst clock.
+                if not working and not active and not ledger_after.get("active_burst_id"):
+                    context.pop("active_user_message_key", None)
+                # Spec #325 B1: stamp one finalized duration onto the result-anchor message.
+                if not working and not active and ledger_after.get("bursts"):
+                    try:
+                        await _stamp_burst_result_anchor(db, conv_id, ledger_after)
+                        context = set_ledger(context, ledger_after)
+                    except Exception as stamp_exc:
+                        print(f"[WS] B1 result anchor stamp error: {stamp_exc}")
+                work_burst_proj = work_burst_projection(get_ledger(context))
+            except Exception as te:
+                print(f"[WS] work_burst_time error: {te}")
 
             c.context = context
             await db.commit()
@@ -647,7 +728,7 @@ async def _apply_worker_state(
             ]
             from app.services.case_participants import participants_list
 
-            return {
+            payload = {
                 "type": "conversation_working",
                 "conversation_id": conv_id,
                 "working": active,
@@ -660,6 +741,9 @@ async def _apply_worker_state(
                 "task_id": tid or None,
                 "reason": str(reason or "") or None,
             }
+            if work_burst_proj is not None:
+                payload["work_burst"] = work_burst_proj
+            return payload
     except Exception as e:
         print(f"[WS] apply worker state error: {e}")
         return empty
@@ -670,6 +754,167 @@ async def _broadcast_conversation_working(payload: dict) -> None:
     if not conv_id or not payload:
         return
     await _broadcast_to_conversation(conv_id, json.dumps(payload, ensure_ascii=False))
+
+
+async def _retry_stamp_work_burst_after_agent_text(conv_id: str) -> None:
+    """When agent text is saved after settle, stamp any unstamped finalized bursts."""
+    from app.db.base import async_session
+    from app.models.conversation import Conversation
+    from app.services.work_burst_time import get_ledger, set_ledger
+
+    cid = str(conv_id or "").strip()
+    if not cid:
+        return
+    async with async_session() as db:
+        result = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(cid)))
+        conv = result.scalar_one_or_none()
+        if not conv:
+            return
+        context = dict(conv.context or {}) if isinstance(conv.context, dict) else {}
+        ledger = get_ledger(context)
+        bursts = ledger.get("bursts") if isinstance(ledger.get("bursts"), dict) else {}
+        if not any(
+            isinstance(row, dict)
+            and str(row.get("status") or "") == "finalized"
+            and not str(row.get("result_anchor_message_id") or "").strip()
+            for row in bursts.values()
+        ):
+            return
+        await _stamp_burst_result_anchor(db, cid, ledger)
+        context = set_ledger(context, ledger)
+        conv.context = context
+        await db.commit()
+        # Push updated ledger so FE can show 耗时 without full reload.
+        try:
+            from app.services.work_burst_time import projection as work_burst_projection
+
+            proj = work_burst_projection(get_ledger(context))
+            await _broadcast_to_conversation(
+                cid,
+                json.dumps(
+                    {
+                        "type": "conversation_working",
+                        "conversation_id": cid,
+                        "work_burst": proj,
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        except Exception as be:
+            print(f"[WS] B1 re-stamp broadcast error: {be}")
+
+
+async def _stamp_burst_result_anchor(db, conv_id: str, ledger: dict) -> None:
+    """Persist B1 work_seconds on exactly one agent result message per newly finalized burst."""
+    from app.models.message import Message
+    from app.services.work_burst_time import pick_result_anchor_message_id, stamp_result_anchor_fields
+
+    bursts = ledger.get("bursts") if isinstance(ledger.get("bursts"), dict) else {}
+    for bid, row in bursts.items():
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("status") or "") != "finalized":
+            continue
+        if row.get("result_anchor_message_id"):
+            continue
+        try:
+            ws = int(row.get("work_seconds") if row.get("work_seconds") is not None else -1)
+        except (TypeError, ValueError):
+            continue
+        if ws < 0:
+            continue
+        task_ids = [str(t) for t in (row.get("task_ids") or []) if str(t or "").strip()]
+        result = await db.execute(
+            select(Message)
+            .where(Message.conversation_id == uuid.UUID(conv_id))
+            .order_by(Message.created_at.asc())
+        )
+        messages = list(result.scalars().all())
+        # Clear prior anchors for this burst (R1 reopen edge) then pick one.
+        for msg in messages:
+            content = dict(msg.content or {}) if isinstance(msg.content, dict) else {}
+            if str(content.get("work_burst_id") or "") == str(bid) and content.get("is_result_anchor"):
+                content.pop("is_result_anchor", None)
+                content.pop("work_seconds", None)
+                # keep work_burst_id for audit if any
+                msg.content = content
+        mid = pick_result_anchor_message_id(messages, task_ids=task_ids)
+        if not mid:
+            # No agent text yet — leave unset so we retry when text lands (do not pin "").
+            # projection.finalized_work_seconds remains the FE reload source.
+            continue
+        for msg in messages:
+            if str(msg.id) != mid:
+                continue
+            content = dict(msg.content or {}) if isinstance(msg.content, dict) else {}
+            msg.content = stamp_result_anchor_fields(
+                content, work_burst_id=bid, work_seconds=ws
+            )
+            row["result_anchor_message_id"] = mid
+            break
+        # Mutate ledger row for persistence by caller (context already references ledger).
+        bursts[bid] = row
+
+
+async def _set_work_burst_authorize_paused(conv_id: str | None, *, paused: bool) -> dict | None:
+    """Spec #325 H1: pending user authorize does not accrue busy work-seconds."""
+    cid = str(conv_id or "").strip()
+    if not cid:
+        return None
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+        from app.services.work_burst_time import apply_authorize_pause, get_ledger, projection as work_burst_projection
+
+        async with async_session() as db:
+            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(cid)))
+            c = r.scalar_one_or_none()
+            if not c:
+                return None
+            context = apply_authorize_pause(dict(c.context or {}), paused=paused)
+            ledger = get_ledger(context)
+            # R1: if resume settled an idle burst, drop stored umk so next turn is fresh.
+            if not paused and not ledger.get("active_burst_id"):
+                context.pop("active_user_message_key", None)
+                # B1: stamp result anchor for bursts finalized on resume-settle.
+                try:
+                    await _stamp_burst_result_anchor(db, cid, ledger)
+                    context = {
+                        **context,
+                        "work_burst_ledger": ledger,
+                    }
+                except Exception as stamp_exc:
+                    print(f"[WS] B1 result anchor stamp (authorize resume) error: {stamp_exc}")
+            c.context = context
+            await db.commit()
+            proj = work_burst_projection(get_ledger(context))
+            workers = _workers_from_context(context)
+            # After settle-on-resume, do not keep the session "working" for a dead pause.
+            still_authorize = bool(paused and ledger.get("active_burst_id"))
+            payload = {
+                "type": "conversation_working",
+                "conversation_id": cid,
+                "working": bool(workers) or still_authorize,
+                # Keep session "working" while authorize is pending so Send stays as interrupt.
+                "status": str(c.status or "created"),
+                "workers": [
+                    {
+                        "node_id": wid,
+                        "task_id": (meta or {}).get("task_id"),
+                        "expert_id": (meta or {}).get("expert_id"),
+                        "expert_name": (meta or {}).get("expert_name"),
+                    }
+                    for wid, meta in workers.items()
+                ],
+                "interrupting": bool(context.get("interrupt_pending")) and bool(workers),
+                "work_burst": proj,
+                "reason": "authorize_pause" if paused else "authorize_resume",
+            }
+            await _broadcast_conversation_working(payload)
+            return payload
+    except Exception as e:
+        print(f"[WS] work_burst authorize pause error: {e}")
+        return None
 
 
 async def _interrupt_all_session_workers(conv_id: str, raw_msg: dict) -> dict:
@@ -1090,6 +1335,9 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
                 "options": pending_options,
                 "selection": pending_selection,
             }
+        # Spec #325 H1: authorize wait is not busy — pause work-burst accrual.
+        if conv_id:
+            await _set_work_burst_authorize_paused(conv_id, paused=True)
             if len(choice_card_snapshots) > 500:
                 # Drop oldest half (dict insertion order).
                 for drop_id in list(choice_card_snapshots.keys())[:250]:
@@ -2386,6 +2634,20 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                 content=content,
             ))
             await db.commit()
+
+        # Spec #325 B1: agent text often arrives after burst finalize — re-try stamp so
+        # every completed turn can get work_seconds on the result row.
+        if role == "agent" and str(msg_type or "") in {
+            "text",
+            "task_complete",
+            "task_error",
+            "task_incomplete",
+        }:
+            try:
+                await _retry_stamp_work_burst_after_agent_text(str(conv_id))
+            except Exception as stamp_exc:
+                print(f"[WS] B1 re-stamp after agent text error: {stamp_exc}")
+
         return message_id
     except Exception as e:
         print(f"[WS] _save_message error: {e}")
@@ -3485,6 +3747,8 @@ async def _freeze_pending_approvals_on_interrupt(conv_id: str, client_id: str) -
             )
         except Exception as e:
             print(f"[WS] interrupt freeze audit error: {e}")
+    # Spec #325 H1: no longer waiting on authorize after interrupt freeze.
+    await _set_work_burst_authorize_paused(conv_id, paused=False)
     return len(pending_for_conv)
 
 
@@ -3822,6 +4086,8 @@ async def _forward_pending_approval_text(
             )
         except Exception as e:
             print(f"[WS] pending-text audit error: {e}")
+    # Spec #325 H1: free-text resolved authorize wait — resume busy accrual.
+    await _set_work_burst_authorize_paused(conv_id, paused=False)
     return True
 
 
@@ -5238,6 +5504,13 @@ async def _dispatch_task_assign_to_node(
     )
     await _bind_conversation_to_node(conv_id, node_id, active_task_id=str(task_msg.get("task_id") or ""))
     if force_working:
+        # Spec #325 R1: same-user-message auto-retry shares one work-burst clock.
+        umk = str(
+            msg.get("client_message_id")
+            or msg.get("id")
+            or task_msg.get("client_message_id")
+            or ""
+        ).strip() or None
         working_payload = await _apply_worker_state(
             conv_id,
             node_id=node_id,
@@ -5246,6 +5519,7 @@ async def _dispatch_task_assign_to_node(
             expert_id=expert_id,
             expert_name=expert_name,
             interrupt_pending=False,
+            user_message_key=umk,
         )
         await _broadcast_conversation_working(working_payload)
     await _incr_sessions(node_id, 1)
@@ -6028,6 +6302,9 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     decision = msg.get("decision", "cancel")
                     approval = pending_approvals.pop(str(request_id), {}) if request_id else {}
                     had_live_pending = bool(isinstance(approval, dict) and approval)
+                    # Spec #325 H1: leave authorize wait — resume busy accrual if workers still busy.
+                    if had_live_pending:
+                        await _set_work_burst_authorize_paused(conv_id, paused=False)
                     # Spec #313 L10: fall back to durable option snapshot when pending already gone.
                     card_source = (
                         approval

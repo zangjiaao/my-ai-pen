@@ -52,6 +52,127 @@ def _num(value: object) -> float:
         return 0.0
 
 
+def _usage_fields(raw: object) -> dict[str, Any]:
+    """Normalize LLM usage scalars (+ optional model). Spec #324 S1."""
+    src = _as_dict(raw)
+    out: dict[str, Any] = {
+        "total_tokens": int(_num(src.get("total_tokens"))),
+        "cost": round(float(_num(src.get("cost"))), 6),
+        "requests": int(_num(src.get("requests"))),
+    }
+    model = str(src.get("model") or "").strip()
+    if model:
+        out["model"] = model
+    return out
+
+
+def merge_usage_lifetime(
+    lifetime: object,
+    cursor: object,
+    snap: object,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Monotonic lifetime totals from burst-resettable cumulative snapshots.
+
+    Checkpoints report per-burst cumulative usage that restarts near zero on a
+    new work-burst. When the snap is >= cursor, add the delta; when it drops
+    (burst reset), add the whole snap so prior bursts are not lost (Z1).
+
+    Returns (lifetime_usage, new_cursor). Does not double-count within one
+    continuous cumulative series.
+    """
+    life = _usage_fields(lifetime)
+    cur = _usage_fields(cursor)
+    s = _usage_fields(snap)
+
+    def delta(life_v: float, cur_v: float, snap_v: float) -> float:
+        if snap_v >= cur_v:
+            return snap_v - cur_v
+        return snap_v
+
+    new_life: dict[str, Any] = {
+        "total_tokens": int(life["total_tokens"] + delta(life["total_tokens"], cur["total_tokens"], s["total_tokens"])),
+        "cost": round(
+            float(life["cost"]) + delta(float(life["cost"]), float(cur["cost"]), float(s["cost"])),
+            6,
+        ),
+        "requests": int(life["requests"] + delta(life["requests"], cur["requests"], s["requests"])),
+    }
+    model = s.get("model") or life.get("model")
+    if model:
+        new_life["model"] = str(model)
+    return new_life, s
+
+
+def _panel_children_usage_sum(panel: object) -> dict[str, Any]:
+    """Sum Sub/child usage rows (parent_id set). Main row is excluded."""
+    tokens = 0
+    cost = 0.0
+    requests = 0
+    if not isinstance(panel, list):
+        return _usage_fields({})
+    for item in panel:
+        if not isinstance(item, dict):
+            continue
+        if not str(item.get("parent_id") or "").strip():
+            continue
+        u = _usage_fields(item.get("usage") or item.get("llm_usage"))
+        tokens += int(u["total_tokens"])
+        cost += float(u["cost"])
+        requests += int(u["requests"])
+    return {
+        "total_tokens": tokens,
+        "cost": round(cost, 6),
+        "requests": requests,
+    }
+
+
+def ensure_usage_own(row: dict[str, Any]) -> dict[str, Any]:
+    """Migrate pre-S1 rows: historical ``usage`` was own/checkpoint-only.
+
+    Seed ``usage_cursor`` to the same baseline so the first post-upgrade
+    ``merge_usage_lifetime`` does not re-add the entire prior total
+    (snap − 0 would double-count; Spec #323 / #324 L3).
+    """
+    if row.get("usage_own") is None and isinstance(row.get("usage"), dict):
+        # Copy scalars only — do not keep a pointer to the display dict.
+        migrated = _usage_fields(row.get("usage"))
+        row["usage_own"] = migrated
+        if row.get("usage_cursor") is None:
+            row["usage_cursor"] = dict(migrated)
+    elif (
+        isinstance(row.get("usage_own"), dict)
+        and row.get("usage_cursor") is None
+    ):
+        # Own exists without cursor (partial write) — baseline cursor at current own.
+        row["usage_cursor"] = _usage_fields(row.get("usage_own"))
+    return row
+
+
+def rollup_participant_usage(row: dict | None) -> dict[str, Any]:
+    """Participant display usage = own lifetime + Sub children (no double-count).
+
+    ``usage_own`` is Main/own metered lifetime. Child rows on ``panel_agents``
+    carry their own usage; they are folded once into the parent total. Case
+    rollup sums these parent totals only (children are not separate Case rows).
+
+    Never re-read rolled ``usage`` as own — that would double-count children on
+    repeated recompute.
+    """
+    r = dict(_as_dict(row))
+    ensure_usage_own(r)
+    own = _usage_fields(r.get("usage_own"))
+    children = _panel_children_usage_sum(r.get("panel_agents"))
+    out: dict[str, Any] = {
+        "total_tokens": int(own["total_tokens"]) + int(children["total_tokens"]),
+        "cost": round(float(own["cost"]) + float(children["cost"]), 6),
+        "requests": int(own["requests"]) + int(children["requests"]),
+    }
+    model = own.get("model")
+    if model:
+        out["model"] = str(model)
+    return out
+
+
 _RUNNING_PANEL_STATUSES = frozenset(
     {"running", "tool_running", "llm_waiting", "starting", "working", "chat"}
 )
@@ -82,7 +203,24 @@ def merge_panel_agents(prev: object, incoming: object) -> list[dict[str, Any]]:
     by_id: dict[str, dict[str, Any]] = {str(a["id"]): dict(a) for a in prev_list}
     inc_ids = {str(a["id"]) for a in inc_list}
     for a in inc_list:
-        by_id[str(a["id"])] = dict(a)
+        aid = str(a["id"])
+        incoming = dict(a)
+        prev_row = by_id.get(aid)
+        # Spec #324: keep Sub usage lifetime when the same id is re-emitted.
+        snap_u = incoming.get("usage") if isinstance(incoming.get("usage"), dict) else None
+        if snap_u is None and isinstance(incoming.get("llm_usage"), dict):
+            snap_u = incoming.get("llm_usage")
+        if isinstance(snap_u, dict):
+            prev_life = _as_dict(prev_row).get("usage") if prev_row else None
+            prev_cur = _as_dict(prev_row).get("usage_cursor") if prev_row else None
+            life, cur = merge_usage_lifetime(prev_life, prev_cur, snap_u)
+            incoming["usage"] = life
+            incoming["usage_cursor"] = cur
+        elif prev_row and isinstance(prev_row.get("usage"), dict):
+            incoming["usage"] = dict(prev_row["usage"])
+            if isinstance(prev_row.get("usage_cursor"), dict):
+                incoming["usage_cursor"] = dict(prev_row["usage_cursor"])
+        by_id[aid] = incoming
 
     for aid, row in by_id.items():
         if aid in inc_ids:
@@ -237,7 +375,7 @@ def upsert_participant(
     panel_agents: object = None,
     plan_tree: object = None,
     usage_snapshot: object = None,
-    usage_mode: str = "replace",  # replace | merge_max
+    usage_mode: str = "replace",  # replace | merge_max | lifetime
     touch: bool = True,
 ) -> dict[str, Any]:
     """Insert or update one Case participant; returns new context dict."""
@@ -285,22 +423,23 @@ def upsert_participant(
         row["plan_tree"] = stamped
 
     if isinstance(usage_snapshot, dict):
-        prev_u = _as_dict(row.get("usage"))
-        snap = {
-            "total_tokens": int(_num(usage_snapshot.get("total_tokens"))),
-            "cost": float(_num(usage_snapshot.get("cost"))),
-            "requests": int(_num(usage_snapshot.get("requests"))),
-        }
-        if usage_mode == "merge_max":
-            # Avoid double-count when checkpoint reports cumulative burst usage:
-            # keep the max seen for this participant (burst restarts reset task tokens).
-            row["usage"] = {
-                "total_tokens": max(int(_num(prev_u.get("total_tokens"))), snap["total_tokens"]),
-                "cost": max(float(_num(prev_u.get("cost"))), snap["cost"]),
-                "requests": max(int(_num(prev_u.get("requests"))), snap["requests"]),
-            }
+        snap = _usage_fields(usage_snapshot)
+        # model may arrive only on the snapshot (metered/configured id).
+        if usage_mode == "merge_max" or usage_mode == "lifetime":
+            # Spec #324 S1: monotonic lifetime across bursts (not plain max — multi-burst
+            # must accumulate; max under-counts when a later burst is smaller).
+            ensure_usage_own(row)
+            life, cur = merge_usage_lifetime(row.get("usage_own"), row.get("usage_cursor"), snap)
+            row["usage_own"] = life
+            row["usage_cursor"] = cur
         else:
-            row["usage"] = snap
+            # replace: treat snap as the full own lifetime (tests / explicit reset only).
+            row["usage_own"] = snap
+            row["usage_cursor"] = snap
+
+    ensure_usage_own(row)
+    # Display usage = own + Sub children (single-count). Always refresh after panel/usage writes.
+    row["usage"] = rollup_participant_usage(row)
 
     if touch:
         row["last_seen_at"] = _now_iso()
@@ -311,7 +450,7 @@ def upsert_participant(
 
 
 def recompute_case_run(context: dict | None) -> dict[str, Any]:
-    """Roll up Case-level started_at + llm_usage from participants."""
+    """Roll up Case-level started_at + llm_usage from participants (incl. Sub once)."""
     ctx = dict(context or {})
     roster = participants_map(ctx)
     tokens = 0
@@ -319,17 +458,23 @@ def recompute_case_run(context: dict | None) -> dict[str, Any]:
     requests = 0
     earliest: str | None = None
     latest: str | None = None
-    for row in roster.values():
-        u = _as_dict(row.get("usage"))
-        tokens += int(_num(u.get("total_tokens")))
-        cost += float(_num(u.get("cost")))
-        requests += int(_num(u.get("requests")))
+    for key, row in list(roster.items()):
+        # Keep display usage coherent even if panel_agents were patched in place.
+        row = dict(row)
+        ensure_usage_own(row)
+        rolled = rollup_participant_usage(row)
+        row["usage"] = rolled
+        roster[key] = row
+        tokens += int(rolled["total_tokens"])
+        cost += float(rolled["cost"])
+        requests += int(rolled["requests"])
         seen = str(row.get("last_seen_at") or "").strip()
         if seen:
             if earliest is None or seen < earliest:
                 earliest = seen
             if latest is None or seen > latest:
                 latest = seen
+    ctx["participants"] = roster
     prev_run = _as_dict(ctx.get("case_run"))
     started = str(prev_run.get("started_at") or "").strip() or earliest
     case_run = {
@@ -454,13 +599,14 @@ def mark_participant_idle(
     pack_id: object = None,
     last_detail: object = None,
 ) -> dict[str, Any]:
+    # Spec #324: do not invent work-content narration on idle; runtime is dot+badge.
     return upsert_participant(
         context,
         expert_id=expert_id,
         expert_name=expert_name,
         pack_id=pack_id,
         last_status="idle",
-        last_detail=last_detail if last_detail is not None else "本轮工作已结束",
+        last_detail=last_detail if last_detail is not None else "",
         panel_agents=None,  # keep previous panel_agents
         touch=True,
     )
@@ -523,8 +669,7 @@ def agents_from_participants(
             status = "idle"
 
         detail = str(row.get("last_detail") or "").strip()
-        if status == "idle" and not detail:
-            detail = "空闲"
+        usage = rollup_participant_usage(row)
 
         root = {
             "id": root_id,
@@ -541,6 +686,9 @@ def agents_from_participants(
             "current_action": status,
             "current_detail": detail,
             "highlighted": bool(active_eid and eid and active_eid == eid),
+            # Spec #324 D1: Participant cumulative usage for AgentRow (own + Subs).
+            "usage": usage,
+            "model": usage.get("model") or "",
         }
         # Pull live tool from nested panel main if running
         panel = row.get("panel_agents") if isinstance(row.get("panel_agents"), list) else []
@@ -561,23 +709,29 @@ def agents_from_participants(
                         root["current_detail"] = str(item.get("current_detail"))
                 continue
             # Subagent under this role
-            children.append(
-                {
-                    "id": f"{root_id}-{item_id}",
-                    "name": str(item.get("name") or item_id),
-                    "status": str(item.get("status") or "running"),
-                    "parent_id": root_id,
-                    "task": str(item.get("task") or ""),
-                    "skills": item.get("skills") if isinstance(item.get("skills"), list) else [],
-                    "pending_count": int(item.get("pending_count") or 0),
-                    "role": "subagent",
-                    "pack_id": pack,
-                    "expert_id": eid,
-                    "current_tool": str(item.get("current_tool") or ""),
-                    "current_action": str(item.get("current_action") or ""),
-                    "current_detail": str(item.get("current_detail") or item.get("task") or ""),
-                }
-            )
+            child_usage = _usage_fields(item.get("usage") or item.get("llm_usage"))
+            child: dict[str, Any] = {
+                "id": f"{root_id}-{item_id}",
+                "name": str(item.get("name") or item_id),
+                "status": str(item.get("status") or "running"),
+                "parent_id": root_id,
+                "task": str(item.get("task") or ""),
+                "skills": item.get("skills") if isinstance(item.get("skills"), list) else [],
+                "pending_count": int(item.get("pending_count") or 0),
+                "role": "subagent",
+                "pack_id": pack,
+                "expert_id": eid,
+                "current_tool": str(item.get("current_tool") or ""),
+                "current_action": str(item.get("current_action") or ""),
+                "current_detail": str(item.get("current_detail") or item.get("task") or ""),
+            }
+            if any(int(child_usage.get(k) or 0) for k in ("total_tokens", "requests")) or float(
+                child_usage.get("cost") or 0
+            ) > 0:
+                child["usage"] = child_usage
+                if child_usage.get("model"):
+                    child["model"] = child_usage["model"]
+            children.append(child)
         out.append(root)
         out.extend(children)
 

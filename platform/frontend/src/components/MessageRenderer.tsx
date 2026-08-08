@@ -8,11 +8,12 @@ import {
   resolveToolItemStatus,
   toolActivitySummaryLabel,
 } from "../lib/status";
-import { phaseLabel } from "../lib/phase";
+import { isInfraStatusNotice, isLegacyPhaseOnlyStatus } from "../lib/chatStreamChrome";
 import ChoiceCard from "./cards/ChoiceCard";
 import ThinkingCard from "./cards/ThinkingCard";
 import MarkdownText from "./MarkdownText";
 import type { ChoiceDecision } from "../lib/choiceCard";
+import { formatAgentDurationLabel, resultAnchorWorkSeconds } from "../lib/workBurstTime";
 
 interface Props {
   message: Message;
@@ -39,6 +40,11 @@ interface Props {
   sessionActive?: boolean;
   /** Disable choice controls while a turn is running. */
   choiceDisabled?: boolean;
+  /**
+   * Spec #325 B1: finalized work-seconds for this message when it is the burst
+   * result anchor (one duration per work-burst; not on tool/thinking cards).
+   */
+  resultAnchorWorkSeconds?: number | null;
 }
 
 /** Shared speaker resolution for agent messages and list-tail pending chrome (Spec #305). */
@@ -724,40 +730,37 @@ export function AgentPendingCard({ content }: { content: Record<string, unknown>
     </div>
   );
 }
-function statusNoticeText(content: Record<string, unknown>): string {
-  const phase = typeof content.phase === "string" ? content.phase : parsePhaseFromText(String(content.text || ""));
-  return phase ? phaseLabel(phase) : String(content.text || "");
-}
-
-function isLegacyPhaseOnlyStatus(content: Record<string, unknown>): boolean {
-  const phase = typeof content.phase === "string" ? content.phase : parsePhaseFromText(String(content.text || ""));
-  if (!["intake", "recon", "analysis", "verify", "report", "complete"].includes(phase)) return false;
-  const text = String(content.text || "").trim();
-  return Boolean(content.synthetic) || !text || text === phaseLabel(phase) || text.startsWith(`Phase: ${phase}`);
-}
-
-function parsePhaseFromText(text: string): string {
-  return text.match(/Phase:\s*([^\s(]+)/)?.[1] || "";
-}
-
-function StatusNotice({ content }: { content: Record<string, unknown> }) {
+function StatusNotice({ content, msgType }: { content: Record<string, unknown>; msgType?: string }) {
+  // Only engagement_closeout is product-visible; harness/status noise stays out of the stream.
+  if (msgType === "engagement_closeout" || String(content.type || "") === "engagement_closeout") {
+    const text = String(content.text || "").trim();
+    if (!text) return null;
+    return (
+      <div className="my-2 text-center text-xs text-ink-muted" data-status-notice>
+        {text}
+      </div>
+    );
+  }
+  if (isInfraStatusNotice(content, msgType)) return null;
   if (isLegacyPhaseOnlyStatus(content)) return null;
-  return <div className="my-2 text-center text-xs text-ink-muted">{statusNoticeText(content)}</div>;
+  // Generic status (e.g. harness abort) — not useful in multi-agent Case stream.
+  return null;
 }
 
-function SystemNotice({ content }: { content: Record<string, unknown> }) {
-  return <StatusNotice content={content} />;
+function SystemNotice({ content, msgType }: { content: Record<string, unknown>; msgType?: string }) {
+  return <StatusNotice content={content} msgType={msgType} />;
 }
 
-export default function MessageRenderer({ message, agentNameById = {}, previousMessage, fallbackPentestNodeId, platformAgentNodeId, onDecision, onConfirmOptions, onOpenVulnerability, onOpenAsset, onOpenEvidence, highlightedApprovalId, approvalDecisionByRequestId = {}, choiceSelectedByRequestId = {}, sessionActive, choiceDisabled = false }: Props) {
+export default function MessageRenderer({ message, agentNameById = {}, previousMessage, fallbackPentestNodeId, platformAgentNodeId, onDecision, onConfirmOptions, onOpenVulnerability, onOpenAsset, onOpenEvidence, highlightedApprovalId, approvalDecisionByRequestId = {}, choiceSelectedByRequestId = {}, sessionActive, choiceDisabled = false, resultAnchorWorkSeconds: resultAnchorSecondsProp }: Props) {
   const { role, msg_type, content } = message;
 
-  // Spec #163: engagement_closeout uses content.text (platform gist) via SystemNotice.
+  // Spec #163: engagement_closeout only. Generic status/harness lines are not rendered.
   if (role === "system" || msg_type === "status" || msg_type === "engagement_closeout") {
-    return <SystemNotice content={content} />;
+    return <SystemNotice content={content} msgType={msg_type} />;
   }
 
   // Spec #312: only confirm_options decisions show a user bubble (text is display content).
+  // Stream datetime stamps are stream chrome (before dialogue), not per-bubble clocks.
   if (role === "user" && msg_type === "decision") {
     const decision = String(content.decision || "").trim();
     if (decision !== "confirm_options") return null;
@@ -782,6 +785,17 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
   const agentLabel = agentDisplayName(content, agentNameById, fallbackPentestNodeId, platformAgentNodeId);
   const previousAgentLabel = previousMessage?.role === "agent" ? agentDisplayName(previousMessage.content, agentNameById, fallbackPentestNodeId, platformAgentNodeId) : "";
   const showAgentLabel = previousAgentLabel !== agentLabel;
+  // Spec #325 B1: one duration per work-burst on result anchor — never on tool/thinking.
+  const isToolOrThinking =
+    msg_type === "tool_call"
+    || msg_type === "thinking"
+    || msg_type === "reasoning"
+    || msg_type === "agent_thinking";
+  const b1Seconds = isToolOrThinking
+    ? null
+    : (resultAnchorSecondsProp != null
+      ? resultAnchorSecondsProp
+      : resultAnchorWorkSeconds(content));
   let body: ReactNode;
   switch (msg_type) {
     case "tool_call":
@@ -824,13 +838,15 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
       break;
     case "status":
     case "engagement_closeout":
-      body = <StatusNotice content={content} />;
+      body = <StatusNotice content={content} msgType={msg_type} />;
       break;
     case "text":
     default:
       body = <MarkdownText text={String(content.text || "")} />;
   }
 
+  // Spec #325 B1: total work duration only on Agent result (bottom-right), not user bubbles.
+  // Stream datetime stamps live in ConversationPage chrome *before* dialogue.
   return (
     <div className="my-2 min-w-0">
       {showAgentLabel && (
@@ -838,7 +854,20 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
           <span className="font-medium text-ink-secondary">{agentLabel}</span>
         </div>
       )}
-      {body}
+      <div className="relative min-w-0">
+        {body}
+        {b1Seconds != null && (
+          <div
+            data-testid="burst-result-duration"
+            className="mt-1 flex justify-start"
+            title="本轮工作总耗时"
+          >
+            <span className="text-[11px] tabular-nums text-ink-muted">
+              {formatAgentDurationLabel(b1Seconds)}
+            </span>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

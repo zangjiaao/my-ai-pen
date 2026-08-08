@@ -36,6 +36,10 @@ import {
   upsertWorkerAgent,
 } from "../lib/panelAgentsState";
 import {
+  projectStreamWithDaySeparators,
+  shouldRenderStatusNotice,
+} from "../lib/chatStreamChrome";
+import {
   buildPendingSendSuccessEvent,
   clearLiveStreams,
   durableStreamSnapshots,
@@ -72,6 +76,13 @@ import {
   isChoiceDecisionFinal,
   type ChoiceDecision,
 } from "../lib/choiceCard";
+import {
+  composerLiveSeconds,
+  composerTimerVisible,
+  formatWorkSeconds,
+  selectResultAnchorMessageIds,
+  type WorkBurstProjection,
+} from "../lib/workBurstTime";
 
 const ACTIVE_CONVERSATION_KEY = "active_conversation_id";
 /** Set by AssetPage when launching a task from selected hosts/ports. */
@@ -215,6 +226,8 @@ type ConversationSnapshot = {
   workers?: Array<Record<string, unknown>>;
   participants?: Array<Record<string, unknown>>;
   case_run?: CaseRunSummary;
+  /** Spec #325 S2 work-burst time ledger (composer C1 + B1). */
+  work_burst?: WorkBurstProjection;
   agent_state?: Record<string, unknown>;
   progress?: Progress;
   kanban?: KanbanSummary;
@@ -303,6 +316,10 @@ export default function ConversationPage() {
   /** Spec #311 Case Workset (Next) — display-only panel projection; separate from Tasks */
   const [workset, setWorkset] = useState<Record<string, unknown> | undefined>();
   const [running, setRunning] = useState(false);
+  /** Spec #325: work-burst time ledger projection (composer timer + B1). */
+  const [workBurst, setWorkBurst] = useState<WorkBurstProjection | null>(null);
+  const [composerTickMs, setComposerTickMs] = useState(() => Date.now());
+  const composerTickAnchorRef = useRef<{ seconds: number; atMs: number } | null>(null);
   /** True while interrupt was sent and nodes have not yet reported idle. */
   const [interrupting, setInterrupting] = useState(false);
   /**
@@ -391,6 +408,11 @@ export default function ConversationPage() {
     });
     return groupConsecutiveToolMessages(merged);
   }, [messages, liveStreams, activeId]);
+  /** Spec #326: messenger day separators over the renderable stream. */
+  const streamChromeItems = useMemo(
+    () => projectStreamWithDaySeparators(displayMessages),
+    [displayMessages],
+  );
   const showPendingChrome = pendingChromeVisible(pendingChrome, activeId);
   const activeConversation = useMemo(() => conversations.find(c => c.id === activeId), [activeId, conversations]);
   /**
@@ -404,6 +426,40 @@ export default function ConversationPage() {
     || activeConversation?.status === "running"
     || launchOptimisticRef.current,
   );
+
+  // Spec #325 C1: tick composer timer while accruing (pause on authorize).
+  const showComposerTimer = composerTimerVisible(workBurst, isActiveConversationRunning);
+  useEffect(() => {
+    if (!showComposerTimer || workBurst?.authorize_paused || workBurst?.accruing === false) {
+      return;
+    }
+    const id = window.setInterval(() => setComposerTickMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [showComposerTimer, workBurst?.authorize_paused, workBurst?.accruing, workBurst?.active_burst_id]);
+
+  const composerTimerText = useMemo(() => {
+    if (!showComposerTimer) return null;
+    const secs = composerLiveSeconds(workBurst, {
+      nowMs: composerTickMs,
+      tickAnchor: workBurst?.authorize_paused || workBurst?.accruing === false
+        ? null
+        : composerTickAnchorRef.current,
+    });
+    if (secs == null) return null;
+    return formatWorkSeconds(secs);
+  }, [showComposerTimer, workBurst, composerTickMs]);
+
+  const resultAnchorSecondsByMessageId = useMemo(() => {
+    return selectResultAnchorMessageIds(
+      displayMessages.map((m) => ({
+        id: m.id,
+        role: m.role,
+        msg_type: m.msg_type,
+        content: m.content as Record<string, unknown>,
+      })),
+      workBurst?.finalized_work_seconds,
+    );
+  }, [displayMessages, workBurst?.finalized_work_seconds]);
   const activeWorkflowKind = useMemo(() => {
     if (kanban?.workflow_kind) return kanban.workflow_kind;
     const nodeId = activeConversation?.node_id || activeConversationNodeId || "";
@@ -611,6 +667,22 @@ export default function ConversationPage() {
       ? snapshot.case_run
       : fallback?.case_run;
     if (nextCaseRun) setCaseRun(nextCaseRun);
+    // Spec #325: work-burst ledger for C1/B1 (prefer snapshot; keep prior if empty).
+    const nextWb = snapshot.work_burst && Object.keys(snapshot.work_burst).length
+      ? snapshot.work_burst
+      : fallback?.work_burst;
+    if (nextWb) {
+      setWorkBurst(nextWb);
+      const live = nextWb.live_work_seconds;
+      if (nextWb.active_burst_id && live != null && nextWb.accruing) {
+        composerTickAnchorRef.current = { seconds: Number(live) || 0, atMs: Date.now() };
+      } else {
+        composerTickAnchorRef.current = null;
+      }
+    } else if (!snapshot.working && !(fallback?.working)) {
+      setWorkBurst(null);
+      composerTickAnchorRef.current = null;
+    }
     // Spec #280: empty ledger arrays are correct — do not fall back to chat archaeology.
     setFindings(Array.isArray(snapshot.findings) ? snapshot.findings : (fallback?.findings || []));
     setAssets(snapshot.assets?.length ? snapshot.assets : fallback?.assets || []);
@@ -765,6 +837,25 @@ export default function ConversationPage() {
     // Multi-role Case roster: light case_run patch; full snapshot only when multi-role.
     if (isRecord(msg.case_run)) {
       setCaseRun(msg.case_run as CaseRunSummary);
+    }
+    // Spec #325: work_burst is the sole C1/B1 clock source (not Status elapsed).
+    if (isRecord(msg.work_burst)) {
+      const wb = msg.work_burst as WorkBurstProjection;
+      setWorkBurst(wb);
+      const live = wb.live_work_seconds;
+      if (wb.active_burst_id && live != null && wb.accruing !== false && !wb.authorize_paused) {
+        composerTickAnchorRef.current = { seconds: Number(live) || 0, atMs: Date.now() };
+      } else if (!wb.active_burst_id) {
+        composerTickAnchorRef.current = null;
+      } else {
+        // Authorize pause: freeze tick at live value
+        composerTickAnchorRef.current = live != null
+          ? { seconds: Number(live) || 0, atMs: Date.now() }
+          : composerTickAnchorRef.current;
+      }
+    } else if (!working) {
+      setWorkBurst((prev) => (prev?.active_burst_id ? { ...prev, active_burst_id: null, accruing: false } : prev));
+      composerTickAnchorRef.current = null;
     }
     const participants = Array.isArray(msg.participants) ? msg.participants : [];
     if (participants.length > 1 || (participants.length === 1 && !working)) {
@@ -2636,29 +2727,57 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               )}
               {messageQuery.isFetchingNextPage && <div className="py-2 text-center text-xs text-ink-muted">Loading older messages...</div>}
               {messageQuery.hasNextPage && !messageQuery.isFetchingNextPage && <button type="button" onClick={fetchOlderMessages} className="mx-auto block rounded-pill border border-hairline px-3 py-1.5 text-xs text-ink-secondary">Load older messages</button>}
-              {displayMessages.map((msg, index) => (
-                <div key={messageListKey(msg)} data-message-created-at={msg.created_at}>
-                  <MessageRenderer
-                    message={msg}
-                    previousMessage={displayMessages[index - 1]}
-                    agentNameById={agentNameById}
-                    fallbackPentestNodeId={fallbackPentestNodeId}
-                    platformAgentNodeId={platformAgentNodeId}
-                    onDecision={handleDecision}
-                    onConfirmOptions={handleConfirmOptions}
-                    onOpenVulnerability={setSelectedVulnerability}
-                    onOpenAsset={setSelectedAsset}
-                    onOpenEvidence={setSelectedEvidence}
-                    highlightedApprovalId={highlightedApprovalId}
-                    approvalDecisionByRequestId={approvalDecisionByRequestId}
-                    choiceSelectedByRequestId={choiceSelectedByRequestId}
-                    sessionActive={isActiveConversationRunning}
-                    choiceDisabled={
-                      interrupting || ((running || Boolean(activeConversation?.working)) && !hasOpenInteractiveChoice)
-                    }
-                  />
-                </div>
-              ))}
+              {streamChromeItems.map((item, index) => {
+                if (item.kind === "time_separator" || item.kind === "day_separator") {
+                  const stampKey =
+                    item.kind === "time_separator" ? item.stampKey : item.dayKey;
+                  return (
+                    <div
+                      key={`time-${stampKey}-${index}`}
+                      role="separator"
+                      data-chat-message-time={item.label}
+                      data-chat-day-separator={stampKey}
+                      className="my-3 flex items-center justify-center"
+                    >
+                      <span className="rounded-full bg-surface-default px-3 py-0.5 font-mono text-[11px] tabular-nums text-ink-muted">
+                        {item.label}
+                      </span>
+                    </div>
+                  );
+                }
+                const msg = item.message;
+                const prevMsg = (() => {
+                  for (let i = index - 1; i >= 0; i--) {
+                    const prev = streamChromeItems[i];
+                    if (prev.kind === "message") return prev.message;
+                  }
+                  return undefined;
+                })();
+                return (
+                  <div key={messageListKey(msg)} data-message-created-at={msg.created_at}>
+                    <MessageRenderer
+                      message={msg}
+                      previousMessage={prevMsg}
+                      agentNameById={agentNameById}
+                      fallbackPentestNodeId={fallbackPentestNodeId}
+                      platformAgentNodeId={platformAgentNodeId}
+                      onDecision={handleDecision}
+                      onConfirmOptions={handleConfirmOptions}
+                      onOpenVulnerability={setSelectedVulnerability}
+                      onOpenAsset={setSelectedAsset}
+                      onOpenEvidence={setSelectedEvidence}
+                      highlightedApprovalId={highlightedApprovalId}
+                      approvalDecisionByRequestId={approvalDecisionByRequestId}
+                      choiceSelectedByRequestId={choiceSelectedByRequestId}
+                      sessionActive={isActiveConversationRunning}
+                      choiceDisabled={
+                        interrupting || ((running || Boolean(activeConversation?.working)) && !hasOpenInteractiveChoice)
+                      }
+                      resultAnchorWorkSeconds={resultAnchorSecondsByMessageId[msg.id]}
+                    />
+                  </div>
+                );
+              })}
               {/* Spec #276: pending is chrome only — not a Message / live-slot row.
                   Spec #305: same speaker row rules as MessageRenderer (first / expert switch only). */}
               {showPendingChrome && pendingChrome && (() => {
@@ -2992,7 +3111,17 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
                       </button>
                     )}
                   </div>
-                  <div className="flex h-8 shrink-0 items-center">
+                  <div className="flex h-8 shrink-0 items-center gap-2">
+                    {/* Spec #325 C1: live work-burst timer near Send; hide on settle. */}
+                    {composerTimerText != null && (
+                      <span
+                        data-testid="composer-work-timer"
+                        className="font-mono text-xs tabular-nums text-ink-muted"
+                        title={workBurst?.authorize_paused ? "等待授权（不计工作时间）" : "本轮工作时长"}
+                      >
+                        {composerTimerText}
+                      </span>
+                    )}
                     {isActiveConversationRunning ? (
                       <button
                         type="button"
@@ -3301,7 +3430,15 @@ function isRenderableMessage(message: Message): boolean {
     return readString(message.content.decision) === "confirm_options";
   }
   if (message.msg_type === "tool_call") return true;
-  if (["text", "status", "engagement_closeout", "confirm_card", "choice_card", "vuln_card", "vuln_found", "asset_card", "asset_discovered", "agent_pending", "thinking", "reasoning", "agent_thinking"].includes(message.msg_type)) return true;
+  // Spec #326 L9: drop infra status (tooling_health-class) from the stream list entirely.
+  if (
+    message.role === "system" ||
+    message.msg_type === "status" ||
+    message.msg_type === "engagement_closeout"
+  ) {
+    return shouldRenderStatusNotice(message);
+  }
+  if (["text", "confirm_card", "choice_card", "vuln_card", "vuln_found", "asset_card", "asset_discovered", "agent_pending", "thinking", "reasoning", "agent_thinking"].includes(message.msg_type)) return true;
   return false;
 }
 function groupConsecutiveToolMessages(messages: Message[]): Message[] {
