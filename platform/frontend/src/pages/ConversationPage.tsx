@@ -35,6 +35,7 @@ import {
   isStrixAgentStatus,
   upsertSubagentChild,
   mergeLivePanelAgents,
+  mergeSnapshotAgentsPreserveHarness,
   patchMainAgentActivity,
   preferRicherPlanTree,
   mergePlanTreeByOwner,
@@ -713,8 +714,12 @@ export default function ConversationPage() {
         setViewedRevisionId(null);
       }
     }
-    // Backend case_participants.merge_panel_agents is source of truth for Subagent history.
-    setStrixAgents(snapshot.strix_agents?.length ? snapshot.strix_agents : fallback?.strix_agents || []);
+    // Backend case_participants is SoT for Subagent history — but live Free/Graph badge
+    // and pi session_id must not flash off when a mid-stream snapshot omits them.
+    const nextAgents = snapshot.strix_agents?.length
+      ? snapshot.strix_agents
+      : fallback?.strix_agents || [];
+    setStrixAgents((prev) => mergeSnapshotAgentsPreserveHarness(prev, nextAgents));
     setStrixNotes(snapshot.strix_notes?.length ? snapshot.strix_notes : fallback?.strix_notes || []);
     // Never replace a populated live run with an empty snapshot object ({} is truthy).
     const nextRun = hasStrixRunSummary(snapshot.strix_run)

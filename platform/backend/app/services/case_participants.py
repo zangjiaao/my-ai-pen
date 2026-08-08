@@ -968,11 +968,27 @@ def agents_from_participants(
             "usage": usage,
             "model": usage.get("model") or "",
         }
+        # Spec #278: Free/Graph badge is Session harness, not burst-ephemeral.
+        # Prefer Participant Session work_mode (context.sessions), then last panel main.
+        try:
+            from app.services.participant_session import session_record_from_context
+
+            sess = session_record_from_context(context, eid)
+            swm = str(sess.get("work_mode") or "").strip().lower()
+            if swm == "free":
+                root["work_mode"] = "free"
+            elif swm == "graph":
+                root["work_mode"] = "graph"
+                sgid = str(sess.get("graph_id") or "").strip()
+                if sgid:
+                    root["graph_id"] = sgid
+        except Exception:
+            pass
         # Collab copy: pi-agent-core Agent.sessionId only (never expert catalog / roster key).
         pi_sid = str(row.get("session_instance_id") or "").strip()
         if pi_sid and not pi_sid.startswith("expert:") and not pi_sid.startswith("pack:") and pi_sid != key:
             root["session_id"] = pi_sid
-        # Pull live tool from nested panel main if running
+        # Pull live tool / harness fields from nested panel main
         panel = row.get("panel_agents") if isinstance(row.get("panel_agents"), list) else []
         children: list[dict[str, Any]] = []
         for item in panel:
@@ -983,7 +999,24 @@ def agents_from_participants(
             if not item_id:
                 continue
             if not parent:
-                # Merge live main fields into root
+                # Always lift work_mode from last panel Main (Node stamps Free/Graph on every list()).
+                pwm = str(item.get("work_mode") or "").strip().lower()
+                if pwm == "free":
+                    root["work_mode"] = "free"
+                    root.pop("graph_id", None)
+                    root.pop("graph_label", None)
+                elif pwm == "graph" or pwm.startswith("hard_graph"):
+                    root["work_mode"] = "graph"
+                    gid = str(item.get("graph_id") or "").strip()
+                    if not gid and pwm.startswith("hard_graph:"):
+                        parts = pwm.split(":")
+                        gid = parts[1] if len(parts) > 1 else ""
+                    if gid:
+                        root["graph_id"] = gid
+                    glabel = str(item.get("graph_label") or "").strip()
+                    if glabel:
+                        root["graph_label"] = glabel
+                # Activity chrome only while running (idle keeps last_detail).
                 if status == "running":
                     root["current_tool"] = str(item.get("current_tool") or "")
                     root["current_action"] = str(item.get("current_action") or root["current_action"])

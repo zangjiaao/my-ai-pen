@@ -118,6 +118,36 @@ def test_checkpoint_projects_agent_session_id():
     assert agents[0].get("session_id") == "pi-sid-from-checkpoint"
 
 
+def test_agents_from_participants_projects_work_mode_badge():
+    """Spec #278: Free/Graph badge must survive snapshot projection (not only live panel)."""
+    eid = "3646a655-c22f-4af8-908e-037d1cec8bc4"
+    ctx = {
+        "sessions": {eid: {"work_mode": "free", "graph_id": None}},
+        "participants": {
+            f"expert:{eid}": {
+                "key": f"expert:{eid}",
+                "expert_id": eid,
+                "expert_name": "渗透大师",
+                "pack_id": "pentest",
+                "last_status": "idle",
+                "panel_agents": [
+                    {
+                        "id": "node4-main",
+                        "name": "渗透大师",
+                        "status": "completed",
+                        "parent_id": None,
+                        "work_mode": "free",
+                    }
+                ],
+            }
+        },
+    }
+    agents = agents_from_participants(ctx)
+    mains = [a for a in agents if not a.get("parent_id")]
+    assert len(mains) == 1
+    assert mains[0].get("work_mode") == "free"
+
+
 def test_settle_context_after_session_delete_clears_workers_and_panel_ghosts():
     from app.services.case_participants import settle_context_after_session_delete
 

@@ -141,6 +141,56 @@ function isChildOfRoot(agent: StrixAgentStatus, rootId: string): boolean {
  * Invariant: Subagent children under the active root are upserted by id and never
  * dropped when a new burst sends main-only. Terminal settle is backend-only.
  */
+/**
+ * Snapshot replace for collab tree: keep Session harness fields (work_mode / graph_* /
+ * session_id) when the snapshot row is thinner than the live row.
+ * Prevents Free/Graph badge flash-off during mid-stream refreshConversationState.
+ */
+export function mergeSnapshotAgentsPreserveHarness(
+  prev: StrixAgentStatus[],
+  next: StrixAgentStatus[],
+): StrixAgentStatus[] {
+  if (!next.length) return prev.length ? prev : next;
+  if (!prev.length) return next;
+  const prevByKey = new Map<string, StrixAgentStatus>();
+  for (const a of prev) {
+    const k = String(a.expert_id || a.id || "").trim();
+    if (k) prevByKey.set(k, a);
+    prevByKey.set(a.id, a);
+  }
+  return next.map((row) => {
+    const prior =
+      prevByKey.get(String(row.expert_id || "").trim()) ||
+      prevByKey.get(row.id) ||
+      null;
+    if (!prior || row.parent_id) return row;
+    const liveWm = String(row.work_mode || "").trim();
+    const priorWm = String(prior.work_mode || "").trim();
+    const work_mode = liveWm || priorWm || undefined;
+    const liveSid = String(row.session_id || "").trim();
+    const priorSid = String(prior.session_id || "").trim();
+    const sidOk = (s: string) => s && !s.startsWith("expert:") && !s.startsWith("pack:");
+    const session_id = (sidOk(liveSid) ? liveSid : "") || (sidOk(priorSid) ? priorSid : "") || undefined;
+    return {
+      ...row,
+      ...(work_mode
+        ? {
+            work_mode,
+            graph_id:
+              String(work_mode).toLowerCase() === "free"
+                ? undefined
+                : row.graph_id || prior.graph_id,
+            graph_label:
+              String(work_mode).toLowerCase() === "free"
+                ? undefined
+                : row.graph_label || prior.graph_label,
+          }
+        : {}),
+      ...(session_id ? { session_id } : {}),
+    };
+  });
+}
+
 export function mergeLivePanelAgents(
   prev: StrixAgentStatus[],
   panel: StrixAgentStatus[],
@@ -180,6 +230,24 @@ export function mergeLivePanelAgents(
     (prevSessionId && !prevSessionId.startsWith("expert:") && !prevSessionId.startsWith("pack:")
       ? prevSessionId
       : "");
+  // Spec #278: work_mode is Session harness — never drop Free/Graph when a live
+  // panel tick omits it (status/stream panels used to flash the badge on/off).
+  const liveWm = String(panelMain.work_mode || "").trim().toLowerCase();
+  const prevWm = String(root.work_mode || "").trim().toLowerCase();
+  let workMode: string | undefined;
+  let graphId = root.graph_id;
+  let graphLabel = root.graph_label;
+  if (liveWm === "free") {
+    workMode = "free";
+    graphId = undefined;
+    graphLabel = undefined;
+  } else if (liveWm === "graph" || liveWm.startsWith("hard_graph")) {
+    workMode = "graph";
+    graphId = panelMain.graph_id || root.graph_id;
+    graphLabel = panelMain.graph_label || root.graph_label;
+  } else if (prevWm === "free" || prevWm === "graph" || prevWm.startsWith("hard_graph")) {
+    workMode = prevWm === "free" ? "free" : "graph";
+  }
   const nextRoot: StrixAgentStatus = {
     ...root,
     status: panelMain.status || root.status || "running",
@@ -190,6 +258,13 @@ export function mergeLivePanelAgents(
     highlighted: true,
     expert_id: eid || root.expert_id || panelMain.expert_id,
     ...(sessionId ? { session_id: sessionId } : {}),
+    ...(workMode
+      ? {
+          work_mode: workMode,
+          graph_id: workMode === "graph" ? graphId : undefined,
+          graph_label: workMode === "graph" ? graphLabel : undefined,
+        }
+      : {}),
   };
   const nextKids = mergePanelChildren(
     prevKids,
