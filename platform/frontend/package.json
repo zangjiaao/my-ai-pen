@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test:unit": "tsx src/lib/panelAgentsState.test.ts && tsx src/lib/workerPresentation.test.ts && tsx src/lib/orderStrixAgents.test.ts && tsx src/lib/tasksListCap.test.ts && tsx src/lib/messageStreamIdentity.test.ts && tsx src/lib/findingNew.test.ts && tsx src/lib/packHonesty.test.ts && tsx src/lib/workerAuditChannel.test.ts && tsx src/lib/workerAuditTurns.test.ts && tsx src/lib/workerDisplayName.test.ts && tsx src/lib/trafficAuditView.test.ts && tsx src/lib/workset.test.ts && tsx src/lib/choiceCard.test.ts && tsx src/lib/status.test.ts && tsx src/lib/agentSpeaker.test.ts && tsx src/lib/surfaceModel.hostPort.test.ts"
+    "test:unit": "tsx src/lib/panelAgentsState.test.ts && tsx src/lib/workerPresentation.test.ts && tsx src/lib/orderStrixAgents.test.ts && tsx src/lib/tasksListCap.test.ts && tsx src/lib/messageStreamIdentity.test.ts && tsx src/lib/findingNew.test.ts && tsx src/lib/packHonesty.test.ts && tsx src/lib/workerAuditChannel.test.ts && tsx src/lib/workerAuditTurns.test.ts && tsx src/lib/workerDisplayName.test.ts && tsx src/lib/trafficAuditView.test.ts && tsx src/lib/workset.test.ts && tsx src/lib/choiceCard.test.ts && tsx src/lib/status.test.ts && tsx src/lib/agentSpeaker.test.ts && tsx src/lib/surfaceModel.hostPort.test.ts && tsx src/lib/chatStreamChrome.test.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.62.0",

@@ -36,6 +36,10 @@ import {
   upsertWorkerAgent,
 } from "../lib/panelAgentsState";
 import {
+  projectStreamWithDaySeparators,
+  shouldRenderStatusNotice,
+} from "../lib/chatStreamChrome";
+import {
   buildPendingSendSuccessEvent,
   clearLiveStreams,
   durableStreamSnapshots,
@@ -391,6 +395,11 @@ export default function ConversationPage() {
     });
     return groupConsecutiveToolMessages(merged);
   }, [messages, liveStreams, activeId]);
+  /** Spec #326: messenger day separators over the renderable stream. */
+  const streamChromeItems = useMemo(
+    () => projectStreamWithDaySeparators(displayMessages),
+    [displayMessages],
+  );
   const showPendingChrome = pendingChromeVisible(pendingChrome, activeId);
   const activeConversation = useMemo(() => conversations.find(c => c.id === activeId), [activeId, conversations]);
   /**
@@ -2636,29 +2645,53 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               )}
               {messageQuery.isFetchingNextPage && <div className="py-2 text-center text-xs text-ink-muted">Loading older messages...</div>}
               {messageQuery.hasNextPage && !messageQuery.isFetchingNextPage && <button type="button" onClick={fetchOlderMessages} className="mx-auto block rounded-pill border border-hairline px-3 py-1.5 text-xs text-ink-secondary">Load older messages</button>}
-              {displayMessages.map((msg, index) => (
-                <div key={messageListKey(msg)} data-message-created-at={msg.created_at}>
-                  <MessageRenderer
-                    message={msg}
-                    previousMessage={displayMessages[index - 1]}
-                    agentNameById={agentNameById}
-                    fallbackPentestNodeId={fallbackPentestNodeId}
-                    platformAgentNodeId={platformAgentNodeId}
-                    onDecision={handleDecision}
-                    onConfirmOptions={handleConfirmOptions}
-                    onOpenVulnerability={setSelectedVulnerability}
-                    onOpenAsset={setSelectedAsset}
-                    onOpenEvidence={setSelectedEvidence}
-                    highlightedApprovalId={highlightedApprovalId}
-                    approvalDecisionByRequestId={approvalDecisionByRequestId}
-                    choiceSelectedByRequestId={choiceSelectedByRequestId}
-                    sessionActive={isActiveConversationRunning}
-                    choiceDisabled={
-                      interrupting || ((running || Boolean(activeConversation?.working)) && !hasOpenInteractiveChoice)
-                    }
-                  />
-                </div>
-              ))}
+              {streamChromeItems.map((item, index) => {
+                if (item.kind === "day_separator") {
+                  return (
+                    <div
+                      key={`day-${item.dayKey}-${index}`}
+                      role="separator"
+                      data-chat-day-separator={item.dayKey}
+                      className="my-3 flex items-center justify-center"
+                    >
+                      <span className="rounded-full bg-surface-default px-3 py-0.5 text-[11px] text-ink-muted">
+                        {item.label}
+                      </span>
+                    </div>
+                  );
+                }
+                const msg = item.message;
+                const prevMsg = (() => {
+                  for (let i = index - 1; i >= 0; i--) {
+                    const prev = streamChromeItems[i];
+                    if (prev.kind === "message") return prev.message;
+                  }
+                  return undefined;
+                })();
+                return (
+                  <div key={messageListKey(msg)} data-message-created-at={msg.created_at}>
+                    <MessageRenderer
+                      message={msg}
+                      previousMessage={prevMsg}
+                      agentNameById={agentNameById}
+                      fallbackPentestNodeId={fallbackPentestNodeId}
+                      platformAgentNodeId={platformAgentNodeId}
+                      onDecision={handleDecision}
+                      onConfirmOptions={handleConfirmOptions}
+                      onOpenVulnerability={setSelectedVulnerability}
+                      onOpenAsset={setSelectedAsset}
+                      onOpenEvidence={setSelectedEvidence}
+                      highlightedApprovalId={highlightedApprovalId}
+                      approvalDecisionByRequestId={approvalDecisionByRequestId}
+                      choiceSelectedByRequestId={choiceSelectedByRequestId}
+                      sessionActive={isActiveConversationRunning}
+                      choiceDisabled={
+                        interrupting || ((running || Boolean(activeConversation?.working)) && !hasOpenInteractiveChoice)
+                      }
+                    />
+                  </div>
+                );
+              })}
               {/* Spec #276: pending is chrome only — not a Message / live-slot row.
                   Spec #305: same speaker row rules as MessageRenderer (first / expert switch only). */}
               {showPendingChrome && pendingChrome && (() => {
@@ -3301,7 +3334,15 @@ function isRenderableMessage(message: Message): boolean {
     return readString(message.content.decision) === "confirm_options";
   }
   if (message.msg_type === "tool_call") return true;
-  if (["text", "status", "engagement_closeout", "confirm_card", "choice_card", "vuln_card", "vuln_found", "asset_card", "asset_discovered", "agent_pending", "thinking", "reasoning", "agent_thinking"].includes(message.msg_type)) return true;
+  // Spec #326 L9: drop infra status (tooling_health-class) from the stream list entirely.
+  if (
+    message.role === "system" ||
+    message.msg_type === "status" ||
+    message.msg_type === "engagement_closeout"
+  ) {
+    return shouldRenderStatusNotice(message);
+  }
+  if (["text", "confirm_card", "choice_card", "vuln_card", "vuln_found", "asset_card", "asset_discovered", "agent_pending", "thinking", "reasoning", "agent_thinking"].includes(message.msg_type)) return true;
   return false;
 }
 function groupConsecutiveToolMessages(messages: Message[]): Message[] {
