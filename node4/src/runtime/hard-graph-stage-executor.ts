@@ -32,6 +32,7 @@ import {
   PlatformTextStream,
   createUsageLedgerFromEnv,
   emitCheckpointUpdate,
+  streamDiagnosisPayload,
   type ObservabilityContext,
 } from "./platform-observability.js";
 import { PanelAgentTracker } from "./panel-agents.js";
@@ -82,7 +83,14 @@ import {
   formatSkillL1CatalogInjection,
   loadSkillL1Catalog,
 } from "./skill-l1-catalog.js";
-import { extractLlmTurnError, LlmTurnError } from "./llm-turn-error.js";
+import {
+  extractLlmTurnError,
+  isIncompleteStreamError,
+  llmTurnErrorWithDiagnosis,
+  LlmTurnError,
+  formatLlmErrorForUser,
+} from "./llm-turn-error.js";
+import { streamIdleTimeoutMessage } from "./llm-stream-health.js";
 
 /**
  * Deposit host-trusted surfaces/candidates into ledger + Finding Store.
@@ -895,11 +903,19 @@ export function createHardGraphStageExecutor(options: {
         followUp: (text) => session.followUp(text),
       });
 
+      // Spec #353: stream health + idle abort for Graph Main stage (same rules as Free).
       const sessionObs = attachNode4SessionObservability({
         session,
         obsCtx,
         textStream,
         checkpointThrottle,
+        onIdleAbort: () => {
+          try {
+            session.abort();
+          } catch {
+            /* best-effort */
+          }
+        },
       });
 
       // Initial checkpoint so Status has a live panel row for this stage (+ session_id).
@@ -925,6 +941,27 @@ export function createHardGraphStageExecutor(options: {
         } else {
           await session.prompt(userPrompt);
         }
+        // Spec #353: idle abort is fail-closed LlmTurnError (not user cancel).
+        if (obsCtx.streamHealth?.isIdleAbortRequested) {
+          const e = llmTurnErrorWithDiagnosis(streamIdleTimeoutMessage(), obsCtx.streamHealth);
+          try {
+            await textStream.emitFinalText(e.userMessage);
+          } catch {
+            /* best-effort */
+          }
+          await parentRuntime.platform
+            .send({
+              type: "status_update",
+              conversation_id: task.conversationId,
+              task_id: task.taskId,
+              message: e.userMessage,
+              agent_phase: "error",
+              status: "failed",
+              stream_diagnosis: streamDiagnosisPayload(e.diagnosis),
+            } as any)
+            .catch(() => {});
+          throw e;
+        }
         // Spec #116 I0.7: abort may cancel turn without throw — still fail-closed aborted.
         if (abortSignal?.aborted) {
           return await finalizeStage({
@@ -937,20 +974,58 @@ export function createHardGraphStageExecutor(options: {
         // Soft LLM failure (403 etc.): surface to user and fail stage — not silent empty settle.
         const llmErr = extractLlmTurnError(session.messages);
         if (llmErr) {
+          const e = llmTurnErrorWithDiagnosis(llmErr, obsCtx.streamHealth, {
+            finishReasonPresent: false,
+          });
           try {
-            await textStream.emitFinalText(llmErr);
+            await textStream.emitFinalText(e.userMessage);
           } catch {
             /* best-effort */
           }
-          throw new LlmTurnError(llmErr);
+          await parentRuntime.platform
+            .send({
+              type: "status_update",
+              conversation_id: task.conversationId,
+              task_id: task.taskId,
+              message: e.userMessage,
+              agent_phase: "error",
+              status: "failed",
+              stream_diagnosis: streamDiagnosisPayload(e.diagnosis),
+            } as any)
+            .catch(() => {});
+          throw e;
+        }
+        if (obsCtx.streamHealth && obsCtx.streamHealth.state !== "terminal") {
+          obsCtx.streamHealth.terminalSuccess();
         }
       } catch (err) {
+        if (obsCtx.streamHealth?.isIdleAbortRequested) {
+          throw llmTurnErrorWithDiagnosis(streamIdleTimeoutMessage(), obsCtx.streamHealth);
+        }
         if (abortSignal?.aborted) {
           return await finalizeStage({
             narrative: failNarrative("aborted", "aborted"),
             child: childRuntime,
             seed: continuitySeed,
             workDir,
+          });
+        }
+        if (isIncompleteStreamError(err) || err instanceof LlmTurnError) {
+          if (err instanceof LlmTurnError && err.diagnosis) throw err;
+          const raw =
+            err instanceof LlmTurnError
+              ? err.userMessage
+              : err instanceof Error
+                ? err.message
+                : String(err);
+          throw llmTurnErrorWithDiagnosis(raw, obsCtx.streamHealth, {
+            finishReasonPresent: false,
+          });
+        }
+        const raw = err instanceof Error ? err.message : String(err);
+        if (/模型调用失败|provider|stream|finish_reason|llm/i.test(raw)) {
+          throw llmTurnErrorWithDiagnosis(formatLlmErrorForUser(raw), obsCtx.streamHealth, {
+            finishReasonPresent: false,
           });
         }
         throw err;

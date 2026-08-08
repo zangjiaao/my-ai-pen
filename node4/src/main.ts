@@ -109,12 +109,24 @@ async function runAssignedTask(message: Record<string, unknown>): Promise<void> 
       const message = raw.startsWith("模型调用失败") || raw.startsWith("llm_error")
         ? raw.replace(/^llm_error:\s*/i, "")
         : raw;
+      // Spec #353 S2: attach stream diagnosis package when present (no full tool args).
+      const diagnosis =
+        error &&
+        typeof error === "object" &&
+        "diagnosis" in error &&
+        (error as { diagnosis?: unknown }).diagnosis &&
+        typeof (error as { diagnosis?: unknown }).diagnosis === "object"
+          ? (error as { diagnosis: Record<string, unknown> }).diagnosis
+          : undefined;
       await client.send({
         type: "task_error",
         conversation_id: task.conversationId,
         task_id: task.taskId,
         message,
-        stop_reason: /模型调用失败|llm_error/i.test(raw) ? "llm_error" : "error",
+        stop_reason: /模型调用失败|llm_error|stream idle timeout|finish_reason/i.test(raw)
+          ? "llm_error"
+          : "error",
+        ...(diagnosis ? { stream_diagnosis: diagnosis } : {}),
       });
     }
   } finally {

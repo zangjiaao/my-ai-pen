@@ -1164,7 +1164,7 @@ function unifiedTodoItems(nodes: PlanNode[]): { items: PlanNode[]; hiddenCount: 
 /** Align collaboration tree with conversation lifecycle (timer already stopped when running=false). */
 function normalizeAgentsForConversationRunning(agents: StrixAgentStatus[], running: boolean): StrixAgentStatus[] {
   if (running || agents.length === 0) return agents;
-  const open = new Set(["running", "pending", "todo", "llm_waiting", "tool_running", "working", "chat", "starting", ""]);
+  const open = new Set(["running", "pending", "todo", "llm_waiting", "llm_stalled", "stream_stalled", "tool_running", "working", "chat", "starting", ""]);
   return agents.map((agent) => {
     const status = String(agent.status || "").toLowerCase();
     if (!open.has(status)) return agent;

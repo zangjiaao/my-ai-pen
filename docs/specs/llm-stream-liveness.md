@@ -1,6 +1,6 @@
 # Spec: LLM stream liveness + fail-closed incomplete streams
 
-**Status:** Implementable Spec (product contract)  
+**Status:** Implemented (product contract) — Runtime stream health + fail-closed incomplete/idle + diagnosis package; FE projects `llm_stalled`  
 **Tracker:** [#353](https://github.com/zangjiaao/my-ai-pen/issues/353)  
 **Decision source:** Live diagnosis of Case `6eb54137-6b8e-47b5-9548-1d7baedbb69d` — thinking done → ~16 min silence at `llm_waiting` → terminal `模型调用失败：Stream ended without finish_reason`; operator could not distinguish hang vs work; post-hoc forensics could not prove tool-arg vs empty stream vs proxy (observability blind zone).
 
@@ -104,8 +104,8 @@ Incident class: Case `6eb54137-…` (task `3917753b-…`): last progressive acti
 1. **Primary seam (S1) — LLM stream lifecycle:** Session/task-scoped stream health for the Main model turn: open → activity → stall → terminal (success | incomplete | aborted). Prefer extending the existing observability / agent-event bridge (tool_execution_end → llm_waiting path) rather than a second parallel kernel.  
 2. **Secondary seam (S2) — Diagnosis package on terminal LLM failure:** On `LlmTurnError` / incomplete-stream class failures, attach structured fields (see sketch) to the same user-visible failure path and to task/events diagnostics.  
 3. **Tertiary seam (S3) — UI projection:** Status/timeline project Runtime stall + failed states only; no FE-only “N seconds then guess stuck.”  
-4. **Stall threshold:** Product default idle window after last stream activity (implementation picks a conservative default, configurable). Stall emits a Runtime-authored status/diagnostic frame; it does not invent thinking prose.  
-5. **Early abort (optional but recommended in v1):** After a longer idle than stall (or combined policy), Runtime may abort the stream and fail the turn with an explicit “stream idle timeout” class message—same channel as incomplete finish_reason failures.  
+4. **Stall threshold:** Default **45s** idle after last stream activity (`NODE4_LLM_STALL_MS`). Stall emits Runtime `agent_phase=llm_stalled` + `stream_health` snapshot + panel detail; it does not invent thinking prose or reseed #276 pending.  
+5. **Early abort (recommended v1):** Default **180s** idle (`NODE4_LLM_IDLE_ABORT_MS`; set `0` to disable). Runtime aborts the provider stream and fails the turn with `stream idle timeout` / diagnosis `idle_timeout`—same `LlmTurnError` → `task_error` channel as incomplete finish_reason.  
 6. **Incomplete stream:** When the provider iterator ends without success stop / finish_reason, map to existing user-facing LLM error formatting immediately; do not wait for unrelated retries to “accumulate.”  
 7. **Coarse chunk kinds only:** thinking / text / toolcall / empty_or_other for diagnostics—not full SSE replay in Case chat.  
 8. **Relation to #305:** Keep T1 empty running thinking for tool→think. After thinking is **done**, if the stream continues without new projectable frames, stream-stall owns liveness—not a second pending reseed.  

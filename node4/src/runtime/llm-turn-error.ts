@@ -1,18 +1,64 @@
 /**
  * Detect soft LLM turn failures (stopReason=error / errorMessage) that do not throw.
  * Spec: surface to UI + task_error — never silent natural_stop / completed.
+ * Spec #353: optional stream diagnosis package on terminal LLM failures (S2).
  */
+
+import type { StreamDiagnosis } from "./llm-stream-health.js";
+import {
+  isIncompleteStreamMessage,
+  type LlmStreamHealth,
+} from "./llm-stream-health.js";
 
 export class LlmTurnError extends Error {
   readonly code = "llm_error" as const;
   readonly userMessage: string;
+  /** Spec #353 S2: durable stream forensics (no full tool args). */
+  readonly diagnosis?: StreamDiagnosis;
 
-  constructor(message: string) {
+  constructor(message: string, diagnosis?: StreamDiagnosis) {
     const msg = String(message || "Model request failed").trim() || "Model request failed";
     super(msg);
     this.name = "LlmTurnError";
     this.userMessage = msg;
+    if (diagnosis) this.diagnosis = diagnosis;
   }
+}
+
+/**
+ * Build LlmTurnError with diagnosis from stream health (incomplete / idle / provider).
+ * Marks health terminal when a tracker is provided.
+ */
+export function llmTurnErrorWithDiagnosis(
+  providerMessage: string,
+  health?: LlmStreamHealth | null,
+  opts?: { finishReasonPresent?: boolean },
+): LlmTurnError {
+  const raw = String(providerMessage || "").trim() || "Model request failed";
+  const user = formatLlmErrorForUser(raw);
+  const diagnosis = health
+    ? health.state === "terminal"
+      ? health.diagnosis({
+          providerMessage: raw,
+          finishReasonPresent: opts?.finishReasonPresent === true,
+        })
+      : health.terminalFailure({
+          providerMessage: raw,
+          finishReasonPresent: opts?.finishReasonPresent === true,
+        })
+    : undefined;
+  return new LlmTurnError(user, diagnosis);
+}
+
+/** Thrown or soft provider text that is incomplete-stream class (fail-closed immediately). */
+export function isIncompleteStreamError(err: unknown): boolean {
+  const raw =
+    err instanceof Error
+      ? err.message
+      : typeof err === "string"
+        ? err
+        : String((err as { message?: string })?.message || err || "");
+  return isIncompleteStreamMessage(raw);
 }
 
 /** Last assistant message fields we care about for error detection. */
