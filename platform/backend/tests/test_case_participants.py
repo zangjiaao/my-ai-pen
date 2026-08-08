@@ -47,6 +47,36 @@ def test_remove_participant_session_delete_drops_collab_card():
     assert ctx["participants"] == {}
 
 
+def test_session_instance_id_renews_after_delete_reentry():
+    """Spec #354: collab Session ID must change after Delete + same-expert re-entry.
+
+    Expert catalog id stays stable; session_instance_id is the operator-visible
+    Session handle (not expert:{catalog_uuid}).
+    """
+    eid = "269b0fae-ec27-49a7-8e14-02ad26beb69e"
+    ctx = upsert_participant({}, expert_id=eid, expert_name="平台助理", pack_id="default")
+    agents1 = agents_from_participants(ctx)
+    assert len(agents1) == 1
+    sid1 = str(agents1[0].get("session_id") or "")
+    assert sid1
+    assert sid1 != f"expert:{eid}"
+    assert sid1 != eid
+    # Same expert maintain upsert keeps instance
+    ctx = upsert_participant(ctx, expert_id=eid, expert_name="平台助理", pack_id="default", last_status="running")
+    agents_mid = agents_from_participants(ctx)
+    assert agents_mid[0].get("session_id") == sid1
+    # Delete then re-entry
+    ctx = remove_participant(ctx, expert_id=eid)
+    assert agents_from_participants(ctx) == []
+    ctx = upsert_participant(ctx, expert_id=eid, expert_name="平台助理", pack_id="default")
+    agents2 = agents_from_participants(ctx)
+    assert len(agents2) == 1
+    sid2 = str(agents2[0].get("session_id") or "")
+    assert sid2
+    assert sid2 != sid1
+    assert agents2[0].get("expert_id") == eid
+
+
 def test_settle_context_after_session_delete_clears_workers_and_panel_ghosts():
     from app.services.case_participants import settle_context_after_session_delete
 

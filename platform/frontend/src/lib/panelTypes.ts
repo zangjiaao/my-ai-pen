@@ -69,8 +69,9 @@ export type StrixAgentStatus = {
   expert_id?: string;
   pack_id?: string;
   /**
-   * Spec #354: durable Participant Session identity on this Case
-   * (typically `expert:{uuid}` / park key material). Shown in collab chrome.
+   * Spec #354: Participant Session *instance* id on this Case.
+   * Renewed after Session Delete + same-expert re-entry. Distinct from
+   * expert_id (catalog identity). Shown in collab chrome.
    */
   session_id?: string;
   /** Currently sticky / active speaker role. */
