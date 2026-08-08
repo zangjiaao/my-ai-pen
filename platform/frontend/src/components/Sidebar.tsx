@@ -341,7 +341,10 @@ export default function Sidebar({ activeId, onSelect }: Props) {
                       : "hover:bg-surface-default"
                   }`}
                 >
-                  <span className={`h-2 w-2 rounded-full ${statusDotClass(c.status, c.working)}`} />
+                  <span
+                    className={`h-2 w-2 rounded-full ${packageStatusDotClass(c.status, c.working)}`}
+                    title={packageStatusTitle(c.status, c.working)}
+                  />
                 </button>
               ))}
             </div>
