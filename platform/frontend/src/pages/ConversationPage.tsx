@@ -2728,15 +2728,18 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               {messageQuery.isFetchingNextPage && <div className="py-2 text-center text-xs text-ink-muted">Loading older messages...</div>}
               {messageQuery.hasNextPage && !messageQuery.isFetchingNextPage && <button type="button" onClick={fetchOlderMessages} className="mx-auto block rounded-pill border border-hairline px-3 py-1.5 text-xs text-ink-secondary">Load older messages</button>}
               {streamChromeItems.map((item, index) => {
-                if (item.kind === "day_separator") {
+                if (item.kind === "time_separator" || item.kind === "day_separator") {
+                  const stampKey =
+                    item.kind === "time_separator" ? item.stampKey : item.dayKey;
                   return (
                     <div
-                      key={`day-${item.dayKey}-${index}`}
+                      key={`time-${stampKey}-${index}`}
                       role="separator"
-                      data-chat-day-separator={item.dayKey}
+                      data-chat-message-time={item.label}
+                      data-chat-day-separator={stampKey}
                       className="my-3 flex items-center justify-center"
                     >
-                      <span className="rounded-full bg-surface-default px-3 py-0.5 text-[11px] text-ink-muted">
+                      <span className="rounded-full bg-surface-default px-3 py-0.5 font-mono text-[11px] tabular-nums text-ink-muted">
                         {item.label}
                       </span>
                     </div>

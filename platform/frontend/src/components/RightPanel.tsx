@@ -7,7 +7,7 @@ import {
   agentStatusCount,
   orderStrixAgents,
 } from "./AgentCollaborationTree";
-import { formatCaseMeteringHeader } from "../lib/caseMetering";
+import { formatCaseMeteringDetail, formatCaseMeteringHeader } from "../lib/caseMetering";
 import {
   SurfaceTreeView,
   collectSurfaceEntries,
@@ -310,6 +310,8 @@ export default function RightPanel({
 
   const findingGroups = groupFindingsByKind(findings);
   const caseMeteringText = formatCaseMeteringHeader(caseRun);
+  const caseActiveLine = displayAgents.length > 0 ? agentStatusCount(displayAgents) : "";
+  const caseMeteringDetail = formatCaseMeteringDetail(caseRun, { activeLine: caseActiveLine });
   const findingsTabTitle = findingsTabHoverTitle(findingGroups);
   const tabs: { key: Tab; label: string; title?: string }[] = [
     { key: "status", label: "Status" },
@@ -352,23 +354,16 @@ export default function RightPanel({
             {(displayAgents.length > 0 || Boolean(caseRun?.llm_usage)) && (
               <section data-testid="case-collab-section">
                 <div className="mb-2 flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="text-xs text-ink-muted">
-                      {displayAgents.filter((a) => !a.parent_id).length > 1 ? "Case participants" : "Agent collaboration"}
-                    </p>
-                    <p
-                      className="mt-0.5 font-mono text-sm font-medium text-ink"
-                      data-testid="case-metering-header"
-                      title="Case cumulative tokens and cost (all Participants + Subs)"
-                    >
-                      {caseMeteringText}
-                    </p>
-                  </div>
-                  {displayAgents.length > 0 && (
-                    <p className="shrink-0 font-mono text-[11px] text-ink-muted" data-testid="case-active-count">
-                      {agentStatusCount(displayAgents)}
-                    </p>
-                  )}
+                  <p className="min-w-0 text-xs text-ink-muted">
+                    {displayAgents.filter((a) => !a.parent_id).length > 1 ? "Case participants" : "Agent collaboration"}
+                  </p>
+                  <p
+                    className="shrink-0 cursor-default font-mono text-[11px] text-ink-muted"
+                    data-testid="case-metering-header"
+                    title={caseMeteringDetail}
+                  >
+                    {caseMeteringText}
+                  </p>
                 </div>
                 {displayAgents.length > 0 && (
                   <StrixAgentList agents={displayAgents} onWorkerClick={onWorkerClick} />

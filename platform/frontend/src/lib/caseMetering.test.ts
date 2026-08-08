@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import {
   agentRowUsesMeteringSecondary,
   formatAgentUsageLine,
+  formatCaseMeteringDetail,
   formatCaseMeteringHeader,
   formatCostUsd,
   formatTokenCount,
@@ -23,6 +24,16 @@ assert.equal(
 );
 assert.equal(formatCaseMeteringHeader({ llm_usage: { total_tokens: 0, cost: 0 } }), "0 tok");
 assert.equal(formatCaseMeteringHeader(undefined), "0 tok");
+
+const detail = formatCaseMeteringDetail(
+  { llm_usage: { total_tokens: 4900000, cost: 0.06, requests: 12 } },
+  { activeLine: "0/1 active" },
+);
+assert.ok(detail.includes("4,900,000"));
+assert.ok(detail.includes("Requests: 12"));
+assert.ok(detail.includes("$0.06"));
+assert.ok(detail.includes("0/1 active"));
+assert.ok(detail.includes("Case cumulative"));
 
 assert.equal(
   formatAgentUsageLine({

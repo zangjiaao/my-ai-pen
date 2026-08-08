@@ -22,7 +22,7 @@ export type WorkBurstProjection = {
   >;
 };
 
-/** Format busy-union seconds as compact mm:ss or h:mm:ss. */
+/** Format busy-union seconds as compact mm:ss or h:mm:ss (composer live timer). */
 export function formatWorkSeconds(seconds: unknown): string {
   const n = Math.max(0, Math.floor(Number(seconds) || 0));
   const h = Math.floor(n / 3600);
@@ -32,6 +32,26 @@ export function formatWorkSeconds(seconds: unknown): string {
     return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
   }
   return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+/**
+ * Agent result B1 duration label (left of result card): 耗时：11s / 耗时：1m 5s / 耗时：1h 1m 5s
+ */
+export function formatAgentDurationLabel(seconds: unknown): string {
+  const n = Math.max(0, Math.floor(Number(seconds) || 0));
+  const h = Math.floor(n / 3600);
+  const m = Math.floor((n % 3600) / 60);
+  const s = n % 60;
+  if (h > 0) {
+    if (m > 0 || s > 0) {
+      return s > 0 ? `耗时：${h}h ${m}m ${s}s` : `耗时：${h}h ${m}m`;
+    }
+    return `耗时：${h}h`;
+  }
+  if (m > 0) {
+    return s > 0 ? `耗时：${m}m ${s}s` : `耗时：${m}m`;
+  }
+  return `耗时：${s}s`;
 }
 
 /**
@@ -88,46 +108,81 @@ export function resultAnchorWorkSeconds(content: Record<string, unknown> | null 
   return null;
 }
 
+const RESULT_MSG_TYPES = new Set(["text", "task_complete", "task_error", "task_incomplete", ""]);
+
+function isAgentResultMessage(m: {
+  role?: string;
+  msg_type?: string;
+}): boolean {
+  if (String(m.role || "") !== "agent") return false;
+  const mt = String(m.msg_type ?? "text").toLowerCase();
+  return RESULT_MSG_TYPES.has(mt);
+}
+
 /**
- * Given messages + finalized map, ensure only one message id is the B1 anchor per burst.
- * Prefer messages already stamped; else last text/status/error agent row.
+ * messageId → work_seconds for B1 display.
+ *
+ * Prefer server-stamped content; then attach each finalized burst to the **last
+ * agent text of each user→agent turn** so multi-turn Cases always show 耗时
+ * (not only when finalized map has exactly one entry).
  */
 export function selectResultAnchorMessageIds(
   messages: Array<{ id?: string; role?: string; msg_type?: string; content?: Record<string, unknown> }>,
   finalized: Record<string, number> | undefined,
 ): Record<string, number> {
-  /** messageId → work_seconds for B1 display */
   const out: Record<string, number> = {};
-  if (!finalized || !messages?.length) return out;
+  if (!messages?.length) return out;
 
-  // Prefer server-stamped anchors
+  const stampedBurstIds = new Set<string>();
+
+  // 1) Prefer server-stamped anchors on agent result rows
   for (const m of messages) {
     const id = String(m.id || "").trim();
-    if (!id || m.role !== "agent") continue;
+    if (!id || !isAgentResultMessage(m)) continue;
     const content = m.content && typeof m.content === "object" ? m.content : {};
     const secs = resultAnchorWorkSeconds(content);
     if (secs != null) {
       out[id] = secs;
+      const bid = String(content.work_burst_id || "").trim();
+      if (bid) stampedBurstIds.add(bid);
     }
   }
-  if (Object.keys(out).length) return out;
 
-  // Fallback: last agent result-like message gets the most recent finalized seconds
-  // when server stamp is missing (reload race). One duration total if single finalized.
-  const values = Object.entries(finalized).filter(([k]) => !k.startsWith("task:"));
-  if (values.length !== 1) return out;
-  const [, secs] = values[0];
-  // Align with backend RESULT_ANCHOR_MSG_TYPES — SystemNotice rows (status /
-  // engagement_closeout) do not render B1 chrome.
-  const resultTypes = new Set(["text", "task_complete", "task_error", "task_incomplete"]);
-  let lastId = "";
+  // 2) Turn ends: last agent result after each user message (or stream tail)
+  const segmentEnds: string[] = [];
+  let pending: string | null = null;
   for (const m of messages) {
-    if (m.role !== "agent") continue;
-    const mt = String(m.msg_type || "").toLowerCase();
-    if (resultTypes.has(mt)) {
-      lastId = String(m.id || "").trim();
+    if (String(m.role || "") === "user") {
+      if (pending) segmentEnds.push(pending);
+      pending = null;
+      continue;
+    }
+    if (isAgentResultMessage(m)) {
+      const id = String(m.id || "").trim();
+      if (id) pending = id;
     }
   }
-  if (lastId) out[lastId] = Math.floor(Number(secs) || 0);
+  if (pending) segmentEnds.push(pending);
+
+  // 3) Attach remaining finalized bursts (newest → newest turn) so multi-turn never drops 耗时
+  const pendingFinalized = Object.entries(finalized || {})
+    .filter(([k, v]) => !String(k).startsWith("task:") && Number.isFinite(Number(v)))
+    .filter(([bid]) => !stampedBurstIds.has(String(bid)))
+    .map(([bid, v]) => [String(bid), Math.max(0, Math.floor(Number(v)))] as const);
+
+  let fi = pendingFinalized.length - 1;
+  for (let si = segmentEnds.length - 1; si >= 0 && fi >= 0; si--) {
+    const id = segmentEnds[si];
+    if (out[id] != null) continue;
+    out[id] = pendingFinalized[fi][1];
+    fi -= 1;
+  }
+
+  // 4) No turn segmentation but we have ledger seconds: last agent result
+  if (Object.keys(out).length === 0 && pendingFinalized.length > 0) {
+    const last = segmentEnds[segmentEnds.length - 1];
+    if (last) out[last] = pendingFinalized[pendingFinalized.length - 1][1];
+  }
+
   return out;
 }

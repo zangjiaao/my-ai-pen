@@ -1,9 +1,9 @@
 /**
  * Conversation stream chrome (Spec #326 / #323 UI seam):
- * - Messenger-style day separators + message clock times
- * - Structured denylist for infra status notices (tooling_health-class)
+ * - Centered datetime stamps before dialogue (when necessary)
+ * - Suppress harness/infra status notices; keep engagement_closeout only
  *
- * No free-text NLP for product routing — only structured type/field tokens.
+ * No free-text NLP for product routing — structured fields + denylist only.
  */
 import { phaseLabel } from "./phase";
 
@@ -11,8 +11,14 @@ import { phaseLabel } from "./phase";
 export const INFRA_STATUS_TOKENS = new Set<string>(["tooling_health"]);
 
 /**
+ * Gap (ms) between consecutive messages before a new centered timestamp is needed.
+ * Same-burst chatter stays unstamped.
+ */
+export const STREAM_TIME_STAMP_GAP_MS = 5 * 60 * 1000;
+
+/**
  * True when a status/system payload is infrastructure noise, not product chat chrome.
- * engagement_closeout and other user-meaningful system gists stay visible unless listed here.
+ * engagement_closeout stays visible unless empty.
  */
 export function isInfraStatusNotice(
   content: Record<string, unknown>,
@@ -61,6 +67,10 @@ export function statusNoticeDisplayText(content: Record<string, unknown>): strin
 /**
  * External stream projection: should this status/system/engagement_closeout row
  * appear as centered StatusNotice chrome?
+ *
+ * Product choice: generic status/harness lines (e.g. "harness abort: cancelled") are
+ * not useful in multi-agent Case streams — hide all `status` / system except
+ * engagement_closeout with non-empty text.
  */
 export function shouldRenderStatusNotice(message: {
   role?: string;
@@ -78,17 +88,18 @@ export function shouldRenderStatusNotice(message: {
     role === "system" || msgType === "status" || msgType === "engagement_closeout";
   if (!isStatusPath) return false;
 
-  if (isInfraStatusNotice(content, msgType)) return false;
-
+  // Only user-meaningful system gist kept in stream (Spec #163 closeout).
   if (msgType === "engagement_closeout" || String(content.type || "") === "engagement_closeout") {
     return Boolean(String(content.text || "").trim());
   }
 
+  // All other status / system notices (harness abort, tooling_health, phase ticks, …) stay out.
+  if (isInfraStatusNotice(content, msgType)) return false;
   if (isLegacyPhaseOnlyStatus(content)) return false;
-  return Boolean(String(statusNoticeDisplayText(content) || "").trim());
+  return false;
 }
 
-// --- Day / time stamps -------------------------------------------------------
+// --- Time stamps (centered, before dialogue, when necessary) -----------------
 
 export function parseMessageDate(iso: string | undefined | null): Date | null {
   if (!iso) return null;
@@ -96,7 +107,7 @@ export function parseMessageDate(iso: string | undefined | null): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-/** Local calendar day key YYYY-MM-DD for messenger orientation. */
+/** Local calendar day key YYYY-MM-DD. */
 export function calendarDayKey(iso: string | undefined | null): string | null {
   const d = parseMessageDate(iso);
   if (!d) return null;
@@ -106,70 +117,79 @@ export function calendarDayKey(iso: string | undefined | null): string | null {
   return `${y}-${m}-${day}`;
 }
 
-function localDayKeyFromDate(d: Date): string {
+/**
+ * Full local datetime for stream separators: 20XX/XX/XX XX:XX:XX
+ */
+export function formatChatMessageTime(iso: string | undefined | null): string {
+  const d = parseMessageDate(iso);
+  if (!d) return "";
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  return `${y}/${m}/${day} ${hh}:${mm}:${ss}`;
 }
 
+/** @deprecated use formatChatMessageTime — kept as alias for day-label callers during transition. */
+export function formatChatDaySeparator(iso: string, _now?: Date): string {
+  return formatChatMessageTime(iso);
+}
+
+/**
+ * Insert a centered timestamp before this message when:
+ * - first renderable message in the stream, or
+ * - calendar day changed, or
+ * - gap from previous message ≥ STREAM_TIME_STAMP_GAP_MS
+ */
+export function shouldInsertStreamTimeStamp(
+  previousCreatedAt: string | undefined | null,
+  currentCreatedAt: string | undefined | null,
+  gapMs: number = STREAM_TIME_STAMP_GAP_MS,
+): boolean {
+  const curr = parseMessageDate(currentCreatedAt);
+  if (!curr) return false;
+  const prev = parseMessageDate(previousCreatedAt);
+  if (!prev) return true;
+  if (calendarDayKey(previousCreatedAt) !== calendarDayKey(currentCreatedAt)) return true;
+  return curr.getTime() - prev.getTime() >= gapMs;
+}
+
+/** @deprecated name — same as shouldInsertStreamTimeStamp for first-day semantics. */
 export function shouldInsertDaySeparator(
   previousCreatedAt: string | undefined | null,
   currentCreatedAt: string | undefined | null,
 ): boolean {
-  const curr = calendarDayKey(currentCreatedAt);
-  if (!curr) return false;
-  const prev = calendarDayKey(previousCreatedAt);
-  return prev !== curr;
-}
-
-/** Messenger-style day label (local calendar; Chinese product UI). */
-export function formatChatDaySeparator(iso: string, now: Date = new Date()): string {
-  const d = parseMessageDate(iso);
-  if (!d) return "";
-  const dayKey = calendarDayKey(iso);
-  if (!dayKey) return "";
-  const today = localDayKeyFromDate(now);
-  const yesterdayDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-  const yesterday = localDayKeyFromDate(yesterdayDate);
-  if (dayKey === today) return "今天";
-  if (dayKey === yesterday) return "昨天";
-  if (d.getFullYear() === now.getFullYear()) {
-    return `${d.getMonth() + 1}月${d.getDate()}日`;
-  }
-  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
-}
-
-/** Local HH:mm clock for message stamps. */
-export function formatChatMessageTime(iso: string | undefined | null): string {
-  const d = parseMessageDate(iso);
-  if (!d) return "";
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  return shouldInsertStreamTimeStamp(previousCreatedAt, currentCreatedAt);
 }
 
 export type StreamChromeItem<T> =
+  | { kind: "time_separator"; stampKey: string; label: string }
+  /** @deprecated prefer time_separator; still accepted by ConversationPage mapper */
   | { kind: "day_separator"; dayKey: string; label: string }
   | { kind: "message"; message: T };
 
 /**
- * Project a chronological message list into stream rows with day separators.
- * Callers may pre-filter suppressed status messages.
+ * Project chronological messages into stream rows with centered datetime stamps
+ * **before** dialogue when necessary (not every message).
  */
 export function projectStreamWithDaySeparators<T extends { created_at?: string }>(
   messages: T[],
-  now: Date = new Date(),
+  _now: Date = new Date(),
+  gapMs: number = STREAM_TIME_STAMP_GAP_MS,
 ): StreamChromeItem<T>[] {
   const out: StreamChromeItem<T>[] = [];
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
     const prev = i > 0 ? messages[i - 1] : undefined;
-    if (shouldInsertDaySeparator(prev?.created_at, msg.created_at)) {
-      const dayKey = calendarDayKey(msg.created_at);
-      if (dayKey) {
+    if (shouldInsertStreamTimeStamp(prev?.created_at, msg.created_at, gapMs)) {
+      const label = formatChatMessageTime(msg.created_at);
+      if (label) {
         out.push({
-          kind: "day_separator",
-          dayKey,
-          label: formatChatDaySeparator(String(msg.created_at), now),
+          kind: "time_separator",
+          stampKey: label,
+          label,
         });
       }
     }
@@ -177,3 +197,6 @@ export function projectStreamWithDaySeparators<T extends { created_at?: string }
   }
   return out;
 }
+
+/** Alias for clarity at call sites. */
+export const projectStreamWithTimeSeparators = projectStreamWithDaySeparators;

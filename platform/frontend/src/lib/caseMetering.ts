@@ -34,8 +34,7 @@ export function formatCostUsd(value: unknown): string {
 }
 
 /**
- * Collaboration section primary metric: Case total tokens + cost.
- * Active worker count is secondary only (caller may append).
+ * Compact Case total tokens + cost for collab header (active-count chrome style).
  */
 export function formatCaseMeteringHeader(caseRun: CaseRunSummaryLike | undefined | null): string {
   const usage = caseRun?.llm_usage || {};
@@ -45,6 +44,29 @@ export function formatCaseMeteringHeader(caseRun: CaseRunSummaryLike | undefined
   if (cost > 0) return `${tok} tok · ${formatCostUsd(cost)}`;
   if (tokens > 0) return `${tok} tok`;
   return "0 tok";
+}
+
+/**
+ * Hover / title detail for Case metering (full numbers; optional active line).
+ */
+export function formatCaseMeteringDetail(
+  caseRun: CaseRunSummaryLike | undefined | null,
+  opts?: { activeLine?: string },
+): string {
+  const usage = caseRun?.llm_usage || {};
+  const tokens = Number(usage.total_tokens || 0);
+  const cost = Number(usage.cost || 0);
+  const requests = Number(usage.requests || 0);
+  const tokenExact = Number.isFinite(tokens) ? Math.round(tokens).toLocaleString("en-US") : "0";
+  const lines = [
+    "Case cumulative (all Participants + Subs)",
+    `Tokens: ${tokenExact}`,
+    `Requests: ${Number.isFinite(requests) ? Math.round(requests).toLocaleString("en-US") : "0"}`,
+    `Cost: ${formatCostUsd(cost)}`,
+  ];
+  const active = String(opts?.activeLine || "").trim();
+  if (active) lines.push(`Workers: ${active}`);
+  return lines.join("\n");
 }
 
 function readUsage(agent: Pick<StrixAgentStatus, "usage" | "model">): AgentUsageSummary {

@@ -8,17 +8,12 @@ import {
   resolveToolItemStatus,
   toolActivitySummaryLabel,
 } from "../lib/status";
-import {
-  formatChatMessageTime,
-  isInfraStatusNotice,
-  isLegacyPhaseOnlyStatus,
-  statusNoticeDisplayText,
-} from "../lib/chatStreamChrome";
+import { isInfraStatusNotice, isLegacyPhaseOnlyStatus } from "../lib/chatStreamChrome";
 import ChoiceCard from "./cards/ChoiceCard";
 import ThinkingCard from "./cards/ThinkingCard";
 import MarkdownText from "./MarkdownText";
 import type { ChoiceDecision } from "../lib/choiceCard";
-import { formatWorkSeconds, resultAnchorWorkSeconds } from "../lib/workBurstTime";
+import { formatAgentDurationLabel, resultAnchorWorkSeconds } from "../lib/workBurstTime";
 
 interface Props {
   message: Message;
@@ -736,64 +731,53 @@ export function AgentPendingCard({ content }: { content: Record<string, unknown>
   );
 }
 function StatusNotice({ content, msgType }: { content: Record<string, unknown>; msgType?: string }) {
-  // Spec #326 L9: hide infra status (tooling_health-class); keep engagement_closeout.
+  // Only engagement_closeout is product-visible; harness/status noise stays out of the stream.
+  if (msgType === "engagement_closeout" || String(content.type || "") === "engagement_closeout") {
+    const text = String(content.text || "").trim();
+    if (!text) return null;
+    return (
+      <div className="my-2 text-center text-xs text-ink-muted" data-status-notice>
+        {text}
+      </div>
+    );
+  }
   if (isInfraStatusNotice(content, msgType)) return null;
-  if (msgType !== "engagement_closeout" && isLegacyPhaseOnlyStatus(content)) return null;
-  const text = statusNoticeDisplayText(content);
-  if (!String(text || "").trim()) return null;
-  return (
-    <div className="my-2 text-center text-xs text-ink-muted" data-status-notice>
-      {text}
-    </div>
-  );
+  if (isLegacyPhaseOnlyStatus(content)) return null;
+  // Generic status (e.g. harness abort) — not useful in multi-agent Case stream.
+  return null;
 }
 
 function SystemNotice({ content, msgType }: { content: Record<string, unknown>; msgType?: string }) {
   return <StatusNotice content={content} msgType={msgType} />;
 }
 
-function MessageTimeStamp({ createdAt, align = "end" }: { createdAt?: string; align?: "end" | "start" }) {
-  const clock = formatChatMessageTime(createdAt);
-  if (!clock) return null;
-  return (
-    <div
-      className={`mt-0.5 px-1 text-[10px] leading-none text-ink-muted ${align === "end" ? "text-right" : "text-left"}`}
-      data-chat-message-time={clock}
-    >
-      {clock}
-    </div>
-  );
-}
-
 export default function MessageRenderer({ message, agentNameById = {}, previousMessage, fallbackPentestNodeId, platformAgentNodeId, onDecision, onConfirmOptions, onOpenVulnerability, onOpenAsset, onOpenEvidence, highlightedApprovalId, approvalDecisionByRequestId = {}, choiceSelectedByRequestId = {}, sessionActive, choiceDisabled = false, resultAnchorWorkSeconds: resultAnchorSecondsProp }: Props) {
   const { role, msg_type, content } = message;
 
-  // Spec #163: engagement_closeout uses content.text (platform gist) via SystemNotice.
-  // Spec #326: tooling_health-class infra status is not product StatusNotice chrome.
+  // Spec #163: engagement_closeout only. Generic status/harness lines are not rendered.
   if (role === "system" || msg_type === "status" || msg_type === "engagement_closeout") {
     return <SystemNotice content={content} msgType={msg_type} />;
   }
 
   // Spec #312: only confirm_options decisions show a user bubble (text is display content).
+  // Stream datetime stamps are stream chrome (before dialogue), not per-bubble clocks.
   if (role === "user" && msg_type === "decision") {
     const decision = String(content.decision || "").trim();
     if (decision !== "confirm_options") return null;
     const decisionText = String(content.text || "").trim() || "已选择";
     return (
-      <div className="my-2 flex min-w-0 flex-col items-end">
+      <div className="my-2 flex min-w-0 justify-end">
         <div className="max-w-[70%] break-words rounded-2xl bg-surface-default px-4 py-2.5 text-sm [overflow-wrap:anywhere]">
           {renderMentionText(decisionText)}
         </div>
-        <MessageTimeStamp createdAt={message.created_at} align="end" />
       </div>
     );
   }
 
   if (role === "user") {
     return (
-      <div className="my-2 flex min-w-0 flex-col items-end">
+      <div className="my-2 flex min-w-0 justify-end">
         <div className="max-w-[70%] break-words rounded-2xl bg-surface-default px-4 py-2.5 text-sm [overflow-wrap:anywhere]">{renderMentionText(String(content.text || ""))}</div>
-        <MessageTimeStamp createdAt={message.created_at} align="end" />
       </div>
     );
   }
@@ -861,9 +845,8 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
       body = <MarkdownText text={String(content.text || "")} />;
   }
 
-  // Message clock on agent text turns (and status path above); skip tool/thinking chrome noise.
-  const showMessageTime = msg_type === "text" || msg_type === "status" || msg_type === "engagement_closeout";
-
+  // Spec #325 B1: total work duration only on Agent result (bottom-right), not user bubbles.
+  // Stream datetime stamps live in ConversationPage chrome *before* dialogue.
   return (
     <div className="my-2 min-w-0">
       {showAgentLabel && (
@@ -876,15 +859,14 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
         {b1Seconds != null && (
           <div
             data-testid="burst-result-duration"
-            className="mt-1 flex justify-end"
-            title="本轮工作时长"
+            className="mt-1 flex justify-start"
+            title="本轮工作总耗时"
           >
-            <span className="font-mono text-[11px] tabular-nums text-ink-muted">
-              {formatWorkSeconds(b1Seconds)}
+            <span className="text-[11px] tabular-nums text-ink-muted">
+              {formatAgentDurationLabel(b1Seconds)}
             </span>
           </div>
         )}
-        {showMessageTime ? <MessageTimeStamp createdAt={message.created_at} align="start" /> : null}
       </div>
     </div>
   );

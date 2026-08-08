@@ -756,6 +756,54 @@ async def _broadcast_conversation_working(payload: dict) -> None:
     await _broadcast_to_conversation(conv_id, json.dumps(payload, ensure_ascii=False))
 
 
+async def _retry_stamp_work_burst_after_agent_text(conv_id: str) -> None:
+    """When agent text is saved after settle, stamp any unstamped finalized bursts."""
+    from app.db.base import async_session
+    from app.models.conversation import Conversation
+    from app.services.work_burst_time import get_ledger, set_ledger
+
+    cid = str(conv_id or "").strip()
+    if not cid:
+        return
+    async with async_session() as db:
+        result = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(cid)))
+        conv = result.scalar_one_or_none()
+        if not conv:
+            return
+        context = dict(conv.context or {}) if isinstance(conv.context, dict) else {}
+        ledger = get_ledger(context)
+        bursts = ledger.get("bursts") if isinstance(ledger.get("bursts"), dict) else {}
+        if not any(
+            isinstance(row, dict)
+            and str(row.get("status") or "") == "finalized"
+            and not str(row.get("result_anchor_message_id") or "").strip()
+            for row in bursts.values()
+        ):
+            return
+        await _stamp_burst_result_anchor(db, cid, ledger)
+        context = set_ledger(context, ledger)
+        conv.context = context
+        await db.commit()
+        # Push updated ledger so FE can show 耗时 without full reload.
+        try:
+            from app.services.work_burst_time import projection as work_burst_projection
+
+            proj = work_burst_projection(get_ledger(context))
+            await _broadcast_to_conversation(
+                cid,
+                json.dumps(
+                    {
+                        "type": "conversation_working",
+                        "conversation_id": cid,
+                        "work_burst": proj,
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        except Exception as be:
+            print(f"[WS] B1 re-stamp broadcast error: {be}")
+
+
 async def _stamp_burst_result_anchor(db, conv_id: str, ledger: dict) -> None:
     """Persist B1 work_seconds on exactly one agent result message per newly finalized burst."""
     from app.models.message import Message
@@ -792,9 +840,8 @@ async def _stamp_burst_result_anchor(db, conv_id: str, ledger: dict) -> None:
                 msg.content = content
         mid = pick_result_anchor_message_id(messages, task_ids=task_ids)
         if not mid:
-            # No agent message yet (fail-fast) — still record so we don't re-scan forever;
-            # projection.finalized_work_seconds remains the reload source.
-            row["result_anchor_message_id"] = ""
+            # No agent text yet — leave unset so we retry when text lands (do not pin "").
+            # projection.finalized_work_seconds remains the FE reload source.
             continue
         for msg in messages:
             if str(msg.id) != mid:
@@ -2587,6 +2634,20 @@ async def _save_message(msg: dict, role: str) -> uuid.UUID | None:
                 content=content,
             ))
             await db.commit()
+
+        # Spec #325 B1: agent text often arrives after burst finalize — re-try stamp so
+        # every completed turn can get work_seconds on the result row.
+        if role == "agent" and str(msg_type or "") in {
+            "text",
+            "task_complete",
+            "task_error",
+            "task_incomplete",
+        }:
+            try:
+                await _retry_stamp_work_burst_after_agent_text(str(conv_id))
+            except Exception as stamp_exc:
+                print(f"[WS] B1 re-stamp after agent text error: {stamp_exc}")
+
         return message_id
     except Exception as e:
         print(f"[WS] _save_message error: {e}")

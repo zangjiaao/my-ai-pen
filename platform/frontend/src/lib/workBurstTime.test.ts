@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import {
   composerLiveSeconds,
   composerTimerVisible,
+  formatAgentDurationLabel,
   formatWorkSeconds,
   resultAnchorWorkSeconds,
   selectResultAnchorMessageIds,
@@ -17,6 +18,12 @@ import {
   assert.equal(formatWorkSeconds(65), "1:05");
   assert.equal(formatWorkSeconds(3600 + 65), "1:01:05");
   console.log("ok: formatWorkSeconds");
+
+  assert.equal(formatAgentDurationLabel(0), "耗时：0s");
+  assert.equal(formatAgentDurationLabel(11), "耗时：11s");
+  assert.equal(formatAgentDurationLabel(65), "耗时：1m 5s");
+  assert.equal(formatAgentDurationLabel(3600 + 65), "耗时：1h 1m 5s");
+  console.log("ok: formatAgentDurationLabel");
 }
 
 {
@@ -91,6 +98,45 @@ import {
   );
   assert.equal(onlyStatus.s1, undefined);
   console.log("ok: B1 fallback skips status/closeout");
+}
+
+{
+  // Multi-turn: each user→agent segment gets a finalized duration (not only when count===1)
+  const msgs = [
+    { id: "u1", role: "user", msg_type: "text", content: { text: "a" } },
+    { id: "a1", role: "agent", msg_type: "text", content: { text: "ra" } },
+    { id: "u2", role: "user", msg_type: "text", content: { text: "b" } },
+    { id: "a2t", role: "agent", msg_type: "thinking", content: {} },
+    { id: "a2", role: "agent", msg_type: "text", content: { text: "rb" } },
+    { id: "u3", role: "user", msg_type: "text", content: { text: "c" } },
+    { id: "a3", role: "agent", msg_type: "text", content: { text: "rc" } },
+  ];
+  const map = selectResultAnchorMessageIds(msgs, {
+    burst_old: 10,
+    burst_mid: 20,
+    burst_new: 30,
+  });
+  assert.equal(map.a1, 10);
+  assert.equal(map.a2, 20);
+  assert.equal(map.a3, 30);
+  assert.equal(map.a2t, undefined, "thinking is not a duration locus");
+  console.log("ok: B1 multi-turn each agent text turn has duration");
+}
+
+{
+  // Prefer server stamp; do not overwrite with fallback
+  const msgs = [
+    { id: "u1", role: "user", msg_type: "text", content: {} },
+    {
+      id: "a1",
+      role: "agent",
+      msg_type: "text",
+      content: { is_result_anchor: true, work_seconds: 99, work_burst_id: "b1" },
+    },
+  ];
+  const map = selectResultAnchorMessageIds(msgs, { b1: 99, b2: 5 });
+  assert.equal(map.a1, 99);
+  console.log("ok: B1 keeps server stamp");
 }
 
 console.log("workBurstTime.test.ts: all ok");
