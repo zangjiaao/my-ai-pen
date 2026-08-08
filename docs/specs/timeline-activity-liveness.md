@@ -2,7 +2,7 @@
 
 **Status:** implemented — GitHub [#305](https://github.com/zangjiaao/my-ai-pen/issues/305)  
 **Scope:** Node4 progressive thinking frames + platform merge/persist + conversation timeline UI (ThinkingCard, pending chrome speaker, ToolCallCard status correctness)  
-**Related:** Spec #276 [`stream-message-identity.md`](stream-message-identity.md); research [`../wayfinder/research-thinking-message-status.md`](../wayfinder/research-thinking-message-status.md), [`../wayfinder/research-pending-vs-thinking-chrome.md`](../wayfinder/research-pending-vs-thinking-chrome.md)
+**Related:** Spec #276 [`stream-message-identity.md`](stream-message-identity.md); Spec #350 [`tool-call-lifecycle.md`](tool-call-lifecycle.md) (tool running from **name known**, not only execute-start); research [`../wayfinder/research-thinking-message-status.md`](../wayfinder/research-thinking-message-status.md), [`../wayfinder/research-pending-vs-thinking-chrome.md`](../wayfinder/research-pending-vs-thinking-chrome.md)
 
 ## Problem Statement
 
@@ -102,6 +102,7 @@ Users always see either pending (first wait), thinking-in-progress, tool-in-prog
 - Verify running→done emission and frontend merge for tool_call rows on long-running tools.
 - Fix false done (premature status, merge preferring done too early, default status “done” when missing on in-flight rows, etc.) if repro’d.
 - Do not reintroduce tool_output→pending reseed.
+- **Extended by Spec #350:** running is projectable from **tool name known** (streaming `toolcall_*`), not only from late `tool_execution_start` — see [`tool-call-lifecycle.md`](tool-call-lifecycle.md).
 
 ### Modules (conceptual)
 

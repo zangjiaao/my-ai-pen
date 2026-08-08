@@ -157,4 +157,32 @@ import {
   console.log("ok: S5 toolActivitySummary 执行中 vs success family");
 }
 
-console.log("all status Spec #305 tests passed");
+// Spec #350 secondary seam: running progressive payload → in-progress tool chrome
+// (ToolCallCard / summarizeToolActivity share this pure surface; no invent when empty).
+{
+  assert.equal(
+    toolActivitySummaryLabel([
+      { status: "running", toolName: "platform_create_report" },
+    ]),
+    "执行中",
+    "name-known running frame projects as 执行中 (long report tool same as any Main tool)",
+  );
+  assert.equal(
+    toolActivitySummaryKind([{ status: "running", toolName: "platform_list_assets" }]),
+    "running",
+  );
+  assert.equal(
+    toolActivitySummaryLabel([{ status: "done", toolName: "platform_create_report" }]),
+    "已完成1次",
+  );
+  assert.equal(
+    toolActivitySummaryLabel([{ status: "error", toolName: "platform_create_report" }]),
+    "失败",
+  );
+  // Frontend must not invent running when Runtime frame has no status (Spec #350 F1).
+  assert.equal(mergeToolLifecycleStatus("", ""), "");
+  assert.equal(resolveToolItemStatus(undefined), "");
+  console.log("ok: Spec #350 running progressive → 执行中 chrome; no invent status");
+}
+
+console.log("all status Spec #305 / #350 tests passed");
