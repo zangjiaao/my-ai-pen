@@ -9,6 +9,7 @@ No NLP: keys come from structured expert_id / pack_id / expert_name only.
 from __future__ import annotations
 
 import re
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -387,12 +388,22 @@ def upsert_participant(
     roster = participants_map(ctx)
     prev = dict(roster.get(key) or {})
 
+    # Spec #354: Session *instance* id is distinct from expert catalog id.
+    # Same expert re-entry after Delete mints a new instance (L8/L10); roster
+    # key stays expert-scoped for isolation / handoff.
+    prev_instance = str(prev.get("session_instance_id") or "").strip()
+    if prev_instance:
+        instance_id = prev_instance
+    else:
+        instance_id = str(uuid.uuid4())
+
     row: dict[str, Any] = {
         **prev,
         "key": key,
         "expert_id": eid or prev.get("expert_id") or "",
         "expert_name": name or prev.get("expert_name") or pack,
         "pack_id": pack or prev.get("pack_id") or "default",
+        "session_instance_id": instance_id,
     }
     if last_status is not None and str(last_status).strip():
         row["last_status"] = str(last_status).strip().lower()
@@ -940,9 +951,9 @@ def agents_from_participants(
             "role": "main",
             "pack_id": pack,
             "expert_id": eid,
-            # Spec #354: durable Participant Session identity on this Case (case+expert).
-            # UI shows this instead of an "active" badge for debug / continuity checks.
-            "session_id": key,
+            # Spec #354: Session *instance* id (new after Delete+re-entry).
+            # Expert catalog id stays in expert_id; do not use expert:{uuid} as session_id.
+            "session_id": str(row.get("session_instance_id") or "").strip() or key,
             "current_tool": "",
             "current_action": status,
             "current_detail": detail,

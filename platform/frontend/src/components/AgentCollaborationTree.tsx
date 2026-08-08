@@ -367,18 +367,17 @@ function AgentRoleBadge({ primary }: { primary: boolean }) {
   );
 }
 
-/** Full Session identity string (clipboard + tooltip). */
+/** Full Session *instance* id (clipboard + tooltip). Prefer instance over expert catalog. */
 function sessionIdFull(agent: StrixAgentStatus): string {
   const sid = String(agent.session_id || "").trim();
-  if (sid) return sid;
-  const eid = String(agent.expert_id || "").trim();
-  if (eid) return `expert:${eid}`;
+  // Never treat expert:{catalog} as Session instance — that id is stable across Delete.
+  if (sid && !sid.startsWith("expert:")) return sid;
   return "";
 }
 
 /**
  * Compact display form for collab chrome (clipboard still gets full id).
- * expert:{uuid} → first 8 of uuid; other keys truncated similarly.
+ * Instance UUID → first 8 chars.
  */
 function sessionIdDisplay(agent: StrixAgentStatus): string {
   const full = sessionIdFull(agent);

@@ -261,6 +261,16 @@ async def delete_participant_session(
             else:
                 ctx.pop("sessions", None)
         ctx = remove_participant(ctx, expert_id=expert_id)
+        # Drop sticky Case speaker when this Session was the sticky one so re-entry
+        # is an explicit re-select (not silent resurrect of disposed identity).
+        task = dict(ctx.get("task") or {}) if isinstance(ctx.get("task"), dict) else {}
+        if str(task.get("expert_id") or "").strip() == expert_id:
+            task.pop("expert_id", None)
+            task.pop("expert_name", None)
+            if task:
+                ctx["task"] = task
+            else:
+                ctx.pop("task", None)
 
     # Close package busy chrome (workers / interrupt / checkpoint ghost Main).
     ctx = settle_context_after_session_delete(ctx, expert_id=expert_id or None)
