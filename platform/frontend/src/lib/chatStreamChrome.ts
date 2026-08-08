@@ -101,10 +101,22 @@ export function shouldRenderStatusNotice(message: {
 
 // --- Time stamps (centered, before dialogue, when necessary) -----------------
 
+/**
+ * Parse message created_at for stream chrome.
+ * Rejects missing/invalid times and epoch sentinels (e.g. live-frame Date(0) placeholders
+ * that used to flash as 1970/01/01 then disappear).
+ */
 export function parseMessageDate(iso: string | undefined | null): Date | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? null : d;
+  if (iso == null) return null;
+  const raw = String(iso).trim();
+  if (!raw || raw === "0") return null;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return null;
+  // Treat unix epoch ±1 day as "no real time" (placeholder / default DB zero).
+  if (d.getTime() < 86_400_000) return null;
+  // Product stamps are modern Case times; years before 2000 are not operator-useful.
+  if (d.getFullYear() < 2000) return null;
+  return d;
 }
 
 /** Local calendar day key YYYY-MM-DD. */
