@@ -1283,19 +1283,37 @@ export default function ConversationPage() {
       const convId = messageConversationId(msg, activeId);
       const checkpoint = m.checkpoint && typeof m.checkpoint === "object" && !Array.isArray(m.checkpoint) ? m.checkpoint as Record<string, unknown> : {};
       const node3Strix = checkpoint.node3_strix && typeof checkpoint.node3_strix === "object" && !Array.isArray(checkpoint.node3_strix) ? checkpoint.node3_strix as Record<string, unknown> : {};
+      // pi-agent-core Agent.sessionId (Node) — collab copy chrome only.
+      const agentSessionId = readString(checkpoint.agent_session_id);
+      const stampPiSessionId = (list: StrixAgentStatus[]): StrixAgentStatus[] => {
+        if (!agentSessionId || agentSessionId.startsWith("expert:") || agentSessionId.startsWith("pack:")) {
+          return list;
+        }
+        const eid = readString(m.expert_id) || readString(checkpoint.expert_id);
+        return list.map((a) => {
+          if (a.parent_id) return a;
+          if (eid && String(a.expert_id || "").trim() && String(a.expert_id || "").trim() !== eid) {
+            return a;
+          }
+          return { ...a, session_id: agentSessionId };
+        });
+      };
       // Multi-role: merge live panel into existing roster; never wipe other Case participants.
       if (Array.isArray(node3Strix.agents) && node3Strix.agents.length) {
         const next = node3Strix.agents.filter(isStrixAgentStatus);
-        setStrixAgents((prev) => mergeLivePanelAgents(prev, next, {
+        setStrixAgents((prev) => stampPiSessionId(mergeLivePanelAgents(prev, next, {
           expert_id: readString(m.expert_id) || readString(checkpoint.expert_id),
           expert_name: readString(m.expert_name) || readString(checkpoint.expert_name),
-        }));
+        })));
       } else if (Array.isArray(checkpoint.panel_agents) && checkpoint.panel_agents.length) {
         const next = checkpoint.panel_agents.filter(isStrixAgentStatus);
-        setStrixAgents((prev) => mergeLivePanelAgents(prev, next, {
+        setStrixAgents((prev) => stampPiSessionId(mergeLivePanelAgents(prev, next, {
           expert_id: readString(m.expert_id) || readString(checkpoint.expert_id),
           expert_name: readString(m.expert_name) || readString(checkpoint.expert_name),
-        }));
+        })));
+      } else if (agentSessionId) {
+        // Checkpoint without panel_agents still updates pi Session id on current Main.
+        setStrixAgents((prev) => stampPiSessionId(prev));
       }
       if (Array.isArray(node3Strix.todos)) {
         const todoPlan = strixTodosToPlanTree(node3Strix.todos);

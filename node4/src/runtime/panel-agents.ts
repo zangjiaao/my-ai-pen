@@ -28,6 +28,11 @@ export type PanelAgentRecord = {
   work_mode?: "free" | "graph";
   graph_id?: string;
   graph_label?: string;
+  /**
+   * pi-agent-core Agent.sessionId on Main only — collab copy chrome.
+   * Not expert catalog id.
+   */
+  session_id?: string;
 };
 
 /** Map tool names → short Chinese labels (product UI language). */
@@ -114,11 +119,18 @@ export class PanelAgentTracker {
   private workMode: "free" | "graph" = "free";
   private graphId = "";
   private graphLabel = "";
+  /** pi-agent-core Agent.sessionId for collab copy chrome. */
+  private agentSessionId = "";
 
   constructor(mainTask: string, mainName?: string) {
     this.mainTask = (mainTask || "Authorized security task").slice(0, 240);
     this.mainName = (mainName || "Expert").trim().slice(0, 64) || "Expert";
     this.detail = describeMainActivity({ phase: this.phase });
+  }
+
+  /** Bind pi-agent-core Agent.sessionId onto Main panel rows (collab copy). */
+  setAgentSessionId(sessionId: string | null | undefined): void {
+    this.agentSessionId = String(sessionId || "").trim().slice(0, 128);
   }
 
   /** Set actual Free/Graph harness for collaboration tree main row. */
@@ -295,6 +307,7 @@ export class PanelAgentTracker {
       work_mode: this.workMode,
       graph_id: this.graphId || undefined,
       graph_label: this.graphLabel || undefined,
+      ...(this.agentSessionId ? { session_id: this.agentSessionId } : {}),
     };
     return [main, ...this.children.values()];
   }

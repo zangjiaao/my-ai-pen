@@ -170,6 +170,16 @@ export function mergeLivePanelAgents(
     )
     .map((a) => (!a.parent_id ? { ...a, highlighted: false } : a));
 
+  // pi Agent.sessionId: prefer live panel stamp; never drop a known id when panel omits it.
+  const liveSessionId = String(panelMain.session_id || "").trim();
+  const prevSessionId = String(root.session_id || "").trim();
+  const sessionId =
+    (liveSessionId && !liveSessionId.startsWith("expert:") && !liveSessionId.startsWith("pack:")
+      ? liveSessionId
+      : "") ||
+    (prevSessionId && !prevSessionId.startsWith("expert:") && !prevSessionId.startsWith("pack:")
+      ? prevSessionId
+      : "");
   const nextRoot: StrixAgentStatus = {
     ...root,
     status: panelMain.status || root.status || "running",
@@ -179,6 +189,7 @@ export function mergeLivePanelAgents(
     last_tool: panelMain.last_tool || root.last_tool,
     highlighted: true,
     expert_id: eid || root.expert_id || panelMain.expert_id,
+    ...(sessionId ? { session_id: sessionId } : {}),
   };
   const nextKids = mergePanelChildren(
     prevKids,

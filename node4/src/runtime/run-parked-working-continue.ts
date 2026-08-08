@@ -194,6 +194,19 @@ export async function runParkedWorkingContinue(options: {
     checkpointThrottle,
     disposeTextStream: false,
   });
+  // Collab copy: surface parked pi Agent.sessionId on panel + checkpoint.
+  const piSid = String(
+    session.sessionId || parked.agentSessionId || obsCtx.agentSessionId || "",
+  ).trim();
+  if (piSid) {
+    obsCtx.agentSessionId = piSid;
+    try {
+      panel.setAgentSessionId(piSid);
+    } catch {
+      /* ignore */
+    }
+    await emitCheckpointUpdate(obsCtx, { status: "running" }).catch(() => {});
+  }
 
   const cancelled = () => Boolean(signal?.aborted);
   if (signal) {

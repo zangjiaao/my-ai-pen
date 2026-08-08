@@ -875,6 +875,17 @@ export function createHardGraphStageExecutor(options: {
         ? await boundSessionFactory(boundOpts)
         : await createBoundNode4Session(boundOpts);
 
+      // Collab copy: bind pi Agent.sessionId onto shared panel Main.
+      const piSid = String(session.sessionId || "").trim();
+      if (piSid) {
+        obsCtx.agentSessionId = piSid;
+        try {
+          panel.setAgentSessionId(piSid);
+        } catch {
+          /* ignore */
+        }
+      }
+
       // Mid-run user_steer → current Graph Main stage (replace on stage switch).
       // Do not register subagent package sessions for conversation-level steer.
       const unregisterActiveSession = registerActiveSession({
@@ -891,7 +902,7 @@ export function createHardGraphStageExecutor(options: {
         checkpointThrottle,
       });
 
-      // Initial checkpoint so Status has a live panel row for this stage.
+      // Initial checkpoint so Status has a live panel row for this stage (+ session_id).
       await emitCheckpointUpdate(obsCtx).catch(() => {});
 
       try {

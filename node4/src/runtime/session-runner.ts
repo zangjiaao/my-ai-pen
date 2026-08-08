@@ -408,9 +408,16 @@ export async function runNode4Task(
     // session-runner owns end-of-task textStream.dispose below.
     disposeTextStream: false,
   });
-  // Project pi Agent.sessionId immediately so collab copy chrome has the real id
-  // before the first throttled checkpoint (do not wait for usage ticks).
-  if (obsCtx.agentSessionId) {
+  // Stamp pi Agent.sessionId on panel Main + checkpoint so FE collab copy sees it
+  // on the same path as live panel_agents (not only participants snapshot).
+  const piSid = String(session.sessionId || obsCtx.agentSessionId || "").trim();
+  if (piSid) {
+    obsCtx.agentSessionId = piSid;
+    try {
+      panel.setAgentSessionId(piSid);
+    } catch {
+      /* ignore */
+    }
     await emitCheckpointUpdate(obsCtx, { status: "running" }).catch(() => {});
   }
 
