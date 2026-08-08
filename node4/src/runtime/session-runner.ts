@@ -79,47 +79,7 @@ import {
 } from "./working-session-park.js";
 import { runParkedWorkingContinue } from "./run-parked-working-continue.js";
 import type { TodoStore as TodoStoreType } from "../stores/todo.js";
-
-/**
- * Spec #354 S4: seed TodoStore from Case pending-handoff snapshot on same-expert re-entry.
- * Best-effort — malformed payloads yield empty store (agent can re-plan honestly).
- */
-function seedTodoFromHandoff(task: TaskEnvelope): TodoStore {
-  const store = new TodoStore();
-  const raw = task.pendingHandoffTodos;
-  if (!Array.isArray(raw) || raw.length === 0) return store;
-  try {
-    // Prefer TodoPhase[] snapshot shape from disposeWorkingSession.
-    const list: Array<{ phase: string; items: string[] }> = [];
-    for (const phase of raw) {
-      if (!phase || typeof phase !== "object") continue;
-      const p = phase as { name?: unknown; tasks?: unknown; items?: unknown };
-      const name = String(p.name || "Handoff").trim() || "Handoff";
-      const items: string[] = [];
-      if (Array.isArray(p.tasks)) {
-        for (const t of p.tasks) {
-          if (!t || typeof t !== "object") continue;
-          const status = String((t as { status?: unknown }).status || "").toLowerCase();
-          if (status === "done" || status === "failed" || status === "skipped") continue;
-          const title = String((t as { title?: unknown }).title || "").trim();
-          if (title) items.push(title);
-        }
-      } else if (Array.isArray(p.items)) {
-        for (const it of p.items) {
-          const title = String(it || "").trim();
-          if (title) items.push(title);
-        }
-      }
-      if (items.length) list.push({ phase: name, items });
-    }
-    if (list.length) {
-      store.apply({ op: "init", list, free_map: true });
-    }
-  } catch {
-    /* empty store */
-  }
-  return store;
-}
+import { seedTodoFromHandoff } from "./handoff-todo-seed.js";
 
 export async function runNode4Task(
   config: Node4Config,

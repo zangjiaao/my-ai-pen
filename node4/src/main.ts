@@ -160,17 +160,22 @@ client.on("case_session_release", async (message) => {
     cancelApprovalsForConversation(conversationId);
     prev.abort();
   }
-  await waitConversationIdle(conversationId);
+  const idle = await waitConversationIdle(conversationId);
   const result = await disposeWorkingSessionsForCase(conversationId);
-  clearPendingCaseDispose(conversationId);
+  // Only clear pending when idle (finally already ran). If still busy, keep pending
+  // so a late finally force-disposes instead of re-parking (Spec #354 L1).
+  if (idle) {
+    clearPendingCaseDispose(conversationId);
+  }
   console.log(
-    `[node4] case_session_release conv=${conversationId.slice(0, 8)} disposed=${result.disposed}`,
+    `[node4] case_session_release conv=${conversationId.slice(0, 8)} disposed=${result.disposed} idle=${idle}`,
   );
   await client.send({
     type: "case_session_release_ack",
     conversation_id: conversationId,
     disposed: result.disposed,
     keys: result.keys,
+    pending: !idle,
   });
 });
 
@@ -182,18 +187,26 @@ client.on("session_dispose", async (message) => {
   const conversationId = String(message.conversation_id || message.conversationId || "").trim();
   const expertId = String(message.expert_id || message.expertId || "").trim();
   if (!conversationId) return;
-  markPendingSessionDispose(conversationId, expertId || undefined);
+  // Missing expert_id: Case-scoped pending so any conv::expert finally disposes.
+  if (expertId) {
+    markPendingSessionDispose(conversationId, expertId);
+  } else {
+    markPendingCaseDispose(conversationId);
+  }
   // If this Session's Case is mid-burst, abort so finally can dispose (not park).
   const prev = aborts.get(conversationId);
   if (prev) {
     cancelApprovalsForConversation(conversationId);
     prev.abort();
   }
-  await waitConversationIdle(conversationId);
+  const idle = await waitConversationIdle(conversationId);
   const result = await disposeWorkingSession(conversationId, expertId || undefined);
-  clearPendingSessionDispose(conversationId, expertId || undefined);
+  if (idle) {
+    if (expertId) clearPendingSessionDispose(conversationId, expertId);
+    else clearPendingCaseDispose(conversationId);
+  }
   console.log(
-    `[node4] session_dispose conv=${conversationId.slice(0, 8)} expert=${expertId || "-"} disposed=${result.disposed}`,
+    `[node4] session_dispose conv=${conversationId.slice(0, 8)} expert=${expertId || "-"} disposed=${result.disposed} idle=${idle}`,
   );
   await client.send({
     type: "session_dispose_ack",
@@ -201,6 +214,7 @@ client.on("session_dispose", async (message) => {
     expert_id: expertId || null,
     disposed: result.disposed,
     open_todos: result.openTodos,
+    pending: !idle,
   });
 });
 

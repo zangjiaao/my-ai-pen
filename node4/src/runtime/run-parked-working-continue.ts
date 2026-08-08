@@ -255,8 +255,7 @@ export async function runParkedWorkingContinue(options: {
     } catch {
       openTodoCount = 0;
     }
-    // Align harness + disposition: incomplete ⇒ re-park; completed ⇒ dispose.
-    // Never treat a single successful prompt as product-terminal for Graph.
+    // Spec #354: package complete still re-parks; dispose only via pending whitelist.
     harnessStatus = harnessStatusAfterParkedContinue({
       aborted,
       workMode,
@@ -264,7 +263,6 @@ export async function runParkedWorkingContinue(options: {
     });
     const decision = decideCaptainEndDisposition({
       aborted,
-      productTerminal: harnessStatus === "completed",
     });
     const applied = applyCaptainEndDisposition({
       decision,

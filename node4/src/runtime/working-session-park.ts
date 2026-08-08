@@ -73,6 +73,11 @@ const parks = new Map<string, ParkedWorkingRuntime>();
 const pendingDisposeKeys = new Set<string>();
 /** Case-wide pending dispose (all experts under conversation). */
 const pendingDisposeCases = new Set<string>();
+/**
+ * Todo snapshots captured at force-dispose (mid-burst Session delete) so
+ * session_dispose_ack can return open_todos even when the park map is already empty.
+ */
+const disposedTodoSnapshots = new Map<string, ReturnType<TodoStore["snapshot"]>>();
 
 /** Participant Session key: conversation_id + expert_id (fallback conversation alone). */
 export function parkSessionKey(
@@ -121,12 +126,54 @@ export function isPendingDispose(
   if (!c) return false;
   if (pendingDisposeCases.has(c)) return true;
   const key = parkSessionKey(conversationId, expertId);
-  return Boolean(key && pendingDisposeKeys.has(key));
+  if (key && pendingDisposeKeys.has(key)) return true;
+  // Bare conversation pending matches any expert under that Case (missing expert_id on delete).
+  if (pendingDisposeKeys.has(c)) return true;
+  return false;
 }
 
 export function clearPendingDisposeForTests(): void {
   pendingDisposeKeys.clear();
   pendingDisposeCases.clear();
+  disposedTodoSnapshots.clear();
+}
+
+function stashDisposedTodos(
+  conversationId: string,
+  expertId: string | null | undefined,
+  todo: TodoStore | undefined,
+): void {
+  if (!todo) return;
+  let snap: ReturnType<TodoStore["snapshot"]> = [];
+  try {
+    snap = todo.snapshot();
+  } catch {
+    return;
+  }
+  const key = parkSessionKey(conversationId, expertId);
+  if (key) disposedTodoSnapshots.set(key, snap);
+  const c = String(conversationId || "").trim();
+  // Also store under bare Case key for expert_id-less dispose lookups.
+  if (c) disposedTodoSnapshots.set(c, snap);
+}
+
+function takeStashedTodos(
+  conversationId: string,
+  expertId?: string | null,
+): ReturnType<TodoStore["snapshot"]> {
+  const key = parkSessionKey(conversationId, expertId);
+  if (key && disposedTodoSnapshots.has(key)) {
+    const v = disposedTodoSnapshots.get(key) || [];
+    disposedTodoSnapshots.delete(key);
+    return v;
+  }
+  const c = String(conversationId || "").trim();
+  if (c && disposedTodoSnapshots.has(c)) {
+    const v = disposedTodoSnapshots.get(c) || [];
+    disposedTodoSnapshots.delete(c);
+    return v;
+  }
+  return [];
 }
 
 export function isParkExpired(
@@ -277,6 +324,14 @@ export function applyCaptainEndDisposition(options: {
   // Ensure we do not leave a prior park for this Session.
   const key = parkSessionKey(options.entry.conversationId, options.entry.expertId);
   if (key) parks.delete(key);
+  // Capture Todo before dispose so Session Delete ack can hold the map (mid-burst).
+  if (forceDispose || decision.disposition === "dispose") {
+    stashDisposedTodos(
+      options.entry.conversationId,
+      options.entry.expertId,
+      options.entry.todo,
+    );
+  }
   try {
     void Promise.resolve(options.entry.dispose());
   } catch {
@@ -422,15 +477,33 @@ export function harnessStatusAfterParkedContinue(input: {
 /**
  * Spec #354 L1/L10: dispose one Participant Session park (Session delete).
  * Returns open todo snapshot items for Case pending-handoff holding.
+ * When expertId is empty, disposes all parks under the Case (prefix match).
+ * Also returns mid-burst force-dispose stashed todos when park is already gone.
  */
 export async function disposeWorkingSession(
   conversationId: string,
   expertId?: string | null,
 ): Promise<{ disposed: boolean; openTodos: ReturnType<TodoStore["snapshot"]> }> {
-  const key = parkSessionKey(conversationId, expertId);
-  if (!key) return { disposed: false, openTodos: [] };
-  const entry = parks.get(key);
-  if (!entry) return { disposed: false, openTodos: [] };
+  const c = String(conversationId || "").trim();
+  const e = String(expertId || "").trim();
+  if (!c) return { disposed: false, openTodos: [] };
+
+  // Missing expert_id: dispose every park under this Case (safe product default).
+  if (!e) {
+    const caseOut = await disposeWorkingSessionsForCase(c);
+    const stashed = takeStashedTodos(c, undefined);
+    return {
+      disposed: caseOut.disposed > 0 || stashed.length > 0,
+      openTodos: stashed,
+    };
+  }
+
+  const key = parkSessionKey(c, e);
+  const entry = key ? parks.get(key) : undefined;
+  if (!entry) {
+    const stashed = takeStashedTodos(c, e);
+    return { disposed: stashed.length > 0, openTodos: stashed };
+  }
   parks.delete(key);
   let openTodos: ReturnType<TodoStore["snapshot"]> = [];
   try {
@@ -443,6 +516,9 @@ export async function disposeWorkingSession(
   } catch {
     /* ignore */
   }
+  // Prefer live park snapshot; drop any stale stash for this key.
+  disposedTodoSnapshots.delete(key);
+  disposedTodoSnapshots.delete(c);
   return { disposed: true, openTodos };
 }
 
@@ -465,6 +541,7 @@ export async function disposeWorkingSessionsForCase(
     const entry = parks.get(key);
     if (!entry) continue;
     parks.delete(key);
+    stashDisposedTodos(entry.conversationId, entry.expertId, entry.todo);
     try {
       await Promise.resolve(entry.dispose());
     } catch {

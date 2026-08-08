@@ -1025,6 +1025,49 @@ def resolve_session_lifecycle_ack(msg: dict) -> None:
         fut.set_result(dict(msg))
 
 
+def register_session_lifecycle_ack_waiter(
+    *,
+    ack_type: str,
+    conversation_id: str,
+    expert_id: str | None = None,
+) -> asyncio.Future:
+    """Register waiter **before** sending Node command (avoids dropped fast acks)."""
+    key = _session_lifecycle_ack_key(ack_type, conversation_id, expert_id)
+    loop = asyncio.get_running_loop()
+    fut: asyncio.Future = loop.create_future()
+    prev = _session_lifecycle_acks.pop(key, None)
+    if prev and not prev.done():
+        prev.cancel()
+    _session_lifecycle_acks[key] = fut
+    return fut
+
+
+def cancel_session_lifecycle_ack_waiter(
+    *,
+    ack_type: str,
+    conversation_id: str,
+    expert_id: str | None = None,
+) -> None:
+    key = _session_lifecycle_ack_key(ack_type, conversation_id, expert_id)
+    fut = _session_lifecycle_acks.pop(key, None)
+    if fut and not fut.done():
+        fut.cancel()
+
+
+async def await_session_lifecycle_ack(
+    fut: asyncio.Future,
+    *,
+    timeout_s: float = 5.0,
+) -> dict | None:
+    """Await a previously registered lifecycle waiter."""
+    try:
+        return await asyncio.wait_for(fut, timeout=timeout_s)
+    except asyncio.TimeoutError:
+        return None
+    except Exception:
+        return None
+
+
 async def wait_session_lifecycle_ack(
     *,
     ack_type: str,
@@ -1032,19 +1075,13 @@ async def wait_session_lifecycle_ack(
     expert_id: str | None = None,
     timeout_s: float = 5.0,
 ) -> dict | None:
-    """Wait for a Node lifecycle ack (Spec #354 handoff SoT)."""
-    key = _session_lifecycle_ack_key(ack_type, conversation_id, expert_id)
-    loop = asyncio.get_running_loop()
-    fut: asyncio.Future = loop.create_future()
-    _session_lifecycle_acks[key] = fut
-    try:
-        return await asyncio.wait_for(fut, timeout=timeout_s)
-    except asyncio.TimeoutError:
-        _session_lifecycle_acks.pop(key, None)
-        return None
-    except Exception:
-        _session_lifecycle_acks.pop(key, None)
-        return None
+    """Register + wait for a Node lifecycle ack (Spec #354 handoff SoT)."""
+    fut = register_session_lifecycle_ack_waiter(
+        ack_type=ack_type,
+        conversation_id=conversation_id,
+        expert_id=expert_id,
+    )
+    return await await_session_lifecycle_ack(fut, timeout_s=timeout_s)
 
 
 async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, conv_id: str | None) -> None:

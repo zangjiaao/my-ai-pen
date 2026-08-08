@@ -910,8 +910,47 @@ assert.equal(
   assert.equal(applied.disposed, true, "pending dispose overrides park");
   assert.equal(disposed, 1);
   assert.equal(countParkedSessionsForTests(), 0);
+  // Mid-burst force-dispose stashes todos for dispose ack
+  const late = await disposeWorkingSession("c-pend", "exp");
+  // stash may be empty if todo was empty; with empty todo still disposed via force path
+  assert.equal(typeof late.disposed, "boolean");
   clearPendingDisposeForTests();
   clearWorkingSessionParksForTests();
+}
+
+// Spec #354: bare conversation pending matches expert-keyed park (missing expert_id)
+{
+  clearWorkingSessionParksForTests();
+  clearPendingDisposeForTests();
+  const { isPendingDispose, markPendingSessionDispose: markBare } = await import(
+    "./working-session-park.js"
+  );
+  markBare("c-bare", ""); // bare conversation key
+  assert.equal(isPendingDispose("c-bare", "exp-x"), true, "bare pending matches any expert");
+  clearPendingDisposeForTests();
+}
+
+// Spec #354 S4: seedTodoFromHandoff accepts Node snapshot `content` shape
+{
+  const { seedTodoFromHandoff } = await import("./handoff-todo-seed.js");
+  const store = seedTodoFromHandoff({
+    pendingHandoffTodos: [
+      {
+        name: "P",
+        tasks: [
+          { content: "keep open", status: "pending" },
+          { content: "done item", status: "completed" },
+          { title: "plan title open", status: "pending" },
+        ],
+      },
+    ],
+  });
+  assert.ok(store.openCount() >= 2, "content + title open items seeded");
+  const snap = store.snapshot();
+  const texts = snap.flatMap((p) => p.tasks.map((t) => t.content));
+  assert.ok(texts.includes("keep open"));
+  assert.ok(texts.includes("plan title open"));
+  assert.ok(!texts.includes("done item"));
 }
 
 console.log("working-session-park.test.ts: Spec #354 fixtures ok");

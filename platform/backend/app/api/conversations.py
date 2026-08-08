@@ -230,8 +230,8 @@ async def delete_participant_session(
         conversation_id=str(c.id),
         expert_id=expert_id or None,
     )
-    # Node dispose is fire-and-forget; prefer Node open_todos when ack is wired later.
-    # Always fall back to platform product-state plan_tree so handoff works offline.
+    # Prefer Node open_todos from lifecycle ack (SoT for live TodoStore).
+    # Fall back to platform plan_tree so handoff still works offline / ack timeout.
     open_todos: list = []
     if isinstance(result.get("ack"), dict):
         raw = result["ack"].get("open_todos")
@@ -978,7 +978,10 @@ async def _push_node_json(
     expert_id: str | None = None,
     timeout_s: float = 5.0,
 ) -> dict:
-    """Push to live node WebSocket; optionally wait for Spec #354 lifecycle ack."""
+    """Push to live node WebSocket; wait for Spec #354 lifecycle ack when requested.
+
+    Waiter is registered **before** send so a fast Node ack cannot be dropped.
+    """
     try:
         from app.ws import router as ws_router
     except Exception as e:
@@ -986,20 +989,37 @@ async def _push_node_json(
     ws = ws_router.node_connections.get(str(node_id))
     if not ws:
         return {"delivered": False, "reason": "offline"}
+
+    waiter = None
+    if wait_ack and conversation_id:
+        try:
+            waiter = ws_router.register_session_lifecycle_ack_waiter(
+                ack_type=wait_ack,
+                conversation_id=conversation_id,
+                expert_id=expert_id,
+            )
+        except Exception as e:
+            print(f"[api] register lifecycle waiter failed: {e}")
+
     try:
         await ws.send_text(json.dumps(msg, ensure_ascii=False))
     except Exception as e:
         print(f"[api] push_node_json failed node={str(node_id)[:8]} type={msg.get('type')}: {e}")
+        if waiter is not None:
+            try:
+                ws_router.cancel_session_lifecycle_ack_waiter(
+                    ack_type=wait_ack or "",
+                    conversation_id=conversation_id or "",
+                    expert_id=expert_id,
+                )
+            except Exception:
+                pass
         return {"delivered": False, "reason": str(e)}
-    if not wait_ack or not conversation_id:
+
+    if waiter is None or not wait_ack or not conversation_id:
         return {"delivered": True}
     try:
-        ack = await ws_router.wait_session_lifecycle_ack(
-            ack_type=wait_ack,
-            conversation_id=conversation_id,
-            expert_id=expert_id,
-            timeout_s=timeout_s,
-        )
+        ack = await ws_router.await_session_lifecycle_ack(waiter, timeout_s=timeout_s)
         if ack is None:
             return {"delivered": True, "ack": None, "ack_timeout": True}
         return {"delivered": True, "ack": ack}
