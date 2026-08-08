@@ -135,6 +135,8 @@ export async function emitTodoPlanTreeUpdate(
 ): Promise<void> {
   const payload = buildTodoPlanTreePayload(todo);
   const plan_tree = stampPlanTreeOwner(payload.plan_tree, task);
+  // Spec #321: Task Map revision list + live id (FE history view; mutations always live).
+  const taskMap = todo.taskMapProjection();
   await platform.send({
     type: "plan_tree_updated",
     conversation_id: task.conversationId,
@@ -147,5 +149,8 @@ export async function emitTodoPlanTreeUpdate(
     expert_id: task.expertId,
     expert_name: task.expertName,
     engagement: task.engagement || task.role,
+    task_map_revisions: taskMap.task_map_revisions,
+    live_revision_id: taskMap.live_revision_id,
+    live_sealed: taskMap.live_sealed,
   } as PlatformMessage);
 }

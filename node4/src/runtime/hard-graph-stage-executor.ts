@@ -954,8 +954,10 @@ export function createHardGraphStageExecutor(options: {
         graphRun?.usage.mergeSnapshot(
           stageUsage.snapshot({ tool_calls: obsCounters.toolCallCount }),
         );
-        // Spec #283 I0.9: shared captain end policy (interrupt → park; stage settle → dispose).
+        // Spec #283 I0.9 + #354: interrupt/stage settle → park; Case/Session dispose pending → dispose.
         // #282 mode wire remains: incomplete continue → Hard path; attach uses park when present.
+        // Spec #354 L4: park Session-owned Todo/TaskMap on parentRuntime (Graph plan lives there).
+        // Stage child TodoStore is stage-local tool scratch; Session continuity uses parent.
         applyCaptainEndDisposition({
           decision: decideParkOnEnd({
             aborted: Boolean(abortSignal?.aborted),
@@ -970,9 +972,9 @@ export function createHardGraphStageExecutor(options: {
             stageId: input.stage.id,
             taskId: task.taskId,
             session,
-            todo: childRuntime.todo,
+            todo: parentRuntime.todo,
             accounts: task.accounts,
-            runtime: childRuntime,
+            runtime: parentRuntime,
             dispose: () => {
               try {
                 void Promise.resolve(session.dispose());

@@ -27,6 +27,11 @@ import { upsertTrafficExchange, type TrafficExchange } from "../lib/trafficAudit
 import WorkerAuditDialog from "../components/WorkerAuditDialog";
 import type { PlanNode, StrixAgentStatus } from "../lib/panelTypes";
 import {
+  nextViewedRevisionId,
+  normalizeTaskMapRevisions,
+  type TaskMapRevision,
+} from "../lib/taskMapHistory";
+import {
   isStrixAgentStatus,
   upsertSubagentChild,
   mergeLivePanelAgents,
@@ -250,6 +255,10 @@ type ConversationSnapshot = {
   /** Spec #311 Case Workset (Next) — display-only panel projection */
   workset?: Record<string, unknown>;
   goal_outer?: Record<string, unknown> | null;
+  /** Spec #321 Task Map history */
+  task_map_revisions?: unknown[];
+  live_revision_id?: string | null;
+  live_sealed?: boolean;
 };
 
 
@@ -290,6 +299,13 @@ export default function ConversationPage() {
   const [kanban, setKanban] = useState<KanbanSummary | undefined>();
   const [pendingWorkflowKind, setPendingWorkflowKind] = useState<string>("");
   const [planTree, setPlanTree] = useState<PlanNode[]>([]);
+  /** Spec #321 Task Map history — product-state revisions; FE selection is view-only. */
+  const [taskMapRevisions, setTaskMapRevisions] = useState<TaskMapRevision[]>([]);
+  const [liveRevisionId, setLiveRevisionId] = useState<string | null>(null);
+  const [pendingHandoffExpertIds, setPendingHandoffExpertIds] = useState<string[]>([]);
+  const [viewedRevisionId, setViewedRevisionId] = useState<string | null>(null);
+  /** Prior live id for selection policy (follow live after archive unless viewing history). */
+  const liveRevisionIdRef = useRef<string | null>(null);
   const [strixAgents, setStrixAgents] = useState<StrixAgentStatus[]>([]);
   const [strixNotes, setStrixNotes] = useState<StrixNote[]>([]);
   const [strixRun, setStrixRun] = useState<StrixRun | undefined>();
@@ -653,6 +669,50 @@ export default function ConversationPage() {
           : [];
       return preferRicherPlanTree(prev, next);
     });
+    // Spec #354 S4: pending incomplete-map holds for collab badge.
+    {
+      const raw =
+        (snapshot as { pending_handoff_expert_ids?: unknown }).pending_handoff_expert_ids ??
+        (fallback as { pending_handoff_expert_ids?: unknown } | undefined)?.pending_handoff_expert_ids;
+      if (Array.isArray(raw)) {
+        setPendingHandoffExpertIds(raw.map((x) => String(x || "").trim()).filter(Boolean));
+      } else {
+        setPendingHandoffExpertIds([]);
+      }
+    }
+    // Spec #321: Task Map revisions from product-state (do not invent history on FE).
+    // Keep intentional history selection; if user was on live, follow new live after archive.
+    {
+      const revs = normalizeTaskMapRevisions(
+        snapshot.task_map_revisions ?? fallback?.task_map_revisions,
+      );
+      const liveId =
+        (snapshot.live_revision_id != null && String(snapshot.live_revision_id).trim()) ||
+        (fallback?.live_revision_id != null && String(fallback.live_revision_id).trim()) ||
+        null;
+      if (revs.length) {
+        setTaskMapRevisions(revs);
+      }
+      if (liveId) {
+        const prevLive = liveRevisionIdRef.current;
+        liveRevisionIdRef.current = liveId;
+        setLiveRevisionId(liveId);
+        setViewedRevisionId((prevView) =>
+          nextViewedRevisionId({
+            prevViewedId: prevView,
+            prevLiveId: prevLive,
+            nextLiveId: liveId,
+            revisions: revs,
+          }),
+        );
+      } else if (!revs.length) {
+        // Brand-new Session: honest empty Tasks, no phantom history.
+        setTaskMapRevisions([]);
+        liveRevisionIdRef.current = null;
+        setLiveRevisionId(null);
+        setViewedRevisionId(null);
+      }
+    }
     // Backend case_participants.merge_panel_agents is source of truth for Subagent history.
     setStrixAgents(snapshot.strix_agents?.length ? snapshot.strix_agents : fallback?.strix_agents || []);
     setStrixNotes(snapshot.strix_notes?.length ? snapshot.strix_notes : fallback?.strix_notes || []);
@@ -1061,6 +1121,25 @@ export default function ConversationPage() {
           setPlanTree((prev) => mergePlanTreeByOwner(prev, stamped));
           planTreeDebounceRef.current = null;
         }, 250);
+      }
+      // Spec #321: update revision metadata; follow live after archive unless viewing history.
+      const revs = normalizeTaskMapRevisions(m.task_map_revisions);
+      const liveId = readString(m.live_revision_id) || null;
+      if (revs.length) {
+        setTaskMapRevisions(revs);
+      }
+      if (liveId) {
+        const prevLive = liveRevisionIdRef.current;
+        liveRevisionIdRef.current = liveId;
+        setLiveRevisionId(liveId);
+        setViewedRevisionId((prevView) =>
+          nextViewedRevisionId({
+            prevViewedId: prevView,
+            prevLiveId: prevLive,
+            nextLiveId: liveId,
+            revisions: revs,
+          }),
+        );
       }
       if (isProgress(m.progress)) setProgress(m.progress);
       if (isKanbanSummary(m.kanban)) setKanban(m.kanban);
@@ -1677,6 +1756,10 @@ export default function ConversationPage() {
     setKanban(undefined);
     setPendingWorkflowKind("");
     setPlanTree([]);
+    setTaskMapRevisions([]);
+    liveRevisionIdRef.current = null;
+    setLiveRevisionId(null);
+    setViewedRevisionId(null);
     setStrixAgents([]);
     setStrixNotes([]);
     setStrixRun(undefined);
@@ -3166,6 +3249,11 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               workflowKind={activeWorkflowKind}
               running={isActiveConversationRunning}
               planTree={planTree}
+              taskMapRevisions={taskMapRevisions}
+              liveRevisionId={liveRevisionId}
+              viewedRevisionId={viewedRevisionId}
+              onSelectTaskMapRevision={(id) => setViewedRevisionId(id)}
+              onReturnToLiveTaskMap={() => setViewedRevisionId(liveRevisionId)}
               strixAgents={applyDisplayNameOverrides(strixAgents, workerDisplayNames)}
               strixNotes={strixNotes}
               strixRun={strixRun}
@@ -3175,6 +3263,18 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               assets={assets}
               taskContext={taskContext}
               engagementCloseout={engagementCloseout}
+              conversationId={activeId}
+              pendingHandoffExpertIds={pendingHandoffExpertIds}
+              onSessionLifecycleDone={() => {
+                // Spec #354: Session Delete mid-run must flip Navbar light + interrupt → send.
+                if (!activeId) return;
+                setRunning(false);
+                setInterrupting(false);
+                launchOptimisticRef.current = false;
+                patchConversation(activeId, { working: false, status: "incomplete" });
+                clearProgressiveStreamUi();
+                void refreshConversationState(activeId);
+              }}
               onOpenVulnerability={setSelectedVulnerability}
               onOpenAsset={setSelectedAsset}
               onWorkerClick={(agent, workerOrdinal) => {

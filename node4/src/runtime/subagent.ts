@@ -178,6 +178,10 @@ export class SubagentHost {
       this.opts.task,
       plan,
       `subagent.${input.status}:${input.subagentId}`,
+      {
+        // Spec #321 E5: package chip updates mutate live map only.
+        taskMap: this.opts.todo?.()?.getTaskMap(),
+      },
     ).catch(() => {});
 
     if (bound) {

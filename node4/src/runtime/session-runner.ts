@@ -73,9 +73,13 @@ import {
 import {
   applyCaptainEndDisposition,
   decideParkOnEnd,
+  dropParkedSession,
+  parkNeedsAgentReseed,
   resolveWorkingSessionContinue,
 } from "./working-session-park.js";
 import { runParkedWorkingContinue } from "./run-parked-working-continue.js";
+import type { TodoStore as TodoStoreType } from "../stores/todo.js";
+import { seedTodoFromHandoff } from "./handoff-todo-seed.js";
 
 export async function runNode4Task(
   config: Node4Config,
@@ -156,21 +160,33 @@ export async function runNode4Task(
   });
   const sessionWorkModeForPark: "free" | "graph" =
     workPath.path === "hard" && hardResolved.mode === "hard" ? "graph" : "free";
+  // Spec #354 S4: platform handoff after Session Delete must not revive a ghost park.
+  if (task.pendingHandoffTodos != null || (task as { pendingHandoff?: boolean }).pendingHandoff) {
+    await dropParkedSession(task.conversationId, task.expertId || pack.id);
+  }
+
   const parkContinue = resolveWorkingSessionContinue({
     conversationId: task.conversationId,
     expertId: task.expertId || pack.id,
     sessionWorkMode: sessionWorkModeForPark,
     continueInEnvelope,
   });
+  /** Spec #354 L9: post-Reset parks keep Todo but need a fresh Agent. */
+  let handoffTodo: TodoStoreType | undefined;
   if (parkContinue.action === "attach") {
-    const parkedOut = await runParkedWorkingContinue({
-      config,
-      platform: loggingPlatform,
-      task,
-      parked: parkContinue.entry,
-      signal,
-    });
-    return { terminalStatus: parkedOut.terminalStatus, taskDir };
+    if (parkNeedsAgentReseed(parkContinue.entry)) {
+      handoffTodo = parkContinue.entry.todo;
+      // Shell park already consumed by resolveWorkingSessionContinue; reseed reuses Todo.
+    } else {
+      const parkedOut = await runParkedWorkingContinue({
+        config,
+        platform: loggingPlatform,
+        task,
+        parked: parkContinue.entry,
+        signal,
+      });
+      return { terminalStatus: parkedOut.terminalStatus, taskDir };
+    }
   }
 
   // --- Cold reseed path only (no park attach) ---
@@ -202,7 +218,8 @@ export async function runNode4Task(
     platformApi: config.nodeToken
       ? { baseUrl: config.platformHttpUrl, nodeToken: config.nodeToken }
       : undefined,
-    todo: new TodoStore(),
+    // Spec #354: Reset/handoff may supply a live TodoStore with open items.
+    todo: handoffTodo ?? seedTodoFromHandoff(task),
     evidence: new EvidenceStore(join(taskDir, "evidence")),
     findingsDir: join(taskDir, "findings"),
     goals,
@@ -882,7 +899,8 @@ export async function runNode4Task(
       /* ignore */
     }
     await textStream.dispose().catch(() => {});
-    // Spec #283 I0.9: shared captain end policy (interrupt → park; settled burst → dispose).
+    // Spec #283 I0.9 + #354: shared captain end policy (package settle/interrupt → park;
+    // Session delete / Case close pending → dispose via applyCaptainEndDisposition).
     applyCaptainEndDisposition({
       decision: decideParkOnEnd({ aborted: cancelled() }),
       entry: {

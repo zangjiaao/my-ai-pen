@@ -108,6 +108,8 @@ export function createTodoTool(runtime: ToolRuntime): AgentTool<any> {
       });
       // Platform alone is enough once user confirmed; agent flag without platform is not.
       const allowReplace = platformGrant === true;
+      // Spec #321 E2: capture seal *before* apply — after successful init the new map is unsealed.
+      const priorLiveSealed = isFreeMainMap && runtime.todo.getTaskMap().isSealed;
 
       const input: TodoParams = {
         op,
@@ -162,11 +164,13 @@ export function createTodoTool(runtime: ToolRuntime): AgentTool<any> {
           { isError: true },
         );
       }
-      // Spec #313 L3: one-shot — consume platform grant after successful Free replace init.
+      // Spec #313 L3 / #321 E3: one-shot grant consumed only when open+grant replace used it.
+      // E2 sealed→init is grant-free — do not burn the grant.
       if (
         op === "init" &&
         isFreeMainMap &&
         allowReplace &&
+        !priorLiveSealed &&
         !result.readOnly &&
         !result.errors.length
       ) {
@@ -211,6 +215,10 @@ export function createTodoTool(runtime: ToolRuntime): AgentTool<any> {
             runtime.task,
             graphRun.plan,
             `todo.${op}`,
+            {
+              // Spec #321: Graph L2 mutations stay on the same live map (E5).
+              taskMap: runtime.todo.getTaskMap(),
+            },
           );
         } else {
           await emitTodoPlanTreeUpdate(runtime.platform, runtime.task, runtime.todo, `todo.${op}`);

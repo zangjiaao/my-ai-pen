@@ -546,11 +546,18 @@ def apply_plan_tree_to_participant(
     expert_name: object = None,
     pack_id: object = None,
     task_id: object = None,
+    task_map_revisions: object = None,
+    live_revision_id: object = None,
+    live_sealed: object = None,
 ) -> dict[str, Any]:
-    """Store a role's todo plan on its Case participant (does not wipe other roles)."""
+    """Store a role's todo plan on its Case participant (does not wipe other roles).
+
+    Spec #321: optional Task Map revision list is Session/participant-scoped so
+    multi-role Cases do not merge maps into one fake list.
+    """
     if not isinstance(plan_tree, list):
         return dict(context or {})
-    return upsert_participant(
+    ctx = upsert_participant(
         context,
         expert_id=expert_id,
         expert_name=expert_name,
@@ -559,6 +566,155 @@ def apply_plan_tree_to_participant(
         plan_tree=plan_tree,
         touch=True,
     )
+    if task_map_revisions is not None or live_revision_id is not None or live_sealed is not None:
+        ctx = apply_task_map_to_participant(
+            ctx,
+            task_map_revisions=task_map_revisions,
+            live_revision_id=live_revision_id,
+            live_sealed=live_sealed,
+            expert_id=expert_id,
+            expert_name=expert_name,
+            pack_id=pack_id,
+            task_id=task_id,
+        )
+    return ctx
+
+
+def apply_task_map_to_participant(
+    context: dict | None,
+    *,
+    task_map_revisions: object = None,
+    live_revision_id: object = None,
+    live_sealed: object = None,
+    expert_id: object = None,
+    expert_name: object = None,
+    pack_id: object = None,
+    task_id: object = None,
+) -> dict[str, Any]:
+    """Spec #321: persist Task Map history on the matching participant (immutable archives)."""
+    ctx = dict(context or {})
+    pack = str(pack_id or "").strip() or "default"
+    name = str(expert_name or "").strip() or pack
+    eid = str(expert_id or "").strip()
+    key = participant_key(expert_id=eid or None, pack_id=pack, expert_name=name)
+    roster = participants_map(ctx)
+    prev = dict(roster.get(key) or {})
+    row: dict[str, Any] = {
+        **prev,
+        "key": key,
+        "expert_id": eid or prev.get("expert_id") or "",
+        "expert_name": name or prev.get("expert_name") or pack,
+        "pack_id": pack or prev.get("pack_id") or "default",
+    }
+    if isinstance(task_map_revisions, list):
+        # Deep-copy + merge by id so a Node cold-start with a shorter list cannot
+        # wipe Session history (Spec #321 retention for Case/Session lifetime).
+        try:
+            import copy
+
+            incoming = copy.deepcopy(task_map_revisions)
+        except Exception:
+            incoming = list(task_map_revisions)
+        prev_revs = prev.get("task_map_revisions") if isinstance(prev.get("task_map_revisions"), list) else []
+        row["task_map_revisions"] = merge_task_map_revisions(prev_revs, incoming)
+    if live_revision_id is not None:
+        lid = str(live_revision_id).strip() if live_revision_id is not None else ""
+        row["live_revision_id"] = lid or None
+    if live_sealed is not None:
+        row["live_sealed"] = bool(live_sealed)
+    if task_id is not None and str(task_id).strip():
+        row["last_task_id"] = str(task_id).strip()
+    roster[key] = row
+    ctx["participants"] = roster
+    return ctx
+
+
+def merge_task_map_revisions(previous: list, incoming: list) -> list[dict[str, Any]]:
+    """Union revisions by id; incoming wins on conflict. Prefer stable archive order.
+
+    At most one is_live row after merge: when incoming declares a live id, prior
+    lives not present as live in incoming are demoted to archived (keeps history).
+    """
+    by_id: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    incoming_live: set[str] = set()
+    if isinstance(incoming, list):
+        for item in incoming:
+            if isinstance(item, dict) and item.get("is_live"):
+                rid = str(item.get("id") or "").strip()
+                if rid:
+                    incoming_live.add(rid)
+    for src in (previous, incoming):
+        if not isinstance(src, list):
+            continue
+        for item in src:
+            if not isinstance(item, dict):
+                continue
+            rid = str(item.get("id") or "").strip()
+            if not rid:
+                continue
+            if rid not in by_id:
+                order.append(rid)
+            by_id[rid] = dict(item)
+    if incoming_live:
+        for rid, item in list(by_id.items()):
+            if item.get("is_live") and rid not in incoming_live:
+                demoted = dict(item)
+                demoted["is_live"] = False
+                by_id[rid] = demoted
+    # Live rows last; archived keep first-seen order.
+    archived = [by_id[i] for i in order if not by_id[i].get("is_live")]
+    live = [by_id[i] for i in order if by_id[i].get("is_live")]
+    return archived + live
+
+
+def task_map_projection_from_participants(context: dict | None) -> dict[str, Any]:
+    """Spec #321: Case-level Task Map projection from the active/primary participant.
+
+    Multi-role: each participant keeps its own revisions; snapshot exposes the
+    union metadata list tagged with owner when multiple roles have maps, but
+    live_revision_id stays the single writable live of the most recently updated
+    participant that has a live map (not a merged fake checklist).
+
+    Returned revision payloads are deep-copied so consumers cannot mutate archives.
+    """
+    import copy
+
+    revisions: list[dict[str, Any]] = []
+    live_id: str | None = None
+    live_sealed = False
+    seen_ids: set[str] = set()
+    for row in participants_list(context):
+        eid = str(row.get("expert_id") or "").strip()
+        ename = str(row.get("expert_name") or "").strip()
+        revs = row.get("task_map_revisions") if isinstance(row.get("task_map_revisions"), list) else []
+        for item in revs:
+            if not isinstance(item, dict):
+                continue
+            rid = str(item.get("id") or "").strip()
+            if rid and rid in seen_ids:
+                continue
+            if rid:
+                seen_ids.add(rid)
+            node = copy.deepcopy(item)
+            if eid and not node.get("owner_expert_id"):
+                node["owner_expert_id"] = eid
+            if ename and not node.get("owner_expert_name"):
+                node["owner_expert_name"] = ename
+            revisions.append(node)
+        row_live = str(row.get("live_revision_id") or "").strip()
+        if row_live:
+            live_id = row_live
+            live_sealed = bool(row.get("live_sealed"))
+    # Case-level honesty: only the Case live_revision_id is is_live.
+    if live_id:
+        for node in revisions:
+            node["is_live"] = str(node.get("id") or "") == live_id
+    return {
+        "task_map_revisions": revisions,
+        "live_revision_id": live_id,
+        "live_sealed": live_sealed,
+    }
 
 
 def plan_tree_from_participants(context: dict | None) -> list[dict[str, Any]]:
@@ -610,6 +766,108 @@ def mark_participant_idle(
         panel_agents=None,  # keep previous panel_agents
         touch=True,
     )
+
+
+def remove_participant(
+    context: dict | None,
+    *,
+    expert_id: object = None,
+    pack_id: object = None,
+    expert_name: object = None,
+) -> dict[str, Any]:
+    """Spec #354 L10: remove Case roster row after Session Delete so collab UI drops the card."""
+    ctx = dict(context or {})
+    roster = participants_map(ctx)
+    if not roster:
+        return ctx
+    eid = str(expert_id or "").strip()
+    pack = str(pack_id or "").strip()
+    name = str(expert_name or "").strip()
+    keys_to_drop: list[str] = []
+    if eid:
+        # Drop any row whose expert_id matches (key may be expert:{id} or pack:...).
+        for key, row in roster.items():
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("expert_id") or "").strip() == eid:
+                keys_to_drop.append(key)
+            elif key == f"expert:{eid}" or key.endswith(f":{eid}"):
+                keys_to_drop.append(key)
+    else:
+        key = participant_key(expert_id=None, pack_id=pack or None, expert_name=name or None)
+        if key in roster:
+            keys_to_drop.append(key)
+    if not keys_to_drop:
+        return ctx
+    for key in keys_to_drop:
+        roster.pop(key, None)
+    # Keep empty dict (not pop) so snapshot does not fall back to checkpoint panel_agents
+    # and resurrect a ghost Main card after Session Delete (Spec #354).
+    ctx["participants"] = roster
+    return recompute_case_run(ctx)
+
+
+def settle_context_after_session_delete(
+    context: dict | None,
+    *,
+    expert_id: object = None,
+) -> dict[str, Any]:
+    """Spec #354: after Session Delete mid-run, close package busy state on the Case.
+
+    - Drop workers tied to this expert (or all if expert unknown)
+    - Clear interrupt_pending / active_task_id when no workers remain
+    - Clear checkpoint panel_agents ghosts when roster empty
+    Does not invent new participants.
+    """
+    ctx = dict(context or {})
+    eid = str(expert_id or "").strip()
+    workers_raw = ctx.get("workers") if isinstance(ctx.get("workers"), dict) else {}
+    new_workers: dict[str, Any] = {}
+    for nid, meta in workers_raw.items():
+        if not isinstance(meta, dict):
+            continue
+        meta_eid = str(meta.get("expert_id") or "").strip()
+        if eid and meta_eid and meta_eid != eid:
+            new_workers[str(nid)] = meta
+            continue
+        # Drop matching expert worker, or drop all when expert unknown / untagged.
+        if eid and meta_eid and meta_eid == eid:
+            continue
+        if eid and not meta_eid:
+            # Untagged worker on single-node Cases usually belongs to the deleted Session.
+            continue
+        if not eid:
+            continue
+        new_workers[str(nid)] = meta
+    if not eid:
+        new_workers = {}
+    ctx["workers"] = new_workers
+    ctx.pop("interrupt_pending", None)
+    if not new_workers:
+        ctx.pop("active_task_id", None)
+        # Soft-close work-burst ledger if open.
+        try:
+            from app.services.work_burst_time import finalize_burst, get_ledger, set_ledger
+
+            ledger = get_ledger(ctx)
+            if ledger.get("active_burst_id"):
+                ctx = set_ledger(ctx, finalize_burst(ledger))
+        except Exception:
+            pass
+    # Ghost Main from checkpoint.panel_agents when participants empty.
+    roster = participants_map(ctx)
+    if not roster:
+        cp = dict(ctx.get("checkpoint") or {}) if isinstance(ctx.get("checkpoint"), dict) else {}
+        if cp:
+            if "panel_agents" in cp:
+                cp["panel_agents"] = []
+            node3 = cp.get("node3_strix") if isinstance(cp.get("node3_strix"), dict) else None
+            if node3 is not None:
+                ns = dict(node3)
+                ns["agents"] = []
+                cp["node3_strix"] = ns
+            ctx["checkpoint"] = cp
+    return ctx
 
 
 def participants_list(context: dict | None) -> list[dict[str, Any]]:
@@ -682,6 +940,9 @@ def agents_from_participants(
             "role": "main",
             "pack_id": pack,
             "expert_id": eid,
+            # Spec #354: durable Participant Session identity on this Case (case+expert).
+            # UI shows this instead of an "active" badge for debug / continuity checks.
+            "session_id": key,
             "current_tool": "",
             "current_action": status,
             "current_detail": detail,

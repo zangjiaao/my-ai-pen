@@ -86,6 +86,16 @@ def objective_title(phase: str, key: str) -> str:
     return titles.get((phase, key), key.replace("_", " ").title())
 
 
+def _pending_handoff_expert_ids(context: object) -> list[str]:
+    """Spec #354: expert ids with incomplete map holds (collab badge)."""
+    try:
+        from app.services.session_handoff import pending_handoff_expert_ids
+
+        return pending_handoff_expert_ids(context if isinstance(context, dict) else {})
+    except Exception:
+        return []
+
+
 def ensure_plan_tree_shape(items: list[dict], phase: str | None, completed: set[str], status: str, workflow_kind: str | None = None) -> list[dict]:
     nodes = [dict(item) for item in items if isinstance(item, dict)]
     if workflow_kind == "strix":
@@ -321,11 +331,20 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
     # Multi-role Case: merge per-participant plan trees so one role's todo map
     # does not wipe another role's tasks after handoff.
     try:
-        from app.services.case_participants import plan_tree_from_participants
+        from app.services.case_participants import (
+            plan_tree_from_participants,
+            task_map_projection_from_participants,
+        )
 
         participant_plan = plan_tree_from_participants(context)
+        task_map_proj = task_map_projection_from_participants(context)
     except Exception:
         participant_plan = []
+        task_map_proj = {
+            "task_map_revisions": [],
+            "live_revision_id": None,
+            "live_sealed": False,
+        }
     if participant_plan:
         raw_plan_tree = merge_plan_trees_by_owner(participant_plan, raw_plan_tree)
     workflow_kind = workflow_kind_for_checkpoint(checkpoint)
@@ -435,6 +454,12 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
         "attack_surface": attack_surface_items,
         "coverage": coverage_items,
         "plan_tree": plan_tree,
+        # Spec #321: Task Map history (audit/backend; operator selector retired by #354).
+        "task_map_revisions": task_map_proj.get("task_map_revisions") or [],
+        "live_revision_id": task_map_proj.get("live_revision_id"),
+        "live_sealed": bool(task_map_proj.get("live_sealed")),
+        # Spec #354 S4: pending incomplete-map holds per expert (collab badge).
+        "pending_handoff_expert_ids": _pending_handoff_expert_ids(context),
         "captured_traffic": captured_traffic_items,
         # Spec #309: Case traffic audit list (replaces right-panel Activity projection).
         "traffic_exchanges": traffic_exchange_items,
@@ -484,19 +509,31 @@ def strix_agents_for_snapshot(
     conversation_status: str | None,
     task_context: dict | None = None,
 ) -> list[dict]:
-    """Case participants first (multi-role); fall back to last checkpoint panel agents."""
+    """Case participants first (multi-role); fall back to last checkpoint panel agents.
+
+    Spec #354: when ``participants`` key is present (including empty after Session Delete),
+    do **not** resurrect ghost Main cards from checkpoint.panel_agents.
+    """
     task_meta = task_context if isinstance(task_context, dict) else {}
+    ctx = context if isinstance(context, dict) else {}
     try:
         from app.services.case_participants import agents_from_participants, participants_map
 
-        if participants_map(context):
+        # Explicit roster (even empty {}) is product SoT after Session lifecycle ops.
+        if isinstance(ctx.get("participants"), dict):
             agents = agents_from_participants(
-                context,
+                ctx,
+                conversation_status=conversation_status,
+                active_expert_id=task_meta.get("expert_id"),
+            )
+            return normalize_agents_for_conversation_status(agents, conversation_status)
+        if participants_map(ctx):
+            agents = agents_from_participants(
+                ctx,
                 conversation_status=conversation_status,
                 active_expert_id=task_meta.get("expert_id"),
             )
             if agents:
-                # Preserve current_detail / expert fields already set by agents_from_participants.
                 return normalize_agents_for_conversation_status(agents, conversation_status)
     except Exception:
         pass

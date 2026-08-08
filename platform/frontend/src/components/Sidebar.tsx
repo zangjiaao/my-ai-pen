@@ -533,11 +533,19 @@ export default function Sidebar({ activeId, onSelect }: Props) {
   );
 }
 
-/** Conversation status light — running/working matches ThinkingCard breath (animate-pulse + blue). */
+/**
+ * Case package status light (Spec #354 S2 / L7) — display only; red ≠ Case death.
+ * green idle · blue running · yellow wait/pause · red latest error
+ */
 function statusDotClass(status: string, working?: boolean) {
   if (status === "running" || working === true) return "animate-pulse bg-status-running";
-  if (status === "completed") return "bg-status-success";
-  if (status === "incomplete") return "bg-severity-medium";
-  if (status === "failed" || status === "canceled") return "bg-severity-critical";
-  if (status === "paused") return "bg-ink-secondary";  return "bg-ink-muted";
+  // green: idle completed or freshly created Case
+  if (status === "completed" || status === "created" || !status) return "bg-status-success";
+  // yellow: authorize wait / Task pause / incomplete package (not Case death)
+  if (status === "incomplete" || status === "paused") return "bg-severity-medium";
+  // red: latest package error — Case remains messageable
+  if (status === "failed") return "bg-severity-critical";
+  // canceled remains a distinct light (not "Case failed forever")
+  if (status === "canceled") return "bg-severity-critical";
+  return "bg-status-success";
 }

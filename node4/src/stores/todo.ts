@@ -13,6 +13,7 @@ import {
   type WorkerBindResult,
   type WorkerChipInput,
 } from "../runtime/hard-graph-plan.js";
+import { TaskMapHistory, type TaskMapProjection } from "./task-map.js";
 
 export type TodoStatus = "pending" | "in_progress" | "completed" | "abandoned";
 export type TodoOpName = "init" | "start" | "done" | "rm" | "drop" | "append" | "view";
@@ -68,6 +69,11 @@ export type TodoParams = {
   free_map?: boolean;
   /** Spec #313: explicit user permission to replace Free Tasks map on init. */
   allow_replace?: boolean;
+  /**
+   * Spec #321 E2: when live map is sealed (all-terminal), full init archives
+   * without a new replace grant. Set by TodoStore from TaskMapHistory.
+   */
+  live_sealed?: boolean;
 };
 
 /** True when Free Tasks map has any phase with tasks (open or closed history). */
@@ -76,20 +82,28 @@ export function freeMapNonEmpty(phases: readonly TodoPhase[]): boolean {
 }
 
 /**
- * Spec #313 S2 — Free silent todo.init replace gate (pure).
+ * Spec #313 S2 / #321 E2–E3 — Free silent todo.init replace gate (pure).
  * Returns error text when replace is denied; undefined when allowed.
+ *
+ * - empty map → allow
+ * - live sealed (all-terminal) → allow without grant (E2 archive-then-init)
+ * - allowReplace / platform grant → allow (E3)
+ * - otherwise deny when map non-empty
  */
 export function freeInitReplaceDenied(
   previous: readonly TodoPhase[],
   allowReplace?: boolean,
+  options?: { liveSealed?: boolean },
 ): string | undefined {
   if (allowReplace === true) return undefined;
+  if (options?.liveSealed === true) return undefined;
   if (!freeMapNonEmpty(previous)) return undefined;
   return (
     "Free Tasks map already exists; silent todo.init replace is forbidden. " +
     "Use append/start/done/drop/rm to maintain the map, or obtain platform-issued " +
     "todo_replace_allowed after explicit user permission (ChoiceCard option " +
-    "replace_todo_map / todo_replace_permission) — agent allow_replace alone is not enough."
+    "replace_todo_map / todo_replace_permission) — agent allow_replace alone is not enough. " +
+    "After the map is fully terminal (sealed), a new init archives the completed map without a grant."
   );
 }
 
@@ -206,9 +220,12 @@ export function applyTodoOp(previous: TodoPhase[], params: TodoParams): TodoAppl
 
   switch (op) {
     case "init": {
-      // Spec #313 Free: silent full replace forbidden when map exists (unless allow_replace).
+      // Spec #313 Free / #321 E2–E3: silent full replace forbidden when map exists
+      // unless allow_replace (grant) or live is sealed (E2).
       if (params.free_map) {
-        const denied = freeInitReplaceDenied(previous, params.allow_replace === true);
+        const denied = freeInitReplaceDenied(previous, params.allow_replace === true, {
+          liveSealed: params.live_sealed === true,
+        });
         if (denied) {
           errors.push(denied);
           break;
@@ -266,6 +283,25 @@ export class TodoStore {
   private ownershipByNodeId = new Map<string, TodoWorkerOwnership>();
   /** Synthetic pkg-* rows when bind falls through (owner still set). */
   private packageItems: TodoPackageWorkItem[] = [];
+  /**
+   * Spec #321 Task Map history for Free Main checklist (archive-then-switch).
+   * Graph whole-participation maps may share this instance via setTaskMap / lifecycle.
+   */
+  private readonly taskMap: TaskMapHistory;
+
+  constructor(taskMap?: TaskMapHistory) {
+    this.taskMap = taskMap ?? new TaskMapHistory();
+  }
+
+  /** Spec #321: Session Task Map history (shared with Graph when wired). */
+  getTaskMap(): TaskMapHistory {
+    return this.taskMap;
+  }
+
+  /** Spec #321 product-state projection fields. */
+  taskMapProjection(): TaskMapProjection {
+    return this.taskMap.projection();
+  }
 
   snapshot(): TodoPhase[] {
     return clonePhases(this.phases);
@@ -278,15 +314,49 @@ export class TodoStore {
   }
 
   apply(params: TodoParams): TodoApplyResult {
-    const result = applyTodoOp(this.phases, params);
+    const freeMap = params.free_map === true;
+    const priorNonEmpty = freeMap && freeMapNonEmpty(this.phases);
+    const liveSealed = freeMap && this.taskMap.isSealed;
+    const input: TodoParams = freeMap
+      ? { ...params, live_sealed: liveSealed || params.live_sealed === true }
+      : params;
+
+    const result = applyTodoOp(this.phases, input);
     if (!result.readOnly && result.errors.length === 0) {
       this.phases = clonePhases(result.phases);
       this.pruneOrphanOwnership();
+      if (freeMap) {
+        this.syncFreeTaskMap(params.op, priorNonEmpty);
+      }
     }
     return {
       ...result,
       phases: this.snapshot(),
     };
+  }
+
+  /**
+   * Spec #321: after a successful Free map mutation, keep Task Map history in sync.
+   * - init on non-empty prior (sealed E2 or granted E3) → archive-then-install
+   * - first init / empty → install live
+   * - maintain ops → mutate live only (E5); may seal (E1)
+   */
+  private syncFreeTaskMap(op: TodoOpName, priorNonEmpty: boolean): void {
+    const planTree = this.toPlanNodes();
+    const meta = { work_mode: "free" as const };
+    if (op === "init") {
+      if (priorNonEmpty) {
+        this.taskMap.archiveThenInstall(planTree, meta);
+      } else if (!this.taskMap.liveRevisionId || !this.taskMap.hasLiveContent()) {
+        this.taskMap.installLive(planTree, meta);
+      } else {
+        // Empty re-init onto existing empty live shell
+        this.taskMap.installLive(planTree, meta);
+      }
+      return;
+    }
+    if (op === "view") return;
+    this.taskMap.mutateLive(planTree, meta);
   }
 
   /**

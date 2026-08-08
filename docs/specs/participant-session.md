@@ -1,7 +1,7 @@
 # Spec: Case · Participant Session · work mode continuity
 
 **Status:** Implementable Spec (product contract)  
-**Issue:** [#277](https://github.com/zangjiaao/my-ai-pen/issues/277) (amended by [#282](https://github.com/zangjiaao/my-ai-pen/issues/282) mode continuity on interrupt→continue; [#283](https://github.com/zangjiaao/my-ai-pen/issues/283) I0.9 working-runtime continuity)  
+**Issue:** [#277](https://github.com/zangjiaao/my-ai-pen/issues/277) (amended by [#282](https://github.com/zangjiaao/my-ai-pen/issues/282) mode continuity on interrupt→continue; [#283](https://github.com/zangjiaao/my-ai-pen/issues/283) I0.9 working-runtime continuity; [#354](https://github.com/zangjiaao/my-ai-pen/issues/354) Session owns runtime — Task package settle does not dispose captain)  
 **Inputs:** Owner grilling (session analysis `0ab49d25-…`; Free→Graph silent divert; Case vs Session continuity); owner resolution vs map [#213](https://github.com/zangjiaao/my-ai-pen/issues/213) (2026-08-03); field Case `f758d7f5-…` (Graph interrupt → Free cold-start / working-runtime amnesia)  
 **Product path:** Graph × Pi + Product state (ADR 0001). Soft scenario Graph remains **retired**.  
 **Amends:** `docs/specs/task-graph.md` product rule “Expert = Graph only / no Expert free chip”; `docs/specs/expert-offers.md` Case sticky template as sole mode authority; interrupt continue continuity (#282 mode + #283 I0.9 park/attach).  
@@ -174,10 +174,10 @@ Primary seam: **Working session continue after interrupt**.
 | I0.9-W6 | Park miss → mode-correct Graph reseed; never silent Free demotion when Session mode was Graph. |
 | I0.9-W7 | Idle interrupt → honest settle; continue by Session mode (#282 I7). |
 | I0.9-W8 | Steer/padding mid-run ≠ interrupt; does not dispose or park. |
-| I0.9-W9 | Park TTL expiry → honest reseed; Session mode preserved. v1 park is memory-only in the live Node process (default TTL 30 minutes). |
+| I0.9-W9 | Park TTL: Spec [#354](https://github.com/zangjiaao/my-ai-pen/issues/354) L2 retires idle park TTL as product Session death (default disabled). Explicit TTL may still be used for tests/ops; process death → honest mode-correct reseed. |
 | I0.9-W10 | Explicit composer Graph after Free may enter Graph (permission); Free park is not forced onto Graph (mode_mismatch reseed). |
 
-**Node adapter:** `working-session-park` registry keyed by `conversation_id + expert_id`. Interrupt parks captain; continue attaches; dispose only on natural terminal / transfer / TTL / process death (then honest reseed).
+**Node adapter:** `working-session-park` registry keyed by `conversation_id + expert_id`. Interrupt **and Task package settle/error** park captain (Spec #354); continue attaches. Dispose only on Case close / Session delete / expert transfer / explicit manual end (whitelist); process death → honest reseed. Idle park TTL is not product Session death (L2).
 
 ---
 

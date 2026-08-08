@@ -42,7 +42,9 @@ export default function TopBar({ title, conversationId, actions }: Props) {
             className="inline-flex max-w-[220px] items-center gap-1.5 rounded-md border border-hairline bg-canvas-inset px-2 py-1 font-mono text-[11px] text-ink-secondary transition-colors hover:text-ink"
           >
             {copied ? <Check size={13} /> : <Copy size={13} />}
-            <span className="truncate">session {shortId}</span>
+            <span className="truncate" data-testid="case-id-chrome">
+              Case {shortId}
+            </span>
           </button>
         )}
       </div>

@@ -21,6 +21,15 @@ import {
   enqueuePendingSteer,
 } from "./runtime/active-session-registry.js";
 import {
+  clearPendingCaseDispose,
+  clearPendingSessionDispose,
+  disposeWorkingSession,
+  disposeWorkingSessionsForCase,
+  markPendingCaseDispose,
+  markPendingSessionDispose,
+  resetWorkingSessionMemory,
+} from "./runtime/working-session-park.js";
+import {
   installExpert,
   listInstalledPackIds,
   reconcilePlatformOffers,
@@ -126,6 +135,117 @@ async function runAssignedTask(message: Record<string, unknown>): Promise<void> 
 
 client.on("task_assign", async (message) => {
   await runAssignedTask(message);
+});
+
+/** Wait until conversation is not mid work-burst (or timeout). */
+async function waitConversationIdle(conversationId: string, maxMs = 4000): Promise<boolean> {
+  const start = Date.now();
+  while (busy.has(conversationId) && Date.now() - start < maxMs) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return !busy.has(conversationId);
+}
+
+/**
+ * Spec #354: Case close protocol — release all captains for a CaseID.
+ * Platform sends on conversation delete/archive.
+ */
+client.on("case_session_release", async (message) => {
+  const conversationId = String(message.conversation_id || message.conversationId || "").trim();
+  if (!conversationId) return;
+  // Mark dispose-on-finally so a live burst cannot re-park after abort.
+  markPendingCaseDispose(conversationId);
+  const prev = aborts.get(conversationId);
+  if (prev) {
+    cancelApprovalsForConversation(conversationId);
+    prev.abort();
+  }
+  const idle = await waitConversationIdle(conversationId);
+  const result = await disposeWorkingSessionsForCase(conversationId);
+  // Only clear pending when idle (finally already ran). If still busy, keep pending
+  // so a late finally force-disposes instead of re-parking (Spec #354 L1).
+  if (idle) {
+    clearPendingCaseDispose(conversationId);
+  }
+  console.log(
+    `[node4] case_session_release conv=${conversationId.slice(0, 8)} disposed=${result.disposed} idle=${idle}`,
+  );
+  await client.send({
+    type: "case_session_release_ack",
+    conversation_id: conversationId,
+    disposed: result.disposed,
+    keys: result.keys,
+    pending: !idle,
+  });
+});
+
+/**
+ * Spec #354 L10: Session Delete — dispose one Participant Session captain.
+ * Incomplete Todo snapshot returned for Case pending-handoff holding.
+ */
+client.on("session_dispose", async (message) => {
+  const conversationId = String(message.conversation_id || message.conversationId || "").trim();
+  const expertId = String(message.expert_id || message.expertId || "").trim();
+  if (!conversationId) return;
+  // Missing expert_id: Case-scoped pending so any conv::expert finally disposes.
+  if (expertId) {
+    markPendingSessionDispose(conversationId, expertId);
+  } else {
+    markPendingCaseDispose(conversationId);
+  }
+  // If this Session's Case is mid-burst, abort so finally can dispose (not park).
+  const prev = aborts.get(conversationId);
+  if (prev) {
+    cancelApprovalsForConversation(conversationId);
+    prev.abort();
+  }
+  const idle = await waitConversationIdle(conversationId);
+  const result = await disposeWorkingSession(conversationId, expertId || undefined);
+  if (idle) {
+    if (expertId) clearPendingSessionDispose(conversationId, expertId);
+    else clearPendingCaseDispose(conversationId);
+  }
+  console.log(
+    `[node4] session_dispose conv=${conversationId.slice(0, 8)} expert=${expertId || "-"} disposed=${result.disposed} idle=${idle}`,
+  );
+  await client.send({
+    type: "session_dispose_ack",
+    conversation_id: conversationId,
+    expert_id: expertId || null,
+    disposed: result.disposed,
+    open_todos: result.openTodos,
+    pending: !idle,
+  });
+});
+
+/**
+ * Spec #354 L9: Session Reset — clear model memory, keep incomplete Todo.
+ */
+client.on("session_reset", async (message) => {
+  const conversationId = String(message.conversation_id || message.conversationId || "").trim();
+  const expertId = String(message.expert_id || message.expertId || "").trim();
+  if (!conversationId) return;
+  // Prefer idle Reset; if busy, abort then wait so park exists for reset.
+  if (busy.has(conversationId)) {
+    const prev = aborts.get(conversationId);
+    if (prev) {
+      cancelApprovalsForConversation(conversationId);
+      prev.abort();
+    }
+    await waitConversationIdle(conversationId);
+  }
+  const result = await resetWorkingSessionMemory(conversationId, expertId || undefined);
+  console.log(
+    `[node4] session_reset conv=${conversationId.slice(0, 8)} expert=${expertId || "-"} ok=${result.ok}`,
+  );
+  await client.send({
+    type: "session_reset_ack",
+    conversation_id: conversationId,
+    expert_id: expertId || null,
+    ok: result.ok,
+    open_todo_count: result.openTodoCount,
+    reason: result.reason,
+  });
 });
 
 /** Report physical pack install state so platform logs / future UI can verify. */
@@ -411,6 +531,16 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
     caseContext,
     agentLanguage,
     todoReplaceAllowed: todoReplaceAllowed || undefined,
+    pendingHandoffTodos:
+      message.pending_handoff_todos !== undefined
+        ? message.pending_handoff_todos
+        : message.pendingHandoffTodos !== undefined
+          ? message.pendingHandoffTodos
+          : undefined,
+    pendingHandoff:
+      message.pending_handoff === true ||
+      message.pendingHandoff === true ||
+      undefined,
   };
 }
 

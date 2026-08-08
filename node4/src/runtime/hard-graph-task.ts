@@ -137,15 +137,24 @@ export async function emitHardGraphStageStatus(options: {
   startedAt: string;
   /** Optional L1/L2 Tasks map — updated and re-emitted on stage boundaries. */
   plan?: HardGraphPlanStore;
+  /** Spec #321: Task Map history — stage boundaries mutate live only (E5). */
+  taskMap?: import("../stores/task-map.js").TaskMapHistory;
 }): Promise<void> {
-  const { platform, task, event, startedAt, plan } = options;
+  const { platform, task, event, startedAt, plan, taskMap } = options;
   const work_mode = workModeForEvent(event);
   const hard_graph = hardGraphPayload(event);
+  const mapOpts = taskMap ? { taskMap } : undefined;
 
   if (event.type === "stage_start") {
     if (plan) {
       plan.setStageStatus(event.stageId, "running");
-      await emitHardGraphPlanTreeUpdate(platform, task, plan, `stage_start:${event.stageId}`);
+      await emitHardGraphPlanTreeUpdate(
+        platform,
+        task,
+        plan,
+        `stage_start:${event.stageId}`,
+        mapOpts,
+      );
     }
     const statusMsg: PlatformMessage = {
       type: "status_update",
@@ -185,7 +194,13 @@ export async function emitHardGraphStageStatus(options: {
         // Spec #281: drop running L2 under ending stage before/while L1 closes.
         plan.neutralizeOpenRunningL2(event.stageId);
         plan.setStageStatus(event.stageId, planStatus);
-        await emitHardGraphPlanTreeUpdate(platform, task, plan, `stage_end:${event.stageId}:${event.outcome}`);
+        await emitHardGraphPlanTreeUpdate(
+          platform,
+          task,
+          plan,
+          `stage_end:${event.stageId}:${event.outcome}`,
+          mapOpts,
+        );
       }
     }
     const statusMsg: PlatformMessage = {
@@ -264,6 +279,19 @@ export async function runHardGraphExpertTask(options: {
     graphQuality,
   };
   parentRuntime.lifecycle.panelAgents = panel;
+  // Spec #321 E4: entering/restarting Graph is a new participation map.
+  // Archive prior Free/Graph live (if any) and install this Graph plan as live.
+  // Stage advances later only mutate live (emitHardGraphPlanTreeUpdate E5).
+  {
+    const taskMap = parentRuntime.todo.getTaskMap();
+    const initialTree = graphPlan.toPlanTree();
+    const meta = { work_mode: "graph" as const, graph_id: graph.id, title: graph.label || graph.id };
+    if (taskMap.hasLiveContent()) {
+      taskMap.archiveThenInstall(initialTree, meta);
+    } else {
+      taskMap.installLive(initialTree, meta);
+    }
+  }
   // Spec #116: ensure Store-first process quality survives all stages
   const processQuality = ensureProcessQuality(parentRuntime.lifecycle);
 
@@ -329,8 +357,10 @@ export async function runHardGraphExpertTask(options: {
   };
   await platform.send(workStart);
 
-  // L1 stage map before any stage todos.
-  await emitHardGraphPlanTreeUpdate(platform, task, graphPlan, "graph_start");
+  // L1 stage map before any stage todos (live already installed above; E5 re-emit only).
+  await emitHardGraphPlanTreeUpdate(platform, task, graphPlan, "graph_start", {
+    taskMap: parentRuntime.todo.getTaskMap(),
+  });
 
   const availableTools = toolNamesForPack(pack);
   const executeStage =
@@ -360,7 +390,14 @@ export async function runHardGraphExpertTask(options: {
         maxRefine: l1MaxStageRefine(),
       },
       onEvent: (event) =>
-        emitHardGraphStageStatus({ platform, task, event, startedAt, plan: graphPlan }),
+        emitHardGraphStageStatus({
+          platform,
+          task,
+          event,
+          startedAt,
+          plan: graphPlan,
+          taskMap: parentRuntime.todo.getTaskMap(),
+        }),
     });
   } catch (err) {
     // LlmTurnError: runner already closed stage/run plan events. Emit failed checkpoint

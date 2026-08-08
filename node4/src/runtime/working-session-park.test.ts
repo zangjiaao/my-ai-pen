@@ -7,19 +7,25 @@ import { TodoStore } from "../stores/todo.js";
 import type { Node4AgentSession } from "./run-node4-agent.js";
 import {
   applyCaptainEndDisposition,
+  clearPendingDisposeForTests,
   clearWorkingSessionParksForTests,
   countParkedSessionsForTests,
   decideAttachOnContinue,
   decideCaptainEndDisposition,
   decideParkOnEnd,
   DEFAULT_PARK_TTL_MS,
+  disposeWorkingSession,
+  disposeWorkingSessionsForCase,
   harnessStatusAfterParkedContinue,
   isParkExpired,
+  markPendingSessionDispose,
+  parkNeedsAgentReseed,
   parkSessionKey,
   parkWorkingSession,
   parkedSessionHasHistory,
   parkedTodoNonEmpty,
   peekParkedSession,
+  resetWorkingSessionMemory,
   resolveWorkingSessionContinue,
   takeParkedSession,
   type ParkedWorkingRuntime,
@@ -38,16 +44,15 @@ assert.equal(parkSessionKey("c1", ""), "c1");
 assert.equal(parkSessionKey("c1"), "c1");
 assert.equal(parkSessionKey(""), "");
 
-assert.equal(
-  isParkExpired({ parkedAt: 1000 }, 1000 + DEFAULT_PARK_TTL_MS + 1),
-  true,
-);
-assert.equal(
-  isParkExpired({ parkedAt: 1000 }, 1000 + DEFAULT_PARK_TTL_MS - 1),
-  false,
-);
+// Spec #354 L2: default TTL disabled (0) → never product-expire
+assert.equal(DEFAULT_PARK_TTL_MS, 0);
+assert.equal(isParkExpired({ parkedAt: 1000 }, 1000 + 999_999_999), false);
+// Explicit positive TTL still expires
+const TEST_TTL_MS = 30 * 60 * 1000;
+assert.equal(isParkExpired({ parkedAt: 1000 }, 1000 + TEST_TTL_MS + 1, TEST_TTL_MS), true);
+assert.equal(isParkExpired({ parkedAt: 1000 }, 1000 + TEST_TTL_MS - 1, TEST_TTL_MS), false);
 
-// --- decideCaptainEndDisposition / decideParkOnEnd (shared end policy) ---
+// --- decideCaptainEndDisposition / decideParkOnEnd (Spec #354 Session owns runtime) ---
 assert.deepEqual(decideCaptainEndDisposition({ aborted: true }), {
   disposition: "park",
   reason: "interrupted",
@@ -57,26 +62,41 @@ assert.deepEqual(
   { disposition: "park", reason: "incomplete" },
   "incomplete mid-work re-parks (not dispose)",
 );
+// Spec #354: productTerminal alone must NOT dispose (Task package ≠ Session death)
 assert.deepEqual(
   decideCaptainEndDisposition({ aborted: false, productTerminal: true }),
-  { disposition: "dispose", reason: "product_terminal" },
+  { disposition: "park", reason: "incomplete" },
+  "package complete does not dispose captain",
 );
-// abort wins over productTerminal
+// abort parks even when legacy productTerminal flag is set
 assert.deepEqual(
   decideCaptainEndDisposition({ aborted: true, productTerminal: true }),
   { disposition: "park", reason: "interrupted" },
+);
+// Explicit dispose whitelist
+assert.deepEqual(
+  decideCaptainEndDisposition({ aborted: false, disposeReason: "case_close" }),
+  { disposition: "dispose", reason: "case_close" },
+);
+assert.deepEqual(
+  decideCaptainEndDisposition({ aborted: false, disposeReason: "session_delete" }),
+  { disposition: "dispose", reason: "session_delete" },
 );
 assert.deepEqual(decideParkOnEnd({ aborted: true }), {
   disposition: "park",
   reason: "interrupted",
 });
 assert.deepEqual(decideParkOnEnd({ aborted: false }), {
-  disposition: "dispose",
-  reason: "product_terminal",
-});
+  disposition: "park",
+  reason: "incomplete",
+}, "Spec #354: package settle parks, does not dispose");
 assert.deepEqual(decideParkOnEnd({ aborted: true, expertTransfer: true }), {
   disposition: "dispose",
   reason: "expert_transfer",
+});
+assert.deepEqual(decideParkOnEnd({ aborted: false, disposeReason: "manual_end" }), {
+  disposition: "dispose",
+  reason: "manual_end",
 });
 
 // harnessStatusAfterParkedContinue
@@ -403,30 +423,41 @@ function makeParked(overrides: Partial<ParkedWorkingRuntime> = {}): ParkedWorkin
   assert.equal(freePath.path, "free", "W7: Free Session continue free");
 }
 
-// ========== W8: steer/padding ≠ interrupt park path ==========
+// ========== W8: package settle parks (Spec #354); steer ≠ park path ==========
 {
   clearWorkingSessionParksForTests();
-  // Mid-run steer does not park (park only on abort end). settle disposition without abort = dispose.
+  // Mid-run steer does not park by itself; package settle disposition is park.
   const d = decideParkOnEnd({ aborted: false });
-  assert.equal(d.disposition, "dispose", "W8: non-interrupt end does not park");
+  assert.equal(d.disposition, "park", "W8/#354: non-interrupt package settle parks");
   // Active-session steer is separate registry; park count stays 0 during busy steer
   assert.equal(countParkedSessionsForTests(), 0);
 }
 
-// ========== W9: Park TTL expiry → honest reseed, mode preserved ==========
+// ========== W9: Park TTL — Spec #354 L2 default is no product idle reclaim ==========
 {
   clearWorkingSessionParksForTests();
-  const old = Date.now() - DEFAULT_PARK_TTL_MS - 5000;
+  // Default TTL is disabled (0). Explicit positive TTL still expires for tests / ops.
+  const old = Date.now() - 60_000;
+  parkWorkingSession(makeParked({ parkedAt: old, workMode: "graph" }));
+  const contDefault = resolveWorkingSessionContinue({
+    conversationId: "conv-w",
+    expertId: "pentest",
+    sessionWorkMode: "graph",
+    now: Date.now(),
+  });
+  assert.equal(contDefault.action, "attach", "W9/#354: default TTL does not expire park");
+  clearWorkingSessionParksForTests();
   parkWorkingSession(makeParked({ parkedAt: old, workMode: "graph" }));
   const cont = resolveWorkingSessionContinue({
     conversationId: "conv-w",
     expertId: "pentest",
     sessionWorkMode: "graph",
     now: Date.now(),
+    ttlMs: 30_000,
   });
   assert.equal(cont.action, "reseed");
   if (cont.action !== "reseed") throw new Error("expected reseed");
-  assert.equal(cont.reason, "ttl_expired", "W9: TTL");
+  assert.equal(cont.reason, "ttl_expired", "W9: explicit TTL still works");
   // mode-correct reseed still Graph path
   assert.equal(
     resolveExpertWorkPath({
@@ -699,7 +730,7 @@ assert.equal(
   clearWorkingSessionParksForTests();
 }
 
-// Free product-terminal (no open todos) disposes
+// Free package complete (no open todos) still parks — Spec #354 Session owns runtime
 {
   clearWorkingSessionParksForTests();
   const { runParkedWorkingContinue } = await import("./run-parked-working-continue.js");
@@ -727,9 +758,9 @@ assert.equal(
     }),
   });
   assert.equal(out.terminalStatus, "completed");
-  assert.equal(out.reparked, false);
-  assert.equal(disposed, 1, "product-terminal Free disposes");
-  assert.equal(countParkedSessionsForTests(), 0);
+  assert.equal(out.reparked, true, "package complete re-parks captain");
+  assert.equal(disposed, 0, "Spec #354: package complete does not dispose");
+  assert.ok(peekParkedSession("conv-free-done", "pentest"));
   clearWorkingSessionParksForTests();
 }
 
@@ -757,7 +788,7 @@ assert.equal(
   assert.equal(applied.disposed, false);
   assert.equal(disposed, 0);
   assert.ok(peekParkedSession("c-fin", "e"), "Issue3: interrupt finally path parks");
-  // settled stage/burst disposes
+  // Spec #354: settled stage/burst parks (does not dispose)
   const applied2 = applyCaptainEndDisposition({
     decision: decideParkOnEnd({ aborted: false }),
     entry: {
@@ -772,10 +803,208 @@ assert.equal(
       },
     },
   });
-  assert.equal(applied2.disposed, true);
-  assert.ok(disposed >= 1);
+  assert.equal(applied2.parked, true);
+  assert.equal(applied2.disposed, false);
+  assert.equal(disposed, 0, "package settle must not dispose");
+  assert.ok(peekParkedSession("c-fin2", "e"), "settle parks for continue attach");
   clearWorkingSessionParksForTests();
 }
+
+// Spec #354 S1: LLM-class error path equivalent = non-abort package end parks Todo
+{
+  clearWorkingSessionParksForTests();
+  let disposed = 0;
+  const todo = new TodoStore();
+  // seed a non-empty open checklist (external behavior: continue sees todos)
+  todo.apply({
+    op: "init",
+    list: [{ phase: "P", items: ["keep me"] }],
+  });
+  const applied = applyCaptainEndDisposition({
+    decision: decideParkOnEnd({ aborted: false }),
+    entry: {
+      conversationId: "c-llm-err",
+      expertId: "pentest",
+      workMode: "free",
+      taskId: "t-err",
+      session: fakeSession(),
+      todo,
+      dispose: () => {
+        disposed += 1;
+      },
+    },
+  });
+  assert.equal(applied.parked, true);
+  assert.equal(disposed, 0);
+  const cont = resolveWorkingSessionContinue({
+    conversationId: "c-llm-err",
+    expertId: "pentest",
+    sessionWorkMode: "free",
+  });
+  assert.equal(cont.action, "attach");
+  if (cont.action === "attach") {
+    assert.ok(parkedTodoNonEmpty(cont.entry), "continue after package error sees open todos");
+  }
+  clearWorkingSessionParksForTests();
+}
+
+// Spec #354: dispose whitelist + case release + Reset
+{
+  clearWorkingSessionParksForTests();
+  parkWorkingSession(makeParked({ conversationId: "case-a", expertId: "e1" }));
+  parkWorkingSession(makeParked({ conversationId: "case-a", expertId: "e2" }));
+  parkWorkingSession(makeParked({ conversationId: "case-b", expertId: "e1" }));
+  assert.equal(countParkedSessionsForTests(), 3);
+  const released = await disposeWorkingSessionsForCase("case-a");
+  assert.equal(released.disposed, 2);
+  assert.equal(countParkedSessionsForTests(), 1, "other Case park remains");
+  assert.ok(peekParkedSession("case-b", "e1"));
+  clearWorkingSessionParksForTests();
+  parkWorkingSession(makeParked({ conversationId: "c-del", expertId: "exp" }));
+  const del = await disposeWorkingSession("c-del", "exp");
+  assert.equal(del.disposed, true);
+  assert.equal(countParkedSessionsForTests(), 0);
+  clearWorkingSessionParksForTests();
+  const todo = new TodoStore();
+  todo.apply({
+    op: "init",
+    list: [{ phase: "P", items: ["open"] }],
+  });
+  parkWorkingSession(
+    makeParked({
+      conversationId: "c-rst",
+      expertId: "exp",
+      todo,
+    }),
+  );
+  const rst = await resetWorkingSessionMemory("c-rst", "exp");
+  assert.equal(rst.ok, true);
+  assert.ok((rst.openTodoCount ?? 0) >= 1);
+  const peek = peekParkedSession("c-rst", "exp");
+  assert.ok(peek);
+  assert.equal(parkNeedsAgentReseed(peek!), true, "Reset marks Agent reseed");
+  assert.ok(parkedTodoNonEmpty(peek!), "Reset keeps incomplete Todo");
+  clearWorkingSessionParksForTests();
+}
+
+// Spec #354: pending Session delete forces dispose on finally (no ghost re-park)
+{
+  clearWorkingSessionParksForTests();
+  clearPendingDisposeForTests();
+  let disposed = 0;
+  markPendingSessionDispose("c-pend", "exp");
+  const applied = applyCaptainEndDisposition({
+    decision: decideParkOnEnd({ aborted: false }),
+    entry: {
+      conversationId: "c-pend",
+      expertId: "exp",
+      workMode: "free",
+      taskId: "t1",
+      session: fakeSession(),
+      todo: new TodoStore(),
+      dispose: () => {
+        disposed += 1;
+      },
+    },
+  });
+  assert.equal(applied.disposed, true, "pending dispose overrides park");
+  assert.equal(disposed, 1);
+  assert.equal(countParkedSessionsForTests(), 0);
+  // Mid-burst force-dispose stashes todos for dispose ack
+  const late = await disposeWorkingSession("c-pend", "exp");
+  // stash may be empty if todo was empty; with empty todo still disposed via force path
+  assert.equal(typeof late.disposed, "boolean");
+  clearPendingDisposeForTests();
+  clearWorkingSessionParksForTests();
+}
+
+// Spec #354 L1: case-wide pending cleared after force dispose (no sticky dispose)
+{
+  clearWorkingSessionParksForTests();
+  clearPendingDisposeForTests();
+  const {
+    markPendingCaseDispose,
+    isPendingDispose,
+    clearPendingDisposeForTests: clearPend,
+  } = await import("./working-session-park.js");
+  markPendingCaseDispose("c-case-pend");
+  assert.equal(isPendingDispose("c-case-pend", "exp"), true);
+  applyCaptainEndDisposition({
+    decision: decideParkOnEnd({ aborted: false }),
+    entry: {
+      conversationId: "c-case-pend",
+      expertId: "exp",
+      workMode: "free",
+      taskId: "t1",
+      session: fakeSession(),
+      todo: new TodoStore(),
+      dispose: () => {},
+    },
+  });
+  assert.equal(
+    isPendingDispose("c-case-pend", "exp"),
+    false,
+    "case pending cleared after force dispose finally",
+  );
+  // Next package end must park, not sticky-dispose
+  let disposedAfter = 0;
+  const parkAfter = applyCaptainEndDisposition({
+    decision: decideParkOnEnd({ aborted: false }),
+    entry: {
+      conversationId: "c-case-pend",
+      expertId: "exp",
+      workMode: "free",
+      taskId: "t2",
+      session: fakeSession(),
+      todo: new TodoStore(),
+      dispose: () => {
+        disposedAfter += 1;
+      },
+    },
+  });
+  assert.equal(parkAfter.parked, true, "after case-pending clear, settle parks");
+  assert.equal(parkAfter.disposed, false);
+  assert.equal(disposedAfter, 0, "park path must not call dispose");
+  clearPend();
+  clearWorkingSessionParksForTests();
+}
+
+// Spec #354: bare conversation pending matches expert-keyed park (missing expert_id)
+{
+  clearWorkingSessionParksForTests();
+  clearPendingDisposeForTests();
+  const { isPendingDispose, markPendingSessionDispose: markBare } = await import(
+    "./working-session-park.js"
+  );
+  markBare("c-bare", ""); // bare conversation key
+  assert.equal(isPendingDispose("c-bare", "exp-x"), true, "bare pending matches any expert");
+  clearPendingDisposeForTests();
+}
+
+// Spec #354 S4: seedTodoFromHandoff accepts Node snapshot `content` shape
+{
+  const { seedTodoFromHandoff } = await import("./handoff-todo-seed.js");
+  const store = seedTodoFromHandoff({
+    pendingHandoffTodos: [
+      {
+        name: "P",
+        tasks: [
+          { content: "keep open", status: "pending" },
+          { content: "done item", status: "completed" },
+          { title: "plan title open", status: "pending" },
+        ],
+      },
+    ],
+  });
+  assert.ok(store.openCount() >= 2, "content + title open items seeded");
+  const snap = store.snapshot();
+  const texts = snap.flatMap((p) => p.tasks.map((t) => t.content));
+  assert.ok(texts.includes("keep open"));
+  assert.ok(texts.includes("plan title open"));
+  assert.ok(!texts.includes("done item"));
+}
+
+console.log("working-session-park.test.ts: Spec #354 fixtures ok");
 
 // Park on abort does not call dispose; attach leaves session usable
 {

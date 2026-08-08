@@ -2,8 +2,13 @@
  * Status tab collaboration tree (Main + Workers).
  * Extracted from RightPanel so presentation logic stays scannable.
  */
-import { useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
-import { Bot, GitBranch, Tag } from "lucide-react";
+import {
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from "react";
+import { Bot, Check, Copy, GitBranch, RotateCcw, Tag, Trash2 } from "lucide-react";
 import {
   agentDisplayName,
   compareAgentNames,
@@ -14,13 +19,23 @@ import { formatAgentUsageLine } from "../lib/caseMetering";
 
 export type { StrixAgentStatus } from "../lib/panelTypes";
 
+/** Spec #354: Session lifecycle on Main cards only. */
+export type SessionLifecycleHandlers = {
+  onRequestReset?: (agent: StrixAgentStatus) => void;
+  onRequestDelete?: (agent: StrixAgentStatus) => void;
+  busy?: boolean;
+};
+
 export function StrixAgentList({
   agents,
   onWorkerClick,
+  sessionLifecycle,
 }: {
   agents: StrixAgentStatus[];
   /** Spec #308: open Worker audit dialog (Workers only; not Main). */
   onWorkerClick?: (agent: StrixAgentStatus, workerOrdinal?: number) => void;
+  /** Spec #354 S3: Reset / Delete Session on Main cards (confirm lives in parent). */
+  sessionLifecycle?: SessionLifecycleHandlers;
 }) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const roots = agents.filter((agent) => !agent.parent_id);
@@ -102,6 +117,12 @@ export function StrixAgentList({
                 ? () => onWorkerClick(agent, workerOrdinal)
                 : undefined
             }
+            sessionLifecycle={
+              // Spec #354: only real Participant Sessions (have expert_id), never synthetic node4-main.
+              primary && String(agent.expert_id || "").trim()
+                ? sessionLifecycle
+                : undefined
+            }
           />
         </div>
         {children.length > 0 && (
@@ -132,6 +153,7 @@ function AgentRow({
   workerOrdinal,
   onToggle,
   onWorkerOpen,
+  sessionLifecycle,
 }: {
   agent: StrixAgentStatus;
   primary?: boolean;
@@ -142,11 +164,12 @@ function AgentRow({
   onToggle?: () => void;
   /** Spec #308: open audit dialog for Worker rows. */
   onWorkerOpen?: () => void;
+  /** Spec #354: Main Session Reset / Delete (parent owns ConfirmDialog). */
+  sessionLifecycle?: SessionLifecycleHandlers;
 }) {
   // Spec #324 D1: secondary line is model · requests · tokens — not tool/work narration.
   const usageLine = formatAgentUsageLine(agent, { short: secondary });
   const displayName = agentDisplayName(agent, workerOrdinal);
-  const status = agentStatusLabel(agent.status);
   // Worker open takes precedence for click; expand still via child-count control if needed.
   const rowInteractive = Boolean(onWorkerOpen || onToggle);
   const handleRowActivate = () => {
@@ -168,6 +191,27 @@ function AgentRow({
   // Sub: skill chips sit beside the title; Main keeps them in AgentMeta below.
   const titleSkills =
     secondary && Array.isArray(agent.skills) ? agent.skills.slice(0, 5) : [];
+  const showSessionActions =
+    primary &&
+    Boolean(sessionLifecycle?.onRequestReset || sessionLifecycle?.onRequestDelete);
+  const sessionBusy = Boolean(sessionLifecycle?.busy);
+  const [sessionIdCopied, setSessionIdCopied] = useState(false);
+  const fullSessionId = sessionIdFull(agent);
+  const shortSessionId = sessionIdDisplay(agent);
+
+  const copySessionId = async (e: ReactMouseEvent | ReactKeyboardEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (!fullSessionId) return;
+    try {
+      await navigator.clipboard.writeText(fullSessionId);
+      setSessionIdCopied(true);
+      window.setTimeout(() => setSessionIdCopied(false), 1400);
+    } catch {
+      setSessionIdCopied(false);
+    }
+  };
+
   return (
     <div
       className={`min-w-0 rounded-md ${padY} pr-2 pl-[9px] ${highlighted ? "bg-status-running/8 ring-1 ring-status-running/25" : "bg-surface-default"} ${rowInteractive ? "cursor-pointer hover:bg-canvas-inset focus-visible:outline focus-visible:outline-2 focus-visible:outline-status-running/40" : "hover:bg-canvas-inset"}`}
@@ -180,6 +224,12 @@ function AgentRow({
       data-expert-id={agent.expert_id || undefined}
       data-worker-audit={onWorkerOpen ? "true" : undefined}
     >
+      {/*
+        Two rows only:
+        [dot] [name · mode]                         [count] [status] [reset] [delete]
+              [usage mono]          [copy session id — TopBar-like, no border/bg]
+              [meta chips if any]
+      */}
       <div className="flex min-w-0 items-start gap-2">
         <span
           aria-hidden="true"
@@ -187,59 +237,115 @@ function AgentRow({
           title={agentStatusLabel(agent.status)}
         />
         <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-start justify-between gap-2">
-            <div className="min-w-0 flex-1">
-              <div className="flex min-w-0 items-center gap-1.5">
-                <AgentRoleBadge primary={primary} />
-                <p className="min-w-0 truncate text-sm font-medium" title={displayName}>
-                  {displayName}
-                </p>
-                {primary && (() => {
-                  const modeBadge = formatAgentWorkModeBadge(agent);
-                  return modeBadge ? (
-                    <span
-                      className="shrink-0 rounded-sm bg-canvas-inset px-1.5 py-0.5 text-[10px] font-medium text-ink-secondary"
-                      title={
-                        agent.work_mode === "graph" || String(agent.work_mode || "").startsWith("hard_graph")
-                          ? `Session harness: Graph${agent.graph_id ? ` (${agent.graph_id})` : ""}`
-                          : "Session harness: Free"
-                      }
-                      data-testid="agent-work-mode-badge"
-                    >
-                      {modeBadge}
-                    </span>
-                  ) : null;
-                })()}
-                {titleSkills.map((skill) => (
-                  <AgentSkillBadge key={skill} skill={skill} />
-                ))}
-                {highlighted && (
-                  <span className="shrink-0 rounded-sm bg-status-running/15 px-1.5 py-0.5 text-[10px] font-medium text-status-running">
-                    active
+          <div className="flex min-w-0 items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <AgentRoleBadge primary={primary} />
+              <p className="min-w-0 truncate text-sm font-medium" title={displayName}>
+                {displayName}
+              </p>
+              {primary && (() => {
+                const modeBadge = formatAgentWorkModeBadge(agent);
+                return modeBadge ? (
+                  <span
+                    className="shrink-0 rounded-sm bg-canvas-inset px-1.5 py-0.5 text-[10px] font-medium text-ink-secondary"
+                    title={
+                      agent.work_mode === "graph" || String(agent.work_mode || "").startsWith("hard_graph")
+                        ? `Session harness: Graph${agent.graph_id ? ` (${agent.graph_id})` : ""}`
+                        : "Session harness: Free"
+                    }
+                    data-testid="agent-work-mode-badge"
+                  >
+                    {modeBadge}
                   </span>
-                )}
-              </div>
-              {usageLine ? (
-                <p
-                  className={`${secondary ? "mt-0" : "mt-0.5"} min-w-0 truncate font-mono text-xs text-ink-secondary`}
-                  title={usageLine}
-                  data-testid={primary ? "agent-usage-line" : "sub-usage-line"}
-                >
-                  {usageLine}
-                </p>
-              ) : null}
+                ) : null;
+              })()}
+              {titleSkills.map((skill) => (
+                <AgentSkillBadge key={skill} skill={skill} />
+              ))}
             </div>
-            <div className="flex shrink-0 items-center gap-1.5">
+            <div
+              className="flex shrink-0 items-center gap-1"
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => e.stopPropagation()}
+            >
               {childCount > 0 && (
                 <span className="font-mono text-[10px] text-ink-muted" title={`${childCount} sub-agents`}>
                   {childCount}
                 </span>
               )}
-              <span className={`rounded-sm px-1.5 py-0.5 text-[10px] font-medium uppercase ${agentStatusBadgeClass(agent.status)}`}>
-                {status}
-              </span>
+              {/* Status text badge removed — left status dot already carries runtime (Spec #354 collab chrome). */}
+              {showSessionActions && (
+                <div className="flex items-center" data-testid="session-lifecycle-actions">
+                  {sessionLifecycle?.onRequestReset && (
+                    <button
+                      type="button"
+                      data-testid="session-reset-btn"
+                      disabled={sessionBusy}
+                      title="Reset Session — clear model memory, keep incomplete Tasks"
+                      aria-label="Reset Session"
+                      className="inline-flex h-6 w-6 items-center justify-center rounded-md text-ink-muted transition-colors hover:bg-canvas-inset hover:text-ink disabled:opacity-40"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        sessionLifecycle.onRequestReset?.(agent);
+                      }}
+                    >
+                      <RotateCcw className="h-3.5 w-3.5" strokeWidth={1.75} />
+                    </button>
+                  )}
+                  {sessionLifecycle?.onRequestDelete && (
+                    <button
+                      type="button"
+                      data-testid="session-delete-btn"
+                      disabled={sessionBusy}
+                      title="Delete Session — hold incomplete Tasks for same-expert handoff"
+                      aria-label="Delete Session"
+                      className="inline-flex h-6 w-6 items-center justify-center rounded-md text-ink-muted transition-colors hover:bg-canvas-inset hover:text-severity-critical disabled:opacity-40"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        sessionLifecycle.onRequestDelete?.(agent);
+                      }}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           </div>
+          {/* Second row: usage left, session id copy right (or full-width usage for Sub). */}
+          {(usageLine || (primary && shortSessionId)) && (
+            <div className="mt-0.5 flex min-w-0 items-center justify-between gap-2">
+              {usageLine ? (
+                <p
+                  className="min-w-0 flex-1 truncate font-mono text-xs text-ink-secondary"
+                  title={usageLine}
+                  data-testid={primary ? "agent-usage-line" : "sub-usage-line"}
+                >
+                  {usageLine}
+                </p>
+              ) : (
+                <span className="min-w-0 flex-1" />
+              )}
+              {primary && shortSessionId && (
+                <button
+                  type="button"
+                  data-testid="agent-session-id"
+                  title={sessionIdCopied ? "Copied" : fullSessionId}
+                  className="inline-flex shrink-0 items-center gap-1 font-mono text-[11px] text-ink-muted transition-colors hover:text-ink"
+                  onClick={(e) => {
+                    void copySessionId(e);
+                  }}
+                >
+                  {sessionIdCopied ? (
+                    <Check size={12} strokeWidth={1.75} className="shrink-0" />
+                  ) : (
+                    <Copy size={12} strokeWidth={1.75} className="shrink-0 opacity-70" />
+                  )}
+                  <span className="min-w-0 truncate">{shortSessionId}</span>
+                </button>
+              )}
+            </div>
+          )}
           <AgentMeta agent={agent} primary={primary && !secondary} skillsInTitle={secondary} />
         </div>
       </div>
@@ -259,6 +365,26 @@ function AgentRoleBadge({ primary }: { primary: boolean }) {
       <Icon className="h-3 w-3" />
     </span>
   );
+}
+
+/** Full Session identity string (clipboard + tooltip). */
+function sessionIdFull(agent: StrixAgentStatus): string {
+  const sid = String(agent.session_id || "").trim();
+  if (sid) return sid;
+  const eid = String(agent.expert_id || "").trim();
+  if (eid) return `expert:${eid}`;
+  return "";
+}
+
+/**
+ * Compact display form for collab chrome (clipboard still gets full id).
+ * expert:{uuid} → first 8 of uuid; other keys truncated similarly.
+ */
+function sessionIdDisplay(agent: StrixAgentStatus): string {
+  const full = sessionIdFull(agent);
+  if (!full) return "";
+  const bare = full.includes(":") ? full.slice(full.indexOf(":") + 1) : full;
+  return bare.slice(0, 8);
 }
 
 function AgentMeta({
@@ -372,16 +498,6 @@ function agentStatusDotClass(status: string | undefined): string {
   if (isInterruptedAgentStatus(normalized)) return "bg-severity-critical";
   if (normalized === "done") return "bg-status-success";
   return "bg-canvas-inset";
-}
-
-function agentStatusBadgeClass(status: string | undefined): string {
-  const normalized = agentStatusLabel(status);
-  if (normalized === "running") return "bg-status-running/10 text-status-running";
-  if (normalized === "done") return "bg-status-success/10 text-status-success";
-  if (normalized === "timeout") return "bg-severity-high-subtle text-severity-high";
-  if (isInterruptedAgentStatus(normalized)) return "bg-severity-critical-subtle text-severity-critical";
-  if (normalized === "pending") return "bg-[#fff7ed] text-[#d97706]";
-  return "bg-canvas-inset text-ink-secondary";
 }
 
 /** Tool → short Chinese label for skill/meta chips (not AgentRow narration). */
