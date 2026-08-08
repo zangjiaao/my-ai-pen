@@ -92,7 +92,7 @@ export function describeMainActivity(input: {
   }
 
   // Spec #353: Runtime-authored stall phase (not #276 pending reseed; not free-text NLP).
-  if (phase === "llm_stalled" || phase === "stream_stalled") {
+  if (phase === "llm_stalled") {
     return "模型流无进度，仍在等待";
   }
 

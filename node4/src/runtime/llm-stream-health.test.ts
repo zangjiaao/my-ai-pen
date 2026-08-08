@@ -142,6 +142,14 @@ import {
   assert.equal(d.finish_reason_present, true);
 }
 
+// finish_reason_present false when no reason observed
+{
+  const h = new LlmStreamHealth({ stallThresholdMs: 60_000, abortThresholdMs: null });
+  h.open();
+  const d = h.terminalSuccess();
+  assert.equal(d.finish_reason_present, false, "no finishReason arg → not claimed present");
+}
+
 // --- S2: classify helpers ---
 
 assert.equal(
@@ -151,6 +159,11 @@ assert.equal(
 assert.equal(isIncompleteStreamMessage("Stream ended without finish_reason"), true);
 assert.equal(isIncompleteStreamMessage("403 China opt-in"), false);
 assert.equal(classifyStreamProviderMessage("stream idle timeout"), "idle_timeout");
+// Negatives: bare timeout / operation timeout must not become stream forensics theater
+assert.equal(classifyStreamProviderMessage("operation timeout"), "other");
+assert.equal(classifyStreamProviderMessage("timeout"), "other");
+assert.equal(classifyStreamProviderMessage("shell aborted by user"), "other");
+assert.equal(classifyStreamProviderMessage("operation aborted"), "aborted");
 assert.equal(coarseKindFromAssistantEventType("thinking_delta"), "thinking");
 assert.equal(coarseKindFromAssistantEventType("text_start"), "text");
 assert.equal(coarseKindFromAssistantEventType("toolcall_start"), "toolcall");

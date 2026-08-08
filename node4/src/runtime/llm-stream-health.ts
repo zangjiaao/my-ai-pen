@@ -91,18 +91,41 @@ function envPositiveMs(env: NodeJS.ProcessEnv, key: string, fallback: number): n
   return Math.floor(n);
 }
 
-/** Classify provider / throw text into a terminal class (fail-closed incomplete). */
+/**
+ * Classify provider / throw text into a terminal class (fail-closed incomplete).
+ * Prefer known phrases; avoid bare "timeout"/"abort" false positives (review #353).
+ */
 export function classifyStreamProviderMessage(raw: string): StreamTerminalClass {
   const t = String(raw || "").trim().toLowerCase();
   if (!t) return "other";
-  if (/without finish_reason|no finish_reason|missing finish_reason/.test(t)) {
+  if (
+    t.includes("without finish_reason") ||
+    t.includes("no finish_reason") ||
+    t.includes("missing finish_reason")
+  ) {
     return "incomplete_finish";
   }
-  if (/stream idle timeout|idle timeout|llm stream idle/.test(t)) {
+  if (
+    t.includes("stream idle timeout") ||
+    t.includes("llm stream idle") ||
+    t === "stream idle timeout"
+  ) {
     return "idle_timeout";
   }
-  if (/abort|cancelled|canceled|interrupted/.test(t)) return "aborted";
-  if (/stream ended|connection|econnreset|socket|timeout|network|502|503|504/.test(t)) {
+  if (
+    /\b(operation aborted|request aborted|stream aborted)\b/.test(t) ||
+    t === "aborted" ||
+    t === "cancelled" ||
+    t === "canceled" ||
+    t === "interrupted"
+  ) {
+    return "aborted";
+  }
+  if (
+    /stream ended|econnreset|econnrefused|socket hang up|network error|502 bad gateway|503 service|504 gateway/.test(
+      t,
+    )
+  ) {
     return "provider_error";
   }
   return "other";
@@ -257,7 +280,8 @@ export class LlmStreamHealth {
     return this.finishTerminal({
       terminalClass: "success",
       providerMessage: "",
-      finishReasonPresent: Boolean(fr) || true,
+      // Only true when a finish/stop reason string was actually observed.
+      finishReasonPresent: Boolean(fr),
       atMs: opts?.atMs,
     });
   }

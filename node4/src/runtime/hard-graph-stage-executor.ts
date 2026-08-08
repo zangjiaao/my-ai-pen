@@ -32,7 +32,6 @@ import {
   PlatformTextStream,
   createUsageLedgerFromEnv,
   emitCheckpointUpdate,
-  streamDiagnosisPayload,
   type ObservabilityContext,
 } from "./platform-observability.js";
 import { PanelAgentTracker } from "./panel-agents.js";
@@ -83,14 +82,12 @@ import {
   formatSkillL1CatalogInjection,
   loadSkillL1Catalog,
 } from "./skill-l1-catalog.js";
+import { extractLlmTurnError, isLlmTurnError } from "./llm-turn-error.js";
 import {
-  extractLlmTurnError,
-  isIncompleteStreamError,
-  llmTurnErrorWithDiagnosis,
-  LlmTurnError,
-  formatLlmErrorForUser,
-} from "./llm-turn-error.js";
-import { streamIdleTimeoutMessage } from "./llm-stream-health.js";
+  idleTimeoutLlmTurnError,
+  mapPromptFailureToLlmTurnError,
+  surfaceLlmTurnFailure,
+} from "./llm-turn-surface.js";
 
 /**
  * Deposit host-trusted surfaces/candidates into ledger + Finding Store.
@@ -943,24 +940,14 @@ export function createHardGraphStageExecutor(options: {
         }
         // Spec #353: idle abort is fail-closed LlmTurnError (not user cancel).
         if (obsCtx.streamHealth?.isIdleAbortRequested) {
-          const e = llmTurnErrorWithDiagnosis(streamIdleTimeoutMessage(), obsCtx.streamHealth);
-          try {
-            await textStream.emitFinalText(e.userMessage);
-          } catch {
-            /* best-effort */
-          }
-          await parentRuntime.platform
-            .send({
-              type: "status_update",
-              conversation_id: task.conversationId,
-              task_id: task.taskId,
-              message: e.userMessage,
-              agent_phase: "error",
-              status: "failed",
-              stream_diagnosis: streamDiagnosisPayload(e.diagnosis),
-            } as any)
-            .catch(() => {});
-          throw e;
+          throw await surfaceLlmTurnFailure({
+            platform: parentRuntime.platform,
+            conversationId: task.conversationId,
+            taskId: task.taskId,
+            textStream,
+            health: obsCtx.streamHealth,
+            error: idleTimeoutLlmTurnError(obsCtx.streamHealth),
+          });
         }
         // Spec #116 I0.7: abort may cancel turn without throw — still fail-closed aborted.
         if (abortSignal?.aborted) {
@@ -971,36 +958,35 @@ export function createHardGraphStageExecutor(options: {
             workDir,
           });
         }
-        // Soft LLM failure (403 etc.): surface to user and fail stage — not silent empty settle.
+        // Soft LLM failure (403 etc.): single surface — not silent empty settle.
         const llmErr = extractLlmTurnError(session.messages);
         if (llmErr) {
-          const e = llmTurnErrorWithDiagnosis(llmErr, obsCtx.streamHealth, {
-            finishReasonPresent: false,
+          throw await surfaceLlmTurnFailure({
+            platform: parentRuntime.platform,
+            conversationId: task.conversationId,
+            taskId: task.taskId,
+            textStream,
+            health: obsCtx.streamHealth,
+            providerMessage: llmErr,
           });
-          try {
-            await textStream.emitFinalText(e.userMessage);
-          } catch {
-            /* best-effort */
-          }
-          await parentRuntime.platform
-            .send({
-              type: "status_update",
-              conversation_id: task.conversationId,
-              task_id: task.taskId,
-              message: e.userMessage,
-              agent_phase: "error",
-              status: "failed",
-              stream_diagnosis: streamDiagnosisPayload(e.diagnosis),
-            } as any)
-            .catch(() => {});
-          throw e;
         }
         if (obsCtx.streamHealth && obsCtx.streamHealth.state !== "terminal") {
           obsCtx.streamHealth.terminalSuccess();
         }
       } catch (err) {
-        if (obsCtx.streamHealth?.isIdleAbortRequested) {
-          throw llmTurnErrorWithDiagnosis(streamIdleTimeoutMessage(), obsCtx.streamHealth);
+        // Already surfaced in try-body (idle/soft LLM) — rethrow without double publish.
+        if (isLlmTurnError(err) && err.diagnosis) throw err;
+        // Spec #353: structured map only (idle / incomplete / LlmTurnError).
+        const mapped = mapPromptFailureToLlmTurnError(err, obsCtx.streamHealth);
+        if (mapped) {
+          throw await surfaceLlmTurnFailure({
+            platform: parentRuntime.platform,
+            conversationId: task.conversationId,
+            taskId: task.taskId,
+            textStream,
+            health: obsCtx.streamHealth,
+            error: mapped,
+          });
         }
         if (abortSignal?.aborted) {
           return await finalizeStage({
@@ -1008,24 +994,6 @@ export function createHardGraphStageExecutor(options: {
             child: childRuntime,
             seed: continuitySeed,
             workDir,
-          });
-        }
-        if (isIncompleteStreamError(err) || err instanceof LlmTurnError) {
-          if (err instanceof LlmTurnError && err.diagnosis) throw err;
-          const raw =
-            err instanceof LlmTurnError
-              ? err.userMessage
-              : err instanceof Error
-                ? err.message
-                : String(err);
-          throw llmTurnErrorWithDiagnosis(raw, obsCtx.streamHealth, {
-            finishReasonPresent: false,
-          });
-        }
-        const raw = err instanceof Error ? err.message : String(err);
-        if (/模型调用失败|provider|stream|finish_reason|llm/i.test(raw)) {
-          throw llmTurnErrorWithDiagnosis(formatLlmErrorForUser(raw), obsCtx.streamHealth, {
-            finishReasonPresent: false,
           });
         }
         throw err;

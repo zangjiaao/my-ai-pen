@@ -18,7 +18,6 @@ import {
   coarseKindFromAssistantEventType,
   loadStreamHealthConfigFromEnv,
   streamStallDetail,
-  type StreamDiagnosis,
 } from "./llm-stream-health.js";
 
 /** First token goes out immediately; subsequent flushes coalesce. */
@@ -682,34 +681,8 @@ export async function applyStreamHealthTick(
     return "stalled";
   }
 
-  // abort — fail-closed idle timeout (same channel as incomplete finish_reason)
-  const diagnosis = health.diagnosis({
-    terminalClass: "idle_timeout",
-    providerMessage: "stream idle timeout",
-    finishReasonPresent: false,
-  });
-  ctx.counters.phase = "error";
-  ctx.panel.setMainActivity({
-    phase: "error",
-    tool: "",
-    detail: "模型流空闲超时",
-  });
-  await ctx.platform.send({
-    type: "status_update",
-    conversation_id: ctx.task.conversationId,
-    task_id: ctx.task.taskId,
-    message: "模型流空闲超时",
-    active_tool: "",
-    agent_phase: "error",
-    current_detail: "模型流空闲超时",
-    status: "failed",
-    stream_health: health.snapshot(),
-    stream_diagnosis: diagnosis,
-    llm_usage: ctx.usage.snapshot({ tool_calls: ctx.counters.toolCallCount }),
-    panel_agents: ctx.panel.list(),
-  } as PlatformMessage);
-  await emitCheckpointUpdate(ctx, { status: "failed" }).catch(() => {});
-  options?.checkpointThrottle?.markEmitted();
+  // abort — health already terminalized by tick(); runners own single user-visible
+  // surface via surfaceLlmTurnFailure (no double status/chat publish here).
   try {
     options?.onIdleAbort?.();
   } catch {
@@ -718,23 +691,8 @@ export async function applyStreamHealthTick(
   return "abort";
 }
 
-/** Serialize diagnosis for status/task_error payloads (no secrets). */
-export function streamDiagnosisPayload(
-  diagnosis: StreamDiagnosis | undefined | null,
-): StreamDiagnosis | undefined {
-  if (!diagnosis) return undefined;
-  return {
-    stream_terminal_class: diagnosis.stream_terminal_class,
-    provider_message: String(diagnosis.provider_message || "").slice(0, 500),
-    last_activity_at: diagnosis.last_activity_at,
-    idle_ms: diagnosis.idle_ms,
-    chunk_count: diagnosis.chunk_count,
-    kind_counts: { ...diagnosis.kind_counts },
-    tool_name_seen: diagnosis.tool_name_seen === true,
-    tool_name: diagnosis.tool_name ? String(diagnosis.tool_name).slice(0, 64) : undefined,
-    finish_reason_present: diagnosis.finish_reason_present === true,
-  };
-}
+/** @deprecated import from llm-turn-surface.js — re-export for existing call sites. */
+export { streamDiagnosisPayload } from "./llm-turn-surface.js";
 
 export async function emitCheckpointUpdate(
   ctx: ObservabilityContext,

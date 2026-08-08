@@ -395,7 +395,7 @@ export function patchMainAgentActivity(
       detail ||
       (phase === "tool_running" && tool
         ? `正在调用 ${tool}`
-        : phase === "llm_stalled" || phase === "stream_stalled"
+        : phase === "llm_stalled"
           ? "模型流无进度，仍在等待"
           : phase === "llm_waiting"
             ? lastTool

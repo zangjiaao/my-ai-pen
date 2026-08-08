@@ -71,7 +71,7 @@ export function agentDisplayName(
 }
 
 function isOpaquePhaseToken(value: string): boolean {
-  return /^(tool_running|llm_waiting|llm_stalled|stream_stalled|model_turn|starting|running|continue|finished|completed|chat|working|done)$/i.test(
+  return /^(tool_running|llm_waiting|llm_stalled|model_turn|starting|running|continue|finished|completed|chat|working|done)$/i.test(
     value.trim(),
   );
 }

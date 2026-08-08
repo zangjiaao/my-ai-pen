@@ -56,7 +56,6 @@ import {
   createUsageLedgerFromEnv,
   emitCheckpointUpdate,
   PlatformTextStream,
-  streamDiagnosisPayload,
   type ObservabilityContext,
 } from "./platform-observability.js";
 import {
@@ -67,14 +66,12 @@ import {
   buildWorksetSettleEmitPackage,
   writeAttackSurfaceCandidatesArtifact,
 } from "./workset-settle-emit.js";
+import { extractLlmTurnError } from "./llm-turn-error.js";
 import {
-  extractLlmTurnError,
-  isIncompleteStreamError,
-  llmTurnErrorWithDiagnosis,
-  LlmTurnError,
-  formatLlmErrorForUser,
-} from "./llm-turn-error.js";
-import { streamIdleTimeoutMessage } from "./llm-stream-health.js";
+  idleTimeoutLlmTurnError,
+  mapPromptFailureToLlmTurnError,
+  surfaceLlmTurnFailure,
+} from "./llm-turn-surface.js";
 import {
   applyCaptainEndDisposition,
   decideParkOnEnd,
@@ -593,127 +590,60 @@ export async function runNode4Task(
   if (runtime.lifecycle.midRunTodo) resetMidRunTodoCycle(runtime.lifecycle.midRunTodo);
 
   const health = () => obsCtx.streamHealth;
+  const usageSnap = () => usage.snapshot({ tool_calls: obsCounters.toolCallCount });
 
-  /** Soft LLM failures (stopReason=error) → user-visible text + LlmTurnError → task_error. */
+  /** Soft LLM failures (stopReason=error) → single surface → task_error. */
   const assertNoLlmTurnError = async () => {
-    // Spec #353: idle abort may cancel the prompt without leaving soft error messages.
+    // Spec #353: idle abort may cancel the prompt without soft error messages.
     if (health()?.isIdleAbortRequested) {
-      const err = llmTurnErrorWithDiagnosis(streamIdleTimeoutMessage(), health());
-      try {
-        await textStream.emitFinalText(err.userMessage);
-      } catch {
-        /* best-effort */
-      }
-      await loggingPlatform
-        .send({
-          type: "status_update",
-          conversation_id: task.conversationId,
-          task_id: task.taskId,
-          message: err.userMessage,
-          agent_phase: "error",
-          status: "failed",
-          stream_diagnosis: streamDiagnosisPayload(err.diagnosis),
-          llm_usage: usage.snapshot({ tool_calls: obsCounters.toolCallCount }),
-        })
-        .catch(() => {});
-      throw err;
+      throw await surfaceLlmTurnFailure({
+        platform: loggingPlatform,
+        conversationId: task.conversationId,
+        taskId: task.taskId,
+        textStream,
+        health: health(),
+        error: idleTimeoutLlmTurnError(health()),
+        llmUsage: usageSnap(),
+      });
     }
     if (cancelled()) return;
     const errText = extractLlmTurnError(session.messages);
     if (!errText) {
-      // Healthy soft-complete — close stream health for this wait.
       if (health() && health()!.state !== "terminal") {
         health()!.terminalSuccess();
       }
       return;
     }
-    const err = llmTurnErrorWithDiagnosis(errText, health(), {
-      finishReasonPresent: false,
+    throw await surfaceLlmTurnFailure({
+      platform: loggingPlatform,
+      conversationId: task.conversationId,
+      taskId: task.taskId,
+      textStream,
+      health: health(),
+      providerMessage: errText,
+      llmUsage: usageSnap(),
     });
-    try {
-      await textStream.emitFinalText(err.userMessage);
-    } catch {
-      /* best-effort chat bubble */
-    }
-    await loggingPlatform
-      .send({
-        type: "status_update",
-        conversation_id: task.conversationId,
-        task_id: task.taskId,
-        message: err.userMessage,
-        agent_phase: "error",
-        status: "failed",
-        stream_diagnosis: streamDiagnosisPayload(err.diagnosis),
-        llm_usage: usage.snapshot({ tool_calls: obsCounters.toolCallCount }),
-      })
-      .catch(() => {});
-    throw err;
   };
 
-  /** Single prompt + soft-error assert channel (throws LlmTurnError → main task_error). */
+  /** Single prompt + soft-error assert (throws LlmTurnError → main task_error). */
   const promptAndAssert = async (promptText: string) => {
     try {
       await session.prompt(promptText, { source: "interactive" });
     } catch (err) {
-      // Spec #353: idle-timeout abort or incomplete stream → immediate LlmTurnError + diagnosis.
-      if (health()?.isIdleAbortRequested) {
-        const e = llmTurnErrorWithDiagnosis(streamIdleTimeoutMessage(), health());
-        try {
-          await textStream.emitFinalText(e.userMessage);
-        } catch {
-          /* best-effort */
-        }
-        await loggingPlatform
-          .send({
-            type: "status_update",
-            conversation_id: task.conversationId,
-            task_id: task.taskId,
-            message: e.userMessage,
-            agent_phase: "error",
-            status: "failed",
-            stream_diagnosis: streamDiagnosisPayload(e.diagnosis),
-            llm_usage: usage.snapshot({ tool_calls: obsCounters.toolCallCount }),
-          })
-          .catch(() => {});
-        throw e;
+      // Spec #353: structured classes only (idle / incomplete / LlmTurnError).
+      const mapped = mapPromptFailureToLlmTurnError(err, health());
+      if (mapped) {
+        throw await surfaceLlmTurnFailure({
+          platform: loggingPlatform,
+          conversationId: task.conversationId,
+          taskId: task.taskId,
+          textStream,
+          health: health(),
+          error: mapped,
+          llmUsage: usageSnap(),
+        });
       }
-      if (!cancelled()) {
-        if (isIncompleteStreamError(err) || err instanceof LlmTurnError) {
-          const raw =
-            err instanceof LlmTurnError
-              ? err.userMessage
-              : err instanceof Error
-                ? err.message
-                : String(err);
-          const e = llmTurnErrorWithDiagnosis(raw, health(), { finishReasonPresent: false });
-          try {
-            await textStream.emitFinalText(e.userMessage);
-          } catch {
-            /* best-effort */
-          }
-          await loggingPlatform
-            .send({
-              type: "status_update",
-              conversation_id: task.conversationId,
-              task_id: task.taskId,
-              message: e.userMessage,
-              agent_phase: "error",
-              status: "failed",
-              stream_diagnosis: streamDiagnosisPayload(e.diagnosis),
-              llm_usage: usage.snapshot({ tool_calls: obsCounters.toolCallCount }),
-            })
-            .catch(() => {});
-          throw e;
-        }
-        // Other throws: still attach diagnosis when message looks like provider LLM fail.
-        const raw = err instanceof Error ? err.message : String(err);
-        if (/模型调用失败|provider|stream|finish_reason|llm/i.test(raw)) {
-          throw llmTurnErrorWithDiagnosis(formatLlmErrorForUser(raw), health(), {
-            finishReasonPresent: false,
-          });
-        }
-        throw err;
-      }
+      if (!cancelled()) throw err;
       return;
     }
     await assertNoLlmTurnError();

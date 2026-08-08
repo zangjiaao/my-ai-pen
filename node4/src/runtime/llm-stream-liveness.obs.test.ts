@@ -8,7 +8,6 @@ import {
   CheckpointThrottle,
   handleNode4SessionEvent,
   PlatformTextStream,
-  streamDiagnosisPayload,
   type ObservabilityContext,
 } from "./platform-observability.js";
 import { LlmStreamHealth } from "./llm-stream-health.js";
@@ -22,6 +21,11 @@ import {
   llmTurnErrorWithDiagnosis,
   formatLlmErrorForUser,
 } from "./llm-turn-error.js";
+import {
+  mapPromptFailureToLlmTurnError,
+  streamDiagnosisPayload,
+  surfaceLlmTurnFailure,
+} from "./llm-turn-surface.js";
 
 function fakePlatform(): PlatformSink & { messages: PlatformMessage[] } {
   const messages: PlatformMessage[] = [];
@@ -150,7 +154,7 @@ function makeCtx(
   assert.equal(payload!.stream_terminal_class, "incomplete_finish");
 }
 
-// --- S2: idle abort tick → abort outcome + diagnosis ---
+// --- S2: idle abort tick → single-writer (abort callback only; no status/diagnosis) ---
 
 {
   let now = 40_000_000;
@@ -166,6 +170,7 @@ function makeCtx(
   health.noteActivity("text", { atMs: now });
   now += 2_000;
   assert.equal(await applyStreamHealthTick(ctx, health), "stalled");
+  const beforeAbortMsgs = platform.messages.length;
   now += 3_000;
   const outcome = await applyStreamHealthTick(ctx, health, {
     onIdleAbort: () => {
@@ -175,14 +180,58 @@ function makeCtx(
   assert.equal(outcome, "abort");
   assert.equal(aborted, true);
   assert.equal(health.isIdleAbortRequested, true);
+  assert.equal(health.state, "terminal");
+  // Tick must NOT publish failed status — runners own surfaceLlmTurnFailure.
   const withDiag = platform.messages.filter(
     (m) => (m as Record<string, unknown>).stream_diagnosis != null,
   );
-  assert.ok(withDiag.length >= 1, "idle abort emits stream_diagnosis");
-  const d = (withDiag[withDiag.length - 1] as Record<string, unknown>).stream_diagnosis as {
-    stream_terminal_class?: string;
-  };
-  assert.equal(d.stream_terminal_class, "idle_timeout");
+  assert.equal(withDiag.length, 0, "tick idle abort does not emit stream_diagnosis");
+  assert.equal(
+    platform.messages.length,
+    beforeAbortMsgs,
+    "tick idle abort does not emit extra status frames",
+  );
+}
+
+// --- S2: surface helper is the single publisher ---
+
+{
+  let now = 50_000_000;
+  const health = new LlmStreamHealth({
+    stallThresholdMs: 2_000,
+    abortThresholdMs: 5_000,
+    now: () => now,
+  });
+  health.open(now);
+  health.noteActivity("thinking", { atMs: now });
+  now += 5_000;
+  assert.equal(health.tick(now), "abort");
+  const platform = fakePlatform();
+  const err = await surfaceLlmTurnFailure({
+    platform,
+    conversationId: "c1",
+    taskId: "t1",
+    health,
+    error: mapPromptFailureToLlmTurnError(new Error("session aborted"), health)!,
+  });
+  assert.match(err.userMessage, /模型调用失败|idle/i);
+  assert.equal(err.diagnosis?.stream_terminal_class, "idle_timeout");
+  const statuses = platform.messages.filter((m) => m.type === "status_update");
+  assert.equal(statuses.length, 1, "exactly one failed status from surface helper");
+  assert.ok((statuses[0] as Record<string, unknown>).stream_diagnosis);
+}
+
+// --- mapPromptFailure: structured only (no broad keyword wrap) ---
+
+{
+  assert.equal(
+    mapPromptFailureToLlmTurnError(new Error("shell provider stream llm failed")),
+    null,
+    "unrelated throw with stream/llm words must not auto-wrap",
+  );
+  assert.ok(
+    mapPromptFailureToLlmTurnError(new Error("Stream ended without finish_reason")),
+  );
 }
 
 // --- format keeps provider detail ---
