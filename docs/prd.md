@@ -74,7 +74,7 @@
 
 **P1**
 
-- 右侧面板：Status（Case 级 elapsed / tokens / target、**多角色参与者花名册**、Tasks 带 owner 芯片）、Surface、Findings、Traffic（Case 流量审计：`http`+browser 网络 hook 采集，非 MITM）——不堆叠重复的 Expert role / Engagement dashboard 卡片。
+- 右侧面板：Status（**Case 计量**总 tokens/花费 + **多角色参与者花名册**（行内模型/请求/Token 累计，含 Sub rollup；无工具进度话术）+ Tasks 带 owner 芯片；**不**以 elapsed/起止为主叙事——时间见对话日戳、发送旁活计时、Agent 结果锚点耗时，Spec [#323](https://github.com/zangjiaao/my-ai-pen/issues/323)）、Surface、Findings、Traffic（Case 流量审计：`http`+browser 网络 hook 采集，非 MITM）——不堆叠重复的 Expert role / Engagement dashboard 卡片。
   - **可见性**：普通对话也可手动打开；**默认折叠**；有任务/目标/工作产物后自动展开。
   - **1 会话 = 1 Case**：`conversation.context.participants` 按 `expert_id`（或 pack+name）记录每位参与者；checkpoint 只更新对应角色，不整表覆盖。
   - **协作树**：每个产品专家 / default 座位一行 root；该角色最近一轮的 subagent 挂在其下；当前 sticky 角色高亮。

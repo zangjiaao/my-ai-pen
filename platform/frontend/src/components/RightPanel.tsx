@@ -5,9 +5,9 @@ import type { PlanNode, PlanStatus, StrixAgentStatus } from "../lib/panelTypes";
 import {
   StrixAgentList,
   agentStatusCount,
-  friendlyToolLabel,
   orderStrixAgents,
 } from "./AgentCollaborationTree";
+import { formatCaseMeteringHeader } from "../lib/caseMetering";
 import {
   SurfaceTreeView,
   collectSurfaceEntries,
@@ -260,45 +260,10 @@ export default function RightPanel({
     : unifiedTodoItems(visiblePlanTree);
   const taskItems = taskList.items;
   const tasksHiddenCount = taskList.hiddenCount;
-  const displayRun = useMemo(
-    () => mergeCaseRunIntoDisplayRun(strixRun, caseRun, running),
-    [strixRun, caseRun, running],
-  );
-  // Prefer the larger of kanban.elapsed_seconds and the run start/end window so
-  // Elapsed stays aligned with Started/Ended even when conversation row times lag.
-  const elapsedBaseSeconds = Math.max(
-    normalizeSeconds(kanbanSummary.elapsed_seconds),
-    elapsedSecondsFromRun(displayRun || strixRun, running),
-    elapsedSecondsFromCaseRun(caseRun, running),
-  );
   const intake = normalizeIntake(intakeResult, intakeStatus);
-  const [elapsedClock, setElapsedClock] = useState(() => ({ seconds: elapsedBaseSeconds, anchorSeconds: elapsedBaseSeconds, anchorMs: Date.now() }));
+  // Spec #324: Status no longer owns elapsed clock (S2 / #325: composer + B1).
   const [panelWidth, setPanelWidth] = useState(loadRightPanelWidth);
   const [resizing, setResizing] = useState(false);
-
-  useEffect(() => {
-    setElapsedClock((current) => {
-      if (running && elapsedBaseSeconds <= current.seconds) return current;
-      return { seconds: elapsedBaseSeconds, anchorSeconds: elapsedBaseSeconds, anchorMs: Date.now() };
-    });
-  }, [elapsedBaseSeconds]);
-
-  useEffect(() => {
-    if (!running) {
-      setElapsedClock((current) => ({ seconds: elapsedBaseSeconds, anchorSeconds: elapsedBaseSeconds, anchorMs: Date.now() }));
-      return;
-    }
-    const update = () => {
-      const nowMs = Date.now();
-      setElapsedClock((current) => {
-        const seconds = current.anchorSeconds + Math.floor((nowMs - current.anchorMs) / 1000);
-        return seconds === current.seconds ? current : { ...current, seconds };
-      });
-    };
-    update();
-    const timer = window.setInterval(update, 250);
-    return () => window.clearInterval(timer);
-  }, [elapsedBaseSeconds, running]);
 
   useEffect(() => {
     const handleResize = () => setPanelWidth((current) => clampRightPanelWidth(current));
@@ -343,8 +308,8 @@ export default function RightPanel({
     window.addEventListener("pointercancel", handleEnd);
   };
 
-  const elapsedText = formatDuration(elapsedClock.seconds);
   const findingGroups = groupFindingsByKind(findings);
+  const caseMeteringText = formatCaseMeteringHeader(caseRun);
   const findingsTabTitle = findingsTabHoverTitle(findingGroups);
   const tabs: { key: Tab; label: string; title?: string }[] = [
     { key: "status", label: "Status" },
@@ -383,25 +348,31 @@ export default function RightPanel({
       <div className="flex-1 overflow-y-auto p-4">
         {tab === "status" && (
           <div className="space-y-4">
-            {/* Run summary: elapsed / budget (tokens·cost) / targets (asset context) */}
-            {displayRun ? (
-              <StrixRunSummary run={displayRun} elapsedText={elapsedText} />
-            ) : (
-              <section>
-                <p className="mb-1 text-xs text-ink-muted">Elapsed</p>
-                <p className="font-mono text-xl font-semibold leading-none tracking-normal">{elapsedText}</p>
-              </section>
-            )}
-            {/* Case multi-role roster (one root per product expert / default seat) */}
-            {displayAgents.length > 0 && (
-              <section>
+            {/* Spec #324 D1: Case tokens+cost primary; active count secondary. No elapsed hero. */}
+            {(displayAgents.length > 0 || Boolean(caseRun?.llm_usage)) && (
+              <section data-testid="case-collab-section">
                 <div className="mb-2 flex items-center justify-between gap-2">
-                  <p className="text-xs text-ink-muted">
-                    {displayAgents.filter((a) => !a.parent_id).length > 1 ? "Case participants" : "Agent collaboration"}
-                  </p>
-                  <p className="font-mono text-[11px] text-ink-muted">{agentStatusCount(displayAgents)}</p>
+                  <div className="min-w-0">
+                    <p className="text-xs text-ink-muted">
+                      {displayAgents.filter((a) => !a.parent_id).length > 1 ? "Case participants" : "Agent collaboration"}
+                    </p>
+                    <p
+                      className="mt-0.5 font-mono text-sm font-medium text-ink"
+                      data-testid="case-metering-header"
+                      title="Case cumulative tokens and cost (all Participants + Subs)"
+                    >
+                      {caseMeteringText}
+                    </p>
+                  </div>
+                  {displayAgents.length > 0 && (
+                    <p className="shrink-0 font-mono text-[11px] text-ink-muted" data-testid="case-active-count">
+                      {agentStatusCount(displayAgents)}
+                    </p>
+                  )}
                 </div>
-                <StrixAgentList agents={displayAgents} onWorkerClick={onWorkerClick} />
+                {displayAgents.length > 0 && (
+                  <StrixAgentList agents={displayAgents} onWorkerClick={onWorkerClick} />
+                )}
               </section>
             )}
             {/* Intentional TODO / work packages — Expert Graph L1 stages + L2 todos when present */}
@@ -790,93 +761,6 @@ function OverallProgress({ progress }: { progress: { percent: number; label: str
   );
 }
 
-function StrixRunSummary({ run, elapsedText }: { run: StrixRun; elapsedText: string }) {
-  const usage = run.llm_usage || {};
-  const targets = Array.isArray(run.targets_info) ? run.targets_info : [];
-  const hasUsage = Number(usage.total_tokens || usage.requests || 0) > 0;
-  const hasTargets = targets.some((target) => target.target || target.original);
-  if (!run.start_time && !run.end_time && !hasTargets && !hasUsage) return null;
-  return (
-    <section className="space-y-3 text-xs">
-      <TimeSummary elapsedText={elapsedText} startTime={run.start_time} endTime={run.end_time} />
-      {hasUsage && <LlmUsageSummary usage={usage} />}
-      {hasTargets && <TargetSummary targets={targets} />}
-    </section>
-  );
-}
-
-function TimeSummary({ elapsedText, startTime, endTime }: { elapsedText: string; startTime?: string; endTime?: string }) {
-  return (
-    <div className="grid grid-cols-3 gap-2">
-      <div className="min-w-0 px-2 py-1">
-        <SummarySubLabel>Elapsed</SummarySubLabel>
-        <p className="mt-0.5 font-mono text-xl font-semibold leading-none text-ink">{elapsedText}</p>
-      </div>
-      <div className="min-w-0 px-2 py-1">
-        <SummarySubLabel>Started</SummarySubLabel>
-        <SummaryValue>{startTime ? formatDateTime(startTime) : "-"}</SummaryValue>
-      </div>
-      <div className="min-w-0 px-2 py-1">
-        <SummarySubLabel>Ended</SummarySubLabel>
-        <SummaryValue>{endTime ? formatDateTime(endTime) : "-"}</SummaryValue>
-      </div>
-    </div>
-  );
-}
-
-function LlmUsageSummary({ usage }: { usage: NonNullable<StrixRun["llm_usage"]> }) {
-  const tokenDetail = `Input: ${formatNumber(usage.input_tokens)}\nOutput: ${formatNumber(usage.output_tokens)}\nCached: ${formatNumber(usage.cached_tokens)}\nReasoning: ${formatNumber(usage.reasoning_tokens)}`;
-  return (
-    <div className="grid grid-cols-3 gap-2">
-      <div className="min-w-0 px-2 py-1">
-        <SummarySubLabel>Requests</SummarySubLabel>
-        <SummaryValue>{formatNumber(usage.requests)}</SummaryValue>
-      </div>
-      <div className="min-w-0 px-2 py-1" title={tokenDetail}>
-        <SummarySubLabel>Tokens</SummarySubLabel>
-        <SummaryValue>{formatCompactNumber(usage.total_tokens)}</SummaryValue>
-      </div>
-      <div className="min-w-0 px-2 py-1">
-        <SummarySubLabel>Cost</SummarySubLabel>
-        <SummaryValue>{Number(usage.cost || 0) > 0 ? `$${formatCost(usage.cost)}` : "-"}</SummaryValue>
-      </div>
-    </div>
-  );
-}
-
-function TargetSummary({ targets }: { targets: NonNullable<StrixRun["targets_info"]> }) {
-  const items = targets.map((target) => ({
-    type: target.type || "target",
-    value: target.target || target.original || "",
-  })).filter((target) => target.value);
-  if (!items.length) return null;
-  return (
-    <div className="min-w-0">
-      <SummaryLabel>Target</SummaryLabel>
-      <div className="space-y-1">
-        {items.map((target, index) => (
-          <div key={`${target.value}-${index}`} className="flex min-w-0 items-center gap-2">
-            <span className="shrink-0 rounded-sm bg-canvas-inset px-1.5 py-0.5 text-[10px] uppercase text-ink-secondary">{target.type}</span>
-            <span className="min-w-0 break-words font-mono text-xs font-medium text-ink [overflow-wrap:anywhere]">{target.value}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function SummaryLabel({ children }: { children: ReactNode }) {
-  return <p className="mb-1 text-xs text-ink-muted">{children}</p>;
-}
-
-function SummarySubLabel({ children }: { children: ReactNode }) {
-  return <p className="text-[10px] text-ink-muted">{children}</p>;
-}
-
-function SummaryValue({ children }: { children: ReactNode }) {
-  return <p className="mt-0.5 min-w-0 break-words font-mono text-sm font-medium text-ink [overflow-wrap:anywhere]">{children}</p>;
-}
-
 function WorkflowPlan({ phases }: { phases: PhasePlan[]; running?: boolean }) {
   if (!phases.length) {
     return <p className="text-sm text-ink-muted">No active task plan yet</p>;
@@ -1137,9 +1021,8 @@ function synthesizeMainAgent(activeTool: string | undefined, running: boolean, w
     role: "main",
     current_tool: tool,
     current_action: running ? (tool ? "tool_running" : "llm_waiting") : "finished",
-    current_detail: running
-      ? (tool ? `正在${friendlyToolLabel(tool)}` : "等待模型思考与回复")
-      : "本轮工作已结束",
+    // Spec #324: no work-content summary; runtime via status only.
+    current_detail: "",
   }];
 }
 
@@ -1155,75 +1038,11 @@ function normalizeAgentsForConversationRunning(agents: StrixAgentStatus[], runni
       status: "completed",
       current_tool: "",
       current_action: "finished",
-      current_detail: "本轮工作已结束",
+      // Spec #324: do not invent “本轮工作已结束” narration; badge/dot carry runtime.
+      current_detail: "",
       pending_count: 0,
     };
   });
-}
-
-function hasRunSummaryData(run: StrixRun | undefined): boolean {
-  if (!run) return false;
-  const usage = run.llm_usage || {};
-  const targets = Array.isArray(run.targets_info) ? run.targets_info : [];
-  return Boolean(
-    run.start_time ||
-    run.end_time ||
-    run.scan_mode ||
-    Number(usage.total_tokens || usage.requests || 0) > 0 ||
-    targets.some((target) => target.target || target.original),
-  );
-}
-
-/** Fold Case multi-role rollup (tokens/start) into the Status top strip. */
-function mergeCaseRunIntoDisplayRun(
-  run: StrixRun | undefined,
-  caseRun: CaseRunSummary | undefined,
-  _running: boolean,
-): StrixRun | undefined {
-  const base = run && hasRunSummaryData(run) ? { ...run, llm_usage: { ...(run.llm_usage || {}) } } : undefined;
-  const crUsage = caseRun?.llm_usage || {};
-  const crTokens = Number(crUsage.total_tokens || 0);
-  const crCost = Number(crUsage.cost || 0);
-  const crRequests = Number(crUsage.requests || 0);
-  if (!base && !caseRun) return undefined;
-  if (!base) {
-    if (!crTokens && !caseRun?.started_at && !crRequests) return undefined;
-    return {
-      start_time: caseRun?.started_at,
-      llm_usage: {
-        total_tokens: crTokens || undefined,
-        cost: crCost || undefined,
-        requests: crRequests || undefined,
-        agent_count: caseRun?.participant_count,
-      },
-    };
-  }
-  const baseTokens = Number(base.llm_usage?.total_tokens || 0);
-  if (crTokens > baseTokens) {
-    base.llm_usage = {
-      ...base.llm_usage,
-      total_tokens: crTokens,
-      cost: Math.max(Number(base.llm_usage?.cost || 0), crCost),
-      requests: Math.max(Number(base.llm_usage?.requests || 0), crRequests),
-      agent_count: Math.max(
-        Number(base.llm_usage?.agent_count || 0),
-        Number(caseRun?.participant_count || 0),
-      ) || undefined,
-    };
-  }
-  if (!base.start_time && caseRun?.started_at) {
-    base.start_time = caseRun.started_at;
-  }
-  return hasRunSummaryData(base) ? base : undefined;
-}
-
-function elapsedSecondsFromCaseRun(caseRun: CaseRunSummary | undefined, running: boolean): number {
-  if (!caseRun?.started_at) return 0;
-  const start = Date.parse(caseRun.started_at);
-  if (!Number.isFinite(start)) return 0;
-  const endRaw = running ? Date.now() : Date.parse(String(caseRun.last_active_at || "")) || Date.now();
-  if (!Number.isFinite(endRaw) || endRaw < start) return 0;
-  return Math.max(0, Math.floor((endRaw - start) / 1000));
 }
 
 function countLabel(base: string, count: number): string {
@@ -1356,62 +1175,6 @@ function planItemDotClass(status: string): string {
   if (status === "running") return "bg-ink";
   if (isTerminalPlanStatus(status)) return "bg-hairline";
   return "bg-canvas-inset";
-}
-
-function normalizeSeconds(seconds: unknown): number {
-  const value = Number(seconds || 0);
-  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
-}
-
-/** Total run seconds from StrixRun start/end (or start→now while running). */
-function elapsedSecondsFromRun(run: StrixRun | undefined, running: boolean): number {
-  if (!run?.start_time) return 0;
-  const startMs = Date.parse(run.start_time);
-  if (!Number.isFinite(startMs)) return 0;
-  let endMs: number;
-  if (run.end_time) {
-    endMs = Date.parse(run.end_time);
-  } else if (running) {
-    endMs = Date.now();
-  } else {
-    return 0;
-  }
-  if (!Number.isFinite(endMs) || endMs < startMs) return 0;
-  return Math.floor((endMs - startMs) / 1000);
-}
-
-function formatDuration(seconds: unknown): string {
-  const total = normalizeSeconds(seconds);
-  if (total <= 0) return "00:00";
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const secs = total % 60;
-  const pad = (item: number) => String(item).padStart(2, "0");
-  return hours > 0 ? `${hours}:${pad(minutes)}:${pad(secs)}` : `${pad(minutes)}:${pad(secs)}`;
-}
-
-function formatDateTime(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString([], { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
-}
-
-function formatNumber(value: unknown): string {
-  const numberValue = Number(value || 0);
-  if (!Number.isFinite(numberValue) || numberValue <= 0) return "0";
-  return new Intl.NumberFormat().format(numberValue);
-}
-
-function formatCompactNumber(value: unknown): string {
-  const numberValue = Number(value || 0);
-  if (!Number.isFinite(numberValue) || numberValue <= 0) return "0";
-  return new Intl.NumberFormat([], { notation: "compact", maximumFractionDigits: 1 }).format(numberValue);
-}
-
-function formatCost(value: unknown): string {
-  const numberValue = Number(value || 0);
-  if (!Number.isFinite(numberValue) || numberValue <= 0) return "0";
-  return numberValue < 0.01 ? numberValue.toFixed(4) : numberValue.toFixed(2);
 }
 
 function planNodeKey(node: PlanNode, index: number) {
