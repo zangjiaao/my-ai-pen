@@ -768,11 +768,14 @@ def normalize_agents_for_conversation_status(
             on_active_package = True
 
         if not on_active_package:
-            # Other experts: only clear stuck running if truly mid-flight and Case
-            # package ended for *their* row — leave their idle/completed alone.
+            # Peer experts must NOT inherit the current Task package light.
+            # But orphan mid-flight chrome (running/llm_waiting) after Case package
+            # terminal is wrong — demote to idle without painting Case incomplete.
             if current in open_statuses or current in {"working"}:
-                # Do not force Case incomplete onto peer experts.
-                pass
+                agent["status"] = "idle"
+                agent["current_action"] = "idle"
+                agent["current_tool"] = ""
+                agent["pending_count"] = 0
             out.append(agent)
             continue
 

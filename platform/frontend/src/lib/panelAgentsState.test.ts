@@ -168,6 +168,21 @@ const liveMainOnly: StrixAgentStatus[] = [
   const merged = mergeSnapshotAgentsPreserveHarness(prev, snap);
   assert(merged[0]!.work_mode === "free", "preserve free work_mode");
   assert(merged[0]!.session_id === "pi-sid-keep", "preserve pi session_id");
+  // Empty snapshot is authoritative (Session Delete) — do not resurrect prev.
+  const empty = mergeSnapshotAgentsPreserveHarness(prev, []);
+  assert(empty.length === 0, "empty next clears collab tree");
+  // Snapshot with new Reset id wins over prior live id.
+  const afterReset = mergeSnapshotAgentsPreserveHarness(prev, [
+    {
+      id: "role-expert:e1",
+      name: "渗透大师",
+      status: "idle",
+      expert_id: "e1",
+      work_mode: "free",
+      session_id: "pi-sid-new-after-reset",
+    },
+  ]);
+  assert(afterReset[0]!.session_id === "pi-sid-new-after-reset", "reset id wins");
   console.log("ok: mergeSnapshotAgentsPreserveHarness keeps harness fields");
 }
 

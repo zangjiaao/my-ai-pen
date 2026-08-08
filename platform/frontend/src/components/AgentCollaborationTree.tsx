@@ -515,16 +515,6 @@ function isActiveAgentStatus(status: string | undefined): boolean {
   return ["running", "waiting", "pending"].includes(String(status || "").toLowerCase());
 }
 
-/** @deprecated use packageStatusTitle / packageStatusDotClass (Spec #354 package light). */
-function agentStatusLabel(status: string | undefined): string {
-  return packageStatusTitle(resolvePackageLightStatus({ agentStatus: status }));
-}
-
-/** @deprecated use packageStatusDotClass */
-function agentStatusDotClass(status: string | undefined): string {
-  return packageStatusDotClass(resolvePackageLightStatus({ agentStatus: status }));
-}
-
 /** Tool → short Chinese label for skill/meta chips (not AgentRow narration). */
 export function friendlyToolLabel(tool: string): string {
   const t = String(tool || "").trim();

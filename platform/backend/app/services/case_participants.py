@@ -1016,6 +1016,15 @@ def agents_from_participants(
                     glabel = str(item.get("graph_label") or "").strip()
                     if glabel:
                         root["graph_label"] = glabel
+                # Collab copy: panel Main may carry pi Agent.sessionId when top-level missed.
+                panel_sid = str(item.get("session_id") or "").strip()
+                if (
+                    panel_sid
+                    and not panel_sid.startswith("expert:")
+                    and not panel_sid.startswith("pack:")
+                    and not root.get("session_id")
+                ):
+                    root["session_id"] = panel_sid
                 # Activity chrome only while running (idle keeps last_detail).
                 if status == "running":
                     root["current_tool"] = str(item.get("current_tool") or "")

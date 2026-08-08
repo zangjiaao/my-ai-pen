@@ -236,7 +236,7 @@ client.on("session_reset", async (message) => {
   }
   const result = await resetWorkingSessionMemory(conversationId, expertId || undefined);
   console.log(
-    `[node4] session_reset conv=${conversationId.slice(0, 8)} expert=${expertId || "-"} ok=${result.ok}`,
+    `[node4] session_reset conv=${conversationId.slice(0, 8)} expert=${expertId || "-"} ok=${result.ok} sid=${(result.agentSessionId || "").slice(0, 8)}`,
   );
   await client.send({
     type: "session_reset_ack",
@@ -245,6 +245,8 @@ client.on("session_reset", async (message) => {
     ok: result.ok,
     open_todo_count: result.openTodoCount,
     reason: result.reason,
+    // Spec #354 L10a: new pi Agent.sessionId after Reset (operator copy chrome).
+    agent_session_id: result.agentSessionId || null,
   });
 });
 

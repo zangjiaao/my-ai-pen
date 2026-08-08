@@ -145,12 +145,16 @@ function isChildOfRoot(agent: StrixAgentStatus, rootId: string): boolean {
  * Snapshot replace for collab tree: keep Session harness fields (work_mode / graph_* /
  * session_id) when the snapshot row is thinner than the live row.
  * Prevents Free/Graph badge flash-off during mid-stream refreshConversationState.
+ *
+ * Empty `next` is authoritative (Session Delete / empty Case) — do not resurrect prev.
+ * Prefer snapshot session_id when present so Reset-projected new pi ids win over stale live.
  */
 export function mergeSnapshotAgentsPreserveHarness(
   prev: StrixAgentStatus[],
   next: StrixAgentStatus[],
 ): StrixAgentStatus[] {
-  if (!next.length) return prev.length ? prev : next;
+  // Empty snapshot is product truth (e.g. last Session Delete), not "mid-stream thin".
+  if (!next.length) return next;
   if (!prev.length) return next;
   const prevByKey = new Map<string, StrixAgentStatus>();
   for (const a of prev) {
@@ -158,6 +162,8 @@ export function mergeSnapshotAgentsPreserveHarness(
     if (k) prevByKey.set(k, a);
     prevByKey.set(a.id, a);
   }
+  const sidOk = (s: string) =>
+    Boolean(s) && !s.startsWith("expert:") && !s.startsWith("pack:");
   return next.map((row) => {
     const prior =
       prevByKey.get(String(row.expert_id || "").trim()) ||
@@ -169,8 +175,9 @@ export function mergeSnapshotAgentsPreserveHarness(
     const work_mode = liveWm || priorWm || undefined;
     const liveSid = String(row.session_id || "").trim();
     const priorSid = String(prior.session_id || "").trim();
-    const sidOk = (s: string) => s && !s.startsWith("expert:") && !s.startsWith("pack:");
-    const session_id = (sidOk(liveSid) ? liveSid : "") || (sidOk(priorSid) ? priorSid : "") || undefined;
+    // Authoritative snapshot id wins (Reset / new Agent). Only fill gap from live.
+    const session_id =
+      (sidOk(liveSid) ? liveSid : "") || (sidOk(priorSid) ? priorSid : "") || undefined;
     return {
       ...row,
       ...(work_mode

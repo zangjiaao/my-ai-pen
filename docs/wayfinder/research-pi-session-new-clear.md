@@ -48,7 +48,8 @@ So product analogy:
 
 ## Collab copy chrome
 
-Always show a copy control when Main has a session/expert id:
+Show copy control **only** when a real pi-agent-core `Agent.sessionId` is projected
+(Node checkpoint / Reset ack → participant `session_instance_id` → FE `session_id`).
 
-1. Prefer platform `session_instance_id` / Node `Agent.sessionId` when projected.
-2. Fallback `expert:{catalog_id}` so the button never vanishes for legacy rows.
+- Never fall back to expert catalog id (`expert:{uuid}`) — that is product identity, not the Agent instance.
+- Hide the button until the Agent is constructed (or Reset mints a new id).

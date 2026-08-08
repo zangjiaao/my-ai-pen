@@ -148,6 +148,34 @@ def test_agents_from_participants_projects_work_mode_badge():
     assert mains[0].get("work_mode") == "free"
 
 
+def test_normalize_package_status_scoped_to_active_expert():
+    """Case package light settles only the current Task expert; peers demote open→idle."""
+    from app.services.conversation_snapshot import normalize_agents_for_conversation_status
+
+    agents = [
+        {"id": "role-e1", "status": "idle", "parent_id": None, "expert_id": "e1"},
+        {"id": "role-e2", "status": "running", "parent_id": None, "expert_id": "e2"},
+        {"id": "role-e2-w", "status": "tool_running", "parent_id": "role-e2", "expert_id": "e2"},
+        {"id": "role-e3", "status": "running", "parent_id": None, "expert_id": "e3"},
+    ]
+    out = normalize_agents_for_conversation_status(
+        agents, "incomplete", active_expert_id="e2"
+    )
+    by = {a["id"]: a["status"] for a in out}
+    assert by["role-e1"] == "idle"
+    assert by["role-e2"] == "incomplete"
+    assert by["role-e2-w"] == "incomplete"
+    # Peer stuck running demoted to idle — not painted incomplete.
+    assert by["role-e3"] == "idle"
+
+    out2 = normalize_agents_for_conversation_status(
+        agents, "completed", active_expert_id="e2"
+    )
+    by2 = {a["id"]: a["status"] for a in out2}
+    assert by2["role-e2"] == "completed"
+    assert by2["role-e3"] == "idle"
+
+
 def test_settle_context_after_session_delete_clears_workers_and_panel_ghosts():
     from app.services.case_participants import settle_context_after_session_delete
 

@@ -590,13 +590,7 @@ export async function resetWorkingSessionMemory(
     openTodoCount = 0;
   }
   // Dispose the live pi-agent-core instance (abort + Agent.reset + clear queues).
-  try {
-    if (typeof entry.session?.reset === "function") {
-      entry.session.reset();
-    }
-  } catch {
-    /* ignore */
-  }
+  // Single teardown path — wrapAgentAsSession.dispose already includes reset().
   try {
     await Promise.resolve(entry.dispose());
   } catch {
