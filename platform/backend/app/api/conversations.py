@@ -190,7 +190,15 @@ async def reset_participant_session(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Spec #354 L9: Session Reset — clear model memory, keep incomplete Todo."""
+    """Spec #354 L9: Session Reset — clear model memory, keep incomplete Todo.
+
+    L10a: Node mints a new pi Agent.sessionId on Reset; project it onto the
+    participant so collab copy chrome updates without waiting for the next run.
+    """
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from app.services.case_participants import upsert_participant
+
     c = await _get_conv(conv_id, current_user, db)
     expert_id = str((body.expert_id if body else None) or _active_expert_id(c) or "").strip()
     result = await _notify_node_session_op(
@@ -199,6 +207,19 @@ async def reset_participant_session(
         conversation_id=str(c.id),
         expert_id=expert_id or None,
     )
+    agent_session_id = None
+    if isinstance(result.get("ack"), dict):
+        agent_session_id = str(result["ack"].get("agent_session_id") or "").strip() or None
+    if expert_id and agent_session_id:
+        ctx = dict(c.context) if isinstance(c.context, dict) else {}
+        ctx = upsert_participant(
+            ctx,
+            expert_id=expert_id,
+            pi_agent_session_id=agent_session_id,
+            touch=True,
+        )
+        c.context = ctx
+        flag_modified(c, "context")
     await _audit(
         db,
         uuid.UUID(current_user["user_id"]),
@@ -206,10 +227,19 @@ async def reset_participant_session(
         "conversation",
         c.id,
         c.id,
-        {"expert_id": expert_id or None, "node": result},
+        {
+            "expert_id": expert_id or None,
+            "node": result,
+            "agent_session_id": agent_session_id,
+        },
     )
     await db.commit()
-    return {"ok": True, "expert_id": expert_id or None, "node": result}
+    return {
+        "ok": True,
+        "expert_id": expert_id or None,
+        "agent_session_id": agent_session_id,
+        "node": result,
+    }
 
 
 @router.post("/{conv_id}/sessions/delete")

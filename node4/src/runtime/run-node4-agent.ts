@@ -30,6 +30,11 @@ export type Node4AgentSession = {
   prompt: (text: string, opts?: { source?: string }) => Promise<void>;
   abort: () => void;
   dispose: () => void | Promise<void>;
+  /**
+   * pi-agent-core Agent.reset(): clear transcript + queues (in-place memory wipe).
+   * Spec #354 Reset / pi /new-like reseed may call this before opening a new Agent.
+   */
+  reset?: () => void;
   subscribe: (listener: (event: AgentEvent) => void | Promise<void>) => () => void;
   /**
    * Mid-run user padding (pi Agent.steer) — after current tool batch / turn boundary.
@@ -39,6 +44,11 @@ export type Node4AgentSession = {
   /** Inject a user follow-up for the next turn (mid-run product nudges / after stop). */
   followUp: (text: string) => void;
   readonly messages: readonly unknown[];
+  /**
+   * pi-agent-core Agent.sessionId — provider cache-aware id; renews when a new
+   * Agent is constructed (Reset reseed / cold start), not on package settle.
+   */
+  readonly sessionId?: string;
 };
 
 export type RunNode4AgentOptions = {
@@ -60,6 +70,11 @@ export type BoundNode4SessionOptions = {
   pack?: RolePack;
   systemPrompt: string;
   thinkingLevel?: Node4AgentThinkingLevel;
+  /**
+   * pi-agent-core sessionId. Omit → mint a new UUID (cold start / Reset reseed).
+   * Pass prior id only when intentionally continuing the same Agent identity.
+   */
+  sessionId?: string;
 };
 
 export type BoundNode4Session = {
@@ -156,6 +171,12 @@ export async function runNode4Agent(options: RunNode4AgentOptions): Promise<Node
   }
 
   const thinkingLevel = options.thinkingLevel ?? "medium";
+  // Always bind a concrete sessionId so Reset/Delete can prove a new pi Agent identity.
+  const sessionId =
+    String(options.sessionId || "").trim() ||
+    (typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `n4-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`);
   const agent = new Agent({
     initialState: {
       systemPrompt: options.systemPrompt,
@@ -168,7 +189,7 @@ export async function runNode4Agent(options: RunNode4AgentOptions): Promise<Node
     getApiKey: options.getApiKey ?? ((provider: string) => resolveNode4ApiKey(provider)),
     beforeToolCall: options.beforeToolCall,
     afterToolCall: options.afterToolCall,
-    sessionId: options.sessionId,
+    sessionId,
   });
 
   return wrapAgentAsSession(agent);
@@ -182,6 +203,11 @@ export function wrapAgentAsSession(agent: Agent): Node4AgentSession {
     abort: () => {
       agent.abort();
     },
+    /**
+     * Tear down this pi-agent-core Agent instance (Delete / package end dispose).
+     * Aligns with pi coding-agent teardown before SessionManager.newSession:
+     * abort active run, clear queues, wipe transcript via Agent.reset().
+     */
     dispose: () => {
       try {
         agent.abort();
@@ -189,7 +215,25 @@ export function wrapAgentAsSession(agent: Agent): Node4AgentSession {
         /* ignore */
       }
       try {
+        agent.reset();
+      } catch {
+        /* ignore */
+      }
+      try {
         agent.clearAllQueues();
+      } catch {
+        /* ignore */
+      }
+    },
+    /** In-place memory wipe without dropping the Agent object (optional). */
+    reset: () => {
+      try {
+        agent.abort();
+      } catch {
+        /* ignore */
+      }
+      try {
+        agent.reset();
       } catch {
         /* ignore */
       }
@@ -214,6 +258,9 @@ export function wrapAgentAsSession(agent: Agent): Node4AgentSession {
     },
     get messages() {
       return agent.state.messages;
+    },
+    get sessionId() {
+      return agent.sessionId;
     },
   };
 }
@@ -244,6 +291,7 @@ export async function createBoundNode4Session(
     tools,
     model,
     thinkingLevel: options.thinkingLevel ?? "medium",
+    sessionId: options.sessionId,
     afterToolCall: async (context: AfterToolCallContext) => {
       const tracker = runtime.lifecycle.midRunTodo;
       if (!tracker) return undefined;

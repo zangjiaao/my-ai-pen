@@ -47,6 +47,13 @@ export type ParkedWorkingRuntime = {
   parkedAt: number;
   /** Tear down when park is dropped (TTL / mode mismatch / terminal). */
   dispose: () => void | Promise<void>;
+  /**
+   * pi-agent-core Agent.sessionId at park time (or next id after Reset reseed).
+   * Spec #354 Reset = dispose Agent + mint new sessionId (pi /new style).
+   */
+  agentSessionId?: string;
+  /** After Reset: next createBoundNode4Session must mint a brand-new Agent (not reattach). */
+  needsAgentReseed?: boolean;
 };
 
 export type CaptainEndDisposition =
@@ -315,9 +322,13 @@ export function applyCaptainEndDisposition(options: {
     : options.decision;
 
   if (decision.disposition === "park") {
+    const agentSessionId =
+      String(options.entry.agentSessionId || options.entry.session?.sessionId || "").trim() ||
+      undefined;
     parkWorkingSession({
       ...options.entry,
       parkedAt: options.entry.parkedAt ?? Date.now(),
+      agentSessionId,
     });
     return { parked: true, disposed: false };
   }
@@ -558,14 +569,16 @@ export async function disposeWorkingSessionsForCase(
 }
 
 /**
- * Spec #354 L9: Session Reset — clear model/pi working memory, keep incomplete Todo.
- * Disposes the parked pi session handle and re-parks todo-only (session null-safe
- * reseed on next attach). Marks entry so attach path reseeds Agent while reusing Todo.
+ * Spec #354 L9: Session Reset — dispose pi-agent-core Agent instance, keep Todo.
+ *
+ * Aligns with pi coding-agent `/new` (handleClearCommand → runtimeHost.newSession):
+ * teardown current Agent, mint a new Agent.sessionId; next attach constructs a
+ * fresh Agent (not reattach old transcript). Incomplete TodoStore is preserved.
  */
 export async function resetWorkingSessionMemory(
   conversationId: string,
   expertId?: string | null,
-): Promise<{ ok: boolean; openTodoCount: number; reason?: string }> {
+): Promise<{ ok: boolean; openTodoCount: number; reason?: string; agentSessionId?: string }> {
   const entry = peekParkedSession(conversationId, expertId);
   if (!entry) {
     return { ok: false, openTodoCount: 0, reason: "miss" };
@@ -576,21 +589,32 @@ export async function resetWorkingSessionMemory(
   } catch {
     openTodoCount = 0;
   }
+  // Dispose the live pi-agent-core instance (abort + Agent.reset + clear queues).
+  // Single teardown path — wrapAgentAsSession.dispose already includes reset().
   try {
     await Promise.resolve(entry.dispose());
   } catch {
     /* ignore */
   }
-  // Re-park with a no-op session shell so Todo survives; next attach reseeds Agent.
+  // New pi Agent identity for reseed (like SessionManager.newSession minting a new id).
+  const nextAgentSessionId =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `n4-reset-${Date.now().toString(36)}`;
+  // Re-park with a no-op session shell so Todo survives; next attach builds a new Agent.
   const shell: Node4AgentSession = {
     prompt: async () => {},
     abort: () => {},
     dispose: () => {},
+    reset: () => {},
     subscribe: () => () => {},
     steer: () => {},
     followUp: () => {},
     get messages() {
       return [];
+    },
+    get sessionId() {
+      return nextAgentSessionId;
     },
   };
   parkWorkingSession({
@@ -598,14 +622,17 @@ export async function resetWorkingSessionMemory(
     session: shell,
     dispose: () => {},
     parkedAt: Date.now(),
+    agentSessionId: nextAgentSessionId,
+    needsAgentReseed: true,
   });
-  // Flag for attach: empty messages means reseed agent in runner when needed.
+  // Legacy flag still checked by parkNeedsAgentReseed for older tests.
   (shell as { __memoryReset?: boolean }).__memoryReset = true;
-  return { ok: true, openTodoCount };
+  return { ok: true, openTodoCount, agentSessionId: nextAgentSessionId };
 }
 
 /** True when park session is a post-Reset shell (needs Agent reseed on attach). */
 export function parkNeedsAgentReseed(entry: ParkedWorkingRuntime): boolean {
+  if (entry.needsAgentReseed) return true;
   const msgs = entry.session?.messages;
   if (!Array.isArray(msgs) || msgs.length > 0) return false;
   return Boolean((entry.session as { __memoryReset?: boolean } | undefined)?.__memoryReset);

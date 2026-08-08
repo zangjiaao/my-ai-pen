@@ -35,6 +35,7 @@ import {
   isStrixAgentStatus,
   upsertSubagentChild,
   mergeLivePanelAgents,
+  mergeSnapshotAgentsPreserveHarness,
   patchMainAgentActivity,
   preferRicherPlanTree,
   mergePlanTreeByOwner,
@@ -713,8 +714,12 @@ export default function ConversationPage() {
         setViewedRevisionId(null);
       }
     }
-    // Backend case_participants.merge_panel_agents is source of truth for Subagent history.
-    setStrixAgents(snapshot.strix_agents?.length ? snapshot.strix_agents : fallback?.strix_agents || []);
+    // Backend case_participants is SoT for Subagent history — but live Free/Graph badge
+    // and pi session_id must not flash off when a mid-stream snapshot omits them.
+    const nextAgents = snapshot.strix_agents?.length
+      ? snapshot.strix_agents
+      : fallback?.strix_agents || [];
+    setStrixAgents((prev) => mergeSnapshotAgentsPreserveHarness(prev, nextAgents));
     setStrixNotes(snapshot.strix_notes?.length ? snapshot.strix_notes : fallback?.strix_notes || []);
     // Never replace a populated live run with an empty snapshot object ({} is truthy).
     const nextRun = hasStrixRunSummary(snapshot.strix_run)
@@ -1283,19 +1288,37 @@ export default function ConversationPage() {
       const convId = messageConversationId(msg, activeId);
       const checkpoint = m.checkpoint && typeof m.checkpoint === "object" && !Array.isArray(m.checkpoint) ? m.checkpoint as Record<string, unknown> : {};
       const node3Strix = checkpoint.node3_strix && typeof checkpoint.node3_strix === "object" && !Array.isArray(checkpoint.node3_strix) ? checkpoint.node3_strix as Record<string, unknown> : {};
+      // pi-agent-core Agent.sessionId (Node) — collab copy chrome only.
+      const agentSessionId = readString(checkpoint.agent_session_id);
+      const stampPiSessionId = (list: StrixAgentStatus[]): StrixAgentStatus[] => {
+        if (!agentSessionId || agentSessionId.startsWith("expert:") || agentSessionId.startsWith("pack:")) {
+          return list;
+        }
+        const eid = readString(m.expert_id) || readString(checkpoint.expert_id);
+        return list.map((a) => {
+          if (a.parent_id) return a;
+          if (eid && String(a.expert_id || "").trim() && String(a.expert_id || "").trim() !== eid) {
+            return a;
+          }
+          return { ...a, session_id: agentSessionId };
+        });
+      };
       // Multi-role: merge live panel into existing roster; never wipe other Case participants.
       if (Array.isArray(node3Strix.agents) && node3Strix.agents.length) {
         const next = node3Strix.agents.filter(isStrixAgentStatus);
-        setStrixAgents((prev) => mergeLivePanelAgents(prev, next, {
+        setStrixAgents((prev) => stampPiSessionId(mergeLivePanelAgents(prev, next, {
           expert_id: readString(m.expert_id) || readString(checkpoint.expert_id),
           expert_name: readString(m.expert_name) || readString(checkpoint.expert_name),
-        }));
+        })));
       } else if (Array.isArray(checkpoint.panel_agents) && checkpoint.panel_agents.length) {
         const next = checkpoint.panel_agents.filter(isStrixAgentStatus);
-        setStrixAgents((prev) => mergeLivePanelAgents(prev, next, {
+        setStrixAgents((prev) => stampPiSessionId(mergeLivePanelAgents(prev, next, {
           expert_id: readString(m.expert_id) || readString(checkpoint.expert_id),
           expert_name: readString(m.expert_name) || readString(checkpoint.expert_name),
-        }));
+        })));
+      } else if (agentSessionId) {
+        // Checkpoint without panel_agents still updates pi Session id on current Main.
+        setStrixAgents((prev) => stampPiSessionId(prev));
       }
       if (Array.isArray(node3Strix.todos)) {
         const todoPlan = strixTodosToPlanTree(node3Strix.todos);
@@ -2770,7 +2793,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
         />
         <div className="flex min-w-0 flex-1 overflow-hidden">
           <main data-testid="conversation-main" data-active-conversation-id={activeId || ""} className={`flex min-w-0 flex-1 flex-col ${rightPanelOpen ? "border-r border-hairline-soft" : ""}`}>
-            <div ref={messageScrollerRef} onScroll={handleMessageScroll} className="min-w-0 flex-1 overflow-y-auto px-20 py-4 space-y-4">
+            <div ref={messageScrollerRef} onScroll={handleMessageScroll} className="min-w-0 flex-1 overflow-y-auto px-9 py-4 space-y-4">
               {messages.length === 0 && !activeId && (
                 <div className="flex h-full items-center justify-center">
                   <div className="max-w-md text-center">
@@ -2897,7 +2920,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               })()}
               {/* Spec #312 L10: mechanical WorksetChoiceBar retired — next_steps ChoiceCard in stream. */}
             </div>
-            <div className="px-16 pt-4 pb-4">
+            <div className="px-6 pt-4 pb-4">
               {/* Agent-style composer: partner chip → (pentest: mode + Goal) → send */}
               <div className="relative rounded-2xl border border-hairline bg-canvas shadow-[0_1px_2px_rgba(0,0,0,0.04)] focus-within:border-ink/40 focus-within:shadow-[0_2px_8px_rgba(0,0,0,0.06)]">
                 {mentionState && mentionOptions.length > 0 && (
@@ -3264,6 +3287,21 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               taskContext={taskContext}
               engagementCloseout={engagementCloseout}
               conversationId={activeId}
+              packageStatus={
+                conversations.find((c) => c.id === activeId)?.status ||
+                (isActiveConversationRunning ? "running" : null)
+              }
+              packageWorking={
+                Boolean(conversations.find((c) => c.id === activeId)?.working) ||
+                isActiveConversationRunning
+              }
+              packageExpertId={
+                String(
+                  (taskContext as { expert_id?: string } | undefined)?.expert_id ||
+                    selectedMention?.expertId ||
+                    "",
+                ).trim() || null
+              }
               pendingHandoffExpertIds={pendingHandoffExpertIds}
               onSessionLifecycleDone={() => {
                 // Spec #354: Session Delete mid-run must flip Navbar light + interrupt → send.

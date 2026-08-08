@@ -171,11 +171,16 @@ export async function runNode4Task(
     sessionWorkMode: sessionWorkModeForPark,
     continueInEnvelope,
   });
-  /** Spec #354 L9: post-Reset parks keep Todo but need a fresh Agent. */
+  /** Spec #354 L9: post-Reset parks keep Todo but need a fresh pi-agent-core Agent. */
   let handoffTodo: TodoStoreType | undefined;
+  /** After Reset: mint/bind a new Agent.sessionId (pi /new style), do not reuse disposed id. */
+  let reseedAgentSessionId: string | undefined;
   if (parkContinue.action === "attach") {
     if (parkNeedsAgentReseed(parkContinue.entry)) {
       handoffTodo = parkContinue.entry.todo;
+      reseedAgentSessionId =
+        String(parkContinue.entry.agentSessionId || parkContinue.entry.session?.sessionId || "").trim() ||
+        undefined;
       // Shell park already consumed by resolveWorkingSessionContinue; reseed reuses Todo.
     } else {
       const parkedOut = await runParkedWorkingContinue({
@@ -382,6 +387,8 @@ export async function runNode4Task(
     pack: packForTools,
     systemPrompt,
     thinkingLevel: chatOnly ? "low" : "medium",
+    // Reset reseed: new pi-agent-core Agent with the id minted at Reset time.
+    sessionId: reseedAgentSessionId,
   });
   sessionRef = session;
   // Mid-run user_steer (password hints, etc.) → pi steer/followUp on this session.
@@ -401,6 +408,18 @@ export async function runNode4Task(
     // session-runner owns end-of-task textStream.dispose below.
     disposeTextStream: false,
   });
+  // Stamp pi Agent.sessionId on panel Main + checkpoint so FE collab copy sees it
+  // on the same path as live panel_agents (not only participants snapshot).
+  const piSid = String(session.sessionId || obsCtx.agentSessionId || "").trim();
+  if (piSid) {
+    obsCtx.agentSessionId = piSid;
+    try {
+      panel.setAgentSessionId(piSid);
+    } catch {
+      /* ignore */
+    }
+    await emitCheckpointUpdate(obsCtx, { status: "running" }).catch(() => {});
+  }
 
   // Outer continues: product default OFF (settle on natural stop). Lab opt-in via env.
   // Discovery / multi-tool work stays in-loop (pi agent-loop). No session wall.

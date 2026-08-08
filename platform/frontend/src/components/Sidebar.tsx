@@ -23,6 +23,7 @@ import { useConversationStore } from "../stores/conversationStore";
 import { authFetch } from "../lib/api";
 import ConfirmDialog from "./ConfirmDialog";
 import { BRAND_NAME } from "../lib/brand";
+import { packageStatusDotClass, packageStatusTitle } from "../lib/packageStatusLight";
 
 interface Props {
   activeId: string | null;
@@ -340,7 +341,10 @@ export default function Sidebar({ activeId, onSelect }: Props) {
                       : "hover:bg-surface-default"
                   }`}
                 >
-                  <span className={`h-2 w-2 rounded-full ${statusDotClass(c.status, c.working)}`} />
+                  <span
+                    className={`h-2 w-2 rounded-full ${packageStatusDotClass(c.status, c.working)}`}
+                    title={packageStatusTitle(c.status, c.working)}
+                  />
                 </button>
               ))}
             </div>
@@ -408,8 +412,8 @@ export default function Sidebar({ activeId, onSelect }: Props) {
                     >
                       <div className="flex items-center gap-2">
                         <span
-                          className={`inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full ${statusDotClass(c.status, c.working)}`}
-                          title={c.working || c.status === "running" ? "运行中" : c.status}
+                          className={`inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full ${packageStatusDotClass(c.status, c.working)}`}
+                          title={packageStatusTitle(c.status, c.working)}
                         />
                         <span className="truncate">{c.title}</span>
                       </div>
@@ -533,19 +537,4 @@ export default function Sidebar({ activeId, onSelect }: Props) {
   );
 }
 
-/**
- * Case package status light (Spec #354 S2 / L7) — display only; red ≠ Case death.
- * green idle · blue running · yellow wait/pause · red latest error
- */
-function statusDotClass(status: string, working?: boolean) {
-  if (status === "running" || working === true) return "animate-pulse bg-status-running";
-  // green: idle completed or freshly created Case
-  if (status === "completed" || status === "created" || !status) return "bg-status-success";
-  // yellow: authorize wait / Task pause / incomplete package (not Case death)
-  if (status === "incomplete" || status === "paused") return "bg-severity-medium";
-  // red: latest package error — Case remains messageable
-  if (status === "failed") return "bg-severity-critical";
-  // canceled remains a distinct light (not "Case failed forever")
-  if (status === "canceled") return "bg-severity-critical";
-  return "bg-status-success";
-}
+

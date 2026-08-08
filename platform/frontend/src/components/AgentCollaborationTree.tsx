@@ -16,10 +16,29 @@ import {
 import type { StrixAgentStatus } from "../lib/panelTypes";
 import { formatAgentWorkModeBadge } from "../lib/panelAgentsState";
 import { formatAgentUsageLine } from "../lib/caseMetering";
+import {
+  packageStatusDotClass,
+  packageStatusTitle,
+  resolvePackageLightStatus,
+} from "../lib/packageStatusLight";
 
 export type { StrixAgentStatus } from "../lib/panelTypes";
 
 /** Spec #354: Session lifecycle on Main cards only. */
+
+/** True when this Main is the current Task package expert (package light applies). */
+function isPackageExpert(
+  agent: StrixAgentStatus,
+  packageExpertId?: string | null,
+): boolean {
+  const want = String(packageExpertId || "").trim();
+  if (!want) {
+    // No task expert: only highlighted Main (single-speaker) follows package light.
+    return Boolean(agent.highlighted);
+  }
+  return String(agent.expert_id || "").trim() === want;
+}
+
 export type SessionLifecycleHandlers = {
   onRequestReset?: (agent: StrixAgentStatus) => void;
   onRequestDelete?: (agent: StrixAgentStatus) => void;
@@ -30,12 +49,22 @@ export function StrixAgentList({
   agents,
   onWorkerClick,
   sessionLifecycle,
+  packageStatus,
+  packageWorking,
+  packageExpertId,
 }: {
   agents: StrixAgentStatus[];
   /** Spec #308: open Worker audit dialog (Workers only; not Main). */
   onWorkerClick?: (agent: StrixAgentStatus, workerOrdinal?: number) => void;
   /** Spec #354 S3: Reset / Delete Session on Main cards (confirm lives in parent). */
   sessionLifecycle?: SessionLifecycleHandlers;
+  /**
+   * Spec #354 S2: Task package status light — only for the Main of this expert_id
+   * (current Task speaker). Peer experts keep their own status.
+   */
+  packageStatus?: string | null;
+  packageWorking?: boolean;
+  packageExpertId?: string | null;
 }) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const roots = agents.filter((agent) => !agent.parent_id);
@@ -123,6 +152,12 @@ export function StrixAgentList({
                 ? sessionLifecycle
                 : undefined
             }
+            packageStatus={
+              primary && isPackageExpert(agent, packageExpertId) ? packageStatus : undefined
+            }
+            packageWorking={
+              primary && isPackageExpert(agent, packageExpertId) ? packageWorking : undefined
+            }
           />
         </div>
         {children.length > 0 && (
@@ -154,6 +189,8 @@ function AgentRow({
   onToggle,
   onWorkerOpen,
   sessionLifecycle,
+  packageStatus,
+  packageWorking,
 }: {
   agent: StrixAgentStatus;
   primary?: boolean;
@@ -166,6 +203,9 @@ function AgentRow({
   onWorkerOpen?: () => void;
   /** Spec #354: Main Session Reset / Delete (parent owns ConfirmDialog). */
   sessionLifecycle?: SessionLifecycleHandlers;
+  /** Spec #354 S2: Task package status for Main light (sync Sidebar). */
+  packageStatus?: string | null;
+  packageWorking?: boolean;
 }) {
   // Spec #324 D1: secondary line is model · requests · tokens — not tool/work narration.
   const usageLine = formatAgentUsageLine(agent, { short: secondary });
@@ -231,11 +271,24 @@ function AgentRow({
               [meta chips if any]
       */}
       <div className="flex min-w-0 items-start gap-2">
-        <span
-          aria-hidden="true"
-          className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${agentStatusDotClass(agent.status)}`}
-          title={agentStatusLabel(agent.status)}
-        />
+        {(() => {
+          // Spec #354 S2: Main uses Case Task package status (same palette as Sidebar).
+          // Workers keep agent/panel phase mapping through the same light helper.
+          const lightStatus = primary
+            ? resolvePackageLightStatus({
+                packageStatus,
+                agentStatus: agent.status,
+                working: packageWorking,
+              })
+            : resolvePackageLightStatus({ agentStatus: agent.status });
+          return (
+            <span
+              aria-hidden="true"
+              className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${packageStatusDotClass(lightStatus, primary ? packageWorking : undefined)}`}
+              title={packageStatusTitle(lightStatus, primary ? packageWorking : undefined)}
+            />
+          );
+        })()}
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center justify-between gap-2">
             <div className="flex min-w-0 items-center gap-1.5">
@@ -367,23 +420,23 @@ function AgentRoleBadge({ primary }: { primary: boolean }) {
   );
 }
 
-/** Full Session *instance* id (clipboard + tooltip). Prefer instance over expert catalog. */
+/**
+ * pi-agent-core Agent.sessionId only (clipboard + tooltip).
+ * Never expert catalog id — that is product identity, not the Agent instance.
+ */
 function sessionIdFull(agent: StrixAgentStatus): string {
   const sid = String(agent.session_id || "").trim();
-  // Never treat expert:{catalog} as Session instance — that id is stable across Delete.
-  if (sid && !sid.startsWith("expert:")) return sid;
-  return "";
+  if (!sid) return "";
+  // Reject expert-catalog / roster keys (historical mis-projection).
+  if (sid.startsWith("expert:") || sid.startsWith("pack:")) return "";
+  return sid;
 }
 
-/**
- * Compact display form for collab chrome (clipboard still gets full id).
- * Instance UUID → first 8 chars.
- */
+/** Compact display: first 8 of pi Agent.sessionId. */
 function sessionIdDisplay(agent: StrixAgentStatus): string {
   const full = sessionIdFull(agent);
   if (!full) return "";
-  const bare = full.includes(":") ? full.slice(full.indexOf(":") + 1) : full;
-  return bare.slice(0, 8);
+  return full.slice(0, 8);
 }
 
 function AgentMeta({
@@ -460,43 +513,6 @@ export function agentStatusCount(agents: StrixAgentStatus[]): string {
 
 function isActiveAgentStatus(status: string | undefined): boolean {
   return ["running", "waiting", "pending"].includes(String(status || "").toLowerCase());
-}
-
-function agentStatusLabel(status: string | undefined): string {
-  // Case Main roots often arrive as "idle"; treat idle/empty as done (green), same as Sub completed.
-  const normalized = String(status ?? "")
-    .trim()
-    .toLowerCase() || "done";
-  if (normalized === "completed" || normalized === "idle" || normalized === "finished" || normalized === "success") {
-    return "done";
-  }
-  if (normalized === "crashed") return "failed";
-  if (normalized === "waiting") return "pending";
-  if (normalized === "timed_out" || normalized === "timeout") return "timeout";
-  return normalized;
-}
-
-function isInterruptedAgentStatus(status: string): boolean {
-  return ["failed", "stopped", "interrupted", "canceled", "cancelled", "timeout", "aborted"].includes(status);
-}
-
-function agentStatusDotClass(status: string | undefined): string {
-  const normalized = agentStatusLabel(status);
-  if (
-    normalized === "running" ||
-    normalized === "tool_running" ||
-    normalized === "llm_waiting" ||
-    normalized === "working" ||
-    normalized === "chat" ||
-    normalized === "starting"
-  ) {
-    return "animate-pulse bg-status-running";
-  }
-  if (normalized === "pending") return "bg-[#d97706]";
-  if (normalized === "timeout") return "bg-severity-high";
-  if (isInterruptedAgentStatus(normalized)) return "bg-severity-critical";
-  if (normalized === "done") return "bg-status-success";
-  return "bg-canvas-inset";
 }
 
 /** Tool → short Chinese label for skill/meta chips (not AgentRow narration). */

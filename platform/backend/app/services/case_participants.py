@@ -9,7 +9,6 @@ No NLP: keys come from structured expert_id / pack_id / expert_name only.
 from __future__ import annotations
 
 import re
-import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -378,6 +377,8 @@ def upsert_participant(
     usage_snapshot: object = None,
     usage_mode: str = "replace",  # replace | merge_max | lifetime
     touch: bool = True,
+    # pi-agent-core Agent.sessionId from Node (collab copy only; never expert catalog).
+    pi_agent_session_id: object = None,
 ) -> dict[str, Any]:
     """Insert or update one Case participant; returns new context dict."""
     ctx = dict(context or {})
@@ -388,14 +389,14 @@ def upsert_participant(
     roster = participants_map(ctx)
     prev = dict(roster.get(key) or {})
 
-    # Spec #354: Session *instance* id is distinct from expert catalog id.
-    # Same expert re-entry after Delete mints a new instance (L8/L10); roster
-    # key stays expert-scoped for isolation / handoff.
-    prev_instance = str(prev.get("session_instance_id") or "").strip()
-    if prev_instance:
-        instance_id = prev_instance
-    else:
-        instance_id = str(uuid.uuid4())
+    # Collab Session id = pi-agent-core Agent.sessionId only (Node SoT).
+    # Do not invent platform UUIDs or expert:{catalog} keys for copy chrome.
+    incoming_pi = str(pi_agent_session_id or "").strip()
+    if incoming_pi.startswith("expert:") or incoming_pi.startswith("pack:"):
+        incoming_pi = ""
+    prev_pi = str(prev.get("session_instance_id") or "").strip()
+    if prev_pi.startswith("expert:") or prev_pi.startswith("pack:"):
+        prev_pi = ""
 
     row: dict[str, Any] = {
         **prev,
@@ -403,8 +404,13 @@ def upsert_participant(
         "expert_id": eid or prev.get("expert_id") or "",
         "expert_name": name or prev.get("expert_name") or pack,
         "pack_id": pack or prev.get("pack_id") or "default",
-        "session_instance_id": instance_id,
     }
+    if incoming_pi:
+        row["session_instance_id"] = incoming_pi
+    elif prev_pi:
+        row["session_instance_id"] = prev_pi
+    else:
+        row.pop("session_instance_id", None)
     if last_status is not None and str(last_status).strip():
         row["last_status"] = str(last_status).strip().lower()
     elif not row.get("last_status"):
@@ -533,6 +539,8 @@ def apply_checkpoint_to_participant(
     plan = cp.get("plan_tree") if isinstance(cp.get("plan_tree"), list) else None
     if plan is None and isinstance(cp.get("exploration_plan_tree"), list):
         plan = cp.get("exploration_plan_tree")
+    # Node projects pi-agent-core Agent.sessionId on checkpoints (collab copy SoT).
+    pi_sid = str(cp.get("agent_session_id") or "").strip() or None
     return upsert_participant(
         context,
         expert_id=expert_id,
@@ -546,6 +554,7 @@ def apply_checkpoint_to_participant(
         usage_snapshot=usage,
         usage_mode="merge_max",
         touch=True,
+        pi_agent_session_id=pi_sid,
     )
 
 
@@ -951,9 +960,6 @@ def agents_from_participants(
             "role": "main",
             "pack_id": pack,
             "expert_id": eid,
-            # Spec #354: Session *instance* id (new after Delete+re-entry).
-            # Expert catalog id stays in expert_id; do not use expert:{uuid} as session_id.
-            "session_id": str(row.get("session_instance_id") or "").strip() or key,
             "current_tool": "",
             "current_action": status,
             "current_detail": detail,
@@ -962,7 +968,27 @@ def agents_from_participants(
             "usage": usage,
             "model": usage.get("model") or "",
         }
-        # Pull live tool from nested panel main if running
+        # Spec #278: Free/Graph badge is Session harness, not burst-ephemeral.
+        # Prefer Participant Session work_mode (context.sessions), then last panel main.
+        try:
+            from app.services.participant_session import session_record_from_context
+
+            sess = session_record_from_context(context, eid)
+            swm = str(sess.get("work_mode") or "").strip().lower()
+            if swm == "free":
+                root["work_mode"] = "free"
+            elif swm == "graph":
+                root["work_mode"] = "graph"
+                sgid = str(sess.get("graph_id") or "").strip()
+                if sgid:
+                    root["graph_id"] = sgid
+        except Exception:
+            pass
+        # Collab copy: pi-agent-core Agent.sessionId only (never expert catalog / roster key).
+        pi_sid = str(row.get("session_instance_id") or "").strip()
+        if pi_sid and not pi_sid.startswith("expert:") and not pi_sid.startswith("pack:") and pi_sid != key:
+            root["session_id"] = pi_sid
+        # Pull live tool / harness fields from nested panel main
         panel = row.get("panel_agents") if isinstance(row.get("panel_agents"), list) else []
         children: list[dict[str, Any]] = []
         for item in panel:
@@ -973,7 +999,33 @@ def agents_from_participants(
             if not item_id:
                 continue
             if not parent:
-                # Merge live main fields into root
+                # Always lift work_mode from last panel Main (Node stamps Free/Graph on every list()).
+                pwm = str(item.get("work_mode") or "").strip().lower()
+                if pwm == "free":
+                    root["work_mode"] = "free"
+                    root.pop("graph_id", None)
+                    root.pop("graph_label", None)
+                elif pwm == "graph" or pwm.startswith("hard_graph"):
+                    root["work_mode"] = "graph"
+                    gid = str(item.get("graph_id") or "").strip()
+                    if not gid and pwm.startswith("hard_graph:"):
+                        parts = pwm.split(":")
+                        gid = parts[1] if len(parts) > 1 else ""
+                    if gid:
+                        root["graph_id"] = gid
+                    glabel = str(item.get("graph_label") or "").strip()
+                    if glabel:
+                        root["graph_label"] = glabel
+                # Collab copy: panel Main may carry pi Agent.sessionId when top-level missed.
+                panel_sid = str(item.get("session_id") or "").strip()
+                if (
+                    panel_sid
+                    and not panel_sid.startswith("expert:")
+                    and not panel_sid.startswith("pack:")
+                    and not root.get("session_id")
+                ):
+                    root["session_id"] = panel_sid
+                # Activity chrome only while running (idle keeps last_detail).
                 if status == "running":
                     root["current_tool"] = str(item.get("current_tool") or "")
                     root["current_action"] = str(item.get("current_action") or root["current_action"])
