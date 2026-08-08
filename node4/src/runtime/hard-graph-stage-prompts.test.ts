@@ -51,8 +51,9 @@ assert.doesNotMatch(sys, /DVWA/i, "no answer-key target names");
 assert.doesNotMatch(sys, /Feedback reads result\.json only/i);
 assert.match(sys, /host-owned|Finding Store|host settlement/i);
 assert.match(sys, /process-chore|Write result\.json/i);
-// #137: unset language → auto policy on stage prompts
+// #137 / #352: unset language → auto Standing-first on stage prompts
 assert.match(sys, /node policy: auto/, "stage unset language → auto policy");
+assert.ok(sys.startsWith("## Standing node policies"), "stage unset Standing-first");
 
 // Spec #274 review: typed StagePromptExtras — injections land when set on input
 const inputWithExtras: typeof inputWithSub & {
@@ -84,7 +85,8 @@ const sysNo = stageSystemPrompt(noSub, task);
 assert.doesNotMatch(sysNo, /Prefer packages/i, "no package steer without subagent tool");
 assert.match(sysNo, /narrate/i, "narration still encouraged");
 
-// --- #137: language policy on stage + subagent + free (shared formatter) ---
+// --- #137 / #352: Standing-first language on stage + subagent + free (shared formatter) ---
+const STANDING_HEADING = "## Standing node policies";
 const baseTask: TaskEnvelope = {
   taskId: "t-lang",
   conversationId: "c-lang",
@@ -115,6 +117,22 @@ for (const code of ["zh-TW", "ja", "zh-CN", "en", "auto"] as const) {
   assert.match(subPrompt, header, `subagent has ${code} policy`);
   assert.match(stagePrompt, /agent-authored narrative|user's language/i);
   assert.match(subPrompt, /agent-authored narrative|user's language/i);
+  // Standing-first: language block precedes stage identity / mission / work
+  assert.ok(stagePrompt.startsWith(STANDING_HEADING), `stage Standing-first for ${code}`);
+  assert.ok(freePrompt.startsWith(STANDING_HEADING), `free Standing-first for ${code}`);
+  assert.ok(subPrompt.startsWith(STANDING_HEADING), `subagent Standing-first for ${code}`);
+  assert.ok(
+    stagePrompt.indexOf(STANDING_HEADING) < stagePrompt.indexOf("Hard Graph stage agent"),
+    `stage Standing before stage identity for ${code}`,
+  );
+  // Mission line is exactly "mission" as its own line (not "mission packs" in policy body).
+  assert.ok(
+    subPrompt.indexOf(STANDING_HEADING) < subPrompt.indexOf("\nmission\n"),
+    `subagent Standing before mission for ${code}`,
+  );
+  assert.match(stagePrompt, /thinking\/reasoning/i, `stage names thinking for ${code}`);
+  assert.match(subPrompt, /thinking\/reasoning/i, `subagent names thinking for ${code}`);
+  assert.match(stagePrompt, /Do not rewrite.*raw tool stdout/i, `stage raw-tool non-rewrite for ${code}`);
 }
 // Distinct zh-TW vs zh-CN on stage
 const stageTw = stageSystemPrompt(inputWithSub, { ...baseTask, agentLanguage: "zh-TW" });

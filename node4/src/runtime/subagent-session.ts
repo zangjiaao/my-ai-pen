@@ -265,8 +265,8 @@ async function collectStructuredResult(input: {
 }
 
 /**
- * Pure subagent system-prompt assembly (#134 / #137).
- * Includes the same Node language policy as free OMP / Hard Graph stages.
+ * Pure subagent system-prompt assembly (#134 / #137 / #352).
+ * Standing language policy first (shared formatter), then mission/work.
  * Exported for harness contract tests.
  */
 export function buildSubagentSystemPrompt(options: {
@@ -280,11 +280,12 @@ export function buildSubagentSystemPrompt(options: {
   const { pack, parentPackId, childTask } = options;
   const nodeLabel = options.nodeType ? `node_type=${options.nodeType}` : "node_type=(free)";
   return [
+    // Standing language policy first (#352) — before mission/work.
+    formatAgentLanguageInjection(childTask.agentLanguage),
+    "",
     ...pack.missionLines,
     "",
     ...pack.workLines,
-    "",
-    formatAgentLanguageInjection(childTask.agentLanguage),
     "",
     `Parent pack: ${parentPackId}. ${nodeLabel}.`,
     `Tools: ${pack.toolNames.join(", ")}.`,

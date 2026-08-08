@@ -125,27 +125,39 @@ ok(
   "繁體 → forced zh-TW",
 );
 
-// --- Policy markers per shipped code ---
+// --- Policy markers per shipped code (#352 Standing shell) ---
+const STANDING_HEADING = "## Standing node policies";
 const narrativeSurfaces =
   /thinking|todo|tool-call|finding ledger|stage completion|handoff|report markdown/i;
+const thinkingSameSurface =
+  /thinking\/reasoning shown in Chat|thinking\/reasoning text shown in Chat/i;
+const sameLanguageNotSideChannel = /same.?language|not an English-only/i;
 const rawToolExclude = /Do not rewrite.*raw tool stdout/i;
 
 for (const code of ["zh-CN", "zh-TW", "en", "ja"] as const) {
   const block = formatAgentLanguageInjection(code);
+  assert.ok(block.startsWith(STANDING_HEADING), `${code} starts with Standing shell`);
   assert.match(block, new RegExp(`node policy: ${code}`), `${code} policy header`);
+  assert.match(block, /### Output language \(node policy:/, `${code} language under Standing as ###`);
   assert.match(block, narrativeSurfaces, `${code} lists narrative surfaces`);
+  assert.match(block, thinkingSameSurface, `${code} names thinking shown in Chat`);
+  assert.match(block, sameLanguageNotSideChannel, `${code} treats thinking as same-language surface`);
   assert.match(block, rawToolExclude, `${code} excludes raw tool rewrite`);
   assert.doesNotMatch(block, /node policy: auto/, `${code} is not auto header`);
 }
-console.log("ok", "forced codes produce distinct policy markers");
+console.log("ok", "forced codes produce distinct Standing policy markers");
 
 const autoBlock = formatAgentLanguageInjection("auto");
+assert.ok(autoBlock.startsWith(STANDING_HEADING), "auto starts with Standing shell");
 assert.match(autoBlock, /node policy: auto/);
 assert.match(autoBlock, /Match the \*\*user's language\*\*/);
 assert.match(autoBlock, narrativeSurfaces);
+assert.match(autoBlock, thinkingSameSurface, "auto names thinking shown in Chat");
+assert.match(autoBlock, sameLanguageNotSideChannel, "auto treats thinking as same-language surface");
+assert.match(autoBlock, rawToolExclude, "auto excludes raw tool rewrite");
 const unsetBlock = formatAgentLanguageInjection(undefined);
 assert.equal(unsetBlock, autoBlock, "unset → same as auto policy");
-console.log("ok", "auto / unset policy");
+console.log("ok", "auto / unset Standing policy");
 
 const jaBlock = formatAgentLanguageInjection("ja");
 assert.match(jaBlock, /in \*\*Japanese\*\*/);
@@ -180,7 +192,7 @@ ok(
   "language sanitize keeps spaces",
 );
 
-// --- Free-path system prompt includes language block ---
+// --- Free-path system prompt includes language block Standing-first (#352) ---
 const baseTask = {
   taskId: "t-lang",
   conversationId: "c-lang",
@@ -194,6 +206,10 @@ for (const code of ["auto", "zh-CN", "zh-TW", "en", "ja"] as const) {
     { ...baseTask, agentLanguage: code === "auto" ? undefined : code },
     PENTEST_ROLE_PACK,
   );
+  assert.ok(
+    prompt.startsWith(STANDING_HEADING),
+    `free path Standing-first for ${code === "auto" ? "unset→auto" : code}`,
+  );
   if (code === "auto") {
     assert.match(prompt, /node policy: auto/, "free path unset → auto");
   } else {
@@ -204,12 +220,19 @@ for (const code of ["auto", "zh-CN", "zh-TW", "en", "ja"] as const) {
     );
   }
   assert.match(prompt, /Output language/, `free path has Output language for ${code}`);
+  // Standing language precedes mission/work pack content (mission lines are not Standing).
+  const standingIdx = prompt.indexOf(STANDING_HEADING);
+  const rolePackIdx = prompt.indexOf("Role pack:");
+  assert.ok(standingIdx === 0, `free Standing at start for ${code}`);
+  assert.ok(rolePackIdx > standingIdx, `free Standing before Role pack for ${code}`);
 }
 const freeAuto = buildSystemPrompt({ ...baseTask, agentLanguage: "auto" }, PENTEST_ROLE_PACK);
 assert.match(freeAuto, /node policy: auto/, "free path explicit auto");
+assert.ok(freeAuto.startsWith(STANDING_HEADING), "free explicit auto Standing-first");
 const freeJp = buildSystemPrompt({ ...baseTask, agentLanguage: "jp" }, PENTEST_ROLE_PACK);
 assert.match(freeJp, /node policy: ja/, "free path alias jp → ja policy");
-console.log("ok", "free-path system prompt language injection");
+assert.ok(freeJp.startsWith(STANDING_HEADING), "free alias jp Standing-first");
+console.log("ok", "free-path system prompt Standing-first language injection");
 
 ok(
   FORCED_LANGUAGE_POLICY_TEMPLATE.includes("{{ language_code }}"),

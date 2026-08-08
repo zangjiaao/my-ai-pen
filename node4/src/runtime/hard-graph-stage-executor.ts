@@ -180,6 +180,10 @@ export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope)
   const hypothesisBlock = input.hypothesisQueueInjection || "";
   const skillL1Block = input.skillL1CatalogInjection || "";
   return [
+    // Standing language policy first (#352) — before stage identity / mission rules.
+    // Same shared formatter as free OMP / subagent (#134 / #137).
+    formatAgentLanguageInjection(task.agentLanguage),
+    "",
     "You are a **Hard Graph stage agent** (Graph × Pi).",
     `Graph: ${input.graphId}  Stage: ${input.stage.id} (index ${input.stageIndex})`,
     input.stage.success ? `Stage success criteria: ${input.stage.success}` : "",
@@ -217,9 +221,6 @@ export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope)
         ].join(" ")
       : "",
     "Fail closed: do not invent surfaces or proof. Destructive actions default-deny unless RoE explicitly allows (record skipped_roe when denied).",
-    "",
-    // Same language policy as free OMP / subagent (#134 / #137).
-    formatAgentLanguageInjection(task.agentLanguage),
     "",
     `Target: ${JSON.stringify(task.target)}`,
     `Scope: ${JSON.stringify(task.scope)}`,

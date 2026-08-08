@@ -131,39 +131,71 @@ export function resolveAgentLanguage(raw: unknown): ResolvedAgentLanguage {
   };
 }
 
+/**
+ * English structural shell for standing node policies (#352).
+ * Language body is nested under this heading; heading stays English for structure stability.
+ * `policy_body` is host-authored multi-line markdown — substituted with delimiter-only defense
+ * (not label alphabet sanitizers that would destroy newlines).
+ */
+export const STANDING_LANGUAGE_SHELL_TEMPLATE = [
+  "## Standing node policies",
+  "",
+  "{{ policy_body }}",
+].join("\n");
+
+/** Forced-code policy body (English). Nested under Standing as ###. */
 export const FORCED_LANGUAGE_POLICY_TEMPLATE = [
-  "## Output language (node policy: {{ language_code }})",
+  "### Output language (node policy: {{ language_code }})",
   "Write **all agent-authored narrative** in **{{ language_prompt_name }}** when this node policy is set.",
   "Surfaces in scope: user-facing chat replies; thinking/reasoning text shown in Chat; todo/plan labels and updates you write; tool-call intent and progress narration; finding ledger fields (title, description, impact, remediation, PoC narrative); stage completion summaries and package/subagent handoff narration you write; report markdown you author.",
+  "Thinking/reasoning shown in Chat is the **same language surface** as chat replies — write it in **{{ language_prompt_name }}**, not as an English-only internal side channel.",
   "Do not default to another natural language for these surfaces — even if mission packs, tool output, or payloads are in English or another language.",
   "Keep technical tokens as-is when needed (paths, headers, CVE ids, code, shell stdout excerpts in proof).",
   "**Do not rewrite** raw tool stdout/stderr, HTTP bodies, or other protocol/machine identifiers; only your narration and booked finding/report text must follow this language.",
 ].join("\n");
 
+/** Auto policy body (English). Nested under Standing as ###. */
 export const AUTO_LANGUAGE_POLICY_TEMPLATE = [
-  "## Output language (node policy: auto)",
+  "### Output language (node policy: auto)",
   "Match the **user's language** for all agent-authored narrative (chat replies; thinking/reasoning text shown in Chat; todo/plan labels and updates you write; tool-call intent and progress narration; finding ledger fields; stage completion summaries and package/subagent handoff narration you write; report markdown you author).",
+  "Thinking/reasoning shown in Chat is the **same language surface** as chat replies — match the user's language there too, not as an English-only internal side channel.",
   "If the user writes Chinese, use Chinese; if English, use English; similarly follow other languages the user uses.",
   "Keep technical tokens as-is when needed (paths, headers, CVE ids, code, shell stdout excerpts in proof).",
   "**Do not rewrite** raw tool stdout/stderr, HTTP bodies, or other protocol/machine identifiers.",
 ].join("\n");
 
 /**
+ * Host-authored multi-line policy body for Standing shell substitution.
+ * Preserves newlines; strips residual template delimiters only (no label alphabet collapse).
+ */
+export function sanitizePolicyBodyForShell(raw: unknown, fallback = ""): string {
+  let s = String(raw ?? "").replace(/\{\{/g, "").replace(/\}\}/g, "");
+  if (!s.trim()) return fallback;
+  return s;
+}
+
+/**
  * Render the language policy block for a system prompt.
  * Shared by free OMP, Hard Graph stage, and subagent session builders.
+ * Returns Standing shell first (English heading) with English policy body nested under it (#352).
  */
 export function formatAgentLanguageInjection(language: unknown): string {
   const resolved = resolveAgentLanguage(language);
-  if (resolved.mode === "auto") {
-    return AUTO_LANGUAGE_POLICY_TEMPLATE;
-  }
+  const policyBody =
+    resolved.mode === "auto"
+      ? AUTO_LANGUAGE_POLICY_TEMPLATE
+      : renderPromptTemplate(
+          FORCED_LANGUAGE_POLICY_TEMPLATE,
+          {
+            language_code: resolved.code,
+            language_prompt_name: resolved.promptName,
+          },
+          { sanitizeValue: sanitizeLanguageTemplateValue },
+        );
   return renderPromptTemplate(
-    FORCED_LANGUAGE_POLICY_TEMPLATE,
-    {
-      language_code: resolved.code,
-      language_prompt_name: resolved.promptName,
-    },
-    { sanitizeValue: sanitizeLanguageTemplateValue },
+    STANDING_LANGUAGE_SHELL_TEMPLATE,
+    { policy_body: policyBody },
+    { sanitizeValue: sanitizePolicyBodyForShell },
   );
 }
 
