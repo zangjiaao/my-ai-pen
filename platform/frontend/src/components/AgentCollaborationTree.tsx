@@ -367,17 +367,20 @@ function AgentRoleBadge({ primary }: { primary: boolean }) {
   );
 }
 
-/** Full Session *instance* id (clipboard + tooltip). Prefer instance over expert catalog. */
+/** Full Session id for clipboard + tooltip (always available for Main with expert). */
 function sessionIdFull(agent: StrixAgentStatus): string {
+  // Prefer platform/Node instance id when present (renews after Delete/Reset reseed).
   const sid = String(agent.session_id || "").trim();
-  // Never treat expert:{catalog} as Session instance — that id is stable across Delete.
-  if (sid && !sid.startsWith("expert:")) return sid;
+  if (sid) return sid;
+  // Fallback: expert catalog key so copy chrome never disappears.
+  const eid = String(agent.expert_id || "").trim();
+  if (eid) return `expert:${eid}`;
   return "";
 }
 
 /**
  * Compact display form for collab chrome (clipboard still gets full id).
- * Instance UUID → first 8 chars.
+ * `expert:{uuid}` / bare uuid → first 8 of the uuid portion.
  */
 function sessionIdDisplay(agent: StrixAgentStatus): string {
   const full = sessionIdFull(agent);
