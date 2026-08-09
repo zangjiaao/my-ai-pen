@@ -55,14 +55,6 @@ export function resolveToolChromeStatusForSession(
   return base;
 }
 
-/** Whether the process status light should pulse (active running only). */
-export function processChromeLightPulse(
-  status: UiExecutionStatus,
-  options?: { sessionActive?: boolean },
-): boolean {
-  return status === "running" && options?.sessionActive !== false;
-}
-
 /**
  * Presentational projection for ThinkingCard (Spec #305 S3 / Issue 13).
  * defaultExpanded is always true; empty body yields no fake placeholder.
