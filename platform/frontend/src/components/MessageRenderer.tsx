@@ -8,6 +8,7 @@ import {
   resolveToolItemStatus,
   toolActivitySummaryLabel,
 } from "../lib/status";
+import { friendlyToolLabel } from "../lib/toolLabels";
 import { isInfraStatusNotice, isLegacyPhaseOnlyStatus } from "../lib/chatStreamChrome";
 import ChoiceCard from "./cards/ChoiceCard";
 import ThinkingCard from "./cards/ThinkingCard";
@@ -420,25 +421,20 @@ function displayToolName(toolName: string, explicitTitle = ""): string {
   const title = explicitTitle.trim();
   if (title) return title;
   const normalized = toolName.trim();
-  const lower = normalized.toLowerCase();
-  const known: Record<string, string> = {
-    exec_command: "Exec Command",
-    write_stdin: "Command Input",
-  };
-  if (known[lower]) return known[lower];
   if (!normalized) return "";
-  return normalized.includes("_")
-    ? normalized.split("_").filter(Boolean).map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(" ")
-    : normalized;
+  return friendlyToolLabel(normalized);
 }
 
 function isCommandToolName(toolName: string): boolean {
-  return /exec command|command input|execute|command|shell|docker|process|stdin|\bscan\b/i.test(toolName);
+  // Match raw ids and Chinese display labels after friendlyToolLabel.
+  return /exec command|command input|execute|command|shell|docker|process|stdin|\bscan\b|执行命令|命令输入/i.test(
+    toolName,
+  );
 }
 
 function toolTitle(toolNames: string[]): string {
   const unique = uniqueStrings(toolNames);
-  if (!unique.length) return "Tool activity";
+  if (!unique.length) return "工具活动";
   if (unique.length === 1) return unique[0];
   return `${unique.slice(0, 2).join(" + ")}${unique.length > 2 ? ` +${unique.length - 2}` : ""}`;
 }
@@ -711,11 +707,16 @@ function normalizeSeverity(value: unknown): string {
  * Hide entirely via localStorage my-ai-pen.workingChrome=0 (see isWorkingChromeEnabled).
  */
 export function AgentPendingCard({ content }: { content: Record<string, unknown> }) {
-  const raw = String(content.text || "Working ...").trim() || "Working ...";
-  // Legacy copy from older clients / tests
+  const raw = String(content.text || "工作中...").trim() || "工作中...";
+  // Legacy English / old pending copy → product Chinese Working chrome
   const title =
-    raw === "思考" || raw === "思考中…" || raw === "思考中"
-      ? "Working ..."
+    raw === "思考" ||
+    raw === "思考中…" ||
+    raw === "思考中" ||
+    raw === "Working ..." ||
+    raw === "Working…" ||
+    /^working\b/i.test(raw)
+      ? "工作中..."
       : raw;
   return (
     <div data-testid="agent-pending-card" className="my-2 min-w-0 max-w-full rounded-md bg-surface-default/70">

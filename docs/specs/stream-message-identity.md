@@ -19,8 +19,8 @@ That forced morph/align/delete logic across the list, live overlay, and React Qu
 - **Delete live-slot-as-Message.** Pending is **chrome**, not a Message.
 - **Message list identity** for progressive text/thinking = **`stream_id` only**.
 - **RQ** remains durable message SOT; **live overlay** is `Record<streamId, stream frame>` only (no live-slot keys).
-- **Working chrome (amends narrow pending):** show **indicator light + `Working ...`** at list tail after successful send; **keep for the whole turn** while progressive thinking/text/tool cards stream above it (product A — Working = agent work state; thinking/tool cards = stream content). Hide only on turn **terminal** (task complete/error/user stop/clear). **Do not** invent Working from tool_output alone. Toggle off for A/B: `localStorage my-ai-pen.workingChrome=0`. Thinking progressive frames carry explicit `content.status` (`running` | `done`); see [`timeline-activity-liveness.md`](timeline-activity-liveness.md).
-- **Tool feedback:** tool_call cards only (icons + description); tools do not clear or reseed Working.
+- **Working chrome (amends narrow pending):** show **indicator light + `工作中...`** at list tail after successful send; **keep for the whole turn** while progressive thinking/text/tool cards stream above it (product A — Working = agent work state; thinking/tool cards = stream content). Hide only on turn **terminal** (task complete/error/user stop/clear). **Do not** invent Working from tool_output alone. Toggle off for A/B: `localStorage my-ai-pen.workingChrome=0`. Thinking progressive frames carry explicit `content.status` (`running` | `done`); see [`timeline-activity-liveness.md`](timeline-activity-liveness.md).
+- **Tool feedback:** tool_call cards only (icons + Chinese tool labels + description); tools do not clear or reseed Working.
 - **Missing `stream_id`:** fail-closed — do not enter live progressive list; do not invent fallback keys.
 - **Prune live:** clear on conversation load/switch, task_complete, task_error, interrupt settle; optionally drop a live key when RQ already has same stream_id with text ≥ live.
 
@@ -45,7 +45,7 @@ Prefer S1–S3 pure functions over ConversationPage integration tests.
 ## Frozen decisions (grilling)
 
 1. End state A — delete live-slot-as-Message  
-2. Pending A — **amended:** whole-turn Working chrome (light + Working ...); not cleared by progressive frames  
+2. Pending A — **amended:** whole-turn Working chrome (light + 工作中...); not cleared by progressive frames  
 3. Data A — RQ SOT + live by stream_id  
 4. Retire `agent_pending` Message type (filter history)  
 5. Tools A — tool_call cards only  

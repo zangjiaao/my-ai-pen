@@ -92,7 +92,7 @@ export type PendingChromeEvent =
   | { type: "tool_output" };
 
 /** Default list-tail Working label (indicator light + this title). */
-export const DEFAULT_PENDING_LABEL = "Working ...";
+export const DEFAULT_PENDING_LABEL = "工作中...";
 
 function optionalTrimmed(value: unknown): string | undefined {
   const s = String(value ?? "").trim();

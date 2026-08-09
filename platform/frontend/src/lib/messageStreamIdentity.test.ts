@@ -262,7 +262,7 @@ import {
   );
   assert.equal(pendingChromeVisible(pending, "conv-compose"), true);
   assert.equal(pending!.expert_name, "渗透大师");
-  assert.equal(pending!.label, "Working ...");
+  assert.equal(pending!.label, "工作中...");
 
   const step = applyProgressiveActivity(
     { live: {}, pending },
@@ -277,14 +277,14 @@ import {
   );
   assert.equal(step.accepted, true);
   assert.ok(step.pending, "Working stays through empty running thinking");
-  assert.equal(step.pending!.label, "Working ...");
+  assert.equal(step.pending!.label, "工作中...");
   assert.ok(step.live["n4-thinking-compose-1"]);
   assert.equal(step.live["n4-thinking-compose-1"]!.content?.status, "running");
 
   // tools never clear Working mid-turn
   const afterTool = reducePendingChrome(step.pending, { type: "tool_output" });
   assert.ok(afterTool);
-  assert.equal(afterTool!.label, "Working ...");
+  assert.equal(afterTool!.label, "工作中...");
   console.log("ok: Working stays through progressive thinking + tools");
 }
 
@@ -304,7 +304,7 @@ import {
   assert.equal(shape.expert_name, "渗透大师");
   assert.equal(shape.expert_display_name, "渗透大师");
   assert.equal(shape.agent_source, "pentest");
-  assert.equal(shape.text, "Working ...");
+  assert.equal(shape.text, "工作中...");
   console.log("ok: Issue 7 pending speaker content shape");
 }
 
@@ -323,17 +323,17 @@ import {
     type: "send_success",
     conversationId: "conv-1",
   });
-  assert.deepEqual(pending, { conversationId: "conv-1", label: "Working ..." });
+  assert.deepEqual(pending, { conversationId: "conv-1", label: "工作中..." });
   assert.equal(pendingChromeVisible(pending, "conv-1"), true);
   assert.equal(pendingChromeVisible(pending, "conv-other"), false);
 
   // tool_output while Working does not clear or reseed
   pending = reducePendingChrome(pending, { type: "tool_output" });
-  assert.deepEqual(pending, { conversationId: "conv-1", label: "Working ..." });
+  assert.deepEqual(pending, { conversationId: "conv-1", label: "工作中..." });
 
   // progressive stream_started keeps Working (coexists with thinking/tool cards)
   pending = reducePendingChrome(pending, { type: "stream_started" });
-  assert.deepEqual(pending, { conversationId: "conv-1", label: "Working ..." });
+  assert.deepEqual(pending, { conversationId: "conv-1", label: "工作中..." });
 
   // tools still never invent Working if already cleared
   pending = reducePendingChrome(null, { type: "tool_output" });
@@ -354,7 +354,7 @@ import {
   assert.equal(pending!.expert_name, "渗透大师");
   assert.equal(pending!.expert_id, "exp-1");
   assert.equal(pending!.agent_source, "pentest");
-  assert.equal(pending!.label, "Working ...");
+  assert.equal(pending!.label, "工作中...");
   console.log("ok: S4 Working chrome carries speaker attribution");
 }
 
