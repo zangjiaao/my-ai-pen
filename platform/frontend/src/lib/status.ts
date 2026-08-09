@@ -37,33 +37,6 @@ export function resolveThinkingUiStatusForSession(
 }
 
 /**
- * Process chrome light status for Tool (and similar) main rows.
- * Same orphan rule as thinking: idle session must not keep a pulsing running light.
- * Empty/missing explicit status → running when session active (in-flight progressive),
- * done when idle (historical / incomplete settle without terminal frame).
- */
-export function resolveToolChromeStatusForSession(
-  value: unknown,
-  options?: { sessionActive?: boolean },
-): UiExecutionStatus {
-  const raw = String(value ?? "").trim();
-  if (!raw) {
-    return options?.sessionActive === false ? "done" : "running";
-  }
-  const base = normalizeExecutionStatus(raw);
-  if (options?.sessionActive === false && base === "running") return "done";
-  return base;
-}
-
-/** Whether the process status light should pulse (active running only). */
-export function processChromeLightPulse(
-  status: UiExecutionStatus,
-  options?: { sessionActive?: boolean },
-): boolean {
-  return status === "running" && options?.sessionActive !== false;
-}
-
-/**
  * Presentational projection for ThinkingCard (Spec #305 S3 / Issue 13).
  * defaultExpanded is always true; empty body yields no fake placeholder.
  * @param options.sessionActive when false, orphan running thinking → 思考完成
