@@ -26,6 +26,7 @@ import { HardGraphPlanStore } from "./hard-graph-plan.js";
 import { createUsageLedgerFromEnv } from "./platform-observability.js";
 import { PanelAgentTracker } from "./panel-agents.js";
 import { normalizeSubagentResult } from "./subagent-result.js";
+import { PENTEST_ROLE_PACK } from "../roles/index.js";
 
 const repoExperts = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -161,6 +162,7 @@ assert.equal(normalizeSubagentResult(settlement.structured).summaryProvided, tru
       toolProfile: "default",
     } as any,
     runtime.task as any,
+    PENTEST_ROLE_PACK,
   );
   assert.match(sys, /host-owned|Finding Store/i);
   assert.match(sys, /do \*\*not\*\* write result\.json as the stage handoff/i);
@@ -214,8 +216,11 @@ assert.equal(normalizeSubagentResult(settlement.structured).summaryProvided, tru
     pack: {
       id: "pentest",
       label: "Pentest",
-      system: "test",
-      tools: ["todo", "fact", "write"],
+      missionLines: [],
+      workLines: [],
+      toolNames: ["todo", "fact", "write"],
+      bookingMode: "finding",
+      settlementNote: "test",
     } as any,
     // Production-like path: bound session writes poison result.json; no hostInject.
     boundSessionFactory: async ({ runtime: childRt }) => {

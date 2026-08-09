@@ -7,12 +7,14 @@ Independent **expert pack** units maintained outside the Node harness.
 **Product:** [`docs/prd.md`](../docs/prd.md) · **Cleanup plan:** [`docs/project-cleanup-plan.md`](../docs/project-cleanup-plan.md)  
 (Experts = target families; stages = skills; pipeline = Case + user @ — not stage-named Experts.)
 
+**Pack authoring (system prompt layers):** Product Agent system prompts assemble as **Base → Profession → Runtime → Task**. Pack `mission.md` / `work.md` are the **Profession** layer (seat how-to only). Put Free vs Graph harness and tool catalogs in **Runtime** (host-owned), this-turn facts in **Task**, and attack-class procedure depth in **skill bodies**—not always-on Profession. Rule of thumb and ownership table: [`docs/specs/prompt-layers.md`](../docs/specs/prompt-layers.md) §3 / §10 (Spec [#386](https://github.com/zangjiaao/my-ai-pen/issues/386)).
+
 | Path | Role |
 |------|------|
 | `experts/<id>/pack.json` | Identity, tools, skills, aliases, booking mode |
-| `experts/<id>/mission.md` | Mission lines (system prompt) |
-| `experts/<id>/work.md` | How-to-work lines |
-| `experts/<id>/skills/` | Pack-scoped methodology skills |
+| `experts/<id>/mission.md` | Mission lines (system prompt **Profession** layer) |
+| `experts/<id>/work.md` | How-to-work lines (**Profession** core; keep short — see prompt-layers Spec) |
+| `experts/<id>/skills/` | Pack-scoped methodology skills (progressive load; not always-on Profession) |
 | `experts/<id>/recipes/` | Optional non-answer templates |
 | `experts/<id>/refs/` | Optional on-demand payload/component cards (pentest: `refs/payloads`, `refs/components`) |
 | `experts/<id>/CHANGELOG.md` | Pack release notes (versioning; L2 sandbox notes when relevant) |

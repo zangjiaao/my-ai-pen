@@ -52,7 +52,6 @@ import {
 } from "./host-stage-settlement.js";
 import { SubagentHost } from "./subagent.js";
 import type { Node4AgentSession } from "./run-node4-agent.js";
-import { formatAgentLanguageInjection } from "./agent-language.js";
 import { formatPriorSnapshotInjection } from "./prior-seed.js";
 import {
   buildL1InputFromProductState,
@@ -88,6 +87,13 @@ import {
   mapPromptFailureToLlmTurnError,
   surfaceLlmTurnFailure,
 } from "./llm-turn-surface.js";
+import {
+  assembleSystemPrompt,
+  buildBaseLayer,
+  buildProfessionLayer,
+  joinNonEmptyPromptParts,
+  type PromptLayers,
+} from "./prompt.js";
 
 /**
  * Deposit host-trusted surfaces/candidates into ledger + Finding Store.
@@ -174,7 +180,16 @@ export function stageIntentPromptLines(stage: {
   return "";
 }
 
-export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope): string {
+/**
+ * Four-layer stage system prompt inputs (T4 / #390).
+ * Same seam as Free Main: Base → Profession → Runtime → Task.
+ * Stage identity/law lives in Runtime; pack mission+work is Profession (P3 required).
+ */
+export function buildStagePromptLayers(
+  input: StageExecutorInput,
+  task: TaskEnvelope,
+  pack: RolePack,
+): PromptLayers {
   const toolList = input.tools.length ? input.tools.join(", ") : "(none)";
   const allowSubagent = input.tools.includes("subagent");
   const allowFinding = input.tools.includes("finding");
@@ -185,11 +200,14 @@ export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope)
   const priorSeed = input.priorSnapshot || "";
   const hypothesisBlock = input.hypothesisQueueInjection || "";
   const skillL1Block = input.skillL1CatalogInjection || "";
-  return [
-    // Standing language policy first (#352) — before stage identity / mission rules.
-    // Same shared formatter as free OMP / subagent (#134 / #137).
-    formatAgentLanguageInjection(task.agentLanguage),
-    "",
+
+  // Base: Standing + seat meta (shared with Free; stage identity is Runtime)
+  const base = buildBaseLayer(task, pack);
+  // Profession: pack mission+work so stages keep proof bar / progressive skill / fact vs finding
+  const profession = buildProfessionLayer(task, pack);
+
+  // Runtime: Graph stage law + capability (skill L1 catalog is Runtime capability)
+  const runtime = joinNonEmptyPromptParts([
     "You are a **Hard Graph stage agent** (Graph × Pi).",
     `Graph: ${input.graphId}  Stage: ${input.stage.id} (index ${input.stageIndex})`,
     input.stage.success ? `Stage success criteria: ${input.stage.success}` : "",
@@ -227,17 +245,35 @@ export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope)
         ].join(" ")
       : "",
     "Fail closed: do not invent surfaces or proof. Destructive actions default-deny unless RoE explicitly allows (record skipped_roe when denied).",
-    "",
+    // Spec: skill L1 is Runtime capability; hyp queue is stage-mode Runtime projection
+    skillL1Block,
+    hypMode ? hypothesisBlock : "",
+  ]);
+
+  // Task: this-turn envelope + handoff / prior seed facts
+  const taskLayer = joinNonEmptyPromptParts([
     `Target: ${JSON.stringify(task.target)}`,
     `Scope: ${JSON.stringify(task.scope)}`,
     `Prior handoff stages: ${input.handoff.completed_stages.join(", ") || "(none)"}`,
     `Known surfaces: ${JSON.stringify(input.handoff.surfaces.slice(0, 20))}`,
     priorSeed,
-    hypothesisBlock,
-    skillL1Block,
-  ]
-    .filter(Boolean)
-    .join("\n");
+    // When hyp mode off, still surface any injected block if host set it (defensive)
+    !hypMode ? hypothesisBlock : "",
+  ]);
+
+  return { base, profession, runtime, task: taskLayer };
+}
+
+/**
+ * Expert Graph stage captain system prompt via the shared four-layer seam (#390).
+ * Pack is required so Profession core (mission+work) is never dropped.
+ */
+export function stageSystemPrompt(
+  input: StageExecutorInput,
+  task: TaskEnvelope,
+  pack: RolePack,
+): string {
+  return assembleSystemPrompt(buildStagePromptLayers(input, task, pack));
 }
 
 /** Exported for harness contract tests (#101 / #125). */
@@ -511,7 +547,7 @@ export function createHardGraphStageExecutor(options: {
       skillL1CatalogInjection,
       confirmedNotSeededInjection,
     };
-    const systemPrompt = stageSystemPrompt(promptInput, task);
+    const systemPrompt = stageSystemPrompt(promptInput, task, pack);
     const userPrompt = stageUserPrompt(promptInput, task, {
       confirmableFeedbackOk: bookStage ? confirmableAtStart : undefined,
     });
