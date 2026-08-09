@@ -250,7 +250,7 @@ import {
   console.log("ok: S2 isProgressiveActivityFrame gates");
 }
 
-// Issue 6: composition send → empty running → pending gone
+// Product A: composition send → empty running → Working stays; tools do not reseed if cleared
 {
   let pending = reducePendingChrome(
     null,
@@ -262,6 +262,7 @@ import {
   );
   assert.equal(pendingChromeVisible(pending, "conv-compose"), true);
   assert.equal(pending!.expert_name, "渗透大师");
+  assert.equal(pending!.label, "Working ...");
 
   const step = applyProgressiveActivity(
     { live: {}, pending },
@@ -275,14 +276,16 @@ import {
     },
   );
   assert.equal(step.accepted, true);
-  assert.equal(step.pending, null, "pending cleared on empty running");
+  assert.ok(step.pending, "Working stays through empty running thinking");
+  assert.equal(step.pending!.label, "Working ...");
   assert.ok(step.live["n4-thinking-compose-1"]);
   assert.equal(step.live["n4-thinking-compose-1"]!.content?.status, "running");
 
-  // tools never reseed after clear
+  // tools never clear Working mid-turn
   const afterTool = reducePendingChrome(step.pending, { type: "tool_output" });
-  assert.equal(afterTool, null);
-  console.log("ok: Issue 6 compose send → empty running → pending gone");
+  assert.ok(afterTool);
+  assert.equal(afterTool!.label, "Working ...");
+  console.log("ok: Working stays through progressive thinking + tools");
 }
 
 // Issue 7: pending content shape for speaker
@@ -301,16 +304,16 @@ import {
   assert.equal(shape.expert_name, "渗透大师");
   assert.equal(shape.expert_display_name, "渗透大师");
   assert.equal(shape.agent_source, "pentest");
-  assert.equal(shape.text, "思考中…");
+  assert.equal(shape.text, "Working ...");
   console.log("ok: Issue 7 pending speaker content shape");
 }
 
 // ---------------------------------------------------------------------------
-// S2: pending chrome lifecycle
+// S2: Working chrome lifecycle (product A — whole turn)
 // ---------------------------------------------------------------------------
 {
   let pending: PendingChrome = null;
-  // tool alone must never show pending
+  // tool alone must never show Working
   pending = reducePendingChrome(pending, { type: "tool_output" });
   assert.equal(pending, null);
   assert.equal(pendingChromeVisible(pending, "conv-1"), false);
@@ -320,25 +323,25 @@ import {
     type: "send_success",
     conversationId: "conv-1",
   });
-  assert.deepEqual(pending, { conversationId: "conv-1", label: "思考中…" });
+  assert.deepEqual(pending, { conversationId: "conv-1", label: "Working ..." });
   assert.equal(pendingChromeVisible(pending, "conv-1"), true);
   assert.equal(pendingChromeVisible(pending, "conv-other"), false);
 
-  // tool_output while pending does not clear or reseed
+  // tool_output while Working does not clear or reseed
   pending = reducePendingChrome(pending, { type: "tool_output" });
-  assert.deepEqual(pending, { conversationId: "conv-1", label: "思考中…" });
+  assert.deepEqual(pending, { conversationId: "conv-1", label: "Working ..." });
 
-  // hide on first stream (incl. empty running activity → stream_started)
+  // progressive stream_started keeps Working (coexists with thinking/tool cards)
   pending = reducePendingChrome(pending, { type: "stream_started" });
-  assert.equal(pending, null);
+  assert.deepEqual(pending, { conversationId: "conv-1", label: "Working ..." });
 
-  // tools never reseed after clear
-  pending = reducePendingChrome(pending, { type: "tool_output" });
+  // tools still never invent Working if already cleared
+  pending = reducePendingChrome(null, { type: "tool_output" });
   assert.equal(pending, null);
-  console.log("ok: pending show after send, hide on stream, not on tool alone");
+  console.log("ok: Working show after send, stay on stream/tools, not invented by tool alone");
 }
 
-// Spec #305 S4: pending chrome may carry speaker attribution
+// Spec #305 S4: Working chrome may carry speaker attribution
 {
   const pending = reducePendingChrome(null, {
     type: "send_success",
@@ -351,8 +354,8 @@ import {
   assert.equal(pending!.expert_name, "渗透大师");
   assert.equal(pending!.expert_id, "exp-1");
   assert.equal(pending!.agent_source, "pentest");
-  assert.equal(pending!.label, "思考中…");
-  console.log("ok: S4 pending chrome carries speaker attribution");
+  assert.equal(pending!.label, "Working ...");
+  console.log("ok: S4 Working chrome carries speaker attribution");
 }
 
 {

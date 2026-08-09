@@ -1732,7 +1732,7 @@ export default function ConversationPage() {
     const attribution = agentAttribution(raw);
     const content = { ...attribution, ...c };
     const message = makeMessage(convId, "agent", msgType, content);
-    // Spec #305: hide pending on first progressive activity (incl. empty running/done thinking).
+    // Working chrome stays through progressive activity (product A — coexists with thinking/tools).
     // Spec #308: Worker process is dialog-only — do not drive Main chrome.
     if (!workerScoped) {
       setPendingChrome((cur) => reducePendingChrome(cur, { type: "stream_started" }));
@@ -2278,7 +2278,7 @@ export default function ConversationPage() {
       shouldContinueExisting && activeConversation?.status === "running",
     );
     // Optimistic user row only — do not write agent_pending into RQ (Spec #276).
-    // Pending is list-tail chrome until the first progressive stream_id frame.
+    // Working is list-tail chrome for the whole turn (until terminal); not a Message.
     setConversationMessageData(convId, (data) => {
       const withoutPending = removeMessageRecords(
         data,

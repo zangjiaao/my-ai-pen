@@ -705,18 +705,27 @@ function normalizeSeverity(value: unknown): string {
   const severity = String(value || "info").toLowerCase();
   return ["critical", "high", "medium", "low", "info"].includes(severity) ? severity : "info";
 }
-/** List-tail pending chrome (Spec #276) — not a Message; may be used outside msg_type agent_pending. */
+/**
+ * List-tail Working chrome — not a Message.
+ * Indicator light + label (default "Working ..."); coexists with thinking/tool cards.
+ * Hide entirely via localStorage my-ai-pen.workingChrome=0 (see isWorkingChromeEnabled).
+ */
 export function AgentPendingCard({ content }: { content: Record<string, unknown> }) {
-  // Spec #305 copy B: lifecycle title only (思考中… / tool wait) — no stacked 「思考」+ label.
-  // Same shell as ThinkingCard (pulse + single title row).
-  const raw = String(content.text || "思考中…").trim() || "思考中…";
-  const title = raw.includes("调用") ? raw : raw === "思考" ? "思考中…" : raw;
+  const raw = String(content.text || "Working ...").trim() || "Working ...";
+  // Legacy copy from older clients / tests
+  const title =
+    raw === "思考" || raw === "思考中…" || raw === "思考中"
+      ? "Working ..."
+      : raw;
   return (
     <div data-testid="agent-pending-card" className="my-2 min-w-0 max-w-full rounded-md bg-surface-default/70">
       <div className="flex w-full min-w-0 items-center gap-1.5 py-1.5 text-left">
         <div className="flex flex-shrink-0 items-center gap-1">
           <span className="inline-flex h-5 w-5 items-center justify-center text-ink-muted">
-            <span className="inline-flex h-2 w-2 animate-pulse rounded-full bg-status-running" />
+            <span
+              data-testid="working-status-light"
+              className="inline-flex h-2 w-2 animate-pulse rounded-full bg-status-running"
+            />
           </span>
         </div>
         <span
