@@ -5,15 +5,26 @@ from datetime import datetime, timezone
 
 from app.models.conversation import Conversation
 
-# Product lifecycle (converged): created | running | incomplete | failed | completed | canceled
-# "paused" / "blocked" normalize into incomplete (not product surfaces).
-CONVERSATION_STATUSES = {"created", "running", "completed", "incomplete", "failed", "canceled"}
+# Product lifecycle: created | running | pause | completed | failed | canceled
+# incomplete: harness half-settle (still allowed); pause: human wait (ChoiceCard authorize).
+# "paused" normalizes to pause; "blocked" still → incomplete.
+CONVERSATION_STATUSES = {
+    "created",
+    "running",
+    "pause",
+    "completed",
+    "incomplete",
+    "failed",
+    "canceled",
+}
 
 CONVERSATION_TRANSITIONS: dict[str, set[str]] = {
     "created": {"running", "canceled"},
-    "running": {"completed", "incomplete", "failed", "canceled"},
+    "running": {"pause", "completed", "incomplete", "failed", "canceled"},
+    # pause = 等人授权 / 人工暂停；可继续或终态
+    "pause": {"running", "canceled", "failed", "completed", "incomplete"},
     "completed": {"running"},
-    "incomplete": {"running", "canceled", "completed", "failed"},
+    "incomplete": {"running", "canceled", "completed", "failed", "pause"},
     "failed": {"running", "canceled"},
     "canceled": {"running"},
 }
@@ -30,7 +41,7 @@ CHECKPOINT_TERMINAL_STATUS = {
 }
 
 # Pre-terminal rows that may be healed from a terminal checkpoint.
-HEALABLE_STATUSES = {"created", "running"}
+HEALABLE_STATUSES = {"created", "running", "pause"}
 
 
 class ConversationStatusError(ValueError):
@@ -43,11 +54,11 @@ def normalize_conversation_status(status: str) -> str:
         return "running"
     if normalized == "cancelled":
         return "canceled"
-    # Product convergence: blocked → incomplete; pause is not a product terminal.
+    # Product: blocked → incomplete (harness); paused/waiting → pause (human wait).
     if normalized == "blocked":
         return "incomplete"
-    if normalized == "paused":
-        return "incomplete"
+    if normalized in {"paused", "waiting", "waiting_user", "awaiting_decision"}:
+        return "pause"
     return normalized
 
 
@@ -63,6 +74,11 @@ def transition_conversation(conv: Conversation, next_status: str) -> None:
     # task_complete can arrive even if bind never flipped created→running
     # (bind race / missing node_id). Bridge through running so settlement sticks.
     if current == "created" and target in {"completed", "incomplete", "failed"}:
+        conv.status = "running"
+        conv.last_active_at = datetime.now(timezone.utc)
+        current = "running"
+    # Authorize card while still created (edge): bridge to running then pause.
+    if current == "created" and target == "pause":
         conv.status = "running"
         conv.last_active_at = datetime.now(timezone.utc)
         current = "running"

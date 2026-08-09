@@ -70,7 +70,7 @@ Operators use the right panel to understand **Case** situation (shared multi-age
 | **Start anchor (E1)** | First successful **task_assign / work-burst enter**; write-once `started_at` |
 | **Work seconds (S)** | Sum of busy intervals — **not** wall-clock `now − started_at` |
 | **Parallel (U)** | **Union** of busy intervals (at least one worker busy), not sum of Main+Sub seconds |
-| **Authorize wait (H1)** | Pending user authorize/cancel is **not** busy |
+| **Authorize wait (H1)** | Pending user authorize/cancel is **not** busy; Task package status **`pause`** (yellow light; not covered by `working` blue) |
 | **Same-user-message auto-retry (R1)** | Same work-burst; mergeable busy until final success/abandon |
 | **API error** | Closes **current** busy interval; updates last activity; **does not** close Case or clear `started_at` |
 | **Reset (Z1)** | No mid-Case reset |
