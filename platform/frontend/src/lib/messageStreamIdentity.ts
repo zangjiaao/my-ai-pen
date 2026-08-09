@@ -469,7 +469,7 @@ export function applyProgressiveActivity(
     conversationId: input.conversationId,
     content,
   });
-  // Notify reducer for symmetry; Working remains until terminal/clear.
+  // First progressive output hides Working (stream_started → clear).
   const pending = reducePendingChrome(state.pending, { type: "stream_started" });
   return { live, pending, accepted: true };
 }
