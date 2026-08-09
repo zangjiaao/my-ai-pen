@@ -1,5 +1,10 @@
 import { useState } from "react";
 import { Brain } from "lucide-react";
+import {
+  PROCESS_LEADING_ICON_SIZE,
+  PROCESS_LEADING_ICON_STROKE,
+  PROCESS_LEADING_SLOT_CLASS,
+} from "../../lib/processChromeIcon";
 import { thinkingCardProjection } from "../../lib/status";
 import MarkdownText from "../MarkdownText";
 
@@ -34,8 +39,8 @@ export default function ThinkingCard({
         className="flex w-full min-w-0 items-center gap-1.5 py-1.5 text-left transition-colors hover:bg-canvas-inset"
       >
         <div className="flex flex-shrink-0 items-center gap-1">
-          <span title="Thinking" className="inline-flex h-5 w-5 items-center justify-center text-ink-muted">
-            <Brain size={15} />
+          <span title="Thinking" className={PROCESS_LEADING_SLOT_CLASS}>
+            <Brain size={PROCESS_LEADING_ICON_SIZE} strokeWidth={PROCESS_LEADING_ICON_STROKE} />
           </span>
         </div>
         <span

@@ -9,6 +9,11 @@ import {
   toolActivitySummaryLabel,
 } from "../lib/status";
 import { friendlyToolLabel } from "../lib/toolLabels";
+import {
+  PROCESS_LEADING_ICON_SIZE,
+  PROCESS_LEADING_ICON_STROKE,
+  PROCESS_LEADING_SLOT_CLASS,
+} from "../lib/processChromeIcon";
 import { isInfraStatusNotice, isLegacyPhaseOnlyStatus } from "../lib/chatStreamChrome";
 import ChoiceCard from "./cards/ChoiceCard";
 import ThinkingCard from "./cards/ThinkingCard";
@@ -183,8 +188,8 @@ type ToolCategory = { key: string; label: string; Icon: LucideIcon };
 function ToolCategoryIcon({ category }: { category: ToolCategory }) {
   const Icon = category.Icon;
   return (
-    <span title={category.label} className="inline-flex h-5 w-5 items-center justify-center text-ink-muted">
-      <Icon size={15} />
+    <span title={category.label} className={PROCESS_LEADING_SLOT_CLASS}>
+      <Icon size={PROCESS_LEADING_ICON_SIZE} strokeWidth={PROCESS_LEADING_ICON_STROKE} />
     </span>
   );
 }
@@ -722,7 +727,7 @@ export function AgentPendingCard({ content }: { content: Record<string, unknown>
     <div data-testid="agent-pending-card" className="my-2 min-w-0 max-w-full rounded-md bg-surface-default/70">
       <div className="flex w-full min-w-0 items-center gap-1.5 py-1.5 text-left">
         <div className="flex flex-shrink-0 items-center gap-1">
-          <span className="inline-flex h-5 w-5 items-center justify-center text-ink-muted">
+          <span className={PROCESS_LEADING_SLOT_CLASS}>
             <span
               data-testid="working-status-light"
               className="inline-flex h-2 w-2 animate-pulse rounded-full bg-status-running"
