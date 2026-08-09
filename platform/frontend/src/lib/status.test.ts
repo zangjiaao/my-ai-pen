@@ -8,8 +8,10 @@ import {
   mergeThinkingStatus,
   mergeToolLifecycleStatus,
   normalizeExecutionStatus,
+  processChromeLightPulse,
   resolveThinkingUiStatus,
   resolveThinkingUiStatusForSession,
+  resolveToolChromeStatusForSession,
   resolveToolItemStatus,
   thinkingCardProjection,
   thinkingLifecycleTitle,
@@ -155,6 +157,37 @@ import {
   );
   assert.equal(toolActivitySummaryLabel([{ status: "error" }]), "失败");
   console.log("ok: S5 toolActivitySummary 执行中 vs success family");
+}
+
+// Process chrome light: orphan running stops pulsing (idle session → done).
+{
+  assert.equal(
+    resolveToolChromeStatusForSession("running", { sessionActive: true }),
+    "running",
+  );
+  assert.equal(
+    resolveToolChromeStatusForSession("running", { sessionActive: false }),
+    "done",
+    "orphan tool running → done light when Case idle",
+  );
+  assert.equal(
+    processChromeLightPulse("running", { sessionActive: true }),
+    true,
+  );
+  assert.equal(
+    processChromeLightPulse("running", { sessionActive: false }),
+    false,
+    "no pulse when session idle even if raw status still running",
+  );
+  assert.equal(
+    processChromeLightPulse("done", { sessionActive: true }),
+    false,
+  );
+  assert.equal(
+    resolveToolChromeStatusForSession("", { sessionActive: false }),
+    "done",
+  );
+  console.log("ok: process chrome light orphan + pulse rules");
 }
 
 // Spec #350 secondary seam: running progressive payload → in-progress tool chrome

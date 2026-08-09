@@ -1,16 +1,18 @@
 import { useState, type ReactNode } from "react";
-import { Brain, Compass, Globe2, Search, ShieldAlert, Terminal, Users, Wrench, type LucideIcon } from "lucide-react";
 import type { Message } from "../lib/types";
 import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../lib/securityTypes";
 import { isTruthyNewFlag } from "../lib/findingNew";
 import {
   normalizeExecutionStatus,
+  processChromeLightPulse,
+  resolveToolChromeStatusForSession,
   resolveToolItemStatus,
   toolActivitySummaryLabel,
 } from "../lib/status";
 import { isInfraStatusNotice, isLegacyPhaseOnlyStatus } from "../lib/chatStreamChrome";
 import ChoiceCard from "./cards/ChoiceCard";
 import ThinkingCard from "./cards/ThinkingCard";
+import { ProcessChromeRow, ProcessStatusLight } from "./ProcessChromeRow";
 import MarkdownText from "./MarkdownText";
 import type { ChoiceDecision } from "../lib/choiceCard";
 import { formatAgentDurationLabel, resultAnchorWorkSeconds } from "../lib/workBurstTime";
@@ -93,43 +95,58 @@ export function shouldShowAgentSpeakerLabel(
   );
   return previousLabel !== label;
 }
-function ToolCallCard({ content, onOpenEvidence }: { content: Record<string, unknown>; onOpenEvidence?: (evidence: Partial<SecurityEvidence>) => void }) {
+function ToolCallCard({
+  content,
+  onOpenEvidence,
+  sessionActive,
+}: {
+  content: Record<string, unknown>;
+  onOpenEvidence?: (evidence: Partial<SecurityEvidence>) => void;
+  /** Idle session: orphan running → solid done light (aligned with Thinking). */
+  sessionActive?: boolean;
+}) {
   const [expanded, setExpanded] = useState(false);
   const toolNames = toolNamesFromContent(content);
   const primaryTool = toolNames[0] || "tool";
   const latestTool = String(content.latest_tool_name || content.tool_name || primaryTool);
-  const status = normalizeExecutionStatus(content.status);
+  const chromeStatus = resolveToolChromeStatusForSession(content.status, { sessionActive });
+  const pulse = processChromeLightPulse(chromeStatus, { sessionActive });
   const stdout = content.stdout as string || "";
   const items = toolItemsFromContent(content);
-  const category = toolPrimaryCategory(toolNames, items.map(item => item.category || ""));
+  // Project item statuses for summary when orphan-running so label matches light (not 执行中 + green).
+  const summaryItems =
+    sessionActive === false
+      ? items.map((item) =>
+          normalizeExecutionStatus(item.status) === "running" ? { ...item, status: "done" } : item,
+        )
+      : items;
   const fallbackSummary = summarizeToolOutput(stdout, latestTool);
-  const resultSummary = summarizeToolActivity(items, latestTool, status);
+  const resultSummary = summarizeToolActivity(summaryItems, latestTool, chromeStatus);
   return (
-    <div data-testid="tool-card" className="my-2 min-w-0 max-w-full rounded-md bg-surface-default/70">
-      <button
-        data-testid="tool-card-toggle"
-        type="button"
-        aria-expanded={expanded}
-        onClick={() => setExpanded(value => !value)}
-        className="flex w-full min-w-0 items-center gap-1.5 py-1.5 text-left transition-colors hover:bg-canvas-inset"
-      >
-        <div className="flex flex-shrink-0 items-center gap-1">
-          <ToolCategoryIcon category={category} />
-        </div>
-        <span className="min-w-0 max-w-[34%] flex-shrink truncate font-sans text-sm text-ink-secondary">{toolTitle(toolNames)}</span>
-        <span className="min-w-0 truncate text-xs text-ink-secondary">{resultSummary}</span>
-        <span className="min-w-6 flex-1" aria-hidden="true" />
-      </button>
-      {expanded && (
+    <ProcessChromeRow
+      testId="tool-card"
+      leading={<ProcessStatusLight status={chromeStatus} pulse={pulse} testId="tool-status-light" />}
+      title={toolTitle(toolNames)}
+      summary={resultSummary}
+      expanded={expanded}
+      onToggle={() => setExpanded((value) => !value)}
+    >
+      {expanded ? (
         <div className="space-y-0.5 pb-1 pl-2">
-          {items.length ? items.map((item, index) => (
-            <ToolItemRow key={`${item.runId || item.evidenceId || index}-${index}`} item={item} onOpenEvidence={onOpenEvidence} />
-          )) : (
+          {items.length ? (
+            items.map((item, index) => (
+              <ToolItemRow
+                key={`${item.runId || item.evidenceId || index}-${index}`}
+                item={item}
+                onOpenEvidence={onOpenEvidence}
+              />
+            ))
+          ) : (
             <div className="py-1 text-xs text-ink-secondary">{fallbackSummary}</div>
           )}
         </div>
-      )}
-    </div>
+      ) : null}
+    </ProcessChromeRow>
   );
 }
 
@@ -177,17 +194,6 @@ function ToolItemRow({ item, onOpenEvidence }: { item: ToolItem; onOpenEvidence?
     </div>
   );
 }
-type ToolCategory = { key: string; label: string; Icon: LucideIcon };
-
-function ToolCategoryIcon({ category }: { category: ToolCategory }) {
-  const Icon = category.Icon;
-  return (
-    <span title={category.label} className="inline-flex h-5 w-5 items-center justify-center text-ink-muted">
-      <Icon size={15} />
-    </span>
-  );
-}
-
 function summarizeToolActivity(items: ToolItem[], fallbackTool: string, aggregateStatus: string): string {
   const candidates: ToolItem[] = items.length
     ? items
@@ -443,54 +449,6 @@ function toolTitle(toolNames: string[]): string {
   return `${unique.slice(0, 2).join(" + ")}${unique.length > 2 ? ` +${unique.length - 2}` : ""}`;
 }
 
-function toolPrimaryCategory(toolNames: string[], explicitCategories: string[] = []): ToolCategory {
-  const explicit = uniqueStrings(explicitCategories.map(normalizeToolCategoryKey));
-  const inferred = toolNames.map(toolCategoryKey);
-  const key = explicit.find(category => category !== "tool") || explicit[0] || inferred.find(category => category !== "tool") || inferred[0] || "tool";
-  return categoryForKey(key);
-}
-
-function toolCategoryKey(toolName: string): string {
-  const name = toolName.toLowerCase();
-  if (/browser|explore|crawl|capture|traffic|discover|asset|surface/.test(name)) return "discovery";
-  if (/http|request|replay|mutate|fetch|curl/.test(name)) return "request";
-  if (/execute|command|shell|docker|process/.test(name)) return "command";
-  if (/finding|vuln|verify|evidence|confirm/.test(name)) return "finding";
-  if (/search|scan|dir|wordlist|enumerate/.test(name)) return "search";
-  if (/agent|message|graph/.test(name)) return "agent";
-  if (/todo|note|think|skill/.test(name)) return "planning";
-  return "tool";
-}
-
-function categoryForKey(key: string): ToolCategory {
-  const normalizedKey = normalizeToolCategoryKey(key);
-  const categories: Record<string, ToolCategory> = {
-    discovery: { key: "discovery", label: "发现", Icon: Compass },
-    request: { key: "request", label: "请求", Icon: Globe2 },
-    command: { key: "command", label: "命令执行", Icon: Terminal },
-    finding: { key: "finding", label: "发现验证", Icon: ShieldAlert },
-    search: { key: "search", label: "搜索枚举", Icon: Search },
-    agent: { key: "agent", label: "Agent", Icon: Users },
-    planning: { key: "planning", label: "规划", Icon: Brain },
-    tool: { key: "tool", label: "工具", Icon: Wrench },
-  };
-  return categories[normalizedKey] || categories.tool;
-}
-
-function normalizeToolCategoryKey(value: string): string {
-  const key = String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
-  if (!key) return "";
-  if (["discovery", "discover", "asset", "assets", "recon"].includes(key)) return "discovery";
-  if (["request", "requests", "http", "http_request", "traffic", "sitemap", "scope"].includes(key)) return "request";
-  if (["command", "commands", "exec", "execution", "shell", "process"].includes(key)) return "command";
-  if (["finding", "findings", "vuln", "vulns", "vulnerability", "vulnerabilities", "evidence", "report"].includes(key)) return "finding";
-  if (["search", "scan", "scanner", "enumeration", "enumerate", "skill", "skills"].includes(key)) return "search";
-  if (["agent", "agents", "subagent", "sub_agent"].includes(key)) return "agent";
-  if (["planning", "plan", "todo", "todos", "note", "notes", "think", "thinking"].includes(key)) return "planning";
-  if (key === "tool" || key === "tools") return "tool";
-  return key;
-}
-
 function summarizeToolOutput(stdout: string, latestTool = "tool"): string {
   const lines = stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
   if (!lines.length) return "Waiting for tool output";
@@ -708,26 +666,16 @@ function normalizeSeverity(value: unknown): string {
 /** List-tail pending chrome (Spec #276) — not a Message; may be used outside msg_type agent_pending. */
 export function AgentPendingCard({ content }: { content: Record<string, unknown> }) {
   // Spec #305 copy B: lifecycle title only (思考中… / tool wait) — no stacked 「思考」+ label.
-  // Same shell as ThinkingCard (pulse + single title row).
+  // Shell: ProcessChromeRow + running pulse light (unified with Tool main row dialect).
   const raw = String(content.text || "思考中…").trim() || "思考中…";
   const title = raw.includes("调用") ? raw : raw === "思考" ? "思考中…" : raw;
   return (
-    <div data-testid="agent-pending-card" className="my-2 min-w-0 max-w-full rounded-md bg-surface-default/70">
-      <div className="flex w-full min-w-0 items-center gap-1.5 py-1.5 text-left">
-        <div className="flex flex-shrink-0 items-center gap-1">
-          <span className="inline-flex h-5 w-5 items-center justify-center text-ink-muted">
-            <span className="inline-flex h-2 w-2 animate-pulse rounded-full bg-status-running" />
-          </span>
-        </div>
-        <span
-          data-testid="agent-pending-title"
-          className="min-w-0 flex-shrink font-sans text-sm text-ink-secondary"
-        >
-          {title}
-        </span>
-        <span className="min-w-6 flex-1" aria-hidden="true" />
-      </div>
-    </div>
+    <ProcessChromeRow
+      testId="agent-pending-card"
+      titleTestId="agent-pending-title"
+      leading={<ProcessStatusLight status="running" pulse testId="pending-status-light" />}
+      title={title}
+    />
   );
 }
 function StatusNotice({ content, msgType }: { content: Record<string, unknown>; msgType?: string }) {
@@ -799,7 +747,13 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
   let body: ReactNode;
   switch (msg_type) {
     case "tool_call":
-      body = <ToolCallCard content={content} onOpenEvidence={onOpenEvidence} />;
+      body = (
+        <ToolCallCard
+          content={content}
+          onOpenEvidence={onOpenEvidence}
+          sessionActive={sessionActive}
+        />
+      );
       break;
     case "vuln_card":
     case "vuln_found":
