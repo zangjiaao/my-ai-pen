@@ -5,8 +5,9 @@ import {
   PROCESS_LEADING_ICON_STROKE,
   PROCESS_LEADING_SLOT_CLASS,
 } from "../../lib/processChromeIcon";
-import { thinkingCardProjection } from "../../lib/status";
+import { resolveThinkingUiStatusForSession, thinkingCardProjection } from "../../lib/status";
 import MarkdownText from "../MarkdownText";
+import { ProcessStatusLight } from "../ProcessStatusLight";
 
 /** Thinking body density: secondary chrome + soft-break for streamed short lines (Spec #327 / #329). */
 const THINKING_MARKDOWN_CLASS =
@@ -14,8 +15,8 @@ const THINKING_MARKDOWN_CLASS =
 
 /**
  * Thinking row — same shell language as ToolCallCard (light bar, no heavy border box).
- * Spec #305: lifecycle title (思考中… / 思考完成), default expanded, no header truncation,
- * empty body allowed while running (no fake placeholder copy).
+ * Leading: pulse status light while running; Brain icon when done.
+ * Spec #305: lifecycle title (思考中… / 思考完成), default expanded, no header truncation.
  * Spec #329: body uses shared dialog Markdown renderer with soft-break + muted density.
  */
 export default function ThinkingCard({
@@ -27,7 +28,16 @@ export default function ThinkingCard({
   sessionActive?: boolean;
 }) {
   const projection = thinkingCardProjection(content, { sessionActive });
+  const uiStatus = resolveThinkingUiStatusForSession(content.status, { sessionActive });
   const [expanded, setExpanded] = useState<boolean>(projection.defaultExpanded);
+  const leading =
+    uiStatus === "running" ? (
+      <ProcessStatusLight status="running" pulse testId="thinking-status-light" />
+    ) : (
+      <span title="Thinking" className={PROCESS_LEADING_SLOT_CLASS}>
+        <Brain size={PROCESS_LEADING_ICON_SIZE} strokeWidth={PROCESS_LEADING_ICON_STROKE} />
+      </span>
+    );
 
   return (
     <div data-testid="thinking-card" className="my-2 min-w-0 max-w-full rounded-md bg-surface-default/70">
@@ -38,11 +48,7 @@ export default function ThinkingCard({
         onClick={() => setExpanded((value) => !value)}
         className="flex w-full min-w-0 items-center gap-1.5 py-1.5 text-left transition-colors hover:bg-canvas-inset"
       >
-        <div className="flex flex-shrink-0 items-center gap-1">
-          <span title="Thinking" className={PROCESS_LEADING_SLOT_CLASS}>
-            <Brain size={PROCESS_LEADING_ICON_SIZE} strokeWidth={PROCESS_LEADING_ICON_STROKE} />
-          </span>
-        </div>
+        <div className="flex flex-shrink-0 items-center gap-1">{leading}</div>
         <span
           data-testid="thinking-card-title"
           className="min-w-0 flex-shrink font-sans text-sm text-ink-secondary"

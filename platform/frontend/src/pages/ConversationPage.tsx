@@ -1732,7 +1732,7 @@ export default function ConversationPage() {
     const attribution = agentAttribution(raw);
     const content = { ...attribution, ...c };
     const message = makeMessage(convId, "agent", msgType, content);
-    // Working chrome stays through progressive activity (product A — coexists with thinking/tools).
+    // Working hides on first progressive thinking/text (tool_output also clears).
     // Spec #308: Worker process is dialog-only — do not drive Main chrome.
     if (!workerScoped) {
       setPendingChrome((cur) => reducePendingChrome(cur, { type: "stream_started" }));

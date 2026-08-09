@@ -10,6 +10,7 @@ import {
   normalizeExecutionStatus,
   resolveThinkingUiStatus,
   resolveThinkingUiStatusForSession,
+  resolveToolChromeStatusForSession,
   resolveToolItemStatus,
   thinkingCardProjection,
   thinkingLifecycleTitle,
@@ -155,6 +156,16 @@ import {
   );
   assert.equal(toolActivitySummaryLabel([{ status: "error" }]), "失败");
   console.log("ok: S5 toolActivitySummary 执行中 vs success family");
+}
+
+// Tool chrome leading status (running light vs done icon)
+{
+  assert.equal(resolveToolChromeStatusForSession("running", { sessionActive: true }), "running");
+  assert.equal(resolveToolChromeStatusForSession("running", { sessionActive: false }), "done");
+  assert.equal(resolveToolChromeStatusForSession("", { sessionActive: true }), "running");
+  assert.equal(resolveToolChromeStatusForSession("", { sessionActive: false }), "done");
+  assert.equal(resolveToolChromeStatusForSession("error", { sessionActive: true }), "fail");
+  console.log("ok: tool chrome status for leading light/icon");
 }
 
 // Spec #350 secondary seam: running progressive payload → in-progress tool chrome

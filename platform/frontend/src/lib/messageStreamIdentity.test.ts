@@ -250,7 +250,7 @@ import {
   console.log("ok: S2 isProgressiveActivityFrame gates");
 }
 
-// Product A: composition send → empty running → Working stays; tools do not reseed if cleared
+// Working: send → first progressive output hides; tools clear if still showing; never invent
 {
   let pending = reducePendingChrome(
     null,
@@ -276,16 +276,21 @@ import {
     },
   );
   assert.equal(step.accepted, true);
-  assert.ok(step.pending, "Working stays through empty running thinking");
-  assert.equal(step.pending!.label, "工作中...");
+  assert.equal(step.pending, null, "Working hides on first progressive output");
   assert.ok(step.live["n4-thinking-compose-1"]);
   assert.equal(step.live["n4-thinking-compose-1"]!.content?.status, "running");
 
-  // tools never clear Working mid-turn
-  const afterTool = reducePendingChrome(step.pending, { type: "tool_output" });
-  assert.ok(afterTool);
-  assert.equal(afterTool!.label, "工作中...");
-  console.log("ok: Working stays through progressive thinking + tools");
+  // tool_output alone never invents Working
+  const afterTool = reducePendingChrome(null, { type: "tool_output" });
+  assert.equal(afterTool, null);
+  // tool_output clears pre-output Working
+  pending = reducePendingChrome(
+    null,
+    buildPendingSendSuccessEvent({ conversationId: "conv-tool-first" }),
+  );
+  pending = reducePendingChrome(pending, { type: "tool_output" });
+  assert.equal(pending, null, "first tool output also hides Working");
+  console.log("ok: Working until first output (thinking or tool)");
 }
 
 // Issue 7: pending content shape for speaker
@@ -309,11 +314,11 @@ import {
 }
 
 // ---------------------------------------------------------------------------
-// S2: Working chrome lifecycle (product A — whole turn)
+// S2: Working chrome lifecycle — until first agent output only
 // ---------------------------------------------------------------------------
 {
   let pending: PendingChrome = null;
-  // tool alone must never show Working
+  // tool alone must never invent Working
   pending = reducePendingChrome(pending, { type: "tool_output" });
   assert.equal(pending, null);
   assert.equal(pendingChromeVisible(pending, "conv-1"), false);
@@ -327,18 +332,14 @@ import {
   assert.equal(pendingChromeVisible(pending, "conv-1"), true);
   assert.equal(pendingChromeVisible(pending, "conv-other"), false);
 
-  // tool_output while Working does not clear or reseed
-  pending = reducePendingChrome(pending, { type: "tool_output" });
-  assert.deepEqual(pending, { conversationId: "conv-1", label: "工作中..." });
-
-  // progressive stream_started keeps Working (coexists with thinking/tool cards)
+  // first stream hides Working
   pending = reducePendingChrome(pending, { type: "stream_started" });
-  assert.deepEqual(pending, { conversationId: "conv-1", label: "工作中..." });
-
-  // tools still never invent Working if already cleared
-  pending = reducePendingChrome(null, { type: "tool_output" });
   assert.equal(pending, null);
-  console.log("ok: Working show after send, stay on stream/tools, not invented by tool alone");
+
+  // tools never reseed after clear
+  pending = reducePendingChrome(pending, { type: "tool_output" });
+  assert.equal(pending, null);
+  console.log("ok: Working after send, hide on first stream, not invented by tool alone");
 }
 
 // Spec #305 S4: Working chrome may carry speaker attribution

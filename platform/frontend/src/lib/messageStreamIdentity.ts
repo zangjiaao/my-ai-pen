@@ -5,8 +5,8 @@
  * No live-slot Message dual identity.
  * Spec #305: thinking may carry content.status; empty running thinking upserts; Working may carry speaker attribution.
  *
- * Working chrome (product A): show after send; stay through progressive thinking/text/tools;
- * hide only on turn terminal / clear. Thinking + tool cards are separate stream content.
+ * Working chrome: show after send until first agent output (thinking/text/tool);
+ * then hide. Thinking/tool cards use light while running, icon when done.
  * Toggle off for A/B: localStorage `my-ai-pen.workingChrome` = `0` | `off` | `false`.
  */
 
@@ -84,11 +84,13 @@ export type PendingChromeEvent =
       expert_display_name?: string;
       agent_source?: string;
     }
-  /** Progressive thinking/text started — keep Working (no longer clears). */
+  /** First progressive thinking/text — hide Working (content is now on the timeline). */
   | { type: "stream_started" }
   | { type: "terminal" }
   | { type: "clear" }
-  /** Tool feedback must never show or reseed Working chrome. */
+  /**
+   * Tool progressive frame: hide Working if present; never invent Working from tools alone.
+   */
   | { type: "tool_output" };
 
 /** Default list-tail Working label (indicator light + this title). */
@@ -101,7 +103,7 @@ function optionalTrimmed(value: unknown): string | undefined {
 
 /**
  * Pure state machine for list-tail Working chrome.
- * Show after send; keep through progressive frames; clear only on terminal/clear.
+ * Show after send until first agent output (thinking/text/tool) or turn terminal.
  */
 export function reducePendingChrome(
   current: PendingChrome,
@@ -123,10 +125,9 @@ export function reducePendingChrome(
       if (agentSource) chrome.agent_source = agentSource;
       return chrome;
     }
-    // Product A: progressive activity coexists with Working — do not clear.
+    // First progressive content (thinking/text/tool) or settle — hide Working.
     case "stream_started":
     case "tool_output":
-      return current;
     case "terminal":
     case "clear":
       return null;
@@ -426,8 +427,7 @@ export function pendingChromeSpeakerContent(
 }
 
 /**
- * Pure operator path: progressive frame → live upsert.
- * Working chrome stays (stream_started no longer clears — product A).
+ * Pure operator path: progressive frame → live upsert + hide Working on first output.
  * Mirrors ConversationPage upsertStreamedAgentText accept gate without React.
  */
 export function applyProgressiveActivity(

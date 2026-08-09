@@ -5,6 +5,7 @@ import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../
 import { isTruthyNewFlag } from "../lib/findingNew";
 import {
   normalizeExecutionStatus,
+  resolveToolChromeStatusForSession,
   resolveToolItemStatus,
   toolActivitySummaryLabel,
 } from "../lib/status";
@@ -17,6 +18,7 @@ import {
 import { isInfraStatusNotice, isLegacyPhaseOnlyStatus } from "../lib/chatStreamChrome";
 import ChoiceCard from "./cards/ChoiceCard";
 import ThinkingCard from "./cards/ThinkingCard";
+import { ProcessStatusLight } from "./ProcessStatusLight";
 import MarkdownText from "./MarkdownText";
 import type { ChoiceDecision } from "../lib/choiceCard";
 import { formatAgentDurationLabel, resultAnchorWorkSeconds } from "../lib/workBurstTime";
@@ -99,17 +101,32 @@ export function shouldShowAgentSpeakerLabel(
   );
   return previousLabel !== label;
 }
-function ToolCallCard({ content, onOpenEvidence }: { content: Record<string, unknown>; onOpenEvidence?: (evidence: Partial<SecurityEvidence>) => void }) {
+function ToolCallCard({
+  content,
+  onOpenEvidence,
+  sessionActive,
+}: {
+  content: Record<string, unknown>;
+  onOpenEvidence?: (evidence: Partial<SecurityEvidence>) => void;
+  sessionActive?: boolean;
+}) {
   const [expanded, setExpanded] = useState(false);
   const toolNames = toolNamesFromContent(content);
   const primaryTool = toolNames[0] || "tool";
   const latestTool = String(content.latest_tool_name || content.tool_name || primaryTool);
-  const status = normalizeExecutionStatus(content.status);
+  const chromeStatus = resolveToolChromeStatusForSession(content.status, { sessionActive });
   const stdout = content.stdout as string || "";
   const items = toolItemsFromContent(content);
   const category = toolPrimaryCategory(toolNames, items.map(item => item.category || ""));
   const fallbackSummary = summarizeToolOutput(stdout, latestTool);
-  const resultSummary = summarizeToolActivity(items, latestTool, status);
+  const resultSummary = summarizeToolActivity(items, latestTool, chromeStatus);
+  // Running → pulse light; done/fail → category icon (same as thinking: light while in flight).
+  const leading =
+    chromeStatus === "running" ? (
+      <ProcessStatusLight status="running" pulse testId="tool-status-light" />
+    ) : (
+      <ToolCategoryIcon category={category} />
+    );
   return (
     <div data-testid="tool-card" className="my-2 min-w-0 max-w-full rounded-md bg-surface-default/70">
       <button
@@ -119,9 +136,7 @@ function ToolCallCard({ content, onOpenEvidence }: { content: Record<string, unk
         onClick={() => setExpanded(value => !value)}
         className="flex w-full min-w-0 items-center gap-1.5 py-1.5 text-left transition-colors hover:bg-canvas-inset"
       >
-        <div className="flex flex-shrink-0 items-center gap-1">
-          <ToolCategoryIcon category={category} />
-        </div>
+        <div className="flex flex-shrink-0 items-center gap-1">{leading}</div>
         <span className="min-w-0 max-w-[34%] flex-shrink truncate font-sans text-sm text-ink-secondary">{toolTitle(toolNames)}</span>
         <span className="min-w-0 truncate text-xs text-ink-secondary">{resultSummary}</span>
         <span className="min-w-6 flex-1" aria-hidden="true" />
@@ -727,12 +742,7 @@ export function AgentPendingCard({ content }: { content: Record<string, unknown>
     <div data-testid="agent-pending-card" className="my-2 min-w-0 max-w-full rounded-md bg-surface-default/70">
       <div className="flex w-full min-w-0 items-center gap-1.5 py-1.5 text-left">
         <div className="flex flex-shrink-0 items-center gap-1">
-          <span className={PROCESS_LEADING_SLOT_CLASS}>
-            <span
-              data-testid="working-status-light"
-              className="inline-flex h-2 w-2 animate-pulse rounded-full bg-status-running"
-            />
-          </span>
+          <ProcessStatusLight status="running" pulse testId="working-status-light" />
         </div>
         <span
           data-testid="agent-pending-title"
@@ -814,7 +824,13 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
   let body: ReactNode;
   switch (msg_type) {
     case "tool_call":
-      body = <ToolCallCard content={content} onOpenEvidence={onOpenEvidence} />;
+      body = (
+        <ToolCallCard
+          content={content}
+          onOpenEvidence={onOpenEvidence}
+          sessionActive={sessionActive}
+        />
+      );
       break;
     case "vuln_card":
     case "vuln_found":
