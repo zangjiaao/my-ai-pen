@@ -14,6 +14,18 @@ export function packageStatusDotClass(
   const s = String(status || "")
     .trim()
     .toLowerCase();
+  // yellow first: paused / authorize wait must not be covered by working=blue
+  // (canonical status is paused; pause/waiting_* are aliases)
+  if (
+    s === "paused" ||
+    s === "pause" ||
+    s === "incomplete" ||
+    s === "pending" ||
+    s === "waiting" ||
+    s === "waiting_user"
+  ) {
+    return "bg-severity-medium";
+  }
   // Live work-burst wins (platform workers / status=running).
   if (working === true || s === "running") {
     return "animate-pulse bg-status-running";
@@ -28,15 +40,6 @@ export function packageStatusDotClass(
     s === "starting"
   ) {
     return "animate-pulse bg-status-running";
-  }
-  // yellow: authorize wait / Task pause / incomplete package
-  if (
-    s === "incomplete" ||
-    s === "paused" ||
-    s === "pending" ||
-    s === "waiting"
-  ) {
-    return "bg-severity-medium";
   }
   // red: latest package error / cancel / abort
   if (
@@ -74,6 +77,17 @@ export function packageStatusTitle(
   const s = String(status || "")
     .trim()
     .toLowerCase();
+  // paused / authorize wait (title must match yellow light even if working)
+  if (
+    s === "paused" ||
+    s === "pause" ||
+    s === "waiting" ||
+    s === "waiting_user" ||
+    s === "pending"
+  ) {
+    return "等待授权";
+  }
+  if (s === "incomplete") return "等待/暂停";
   if (working === true || s === "running") return "运行中";
   if (
     s === "tool_running" ||
@@ -85,8 +99,6 @@ export function packageStatusTitle(
   ) {
     return "运行中";
   }
-  if (s === "incomplete" || s === "paused") return "等待/暂停";
-  if (s === "pending" || s === "waiting") return "等待";
   if (s === "failed") return "错误";
   if (s === "canceled" || s === "cancelled" || s === "stopped" || s === "aborted") {
     return "已中止";
@@ -109,15 +121,18 @@ export function resolvePackageLightStatus(input: {
   agentStatus?: string | null;
   working?: boolean;
 }): string {
-  if (input.working === true) return "running";
   const pkg = String(input.packageStatus || "")
     .trim()
     .toLowerCase();
+  // paused wins over working (authorize wait keeps working=true for Send interrupt).
+  if (pkg === "paused" || pkg === "pause" || pkg === "waiting_user") {
+    return "paused";
+  }
+  if (input.working === true) return "running";
   // Authoritative package terminals / running always win for Main sync.
   if (
     pkg === "running" ||
     pkg === "incomplete" ||
-    pkg === "paused" ||
     pkg === "failed" ||
     pkg === "canceled" ||
     pkg === "cancelled" ||
@@ -129,6 +144,9 @@ export function resolvePackageLightStatus(input: {
   const a = String(input.agentStatus || "")
     .trim()
     .toLowerCase();
+  if (a === "paused" || a === "pause" || a === "waiting" || a === "waiting_user" || a === "pending") {
+    return "paused";
+  }
   if (
     a === "running" ||
     a === "tool_running" ||
@@ -140,8 +158,8 @@ export function resolvePackageLightStatus(input: {
   ) {
     return "running";
   }
-  if (a === "incomplete" || a === "paused" || a === "pending" || a === "waiting") {
-    return a === "pending" || a === "waiting" ? "incomplete" : a;
+  if (a === "incomplete") {
+    return "incomplete";
   }
   if (
     a === "failed" ||

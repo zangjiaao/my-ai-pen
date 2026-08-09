@@ -5,12 +5,20 @@ import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../
 import { isTruthyNewFlag } from "../lib/findingNew";
 import {
   normalizeExecutionStatus,
+  resolveToolChromeStatusForSession,
   resolveToolItemStatus,
   toolActivitySummaryLabel,
 } from "../lib/status";
+import { friendlyToolLabel } from "../lib/toolLabels";
+import {
+  PROCESS_LEADING_ICON_SIZE,
+  PROCESS_LEADING_ICON_STROKE,
+  PROCESS_LEADING_SLOT_CLASS,
+} from "../lib/processChromeIcon";
 import { isInfraStatusNotice, isLegacyPhaseOnlyStatus } from "../lib/chatStreamChrome";
 import ChoiceCard from "./cards/ChoiceCard";
 import ThinkingCard from "./cards/ThinkingCard";
+import { ProcessStatusLight } from "./ProcessStatusLight";
 import MarkdownText from "./MarkdownText";
 import type { ChoiceDecision } from "../lib/choiceCard";
 import { formatAgentDurationLabel, resultAnchorWorkSeconds } from "../lib/workBurstTime";
@@ -93,17 +101,32 @@ export function shouldShowAgentSpeakerLabel(
   );
   return previousLabel !== label;
 }
-function ToolCallCard({ content, onOpenEvidence }: { content: Record<string, unknown>; onOpenEvidence?: (evidence: Partial<SecurityEvidence>) => void }) {
+function ToolCallCard({
+  content,
+  onOpenEvidence,
+  sessionActive,
+}: {
+  content: Record<string, unknown>;
+  onOpenEvidence?: (evidence: Partial<SecurityEvidence>) => void;
+  sessionActive?: boolean;
+}) {
   const [expanded, setExpanded] = useState(false);
   const toolNames = toolNamesFromContent(content);
   const primaryTool = toolNames[0] || "tool";
   const latestTool = String(content.latest_tool_name || content.tool_name || primaryTool);
-  const status = normalizeExecutionStatus(content.status);
+  const chromeStatus = resolveToolChromeStatusForSession(content.status, { sessionActive });
   const stdout = content.stdout as string || "";
   const items = toolItemsFromContent(content);
   const category = toolPrimaryCategory(toolNames, items.map(item => item.category || ""));
   const fallbackSummary = summarizeToolOutput(stdout, latestTool);
-  const resultSummary = summarizeToolActivity(items, latestTool, status);
+  const resultSummary = summarizeToolActivity(items, latestTool, chromeStatus);
+  // Running → pulse light; done/fail → category icon (same as thinking: light while in flight).
+  const leading =
+    chromeStatus === "running" ? (
+      <ProcessStatusLight status="running" pulse testId="tool-status-light" />
+    ) : (
+      <ToolCategoryIcon category={category} />
+    );
   return (
     <div data-testid="tool-card" className="my-2 min-w-0 max-w-full rounded-md bg-surface-default/70">
       <button
@@ -113,9 +136,7 @@ function ToolCallCard({ content, onOpenEvidence }: { content: Record<string, unk
         onClick={() => setExpanded(value => !value)}
         className="flex w-full min-w-0 items-center gap-1.5 py-1.5 text-left transition-colors hover:bg-canvas-inset"
       >
-        <div className="flex flex-shrink-0 items-center gap-1">
-          <ToolCategoryIcon category={category} />
-        </div>
+        <div className="flex flex-shrink-0 items-center gap-1">{leading}</div>
         <span className="min-w-0 max-w-[34%] flex-shrink truncate font-sans text-sm text-ink-secondary">{toolTitle(toolNames)}</span>
         <span className="min-w-0 truncate text-xs text-ink-secondary">{resultSummary}</span>
         <span className="min-w-6 flex-1" aria-hidden="true" />
@@ -182,8 +203,8 @@ type ToolCategory = { key: string; label: string; Icon: LucideIcon };
 function ToolCategoryIcon({ category }: { category: ToolCategory }) {
   const Icon = category.Icon;
   return (
-    <span title={category.label} className="inline-flex h-5 w-5 items-center justify-center text-ink-muted">
-      <Icon size={15} />
+    <span title={category.label} className={PROCESS_LEADING_SLOT_CLASS}>
+      <Icon size={PROCESS_LEADING_ICON_SIZE} strokeWidth={PROCESS_LEADING_ICON_STROKE} />
     </span>
   );
 }
@@ -420,25 +441,20 @@ function displayToolName(toolName: string, explicitTitle = ""): string {
   const title = explicitTitle.trim();
   if (title) return title;
   const normalized = toolName.trim();
-  const lower = normalized.toLowerCase();
-  const known: Record<string, string> = {
-    exec_command: "Exec Command",
-    write_stdin: "Command Input",
-  };
-  if (known[lower]) return known[lower];
   if (!normalized) return "";
-  return normalized.includes("_")
-    ? normalized.split("_").filter(Boolean).map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(" ")
-    : normalized;
+  return friendlyToolLabel(normalized);
 }
 
 function isCommandToolName(toolName: string): boolean {
-  return /exec command|command input|execute|command|shell|docker|process|stdin|\bscan\b/i.test(toolName);
+  // Match raw ids and Chinese display labels after friendlyToolLabel.
+  return /exec command|command input|execute|command|shell|docker|process|stdin|\bscan\b|执行命令|命令输入/i.test(
+    toolName,
+  );
 }
 
 function toolTitle(toolNames: string[]): string {
   const unique = uniqueStrings(toolNames);
-  if (!unique.length) return "Tool activity";
+  if (!unique.length) return "工具活动";
   if (unique.length === 1) return unique[0];
   return `${unique.slice(0, 2).join(" + ")}${unique.length > 2 ? ` +${unique.length - 2}` : ""}`;
 }
@@ -705,19 +721,28 @@ function normalizeSeverity(value: unknown): string {
   const severity = String(value || "info").toLowerCase();
   return ["critical", "high", "medium", "low", "info"].includes(severity) ? severity : "info";
 }
-/** List-tail pending chrome (Spec #276) — not a Message; may be used outside msg_type agent_pending. */
+/**
+ * List-tail Working chrome — not a Message.
+ * Indicator light + label (default "Working ..."); coexists with thinking/tool cards.
+ * Hide entirely via localStorage my-ai-pen.workingChrome=0 (see isWorkingChromeEnabled).
+ */
 export function AgentPendingCard({ content }: { content: Record<string, unknown> }) {
-  // Spec #305 copy B: lifecycle title only (思考中… / tool wait) — no stacked 「思考」+ label.
-  // Same shell as ThinkingCard (pulse + single title row).
-  const raw = String(content.text || "思考中…").trim() || "思考中…";
-  const title = raw.includes("调用") ? raw : raw === "思考" ? "思考中…" : raw;
+  const raw = String(content.text || "工作中...").trim() || "工作中...";
+  // Legacy English / old pending copy → product Chinese Working chrome
+  const title =
+    raw === "思考" ||
+    raw === "思考中…" ||
+    raw === "思考中" ||
+    raw === "Working ..." ||
+    raw === "Working…" ||
+    /^working\b/i.test(raw)
+      ? "工作中..."
+      : raw;
   return (
     <div data-testid="agent-pending-card" className="my-2 min-w-0 max-w-full rounded-md bg-surface-default/70">
       <div className="flex w-full min-w-0 items-center gap-1.5 py-1.5 text-left">
         <div className="flex flex-shrink-0 items-center gap-1">
-          <span className="inline-flex h-5 w-5 items-center justify-center text-ink-muted">
-            <span className="inline-flex h-2 w-2 animate-pulse rounded-full bg-status-running" />
-          </span>
+          <ProcessStatusLight status="running" pulse testId="working-status-light" />
         </div>
         <span
           data-testid="agent-pending-title"
@@ -799,7 +824,13 @@ export default function MessageRenderer({ message, agentNameById = {}, previousM
   let body: ReactNode;
   switch (msg_type) {
     case "tool_call":
-      body = <ToolCallCard content={content} onOpenEvidence={onOpenEvidence} />;
+      body = (
+        <ToolCallCard
+          content={content}
+          onOpenEvidence={onOpenEvidence}
+          sessionActive={sessionActive}
+        />
+      );
       break;
     case "vuln_card":
     case "vuln_found":

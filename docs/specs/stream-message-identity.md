@@ -19,8 +19,8 @@ That forced morph/align/delete logic across the list, live overlay, and React Qu
 - **Delete live-slot-as-Message.** Pending is **chrome**, not a Message.
 - **Message list identity** for progressive text/thinking = **`stream_id` only**.
 - **RQ** remains durable message SOT; **live overlay** is `Record<streamId, stream frame>` only (no live-slot keys).
-- **Pending chrome:** show “思考中…” at list tail after successful send while conversation is running and no progressive stream yet; hide on first progressive **activity** for the turn — thinking/text with `stream_id`, including **empty running thinking** (`content.status === "running"`, Spec #305), or task complete/error/user stop. **Do not** re-seed pending on tool gaps. Thinking progressive frames carry explicit `content.status` (`running` | `done`); see [`timeline-activity-liveness.md`](timeline-activity-liveness.md).
-- **Tool feedback:** tool_call cards only (remove tool_output → pending reseed).
+- **Working chrome:** show **indicator light + `工作中...`** at list tail after successful send **until first agent output** (thinking/text progressive or tool_output); then hide. **Do not** invent Working from tool alone when chrome already null. Toggle off for A/B: `localStorage my-ai-pen.workingChrome=0`.
+- **Thinking / tool leading:** pulse **status light while running**; **category/Brain icon when done/fail**. Cards remain stream content (Chinese labels for tools).
 - **Missing `stream_id`:** fail-closed — do not enter live progressive list; do not invent fallback keys.
 - **Prune live:** clear on conversation load/switch, task_complete, task_error, interrupt settle; optionally drop a live key when RQ already has same stream_id with text ≥ live.
 
@@ -29,7 +29,7 @@ That forced morph/align/delete logic across the list, live overlay, and React Qu
 | Seam | Behavior |
 |------|----------|
 | **S1 pure identity module** | `messageListKey`; live map key = stream_id only; no live-slot helpers required after delete; merge progressive text |
-| **S2 pending chrome lifecycle** | pure state machine: show after send; hide on first stream / terminal; never show from tool_output alone |
+| **S2 Working chrome lifecycle** | show after send; hide on first stream/tool_output/terminal; never invent from tool alone; `isWorkingChromeEnabled` gate |
 | **S3 live prune** | boundary clear; catch-up prune when RQ has stream with ≥ text |
 | **S4 display merge** | RQ messages (filter agent_pending) ∪ live by stream_id; list React keys by stream_id |
 
@@ -45,7 +45,7 @@ Prefer S1–S3 pure functions over ConversationPage integration tests.
 ## Frozen decisions (grilling)
 
 1. End state A — delete live-slot-as-Message  
-2. Pending A — narrow chrome window only  
+2. Pending A — Working chrome until first agent output (light + 工作中...); thinking/tool cards use light while running, icon when done
 3. Data A — RQ SOT + live by stream_id  
 4. Retire `agent_pending` Message type (filter history)  
 5. Tools A — tool_call cards only  

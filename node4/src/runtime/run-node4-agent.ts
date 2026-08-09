@@ -293,20 +293,26 @@ export async function createBoundNode4Session(
     thinkingLevel: options.thinkingLevel ?? "medium",
     sessionId: options.sessionId,
     afterToolCall: async (context: AfterToolCallContext) => {
+      // pi-agent-core: execute() never sets isError unless throw; product tools put
+      // isError on result.details (textResult(_, { isError: true })). Promote so
+      // tool_execution_end.isError matches the tool contract.
+      const promoteError = toolResultDetailsIsError(context.result) && !context.isError;
+      const isError = Boolean(context.isError) || promoteError;
       const tracker = runtime.lifecycle.midRunTodo;
-      if (!tracker) return undefined;
-      const nudge = noteToolForMidRunTodoNudge(tracker, context.toolCall.name, {
-        openTodoCount: runtime.todo.openCount(),
-        isError: Boolean(context.isError),
-      });
-      if (nudge) {
-        try {
-          followUpHold.fn?.(nudge);
-        } catch {
-          /* non-fatal */
+      if (tracker) {
+        const nudge = noteToolForMidRunTodoNudge(tracker, context.toolCall.name, {
+          openTodoCount: runtime.todo.openCount(),
+          isError,
+        });
+        if (nudge) {
+          try {
+            followUpHold.fn?.(nudge);
+          } catch {
+            /* non-fatal */
+          }
         }
       }
-      return undefined;
+      return promoteError ? { isError: true } : undefined;
     },
   });
 
@@ -316,9 +322,66 @@ export async function createBoundNode4Session(
   return { session, segmentCounter };
 }
 
+export type NamedToolInvocation = { toolCallId: string; toolName: string };
+
 /**
- * Sole product fan-out for tool start/end → platform tool_output + segment counters.
+ * Product tools return `{ content, details: { isError?: true } }` via textResult/jsonResult.
+ * pi-agent-core AgentToolResult has no top-level isError — only content/details/terminate.
+ * Read the product convention from details.
+ */
+export function toolResultDetailsIsError(result: unknown): boolean {
+  if (!result || typeof result !== "object") return false;
+  const details = (result as { details?: unknown }).details;
+  if (!details || typeof details !== "object" || Array.isArray(details)) return false;
+  return Boolean((details as { isError?: unknown }).isError);
+}
+
+/**
+ * Resolve terminal tool status from pi tool_execution_end (primary) plus product details.
+ * Prefer event.isError after afterToolCall promotion; details.isError is belt for bare bridge tests.
+ */
+export function resolveToolExecutionEndIsError(event: {
+  isError?: boolean;
+  result?: unknown;
+}): boolean {
+  if (event.isError) return true;
+  return toolResultDetailsIsError(event.result);
+}
+
+/**
+ * Spec #350: extract tool invocations whose **name and id are both known** from an
+ * assistant partial (toolcall_start / toolcall_delta snapshots).
+ * Empty name or id is skipped — identity must match later tool_execution_* toolCallId.
+ */
+export function namedToolInvocationsFromPartial(message: unknown): NamedToolInvocation[] {
+  if (!message || typeof message !== "object") return [];
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) return [];
+  const out: NamedToolInvocation[] = [];
+  const seen = new Set<string>();
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    const b = block as { type?: string; id?: string; name?: string; toolName?: string };
+    const t = String(b.type || "");
+    if (t !== "toolCall" && t !== "tool_use" && t !== "toolcall") continue;
+    const toolName = String(b.name || b.toolName || "").trim();
+    const toolCallId = String(b.id || "").trim();
+    if (!toolName || !toolCallId) continue;
+    if (seen.has(toolCallId)) continue;
+    seen.add(toolCallId);
+    out.push({ toolCallId, toolName });
+  }
+  return out;
+}
+
+/**
+ * Sole product fan-out for tool progressive frames → platform tool_output + segment counters.
  * Panel/status for Main still goes through handleNode4SessionEvent on the same events.
+ *
+ * Spec #350 lifecycle: **tool name known** (streaming toolcall_* with id+name) → one running;
+ * tool_execution_start emits running only if not already projected; end → done/error.
+ * Segment counters still bump only on tool_execution_start (actual execution).
+ * At most one progressive `running` frame per toolCallId (no execute re-emit after name-known).
  *
  * Product policy (A) + Spec #308: **subagent package sessions do not emit Main chat tool_output.**
  * When `lifecycle.subagentDepth > 0`, still count tools for salvage/settlement; if Worker audit
@@ -330,80 +393,124 @@ export function attachProductToolEventBridge(
   runtime: ToolRuntime,
   segmentCounter?: { tools: number },
 ): () => void {
-  return session.subscribe(async (event) => {
+  /** toolCallIds that already received a progressive running frame (name-known or execute). */
+  const runningEmitted = new Set<string>();
+
+  async function emitToolFrame(opts: {
+    toolName: string;
+    toolCallId: string;
+    status: "running" | "done" | "error";
+    summary?: string;
+    args?: Record<string, unknown>;
+    resultText?: string;
+  }): Promise<void> {
+    const toolName = opts.toolName || "tool";
+    const summary =
+      opts.summary != null
+        ? String(opts.summary).slice(0, 500)
+        : opts.status === "running"
+          ? `${toolName} running`
+          : "";
+    if (isSubagentPackageSession(runtime)) {
+      const { emitWorkerToolFrame } = await import("./worker-audit-channel.js");
+      await emitWorkerToolFrame({
+        runtime,
+        toolName,
+        toolCallId: opts.toolCallId,
+        status: opts.status,
+        summary,
+        args: opts.args,
+        resultText: opts.resultText,
+      });
+      return;
+    }
+    // Speaker = requesting Session (task persona). Never handoff destination.
+    const speaker: Record<string, string> = {};
+    if (runtime.task.expertId) speaker.expert_id = String(runtime.task.expertId);
+    if (runtime.task.expertName) speaker.expert_name = String(runtime.task.expertName);
+    await runtime.platform.send({
+      type: "tool_output",
+      conversation_id: runtime.task.conversationId,
+      task_id: runtime.task.taskId,
+      tool_name: toolName,
+      tool_run_id: opts.toolCallId,
+      status: opts.status,
+      summary,
+      args: opts.args,
+      result_text: opts.resultText != null ? String(opts.resultText).slice(0, 4000) : undefined,
+      ...speaker,
+    });
+  }
+
+  async function emitRunningOnce(
+    toolName: string,
+    toolCallId: string,
+    args?: Record<string, unknown>,
+  ): Promise<void> {
+    if (runningEmitted.has(toolCallId)) return;
+    runningEmitted.add(toolCallId);
+    // Args may be incomplete at name-known — do not dump streaming bodies (story 30).
+    await emitToolFrame({
+      toolName,
+      toolCallId,
+      status: "running",
+      args: args || {},
+    });
+  }
+
+  return session.subscribe(async (event: AgentEvent) => {
+    // Spec #350 D1: project running as soon as name+id known while args may still stream.
+    if (event.type === "message_update") {
+      const msg = event.message;
+      if (msg && typeof msg === "object" && "role" in msg && msg.role !== "assistant") return;
+      const ame = event.assistantMessageEvent;
+      const kind = String(ame?.type || "");
+      if (!kind.startsWith("toolcall_")) return;
+      // Streaming SoT is partial; fall back to message when partial is absent.
+      const snapshot =
+        ame && "partial" in ame && ame.partial != null ? ame.partial : msg;
+      for (const inv of namedToolInvocationsFromPartial(snapshot)) {
+        await emitRunningOnce(inv.toolName, inv.toolCallId);
+      }
+      return;
+    }
+
     if (event.type === "tool_execution_start") {
       if (segmentCounter) segmentCounter.tools += 1;
       runtime.lifecycle.toolsInLastSegment = (runtime.lifecycle.toolsInLastSegment || 0) + 1;
-      if (isSubagentPackageSession(runtime)) {
-        const { emitWorkerToolFrame } = await import("./worker-audit-channel.js");
-        const toolName = String(event.toolName || "tool");
-        const toolCallId = String(event.toolCallId || "");
-        await emitWorkerToolFrame({
-          runtime,
-          toolName,
-          toolCallId,
-          status: "running",
-          summary: `${toolName} running`,
-          args: (event as { args?: Record<string, unknown> }).args || {},
-        });
-        return;
-      }
       const toolName = String(event.toolName || "tool");
       const toolCallId = String(event.toolCallId || "");
-      // Speaker = requesting Session (task persona). Never handoff destination.
-      const speaker: Record<string, string> = {};
-      if (runtime.task.expertId) speaker.expert_id = String(runtime.task.expertId);
-      if (runtime.task.expertName) speaker.expert_name = String(runtime.task.expertName);
-      await runtime.platform.send({
-        type: "tool_output",
-        conversation_id: runtime.task.conversationId,
-        task_id: runtime.task.taskId,
-        tool_name: toolName,
-        tool_run_id: toolCallId,
-        status: "running",
-        summary: `${toolName} running`,
-        args: (event as { args?: Record<string, unknown> }).args || {},
-        ...speaker,
-      });
+      // Emit running only if name-known did not already project this id.
+      const args =
+        event.args && typeof event.args === "object" && !Array.isArray(event.args)
+          ? (event.args as Record<string, unknown>)
+          : {};
+      await emitRunningOnce(toolName, toolCallId, args);
       return;
     }
 
     if (event.type === "tool_execution_end") {
       const toolName = String(event.toolName || "tool");
       const toolCallId = String(event.toolCallId || "");
-      const result = (event as { result?: { content?: Array<{ type?: string; text?: string }> } }).result;
-      const content = result?.content || [];
+      const result = event.result;
+      const content =
+        result && typeof result === "object" && Array.isArray(result.content)
+          ? (result.content as Array<{ type?: string; text?: string }>)
+          : [];
       const text = content
         .filter((item) => item?.type === "text")
         .map((item) => item.text || "")
         .join("\n")
         .slice(0, 4000);
-      const isError = Boolean((event as { isError?: boolean }).isError);
-      if (isSubagentPackageSession(runtime)) {
-        const { emitWorkerToolFrame } = await import("./worker-audit-channel.js");
-        await emitWorkerToolFrame({
-          runtime,
-          toolName,
-          toolCallId,
-          status: isError ? "error" : "done",
-          summary: text.slice(0, 500),
-          resultText: text,
-        });
-        return;
-      }
-      const speaker: Record<string, string> = {};
-      if (runtime.task.expertId) speaker.expert_id = String(runtime.task.expertId);
-      if (runtime.task.expertName) speaker.expert_name = String(runtime.task.expertName);
-      await runtime.platform.send({
-        type: "tool_output",
-        conversation_id: runtime.task.conversationId,
-        task_id: runtime.task.taskId,
-        tool_name: toolName,
-        tool_run_id: toolCallId,
+      // Prefer pi event.isError (after afterToolCall promotion of details.isError).
+      const isError = resolveToolExecutionEndIsError(event);
+      runningEmitted.delete(toolCallId);
+      await emitToolFrame({
+        toolName,
+        toolCallId,
         status: isError ? "error" : "done",
         summary: text.slice(0, 500),
-        result_text: text,
-        ...speaker,
+        resultText: text,
       });
     }
   });

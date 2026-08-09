@@ -1,9 +1,13 @@
 /**
- * Progressive stream identity + pending chrome (Spec #276 / #305).
+ * Progressive stream identity + Working chrome (amends Spec #276 pending window).
  *
- * Pending is **chrome**, not a Message. Live overlay keys are **stream_id only**.
+ * Working is **chrome**, not a Message. Live overlay keys are **stream_id only**.
  * No live-slot Message dual identity.
- * Spec #305: thinking may carry content.status; empty running thinking upserts; pending may carry speaker attribution.
+ * Spec #305: thinking may carry content.status; empty running thinking upserts; Working may carry speaker attribution.
+ *
+ * Working chrome: show after send until first agent output (thinking/text/tool);
+ * then hide. Thinking/tool cards use light while running, icon when done.
+ * Toggle off for A/B: localStorage `my-ai-pen.workingChrome` = `0` | `off` | `false`.
  */
 
 import { mergeThinkingStatus, normalizeExecutionStatus } from "./status";
@@ -34,8 +38,31 @@ export function mergeProgressiveText(prev: string, next: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Pending chrome lifecycle (S2) — not a Message; list-tail only
+// Working chrome lifecycle — not a Message; list-tail only
 // ---------------------------------------------------------------------------
+
+/** localStorage key: `0` / `off` / `false` hides Working chrome for A/B comparison. */
+export const WORKING_CHROME_STORAGE_KEY = "my-ai-pen.workingChrome";
+
+/**
+ * Runtime toggle for list-tail Working chrome (default on).
+ * Console A/B without rebuild:
+ *   localStorage.setItem("my-ai-pen.workingChrome", "0"); location.reload()
+ *   localStorage.removeItem("my-ai-pen.workingChrome"); location.reload()
+ */
+export function isWorkingChromeEnabled(): boolean {
+  if (typeof localStorage === "undefined") return true;
+  try {
+    const v = String(localStorage.getItem(WORKING_CHROME_STORAGE_KEY) ?? "")
+      .trim()
+      .toLowerCase();
+    if (v === "0" || v === "false" || v === "off" || v === "no") return false;
+    if (v === "1" || v === "true" || v === "on" || v === "yes") return true;
+  } catch {
+    /* private mode / denied */
+  }
+  return true;
+}
 
 export type PendingChrome = {
   conversationId: string;
@@ -57,20 +84,27 @@ export type PendingChromeEvent =
       expert_display_name?: string;
       agent_source?: string;
     }
+  /** First progressive thinking/text — hide Working (content is now on the timeline). */
   | { type: "stream_started" }
   | { type: "terminal" }
   | { type: "clear" }
-  /** Tool feedback must never show or reseed pending chrome. */
+  /**
+   * Tool progressive frame: hide Working if present; never invent Working from tools alone.
+   */
   | { type: "tool_output" };
 
-const DEFAULT_PENDING_LABEL = "思考中…";
+/** Default list-tail Working label (indicator light + this title). */
+export const DEFAULT_PENDING_LABEL = "工作中...";
 
 function optionalTrimmed(value: unknown): string | undefined {
   const s = String(value ?? "").trim();
   return s || undefined;
 }
 
-/** Pure state machine for post-send “思考中…” chrome. */
+/**
+ * Pure state machine for list-tail Working chrome.
+ * Show after send until first agent output (thinking/text/tool) or turn terminal.
+ */
 export function reducePendingChrome(
   current: PendingChrome,
   event: PendingChromeEvent,
@@ -91,22 +125,23 @@ export function reducePendingChrome(
       if (agentSource) chrome.agent_source = agentSource;
       return chrome;
     }
+    // First progressive content (thinking/text/tool) or settle — hide Working.
     case "stream_started":
+    case "tool_output":
     case "terminal":
     case "clear":
       return null;
-    case "tool_output":
-      return current;
     default:
       return current;
   }
 }
 
-/** Whether pending chrome should render for the active conversation. */
+/** Whether Working chrome should render for the active conversation. */
 export function pendingChromeVisible(
   pending: PendingChrome,
   conversationId: string | null | undefined,
 ): boolean {
+  if (!isWorkingChromeEnabled()) return false;
   if (!pending || !conversationId) return false;
   return pending.conversationId === conversationId;
 }
@@ -392,7 +427,7 @@ export function pendingChromeSpeakerContent(
 }
 
 /**
- * Pure operator path: progressive frame → live upsert + pending clear (Issue 4 / 6).
+ * Pure operator path: progressive frame → live upsert + hide Working on first output.
  * Mirrors ConversationPage upsertStreamedAgentText accept gate without React.
  */
 export function applyProgressiveActivity(
@@ -434,6 +469,7 @@ export function applyProgressiveActivity(
     conversationId: input.conversationId,
     content,
   });
+  // First progressive output hides Working (stream_started → clear).
   const pending = reducePendingChrome(state.pending, { type: "stream_started" });
   return { live, pending, accepted: true };
 }

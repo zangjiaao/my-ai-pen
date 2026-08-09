@@ -703,7 +703,15 @@ def normalize_agents_for_conversation_status(
     with the latest Task light. Do **not** map ``incomplete`` → completed.
     """
     status = str(conversation_status or "").strip().lower()
-    if status not in {"completed", "incomplete", "failed", "canceled", "cancelled", "paused"}:
+    if status not in {
+        "completed",
+        "incomplete",
+        "failed",
+        "canceled",
+        "cancelled",
+        "paused",
+        "pause",
+    }:
         return agents
     if status == "failed":
         package_status = "failed"
@@ -711,8 +719,8 @@ def normalize_agents_for_conversation_status(
     elif status in {"canceled", "cancelled"}:
         package_status = "canceled"
         terminal_action = "stopped"
-    elif status in {"incomplete", "paused"}:
-        package_status = "incomplete" if status == "incomplete" else "paused"
+    elif status in {"incomplete", "paused", "pause"}:
+        package_status = "paused" if status in {"pause", "paused"} else "incomplete"
         terminal_action = "paused"
     else:
         package_status = "completed"

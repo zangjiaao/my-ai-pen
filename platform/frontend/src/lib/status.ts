@@ -37,6 +37,24 @@ export function resolveThinkingUiStatusForSession(
 }
 
 /**
+ * Tool main-row leading: running → status light; done/fail → category icon.
+ * Empty status while session active treats as running (in-flight progressive);
+ * idle session never keeps a running light (orphan → done → show icon).
+ */
+export function resolveToolChromeStatusForSession(
+  value: unknown,
+  options?: { sessionActive?: boolean },
+): UiExecutionStatus {
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    return options?.sessionActive === false ? "done" : "running";
+  }
+  const base = normalizeExecutionStatus(raw);
+  if (options?.sessionActive === false && base === "running") return "done";
+  return base;
+}
+
+/**
  * Presentational projection for ThinkingCard (Spec #305 S3 / Issue 13).
  * defaultExpanded is always true; empty body yields no fake placeholder.
  * @param options.sessionActive when false, orphan running thinking → 思考完成

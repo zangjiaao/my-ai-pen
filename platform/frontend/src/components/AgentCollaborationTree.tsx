@@ -21,8 +21,11 @@ import {
   packageStatusTitle,
   resolvePackageLightStatus,
 } from "../lib/packageStatusLight";
+import { friendlyToolLabel } from "../lib/toolLabels";
 
 export type { StrixAgentStatus } from "../lib/panelTypes";
+/** Re-export for callers that imported labels from this module. */
+export { friendlyToolLabel };
 
 /** Spec #354: Session lifecycle on Main cards only. */
 
@@ -513,42 +516,6 @@ export function agentStatusCount(agents: StrixAgentStatus[]): string {
 
 function isActiveAgentStatus(status: string | undefined): boolean {
   return ["running", "waiting", "pending"].includes(String(status || "").toLowerCase());
-}
-
-/** Tool → short Chinese label for skill/meta chips (not AgentRow narration). */
-export function friendlyToolLabel(tool: string): string {
-  const t = String(tool || "").trim();
-  if (!t) return "工具";
-  const map: Record<string, string> = {
-    platform_list_assets: "查询资产台账",
-    platform_get_asset: "读取资产详情",
-    platform_list_vulnerabilities: "查询漏洞台账",
-    platform_get_vulnerability: "读取漏洞详情",
-    platform_update_finding_status: "更新漏洞状态",
-    platform_enrich_asset: "补充资产信息",
-    platform_conversation_snapshot: "读取会话快照",
-    platform_list_reports: "查询报告列表",
-    platform_create_report: "生成交付报告",
-    request_user_decision: "请求用户授权",
-    shell: "执行命令",
-    http: "HTTP 探测",
-    session: "会话化 HTTP",
-    browser: "浏览器探测",
-    script: "运行脚本",
-    write: "写入文件",
-    edit: "编辑文件",
-    read: "读取文件",
-    finding: "登记发现/漏洞",
-    fact: "记录过程事实",
-    todo: "更新任务清单",
-    skill: "加载技能",
-    subagent: "启动子代理",
-    goal: "更新目标",
-    captcha: "处理验证码",
-  };
-  if (map[t]) return map[t];
-  if (t.startsWith("platform_")) return `平台：${t.replace(/^platform_/, "").replace(/_/g, " ")}`;
-  return t.replace(/_/g, " ");
 }
 
 function friendlySkillName(skill: string): string {

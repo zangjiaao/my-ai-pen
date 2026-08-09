@@ -7,7 +7,9 @@ import assert from "node:assert/strict";
 import {
   attachProductToolEventBridge,
   resolveNode4Model,
+  resolveToolExecutionEndIsError,
   runNode4Agent,
+  toolResultDetailsIsError,
   type Node4AgentSession,
 } from "./run-node4-agent.js";
 import type { AgentEvent } from "@earendil-works/pi-agent-core";
@@ -135,6 +137,90 @@ async function testAbortStopsFurtherWork() {
   assert.equal(prompts, 1);
 }
 
+async function testToolResultDetailsIsErrorPromotion() {
+  assert.equal(toolResultDetailsIsError(undefined), false);
+  assert.equal(toolResultDetailsIsError({ content: [], details: {} }), false);
+  assert.equal(
+    toolResultDetailsIsError({ content: [], details: { isError: true } }),
+    true,
+    "product textResult(_, { isError: true })",
+  );
+  assert.equal(
+    resolveToolExecutionEndIsError({ isError: false, result: { details: { isError: true } } }),
+    true,
+  );
+  assert.equal(
+    resolveToolExecutionEndIsError({ isError: true, result: { details: {} } }),
+    true,
+    "pi event.isError wins",
+  );
+  assert.equal(
+    resolveToolExecutionEndIsError({
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "error: packages[0] incomplete handoff" }],
+        details: { isError: true },
+      },
+    }),
+    true,
+    "subagent incomplete handoff must not be done",
+  );
+}
+
+/** Bridge emits error when pi end carries product details.isError (or event.isError). */
+async function testToolEventBridgeErrorFromDetailsIsError() {
+  const platformMsgs: Array<{ type: string; status?: string; summary?: string }> = [];
+  const runtime = {
+    task: { conversationId: "c", taskId: "t" },
+    platform: {
+      send: async (msg: { type: string; status?: string; summary?: string }) => {
+        platformMsgs.push(msg);
+      },
+    },
+    lifecycle: { toolsInLastSegment: 0, subagentDepth: 0 },
+  } as unknown as ToolRuntime;
+
+  const session = fakeSession({
+    events: [
+      {
+        type: "tool_execution_start",
+        toolCallId: "sub1",
+        toolName: "subagent",
+        args: {},
+      } as AgentEvent,
+      {
+        type: "tool_execution_end",
+        toolCallId: "sub1",
+        toolName: "subagent",
+        // pi leaves isError false when execute does not throw
+        isError: false,
+        result: {
+          content: [
+            {
+              type: "text",
+              text: "error: packages[0] incomplete handoff — need target, scope, already_done",
+            },
+          ],
+          details: { isError: true },
+        },
+      } as AgentEvent,
+    ],
+  });
+  attachProductToolEventBridge(session, runtime);
+  await session.prompt("x");
+  const tools = platformMsgs.filter((m) => m.type === "tool_output");
+  assert.ok(tools.some((m) => m.status === "running"));
+  assert.ok(
+    tools.some((m) => m.status === "error"),
+    "incomplete handoff must be error not done",
+  );
+  assert.equal(
+    tools.filter((m) => m.status === "done").length,
+    0,
+    "must not emit done for details.isError",
+  );
+}
+
 async function testToolEventBridgeSingleFanOut() {
   const platformMsgs: Array<{ type: string; status?: string }> = [];
   const segmentCounter = { tools: 0 };
@@ -171,6 +257,413 @@ async function testToolEventBridgeSingleFanOut() {
   assert.equal(runtime.lifecycle.toolsInLastSegment, 1);
   assert.ok(platformMsgs.some((m) => m.type === "tool_output" && m.status === "running"));
   assert.ok(platformMsgs.some((m) => m.type === "tool_output" && m.status === "done"));
+}
+
+/**
+ * Spec #350: running progressive frame as soon as tool name+id known (toolcall_start),
+ * not only at tool_execution_start (after large args finish streaming).
+ *
+ * Phase A asserts name-known alone (no execute events) — this is the regression gate
+ * for the late-start bug. Phase B asserts same run id → done and no delta spam.
+ */
+async function testToolEventBridgeRunningFromToolNameKnown() {
+  // --- Phase A: name-known only (no tool_execution_*) ---
+  const earlyMsgs: Array<{
+    type: string;
+    status?: string;
+    tool_name?: string;
+    tool_run_id?: string;
+  }> = [];
+  const segmentCounter = { tools: 0 };
+  const earlyRuntime = {
+    task: { conversationId: "c", taskId: "t", expertId: "pentest", expertName: "渗透" },
+    platform: {
+      send: async (msg: {
+        type: string;
+        status?: string;
+        tool_name?: string;
+        tool_run_id?: string;
+      }) => {
+        earlyMsgs.push(msg);
+      },
+    },
+    lifecycle: { toolsInLastSegment: 0, subagentDepth: 0 },
+  } as unknown as ToolRuntime;
+
+  const partial = {
+    role: "assistant",
+    content: [
+      { type: "toolCall", id: "tc-report", name: "platform_create_report", arguments: {} },
+    ],
+  };
+
+  const earlySession = fakeSession({
+    events: [
+      {
+        type: "message_update",
+        message: partial,
+        assistantMessageEvent: {
+          type: "toolcall_start",
+          contentIndex: 0,
+          partial,
+        },
+      } as unknown as AgentEvent,
+      // Args still streaming — still no execute
+      {
+        type: "message_update",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "tc-report",
+              name: "platform_create_report",
+              arguments: { markdown: "# partial" },
+            },
+          ],
+        },
+        assistantMessageEvent: {
+          type: "toolcall_delta",
+          contentIndex: 0,
+          delta: '{"markdown":',
+          partial: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "tc-report",
+                name: "platform_create_report",
+                arguments: { markdown: "# partial" },
+              },
+            ],
+          },
+        },
+      } as unknown as AgentEvent,
+    ],
+  });
+  attachProductToolEventBridge(earlySession, earlyRuntime, segmentCounter);
+  await earlySession.prompt("write report");
+
+  const earlyTools = earlyMsgs.filter((m) => m.type === "tool_output");
+  assert.equal(earlyTools.length, 1, "exactly one running frame for name-known (no delta spam)");
+  assert.equal(earlyTools[0]?.status, "running");
+  assert.equal(earlyTools[0]?.tool_name, "platform_create_report");
+  assert.equal(earlyTools[0]?.tool_run_id, "tc-report");
+  assert.equal(segmentCounter.tools, 0, "name-known must not count as tool execution");
+  assert.equal(earlyRuntime.lifecycle.toolsInLastSegment, 0);
+
+  // --- Phase B: full lifecycle name-known → execute → end on same run id ---
+  const platformMsgs: Array<{
+    type: string;
+    status?: string;
+    tool_name?: string;
+    tool_run_id?: string;
+  }> = [];
+  const segmentCounterB = { tools: 0 };
+  const runtime = {
+    task: { conversationId: "c", taskId: "t", expertId: "pentest", expertName: "渗透" },
+    platform: {
+      send: async (msg: {
+        type: string;
+        status?: string;
+        tool_name?: string;
+        tool_run_id?: string;
+      }) => {
+        platformMsgs.push(msg);
+      },
+    },
+    lifecycle: { toolsInLastSegment: 0, subagentDepth: 0 },
+  } as unknown as ToolRuntime;
+
+  const session = fakeSession({
+    events: [
+      {
+        type: "message_update",
+        message: partial,
+        assistantMessageEvent: {
+          type: "toolcall_start",
+          contentIndex: 0,
+          partial,
+        },
+      } as unknown as AgentEvent,
+      {
+        type: "tool_execution_start",
+        toolCallId: "tc-report",
+        toolName: "platform_create_report",
+        args: { markdown: "# full report body" },
+      } as AgentEvent,
+      {
+        type: "tool_execution_end",
+        toolCallId: "tc-report",
+        toolName: "platform_create_report",
+        result: { content: [{ type: "text", text: "report saved" }], details: {} },
+        isError: false,
+      } as AgentEvent,
+    ],
+  });
+  attachProductToolEventBridge(session, runtime, segmentCounterB);
+  await session.prompt("write report");
+
+  const tools = platformMsgs.filter((m) => m.type === "tool_output");
+  assert.equal(tools.length, 2, "exactly one running + one done (no execute re-emit)");
+  assert.equal(tools[0]?.status, "running", "first frame is running from name-known");
+  assert.equal(tools[0]?.tool_run_id, "tc-report");
+  assert.equal(tools[1]?.status, "done");
+  assert.equal(tools[1]?.tool_run_id, "tc-report");
+  assert.equal(segmentCounterB.tools, 1, "tools counted once at execute-start");
+  assert.equal(runtime.lifecycle.toolsInLastSegment, 1);
+}
+
+/**
+ * Spec #350: OpenAI-style deferred id/name — toolcall_start may have empty id/name;
+ * running only after both appear on a later toolcall_delta partial.
+ */
+async function testToolEventBridgeRunningAfterDeferredIdAndName() {
+  const platformMsgs: Array<{
+    type: string;
+    status?: string;
+    tool_name?: string;
+    tool_run_id?: string;
+  }> = [];
+  const segmentCounter = { tools: 0 };
+  const runtime = {
+    task: { conversationId: "c", taskId: "t" },
+    platform: {
+      send: async (msg: {
+        type: string;
+        status?: string;
+        tool_name?: string;
+        tool_run_id?: string;
+      }) => {
+        platformMsgs.push(msg);
+      },
+    },
+    lifecycle: { toolsInLastSegment: 0, subagentDepth: 0 },
+  } as unknown as ToolRuntime;
+
+  const emptyPartial = {
+    role: "assistant",
+    content: [{ type: "toolCall", id: "", name: "", arguments: {} }],
+  };
+  const idOnlyPartial = {
+    role: "assistant",
+    content: [{ type: "toolCall", id: "tc-late", name: "", arguments: {} }],
+  };
+  const fullPartial = {
+    role: "assistant",
+    content: [
+      { type: "toolCall", id: "tc-late", name: "platform_create_report", arguments: {} },
+    ],
+  };
+
+  const session = fakeSession({
+    events: [
+      {
+        type: "message_update",
+        message: emptyPartial,
+        assistantMessageEvent: {
+          type: "toolcall_start",
+          contentIndex: 0,
+          partial: emptyPartial,
+        },
+      } as unknown as AgentEvent,
+      {
+        type: "message_update",
+        message: idOnlyPartial,
+        assistantMessageEvent: {
+          type: "toolcall_delta",
+          contentIndex: 0,
+          delta: "",
+          partial: idOnlyPartial,
+        },
+      } as unknown as AgentEvent,
+      {
+        type: "message_update",
+        message: fullPartial,
+        assistantMessageEvent: {
+          type: "toolcall_delta",
+          contentIndex: 0,
+          delta: "",
+          partial: fullPartial,
+        },
+      } as unknown as AgentEvent,
+    ],
+  });
+  attachProductToolEventBridge(session, runtime, segmentCounter);
+  await session.prompt("x");
+
+  const tools = platformMsgs.filter((m) => m.type === "tool_output");
+  assert.equal(tools.length, 1, "no emit until both id and name known");
+  assert.equal(tools[0]?.status, "running");
+  assert.equal(tools[0]?.tool_run_id, "tc-late");
+  assert.equal(tools[0]?.tool_name, "platform_create_report");
+  assert.equal(segmentCounter.tools, 0);
+}
+
+/** Spec #350: two run ids get independent running frames from name-known (no execute). */
+async function testToolEventBridgeIndependentRunIds() {
+  const platformMsgs: Array<{
+    type: string;
+    status?: string;
+    tool_name?: string;
+    tool_run_id?: string;
+  }> = [];
+  const runtime = {
+    task: { conversationId: "c", taskId: "t" },
+    platform: {
+      send: async (msg: {
+        type: string;
+        status?: string;
+        tool_name?: string;
+        tool_run_id?: string;
+      }) => {
+        platformMsgs.push(msg);
+      },
+    },
+    lifecycle: { toolsInLastSegment: 0, subagentDepth: 0 },
+  } as unknown as ToolRuntime;
+
+  const partial = {
+    role: "assistant",
+    content: [
+      { type: "toolCall", id: "a", name: "shell", arguments: {} },
+      { type: "toolCall", id: "b", name: "http_request", arguments: {} },
+    ],
+  };
+
+  const session = fakeSession({
+    events: [
+      {
+        type: "message_update",
+        message: partial,
+        assistantMessageEvent: { type: "toolcall_start", contentIndex: 0, partial },
+      } as unknown as AgentEvent,
+      // terminal paths stay independent too
+      {
+        type: "tool_execution_end",
+        toolCallId: "a",
+        toolName: "shell",
+        result: { content: [{ type: "text", text: "a-ok" }], details: {} },
+        isError: false,
+      } as AgentEvent,
+      {
+        type: "tool_execution_end",
+        toolCallId: "b",
+        toolName: "http_request",
+        result: { content: [{ type: "text", text: "b-ok" }], details: {} },
+        isError: true,
+      } as AgentEvent,
+    ],
+  });
+  attachProductToolEventBridge(session, runtime);
+  await session.prompt("x");
+
+  const tools = platformMsgs.filter((m) => m.type === "tool_output");
+  assert.ok(
+    tools.some((m) => m.tool_run_id === "a" && m.status === "running" && m.tool_name === "shell"),
+    "run a running from name-known",
+  );
+  assert.ok(tools.some((m) => m.tool_run_id === "a" && m.status === "done"), "run a done");
+  assert.ok(
+    tools.some(
+      (m) => m.tool_run_id === "b" && m.status === "running" && m.tool_name === "http_request",
+    ),
+    "run b running from name-known",
+  );
+  assert.ok(
+    tools.some((m) => m.tool_run_id === "b" && m.status === "error"),
+    "run b error independent",
+  );
+}
+
+/**
+ * Spec #350 + #308: name-known early frames must not leak unscoped Main for package workers.
+ * With workerAudit scope, Worker channel still gets early running.
+ */
+async function testToolEventBridgeNameKnownSilentForSubagentDepth() {
+  const platformMsgs: Array<{ type: string; status?: string; channel?: string }> = [];
+  const segmentCounter = { tools: 0 };
+  const runtime = {
+    task: { conversationId: "c", taskId: "t/sub/sub_1" },
+    platform: {
+      send: async (msg: { type: string; status?: string; channel?: string }) => {
+        platformMsgs.push(msg);
+      },
+    },
+    lifecycle: { toolsInLastSegment: 0, subagentDepth: 1 },
+  } as unknown as ToolRuntime;
+
+  const partial = {
+    role: "assistant",
+    content: [{ type: "toolCall", id: "tc1", name: "shell", arguments: {} }],
+  };
+  const session = fakeSession({
+    events: [
+      {
+        type: "message_update",
+        message: partial,
+        assistantMessageEvent: { type: "toolcall_start", contentIndex: 0, partial },
+      } as unknown as AgentEvent,
+      {
+        type: "tool_execution_start",
+        toolCallId: "tc1",
+        toolName: "shell",
+        args: {},
+      } as AgentEvent,
+      {
+        type: "tool_execution_end",
+        toolCallId: "tc1",
+        toolName: "shell",
+        result: { content: [{ type: "text", text: "ok" }], details: {} },
+        isError: false,
+      } as AgentEvent,
+    ],
+  });
+  attachProductToolEventBridge(session, runtime, segmentCounter);
+  await session.prompt("x");
+  assert.equal(segmentCounter.tools, 1, "still count at execute-start");
+  assert.equal(
+    platformMsgs.filter((m) => m.type === "tool_output" && !m.channel).length,
+    0,
+    "no unscoped Main tool_output from package name-known or execute",
+  );
+
+  // Worker-scoped package: early name-known running lands on Worker channel only
+  const workerMsgs: Array<Record<string, unknown>> = [];
+  const workerRuntime = {
+    task: { conversationId: "c", taskId: "t/sub/sub_1" },
+    platform: {
+      send: async (msg: Record<string, unknown>) => {
+        workerMsgs.push(msg);
+      },
+    },
+    lifecycle: {
+      toolsInLastSegment: 0,
+      subagentDepth: 1,
+      workerAudit: { agentId: "sub_1", packageTurnId: "pkg_sub_1_test" },
+    },
+  } as unknown as ToolRuntime;
+  const workerSession = fakeSession({
+    events: [
+      {
+        type: "message_update",
+        message: partial,
+        assistantMessageEvent: { type: "toolcall_start", contentIndex: 0, partial },
+      } as unknown as AgentEvent,
+    ],
+  });
+  attachProductToolEventBridge(workerSession, workerRuntime);
+  await workerSession.prompt("x");
+  const workerTools = workerMsgs.filter((m) => m.type === "tool_output");
+  assert.equal(workerTools.length, 1, "one Worker running frame at name-known");
+  assert.equal(workerTools[0]?.status, "running");
+  assert.equal(workerTools[0]?.channel, "worker_audit");
+  assert.equal(workerTools[0]?.agent_id, "sub_1");
+  assert.equal(
+    workerMsgs.filter((m) => m.type === "tool_output" && !m.channel).length,
+    0,
+    "still no unscoped Main",
+  );
 }
 
 /** Policy A: package workers must not emit Main (unscoped) tool_output. */
@@ -307,7 +800,13 @@ async function testNoCodingAgentImportInModule() {
 async function main() {
   await testPromptAndEvents();
   await testAbortStopsFurtherWork();
+  await testToolResultDetailsIsErrorPromotion();
+  await testToolEventBridgeErrorFromDetailsIsError();
   await testToolEventBridgeSingleFanOut();
+  await testToolEventBridgeRunningFromToolNameKnown();
+  await testToolEventBridgeRunningAfterDeferredIdAndName();
+  await testToolEventBridgeIndependentRunIds();
+  await testToolEventBridgeNameKnownSilentForSubagentDepth();
   await testToolEventBridgeSilentForSubagentDepth();
   await testToolEventBridgeWorkerAuditChannel();
   await testResolveModelOverrideBaseUrl();

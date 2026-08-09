@@ -867,14 +867,29 @@ async def _stamp_burst_result_anchor(db, conv_id: str, ledger: dict) -> None:
         bursts[bid] = row
 
 
-async def _set_work_burst_authorize_paused(conv_id: str | None, *, paused: bool) -> dict | None:
-    """Spec #325 H1: pending user authorize does not accrue busy work-seconds."""
+async def _set_work_burst_authorize_paused(
+    conv_id: str | None,
+    *,
+    paused: bool,
+    resume_status: str | None = None,
+) -> dict | None:
+    """Spec #325 H1: pending user authorize does not accrue busy work-seconds.
+
+    Task package status: running → paused on authorize wait; paused → running (or
+    resume_status) when the wait ends. Light uses status=paused (yellow) even if
+    working stays true so Send can still interrupt.
+    """
     cid = str(conv_id or "").strip()
     if not cid:
         return None
     try:
         from app.db.base import async_session
         from app.models.conversation import Conversation
+        from app.services.conversation_state import (
+            ConversationStatusError,
+            normalize_conversation_status,
+            transition_conversation,
+        )
         from app.services.work_burst_time import apply_authorize_pause, get_ledger, projection as work_burst_projection
 
         async with async_session() as db:
@@ -897,6 +912,20 @@ async def _set_work_burst_authorize_paused(conv_id: str | None, *, paused: bool)
                 except Exception as stamp_exc:
                     print(f"[WS] B1 result anchor stamp (authorize resume) error: {stamp_exc}")
             c.context = context
+            # Package status: human wait = paused (canonical; pause/waiting normalize here).
+            try:
+                cur = normalize_conversation_status(str(c.status or "created"))
+                if paused:
+                    if cur in {"running", "created"}:
+                        transition_conversation(c, "paused")
+                else:
+                    if cur == "paused":
+                        target = normalize_conversation_status(resume_status or "running")
+                        if target not in {"running", "canceled", "failed", "completed", "incomplete"}:
+                            target = "running"
+                        transition_conversation(c, target)
+            except ConversationStatusError as st_exc:
+                print(f"[WS] authorize status transition: {st_exc}")
             await db.commit()
             proj = work_burst_projection(get_ledger(context))
             workers = _workers_from_context(context)
@@ -3846,7 +3875,8 @@ async def _freeze_pending_approvals_on_interrupt(conv_id: str, client_id: str) -
         except Exception as e:
             print(f"[WS] interrupt freeze audit error: {e}")
     # Spec #325 H1: no longer waiting on authorize after interrupt freeze.
-    await _set_work_burst_authorize_paused(conv_id, paused=False)
+    # Product: paused → canceled when interrupt freezes open ChoiceCards.
+    await _set_work_burst_authorize_paused(conv_id, paused=False, resume_status="canceled")
     return len(pending_for_conv)
 
 
@@ -6488,8 +6518,21 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     approval = pending_approvals.pop(str(request_id), {}) if request_id else {}
                     had_live_pending = bool(isinstance(approval, dict) and approval)
                     # Spec #325 H1: leave authorize wait — resume busy accrual if workers still busy.
+                    # paused → running on authorize/confirm; paused → canceled on cancel.
                     if had_live_pending:
-                        await _set_work_burst_authorize_paused(conv_id, paused=False)
+                        dec = str(decision or "").strip().lower()
+                        if dec in {"authorize", "confirm_options", "confirm", "allow", "yes"}:
+                            await _set_work_burst_authorize_paused(
+                                conv_id, paused=False, resume_status="running"
+                            )
+                        elif dec in {"cancel", "deny", "reject", "no"}:
+                            await _set_work_burst_authorize_paused(
+                                conv_id, paused=False, resume_status="canceled"
+                            )
+                        else:
+                            await _set_work_burst_authorize_paused(
+                                conv_id, paused=False, resume_status="running"
+                            )
                     # Spec #313 L10: fall back to durable option snapshot when pending already gone.
                     card_source = (
                         approval
