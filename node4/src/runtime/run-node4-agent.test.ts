@@ -7,7 +7,9 @@ import assert from "node:assert/strict";
 import {
   attachProductToolEventBridge,
   resolveNode4Model,
+  resolveToolExecutionEndIsError,
   runNode4Agent,
+  toolResultDetailsIsError,
   type Node4AgentSession,
 } from "./run-node4-agent.js";
 import type { AgentEvent } from "@earendil-works/pi-agent-core";
@@ -133,6 +135,90 @@ async function testAbortStopsFurtherWork() {
   session.abort();
   await assert.rejects(() => session.prompt("two"), /aborted/);
   assert.equal(prompts, 1);
+}
+
+async function testToolResultDetailsIsErrorPromotion() {
+  assert.equal(toolResultDetailsIsError(undefined), false);
+  assert.equal(toolResultDetailsIsError({ content: [], details: {} }), false);
+  assert.equal(
+    toolResultDetailsIsError({ content: [], details: { isError: true } }),
+    true,
+    "product textResult(_, { isError: true })",
+  );
+  assert.equal(
+    resolveToolExecutionEndIsError({ isError: false, result: { details: { isError: true } } }),
+    true,
+  );
+  assert.equal(
+    resolveToolExecutionEndIsError({ isError: true, result: { details: {} } }),
+    true,
+    "pi event.isError wins",
+  );
+  assert.equal(
+    resolveToolExecutionEndIsError({
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "error: packages[0] incomplete handoff" }],
+        details: { isError: true },
+      },
+    }),
+    true,
+    "subagent incomplete handoff must not be done",
+  );
+}
+
+/** Bridge emits error when pi end carries product details.isError (or event.isError). */
+async function testToolEventBridgeErrorFromDetailsIsError() {
+  const platformMsgs: Array<{ type: string; status?: string; summary?: string }> = [];
+  const runtime = {
+    task: { conversationId: "c", taskId: "t" },
+    platform: {
+      send: async (msg: { type: string; status?: string; summary?: string }) => {
+        platformMsgs.push(msg);
+      },
+    },
+    lifecycle: { toolsInLastSegment: 0, subagentDepth: 0 },
+  } as unknown as ToolRuntime;
+
+  const session = fakeSession({
+    events: [
+      {
+        type: "tool_execution_start",
+        toolCallId: "sub1",
+        toolName: "subagent",
+        args: {},
+      } as AgentEvent,
+      {
+        type: "tool_execution_end",
+        toolCallId: "sub1",
+        toolName: "subagent",
+        // pi leaves isError false when execute does not throw
+        isError: false,
+        result: {
+          content: [
+            {
+              type: "text",
+              text: "error: packages[0] incomplete handoff — need target, scope, already_done",
+            },
+          ],
+          details: { isError: true },
+        },
+      } as AgentEvent,
+    ],
+  });
+  attachProductToolEventBridge(session, runtime);
+  await session.prompt("x");
+  const tools = platformMsgs.filter((m) => m.type === "tool_output");
+  assert.ok(tools.some((m) => m.status === "running"));
+  assert.ok(
+    tools.some((m) => m.status === "error"),
+    "incomplete handoff must be error not done",
+  );
+  assert.equal(
+    tools.filter((m) => m.status === "done").length,
+    0,
+    "must not emit done for details.isError",
+  );
 }
 
 async function testToolEventBridgeSingleFanOut() {
@@ -714,6 +800,8 @@ async function testNoCodingAgentImportInModule() {
 async function main() {
   await testPromptAndEvents();
   await testAbortStopsFurtherWork();
+  await testToolResultDetailsIsErrorPromotion();
+  await testToolEventBridgeErrorFromDetailsIsError();
   await testToolEventBridgeSingleFanOut();
   await testToolEventBridgeRunningFromToolNameKnown();
   await testToolEventBridgeRunningAfterDeferredIdAndName();

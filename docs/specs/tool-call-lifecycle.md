@@ -16,7 +16,7 @@ This is a **lifecycle projection gap**, not a separate background Agent subsyste
 |--------|----------|
 | **Start (D1)** | As soon as Runtime knows **tool name + tool call id** for an invocation (`message_update` / `toolcall_*` on the assistant partial), emit progressive `tool_output` with `status: "running"` for that `tool_run_id`. |
 | **Execute** | `tool_execution_start` emits running **only if** name-known did not already project that id; at most one progressive `running` per `tool_run_id`. Segment/salvage tool counters still bump only here. |
-| **End** | `tool_execution_end` → `done` or `error` on the **same** `tool_run_id`. |
+| **End** | `tool_execution_end` → `done` or `error` on the **same** `tool_run_id`. Product tools put `isError` on `result.details`; `afterToolCall` promotes it to pi `event.isError` (AgentToolResult has no top-level isError). |
 | **Identity** | One progressive card per invocation (`tool_run_id`). No composite multi-tool group card. |
 | **SoT** | Runtime owns frames; frontend **projects** only (no timer / free-text invent running). |
 | **Pre-name gaps** | Covered by Thinking progressive chrome when present — not by pending reseed (#276) or N-second placeholders. |

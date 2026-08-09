@@ -293,20 +293,26 @@ export async function createBoundNode4Session(
     thinkingLevel: options.thinkingLevel ?? "medium",
     sessionId: options.sessionId,
     afterToolCall: async (context: AfterToolCallContext) => {
+      // pi-agent-core: execute() never sets isError unless throw; product tools put
+      // isError on result.details (textResult(_, { isError: true })). Promote so
+      // tool_execution_end.isError matches the tool contract.
+      const promoteError = toolResultDetailsIsError(context.result) && !context.isError;
+      const isError = Boolean(context.isError) || promoteError;
       const tracker = runtime.lifecycle.midRunTodo;
-      if (!tracker) return undefined;
-      const nudge = noteToolForMidRunTodoNudge(tracker, context.toolCall.name, {
-        openTodoCount: runtime.todo.openCount(),
-        isError: Boolean(context.isError),
-      });
-      if (nudge) {
-        try {
-          followUpHold.fn?.(nudge);
-        } catch {
-          /* non-fatal */
+      if (tracker) {
+        const nudge = noteToolForMidRunTodoNudge(tracker, context.toolCall.name, {
+          openTodoCount: runtime.todo.openCount(),
+          isError,
+        });
+        if (nudge) {
+          try {
+            followUpHold.fn?.(nudge);
+          } catch {
+            /* non-fatal */
+          }
         }
       }
-      return undefined;
+      return promoteError ? { isError: true } : undefined;
     },
   });
 
@@ -317,6 +323,30 @@ export async function createBoundNode4Session(
 }
 
 export type NamedToolInvocation = { toolCallId: string; toolName: string };
+
+/**
+ * Product tools return `{ content, details: { isError?: true } }` via textResult/jsonResult.
+ * pi-agent-core AgentToolResult has no top-level isError — only content/details/terminate.
+ * Read the product convention from details.
+ */
+export function toolResultDetailsIsError(result: unknown): boolean {
+  if (!result || typeof result !== "object") return false;
+  const details = (result as { details?: unknown }).details;
+  if (!details || typeof details !== "object" || Array.isArray(details)) return false;
+  return Boolean((details as { isError?: unknown }).isError);
+}
+
+/**
+ * Resolve terminal tool status from pi tool_execution_end (primary) plus product details.
+ * Prefer event.isError after afterToolCall promotion; details.isError is belt for bare bridge tests.
+ */
+export function resolveToolExecutionEndIsError(event: {
+  isError?: boolean;
+  result?: unknown;
+}): boolean {
+  if (event.isError) return true;
+  return toolResultDetailsIsError(event.result);
+}
 
 /**
  * Spec #350: extract tool invocations whose **name and id are both known** from an
@@ -472,7 +502,8 @@ export function attachProductToolEventBridge(
         .map((item) => item.text || "")
         .join("\n")
         .slice(0, 4000);
-      const isError = Boolean(event.isError);
+      // Prefer pi event.isError (after afterToolCall promotion of details.isError).
+      const isError = resolveToolExecutionEndIsError(event);
       runningEmitted.delete(toolCallId);
       await emitToolFrame({
         toolName,
