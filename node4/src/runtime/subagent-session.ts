@@ -37,12 +37,11 @@ import {
   type SubagentIdlePool,
 } from "./subagent-idle-pool.js";
 import { extractLlmTurnError, LlmTurnError } from "./llm-turn-error.js";
+// Package worker system-prompt layers live in the canonical prompt module (#393).
 import {
-  assembleSystemPrompt,
-  buildBaseLayer,
-  buildProfessionLayer,
-  joinNonEmptyPromptParts,
-  type PromptLayers,
+  buildSubagentPromptLayers,
+  buildSubagentSystemPrompt,
+  type BuildSubagentPromptOptions,
 } from "./prompt.js";
 import {
   attachWorkerProcessStream,
@@ -52,6 +51,13 @@ import {
   newPackageTurnId,
   setWorkerAuditScope,
 } from "./worker-audit-channel.js";
+
+// Thin re-exports for test / harness import stability (#393).
+export {
+  buildSubagentPromptLayers,
+  buildSubagentSystemPrompt,
+  type BuildSubagentPromptOptions,
+};
 
 /** Act tools for child workers — no subagent, finding, goal, or platform ledger. */
 export const SUBAGENT_CHILD_TOOL_NAMES = [
@@ -269,92 +275,6 @@ async function collectStructuredResult(input: {
     "utf8",
   );
   return { structured, salvaged };
-}
-
-/** Options for Package worker system-prompt layers (T5 / #391). */
-export type BuildSubagentPromptOptions = {
-  /** Compact worker mission/work (childRolePack) or pack profession lines. */
-  pack: Pick<RolePack, "missionLines" | "workLines" | "toolNames">;
-  parentPackId: string;
-  nodeType?: string;
-  skillId?: string;
-  skillBody?: string;
-  childTask: Pick<
-    TaskEnvelope,
-    "target" | "scope" | "agentLanguage" | "expertName" | "expertId"
-  >;
-};
-
-/**
- * Four-layer Package worker system prompt inputs (T5 / #391).
- * Same seam as Free Main / Graph stage: Base → Profession → Runtime → Task.
- * Compact Profession from child pack mission+work; return contract + optional
- * skill body live in Runtime; child target/scope in Task.
- */
-export function buildSubagentPromptLayers(
-  options: BuildSubagentPromptOptions,
-): PromptLayers {
-  const { pack, parentPackId, childTask } = options;
-  const rolePack: RolePack = {
-    id: parentPackId || "runtime",
-    label: "Subagent worker",
-    missionLines: pack.missionLines,
-    workLines: pack.workLines,
-    toolNames: pack.toolNames,
-    bookingMode: "none",
-    settlementNote:
-      "Child stops after intentional structured return; host settles into Finding Store. Salvage ≠ success.",
-  };
-  // Minimal envelope for shared Base/Profession builders (language + optional persona).
-  const task: TaskEnvelope = {
-    taskId: "package-worker",
-    conversationId: "package-worker",
-    instruction: "",
-    target: childTask.target ?? {},
-    scope: childTask.scope ?? {},
-    agentLanguage: childTask.agentLanguage,
-    expertName: childTask.expertName,
-    expertId: childTask.expertId,
-  };
-
-  // Base: Standing first (#352); seat meta / persona when present (trimmed vs Main OK).
-  const base = buildBaseLayer(task, rolePack);
-  // Profession: compact worker how-to (mission + work from child pack).
-  const profession = buildProfessionLayer(task, rolePack);
-
-  const nodeLabel = options.nodeType
-    ? `node_type=${options.nodeType}`
-    : "node_type=(free)";
-  const skillSection = options.skillBody
-    ? `## Loaded skill (${options.skillId})\n${options.skillBody}`
-    : options.skillId
-      ? `## Skill\nRequested skill_id=${options.skillId} was not loaded; use skill tool if needed.`
-      : "Load at most one skill via skill(op=load) if methodology helps.";
-
-  // Runtime: parent pack label, tools, return contract, optional one skill body.
-  const runtime = joinNonEmptyPromptParts([
-    `Parent pack: ${parentPackId}. ${nodeLabel}.`,
-    `Tools: ${pack.toolNames.join(", ")}.`,
-    formatSubagentReturnContractPrompt(),
-    skillSection,
-  ]);
-
-  // Task: child target/scope envelope only.
-  const taskLayer = joinNonEmptyPromptParts([
-    `Target envelope: ${JSON.stringify(childTask.target)}`,
-    `Scope envelope: ${JSON.stringify(childTask.scope)}`,
-  ]);
-
-  return { base, profession, runtime, task: taskLayer };
-}
-
-/**
- * Package worker system prompt via the shared four-layer seam (#391 / #352).
- * Standing language first, compact profession, worker Runtime, child Task.
- * Exported for harness contract tests.
- */
-export function buildSubagentSystemPrompt(options: BuildSubagentPromptOptions): string {
-  return assembleSystemPrompt(buildSubagentPromptLayers(options));
 }
 
 function buildUserPrompt(assignment: string, sessionSeeded: boolean, resume: boolean): string {

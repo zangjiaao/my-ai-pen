@@ -42,7 +42,7 @@ import {
 } from "./hard-graph-feedback.js";
 import { assertGraphPackageAnchor } from "./package-honesty-host.js";
 import { normalizeSubagentResult } from "./subagent-result.js";
-import { stageSystemPrompt } from "./hard-graph-stage-executor.js";
+import { stageSystemPrompt } from "./prompt.js";
 import type { StageExecutorInput } from "./hard-graph-runner.js";
 import type { TaskEnvelope } from "../types.js";
 import { PENTEST_ROLE_PACK } from "../roles/index.js";

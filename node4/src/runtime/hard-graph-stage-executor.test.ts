@@ -11,10 +11,8 @@ import { fileURLToPath } from "node:url";
 import type { ToolRuntime } from "../types.js";
 import { loadHardGraphFile } from "./hard-graph-definition.js";
 import { evaluateStageGate } from "./hard-graph-runner.js";
-import {
-  createHardGraphStageExecutor,
-  stageSystemPrompt,
-} from "./hard-graph-stage-executor.js";
+import { createHardGraphStageExecutor } from "./hard-graph-stage-executor.js";
+import { stageSystemPrompt } from "./prompt.js";
 import { settleHostStage } from "./host-stage-settlement.js";
 import { createProcessQualityState } from "./package-honesty-host.js";
 import { SurfaceLedgerStore } from "../stores/surface-ledger.js";
@@ -314,7 +312,15 @@ assert.equal(normalizeSubagentResult(settlement.structured).summaryProvided, tru
         processQuality: createProcessQualityState(),
       },
     } as any,
-    pack: { id: "pentest", label: "P", system: "t", tools: ["todo"] } as any,
+    pack: {
+      id: "pentest",
+      label: "P",
+      missionLines: [],
+      workLines: [],
+      toolNames: ["todo"],
+      bookingMode: "finding",
+      settlementNote: "test",
+    } as any,
     sessionFactory: async () => ({
       summary: "session narrative only",
       // surfaces in structured must NOT deposit

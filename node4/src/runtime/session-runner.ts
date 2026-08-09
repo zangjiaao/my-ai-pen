@@ -145,7 +145,7 @@ export async function runNode4Task(
    * Spec #283 I0.9: resolve park attach **before** allocating cold Free runtime stores
    * (empty TodoStore / goals / subagent host) so reseed-only paths build those.
    */
-  const packRootForHard = (pack as { packRoot?: string }).packRoot;
+  const packRootForHard = pack.packRoot;
   const hardResolved = await resolveHardGraph({
     task,
     packRoot: packRootForHard,

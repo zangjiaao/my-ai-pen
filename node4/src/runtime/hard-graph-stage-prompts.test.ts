@@ -5,14 +5,16 @@
  * Run: npx tsx src/runtime/hard-graph-stage-prompts.test.ts
  */
 import assert from "node:assert/strict";
-import {
-  buildStagePromptLayers,
-  stageSystemPrompt,
-  stageUserPrompt,
-} from "./hard-graph-stage-executor.js";
+import { stageUserPrompt } from "./hard-graph-stage-executor.js";
 import type { StageExecutorInput } from "./hard-graph-runner.js";
-import { assembleSystemPrompt, buildSystemPrompt } from "./prompt.js";
-import { buildSubagentSystemPrompt } from "./subagent-session.js";
+import {
+  assembleSystemPrompt,
+  buildPromptLayers,
+  buildStagePromptLayers,
+  buildSubagentSystemPrompt,
+  buildSystemPrompt,
+  stageSystemPrompt,
+} from "./prompt.js";
 import { PENTEST_ROLE_PACK } from "../roles/index.js";
 import type { TaskEnvelope } from "../types.js";
 
@@ -62,13 +64,17 @@ assert.match(sys, /process-chore|Write result\.json/i);
 assert.match(sys, /node policy: auto/, "stage unset language → auto policy");
 assert.ok(sys.startsWith("## Standing node policies"), "stage unset Standing-first");
 
-// Spec #274 review: typed StagePromptExtras — injections land when set on input
+// Spec #274 / #394: typed StagePromptExtras — hyp queue only in Runtime when hyp mode on
 const inputWithExtras: typeof inputWithSub & {
   priorSnapshot?: string;
   hypothesisQueueInjection?: string;
   skillL1CatalogInjection?: string;
 } = {
   ...inputWithSub,
+  // hyp mode on so queue injection has a single Runtime home (#394)
+  stage: { ...baseStage, hypothesis_work_mode: true, tools: { allow: ["todo", "shell", "subagent", "hypothesis"] } } as any,
+  tools: ["todo", "shell", "subagent", "hypothesis"],
+  toolProfile: { allow: ["todo", "shell", "subagent", "hypothesis"] },
   priorSnapshot: "<prior-finding-store>\nempty_prior: true\n</prior-finding-store>",
   hypothesisQueueInjection: "<hypothesis-queue>\nactive_n=0\n</hypothesis-queue>",
   skillL1CatalogInjection: "<skill-l1-catalog>\ncount=0\n</skill-l1-catalog>",
@@ -148,8 +154,17 @@ assert.match(stageTw, /Traditional Chinese/);
 assert.match(stageCn, /Simplified Chinese/);
 assert.notEqual(stageTw, stageCn);
 
-// --- #390 T4: Profession-core contract markers on Graph stage (prompt-layers.md §6) ---
-// Markers chosen from experts/pentest/work.md (existing English rule phrases, not new tokens).
+// --- #390 T4 / #394: Profession-core contract markers on Graph stage (prompt-layers.md §6) ---
+// Markers: existing English rule phrases from experts/pentest/work.md + mission.md
+// (pack loader drops markdown headings). Compact Profession keeps marker-bearing lines
+// + short mission identity; Free Main still ships full mission+work.
+//
+// Required profession markers:
+//   1. progressive skill — /at most one/i + /Never bulk-load|bulk-load/i
+//   2. proof bar triad — /Causality/i /Reproducibility/i /Impact/i
+//   3. fact/surface vs finding — /process cognition|finding\(confirm\).*product vulns/i
+//   4. no invent / scope honesty — assembled /invented host assets|do not invent surfaces/i
+//      (Runtime fail-closed covers "do not invent surfaces" when citizen lines are compacted out)
 {
   const layers = buildStagePromptLayers(inputWithSub, task, pack);
   const assembled = assembleSystemPrompt(layers);
@@ -191,7 +206,6 @@ assert.notEqual(stageTw, stageCn);
   );
 
   // 1. Progressive skill load discipline (at most one / progressive / never bulk-load)
-  // Markers from experts/pentest/work.md body lines (pack loader drops markdown headings).
   assert.match(
     layers.profession,
     /at most one/i,
@@ -232,10 +246,47 @@ assert.notEqual(stageTw, stageCn);
     "P3 marker: scope/RoE discipline on stage Runtime",
   );
 
-  // Skill L1 catalog is Runtime capability; prior seed is Task
+  // #394: stage compact Profession is thinner than Free full Profession
+  const freeLayers = buildPromptLayers(task, pack);
+  assert.ok(
+    layers.profession.length < freeLayers.profession.length,
+    `stage compact Profession shorter than Free full (compact=${layers.profession.length} full=${freeLayers.profession.length})`,
+  );
+  // Compact must not re-ship Free work-mode pointer as always-on profession
+  assert.doesNotMatch(
+    layers.profession,
+    /Default Expert mode is \*\*Free\*\*/,
+    "compact Profession drops Free-mode work.md pointer",
+  );
+
+  // Skill L1 catalog is Runtime capability; prior seed is Task; hyp queue Runtime-only when on
   const layersExtras = buildStagePromptLayers(inputWithExtras, task, pack);
   assert.match(layersExtras.runtime, /skill-l1-catalog/, "skill L1 in Runtime");
   assert.match(layersExtras.task, /prior-finding-store/, "prior seed in Task");
+  assert.match(
+    layersExtras.runtime,
+    /hypothesis-queue/,
+    "#394 hyp queue injection single home: Runtime when hyp mode on",
+  );
+  assert.doesNotMatch(
+    layersExtras.task,
+    /hypothesis-queue/,
+    "#394 hyp queue not dual-dumped into Task",
+  );
+  // Hyp mode off: even if host set injection, do not place hyp block in Task or Runtime
+  const layersHypOff = buildStagePromptLayers(
+    {
+      ...inputWithSub,
+      hypothesisQueueInjection: "<hypothesis-queue>\nactive_n=9\n</hypothesis-queue>",
+    },
+    task,
+    pack,
+  );
+  assert.doesNotMatch(
+    layersHypOff.runtime + "\n" + layersHypOff.task,
+    /hypothesis-queue/,
+    "#394 hyp mode off: no hyp block in Runtime or Task",
+  );
 }
 
 console.log("hard-graph-stage-prompts.test.ts: ok");

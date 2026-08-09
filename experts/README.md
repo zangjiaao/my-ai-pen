@@ -7,7 +7,7 @@ Independent **expert pack** units maintained outside the Node harness.
 **Product:** [`docs/prd.md`](../docs/prd.md) · **Cleanup plan:** [`docs/project-cleanup-plan.md`](../docs/project-cleanup-plan.md)  
 (Experts = target families; stages = skills; pipeline = Case + user @ — not stage-named Experts.)
 
-**Pack authoring (system prompt layers):** Product Agent system prompts assemble as **Base → Profession → Runtime → Task**. Pack `mission.md` / `work.md` are the **Profession** layer (seat how-to only). Put Free vs Graph harness and tool catalogs in **Runtime** (host-owned), this-turn facts in **Task**, and attack-class procedure depth in **skill bodies**—not always-on Profession. Rule of thumb and ownership table: [`docs/specs/prompt-layers.md`](../docs/specs/prompt-layers.md) §3 / §10 (Spec [#386](https://github.com/zangjiaao/my-ai-pen/issues/386)).
+**Pack authoring (system prompt layers):** Product Agent system prompts assemble as **Base → Profession → Runtime → Task**. Pack `mission.md` / `work.md` are the **Profession** layer (seat how-to only). Put Free vs Graph harness and tool catalogs in **Runtime** (host-owned), this-turn facts in **Task**, and attack-class procedure depth in **skill bodies**—not always-on Profession. Do **not** re-author platform-citizen / next_steps longform in `work.md` — host prepends citizen into mission at pack load (appears in Profession today; not yet a separate Base string — Spec [#395](https://github.com/zangjiaao/my-ai-pen/issues/395) / [`prompt-layers.md`](../docs/specs/prompt-layers.md) §3.3.1). Rule of thumb and ownership table: [`docs/specs/prompt-layers.md`](../docs/specs/prompt-layers.md) §3 / §10 (Spec [#386](https://github.com/zangjiaao/my-ai-pen/issues/386)).
 
 | Path | Role |
 |------|------|

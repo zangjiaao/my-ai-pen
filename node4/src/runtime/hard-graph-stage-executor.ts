@@ -87,13 +87,15 @@ import {
   mapPromptFailureToLlmTurnError,
   surfaceLlmTurnFailure,
 } from "./llm-turn-surface.js";
+// Stage system-prompt layers live in the canonical prompt module (#393).
 import {
-  assembleSystemPrompt,
-  buildBaseLayer,
-  buildProfessionLayer,
-  joinNonEmptyPromptParts,
-  type PromptLayers,
+  buildStagePromptLayers,
+  stageIntentPromptLines,
+  stageSystemPrompt,
 } from "./prompt.js";
+
+// Thin re-exports for test / harness import stability (#393).
+export { buildStagePromptLayers, stageIntentPromptLines, stageSystemPrompt };
 
 /**
  * Deposit host-trusted surfaces/candidates into ledger + Finding Store.
@@ -154,127 +156,6 @@ export type HardGraphBoundSessionFactory = (options: {
   systemPrompt: string;
   thinkingLevel?: string;
 }) => Promise<{ session: Node4AgentSession }>;
-
-/** Exported for harness contract tests (#101 / #125). */
-/** Data-driven stage intent text (Spec #139 I5) — prefers stage.intent over stage id. */
-export function stageIntentPromptLines(stage: {
-  id: string;
-  intent?: string;
-}): string {
-  const intent = String(stage.intent || stage.id || "").toLowerCase();
-  if (intent === "surface") {
-    return [
-      "**Stage intent (surface — Spec #139 I5):** inventory + **bounded smoke** only.",
-      "Bounded smoke = short characterize-or-deadend per observed surface (login form shape, param names, auth requirement) — not multi-class exploitation campaigns.",
-      "Multi-class depth belongs in class_probe+ stages. Do not treat recon as full exploit.",
-      "No candidates_min class quota; opportunistic smoke candidates may deposit but are not required for gate.",
-      "Do not call finding(confirm) on this stage (tool profile forbids).",
-    ].join(" ");
-  }
-  if (intent === "init") {
-    return "Init: RoE + target understanding only; no live recon. Acknowledge priors loaded or honest empty-prior from host seed.";
-  }
-  if (intent === "book") {
-    return "Book stage: confirm feedback_ok Store rows by finding_id only; leftover feedback_ok become explicit unbookable reasons.";
-  }
-  return "";
-}
-
-/**
- * Four-layer stage system prompt inputs (T4 / #390).
- * Same seam as Free Main: Base → Profession → Runtime → Task.
- * Stage identity/law lives in Runtime; pack mission+work is Profession (P3 required).
- */
-export function buildStagePromptLayers(
-  input: StageExecutorInput,
-  task: TaskEnvelope,
-  pack: RolePack,
-): PromptLayers {
-  const toolList = input.tools.length ? input.tools.join(", ") : "(none)";
-  const allowSubagent = input.tools.includes("subagent");
-  const allowFinding = input.tools.includes("finding");
-  const allowHypothesis = input.tools.includes("hypothesis");
-  const hypMode = isHypothesisWorkModeOn(input.stage);
-  const intentLines = stageIntentPromptLines(input.stage);
-  // Typed StagePromptExtras (prior / hyp queue / skill L1) — no cast soup
-  const priorSeed = input.priorSnapshot || "";
-  const hypothesisBlock = input.hypothesisQueueInjection || "";
-  const skillL1Block = input.skillL1CatalogInjection || "";
-
-  // Base: Standing + seat meta (shared with Free; stage identity is Runtime)
-  const base = buildBaseLayer(task, pack);
-  // Profession: pack mission+work so stages keep proof bar / progressive skill / fact vs finding
-  const profession = buildProfessionLayer(task, pack);
-
-  // Runtime: Graph stage law + capability (skill L1 catalog is Runtime capability)
-  const runtime = joinNonEmptyPromptParts([
-    "You are a **Hard Graph stage agent** (Graph × Pi).",
-    `Graph: ${input.graphId}  Stage: ${input.stage.id} (index ${input.stageIndex})`,
-    input.stage.success ? `Stage success criteria: ${input.stage.success}` : "",
-    "You do NOT schedule other stages. Complete only this stage.",
-    `Allowed tools for this stage: ${toolList}`,
-    intentLines,
-    "Briefly narrate progress in assistant text when useful (what you are checking next; what you observed). Do not invent surfaces, proof, or booked findings in prose.",
-    "**Stage settlement is host-owned** (Spec #125): do **not** write result.json as the stage handoff or booking channel. Host projects stage outcome from Finding Store, package terminals, and surface ledger.",
-    "Bookable candidates must land in **Finding Store** (package settlement auto-ingest, or finding(upsert) for serial Main work) with title, location, **severity** (critical|high|medium|low|info — no silent medium), proof_excerpt (verbatim tool stdout/body ≥24 chars), optional poc.",
-    "Surfaces: Runtime settles real Traffic (+ TARGET seed) into the ledger; use **surface(op=summary|list|get)** for coverage. Optional surface(upsert) is non-primary corrective only — never stage result.json as handoff.",
-    allowFinding
-      ? "After L0 Feedback marks feedback_ok, Main books with finding(confirm, finding_id=…). Severity fills from Store when omitted; missing severity fails closed."
-      : "This stage cannot finding(confirm). Deposit candidates via packages or surface/fact only.",
-    "Do **not** create process-chore L2 todos (e.g. Write result.json, collect subagents, pure meta login prep).",
-    "Spec #281: If you use todo(init), checklist is **this stage only** (single phase / stage-local items). Do not init a whole-engagement multi-phase map (recon/auth/vuln/report) under Graph — that is Free-mode behavior.",
-    hypMode && allowHypothesis
-      ? [
-          "Hypothesis work mode ON for this stage: maintain the host **hypothesis queue** (hypothesis tool) for active/confirmed/killed/deferred exploration.",
-          "Main commits only; Sub packages return structured hypothesis_outcomes (proved|disproved|inconclusive).",
-          "Bind package this_turn_goal / success_criteria to prove_if / disprove_if when applicable.",
-          "Confirmed ≠ booked — never finding(confirm) from hypothesis id alone.",
-        ].join(" ")
-      : "",
-    allowSubagent
-      ? [
-          "Agent Graph (preferred when multi-class or multi-surface work is justified): fan-out with **subagent** packages[] (skill/path-scoped workers).",
-          "Prefer packages over one long serial monologue across all vulnerability classes or surfaces.",
-          "Each formal package **must** pass plan_node_id (L2 attack-class anchor). No hard package quotas.",
-          "Anti-micro-spawn: do not split trivial single-GET chores into packages.",
-          "Workers return structured candidates/surfaces with severity + verbatim proof_excerpt; host settlement + Finding Store own Join — do not rephrase proof into a result.json ceremony.",
-          "Discovery packages: already_done must include prior pathKey∩class; host hard-fails spawn on prior collision — use re-verify packages with prior Store ids for known holes.",
-          "After packages start this stage: orchestrate + settle only (do not serial-erase package failure).",
-          "No nested subagent inside workers. Stay in RoE/scope.",
-          "Serial Main-only probing is allowed if packages are not justified (single surface / single class) — deposit Store/surfaces via host paths.",
-        ].join(" ")
-      : "",
-    "Fail closed: do not invent surfaces or proof. Destructive actions default-deny unless RoE explicitly allows (record skipped_roe when denied).",
-    // Spec: skill L1 is Runtime capability; hyp queue is stage-mode Runtime projection
-    skillL1Block,
-    hypMode ? hypothesisBlock : "",
-  ]);
-
-  // Task: this-turn envelope + handoff / prior seed facts
-  const taskLayer = joinNonEmptyPromptParts([
-    `Target: ${JSON.stringify(task.target)}`,
-    `Scope: ${JSON.stringify(task.scope)}`,
-    `Prior handoff stages: ${input.handoff.completed_stages.join(", ") || "(none)"}`,
-    `Known surfaces: ${JSON.stringify(input.handoff.surfaces.slice(0, 20))}`,
-    priorSeed,
-    // When hyp mode off, still surface any injected block if host set it (defensive)
-    !hypMode ? hypothesisBlock : "",
-  ]);
-
-  return { base, profession, runtime, task: taskLayer };
-}
-
-/**
- * Expert Graph stage captain system prompt via the shared four-layer seam (#390).
- * Pack is required so Profession core (mission+work) is never dropped.
- */
-export function stageSystemPrompt(
-  input: StageExecutorInput,
-  task: TaskEnvelope,
-  pack: RolePack,
-): string {
-  return assembleSystemPrompt(buildStagePromptLayers(input, task, pack));
-}
 
 /** Exported for harness contract tests (#101 / #125). */
 export function stageUserPrompt(

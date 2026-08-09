@@ -4,10 +4,10 @@
  */
 import assert from "node:assert/strict";
 import {
+  assembleSystemPrompt,
   buildSubagentPromptLayers,
   buildSubagentSystemPrompt,
-} from "./subagent-session.js";
-import { assembleSystemPrompt } from "./prompt.js";
+} from "./prompt.js";
 import { formatAgentLanguageInjection } from "./agent-language.js";
 import type { TaskEnvelope } from "../types.js";
 
