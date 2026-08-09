@@ -62,21 +62,21 @@ def test_transition_still_rejects_invalid_paths():
         pass
 
 
-def test_paused_normalizes_to_pause():
-    """Product: paused/waiting → pause (human wait / authorize); blocked → incomplete."""
+def test_pause_aliases_normalize_to_paused():
+    """Product: pause/waiting → paused (human wait / authorize); blocked → incomplete."""
     from app.services.conversation_state import normalize_conversation_status
 
-    assert normalize_conversation_status("paused") == "pause"
-    assert normalize_conversation_status("pause") == "pause"
-    assert normalize_conversation_status("waiting_user") == "pause"
+    assert normalize_conversation_status("paused") == "paused"
+    assert normalize_conversation_status("pause") == "paused"
+    assert normalize_conversation_status("waiting_user") == "paused"
     assert normalize_conversation_status("blocked") == "incomplete"
-    # pause can continue or settle
+    # paused can continue or settle
     c = _conv(status="running")
-    transition_conversation(c, "pause")
-    assert c.status == "pause"
+    transition_conversation(c, "paused")
+    assert c.status == "paused"
     transition_conversation(c, "running")
     assert c.status == "running"
-    transition_conversation(c, "pause")
+    transition_conversation(c, "paused")
     transition_conversation(c, "canceled")
     assert c.status == "canceled"
 

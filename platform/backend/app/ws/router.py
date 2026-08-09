@@ -875,8 +875,8 @@ async def _set_work_burst_authorize_paused(
 ) -> dict | None:
     """Spec #325 H1: pending user authorize does not accrue busy work-seconds.
 
-    Task package status: running → pause on authorize wait; pause → running (or
-    resume_status) when the wait ends. Light uses status=pause (yellow) even if
+    Task package status: running → paused on authorize wait; paused → running (or
+    resume_status) when the wait ends. Light uses status=paused (yellow) even if
     working stays true so Send can still interrupt.
     """
     cid = str(conv_id or "").strip()
@@ -912,16 +912,14 @@ async def _set_work_burst_authorize_paused(
                 except Exception as stamp_exc:
                     print(f"[WS] B1 result anchor stamp (authorize resume) error: {stamp_exc}")
             c.context = context
-            # Package status: human wait = pause (product 6-state + incomplete).
+            # Package status: human wait = paused (canonical; pause/waiting normalize here).
             try:
                 cur = normalize_conversation_status(str(c.status or "created"))
                 if paused:
-                    if cur == "running":
-                        transition_conversation(c, "pause")
-                    elif cur == "created":
-                        transition_conversation(c, "pause")
+                    if cur in {"running", "created"}:
+                        transition_conversation(c, "paused")
                 else:
-                    if cur == "pause":
+                    if cur == "paused":
                         target = normalize_conversation_status(resume_status or "running")
                         if target not in {"running", "canceled", "failed", "completed", "incomplete"}:
                             target = "running"
@@ -3877,7 +3875,7 @@ async def _freeze_pending_approvals_on_interrupt(conv_id: str, client_id: str) -
         except Exception as e:
             print(f"[WS] interrupt freeze audit error: {e}")
     # Spec #325 H1: no longer waiting on authorize after interrupt freeze.
-    # Product: pause → canceled when interrupt freezes open ChoiceCards.
+    # Product: paused → canceled when interrupt freezes open ChoiceCards.
     await _set_work_burst_authorize_paused(conv_id, paused=False, resume_status="canceled")
     return len(pending_for_conv)
 
@@ -6520,7 +6518,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     approval = pending_approvals.pop(str(request_id), {}) if request_id else {}
                     had_live_pending = bool(isinstance(approval, dict) and approval)
                     # Spec #325 H1: leave authorize wait — resume busy accrual if workers still busy.
-                    # pause → running on authorize/confirm; pause → canceled on cancel.
+                    # paused → running on authorize/confirm; paused → canceled on cancel.
                     if had_live_pending:
                         dec = str(decision or "").strip().lower()
                         if dec in {"authorize", "confirm_options", "confirm", "allow", "yes"}:

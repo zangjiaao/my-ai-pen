@@ -720,7 +720,7 @@ def normalize_agents_for_conversation_status(
         package_status = "canceled"
         terminal_action = "stopped"
     elif status in {"incomplete", "paused", "pause"}:
-        package_status = "pause" if status in {"pause", "paused"} else "incomplete"
+        package_status = "paused" if status in {"pause", "paused"} else "incomplete"
         terminal_action = "paused"
     else:
         package_status = "completed"

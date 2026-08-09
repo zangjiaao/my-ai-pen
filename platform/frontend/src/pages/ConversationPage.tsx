@@ -2278,7 +2278,7 @@ export default function ConversationPage() {
       shouldContinueExisting && activeConversation?.status === "running",
     );
     // Optimistic user row only — do not write agent_pending into RQ (Spec #276).
-    // Working is list-tail chrome for the whole turn (until terminal); not a Message.
+    // Working is list-tail chrome until first agent output (or terminal); not a Message.
     setConversationMessageData(convId, (data) => {
       const withoutPending = removeMessageRecords(
         data,

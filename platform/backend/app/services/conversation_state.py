@@ -5,13 +5,13 @@ from datetime import datetime, timezone
 
 from app.models.conversation import Conversation
 
-# Product lifecycle: created | running | pause | completed | failed | canceled
-# incomplete: harness half-settle (still allowed); pause: human wait (ChoiceCard authorize).
-# "paused" normalizes to pause; "blocked" still → incomplete.
+# Product lifecycle: created | running | paused | completed | failed | canceled
+# incomplete: harness half-settle (still allowed); paused: human wait (ChoiceCard authorize).
+# "pause" / waiting_* normalize to paused; "blocked" still → incomplete.
 CONVERSATION_STATUSES = {
     "created",
     "running",
-    "pause",
+    "paused",
     "completed",
     "incomplete",
     "failed",
@@ -20,11 +20,11 @@ CONVERSATION_STATUSES = {
 
 CONVERSATION_TRANSITIONS: dict[str, set[str]] = {
     "created": {"running", "canceled"},
-    "running": {"pause", "completed", "incomplete", "failed", "canceled"},
-    # pause = 等人授权 / 人工暂停；可继续或终态
-    "pause": {"running", "canceled", "failed", "completed", "incomplete"},
+    "running": {"paused", "completed", "incomplete", "failed", "canceled"},
+    # paused = 等人授权 / 人工暂停；可继续或终态
+    "paused": {"running", "canceled", "failed", "completed", "incomplete"},
     "completed": {"running"},
-    "incomplete": {"running", "canceled", "completed", "failed", "pause"},
+    "incomplete": {"running", "canceled", "completed", "failed", "paused"},
     "failed": {"running", "canceled"},
     "canceled": {"running"},
 }
@@ -41,7 +41,7 @@ CHECKPOINT_TERMINAL_STATUS = {
 }
 
 # Pre-terminal rows that may be healed from a terminal checkpoint.
-HEALABLE_STATUSES = {"created", "running", "pause"}
+HEALABLE_STATUSES = {"created", "running", "paused"}
 
 
 class ConversationStatusError(ValueError):
@@ -54,11 +54,11 @@ def normalize_conversation_status(status: str) -> str:
         return "running"
     if normalized == "cancelled":
         return "canceled"
-    # Product: blocked → incomplete (harness); paused/waiting → pause (human wait).
+    # Product: blocked → incomplete (harness); pause/waiting → paused (human wait).
     if normalized == "blocked":
         return "incomplete"
-    if normalized in {"paused", "waiting", "waiting_user", "awaiting_decision"}:
-        return "pause"
+    if normalized in {"pause", "paused", "waiting", "waiting_user", "awaiting_decision"}:
+        return "paused"
     return normalized
 
 
@@ -77,8 +77,8 @@ def transition_conversation(conv: Conversation, next_status: str) -> None:
         conv.status = "running"
         conv.last_active_at = datetime.now(timezone.utc)
         current = "running"
-    # Authorize card while still created (edge): bridge to running then pause.
-    if current == "created" and target == "pause":
+    # Authorize card while still created (edge): bridge to running then paused.
+    if current == "created" and target == "paused":
         conv.status = "running"
         conv.last_active_at = datetime.now(timezone.utc)
         current = "running"

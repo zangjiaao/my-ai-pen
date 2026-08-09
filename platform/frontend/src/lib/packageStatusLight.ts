@@ -14,10 +14,11 @@ export function packageStatusDotClass(
   const s = String(status || "")
     .trim()
     .toLowerCase();
-  // yellow first: pause / authorize wait must not be covered by working=blue
+  // yellow first: paused / authorize wait must not be covered by working=blue
+  // (canonical status is paused; pause/waiting_* are aliases)
   if (
-    s === "pause" ||
     s === "paused" ||
+    s === "pause" ||
     s === "incomplete" ||
     s === "pending" ||
     s === "waiting" ||
@@ -76,10 +77,10 @@ export function packageStatusTitle(
   const s = String(status || "")
     .trim()
     .toLowerCase();
-  // pause / authorize wait (title must match yellow light even if working)
+  // paused / authorize wait (title must match yellow light even if working)
   if (
-    s === "pause" ||
     s === "paused" ||
+    s === "pause" ||
     s === "waiting" ||
     s === "waiting_user" ||
     s === "pending"
@@ -123,9 +124,9 @@ export function resolvePackageLightStatus(input: {
   const pkg = String(input.packageStatus || "")
     .trim()
     .toLowerCase();
-  // pause wins over working (authorize wait keeps working=true for Send interrupt).
-  if (pkg === "pause" || pkg === "paused" || pkg === "waiting_user") {
-    return "pause";
+  // paused wins over working (authorize wait keeps working=true for Send interrupt).
+  if (pkg === "paused" || pkg === "pause" || pkg === "waiting_user") {
+    return "paused";
   }
   if (input.working === true) return "running";
   // Authoritative package terminals / running always win for Main sync.
@@ -143,8 +144,8 @@ export function resolvePackageLightStatus(input: {
   const a = String(input.agentStatus || "")
     .trim()
     .toLowerCase();
-  if (a === "pause" || a === "paused" || a === "waiting" || a === "waiting_user" || a === "pending") {
-    return "pause";
+  if (a === "paused" || a === "pause" || a === "waiting" || a === "waiting_user" || a === "pending") {
+    return "paused";
   }
   if (
     a === "running" ||
