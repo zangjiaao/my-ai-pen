@@ -16,8 +16,8 @@ Operators watching a long Expert Graph / Free run often see an **empty or mislea
 
 Today there are **three disconnected notions** of “attack surface”:
 
-1. **Node `taskDir/surfaces/ledger.json`** — Agent `fact(op=surface)` and Graph coverage gates; **not projected** to the Case UI.
-2. **UI Surface tab** — Frontend merges **engagement target + Case assets (`properties.urls`) + plan_tree surface nodes + finding paths**. Host assets are user-created; agents only enrich. Booking a finding can attach a **global** host asset (with historical URLs from other labs) to the Case, so the panel can **suddenly fill with stale DVWA/Juice noise**.
+1. **Node surface working store** — historically `taskDir/surfaces/ledger.json`; now **SQLite** `ledger.sqlite` + `surface` tool + Graph gates (#370–#371); **not** the Case UI projection path.
+2. **UI Surface tab** — **(#375)** projects Case `surface_ledger` only. Pre-spec multi-source merge (engagement target + Case assets `properties.urls` + plan_tree surface nodes + finding-only invent) is retired for this tab so dirty global asset URLs no longer fill Surface.
 3. **Traffic audit (#309)** — Honest capture of HTTP exchanges; **not** the Surface inventory.
 
 Consequences:
@@ -350,7 +350,10 @@ Traffic is **L0 observability**. Surface is **L1 Agent-judged Case coverage ledg
 
 | Area | Behavior now |
 |------|----------------|
-| Node store | **#370:** SQLite `taskDir/surfaces/ledger.sqlite` + `surface` tool (upsert/list/get); one-shot migrate from `ledger.json`; legacy JSON dual-write bridge until #371 gates switch. Identity pure: `surface-identity.ts` (#369) |
-| UI Surface | multi-source merge (pre-spec; #375) |
-| Case document | Platform `conversation.context.surface_ledger` + snapshot + WS `surface_upsert` (#373 / dual-write #374) |
-| Tests | Platform pure merge + snapshot project (`tests/test_surface_ledger.py`); Node identity pure (#369); tool+SQLite seam `node4/src/tools/surface.test.ts` (#370) |
+| Node store | **#370/#371 done:** SQLite `taskDir/surfaces/ledger.sqlite` + `surface` tool (upsert/list/get); one-shot migrate from `ledger.json`; Graph gates (todo done, subagent post-process, host/hard settlement, finding booked) read SQLite. Identity pure: `surface-identity.ts` (#369). JSON dual-write bridge removed. |
+| Online dual-write | **#374:** After local SQLite commit, when `platformApi` + `conversationId` present → `platform_sync=pending` and async WS `surface_upsert` (`runtime/surface-platform-sync.ts`); settles to `ok` or `error` with retry. Offline/standalone stays `offline` (no Platform dependency). Tool `ok` never waits on Platform. |
+| Finding → booked | **#376:** Platform `vuln_found` persist success → `apply_booked_side_effect` (match advance / system-create `source=finding` / hard-cap soft-skip). Broadcasts `surface_upsert` when a row lands. Node `surfaceSqlite.markBooked` advances match or creates with `softCapSkip` (finding never blocked). Ordinary surface upsert still cannot set `booked`. |
+| UI Surface | **#375 done:** Right-panel Surface projects Case `surface_ledger` only (snapshot + live `surface_upsert` merge by origin_key+path_key). Empty ledger ⇒ empty panel. Findings may badge matching ledger paths; no invent from assets.urls / plan_tree / engagement target / finding-only tree. |
+| Case document | Platform `conversation.context.surface_ledger` + snapshot + WS `surface_upsert` (#373); Node dual-write publishes that event (#374) |
+| Offline import | **#377:** `/api/sync/import` merges package `surface_ledger.json` (preferred) and/or legacy `attack_surface.json` by identity into Case `context.surface_ledger` (`merge_import_package_into_context`); snapshot/UI project imported rows; second merge does not duplicate identities |
+| Tests | Platform pure merge + snapshot project + S5 booked + S7 import (`tests/test_surface_ledger.py`); Node identity pure (#369); tool+SQLite seam `node4/src/tools/surface.test.ts` (#370); gate seam `node4/src/stores/surface-sqlite.gate.test.ts` (#371, includes markBooked create); dual-write seam `node4/src/runtime/surface-platform-sync.test.ts` (#374); FE empty-vs-ledger projection `platform/frontend/src/lib/surfaceModel.ledger.test.ts` (#375) |

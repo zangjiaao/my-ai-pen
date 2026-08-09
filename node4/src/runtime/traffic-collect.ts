@@ -1,12 +1,15 @@
 /**
  * Spec #309 — Case traffic audit collect (Node Runtime hook side).
  *
- * Passive instrumentation on `http` + browser network. No Agent traffic tools.
+ * Passive instrumentation on `http` + browser network + best-effort shell.
+ * Agents do not log traffic; they may **query** session captures via `traffic_list`
+ * (#378 raw material). Collect never writes the surface ledger.
  * Platform Case store is panel SoT; act-observation memory remains booking-only.
  */
 
 import { createHash } from "node:crypto";
 import type { PlatformSink, TaskEnvelope, ToolRuntime } from "../types.js";
+import { rememberTrafficExchange } from "./traffic-query.js";
 
 export type TrafficSource = "http" | "browser" | "shell" | "mitm";
 export type TrafficPhase = "pending" | "completed" | "failed";
@@ -470,6 +473,8 @@ export async function emitHttpPending(
     requestBody: input.requestBody,
     bodyBudget: input.bodyBudget,
   });
+  // #378: remember before platform emit so local query works if send fails.
+  rememberTrafficExchange(runtime, exchange);
   await emitTrafficExchange(runtime.platform, exchange).catch(() => {});
   return exchange;
 }
@@ -486,6 +491,7 @@ export async function emitHttpComplete(
   },
 ): Promise<TrafficExchange> {
   const done = completeExchange(pending, input);
+  rememberTrafficExchange(runtime, done);
   await emitTrafficExchange(runtime.platform, done).catch(() => {});
   return done;
 }
@@ -496,6 +502,7 @@ export async function emitHttpFail(
   error: string,
 ): Promise<TrafficExchange> {
   const done = failExchange(pending, error);
+  rememberTrafficExchange(runtime, done);
   await emitTrafficExchange(runtime.platform, done).catch(() => {});
   return done;
 }
@@ -807,6 +814,7 @@ export async function emitShellHttpTraffic(
   // Advance sequence counter past emitted rows
   (runtime.lifecycle as { trafficSequence?: number }).trafficSequence = seq0 + exchanges.length;
   for (const ex of exchanges) {
+    rememberTrafficExchange(runtime, ex);
     await emitTrafficExchange(runtime.platform, ex).catch(() => {});
   }
   return exchanges;
@@ -884,6 +892,8 @@ export async function drainBrowserNetworkRows(options: {
   seenIds: BrowserSeenMap;
   sequenceStart?: number;
   bodyBudget?: number;
+  /** Optional session host for #378 Agent query store (no surface ledger). */
+  storeHost?: ToolRuntime | { trafficById?: Map<string, TrafficExchange> };
 }): Promise<TrafficExchange[]> {
   const emitted: TrafficExchange[] = [];
   let seq = options.sequenceStart ?? 0;
@@ -902,6 +912,7 @@ export async function drainBrowserNetworkRows(options: {
     seq += 1;
     exchange.sequence = seq;
     rememberBrowserEmit(options.seenIds, mapKey, exchange);
+    if (options.storeHost) rememberTrafficExchange(options.storeHost, exchange);
     await emitTrafficExchange(options.platform, exchange).catch(() => {});
     emitted.push(exchange);
   }

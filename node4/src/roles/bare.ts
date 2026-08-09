@@ -37,6 +37,7 @@ export const BARE_RUNTIME_PACK: RolePack = {
     "- Long multi-challenge work: call goal(op=create, objective=...) early. Harness auto-continues while active with **no continue-count cap** (OMP). Optional token_budget → budget-limited soft stop (not completion). Call goal(complete) only after a real completion audit against current evidence.",
     "- If you prove a security issue in scope, book via finding(confirm) with proof= quoted from tool output; chat is not product truth.",
     "- Use fact(upsert) for process cognition (ports/auth/deadends) as you confirm it — separate from finding booking.",
+    "- Deposit attack-surface paths with surface(op=upsert); list open queue with surface(op=list).",
     "- Subagent requires full handoff (target, scope, already_done, this_turn_goal, success_criteria); no nested subagent.",
     "- When multiple todos are open, pass plan_node_id (todo work_items[].node_id) on subagent so the Worker chip binds to the right Tasks row.",
     "- No finish tool; no session wall. Harness settles when you stop with no tools (or goal complete/drop/budget-limited).",
@@ -52,8 +53,10 @@ export const BARE_RUNTIME_PACK: RolePack = {
     "script",
     "finding",
     "fact",
+    "surface",
     "subagent",
     "goal",
+    "traffic_list",
   ],
   bookingMode: "finding",
   settlementNote:

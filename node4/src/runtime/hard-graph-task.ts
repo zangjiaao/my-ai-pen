@@ -455,7 +455,8 @@ export async function runHardGraphExpertTask(options: {
       priorSeed: gq.priorSeed,
       unbookable: gq.unbookable,
       l1ByStage: gq.l1ByStage,
-      surfaceSummary: parentRuntime.surfaceLedger?.summary?.() as
+      surfaceSummary: ((await parentRuntime.surfaceSqlite?.summary?.()) ??
+        parentRuntime.surfaceLedger?.summary?.()) as
         | { total?: number; by_status?: Record<string, number>; sample_paths?: string[] }
         | undefined,
       hypothesis_summary,
@@ -493,14 +494,25 @@ export async function runHardGraphExpertTask(options: {
     agent_count: panel.list().length,
   });
 
-  // Spec #311: Hard settle emits Workset proposed from open surfaces + finding locations.
-  let openSurfaces: import("../stores/surface-ledger.js").SurfaceItem[] = [];
+  // Spec #311 / #371: Hard settle emits Workset proposed from open surfaces + finding locations.
+  // SQLite working store is coverage SoT; legacy JSON only for partial test runtimes.
+  let openSurfaces: Array<{
+    location: string;
+    path_key: string;
+    kind?: string;
+    status: string;
+  }> = [];
   let locationStrings: string[] = [];
   try {
-    const ledger = parentRuntime.surfaceLedger;
-    if (ledger) {
-      await ledger.load().catch(() => undefined);
-      openSurfaces = ledger.listOpen();
+    if (parentRuntime.surfaceSqlite) {
+      await parentRuntime.surfaceSqlite.open().catch(() => undefined);
+      openSurfaces = await parentRuntime.surfaceSqlite.listOpen();
+    } else {
+      const ledger = parentRuntime.surfaceLedger;
+      if (ledger) {
+        await ledger.load().catch(() => undefined);
+        openSurfaces = ledger.listOpen();
+      }
     }
   } catch {
     openSurfaces = [];

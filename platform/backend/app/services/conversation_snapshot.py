@@ -372,6 +372,16 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
         )
     except Exception:
         traffic_exchange_items = []
+    # Spec #368 / #373 S4: Case surface_ledger SoT = conversation.context surface_ledger.
+    try:
+        from app.services.surface_ledger import surface_ledger_for_snapshot
+
+        surface_ledger_doc = surface_ledger_for_snapshot(
+            context,
+            conversation_id=str(conversation.id),
+        )
+    except Exception:
+        surface_ledger_doc = {"version": 1, "updated_at": None, "surfaces": []}
     snapshot_message_items, omitted = snapshot_messages(messages)
     agent_items = agents_from_messages(messages)
     # Prefer Case multi-role roster (participants) over last-checkpoint-only agents.
@@ -463,6 +473,8 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
         "captured_traffic": captured_traffic_items,
         # Spec #309: Case traffic audit list (replaces right-panel Activity projection).
         "traffic_exchanges": traffic_exchange_items,
+        # Spec #368 / #373: Case attack-surface ledger (UI Surface SoT; empty = valid).
+        "surface_ledger": surface_ledger_doc,
         "pending_approvals": pending,
         "evidence": evidence_items,
         "read_model_errors": read_model_errors,
@@ -476,6 +488,7 @@ async def build_conversation_snapshot(db: AsyncSession, conversation: Conversati
             "coverage": len(coverage_items),
             "captured_traffic": len(captured_traffic_items),
             "traffic_exchanges": len(traffic_exchange_items),
+            "surface_ledger": len(surface_ledger_doc.get("surfaces") or []),
             "plan_tree": len(plan_tree),
             "messages": len(snapshot_message_items),
             "agents": len(agent_items),

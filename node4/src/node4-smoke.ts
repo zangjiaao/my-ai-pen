@@ -305,6 +305,8 @@ async function main() {
   const bare = resolveRolePack({ engagement: BARE_RUNTIME_ID });
   assert(bare.pack.id === BARE_RUNTIME_ID && !bare.blocked, "explicit runtime → bare pack");
   assert(toolNamesForPack(PENTEST_ROLE_PACK).includes("finding"), "pentest has finding");
+  assert(toolNamesForPack(PENTEST_ROLE_PACK).includes("traffic_list"), "pentest has traffic_list (#378)");
+  assert(toolNamesForPack(PENTEST_ROLE_PACK).includes("surface"), "pentest has surface (#370)");
   assert(!toolNamesForPack(CONSULT_STUB_ROLE_PACK).includes("finding"), "consult stub has no finding");
   assert(toolNamesForPack(PENTEST_ROLE_PACK).includes("subagent"), "pentest has subagent");
   // Pentest OMP assist: session/browser/skill (not process prisons; no captcha by default)

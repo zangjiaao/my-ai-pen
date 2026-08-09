@@ -53,6 +53,8 @@ export function humanizeToolName(tool: string): string {
     request_user_decision: "请求用户授权",
     shell: "执行命令",
     http: "HTTP 探测",
+    traffic_list: "查询抓包原始材料",
+    surface: "攻击面台账",
     session: "会话化 HTTP",
     browser: "浏览器探测",
     script: "运行脚本",

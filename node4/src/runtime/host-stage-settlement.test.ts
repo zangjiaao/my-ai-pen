@@ -96,7 +96,7 @@ function makeRuntime(opts?: {
     ],
   });
   // Agent would have claimed full success in result.json — host must not care.
-  const settlement = settleHostStage({
+  const settlement = await settleHostStage({
     stageId: "auth_session",
     runtime,
     narrative: {
@@ -126,7 +126,7 @@ function makeRuntime(opts?: {
       { key: "p2", terminal: "running" },
     ],
   });
-  const s = settleHostStage({ stageId: "auth_session", runtime });
+  const s = await settleHostStage({ stageId: "auth_session", runtime });
   assert.equal(s.structured.ok, false);
   assert.ok(s.running_packages.includes("p2"));
 }
@@ -138,7 +138,7 @@ function makeRuntime(opts?: {
     { location: "http://t/login", kind: "form" },
     { location: "http://t/setup.php", kind: "page" },
   ]);
-  const s = settleHostStage({
+  const s = await settleHostStage({
     stageId: "surface",
     runtime,
     narrative: { summary: "recon complete" },
@@ -206,7 +206,7 @@ assert.equal(
       }),
       "utf8",
     );
-    const settlement = settleHostStage({
+    const settlement = await settleHostStage({
       stageId: "wave",
       runtime,
       narrative: { summary: "wave complete" },
@@ -244,7 +244,7 @@ assert.equal(
   const exec: StageExecutor = async () => {
     const runtime = makeRuntime({ stageId: "surface" });
     // No surfaces in ledger → require fails even with agent ok:true narrative
-    const settlement = settleHostStage({
+    const settlement = await settleHostStage({
       stageId: "surface",
       runtime,
       narrative: { summary: "I wrote result.json with surfaces" },
@@ -279,7 +279,7 @@ assert.equal(
     ],
     { package_id: "p1", stage_id: "class_probe", plan_node_id: "todo-sqli" },
   );
-  const s = settleHostStage({ stageId: "class_probe", runtime, narrative: { summary: "probed" } });
+  const s = await settleHostStage({ stageId: "class_probe", runtime, narrative: { summary: "probed" } });
   assert.ok(s.structured.candidates.length >= 1);
   assert.ok(s.feedback_ok_ids.length >= 1, "L0 feedback_ok ids captain-visible");
   assert.equal(s.structured.ok, true);
@@ -322,7 +322,7 @@ assert.equal(
     panel: {},
     stageId: "auth_session",
   };
-  const s = settleHostStage({
+  const s = await settleHostStage({
     stageId: "auth_session",
     runtime,
     narrative: { summary: "wave" },
@@ -357,7 +357,7 @@ assert.equal(
       ],
       { package_id: "p", stage_id: "wave" },
     );
-    const settlement = settleHostStage({
+    const settlement = await settleHostStage({
       stageId: "wave",
       runtime,
       narrative: { summary: "ok" },
@@ -421,7 +421,7 @@ assert.equal(
   assert.equal(weakIds.length, 1, "candidate stored then L0-evaluated");
   const weakRow = store.get(weakIds[0]!);
   assert.equal(weakRow?.status, "feedback_reject", "book-path L0 reject");
-  const s = settleHostStage({
+  const s = await settleHostStage({
     stageId: "class_probe",
     runtime,
     narrative: { summary: "partial packages + weak book path" },
@@ -530,7 +530,7 @@ assert.equal(
       panel: {},
       stageId: "authz_logic",
     };
-    const settlement = settleHostStage({
+    const settlement = await settleHostStage({
       stageId: "authz_logic",
       runtime,
       narrative: { summary: "wave" },

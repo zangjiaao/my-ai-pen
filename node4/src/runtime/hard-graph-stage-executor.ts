@@ -100,8 +100,14 @@ async function depositHostTrustedStructured(
   hostInject?: SubagentStructuredResult,
 ): Promise<void> {
   if (!hostInject) return;
-  if (hostInject.surfaces.length && runtime.surfaceLedger) {
-    await runtime.surfaceLedger.upsertFromRecon(hostInject.surfaces).catch(() => {});
+  if (hostInject.surfaces.length) {
+    // Spec #371: SQLite working store is coverage SoT; legacy JSON only as test fallback.
+    if (runtime.surfaceSqlite) {
+      await runtime.surfaceSqlite.open().catch(() => {});
+      await runtime.surfaceSqlite.upsertFromRecon(hostInject.surfaces).catch(() => {});
+    } else if (runtime.surfaceLedger) {
+      await runtime.surfaceLedger.upsertFromRecon(hostInject.surfaces).catch(() => {});
+    }
   }
   if (hostInject.candidates.length) {
     const fstore = ensureProcessQuality(runtime.lifecycle).findingStore;
@@ -193,10 +199,10 @@ export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope)
     "Briefly narrate progress in assistant text when useful (what you are checking next; what you observed). Do not invent surfaces, proof, or booked findings in prose.",
     "**Stage settlement is host-owned** (Spec #125): do **not** write result.json as the stage handoff or booking channel. Host projects stage outcome from Finding Store, package terminals, and surface ledger.",
     "Bookable candidates must land in **Finding Store** (package settlement auto-ingest, or finding(upsert) for serial Main work) with title, location, **severity** (critical|high|medium|low|info — no silent medium), proof_excerpt (verbatim tool stdout/body ≥24 chars), optional poc.",
-    "Surfaces for recon: use **fact(op=surface, location=…)** (host ledger) or package workers — never stage result.json as handoff.",
+    "Surfaces for recon: use **surface(op=upsert, location=…)** (SQLite working ledger; fact(op=surface) is a thin wrapper) or package workers — never stage result.json as handoff.",
     allowFinding
       ? "After L0 Feedback marks feedback_ok, Main books with finding(confirm, finding_id=…). Severity fills from Store when omitted; missing severity fails closed."
-      : "This stage cannot finding(confirm). Deposit candidates via packages or fact/surfaces only.",
+      : "This stage cannot finding(confirm). Deposit candidates via packages or surface/fact only.",
     "Do **not** create process-chore L2 todos (e.g. Write result.json, collect subagents, pure meta login prep).",
     "Spec #281: If you use todo(init), checklist is **this stage only** (single phase / stage-local items). Do not init a whole-engagement multi-phase map (recon/auth/vuln/report) under Graph — that is Free-mode behavior.",
     hypMode && allowHypothesis
@@ -261,7 +267,7 @@ export function stageUserPrompt(
     ? "Complete this book stage only. Use finding(list) then finding(confirm, finding_id=…) for confirmable Store rows; do not invent ids; do not stop with zero confirms while feedback_ok remain; settle via host/Store (no result.json handoff). Book L0 consumes Store only — hypothesis queue is informational."
     : allowSubagent
       ? "Complete this stage only. Prefer subagent packages when multi-class work is justified; narrate briefly; settle via host/Store (no result.json handoff); then stop."
-      : "Complete this stage only. Narrate briefly when useful; deposit surfaces via fact(op=surface) and candidates via finding(upsert) — do not use result.json as stage handoff; then stop.";
+      : "Complete this stage only. Narrate briefly when useful; deposit surfaces via surface(op=upsert) and candidates via finding(upsert) — do not use result.json as stage handoff; then stop.";
   return [
     `### Hard Graph stage: ${input.stage.id}`,
     input.stage.success || "",
@@ -330,6 +336,7 @@ export function buildHardGraphStageChildRuntime(options: {
     skillIds: pack.skillIds,
     processFacts,
     surfaceLedger: parent.surfaceLedger,
+    surfaceSqlite: parent.surfaceSqlite,
     lifecycle: {
       toolsInLastSegment: 0,
       recentObservations: [],
@@ -555,17 +562,19 @@ export function createHardGraphStageExecutor(options: {
         );
       }
       const settleRuntime = opts.child || parentRuntime;
-      // Warm ledger once, then deposit hostInject, then re-warm for projection.
+      // Warm surface working store, then deposit hostInject, then re-read for projection (#371 SQLite).
+      await settleRuntime.surfaceSqlite?.open?.().catch(() => {});
       await settleRuntime.surfaceLedger?.load?.().catch(() => {});
       if (opts.hostInject) {
         await depositHostTrustedStructured(settleRuntime, input.stage.id, opts.hostInject);
         if (settleRuntime !== parentRuntime) {
           await depositHostTrustedStructured(parentRuntime, input.stage.id, opts.hostInject);
         }
+        await settleRuntime.surfaceSqlite?.open?.().catch(() => {});
         await settleRuntime.surfaceLedger?.load?.().catch(() => {});
       }
 
-      const settlement = settleHostStage({
+      const settlement = await settleHostStage({
         stageId: input.stage.id,
         runtime: settleRuntime,
         narrative: opts.narrative,
@@ -638,7 +647,8 @@ export function createHardGraphStageExecutor(options: {
         store: pq.findingStore,
         fanoutPackagesN,
         honestyFlags,
-        surfaceSummary: settleRuntime.surfaceLedger?.summary?.() as
+        surfaceSummary: ((await settleRuntime.surfaceSqlite?.summary?.()) ??
+          settleRuntime.surfaceLedger?.summary?.()) as
           | { total?: number; open?: number; probed?: number; booked?: number }
           | undefined,
       });
@@ -678,9 +688,11 @@ export function createHardGraphStageExecutor(options: {
 
       // Spec #285 S4: Product-state route projection from hypothesis queue + Finding Store + surfaces.
       // Full snapshot each settle (not sticky). Gate choice from structured Main output only.
-      const surfaceSummary = settleRuntime.surfaceLedger?.summary?.() as
-        | { total?: number; open?: number; probed?: number; booked?: number }
-        | undefined;
+      const surfaceSummary =
+        ((await settleRuntime.surfaceSqlite?.summary?.()) ??
+          settleRuntime.surfaceLedger?.summary?.()) as
+          | { total?: number; open?: number; probed?: number; booked?: number }
+          | undefined;
       const surfacesFromLedger =
         typeof surfaceSummary?.total === "number"
           ? surfaceSummary.total

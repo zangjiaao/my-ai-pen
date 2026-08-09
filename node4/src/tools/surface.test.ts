@@ -1,0 +1,317 @@
+/**
+ * Seam S2: surface tool + SQLite working store (Spec #368 / issue #370).
+ * External behavior only — not SQL internals as product contract.
+ * Run: npx tsx src/tools/surface.test.ts
+ */
+import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { SurfaceSqliteStore, SURFACE_WRITE_HARD_CAP } from "../stores/surface-sqlite.js";
+import { SurfaceLedgerStore } from "../stores/surface-ledger.js";
+import { createSurfaceTool, depositSurfaceLocation } from "./surface.js";
+import type { ToolRuntime } from "../types.js";
+import type { TaskEnvelope } from "../types.js";
+
+function minimalRuntime(
+  taskDir: string,
+  opts?: {
+    surfaceSqlite?: SurfaceSqliteStore;
+    surfaceLedger?: SurfaceLedgerStore;
+    workerAudit?: { agentId: string; packageTurnId: string } | null;
+    subagentDepth?: number;
+  },
+): ToolRuntime {
+  const task = {
+    taskId: "t-surface-370",
+    conversationId: "c1",
+    instruction: "test",
+  } as TaskEnvelope;
+  return {
+    task,
+    workspaceDir: taskDir,
+    taskDir,
+    platform: { async send() {} },
+    todo: {} as ToolRuntime["todo"],
+    evidence: {} as ToolRuntime["evidence"],
+    findingsDir: join(taskDir, "findings"),
+    goals: {} as ToolRuntime["goals"],
+    surfaceSqlite: opts?.surfaceSqlite,
+    surfaceLedger: opts?.surfaceLedger,
+    lifecycle: {
+      subagentDepth: opts?.subagentDepth ?? 0,
+      workerAudit: opts?.workerAudit ?? null,
+    },
+  };
+}
+
+async function toolJson(tool: ReturnType<typeof createSurfaceTool>, params: Record<string, unknown>) {
+  const out = await tool.execute("call-1", params);
+  const text = out.content?.[0] && "text" in out.content[0] ? String((out.content[0] as { text: string }).text) : "";
+  if (text.startsWith("error:")) {
+    return { error: text, raw: out };
+  }
+  return { data: JSON.parse(text) as Record<string, unknown>, raw: out };
+}
+
+const dir = await mkdtemp(join(tmpdir(), "node4-surface-tool-"));
+const sqlitePath = SurfaceSqliteStore.pathFromTaskDir(dir);
+const store = new SurfaceSqliteStore(sqlitePath);
+await store.open();
+const legacy = new SurfaceLedgerStore(SurfaceLedgerStore.pathFromTaskDir(dir));
+await legacy.ensureDir();
+await legacy.load();
+
+const runtime = minimalRuntime(dir, { surfaceSqlite: store, surfaceLedger: legacy });
+const tool = createSurfaceTool(runtime);
+
+// --- upsert + get identity normalize ---
+{
+  const r = await toolJson(tool, {
+    op: "upsert",
+    location: "https://Host.Example:443/api/Users?x=1",
+    methods: ["get"],
+    params: ["id"],
+    kind: "api",
+    note: "from recon",
+  });
+  assert.ok(r.data, `upsert failed: ${r.error}`);
+  assert.equal(r.data!.ok, true);
+  assert.equal(r.data!.created, 1);
+  assert.equal(r.data!.total, 1);
+  assert.equal(r.data!.platform_sync, "offline");
+  assert.equal(r.data!.source_agent_id, "main");
+  const surfaces = r.data!.surfaces as Array<Record<string, unknown>>;
+  assert.equal(surfaces[0]!.origin_key, "https://host.example:443");
+  assert.equal(surfaces[0]!.path_key, "/api/users");
+  assert.deepEqual(surfaces[0]!.methods, ["GET"]);
+  assert.deepEqual(surfaces[0]!.params, ["id"]);
+}
+
+// --- merge params/methods on same identity; no status downgrade ---
+{
+  const r = await toolJson(tool, {
+    op: "upsert",
+    location: "https://host.example/api/users",
+    methods: ["POST"],
+    params: ["name"],
+    status: "in_probe",
+  });
+  assert.ok(r.data);
+  assert.equal(r.data!.created, 0);
+  assert.equal(r.data!.updated, 1);
+  const surfaces = r.data!.surfaces as Array<Record<string, unknown>>;
+  assert.deepEqual(surfaces[0]!.methods, ["GET", "POST"]);
+  assert.deepEqual(surfaces[0]!.params, ["id", "name"]);
+  assert.equal(surfaces[0]!.status, "in_probe");
+}
+
+// --- upsert cannot set booked ---
+{
+  const r = await toolJson(tool, {
+    op: "upsert",
+    location: "https://host.example/api/users",
+    status: "booked",
+  });
+  assert.ok(r.data);
+  const surfaces = r.data!.surfaces as Array<Record<string, unknown>>;
+  assert.equal(surfaces[0]!.status, "in_probe", "booked ignored on ordinary upsert");
+}
+
+// --- list default open+in_probe ---
+{
+  await toolJson(tool, {
+    op: "upsert",
+    location: "https://host.example/login",
+    status: "open",
+  });
+  await toolJson(tool, {
+    op: "upsert",
+    location: "https://host.example/admin",
+    status: "probed",
+  });
+  const r = await toolJson(tool, { op: "list" });
+  assert.ok(r.data);
+  assert.equal(r.data!.ok, true);
+  assert.equal(r.data!.returned, 2, "default excludes probed");
+  assert.equal(r.data!.total_matching, 2);
+  assert.equal(r.data!.has_more, false);
+  const list = r.data!.surfaces as Array<Record<string, unknown>>;
+  for (const s of list) {
+    assert.ok(s.status === "open" || s.status === "in_probe");
+  }
+}
+
+// --- list status=all + has_more pagination ---
+{
+  const rAll = await toolJson(tool, { op: "list", status: "all" });
+  assert.ok(rAll.data);
+  assert.equal(rAll.data!.total_matching, 3);
+
+  // page size 1
+  const p0 = await toolJson(tool, { op: "list", status: "all", limit: 1, offset: 0 });
+  assert.ok(p0.data);
+  assert.equal(p0.data!.returned, 1);
+  assert.equal(p0.data!.has_more, true);
+  assert.equal(p0.data!.total_matching, 3);
+
+  const p2 = await toolJson(tool, { op: "list", status: "all", limit: 1, offset: 2 });
+  assert.ok(p2.data);
+  assert.equal(p2.data!.returned, 1);
+  assert.equal(p2.data!.has_more, false);
+}
+
+// --- get by location ---
+{
+  const r = await toolJson(tool, {
+    op: "get",
+    location: "https://host.example/api/users?q=1",
+  });
+  assert.ok(r.data);
+  assert.equal((r.data!.surface as Record<string, unknown>).path_key, "/api/users");
+}
+
+// --- Worker source_agent_id on same store ---
+{
+  const workerRt = minimalRuntime(dir, {
+    surfaceSqlite: store,
+    surfaceLedger: legacy,
+    workerAudit: { agentId: "sub_42", packageTurnId: "pkg_1" },
+    subagentDepth: 1,
+  });
+  const workerTool = createSurfaceTool(workerRt);
+  const r = await toolJson(workerTool, {
+    op: "upsert",
+    location: "ssh://10.0.0.5:22",
+    kind: "ssh",
+    note: "worker deposit",
+  });
+  assert.ok(r.data);
+  assert.equal(r.data!.source_agent_id, "sub_42");
+  assert.equal(r.data!.created, 1);
+  const g = await toolJson(tool, { op: "get", location: "ssh://10.0.0.5" });
+  assert.ok(g.data);
+  assert.equal((g.data!.surface as Record<string, unknown>).origin_key, "ssh://10.0.0.5:22");
+  assert.equal((g.data!.surface as Record<string, unknown>).path_key, "");
+  assert.equal((g.data!.surface as Record<string, unknown>).source_agent_id, "sub_42");
+}
+
+// --- hard-cap reject ---
+{
+  const capDir = await mkdtemp(join(tmpdir(), "node4-surface-cap-"));
+  const capStore = new SurfaceSqliteStore(SurfaceSqliteStore.pathFromTaskDir(capDir));
+  await capStore.open();
+  // Fill to hard-cap via direct store (faster than tool loop for 2000)
+  const bulk: { location: string }[] = [];
+  for (let i = 0; i < SURFACE_WRITE_HARD_CAP; i++) {
+    bulk.push({ location: `https://cap.test/p/${i}` });
+  }
+  // batch in chunks of 20
+  for (let i = 0; i < bulk.length; i += 20) {
+    const chunk = bulk.slice(i, i + 20);
+    const res = await capStore.upsert(chunk, { source_agent_id: "main" });
+    assert.equal(res.ok, true, `bulk fill failed at ${i}`);
+  }
+  assert.equal(await capStore.count(), SURFACE_WRITE_HARD_CAP);
+
+  const capRt = minimalRuntime(capDir, { surfaceSqlite: capStore });
+  const capTool = createSurfaceTool(capRt);
+  const blocked = await toolJson(capTool, {
+    op: "upsert",
+    location: "https://cap.test/p/overflow",
+  });
+  assert.ok(blocked.error, "expected hard-cap error");
+  assert.match(blocked.error!, /hard-cap/i);
+
+  // Updating existing identity still allowed at cap
+  const upd = await toolJson(capTool, {
+    op: "upsert",
+    location: "https://cap.test/p/0",
+    params: ["x"],
+  });
+  assert.ok(upd.data);
+  assert.equal(upd.data!.ok, true);
+  assert.equal(upd.data!.updated, 1);
+  assert.equal(upd.data!.created, 0);
+
+  capStore.close();
+  await rm(capDir, { recursive: true, force: true });
+}
+
+// --- legacy JSON one-shot migrate ---
+{
+  const migDir = await mkdtemp(join(tmpdir(), "node4-surface-mig-"));
+  await mkdir(join(migDir, "surfaces"), { recursive: true });
+  await writeFile(
+    join(migDir, "surfaces", "ledger.json"),
+    JSON.stringify({
+      version: 1,
+      updated_at: new Date().toISOString(),
+      surfaces: [
+        {
+          id: "/vuln/sqli",
+          location: "http://127.0.0.1:8080/vuln/sqli",
+          path_key: "/vuln/sqli",
+          status: "open",
+          params: ["id"],
+          updated_at: new Date().toISOString(),
+        },
+        {
+          id: "/vuln/xss",
+          location: "http://127.0.0.1:8080/vuln/xss",
+          path_key: "/vuln/xss",
+          status: "probed",
+          updated_at: new Date().toISOString(),
+        },
+      ],
+    }),
+    "utf8",
+  );
+  const migStore = new SurfaceSqliteStore(SurfaceSqliteStore.pathFromTaskDir(migDir));
+  await migStore.open();
+  assert.equal(await migStore.count(), 2);
+  const open = await migStore.list({ status: "open" });
+  assert.equal(open.total_matching, 1);
+  const probed = await migStore.get({ location: "http://127.0.0.1:8080/vuln/xss" });
+  assert.ok(probed);
+  assert.equal(probed!.status, "probed");
+  migStore.close();
+  await rm(migDir, { recursive: true, force: true });
+}
+
+// --- depositSurfaceLocation helper (fact thin wrapper) ---
+{
+  const dep = await depositSurfaceLocation(runtime, {
+    location: "redis://10.1.2.3:6379",
+    note: "exposed redis",
+    source_agent_id: "main_serial",
+  });
+  assert.ok(dep.ok, dep.ok ? "ok" : dep.error);
+  assert.equal((dep as { created: number }).created, 1);
+  const g = await store.get({ location: "redis://10.1.2.3:6379" });
+  assert.ok(g);
+  assert.equal(g!.kind, "redis");
+}
+
+// --- offline: no platformApi required ---
+{
+  assert.equal(runtime.platformApi, undefined);
+  const r = await toolJson(tool, { op: "list", status: "all", limit: 5 });
+  assert.ok(r.data);
+  assert.equal(r.data!.ok, true);
+}
+
+// --- #371: gates read SQLite working store (no JSON dual-write required) ---
+{
+  const sum = await store.summary();
+  assert.ok(sum.total >= 1, "SQLite working store is gate coverage SoT");
+  assert.ok(typeof sum.actionable === "number");
+  assert.ok(Array.isArray(sum.open_preview));
+  // Legacy JSON may stay empty after dual-write removal — migrate-only path remains on open().
+  await legacy.load();
+  // No requirement that legacy mirror tool upserts.
+}
+
+store.close();
+await rm(dir, { recursive: true, force: true });
+console.log("surface.test.ts: ok");

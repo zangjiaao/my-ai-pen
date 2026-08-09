@@ -41,7 +41,7 @@ Operators watching a Case cannot see **what HTTP traffic the Agent actually prod
 5. **R2** two-phase pending → complete on one `exchange_id`.
 6. **P2** Case-level persist; body truncation + length/hash.
 7. **N3** default view; **F2** store fuller browser network than the default view.
-8. **O1** Runtime hook collect only; no Agent traffic tools; no tool-prose-as-SoT.
+8. **O1** Runtime hook collect only; no Agent “log traffic” maintenance tools; no tool-prose-as-SoT. **Read query** of session captures for raw material is separate (#378 `traffic_list`) and must not write surface ledger.
 9. **C2** empty state when no exchanges; search + source filter toolbar (not a long honesty blurb).
 10. **Out of V1:** intercept/replay, MITM, WS frame bodies, HAR export, cross-Case lake, finding attach UI, multi-field advanced filters, keep old Activity timeline.
 

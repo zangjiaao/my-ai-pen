@@ -136,6 +136,11 @@ export function buildSystemPrompt(
       "Process facts (fact tool): write confirmed cognition immediately (ports/auth/deadends); separate from finding booking; list is index-only — get body before relying on detail.",
     );
   }
+  if (pack.toolNames.includes("surface")) {
+    lines.push(
+      "Attack surface (surface tool): deposit observed locations with surface(op=upsert); list open/in_probe queue (page ≤200, has_more); prefer over fact(op=surface).",
+    );
+  }
   if (pack.recipeDir) {
     const root = (pack as { packRoot?: string }).packRoot;
     const recipePath = root ? `${root}/${pack.recipeDir}` : `experts/<pack>/${pack.recipeDir}`;

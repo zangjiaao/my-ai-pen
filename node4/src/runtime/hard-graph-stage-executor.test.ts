@@ -76,7 +76,7 @@ const runtime = {
   surfaceLedger: new SurfaceLedgerStore(SurfaceLedgerStore.pathFromTaskDir(workDir)),
 } as unknown as ToolRuntime;
 
-const settlement = settleHostStage({
+const settlement = await settleHostStage({
   stageId: "init",
   runtime,
   narrative: { summary: "Target and RoE understood; handoff ready" },
@@ -95,7 +95,7 @@ assert.equal(
 
 // Surface stage: host ledger, not agent file
 await runtime.surfaceLedger!.upsertFromRecon([{ location: "http://t/login", kind: "form" }]);
-const surf = settleHostStage({
+const surf = await settleHostStage({
   stageId: "surface",
   runtime,
   narrative: { summary: "surfaces mapped" },
@@ -133,7 +133,7 @@ assert.equal(normalizeSubagentResult(settlement.structured).summaryProvided, tru
       recentObservations: [],
     },
   } as unknown as ToolRuntime;
-  const noLaunder = settleHostStage({
+  const noLaunder = await settleHostStage({
     stageId: "surface",
     runtime: poisonRt,
     narrative: { summary: "I wrote result.json with surfaces" },

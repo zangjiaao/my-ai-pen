@@ -35,11 +35,14 @@ class ReportPackage:
     assets: list[dict[str, Any]]
     vulnerabilities: list[dict[str, Any]]
     evidence: list[dict[str, Any]]
-    attack_surface: list[dict[str, Any]]
+    attack_surface: list[dict[str, Any]] | dict[str, Any]
     coverage: list[dict[str, Any]]
     traffic: list[dict[str, Any]]
     checkpoint: dict[str, Any]
     evidence_files: list[str]
+    # Spec #368 D13 / #377: optional surface_ledger.json (canonical); may also
+    # appear as ledger-shaped attack_surface.json.
+    surface_ledger: dict[str, Any] | list[dict[str, Any]] | None = None
 
 
 @router.post("/import")
@@ -51,20 +54,41 @@ async def import_report(
     """Import a standalone Node report.tar.gz package."""
     package = load_report_package(await file.read())
     user_id = uuid.UUID(current_user["user_id"])
+    conv_id = uuid.uuid4()
+
+    # Spec #368 D13 / #377: merge package surfaces into Case surface_ledger
+    # (UI SoT), not only a dead context["attack_surface"] key.
+    from app.services.surface_ledger import merge_import_package_into_context
+
+    context: dict[str, Any] = {
+        "imported_from": "standalone_report",
+        "import_manifest": package.manifest,
+        "checkpoint": package.checkpoint,
+        "attack_surface": package.attack_surface,
+        "coverage": package.coverage,
+        "traffic": package.traffic,
+        "evidence_files": package.evidence_files,
+    }
+    context, landed_surfaces = merge_import_package_into_context(
+        context,
+        conversation_id=str(conv_id),
+        surface_ledger=package.surface_ledger,
+        attack_surface=package.attack_surface,
+    )
+    if isinstance(package.attack_surface, list):
+        attack_surface_count = len(package.attack_surface)
+    elif isinstance(package.attack_surface, dict):
+        surfaces_raw = package.attack_surface.get("surfaces")
+        attack_surface_count = len(surfaces_raw) if isinstance(surfaces_raw, list) else 0
+    else:
+        attack_surface_count = 0
+
     conv = Conversation(
-        id=uuid.uuid4(),
+        id=conv_id,
         user_id=user_id,
         title=_conversation_title(package.manifest),
         status=_conversation_status(str(package.manifest.get("status") or "completed")),
-        context={
-            "imported_from": "standalone_report",
-            "import_manifest": package.manifest,
-            "checkpoint": package.checkpoint,
-            "attack_surface": package.attack_surface,
-            "coverage": package.coverage,
-            "traffic": package.traffic,
-            "evidence_files": package.evidence_files,
-        },
+        context=context,
     )
     db.add(conv)
     await db.flush()
@@ -85,7 +109,8 @@ async def import_report(
         "assets_imported": assets_imported,
         "vulns_imported": vulns_imported,
         "evidence_imported": evidence_imported,
-        "attack_surface_imported": len(package.attack_surface),
+        "attack_surface_imported": attack_surface_count,
+        "surface_ledger_imported": len(landed_surfaces),
         "coverage_imported": len(package.coverage),
         "traffic_imported": len(package.traffic),
         "warnings": [],
@@ -114,6 +139,9 @@ def load_report_package(raw: bytes) -> ReportPackage:
             manifest = _read_json(tar, members, "manifest.json")
             if manifest.get("format_version") != FORMAT_VERSION:
                 raise HTTPException(400, f"Unsupported report format: {manifest.get('format_version')}")
+            surface_ledger = None
+            if "surface_ledger.json" in members:
+                surface_ledger = _read_json(tar, members, "surface_ledger.json")
             return ReportPackage(
                 manifest=manifest,
                 messages=_read_jsonl(tar, members, "conversation.jsonl"),
@@ -125,6 +153,7 @@ def load_report_package(raw: bytes) -> ReportPackage:
                 traffic=_read_json(tar, members, "traffic.json", default=[]),
                 checkpoint=_read_json(tar, members, "checkpoints/latest.json"),
                 evidence_files=sorted(name for name in members if name.startswith("evidence/")),
+                surface_ledger=surface_ledger,
             )
     except HTTPException:
         raise

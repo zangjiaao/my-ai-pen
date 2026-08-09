@@ -24,6 +24,13 @@ import {
 import { filterMainChannelMessages, isWorkerAuditScoped } from "../lib/workerAuditChannel";
 import { applyDisplayNameOverrides } from "../lib/workerDisplayName";
 import { upsertTrafficExchange, type TrafficExchange } from "../lib/trafficAuditView";
+import {
+  emptySurfaceLedger,
+  ensureSurfaceLedger,
+  upsertSurfaceLedger,
+  type SurfaceLedger,
+  type SurfaceLedgerRow,
+} from "../lib/surfaceModel";
 import WorkerAuditDialog from "../components/WorkerAuditDialog";
 import type { PlanNode, StrixAgentStatus } from "../lib/panelTypes";
 import {
@@ -253,6 +260,8 @@ type ConversationSnapshot = {
   worker_display_names?: Record<string, string>;
   /** Spec #309 Case traffic audit store */
   traffic_exchanges?: TrafficExchange[];
+  /** Spec #368 / #375 Case surface_ledger (Surface tab SoT) */
+  surface_ledger?: SurfaceLedger;
   /** Spec #311 Case Workset (Next) — display-only panel projection */
   workset?: Record<string, unknown>;
   goal_outer?: Record<string, unknown> | null;
@@ -330,6 +339,8 @@ export default function ConversationPage() {
   } | null>(null);
   /** Spec #309: Case traffic audit (right-panel Traffic tab). */
   const [trafficExchanges, setTrafficExchanges] = useState<TrafficExchange[]>([]);
+  /** Spec #368 / #375: Case surface_ledger (right-panel Surface tab SoT). */
+  const [surfaceLedger, setSurfaceLedger] = useState<SurfaceLedger>(() => emptySurfaceLedger());
   /** Spec #311 Case Workset (Next) — display-only panel projection; separate from Tasks */
   const [workset, setWorkset] = useState<Record<string, unknown> | undefined>();
   const [running, setRunning] = useState(false);
@@ -763,6 +774,14 @@ export default function ConversationPage() {
           ? (fallback?.traffic_exchanges as TrafficExchange[])
           : [],
     );
+    // Spec #375: empty surface_ledger is correct (no deposit yet).
+    setSurfaceLedger(
+      ensureSurfaceLedger(
+        snapshot.surface_ledger != null
+          ? snapshot.surface_ledger
+          : fallback?.surface_ledger,
+      ),
+    );
     setTaskContext(
       snapshot.task_context && Object.keys(snapshot.task_context).length
         ? snapshot.task_context
@@ -951,6 +970,25 @@ export default function ConversationPage() {
         upsertTrafficExchange(prev, {
           ...(m as TrafficExchange),
           exchange_id: id,
+        }),
+      );
+    },
+    surface_upsert: (msg) => {
+      // Spec #375: live merge by origin_key+path_key into Case surface_ledger.
+      if (!isActiveMessage(msg, activeId)) return;
+      const m = msg as Record<string, unknown>;
+      const surfaces = Array.isArray(m.surfaces)
+        ? (m.surfaces as SurfaceLedgerRow[])
+        : m.surface && typeof m.surface === "object"
+          ? [m.surface as SurfaceLedgerRow]
+          : m.origin_key || m.location
+            ? [m as SurfaceLedgerRow]
+            : [];
+      if (!surfaces.length) return;
+      setSurfaceLedger((prev) =>
+        upsertSurfaceLedger(prev, {
+          surfaces,
+          updated_at: m.updated_at != null ? String(m.updated_at) : null,
         }),
       );
     },
@@ -1792,6 +1830,7 @@ export default function ConversationPage() {
     setPendingApprovals([]);
     setEvidence([]);
     setTrafficExchanges([]);
+    setSurfaceLedger(emptySurfaceLedger());
     setTaskContext(undefined);
     setEngagementCloseout(undefined);
     setWorkerDisplayNames({});
@@ -3282,6 +3321,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
               strixRun={strixRun}
               caseRun={caseRun}
               trafficExchanges={trafficExchanges}
+              surfaceLedger={surfaceLedger}
               findings={findings}
               assets={assets}
               taskContext={taskContext}

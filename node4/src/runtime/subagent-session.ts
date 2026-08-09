@@ -59,6 +59,7 @@ export const SUBAGENT_CHILD_TOOL_NAMES = [
   "browser",
   "script",
   "fact",
+  "surface",
   "skill",
 ] as const;
 
@@ -634,6 +635,9 @@ async function runColdPackage(args: {
     skills: skillStore,
     skillIds: pack.skillIds,
     processFacts,
+    // Same Case surface ledger as Main (Spec #370) — Worker deposits via surface tool.
+    surfaceLedger: parent.surfaceLedger,
+    surfaceSqlite: parent.surfaceSqlite,
     lifecycle: {
       toolsInLastSegment: 0,
       recentObservations: [],

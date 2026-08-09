@@ -7,6 +7,7 @@ import { EvidenceStore } from "../stores/evidence.js";
 import { GoalStore } from "../stores/goal.js";
 import { ProcessFactStore } from "../stores/process-fact.js";
 import { SurfaceLedgerStore } from "../stores/surface-ledger.js";
+import { SurfaceSqliteStore } from "../stores/surface-sqlite.js";
 import { SkillStore } from "../stores/skill.js";
 import { TodoStore } from "../stores/todo.js";
 import { createProcessQualityState } from "./package-honesty-host.js";
@@ -213,9 +214,13 @@ export async function runNode4Task(
   const skills = skillsDir ? new SkillStore(skillsDir) : undefined;
   const processFacts = new ProcessFactStore(join(taskDir, "facts"));
   await processFacts.ensureDir();
+  // Spec #370–#371: SQLite is surface tool + Graph gate SoT (offline ok).
+  // Legacy JSON still opened for one-shot migrate via store.open() and test fallbacks.
   const surfaceLedger = new SurfaceLedgerStore(SurfaceLedgerStore.pathFromTaskDir(taskDir));
   await surfaceLedger.ensureDir();
   await surfaceLedger.load();
+  const surfaceSqlite = new SurfaceSqliteStore(SurfaceSqliteStore.pathFromTaskDir(taskDir));
+  await surfaceSqlite.open();
 
   const runtime: ToolRuntime = {
     task,
@@ -235,6 +240,7 @@ export async function runNode4Task(
     skillIds: pack.skillIds?.length ? pack.skillIds : undefined,
     processFacts,
     surfaceLedger,
+    surfaceSqlite,
     lifecycle: {
       toolsInLastSegment: 0,
       panelAgents: panel,

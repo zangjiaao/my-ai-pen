@@ -12,9 +12,11 @@
     "session",
     "script",
     "finding",
+    "surface",
     "subagent",
     "goal",
-    "skill"
+    "skill",
+    "traffic_list"
   ],
   "skillIds": [
     "llm-threat-model-roe",

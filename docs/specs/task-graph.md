@@ -95,7 +95,8 @@ Main DISPATCH (goal + success_criteria)
 
 ## Surface ledger (coverage truth)
 
-- Path: `taskDir/surfaces/ledger.json` (`SurfaceLedgerStore`).
+- **Working store (SoT):** `taskDir/surfaces/ledger.sqlite` (`SurfaceSqliteStore`) — Agent `surface` tool + Graph coverage gates (#370–#371).
+- **Legacy:** `ledger.json` one-shot migrates into SQLite on open; not gate SoT.
 - **surface** packages must return `surfaces[]` (live recon locations). Empty → `package_gaps` / re-dispatch.
 - Status: `open` → `in_probe` → `probed` | `booked` | `deadend` | `skipped_roe`.
 - Candidate locations mark **probed**; `finding(confirm)` marks **booked**.

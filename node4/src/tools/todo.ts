@@ -69,28 +69,57 @@ export function createTodoTool(runtime: ToolRuntime): AgentTool<any> {
         }
       }
 
-      // Graph: surface ledger is coverage truth — reject bare todo(done) while paths are open.
-      if (op === "done" && runtime.lifecycle.pentestGraph?.mode === "graph" && runtime.surfaceLedger) {
-        await runtime.surfaceLedger.load();
-        const summary = runtime.surfaceLedger.summary();
-        if (summary.total >= 1) {
-          const gate = assertTodoDoneAllowed({
-            task: params.task != null ? String(params.task) : undefined,
-            phase: params.phase != null ? String(params.phase) : undefined,
-            note: params.note != null ? String(params.note) : undefined,
-            summary,
-            hasActedMatch: (t) => runtime.surfaceLedger!.hasActedMatch(t),
-            findByLocationHint: (t) => runtime.surfaceLedger!.findByLocationHint(t),
-          });
-          if (!gate.ok) {
-            runtime.lifecycle.pendingTodoErrorReminder = [gate.error];
-            return textResult(gate.error, { isError: true });
+      // Graph: surface SQLite working store is coverage truth (#371) — reject bare todo(done) while paths are open.
+      // Prefer surfaceSqlite; fall back to legacy JSON ledger only for partial test runtimes.
+      if (op === "done" && runtime.lifecycle.pentestGraph?.mode === "graph") {
+        const sqlite = runtime.surfaceSqlite;
+        const legacy = runtime.surfaceLedger;
+        if (sqlite) {
+          await sqlite.open();
+          const summary = await sqlite.summary();
+          if (summary.total >= 1) {
+            const gate = await assertTodoDoneAllowed({
+              task: params.task != null ? String(params.task) : undefined,
+              phase: params.phase != null ? String(params.phase) : undefined,
+              note: params.note != null ? String(params.note) : undefined,
+              summary,
+              hasActedMatch: (t) => sqlite.hasActedMatch(t),
+              findByLocationHint: (t) => sqlite.findByLocationHint(t),
+            });
+            if (!gate.ok) {
+              runtime.lifecycle.pendingTodoErrorReminder = [gate.error];
+              return textResult(gate.error, { isError: true });
+            }
+            if (gate.ledgerOp) {
+              if (gate.ledgerOp.op === "deadend") {
+                await sqlite.markDeadend(gate.ledgerOp.location, gate.ledgerOp.note);
+              } else {
+                await sqlite.markSkipped(gate.ledgerOp.location, gate.ledgerOp.note);
+              }
+            }
           }
-          if (gate.ledgerOp) {
-            if (gate.ledgerOp.op === "deadend") {
-              await runtime.surfaceLedger.markDeadend(gate.ledgerOp.location, gate.ledgerOp.note);
-            } else {
-              await runtime.surfaceLedger.markSkipped(gate.ledgerOp.location, gate.ledgerOp.note);
+        } else if (legacy) {
+          await legacy.load();
+          const summary = legacy.summary();
+          if (summary.total >= 1) {
+            const gate = await assertTodoDoneAllowed({
+              task: params.task != null ? String(params.task) : undefined,
+              phase: params.phase != null ? String(params.phase) : undefined,
+              note: params.note != null ? String(params.note) : undefined,
+              summary,
+              hasActedMatch: (t) => legacy.hasActedMatch(t),
+              findByLocationHint: (t) => legacy.findByLocationHint(t),
+            });
+            if (!gate.ok) {
+              runtime.lifecycle.pendingTodoErrorReminder = [gate.error];
+              return textResult(gate.error, { isError: true });
+            }
+            if (gate.ledgerOp) {
+              if (gate.ledgerOp.op === "deadend") {
+                await legacy.markDeadend(gate.ledgerOp.location, gate.ledgerOp.note);
+              } else {
+                await legacy.markSkipped(gate.ledgerOp.location, gate.ledgerOp.note);
+              }
             }
           }
         }

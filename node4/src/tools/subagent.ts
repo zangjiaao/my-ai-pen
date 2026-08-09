@@ -310,7 +310,8 @@ export function createSubagentTool(runtime: ToolRuntime): AgentTool<any> {
           ready_total += r.acceptance?.ready_to_book?.length || 0;
           gap_total += r.acceptance?.needs_more_evidence?.length || 0;
         }
-        const ledgerSum = runtime.surfaceLedger?.summary();
+        const ledgerSum =
+          (await runtime.surfaceSqlite?.summary()) ?? runtime.surfaceLedger?.summary();
         const pathWarns = pathDispatchWarnFields(runtime);
 
         return jsonResult({
@@ -706,21 +707,37 @@ async function runSubagentPackage(
   const usedCommandOnly = Boolean(command);
   const nt = nodeType;
 
-  // Post-process under mutex (ledger + parent observations)
+  // Post-process under mutex (surface working store + parent observations)
   return postLock(async () => {
-    const ledger = runtime.surfaceLedger;
-    if (ledger) {
+    // Spec #371: SQLite is coverage SoT; legacy JSON only when sqlite missing (tests).
+    const sqlite = runtime.surfaceSqlite;
+    const legacy = runtime.surfaceLedger;
+    if (sqlite) {
+      await sqlite.open().catch(() => {});
       if (structured.surfaces?.length) {
-        await ledger.upsertFromRecon(structured.surfaces, {
+        await sqlite.upsertFromRecon(structured.surfaces, {
           source_subagent_id: result.subagentId,
         });
       }
       const candLocs = structured.candidates
         .map((c) => c.location)
         .filter((x): x is string => Boolean(x && String(x).trim()));
-      if (candLocs.length) await ledger.markProbed(candLocs);
+      if (candLocs.length) await sqlite.markProbed(candLocs);
       if (nt && SURFACE_CONSUMER_NODES.has(nt) && handoff.handoff.target) {
-        await ledger.markInProbe([handoff.handoff.target]);
+        await sqlite.markInProbe([handoff.handoff.target]);
+      }
+    } else if (legacy) {
+      if (structured.surfaces?.length) {
+        await legacy.upsertFromRecon(structured.surfaces, {
+          source_subagent_id: result.subagentId,
+        });
+      }
+      const candLocs = structured.candidates
+        .map((c) => c.location)
+        .filter((x): x is string => Boolean(x && String(x).trim()));
+      if (candLocs.length) await legacy.markProbed(candLocs);
+      if (nt && SURFACE_CONSUMER_NODES.has(nt) && handoff.handoff.target) {
+        await legacy.markInProbe([handoff.handoff.target]);
       }
     }
 
@@ -745,8 +762,10 @@ async function runSubagentPackage(
       ];
     }
 
-    if (ledger) {
-      const sum = ledger.summary();
+    if (sqlite || legacy) {
+      const sum = sqlite
+        ? await sqlite.summary()
+        : legacy!.summary();
       acceptance.surface_ledger = sum as unknown as Record<string, unknown>;
       acceptance.surface_open_hint =
         sum.actionable > 0
@@ -758,14 +777,13 @@ async function runSubagentPackage(
 
       if (nt && SURFACE_CONSUMER_NODES.has(nt) && sum.actionable > 0 && handoff.handoff.target) {
         const tgtKey = pathKey(handoff.handoff.target);
-        const known = ledger
-          .all()
-          .some(
-            (s) =>
-              pathKey(s.location) === tgtKey ||
-              pathKey(s.path_key) === tgtKey ||
-              handoff.handoff.target.includes(s.path_key),
-          );
+        const allRows = sqlite ? await sqlite.all() : legacy!.all();
+        const known = allRows.some(
+          (s) =>
+            pathKey(s.location) === tgtKey ||
+            pathKey(s.path_key) === tgtKey ||
+            handoff.handoff.target.includes(s.path_key),
+        );
         if (tgtKey && !known) {
           acceptance.package_gaps = [
             ...acceptance.package_gaps,

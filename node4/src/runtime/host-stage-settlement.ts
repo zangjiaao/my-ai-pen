@@ -114,7 +114,23 @@ function storeCandidatesToProjection(rows: FindingRecord[]): SubagentCandidate[]
   return out.slice(0, 80);
 }
 
-function surfacesFromLedger(runtime: ToolRuntime): SubagentSurface[] {
+async function surfacesFromWorkingStore(runtime: ToolRuntime): Promise<SubagentSurface[]> {
+  // Spec #371: prefer SQLite working store; legacy JSON only for partial test runtimes.
+  if (runtime.surfaceSqlite) {
+    try {
+      await runtime.surfaceSqlite.open();
+      const items = await runtime.surfaceSqlite.all();
+      return items.slice(0, 80).map((s) => ({
+        location: s.location,
+        kind: s.kind,
+        params: s.params,
+        auth: s.auth,
+        note: s.note,
+      }));
+    } catch {
+      return [];
+    }
+  }
   const ledger = runtime.surfaceLedger;
   if (!ledger) return [];
   const items = ledger.all();
@@ -253,8 +269,11 @@ export function illegalL2DoneForPackages(
 /**
  * Project stage outcome from host state only.
  * Agent result.json is never read here.
+ * Async: surface projection reads SQLite working store (#371).
  */
-export function settleHostStage(input: HostStageSettlementInput): HostStageSettlement {
+export async function settleHostStage(
+  input: HostStageSettlementInput,
+): Promise<HostStageSettlement> {
   const stageId = String(input.stageId || "").trim();
   const runtime = input.runtime;
   const pq: ProcessQualityState = ensureProcessQuality(runtime.lifecycle);
@@ -286,7 +305,7 @@ export function settleHostStage(input: HostStageSettlementInput): HostStageSettl
     storeCandidatesToProjection(storeRows),
     candidatesFromEvidenceCache(runtime, stageId),
   );
-  const surfaces = surfacesFromLedger(runtime);
+  const surfaces = await surfacesFromWorkingStore(runtime);
   const feedback_ok_ids = feedbackOkIds(pq.findingStore, stageId);
 
   const narrativeSummary = String(input.narrative?.summary || "").trim();
