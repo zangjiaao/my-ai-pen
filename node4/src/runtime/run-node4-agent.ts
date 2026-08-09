@@ -348,9 +348,10 @@ export function namedToolInvocationsFromPartial(message: unknown): NamedToolInvo
  * Sole product fan-out for tool progressive frames → platform tool_output + segment counters.
  * Panel/status for Main still goes through handleNode4SessionEvent on the same events.
  *
- * Spec #350 lifecycle: **tool name known** (streaming toolcall_* with id+name) → running;
- * tool_execution_start may re-emit running (merge by tool_run_id); end → done/error.
+ * Spec #350 lifecycle: **tool name known** (streaming toolcall_* with id+name) → one running;
+ * tool_execution_start emits running only if not already projected; end → done/error.
  * Segment counters still bump only on tool_execution_start (actual execution).
+ * At most one progressive `running` frame per toolCallId (no execute re-emit after name-known).
  *
  * Product policy (A) + Spec #308: **subagent package sessions do not emit Main chat tool_output.**
  * When `lifecycle.subagentDepth > 0`, still count tools for salvage/settlement; if Worker audit
@@ -365,20 +366,31 @@ export function attachProductToolEventBridge(
   /** toolCallIds that already received a progressive running frame (name-known or execute). */
   const runningEmitted = new Set<string>();
 
-  async function emitRunningFrame(
-    toolName: string,
-    toolCallId: string,
-    args: Record<string, unknown>,
-  ): Promise<void> {
+  async function emitToolFrame(opts: {
+    toolName: string;
+    toolCallId: string;
+    status: "running" | "done" | "error";
+    summary?: string;
+    args?: Record<string, unknown>;
+    resultText?: string;
+  }): Promise<void> {
+    const toolName = opts.toolName || "tool";
+    const summary =
+      opts.summary != null
+        ? String(opts.summary).slice(0, 500)
+        : opts.status === "running"
+          ? `${toolName} running`
+          : "";
     if (isSubagentPackageSession(runtime)) {
       const { emitWorkerToolFrame } = await import("./worker-audit-channel.js");
       await emitWorkerToolFrame({
         runtime,
         toolName,
-        toolCallId,
-        status: "running",
-        summary: `${toolName} running`,
-        args,
+        toolCallId: opts.toolCallId,
+        status: opts.status,
+        summary,
+        args: opts.args,
+        resultText: opts.resultText,
       });
       return;
     }
@@ -391,34 +403,44 @@ export function attachProductToolEventBridge(
       conversation_id: runtime.task.conversationId,
       task_id: runtime.task.taskId,
       tool_name: toolName,
-      tool_run_id: toolCallId,
-      status: "running",
-      summary: `${toolName} running`,
-      args,
+      tool_run_id: opts.toolCallId,
+      status: opts.status,
+      summary,
+      args: opts.args,
+      result_text: opts.resultText != null ? String(opts.resultText).slice(0, 4000) : undefined,
       ...speaker,
     });
   }
 
-  return session.subscribe(async (event) => {
+  async function emitRunningOnce(
+    toolName: string,
+    toolCallId: string,
+    args?: Record<string, unknown>,
+  ): Promise<void> {
+    if (runningEmitted.has(toolCallId)) return;
+    runningEmitted.add(toolCallId);
+    // Args may be incomplete at name-known — do not dump streaming bodies (story 30).
+    await emitToolFrame({
+      toolName,
+      toolCallId,
+      status: "running",
+      args: args || {},
+    });
+  }
+
+  return session.subscribe(async (event: AgentEvent) => {
     // Spec #350 D1: project running as soon as name+id known while args may still stream.
     if (event.type === "message_update") {
-      const msg = (event as { message?: { role?: string } }).message;
-      if (msg?.role && msg.role !== "assistant") return;
-      const ame = (event as { assistantMessageEvent?: { type?: string; partial?: unknown } })
-        .assistantMessageEvent;
+      const msg = event.message;
+      if (msg && typeof msg === "object" && "role" in msg && msg.role !== "assistant") return;
+      const ame = event.assistantMessageEvent;
       const kind = String(ame?.type || "");
       if (!kind.startsWith("toolcall_")) return;
-      const fromPartial = namedToolInvocationsFromPartial(ame?.partial);
-      const fromMessage = namedToolInvocationsFromPartial(msg);
-      const byId = new Map<string, NamedToolInvocation>();
-      for (const inv of [...fromPartial, ...fromMessage]) {
-        byId.set(inv.toolCallId, inv);
-      }
-      for (const inv of byId.values()) {
-        if (runningEmitted.has(inv.toolCallId)) continue;
-        runningEmitted.add(inv.toolCallId);
-        // Args incomplete by design — do not dump streaming bodies into chat (story 30).
-        await emitRunningFrame(inv.toolName, inv.toolCallId, {});
+      // Streaming SoT is partial; fall back to message when partial is absent.
+      const snapshot =
+        ame && "partial" in ame && ame.partial != null ? ame.partial : msg;
+      for (const inv of namedToolInvocationsFromPartial(snapshot)) {
+        await emitRunningOnce(inv.toolName, inv.toolCallId);
       }
       return;
     }
@@ -428,54 +450,36 @@ export function attachProductToolEventBridge(
       runtime.lifecycle.toolsInLastSegment = (runtime.lifecycle.toolsInLastSegment || 0) + 1;
       const toolName = String(event.toolName || "tool");
       const toolCallId = String(event.toolCallId || "");
-      // Re-emit running with full args when execute starts (merge by tool_run_id).
-      // If name-known already projected running, FE keeps one card.
-      runningEmitted.add(toolCallId);
-      await emitRunningFrame(
-        toolName,
-        toolCallId,
-        (event as { args?: Record<string, unknown> }).args || {},
-      );
+      // Emit running only if name-known did not already project this id.
+      const args =
+        event.args && typeof event.args === "object" && !Array.isArray(event.args)
+          ? (event.args as Record<string, unknown>)
+          : {};
+      await emitRunningOnce(toolName, toolCallId, args);
       return;
     }
 
     if (event.type === "tool_execution_end") {
       const toolName = String(event.toolName || "tool");
       const toolCallId = String(event.toolCallId || "");
-      const result = (event as { result?: { content?: Array<{ type?: string; text?: string }> } }).result;
-      const content = result?.content || [];
+      const result = event.result;
+      const content =
+        result && typeof result === "object" && Array.isArray(result.content)
+          ? (result.content as Array<{ type?: string; text?: string }>)
+          : [];
       const text = content
         .filter((item) => item?.type === "text")
         .map((item) => item.text || "")
         .join("\n")
         .slice(0, 4000);
-      const isError = Boolean((event as { isError?: boolean }).isError);
+      const isError = Boolean(event.isError);
       runningEmitted.delete(toolCallId);
-      if (isSubagentPackageSession(runtime)) {
-        const { emitWorkerToolFrame } = await import("./worker-audit-channel.js");
-        await emitWorkerToolFrame({
-          runtime,
-          toolName,
-          toolCallId,
-          status: isError ? "error" : "done",
-          summary: text.slice(0, 500),
-          resultText: text,
-        });
-        return;
-      }
-      const speaker: Record<string, string> = {};
-      if (runtime.task.expertId) speaker.expert_id = String(runtime.task.expertId);
-      if (runtime.task.expertName) speaker.expert_name = String(runtime.task.expertName);
-      await runtime.platform.send({
-        type: "tool_output",
-        conversation_id: runtime.task.conversationId,
-        task_id: runtime.task.taskId,
-        tool_name: toolName,
-        tool_run_id: toolCallId,
+      await emitToolFrame({
+        toolName,
+        toolCallId,
         status: isError ? "error" : "done",
         summary: text.slice(0, 500),
-        result_text: text,
-        ...speaker,
+        resultText: text,
       });
     }
   });

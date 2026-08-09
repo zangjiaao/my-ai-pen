@@ -319,17 +319,13 @@ async function testToolEventBridgeRunningFromToolNameKnown() {
   await session.prompt("write report");
 
   const tools = platformMsgs.filter((m) => m.type === "tool_output");
-  assert.ok(tools.length >= 2, "at least running + done");
+  assert.equal(tools.length, 2, "exactly one running + one done (no execute re-emit)");
   assert.equal(tools[0]?.status, "running", "first frame is running from name-known");
   assert.equal(tools[0]?.tool_run_id, "tc-report");
+  assert.equal(tools[1]?.status, "done");
+  assert.equal(tools[1]?.tool_run_id, "tc-report");
   assert.equal(segmentCounterB.tools, 1, "tools counted once at execute-start");
   assert.equal(runtime.lifecycle.toolsInLastSegment, 1);
-  const done = tools.filter((m) => m.status === "done" && m.tool_run_id === "tc-report");
-  assert.equal(done.length, 1, "one done for same run id");
-  const runningForId = tools.filter(
-    (m) => m.status === "running" && m.tool_run_id === "tc-report",
-  );
-  assert.ok(runningForId.length >= 1 && runningForId.length <= 2, "running not spammed");
 }
 
 /**

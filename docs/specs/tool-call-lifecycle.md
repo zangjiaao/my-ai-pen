@@ -15,7 +15,7 @@ This is a **lifecycle projection gap**, not a separate background Agent subsyste
 | Anchor | Behavior |
 |--------|----------|
 | **Start (D1)** | As soon as Runtime knows **tool name + tool call id** for an invocation (`message_update` / `toolcall_*` on the assistant partial), emit progressive `tool_output` with `status: "running"` for that `tool_run_id`. |
-| **Execute** | `tool_execution_start` may re-emit running (with full args); FE merges by `tool_run_id` — **one card per invocation**. Segment/salvage tool counters still bump only here. |
+| **Execute** | `tool_execution_start` emits running **only if** name-known did not already project that id; at most one progressive `running` per `tool_run_id`. Segment/salvage tool counters still bump only here. |
 | **End** | `tool_execution_end` → `done` or `error` on the **same** `tool_run_id`. |
 | **Identity** | One progressive card per invocation (`tool_run_id`). No composite multi-tool group card. |
 | **SoT** | Runtime owns frames; frontend **projects** only (no timer / free-text invent running). |
