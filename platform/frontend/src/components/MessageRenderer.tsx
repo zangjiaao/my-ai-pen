@@ -4,6 +4,7 @@ import type { SecurityAsset, SecurityEvidence, SecurityVulnerability } from "../
 import { isTruthyNewFlag } from "../lib/findingNew";
 import {
   normalizeExecutionStatus,
+  processChromeLightPulse,
   resolveToolChromeStatusForSession,
   resolveToolItemStatus,
   toolActivitySummaryLabel,
@@ -108,8 +109,8 @@ function ToolCallCard({
   const toolNames = toolNamesFromContent(content);
   const primaryTool = toolNames[0] || "tool";
   const latestTool = String(content.latest_tool_name || content.tool_name || primaryTool);
-  // Project once for light + summary; pulse iff projected status is still running.
   const chromeStatus = resolveToolChromeStatusForSession(content.status, { sessionActive });
+  const pulse = processChromeLightPulse(chromeStatus, { sessionActive });
   const stdout = content.stdout as string || "";
   const items = toolItemsFromContent(content);
   // Project item statuses for summary when orphan-running so label matches light (not 执行中 + green).
@@ -124,13 +125,7 @@ function ToolCallCard({
   return (
     <ProcessChromeRow
       testId="tool-card"
-      leading={
-        <ProcessStatusLight
-          status={chromeStatus}
-          pulse={chromeStatus === "running"}
-          testId="tool-status-light"
-        />
-      }
+      leading={<ProcessStatusLight status={chromeStatus} pulse={pulse} testId="tool-status-light" />}
       title={toolTitle(toolNames)}
       summary={resultSummary}
       expanded={expanded}
