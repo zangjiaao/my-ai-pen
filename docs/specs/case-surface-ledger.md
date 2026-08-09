@@ -1,215 +1,291 @@
 # Spec: Case Surface ledger (shared attack-surface SoT)
 
-**Status:** approved for implementation (not yet implemented)  
+**Status:** amended (product model v2 — Agent-first passive management)  
 **Issue:** [#368](https://github.com/zangjiaao/my-ai-pen/issues/368)  
-**Related:** Product state → UI passive projection ([#280](https://github.com/zangjiaao/my-ai-pen/issues/280), later-wave attack surface); Case traffic audit ([#309](https://github.com/zangjiaao/my-ai-pen/issues/309)); base booking / finding id ([#279](https://github.com/zangjiaao/my-ai-pen/issues/279)); task-graph surface coverage ([`task-graph.md`](task-graph.md)); Asset inventory ledger Host → Service → Observation ([#322](https://github.com/zangjiaao/my-ai-pen/issues/322), **after** this Case Surface SoT); ADR 0001 Graph × Pi
+**Related:** Product state → UI passive projection ([#280](https://github.com/zangjiaao/my-ai-pen/issues/280)); Case traffic audit ([#309](https://github.com/zangjiaao/my-ai-pen/issues/309)); base booking / finding id ([#279](https://github.com/zangjiaao/my-ai-pen/issues/279)); task-graph ([`task-graph.md`](task-graph.md)); Asset inventory ([#322](https://github.com/zangjiaao/my-ai-pen/issues/322)); ADR 0001 Graph × Pi
 
-**Product path:** Node4 Agent Runtime (SQLite working store + `surface` tool) · Platform Case document + WS projection · Conversation right-panel Surface tab  
+**Product path:** Node4 Agent Runtime (Traffic collect → Surface settle + SQLite working store) · Platform Case `surface_ledger` + WS · Conversation right-panel Surface tab  
 
-**Does not implement product code in this document** — normative contracts only. Decisions locked via grilling (2026-08-10).
+**Does not implement product code in this document** — normative contracts only.
+
+**Decision history:**
+
+| When | What |
+|------|------|
+| 2026-08-10 | v1 grill: Agent deposit via `surface` tool; Traffic raw material only; no TARGET seed |
+| 2026-08-10 | v1 implementation tickets #369–#378 (tool, SQLite, dual-write, FE, finding→booked, import, traffic_list) |
+| 2026-08-10 | Field failure: Case finished with Findings + Traffic, Surface empty; Agent recon = prior path lists + curl, not scientific crawl; finding→booked failed on non-URL `location` |
+| 2026-08-10 | **v2 grill (this amendment):** Surface is **Agent working memory**, **Runtime-passive from Traffic**, completion via **finding confirm**; no complete-tag without test traffic |
 
 ---
 
 ## Problem Statement
 
-Operators watching a long Expert Graph / Free run often see an **empty or misleading Surface panel**, even when recon has already deposited dozens of paths in the Node task workspace.
+### Operator / Agent experience
 
-Today there are **three disconnected notions** of “attack surface”:
+- Surface tab empty while Traffic and Findings grow → operators lose trust; process looks broken.
+- Agents focus on **booking vulns**, not ledger hygiene. Requiring deliberate `surface.upsert` (v1) fails in the field: Agents skip it; more gates steal attention without fixing behavior.
+- Agents often **guess known product paths** (e.g. Juice Shop menus) and batch-`curl`, without browser crawl, OpenAPI parse, or traffic-driven discovery. That is **not** scientific black-box recon for unknown systems—even when it “works” on famous labs.
 
-1. **Node surface working store** — historically `taskDir/surfaces/ledger.json`; now **SQLite** `ledger.sqlite` + `surface` tool + Graph gates (#370–#371); **not** the Case UI projection path.
-2. **UI Surface tab** — **(#375)** projects Case `surface_ledger` only. Pre-spec multi-source merge (engagement target + Case assets `properties.urls` + plan_tree surface nodes + finding-only invent) is retired for this tab so dirty global asset URLs no longer fill Surface.
-3. **Traffic audit (#309)** — Honest capture of HTTP exchanges; **not** the Surface inventory.
+### Product intent (v2)
 
-Consequences:
+**Surface management exists to help the Agent know what was found, what was touched, and what was completed—not to give the Agent another administrative chore.**
 
-- Empty Surface does **not** mean “no recon”; full Surface does **not** mean “this Case’s ledger.”
-- Agent and UI do not share one Product SoT.
-- Continuous recon cannot be trusted as a single evolving inventory.
+```text
+Agent explores (guess OK if real requests; prefer real feature use)
+  → real traffic
+  → Runtime settles Traffic into Surface (passive)
+  → Agent reads Surface summaries (how many / what’s left)
+  → finding(confirm) marks matching Surface complete (booked)
+  → forbid completion tags on surfaces with no test traffic
+```
 
-Product intent: **capture is raw material; Agent analyzes and deposits attack surface into a fixed shared ledger; UI only projects that ledger; Agent continues to iterate the same ledger as probing deepens.**
+UI projects the **same** Case ledger. Dual-write (Node SQLite + Platform) remains the storage topology from v1 implementation.
 
 ---
 
 ## Solution
 
-### End-to-end flow
+### End-to-end flow (normative v2)
 
 ```text
-Capture (Traffic #309)     →  raw material (queryable: latest / paginated)
-Agent `surface` tool       →  analyze + deposit (continuous upsert)
-Node SQLite (task/Case)    →  Agent + Graph-gate working store (fast read)
-Dual-write (async)         →  Platform Case `context.surface_ledger`
-UI Surface tab             →  subscribe/project Case ledger only
-Offline                    →  local SQLite; export → import into Platform
+TARGET seed (engagement)
+        +
+Agent acts (shell/http/browser/…) — may guess paths; must generate real requests
+        │
+        ▼
+Traffic exchanges (#309)          ← L0 raw capture (unchanged collect)
+        │
+        ▼  Runtime settle (passive, continuous)
+Surface ledger (Case + Node SQLite)
+  seen    = first observation for identity
+  touched = subsequent request activity on identity
+  booked  = finding(confirm) success on that identity
+        │
+        ├─► Agent read-only summary / list (management view)
+        ├─► Operator UI Surface tab (project only)
+        └─► finding(confirm) → complete tag (booked); no traffic ⇒ no complete
 ```
 
-### Roles
+### Roles (v2)
 
 | Role | Responsibility |
 |------|----------------|
-| **Agent (Main + Worker)** | Call tools; **deposit** surfaces via `surface` tool; **read** working queue from Node (page ≤200); does **not** maintain UI lists or enrich global assets to “feed Surface” |
-| **Node Runtime** | Own SQLite surface store; implement `surface` tool; Graph gates read **local** store; online **dual-write** to Platform (async); migrate legacy JSON once |
-| **Platform** | Case-scoped `surface_ledger` document; snapshot + WS `surface_upsert`; import merge; finding-booked side-effect |
-| **Frontend** | Project Case ledger only; empty ledger ⇒ empty Surface (**correct**) |
+| **Agent** | Explore and test (guess + real use OK); **read** Surface to manage work; **confirm** findings (drives booked). Does **not** own “register every path” as a primary task. Must **not** mark complete without traffic evidence. |
+| **Node Runtime** | Collect Traffic; **settle** Traffic (+ TARGET seed) into Surface; dual-write Platform; apply booked on confirm; enforce no-complete-without-traffic; optional short Surface summary into Agent context |
+| **Platform** | Case `surface_ledger` SoT for UI/import; WS `surface_upsert`; booked side-effect on `vuln_found` |
+| **Frontend** | Project Case ledger only; honest empty when empty |
 
-### Dual mode (online / offline)
+### Primary audience
 
-| Mode | Write | Agent / gate read | UI |
-|------|-------|-------------------|-----|
-| **Online** (Node bound to Platform) | Local SQLite **required** for tool `ok`; Platform **async** sync with `platform_sync`: `pending` \| `ok` \| `error` + retry | **Node SQLite** | **Case** ledger after sync (may lag seconds) |
-| **Offline** / standalone | Local SQLite only | Local SQLite | N/A until import |
-
-**Uniqueness rule:** Agent always reads the Node working store after a successful local write. Platform is the **Case product copy** for UI, multi-client, and import. Sync lag must not silently invent a second inventory semantics—UI may be briefly behind, never a different merge algorithm.
+**First service object = Agent working memory.** Operator UI and Graph metrics are the same ledger’s projections, not a separate “human-only” list.
 
 ### What is *not* Surface
 
-- Traffic exchanges (raw capture)
+- Raw Traffic exchange bodies (Traffic tab owns those)
 - Global asset `urls` bags
-- Chat prose / tool stdout
-- Automatic dump of every observed URL
+- Chat prose claiming “discovered surfaces” without ledger rows
+- Completion tags without test traffic on that identity
+
+### Scientific discovery (product pressure, not this Spec’s full recon engine)
+
+v2 **does not** ban path guessing. It requires:
+
+1. Guesses that matter **leave Traffic** (real requests).  
+2. Runtime **records** those as Surface.  
+3. Later work (separate tickets / harness) should **encourage** contract crawl, HTML/JS extract, authenticated browsing—so discovery is not *only* prior menus.  
+
+Surface Spec owns **settle + manage**; full “recon pipeline” skills may live in harness/pack tickets.
 
 ---
 
 ## User Stories
 
-1. As an **operator**, I want Surface to show only the Case attack-surface ledger, so that empty means nothing was deposited for this Case.
-2. As an **operator**, I want Surface to grow as the engagement deepens, so that I can see recon progress without reading the whole chat.
-3. As an **operator**, I want Surface **not** to suddenly fill with URLs from other labs on the same hostname, so that historical asset noise does not pollute this Case.
-4. As an **operator**, I want multi-protocol entries (HTTPS, SSH, Redis, MySQL, …) under `scheme://host:port`, so that non-HTTP services are first-class.
-5. As an **operator**, I want live updates when surfaces are deposited, so that I do not refresh manually.
-6. As an **operator**, I want offline standalone work to remain inspectable and later importable, so that lab runs can join the platform Case model.
-7. As an **Agent**, I want a dedicated `surface` tool (not process-fact), so that attack-surface deposit is explicit and listable.
-8. As an **Agent**, I want to list only open / in-probe surfaces in pages of 200, so that my context stays bounded while the Case may hold more rows.
-9. As an **Agent**, I want `has_more` / total counts when listing, so that I can consume the queue in producer–consumer batches.
-10. As an **Agent**, I want to upsert the same path repeatedly as params grow, so that JSON body fields merge into one entry instead of exploding rows.
-11. As an **Agent**, I want Traffic query (latest + paginated full) as raw material, so that I analyze captures without memorizing every tool blob.
-12. As an **Agent**, I want deposit success when local SQLite write succeeds online, so that I am not blocked on Platform latency.
-13. As a **Worker**, I want to deposit surfaces into the same Case ledger as Main, so that parallel recon is not lost.
-14. As **Graph Runtime**, I want coverage gates to read the Node surface store, so that `todo(done)` still reflects real open paths.
-15. As **Graph Runtime**, I want status transitions that never downgrade, so that probed/booked work is not erased by a careless re-deposit.
-16. As **booking Runtime**, I want successful `finding(confirm)` to mark or create the matching surface as `booked`, so that coverage and Findings stay aligned.
-17. As **booking Runtime**, I want finding booking to succeed even if surface hard-cap blocks a new surface row, so that Product vulns are never blocked by inventory limits.
-18. As **Platform**, I want Case-scoped storage and snapshot fields, so that clients agree on membership.
-19. As **Platform**, I want WS upsert-by-identity, so that live UI matches the ledger without full replace storms.
-20. As an **implementer**, I want a write hard-cap of 2000 rows per Case, so that runaway deposits cannot explode storage.
-21. As an **implementer**, I want legacy `ledger.json` one-shot migration into SQLite, so that in-flight tasks do not lose coverage state.
-22. As an **implementer**, I want import package surface data merged by identity, so that offline packages upgrade the existing sync import path.
-23. As a **future Asset owner**, I want origin keys documented as the future asset primary key, so that host inventory can align later without redoing Surface identity.
-24. As a **product owner**, I want Todo/Finding dual-write SQLite patterns documented as out-of-scope principles only, so that this spec stays AFK-finishable.
-25. As an **operator**, I want no automatic TARGET seed into the ledger, so that Surface only contains deposited (or finding-side-effect) rows.
-26. As an **Agent**, I want upsert batches small enough per call (e.g. ≤20), so that a single tool call cannot flood the store.
-27. As an **operator**, I want status visible on surface rows (open / probed / booked / …), so that coverage is understandable without opening Findings.
-28. As **Platform sync**, I want failed Platform writes to be retried and observable, so that UI eventually converges with Node.
-29. As a **frontend engineer**, I want a single projection path, so that asset/plan/finding merge code can be deleted from Surface.
-30. As a **security engineer**, I want path identity without query strings as keys, so that parameterized probes do not create infinite surfaces.
-31. As a **security engineer**, I want REST JSON parameters as merged `params`, so that body fields are test dimensions on one endpoint.
-32. As an **Agent**, I want list filters by origin and status, so that I can focus one service at a time.
-33. As **Node offline**, I want full gate and deposit behavior without Platform, so that standalone lab remains valid.
-34. As an **importer**, I want merge (not blind replace) on import when targeting an existing Case flow, so that later imports deepen the ledger.
-35. As a **spec consumer**, I want explicit non-goals, so that agents do not “helpfully” auto-fill Surface from Traffic.
+### Agent-first management
+
+1. As an **Agent**, I want surfaces to appear when I generate real traffic, so that I do not spend turns on ledger bookkeeping.
+2. As an **Agent**, I want a short summary (seen / touched / booked counts + samples), so that I know how much surface I have and how much is done.
+3. As an **Agent**, I want `surface list` to page and filter the ledger, so that I can inspect without loading thousands of rows.
+4. As an **Agent**, I want guessing paths to be allowed if I actually request them, so that prior knowledge can still produce ledger rows via Traffic.
+5. As an **Agent**, I want successful `finding(confirm)` to mark the related surface complete, so that I do not double-update status.
+6. As an **Agent**, I want the runtime to **reject** complete-tags on surfaces with no test traffic, so that I cannot fake coverage.
+7. As an **Agent**, I may verify prior vulns early, so that those requests still populate Surface via Traffic before or after book.
+
+### Operator / platform
+
+8. As an **operator**, I want Surface to grow as traffic accrues, so that mid-run empty panel is rare when the Agent is active.
+9. As an **operator**, I want Surface and Findings to align after books (booked surfaces), so that “vulns without surfaces” is not the normal end state.
+10. As an **operator**, I want Surface to stay Case-scoped and not pull dirty global asset URL bags.
+11. As an **operator**, I want multi-protocol origins (`scheme://host:port`) when non-HTTP traffic exists (later intensity OK).
+12. As **Platform**, I want dual-write and snapshot/WS continuity from v1 implementation, so that FE projection stays event-driven.
+
+### Integrity
+
+13. As a **process owner**, I want chat claims of “discovered surfaces” to be checkable against the ledger, so that prose is not the SoT.
+14. As a **security engineer**, I want identity without query strings as keys, so that parameterized probes do not explode the ledger.
+15. As an **implementer**, I want hard-cap 2000 and read page 200 retained, so that context and storage stay bounded.
 
 ---
 
 ## Implementation Decisions
 
-### D1 — Product SoT vs working store
+### D0 — Amendment supersedes v1 deposit model
 
-- **UI / Case product SoT:** `conversation.context["surface_ledger"]` document on Platform (first version; not a separate DB table).
-- **Agent / Graph-gate working store:** Node **SQLite** per task workspace (Case-scoped logical ledger; cumulative for the conversation when online).
-- Online: **dual-write** — local commit required for tool success; Platform **async** with `platform_sync` state and retry.
-- Offline: local only; export/import elevates to Platform.
+| Topic | v1 (superseded for product) | v2 (normative now) |
+|-------|----------------------------|--------------------|
+| Who creates rows | Agent `surface` upsert primary | **Runtime settle from Traffic** (+ TARGET seed) |
+| Traffic | Raw material only; no auto insert | **Primary feed into Surface** |
+| TARGET seed | Forbidden | **Required** on engagement start |
+| Completion | booked via finding; Agent upsert open | **booked only via finding confirm**; **no complete without traffic** |
+| Agent `surface` tool | Primary deposit | **Read/list/get primary**; optional note; upsert not required for normal path |
+| Empty mid-run with heavy traffic | “Honest empty” if no deposit | **Bug / incomplete settle** — not acceptable product outcome |
 
-### D2 — Identity (two-level)
+v1 code paths (SQLite, dual-write, FE projection, import, identity pure) **remain building blocks**; product rules above redirect **how rows are born and completed**.
 
-- **Origin key** (normalized): `scheme://host:port`
-  - scheme lowercased; host lowercased; **port always explicit** (including defaults 80/443/22/6379/…).
-  - IPv6 in bracket form.
-  - Examples: `https://host.docker.internal:3000`, `ssh://1.1.1.1:22`, `redis://10.0.0.1:6379`.
-- **Surface row key:** `origin_key` + `path_key`
-  - HTTP(S): normalized path (no query/fragment; trailing-slash rules consistent with existing pathKey semantics).
-  - Non-HTTP: `path_key` empty (single row per origin).
-- **Not in primary key:** HTTP method(s), query, JSON body fields, headers.
-- **Merged attributes:** `methods[]`, `params[]` (union; optional `param_in` later), `kind`, `auth`, `note`, `source_agent_id`, timestamps.
-- **Future assets:** product direction is asset primary key = **origin key**; this spec does **not** migrate the assets table.
+### D1 — Product SoT vs working store (unchanged topology)
 
-### D3 — Status machine
+- **UI / Case SoT:** `conversation.context["surface_ledger"]` on Platform.
+- **Agent / Runtime working store:** Node **SQLite** (`taskDir/surfaces/ledger.sqlite`).
+- Online: dual-write; local commit required for Agent-visible local reads; Platform async (`platform_sync`).
+- Offline: local only; import elevates to Case.
 
+### D2 — Identity (two-level, unchanged)
+
+- **Origin key:** normalized `scheme://host:port` (explicit ports, lowercased scheme/host).
+- **Row key:** `origin_key` + `path_key` (HTTP path normalized; strip query/fragment; non-HTTP path empty).
+- **Not in key:** method, query, JSON body fields (merge into `methods[]` / `params[]`).
+- Future assets may align host inventory to origin; out of this Spec’s table migration.
+
+### D3 — Status machine (v2)
+
+Minimal normative statuses for management:
+
+```text
+seen  →  touched  →  booked
 ```
-open → in_probe → probed | booked | deadend | skipped_roe
-```
 
-- Same path re-deposit: **never downgrade** status; only enrich attributes or advance forward.
-- Ordinary `surface.upsert` **must not** set `booked`.
-- **`booked` only via finding booking path** (D7).
+| Status | Meaning | Writer |
+|--------|---------|--------|
+| **seen** | Identity first observed (TARGET seed or first traffic settle) | Runtime |
+| **touched** | Further request activity on that identity (or first request if policy collapses seen→touched on any request) | Runtime |
+| **booked** | Successful finding confirm mapped to this identity | Runtime (book path only) |
 
-### D4 — Scope and caps
+**Rules:**
 
-- **Case-level** cumulative ledger (one inventory per conversation).
-- **Agent read page size:** default **200**; support status/origin filters; pagination; response includes `returned`, `total_matching`, `has_more`.
-- **Write hard-cap:** **2000** surfaces per Case (configurable; recommended config ceiling ≤5000). Excess upsert **rejected** with clear error.
-- **Per-call batch:** recommend max **20** surfaces per upsert call.
-- Rationale: 200 bounds **context**; 2000 bounds **accident**; industry single-app OpenAPI averages are tens of paths—thousands usually means scope or noise failure.
+- Never downgrade (e.g. booked ↛ seen).
+- **No Agent API may set booked/complete** except via finding confirm path.
+- **Complete/booked requires** the identity to have had **test traffic** (`touched` or equivalent evidence). If confirm maps to a never-seen path, Runtime may **create** a row from resolved URL **only if** traffic or resolvable absolute URL evidence exists; otherwise soft-fail complete tag (finding still succeeds) — prefer resolving host+port+`location_key` from booking payload + recent traffic.
+- Legacy statuses (`open` / `in_probe` / `probed` / `deadend` / `skipped_roe`) from v1 JSON/SQLite — **expand-contract** (#379): accept on read; normalize on write.
 
-### D5 — `surface` tool (new; not `fact`)
+  | Legacy (read) | Write (v2) |
+  |---------------|------------|
+  | `open` | `seen` |
+  | `in_probe` | `touched` |
+  | `probed` | `touched` |
+  | `booked` | `booked` |
+  | `deadend` | `deadend` (optional terminal retained; same rank as `touched`, no lateral) |
+  | `skipped_roe` | `skipped_roe` (optional terminal retained; same rank as `touched`, no lateral) |
 
-Ops (minimum):
+  **Choice (#379):** `deadend` / `skipped_roe` are **retained as optional write terminals**, not collapsed to `touched`+tag.
 
-- `upsert` — one or many surfaces (identity merge).
-- `list` — default filter: actionable queue `open` + `in_probe`; limit default 200.
-- `get` — by identity or id.
+**Optional later (not v2 DoD):** Agent `tested` without vuln — only if traffic touched; deferred so complete ≈ booked for now.
 
-Behavior:
+### D4 — Scope and caps (retained)
 
-- Main **and** Worker may call upsert into the **same** logical Case ledger.
-- Online `ok: true` iff **local SQLite** write succeeded; include `platform_sync` field.
-- Do not require Agent to call platform enrich-asset for Surface visibility.
+- Case-level cumulative ledger.
+- Agent read page default **200**; `returned` / `total_matching` / `has_more`.
+- Write hard-cap **2000** per Case (configurable ≤5000).
+- Settle must be bounded (dedupe by identity; noise filters — see open knobs).
 
-Deprecate product guidance that uses `fact(op=surface)` as the UI/coverage deposit path; migrate callers to `surface`.
+### D5 — `surface` tool (role change)
 
-### D6 — Capture as raw material only
+**Primary:** `list` / `get` / **summary** for Agent management (counts + samples). **Agent context injection:** tool-first (locked)—do **not** auto-inject a Surface summary every LLM turn; optional light prompt nudge (“use surface summary/list for coverage”) is OK.
 
-- Traffic (#309) remains passive Runtime collect.
-- Agent **queries** traffic: prefer **latest/delta**; also **paginated full**.
-- Prefer path-aggregated summaries for analysis prompts; full bodies on demand.
-- **No** automatic insert from traffic rows into surface ledger (optional short “unfiled path count” hint is later, not DoD).
-- **Implemented (#378):** Node4 tool `traffic_list` reads a **session** Runtime store filled by collect hooks (summary by default; `since_sequence` delta; `offset`/`limit` page; optional `aggregate_paths` / `include_bodies` / `exchange_id`). Collect path does not write surface ledger. Residual: Case-history list via Platform HTTP after process restart is not Agent-tool-backed yet (operator Traffic panel / snapshot remains panel SoT).
+**Secondary (optional):** `note` or rare manual correctives — not the main fill path.
 
-### D7 — Finding → surface side-effect
+**Deprecated as product requirement:** Agent must call `upsert` to make Surface real. **Locked:** keep `upsert` registered for debug/correction/import/tests, but **not** the primary fill path; prompts must not require registration. Normal engagement fill is settle-from-traffic (+ seed + confirm).
 
-On successful Case booking (`finding(confirm)` / `vuln_found` persist success):
+### D6 — Traffic settle → Surface (core v2)
 
-1. Resolve origin + path from finding location.
-2. If matching surface exists → set status `booked` (no downgrade from booked).
-3. If none → **system create** one row (`source=finding`, status=`booked`).
-4. If hard-cap would block create → **skip surface create**, still keep finding; emit warning/metric.
-5. This is an allowed **system write** exception to “Agent-only deposit.”
+- On Traffic exchange **complete**: **immediately** settle (normalize URL → identity → upsert Surface). No debounce/batch required for v2 (locked). Pending-only exchanges need not create rows until complete/fail with a usable URL.
+- **v2 settle scope (locked): HTTP(S) only.** Non-HTTP origins remain valid identity types for later; do not block v2 DoD on ssh/redis capture.
+- First time → `seen` (or `touched` if product collapses).
+- Later requests on same identity → `touched`; merge methods.
+- TARGET / scope.allow: seed origin (+ entry path `/` when web) at task start as `seen`.
+- Agent exploration (guessed paths, feature clicking) **must** produce traffic to enter the ledger—by design.
+- `traffic_list` remains available for raw capture inspection (#378); Surface is the **structured** management view.
 
-### D8 — No TARGET auto-seed
+#### D6.1 — Noise filter (locked)
 
-- Engagement target / scope.allow are **not** auto-inserted into the ledger.
-- Empty Surface at task start is correct until deposit or finding side-effect.
+**Request-as-row (Traffic settle → Surface):**
 
-### D9 — Platform document shape (logical)
+- Default: almost all http(s) exchanges with a path become/update a Surface row.
+- **Static suffix denylist** — do **not** create Surface rows for the asset path itself, e.g. `.js`, `.css`, `.map`, common image/font extensions (exact list is an implementation knob; keep conservative).
+- **4xx/5xx remain rows** (401/403/500 are valid surface signals). Optional config may drop pure connection-fail `000` later.
+
+**Status vocabulary (locked):** keep **`seen` / `touched` / `booked`** (not collapsed). First observation → `seen`; later real request on same identity → `touched`; finding confirm → `booked`.
+
+#### D6.2 — Capture enrichment / clue mining (follow-on to #309; not Surface v2 DoD)
+
+**Placement:** After **capture** (Traffic), Runtime may run **enrichment** that mines valuable clues from stored exchanges (and response bodies)—especially SPA/Vue/React **JS bundles**, headers, and error pages—and **surfaces those clues to the Agent for analysis**.
+
+This is a **Capture-layer capability** (extends #309 lineage), not a second Surface SoT and not required for the first Traffic→Surface settle ticket.
+
+| Output | Destination |
+|--------|-------------|
+| Structured **clues** (API path candidates, internal hosts, secret-shaped strings, …) | Agent-readable channel: e.g. `traffic`/`capture` clue list tool, optional context hint, process facts |
+| Optional later bridge | Selected path-shaped clues **may** be settled into Surface as `seen` + `source=js_extract` **only** when product chooses that bridge; clue stream itself must not explode Surface without budget |
+
+**Plugin shape (preferred architecture, implement later):**
+
+- Pluggable analyzers: `analyze_capture_artifact(kind, bytes, meta) → clues[]` (browser-load and offline `.js` fetch share the same interface).
+- Inspired by browser “endpoint / secret finder” extensions, but **product-whitelisted** in pen-sandbox—not arbitrary store installs.
+- Budgeted: max body bytes, max clues per artifact, severity tiers (endpoint vs credential).
+
+**Relation to Surface management (v2):**
+
+- Surface ledger remains **Traffic request settle + seed + confirm** for “what was hit / completed.”
+- Clue mining helps the Agent **decide what to hit next** scientifically (read clues → request → settle → touch).
+- Guesses that never become requests still do not become completed surfaces.
+
+### D7 — Finding confirm → complete (booked)
+
+On successful Case booking:
+
+1. Resolve identity from absolute URL if present; else **host/target + port + location_key**; else URL extracted from proof excerpts.
+2. **Create-on-book (locked):** If the identity was never trafficked, **still create/update a `booked` row** when resolution is **strong** (absolute URL and/or host+port+`location_key` composable). This is the completion tag path for confirm.
+3. Set status `booked` (complete tag). Prefer attaching `last_traffic_at` when traffic exists; booked-without-prior-traffic is allowed only with strong identity evidence (not free-text prose alone).
+4. Hard-cap: never fail finding; skip surface create with metric.
+5. **Forbidden:** complete/booked without confirm; complete/booked when identity **cannot** be resolved to a strong location (no scheme-less bare guess, no empty host). Soft-fail surface side-effect; finding still succeeds.
+
+**Known bug to fix under this Spec:** `location` like `PUT /api/Products/...` without scheme must not yield silent `unparseable` when `location_key` + host + port exist.
+
+### D8 — TARGET seed (v2)
+
+- Engagement target and in-scope allows **are** seeded into Surface at task start (origin + web root when applicable).
+- Seeds are `seen` until traffic advances them.
+
+### D9 — Document shape
 
 ```text
 surface_ledger: {
-  version: 1,
+  version: 2,                 // bump when status vocabulary ships
   updated_at: iso8601,
   surfaces: [
     {
-      id,                    // stable; may equal path identity hash
-      origin_key,            // scheme://host:port
-      path_key,              // "" for non-HTTP
-      location,              // display / original location string
-      kind?,                 // url | ssh | redis | mysql | ...
+      id,
+      origin_key,
+      path_key,
+      location,
+      kind?,
       methods?: string[],
       params?: string[],
-      auth?,
-      status,                // open | in_probe | probed | booked | deadend | skipped_roe
-      note?,
-      source?,               // agent | finding | import | ...
+      status,                 // seen | touched | booked (+ legacy mapped)
+      source?,                // traffic | target_seed | finding | import | agent_upsert
       source_agent_id?,
-      platform_sync?,        // optional on Node side only
+      first_seen_at?,
+      last_traffic_at?,       // evidence for “has test traffic”
+      platform_sync?,
       updated_at,
       created_at?
     }
@@ -217,143 +293,153 @@ surface_ledger: {
 }
 ```
 
-WS event: **`surface_upsert`** — merge by identity (`origin_key` + `path_key`) into Case document; snapshot field `surface_ledger` (or `surfaces` array alias—pick one name and stick to it in implementation).
+WS: `surface_upsert` by identity (retain).
 
-### D10 — Frontend projection
+### D10 — Frontend
 
-- Surface tab reads **only** Case `surface_ledger` (snapshot + live upserts).
-- **Remove** as Surface inventory sources: `collectSurfaceEntries` from assets.urls, plan_tree surface/request nodes, engagement target seed, finding-only tree building as primary inventory.
-- Findings may still **badge** onto ledger paths when identities match; unlinked findings do not invent a parallel tree.
-- Empty copy remains honest (e.g. “No attack surface recorded yet”).
+- Surface tab = Case `surface_ledger` only (v1 #375 stands).
+- Empty with zero traffic may still be honest at t0; empty after heavy traffic is a settle bug.
 
 ### D11 — Graph gates
 
-- Coverage / `todo(done)` surface checks read **Node SQLite** (working store), not FE.
-- After dual-write design, local store is the gate truth; Platform lag does not block local gates.
+- Gates may read Surface for coverage honesty; **prefer not** to force Agent attention onto manual surface ops.
+- Soft process signals (“high prior-only pattern”) later; hard gates secondary to passive settle.
 
-### D12 — Migration
+### D12–D13 — Migration / import
 
-- On first open of a task that still has legacy `surfaces/ledger.json` and empty/missing SQLite: **one-shot import** into SQLite (preserve statuses), then archive or leave file read-only.
-- No long dual-read period.
+- Retain JSON→SQLite one-shot and import merge-by-identity from v1.
+- Import rows map into v2 status vocabulary.
 
-### D13 — Offline import/export
+### D14 — Out of scope for this Spec body
 
-- Existing Platform `/api/sync/import` already accepts `attack_surface.json` into a new conversation context (mvp-demo format).
-- **Refactor** that path to:
-  - Accept **surface_ledger** schema (D9);
-  - **Upsert-by-identity** merge semantics;
-  - Populate Case `surface_ledger` used by UI (not only a dead context key FE ignores).
-- Export from Node standalone should emit the same schema from SQLite.
-- Full redesign of the entire report tarball is not required beyond surface section + compatibility notes.
+- Full automated recon pipeline (OpenAPI crawler skill, browser feature walk) — harness/pack tickets; must **feed** Traffic so settle still owns ledger fill.
+- MITM job D.
+- Asset table PK migration (#322).
+- Keyword intent routing.
 
-### D14 — Spec scope boundary
+### D15 — Modules (logical, v2 delta)
 
-- **In scope:** Surface ledger only (tool, SQLite, Case doc, WS, FE, finding side-effect, import surface section, JSON migration).
-- **Documented principle only (not DoD):** Todo / Finding process artifacts may later use the same dual-mode “Node working store + async Platform” pattern; do not implement in this issue.
-
-### D15 — Modules (logical)
-
-- Node: surface SQLite store; `surface` tool; dual-write publisher; gate integration; JSON migration; traffic list helpers if missing for Agent raw material.
-- Platform: context merge for `surface_ledger`; snapshot; WS `surface_upsert`; booking side-effect; sync import refactor.
-- Frontend: Surface tab pure projection from ledger; delete multi-source inventory merge for this tab.
+| Module | v2 work |
+|--------|---------|
+| Traffic collect | On exchange complete → call Surface settle |
+| Surface settle pure | URL→identity, status advance, noise filter |
+| SQLite + dual-write | Already exist; wire settle + last_traffic_at |
+| finding book | Fix location resolve; enforce traffic evidence for booked |
+| Agent context | Optional compact Surface summary injection |
+| `surface` tool | Prefer list/summary; document upsert non-primary |
+| FE | Status labels seen/touched/booked if vocabulary changes |
 
 ---
 
 ## Testing Decisions
 
-### What makes a good test
+### Good tests
 
-- Assert **external behavior** (tool results, Case document membership, WS payload identity, FE empty-when-empty).
-- Prefer **pure functions** for identity, status monotonicity, merge of params/methods.
-- Do not assert private file paths or SQL as the product contract—SQLite is an implementation of the working store seam.
-- Prefer highest seam: tool → store → platform fake → snapshot/UI pure projection.
+External behavior: traffic in → surface row; second request → touched; confirm → booked; confirm without resolvable/trafficked identity → no fake complete (or create only per D7 rules); Agent cannot mark booked via ordinary surface op; FE shows ledger only.
 
-### Seams (approved)
+### Seams
 
 | Seam | External behavior |
 |------|-------------------|
-| **S1 Identity & status pure** | Origin + path_key normalize/dedupe; params/methods merge; no status downgrade; upsert cannot set `booked` |
-| **S2 Node `surface` tool + SQLite** | list/get/upsert; default actionable queue; page ≤200 + has_more; hard-cap 2000 reject; Main+Worker write; JSON→SQLite one-shot migrate |
-| **S3 Online dual-write** | Local success ⇒ ok; Platform async pending/ok/error; retry converges identity set |
-| **S4 Platform Case project** | context ledger upsert-by-identity; snapshot; WS `surface_upsert`; no cross-Case leak |
-| **S5 Finding → booked** | Match advance; missing create; cap skip does not fail booking |
-| **S6 FE Surface SoT** | Only Case ledger; empty ledger ⇒ empty panel; no asset.urls primary tree |
-| **S7 Import** | Package surface_ledger merge by identity into Case |
+| **S1 Identity & status** | Normalize identity; no status downgrade; booked only via allow_booked/confirm path |
+| **S2 Traffic settle** | Complete exchange upserts surface; TARGET seed present; noise filtered per policy |
+| **S3 Dual-write** | Local + async Platform (retain) |
+| **S4 Case project** | Snapshot + WS (retain) |
+| **S5 Confirm → booked** | Resolve host+port+path; traffic evidence rule; finding never fails |
+| **S6 FE** | Ledger only (retain) |
+| **S7 Import** | Merge by identity (retain) |
+| **S8 No fake complete** | Reject complete without traffic evidence |
 
 ### Prior art
 
-- Traffic audit pure/view tests and snapshot purity tests (#309 / #280).
-- Existing Node `surface-ledger` unit tests (status/gate) — rehome semantics onto SQLite + tool.
-- Booking / `vuln_found` tests for finding side-effect attachment.
+#309 traffic tests; v1 surface-identity / surface-sqlite / surface_ledger.py / FE ledger tests; booking tests.
 
 ---
 
 ## Out of Scope
 
-- Auto-creating Surface rows from every Traffic exchange.
-- Using or expanding global **asset.urls** as Surface SoT.
-- Migrating Asset table primary key to origin (declaration only).
-- Full Todo / Finding SQLite dual-write implementation.
-- MITM / full egress capture (owned by traffic job D).
-- Soft Graph / Node5 / co-equal Python kernel.
-- Raising write cap by inventing per-target benchmark profiles.
-- Agent keyword/intent routing to choose surface workflows.
-- Hardcoded vulnerability or surface lists for demos.
+- Using global asset.urls as Surface SoT.
+- Requiring Agent deliberate surface registration for normal fill.
+- Auto-book findings without confirm.
+- Full MITM.
+- Treating model prior path lists as ledger rows **without** a corresponding request (no traffic, no row).
 
 ---
 
 ## Further Notes
 
-### Relation to #280
-
-Wave 1 delivered Findings + Evidence pure projection. This spec **is** the Case **Surface coverage** projection wave (right-panel Surface tab SoT): same role split (Agent tools → Runtime/Platform store → UI project), with the dual-mode working store for Agent efficiency. It is **not** the long-lived Host/Service asset inventory wave (#322).
-
 ### Relation to #309
 
-Traffic is **L0 observability**. Surface is **L1 Agent-judged Case coverage ledger**. Both are Case-scoped product state; neither replaces the other.
+Traffic is L0 capture. Surface is L1 **settled management ledger derived from Traffic** (plus seed/import). Agent may still `traffic_list` for raw detail.
 
-### Relation to #322 (Asset inventory — depends on this Spec)
+### Relation to #280 / #322
 
-**Layer split (locked):**
+Unchanged layer split: Case Surface vs long-lived Asset inventory vs Traffic. v2 changes **how Surface fills**, not the layer boundaries.
 
-| Layer | Owner Spec | What it is |
-|-------|------------|------------|
-| **Case Surface ledger** | **This doc / #368** | This-engagement coverage: `origin_key` + `path_key`, status machine, Agent `surface` tool, Node SQLite + Platform dual-write, UI Surface tab |
-| **Asset inventory** | **#322** | Long-lived Host → Service → Observation + tags; Finding `service_id`; `inventory_summary`; promote/adopt/pin |
-| **Traffic** | #309 | Raw capture; never auto-fills Surface |
+### Field lesson (Case 77fc1ff9 / similar)
 
-**Precedence when object descriptions conflict:** **#368 / this living doc wins** for Surface rows, Surface tab, origin/path identity, status machine, dual-write, Graph gate surface reads, and finding→`booked` surface side-effect. #322 must **not** redefine Surface as asset.urls, path-as-Asset, or a second Case coverage SoT.
+- Agent had path knowledge from **priors + model**, verified via **shell curl batches**, not browser/bruteforce/traffic tools.
+- Chat said “discovered surfaces”; Surface SoT empty — **v1 model failed Agents**.
+- Findings booked while surface side-effect unparseable — **implementation gap under D7**.
 
-**#322 depends on #368 implementation** for:
+### Operator expectation after v2
 
-- Surface tab data source (Case `surface_ledger` only — #375).
-- Working-store semantics Agents and gates already use (SQLite + `surface` tool).
-- Promote/adopt UX: act **from Surface origin rows or Host detail**, never re-merge global assets into the Surface tree.
-- Finding book composes side-effects: #368 surface `booked` **and** #322 Service attach — both may run; neither replaces the other.
+- Active probing ⇒ Surface grows from traffic settle.
+- Booked finding ⇒ matching surface booked when identity resolvable + traffic rules satisfied.
+- “Discovered surfaces” in chat should be checkable against ledger counts.
 
-**Not required by #368 DoD:** auto-mirroring Surface deposits into Services/Observations. That bridge (if ever) is an explicit #322 or later decision; V1 inventory still forbids hydrating priors into Surface as probed (R4).
+### Living status (implementation)
 
-### Operator expectation after ship
+| Area | Behavior now (code as of v1 ship) | v2 gap |
+|------|-------------------------------------|--------|
+| Node store | SQLite + surface tool + gates; status vocab seen/touched/booked (#379) | — |
+| Dual-write | #374 async surface_upsert | Unchanged topology |
+| Traffic→Surface | **#380:** on exchange complete/fail, HTTP(S) settle → SQLite + dual-write; static denylist; first→seen later→touched | — |
+| TARGET seed | **#381:** task start seeds TARGET + scope.allow web roots as `seen` (`source=target_seed`) | Traffic settle advances seed rows to touched |
+| Finding→booked | **#382:** resolve absolute URL → host+port+location_key → proof URL; create-on-book with strong identity; soft-fail unparseable (finding never fails) | — |
+| FE | Case ledger only | Label/status display if vocab changes |
+| Agent summary | **#383:** `surface(op=summary)` counts + samples; list/get primary; upsert non-primary; prompts tool-first (no every-turn inject) | — |
 
-- Mid-run empty Surface ⇒ Agent has not deposited (or sync pending)—check tool use / `platform_sync`, not asset attachment.
-- Finding booked without prior deposit ⇒ system-created `booked` row appears.
-- 200 list page ≠ 200 total; Agent must page through `has_more`.
+---
 
-### Open implementation knobs (non-blocking)
+## Open implementation knobs (to grill next)
 
-- Exact SQLite file location under taskDir.
-- Retry backoff for Platform sync.
-- Whether import always creates a new conversation (today) vs merge-into-existing Case (prefer supporting ledger merge either way).
-- Optional later: stage-boundary “N unfiled traffic paths” hint (not SoT).
+These are **not** locked; resolve before/during v2 implementation tickets:
 
-### Living status (fill on implement)
+1. ~~**Noise filter**~~ → **Locked D6.1:** default settle + static suffix denylist (static path not a Surface row).
+2. ~~**seen vs touched**~~ → **Locked:** keep **seen / touched / booked**.
+3. ~~**JS / SPA mining**~~ → **Locked as Capture follow-on (D6.2):** post-capture clue mining (pluggable analyzers; feed Agent); optional later bridge into Surface `seen`; **not** Surface v2 minimum DoD.
+4. ~~**Create-on-book**~~ → **Locked D7:** strong identity evidence (absolute URL and/or host+port+location_key) **may create booked** even without prior traffic; unresolved identity → no complete tag (finding still ok).
+5. ~~**Settle timing**~~ → **Locked:** settle on each exchange **complete** immediately (no debounce required).
+6. ~~**Agent context injection**~~ → **Locked:** tool-first (`surface` list/summary/get); no every-turn auto-inject.
+7. ~~**Surface tool upsert**~~ → **Locked:** keep registered; non-primary; prompts do not require it.
+8. ~~**Non-HTTP**~~ → **Locked for v2:** HTTP(S) settle only; other schemes later.
+9. **Capture enrichment (D6.2) ticket scope** — separate from Surface v2 DoD: clue types (paths vs secrets), browser vs shell-fetched JS, plugin interface. Grill when that ticket is opened.
 
-| Area | Behavior now |
-|------|----------------|
-| Node store | **#370/#371 done:** SQLite `taskDir/surfaces/ledger.sqlite` + `surface` tool (upsert/list/get); one-shot migrate from `ledger.json`; Graph gates (todo done, subagent post-process, host/hard settlement, finding booked) read SQLite. Identity pure: `surface-identity.ts` (#369). JSON dual-write bridge removed. |
-| Online dual-write | **#374:** After local SQLite commit, when `platformApi` + `conversationId` present → `platform_sync=pending` and async WS `surface_upsert` (`runtime/surface-platform-sync.ts`); settles to `ok` or `error` with retry. Offline/standalone stays `offline` (no Platform dependency). Tool `ok` never waits on Platform. |
-| Finding → booked | **#376:** Platform `vuln_found` persist success → `apply_booked_side_effect` (match advance / system-create `source=finding` / hard-cap soft-skip). Broadcasts `surface_upsert` when a row lands. Node `surfaceSqlite.markBooked` advances match or creates with `softCapSkip` (finding never blocked). Ordinary surface upsert still cannot set `booked`. |
-| UI Surface | **#375 done:** Right-panel Surface projects Case `surface_ledger` only (snapshot + live `surface_upsert` merge by origin_key+path_key). Empty ledger ⇒ empty panel. Findings may badge matching ledger paths; no invent from assets.urls / plan_tree / engagement target / finding-only tree. |
-| Case document | Platform `conversation.context.surface_ledger` + snapshot + WS `surface_upsert` (#373); Node dual-write publishes that event (#374) |
-| Offline import | **#377:** `/api/sync/import` merges package `surface_ledger.json` (preferred) and/or legacy `attack_surface.json` by identity into Case `context.surface_ledger` (`merge_import_package_into_context`); snapshot/UI project imported rows; second merge does not duplicate identities |
-| Tests | Platform pure merge + snapshot project + S5 booked + S7 import (`tests/test_surface_ledger.py`); Node identity pure (#369); tool+SQLite seam `node4/src/tools/surface.test.ts` (#370); gate seam `node4/src/stores/surface-sqlite.gate.test.ts` (#371, includes markBooked create); dual-write seam `node4/src/runtime/surface-platform-sync.test.ts` (#374); FE empty-vs-ledger projection `platform/frontend/src/lib/surfaceModel.ledger.test.ts` (#375) |
+### Locked summary (v2 product + knobs)
+
+| Item | Decision |
+|------|----------|
+| Audience | Agent working memory first |
+| Row birth | Runtime Traffic settle + TARGET seed |
+| Noise | Default settle + static suffix denylist |
+| JS/SPA mining | Capture enrichment later (D6.2); feed Agent; optional Surface bridge later |
+| Status | seen → touched → booked |
+| Complete | finding confirm only; create-on-book with **strong** identity; no fake complete |
+| Settle timing | Per exchange complete, immediate |
+| Agent read | surface list/summary/get tool-first |
+| upsert | Keep, non-primary |
+| Protocol | HTTP(S) only for v2 settle |
+| Caps | page 200 / hard 2000 |
+
+---
+
+## Amendment checklist (for implementers)
+
+- [x] Traffic complete → Surface settle (Node + dual-write) — #380
+- [x] TARGET/scope seed at task start (#381)
+- [x] Status: seen / touched / booked (+ migration map) — #379
+- [x] Confirm → booked with robust location resolve; create-on-book with strong identity (#382)
+- [x] Agent-facing summary/list aligned to management purpose (#383)
+- [x] Docs/prompts: deposit-not-required; explore generates traffic; confirm completes (#383)
+- [ ] Tests S2 + S5 + S8; regression on unparseable `PUT /api/...` locations (S2 covered in #380; summary seam in #383)

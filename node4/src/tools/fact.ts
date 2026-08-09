@@ -3,7 +3,7 @@
  * Never creates host assets.
  *
  * fact(op=surface) is a thin wrapper over the surface SQLite store (#370).
- * Prefer the dedicated `surface` tool for deposit/list/get.
+ * Prefer the dedicated `surface` tool for summary/list/get (upsert non-primary).
  */
 import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
@@ -19,7 +19,7 @@ export function createFactTool(runtime: ToolRuntime): AgentTool<any> {
       "Persist process cognition (ports, auth state, failed probes, surface notes) under the task workspace.",
       "Ops: list | get | upsert | surface.",
       "list returns short index (key+summary). get returns full body. upsert writes/overwrites one fact_key.",
-      "surface: thin wrapper — deposits one location into the surface SQLite ledger (prefer surface(op=upsert) for batches/list).",
+      "surface: thin wrapper — optional one-location deposit into the surface SQLite ledger (prefer surface summary/list/get; normal fill is Traffic settle + seed).",
       "Separate from finding(confirm): facts are working memory; product vulns need finding + grounded proof.",
       "Does NOT create platform host IP/domain assets (user-created only).",
       "Write-as-you-go: upsert when you confirm a cognition — do not wait for session end.",
@@ -120,7 +120,7 @@ export function createFactTool(runtime: ToolRuntime): AgentTool<any> {
           total: deposited.total,
           platform_sync: deposited.platform_sync,
           guidance:
-            "Surface deposited to SQLite working ledger (prefer surface tool for list/get/batch). Do not write result.json for handoff.",
+            "Optional surface deposit ok. Prefer surface(summary|list|get); normal fill is Traffic settle + TARGET seed. Do not write result.json for handoff.",
         });
       }
 

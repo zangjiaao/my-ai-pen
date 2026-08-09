@@ -1,5 +1,5 @@
 /**
- * Seam S2: surface tool + SQLite working store (Spec #368 / issue #370).
+ * Seam S2: surface tool + SQLite working store (Spec #368 / #370 / #383 D5).
  * External behavior only — not SQL internals as product contract.
  * Run: npx tsx src/tools/surface.test.ts
  */
@@ -95,7 +95,7 @@ const tool = createSurfaceTool(runtime);
     location: "https://host.example/api/users",
     methods: ["POST"],
     params: ["name"],
-    status: "in_probe",
+    status: "touched",
   });
   assert.ok(r.data);
   assert.equal(r.data!.created, 0);
@@ -103,7 +103,7 @@ const tool = createSurfaceTool(runtime);
   const surfaces = r.data!.surfaces as Array<Record<string, unknown>>;
   assert.deepEqual(surfaces[0]!.methods, ["GET", "POST"]);
   assert.deepEqual(surfaces[0]!.params, ["id", "name"]);
-  assert.equal(surfaces[0]!.status, "in_probe");
+  assert.equal(surfaces[0]!.status, "touched");
 }
 
 // --- upsert cannot set booked ---
@@ -115,30 +115,30 @@ const tool = createSurfaceTool(runtime);
   });
   assert.ok(r.data);
   const surfaces = r.data!.surfaces as Array<Record<string, unknown>>;
-  assert.equal(surfaces[0]!.status, "in_probe", "booked ignored on ordinary upsert");
+  assert.equal(surfaces[0]!.status, "touched", "booked ignored on ordinary upsert");
 }
 
-// --- list default open+in_probe ---
+// --- list default seen+touched ---
 {
   await toolJson(tool, {
     op: "upsert",
     location: "https://host.example/login",
-    status: "open",
+    status: "seen",
   });
   await toolJson(tool, {
     op: "upsert",
     location: "https://host.example/admin",
-    status: "probed",
+    status: "deadend",
   });
   const r = await toolJson(tool, { op: "list" });
   assert.ok(r.data);
   assert.equal(r.data!.ok, true);
-  assert.equal(r.data!.returned, 2, "default excludes probed");
+  assert.equal(r.data!.returned, 2, "default excludes deadend/booked");
   assert.equal(r.data!.total_matching, 2);
   assert.equal(r.data!.has_more, false);
   const list = r.data!.surfaces as Array<Record<string, unknown>>;
   for (const s of list) {
-    assert.ok(s.status === "open" || s.status === "in_probe");
+    assert.ok(s.status === "seen" || s.status === "touched");
   }
 }
 
@@ -159,6 +159,65 @@ const tool = createSurfaceTool(runtime);
   assert.ok(p2.data);
   assert.equal(p2.data!.returned, 1);
   assert.equal(p2.data!.has_more, false);
+}
+
+// --- #383 summary shape (seen/touched/booked counts + samples) ---
+{
+  const r = await toolJson(tool, { op: "summary" });
+  assert.ok(r.data, `summary failed: ${r.error}`);
+  assert.equal(r.data!.ok, true);
+  assert.equal(r.data!.op, "summary");
+  assert.equal(typeof r.data!.total, "number");
+  assert.ok((r.data!.total as number) >= 3);
+  assert.equal(typeof r.data!.seen, "number");
+  assert.equal(typeof r.data!.touched, "number");
+  assert.equal(typeof r.data!.booked, "number");
+  assert.equal(typeof r.data!.deadend, "number");
+  assert.equal(typeof r.data!.skipped_roe, "number");
+  assert.equal(typeof r.data!.actionable, "number");
+  assert.equal(
+    (r.data!.actionable as number),
+    (r.data!.seen as number) + (r.data!.touched as number),
+  );
+  assert.ok((r.data!.deadend as number) >= 1, "admin deadend counted");
+  const counts = r.data!.counts as Record<string, number>;
+  assert.ok(counts);
+  assert.equal(counts.seen, r.data!.seen);
+  assert.equal(counts.touched, r.data!.touched);
+  assert.equal(counts.booked, r.data!.booked);
+  assert.equal(counts.deadend, r.data!.deadend);
+  assert.equal(counts.skipped_roe, r.data!.skipped_roe);
+  assert.ok(Array.isArray(r.data!.sample_paths));
+  assert.ok(Array.isArray(r.data!.samples));
+  const samples = r.data!.samples as Array<Record<string, unknown>>;
+  for (const s of samples) {
+    assert.ok(typeof s.location === "string" || typeof s.path_key === "string");
+    assert.ok(typeof s.status === "string");
+  }
+  // Tool description posture: summary is primary; guidance must not require upsert deposit
+  assert.ok(typeof r.data!.guidance === "string");
+  assert.doesNotMatch(String(r.data!.guidance), /must (?:deposit|upsert|register)/i);
+}
+
+// --- summary empty ledger ---
+{
+  const emptyDir = await mkdtemp(join(tmpdir(), "node4-surface-sum-empty-"));
+  const emptyStore = new SurfaceSqliteStore(SurfaceSqliteStore.pathFromTaskDir(emptyDir));
+  await emptyStore.open();
+  const emptyRt = minimalRuntime(emptyDir, { surfaceSqlite: emptyStore });
+  const emptyTool = createSurfaceTool(emptyRt);
+  const r = await toolJson(emptyTool, { op: "summary" });
+  assert.ok(r.data);
+  assert.equal(r.data!.ok, true);
+  assert.equal(r.data!.total, 0);
+  assert.equal(r.data!.seen, 0);
+  assert.equal(r.data!.touched, 0);
+  assert.equal(r.data!.booked, 0);
+  assert.equal(r.data!.actionable, 0);
+  assert.deepEqual(r.data!.sample_paths, []);
+  assert.deepEqual(r.data!.samples, []);
+  emptyStore.close();
+  await rm(emptyDir, { recursive: true, force: true });
 }
 
 // --- get by location ---
@@ -270,11 +329,16 @@ const tool = createSurfaceTool(runtime);
   const migStore = new SurfaceSqliteStore(SurfaceSqliteStore.pathFromTaskDir(migDir));
   await migStore.open();
   assert.equal(await migStore.count(), 2);
-  const open = await migStore.list({ status: "open" });
-  assert.equal(open.total_matching, 1);
+  // Legacy JSON statuses may remain on migrate until re-write; list default maps open→seen filter.
+  const seenOrOpen = await migStore.list({ status: "seen" });
+  assert.ok(seenOrOpen.total_matching >= 1, "migrated open/seen rows listable as seen");
   const probed = await migStore.get({ location: "http://127.0.0.1:8080/vuln/xss" });
   assert.ok(probed);
-  assert.equal(probed!.status, "probed");
+  // Expand-contract: unmigrated legacy "probed" may remain until rewrite; normalize on read path of list.
+  assert.ok(
+    probed!.status === "probed" || probed!.status === "touched",
+    `expected probed or touched, got ${probed!.status}`,
+  );
   migStore.close();
   await rm(migDir, { recursive: true, force: true });
 }

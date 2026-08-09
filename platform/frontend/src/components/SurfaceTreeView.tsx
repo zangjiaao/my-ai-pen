@@ -5,7 +5,12 @@ import { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Search } from "lucide-react";
 import type { SecurityVulnerability } from "../lib/securityTypes";
 import type { SurfaceEntry } from "../lib/surfaceModel";
-import { surfaceMethodChips } from "../lib/surfaceModel";
+import {
+  preferSurfaceStatus,
+  surfaceMethodChips,
+  surfaceStatusBadgeClass,
+  surfaceStatusLabel,
+} from "../lib/surfaceModel";
 import {
   dedupeFindingTags,
   findingTagClass,
@@ -28,10 +33,17 @@ export type SurfaceTreeNode = {
   /** Leaf payload (web route or non-web service). */
   entries: SurfaceEntry[];
   methods: string[];
+  /** Spec #384: highest v2 status among own entries (seen | touched | booked | …). */
+  status?: string;
   leafCount: number;
   findingTags: SurfaceFindingTag[];
   subtreeFindingTags: SurfaceFindingTag[];
 };
+
+function absorbEntryStatus(node: SurfaceTreeNode, entry: SurfaceEntry): void {
+  const next = preferSurfaceStatus(node.status, entry.status);
+  if (next) node.status = next;
+}
 
 function pathSegments(path: string): string[] {
   const raw = String(path || "").trim();
@@ -97,6 +109,7 @@ export function buildSurfaceTree(
       children: [],
       entries: [],
       methods: [],
+      status: undefined,
       leafCount: 0,
       findingTags: [],
       subtreeFindingTags: [],
@@ -120,6 +133,7 @@ export function buildSurfaceTree(
       children: [],
       entries: [],
       methods: [],
+      status: undefined,
       leafCount: 0,
       // Tags attach when the matching entry is processed (root path → port; deeper → path node).
       findingTags: [],
@@ -135,6 +149,7 @@ export function buildSurfaceTree(
 
     if (entry.service !== "web") {
       portNode.entries.push(entry);
+      absorbEntryStatus(portNode, entry);
       const tags = findingsByPath.get(entry.key.toLowerCase()) || [];
       portNode.findingTags = dedupeFindingTags([...portNode.findingTags, ...tags]);
       continue;
@@ -144,6 +159,7 @@ export function buildSurfaceTree(
     if (segs.length === 0) {
       // Web root of this origin
       portNode.entries.push(entry);
+      absorbEntryStatus(portNode, entry);
       for (const m of surfaceMethodChips(entry.method)) {
         if (!portNode.methods.includes(m)) portNode.methods.push(m);
       }
@@ -169,6 +185,7 @@ export function buildSurfaceTree(
           children: [],
           entries: [],
           methods: [],
+          status: undefined,
           leafCount: 0,
           findingTags: [],
           subtreeFindingTags: [],
@@ -178,6 +195,7 @@ export function buildSurfaceTree(
       cursor = child;
     }
     cursor.entries.push(entry);
+    absorbEntryStatus(cursor, entry);
     for (const m of surfaceMethodChips(entry.method)) {
       if (!cursor.methods.includes(m)) cursor.methods.push(m);
     }
@@ -573,6 +591,16 @@ function SurfaceTreeNodeRow({
                   {m}
                 </span>
               ))}
+            {/* Spec #384: v2 status (seen / touched / booked); own-entry rows only. */}
+            {node.status && surfaceStatusLabel(node.status) && (
+              <span
+                className={`shrink-0 rounded px-1 py-0.5 font-mono text-[10px] font-medium uppercase ${surfaceStatusBadgeClass(node.status)}`}
+                data-testid="surface-status"
+                data-status={surfaceStatusLabel(node.status)}
+              >
+                {surfaceStatusLabel(node.status)}
+              </span>
+            )}
           </button>
           {visibleTags.length > 0 && (
             <span className="flex min-w-0 flex-wrap items-center gap-0.5">

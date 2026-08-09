@@ -1,9 +1,10 @@
-"""Spec #368 / #373 / #376 — Case surface_ledger store / project (pure + context merge).
+"""Spec #368 / #373 / #376 / #379 — Case surface_ledger store / project (pure + context merge).
 
 SoT lives on conversation.context["surface_ledger"]:
-  { version: 1, updated_at, surfaces: [...] }
+  { version: 2, updated_at, surfaces: [...] }
 
 Identity: origin_key + path_key (mirrors node4 surface-identity pure core).
+Status v2 (D3): seen → touched → booked; legacy open/in_probe/probed accepted on read.
 Ordinary upsert: merge methods/params; never downgrade status; cannot set booked.
 Finding book path: apply_booked_side_effect (allow_booked; cap-skip create soft).
 """
@@ -17,27 +18,45 @@ from urllib.parse import unquote, urlparse
 
 # Spec D4: write hard-cap per Case (configurable ceiling ≤5000).
 DEFAULT_ROW_CAP = 2000
-LEDGER_VERSION = 1
+# Spec D9: version 2 when status vocabulary (seen/touched/booked) ships (#379).
+LEDGER_VERSION = 2
 
+# Write statuses: normative v2 + optional retained terminals (deadend/skipped_roe).
 SURFACE_STATUSES = frozenset(
     {
-        "open",
-        "in_probe",
-        "probed",
+        "seen",
+        "touched",
         "booked",
         "deadend",
         "skipped_roe",
     }
 )
 
-# Rank for monotonic advance. Peers at same rank cannot lateral-transition.
+# Legacy v1 statuses accepted on read; normalized via LEGACY_STATUS_MAP on write.
+LEGACY_SURFACE_STATUSES = frozenset({"open", "in_probe", "probed"})
+
+ACCEPTED_SURFACE_STATUSES = SURFACE_STATUSES | LEGACY_SURFACE_STATUSES
+
+# open→seen, in_probe/probed→touched, booked→booked;
+# deadend/skipped_roe retained as optional terminals (not collapsed to touched+tag).
+LEGACY_STATUS_MAP: dict[str, str] = {
+    "open": "seen",
+    "in_probe": "touched",
+    "probed": "touched",
+    "seen": "seen",
+    "touched": "touched",
+    "booked": "booked",
+    "deadend": "deadend",
+    "skipped_roe": "skipped_roe",
+}
+
+# Rank for monotonic advance (post-normalize). Peers cannot lateral-transition.
 STATUS_RANK: dict[str, int] = {
-    "open": 0,
-    "in_probe": 1,
-    "probed": 2,
-    "deadend": 2,
-    "skipped_roe": 2,
-    "booked": 3,
+    "seen": 0,
+    "touched": 1,
+    "deadend": 1,
+    "skipped_roe": 1,
+    "booked": 2,
 }
 
 # Well-known default ports (generic IANA-style; not product-target-specific).
@@ -67,6 +86,19 @@ DEFAULT_PORTS: dict[str, int] = {
 
 _SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*://", re.IGNORECASE)
 _PATH_SEG_RE = re.compile(r"(/[\w./%-]+)")
+# Absolute URL token (http/https or other schemes) inside free-text blobs.
+_ABS_URL_TOKEN_RE = re.compile(
+    r"[a-z][a-z0-9+.-]*://[^\s,;)\]}>'\"]+",
+    re.IGNORECASE,
+)
+# METHOD /path or bare /path; allow OpenAPI braces in segments.
+_METHOD_PATH_RE = re.compile(
+    r"^(?:[A-Z]{3,10}\s+)(/(?:[^\s?#]+))",
+    re.IGNORECASE,
+)
+_PATH_IN_TEXT_RE = re.compile(
+    r"(/(?:[A-Za-z0-9._~!$&'()*+,;=:@%{}-]|%[0-9A-Fa-f]{2})+)"
+)
 
 
 def _now_iso() -> str:
@@ -82,12 +114,231 @@ def _str_or_none(value: Any, *, max_len: int | None = None) -> str | None:
     return text
 
 
+def _extract_abs_url_tokens(text: str | None) -> list[str]:
+    """Return absolute URL tokens found in free text (order preserved, de-duped)."""
+    raw = str(text or "").strip()
+    if not raw:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in _ABS_URL_TOKEN_RE.finditer(raw):
+        tok = m.group(0).rstrip(").,;]'\"")
+        if tok and tok not in seen:
+            seen.add(tok)
+            out.append(tok)
+    return out
+
+
+def _normalize_booking_path(path: str | None) -> str:
+    """Normalize a path fragment for host+port+location_key composition."""
+    p = str(path or "").strip()
+    if not p:
+        return ""
+    # Accidental full URL passed as location_key → take path only.
+    if _SCHEME_RE.match(p):
+        try:
+            u = urlparse(p)
+            p = u.path or "/"
+        except Exception:
+            return ""
+    if not p.startswith("/"):
+        p = f"/{p}"
+    p = p.split("?", 1)[0].split("#", 1)[0]
+    while "//" in p:
+        p = p.replace("//", "/")
+    if p != "/" and p.endswith("/"):
+        p = p.rstrip("/")
+    # Light lower-case for identity stability (mirrors http_path_key).
+    return p.lower() if p else ""
+
+
+def path_from_location_blob(raw: str | None) -> str:
+    """Extract a path from method-path or prose finding locations.
+
+    Handles field forms like ``PUT /api/Products/{id} (...)`` that are not absolute URLs.
+    """
+    s = str(raw or "").strip()
+    if not s:
+        return ""
+    # Prefer leading METHOD /path
+    m = _METHOD_PATH_RE.match(s)
+    if m:
+        return _normalize_booking_path(m.group(1).rstrip(").,;]'\" "))
+    if s.startswith("/"):
+        token = s.split("?", 1)[0].split("#", 1)[0].split()[0]
+        return _normalize_booking_path(token.rstrip(").,;]'\" "))
+    # Prose: "... at /vulnerabilities/sqli/" or "GET /path"
+    pm = _PATH_IN_TEXT_RE.search(s)
+    if pm:
+        return _normalize_booking_path(pm.group(1).rstrip(").,;]'\" "))
+    return ""
+
+
+def _parse_port_value(port: Any) -> int | None:
+    if port is None:
+        return None
+    text = str(port).strip()
+    if not text:
+        return None
+    try:
+        n = int(text)
+    except (TypeError, ValueError):
+        return None
+    if n < 1 or n > 65535:
+        return None
+    return n
+
+
+def _clean_host(host: Any) -> str:
+    h = str(host or "").strip().lower()
+    if not h:
+        return ""
+    h = h.strip("[]").rstrip(".")
+    # Drop accidental path/userinfo
+    if "/" in h:
+        h = h.split("/", 1)[0]
+    if "@" in h:
+        h = h.rsplit("@", 1)[-1]
+    # host:port → host (port handled separately)
+    if h.count(":") == 1 and not h.startswith("["):
+        # ipv4/host:port
+        left, right = h.split(":", 1)
+        if right.isdigit():
+            h = left
+    return h
+
+
+def compose_http_location(
+    host: str,
+    port: int,
+    path: str,
+    *,
+    scheme: str | None = None,
+) -> str:
+    """Build scheme://host[:port]/path for parse_location (strong identity composition)."""
+    host_s = _clean_host(host)
+    if not host_s:
+        return ""
+    scheme_s = (scheme or "").strip().lower()
+    if scheme_s not in {"http", "https"}:
+        scheme_s = "https" if int(port) in (443, 8443) else "http"
+    host_disp = f"[{host_s}]" if ":" in host_s else host_s
+    path_s = _normalize_booking_path(path) or "/"
+    if (scheme_s == "http" and port == 80) or (scheme_s == "https" and port == 443):
+        return f"{scheme_s}://{host_disp}{path_s}"
+    return f"{scheme_s}://{host_disp}:{int(port)}{path_s}"
+
+
+def _proof_text_blobs(
+    proof: str | None = None,
+    proof_excerpts: list | None = None,
+) -> list[str]:
+    blobs: list[str] = []
+    if proof is not None and str(proof).strip():
+        blobs.append(str(proof))
+    if isinstance(proof_excerpts, list):
+        for item in proof_excerpts:
+            if isinstance(item, dict):
+                ex = item.get("excerpt")
+                if ex is not None and str(ex).strip():
+                    blobs.append(str(ex))
+            elif item is not None and str(item).strip():
+                blobs.append(str(item))
+    return blobs
+
+
+def resolve_booking_location(
+    location: str | None = None,
+    *,
+    host: str | None = None,
+    port: str | int | None = None,
+    location_key: str | None = None,
+    proof: str | None = None,
+    proof_excerpts: list | None = None,
+    scheme: str | None = None,
+) -> dict[str, Any]:
+    """Spec #368 D7 / #382: resolve strong surface identity for finding book.
+
+    Order:
+      1. Absolute URL (whole location or first absolute URL token in location)
+      2. host/target + port + location_key (location_key arg or path from location blob)
+      3. Absolute URL extracted from proof / proof_excerpts
+
+    Returns parse_location-compatible ``{ok: True, origin_key, path_key, ...}``
+    or ``{ok: False, error}``. Soft-fail only — never used to fail a finding.
+    """
+    raw = str(location or "").strip()
+
+    # 1a. Whole location is scheme://…
+    if raw and _SCHEME_RE.match(raw):
+        parsed = parse_location(raw)
+        if parsed.get("ok"):
+            return parsed
+
+    # 1b. Absolute URL token embedded in location free-text
+    for url in _extract_abs_url_tokens(raw):
+        parsed = parse_location(url)
+        if parsed.get("ok"):
+            return parsed
+
+    # 2. host + port + location_key (strong composition)
+    host_s = _clean_host(host)
+    port_n = _parse_port_value(port)
+    path = _normalize_booking_path(location_key) if location_key else ""
+    if not path:
+        path = path_from_location_blob(raw)
+    if host_s and port_n is not None and path:
+        composed = compose_http_location(host_s, port_n, path, scheme=scheme)
+        if composed:
+            parsed = parse_location(composed)
+            if parsed.get("ok"):
+                return parsed
+
+    # 3. Proof absolute URLs
+    for blob in _proof_text_blobs(proof, proof_excerpts):
+        for url in _extract_abs_url_tokens(blob):
+            parsed = parse_location(url)
+            if parsed.get("ok"):
+                return parsed
+
+    if not raw and not host_s:
+        return {"ok": False, "error": "empty location"}
+    return {
+        "ok": False,
+        "error": (
+            "unresolvable location "
+            "(need absolute URL, or host+port+location_key, or proof URL)"
+        ),
+    }
+
+
 def is_surface_status(v: Any) -> bool:
-    return isinstance(v, str) and v in SURFACE_STATUSES
+    """True for any accepted input status (legacy or write form)."""
+    if not isinstance(v, str):
+        return False
+    return v.strip().lower() in ACCEPTED_SURFACE_STATUSES
+
+
+def is_write_surface_status(v: Any) -> bool:
+    """True only for post-normalize write statuses."""
+    if not isinstance(v, str):
+        return False
+    return v.strip().lower() in SURFACE_STATUSES
+
+
+def normalize_surface_status(v: Any) -> str | None:
+    """Expand-contract: accept legacy/v2 on read; return write status or None."""
+    if not isinstance(v, str):
+        return None
+    return LEGACY_STATUS_MAP.get(v.strip().lower())
 
 
 def status_rank(status: str) -> int:
-    return STATUS_RANK.get(status, -1)
+    """Rank after normalize; unknown → -1."""
+    n = normalize_surface_status(status)
+    if n is None:
+        return -1
+    return STATUS_RANK.get(n, -1)
 
 
 def _is_http_scheme(scheme: str) -> bool:
@@ -237,18 +488,20 @@ def can_transition_status(
     *,
     allow_booked: bool = False,
 ) -> bool:
-    """Whether a status transition is allowed (same status = no-op allowed)."""
-    if not is_surface_status(from_status) or not is_surface_status(to_status):
+    """Whether a status transition is allowed (inputs may be legacy; compared post-normalize)."""
+    from_n = normalize_surface_status(from_status)
+    to_n = normalize_surface_status(to_status)
+    if from_n is None or to_n is None:
         return False
-    if to_status == "booked" and not allow_booked:
+    if to_n == "booked" and not allow_booked:
         return False
-    if from_status == to_status:
+    if from_n == to_n:
         return True
-    from_r = STATUS_RANK[from_status]
-    to_r = STATUS_RANK[to_status]
+    from_r = STATUS_RANK[from_n]
+    to_r = STATUS_RANK[to_n]
     if to_r < from_r:
         return False
-    # Same rank, different terminal (probed ↔ deadend ↔ skipped_roe): no lateral.
+    # Same rank, different peer (touched ↔ deadend ↔ skipped_roe): no lateral.
     if to_r == from_r:
         return False
     return True
@@ -260,32 +513,41 @@ def apply_status_advance(
     *,
     allow_booked: bool = False,
 ) -> dict[str, Any]:
-    """Apply a forward status change when allowed; otherwise keep from_status."""
-    if not can_transition_status(from_status, to_status, allow_booked=allow_booked):
-        return {"status": from_status, "changed": False}
-    if from_status == to_status:
-        return {"status": from_status, "changed": False}
-    return {"status": to_status, "changed": True}
+    """Apply a forward status change when allowed; otherwise keep normalized from.
+
+    Always returns a write SurfaceStatus (legacy inputs normalized).
+    """
+    from_n = normalize_surface_status(from_status) or "seen"
+    to_n = normalize_surface_status(to_status)
+    if to_n is None or not can_transition_status(from_n, to_n, allow_booked=allow_booked):
+        return {"status": from_n, "changed": False}
+    if from_n == to_n:
+        return {"status": from_n, "changed": False}
+    return {"status": to_n, "changed": True}
 
 
 def resolve_upsert_status(
     existing: str | None,
     requested: str | None = None,
 ) -> str:
-    """Status for ordinary surface upsert (not booking).
+    """Status for ordinary surface upsert / settle (not booking).
 
-    - New row defaults to open when request omitted/invalid.
-    - Requested booked is ignored (stays existing or open).
+    - New row defaults to seen when request omitted/invalid.
+    - Requested booked is ignored (stays existing or seen).
+    - Legacy requested/existing values are normalized.
     - Never downgrades an existing status.
     """
-    want = "open"
-    if requested is not None and is_surface_status(requested) and requested != "booked":
-        want = requested
-    if existing is None:
+    want = "seen"
+    if requested is not None:
+        req_n = normalize_surface_status(requested)
+        if req_n is not None and req_n != "booked":
+            want = req_n
+    if existing is None or existing == "":
         return want
-    if not is_surface_status(existing):
+    existing_n = normalize_surface_status(existing)
+    if existing_n is None:
         return want
-    return apply_status_advance(existing, want)["status"]
+    return apply_status_advance(existing_n, want)["status"]
 
 
 def empty_ledger(*, updated_at: str | None = None) -> dict[str, Any]:
@@ -392,10 +654,14 @@ def normalize_surface_row(
         requested_status = requested_status.strip().lower()
     else:
         requested_status = None
-    if allow_booked and is_surface_status(requested_status):
-        status = requested_status  # type: ignore[assignment]
+    if allow_booked:
+        req_n = normalize_surface_status(requested_status)
+        status = req_n if req_n is not None else "seen"
     else:
-        status = resolve_upsert_status(None, requested_status if is_surface_status(requested_status) else None)
+        status = resolve_upsert_status(
+            None,
+            requested_status if is_surface_status(requested_status) else None,
+        )
 
     row_id = str(msg.get("id") or "").strip() or surface_row_key(origin_key, path_key)[:180]
     now = _now_iso()
@@ -433,9 +699,11 @@ def merge_surface_row(
     """Upsert merge by identity: methods/params union; never downgrade status."""
     if not existing:
         row = dict(incoming)
-        # Guard: ordinary path cannot create booked.
-        if not allow_booked and row.get("status") == "booked":
-            row["status"] = "open"
+        # Guard: ordinary path cannot create booked; always store write vocabulary.
+        st = normalize_surface_status(row.get("status")) or "seen"
+        if not allow_booked and st == "booked":
+            st = "seen"
+        row["status"] = st
         return row
 
     out = dict(existing)
@@ -458,12 +726,10 @@ def merge_surface_row(
     out["methods"] = merge_methods(existing.get("methods"), incoming.get("methods"))
     out["params"] = merge_params(existing.get("params"), incoming.get("params"))
 
-    old_status = str(existing.get("status") or "open")
-    if not is_surface_status(old_status):
-        old_status = "open"
+    old_status = normalize_surface_status(existing.get("status")) or "seen"
     req = incoming.get("status")
     req_s = str(req).strip().lower() if req is not None else None
-    if allow_booked and is_surface_status(req_s):
+    if allow_booked and normalize_surface_status(req_s) is not None:
         adv = apply_status_advance(old_status, req_s, allow_booked=True)
         out["status"] = adv["status"]
     else:
@@ -737,8 +1003,14 @@ def apply_booked_side_effect(
     *,
     conversation_id: str,
     row_cap: int = DEFAULT_ROW_CAP,
+    host: str | None = None,
+    port: str | int | None = None,
+    location_key: str | None = None,
+    proof: str | None = None,
+    proof_excerpts: list | None = None,
+    scheme: str | None = None,
 ) -> dict[str, Any]:
-    """Spec #368 D7 / #376: finding book → surface booked (system write).
+    """Spec #368 D7 / #376 / #382: finding book → surface booked (system write).
 
     Pure: does not fail callers — always returns a result dict.
 
@@ -751,11 +1023,12 @@ def apply_booked_side_effect(
       }
 
     Rules:
-      1. Resolve origin+path from finding location.
+      1. Resolve origin+path (absolute URL → host+port+location_key → proof URL).
       2. Matching row → advance status to booked (allow_booked; never downgrade booked).
-      3. No match → system-create row source=finding, status=booked.
+      3. No match + strong identity → system-create row source=finding, status=booked.
       4. Hard-cap blocks create → skip surface write; finding path must still succeed.
       5. Ordinary upsert remains cannot-set-booked (this path alone uses allow_booked=True).
+      6. Unresolvable identity → soft unparseable; never fails the finding.
     """
     ctx = dict(context) if isinstance(context, dict) else {}
     conv = str(conversation_id or "").strip()
@@ -767,7 +1040,7 @@ def apply_booked_side_effect(
             "landed": None,
             "warning": "missing conversation_id",
         }
-    if not raw_loc:
+    if not raw_loc and not host and not location_key and not proof and not proof_excerpts:
         return {
             "context": ctx,
             "action": "noop",
@@ -775,9 +1048,16 @@ def apply_booked_side_effect(
             "warning": "empty location",
         }
 
-    parsed = parse_location(raw_loc)
+    parsed = resolve_booking_location(
+        raw_loc or None,
+        host=host,
+        port=port,
+        location_key=location_key,
+        proof=proof,
+        proof_excerpts=proof_excerpts,
+        scheme=scheme,
+    )
     if not parsed.get("ok"):
-        # Try to recover bare paths / host-only strings is out of scope; fail soft.
         return {
             "context": ctx,
             "action": "unparseable",
@@ -797,9 +1077,7 @@ def apply_booked_side_effect(
     now = _now_iso()
 
     if existing is not None:
-        old_status = str(existing.get("status") or "open")
-        if not is_surface_status(old_status):
-            old_status = "open"
+        old_status = normalize_surface_status(existing.get("status")) or "seen"
         if old_status == "booked":
             # Already booked — optional location refresh only via merge identity path.
             return {

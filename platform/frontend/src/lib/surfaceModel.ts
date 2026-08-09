@@ -29,9 +29,74 @@ export type SurfaceEntry = {
   isTarget?: boolean;
   /** Discovered later (SSRF/internal/out-of-scope probe) — not the user TARGET. */
   isDiscovered?: boolean;
-  /** Case surface_ledger status (open | in_probe | probed | booked | …). */
+  /** Case surface_ledger status (v2: seen | touched | booked; legacy mapped on project). */
   status?: string;
 };
+
+/**
+ * Spec #368 / #379 / #384 — Surface status vocabulary (D3).
+ * Write form: seen → touched → booked (+ optional deadend / skipped_roe).
+ * Legacy open / in_probe / probed accepted on read and mapped for display.
+ */
+export const SURFACE_STATUS_LEGACY_MAP: Record<string, string> = {
+  open: "seen",
+  in_probe: "touched",
+  probed: "touched",
+  seen: "seen",
+  touched: "touched",
+  booked: "booked",
+  deadend: "deadend",
+  skipped_roe: "skipped_roe",
+};
+
+/** Rank after normalize (monotonic advance; peers do not lateral). */
+export const SURFACE_STATUS_RANK: Record<string, number> = {
+  seen: 0,
+  touched: 1,
+  deadend: 1,
+  skipped_roe: 1,
+  booked: 2,
+};
+
+/** Expand-contract: accept legacy/v2 on read; return write/display status or undefined. */
+export function normalizeSurfaceStatus(raw: unknown): string | undefined {
+  if (raw == null) return undefined;
+  const s = String(raw).trim().toLowerCase();
+  if (!s) return undefined;
+  return SURFACE_STATUS_LEGACY_MAP[s];
+}
+
+/**
+ * Prefer the higher-rank status (post-normalize). Never “downgrade” when merging
+ * live surface_upsert rows or projected entries.
+ */
+export function preferSurfaceStatus(
+  a?: string | null,
+  b?: string | null,
+): string | undefined {
+  const na = normalizeSurfaceStatus(a);
+  const nb = normalizeSurfaceStatus(b);
+  if (!na) return nb;
+  if (!nb) return na;
+  const ra = SURFACE_STATUS_RANK[na] ?? -1;
+  const rb = SURFACE_STATUS_RANK[nb] ?? -1;
+  return rb > ra ? nb : na;
+}
+
+/** Display label for Surface UI (always v2 / retained terminal form). */
+export function surfaceStatusLabel(status?: string | null): string {
+  return normalizeSurfaceStatus(status) || "";
+}
+
+/** Tailwind badge classes for Surface status chips. */
+export function surfaceStatusBadgeClass(status?: string | null): string {
+  const n = normalizeSurfaceStatus(status);
+  if (n === "booked") return "bg-status-success/15 text-status-success";
+  if (n === "touched") return "bg-status-running/12 text-status-running";
+  if (n === "deadend" || n === "skipped_roe") return "bg-canvas-inset text-ink-muted";
+  // seen (and unknown fallback when caller still passes a label)
+  return "bg-canvas-inset text-ink-secondary";
+}
 
 /**
  * Spec #368 / #375 — Case surface_ledger document (Platform snapshot + WS).
@@ -129,6 +194,14 @@ export function upsertSurfaceLedger(
       Array.isArray(prev.params) ? prev.params.map(String) : [],
       Array.isArray(raw.params) ? raw.params.map(String) : [],
     );
+    // Spec #384 / D3: never downgrade status on live merge (seen→touched→booked).
+    const status =
+      preferSurfaceStatus(
+        prev.status != null ? String(prev.status) : null,
+        raw.status != null ? String(raw.status) : null,
+      ) ??
+      (raw.status != null ? String(raw.status) : undefined) ??
+      (prev.status != null ? String(prev.status) : undefined);
     byKey.set(k, {
       ...prev,
       ...raw,
@@ -138,6 +211,7 @@ export function upsertSurfaceLedger(
       params: params.length ? params : prev.params || raw.params,
       id: prev.id || raw.id,
       created_at: prev.created_at || raw.created_at,
+      ...(status != null ? { status } : {}),
     });
   }
   return {
@@ -172,7 +246,7 @@ export function projectSurfaceEntriesFromLedger(ledger: SurfaceLedger | null | u
       ...existing,
       method: methods.length ? methods.join(",") : existing.method,
       source: existing.source || entry.source,
-      status: entry.status || existing.status,
+      status: preferSurfaceStatus(existing.status, entry.status) || existing.status || entry.status,
       title: existing.title || entry.title,
     });
   }
@@ -235,7 +309,8 @@ export function ledgerRowToSurfaceEntry(row: SurfaceLedgerRow): SurfaceEntry | n
     },
   );
   if (methodStr) entry.method = methodStr;
-  const status = String(row.status || "").trim();
+  // Spec #384: project v2 labels; map legacy open/in_probe/probed for display.
+  const status = normalizeSurfaceStatus(row.status);
   if (status) entry.status = status;
   return entry;
 }

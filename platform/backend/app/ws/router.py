@@ -1323,7 +1323,7 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
         applied = apply_vuln_persist_result(msg, persisted)
         msg.clear()
         msg.update(applied)
-        # Spec #368 D7 / #376: successful book → surface booked side-effect (non-fatal).
+        # Spec #368 D7 / #376 / #382: successful book → surface booked side-effect (non-fatal).
         side_conv = str(conv_id or applied.get("conversation_id") or "").strip()
         if str(applied.get("type") or "") == "vuln_found" and side_conv:
             try:
@@ -1331,8 +1331,29 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
                     conversation_id=side_conv,
                     location=str(
                         applied.get("location")
+                        or applied.get("url")
                         or applied.get("poc")
                         or ""
+                    ),
+                    host=str(
+                        applied.get("affected_asset")
+                        or applied.get("target")
+                        or ""
+                    )
+                    or None,
+                    port=applied.get("port"),
+                    location_key=str(applied.get("location_key") or "") or None,
+                    proof=str(
+                        applied.get("proof")
+                        or applied.get("poc")
+                        or applied.get("evidence_summary")
+                        or ""
+                    )
+                    or None,
+                    proof_excerpts=(
+                        applied.get("proof_excerpts")
+                        if isinstance(applied.get("proof_excerpts"), list)
+                        else None
                     ),
                 )
                 if surface_evt:
@@ -2993,15 +3014,23 @@ async def _apply_finding_surface_booked_side_effect(
     *,
     conversation_id: str,
     location: str,
+    host: str | None = None,
+    port: str | int | None = None,
+    location_key: str | None = None,
+    proof: str | None = None,
+    proof_excerpts: list | None = None,
 ) -> dict | None:
-    """Spec #368 D7 / #376: after finding book, advance/create surface as booked.
+    """Spec #368 D7 / #376 / #382: after finding book, advance/create surface as booked.
 
-    Never raises for caller — hard-cap create skip is soft; finding remains success.
+    Resolves identity from absolute URL, host+port+location_key, or proof URLs.
+    Never raises for caller — hard-cap / unparseable create skip is soft; finding remains success.
     Returns a surface_upsert project frame when a row landed (advanced/created), else None.
     """
     conv = str(conversation_id or "").strip()
     loc = str(location or "").strip()
-    if not conv or not loc:
+    if not conv:
+        return None
+    if not loc and not host and not location_key and not proof and not proof_excerpts:
         return None
     try:
         from app.db.base import async_session
@@ -3021,8 +3050,13 @@ async def _apply_finding_surface_booked_side_effect(
             context = c.context if isinstance(c.context, dict) else {}
             result = apply_booked_side_effect(
                 context,
-                loc,
+                loc or None,
                 conversation_id=conv,
+                host=host,
+                port=port,
+                location_key=location_key,
+                proof=proof,
+                proof_excerpts=proof_excerpts,
             )
             action = str(result.get("action") or "")
             if result.get("warning"):

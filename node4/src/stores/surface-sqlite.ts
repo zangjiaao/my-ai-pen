@@ -20,9 +20,12 @@ import {
   isSurfaceStatus,
   mergeMethods,
   mergeParams,
+  normalizeSurfaceStatus,
   parseLocation,
+  resolveBookingLocation,
   resolveUpsertStatus,
   surfaceRowKey,
+  type ResolveBookingLocationInput,
   type SurfaceStatus,
 } from "./surface-identity.js";
 
@@ -38,9 +41,12 @@ export const SURFACE_UPSERT_BATCH_MAX = 20;
 /** Open-path preview size for gate error messages (matches legacy ledger). */
 const OPEN_PREVIEW = 8;
 
-/** Terminal statuses for Graph todo(done) acted-match (legacy gate semantics). */
+/**
+ * Terminal / acted statuses for Graph todo(done) match (v2 + retained terminals).
+ * Legacy probed maps to touched via normalizeSurfaceStatus on read.
+ */
 const TERMINAL: ReadonlySet<SurfaceStatus> = new Set([
-  "probed",
+  "touched",
   "booked",
   "deadend",
   "skipped_roe",
@@ -139,7 +145,12 @@ export type SurfaceGetOpts = {
   path_key?: string | null;
 };
 
-/** Gate / settlement summary (parity with legacy SurfaceLedgerSummary). */
+/**
+ * Gate / settlement summary.
+ * Field names keep v1 gate consumers working:
+ *   open ≈ seen, in_probe ≈ touched (active work), probed unused under v2 (stays 0),
+ *   actionable = seen + touched (not booked / optional terminals).
+ */
 export type SurfaceCoverageSummary = {
   total: number;
   open: number;
@@ -148,7 +159,7 @@ export type SurfaceCoverageSummary = {
   booked: number;
   deadend: number;
   skipped: number;
-  /** Paths still needing act (open + in_probe). */
+  /** Paths still needing act (seen + touched). */
   actionable: number;
   open_preview: string[];
 };
@@ -225,7 +236,8 @@ function asStringList(v: unknown, max = 40): string[] | undefined {
 }
 
 function rowFromDb(r: DbRow): SurfaceRow {
-  const status = isSurfaceStatus(r.status) ? r.status : "open";
+  // Expand-contract: accept legacy DB values; surface write form to callers.
+  const status = normalizeSurfaceStatus(r.status) ?? "seen";
   const sync = r.platform_sync;
   const platform_sync: PlatformSyncState =
     sync === "pending" || sync === "ok" || sync === "error" || sync === "offline"
@@ -251,25 +263,45 @@ function rowFromDb(r: DbRow): SurfaceRow {
 }
 
 function defaultListStatuses(status: SurfaceListOpts["status"]): SurfaceStatus[] | "all" {
-  if (status == null || status === "") return ["open", "in_probe"];
+  const fallback: SurfaceStatus[] = ["seen", "touched"];
+  if (status == null || status === "") return fallback;
   if (typeof status === "string") {
     const s = status.trim().toLowerCase();
     if (s === "all" || s === "*") return "all";
     if (s.includes(",")) {
-      return s
+      const out = s
         .split(",")
-        .map((x) => x.trim())
-        .filter((x): x is SurfaceStatus => isSurfaceStatus(x));
+        .map((x) => normalizeSurfaceStatus(x.trim()))
+        .filter((x): x is SurfaceStatus => x != null);
+      return out.length ? out : fallback;
     }
-    return isSurfaceStatus(s) ? [s] : ["open", "in_probe"];
+    const one = normalizeSurfaceStatus(s);
+    return one != null ? [one] : fallback;
   }
   if (Array.isArray(status)) {
     const out = status
-      .map((x) => String(x ?? "").trim().toLowerCase())
-      .filter((x): x is SurfaceStatus => isSurfaceStatus(x));
-    return out.length ? out : ["open", "in_probe"];
+      .map((x) => normalizeSurfaceStatus(String(x ?? "").trim()))
+      .filter((x): x is SurfaceStatus => x != null);
+    return out.length ? out : fallback;
   }
-  return ["open", "in_probe"];
+  return fallback;
+}
+
+/**
+ * Expand write statuses to SQL match set including unmigrated legacy values
+ * still stored in SQLite (expand-contract read).
+ */
+function sqlStatusMatchSet(statuses: SurfaceStatus[]): string[] {
+  const out = new Set<string>();
+  for (const s of statuses) {
+    out.add(s);
+    if (s === "seen") out.add("open");
+    if (s === "touched") {
+      out.add("in_probe");
+      out.add("probed");
+    }
+  }
+  return [...out];
 }
 
 export class SurfaceSqliteStore {
@@ -385,8 +417,8 @@ export class SurfaceSqliteStore {
         kind = rec.kind != null ? String(rec.kind) : undefined;
       }
       const id = surfaceRowKey(origin_key, path_key);
-      const statusRaw = String(rec.status || "open").trim();
-      const status: SurfaceStatus = isSurfaceStatus(statusRaw) ? statusRaw : "open";
+      const statusRaw = String(rec.status || "seen").trim();
+      const status: SurfaceStatus = normalizeSurfaceStatus(statusRaw) ?? "seen";
       const methods = asStringList(rec.methods) ?? [];
       const params = asStringList(rec.params) ?? [];
       const note = rec.note != null ? clip(String(rec.note), 500) : undefined;
@@ -489,18 +521,15 @@ export class SurfaceSqliteStore {
         const existing = this.getByIdentityUnlocked(origin_key, path_key);
 
         let status: SurfaceStatus;
-        if (meta?.allowBooked && raw.status != null && isSurfaceStatus(raw.status) && raw.status === "booked") {
-          // Booking path: advance with allowBooked semantics via resolve + force booked when new.
-          if (!existing) {
-            status = "booked";
-          } else {
-            // Never downgrade from booked; otherwise set booked.
-            status = existing.status === "booked" ? "booked" : "booked";
-          }
+        const rawStatusNorm =
+          raw.status != null ? normalizeSurfaceStatus(String(raw.status).trim()) : null;
+        if (meta?.allowBooked && rawStatusNorm === "booked") {
+          // Booking path: advance with allowBooked semantics; force booked when allowed.
+          status = "booked";
         } else {
           const requested =
             raw.status != null && isSurfaceStatus(String(raw.status).trim())
-              ? (String(raw.status).trim() as SurfaceStatus)
+              ? String(raw.status).trim()
               : undefined;
           status = resolveUpsertStatus(existing?.status, requested);
         }
@@ -646,8 +675,9 @@ export class SurfaceSqliteStore {
             offset,
           };
         }
-        where.push(`status IN (${statuses.map(() => "?").join(",")})`);
-        params.push(...statuses);
+        const match = sqlStatusMatchSet(statuses);
+        where.push(`status IN (${match.map(() => "?").join(",")})`);
+        params.push(...match);
       }
       if (origin) {
         where.push("origin_key = ?");
@@ -737,10 +767,10 @@ export class SurfaceSqliteStore {
     return this.withLock(async () => this.allUnlocked());
   }
 
-  /** open + in_probe queue (Hard Workset emit / settlement). */
+  /** seen + touched queue (actionable; Hard Workset emit / settlement). */
   async listOpen(): Promise<SurfaceRow[]> {
     return this.withLock(async () =>
-      this.allUnlocked().filter((s) => s.status === "open" || s.status === "in_probe"),
+      this.allUnlocked().filter((s) => s.status === "seen" || s.status === "touched"),
     );
   }
 
@@ -760,16 +790,16 @@ export class SurfaceSqliteStore {
         open_preview: [],
       };
       for (const s of surfaces) {
-        if (s.status === "open") counts.open += 1;
-        else if (s.status === "in_probe") counts.in_probe += 1;
-        else if (s.status === "probed") counts.probed += 1;
+        // Map v2 write statuses onto legacy summary field names for gate parity.
+        if (s.status === "seen") counts.open += 1;
+        else if (s.status === "touched") counts.in_probe += 1;
         else if (s.status === "booked") counts.booked += 1;
         else if (s.status === "deadend") counts.deadend += 1;
         else if (s.status === "skipped_roe") counts.skipped += 1;
       }
       counts.actionable = counts.open + counts.in_probe;
       counts.open_preview = surfaces
-        .filter((s) => s.status === "open" || s.status === "in_probe")
+        .filter((s) => s.status === "seen" || s.status === "touched")
         .slice(0, OPEN_PREVIEW)
         .map((s) => s.path_key || s.location);
       return counts;
@@ -862,31 +892,50 @@ export class SurfaceSqliteStore {
     });
   }
 
+  /** Advance to touched (legacy name; v2 maps in_probe → touched). */
   async markInProbe(locations: string[]): Promise<number> {
-    return this.setStatusByLocations(locations, "in_probe");
+    return this.setStatusByLocations(locations, "touched");
   }
 
+  /** Advance to touched (legacy name; v2 maps probed → touched). */
   async markProbed(locations: string[]): Promise<number> {
-    return this.setStatusByLocations(locations, "probed");
+    return this.setStatusByLocations(locations, "touched");
   }
 
   /**
-   * Spec #368 D7 / #376: finding book side-effect on local working store.
-   * Advance matching rows to booked; if none match and location is parseable,
-   * system-create source=finding status=booked. Hard-cap create is soft-skipped
-   * (finding booking must not fail).
+   * Spec #368 D7 / #376 / #382: finding book side-effect on local working store.
+   * Resolve identity (absolute URL → host+port+location_key → proof URL), advance
+   * matching rows to booked; if none match and identity is strong, system-create
+   * source=finding status=booked. Hard-cap create is soft-skipped (finding must not fail).
    */
-  async markBooked(location: string): Promise<number> {
+  async markBooked(
+    location: string,
+    opts?: Omit<ResolveBookingLocationInput, "location">,
+  ): Promise<number> {
     const loc = String(location || "").trim();
-    if (!loc) return 0;
-    const advanced = await this.setStatusByLocations([loc], "booked", undefined, {
-      allowBooked: true,
+    const resolved = resolveBookingLocation({
+      location: loc || undefined,
+      host: opts?.host,
+      port: opts?.port,
+      locationKey: opts?.locationKey,
+      proof: opts?.proof,
+      proofExcerpts: opts?.proofExcerpts,
+      scheme: opts?.scheme,
     });
-    if (advanced > 0) return advanced;
-    // No match → system-create when scheme:// present (same identity as Platform D7).
-    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(loc)) return 0;
+    // Prefer path/location match first (scheme-less location may still hit trafficked rows).
+    const matchHints = [loc, resolved.ok ? resolved.location : "", resolved.ok ? resolved.path_key : ""]
+      .map((s) => String(s || "").trim())
+      .filter(Boolean);
+    if (matchHints.length) {
+      const advanced = await this.setStatusByLocations(matchHints, "booked", undefined, {
+        allowBooked: true,
+      });
+      if (advanced > 0) return advanced;
+    }
+    // No match → system-create only with strong resolved identity (create-on-book).
+    if (!resolved.ok) return 0;
     const result = await this.upsert(
-      [{ location: loc, status: "booked", source: "finding" }],
+      [{ location: resolved.location, status: "booked", source: "finding" }],
       {
         source: "finding",
         allowBooked: true,
@@ -907,7 +956,7 @@ export class SurfaceSqliteStore {
   }
 
   /**
-   * Merge recon surfaces (host inject / subagent structured). New paths start open.
+   * Merge recon surfaces (host inject / subagent structured). New paths start seen.
    * Prefer surface tool upsert for agent deposits; this is the gate/settlement write path.
    */
   async upsertFromRecon(
@@ -928,7 +977,7 @@ export class SurfaceSqliteStore {
           : undefined,
         auth: raw.auth != null ? String(raw.auth) : undefined,
         note: raw.note != null ? String(raw.note) : undefined,
-        status: "open",
+        status: "seen",
       });
     }
     if (!items.length) {

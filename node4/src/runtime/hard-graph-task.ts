@@ -29,6 +29,7 @@ import { PanelAgentTracker } from "./panel-agents.js";
 import { GoalStore } from "../stores/goal.js";
 import { ensureProcessQuality } from "./package-honesty-host.js";
 import { seedPriorsAtGraphStart } from "./prior-seed.js";
+import { seedSurfacesFromTargetAtTaskStart } from "./surface-target-seed.js";
 import { buildEngagementCloseout, writeEngagementCloseout } from "./engagement-closeout.js";
 import {
   createGraphRunQualityState,
@@ -316,6 +317,15 @@ export async function runHardGraphExpertTask(options: {
     task.caseContext,
   );
   graphQuality.priorSeed = priorSeed;
+
+  // Spec #381 / D8: TARGET + scope.allow → Surface seen (idempotent if session-runner already seeded).
+  await seedSurfacesFromTargetAtTaskStart(parentRuntime).catch((err) => {
+    console.warn(
+      `[node4] surface target seed (hard-graph) failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  });
 
   // Spec #278: task_start carries Session actual Graph mode for AgentRow + dual-rail.
   await platform.send({

@@ -18,7 +18,7 @@ export function createTrafficListTool(runtime: ToolRuntime): AgentTool<any> {
       "(offset/limit). Default returns summaries (method, host, path, status, source, time) " +
       "without bodies; set include_bodies=true or exchange_id for detail. " +
       "Optional aggregate_paths for path-level overview. " +
-      "Read-only — does NOT deposit attack-surface ledger rows (use surface(op=upsert) after analysis).",
+      "Read-only raw capture. Surface ledger fills from Traffic settle automatically; use surface(summary|list) for coverage — do not treat this or surface(upsert) as the primary fill path.",
     parameters: Type.Object({
       limit: Type.Optional(Type.Number({ description: "Max rows (default 20, max 200)" })),
       offset: Type.Optional(Type.Number({ description: "Pagination offset (default 0)" })),

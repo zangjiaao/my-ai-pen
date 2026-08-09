@@ -199,7 +199,7 @@ export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope)
     "Briefly narrate progress in assistant text when useful (what you are checking next; what you observed). Do not invent surfaces, proof, or booked findings in prose.",
     "**Stage settlement is host-owned** (Spec #125): do **not** write result.json as the stage handoff or booking channel. Host projects stage outcome from Finding Store, package terminals, and surface ledger.",
     "Bookable candidates must land in **Finding Store** (package settlement auto-ingest, or finding(upsert) for serial Main work) with title, location, **severity** (critical|high|medium|low|info — no silent medium), proof_excerpt (verbatim tool stdout/body ≥24 chars), optional poc.",
-    "Surfaces for recon: use **surface(op=upsert, location=…)** (SQLite working ledger; fact(op=surface) is a thin wrapper) or package workers — never stage result.json as handoff.",
+    "Surfaces: Runtime settles real Traffic (+ TARGET seed) into the ledger; use **surface(op=summary|list|get)** for coverage. Optional surface(upsert) is non-primary corrective only — never stage result.json as handoff.",
     allowFinding
       ? "After L0 Feedback marks feedback_ok, Main books with finding(confirm, finding_id=…). Severity fills from Store when omitted; missing severity fails closed."
       : "This stage cannot finding(confirm). Deposit candidates via packages or surface/fact only.",
@@ -267,7 +267,7 @@ export function stageUserPrompt(
     ? "Complete this book stage only. Use finding(list) then finding(confirm, finding_id=…) for confirmable Store rows; do not invent ids; do not stop with zero confirms while feedback_ok remain; settle via host/Store (no result.json handoff). Book L0 consumes Store only — hypothesis queue is informational."
     : allowSubagent
       ? "Complete this stage only. Prefer subagent packages when multi-class work is justified; narrate briefly; settle via host/Store (no result.json handoff); then stop."
-      : "Complete this stage only. Narrate briefly when useful; deposit surfaces via surface(op=upsert) and candidates via finding(upsert) — do not use result.json as stage handoff; then stop.";
+      : "Complete this stage only. Narrate briefly when useful; explore so Traffic settles into Surface; candidates via finding(upsert); surface(summary|list) for coverage — do not use result.json as stage handoff; then stop.";
   return [
     `### Hard Graph stage: ${input.stage.id}`,
     input.stage.success || "",

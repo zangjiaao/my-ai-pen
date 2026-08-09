@@ -635,7 +635,7 @@ async function runColdPackage(args: {
     skills: skillStore,
     skillIds: pack.skillIds,
     processFacts,
-    // Same Case surface ledger as Main (Spec #370) — Worker deposits via surface tool.
+    // Same Case surface ledger as Main (Spec #370/#383) — Worker shares store; fill is Traffic settle + seed.
     surfaceLedger: parent.surfaceLedger,
     surfaceSqlite: parent.surfaceSqlite,
     lifecycle: {

@@ -1,5 +1,6 @@
 /**
- * Spec #375 D10 — FE Surface panel projects Case surface_ledger only.
+ * Spec #375 D10 / #384 — FE Surface panel projects Case surface_ledger only;
+ * v2 status presentation (seen / touched / booked) with legacy map.
  */
 import assert from "node:assert/strict";
 import {
@@ -7,11 +8,15 @@ import {
   collectSurfaceEntries,
   emptySurfaceLedger,
   ensureSurfaceLedger,
+  normalizeSurfaceStatus,
   parseEngagementTargets,
+  preferSurfaceStatus,
   projectSurfaceEntriesFromLedger,
+  surfaceStatusLabel,
   upsertSurfaceLedger,
   type SurfaceLedger,
 } from "./surfaceModel.ts";
+import { buildSurfaceTree } from "../components/SurfaceTreeView.tsx";
 
 function testEmptyLedgerProjectsEmpty() {
   const empty = emptySurfaceLedger();
@@ -20,6 +25,8 @@ function testEmptyLedgerProjectsEmpty() {
   assert.equal(projectSurfaceEntriesFromLedger(undefined).length, 0);
   assert.equal(projectSurfaceEntriesFromLedger({ version: 1, surfaces: [] }).length, 0);
   assert.deepEqual(ensureSurfaceLedger(null), emptySurfaceLedger());
+  // Empty tree / honest empty panel after project.
+  assert.equal(buildSurfaceTree([]).length, 0);
 }
 
 function testLedgerRowsProjectToInventory() {
@@ -34,7 +41,7 @@ function testLedgerRowsProjectToInventory() {
         location: "https://lab.example/login",
         kind: "url",
         methods: ["GET", "POST"],
-        status: "open",
+        status: "seen",
         source: "agent",
       },
       {
@@ -43,7 +50,7 @@ function testLedgerRowsProjectToInventory() {
         path_key: "",
         location: "ssh://10.0.0.5:22",
         kind: "ssh",
-        status: "probed",
+        status: "touched",
         source: "agent",
       },
     ],
@@ -57,14 +64,81 @@ function testLedgerRowsProjectToInventory() {
   assert.equal(login!.service, "web");
   assert.ok(String(login!.method || "").includes("GET"));
   assert.ok(String(login!.method || "").includes("POST"));
-  assert.equal(login!.status, "open");
+  assert.equal(login!.status, "seen");
 
   const ssh = entries.find((e) => e.service === "ssh");
   assert.ok(ssh);
   assert.equal(ssh!.host, "10.0.0.5");
   assert.equal(ssh!.port, "22");
   assert.equal(ssh!.path, "");
-  assert.equal(ssh!.status, "probed");
+  assert.equal(ssh!.status, "touched");
+}
+
+function testLegacyStatusMapsToV2Presentation() {
+  // Spec #379 / #384: open→seen, in_probe/probed→touched, booked→booked.
+  assert.equal(normalizeSurfaceStatus("open"), "seen");
+  assert.equal(normalizeSurfaceStatus("  Open "), "seen");
+  assert.equal(normalizeSurfaceStatus("in_probe"), "touched");
+  assert.equal(normalizeSurfaceStatus("probed"), "touched");
+  assert.equal(normalizeSurfaceStatus("seen"), "seen");
+  assert.equal(normalizeSurfaceStatus("touched"), "touched");
+  assert.equal(normalizeSurfaceStatus("booked"), "booked");
+  assert.equal(normalizeSurfaceStatus("deadend"), "deadend");
+  assert.equal(normalizeSurfaceStatus("skipped_roe"), "skipped_roe");
+  assert.equal(normalizeSurfaceStatus("nope"), undefined);
+  assert.equal(surfaceStatusLabel("open"), "seen");
+  assert.equal(surfaceStatusLabel("probed"), "touched");
+
+  const ledger: SurfaceLedger = {
+    version: 1,
+    surfaces: [
+      {
+        origin_key: "https://legacy.example:443",
+        path_key: "/a",
+        location: "https://legacy.example/a",
+        kind: "url",
+        status: "open",
+      },
+      {
+        origin_key: "https://legacy.example:443",
+        path_key: "/b",
+        location: "https://legacy.example/b",
+        kind: "url",
+        status: "in_probe",
+      },
+      {
+        origin_key: "https://legacy.example:443",
+        path_key: "/c",
+        location: "https://legacy.example/c",
+        kind: "url",
+        status: "probed",
+      },
+      {
+        origin_key: "https://legacy.example:443",
+        path_key: "/d",
+        location: "https://legacy.example/d",
+        kind: "url",
+        status: "booked",
+      },
+    ],
+  };
+  const entries = projectSurfaceEntriesFromLedger(ledger);
+  assert.equal(entries.find((e) => e.path === "/a")!.status, "seen");
+  assert.equal(entries.find((e) => e.path === "/b")!.status, "touched");
+  assert.equal(entries.find((e) => e.path === "/c")!.status, "touched");
+  assert.equal(entries.find((e) => e.path === "/d")!.status, "booked");
+
+  const tree = buildSurfaceTree(entries);
+  assert.ok(tree.length >= 1);
+  const port = tree[0]!.children.find((c) => c.nodeKind === "port");
+  assert.ok(port);
+  const byPath = new Map(port!.children.map((c) => [c.path, c]));
+  // path nodes store label as segment; path as /a, /b, …
+  assert.equal(byPath.get("/a")?.status, "seen");
+  assert.equal(byPath.get("/b")?.status, "touched");
+  assert.equal(byPath.get("/c")?.status, "touched");
+  assert.equal(byPath.get("/d")?.status, "booked");
+  assert.equal(surfaceStatusLabel(byPath.get("/a")?.status), "seen");
 }
 
 function testDirtyAssetsDoNotSeedProjection() {
@@ -115,6 +189,7 @@ function testLiveUpsertMergesByIdentity() {
   });
   assert.equal(ledger.surfaces.length, 1);
   assert.equal(projectSurfaceEntriesFromLedger(ledger).length, 1);
+  assert.equal(projectSurfaceEntriesFromLedger(ledger)[0]!.status, "seen");
 
   ledger = upsertSurfaceLedger(ledger, {
     updated_at: "t2",
@@ -130,7 +205,7 @@ function testLiveUpsertMergesByIdentity() {
         origin_key: "https://app.example:443",
         path_key: "/api/orders",
         methods: ["GET"],
-        status: "open",
+        status: "seen",
         location: "https://app.example/api/orders",
       },
     ],
@@ -146,6 +221,107 @@ function testLiveUpsertMergesByIdentity() {
   assert.equal(entries.length, 2);
   assert.ok(entries.some((e) => e.path === "/api/users"));
   assert.ok(entries.some((e) => e.path === "/api/orders"));
+  // Live status advance: open → in_probe projects as seen → touched.
+  assert.equal(entries.find((e) => e.path === "/api/users")!.status, "touched");
+  assert.equal(entries.find((e) => e.path === "/api/orders")!.status, "seen");
+}
+
+function testLiveUpsertUpdatesStatusDisplayWithoutDowngrade() {
+  let ledger = emptySurfaceLedger();
+  ledger = upsertSurfaceLedger(ledger, {
+    surfaces: [
+      {
+        origin_key: "https://app.example:443",
+        path_key: "/pay",
+        location: "https://app.example/pay",
+        status: "seen",
+      },
+    ],
+  });
+  assert.equal(projectSurfaceEntriesFromLedger(ledger)[0]!.status, "seen");
+
+  ledger = upsertSurfaceLedger(ledger, {
+    surfaces: [
+      {
+        origin_key: "https://app.example:443",
+        path_key: "/pay",
+        location: "https://app.example/pay",
+        status: "touched",
+      },
+    ],
+  });
+  assert.equal(projectSurfaceEntriesFromLedger(ledger)[0]!.status, "touched");
+
+  ledger = upsertSurfaceLedger(ledger, {
+    surfaces: [
+      {
+        origin_key: "https://app.example:443",
+        path_key: "/pay",
+        location: "https://app.example/pay",
+        status: "booked",
+      },
+    ],
+  });
+  assert.equal(projectSurfaceEntriesFromLedger(ledger)[0]!.status, "booked");
+
+  // Out-of-order lower status must not downgrade display.
+  ledger = upsertSurfaceLedger(ledger, {
+    surfaces: [
+      {
+        origin_key: "https://app.example:443",
+        path_key: "/pay",
+        location: "https://app.example/pay",
+        status: "seen",
+      },
+    ],
+  });
+  assert.equal(projectSurfaceEntriesFromLedger(ledger)[0]!.status, "booked");
+  assert.equal(preferSurfaceStatus("booked", "seen"), "booked");
+  assert.equal(preferSurfaceStatus("open", "probed"), "touched");
+
+  const tree = buildSurfaceTree(projectSurfaceEntriesFromLedger(ledger));
+  const pathNode = tree[0]?.children[0]?.children.find((c) => c.path === "/pay");
+  assert.ok(pathNode);
+  assert.equal(pathNode!.status, "booked");
+  assert.equal(surfaceStatusLabel(pathNode!.status), "booked");
+}
+
+function testEmptyVsSettledPresentation() {
+  // Honest empty when ledger empty (before traffic settle).
+  assert.equal(projectSurfaceEntriesFromLedger(emptySurfaceLedger()).length, 0);
+  assert.equal(buildSurfaceTree(projectSurfaceEntriesFromLedger(null)).length, 0);
+
+  // After settle-like upserts, rows appear with v2 labels (no asset.urls invent).
+  let ledger = emptySurfaceLedger();
+  ledger = upsertSurfaceLedger(ledger, {
+    updated_at: "settled",
+    surfaces: [
+      {
+        origin_key: "https://target.example:443",
+        path_key: "/",
+        location: "https://target.example/",
+        kind: "url",
+        methods: ["GET"],
+        status: "seen",
+        source: "traffic_settle",
+      },
+      {
+        origin_key: "https://target.example:443",
+        path_key: "/login",
+        location: "https://target.example/login",
+        kind: "url",
+        methods: ["GET", "POST"],
+        status: "touched",
+        source: "traffic_settle",
+      },
+    ],
+  });
+  const entries = projectSurfaceEntriesFromLedger(ledger);
+  assert.equal(entries.length, 2);
+  assert.ok(entries.every((e) => e.status === "seen" || e.status === "touched"));
+  const tree = buildSurfaceTree(entries);
+  assert.equal(tree.length, 1);
+  assert.ok(tree[0]!.leafCount >= 2);
 }
 
 function testFindingsBadgeOnlyMatchingLedgerPaths() {
@@ -186,7 +362,10 @@ function testFindingsBadgeOnlyMatchingLedgerPaths() {
 
 testEmptyLedgerProjectsEmpty();
 testLedgerRowsProjectToInventory();
+testLegacyStatusMapsToV2Presentation();
 testDirtyAssetsDoNotSeedProjection();
 testLiveUpsertMergesByIdentity();
+testLiveUpsertUpdatesStatusDisplayWithoutDowngrade();
+testEmptyVsSettledPresentation();
 testFindingsBadgeOnlyMatchingLedgerPaths();
 console.log("surfaceModel.ledger.test.ts: ok");

@@ -3,12 +3,16 @@
  *
  * Passive instrumentation on `http` + browser network + best-effort shell.
  * Agents do not log traffic; they may **query** session captures via `traffic_list`
- * (#378 raw material). Collect never writes the surface ledger.
+ * (#378 raw material).
+ *
+ * Spec #380 (D6): on exchange complete/fail, Runtime also settles HTTP(S) into the
+ * Surface working store (+ dual-write). Pending-only rows do not create Surface rows.
  * Platform Case store is panel SoT; act-observation memory remains booking-only.
  */
 
 import { createHash } from "node:crypto";
 import type { PlatformSink, TaskEnvelope, ToolRuntime } from "../types.js";
+import { settleTrafficToSurface } from "./surface-settle.js";
 import { rememberTrafficExchange } from "./traffic-query.js";
 
 export type TrafficSource = "http" | "browser" | "shell" | "mitm";
@@ -492,6 +496,9 @@ export async function emitHttpComplete(
 ): Promise<TrafficExchange> {
   const done = completeExchange(pending, input);
   rememberTrafficExchange(runtime, done);
+  // #380 D6: settle Surface immediately on complete (HTTP(S); denylist; dual-write).
+  // Await local SQLite so subsequent surface list sees the row; dual-write stays async.
+  await settleTrafficToSurface(runtime, done);
   await emitTrafficExchange(runtime.platform, done).catch(() => {});
   return done;
 }
@@ -503,6 +510,8 @@ export async function emitHttpFail(
 ): Promise<TrafficExchange> {
   const done = failExchange(pending, error);
   rememberTrafficExchange(runtime, done);
+  // #380: fail with usable URL still settles (pending-only does not).
+  await settleTrafficToSurface(runtime, done);
   await emitTrafficExchange(runtime.platform, done).catch(() => {});
   return done;
 }
@@ -815,6 +824,8 @@ export async function emitShellHttpTraffic(
   (runtime.lifecycle as { trafficSequence?: number }).trafficSequence = seq0 + exchanges.length;
   for (const ex of exchanges) {
     rememberTrafficExchange(runtime, ex);
+    // #380 D6: shell HTTP complete/fail → Surface settle
+    await settleTrafficToSurface(runtime, ex);
     await emitTrafficExchange(runtime.platform, ex).catch(() => {});
   }
   return exchanges;
@@ -892,7 +903,10 @@ export async function drainBrowserNetworkRows(options: {
   seenIds: BrowserSeenMap;
   sequenceStart?: number;
   bodyBudget?: number;
-  /** Optional session host for #378 Agent query store (no surface ledger). */
+  /**
+   * Optional session host for #378 Agent query store.
+   * When a full ToolRuntime (with surfaceSqlite), also #380 Surface settle on terminal rows.
+   */
   storeHost?: ToolRuntime | { trafficById?: Map<string, TrafficExchange> };
 }): Promise<TrafficExchange[]> {
   const emitted: TrafficExchange[] = [];
@@ -913,10 +927,27 @@ export async function drainBrowserNetworkRows(options: {
     exchange.sequence = seq;
     rememberBrowserEmit(options.seenIds, mapKey, exchange);
     if (options.storeHost) rememberTrafficExchange(options.storeHost, exchange);
+    // #380 D6: browser terminal rows → Surface settle when runtime has working store
+    if (options.storeHost && isToolRuntimeForSettle(options.storeHost)) {
+      await settleTrafficToSurface(options.storeHost, exchange);
+    }
     await emitTrafficExchange(options.platform, exchange).catch(() => {});
     emitted.push(exchange);
   }
   return emitted;
+}
+
+/** True when storeHost is a ToolRuntime (has task + lifecycle) suitable for settle. */
+function isToolRuntimeForSettle(
+  host: ToolRuntime | { trafficById?: Map<string, TrafficExchange> },
+): host is ToolRuntime {
+  return (
+    typeof host === "object" &&
+    host != null &&
+    "task" in host &&
+    "lifecycle" in host &&
+    "platform" in host
+  );
 }
 
 export function getBrowserSeenIds(runtime: ToolRuntime): BrowserSeenMap {

@@ -336,7 +336,7 @@ export function queryTrafficExchanges(
     exchanges: page.map((ex) => (includeBodies ? { ...ex } : projectTrafficSummary(ex))),
     note:
       "Session capture raw material (Runtime hook store). Summaries omit bodies by default. " +
-      "Does not deposit surface ledger — use surface(op=upsert) after analysis.",
+      "Raw capture only. Surface fills via Traffic settle; use surface(summary|list) for coverage.",
   };
   if (wantAgg) {
     // Aggregate over the filtered set (not only the page) for recon overview.

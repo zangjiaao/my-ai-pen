@@ -83,6 +83,7 @@ import {
 import { runParkedWorkingContinue } from "./run-parked-working-continue.js";
 import type { TodoStore as TodoStoreType } from "../stores/todo.js";
 import { seedTodoFromHandoff } from "./handoff-todo-seed.js";
+import { seedSurfacesFromTargetAtTaskStart } from "./surface-target-seed.js";
 
 export async function runNode4Task(
   config: Node4Config,
@@ -258,6 +259,14 @@ export async function runNode4Task(
     panelAgents: panel,
     // Spec #301 Free path: host auto-bind Worker ↔ Case Main todos on spawn.
     todo: () => runtime.todo,
+  });
+
+  // Spec #381 / D8: TARGET + scope.allow web origins → Surface seen (no traffic required).
+  // Free + Hard Graph share this cold-start path; dual-write when Platform-bound.
+  await seedSurfacesFromTargetAtTaskStart(runtime).catch((err) => {
+    console.warn(
+      `[node4] surface target seed failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
   });
 
   /**

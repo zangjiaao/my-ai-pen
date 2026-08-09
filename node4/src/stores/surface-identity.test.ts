@@ -1,15 +1,21 @@
 /**
- * Pure contract: surface identity + status machine (Spec #368 / issue #369).
+ * Pure contract: surface identity + status machine (Spec #368 / #369 / #379).
  * Run: npx tsx src/stores/surface-identity.test.ts
  */
 import assert from "node:assert/strict";
 import {
   applyStatusAdvance,
   canTransitionStatus,
+  composeHttpLocation,
   isSurfaceStatus,
+  isWriteSurfaceStatus,
+  LEGACY_STATUS_MAP,
   mergeMethods,
   mergeParams,
+  normalizeSurfaceStatus,
   parseLocation,
+  pathFromLocationBlob,
+  resolveBookingLocation,
   resolveUpsertStatus,
   statusRank,
   surfaceRowKey,
@@ -103,6 +109,42 @@ import {
   assert.equal(parseLocation("/relative/path").ok, false);
 }
 
+// --- Spec #382 resolveBookingLocation (D7) ---
+
+{
+  assert.equal(pathFromLocationBlob("PUT /api/Products/{id} (note)"), "/api/products/{id}");
+  assert.equal(composeHttpLocation("h.local", 3000, "/api/x"), "http://h.local:3000/api/x");
+}
+
+{
+  const r = resolveBookingLocation({
+    location: "PUT /api/Products/{id} (IDOR)",
+    host: "host.docker.internal",
+    port: 3000,
+    locationKey: "/api/products/{id}",
+  });
+  assert.equal(r.ok, true);
+  if (!r.ok) throw new Error("expected resolve ok");
+  assert.equal(r.origin_key, "http://host.docker.internal:3000");
+  assert.equal(r.path_key, "/api/products/{id}");
+}
+
+{
+  const r = resolveBookingLocation({
+    location: "PUT /api/Orders/1",
+    proof: "Request: PUT http://juice:3000/api/Orders/1\n200 OK",
+  });
+  assert.equal(r.ok, true);
+  if (!r.ok) throw new Error("expected proof resolve ok");
+  assert.equal(r.origin_key, "http://juice:3000");
+  assert.equal(r.path_key, "/api/orders/1");
+}
+
+{
+  const r = resolveBookingLocation({ location: "PUT /api/Products/{id}" });
+  assert.equal(r.ok, false);
+}
+
 // --- methods / params union merge ---
 
 {
@@ -118,75 +160,134 @@ import {
   assert.deepEqual(mergeParams(undefined, undefined), []);
 }
 
-// --- status machine: never downgrade; upsert cannot set booked ---
+// --- status machine v2: seen → touched → booked; legacy map; never downgrade ---
 
 {
+  // Accept both legacy and v2 on read
   assert.equal(isSurfaceStatus("open"), true);
+  assert.equal(isSurfaceStatus("seen"), true);
+  assert.equal(isSurfaceStatus("touched"), true);
+  assert.equal(isSurfaceStatus("in_probe"), true);
+  assert.equal(isSurfaceStatus("probed"), true);
   assert.equal(isSurfaceStatus("booked"), true);
   assert.equal(isSurfaceStatus("nope"), false);
-  assert.ok(statusRank("booked") > statusRank("probed"));
-  assert.ok(statusRank("probed") > statusRank("in_probe"));
-  assert.ok(statusRank("in_probe") > statusRank("open"));
+  assert.equal(isWriteSurfaceStatus("open"), false);
+  assert.equal(isWriteSurfaceStatus("seen"), true);
+  assert.equal(isWriteSurfaceStatus("touched"), true);
+  assert.equal(isWriteSurfaceStatus("probed"), false);
 }
 
 {
-  // probed + open attempt stays probed
-  assert.equal(resolveUpsertStatus("probed", "open"), "probed");
+  // Legacy → v2 migration map
+  assert.equal(normalizeSurfaceStatus("open"), "seen");
+  assert.equal(normalizeSurfaceStatus("in_probe"), "touched");
+  assert.equal(normalizeSurfaceStatus("probed"), "touched");
+  assert.equal(normalizeSurfaceStatus("booked"), "booked");
+  assert.equal(normalizeSurfaceStatus("seen"), "seen");
+  assert.equal(normalizeSurfaceStatus("touched"), "touched");
+  // Optional terminals retained (not collapsed to touched)
+  assert.equal(normalizeSurfaceStatus("deadend"), "deadend");
+  assert.equal(normalizeSurfaceStatus("skipped_roe"), "skipped_roe");
+  assert.equal(LEGACY_STATUS_MAP.open, "seen");
+  assert.equal(LEGACY_STATUS_MAP.in_probe, "touched");
+  assert.equal(LEGACY_STATUS_MAP.probed, "touched");
+  assert.equal(normalizeSurfaceStatus("NOPE"), null);
+  // Case / trim tolerant
+  assert.equal(normalizeSurfaceStatus("  Open "), "seen");
+  assert.equal(normalizeSurfaceStatus("IN_PROBE"), "touched");
+}
+
+{
+  // Ranks: booked > touched(=deadend peers) > seen; legacy ranks via normalize
+  assert.ok(statusRank("booked") > statusRank("touched"));
+  assert.ok(statusRank("touched") > statusRank("seen"));
+  assert.equal(statusRank("touched"), statusRank("probed"));
+  assert.equal(statusRank("seen"), statusRank("open"));
+  assert.equal(statusRank("touched"), statusRank("in_probe"));
+  assert.equal(statusRank("touched"), statusRank("deadend"));
+  assert.equal(statusRank("touched"), statusRank("skipped_roe"));
+}
+
+{
+  // touched + seen attempt stays touched (never downgrade); legacy inputs normalize
+  assert.equal(resolveUpsertStatus("probed", "open"), "touched");
+  assert.equal(resolveUpsertStatus("touched", "seen"), "touched");
   assert.equal(canTransitionStatus("probed", "open"), false);
+  assert.equal(canTransitionStatus("touched", "seen"), false);
   const adv = applyStatusAdvance("probed", "open");
-  assert.equal(adv.status, "probed");
+  assert.equal(adv.status, "touched");
   assert.equal(adv.changed, false);
 }
 
 {
-  // upsert cannot set booked
-  assert.equal(resolveUpsertStatus(undefined, "booked"), "open");
-  assert.equal(resolveUpsertStatus("open", "booked"), "open");
-  assert.equal(resolveUpsertStatus("probed", "booked"), "probed");
+  // ordinary upsert/settle cannot set booked
+  assert.equal(resolveUpsertStatus(undefined, "booked"), "seen");
+  assert.equal(resolveUpsertStatus("open", "booked"), "seen");
+  assert.equal(resolveUpsertStatus("seen", "booked"), "seen");
+  assert.equal(resolveUpsertStatus("probed", "booked"), "touched");
+  assert.equal(resolveUpsertStatus("touched", "booked"), "touched");
   assert.equal(canTransitionStatus("open", "booked"), false);
+  assert.equal(canTransitionStatus("seen", "booked"), false);
   assert.equal(canTransitionStatus("open", "booked", { allowBooked: true }), true);
+  assert.equal(canTransitionStatus("seen", "booked", { allowBooked: true }), true);
   const viaBooking = applyStatusAdvance("open", "booked", { allowBooked: true });
   assert.equal(viaBooking.status, "booked");
   assert.equal(viaBooking.changed, true);
+  const viaV2 = applyStatusAdvance("seen", "booked", { allowBooked: true });
+  assert.equal(viaV2.status, "booked");
+  assert.equal(viaV2.changed, true);
 }
 
 {
-  // forward advances
-  assert.equal(resolveUpsertStatus("open", "in_probe"), "in_probe");
-  assert.equal(resolveUpsertStatus("in_probe", "probed"), "probed");
-  assert.equal(resolveUpsertStatus(undefined, "in_probe"), "in_probe");
-  assert.equal(resolveUpsertStatus(undefined, undefined), "open");
+  // forward advances (v2 + legacy synonyms)
+  assert.equal(resolveUpsertStatus("seen", "touched"), "touched");
+  assert.equal(resolveUpsertStatus("open", "in_probe"), "touched");
+  assert.equal(resolveUpsertStatus("in_probe", "probed"), "touched");
+  assert.equal(resolveUpsertStatus(undefined, "in_probe"), "touched");
+  assert.equal(resolveUpsertStatus(undefined, "touched"), "touched");
+  assert.equal(resolveUpsertStatus(undefined, undefined), "seen");
+  assert.equal(resolveUpsertStatus(undefined, "seen"), "seen");
 }
 
 {
-  // no lateral between same-rank terminals; booked never downgrades
+  // no lateral between same-rank peers; booked never downgrades
+  assert.equal(canTransitionStatus("touched", "deadend"), false);
   assert.equal(canTransitionStatus("probed", "deadend"), false);
   assert.equal(canTransitionStatus("deadend", "probed"), false);
+  assert.equal(canTransitionStatus("deadend", "touched"), false);
   assert.equal(canTransitionStatus("booked", "probed"), false);
+  assert.equal(canTransitionStatus("booked", "touched"), false);
   assert.equal(canTransitionStatus("booked", "open"), false);
+  assert.equal(canTransitionStatus("booked", "seen"), false);
   assert.equal(canTransitionStatus("deadend", "booked", { allowBooked: true }), true);
   assert.equal(canTransitionStatus("skipped_roe", "open"), false);
+  assert.equal(canTransitionStatus("skipped_roe", "seen"), false);
 }
 
 {
-  // same status is a no-op advance
+  // same status is a no-op advance (legacy in_probe normalizes to touched)
   assert.equal(canTransitionStatus("open", "open"), true);
+  assert.equal(canTransitionStatus("seen", "seen"), true);
   const same = applyStatusAdvance("in_probe", "in_probe");
-  assert.equal(same.status, "in_probe");
+  assert.equal(same.status, "touched");
   assert.equal(same.changed, false);
+  const sameV2 = applyStatusAdvance("touched", "touched");
+  assert.equal(sameV2.status, "touched");
+  assert.equal(sameV2.changed, false);
 }
 
 {
-  // skip intermediate ranks allowed (open → probed)
-  assert.equal(canTransitionStatus("open", "probed"), true);
+  // skip intermediate ranks allowed (seen → booked with allow; open → deadend)
+  assert.equal(canTransitionStatus("open", "probed"), true); // open→seen, probed→touched
+  assert.equal(canTransitionStatus("seen", "touched"), true);
   assert.equal(resolveUpsertStatus("open", "deadend"), "deadend");
+  assert.equal(resolveUpsertStatus("seen", "deadend"), "deadend");
 }
 
-// Exhaustive rank monotonicity for non-booked pairs
+// Exhaustive rank monotonicity for write-status pairs (non-booked without allowBooked)
 const ALL: SurfaceStatus[] = [
-  "open",
-  "in_probe",
-  "probed",
+  "seen",
+  "touched",
   "booked",
   "deadend",
   "skipped_roe",
@@ -210,6 +311,19 @@ for (const from of ALL) {
       assert.equal(allowed, false, `${from}→${to} no downgrade/lateral`);
     }
   }
+}
+
+// Legacy input pairs also refuse booked without allowBooked and never downgrade after map
+const LEGACY_PAIRS: Array<[string, string, SurfaceStatus]> = [
+  ["open", "in_probe", "touched"],
+  ["open", "probed", "touched"],
+  ["in_probe", "open", "touched"],
+  ["probed", "open", "touched"],
+  ["open", "booked", "seen"], // booked ignored on upsert
+  ["probed", "booked", "touched"],
+];
+for (const [from, to, expect] of LEGACY_PAIRS) {
+  assert.equal(resolveUpsertStatus(from, to), expect, `legacy ${from}+${to}→${expect}`);
 }
 
 console.log("surface-identity.test.ts: ok");

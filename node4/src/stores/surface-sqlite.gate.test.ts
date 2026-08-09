@@ -26,12 +26,15 @@ assert.ok(sum.open_preview.length >= 1);
 
 await store.markInProbe(["http://127.0.0.1:8080/vulnerabilities/sqli/"]);
 sum = await store.summary();
+// v2: in_probe/probed → touched; summary maps touched → in_probe field (open ≈ seen)
 assert.equal(sum.in_probe, 1);
 assert.equal(sum.open, 1);
 
 await store.markProbed(["http://127.0.0.1:8080/vulnerabilities/sqli/?id=2"]);
 sum = await store.summary();
-assert.equal(sum.probed, 1);
+// Same rank as markInProbe under v2 (both → touched); no separate probed bucket.
+assert.equal(sum.in_probe, 1);
+assert.equal(sum.probed, 0);
 assert.ok(await store.hasActedMatch("/vulnerabilities/sqli"));
 
 await store.markBooked("http://127.0.0.1:8080/vulnerabilities/sqli/");
@@ -92,6 +95,23 @@ const created = await store.get({ location: "http://127.0.0.1:8080/new-from-find
 assert.ok(created);
 assert.equal(created?.status, "booked");
 assert.equal(created?.source, "finding");
+
+// Spec #382 D7: create-on-book from method-path + host/port/location_key (no scheme)
+const nPut = await store.markBooked("PUT /api/Products/{id} (IDOR)", {
+  host: "127.0.0.1",
+  port: 8080,
+  locationKey: "/api/products/{id}",
+});
+assert.equal(nPut, 1);
+const putRow = await store.get({ location: "http://127.0.0.1:8080/api/products/{id}" });
+assert.ok(putRow);
+assert.equal(putRow?.status, "booked");
+assert.equal(putRow?.source, "finding");
+assert.equal(putRow?.path_key, "/api/products/{id}");
+
+// Unresolvable scheme-less location soft-skips create
+const nSkip = await store.markBooked("PUT /api/Never/1");
+assert.equal(nSkip, 0);
 
 store.close();
 await rm(dir, { recursive: true, force: true });

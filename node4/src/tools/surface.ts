@@ -1,5 +1,9 @@
 /**
- * Surface tool — Case attack-surface ledger deposit / list / get (Spec #368 / #370).
+ * Surface tool — Case attack-surface ledger (Spec #368 / #370 / #383 D5).
+ *
+ * Primary Agent ops: summary | list | get (management view).
+ * Normal fill is Runtime: Traffic settle + TARGET seed; booked via finding(confirm).
+ * upsert remains registered as non-primary (corrective / debug / import / tests).
  *
  * Working store: Node SQLite (taskDir/surfaces/ledger.sqlite). Offline ok without Platform.
  * Online (#374): local commit required for ok; async Platform surface_upsert (platform_sync pending→ok|error).
@@ -59,26 +63,31 @@ function asItemList(params: Record<string, unknown>): SurfaceUpsertItem[] {
   ];
 }
 
+/** Sample path count for surface(op=summary) agent management view (#383). */
+const SURFACE_SUMMARY_SAMPLE_MAX = 8;
+
 export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
   return {
     name: "surface",
     label: "Attack surface ledger",
     description: [
-      "Deposit and query the Case attack-surface working ledger (Node SQLite).",
-      "Ops: upsert | list | get.",
-      "upsert: merge by origin_key+path_key (scheme://host:port + path; query/body not in key). methods/params union-merge. Status never downgrades; cannot set booked (finding booking only).",
-      `list: default open+in_probe actionable queue; limit default ${SURFACE_LIST_DEFAULT_LIMIT}; returns returned/total_matching/has_more.`,
+      "Query the Case attack-surface working ledger (Node SQLite) — Agent management view.",
+      "PRIMARY ops: summary | list | get.",
+      "summary: counts (seen/touched/booked + deadend/skipped_roe) + sample paths + total; use for coverage.",
+      `list: default seen+touched actionable queue; limit default ${SURFACE_LIST_DEFAULT_LIMIT} (max same); returns returned/total_matching/has_more.`,
       "get: by id, location, or origin_key+path_key.",
-      "Main and Worker write the same Case ledger. Offline ok — no Platform required.",
+      "Normal ledger fill is Runtime-passive: Traffic settle + TARGET seed; booked only via finding(confirm). Do not treat upsert as required registration.",
+      "Optional upsert (non-primary): rare correctives/debug — merge by origin_key+path_key; methods/params union; status never downgrades; cannot set booked.",
+      "Main and Worker share the same Case ledger. Offline ok — no Platform required.",
       "Online: local SQLite ok is enough; Platform Case ledger syncs async (platform_sync pending|ok|error).",
-      "Prefer this tool over fact(op=surface). Do not dump every Traffic URL — deposit after analysis.",
-      `Write hard-cap ${SURFACE_WRITE_HARD_CAP} rows; prefer ≤${SURFACE_UPSERT_BATCH_MAX} per upsert call.`,
+      "Prefer this tool over fact(op=surface).",
+      `Write hard-cap ${SURFACE_WRITE_HARD_CAP} rows; prefer ≤${SURFACE_UPSERT_BATCH_MAX} per optional upsert call.`,
     ].join(" "),
     parameters: Type.Object({
-      op: Type.String({ description: "upsert | list | get" }),
+      op: Type.String({ description: "summary | list | get | upsert (upsert non-primary)" }),
       /** Single location (upsert/get) */
       location: Type.Optional(Type.String()),
-      /** Batch upsert items */
+      /** Batch upsert items (non-primary) */
       surfaces: Type.Optional(
         Type.Array(
           Type.Object({
@@ -98,7 +107,7 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
       status: Type.Optional(
         Type.String({
           description:
-            "upsert: open|in_probe|probed|deadend|skipped_roe (not booked). list: filter or comma-list or 'all'",
+            "upsert: seen|touched|deadend|skipped_roe (not booked; legacy open/in_probe/probed accepted). list: filter or comma-list or 'all' (default seen+touched)",
         }),
       ),
       kind: Type.Optional(Type.String()),
@@ -130,6 +139,65 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
 
       const op = String(params?.op || "list").trim().toLowerCase();
 
+      if (op === "summary") {
+        // Spec #383 D5: Agent management view — counts + sample paths (tool-first, no every-turn inject).
+        const cov = await store.summary();
+        // Richer samples: path_key (or location) with status for actionable + a few booked.
+        const actionable = await store.list({
+          status: "seen,touched",
+          limit: SURFACE_SUMMARY_SAMPLE_MAX,
+          offset: 0,
+        });
+        const bookedSample = await store.list({
+          status: "booked",
+          limit: Math.min(4, SURFACE_SUMMARY_SAMPLE_MAX),
+          offset: 0,
+        });
+        const sample_paths = [
+          ...actionable.surfaces.map((s) => s.path_key || s.location),
+          ...bookedSample.surfaces.map((s) => s.path_key || s.location),
+        ].slice(0, SURFACE_SUMMARY_SAMPLE_MAX);
+        const samples = [
+          ...actionable.surfaces.map((s) => ({
+            location: s.location,
+            path_key: s.path_key,
+            origin_key: s.origin_key,
+            status: s.status,
+          })),
+          ...bookedSample.surfaces.map((s) => ({
+            location: s.location,
+            path_key: s.path_key,
+            origin_key: s.origin_key,
+            status: s.status,
+          })),
+        ].slice(0, SURFACE_SUMMARY_SAMPLE_MAX);
+        return jsonResult({
+          ok: true,
+          op: "summary",
+          total: cov.total,
+          seen: cov.open,
+          touched: cov.in_probe,
+          booked: cov.booked,
+          deadend: cov.deadend,
+          skipped_roe: cov.skipped,
+          /** seen + touched still needing act */
+          actionable: cov.actionable,
+          counts: {
+            seen: cov.open,
+            touched: cov.in_probe,
+            booked: cov.booked,
+            deadend: cov.deadend,
+            skipped_roe: cov.skipped,
+          },
+          sample_paths,
+          samples,
+          guidance:
+            cov.total === 0
+              ? "Ledger empty. Fill is Runtime-passive: real Traffic settle + TARGET seed. Explore with http/session/browser so requests land; then re-check summary. upsert is optional corrective only — not required."
+              : "Coverage snapshot. actionable = seen+touched. Use surface(list) to page (default seen+touched, ≤200). booked advances only via finding(confirm). Do not require surface(upsert) for normal fill.",
+        });
+      }
+
       if (op === "list") {
         const result = await store.list({
           status: params?.status,
@@ -148,8 +216,8 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
           offset: result.offset,
           guidance:
             result.has_more
-              ? "More rows match — page with offset+=limit. Default filter is open+in_probe; status=all for full ledger."
-              : "Actionable queue page. Prefer surface(upsert) as recon deepens; finding(confirm) marks booked via booking path.",
+              ? "More rows match — page with offset+=limit. Default filter is seen+touched; status=all for full ledger."
+              : "Actionable queue page (seen+touched by default). Ledger fills from Traffic settle + TARGET seed; finding(confirm) marks booked. surface(summary) for counts; upsert is optional corrective only.",
         });
       }
 
@@ -215,12 +283,12 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
           source_agent_id,
           hard_cap: SURFACE_WRITE_HARD_CAP,
           guidance: platformOnline
-            ? "Local SQLite commit ok; Platform surface_ledger sync is async (platform_sync pending→ok|error). List open queue with surface(op=list)."
-            : "Local SQLite commit ok (offline/standalone does not need Platform). List open queue with surface(op=list).",
+            ? "Local SQLite commit ok (optional corrective path). Prefer Traffic settle + seed for normal fill; surface(summary|list) for coverage. Platform surface_ledger sync is async."
+            : "Local SQLite commit ok (optional corrective; offline). Prefer Traffic settle + seed for normal fill; surface(summary|list) for coverage.",
         });
       }
 
-      return textResult("error: op must be upsert|list|get", { isError: true });
+      return textResult("error: op must be summary|list|get|upsert", { isError: true });
     },
   };
 }

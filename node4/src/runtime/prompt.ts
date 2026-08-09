@@ -138,7 +138,7 @@ export function buildSystemPrompt(
   }
   if (pack.toolNames.includes("surface")) {
     lines.push(
-      "Attack surface (surface tool): deposit observed locations with surface(op=upsert); list open/in_probe queue (page ≤200, has_more); prefer over fact(op=surface).",
+      "Attack surface (surface tool): use summary/list/get for coverage (seen/touched/booked counts + samples; list page ≤200). Ledger fills from Traffic settle + TARGET seed; finding(confirm) marks booked. upsert is optional corrective only — not required registration. Prefer over fact(op=surface).",
     );
   }
   if (pack.recipeDir) {

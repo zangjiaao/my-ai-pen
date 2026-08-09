@@ -1,5 +1,5 @@
 /**
- * Surface identity + status pure core (Case Surface ledger Spec #368 / issue #369).
+ * Surface identity + status pure core (Case Surface ledger Spec #368 / #369 / #379).
  *
  * Pure functions only — no I/O. #370 (SQLite store / surface tool) consumes this contract.
  *
@@ -9,40 +9,90 @@
  *   path_key = HTTP(S) pathname normalized (no query/fragment); empty for non-HTTP
  *   methods[] / params[] merge on same identity — not part of primary key
  *
- * Status: open → in_probe → probed | booked | deadend | skipped_roe
+ * Status (v2 D3): seen → touched → booked
  *   - never downgrade on re-upsert
- *   - ordinary upsert cannot set booked (booking path only)
+ *   - ordinary upsert/settle cannot set booked (allowBooked / confirm path only)
+ * Expand-contract: accept legacy on read; normalize to v2 on write (see LEGACY_STATUS_MAP).
  */
 
 import { pathKey as httpPathKey } from "../runtime/subagent-booking.js";
 
+/**
+ * Normative v2 management statuses (+ optional retained terminals).
+ * Write path always stores these (never open/in_probe/probed).
+ */
 export type SurfaceStatus =
-  | "open"
-  | "in_probe"
-  | "probed"
+  | "seen"
+  | "touched"
   | "booked"
   | "deadend"
   | "skipped_roe";
 
+/** Legacy v1 statuses accepted on read; mapped via LEGACY_STATUS_MAP on write. */
+export type LegacySurfaceStatus = "open" | "in_probe" | "probed";
+
+/** Any status string the pure core accepts as input (legacy or v2). */
+export type AcceptedSurfaceStatus = SurfaceStatus | LegacySurfaceStatus;
+
+/** Normative write vocabulary (Spec D3). */
+export const SURFACE_STATUSES_V2: readonly SurfaceStatus[] = [
+  "seen",
+  "touched",
+  "booked",
+] as const;
+
+/**
+ * Write statuses: v2 + optional terminals retained from v1.
+ * Choice (#379): deadend / skipped_roe are optional terminals (same rank as touched),
+ * not collapsed to touched+tag.
+ */
 export const SURFACE_STATUSES: readonly SurfaceStatus[] = [
-  "open",
-  "in_probe",
-  "probed",
+  "seen",
+  "touched",
   "booked",
   "deadend",
   "skipped_roe",
 ] as const;
 
-const STATUS_SET: ReadonlySet<string> = new Set(SURFACE_STATUSES);
+/** Legacy strings still accepted on read / inbound payloads. */
+export const LEGACY_SURFACE_STATUSES: readonly LegacySurfaceStatus[] = [
+  "open",
+  "in_probe",
+  "probed",
+] as const;
 
-/** Rank for monotonic advance. Peers at same rank cannot lateral-transition. */
+/**
+ * Expand-contract migration map (read accept → write normalize).
+ * open→seen, in_probe/probed→touched, booked→booked;
+ * deadend/skipped_roe retained as optional terminals (identity map).
+ */
+export const LEGACY_STATUS_MAP: Readonly<Record<string, SurfaceStatus>> = {
+  open: "seen",
+  in_probe: "touched",
+  probed: "touched",
+  seen: "seen",
+  touched: "touched",
+  booked: "booked",
+  deadend: "deadend",
+  skipped_roe: "skipped_roe",
+};
+
+const STATUS_SET: ReadonlySet<string> = new Set(SURFACE_STATUSES);
+const ACCEPTED_STATUS_SET: ReadonlySet<string> = new Set([
+  ...SURFACE_STATUSES,
+  ...LEGACY_SURFACE_STATUSES,
+]);
+
+/**
+ * Rank for monotonic advance (post-normalize).
+ * Peers at same rank cannot lateral-transition (touched ↔ deadend ↔ skipped_roe).
+ */
 const STATUS_RANK: Record<SurfaceStatus, number> = {
-  open: 0,
-  in_probe: 1,
-  probed: 2,
-  deadend: 2,
-  skipped_roe: 2,
-  booked: 3,
+  seen: 0,
+  touched: 1,
+  deadend: 1,
+  skipped_roe: 1,
+  booked: 2,
 };
 
 /**
@@ -104,12 +154,31 @@ export type StatusTransitionOpts = {
   allowBooked?: boolean;
 };
 
-export function isSurfaceStatus(v: unknown): v is SurfaceStatus {
-  return typeof v === "string" && STATUS_SET.has(v);
+/** True for any accepted input status (legacy or write form). */
+export function isSurfaceStatus(v: unknown): v is AcceptedSurfaceStatus {
+  return typeof v === "string" && ACCEPTED_STATUS_SET.has(v.trim().toLowerCase());
 }
 
-export function statusRank(status: SurfaceStatus): number {
-  return STATUS_RANK[status];
+/** True only for post-normalize write statuses. */
+export function isWriteSurfaceStatus(v: unknown): v is SurfaceStatus {
+  return typeof v === "string" && STATUS_SET.has(v.trim().toLowerCase());
+}
+
+/**
+ * Expand-contract: accept legacy/v2 on read; return write SurfaceStatus or null.
+ * Ordinary callers should normalize before persist.
+ */
+export function normalizeSurfaceStatus(v: unknown): SurfaceStatus | null {
+  if (typeof v !== "string") return null;
+  const key = v.trim().toLowerCase();
+  const mapped = LEGACY_STATUS_MAP[key];
+  return mapped ?? null;
+}
+
+/** Rank after normalize; unknown → -1. */
+export function statusRank(status: AcceptedSurfaceStatus | string): number {
+  const n = normalizeSurfaceStatus(status);
+  return n != null ? STATUS_RANK[n] : -1;
 }
 
 function isHttpScheme(scheme: string): boolean {
@@ -118,6 +187,177 @@ function isHttpScheme(scheme: string): boolean {
 
 function kindFromScheme(scheme: string): string {
   return isHttpScheme(scheme) ? "url" : scheme;
+}
+
+const ABS_URL_TOKEN_RE = /[a-z][a-z0-9+.-]*:\/\/[^\s,;)\]}>'"]+/gi;
+const METHOD_PATH_RE = /^(?:[A-Z]{3,10}\s+)(\/[^\s?#]+)/i;
+const PATH_IN_TEXT_RE = /(\/(?:[A-Za-z0-9._~!$&'()*+,;=:@%{}-]|%[0-9A-Fa-f]{2})+)/;
+
+function extractAbsUrlTokens(text: string | null | undefined): string[] {
+  const raw = String(text ?? "").trim();
+  if (!raw) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const m of raw.matchAll(ABS_URL_TOKEN_RE)) {
+    const tok = m[0]!.replace(/[).,;\]'"]+$/g, "");
+    if (tok && !seen.has(tok)) {
+      seen.add(tok);
+      out.push(tok);
+    }
+  }
+  return out;
+}
+
+function normalizeBookingPath(path: string | null | undefined): string {
+  let p = String(path ?? "").trim();
+  if (!p) return "";
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(p)) {
+    try {
+      p = new URL(p).pathname || "/";
+    } catch {
+      return "";
+    }
+  }
+  if (!p.startsWith("/")) p = `/${p}`;
+  p = p.split("?", 1)[0]!.split("#", 1)[0]!;
+  while (p.includes("//")) p = p.replaceAll("//", "/");
+  if (p !== "/" && p.endsWith("/")) p = p.replace(/\/+$/, "");
+  return p.toLowerCase();
+}
+
+/** Extract path from method-path / prose finding locations (e.g. `PUT /api/x/{id}`). */
+export function pathFromLocationBlob(raw: string | null | undefined): string {
+  const s = String(raw ?? "").trim();
+  if (!s) return "";
+  const methodPath = METHOD_PATH_RE.exec(s);
+  if (methodPath?.[1]) {
+    return normalizeBookingPath(methodPath[1].replace(/[).,;\]'"]+$/g, ""));
+  }
+  if (s.startsWith("/")) {
+    const token = s.split("?", 1)[0]!.split("#", 1)[0]!.split(/\s+/, 1)[0]!;
+    return normalizeBookingPath(token.replace(/[).,;\]'"]+$/g, ""));
+  }
+  const inText = PATH_IN_TEXT_RE.exec(s);
+  if (inText?.[1]) {
+    return normalizeBookingPath(inText[1].replace(/[).,;\]'"]+$/g, ""));
+  }
+  return "";
+}
+
+function cleanHost(host: string | null | undefined): string {
+  let h = String(host ?? "")
+    .trim()
+    .toLowerCase();
+  if (!h) return "";
+  h = h.replace(/^\[|\]$/g, "").replace(/\.+$/, "");
+  if (h.includes("/")) h = h.split("/", 1)[0]!;
+  if (h.includes("@")) h = h.split("@").pop()!;
+  if ((h.match(/:/g) || []).length === 1 && !h.startsWith("[")) {
+    const [left, right] = h.split(":", 2);
+    if (right && /^\d+$/.test(right)) h = left!;
+  }
+  return h;
+}
+
+function parsePortValue(port: string | number | null | undefined): number | null {
+  if (port == null || port === "") return null;
+  const n = typeof port === "number" ? port : Number.parseInt(String(port).trim(), 10);
+  if (!Number.isFinite(n) || n < 1 || n > 65535) return null;
+  return n;
+}
+
+/** Build scheme://host[:port]/path for parseLocation (strong identity composition). */
+export function composeHttpLocation(
+  host: string,
+  port: number,
+  path: string,
+  scheme?: string | null,
+): string {
+  const hostS = cleanHost(host);
+  if (!hostS) return "";
+  let schemeS = String(scheme ?? "")
+    .trim()
+    .toLowerCase();
+  if (schemeS !== "http" && schemeS !== "https") {
+    schemeS = port === 443 || port === 8443 ? "https" : "http";
+  }
+  const hostDisp = hostS.includes(":") ? `[${hostS}]` : hostS;
+  const pathS = normalizeBookingPath(path) || "/";
+  if ((schemeS === "http" && port === 80) || (schemeS === "https" && port === 443)) {
+    return `${schemeS}://${hostDisp}${pathS}`;
+  }
+  return `${schemeS}://${hostDisp}:${port}${pathS}`;
+}
+
+export type ResolveBookingLocationInput = {
+  location?: string | null;
+  host?: string | null;
+  port?: string | number | null;
+  locationKey?: string | null;
+  proof?: string | null;
+  proofExcerpts?: Array<{ excerpt?: string } | string> | null;
+  scheme?: string | null;
+};
+
+/**
+ * Spec #368 D7 / #382: resolve strong surface identity for finding book.
+ * Order: absolute URL → host+port+location_key → proof URL.
+ */
+export function resolveBookingLocation(input: ResolveBookingLocationInput): ParsedLocation {
+  const raw = String(input.location ?? "").trim();
+
+  // 1a. Whole location is scheme://…
+  if (raw && /^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) {
+    const parsed = parseLocation(raw);
+    if (parsed.ok) return parsed;
+  }
+
+  // 1b. Absolute URL token embedded in location free-text
+  for (const url of extractAbsUrlTokens(raw)) {
+    const parsed = parseLocation(url);
+    if (parsed.ok) return parsed;
+  }
+
+  // 2. host + port + location_key (strong composition)
+  const hostS = cleanHost(input.host);
+  const portN = parsePortValue(input.port);
+  let path = input.locationKey ? normalizeBookingPath(input.locationKey) : "";
+  if (!path) path = pathFromLocationBlob(raw);
+  if (hostS && portN != null && path) {
+    const composed = composeHttpLocation(hostS, portN, path, input.scheme);
+    if (composed) {
+      const parsed = parseLocation(composed);
+      if (parsed.ok) return parsed;
+    }
+  }
+
+  // 3. Proof absolute URLs
+  const proofBlobs: string[] = [];
+  if (input.proof != null && String(input.proof).trim()) {
+    proofBlobs.push(String(input.proof));
+  }
+  if (Array.isArray(input.proofExcerpts)) {
+    for (const item of input.proofExcerpts) {
+      if (item && typeof item === "object" && "excerpt" in item && item.excerpt) {
+        proofBlobs.push(String(item.excerpt));
+      } else if (typeof item === "string" && item.trim()) {
+        proofBlobs.push(item);
+      }
+    }
+  }
+  for (const blob of proofBlobs) {
+    for (const url of extractAbsUrlTokens(blob)) {
+      const parsed = parseLocation(url);
+      if (parsed.ok) return parsed;
+    }
+  }
+
+  if (!raw && !hostS) return { ok: false, error: "empty location" };
+  return {
+    ok: false,
+    error:
+      "unresolvable location (need absolute URL, or host+port+location_key, or proof URL)",
+  };
 }
 
 /**
@@ -238,56 +478,67 @@ export function mergeParams(
 }
 
 /**
- * Whether a status transition is allowed.
+ * Whether a status transition is allowed (inputs may be legacy; compared post-normalize).
  * Same status is allowed (no-op). Downgrades and same-rank laterals are refused.
  * Transition into `booked` requires `{ allowBooked: true }`.
  */
 export function canTransitionStatus(
-  from: SurfaceStatus,
-  to: SurfaceStatus,
+  from: AcceptedSurfaceStatus | string,
+  to: AcceptedSurfaceStatus | string,
   opts?: StatusTransitionOpts,
 ): boolean {
-  if (!isSurfaceStatus(from) || !isSurfaceStatus(to)) return false;
-  if (to === "booked" && !opts?.allowBooked) return false;
-  if (from === to) return true;
-  const fromR = STATUS_RANK[from];
-  const toR = STATUS_RANK[to];
+  const fromN = normalizeSurfaceStatus(from);
+  const toN = normalizeSurfaceStatus(to);
+  if (fromN == null || toN == null) return false;
+  if (toN === "booked" && !opts?.allowBooked) return false;
+  if (fromN === toN) return true;
+  const fromR = STATUS_RANK[fromN];
+  const toR = STATUS_RANK[toN];
   if (toR < fromR) return false;
-  // Same rank, different terminal (probed ↔ deadend ↔ skipped_roe): no lateral.
+  // Same rank, different peer (touched ↔ deadend ↔ skipped_roe): no lateral.
   if (toR === fromR) return false;
   return true;
 }
 
 /**
- * Apply a forward status change when allowed; otherwise keep `from`.
- * Use `{ allowBooked: true }` only from the finding booking path.
+ * Apply a forward status change when allowed; otherwise keep normalized `from`.
+ * Use `{ allowBooked: true }` only from the finding booking / confirm path.
+ * Always returns a write SurfaceStatus (legacy inputs normalized).
  */
 export function applyStatusAdvance(
-  from: SurfaceStatus,
-  to: SurfaceStatus,
+  from: AcceptedSurfaceStatus | string,
+  to: AcceptedSurfaceStatus | string,
   opts?: StatusTransitionOpts,
 ): { status: SurfaceStatus; changed: boolean } {
-  if (!canTransitionStatus(from, to, opts)) {
-    return { status: from, changed: false };
+  const fromN = normalizeSurfaceStatus(from) ?? "seen";
+  const toN = normalizeSurfaceStatus(to);
+  if (toN == null || !canTransitionStatus(fromN, toN, opts)) {
+    return { status: fromN, changed: false };
   }
-  if (from === to) return { status: from, changed: false };
-  return { status: to, changed: true };
+  if (fromN === toN) return { status: fromN, changed: false };
+  return { status: toN, changed: true };
 }
 
 /**
- * Status resolution for ordinary surface upsert (not booking).
- * - New row defaults to `open` when request omitted/invalid.
- * - Requested `booked` is ignored (stays existing or `open`).
+ * Status resolution for ordinary surface upsert / settle (not booking).
+ * - New row defaults to `seen` when request omitted/invalid.
+ * - Requested `booked` is ignored (stays existing or `seen`).
+ * - Legacy requested/existing values are normalized (open→seen, in_probe/probed→touched).
  * - Never downgrades an existing status.
  */
 export function resolveUpsertStatus(
-  existing: SurfaceStatus | undefined,
-  requested?: SurfaceStatus | null,
+  existing: AcceptedSurfaceStatus | string | undefined,
+  requested?: AcceptedSurfaceStatus | string | null,
 ): SurfaceStatus {
-  let want: SurfaceStatus = "open";
-  if (requested != null && isSurfaceStatus(requested) && requested !== "booked") {
-    want = requested;
+  let want: SurfaceStatus = "seen";
+  if (requested != null) {
+    const reqN = normalizeSurfaceStatus(requested);
+    if (reqN != null && reqN !== "booked") {
+      want = reqN;
+    }
   }
-  if (existing == null) return want;
-  return applyStatusAdvance(existing, want).status;
+  if (existing == null || existing === "") return want;
+  const existingN = normalizeSurfaceStatus(existing);
+  if (existingN == null) return want;
+  return applyStatusAdvance(existingN, want).status;
 }

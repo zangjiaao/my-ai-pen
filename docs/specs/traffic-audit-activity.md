@@ -30,6 +30,8 @@ Operators watching a Case cannot see **what HTTP traffic the Agent actually prod
 
 **Phasing:** V1 = job **A** (fact-bypass observability). Future job **D** (full egress MITM) reuses the same exchange shape + new `source`.
 
+**Later (Capture enrichment — not V1 DoD):** After exchanges are stored, Runtime may run **pluggable analyzers** on artifacts (especially JS/CSS bodies from SPA bundles) to mine **clues** (API path candidates, secret-shaped strings, internal hosts) and expose them to the **Agent** for analysis—see [`case-surface-ledger.md`](case-surface-ledger.md) **D6.2**. Clue mining is a Capture follow-on; Case Surface settle from request URLs is owned by the Surface Spec (v2).
+
 ---
 
 ## Product locks
