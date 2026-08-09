@@ -21,8 +21,11 @@ import {
   packageStatusTitle,
   resolvePackageLightStatus,
 } from "../lib/packageStatusLight";
+import { friendlyToolLabel } from "../lib/toolLabels";
 
 export type { StrixAgentStatus } from "../lib/panelTypes";
+/** Re-export for callers that imported labels from this module. */
+export { friendlyToolLabel };
 
 /** Spec #354: Session lifecycle on Main cards only. */
 
@@ -514,9 +517,6 @@ export function agentStatusCount(agents: StrixAgentStatus[]): string {
 function isActiveAgentStatus(status: string | undefined): boolean {
   return ["running", "waiting", "pending"].includes(String(status || "").toLowerCase());
 }
-
-/** Tool → short Chinese label for skill/meta chips (not AgentRow narration). */
-export { friendlyToolLabel } from "../lib/toolLabels";
 
 function friendlySkillName(skill: string): string {
   const explicit: Record<string, string> = {
