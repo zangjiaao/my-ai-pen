@@ -2961,13 +2961,17 @@ async def _persist_traffic_exchange(msg: dict, node_id: str | None) -> dict | No
 
 
 async def _persist_surface_upsert(msg: dict, node_id: str | None) -> dict | None:
-    """Spec #368 / #373: upsert Case surface_ledger by identity; return FE project frame."""
+    """Spec #368 / #373 / #410: upsert Case surface_ledger + inventory NEW admit."""
     conv_id = msg.get("conversation_id")
     if not conv_id:
         return None
     try:
         from app.db.base import async_session
         from app.models.conversation import Conversation
+        from app.services.surface_inventory import (
+            admit_surfaces_for_user,
+            stamp_is_new_from_novelty,
+        )
         from app.services.surface_ledger import (
             extract_surfaces_from_upsert_message,
             merge_surfaces_into_context,
@@ -2988,7 +2992,24 @@ async def _persist_surface_upsert(msg: dict, node_id: str | None) -> dict | None
             if not c:
                 return None
             context = c.context if isinstance(c.context, dict) else {}
-            next_ctx, landed = merge_surfaces_into_context(context, rows, allow_booked=False)
+            # Spec #410: durable inventory admit → is_new only on first-ever identity.
+            novelty: dict = {}
+            if c.user_id:
+                try:
+                    novelty = await admit_surfaces_for_user(
+                        db,
+                        user_id=c.user_id,
+                        conversation_id=c.id,
+                        surfaces=rows,
+                    )
+                except Exception as inv_err:
+                    # Inventory failure must not block Case ledger dual-write.
+                    print(f"[WS] surface inventory admit error (non-fatal): {inv_err}")
+                    novelty = {}
+            stamped = stamp_is_new_from_novelty(rows, novelty) if novelty else stamp_is_new_from_novelty(rows, {})
+            next_ctx, landed = merge_surfaces_into_context(
+                context, stamped, allow_booked=False
+            )
             if not landed:
                 # Hard-cap reject of all new identities — no broadcast payload.
                 return None
@@ -3020,7 +3041,7 @@ async def _apply_finding_surface_booked_side_effect(
     proof: str | None = None,
     proof_excerpts: list | None = None,
 ) -> dict | None:
-    """Spec #368 D7 / #376 / #382: after finding book, advance/create surface as booked.
+    """Spec #368 D7 / #376 / #382 / #410: finding book → surface booked + inventory admit.
 
     Resolves identity from absolute URL, host+port+location_key, or proof URLs.
     Never raises for caller — hard-cap / unparseable create skip is soft; finding remains success.
@@ -3035,6 +3056,10 @@ async def _apply_finding_surface_booked_side_effect(
     try:
         from app.db.base import async_session
         from app.models.conversation import Conversation
+        from app.services.surface_inventory import (
+            admit_surfaces_for_user,
+            stamp_is_new_from_novelty,
+        )
         from app.services.surface_ledger import (
             apply_booked_side_effect,
             project_surface_upsert_event,
@@ -3066,10 +3091,34 @@ async def _apply_finding_surface_booked_side_effect(
                 )
             if action in {"advanced", "created"}:
                 next_ctx = result.get("context")
+                landed = result.get("landed")
+                # Spec #410: durable inventory admit; stamp is_new (sticky-true on merge).
+                if isinstance(landed, dict) and c.user_id:
+                    try:
+                        from app.services.surface_ledger import merge_surfaces_into_context
+
+                        novelty = await admit_surfaces_for_user(
+                            db,
+                            user_id=c.user_id,
+                            conversation_id=c.id,
+                            surfaces=[landed],
+                        )
+                        stamped = stamp_is_new_from_novelty([landed], novelty or {})
+                        if stamped and isinstance(next_ctx, dict):
+                            next_ctx, landed_list = merge_surfaces_into_context(
+                                next_ctx,
+                                stamped,
+                                allow_booked=True,
+                            )
+                            if landed_list:
+                                landed = landed_list[0]
+                    except Exception as inv_err:
+                        print(
+                            f"[WS] finding surface inventory admit error (non-fatal): {inv_err}"
+                        )
                 if isinstance(next_ctx, dict):
                     c.context = next_ctx
                     await db.commit()
-                landed = result.get("landed")
                 if isinstance(landed, dict):
                     ledger = (
                         next_ctx.get("surface_ledger")

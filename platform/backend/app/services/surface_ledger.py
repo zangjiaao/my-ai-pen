@@ -690,13 +690,35 @@ def normalize_surface_row(
     }
 
 
+def _coerce_is_new(value: Any, *, default: bool = False) -> bool:
+    """False-safe is_new for Case ledger rows (Spec #410 inventory novelty)."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    s = str(value).strip().lower()
+    if s in {"1", "true", "yes", "y", "on"}:
+        return True
+    if s in {"0", "false", "no", "n", "off", ""}:
+        return False
+    return default
+
+
 def merge_surface_row(
     existing: dict | None,
     incoming: dict,
     *,
     allow_booked: bool = False,
 ) -> dict:
-    """Upsert merge by identity: methods/params union; never downgrade status."""
+    """Upsert merge by identity: methods/params union; never downgrade status.
+
+    Spec #410: ``is_new`` is engagement novelty from durable inventory admit.
+    - Create: take incoming is_new (false-safe default False).
+    - Update: sticky — never clear is_new from later dual-writes / re-admits.
+    Inventory age does not advance status (no auto-TESTED).
+    """
     if not existing:
         row = dict(incoming)
         # Guard: ordinary path cannot create booked; always store write vocabulary.
@@ -704,6 +726,8 @@ def merge_surface_row(
         if not allow_booked and st == "booked":
             st = "seen"
         row["status"] = st
+        # First Case row for this identity this engagement.
+        row["is_new"] = _coerce_is_new(row.get("is_new"), default=False)
         return row
 
     out = dict(existing)
@@ -739,6 +763,17 @@ def merge_surface_row(
         )
 
     out["updated_at"] = incoming.get("updated_at") or existing.get("updated_at") or _now_iso()
+
+    # Spec #410: engagement novelty sticky-true.
+    # - Once true for this Case, later inventory re-admits (false) must not clear it.
+    # - Allow false→true if inventory stamp arrives after row create (booked path).
+    prev_new = (
+        _coerce_is_new(existing.get("is_new"), default=False)
+        if "is_new" in existing
+        else False
+    )
+    inc_new = _coerce_is_new(incoming.get("is_new"), default=False)
+    out["is_new"] = bool(prev_new or inc_new)
     return out
 
 

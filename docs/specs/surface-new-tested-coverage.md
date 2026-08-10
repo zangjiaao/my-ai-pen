@@ -102,7 +102,7 @@
 
 1. **Primary seam — UI projection:** Surface tree / summary counts use L5; method chips default off; BOOK/SEEN/PRIOR not shown.  
 2. **Secondary seam — Case status mapping:** Expand–contract from v2 write statuses to operator TESTED + internal fields for NEW (inventory flag or join).  
-3. **Tertiary seam — Inventory precipitation:** On settle (and seed), upsert identity into asset-scoped durable store; set NEW only on first admit; Case row carries `is_new` / inventory_id as needed for projection.  
+3. **Tertiary seam — Inventory precipitation (#410):** On Platform dual-write of Traffic settle / TARGET seed / booked create, upsert identity into user-scoped `surface_inventory` (origin_key+path_key; optional asset_id via Host match). First admit → Case row `is_new=true` (sticky for the engagement); later Cases → `is_new=false`. Case ledger remains TESTED/traffic SoT. Aligns with Spec #322 as thin novelty baseline — does not redefine Host→Service.  
 4. **Agent seam:** Profession + surface tool guidance + soft continue reminders use **NEW untested** queue (replace pure “seen count” copy where inventory is available).  
 5. **Upsert:** Must not elevate TESTED rank without traffic (harden if still possible).  
 6. **Graph gates:** Keep host-owned package/surface gates; map booked/open internally without forcing BOOK chip on Free UI.  
@@ -172,6 +172,7 @@ Prefer synthetic ledger fixtures over live LLM.
 - [x] `case-surface-ledger.md` points to this v3 operator model  
 - [x] UI declutter (methods / rollup) — #408  
 - [x] Operator projection NEW / TESTED / finding tags — #409  
-- [ ] Durable inventory + NEW admit — #410  
+- [x] Durable inventory + NEW admit — #410  
 - [ ] Agent tool + soft harness + profession copy — #411  
 - [x] Tests for operator status label map / tree chrome (#409; inventory + agent seams follow)  
+- [x] Tests for inventory first admit → NEW; re-admit → not NEW; TESTED still traffic-objective (#410)  

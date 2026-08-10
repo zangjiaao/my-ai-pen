@@ -377,6 +377,8 @@ Traffic is L0 capture. Surface is L1 **settled management ledger derived from Tr
 
 Unchanged layer split: Case Surface vs long-lived Asset inventory vs Traffic. v2 changes **how Surface fills**, not the layer boundaries.
 
+**Durable surface identity inventory (Spec [#410](https://github.com/zangjiaao/my-ai-pen/issues/410)):** platform `surface_inventory` precipitates origin_key+path_key for **NEW** only (user-scoped; optional `asset_id` when Host exists). Case `surface_ledger` remains live SoT for TESTED/traffic/booked. Full Host→Service→Observation redesign stays Spec [#322](https://github.com/zangjiaao/my-ai-pen/issues/322) — #410 is a thin novelty baseline, not a competing inventory object model.
+
 ### Field lesson (Case 77fc1ff9 / similar)
 
 - Agent had path knowledge from **priors + model**, verified via **shell curl batches**, not browser/bruteforce/traffic tools.
