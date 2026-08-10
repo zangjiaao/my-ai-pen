@@ -152,14 +152,20 @@ export function baseLayerInputFrom(
   };
 }
 
+/** Coerce pack/fixture profession lines to a string array (fixtures may omit). */
+function asProfessionLines(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((line): line is string => typeof line === "string");
+}
+
 /** Derive narrow Profession input from task + pack (legal packs always have arrays). */
 export function professionLayerInputFrom(
   task: Pick<TaskEnvelope, "agentLanguage" | "expertName" | "expertId">,
   pack: Pick<RolePack, "id" | "label" | "missionLines" | "workLines">,
 ): ProfessionLayerInput {
   return {
-    missionLines: pack.missionLines,
-    workLines: pack.workLines,
+    missionLines: asProfessionLines(pack.missionLines),
+    workLines: asProfessionLines(pack.workLines),
     vars: promptTemplateVarsFromBase(baseLayerInputFrom(task, pack)),
   };
 }
@@ -190,9 +196,11 @@ export function buildBaseLayer(input: BaseLayerInput): string {
  */
 export function buildProfessionLayer(input: ProfessionLayerInput): string {
   const render = (line: string) => renderPromptTemplate(line, input.vars);
+  const missionLines = asProfessionLines(input.missionLines);
+  const workLines = asProfessionLines(input.workLines);
   return joinNonEmptyPromptParts([
-    ...input.missionLines.map(render),
-    ...input.workLines.map(render),
+    ...missionLines.map(render),
+    ...workLines.map(render),
   ]);
 }
 
@@ -222,15 +230,18 @@ const PLATFORM_CITIZEN_MISSION_SKIP_RE =
 export function compactProfessionLayerInput(
   input: ProfessionLayerInput,
 ): ProfessionLayerInput {
-  const missionLines = input.missionLines.filter(
+  // Fixture / partial packs may omit missionLines/workLines — never throw.
+  const missionSrc = asProfessionLines(input.missionLines);
+  const workSrc = asProfessionLines(input.workLines);
+  const missionLines = missionSrc.filter(
     (line) =>
       !PLATFORM_CITIZEN_MISSION_SKIP_RE.test(line) &&
       (MISSION_IDENTITY_LINE_RE.test(line) || PROFESSION_CORE_LINE_RE.test(line)),
   );
-  const workLines = input.workLines.filter((line) => PROFESSION_CORE_LINE_RE.test(line));
+  const workLines = workSrc.filter((line) => PROFESSION_CORE_LINE_RE.test(line));
   return {
-    missionLines: missionLines.length > 0 ? missionLines : input.missionLines,
-    workLines: workLines.length > 0 ? workLines : input.workLines,
+    missionLines: missionLines.length > 0 ? missionLines : missionSrc,
+    workLines: workLines.length > 0 ? workLines : workSrc,
     vars: input.vars,
   };
 }
@@ -512,8 +523,8 @@ export function buildSubagentPromptLayers(
   // Profession: compact core (#396) — same marker filter as Graph stage (#394);
   // drops platform-citizen next_steps / todo_replace longform; Free Main stays full.
   const profession = buildCompactProfessionLayer({
-    missionLines: pack.missionLines,
-    workLines: pack.workLines,
+    missionLines: asProfessionLines(pack.missionLines),
+    workLines: asProfessionLines(pack.workLines),
     vars: promptTemplateVarsFromBase({
       agentLanguage: childTask.agentLanguage,
       packId,
