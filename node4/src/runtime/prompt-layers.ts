@@ -307,7 +307,7 @@ export function buildPromptLayers(
   }
   if (pack.toolNames.includes("surface")) {
     runtimeParts.push(
-      "Attack surface (surface tool): summary|list|get for coverage; ledger from Traffic settle + TARGET seed; confirm→booked; upsert optional corrective only (prefer over fact(op=surface)).",
+      "Attack surface (surface tool): summary|list|get for coverage (seen=first-touch still owed deepen; touched=further traffic; booked=confirm only); ledger from Traffic settle + TARGET seed; before next_steps/wrap disclose remaining seen; upsert optional corrective only (prefer over fact(op=surface)).",
     );
   }
   if (pack.recipeDir) {

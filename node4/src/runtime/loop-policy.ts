@@ -18,6 +18,10 @@
 
 import { midRunBookingNudge, type BookingSnapshot } from "./booking-harness.js";
 import { incompleteTodoStopReminder, midRunTodoNudge, todoErrorReminder } from "./todo-harness.js";
+import {
+  incompleteSeenSurfaceStopReminder,
+  midRunSeenSurfaceNudge,
+} from "./surface-harness.js";
 
 export type ContinueDecision = {
   continue: boolean;
@@ -373,6 +377,13 @@ export function composeContinuePrompt(options: {
   openTodoCount: number;
   /** Optional open task titles for OMP incomplete-stop reminder. */
   openTodoTitles?: string[];
+  /**
+   * Surface rows still at **seen** (first traffic only). Soft coverage honesty —
+   * never hard-blocks settlement (#407).
+   */
+  openSeenSurfaceCount?: number;
+  /** Optional path/location samples for remaining seen surfaces. */
+  openSeenSurfaceSamples?: string[];
   todoErrors?: string[];
   booking?: BookingSnapshot;
   goalSummary?: string;
@@ -416,6 +427,22 @@ export function composeContinuePrompt(options: {
   } else if (options.kind === "premature") {
     // Map-complete false finish: still steer toward untested recon surfaces.
     parts.push(discoveryBreadthReminder());
+  }
+  // Soft Surface SEEN coverage (parallel to todo incomplete — never blocks settlement).
+  const seenCount = options.openSeenSurfaceCount ?? 0;
+  if (seenCount > 0) {
+    if (options.kind === "empty" || options.kind === "premature") {
+      parts.push(
+        incompleteSeenSurfaceStopReminder(
+          seenCount,
+          options.openSeenSurfaceSamples || [],
+          options.attempt,
+          options.max,
+        ),
+      );
+    } else {
+      parts.push(midRunSeenSurfaceNudge(seenCount));
+    }
   }
   if (options.booking) {
     const bookingNudge = midRunBookingNudge(options.booking);

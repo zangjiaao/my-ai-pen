@@ -446,6 +446,24 @@ const baseTask: TaskEnvelope = {
     /Guessed paths OK/i.test(workBody) && /real requests/i.test(workBody),
     "T3 work.md: guessed paths only with real requests",
   );
+
+  // #406: SEEN coverage discipline always-on in profession work.md
+  ok(
+    /\*\*seen\*\*.*first traffic only/i.test(workBody) &&
+      /\*\*touched\*\*/i.test(workBody) &&
+      /\*\*booked\*\*/i.test(workBody),
+    "T3 work.md: seen/touched/booked vocabulary (seen = first-touch only)",
+  );
+  ok(
+    /Coverage honesty/i.test(workBody) &&
+      /surface\(summary\)/i.test(workBody) &&
+      /disclose remaining seen/i.test(workBody),
+    "T3 work.md: coverage honesty before wrap / disclose remaining seen",
+  );
+  ok(
+    /Todo map complete ≠ surface coverage complete/i.test(workBody),
+    "T3 work.md: todo complete ≠ surface coverage complete",
+  );
 }
 
 console.log("\nALL prompt-layers T1+T2+T3 tests passed");

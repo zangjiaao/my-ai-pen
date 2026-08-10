@@ -773,6 +773,22 @@ export async function runNode4Task(
             .map((t) => t.content),
         );
       const openTodoCount = runtime.todo.openCount();
+      // Objective Surface SEEN queue (Traffic settle) for soft stop/mid-run coverage honesty (#407).
+      let openSeenSurfaceCount = 0;
+      let openSeenSurfaceSamples: string[] = [];
+      if (runtime.surfaceSqlite) {
+        try {
+          const rows = await runtime.surfaceSqlite.all();
+          const seen = rows.filter((s) => s.status === "seen");
+          openSeenSurfaceCount = seen.length;
+          openSeenSurfaceSamples = seen
+            .slice(0, 12)
+            .map((s) => s.path_key || s.location || s.id)
+            .filter(Boolean);
+        } catch {
+          // Soft path only — never fail continue on ledger read.
+        }
+      }
       const goalContinuationBody =
         decision.kind === "goal" && modeGoal
           ? buildGoalContinuationPrompt(modeGoal, { openTodoTitles, openTodoCount })
@@ -806,6 +822,8 @@ export async function runNode4Task(
             max: maxContinues,
             openTodoCount,
             openTodoTitles,
+            openSeenSurfaceCount,
+            openSeenSurfaceSamples,
             todoErrors,
             booking: bookingSnap,
             goalSummary: goalSnap,
