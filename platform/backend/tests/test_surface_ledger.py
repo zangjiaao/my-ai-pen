@@ -253,6 +253,66 @@ class TestSurfaceLedgerStore(unittest.TestCase):
         assert row is not None
         self.assertEqual(row["status"], "seen")
 
+    def test_normalize_preserves_case_tested_from_dual_write(self):
+        """Spec #413: Node surface_upsert must not drop case_tested (TESTED chip SoT)."""
+        row = normalize_surface_row(
+            _row(status="touched", case_tested=True, source="traffic"),
+            conversation_id="conv-a",
+        )
+        self.assertIsNotNone(row)
+        assert row is not None
+        self.assertTrue(row["case_tested"])
+
+        missing = normalize_surface_row(_row(status="touched"), conversation_id="conv-a")
+        assert missing is not None
+        self.assertFalse(missing["case_tested"], "missing case_tested is false-safe")
+
+        # extract + merge path (same as WS surface_upsert) must land sticky true
+        extracted = extract_surfaces_from_upsert_message(
+            {
+                "conversation_id": "conv-a",
+                "surfaces": [
+                    {
+                        "origin_key": "https://example.com:443",
+                        "path_key": "/api/users",
+                        "location": "https://example.com/api/users",
+                        "status": "touched",
+                        "methods": ["GET"],
+                        "case_tested": True,
+                        "source": "traffic",
+                    }
+                ],
+            },
+            conversation_id="conv-a",
+        )
+        self.assertEqual(len(extracted), 1)
+        self.assertTrue(extracted[0]["case_tested"])
+        ctx, landed = merge_surfaces_into_context({}, extracted, allow_booked=False)
+        self.assertEqual(len(landed), 1)
+        self.assertTrue(landed[0]["case_tested"])
+        self.assertTrue(ctx["surface_ledger"]["surfaces"][0]["case_tested"])
+
+        # Later dual-write without case_tested must not clear sticky true
+        later = extract_surfaces_from_upsert_message(
+            {
+                "conversation_id": "conv-a",
+                "surfaces": [
+                    {
+                        "origin_key": "https://example.com:443",
+                        "path_key": "/api/users",
+                        "location": "https://example.com/api/users",
+                        "status": "touched",
+                        "methods": ["POST"],
+                        "case_tested": False,
+                    }
+                ],
+            },
+            conversation_id="conv-a",
+        )
+        ctx2, landed2 = merge_surfaces_into_context(ctx, later, allow_booked=False)
+        self.assertTrue(ctx2["surface_ledger"]["surfaces"][0]["case_tested"])
+        self.assertTrue(landed2[0]["case_tested"])
+
     def test_identity_merge_methods_params_no_duplicate_rows(self):
         a = normalize_surface_row(
             _row(methods=["GET"], params=["id"], status="open"),

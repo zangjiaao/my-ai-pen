@@ -668,6 +668,10 @@ def normalize_surface_row(
     created_at = _str_or_none(msg.get("created_at")) or now
     updated_at = _str_or_none(msg.get("updated_at")) or now
 
+    # Spec #413: preserve case_tested from Node dual-write (purpose=test settle).
+    # False-safe: missing/invalid → False; sticky merge happens in merge_surface_row.
+    case_tested = _coerce_case_tested(msg.get("case_tested"), default=False)
+
     return {
         "id": row_id[:180],
         "conversation_id": conv,
@@ -687,6 +691,7 @@ def normalize_surface_row(
         ),
         "updated_at": updated_at,
         "created_at": created_at,
+        "case_tested": case_tested,
     }
 
 
@@ -1010,6 +1015,7 @@ def extract_surfaces_from_upsert_message(
                     "updated_at",
                     "created_at",
                     "conversation_id",
+                    "case_tested",  # Spec #413 TESTED dual-write
                 )
             }
             candidates.append(top)

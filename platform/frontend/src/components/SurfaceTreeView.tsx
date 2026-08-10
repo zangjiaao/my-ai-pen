@@ -1,13 +1,13 @@
 /**
  * Attack surface tree UI.
- * Spec #408 L5 density + #409 operator projection: NEW + TESTED; no SEEN/BOOK/PRIOR chips.
+ * Spec #408 L5 density + #409/#413 operator projection: NEW + TESTED; no SEEN/BOOK/PRIOR chips.
+ * Toolbar aligned with Traffic: search + single view filter (All / NEW / Untested / Findings).
  */
 import { useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, Search } from "lucide-react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import type { SecurityVulnerability } from "../lib/securityTypes";
 import type { SurfaceEntry } from "../lib/surfaceModel";
 import {
-  normalizeSurfaceStatus,
   preferSurfaceStatus,
   surfaceMethodChips,
   surfaceShowsStatusChip,
@@ -47,8 +47,6 @@ export type SurfaceTreeNode = {
    */
   caseTested?: boolean;
   leafCount: number;
-  /** Entries under this node still in seen/touched (not terminal booked/deadend/skipped_roe). */
-  unfinishedCount: number;
   findingTags: SurfaceFindingTag[];
   subtreeFindingTags: SurfaceFindingTag[];
 };
@@ -64,20 +62,14 @@ export type SurfaceTreeRowChrome = {
   showStatusChip: boolean;
   /** Inventory novelty badge (only when flagged). */
   showNewBadge: boolean;
-  unfinishedCount: number;
 };
-
-/** True when status still represents unfinished exercise (not booked / terminal). */
-function isUnfinishedSurfaceStatus(status?: string | null): boolean {
-  const n = normalizeSurfaceStatus(status);
-  if (!n) return true;
-  return n === "seen" || n === "touched";
-}
 
 /**
  * Decide what a Surface tree row should show.
- * Methods never chip on the tree by default; collapsed parents roll up to counts.
+ * Methods never chip on the tree by default; collapsed parents roll up to finding counts.
  * Operator status: TESTED from case_tested (#413); no SEEN/BOOK; NEW only when flagged (#409).
+ * NEW/TESTED only on nodes that own surface entries (identity) — not origin/path parents
+ * that merely aggregate children (even when expanded).
  */
 export function surfaceTreeRowChrome(
   node: SurfaceTreeNode,
@@ -86,7 +78,11 @@ export function surfaceTreeRowChrome(
   const hasChildren = node.children.length > 0;
   const collapsedParent = hasChildren && !opts.open;
   const allPreview = dedupeFindingTags([...node.findingTags, ...node.subtreeFindingTags]);
-  const unfinishedCount = node.unfinishedCount ?? 0;
+  // Identity chips: own ledger entries only, never on structural origin/host/port roots
+  // (even when TARGET seed attaches path=/ to the origin row — that lives on a "/" child).
+  const isStructuralRoot =
+    node.nodeKind === "origin" || node.nodeKind === "host" || node.nodeKind === "port";
+  const isIdentity = !isStructuralRoot && (node.entries?.length || 0) > 0;
 
   if (collapsedParent) {
     return {
@@ -95,10 +91,9 @@ export function surfaceTreeRowChrome(
       tags: [],
       extraTagCount: 0,
       findingCount: allPreview.length,
-      // Max-status alone hides unfinished children — prefer unfinished count instead.
+      // Collapsed: leafCount + findings count only (no max-status / unfinished).
       showStatusChip: false,
       showNewBadge: false,
-      unfinishedCount,
     };
   }
 
@@ -113,9 +108,9 @@ export function surfaceTreeRowChrome(
       : node.caseTested === false
         ? { caseTested: false as const }
         : undefined;
-  const showStatusChip = surfaceShowsStatusChip(node.status, labelOpts);
-  // Leaf novelty only (own entries / node flag); not subtree flood on expanded parents without own NEW.
-  const showNewBadge = Boolean(node.isNew);
+  const showStatusChip = isIdentity && surfaceShowsStatusChip(node.status, labelOpts);
+  // Own-entry novelty only — never on origin aggregator.
+  const showNewBadge = isIdentity && Boolean(node.isNew);
 
   return {
     showMethods: false,
@@ -125,7 +120,6 @@ export function surfaceTreeRowChrome(
     findingCount: tagsSource.length,
     showStatusChip,
     showNewBadge,
-    unfinishedCount,
   };
 }
 
@@ -184,7 +178,8 @@ export function buildSurfaceTree(
       } else if (entry.isDiscovered && !node.isTarget) {
         node.isDiscovered = true;
       }
-      absorbEntryStatus(node, entry);
+      // Do not absorb entry status here — only when the entry is attached to this
+      // node (root path / non-web). Child paths must not stamp NEW/TESTED on origin.
       return node;
     }
     const label =
@@ -209,11 +204,9 @@ export function buildSurfaceTree(
       methods: [],
       status: undefined,
       leafCount: 0,
-      unfinishedCount: 0,
       findingTags: [],
       subtreeFindingTags: [],
     };
-    absorbEntryStatus(node, entry);
     origins.set(originKey, node);
     return node;
   };
@@ -231,28 +224,17 @@ export function buildSurfaceTree(
     }
 
     const segs = pathSegments(entry.path);
-    if (segs.length === 0) {
-      // Web root of this origin
-      originNode.entries.push(entry);
-      absorbEntryStatus(originNode, entry);
-      for (const m of surfaceMethodChips(entry.method)) {
-        if (!originNode.methods.includes(m)) originNode.methods.push(m);
-      }
-      const tags = findingsByPath.get(entry.key.toLowerCase()) || [];
-      originNode.findingTags = dedupeFindingTags([...originNode.findingTags, ...tags]);
-      continue;
-    }
-
+    // Web root path "/" is an explicit path child — origin row stays structural only
+    // (no NEW/TESTED chips on the host:port root from TARGET seed / browse of /).
     let cursor = originNode;
-    for (let i = 0; i < segs.length; i++) {
-      const seg = segs[i]!;
-      const childId = `${originNode.id}|/${segs.slice(0, i + 1).join("/")}`;
-      let child = cursor.children.find((c) => c.id === childId);
-      if (!child) {
-        child = {
-          id: childId,
-          label: seg,
-          path: `/${segs.slice(0, i + 1).join("/")}`,
+    if (segs.length === 0) {
+      const rootId = `${originNode.id}|/`;
+      let rootPath = cursor.children.find((c) => c.id === rootId);
+      if (!rootPath) {
+        rootPath = {
+          id: rootId,
+          label: "",
+          path: "/",
           nodeKind: "path",
           service: "web",
           children: [],
@@ -260,13 +242,36 @@ export function buildSurfaceTree(
           methods: [],
           status: undefined,
           leafCount: 0,
-          unfinishedCount: 0,
           findingTags: [],
           subtreeFindingTags: [],
         };
-        cursor.children.push(child);
+        cursor.children.push(rootPath);
       }
-      cursor = child;
+      cursor = rootPath;
+    } else {
+      for (let i = 0; i < segs.length; i++) {
+        const seg = segs[i]!;
+        const childId = `${originNode.id}|/${segs.slice(0, i + 1).join("/")}`;
+        let child = cursor.children.find((c) => c.id === childId);
+        if (!child) {
+          child = {
+            id: childId,
+            label: seg,
+            path: `/${segs.slice(0, i + 1).join("/")}`,
+            nodeKind: "path",
+            service: "web",
+            children: [],
+            entries: [],
+            methods: [],
+            status: undefined,
+            leafCount: 0,
+            findingTags: [],
+            subtreeFindingTags: [],
+          };
+          cursor.children.push(child);
+        }
+        cursor = child;
+      }
     }
     cursor.entries.push(entry);
     absorbEntryStatus(cursor, entry);
@@ -283,16 +288,11 @@ export function buildSurfaceTree(
     if (node.nodeKind === "service" && node.entries.length) leaves = 1;
     let subtreeTags = [...node.findingTags];
     const methods = new Set(node.methods);
-    let unfinished = 0;
-    for (const e of node.entries) {
-      if (isUnfinishedSurfaceStatus(e.status)) unfinished += 1;
-    }
     for (const child of node.children) {
       leaves += finalize(child);
       for (const m of child.methods) methods.add(m);
       subtreeTags = subtreeTags.concat(child.subtreeFindingTags);
-      unfinished += child.unfinishedCount || 0;
-      // Bubble status from children (data only; collapsed UI prefers counts — #408)
+      // Bubble status from children (data only; collapsed UI uses leafCount — #408)
       const bubbled = preferSurfaceStatus(node.status, child.status);
       if (bubbled) node.status = bubbled;
     }
@@ -301,7 +301,6 @@ export function buildSurfaceTree(
       leaves = Math.max(leaves, 1);
     }
     node.leafCount = leaves;
-    node.unfinishedCount = unfinished;
     node.subtreeFindingTags = dedupeFindingTags(subtreeTags);
     // Methods remain available for search / tool payloads; not rendered as tree chips.
     node.methods = Array.from(methods);
@@ -324,50 +323,53 @@ export function buildSurfaceTree(
   return roots;
 }
 
-export type SurfaceKindFilter = "all" | "vuln" | "key" | "flag" | "findings";
+/**
+ * Operator coverage view filter (Surface toolbar).
+ * Replaces legacy Findings-kind chips (Vuln/Key/Flag) — those live on Findings tab.
+ */
+export type SurfaceViewFilter = "all" | "new" | "untested" | "findings";
+/** @deprecated Use SurfaceViewFilter — kept for import compatibility. */
+export type SurfaceKindFilter = SurfaceViewFilter;
 
 export function SurfaceTreeView({
   roots,
   total,
-  linkedCount = 0,
   findingsTotal = 0,
-  kindCounts = { vuln: 0, flag: 0, key: 0 },
   unlinked = [],
   onOpenVulnerability,
 }: {
   roots: SurfaceTreeNode[];
   total: number;
-  /** Unique findings successfully hung on a route. */
-  linkedCount?: number;
-  /** Same as Findings tab unique count (findings.length). */
+  /** Same as Findings tab unique count (findings.length) — for Findings option title. */
   findingsTotal?: number;
-  /** Chip counts by kind — exclusive, matches Findings Vuln / Key / Flags. */
+  /** @deprecated unused; kept so callers can pass linkedCount without TS noise. */
+  linkedCount?: number;
+  /** @deprecated unused; Findings-kind chips removed from Surface toolbar. */
   kindCounts?: { vuln: number; flag: number; key: number };
   unlinked?: SurfaceFindingTag[];
   onOpenVulnerability?: (finding: Partial<SecurityVulnerability>) => void;
 }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [query, setQuery] = useState("");
-  const [kindFilter, setKindFilter] = useState<SurfaceKindFilter>("all");
+  const [viewFilter, setViewFilter] = useState<SurfaceViewFilter>("all");
 
-  const filterActive = Boolean(query.trim()) || kindFilter !== "all";
+  const filterActive = Boolean(query.trim()) || viewFilter !== "all";
+  const stats = useMemo(() => countSurfaceViewStats(roots), [roots]);
 
   const filteredRoots = useMemo(
-    () => filterSurfaceTree(roots, query, kindFilter),
-    [roots, query, kindFilter],
+    () => filterSurfaceTree(roots, query, viewFilter),
+    [roots, query, viewFilter],
   );
 
+  // Unlinked findings are not Surface identities — only show under All / Findings.
   const filteredUnlinked = useMemo(() => {
+    if (viewFilter === "new" || viewFilter === "untested") return [];
     const q = query.trim().toLowerCase();
     return unlinked.filter((tag) => {
-      if (kindFilter === "vuln" && tag.kind !== "vuln") return false;
-      if (kindFilter === "key" && tag.kind !== "key") return false;
-      if (kindFilter === "flag" && tag.kind !== "flag") return false;
-      // "findings" and "all" keep unlinked (they are findings without a path)
       if (!q) return true;
       return `${tag.label} ${tag.title} ${tag.kind}`.toLowerCase().includes(q);
     });
-  }, [unlinked, query, kindFilter]);
+  }, [unlinked, query, viewFilter]);
 
   const isOpen = (node: SurfaceTreeNode, depth: number) => {
     if (collapsed[node.id] !== undefined) return !collapsed[node.id];
@@ -385,70 +387,47 @@ export function SurfaceTreeView({
   };
 
   const unlinkedCount = filteredUnlinked.length;
-  const visibleLeafHint = filterActive
-    ? countSurfaceLeaves(filteredRoots)
-    : total;
-
-  const filterChips: Array<{ id: SurfaceKindFilter; label: string; count: number; title?: string }> = [
-    { id: "all", label: "All", count: total, title: `${total} surfaces · ${findingsTotal} findings · ${linkedCount} linked` },
-    { id: "findings", label: "Findings", count: findingsTotal, title: "Only routes with linked findings" },
-    { id: "vuln", label: "Vuln", count: kindCounts.vuln },
-    { id: "key", label: "Key", count: kindCounts.key },
-    { id: "flag", label: "Flag", count: kindCounts.flag },
-  ];
 
   return (
-    <div className="space-y-2.5">
-      <div className="space-y-2">
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-muted" />
-          <input
-            type="search"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search host, path, finding…"
-            className="w-full rounded-md border border-hairline-soft bg-canvas-inset py-1.5 pl-7 pr-2 text-xs text-ink placeholder:text-ink-muted focus:border-hairline focus:outline-none"
-            aria-label="Search attack surface"
-          />
-        </div>
-        <div className="flex flex-wrap items-center gap-1">
-          {filterChips.map((chip) => {
-            const active = kindFilter === chip.id;
-            const empty = chip.id !== "all" && chip.count === 0;
-            return (
-              <button
-                key={chip.id}
-                type="button"
-                disabled={empty}
-                title={chip.title}
-                onClick={() => setKindFilter(chip.id)}
-                className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
-                  active
-                    ? chip.id === "flag"
-                      ? "bg-status-success/15 text-status-success"
-                      : chip.id === "key"
-                        ? "bg-status-running/12 text-status-running"
-                        : chip.id === "vuln"
-                          ? "bg-severity-high-subtle text-severity-high"
-                          : "bg-ink text-on-ink"
-                    : "bg-canvas-inset text-ink-muted hover:bg-surface-default hover:text-ink"
-                }`}
-              >
-                <span>{chip.label}</span>
-                <span className={active && chip.id === "all" ? "opacity-80" : "opacity-70"}>{chip.count}</span>
-              </button>
-            );
-          })}
-          {filterActive && (
-            <span className="ml-auto font-mono text-[10px] text-ink-muted">
-              {visibleLeafHint} match{visibleLeafHint === 1 ? "" : "es"}
-            </span>
-          )}
-        </div>
+    <div className="space-y-2" data-testid="surface-tree">
+      {/* Match Traffic toolbar: search + single select filter. */}
+      <div className="flex flex-wrap items-center gap-2" data-testid="surface-toolbar">
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search host, path, finding…"
+          data-testid="surface-search"
+          className="min-w-0 flex-1 rounded-md border border-hairline bg-canvas px-2.5 py-1.5 text-[12px] text-ink placeholder:text-ink-muted outline-none focus:border-ink"
+          aria-label="Search attack surface"
+        />
+        <select
+          value={viewFilter}
+          onChange={(e) => setViewFilter(e.target.value as SurfaceViewFilter)}
+          data-testid="surface-view-filter"
+          className="shrink-0 rounded-md border border-hairline bg-canvas px-2 py-1.5 text-[12px] text-ink outline-none focus:border-ink"
+          aria-label="Filter surfaces"
+          title={
+            viewFilter === "new"
+              ? "Inventory NEW this Case"
+              : viewFilter === "untested"
+                ? "Not yet TESTED this Case (no purpose=test traffic)"
+                : viewFilter === "findings"
+                  ? "Routes with linked findings"
+                  : `${total} surfaces · ${findingsTotal} findings`
+          }
+        >
+          <option value="all">All ({stats.all || total})</option>
+          <option value="new">NEW ({stats.new})</option>
+          <option value="untested">Untested ({stats.untested})</option>
+          <option value="findings">Findings ({stats.findings})</option>
+        </select>
       </div>
 
       {filteredRoots.length === 0 && unlinkedCount === 0 ? (
-        <p className="py-4 text-center text-xs text-ink-muted">No surfaces match this search / filter</p>
+        <p className="text-sm text-ink-muted" data-testid="surface-filter-empty">
+          No surfaces match search/filter
+        </p>
       ) : (
         <div className="space-y-0.5">
           {filteredRoots.map((node) => (
@@ -494,11 +473,6 @@ export function SurfaceTreeView({
   );
 }
 
-function surfaceTagMatchesKind(tag: SurfaceFindingTag, kind: SurfaceKindFilter): boolean {
-  if (kind === "all" || kind === "findings") return true;
-  return tag.kind === kind;
-}
-
 function surfaceNodeSearchBlob(node: SurfaceTreeNode): string {
   const parts = [
     node.label,
@@ -512,66 +486,107 @@ function surfaceNodeSearchBlob(node: SurfaceTreeNode): string {
   return parts.join(" ").toLowerCase();
 }
 
-function filterSurfaceTree(
+/** Whether this node (as a surface identity / leaf) matches the view filter. */
+export function surfaceNodeMatchesViewFilter(
+  node: SurfaceTreeNode,
+  filter: SurfaceViewFilter,
+): boolean {
+  if (filter === "all") return true;
+  if (filter === "new") return node.isNew === true;
+  // Spec #413: untested = not case_tested this Case.
+  if (filter === "untested") return node.caseTested !== true;
+  if (filter === "findings") return (node.findingTags?.length || 0) > 0;
+  return true;
+}
+
+/**
+ * Collect path/service nodes that carry surface entries (operator “leaves”).
+ * Intermediate path parents without own entries are skipped.
+ */
+export function collectSurfaceIdentityNodes(roots: SurfaceTreeNode[]): SurfaceTreeNode[] {
+  const out: SurfaceTreeNode[] = [];
+  const walk = (node: SurfaceTreeNode) => {
+    if (node.entries.length > 0) out.push(node);
+    for (const child of node.children) walk(child);
+  };
+  for (const r of roots) walk(r);
+  return out;
+}
+
+export function countSurfaceViewStats(roots: SurfaceTreeNode[]): {
+  all: number;
+  new: number;
+  untested: number;
+  findings: number;
+} {
+  const leaves = collectSurfaceIdentityNodes(roots);
+  let neu = 0;
+  let untested = 0;
+  let findings = 0;
+  for (const n of leaves) {
+    if (n.isNew === true) neu += 1;
+    if (n.caseTested !== true) untested += 1;
+    if ((n.findingTags?.length || 0) > 0) findings += 1;
+  }
+  return { all: leaves.length, new: neu, untested, findings };
+}
+
+export function filterSurfaceTree(
   roots: SurfaceTreeNode[],
   query: string,
-  kind: SurfaceKindFilter,
+  view: SurfaceViewFilter,
 ): SurfaceTreeNode[] {
   const q = query.trim().toLowerCase();
-  if (!q && kind === "all") return roots;
+  if (!q && view === "all") return roots;
 
   const filterNode = (node: SurfaceTreeNode): SurfaceTreeNode | null => {
     const children = node.children
       .map((child) => filterNode(child))
       .filter((child): child is SurfaceTreeNode => child != null);
 
-    const ownTags = node.findingTags.filter((t) => surfaceTagMatchesKind(t, kind));
     const searchSelf = !q || surfaceNodeSearchBlob(node).includes(q);
+    const selfHasEntries = node.entries.length > 0;
+    const selfMatchesView = !selfHasEntries || surfaceNodeMatchesViewFilter(node, view);
+    const selfMatches = selfHasEntries && selfMatchesView && searchSelf;
 
-    // Keep ancestors of matching descendants.
+    // Keep ancestors of matching descendants (and/or own matching identity).
     if (children.length > 0) {
       const subtreeTags = dedupeFindingTags([
-        ...ownTags,
+        ...(selfMatches ? node.findingTags : []),
         ...children.flatMap((c) => c.subtreeFindingTags),
       ]);
+      // When filter excludes this node's own identity, drop own entries from the projected node
+      // so chrome does not show a non-matching root path as if it were a hit.
       return {
         ...node,
         children,
-        findingTags: kind === "all" ? node.findingTags : ownTags,
-        subtreeFindingTags: kind === "all"
-          ? dedupeFindingTags([...node.findingTags, ...children.flatMap((c) => c.subtreeFindingTags)])
-          : subtreeTags,
-        leafCount: children.reduce((n, c) => n + (c.leafCount || 0), 0) || node.leafCount,
+        entries: selfMatches ? node.entries : [],
+        findingTags: selfMatches ? node.findingTags : [],
+        subtreeFindingTags: subtreeTags,
+        leafCount:
+          children.reduce((n, c) => n + (c.leafCount || 0), 0) +
+          (selfMatches ? Math.max(1, node.entries.length) : 0),
+        isNew: selfMatches ? node.isNew : undefined,
+        caseTested: selfMatches ? node.caseTested : undefined,
+        status: selfMatches ? node.status : preferSurfaceStatus(undefined, children[0]?.status),
       };
     }
 
     // Leaf (no surviving children)
-    if (q && !searchSelf) return null;
-    if (kind === "findings" && ownTags.length === 0) return null;
-    if (kind !== "all" && kind !== "findings" && ownTags.length === 0) return null;
+    if (!selfHasEntries) {
+      // Empty intermediate path with no matches — drop.
+      return null;
+    }
+    if (!selfMatches) return null;
 
     return {
       ...node,
       children: [],
-      findingTags: kind === "all" ? node.findingTags : ownTags,
-      subtreeFindingTags: kind === "all" ? node.subtreeFindingTags : ownTags,
+      subtreeFindingTags: node.findingTags,
     };
   };
 
   return roots.map(filterNode).filter((n): n is SurfaceTreeNode => n != null);
-}
-
-function countSurfaceLeaves(roots: SurfaceTreeNode[]): number {
-  let n = 0;
-  const walk = (node: SurfaceTreeNode) => {
-    if (!node.children.length) {
-      n += 1;
-      return;
-    }
-    for (const c of node.children) walk(c);
-  };
-  for (const r of roots) walk(r);
-  return n;
 }
 
 function SurfaceTreeNodeRow({
@@ -600,7 +615,11 @@ function SurfaceTreeNodeRow({
     .join("\n");
 
   const displayLabel =
-    node.nodeKind === "path" ? `/${node.label}` : node.label;
+    node.nodeKind === "path"
+      ? node.path === "/" || !node.label
+        ? "/"
+        : `/${node.label}`
+      : node.label;
   const serviceBadge =
     node.service && node.service !== "web" && (node.nodeKind === "port" || node.nodeKind === "service")
       ? node.service.toUpperCase()
@@ -661,15 +680,6 @@ function SurfaceTreeNodeRow({
               <span className="shrink-0 font-mono text-[10px] text-ink-muted">{node.leafCount}</span>
             )}
             {/* Spec #408 L5: HTTP method chips are not rendered on the Surface tree. */}
-            {chrome.findingMode === "count" && chrome.unfinishedCount > 0 && (
-              <span
-                className="shrink-0 font-mono text-[10px] text-ink-muted"
-                data-testid="surface-unfinished-count"
-                title="Surfaces not yet TESTED (or only first-touch) under this branch"
-              >
-                {chrome.unfinishedCount} unfinished
-              </span>
-            )}
             {chrome.findingMode === "count" && chrome.findingCount > 0 && (
               <span
                 className="shrink-0 rounded bg-severity-high-subtle px-1 py-0.5 font-mono text-[10px] font-medium text-severity-high"

@@ -1,6 +1,7 @@
 /**
- * Spec #408 L5 density + #409 operator projection — Surface tree:
+ * Spec #408 L5 density + #409/#413 operator projection — Surface tree:
  * no method chips; collapsed parents use counts; NEW + TESTED; no SEEN/BOOK/PRIOR.
+ * Toolbar: Traffic-aligned search + All/NEW/Untested/Findings view filter.
  * Run: npx tsx src/components/SurfaceTreeView.test.tsx  (from platform/frontend)
  */
 import assert from "node:assert/strict";
@@ -8,6 +9,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   buildSurfaceTree,
+  countSurfaceViewStats,
+  filterSurfaceTree,
   surfaceTreeRowChrome,
   SurfaceTreeView,
 } from "./SurfaceTreeView.tsx";
@@ -83,7 +86,7 @@ function testCollapsedParentUsesCountsNotSeverityStackOrMaxStatus() {
   const origin = tree[0]!;
   assert.equal(origin.nodeKind, "origin");
   assert.ok(origin.subtreeFindingTags.length >= 3);
-  assert.ok(origin.unfinishedCount >= 2, "seen+touched count under origin");
+  assert.ok(origin.leafCount >= 3, "collapsed parent shows child leaf count");
 
   const collapsed = surfaceTreeRowChrome(origin, { open: false });
   assert.equal(collapsed.showMethods, false);
@@ -91,7 +94,6 @@ function testCollapsedParentUsesCountsNotSeverityStackOrMaxStatus() {
   assert.equal(collapsed.findingCount, 3);
   assert.equal(collapsed.tags.length, 0, "no severity title chips on collapsed parent");
   assert.equal(collapsed.showStatusChip, false, "no max-status chip alone on collapsed parent");
-  assert.ok(collapsed.unfinishedCount >= 2);
 
   const expanded = surfaceTreeRowChrome(origin, { open: true });
   assert.equal(expanded.findingMode, "tags");
@@ -213,9 +215,139 @@ function testOperatorChipsNewTestedNoSeenBook() {
   assert.equal(surfaceTreeRowChrome(byPath.get("/quiet")!, { open: true }).showNewBadge, false);
 }
 
+function testOriginRootDoesNotShowNewOrTestedFromChildren() {
+  // Child paths stamp NEW/TESTED; origin aggregator must not inherit chips.
+  const entries = [
+    entry({
+      key: "https://lab.example:443|/a",
+      path: "/a",
+      status: "touched",
+      isNew: true,
+      caseTested: true,
+    }),
+    entry({
+      key: "https://lab.example:443|/b",
+      path: "/b",
+      status: "touched",
+      isNew: true,
+      caseTested: true,
+    }),
+  ];
+  const roots = buildSurfaceTree(entries);
+  const origin = roots[0]!;
+  assert.equal(origin.nodeKind, "origin");
+  assert.equal(origin.entries.length, 0, "no root-path entry on origin");
+  // Expanded origin is a parent with children — chrome must not chip NEW/TESTED.
+  const originChrome = surfaceTreeRowChrome(origin, { open: true });
+  assert.equal(originChrome.showNewBadge, false, "origin no NEW from children");
+  assert.equal(originChrome.showStatusChip, false, "origin no TESTED from children");
+  assert.equal(origin.isNew, undefined, "origin isNew not absorbed from child attach");
+  assert.equal(origin.caseTested, undefined, "origin caseTested not absorbed from child attach");
+
+  const leafA = origin.children.find((c) => c.path === "/a")!;
+  assert.equal(surfaceTreeRowChrome(leafA, { open: true }).showNewBadge, true);
+  assert.equal(surfaceTreeRowChrome(leafA, { open: true }).showStatusChip, true);
+
+  // path=/ is a path child under origin — origin still never chips; "/" leaf does.
+  const withRoot = buildSurfaceTree([
+    entry({
+      key: "https://lab.example:443|/",
+      path: "/",
+      status: "touched",
+      isNew: true,
+      caseTested: true,
+    }),
+    entry({
+      key: "https://lab.example:443|/x",
+      path: "/x",
+      status: "seen",
+      caseTested: false,
+    }),
+  ]);
+  const rootOrigin = withRoot[0]!;
+  assert.equal(rootOrigin.entries.length, 0, "origin remains structural");
+  assert.equal(surfaceTreeRowChrome(rootOrigin, { open: true }).showNewBadge, false);
+  assert.equal(surfaceTreeRowChrome(rootOrigin, { open: true }).showStatusChip, false);
+  const slash = rootOrigin.children.find((c) => c.path === "/")!;
+  assert.ok(slash, "root path is a child node");
+  assert.equal(surfaceTreeRowChrome(slash, { open: true }).showNewBadge, true);
+  assert.equal(surfaceTreeRowChrome(slash, { open: true }).showStatusChip, true);
+}
+
+function testToolbarMatchesTrafficPatternAndViewFilters() {
+  const findingsByPath = new Map<string, SurfaceFindingTag[]>([
+    ["https://lab.example:443|/vuln", [tag("f1", "high", "SQLi")]],
+  ]);
+  const entries = [
+    entry({
+      key: "https://lab.example:443|/novel",
+      path: "/novel",
+      status: "seen",
+      isNew: true,
+      caseTested: false,
+    }),
+    entry({
+      key: "https://lab.example:443|/tested",
+      path: "/tested",
+      status: "touched",
+      isNew: false,
+      caseTested: true,
+    }),
+    entry({
+      key: "https://lab.example:443|/vuln",
+      path: "/vuln",
+      status: "booked",
+      isNew: true,
+      caseTested: true,
+    }),
+  ];
+  const roots = buildSurfaceTree(entries, findingsByPath);
+  const stats = countSurfaceViewStats(roots);
+  assert.equal(stats.all, 3);
+  assert.equal(stats.new, 2);
+  assert.equal(stats.untested, 1);
+  assert.equal(stats.findings, 1);
+
+  const onlyNew = filterSurfaceTree(roots, "", "new");
+  const newPaths = onlyNew.flatMap((r) => r.children.map((c) => c.path)).sort();
+  assert.deepEqual(newPaths, ["/novel", "/vuln"]);
+
+  const onlyUntested = filterSurfaceTree(roots, "", "untested");
+  assert.deepEqual(
+    onlyUntested.flatMap((r) => r.children.map((c) => c.path)),
+    ["/novel"],
+  );
+
+  const onlyFindings = filterSurfaceTree(roots, "", "findings");
+  assert.deepEqual(
+    onlyFindings.flatMap((r) => r.children.map((c) => c.path)),
+    ["/vuln"],
+  );
+
+  const html = renderToStaticMarkup(
+    createElement(SurfaceTreeView, {
+      roots,
+      total: 3,
+      findingsTotal: 1,
+    }),
+  );
+  assert.ok(html.includes('data-testid="surface-toolbar"'), "toolbar present");
+  assert.ok(html.includes('data-testid="surface-search"'), "search like traffic");
+  assert.ok(html.includes('data-testid="surface-view-filter"'), "view select");
+  assert.ok(html.includes("NEW (2)"), "NEW option with count");
+  assert.ok(html.includes("Untested (1)"), "Untested option with count");
+  assert.ok(html.includes("Findings (1)"), "Findings option with count");
+  // Legacy Vuln/Key/Flag chips removed from Surface toolbar.
+  assert.ok(!html.includes(">Vuln<"), "no Vuln chip");
+  assert.ok(!html.includes(">Key<"), "no Key chip");
+  assert.ok(!html.includes(">Flag<"), "no Flag chip");
+}
+
 testMethodsStayInModelButNotOnTreeChrome();
 testCollapsedParentUsesCountsNotSeverityStackOrMaxStatus();
 testRenderHasNoMethodChips();
 testLedgerProjectionUnchanged();
 testOperatorChipsNewTestedNoSeenBook();
+testOriginRootDoesNotShowNewOrTestedFromChildren();
+testToolbarMatchesTrafficPatternAndViewFilters();
 console.log("SurfaceTreeView.test.tsx: ok");
