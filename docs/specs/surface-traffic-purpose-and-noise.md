@@ -1,6 +1,6 @@
 # Spec: Surface traffic noise filter + test-purpose (TESTED)
 
-**Status:** Implementable Spec (product contract)  
+**Status:** Living Spec — **shipped** (noise filter [#412](https://github.com/zangjiaao/my-ai-pen/issues/412); purpose→TESTED [#413](https://github.com/zangjiaao/my-ai-pen/issues/413); dual-write preserve in [#414](https://github.com/zangjiaao/my-ai-pen/pull/414)). Product contract remains normative.  
 **Amends:** [`case-surface-ledger.md`](case-surface-ledger.md) (D6 settle), [`surface-new-tested-coverage.md`](surface-new-tested-coverage.md) (TESTED axis)  
 **Related:** Spec [#368](https://github.com/zangjiaao/my-ai-pen/issues/368); inventory NEW [#410](https://github.com/zangjiaao/my-ai-pen/issues/410); field Cases `f7f55cea-…` (noise + all-NEW cold start), `760e07b9-…` (dual-write)
 
