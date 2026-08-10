@@ -73,7 +73,7 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
     description: [
       "Query the Case attack-surface working ledger (Node SQLite) — Agent management view.",
       "PRIMARY ops: summary | list | get.",
-      "summary: counts (seen/touched/booked + deadend/skipped_roe) + sample paths + total; use for coverage.",
+      "summary: counts (seen/touched/booked + deadend/skipped_roe; operator aliases tested=touched) + sample paths + total; use for coverage.",
       `list: default seen+touched actionable queue; limit default ${SURFACE_LIST_DEFAULT_LIMIT} (max same); returns returned/total_matching/has_more.`,
       "get: by id, location, or origin_key+path_key.",
       "Normal ledger fill is Runtime-passive: Traffic settle + TARGET seed; booked only via finding(confirm). Do not treat upsert as required registration.",
@@ -171,12 +171,16 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
             status: s.status,
           })),
         ].slice(0, SURFACE_SUMMARY_SAMPLE_MAX);
+        // Spec #409 light align: keep v2 field names; operator aliases tested (= touched).
+        // Full NEW/TESTED Agent duty is #411 (after inventory #410).
         return jsonResult({
           ok: true,
           op: "summary",
           total: cov.total,
           seen: cov.open,
           touched: cov.in_probe,
+          /** Operator vocabulary: TESTED = this-Case traffic-advanced (v2 touched). */
+          tested: cov.in_probe,
           booked: cov.booked,
           deadend: cov.deadend,
           skipped_roe: cov.skipped,
@@ -185,6 +189,7 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
           counts: {
             seen: cov.open,
             touched: cov.in_probe,
+            tested: cov.in_probe,
             booked: cov.booked,
             deadend: cov.deadend,
             skipped_roe: cov.skipped,
@@ -194,7 +199,7 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
           guidance:
             cov.total === 0
               ? "Ledger empty. Fill is Runtime-passive: real Traffic settle + TARGET seed. Explore with http/session/browser so requests land; then re-check summary. upsert is optional corrective only — not required."
-              : "Coverage snapshot. actionable = seen+touched. Use surface(list) to page (default seen+touched, ≤200). booked advances only via finding(confirm). Do not require surface(upsert) for normal fill.",
+              : "Coverage snapshot. tested = touched (this-Case further traffic). actionable = seen+touched (not yet booked). Use surface(list) to page (default seen+touched, ≤200). booked advances only via finding(confirm); platform vuln priors alone are not coverage. Do not require surface(upsert) for normal fill.",
         });
       }
 

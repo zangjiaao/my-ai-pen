@@ -1,6 +1,6 @@
 /**
  * Attack surface tree UI.
- * Spec #408 / surface-new-tested-coverage L5: no method chips on tree; collapsed parents use counts.
+ * Spec #408 L5 density + #409 operator projection: NEW + TESTED; no SEEN/BOOK/PRIOR chips.
  */
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Search } from "lucide-react";
@@ -10,6 +10,7 @@ import {
   normalizeSurfaceStatus,
   preferSurfaceStatus,
   surfaceMethodChips,
+  surfaceShowsStatusChip,
   surfaceStatusBadgeClass,
   surfaceStatusLabel,
 } from "../lib/surfaceModel";
@@ -36,8 +37,10 @@ export type SurfaceTreeNode = {
   entries: SurfaceEntry[];
   /** Methods stay in the data model (search / tools); not rendered as tree chips (#408 L5). */
   methods: string[];
-  /** Spec #384: highest v2 status among own entries (seen | touched | booked | …). */
+  /** Spec #384: highest v2 internal status among own entries (seen | touched | booked | …). */
   status?: string;
+  /** Spec #409: true when any own entry is inventory-new (false-safe). */
+  isNew?: boolean;
   leafCount: number;
   /** Entries under this node still in seen/touched (not terminal booked/deadend/skipped_roe). */
   unfinishedCount: number;
@@ -45,14 +48,17 @@ export type SurfaceTreeNode = {
   subtreeFindingTags: SurfaceFindingTag[];
 };
 
-/** Spec #408 L5: pure row chrome — methods off; collapsed parents use counts not tag stacks. */
+/** Spec #408 L5 + #409: pure row chrome — methods off; operator NEW/TESTED; collapsed parents use counts. */
 export type SurfaceTreeRowChrome = {
   showMethods: boolean;
   findingMode: "tags" | "count";
   tags: SurfaceFindingTag[];
   extraTagCount: number;
   findingCount: number;
+  /** Operator status chip (TESTED / terminals only — never SEEN/BOOK/PRIOR). */
   showStatusChip: boolean;
+  /** Inventory novelty badge (only when flagged). */
+  showNewBadge: boolean;
   unfinishedCount: number;
 };
 
@@ -66,6 +72,7 @@ function isUnfinishedSurfaceStatus(status?: string | null): boolean {
 /**
  * Decide what a Surface tree row should show.
  * Methods never chip on the tree by default; collapsed parents roll up to counts.
+ * Operator status: TESTED for touched family; no SEEN/BOOK; NEW only when flagged (#409).
  */
 export function surfaceTreeRowChrome(
   node: SurfaceTreeNode,
@@ -85,6 +92,7 @@ export function surfaceTreeRowChrome(
       findingCount: allPreview.length,
       // Max-status alone hides unfinished children — prefer unfinished count instead.
       showStatusChip: false,
+      showNewBadge: false,
       unfinishedCount,
     };
   }
@@ -93,7 +101,10 @@ export function surfaceTreeRowChrome(
   const tagsSource = hasChildren ? node.findingTags : allPreview;
   const tags = tagsSource.slice(0, 3);
   const extraTagCount = Math.max(0, tagsSource.length - tags.length);
-  const showStatusChip = Boolean(node.status && surfaceStatusLabel(node.status));
+  // Operator projection: empty label for seen/booked ⇒ no chip.
+  const showStatusChip = surfaceShowsStatusChip(node.status);
+  // Leaf novelty only (own entries / node flag); not subtree flood on expanded parents without own NEW.
+  const showNewBadge = Boolean(node.isNew);
 
   return {
     showMethods: false,
@@ -102,6 +113,7 @@ export function surfaceTreeRowChrome(
     extraTagCount,
     findingCount: tagsSource.length,
     showStatusChip,
+    showNewBadge,
     unfinishedCount,
   };
 }
@@ -129,6 +141,7 @@ export function entryOriginRootKey(entry: SurfaceEntry): string {
 function absorbEntryStatus(node: SurfaceTreeNode, entry: SurfaceEntry): void {
   const next = preferSurfaceStatus(node.status, entry.status);
   if (next) node.status = next;
+  if (entry.isNew) node.isNew = true;
 }
 
 function pathSegments(path: string): string[] {
@@ -635,7 +648,7 @@ function SurfaceTreeNodeRow({
               <span
                 className="shrink-0 font-mono text-[10px] text-ink-muted"
                 data-testid="surface-unfinished-count"
-                title="Surfaces still seen/touched under this branch"
+                title="Surfaces not yet TESTED (or only first-touch) under this branch"
               >
                 {chrome.unfinishedCount} unfinished
               </span>
@@ -649,8 +662,17 @@ function SurfaceTreeNodeRow({
                 {chrome.findingCount} finding{chrome.findingCount === 1 ? "" : "s"}
               </span>
             )}
-            {/* Spec #384: v2 status on leaf / expanded rows (not collapsed parent max-chip alone). */}
-            {chrome.showStatusChip && node.status && surfaceStatusLabel(node.status) && (
+            {/* Spec #409: NEW only when inventory novelty flag true (false-safe until #410). */}
+            {chrome.showNewBadge && (
+              <span
+                className="shrink-0 rounded bg-status-success/15 px-1 py-0.5 font-mono text-[10px] font-medium uppercase text-status-success"
+                data-testid="surface-new"
+              >
+                NEW
+              </span>
+            )}
+            {/* Spec #409: TESTED for touched family; never SEEN/BOOK/PRIOR; terminals muted. */}
+            {chrome.showStatusChip && surfaceStatusLabel(node.status) && (
               <span
                 className={`shrink-0 rounded px-1 py-0.5 font-mono text-[10px] font-medium uppercase ${surfaceStatusBadgeClass(node.status)}`}
                 data-testid="surface-status"

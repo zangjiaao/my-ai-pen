@@ -1,6 +1,6 @@
 /**
- * Spec #408 / surface-new-tested-coverage L5 — Surface tree UI density:
- * no method chips; collapsed parents use finding/unfinished counts (not method union or severity stacks).
+ * Spec #408 L5 density + #409 operator projection — Surface tree:
+ * no method chips; collapsed parents use counts; NEW + TESTED; no SEEN/BOOK/PRIOR.
  * Run: npx tsx src/components/SurfaceTreeView.test.tsx  (from platform/frontend)
  */
 import assert from "node:assert/strict";
@@ -13,7 +13,11 @@ import {
 } from "./SurfaceTreeView.tsx";
 import type { SurfaceEntry } from "../lib/surfaceModel.ts";
 import type { SurfaceFindingTag } from "../lib/findingKinds.ts";
-import { projectSurfaceEntriesFromLedger, type SurfaceLedger } from "../lib/surfaceModel.ts";
+import {
+  projectSurfaceEntriesFromLedger,
+  surfaceStatusLabel,
+  type SurfaceLedger,
+} from "../lib/surfaceModel.ts";
 
 function entry(partial: Partial<SurfaceEntry> & Pick<SurfaceEntry, "key" | "path">): SurfaceEntry {
   return {
@@ -99,7 +103,17 @@ function testCollapsedParentUsesCountsNotSeverityStackOrMaxStatus() {
   assert.equal(leafChrome.findingMode, "tags");
   assert.equal(leafChrome.tags.length, 1);
   assert.equal(leafChrome.tags[0]!.label, "high");
-  assert.equal(leafChrome.showStatusChip, true);
+  // Spec #409: seen → no status chip (quiet, not SEEN flood).
+  assert.equal(leafChrome.showStatusChip, false);
+
+  const leafB = origin.children.find((c) => c.path === "/b")!;
+  assert.equal(surfaceTreeRowChrome(leafB, { open: true }).showStatusChip, true);
+  assert.equal(surfaceStatusLabel(leafB.status), "TESTED");
+
+  const leafC = origin.children.find((c) => c.path === "/c")!;
+  // Booked: finding tags without BOOK status chip.
+  assert.equal(surfaceTreeRowChrome(leafC, { open: true }).showStatusChip, false);
+  assert.equal(surfaceTreeRowChrome(leafC, { open: true }).tags.length, 1);
 }
 
 function testRenderHasNoMethodChips() {
@@ -153,8 +167,55 @@ function testLedgerProjectionUnchanged() {
   assert.equal(surfaceTreeRowChrome(tree[0]!.children[0]!, { open: true }).showMethods, false);
 }
 
+function testOperatorChipsNewTestedNoSeenBook() {
+  const findingsByPath = new Map<string, SurfaceFindingTag[]>([
+    ["https://lab.example:443|/booked", [tag("f1", "high", "SQLi")]],
+  ]);
+  const entries = [
+    entry({ key: "https://lab.example:443|/quiet", path: "/quiet", status: "seen" }),
+    entry({ key: "https://lab.example:443|/tested", path: "/tested", status: "touched" }),
+    entry({ key: "https://lab.example:443|/booked", path: "/booked", status: "booked" }),
+    entry({ key: "https://lab.example:443|/novel", path: "/novel", status: "seen", isNew: true }),
+  ];
+  const roots = buildSurfaceTree(entries, findingsByPath);
+  const html = renderToStaticMarkup(
+    createElement(SurfaceTreeView, {
+      roots,
+      total: 4,
+    }),
+  );
+
+  // No operator SEEN / BOOK / PRIOR chips (status text nodes or data-status).
+  assert.ok(!html.includes('data-status="seen"'));
+  assert.ok(!html.includes('data-status="booked"'));
+  assert.ok(!html.includes('data-status="BOOK"'));
+  assert.ok(!html.includes('data-status="PRIOR"'));
+  assert.ok(!/>\s*seen\s*</i.test(html));
+  assert.ok(!/>\s*booked\s*</i.test(html));
+  assert.ok(!/>\s*BOOK\s*</.test(html));
+  assert.ok(!/>\s*PRIOR\s*</.test(html));
+  assert.ok(!/>\s*SEEN\s*</.test(html));
+
+  // TESTED for touched family.
+  assert.ok(html.includes('data-status="TESTED"') || html.includes(">TESTED<") || html.includes("TESTED"));
+  // NEW only when flagged.
+  assert.ok(html.includes('data-testid="surface-new"') || html.includes(">NEW<"));
+  // Booked path still shows finding severity tag.
+  assert.ok(html.includes(">high<") || html.includes("high"));
+
+  const byPath = new Map(roots[0]!.children.map((c) => [c.path, c]));
+  assert.equal(surfaceTreeRowChrome(byPath.get("/quiet")!, { open: true }).showStatusChip, false);
+  assert.equal(surfaceTreeRowChrome(byPath.get("/tested")!, { open: true }).showStatusChip, true);
+  assert.equal(surfaceStatusLabel(byPath.get("/tested")!.status), "TESTED");
+  assert.equal(surfaceTreeRowChrome(byPath.get("/booked")!, { open: true }).showStatusChip, false);
+  assert.equal(surfaceTreeRowChrome(byPath.get("/booked")!, { open: true }).tags.length, 1);
+  assert.equal(surfaceTreeRowChrome(byPath.get("/novel")!, { open: true }).showNewBadge, true);
+  assert.equal(surfaceTreeRowChrome(byPath.get("/quiet")!, { open: true }).showNewBadge, false);
+}
+
 testMethodsStayInModelButNotOnTreeChrome();
 testCollapsedParentUsesCountsNotSeverityStackOrMaxStatus();
 testRenderHasNoMethodChips();
 testLedgerProjectionUnchanged();
+testOperatorChipsNewTestedNoSeenBook();
 console.log("SurfaceTreeView.test.tsx: ok");

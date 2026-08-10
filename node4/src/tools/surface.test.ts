@@ -171,6 +171,8 @@ const tool = createSurfaceTool(runtime);
   assert.ok((r.data!.total as number) >= 3);
   assert.equal(typeof r.data!.seen, "number");
   assert.equal(typeof r.data!.touched, "number");
+  // Spec #409 light: operator alias tested = touched
+  assert.equal(r.data!.tested, r.data!.touched);
   assert.equal(typeof r.data!.booked, "number");
   assert.equal(typeof r.data!.deadend, "number");
   assert.equal(typeof r.data!.skipped_roe, "number");
@@ -184,6 +186,7 @@ const tool = createSurfaceTool(runtime);
   assert.ok(counts);
   assert.equal(counts.seen, r.data!.seen);
   assert.equal(counts.touched, r.data!.touched);
+  assert.equal(counts.tested, r.data!.touched);
   assert.equal(counts.booked, r.data!.booked);
   assert.equal(counts.deadend, r.data!.deadend);
   assert.equal(counts.skipped_roe, r.data!.skipped_roe);

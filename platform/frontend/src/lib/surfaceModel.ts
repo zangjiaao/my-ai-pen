@@ -29,8 +29,13 @@ export type SurfaceEntry = {
   isTarget?: boolean;
   /** Discovered later (SSRF/internal/out-of-scope probe) — not the user TARGET. */
   isDiscovered?: boolean;
-  /** Case surface_ledger status (v2: seen | touched | booked; legacy mapped on project). */
+  /** Case surface_ledger status (v2 internal: seen | touched | booked; legacy mapped on project). */
   status?: string;
+  /**
+   * Spec #409 / inventory novelty: true only when Case row / join flags first inventory admit.
+   * False-safe until durable inventory (#410) lands — absent/undefined ⇒ not NEW.
+   */
+  isNew?: boolean;
   /** URL scheme from origin_key (http/https/ssh/…). */
   scheme?: string;
   /**
@@ -90,18 +95,53 @@ export function preferSurfaceStatus(
   return rb > ra ? nb : na;
 }
 
-/** Display label for Surface UI (always v2 / retained terminal form). */
+/**
+ * Spec #409 / L1 L6 — operator-facing status chip label (not internal v2 write form).
+ *
+ * | Internal (normalize) | Operator chip |
+ * |----------------------|---------------|
+ * | touched (+ legacy in_probe/probed) | TESTED |
+ * | seen (+ legacy open) | *(none — quiet)* |
+ * | booked | *(none — finding tags only)* |
+ * | deadend / skipped_roe | retained muted terminal |
+ *
+ * Never returns SEEN, BOOK, BOOKED, or PRIOR.
+ */
 export function surfaceStatusLabel(status?: string | null): string {
-  return normalizeSurfaceStatus(status) || "";
+  const n = normalizeSurfaceStatus(status);
+  if (!n) return "";
+  if (n === "touched") return "TESTED";
+  if (n === "deadend") return "deadend";
+  if (n === "skipped_roe") return "skipped_roe";
+  // seen, booked: no operator status chip
+  return "";
 }
 
-/** Tailwind badge classes for Surface status chips. */
+/**
+ * True when operator UI should render a status chip for this internal status.
+ * Collapsed parents still suppress chips via tree chrome (#408).
+ */
+export function surfaceShowsStatusChip(status?: string | null): boolean {
+  return Boolean(surfaceStatusLabel(status));
+}
+
+/**
+ * Spec #409 — NEW badge only when novelty flag is explicitly true.
+ * Absent / null / unknown ⇒ false (safe until inventory #410).
+ */
+export function isSurfaceNew(row: { is_new?: unknown; isNew?: unknown } | null | undefined): boolean {
+  if (!row || typeof row !== "object") return false;
+  const flag = (row as { is_new?: unknown; isNew?: unknown }).is_new ?? (row as { isNew?: unknown }).isNew;
+  if (flag === undefined || flag === null || flag === "") return false;
+  return flag === true || flag === 1 || flag === "true" || flag === "1";
+}
+
+/** Tailwind badge classes for operator Surface status chips (TESTED / terminals). */
 export function surfaceStatusBadgeClass(status?: string | null): string {
   const n = normalizeSurfaceStatus(status);
-  if (n === "booked") return "bg-status-success/15 text-status-success";
   if (n === "touched") return "bg-status-running/12 text-status-running";
   if (n === "deadend" || n === "skipped_roe") return "bg-canvas-inset text-ink-muted";
-  // seen (and unknown fallback when caller still passes a label)
+  // Fallback when a label is still rendered (should not be seen/booked after #409)
   return "bg-canvas-inset text-ink-secondary";
 }
 
@@ -254,6 +294,8 @@ export function projectSurfaceEntriesFromLedger(ledger: SurfaceLedger | null | u
       method: methods.length ? methods.join(",") : existing.method,
       source: existing.source || entry.source,
       status: preferSurfaceStatus(existing.status, entry.status) || existing.status || entry.status,
+      // Novelty is sticky true once any merge source flags it (false-safe default).
+      isNew: Boolean(existing.isNew || entry.isNew),
       title: existing.title || entry.title,
     });
   }
@@ -329,9 +371,12 @@ export function ledgerRowToSurfaceEntry(row: SurfaceLedgerRow): SurfaceEntry | n
   // Tree root identity = origin_key (scheme://host:port), not bare host.
   entry.assetKey = entry.originKey;
   entry.assetLabel = originKeyNorm;
-  // Spec #384: project v2 labels; map legacy open/in_probe/probed for display.
+  // Spec #384: project v2 internal status; map legacy open/in_probe/probed.
+  // Operator chips (TESTED / quiet / no BOOK) apply at display via surfaceStatusLabel (#409).
   const status = normalizeSurfaceStatus(row.status);
   if (status) entry.status = status;
+  // Spec #409: NEW only when ledger/join explicitly flags first inventory admit (false-safe).
+  if (isSurfaceNew(row)) entry.isNew = true;
   return entry;
 }
 

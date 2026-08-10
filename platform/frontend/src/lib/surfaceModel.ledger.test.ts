@@ -1,6 +1,6 @@
 /**
- * Spec #375 D10 / #384 — FE Surface panel projects Case surface_ledger only;
- * v2 status presentation (seen / touched / booked) with legacy map.
+ * Spec #375 D10 / #384 / #409 — FE Surface panel projects Case surface_ledger only;
+ * internal v2 status (seen/touched/booked); operator chips NEW + TESTED (no SEEN/BOOK).
  */
 import assert from "node:assert/strict";
 import {
@@ -8,15 +8,17 @@ import {
   collectSurfaceEntries,
   emptySurfaceLedger,
   ensureSurfaceLedger,
+  isSurfaceNew,
   normalizeSurfaceStatus,
   parseEngagementTargets,
   preferSurfaceStatus,
   projectSurfaceEntriesFromLedger,
+  surfaceShowsStatusChip,
   surfaceStatusLabel,
   upsertSurfaceLedger,
   type SurfaceLedger,
 } from "./surfaceModel.ts";
-import { buildSurfaceTree } from "../components/SurfaceTreeView.tsx";
+import { buildSurfaceTree, surfaceTreeRowChrome } from "../components/SurfaceTreeView.tsx";
 
 function testEmptyLedgerProjectsEmpty() {
   const empty = emptySurfaceLedger();
@@ -83,7 +85,7 @@ function testLedgerRowsProjectToInventory() {
 }
 
 function testLegacyStatusMapsToV2Presentation() {
-  // Spec #379 / #384: open→seen, in_probe/probed→touched, booked→booked.
+  // Spec #379 / #384: open→seen, in_probe/probed→touched, booked→booked (internal).
   assert.equal(normalizeSurfaceStatus("open"), "seen");
   assert.equal(normalizeSurfaceStatus("  Open "), "seen");
   assert.equal(normalizeSurfaceStatus("in_probe"), "touched");
@@ -94,8 +96,11 @@ function testLegacyStatusMapsToV2Presentation() {
   assert.equal(normalizeSurfaceStatus("deadend"), "deadend");
   assert.equal(normalizeSurfaceStatus("skipped_roe"), "skipped_roe");
   assert.equal(normalizeSurfaceStatus("nope"), undefined);
-  assert.equal(surfaceStatusLabel("open"), "seen");
-  assert.equal(surfaceStatusLabel("probed"), "touched");
+  // Spec #409 operator labels (not raw v2 strings).
+  assert.equal(surfaceStatusLabel("open"), "");
+  assert.equal(surfaceStatusLabel("probed"), "TESTED");
+  assert.equal(surfaceStatusLabel("touched"), "TESTED");
+  assert.equal(surfaceStatusLabel("booked"), "");
 
   const ledger: SurfaceLedger = {
     version: 1,
@@ -146,7 +151,118 @@ function testLegacyStatusMapsToV2Presentation() {
   assert.equal(byPath.get("/b")?.status, "touched");
   assert.equal(byPath.get("/c")?.status, "touched");
   assert.equal(byPath.get("/d")?.status, "booked");
-  assert.equal(surfaceStatusLabel(byPath.get("/a")?.status), "seen");
+  // Operator: seen quiet, touched → TESTED.
+  assert.equal(surfaceStatusLabel(byPath.get("/a")?.status), "");
+  assert.equal(surfaceStatusLabel(byPath.get("/b")?.status), "TESTED");
+}
+
+/** Spec #409 — operator status label map + NEW false-safe projection. */
+function testOperatorStatusProjectionNewTestedNoBook() {
+  // Internal normalize stays expand–contract for Graph/gates.
+  assert.equal(normalizeSurfaceStatus("seen"), "seen");
+  assert.equal(normalizeSurfaceStatus("touched"), "touched");
+  assert.equal(normalizeSurfaceStatus("booked"), "booked");
+
+  // Operator chips.
+  assert.equal(surfaceStatusLabel("seen"), "");
+  assert.equal(surfaceStatusLabel("open"), "");
+  assert.equal(surfaceStatusLabel("touched"), "TESTED");
+  assert.equal(surfaceStatusLabel("in_probe"), "TESTED");
+  assert.equal(surfaceStatusLabel("probed"), "TESTED");
+  assert.equal(surfaceStatusLabel("booked"), "");
+  assert.equal(surfaceStatusLabel("deadend"), "deadend");
+  assert.equal(surfaceStatusLabel("skipped_roe"), "skipped_roe");
+  assert.equal(surfaceStatusLabel(undefined), "");
+  assert.equal(surfaceStatusLabel("PRIOR"), "");
+  assert.equal(surfaceStatusLabel("prior"), "");
+
+  assert.equal(surfaceShowsStatusChip("seen"), false);
+  assert.equal(surfaceShowsStatusChip("touched"), true);
+  assert.equal(surfaceShowsStatusChip("booked"), false);
+  assert.equal(surfaceShowsStatusChip("deadend"), true);
+
+  // NEW false-safe until inventory flag present.
+  assert.equal(isSurfaceNew(undefined), false);
+  assert.equal(isSurfaceNew({}), false);
+  assert.equal(isSurfaceNew({ is_new: false }), false);
+  assert.equal(isSurfaceNew({ is_new: true }), true);
+  assert.equal(isSurfaceNew({ is_new: "true" }), true);
+  assert.equal(isSurfaceNew({ isNew: true }), true);
+  assert.equal(isSurfaceNew({ is_new: 0 }), false);
+
+  const ledger: SurfaceLedger = {
+    version: 1,
+    surfaces: [
+      {
+        origin_key: "https://op.example:443",
+        path_key: "/quiet",
+        location: "https://op.example/quiet",
+        kind: "url",
+        status: "seen",
+      },
+      {
+        origin_key: "https://op.example:443",
+        path_key: "/tested",
+        location: "https://op.example/tested",
+        kind: "url",
+        status: "touched",
+      },
+      {
+        origin_key: "https://op.example:443",
+        path_key: "/booked",
+        location: "https://op.example/booked",
+        kind: "url",
+        status: "booked",
+      },
+      {
+        origin_key: "https://op.example:443",
+        path_key: "/novel",
+        location: "https://op.example/novel",
+        kind: "url",
+        status: "seen",
+        is_new: true,
+      },
+      {
+        origin_key: "https://op.example:443",
+        path_key: "/old",
+        location: "https://op.example/old",
+        kind: "url",
+        status: "touched",
+        is_new: false,
+      },
+    ],
+  };
+  const entries = projectSurfaceEntriesFromLedger(ledger);
+  assert.equal(entries.find((e) => e.path === "/quiet")!.isNew, undefined);
+  assert.equal(entries.find((e) => e.path === "/novel")!.isNew, true);
+  assert.equal(entries.find((e) => e.path === "/old")!.isNew, undefined);
+  assert.equal(entries.find((e) => e.path === "/old")!.status, "touched");
+
+  const tree = buildSurfaceTree(entries);
+  const byPath = new Map(tree[0]!.children.map((c) => [c.path, c]));
+
+  const quietChrome = surfaceTreeRowChrome(byPath.get("/quiet")!, { open: true });
+  assert.equal(quietChrome.showStatusChip, false, "seen → no SEEN chip");
+  assert.equal(quietChrome.showNewBadge, false);
+
+  const testedChrome = surfaceTreeRowChrome(byPath.get("/tested")!, { open: true });
+  assert.equal(testedChrome.showStatusChip, true);
+  assert.equal(surfaceStatusLabel(byPath.get("/tested")!.status), "TESTED");
+  assert.equal(testedChrome.showNewBadge, false);
+
+  const bookedChrome = surfaceTreeRowChrome(byPath.get("/booked")!, { open: true });
+  assert.equal(bookedChrome.showStatusChip, false, "booked → no BOOK chip");
+  assert.equal(surfaceStatusLabel(byPath.get("/booked")!.status), "");
+
+  const novelChrome = surfaceTreeRowChrome(byPath.get("/novel")!, { open: true });
+  assert.equal(novelChrome.showNewBadge, true);
+  assert.equal(novelChrome.showStatusChip, false, "NEW seen row not TESTED yet");
+  assert.equal(byPath.get("/novel")!.isNew, true);
+
+  const oldChrome = surfaceTreeRowChrome(byPath.get("/old")!, { open: true });
+  assert.equal(oldChrome.showNewBadge, false);
+  assert.equal(oldChrome.showStatusChip, true);
+  assert.equal(surfaceStatusLabel(byPath.get("/old")!.status), "TESTED");
 }
 
 function testDirtyAssetsDoNotSeedProjection() {
@@ -292,8 +408,10 @@ function testLiveUpsertUpdatesStatusDisplayWithoutDowngrade() {
   const pathNode = tree[0]?.children.find((c) => c.path === "/pay");
   assert.ok(pathNode);
   assert.equal(tree[0]!.nodeKind, "origin");
+  // Internal status remains booked for gates; operator chip suppressed (#409).
   assert.equal(pathNode!.status, "booked");
-  assert.equal(surfaceStatusLabel(pathNode!.status), "booked");
+  assert.equal(surfaceStatusLabel(pathNode!.status), "");
+  assert.equal(surfaceTreeRowChrome(pathNode!, { open: true }).showStatusChip, false);
 }
 
 function testEmptyVsSettledPresentation() {
@@ -373,6 +491,7 @@ function testFindingsBadgeOnlyMatchingLedgerPaths() {
 testEmptyLedgerProjectsEmpty();
 testLedgerRowsProjectToInventory();
 testLegacyStatusMapsToV2Presentation();
+testOperatorStatusProjectionNewTestedNoBook();
 testDirtyAssetsDoNotSeedProjection();
 testLiveUpsertMergesByIdentity();
 testLiveUpsertUpdatesStatusDisplayWithoutDowngrade();
