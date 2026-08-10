@@ -308,11 +308,33 @@ Standing-first language tests; Graph L1 catalog injection tests; skill L1 no-bod
 
 Pack authors: the experts catalog README points here — see [`experts/README.md`](../../experts/README.md) (**Pack authoring (system prompt layers)**). Pack files map as: `mission.md` + `work.md` → Profession; `skills/` → progressive skill bodies (not always-on Profession). Platform citizen is **not** authored in pack files — `load-pack` prepends it into mission lines (appears in Profession string until Option A).
 
+### 10.1 Expert pack author checklist
+
+Short checklist for pack authors (Spec [#386](https://github.com/zangjiaao/my-ai-pen/issues/386); polish [#405](https://github.com/zangjiaao/my-ai-pen/issues/405)):
+
+| File | Duty |
+|------|------|
+| **`mission.md`** | **Identity** — who this seat is / job boundary. Keep short. |
+| **`work.md`** | **Hard rules only** — start order, proof bar, deadend/rotate, fact/surface vs finding pointers. Prefer ≤ ~2–3k chars. |
+| **`skills/*/SKILL.md`** | **Class depth** — procedure for one attack class or recon entry. Progressive load; not always-on Profession. |
+
+**Do:**
+
+1. **Opening skills mutually exclusive** — each entry skill’s *When to load* / *When not to load* must not both claim the same default start (e.g. app recon vs host/port enum). Align with work.md “at most one” start order.
+2. **Skill when / not load** — every methodology skill states both; agents route from observed surface, not a coverage checklist.
+3. **Free/Graph pointer in work** — one short line only: mode / Graph catalog live in **Runtime** (host). No Free multi-phase todo maps or Graph dual dump in always-on Profession.
+
+**Do not put in `work.md`:**
+
+- Platform-citizen / next_steps / handoff longform (host injects at pack load — §3.3.1).
+- Graph settlement law (host-owned stage settlement, packages[], `plan_node_id` ceremony, stage success encyclopedias).
+- Attack-class procedure bodies (those are skills).
+
 ---
 
 ## 11. References
 
-- Issue [#386](https://github.com/zangjiaao/my-ai-pen/issues/386) and implementation tickets [#387](https://github.com/zangjiaao/my-ai-pen/issues/387)–[#392](https://github.com/zangjiaao/my-ai-pen/issues/392); follow-ups [#393](https://github.com/zangjiaao/my-ai-pen/issues/393)–[#395](https://github.com/zangjiaao/my-ai-pen/issues/395) (seam purity / compact Profession / Spec-honest citizen+RoE homes)  
+- Issue [#386](https://github.com/zangjiaao/my-ai-pen/issues/386) and implementation tickets [#387](https://github.com/zangjiaao/my-ai-pen/issues/387)–[#392](https://github.com/zangjiaao/my-ai-pen/issues/392); follow-ups [#393](https://github.com/zangjiaao/my-ai-pen/issues/393)–[#395](https://github.com/zangjiaao/my-ai-pen/issues/395) (seam purity / compact Profession / Spec-honest citizen+RoE homes); author checklist polish [#405](https://github.com/zangjiaao/my-ai-pen/issues/405)  
 - ADR 0001 Graph × Pi  
 - Specs: participant-session (#277), graph-catalog-work-mode-ui (#278), composer-graph-harness-bind (#284), hypothesis-evidence (#274), harness, task-graph  
 - `CONTEXT.md` product seats / work mode / Expert Graph  

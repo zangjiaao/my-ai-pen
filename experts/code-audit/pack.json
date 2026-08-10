@@ -22,5 +22,5 @@
     "code-runtime-handoff"
   ],
   "bookingMode": "finding",
-  "settlementNote": "Book code issues with file location and proof excerpts. Suggest runtime verify handoff to application security when needed. No finish tool."
+  "settlementNote": "Book code issues with file location and proof excerpts. Runtime verify seat change: platform_list_experts → request_user_decision(kind=handoff); chat suggest only when not requesting seat change. No finish tool."
 }

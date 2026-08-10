@@ -19,7 +19,7 @@
     },
     {
       "id": "consult",
-      "label": "Consult → alias of default (builtin)",
+      "label": "LEGACY alias of default (not Profession SoT; resolve→default)",
       "aliases": []
     },
     {

@@ -302,12 +302,12 @@ export function buildPromptLayers(
   }
   if (pack.toolNames.includes("fact")) {
     runtimeParts.push(
-      "Process facts (fact tool): write confirmed cognition immediately (ports/auth/deadends); separate from finding booking; list is index-only — get body before relying on detail.",
+      "Process facts (fact tool): write confirmed cognition now (ports/auth/deadends); ≠ finding; list=index — get body for detail.",
     );
   }
   if (pack.toolNames.includes("surface")) {
     runtimeParts.push(
-      "Attack surface (surface tool): use summary/list/get for coverage (seen/touched/booked counts + samples; list page ≤200). Ledger fills from Traffic settle + TARGET seed; finding(confirm) marks booked. upsert is optional corrective only — not required registration. Prefer over fact(op=surface).",
+      "Attack surface (surface tool): summary|list|get for coverage; ledger from Traffic settle + TARGET seed; confirm→booked; upsert optional corrective only (prefer over fact(op=surface)).",
     );
   }
   if (pack.recipeDir) {

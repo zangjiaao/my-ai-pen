@@ -252,10 +252,10 @@ assert.notEqual(stageTw, stageCn);
     layers.profession.length < freeLayers.profession.length,
     `stage compact Profession shorter than Free full (compact=${layers.profession.length} full=${freeLayers.profession.length})`,
   );
-  // Compact must not re-ship Free work-mode pointer as always-on profession
+  // Compact must not re-ship Free work-mode pointer as always-on profession (#405)
   assert.doesNotMatch(
     layers.profession,
-    /Default Expert mode is \*\*Free\*\*/,
+    /Mode \/ Graph catalog live in \*\*Runtime\*\*|Default Expert mode is \*\*Free\*\*/i,
     "compact Profession drops Free-mode work.md pointer",
   );
 
