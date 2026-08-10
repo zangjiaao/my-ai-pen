@@ -4,4 +4,4 @@
 export * from "../lib/surfaceModel";
 export * from "../lib/findingKinds";
 export { SurfaceTreeView, buildSurfaceTree } from "./SurfaceTreeView";
-export type { SurfaceTreeNode, SurfaceKindFilter } from "./SurfaceTreeView";
+export type { SurfaceTreeNode, SurfaceViewFilter, SurfaceKindFilter } from "./SurfaceTreeView";

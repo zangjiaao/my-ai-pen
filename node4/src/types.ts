@@ -130,8 +130,16 @@ export type ToolRuntime = {
   skillIds?: readonly string[];
   /** Process cognition facts (taskDir/facts) — separate from finding booking. */
   processFacts?: import("./stores/process-fact.js").ProcessFactStore;
-  /** Attack-surface ledger (taskDir/surfaces/ledger.json) — recon coverage truth. */
+  /**
+   * Legacy JSON surface ledger (taskDir/surfaces/ledger.json).
+   * Prefer surfaceSqlite for gates; kept for migrate/tests only (#371).
+   */
   surfaceLedger?: import("./stores/surface-ledger.js").SurfaceLedgerStore;
+  /**
+   * Case Surface working store (taskDir/surfaces/ledger.sqlite) — Agent tool + Graph gate SoT (#370–#371).
+   * Offline ok without Platform. Online dual-write (#374) via surface_upsert when platformApi set.
+   */
+  surfaceSqlite?: import("./stores/surface-sqlite.js").SurfaceSqliteStore;
   lifecycle: {
     toolsInLastSegment?: number;
     /** Set on failed todo apply; consumed by next harness continue injection. */

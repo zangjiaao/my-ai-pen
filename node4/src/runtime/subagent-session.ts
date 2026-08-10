@@ -36,8 +36,13 @@ import {
   type IdleSubagentHandle,
   type SubagentIdlePool,
 } from "./subagent-idle-pool.js";
-import { formatAgentLanguageInjection } from "./agent-language.js";
 import { extractLlmTurnError, LlmTurnError } from "./llm-turn-error.js";
+// Package worker system-prompt layers live in the canonical prompt module (#393).
+import {
+  buildSubagentPromptLayers,
+  buildSubagentSystemPrompt,
+  type BuildSubagentPromptOptions,
+} from "./prompt.js";
 import {
   attachWorkerProcessStream,
   emitWorkerPackageDelivery,
@@ -46,6 +51,13 @@ import {
   newPackageTurnId,
   setWorkerAuditScope,
 } from "./worker-audit-channel.js";
+
+// Thin re-exports for test / harness import stability (#393).
+export {
+  buildSubagentPromptLayers,
+  buildSubagentSystemPrompt,
+  type BuildSubagentPromptOptions,
+};
 
 /** Act tools for child workers — no subagent, finding, goal, or platform ledger. */
 export const SUBAGENT_CHILD_TOOL_NAMES = [
@@ -59,6 +71,7 @@ export const SUBAGENT_CHILD_TOOL_NAMES = [
   "browser",
   "script",
   "fact",
+  "surface",
   "skill",
 ] as const;
 
@@ -262,45 +275,6 @@ async function collectStructuredResult(input: {
     "utf8",
   );
   return { structured, salvaged };
-}
-
-/**
- * Pure subagent system-prompt assembly (#134 / #137 / #352).
- * Standing language policy first (shared formatter), then mission/work.
- * Exported for harness contract tests.
- */
-export function buildSubagentSystemPrompt(options: {
-  pack: Pick<RolePack, "missionLines" | "workLines" | "toolNames">;
-  parentPackId: string;
-  nodeType?: string;
-  skillId?: string;
-  skillBody?: string;
-  childTask: Pick<TaskEnvelope, "target" | "scope" | "agentLanguage">;
-}): string {
-  const { pack, parentPackId, childTask } = options;
-  const nodeLabel = options.nodeType ? `node_type=${options.nodeType}` : "node_type=(free)";
-  return [
-    // Standing language policy first (#352) — before mission/work.
-    formatAgentLanguageInjection(childTask.agentLanguage),
-    "",
-    ...pack.missionLines,
-    "",
-    ...pack.workLines,
-    "",
-    `Parent pack: ${parentPackId}. ${nodeLabel}.`,
-    `Tools: ${pack.toolNames.join(", ")}.`,
-    "",
-    formatSubagentReturnContractPrompt(),
-    "",
-    options.skillBody
-      ? `## Loaded skill (${options.skillId})\n${options.skillBody}`
-      : options.skillId
-        ? `## Skill\nRequested skill_id=${options.skillId} was not loaded; use skill tool if needed.`
-        : "Load at most one skill via skill(op=load) if methodology helps.",
-    "",
-    `Target envelope: ${JSON.stringify(childTask.target)}`,
-    `Scope envelope: ${JSON.stringify(childTask.scope)}`,
-  ].join("\n");
 }
 
 function buildUserPrompt(assignment: string, sessionSeeded: boolean, resume: boolean): string {
@@ -634,6 +608,9 @@ async function runColdPackage(args: {
     skills: skillStore,
     skillIds: pack.skillIds,
     processFacts,
+    // Same Case surface ledger as Main (Spec #370/#383) — Worker shares store; fill is Traffic settle + seed.
+    surfaceLedger: parent.surfaceLedger,
+    surfaceSqlite: parent.surfaceSqlite,
     lifecycle: {
       toolsInLastSegment: 0,
       recentObservations: [],

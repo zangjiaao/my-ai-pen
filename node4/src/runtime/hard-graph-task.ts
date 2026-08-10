@@ -29,6 +29,7 @@ import { PanelAgentTracker } from "./panel-agents.js";
 import { GoalStore } from "../stores/goal.js";
 import { ensureProcessQuality } from "./package-honesty-host.js";
 import { seedPriorsAtGraphStart } from "./prior-seed.js";
+import { seedSurfacesFromTargetAtTaskStart } from "./surface-target-seed.js";
 import { buildEngagementCloseout, writeEngagementCloseout } from "./engagement-closeout.js";
 import {
   createGraphRunQualityState,
@@ -317,6 +318,15 @@ export async function runHardGraphExpertTask(options: {
   );
   graphQuality.priorSeed = priorSeed;
 
+  // Spec #381 / D8: TARGET + scope.allow → Surface seen (idempotent if session-runner already seeded).
+  await seedSurfacesFromTargetAtTaskStart(parentRuntime).catch((err) => {
+    console.warn(
+      `[node4] surface target seed (hard-graph) failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  });
+
   // Spec #278: task_start carries Session actual Graph mode for AgentRow + dual-rail.
   await platform.send({
     type: "task_start",
@@ -455,7 +465,8 @@ export async function runHardGraphExpertTask(options: {
       priorSeed: gq.priorSeed,
       unbookable: gq.unbookable,
       l1ByStage: gq.l1ByStage,
-      surfaceSummary: parentRuntime.surfaceLedger?.summary?.() as
+      surfaceSummary: ((await parentRuntime.surfaceSqlite?.summary?.()) ??
+        parentRuntime.surfaceLedger?.summary?.()) as
         | { total?: number; by_status?: Record<string, number>; sample_paths?: string[] }
         | undefined,
       hypothesis_summary,
@@ -493,14 +504,25 @@ export async function runHardGraphExpertTask(options: {
     agent_count: panel.list().length,
   });
 
-  // Spec #311: Hard settle emits Workset proposed from open surfaces + finding locations.
-  let openSurfaces: import("../stores/surface-ledger.js").SurfaceItem[] = [];
+  // Spec #311 / #371: Hard settle emits Workset proposed from open surfaces + finding locations.
+  // SQLite working store is coverage SoT; legacy JSON only for partial test runtimes.
+  let openSurfaces: Array<{
+    location: string;
+    path_key: string;
+    kind?: string;
+    status: string;
+  }> = [];
   let locationStrings: string[] = [];
   try {
-    const ledger = parentRuntime.surfaceLedger;
-    if (ledger) {
-      await ledger.load().catch(() => undefined);
-      openSurfaces = ledger.listOpen();
+    if (parentRuntime.surfaceSqlite) {
+      await parentRuntime.surfaceSqlite.open().catch(() => undefined);
+      openSurfaces = await parentRuntime.surfaceSqlite.listOpen();
+    } else {
+      const ledger = parentRuntime.surfaceLedger;
+      if (ledger) {
+        await ledger.load().catch(() => undefined);
+        openSurfaces = ledger.listOpen();
+      }
     }
   } catch {
     openSurfaces = [];

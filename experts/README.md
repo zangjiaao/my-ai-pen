@@ -7,12 +7,14 @@ Independent **expert pack** units maintained outside the Node harness.
 **Product:** [`docs/prd.md`](../docs/prd.md) · **Cleanup plan:** [`docs/project-cleanup-plan.md`](../docs/project-cleanup-plan.md)  
 (Experts = target families; stages = skills; pipeline = Case + user @ — not stage-named Experts.)
 
+**Pack authoring (system prompt layers):** Product Agent system prompts assemble as **Base → Profession → Runtime → Task**. Pack `mission.md` / `work.md` are the **Profession** layer (seat how-to only). Put Free vs Graph harness and tool catalogs in **Runtime** (host-owned), this-turn facts in **Task**, and attack-class procedure depth in **skill bodies**—not always-on Profession. Do **not** re-author platform-citizen / next_steps longform in `work.md` — host prepends citizen into mission at pack load (appears in Profession today; not yet a separate Base string — Spec [#395](https://github.com/zangjiaao/my-ai-pen/issues/395) / [`prompt-layers.md`](../docs/specs/prompt-layers.md) §3.3.1). Rule of thumb, ownership table, and **expert pack author checklist** (`mission` = identity · `work` = hard rules short · skills = class depth; opening-skill mutual exclusion; no citizen/Graph law in work): [`docs/specs/prompt-layers.md`](../docs/specs/prompt-layers.md) §3 / §10 / §10.1 (Spec [#386](https://github.com/zangjiaao/my-ai-pen/issues/386) · [#405](https://github.com/zangjiaao/my-ai-pen/issues/405)).
+
 | Path | Role |
 |------|------|
 | `experts/<id>/pack.json` | Identity, tools, skills, aliases, booking mode |
-| `experts/<id>/mission.md` | Mission lines (system prompt) |
-| `experts/<id>/work.md` | How-to-work lines |
-| `experts/<id>/skills/` | Pack-scoped methodology skills |
+| `experts/<id>/mission.md` | Mission lines (system prompt **Profession** layer) |
+| `experts/<id>/work.md` | How-to-work lines (**Profession** core; keep short — see prompt-layers Spec) |
+| `experts/<id>/skills/` | Pack-scoped methodology skills (progressive load; not always-on Profession) |
 | `experts/<id>/recipes/` | Optional non-answer templates |
 | `experts/<id>/refs/` | Optional on-demand payload/component cards (pentest: `refs/payloads`, `refs/components`) |
 | `experts/<id>/CHANGELOG.md` | Pack release notes (versioning; L2 sandbox notes when relevant) |
@@ -48,7 +50,7 @@ npx tsx src/expert-cli.ts uninstall ctf
 - **install** copies `experts/<id>` → install root only.
 - **uninstall** removes only that install-root copy; cannot “uninstall” built-in `default`.
 - Explicit **expert** `engagement`/`role` must match an **installed** pack or the task is blocked.
-- `consult` catalog entry → **alias / migration path to `default`**.
+- `consult` catalog entry → **legacy alias / migration path to built-in `default`**. **Not** product Profession SoT (Default mission/work live in `node4/src/roles/default.ts`). Do not expand `experts/consult/` as a parallel assistant; runtime resolve already maps `consult` → `default`.
 
 Platform `offers` remains permission/billing for **expert** packs; Node install is independent for lab comparison.
 
@@ -61,7 +63,7 @@ Remote marketplace / network hot-load is out of scope.
 | `default` | **Target built-in seat** (workspace assistant); not a commercial Expert instance |
 | `pentest` | Application security (Web/API); product Expert Graph template `app_assessment` |
 | `ctf` | CTF web player |
-| `consult` | **Legacy alias → `default`** (stub pack during migration) |
+| `consult` | **LEGACY alias → built-in `default`** only — **not** product Profession SoT; do not maintain as parallel assistant |
 | `llm-security` | Model and Agent security (Guide + DeepTeam methodology skills) |
 | `code-audit` | Source code assessment (Argo-style validate / partition) |
 | `alert-triage` | Alert / detection triage + purple replay (Guide) |

@@ -597,9 +597,22 @@ export function createFindingTool(runtime: ToolRuntime): AgentTool<any> {
           storeFindingId: storeFindingId || undefined,
           relatedPriorId,
         });
-        // Coverage ledger: mark matching surface booked
+        // Coverage ledger: mark matching surface booked (SQLite SoT #371 / #382; legacy fallback for tests)
         try {
-          await runtime.surfaceLedger?.markBooked(location);
+          if (runtime.surfaceSqlite) {
+            await runtime.surfaceSqlite.open();
+            const affected = resolveAffectedHostPort(location, runtime.task);
+            const locPort = parseHostPort(location).port;
+            const bookPort = locPort || affected.port;
+            await runtime.surfaceSqlite.markBooked(location, {
+              host: affected.host || undefined,
+              port: bookPort || undefined,
+              proof: proofText || undefined,
+              proofExcerpts,
+            });
+          } else {
+            await runtime.surfaceLedger?.markBooked(location);
+          }
         } catch {
           /* non-fatal */
         }

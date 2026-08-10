@@ -1,15 +1,24 @@
 /**
  * Probe-stage harness: narration + prefer packages (#101).
  * Language policy injection on stage + free/subagent parity (#134 / #137).
+ * Prompt layers T4: Graph stage on same seam + Profession core (#390).
  * Run: npx tsx src/runtime/hard-graph-stage-prompts.test.ts
  */
 import assert from "node:assert/strict";
-import { stageSystemPrompt, stageUserPrompt } from "./hard-graph-stage-executor.js";
+import { stageUserPrompt } from "./hard-graph-stage-executor.js";
 import type { StageExecutorInput } from "./hard-graph-runner.js";
-import { buildSystemPrompt } from "./prompt.js";
-import { buildSubagentSystemPrompt } from "./subagent-session.js";
+import {
+  assembleSystemPrompt,
+  buildPromptLayers,
+  buildStagePromptLayers,
+  buildSubagentSystemPrompt,
+  buildSystemPrompt,
+  stageSystemPrompt,
+} from "./prompt.js";
 import { PENTEST_ROLE_PACK } from "../roles/index.js";
 import type { TaskEnvelope } from "../types.js";
+
+const pack = PENTEST_ROLE_PACK;
 
 const baseStage = {
   id: "class_probe",
@@ -42,7 +51,7 @@ const task = {
   scope: {},
 } as any;
 
-const sys = stageSystemPrompt(inputWithSub, task);
+const sys = stageSystemPrompt(inputWithSub, task, pack);
 assert.match(sys, /narrate progress/i, "encourages short narration");
 assert.match(sys, /Prefer packages/i, "prefer packages when multi-class");
 assert.doesNotMatch(sys, /exactly \d+ packages/i, "no fixed package count");
@@ -55,18 +64,22 @@ assert.match(sys, /process-chore|Write result\.json/i);
 assert.match(sys, /node policy: auto/, "stage unset language → auto policy");
 assert.ok(sys.startsWith("## Standing node policies"), "stage unset Standing-first");
 
-// Spec #274 review: typed StagePromptExtras — injections land when set on input
+// Spec #274 / #394: typed StagePromptExtras — hyp queue only in Runtime when hyp mode on
 const inputWithExtras: typeof inputWithSub & {
   priorSnapshot?: string;
   hypothesisQueueInjection?: string;
   skillL1CatalogInjection?: string;
 } = {
   ...inputWithSub,
+  // hyp mode on so queue injection has a single Runtime home (#394)
+  stage: { ...baseStage, hypothesis_work_mode: true, tools: { allow: ["todo", "shell", "subagent", "hypothesis"] } } as any,
+  tools: ["todo", "shell", "subagent", "hypothesis"],
+  toolProfile: { allow: ["todo", "shell", "subagent", "hypothesis"] },
   priorSnapshot: "<prior-finding-store>\nempty_prior: true\n</prior-finding-store>",
   hypothesisQueueInjection: "<hypothesis-queue>\nactive_n=0\n</hypothesis-queue>",
   skillL1CatalogInjection: "<skill-l1-catalog>\ncount=0\n</skill-l1-catalog>",
 };
-const sysExtras = stageSystemPrompt(inputWithExtras, task);
+const sysExtras = stageSystemPrompt(inputWithExtras, task, pack);
 assert.match(sysExtras, /prior-finding-store/);
 assert.match(sysExtras, /hypothesis-queue/);
 assert.match(sysExtras, /skill-l1-catalog/);
@@ -81,7 +94,7 @@ const noSub: StageExecutorInput = {
   tools: ["todo", "write"],
   toolProfile: { allow: ["todo", "write"] },
 };
-const sysNo = stageSystemPrompt(noSub, task);
+const sysNo = stageSystemPrompt(noSub, task, pack);
 assert.doesNotMatch(sysNo, /Prefer packages/i, "no package steer without subagent tool");
 assert.match(sysNo, /narrate/i, "narration still encouraged");
 
@@ -97,7 +110,7 @@ const baseTask: TaskEnvelope = {
 
 for (const code of ["zh-TW", "ja", "zh-CN", "en", "auto"] as const) {
   const t = { ...baseTask, agentLanguage: code };
-  const stagePrompt = stageSystemPrompt(inputWithSub, t);
+  const stagePrompt = stageSystemPrompt(inputWithSub, t, pack);
   const freePrompt = buildSystemPrompt(t, PENTEST_ROLE_PACK);
   const subPrompt = buildSubagentSystemPrompt({
     pack: {
@@ -135,10 +148,145 @@ for (const code of ["zh-TW", "ja", "zh-CN", "en", "auto"] as const) {
   assert.match(stagePrompt, /Do not rewrite.*raw tool stdout/i, `stage raw-tool non-rewrite for ${code}`);
 }
 // Distinct zh-TW vs zh-CN on stage
-const stageTw = stageSystemPrompt(inputWithSub, { ...baseTask, agentLanguage: "zh-TW" });
-const stageCn = stageSystemPrompt(inputWithSub, { ...baseTask, agentLanguage: "zh-CN" });
+const stageTw = stageSystemPrompt(inputWithSub, { ...baseTask, agentLanguage: "zh-TW" }, pack);
+const stageCn = stageSystemPrompt(inputWithSub, { ...baseTask, agentLanguage: "zh-CN" }, pack);
 assert.match(stageTw, /Traditional Chinese/);
 assert.match(stageCn, /Simplified Chinese/);
 assert.notEqual(stageTw, stageCn);
+
+// --- #390 T4 / #394: Profession-core contract markers on Graph stage (prompt-layers.md §6) ---
+// Markers: existing English rule phrases from experts/pentest/work.md + mission.md
+// (pack loader drops markdown headings). Compact Profession keeps marker-bearing lines
+// + short mission identity; Free Main still ships full mission+work.
+//
+// Required profession markers:
+//   1. progressive skill — /at most one/i + /Never bulk-load|bulk-load/i
+//   2. proof bar triad — /Causality/i /Reproducibility/i /Impact/i
+//   3. fact/surface vs finding — /process cognition|finding\(confirm\).*product vulns/i
+//   4. no invent / scope honesty — assembled /invented host assets|do not invent surfaces/i
+//      (Runtime fail-closed covers "do not invent surfaces" when citizen lines are compacted out)
+{
+  const layers = buildStagePromptLayers(inputWithSub, task, pack);
+  const assembled = assembleSystemPrompt(layers);
+  assert.equal(
+    stageSystemPrompt(inputWithSub, task, pack),
+    assembled,
+    "stageSystemPrompt equals assemble(buildStagePromptLayers)",
+  );
+
+  // Layer order: Base (Standing) → Profession → Runtime (stage identity) → Task (target)
+  assert.ok(layers.base.startsWith(STANDING_HEADING), "stage Base Standing-first");
+  assert.ok(layers.profession.length > 0, "stage Profession non-empty");
+  assert.ok(
+    layers.runtime.includes("Hard Graph stage agent"),
+    "stage identity is Runtime (not Base)",
+  );
+  assert.ok(layers.task.includes("Target:"), "stage Task owns target");
+  assert.ok(
+    !layers.profession.includes("Hard Graph stage agent"),
+    "Profession does not own Graph stage law",
+  );
+  assert.ok(
+    !layers.runtime.includes("Target:"),
+    "Runtime does not own Task target JSON",
+  );
+
+  const standingIdx = assembled.indexOf(STANDING_HEADING);
+  const stageIdIdx = assembled.indexOf("Hard Graph stage agent");
+  const targetIdx = assembled.indexOf("Target:");
+  // Profession sits between Base and Runtime stage identity
+  // (work.md headings are stripped on pack load — use body phrase "Causality")
+  assert.ok(standingIdx === 0, "Standing at absolute start");
+  assert.ok(stageIdIdx > standingIdx, "Runtime stage identity after Base");
+  assert.ok(targetIdx > stageIdIdx, "Task target after Runtime stage law");
+  const causalityIdx = assembled.search(/Causality/i);
+  assert.ok(
+    causalityIdx > standingIdx && causalityIdx < stageIdIdx,
+    "Profession (proof-bar body) before Runtime stage identity",
+  );
+
+  // 1. Progressive skill load discipline (at most one / progressive / never bulk-load)
+  assert.match(
+    layers.profession,
+    /at most one/i,
+    "P3 marker: progressive skill — at most one methodology body",
+  );
+  assert.match(
+    layers.profession,
+    /Never bulk-load|bulk-load/i,
+    "P3 marker: progressive skill — never bulk-load",
+  );
+  // 2. Proof bar expectations (causality / reproducibility / impact)
+  assert.match(
+    layers.profession,
+    /Causality/i,
+    "P3 marker: proof bar — causality",
+  );
+  assert.match(
+    layers.profession,
+    /Reproducibility/i,
+    "P3 marker: proof bar — reproducibility",
+  );
+  assert.match(layers.profession, /Impact/i, "P3 marker: proof bar — impact");
+  // 3. Fact/surface vs finding separation (body: "fact: process cognition")
+  assert.match(
+    layers.profession,
+    /process cognition|finding\(confirm\).*product vulns/i,
+    "P3 marker: fact/surface vs finding separation",
+  );
+  // 4. Scope/RoE / no invent surfaces (profession + Runtime fail-closed)
+  assert.match(
+    assembled,
+    /invented host assets|do not invent surfaces/i,
+    "P3 marker: no invent surfaces / host assets",
+  );
+  assert.match(
+    layers.runtime,
+    /Fail closed|Stay in RoE\/scope|authorized/i,
+    "P3 marker: scope/RoE discipline on stage Runtime",
+  );
+
+  // #394: stage compact Profession is thinner than Free full Profession
+  const freeLayers = buildPromptLayers(task, pack);
+  assert.ok(
+    layers.profession.length < freeLayers.profession.length,
+    `stage compact Profession shorter than Free full (compact=${layers.profession.length} full=${freeLayers.profession.length})`,
+  );
+  // Compact must not re-ship Free work-mode pointer as always-on profession (#405)
+  assert.doesNotMatch(
+    layers.profession,
+    /Mode \/ Graph catalog live in \*\*Runtime\*\*|Default Expert mode is \*\*Free\*\*/i,
+    "compact Profession drops Free-mode work.md pointer",
+  );
+
+  // Skill L1 catalog is Runtime capability; prior seed is Task; hyp queue Runtime-only when on
+  const layersExtras = buildStagePromptLayers(inputWithExtras, task, pack);
+  assert.match(layersExtras.runtime, /skill-l1-catalog/, "skill L1 in Runtime");
+  assert.match(layersExtras.task, /prior-finding-store/, "prior seed in Task");
+  assert.match(
+    layersExtras.runtime,
+    /hypothesis-queue/,
+    "#394 hyp queue injection single home: Runtime when hyp mode on",
+  );
+  assert.doesNotMatch(
+    layersExtras.task,
+    /hypothesis-queue/,
+    "#394 hyp queue not dual-dumped into Task",
+  );
+  // Hyp mode off: even if host set injection, do not place hyp block in Task or Runtime
+  const layersHypOff = buildStagePromptLayers(
+    {
+      ...inputWithSub,
+      hypothesisQueueInjection: "<hypothesis-queue>\nactive_n=9\n</hypothesis-queue>",
+    },
+    task,
+    pack,
+  );
+  assert.doesNotMatch(
+    layersHypOff.runtime + "\n" + layersHypOff.task,
+    /hypothesis-queue/,
+    "#394 hyp mode off: no hyp block in Runtime or Task",
+  );
+}
 
 console.log("hard-graph-stage-prompts.test.ts: ok");

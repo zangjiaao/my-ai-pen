@@ -339,16 +339,29 @@ export const SURFACE_CONSUMER_NODES = new Set([
 export const SURFACE_PRODUCER_NODES = new Set(["surface", "recon"]);
 
 /**
- * Pure gate for Graph todo(done). Ledger is coverage truth.
+ * Pure gate for Graph todo(done). Surface working store is coverage truth (#371: SQLite SoT).
+ * Matchers may be sync (legacy ledger) or async (SurfaceSqliteStore).
  */
-export function assertTodoDoneAllowed(input: {
+export async function assertTodoDoneAllowed(input: {
   task?: string;
   phase?: string;
   note?: string;
-  summary: SurfaceLedgerSummary;
-  hasActedMatch: (text: string) => boolean;
-  findByLocationHint: (text: string) => SurfaceItem | undefined;
-}): { ok: true; ledgerOp?: { op: "deadend" | "skipped_roe"; location: string; note?: string } } | { ok: false; error: string } {
+  summary: SurfaceLedgerSummary | {
+    total: number;
+    actionable: number;
+    open_preview: string[];
+  };
+  hasActedMatch: (text: string) => boolean | Promise<boolean>;
+  findByLocationHint: (
+    text: string,
+  ) =>
+    | { location: string }
+    | undefined
+    | Promise<{ location: string } | undefined>;
+}): Promise<
+  | { ok: true; ledgerOp?: { op: "deadend" | "skipped_roe"; location: string; note?: string } }
+  | { ok: false; error: string }
+> {
   const task = String(input.task || "").trim();
   const phase = String(input.phase || "").trim();
   const note = String(input.note || "").trim();
@@ -370,7 +383,7 @@ export function assertTodoDoneAllowed(input: {
   if (deadendM) {
     const kind = deadendM[1]!.toLowerCase() === "skipped_roe" ? "skipped_roe" : "deadend";
     const rest = (deadendM[2] || "").trim();
-    const hit = input.findByLocationHint(rest || task || note);
+    const hit = await input.findByLocationHint(rest || task || note);
     if (hit) {
       return {
         ok: true,
@@ -383,7 +396,7 @@ export function assertTodoDoneAllowed(input: {
 
   // probed/booked note — need acted match or path in ledger terminal
   if (/^(probed|booked)\b/i.test(note)) {
-    if (input.hasActedMatch(blob)) return { ok: true };
+    if (await input.hasActedMatch(blob)) return { ok: true };
     return {
       ok: false,
       error:
@@ -404,7 +417,7 @@ export function assertTodoDoneAllowed(input: {
   }
 
   // Path already acted appears in task/note
-  if (input.hasActedMatch(blob)) return { ok: true };
+  if (await input.hasActedMatch(blob)) return { ok: true };
 
   // Meta task with any note
   if (meta && note.length >= 2) return { ok: true };

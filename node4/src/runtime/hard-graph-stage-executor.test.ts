@@ -11,10 +11,8 @@ import { fileURLToPath } from "node:url";
 import type { ToolRuntime } from "../types.js";
 import { loadHardGraphFile } from "./hard-graph-definition.js";
 import { evaluateStageGate } from "./hard-graph-runner.js";
-import {
-  createHardGraphStageExecutor,
-  stageSystemPrompt,
-} from "./hard-graph-stage-executor.js";
+import { createHardGraphStageExecutor } from "./hard-graph-stage-executor.js";
+import { stageSystemPrompt } from "./prompt.js";
 import { settleHostStage } from "./host-stage-settlement.js";
 import { createProcessQualityState } from "./package-honesty-host.js";
 import { SurfaceLedgerStore } from "../stores/surface-ledger.js";
@@ -26,6 +24,7 @@ import { HardGraphPlanStore } from "./hard-graph-plan.js";
 import { createUsageLedgerFromEnv } from "./platform-observability.js";
 import { PanelAgentTracker } from "./panel-agents.js";
 import { normalizeSubagentResult } from "./subagent-result.js";
+import { PENTEST_ROLE_PACK } from "../roles/index.js";
 
 const repoExperts = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -76,7 +75,7 @@ const runtime = {
   surfaceLedger: new SurfaceLedgerStore(SurfaceLedgerStore.pathFromTaskDir(workDir)),
 } as unknown as ToolRuntime;
 
-const settlement = settleHostStage({
+const settlement = await settleHostStage({
   stageId: "init",
   runtime,
   narrative: { summary: "Target and RoE understood; handoff ready" },
@@ -95,7 +94,7 @@ assert.equal(
 
 // Surface stage: host ledger, not agent file
 await runtime.surfaceLedger!.upsertFromRecon([{ location: "http://t/login", kind: "form" }]);
-const surf = settleHostStage({
+const surf = await settleHostStage({
   stageId: "surface",
   runtime,
   narrative: { summary: "surfaces mapped" },
@@ -133,7 +132,7 @@ assert.equal(normalizeSubagentResult(settlement.structured).summaryProvided, tru
       recentObservations: [],
     },
   } as unknown as ToolRuntime;
-  const noLaunder = settleHostStage({
+  const noLaunder = await settleHostStage({
     stageId: "surface",
     runtime: poisonRt,
     narrative: { summary: "I wrote result.json with surfaces" },
@@ -161,6 +160,7 @@ assert.equal(normalizeSubagentResult(settlement.structured).summaryProvided, tru
       toolProfile: "default",
     } as any,
     runtime.task as any,
+    PENTEST_ROLE_PACK,
   );
   assert.match(sys, /host-owned|Finding Store/i);
   assert.match(sys, /do \*\*not\*\* write result\.json as the stage handoff/i);
@@ -214,8 +214,11 @@ assert.equal(normalizeSubagentResult(settlement.structured).summaryProvided, tru
     pack: {
       id: "pentest",
       label: "Pentest",
-      system: "test",
-      tools: ["todo", "fact", "write"],
+      missionLines: [],
+      workLines: [],
+      toolNames: ["todo", "fact", "write"],
+      bookingMode: "finding",
+      settlementNote: "test",
     } as any,
     // Production-like path: bound session writes poison result.json; no hostInject.
     boundSessionFactory: async ({ runtime: childRt }) => {
@@ -309,7 +312,15 @@ assert.equal(normalizeSubagentResult(settlement.structured).summaryProvided, tru
         processQuality: createProcessQualityState(),
       },
     } as any,
-    pack: { id: "pentest", label: "P", system: "t", tools: ["todo"] } as any,
+    pack: {
+      id: "pentest",
+      label: "P",
+      missionLines: [],
+      workLines: [],
+      toolNames: ["todo"],
+      bookingMode: "finding",
+      settlementNote: "test",
+    } as any,
     sessionFactory: async () => ({
       summary: "session narrative only",
       // surfaces in structured must NOT deposit

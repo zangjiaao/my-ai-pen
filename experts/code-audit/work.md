@@ -27,8 +27,9 @@ Adapted from Argo-style density (recon → partition → review → validate), *
 
 ## 5. After static work (same Case)
 - Book code findings with file:line + excerpts as evidence.
-- In chat, **suggest** application security (`pentest`) for runtime verify when needed; include paths/evidence ids so the next expert’s Case context carries them.
-- Detection questions → suggest **alert-triage**. Agent/LLM surfaces → suggest **llm-security**.
+- **No silent seat switch.** Stay in this pack until the user Authorizes a seat change.
+- When runtime verify or peer execution should change pack (application security / `pentest`, **alert-triage**, **llm-security**): `platform_list_experts` → one `request_user_decision(kind=handoff, …)` and wait. Include paths/evidence ids so the next expert’s Case context carries them. Never invent experts.
+- **Chat suggest only** when you are **not** requesting a seat change (note for user / Case context).
 
 ## 6. Book
 - `finding(confirm)` with location=`file:line`, PoC=snippet + why exploitable, evidence_ids for excerpts.

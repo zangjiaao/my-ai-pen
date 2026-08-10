@@ -19,7 +19,9 @@ Adapted from AI-Red-Teaming-Guide **Purple Team Operations** and harm-severity t
 ## Book
 - Outcomes need alert payloads, log excerpts, or explicit “no matching alert in window X”.
 - Prefer linking red-team `finding` ids when available.
-- Re-validation of exploit paths → **suggest in chat** application security or llm-security — not silent pack switch.
+- **No silent seat switch.** Stay in this pack until the user Authorizes a seat change.
+- Re-validation of exploit paths on another pack (application security / `pentest`, **llm-security**): `platform_list_experts` → one `request_user_decision(kind=handoff, …)` and wait. Never invent experts.
+- **Chat suggest only** when you are **not** requesting a seat change (note for user / Case context).
 
 ## Do not
 - Invent alerts that did not fire.

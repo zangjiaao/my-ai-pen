@@ -17,6 +17,8 @@ import { createFactTool } from "./fact.js";
 import { createTodoTool } from "./todo.js";
 import { PLATFORM_TOOL_FACTORIES } from "./platform.js";
 import { createRequestUserDecisionTool } from "./decision.js";
+import { createTrafficListTool } from "./traffic.js";
+import { createSurfaceTool } from "./surface.js";
 
 /** Full registry of tool factories (role packs select a subset). */
 export const ALL_NODE4_TOOL_FACTORIES: Record<string, (runtime: ToolRuntime) => AgentTool<any>> = {
@@ -32,10 +34,12 @@ export const ALL_NODE4_TOOL_FACTORIES: Record<string, (runtime: ToolRuntime) => 
   script: createScriptTool,
   finding: createFindingTool,
   fact: createFactTool,
+  surface: createSurfaceTool,
   subagent: createSubagentTool,
   goal: createGoalTool,
   skill: createSkillTool,
   hypothesis: createHypothesisTool,
+  traffic_list: createTrafficListTool,
   request_user_decision: createRequestUserDecisionTool,
   ...PLATFORM_TOOL_FACTORIES,
 };
@@ -51,8 +55,10 @@ export const NODE4_TOOL_NAMES = [
   "script",
   "finding",
   "fact",
+  "surface",
   "subagent",
   "goal",
+  "traffic_list",
 ] as const;
 
 export function createNode4Tools(runtime: ToolRuntime, pack?: RolePack): AgentTool<any>[] {

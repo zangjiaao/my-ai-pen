@@ -188,7 +188,7 @@ try {
 
   const exec: StageExecutor = async () => {
     // Host settlement only — agent file ignored
-    const settlement = settleHostStage({
+    const settlement = await settleHostStage({
       stageId,
       runtime,
       narrative: { summary: "auth_session wave settled" },
@@ -226,7 +226,7 @@ try {
   assert.equal(result.processMetrics?.findings_booked_n ?? 0, 0, "zero confirms → booked 0");
   // Captain surface: confirmable ids after settlement (Spec #130)
   assert.ok(stageEndIds && stageEndIds.length >= 1, "stage_end feedback_ok_ids for Main");
-  const settleAgain = settleHostStage({
+  const settleAgain = await settleHostStage({
     stageId,
     runtime,
     narrative: { summary: "auth_session wave settled" },

@@ -52,7 +52,6 @@ import {
 } from "./host-stage-settlement.js";
 import { SubagentHost } from "./subagent.js";
 import type { Node4AgentSession } from "./run-node4-agent.js";
-import { formatAgentLanguageInjection } from "./agent-language.js";
 import { formatPriorSnapshotInjection } from "./prior-seed.js";
 import {
   buildL1InputFromProductState,
@@ -88,6 +87,15 @@ import {
   mapPromptFailureToLlmTurnError,
   surfaceLlmTurnFailure,
 } from "./llm-turn-surface.js";
+// Stage system-prompt layers live in the canonical prompt module (#393).
+import {
+  buildStagePromptLayers,
+  stageIntentPromptLines,
+  stageSystemPrompt,
+} from "./prompt.js";
+
+// Thin re-exports for test / harness import stability (#393).
+export { buildStagePromptLayers, stageIntentPromptLines, stageSystemPrompt };
 
 /**
  * Deposit host-trusted surfaces/candidates into ledger + Finding Store.
@@ -100,8 +108,14 @@ async function depositHostTrustedStructured(
   hostInject?: SubagentStructuredResult,
 ): Promise<void> {
   if (!hostInject) return;
-  if (hostInject.surfaces.length && runtime.surfaceLedger) {
-    await runtime.surfaceLedger.upsertFromRecon(hostInject.surfaces).catch(() => {});
+  if (hostInject.surfaces.length) {
+    // Spec #371: SQLite working store is coverage SoT; legacy JSON only as test fallback.
+    if (runtime.surfaceSqlite) {
+      await runtime.surfaceSqlite.open().catch(() => {});
+      await runtime.surfaceSqlite.upsertFromRecon(hostInject.surfaces).catch(() => {});
+    } else if (runtime.surfaceLedger) {
+      await runtime.surfaceLedger.upsertFromRecon(hostInject.surfaces).catch(() => {});
+    }
   }
   if (hostInject.candidates.length) {
     const fstore = ensureProcessQuality(runtime.lifecycle).findingStore;
@@ -144,97 +158,6 @@ export type HardGraphBoundSessionFactory = (options: {
 }) => Promise<{ session: Node4AgentSession }>;
 
 /** Exported for harness contract tests (#101 / #125). */
-/** Data-driven stage intent text (Spec #139 I5) — prefers stage.intent over stage id. */
-export function stageIntentPromptLines(stage: {
-  id: string;
-  intent?: string;
-}): string {
-  const intent = String(stage.intent || stage.id || "").toLowerCase();
-  if (intent === "surface") {
-    return [
-      "**Stage intent (surface — Spec #139 I5):** inventory + **bounded smoke** only.",
-      "Bounded smoke = short characterize-or-deadend per observed surface (login form shape, param names, auth requirement) — not multi-class exploitation campaigns.",
-      "Multi-class depth belongs in class_probe+ stages. Do not treat recon as full exploit.",
-      "No candidates_min class quota; opportunistic smoke candidates may deposit but are not required for gate.",
-      "Do not call finding(confirm) on this stage (tool profile forbids).",
-    ].join(" ");
-  }
-  if (intent === "init") {
-    return "Init: RoE + target understanding only; no live recon. Acknowledge priors loaded or honest empty-prior from host seed.";
-  }
-  if (intent === "book") {
-    return "Book stage: confirm feedback_ok Store rows by finding_id only; leftover feedback_ok become explicit unbookable reasons.";
-  }
-  return "";
-}
-
-export function stageSystemPrompt(input: StageExecutorInput, task: TaskEnvelope): string {
-  const toolList = input.tools.length ? input.tools.join(", ") : "(none)";
-  const allowSubagent = input.tools.includes("subagent");
-  const allowFinding = input.tools.includes("finding");
-  const allowHypothesis = input.tools.includes("hypothesis");
-  const hypMode = isHypothesisWorkModeOn(input.stage);
-  const intentLines = stageIntentPromptLines(input.stage);
-  // Typed StagePromptExtras (prior / hyp queue / skill L1) — no cast soup
-  const priorSeed = input.priorSnapshot || "";
-  const hypothesisBlock = input.hypothesisQueueInjection || "";
-  const skillL1Block = input.skillL1CatalogInjection || "";
-  return [
-    // Standing language policy first (#352) — before stage identity / mission rules.
-    // Same shared formatter as free OMP / subagent (#134 / #137).
-    formatAgentLanguageInjection(task.agentLanguage),
-    "",
-    "You are a **Hard Graph stage agent** (Graph × Pi).",
-    `Graph: ${input.graphId}  Stage: ${input.stage.id} (index ${input.stageIndex})`,
-    input.stage.success ? `Stage success criteria: ${input.stage.success}` : "",
-    "You do NOT schedule other stages. Complete only this stage.",
-    `Allowed tools for this stage: ${toolList}`,
-    intentLines,
-    "Briefly narrate progress in assistant text when useful (what you are checking next; what you observed). Do not invent surfaces, proof, or booked findings in prose.",
-    "**Stage settlement is host-owned** (Spec #125): do **not** write result.json as the stage handoff or booking channel. Host projects stage outcome from Finding Store, package terminals, and surface ledger.",
-    "Bookable candidates must land in **Finding Store** (package settlement auto-ingest, or finding(upsert) for serial Main work) with title, location, **severity** (critical|high|medium|low|info — no silent medium), proof_excerpt (verbatim tool stdout/body ≥24 chars), optional poc.",
-    "Surfaces for recon: use **fact(op=surface, location=…)** (host ledger) or package workers — never stage result.json as handoff.",
-    allowFinding
-      ? "After L0 Feedback marks feedback_ok, Main books with finding(confirm, finding_id=…). Severity fills from Store when omitted; missing severity fails closed."
-      : "This stage cannot finding(confirm). Deposit candidates via packages or fact/surfaces only.",
-    "Do **not** create process-chore L2 todos (e.g. Write result.json, collect subagents, pure meta login prep).",
-    "Spec #281: If you use todo(init), checklist is **this stage only** (single phase / stage-local items). Do not init a whole-engagement multi-phase map (recon/auth/vuln/report) under Graph — that is Free-mode behavior.",
-    hypMode && allowHypothesis
-      ? [
-          "Hypothesis work mode ON for this stage: maintain the host **hypothesis queue** (hypothesis tool) for active/confirmed/killed/deferred exploration.",
-          "Main commits only; Sub packages return structured hypothesis_outcomes (proved|disproved|inconclusive).",
-          "Bind package this_turn_goal / success_criteria to prove_if / disprove_if when applicable.",
-          "Confirmed ≠ booked — never finding(confirm) from hypothesis id alone.",
-        ].join(" ")
-      : "",
-    allowSubagent
-      ? [
-          "Agent Graph (preferred when multi-class or multi-surface work is justified): fan-out with **subagent** packages[] (skill/path-scoped workers).",
-          "Prefer packages over one long serial monologue across all vulnerability classes or surfaces.",
-          "Each formal package **must** pass plan_node_id (L2 attack-class anchor). No hard package quotas.",
-          "Anti-micro-spawn: do not split trivial single-GET chores into packages.",
-          "Workers return structured candidates/surfaces with severity + verbatim proof_excerpt; host settlement + Finding Store own Join — do not rephrase proof into a result.json ceremony.",
-          "Discovery packages: already_done must include prior pathKey∩class; host hard-fails spawn on prior collision — use re-verify packages with prior Store ids for known holes.",
-          "After packages start this stage: orchestrate + settle only (do not serial-erase package failure).",
-          "No nested subagent inside workers. Stay in RoE/scope.",
-          "Serial Main-only probing is allowed if packages are not justified (single surface / single class) — deposit Store/surfaces via host paths.",
-        ].join(" ")
-      : "",
-    "Fail closed: do not invent surfaces or proof. Destructive actions default-deny unless RoE explicitly allows (record skipped_roe when denied).",
-    "",
-    `Target: ${JSON.stringify(task.target)}`,
-    `Scope: ${JSON.stringify(task.scope)}`,
-    `Prior handoff stages: ${input.handoff.completed_stages.join(", ") || "(none)"}`,
-    `Known surfaces: ${JSON.stringify(input.handoff.surfaces.slice(0, 20))}`,
-    priorSeed,
-    hypothesisBlock,
-    skillL1Block,
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
-/** Exported for harness contract tests (#101 / #125). */
 export function stageUserPrompt(
   input: StageExecutorInput,
   task: TaskEnvelope,
@@ -261,7 +184,7 @@ export function stageUserPrompt(
     ? "Complete this book stage only. Use finding(list) then finding(confirm, finding_id=…) for confirmable Store rows; do not invent ids; do not stop with zero confirms while feedback_ok remain; settle via host/Store (no result.json handoff). Book L0 consumes Store only — hypothesis queue is informational."
     : allowSubagent
       ? "Complete this stage only. Prefer subagent packages when multi-class work is justified; narrate briefly; settle via host/Store (no result.json handoff); then stop."
-      : "Complete this stage only. Narrate briefly when useful; deposit surfaces via fact(op=surface) and candidates via finding(upsert) — do not use result.json as stage handoff; then stop.";
+      : "Complete this stage only. Narrate briefly when useful; explore so Traffic settles into Surface; candidates via finding(upsert); surface(summary|list) for coverage — do not use result.json as stage handoff; then stop.";
   return [
     `### Hard Graph stage: ${input.stage.id}`,
     input.stage.success || "",
@@ -330,6 +253,7 @@ export function buildHardGraphStageChildRuntime(options: {
     skillIds: pack.skillIds,
     processFacts,
     surfaceLedger: parent.surfaceLedger,
+    surfaceSqlite: parent.surfaceSqlite,
     lifecycle: {
       toolsInLastSegment: 0,
       recentObservations: [],
@@ -504,7 +428,7 @@ export function createHardGraphStageExecutor(options: {
       skillL1CatalogInjection,
       confirmedNotSeededInjection,
     };
-    const systemPrompt = stageSystemPrompt(promptInput, task);
+    const systemPrompt = stageSystemPrompt(promptInput, task, pack);
     const userPrompt = stageUserPrompt(promptInput, task, {
       confirmableFeedbackOk: bookStage ? confirmableAtStart : undefined,
     });
@@ -555,17 +479,19 @@ export function createHardGraphStageExecutor(options: {
         );
       }
       const settleRuntime = opts.child || parentRuntime;
-      // Warm ledger once, then deposit hostInject, then re-warm for projection.
+      // Warm surface working store, then deposit hostInject, then re-read for projection (#371 SQLite).
+      await settleRuntime.surfaceSqlite?.open?.().catch(() => {});
       await settleRuntime.surfaceLedger?.load?.().catch(() => {});
       if (opts.hostInject) {
         await depositHostTrustedStructured(settleRuntime, input.stage.id, opts.hostInject);
         if (settleRuntime !== parentRuntime) {
           await depositHostTrustedStructured(parentRuntime, input.stage.id, opts.hostInject);
         }
+        await settleRuntime.surfaceSqlite?.open?.().catch(() => {});
         await settleRuntime.surfaceLedger?.load?.().catch(() => {});
       }
 
-      const settlement = settleHostStage({
+      const settlement = await settleHostStage({
         stageId: input.stage.id,
         runtime: settleRuntime,
         narrative: opts.narrative,
@@ -638,7 +564,8 @@ export function createHardGraphStageExecutor(options: {
         store: pq.findingStore,
         fanoutPackagesN,
         honestyFlags,
-        surfaceSummary: settleRuntime.surfaceLedger?.summary?.() as
+        surfaceSummary: ((await settleRuntime.surfaceSqlite?.summary?.()) ??
+          settleRuntime.surfaceLedger?.summary?.()) as
           | { total?: number; open?: number; probed?: number; booked?: number }
           | undefined,
       });
@@ -678,9 +605,11 @@ export function createHardGraphStageExecutor(options: {
 
       // Spec #285 S4: Product-state route projection from hypothesis queue + Finding Store + surfaces.
       // Full snapshot each settle (not sticky). Gate choice from structured Main output only.
-      const surfaceSummary = settleRuntime.surfaceLedger?.summary?.() as
-        | { total?: number; open?: number; probed?: number; booked?: number }
-        | undefined;
+      const surfaceSummary =
+        ((await settleRuntime.surfaceSqlite?.summary?.()) ??
+          settleRuntime.surfaceLedger?.summary?.()) as
+          | { total?: number; open?: number; probed?: number; booked?: number }
+          | undefined;
       const surfacesFromLedger =
         typeof surfaceSummary?.total === "number"
           ? surfaceSummary.total

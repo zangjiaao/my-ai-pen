@@ -11,8 +11,10 @@
     "http",
     "script",
     "finding",
+    "surface",
     "goal",
-    "skill"
+    "skill",
+    "traffic_list"
   ],
   "skillIds": [
     "alert-enrichment",

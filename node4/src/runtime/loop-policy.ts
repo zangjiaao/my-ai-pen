@@ -18,6 +18,10 @@
 
 import { midRunBookingNudge, type BookingSnapshot } from "./booking-harness.js";
 import { incompleteTodoStopReminder, midRunTodoNudge, todoErrorReminder } from "./todo-harness.js";
+import {
+  incompleteNewUntestedSurfaceStopReminder,
+  midRunNewUntestedSurfaceNudge,
+} from "./surface-harness.js";
 
 export type ContinueDecision = {
   continue: boolean;
@@ -373,6 +377,19 @@ export function composeContinuePrompt(options: {
   openTodoCount: number;
   /** Optional open task titles for OMP incomplete-stop reminder. */
   openTodoTitles?: string[];
+  /**
+   * Surface rows still **NEW untested** (or first-touch seen fallback). Soft
+   * coverage honesty — never hard-blocks settlement (#411 / #407).
+   */
+  openNewUntestedSurfaceCount?: number;
+  /** Optional path/location samples for remaining NEW untested surfaces. */
+  openNewUntestedSurfaceSamples?: string[];
+  /**
+   * @deprecated Prefer openNewUntestedSurfaceCount (#411). Still accepted as alias.
+   */
+  openSeenSurfaceCount?: number;
+  /** @deprecated Prefer openNewUntestedSurfaceSamples. */
+  openSeenSurfaceSamples?: string[];
   todoErrors?: string[];
   booking?: BookingSnapshot;
   goalSummary?: string;
@@ -416,6 +433,25 @@ export function composeContinuePrompt(options: {
   } else if (options.kind === "premature") {
     // Map-complete false finish: still steer toward untested recon surfaces.
     parts.push(discoveryBreadthReminder());
+  }
+  // Soft Surface NEW→TESTED coverage (parallel to todo incomplete — never blocks settlement).
+  const newUntestedCount =
+    options.openNewUntestedSurfaceCount ?? options.openSeenSurfaceCount ?? 0;
+  const newUntestedSamples =
+    options.openNewUntestedSurfaceSamples || options.openSeenSurfaceSamples || [];
+  if (newUntestedCount > 0) {
+    if (options.kind === "empty" || options.kind === "premature") {
+      parts.push(
+        incompleteNewUntestedSurfaceStopReminder(
+          newUntestedCount,
+          newUntestedSamples,
+          options.attempt,
+          options.max,
+        ),
+      );
+    } else {
+      parts.push(midRunNewUntestedSurfaceNudge(newUntestedCount));
+    }
   }
   if (options.booking) {
     const bookingNudge = midRunBookingNudge(options.booking);

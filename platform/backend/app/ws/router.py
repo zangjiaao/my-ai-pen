@@ -1323,6 +1323,48 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
         applied = apply_vuln_persist_result(msg, persisted)
         msg.clear()
         msg.update(applied)
+        # Spec #368 D7 / #376 / #382: successful book → surface booked side-effect (non-fatal).
+        side_conv = str(conv_id or applied.get("conversation_id") or "").strip()
+        if str(applied.get("type") or "") == "vuln_found" and side_conv:
+            try:
+                surface_evt = await _apply_finding_surface_booked_side_effect(
+                    conversation_id=side_conv,
+                    location=str(
+                        applied.get("location")
+                        or applied.get("url")
+                        or applied.get("poc")
+                        or ""
+                    ),
+                    host=str(
+                        applied.get("affected_asset")
+                        or applied.get("target")
+                        or ""
+                    )
+                    or None,
+                    port=applied.get("port"),
+                    location_key=str(applied.get("location_key") or "") or None,
+                    proof=str(
+                        applied.get("proof")
+                        or applied.get("poc")
+                        or applied.get("evidence_summary")
+                        or ""
+                    )
+                    or None,
+                    proof_excerpts=(
+                        applied.get("proof_excerpts")
+                        if isinstance(applied.get("proof_excerpts"), list)
+                        else None
+                    ),
+                )
+                if surface_evt:
+                    await _broadcast_to_conversation(
+                        side_conv,
+                        json.dumps(surface_evt, ensure_ascii=False),
+                    )
+            except Exception as surface_exc:
+                print(
+                    f"[WS] finding→surface booked side-effect error (non-fatal): {surface_exc}"
+                )
     elif msg.get("type") == "evidence_created":
         # Real proofs from Node4 emitEvidence (structured properties).
         await _persist_evidence(msg, client_id)
@@ -1334,6 +1376,15 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
             msg.update(persisted_tx)
         else:
             # Fail closed: do not broadcast unpersisted / invalid traffic frames.
+            return
+    elif msg.get("type") == "surface_upsert":
+        # Spec #368 / #373 S4: Case surface_ledger — identity merge, then project.
+        persisted_sf = await _persist_surface_upsert(msg, client_id)
+        if persisted_sf:
+            msg.clear()
+            msg.update(persisted_sf)
+        else:
+            # Fail closed: do not broadcast unpersisted / invalid surface frames.
             return
     elif msg.get("type") == "tool_output":
         # Tool cards already stream stdout; do NOT re-book every tool result as
@@ -1359,6 +1410,8 @@ async def _handle_node_message(ws: WebSocket, client_id: str | None, msg: dict, 
             "checkpoint_update",
             # Spec #309: traffic lives in conversation.context store, not chat message log.
             "traffic_exchange",
+            # Spec #368 / #373: surface ledger lives in conversation.context, not chat log.
+            "surface_upsert",
         }
         and not _is_pentest_runtime_status(msg)
         and not (msg_type == "engagement_closeout" and engagement_closeout_accepted is None)
@@ -2904,6 +2957,201 @@ async def _persist_traffic_exchange(msg: dict, node_id: str | None) -> dict | No
             return dict(normalized)
     except Exception as e:
         print(f"[WS] persist traffic_exchange error: {e}")
+        return None
+
+
+async def _persist_surface_upsert(msg: dict, node_id: str | None) -> dict | None:
+    """Spec #368 / #373 / #410: upsert Case surface_ledger + inventory NEW admit."""
+    conv_id = msg.get("conversation_id")
+    if not conv_id:
+        return None
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+        from app.services.surface_inventory import (
+            admit_surfaces_for_user,
+            stamp_is_new_from_novelty,
+        )
+        from app.services.surface_ledger import (
+            extract_surfaces_from_upsert_message,
+            merge_surfaces_into_context,
+            project_surface_upsert_event,
+        )
+
+        rows = extract_surfaces_from_upsert_message(
+            msg,
+            conversation_id=str(conv_id),
+            allow_booked=False,
+        )
+        if not rows:
+            return None
+
+        async with async_session() as db:
+            r = await db.execute(select(Conversation).where(Conversation.id == uuid.UUID(str(conv_id))))
+            c = r.scalar_one_or_none()
+            if not c:
+                return None
+            context = c.context if isinstance(c.context, dict) else {}
+            # Spec #410: durable inventory admit → is_new only on first-ever identity.
+            # Use a SAVEPOINT: inventory SQL failure must not abort the outer txn
+            # (Postgres "current transaction is aborted" would otherwise drop Case
+            # surface_ledger dual-write when surface_inventory is missing/unmigrated).
+            novelty: dict = {}
+            if c.user_id:
+                try:
+                    async with db.begin_nested():
+                        novelty = await admit_surfaces_for_user(
+                            db,
+                            user_id=c.user_id,
+                            conversation_id=c.id,
+                            surfaces=rows,
+                        )
+                except Exception as inv_err:
+                    # Inventory failure must not block Case ledger dual-write.
+                    print(f"[WS] surface inventory admit error (non-fatal): {inv_err}")
+                    novelty = {}
+            stamped = stamp_is_new_from_novelty(rows, novelty) if novelty else stamp_is_new_from_novelty(rows, {})
+            next_ctx, landed = merge_surfaces_into_context(
+                context, stamped, allow_booked=False
+            )
+            if not landed:
+                # Hard-cap reject of all new identities — no broadcast payload.
+                return None
+            c.context = next_ctx
+            await db.commit()
+            ledger = next_ctx.get("surface_ledger") if isinstance(next_ctx, dict) else {}
+            updated_at = (
+                str(ledger.get("updated_at"))
+                if isinstance(ledger, dict) and ledger.get("updated_at")
+                else None
+            )
+            return project_surface_upsert_event(
+                conversation_id=str(conv_id),
+                surfaces=landed,
+                updated_at=updated_at,
+            )
+    except Exception as e:
+        print(f"[WS] persist surface_upsert error: {e}")
+        return None
+
+
+async def _apply_finding_surface_booked_side_effect(
+    *,
+    conversation_id: str,
+    location: str,
+    host: str | None = None,
+    port: str | int | None = None,
+    location_key: str | None = None,
+    proof: str | None = None,
+    proof_excerpts: list | None = None,
+) -> dict | None:
+    """Spec #368 D7 / #376 / #382 / #410: finding book → surface booked + inventory admit.
+
+    Resolves identity from absolute URL, host+port+location_key, or proof URLs.
+    Never raises for caller — hard-cap / unparseable create skip is soft; finding remains success.
+    Returns a surface_upsert project frame when a row landed (advanced/created), else None.
+    """
+    conv = str(conversation_id or "").strip()
+    loc = str(location or "").strip()
+    if not conv:
+        return None
+    if not loc and not host and not location_key and not proof and not proof_excerpts:
+        return None
+    try:
+        from app.db.base import async_session
+        from app.models.conversation import Conversation
+        from app.services.surface_inventory import (
+            admit_surfaces_for_user,
+            stamp_is_new_from_novelty,
+        )
+        from app.services.surface_ledger import (
+            apply_booked_side_effect,
+            project_surface_upsert_event,
+        )
+
+        async with async_session() as db:
+            r = await db.execute(
+                select(Conversation).where(Conversation.id == uuid.UUID(conv))
+            )
+            c = r.scalar_one_or_none()
+            if not c:
+                return None
+            context = c.context if isinstance(c.context, dict) else {}
+            result = apply_booked_side_effect(
+                context,
+                loc or None,
+                conversation_id=conv,
+                host=host,
+                port=port,
+                location_key=location_key,
+                proof=proof,
+                proof_excerpts=proof_excerpts,
+            )
+            action = str(result.get("action") or "")
+            if result.get("warning"):
+                print(
+                    f"[WS] finding→surface booked: action={action} "
+                    f"warning={result.get('warning')}"
+                )
+            if action in {"advanced", "created"}:
+                next_ctx = result.get("context")
+                landed = result.get("landed")
+                # Spec #410: durable inventory admit; stamp is_new (sticky-true on merge).
+                # SAVEPOINT so missing inventory table cannot poison finding→surface commit.
+                if isinstance(landed, dict) and c.user_id:
+                    try:
+                        from app.services.surface_ledger import merge_surfaces_into_context
+
+                        novelty: dict = {}
+                        try:
+                            async with db.begin_nested():
+                                novelty = await admit_surfaces_for_user(
+                                    db,
+                                    user_id=c.user_id,
+                                    conversation_id=c.id,
+                                    surfaces=[landed],
+                                )
+                        except Exception as inv_err:
+                            print(
+                                f"[WS] finding surface inventory admit error (non-fatal): {inv_err}"
+                            )
+                            novelty = {}
+                        stamped = stamp_is_new_from_novelty([landed], novelty or {})
+                        if stamped and isinstance(next_ctx, dict):
+                            next_ctx, landed_list = merge_surfaces_into_context(
+                                next_ctx,
+                                stamped,
+                                allow_booked=True,
+                            )
+                            if landed_list:
+                                landed = landed_list[0]
+                    except Exception as inv_err:
+                        print(
+                            f"[WS] finding surface inventory stamp error (non-fatal): {inv_err}"
+                        )
+                if isinstance(next_ctx, dict):
+                    c.context = next_ctx
+                    await db.commit()
+                if isinstance(landed, dict):
+                    ledger = (
+                        next_ctx.get("surface_ledger")
+                        if isinstance(next_ctx, dict)
+                        else {}
+                    )
+                    updated_at = (
+                        str(ledger.get("updated_at"))
+                        if isinstance(ledger, dict) and ledger.get("updated_at")
+                        else None
+                    )
+                    return project_surface_upsert_event(
+                        conversation_id=conv,
+                        surfaces=[landed],
+                        updated_at=updated_at,
+                    )
+            # already_booked / cap_skip / unparseable / noop: no broadcast needed
+            return None
+    except Exception as e:
+        print(f"[WS] finding→surface booked side-effect persist error (non-fatal): {e}")
         return None
 
 

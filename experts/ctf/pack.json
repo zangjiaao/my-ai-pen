@@ -15,9 +15,11 @@
     "script",
     "finding",
     "fact",
+    "surface",
     "subagent",
     "goal",
-    "skill"
+    "skill",
+    "traffic_list"
   ],
   "skillIds": ["ctf-web-recon", "ctf-flag-verify", "ctf-stuck-rotation"],
   "bookingMode": "finding",

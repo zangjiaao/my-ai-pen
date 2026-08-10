@@ -6,7 +6,6 @@
  */
 
 import type { PlatformSink, TaskEnvelope } from "../types.js";
-import type { SurfaceItem } from "../stores/surface-ledger.js";
 import {
   hardGraphToHarnessStatus,
   type HardGraphTerminal,
@@ -37,8 +36,13 @@ export async function settleHardGraphTask(options: {
   startedAt: string;
   /** Aggregated run usage (Hard Graph stage ledgers merged). */
   llmUsage?: Record<string, unknown>;
-  /** Open / in_probe surfaces from SurfaceLedger (Hard Workset emit). */
-  openSurfaces?: SurfaceItem[];
+  /** Open / in_probe surfaces from SQLite working store (Hard Workset emit, #371). */
+  openSurfaces?: Array<{
+    location: string;
+    path_key: string;
+    kind?: string;
+    status: string;
+  }>;
   /** Finding location strings for OOS host discovery. */
   locationStrings?: string[];
   goalMode?: boolean;

@@ -42,6 +42,10 @@ import {
 } from "./hard-graph-feedback.js";
 import { assertGraphPackageAnchor } from "./package-honesty-host.js";
 import { normalizeSubagentResult } from "./subagent-result.js";
+import { stageSystemPrompt } from "./prompt.js";
+import type { StageExecutorInput } from "./hard-graph-runner.js";
+import type { TaskEnvelope } from "../types.js";
+import { PENTEST_ROLE_PACK } from "../roles/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, "../../..");
@@ -418,19 +422,83 @@ assert.equal(
 );
 assert.equal(store.assertConfirmAllowed("").ok, false, "Case B: invent-without-id forbidden");
 
-// --- I2 Track B static presence (pack + specs) ---
+// --- I2 Track B static presence (Graph Runtime + Free profession slim — Spec #388 T2) ---
+// Graph process-quality / packages / plan_node_id longform lives on Graph stage Runtime
+// (hard-graph-stage-executor), not Free always-on Profession (work.md).
 const workMd = readFileSync(join(repoRoot, "experts/pentest/work.md"), "utf8");
-assert.match(workMd, /prefer packages/i, "I2.1 prefer packages");
-assert.match(workMd, /anti-micro-spawn|micro-spawn/i, "I2.1 anti-micro");
-assert.match(workMd, /not.*process chore|process chores/i, "I2.1 L2≠process-chore");
-assert.match(workMd, /phase intent/i, "I2.1 phase intent");
-assert.match(workMd, /answer keys|expected vuln|hard fanout quotas/i, "I2.2 bans");
-assert.match(workMd, /finding_id|feedback_ok/i, "I2 Store confirm path");
+// Free Profession must not re-teach full Graph process-quality chapters (#388).
+assert.doesNotMatch(
+  workMd,
+  /### Process quality \(Expert Graph/i,
+  "I2 Free work.md: no Process quality (Expert Graph) chapter",
+);
+assert.doesNotMatch(
+  workMd,
+  /### Hypothesis work mode \(Expert Graph/i,
+  "I2 Free work.md: no Hypothesis work mode (Expert Graph) chapter",
+);
+assert.doesNotMatch(
+  workMd,
+  /Stage settlement is host-owned/i,
+  "I2 Free work.md: no host-settlement longform",
+);
+assert.doesNotMatch(
+  workMd,
+  /plan_node_id REQUIRED/i,
+  "I2 Free work.md: no plan_node_id REQUIRED Graph package law",
+);
+// Free still keeps booking honesty + anti-answer-key competence.
+assert.match(workMd, /finding_id|feedback_ok/i, "I2 Free Store confirm path pointer");
+// #399: profession honesty single-home is mission (RoE also injects invent ban on Runtime)
+const missionMd = readFileSync(join(repoRoot, "experts/pentest/mission.md"), "utf8");
+assert.match(
+  missionMd,
+  /answer keys|fixed vulnerabilit|fixed vuln lists/i,
+  "I2 Free profession bans invent answer keys (mission)",
+);
 assert.doesNotMatch(
   workMd,
   /packages_n\s*must\s*[≥>=]\s*\d|must spawn\s+\d+\s+packages/i,
   "I2.3 no L1 hard fanout quota sentences",
 );
+
+// Graph stage Runtime still carries process-quality steer (prefer packages, anti-micro, …).
+const pqStageInput: StageExecutorInput = {
+  stage: {
+    id: "class_probe",
+    success: "probe with proof",
+    require: { summary: true },
+    tools: { allow: ["todo", "shell", "subagent"] },
+    max_retries: 1,
+  } as StageExecutorInput["stage"],
+  stageIndex: 3,
+  graphId: "app_assessment",
+  handoff: {
+    surfaces: [{ location: "http://t/" }],
+    candidates: [],
+    facts: [],
+    deadends: [],
+    completed_stages: ["init", "surface"],
+  },
+  tools: ["todo", "shell", "subagent"],
+  toolProfile: { allow: ["todo", "shell", "subagent"] },
+};
+const pqStageSys = stageSystemPrompt(
+  pqStageInput,
+  {
+    taskId: "t-pq",
+    conversationId: "c-pq",
+    instruction: "assess",
+    target: { url: "http://t" },
+    scope: {},
+  } as TaskEnvelope,
+  PENTEST_ROLE_PACK,
+);
+assert.match(pqStageSys, /Prefer packages/i, "I2.1 Graph stage prefer packages");
+assert.match(pqStageSys, /anti-micro-spawn|micro-spawn/i, "I2.1 Graph stage anti-micro");
+assert.match(pqStageSys, /process-chore|Write result\.json/i, "I2.1 Graph stage L2≠process-chore");
+assert.match(pqStageSys, /plan_node_id/i, "I2.1 Graph stage plan_node_id");
+assert.match(pqStageSys, /host-owned|Finding Store/i, "I2 Graph stage host settlement");
 
 const appAssessment = readFileSync(
   join(repoRoot, "experts/pentest/graphs/hard/app_assessment.json"),

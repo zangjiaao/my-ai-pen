@@ -13,6 +13,7 @@ const RELIABLE_TYPES = new Set([
   "vuln_found",
   "evidence_created",
   "traffic_exchange",
+  "surface_upsert",
   "work_status",
   "checkpoint_update",
   "task_start",

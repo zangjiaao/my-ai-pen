@@ -29,7 +29,460 @@ export type SurfaceEntry = {
   isTarget?: boolean;
   /** Discovered later (SSRF/internal/out-of-scope probe) — not the user TARGET. */
   isDiscovered?: boolean;
+  /** Case surface_ledger status (v2 internal: seen | touched | booked; legacy mapped on project). */
+  status?: string;
+  /**
+   * Spec #409 / inventory novelty: true only when Case row / join flags first inventory admit.
+   * False-safe until durable inventory (#410) lands — absent/undefined ⇒ not NEW.
+   */
+  isNew?: boolean;
+  /**
+   * Spec #413 — this Case had ≥1 purpose=test exchange on this identity (operator TESTED).
+   * Prefer over multi-hit-only status=touched. False-safe when absent on legacy rows.
+   */
+  caseTested?: boolean;
+  /** URL scheme from origin_key (http/https/ssh/…). */
+  scheme?: string;
+  /**
+   * Spec D2 tree root: normalized `scheme://host:port`.
+   * Different ports are different objects (not collapsed under bare host).
+   */
+  originKey?: string;
 };
+
+/**
+ * Spec #368 / #379 / #384 — Surface status vocabulary (D3).
+ * Write form: seen → touched → booked (+ optional deadend / skipped_roe).
+ * Legacy open / in_probe / probed accepted on read and mapped for display.
+ */
+export const SURFACE_STATUS_LEGACY_MAP: Record<string, string> = {
+  open: "seen",
+  in_probe: "touched",
+  probed: "touched",
+  seen: "seen",
+  touched: "touched",
+  booked: "booked",
+  deadend: "deadend",
+  skipped_roe: "skipped_roe",
+};
+
+/** Rank after normalize (monotonic advance; peers do not lateral). */
+export const SURFACE_STATUS_RANK: Record<string, number> = {
+  seen: 0,
+  touched: 1,
+  deadend: 1,
+  skipped_roe: 1,
+  booked: 2,
+};
+
+/** Expand-contract: accept legacy/v2 on read; return write/display status or undefined. */
+export function normalizeSurfaceStatus(raw: unknown): string | undefined {
+  if (raw == null) return undefined;
+  const s = String(raw).trim().toLowerCase();
+  if (!s) return undefined;
+  return SURFACE_STATUS_LEGACY_MAP[s];
+}
+
+/**
+ * Prefer the higher-rank status (post-normalize). Never “downgrade” when merging
+ * live surface_upsert rows or projected entries.
+ */
+export function preferSurfaceStatus(
+  a?: string | null,
+  b?: string | null,
+): string | undefined {
+  const na = normalizeSurfaceStatus(a);
+  const nb = normalizeSurfaceStatus(b);
+  if (!na) return nb;
+  if (!nb) return na;
+  const ra = SURFACE_STATUS_RANK[na] ?? -1;
+  const rb = SURFACE_STATUS_RANK[nb] ?? -1;
+  return rb > ra ? nb : na;
+}
+
+/**
+ * Spec #413 — case_tested flag from Case ledger / dual-write (false-safe).
+ */
+export function isSurfaceCaseTested(
+  row: { case_tested?: unknown; caseTested?: unknown } | null | undefined,
+): boolean {
+  if (!row || typeof row !== "object") return false;
+  const flag =
+    (row as { case_tested?: unknown; caseTested?: unknown }).case_tested ??
+    (row as { caseTested?: unknown }).caseTested;
+  if (flag === undefined || flag === null || flag === "") return false;
+  return flag === true || flag === 1 || flag === "true" || flag === "1";
+}
+
+export type SurfaceStatusLabelOpts = {
+  /**
+   * Spec #413 — when provided, TESTED follows case_tested (not multi-hit-only touched).
+   * - true → TESTED
+   * - false → no TESTED from status (browse multi-hit stays quiet)
+   * - omitted → legacy expand-contract: touched family → TESTED
+   */
+  caseTested?: boolean | null;
+};
+
+/**
+ * Spec #409 / #413 — operator-facing status chip label (not internal v2 write form).
+ *
+ * | Signal | Operator chip |
+ * |--------|---------------|
+ * | case_tested true (preferred) | TESTED |
+ * | legacy: touched (+ in_probe/probed) when case_tested absent | TESTED |
+ * | case_tested false | no TESTED (even if status=touched from browse multi-hit) |
+ * | seen / booked | *(none — quiet / finding tags only)* |
+ * | deadend / skipped_roe | retained muted terminal |
+ *
+ * Never returns SEEN, BOOK, BOOKED, or PRIOR.
+ */
+export function surfaceStatusLabel(
+  status?: string | null,
+  opts?: SurfaceStatusLabelOpts | null,
+): string {
+  const n = normalizeSurfaceStatus(status);
+  if (n === "deadend") return "deadend";
+  if (n === "skipped_roe") return "skipped_roe";
+
+  const ct = opts?.caseTested;
+  if (ct === true) return "TESTED";
+  if (ct === false) {
+    // Explicit not-tested this Case — do not show TESTED from multi-hit status alone.
+    return "";
+  }
+  // Legacy: no case_tested field → fall back to touched family.
+  if (n === "touched") return "TESTED";
+  // seen, booked, missing: no operator status chip
+  return "";
+}
+
+/**
+ * True when operator UI should render a status chip for this internal status / case_tested.
+ * Collapsed parents still suppress chips via tree chrome (#408).
+ */
+export function surfaceShowsStatusChip(
+  status?: string | null,
+  opts?: SurfaceStatusLabelOpts | null,
+): boolean {
+  return Boolean(surfaceStatusLabel(status, opts));
+}
+
+/**
+ * Spec #409 — NEW badge only when novelty flag is explicitly true.
+ * Absent / null / unknown ⇒ false (safe until inventory #410).
+ */
+export function isSurfaceNew(row: { is_new?: unknown; isNew?: unknown } | null | undefined): boolean {
+  if (!row || typeof row !== "object") return false;
+  const flag = (row as { is_new?: unknown; isNew?: unknown }).is_new ?? (row as { isNew?: unknown }).isNew;
+  if (flag === undefined || flag === null || flag === "") return false;
+  return flag === true || flag === 1 || flag === "true" || flag === "1";
+}
+
+/** Tailwind badge classes for operator Surface status chips (TESTED / terminals). */
+export function surfaceStatusBadgeClass(
+  status?: string | null,
+  opts?: SurfaceStatusLabelOpts | null,
+): string {
+  const label = surfaceStatusLabel(status, opts);
+  if (label === "TESTED") return "bg-status-running/12 text-status-running";
+  const n = normalizeSurfaceStatus(status);
+  if (n === "deadend" || n === "skipped_roe") return "bg-canvas-inset text-ink-muted";
+  // Fallback when a label is still rendered (should not be seen/booked after #409)
+  return "bg-canvas-inset text-ink-secondary";
+}
+
+/**
+ * Spec #368 / #375 — Case surface_ledger document (Platform snapshot + WS).
+ * UI Surface tab projects only this SoT (D10).
+ */
+export type SurfaceLedgerRow = {
+  id?: string;
+  origin_key?: string;
+  path_key?: string;
+  location?: string;
+  kind?: string;
+  methods?: string[];
+  params?: string[];
+  auth?: string | null;
+  status?: string;
+  note?: string | null;
+  source?: string;
+  source_agent_id?: string;
+  updated_at?: string;
+  created_at?: string;
+  conversation_id?: string;
+  [key: string]: unknown;
+};
+
+export type SurfaceLedger = {
+  version?: number;
+  updated_at?: string | null;
+  surfaces: SurfaceLedgerRow[];
+};
+
+/** Honest empty Case surface ledger (empty panel is correct). */
+export function emptySurfaceLedger(): SurfaceLedger {
+  return { version: 1, updated_at: null, surfaces: [] };
+}
+
+/** Normalize snapshot / WS payload into a SurfaceLedger (missing → empty). */
+export function ensureSurfaceLedger(raw: unknown): SurfaceLedger {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return emptySurfaceLedger();
+  const doc = raw as Record<string, unknown>;
+  const surfaces = Array.isArray(doc.surfaces)
+    ? (doc.surfaces as SurfaceLedgerRow[]).filter((s) => s && typeof s === "object")
+    : [];
+  const version = Number(doc.version);
+  return {
+    version: Number.isFinite(version) && version > 0 ? version : 1,
+    updated_at: doc.updated_at != null ? String(doc.updated_at) : null,
+    surfaces,
+  };
+}
+
+/** Identity for Case ledger rows: origin_key + path_key (D2). */
+export function surfaceLedgerIdentity(row: Pick<SurfaceLedgerRow, "origin_key" | "path_key">): string {
+  const origin = String(row.origin_key || "").trim().toLowerCase();
+  const path = String(row.path_key ?? "").trim();
+  if (!origin) return "";
+  if (!path) return origin;
+  return path.startsWith("/") ? `${origin}${path}` : `${origin}/${path}`;
+}
+
+/**
+ * Merge WS `surface_upsert` rows into the Case ledger by origin_key+path_key.
+ * Later fields enrich; methods union. Does not invent rows from assets/plan.
+ */
+export function upsertSurfaceLedger(
+  ledger: SurfaceLedger | null | undefined,
+  incoming: { surfaces?: SurfaceLedgerRow[]; updated_at?: string | null },
+): SurfaceLedger {
+  const base = ensureSurfaceLedger(ledger);
+  const rows = Array.isArray(incoming?.surfaces) ? incoming.surfaces : [];
+  if (!rows.length) {
+    if (incoming?.updated_at != null) {
+      return { ...base, updated_at: String(incoming.updated_at) };
+    }
+    return base;
+  }
+  const byKey = new Map<string, SurfaceLedgerRow>();
+  for (const s of base.surfaces) {
+    const k = surfaceLedgerIdentity(s);
+    if (k) byKey.set(k, s);
+  }
+  for (const raw of rows) {
+    if (!raw || typeof raw !== "object") continue;
+    const k = surfaceLedgerIdentity(raw);
+    if (!k) continue;
+    const prev = byKey.get(k);
+    if (!prev) {
+      byKey.set(k, { ...raw });
+      continue;
+    }
+    const methods = mergeStringList(
+      Array.isArray(prev.methods) ? prev.methods.map(String) : [],
+      Array.isArray(raw.methods) ? raw.methods.map(String) : [],
+    );
+    const params = mergeStringList(
+      Array.isArray(prev.params) ? prev.params.map(String) : [],
+      Array.isArray(raw.params) ? raw.params.map(String) : [],
+    );
+    // Spec #384 / D3: never downgrade status on live merge (seen→touched→booked).
+    const status =
+      preferSurfaceStatus(
+        prev.status != null ? String(prev.status) : null,
+        raw.status != null ? String(raw.status) : null,
+      ) ??
+      (raw.status != null ? String(raw.status) : undefined) ??
+      (prev.status != null ? String(prev.status) : undefined);
+    // Spec #413: case_tested sticky true on live merge.
+    const prevCt = isSurfaceCaseTested(prev);
+    const rawCt = isSurfaceCaseTested(raw);
+    const case_tested = Boolean(prevCt || rawCt);
+    byKey.set(k, {
+      ...prev,
+      ...raw,
+      origin_key: prev.origin_key || raw.origin_key,
+      path_key: prev.path_key != null && prev.path_key !== "" ? prev.path_key : raw.path_key,
+      methods: methods.length ? methods : prev.methods || raw.methods,
+      params: params.length ? params : prev.params || raw.params,
+      id: prev.id || raw.id,
+      created_at: prev.created_at || raw.created_at,
+      ...(status != null ? { status } : {}),
+      case_tested,
+    });
+  }
+  return {
+    version: base.version || 1,
+    updated_at:
+      incoming?.updated_at != null
+        ? String(incoming.updated_at)
+        : base.updated_at ?? null,
+    surfaces: Array.from(byKey.values()).sort((a, b) =>
+      surfaceLedgerIdentity(a).localeCompare(surfaceLedgerIdentity(b)),
+    ),
+  };
+}
+
+/**
+ * Spec #375 D10: project Surface inventory from Case surface_ledger only.
+ * Empty ledger ⇒ empty list (honest empty panel). No assets/plan/target seed.
+ */
+export function projectSurfaceEntriesFromLedger(ledger: SurfaceLedger | null | undefined): SurfaceEntry[] {
+  const doc = ensureSurfaceLedger(ledger);
+  const byKey = new Map<string, SurfaceEntry>();
+  for (const row of doc.surfaces) {
+    const entry = ledgerRowToSurfaceEntry(row);
+    if (!entry) continue;
+    const existing = byKey.get(entry.key.toLowerCase());
+    if (!existing) {
+      byKey.set(entry.key.toLowerCase(), entry);
+      continue;
+    }
+    const methods = mergeMethodList(existing.method, entry.method);
+    byKey.set(entry.key.toLowerCase(), {
+      ...existing,
+      method: methods.length ? methods.join(",") : existing.method,
+      source: existing.source || entry.source,
+      status: preferSurfaceStatus(existing.status, entry.status) || existing.status || entry.status,
+      // Novelty is sticky true once any merge source flags it (false-safe default).
+      isNew: Boolean(existing.isNew || entry.isNew),
+      // Spec #413: case_tested sticky true for operator TESTED.
+      caseTested: Boolean(existing.caseTested || entry.caseTested),
+      title: existing.title || entry.title,
+    });
+  }
+  return Array.from(byKey.values()).sort((a, b) => a.key.localeCompare(b.key));
+}
+
+/** Convert one Case ledger row into a tree SurfaceEntry (or null if unusable). */
+export function ledgerRowToSurfaceEntry(row: SurfaceLedgerRow): SurfaceEntry | null {
+  if (!row || typeof row !== "object") return null;
+  const originKey = String(row.origin_key || "").trim();
+  const location = String(row.location || "").trim();
+  const parsedOrigin = parseOriginKey(originKey) || (location ? parseOriginKeyFromLocation(location) : null);
+  if (!parsedOrigin) return null;
+
+  const scheme = parsedOrigin.scheme;
+  const isHttp =
+    scheme === "http" ||
+    scheme === "https" ||
+    scheme === "ws" ||
+    scheme === "wss" ||
+    String(row.kind || "").toLowerCase() === "url";
+
+  let pathKey = String(row.path_key ?? "").trim();
+  if (isHttp) {
+    if (!pathKey && location) {
+      try {
+        const u = new URL(location.includes("://") ? location : `http://x${location.startsWith("/") ? location : `/${location}`}`);
+        pathKey = u.pathname || "/";
+      } catch {
+        pathKey = pathKey || "/";
+      }
+    }
+    pathKey = pathKey || "/";
+    if (pathKey.length > 1) pathKey = pathKey.replace(/\/+$/, "") || "/";
+    if (!pathKey.startsWith("/")) pathKey = `/${pathKey}`;
+  } else {
+    pathKey = "";
+  }
+
+  const service = isHttp
+    ? "web"
+    : normalizeServiceName(String(row.kind || scheme || "unknown")) || scheme || "unknown";
+
+  const methods = Array.isArray(row.methods)
+    ? mergeMethodList(...row.methods.map((m) => String(m || "")))
+    : [];
+  const methodStr = methods.join(",");
+  const originDisplay = parsedOrigin.port
+    ? `${parsedOrigin.host}:${parsedOrigin.port}`
+    : parsedOrigin.host;
+  const originKeyNorm =
+    originKey ||
+    (parsedOrigin.port
+      ? `${scheme}://${parsedOrigin.host}:${parsedOrigin.port}`
+      : `${scheme}://${parsedOrigin.host}`);
+  const entry = toSurfaceEntry(
+    {
+      host: parsedOrigin.host,
+      port: parsedOrigin.port,
+      origin: originDisplay,
+      path: isHttp ? pathKey || "/" : "",
+      service,
+      method: methods[0] || "",
+    },
+    {
+      source: String(row.source || "ledger"),
+      title: location || undefined,
+    },
+  );
+  if (methodStr) entry.method = methodStr;
+  entry.scheme = scheme;
+  entry.originKey = originKeyNorm.toLowerCase();
+  // Tree root identity = origin_key (scheme://host:port), not bare host.
+  entry.assetKey = entry.originKey;
+  entry.assetLabel = originKeyNorm;
+  // Spec #384: project v2 internal status; map legacy open/in_probe/probed.
+  // Operator chips (TESTED / quiet / no BOOK) apply at display via surfaceStatusLabel (#409/#413).
+  const status = normalizeSurfaceStatus(row.status);
+  if (status) entry.status = status;
+  // Spec #409: NEW only when ledger/join explicitly flags first inventory admit (false-safe).
+  if (isSurfaceNew(row)) entry.isNew = true;
+  // Spec #413: case_tested drives TESTED chip (sticky; false-safe when absent).
+  if (isSurfaceCaseTested(row)) entry.caseTested = true;
+  else if (
+    (row as SurfaceLedgerRow).case_tested === false ||
+    (row as SurfaceLedgerRow).caseTested === false
+  ) {
+    entry.caseTested = false;
+  }
+  return entry;
+}
+
+/** Parse `scheme://host:port` origin_key (port always explicit per D2). */
+function parseOriginKey(originKey: string): { scheme: string; host: string; port: string } | null {
+  const raw = String(originKey || "").trim();
+  if (!raw) return null;
+  const m = raw.match(/^([a-z][a-z0-9+.-]*):\/\/(\[[^\]]+\]|[^/:]+):(\d{1,5})$/i);
+  if (m) {
+    let host = m[2];
+    if (host.startsWith("[") && host.endsWith("]")) host = host.slice(1, -1);
+    return { scheme: m[1].toLowerCase(), host, port: m[3] };
+  }
+  try {
+    const u = new URL(raw);
+    const scheme = (u.protocol || "").replace(":", "").toLowerCase();
+    const host = u.hostname || "";
+    const port = u.port || "";
+    if (!scheme || !host) return null;
+    return { scheme, host, port };
+  } catch {
+    return null;
+  }
+}
+
+function parseOriginKeyFromLocation(location: string): { scheme: string; host: string; port: string } | null {
+  try {
+    const u = new URL(String(location || "").trim());
+    const scheme = (u.protocol || "").replace(":", "").toLowerCase();
+    const host = u.hostname || "";
+    if (!scheme || !host) return null;
+    let port = u.port || "";
+    if (!port) {
+      if (scheme === "https" || scheme === "wss") port = "443";
+      else if (scheme === "http" || scheme === "ws") port = "80";
+      else if (scheme === "ssh") port = "22";
+      else if (scheme === "redis") port = "6379";
+      else if (scheme === "mysql") port = "3306";
+    }
+    return { scheme, host, port };
+  } catch {
+    return null;
+  }
+}
 
 /** Parsed engagement targets for Surface classification. */
 export type EngagementTarget = {
@@ -1205,7 +1658,8 @@ export function attachFindingsToSurface(
     else if (tag.kind === "key") kindCounts.key += 1;
     else kindCounts.vuln += 1;
 
-    if (!resolved) {
+    // Spec #375 D10: badge only onto existing ledger inventory keys — never invent a second tree.
+    if (!resolved || !surfaceSet.has(resolved.toLowerCase())) {
       unlinked.push(tag);
       return;
     }

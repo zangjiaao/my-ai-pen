@@ -38,8 +38,9 @@ Load **one** skill at a time matching the current hypothesis:
 
 ## 4. Book & collaborate
 - `finding(confirm)` with location (endpoint), PoC (turns/payloads), evidence_ids holding transcripts/tool results.
-- Classic Web/API on same host → **suggest in chat** application security (do not silent pack switch); book evidence on the Case.
-- Detection validation → suggest **alert-triage**; optional methodology skill `llm-purple-handoff` for what to write in the suggestion.
+- **No silent seat switch.** Stay in this pack until the user Authorizes a seat change.
+- When execution should continue on another pack (classic Web/API → application security / `pentest`; detection → **alert-triage**): `platform_list_experts` → one `request_user_decision(kind=handoff, …)` and wait. Never invent experts.
+- **Chat suggest only** when you are **not** requesting a seat change (note for user / Case context). Optional skill `llm-purple-handoff` for what to package.
 - Red–blue on AI systems: prove abuse paths first; detection should use tool/MCP/action telemetry (not prompt keywords only).
 
 ## 5. Recipes

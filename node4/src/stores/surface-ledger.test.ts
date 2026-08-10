@@ -40,7 +40,7 @@ sum = store.summary();
 assert.equal(sum.booked, 1);
 
 // Gate: open xss still blocks bare done
-const blocked = assertTodoDoneAllowed({
+const blocked = await assertTodoDoneAllowed({
   task: "XSS Reflected & Stored",
   note: undefined,
   summary: store.summary(),
@@ -50,7 +50,7 @@ const blocked = assertTodoDoneAllowed({
 assert.equal(blocked.ok, false);
 
 // Gate: path acted match allows
-const okPath = assertTodoDoneAllowed({
+const okPath = await assertTodoDoneAllowed({
   task: "SQLi at /vulnerabilities/sqli",
   summary: store.summary(),
   hasActedMatch: (t) => store.hasActedMatch(t),
@@ -59,7 +59,7 @@ const okPath = assertTodoDoneAllowed({
 assert.equal(okPath.ok, true);
 
 // Gate: deadend note
-const dead = assertTodoDoneAllowed({
+const dead = await assertTodoDoneAllowed({
   task: "XSS Reflected & Stored",
   note: "deadend: /vulnerabilities/xss_r no reflection",
   summary: store.summary(),
@@ -74,7 +74,7 @@ await store.markDeadend("/vulnerabilities/xss_r/", "no reflection");
 sum = store.summary();
 assert.equal(sum.actionable, 0);
 
-const clear = assertTodoDoneAllowed({
+const clear = await assertTodoDoneAllowed({
   task: "anything",
   summary: store.summary(),
   hasActedMatch: (t) => store.hasActedMatch(t),

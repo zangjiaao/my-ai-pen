@@ -8,6 +8,7 @@ from app.models.audit import AuditLog
 from app.models.evidence import Evidence
 from app.models.expert import Expert
 from app.models.conversation_report import ConversationReport
+from app.models.surface_inventory import SurfaceInventory
 
 __all__ = [
     "User",
@@ -20,4 +21,5 @@ __all__ = [
     "Evidence",
     "Expert",
     "ConversationReport",
+    "SurfaceInventory",
 ]

@@ -10,7 +10,16 @@ import {
   type AttackSurfaceCandidate,
   scopeHostsFromTask,
 } from "./attack-surface.js";
-import type { SurfaceItem } from "../stores/surface-ledger.js";
+/** Minimal open-surface row for Workset emit (SQLite or legacy ledger). */
+export type WorksetOpenSurface = {
+  location: string;
+  path_key: string;
+  kind?: string;
+  status: string;
+  /** Legacy ledger fields (optional; not required for emit). */
+  id?: string;
+  updated_at?: string;
+};
 
 export type WorksetFamily = "t_surface" | "t_host";
 
@@ -104,7 +113,7 @@ export function worksetCandidatesFromAttackSurface(
  */
 export function worksetCandidatesFromHardSettle(options: {
   task: { target?: Record<string, unknown>; scope?: Record<string, unknown> };
-  openSurfaces?: SurfaceItem[];
+  openSurfaces?: WorksetOpenSurface[];
   locationStrings?: string[];
   source?: string;
 }): WorksetCandidate[] {

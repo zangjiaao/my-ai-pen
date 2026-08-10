@@ -45,6 +45,7 @@ async function drainBrowserTraffic(
       rows,
       seenIds: seen,
       sequenceStart: seqStart,
+      storeHost: runtime,
     });
     if (emitted.length) {
       for (let i = 0; i < emitted.length; i += 1) nextSequence(runtime);

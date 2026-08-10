@@ -52,6 +52,12 @@ export function pathKey(loc: string): string {
     if (/^https?:\/\//i.test(s)) {
       const u = new URL(s);
       let path = u.pathname || "/";
+      // new URL percent-encodes braces etc.; decode so identity matches platform (e.g. {id}).
+      try {
+        path = decodeURIComponent(path);
+      } catch {
+        /* keep encoded pathname */
+      }
       path = path.replace(/\/+$/, "") || "/";
       return path.toLowerCase();
     }

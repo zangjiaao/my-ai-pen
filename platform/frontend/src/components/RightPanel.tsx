@@ -10,13 +10,9 @@ import {
 import { formatCaseMeteringDetail, formatCaseMeteringHeader } from "../lib/caseMetering";
 import {
   SurfaceTreeView,
-  collectSurfaceEntries,
   attachFindingsToSurface,
-  canonicalizeSurfaceEntries,
-  parseEngagementTargets,
-  parseSurfaceInventoryKey,
-  parseSurfaceRef,
-  toSurfaceEntry,
+  projectSurfaceEntriesFromLedger,
+  ensureSurfaceLedger,
   buildSurfaceTree,
   resolveFindingSurfaceKey,
   surfaceKeyToDisplay,
@@ -24,6 +20,7 @@ import {
   findingsTabHoverTitle,
   attackSurfaceItems,
   type SurfaceEntry,
+  type SurfaceLedger,
 } from "./SurfaceInventory";
 import FindingCard from "./cards/FindingCard";
 import { GraphAwareTodoList } from "./TasksPlanList";
@@ -135,6 +132,8 @@ interface Props {
   caseRun?: CaseRunSummary;
   /** Spec #309: Case traffic audit store projection (replaces Activity timeline). */
   trafficExchanges?: TrafficExchange[];
+  /** Spec #368 / #375: Case surface_ledger (snapshot + live upserts) — sole Surface inventory SoT. */
+  surfaceLedger?: SurfaceLedger | null;
   findings?: Array<Record<string, unknown>>;
   assets?: Array<Record<string, unknown>>;
   /** Authorized engagement from conversation.context.task (target + scope.allow). */
@@ -201,6 +200,7 @@ export default function RightPanel({
   strixRun,
   caseRun,
   trafficExchanges = [],
+  surfaceLedger = null,
   findings = [],
   assets = [],
   taskContext,
@@ -263,36 +263,16 @@ export default function RightPanel({
       (row) => String(row.exchange_id || "") === selectedTrafficId,
     ) || null;
   }, [selectedTrafficId, trafficExchanges]);
-  const engagementTargets = useMemo(() => parseEngagementTargets(taskContext), [taskContext]);
-  // Host → port/service → path inventory (not path-only under "/").
-  const baseSurfaceEntries = useMemo(
-    () => collectSurfaceEntries(planTree, assets, [], engagementTargets),
-    [planTree, assets, engagementTargets],
+  // Spec #375 D10: Surface inventory from Case surface_ledger only (empty ledger ⇒ empty panel).
+  const surfaceEntries = useMemo(
+    () => projectSurfaceEntriesFromLedger(ensureSurfaceLedger(surfaceLedger)),
+    [surfaceLedger],
   );
-  const surfaceKeyList = useMemo(() => baseSurfaceEntries.map((e) => e.key), [baseSurfaceEntries]);
+  const surfaceKeyList = useMemo(() => surfaceEntries.map((e) => e.key), [surfaceEntries]);
   const findingAttachment = useMemo(
-    () => attachFindingsToSurface(findings, surfaceKeyList, baseSurfaceEntries),
-    [findings, surfaceKeyList, baseSurfaceEntries],
+    () => attachFindingsToSurface(findings, surfaceKeyList, surfaceEntries),
+    [findings, surfaceKeyList, surfaceEntries],
   );
-  const surfaceEntries = useMemo(() => {
-    const byKey = new Map(baseSurfaceEntries.map((e) => [e.key.toLowerCase(), e]));
-    for (const [pathKey, tags] of findingAttachment.byPath) {
-      if (byKey.has(pathKey.toLowerCase())) continue;
-      const raw = tags[0] ? String(tags[0].finding.__surface_path || pathKey) : pathKey;
-      // Prefer inventory-key parse (`host:port|web|/path`) — parseSurfaceRef only accepts URLs/paths.
-      const parsed = parseSurfaceInventoryKey(raw) || parseSurfaceRef(raw);
-      if (!parsed) continue;
-      // Bare toSurfaceEntry lacks assetKey — re-canonicalize below so findings join the asset root.
-      const entry = toSurfaceEntry(parsed, { source: "finding" });
-      byKey.set(entry.key.toLowerCase(), entry);
-    }
-    // Re-fold finding-only leaves into the same host/asset root as inventory (no dual site trees).
-    return canonicalizeSurfaceEntries(
-      Array.from(byKey.values()),
-      assets,
-      engagementTargets,
-    ).sort((a, b) => a.key.localeCompare(b.key));
-  }, [baseSurfaceEntries, findingAttachment, assets, engagementTargets]);
   const findingsByPath = findingAttachment.byPath;
   const unlinkedFindings = findingAttachment.unlinked;
   const surfaceTree = useMemo(() => buildSurfaceTree(surfaceEntries, findingsByPath), [surfaceEntries, findingsByPath]);
@@ -311,7 +291,7 @@ export default function RightPanel({
   // If the conversation is no longer running, never leave Main/Worker agents stuck on "running"
   // (stale checkpoint.panel_agents can lag behind conversation status).
   const displayAgents = normalizeAgentsForConversationRunning(orderedStrixAgents, running);
-  const hasStatusData = running || Boolean(activeTool) || planTree.length > 0 || displayAgents.length > 0 || findings.length > 0 || assets.length > 0 || trafficExchanges.length > 0 || Boolean(strixRun) || Boolean(caseRun?.started_at || caseRun?.llm_usage?.total_tokens) || Boolean(engagementCloseout && Object.keys(engagementCloseout).length);
+  const hasStatusData = running || Boolean(activeTool) || planTree.length > 0 || displayAgents.length > 0 || findings.length > 0 || assets.length > 0 || trafficExchanges.length > 0 || surfaceItems.length > 0 || Boolean(strixRun) || Boolean(caseRun?.started_at || caseRun?.llm_usage?.total_tokens) || Boolean(engagementCloseout && Object.keys(engagementCloseout).length);
   // Spec #321: history selection shows frozen revision plan_tree; live stays default.
   const viewedPlanTree = planTreeForView({
     planTree,
@@ -515,7 +495,9 @@ export default function RightPanel({
         )}
         {tab === "surface" && (
           surfaceItems.length === 0 ? (
-            <p className="text-sm text-ink-muted">No attack surface recorded yet</p>
+            <p className="text-sm text-ink-muted" data-testid="surface-empty">
+              No attack surface recorded yet
+            </p>
           ) : (
             <SurfaceTreeView
               roots={surfaceTree}

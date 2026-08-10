@@ -7,6 +7,7 @@ import { EvidenceStore } from "../stores/evidence.js";
 import { GoalStore } from "../stores/goal.js";
 import { ProcessFactStore } from "../stores/process-fact.js";
 import { SurfaceLedgerStore } from "../stores/surface-ledger.js";
+import { SurfaceSqliteStore } from "../stores/surface-sqlite.js";
 import { SkillStore } from "../stores/skill.js";
 import { TodoStore } from "../stores/todo.js";
 import { createProcessQualityState } from "./package-honesty-host.js";
@@ -23,6 +24,7 @@ import {
   resolveOuterContinueBudgets,
   normalizeProductStopReason,
 } from "./loop-policy.js";
+import { selectNewUntestedSurfaces } from "./surface-harness.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { writePostRunInspectArtifacts } from "./session-inspect.js";
 import { eagerBookingInjection } from "./booking-harness.js";
@@ -82,6 +84,7 @@ import {
 import { runParkedWorkingContinue } from "./run-parked-working-continue.js";
 import type { TodoStore as TodoStoreType } from "../stores/todo.js";
 import { seedTodoFromHandoff } from "./handoff-todo-seed.js";
+import { seedSurfacesFromTargetAtTaskStart } from "./surface-target-seed.js";
 
 export async function runNode4Task(
   config: Node4Config,
@@ -143,7 +146,7 @@ export async function runNode4Task(
    * Spec #283 I0.9: resolve park attach **before** allocating cold Free runtime stores
    * (empty TodoStore / goals / subagent host) so reseed-only paths build those.
    */
-  const packRootForHard = (pack as { packRoot?: string }).packRoot;
+  const packRootForHard = pack.packRoot;
   const hardResolved = await resolveHardGraph({
     task,
     packRoot: packRootForHard,
@@ -213,9 +216,13 @@ export async function runNode4Task(
   const skills = skillsDir ? new SkillStore(skillsDir) : undefined;
   const processFacts = new ProcessFactStore(join(taskDir, "facts"));
   await processFacts.ensureDir();
+  // Spec #370–#371: SQLite is surface tool + Graph gate SoT (offline ok).
+  // Legacy JSON still opened for one-shot migrate via store.open() and test fallbacks.
   const surfaceLedger = new SurfaceLedgerStore(SurfaceLedgerStore.pathFromTaskDir(taskDir));
   await surfaceLedger.ensureDir();
   await surfaceLedger.load();
+  const surfaceSqlite = new SurfaceSqliteStore(SurfaceSqliteStore.pathFromTaskDir(taskDir));
+  await surfaceSqlite.open();
 
   const runtime: ToolRuntime = {
     task,
@@ -235,6 +242,7 @@ export async function runNode4Task(
     skillIds: pack.skillIds?.length ? pack.skillIds : undefined,
     processFacts,
     surfaceLedger,
+    surfaceSqlite,
     lifecycle: {
       toolsInLastSegment: 0,
       panelAgents: panel,
@@ -252,6 +260,14 @@ export async function runNode4Task(
     panelAgents: panel,
     // Spec #301 Free path: host auto-bind Worker ↔ Case Main todos on spawn.
     todo: () => runtime.todo,
+  });
+
+  // Spec #381 / D8: TARGET + scope.allow web origins → Surface seen (no traffic required).
+  // Free + Hard Graph share this cold-start path; dual-write when Platform-bound.
+  await seedSurfacesFromTargetAtTaskStart(runtime).catch((err) => {
+    console.warn(
+      `[node4] surface target seed failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
   });
 
   /**
@@ -758,6 +774,20 @@ export async function runNode4Task(
             .map((t) => t.content),
         );
       const openTodoCount = runtime.todo.openCount();
+      // Soft NEW untested queue for stop/mid-run coverage honesty (#411).
+      // Prefer is_new + not TESTED when inventory flag is on rows; else first-touch seen.
+      let openNewUntestedSurfaceCount = 0;
+      let openNewUntestedSurfaceSamples: string[] = [];
+      if (runtime.surfaceSqlite) {
+        try {
+          const rows = await runtime.surfaceSqlite.all();
+          const queue = selectNewUntestedSurfaces(rows, 12);
+          openNewUntestedSurfaceCount = queue.count;
+          openNewUntestedSurfaceSamples = queue.samples;
+        } catch {
+          // Soft path only — never fail continue on ledger read.
+        }
+      }
       const goalContinuationBody =
         decision.kind === "goal" && modeGoal
           ? buildGoalContinuationPrompt(modeGoal, { openTodoTitles, openTodoCount })
@@ -791,6 +821,8 @@ export async function runNode4Task(
             max: maxContinues,
             openTodoCount,
             openTodoTitles,
+            openNewUntestedSurfaceCount,
+            openNewUntestedSurfaceSamples,
             todoErrors,
             booking: bookingSnap,
             goalSummary: goalSnap,
