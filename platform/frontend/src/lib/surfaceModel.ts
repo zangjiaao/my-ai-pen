@@ -212,6 +212,12 @@ export type SurfaceLedgerRow = {
   updated_at?: string;
   created_at?: string;
   conversation_id?: string;
+  /** Spec #413 — sticky TESTED for this Case (snake or camel on wire). */
+  case_tested?: boolean | null;
+  caseTested?: boolean | null;
+  /** Spec #409 — first inventory admit (false-safe when absent). */
+  is_new?: boolean | null;
+  isNew?: boolean | null;
   [key: string]: unknown;
 };
 
