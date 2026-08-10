@@ -72,6 +72,14 @@ function testLedgerRowsProjectToInventory() {
   assert.equal(ssh!.port, "22");
   assert.equal(ssh!.path, "");
   assert.equal(ssh!.status, "touched");
+  assert.equal(login!.originKey, "https://lab.example:443");
+  assert.equal(ssh!.originKey, "ssh://10.0.0.5:22");
+
+  const tree = buildSurfaceTree(entries);
+  assert.equal(tree.length, 2, "web origin and ssh origin are separate roots");
+  const labels = tree.map((r) => r.label).sort();
+  assert.ok(labels.some((l) => l.includes("https://lab.example:443")));
+  assert.ok(labels.some((l) => l.includes("ssh://10.0.0.5:22")));
 }
 
 function testLegacyStatusMapsToV2Presentation() {
@@ -130,10 +138,10 @@ function testLegacyStatusMapsToV2Presentation() {
 
   const tree = buildSurfaceTree(entries);
   assert.ok(tree.length >= 1);
-  const port = tree[0]!.children.find((c) => c.nodeKind === "port");
-  assert.ok(port);
-  const byPath = new Map(port!.children.map((c) => [c.path, c]));
-  // path nodes store label as segment; path as /a, /b, …
+  assert.equal(tree[0]!.nodeKind, "origin");
+  assert.equal(tree[0]!.label, "https://legacy.example:443");
+  // Paths hang directly under origin (no :port intermediate).
+  const byPath = new Map(tree[0]!.children.map((c) => [c.path, c]));
   assert.equal(byPath.get("/a")?.status, "seen");
   assert.equal(byPath.get("/b")?.status, "touched");
   assert.equal(byPath.get("/c")?.status, "touched");
@@ -280,8 +288,10 @@ function testLiveUpsertUpdatesStatusDisplayWithoutDowngrade() {
   assert.equal(preferSurfaceStatus("open", "probed"), "touched");
 
   const tree = buildSurfaceTree(projectSurfaceEntriesFromLedger(ledger));
-  const pathNode = tree[0]?.children[0]?.children.find((c) => c.path === "/pay");
+  // Paths hang under origin root (scheme://host:port), not under :port.
+  const pathNode = tree[0]?.children.find((c) => c.path === "/pay");
   assert.ok(pathNode);
+  assert.equal(tree[0]!.nodeKind, "origin");
   assert.equal(pathNode!.status, "booked");
   assert.equal(surfaceStatusLabel(pathNode!.status), "booked");
 }

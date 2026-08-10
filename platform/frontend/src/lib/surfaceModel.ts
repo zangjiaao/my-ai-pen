@@ -31,6 +31,13 @@ export type SurfaceEntry = {
   isDiscovered?: boolean;
   /** Case surface_ledger status (v2: seen | touched | booked; legacy mapped on project). */
   status?: string;
+  /** URL scheme from origin_key (http/https/ssh/…). */
+  scheme?: string;
+  /**
+   * Spec D2 tree root: normalized `scheme://host:port`.
+   * Different ports are different objects (not collapsed under bare host).
+   */
+  originKey?: string;
 };
 
 /**
@@ -294,11 +301,19 @@ export function ledgerRowToSurfaceEntry(row: SurfaceLedgerRow): SurfaceEntry | n
     ? mergeMethodList(...row.methods.map((m) => String(m || "")))
     : [];
   const methodStr = methods.join(",");
+  const originDisplay = parsedOrigin.port
+    ? `${parsedOrigin.host}:${parsedOrigin.port}`
+    : parsedOrigin.host;
+  const originKeyNorm =
+    originKey ||
+    (parsedOrigin.port
+      ? `${scheme}://${parsedOrigin.host}:${parsedOrigin.port}`
+      : `${scheme}://${parsedOrigin.host}`);
   const entry = toSurfaceEntry(
     {
       host: parsedOrigin.host,
       port: parsedOrigin.port,
-      origin: parsedOrigin.port ? `${parsedOrigin.host}:${parsedOrigin.port}` : parsedOrigin.host,
+      origin: originDisplay,
       path: isHttp ? pathKey || "/" : "",
       service,
       method: methods[0] || "",
@@ -309,6 +324,11 @@ export function ledgerRowToSurfaceEntry(row: SurfaceLedgerRow): SurfaceEntry | n
     },
   );
   if (methodStr) entry.method = methodStr;
+  entry.scheme = scheme;
+  entry.originKey = originKeyNorm.toLowerCase();
+  // Tree root identity = origin_key (scheme://host:port), not bare host.
+  entry.assetKey = entry.originKey;
+  entry.assetLabel = originKeyNorm;
   // Spec #384: project v2 labels; map legacy open/in_probe/probed for display.
   const status = normalizeSurfaceStatus(row.status);
   if (status) entry.status = status;

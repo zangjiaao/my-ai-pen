@@ -22,8 +22,8 @@ export type SurfaceTreeNode = {
   id: string;
   label: string;
   path: string;
-  /** host | port | path | service */
-  nodeKind?: "host" | "port" | "path" | "service";
+  /** origin (scheme://host:port) | path | service — ports are not intermediate nodes */
+  nodeKind?: "host" | "port" | "path" | "service" | "origin";
   service?: string;
   /** Extra hostnames/IPs for the same asset (shown muted on the root). */
   aliases?: string[];
@@ -40,6 +40,26 @@ export type SurfaceTreeNode = {
   subtreeFindingTags: SurfaceFindingTag[];
 };
 
+/** Spec D2: tree root = scheme://host:port (different ports = different roots). */
+export function entryOriginRootKey(entry: SurfaceEntry): string {
+  const explicit = String(entry.originKey || entry.assetKey || "").trim().toLowerCase();
+  if (explicit.includes("://")) return explicit;
+  const host = String(entry.host || "").trim().toLowerCase();
+  const port = String(entry.port || "").trim();
+  let scheme = String(entry.scheme || "").trim().toLowerCase();
+  if (!scheme) {
+    if (entry.service && entry.service !== "web") scheme = entry.service.toLowerCase();
+    else if (port === "443") scheme = "https";
+    else scheme = "http";
+  }
+  if (host && port) return `${scheme}://${host}:${port}`;
+  if (host) return `${scheme}://${host}`;
+  const origin = String(entry.origin || "").trim().toLowerCase();
+  if (origin.includes("://")) return origin;
+  if (origin) return `${scheme}://${origin}`;
+  return "unknown";
+}
+
 function absorbEntryStatus(node: SurfaceTreeNode, entry: SurfaceEntry): void {
   const next = preferSurfaceStatus(node.status, entry.status);
   if (next) node.status = next;
@@ -55,55 +75,37 @@ export function buildSurfaceTree(
   items: SurfaceEntry[],
   findingsByPath: Map<string, SurfaceFindingTag[]> = new Map(),
 ): SurfaceTreeNode[] {
-  // One root per logical asset (not per raw hostname string).
-  const assets = new Map<string, SurfaceTreeNode>();
+  // One root per scheme://host:port (Spec D2) — not bare hostname.
+  const origins = new Map<string, SurfaceTreeNode>();
 
-  const ensureAsset = (entry: SurfaceEntry): SurfaceTreeNode => {
-    const hostOnly = String(entry.host || entry.assetLabel || "")
-      .split(":")[0]
-      .trim()
-      .toLowerCase();
-    // Prefer explicit assetKey; also collapse same hostname into one root when keys diverge
-    // (e.g. asset:uuid from ledger vs host:hostname from finding-only leaves).
-    let assetKey = entry.assetKey || (hostOnly ? `host:${hostOnly}` : `host:${entry.host || "(target)"}`);
-    let node = assets.get(assetKey);
-    if (!node && hostOnly) {
-      for (const [k, existing] of assets) {
-        if (existing.nodeKind === "host" && existing.label.toLowerCase().split(":")[0] === hostOnly) {
-          node = existing;
-          assetKey = k;
-          break;
-        }
-      }
-    }
+  const ensureOrigin = (entry: SurfaceEntry): SurfaceTreeNode => {
+    const originKey = entryOriginRootKey(entry);
+    let node = origins.get(originKey);
     if (node) {
-      if (entry.hostAliases?.length) {
-        const set = new Set([...(node.aliases || []), ...entry.hostAliases]);
-        node.aliases = [...set].filter((h) => h.toLowerCase() !== node!.label.toLowerCase());
-      }
       if (entry.isTarget) {
         node.isTarget = true;
         node.isDiscovered = false;
       } else if (entry.isDiscovered && !node.isTarget) {
         node.isDiscovered = true;
       }
-      // Prefer ledger uuid keys over synthetic host: keys when both appear.
-      if (entry.assetKey && entry.assetKey !== assetKey && !assets.has(entry.assetKey)) {
-        assets.delete(assetKey);
-        assets.set(entry.assetKey, node);
-        node.id = `asset:${entry.assetKey}`;
-      }
+      absorbEntryStatus(node, entry);
       return node;
     }
-    // Host root label is hostname only (ports are children).
-    const label = hostOnly || entry.assetLabel || entry.host || "(target)";
-    const displayHost = label.includes(":") ? label.split(":")[0]! : label;
+    const label =
+      entry.originKey ||
+      entry.assetLabel ||
+      (entry.scheme && entry.host && entry.port
+        ? `${entry.scheme}://${entry.host}:${entry.port}`
+        : entry.origin.includes("://")
+          ? entry.origin
+          : originKey);
     node = {
-      id: `asset:${assetKey}`,
-      label: displayHost,
-      path: displayHost,
-      nodeKind: "host",
-      aliases: (entry.hostAliases || []).filter((h) => h.toLowerCase() !== displayHost.toLowerCase()),
+      id: `origin:${originKey}`,
+      label,
+      path: label,
+      nodeKind: "origin",
+      service: entry.service,
+      aliases: [],
       isTarget: Boolean(entry.isTarget),
       isDiscovered: Boolean(entry.isDiscovered) && !entry.isTarget,
       children: [],
@@ -114,66 +116,40 @@ export function buildSurfaceTree(
       findingTags: [],
       subtreeFindingTags: [],
     };
-    assets.set(assetKey, node);
-    return node;
-  };
-
-  const ensurePort = (hostNode: SurfaceTreeNode, entry: SurfaceEntry): SurfaceTreeNode => {
-    // Group by port+service under the asset (not by original hostname alias).
-    const portLabel = entry.port ? `:${entry.port}` : entry.service !== "web" ? entry.service : "service";
-    const id = `${hostNode.id}|:${entry.port || "0"}|${entry.service}`;
-    let node = hostNode.children.find((c) => c.id === id);
-    if (node) return node;
-    node = {
-      id,
-      label: portLabel,
-      path: entry.origin || portLabel,
-      nodeKind: entry.service === "web" ? "port" : "service",
-      service: entry.service,
-      children: [],
-      entries: [],
-      methods: [],
-      status: undefined,
-      leafCount: 0,
-      // Tags attach when the matching entry is processed (root path → port; deeper → path node).
-      findingTags: [],
-      subtreeFindingTags: [],
-    };
-    hostNode.children.push(node);
+    absorbEntryStatus(node, entry);
+    origins.set(originKey, node);
     return node;
   };
 
   for (const entry of items) {
-    const hostNode = ensureAsset(entry);
-    const portNode = ensurePort(hostNode, entry);
+    const originNode = ensureOrigin(entry);
 
     if (entry.service !== "web") {
-      portNode.entries.push(entry);
-      absorbEntryStatus(portNode, entry);
+      // Non-HTTP service: leaf on the origin root (no path children).
+      originNode.entries.push(entry);
+      absorbEntryStatus(originNode, entry);
       const tags = findingsByPath.get(entry.key.toLowerCase()) || [];
-      portNode.findingTags = dedupeFindingTags([...portNode.findingTags, ...tags]);
+      originNode.findingTags = dedupeFindingTags([...originNode.findingTags, ...tags]);
       continue;
     }
 
     const segs = pathSegments(entry.path);
     if (segs.length === 0) {
       // Web root of this origin
-      portNode.entries.push(entry);
-      absorbEntryStatus(portNode, entry);
+      originNode.entries.push(entry);
+      absorbEntryStatus(originNode, entry);
       for (const m of surfaceMethodChips(entry.method)) {
-        if (!portNode.methods.includes(m)) portNode.methods.push(m);
+        if (!originNode.methods.includes(m)) originNode.methods.push(m);
       }
       const tags = findingsByPath.get(entry.key.toLowerCase()) || [];
-      portNode.findingTags = dedupeFindingTags([...portNode.findingTags, ...tags]);
+      originNode.findingTags = dedupeFindingTags([...originNode.findingTags, ...tags]);
       continue;
     }
 
-    let cursor = portNode;
-    let accPath = entry.origin;
+    let cursor = originNode;
     for (let i = 0; i < segs.length; i++) {
       const seg = segs[i]!;
-      accPath = `${accPath}/${seg}`;
-      const childId = `${portNode.id}|/${segs.slice(0, i + 1).join("/")}`;
+      const childId = `${originNode.id}|/${segs.slice(0, i + 1).join("/")}`;
       let child = cursor.children.find((c) => c.id === childId);
       if (!child) {
         child = {
@@ -205,7 +181,6 @@ export function buildSurfaceTree(
 
   const finalize = (node: SurfaceTreeNode): number => {
     let leaves = node.entries.length > 0 ? Math.max(1, node.entries.length) : 0;
-    // path leaves count as 1 each even if multiple methods merged
     if (node.nodeKind === "path" && node.entries.length) leaves = 1;
     if (node.nodeKind === "service" && node.entries.length) leaves = 1;
     let subtreeTags = [...node.findingTags];
@@ -214,17 +189,18 @@ export function buildSurfaceTree(
       leaves += finalize(child);
       for (const m of child.methods) methods.add(m);
       subtreeTags = subtreeTags.concat(child.subtreeFindingTags);
+      // Bubble status from children
+      const bubbled = preferSurfaceStatus(node.status, child.status);
+      if (bubbled) node.status = bubbled;
     }
-    // Port-only web root without children still counts
-    if (node.nodeKind === "port" && node.entries.length && !node.children.length) leaves = Math.max(leaves, 1);
+    // Origin root with only root-path entries still counts
+    if (node.nodeKind === "origin" && node.entries.length && !node.children.length) {
+      leaves = Math.max(leaves, 1);
+    }
     node.leafCount = leaves;
     node.subtreeFindingTags = dedupeFindingTags(subtreeTags);
     node.methods = Array.from(methods);
     node.children.sort((a, b) => {
-      // ports numeric when possible
-      const ap = a.label.startsWith(":") ? Number(a.label.slice(1)) : NaN;
-      const bp = b.label.startsWith(":") ? Number(b.label.slice(1)) : NaN;
-      if (Number.isFinite(ap) && Number.isFinite(bp) && ap !== bp) return ap - bp;
       const af = a.subtreeFindingTags.length;
       const bf = b.subtreeFindingTags.length;
       if (bf !== af) return bf - af;
@@ -233,9 +209,8 @@ export function buildSurfaceTree(
     return leaves;
   };
 
-  const roots = Array.from(assets.values());
+  const roots = Array.from(origins.values());
   for (const h of roots) finalize(h);
-  // TARGET first, then discovered, then alpha.
   roots.sort((a, b) => {
     if (a.isTarget !== b.isTarget) return a.isTarget ? -1 : 1;
     if (a.isDiscovered !== b.isDiscovered) return a.isDiscovered ? 1 : -1;
@@ -558,12 +533,12 @@ function SurfaceTreeNodeRow({
             className="flex min-w-0 items-center gap-1.5 text-left"
           >
             <span className="truncate font-mono text-[13px] font-medium text-ink">{displayLabel}</span>
-            {node.nodeKind === "host" && node.isTarget && (
+            {(node.nodeKind === "host" || node.nodeKind === "origin") && node.isTarget && (
               <span className="shrink-0 rounded bg-status-running/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wide text-status-running">
                 Target
               </span>
             )}
-            {node.nodeKind === "host" && node.isDiscovered && !node.isTarget && (
+            {(node.nodeKind === "host" || node.nodeKind === "origin") && node.isDiscovered && !node.isTarget && (
               <span className="shrink-0 rounded bg-canvas-inset px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase text-ink-muted">
                 Discovered
               </span>
@@ -573,7 +548,7 @@ function SurfaceTreeNodeRow({
                 {serviceBadge}
               </span>
             )}
-            {node.nodeKind === "host" && node.aliases && node.aliases.length > 0 && (
+            {(node.nodeKind === "host" || node.nodeKind === "origin") && node.aliases && node.aliases.length > 0 && (
               <span
                 className="min-w-0 truncate font-mono text-[10px] text-ink-muted"
                 title={node.aliases.join(", ")}
