@@ -170,7 +170,7 @@ Prefer synthetic ledger fixtures over live LLM.
 
 - [x] Spec indexed from `docs/README.md`  
 - [x] `case-surface-ledger.md` points to this v3 operator model  
-- [ ] UI declutter (methods / rollup) — #408  
+- [x] UI declutter (methods / rollup) — #408  
 - [ ] Operator projection NEW / TESTED / finding tags — #409  
 - [ ] Durable inventory + NEW admit — #410  
 - [ ] Agent tool + soft harness + profession copy — #411  

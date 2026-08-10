@@ -1,11 +1,13 @@
 /**
  * Attack surface tree UI.
+ * Spec #408 / surface-new-tested-coverage L5: no method chips on tree; collapsed parents use counts.
  */
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Search } from "lucide-react";
 import type { SecurityVulnerability } from "../lib/securityTypes";
 import type { SurfaceEntry } from "../lib/surfaceModel";
 import {
+  normalizeSurfaceStatus,
   preferSurfaceStatus,
   surfaceMethodChips,
   surfaceStatusBadgeClass,
@@ -32,13 +34,77 @@ export type SurfaceTreeNode = {
   children: SurfaceTreeNode[];
   /** Leaf payload (web route or non-web service). */
   entries: SurfaceEntry[];
+  /** Methods stay in the data model (search / tools); not rendered as tree chips (#408 L5). */
   methods: string[];
   /** Spec #384: highest v2 status among own entries (seen | touched | booked | …). */
   status?: string;
   leafCount: number;
+  /** Entries under this node still in seen/touched (not terminal booked/deadend/skipped_roe). */
+  unfinishedCount: number;
   findingTags: SurfaceFindingTag[];
   subtreeFindingTags: SurfaceFindingTag[];
 };
+
+/** Spec #408 L5: pure row chrome — methods off; collapsed parents use counts not tag stacks. */
+export type SurfaceTreeRowChrome = {
+  showMethods: boolean;
+  findingMode: "tags" | "count";
+  tags: SurfaceFindingTag[];
+  extraTagCount: number;
+  findingCount: number;
+  showStatusChip: boolean;
+  unfinishedCount: number;
+};
+
+/** True when status still represents unfinished exercise (not booked / terminal). */
+function isUnfinishedSurfaceStatus(status?: string | null): boolean {
+  const n = normalizeSurfaceStatus(status);
+  if (!n) return true;
+  return n === "seen" || n === "touched";
+}
+
+/**
+ * Decide what a Surface tree row should show.
+ * Methods never chip on the tree by default; collapsed parents roll up to counts.
+ */
+export function surfaceTreeRowChrome(
+  node: SurfaceTreeNode,
+  opts: { open: boolean },
+): SurfaceTreeRowChrome {
+  const hasChildren = node.children.length > 0;
+  const collapsedParent = hasChildren && !opts.open;
+  const allPreview = dedupeFindingTags([...node.findingTags, ...node.subtreeFindingTags]);
+  const unfinishedCount = node.unfinishedCount ?? 0;
+
+  if (collapsedParent) {
+    return {
+      showMethods: false,
+      findingMode: "count",
+      tags: [],
+      extraTagCount: 0,
+      findingCount: allPreview.length,
+      // Max-status alone hides unfinished children — prefer unfinished count instead.
+      showStatusChip: false,
+      unfinishedCount,
+    };
+  }
+
+  // Leaf, or expanded parent: own finding tags only (not full subtree stack).
+  const tagsSource = hasChildren ? node.findingTags : allPreview;
+  const tags = tagsSource.slice(0, 3);
+  const extraTagCount = Math.max(0, tagsSource.length - tags.length);
+  const showStatusChip = Boolean(node.status && surfaceStatusLabel(node.status));
+
+  return {
+    showMethods: false,
+    findingMode: "tags",
+    tags,
+    extraTagCount,
+    findingCount: tagsSource.length,
+    showStatusChip,
+    unfinishedCount,
+  };
+}
 
 /** Spec D2: tree root = scheme://host:port (different ports = different roots). */
 export function entryOriginRootKey(entry: SurfaceEntry): string {
@@ -113,6 +179,7 @@ export function buildSurfaceTree(
       methods: [],
       status: undefined,
       leafCount: 0,
+      unfinishedCount: 0,
       findingTags: [],
       subtreeFindingTags: [],
     };
@@ -163,6 +230,7 @@ export function buildSurfaceTree(
           methods: [],
           status: undefined,
           leafCount: 0,
+          unfinishedCount: 0,
           findingTags: [],
           subtreeFindingTags: [],
         };
@@ -185,11 +253,16 @@ export function buildSurfaceTree(
     if (node.nodeKind === "service" && node.entries.length) leaves = 1;
     let subtreeTags = [...node.findingTags];
     const methods = new Set(node.methods);
+    let unfinished = 0;
+    for (const e of node.entries) {
+      if (isUnfinishedSurfaceStatus(e.status)) unfinished += 1;
+    }
     for (const child of node.children) {
       leaves += finalize(child);
       for (const m of child.methods) methods.add(m);
       subtreeTags = subtreeTags.concat(child.subtreeFindingTags);
-      // Bubble status from children
+      unfinished += child.unfinishedCount || 0;
+      // Bubble status from children (data only; collapsed UI prefers counts — #408)
       const bubbled = preferSurfaceStatus(node.status, child.status);
       if (bubbled) node.status = bubbled;
     }
@@ -198,7 +271,9 @@ export function buildSurfaceTree(
       leaves = Math.max(leaves, 1);
     }
     node.leafCount = leaves;
+    node.unfinishedCount = unfinished;
     node.subtreeFindingTags = dedupeFindingTags(subtreeTags);
+    // Methods remain available for search / tool payloads; not rendered as tree chips.
     node.methods = Array.from(methods);
     node.children.sort((a, b) => {
       const af = a.subtreeFindingTags.length;
@@ -489,15 +564,10 @@ function SurfaceTreeNodeRow({
   const open = isOpen(node, depth);
   const canExpand = hasChildren;
   const paddingLeft = 8 + depth * 12;
-  const showMethodsOnRow = node.methods.length > 0 && (!hasChildren || !open);
-  // When expanded, only show tags that belong to THIS node (not children).
-  // When collapsed, preview subtree tags so users still see vuln count under the port/host.
-  const allPreview = dedupeFindingTags([...node.findingTags, ...node.subtreeFindingTags]);
-  const rowTags = !hasChildren || !open ? allPreview.slice(0, 3) : node.findingTags.slice(0, 3);
-  const extraTagCount = !hasChildren || !open
-    ? Math.max(0, allPreview.length - rowTags.length)
-    : Math.max(0, node.findingTags.length - rowTags.length);
-  const visibleTags = rowTags;
+  const chrome = surfaceTreeRowChrome(node, { open });
+  const allPreviewTitles = dedupeFindingTags([...node.findingTags, ...node.subtreeFindingTags])
+    .map((t) => t.title)
+    .join("\n");
 
   const displayLabel =
     node.nodeKind === "path" ? `/${node.label}` : node.label;
@@ -560,14 +630,27 @@ function SurfaceTreeNodeRow({
             {hasChildren && node.leafCount > 0 && (
               <span className="shrink-0 font-mono text-[10px] text-ink-muted">{node.leafCount}</span>
             )}
-            {showMethodsOnRow &&
-              node.methods.map((m) => (
-                <span key={m} className="rounded bg-canvas-inset px-1 py-0.5 font-mono text-[10px] uppercase text-ink-secondary">
-                  {m}
-                </span>
-              ))}
-            {/* Spec #384: v2 status (seen / touched / booked); own-entry rows only. */}
-            {node.status && surfaceStatusLabel(node.status) && (
+            {/* Spec #408 L5: HTTP method chips are not rendered on the Surface tree. */}
+            {chrome.findingMode === "count" && chrome.unfinishedCount > 0 && (
+              <span
+                className="shrink-0 font-mono text-[10px] text-ink-muted"
+                data-testid="surface-unfinished-count"
+                title="Surfaces still seen/touched under this branch"
+              >
+                {chrome.unfinishedCount} unfinished
+              </span>
+            )}
+            {chrome.findingMode === "count" && chrome.findingCount > 0 && (
+              <span
+                className="shrink-0 rounded bg-severity-high-subtle px-1 py-0.5 font-mono text-[10px] font-medium text-severity-high"
+                data-testid="surface-finding-count"
+                title={allPreviewTitles}
+              >
+                {chrome.findingCount} finding{chrome.findingCount === 1 ? "" : "s"}
+              </span>
+            )}
+            {/* Spec #384: v2 status on leaf / expanded rows (not collapsed parent max-chip alone). */}
+            {chrome.showStatusChip && node.status && surfaceStatusLabel(node.status) && (
               <span
                 className={`shrink-0 rounded px-1 py-0.5 font-mono text-[10px] font-medium uppercase ${surfaceStatusBadgeClass(node.status)}`}
                 data-testid="surface-status"
@@ -577,9 +660,9 @@ function SurfaceTreeNodeRow({
               </span>
             )}
           </button>
-          {visibleTags.length > 0 && (
+          {chrome.findingMode === "tags" && chrome.tags.length > 0 && (
             <span className="flex min-w-0 flex-wrap items-center gap-0.5">
-              {visibleTags.map((tag) => (
+              {chrome.tags.map((tag) => (
                 <button
                   key={tag.id}
                   type="button"
@@ -590,9 +673,9 @@ function SurfaceTreeNodeRow({
                   {tag.label}
                 </button>
               ))}
-              {extraTagCount > 0 && (
-                <span className="font-mono text-[10px] text-ink-muted" title={allPreview.map((t) => t.title).join("\n")}>
-                  +{extraTagCount}
+              {chrome.extraTagCount > 0 && (
+                <span className="font-mono text-[10px] text-ink-muted" title={allPreviewTitles}>
+                  +{chrome.extraTagCount}
                 </span>
               )}
             </span>
