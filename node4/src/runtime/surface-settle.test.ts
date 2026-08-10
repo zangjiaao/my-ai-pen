@@ -1,5 +1,5 @@
 /**
- * Seam S2: Traffic complete → Surface settle (Spec #368 / issue #380).
+ * Seam S2: Traffic complete → Surface settle (Spec #368 / #380 / #412).
  * Pure plan + integration with fake SQLite store / dual-write.
  * Run: npx tsx src/runtime/surface-settle.test.ts  (from node4/)
  */
@@ -16,12 +16,16 @@ import {
 } from "./traffic-collect.js";
 import {
   extractUrlParamNames,
+  hasGarbageToolPath,
+  isCollapsedOsProbePath,
   isHttpHttpsScheme,
+  isOriginInEngagementScope,
   isStaticSurfacePath,
   isTrafficSettlePhase,
   planTrafficSurfaceSettle,
   settleTrafficToSurface,
   STATIC_PATH_SUFFIX_DENYLIST,
+  trafficSettleScopeFromTask,
 } from "./surface-settle.js";
 import {
   resetSurfacePlatformSyncTracking,
@@ -150,6 +154,143 @@ import {
 }
 
 // ---------------------------------------------------------------------------
+// Pure: L2 noise filter — garbage path / scope / collapsed OS probe (#412)
+// ---------------------------------------------------------------------------
+
+{
+  assert.equal(hasGarbageToolPath("/ftp/${pdf}"), true);
+  assert.equal(hasGarbageToolPath("/ftp/{{file}}"), true);
+  assert.equal(hasGarbageToolPath("/ftp/report.pdf"), false);
+  assert.equal(hasGarbageToolPath("/api/users"), false);
+}
+
+{
+  const skipDollar = planTrafficSurfaceSettle(
+    { url: "https://target.example/ftp/${pdf}", method: "GET", phase: "completed" },
+    null,
+  );
+  assert.equal(skipDollar.settle, false);
+  if (!skipDollar.settle) assert.equal(skipDollar.reason, "garbage_path");
+
+  const skipMustache = planTrafficSurfaceSettle(
+    { url: "https://target.example/rest/{{id}}", method: "GET", phase: "completed" },
+    null,
+  );
+  assert.equal(skipMustache.settle, false);
+  if (!skipMustache.settle) assert.equal(skipMustache.reason, "garbage_path");
+}
+
+{
+  // No scope context → origin gate off (backward compatible)
+  const open = planTrafficSurfaceSettle(
+    { url: "https://www.w3.org/TR/html", method: "GET", phase: "completed" },
+    null,
+  );
+  assert.equal(open.settle, true);
+
+  // Empty allowedHosts → gate off
+  const emptyScope = planTrafficSurfaceSettle(
+    { url: "https://www.w3.org/TR/html", method: "GET", phase: "completed" },
+    null,
+    { allowedHosts: new Set() },
+  );
+  assert.equal(emptyScope.settle, true);
+
+  const scope = { allowedHosts: new Set(["target.example", "host.docker.internal"]) };
+
+  const inScope = planTrafficSurfaceSettle(
+    { url: "https://target.example/api/users", method: "GET", phase: "completed" },
+    null,
+    scope,
+  );
+  assert.equal(inScope.settle, true);
+  if (!inScope.settle) throw new Error("expected in-scope settle");
+  assert.equal(inScope.origin_key, "https://target.example:443");
+
+  const oos = planTrafficSurfaceSettle(
+    { url: "https://www.w3.org/TR/html", method: "GET", phase: "completed" },
+    null,
+    scope,
+  );
+  assert.equal(oos.settle, false);
+  if (!oos.settle) assert.equal(oos.reason, "out_of_scope");
+
+  const fakeHost = planTrafficSurfaceSettle(
+    { url: "http://nonexistent-host:9999/", method: "GET", phase: "completed" },
+    null,
+    scope,
+  );
+  assert.equal(fakeHost.settle, false);
+  if (!fakeHost.settle) assert.equal(fakeHost.reason, "out_of_scope");
+
+  // Alias host listed in allow still settles
+  const alias = planTrafficSurfaceSettle(
+    { url: "http://host.docker.internal:3000/login", method: "GET", phase: "completed" },
+    null,
+    scope,
+  );
+  assert.equal(alias.settle, true);
+}
+
+{
+  // trafficSettleScopeFromTask mirrors TARGET + scope.allow
+  const ctx = trafficSettleScopeFromTask({
+    target: { type: "url", value: "https://app.example.com/login" },
+    scope: { allow: ["http://host.docker.internal:8080", "127.0.0.1"] },
+  });
+  assert.ok(ctx.allowedHosts instanceof Set);
+  const hosts = ctx.allowedHosts as Set<string>;
+  assert.ok(hosts.has("app.example.com"));
+  assert.ok(hosts.has("host.docker.internal"));
+  assert.ok(hosts.has("127.0.0.1"));
+  assert.equal(isOriginInEngagementScope("app.example.com", ctx), true);
+  assert.equal(isOriginInEngagementScope("www.w3.org", ctx), false);
+}
+
+{
+  // Collapsed OS probe: traversal in raw URL + normalized OS path → skip
+  assert.equal(
+    isCollapsedOsProbePath("/etc/passwd", "https://t.example/foo/../../../etc/passwd"),
+    true,
+  );
+  assert.equal(
+    isCollapsedOsProbePath("/windows/win.ini", "https://t.example/a/../../windows/win.ini"),
+    true,
+  );
+  // No traversal in URL → real business path may settle even if name matches
+  assert.equal(isCollapsedOsProbePath("/etc/passwd", "https://t.example/etc/passwd"), false);
+
+  const probe = planTrafficSurfaceSettle(
+    {
+      url: "https://target.example/assets/../../../etc/passwd",
+      method: "GET",
+      phase: "completed",
+    },
+    null,
+    { allowedHosts: new Set(["target.example"]) },
+  );
+  assert.equal(probe.settle, false);
+  if (!probe.settle) assert.equal(probe.reason, "collapsed_os_probe");
+
+  // Legitimate path without traversal still settles
+  const legit = planTrafficSurfaceSettle(
+    { url: "https://target.example/etc/passwd", method: "GET", phase: "completed" },
+    null,
+    { allowedHosts: new Set(["target.example"]) },
+  );
+  assert.equal(legit.settle, true);
+
+  // Static denylist still wins / remains
+  const staticStill = planTrafficSurfaceSettle(
+    { url: "https://target.example/static/app.js", method: "GET", phase: "completed" },
+    null,
+    { allowedHosts: new Set(["target.example"]) },
+  );
+  assert.equal(staticStill.settle, false);
+  if (!staticStill.settle) assert.equal(staticStill.reason, "static_denylist");
+}
+
+// ---------------------------------------------------------------------------
 // Integration: fake store — first seen, second touched, denylist, dual-write
 // ---------------------------------------------------------------------------
 
@@ -170,12 +311,19 @@ function runtimeFor(
   taskDir: string,
   store: SurfaceSqliteStore | undefined,
   platform: PlatformSink,
-  opts?: { platformApi?: boolean; conversationId?: string },
+  opts?: {
+    platformApi?: boolean;
+    conversationId?: string;
+    target?: Record<string, unknown>;
+    scope?: Record<string, unknown>;
+  },
 ): ToolRuntime {
   const task = {
     taskId: "t-380",
     conversationId: opts?.conversationId ?? "conv-380",
     instruction: "test",
+    target: opts?.target ?? {},
+    scope: opts?.scope ?? {},
   } as TaskEnvelope;
   return {
     task,
@@ -350,6 +498,69 @@ function completedExchange(partial: Partial<TrafficExchange> & { url: string }):
   if (!r.ok) throw new Error("expected ok");
   assert.equal(r.skipped, true);
   if (r.skipped) assert.equal(r.reason, "no_surface_store");
+  await rm(dir, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------------------
+// Integration: scope gate + garbage path via settleTrafficToSurface (#412)
+// ---------------------------------------------------------------------------
+
+{
+  const dir = await mkdtemp(join(tmpdir(), "node4-s412-scope-"));
+  const store = new SurfaceSqliteStore(SurfaceSqliteStore.pathFromTaskDir(dir));
+  await store.open();
+  const platform = fakePlatform();
+  const rt = runtimeFor(dir, store, platform, {
+    platformApi: false,
+    target: { type: "url", value: "https://target.example/" },
+    scope: { allow: ["https://target.example"] },
+  });
+
+  // In-scope TARGET traffic still settles
+  const ok = await settleTrafficToSurface(
+    rt,
+    completedExchange({ url: "https://target.example/vuln/sqli?id=1", method: "GET" }),
+  );
+  assert.equal(ok.ok, true);
+  if (!ok.ok || ok.skipped) throw new Error(`expected apply: ${JSON.stringify(ok)}`);
+  assert.equal(ok.row?.path_key, "/vuln/sqli");
+
+  // Out-of-scope origin does not create a Surface row (Traffic would still record)
+  const oos = await settleTrafficToSurface(
+    rt,
+    completedExchange({ url: "https://www.w3.org/TR/html", method: "GET" }),
+  );
+  assert.equal(oos.ok, true);
+  if (!oos.ok) throw new Error("expected skip ok");
+  assert.equal(oos.skipped, true);
+  if (oos.skipped) assert.equal(oos.reason, "out_of_scope");
+  assert.equal(await store.get({ location: "https://www.w3.org/TR/html" }), null);
+
+  // Garbage path does not settle
+  const garbage = await settleTrafficToSurface(
+    rt,
+    completedExchange({ url: "https://target.example/ftp/${pdf}", method: "GET" }),
+  );
+  assert.equal(garbage.ok, true);
+  if (!garbage.ok) throw new Error("expected skip ok");
+  assert.equal(garbage.skipped, true);
+  if (garbage.skipped) assert.equal(garbage.reason, "garbage_path");
+  assert.equal(await store.count(), 1); // only the in-scope sqli row
+
+  // Collapsed OS probe does not settle
+  const probe = await settleTrafficToSurface(
+    rt,
+    completedExchange({
+      url: "https://target.example/x/../../../etc/passwd",
+      method: "GET",
+    }),
+  );
+  assert.equal(probe.ok, true);
+  if (!probe.ok) throw new Error("expected skip ok");
+  assert.equal(probe.skipped, true);
+  if (probe.skipped) assert.equal(probe.reason, "collapsed_os_probe");
+
+  store.close();
   await rm(dir, { recursive: true, force: true });
 }
 

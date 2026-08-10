@@ -1,13 +1,15 @@
 /**
- * Spec #368 / #380 — Traffic complete → Surface settle (D6 / D6.1).
+ * Spec #368 / #380 / #412 — Traffic complete → Surface settle (D6 / D6.1).
  *
  * Pure decision + Node integration:
  *   HTTP(S) exchange complete/fail → identity (origin_key + path_key)
  *   → first hit seen, later touched; merge methods
- *   → static suffix denylist skips asset paths
+ *   → L2 noise gates: engagement scope, garbage path, static denylist,
+ *     optional collapsed OS-probe paths
  *   → SQLite working store + async Platform dual-write (#374)
  *
  * Does not implement TARGET seed (#381) or finding confirm booked (#382).
+ * Traffic purpose / case_tested is companion #413.
  */
 
 import type { ToolRuntime } from "../types.js";
@@ -18,6 +20,7 @@ import {
   type ParsedLocationOk,
 } from "../stores/surface-identity.js";
 import type { SurfaceRow, SurfaceUpsertResult } from "../stores/surface-sqlite.js";
+import { scopeHostsFromTask } from "./attack-surface.js";
 import {
   enqueueSurfacePlatformSync,
   isSurfacePlatformOnline,
@@ -81,6 +84,34 @@ export type TrafficSettleApplyResult =
   | { ok: true; skipped: false; created: number; updated: number; row: SurfaceRow | null }
   | { ok: false; error: string };
 
+/**
+ * Optional engagement-scope context for L2 noise filter (#412).
+ * When omitted, or when allowedHosts is empty, origin scope gate is off
+ * (lab / no TARGET+allow → keep prior settle behaviour).
+ */
+export type TrafficSettleScopeContext = {
+  /**
+   * Lowercase hostnames from task TARGET + scope.allow
+   * (same set as scopeHostsFromTask). Empty/missing = no origin filter.
+   */
+  allowedHosts?: ReadonlySet<string> | readonly string[] | null;
+};
+
+/**
+ * Well-known OS probe paths after URL/path normalization collapses `..`.
+ * Only used when the raw URL contained traversal (`..` / `%2e%2e`).
+ */
+const COLLAPSED_OS_PROBE_PATHS: ReadonlySet<string> = new Set([
+  "/etc/passwd",
+  "/etc/shadow",
+  "/etc/hosts",
+  "/etc/group",
+  "/windows/win.ini",
+  "/win.ini",
+  "/boot.ini",
+  "/windows/system32/drivers/etc/hosts",
+]);
+
 /** True when path_key is a denylisted static asset path (D6.1). */
 export function isStaticSurfacePath(pathKey: string): boolean {
   const p = String(pathKey || "").trim().toLowerCase();
@@ -90,6 +121,87 @@ export function isStaticSurfacePath(pathKey: string): boolean {
     if (p.endsWith(suffix)) return true;
   }
   return false;
+}
+
+/**
+ * Unexpanded shell/tool template leftovers in path (#412 L2).
+ * Matches `${…}` and `{{…}}` after path_key decode.
+ */
+export function hasGarbageToolPath(pathKey: string): boolean {
+  const p = String(pathKey || "");
+  return p.includes("${") || p.includes("{{");
+}
+
+/** Normalize host for scope compare (lowercase; strip IPv6 brackets). */
+export function normalizeScopeHost(host: string): string {
+  let h = String(host || "").trim().toLowerCase();
+  if (h.startsWith("[") && h.endsWith("]")) h = h.slice(1, -1);
+  return h;
+}
+
+/**
+ * Whether origin host is in engagement scope (TARGET + scope.allow hosts).
+ * Empty/missing allowedHosts → true (no gate).
+ */
+export function isOriginInEngagementScope(
+  host: string,
+  scope?: TrafficSettleScopeContext | null,
+): boolean {
+  if (!scope) return true;
+  const raw = scope.allowedHosts;
+  if (raw == null) return true;
+  const set =
+    raw instanceof Set
+      ? raw
+      : new Set([...raw].map((h) => normalizeScopeHost(String(h))).filter(Boolean));
+  if (set.size === 0) return true;
+  const h = normalizeScopeHost(host);
+  if (!h) return false;
+  if (set.has(h)) return true;
+  // Also accept bracketed form if callers put it in the set.
+  if (h.includes(":") && set.has(`[${h}]`)) return true;
+  return false;
+}
+
+/**
+ * Raw URL path (before URL class collapse) contains path traversal.
+ * Detects `..` segments and common encodings.
+ */
+export function rawUrlHasPathTraversal(url: string): boolean {
+  const s = String(url || "");
+  // Path portion only when scheme present; else whole string.
+  let pathPart = s;
+  const m = s.match(/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*(\/[^?#]*)/i);
+  if (m?.[1]) pathPart = m[1];
+  if (pathPart.includes("..")) return true;
+  // %2e%2e / %2E%2E and mixed encodings
+  if (/%2e%2e/i.test(pathPart)) return true;
+  if (/\.%2e|%2e\./i.test(pathPart)) return true;
+  return false;
+}
+
+/**
+ * Normalized path looks like a collapsed OS-file probe (#412 optional L2).
+ * Only true when raw URL had traversal **and** path_key is a known OS probe.
+ */
+export function isCollapsedOsProbePath(pathKey: string, rawUrl: string): boolean {
+  if (!rawUrlHasPathTraversal(rawUrl)) return false;
+  const p = String(pathKey || "").trim().toLowerCase();
+  if (!p) return false;
+  if (COLLAPSED_OS_PROBE_PATHS.has(p)) return true;
+  // Trailing match after extra collapse noise, e.g. rare double-prefix.
+  for (const probe of COLLAPSED_OS_PROBE_PATHS) {
+    if (p.endsWith(probe)) return true;
+  }
+  return false;
+}
+
+/** Build settle scope context from task TARGET + scope.allow (host set). */
+export function trafficSettleScopeFromTask(task: {
+  target?: Record<string, unknown>;
+  scope?: Record<string, unknown>;
+}): TrafficSettleScopeContext {
+  return { allowedHosts: scopeHostsFromTask(task) };
 }
 
 /** HTTP(S) only for v2 settle (D6). */
@@ -127,6 +239,7 @@ export function extractUrlParamNames(url: string): string[] {
  *
  * @param exchange — traffic row (url/method/phase required for eligibility)
  * @param existing — prior Surface row for this identity, if any (null/undefined = first hit)
+ * @param scope — optional L2 engagement hosts; omit/empty = no origin filter
  */
 export function planTrafficSurfaceSettle(
   exchange: {
@@ -135,6 +248,7 @@ export function planTrafficSurfaceSettle(
     phase?: string | null;
   },
   existing?: { status?: string; methods?: readonly string[] | null; params?: readonly string[] | null } | null,
+  scope?: TrafficSettleScopeContext | null,
 ): TrafficSettleDecision {
   if (!isTrafficSettlePhase(exchange.phase)) {
     return { settle: false, reason: "phase_not_terminal" };
@@ -152,6 +266,15 @@ export function planTrafficSurfaceSettle(
   }
   if (isStaticSurfacePath(parsed.path_key)) {
     return { settle: false, reason: "static_denylist" };
+  }
+  if (hasGarbageToolPath(parsed.path_key)) {
+    return { settle: false, reason: "garbage_path" };
+  }
+  if (isCollapsedOsProbePath(parsed.path_key, url)) {
+    return { settle: false, reason: "collapsed_os_probe" };
+  }
+  if (!isOriginInEngagementScope(parsed.host, scope)) {
+    return { settle: false, reason: "out_of_scope" };
   }
 
   const method = String(exchange.method || "GET").trim().toUpperCase() || "GET";
@@ -205,9 +328,12 @@ export async function settleTrafficToSurface(
       return { ok: true, skipped: true, reason: "no_surface_store" };
     }
 
-    // Cheap pure pre-check without DB (skip static / non-http / pending).
+    // L2 scope from task TARGET + scope.allow (host set). Empty → no origin gate.
+    const scope = trafficSettleScopeFromTask(runtime.task || {});
+
+    // Cheap pure pre-check without DB (skip static / garbage / OOS / pending).
     // existing=null only affects requested status — skip reasons are identity-independent.
-    const pre = planTrafficSurfaceSettle(exchange, null);
+    const pre = planTrafficSurfaceSettle(exchange, null, scope);
     if (!pre.settle) {
       return { ok: true, skipped: true, reason: pre.reason };
     }
@@ -219,7 +345,7 @@ export async function settleTrafficToSurface(
       origin_key: pre.origin_key,
       path_key: pre.path_key,
     });
-    const plan = planTrafficSurfaceSettle(exchange, existing);
+    const plan = planTrafficSurfaceSettle(exchange, existing, scope);
     if (!plan.settle) {
       return { ok: true, skipped: true, reason: plan.reason };
     }
