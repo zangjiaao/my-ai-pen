@@ -11,7 +11,8 @@
  *
  * Status (v2 D3): seen → touched → booked
  *   - never downgrade on re-upsert
- *   - ordinary upsert/settle cannot set booked (allowBooked / confirm path only)
+ *   - ordinary upsert cannot set booked (allowBooked / confirm path only)
+ *   - ordinary upsert cannot elevate to touched/TESTED without allowTested (Traffic settle) (#411)
  * Expand-contract: accept legacy on read; normalize to v2 on write (see LEGACY_STATUS_MAP).
  */
 
@@ -519,16 +520,28 @@ export function applyStatusAdvance(
   return { status: toN, changed: true };
 }
 
+export type ResolveUpsertStatusOpts = {
+  /**
+   * Allow advance to `touched` (operator TESTED). Traffic settle only (#411).
+   * Ordinary Agent upsert must not fake TESTED without real traffic.
+   */
+  allowTested?: boolean;
+};
+
 /**
  * Status resolution for ordinary surface upsert / settle (not booking).
  * - New row defaults to `seen` when request omitted/invalid.
  * - Requested `booked` is ignored (stays existing or `seen`).
+ * - Requested `touched` (TESTED) requires `{ allowTested: true }` — Traffic settle.
+ *   Without it, elevation to touched is refused (existing rank preserved; new rows → seen).
  * - Legacy requested/existing values are normalized (open→seen, in_probe/probed→touched).
  * - Never downgrades an existing status.
+ * - Terminals deadend / skipped_roe remain allowed on ordinary upsert.
  */
 export function resolveUpsertStatus(
   existing: AcceptedSurfaceStatus | string | undefined,
   requested?: AcceptedSurfaceStatus | string | null,
+  opts?: ResolveUpsertStatusOpts,
 ): SurfaceStatus {
   let want: SurfaceStatus = "seen";
   if (requested != null) {
@@ -536,6 +549,10 @@ export function resolveUpsertStatus(
     if (reqN != null && reqN !== "booked") {
       want = reqN;
     }
+  }
+  // Spec #411 L2: no Agent upsert to fake TESTED without traffic-objective allow.
+  if (want === "touched" && !opts?.allowTested) {
+    want = "seen";
   }
   if (existing == null || existing === "") return want;
   const existingN = normalizeSurfaceStatus(existing);

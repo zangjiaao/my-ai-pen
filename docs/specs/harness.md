@@ -233,7 +233,7 @@ State machine (`stores/todo.ts`) matches OMP ops: content-keyed tasks, single `i
 | Tool prompt | OMP ops + live map hygiene; **no** hardcoded OWASP/CTF phase lists |
 | Mid-run nudge | After ~12 act tools without `todo`, inject gentle reconcile (OMP #3651) |
 | Stop reminder | Empty/premature continue with open items lists incomplete todos |
-| Surface seen (soft) | Empty/premature (and other continues) with ledger **seen > 0**: soft reminder + sample paths (`surface-harness.ts`); **never** blocks settlement (#407). Profession SEEN discipline in pack `work.md` (#406) |
+| Surface NEW untested (soft) | Empty/premature (and other continues) with **NEW untested > 0** (prefer `is_new` + not TESTED; fallback first-touch `seen`): soft reminder + samples (`surface-harness.ts`); **never** blocks settlement (#411 / #407). Profession NEW→TESTED + priors ≠ coverage in pack `work.md` |
 | Settlement | Open todos **never** block booking or harness settlement |
 
 Prefer act density over todo thrash, but **do not** leave finished categories open until end-of-run batch-flip.

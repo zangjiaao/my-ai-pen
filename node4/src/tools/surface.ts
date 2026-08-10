@@ -23,6 +23,7 @@ import {
   enqueueSurfacePlatformSync,
   isSurfacePlatformOnline,
 } from "../runtime/surface-platform-sync.js";
+import { selectNewUntestedSurfaces } from "../runtime/surface-harness.js";
 
 function resolveSourceAgentId(runtime: ToolRuntime): string {
   const wa = runtime.lifecycle.workerAudit?.agentId;
@@ -73,13 +74,13 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
     description: [
       "Query the Case attack-surface working ledger (Node SQLite) — Agent management view.",
       "PRIMARY ops: summary | list | get.",
-      "summary: counts (seen/touched/booked + deadend/skipped_roe; operator aliases tested=touched) + sample paths + total; use for coverage.",
+      "summary: counts + new_untested + tested(=touched) + samples; primary duty NEW→TESTED (or deadend).",
       `list: default seen+touched actionable queue; limit default ${SURFACE_LIST_DEFAULT_LIMIT} (max same); returns returned/total_matching/has_more.`,
       "get: by id, location, or origin_key+path_key.",
-      "Normal ledger fill is Runtime-passive: Traffic settle + TARGET seed; booked only via finding(confirm). Do not treat upsert as required registration.",
-      "Optional upsert (non-primary): rare correctives/debug — merge by origin_key+path_key; methods/params union; status never downgrades; cannot set booked.",
+      "Normal ledger fill is Runtime-passive: Traffic settle + TARGET seed; TESTED only via further real Traffic; booked only via finding(confirm).",
+      "Platform vuln priors alone ≠ this-Case TESTED / ≠ coverage complete — re-verify context only.",
+      "Optional upsert (non-primary): rare correctives — cannot set booked; cannot fake TESTED/touched without traffic.",
       "Main and Worker share the same Case ledger. Offline ok — no Platform required.",
-      "Online: local SQLite ok is enough; Platform Case ledger syncs async (platform_sync pending|ok|error).",
       "Prefer this tool over fact(op=surface).",
       `Write hard-cap ${SURFACE_WRITE_HARD_CAP} rows; prefer ≤${SURFACE_UPSERT_BATCH_MAX} per optional upsert call.`,
     ].join(" "),
@@ -107,7 +108,7 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
       status: Type.Optional(
         Type.String({
           description:
-            "upsert: seen|touched|deadend|skipped_roe (not booked; legacy open/in_probe/probed accepted). list: filter or comma-list or 'all' (default seen+touched)",
+            "upsert: seen|deadend|skipped_roe (not booked; touched/TESTED only via Traffic settle — agent cannot fake). list: filter or comma-list or 'all' (default seen+touched)",
         }),
       ),
       kind: Type.Optional(Type.String()),
@@ -171,8 +172,9 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
             status: s.status,
           })),
         ].slice(0, SURFACE_SUMMARY_SAMPLE_MAX);
-        // Spec #409 light align: keep v2 field names; operator aliases tested (= touched).
-        // Full NEW/TESTED Agent duty is #411 (after inventory #410).
+        // Spec #411: NEW untested queue (prefer is_new when present; else first-touch seen).
+        const allRows = await store.all();
+        const newQueue = selectNewUntestedSurfaces(allRows, SURFACE_SUMMARY_SAMPLE_MAX);
         return jsonResult({
           ok: true,
           op: "summary",
@@ -181,6 +183,8 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
           touched: cov.in_probe,
           /** Operator vocabulary: TESTED = this-Case traffic-advanced (v2 touched). */
           tested: cov.in_probe,
+          /** Primary coverage queue: NEW untested (or seen fallback until is_new dual-write). */
+          new_untested: newQueue.count,
           booked: cov.booked,
           deadend: cov.deadend,
           skipped_roe: cov.skipped,
@@ -190,16 +194,19 @@ export function createSurfaceTool(runtime: ToolRuntime): AgentTool<any> {
             seen: cov.open,
             touched: cov.in_probe,
             tested: cov.in_probe,
+            new_untested: newQueue.count,
             booked: cov.booked,
             deadend: cov.deadend,
             skipped_roe: cov.skipped,
           },
+          new_untested_samples: newQueue.samples,
+          new_untested_mode: newQueue.mode,
           sample_paths,
           samples,
           guidance:
             cov.total === 0
               ? "Ledger empty. Fill is Runtime-passive: real Traffic settle + TARGET seed. Explore with http/session/browser so requests land; then re-check summary. upsert is optional corrective only — not required."
-              : "Coverage snapshot. tested = touched (this-Case further traffic). actionable = seen+touched (not yet booked). Use surface(list) to page (default seen+touched, ≤200). booked advances only via finding(confirm); platform vuln priors alone are not coverage. Do not require surface(upsert) for normal fill.",
+              : "Coverage snapshot. Primary duty: NEW untested → TESTED (real further traffic) or deadend. tested=touched this-Case only. Platform vuln priors ≠ TESTED / ≠ coverage complete. upsert cannot fake TESTED. Open NEW untested never blocks booking — disclose on pause. Use surface(list) for pages.",
         });
       }
 

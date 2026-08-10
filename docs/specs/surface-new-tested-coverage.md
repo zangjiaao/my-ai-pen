@@ -173,6 +173,7 @@ Prefer synthetic ledger fixtures over live LLM.
 - [x] UI declutter (methods / rollup) — #408  
 - [x] Operator projection NEW / TESTED / finding tags — #409  
 - [x] Durable inventory + NEW admit — #410  
-- [ ] Agent tool + soft harness + profession copy — #411  
+- [x] Agent tool + soft harness + profession copy — #411  
 - [x] Tests for operator status label map / tree chrome (#409; inventory + agent seams follow)  
 - [x] Tests for inventory first admit → NEW; re-admit → not NEW; TESTED still traffic-objective (#410)  
+- [x] Tests for NEW-untested soft harness + upsert cannot fake TESTED + profession markers (#411)  

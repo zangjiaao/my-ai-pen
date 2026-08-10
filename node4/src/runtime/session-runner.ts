@@ -24,6 +24,7 @@ import {
   resolveOuterContinueBudgets,
   normalizeProductStopReason,
 } from "./loop-policy.js";
+import { selectNewUntestedSurfaces } from "./surface-harness.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { writePostRunInspectArtifacts } from "./session-inspect.js";
 import { eagerBookingInjection } from "./booking-harness.js";
@@ -773,18 +774,16 @@ export async function runNode4Task(
             .map((t) => t.content),
         );
       const openTodoCount = runtime.todo.openCount();
-      // Objective Surface SEEN queue (Traffic settle) for soft stop/mid-run coverage honesty (#407).
-      let openSeenSurfaceCount = 0;
-      let openSeenSurfaceSamples: string[] = [];
+      // Soft NEW untested queue for stop/mid-run coverage honesty (#411).
+      // Prefer is_new + not TESTED when inventory flag is on rows; else first-touch seen.
+      let openNewUntestedSurfaceCount = 0;
+      let openNewUntestedSurfaceSamples: string[] = [];
       if (runtime.surfaceSqlite) {
         try {
           const rows = await runtime.surfaceSqlite.all();
-          const seen = rows.filter((s) => s.status === "seen");
-          openSeenSurfaceCount = seen.length;
-          openSeenSurfaceSamples = seen
-            .slice(0, 12)
-            .map((s) => s.path_key || s.location || s.id)
-            .filter(Boolean);
+          const queue = selectNewUntestedSurfaces(rows, 12);
+          openNewUntestedSurfaceCount = queue.count;
+          openNewUntestedSurfaceSamples = queue.samples;
         } catch {
           // Soft path only — never fail continue on ledger read.
         }
@@ -822,8 +821,8 @@ export async function runNode4Task(
             max: maxContinues,
             openTodoCount,
             openTodoTitles,
-            openSeenSurfaceCount,
-            openSeenSurfaceSamples,
+            openNewUntestedSurfaceCount,
+            openNewUntestedSurfaceSamples,
             todoErrors,
             booking: bookingSnap,
             goalSummary: goalSnap,

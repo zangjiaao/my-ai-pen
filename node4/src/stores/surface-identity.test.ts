@@ -239,12 +239,28 @@ import {
 }
 
 {
-  // forward advances (v2 + legacy synonyms)
-  assert.equal(resolveUpsertStatus("seen", "touched"), "touched");
-  assert.equal(resolveUpsertStatus("open", "in_probe"), "touched");
-  assert.equal(resolveUpsertStatus("in_probe", "probed"), "touched");
-  assert.equal(resolveUpsertStatus(undefined, "in_probe"), "touched");
-  assert.equal(resolveUpsertStatus(undefined, "touched"), "touched");
+  // Spec #411: ordinary upsert cannot fake TESTED (touched) without allowTested
+  assert.equal(resolveUpsertStatus("seen", "touched"), "seen", "agent cannot elevate to TESTED");
+  assert.equal(resolveUpsertStatus("open", "in_probe"), "seen");
+  assert.equal(resolveUpsertStatus(undefined, "touched"), "seen", "new row stays seen");
+  assert.equal(resolveUpsertStatus(undefined, "in_probe"), "seen");
+  assert.equal(
+    resolveUpsertStatus("touched", "touched"),
+    "touched",
+    "already TESTED preserved (no downgrade via capped request)",
+  );
+  assert.equal(resolveUpsertStatus("seen", "deadend"), "deadend", "deadend still allowed");
+  assert.equal(resolveUpsertStatus("seen", "skipped_roe"), "skipped_roe");
+}
+
+{
+  // Traffic-objective allowTested: forward advances (v2 + legacy synonyms)
+  const traffic = { allowTested: true };
+  assert.equal(resolveUpsertStatus("seen", "touched", traffic), "touched");
+  assert.equal(resolveUpsertStatus("open", "in_probe", traffic), "touched");
+  assert.equal(resolveUpsertStatus("in_probe", "probed", traffic), "touched");
+  assert.equal(resolveUpsertStatus(undefined, "in_probe", traffic), "touched");
+  assert.equal(resolveUpsertStatus(undefined, "touched", traffic), "touched");
   assert.equal(resolveUpsertStatus(undefined, undefined), "seen");
   assert.equal(resolveUpsertStatus(undefined, "seen"), "seen");
 }
@@ -313,17 +329,30 @@ for (const from of ALL) {
   }
 }
 
-// Legacy input pairs also refuse booked without allowBooked and never downgrade after map
-const LEGACY_PAIRS: Array<[string, string, SurfaceStatus]> = [
-  ["open", "in_probe", "touched"],
-  ["open", "probed", "touched"],
-  ["in_probe", "open", "touched"],
+// Legacy input pairs: agent path (no allowTested) cannot fake TESTED; traffic path can.
+const LEGACY_AGENT_PAIRS: Array<[string, string, SurfaceStatus]> = [
+  ["open", "in_probe", "seen"], // capped — no fake TESTED
+  ["open", "probed", "seen"],
+  ["in_probe", "open", "touched"], // already TESTED rank; no downgrade
   ["probed", "open", "touched"],
   ["open", "booked", "seen"], // booked ignored on upsert
   ["probed", "booked", "touched"],
 ];
-for (const [from, to, expect] of LEGACY_PAIRS) {
-  assert.equal(resolveUpsertStatus(from, to), expect, `legacy ${from}+${to}→${expect}`);
+for (const [from, to, expect] of LEGACY_AGENT_PAIRS) {
+  assert.equal(resolveUpsertStatus(from, to), expect, `agent legacy ${from}+${to}→${expect}`);
+}
+const LEGACY_TRAFFIC_PAIRS: Array<[string, string, SurfaceStatus]> = [
+  ["open", "in_probe", "touched"],
+  ["open", "probed", "touched"],
+  ["in_probe", "open", "touched"],
+  ["probed", "open", "touched"],
+];
+for (const [from, to, expect] of LEGACY_TRAFFIC_PAIRS) {
+  assert.equal(
+    resolveUpsertStatus(from, to, { allowTested: true }),
+    expect,
+    `traffic legacy ${from}+${to}→${expect}`,
+  );
 }
 
 console.log("surface-identity.test.ts: ok");

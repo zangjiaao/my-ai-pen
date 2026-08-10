@@ -92,6 +92,12 @@ export type SurfaceUpsertMeta = {
    */
   allowBooked?: boolean;
   /**
+   * Allow status=touched (operator TESTED). Traffic settle only (#411).
+   * Ordinary Agent upsert leaves this false — cannot fake TESTED without traffic.
+   * Also true when source is `"traffic"`.
+   */
+  allowTested?: boolean;
+  /**
    * When true, skip hard-cap create failure by returning skip (finding path may keep booking).
    * Ordinary tool upsert leaves this false → hard reject.
    */
@@ -531,7 +537,12 @@ export class SurfaceSqliteStore {
             raw.status != null && isSurfaceStatus(String(raw.status).trim())
               ? String(raw.status).trim()
               : undefined;
-          status = resolveUpsertStatus(existing?.status, requested);
+          // Spec #411: TESTED (touched) only via Traffic settle (or explicit allowTested).
+          const allowTested =
+            meta?.allowTested === true ||
+            meta?.source === "traffic" ||
+            String(raw.source || "").trim() === "traffic";
+          status = resolveUpsertStatus(existing?.status, requested, { allowTested });
         }
 
         const methods = mergeMethods(existing?.methods, asStringList(raw.methods));

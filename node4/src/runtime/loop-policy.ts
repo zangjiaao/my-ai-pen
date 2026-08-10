@@ -19,8 +19,8 @@
 import { midRunBookingNudge, type BookingSnapshot } from "./booking-harness.js";
 import { incompleteTodoStopReminder, midRunTodoNudge, todoErrorReminder } from "./todo-harness.js";
 import {
-  incompleteSeenSurfaceStopReminder,
-  midRunSeenSurfaceNudge,
+  incompleteNewUntestedSurfaceStopReminder,
+  midRunNewUntestedSurfaceNudge,
 } from "./surface-harness.js";
 
 export type ContinueDecision = {
@@ -378,11 +378,17 @@ export function composeContinuePrompt(options: {
   /** Optional open task titles for OMP incomplete-stop reminder. */
   openTodoTitles?: string[];
   /**
-   * Surface rows still at **seen** (first traffic only). Soft coverage honesty —
-   * never hard-blocks settlement (#407).
+   * Surface rows still **NEW untested** (or first-touch seen fallback). Soft
+   * coverage honesty — never hard-blocks settlement (#411 / #407).
+   */
+  openNewUntestedSurfaceCount?: number;
+  /** Optional path/location samples for remaining NEW untested surfaces. */
+  openNewUntestedSurfaceSamples?: string[];
+  /**
+   * @deprecated Prefer openNewUntestedSurfaceCount (#411). Still accepted as alias.
    */
   openSeenSurfaceCount?: number;
-  /** Optional path/location samples for remaining seen surfaces. */
+  /** @deprecated Prefer openNewUntestedSurfaceSamples. */
   openSeenSurfaceSamples?: string[];
   todoErrors?: string[];
   booking?: BookingSnapshot;
@@ -428,20 +434,23 @@ export function composeContinuePrompt(options: {
     // Map-complete false finish: still steer toward untested recon surfaces.
     parts.push(discoveryBreadthReminder());
   }
-  // Soft Surface SEEN coverage (parallel to todo incomplete — never blocks settlement).
-  const seenCount = options.openSeenSurfaceCount ?? 0;
-  if (seenCount > 0) {
+  // Soft Surface NEW→TESTED coverage (parallel to todo incomplete — never blocks settlement).
+  const newUntestedCount =
+    options.openNewUntestedSurfaceCount ?? options.openSeenSurfaceCount ?? 0;
+  const newUntestedSamples =
+    options.openNewUntestedSurfaceSamples || options.openSeenSurfaceSamples || [];
+  if (newUntestedCount > 0) {
     if (options.kind === "empty" || options.kind === "premature") {
       parts.push(
-        incompleteSeenSurfaceStopReminder(
-          seenCount,
-          options.openSeenSurfaceSamples || [],
+        incompleteNewUntestedSurfaceStopReminder(
+          newUntestedCount,
+          newUntestedSamples,
           options.attempt,
           options.max,
         ),
       );
     } else {
-      parts.push(midRunSeenSurfaceNudge(seenCount));
+      parts.push(midRunNewUntestedSurfaceNudge(newUntestedCount));
     }
   }
   if (options.booking) {

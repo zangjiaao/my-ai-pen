@@ -88,7 +88,7 @@ const tool = createSurfaceTool(runtime);
   assert.deepEqual(surfaces[0]!.params, ["id"]);
 }
 
-// --- merge params/methods on same identity; no status downgrade ---
+// --- merge params/methods on same identity; agent cannot fake TESTED (#411) ---
 {
   const r = await toolJson(tool, {
     op: "upsert",
@@ -103,7 +103,11 @@ const tool = createSurfaceTool(runtime);
   const surfaces = r.data!.surfaces as Array<Record<string, unknown>>;
   assert.deepEqual(surfaces[0]!.methods, ["GET", "POST"]);
   assert.deepEqual(surfaces[0]!.params, ["id", "name"]);
-  assert.equal(surfaces[0]!.status, "touched");
+  assert.equal(
+    surfaces[0]!.status,
+    "seen",
+    "agent upsert cannot elevate to touched/TESTED without traffic",
+  );
 }
 
 // --- upsert cannot set booked ---
@@ -115,7 +119,25 @@ const tool = createSurfaceTool(runtime);
   });
   assert.ok(r.data);
   const surfaces = r.data!.surfaces as Array<Record<string, unknown>>;
-  assert.equal(surfaces[0]!.status, "touched", "booked ignored on ordinary upsert");
+  assert.equal(surfaces[0]!.status, "seen", "booked ignored on ordinary upsert");
+}
+
+// --- traffic-objective upsert can still mark TESTED (settle path) ---
+{
+  const r = await store.upsert(
+    [
+      {
+        location: "https://host.example/api/users",
+        status: "touched",
+        methods: ["GET"],
+      },
+    ],
+    { source: "traffic", source_agent_id: "main" },
+  );
+  assert.ok(r.ok);
+  if (r.ok) {
+    assert.equal(r.upserted[0]!.status, "touched", "source=traffic may set TESTED");
+  }
 }
 
 // --- list default seen+touched ---
@@ -173,6 +195,12 @@ const tool = createSurfaceTool(runtime);
   assert.equal(typeof r.data!.touched, "number");
   // Spec #409 light: operator alias tested = touched
   assert.equal(r.data!.tested, r.data!.touched);
+  // Spec #411: new_untested queue (seen fallback when no is_new)
+  assert.equal(typeof r.data!.new_untested, "number");
+  assert.equal(r.data!.new_untested, r.data!.seen, "fallback: new_untested ≈ seen without is_new");
+  assert.equal((r.data!.counts as Record<string, number>).new_untested, r.data!.new_untested);
+  assert.ok(Array.isArray(r.data!.new_untested_samples));
+  assert.equal(r.data!.new_untested_mode, "seen_fallback");
   assert.equal(typeof r.data!.booked, "number");
   assert.equal(typeof r.data!.deadend, "number");
   assert.equal(typeof r.data!.skipped_roe, "number");
@@ -200,6 +228,7 @@ const tool = createSurfaceTool(runtime);
   // Tool description posture: summary is primary; guidance must not require upsert deposit
   assert.ok(typeof r.data!.guidance === "string");
   assert.doesNotMatch(String(r.data!.guidance), /must (?:deposit|upsert|register)/i);
+  assert.match(String(r.data!.guidance), /priors.*≠|NEW untested/i, "guidance: priors ≠ coverage / NEW duty");
 }
 
 // --- summary empty ledger ---

@@ -447,22 +447,36 @@ const baseTask: TaskEnvelope = {
     "T3 work.md: guessed paths only with real requests",
   );
 
-  // #406: SEEN coverage discipline always-on in profession work.md
+  // #411: NEW → TESTED coverage; priors ≠ this-Case TESTED / coverage complete
   ok(
-    /\*\*seen\*\*.*first traffic only/i.test(workBody) &&
-      /\*\*touched\*\*/i.test(workBody) &&
-      /\*\*booked\*\*/i.test(workBody),
-    "T3 work.md: seen/touched/booked vocabulary (seen = first-touch only)",
+    /\*\*NEW\*\*/i.test(workBody) &&
+      /\*\*TESTED\*\*/i.test(workBody) &&
+      /\*\*NEW\*\*[^*]*→\s*\*\*TESTED\*\*/i.test(workBody),
+    "T3 work.md: NEW → TESTED primary duty",
+  );
+  ok(
+    /priors/i.test(workBody) &&
+      /≠ this-Case TESTED|≠ coverage complete/i.test(workBody),
+    "T3 work.md: priors ≠ this-Case TESTED / ≠ coverage complete",
+  );
+  ok(
+    /cannot fake TESTED/i.test(workBody) || /upsert optional.*cannot fake TESTED/i.test(workBody),
+    "T3 work.md: upsert cannot fake TESTED",
   );
   ok(
     /Coverage honesty/i.test(workBody) &&
       /surface\(summary\)/i.test(workBody) &&
-      /disclose remaining seen/i.test(workBody),
-    "T3 work.md: coverage honesty before wrap / disclose remaining seen",
+      /disclose remaining NEW untested/i.test(workBody),
+    "T3 work.md: coverage honesty / disclose remaining NEW untested",
   );
   ok(
     /Todo map complete ≠ surface coverage complete/i.test(workBody),
     "T3 work.md: todo complete ≠ surface coverage complete",
+  );
+  ok(
+    /never hard-blocks settlement/i.test(workBody) ||
+      /Open NEW untested never hard-blocks/i.test(workBody),
+    "T3 work.md: open NEW untested does not hard-block settlement",
   );
 }
 
