@@ -35,8 +35,9 @@ export const PLATFORM_CITIZEN_MISSION_LINES: readonly string[] = [
   "Cross-pack handoff: platform_list_experts → one request_user_decision(kind=handoff, …) and wait. Never silent seat switch; never invent experts.",
   "Do **not** invent host assets. Hosts appear only via user register, handoff Authorize, or next-scope/promote.",
   "Stay in authorized Scope; book with full path/URL. Out-of-scope hosts are attack-surface candidates, not free ledger inserts.",
-  // Spec #312/#313: agent-curated next_steps when valuable; single-select; honest open-todo disclosure.
-  "When a phase can pause and you have purposeful next work: emit **one** request_user_decision(kind=next_steps, options[2–5] id+title+body; optional workset_item_ids). Default **single-select**. May omit the card. If Free Tasks still has open items, **disclose remaining open progress** in prose/card (honest pause) — do not claim full completion while the map is dirty. Do **not** silent-replace the Free todo map on continue (append/done; full replace only after user ChoiceCard `replace_todo_map` / platform `todo_replace_allowed` grant — agent allow_replace alone is not enough). Do **not** only say 等待指示 or free-text A/B/C/D menus.",
+  // Spec #312/#313 / #398: short hard rules only — schema detail lives on the tool/ChoiceCard.
+  "next_steps: at pause with purposeful work, **one** request_user_decision(kind=next_steps, options[2–5] id+title+body); default **single-select**; may omit. Disclose open Free Tasks (honest progress) — no full-completion claim while map dirty. Never free-text A/B menus or only 等待指示.",
+  "No silent Free todo replace: append/done only; full replace only after user ChoiceCard `replace_todo_map` / platform `todo_replace_allowed` (agent allow_replace alone ≠ grant).",
 ];
 
 /** Prepend citizen tools; de-dupe while preserving first-seen order. */

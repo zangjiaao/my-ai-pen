@@ -213,11 +213,11 @@ const PLATFORM_CITIZEN_MISSION_SKIP_RE =
   /\[platform-citizen\]|platform_list_|request_user_decision|kind=next_steps|todo_replace|Honest counts:|Cross-pack handoff|Open priors on this Scope|Read inventory\/priors/i;
 
 /**
- * Filter mission+work to compact Profession for Graph stage captains (#394).
- * Keeps marker-bearing work lines + short mission identity; drops Free-mode
- * pointers, pack-load citizen longform (not a separate Base block yet — Spec #395),
- * and report/stop encyclopedia. Fail-open: if a side filters to empty
- * (thin/fixture packs), keep original lines.
+ * Filter mission+work to compact Profession for Graph stage captains (#394)
+ * and Package workers (#396). Keeps marker-bearing work lines + short mission
+ * identity; drops Free-mode pointers, pack-load citizen longform (not a separate
+ * Base block yet — Spec #395), and report/stop encyclopedia. Fail-open: if a
+ * side filters to empty (thin/fixture packs), keep original lines.
  */
 export function compactProfessionLayerInput(
   input: ProfessionLayerInput,
@@ -236,7 +236,7 @@ export function compactProfessionLayerInput(
 }
 
 /**
- * Compact Profession layer for Graph stage captains (and optional workers).
+ * Compact Profession layer for Graph stage captains and Package workers (#394 / #396).
  * Free Main continues to use full buildProfessionLayer / pack mission+work.
  */
 export function buildCompactProfessionLayer(input: ProfessionLayerInput): string {
@@ -284,8 +284,10 @@ export function buildPromptLayers(
       : pack.skillIds.filter((id) => !/postex|lateral/i.test(id));
     runtimeParts.push(
       `Skills available (load on demand via skill tool — ids only, not full bodies): ${gated.join(", ")}.`,
-      "Progressive load: skill(op=list) returns id/name/description only; skill(op=load, id=...) for one body when needed. Never bulk-load the catalog. Skills are methodology, not permission ACLs.",
     );
+    // #399 single-home: Profession work.md owns progressive skill (start order / at most one / rotate).
+    // Runtime keeps the id list + one never-bulk-load line — not a multi-sentence restatement of work.md.
+    runtimeParts.push("Never bulk-load skill bodies.");
     if (!roe.allowPostex) {
       runtimeParts.push(
         "Post-ex/lateral skills are withheld for this engagement (allow_postex=false).",
@@ -420,9 +422,10 @@ export function buildStagePromptLayers(
     `Allowed tools for this stage: ${toolList}`,
     intentLines,
     "Briefly narrate progress in assistant text when useful (what you are checking next; what you observed). Do not invent surfaces, proof, or booked findings in prose.",
-    "**Stage settlement is host-owned** (Spec #125): do **not** write result.json as the stage handoff or booking channel. Host projects stage outcome from Finding Store, package terminals, and surface ledger.",
+    // #399: one host-settlement hard rule (no multi-paraphrase of the result.json ban).
+    "**Stage settlement is host-owned** (Spec #125): do **not** write result.json as the stage handoff or booking channel — host projects outcome from Finding Store, package terminals, and surface ledger.",
     "Bookable candidates must land in **Finding Store** (package settlement auto-ingest, or finding(upsert) for serial Main work) with title, location, **severity** (critical|high|medium|low|info — no silent medium), proof_excerpt (verbatim tool stdout/body ≥24 chars), optional poc.",
-    "Surfaces: Runtime settles real Traffic (+ TARGET seed) into the ledger; use **surface(op=summary|list|get)** for coverage. Optional surface(upsert) is non-primary corrective only — never stage result.json as handoff.",
+    "Surfaces: Runtime settles real Traffic (+ TARGET seed) into the ledger; use **surface(op=summary|list|get)** for coverage. Optional surface(upsert) is non-primary corrective only.",
     allowFinding
       ? "After L0 Feedback marks feedback_ok, Main books with finding(confirm, finding_id=…). Severity fills from Store when omitted; missing severity fails closed."
       : "This stage cannot finding(confirm). Deposit candidates via packages or surface/fact only.",
@@ -442,7 +445,7 @@ export function buildStagePromptLayers(
           "Prefer packages over one long serial monologue across all vulnerability classes or surfaces.",
           "Each formal package **must** pass plan_node_id (L2 attack-class anchor). No hard package quotas.",
           "Anti-micro-spawn: do not split trivial single-GET chores into packages.",
-          "Workers return structured candidates/surfaces with severity + verbatim proof_excerpt; host settlement + Finding Store own Join — do not rephrase proof into a result.json ceremony.",
+          "Workers return structured candidates/surfaces with severity + verbatim proof_excerpt; host settlement + Finding Store own Join.",
           "Discovery packages: already_done must include prior pathKey∩class; host hard-fails spawn on prior collision — use re-verify packages with prior Store ids for known holes.",
           "After packages start this stage: orchestrate + settle only (do not serial-erase package failure).",
           "No nested subagent inside workers. Stay in RoE/scope.",
@@ -484,10 +487,10 @@ export function stageSystemPrompt(
 // ---------------------------------------------------------------------------
 
 /**
- * Four-layer Package worker system prompt inputs (T5 / #391).
+ * Four-layer Package worker system prompt inputs (T5 / #391 / #396).
  * Same seam as Free Main / Graph stage: Base → Profession → Runtime → Task.
- * Compact Profession from child pack mission+work; return contract + optional
- * skill body live in Runtime; child target/scope in Task.
+ * Profession is **compact** (shared buildCompactProfessionLayer — #394/#396);
+ * return contract + optional skill body live in Runtime; child target/scope in Task.
  *
  * Uses narrow Base/Profession inputs — no fake TaskEnvelope / RolePack (#393).
  */
@@ -506,8 +509,9 @@ export function buildSubagentPromptLayers(
     expertName: childTask.expertName,
     expertId: childTask.expertId,
   });
-  // Profession: compact worker how-to (mission + work from child pack).
-  const profession = buildProfessionLayer({
+  // Profession: compact core (#396) — same marker filter as Graph stage (#394);
+  // drops platform-citizen next_steps / todo_replace longform; Free Main stays full.
+  const profession = buildCompactProfessionLayer({
     missionLines: pack.missionLines,
     workLines: pack.workLines,
     vars: promptTemplateVarsFromBase({

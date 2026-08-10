@@ -449,8 +449,13 @@ assert.doesNotMatch(
 );
 // Free still keeps booking honesty + anti-answer-key competence.
 assert.match(workMd, /finding_id|feedback_ok/i, "I2 Free Store confirm path pointer");
-// T3 work.md short form "fixed vuln lists"; mission still has "fixed vulnerability lists"
-assert.match(workMd, /answer keys|fixed vulnerabilit|fixed vuln lists/i, "I2 Free bans answer keys");
+// #399: profession honesty single-home is mission (RoE also injects invent ban on Runtime)
+const missionMd = readFileSync(join(repoRoot, "experts/pentest/mission.md"), "utf8");
+assert.match(
+  missionMd,
+  /answer keys|fixed vulnerabilit|fixed vuln lists/i,
+  "I2 Free profession bans invent answer keys (mission)",
+);
 assert.doesNotMatch(
   workMd,
   /packages_n\s*must\s*[≥>=]\s*\d|must spawn\s+\d+\s+packages/i,

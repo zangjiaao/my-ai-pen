@@ -162,6 +162,15 @@ const baseTask: TaskEnvelope = {
     "Expert Free skill surface present",
   );
   ok(prompt.includes("allow_postex"), "Expert Free has RoE");
+  // #399: Runtime skill blurb is one never-bulk-load line (Profession owns progressive doctrine)
+  ok(
+    layers.runtime.includes("Never bulk-load skill bodies."),
+    "T1 Runtime has short never-bulk-load skill line",
+  );
+  ok(
+    !/skill\(op=list\) returns id\/name\/description only/i.test(layers.runtime),
+    "T1 Runtime does not multi-sentence restatement of progressive skill (work.md home)",
+  );
 }
 
 // --- Default: non-act / no finding(confirm) recon methodology ---
