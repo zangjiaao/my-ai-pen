@@ -212,7 +212,7 @@ export default function SchedulesPage() {
 
   return (
     <div className="flex h-screen bg-canvas">
-      <Sidebar activeId={null} onSelect={() => {}} />
+      <Sidebar activeId={null} />
       <div className="flex flex-1 flex-col overflow-hidden">
         <TopBar title="任务计划" />
         <div className="flex flex-1 overflow-hidden">

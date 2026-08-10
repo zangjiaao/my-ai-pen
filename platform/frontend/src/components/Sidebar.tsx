@@ -23,11 +23,15 @@ import { useConversationStore } from "../stores/conversationStore";
 import { authFetch } from "../lib/api";
 import ConfirmDialog from "./ConfirmDialog";
 import { BRAND_NAME } from "../lib/brand";
+import {
+  HOME_CHAT_PATH,
+  casePath,
+  isConversationSurfacePath,
+} from "../lib/caseRoutes";
 import { packageStatusDotClass, packageStatusTitle } from "../lib/packageStatusLight";
 
 interface Props {
   activeId: string | null;
-  onSelect: (id: string) => void;
 }
 
 const ACTIVE_CONVERSATION_KEY = "active_conversation_id";
@@ -110,7 +114,7 @@ function NavRow(props: {
   );
 }
 
-export default function Sidebar({ activeId, onSelect }: Props) {
+export default function Sidebar({ activeId }: Props) {
   const { user, logout } = useAuthStore();
   const { conversations, fetchAll, removeLocal } = useConversationStore();
   const navigate = useNavigate();
@@ -183,6 +187,20 @@ export default function Sidebar({ activeId, onSelect }: Props) {
     }
   };
 
+  /** URL is SoT for open Case — navigate only; ConversationPage loads from the route. */
+  const openCase = (caseId: string) => {
+    const id = caseId.trim();
+    if (!id) return;
+    // Selecting a real Case cancels blank-chat intent (must not race restore preferBlank).
+    try {
+      sessionStorage.removeItem(PREFER_BLANK_CHAT_KEY);
+    } catch {
+      /* ignore */
+    }
+    localStorage.setItem(ACTIVE_CONVERSATION_KEY, id);
+    navigate(casePath(id));
+  };
+
   const goHomeNewChat = () => {
     localStorage.removeItem(ACTIVE_CONVERSATION_KEY);
     // Survive StrictMode remount: session flag + router state. ConversationPage no longer
@@ -192,13 +210,13 @@ export default function Sidebar({ activeId, onSelect }: Props) {
     } catch {
       /* ignore */
     }
-    navigate("/", { state: { preferBlankChat: true } });
-    onSelect("");
+    navigate(HOME_CHAT_PATH, { state: { preferBlankChat: true } });
   };
 
   const dashboardActive =
     location.pathname === "/dashboard" || location.pathname.startsWith("/dashboard/");
-  const onConversationHome = location.pathname === "/" || location.pathname === "";
+  /** Conversation surface: blank home `/` or open Case `/:uuid`. */
+  const onConversationHome = isConversationSurfacePath(location.pathname);
 
   const initials = useMemo(
     () => userInitials(user?.email, user?.display_name),
@@ -236,8 +254,12 @@ export default function Sidebar({ activeId, onSelect }: Props) {
       removeLocal(targetId);
       if (activeId === targetId) {
         localStorage.removeItem(ACTIVE_CONVERSATION_KEY);
-        onSelect("");
-        navigate("/");
+        try {
+          sessionStorage.setItem(PREFER_BLANK_CHAT_KEY, "1");
+        } catch {
+          /* ignore */
+        }
+        navigate(HOME_CHAT_PATH, { state: { preferBlankChat: true } });
       }
       setDeleteTarget(null);
       await fetchAll();
@@ -330,11 +352,7 @@ export default function Sidebar({ activeId, onSelect }: Props) {
                   key={c.id}
                   type="button"
                   title={c.title}
-                  onClick={() => {
-                    localStorage.setItem(ACTIVE_CONVERSATION_KEY, c.id);
-                    navigate("/");
-                    onSelect(c.id);
-                  }}
+                  onClick={() => openCase(c.id)}
                   className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${
                     c.id === activeId && onConversationHome
                       ? "bg-accent-subtle"
@@ -399,11 +417,7 @@ export default function Sidebar({ activeId, onSelect }: Props) {
                   <>
                     <button
                       type="button"
-                      onClick={() => {
-                        localStorage.setItem(ACTIVE_CONVERSATION_KEY, c.id);
-                        navigate("/");
-                        onSelect(c.id);
-                      }}
+                      onClick={() => openCase(c.id)}
                       className={`min-w-0 flex-1 rounded-lg px-3 py-2 text-left text-sm transition-colors ${
                         selected
                           ? "font-medium text-ink"

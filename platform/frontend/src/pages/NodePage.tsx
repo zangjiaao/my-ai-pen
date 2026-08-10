@@ -158,7 +158,7 @@ export default function NodePage() {
 
   return (
     <div className="flex h-screen bg-canvas">
-      <Sidebar activeId={null} onSelect={() => {}} />
+      <Sidebar activeId={null} />
       <div className="flex flex-1 flex-col">
         <TopBar title="节点管理" />
         <div className="flex-1 overflow-y-auto p-6">
