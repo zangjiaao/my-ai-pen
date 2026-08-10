@@ -1,6 +1,6 @@
 # Spec: Surface coverage v3 — NEW · TESTED · Finding tags (no BOOK chip)
 
-**Status:** Implementable Spec (product contract)  
+**Status:** Living Spec — **shipped** (tickets [#408](https://github.com/zangjiaao/my-ai-pen/issues/408)–[#411](https://github.com/zangjiaao/my-ai-pen/issues/411); purpose axis extended by [#413](https://github.com/zangjiaao/my-ai-pen/issues/413)). Product contract remains normative.  
 **Amends:** [`case-surface-ledger.md`](case-surface-ledger.md) / Spec [#368](https://github.com/zangjiaao/my-ai-pen/issues/368) (v2 settle + seen/touched/booked internal)  
 **Related:** Asset inventory [#322](https://github.com/zangjiaao/my-ai-pen/issues/322); product state UI [#280](https://github.com/zangjiaao/my-ai-pen/issues/280); Free coverage honesty [#406](https://github.com/zangjiaao/my-ai-pen/issues/406) / soft SEEN harness [#407](https://github.com/zangjiaao/my-ai-pen/issues/407)  
 **Field drivers:** Cases `c02e3c20-…`, `5a9cf1f6-…` — operators read Case Surface as “still untested”; Agents treated platform vuln priors as coverage and left Runtime-objective first-touch rows unadvanced; tree chip density (methods + status + severity + rollup) obscured signal.

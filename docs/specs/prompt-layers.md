@@ -1,6 +1,6 @@
 # Spec: Layered system-prompt assembly
 
-**Status:** Living Spec — **P1–P3 shipped** (implementation tickets [#387](https://github.com/zangjiaao/my-ai-pen/issues/387)–[#391](https://github.com/zangjiaao/my-ai-pen/issues/391) / T1–T5); **P4** docs + pack authoring closeout is this ticket ([#392](https://github.com/zangjiaao/my-ai-pen/issues/392) / T6). Four-layer model remains **normative**.  
+**Status:** Living Spec — **P1–P4 shipped** (T1–T6 / [#387](https://github.com/zangjiaao/my-ai-pen/issues/387)–[#392](https://github.com/zangjiaao/my-ai-pen/issues/392); follow-ups [#393](https://github.com/zangjiaao/my-ai-pen/issues/393)–[#395](https://github.com/zangjiaao/my-ai-pen/issues/395), de-dupe [#396](https://github.com/zangjiaao/my-ai-pen/issues/396)–[#399](https://github.com/zangjiaao/my-ai-pen/issues/399), pack quality [#402](https://github.com/zangjiaao/my-ai-pen/issues/402)–[#405](https://github.com/zangjiaao/my-ai-pen/issues/405)). Parent Spec [#386](https://github.com/zangjiaao/my-ai-pen/issues/386) closable. Four-layer model remains **normative**; edit this Spec when layer ownership or path recipes change.  
 **Issue:** [#386](https://github.com/zangjiaao/my-ai-pen/issues/386)  
 **Implementation tickets (sub-issues of #386):**  
 [#387](https://github.com/zangjiaao/my-ai-pen/issues/387) T1 assembler + Default/Free parity ·  
@@ -23,7 +23,7 @@
 | [#389](https://github.com/zangjiaao/my-ai-pen/issues/389) T3 | **P2** | Slim Expert Profession core (pentest `mission.md` / `work.md`); citizen/handoff not re-owned in pack how-to (host inject; see §3.3.1) |
 | [#390](https://github.com/zangjiaao/my-ai-pen/issues/390) T4 | **P3** | Expert Graph stage captains on the same seam + Profession core/compact markers |
 | [#391](https://github.com/zangjiaao/my-ai-pen/issues/391) T5 | **P3** | Package workers on the same seam (compact Profession + optional one skill body + return contract) |
-| [#392](https://github.com/zangjiaao/my-ai-pen/issues/392) T6 | **P4** | This closeout: Spec status, pack authoring discoverability (§10 + `experts/README.md`), README index |
+| [#392](https://github.com/zangjiaao/my-ai-pen/issues/392) T6 | **P4** | **Shipped:** Spec status, pack authoring discoverability (§10 / §10.1 + `experts/README.md`), README index |
 
 **Primary code seam:** `node4/src/runtime/prompt-layers.ts` (re-exported from `prompt.ts`) — `assembleSystemPrompt`, narrow `buildBaseLayer` / `buildProfessionLayer`, Free `buildPromptLayers`, Graph stage `buildStagePromptLayers` / `stageSystemPrompt`, Package worker `buildSubagentPromptLayers` / `buildSubagentSystemPrompt`. Hard Graph executor and subagent session **call** the seam only (no large prompt-string ownership; no fake TaskEnvelope/RolePack for workers — #393). **#394 follow-up:** Graph stage uses `buildCompactProfessionLayer` (marker-bearing mission/work subset; Free stays full Profession); hypothesis queue injection is **Runtime-only** when hyp mode is on (no Task dual-home); `RolePack.packRoot` is typed (no anonymous cast at recipe/hard-resolve paths). **#395 follow-up (Spec-honest partial):** citizen remains pack-load–prepended into mission lines (Profession string today); full RoE instance (`formatRoeInjection`) remains Free Runtime — see §3.3.1. Contract suites: `prompt-layers.test.ts`, Free/Default path contracts, `hard-graph-stage-prompts.test.ts`, `subagent-language.test.ts`.
 
@@ -249,7 +249,7 @@ Exact stable **markers** for tests are chosen in the PR that lands P3 (prefer ex
 | **P1** | Unified four-layer assembler; wire Default + Expert Free Main | Prefer **parity** (external contracts unchanged) | Existing prompt contracts green + assembler unit tests | **Shipped** via [#387](https://github.com/zangjiaao/my-ai-pen/issues/387) T1 |
 | **P2** | Slim Profession core; thin Free Runtime; move Graph-only out of Free always-on; hit §3.7 budgets where practical | Content shape; Free methodology preserved | Free contract suite + size checklist | **Shipped** via [#388](https://github.com/zangjiaao/my-ai-pen/issues/388) T2 + [#389](https://github.com/zangjiaao/my-ai-pen/issues/389) T3 |
 | **P3** | Graph stage uses same seam + Profession core/compact; Package workers same seam | Graph gains profession core; third dialect ends | Stage profession-core tests mandatory; Package seam tests | **Shipped** via [#390](https://github.com/zangjiaao/my-ai-pen/issues/390) T4 + [#391](https://github.com/zangjiaao/my-ai-pen/issues/391) T5 |
-| **P4** | Living docs, README index, pack authoring notes; PRD only if product-visible posture changes | Docs | Index + authoring § | **This ticket** [#392](https://github.com/zangjiaao/my-ai-pen/issues/392) T6 |
+| **P4** | Living docs, README index, pack authoring notes; PRD only if product-visible posture changes | Docs | Index + authoring § | **Shipped** via [#392](https://github.com/zangjiaao/my-ai-pen/issues/392) T6 |
 
 Prefer incremental PRs per phase. Do not block P1 on perfect content rewrite. **After P4:** keep this Spec living when layer ownership or path recipes change; do not reintroduce L0–L5 product vocabulary.
 
