@@ -26,7 +26,7 @@
 | Axis | Meaning | UI |
 |------|---------|-----|
 | **Novelty** | Is this identity **new to the durable surface inventory** (asset-scoped)? | Optional **NEW** badge only when true |
-| **This-engagement exercise** | Did **this Case** put real further probe traffic on it? | **TESTED** (replaces operator-facing “touched”) |
+| **This-engagement exercise** | Did **this Case** put **test-purpose** traffic on it (≥1 exchange)? | **TESTED** — see [`surface-traffic-purpose-and-noise.md`](surface-traffic-purpose-and-noise.md); **not** hit≥2, **not** finding tags |
 | **Findings** | Confirmed product issues on this identity | **Finding severity tags only** — **no BOOK status chip** |
 
 ### L2 — Runtime objectivity preserved

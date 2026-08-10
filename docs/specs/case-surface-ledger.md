@@ -216,13 +216,16 @@ seen  →  touched  →  booked
 - Agent exploration (guessed paths, feature clicking) **must** produce traffic to enter the ledger—by design.
 - `traffic_list` remains available for raw capture inspection (#378); Surface is the **structured** management view.
 
-#### D6.1 — Noise filter (locked)
+#### D6.1 — Noise filter (locked; amended)
 
 **Request-as-row (Traffic settle → Surface):**
 
-- Default: almost all http(s) exchanges with a path become/update a Surface row.
+- Default: in-scope http(s) exchanges with a path become/update a Surface row.
 - **Static suffix denylist** — do **not** create Surface rows for the asset path itself, e.g. `.js`, `.css`, `.map`, common image/font extensions (exact list is an implementation knob; keep conservative).
 - **4xx/5xx remain rows** (401/403/500 are valid surface signals). Optional config may drop pure connection-fail `000` later.
+- **Scope gate (product amend):** do **not** settle Surface for origins outside TARGET / `scope.allow` (Traffic audit may still keep the exchange). See [`surface-traffic-purpose-and-noise.md`](surface-traffic-purpose-and-noise.md).
+- **Garbage path:** unexpanded `${…}` / `{{…}}` in path → do not settle.
+- **TESTED / purpose:** operator TESTED is **not** “second hit”; it is ≥1 **test-purpose** exchange — same companion Spec.
 
 **Status vocabulary (locked):** keep **`seen` / `touched` / `booked`** (not collapsed). First observation → `seen`; later real request on same identity → `touched`; finding confirm → `booked`.
 
