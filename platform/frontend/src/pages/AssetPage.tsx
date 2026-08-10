@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import Sidebar from "../components/Sidebar";
 import TopBar from "../components/TopBar";
 import { authFetch } from "../lib/api";
+import { casePath } from "../lib/caseRoutes";
 import AssetDetailDialog from "../components/AssetDetailDialog";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { buildRiskChips } from "../components/cards/FindingCard";
@@ -442,7 +443,7 @@ export default function AssetPage() {
       localStorage.setItem(ACTIVE_CONVERSATION_KEY, conv.id);
       sessionStorage.setItem(PENDING_ASSET_TASK_KEY, JSON.stringify(pending));
       setNotice("已创建会话，请选择专家后发送…");
-      navigate("/");
+      navigate(casePath(conv.id));
     } catch (err) {
       setError(err instanceof Error ? err.message : "创建任务失败");
     } finally {
@@ -512,7 +513,7 @@ export default function AssetPage() {
 
   return (
     <div className="flex h-screen bg-canvas">
-      <Sidebar activeId={null} onSelect={() => {}} />
+      <Sidebar activeId={null} />
       <div className="flex flex-1 flex-col overflow-hidden">
         <TopBar title="资产管理" />
         <div className="flex flex-1 overflow-hidden">

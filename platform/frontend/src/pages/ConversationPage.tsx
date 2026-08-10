@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import Sidebar from "../components/Sidebar";
+import {
+  HOME_CHAT_PATH,
+  casePath,
+  isCaseId,
+} from "../lib/caseRoutes";
 import TopBar from "../components/TopBar";
 import RightPanel from "../components/RightPanel";
 import MessageRenderer, {
@@ -277,8 +282,20 @@ export default function ConversationPage() {
   const queryClient = useQueryClient();
   const location = useLocation();
   const navigate = useNavigate();
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [restoreAttempted, setRestoreAttempted] = useState(false);
+  const { caseId: caseIdParam } = useParams<{ caseId?: string }>();
+  /** Canonical Case URL (`/:caseId`). URL is SoT for which session is open. */
+  const routeCaseIdRaw = (caseIdParam || "").trim() || null;
+  const routeCaseId = routeCaseIdRaw && isCaseId(routeCaseIdRaw) ? routeCaseIdRaw : null;
+  const routeCaseIdInvalid = Boolean(routeCaseIdRaw && !routeCaseId);
+  // Seed from URL so cross-page open does not flash blank welcome before load.
+  const [activeId, setActiveId] = useState<string | null>(() => routeCaseId);
+  /**
+   * Case id whose messages/state were already loaded (or intentionally opened)
+   * for the current mount. Prevents re-loadConversation on URL pin after first
+   * send (which would wipe optimistic rows). Null = blank home loaded.
+   */
+  const caseRouteLoadedRef = useRef<string | null | undefined>(undefined);
+  const [homeRestoreDone, setHomeRestoreDone] = useState(false);
   const [stateSnapshotLoaded, setStateSnapshotLoaded] = useState(false);
   const messageScrollerRef = useRef<HTMLDivElement | null>(null);
   const importFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -1847,6 +1864,7 @@ export default function ConversationPage() {
     setLiveStreams(clearLiveStreams());
     setPendingChrome((cur) => reducePendingChrome(cur, { type: "clear" }));
     if (!id) {
+      caseRouteLoadedRef.current = null;
       localStorage.removeItem(ACTIVE_CONVERSATION_KEY);
       void queryClient.removeQueries({ queryKey: ["conversation-messages"] });
       setActiveId(null);
@@ -1860,6 +1878,9 @@ export default function ConversationPage() {
       /* ignore */
     }
 
+    // Mark before fetch so same-route effect re-runs (e.g. conversations list
+    // refresh) do not re-enter load and wipe live/optimistic state.
+    caseRouteLoadedRef.current = id;
     setStateSnapshotLoaded(false);
     pendingScrollToBottomRef.current = true;
     shouldStickToBottomRef.current = true;
@@ -1880,17 +1901,25 @@ export default function ConversationPage() {
       setStateSnapshotLoaded(true);
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) {
+        caseRouteLoadedRef.current = null;
         localStorage.removeItem(ACTIVE_CONVERSATION_KEY);
         void queryClient.removeQueries({ queryKey: ["conversation-messages", id] });
         setActiveId(null);
         resetConversationState();
         void fetchAll();
+        // Drop dead Case URL so operator lands on blank home, not a stuck `/:missing`.
+        navigate(HOME_CHAT_PATH, { replace: true, state: { preferBlankChat: true } });
+        try {
+          sessionStorage.setItem(PREFER_BLANK_CHAT_KEY, "1");
+        } catch {
+          /* ignore */
+        }
         return;
       }
       applyConversationState(fallbackState);
       setStateSnapshotLoaded(false);
     }
-  }, [applyConversationState, conversations, fetchAll, queryClient, resetConversationState, send]);
+  }, [applyConversationState, conversations, fetchAll, navigate, queryClient, resetConversationState, send]);
   loadConversationRef.current = loadConversation;
 
   useEffect(() => {
@@ -2000,9 +2029,41 @@ export default function ConversationPage() {
     [mentionTargets, mentionState],
   );
 
+  // Case URL is the only SoT for the open session. localStorage is last-active
+  // cache (redirect `/` → `/:id`). preferBlank forces blank home without redirect.
   useEffect(() => {
-    if (restoreAttempted) return;
-    // Asset-page launch owns conversation selection; do not race it with restore.
+    // Non-UUID segment under conversation shell → bounce home.
+    if (routeCaseIdInvalid) {
+      navigate(HOME_CHAT_PATH, { replace: true, state: { preferBlankChat: true } });
+      try {
+        sessionStorage.setItem(PREFER_BLANK_CHAT_KEY, "1");
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+
+    // Explicit `/:caseId` always wins (history click, deep link, refresh, pin after create).
+    if (routeCaseId) {
+      try {
+        sessionStorage.removeItem(PREFER_BLANK_CHAT_KEY);
+      } catch {
+        /* ignore */
+      }
+      setHomeRestoreDone(false);
+      // Already loaded / intentionally opened this Case (incl. first-send URL pin).
+      if (caseRouteLoadedRef.current === routeCaseId) {
+        if (activeId !== routeCaseId) setActiveId(routeCaseId);
+        return;
+      }
+      void loadConversation(routeCaseId);
+      return;
+    }
+
+    // Home `/` only below this point.
+    if (location.pathname !== "/" && location.pathname !== "") return;
+
+    // Asset-page launch may still land on `/` with a pending draft (legacy).
     if (sessionStorage.getItem(PENDING_ASSET_TASK_KEY)) return;
 
     const locState = (location.state || null) as ConversationLocationState | null;
@@ -2016,37 +2077,52 @@ export default function ConversationPage() {
         }
       })();
 
-    // Sidebar「新建会话」: stay on blank composer. Do NOT fall back to first/running
-    // session (that was the bug from other pages). Keep session flag until after
-    // restore so React StrictMode remount still sees it.
+    // Sidebar「新建会话」 / deleted active Case: stay on blank composer.
     if (preferBlank) {
-      setRestoreAttempted(true);
-      void loadConversation(null).finally(() => {
-        try {
-          sessionStorage.removeItem(PREFER_BLANK_CHAT_KEY);
-        } catch {
-          /* ignore */
-        }
-        // Drop one-shot location state so refresh keeps normal restore behavior.
-        if (locState?.preferBlankChat) {
-          navigate(".", { replace: true, state: {} });
-        }
-      });
+      // undefined = never settled; string id = open Case; null = already blank.
+      const needsBlankLoad =
+        activeId != null || caseRouteLoadedRef.current !== null;
+      if (needsBlankLoad) {
+        void loadConversation(null);
+      } else {
+        caseRouteLoadedRef.current = null;
+      }
+      setHomeRestoreDone(true);
+      try {
+        sessionStorage.removeItem(PREFER_BLANK_CHAT_KEY);
+      } catch {
+        /* ignore */
+      }
+      // Drop one-shot location state so refresh keeps normal restore behavior.
+      if (locState?.preferBlankChat) {
+        navigate(".", { replace: true, state: {} });
+      }
       return;
     }
 
+    if (homeRestoreDone) return;
+
     const storedId = localStorage.getItem(ACTIVE_CONVERSATION_KEY);
-    // Always honor an explicit stored id — even if the list has not fetched it yet
-    // (freshly created from Assets / Vulns).
-    if (storedId) {
-      setRestoreAttempted(true);
-      void loadConversation(storedId);
+    // Honor last-active cache by canonicalizing to `/:id`.
+    if (storedId && isCaseId(storedId)) {
+      setHomeRestoreDone(true);
+      navigate(casePath(storedId), { replace: true });
       return;
     }
 
     // No stored id → blank composer. Do not auto-pick conversations[0] / running.
-    setRestoreAttempted(true);
-  }, [conversations, loadConversation, location.state, navigate, restoreAttempted]);
+    caseRouteLoadedRef.current = null;
+    setHomeRestoreDone(true);
+  }, [
+    activeId,
+    homeRestoreDone,
+    loadConversation,
+    location.pathname,
+    location.state,
+    navigate,
+    routeCaseId,
+    routeCaseIdInvalid,
+  ]);
 
   useEffect(() => {
     if (activeId) send({ type: "subscribe", conversation_id: activeId });
@@ -2142,7 +2218,9 @@ export default function ConversationPage() {
       const summary = `Import complete: messages ${result.messages_imported || 0}, assets ${result.assets_imported || 0}, vulnerabilities ${result.vulns_imported || 0}, evidence ${result.evidence_imported || 0}`;
       setImportStatus({ level: "success", text: summary });
       await fetchAll();
+      // Mark loaded after loadConversation; pin URL without remount (layout shell).
       await loadConversation(result.conversation_id);
+      navigate(casePath(result.conversation_id), { replace: true });
     } catch (error) {
       const message = error instanceof ApiError ? String(error.message) : "Import failed. Please confirm this is a pentest-node report.tar.gz export.";
       setImportStatus({ level: "error", text: message });
@@ -2150,7 +2228,7 @@ export default function ConversationPage() {
       setImportingReport(false);
       if (importFileInputRef.current) importFileInputRef.current.value = "";
     }
-  }, [fetchAll, loadConversation]);
+  }, [fetchAll, loadConversation, navigate]);
 
   const launchTaskMessage = useCallback(async (opts: {
     displayText: string;
@@ -2228,18 +2306,27 @@ export default function ConversationPage() {
           headers: { "Content-Type": "application/json" },
         });
         convId = data.id;
+        // Pin as already-open so route effect does not re-load and wipe optimistic rows.
+        caseRouteLoadedRef.current = convId;
         setActiveId(convId);
         localStorage.setItem(ACTIVE_CONVERSATION_KEY, convId);
         send({ type: "subscribe", conversation_id: convId });
         if (startFresh) resetConversationState();
+        if (location.pathname !== casePath(convId)) {
+          navigate(casePath(convId), { replace: true });
+        }
         void fetchAll();
       } catch {
         return;
       }
     } else if (explicitConv) {
+      caseRouteLoadedRef.current = convId;
       setActiveId(convId);
       localStorage.setItem(ACTIVE_CONVERSATION_KEY, convId);
       send({ type: "subscribe", conversation_id: convId });
+      if (location.pathname !== casePath(convId)) {
+        navigate(casePath(convId), { replace: true });
+      }
       void fetchAll();
     }
 
@@ -2421,6 +2508,8 @@ export default function ConversationPage() {
     setConversationMessageData,
     activeConversationNodeId,
     fetchAll,
+    location.pathname,
+    navigate,
     patchConversation,
     workset,
   ]);
@@ -2454,11 +2543,11 @@ export default function ConversationPage() {
       return;
     }
 
-    // Consume session flag once; pin conversation before restore can rewrite it.
+    // Consume session flag once. URL (`/:id` from AssetPage) is SoT for load;
+    // this effect only prefill draft + optional legacy autoSend after load.
     pendingAssetLaunchDoneRef.current = true;
     sessionStorage.removeItem(PENDING_ASSET_TASK_KEY);
     localStorage.setItem(ACTIVE_CONVERSATION_KEY, convId);
-    setRestoreAttempted(true);
 
     const target = draft.target || null;
     const scope = draft.scope || null;
@@ -2479,12 +2568,18 @@ export default function ConversationPage() {
       });
     }
 
-    void (async () => {
-      try {
-        await Promise.resolve();
-        await loadConversationRef.current(convId);
-        // Legacy path only if autoSend explicitly requested.
-        if (autoSend) {
+    if (location.pathname !== casePath(convId)) {
+      navigate(casePath(convId), { replace: true });
+    }
+
+    // Legacy path only if autoSend explicitly requested (Asset v2 uses autoSend: false).
+    if (autoSend) {
+      void (async () => {
+        try {
+          // Wait until route effect has loaded this Case (or load now if already on URL).
+          if (caseRouteLoadedRef.current !== convId) {
+            await loadConversationRef.current(convId);
+          }
           pendingAssetTaskRef.current = null;
           await launchTaskMessageRef.current({
             displayText: text,
@@ -2494,12 +2589,12 @@ export default function ConversationPage() {
             forceNewConversation: false,
             conversationId: convId,
           });
+        } catch {
+          // loadConversation / launch already surface errors; keep composer usable.
         }
-      } catch {
-        // loadConversation / launch already surface errors; keep composer usable.
-      }
-    })();
-  }, []);
+      })();
+    }
+  }, [location.pathname, navigate]);
 
   const handleSend = useCallback(async (overrideText?: string) => {
     const displayText = (typeof overrideText === "string" ? overrideText : input).trim();
@@ -2805,7 +2900,7 @@ function agentTargetForNode(node: AgentNode): AgentIdentity | undefined {
 
   return (
     <div className="flex h-screen overflow-hidden bg-canvas">
-      <Sidebar activeId={activeId} onSelect={(id) => { void loadConversation(id || null); }} />
+      <Sidebar activeId={activeId} />
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar
           title={activeId ? conversations?.find(c => c.id === activeId)?.title : undefined}

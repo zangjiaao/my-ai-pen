@@ -119,7 +119,7 @@ export default function ExpertPage() {
 
   return (
     <div className="flex h-screen bg-canvas">
-      <Sidebar activeId={null} onSelect={() => {}} />
+      <Sidebar activeId={null} />
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar title="专家管理" />
         <div className="flex-1 overflow-y-auto p-6">
