@@ -16,6 +16,7 @@
 | 2026-08-10 | v1 implementation tickets #369–#378 (tool, SQLite, dual-write, FE, finding→booked, import, traffic_list) |
 | 2026-08-10 | Field failure: Case finished with Findings + Traffic, Surface empty; Agent recon = prior path lists + curl, not scientific crawl; finding→booked failed on non-URL `location` |
 | 2026-08-10 | **v2 grill (this amendment):** Surface is **Agent working memory**, **Runtime-passive from Traffic**, completion via **finding confirm**; no complete-tag without test traffic |
+| 2026-08-10 | **v3 operator model (amend):** [`surface-new-tested-coverage.md`](surface-new-tested-coverage.md) — UI **NEW** (inventory novelty) + **TESTED** (this-Case traffic) + finding tags; no BOOK/SEEN/PRIOR chips; method chips off tree; priors ≠ coverage. Internal settle may keep seen/touched/booked expand–contract. |
 
 ---
 
@@ -424,7 +425,8 @@ These are **not** locked; resolve before/during v2 implementation tickets:
 | Row birth | Runtime Traffic settle + TARGET seed |
 | Noise | Default settle + static suffix denylist |
 | JS/SPA mining | Capture enrichment later (D6.2); feed Agent; optional Surface bridge later |
-| Status | seen → touched → booked |
+| Status (v2 internal) | seen → touched → booked |
+| Status (v3 operator UI) | **NEW** (inventory) + **TESTED** (this Case traffic) + finding tags — see [`surface-new-tested-coverage.md`](surface-new-tested-coverage.md) |
 | Complete | finding confirm only; create-on-book with **strong** identity; no fake complete |
 | Settle timing | Per exchange complete, immediate |
 | Agent read | surface list/summary/get tool-first |
