@@ -17,6 +17,8 @@ STRIP_BODY_AFTER = 300
 # shell = best-effort CLI capture (curl/wget/httpie) — not MITM; honesty on FE.
 SOURCES = frozenset({"http", "browser", "shell", "mitm"})
 PHASES = frozenset({"pending", "completed", "failed"})
+# Spec #413 L3 — exchange purpose (test | browse | setup | noise | unknown).
+PURPOSES = frozenset({"test", "browse", "setup", "noise", "unknown"})
 
 
 def _now_iso() -> str:
@@ -100,7 +102,16 @@ def normalize_traffic_exchange(msg: dict, *, conversation_id: str | None = None)
     if resource_class == "":
         resource_class = None
 
-    return {
+    # Spec #413: optional purpose on dual-write; omit when invalid (expand-contract).
+    purpose_raw = msg.get("purpose")
+    purpose: str | None
+    if purpose_raw is None or str(purpose_raw).strip() == "":
+        purpose = None
+    else:
+        p = str(purpose_raw).strip().lower()
+        purpose = p if p in PURPOSES else None
+
+    out = {
         "type": "traffic_exchange",
         "exchange_id": exchange_id,
         "conversation_id": conv,
@@ -131,6 +142,9 @@ def normalize_traffic_exchange(msg: dict, *, conversation_id: str | None = None)
         "browser_resource_class": resource_class,
         "is_websocket": bool(msg.get("is_websocket")),
     }
+    if purpose is not None:
+        out["purpose"] = purpose
+    return out
 
 
 def _safe_int(value: Any) -> int | None:
@@ -161,6 +175,7 @@ def merge_exchange(existing: dict | None, incoming: dict) -> dict:
         "started_at",
         "browser_resource_class",
         "is_websocket",
+        "purpose",
         "request_headers",
         "request_body",
         "request_body_truncated",

@@ -12,11 +12,16 @@
 
 import { createHash } from "node:crypto";
 import type { PlatformSink, TaskEnvelope, ToolRuntime } from "../types.js";
-import { settleTrafficToSurface } from "./surface-settle.js";
+import { settleTrafficToSurface, trafficSettleScopeFromTask } from "./surface-settle.js";
 import { rememberTrafficExchange } from "./traffic-query.js";
+import {
+  classifyTrafficPurpose,
+  type TrafficPurpose,
+} from "./traffic-purpose.js";
 
 export type TrafficSource = "http" | "browser" | "shell" | "mitm";
 export type TrafficPhase = "pending" | "completed" | "failed";
+export type { TrafficPurpose };
 export type BrowserResourceClass =
   | "document"
   | "xhr"
@@ -62,6 +67,11 @@ export type TrafficExchange = {
   response_body_binary?: boolean;
   browser_resource_class?: BrowserResourceClass | null;
   is_websocket?: boolean;
+  /**
+   * Spec #413 L3 — exchange purpose (test | browse | setup | noise | unknown).
+   * Set at collect time (tool default + heuristics); drives Surface case_tested.
+   */
+  purpose?: TrafficPurpose;
 };
 
 export type BodyCapture = {
@@ -182,8 +192,18 @@ export function buildPendingHttpExchange(input: {
   requestBody?: string | null;
   bodyBudget?: number;
   startedAt?: string;
+  /** Explicit purpose override (#413); else classified from source/url. */
+  purpose?: TrafficPurpose | string | null;
 }): TrafficExchange {
   const req = captureBody(input.requestBody, { budget: input.bodyBudget });
+  const method = String(input.method || "GET").toUpperCase();
+  const url = String(input.url || "");
+  const purpose = classifyTrafficPurpose({
+    purpose: input.purpose,
+    source: "http",
+    method,
+    url,
+  });
   return {
     type: "traffic_exchange",
     exchange_id: newExchangeId("http"),
@@ -192,8 +212,8 @@ export function buildPendingHttpExchange(input: {
     sequence: input.sequence,
     source: "http",
     phase: "pending",
-    method: String(input.method || "GET").toUpperCase(),
-    url: String(input.url || ""),
+    method,
+    url,
     request_headers: input.requestHeaders ?? null,
     request_body: req.text,
     status_code: null,
@@ -212,6 +232,7 @@ export function buildPendingHttpExchange(input: {
     response_body_hash: null,
     request_body_binary: req.binary,
     response_body_binary: false,
+    purpose,
   };
 }
 
@@ -242,6 +263,15 @@ export function completeExchange(
     Number.isFinite(startedMs) && Number.isFinite(completedMs)
       ? Math.max(0, completedMs - startedMs)
       : null;
+  const purpose =
+    pending.purpose ??
+    classifyTrafficPurpose({
+      purpose: null,
+      source: pending.source,
+      method: pending.method,
+      url: pending.url,
+      browser_resource_class: pending.browser_resource_class,
+    });
   return {
     ...pending,
     phase: "completed",
@@ -256,6 +286,7 @@ export function completeExchange(
     response_body_bytes: res.bytes,
     response_body_hash: res.hash,
     response_body_binary: res.binary,
+    purpose,
   };
 }
 
@@ -271,6 +302,15 @@ export function failExchange(
     Number.isFinite(startedMs) && Number.isFinite(completedMs)
       ? Math.max(0, completedMs - startedMs)
       : null;
+  const purpose =
+    pending.purpose ??
+    classifyTrafficPurpose({
+      purpose: null,
+      source: pending.source,
+      method: pending.method,
+      url: pending.url,
+      browser_resource_class: pending.browser_resource_class,
+    });
   return {
     ...pending,
     phase: "failed",
@@ -278,6 +318,7 @@ export function failExchange(
     completed_at: done,
     duration_ms,
     error: String(error || "request failed").slice(0, 2000),
+    purpose,
   };
 }
 
@@ -373,6 +414,18 @@ export function browserNetworkRowToExchange(input: {
     ? `tx_browser_${idFromBrowser.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 64)}`
     : newExchangeId("browser");
 
+  const purpose = classifyTrafficPurpose({
+    purpose:
+      row.purpose != null
+        ? String(row.purpose)
+        : row.traffic_purpose != null
+          ? String(row.traffic_purpose)
+          : null,
+    source: "browser",
+    method,
+    url,
+    browser_resource_class: resourceClass,
+  });
   return {
     type: "traffic_exchange",
     exchange_id: exchangeId,
@@ -408,6 +461,7 @@ export function browserNetworkRowToExchange(input: {
     response_body_binary: res.binary,
     browser_resource_class: resourceClass,
     is_websocket: isWs,
+    purpose,
   };
 }
 
@@ -494,7 +548,8 @@ export async function emitHttpComplete(
     bodyBudget?: number;
   },
 ): Promise<TrafficExchange> {
-  const done = completeExchange(pending, input);
+  const scope = trafficSettleScopeFromTask(runtime.task || {});
+  const done = ensureExchangePurpose(completeExchange(pending, input), scope);
   rememberTrafficExchange(runtime, done);
   // #380 D6: settle Surface immediately on complete (HTTP(S); denylist; dual-write).
   // Await local SQLite so subsequent surface list sees the row; dual-write stays async.
@@ -508,7 +563,8 @@ export async function emitHttpFail(
   pending: TrafficExchange,
   error: string,
 ): Promise<TrafficExchange> {
-  const done = failExchange(pending, error);
+  const scope = trafficSettleScopeFromTask(runtime.task || {});
+  const done = ensureExchangePurpose(failExchange(pending, error), scope);
   rememberTrafficExchange(runtime, done);
   // #380: fail with usable URL still settles (pending-only does not).
   await settleTrafficToSurface(runtime, done);
@@ -709,8 +765,12 @@ export function buildShellHttpExchanges(input: {
       const origin = base.origin;
       return parsed.pathStatuses.map((ps, i) => {
         const url = `${origin}${ps.path.startsWith("/") ? ps.path : `/${ps.path}`}`;
-        const res = captureBody(null, { budget });
         const emptyReq = captureBody(null, { budget });
+        const purpose = classifyTrafficPurpose({
+          source: "shell",
+          method: "GET",
+          url,
+        });
         return {
           type: "traffic_exchange" as const,
           exchange_id: newExchangeId("shell"),
@@ -739,6 +799,7 @@ export function buildShellHttpExchanges(input: {
           response_body_hash: null,
           request_body_binary: false,
           response_body_binary: false,
+          purpose,
         };
       });
     } catch {
@@ -757,6 +818,12 @@ export function buildShellHttpExchanges(input: {
         : parsed.pathStatuses.find((p) => url.endsWith(p.path))?.status ??
           (i === 0 ? parsed.statusCode : null);
     const phase: TrafficPhase = failed && status == null ? "failed" : "completed";
+    const rowMethod = i === 0 ? method : "GET";
+    const purpose = classifyTrafficPurpose({
+      source: "shell",
+      method: rowMethod,
+      url,
+    });
     out.push({
       type: "traffic_exchange",
       exchange_id: newExchangeId("shell"),
@@ -765,7 +832,7 @@ export function buildShellHttpExchanges(input: {
       sequence: (input.sequenceStart || 0) + i + 1,
       source: "shell",
       phase,
-      method: i === 0 ? method : "GET",
+      method: rowMethod,
       url,
       request_headers: i === 0 ? reqHeaders : null,
       request_body: req.text,
@@ -785,9 +852,34 @@ export function buildShellHttpExchanges(input: {
       response_body_hash: res.hash,
       request_body_binary: req.binary,
       response_body_binary: res.binary,
+      purpose,
     });
   }
   return out;
+}
+
+/**
+ * Ensure exchange has a purpose (re-classify with optional task scope for OOS→noise).
+ * Idempotent when purpose already set and no scope re-check needed; always returns a purpose.
+ */
+export function ensureExchangePurpose(
+  exchange: TrafficExchange,
+  scope?: { allowedHosts?: ReadonlySet<string> | readonly string[] | null } | null,
+): TrafficExchange {
+  // Re-classify when scope available so OOS can become noise; preserve explicit test/browse/setup
+  // only when already classified without needing noise override — simplest: always re-run with
+  // purpose as seed only if we want declaration to stick. Explicit purpose on exchange wins
+  // inside classifyTrafficPurpose.
+  const purpose = classifyTrafficPurpose({
+    purpose: exchange.purpose,
+    source: exchange.source,
+    method: exchange.method,
+    url: exchange.url,
+    browser_resource_class: exchange.browser_resource_class,
+    scope: scope ?? null,
+  });
+  if (exchange.purpose === purpose) return exchange;
+  return { ...exchange, purpose };
 }
 
 /**
@@ -822,13 +914,17 @@ export async function emitShellHttpTraffic(
   if (!exchanges.length) return [];
   // Advance sequence counter past emitted rows
   (runtime.lifecycle as { trafficSequence?: number }).trafficSequence = seq0 + exchanges.length;
-  for (const ex of exchanges) {
+  const scope = trafficSettleScopeFromTask(runtime.task || {});
+  const out: TrafficExchange[] = [];
+  for (const raw of exchanges) {
+    const ex = ensureExchangePurpose(raw, scope);
     rememberTrafficExchange(runtime, ex);
     // #380 D6: shell HTTP complete/fail → Surface settle
     await settleTrafficToSurface(runtime, ex);
     await emitTrafficExchange(runtime.platform, ex).catch(() => {});
+    out.push(ex);
   }
-  return exchanges;
+  return out;
 }
 
 /** Phase rank for browser same-id upgrade (R2). */
@@ -925,14 +1021,19 @@ export async function drainBrowserNetworkRows(options: {
     if (!shouldEmitBrowserRow(options.seenIds, mapKey, exchange)) continue;
     seq += 1;
     exchange.sequence = seq;
-    rememberBrowserEmit(options.seenIds, mapKey, exchange);
-    if (options.storeHost) rememberTrafficExchange(options.storeHost, exchange);
+    const scope =
+      options.storeHost && isToolRuntimeForSettle(options.storeHost)
+        ? trafficSettleScopeFromTask(options.storeHost.task || {})
+        : null;
+    const withPurpose = ensureExchangePurpose(exchange, scope);
+    rememberBrowserEmit(options.seenIds, mapKey, withPurpose);
+    if (options.storeHost) rememberTrafficExchange(options.storeHost, withPurpose);
     // #380 D6: browser terminal rows → Surface settle when runtime has working store
     if (options.storeHost && isToolRuntimeForSettle(options.storeHost)) {
-      await settleTrafficToSurface(options.storeHost, exchange);
+      await settleTrafficToSurface(options.storeHost, withPurpose);
     }
-    await emitTrafficExchange(options.platform, exchange).catch(() => {});
-    emitted.push(exchange);
+    await emitTrafficExchange(options.platform, withPurpose).catch(() => {});
+    emitted.push(withPurpose);
   }
   return emitted;
 }

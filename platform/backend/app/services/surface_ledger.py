@@ -706,6 +706,11 @@ def _coerce_is_new(value: Any, *, default: bool = False) -> bool:
     return default
 
 
+def _coerce_case_tested(value: Any, *, default: bool = False) -> bool:
+    """False-safe case_tested for Case ledger rows (Spec #413 purpose=test traffic)."""
+    return _coerce_is_new(value, default=default)
+
+
 def merge_surface_row(
     existing: dict | None,
     incoming: dict,
@@ -718,6 +723,11 @@ def merge_surface_row(
     - Create: take incoming is_new (false-safe default False).
     - Update: sticky — never clear is_new from later dual-writes / re-admits.
     Inventory age does not advance status (no auto-TESTED).
+
+    Spec #413: ``case_tested`` sticky true when purpose=test traffic hit this identity.
+    - Create: take incoming case_tested (false-safe).
+    - Update: sticky — never clear once true.
+    Finding book alone does not set case_tested (orthogonal to TESTED chip).
     """
     if not existing:
         row = dict(incoming)
@@ -728,6 +738,7 @@ def merge_surface_row(
         row["status"] = st
         # First Case row for this identity this engagement.
         row["is_new"] = _coerce_is_new(row.get("is_new"), default=False)
+        row["case_tested"] = _coerce_case_tested(row.get("case_tested"), default=False)
         return row
 
     out = dict(existing)
@@ -774,6 +785,15 @@ def merge_surface_row(
     )
     inc_new = _coerce_is_new(incoming.get("is_new"), default=False)
     out["is_new"] = bool(prev_new or inc_new)
+
+    # Spec #413: case_tested sticky-true (purpose=test traffic).
+    prev_ct = (
+        _coerce_case_tested(existing.get("case_tested"), default=False)
+        if "case_tested" in existing
+        else False
+    )
+    inc_ct = _coerce_case_tested(incoming.get("case_tested"), default=False)
+    out["case_tested"] = bool(prev_ct or inc_ct)
     return out
 
 

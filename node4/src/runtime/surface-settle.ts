@@ -1,15 +1,17 @@
 /**
- * Spec #368 / #380 / #412 — Traffic complete → Surface settle (D6 / D6.1).
+ * Spec #368 / #380 / #412 / #413 — Traffic complete → Surface settle (D6 / D6.1).
  *
  * Pure decision + Node integration:
  *   HTTP(S) exchange complete/fail → identity (origin_key + path_key)
- *   → first hit seen, later touched; merge methods
  *   → L2 noise gates: engagement scope, garbage path, static denylist,
  *     optional collapsed OS-probe paths
+ *   → purpose classify (#413): purpose=test → case_tested sticky + status touched
+ *     (single test request enough for operator TESTED)
+ *   → non-test settle: first seen, later multi-hit touched (Graph internal);
+ *     case_tested stays false unless a prior test hit
  *   → SQLite working store + async Platform dual-write (#374)
  *
  * Does not implement TARGET seed (#381) or finding confirm booked (#382).
- * Traffic purpose / case_tested is companion #413.
  */
 
 import type { ToolRuntime } from "../types.js";
@@ -26,6 +28,11 @@ import {
   isSurfacePlatformOnline,
 } from "./surface-platform-sync.js";
 import type { TrafficExchange } from "./traffic-collect.js";
+import {
+  classifyTrafficPurpose,
+  purposeMarksCaseTested,
+  type TrafficPurpose,
+} from "./traffic-purpose.js";
 
 /**
  * Conservative static asset path suffixes (D6.1).
@@ -75,6 +82,13 @@ export type TrafficSettlePlan = {
   methods: string[];
   params: string[];
   source: "traffic";
+  /** Spec #413 L3 — classified exchange purpose. */
+  purpose: TrafficPurpose;
+  /**
+   * Spec #413 L4 — sticky flag to set on Surface when purpose=test.
+   * False means "do not set" (never clears an existing case_tested).
+   */
+  case_tested: boolean;
 };
 
 export type TrafficSettleDecision = TrafficSettleSkip | TrafficSettlePlan;
@@ -237,7 +251,7 @@ export function extractUrlParamNames(url: string): string[] {
 /**
  * Pure S2 decision: whether this exchange should upsert Surface, and with what fields.
  *
- * @param exchange — traffic row (url/method/phase required for eligibility)
+ * @param exchange — traffic row (url/method/phase required for eligibility; optional purpose/source)
  * @param existing — prior Surface row for this identity, if any (null/undefined = first hit)
  * @param scope — optional L2 engagement hosts; omit/empty = no origin filter
  */
@@ -246,8 +260,16 @@ export function planTrafficSurfaceSettle(
     url?: string | null;
     method?: string | null;
     phase?: string | null;
+    source?: string | null;
+    purpose?: string | null;
+    browser_resource_class?: string | null;
   },
-  existing?: { status?: string; methods?: readonly string[] | null; params?: readonly string[] | null } | null,
+  existing?: {
+    status?: string;
+    methods?: readonly string[] | null;
+    params?: readonly string[] | null;
+    case_tested?: boolean | null;
+  } | null,
   scope?: TrafficSettleScopeContext | null,
 ): TrafficSettleDecision {
   if (!isTrafficSettlePhase(exchange.phase)) {
@@ -280,7 +302,26 @@ export function planTrafficSurfaceSettle(
   const method = String(exchange.method || "GET").trim().toUpperCase() || "GET";
   const methods = mergeMethods(existing?.methods, [method]);
   const params = mergeParams(existing?.params, extractUrlParamNames(url));
-  const status: "seen" | "touched" = existing ? "touched" : "seen";
+
+  // Spec #413: classify purpose (explicit > tool default > heuristics).
+  const purpose = classifyTrafficPurpose({
+    purpose: exchange.purpose,
+    source: exchange.source,
+    method,
+    url,
+    browser_resource_class: exchange.browser_resource_class,
+    scope: scope ?? null,
+  });
+  const marksTested = purposeMarksCaseTested(purpose);
+  // Operator TESTED: single purpose=test is enough → elevate to touched immediately.
+  // Non-test: first→seen / later multi-hit→touched for Graph bookkeeping only
+  // (operator chip uses case_tested, not multi-hit alone).
+  const statusFinal: "seen" | "touched" = marksTested
+    ? "touched"
+    : existing
+      ? "touched"
+      : "seen";
+  const case_tested = marksTested;
 
   // Prefer a clean location without query/fragment for display stability.
   const location = surfaceLocationFromParsed(parsed, url);
@@ -291,10 +332,12 @@ export function planTrafficSurfaceSettle(
     origin_key: parsed.origin_key,
     path_key: parsed.path_key,
     kind: parsed.kind || "url",
-    status,
+    status: statusFinal,
     methods,
     params,
     source: "traffic",
+    purpose,
+    case_tested,
   };
 }
 
@@ -353,6 +396,7 @@ export async function settleTrafficToSurface(
     const platformOnline = isSurfacePlatformOnline(runtime);
     // Omit item.source so existing provenance (e.g. target_seed) is preserved;
     // new rows get meta.source = traffic.
+    // Spec #413: purpose=test → case_tested sticky + allowTested (touched).
     const result = await store.upsert(
       [
         {
@@ -361,12 +405,17 @@ export async function settleTrafficToSurface(
           params: plan.params.length ? plan.params : undefined,
           status: plan.status,
           kind: plan.kind,
+          // Only set true; never clear via settle (sticky in store).
+          ...(plan.case_tested ? { case_tested: true } : {}),
         },
       ],
       {
         source_agent_id: resolveSourceAgentId(runtime),
         source: "traffic",
         platformOnline,
+        // Traffic settle may elevate touched; case_tested only when purpose=test.
+        allowTested: true,
+        allowCaseTested: plan.case_tested,
       },
     );
 

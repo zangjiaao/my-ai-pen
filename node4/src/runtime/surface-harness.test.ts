@@ -33,8 +33,9 @@ assert.match(mid, /priors/i, "mid-run priors note");
 assert.match(incompleteSeenSurfaceStopReminder(1, ["/x"]), /NEW untested/i);
 assert.match(midRunSeenSurfaceNudge(2), /NEW untested/i);
 
-// --- selectNewUntestedSurfaces: prefer is_new; fallback seen ---
+// --- selectNewUntestedSurfaces: prefer is_new; untested = !case_tested (#413) ---
 {
+  // Legacy rows without case_tested: status=touched treated as tested (expand-contract).
   const fallback = selectNewUntestedSurfaces([
     { status: "seen", path_key: "/a" },
     { status: "touched", path_key: "/b" },
@@ -46,14 +47,27 @@ assert.match(midRunSeenSurfaceNudge(2), /NEW untested/i);
 }
 
 {
+  // Explicit case_tested: browse multi-hit (touched + false) stays untested.
+  const purpose = selectNewUntestedSurfaces([
+    { status: "seen", case_tested: false, path_key: "/browse" },
+    { status: "touched", case_tested: false, path_key: "/browse2" },
+    { status: "touched", case_tested: true, path_key: "/tested" },
+    { status: "seen", case_tested: true, path_key: "/single-test" },
+  ]);
+  assert.equal(purpose.mode, "seen_fallback");
+  assert.equal(purpose.count, 2, "!case_tested only");
+  assert.deepEqual(purpose.samples, ["/browse", "/browse2"]);
+}
+
+{
   const withNew = selectNewUntestedSurfaces([
-    { status: "seen", is_new: true, path_key: "/novel" },
-    { status: "seen", is_new: false, path_key: "/old" },
-    { status: "touched", is_new: true, path_key: "/tested-new" },
-    { status: "seen", is_new: true, path_key: "/novel2" },
+    { status: "seen", is_new: true, case_tested: false, path_key: "/novel" },
+    { status: "seen", is_new: false, case_tested: false, path_key: "/old" },
+    { status: "touched", is_new: true, case_tested: true, path_key: "/tested-new" },
+    { status: "seen", is_new: true, case_tested: false, path_key: "/novel2" },
   ]);
   assert.equal(withNew.mode, "new_untested");
-  assert.equal(withNew.count, 2, "only is_new && seen");
+  assert.equal(withNew.count, 2, "only is_new && !case_tested");
   assert.deepEqual(withNew.samples, ["/novel", "/novel2"]);
 }
 

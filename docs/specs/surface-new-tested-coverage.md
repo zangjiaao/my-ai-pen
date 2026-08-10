@@ -62,7 +62,7 @@
 | Operator term | Rough v2 internal analogue | Notes |
 |---------------|----------------------------|--------|
 | **NEW** | (none — inventory novelty) | Not equal to “first traffic this Case” alone if inventory already knew the path |
-| **TESTED** | touched (later traffic) | User-facing rename; still traffic-objective |
+| **TESTED** | case_tested (≥1 purpose=test this Case; see surface-traffic-purpose-and-noise) | Not multi-hit-only touched; findings orthogonal |
 | *(no chip)* | seen only, inventory-known | Quiet — not “untested red” for every historical path |
 | *(no chip)* | booked | Finding tags carry the signal |
 
@@ -114,7 +114,8 @@
 ```text
 v2 seen + inventory first admit     → UI NEW (optional), not yet TESTED
 v2 seen + inventory already known → UI quiet (no SEEN)
-v2 touched / later traffic        → UI TESTED
+v2 + case_tested (purpose=test ≥1) → UI TESTED (single test request enough)
+v2 touched without case_tested    → quiet when dual-write has explicit false (browse multi-hit)
 v2 booked                         → UI finding tags only (internal booked ok)
 deadend / skipped_roe             → retained terminals (muted)
 ```

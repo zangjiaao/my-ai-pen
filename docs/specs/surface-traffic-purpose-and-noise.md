@@ -182,7 +182,7 @@ Noise is filtered at settle. NEW remains inventory novelty only.
 - [x] Spec indexed in `docs/README.md`  
 - [x] Cross-links from case-surface-ledger + surface-new-tested-coverage  
 - [x] Scope + garbage settle gates — #412  
-- [ ] Traffic purpose + tool defaults — #413  
-- [ ] case_tested + operator TESTED projection — #413  
-- [ ] Harness/summary copy alignment — #413  
+- [x] Traffic purpose + tool defaults — #413  
+- [x] case_tested + operator TESTED projection — #413  
+- [x] Harness/summary copy alignment — #413  
 - [x] Tests (scope + garbage + static denylist + collapsed OS probe for #412; purpose/TESTED for #413)  

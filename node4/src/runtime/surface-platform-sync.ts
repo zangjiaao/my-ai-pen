@@ -38,7 +38,7 @@ export function isSurfacePlatformOnline(runtime: ToolRuntime): boolean {
   return Boolean(runtime.platformApi);
 }
 
-/** Project a SQLite row into the Platform surface_upsert payload shape (#373). */
+/** Project a SQLite row into the Platform surface_upsert payload shape (#373 / #413). */
 export function surfaceRowToPlatformPayload(row: SurfaceRow): Record<string, unknown> {
   const out: Record<string, unknown> = {
     id: row.id,
@@ -50,6 +50,8 @@ export function surfaceRowToPlatformPayload(row: SurfaceRow): Record<string, unk
     status: row.status,
     created_at: row.created_at,
     updated_at: row.updated_at,
+    // Spec #413: dual-write case_tested for FE TESTED chip (sticky true).
+    case_tested: row.case_tested === true,
   };
   if (row.kind) out.kind = row.kind;
   if (row.auth) out.auth = row.auth;

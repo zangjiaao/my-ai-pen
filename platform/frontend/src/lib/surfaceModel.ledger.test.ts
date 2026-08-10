@@ -8,6 +8,7 @@ import {
   collectSurfaceEntries,
   emptySurfaceLedger,
   ensureSurfaceLedger,
+  isSurfaceCaseTested,
   isSurfaceNew,
   normalizeSurfaceStatus,
   parseEngagementTargets,
@@ -96,11 +97,17 @@ function testLegacyStatusMapsToV2Presentation() {
   assert.equal(normalizeSurfaceStatus("deadend"), "deadend");
   assert.equal(normalizeSurfaceStatus("skipped_roe"), "skipped_roe");
   assert.equal(normalizeSurfaceStatus("nope"), undefined);
-  // Spec #409 operator labels (not raw v2 strings).
+  // Spec #409/#413 operator labels (not raw v2 strings).
+  // Legacy (no case_tested opts): touched family → TESTED.
   assert.equal(surfaceStatusLabel("open"), "");
   assert.equal(surfaceStatusLabel("probed"), "TESTED");
   assert.equal(surfaceStatusLabel("touched"), "TESTED");
   assert.equal(surfaceStatusLabel("booked"), "");
+  // Spec #413: case_tested drives TESTED; multi-hit alone does not.
+  assert.equal(surfaceStatusLabel("seen", { caseTested: true }), "TESTED");
+  assert.equal(surfaceStatusLabel("touched", { caseTested: true }), "TESTED");
+  assert.equal(surfaceStatusLabel("touched", { caseTested: false }), "");
+  assert.equal(surfaceStatusLabel("seen", { caseTested: false }), "");
 
   const ledger: SurfaceLedger = {
     version: 1,
@@ -163,7 +170,7 @@ function testOperatorStatusProjectionNewTestedNoBook() {
   assert.equal(normalizeSurfaceStatus("touched"), "touched");
   assert.equal(normalizeSurfaceStatus("booked"), "booked");
 
-  // Operator chips.
+  // Operator chips (legacy status fallback when case_tested omitted).
   assert.equal(surfaceStatusLabel("seen"), "");
   assert.equal(surfaceStatusLabel("open"), "");
   assert.equal(surfaceStatusLabel("touched"), "TESTED");
@@ -180,6 +187,8 @@ function testOperatorStatusProjectionNewTestedNoBook() {
   assert.equal(surfaceShowsStatusChip("touched"), true);
   assert.equal(surfaceShowsStatusChip("booked"), false);
   assert.equal(surfaceShowsStatusChip("deadend"), true);
+  assert.equal(surfaceShowsStatusChip("touched", { caseTested: false }), false);
+  assert.equal(surfaceShowsStatusChip("seen", { caseTested: true }), true);
 
   // NEW false-safe until inventory flag present.
   assert.equal(isSurfaceNew(undefined), false);
@@ -190,6 +199,13 @@ function testOperatorStatusProjectionNewTestedNoBook() {
   assert.equal(isSurfaceNew({ isNew: true }), true);
   assert.equal(isSurfaceNew({ is_new: 0 }), false);
 
+  // Spec #413 case_tested false-safe + project.
+  assert.equal(isSurfaceCaseTested(undefined), false);
+  assert.equal(isSurfaceCaseTested({}), false);
+  assert.equal(isSurfaceCaseTested({ case_tested: false }), false);
+  assert.equal(isSurfaceCaseTested({ case_tested: true }), true);
+  assert.equal(isSurfaceCaseTested({ caseTested: true }), true);
+
   const ledger: SurfaceLedger = {
     version: 1,
     surfaces: [
@@ -199,6 +215,7 @@ function testOperatorStatusProjectionNewTestedNoBook() {
         location: "https://op.example/quiet",
         kind: "url",
         status: "seen",
+        case_tested: false,
       },
       {
         origin_key: "https://op.example:443",
@@ -206,6 +223,15 @@ function testOperatorStatusProjectionNewTestedNoBook() {
         location: "https://op.example/tested",
         kind: "url",
         status: "touched",
+        case_tested: true,
+      },
+      {
+        origin_key: "https://op.example:443",
+        path_key: "/browse-multi",
+        location: "https://op.example/browse-multi",
+        kind: "url",
+        status: "touched",
+        case_tested: false,
       },
       {
         origin_key: "https://op.example:443",
@@ -237,6 +263,9 @@ function testOperatorStatusProjectionNewTestedNoBook() {
   assert.equal(entries.find((e) => e.path === "/novel")!.isNew, true);
   assert.equal(entries.find((e) => e.path === "/old")!.isNew, undefined);
   assert.equal(entries.find((e) => e.path === "/old")!.status, "touched");
+  assert.equal(entries.find((e) => e.path === "/tested")!.caseTested, true);
+  assert.equal(entries.find((e) => e.path === "/browse-multi")!.caseTested, false);
+  assert.equal(entries.find((e) => e.path === "/quiet")!.caseTested, false);
 
   const tree = buildSurfaceTree(entries);
   const byPath = new Map(tree[0]!.children.map((c) => [c.path, c]));
@@ -247,8 +276,17 @@ function testOperatorStatusProjectionNewTestedNoBook() {
 
   const testedChrome = surfaceTreeRowChrome(byPath.get("/tested")!, { open: true });
   assert.equal(testedChrome.showStatusChip, true);
-  assert.equal(surfaceStatusLabel(byPath.get("/tested")!.status), "TESTED");
+  assert.equal(
+    surfaceStatusLabel(byPath.get("/tested")!.status, {
+      caseTested: byPath.get("/tested")!.caseTested,
+    }),
+    "TESTED",
+  );
   assert.equal(testedChrome.showNewBadge, false);
+
+  // Browse multi-hit (status=touched, case_tested=false) → no TESTED chip.
+  const browseChrome = surfaceTreeRowChrome(byPath.get("/browse-multi")!, { open: true });
+  assert.equal(browseChrome.showStatusChip, false, "case_tested false → no TESTED");
 
   const bookedChrome = surfaceTreeRowChrome(byPath.get("/booked")!, { open: true });
   assert.equal(bookedChrome.showStatusChip, false, "booked → no BOOK chip");

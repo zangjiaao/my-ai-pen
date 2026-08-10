@@ -70,6 +70,11 @@ export type SurfaceRow = {
   platform_sync: PlatformSyncState;
   created_at: string;
   updated_at: string;
+  /**
+   * Spec #413 — sticky true when this Case had ≥1 purpose=test exchange on identity.
+   * Operator TESTED chip; not inventable by Agent upsert without traffic.
+   */
+  case_tested: boolean;
 };
 
 export type SurfaceUpsertItem = {
@@ -81,6 +86,11 @@ export type SurfaceUpsertItem = {
   auth?: string | null;
   note?: string | null;
   source?: string | null;
+  /**
+   * Spec #413 — only applied when meta.allowCaseTested (traffic settle purpose=test).
+   * Ordinary Agent upsert cannot set this true.
+   */
+  case_tested?: boolean | null;
 };
 
 export type SurfaceUpsertMeta = {
@@ -97,6 +107,11 @@ export type SurfaceUpsertMeta = {
    * Also true when source is `"traffic"`.
    */
   allowTested?: boolean;
+  /**
+   * Spec #413 — allow setting case_tested=true (purpose=test traffic only).
+   * Ordinary Agent upsert leaves this false — cannot fake TESTED without traffic.
+   */
+  allowCaseTested?: boolean;
   /**
    * When true, skip hard-cap create failure by returning skip (finding path may keep booking).
    * Ordinary tool upsert leaves this false → hard reject.
@@ -186,6 +201,7 @@ type DbRow = {
   platform_sync: string | null;
   created_at: string;
   updated_at: string;
+  case_tested?: number | null;
 };
 
 const SCHEMA = `
@@ -204,13 +220,22 @@ CREATE TABLE IF NOT EXISTS surfaces (
   source_agent_id TEXT,
   platform_sync TEXT NOT NULL DEFAULT 'offline',
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  case_tested INTEGER NOT NULL DEFAULT 0
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_surfaces_origin_path
   ON surfaces(origin_key, path_key);
 CREATE INDEX IF NOT EXISTS ix_surfaces_status ON surfaces(status);
 CREATE INDEX IF NOT EXISTS ix_surfaces_origin ON surfaces(origin_key);
 `;
+
+/** Coerce SQLite / payload truthiness for case_tested (false-safe). */
+export function coerceCaseTested(value: unknown, defaultValue = false): boolean {
+  if (value === undefined || value === null || value === "") return defaultValue;
+  if (value === true || value === 1 || value === "1" || value === "true") return true;
+  if (value === false || value === 0 || value === "0" || value === "false") return false;
+  return defaultValue;
+}
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -265,6 +290,7 @@ function rowFromDb(r: DbRow): SurfaceRow {
     platform_sync,
     created_at: r.created_at,
     updated_at: r.updated_at,
+    case_tested: coerceCaseTested(r.case_tested, false),
   };
 }
 
@@ -337,8 +363,24 @@ export class SurfaceSqliteStore {
       const db = new DatabaseSync(this.dbPath);
       db.exec(SCHEMA);
       this.db = db;
+      this.ensureSchemaColumnsUnlocked();
       await this.migrateLegacyJsonUnlocked();
     });
+  }
+
+  /**
+   * Expand-contract: add columns for older ledger.sqlite files that predate
+   * case_tested (#413). CREATE TABLE IF NOT EXISTS does not alter existing tables.
+   */
+  private ensureSchemaColumnsUnlocked(): void {
+    const db = this.requireDb();
+    const cols = db
+      .prepare("PRAGMA table_info(surfaces)")
+      .all() as Array<{ name?: string }>;
+    const names = new Set(cols.map((c) => String(c.name || "")));
+    if (!names.has("case_tested")) {
+      db.exec("ALTER TABLE surfaces ADD COLUMN case_tested INTEGER NOT NULL DEFAULT 0");
+    }
   }
 
   close(): void {
@@ -442,8 +484,9 @@ export class SurfaceSqliteStore {
           .prepare(
             `INSERT OR IGNORE INTO surfaces (
               id, origin_key, path_key, location, kind, methods_json, params_json,
-              auth, status, note, source, source_agent_id, platform_sync, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              auth, status, note, source, source_agent_id, platform_sync, created_at, updated_at,
+              case_tested
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             id,
@@ -461,6 +504,8 @@ export class SurfaceSqliteStore {
             "offline",
             created_at,
             updated_at,
+            // Legacy migrate: do not invent case_tested (false-safe).
+            0,
           );
       } catch {
         /* skip bad row */
@@ -570,6 +615,14 @@ export class SurfaceSqliteStore {
         const agentId = source_agent_id || existing?.source_agent_id;
         const locationStore = clip(location, 500);
 
+        // Spec #413: case_tested sticky true only when traffic purpose=test (allowCaseTested).
+        // Ordinary Agent upsert cannot invent TESTED without traffic.
+        const allowCaseTested = meta?.allowCaseTested === true;
+        let case_tested = existing?.case_tested === true;
+        if (allowCaseTested && coerceCaseTested(raw.case_tested, false)) {
+          case_tested = true;
+        }
+
         if (!existing) {
           const total = this.countUnlocked();
           if (total >= SURFACE_WRITE_HARD_CAP) {
@@ -588,8 +641,9 @@ export class SurfaceSqliteStore {
             .prepare(
               `INSERT INTO surfaces (
                 id, origin_key, path_key, location, kind, methods_json, params_json,
-                auth, status, note, source, source_agent_id, platform_sync, created_at, updated_at
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                auth, status, note, source, source_agent_id, platform_sync, created_at, updated_at,
+                case_tested
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
             .run(
               id,
@@ -607,6 +661,7 @@ export class SurfaceSqliteStore {
               platform_sync,
               ts,
               ts,
+              case_tested ? 1 : 0,
             );
           created += 1;
         } else {
@@ -615,7 +670,8 @@ export class SurfaceSqliteStore {
               `UPDATE surfaces SET
                 location = ?, kind = ?, methods_json = ?, params_json = ?,
                 auth = ?, status = ?, note = ?, source = ?,
-                source_agent_id = ?, platform_sync = ?, updated_at = ?
+                source_agent_id = ?, platform_sync = ?, updated_at = ?,
+                case_tested = ?
               WHERE id = ?`,
             )
             .run(
@@ -631,6 +687,7 @@ export class SurfaceSqliteStore {
               // Online re-upsert always re-pending (attrs may have changed). Offline stays offline.
               platform_sync,
               ts,
+              case_tested ? 1 : 0,
               existing.id,
             );
           updated += 1;

@@ -130,13 +130,30 @@ const tool = createSurfaceTool(runtime);
         location: "https://host.example/api/users",
         status: "touched",
         methods: ["GET"],
+        case_tested: true,
       },
     ],
-    { source: "traffic", source_agent_id: "main" },
+    {
+      source: "traffic",
+      source_agent_id: "main",
+      allowTested: true,
+      allowCaseTested: true,
+    },
   );
   assert.ok(r.ok);
   if (r.ok) {
     assert.equal(r.upserted[0]!.status, "touched", "source=traffic may set TESTED");
+    assert.equal(r.upserted[0]!.case_tested, true, "purpose=test settle sets case_tested");
+  }
+
+  // Agent cannot invent case_tested on another path
+  const fake = await store.upsert(
+    [{ location: "https://host.example/login", status: "touched", case_tested: true }],
+    { source: "agent" },
+  );
+  assert.ok(fake.ok);
+  if (fake.ok) {
+    assert.equal(fake.upserted[0]!.case_tested, false, "agent cannot fake case_tested");
   }
 }
 
@@ -193,11 +210,17 @@ const tool = createSurfaceTool(runtime);
   assert.ok((r.data!.total as number) >= 3);
   assert.equal(typeof r.data!.seen, "number");
   assert.equal(typeof r.data!.touched, "number");
-  // Spec #409 light: operator alias tested = touched
-  assert.equal(r.data!.tested, r.data!.touched);
-  // Spec #411: new_untested queue (seen fallback when no is_new)
+  // Spec #413: tested = case_tested count (≥1 purpose=test), not multi-hit-only touched.
+  assert.equal(typeof r.data!.tested, "number");
+  assert.equal(r.data!.tested, r.data!.case_tested);
+  assert.ok((r.data!.tested as number) >= 1, "traffic case_tested counted as tested");
+  // Spec #411/#413: new_untested queue = !case_tested (seen_fallback when no is_new)
   assert.equal(typeof r.data!.new_untested, "number");
-  assert.equal(r.data!.new_untested, r.data!.seen, "fallback: new_untested ≈ seen without is_new");
+  assert.equal(
+    r.data!.new_untested,
+    (r.data!.total as number) - (r.data!.tested as number),
+    "untested = total − case_tested (no is_new flags)",
+  );
   assert.equal((r.data!.counts as Record<string, number>).new_untested, r.data!.new_untested);
   assert.ok(Array.isArray(r.data!.new_untested_samples));
   assert.equal(r.data!.new_untested_mode, "seen_fallback");
@@ -214,7 +237,8 @@ const tool = createSurfaceTool(runtime);
   assert.ok(counts);
   assert.equal(counts.seen, r.data!.seen);
   assert.equal(counts.touched, r.data!.touched);
-  assert.equal(counts.tested, r.data!.touched);
+  assert.equal(counts.tested, r.data!.tested);
+  assert.equal(counts.case_tested, r.data!.tested);
   assert.equal(counts.booked, r.data!.booked);
   assert.equal(counts.deadend, r.data!.deadend);
   assert.equal(counts.skipped_roe, r.data!.skipped_roe);

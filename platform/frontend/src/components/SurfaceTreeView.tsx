@@ -41,6 +41,11 @@ export type SurfaceTreeNode = {
   status?: string;
   /** Spec #409: true when any own entry is inventory-new (false-safe). */
   isNew?: boolean;
+  /**
+   * Spec #413: true when any own entry has case_tested (purpose=test traffic this Case).
+   * When false explicitly on leaves with the flag dual-written, suppress multi-hit TESTED.
+   */
+  caseTested?: boolean;
   leafCount: number;
   /** Entries under this node still in seen/touched (not terminal booked/deadend/skipped_roe). */
   unfinishedCount: number;
@@ -72,7 +77,7 @@ function isUnfinishedSurfaceStatus(status?: string | null): boolean {
 /**
  * Decide what a Surface tree row should show.
  * Methods never chip on the tree by default; collapsed parents roll up to counts.
- * Operator status: TESTED for touched family; no SEEN/BOOK; NEW only when flagged (#409).
+ * Operator status: TESTED from case_tested (#413); no SEEN/BOOK; NEW only when flagged (#409).
  */
 export function surfaceTreeRowChrome(
   node: SurfaceTreeNode,
@@ -101,8 +106,14 @@ export function surfaceTreeRowChrome(
   const tagsSource = hasChildren ? node.findingTags : allPreview;
   const tags = tagsSource.slice(0, 3);
   const extraTagCount = Math.max(0, tagsSource.length - tags.length);
-  // Operator projection: empty label for seen/booked ⇒ no chip.
-  const showStatusChip = surfaceShowsStatusChip(node.status);
+  // Spec #413: TESTED from case_tested when known; legacy falls back to status=touched.
+  const labelOpts =
+    node.caseTested === true
+      ? { caseTested: true as const }
+      : node.caseTested === false
+        ? { caseTested: false as const }
+        : undefined;
+  const showStatusChip = surfaceShowsStatusChip(node.status, labelOpts);
   // Leaf novelty only (own entries / node flag); not subtree flood on expanded parents without own NEW.
   const showNewBadge = Boolean(node.isNew);
 
@@ -142,6 +153,12 @@ function absorbEntryStatus(node: SurfaceTreeNode, entry: SurfaceEntry): void {
   const next = preferSurfaceStatus(node.status, entry.status);
   if (next) node.status = next;
   if (entry.isNew) node.isNew = true;
+  // Spec #413: sticky case_tested for operator TESTED chip.
+  if (entry.caseTested === true) node.caseTested = true;
+  else if (entry.caseTested === false && node.caseTested !== true) {
+    // Preserve explicit false only when no sibling has tested yet.
+    if (node.caseTested === undefined) node.caseTested = false;
+  }
 }
 
 function pathSegments(path: string): string[] {
@@ -671,14 +688,43 @@ function SurfaceTreeNodeRow({
                 NEW
               </span>
             )}
-            {/* Spec #409: TESTED for touched family; never SEEN/BOOK/PRIOR; terminals muted. */}
-            {chrome.showStatusChip && surfaceStatusLabel(node.status) && (
+            {/* Spec #409/#413: TESTED from case_tested; never SEEN/BOOK/PRIOR; terminals muted. */}
+            {chrome.showStatusChip &&
+              surfaceStatusLabel(
+                node.status,
+                node.caseTested === true
+                  ? { caseTested: true }
+                  : node.caseTested === false
+                    ? { caseTested: false }
+                    : undefined,
+              ) && (
               <span
-                className={`shrink-0 rounded px-1 py-0.5 font-mono text-[10px] font-medium uppercase ${surfaceStatusBadgeClass(node.status)}`}
+                className={`shrink-0 rounded px-1 py-0.5 font-mono text-[10px] font-medium uppercase ${surfaceStatusBadgeClass(
+                  node.status,
+                  node.caseTested === true
+                    ? { caseTested: true }
+                    : node.caseTested === false
+                      ? { caseTested: false }
+                      : undefined,
+                )}`}
                 data-testid="surface-status"
-                data-status={surfaceStatusLabel(node.status)}
+                data-status={surfaceStatusLabel(
+                  node.status,
+                  node.caseTested === true
+                    ? { caseTested: true }
+                    : node.caseTested === false
+                      ? { caseTested: false }
+                      : undefined,
+                )}
               >
-                {surfaceStatusLabel(node.status)}
+                {surfaceStatusLabel(
+                  node.status,
+                  node.caseTested === true
+                    ? { caseTested: true }
+                    : node.caseTested === false
+                      ? { caseTested: false }
+                      : undefined,
+                )}
               </span>
             )}
           </button>

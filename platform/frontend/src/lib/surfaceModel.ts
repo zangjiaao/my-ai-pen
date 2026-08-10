@@ -36,6 +36,11 @@ export type SurfaceEntry = {
    * False-safe until durable inventory (#410) lands — absent/undefined ⇒ not NEW.
    */
   isNew?: boolean;
+  /**
+   * Spec #413 — this Case had ≥1 purpose=test exchange on this identity (operator TESTED).
+   * Prefer over multi-hit-only status=touched. False-safe when absent on legacy rows.
+   */
+  caseTested?: boolean;
   /** URL scheme from origin_key (http/https/ssh/…). */
   scheme?: string;
   /**
@@ -96,33 +101,71 @@ export function preferSurfaceStatus(
 }
 
 /**
- * Spec #409 / L1 L6 — operator-facing status chip label (not internal v2 write form).
+ * Spec #413 — case_tested flag from Case ledger / dual-write (false-safe).
+ */
+export function isSurfaceCaseTested(
+  row: { case_tested?: unknown; caseTested?: unknown } | null | undefined,
+): boolean {
+  if (!row || typeof row !== "object") return false;
+  const flag =
+    (row as { case_tested?: unknown; caseTested?: unknown }).case_tested ??
+    (row as { caseTested?: unknown }).caseTested;
+  if (flag === undefined || flag === null || flag === "") return false;
+  return flag === true || flag === 1 || flag === "true" || flag === "1";
+}
+
+export type SurfaceStatusLabelOpts = {
+  /**
+   * Spec #413 — when provided, TESTED follows case_tested (not multi-hit-only touched).
+   * - true → TESTED
+   * - false → no TESTED from status (browse multi-hit stays quiet)
+   * - omitted → legacy expand-contract: touched family → TESTED
+   */
+  caseTested?: boolean | null;
+};
+
+/**
+ * Spec #409 / #413 — operator-facing status chip label (not internal v2 write form).
  *
- * | Internal (normalize) | Operator chip |
- * |----------------------|---------------|
- * | touched (+ legacy in_probe/probed) | TESTED |
- * | seen (+ legacy open) | *(none — quiet)* |
- * | booked | *(none — finding tags only)* |
+ * | Signal | Operator chip |
+ * |--------|---------------|
+ * | case_tested true (preferred) | TESTED |
+ * | legacy: touched (+ in_probe/probed) when case_tested absent | TESTED |
+ * | case_tested false | no TESTED (even if status=touched from browse multi-hit) |
+ * | seen / booked | *(none — quiet / finding tags only)* |
  * | deadend / skipped_roe | retained muted terminal |
  *
  * Never returns SEEN, BOOK, BOOKED, or PRIOR.
  */
-export function surfaceStatusLabel(status?: string | null): string {
+export function surfaceStatusLabel(
+  status?: string | null,
+  opts?: SurfaceStatusLabelOpts | null,
+): string {
   const n = normalizeSurfaceStatus(status);
-  if (!n) return "";
-  if (n === "touched") return "TESTED";
   if (n === "deadend") return "deadend";
   if (n === "skipped_roe") return "skipped_roe";
-  // seen, booked: no operator status chip
+
+  const ct = opts?.caseTested;
+  if (ct === true) return "TESTED";
+  if (ct === false) {
+    // Explicit not-tested this Case — do not show TESTED from multi-hit status alone.
+    return "";
+  }
+  // Legacy: no case_tested field → fall back to touched family.
+  if (n === "touched") return "TESTED";
+  // seen, booked, missing: no operator status chip
   return "";
 }
 
 /**
- * True when operator UI should render a status chip for this internal status.
+ * True when operator UI should render a status chip for this internal status / case_tested.
  * Collapsed parents still suppress chips via tree chrome (#408).
  */
-export function surfaceShowsStatusChip(status?: string | null): boolean {
-  return Boolean(surfaceStatusLabel(status));
+export function surfaceShowsStatusChip(
+  status?: string | null,
+  opts?: SurfaceStatusLabelOpts | null,
+): boolean {
+  return Boolean(surfaceStatusLabel(status, opts));
 }
 
 /**
@@ -137,9 +180,13 @@ export function isSurfaceNew(row: { is_new?: unknown; isNew?: unknown } | null |
 }
 
 /** Tailwind badge classes for operator Surface status chips (TESTED / terminals). */
-export function surfaceStatusBadgeClass(status?: string | null): string {
+export function surfaceStatusBadgeClass(
+  status?: string | null,
+  opts?: SurfaceStatusLabelOpts | null,
+): string {
+  const label = surfaceStatusLabel(status, opts);
+  if (label === "TESTED") return "bg-status-running/12 text-status-running";
   const n = normalizeSurfaceStatus(status);
-  if (n === "touched") return "bg-status-running/12 text-status-running";
   if (n === "deadend" || n === "skipped_roe") return "bg-canvas-inset text-ink-muted";
   // Fallback when a label is still rendered (should not be seen/booked after #409)
   return "bg-canvas-inset text-ink-secondary";
@@ -249,6 +296,10 @@ export function upsertSurfaceLedger(
       ) ??
       (raw.status != null ? String(raw.status) : undefined) ??
       (prev.status != null ? String(prev.status) : undefined);
+    // Spec #413: case_tested sticky true on live merge.
+    const prevCt = isSurfaceCaseTested(prev);
+    const rawCt = isSurfaceCaseTested(raw);
+    const case_tested = Boolean(prevCt || rawCt);
     byKey.set(k, {
       ...prev,
       ...raw,
@@ -259,6 +310,7 @@ export function upsertSurfaceLedger(
       id: prev.id || raw.id,
       created_at: prev.created_at || raw.created_at,
       ...(status != null ? { status } : {}),
+      case_tested,
     });
   }
   return {
@@ -296,6 +348,8 @@ export function projectSurfaceEntriesFromLedger(ledger: SurfaceLedger | null | u
       status: preferSurfaceStatus(existing.status, entry.status) || existing.status || entry.status,
       // Novelty is sticky true once any merge source flags it (false-safe default).
       isNew: Boolean(existing.isNew || entry.isNew),
+      // Spec #413: case_tested sticky true for operator TESTED.
+      caseTested: Boolean(existing.caseTested || entry.caseTested),
       title: existing.title || entry.title,
     });
   }
@@ -372,11 +426,19 @@ export function ledgerRowToSurfaceEntry(row: SurfaceLedgerRow): SurfaceEntry | n
   entry.assetKey = entry.originKey;
   entry.assetLabel = originKeyNorm;
   // Spec #384: project v2 internal status; map legacy open/in_probe/probed.
-  // Operator chips (TESTED / quiet / no BOOK) apply at display via surfaceStatusLabel (#409).
+  // Operator chips (TESTED / quiet / no BOOK) apply at display via surfaceStatusLabel (#409/#413).
   const status = normalizeSurfaceStatus(row.status);
   if (status) entry.status = status;
   // Spec #409: NEW only when ledger/join explicitly flags first inventory admit (false-safe).
   if (isSurfaceNew(row)) entry.isNew = true;
+  // Spec #413: case_tested drives TESTED chip (sticky; false-safe when absent).
+  if (isSurfaceCaseTested(row)) entry.caseTested = true;
+  else if (
+    (row as SurfaceLedgerRow).case_tested === false ||
+    (row as SurfaceLedgerRow).caseTested === false
+  ) {
+    entry.caseTested = false;
+  }
   return entry;
 }
 

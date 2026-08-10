@@ -357,6 +357,8 @@ function completedExchange(partial: Partial<TrafficExchange> & { url: string }):
     status_code: partial.status_code ?? 200,
     started_at: partial.started_at || new Date().toISOString(),
     completed_at: partial.completed_at || new Date().toISOString(),
+    purpose: partial.purpose,
+    browser_resource_class: partial.browser_resource_class,
   };
 }
 
@@ -380,7 +382,9 @@ function completedExchange(partial: Partial<TrafficExchange> & { url: string }):
   if (!first.ok || first.skipped) throw new Error(`expected apply: ${JSON.stringify(first)}`);
   assert.equal(first.created, 1);
   assert.equal(first.updated, 0);
-  assert.equal(first.row?.status, "seen");
+  // Spec #413: shell/http purpose=test → case_tested + touched on first hit (single request enough).
+  assert.equal(first.row?.status, "touched");
+  assert.equal(first.row?.case_tested, true);
   assert.equal(first.row?.origin_key, "https://target.example:443");
   assert.equal(first.row?.path_key, "/vuln/sqli");
   assert.equal(first.row?.source, "traffic");
@@ -400,6 +404,7 @@ function completedExchange(partial: Partial<TrafficExchange> & { url: string }):
   assert.equal(second.created, 0);
   assert.equal(second.updated, 1);
   assert.equal(second.row?.status, "touched");
+  assert.equal(second.row?.case_tested, true);
   assert.deepEqual(second.row?.methods, ["GET", "POST"]);
 
   // Third hit stays touched (no downgrade)
@@ -467,11 +472,13 @@ function completedExchange(partial: Partial<TrafficExchange> & { url: string }):
   assert.equal(await store.count(), 1);
   const row = await store.get({ location: "http://127.0.0.1:8080/login" });
   assert.ok(row);
-  assert.equal(row?.status, "seen");
+  // Spec #413: http GET purpose=test → case_tested on first complete.
+  assert.equal(row?.status, "touched");
+  assert.equal(row?.case_tested, true);
   assert.equal(row?.source, "traffic");
   assert.deepEqual(row?.methods, ["GET"]);
 
-  // Second complete on same path via new exchange → touched
+  // Second complete on same path via new exchange → still tested; methods merge
   const pending2 = await emitHttpPending(rt, {
     method: "POST",
     url: "http://127.0.0.1:8080/login",
@@ -479,6 +486,7 @@ function completedExchange(partial: Partial<TrafficExchange> & { url: string }):
   await emitHttpComplete(rt, pending2, { statusCode: 200, responseBody: "ok" });
   const row2 = await store.get({ location: "http://127.0.0.1:8080/login" });
   assert.equal(row2?.status, "touched");
+  assert.equal(row2?.case_tested, true);
   assert.deepEqual(row2?.methods, ["GET", "POST"]);
 
   store.close();
@@ -559,6 +567,142 @@ function completedExchange(partial: Partial<TrafficExchange> & { url: string }):
   if (!probe.ok) throw new Error("expected skip ok");
   assert.equal(probe.skipped, true);
   if (probe.skipped) assert.equal(probe.reason, "collapsed_os_probe");
+
+  store.close();
+  await rm(dir, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------------------
+// Pure + integration: purpose + case_tested (#413)
+// ---------------------------------------------------------------------------
+
+{
+  // shell/http single GET purpose=test → case_tested plan
+  const plan = planTrafficSurfaceSettle(
+    {
+      url: "https://lab.example/api",
+      method: "GET",
+      phase: "completed",
+      source: "shell",
+    },
+    null,
+  );
+  assert.equal(plan.settle, true);
+  if (!plan.settle) throw new Error("expected settle");
+  assert.equal(plan.purpose, "test");
+  assert.equal(plan.case_tested, true);
+  assert.equal(plan.status, "touched", "single test request → touched");
+}
+
+{
+  // browser browse does not set case_tested
+  const browse = planTrafficSurfaceSettle(
+    {
+      url: "https://lab.example/",
+      method: "GET",
+      phase: "completed",
+      source: "browser",
+      purpose: "browse",
+    },
+    null,
+  );
+  assert.equal(browse.settle, true);
+  if (!browse.settle) throw new Error("expected settle");
+  assert.equal(browse.purpose, "browse");
+  assert.equal(browse.case_tested, false);
+  assert.equal(browse.status, "seen");
+
+  // Multi-hit browse elevates Graph status but not case_tested
+  const browse2 = planTrafficSurfaceSettle(
+    {
+      url: "https://lab.example/",
+      method: "GET",
+      phase: "completed",
+      source: "browser",
+      purpose: "browse",
+    },
+    { status: "seen", methods: ["GET"] },
+  );
+  assert.equal(browse2.settle, true);
+  if (!browse2.settle) throw new Error("expected settle");
+  assert.equal(browse2.case_tested, false);
+  assert.equal(browse2.status, "touched");
+}
+
+{
+  // Explicit purpose override
+  const forced = planTrafficSurfaceSettle(
+    {
+      url: "https://lab.example/x",
+      method: "GET",
+      phase: "completed",
+      source: "browser",
+      purpose: "test",
+    },
+    null,
+  );
+  assert.equal(forced.settle, true);
+  if (!forced.settle) throw new Error("expected settle");
+  assert.equal(forced.case_tested, true);
+}
+
+{
+  const dir = await mkdtemp(join(tmpdir(), "node4-s413-purpose-"));
+  const store = new SurfaceSqliteStore(SurfaceSqliteStore.pathFromTaskDir(dir));
+  await store.open();
+  const platform = fakePlatform();
+  const rt = runtimeFor(dir, store, platform, { platformApi: true });
+  resetSurfacePlatformSyncTracking();
+
+  // Browse-only traffic: settle without case_tested
+  const browse = await settleTrafficToSurface(
+    rt,
+    completedExchange({
+      url: "https://lab.example/home",
+      method: "GET",
+      source: "browser",
+      purpose: "browse",
+    }),
+  );
+  assert.equal(browse.ok, true);
+  if (!browse.ok || browse.skipped) throw new Error(JSON.stringify(browse));
+  assert.equal(browse.row?.case_tested, false);
+  assert.equal(browse.row?.status, "seen");
+
+  // Agent upsert cannot fake case_tested
+  const fake = await store.upsert(
+    [{ location: "https://lab.example/home", status: "touched", case_tested: true }],
+    { source: "agent" },
+  );
+  assert.equal(fake.ok, true);
+  if (!fake.ok) throw new Error("upsert");
+  assert.equal(fake.upserted[0]?.case_tested, false, "agent cannot set case_tested");
+  assert.equal(fake.upserted[0]?.status, "seen", "agent cannot elevate touched without traffic allow");
+
+  // One shell test → case_tested sticky
+  const testHit = await settleTrafficToSurface(
+    rt,
+    completedExchange({
+      url: "https://lab.example/home",
+      method: "GET",
+      source: "shell",
+      purpose: "test",
+    }),
+  );
+  assert.equal(testHit.ok, true);
+  if (!testHit.ok || testHit.skipped) throw new Error(JSON.stringify(testHit));
+  assert.equal(testHit.row?.case_tested, true);
+  assert.equal(testHit.row?.status, "touched");
+
+  // Dual-write includes case_tested
+  await waitSurfacePlatformSyncs();
+  const upserts = platform.messages.filter((m) => m.type === "surface_upsert");
+  assert.ok(upserts.length >= 1);
+  const lastSurfaces = (upserts[upserts.length - 1] as { surfaces?: Array<Record<string, unknown>> })
+    .surfaces;
+  assert.ok(Array.isArray(lastSurfaces) && lastSurfaces.length >= 1);
+  const payload = lastSurfaces.find((s) => String(s.path_key || "") === "/home") || lastSurfaces[0];
+  assert.equal(payload?.case_tested, true, "dual-write case_tested");
 
   store.close();
   await rm(dir, { recursive: true, force: true });
