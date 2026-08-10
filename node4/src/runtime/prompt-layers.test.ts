@@ -420,6 +420,32 @@ const baseTask: TaskEnvelope = {
     /nuclei first|nuclei \/ searchsploit first/i.test(workBody),
     "T3 work.md: named-product nuclei-first pointer",
   );
+
+  // #400: scientific recon + Surface v2 posture (profession core)
+  ok(
+    /Discovery order/i.test(workBody) && /real feature use/i.test(workBody),
+    "T3 work.md: discovery order (reachable → real feature use → path hypotheses)",
+  );
+  ok(
+    /full surface enum/i.test(workBody) &&
+      /training-data|historical-vuln/i.test(workBody),
+    "T3 work.md: bans prior-only path menus as full surface enum",
+  );
+  ok(
+    /prefer.*http.*session.*browser|Prefer `http`\/`session`\/`browser`/i.test(workBody) &&
+      /shell batch curl is \*\*supplement\*\*|shell batch curl is supplement/i.test(workBody),
+    "T3 work.md: first-pass prefer http/session/browser; shell batch is supplement",
+  );
+  ok(
+    /Traffic settle \+ TARGET seed/i.test(workBody) &&
+      /upsert optional/i.test(workBody) &&
+      /finding\(confirm\).*booked|booked/i.test(workBody),
+    "T3 work.md: Surface v2 (Traffic settle + seed; upsert optional; confirm→booked)",
+  );
+  ok(
+    /Guessed paths OK/i.test(workBody) && /real requests/i.test(workBody),
+    "T3 work.md: guessed paths only with real requests",
+  );
 }
 
 console.log("\nALL prompt-layers T1+T2+T3 tests passed");
