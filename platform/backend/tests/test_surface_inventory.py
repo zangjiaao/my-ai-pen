@@ -1,4 +1,9 @@
-"""Spec #410 — Durable surface inventory + NEW on first admit (pure)."""
+"""Spec #410 — Durable surface inventory + NEW on first admit (pure).
+
+Also documents dual-write isolation: inventory admit must use a SAVEPOINT
+(see app.ws.router _persist_surface_upsert) so a missing surface_inventory
+table cannot abort Postgres txn and drop Case surface_ledger writes.
+"""
 from __future__ import annotations
 
 import unittest

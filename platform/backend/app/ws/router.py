@@ -2993,15 +2993,19 @@ async def _persist_surface_upsert(msg: dict, node_id: str | None) -> dict | None
                 return None
             context = c.context if isinstance(c.context, dict) else {}
             # Spec #410: durable inventory admit → is_new only on first-ever identity.
+            # Use a SAVEPOINT: inventory SQL failure must not abort the outer txn
+            # (Postgres "current transaction is aborted" would otherwise drop Case
+            # surface_ledger dual-write when surface_inventory is missing/unmigrated).
             novelty: dict = {}
             if c.user_id:
                 try:
-                    novelty = await admit_surfaces_for_user(
-                        db,
-                        user_id=c.user_id,
-                        conversation_id=c.id,
-                        surfaces=rows,
-                    )
+                    async with db.begin_nested():
+                        novelty = await admit_surfaces_for_user(
+                            db,
+                            user_id=c.user_id,
+                            conversation_id=c.id,
+                            surfaces=rows,
+                        )
                 except Exception as inv_err:
                     # Inventory failure must not block Case ledger dual-write.
                     print(f"[WS] surface inventory admit error (non-fatal): {inv_err}")
@@ -3093,16 +3097,25 @@ async def _apply_finding_surface_booked_side_effect(
                 next_ctx = result.get("context")
                 landed = result.get("landed")
                 # Spec #410: durable inventory admit; stamp is_new (sticky-true on merge).
+                # SAVEPOINT so missing inventory table cannot poison finding→surface commit.
                 if isinstance(landed, dict) and c.user_id:
                     try:
                         from app.services.surface_ledger import merge_surfaces_into_context
 
-                        novelty = await admit_surfaces_for_user(
-                            db,
-                            user_id=c.user_id,
-                            conversation_id=c.id,
-                            surfaces=[landed],
-                        )
+                        novelty: dict = {}
+                        try:
+                            async with db.begin_nested():
+                                novelty = await admit_surfaces_for_user(
+                                    db,
+                                    user_id=c.user_id,
+                                    conversation_id=c.id,
+                                    surfaces=[landed],
+                                )
+                        except Exception as inv_err:
+                            print(
+                                f"[WS] finding surface inventory admit error (non-fatal): {inv_err}"
+                            )
+                            novelty = {}
                         stamped = stamp_is_new_from_novelty([landed], novelty or {})
                         if stamped and isinstance(next_ctx, dict):
                             next_ctx, landed_list = merge_surfaces_into_context(
@@ -3114,7 +3127,7 @@ async def _apply_finding_surface_booked_side_effect(
                                 landed = landed_list[0]
                     except Exception as inv_err:
                         print(
-                            f"[WS] finding surface inventory admit error (non-fatal): {inv_err}"
+                            f"[WS] finding surface inventory stamp error (non-fatal): {inv_err}"
                         )
                 if isinstance(next_ctx, dict):
                     c.context = next_ctx
