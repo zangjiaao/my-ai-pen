@@ -43,6 +43,8 @@ function makeFakeDocker() {
       creates.push(opts.name);
       imagesUsed.push(opts.image);
       running.add(opts.name);
+      // volumes optional for older cases
+      void opts.volumes;
       return { exitCode: 0, stdout: opts.name, stderr: "" };
     },
     async exec(name, argv) {

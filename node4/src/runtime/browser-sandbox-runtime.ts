@@ -16,6 +16,8 @@ import {
   type BrowserSandboxListItem,
   type SandboxExecResult,
 } from "./browser-sandbox-docker.js";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   agentBrowserSessionName,
   containerNameForSeat,
@@ -29,6 +31,13 @@ export type BrowserSandboxSession = {
   conversationId: string;
   expertId: string;
   seatKey: string;
+  /** Host path mounted at /workspace when created (Spec #428). */
+  workspaceHostPath?: string;
+};
+
+export type BrowserSandboxEnsureOptions = {
+  /** Host Session workspace directory to mount at /workspace (rw). */
+  workspaceHostPath?: string;
 };
 
 type SessionRecord = BrowserSandboxSession & { started: boolean };
@@ -178,12 +187,18 @@ export class BrowserSandboxRuntime {
     return Math.floor((this.now() + this.leaseConfig.leaseMs) / 1000);
   }
 
-  async ensure(seat: BrowserSandboxSeat | string): Promise<BrowserSandboxSession> {
+  async ensure(
+    seat: BrowserSandboxSeat | string,
+    opts?: BrowserSandboxEnsureOptions,
+  ): Promise<BrowserSandboxSession> {
     const s = normalizeSeat(seat);
-    return this.withSeatLock(s.seatKey, () => this.ensureUnlocked(s));
+    return this.withSeatLock(s.seatKey, () => this.ensureUnlocked(s, opts));
   }
 
-  private async ensureUnlocked(seat: BrowserSandboxSeat): Promise<BrowserSandboxSession> {
+  private async ensureUnlocked(
+    seat: BrowserSandboxSeat,
+    opts?: BrowserSandboxEnsureOptions,
+  ): Promise<BrowserSandboxSession> {
     const key = seat.seatKey;
     const existing = this.sessions.get(key);
     if (existing?.started) {
@@ -193,6 +208,7 @@ export class BrowserSandboxRuntime {
         conversationId: existing.conversationId,
         expertId: existing.expertId,
         seatKey: existing.seatKey,
+        workspaceHostPath: existing.workspaceHostPath,
       };
     }
 
@@ -208,6 +224,20 @@ export class BrowserSandboxRuntime {
       leaseUntilUnix: leaseUntil,
     });
 
+    const workspaceHostPath = opts?.workspaceHostPath
+      ? resolve(String(opts.workspaceHostPath).trim())
+      : undefined;
+    const volumes: string[] = [];
+    if (workspaceHostPath) {
+      volumes.push(`${workspaceHostPath}:/workspace:rw`);
+    }
+    const tplHost =
+      process.env.PEN_TOOLS_NUCLEI_TEMPLATES?.trim() ||
+      resolve(process.env.HOME || "/tmp", ".cache/pen-tools/nuclei-templates");
+    if (existsSync(tplHost)) {
+      volumes.push(`${tplHost}:/root/nuclei-templates:ro`);
+    }
+
     await this.docker.rmForce(name, 30_000);
 
     const started = await this.docker.runDetached(
@@ -217,9 +247,12 @@ export class BrowserSandboxRuntime {
         env: [
           "NO_PROXY=localhost,127.0.0.1,host.docker.internal",
           "no_proxy=localhost,127.0.0.1,host.docker.internal",
+          "HOME=/workspace",
           `AGENT_BROWSER_SESSION=${agentBrowserSessionName(key)}`,
         ],
         labels,
+        volumes,
+        network: process.env.PEN_TOOLS_NETWORK?.trim() || "host",
         entrypoint: ["bash"],
         cmd: ["-lc", "sleep infinity"],
       },
@@ -240,6 +273,7 @@ export class BrowserSandboxRuntime {
       conversationId: seat.conversationId,
       expertId: seat.expertId,
       seatKey: key,
+      workspaceHostPath,
       started: true,
     };
     this.sessions.set(key, record);
@@ -249,6 +283,7 @@ export class BrowserSandboxRuntime {
       conversationId: record.conversationId,
       expertId: record.expertId,
       seatKey: record.seatKey,
+      workspaceHostPath: record.workspaceHostPath,
     };
   }
 
@@ -256,10 +291,11 @@ export class BrowserSandboxRuntime {
     seat: BrowserSandboxSeat | string,
     argv: string[],
     timeoutMs = 120_000,
+    opts?: BrowserSandboxEnsureOptions,
   ): Promise<SandboxExecResult> {
     const s = normalizeSeat(seat);
     return this.withSeatLock(s.seatKey, async () => {
-      const session = await this.ensureUnlocked(s);
+      const session = await this.ensureUnlocked(s, opts);
       const result = await this.docker.exec(session.containerName, argv, timeoutMs);
       return { ...result, via: "sandbox" };
     });

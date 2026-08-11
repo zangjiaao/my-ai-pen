@@ -30,7 +30,7 @@ Node4 (OMP) — target model
 
 Legacy names `pen-tools` / `pen-browser` may still appear as **tags aliased at build time**; do not maintain two product images.
 
-**Shipped vs target:** Spec [#427](https://github.com/zangjiaao/my-ai-pen/issues/427) ships **Session-seat browser key** `(conversationId, expertId)` and **no task-end dispose**. Shell still short-lived `--rm` until [#428](https://github.com/zangjiaao/my-ai-pen/issues/428); seat/Case `rm` fan-in [#429](https://github.com/zangjiaao/my-ai-pen/issues/429); idle/Node **stop** [#430](https://github.com/zangjiaao/my-ai-pen/issues/430).
+**Shipped vs target:** [#427](https://github.com/zangjiaao/my-ai-pen/issues/427) seat key + no task-end dispose; [#428](https://github.com/zangjiaao/my-ai-pen/issues/428) Session workspace mount + shell **exec into sticky box** (ephemeral `--rm` only as fallback without seat). Remaining: seat/Case `rm` [#429](https://github.com/zangjiaao/my-ai-pen/issues/429); idle/Node **stop** [#430](https://github.com/zangjiaao/my-ai-pen/issues/430); janitor/docs [#431](https://github.com/zangjiaao/my-ai-pen/issues/431).
 
 ---
 

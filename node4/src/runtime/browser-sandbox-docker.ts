@@ -40,6 +40,10 @@ export type BrowserSandboxDockerPort = {
       image: string;
       env: string[];
       labels?: Record<string, string>;
+      /** Host binds e.g. `/host/path:/workspace:rw` */
+      volumes?: string[];
+      /** Docker network mode (default host for scanners + browser). */
+      network?: string;
       entrypoint: string[];
       cmd: string[];
     },
@@ -109,11 +113,14 @@ export function createProcessDockerPort(bin: string = dockerBin()): BrowserSandb
       return runProcess(bin, ["rm", "-f", name], timeoutMs);
     },
     async runDetached(opts, timeoutMs = 120_000) {
+      const network = opts.network?.trim() || process.env.PEN_TOOLS_NETWORK?.trim() || "host";
       const argv: string[] = [
         "run",
         "-d",
         "--name",
         opts.name,
+        "--network",
+        network,
         "--add-host",
         "host.docker.internal:host-gateway",
         "--cap-add",
@@ -128,6 +135,9 @@ export function createProcessDockerPort(bin: string = dockerBin()): BrowserSandb
         for (const [k, v] of Object.entries(opts.labels)) {
           argv.push("--label", `${k}=${v}`);
         }
+      }
+      for (const vol of opts.volumes || []) {
+        if (vol) argv.push("-v", vol);
       }
       if (opts.entrypoint.length) {
         argv.push("--entrypoint", opts.entrypoint[0]);

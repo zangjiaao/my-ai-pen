@@ -3,7 +3,16 @@ import { Type } from "typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolRuntime } from "../types.js";
 import { buildShellEnv } from "../runtime/pen-tools-path.js";
-import { isShellInPenToolsEnabled, runShellInPenTools } from "../runtime/pen-tools-shell.js";
+import {
+  isShellInPenToolsEnabled,
+  runShellInPenTools,
+  type PenToolsShellOptions,
+} from "../runtime/pen-tools-shell.js";
+import { resolveBrowserSandboxSeat } from "../runtime/browser-sandbox-image.js";
+import {
+  ensureSessionWorkspace,
+  resolveSessionWorkspaceDir,
+} from "../runtime/session-workspace.js";
 import { recordActObservation, jsonResult, textResult } from "./common.js";
 import { archiveAndGovernToolOutput } from "../runtime/tool-output-governance.js";
 import {
@@ -29,7 +38,7 @@ export function createShellTool(runtime: ToolRuntime): AgentTool<any> {
     name: "shell",
     label: "Shell",
     description: [
-      "PRIMARY act tool. Run bash in the task workspace.",
+      "PRIMARY act tool. Run bash in the Session workspace (sticky pen-sandbox /workspace when available).",
       "HIGH DENSITY: pack cookie jars, curl pipelines, python one-liners, and parsing in ONE command (chain with && when order matters).",
       "Independent probes: issue multiple shell tool calls in the SAME turn (they can run in parallel).",
       "Prefer shell over http for multi-step recon/exploit. Use scripts/ for longer exploits (write then shell python scripts/x.py).",
@@ -66,7 +75,8 @@ export function createShellTool(runtime: ToolRuntime): AgentTool<any> {
       const timeoutSec = clampTimeoutSec(params.timeout_seconds);
       const timeoutMs = timeoutSec * 1000;
       const startedMs = Date.now();
-      const result = await runShell(command, runtime.taskDir, timeoutMs, combined);
+      const shellOpts = await resolveStickyShellOpts(runtime);
+      const result = await runShell(command, runtime.taskDir, timeoutMs, combined, shellOpts);
       const durationMs = Date.now() - startedMs;
       const governed = await archiveAndGovernToolOutput({
         taskDir: runtime.taskDir,
@@ -172,8 +182,25 @@ export type ShellRunResult = {
   aborted: boolean;
 };
 
+async function resolveStickyShellOpts(
+  runtime: ToolRuntime,
+): Promise<PenToolsShellOptions | undefined> {
+  try {
+    const seat = resolveBrowserSandboxSeat(runtime.task);
+    const workspaceHostPath = resolveSessionWorkspaceDir(
+      runtime.workspaceDir,
+      seat.conversationId,
+      seat.expertId,
+    );
+    await ensureSessionWorkspace(workspaceHostPath);
+    return { seat, workspaceHostPath };
+  } catch {
+    return undefined;
+  }
+}
+
 /**
- * Spawn bash -lc. Prefer pen-tools container (S4) when image present; else host with PATH shims (S1).
+ * Spawn bash -lc. Prefer sticky pen-sandbox exec (Spec #428); else ephemeral container; else host.
  * Exported for smokes.
  */
 export function runShell(
@@ -181,9 +208,10 @@ export function runShell(
   cwd: string,
   timeoutMs: number,
   signal?: AbortSignal,
+  opts?: PenToolsShellOptions,
 ): Promise<ShellRunResult> {
   if (isShellInPenToolsEnabled()) {
-    return runShellInPenTools(command, cwd, timeoutMs, signal);
+    return runShellInPenTools(command, cwd, timeoutMs, signal, opts);
   }
   return runShellOnHost(command, cwd, timeoutMs, signal);
 }

@@ -14,6 +14,10 @@ import {
 } from "./browser-sandbox-image.js";
 import { getDefaultBrowserSandboxRuntime } from "./browser-sandbox-runtime.js";
 import type { SandboxExecResult } from "./browser-sandbox-docker.js";
+import {
+  ensureSessionWorkspace,
+  resolveSessionWorkspaceDir,
+} from "./session-workspace.js";
 
 /**
  * Run agent-browser: sandbox first (default), host fallback when sandbox disabled or fails to start.
@@ -24,8 +28,13 @@ export async function runBrowserCommand(
   timeoutMs = 120_000,
 ): Promise<SandboxExecResult & { text: string }> {
   let seatKey: string;
+  let workspaceHostPath: string | undefined;
   try {
-    seatKey = resolveBrowserSandboxSeat(runtime.task).seatKey;
+    const seat = resolveBrowserSandboxSeat(runtime.task);
+    seatKey = seat.seatKey;
+    workspaceHostPath = await ensureSessionWorkspace(
+      resolveSessionWorkspaceDir(runtime.workspaceDir, seat.conversationId, seat.expertId),
+    );
   } catch (e) {
     if (e instanceof BrowserSandboxSeatError) {
       return {
@@ -43,6 +52,7 @@ export async function runBrowserCommand(
 
   const preferSandbox = isBrowserSandboxPreferred();
   const sandboxRuntime = getDefaultBrowserSandboxRuntime();
+  const ensureOpts = workspaceHostPath ? { workspaceHostPath } : undefined;
 
   if (preferSandbox) {
     try {
@@ -62,7 +72,12 @@ export async function runBrowserCommand(
       throw e;
     }
     try {
-      const result = await sandboxRuntime.exec(seatKey, ["agent-browser", ...args], timeoutMs);
+      const result = await sandboxRuntime.exec(
+        seatKey,
+        ["agent-browser", ...args],
+        timeoutMs,
+        ensureOpts,
+      );
       const text = `${result.stdout || ""}${result.stderr ? `\n${result.stderr}` : ""}`.trim();
       if (result.unavailable) {
         throw new Error(result.error || "docker unavailable");
