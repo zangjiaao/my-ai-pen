@@ -12,7 +12,6 @@ import { parseCookiesJson } from "../runtime/agent-browser-cli.js";
 import {
   rewriteUrlForSandbox,
   runBrowserCommand,
-  stopBrowserSandbox,
 } from "../runtime/browser-sandbox.js";
 import {
   drainBrowserNetworkRows,
@@ -105,8 +104,8 @@ export function createBrowserTool(runtime: ToolRuntime): AgentTool<any> {
         runBrowserCommand(runtime, args, timeoutMs);
 
       if (action === "close") {
+        // Spec #333: close browser UI/session only — container GC is runtime dispose (task end/abort).
         const r = await run(["close"], 30_000);
-        await stopBrowserSandbox(runtime.task.taskId).catch(() => {});
         return jsonResult({
           ok: r.exitCode === 0,
           action: "close",

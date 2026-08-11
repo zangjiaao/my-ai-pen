@@ -171,6 +171,18 @@ try {
     assert(attempts === 2, "failed ensure does not block retry create");
   }
 
+  // --- disposeAll clears every parent session (Spec #333 graceful shutdown) ---
+  {
+    const fake = makeFakeDocker();
+    const rt = new BrowserSandboxRuntime({ docker: fake.docker });
+    await rt.ensure("shut-a");
+    await rt.ensure("shut-b");
+    assert(rt.activeSessionCount() === 2, "two sessions");
+    await rt.disposeAll();
+    assert(rt.activeSessionCount() === 0, "disposeAll cleared sessions");
+    assert(fake.running.size === 0, "disposeAll removed containers");
+  }
+
   console.log(JSON.stringify({ ok: true, cases: "ensure/reuse/dispose/fake-docker" }, null, 2));
   console.log("RESULT: PASS — BrowserSandboxRuntime (#331)");
 } finally {

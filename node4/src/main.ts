@@ -3,6 +3,7 @@ import { loadConfig } from "./config.js";
 import { loadDotEnv } from "./env.js";
 import { PlatformWSClient } from "./platform/ws-client.js";
 import { runNode4Task } from "./runtime/session-runner.js";
+import { disposeAllBrowserSandboxes } from "./runtime/browser-sandbox.js";
 import { isLlmTurnError } from "./runtime/llm-turn-error.js";
 import { streamDiagnosisPayload } from "./runtime/llm-turn-surface.js";
 import type { TaskEnvelope } from "./types.js";
@@ -559,6 +560,30 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
       undefined,
   };
 }
+
+/** Spec #333: best-effort dispose of this instance's browser sandboxes on graceful stop. */
+function installGracefulBrowserSandboxShutdown(): void {
+  let shuttingDown = false;
+  const onSignal = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[node4] ${signal}: disposing browser sandboxes`);
+    void disposeAllBrowserSandboxes()
+      .catch((err) => {
+        console.warn(
+          `[node4] browser sandbox disposeAll failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      })
+      .finally(() => {
+        // Listener replaces default terminate; exit after best-effort cleanup.
+        process.exit(0);
+      });
+  };
+  process.once("SIGTERM", () => onSignal("SIGTERM"));
+  process.once("SIGINT", () => onSignal("SIGINT"));
+}
+
+installGracefulBrowserSandboxShutdown();
 
 console.log(`[node4] starting node=${config.nodeName} ws=${config.platformWsUrl}`);
 await client.connect();

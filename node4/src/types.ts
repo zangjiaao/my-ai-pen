@@ -199,6 +199,14 @@ export type ToolRuntime = {
      */
     subagentIdlePool?: import("./runtime/subagent-idle-pool.js").SubagentIdlePool;
     /**
+     * Spec #333: runtime-owned browser sandbox dispose for this parent task.
+     * When unset, task cleanup uses process-default disposeBrowserSandbox.
+     * Agent browser close must not own container GC.
+     */
+    browserSandbox?: {
+      dispose(parentTaskId: string): Promise<void>;
+    };
+    /**
      * finding(confirm) ground-fail counts by title|location — anti-thrash for identical retries.
      * After ≥2 failures, errors include bookable_unbooked judgment guidance.
      */

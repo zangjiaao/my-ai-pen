@@ -275,10 +275,26 @@ export class BrowserSandboxRuntime {
     await this.docker.rmForce(name, 30_000);
     this.sessions.delete(key);
   }
+
+  /** Dispose every parent-scoped sandbox held by this runtime (graceful process shutdown). */
+  async disposeAll(): Promise<void> {
+    const keys = [...this.sessions.keys()];
+    await Promise.all(keys.map((k) => this.dispose(k)));
+  }
+
+  /** How many parent tasks currently have a live session record (tests / observability). */
+  activeSessionCount(): number {
+    return this.sessions.size;
+  }
 }
 
 /** Process-default runtime used by module-level helpers and browser tool. */
 const defaultRuntime = new BrowserSandboxRuntime();
+
+/** Default process-local runtime (for lifecycle wiring / tests). */
+export function getDefaultBrowserSandboxRuntime(): BrowserSandboxRuntime {
+  return defaultRuntime;
+}
 
 /** @deprecated Prefer BrowserSandboxRuntime.ensure — kept for call-site compatibility. */
 export async function ensureBrowserSandbox(taskId: string): Promise<BrowserSandboxSession> {
@@ -296,6 +312,11 @@ export async function execInBrowserSandbox(
 /** Runtime dispose for a parent task (alias: stopBrowserSandbox). */
 export async function disposeBrowserSandbox(parentTaskId: string): Promise<void> {
   return defaultRuntime.dispose(parentTaskId);
+}
+
+/** Best-effort dispose of all sandboxes owned by this process instance (Spec #333). */
+export async function disposeAllBrowserSandboxes(): Promise<void> {
+  return defaultRuntime.disposeAll();
 }
 
 /** @deprecated Prefer disposeBrowserSandbox / BrowserSandboxRuntime.dispose */
