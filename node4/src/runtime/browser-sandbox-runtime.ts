@@ -21,6 +21,7 @@ import { resolve } from "node:path";
 import {
   agentBrowserSessionName,
   containerNameForSeat,
+  formatBrowserSandboxSeatKey,
   resolveBrowserSandboxImage,
   type BrowserSandboxSeat,
 } from "./browser-sandbox-image.js";
@@ -322,6 +323,25 @@ export class BrowserSandboxRuntime {
     });
   }
 
+  /**
+   * Spec #429: rm all sticky boxes for a Case (conversationId).
+   * Matches seatKeys `conv` or `conv::*` in process map + held set.
+   */
+  async disposeForConversation(conversationId: string): Promise<number> {
+    const c = String(conversationId || "").trim();
+    if (!c) return 0;
+    const prefix = `${c}::`;
+    const keys = new Set<string>();
+    for (const k of this.sessions.keys()) {
+      if (k === c || k.startsWith(prefix)) keys.add(k);
+    }
+    for (const k of this.heldSeats) {
+      if (k === c || k.startsWith(prefix)) keys.add(k);
+    }
+    await Promise.all([...keys].map((k) => this.dispose(k)));
+    return keys.size;
+  }
+
   async disposeAll(): Promise<void> {
     const keys = [...new Set([...this.sessions.keys(), ...this.heldSeats])];
     await Promise.all(keys.map((k) => this.dispose(k)));
@@ -466,7 +486,24 @@ export async function disposeBrowserSandbox(seatKey: string): Promise<void> {
   return defaultRuntime.dispose(seatKey);
 }
 
-/** Process-default dispose of all sandboxes on this instance (graceful shutdown). */
+/** Spec #429: rm sticky box for one Participant Session seat. */
+export async function disposeBrowserSandboxForSeat(
+  conversationId: string,
+  expertId: string,
+): Promise<void> {
+  const c = String(conversationId || "").trim();
+  const e = String(expertId || "").trim();
+  if (!c || !e) return;
+  const seatKey = formatBrowserSandboxSeatKey(c, e);
+  return defaultRuntime.dispose({ conversationId: c, expertId: e, seatKey });
+}
+
+/** Spec #429: rm all sticky boxes under a Case. */
+export async function disposeBrowserSandboxForCase(conversationId: string): Promise<number> {
+  return defaultRuntime.disposeForConversation(conversationId);
+}
+
+/** Process-default dispose of all sandboxes on this instance (graceful shutdown → #430 prefers stop). */
 export async function disposeAllBrowserSandboxes(): Promise<void> {
   return defaultRuntime.disposeAll();
 }

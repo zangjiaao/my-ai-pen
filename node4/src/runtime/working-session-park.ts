@@ -20,6 +20,10 @@
 import type { Node4AgentSession } from "./run-node4-agent.js";
 import type { TodoStore } from "../stores/todo.js";
 import type { ToolRuntime } from "../types.js";
+import {
+  disposeBrowserSandboxForCase,
+  disposeBrowserSandboxForSeat,
+} from "./browser-sandbox.js";
 
 /**
  * Default idle park TTL. Spec #354 L2: do not reclaim Participant Session for
@@ -348,6 +352,14 @@ export function applyCaptainEndDisposition(options: {
   } catch {
     /* ignore */
   }
+  // Spec #429: seat death (force/explicit dispose) tears sticky pen-sandbox with captain.
+  if (forceDispose || decision.disposition === "dispose") {
+    const exp = String(options.entry.expertId || "").trim();
+    const conv = String(options.entry.conversationId || "").trim();
+    if (conv && exp) {
+      void disposeBrowserSandboxForSeat(conv, exp).catch(() => {});
+    }
+  }
   // Clear Session-key pending always after force/explicit dispose.
   clearPendingSessionDispose(options.entry.conversationId, options.entry.expertId);
   // Spec #354 L1: case-wide pending must not stick after the mid-burst finally
@@ -518,6 +530,8 @@ export async function disposeWorkingSession(
   const key = parkSessionKey(c, e);
   const entry = key ? parks.get(key) : undefined;
   if (!entry) {
+    // Spec #429: still rm sticky sandbox even if captain park already gone.
+    await disposeBrowserSandboxForSeat(c, e).catch(() => {});
     const stashed = takeStashedTodos(c, e);
     return { disposed: stashed.length > 0, openTodos: stashed };
   }
@@ -533,6 +547,8 @@ export async function disposeWorkingSession(
   } catch {
     /* ignore */
   }
+  // Spec #429: Session Delete → rm sticky pen-sandbox for this seat.
+  await disposeBrowserSandboxForSeat(c, e).catch(() => {});
   // Prefer live park snapshot; drop any stale stash for this key.
   disposedTodoSnapshots.delete(key);
   disposedTodoSnapshots.delete(c);
@@ -565,6 +581,8 @@ export async function disposeWorkingSessionsForCase(
       /* ignore */
     }
   }
+  // Spec #429: Case close → rm all sticky pen-sandboxes under conversation.
+  await disposeBrowserSandboxForCase(c).catch(() => {});
   return { disposed: keys.length, keys };
 }
 

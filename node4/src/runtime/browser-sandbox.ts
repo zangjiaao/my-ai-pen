@@ -42,6 +42,8 @@ export {
   BrowserSandboxRuntime,
   disposeAllBrowserSandboxes,
   disposeBrowserSandbox,
+  disposeBrowserSandboxForCase,
+  disposeBrowserSandboxForSeat,
   getDefaultBrowserSandboxRuntime,
   holdBrowserSandboxSeat,
   holdBrowserSandboxTask,
