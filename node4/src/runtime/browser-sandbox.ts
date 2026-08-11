@@ -1,6 +1,8 @@
 /**
  * Browser sandbox for Node4 — unified pen-sandbox (same image as shell).
  * Spec #330: browser image is explicit env only; no Strix / ambient-tag fallback.
+ * Spec #331: BrowserSandboxRuntime — ensure / reuse / dispose by parent task id,
+ * with an injectable Docker port for unit tests.
  *
  * Env:
  * - NODE4_BROWSER_SANDBOX=0|false → force host agent-browser only
@@ -21,14 +23,29 @@ export type SandboxExecResult = {
   via?: "sandbox" | "host";
 };
 
-type SessionRecord = {
-  containerName: string;
-  image: string;
-  taskId: string;
-  started: boolean;
+/** Injectable Docker operations used by BrowserSandboxRuntime (Spec #331). */
+export type BrowserSandboxDockerPort = {
+  rmForce(name: string, timeoutMs?: number): Promise<SandboxExecResult>;
+  runDetached(
+    opts: {
+      name: string;
+      image: string;
+      env: string[];
+      entrypoint: string[];
+      cmd: string[];
+    },
+    timeoutMs?: number,
+  ): Promise<SandboxExecResult>;
+  exec(name: string, argv: string[], timeoutMs?: number): Promise<SandboxExecResult>;
 };
 
-const sessions = new Map<string, SessionRecord>();
+export type BrowserSandboxSession = {
+  containerName: string;
+  image: string;
+  parentTaskId: string;
+};
+
+type SessionRecord = BrowserSandboxSession & { started: boolean };
 
 /** Thrown when browser sandbox image env is missing (fail closed; no Strix). */
 export class BrowserSandboxImageError extends Error {
@@ -65,17 +82,13 @@ export function resolveBrowserSandboxImage(): string {
   return image;
 }
 
-function sandboxImage(): string {
-  return resolveBrowserSandboxImage();
-}
-
 export function isBrowserSandboxPreferred(): boolean {
   const raw = (process.env.NODE4_BROWSER_SANDBOX ?? "1").trim().toLowerCase();
   return !(raw === "0" || raw === "false" || raw === "off" || raw === "host");
 }
 
-function containerNameFor(taskId: string): string {
-  const safe = taskId.replace(/[^a-zA-Z0-9_.-]/g, "-").slice(0, 48);
+export function containerNameForParentTask(parentTaskId: string): string {
+  const safe = parentTaskId.replace(/[^a-zA-Z0-9_.-]/g, "-").slice(0, 48);
   return `node4-browser-${safe}`;
 }
 
@@ -123,53 +136,153 @@ function runProcess(command: string, argv: string[], timeoutMs: number): Promise
   });
 }
 
-export async function ensureBrowserSandbox(taskId: string): Promise<SessionRecord> {
-  const existing = sessions.get(taskId);
-  if (existing?.started) return existing;
+/** Real Docker CLI port used in production. */
+export function createProcessDockerPort(bin: string = dockerBin()): BrowserSandboxDockerPort {
+  return {
+    async rmForce(name, timeoutMs = 30_000) {
+      return runProcess(bin, ["rm", "-f", name], timeoutMs);
+    },
+    async runDetached(opts, timeoutMs = 120_000) {
+      const argv: string[] = [
+        "run",
+        "-d",
+        "--name",
+        opts.name,
+        "--add-host",
+        "host.docker.internal:host-gateway",
+        "--cap-add",
+        "NET_ADMIN",
+        "--cap-add",
+        "NET_RAW",
+      ];
+      for (const e of opts.env) {
+        argv.push("-e", e);
+      }
+      if (opts.entrypoint.length) {
+        argv.push("--entrypoint", opts.entrypoint[0]);
+        // remaining entrypoint parts are not used with bash -lc pattern
+      }
+      argv.push(opts.image, ...opts.cmd);
+      return runProcess(bin, argv, timeoutMs);
+    },
+    async exec(name, argv, timeoutMs = 120_000) {
+      const shellCmd = argv.map(shellQuote).join(" ");
+      return runProcess(bin, ["exec", name, "bash", "-lc", shellCmd], timeoutMs);
+    },
+  };
+}
 
-  const name = containerNameFor(taskId);
-  const image = sandboxImage();
-  const docker = dockerBin();
+export type BrowserSandboxRuntimeOptions = {
+  docker?: BrowserSandboxDockerPort;
+  resolveImage?: () => string;
+};
 
-  await runProcess(docker, ["rm", "-f", name], 30_000);
+/**
+ * Process-local browser sandbox lifecycle keyed by parent task id (Spec #331).
+ * One container per parent; reuse while held; dispose drops container + session.
+ * No cross-task warm pool.
+ */
+export class BrowserSandboxRuntime {
+  private readonly docker: BrowserSandboxDockerPort;
+  private readonly resolveImage: () => string;
+  private readonly sessions = new Map<string, SessionRecord>();
 
-  const started = await runProcess(
-    docker,
-    [
-      "run",
-      "-d",
-      "--name",
-      name,
-      "--add-host",
-      "host.docker.internal:host-gateway",
-      "--cap-add",
-      "NET_ADMIN",
-      "--cap-add",
-      "NET_RAW",
-      "-e",
-      "NO_PROXY=localhost,127.0.0.1,host.docker.internal",
-      "-e",
-      "no_proxy=localhost,127.0.0.1,host.docker.internal",
-      "-e",
-      `AGENT_BROWSER_SESSION=node4-${taskId.slice(0, 32)}`,
-      "--entrypoint",
-      "bash",
-      image,
-      "-lc",
-      "sleep infinity",
-    ],
-    120_000,
-  );
-
-  if (started.unavailable || started.exitCode !== 0) {
-    throw new Error(
-      `Failed to start browser sandbox: ${started.error || started.stderr || started.stdout || `exit ${started.exitCode}`}`,
-    );
+  constructor(opts: BrowserSandboxRuntimeOptions = {}) {
+    this.docker = opts.docker ?? createProcessDockerPort();
+    this.resolveImage = opts.resolveImage ?? resolveBrowserSandboxImage;
   }
 
-  const record: SessionRecord = { containerName: name, image, taskId, started: true };
-  sessions.set(taskId, record);
-  return record;
+  /** Create or reuse the long-lived browser container for this parent task. */
+  async ensure(parentTaskId: string): Promise<BrowserSandboxSession> {
+    const key = String(parentTaskId || "").trim();
+    if (!key) throw new Error("parentTaskId required for browser sandbox");
+
+    const existing = this.sessions.get(key);
+    if (existing?.started) {
+      return {
+        containerName: existing.containerName,
+        image: existing.image,
+        parentTaskId: existing.parentTaskId,
+      };
+    }
+
+    const image = this.resolveImage();
+    const name = containerNameForParentTask(key);
+
+    // Clear any stale same-name container on the daemon before create.
+    await this.docker.rmForce(name, 30_000);
+
+    const started = await this.docker.runDetached(
+      {
+        name,
+        image,
+        env: [
+          "NO_PROXY=localhost,127.0.0.1,host.docker.internal",
+          "no_proxy=localhost,127.0.0.1,host.docker.internal",
+          `AGENT_BROWSER_SESSION=node4-${key.slice(0, 32)}`,
+        ],
+        entrypoint: ["bash"],
+        cmd: ["-lc", "sleep infinity"],
+      },
+      120_000,
+    );
+
+    if (started.unavailable || started.exitCode !== 0) {
+      throw new Error(
+        `Failed to start browser sandbox: ${started.error || started.stderr || started.stdout || `exit ${started.exitCode}`}`,
+      );
+    }
+
+    const record: SessionRecord = {
+      containerName: name,
+      image,
+      parentTaskId: key,
+      started: true,
+    };
+    this.sessions.set(key, record);
+    return {
+      containerName: record.containerName,
+      image: record.image,
+      parentTaskId: record.parentTaskId,
+    };
+  }
+
+  async exec(
+    parentTaskId: string,
+    argv: string[],
+    timeoutMs = 120_000,
+  ): Promise<SandboxExecResult> {
+    const session = await this.ensure(parentTaskId);
+    const result = await this.docker.exec(session.containerName, argv, timeoutMs);
+    return { ...result, via: "sandbox" };
+  }
+
+  /**
+   * Remove the parent-scoped container immediately and drop the local session.
+   * Idempotent: safe when no session is tracked (still best-effort rm by name).
+   */
+  async dispose(parentTaskId: string): Promise<void> {
+    const key = String(parentTaskId || "").trim();
+    if (!key) return;
+
+    const session = this.sessions.get(key);
+    const name = session?.containerName ?? containerNameForParentTask(key);
+
+    if (session) {
+      // Best-effort browser UI teardown; container delete is the lifecycle authority.
+      await this.docker.exec(name, ["agent-browser", "close", "--all"], 30_000).catch(() => {});
+    }
+    await this.docker.rmForce(name, 30_000);
+    this.sessions.delete(key);
+  }
+}
+
+/** Process-default runtime used by module-level helpers and browser tool. */
+const defaultRuntime = new BrowserSandboxRuntime();
+
+/** @deprecated Prefer BrowserSandboxRuntime.ensure — kept for call-site compatibility. */
+export async function ensureBrowserSandbox(taskId: string): Promise<BrowserSandboxSession> {
+  return defaultRuntime.ensure(taskId);
 }
 
 export async function execInBrowserSandbox(
@@ -177,28 +290,17 @@ export async function execInBrowserSandbox(
   argv: string[],
   timeoutMs = 120_000,
 ): Promise<SandboxExecResult> {
-  const session = await ensureBrowserSandbox(taskId);
-  const docker = dockerBin();
-  const shellCmd = argv.map(shellQuote).join(" ");
-  const result = await runProcess(
-    docker,
-    ["exec", session.containerName, "bash", "-lc", shellCmd],
-    timeoutMs,
-  );
-  return { ...result, via: "sandbox" };
+  return defaultRuntime.exec(taskId, argv, timeoutMs);
 }
 
+/** Runtime dispose for a parent task (alias: stopBrowserSandbox). */
+export async function disposeBrowserSandbox(parentTaskId: string): Promise<void> {
+  return defaultRuntime.dispose(parentTaskId);
+}
+
+/** @deprecated Prefer disposeBrowserSandbox / BrowserSandboxRuntime.dispose */
 export async function stopBrowserSandbox(taskId: string): Promise<void> {
-  const session = sessions.get(taskId);
-  if (!session) return;
-  const docker = dockerBin();
-  await runProcess(
-    docker,
-    ["exec", session.containerName, "bash", "-lc", "agent-browser close --all >/dev/null 2>&1 || true"],
-    30_000,
-  );
-  await runProcess(docker, ["rm", "-f", session.containerName], 30_000);
-  sessions.delete(taskId);
+  return defaultRuntime.dispose(taskId);
 }
 
 /**
@@ -230,9 +332,8 @@ export async function runBrowserCommand(
       throw e;
     }
     try {
-      const result = await execInBrowserSandbox(runtime.task.taskId, ["agent-browser", ...args], timeoutMs);
+      const result = await defaultRuntime.exec(runtime.task.taskId, ["agent-browser", ...args], timeoutMs);
       const text = `${result.stdout || ""}${result.stderr ? `\n${result.stderr}` : ""}`.trim();
-      // If docker exec fails because binary missing, surface clearly
       if (result.unavailable) {
         throw new Error(result.error || "docker unavailable");
       }
