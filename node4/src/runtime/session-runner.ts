@@ -47,7 +47,11 @@ import {
   unavailableGraphTerminal,
 } from "./hard-graph-definition.js";
 import { runHardGraphExpertTask } from "./hard-graph-task.js";
-import { disposeBrowserSandbox } from "./browser-sandbox.js";
+import {
+  disposeBrowserSandbox,
+  holdBrowserSandboxTask,
+  releaseBrowserSandboxTask,
+} from "./browser-sandbox.js";
 import { runTaskResourceCleanup } from "./task-resource-cleanup.js";
 import {
   buildGoalBudgetLimitPrompt,
@@ -273,14 +277,17 @@ export async function runNode4Task(
   });
 
   /** Spec #333: idle pool + browser sandbox teardown (task end / abort / error). */
-  const cleanupTaskResources = () =>
-    runTaskResourceCleanup({
+  const cleanupTaskResources = () => {
+    // Spec #334: stop lease heartbeat for this parent before dispose.
+    releaseBrowserSandboxTask(task.taskId);
+    return runTaskResourceCleanup({
       parentTaskId: task.taskId,
       idlePool: runtime.lifecycle.subagentIdlePool,
       browserSandbox: runtime.lifecycle.browserSandbox ?? {
         dispose: (id) => disposeBrowserSandbox(id),
       },
     });
+  };
 
   /**
    * Graph × Pi Hard Graph path (ownership inversion).
@@ -290,6 +297,8 @@ export async function runNode4Task(
    */
   // Expert Graph vs free OMP (#76 Soft retired). No Soft scenario inject path.
   if (workPath.path === "hard" && hardResolved.mode === "hard") {
+    // Spec #334: hold parent task for lease heartbeat (not browser-tool traffic).
+    holdBrowserSandboxTask(task.taskId);
     runtime.lifecycle.abortSignal = signal;
     try {
       const hardOut = await runHardGraphExpertTask({
@@ -321,6 +330,9 @@ export async function runNode4Task(
       .catch(() => {});
     return { terminalStatus: term.terminalStatus, taskDir };
   }
+
+  // Free OMP path: hold for lease heartbeat until cleanupTaskResources.
+  holdBrowserSandboxTask(task.taskId);
 
   // Free OMP Main path only (Default / free Expert chat — no Soft inject).
   // Soft scenario Graph is retired (#76); freePentestGraphResolution is the free-path SOT.

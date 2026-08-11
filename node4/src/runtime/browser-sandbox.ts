@@ -4,16 +4,29 @@
  * Spec #331: BrowserSandboxRuntime — ensure / reuse / dispose by parent task id,
  * with an injectable Docker port for unit tests.
  * Spec #332: sub-agents share parent sandbox + session; browser tool calls serialized per parent.
+ * Spec #334: ownership labels, lease heartbeat while task held, janitor reaps expired only.
  *
  * Env:
  * - NODE4_BROWSER_SANDBOX=0|false → force host agent-browser only
  * - PEN_SANDBOX_IMAGE / NODE4_BROWSER_SANDBOX_IMAGE → required pin for sandbox path
  * - NODE4_DOCKER_BIN (default docker)
+ * - NODE4_BROWSER_SANDBOX_HEARTBEAT_MS / _LEASE_MS / _JANITOR_MS
  */
 
+import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import type { ToolRuntime } from "../types.js";
 import { runAgentBrowser } from "./agent-browser-cli.js";
+import {
+  BROWSER_SANDBOX_COMPONENT,
+  BROWSER_SANDBOX_LABEL,
+  BROWSER_SANDBOX_LEASE_PATH,
+  buildBrowserSandboxLabels,
+  loadBrowserSandboxLeaseConfig,
+  parseLeaseUntilUnix,
+  shouldReapBrowserSandbox,
+  type BrowserSandboxLeaseConfig,
+} from "./browser-sandbox-labels.js";
 
 export type SandboxExecResult = {
   exitCode: number | null;
@@ -24,7 +37,14 @@ export type SandboxExecResult = {
   via?: "sandbox" | "host";
 };
 
-/** Injectable Docker operations used by BrowserSandboxRuntime (Spec #331). */
+export type BrowserSandboxListItem = {
+  name: string;
+  labels: Record<string, string>;
+  /** Live lease unix seconds (file preferred, else create-time label). */
+  leaseUntilUnix: number | null;
+};
+
+/** Injectable Docker operations used by BrowserSandboxRuntime (Spec #331 / #334). */
 export type BrowserSandboxDockerPort = {
   rmForce(name: string, timeoutMs?: number): Promise<SandboxExecResult>;
   runDetached(
@@ -32,12 +52,17 @@ export type BrowserSandboxDockerPort = {
       name: string;
       image: string;
       env: string[];
+      labels?: Record<string, string>;
       entrypoint: string[];
       cmd: string[];
     },
     timeoutMs?: number,
   ): Promise<SandboxExecResult>;
   exec(name: string, argv: string[], timeoutMs?: number): Promise<SandboxExecResult>;
+  /** List product browser-sandbox containers (label filter). */
+  listBrowserSandboxes(): Promise<BrowserSandboxListItem[]>;
+  /** Write live lease file inside the container (labels are immutable after create). */
+  writeLease(name: string, leaseUntilUnix: number, timeoutMs?: number): Promise<SandboxExecResult>;
 };
 
 export type BrowserSandboxSession = {
@@ -179,9 +204,13 @@ export function createProcessDockerPort(bin: string = dockerBin()): BrowserSandb
       for (const e of opts.env) {
         argv.push("-e", e);
       }
+      if (opts.labels) {
+        for (const [k, v] of Object.entries(opts.labels)) {
+          argv.push("--label", `${k}=${v}`);
+        }
+      }
       if (opts.entrypoint.length) {
         argv.push("--entrypoint", opts.entrypoint[0]);
-        // remaining entrypoint parts are not used with bash -lc pattern
       }
       argv.push(opts.image, ...opts.cmd);
       return runProcess(bin, argv, timeoutMs);
@@ -190,30 +219,149 @@ export function createProcessDockerPort(bin: string = dockerBin()): BrowserSandb
       const shellCmd = argv.map(shellQuote).join(" ");
       return runProcess(bin, ["exec", name, "bash", "-lc", shellCmd], timeoutMs);
     },
+    async listBrowserSandboxes() {
+      const listed = await runProcess(
+        bin,
+        [
+          "ps",
+          "-aq",
+          "--filter",
+          `label=${BROWSER_SANDBOX_LABEL.component}=${BROWSER_SANDBOX_COMPONENT}`,
+        ],
+        30_000,
+      );
+      if (listed.unavailable || listed.exitCode !== 0) return [];
+      const ids = listed.stdout
+        .split(/\r?\n/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const out: BrowserSandboxListItem[] = [];
+      for (const id of ids) {
+        const inspected = await runProcess(
+          bin,
+          ["inspect", "--format", "{{.Name}}\t{{json .Config.Labels}}", id],
+          15_000,
+        );
+        if (inspected.exitCode !== 0) continue;
+        const line = inspected.stdout.trim();
+        const tab = line.indexOf("\t");
+        const rawName = tab >= 0 ? line.slice(0, tab) : line;
+        const name = rawName.replace(/^\//, "");
+        let labels: Record<string, string> = {};
+        try {
+          const json = tab >= 0 ? line.slice(tab + 1) : "{}";
+          const parsed = JSON.parse(json || "{}") as Record<string, string | null>;
+          labels = {};
+          for (const [k, v] of Object.entries(parsed || {})) {
+            if (v != null) labels[k] = String(v);
+          }
+        } catch {
+          labels = {};
+        }
+        const leaseFile = await runProcess(
+          bin,
+          ["exec", name, "bash", "-lc", `cat ${BROWSER_SANDBOX_LEASE_PATH} 2>/dev/null || true`],
+          10_000,
+        );
+        const fromFile = parseLeaseUntilUnix(leaseFile.stdout);
+        const fromLabel = parseLeaseUntilUnix(labels[BROWSER_SANDBOX_LABEL.leaseUntil]);
+        out.push({
+          name,
+          labels,
+          leaseUntilUnix: fromFile ?? fromLabel,
+        });
+      }
+      return out;
+    },
+    async writeLease(name, leaseUntilUnix, timeoutMs = 15_000) {
+      const body = String(Math.floor(leaseUntilUnix));
+      const cmd = `mkdir -p /run/myaipen && printf '%s' ${shellQuote(body)} > ${BROWSER_SANDBOX_LEASE_PATH}`;
+      return runProcess(bin, ["exec", name, "bash", "-lc", cmd], timeoutMs);
+    },
   };
 }
+
+/** Process boot UUID — restart never reuses another live process identity (Spec #334). */
+export const BROWSER_SANDBOX_INSTANCE_ID = randomUUID();
 
 export type BrowserSandboxRuntimeOptions = {
   docker?: BrowserSandboxDockerPort;
   resolveImage?: () => string;
+  /** Node identity for labels (default NODE_NAME). */
+  nodeId?: string;
+  /** Process instance id (default boot UUID). */
+  instanceId?: string;
+  /** Clock for lease/janitor tests. */
+  now?: () => number;
+  leaseConfig?: Partial<BrowserSandboxLeaseConfig>;
 };
 
 /**
- * Process-local browser sandbox lifecycle keyed by parent task id (Spec #331 / #332).
+ * Process-local browser sandbox lifecycle keyed by parent task id (Spec #331 / #332 / #334).
  * One container per parent; reuse while held; dispose drops container + session.
  * Browser ensure/exec/dispose for a parent are serialized (concurrent sub-agents queue).
+ * Labels + lease for distributed janitor; heartbeat while parent task is held.
  * No cross-task warm pool.
  */
 export class BrowserSandboxRuntime {
   private readonly docker: BrowserSandboxDockerPort;
   private readonly resolveImage: () => string;
+  private readonly nodeId: string;
+  private readonly instanceId: string;
+  private readonly now: () => number;
+  private readonly leaseConfig: BrowserSandboxLeaseConfig;
   private readonly sessions = new Map<string, SessionRecord>();
   /** Spec #332: per-parent promise chain — browser tool calls do not interleave. */
   private readonly locks = new Map<string, Promise<unknown>>();
+  /**
+   * Spec #334: parent tasks still held by this process (session/task registration).
+   * Heartbeat renews lease for sandboxes whose parent is in this set.
+   */
+  private readonly heldParents = new Set<string>();
 
   constructor(opts: BrowserSandboxRuntimeOptions = {}) {
     this.docker = opts.docker ?? createProcessDockerPort();
     this.resolveImage = opts.resolveImage ?? resolveBrowserSandboxImage;
+    this.nodeId =
+      opts.nodeId?.trim() ||
+      process.env.NODE_NAME?.trim() ||
+      "pentest-node4-01";
+    this.instanceId = opts.instanceId?.trim() || BROWSER_SANDBOX_INSTANCE_ID;
+    this.now = opts.now ?? (() => Date.now());
+    const base = loadBrowserSandboxLeaseConfig();
+    this.leaseConfig = {
+      heartbeatMs: opts.leaseConfig?.heartbeatMs ?? base.heartbeatMs,
+      leaseMs: opts.leaseConfig?.leaseMs ?? base.leaseMs,
+      janitorMs: opts.leaseConfig?.janitorMs ?? base.janitorMs,
+    };
+  }
+
+  getLeaseConfig(): BrowserSandboxLeaseConfig {
+    return { ...this.leaseConfig };
+  }
+
+  getInstanceId(): string {
+    return this.instanceId;
+  }
+
+  getNodeId(): string {
+    return this.nodeId;
+  }
+
+  /** Mark parent task held for lease heartbeat (call at task start). */
+  holdParentTask(parentTaskId: string): void {
+    const key = String(parentTaskId || "").trim();
+    if (key) this.heldParents.add(key);
+  }
+
+  /** Drop hold registration (call at task end; dispose still owns container delete). */
+  releaseParentTask(parentTaskId: string): void {
+    const key = String(parentTaskId || "").trim();
+    if (key) this.heldParents.delete(key);
+  }
+
+  listHeldParentTasks(): string[] {
+    return [...this.heldParents];
   }
 
   /**
@@ -243,6 +391,10 @@ export class BrowserSandboxRuntime {
     }
   }
 
+  private leaseUntilFromNow(): number {
+    return Math.floor((this.now() + this.leaseConfig.leaseMs) / 1000);
+  }
+
   /** Create or reuse the long-lived browser container for this parent task. */
   async ensure(parentTaskId: string): Promise<BrowserSandboxSession> {
     return this.withParentLock(parentTaskId, () => this.ensureUnlocked(parentTaskId));
@@ -263,6 +415,13 @@ export class BrowserSandboxRuntime {
 
     const image = this.resolveImage();
     const name = containerNameForParentTask(key);
+    const leaseUntil = this.leaseUntilFromNow();
+    const labels = buildBrowserSandboxLabels({
+      nodeId: this.nodeId,
+      instanceId: this.instanceId,
+      parentTaskId: key,
+      leaseUntilUnix: leaseUntil,
+    });
 
     // Clear any stale same-name container on the daemon before create.
     await this.docker.rmForce(name, 30_000);
@@ -276,6 +435,7 @@ export class BrowserSandboxRuntime {
           "no_proxy=localhost,127.0.0.1,host.docker.internal",
           `AGENT_BROWSER_SESSION=${agentBrowserSessionName(key)}`,
         ],
+        labels,
         entrypoint: ["bash"],
         cmd: ["-lc", "sleep infinity"],
       },
@@ -287,6 +447,8 @@ export class BrowserSandboxRuntime {
         `Failed to start browser sandbox: ${started.error || started.stderr || started.stdout || `exit ${started.exitCode}`}`,
       );
     }
+
+    await this.docker.writeLease(name, leaseUntil).catch(() => {});
 
     const record: SessionRecord = {
       containerName: name,
@@ -321,6 +483,7 @@ export class BrowserSandboxRuntime {
   async dispose(parentTaskId: string): Promise<void> {
     const key = String(parentTaskId || "").trim();
     if (!key) return;
+    this.heldParents.delete(key);
     return this.withParentLock(key, async () => {
       const session = this.sessions.get(key);
       const name = session?.containerName ?? containerNameForParentTask(key);
@@ -336,8 +499,58 @@ export class BrowserSandboxRuntime {
 
   /** Dispose every parent-scoped sandbox held by this runtime (graceful process shutdown). */
   async disposeAll(): Promise<void> {
-    const keys = [...this.sessions.keys()];
+    const keys = [...new Set([...this.sessions.keys(), ...this.heldParents])];
     await Promise.all(keys.map((k) => this.dispose(k)));
+    this.heldParents.clear();
+  }
+
+  /**
+   * Spec #334: renew lease for sandboxes whose parent task is still held.
+   * Does not require recent browser tool traffic.
+   */
+  async renewLeasesForHeldTasks(): Promise<number> {
+    const leaseUntil = this.leaseUntilFromNow();
+    let n = 0;
+    for (const parentId of this.heldParents) {
+      const session = this.sessions.get(parentId);
+      if (!session?.started) continue;
+      try {
+        await this.docker.writeLease(session.containerName, leaseUntil);
+        n += 1;
+      } catch {
+        /* best-effort */
+      }
+    }
+    return n;
+  }
+
+  /**
+   * Spec #334: reap product-labeled browser sandboxes whose lease is past.
+   * Never deletes non-expired containers (including other nodes' live sandboxes).
+   * Ignores unlabeled / non-product containers.
+   */
+  async reapExpired(nowUnix?: number): Promise<{ reaped: string[]; inspected: number }> {
+    const now = nowUnix ?? Math.floor(this.now() / 1000);
+    const items = await this.docker.listBrowserSandboxes();
+    const reaped: string[] = [];
+    for (const item of items) {
+      if (
+        !shouldReapBrowserSandbox({
+          labels: item.labels,
+          leaseUntilUnix: item.leaseUntilUnix,
+          nowUnix: now,
+        })
+      ) {
+        continue;
+      }
+      await this.docker.rmForce(item.name, 30_000).catch(() => {});
+      reaped.push(item.name);
+      // Drop local session if we were tracking this name
+      for (const [pid, rec] of this.sessions) {
+        if (rec.containerName === item.name) this.sessions.delete(pid);
+      }
+    }
+    return { reaped, inspected: items.length };
   }
 
   /** How many parent tasks currently have a live session record (tests / observability). */
@@ -352,6 +565,70 @@ const defaultRuntime = new BrowserSandboxRuntime();
 /** Default process-local runtime (for lifecycle wiring / tests). */
 export function getDefaultBrowserSandboxRuntime(): BrowserSandboxRuntime {
   return defaultRuntime;
+}
+
+/** Spec #334: register parent task as held for lease heartbeat. */
+export function holdBrowserSandboxTask(parentTaskId: string): void {
+  defaultRuntime.holdParentTask(parentTaskId);
+}
+
+/** Spec #334: clear hold registration for a parent task. */
+export function releaseBrowserSandboxTask(parentTaskId: string): void {
+  defaultRuntime.releaseParentTask(parentTaskId);
+}
+
+export type BrowserSandboxBackgroundHandles = {
+  stop: () => void;
+};
+
+/**
+ * Spec #334: startup janitor pass + periodic janitor + heartbeat renewals.
+ * Call once from Node4 main after boot.
+ */
+export function startBrowserSandboxBackgroundJobs(
+  runtime: BrowserSandboxRuntime = defaultRuntime,
+): BrowserSandboxBackgroundHandles {
+  const { heartbeatMs, janitorMs } = runtime.getLeaseConfig();
+  let stopped = false;
+
+  const runJanitor = () => {
+    if (stopped) return;
+    void runtime
+      .reapExpired()
+      .then((r) => {
+        if (r.reaped.length) {
+          console.log(
+            `[node4] browser-sandbox janitor reaped ${r.reaped.length}/${r.inspected}: ${r.reaped.join(", ")}`,
+          );
+        }
+      })
+      .catch((err) => {
+        console.warn(
+          `[node4] browser-sandbox janitor failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+  };
+
+  const runHeartbeat = () => {
+    if (stopped) return;
+    void runtime.renewLeasesForHeldTasks().catch(() => {});
+  };
+
+  // Startup sweep without waiting for first interval.
+  runJanitor();
+
+  const janitorTimer = setInterval(runJanitor, janitorMs);
+  const heartbeatTimer = setInterval(runHeartbeat, heartbeatMs);
+  janitorTimer.unref?.();
+  heartbeatTimer.unref?.();
+
+  return {
+    stop: () => {
+      stopped = true;
+      clearInterval(janitorTimer);
+      clearInterval(heartbeatTimer);
+    },
+  };
 }
 
 /** @deprecated Prefer BrowserSandboxRuntime.ensure — kept for call-site compatibility. */

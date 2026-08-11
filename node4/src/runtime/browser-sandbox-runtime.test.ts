@@ -43,6 +43,12 @@ function makeFakeDocker() {
       }
       return { exitCode: 0, stdout: "ok", stderr: "", via: "sandbox" };
     },
+    async listBrowserSandboxes() {
+      return [];
+    },
+    async writeLease() {
+      return ok();
+    },
   };
 
   return { docker, creates, rms, execs, running, imagesUsed };
@@ -148,6 +154,12 @@ try {
         return { exitCode: 1, stdout: "", stderr: "boom" };
       },
       async exec() {
+        return ok();
+      },
+      async listBrowserSandboxes() {
+        return [];
+      },
+      async writeLease() {
         return ok();
       },
     };

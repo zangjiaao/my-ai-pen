@@ -85,6 +85,12 @@ try {
       async exec() {
         return ok();
       },
+      async listBrowserSandboxes() {
+        return [];
+      },
+      async writeLease() {
+        return ok();
+      },
     };
     const rt = new BrowserSandboxRuntime({ docker });
     const parentKey = resolveBrowserSandboxParentTaskId({ taskId: "parent-A" });
@@ -121,6 +127,12 @@ try {
         concurrent -= 1;
         return ok();
       },
+      async listBrowserSandboxes() {
+        return [];
+      },
+      async writeLease() {
+        return ok();
+      },
     };
     const rt = new BrowserSandboxRuntime({ docker });
     await rt.ensure("parent-serial");
@@ -148,6 +160,12 @@ try {
         maxConcurrent = Math.max(maxConcurrent, concurrent);
         await delay(40);
         concurrent -= 1;
+        return ok();
+      },
+      async listBrowserSandboxes() {
+        return [];
+      },
+      async writeLease() {
         return ok();
       },
     };

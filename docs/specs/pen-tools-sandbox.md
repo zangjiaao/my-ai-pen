@@ -70,9 +70,20 @@ docker pull "$PEN_SANDBOX_IMAGE"
 | `NODE4_SHELL_IN_PEN_TOOLS=auto\|1\|0` | Shell-in-container (auto when image present) |
 | `NODE4_BROWSER_SANDBOX=0` | Host agent-browser only |
 | `NODE4_PEN_TOOLS=0` | Disable host PATH shims |
+| `NODE4_BROWSER_SANDBOX_HEARTBEAT_MS` | Lease renewal interval while parent task is held (default ~90s) |
+| `NODE4_BROWSER_SANDBOX_LEASE_MS` | Lease TTL without renewal (default ~12 min); expired → janitor may reap |
+| `NODE4_BROWSER_SANDBOX_JANITOR_MS` | Periodic reap interval (default ~120s); startup also runs one pass |
 
 **Browser resolution (strict):** `node4/src/runtime/browser-sandbox.ts` → `resolveBrowserSandboxImage` — explicit env only; no ambient local-tag discovery; no Strix default.  
 **Shell resolution:** `node4/src/runtime/pentest-sandbox-image.ts` / `pen-tools-shell.ts` — may still discover local first-party tags for lab convenience.
+
+### Browser sandbox lifecycle (Spec #320)
+
+- **One container per parent task** (sub-agents share it). Runtime dispose on task end / abort / graceful shutdown.
+- **Labels** (inspectable on Docker host): `myaipen.component=browser-sandbox`, `myaipen.node_id`, `myaipen.instance_id` (boot UUID), `myaipen.parent_task_id`, `myaipen.lease_until` (create-time).
+- **Live lease** file in container: `/run/myaipen/lease_until` (renewed by heartbeat while the parent task is held — not only on browser tool traffic).
+- **Janitor:** each Node sweeps its Docker endpoint at startup + periodically; deletes only product-labeled sandboxes with **expired** lease. Non-expired containers (including other nodes') are never reaped.
+- **Operator debug:** `docker ps --filter label=myaipen.parent_task_id=<taskId>` or `label=myaipen.component=browser-sandbox`.
 
 ---
 

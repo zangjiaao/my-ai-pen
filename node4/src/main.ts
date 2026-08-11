@@ -3,7 +3,10 @@ import { loadConfig } from "./config.js";
 import { loadDotEnv } from "./env.js";
 import { PlatformWSClient } from "./platform/ws-client.js";
 import { runNode4Task } from "./runtime/session-runner.js";
-import { disposeAllBrowserSandboxes } from "./runtime/browser-sandbox.js";
+import {
+  disposeAllBrowserSandboxes,
+  startBrowserSandboxBackgroundJobs,
+} from "./runtime/browser-sandbox.js";
 import { isLlmTurnError } from "./runtime/llm-turn-error.js";
 import { streamDiagnosisPayload } from "./runtime/llm-turn-surface.js";
 import type { TaskEnvelope } from "./types.js";
@@ -561,12 +564,16 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
   };
 }
 
-/** Spec #333: best-effort dispose of this instance's browser sandboxes on graceful stop. */
+/** Spec #334: startup + periodic janitor and lease heartbeat. */
+const browserSandboxJobs = startBrowserSandboxBackgroundJobs();
+
+/** Spec #333/#334: best-effort dispose of this instance's browser sandboxes on graceful stop. */
 function installGracefulBrowserSandboxShutdown(): void {
   let shuttingDown = false;
   const onSignal = (signal: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
+    browserSandboxJobs.stop();
     console.log(`[node4] ${signal}: disposing browser sandboxes`);
     void disposeAllBrowserSandboxes()
       .catch((err) => {
