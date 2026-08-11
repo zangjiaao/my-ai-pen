@@ -338,29 +338,14 @@ export function startBrowserSandboxBackgroundJobs(
   };
 }
 
-export async function ensureBrowserSandbox(taskId: string): Promise<BrowserSandboxSession> {
-  return defaultRuntime.ensure(taskId);
-}
-
-export async function execInBrowserSandbox(
-  taskId: string,
-  argv: string[],
-  timeoutMs = 120_000,
-): Promise<SandboxExecResult> {
-  return defaultRuntime.exec(taskId, argv, timeoutMs);
-}
-
+/** Process-default dispose for one parent task (task cleanup / inject). */
 export async function disposeBrowserSandbox(parentTaskId: string): Promise<void> {
   return defaultRuntime.dispose(parentTaskId);
 }
 
+/** Process-default dispose of all sandboxes on this instance (graceful shutdown). */
 export async function disposeAllBrowserSandboxes(): Promise<void> {
   return defaultRuntime.disposeAll();
-}
-
-/** @deprecated Prefer disposeBrowserSandbox */
-export async function stopBrowserSandbox(taskId: string): Promise<void> {
-  return defaultRuntime.dispose(taskId);
 }
 
 export type { BrowserSandboxDockerPort, BrowserSandboxListItem, SandboxExecResult };

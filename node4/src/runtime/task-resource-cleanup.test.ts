@@ -101,5 +101,24 @@ function assert(cond: unknown, msg: string): void {
   assert(!called, "blank parentTaskId skips browser");
 }
 
+// --- browser dispose timeout is best-effort (does not hang forever) ---
+{
+  let started = false;
+  const t0 = Date.now();
+  await runTaskResourceCleanup({
+    parentTaskId: "task-timeout",
+    browserDisposeTimeoutMs: 50,
+    browserSandbox: {
+      async dispose() {
+        started = true;
+        await new Promise((r) => setTimeout(r, 5_000));
+      },
+    },
+  });
+  const elapsed = Date.now() - t0;
+  assert(started, "dispose started");
+  assert(elapsed < 2_000, `dispose timed out without hanging (${elapsed}ms)`);
+}
+
 console.log(JSON.stringify({ ok: true, cases: "task-resource-cleanup" }, null, 2));
 console.log("RESULT: PASS — task resource cleanup (#333)");

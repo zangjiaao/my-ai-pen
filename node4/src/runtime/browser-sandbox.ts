@@ -36,13 +36,10 @@ export {
   BrowserSandboxRuntime,
   disposeAllBrowserSandboxes,
   disposeBrowserSandbox,
-  ensureBrowserSandbox,
-  execInBrowserSandbox,
   getDefaultBrowserSandboxRuntime,
   holdBrowserSandboxTask,
   releaseBrowserSandboxTask,
   startBrowserSandboxBackgroundJobs,
-  stopBrowserSandbox,
 } from "./browser-sandbox-runtime.js";
 
 export { rewriteUrlForSandbox, runBrowserCommand } from "./browser-sandbox-command.js";
