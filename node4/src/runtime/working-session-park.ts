@@ -24,6 +24,8 @@ import {
   disposeBrowserSandboxForCase,
   disposeBrowserSandboxForSeat,
 } from "./browser-sandbox.js";
+// Note: sandbox rm only from disposeWorkingSession / disposeWorkingSessionsForCase
+// (not applyCaptainEndDisposition) so Session Delete has a single awaited fan-in.
 
 /**
  * Default idle park TTL. Spec #354 L2: do not reclaim Participant Session for
@@ -352,14 +354,8 @@ export function applyCaptainEndDisposition(options: {
   } catch {
     /* ignore */
   }
-  // Spec #429: seat death (force/explicit dispose) tears sticky pen-sandbox with captain.
-  if (forceDispose || decision.disposition === "dispose") {
-    const exp = String(options.entry.expertId || "").trim();
-    const conv = String(options.entry.conversationId || "").trim();
-    if (conv && exp) {
-      void disposeBrowserSandboxForSeat(conv, exp).catch(() => {});
-    }
-  }
+  // Sticky pen-sandbox rm is owned solely by disposeWorkingSession / ForCase
+  // (awaited single fan-in) — not fire-and-forget here (review: double-rm race).
   // Clear Session-key pending always after force/explicit dispose.
   clearPendingSessionDispose(options.entry.conversationId, options.entry.expertId);
   // Spec #354 L1: case-wide pending must not stick after the mid-burst finally

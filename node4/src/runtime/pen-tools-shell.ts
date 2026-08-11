@@ -30,7 +30,7 @@ export type PenToolsShellResult = {
   timedOut: boolean;
   aborted: boolean;
   /** How the command ran (for tests / observability). */
-  via?: "sticky-exec" | "ephemeral-run" | "host";
+  via?: "sticky-exec" | "sticky-failed" | "ephemeral-run" | "host";
 };
 
 export type PenToolsShellOptions = {
@@ -63,7 +63,8 @@ export function isShellInPenToolsEnabled(): boolean {
 
 /**
  * Run shell in pen-sandbox.
- * Prefer sticky Session container (Spec #428); else ephemeral `docker run --rm`.
+ * With seat+workspace: **sticky only** (fail-closed — never silent ephemeral twin box).
+ * Without seat: ephemeral `docker run --rm`.
  */
 export async function runShellInPenTools(
   command: string,
@@ -88,6 +89,7 @@ export async function runShellInPenTools(
     try {
       const absWs = await ensureSessionWorkspace(workspaceHostPath);
       const rt = getDefaultBrowserSandboxRuntime();
+      // Single bash -lc (docker port runs argv as-is under docker exec).
       const result = await rt.exec(
         seat,
         ["bash", "-lc", `cd /workspace && ${command}`],
@@ -95,19 +97,36 @@ export async function runShellInPenTools(
         { workspaceHostPath: absWs },
       );
       if (result.unavailable) {
-        // Fall through to ephemeral run if docker missing mid-flight.
-      } else {
+        const msg =
+          result.error ||
+          "Sticky pen-sandbox unavailable (docker). Not falling back to ephemeral shell.";
         return {
-          exitCode: result.exitCode,
-          stdout: (result.stdout || "").slice(-STDOUT_CAP),
-          stderr: (result.stderr || "").slice(-STDERR_CAP),
+          exitCode: null,
+          stdout: "",
+          stderr: msg,
           timedOut: false,
           aborted: false,
-          via: "sticky-exec",
+          via: "sticky-failed",
         };
       }
-    } catch {
-      /* fall through to ephemeral */
+      return {
+        exitCode: result.exitCode,
+        stdout: (result.stdout || "").slice(-STDOUT_CAP),
+        stderr: (result.stderr || "").slice(-STDERR_CAP),
+        timedOut: false,
+        aborted: false,
+        via: "sticky-exec",
+      };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: `Sticky pen-sandbox shell failed: ${msg}`,
+        timedOut: false,
+        aborted: false,
+        via: "sticky-failed",
+      };
     }
   }
 

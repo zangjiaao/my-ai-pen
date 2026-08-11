@@ -62,26 +62,18 @@ function normalizeSeat(seat: BrowserSandboxSeat | string): BrowserSandboxSeat {
   if (typeof seat === "string") {
     const key = String(seat || "").trim();
     if (!key) throw new Error("seatKey required for browser sandbox");
-    const idx = key.indexOf("::");
-    if (idx <= 0 || idx === key.length - 2) {
-      // Allow bare seatKey for dispose/ensure after resolve — conversation/expert from key parts if possible.
-      const parts = key.split("::");
-      if (parts.length >= 2 && parts[0] && parts[1]) {
-        return {
-          conversationId: parts[0],
-          expertId: parts.slice(1).join("::"),
-          seatKey: key,
-        };
-      }
+    const sep = key.indexOf("::");
+    if (sep <= 0 || sep >= key.length - 2) {
       throw new Error(
         "browser sandbox seatKey must be conversationId::expertId (or pass BrowserSandboxSeat)",
       );
     }
-    return {
-      conversationId: key.slice(0, idx),
-      expertId: key.slice(idx + 2),
-      seatKey: key,
-    };
+    const conversationId = key.slice(0, sep);
+    const expertId = key.slice(sep + 2);
+    if (!conversationId || !expertId) {
+      throw new Error("browser sandbox seatKey must be conversationId::expertId");
+    }
+    return { conversationId, expertId, seatKey: key };
   }
   const conversationId = String(seat.conversationId || "").trim();
   const expertId = String(seat.expertId || "").trim();
@@ -217,78 +209,85 @@ export class BrowserSandboxRuntime {
     };
   }
 
+  private workspaceFromOpts(opts?: BrowserSandboxEnsureOptions): string | undefined {
+    if (opts?.workspaceHostPath == null) return undefined;
+    const p = String(opts.workspaceHostPath).trim();
+    return p ? resolve(p) : undefined;
+  }
+
+  private async rememberRunning(
+    seat: BrowserSandboxSeat,
+    name: string,
+    image: string,
+    workspaceHostPath?: string,
+  ): Promise<BrowserSandboxSession> {
+    const record: SessionRecord = {
+      containerName: name,
+      image,
+      conversationId: seat.conversationId,
+      expertId: seat.expertId,
+      seatKey: seat.seatKey,
+      workspaceHostPath,
+      started: true,
+    };
+    this.sessions.set(seat.seatKey, record);
+    await this.docker.writeLease(name, this.leaseUntilFromNow()).catch(() => {});
+    return this.sessionView(record);
+  }
+
+  /** Start a known container; false if start failed (caller may recreate). */
+  private async tryStartContainer(name: string): Promise<boolean> {
+    const startResult = await this.docker.start(name, 60_000);
+    if (startResult.unavailable) return false;
+    if (startResult.exitCode != null && startResult.exitCode !== 0) return false;
+    return true;
+  }
+
   private async ensureUnlocked(
     seat: BrowserSandboxSeat,
     opts?: BrowserSandboxEnsureOptions,
   ): Promise<BrowserSandboxSession> {
     const key = seat.seatKey;
     this.touchTraffic(key);
+    const image = this.resolveImage();
+    const name = containerNameForSeat(key);
+    const workspaceHostPath =
+      this.workspaceFromOpts(opts) ?? this.sessions.get(key)?.workspaceHostPath;
 
+    // 1) Process map — re-verify Docker (never trust started=true blindly).
     const existing = this.sessions.get(key);
     if (existing) {
-      if (!existing.started) {
-        const startResult = await this.docker.start(existing.containerName, 60_000);
-        if (startResult.unavailable || (startResult.exitCode !== 0 && startResult.exitCode != null)) {
-          // Container may have been removed externally — recreate below.
-          this.sessions.delete(key);
-        } else {
+      const state = await this.docker.inspectState(existing.containerName, 15_000);
+      if (state === "running") {
+        existing.started = true;
+        if (workspaceHostPath) existing.workspaceHostPath = workspaceHostPath;
+        return this.sessionView(existing);
+      }
+      if (state === "stopped") {
+        if (await this.tryStartContainer(existing.containerName)) {
           existing.started = true;
+          if (workspaceHostPath) existing.workspaceHostPath = workspaceHostPath;
           await this.docker.writeLease(existing.containerName, this.leaseUntilFromNow()).catch(() => {});
           return this.sessionView(existing);
         }
-      } else {
-        return this.sessionView(existing);
       }
+      // missing / unknown / start failed → drop map entry and continue
+      this.sessions.delete(key);
     }
 
-    const image = this.resolveImage();
-    const name = containerNameForSeat(key);
-
-    // Spec #430: reuse stopped container on host if still present (same name).
-    const state = await this.docker.inspectState(name, 15_000);
-    if (state === "running" || state === "stopped") {
-      if (state === "stopped") {
-        const startResult = await this.docker.start(name, 60_000);
-        if (startResult.unavailable || (startResult.exitCode !== 0 && startResult.exitCode != null)) {
-          await this.docker.rmForce(name, 30_000).catch(() => {});
-        } else {
-          const workspaceHostPath =
-            opts?.workspaceHostPath != null
-              ? resolve(String(opts.workspaceHostPath).trim())
-              : undefined;
-          const record: SessionRecord = {
-            containerName: name,
-            image,
-            conversationId: seat.conversationId,
-            expertId: seat.expertId,
-            seatKey: key,
-            workspaceHostPath,
-            started: true,
-          };
-          this.sessions.set(key, record);
-          await this.docker.writeLease(name, this.leaseUntilFromNow()).catch(() => {});
-          return this.sessionView(record);
-        }
-      } else {
-        const workspaceHostPath =
-          opts?.workspaceHostPath != null
-            ? resolve(String(opts.workspaceHostPath).trim())
-            : undefined;
-        const record: SessionRecord = {
-          containerName: name,
-          image,
-          conversationId: seat.conversationId,
-          expertId: seat.expertId,
-          seatKey: key,
-          workspaceHostPath,
-          started: true,
-        };
-        this.sessions.set(key, record);
-        await this.docker.writeLease(name, this.leaseUntilFromNow()).catch(() => {});
-        return this.sessionView(record);
+    // 2) Host may still have the named box (Node restart / map miss).
+    const hostState = await this.docker.inspectState(name, 15_000);
+    if (hostState === "running") {
+      return this.rememberRunning(seat, name, image, workspaceHostPath);
+    }
+    if (hostState === "stopped") {
+      if (await this.tryStartContainer(name)) {
+        return this.rememberRunning(seat, name, image, workspaceHostPath);
       }
+      await this.docker.rmForce(name, 30_000).catch(() => {});
     }
 
+    // 3) Create fresh
     const leaseUntil = this.leaseUntilFromNow();
     const labels = buildBrowserSandboxLabels({
       nodeId: this.nodeId,
@@ -299,9 +298,6 @@ export class BrowserSandboxRuntime {
       leaseUntilUnix: leaseUntil,
     });
 
-    const workspaceHostPath = opts?.workspaceHostPath
-      ? resolve(String(opts.workspaceHostPath).trim())
-      : undefined;
     const volumes: string[] = [];
     if (workspaceHostPath) {
       volumes.push(`${workspaceHostPath}:/workspace:rw`);
@@ -313,18 +309,22 @@ export class BrowserSandboxRuntime {
       volumes.push(`${tplHost}:/root/nuclei-templates:ro`);
     }
 
+    const env = [
+      "NO_PROXY=localhost,127.0.0.1,host.docker.internal",
+      "no_proxy=localhost,127.0.0.1,host.docker.internal",
+      `AGENT_BROWSER_SESSION=${agentBrowserSessionName(key)}`,
+    ];
+    if (workspaceHostPath) {
+      env.push("HOME=/workspace");
+    }
+
     await this.docker.rmForce(name, 30_000);
 
     const started = await this.docker.runDetached(
       {
         name,
         image,
-        env: [
-          "NO_PROXY=localhost,127.0.0.1,host.docker.internal",
-          "no_proxy=localhost,127.0.0.1,host.docker.internal",
-          "HOME=/workspace",
-          `AGENT_BROWSER_SESSION=${agentBrowserSessionName(key)}`,
-        ],
+        env,
         labels,
         volumes,
         network: process.env.PEN_TOOLS_NETWORK?.trim() || "host",
@@ -340,19 +340,7 @@ export class BrowserSandboxRuntime {
       );
     }
 
-    await this.docker.writeLease(name, leaseUntil).catch(() => {});
-
-    const record: SessionRecord = {
-      containerName: name,
-      image,
-      conversationId: seat.conversationId,
-      expertId: seat.expertId,
-      seatKey: key,
-      workspaceHostPath,
-      started: true,
-    };
-    this.sessions.set(key, record);
-    return this.sessionView(record);
+    return this.rememberRunning(seat, name, image, workspaceHostPath);
   }
 
   async exec(
@@ -453,7 +441,7 @@ export class BrowserSandboxRuntime {
 
   /**
    * Spec #429: rm all sticky boxes for a Case (conversationId).
-   * Matches seatKeys `conv` or `conv::*` in process map + held set.
+   * Process map/held keys **and** Docker labels (covers Node restart / empty map).
    */
   async disposeForConversation(conversationId: string): Promise<number> {
     const c = String(conversationId || "").trim();
@@ -466,8 +454,30 @@ export class BrowserSandboxRuntime {
     for (const k of this.heldSeats) {
       if (k === c || k.startsWith(prefix)) keys.add(k);
     }
+    // Scan Docker by conversation label so Case close works after process restart.
+    const orphanNames: string[] = [];
+    try {
+      const items = await this.docker.listBrowserSandboxes();
+      for (const item of items) {
+        const conv = item.labels?.[BROWSER_SANDBOX_LABEL.conversationId];
+        if (conv !== c) continue;
+        const seatKey =
+          item.labels?.[BROWSER_SANDBOX_LABEL.seatKey] ||
+          item.labels?.[BROWSER_SANDBOX_LABEL.parentTaskId];
+        if (seatKey) keys.add(seatKey);
+        else orphanNames.push(item.name);
+      }
+    } catch {
+      /* best-effort label scan */
+    }
     await Promise.all([...keys].map((k) => this.dispose(k)));
-    return keys.size;
+    for (const name of orphanNames) {
+      await this.docker.rmForce(name, 30_000).catch(() => {});
+      for (const [sid, rec] of this.sessions) {
+        if (rec.containerName === name) this.sessions.delete(sid);
+      }
+    }
+    return keys.size + orphanNames.length;
   }
 
   async disposeAll(): Promise<void> {

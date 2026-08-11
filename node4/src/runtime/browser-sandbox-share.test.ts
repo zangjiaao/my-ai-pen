@@ -80,12 +80,15 @@ try {
   // --- main + sub resolve to one container create ---
   {
     const creates: string[] = [];
+    const running = new Set<string>();
     const docker: BrowserSandboxDockerPort = {
-      async rmForce() {
+      async rmForce(name) {
+        running.delete(name);
         return ok();
       },
       async runDetached(opts) {
         creates.push(opts.name);
+        running.add(opts.name);
         assert(
           opts.env.some((e) => e === `AGENT_BROWSER_SESSION=${agentBrowserSessionName(seat.seatKey)}`),
           "shared AGENT_BROWSER_SESSION for seat",
@@ -101,15 +104,17 @@ try {
       async writeLease() {
         return ok();
       },
-    async stop() {
-      return ok();
-    },
-    async start() {
-      return ok();
-    },
-    async inspectState() {
-      return "missing" as const;
-    },
+      async stop(name) {
+        running.delete(name);
+        return ok();
+      },
+      async start(name) {
+        running.add(name);
+        return ok();
+      },
+      async inspectState(name) {
+        return running.has(name) ? "running" : "missing";
+      },
     };
     const rt = new BrowserSandboxRuntime({ docker });
     // Main burst
@@ -123,11 +128,14 @@ try {
   {
     let concurrent = 0;
     let maxConcurrent = 0;
+    const running = new Set<string>();
     const docker: BrowserSandboxDockerPort = {
-      async rmForce() {
+      async rmForce(name) {
+        running.delete(name);
         return ok();
       },
       async runDetached(opts) {
+        running.add(opts.name);
         return { exitCode: 0, stdout: opts.name, stderr: "" };
       },
       async exec() {
@@ -143,15 +151,17 @@ try {
       async writeLease() {
         return ok();
       },
-    async stop() {
-      return ok();
-    },
-    async start() {
-      return ok();
-    },
-    async inspectState() {
-      return "missing" as const;
-    },
+      async stop(name) {
+        running.delete(name);
+        return ok();
+      },
+      async start(name) {
+        running.add(name);
+        return ok();
+      },
+      async inspectState(name) {
+        return running.has(name) ? "running" : "missing";
+      },
     };
     const rt = new BrowserSandboxRuntime({ docker });
     await rt.ensure(seat);

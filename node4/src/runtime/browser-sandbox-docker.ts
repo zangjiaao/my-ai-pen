@@ -155,8 +155,11 @@ export function createProcessDockerPort(bin: string = dockerBin()): BrowserSandb
       return runProcess(bin, argv, timeoutMs);
     },
     async exec(name, argv, timeoutMs = 120_000) {
-      const shellCmd = argv.map(shellQuote).join(" ");
-      return runProcess(bin, ["exec", name, "bash", "-lc", shellCmd], timeoutMs);
+      // Run argv as-is (no outer bash -lc). Callers pass ["bash","-lc",script] when shell is needed.
+      if (!argv.length) {
+        return { exitCode: 1, stdout: "", stderr: "exec argv empty" };
+      }
+      return runProcess(bin, ["exec", name, ...argv], timeoutMs);
     },
     async listBrowserSandboxes() {
       const listed = await runProcess(

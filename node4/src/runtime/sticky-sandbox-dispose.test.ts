@@ -58,14 +58,16 @@ function makeFakeDocker() {
     async writeLease() {
       return ok();
     },
-    async stop() {
+    async stop(name) {
+      running.delete(name);
       return ok();
     },
-    async start() {
+    async start(name) {
+      running.add(name);
       return ok();
     },
-    async inspectState() {
-      return "missing" as const;
+    async inspectState(name) {
+      return running.has(name) ? "running" : "missing";
     },
   };
   return { docker, creates, rms, running };

@@ -291,6 +291,50 @@ try {
     assert(fake.running.has(first.containerName), "running again");
   }
 
+  // --- map says running but docker stopped → ensure restarts (no blind trust) ---
+  {
+    const fake = makeFakeDocker();
+    const rt = new BrowserSandboxRuntime({ docker: fake.docker });
+    const first = await rt.ensure(s1);
+    // Simulate external stop while map still started=true
+    fake.running.delete(first.containerName);
+    const second = await rt.ensure(s1);
+    assert(second.containerName === first.containerName, "same box");
+    assert(fake.running.has(first.containerName), "restarted from stopped docker state");
+    assert(fake.creates.length === 1, "no recreate");
+  }
+
+  // --- Case dispose scans label even when map empty ---
+  {
+    const fake = makeFakeDocker();
+    const rt = new BrowserSandboxRuntime({ docker: fake.docker });
+    const a = await rt.ensure(seat("case-lbl", "e1"));
+    // Drop process map as if Node "restarted" but container still on host
+    // (simulate by disposing map only — use internal path: stop then clear via dispose of other)
+    // Ensure box exists with labels via listBrowserSandboxes
+    fake.docker.listBrowserSandboxes = async () => [
+      {
+        name: a.containerName,
+        labels: {
+          "myaipen.component": "browser-sandbox",
+          "myaipen.conversation_id": "case-lbl",
+          "myaipen.expert_id": "e1",
+          "myaipen.seat_key": formatBrowserSandboxSeatKey("case-lbl", "e1"),
+        },
+        leaseUntilUnix: 9999999999,
+        leaseTrusted: true,
+      },
+    ];
+    // Clear map without rm (simulate process memory loss): re-create runtime sharing docker
+    const rt2 = new BrowserSandboxRuntime({ docker: fake.docker, instanceId: "restarted" });
+    // container still known+running on fake host
+    fake.known.add(a.containerName);
+    fake.running.add(a.containerName);
+    const n = await rt2.disposeForConversation("case-lbl");
+    assert(n >= 1, `label scan disposed, got ${n}`);
+    assert(!fake.running.has(a.containerName), "box rm'd via label scan");
+  }
+
   // --- idle stop does not rm ---
   {
     const fake = makeFakeDocker();

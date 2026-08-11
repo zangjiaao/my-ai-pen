@@ -109,12 +109,15 @@ try {
   {
     const execs: string[][] = [];
     let creates = 0;
+    const running = new Set<string>();
     const docker: BrowserSandboxDockerPort = {
-      async rmForce() {
+      async rmForce(name) {
+        running.delete(name);
         return ok();
       },
       async runDetached(opts) {
         creates += 1;
+        running.add(opts.name);
         return { exitCode: 0, stdout: opts.name, stderr: "" };
       },
       async exec(_name, argv) {
@@ -127,15 +130,17 @@ try {
       async writeLease() {
         return ok();
       },
-    async stop() {
-      return ok();
-    },
-    async start() {
-      return ok();
-    },
-    async inspectState() {
-      return "missing" as const;
-    },
+      async stop(name) {
+        running.delete(name);
+        return ok();
+      },
+      async start(name) {
+        running.add(name);
+        return ok();
+      },
+      async inspectState(name) {
+        return running.has(name) ? "running" : "missing";
+      },
     };
     // Install as default by constructing and replacing is hard; call runtime path via runShellInPenTools
     // uses getDefaultBrowserSandboxRuntime — so patch by running against injected path:
@@ -164,31 +169,27 @@ try {
     }
   }
 
-  // --- runShellInPenTools sticky path uses process default runtime: unit with seat opts when default works ---
-  // Without real docker, sticky path may fall through; verify ephemeral still works with shell off image.
+  // --- sticky shell fail-closed: never silent ephemeral when seat is set ---
   process.env.NODE4_SHELL_IN_PEN_TOOLS = "1";
   {
-    // Force sticky attempt: if default runtime docker fails, falls back — just ensure no throw
-    const dir = mkdtempSync(join(tmpdir(), "ephem-"));
+    const dir = mkdtempSync(join(tmpdir(), "sticky-fail-"));
     try {
       writeFileSync(join(dir, "x.txt"), "x\n");
-      // No seat → ephemeral path (needs docker image in real env; skip if fails)
-      // Here only assert API accepts opts without throwing before docker
       const seat = {
-        conversationId: "c",
-        expertId: "e",
-        seatKey: formatBrowserSandboxSeatKey("c", "e"),
+        conversationId: "c-fail",
+        expertId: "e-fail",
+        seatKey: formatBrowserSandboxSeatKey("c-fail", "e-fail"),
       };
-      // Call may fall through to ephemeral; catch docker missing
-      try {
-        const r = await runShellInPenTools("echo hi", dir, 5_000, undefined, {
-          seat,
-          workspaceHostPath: dir,
-        });
-        assert(r.via === "sticky-exec" || r.via === "ephemeral-run" || r.exitCode != null, "ran");
-      } catch {
-        /* docker may be absent in CI unit path */
-      }
+      // No working sticky ensure (default docker may fail) → sticky-failed, not ephemeral
+      const r = await runShellInPenTools("echo hi", dir, 3_000, undefined, {
+        seat,
+        workspaceHostPath: dir,
+      });
+      assert(
+        r.via === "sticky-exec" || r.via === "sticky-failed",
+        `must not ephemeral with seat, via=${r.via}`,
+      );
+      assert(r.via !== "ephemeral-run", "no silent ephemeral twin");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
