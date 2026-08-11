@@ -64,7 +64,11 @@ export type TaskEnvelope = {
   /** Optional test accounts / credentials provided by the customer (structured). */
   accounts?: unknown;
   scanMode?: string;
-  /** Optional parent task for future multi-agent platform orchestration (pass-through). */
+  /**
+   * Parent work-unit task id for multi-agent / sub-agent package workers.
+   * Spec #332: browser sandbox ensure/exec/dispose and agent-browser session key use this
+   * (not the child's `{parent}/sub/...` taskId) so login/cookies stay continuous.
+   */
   parentTaskId?: string;
   /**
    * Explicit structured long-task objective to seed OMP-style goal mode

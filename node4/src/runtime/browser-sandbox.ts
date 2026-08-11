@@ -3,6 +3,7 @@
  * Spec #330: browser image is explicit env only; no Strix / ambient-tag fallback.
  * Spec #331: BrowserSandboxRuntime — ensure / reuse / dispose by parent task id,
  * with an injectable Docker port for unit tests.
+ * Spec #332: sub-agents share parent sandbox + session; browser tool calls serialized per parent.
  *
  * Env:
  * - NODE4_BROWSER_SANDBOX=0|false → force host agent-browser only
@@ -92,6 +93,26 @@ export function containerNameForParentTask(parentTaskId: string): string {
   return `node4-browser-${safe}`;
 }
 
+/**
+ * Spec #332: sandbox / agent-browser session key for a work unit.
+ * Prefer structured parentTaskId; else strip `{parent}/sub/...` child task ids.
+ */
+export function resolveBrowserSandboxParentTaskId(
+  task: { taskId?: string; parentTaskId?: string } | null | undefined,
+): string {
+  const explicit = String(task?.parentTaskId || "").trim();
+  if (explicit) return explicit;
+  const tid = String(task?.taskId || "").trim();
+  const idx = tid.indexOf("/sub/");
+  if (idx > 0) return tid.slice(0, idx);
+  return tid;
+}
+
+/** Shared agent-browser session name for a parent task (cookies/storage). */
+export function agentBrowserSessionName(parentTaskId: string): string {
+  return `node4-${String(parentTaskId || "").slice(0, 32)}`;
+}
+
 function shellQuote(value: string): string {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
@@ -178,22 +199,56 @@ export type BrowserSandboxRuntimeOptions = {
 };
 
 /**
- * Process-local browser sandbox lifecycle keyed by parent task id (Spec #331).
+ * Process-local browser sandbox lifecycle keyed by parent task id (Spec #331 / #332).
  * One container per parent; reuse while held; dispose drops container + session.
+ * Browser ensure/exec/dispose for a parent are serialized (concurrent sub-agents queue).
  * No cross-task warm pool.
  */
 export class BrowserSandboxRuntime {
   private readonly docker: BrowserSandboxDockerPort;
   private readonly resolveImage: () => string;
   private readonly sessions = new Map<string, SessionRecord>();
+  /** Spec #332: per-parent promise chain — browser tool calls do not interleave. */
+  private readonly locks = new Map<string, Promise<unknown>>();
 
   constructor(opts: BrowserSandboxRuntimeOptions = {}) {
     this.docker = opts.docker ?? createProcessDockerPort();
     this.resolveImage = opts.resolveImage ?? resolveBrowserSandboxImage;
   }
 
+  /**
+   * Serialize work for one parent task. Does not serialize across different parents
+   * (shell/http stay free of this lock entirely — they never call this runtime).
+   */
+  private async withParentLock<T>(parentTaskId: string, fn: () => Promise<T>): Promise<T> {
+    const key = String(parentTaskId || "").trim();
+    if (!key) throw new Error("parentTaskId required for browser sandbox");
+    const prev = this.locks.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    this.locks.set(
+      key,
+      prev.then(
+        () => held,
+        () => held,
+      ),
+    );
+    try {
+      await prev.catch(() => {});
+      return await fn();
+    } finally {
+      release();
+    }
+  }
+
   /** Create or reuse the long-lived browser container for this parent task. */
   async ensure(parentTaskId: string): Promise<BrowserSandboxSession> {
+    return this.withParentLock(parentTaskId, () => this.ensureUnlocked(parentTaskId));
+  }
+
+  private async ensureUnlocked(parentTaskId: string): Promise<BrowserSandboxSession> {
     const key = String(parentTaskId || "").trim();
     if (!key) throw new Error("parentTaskId required for browser sandbox");
 
@@ -219,7 +274,7 @@ export class BrowserSandboxRuntime {
         env: [
           "NO_PROXY=localhost,127.0.0.1,host.docker.internal",
           "no_proxy=localhost,127.0.0.1,host.docker.internal",
-          `AGENT_BROWSER_SESSION=node4-${key.slice(0, 32)}`,
+          `AGENT_BROWSER_SESSION=${agentBrowserSessionName(key)}`,
         ],
         entrypoint: ["bash"],
         cmd: ["-lc", "sleep infinity"],
@@ -252,9 +307,11 @@ export class BrowserSandboxRuntime {
     argv: string[],
     timeoutMs = 120_000,
   ): Promise<SandboxExecResult> {
-    const session = await this.ensure(parentTaskId);
-    const result = await this.docker.exec(session.containerName, argv, timeoutMs);
-    return { ...result, via: "sandbox" };
+    return this.withParentLock(parentTaskId, async () => {
+      const session = await this.ensureUnlocked(parentTaskId);
+      const result = await this.docker.exec(session.containerName, argv, timeoutMs);
+      return { ...result, via: "sandbox" };
+    });
   }
 
   /**
@@ -264,16 +321,17 @@ export class BrowserSandboxRuntime {
   async dispose(parentTaskId: string): Promise<void> {
     const key = String(parentTaskId || "").trim();
     if (!key) return;
+    return this.withParentLock(key, async () => {
+      const session = this.sessions.get(key);
+      const name = session?.containerName ?? containerNameForParentTask(key);
 
-    const session = this.sessions.get(key);
-    const name = session?.containerName ?? containerNameForParentTask(key);
-
-    if (session) {
-      // Best-effort browser UI teardown; container delete is the lifecycle authority.
-      await this.docker.exec(name, ["agent-browser", "close", "--all"], 30_000).catch(() => {});
-    }
-    await this.docker.rmForce(name, 30_000);
-    this.sessions.delete(key);
+      if (session) {
+        // Best-effort browser UI teardown; container delete is the lifecycle authority.
+        await this.docker.exec(name, ["agent-browser", "close", "--all"], 30_000).catch(() => {});
+      }
+      await this.docker.rmForce(name, 30_000);
+      this.sessions.delete(key);
+    });
   }
 
   /** Dispose every parent-scoped sandbox held by this runtime (graceful process shutdown). */
@@ -332,6 +390,8 @@ export async function runBrowserCommand(
   args: string[],
   timeoutMs = 120_000,
 ): Promise<SandboxExecResult & { text: string }> {
+  // Spec #332: parent work unit key (sub-agents share parent sandbox + session).
+  const parentKey = resolveBrowserSandboxParentTaskId(runtime.task);
   const preferSandbox = isBrowserSandboxPreferred();
 
   if (preferSandbox) {
@@ -353,7 +413,7 @@ export async function runBrowserCommand(
       throw e;
     }
     try {
-      const result = await defaultRuntime.exec(runtime.task.taskId, ["agent-browser", ...args], timeoutMs);
+      const result = await defaultRuntime.exec(parentKey, ["agent-browser", ...args], timeoutMs);
       const text = `${result.stdout || ""}${result.stderr ? `\n${result.stderr}` : ""}`.trim();
       if (result.unavailable) {
         throw new Error(result.error || "docker unavailable");
@@ -363,9 +423,10 @@ export async function runBrowserCommand(
       const msg = e instanceof Error ? e.message : String(e);
       // Fall through to host only if sandbox cannot start (image was configured)
       const host = await runAgentBrowser(args, {
-        taskId: runtime.task.taskId,
+        taskId: parentKey,
         taskDir: runtime.taskDir,
         timeoutMs,
+        env: { AGENT_BROWSER_SESSION: agentBrowserSessionName(parentKey) },
       });
       const text = `${host.stdout || ""}${host.stderr ? `\n${host.stderr}` : ""}${host.error ? `\n${host.error}` : ""}`.trim();
       return {
@@ -383,9 +444,10 @@ export async function runBrowserCommand(
   }
 
   const host = await runAgentBrowser(args, {
-    taskId: runtime.task.taskId,
+    taskId: parentKey,
     taskDir: runtime.taskDir,
     timeoutMs,
+    env: { AGENT_BROWSER_SESSION: agentBrowserSessionName(parentKey) },
   });
   const text = `${host.stdout || ""}${host.stderr ? `\n${host.stderr}` : ""}`.trim();
   return {
