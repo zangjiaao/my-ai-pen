@@ -501,16 +501,17 @@ export class BrowserSandboxRuntime {
     const now = nowUnix ?? Math.floor(this.now() / 1000);
     const items = await this.docker.listBrowserSandboxes();
     const reaped: string[] = [];
-    const liveNames = new Set(
-      [...this.sessions.values()].filter((s) => s.started).map((s) => s.containerName),
-    );
+    // Running or stopped sticky seats still in process map must not be janitor-rm'd
+    // (idle stop leaves started=false; product rm only on seat death).
+    const mappedNames = new Set([...this.sessions.values()].map((s) => s.containerName));
     for (const item of items) {
       const seatFromLabel =
         item.labels?.[BROWSER_SANDBOX_LABEL.seatKey] ||
         item.labels?.[BROWSER_SANDBOX_LABEL.parentTaskId];
       if (seatFromLabel && this.heldSeats.has(seatFromLabel)) continue;
-      // Never reap a sticky session still mapped in this process (task-end does not dispose).
-      if (liveNames.has(item.name)) continue;
+      if (seatFromLabel && this.sessions.has(seatFromLabel)) continue;
+      // Never reap a sticky session still mapped in this process.
+      if (mappedNames.has(item.name)) continue;
 
       if (
         !shouldReapBrowserSandbox({

@@ -30,7 +30,7 @@ Node4 (OMP) — target model
 
 Legacy names `pen-tools` / `pen-browser` may still appear as **tags aliased at build time**; do not maintain two product images.
 
-**Shipped vs target:** [#427](https://github.com/zangjiaao/my-ai-pen/issues/427) seat key + no task-end dispose; [#428](https://github.com/zangjiaao/my-ai-pen/issues/428) Session workspace mount + shell **exec into sticky box** (ephemeral `--rm` only as fallback without seat). Remaining: seat/Case `rm` [#429](https://github.com/zangjiaao/my-ai-pen/issues/429); idle/Node **stop** [#430](https://github.com/zangjiaao/my-ai-pen/issues/430); janitor/docs [#431](https://github.com/zangjiaao/my-ai-pen/issues/431).
+**Shipped (Spec [#426](https://github.com/zangjiaao/my-ai-pen/issues/426) tickets [#427](https://github.com/zangjiaao/my-ai-pen/issues/427)–[#431](https://github.com/zangjiaao/my-ai-pen/issues/431)):** Session-seat sticky pen-sandbox — key, workspace mount, sticky shell exec, Session/Case `rm`, idle/Node `stop`, session labels + docs.
 
 ---
 
@@ -81,7 +81,7 @@ docker pull "$PEN_SANDBOX_IMAGE"
 | `NODE4_BROWSER_SANDBOX_HEARTBEAT_MS` | Lease renewal interval while Session box is held/running (default ~90s); retarget from parent-task hold |
 | `NODE4_BROWSER_SANDBOX_LEASE_MS` | Lease TTL without renewal (default ~12 min); expired → janitor may **rm** orphans only when policy allows |
 | `NODE4_BROWSER_SANDBOX_JANITOR_MS` | Periodic reap interval (default ~120s); startup also runs one pass |
-| `PEN_SANDBOX_IDLE_STOP_MS` | (target) Idle **stop** clock: no pen-sandbox tool traffic for this seat (default **4h**); **stop**, never product idle **rm** |
+| `PEN_SANDBOX_IDLE_STOP_MS` | Idle **stop** clock: no pen-sandbox tool traffic for this seat (default **4h**); **stop**, never product idle **rm**. `0` disables |
 
 **Browser resolution (strict):** `node4/src/runtime/browser-sandbox.ts` → `resolveBrowserSandboxImage` — explicit env only; no ambient local-tag discovery; no Strix default.  
 **Shell resolution:** `node4/src/runtime/pentest-sandbox-image.ts` / `pen-tools-shell.ts` — may still discover local first-party tags for lab convenience; sticky model uses **exec into Session box**.
@@ -101,15 +101,15 @@ docker pull "$PEN_SANDBOX_IMAGE"
 
 **Attach:** seat live + running → reuse; stopped → `start` same container; none → create. Hard cutover from #320 (no dual-mode task\|session flag).
 
-**Workspace SoT:** host **Session-scoped** directory mounted at `/workspace` (rw). Scripts/evidence/findings/reports/credential backups **must** use workspace. Browser profile / `/tmp` / tool caches may stay in-container only. Login **primary** path = in-box profile + stickiness; optional cookie/profile files under workspace (e.g. `credentials/`) for operator import — dedicated captcha UI is **future**.
+**Workspace SoT:** host path `{NODE4_WORKSPACE}/sessions/{conversationId}/{expertId}/` mounted at `/workspace` (rw). Durable subdirs include `scripts/`, `evidence/`, `findings/`, `credentials/`, `exports/`, `notes/`. Login **primary** = in-box browser profile + stickiness; optional cookie/profile packs under `credentials/` for agent import (v1 file slot; dedicated captcha UI is **future**).
 
 **Multi-seat:** one box per seat; never rebind/inherit box across experts; cross-seat only explicit file export/import; multiple seat boxes may coexist on one Case.
 
-**Hooks:** piggyback existing platform→Node `session_dispose` / `case_session_release` / park dispose fan-in (`docs/wayfinder/research-session-sticky-env-dispose-hooks.md`). Do not invent a second lifecycle bus. Stop disposing sticky env from task-end `runTaskResourceCleanup`.
+**Hooks:** `session_dispose` / `case_session_release` / park force-dispose fan-in → **rm**; `session_reset` / task-end / interrupt → **no** env dispose. Research: `docs/wayfinder/research-session-sticky-env-dispose-hooks.md`.
 
-**Labels / ops (target):** `myaipen.component=pen-sandbox` (or retain `browser-sandbox` alias during migrate), `myaipen.conversation_id`, `myaipen.expert_id`, `myaipen.node_id`, `myaipen.instance_id`, lease fields. Operator search by **session seat**, not parent task. Lease/janitor retarget to session identity; **rm** only expired orphans / seat-dead leftovers — idle product path is **stop**.
+**Labels / ops (shipped):** component still `browser-sandbox` for janitor filter compatibility; also `myaipen.conversation_id`, `myaipen.expert_id`, `myaipen.seat_key` (and legacy `parent_task_id` = seatKey). Search by conversation/expert/seat. Janitor **rm** only expired product boxes **not** mapped as live sticky seats in this process (idle **stop** leaves map entry).
 
-**Historical Spec #320 (shipped):** one container per parent task; dispose on task end; labels with `parent_task_id`. **Superseded for product lifetime** by this section; image pin / no Strix **kept**.
+**Historical Spec #320:** parent-task key + task-end dispose — **superseded**; image pin / no Strix **kept**.
 
 ---
 
