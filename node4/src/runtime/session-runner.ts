@@ -47,11 +47,7 @@ import {
   unavailableGraphTerminal,
 } from "./hard-graph-definition.js";
 import { runHardGraphExpertTask } from "./hard-graph-task.js";
-import {
-  disposeBrowserSandbox,
-  holdBrowserSandboxTask,
-  releaseBrowserSandboxTask,
-} from "./browser-sandbox.js";
+import { holdBrowserSandboxTask, releaseBrowserSandboxTask } from "./browser-sandbox.js";
 import { runTaskResourceCleanup } from "./task-resource-cleanup.js";
 import {
   buildGoalBudgetLimitPrompt,
@@ -276,16 +272,18 @@ export async function runNode4Task(
     );
   });
 
-  /** Spec #333: idle pool + browser sandbox teardown (task end / abort / error). */
+  /**
+   * Spec #333: single teardown authority for idle pool + browser sandbox.
+   * Free path: only `finally` (not abort fire-and-forget / mid-function end).
+   * Hard Graph: try/finally. Defaults to process disposeBrowserSandbox when unset.
+   */
   const cleanupTaskResources = () => {
     // Spec #334: stop lease heartbeat for this parent before dispose.
     releaseBrowserSandboxTask(task.taskId);
     return runTaskResourceCleanup({
       parentTaskId: task.taskId,
       idlePool: runtime.lifecycle.subagentIdlePool,
-      browserSandbox: runtime.lifecycle.browserSandbox ?? {
-        dispose: (id) => disposeBrowserSandbox(id),
-      },
+      browserSandbox: runtime.lifecycle.browserSandbox,
     });
   };
 
@@ -385,9 +383,7 @@ export async function runNode4Task(
       } catch {
         /* ignore */
       }
-      // Drop warm subagent sessions + browser sandbox so cancelled tasks do not leak.
-      // Spec #333: fire-and-forget; free-path finally also awaits cleanup.
-      void cleanupTaskResources().catch(() => {});
+      // Spec #333 review: teardown only in `finally` (single lifecycle authority).
     };
     if (signal.aborted) onCancel();
     else signal.addEventListener("abort", onCancel, { once: true });
@@ -886,8 +882,7 @@ export async function runNode4Task(
       }
     }
 
-    // Spec #333: idle pool + browser sandbox at natural task end (also in finally).
-    await cleanupTaskResources().catch(() => {});
+    // Spec #333: resource dispose is in `finally` only (single authority).
 
     const booked = await loadConfirmedFindings(runtime.findingsDir);
     // Chat-only: completed only when a real reply happened (not LLM soft-error — those throw).

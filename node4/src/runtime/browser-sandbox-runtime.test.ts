@@ -49,7 +49,7 @@ function makeFakeDocker() {
     async writeLease() {
       return ok();
     },
-  };
+  } satisfies BrowserSandboxDockerPort;
 
   return { docker, creates, rms, execs, running, imagesUsed };
 }

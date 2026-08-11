@@ -47,6 +47,15 @@ function ok(): SandboxExecResult {
   );
   assert(
     !shouldReapBrowserSandbox({
+      labels,
+      leaseUntilUnix: 1_700_000_100,
+      nowUnix: 1_700_000_200,
+      leaseTrusted: false,
+    }),
+    "untrusted lease never reaped (stale-label guard)",
+  );
+  assert(
+    !shouldReapBrowserSandbox({
       labels: { foo: "bar" },
       leaseUntilUnix: 1,
       nowUnix: 999,
@@ -160,6 +169,7 @@ try {
           leaseUntilUnix: 100,
         }),
         leaseUntilUnix: 100,
+        leaseTrusted: true,
       },
       {
         name: "node4-browser-live",
@@ -170,11 +180,24 @@ try {
           leaseUntilUnix: 9_999_999_999,
         }),
         leaseUntilUnix: 9_999_999_999,
+        leaseTrusted: true,
+      },
+      {
+        name: "node4-browser-untrusted",
+        labels: buildBrowserSandboxLabels({
+          nodeId: "other-node",
+          instanceId: "other-inst",
+          parentTaskId: "t-stale-label",
+          leaseUntilUnix: 100,
+        }),
+        leaseUntilUnix: 100,
+        leaseTrusted: false,
       },
       {
         name: "unrelated",
         labels: { app: "postgres" },
         leaseUntilUnix: 1,
+        leaseTrusted: true,
       },
     ];
     const docker: BrowserSandboxDockerPort = {
@@ -199,8 +222,50 @@ try {
     const result = await rt.reapExpired(200);
     assert(result.reaped.includes("node4-browser-expired"), "expired reaped");
     assert(!result.reaped.includes("node4-browser-live"), "live foreign kept");
+    assert(!result.reaped.includes("node4-browser-untrusted"), "untrusted lease kept");
     assert(!result.reaped.includes("unrelated"), "unlabeled ignored");
     assert(rms.length === 1 && rms[0] === "node4-browser-expired", "only one rm");
+  }
+
+  // --- held parent is never reaped by this process even if lease looks expired ---
+  {
+    const rms: string[] = [];
+    const docker: BrowserSandboxDockerPort = {
+      async rmForce(name) {
+        rms.push(name);
+        return ok();
+      },
+      async runDetached(opts) {
+        return { exitCode: 0, stdout: opts.name, stderr: "" };
+      },
+      async exec() {
+        return ok();
+      },
+      async listBrowserSandboxes() {
+        return [
+          {
+            name: "node4-browser-held",
+            labels: buildBrowserSandboxLabels({
+              nodeId: "me",
+              instanceId: "inst",
+              parentTaskId: "held-parent",
+              leaseUntilUnix: 1,
+            }),
+            leaseUntilUnix: 1,
+            leaseTrusted: true,
+          },
+        ];
+      },
+      async writeLease() {
+        return ok();
+      },
+    };
+    const rt = new BrowserSandboxRuntime({ docker, now: () => 999_000 });
+    rt.holdParentTask("held-parent");
+    await rt.ensure("held-parent");
+    const result = await rt.reapExpired(999);
+    assert(!result.reaped.includes("node4-browser-held"), "held parent not reaped");
+    assert(!rms.includes("node4-browser-held"), "no rm of held");
   }
 
   // --- instance id is unique per runtime when not shared ---

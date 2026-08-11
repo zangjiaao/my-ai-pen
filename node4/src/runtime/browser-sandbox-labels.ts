@@ -29,8 +29,8 @@ export type BrowserSandboxLeaseConfig = {
 
 const MIN_MS = 5_000;
 
-function envPositiveMs(key: string, fallback: number): number {
-  const n = Number(process.env[key]);
+function envPositiveMsFrom(env: NodeJS.ProcessEnv, key: string, fallback: number): number {
+  const n = Number(env[key]);
   if (!Number.isFinite(n) || n < MIN_MS) return fallback;
   return Math.floor(n);
 }
@@ -44,12 +44,6 @@ export function loadBrowserSandboxLeaseConfig(
     leaseMs: envPositiveMsFrom(env, "NODE4_BROWSER_SANDBOX_LEASE_MS", 12 * 60_000),
     janitorMs: envPositiveMsFrom(env, "NODE4_BROWSER_SANDBOX_JANITOR_MS", 120_000),
   };
-}
-
-function envPositiveMsFrom(env: NodeJS.ProcessEnv, key: string, fallback: number): number {
-  const n = Number(env[key]);
-  if (!Number.isFinite(n) || n < MIN_MS) return fallback;
-  return Math.floor(n);
 }
 
 export function buildBrowserSandboxLabels(input: {
@@ -82,13 +76,17 @@ export function parseLeaseUntilUnix(raw: string | undefined | null): number | nu
 
 /**
  * Pure janitor decision: should this labeled container be reaped?
- * Only product browser-sandbox with an expired lease; never non-expired (any node).
+ * Only product browser-sandbox with an expired, **trusted** lease; never non-expired (any node).
+ * When leaseTrusted is false (live lease file unreadable), do not reap — avoids stale-label kills.
  */
 export function shouldReapBrowserSandbox(input: {
   labels: Record<string, string>;
   leaseUntilUnix: number | null;
   nowUnix: number;
+  /** Default true. false → never reap (unknown live lease). */
+  leaseTrusted?: boolean;
 }): boolean {
+  if (input.leaseTrusted === false) return false;
   if (!isProductBrowserSandboxLabels(input.labels)) return false;
   if (input.leaseUntilUnix == null) return false;
   return input.leaseUntilUnix < input.nowUnix;

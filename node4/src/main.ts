@@ -567,6 +567,9 @@ function normalizeTask(message: Record<string, unknown>): TaskEnvelope {
 /** Spec #334: startup + periodic janitor and lease heartbeat. */
 const browserSandboxJobs = startBrowserSandboxBackgroundJobs();
 
+/** Bounded wait so docker/lock hangs cannot block process exit forever (review #320). */
+const BROWSER_SANDBOX_SHUTDOWN_DISPOSE_MS = 20_000;
+
 /** Spec #333/#334: best-effort dispose of this instance's browser sandboxes on graceful stop. */
 function installGracefulBrowserSandboxShutdown(): void {
   let shuttingDown = false;
@@ -574,16 +577,23 @@ function installGracefulBrowserSandboxShutdown(): void {
     if (shuttingDown) return;
     shuttingDown = true;
     browserSandboxJobs.stop();
-    console.log(`[node4] ${signal}: disposing browser sandboxes`);
-    void disposeAllBrowserSandboxes()
+    console.log(`[node4] ${signal}: disposing browser sandboxes (timeout ${BROWSER_SANDBOX_SHUTDOWN_DISPOSE_MS}ms)`);
+    const timedOut = new Promise<never>((_, reject) => {
+      const t = setTimeout(
+        () => reject(new Error(`browser sandbox dispose timed out after ${BROWSER_SANDBOX_SHUTDOWN_DISPOSE_MS}ms`)),
+        BROWSER_SANDBOX_SHUTDOWN_DISPOSE_MS,
+      );
+      t.unref?.();
+    });
+    void Promise.race([disposeAllBrowserSandboxes(), timedOut])
+      .then(() => {
+        process.exit(0);
+      })
       .catch((err) => {
         console.warn(
           `[node4] browser sandbox disposeAll failed: ${err instanceof Error ? err.message : String(err)}`,
         );
-      })
-      .finally(() => {
-        // Listener replaces default terminate; exit after best-effort cleanup.
-        process.exit(0);
+        process.exit(1);
       });
   };
   process.once("SIGTERM", () => onSignal("SIGTERM"));
