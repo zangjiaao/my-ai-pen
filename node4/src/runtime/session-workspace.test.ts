@@ -75,6 +75,15 @@ try {
       async writeLease() {
         return ok();
       },
+    async stop() {
+      return ok();
+    },
+    async start() {
+      return ok();
+    },
+    async inspectState() {
+      return "missing" as const;
+    },
     };
     const rt = new BrowserSandboxRuntime({ docker });
     const seat = {
@@ -118,6 +127,15 @@ try {
       async writeLease() {
         return ok();
       },
+    async stop() {
+      return ok();
+    },
+    async start() {
+      return ok();
+    },
+    async inspectState() {
+      return "missing" as const;
+    },
     };
     // Install as default by constructing and replacing is hard; call runtime path via runShellInPenTools
     // uses getDefaultBrowserSandboxRuntime — so patch by running against injected path:

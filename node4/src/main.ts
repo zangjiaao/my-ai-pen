@@ -4,7 +4,7 @@ import { loadDotEnv } from "./env.js";
 import { PlatformWSClient } from "./platform/ws-client.js";
 import { runNode4Task } from "./runtime/session-runner.js";
 import {
-  disposeAllBrowserSandboxes,
+  stopAllBrowserSandboxes,
   startBrowserSandboxBackgroundJobs,
 } from "./runtime/browser-sandbox.js";
 import { isLlmTurnError } from "./runtime/llm-turn-error.js";
@@ -570,28 +570,30 @@ const browserSandboxJobs = startBrowserSandboxBackgroundJobs();
 /** Bounded wait so docker/lock hangs cannot block process exit forever (review #320). */
 const BROWSER_SANDBOX_SHUTDOWN_DISPOSE_MS = 20_000;
 
-/** Spec #333/#334: best-effort dispose of this instance's browser sandboxes on graceful stop. */
+/** Spec #430: stop (not rm) sticky pen-sandboxes on graceful Node exit. */
 function installGracefulBrowserSandboxShutdown(): void {
   let shuttingDown = false;
   const onSignal = (signal: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
     browserSandboxJobs.stop();
-    console.log(`[node4] ${signal}: disposing browser sandboxes (timeout ${BROWSER_SANDBOX_SHUTDOWN_DISPOSE_MS}ms)`);
+    console.log(
+      `[node4] ${signal}: stopping sticky pen-sandboxes (timeout ${BROWSER_SANDBOX_SHUTDOWN_DISPOSE_MS}ms)`,
+    );
     const timedOut = new Promise<never>((_, reject) => {
       const t = setTimeout(
-        () => reject(new Error(`browser sandbox dispose timed out after ${BROWSER_SANDBOX_SHUTDOWN_DISPOSE_MS}ms`)),
+        () => reject(new Error(`browser sandbox stop timed out after ${BROWSER_SANDBOX_SHUTDOWN_DISPOSE_MS}ms`)),
         BROWSER_SANDBOX_SHUTDOWN_DISPOSE_MS,
       );
       t.unref?.();
     });
-    void Promise.race([disposeAllBrowserSandboxes(), timedOut])
+    void Promise.race([stopAllBrowserSandboxes(), timedOut])
       .then(() => {
         process.exit(0);
       })
       .catch((err) => {
         console.warn(
-          `[node4] browser sandbox disposeAll failed: ${err instanceof Error ? err.message : String(err)}`,
+          `[node4] browser sandbox stopAll failed: ${err instanceof Error ? err.message : String(err)}`,
         );
         process.exit(1);
       });

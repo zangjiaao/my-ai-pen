@@ -33,9 +33,15 @@ export type BrowserSandboxLeaseConfig = {
   leaseMs: number;
   /** Janitor period. Default 120s. */
   janitorMs: number;
+  /**
+   * Spec #430: stop (not rm) after this long without pen-sandbox tool traffic.
+   * Default 4h. Set 0 to disable idle stop.
+   */
+  idleStopMs: number;
 };
 
 const MIN_MS = 5_000;
+const DEFAULT_IDLE_STOP_MS = 4 * 60 * 60_000;
 
 function envPositiveMsFrom(env: NodeJS.ProcessEnv, key: string, fallback: number): number {
   const n = Number(env[key]);
@@ -43,7 +49,15 @@ function envPositiveMsFrom(env: NodeJS.ProcessEnv, key: string, fallback: number
   return Math.floor(n);
 }
 
-/** Env-tunable lease knobs (Spec #334 defaults). */
+function envIdleStopMs(env: NodeJS.ProcessEnv): number {
+  const raw = env.PEN_SANDBOX_IDLE_STOP_MS ?? env.NODE4_PEN_SANDBOX_IDLE_STOP_MS;
+  if (raw == null || String(raw).trim() === "") return DEFAULT_IDLE_STOP_MS;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_IDLE_STOP_MS;
+  return Math.floor(n);
+}
+
+/** Env-tunable lease + idle-stop knobs (Spec #334 / #430). */
 export function loadBrowserSandboxLeaseConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): BrowserSandboxLeaseConfig {
@@ -51,6 +65,7 @@ export function loadBrowserSandboxLeaseConfig(
     heartbeatMs: envPositiveMsFrom(env, "NODE4_BROWSER_SANDBOX_HEARTBEAT_MS", 90_000),
     leaseMs: envPositiveMsFrom(env, "NODE4_BROWSER_SANDBOX_LEASE_MS", 12 * 60_000),
     janitorMs: envPositiveMsFrom(env, "NODE4_BROWSER_SANDBOX_JANITOR_MS", 120_000),
+    idleStopMs: envIdleStopMs(env),
   };
 }
 

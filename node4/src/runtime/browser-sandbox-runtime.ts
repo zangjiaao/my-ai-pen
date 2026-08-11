@@ -41,7 +41,10 @@ export type BrowserSandboxEnsureOptions = {
   workspaceHostPath?: string;
 };
 
-type SessionRecord = BrowserSandboxSession & { started: boolean };
+type SessionRecord = BrowserSandboxSession & {
+  /** Container believed running (false after idle/Node stop). */
+  started: boolean;
+};
 
 /** Process boot UUID — restart never reuses another live process identity (Spec #334). */
 export const BROWSER_SANDBOX_INSTANCE_ID = randomUUID();
@@ -104,6 +107,8 @@ export class BrowserSandboxRuntime {
   private readonly locks = new Map<string, Promise<unknown>>();
   /** Seats with an in-flight work-burst (lease heartbeat priority). */
   private readonly heldSeats = new Set<string>();
+  /** Last pen-sandbox tool traffic (ensure/exec) per seat — idle stop clock. */
+  private readonly lastTrafficMs = new Map<string, number>();
 
   constructor(opts: BrowserSandboxRuntimeOptions = {}) {
     this.docker = opts.docker ?? createProcessDockerPort();
@@ -116,6 +121,7 @@ export class BrowserSandboxRuntime {
       heartbeatMs: opts.leaseConfig?.heartbeatMs ?? base.heartbeatMs,
       leaseMs: opts.leaseConfig?.leaseMs ?? base.leaseMs,
       janitorMs: opts.leaseConfig?.janitorMs ?? base.janitorMs,
+      idleStopMs: opts.leaseConfig?.idleStopMs ?? base.idleStopMs,
     };
   }
 
@@ -196,25 +202,93 @@ export class BrowserSandboxRuntime {
     return this.withSeatLock(s.seatKey, () => this.ensureUnlocked(s, opts));
   }
 
+  private touchTraffic(seatKey: string): void {
+    this.lastTrafficMs.set(seatKey, this.now());
+  }
+
+  private sessionView(record: SessionRecord): BrowserSandboxSession {
+    return {
+      containerName: record.containerName,
+      image: record.image,
+      conversationId: record.conversationId,
+      expertId: record.expertId,
+      seatKey: record.seatKey,
+      workspaceHostPath: record.workspaceHostPath,
+    };
+  }
+
   private async ensureUnlocked(
     seat: BrowserSandboxSeat,
     opts?: BrowserSandboxEnsureOptions,
   ): Promise<BrowserSandboxSession> {
     const key = seat.seatKey;
+    this.touchTraffic(key);
+
     const existing = this.sessions.get(key);
-    if (existing?.started) {
-      return {
-        containerName: existing.containerName,
-        image: existing.image,
-        conversationId: existing.conversationId,
-        expertId: existing.expertId,
-        seatKey: existing.seatKey,
-        workspaceHostPath: existing.workspaceHostPath,
-      };
+    if (existing) {
+      if (!existing.started) {
+        const startResult = await this.docker.start(existing.containerName, 60_000);
+        if (startResult.unavailable || (startResult.exitCode !== 0 && startResult.exitCode != null)) {
+          // Container may have been removed externally — recreate below.
+          this.sessions.delete(key);
+        } else {
+          existing.started = true;
+          await this.docker.writeLease(existing.containerName, this.leaseUntilFromNow()).catch(() => {});
+          return this.sessionView(existing);
+        }
+      } else {
+        return this.sessionView(existing);
+      }
     }
 
     const image = this.resolveImage();
     const name = containerNameForSeat(key);
+
+    // Spec #430: reuse stopped container on host if still present (same name).
+    const state = await this.docker.inspectState(name, 15_000);
+    if (state === "running" || state === "stopped") {
+      if (state === "stopped") {
+        const startResult = await this.docker.start(name, 60_000);
+        if (startResult.unavailable || (startResult.exitCode !== 0 && startResult.exitCode != null)) {
+          await this.docker.rmForce(name, 30_000).catch(() => {});
+        } else {
+          const workspaceHostPath =
+            opts?.workspaceHostPath != null
+              ? resolve(String(opts.workspaceHostPath).trim())
+              : undefined;
+          const record: SessionRecord = {
+            containerName: name,
+            image,
+            conversationId: seat.conversationId,
+            expertId: seat.expertId,
+            seatKey: key,
+            workspaceHostPath,
+            started: true,
+          };
+          this.sessions.set(key, record);
+          await this.docker.writeLease(name, this.leaseUntilFromNow()).catch(() => {});
+          return this.sessionView(record);
+        }
+      } else {
+        const workspaceHostPath =
+          opts?.workspaceHostPath != null
+            ? resolve(String(opts.workspaceHostPath).trim())
+            : undefined;
+        const record: SessionRecord = {
+          containerName: name,
+          image,
+          conversationId: seat.conversationId,
+          expertId: seat.expertId,
+          seatKey: key,
+          workspaceHostPath,
+          started: true,
+        };
+        this.sessions.set(key, record);
+        await this.docker.writeLease(name, this.leaseUntilFromNow()).catch(() => {});
+        return this.sessionView(record);
+      }
+    }
+
     const leaseUntil = this.leaseUntilFromNow();
     const labels = buildBrowserSandboxLabels({
       nodeId: this.nodeId,
@@ -278,14 +352,7 @@ export class BrowserSandboxRuntime {
       started: true,
     };
     this.sessions.set(key, record);
-    return {
-      containerName: record.containerName,
-      image: record.image,
-      conversationId: record.conversationId,
-      expertId: record.expertId,
-      seatKey: record.seatKey,
-      workspaceHostPath: record.workspaceHostPath,
-    };
+    return this.sessionView(record);
   }
 
   async exec(
@@ -298,8 +365,68 @@ export class BrowserSandboxRuntime {
     return this.withSeatLock(s.seatKey, async () => {
       const session = await this.ensureUnlocked(s, opts);
       const result = await this.docker.exec(session.containerName, argv, timeoutMs);
+      this.touchTraffic(s.seatKey);
       return { ...result, via: "sandbox" };
     });
+  }
+
+  /**
+   * Spec #430: docker stop only — keep map entry so ensure can start again.
+   */
+  async stop(seat: BrowserSandboxSeat | string): Promise<void> {
+    let key: string;
+    try {
+      key = normalizeSeat(seat).seatKey;
+    } catch {
+      key = String(seat || "").trim();
+    }
+    if (!key) return;
+    return this.withSeatLock(key, async () => {
+      const session = this.sessions.get(key);
+      const name = session?.containerName ?? containerNameForSeat(key);
+      await this.docker.stop(name, 60_000).catch(() => {});
+      if (session) {
+        session.started = false;
+      } else {
+        // Remember stopped box for later start even if we had no map entry.
+        this.sessions.set(key, {
+          containerName: name,
+          image: "",
+          conversationId: key.includes("::") ? key.split("::")[0]! : "",
+          expertId: key.includes("::") ? key.slice(key.indexOf("::") + 2) : "",
+          seatKey: key,
+          started: false,
+        });
+      }
+    });
+  }
+
+  /** Spec #430: stop all process-known sticky boxes (Node shutdown). */
+  async stopAll(): Promise<number> {
+    const keys = [...this.sessions.keys()];
+    await Promise.all(keys.map((k) => this.stop(k)));
+    return keys.length;
+  }
+
+  /**
+   * Spec #430: stop seats with no tool traffic for idleStopMs (never rm).
+   * Skips currently held seats (mid-burst).
+   */
+  async stopIdleSeats(nowMs?: number): Promise<string[]> {
+    const idleMs = this.leaseConfig.idleStopMs;
+    if (!idleMs || idleMs <= 0) return [];
+    const now = nowMs ?? this.now();
+    const stopped: string[] = [];
+    for (const [key, rec] of this.sessions) {
+      if (!rec.started) continue;
+      if (this.heldSeats.has(key)) continue;
+      const lastMs = this.lastTrafficMs.get(key);
+      if (lastMs == null) continue;
+      if (now - lastMs < idleMs) continue;
+      await this.stop(key);
+      stopped.push(key);
+    }
+    return stopped;
   }
 
   async dispose(seat: BrowserSandboxSeat | string): Promise<void> {
@@ -311,6 +438,7 @@ export class BrowserSandboxRuntime {
     }
     if (!key) return;
     this.heldSeats.delete(key);
+    this.lastTrafficMs.delete(key);
     return this.withSeatLock(key, async () => {
       const session = this.sessions.get(key);
       const name = session?.containerName ?? containerNameForSeat(key);
@@ -439,7 +567,7 @@ export type BrowserSandboxBackgroundHandles = {
 export function startBrowserSandboxBackgroundJobs(
   runtime: BrowserSandboxRuntime = defaultRuntime,
 ): BrowserSandboxBackgroundHandles {
-  const { heartbeatMs, janitorMs } = runtime.getLeaseConfig();
+  const { heartbeatMs, janitorMs, idleStopMs } = runtime.getLeaseConfig();
   let stopped = false;
 
   const runJanitor = () => {
@@ -465,18 +593,36 @@ export function startBrowserSandboxBackgroundJobs(
     void runtime.renewLeasesForHeldTasks().catch(() => {});
   };
 
+  const runIdleStop = () => {
+    if (stopped) return;
+    void runtime
+      .stopIdleSeats()
+      .then((keys) => {
+        if (keys.length) {
+          console.log(`[node4] pen-sandbox idle stop (${keys.length}): ${keys.join(", ")}`);
+        }
+      })
+      .catch(() => {});
+  };
+
   runJanitor();
 
   const janitorTimer = setInterval(runJanitor, janitorMs);
   const heartbeatTimer = setInterval(runHeartbeat, heartbeatMs);
+  // Idle check at most every min(idleStop/4, 5m) or 60s floor when idle enabled.
+  const idlePeriod =
+    idleStopMs > 0 ? Math.min(Math.max(Math.floor(idleStopMs / 4), 60_000), 5 * 60_000) : 0;
+  const idleTimer = idlePeriod > 0 ? setInterval(runIdleStop, idlePeriod) : null;
   janitorTimer.unref?.();
   heartbeatTimer.unref?.();
+  idleTimer?.unref?.();
 
   return {
     stop: () => {
       stopped = true;
       clearInterval(janitorTimer);
       clearInterval(heartbeatTimer);
+      if (idleTimer) clearInterval(idleTimer);
     },
   };
 }
@@ -503,9 +649,14 @@ export async function disposeBrowserSandboxForCase(conversationId: string): Prom
   return defaultRuntime.disposeForConversation(conversationId);
 }
 
-/** Process-default dispose of all sandboxes on this instance (graceful shutdown → #430 prefers stop). */
+/** Process-default dispose of all sandboxes on this instance (prefer stopAll on graceful shutdown). */
 export async function disposeAllBrowserSandboxes(): Promise<void> {
   return defaultRuntime.disposeAll();
+}
+
+/** Spec #430: stop all sticky boxes (Node graceful shutdown). */
+export async function stopAllBrowserSandboxes(): Promise<number> {
+  return defaultRuntime.stopAll();
 }
 
 export type { BrowserSandboxDockerPort, BrowserSandboxListItem, SandboxExecResult } from "./browser-sandbox-docker.js";

@@ -50,6 +50,7 @@ export {
   releaseBrowserSandboxSeat,
   releaseBrowserSandboxTask,
   startBrowserSandboxBackgroundJobs,
+  stopAllBrowserSandboxes,
 } from "./browser-sandbox-runtime.js";
 
 export { rewriteUrlForSandbox, runBrowserCommand } from "./browser-sandbox-command.js";

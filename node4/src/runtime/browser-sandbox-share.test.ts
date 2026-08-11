@@ -101,6 +101,15 @@ try {
       async writeLease() {
         return ok();
       },
+    async stop() {
+      return ok();
+    },
+    async start() {
+      return ok();
+    },
+    async inspectState() {
+      return "missing" as const;
+    },
     };
     const rt = new BrowserSandboxRuntime({ docker });
     // Main burst
@@ -134,6 +143,15 @@ try {
       async writeLease() {
         return ok();
       },
+    async stop() {
+      return ok();
+    },
+    async start() {
+      return ok();
+    },
+    async inspectState() {
+      return "missing" as const;
+    },
     };
     const rt = new BrowserSandboxRuntime({ docker });
     await rt.ensure(seat);

@@ -101,6 +101,15 @@ try {
       async writeLease() {
         return ok();
       },
+    async stop() {
+      return ok();
+    },
+    async start() {
+      return ok();
+    },
+    async inspectState() {
+      return "missing" as const;
+    },
     };
     const rt = new BrowserSandboxRuntime({
       docker,
@@ -140,6 +149,15 @@ try {
       async writeLease(_name, leaseUntilUnix) {
         leases.push(leaseUntilUnix);
         return ok();
+      },
+      async stop() {
+        return ok();
+      },
+      async start() {
+        return ok();
+      },
+      async inspectState() {
+        return "missing" as const;
       },
     };
     let now = 1_000_000_000_000;
@@ -231,6 +249,15 @@ try {
       async writeLease() {
         return ok();
       },
+    async stop() {
+      return ok();
+    },
+    async start() {
+      return ok();
+    },
+    async inspectState() {
+      return "missing" as const;
+    },
     };
     const rt = new BrowserSandboxRuntime({ docker, now: () => 200_000 });
     const result = await rt.reapExpired(200);
@@ -278,6 +305,15 @@ try {
       async writeLease() {
         return ok();
       },
+    async stop() {
+      return ok();
+    },
+    async start() {
+      return ok();
+    },
+    async inspectState() {
+      return "missing" as const;
+    },
     };
     const rt = new BrowserSandboxRuntime({ docker, now: () => 999_000 });
     rt.holdSeat(s);
@@ -306,6 +342,15 @@ try {
       async writeLease() {
         return ok();
       },
+    async stop() {
+      return ok();
+    },
+    async start() {
+      return ok();
+    },
+    async inspectState() {
+      return "missing" as const;
+    },
     };
     const a = new BrowserSandboxRuntime({ docker, instanceId: "uuid-a" });
     const b = new BrowserSandboxRuntime({ docker, instanceId: "uuid-b" });

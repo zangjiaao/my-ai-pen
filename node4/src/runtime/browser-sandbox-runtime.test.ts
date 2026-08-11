@@ -31,19 +31,21 @@ function makeFakeDocker() {
   const rms: string[] = [];
   const execs: Array<{ name: string; argv: string[] }> = [];
   const running = new Set<string>();
+  const known = new Set<string>();
   const imagesUsed: string[] = [];
 
   const docker: BrowserSandboxDockerPort = {
     async rmForce(name: string) {
       rms.push(name);
       running.delete(name);
+      known.delete(name);
       return ok();
     },
     async runDetached(opts) {
       creates.push(opts.name);
       imagesUsed.push(opts.image);
       running.add(opts.name);
-      // volumes optional for older cases
+      known.add(opts.name);
       void opts.volumes;
       return { exitCode: 0, stdout: opts.name, stderr: "" };
     },
@@ -60,9 +62,25 @@ function makeFakeDocker() {
     async writeLease() {
       return ok();
     },
+    async stop(name) {
+      running.delete(name);
+      return ok();
+    },
+    async start(name) {
+      if (!known.has(name)) {
+        return { exitCode: 1, stdout: "", stderr: "no such container" };
+      }
+      running.add(name);
+      return ok();
+    },
+    async inspectState(name) {
+      if (running.has(name)) return "running";
+      if (known.has(name)) return "stopped";
+      return "missing";
+    },
   } satisfies BrowserSandboxDockerPort;
 
-  return { docker, creates, rms, execs, running, imagesUsed };
+  return { docker, creates, rms, execs, running, known, imagesUsed };
 }
 
 const saved = { ...process.env };
@@ -189,6 +207,15 @@ try {
       async writeLease() {
         return ok();
       },
+      async stop() {
+        return ok();
+      },
+      async start() {
+        return ok();
+      },
+      async inspectState() {
+        return "missing";
+      },
     };
     const rt = new BrowserSandboxRuntime({
       docker,
@@ -249,8 +276,41 @@ try {
     assert(fake.running.has(sess.containerName), "container still up");
   }
 
-  console.log(JSON.stringify({ ok: true, cases: "seat-key ensure/reuse/dispose" }, null, 2));
-  console.log("RESULT: PASS — BrowserSandboxRuntime (#427)");
+  // --- Spec #430: stop then ensure starts same container (no second create) ---
+  {
+    const fake = makeFakeDocker();
+    const rt = new BrowserSandboxRuntime({ docker: fake.docker });
+    const first = await rt.ensure(s1);
+    assert(fake.creates.length === 1, "one create");
+    await rt.stop(s1);
+    assert(!fake.running.has(first.containerName), "stopped");
+    assert(fake.known.has(first.containerName), "container still known");
+    const second = await rt.ensure(s1);
+    assert(second.containerName === first.containerName, "same name after start");
+    assert(fake.creates.length === 1, "no recreate after stop/start");
+    assert(fake.running.has(first.containerName), "running again");
+  }
+
+  // --- idle stop does not rm ---
+  {
+    const fake = makeFakeDocker();
+    let now = 0;
+    const rt = new BrowserSandboxRuntime({
+      docker: fake.docker,
+      now: () => now,
+      leaseConfig: { idleStopMs: 100 },
+    });
+    await rt.ensure(s1);
+    const createRms = fake.rms.length;
+    now = 200;
+    const stoppedKeys = await rt.stopIdleSeats(now);
+    assert(stoppedKeys.includes(s1.seatKey), "idle stopped");
+    assert(fake.rms.length === createRms, "idle stop never rm");
+    assert(rt.activeSessionCount() === 1, "map kept after idle stop");
+  }
+
+  console.log(JSON.stringify({ ok: true, cases: "seat-key ensure/reuse/dispose/stop" }, null, 2));
+  console.log("RESULT: PASS — BrowserSandboxRuntime (#427/#430)");
 } finally {
   for (const k of Object.keys(process.env)) {
     if (!(k in saved)) delete process.env[k];

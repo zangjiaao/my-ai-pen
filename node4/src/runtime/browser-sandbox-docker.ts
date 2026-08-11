@@ -52,6 +52,15 @@ export type BrowserSandboxDockerPort = {
   exec(name: string, argv: string[], timeoutMs?: number): Promise<SandboxExecResult>;
   listBrowserSandboxes(): Promise<BrowserSandboxListItem[]>;
   writeLease(name: string, leaseUntilUnix: number, timeoutMs?: number): Promise<SandboxExecResult>;
+  /** Spec #430: stop without rm. */
+  stop(name: string, timeoutMs?: number): Promise<SandboxExecResult>;
+  /** Spec #430: start a stopped container. */
+  start(name: string, timeoutMs?: number): Promise<SandboxExecResult>;
+  /**
+   * Container existence / run state.
+   * missing | running | stopped | unknown
+   */
+  inspectState(name: string, timeoutMs?: number): Promise<"missing" | "running" | "stopped" | "unknown">;
 };
 
 export function dockerBin(): string {
@@ -224,6 +233,25 @@ export function createProcessDockerPort(bin: string = dockerBin()): BrowserSandb
         }),
       );
       return rows.filter((r): r is BrowserSandboxListItem => r != null);
+    },
+    async stop(name, timeoutMs = 60_000) {
+      return runProcess(bin, ["stop", name], timeoutMs);
+    },
+    async start(name, timeoutMs = 60_000) {
+      return runProcess(bin, ["start", name], timeoutMs);
+    },
+    async inspectState(name, timeoutMs = 15_000) {
+      const r = await runProcess(
+        bin,
+        ["inspect", "--format", "{{.State.Running}}", name],
+        timeoutMs,
+      );
+      if (r.unavailable) return "unknown";
+      if (r.exitCode !== 0) return "missing";
+      const raw = r.stdout.trim().toLowerCase();
+      if (raw === "true") return "running";
+      if (raw === "false") return "stopped";
+      return "unknown";
     },
     async writeLease(name, leaseUntilUnix, timeoutMs = 15_000) {
       const body = String(Math.floor(leaseUntilUnix));
