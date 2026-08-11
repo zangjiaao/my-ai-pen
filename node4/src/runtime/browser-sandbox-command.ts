@@ -1,15 +1,16 @@
 /**
  * Tool-facing browser command runner (sandbox preferred + host fallback).
- * Spec #330 fail-closed image; Spec #332 parent-scoped session key.
+ * Spec #427: seat-keyed sticky sandbox (conversationId + expertId).
  */
 import type { ToolRuntime } from "../types.js";
 import { runAgentBrowser } from "./agent-browser-cli.js";
 import {
   agentBrowserSessionName,
   BrowserSandboxImageError,
+  BrowserSandboxSeatError,
   isBrowserSandboxPreferred,
   resolveBrowserSandboxImage,
-  resolveBrowserSandboxParentTaskId,
+  resolveBrowserSandboxSeat,
 } from "./browser-sandbox-image.js";
 import { getDefaultBrowserSandboxRuntime } from "./browser-sandbox-runtime.js";
 import type { SandboxExecResult } from "./browser-sandbox-docker.js";
@@ -22,7 +23,24 @@ export async function runBrowserCommand(
   args: string[],
   timeoutMs = 120_000,
 ): Promise<SandboxExecResult & { text: string }> {
-  const parentKey = resolveBrowserSandboxParentTaskId(runtime.task);
+  let seatKey: string;
+  try {
+    seatKey = resolveBrowserSandboxSeat(runtime.task).seatKey;
+  } catch (e) {
+    if (e instanceof BrowserSandboxSeatError) {
+      return {
+        exitCode: null,
+        stdout: "",
+        stderr: "",
+        unavailable: true,
+        error: e.message,
+        text: e.message,
+        via: "sandbox",
+      };
+    }
+    throw e;
+  }
+
   const preferSandbox = isBrowserSandboxPreferred();
   const sandboxRuntime = getDefaultBrowserSandboxRuntime();
 
@@ -44,7 +62,7 @@ export async function runBrowserCommand(
       throw e;
     }
     try {
-      const result = await sandboxRuntime.exec(parentKey, ["agent-browser", ...args], timeoutMs);
+      const result = await sandboxRuntime.exec(seatKey, ["agent-browser", ...args], timeoutMs);
       const text = `${result.stdout || ""}${result.stderr ? `\n${result.stderr}` : ""}`.trim();
       if (result.unavailable) {
         throw new Error(result.error || "docker unavailable");
@@ -53,10 +71,10 @@ export async function runBrowserCommand(
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       const host = await runAgentBrowser(args, {
-        taskId: parentKey,
+        taskId: seatKey,
         taskDir: runtime.taskDir,
         timeoutMs,
-        env: { AGENT_BROWSER_SESSION: agentBrowserSessionName(parentKey) },
+        env: { AGENT_BROWSER_SESSION: agentBrowserSessionName(seatKey) },
       });
       const text = `${host.stdout || ""}${host.stderr ? `\n${host.stderr}` : ""}${host.error ? `\n${host.error}` : ""}`.trim();
       return {
@@ -74,10 +92,10 @@ export async function runBrowserCommand(
   }
 
   const host = await runAgentBrowser(args, {
-    taskId: parentKey,
+    taskId: seatKey,
     taskDir: runtime.taskDir,
     timeoutMs,
-    env: { AGENT_BROWSER_SESSION: agentBrowserSessionName(parentKey) },
+    env: { AGENT_BROWSER_SESSION: agentBrowserSessionName(seatKey) },
   });
   const text = `${host.stdout || ""}${host.stderr ? `\n${host.stderr}` : ""}`.trim();
   return {

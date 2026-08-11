@@ -1,10 +1,11 @@
 /**
- * Spec #331: BrowserSandboxRuntime ensure / reuse / dispose with injectable Docker port.
+ * Spec #331 / #427: BrowserSandboxRuntime seat-keyed ensure / reuse / dispose.
  * Run: npx tsx src/runtime/browser-sandbox-runtime.test.ts
  */
 import {
   BrowserSandboxImageError,
   BrowserSandboxRuntime,
+  formatBrowserSandboxSeatKey,
   type BrowserSandboxDockerPort,
   type SandboxExecResult,
 } from "./browser-sandbox.js";
@@ -15,6 +16,14 @@ function assert(cond: unknown, msg: string): void {
 
 function ok(): SandboxExecResult {
   return { exitCode: 0, stdout: "", stderr: "" };
+}
+
+function seat(conv: string, expert: string) {
+  return {
+    conversationId: conv,
+    expertId: expert,
+    seatKey: formatBrowserSandboxSeatKey(conv, expert),
+  };
 }
 
 function makeFakeDocker() {
@@ -56,30 +65,44 @@ function makeFakeDocker() {
 
 const saved = { ...process.env };
 try {
-  process.env.PEN_SANDBOX_IMAGE = "pen-sandbox:test-331";
+  process.env.PEN_SANDBOX_IMAGE = "pen-sandbox:test-427";
   delete process.env.NODE4_BROWSER_SANDBOX_IMAGE;
   delete process.env.NODE2_BROWSER_SANDBOX_IMAGE;
   delete process.env.PEN_TOOLS_IMAGE;
+
+  const s1 = seat("conv-1", "exp-1");
 
   // --- ensure once, second ensure reuses (no second create) ---
   {
     const fake = makeFakeDocker();
     const rt = new BrowserSandboxRuntime({ docker: fake.docker });
-    const a = await rt.ensure("parent-task-1");
-    const b = await rt.ensure("parent-task-1");
+    const a = await rt.ensure(s1);
+    const b = await rt.ensure(s1);
     assert(a.containerName === b.containerName, "same container name on reuse");
-    assert(a.parentTaskId === "parent-task-1", "keyed by parent task id");
+    assert(a.seatKey === s1.seatKey, "keyed by seat");
+    assert(a.conversationId === "conv-1" && a.expertId === "exp-1", "seat fields");
     assert(fake.creates.length === 1, `one create expected, got ${fake.creates.length}`);
-    assert(fake.imagesUsed[0] === "pen-sandbox:test-331", "uses explicit image");
+    assert(fake.imagesUsed[0] === "pen-sandbox:test-427", "uses explicit image");
+  }
+
+  // --- two sequential "bursts" same seatKey string reuse ---
+  {
+    const fake = makeFakeDocker();
+    const rt = new BrowserSandboxRuntime({ docker: fake.docker });
+    await rt.ensure(s1);
+    // simulate task-end: release hold, do NOT dispose
+    rt.releaseSeat(s1);
+    await rt.ensure(s1);
+    assert(fake.creates.length === 1, "sticky across burst without dispose");
   }
 
   // --- exec reuses without second create ---
   {
     const fake = makeFakeDocker();
     const rt = new BrowserSandboxRuntime({ docker: fake.docker });
-    await rt.ensure("parent-A");
-    const r1 = await rt.exec("parent-A", ["agent-browser", "snapshot"]);
-    const r2 = await rt.exec("parent-A", ["agent-browser", "snapshot"]);
+    await rt.ensure(s1);
+    const r1 = await rt.exec(s1, ["agent-browser", "snapshot"]);
+    const r2 = await rt.exec(s1.seatKey, ["agent-browser", "snapshot"]);
     assert(r1.exitCode === 0 && r2.exitCode === 0, "exec ok");
     assert(fake.creates.length === 1, "exec does not create second container");
     assert(fake.execs.length === 2, "two execs");
@@ -90,37 +113,39 @@ try {
   {
     const fake = makeFakeDocker();
     const rt = new BrowserSandboxRuntime({ docker: fake.docker });
-    const first = await rt.ensure("parent-B");
-    await rt.dispose("parent-B");
+    const first = await rt.ensure(s1);
+    await rt.dispose(s1);
     assert(fake.rms.includes(first.containerName), "dispose rm's container");
     assert(!fake.running.has(first.containerName), "container gone from fake");
-    const second = await rt.ensure("parent-B");
+    const second = await rt.ensure(s1);
     assert(fake.creates.length === 2, "fresh create after dispose");
-    assert(second.containerName === first.containerName, "stable name for same parent id");
+    assert(second.containerName === first.containerName, "stable name for same seat");
   }
 
-  // --- no cross-task reuse after dispose of one ---
+  // --- multi-seat: two experts → two boxes ---
   {
     const fake = makeFakeDocker();
     const rt = new BrowserSandboxRuntime({ docker: fake.docker });
-    const t1 = await rt.ensure("task-one");
-    const t2 = await rt.ensure("task-two");
-    assert(t1.containerName !== t2.containerName, "distinct containers per parent");
-    assert(fake.creates.length === 2, "two creates for two parents");
-    await rt.dispose("task-one");
-    assert(!fake.running.has(t1.containerName), "task-one disposed");
-    assert(fake.running.has(t2.containerName), "task-two still running");
-    await rt.ensure("task-two");
-    assert(fake.creates.length === 2, "task-two still reused after sibling dispose");
+    const a = await rt.ensure(seat("case-x", "expert-a"));
+    const b = await rt.ensure(seat("case-x", "expert-b"));
+    assert(a.containerName !== b.containerName, "distinct containers per seat");
+    assert(fake.creates.length === 2, "two creates for two seats");
+    await rt.dispose(a.seatKey);
+    assert(!fake.running.has(a.containerName), "seat a disposed");
+    assert(fake.running.has(b.containerName), "seat b still running");
   }
 
-  // --- dispose is idempotent when no session ---
+  // --- fail closed: ensure string without :: throws ---
   {
     const fake = makeFakeDocker();
     const rt = new BrowserSandboxRuntime({ docker: fake.docker });
-    await rt.dispose("never-created");
-    // may still force-rm by name; must not throw
-    assert(true, "dispose empty ok");
+    let threw = false;
+    try {
+      await rt.ensure("bare-task-id");
+    } catch {
+      threw = true;
+    }
+    assert(threw, "bare key without seat shape fails");
   }
 
   // --- image unavailable fails ensure ---
@@ -134,7 +159,7 @@ try {
     });
     let threw: unknown;
     try {
-      await rt.ensure("parent-C");
+      await rt.ensure(s1);
     } catch (e) {
       threw = e;
     }
@@ -169,34 +194,61 @@ try {
     });
     let failed = false;
     try {
-      await rt.ensure("parent-fail");
+      await rt.ensure(s1);
     } catch {
       failed = true;
     }
     assert(failed, "ensure throws on docker create failure");
-    // second ensure should try create again (no sticky failed session)
     try {
-      await rt.ensure("parent-fail");
+      await rt.ensure(s1);
     } catch {
       /* expected */
     }
     assert(attempts === 2, "failed ensure does not block retry create");
   }
 
-  // --- disposeAll clears every parent session (Spec #333 graceful shutdown) ---
+  // --- disposeAll clears every seat session ---
   {
     const fake = makeFakeDocker();
     const rt = new BrowserSandboxRuntime({ docker: fake.docker });
-    await rt.ensure("shut-a");
-    await rt.ensure("shut-b");
+    await rt.ensure(seat("c1", "e1"));
+    await rt.ensure(seat("c1", "e2"));
     assert(rt.activeSessionCount() === 2, "two sessions");
     await rt.disposeAll();
     assert(rt.activeSessionCount() === 0, "disposeAll cleared sessions");
     assert(fake.running.size === 0, "disposeAll removed containers");
   }
 
-  console.log(JSON.stringify({ ok: true, cases: "ensure/reuse/dispose/fake-docker" }, null, 2));
-  console.log("RESULT: PASS — BrowserSandboxRuntime (#331)");
+  // --- janitor does not reap process-local sticky session after hold release ---
+  {
+    const fake = makeFakeDocker();
+    const rt = new BrowserSandboxRuntime({
+      docker: fake.docker,
+      now: () => 1_000_000_000_000,
+    });
+    const sess = await rt.ensure(s1);
+    rt.holdSeat(s1);
+    rt.releaseSeat(s1);
+    // inject list result with expired lease for the live container
+    fake.docker.listBrowserSandboxes = async () => [
+      {
+        name: sess.containerName,
+        labels: {
+          "myaipen.component": "browser-sandbox",
+          "myaipen.seat_key": s1.seatKey,
+          "myaipen.parent_task_id": s1.seatKey,
+        },
+        leaseUntilUnix: 1,
+        leaseTrusted: true,
+      },
+    ];
+    const r = await rt.reapExpired(Math.floor(Date.now() / 1000) + 999_999);
+    assert(r.reaped.length === 0, "sticky in-map session not reaped");
+    assert(fake.running.has(sess.containerName), "container still up");
+  }
+
+  console.log(JSON.stringify({ ok: true, cases: "seat-key ensure/reuse/dispose" }, null, 2));
+  console.log("RESULT: PASS — BrowserSandboxRuntime (#427)");
 } finally {
   for (const k of Object.keys(process.env)) {
     if (!(k in saved)) delete process.env[k];

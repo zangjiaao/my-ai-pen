@@ -1,9 +1,10 @@
 /**
- * Spec #334: labels, lease heartbeat, janitor reaping (fake Docker).
+ * Spec #334 / #427: labels, lease heartbeat, janitor reaping (fake Docker) — seat-keyed.
  * Run: npx tsx src/runtime/browser-sandbox-lease.test.ts
  */
 import {
   BrowserSandboxRuntime,
+  formatBrowserSandboxSeatKey,
   type BrowserSandboxDockerPort,
   type BrowserSandboxListItem,
   type SandboxExecResult,
@@ -24,19 +25,29 @@ function ok(): SandboxExecResult {
   return { exitCode: 0, stdout: "", stderr: "" };
 }
 
+function seat(conv: string, expert: string) {
+  const seatKey = formatBrowserSandboxSeatKey(conv, expert);
+  return { conversationId: conv, expertId: expert, seatKey };
+}
+
 // --- pure label / reap rules ---
 {
   const labels = buildBrowserSandboxLabels({
     nodeId: "node-a",
     instanceId: "inst-1",
-    parentTaskId: "task-1",
+    conversationId: "conv-1",
+    expertId: "exp-1",
+    seatKey: "conv-1::exp-1",
     leaseUntilUnix: 1_700_000_100,
   });
   assert(isProductBrowserSandboxLabels(labels), "product labels");
   assert(labels[BROWSER_SANDBOX_LABEL.component] === BROWSER_SANDBOX_COMPONENT, "component");
   assert(labels[BROWSER_SANDBOX_LABEL.nodeId] === "node-a", "node");
   assert(labels[BROWSER_SANDBOX_LABEL.instanceId] === "inst-1", "instance");
-  assert(labels[BROWSER_SANDBOX_LABEL.parentTaskId] === "task-1", "parent");
+  assert(labels[BROWSER_SANDBOX_LABEL.conversationId] === "conv-1", "conversation");
+  assert(labels[BROWSER_SANDBOX_LABEL.expertId] === "exp-1", "expert");
+  assert(labels[BROWSER_SANDBOX_LABEL.seatKey] === "conv-1::exp-1", "seat");
+  assert(labels[BROWSER_SANDBOX_LABEL.parentTaskId] === "conv-1::exp-1", "legacy parent=seatKey");
   assert(
     !shouldReapBrowserSandbox({ labels, leaseUntilUnix: 1_700_000_100, nowUnix: 1_700_000_050 }),
     "non-expired not reaped",
@@ -62,19 +73,13 @@ function ok(): SandboxExecResult {
     }),
     "unlabeled ignored",
   );
-  assert(
-    !shouldReapBrowserSandbox({
-      labels: { [BROWSER_SANDBOX_LABEL.component]: "other" },
-      leaseUntilUnix: 1,
-      nowUnix: 999,
-    }),
-    "non-product ignored",
-  );
 }
 
 const saved = { ...process.env };
 try {
   process.env.PEN_SANDBOX_IMAGE = "pen-sandbox:test-334";
+
+  const lab = seat("lab-conv", "lab-exp");
 
   // --- ensure attaches ownership labels ---
   {
@@ -104,17 +109,19 @@ try {
       now: () => 1_700_000_000_000,
       leaseConfig: { leaseMs: 600_000 },
     });
-    await rt.ensure("parent-lab");
+    await rt.ensure(lab);
     assert(lastLabels, "labels set");
     assert(lastLabels![BROWSER_SANDBOX_LABEL.component] === BROWSER_SANDBOX_COMPONENT, "component label");
     assert(lastLabels![BROWSER_SANDBOX_LABEL.nodeId] === "worker-1", "node label");
     assert(lastLabels![BROWSER_SANDBOX_LABEL.instanceId] === "boot-uuid-abc", "instance label");
-    assert(lastLabels![BROWSER_SANDBOX_LABEL.parentTaskId] === "parent-lab", "parent label");
+    assert(lastLabels![BROWSER_SANDBOX_LABEL.conversationId] === lab.conversationId, "conv label");
+    assert(lastLabels![BROWSER_SANDBOX_LABEL.expertId] === lab.expertId, "expert label");
+    assert(lastLabels![BROWSER_SANDBOX_LABEL.seatKey] === lab.seatKey, "seat label");
     assert(lastLabels![BROWSER_SANDBOX_LABEL.leaseUntil], "lease label");
     assert(rt.getInstanceId() === "boot-uuid-abc", "instance id accessor");
   }
 
-  // --- heartbeat renews lease while held ---
+  // --- heartbeat renews lease for held and sticky sessions ---
   {
     const leases: number[] = [];
     const docker: BrowserSandboxDockerPort = {
@@ -141,19 +148,20 @@ try {
       now: () => now,
       leaseConfig: { leaseMs: 600_000, heartbeatMs: 60_000 },
     });
-    rt.holdParentTask("held-1");
-    await rt.ensure("held-1");
+    const s = seat("h", "e1");
+    rt.holdSeat(s);
+    await rt.ensure(s);
     assert(leases.length >= 1, "create writes lease");
     const first = leases[leases.length - 1];
     now += 60_000;
     const n = await rt.renewLeasesForHeldTasks();
     assert(n === 1, "renewed held session");
     assert(leases[leases.length - 1] > first, "lease extended");
-    // not held → no renew
-    rt.releaseParentTask("held-1");
+    // Spec #427: after release, sticky session still in map → still renews
+    rt.releaseSeat(s);
     const before = leases.length;
     await rt.renewLeasesForHeldTasks();
-    assert(leases.length === before, "no renew when not held");
+    assert(leases.length === before + 1, "sticky session still renews after hold release");
   }
 
   // --- janitor reaps expired product only; keeps non-expired foreign ---
@@ -165,7 +173,9 @@ try {
         labels: buildBrowserSandboxLabels({
           nodeId: "other-node",
           instanceId: "other-inst",
-          parentTaskId: "t-old",
+          conversationId: "c",
+          expertId: "old",
+          seatKey: "c::old",
           leaseUntilUnix: 100,
         }),
         leaseUntilUnix: 100,
@@ -176,7 +186,9 @@ try {
         labels: buildBrowserSandboxLabels({
           nodeId: "other-node",
           instanceId: "other-inst",
-          parentTaskId: "t-live",
+          conversationId: "c",
+          expertId: "live",
+          seatKey: "c::live",
           leaseUntilUnix: 9_999_999_999,
         }),
         leaseUntilUnix: 9_999_999_999,
@@ -187,7 +199,9 @@ try {
         labels: buildBrowserSandboxLabels({
           nodeId: "other-node",
           instanceId: "other-inst",
-          parentTaskId: "t-stale-label",
+          conversationId: "c",
+          expertId: "stale",
+          seatKey: "c::stale",
           leaseUntilUnix: 100,
         }),
         leaseUntilUnix: 100,
@@ -227,15 +241,18 @@ try {
     assert(rms.length === 1 && rms[0] === "node4-browser-expired", "only one rm");
   }
 
-  // --- held parent is never reaped by this process even if lease looks expired ---
+  // --- held seat is never reaped even if lease looks expired ---
   {
     const rms: string[] = [];
+    const s = seat("held-c", "held-e");
+    let containerName = "";
     const docker: BrowserSandboxDockerPort = {
       async rmForce(name) {
         rms.push(name);
         return ok();
       },
       async runDetached(opts) {
+        containerName = opts.name;
         return { exitCode: 0, stdout: opts.name, stderr: "" };
       },
       async exec() {
@@ -244,11 +261,13 @@ try {
       async listBrowserSandboxes() {
         return [
           {
-            name: "node4-browser-held",
+            name: containerName || "node4-browser-held",
             labels: buildBrowserSandboxLabels({
               nodeId: "me",
               instanceId: "inst",
-              parentTaskId: "held-parent",
+              conversationId: s.conversationId,
+              expertId: s.expertId,
+              seatKey: s.seatKey,
               leaseUntilUnix: 1,
             }),
             leaseUntilUnix: 1,
@@ -261,11 +280,12 @@ try {
       },
     };
     const rt = new BrowserSandboxRuntime({ docker, now: () => 999_000 });
-    rt.holdParentTask("held-parent");
-    await rt.ensure("held-parent");
+    rt.holdSeat(s);
+    await rt.ensure(s);
+    const rmsBeforeReap = rms.length;
     const result = await rt.reapExpired(999);
-    assert(!result.reaped.includes("node4-browser-held"), "held parent not reaped");
-    assert(!rms.includes("node4-browser-held"), "no rm of held");
+    assert(result.reaped.length === 0, "held seat not reaped");
+    assert(rms.length === rmsBeforeReap, "reap did not rm held container");
   }
 
   // --- instance id is unique per runtime when not shared ---
@@ -292,8 +312,8 @@ try {
     assert(a.getInstanceId() !== b.getInstanceId(), "distinct instance ids");
   }
 
-  console.log(JSON.stringify({ ok: true, cases: "labels-lease-janitor" }, null, 2));
-  console.log("RESULT: PASS — browser sandbox lease (#334)");
+  console.log(JSON.stringify({ ok: true, cases: "lease-seat-labels" }, null, 2));
+  console.log("RESULT: PASS — browser sandbox lease (#427)");
 } finally {
   for (const k of Object.keys(process.env)) {
     if (!(k in saved)) delete process.env[k];

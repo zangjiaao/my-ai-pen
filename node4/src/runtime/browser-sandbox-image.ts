@@ -1,6 +1,8 @@
 /**
- * Browser sandbox image resolution + parent-task identity helpers (Spec #330 / #332).
+ * Browser sandbox image resolution + Participant Session seat identity (Spec #426 / #427).
+ * Key is (conversationId, expertId) — not parent platform task id.
  */
+import { createHash } from "node:crypto";
 
 /** Shared explicit env pins for pen-sandbox family (browser + shell). */
 export function readExplicitSandboxImageEnv(opts?: {
@@ -27,6 +29,14 @@ export class BrowserSandboxImageError extends Error {
   }
 }
 
+/** Thrown when seat identity is incomplete (fail closed; no Case-level fallback). */
+export class BrowserSandboxSeatError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BrowserSandboxSeatError";
+  }
+}
+
 /**
  * Explicit-env-only browser sandbox image (Spec #330).
  * Order: browser override → unified pen-sandbox → shell-family pin (still explicit).
@@ -49,27 +59,92 @@ export function isBrowserSandboxPreferred(): boolean {
   return !(raw === "0" || raw === "false" || raw === "off" || raw === "host");
 }
 
-export function containerNameForParentTask(parentTaskId: string): string {
-  const safe = parentTaskId.replace(/[^a-zA-Z0-9_.-]/g, "-").slice(0, 48);
-  return `node4-browser-${safe}`;
+/** Participant Session seat for sticky pen-sandbox (Spec #419 / #427). */
+export type BrowserSandboxSeat = {
+  conversationId: string;
+  expertId: string;
+  /** Canonical registry / lock key: `conversationId::expertId`. */
+  seatKey: string;
+};
+
+export function formatBrowserSandboxSeatKey(conversationId: string, expertId: string): string {
+  return `${String(conversationId || "").trim()}::${String(expertId || "").trim()}`;
 }
 
 /**
- * Spec #332: sandbox / agent-browser session key for a work unit.
- * Prefer structured parentTaskId; else strip `{parent}/sub/...` child task ids.
+ * Resolve sticky-sandbox seat from task envelope.
+ * Fail-closed without conversationId or expertId (no Case-only fallback).
  */
-export function resolveBrowserSandboxParentTaskId(
-  task: { taskId?: string; parentTaskId?: string } | null | undefined,
-): string {
-  const explicit = String(task?.parentTaskId || "").trim();
-  if (explicit) return explicit;
-  const tid = String(task?.taskId || "").trim();
-  const idx = tid.indexOf("/sub/");
-  if (idx > 0) return tid.slice(0, idx);
-  return tid;
+export function resolveBrowserSandboxSeat(
+  task:
+    | {
+        conversationId?: string;
+        expertId?: string;
+        taskId?: string;
+        parentTaskId?: string;
+      }
+    | null
+    | undefined,
+): BrowserSandboxSeat {
+  const conversationId = String(task?.conversationId || "").trim();
+  const expertId = String(task?.expertId || "").trim();
+  if (!conversationId) {
+    throw new BrowserSandboxSeatError(
+      "Browser sandbox requires conversationId (Case id). Cannot attach sticky pen-sandbox.",
+    );
+  }
+  if (!expertId) {
+    throw new BrowserSandboxSeatError(
+      "Browser sandbox requires expertId (Participant Session seat). " +
+        "Missing expert fails closed — no Case-level shared box.",
+    );
+  }
+  return {
+    conversationId,
+    expertId,
+    seatKey: formatBrowserSandboxSeatKey(conversationId, expertId),
+  };
 }
 
-/** Shared agent-browser session name for a parent task (cookies/storage). */
-export function agentBrowserSessionName(parentTaskId: string): string {
-  return `node4-${String(parentTaskId || "").slice(0, 32)}`;
+/** Stable short slug for Docker names / AGENT_BROWSER_SESSION (full ids live in labels). */
+export function seatKeySlug(seatKey: string): string {
+  return createHash("sha256").update(String(seatKey || "")).digest("hex").slice(0, 16);
+}
+
+export function containerNameForSeat(seatKey: string): string {
+  return `node4-browser-${seatKeySlug(seatKey)}`;
+}
+
+/** @deprecated Use containerNameForSeat — kept as alias for seat-keyed names. */
+export function containerNameForParentTask(seatKey: string): string {
+  return containerNameForSeat(seatKey);
+}
+
+/** Shared agent-browser session name for a seat (cookies/storage). */
+export function agentBrowserSessionName(seatKey: string): string {
+  return `node4-${seatKeySlug(seatKey)}`;
+}
+
+/**
+ * @deprecated Spec #427 — sticky key is Participant Session, not parent task.
+ * Prefer resolveBrowserSandboxSeat. Kept only for transitional call sites.
+ */
+export function resolveBrowserSandboxParentTaskId(
+  task: {
+    taskId?: string;
+    parentTaskId?: string;
+    conversationId?: string;
+    expertId?: string;
+  } | null | undefined,
+): string {
+  try {
+    return resolveBrowserSandboxSeat(task).seatKey;
+  } catch {
+    const explicit = String(task?.parentTaskId || "").trim();
+    if (explicit) return explicit;
+    const tid = String(task?.taskId || "").trim();
+    const idx = tid.indexOf("/sub/");
+    if (idx > 0) return tid.slice(0, idx);
+    return tid;
+  }
 }

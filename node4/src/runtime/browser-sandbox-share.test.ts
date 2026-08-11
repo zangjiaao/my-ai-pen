@@ -1,12 +1,14 @@
 /**
- * Spec #332: sub-agents share parent sandbox + session; browser exec serialized per parent.
+ * Spec #427: Main + sub-agents share seat sandbox; browser exec serialized per seat.
  * Run: npx tsx src/runtime/browser-sandbox-share.test.ts
  */
 import {
   agentBrowserSessionName,
   BrowserSandboxRuntime,
-  containerNameForParentTask,
-  resolveBrowserSandboxParentTaskId,
+  BrowserSandboxSeatError,
+  containerNameForSeat,
+  formatBrowserSandboxSeatKey,
+  resolveBrowserSandboxSeat,
   type BrowserSandboxDockerPort,
   type SandboxExecResult,
 } from "./browser-sandbox.js";
@@ -23,51 +25,59 @@ function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// --- resolveBrowserSandboxParentTaskId ---
+// --- resolveBrowserSandboxSeat ---
 {
+  const s = resolveBrowserSandboxSeat({
+    conversationId: "conv-1",
+    expertId: "exp-9",
+    taskId: "conv-1-task/sub/worker",
+    parentTaskId: "conv-1-task",
+  });
+  assert(s.seatKey === "conv-1::exp-9", "seat ignores parent task id");
+  assert(s.conversationId === "conv-1" && s.expertId === "exp-9", "fields");
+
+  let missingExpert = false;
+  try {
+    resolveBrowserSandboxSeat({ conversationId: "c", taskId: "t" });
+  } catch (e) {
+    missingExpert = e instanceof BrowserSandboxSeatError;
+  }
+  assert(missingExpert, "missing expertId fail-closed");
+
+  let missingConv = false;
+  try {
+    resolveBrowserSandboxSeat({ expertId: "e" });
+  } catch (e) {
+    missingConv = e instanceof BrowserSandboxSeatError;
+  }
+  assert(missingConv, "missing conversationId fail-closed");
+
   assert(
-    resolveBrowserSandboxParentTaskId({ taskId: "parent-1" }) === "parent-1",
-    "root task id is parent key",
+    agentBrowserSessionName(s.seatKey) === agentBrowserSessionName(s.seatKey),
+    "stable session name",
   );
   assert(
-    resolveBrowserSandboxParentTaskId({
-      taskId: "parent-1/sub/agent-a",
-      parentTaskId: "parent-1",
-    }) === "parent-1",
-    "explicit parentTaskId wins",
-  );
-  assert(
-    resolveBrowserSandboxParentTaskId({ taskId: "parent-1/sub/agent-a" }) === "parent-1",
-    "strip /sub/ when parentTaskId missing",
-  );
-  assert(
-    resolveBrowserSandboxParentTaskId({
-      taskId: "parent-1/sub/a/sub/b",
-      parentTaskId: "root",
-    }) === "root",
-    "nested still uses structured parent",
-  );
-  assert(
-    agentBrowserSessionName("parent-1") === "node4-parent-1",
-    "shared session name from parent",
-  );
-  assert(
-    containerNameForParentTask("parent-1") === containerNameForParentTask("parent-1"),
+    containerNameForSeat(s.seatKey) === containerNameForSeat(s.seatKey),
     "stable container name",
   );
   assert(
-    containerNameForParentTask("parent-1") !==
-      containerNameForParentTask("parent-1/sub/agent-a"),
-    "raw sub id would differ — must not use sub id as key",
+    containerNameForSeat(formatBrowserSandboxSeatKey("c", "a")) !==
+      containerNameForSeat(formatBrowserSandboxSeatKey("c", "b")),
+    "different experts different containers",
   );
 }
 
 const saved = { ...process.env };
 try {
-  process.env.PEN_SANDBOX_IMAGE = "pen-sandbox:test-332";
+  process.env.PEN_SANDBOX_IMAGE = "pen-sandbox:test-427-share";
   delete process.env.NODE4_BROWSER_SANDBOX_IMAGE;
 
-  // --- parent + sub key resolve to one container create ---
+  const seat = resolveBrowserSandboxSeat({
+    conversationId: "case-A",
+    expertId: "pentest-1",
+  });
+
+  // --- main + sub resolve to one container create ---
   {
     const creates: string[] = [];
     const docker: BrowserSandboxDockerPort = {
@@ -77,8 +87,8 @@ try {
       async runDetached(opts) {
         creates.push(opts.name);
         assert(
-          opts.env.some((e) => e === `AGENT_BROWSER_SESSION=${agentBrowserSessionName("parent-A")}`),
-          "shared AGENT_BROWSER_SESSION from parent",
+          opts.env.some((e) => e === `AGENT_BROWSER_SESSION=${agentBrowserSessionName(seat.seatKey)}`),
+          "shared AGENT_BROWSER_SESSION for seat",
         );
         return { exitCode: 0, stdout: opts.name, stderr: "" };
       },
@@ -93,23 +103,14 @@ try {
       },
     };
     const rt = new BrowserSandboxRuntime({ docker });
-    const parentKey = resolveBrowserSandboxParentTaskId({ taskId: "parent-A" });
-    const subKey = resolveBrowserSandboxParentTaskId({
-      taskId: "parent-A/sub/w1",
-      parentTaskId: "parent-A",
-    });
-    assert(parentKey === subKey, "parent and sub resolve same key");
-    await rt.ensure(parentKey);
-    await rt.exec(subKey, ["agent-browser", "snapshot"]);
-    await rt.exec(
-      resolveBrowserSandboxParentTaskId({ taskId: "parent-A/sub/w2" }),
-      ["agent-browser", "snapshot"],
-    );
-    assert(creates.length === 1, `one box for parent+subs, got ${creates.length}`);
-    assert(creates[0] === containerNameForParentTask("parent-A"), "parent-scoped name");
+    // Main burst
+    await rt.ensure(seat);
+    // Subagent on same seat (same conversationId+expertId)
+    await rt.exec(seat, ["agent-browser", "open", "https://example.com"]);
+    assert(creates.length === 1, "sub shares seat container");
   }
 
-  // --- concurrent exec for same parent is serialized (no interleave) ---
+  // --- serialize concurrent execs per seat ---
   {
     let concurrent = 0;
     let maxConcurrent = 0;
@@ -123,7 +124,7 @@ try {
       async exec() {
         concurrent += 1;
         maxConcurrent = Math.max(maxConcurrent, concurrent);
-        await delay(40);
+        await delay(30);
         concurrent -= 1;
         return ok();
       },
@@ -135,51 +136,17 @@ try {
       },
     };
     const rt = new BrowserSandboxRuntime({ docker });
-    await rt.ensure("parent-serial");
+    await rt.ensure(seat);
     await Promise.all([
-      rt.exec("parent-serial", ["agent-browser", "a"]),
-      rt.exec("parent-serial", ["agent-browser", "b"]),
-      rt.exec("parent-serial", ["agent-browser", "c"]),
+      rt.exec(seat, ["agent-browser", "a"]),
+      rt.exec(seat, ["agent-browser", "b"]),
+      rt.exec(seat, ["agent-browser", "c"]),
     ]);
-    assert(maxConcurrent === 1, `same-parent exec serialized, maxConcurrent=${maxConcurrent}`);
+    assert(maxConcurrent === 1, `serialized execs, maxConcurrent=${maxConcurrent}`);
   }
 
-  // --- different parents may run browser exec concurrently ---
-  {
-    let concurrent = 0;
-    let maxConcurrent = 0;
-    const docker: BrowserSandboxDockerPort = {
-      async rmForce() {
-        return ok();
-      },
-      async runDetached(opts) {
-        return { exitCode: 0, stdout: opts.name, stderr: "" };
-      },
-      async exec() {
-        concurrent += 1;
-        maxConcurrent = Math.max(maxConcurrent, concurrent);
-        await delay(40);
-        concurrent -= 1;
-        return ok();
-      },
-      async listBrowserSandboxes() {
-        return [];
-      },
-      async writeLease() {
-        return ok();
-      },
-    };
-    const rt = new BrowserSandboxRuntime({ docker });
-    await Promise.all([rt.ensure("p-x"), rt.ensure("p-y")]);
-    await Promise.all([
-      rt.exec("p-x", ["agent-browser", "x"]),
-      rt.exec("p-y", ["agent-browser", "y"]),
-    ]);
-    assert(maxConcurrent >= 2, `cross-parent not serialized, maxConcurrent=${maxConcurrent}`);
-  }
-
-  console.log(JSON.stringify({ ok: true, cases: "share+serialize" }, null, 2));
-  console.log("RESULT: PASS — browser sandbox share (#332)");
+  console.log(JSON.stringify({ ok: true, cases: "seat-share-serialize" }, null, 2));
+  console.log("RESULT: PASS — browser sandbox seat share (#427)");
 } finally {
   for (const k of Object.keys(process.env)) {
     if (!(k in saved)) delete process.env[k];

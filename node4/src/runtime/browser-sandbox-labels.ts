@@ -8,6 +8,14 @@ export const BROWSER_SANDBOX_LABEL = {
   component: "myaipen.component",
   nodeId: "myaipen.node_id",
   instanceId: "myaipen.instance_id",
+  /** Participant Session seat (Spec #427). */
+  conversationId: "myaipen.conversation_id",
+  expertId: "myaipen.expert_id",
+  seatKey: "myaipen.seat_key",
+  /**
+   * Legacy label: now stores seatKey for hold/janitor matching during cutover.
+   * Prefer conversation_id + expert_id for operator search (Spec #431).
+   */
   parentTaskId: "myaipen.parent_task_id",
   /** Initial lease at create; live lease is also written inside the container. */
   leaseUntil: "myaipen.lease_until",
@@ -19,7 +27,7 @@ export const BROWSER_SANDBOX_COMPONENT = "browser-sandbox";
 export const BROWSER_SANDBOX_LEASE_PATH = "/run/myaipen/lease_until";
 
 export type BrowserSandboxLeaseConfig = {
-  /** Heartbeat interval while a parent task is held. Default 90s. */
+  /** Heartbeat interval while a seat is held or has a live session. Default 90s. */
   heartbeatMs: number;
   /** Lease TTL without renewal. Default 12 min (~8× heartbeat). */
   leaseMs: number;
@@ -49,14 +57,21 @@ export function loadBrowserSandboxLeaseConfig(
 export function buildBrowserSandboxLabels(input: {
   nodeId: string;
   instanceId: string;
-  parentTaskId: string;
+  conversationId: string;
+  expertId: string;
+  seatKey: string;
   leaseUntilUnix: number;
 }): Record<string, string> {
+  const seatKey = String(input.seatKey || "").slice(0, 128);
   return {
     [BROWSER_SANDBOX_LABEL.component]: BROWSER_SANDBOX_COMPONENT,
     [BROWSER_SANDBOX_LABEL.nodeId]: String(input.nodeId || "unknown").slice(0, 128),
     [BROWSER_SANDBOX_LABEL.instanceId]: String(input.instanceId || "").slice(0, 64),
-    [BROWSER_SANDBOX_LABEL.parentTaskId]: String(input.parentTaskId || "").slice(0, 128),
+    [BROWSER_SANDBOX_LABEL.conversationId]: String(input.conversationId || "").slice(0, 128),
+    [BROWSER_SANDBOX_LABEL.expertId]: String(input.expertId || "").slice(0, 128),
+    [BROWSER_SANDBOX_LABEL.seatKey]: seatKey,
+    // Legacy field mirrors seatKey so older hold/janitor paths still match.
+    [BROWSER_SANDBOX_LABEL.parentTaskId]: seatKey,
     [BROWSER_SANDBOX_LABEL.leaseUntil]: String(Math.floor(input.leaseUntilUnix)),
   };
 }

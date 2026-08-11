@@ -1,5 +1,5 @@
 /**
- * Spec #333: task-end resource cleanup (idle pool + browser sandbox).
+ * Spec #333 amended #427: task-end cleanup disposes idle pool only — not sticky browser.
  * Run: npx tsx src/runtime/task-resource-cleanup.test.ts
  */
 import { runTaskResourceCleanup } from "./task-resource-cleanup.js";
@@ -8,7 +8,7 @@ function assert(cond: unknown, msg: string): void {
   if (!cond) throw new Error(msg);
 }
 
-// --- browser dispose called for parent task ---
+// --- browser dispose NOT called on task end ---
 {
   const disposed: string[] = [];
   await runTaskResourceCleanup({
@@ -19,10 +19,10 @@ function assert(cond: unknown, msg: string): void {
       },
     },
   });
-  assert(disposed.length === 1 && disposed[0] === "task-end-1", "browser dispose on task end");
+  assert(disposed.length === 0, "sticky browser not disposed on task end");
 }
 
-// --- abort path same cleanup ---
+// --- abort path also does not dispose browser ---
 {
   const disposed: string[] = [];
   await runTaskResourceCleanup({
@@ -33,10 +33,10 @@ function assert(cond: unknown, msg: string): void {
       },
     },
   });
-  assert(disposed[0] === "task-abort-1", "browser dispose on abort cleanup");
+  assert(disposed.length === 0, "no browser dispose on abort cleanup");
 }
 
-// --- idle pool disposeAll + browser dispose both run ---
+// --- idle pool disposeAll still runs ---
 {
   const steps: string[] = [];
   await runTaskResourceCleanup({
@@ -52,12 +52,11 @@ function assert(cond: unknown, msg: string): void {
       },
     },
   });
-  assert(steps.join(",") === "idle,browser:task-both", "idle then browser");
+  assert(steps.join(",") === "idle", "idle only; browser skipped");
 }
 
-// --- idle pool failure does not block browser dispose ---
+// --- idle pool failure does not throw ---
 {
-  const disposed: string[] = [];
   await runTaskResourceCleanup({
     parentTaskId: "task-err",
     idlePool: {
@@ -65,60 +64,23 @@ function assert(cond: unknown, msg: string): void {
         throw new Error("idle boom");
       },
     },
-    browserSandbox: {
-      async dispose(id) {
-        disposed.push(id);
-      },
-    },
   });
-  assert(disposed[0] === "task-err", "browser still disposed after idle failure");
+  assert(true, "cleanup does not throw on idle failure");
 }
 
-// --- browser dispose failure is swallowed (no throw) ---
+// --- empty parentTaskId still ok ---
 {
-  await runTaskResourceCleanup({
-    parentTaskId: "task-browser-fail",
-    browserSandbox: {
-      async dispose() {
-        throw new Error("browser boom");
-      },
-    },
-  });
-  assert(true, "cleanup does not throw");
-}
-
-// --- empty parentTaskId skips browser dispose ---
-{
-  let called = false;
   await runTaskResourceCleanup({
     parentTaskId: "  ",
-    browserSandbox: {
-      async dispose() {
-        called = true;
-      },
-    },
   });
-  assert(!called, "blank parentTaskId skips browser");
+  assert(true, "empty parent ok");
 }
 
-// --- browser dispose timeout is best-effort (does not hang forever) ---
+// --- no inputs ok ---
 {
-  let started = false;
-  const t0 = Date.now();
-  await runTaskResourceCleanup({
-    parentTaskId: "task-timeout",
-    browserDisposeTimeoutMs: 50,
-    browserSandbox: {
-      async dispose() {
-        started = true;
-        await new Promise((r) => setTimeout(r, 5_000));
-      },
-    },
-  });
-  const elapsed = Date.now() - t0;
-  assert(started, "dispose started");
-  assert(elapsed < 2_000, `dispose timed out without hanging (${elapsed}ms)`);
+  await runTaskResourceCleanup({});
+  assert(true, "empty input ok");
 }
 
-console.log(JSON.stringify({ ok: true, cases: "task-resource-cleanup" }, null, 2));
-console.log("RESULT: PASS — task resource cleanup (#333)");
+console.log(JSON.stringify({ ok: true, cases: "task-cleanup-no-browser-dispose" }, null, 2));
+console.log("RESULT: PASS — task resource cleanup (#427)");

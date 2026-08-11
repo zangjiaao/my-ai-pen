@@ -1,6 +1,6 @@
 /**
- * BrowserSandboxRuntime — ensure / reuse / dispose, parent locks, hold/heartbeat, janitor.
- * Spec #331–#334.
+ * BrowserSandboxRuntime — ensure / reuse / dispose, seat locks, hold/heartbeat, janitor.
+ * Spec #426 / #427: keyed by Participant Session seat (conversationId + expertId).
  */
 import { randomUUID } from "node:crypto";
 import {
@@ -13,18 +13,22 @@ import {
 import {
   createProcessDockerPort,
   type BrowserSandboxDockerPort,
+  type BrowserSandboxListItem,
   type SandboxExecResult,
 } from "./browser-sandbox-docker.js";
 import {
   agentBrowserSessionName,
-  containerNameForParentTask,
+  containerNameForSeat,
   resolveBrowserSandboxImage,
+  type BrowserSandboxSeat,
 } from "./browser-sandbox-image.js";
 
 export type BrowserSandboxSession = {
   containerName: string;
   image: string;
-  parentTaskId: string;
+  conversationId: string;
+  expertId: string;
+  seatKey: string;
 };
 
 type SessionRecord = BrowserSandboxSession & { started: boolean };
@@ -41,9 +45,43 @@ export type BrowserSandboxRuntimeOptions = {
   leaseConfig?: Partial<BrowserSandboxLeaseConfig>;
 };
 
+function normalizeSeat(seat: BrowserSandboxSeat | string): BrowserSandboxSeat {
+  if (typeof seat === "string") {
+    const key = String(seat || "").trim();
+    if (!key) throw new Error("seatKey required for browser sandbox");
+    const idx = key.indexOf("::");
+    if (idx <= 0 || idx === key.length - 2) {
+      // Allow bare seatKey for dispose/ensure after resolve — conversation/expert from key parts if possible.
+      const parts = key.split("::");
+      if (parts.length >= 2 && parts[0] && parts[1]) {
+        return {
+          conversationId: parts[0],
+          expertId: parts.slice(1).join("::"),
+          seatKey: key,
+        };
+      }
+      throw new Error(
+        "browser sandbox seatKey must be conversationId::expertId (or pass BrowserSandboxSeat)",
+      );
+    }
+    return {
+      conversationId: key.slice(0, idx),
+      expertId: key.slice(idx + 2),
+      seatKey: key,
+    };
+  }
+  const conversationId = String(seat.conversationId || "").trim();
+  const expertId = String(seat.expertId || "").trim();
+  const seatKey = String(seat.seatKey || "").trim() || `${conversationId}::${expertId}`;
+  if (!conversationId || !expertId) {
+    throw new Error("browser sandbox requires conversationId and expertId");
+  }
+  return { conversationId, expertId, seatKey };
+}
+
 /**
- * Process-local browser sandbox lifecycle keyed by parent task id.
- * One container per parent; serialize ensure/exec/dispose; labels + lease for janitor.
+ * Process-local browser sandbox lifecycle keyed by Participant Session seat.
+ * One container per seat; serialize ensure/exec/dispose; labels + lease for janitor.
  */
 export class BrowserSandboxRuntime {
   private readonly docker: BrowserSandboxDockerPort;
@@ -54,7 +92,8 @@ export class BrowserSandboxRuntime {
   private readonly leaseConfig: BrowserSandboxLeaseConfig;
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly locks = new Map<string, Promise<unknown>>();
-  private readonly heldParents = new Set<string>();
+  /** Seats with an in-flight work-burst (lease heartbeat priority). */
+  private readonly heldSeats = new Set<string>();
 
   constructor(opts: BrowserSandboxRuntimeOptions = {}) {
     this.docker = opts.docker ?? createProcessDockerPort();
@@ -82,23 +121,38 @@ export class BrowserSandboxRuntime {
     return this.nodeId;
   }
 
-  holdParentTask(parentTaskId: string): void {
-    const key = String(parentTaskId || "").trim();
-    if (key) this.heldParents.add(key);
+  holdSeat(seat: BrowserSandboxSeat | string): void {
+    const key = normalizeSeat(seat).seatKey;
+    if (key) this.heldSeats.add(key);
   }
 
-  releaseParentTask(parentTaskId: string): void {
-    const key = String(parentTaskId || "").trim();
-    if (key) this.heldParents.delete(key);
+  releaseSeat(seat: BrowserSandboxSeat | string): void {
+    const key = normalizeSeat(seat).seatKey;
+    if (key) this.heldSeats.delete(key);
   }
 
+  /** @deprecated Use holdSeat — seat key, not parent task id. */
+  holdParentTask(seatKey: string): void {
+    this.holdSeat(seatKey);
+  }
+
+  /** @deprecated Use releaseSeat */
+  releaseParentTask(seatKey: string): void {
+    this.releaseSeat(seatKey);
+  }
+
+  listHeldSeats(): string[] {
+    return [...this.heldSeats];
+  }
+
+  /** @deprecated Use listHeldSeats */
   listHeldParentTasks(): string[] {
-    return [...this.heldParents];
+    return this.listHeldSeats();
   }
 
-  private async withParentLock<T>(parentTaskId: string, fn: () => Promise<T>): Promise<T> {
-    const key = String(parentTaskId || "").trim();
-    if (!key) throw new Error("parentTaskId required for browser sandbox");
+  private async withSeatLock<T>(seatKey: string, fn: () => Promise<T>): Promise<T> {
+    const key = String(seatKey || "").trim();
+    if (!key) throw new Error("seatKey required for browser sandbox");
     const prev = this.locks.get(key) ?? Promise.resolve();
     let release!: () => void;
     const held = new Promise<void>((r) => {
@@ -114,7 +168,6 @@ export class BrowserSandboxRuntime {
       return await fn();
     } finally {
       release();
-      // GC lock entry when this chain segment is still the map tail.
       void tail.then(() => {
         if (this.locks.get(key) === tail) this.locks.delete(key);
       });
@@ -125,30 +178,33 @@ export class BrowserSandboxRuntime {
     return Math.floor((this.now() + this.leaseConfig.leaseMs) / 1000);
   }
 
-  async ensure(parentTaskId: string): Promise<BrowserSandboxSession> {
-    return this.withParentLock(parentTaskId, () => this.ensureUnlocked(parentTaskId));
+  async ensure(seat: BrowserSandboxSeat | string): Promise<BrowserSandboxSession> {
+    const s = normalizeSeat(seat);
+    return this.withSeatLock(s.seatKey, () => this.ensureUnlocked(s));
   }
 
-  private async ensureUnlocked(parentTaskId: string): Promise<BrowserSandboxSession> {
-    const key = String(parentTaskId || "").trim();
-    if (!key) throw new Error("parentTaskId required for browser sandbox");
-
+  private async ensureUnlocked(seat: BrowserSandboxSeat): Promise<BrowserSandboxSession> {
+    const key = seat.seatKey;
     const existing = this.sessions.get(key);
     if (existing?.started) {
       return {
         containerName: existing.containerName,
         image: existing.image,
-        parentTaskId: existing.parentTaskId,
+        conversationId: existing.conversationId,
+        expertId: existing.expertId,
+        seatKey: existing.seatKey,
       };
     }
 
     const image = this.resolveImage();
-    const name = containerNameForParentTask(key);
+    const name = containerNameForSeat(key);
     const leaseUntil = this.leaseUntilFromNow();
     const labels = buildBrowserSandboxLabels({
       nodeId: this.nodeId,
       instanceId: this.instanceId,
-      parentTaskId: key,
+      conversationId: seat.conversationId,
+      expertId: seat.expertId,
+      seatKey: key,
       leaseUntilUnix: leaseUntil,
     });
 
@@ -181,36 +237,46 @@ export class BrowserSandboxRuntime {
     const record: SessionRecord = {
       containerName: name,
       image,
-      parentTaskId: key,
+      conversationId: seat.conversationId,
+      expertId: seat.expertId,
+      seatKey: key,
       started: true,
     };
     this.sessions.set(key, record);
     return {
       containerName: record.containerName,
       image: record.image,
-      parentTaskId: record.parentTaskId,
+      conversationId: record.conversationId,
+      expertId: record.expertId,
+      seatKey: record.seatKey,
     };
   }
 
   async exec(
-    parentTaskId: string,
+    seat: BrowserSandboxSeat | string,
     argv: string[],
     timeoutMs = 120_000,
   ): Promise<SandboxExecResult> {
-    return this.withParentLock(parentTaskId, async () => {
-      const session = await this.ensureUnlocked(parentTaskId);
+    const s = normalizeSeat(seat);
+    return this.withSeatLock(s.seatKey, async () => {
+      const session = await this.ensureUnlocked(s);
       const result = await this.docker.exec(session.containerName, argv, timeoutMs);
       return { ...result, via: "sandbox" };
     });
   }
 
-  async dispose(parentTaskId: string): Promise<void> {
-    const key = String(parentTaskId || "").trim();
+  async dispose(seat: BrowserSandboxSeat | string): Promise<void> {
+    let key: string;
+    try {
+      key = normalizeSeat(seat).seatKey;
+    } catch {
+      key = String(seat || "").trim();
+    }
     if (!key) return;
-    this.heldParents.delete(key);
-    return this.withParentLock(key, async () => {
+    this.heldSeats.delete(key);
+    return this.withSeatLock(key, async () => {
       const session = this.sessions.get(key);
-      const name = session?.containerName ?? containerNameForParentTask(key);
+      const name = session?.containerName ?? containerNameForSeat(key);
 
       if (session) {
         await this.docker.exec(name, ["agent-browser", "close", "--all"], 30_000).catch(() => {});
@@ -221,16 +287,21 @@ export class BrowserSandboxRuntime {
   }
 
   async disposeAll(): Promise<void> {
-    const keys = [...new Set([...this.sessions.keys(), ...this.heldParents])];
+    const keys = [...new Set([...this.sessions.keys(), ...this.heldSeats])];
     await Promise.all(keys.map((k) => this.dispose(k)));
-    this.heldParents.clear();
+    this.heldSeats.clear();
   }
 
+  /**
+   * Renew leases for held seats and any process-local sticky sessions
+   * so task-end release does not orphan a still-mapped sticky box to janitor.
+   */
   async renewLeasesForHeldTasks(): Promise<number> {
     const leaseUntil = this.leaseUntilFromNow();
     let n = 0;
-    for (const parentId of this.heldParents) {
-      const session = this.sessions.get(parentId);
+    const keys = new Set([...this.heldSeats, ...this.sessions.keys()]);
+    for (const seatKey of keys) {
+      const session = this.sessions.get(seatKey);
       if (!session?.started) continue;
       try {
         await this.docker.writeLease(session.containerName, leaseUntil);
@@ -246,10 +317,16 @@ export class BrowserSandboxRuntime {
     const now = nowUnix ?? Math.floor(this.now() / 1000);
     const items = await this.docker.listBrowserSandboxes();
     const reaped: string[] = [];
+    const liveNames = new Set(
+      [...this.sessions.values()].filter((s) => s.started).map((s) => s.containerName),
+    );
     for (const item of items) {
-      // Never reap a parent this process still holds (heartbeat authority).
-      const parentFromLabel = item.labels?.[BROWSER_SANDBOX_LABEL.parentTaskId];
-      if (parentFromLabel && this.heldParents.has(parentFromLabel)) continue;
+      const seatFromLabel =
+        item.labels?.[BROWSER_SANDBOX_LABEL.seatKey] ||
+        item.labels?.[BROWSER_SANDBOX_LABEL.parentTaskId];
+      if (seatFromLabel && this.heldSeats.has(seatFromLabel)) continue;
+      // Never reap a sticky session still mapped in this process (task-end does not dispose).
+      if (liveNames.has(item.name)) continue;
 
       if (
         !shouldReapBrowserSandbox({
@@ -263,8 +340,8 @@ export class BrowserSandboxRuntime {
       }
       await this.docker.rmForce(item.name, 30_000).catch(() => {});
       reaped.push(item.name);
-      for (const [pid, rec] of this.sessions) {
-        if (rec.containerName === item.name) this.sessions.delete(pid);
+      for (const [sid, rec] of this.sessions) {
+        if (rec.containerName === item.name) this.sessions.delete(sid);
       }
     }
     return { reaped, inspected: items.length };
@@ -281,12 +358,22 @@ export function getDefaultBrowserSandboxRuntime(): BrowserSandboxRuntime {
   return defaultRuntime;
 }
 
-export function holdBrowserSandboxTask(parentTaskId: string): void {
-  defaultRuntime.holdParentTask(parentTaskId);
+export function holdBrowserSandboxSeat(seat: BrowserSandboxSeat | string): void {
+  defaultRuntime.holdSeat(seat);
 }
 
-export function releaseBrowserSandboxTask(parentTaskId: string): void {
-  defaultRuntime.releaseParentTask(parentTaskId);
+export function releaseBrowserSandboxSeat(seat: BrowserSandboxSeat | string): void {
+  defaultRuntime.releaseSeat(seat);
+}
+
+/** @deprecated Use holdBrowserSandboxSeat */
+export function holdBrowserSandboxTask(seatKey: string): void {
+  holdBrowserSandboxSeat(seatKey);
+}
+
+/** @deprecated Use releaseBrowserSandboxSeat */
+export function releaseBrowserSandboxTask(seatKey: string): void {
+  releaseBrowserSandboxSeat(seatKey);
 }
 
 export type BrowserSandboxBackgroundHandles = {
@@ -338,9 +425,9 @@ export function startBrowserSandboxBackgroundJobs(
   };
 }
 
-/** Process-default dispose for one parent task (task cleanup / inject). */
-export async function disposeBrowserSandbox(parentTaskId: string): Promise<void> {
-  return defaultRuntime.dispose(parentTaskId);
+/** Process-default dispose for one seat (Session delete / inject — not task-end). */
+export async function disposeBrowserSandbox(seatKey: string): Promise<void> {
+  return defaultRuntime.dispose(seatKey);
 }
 
 /** Process-default dispose of all sandboxes on this instance (graceful shutdown). */
@@ -348,4 +435,4 @@ export async function disposeAllBrowserSandboxes(): Promise<void> {
   return defaultRuntime.disposeAll();
 }
 
-export type { BrowserSandboxDockerPort, BrowserSandboxListItem, SandboxExecResult };
+export type { BrowserSandboxDockerPort, BrowserSandboxListItem, SandboxExecResult } from "./browser-sandbox-docker.js";

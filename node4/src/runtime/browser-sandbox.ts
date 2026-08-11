@@ -2,9 +2,9 @@
  * Browser sandbox barrel — stable import path for Node4.
  *
  * Modules:
- * - browser-sandbox-image.ts   — image pin + parent-task keys (#330/#332)
+ * - browser-sandbox-image.ts   — image pin + Session seat keys (#426/#427)
  * - browser-sandbox-docker.ts  — injectable Docker port
- * - browser-sandbox-runtime.ts — ensure/reuse/dispose, lease, janitor (#331–#334)
+ * - browser-sandbox-runtime.ts — ensure/reuse/dispose, lease, janitor
  * - browser-sandbox-command.ts — tool-facing runBrowserCommand
  * - browser-sandbox-labels.ts  — pure labels + reap rules
  */
@@ -16,14 +16,20 @@ export type {
 } from "./browser-sandbox-docker.js";
 export { createProcessDockerPort } from "./browser-sandbox-docker.js";
 
+export type { BrowserSandboxSeat } from "./browser-sandbox-image.js";
 export {
   agentBrowserSessionName,
   BrowserSandboxImageError,
+  BrowserSandboxSeatError,
   containerNameForParentTask,
+  containerNameForSeat,
+  formatBrowserSandboxSeatKey,
   isBrowserSandboxPreferred,
   readExplicitSandboxImageEnv,
   resolveBrowserSandboxImage,
   resolveBrowserSandboxParentTaskId,
+  resolveBrowserSandboxSeat,
+  seatKeySlug,
 } from "./browser-sandbox-image.js";
 
 export type {
@@ -37,7 +43,9 @@ export {
   disposeAllBrowserSandboxes,
   disposeBrowserSandbox,
   getDefaultBrowserSandboxRuntime,
+  holdBrowserSandboxSeat,
   holdBrowserSandboxTask,
+  releaseBrowserSandboxSeat,
   releaseBrowserSandboxTask,
   startBrowserSandboxBackgroundJobs,
 } from "./browser-sandbox-runtime.js";

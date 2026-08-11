@@ -47,7 +47,11 @@ import {
   unavailableGraphTerminal,
 } from "./hard-graph-definition.js";
 import { runHardGraphExpertTask } from "./hard-graph-task.js";
-import { holdBrowserSandboxTask, releaseBrowserSandboxTask } from "./browser-sandbox.js";
+import {
+  holdBrowserSandboxSeat,
+  releaseBrowserSandboxSeat,
+  resolveBrowserSandboxSeat,
+} from "./browser-sandbox.js";
 import { runTaskResourceCleanup } from "./task-resource-cleanup.js";
 import {
   buildGoalBudgetLimitPrompt,
@@ -273,17 +277,22 @@ export async function runNode4Task(
   });
 
   /**
-   * Spec #333: single teardown authority for idle pool + browser sandbox.
-   * Free path: only `finally` (not abort fire-and-forget / mid-function end).
-   * Hard Graph: try/finally. Defaults to process disposeBrowserSandbox when unset.
+   * Spec #333 / #427: package teardown = idle pool only.
+   * Sticky pen-sandbox is **not** disposed on work-burst end (Session seat owns it).
    */
+  const seatForHold = (() => {
+    try {
+      return resolveBrowserSandboxSeat(task);
+    } catch {
+      return null;
+    }
+  })();
+
   const cleanupTaskResources = () => {
-    // Spec #334: stop lease heartbeat for this parent before dispose.
-    releaseBrowserSandboxTask(task.taskId);
+    if (seatForHold) releaseBrowserSandboxSeat(seatForHold);
     return runTaskResourceCleanup({
       parentTaskId: task.taskId,
       idlePool: runtime.lifecycle.subagentIdlePool,
-      browserSandbox: runtime.lifecycle.browserSandbox,
     });
   };
 
@@ -295,8 +304,8 @@ export async function runNode4Task(
    */
   // Expert Graph vs free OMP (#76 Soft retired). No Soft scenario inject path.
   if (workPath.path === "hard" && hardResolved.mode === "hard") {
-    // Spec #334: hold parent task for lease heartbeat (not browser-tool traffic).
-    holdBrowserSandboxTask(task.taskId);
+    // Spec #334/#427: hold seat for lease heartbeat while burst runs.
+    if (seatForHold) holdBrowserSandboxSeat(seatForHold);
     runtime.lifecycle.abortSignal = signal;
     try {
       const hardOut = await runHardGraphExpertTask({
@@ -690,8 +699,8 @@ export async function runNode4Task(
   };
 
   try {
-    // Spec #334: hold for lease heartbeat only while this try/finally owns the task.
-    holdBrowserSandboxTask(task.taskId);
+    // Spec #334/#427: hold seat for lease heartbeat only while this try/finally owns the burst.
+    if (seatForHold) holdBrowserSandboxSeat(seatForHold);
 
     if (!cancelled()) {
       await promptAndAssert(userPrompt);
@@ -996,7 +1005,7 @@ export async function runNode4Task(
 
     return { terminalStatus: emitStatus, taskDir };
   } finally {
-    // Spec #333: always tear down browser sandbox + idle pool (end / abort / error).
+    // Spec #333/#427: idle pool only; sticky pen-sandbox survives work-burst end.
     await cleanupTaskResources().catch(() => {});
     // Tear down stream / active-session registration always.
     // Spec #283 I0.9: on user interrupt, park Free Main captain (do not dispose).

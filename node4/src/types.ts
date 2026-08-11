@@ -66,8 +66,8 @@ export type TaskEnvelope = {
   scanMode?: string;
   /**
    * Parent work-unit task id for multi-agent / sub-agent package workers.
-   * Spec #332: browser sandbox ensure/exec/dispose and agent-browser session key use this
-   * (not the child's `{parent}/sub/...` taskId) so login/cookies stay continuous.
+   * Spec #427: sticky pen-sandbox is keyed by (conversationId, expertId), not this field.
+   * parentTaskId remains useful for package worker routing / logging.
    */
   parentTaskId?: string;
   /**
@@ -203,12 +203,11 @@ export type ToolRuntime = {
      */
     subagentIdlePool?: import("./runtime/subagent-idle-pool.js").SubagentIdlePool;
     /**
-     * Spec #333: runtime-owned browser sandbox dispose for this parent task.
-     * When unset, task cleanup uses process-default disposeBrowserSandbox.
-     * Agent browser close must not own container GC.
+     * Optional seat-scoped sandbox dispose (Session delete / tests).
+     * Spec #427: task-end cleanup does **not** call this — sticky env outlives work-bursts.
      */
     browserSandbox?: {
-      dispose(parentTaskId: string): Promise<void>;
+      dispose(seatKey: string): Promise<void>;
     };
     /**
      * finding(confirm) ground-fail counts by title|location — anti-thrash for identical retries.

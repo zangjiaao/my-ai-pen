@@ -1,65 +1,44 @@
 /**
- * Spec #333: centralized end-of-task resource teardown.
- * Mirrors subagent idle-pool dispose + runtime-owned browser sandbox dispose.
- * Agent tools must not own infrastructure lifecycle.
+ * End-of-work-burst resource teardown (Spec #333 amended by #426 / #427).
+ *
+ * - Still disposes subagent idle pool (package-scoped).
+ * - Does **not** dispose Session-sticky pen-sandbox (browser) — that lives until
+ *   Session Delete / Case close / transfer (Spec #421).
  */
-import { disposeBrowserSandbox } from "./browser-sandbox.js";
-
-export type TaskBrowserSandboxHandle = {
-  dispose(parentTaskId: string): Promise<void>;
-};
-
 export type TaskIdlePoolHandle = {
   disposeAll(): Promise<void>;
 };
 
+/**
+ * @deprecated Sticky browser is not disposed on task end. Field ignored if present.
+ */
+export type TaskBrowserSandboxHandle = {
+  dispose(parentTaskId: string): Promise<void>;
+};
+
 export type TaskResourceCleanupInput = {
-  /** Parent task id (platform work unit) — browser sandbox key. */
-  parentTaskId: string;
+  /**
+   * @deprecated Not used for browser dispose after Spec #427.
+   * Kept so call sites can still pass parentTaskId without type break.
+   */
+  parentTaskId?: string;
   /** OMP idle subagent pool (optional). */
   idlePool?: TaskIdlePoolHandle | null;
   /**
-   * Injectable browser sandbox dispose (tests / alternate runtime).
-   * When omitted, uses process-default disposeBrowserSandbox.
+   * @deprecated Ignored — sticky pen-sandbox is not torn down at task end.
    */
   browserSandbox?: TaskBrowserSandboxHandle | null;
   /**
-   * Max wait for browser dispose (docker close+rm under parent lock).
-   * Default 60s so task finally cannot hang forever on a stuck daemon.
+   * @deprecated No browser dispose on task end.
    */
   browserDisposeTimeoutMs?: number;
 };
 
-/** Default bound: agent-browser close (30s) + docker rm (30s) under lock. */
-export const DEFAULT_BROWSER_DISPOSE_TIMEOUT_MS = 60_000;
-
-async function withTimeout(promise: Promise<void>, ms: number, label: string): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
-        timer.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
 /**
- * Dispose task-scoped resources: idle subagent pool then browser sandbox.
- * Each step is best-effort (errors swallowed) so one failure does not block the other.
- * Browser dispose is deadline-bounded (review residual on task-end latency).
+ * Dispose package-scoped resources only (idle subagent pool).
+ * Browser sticky env is intentionally left running.
  */
 export async function runTaskResourceCleanup(input: TaskResourceCleanupInput): Promise<void> {
-  const parentTaskId = String(input.parentTaskId || "").trim();
-  const disposeTimeout =
-    input.browserDisposeTimeoutMs != null && input.browserDisposeTimeoutMs > 0
-      ? Math.floor(input.browserDisposeTimeoutMs)
-      : DEFAULT_BROWSER_DISPOSE_TIMEOUT_MS;
-
   if (input.idlePool?.disposeAll) {
     try {
       await input.idlePool.disposeAll();
@@ -67,15 +46,5 @@ export async function runTaskResourceCleanup(input: TaskResourceCleanupInput): P
       /* best-effort */
     }
   }
-
-  if (!parentTaskId) return;
-
-  try {
-    const dispose = input.browserSandbox?.dispose
-      ? input.browserSandbox.dispose(parentTaskId)
-      : disposeBrowserSandbox(parentTaskId);
-    await withTimeout(dispose, disposeTimeout, "browser sandbox dispose");
-  } catch {
-    /* best-effort — orphans reaped by lease/janitor */
-  }
+  // Spec #427: do not disposeBrowserSandbox on task end / interrupt.
 }
