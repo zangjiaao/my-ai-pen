@@ -33,7 +33,7 @@ function dockerBin(): string {
 
 /** Unified sandbox image (pen-sandbox preferred). */
 export function resolvePenToolsImage(): string {
-  return resolvePentestSandboxImage({ allowStrixFallback: false });
+  return resolvePentestSandboxImage();
 }
 
 export { dockerImageExists };

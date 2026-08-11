@@ -26,10 +26,12 @@ Legacy names `pen-tools` / `pen-browser` may still appear as **tags aliased at b
 
 ---
 
-## 2. Does Strix include a shell?
+## 2. Strix is not a product browser default
 
-**Yes.** Strix is a full Kali-class box (bash, nuclei, Chromium, agent-browser).  
-Node4 never used Strix for the **shell tool** (host / pen-sandbox only). Browser may still **fall back** to Strix if no first-party image is built.
+Strix is a full Kali-class box (bash, nuclei, Chromium, agent-browser) used historically as a research/comparison runtime.  
+Node4 **never** used Strix for the **shell tool** (host / pen-sandbox only). As of Spec #320 / #330, the **browser sandbox path also does not fall back to Strix**.
+
+Browser sandbox requires an **explicit first-party image pin** (`PEN_SANDBOX_IMAGE` and/or `NODE4_BROWSER_SANDBOX_IMAGE`). Missing pin → hard failure of the sandbox path with an operator-actionable error. Host agent-browser remains available only when sandbox is explicitly disabled (`NODE4_BROWSER_SANDBOX=0` / `host`) or after a configured image fails to start.
 
 We own **pen-sandbox** so template freshness, browser pin, and release cadence are under our control.
 
@@ -62,14 +64,15 @@ docker pull "$PEN_SANDBOX_IMAGE"
 
 | Variable | Role |
 |----------|------|
-| `PEN_SANDBOX_IMAGE` | Preferred unified image |
-| `PEN_TOOLS_IMAGE` | Shell override (same image family) |
-| `NODE4_BROWSER_SANDBOX_IMAGE` | Browser override |
+| `PEN_SANDBOX_IMAGE` | Preferred unified image pin (**required** for browser sandbox path) |
+| `PEN_TOOLS_IMAGE` | Shell override (same image family); also accepted as browser pin if set |
+| `NODE4_BROWSER_SANDBOX_IMAGE` | Browser override (wins over unified pin) |
 | `NODE4_SHELL_IN_PEN_TOOLS=auto\|1\|0` | Shell-in-container (auto when image present) |
 | `NODE4_BROWSER_SANDBOX=0` | Host agent-browser only |
 | `NODE4_PEN_TOOLS=0` | Disable host PATH shims |
 
-Resolution: `node4/src/runtime/pentest-sandbox-image.ts`.
+**Browser resolution (strict):** `node4/src/runtime/browser-sandbox.ts` → `resolveBrowserSandboxImage` — explicit env only; no ambient local-tag discovery; no Strix default.  
+**Shell resolution:** `node4/src/runtime/pentest-sandbox-image.ts` / `pen-tools-shell.ts` — may still discover local first-party tags for lab convenience.
 
 ---
 
@@ -130,4 +133,4 @@ Derived from `research/CyberStrikeAI/tools/` **categories**, not as first-class 
 
 ## 8. One-line summary
 
-**One first-party pen-sandbox for the pentest expert — shell and browser; Strix only as emergency browser fallback. Tooling health is optional observability, never a gate. Tool install lists are L2 checklists, not first-class agent tools.**
+**One first-party pen-sandbox for the pentest expert — shell and browser; browser image must be an explicit env pin (no Strix product default). Tooling health is optional observability, never a gate. Tool install lists are L2 checklists, not first-class agent tools.**

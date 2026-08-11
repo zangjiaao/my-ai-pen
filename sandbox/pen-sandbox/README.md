@@ -68,11 +68,13 @@ bash sandbox/pen-sandbox/scripts/update-templates.sh
 
 | Variable | Role |
 |----------|------|
-| `PEN_SANDBOX_IMAGE` | Preferred unified image (default resolution) |
-| `PEN_TOOLS_IMAGE` | Shell override (falls back to pen-sandbox) |
-| `NODE4_BROWSER_SANDBOX_IMAGE` | Browser override (falls back to pen-sandbox) |
+| `PEN_SANDBOX_IMAGE` | Preferred unified image pin (**required** for browser sandbox path) |
+| `PEN_TOOLS_IMAGE` | Shell override (same image family); also accepted as browser pin if set |
+| `NODE4_BROWSER_SANDBOX_IMAGE` | Browser override (wins over unified pin) |
 | `NODE4_SHELL_IN_PEN_TOOLS=auto\|1\|0` | Shell-in-container (auto when image present) |
+
+Browser path does not fall back to third-party Strix images. See Spec #320 / #330.
 
 ## Docs
 
-[`docs/pen-tools-sandbox.md`](../../docs/pen-tools-sandbox.md) (strategy; now unified under pen-sandbox).
+[`docs/specs/pen-tools-sandbox.md`](../../docs/specs/pen-tools-sandbox.md) (strategy; unified under pen-sandbox).

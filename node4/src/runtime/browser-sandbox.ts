@@ -1,17 +1,16 @@
 /**
  * Browser sandbox for Node4 — unified pen-sandbox (same image as shell).
- * Strix remains last-resort fallback if no first-party image is built.
+ * Spec #330: browser image is explicit env only; no Strix / ambient-tag fallback.
  *
  * Env:
  * - NODE4_BROWSER_SANDBOX=0|false → force host agent-browser only
- * - PEN_SANDBOX_IMAGE / NODE4_BROWSER_SANDBOX_IMAGE → pin image
+ * - PEN_SANDBOX_IMAGE / NODE4_BROWSER_SANDBOX_IMAGE → required pin for sandbox path
  * - NODE4_DOCKER_BIN (default docker)
  */
 
 import { spawn } from "node:child_process";
 import type { ToolRuntime } from "../types.js";
-import { runAgentBrowser, type AgentBrowserResult } from "./agent-browser-cli.js";
-import { resolvePentestSandboxImage } from "./pentest-sandbox-image.js";
+import { runAgentBrowser } from "./agent-browser-cli.js";
 
 export type SandboxExecResult = {
   exitCode: number | null;
@@ -31,13 +30,39 @@ type SessionRecord = {
 
 const sessions = new Map<string, SessionRecord>();
 
+/** Thrown when browser sandbox image env is missing (fail closed; no Strix). */
+export class BrowserSandboxImageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BrowserSandboxImageError";
+  }
+}
+
 function dockerBin(): string {
   return process.env.NODE4_DOCKER_BIN?.trim() || process.env.NODE2_DOCKER_BIN?.trim() || "docker";
 }
 
-/** Same image family as shell (pen-sandbox); Strix only if nothing local. */
+/**
+ * Explicit-env-only browser sandbox image (Spec #330).
+ * Order: browser override → unified pen-sandbox → shell-family pin (still explicit).
+ * No local tag discovery and no third-party Strix default.
+ */
 export function resolveBrowserSandboxImage(): string {
-  return resolvePentestSandboxImage({ allowStrixFallback: true });
+  const image =
+    process.env.NODE4_BROWSER_SANDBOX_IMAGE?.trim() ||
+    process.env.NODE2_BROWSER_SANDBOX_IMAGE?.trim() ||
+    process.env.PEN_SANDBOX_IMAGE?.trim() ||
+    process.env.PEN_TOOLS_IMAGE?.trim() ||
+    "";
+  if (!image) {
+    throw new BrowserSandboxImageError(
+      "Browser sandbox image not configured. Set PEN_SANDBOX_IMAGE (or NODE4_BROWSER_SANDBOX_IMAGE) " +
+        "to a first-party pen-sandbox pin and docker pull it. " +
+        "Silent third-party Strix fallback is not used. " +
+        "Build: bash sandbox/pen-sandbox/scripts/build.sh",
+    );
+  }
+  return image;
 }
 
 function sandboxImage(): string {
@@ -187,6 +212,23 @@ export async function runBrowserCommand(
   const preferSandbox = isBrowserSandboxPreferred();
 
   if (preferSandbox) {
+    // Spec #330: misconfigured image fails closed — do not host-fallback or Strix.
+    try {
+      resolveBrowserSandboxImage();
+    } catch (e) {
+      if (e instanceof BrowserSandboxImageError) {
+        return {
+          exitCode: null,
+          stdout: "",
+          stderr: "",
+          unavailable: true,
+          error: e.message,
+          text: e.message,
+          via: "sandbox",
+        };
+      }
+      throw e;
+    }
     try {
       const result = await execInBrowserSandbox(runtime.task.taskId, ["agent-browser", ...args], timeoutMs);
       const text = `${result.stdout || ""}${result.stderr ? `\n${result.stderr}` : ""}`.trim();
@@ -197,7 +239,7 @@ export async function runBrowserCommand(
       return { ...result, text, via: "sandbox" };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      // Fall through to host only if sandbox cannot start
+      // Fall through to host only if sandbox cannot start (image was configured)
       const host = await runAgentBrowser(args, {
         taskId: runtime.task.taskId,
         taskDir: runtime.taskDir,
