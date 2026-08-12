@@ -26,7 +26,7 @@ GitHub Actions: [`.github/workflows/pen-sandbox.yml`](../../.github/workflows/pe
 | Knob | Purpose |
 |------|---------|
 | **Variable** `DOCKERHUB_NAMESPACE` | Hub user/org. Change here when the publish account moves — not hardcoded in the workflow. |
-| **Secret** `DOCKERHUB_TOKEN` | Optional Hub **access token**. Only needed for CI push on `main`. |
+| **Secret** `DOCKERHUB_TOKEN` | Hub **access token**, on Environment **Docker Hub** (not a repo-level secret). Only needed for CI push on `main`. |
 
 On push to `main` touching `sandbox/pen-sandbox/**` (or manual **workflow_dispatch**):
 

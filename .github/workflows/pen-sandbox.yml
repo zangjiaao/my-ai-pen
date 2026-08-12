@@ -3,7 +3,7 @@
 # Repo variable (Settings → Secrets and variables → Actions → Variables):
 #   DOCKERHUB_NAMESPACE — Hub user/org. Change this when the publish account moves.
 #                         Not hardcoded in this file.
-# Optional secret (only to push from CI on main):
+# Environment "Docker Hub" secret (only to push from CI on main):
 #   DOCKERHUB_TOKEN     — Hub access token (not account password)
 #
 # Image: docker.io/<DOCKERHUB_NAMESPACE>/pen-sandbox
@@ -29,6 +29,8 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Token lives on this Environment (not a repo-level secret).
+    environment: Docker Hub
     permissions:
       contents: read
     steps:

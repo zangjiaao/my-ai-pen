@@ -55,7 +55,7 @@ bash sandbox/pen-sandbox/scripts/update-templates.sh   # nuclei-templates host c
 
 **Docker Hub CI:** `.github/workflows/pen-sandbox.yml`  
 Repo **variable** `DOCKERHUB_NAMESPACE` = Hub user/org (change when the account moves).  
-Optional **secret** `DOCKERHUB_TOKEN` if CI should push on `main`.
+Optional Environment **Docker Hub** secret `DOCKERHUB_TOKEN` if CI should push on `main`.
 
 Aliases at local build: `pen-tools:dev` / `pen-browser:dev` for old env vars.
 
